@@ -1,6 +1,7 @@
 // file: web/src/components/MetadataHistory.tsx
-// version: 1.3.3
+// version: 1.4.0
 // guid: 8e3a7b2c-5d1f-4a9e-b6c0-2f8d4e7a1b3c
+// last-edited: 2026-10-03
 
 import { useCallback, useEffect, useState } from 'react';
 import {
@@ -76,6 +77,15 @@ function parseJsonValue(raw?: string): string {
   }
 }
 
+/**
+ * A history row's identity. The store stamps every row of one edit with the
+ * same id (the edit's time in nanoseconds), so the id alone repeats across
+ * the fields that edit changed; id plus field is unique.
+ */
+export function historyRowKey(record: Pick<MetadataChangeRecord, 'id' | 'field'>): string {
+  return `${record.id}:${record.field}`;
+}
+
 function fieldLabel(field: string): string {
   return FIELD_LABELS[field] || field.replace(/_/g, ' ');
 }
@@ -138,11 +148,11 @@ export const MetadataHistory = ({
 
   // Determine the most recent change per field for undo eligibility
   const latestByField = new Set<string>();
-  const latestIds = new Set<number>();
+  const latestIds = new Set<string>();
   for (const record of history) {
     if (!latestByField.has(record.field)) {
       latestByField.add(record.field);
-      latestIds.add(record.id);
+      latestIds.add(historyRowKey(record));
     }
   }
 
@@ -233,7 +243,7 @@ export const MetadataHistory = ({
                     const isSearch = record.field === '__search__';
                     return (
                       <TableRow
-                        key={record.id}
+                        key={historyRowKey(record)}
                         sx={isSearch ? { bgcolor: 'action.hover' } : undefined}
                       >
                         <TableCell>
@@ -334,7 +344,7 @@ export const MetadataHistory = ({
                         </TableCell>
                         <TableCell align="right">
                           {!isSearch &&
-                          latestIds.has(record.id) &&
+                          latestIds.has(historyRowKey(record)) &&
                           record.change_type !== 'undo' ? (
                             <Tooltip title={`Undo this ${fieldLabel(record.field)} change`}>
                               <span>

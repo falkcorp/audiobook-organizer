@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/relink_stale_series_fixer.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 1d26959f-7774-48db-b0ea-fa7813f655ef
 // last-edited: 2026-10-03
 
@@ -760,14 +760,17 @@ func (f *relinkSeriesFixer) Apply(_ context.Context, w *repairs.Writer, fresh re
 	if store == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	s, err := store.GetSeriesByID(d.seriesID)
-	if err != nil {
-		return fmt.Errorf("read series %d: %w", d.seriesID, err)
-	}
-	if s == nil {
-		return fmt.Errorf("%w: series %d no longer exists", repairs.ErrChangedSincePlan, d.seriesID)
-	}
-	_, err = w.Modify(d.bookID, func(row *database.Book) error {
+	_, err := w.Modify(d.bookID, func(row *database.Book) error {
+		// The series row is read inside the book write, beside the
+		// compare-and-set, so no rename or delete between a read and the
+		// write goes unseen.
+		s, serr := store.GetSeriesByID(d.seriesID)
+		if serr != nil {
+			return fmt.Errorf("read series %d: %w", d.seriesID, serr)
+		}
+		if s == nil {
+			return fmt.Errorf("%w: series %d no longer exists", repairs.ErrChangedSincePlan, d.seriesID)
+		}
 		if row.SeriesID != nil {
 			return fmt.Errorf("%w: book %s has series id %d now", repairs.ErrChangedSincePlan, d.bookID, *row.SeriesID)
 		}
