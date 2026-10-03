@@ -1,7 +1,7 @@
 // file: internal/fingerprint/window_exec.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 06d35c35-707c-4690-9bdb-eb99cb5f2002
-// last-edited: 2026-09-19
+// last-edited: 2026-10-03
 
 package fingerprint
 
@@ -355,14 +355,14 @@ func runWindowPipe(ctx context.Context, ffmpegPath, fpcalcPath string, ffArgs, f
 
 	if err := ff.Start(); err != nil {
 		_ = pw.Close()
-		return nil, 0, fmt.Errorf("%w: %w: start: %v", ErrWindowFFmpeg, ErrWindowTransient, err)
+		return nil, 0, startFailure(ctx, ErrWindowFFmpeg, err)
 	}
 	_ = pw.Close() // the child holds its own copy
 	if err := fp.Start(); err != nil {
 		_ = pr.Close()
 		_ = ff.Process.Kill()
 		_ = ff.Wait()
-		return nil, 0, fmt.Errorf("%w: %w: start: %v", ErrWindowFpcalc, ErrWindowTransient, err)
+		return nil, 0, startFailure(ctx, ErrWindowFpcalc, err)
 	}
 
 	// Cancellation kills both children (CommandContext), but a grandchild
@@ -398,6 +398,19 @@ func runWindowPipe(ctx context.Context, ffmpegPath, fpcalcPath string, ffArgs, f
 		return nil, counter.n, err
 	}
 	return frames, counter.n, nil
+}
+
+// startFailure classifies a tool that did not start. exec.Cmd.Start returns
+// ctx.Err() when the context is already done, so a timeout or cancel that
+// lands before Start is reported the way the post-Wait check reports one --
+// as the context's error -- not as a transient tool failure with the cause
+// flattened to text. Anything else (fork EAGAIN, a missing binary) is a
+// transient failure of the tool.
+func startFailure(ctx context.Context, sentinel, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return fmt.Errorf("fingerprint window: %w", ctxErr)
+	}
+	return fmt.Errorf("%w: %w: start: %v", sentinel, ErrWindowTransient, err)
 }
 
 func toolMsg(stderr *cappedBuffer, err error) string {

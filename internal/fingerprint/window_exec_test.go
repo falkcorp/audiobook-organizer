@@ -1,7 +1,7 @@
 // file: internal/fingerprint/window_exec_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6cf5cc21-cb7b-42bc-9d2f-c6838d6a621d
-// last-edited: 2026-09-19
+// last-edited: 2026-10-03
 
 package fingerprint
 
@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -195,45 +196,119 @@ func TestFileWindow_FakeFailures(t *testing.T) {
 	}
 }
 
+// waitForFile blocks until path exists and returns its trimmed contents. The
+// fake tools write their ready file with write-then-rename, so a file that
+// exists is complete. The deadline only bounds a broken test; the result never
+// depends on how fast anything runs. It reports through t.Errorf, so it may run
+// on a goroutine other than the test's.
+func waitForFile(t *testing.T, path string) (string, bool) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		if b, err := os.ReadFile(path); err == nil {
+			return strings.TrimSpace(string(b)), true
+		}
+		if time.Now().After(deadline) {
+			t.Errorf("%s never appeared; the fake tool did not start", path)
+			return "", false
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// readyThen is a fake-tool body that records pidExpr in ready (atomically) and
+// then runs rest.
+func readyThen(ready, pidExpr, rest string) string {
+	return fmt.Sprintf("echo %s > '%s.tmp' && mv '%s.tmp' '%s'\n%s", pidExpr, ready, ready, ready, rest)
+}
+
+// Every case cancels only after the fake ffmpeg is known to be running, so the
+// kill path is what is exercised in every run. Until 2026-10-03 the cases
+// raced a 200-300ms timer against process start-up and asserted a 5s
+// wall-clock bound: under load the timer could fire before ffmpeg started
+// (Start then returned the context error, which FileWindow flattened into a
+// transient ffmpeg failure; fixed in startFailure) and a run that waited out
+// the 2s WaitDelay twice could pass 5s.
 func TestFileWindow_ContextKill(t *testing.T) {
 	skipOnWindows(t)
-	cases := map[string]string{
-		// exec: the sleep IS the ffmpeg process.
-		"single process": "exec sleep 30",
-		// A grandchild inherits the pipe's write end and survives the kill
-		// of its parent; the read end must still be closed on cancel.
-		"orphaned grandchild holds pipe": "sleep 30; exit 0",
-	}
-	for name, ffmpeg := range cases {
-		t.Run(name, func(t *testing.T) {
-			dir := t.TempDir()
-			tools := WindowTools{
-				FFmpegPath: writeScript(t, dir, "ffmpeg", ffmpeg),
-				FpcalcPath: writeScript(t, dir, "fpcalc", fakeFpcalcRaw(900)),
-				Timeout:    300 * time.Millisecond,
-			}
-			start := time.Now()
-			_, err := tools.FileWindow(context.Background(), "/lib/a.m4b", testSpec)
-			if !errors.Is(err, context.DeadlineExceeded) {
-				t.Fatalf("err = %v, want DeadlineExceeded", err)
-			}
-			if el := time.Since(start); el > 5*time.Second {
-				t.Errorf("returned after %v; processes not killed promptly", el)
-			}
-		})
-	}
 
-	t.Run("parent cancel", func(t *testing.T) {
+	t.Run("single process", func(t *testing.T) {
+		// exec: the sleep IS the ffmpeg process. If cancellation did not
+		// kill it, FileWindow would wait out the hour and the test would hang.
 		dir := t.TempDir()
+		ready := filepath.Join(dir, "ready")
 		tools := WindowTools{
-			FFmpegPath: writeScript(t, dir, "ffmpeg", "exec sleep 30"),
+			FFmpegPath: writeScript(t, dir, "ffmpeg", readyThen(ready, "$$", "exec sleep 3600")),
 			FpcalcPath: writeScript(t, dir, "fpcalc", fakeFpcalcRaw(900)),
 		}
 		ctx, cancel := context.WithCancel(context.Background())
-		time.AfterFunc(200*time.Millisecond, cancel)
+		defer cancel()
+		go func() {
+			_, _ = waitForFile(t, ready)
+			cancel()
+		}()
 		_, err := tools.FileWindow(ctx, "/lib/a.m4b", testSpec)
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("err = %v, want Canceled", err)
+		}
+	})
+
+	t.Run("orphaned grandchild holds pipe", func(t *testing.T) {
+		// The grandchild inherits the pipe's write end and survives the kill
+		// of its parent; the read end must still be closed on cancel. Its
+		// stderr goes to /dev/null so the run does not also wait out
+		// ffmpeg's 2s WaitDelay on the stderr pipe, which is not under test.
+		dir := t.TempDir()
+		ready := filepath.Join(dir, "ready")
+		tools := WindowTools{
+			FFmpegPath: writeScript(t, dir, "ffmpeg",
+				"sleep 3600 2>/dev/null &\n"+readyThen(ready, "$!", "wait\nexit 0")),
+			FpcalcPath: writeScript(t, dir, "fpcalc", fakeFpcalcRaw(900)),
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		pidCh := make(chan int, 1)
+		go func() {
+			var pid int
+			if got, ok := waitForFile(t, ready); ok {
+				_, _ = fmt.Sscan(got, &pid)
+			}
+			pidCh <- pid
+			cancel()
+		}()
+		_, err := tools.FileWindow(ctx, "/lib/a.m4b", testSpec)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want Canceled", err)
+		}
+		pid := <-pidCh
+		if pid <= 0 {
+			t.Fatalf("bad grandchild pid %d", pid)
+		}
+		proc, findErr := os.FindProcess(pid)
+		if findErr != nil {
+			t.Fatalf("find grandchild %d: %v", pid, findErr)
+		}
+		t.Cleanup(func() { _ = proc.Kill() })
+		// The grandchild is still alive, still holding the write end: so
+		// FileWindow returned because it closed the read end, not because
+		// the pipe's last writer went away.
+		if sigErr := proc.Signal(syscall.Signal(0)); sigErr != nil {
+			t.Fatalf("grandchild %d is gone (%v); the test no longer proves FileWindow returns while it holds the pipe", pid, sigErr)
+		}
+	})
+
+	t.Run("per-window timeout", func(t *testing.T) {
+		// The timeout can expire before ffmpeg starts or while it runs; both
+		// must report DeadlineExceeded (see TestFileWindow_DoneContextBeforeStart).
+		dir := t.TempDir()
+		tools := WindowTools{
+			FFmpegPath: writeScript(t, dir, "ffmpeg", "exec sleep 3600"),
+			FpcalcPath: writeScript(t, dir, "fpcalc", fakeFpcalcRaw(900)),
+			Timeout:    300 * time.Millisecond,
+		}
+		_, err := tools.FileWindow(context.Background(), "/lib/a.m4b", testSpec)
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("err = %v, want DeadlineExceeded", err)
 		}
 	})
 }
@@ -316,5 +391,29 @@ fi`)
 		if err != nil || len(ints) != 2400 || ints[0] != 4000000000 {
 			t.Fatalf("seg%d decodes to %d frames (first %v), err %v", i, len(ints), ints[:min(1, len(ints))], err)
 		}
+	}
+}
+
+// A context that is already done when FileWindow starts the tools must come
+// back as that context's error. exec.Cmd.Start returns ctx.Err() for a done
+// context, and wrapping it with %v as a transient ffmpeg failure dropped the
+// chain: under load the per-window timeout could expire before ffmpeg started,
+// and TestFileWindow_ContextKill saw "ffmpeg failed: transient" instead of
+// DeadlineExceeded.
+func TestFileWindow_DoneContextBeforeStart(t *testing.T) {
+	skipOnWindows(t)
+	dir := t.TempDir()
+	tools := WindowTools{
+		FFmpegPath: writeScript(t, dir, "ffmpeg", fakeFFmpegOK(120)),
+		FpcalcPath: writeScript(t, dir, "fpcalc", fakeFpcalcRaw(900)),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := tools.FileWindow(ctx, "/lib/a.m4b", testSpec)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want Canceled", err)
+	}
+	if errors.Is(err, ErrWindowTransient) || errors.Is(err, ErrWindowFFmpeg) {
+		t.Fatalf("err = %v: a canceled context is not a tool failure", err)
 	}
 }
