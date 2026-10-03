@@ -15,5 +15,5 @@
 - Saving a book whose author is known only through its author list (shown as "A & B") no longer creates a new author named "A & B" or locks the author field.
 - Clearing the author box on a book that has no author is no longer refused; it simply changes nothing.
 - An author or series sent only as a locked override is now applied, not just locked.
-- AI filename parsing now saves the series number it finds; it was being dropped.
-- Changing only the capitalisation of a book's series name no longer creates a second series and moves the book onto it. The book stays in its series; when it is the only book in that series, the series takes the new capitalisation (recorded in the book's history), and when other books share it, the series name is left as it was.
+- AI filename parsing now saves the series number it finds when the book has none; it was being dropped. A number the book already has is left alone.
+- Changing only the capitalisation of a book's series name no longer creates a second series and moves the book onto it. The book stays in its series; when it is the only book in that series, the series takes the new capitalisation (recorded in the book's history), and when other books share it, the series name is left as it was and nothing is locked. The rename happens only after the book itself is saved, and if it fails the book keeps showing the series' actual name.

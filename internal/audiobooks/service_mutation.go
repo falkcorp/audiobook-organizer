@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_mutation.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: e7b1f6a5-b8c9-0d12-ce3f-4a5b6c7d8e9f
 // last-edited: 2026-10-03
 
@@ -93,12 +93,13 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 	// web editor's form of a clear -- used to lock the field at "" and record
 	// a history row while the author stayed, so the lock claimed a change
 	// that never happened. Refuse it before anything is written, when the
-	// book has an author to clear. On a book with none (the user typed in
-	// the empty box and deleted it again) it changes nothing, so it is
+	// book shows an author to clear. On a book that shows none (the user
+	// typed in the empty box and deleted it again, or an AuthorID with no
+	// author row behind it) it changes nothing the user could see, so it is
 	// dropped: no lock, no history.
 	skipOverride := map[string]bool{}
 	if o, ok := req.Updates.Overrides[database.FieldKeyAuthorName]; ok && authorOverrideClears(o) {
-		if beforeAuthor != "" || authorLinked {
+		if beforeAuthor != "" {
 			return nil, fmt.Errorf("%w: the author cannot be cleared; set a different author", ErrInvalidAudiobookUpdate)
 		}
 		skipOverride[database.FieldKeyAuthorName] = true
@@ -239,6 +240,26 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 		state = map[string]metadataFieldState{}
 	}
 
+	// The series outcome, decided BEFORE the override loop: a series_name
+	// override is locked and recorded there, so it must already be known
+	// whether the sent name is what the book will show. See planSeriesEdit.
+	seriesValue := effectiveString(overrideString(req.Updates.Overrides[database.FieldKeySeriesName]), req.Updates.SeriesName)
+	seriesNameSent := seriesValue != nil && sent(database.FieldKeySeriesName)
+	seriesName := ""
+	if seriesNameSent {
+		seriesName = strings.TrimSpace(*seriesValue)
+	}
+	seriesPlan := svc.planSeriesEdit(id, before, beforeSeries, seriesName, sent("series_id"))
+	if seriesPlan.sameRow && seriesPlan.name != seriesName {
+		// The book will not show the sent spelling (a shared series, or one
+		// that cannot be renamed): locking or recording it would claim a
+		// name the book does not have.
+		skipOverride[database.FieldKeySeriesName] = true
+	}
+	// The series_name field state before this edit, restored if a planned
+	// rename fails after the commit.
+	seriesStateBefore, seriesStateExisted := state[database.FieldKeySeriesName]
+
 	// Process overrides
 	for field, override := range req.Updates.Overrides {
 		if skipOverride[field] {
@@ -342,6 +363,7 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 		authorNames := splitMultipleNames(authorName)
 		var bookAuthors []database.BookAuthor
 		var primaryAuthorID int
+		var rowNames []string
 		for i, aName := range authorNames {
 			aName = strings.TrimSpace(aName)
 			if aName == "" {
@@ -370,6 +392,7 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 			if i > 0 {
 				role = "co-author"
 			}
+			rowNames = append(rowNames, author.Name)
 			bookAuthors = append(bookAuthors, database.BookAuthor{
 				BookID: id, AuthorID: author.ID, Role: role, Position: i,
 			})
@@ -386,7 +409,12 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 		}
 		// Set primary author on the book for backward compat
 		payload.AuthorID = &primaryAuthorID
-		resolvedAuthorName = authorName // Keep the combined name for display
+		// The names of the author rows the book is linked to, not the text as
+		// typed: the lookup ignores case, so "Alice Able" resolves to a row
+		// named "alice able", and stamping the typed spelling on the embedded
+		// Author left it disagreeing with the row (todo.d
+		// EDIT-AUTHOR-CASE-RENAME tracks renaming a sole-credited row).
+		resolvedAuthorName = strings.Join(rowNames, " & ")
 		pendingAuthors = bookAuthors
 	} else if payload.AuthorID != nil {
 		if author, err := svc.store.GetAuthorByID(*payload.AuthorID); err == nil && author != nil {
@@ -422,14 +450,6 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 	// guard), and every read prefers that object, so the book still showed
 	// its series after a 200.
 	var resolvedSeriesName string
-	seriesName := ""
-	// The effective value, as for the author: an override's, else the
-	// top-level key's.
-	seriesValue := effectiveString(payload.SeriesName, req.Updates.SeriesName)
-	seriesNameSent := seriesValue != nil && sent(database.FieldKeySeriesName)
-	if seriesNameSent {
-		seriesName = strings.TrimSpace(*seriesValue)
-	}
 	clearSeries := seriesName == "" && (req.Updates.ClearSeries || seriesNameSent)
 	// hadSeries: the book showed a series name on GET (same resolver). Only
 	// a clear of a series the user could see is a user edit: it wipes the
@@ -439,36 +459,13 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 	// Books hit by the old clear bug (nil SeriesID, stale embedded Series)
 	// show the stale name, so a repeat clear repairs them.
 	hadSeries := beforeSeries != ""
-	// seriesSameRow: the sent name is the book's CURRENT series, compared
-	// the way the name lookup compares (util.NormalizeAuthor: case and
-	// whitespace insensitive). The link is kept and no row is ever created
-	// for it. Looking the name up again could resolve -- or create -- a
-	// different row of that name, because the lookup is scoped by the
-	// book's author: a case-only edit of a series stored without an author
-	// minted a second "The Saga" under the book's author and moved the book
-	// onto it. Only while the book is linked by ID: a name shown from a stale
-	// embedded object alone (nil SeriesID) goes through the lookup, which
-	// relinks the book; skipping it would let the store drop that object.
-	seriesSameRow := seriesName != "" && beforeSeries != "" && before.SeriesID != nil && !sent("series_id") &&
-		util.NormalizeAuthor(seriesName) == util.NormalizeAuthor(beforeSeries)
-	seriesUnchanged := seriesSameRow && seriesName == beforeSeries
-	// seriesRenamedFrom: the name the case-only rename replaced, recorded in
-	// the book's history after the commit (the column diff does not see it:
-	// series_id did not change).
-	seriesRenamedFrom := ""
+	seriesUnchanged := seriesPlan.sameRow && seriesPlan.name == beforeSeries
 	switch {
-	case seriesUnchanged:
-		// Re-sent as shown (the editor sends it on every save): not an edit.
-		resolvedSeriesName = beforeSeries
-	case seriesSameRow:
-		// A case (or spacing) change of the current series: the row is
-		// renamed when this book is its only member, else left as is.
-		resolvedSeriesName = svc.recaseSoleSeries(id, *before.SeriesID, seriesName)
-		if resolvedSeriesName == beforeSeries {
-			seriesUnchanged = true
-		} else {
-			seriesRenamedFrom = beforeSeries
-		}
+	case seriesPlan.sameRow:
+		// The book's current series row (planSeriesEdit): the link is kept and
+		// the name is the plan's -- the sent spelling only when a rename of a
+		// sole-member row is planned (it runs after the commit).
+		resolvedSeriesName = seriesPlan.name
 	case seriesName != "":
 		series, err := svc.store.GetSeriesByName(seriesName, payload.AuthorID)
 		if err != nil {
@@ -646,6 +643,51 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 	// between the commit and these writes can be overwritten by them, or
 	// overwrite them. Tracked in todo.d (EDIT-JOIN-WRITE-STRIPE).
 
+	// The planned case-only series rename, now that the book has committed
+	// (a failed commit must not leave the series renamed with no history).
+	// If it fails, the book's embedded Series name is put back to the row's
+	// actual name, and the series_name lock and history this edit queued are
+	// withdrawn, so neither claims a name the book does not show.
+	seriesRenamed := false
+	if seriesPlan.renameFrom != "" {
+		if rerr := svc.store.RenameSeriesIf(*before.SeriesID, seriesPlan.renameFrom, seriesPlan.name); rerr == nil {
+			seriesRenamed = true
+		} else {
+			singleLog.Warn("UpdateAudiobook %s: case-only rename of series %d to %q failed; the book keeps the series' name: %v",
+				logger.SanitizeLogValue(id), *before.SeriesID, logger.SanitizeLogValue(seriesPlan.name), rerr)
+			actual := seriesPlan.renameFrom
+			if row, gErr := svc.store.GetSeriesByID(*before.SeriesID); gErr == nil && row != nil {
+				actual = row.Name
+			}
+			seriesID := *before.SeriesID
+			if fixed, mErr := svc.store.ModifyBook(id, func(fresh *database.Book) error {
+				if fresh.Series != nil && fresh.Series.ID == seriesID {
+					fresh.Series.Name = actual
+				}
+				return nil
+			}); mErr != nil {
+				singleLog.Warn("UpdateAudiobook %s: could not restore the series name on the book after a failed rename: %v",
+					logger.SanitizeLogValue(id), mErr)
+			} else if fixed != nil {
+				updatedBook = fixed
+			}
+			resolvedSeriesName = actual
+			seriesUnchanged = actual == beforeSeries
+			if seriesStateExisted {
+				state[database.FieldKeySeriesName] = seriesStateBefore
+			} else {
+				delete(state, database.FieldKeySeriesName)
+			}
+			kept := pendingHistory[:0]
+			for _, r := range pendingHistory {
+				if r.field != database.FieldKeySeriesName {
+					kept = append(kept, r)
+				}
+			}
+			pendingHistory = kept
+		}
+	}
+
 	// The book_authors join resolved above.
 	if pendingAuthors != nil {
 		if err := svc.store.SetBookAuthors(id, pendingAuthors); err != nil {
@@ -693,11 +735,12 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 		}
 	}
 
-	// The case-only series rename (recaseSoleSeries), which the column diff
-	// above cannot see.
-	if seriesRenamedFrom != "" {
+	// The case-only series rename, which the column diff above cannot see
+	// (series_id did not change). One row per rename: skipped when the
+	// series_name override/lock row above already recorded it.
+	if seriesRenamed && !overrideRecorded[database.HistoryFieldSeries] {
 		newMetadataStateSvc(svc.store).recordChange(id, database.HistoryFieldSeries,
-			database.ChangeTypeManual, "manual", seriesRenamedFrom, resolvedSeriesName)
+			database.ChangeTypeManual, "manual", seriesPlan.renameFrom, seriesPlan.name)
 	}
 
 	// Save metadata state
@@ -799,49 +842,102 @@ func (svc *AudiobookService) syncEditedNarratorJunction(id string, pre, written 
 	}
 }
 
-// recaseSoleSeries handles an edit that renames a book's current series to
-// a name the lookup treats as the same (only case or spacing differ). The
-// book keeps its link either way. When this book is the series' only member
-// -- counted in ANY state, trashed and non-primary versions included
-// (database.SeriesRefCounts) -- the row takes the sent spelling, through the
-// store's guarded rename (RenameSeriesIf: only if still named as read, and
-// only if no other series of that author answers to the name). When other
-// books share it, a one-book edit does not rename it for all of them, and the
-// row keeps its name. It returns the series' name after the call.
+// seriesEditPlan is UpdateAudiobook's decision for a sent series name,
+// taken before anything is written.
+type seriesEditPlan struct {
+	// sameRow: the sent name is the book's current series row; the link is
+	// kept and no row is looked up or created.
+	sameRow bool
+	// name: the series name the book will show.
+	name string
+	// renameFrom: when set, the row (named renameFrom) is to be renamed to
+	// name after the book commits.
+	renameFrom string
+}
+
+// planSeriesEdit decides what a sent series name does to a book linked to a
+// series.
 //
-// The book's own change history records the rename: the save refreshes the
-// book's embedded Series object to the returned name, and the column diff
-// records the series row (old -> new). A failure leaves the name unchanged
-// and is logged; the edit still saves.
-func (svc *AudiobookService) recaseSoleSeries(bookID string, seriesID int, sentName string) string {
-	row, err := svc.store.GetSeriesByID(seriesID)
-	if err != nil || row == nil {
-		singleLog.Warn("UpdateAudiobook %s: series %d unreadable; case-only rename skipped: %v",
-			logger.SanitizeLogValue(bookID), seriesID, err)
-		if row != nil {
-			return row.Name
-		}
-		return sentName
+// The sent name is the book's CURRENT series when it matches the series
+// row's name, or the name the book shows, the way the name lookup compares
+// (util.NormalizeAuthor: case and whitespace insensitive). Then the link is
+// kept and no row is ever created: looking the name up again could resolve
+// -- or create -- a different row, because the lookup is scoped by the
+// book's author (a case-only edit of a series stored without an author used
+// to mint a second "The Saga" under the book's author and move the book onto
+// it).
+//
+//   - Re-sent exactly as shown: unchanged.
+//   - Spelled differently (case or spacing) and this book is the row's only
+//     member, counted in ANY state, trashed and non-primary versions
+//     included (database.SeriesRefCounts): a rename of the row to the sent
+//     spelling is planned. It runs after the commit, through the store's
+//     guarded rename (RenameSeriesIf: only if still named as read, and only
+//     if no other series of that author answers to the name).
+//   - Shared with other books, or the count cannot be read (fail closed): the
+//     row keeps its name; one book's edit does not rename it for everyone.
+//
+// Not the current row: when the book has no series link, the sent name is a
+// different series, the client also sent series_id, or the linked series row
+// no longer exists (a dangling SeriesID goes through the normal lookup, which
+// relinks the book). A read error of the row keeps the shown name when the
+// sent name matches it.
+//
+// The count and the rename are not atomic: another book can join the series
+// between them, and the row is then renamed for it too. The window is the
+// length of one edit request, and RenameSeriesIf still refuses a rename onto
+// a name another row answers to.
+func (svc *AudiobookService) planSeriesEdit(bookID string, before *database.Book, shown, sentName string, seriesIDSent bool) seriesEditPlan {
+	if sentName == "" || before.SeriesID == nil || seriesIDSent {
+		return seriesEditPlan{}
 	}
-	if row.Name == sentName {
-		return row.Name
+	norm := util.NormalizeAuthor(sentName)
+	row, err := svc.store.GetSeriesByID(*before.SeriesID)
+	if err != nil {
+		if shown != "" && norm == util.NormalizeAuthor(shown) {
+			singleLog.Warn("UpdateAudiobook %s: series %d unreadable; the book keeps its series name: %v",
+				logger.SanitizeLogValue(bookID), *before.SeriesID, err)
+			return seriesEditPlan{sameRow: true, name: shown}
+		}
+		return seriesEditPlan{}
+	}
+	if row == nil {
+		return seriesEditPlan{}
+	}
+	if norm != util.NormalizeAuthor(row.Name) && (shown == "" || norm != util.NormalizeAuthor(shown)) {
+		return seriesEditPlan{}
+	}
+	switch {
+	case sentName == shown:
+		return seriesEditPlan{sameRow: true, name: shown}
+	case sentName == row.Name:
+		return seriesEditPlan{sameRow: true, name: row.Name}
+	case norm != util.NormalizeAuthor(row.Name):
+		// Matches only a stale shown name: keep the row's name.
+		return seriesEditPlan{sameRow: true, name: row.Name}
 	}
 	counts, err := database.SeriesRefCounts(svc.store)
 	if err != nil {
-		// Fail closed: an unanswerable count must not rename a shared row.
-		singleLog.Warn("UpdateAudiobook %s: series %d member count unavailable; case-only rename skipped: %v",
-			logger.SanitizeLogValue(bookID), seriesID, err)
-		return row.Name
+		singleLog.Warn("UpdateAudiobook %s: series %d member count unavailable; its name is left as is: %v",
+			logger.SanitizeLogValue(bookID), row.ID, err)
+		return seriesEditPlan{sameRow: true, name: row.Name}
 	}
-	if counts[seriesID] != 1 {
-		return row.Name
+	if counts[row.ID] != 1 {
+		return seriesEditPlan{sameRow: true, name: row.Name}
 	}
-	if err := svc.store.RenameSeriesIf(seriesID, row.Name, sentName); err != nil {
-		singleLog.Warn("UpdateAudiobook %s: case-only rename of series %d to %q skipped: %v",
-			logger.SanitizeLogValue(bookID), seriesID, logger.SanitizeLogValue(sentName), err)
-		return row.Name
+	return seriesEditPlan{sameRow: true, name: sentName, renameFrom: row.Name}
+}
+
+// overrideString is a string override's value, or nil when the override is
+// absent, clears, carries no value, or is not a string.
+func overrideString(o OverridePayload) *string {
+	if o.Clear || len(o.Value) == 0 {
+		return nil
 	}
-	return sentName
+	if v, ok := decodeRawValue(o.Value).(string); ok {
+		return &v
+	}
+	return nil
 }
 
 // junctionNarratorText is the narrator a GET shows for a book whose

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/ai.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 6ccf0c64-9654-46c5-aed0-584943acb1c5
 // last-edited: 2026-10-03
 
@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
@@ -384,7 +385,11 @@ func (h *AIHandler) TestMetadataSource(c *gin.Context) {
 // service's own keys. The series number goes as series_position; it was sent
 // as series_sequence, a key the update service never reads, so every
 // AI-parsed series number was dropped.
-func AIParsedUpdatePayload(metadata *ai.ParsedMetadata) map[string]any {
+//
+// The series number only fills a book that has no stored position: a parse
+// yields a whole number, and sending it would overwrite a stored "1.5" with
+// 1 and lock it like a user edit.
+func AIParsedUpdatePayload(metadata *ai.ParsedMetadata, book *database.Book) map[string]any {
 	payload := map[string]any{}
 	if metadata == nil {
 		return payload
@@ -407,10 +412,20 @@ func AIParsedUpdatePayload(metadata *ai.ParsedMetadata) map[string]any {
 	if metadata.Series != "" {
 		payload["series_name"] = metadata.Series
 	}
-	if metadata.SeriesNum > 0 {
+	if metadata.SeriesNum > 0 && !hasSeriesPosition(book) {
 		payload["series_position"] = metadata.SeriesNum
 	}
 	return payload
+}
+
+// hasSeriesPosition reports whether book already has a series position
+// (the int or the raw value).
+func hasSeriesPosition(book *database.Book) bool {
+	if book == nil {
+		return false
+	}
+	return book.SeriesSequence != nil ||
+		(book.SeriesPositionRaw != nil && strings.TrimSpace(*book.SeriesPositionRaw) != "")
 }
 
 // ParseAudiobook parses an audiobook's filename with AI and updates its metadata.
@@ -474,7 +489,7 @@ func (h *AIHandler) ParseAudiobook(c *gin.Context) {
 
 	// Build payload for the update service (routes through AudiobookService
 	// which handles "&" splitting for authors/narrators, junction tables, etc.)
-	payload := AIParsedUpdatePayload(metadata)
+	payload := AIParsedUpdatePayload(metadata, book)
 
 	// Route through the service layer for proper multi-author/narrator handling
 	updatedBook, err := h.updater.UpdateAudiobook(c.Request.Context(), id, payload)
