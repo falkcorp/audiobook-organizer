@@ -1,7 +1,7 @@
 // file: internal/undo/revert_plan.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 7c3e9a51-2f84-4b6d-a0e7-5d1c8b4f2e96
-// last-edited: 2026-10-02
+// last-edited: 2026-10-03
 
 package undo
 

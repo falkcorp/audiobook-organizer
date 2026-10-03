@@ -1,5 +1,5 @@
 // file: internal/repairs/writer_files.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 4d8a2f61-3c7e-4b19-8e05-9a1f6c3d7b28
 // last-edited: 2026-10-03
 
@@ -74,6 +74,11 @@ type journalIndex struct {
 	loaded bool
 	keys   map[string]bool
 	books  map[string]bool
+	// created counts the rows this writer created per book, and found
+	// marks a book whose rows were already in the journal (a resumed run),
+	// so voiding a book's only row clears books for it again.
+	created map[string]int
+	found   map[string]bool
 	// latest is the NewValue of the newest row per book, type and field
 	// (valueKey), for JournaledValue.
 	latest map[string]string
@@ -94,6 +99,8 @@ func (ix *journalIndex) load(w *Writer) error {
 	}
 	ix.keys = map[string]bool{}
 	ix.books = map[string]bool{}
+	ix.created = map[string]int{}
+	ix.found = map[string]bool{}
 	ix.latest = map[string]string{}
 	for _, r := range rows {
 		if r.RevertedAt == nil {
@@ -198,6 +205,7 @@ func (w *Writer) journalRow(bookID, changeType, field, oldV, newV string) (journ
 	}
 	if ix.keys[key] {
 		ix.books[bookID] = true
+		ix.found[bookID] = true
 		return journaledRow{}, nil
 	}
 	id := ulid.Make().String()
@@ -215,6 +223,7 @@ func (w *Writer) journalRow(bookID, changeType, field, oldV, newV string) (journ
 	row.prevLatest, row.hadLatest = ix.latest[vk]
 	ix.keys[key] = true
 	ix.books[bookID] = true
+	ix.created[bookID]++
 	ix.latest[vk] = newV
 	w.journaled.Add(1)
 	return row, nil
@@ -239,6 +248,12 @@ func (w *Writer) voidRow(row journaledRow) error {
 	ix.mu.Lock()
 	defer ix.mu.Unlock()
 	delete(ix.keys, row.key)
+	// A book whose only row was voided has nothing journaled: its history
+	// batches are undone field by field again, not marked apply_op_journaled.
+	b := row.row.BookID
+	if ix.created[b]--; ix.created[b] <= 0 && !ix.found[b] {
+		delete(ix.books, b)
+	}
 	if row.hadLatest {
 		ix.latest[row.valueKey] = row.prevLatest
 	} else {

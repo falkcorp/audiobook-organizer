@@ -1,5 +1,5 @@
 // file: internal/metafetch/state_snapshot_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0b9d0f57-6fc7-45ea-9c21-992a7ba92708
 // last-edited: 2026-10-03
 

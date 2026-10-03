@@ -1,5 +1,5 @@
 // file: internal/database/metadata_field_locks.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 0d1a2cd0-a75c-4990-bb1f-bac01864e50c
 // last-edited: 2026-10-03
 
