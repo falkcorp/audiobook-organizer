@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.190.0
+// version: 1.191.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-10-02
+// last-edited: 2026-10-03
 
 package database
 
@@ -140,9 +140,12 @@ type PebbleStore struct {
 	libraryCountsRecomputeMu sync.Mutex           // gates recompute to prevent stampede when N callers see dirty cache
 	UseMemDB                 bool                 // feature flag: use in-memory query layer for aggregations / filtered reads
 
-	// metadataCacheWrites counts PutMetadataCache/DeleteMetadataCache calls;
-	// read by MetadataCacheGeneration.
-	metadataCacheWrites atomic.Uint64
+	// cacheGen is bumped by every write to the "metadata_cache:" keyspace
+	// (MetadataCacheGeneration lists the writers) and cacheChanges records
+	// which book each bump was for, so the review listing's snapshot can
+	// re-read only those rows (MetadataCacheChangedSince).
+	cacheGen     cache.Generation
+	cacheChanges idChangeLog
 
 	// libraryStatsDirty is set by InvalidateLibraryStats and cleared when a
 	// recompute starts. It replaces a Pebble Delete of stats:library that ran on
@@ -194,7 +197,7 @@ type PebbleStore struct {
 	// bookChanges records which book each libGen bump was for, so a
 	// generation-keyed index can catch up by re-reading only those books
 	// (BooksChangedSince) instead of rebuilding from every book.
-	bookChanges bookChangeLog
+	bookChanges idChangeLog
 }
 
 // mem returns the active in-memory query layer or nil if warmup hasn't
@@ -2441,7 +2444,7 @@ func (p *PebbleStore) CreateBook(book *Book) (*Book, error) {
 // committed, and a recovered panic must not leave every cache serving the
 // pre-write library under the old generation.
 //
-// id is the book written; the bump is logged against it (bookChangeLog).
+// id is the book written; the bump is logged against it (idChangeLog).
 func (p *PebbleStore) writeThroughThenBump(id string, writeThrough func()) {
 	defer p.bookChanges.bump(&p.libGen, id)
 	writeThrough()
@@ -2972,7 +2975,7 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, clearSig bool,
 		return nil, err
 	}
 	if cacheRowDeleted {
-		p.metadataCacheWrites.Add(1)
+		p.bumpMetadataCacheGeneration(id)
 	}
 	if markerMayExist {
 		p.forgetUndecodableMarker(id, markerGen)
@@ -3584,7 +3587,7 @@ func (p *PebbleStore) DeleteBook(id string) error {
 		return err
 	}
 	if cacheRowDeleted {
-		p.metadataCacheWrites.Add(1)
+		p.bumpMetadataCacheGeneration(id)
 	}
 	unlockAuthors()
 	authorsLocked = false
@@ -5044,8 +5047,9 @@ func (p *PebbleStore) Reset() error {
 	if err := batch.Commit(pebble.Sync); err != nil {
 		return fmt.Errorf("failed to commit reset batch: %w", err)
 	}
-	// The wipe removed every metadata_cache: row too.
-	p.metadataCacheWrites.Add(1)
+	// The wipe removed every metadata_cache: row too; no record can name
+	// them, so a reader behind this generation rebuilds.
+	p.cacheChanges.bumpAll(&p.cacheGen)
 	// The wipe removed every work: row; invalidate any works cache.
 	p.bumpWorksGeneration()
 
