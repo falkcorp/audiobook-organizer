@@ -606,3 +606,40 @@ func BenchmarkOpChangeBackfill(b *testing.B) {
 		_ = p.Close()
 	}
 }
+
+// TestOpchangeIndex_RebuildInvalidatesCachedSentinel: while a rebuild runs,
+// readers must be on the full scan even though they cached a positive
+// sentinel read before it started, including one cached from a Get that
+// raced the sentinel delete (simulated by storing the pre-rebuild generation).
+func TestOpchangeIndex_RebuildInvalidatesCachedSentinel(t *testing.T) {
+	p := newOpChangeTestStore(t)
+	t.Cleanup(func() { opChangeByBookBackfillAfterChunk = nil })
+	if err := p.CreateOperationChange(&OperationChange{OperationID: "op1", BookID: "b1"}); err != nil {
+		t.Fatal(err)
+	}
+	mustBackfillOpChange(t, p)
+	if built, _ := p.opChangeByBookIndexBuilt(); !built {
+		t.Fatal("not built after backfill")
+	}
+	staleGen := p.opChangeByBookGen.Load()
+	sawScan := false
+	opChangeByBookBackfillAfterChunk = func(int) error {
+		// A reader that read the sentinel just before the delete committed.
+		p.opChangeByBookBuiltAt.Store(staleGen + 1)
+		built, err := p.opChangeByBookIndexBuilt()
+		if err != nil {
+			return err
+		}
+		sawScan = !built
+		return nil
+	}
+	if _, err := p.RebuildOpChangeByBookIndex(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !sawScan {
+		t.Fatal("a reader trusted the index mid-rebuild")
+	}
+	if built, _ := p.opChangeByBookIndexBuilt(); !built {
+		t.Fatal("not built after rebuild")
+	}
+}

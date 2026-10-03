@@ -158,18 +158,23 @@ func (p *PebbleStore) storedOpChangeBookID(primary []byte) (bookID string, found
 	return old.BookID, true, nil
 }
 
-// opChangeByBookIndexBuilt reports whether the backfill sentinel exists. Only
-// true is cached, so a long-lived process picks up a completion without a
-// restart. A read error is returned, never guessed at.
+// opChangeByBookIndexBuilt reports whether the backfill sentinel exists. A
+// positive read is cached against the current generation, so a long-lived
+// process picks up a completion without a restart, and a rebuild (which bumps
+// the generation after its sentinel delete commits) invalidates every cached
+// positive, including one a reader stored from a Get that raced the delete:
+// that reader stored the old generation, which no longer matches. A read
+// error is returned, never guessed at.
 func (p *PebbleStore) opChangeByBookIndexBuilt() (bool, error) {
-	if p.opChangeByBookBuilt.Load() {
+	gen := p.opChangeByBookGen.Load()
+	if p.opChangeByBookBuiltAt.Load() == gen+1 {
 		return true, nil
 	}
 	_, closer, err := p.db.Get([]byte(opChangeByBookBackfillKey))
 	switch {
 	case err == nil:
 		closer.Close()
-		p.opChangeByBookBuilt.Store(true)
+		p.opChangeByBookBuiltAt.Store(gen + 1)
 		return true, nil
 	case errors.Is(err, pebble.ErrNotFound):
 		return false, nil
@@ -349,16 +354,17 @@ func (p *PebbleStore) backfillOpChangeByBook(ctx context.Context, force bool) (O
 			reset.Close()
 			return res, err
 		}
-		// Drop the cached flag before the commit lands so no reader that
-		// starts after this point trusts the index; one already inside
-		// getBookChangesIndexed reads an index that is a superset of what it
-		// was a moment ago.
-		p.opChangeByBookBuilt.Store(false)
 		err := reset.Commit(pebble.Sync)
 		reset.Close()
 		if err != nil {
 			return res, fmt.Errorf("clear opchange_by_book sentinel: %w", err)
 		}
+		// Bump the generation only after the delete is durable: a reader
+		// that Got the sentinel before the commit cached the old generation,
+		// which this invalidates, and every later read misses the sentinel.
+		// A call already inside getBookChangesIndexed finishes on an index
+		// that is no worse than it was before the rebuild started.
+		p.opChangeByBookGen.Add(1)
 	} else {
 		built, err := p.opChangeByBookIndexBuilt()
 		if err != nil {
@@ -442,7 +448,7 @@ func (p *PebbleStore) backfillOpChangeByBook(ctx context.Context, force bool) (O
 		return res, err
 	}
 	res.Commits++
-	p.opChangeByBookBuilt.Store(true)
+	p.opChangeByBookBuiltAt.Store(p.opChangeByBookGen.Load() + 1)
 	if res.Undecodable > 0 {
 		slog.Error("opchange-index-backfill: opchange rows cannot be decoded; GetBookChanges fails "+
 			"for every book until each is rewritten or removed, as it did before the index",
