@@ -847,10 +847,19 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 	if updatedBook == nil {
 		return nil, updateErr
 	}
-	// A hand-picked apply that wrote over a repair's lock makes the lock the
-	// person's: reverting the repair later must not lift it and let a rescan
-	// put the junk back over the person's choice.
-	if cerr := database.ClaimRepairLocks(mfs.db, id, claimedLocks); cerr != nil {
+	// A hand-picked apply that changed a repair-locked field makes the lock
+	// the person's: reverting the repair later must not lift it and let a
+	// rescan put the junk back over the person's choice. Only fields whose
+	// committed value changed: a candidate that merely agrees with the
+	// repair leaves the lock the repair's.
+	var changedLocks []string
+	for _, k := range claimedLocks {
+		if database.LockedColumnChanged(k, before, updatedBook) ||
+			(k == database.FieldKeyAuthorName && credits.Changed()) {
+			changedLocks = append(changedLocks, k)
+		}
+	}
+	if cerr := database.ClaimRepairLocks(mfs.db, id, changedLocks); cerr != nil {
 		slog.Error("hand-picked apply: repair locks not claimed; reverting that repair may lift them",
 			"id", logger.SanitizeLogValue(id), "fields", claimedLocks, "error", logger.SanitizeLogValue(cerr.Error()))
 	}

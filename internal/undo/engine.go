@@ -124,6 +124,9 @@ func PreflightUndoConflicts(store ConflictChecker, operationID string) (*UndoCon
 
 	var restorable []*database.OperationChange
 	for _, c := range changes {
+		if c.Voided {
+			continue // the write it describes never happened
+		}
 		// Classify before the reverted check, as the revert does: a
 		// record-only row is never counted as already reverted.
 		if label := NotRestorableLabel(c); label != "" {
@@ -173,7 +176,7 @@ func PreflightUndoConflicts(store ConflictChecker, operationID string) (*UndoCon
 		if c.ChangeType == ChangeTypeBookSoftDelete && restoresBook[c.BookID] {
 			v = rowVerdict{already: true}
 		} else {
-			v = preflightRow(store, c, plan.Stamps)
+			v = preflightRow(store, c, plan.Stamps, plan)
 		}
 		if c.ChangeType == ChangeTypeBookSoftDelete && v.refusal == nil && v.conflict == nil {
 			restoresBook[c.BookID] = true
@@ -216,7 +219,7 @@ func verdictOf(err error) rowVerdict {
 	return rowVerdict{refusal: err}
 }
 
-func preflightRow(store ConflictChecker, c *database.OperationChange, stamps SoftDeleteStamps) rowVerdict {
+func preflightRow(store ConflictChecker, c *database.OperationChange, stamps SoftDeleteStamps, plan *RevertPlan) rowVerdict {
 	switch c.ChangeType {
 	case "file_move", "organize_rename":
 		conflict, refusal := checkFileMoveConflict(store, c)
@@ -241,6 +244,19 @@ func preflightRow(store ConflictChecker, c *database.OperationChange, stamps Sof
 			// Fields the revert cannot restore at all keep their earlier
 			// classification.
 			return rowVerdict{}
+		}
+		// A value whose paired repair lock a person took over is theirs
+		// (CheckPairedFieldLock), when the store can read both.
+		if locks := plan.FieldLocksOf(c); len(locks) > 0 {
+			if r, ok := store.(fieldStateReader); ok {
+				states, serr := r.GetMetadataFieldStates(c.BookID)
+				if serr != nil {
+					return rowVerdict{refusal: refuse(ReasonFieldUnreadable, "read field states of %s: %v", c.BookID, serr)}
+				}
+				if err := CheckPairedFieldLock(locks, states, c); err != nil {
+					return rowVerdict{refusal: err}
+				}
+			}
 		}
 		// The revert is compare-and-set (CheckBookFieldCurrent): a field
 		// edited since the operation is refused, not overwritten.

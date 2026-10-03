@@ -255,6 +255,8 @@ export interface TagSourceValues {
   stored_value?: string | number | boolean | null;
   override_value?: string | number | boolean | null;
   override_locked?: boolean;
+  /** "repair:<operation id>" when a Repairs apply set the lock; absent for your own lock. */
+  lock_source?: string;
   effective_value?: string | number | boolean | null;
   effective_source?: string;
   updated_at?: string;
@@ -4969,6 +4971,8 @@ export interface MetadataFieldStateEntry {
   fetched_value?: unknown;
   override_value?: unknown;
   override_locked: boolean;
+  /** "repair:<operation id>" when a Repairs apply set the lock; absent for your own lock. */
+  lock_source?: string;
   updated_at: string;
 }
 

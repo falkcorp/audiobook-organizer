@@ -281,13 +281,11 @@ type opsFieldStateStore interface {
 	DeleteUserPreference(key string) error
 }
 
-// opsOperationJournalReader lists an operation's change rows and marks rows
-// reverted. The Repairs apply reads its own op's journal before writing a
-// step, so a resumed run does not journal a step twice, and voids a row it
-// just wrote when the write it describes was refused (repairs.ChangeJournal).
+// opsOperationJournalReader lists an operation's change rows. The Repairs
+// apply reads its own op's journal before writing a step, so a resumed run
+// does not journal a step twice (repairs.ChangeJournal).
 type opsOperationJournalReader interface {
 	GetOperationChanges(operationID string) ([]*database.OperationChange, error)
-	MarkOperationChangesReverted(operationID string, changeIDs []string) error
 }
 
 // opsRecordsAndQueue is opsHousekeeping's original method set.
@@ -346,7 +344,7 @@ type opsPeopleStore interface {
 	opsNarratorStore
 }
 
-// OpsStore is the 89 methods the maintenance ops need -- what they call directly
+// OpsStore is the 88 methods the maintenance ops need -- what they call directly
 // plus what the package's own helpers require of a store handed to them. Exported
 // so *server.Server can name it as a return type.
 type OpsStore interface {
@@ -393,7 +391,7 @@ type StoreProvider interface {
 // opsStoreProvider is the common path, OpsStore, plus the single-purpose
 // accessors that exist only because OpsStore itself is at the embed cap.
 type opsStoreProvider interface {
-	// OpsStore is the common path: 89 methods, used by 39 of the 41 sites.
+	// OpsStore is the common path: 88 methods, used by 39 of the 41 sites.
 	OpsStore() OpsStore
 	// OperationQueueStore serves the dedupe-book-file-rows scan guard: an apply
 	// run must refuse while library.scan is queued or running, because a scan

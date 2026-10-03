@@ -9,7 +9,6 @@ import (
 	"errors"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -51,6 +50,14 @@ func (f *creditFake) CreateOperationChange(c *database.OperationChange) error {
 	if f.failJournl {
 		return errors.New("journal down")
 	}
+	// Stored under its id, like the real store: writing a row again with the
+	// same id replaces it (how a refused write's row is voided).
+	for i := range f.journal {
+		if f.journal[i].ID == c.ID {
+			f.journal[i] = *c
+			return nil
+		}
+	}
 	f.journal = append(f.journal, *c)
 	f.order = append(f.order, "journal:"+c.BookID)
 	return nil
@@ -67,22 +74,6 @@ func (f *creditFake) GetOperationChanges(opID string) ([]*database.OperationChan
 		}
 	}
 	return out, nil
-}
-
-func (f *creditFake) MarkOperationChangesReverted(opID string, ids []string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	want := map[string]bool{}
-	for _, id := range ids {
-		want[id] = true
-	}
-	now := time.Now()
-	for i := range f.journal {
-		if f.journal[i].OperationID == opID && want[f.journal[i].ID] {
-			f.journal[i].RevertedAt = &now
-		}
-	}
-	return nil
 }
 
 // credWriter wires a Writer with the op journal and the credit store.

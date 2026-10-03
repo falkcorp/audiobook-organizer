@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/MetadataEditDialog.tsx
-// version: 2.4.0
+// version: 2.5.0
 // guid: 4a5b6c7d-8e9f-0a1b-2c3d-4e5f6a7b8c9d
 // last-edited: 2026-10-03
 
@@ -191,6 +191,15 @@ export const MetadataEditDialog: React.FC<MetadataEditDialogProps> = ({
     return entry?.override_locked ?? false;
   };
 
+  // A lock a Repairs apply set (lock_source "repair:<op>") rather than you:
+  // shown differently, since reverting that repair lifts it and a match you
+  // pick by hand may still replace the value.
+  const repairLockSource = (formField: string): string | undefined => {
+    if (formField in lockOverrides || dirtyFields.has(formField)) return undefined;
+    const src = getFieldState(formField)?.lock_source;
+    return src && src.startsWith('repair:') ? src : undefined;
+  };
+
   const toggleLock = (formField: string) => {
     const currentlyLocked = isFieldLocked(formField);
     setLockOverrides((prev) => ({ ...prev, [formField]: !currentlyLocked }));
@@ -239,9 +248,11 @@ export const MetadataEditDialog: React.FC<MetadataEditDialogProps> = ({
         <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 0 }}>
           <Tooltip
             title={
-              locked
-                ? 'Locked — will not be overwritten by metadata fetches. Click to unlock.'
-                : 'Unlocked — may be updated by metadata fetches. Click to lock.'
+              locked && repairLockSource(field)
+                ? `Repair lock (${repairLockSource(field)}) — set by a repair so rescans and fetches keep its fix; a match you pick by hand may still replace it. Click to unlock.`
+                : locked
+                  ? 'Your lock — will not be overwritten by metadata fetches. Click to unlock.'
+                  : 'Unlocked — may be updated by metadata fetches. Click to lock.'
             }
           >
             <IconButton

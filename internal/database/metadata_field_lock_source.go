@@ -46,11 +46,15 @@ func (s MetadataFieldState) IsRepairLock() bool {
 }
 
 // metadataStateLocks serialize every read-modify-write of one book's field
-// state rows in this process: the snapshot save the metadata services do
-// (which rewrites every row and deletes the ones missing from the snapshot)
-// and the Repairs lock write. Without it a snapshot read before a repair lock
-// and saved after it erased the lock. Striped by book id like the book write
-// stripes; no code path holds two at once.
+// state rows in this process. The metadata services' whole-snapshot change
+// (metafetch.WithStateSnapshot) holds a book's stripe from its read through
+// its save, which rewrites every row and deletes the ones the change removed;
+// the Repairs lock write (repairs.Writer.LockFields), RecordUserOverrides,
+// ClaimRepairLocks and the revert's lock lift take the same stripe. A snapshot
+// read outside it and saved later erased whatever landed in between: a
+// person's override, a clear, a repair lock. Striped by book id like the book
+// write stripes; no code path holds two at once, and none takes a book write
+// stripe while holding one of these.
 var metadataStateLocks [256]sync.Mutex
 
 // LockMetadataState takes bookID's field-state stripe and returns its
