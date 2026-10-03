@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_auth.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: d9815a3d-0997-4c62-89a2-73f3c57e7fa9
-// last-edited: 2026-09-12
+// last-edited: 2026-10-03
 
 package database
 
@@ -673,7 +673,8 @@ func (p *PebbleStore) ConsumeInvite(token, passwordHashAlgo, passwordHash string
 
 // Sessions
 func (p *PebbleStore) CreateSession(userID, ip, userAgent string, ttl time.Duration) (*Session, error) {
-	id, err := newULID()
+	// The id is the session cookie's value: a credential, so not newULID.
+	id, err := newUnlinkedULID()
 	if err != nil {
 		return nil, err
 	}
