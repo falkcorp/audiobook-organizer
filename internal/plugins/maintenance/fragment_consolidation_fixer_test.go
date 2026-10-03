@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer_test.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: 8e2d5b19-6a4c-4f37-b1d8-2c9e7a3f5d60
 // last-edited: 2026-10-03
 
@@ -220,6 +220,7 @@ func (f *fragFixture) plan(t *testing.T, opID string) *repairs.PlanResult {
 
 func (f *fragFixture) apply(t *testing.T, planOpID, opID string, rowIDs []string, resume *repairs.ApplyCheckpoint) *repairs.ApplyResult {
 	t.Helper()
+	f.applyOp(opID, fragFixerID)
 	no := false
 	params, err := json.Marshal(repairs.ApplyParams{FixerID: fragFixerID, PlanOpID: planOpID, RowIDs: rowIDs, DryRun: &no, Resume: resume})
 	require.NoError(t, err)
@@ -228,6 +229,27 @@ func (f *fragFixture) apply(t *testing.T, planOpID, opID string, rowIDs []string
 	res, ok := rep.result.(*repairs.ApplyResult)
 	require.True(t, ok)
 	return res
+}
+
+// applyOp records opID as a repairs apply run of fixerID, as the op queue
+// does for a real apply: the fragment fixer attributes a journaled retire to
+// itself by the op row of the journal row's operation.
+func (f *fragFixture) applyOp(opID, fixerID string) {
+	params, _ := json.Marshal(repairs.ApplyParams{FixerID: fixerID})
+	f.ops.mu.Lock()
+	defer f.ops.mu.Unlock()
+	if _, ok := f.ops.rows[opID]; !ok {
+		f.ops.rows[opID] = &database.OperationV2Row{ID: opID, DefID: repairs.ApplyOpID, Status: "running", Params: string(params)}
+	}
+}
+
+// fragWriter is a journaled Writer for the fragment fixer under opID, with
+// opID recorded as one of its apply runs (a test's stand-in for a cut-off
+// apply).
+func (f *fragFixture) fragWriter(t *testing.T, opID string) *repairs.Writer {
+	t.Helper()
+	f.applyOp(opID, fragFixerID)
+	return repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, opID)
 }
 
 func findRow(t *testing.T, res *repairs.PlanResult, id string) repairs.Row {
@@ -414,7 +436,7 @@ func TestFragmentFixer_ResumesAPartiallyAppliedRow(t *testing.T) {
 	movedID := "moved:" + f.ids["parent"]
 
 	// The first half of the row, as an interrupted run left it.
-	w := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-cut")
+	w := f.fragWriter(t, "op-cut")
 	was := *f.fileRow(t, "parent", "p03")
 	frag := f.fileRow(t, "fragF", "f03")
 	require.NoError(t, w.RepointBookFile(f.ids["parent"], was.ID, undo.LocationOf(&was),
@@ -449,7 +471,7 @@ func TestFragmentFixer_ResumesAPartiallyAppliedGroup(t *testing.T) {
 			break
 		}
 	}
-	w := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-cut")
+	w := f.fragWriter(t, "op-cut")
 	require.NoError(t, w.MoveBookFiles([]string{otherRow}, other, survivor))
 	// The cut-off run also retitled the survivor and pointed its path at the
 	// folder: the survivor's own row is found by its stored id, not its path.
@@ -1011,7 +1033,7 @@ func TestFragmentFixer_ReplanReformsAnAbandonedGroup(t *testing.T) {
 			break
 		}
 	}
-	w := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-cut")
+	w := f.fragWriter(t, "op-cut")
 	require.NoError(t, w.MoveBookFiles([]string{otherRow}, other, survivor))
 
 	res2 := f.plan(t, "op-plan2")
@@ -1034,7 +1056,7 @@ func TestFragmentFixer_JournalDedupesOnResume(t *testing.T) {
 	f := newFragFixture(t)
 	f.seed(t)
 	for i := 0; i < 2; i++ {
-		w := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-x")
+		w := f.fragWriter(t, "op-x")
 		require.NoError(t, w.Journal(f.ids["fragF"], undo.ChangeTypeBookMergedInto, "merged_into_book_id", "", f.ids["parent"]))
 	}
 	changes, err := f.s.GetOperationChanges("op-x")
@@ -1058,7 +1080,7 @@ func TestFragmentFixer_ReplanReformsAGroupCutMidRetire(t *testing.T) {
 			otherRows = append(otherRows, f.rowIDs["l"+n])
 		}
 	}
-	w := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-cut")
+	w := f.fragWriter(t, "op-cut")
 	for i := range others {
 		require.NoError(t, w.MoveBookFiles([]string{otherRows[i]}, others[i], survivor))
 	}
@@ -1099,7 +1121,7 @@ func TestFragmentFixer_StrandedMemberIsListed(t *testing.T) {
 			otherRows = append(otherRows, f.rowIDs["l"+n])
 		}
 	}
-	w := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-cut")
+	w := f.fragWriter(t, "op-cut")
 	require.NoError(t, w.MoveBookFiles([]string{otherRows[0]}, others[0], survivor))
 	// The third member left the group some other way: two are not a group.
 	_, err := f.s.ModifyBook(others[1], func(b *database.Book) error { yes := true; b.MarkedForDeletion = &yes; return nil })
@@ -1176,7 +1198,7 @@ func TestWriter_OpJournaledMarkerOnlyOnJournaledBooks(t *testing.T) {
 	f := newFragFixture(t)
 	f.seed(t)
 	a, b := f.ids["fragF"], f.ids["fragH"]
-	w := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-mixed")
+	w := f.fragWriter(t, "op-mixed")
 	require.NoError(t, w.Step(a, undo.ChangeTypeBookPathUpdate, "file_path", "x", "y", func() error {
 		_, err := w.Modify(a, func(bk *database.Book) error { bk.Title = "Journaled"; return nil })
 		return err
@@ -1201,7 +1223,7 @@ func TestFragmentFixer_LeftoverSoftDeleteRowCannotUndeleteALaterDelete(t *testin
 	f := newFragFixture(t)
 	f.seed(t)
 	frag := f.ids["fragF"]
-	w := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-left")
+	w := f.fragWriter(t, "op-left")
 	stamp := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
 	require.NoError(t, w.Journal(frag, undo.ChangeTypeBookSoftDelete, "marked_for_deletion", "", undo.SoftDeleteStamp(stamp)))
 	later := stamp.Add(time.Hour)
@@ -1226,7 +1248,7 @@ func TestFragmentFixer_JournaledStepNeverWrittenIsAlreadyRestored(t *testing.T) 
 	frag, parent := f.ids["fragF"], f.ids["parent"]
 	b, err := f.s.GetBookByID(frag)
 	require.NoError(t, err)
-	w := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-cut")
+	w := f.fragWriter(t, "op-cut")
 	require.NoError(t, w.Journal(frag, undo.ChangeTypeBookPrimaryDemote, "is_primary_version", "true", "false"))
 	require.NoError(t, w.Journal(frag, undo.ChangeTypeBookMergedInto, "merged_into_book_id", "", parent))
 	require.NoError(t, w.Journal(frag, undo.ChangeTypeBookPathUpdate, "file_path", b.FilePath, ""))
@@ -1257,7 +1279,7 @@ func TestFragmentFixer_RetireRefusesBeforeFollowingProgress(t *testing.T) {
 	require.NoError(t, f.s.SetUserPosition(u.ID, frag, f.rowIDs["f03"], 100))
 	require.NoError(t, f.s.CreateExternalIDMapping(&database.ExternalIDMapping{Source: "itunes", ExternalID: "ABCDEF0123456789", BookID: frag}))
 
-	w := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-refuse")
+	w := f.fragWriter(t, "op-refuse")
 	steps, err := newFragmentFixer(f.p).retire(context.Background(), f.s, w, frag, parent, merge.SliceMapping{})
 	require.ErrorIs(t, err, repairs.ErrChangedSincePlan)
 	require.Zero(t, steps)
@@ -1299,10 +1321,10 @@ func TestFragmentFixer_ResumedRetireReusesTheJournaledStamp(t *testing.T) {
 	f.seed(t)
 	frag, parent := f.ids["fragF"], f.ids["parent"]
 	stamp := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
-	w := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-resume")
+	w := f.fragWriter(t, "op-resume")
 	require.NoError(t, w.Journal(frag, undo.ChangeTypeBookSoftDelete, "marked_for_deletion", "", undo.SoftDeleteStamp(stamp)))
 
-	w2 := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-resume")
+	w2 := f.fragWriter(t, "op-resume")
 	_, err := newFragmentFixer(f.p).retire(context.Background(), f.s, w2, frag, parent, merge.SliceMapping{})
 	require.NoError(t, err)
 	changes, err := f.s.GetOperationChanges("op-resume")
@@ -1335,7 +1357,7 @@ func TestFragmentFixer_TwoStampsOfOneRetireAreNotAConflict(t *testing.T) {
 			f := newFragFixture(t)
 			f.seed(t)
 			frag := f.ids["fragF"]
-			w := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-two")
+			w := f.fragWriter(t, "op-two")
 			require.NoError(t, w.Journal(frag, undo.ChangeTypeBookSoftDelete, "marked_for_deletion", "", undo.SoftDeleteStamp(s1)))
 			require.NoError(t, w.Journal(frag, undo.ChangeTypeBookSoftDelete, "marked_for_deletion", "", undo.SoftDeleteStamp(s2)))
 			at := written
@@ -1423,7 +1445,7 @@ func TestFragmentFixer_AlreadyRestoredDemoteLeavesAnUntouchedGroup(t *testing.T)
 		return nil
 	})
 	require.NoError(t, err)
-	w := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-crown")
+	w := f.fragWriter(t, "op-crown")
 	require.NoError(t, w.Journal(frag, undo.ChangeTypeBookPrimaryDemote, "is_primary_version", "true", "false"))
 
 	rr, err := audiobooks.NewRevertService(f.s).RevertOperation("op-crown")
@@ -1467,7 +1489,7 @@ func TestFragmentFixer_CutOffRetireRevertLeavesTheGroupAlone(t *testing.T) {
 	require.NoError(t, err)
 	// What the retire journals for an unset-flag fragment, cut off before it
 	// wrote anything.
-	w := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-cut-vg")
+	w := f.fragWriter(t, "op-cut-vg")
 	require.NoError(t, w.Journal(frag, undo.ChangeTypeBookPrimaryDemote, "is_primary_version", "true", "false"))
 	require.NoError(t, w.Journal(frag, undo.ChangeTypeBookMergedInto, "merged_into_book_id", "", parent))
 	require.NoError(t, w.Journal(frag, undo.ChangeTypeBookPathUpdate, "file_path", fb.FilePath, ""))
@@ -1513,7 +1535,7 @@ func TestFragmentFixer_AlreadyRestoredDemoteKeepsALaterUserPick(t *testing.T) {
 		return nil
 	})
 	require.NoError(t, err)
-	w := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-user")
+	w := f.fragWriter(t, "op-user")
 	require.NoError(t, w.Journal(frag, undo.ChangeTypeBookPrimaryDemote, "is_primary_version", "true", "false"))
 
 	_, err = audiobooks.NewRevertService(f.s).RevertOperation("op-user")
@@ -1634,7 +1656,7 @@ func TestFragmentFixer_RetryAfterCutOffRetireStillLeavesGroupAlone(t *testing.T)
 	require.NoError(t, err)
 	fb, err := f.s.GetBookByID(frag)
 	require.NoError(t, err)
-	w := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-cut-retry")
+	w := f.fragWriter(t, "op-cut-retry")
 	require.NoError(t, w.Journal(frag, undo.ChangeTypeBookPrimaryDemote, "is_primary_version", "true", "false"))
 	require.NoError(t, w.Journal(frag, undo.ChangeTypeBookMergedInto, "merged_into_book_id", "", parent))
 	require.NoError(t, w.Journal(frag, undo.ChangeTypeBookPathUpdate, "file_path", fb.FilePath, ""))
@@ -2487,7 +2509,7 @@ func TestFragmentFixer_NumberedCopiesReview(t *testing.T) {
 		// The Apply pre-check, called directly: the engine's pre-apply
 		// Replan (repairs.RunApply) refuses this row first, so Apply never
 		// reaches the pre-check here.
-		require.ErrorIs(t, copyRetireRefusal(f.s, f.s, cp, plan.SurvivorID), repairs.ErrChangedSincePlan)
+		require.ErrorIs(t, copyRetireRefusal(f.s, cp, plan.SurvivorID), repairs.ErrChangedSincePlan)
 
 		out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
 		require.Equal(t, 0, out.Applied, "outcomes %v", out.ByOutcome)
@@ -2603,7 +2625,7 @@ func resumeAfterEveryRetire(t *testing.T, org string) {
 		require.True(t, r.Applicable(), r.SkipReason)
 		plan := r.Detail.(*fragGroupPlan)
 		surv := plan.SurvivorID
-		w := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-cut")
+		w := f.fragWriter(t, "op-cut")
 		for _, m := range plan.Members {
 			if m.Frag.Book.ID == surv {
 				continue
@@ -2727,7 +2749,7 @@ func partialCopiesResume(t *testing.T, org string) {
 		require.True(t, r.Applicable(), r.SkipReason)
 		plan := r.Detail.(*fragGroupPlan)
 		surv := plan.SurvivorID
-		w := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-cut")
+		w := f.fragWriter(t, "op-cut")
 		for _, m := range plan.Members {
 			if m.Frag.Book.ID == surv {
 				continue
@@ -2814,7 +2836,7 @@ func TestFragmentFixer_NumberedResumeAfterFolder(t *testing.T) {
 			plan := r.Detail.(*fragGroupPlan)
 			require.NotEmpty(t, plan.Folder, "a plain numbered set gets a book_path")
 			surv := plan.SurvivorID
-			w := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-cut")
+			w := f.fragWriter(t, "op-cut")
 			for _, m := range plan.Members {
 				if m.Frag.Book.ID == surv {
 					continue
@@ -2908,7 +2930,7 @@ func TestFragmentFixer_NumberedCopiesResumeMidMembers(t *testing.T) {
 				require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
 				plan := r.Detail.(*fragGroupPlan)
 				surv := plan.SurvivorID
-				w := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-cut")
+				w := f.fragWriter(t, "op-cut")
 				var done []fragGroupMember
 				for _, m := range plan.Members {
 					if m.Frag.Book.ID != surv && len(done) < cut {
@@ -2970,7 +2992,7 @@ func TestFragmentFixer_NumberedRetiredElsewhere(t *testing.T) {
 						cp = c
 					}
 				}
-				require.ErrorIs(t, copyRetireRefusal(f.s, f.s, cp, plan.SurvivorID), repairs.ErrChangedSincePlan)
+				require.ErrorIs(t, copyRetireRefusal(f.s, cp, plan.SurvivorID), repairs.ErrChangedSincePlan)
 			}
 			out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
 			require.Equal(t, 0, out.Applied, "outcomes %v %+v", out.ByOutcome, out.Rows)
@@ -3086,7 +3108,7 @@ func TestFragmentFixer_NumberedPinnedResume(t *testing.T) {
 		orig, copies := f.seedChapterCopies(t, dir, nil)
 		f.organizeCopiesFixture(t, "all", orig, copies)
 		r, plan := f.p7Plan(t, dir)
-		w := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-cut")
+		w := f.fragWriter(t, "op-cut")
 		var m fragGroupMember
 		for _, x := range plan.Members {
 			if x.Frag.Book.ID != plan.SurvivorID {
@@ -3095,9 +3117,13 @@ func TestFragmentFixer_NumberedPinnedResume(t *testing.T) {
 			}
 		}
 		require.NoError(t, w.MoveBookFiles([]string{m.Frag.File.ID}, m.Frag.Book.ID, plan.SurvivorID))
+		// retireInto's step 3, journaled first as it journals it; the run is
+		// cut off before the soft-delete.
 		no := false
-		_, err := f.s.ModifyBook(m.Frag.Book.ID, func(b *database.Book) error { b.IsPrimaryVersion = &no; return nil })
-		require.NoError(t, err)
+		require.NoError(t, w.Step(m.Frag.Book.ID, undo.ChangeTypeBookPrimaryDemote, "is_primary_version", "true", "false", func() error {
+			_, err := w.Modify(m.Frag.Book.ID, func(b *database.Book) error { b.IsPrimaryVersion = &no; return nil })
+			return err
+		}))
 		f.requireResumes(t, r, "op-apply")
 		f.requireAllRetiredBut(t, r.BookIDs, plan.SurvivorID)
 	})
@@ -3116,7 +3142,7 @@ func TestFragmentFixer_NumberedPinnedResume(t *testing.T) {
 		require.NoError(t, err)
 		r, plan := f.p7Plan(t, dir)
 		require.NotEqual(t, orig[0], plan.SurvivorID)
-		w := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-cut")
+		w := f.fragWriter(t, "op-cut")
 		var m fragGroupMember
 		for _, x := range plan.Members {
 			if x.Frag.Book.ID == orig[2] {
@@ -3146,7 +3172,7 @@ func TestFragmentFixer_NumberedPinnedResume(t *testing.T) {
 		raw, err := json.Marshal(st)
 		require.NoError(t, err)
 		r.State = raw
-		w := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-cut")
+		w := f.fragWriter(t, "op-cut")
 		n := 0
 		for _, m := range plan.Members {
 			if m.Frag.Book.ID == plan.SurvivorID || n >= 3 {
@@ -3161,7 +3187,7 @@ func TestFragmentFixer_NumberedPinnedResume(t *testing.T) {
 		got, err := newFragmentFixer(f.p).Replan(context.Background(), nil, r, nil)
 		require.NoError(t, err)
 		require.Equal(t, r.Fingerprint, got.Fingerprint, "reason=%q", got.Reason)
-		w2 := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-2")
+		w2 := f.fragWriter(t, "op-2")
 		require.NoError(t, newFragmentFixer(f.p).Apply(context.Background(), w2, r))
 		f.requireAllRetiredBut(t, r.BookIDs, plan.SurvivorID)
 	})
@@ -3181,13 +3207,9 @@ func TestFragmentFixer_NumberedPinnedResume(t *testing.T) {
 		require.NoError(t, err)
 		require.NotEqual(t, r.Fingerprint, got.Fingerprint, "a changed row")
 		require.Contains(t, got.Reason, "no journaled retire")
-		var cp fragGroupCopy
-		for _, c := range plan.Copies {
-			if c.Frag.Book.ID == copies[2] {
-				cp = c
-			}
-		}
-		require.ErrorIs(t, copyRetireRefusal(f.s, f.s, cp, surv), repairs.ErrChangedSincePlan)
+		// copyRetireRefusal trusts the locked Replan's attribution (it runs
+		// right after it under the merge lock), so the refusal comes from
+		// the engine's Replan: nothing is written.
 		out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
 		require.Equal(t, 0, out.Applied)
 		require.Zero(t, out.ByOutcome[repairs.OutcomePartial])
@@ -3197,13 +3219,14 @@ func TestFragmentFixer_NumberedPinnedResume(t *testing.T) {
 		f := newFragFixture(t)
 		_, copies := f.seedChapterCopies(t, dir, nil)
 		r, plan := f.p7Plan(t, dir)
+		f.applyOp("op-other", "some-other-fixer")
 		w := repairs.NewWriter(f.s, f.s, "some-other-fixer", "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-other")
 		_, err := retireInto(context.Background(), f.p, f.s, w, time.Now, "some-other-fixer", copies[2], plan.SurvivorID, nil)
 		require.NoError(t, err)
 		got, err := newFragmentFixer(f.p).Replan(context.Background(), nil, r, nil)
 		require.NoError(t, err)
 		require.NotEqual(t, r.Fingerprint, got.Fingerprint, "a changed row")
-		require.Contains(t, got.Reason, "not by "+fragFixerID)
+		require.Contains(t, got.Reason, "not by a "+fragFixerID+" apply")
 	})
 }
 
@@ -3249,6 +3272,13 @@ func (c *cutStore) ModifyBookFile(bookID, fileID string, fn func(*database.BookF
 		return nil, err
 	}
 	return c.PebbleStore.ModifyBookFile(bookID, fileID, fn)
+}
+
+func (c *cutStore) RecordMetadataChange(r *database.MetadataChangeRecord) error {
+	if err := c.event(); err != nil {
+		return err
+	}
+	return c.PebbleStore.RecordMetadataChange(r)
 }
 
 func (c *cutStore) MoveBookFilesToBook(fileIDs []string, source, target string) error {
@@ -3363,7 +3393,8 @@ func TestFragmentFixer_NumberedCopiesCutAtEveryStep(t *testing.T) {
 				for at := 1; ; at++ {
 					f, r := newCutFixture(t, org, vg)
 					cs := &cutStore{PebbleStore: f.s, at: at}
-					w := repairs.NewWriter(cs, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(cs, cs, "op-cut")
+					f.applyOp("op-cut", fragFixerID)
+					w := repairs.NewWriter(cs, cs, fragFixerID, "bulk_update", "repairs-").WithJournal(cs, cs, "op-cut")
 					err := newFragmentFixer(f.p).Apply(context.Background(), w, r)
 					if !cs.hit {
 						require.NoError(t, err, "event %d never reached", at)
@@ -3389,3 +3420,93 @@ func TestFragmentFixer_NumberedCopiesCutAtEveryStep(t *testing.T) {
 		}
 	}
 }
+
+// TestFragmentFixer_NumberedLiveFlagChecks: the pin does not let a re-plan
+// ignore a live book's election flags. One changed since the plan by
+// anything but this row's own apply is a change.
+func TestFragmentFixer_NumberedLiveFlagChecks(t *testing.T) {
+	const dir = "lib/Clarke/02_light_of_other_days"
+
+	t.Run("a member organized in place after the plan (fallback survivor)", func(t *testing.T) {
+		f := newFragFixture(t)
+		ids := f.looseGroup(t, "lib/NoneOrg", "Chap", 3, func(int) bool { return false })
+		r := rowWithBooks(t, f.plan(t, "op-plan"), ids)
+		require.True(t, r.Applicable(), r.SkipReason)
+		sorted := append([]string(nil), ids...)
+		sort.Strings(sorted)
+		require.Equal(t, sorted[0], r.Proposed["survivor"])
+		f.organized(t, sorted[2])
+		out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
+		require.Equal(t, 0, out.Applied, "outcomes %v %+v", out.ByOutcome, out.Rows)
+		b, err := f.s.GetBookByID(sorted[2])
+		require.NoError(t, err)
+		require.False(t, b.IsSoftDeleted(), "the organized member is never retired into an unorganized survivor")
+	})
+
+	t.Run("a copy demoted by someone else", func(t *testing.T) {
+		f := newFragFixture(t)
+		_, copies := f.seedChapterCopies(t, dir, nil)
+		r, _ := f.p7Plan(t, dir)
+		no := false
+		_, err := f.s.ModifyBook(copies[1], func(b *database.Book) error { b.IsPrimaryVersion = &no; return nil })
+		require.NoError(t, err)
+		got, err := newFragmentFixer(f.p).Replan(context.Background(), nil, r, nil)
+		require.NoError(t, err)
+		require.NotEqual(t, r.Fingerprint, got.Fingerprint)
+		require.Contains(t, got.Reason, "did not change it")
+	})
+
+	t.Run("a held no-survivor row re-evaluates to its own skip reason", func(t *testing.T) {
+		f := newFragFixture(t)
+		ids := f.looseGroup(t, "lib/NoSurv", "Chap", 3, func(int) bool { return false })
+		for _, id := range ids {
+			no := false
+			_, err := f.s.ModifyBook(id, func(b *database.Book) error { b.IsPrimaryVersion = &no; return nil })
+			require.NoError(t, err)
+		}
+		r := rowWithBooks(t, f.plan(t, "op-plan"), ids)
+		require.Equal(t, fragSkipNoSurvivor, r.Skipped)
+		got, err := newFragmentFixer(f.p).Replan(context.Background(), nil, r, nil)
+		require.NoError(t, err)
+		require.Equal(t, r.Fingerprint, got.Fingerprint, got.Reason)
+		require.Equal(t, fragSkipNoSurvivor, got.Skipped)
+	})
+}
+
+// TestFragmentFixer_CrashBeforeHistoryResumes: the process dies after the
+// soft-delete commits and before the Writer's history rows land (no
+// apply_incomplete marker either). The journal row, written first, still
+// attributes the retire to this fixer and the row resumes.
+func TestFragmentFixer_CrashBeforeHistoryResumes(t *testing.T) {
+	f := newFragFixture(t)
+	f.seed(t)
+	res := f.plan(t, "op-plan")
+	id := noParentRowID(f.path("lib/Loose"), "loose")
+	planned := findRow(t, res, id)
+	survivor := planned.Proposed["survivor"]
+	var others, otherRows []string
+	for _, n := range []string{"01", "02", "03"} {
+		if f.ids["loose"+n] != survivor {
+			others = append(others, f.ids["loose"+n])
+			otherRows = append(otherRows, f.rowIDs["l"+n])
+		}
+	}
+	f.applyOp("op-apply", fragFixerID)
+	w := repairs.NewWriter(f.s, dropHistory{}, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-apply")
+	for i := range others {
+		require.NoError(t, w.MoveBookFiles([]string{otherRows[i]}, others[i], survivor))
+	}
+	_, err := retireInto(context.Background(), f.p, f.s, w, time.Now, fragFixerID, others[0], survivor, &merge.SliceMapping{Mappable: true})
+	require.NoError(t, err)
+	got, err := newFragmentFixer(f.p).Replan(context.Background(), nil, planned, nil)
+	require.NoError(t, err)
+	require.Equal(t, planned.Fingerprint, got.Fingerprint, got.Reason)
+	out := f.apply(t, "op-plan", "op-resume", []string{id}, nil)
+	require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+}
+
+// dropHistory loses every history row, as a process that died after the
+// write and before its history would.
+type dropHistory struct{}
+
+func (dropHistory) RecordMetadataChange(*database.MetadataChangeRecord) error { return nil }

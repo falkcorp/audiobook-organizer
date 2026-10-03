@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_operations.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: e4277998-6d7e-4f2a-9b5c-0a620a98105e
-// last-edited: 2026-09-12
+// last-edited: 2026-10-03
 
 package database
 
@@ -580,6 +580,32 @@ func (p *PebbleStore) GetOperationChanges(operationID string) ([]*OperationChang
 		changes = append(changes, &c)
 	}
 	return changes, iter.Error()
+}
+
+// ScanOperationChanges calls fn for every operation change row, in key
+// order, in ONE pass, and stops at fn's first error (returned as is). It is
+// for a caller that must judge many books against the journal: there is no
+// by-book index, so GetBookChanges is a full scan per call and N books cost
+// N scans. Resolve it with database.AsCapability; it is not on Store.
+func (p *PebbleStore) ScanOperationChanges(fn func(*OperationChange) error) error {
+	iter, err := p.db.NewIter(&pebble.IterOptions{
+		LowerBound: []byte("opchange:"),
+		UpperBound: []byte("opchange;"), // ':' + 1 = ';'
+	})
+	if err != nil {
+		return err
+	}
+	defer iter.Close()
+	for iter.First(); iter.Valid(); iter.Next() {
+		var c OperationChange
+		if err := json.Unmarshal(iter.Value(), &c); err != nil {
+			return err
+		}
+		if err := fn(&c); err != nil {
+			return err
+		}
+	}
+	return iter.Error()
 }
 
 // GetBookChanges returns all changes for a given book.

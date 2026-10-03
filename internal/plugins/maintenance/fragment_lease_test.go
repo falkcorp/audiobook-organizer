@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_lease_test.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 6b1e8d42-3c7f-4a95-b2d6-9f0a4e7c1d38
 // last-edited: 2026-10-03
 
@@ -28,6 +28,7 @@ func (f *fragFixture) applyErr(t *testing.T, planOpID, opID string, rowIDs []str
 	no := false
 	params, err := json.Marshal(repairs.ApplyParams{FixerID: fragFixerID, PlanOpID: planOpID, RowIDs: rowIDs, DryRun: &no, Resume: resume})
 	require.NoError(t, err)
+	f.applyOp(opID, fragFixerID)
 	rep := &repairsOpReporter{id: opID}
 	runErr := f.p.runRepairsApply(context.Background(), params, rep)
 	res, _ := rep.result.(*repairs.ApplyResult)
