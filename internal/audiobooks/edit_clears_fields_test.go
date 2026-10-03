@@ -673,9 +673,9 @@ func TestUpdateAudiobook_UnsentPositionKeepsTheRawPosition(t *testing.T) {
 // An override of "2.5" used to fail Atoi and change nothing.
 func TestUpdateAudiobook_SentPositionIsStoredAsSent(t *testing.T) {
 	for name, body := range map[string]map[string]any{
-		"override string": {"overrides": map[string]any{"series_position": map[string]any{"value": "2.5", "locked": true}}},
-		"override number": {"overrides": map[string]any{"series_position": map[string]any{"value": 2.5, "locked": true}}},
-		"top-level":       {"series_position": 2.5},
+		"override string":  {"overrides": map[string]any{"series_position": map[string]any{"value": "2.5", "locked": true}}},
+		"override number":  {"overrides": map[string]any{"series_position": map[string]any{"value": 2.5, "locked": true}}},
+		"top-level":        {"series_position": 2.5},
 		"top-level string": {"series_position": "2.5"},
 	} {
 		t.Run(name, func(t *testing.T) {
