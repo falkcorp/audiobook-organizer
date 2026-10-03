@@ -79,6 +79,9 @@ func serializeBookForIndex(book *Book) ([]byte, error) {
 // - import_path:path:<path>    -> import_path_id (for lookups)
 // - operation:<id>             -> Operation JSON
 // - operationlog:<operation_id>:<timestamp>:<seq> -> OperationLog JSON
+// - opchange:<operation_id>:<change_id> -> OperationChange JSON (undo journal)
+// - opchange_by_book:<book_id>:<operation_id>:<change_id> -> empty (by-book index; see pebble_store_opchange_index.go)
+// - opchange_undecodable:<operation_id>:<change_id> -> empty (journal rows the index backfill could not decode)
 // - preference:<key>           -> UserPreference JSON
 // - playlist:<id>              -> Playlist JSON
 // - playlist:series:<series_id> -> playlist_id
@@ -112,10 +115,13 @@ type PebbleStore struct {
 	// bookAtPathBuilt caches a positive read of the book_atpath: backfill
 	// sentinel. Only true is ever stored; see bookAtPathIndexBuilt.
 	bookAtPathBuilt atomic.Bool
-	// opChangeByBookBuilt caches a positive read of the opchange_by_book:
-	// backfill sentinel. Only true is stored by readers; the rebuild clears it
-	// (pebble_store_opchange_index.go).
-	opChangeByBookBuilt atomic.Bool
+	// opChangeByBookGen and opChangeByBookBuiltAt cache a positive read of the
+	// opchange_by_book: backfill sentinel. The cache is valid only while
+	// opChangeByBookBuiltAt == opChangeByBookGen+1; the rebuild and Reset bump
+	// the generation to invalidate it (pebble_store_opchange_index.go,
+	// opChangeByBookIndexBuilt).
+	opChangeByBookGen     atomic.Uint64
+	opChangeByBookBuiltAt atomic.Uint64
 	// opChangeIdxRunMu admits one opchange_by_book backfill/rebuild at a time.
 	opChangeIdxRunMu sync.Mutex
 	// worksGen is the works generation counter (see WorksGeneration in
@@ -5115,7 +5121,7 @@ func (p *PebbleStore) Reset() error {
 	p.bookAtPathBuilt.Store(false)
 	// Same for the opchange_by_book: sentinel: GetBookChanges falls back to
 	// the full scan instead of trusting a wiped index.
-	p.opChangeByBookBuilt.Store(false)
+	p.opChangeByBookGen.Add(1)
 
 	// Use DeleteRange to wipe the entire keyspace in one operation.
 	// The range ["\x00", "\xff\xff") covers all possible keys.
