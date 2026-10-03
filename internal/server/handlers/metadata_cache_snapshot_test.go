@@ -530,7 +530,7 @@ func TestReviewSnapshotCache_BuildGetsThePreviousSnapshot(t *testing.T) {
 
 // incrBuilder is the builder as NewMetadataCacheHandler wires it for a real
 // store, with a settable clock.
-func incrBuilder(t *testing.T, store *database.PebbleStore, svc cacheRowCandidateReader) (*reviewSnapshotBuilder, *time.Time) {
+func incrBuilder(t testing.TB, store *database.PebbleStore, svc cacheRowCandidateReader) (*reviewSnapshotBuilder, *time.Time) {
 	t.Helper()
 	b := newReviewSnapshotBuilder(store, svc)
 	b.cacheGen = store.MetadataCacheGeneration
