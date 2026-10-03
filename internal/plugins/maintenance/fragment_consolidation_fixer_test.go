@@ -663,6 +663,51 @@ func TestFragmentFixer_SameParentRowClaims(t *testing.T) {
 			require.NotEqual(t, fragClassAmbiguous, r.Class, "%s: %s", r.RowID, r.SkipReason)
 		}
 	})
+	t.Run("two present proven claimants on a gone parent row: one is repointed, the other waits", func(t *testing.T) {
+		f := newFragFixture(t)
+		g1 := f.file(t, "lib/G/01.mp3", 1101)
+		gone := f.path("lib/G/02.mp3")
+		parent := f.book(t, "parent", "Gone", f.path("lib/G"), nil)
+		f.row(t, "g01", parent, g1, "01.mp3", 1101, 600, 1)
+		f.row(t, "g02", parent, gone, "02.mp3", 1102, 600, 2)
+		var frags []string
+		for _, n := range []string{"A", "B"} {
+			fr := f.book(t, "frag"+n, "02", gone, nil)
+			f.row(t, n+"02", fr, gone, "02.mp3", 1102, 600, 0)
+			f.organize(t, fr, f.file(t, "lib/tmp"+n+"/02.mp3", 1102), f.path("lib/G"+n+"/02/02.mp3"))
+			frags = append(frags, fr)
+		}
+		res := f.plan(t, "op-plan")
+		moved := findRow(t, res, "moved:"+parent)
+		require.True(t, moved.Applicable(), moved.SkipReason)
+		require.Len(t, moved.BookIDs, 2, "one fragment per gone row")
+		other := frags[1]
+		if moved.BookIDs[0] == other || moved.BookIDs[1] == other {
+			other = frags[0]
+		}
+		waiting := findRow(t, res, "ambiguous:"+other)
+		require.Equal(t, fragSkipAmbiguous, waiting.Skipped)
+		require.Contains(t, waiting.SkipReason, "plan again")
+		out := f.apply(t, "op-plan", "op-apply", []string{moved.RowID}, nil)
+		require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+		// Next plan: the parent has the file again (at the first fragment's
+		// path), so the other is a copy; its import path names the row's OLD
+		// path, so by today's rules it is an unproven one.
+		res2 := f.plan(t, "op-plan-2")
+		copyRow := findRow(t, res2, fragRowCopyUnproven+":"+parent)
+		require.Contains(t, copyRow.BookIDs, other)
+	})
+	t.Run("a parent retired since the plan is refused at apply", func(t *testing.T) {
+		f := newFragFixture(t)
+		parent := seed(t, f)
+		res := f.plan(t, "op-plan")
+		proven := findRow(t, res, "copy:"+parent)
+		_, err := f.s.ModifyBook(parent, func(b *database.Book) error { yes := true; b.MarkedForDeletion = &yes; return nil })
+		require.NoError(t, err)
+		out := f.apply(t, "op-plan", "op-apply", []string{proven.RowID}, nil)
+		require.Zero(t, out.Applied, "%+v", out.Rows)
+		require.True(t, f.live(t, "fragJ"), "never folded into a dead book")
+	})
 	t.Run("two unproven claimants stay ambiguous", func(t *testing.T) {
 		f := newFragFixture(t)
 		parent := seed(t, f)

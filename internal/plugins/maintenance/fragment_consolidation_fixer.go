@@ -1282,12 +1282,24 @@ func (f *fragmentFixer) buildRows(lib *fragLibrary, ix *fragIndex, cands []*frag
 			}
 			cs = append(proven, unproven...)
 		}
+		moved := 0
 		for _, c := range cs {
 			m := matchOf[c][0]
 			kind, p, hold := f.pairFor(c, m, lib, ignoredOf[c])
 			if hold != "" {
 				rows = append(rows, f.ambiguousRow(lib, c, hold, []fragMatch{m}))
 				continue
+			}
+			if kind == fragClassMoved || kind == fragRowMovedUnproven {
+				// One parent row can be repointed at one file. A second
+				// present fragment claiming the same gone row is listed for
+				// the next plan: once the first is repointed it is a plain
+				// copy of a file the parent has again.
+				if moved++; moved > 1 && !p.Done {
+					rows = append(rows, f.ambiguousRow(lib, c,
+						fmt.Sprintf("parent row %s is claimed by %d present fragments; one is repointed per plan, plan again for this one", rid, len(cs)), []fragMatch{m}))
+					continue
+				}
 			}
 			k := parentKey{m.Row.BookID, kind}
 			pairs[k] = append(pairs[k], p)
@@ -1903,6 +1915,14 @@ func (f *fragmentFixer) replanParent(store OpsStore, lib *fragLibrary, hist Frag
 	}
 	if len(ps.IgnoredITunes) > 0 {
 		f.loadVerdicts(store, lib, append([]string{parentID}, ps.IgnoredITunes...))
+	}
+	// The parent must still be a live multi-file book: another fixer (the
+	// duplicate-copies apply retires losers) may have retired it since the
+	// plan, and a fragment must never be folded into a dead book.
+	if pb, ok := lib.books[parentID]; !ok || pb.SoftDeleted {
+		return changedRow(planned, fmt.Sprintf("parent %s is gone or retired", parentID)), nil
+	} else if len(lib.files[parentID]) < 2 {
+		return changedRow(planned, fmt.Sprintf("parent %s no longer owns 2+ rows", parentID)), nil
 	}
 	ix := newFragIndex()
 	for _, r := range lib.files[parentID] {
