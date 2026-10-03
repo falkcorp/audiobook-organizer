@@ -1,7 +1,7 @@
 // file: internal/database/store.go
-// version: 2.105.0
+// version: 2.106.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-10-01
+// last-edited: 2026-10-03
 
 package database
 
@@ -645,6 +645,14 @@ type OperationChange struct {
 	NewValue   string     `json:"new_value"`
 	RevertedAt *time.Time `json:"reverted_at,omitempty"`
 	CreatedAt  time.Time  `json:"created_at"`
+	// Source names who wrote the row when the operation row alone cannot
+	// say: a repairs fixer's id, stamped by repairs.Writer.Journal. The
+	// journal row outlives its operation row (registry.Discard deletes a
+	// failed or interrupted op's row and keeps its opchange rows), so a
+	// fixer that must recognise its own earlier writes reads this, not the
+	// op row. Empty on rows from writers that do not stamp it and on rows
+	// stored before the field existed.
+	Source string `json:"source,omitempty"`
 }
 
 // SystemActivityLog represents a log entry from a housekeeping goroutine.
