@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_snapshot_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 5a0e9c37-1d4b-4f62-8b17-c2e6d9a40f13
 // last-edited: 2026-10-03
 
@@ -448,30 +448,52 @@ func TestOverlay_UnlistableChangeReadsEveryBookAndAsksForARebuild(t *testing.T) 
 	}
 }
 
-// TestOverlay_TooManyChangedBooksAsksForARebuild: past overlayRebuildThreshold
-// changed books the overlay still serves the request from what it read, but
-// asks for a rebuild so the next one does not read them again.
-func TestOverlay_TooManyChangedBooksAsksForARebuild(t *testing.T) {
-	changed := make([]string, overlayRebuildThreshold+1)
-	for i := range changed {
-		changed[i] = "x" + strconv.Itoa(i)
+// TestOverlay_TooManyChangedRowsAsksForARebuild: past overlayRebuildThreshold
+// changed books OF THE SNAPSHOT'S ROWS the overlay still serves the request
+// from what it read, but asks for a rebuild so the next one does not read
+// them again. Changed books with no row (a library scan writes every book)
+// cost nothing and do not count.
+func TestOverlay_TooManyChangedRowsAsksForARebuild(t *testing.T) {
+	n := overlayRebuildThreshold + 1
+	ids := make([]string, n)
+	books := make(map[string]*database.Book, n)
+	for i := range ids {
+		ids[i] = "r" + strconv.Itoa(i)
+		books[ids[i]] = &database.Book{ID: ids[i]}
 	}
-	changed[0] = "b"
-	var asked []string
-	f := overlayFakeRecording{overlayFake: overlayFake{books: map[string]*database.Book{"a": {ID: "a"}, "b": {ID: "b"}}}, asked: &asked}
-	out, err := overlayLiveBooks(overlaySnap("a", "b"), f, nil, changedIDs(changed...))
+	f := overlayFake{books: books}
+	out, err := overlayLiveBooks(overlaySnap(ids...), f, nil, changedIDs(ids...))
 	require.NoError(t, err)
 	require.True(t, out.rebuild)
-	require.Equal(t, []string{"b"}, asked, "only the changed ROWS are read, however many books changed")
-	require.Len(t, out.rows, 2)
+	require.Len(t, out.rows, n)
 
-	at := make([]string, overlayRebuildThreshold)
-	for i := range at {
-		at[i] = "x" + strconv.Itoa(i)
-	}
-	out, err = overlayLiveBooks(overlaySnap("a"), f, nil, changedIDs(at...))
+	out, err = overlayLiveBooks(overlaySnap(ids[:overlayRebuildThreshold]...), f, nil, changedIDs(ids...))
 	require.NoError(t, err)
-	require.False(t, out.rebuild, "the threshold itself is fine")
+	require.False(t, out.rebuild, "the threshold itself is fine, and the changed book with no row does not count")
+
+	scan := make([]string, n)
+	for i := range scan {
+		scan[i] = "no-row-" + strconv.Itoa(i)
+	}
+	scan[0] = "b"
+	var asked []string
+	fr := overlayFakeRecording{overlayFake: overlayFake{books: map[string]*database.Book{"a": {ID: "a"}, "b": {ID: "b"}}}, asked: &asked}
+	out, err = overlayLiveBooks(overlaySnap("a", "b"), fr, nil, changedIDs(scan...))
+	require.NoError(t, err)
+	require.False(t, out.rebuild, "a scan's book writes are not this snapshot's rows")
+	require.Equal(t, []string{"b"}, asked)
+}
+
+// TestOverlay_FailedBookReadAsksForARebuild: a book read that fails is an
+// error row (not an orphan) and the overlay asks for a rebuild.
+func TestOverlay_FailedBookReadAsksForARebuild(t *testing.T) {
+	f := overlayFake{books: map[string]*database.Book{"a": {ID: "a"}}, pointErr: map[string]error{"b": errors.New("fault")}}
+	out, err := overlayLiveBooks(overlaySnap("a", "b"), f, nil, changedIDs("b"))
+	require.NoError(t, err)
+	require.Equal(t, 1, out.readErrors)
+	require.Equal(t, 0, out.orphaned)
+	require.True(t, out.rebuild)
+	require.Equal(t, []string{"a"}, rowIDs(out.rows))
 }
 
 // TestOverlay_IDsReadOnlyTheAskedChangedBooks: an ids= lookup reads only the
@@ -789,4 +811,50 @@ func TestLoadCacheRowsByID_MatchesTheFullLoader(t *testing.T) {
 		require.Equal(t, w.files, g.files)
 		require.Equal(t, w.book.ID, g.book.ID)
 	}
+}
+
+// faultyStore fails the batch read and the point read of one book, and the
+// cache read of another, so an id load cannot tell what became of them.
+type faultyStore struct {
+	*database.PebbleStore
+	failBook string
+}
+
+func (f *faultyStore) GetBooksByIDs([]string) ([]database.Book, error) {
+	return nil, errors.New("batch fault")
+}
+func (f *faultyStore) GetBookByID(id string) (*database.Book, error) {
+	if id == f.failBook {
+		return nil, errors.New("point fault")
+	}
+	return f.PebbleStore.GetBookByID(id)
+}
+
+// TestReviewSnapshot_FailedReadDuringIncrementalBuildsInFull: a book read
+// that fails for a re-read id must not publish an incremental snapshot that
+// guesses (an orphan, or a missing row, for up to maxAge): the build is a
+// full one instead, and the id loader files the id under failedIDs rather
+// than orphanIDs.
+func TestReviewSnapshot_FailedReadDuringIncrementalBuildsInFull(t *testing.T) {
+	store, svc := reviewSeed(t, 40)
+	ctx := context.Background()
+	b, _ := incrBuilder(t, store, svc)
+	first, err := b.build(ctx, nil)
+	require.NoError(t, err)
+	target := first.rows[2].sum.BookID
+	_, err = store.ModifyBook(target, func(bk *database.Book) error { st := "no_match"; bk.MetadataReviewStatus = &st; return nil })
+	require.NoError(t, err)
+
+	fs := &faultyStore{PebbleStore: store, failBook: target}
+	load, err := loadCacheRowsByID(ctx, fs, svc, []string{target, first.rows[3].sum.BookID})
+	require.NoError(t, err)
+	require.Equal(t, []string{target}, load.failedIDs)
+	require.Empty(t, load.orphanIDs)
+	require.Len(t, load.rows, 1)
+
+	b.store = fs
+	next, err := b.build(ctx, first)
+	require.NoError(t, err)
+	require.False(t, next.incremental, "a failed re-read falls back to a full build")
+	require.Len(t, next.rows, len(first.rows)-1, "every other book still resolves through the full build's per-book fallback")
 }
