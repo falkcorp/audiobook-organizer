@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.196.0
+// version: 1.197.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-03
 
@@ -2777,7 +2777,7 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, clearSig bool,
 	// Author/Series are denormalized display objects derived from
 	// AuthorID/SeriesID; they are recomputed on read, never user-cleared to
 	// nil (no empty-string-style sentinel exists for these pointer structs),
-	// so preserve-on-nil is correct — the same class of fix as the seven
+	// so preserve-on-nil is correct for Author — the same class of fix as the seven
 	// fields above (STOREFID W5d-1 / #1887; the CreateOrganizedVersion write
 	// wiped these before the call-site hydrate landed). A write that
 	// legitimately changes the author must set BOTH AuthorID and a fresh
@@ -2787,12 +2787,27 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, clearSig bool,
 		book.Author = oldBook.Author
 	}
 	//
-	// Series is preserved only while the write still links a series: a nil
-	// SeriesID is a removed series (a projection strips the object, never the
-	// ID), and restoring the old object there kept the series on display
-	// after a user cleared it -- reads prefer the embedded object.
-	if book.Series == nil && book.SeriesID != nil {
-		book.Series = oldBook.Series
+	// Series, unlike Author, is held to SeriesID here on every write, because
+	// every read prefers the embedded object over the link:
+	//   - SeriesID nil: no series. The object is dropped. A projection strips
+	//     the object, never the ID, so a nil ID is a removed series; restoring
+	//     the old object kept the series on display after a user cleared it,
+	//     and so did a writer that nilled only the ID (batch series_id null,
+	//     cleanup/reconcile unlinks).
+	//   - Series missing or naming another series: the stored object is kept
+	//     only when it is the object for this SeriesID (the projection case);
+	//     otherwise it is dropped and reads fall back to GetSeriesByID. A
+	//     writer that moved the book to another series by ID alone used to
+	//     keep the OLD series' name on display.
+	switch {
+	case book.SeriesID == nil:
+		book.Series = nil
+	case book.Series == nil || book.Series.ID != *book.SeriesID:
+		if oldBook.Series != nil && oldBook.Series.ID == *book.SeriesID {
+			book.Series = oldBook.Series
+		} else {
+			book.Series = nil
+		}
 	}
 	if clearSig {
 		book.BookSigV1, book.BookSigV1Mask, book.BookSigSegments = nil, nil, nil
