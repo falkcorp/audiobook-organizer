@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_title_fixer_test.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 3a8d6f52-1e9c-4b07-92d4-6c5b0e8a7f13
 // last-edited: 2026-10-03
 
@@ -142,6 +142,13 @@ func newJunkLib(t *testing.T) *junkLib {
 		"/lib/Author A/Provider Folder/01.mp3", "/lib/Author A/Provider Folder/02.mp3")
 	require.NoError(t, st.UpsertMetadataFieldState(&database.MetadataFieldState{BookID: prov, Field: "title",
 		FetchedValue: &fetched, UpdatedAt: time.Now()}))
+	// A series-position prefix a refetch echoed back as the provider's value
+	// ("02 - No Quarter"): 350 such books on prod, 2026-10-03.
+	fetchedPos := `"02 - No Quarter"`
+	pos := add("provider-prefix", "02 - No Quarter", "/lib/Author P/02 - No Quarter.m4b", nil, nil,
+		"/lib/Author P/02 - No Quarter.m4b")
+	require.NoError(t, st.UpsertMetadataFieldState(&database.MetadataFieldState{BookID: pos, Field: "title",
+		FetchedValue: &fetchedPos, UpdatedAt: time.Now()}))
 	// A bare unpadded number beside other books of its author may be the
 	// real title: needs a person, never a (possible) fragment.
 	add("bare13", "13", "/lib/Author A/13.m4b", a, nil, "/lib/Author A/13.m4b")
@@ -188,6 +195,10 @@ func TestJunkTitleFixer_PlanDecisions(t *testing.T) {
 		// highest score among the trustworthy candidates, not the first
 		"eldest-prefix": "Eldest",
 		"named-credit":  "Named Credit Book",
+		// a provider-recorded title that fails the junk classifier is
+		// repaired like a file-derived one (owner decision 2026-10-03)
+		"provider":        "Provider Folder",
+		"provider-prefix": "No Quarter",
 	}
 	for name, want := range applicable {
 		r, ok := rows[name]
@@ -196,6 +207,10 @@ func TestJunkTitleFixer_PlanDecisions(t *testing.T) {
 		require.Equal(t, want, r.Proposed["title"], name)
 		require.Equal(t, []string{lib.ids[name]}, r.BookIDs, "%s: one book per row", name)
 	}
+	for _, name := range []string{"provider", "provider-prefix"} {
+		require.Contains(t, rows[name].Reason, "recorded as provider-supplied", name)
+	}
+	require.NotContains(t, rows["prefix"].Reason, "provider-supplied")
 	require.Equal(t, repairs.RiskLow, rows["prefix"].Risk)
 	require.Contains(t, rows["eldest-prefix"].Reason, "title_prefix_stripped")
 	require.NotContains(t, rows["eldest-prefix"].Reason, "Eragon")
@@ -209,7 +224,6 @@ func TestJunkTitleFixer_PlanDecisions(t *testing.T) {
 		"eldest98":      junkSkipPossibleFragment,
 		// proven: another book owns one of its files
 		"owned":          junkSkipFragment,
-		"provider":       junkSkipProviderTitle,
 		"owner-proposal": repairs.SkipOwnerManual,
 		"bare13":         junkSkipNeedsManual,
 		"unabridged":     junkSkipNeedsManual,

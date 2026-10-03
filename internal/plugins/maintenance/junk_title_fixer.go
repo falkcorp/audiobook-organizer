@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/junk_title_fixer.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 7c3e9a15-2b6d-4f48-a9e1-5d0b8c4f7a26
 // last-edited: 2026-10-03
 
@@ -53,10 +53,6 @@ const (
 	junkSkipNeedsManual = "skipped_needs_manual"
 	// junkSkipUserLocked: the title carries a user override; never touched.
 	junkSkipUserLocked = "skipped_user_locked"
-	// junkSkipProviderTitle: a metadata provider supplied the title. The
-	// fixer only repairs file-derived junk; a provider value is somebody's
-	// answer and is never overwritten from a folder or a prefix strip.
-	junkSkipProviderTitle = "skipped_provider_title"
 	// junkSkipNotJunk / junkSkipGone: what a re-plan reports for a book
 	// whose title stopped being junk, or that no longer exists. A plan never
 	// lists either.
@@ -518,6 +514,10 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 		return finish(repairs.SkipOwnerManual, "the title marks Big Finish / Doctor Who / Torchwood content; owner applies these by hand")
 	}
 
+	// providerNote ends the row's reason when the junk title is recorded as
+	// a provider's value; kept apart because the reason is rebuilt once a
+	// proposal is chosen.
+	providerNote := ""
 	states, err := store.GetMetadataFieldStates(b.ID)
 	if err != nil {
 		return repairs.Row{}, fmt.Errorf("read field states of %s: %w", b.ID, err)
@@ -529,9 +529,17 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 		if states[i].HasUserOverride() {
 			return finish(junkSkipUserLocked, "the title carries a user override; it is never rewritten")
 		}
+		// A provider value on the title does NOT stop the repair (owner,
+		// 2026-10-03). The book only gets here because its title fails the
+		// junk classifier, and no provider answers "02 - No Quarter" or
+		// "read by narrator": the fetched value is a file-derived title that
+		// a refetch echoed back and recorded as the provider's. 350 such
+		// books were refused on prod as skipped_provider_title. The proposal
+		// gates below are unchanged, and the row says where the title came
+		// from so the reviewer sees it.
 		if states[i].HasProviderValue() {
-			return finish(junkSkipProviderTitle,
-				"a metadata provider supplied the title; this fixer only repairs file-derived titles")
+			providerNote = "; the stored title is recorded as provider-supplied"
+			r.Reason += providerNote
 		}
 	}
 
@@ -787,6 +795,7 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 	if len(also) > 0 {
 		r.Reason += "; other evidence: " + strings.Join(also, ", ")
 	}
+	r.Reason += providerNote
 	r.Detail = &junkDecision{bookID: b.ID, oldTitle: b.Title, newTitle: best.title}
 	r.Fingerprint = junkFingerprint(r, string(kind)+"|"+best.source)
 	return r, nil
