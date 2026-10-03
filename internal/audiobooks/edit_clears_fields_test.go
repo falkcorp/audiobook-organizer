@@ -1,5 +1,5 @@
 // file: internal/audiobooks/edit_clears_fields_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 451212a4-52da-4236-9a22-658fce80859a
 // last-edited: 2026-10-03
 
@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -1372,6 +1373,7 @@ func shownByGET(t *testing.T, store *database.PebbleStore, id string) map[string
 	}
 	out[database.FieldKeyAuthorName] = database.ShownCreditName(primary, authorNamesOf(t, store, id))
 	out[database.FieldKeyNarrator] = database.ShownCreditName(str(view.Narrator), narratorNames(t, store, id))
+	out[database.FieldKeySeriesName] = ""
 	if view.Series != nil {
 		out[database.FieldKeySeriesName] = view.Series.Name
 	}
@@ -1411,6 +1413,14 @@ func jsonText(t *testing.T, raw *string) string {
 // history row's new value, is what GET shows for that field.
 func requireLocksAndHistoryMatchGET(t *testing.T, store *database.PebbleStore, id, label string) {
 	t.Helper()
+	requireLocksAndHistoryMatchGETSince(t, store, id, label, time.Time{})
+}
+
+// requireLocksAndHistoryMatchGETSince is requireLocksAndHistoryMatchGET for
+// the history rows written at or after since (the last edit of a sequence;
+// earlier edits' rows describe earlier states).
+func requireLocksAndHistoryMatchGETSince(t *testing.T, store *database.PebbleStore, id, label string, since time.Time) {
+	t.Helper()
 	shown := shownByGET(t, store, id)
 	for field, st := range fieldStates(t, store, id) {
 		// A stored override value counts as a user override for the lock
@@ -1429,6 +1439,9 @@ func requireLocksAndHistoryMatchGET(t *testing.T, store *database.PebbleStore, i
 			key = ""
 		}
 		for _, r := range rows {
+			if r.ChangedAt.Before(since) {
+				continue
+			}
 			k := key
 			if k == "" {
 				if r.ChangeType == database.ChangeTypeManual {
@@ -1525,6 +1538,75 @@ func TestUpdateAudiobook_LocksAndHistoryAlwaysMatchWhatGETShows(t *testing.T) {
 		require.NoError(t, err)
 		requireLocksAndHistoryMatchGET(t, store, book.ID, "shared")
 		require.Empty(t, lockedKeys(t, store, book.ID), "nothing the book shows changed")
+	})
+	t.Run("lock-only author, no author sent", func(t *testing.T) {
+		store, book := invariantFixture(t)
+		svc := audiobooks.NewAudiobookUpdateService(store)
+		// After an earlier locked author edit, so the old lock value differs.
+		_, err := svc.UpdateAudiobook(context.Background(), book.ID, editor("author_name", "Bob Baker"))
+		require.NoError(t, err)
+		before := historyByField(t, store, book.ID)
+		since := time.Now()
+		_, err = svc.UpdateAudiobook(context.Background(), book.ID,
+			map[string]any{"overrides": map[string]any{"author_name": map[string]any{"locked": true}}})
+		require.NoError(t, err)
+		requireLocksAndHistoryMatchGETSince(t, store, book.ID, "lock-only author", since)
+		st := fieldStates(t, store, book.ID)[database.FieldKeyAuthorName]
+		require.True(t, st.OverrideLocked)
+		require.Equal(t, `"Bob Baker"`, *st.OverrideValue)
+		require.Equal(t, len(before[database.FieldKeyAuthorName]), len(historyByField(t, store, book.ID)[database.FieldKeyAuthorName]),
+			"a lock-only change wrote a history row")
+	})
+	t.Run("lock-only narrator on a junction-only book", func(t *testing.T) {
+		store, book := invariantFixture(t)
+		_, err := store.ModifyBook(book.ID, func(b *database.Book) error { b.Narrator = nil; return nil })
+		require.NoError(t, err)
+		n, err := store.CreateNarrator("Ray Porter")
+		require.NoError(t, err)
+		require.NoError(t, store.SetBookNarrators(book.ID, []database.BookNarrator{{BookID: book.ID, NarratorID: n.ID, Role: "narrator"}}))
+		_, err = audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), book.ID,
+			map[string]any{"overrides": map[string]any{"narrator": map[string]any{"locked": true}}})
+		require.NoError(t, err)
+		requireLocksAndHistoryMatchGET(t, store, book.ID, "lock-only narrator")
+		st := fieldStates(t, store, book.ID)[database.FieldKeyNarrator]
+		require.True(t, st.OverrideLocked)
+		require.Equal(t, `"Ray Porter"`, *st.OverrideValue)
+	})
+	t.Run("author_id + lock-only author_name", func(t *testing.T) {
+		store, book := invariantFixture(t)
+		carol, err := store.GetAuthorByName("carol cole")
+		require.NoError(t, err)
+		_, err = audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), book.ID, map[string]any{
+			"author_id": carol.ID, "overrides": map[string]any{"author_name": map[string]any{"locked": true}}})
+		require.NoError(t, err)
+		requireLocksAndHistoryMatchGET(t, store, book.ID, "author_id + lock-only")
+		st := fieldStates(t, store, book.ID)[database.FieldKeyAuthorName]
+		require.True(t, st.OverrideLocked)
+		require.Equal(t, `"carol cole"`, *st.OverrideValue)
+	})
+	t.Run("position cleared with locked:false", func(t *testing.T) {
+		store, book := invariantFixture(t)
+		svc := audiobooks.NewAudiobookUpdateService(store)
+		_, err := svc.UpdateAudiobook(context.Background(), book.ID, editor("series_position", 3))
+		require.NoError(t, err)
+		since := time.Now()
+		_, err = svc.UpdateAudiobook(context.Background(), book.ID,
+			map[string]any{"overrides": map[string]any{"series_position": map[string]any{"value": nil, "locked": false}}})
+		require.NoError(t, err)
+		requireLocksAndHistoryMatchGETSince(t, store, book.ID, "position clear unlocked", since)
+		st := fieldStates(t, store, book.ID)[database.FieldKeySeriesPosition]
+		require.False(t, st.OverrideLocked)
+		require.Nil(t, st.OverrideValue, "a cleared position kept the old override value")
+	})
+	t.Run("series cleared with locked:false", func(t *testing.T) {
+		store, book := invariantFixture(t)
+		_, err := audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), book.ID, map[string]any{
+			"series_name": "", "overrides": map[string]any{"series_name": map[string]any{"value": "", "locked": false}}})
+		require.NoError(t, err)
+		requireLocksAndHistoryMatchGET(t, store, book.ID, "series clear unlocked")
+		st := fieldStates(t, store, book.ID)[database.FieldKeySeriesName]
+		require.False(t, st.OverrideLocked)
+		require.Nil(t, st.OverrideValue, "a locked:false series clear stored an override value")
 	})
 	t.Run("dangling SeriesID relinked by name", func(t *testing.T) {
 		store, book := invariantFixture(t)
