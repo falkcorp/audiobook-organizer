@@ -77,17 +77,31 @@ type bookWriter interface {
 // contributorResolver is the get-or-create pass UpdateAudiobook runs when a
 // payload names an author, narrator, or series by string rather than by ID.
 // Each entity follows the same lookup-then-create shape, and the two Set*
-// calls rewrite the book's join rows once the IDs are resolved.
-// GetBookNarrators tells a narrator clear whether the junction has anything to
-// clear when the column is already empty.
+// calls rewrite the book's join rows once the IDs are resolved. The two Get*
+// join reads serve the narrator edit: whether a clear has a junction to empty
+// when the column is already empty, and which of the book's authors the
+// store's narrator-credit cleaning drops.
 type contributorResolver interface {
+	authorResolver
+	narratorResolver
+	seriesResolver
+}
+
+type authorResolver interface {
 	GetAuthorByName(name string) (*database.Author, error)
 	CreateAuthor(name string) (*database.Author, error)
 	SetBookAuthors(bookID string, authors []database.BookAuthor) error
+	GetBookAuthors(bookID string) ([]database.BookAuthor, error)
+}
+
+type narratorResolver interface {
 	GetNarratorByName(name string) (*database.Narrator, error)
 	CreateNarrator(name string) (*database.Narrator, error)
 	SetBookNarrators(bookID string, narrators []database.BookNarrator) error
 	GetBookNarrators(bookID string) ([]database.BookNarrator, error)
+}
+
+type seriesResolver interface {
 	GetSeriesByName(name string, authorID *int) (*database.Series, error)
 	CreateSeries(name string, authorID *int) (*database.Series, error)
 }

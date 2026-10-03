@@ -20,6 +20,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
 // errAlreadySoftDeleted is returned by DeleteAudiobook's soft-delete when the
@@ -575,10 +576,33 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 	}
 
 	// The narrator junction, now that the column it mirrors has committed.
-	// The store's own junction sync (inside ModifyBook) has already run for a
-	// changed non-empty credit; this write records the cast as the user split
-	// it, and is the only junction write for a clear. A failure is logged, not
-	// returned: the edit itself landed.
+	//
+	// For a changed non-empty credit the store's own junction sync has
+	// already run inside ModifyBook, and when util.CleanNarratorCredit reads
+	// the credit as people it wrote the CLEANED cast ("Narrated by" stripped,
+	// the book's own authors dropped). That is the cast to keep, so this write
+	// steps aside; when this write ran before the commit, the store's sync
+	// overwrote it the same way. Otherwise (an unchanged credit, or one the
+	// cleaning leaves alone) the cast goes in as the user split it, and a
+	// clear is always written here: the store syncs only non-empty credits.
+	// A failure is logged, not returned: the edit itself landed.
+	if writeNarratorJunction && len(narratorJunction) > 0 && pre != nil {
+		credit := ""
+		if updatedBook.Narrator != nil {
+			credit = *updatedBook.Narrator
+		}
+		preCredit := ""
+		if pre.Narrator != nil {
+			preCredit = *pre.Narrator
+		}
+		if credit != preCredit {
+			if authors, aErr := database.LiveBookAuthorNames(svc.store, updatedBook); aErr == nil {
+				if _, verdict := util.CleanNarratorCredit(credit, authors); verdict == util.NarratorCreditPeople {
+					writeNarratorJunction = false
+				}
+			}
+		}
+	}
 	if writeNarratorJunction {
 		if err := svc.store.SetBookNarrators(id, narratorJunction); err != nil {
 			singleLog.Warn("UpdateAudiobook %s: the edit was saved but book_narrators was not updated: %v",
