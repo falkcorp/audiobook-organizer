@@ -1,12 +1,13 @@
 // file: internal/audiobooks/author_name_gate_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 706fca22-946e-4028-b4d1-f6d7c0bbcbb7
-// last-edited: 2026-09-03
+// last-edited: 2026-10-03
 
 package audiobooks
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -42,7 +43,8 @@ func TestUpdateAudiobook_AllAuthorNamesRejectedReturnsError(t *testing.T) {
 
 	name := "Track 01"
 	_, err := svc.UpdateAudiobook(context.Background(), "bk1", &UpdateAudiobookRequest{
-		Updates: &AudiobookUpdate{Book: &database.Book{}, AuthorName: &name},
+		Updates:    &AudiobookUpdate{Book: &database.Book{}, AuthorName: &name},
+		RawPayload: map[string]json.RawMessage{"author_name": json.RawMessage(`"Track 01"`)},
 	})
 	if err == nil {
 		t.Fatal("expected an error when every author name is rejected, got nil")

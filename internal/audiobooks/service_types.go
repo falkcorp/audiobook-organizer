@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_types.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: a3f9b2c1-d4e5-6f70-8a9b-0c1d2e3f4a5b
 // last-edited: 2026-10-03
 
@@ -121,11 +121,36 @@ type ListFilters struct {
 }
 
 // UpdateAudiobookRequest represents parameters for updating an audiobook
+//
+// RawPayload is the request body's top-level keys. It is what Sent reads, so
+// a request built by hand must list in it every field it means to change:
+// Updates holds parsed values only, and a field present there but absent from
+// RawPayload (and from Overrides) is treated as not sent.
 type UpdateAudiobookRequest struct {
 	Updates             *AudiobookUpdate
 	RawPayload          map[string]json.RawMessage
 	ResolvingAuthorName string
 	ResolvingSeriesName string
+}
+
+// Sent reports whether the client named field (a payload key, which is also
+// its lock key): as a top-level key, or as an override that carries a value.
+// An override that only clears or (un)locks the lock changes no field, so it
+// does not count. UpdateAudiobook makes every "did the client send this"
+// decision through it.
+func (r *UpdateAudiobookRequest) Sent(field string) bool {
+	if r == nil {
+		return false
+	}
+	if _, ok := r.RawPayload[field]; ok {
+		return true
+	}
+	if r.Updates != nil {
+		if o, ok := r.Updates.Overrides[field]; ok && len(o.Value) > 0 && !o.Clear {
+			return true
+		}
+	}
+	return false
 }
 
 // DeleteAudiobookOptions contains options for deleting an audiobook

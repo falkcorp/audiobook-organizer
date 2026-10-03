@@ -1,5 +1,5 @@
 // file: internal/audiobooks/update_service.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: b2c3d4e5-f6g7-h8i9-j0k1-l2m3n4o5p6q7
 // last-edited: 2026-10-03
 
@@ -64,8 +64,13 @@ func (aus *AudiobookUpdateService) UpdateAudiobook(ctx context.Context, id strin
 		return nil, fmt.Errorf("audiobook not found")
 	}
 
-	bookCopy := *currentBook
-	updates := &AudiobookUpdate{Book: &bookCopy}
+	// updates holds only what the payload carries. It used to start as a
+	// copy of the stored row, so every pointer field the book had a value
+	// for looked sent: a title-only PUT then rewrote the narrator junction,
+	// collapsed co-authors through the author_id join sync, and rewrote the
+	// raw series position. Whether a field was sent is decided by req.Sent
+	// (the payload keys), never by a non-nil value here.
+	updates := &AudiobookUpdate{Book: &database.Book{}}
 
 	if title, ok := util.ExtractStringField(payload, "title"); ok {
 		updates.Title = title
@@ -120,13 +125,10 @@ func (aus *AudiobookUpdateService) UpdateAudiobook(ctx context.Context, id strin
 	if asin, ok := util.ExtractStringField(payload, "asin"); ok {
 		updates.ASIN = &asin
 	}
-	// series_position is the lock vocabulary's name for the SeriesSequence
-	// column (database.UserLockableFields). It was the only lockable field
-	// with no top-level payload key, so a client could lock it but never set
-	// it through the same request shape as every other field.
-	if pos, ok := util.ExtractIntField(payload, "series_position"); ok {
-		updates.SeriesSequence = &pos
-	}
+	// series_position (the lock vocabulary's name for the SeriesSequence
+	// column) is read by UpdateAudiobook from RawPayload, not parsed here:
+	// it needs the value as sent ("2.5" keeps its decimal in
+	// SeriesPositionRaw) and null to clear, which an int cannot carry.
 
 	if overridesMap, ok := aus.ExtractOverrides(payload); ok {
 		updates.Overrides = make(map[string]OverridePayload)
