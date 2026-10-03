@@ -985,3 +985,115 @@ func TestJunkTitleFixer_BlobTitleLockHolds(t *testing.T) {
 		require.NotNil(t, c.RevertedAt, "no live undo row for a refused write: %+v", c)
 	}
 }
+
+// An apply cut at any point is finished by the next plan even when the row
+// was only weakly tied (a long title, no narrator column, the narrator tie
+// coming from the "read by X" title the title write replaces). The author
+// lock goes first, and a book carrying it is a continuation: the next plan
+// waives the tie requirement it already passed. The finishing op owns every
+// lock it relies on.
+func TestSwappedTitleAuthorFixer_ContinuationFinishesWeaklyTiedRows(t *testing.T) {
+	type cut int
+	const (
+		afterAuthorLock cut = iota
+		afterTitle
+		afterCredits
+	)
+	cases := []struct {
+		name, title, narrator string
+		// filledNarrator: the narrator column was filled in by a metadata
+		// fetch, so it does not count as a tie (circular).
+		filledNarrator bool
+		at             cut
+	}{
+		{name: "V1 long title, no tie, cut after the title", title: "read by narrator", at: afterTitle},
+		{name: "V1a long title, no tie, cut after the author lock", title: "read by narrator", at: afterAuthorLock},
+		{name: "V1b long title, no tie, cut after the credit move", title: "read by narrator", at: afterCredits},
+		{name: "V2 narrator tie only from the read-by title", title: "read by Jack Voraces", narrator: "Jack Voraces",
+			filledNarrator: true, at: afterTitle},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			l := newSwapLib(t)
+			id := l.add(swapBook{name: "swap", title: c.title, narrator: c.narrator,
+				storedAuthor: "Ultimate Level 1_ Divine Creation", provTitle: "Ultimate Level 1: Divine Creation",
+				provAuthor: "Shawn Wilson", prov: map[string]any{"narrator": "Jack Voraces"}, files: []string{"/lib/S/X/book.m4b"}})
+			if c.filledNarrator {
+				v := `"Jack Voraces"`
+				require.NoError(t, l.store.RecordMetadataChange(&database.MetadataChangeRecord{BookID: id,
+					Field: database.HistoryFieldName("narrator"), NewValue: &v, ChangeType: "fetched"}))
+			}
+			_, rows := l.plan()
+			first, listed := rows["swap"]
+			require.True(t, listed, "the full row is planned")
+			require.True(t, first.Applicable(), "%s %s", first.Skipped, first.SkipReason)
+
+			cw := repairs.NewWriter(l.store, l.store, swappedFixerID, "bulk_update", "repairs-").
+				WithJournal(l.store, l.store, "op-cut").WithCredits(l.store).WithFieldStates(l.store)
+			require.NoError(t, cw.LockFields(id, database.FieldKeyAuthorName))
+			if c.at >= afterTitle {
+				require.NoError(t, writeTitleOnly(cw, l.store, id, c.title, "Ultimate Level 1: Divine Creation"))
+			}
+			if c.at >= afterCredits {
+				wilson, err := l.store.CreateAuthor("Shawn Wilson")
+				require.NoError(t, err)
+				require.NoError(t, l.store.SetBookAuthors(id, []database.BookAuthor{{BookID: id, AuthorID: wilson.ID, Role: "author"}}))
+			}
+
+			plan, rows := l.plan()
+			r, listed := rows["swap"]
+			require.True(t, listed, "the next plan lists the cut book")
+			require.True(t, r.Applicable(), "the next plan finishes the cut apply: %s %s", r.Skipped, r.SkipReason)
+			out := l.apply(plan, []string{r.RowID})
+			require.Equal(t, 1, out.Applied, "outcomes %v", out.ByOutcome)
+			wilson := l.authorID("Shawn Wilson")
+			b := l.book("swap")
+			require.Equal(t, "Ultimate Level 1: Divine Creation", b.Title)
+			require.Equal(t, wilson, *b.AuthorID)
+			require.Contains(t, l.credits("swap"), wilson, "the primary author is in the credit list")
+			for _, f := range []string{database.FieldKeyTitle, database.FieldKeyAuthorName} {
+				st := fieldStateOf(mustStates(t, l, "swap"), f)
+				require.NotNil(t, st, f)
+				require.Equal(t, database.RepairLockSource(swapTestOpID), st.LockSource, "%s is locked under the finishing op", f)
+			}
+		})
+	}
+}
+
+// A person who picks a match by hand after a repair, changing the title,
+// makes the title lock theirs: reverting the repair then leaves their title
+// and their lock alone (the paired lock check), and undoes the rest.
+func TestSwappedTitleAuthorFixer_RevertAfterHandPickedApplyKeepsThePersonsTitle(t *testing.T) {
+	l := newSwapLib(t)
+	l.populate()
+	plan, rows := l.plan()
+	out := l.apply(plan, []string{rows["swap"].RowID})
+	require.Equal(t, 1, out.Applied, "outcomes %v", out.ByOutcome)
+	id := l.ids["swap"]
+
+	_, err := metafetch.NewService(l.store).ApplyMetadataCandidate(id,
+		metafetch.MetadataCandidate{Title: "Ultimate Level One", Source: "audible"}, []string{"title"})
+	require.NoError(t, err)
+	require.Equal(t, "Ultimate Level One", l.book("swap").Title)
+	st := fieldStateOf(mustStates(t, l, "swap"), database.FieldKeyTitle)
+	require.NotNil(t, st)
+	require.True(t, st.OverrideLocked)
+	require.Empty(t, st.LockSource, "the hand-picked apply claimed the lock")
+
+	_, _ = audiobooks.NewRevertService(l.store).RevertOperation(swapTestOpID)
+	require.Equal(t, "Ultimate Level One", l.book("swap").Title, "the person's title is not reverted to junk")
+	require.True(t, l.locked("swap", database.FieldKeyTitle), "and their lock stays")
+	require.Equal(t, l.holder["swap"], *l.book("swap").AuthorID, "the author move is undone")
+
+	// The same when the person only locked the repaired title by hand.
+	l2 := newSwapLib(t)
+	l2.populate()
+	plan2, rows2 := l2.plan()
+	require.Equal(t, 1, l2.apply(plan2, []string{rows2["swap"].RowID}).Applied)
+	row := *fieldStateOf(mustStates(t, l2, "swap"), database.FieldKeyTitle)
+	row.LockSource = ""
+	require.NoError(t, l2.store.UpsertMetadataFieldState(&row))
+	_, _ = audiobooks.NewRevertService(l2.store).RevertOperation(swapTestOpID)
+	require.Equal(t, "Ultimate Level 1: Divine Creation", l2.book("swap").Title)
+	require.True(t, l2.locked("swap", database.FieldKeyTitle))
+}

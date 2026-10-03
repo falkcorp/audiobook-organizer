@@ -465,6 +465,23 @@ func ApplyRespectingLocks(reader MetadataFieldStateReader, book *Book, mutate fu
 	return locks.Apply(book, mutate), nil
 }
 
+// LockedColumnChanged reports whether the Book column lock key key protects
+// differs between before and after. An unknown key, or a nil book, is false.
+func LockedColumnChanged(key string, before, after *Book) bool {
+	if before == nil || after == nil {
+		return false
+	}
+	for _, f := range UserLockableFields {
+		if f.Key != key {
+			continue
+		}
+		b := reflect.ValueOf(before).Elem().FieldByName(f.Column)
+		a := reflect.ValueOf(after).Elem().FieldByName(f.Column)
+		return !columnEqual(snapshotColumn(b), a)
+	}
+	return false
+}
+
 // snapshotColumn copies a column value so a mutation that writes THROUGH an
 // existing pointer (*book.Narrator = x) is caught as well as one that swaps
 // the pointer.

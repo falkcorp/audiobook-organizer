@@ -1465,9 +1465,6 @@ func (f *junkTitleFixer) candidateTitle(bookID, author string) (string, float64,
 // "(Unabridged)", "[Abridged]".
 var catalogEditionRe = regexp.MustCompile(`(?i)\s*[(\[]\s*(?:un)?abridged\s*[)\]]`)
 
-// junkLettersKey is a title reduced to its letters and digits, NFC and lower
-// case: what two spellings of one title share whatever punctuation, spacing
-// or Unicode form each uses ("3-10 to Yuma", "3:10 to Yuma").
 // legacyStateUnreadable returns why a book whose field state is only in a
 // pre-migration blob that does not parse must be held: the apply locks the
 // title it writes, which migrates the blob first, and an unreadable blob
@@ -1482,6 +1479,9 @@ func legacyStateUnreadable(reader database.MetadataFieldStateReader, bookID stri
 	return ""
 }
 
+// junkLettersKey is a title reduced to its letters and digits, NFC and lower
+// case: what two spellings of one title share whatever punctuation, spacing
+// or Unicode form each uses ("3-10 to Yuma", "3:10 to Yuma").
 func junkLettersKey(title string) string {
 	var sb strings.Builder
 	for _, r := range norm.NFC.String(strings.ToLower(title)) {

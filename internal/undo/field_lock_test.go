@@ -44,3 +44,32 @@ func TestFieldLock_RestorableAndCompareAndSet(t *testing.T) {
 	err := CheckFieldLockCurrent([]database.MetadataFieldState{{Field: "title", OverrideValue: &ov, OverrideLocked: true}}, c)
 	require.Equal(t, ReasonChangedSince, RefusalReason(err))
 }
+
+// A value whose paired repair lock a person took over (claimed, or locked by
+// hand: LockSource cleared) stays: the title row is refused while the lock
+// row is too, so the junk value never ends up under the person's lock.
+func TestCheckPairedFieldLock(t *testing.T) {
+	titleRow := &database.OperationChange{OperationID: "op-1", BookID: "b", ChangeType: "metadata_update",
+		FieldName: "title", OldValue: "read by X", NewValue: "Real Title"}
+	lockRow := &database.OperationChange{OperationID: "op-1", BookID: "b", ChangeType: ChangeTypeFieldLock,
+		FieldName: "title", OldValue: FieldLockUnlocked, NewValue: FieldLockLocked}
+	locks := []*database.OperationChange{lockRow}
+	claimed := []database.MetadataFieldState{{BookID: "b", Field: "title", OverrideLocked: true}}
+	require.Equal(t, ReasonChangedSince, RefusalReason(CheckPairedFieldLock(locks, claimed, titleRow)))
+	taken := []database.MetadataFieldState{{BookID: "b", Field: "title", OverrideLocked: true, LockSource: database.RepairLockSource("op-2")}}
+	require.Equal(t, ReasonChangedSince, RefusalReason(CheckPairedFieldLock(locks, taken, titleRow)), "a later op's lock")
+	own := []database.MetadataFieldState{{BookID: "b", Field: "title", OverrideLocked: true, LockSource: database.RepairLockSource("op-1")}}
+	require.NoError(t, CheckPairedFieldLock(locks, own, titleRow), "still the op's lock")
+	require.NoError(t, CheckPairedFieldLock(locks, nil, titleRow), "lock already lifted")
+	require.NoError(t, CheckPairedFieldLock(nil, claimed, titleRow), "no paired lock row")
+	voided := *lockRow
+	voided.Voided = true
+	require.NoError(t, CheckPairedFieldLock([]*database.OperationChange{&voided}, claimed, titleRow), "a voided lock row never happened")
+
+	// A taken-over lock's row is restorable and renders against its source.
+	take := &database.OperationChange{ID: "c2", OperationID: "op-2", BookID: "b", ChangeType: ChangeTypeFieldLock,
+		FieldName: "title", OldValue: FieldLockTakenFrom(database.RepairLockSource("op-1")), NewValue: FieldLockLocked}
+	require.True(t, IsRestorable(take))
+	require.NoError(t, CheckFieldLockCurrent(taken, take))
+	require.ErrorIs(t, CheckFieldLockCurrent(own, take), ErrAlreadyRestored)
+}

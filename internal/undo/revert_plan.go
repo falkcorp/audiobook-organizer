@@ -48,6 +48,9 @@ type RevertPlan struct {
 	// demoted: books this operation journaled a primary demote for
 	// (NoteHandOffs), reverted or not.
 	demoted map[string]bool
+	// fieldLocks: this operation's ChangeTypeFieldLock rows by book and
+	// field, every one of them (reverted or not), for CheckPairedFieldLock.
+	fieldLocks map[string][]*database.OperationChange
 }
 
 // PlanRevert orders rows (an operation's not-yet-reverted restorable rows, in
@@ -60,7 +63,8 @@ func PlanRevert(rows []*database.OperationChange, files func(bookID string) ([]d
 		return nil, err
 	}
 	p := &RevertPlan{Stamps: OpSoftDeleteStamps(rows), deps: deps, depIDs: map[string]bool{},
-		restored: map[string]bool{}, refusedBook: map[string]bool{}, handedOff: map[string]bool{}, demoted: map[string]bool{}}
+		restored: map[string]bool{}, refusedBook: map[string]bool{}, handedOff: map[string]bool{}, demoted: map[string]bool{},
+		fieldLocks: map[string][]*database.OperationChange{}}
 	for _, ids := range deps {
 		for _, id := range ids {
 			p.depIDs[id] = true
@@ -176,8 +180,22 @@ func (p *RevertPlan) NoteHandOffs(all []*database.OperationChange) {
 			p.handedOff[c.BookID] = true
 		case ChangeTypeBookPrimaryDemote:
 			p.demoted[c.BookID] = true
+		case ChangeTypeFieldLock:
+			if !c.Voided {
+				k := c.BookID + "\x00" + c.FieldName
+				p.fieldLocks[k] = append(p.fieldLocks[k], c)
+			}
 		}
 	}
+}
+
+// FieldLocksOf returns this operation's field-lock rows for c's book and
+// field (NoteHandOffs collects them from every row of the operation).
+func (p *RevertPlan) FieldLocksOf(c *database.OperationChange) []*database.OperationChange {
+	if p == nil {
+		return nil
+	}
+	return p.fieldLocks[c.BookID+"\x00"+c.FieldName]
 }
 
 // HandedOff reports whether this operation recorded handing bookID's version

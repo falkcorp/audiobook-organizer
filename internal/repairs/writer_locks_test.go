@@ -108,6 +108,7 @@ func TestWriter_LockFields_Refusals(t *testing.T) {
 	require.Empty(t, f.states["b5"])
 	require.Len(t, f.journal, 1)
 	require.NotNil(t, f.journal[0].RevertedAt, "the row of a lock that was never written is voided")
+	require.True(t, f.journal[0].Voided)
 
 	// Without a field-state store LockFields fails rather than skip the lock.
 	bare := NewWriter(newMemStore(), newMemStore(), "junk", "bulk_update", "rp-").WithJournal(nil, f, "op-1")
@@ -127,16 +128,24 @@ func TestWriter_LockFields_MigratesLegacyBlob(t *testing.T) {
 	require.False(t, blob, "the blob is retired")
 }
 
-// A person's lock is never taken over; this op's own lock is idempotent.
+// Another repair operation's lock is taken over under this op's id, and the
+// journal records it so the revert hands it back; a person's lock is never
+// taken; this op's own lock is idempotent.
 func TestWriter_LockFields_ResumeAndForeignLock(t *testing.T) {
 	f := &fieldStateFake{states: map[string]map[string]database.MetadataFieldState{
-		"b1": {"title": {BookID: "b1", Field: "title", OverrideLocked: true, LockSource: database.RepairLockSource("op-other")}},
+		"b1": {
+			"title":    {BookID: "b1", Field: "title", OverrideLocked: true, LockSource: database.RepairLockSource("op-other")},
+			"narrator": {BookID: "b1", Field: "narrator", OverrideLocked: true},
+		},
 	}}
 	w := lockWriter(f)
-	require.ErrorIs(t, w.LockFields("b1", database.FieldKeyTitle), ErrChangedSincePlan, "another op's lock is not ours")
+	require.NoError(t, w.LockFields("b1", database.FieldKeyTitle))
+	require.Equal(t, database.RepairLockSource("op-1"), f.states["b1"]["title"].LockSource)
+	require.Equal(t, undo.FieldLockTakenFrom(database.RepairLockSource("op-other")), f.journal[0].OldValue)
+	require.ErrorIs(t, w.LockFields("b1", database.FieldKeyNarrator), ErrChangedSincePlan, "a person's lock is never taken")
 	require.NoError(t, w.LockFields("b1", database.FieldKeyAuthorName))
 	require.NoError(t, w.LockFields("b1", database.FieldKeyAuthorName), "a resumed run finds its own lock")
-	require.Len(t, f.journal, 1)
+	require.Len(t, f.journal, 2)
 }
 
 // JournalStep voids its row when the write is refused as changed since plan,
@@ -153,6 +162,6 @@ func TestWriter_JournalStep_VoidsRefusedWrite(t *testing.T) {
 	require.NoError(t, w.JournalStep("b1", e, func() error { return nil }))
 	require.Len(t, f.journal, 2)
 	require.Nil(t, f.journal[1].RevertedAt)
-	require.Error(t, w.JournalStep("b2", e, func() error { return errors.New("disk") }))
-	require.Nil(t, f.journal[2].RevertedAt, "an unknown failure keeps the row")
+	require.Error(t, w.JournalStep("b2", e, func() error { return errors.New("commit failed") }))
+	require.True(t, f.journal[2].Voided, "any failed write wrote nothing: its row is voided too")
 }

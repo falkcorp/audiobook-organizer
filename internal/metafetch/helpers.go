@@ -877,6 +877,7 @@ func BuildMetadataProvenance(book *database.Book, state map[string]MetadataField
 			StoredValue:     storedValue,
 			OverrideValue:   entryState.OverrideValue,
 			OverrideLocked:  entryState.OverrideLocked,
+			LockSource:      entryState.LockSource,
 			EffectiveValue:  effectiveValue,
 			EffectiveSource: effectiveSource,
 			UpdatedAt:       updatedAt,
