@@ -30,6 +30,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
+	"golang.org/x/text/unicode/norm"
 )
 
 // junkTitlesFixerID is the Repairs-lane id of the junk-title fixer. It is the
@@ -112,10 +113,11 @@ func (f *junkTitleFixer) Description() string {
 	return "Books titled with a chapter number (\"01\", \"Chapter 12\", \"Disc 2\"), a narrator credit " +
 		"(\"read by narrator\"), a track tag (\"Opening\", \"Intro\"), a placeholder (\"Unknown Title\"), a bare " +
 		"roman numeral, or a title behind a track-number or punctuation prefix. Proposes the real title from, in " +
-		"order: the intro transcription, the title without its prefix, a matching metadata candidate, the folder or " +
+		"order: the intro transcription, the title without its prefix, a matching metadata candidate, a title a " +
+		"provider recorded for the book, the folder or " +
 		"filename, the series and number. A book another book owns a file of is a fragment for the consolidation " +
-		"fixer; one that only looks like a chapter file is listed for a person. A title a provider recorded for " +
-		"the book but never applied is used as evidence. Writes the title only, never a user-locked one."
+		"fixer; one that only looks like a chapter file is listed for a person. A provider's recorded title counts only when " +
+		"it agrees with the title's own evidence or was recorded under the book's author. Writes the title only, never a user-locked one."
 }
 
 // junkIndex is the library-wide state a decision reads besides the book
@@ -523,14 +525,21 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 	// a provider's value; kept apart because the reason is rebuilt once a
 	// proposal is chosen.
 	providerNote := ""
-	// fetchedTitle is the provider's recorded title, providerSaidIt whether
-	// it IS the stored junk title (or cannot be read: treated the same).
-	fetchedTitle, providerSaidIt := "", false
+	// fetchedTitle and fetchedAuthor are what a provider recorded for the
+	// book; providerSaidIt is whether the recorded title IS the stored junk
+	// one, providerUnreadable whether a value is on record but is no string.
+	fetchedTitle, fetchedAuthor, providerSaidIt, providerUnreadable := "", "", false, false
 	states, err := store.GetMetadataFieldStates(b.ID)
 	if err != nil {
 		return repairs.Row{}, fmt.Errorf("read field states of %s: %w", b.ID, err)
 	}
 	for i := range states {
+		if states[i].Field == "author_name" {
+			if v, ok := metastate.Decode(states[i].FetchedValue).(string); ok {
+				fetchedAuthor = strings.TrimSpace(v)
+			}
+			continue
+		}
 		if states[i].Field != "title" {
 			continue
 		}
@@ -546,18 +555,24 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 		// a scheduled fetch records the provider's candidate and then only
 		// fills empty fields, so the junk title stayed. The stored title is
 		// file-derived and the recorded value is evidence, weighed below
-		// like a cached candidate (the fetch searched on the junk title, and
-		// its hit can be another book: "01 The Shadow of Gods 01-34" has
-		// "Shadowfall" on record). In 11 a provider did return the stored
-		// title: those are repaired too, but never at low risk.
+		// (the fetch searched on the junk title, and its hit can be another
+		// book: "01 The Shadow of Gods 01-34" has "Shadowfall" on record).
+		// In 11 the recorded title IS the stored one, by the letters and
+		// digits ("3-10 to Yuma" is "3:10 to Yuma"): a provider may have
+		// answered with it, or returned no title at all (the fetch then
+		// records the book's own). Those are repaired too, never at low risk.
 		if states[i].HasProviderValue() {
 			if v, ok := metastate.Decode(states[i].FetchedValue).(string); ok {
 				fetchedTitle = strings.TrimSpace(v)
 			}
-			providerSaidIt = fetchedTitle == "" || strings.EqualFold(fetchedTitle, strings.TrimSpace(b.Title))
-			if providerSaidIt {
-				providerNote = "; a metadata provider returned this same title"
-			} else {
+			switch {
+			case fetchedTitle == "":
+				providerUnreadable = true
+				providerNote = "; a provider value is on record for the title but is not a readable string"
+			case junkLettersKey(fetchedTitle) == junkLettersKey(b.Title):
+				providerSaidIt = true
+				providerNote = "; the title a metadata provider recorded for this book is this same title"
+			default:
 				providerNote = fmt.Sprintf("; a metadata provider recorded the title %q for this book", fetchedTitle)
 			}
 			r.Reason += providerNote
@@ -694,13 +709,26 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 		}
 	}
 
-	provided := ""
+	// The provider's recorded title is held to the cached candidate's
+	// standard. For an embedded kind it must agree with the title's own
+	// evidence. Otherwise nothing in the title vouches for it, so it must
+	// have been recorded under the book's own author, as candidateTitle
+	// requires of a candidate (the fetch's title-only fallback searches with
+	// no author at all). No score is on record, so that gate cannot be kept.
+	provided, providerRefusal := "", ""
 	if fetchedTitle != "" && !providerSaidIt {
+		a := strings.TrimSpace(author)
 		switch {
 		case embedded && !titleAgreesWithAny(fetchedTitle, agreeWith):
-			refused = append(refused, fmt.Sprintf("provider value %q disagrees with the title's own evidence", fetchedTitle))
+			providerRefusal = fmt.Sprintf("provider value %q disagrees with the title's own evidence", fetchedTitle)
+		case !embedded && (a == "" || authorname.IsPlaceholderAuthor(a) ||
+			!strings.EqualFold(util.NormalizeAuthor(fetchedAuthor), util.NormalizeAuthor(a))):
+			providerRefusal = fmt.Sprintf("provider value %q was not recorded under this book's author (recorded %q)", fetchedTitle, fetchedAuthor)
 		default:
 			provided, _ = accept(fetchedTitle, junkSrcProvider)
+		}
+		if providerRefusal != "" {
+			refused = append(refused, providerRefusal)
 		}
 	}
 
@@ -712,7 +740,7 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 
 	// Path evidence is what the book's own path says its title is: the
 	// stripped title, the folder, a filename stem that reads like a title.
-	// When it and a transcription or candidate disagree, neither is
+	// When it and a transcription, candidate or provider value disagree, neither is
 	// proposed: each side has a known way to be wrong ("New Folder (2)",
 	// "Libation" vs "Audible Studios presents", a series' first book), and
 	// picking one would write the other's mistake half the time.
@@ -737,7 +765,7 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 		for i := range pathEv {
 			pathTitles[i] = pathEv[i].title
 		}
-		for _, other := range []evidence{{junkSrcTranscribed, spoken}, {junkSrcProvider, provided}, {junkSrcCandidate, candidate}} {
+		for _, other := range []evidence{{junkSrcTranscribed, spoken}, {junkSrcCandidate, candidate}, {junkSrcProvider, provided}} {
 			if other.title == "" || titleAgreesWithAny(other.title, pathTitles) {
 				continue
 			}
@@ -756,11 +784,11 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 	if stripped != "" {
 		props = append(props, proposal{stripped, junkSrcStripped, repairs.RiskLow})
 	}
-	if provided != "" {
-		props = append(props, proposal{provided, junkSrcProvider, repairs.RiskReview})
-	}
 	if candidate != "" {
 		props = append(props, proposal{candidate, junkSrcCandidate, repairs.RiskReview})
+	}
+	if provided != "" {
+		props = append(props, proposal{provided, junkSrcProvider, repairs.RiskReview})
 	}
 	if folder != "" {
 		// A folder reached by climbing past a chapter folder that sits right
@@ -770,7 +798,7 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 		climbed := titleDir != "" && titleDir != filepath.Dir(paths[0])
 		if climbed && slices.Contains(idx.roots, filepath.Dir(titleDir)) {
 			corroborated := false
-			for _, c := range []string{spoken, provided, candidate} {
+			for _, c := range []string{spoken, candidate, provided} {
 				if c != "" && titleAgreesWithAny(c, []string{folder}) {
 					corroborated = true
 				}
@@ -778,7 +806,7 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 			if !corroborated {
 				return finish(junkSkipNeedsManual, fmt.Sprintf(
 					"the folder %q sits directly under the root %s above a chapter folder and may be the author; "+
-						"no transcription or candidate corroborates it", folder, filepath.Dir(titleDir)))
+						"no transcription, candidate or provider value corroborates it", folder, filepath.Dir(titleDir)))
 			}
 		}
 		// A weak filename stem ("hp1", "final") is never a title, not even
@@ -806,7 +834,7 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 		return finish(junkSkipNeedsManual, "only a weak filename stem: "+folder)
 	}
 	if len(props) == 0 {
-		why := "no trustworthy replacement title (no transcription, matching candidate, usable folder or series)"
+		why := "no trustworthy replacement title (no transcription, matching candidate, usable provider value, folder or series)"
 		if len(refused) > 0 {
 			why += "; refused: " + strings.Join(refused, ", ")
 		}
@@ -819,9 +847,11 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 	}
 	r.Proposed = map[string]string{"title": best.title}
 	r.Risk = best.risk
-	if providerSaidIt {
-		// A provider answered with this very title: it may be a real one the
-		// classifier misreads ("3-10 to Yuma"). Never a low-risk row.
+	if providerSaidIt || providerUnreadable || providerRefusal != "" {
+		// The recorded title is this very title (it may be a real one the
+		// classifier misreads: "3-10 to Yuma"), cannot be read, or names
+		// something else: a provider on record against the proposal is a
+		// reason for a person to look. Never a low-risk row.
 		r.Risk = repairs.RiskReview
 	}
 	var also []string
@@ -835,6 +865,9 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 		r.Reason += "; other evidence: " + strings.Join(also, ", ")
 	}
 	r.Reason += providerNote
+	if providerRefusal != "" {
+		r.Reason += "; not used: " + providerRefusal
+	}
 	r.Detail = &junkDecision{bookID: b.ID, oldTitle: b.Title, newTitle: best.title}
 	// The provider's recorded title is an input: one that appears or changes
 	// between plan and apply is a different decision.
@@ -1037,13 +1070,16 @@ func (pc junkProposalCheck) refusal(c, source string) string {
 			return fmt.Sprintf("%q reads like transcribed prose, not a title", c)
 		}
 	}
-	if source == junkSrcFolder || source == junkSrcFilename {
+	if source == junkSrcFolder || source == junkSrcFilename || source == junkSrcProvider || source == junkSrcCandidate {
+		// A catalog title carries these too ("Dune (Unabridged)").
 		switch {
 		case formatWordRe.MatchString(c):
 			return fmt.Sprintf("%q carries a format, edition or disc marker", c)
 		case idCodeRe.MatchString(c):
 			return fmt.Sprintf("%q carries an ASIN or ISBN", c)
 		}
+	}
+	if source == junkSrcFolder || source == junkSrcFilename {
 		if head, _, ok := strings.Cut(c, " - "); ok && pc.namesAPersonNormalized(head) {
 			return fmt.Sprintf("%q starts with a person's name (an \"Author - …\" filename)", c)
 		}
@@ -1272,6 +1308,19 @@ func (f *junkTitleFixer) candidateTitle(bookID, author string) (string, float64,
 		}
 	}
 	return best, bestScore, found
+}
+
+// junkLettersKey is a title reduced to its letters and digits, NFC and lower
+// case: what two spellings of one title share whatever punctuation, spacing
+// or Unicode form each uses ("3-10 to Yuma", "3:10 to Yuma").
+func junkLettersKey(title string) string {
+	var sb strings.Builder
+	for _, r := range norm.NFC.String(strings.ToLower(title)) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			sb.WriteRune(r)
+		}
+	}
+	return sb.String()
 }
 
 // junkFingerprint hashes the decision's inputs and outputs.
