@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_service_organize_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4f8c2a1d-5e9b-4f70-a3c6-8d1e0f2b9a47
 // last-edited: 2026-10-03
 
@@ -62,6 +62,11 @@ func TestRevertChange_OrganizeRename(t *testing.T) {
 	if mockStore.book.FilePath != oldPath {
 		t.Errorf("Book.FilePath = %q, want %q", mockStore.book.FilePath, oldPath)
 	}
+	// And the restore is in the book's history.
+	if len(mockStore.history) != 1 || mockStore.history[0].Field != "file_path" ||
+		mockStore.history[0].Source != RevertHistorySource {
+		t.Errorf("history = %+v, want one operation_revert file_path row", mockStore.history)
+	}
 }
 
 // TestRevertChange_OrganizeNonMutating verifies that organize_failed,
@@ -84,10 +89,15 @@ func TestRevertChange_OrganizeNonMutating(t *testing.T) {
 type stubStoreForRevert struct {
 	database.Store
 	book *database.Book
+	// history holds the rows the revert recorded.
+	history []database.MetadataChangeRecord
 }
 
-// RecordMetadataChange accepts the history rows a revert records.
-func (s *stubStoreForRevert) RecordMetadataChange(*database.MetadataChangeRecord) error { return nil }
+// RecordMetadataChange keeps the history rows a revert records.
+func (s *stubStoreForRevert) RecordMetadataChange(r *database.MetadataChangeRecord) error {
+	s.history = append(s.history, *r)
+	return nil
+}
 
 // GetBookByID returns an independent copy per read, as PebbleStore does, so
 // the caller's edits never reach s.book except through ModifyBook/UpdateBook.
