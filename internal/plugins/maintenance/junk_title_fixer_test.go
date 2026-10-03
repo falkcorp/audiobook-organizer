@@ -631,10 +631,11 @@ func TestLetterLOrdinalFixer(t *testing.T) {
 	require.Equal(t, "1 Corinthians", byID[ids["l Corinthians"]].Proposed["title"])
 	require.Equal(t, "2 Kings 4", byID[ids["ll Kings 4"]].Proposed["title"])
 
-	w := repairs.NewWriter(st, st, f.ID(), "bulk_update", "repairs-")
+	const opID = "op-letter-l"
+	w := repairs.NewWriter(st, st, f.ID(), "bulk_update", "repairs-").WithJournal(st, st, opID).WithFieldStates(st)
 	out, err := repairs.RunApply(context.Background(), f, res, "plan-1",
 		[]string{ids["l Corinthians"], ids["ll Kings 4"], ids["l Timothy"]}, false,
-		repairs.ApplyDeps{Guard: st, Writer: w}, &fakeReporter{})
+		repairs.ApplyDeps{Guard: st, Writer: w, OpID: opID}, &fakeReporter{})
 	require.NoError(t, err)
 	require.Equal(t, 2, out.Applied, "%v", out.ByOutcome)
 	b, err := st.GetBookByID(ids["l Corinthians"])
@@ -643,6 +644,20 @@ func TestLetterLOrdinalFixer(t *testing.T) {
 	b, err = st.GetBookByID(ids["l Timothy"])
 	require.NoError(t, err)
 	require.Equal(t, "l Timothy", b.Title, "a user-locked title is never rewritten")
+	locks, err := database.LoadFieldLocks(st, ids["l Corinthians"])
+	require.NoError(t, err)
+	require.True(t, locks.Locked(database.FieldKeyTitle), "the written title is locked")
+
+	// The op revert puts the title back and lifts the lock.
+	rev, err := audiobooks.NewRevertService(st).RevertOperation(opID)
+	require.NoError(t, err)
+	require.Zero(t, rev.Failed, "revert: %+v", rev)
+	b, err = st.GetBookByID(ids["l Corinthians"])
+	require.NoError(t, err)
+	require.Equal(t, "l Corinthians", b.Title)
+	locks, err = database.LoadFieldLocks(st, ids["l Corinthians"])
+	require.NoError(t, err)
+	require.False(t, locks.Locked(database.FieldKeyTitle))
 }
 
 // planRows plans the fixer over st and returns the rows by book id.
