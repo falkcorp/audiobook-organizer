@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_group_primary_fixer_test.go
-// version: 1.0.3
+// version: 1.1.0
 // guid: 7b2d9e46-0c81-4a37-b5f9-1e6c3a8d4f20
-// last-edited: 2026-10-01
+// last-edited: 2026-10-03
 
 package maintenance
 
@@ -34,13 +34,39 @@ type scriptedScan struct {
 	acquires, releases  int
 	renewsLeft          int
 	running, pausedByUs bool
-	// renews counts every renewal call. ttl > 0 adds the registry's
-	// wall-clock rule on top: a renewal later than ttl after the previous
-	// one (or the acquire) fails, and the holder stays lost.
+	// renews counts every renewal call. ttl > 0 adds the registry's expiry
+	// rule on top: a renewal later than ttl after the previous one (or the
+	// acquire) fails, and the holder stays lost.
+	//
+	// The lease clock (now) is NOT the wall clock: it moves only when a test
+	// calls advanceAfterRenewal. A wall-clock ttl short enough to test with
+	// (400ms) also bounded every gap between two writes of the row under
+	// test, and a slow CI runner took longer than that over one store write,
+	// so the lease "lapsed" in a place the test was not about.
 	renews  int
 	ttl     time.Duration
+	now     time.Time
 	expires time.Time
 	lapsed  bool
+	// advancedAt is renews as of the last advanceAfterRenewal.
+	advancedAt int
+}
+
+// advanceAfterRenewal moves the lease clock forward by d if the holder has
+// renewed since the clock last moved, and reports whether it did. Checking
+// and moving under one lock is what makes a d below ttl safe for a holder
+// that keeps renewing: the renewal counted here stamped its expiry at the
+// current clock, so the lease still has ttl-d left after the move. A holder
+// that stops renewing stops the clock too; the caller sees false.
+func (s *scriptedScan) advanceAfterRenewal(d time.Duration) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.renews == s.advancedAt {
+		return false
+	}
+	s.advancedAt = s.renews
+	s.now = s.now.Add(d)
+	return true
 }
 
 func (s *scriptedScan) AcquireScanStandDown(_ context.Context, holder, _ string) (func(), error) {
@@ -58,7 +84,7 @@ func (s *scriptedScan) AcquireScanStandDown(_ context.Context, holder, _ string)
 		s.running, s.pausedByUs = false, true
 	}
 	if s.ttl > 0 {
-		s.expires = time.Now().Add(s.ttl)
+		s.expires = s.now.Add(s.ttl)
 	}
 	return func() {
 		s.mu.Lock()
@@ -75,11 +101,11 @@ func (s *scriptedScan) RenewScanStandDown(string) bool {
 	defer s.mu.Unlock()
 	s.renews++
 	if s.ttl > 0 {
-		if s.lapsed || time.Now().After(s.expires) {
+		if s.lapsed || s.now.After(s.expires) {
 			s.lapsed = true
 			return false
 		}
-		s.expires = time.Now().Add(s.ttl)
+		s.expires = s.now.Add(s.ttl)
 	}
 	if s.renewsLeft < 0 {
 		return true
