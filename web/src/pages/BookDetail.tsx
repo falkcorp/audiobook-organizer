@@ -947,7 +947,9 @@ export const BookDetail = () => {
       // value, and null for a cleared box). Now that the box opens with the
       // stored number, re-sending it on every save would rewrite a raw
       // position the box cannot show exactly (e.g. "Book 3").
-      series_position: dirtyFields?.has('series_number') ? (updated.series_number ?? undefined) : undefined,
+      series_position: dirtyFields?.has('series_number')
+        ? (updated.series_number ?? undefined)
+        : undefined,
       audiobook_release_year:
         updated.audiobook_release_year || updated.year || book.audiobook_release_year || undefined,
       // PRESERVE-ONLY. This used to be `updated.year || book.print_year`, which
@@ -1015,7 +1017,9 @@ export const BookDetail = () => {
       // cleared; set a different author"), so that text is what is shown.
       console.error('Failed to update metadata', error);
       const message =
-        error instanceof api.ApiError && error.message ? error.message : 'Failed to update metadata.';
+        error instanceof api.ApiError && error.message
+          ? error.message
+          : 'Failed to update metadata.';
       toast(message, 'error');
       throw error instanceof Error ? error : new Error(message);
     } finally {
