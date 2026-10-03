@@ -8,78 +8,26 @@ package server
 import (
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"os"
 	"strings"
 	"time"
-
-	"github.com/falkcorp/audiobook-organizer/internal/metastate"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 
-// These helpers are now methods on *Server so they use the server's
-// resolved store (SERVER-GLOBAL-STORE-AUDIT phase 3b). Callers in this
-// package update to s.loadMetadataState(...) / s.saveMetadataState(...).
+// These helpers are methods on *Server so they use the server's resolved
+// store (SERVER-GLOBAL-STORE-AUDIT phase 3b). A read is loadMetadataState; a
+// change goes through metafetch.WithStateSnapshot, which holds the book's
+// field-state stripe from the read through the save.
 
-func (s *Server) loadLegacyMetadataState(bookID string) (map[string]metafetch.MetadataFieldState, error) {
-	state := map[string]metafetch.MetadataFieldState{}
-	store := s.Ops()
-	if store == nil {
-		return state, fmt.Errorf("database not initialized")
-	}
-
-	pref, err := store.GetUserPreference(metastate.Key(bookID))
-	if err != nil {
-		return state, err
-	}
-	if pref == nil || pref.Value == nil || *pref.Value == "" {
-		return state, nil
-	}
-
-	if err := json.Unmarshal([]byte(*pref.Value), &state); err != nil {
-		return state, fmt.Errorf("failed to parse metadata state: %w", err)
-	}
-	return state, nil
-}
-
+// loadMetadataState is the read-only load (metafetch.LoadStateSnapshot).
 func (s *Server) loadMetadataState(bookID string) (map[string]metafetch.MetadataFieldState, error) {
-	state := map[string]metafetch.MetadataFieldState{}
 	store := s.Ops()
 	if store == nil {
-		return state, fmt.Errorf("database not initialized")
+		return map[string]metafetch.MetadataFieldState{}, fmt.Errorf("database not initialized")
 	}
-
-	stored, err := store.GetMetadataFieldStates(bookID)
-	if err != nil {
-		return state, err
-	}
-	state = metafetch.StateFromRows(stored)
-	if len(state) > 0 {
-		return state, nil
-	}
-
-	legacy, err := s.loadLegacyMetadataState(bookID)
-	if err != nil {
-		return state, err
-	}
-	if len(legacy) == 0 {
-		return state, nil
-	}
-
-	if err := s.saveMetadataState(bookID, legacy); err != nil {
-		slog.Warn("failed to migrate legacy metadata state for", "bookID", bookID, "err", err)
-	}
-	return legacy, nil
-}
-
-func (s *Server) saveMetadataState(bookID string, state map[string]metafetch.MetadataFieldState) error {
-	store := s.Ops()
-	if store == nil {
-		return fmt.Errorf("database not initialized")
-	}
-	return metafetch.SaveStateSnapshot(store, bookID, state)
+	return metafetch.LoadStateSnapshot(store, bookID)
 }
 
 func decodeRawValue(raw json.RawMessage) any {
@@ -94,20 +42,20 @@ func decodeRawValue(raw json.RawMessage) any {
 }
 
 func (s *Server) updateFetchedMetadataState(bookID string, values map[string]any) error {
-	state, err := s.loadMetadataState(bookID)
-	if err != nil {
-		return err
+	store := s.Ops()
+	if store == nil {
+		return fmt.Errorf("database not initialized")
 	}
-	if state == nil {
-		state = map[string]metafetch.MetadataFieldState{}
-	}
-	for field, value := range values {
-		entry := state[field]
-		entry.FetchedValue = value
-		entry.UpdatedAt = time.Now()
-		state[field] = entry
-	}
-	return s.saveMetadataState(bookID, state)
+	return metafetch.WithStateSnapshot(store, bookID, func(state map[string]metafetch.MetadataFieldState) error {
+		now := time.Now()
+		for field, value := range values {
+			entry := state[field]
+			entry.FetchedValue = value
+			entry.UpdatedAt = now
+			state[field] = entry
+		}
+		return nil
+	})
 }
 
 func (s *Server) resolveAuthorAndSeriesNames(book *database.Book) (string, string) {

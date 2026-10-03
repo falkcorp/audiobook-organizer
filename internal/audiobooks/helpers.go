@@ -67,61 +67,27 @@ func decodeRawValue(raw json.RawMessage) any {
 	return value
 }
 
-// loadLegacyMetadataState / loadMetadataState / saveMetadataState are now
-// methods on *AudiobookService so they read/write through svc.store
-// rather than the package-level GetGlobalStore (SERVER-GLOBAL-STORE-AUDIT
-// phase 6). Nil-safe: a zero-value AudiobookService falls back to
-// "database not initialized" same as the old GetGlobalStore == nil path.
+// loadMetadataState / modifyMetadataState are methods on *AudiobookService
+// so they read/write through svc.store rather than the package-level
+// GetGlobalStore (SERVER-GLOBAL-STORE-AUDIT phase 6). Nil-safe: a zero-value
+// AudiobookService reports "database not initialized".
 
-func (svc *AudiobookService) loadLegacyMetadataState(bookID string) (map[string]metadataFieldState, error) {
-	state := map[string]metadataFieldState{}
-	if svc == nil || svc.store == nil {
-		return state, nil
-	}
-	pref, err := svc.store.GetUserPreference(metastate.Key(bookID))
-	if err != nil {
-		return state, err
-	}
-	if pref == nil || pref.Value == nil || *pref.Value == "" {
-		return state, nil
-	}
-	if err := json.Unmarshal([]byte(*pref.Value), &state); err != nil {
-		return state, fmt.Errorf("failed to parse metadata state: %w", err)
-	}
-	return state, nil
-}
-
+// loadMetadataState is the read-only load (metafetch.LoadStateSnapshot).
 func (svc *AudiobookService) loadMetadataState(bookID string) (map[string]metadataFieldState, error) {
-	state := map[string]metadataFieldState{}
 	if svc == nil || svc.store == nil {
-		return state, fmt.Errorf("database not initialized")
+		return map[string]metadataFieldState{}, fmt.Errorf("database not initialized")
 	}
-	stored, err := svc.store.GetMetadataFieldStates(bookID)
-	if err != nil {
-		return state, err
-	}
-	state = metafetch.StateFromRows(stored)
-	if len(state) > 0 {
-		return state, nil
-	}
-	legacy, err := svc.loadLegacyMetadataState(bookID)
-	if err != nil {
-		return state, err
-	}
-	if len(legacy) == 0 {
-		return state, nil
-	}
-	if err := svc.saveMetadataState(bookID, legacy); err != nil {
-		slog.Warn("failed to migrate legacy metadata state for", "bookID", bookID, "err", err)
-	}
-	return legacy, nil
+	return metafetch.LoadStateSnapshot(svc.store, bookID)
 }
 
-func (svc *AudiobookService) saveMetadataState(bookID string, state map[string]metadataFieldState) error {
+// modifyMetadataState runs fn on the book's state under its field-state
+// stripe and saves the result (metafetch.WithStateSnapshot). fn does
+// in-memory work only.
+func (svc *AudiobookService) modifyMetadataState(bookID string, fn func(state map[string]metadataFieldState) error) error {
 	if svc == nil || svc.store == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	return metafetch.SaveStateSnapshot(svc.store, bookID, state)
+	return metafetch.WithStateSnapshot(svc.store, bookID, fn)
 }
 
 // --- metadata state change recorder ----------------------------------------

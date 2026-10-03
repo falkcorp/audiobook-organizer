@@ -18,7 +18,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 
-	"github.com/falkcorp/audiobook-organizer/internal/metastate"
 	"github.com/falkcorp/audiobook-organizer/internal/seqnum"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -678,13 +677,6 @@ type MetadataFieldState struct {
 	// sets, edits, locks or unlocks the field clears it.
 	LockSource string    `json:"lock_source,omitempty"`
 	UpdatedAt  time.Time `json:"updated_at"`
-
-	// loadedLocked / loadedLockSource are the lock as StateFromRows read it,
-	// and cleared marks a field ClearField removes; SaveStateSnapshot reads
-	// them. Not serialized.
-	loadedLocked     bool
-	loadedLockSource string
-	cleared          bool
 }
 
 // metadataFieldState is the unexported spelling of MetadataFieldState, used by
@@ -693,79 +685,33 @@ type MetadataFieldState struct {
 // it has plenty -- checked rather than assumed.
 type metadataFieldState = MetadataFieldState
 
-// These four helpers are *Service methods so they use mfs.db rather than
-// the package global (SERVER-GLOBAL-STORE-AUDIT phase 4).
-func (mfs *Service) loadLegacyMetadataState(bookID string) (map[string]metadataFieldState, error) {
-	state := map[string]metadataFieldState{}
-	if mfs == nil || mfs.db == nil {
-		return state, fmt.Errorf("database not initialized")
-	}
-
-	pref, err := mfs.db.GetUserPreference(metastate.Key(bookID))
-	if err != nil {
-		return state, err
-	}
-	if pref == nil || pref.Value == nil || *pref.Value == "" {
-		return state, nil
-	}
-
-	if err := json.Unmarshal([]byte(*pref.Value), &state); err != nil {
-		return state, fmt.Errorf("failed to parse metadata state: %w", err)
-	}
-	return state, nil
-}
-
+// loadMetadataState is the read-only load (LoadStateSnapshot). A *Service
+// method so it uses mfs.db rather than the package global
+// (SERVER-GLOBAL-STORE-AUDIT phase 4).
 func (mfs *Service) loadMetadataState(bookID string) (map[string]metadataFieldState, error) {
-	state := map[string]metadataFieldState{}
 	if mfs == nil || mfs.db == nil {
-		return state, fmt.Errorf("database not initialized")
+		return map[string]metadataFieldState{}, fmt.Errorf("database not initialized")
 	}
-
-	stored, err := mfs.db.GetMetadataFieldStates(bookID)
-	if err != nil {
-		return state, err
-	}
-	state = StateFromRows(stored)
-	if len(state) > 0 {
-		return state, nil
-	}
-
-	legacy, err := mfs.loadLegacyMetadataState(bookID)
-	if err != nil {
-		return state, err
-	}
-	if len(legacy) == 0 {
-		return state, nil
-	}
-
-	if err := mfs.saveMetadataState(bookID, legacy); err != nil {
-		slog.Warn("failed to migrate legacy metadata state for", "id", logger.SanitizeLogValue(bookID), "error", err)
-	}
-	return legacy, nil
+	return LoadStateSnapshot(mfs.db, bookID)
 }
 
-func (mfs *Service) saveMetadataState(bookID string, state map[string]metadataFieldState) error {
+// updateFetchedMetadataState records provider values as each field's fetched
+// value, under the book's field-state stripe (WithStateSnapshot). Each field
+// written is stamped with the time of this write.
+func (mfs *Service) updateFetchedMetadataState(bookID string, values map[string]any) error {
 	if mfs == nil || mfs.db == nil {
 		return fmt.Errorf("database not initialized")
 	}
-	return SaveStateSnapshot(mfs.db, bookID, state)
-}
-
-func (mfs *Service) updateFetchedMetadataState(bookID string, values map[string]any) error {
-	state, err := mfs.loadMetadataState(bookID)
-	if err != nil {
-		return err
-	}
-	if state == nil {
-		state = map[string]metadataFieldState{}
-	}
-	for field, value := range values {
-		entry := state[field]
-		entry.FetchedValue = value
-		entry.UpdatedAt = time.Now()
-		state[field] = entry
-	}
-	return mfs.saveMetadataState(bookID, state)
+	return WithStateSnapshot(mfs.db, bookID, func(state map[string]metadataFieldState) error {
+		now := time.Now()
+		for field, value := range values {
+			entry := state[field]
+			entry.FetchedValue = value
+			entry.UpdatedAt = now
+			state[field] = entry
+		}
+		return nil
+	})
 }
 
 func stringVal(p *string) any {
