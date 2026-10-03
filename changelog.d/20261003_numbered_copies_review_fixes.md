@@ -29,3 +29,10 @@
   and on any known hash, not just each file against the first. Only a role in
   brackets, such as "(Narrator)", is set aside when testing whether an author
   name looks like a person; "(Unabridged)" or "[Book 3]" is not.
+- **A cut-off numbered-set repair resumes whatever the apply changed on the
+  way.** The plan now stores its survivor and which file it kept for each
+  chapter, and a resume uses those instead of choosing again from the
+  primary and organized flags that the apply changes as it retires books. A
+  retired book counts as done only when this repair retired it into the
+  survivor. A test cuts the repair at every single write and checks each
+  resume reaches the same end state.
