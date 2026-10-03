@@ -33,15 +33,20 @@ func (j *backfillFileHashesJob) ID() string       { return "backfill-file-hashes
 func (j *backfillFileHashesJob) Name() string     { return "Backfill File Hashes" }
 func (j *backfillFileHashesJob) Category() string { return "files" }
 func (j *backfillFileHashesJob) DefaultParams() any {
-	return hashBackfillParams{DryRun: true} // preview by default (owner 2026-09-25); send dry_run=false to apply
+	return struct {
+		DryRun  bool     `json:"dry_run"`
+		BookIDs []string `json:"book_ids,omitempty"`
+	}{DryRun: true} // preview by default (owner 2026-09-25); send dry_run=false to apply
 }
 
-// hashBackfillParams is the job's params shape. BookIDs, when set, limits
-// the run to those books' rows: a repair that needs hashes for one set of
-// books (the fragment fixer proves a duplicate copy by hash) must not have
-// to hash the whole library first. Empty means every row, as before.
-type hashBackfillParams struct {
-	DryRun  bool     `json:"dry_run"`
+// hashBackfillScope is the part of the params the job reads itself. dry_run
+// is NOT here on purpose: the dispatcher resolves it (omitted = preview) and
+// passes it as Run's argument, and the opmode guard refuses a plain-bool
+// dry_run field on any named params struct. BookIDs, when set, limits the
+// run to those books' rows: a repair that needs hashes for one set of books
+// (the fragment fixer proves a duplicate copy by hash) must not have to hash
+// the whole library first. Empty means every row, as before.
+type hashBackfillScope struct {
 	BookIDs []string `json:"book_ids,omitempty"`
 }
 
@@ -93,7 +98,7 @@ func (j *backfillFileHashesJob) Run(ctx context.Context, store maintenance.JobSt
 		return err
 	}
 	if raw := maintenance.RawParamsFromCtx(ctx); len(raw) > 0 {
-		var p hashBackfillParams
+		var p hashBackfillScope
 		if jerr := json.Unmarshal(raw, &p); jerr != nil {
 			return fmt.Errorf("backfill-file-hashes: params: %w", jerr)
 		}
