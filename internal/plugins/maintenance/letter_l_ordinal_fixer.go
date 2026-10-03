@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/letter_l_ordinal_fixer.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9e4b7c21-6a3f-4d58-b1e0-2c8d5f9a3b47
 // last-edited: 2026-10-03
 

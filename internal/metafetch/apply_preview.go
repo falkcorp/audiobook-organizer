@@ -1,7 +1,7 @@
 // file: internal/metafetch/apply_preview.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 3d6a0f94-8b27-4c1e-a5d3-e9f2b7c04a18
-// last-edited: 2026-09-14
+// last-edited: 2026-10-03
 //
 // Read-only preview of ApplyMetadataCandidate, for the bulk-apply dry run.
 //

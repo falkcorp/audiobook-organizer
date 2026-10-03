@@ -1,7 +1,7 @@
 // file: internal/metafetch/metadata_state_service.go
-// version: 1.6.1
+// version: 1.7.0
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-09-13
+// last-edited: 2026-10-03
 
 package metafetch
 

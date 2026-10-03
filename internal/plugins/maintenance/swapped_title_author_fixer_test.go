@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/swapped_title_author_fixer_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8223b479-ea79-40ca-a48a-1b7bc0f3bea2
 // last-edited: 2026-10-03
 
@@ -16,6 +16,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
+	"github.com/falkcorp/audiobook-organizer/internal/metastate"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )
 
@@ -740,4 +741,220 @@ func TestSwappedTitleAuthorFixer_AuthorWhoNarratesKeepsBothCredits(t *testing.T)
 	}
 	require.Equal(t, map[string]bool{"author": true, "narrator": true}, roles)
 	require.Equal(t, bob.ID, *l.book("war").AuthorID)
+}
+
+// A real author is never a misplaced title. An author record that credits
+// other real titles (Poe also wrote "The Raven") is held, and so is an
+// author-only row tied to its provider record by a runtime alone.
+func TestSwappedTitleAuthorFixer_RealAuthorIsNeverRewritten(t *testing.T) {
+	l := newSwapLib(t)
+	l.add(swapBook{name: "poe-other1", title: "The Raven and Other Poems", storedAuthor: "Edgar Allan Poe",
+		files: []string{"/lib/Edgar Allan Poe/The Raven/book.m4b"}})
+	l.add(swapBook{name: "poe-other2", title: "The Tell-Tale Heart", storedAuthor: "Edgar Allan Poe",
+		files: []string{"/lib/Edgar Allan Poe/Tell-Tale/book.m4b"}})
+	l.add(swapBook{name: "poe", title: "Edgar Allan Poe", narrator: "Basil Rathbone", storedAuthor: "Edgar Allan Poe",
+		provTitle: "Edgar Allan Poe", provAuthor: "Jeffrey Meyers",
+		files: []string{"/lib/Edgar Allan Poe/Edgar Allan Poe/book.m4b"}})
+	l.add(swapBook{name: "fry", title: "Stephen Fry", storedAuthor: "Stephen Fry", duration: 9 * 3600,
+		provTitle: "Stephen Fry", provAuthor: "Tim Biographer", prov: map[string]any{"audible_runtime_min": 580},
+		files: []string{"/lib/Stephen Fry/Stephen Fry/book.m4b"}})
+	plan, rows := l.plan()
+	require.Equal(t, junkSkipNeedsManual, rows["poe"].Skipped, rows["poe"].SkipReason)
+	require.Contains(t, rows["poe"].SkipReason, "also credits 2 other title(s)")
+	require.Equal(t, junkSkipNeedsManual, rows["fry"].Skipped, rows["fry"].SkipReason)
+	require.Contains(t, rows["fry"].SkipReason, "a runtime alone does not count")
+
+	poeAuthor := *l.book("poe").AuthorID
+	out := l.apply(plan, []string{rows["poe"].RowID, rows["fry"].RowID})
+	require.Zero(t, out.Applied, "outcomes %v", out.ByOutcome)
+	require.Equal(t, poeAuthor, *l.book("poe").AuthorID)
+	require.False(t, l.locked("poe", database.FieldKeyAuthorName))
+	a, err := l.store.GetAuthorByName("Jeffrey Meyers")
+	require.NoError(t, err)
+	require.Nil(t, a)
+}
+
+// Full shape with a real author: the junk title names the stored author as
+// its reader ("read by T. S. Eliot" by T. S. Eliot). Held whatever the
+// spelling, and the word count does not depend on the initials' spacing.
+func TestSwappedTitleAuthorFixer_SelfReadAuthorIsHeld(t *testing.T) {
+	l := newSwapLib(t)
+	l.add(swapBook{name: "eliot-other", title: "The Waste Land", storedAuthor: "T. S. Eliot",
+		files: []string{"/lib/T. S. Eliot/The Waste Land/book.m4b"}})
+	l.add(swapBook{name: "eliot", title: "read by T. S. Eliot", narrator: "T. S. Eliot", storedAuthor: "T. S. Eliot",
+		provTitle: "T. S. Eliot", provAuthor: "Peter Ackroyd",
+		files: []string{"/lib/T. S. Eliot/Collected Readings/book.m4b"}})
+	l.add(swapBook{name: "eliot2", title: "read by T.S. Eliot", narrator: "T.S. Eliot", storedAuthor: "T.S. Eliot",
+		provTitle: "T.S. Eliot", provAuthor: "Peter Ackroyd", files: []string{"/lib/TSE/Readings/book.m4b"}})
+	_, rows := l.plan()
+	require.Equal(t, junkSkipNeedsManual, rows["eliot"].Skipped, rows["eliot"].SkipReason)
+	require.Equal(t, junkSkipNeedsManual, rows["eliot2"].Skipped, rows["eliot2"].SkipReason)
+	require.Contains(t, rows["eliot2"].SkipReason, "read by its stored author")
+	require.Equal(t, 3, titleWords("T.S. Eliot"))
+	require.Equal(t, 3, titleWords("T. S. Eliot"))
+	require.Equal(t, 5, titleWords("Ultimate Level 1: Divine Creation"))
+}
+
+// A title write refused because the title moved voids the row it journaled:
+// reverting that operation later must not undo a later operation's write,
+// nor leave the junk title locked.
+func TestWriteTitleOnly_RefusedWriteLeavesNoUndoRow(t *testing.T) {
+	l := newSwapLib(t)
+	id := l.add(swapBook{name: "b", title: "read by Jack Voraces", storedAuthor: "Holder Writer", files: []string{"/lib/x/book.m4b"}})
+	_, err := l.store.ModifyBook(id, func(b *database.Book) error { b.Title = "Person Typed"; return nil })
+	require.NoError(t, err)
+	w1 := repairs.NewWriter(l.store, l.store, junkTitlesFixerID, "bulk_update", "repairs-").
+		WithJournal(l.store, l.store, "op1").WithFieldStates(l.store)
+	require.ErrorIs(t, writeTitleOnly(w1, l.store, id, "read by Jack Voraces", "Real Title"), repairs.ErrChangedSincePlan)
+	ch, err := l.store.GetOperationChanges("op1")
+	require.NoError(t, err)
+	for _, c := range ch {
+		require.NotNil(t, c.RevertedAt, "the row of the refused write is voided: %+v", c)
+	}
+
+	_, err = l.store.ModifyBook(id, func(b *database.Book) error { b.Title = "read by Jack Voraces"; return nil })
+	require.NoError(t, err)
+	w2 := repairs.NewWriter(l.store, l.store, junkTitlesFixerID, "bulk_update", "repairs-").
+		WithJournal(l.store, l.store, "op2").WithFieldStates(l.store)
+	require.NoError(t, writeTitleOnly(w2, l.store, id, "read by Jack Voraces", "Real Title"))
+	_, _ = audiobooks.NewRevertService(l.store).RevertOperation("op1")
+	require.Equal(t, "Real Title", l.book("b").Title, "reverting op1 does not touch op2's write")
+	require.True(t, l.locked("b", database.FieldKeyTitle))
+}
+
+// A book whose state is still in the pre-migration blob gets its blob
+// migrated when the title is locked: the write is whole, not partial, and
+// the blob's own lock stays a lock.
+func TestWriteTitleOnly_MigratesLegacyBlob(t *testing.T) {
+	l := newSwapLib(t)
+	id := l.add(swapBook{name: "b", title: "read by Jack Voraces", storedAuthor: "Holder Writer", files: []string{"/lib/x/book.m4b"}})
+	require.NoError(t, l.store.SetUserPreference(metastate.Key(id), `{"narrator":{"override_locked":true}}`))
+	w := repairs.NewWriter(l.store, l.store, junkTitlesFixerID, "bulk_update", "repairs-").
+		WithJournal(l.store, l.store, "op1").WithFieldStates(l.store)
+	require.NoError(t, writeTitleOnly(w, l.store, id, "read by Jack Voraces", "Real Title"))
+	require.Equal(t, "Real Title", l.book("b").Title)
+	require.True(t, l.locked("b", database.FieldKeyTitle))
+	require.True(t, l.locked("b", database.FieldKeyNarrator), "the blob's lock survives as a row")
+	pref, err := l.store.GetUserPreference(metastate.Key(id))
+	require.NoError(t, err)
+	require.True(t, pref == nil || pref.Value == nil || *pref.Value == "", "the blob is retired")
+
+	// A blob that does not parse is held at plan time, before any write.
+	jl := newJunkLib(t)
+	bad := jl.ids["folder"]
+	require.NoError(t, jl.store.SetUserPreference(metastate.Key(bad), `{not json`))
+	_, _, rows := jl.plan(t)
+	require.Equal(t, junkSkipNeedsManual, rows["folder"].Skipped, rows["folder"].SkipReason)
+	require.Contains(t, rows["folder"].SkipReason, "pre-migration metadata state cannot be read")
+}
+
+// The revert lifts only its own lock. A person who locked the field since
+// (their lock carries no repair source) keeps it; the row is refused.
+func TestSwappedTitleAuthorFixer_RevertKeepsAPersonsLock(t *testing.T) {
+	l := newSwapLib(t)
+	l.populate()
+	plan, rows := l.plan()
+	out := l.apply(plan, []string{rows["swap"].RowID})
+	require.Equal(t, 1, out.Applied, "outcomes %v", out.ByOutcome)
+	// The person's lock toggle: UpdateAudiobook clears the source.
+	st := fieldStateOf(mustStates(t, l, "swap"), database.FieldKeyAuthorName)
+	require.NotNil(t, st)
+	require.True(t, st.IsRepairLock())
+	require.Contains(t, lockHoldReason(st, "author"), "locked by a repair")
+	row := *st
+	row.LockSource = ""
+	require.NoError(t, l.store.UpsertMetadataFieldState(&row))
+
+	rev, err := audiobooks.NewRevertService(l.store).RevertOperation(swapTestOpID)
+	require.Error(t, err)
+	require.Equal(t, 1, rev.Failed, "only the author lock row is refused: %+v", rev)
+	require.True(t, l.locked("swap", database.FieldKeyAuthorName), "the person's lock stays")
+	require.False(t, l.locked("swap", database.FieldKeyTitle), "the repair's own title lock is lifted")
+}
+
+func mustStates(t *testing.T, l *swapLib, name string) []database.MetadataFieldState {
+	t.Helper()
+	sts, err := l.store.GetMetadataFieldStates(l.ids[name])
+	require.NoError(t, err)
+	return sts
+}
+
+// An apply cut at any point leaves a book the next plan finishes, and the
+// finished book matches an uninterrupted apply.
+func TestSwappedTitleAuthorFixer_InterruptedApplyIsFinishedByTheNextPlan(t *testing.T) {
+	setup := func(t *testing.T) (*swapLib, string) {
+		l := newSwapLib(t)
+		id := l.add(swapBook{name: "swap", title: "read by Jack Voraces", narrator: "Jack Voraces",
+			storedAuthor: "Ultimate Level 1_ Divine Creation", provTitle: "Ultimate Level 1: Divine Creation",
+			provAuthor: "Shawn Wilson", prov: map[string]any{"narrator": "Jack Voraces"},
+			files: []string{"/lib/S/Ultimate Level 1_ Divine Creation/book.m4b"}})
+		return l, id
+	}
+	cutWriter := func(l *swapLib) *repairs.Writer {
+		return repairs.NewWriter(l.store, l.store, swappedFixerID, "bulk_update", "repairs-").
+			WithJournal(l.store, l.store, "op-cut").WithCredits(l.store).WithFieldStates(l.store)
+	}
+	finish := func(t *testing.T, l *swapLib) {
+		plan, rows := l.plan()
+		r := rows["swap"]
+		require.True(t, r.Applicable(), "the next plan lists the half-done book: %s %s", r.Skipped, r.SkipReason)
+		out := l.apply(plan, []string{r.RowID})
+		require.Equal(t, 1, out.Applied, "outcomes %v", out.ByOutcome)
+		wilson := l.authorID("Shawn Wilson")
+		require.Equal(t, "Ultimate Level 1: Divine Creation", l.book("swap").Title)
+		require.Equal(t, wilson, *l.book("swap").AuthorID)
+		require.Equal(t, []int{wilson}, l.credits("swap"))
+		require.True(t, l.locked("swap", database.FieldKeyTitle))
+		require.True(t, l.locked("swap", database.FieldKeyAuthorName))
+	}
+	t.Run("cut after the title write, before its lock", func(t *testing.T) {
+		l, id := setup(t)
+		_, err := l.store.ModifyBook(id, func(b *database.Book) error { b.Title = "Ultimate Level 1: Divine Creation"; return nil })
+		require.NoError(t, err)
+		finish(t, l)
+	})
+	t.Run("cut after the title and author locks", func(t *testing.T) {
+		l, id := setup(t)
+		w := cutWriter(l)
+		require.NoError(t, writeTitleOnly(w, l.store, id, "read by Jack Voraces", "Ultimate Level 1: Divine Creation"))
+		require.NoError(t, w.LockFields(id, database.FieldKeyAuthorName))
+		finish(t, l)
+	})
+	t.Run("cut after the credit move, before the primary", func(t *testing.T) {
+		l, id := setup(t)
+		w := cutWriter(l)
+		require.NoError(t, writeTitleOnly(w, l.store, id, "read by Jack Voraces", "Ultimate Level 1: Divine Creation"))
+		require.NoError(t, w.LockFields(id, database.FieldKeyAuthorName))
+		wilson, err := l.store.CreateAuthor("Shawn Wilson")
+		require.NoError(t, err)
+		require.NoError(t, l.store.SetBookAuthors(id, []database.BookAuthor{{BookID: id, AuthorID: wilson.ID, Role: "author"}}))
+		require.Equal(t, l.holder["swap"], *l.book("swap").AuthorID)
+		finish(t, l)
+		// The finishing op's revert puts the primary back.
+		rev, err := audiobooks.NewRevertService(l.store).RevertOperation(swapTestOpID)
+		require.NoError(t, err)
+		require.Zero(t, rev.Failed, "%+v", rev)
+		require.Equal(t, l.holder["swap"], *l.book("swap").AuthorID)
+	})
+}
+
+// fetchedByProvider reads every history row: a fetch that filled the
+// narrator long ago (behind more than a page of later rows) still makes the
+// narrator circular.
+func TestSwappedTitleAuthorFixer_FetchedNarratorFoundBehindAPage(t *testing.T) {
+	l := newSwapLib(t)
+	id := l.add(swapBook{name: "deep", title: "read by narrator", narrator: "Pat Voice", storedAuthor: "Vengeance",
+		provTitle: "Vengeance", provAuthor: "Dee Writer", prov: map[string]any{"narrator": "Pat Voice"},
+		files: []string{"/lib/D/Vengeance/book.m4b"}})
+	field := database.HistoryFieldName("narrator")
+	old := time.Now().Add(-time.Hour)
+	v := `"Pat Voice"`
+	require.NoError(t, l.store.RecordMetadataChange(&database.MetadataChangeRecord{BookID: id, Field: field,
+		NewValue: &v, ChangeType: "fetched", ChangedAt: old}))
+	for i := 0; i < 60; i++ {
+		require.NoError(t, l.store.RecordMetadataChange(&database.MetadataChangeRecord{BookID: id, Field: field,
+			NewValue: &v, ChangeType: "bulk_update", ChangedAt: old.Add(time.Duration(i+1) * time.Second)}))
+	}
+	_, rows := l.plan()
+	require.Equal(t, junkSkipNeedsManual, rows["deep"].Skipped, rows["deep"].SkipReason)
 }

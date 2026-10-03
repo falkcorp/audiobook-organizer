@@ -1,7 +1,7 @@
 // file: internal/metafetch/field_locks.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: 2e223955-0b75-4da2-8cbe-a6a99c75bf07
-// last-edited: 2026-10-02
+// last-edited: 2026-10-03
 
 package metafetch
 
