@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_metadata_cache.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3f8b41d7-9e26-4c05-b1a8-7d0e5c26f934
-// last-edited: 2026-10-02
+// last-edited: 2026-10-03
 
 package database
 
@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/cockroachdb/pebble/v2"
 )
@@ -53,7 +52,7 @@ func (p *PebbleStore) PutMetadataCache(entry *MetadataCandidateCache) error {
 	if err := p.db.Set(metadataCacheKey(entry.BookID), data, pebble.Sync); err != nil {
 		return fmt.Errorf("pebble set metadata_cache:%s: %w", entry.BookID, err)
 	}
-	p.metadataCacheWrites.Add(1)
+	p.bumpMetadataCacheGeneration(entry.BookID)
 	return nil
 }
 
@@ -63,7 +62,7 @@ func (p *PebbleStore) DeleteMetadataCache(bookID string) error {
 	if err := p.db.Delete(metadataCacheKey(bookID), pebble.Sync); err != nil {
 		return fmt.Errorf("pebble delete metadata_cache:%s: %w", bookID, err)
 	}
-	p.metadataCacheWrites.Add(1)
+	p.bumpMetadataCacheGeneration(bookID)
 	return nil
 }
 
@@ -113,8 +112,10 @@ func (p *PebbleStore) ListMetadataCacheKeys() ([]MetadataCacheSummary, error) {
 	return out, nil
 }
 
-// MetadataCacheGeneration counts the writes to the "metadata_cache:" keyspace
-// since this store was opened. Every writer moves it, after its commit:
+// MetadataCacheGeneration is the metadata-cache generation: the number of
+// writes to the "metadata_cache:" keyspace since this store was opened. Every
+// writer moves it, after its commit, and records the book it wrote
+// (MetadataCacheChangedSince):
 //
 //   - PutMetadataCache and DeleteMetadataCache;
 //   - UpdateBook, when an identity change (title, author, narrator, series,
@@ -122,21 +123,15 @@ func (p *PebbleStore) ListMetadataCacheKeys() ([]MetadataCacheSummary, error) {
 //     an ASIN/ISBN backfill does this on every book it writes;
 //   - DeleteBook, which deletes the row with the book's other sidecars;
 //   - SetRaw, DeleteRaw and DeleteRawBatch on a key under the prefix;
-//   - Reset, which wipes everything.
+//   - Reset, which wipes everything (and so records no book: a reader behind
+//     it is told to rebuild).
 //
 // A reader holding something derived from the cache -- the review listing's
 // snapshot -- compares it to the value it read when it began building, to
 // learn for the cost of an atomic load whether anything it read can have
-// changed. It is per process and starts at 0 on every open: a value is only
-// comparable with another from the same store.
+// changed, and asks MetadataCacheChangedSince which rows. It is per process
+// and starts at 0 on every open: a value is only comparable with another from
+// the same store.
 func (p *PebbleStore) MetadataCacheGeneration() uint64 {
-	return p.metadataCacheWrites.Load()
-}
-
-// noteRawMetadataCacheWrite moves MetadataCacheGeneration when a raw key
-// write landed in the "metadata_cache:" keyspace.
-func (p *PebbleStore) noteRawMetadataCacheWrite(key string) {
-	if strings.HasPrefix(key, metadataCacheKeyPrefix) {
-		p.metadataCacheWrites.Add(1)
-	}
+	return p.cacheGen.Value()
 }
