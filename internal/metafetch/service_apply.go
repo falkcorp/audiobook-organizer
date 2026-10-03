@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.45.0
+// version: 1.46.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
-// last-edited: 2026-10-02
+// last-edited: 2026-10-03
 
 package metafetch
 

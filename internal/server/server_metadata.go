@@ -1,7 +1,7 @@
 // file: internal/server/server_metadata.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 588350bc-83db-47ed-9590-2b6513aadcda
-// last-edited: 2026-09-01
+// last-edited: 2026-10-03
 
 package server
 
