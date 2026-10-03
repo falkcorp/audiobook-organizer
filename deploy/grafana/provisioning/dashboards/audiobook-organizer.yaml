@@ -1,0 +1,27 @@
+# file: deploy/grafana/provisioning/dashboards/audiobook-organizer.yaml
+# version: 1.0.0
+# guid: 6c6eac32-0672-4b9a-9481-5e0a9fc36772
+# last-edited: 2026-10-03
+#
+# Grafana file-provider for the dashboards in deploy/grafana/dashboards/.
+# Install at /etc/grafana/provisioning/dashboards/audiobook-organizer.yaml on a
+# host that does NOT already provision a dashboards directory, and copy the JSON
+# files into /var/lib/grafana/dashboards.
+#
+# On the server (unimatrixzero) this file is NOT needed: the existing
+# /etc/grafana/provisioning/dashboards/dashboard-provider.yaml ('local-dashboards')
+# already watches /mnt/bigdata/config/grafana/dashboards every 30 s, with
+# foldersFromFilesStructure. Drop the JSON there instead -- see README.md.
+apiVersion: 1
+
+providers:
+  - name: audiobook-organizer
+    orgId: 1
+    folder: Audiobook Organizer
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false
