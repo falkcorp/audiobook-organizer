@@ -1,7 +1,7 @@
 // file: internal/operations/registry/watchdog.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 2b3c4d5e-6f7a-8901-bcde-f01234567890
-// last-edited: 2026-09-25
+// last-edited: 2026-10-03
 
 package registry
 
@@ -62,7 +62,7 @@ func (r *Registry) watchdogCycle() {
 	}
 	r.mu.RUnlock()
 
-	now := time.Now().UTC()
+	now := r.livenessClock().UTC()
 
 	for _, h := range handles {
 		def, defOK := r.lookupDef(h.defID)
