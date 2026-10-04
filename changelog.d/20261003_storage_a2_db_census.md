@@ -11,7 +11,8 @@ pre-registers the TASK-A5 timeline indexes `opv2:open:` and `opv2:done:`, and
 breaks the `_system` user's records under `pref:_system:` out by sub-prefix.
 
 The endpoint (`PermSettingsManage`, the same as db-health) stays cheap. It
-flushes the memtable when it holds at least 1 MiB, and at most once per store
+flushes the memtable only when at least 1 MiB of writes are unflushed (the
+WAL's live size, not the memtable's arena capacity), and at most once per store
 per minute. It then reads sstable properties and span bytes, and makes one
 bounded seek per family range, but only for ranges with at most 1 MiB of data;
 larger ranges count as non-empty without a seek. It reads no values and
@@ -31,8 +32,13 @@ callers share one computation that runs detached from any single caller.
 family exactly with a keys-only pass, limited to `db_census_exact_read_mb_per_sec`
 (default 50 MB/s). The budget is charged on everything the iterator steps
 over, including tombstones and shadowed versions, so the op does not evict the
-cache the library is served from. The op saves its position every 30 seconds,
-inside a family too, and resumes from there after a restart. A cancel stops it
+cache the library is served from. Each family is cut into sub-ranges of at most
+64 MiB on disk, so a run of tombstones can't stall a single read, and the op
+reports progress at least every 5 seconds, including while it waits on the
+budget. It saves its position (a few KB, with the history folded as it
+streams) every 30 seconds, inside a family too, and resumes from there after a
+restart. A run the registry re-dispatches after a deploy keeps its own
+progress, even if it was started with `force=true`. A cancel stops it
 at the next check and publishes nothing. It refuses to start within
 `db_census_exact_cooldown_hours` (default 6) of the last run unless
 `force=true`. `force=true` and `restart=true` both discard saved progress. The same pass builds the per-book `book_ver:` history

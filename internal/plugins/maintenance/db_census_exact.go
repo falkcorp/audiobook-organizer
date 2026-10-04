@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/db_census_exact.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7b09d3be-0012-432e-91e0-ea0f2491bea2
 // last-edited: 2026-10-04
 
@@ -15,6 +15,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -32,22 +33,30 @@ type dbCensusExactParams struct {
 	// ReadMBPerSec overrides config db_census_exact_read_mb_per_sec for this
 	// run (> 0 only).
 	ReadMBPerSec int `json:"read_mb_per_sec"`
+	// Resumed is set by the op itself, in its checkpoint, once the run has
+	// started: the registry merges the checkpoint into the params when it
+	// re-dispatches the op after a restart (ResumeRestart), so a resumed run
+	// sees force=false, restart=false, resumed=true — it keeps its progress
+	// and skips the cooldown check instead of discarding its own work.
+	Resumed bool `json:"resumed"`
 }
 
 func (p *Plugin) dbCensusExactDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:     dbCensusExactOpID,
 		Plugin: "maintenance",
-		// LivenessManual: the pass reports after every family and at least
-		// every ~5 s inside a large one (RunExactCensus's Progress).
+		// LivenessManual: the pass heartbeats through RunExactCensus's
+		// Progress after every family and at least every 5 s while it counts,
+		// crosses sub-ranges or waits for the read budget; a single Next()
+		// walk is bounded by a 64 MiB sub-range.
 		Liveness:    sdk.LivenessManual,
 		DisplayName: "Exact database census",
 		Description: "Counts every key family of the main database exactly with a rate-limited keys-only pass " +
 			"(config db_census_exact_read_mb_per_sec, default 50 MB/s) and builds the per-book history distribution. " +
 			"Resumes after a restart (restart=true discards saved progress); refuses to start again within db_census_exact_cooldown_hours (default 6) unless force=true. " +
 			"The result is what /diagnostics/db-census shows as last_exact.",
-		// ResumeRestart: a restarted run continues after the last family it
-		// finished (progress is saved per family in the store).
+		// ResumeRestart: a restarted run continues from its saved position
+		// (saved at least every 30 s and after every family); see Resumed.
 		ResumePolicy:    sdk.ResumeRestart,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  dbCensusExactOpID,
@@ -81,14 +90,15 @@ func (p *Plugin) runDBCensusExact(ctx context.Context, params json.RawMessage, r
 		return errors.New("exact db census requires the Pebble store")
 	}
 	cfg := config.Snapshot()
-	return runDBCensusExactWith(ctx, runner, args, cfg.DBCensusExactReadMBPerSec, cfg.DBCensusExactCooldownHours, reporter, time.Now())
+	return runDBCensusExactWith(ctx, runner, args, cfg.DBCensusExactReadMBPerSec, cfg.DBCensusExactCooldownHours,
+		reporter, registry.ReporterOpID(reporter), time.Now())
 }
 
 // runDBCensusExactWith is the op body, separated from config and deps for
 // tests.
 func runDBCensusExactWith(
 	ctx context.Context, runner database.DBCensusExactRunner, args dbCensusExactParams,
-	cfgMBPerSec, cfgCooldownHours int, reporter sdk.Reporter, now time.Time,
+	cfgMBPerSec, cfgCooldownHours int, reporter sdk.Reporter, opID string, now time.Time,
 ) error {
 	mbps := cfgMBPerSec
 	if mbps <= 0 {
@@ -102,7 +112,14 @@ func runDBCensusExactWith(
 		cooldown = time.Duration(config.DefaultDBCensusExactCooldownHours) * time.Hour
 	}
 
-	if !args.Force {
+	// A run resuming its own progress (the registry re-dispatched it, or an
+	// unfinished run is waiting) is not a new run: no cooldown, no discard.
+	inProgress, err := runner.ExactCensusInProgress()
+	if err != nil {
+		return fmt.Errorf("read exact census progress: %w", err)
+	}
+	resumable := inProgress != nil && !inProgress.Stale
+	if !args.Force && !args.Resumed && !resumable {
 		last, err := runner.LastExactCensus()
 		if err != nil {
 			return fmt.Errorf("read last exact census: %w", err)
@@ -117,11 +134,21 @@ func runDBCensusExactWith(
 		}
 	}
 
+	if (args.Force || args.Restart) && !args.Resumed {
+		if err := runner.DiscardExactCensusProgress(); err != nil {
+			return fmt.Errorf("discard exact census progress: %w", err)
+		}
+	}
+	// From here on a re-dispatch of this op must resume, not start over.
+	if err := reporter.Checkpoint(dbCensusExactParams{ReadMBPerSec: args.ReadMBPerSec, Resumed: true}); err != nil {
+		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("could not checkpoint the resume flag: %v", err))
+	}
+
 	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("Exact database census starting at %d MB/s read budget", mbps))
 	_ = reporter.UpdateProgress(0, 1, "Starting exact database census...")
 	c, err := runner.RunExactCensus(ctx, database.ExactCensusOptions{
 		ReadBytesPerSec: int64(mbps) << 20,
-		Restart:         args.Force || args.Restart,
+		RunID:           opID,
 		Progress: func(pr database.ExactCensusProgress, family string) {
 			reporter.SetCurrentItem(family)
 			_ = reporter.UpdateProgress(pr.FamiliesDone, pr.FamiliesAll, fmt.Sprintf(

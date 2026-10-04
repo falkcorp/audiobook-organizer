@@ -1,5 +1,5 @@
 // file: internal/database/census.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: be43e3c6-39e4-4a3e-a43c-cd5651ff141c
 // last-edited: 2026-10-04
 
@@ -49,7 +49,8 @@ const (
 	censusColdCacheTTL = 15 * time.Second
 	// censusFlushMinInterval and censusFlushMinMemtable gate the flush at the
 	// start of a census: at most one per store per interval (fresh=true
-	// included), and none for a nearly empty memtable.
+	// included), and none while less than censusFlushMinMemtable bytes of
+	// writes are unflushed (Metrics().WAL.Size).
 	censusFlushMinInterval = 60 * time.Second
 	censusFlushMinMemtable = 1 << 20
 	censusCacheMaxStores   = 8
@@ -160,11 +161,17 @@ type HistoryCensus struct {
 
 // ExactCensusProgress describes an exact census run that has not finished.
 type ExactCensusProgress struct {
+	RunID        string    `json:"run_id"`
+	Registry     string    `json:"registry"`
 	StartedAt    time.Time `json:"started_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 	FamiliesDone int       `json:"families_done"`
 	FamiliesAll  int       `json:"families_all"`
 	BytesRead    int64     `json:"bytes_read"`
+	// Stale is true when the saved run would not be resumed: it was last
+	// updated more than exactCensusProgressMaxAge ago, or under a different
+	// registry or census format.
+	Stale bool `json:"stale"`
 }
 
 // DBCensus is a per-family census of the main Pebble store.
@@ -419,9 +426,14 @@ var censusFlushes = struct {
 // which happened. A request, fresh or not, can therefore cause at most one
 // flush per store per interval.
 func (p *PebbleStore) censusMaybeFlush(now time.Time) (string, error) {
-	mt := p.db.Metrics().MemTable.Size
+	// WAL.Size is the live (unflushed) data in the WAL: what the memtable and
+	// any queued immutable memtables hold. MemTable.Size would be the wrong
+	// gauge — it is arena capacity (256 KiB on a fresh store, 4 MiB once the
+	// memtables have grown), not bytes in use, so it passes any threshold
+	// below that capacity whether or not anything was written.
+	mt := p.db.Metrics().WAL.Size
 	if mt < censusFlushMinMemtable {
-		return fmt.Sprintf("memtable not flushed: it holds only %d bytes; those writes are not in the figures", mt), nil
+		return fmt.Sprintf("memtable not flushed: only %d bytes of writes are unflushed; those writes are not in the figures", mt), nil
 	}
 	censusFlushes.mu.Lock()
 	last, seen := censusFlushes.m[p.db]
