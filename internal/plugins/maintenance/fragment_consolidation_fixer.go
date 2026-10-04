@@ -1642,12 +1642,12 @@ type fragCarry struct {
 //     sync redirect a dedup merge records, in its loser shape) to one live
 //     terminal book: the survivor, or the book the survivor went into;
 //   - every member's planned file row (copies keep theirs by design) is on
-//     the terminal, or on its own member when that member is retired and
-//     resolves to the terminal (a dedup merge keeps a loser's own files on
-//     the loser, as that version's own). A planned file on any OTHER
-//     retired book is not done: it is out of every view while the run looks
-//     finished (review 9: a survivor deleted outright hid 5 such files), and
-//     when that book resolves to the terminal the file is carried;
+//     the terminal, or on its own member when a dedup merge retired that
+//     member into the terminal (a dedup loser keeps its own files, as that
+//     version's own). A planned file on any other retired book is not done:
+//     it is out of every view while the run looks finished (review 9: a
+//     survivor deleted outright hid 5 such files), and when that book
+//     resolves to the terminal the file is carried;
 //   - no book demoted after its newest hand-off note is in a group still
 //     without its one explicit live primary (resumeHandOff's rule);
 //   - when this fixer itself retired every book into the survivor, the
@@ -1667,6 +1667,9 @@ func (f *fragmentFixer) recordDone(store OpsStore, lib *fragLibrary, pj *fragPla
 		return ok && !b.SoftDeleted
 	}
 	resolved := map[string]string{}
+	// dedupLoser: retired books that resolved through a MergeBooks redirect
+	// (a dedup loser keeps its own files, as that version's own).
+	dedupLoser := map[string]bool{}
 	resolve := func(id string) (string, error) {
 		if live(id) {
 			return id, nil
@@ -1674,11 +1677,11 @@ func (f *fragmentFixer) recordDone(store OpsStore, lib *fragLibrary, pj *fragPla
 		if t, ok := resolved[id]; ok {
 			return t, nil
 		}
-		t, err := survivorOf(store, id)
+		t, viaRedirect, err := survivorOf(store, id)
 		if err != nil {
 			return "", err
 		}
-		resolved[id] = t
+		resolved[id], dedupLoser[id] = t, viaRedirect
 		return t, nil
 	}
 	if terminal, err = resolve(rec.Survivor); err != nil || terminal == "" {
@@ -1714,7 +1717,11 @@ func (f *fragmentFixer) recordDone(store OpsStore, lib *fragLibrary, pj *fragPla
 		if t != terminal {
 			return false, terminal, "", nil, nil
 		}
-		if o == id {
+		if o == id && dedupLoser[o] {
+			// A dedup loser keeps its own file (owner decision
+			// 2026-10-04). A book retired through merged_into (a retire,
+			// a combine) has its files moved first, so its own file left
+			// behind is carried like any other.
 			continue
 		}
 		if !slices.Contains(rec.BookIDs, o) && o != rec.Survivor {
@@ -1782,7 +1789,9 @@ func (f *fragmentFixer) recordDone(store OpsStore, lib *fragLibrary, pj *fragPla
 
 // survivorOf is the live book retired book id's work went into, or "" when
 // nothing shows where it went (a book deleted outright: the held row then
-// offers a restore). The evidence is what a merge leaves on the record:
+// offers a restore); viaRedirect says it was found through a MergeBooks
+// redirect (a dedup loser). The evidence is what a merge leaves on the
+// record:
 //   - merged_into_book_id (every retireInto, a combine): followed as
 //     merge.ResolveSurvivor follows it. Undo restores the column, so it is
 //     never stale;
@@ -1798,38 +1807,38 @@ func (f *fragmentFixer) recordDone(store OpsStore, lib *fragLibrary, pj *fragPla
 // round-9 fallback read a survivor deleted outright as merged into the
 // group's primary, offered finishing into it, and that cleared the hold
 // with 5 planned files left on the deleted survivor.
-func survivorOf(store OpsStore, id string) (string, error) {
-	t, err := merge.ResolveSurvivor(store, id)
+func survivorOf(store OpsStore, id string) (t string, viaRedirect bool, err error) {
+	t, err = merge.ResolveSurvivor(store, id)
 	switch {
 	case errors.Is(err, merge.ErrNoLiveSurvivor):
-		return "", nil
+		return "", false, nil
 	case err != nil:
-		return "", fmt.Errorf("resolve %s: %w", id, err)
+		return "", false, fmt.Errorf("resolve %s: %w", id, err)
 	}
 	b, err := store.GetBookByID(id)
 	if err != nil {
-		return "", fmt.Errorf("read %s: %w", id, err)
+		return "", false, fmt.Errorf("read %s: %w", id, err)
 	}
 	if b == nil || !b.IsSoftDeleted() || t == id {
-		return t, nil
+		return t, false, nil
 	}
 	if dcStr(b.MergedIntoBookID) != "" {
-		return t, nil
+		return t, false, nil
 	}
 	g := bookGroup(b)
 	if g == "" || b.IsPrimaryVersion == nil || *b.IsPrimaryVersion {
-		return "", nil
+		return "", false, nil
 	}
 	members, err := store.GetBooksByVersionGroup(g)
 	if err != nil {
-		return "", fmt.Errorf("read version group %s: %w", g, err)
+		return "", false, fmt.Errorf("read version group %s: %w", g, err)
 	}
 	for _, m := range members {
 		if m.ID != id && (m.ID == t || dcStr(m.MergedIntoBookID) == t) {
-			return t, nil
+			return t, true, nil
 		}
 	}
-	return "", nil
+	return "", false, nil
 }
 
 // bookGroup is b's version group ("" for none or a nil book).
@@ -2330,7 +2339,7 @@ func (f *fragmentFixer) replanCarry(store OpsStore, lib *fragLibrary, planned re
 		if !ok || !fb.SoftDeleted {
 			return changedRow(planned, fmt.Sprintf("book %s, which holds the files, is not retired any more", c.From)), nil
 		}
-		t, err := survivorOf(store, c.From)
+		t, _, err := survivorOf(store, c.From)
 		if err != nil {
 			return repairs.Row{}, err
 		}
