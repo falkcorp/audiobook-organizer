@@ -17,7 +17,10 @@ pairs. The new Repairs fixer lists one row per book:
   creates that author and journals the creation.
 
 When a book's primary author is the combined record, the primary moves to the
-first part. These are held, not written: names the shared splitter refuses or
+first author credit of the result, so it agrees with the organizer, which files
+a book under its lowest-position author. A combined credit's slot takes every
+part not already placed before it, in the order the combined name gives them.
+These are held, not written: names the shared splitter refuses or
 would drop a piece of, parts that read as a title or junk, contributor roles,
 a doubled name, more than three names, a name that is a book or series title
 in the library, ambiguous spellings, user-locked authors, a stale embedded

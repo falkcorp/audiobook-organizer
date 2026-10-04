@@ -54,10 +54,16 @@ import (
 //
 // ORDER. The credits are stably sorted by their stored position; where two
 // rows share a position (the "J. N. Chaney @0, Jonathan P. Brazee @0" shape)
-// the parts of the combined name keep the combined string's order. A missing
-// part takes the combined credit's place, in the combined string's order.
-// Positions are then renumbered 0..n-1. When the book's primary AuthorID is
-// the combined record it moves to the first part of that record.
+// the parts of the combined name keep the combined string's order. The
+// combined credit's slot then takes every part not already placed before it,
+// in the combined string's order (an uncredited part as a new row, a part
+// credited after the slot moved up); parts credited before it keep their
+// place. Positions are renumbered 0..n-1. When the book's primary AuthorID is
+// the combined record it moves to the FIRST AUTHOR CREDIT of the result: the
+// organizer files a book under its lowest-position author
+// (organizer.authorNameFromJoin), so the primary and position 0 must agree.
+// That is the combined name's first part except where the existing credits
+// already put another of its parts first; the row reason says so then.
 //
 // HELD (never written):
 //   - the shared splitter (personname.SplitCompositeAuthorName) refuses the
@@ -165,7 +171,7 @@ func (f *combinedAuthorFixer) Description() string {
 		"Brazee\"). Where the separate authors are already credited the combined credit is removed and the " +
 		"positions renumbered; where it is the only credit it is replaced by its parts, each resolved to its " +
 		"existing author (created only when none exists). A primary author that is the combined record moves " +
-		"to the first part. Names the shared splitter will not split, parts that look like titles or junk, " +
+		"to the first author credit. Names the shared splitter will not split, parts that look like titles or junk, " +
 		"contributor roles, a doubled name, credits of more than three names, user-locked authors, iTunes " +
 		"books and Doctor Who / Big Finish / Torchwood are listed, not changed. Only author credits are " +
 		"touched; narrator credits stay. The emptied records are left for maintenance.purge-empty-authors. " +
@@ -188,7 +194,10 @@ const combinedTitlePrefixMin = 10
 
 // namesTitle reports whether name is a book title or series name in the
 // library, or begins with one ("A Dark and Drowning Tide_ A D", a title with a
-// truncated tail).
+// truncated tail). A title that is just the credit's first name is not
+// counted: the title and series tables hold author-named rows (a series
+// called "Michael Anderle"), and that must not hold "Michael Anderle, Craig
+// Martelle".
 func (idx *combinedAuthorIndex) namesTitle(name string) bool {
 	k := authorcredit.LettersKey(name)
 	if k == "" {
@@ -200,8 +209,12 @@ func (idx *combinedAuthorIndex) namesTitle(name string) bool {
 	if len(k) < combinedTitlePrefixMin {
 		return false
 	}
+	first := ""
+	if parts := authorcredit.LooseParts(name); len(parts) > 0 {
+		first = authorcredit.LettersKey(parts[0])
+	}
 	for i := combinedTitlePrefixMin; i < len(k); i++ {
-		if idx.titles[k[:i]] {
+		if idx.titles[k[:i]] && k[:i] != first {
 			return true
 		}
 	}
@@ -708,14 +721,21 @@ func (f *combinedAuthorFixer) evaluate(store OpsStore, idx *combinedAuthorIndex,
 		r.Reason = fmt.Sprintf("credits the combined record %s; it is replaced by its authors", strings.Join(recNames, ", "))
 	}
 	if primaryMoves {
+		pid := combinedFirstAuthor(proposed)
+		pn := newNames[pid]
+		if pn == "" {
+			if d, ok := display[pid]; ok {
+				pn = d
+			} else {
+				pn = nameOf(pid)
+			}
+		}
+		r.Proposed["primary"] = pn
+		r.Reason += fmt.Sprintf("; the primary author moves to %q, the first credit", pn)
 		for ri, rec := range recs {
-			if rec.id == primary {
-				pn := recs[ri].parts[0].name
-				r.Proposed["primary"] = pn
-				r.Reason += fmt.Sprintf("; the primary author moves to %q", pn)
-				if len(proposed) > 0 && proposed[0].AuthorID != targets[ri][0] {
-					r.Reason += " (not the first credit: the credit order of the other authors is kept)"
-				}
+			if rec.id == primary && len(targets[ri]) > 0 && targets[ri][0] != pid {
+				r.Reason += fmt.Sprintf(" (not %q, the first name of the combined record: the credits already put %q first)",
+					rec.parts[0].name, pn)
 			}
 		}
 	}
@@ -725,6 +745,17 @@ func (f *combinedAuthorFixer) evaluate(store OpsStore, idx *combinedAuthorIndex,
 	// refuse this row. Which parts are credited is in the credit list.
 	r.Fingerprint = fingerprintStrings(append(fp, "apply", strconv.FormatBool(primaryMoves))...)
 	return r, true, nil
+}
+
+// combinedFirstAuthor is the author id of the first author-role credit, 0
+// for none.
+func combinedFirstAuthor(credits []database.BookAuthor) int {
+	for _, ba := range credits {
+		if combinedIsAuthorRole(ba.Role) {
+			return ba.AuthorID
+		}
+	}
+	return 0
 }
 
 func recIDsOf(recs []combinedRecordPlan) []int {
@@ -755,10 +786,13 @@ func combinedVariants(idx *combinedAuthorIndex, name string) []database.Author {
 // ids). Rows are stably sorted by position; inside a run of equal positions
 // the rows that are parts of a combined record are put in the combined
 // string's order among their own slots (other rows keep theirs). A combined
-// author-role credit is replaced, in place, by those of its parts no
-// author-role row credits; a combined record held only as the primary
-// AuthorID puts its missing parts first. Non-author-role rows (a narrator
-// credit, even of a combined record) are kept as they are.
+// author-role credit's slot then takes every part of it not already placed
+// before it, in the combined string's order: an uncredited part as a new row,
+// a part credited AFTER the slot as its own row moved up. Parts credited
+// before the slot keep their place (the existing order of the real authors).
+// A combined record held only as the primary AuthorID puts its parts first.
+// Non-author-role rows (a narrator credit, even of a combined record) keep
+// their role and relative order; every row is renumbered.
 func combinedNextCredits(cur []database.BookAuthor, bookID string, recIDs []int, targets [][]int) []database.BookAuthor {
 	isRec := map[int]int{}
 	for i, id := range recIDs {
@@ -802,22 +836,37 @@ func combinedNextCredits(cur []database.BookAuthor, bookID string, recIDs []int,
 		start = end
 	}
 
-	credited := map[int]bool{}
+	// existing is each part's own author-role row (its role is kept when the
+	// row moves to the combined credit's slot).
+	existing := map[int]database.BookAuthor{}
 	for _, ba := range rows {
-		if _, rec := isRec[ba.AuthorID]; !rec && combinedIsAuthorRole(ba.Role) {
-			credited[ba.AuthorID] = true
+		if _, rec := isRec[ba.AuthorID]; rec || !combinedIsAuthorRole(ba.Role) {
+			continue
+		}
+		if _, part := partRank[ba.AuthorID]; part {
+			if _, seen := existing[ba.AuthorID]; !seen {
+				existing[ba.AuthorID] = ba
+			}
 		}
 	}
+	emitted := map[int]bool{}
 	placed := map[int]bool{}
-	missing := func(ri int, role string, out []database.BookAuthor) []database.BookAuthor {
+	// fill emits, in the combined string's order, every part of record ri not
+	// already placed: an uncredited part as a new row in the combined
+	// credit's role, a credited part as its own row moved here.
+	fill := func(ri int, role string, out []database.BookAuthor) []database.BookAuthor {
 		if role == "" {
 			role = "author"
 		}
 		for _, id := range targets[ri] {
-			if credited[id] {
+			if emitted[id] {
 				continue
 			}
-			credited[id] = true
+			emitted[id] = true
+			if row, ok := existing[id]; ok {
+				out = append(out, row)
+				continue
+			}
 			out = append(out, database.BookAuthor{BookID: bookID, AuthorID: id, Role: role})
 		}
 		return out
@@ -825,21 +874,29 @@ func combinedNextCredits(cur []database.BookAuthor, bookID string, recIDs []int,
 	out := make([]database.BookAuthor, 0, len(rows)+4)
 	for _, ba := range rows {
 		ri, rec := isRec[ba.AuthorID]
-		if !rec || !combinedIsAuthorRole(ba.Role) {
+		switch {
+		case !combinedIsAuthorRole(ba.Role):
 			out = append(out, ba)
-			continue
+		case rec:
+			if !placed[ba.AuthorID] {
+				placed[ba.AuthorID] = true
+				out = fill(ri, ba.Role, out)
+			}
+		default:
+			if _, part := partRank[ba.AuthorID]; part {
+				if emitted[ba.AuthorID] {
+					continue // moved to a combined credit's slot, or a repeat
+				}
+				emitted[ba.AuthorID] = true
+			}
+			out = append(out, ba)
 		}
-		if placed[ba.AuthorID] {
-			continue
-		}
-		placed[ba.AuthorID] = true
-		out = missing(ri, ba.Role, out)
 	}
 	var front []database.BookAuthor
 	for ri, id := range recIDs {
 		if !placed[id] {
 			placed[id] = true
-			front = missing(ri, "author", front)
+			front = fill(ri, "author", front)
 		}
 	}
 	out = append(front, out...)
@@ -924,25 +981,31 @@ func (f *combinedAuthorFixer) Apply(_ context.Context, w *repairs.Writer, fresh 
 	}
 	var newPrimary *database.Author
 	primaryChanged := false
-	for ri, rec := range d.records {
-		if rec.id == oldPrimary && len(targets[ri]) > 0 {
-			primaryChanged = true
-			pid := targets[ri][0]
-			if a, ok := byID[pid]; ok {
-				newPrimary = a
-			} else {
-				a, gerr := store.GetAuthorByID(pid)
-				if gerr != nil {
-					return fmt.Errorf("read author %d: %w", pid, gerr)
-				}
-				if a == nil {
-					return fmt.Errorf("%w: book %s: author %d is gone", repairs.ErrChangedSincePlan, id, pid)
-				}
-				newPrimary = a
+	recIDs := recIDsOf(d.records)
+	for _, rec := range d.records {
+		primaryChanged = primaryChanged || rec.id == oldPrimary
+	}
+	if primaryChanged {
+		// The primary is the first author credit of the rewritten list: the
+		// organizer files a book under its lowest-position author
+		// (organizer.authorNameFromJoin), so the two must agree.
+		pid := combinedFirstAuthor(combinedNextCredits(d.credits, id, recIDs, targets))
+		if pid == 0 {
+			return fmt.Errorf("%s: row %s: the rewritten credits name no author", combinedAuthorFixerID, fresh.RowID)
+		}
+		if a, ok := byID[pid]; ok {
+			newPrimary = a
+		} else {
+			a, gerr := store.GetAuthorByID(pid)
+			if gerr != nil {
+				return fmt.Errorf("read author %d: %w", pid, gerr)
 			}
+			if a == nil {
+				return fmt.Errorf("%w: book %s: author %d is gone", repairs.ErrChangedSincePlan, id, pid)
+			}
+			newPrimary = a
 		}
 	}
-	recIDs := recIDsOf(d.records)
 	partial := func(what string, err error) error {
 		return fmt.Errorf("%w: book %s: %s: %w", repairs.ErrPartiallyApplied, id, what, err)
 	}

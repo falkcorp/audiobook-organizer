@@ -4049,8 +4049,13 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 		}
 		book.rememberRow(written)
 		// A multi-author credit's co-authors, only when the scanner's primary
-		// author is what the row now holds (creditScannedAuthors).
-		creditScannedAuthors(getStore(), written.ID, written.AuthorID, authorIDs)
+		// author is what the row now holds (creditScannedAuthors), and never
+		// on a book whose author the user locked (or whose locks could not be
+		// read, which the overlay above treats as locked): a co-author the
+		// user removed must not come back from the tag on every rescan.
+		if rescanMayCreditAuthors(locked, ok) {
+			creditScannedAuthors(getStore(), written.ID, written.AuthorID, authorIDs)
+		}
 		// Check for metadata hash duplicates after update, against the row that
 		// was actually written rather than a local copy of it.
 		detectMetadataHashDuplicate(written, defaultLog)
@@ -4307,6 +4312,13 @@ func (scannerAuthorStore) CreateAuthor(name string) (*database.Author, error) {
 		return nil, fmt.Errorf("author conflict detected but author not found: %s", name)
 	}
 	return author, nil
+}
+
+// rescanMayCreditAuthors reports whether a rescan may add a tag's co-authors:
+// only when the book's field locks were read (locksOK) and the author is not
+// user-locked.
+func rescanMayCreditAuthors(locked map[string]bool, locksOK bool) bool {
+	return locksOK && !locked[database.FieldKeyAuthorName]
 }
 
 // bookAuthorsModifier is the junction write creditScannedAuthors needs.
