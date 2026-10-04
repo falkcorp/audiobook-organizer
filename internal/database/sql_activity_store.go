@@ -124,6 +124,15 @@ func OpenSQLiteActivityStore(path string) (*SQLActivityStore, error) {
 	return openSQLiteActivityStore(path, sqlActCheckpointInterval)
 }
 
+// OpenSQLiteActivityStoreWithCheckpointInterval is OpenSQLiteActivityStore with
+// the background checkpointer's interval chosen by the caller. It exists for
+// tests outside this package that need the checkpointer to run often enough to
+// collide with a foreground checkpoint (internal/activity's vacuum test); the
+// server always uses OpenSQLiteActivityStore.
+func OpenSQLiteActivityStoreWithCheckpointInterval(path string, interval time.Duration) (*SQLActivityStore, error) {
+	return openSQLiteActivityStore(path, interval)
+}
+
 // openSQLiteActivityStore is OpenSQLiteActivityStore with the background
 // checkpoint interval as a parameter, so tests can observe the checkpointer
 // without waiting 30 seconds.

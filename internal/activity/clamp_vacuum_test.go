@@ -27,10 +27,19 @@ import (
 // guard, and returned "success" while reclaiming nothing — so no request could
 // reach the code that would have released the space. Restarting does not help
 // either: SQLite deletes the -wal only on a clean last-connection close.
+//
+// The background checkpointer runs every millisecond here on purpose. This test
+// used to flake under load ("WAL 11.19 MB before, 11.57 MB after"): when the run
+// took long enough for the 30 s checkpointer to tick during the vacuum, the
+// vacuum's TRUNCATE came back busy, VacuumActivity discarded the busy result,
+// and the WAL kept the rebuilt database VACUUM had just written through it.
+// Forcing the collision on every run makes that path deterministic, and the
+// assertion is that the WAL is actually EMPTY afterwards, which only a
+// TRUNCATE that ran can produce.
 func TestClampSummaries_VacuumRunsEvenWhenNothingWasClamped(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "activity.sqlite")
-	store, err := database.OpenSQLiteActivityStore(path)
+	store, err := database.OpenSQLiteActivityStoreWithCheckpointInterval(path, time.Millisecond)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -72,11 +81,12 @@ func TestClampSummaries_VacuumRunsEvenWhenNothingWasClamped(t *testing.T) {
 	if err != nil {
 		return // truncated away entirely is a fine outcome
 	}
-	if after.Size() >= before.Size() {
-		t.Errorf("vacuum did not run on an explicit request with 0 rows clamped: "+
+	if after.Size() != 0 {
+		t.Errorf("vacuum did not empty the WAL on an explicit request with 0 rows clamped: "+
 			"WAL %d bytes before, %d after. `vacuum` defaults to false, so passing it "+
 			"is an explicit request and must not be conditioned on Clamped > 0 — that "+
-			"guard makes reclaiming an already-clamped database impossible",
+			"guard makes reclaiming an already-clamped database impossible — and a "+
+			"busy TRUNCATE must be retried, not reported as success",
 			before.Size(), after.Size())
 	}
 }
