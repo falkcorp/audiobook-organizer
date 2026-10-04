@@ -95,10 +95,9 @@ func TestResolve_KeepsTodaysBehaviourWhenNotCombined(t *testing.T) {
 	got, err = Resolve(st, "Zogarth", PrepareGate)
 	require.NoError(t, err)
 	require.Equal(t, []string{"Zogarth"}, names(got))
-	// One piece missing: not a combined record, created as before.
-	got, err = Resolve(st, "Shirtaloon, Somebody New", PrepareGate)
-	require.NoError(t, err)
-	require.Equal(t, []string{"Shirtaloon, Somebody New"}, names(got))
+	// One piece missing still names two people: never created as one row.
+	_, err = Resolve(st, "Shirtaloon, Somebody New", PrepareGate)
+	require.True(t, errors.Is(err, ErrCombinedCredit), "err %v", err)
 }
 
 func TestCredits(t *testing.T) {
@@ -150,4 +149,66 @@ func positions(cs []database.BookAuthor) []int {
 		out[i] = cs[i].Position
 	}
 	return out
+}
+
+
+// The review of #3717 cases, through the real Pebble store (which has the
+// title check). None may credit a series, a publisher or a cast credit as an
+// author, and none may create a combined record.
+func TestResolve_ReviewCases(t *testing.T) {
+	st := newStore(t, "Dante King", "Annabelle Hawthorne")
+	for _, s := range []string{"Dragon Born", "Star Wars", "Master Class", "Kurtherian Gambit"} {
+		_, err := st.CreateSeries(s, nil)
+		require.NoError(t, err)
+	}
+	ResetTitleCache()
+	created := func(n string) bool {
+		a, err := st.GetAuthorByName(n)
+		require.NoError(t, err)
+		return a != nil
+	}
+
+	// A bracket is stripped, never split: the series is not an author.
+	got, err := Resolve(st, "Dante King (Dragon Born)", PrepareGate)
+	require.NoError(t, err)
+	require.Len(t, got, 1, "one credit, as before")
+	require.False(t, created("Dragon Born"))
+	got, err = Resolve(st, "Alphabet Squadron (Star Wars)", PrepareGate)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.False(t, created("Star Wars"))
+
+	// Two people, one with a series tag: the two people, no combined row.
+	got, err = Resolve(st, "Annabelle Hawthorne, Virgil Knightley(Master Class)", PrepareGate)
+	require.NoError(t, err)
+	require.Equal(t, []string{"Annabelle Hawthorne", "Virgil Knightley"}, names(got))
+	require.False(t, created("Master Class"))
+	require.False(t, created("Annabelle Hawthorne, Virgil Knightley"))
+	require.False(t, created("Annabelle Hawthorne, Virgil Knightley(Master Class)"))
+
+	// A publisher, a cast credit, a series name, or a long list refuses the
+	// split, and the whole string is not created either.
+	for _, n := range []string{
+		"Cassius Lange, LitForge Press, Damien Hanson",
+		"Terry Pratchett, Full Cast",
+		"Michael Anderle, Kurtherian Gambit",
+		"Ray Porter, Kate Reading, Michael Kramer, Tim Gerard Reynolds",
+	} {
+		got, err := Resolve(st, n, PrepareGate)
+		require.True(t, errors.Is(err, ErrCombinedCredit), "%s: err %v", n, err)
+		require.Empty(t, got, n)
+		require.False(t, created(n), n)
+	}
+	for _, n := range []string{"LitForge Press", "Full Cast", "Kurtherian Gambit", "Cassius Lange", "Ray Porter"} {
+		require.False(t, created(n), "%s created", n)
+	}
+}
+
+func TestStripBracketsAndCollective(t *testing.T) {
+	require.Equal(t, "Annabelle Hawthorne, Virgil Knightley", StripBrackets("Annabelle Hawthorne, Virgil Knightley(Master Class)"))
+	require.Equal(t, "Dante King", StripBrackets("Dante King (Dragon Born)"))
+	require.True(t, IsCollectiveCredit("Full Cast"))
+	require.True(t, IsCollectiveCredit("various authors"))
+	require.False(t, IsCollectiveCredit("Terry Pratchett"))
+	require.Nil(t, SplitNames("Dante King (Dragon Born)", PrepareGate), "never the bracket branch")
 }
