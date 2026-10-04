@@ -1,5 +1,5 @@
 // file: internal/repairs/writer_files.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 4d8a2f61-3c7e-4b19-8e05-9a1f6c3d7b28
 // last-edited: 2026-10-03
 
@@ -169,7 +169,8 @@ func (w *Writer) Touch() {
 	}
 }
 
-// Journal records one OperationChange under the apply op's id, unless an
+// Journal records one OperationChange under the apply op's id, stamped
+// with the Writer's source (OperationChange.Source), unless an
 // identical row (same book, type, field and values) is already in the op's
 // journal: a resumed apply re-journals the step it was cut off in.
 func (w *Writer) Journal(bookID, changeType, field, oldV, newV string) error {
@@ -212,6 +213,10 @@ func (w *Writer) journalRow(bookID, changeType, field, oldV, newV string) (journ
 	change := &database.OperationChange{
 		ID: id, OperationID: w.opID, BookID: bookID,
 		ChangeType: changeType, FieldName: field, OldValue: oldV, NewValue: newV,
+		// The fixer's id rides on the row itself: the op row can be
+		// discarded (registry.Discard) while this row stays, and a fixer
+		// telling its own earlier writes from another's still can.
+		Source: w.source,
 	}
 	if err := w.journal.CreateOperationChange(change); err != nil {
 		w.log.Warn("%s: undo row not recorded; the write is not made: book_id=%s change=%s err=%s",

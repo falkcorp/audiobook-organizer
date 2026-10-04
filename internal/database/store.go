@@ -1,5 +1,5 @@
 // file: internal/database/store.go
-// version: 2.107.0
+// version: 2.107.1
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
 // last-edited: 2026-10-03
 
@@ -654,6 +654,14 @@ type OperationChange struct {
 	// altogether, since nothing happened.
 	Voided    bool      `json:"voided,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
+	// Source names who wrote the row when the operation row alone cannot
+	// say: a repairs fixer's id, stamped by repairs.Writer.Journal. The
+	// journal row outlives its operation row (registry.Discard deletes a
+	// failed or interrupted op's row and keeps its opchange rows), so a
+	// fixer that must recognise its own earlier writes reads this, not the
+	// op row. Empty on rows from writers that do not stamp it and on rows
+	// stored before the field existed.
+	Source string `json:"source,omitempty"`
 }
 
 // SystemActivityLog represents a log entry from a housekeeping goroutine.
