@@ -195,10 +195,24 @@ npm ci --prefix web
    plus `type DBCensusProvider interface { DBCensus(ctx context.Context, opts CensusOptions) (*DBCensus, error) }`
    and `var _ DBCensusProvider = (*PebbleStore)(nil)`. Wrap the method body
    with `defer recoverPebbleClosed("DBCensus", &err)`.
-8. Family figures. Run this once per call:
+8. Family figures. Run this once per call.
+
+   **Definition of a key count, decided.** Pebble's `NumEntries` counts every
+   internal entry in a table: puts, point tombstones, range deletions
+   (`NumDeletions` includes range deletions, `$P/sstable/properties.go:213`),
+   and every older version of a key that compaction has not dropped yet. Per
+   table, the census therefore uses `entries = NumEntries − NumDeletions`
+   (clamped at 0) as its key count, and keeps `NumDeletions` separately as
+   `Deletions`. Overwritten versions that are not yet compacted still count
+   once each. `opv2:op:` rows (rewritten on every progress tick) and `book:`
+   rows (rewritten on every save) are inflated by them until compaction. Add
+   the note
+   `"keys = sstable entries minus deletions; overwritten versions not yet compacted count once each"`.
+
    - `levels, err := p.db.SSTables(pebble.WithProperties())`. Index the
-     tables by `FileNum`, and sum `TotalKeys`, `TotalDeletions`,
-     `TotalTables` and `TotalTableBytes` over all of them.
+     tables by `FileNum`. Sum, over all tables, `TotalKeys` (Σ entries as
+     defined above), `TotalDeletions` (Σ `NumDeletions`), `TotalTables` and
+     `TotalTableBytes`.
    - For each `keyRange` r from `keyFamilyRanges(keyFamilies)`, call
      `p.db.SSTables(pebble.WithKeyRangeFilter(lo, hi), pebble.WithApproximateSpanBytes())`.
      `WithApproximateSpanBytes` needs both bounds non-nil: use `[]byte{0x00}`
@@ -208,8 +222,10 @@ npm ci --prefix web
      `EstimateDiskUsage` uses, restricted to one table. That is the
      "apportion by EstimateDiskUsage share" the design asks for.
    - For each table, take the ranges it overlaps:
-     - exactly one range: the table's `NumEntries`, `NumDeletions`,
-       `RawKeySize`, `RawValueSize` go to that range's family unchanged;
+     - exactly one range: the table's entries (as defined above),
+       `NumDeletions`, `RawKeySize` and `RawValueSize` go to that range's
+       family unchanged, as `Keys`, `Deletions`, `RawKeyBytes` and
+       `RawValueBytes`;
      - several ranges: share for r = `span[f][r] / Σ span[f][*]`. If the sum
        is 0 (tiny tables), split equally across the overlapping ranges. Add
        `share × property` to each family and set `Estimated = true` on every
@@ -343,7 +359,12 @@ No `Store` interface changes, so `scripts/check-interface-width.sh` is not
 required.
 
 Timing check: on a local store, `curl -sk https://localhost:8484/api/v1/diagnostics/db-census`
-(with auth) must answer in under 2 s without `deep`. Record the time.
+(with auth) must answer in under 2 s without `deep`. Record the time. Also
+time it on the largest store you can reach: the dedup sandbox on `:8485` if
+one is running, otherwise the largest local DB. Record the cold time (first
+call after start, with `fresh=true`), the warm time (second call with
+`fresh=true`) and `total_tables`. The local store is tiny, so these numbers
+are what predict prod.
 
 ## 9. Deliverables
 
@@ -388,5 +409,6 @@ files changed: <list>
 registry: <N> families (<M> top level); prefixes dropped from the seed list: <list>; added: <list>
 tests: <name> PASS (<time>) ...
 local census timing: shallow <ms>, deep <ms>
+largest-store census: store <which>, total_tables <n>, cold <ms>, warm <ms>
 not done / deviations: <list or "none">
 ```
