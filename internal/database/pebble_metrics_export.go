@@ -1,5 +1,5 @@
 // file: internal/database/pebble_metrics_export.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7efe29c0-d5f8-489a-bdaa-2715b790979d
 // last-edited: 2026-10-04
 
@@ -23,6 +23,12 @@ var _ PebbleMetricsSampler = (*PebbleStore)(nil)
 
 // PebbleMetricsSample samples the main store's database.
 func (p *PebbleStore) PebbleMetricsSample() (metrics.PebbleSample, bool) {
+	// TryRLock: a Close in progress (it holds the write lock across db.Close)
+	// makes this sample not-ok rather than making the scrape wait for it.
+	if !p.sampleMu.TryRLock() {
+		return metrics.PebbleSample{}, false
+	}
+	defer p.sampleMu.RUnlock()
 	if p.dbClosed.Load() {
 		return metrics.PebbleSample{}, false
 	}
@@ -33,12 +39,18 @@ func (p *PebbleStore) PebbleMetricsSample() (metrics.PebbleSample, bool) {
 // false for a nil db, and for a panic matching pebble.ErrClosed; any other
 // panic is re-raised, the same rule recoverPebbleClosed applies.
 //
-// pebble v2.1.7's DB.Metrics() does NOT check for a closed DB (it reads the
-// closed engine's state and returns), so this function cannot tell a closed DB
-// from an open one. Callers that own the store check their own closed flag
-// first (PebbleStore.dbClosed, OLStore.closed). Probing the engine instead was
-// tried and rejected: db.NewSnapshot() as a probe can leave a snapshot open
-// when Close lands, and Close then fails with "leaked snapshots".
+// pebble v2.1.7's DB.Metrics() does NOT check for a closed DB, and it is not
+// safe to call concurrently with Close: Close tears down the file cache after
+// releasing the engine mutex, and Metrics() then reads it and can panic with
+// something other than ErrClosed. This function cannot tell a closed DB from an
+// open one and does not make that call safe. The store owners serialise it
+// against Close (PebbleStore.sampleMu, OLStore.sampleMu: read lock held from the
+// closed-flag check through Metrics(), write lock held by Close). Any other
+// caller must do the same; the only containment otherwise is the recover in
+// metrics' samplePebbleSource, which drops that store from one scrape. Probing
+// the engine instead was tried and rejected: db.NewSnapshot() as a probe can
+// leave a snapshot open when Close lands, and Close then fails with "leaked
+// snapshots".
 func PebbleSampleFromDB(db *pebble.DB) (s metrics.PebbleSample, ok bool) {
 	if db == nil {
 		return metrics.PebbleSample{}, false

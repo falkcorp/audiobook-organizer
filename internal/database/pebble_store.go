@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.203.0
+// version: 1.204.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-04
 
@@ -103,8 +103,12 @@ func serializeBookForIndex(book *Book) ([]byte, error) {
 
 type PebbleStore struct {
 	db *pebble.DB
-	// dbClosed is set immediately before db.Close so the metrics sampler can
-	// skip a closed store without touching the engine (see PebbleMetricsSample).
+	// sampleMu serialises the metrics sampler against Close: the sampler holds
+	// the read lock (TryRLock) from its dbClosed check through db.Metrics();
+	// Close takes the write lock around dbClosed.Store(true) + db.Close(). The
+	// flag alone is not enough: Metrics() reads engine state that Close tears
+	// down (the file cache) after releasing the engine's own mutex.
+	sampleMu sync.RWMutex
 	dbClosed atomic.Bool
 	// memPtr atomically holds the warm in-memory query layer (or nil while
 	// warmup is in progress / failed). Reads load it lock-free; warmup
@@ -691,6 +695,8 @@ func (p *PebbleStore) Close() error {
 	// later flip to trusted (markOpsV2TimelineClosed).
 	p.markOpsV2TimelineClosed()
 
+	p.sampleMu.Lock()
+	defer p.sampleMu.Unlock()
 	p.dbClosed.Store(true)
 	return p.db.Close()
 }
