@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.200.0
+// version: 1.201.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-04
 
@@ -2701,7 +2701,7 @@ func enforceSeriesInvariant(book, old *Book) *Series {
 			book.Series = nil
 		}
 	}
-	return seriesObjectLoss(old, book.Series)
+	return seriesObjectLoss(old, book.Series, book.SeriesID)
 }
 
 // seriesObjectLoss is the stored Series object a write removes that nothing
@@ -2720,7 +2720,11 @@ func enforceSeriesInvariant(book, old *Book) *Series {
 //
 // The stored object (old.Series) is NOT a loss when:
 //   - there is no stored row (create), or no stored object;
-//   - it survives in the written row (kept, same id and name); or
+//   - it survives in the written row (kept, same id and name);
+//   - its id is the NEW SeriesID (newID): the book is (re)linked to the very
+//     series the object names, so the series is kept by its link. Only the
+//     display copy changes, as when the series was renamed since the object
+//     was stored; nothing the relink fixer could restore is lost; or
 //   - its id is the stored row's own SeriesID. That object is only the
 //     display copy of the series the book was linked to, and carries nothing
 //     beyond that link; the write that drops it is a series clear or move.
@@ -2733,12 +2737,15 @@ func enforceSeriesInvariant(book, old *Book) *Series {
 // What remains is a stale object (SeriesID nil, or naming another series)
 // that older builds left in the row: the only record of a series, which the
 // stale-series relink fixer reads.
-func seriesObjectLoss(old *Book, kept *Series) *Series {
+func seriesObjectLoss(old *Book, kept *Series, newID *int) *Series {
 	if old == nil || old.Series == nil {
 		return nil
 	}
 	c := old.Series
 	if kept != nil && kept.ID == c.ID && kept.Name == c.Name {
+		return nil
+	}
+	if newID != nil && *newID == c.ID {
 		return nil
 	}
 	if old.SeriesID != nil && *old.SeriesID == c.ID {

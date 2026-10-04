@@ -1,5 +1,5 @@
 // file: internal/activity/changelog.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 93167949-a587-41e9-8ef9-92d03f86aea6
 // last-edited: 2026-10-04
 
@@ -79,7 +79,11 @@ func (svc *ChangelogService) GetBookChangelog(bookID string) ([]ChangeLogEntry, 
 	}
 
 	// 2. Metadata change history → metadata_apply and tag_write entries
-	metaHistory, err := svc.db.GetBookChangeHistory(bookID, 100)
+	// The WHOLE history: the store orders it by field, then time, and
+	// applies a limit after that, so a window (it was 100) cut whole fields
+	// out of the timeline by name, not by age. The merged timeline below is
+	// sorted by time and cut to MaxChangelogEntries, which is the bound.
+	metaHistory, err := svc.db.GetBookChangeHistory(bookID, 1<<30)
 	if err != nil {
 		slog.Warn("changelog GetBookChangeHistory", "bookID", bookID, "err", err)
 	} else {
