@@ -1,5 +1,5 @@
 <!-- file: docs/plans/storage-efficiency/TASK-A1.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 64eab7cd-1fed-411b-bff5-1946bf95ffa0 -->
 <!-- last-edited: 2026-10-03 -->
 
@@ -26,7 +26,7 @@ measured). None of these is
 exported today, so there is no baseline. The plan requires 24 hours of these
 metrics before the first setting changes.
 
-## 2. Setup
+## 2. ⛔ START HERE (run this first)
 
 ```bash
 cd /Users/jdfalk/repos/github.com/jdfalk/audiobook-organizer
@@ -42,6 +42,26 @@ npm ci --prefix web
 - Never edit the primary checkout. Work only in the worktree above.
 - Commit work in progress at least every 15 minutes, and push it to your own
   branch (step 10 gives the push form).
+- Next, run the "already done if" check in `## Idempotency / Rollback` below.
+  If it says the work exists, stop and report instead of redoing it.
+
+## Idempotency / Rollback
+
+Already done if both of these hold (run from the worktree root):
+
+```bash
+test -f internal/metrics/pebble_collector.go && echo "collector file present"
+grep -c 'registerPebbleMetricsSources' internal/server/server.go   # prints 1 or more when done
+```
+
+Both present: stop and report "already done". Only one present: a previous
+attempt stopped half way; finish the missing step instead of starting over.
+
+Rollback: before the first push, remove the worktree and branch
+(`git worktree remove ../aorg-storage-a1-pebble-metrics --force`, then
+`git branch -D feat/storage-a1-pebble-metrics`), or `git reset --hard
+origin/main` inside it. After the PR merges, `git revert` the merge; the task
+adds files and one line in `server.go` and changes no stored data.
 
 ## 3. Read before editing
 
@@ -49,7 +69,7 @@ npm ci --prefix web
   `pebble.Metrics` fields to a struct. Copy its field paths. The comment at
   `:10-15` explains the dependency rule: `internal/database` is in the plugin
   SDK's dependency closure (`make sdkguard`).
-- `internal/metrics/metrics.go:15-30` and `:294-306`. Naming convention
+- `internal/metrics/metrics.go:14-30` and `:303-314`. Naming convention
   (`Namespace: "audiobook_organizer"`) and the `Register()` once-guard.
 - `internal/metafetch/openlibrary.go:71-88`. `OpenLibraryService.CompactionStats`
   reads the OL store under `svc.Mu`, because the delete and factory-reset
@@ -59,8 +79,6 @@ npm ci --prefix web
 - `internal/database/store_capability.go:58-107`. `AsCapability` walks the
   search-index decorator. A bare type assertion on `Server.Ops()` fails in
   prod.
-- `internal/server/server.go:683-690`. The point in `NewServer` where the
-  container is wired and `server.olService` is set.
 - Pebble v2.1.7 source, `$(go env GOMODCACHE)/github.com/cockroachdb/pebble/v2@v2.1.7/metrics.go:210-300`
   and `:450-475`. The `Metrics` struct, `MemTable`, and `WAL`.
 
@@ -68,7 +86,9 @@ npm ci --prefix web
 
 Run each command from the worktree root and confirm the expected hit before
 editing. If a line number moved, use the new one. If a hit is gone, stop and
-report it.
+report it. The line numbers below were re-run on `origin/main` at
+`373ba19d2`; every file:line cited in sections 3 and 5 comes from this list or
+from that commit, and where they differ the grep result wins.
 
 1. `grep -n 'func CollectCompactionStats' internal/database/compaction_stats.go`
    → `93:func CollectCompactionStats(db *pebble.DB) CompactionStats {`
@@ -82,7 +102,7 @@ report it.
    → `26:github.com/falkcorp/audiobook-organizer/internal/metrics`. Both
    packages are already in the SDK closure. Adding code to them adds no new
    closure entry, as long as you import nothing new from `internal/`.
-5. `grep -n 'func Register()' internal/metrics/metrics.go` → `294:func Register() {`
+5. `grep -n 'func Register()' internal/metrics/metrics.go` → `303:func Register() {`
 6. `grep -n 'metrics.Register()' internal/server/server.go` → `554:	metrics.Register()`
 7. `grep -n 'func (svc \*OpenLibraryService) CompactionStats' internal/metafetch/openlibrary.go`
    → `78:`
@@ -100,6 +120,23 @@ report it.
     (TableBytesFlushed + TableBytesCompacted + BlobBytesFlushed +
     BlobBytesCompacted) / TableBytesIn, and 0 when TableBytesIn is 0. For L0,
     TableBytesIn is the bytes written to the WAL.
+
+15. `grep -n 'server.container = regContainer' internal/server/server.go`
+    → `689:	server.container = regContainer` (step 7 inserts after this line).
+16. `grep -n 'func recoverPebbleClosed(op string, errp \*error)' internal/database/pebble_store_ops_v2.go`
+    → `1103:`. It is a `defer` helper that takes a pointer to the named error
+    return.
+17. `grep -n 'ticker := time.NewTicker(5 \* time.Second)' internal/server/server_lifecycle.go`
+    → `298:`. This is the ticker precedent the decision in section 5 declines
+    to copy (the block runs `:298-345`).
+18. `grep -n 'func NewAIScanStoreFromDB\|prefix: "aiscan:", owned: false' internal/database/ai_scan_store.go`
+    → `128:` and `129:`. The shared-DB flag that step 8 cites.
+19. `grep -n 'Namespace: "audiobook_organizer"' internal/metrics/metrics.go | head -1`
+    → `19:` (the naming convention).
+21. `grep -n 'prometheus.MustRegister(operationStarted' internal/metrics/metrics.go`
+    → `305:` (the first `MustRegister` call that step 2 edits).
+20. `grep -n 'Cheap: Metrics() reads in-memory' internal/database/compaction_stats.go`
+    → `91:` (the comment step 1's decision cites as "`compaction_stats.go:91-92`").
 
 Pebble v2.1.7 field paths, verified. `BlockCache` is `cache.Metrics`
 (`internal/cache/cache.go:23`).
@@ -127,7 +164,7 @@ Pebble v2.1.7 field paths, verified. `BlockCache` is `cache.Metrics`
 Decision: **a custom `prometheus.Collector` that reads the sources at scrape
 time.** The design left the choice between scrape-time and a ticker to the
 precedent in `internal/metrics`. That package has no custom collector; its
-gauges are set by a ticker in `internal/server/server_lifecycle.go:300-341`.
+gauges are set by a ticker in `internal/server/server_lifecycle.go:298-345`.
 Do not follow that precedent here, for three reasons:
 
 - A5 edits `server_lifecycle.go` in the same wave.
@@ -188,7 +225,7 @@ Do not follow that precedent here, for three reasons:
      constants `PebbleStoreMain` and `PebbleStoreOpenLibrary`.
 2. **`internal/metrics/metrics.go`.** Add the package-level collector value
    `pebbleCollectorInstance` to the first `prometheus.MustRegister(...)` call
-   in `Register()` (`:296`). It stays inside the existing `registerOnce`, so
+   in `Register()` (`:305`). It stays inside the existing `registerOnce`, so
    it registers once per process.
 3. **`internal/database/pebble_metrics_export.go` (new).**
    - `func PebbleSampleFromDB(db *pebble.DB) (s metrics.PebbleSample, ok bool)`.
@@ -219,7 +256,7 @@ Do not follow that precedent here, for three reasons:
      `s.olService.PebbleMetricsSample()`.
 7. **`internal/server/server.go`.** Add one line,
    `server.registerPebbleMetricsSources()`, right after
-   `server.container = regContainer` (`:689`). Nothing else in this file.
+   `server.container = regContainer` (`:689`, anchor 15). Nothing else in this file.
 8. Do NOT export the AI-scan store. On prod it shares the main DB
    (`ai_scan_store.go:129`, `NewAIScanStoreFromDB`), so its numbers would
    duplicate `store="main"`.
@@ -267,6 +304,11 @@ Do not follow that precedent here, for three reasons:
   - `TestPebbleSampleFromDB_Nil`. Assert `ok == false`.
 - Existing tests must still pass. `internal/metrics/metrics_test.go` checks
   that `Register()` registers its collectors. Run it.
+- Anti-over-suppression: N/A. A1 only reads and exports; it rejects, skips or
+  hides nothing. The one path that emits nothing (a source returning `false`)
+  is bounded by `TestPebbleCollector_EmitsAllSeriesPerStore`, which fails if a
+  healthy source emits no series, and by `TestPebbleSampleFromDB_RealStore`,
+  which fails if a live store samples as `ok == false`.
 
 ## 8. Verify
 
@@ -299,16 +341,15 @@ The `store="main"` series must appear.
 - Changelog fragment `changelog.d/<YYYYMMDD>_storage_a1_pebble_metrics.md`,
   with NO header. Category `### Added`. One `####` entry naming the metrics
   and the `store` label. Never use a `#` or `##` heading.
-- No `172.16.` addresses and no API-key-shaped strings in any committed file. Check
+- No internal host addresses and no API-key-shaped strings in any committed file. Check
   with `git diff origin/main --stat` and
   `git diff origin/main | grep -nE "ab""k_[A-Za-z0-9]{16,}|172\.16\.[0-9]{1,3}\.[0-9]{1,3}"`, which must print
   nothing.
-- Commit with conventional commits, for example
-  `feat(metrics): export Pebble engine metrics for main and OpenLibrary stores`,
-  and end the message with:
+- Commit with exactly `feat(metrics): export Pebble engine metrics for main and OpenLibrary stores`
+  (`<type>(<scope>): ...` form), and end the message with:
 
   ```
-  Co-Authored-By: <model name> <noreply@anthropic.com>
+  Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_017MtQ5LP2n3t3bs7AhptkKJ
   ```
 - Push by explicit sha (zsh):

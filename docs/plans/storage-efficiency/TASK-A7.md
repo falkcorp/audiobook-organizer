@@ -1,5 +1,5 @@
 <!-- file: docs/plans/storage-efficiency/TASK-A7.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: cb342533-a38a-4e11-a78c-49b2f54cecaf -->
 <!-- last-edited: 2026-10-03 -->
 
@@ -34,11 +34,11 @@ Reviewer: code-reviewer.
 **Why.** Every Pebble knob is at its library default (eval R2): an 8 MB block
 cache against 50.6 GB, a 4 MB memtable, no bloom filters, and one compaction
 at a time. The manual full compaction runs serially (`parallelize=false`,
-`pebble_store.go:5276`), so a full compaction takes 28.5 minutes at
+`pebble_store.go:5356`), so a full compaction takes 28.5 minutes at
 31-52 MiB/s on an NVMe (R3, F2).
 
 The settings must come from the environment: the app's saved settings live
-inside the store they would configure (design 8, `pebble_store.go:392-397`).
+inside the store they would configure (design 8, `pebble_store.go:416-420`).
 
 The operator applies one setting per deploy, each with the A1 metric it
 should move:
@@ -48,7 +48,7 @@ should move:
 - compaction 1-4 with parallel manual compaction →
   `pebble_compaction_debt_bytes` and the db-optimize duration.
 
-## 2. Setup
+## 2. ⛔ START HERE (run this first)
 
 ```bash
 cd /Users/jdfalk/repos/github.com/jdfalk/audiobook-organizer
@@ -63,14 +63,43 @@ npm ci --prefix web
 - Do NOT spawn subagents.
 - Never edit the primary checkout.
 - Commit work in progress every 15 minutes, and push it to your own branch.
+- Next, run the "already done if" check in `## Idempotency / Rollback` below.
+  If it says the work exists, stop and report instead of redoing it.
+
+## Idempotency / Rollback
+
+This task replaces `pebble.FormatNewest` and the literal `false` in the
+`Optimize` methods, so "done" needs the old thing absent AND the new thing
+present. Already done if both hold (worktree root):
+
+```bash
+test -f internal/database/pebble_settings.go && echo "settings file present"
+grep -rn 'pebble.FormatNewest' --include='*.go' internal cmd | grep -v _test.go | wc -l   # must print 0
+```
+
+On `origin/main` at `373ba19d2` the file is absent and the count is above 0.
+Both true: stop and report "already done". Mixed: finish the missing steps.
+
+Rollback: nothing in this task changes behaviour until an operator sets a
+variable. To undo an applied setting, unset the `AORG_PEBBLE_*` variables in
+the unit (or the environment) and restart the service: every default returns.
+For the unit file, restore `MemoryMax=12G` in `/etc/systemd/system` (and in
+`deploy/`), then `sudo systemctl daemon-reload` and restart. To undo the code,
+`git revert` the PR; Pebble's on-disk format is unaffected (the pinned
+constant equals `FormatNewest` on v2.1.7). Bloom filters already written stay
+readable.
 
 ## 3. Read before editing
 
-- `internal/database/pebble_store.go:389-410`. `newPebbleStore`: where
-  `opts` is built and opened. After A4 it also holds the storage-format check
+Line numbers in this section come from `origin/main` at `373ba19d2`. A3 and A4
+merge before this task and shift `pebble_store.go` and `ai_scan_store.go`
+again, so section 4 re-greps each one and the grep result wins.
+
+- `internal/database/pebble_store.go:415-425`. `newPebbleStore`: where
+  `opts` is built (`:416`) and opened (`:420`). After A4 it also holds the storage-format check
   and sidecar. Do not disturb those.
-- `internal/database/pebble_store.go:5250-5280`. The `Optimize` doc comment
-  and body.
+- `internal/database/pebble_store.go:5343-5357`. The `Optimize` doc comment
+  and body (`func (p *PebbleStore) Optimize` at `:5355`).
 - `internal/database/ai_scan_store.go:100-180`. `NewAIScanStore` (owned)
   and `Optimize`.
 - `internal/openlibrary/store.go:31-51`. `NewOLStore` and `Optimize`.
@@ -106,16 +135,21 @@ npm ci --prefix web
 5. `grep -n 'maxMemTableSize\b' $P/open.go | head -2` →
    `62: maxMemTableSize = constants.MaxUint32OrInt`. `MemTableSize` must be
    below 4 GiB.
-6. `grep -n 'return p.db.Compact(ctx, nil, \[\]byte{0xff}, false)' internal/database/pebble_store.go` → `5276:`
+6. `grep -n 'return p.db.Compact(ctx, nil, \[\]byte{0xff}, false)' internal/database/pebble_store.go` → `5356:`
+   and `grep -n 'func (p \*PebbleStore) Optimize' internal/database/pebble_store.go` → `5355:`.
 7. `grep -n 'return s.db.Compact(ctx, nil, \[\]byte{0xff}, false)' internal/database/ai_scan_store.go internal/openlibrary/store.go`
    → `ai_scan_store.go:175`, `openlibrary/store.go:50`.
 8. `grep -n 'FormatMajorVersion: PebbleFormatMajorVersion' internal/database/pebble_store.go`
-   → one line in A4's open function. `grep -n 'FormatMajorVersion: pebble.FormatNewest' internal/database/ai_scan_store.go internal/openlibrary/store.go`
-   → `ai_scan_store.go:109`, `openlibrary/store.go:34`.
-8a. `grep -n '^var NoFilterPolicy' $P/options.go` → `58:`. `grep -n 'o.FilterPolicy = previousLevel.FilterPolicy' $P/options.go`
+   → one line in A4's open function. This prints nothing before A4 merges,
+   which is expected at `373ba19d2`; after A4 it must print one line.
+8a. `grep -n 'FormatMajorVersion: pebble.FormatNewest' internal/database/ai_scan_store.go internal/openlibrary/store.go`
+   → `ai_scan_store.go:109`, `openlibrary/store.go:34` (the two opens step 3
+   and step 4 pin).
+8b. `grep -n '^var NoFilterPolicy' $P/options.go` → `58:`.
+8c. `grep -n 'o.FilterPolicy = previousLevel.FilterPolicy' $P/options.go`
    → `480:`: a level with no policy inherits the level above's, so L6 must be
    set to `pebble.NoFilterPolicy` explicitly.
-8b. `grep -n 'o.MemTableStopWritesThreshold = 2' $P/options.go` → `1480:`
+8d. `grep -n 'o.MemTableStopWritesThreshold = 2' $P/options.go` → `1480:`
    (the default number of queued memtables, used in the `MemoryMax`
    formula).
 9. `grep -n 'db, err := pebble.Open(path, &pebble.Options{' internal/openlibrary/store.go internal/database/ai_scan_store.go`
@@ -123,9 +157,20 @@ npm ci --prefix web
 10. `grep -n 'Compacting main database (Pebble, full keyspace)' internal/plugins/maintenance/db.go` → `69:`
 11. `grep -n 'MemoryMax=12G\|GOMEMLIMIT=9GiB' deploy/audiobook-organizer.service` → `73`, `88`.
 12. `grep -n 'DATABASE_PATH' docs/configuration.md` → `59:`
+13. `grep -n 'openlibrary.NewOLStore(storePath)' internal/metafetch/openlibrary.go`
+    → `56:` and `101:`. Step 3 says the caller already logs the open failure;
+    that is the `slog.Warn("Failed to open OL dump store"` on the line after
+    `:56` (`:58`).
+14. `grep -n 'func (o \*Options) EnsureDefaults' $P/options.go` → `1363:`, and
+    `grep -n 'cacheDefaultSize  *= 8 << 20' $P/options.go` → `40:`, and
+    `grep -n 'o.CacheSize = cacheDefaultSize' $P/options.go` → `1365:`. These
+    are the evidence for `LogEffective`'s defaults (cache 8388608 bytes).
+15. `grep -n 'func NewAIScanStore(\|func (s \*AIScanStore) Optimize' internal/database/ai_scan_store.go`
+    → `107:`, `171:` (step 4 and step 5).
 
 Line numbers in `pebble_store.go` and `ai_scan_store.go` will have shifted
-after A3 and A4 merged. Re-grep and use the current lines.
+again after A3 and A4 merged (they moved from `543827ef7` to `373ba19d2`
+because #3704 grew `pebble_store.go`). Re-grep and use the current lines.
 
 ## 5. Steps
 
@@ -167,13 +212,20 @@ after A3 and A4 merged. Re-grep and use the current lines.
      - `compaction_concurrency`: `"1-1"` when unset;
      - `parallel_manual_compaction`.
 
-     Values are read back from `opts` after `EnsureDefaults` when possible.
-     Otherwise log the documented defaults (eval R2).
+     Read the values this way, with no guessing: copy the options
+     (`c := *opts`; `pebble.Options` holds no locks, so a shallow copy is
+     fine), call `c.EnsureDefaults()` on the COPY, and read from the copy:
+     `c.MemTableSize` (4194304 when unset), `c.CompactionConcurrencyRange()`
+     (`1, 1` when unset), and the cache size, which is the shared size when
+     `c.Cache != nil` and otherwise `c.CacheSize`, which `EnsureDefaults`
+     sets to `cacheDefaultSize`, **8388608** (8 << 20; anchor 14). Never call
+     `EnsureDefaults` on `opts` itself.
    - `func ParallelManualCompaction() bool`. Parses the environment and
      returns false on an error. That error was already reported at open,
      because the main store's open fails on it.
 2. **Main store (`pebble_store.go`, `newPebbleStore`).** Right after `opts`
-   is built (`:393`), call `settings, err := PebbleSettingsFromEnv()`. On
+   is built (`:416`, anchor 1 of A4's brief; re-grep, because A4 splits this
+   function), call `settings, err := PebbleSettingsFromEnv()`. On
    error, return `fmt.Errorf("pebble settings: %w", err)` before opening.
    Then call `settings.ApplyMain(opts)`, keep the test `FS` override, open,
    and call `settings.LogEffective("main", opts)`.
@@ -181,15 +233,15 @@ after A3 and A4 merged. Re-grep and use the current lines.
    `pebble.FormatNewest` with `database.PebbleFormatMajorVersion` (the
    package already imports `internal/database`). Parse the settings the same
    way; on error, return it. The caller already logs OL
-   open failures (`metafetch/openlibrary.go:57`). Call `ApplyShared` on the
+   open failures (`metafetch/openlibrary.go:56-58`, anchor 13). Call `ApplyShared` on the
    options, open, then `LogEffective("openlibrary", ...)`.
 4. **AI-scan store (`ai_scan_store.go`, `NewAIScanStore`).** Replace
    `pebble.FormatNewest` with `PebbleFormatMajorVersion`; change no other
    open option. On prod it is not opened at all: it shares the main DB
    (`NewAIScanStoreFromDB`). Otherwise only `Optimize` changes (step 5).
 5. **Parallel manual compaction.** In all three `Optimize` methods
-   (`pebble_store.go` `:5276`, `ai_scan_store.go` `:175`,
-   `openlibrary/store.go` `:50`), replace the literal `false` with
+   (`pebble_store.go` `:5356`, `ai_scan_store.go` `:175`,
+   `openlibrary/store.go` `:50`; anchors 6 and 7), replace the literal `false` with
    `ParallelManualCompaction()`. In `pebble_store.go`, extend the `Optimize`
    doc comment: `parallelize=true` lets Pebble split the manual compaction
    across the concurrency range, while `false` runs one whole-range
@@ -202,7 +254,7 @@ after A3 and A4 merged. Re-grep and use the current lines.
      commented block listing the five variables, each with a commented-out
      example line (for example `# Environment="AORG_PEBBLE_CACHE_BYTES=4294967296"`).
      Change `MemoryMax=12G` to `MemoryMax=18G` and replace its comment with
-     the formula from design section 8, for example: "MemoryMax must cover
+     the formula from design section 8, using this sentence verbatim: "MemoryMax must cover
      GOMEMLIMIT (9 GiB, Go heap) + the Pebble block cache (4 GiB planned;
      allocated outside the Go heap under cgo, so GOMEMLIMIT does not limit
      it) + memtable size x queued memtables (64 MiB x 2,
@@ -279,6 +331,12 @@ after A3 and A4 merged. Re-grep and use the current lines.
   variables to valid values; open in memory, write and read one key, close.
 - `TestParallelManualCompaction_Env`. Unset gives false, `"true"` gives
   true, `"x"` gives false.
+- Anti-over-suppression: N/A. A7 suppresses nothing; with no variable set it
+  changes nothing, and a bad value fails the open loudly instead of being
+  ignored. The unset path is pinned by
+  `TestPebbleSettings_UnsetIsTodaysDefaults`, and the all-set path by
+  `TestNewPebbleStore_WithSettingsOpensAndWrites`, which fails if a valid
+  setting stops the store opening or writing.
 
 Use `t.Setenv`, never `os.Setenv`. The tests in this package must not leave
 variables set for other tests.
@@ -313,12 +371,12 @@ Then run with `AORG_PEBBLE_COMPACTION_CONCURRENCY=1-4` and confirm `1-4`.
   stating that the defaults are unchanged.
 - Check that `git diff origin/main | grep -nE "ab""k_[A-Za-z0-9]{16,}|172\.16\.[0-9]{1,3}\.[0-9]{1,3}"` prints
   nothing.
-- Commit, for example
-  `feat(database): Pebble open settings from AORG_PEBBLE_* env, shared block cache, parallel manual compaction`,
-  ending with:
+- Commit with exactly
+  `feat(database): Pebble open settings from AORG_PEBBLE_* env, shared block cache, parallel manual compaction`
+  (`<type>(<scope>): ...` form), ending with:
 
   ```
-  Co-Authored-By: <model name> <noreply@anthropic.com>
+  Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_017MtQ5LP2n3t3bs7AhptkKJ
   ```
 - `sha=$(git rev-parse HEAD); git push origin "${sha}:refs/heads/feat/storage-a7-pebble-env-settings"`

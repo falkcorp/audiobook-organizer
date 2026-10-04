@@ -1,5 +1,5 @@
 <!-- file: docs/plans/storage-efficiency/README.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: dbffee11-8cb8-403f-86a9-d887ac6f38dc -->
 <!-- last-edited: 2026-10-03 -->
 
@@ -12,9 +12,15 @@ Evidence: `.claude/notes/db-optimization-eval-2026-10-03.md` in the primary
 checkout (R1-R7, F1-F13).
 
 The A1-A7 briefs were written against `d1f069fac` and revised on 2026-10-03
-to match plan v1.3; the A4, A8 and A9 anchors were re-run on `543827ef7`
-(A8's on `falkcorp/infra-docs` at `5602791`). Each brief is self-contained:
-an executor reads only its own brief, and re-runs its anchor greps first.
+to match plan v1.3. Every anchor in A1-A7 and A9 was then re-run on
+`origin/main` at `373ba19d2` (the merge of #3704), and the anchors that grep
+the Pebble v2.1.7 and ulid v2.1.2 module sources were re-run from the module
+cache. A8's anchors were re-run on `falkcorp/infra-docs` `origin/main` at
+`6f2faca`; its `scripts/dedup-sandbox/` and runbook are unchanged since
+`5602791`. Three anchors cannot pass before their predecessor merges (A3 #10
+needs A2, A7 #8 needs A4, A9 #8 needs A4); each says so in place. Each brief
+is self-contained: an executor reads only its own brief, and re-runs its
+anchor greps first.
 
 ## Briefs
 
@@ -30,7 +36,8 @@ an executor reads only its own brief, and re-runs its anchor greps first.
 | A8 | [TASK-A8.md](TASK-A8.md): rebuild the rehearsal sandbox on a ZFS clone (repo `falkcorp/infra-docs`) | `feat/sandbox-zfs-clone` in `infra-docs` | main session | A2 merged |
 | A9 | [TASK-A9.md](TASK-A9.md): `scripts/deploy-cutover.sh` and its Python body | `feat/storage-a9-deploy-cutover` | sonnet | A4 merged, A8 done |
 
-PR #3698 (also in P-1) merged on 2026-10-03; #3704 is the remaining gate.
+PR #3698 and PR #3704 (both in P-1) have merged: #3704 is `373ba19d2` on
+`main`, so the "start after #3704" gates in A1, A3, A4, A5 and A7 are met.
 
 ## Wave order
 
@@ -57,7 +64,9 @@ PR #3698 (also in P-1) merged on 2026-10-03; #3704 is the remaining gate.
   options and `Optimize`) and `internal/database/ai_scan_store.go` (A3:
   `HealthStats`; A7: open options and `Optimize`), so A7 waits for A3. A9
   needs A4's `--print-storage-format` and sidecar, and A8's sandbox for its
-  one real deploy. A7 and A9 share no file.
+  one real deploy. A9 also edits `docs/system/deploy-and-gpu-ops.md` (a short
+  section on the script and its exit codes), which A4 edited in W1 and which
+  has merged by then; A7 does not touch it, so A7 and A9 still share no file.
 
 No task in any wave edits `database.Store`, an `iface_*.go` file,
 `internal/database/mocks/` or `.interface-width-baseline`. `make ci` runs
@@ -122,8 +131,9 @@ at most one mark, so the W1 tasks touch disjoint files.
   `deploy/audiobook-organizer.service`, `docs/configuration.md`, and adds
   `internal/database/pebble_settings.go` with its test. A9 adds
   `scripts/deploy-cutover.sh`, `scripts/deploy_cutover.py` and
-  `scripts/test_deploy_cutover.py`, and edits `Makefile.local.example`
-  (after A4's edit to it has merged). Disjoint.
+  `scripts/test_deploy_cutover.py`, and edits `Makefile.local.example` and
+  `docs/system/deploy-and-gpu-ops.md` (both after A4's edits to them have
+  merged). Disjoint.
 
 Each task starts from an `origin/main` that already holds its predecessors.
 

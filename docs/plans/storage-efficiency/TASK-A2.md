@@ -1,5 +1,5 @@
 <!-- file: docs/plans/storage-efficiency/TASK-A2.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: f3a0c6be-5f0f-4f00-b712-007dd0053997 -->
 <!-- last-edited: 2026-10-03 -->
 
@@ -25,7 +25,7 @@ numbers from a real census (design P6). The only full count today,
 db-health's `KeyCount`, iterates all 174M keys and takes about 5 minutes (R1,
 F6a).
 
-## 2. Setup
+## 2. ⛔ START HERE (run this first)
 
 ```bash
 cd /Users/jdfalk/repos/github.com/jdfalk/audiobook-organizer
@@ -40,8 +40,30 @@ npm ci --prefix web
 - Never edit the primary checkout.
 - Commit work in progress every 15 minutes, and push it to your own branch
   (step 9 gives the push form).
+- Next, run the "already done if" check in `## Idempotency / Rollback` below.
+  If it says the work exists, stop and report instead of redoing it.
+
+## Idempotency / Rollback
+
+Already done if both of these hold (run from the worktree root):
+
+```bash
+test -f internal/database/census.go && echo "census file present"
+grep -c GetDBCensus internal/server/handlers/diagnostics.go   # prints 1 or more when done
+```
+
+Both present: stop and report "already done". Only one present: a previous
+attempt stopped half way; finish the missing step instead of starting over.
+
+Rollback: before the first push, remove the worktree and branch, or
+`git reset --hard origin/main` inside it. After the PR merges, `git revert`
+is enough: the task adds new files and one route line, changes no stored data
+and no existing response.
 
 ## 3. Read before editing
+
+Line numbers in this section come from `origin/main` at `373ba19d2`. Section 4
+re-greps each one; where a number differs, the grep result wins.
 
 - Pebble v2.1.7 (`P=$(go env GOMODCACHE)/github.com/cockroachdb/pebble/v2@v2.1.7`):
   - `$P/db.go:2228-2420`: `SSTables`, its options, `SSTableInfo`.
@@ -96,7 +118,7 @@ npm ci --prefix web
 10. `grep -n 'MergedIntoBookID \*string' internal/database/store.go` → `346:`
 11. `grep -n 'memTableBooks *=\|memTableBookFiles *=\|memIdxBookID *=\|memIdxMarkedForDeletion *=' internal/database/memdb_schema.go`
     → `12`, `15`, `30`, `40`.
-12. `grep -n 'func (p \*PebbleStore) mem() \*MemStore' internal/database/pebble_store.go` → `209:`
+12. `grep -n 'func (p \*PebbleStore) mem() \*MemStore' internal/database/pebble_store.go` → `232:`
 13. `grep -n 'AcoustIDFingerprintDurationSec float64\|IntroTranscribedAt \*time.Time' internal/database/store.go`
     → `395` (Book.IntroTranscribedAt), `943` (BookFile fingerprint duration),
     `1036` (BookFile.IntroTranscribedAt).
@@ -105,7 +127,20 @@ npm ci --prefix web
     The `book:` family holds the book rows (`book:<ULID>`, which start with an
     uppercase digit or letter) AND lowercase index sub-families.
 15. `grep -n 'func NewPebbleStoreInMemory\|func (p \*PebbleStore) WaitForWarmup' internal/database/pebble_store.go`
-    → `386`, `234`.
+    → `409`, `257`.
+16. `grep -n 'func (m \*MemStore) ListBookIDs\|func (m \*MemStore) ListSoftDeletedBooks' internal/database/memdb_reads.go`
+    → `855`, `924` (the iteration pattern step 9 copies).
+17. `grep -n 'func (m \*MemStore) requireTablesComplete' internal/database/memdb_integrity.go`
+    → `191:` (the guard step 9 starts with).
+18. `grep -n 'type DiagnosticsHandler struct\|func NewDiagnosticsHandler\|func (h \*DiagnosticsHandler) GetDBHealth' internal/server/handlers/diagnostics.go`
+    → `186`, `203`, `678` (step 12 adds `GetDBCensus` as a new method on
+    `DiagnosticsHandler`; it never edits `GetDBHealth`).
+19. `grep -n 'AcoustIDFingerprintDurationSec > 0' internal/database/signal_coverage.go`
+    → `28` (comment), `189` and `208` (the proxy step 6 says "the same proxy
+    `signal_coverage.go` uses").
+20. `grep -n 'memIdxBookID,' internal/database/memdb_schema.go | head -3`
+    → first hit `278:` (the `book_files` table's `book_id` index; section 3
+    cites `:270-280`; the later hits at `349` and `373` are other tables).
 
 ## 5. Steps
 
@@ -129,10 +164,16 @@ npm ci --prefix web
    - every gap between top-level families becomes a range with
      `Family: "(unregistered)"`, including `[nil, firstPrefix)` and
      `[endOfLast, nil)`.
-5. Seed list. Verify EACH prefix is a real key prefix before keeping it: run
-   `grep -rn '"<prefix>' --include='*.go' internal | grep -v _test | head -3`
-   and confirm the hit builds a key, not a log string. Drop the prefixes that
-   are not keys. Add any real prefix you find that is missing.
+5. Seed list. Verify EACH prefix with
+   `grep -rn '"<prefix>' --include='*.go' internal cmd | grep -v _test`.
+   **Keep/drop rule (mechanical):** keep a prefix only if at least one non-test
+   hit builds a key, meaning the string literal sits in `[]byte(`,
+   `fmt.Sprintf(` or a `+` concatenation that is then passed to a Pebble call
+   or returned as a key. Drop it if every non-test hit is in a `slog` call, a
+   `fmt.Errorf` or a comment. A prefix with no non-test hit at all is dropped.
+   List every dropped and every added prefix in the report. Add any real
+   prefix you find that is missing (a literal key prefix passed to
+   `NewIter`, `Get`, `Set` or `Delete` that no registered family covers).
    - top level: `act:`, `aijob:`, `aijob_batch:`, `aijob_payload:`,
      `aiscan:`, `abs_sess:`, `apikey:`, `author:`, `author_alias:`,
      `author_tag:`, `author_tag_idx:`, `author_tombstone:`, `book:`,
@@ -157,8 +198,7 @@ npm ci --prefix web
    - children of `book:`: `book:asin:`, `book:author:`, `book:hash:`,
      `book:lower:`, `book:organizedhash:`, `book:originalhash:`,
      `book:path:`, `book:series:`, `book:sig:`, `book:versiongroup:`,
-     `book:work:`. Check `book:c:`, `book:id:` and `book:my:` too; drop them
-     if they are not keys.
+     `book:work:`. Apply the same keep/drop rule to `book:c:`, `book:id:` and `book:my:`.
    - children of `opv2:`: `opv2:def:`, `opv2:op:`, `opv2:q:`, `opv2:act:`,
      `opv2:state:`, `opv2:log:`, `opv2:err:`, `opv2:strike:`, and,
      **pre-registered for TASK-A5**, `opv2:open:` ("timeline index: op not
@@ -346,6 +386,13 @@ npm ci --prefix web
     PebbleStore; GET without params. Assert status 200, a `families` array
     containing `(unregistered)`, and that `history` is absent or null.
   - `TestGetDBCensus_DeepAddsHistory`.
+- Anti-over-suppression: N/A. The census is read-only and rejects or hides
+  nothing; its only "absent" outputs are `Retired`, `Signals` and `History`,
+  set to nil with a note when memdb is not warm or `deep` is off. The normal
+  path is pinned by `TestDBCensus_ExactFamiliesInSeparateTables` (a healthy
+  store reports exact counts for its families) and
+  `TestDBCensus_RetiredFromMemdb` (a warm store reports non-nil `Retired` and
+  `Signals`), both of which fail if the census suppressed its figures.
 
 ## 8. Verify
 
@@ -380,12 +427,12 @@ are what predict prod.
   category `### Added`, one `####` entry. Never use `#` or `##`.
 - Check that `git diff origin/main | grep -nE "ab""k_[A-Za-z0-9]{16,}|172\.16\.[0-9]{1,3}\.[0-9]{1,3}"` prints
   nothing.
-- Commit, for example
-  `feat(diagnostics): key-family registry and db-census endpoint from sstable properties`,
-  ending with:
+- Commit with exactly
+  `feat(diagnostics): key-family registry and db-census endpoint from sstable properties`
+  (`<type>(<scope>): ...` form), ending with:
 
   ```
-  Co-Authored-By: <model name> <noreply@anthropic.com>
+  Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_017MtQ5LP2n3t3bs7AhptkKJ
   ```
 - `sha=$(git rev-parse HEAD); git push origin "${sha}:refs/heads/feat/storage-a2-db-census"`
