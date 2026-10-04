@@ -1,7 +1,7 @@
 // file: internal/server/handlers/diagnostics.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 14e70c44-73ca-456a-bc67-8dc6ba6e5736
-// last-edited: 2026-10-03
+// last-edited: 2026-10-04
 
 // DiagnosticsHandler hosts the diagnostics HTTP endpoints extracted from the
 // server package: ZIP export start/download, AI batch submit + results, applying
@@ -785,11 +785,13 @@ func resolveKeyCounter(s any) keyCounter {
 // GetDBCensus reports the main Pebble store's per-key-family census.
 // GET /api/v1/diagnostics/db-census[?deep=true][&fresh=true]
 //
-// The default census reads sstable metadata only and never iterates the store,
-// so it answers in well under a second on the production store. deep=true adds
-// the book_ver: keys-only pass (history entries per book), which iterates
-// millions of keys and is never the default. fresh=true bypasses the 5-minute
-// cache and refreshes it.
+// Large families are apportioned from sstable metadata; families under 1M
+// entries are counted exactly by a bounded keys-only pass (time-budgeted).
+// No call iterates the whole store. deep=true adds the book_ver: keys-only
+// pass (history entries per book), which iterates millions of keys, has its
+// own time budget and is never the default. fresh=true bypasses the 5-minute
+// cache and refreshes it. The computation is shared by concurrent callers and
+// does not stop when one of them disconnects.
 func (h *DiagnosticsHandler) GetDBCensus(c *gin.Context) {
 	deep := c.Query("deep") == "true"
 	fresh := c.Query("fresh") == "true"
