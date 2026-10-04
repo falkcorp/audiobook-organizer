@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_summary_clamp_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 8b47e0c9-2f13-45da-9e60-c4a1d5382bf7
-// last-edited: 2026-09-08
+// last-edited: 2026-10-04
 
 package database
 

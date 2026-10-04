@@ -1,7 +1,7 @@
 // file: internal/database/test_deadline_selftest_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a3232db7-10d7-425f-865c-cb905b10b5c3
-// last-edited: 2026-09-26
+// last-edited: 2026-10-04
 
 package database
 
@@ -66,6 +66,7 @@ const (
 	deadlineChildWorkerFinished = "DEADLINE-CHILD: worker finished its store writes"
 	deadlineChildWorkerErr      = "DEADLINE-CHILD: worker store write failed"
 	deadlineChildWhat           = "the deadline child's store-writing worker"
+	deadlineChildReturned       = "DEADLINE-CHILD: wait returned after the worker finished"
 )
 
 // TestAwaitOrFatalDeadline_Child is the body run in a child process by
@@ -75,16 +76,25 @@ const (
 // the worker with waitGroupOrFatal. Writes, not reads: reads can be served from
 // the memdb and never touch Pebble, so they would not expose a closed store.
 //
-//   - mode "slow": the worker writes for 1.5s and returns, inside the grace.
-//   - mode "stuck": the worker writes forever; the grace is 500ms.
+//   - mode "slow": floored bound; the worker writes for 1.5s and returns,
+//     inside the grace. The wait must RETURN and the test pass: the bound was
+//     starved by the package deadline and the work finished.
+//   - mode "slow-full": the same worker under a FULL-regime bound (forced to
+//     100ms). A full bound that expires is a deadlock signal, so the test must
+//     still fail once the worker finishes.
+//   - mode "stuck": floored bound; the worker writes forever; the grace is
+//     500ms. The binary must exit.
 func TestAwaitOrFatalDeadline_Child(t *testing.T) {
 	mode := os.Getenv(deadlineChildEnv)
 	if mode == "" {
 		t.Skip("child process body for TestAwaitOrFatalDeadline_TimedOutWaitNeverClosesStoreUnderWorkers")
 	}
-	runFor, grace := 1500*time.Millisecond, time.Minute
-	if mode == "stuck" {
+	runFor, grace, regime := 1500*time.Millisecond, time.Minute, waitFloored
+	switch mode {
+	case "stuck":
 		runFor, grace = 0, 500*time.Millisecond
+	case "slow-full":
+		regime = waitFull
 	}
 
 	s := newReviewTestStore(t)
@@ -96,7 +106,7 @@ func TestAwaitOrFatalDeadline_Child(t *testing.T) {
 	// A floored bound, as in the make-ci failure: the package deadline had all
 	// but run out, so the wait got the 100ms floor.
 	testWaitBudgetOverride = &waitBudget{
-		bound: testWaitMinBound, grace: grace, regime: waitFloored,
+		bound: testWaitMinBound, grace: grace, regime: regime,
 		hasDeadline: true, left: 3 * time.Second,
 	}
 	t.Cleanup(func() { testWaitBudgetOverride = nil })
@@ -117,7 +127,11 @@ func TestAwaitOrFatalDeadline_Child(t *testing.T) {
 	}()
 
 	waitGroupOrFatal(t, &wg, deadlineChildWhat)
-	t.Error("waitGroupOrFatal returned normally although the worker outlived the 100ms bound")
+	if mode != "slow" {
+		t.Error("waitGroupOrFatal returned normally although the worker outlived the 100ms bound")
+		return
+	}
+	fmt.Fprintln(os.Stderr, deadlineChildReturned)
 }
 
 // 🔴 A TIMED-OUT WAIT MUST NEVER LET CLEANUP CLOSE THE STORE UNDER LIVE WORKERS.
@@ -131,19 +145,23 @@ func TestAwaitOrFatalDeadline_TimedOutWaitNeverClosesStoreUnderWorkers(t *testin
 	if os.Getenv(deadlineChildEnv) != "" {
 		t.Skip("running as a deadline child")
 	}
-	for _, mode := range []string{"slow", "stuck"} {
+	for _, mode := range []string{"slow", "slow-full", "stuck"} {
 		t.Run(mode, func(t *testing.T) {
 			t.Parallel()
 			ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
 			defer cancel()
 			cmd := exec.CommandContext(ctx, os.Args[0],
-				"-test.run=^TestAwaitOrFatalDeadline_Child$", "-test.count=1", "-test.timeout=2m")
+				"-test.run=^TestAwaitOrFatalDeadline_Child$", "-test.count=1", "-test.timeout=2m", "-test.v")
 			cmd.Env = append(os.Environ(), deadlineChildEnv+"="+mode)
 			raw, err := cmd.CombinedOutput()
 			out := string(raw)
 
 			var exitErr *exec.ExitError
-			if !errors.As(err, &exitErr) || exitErr.ExitCode() == 0 {
+			if mode == "slow" {
+				if err != nil {
+					t.Fatalf("slow child (deadline-floored bound, work finished in the grace) must pass, got err=%v\n%s", err, out)
+				}
+			} else if !errors.As(err, &exitErr) || exitErr.ExitCode() == 0 {
 				t.Fatalf("child must fail with a non-zero exit, got err=%v\n%s", err, out)
 			}
 			for _, bad := range []string{"pebble: closed", deadlineChildWorkerErr, "panic:", "after Test"} {
@@ -151,39 +169,52 @@ func TestAwaitOrFatalDeadline_TimedOutWaitNeverClosesStoreUnderWorkers(t *testin
 					t.Errorf("child output contains %q: the store was torn down under the live worker\n%s", bad, out)
 				}
 			}
-			for _, want := range []string{
-				"waitGroupOrFatal: still waiting for " + deadlineChildWhat,
-				"PACKAGE -timeout NEARLY EXHAUSTED, not evidence of a deadlock",
-				"--- all goroutines at wait timeout (TestAwaitOrFatalDeadline_Child) ---",
-			} {
-				if !strings.Contains(out, want) {
-					t.Errorf("child output is missing %q\n%s", want, out)
+			mustContain := func(wants ...string) {
+				t.Helper()
+				for _, want := range wants {
+					if !strings.Contains(out, want) {
+						t.Errorf("%s child output is missing %q\n%s", mode, want, out)
+					}
+				}
+			}
+			mustNotContain := func(why string, bads ...string) {
+				t.Helper()
+				for _, bad := range bads {
+					if strings.Contains(out, bad) {
+						t.Errorf("%s child output contains %q: %s\n%s", mode, bad, why, out)
+					}
 				}
 			}
 			switch mode {
 			case "slow":
-				for _, want := range []string{
+				mustContain(
+					"PACKAGE -timeout NEARLY EXHAUSTED, not evidence of a deadlock",
+					"cut by the package deadline",
 					deadlineChildWorkerFinished,
-					"finished", "after the wait bound expired; failing only now",
+					"finished work is not a deadlock, so the wait passes",
+					deadlineChildReturned,
+					"--- PASS: TestAwaitOrFatalDeadline_Child",
+				)
+				mustNotContain("finished work under a deadline-shortened bound must pass",
+					"EXITING THE TEST BINARY", "--- FAIL", "returned normally", "--- all goroutines")
+			case "slow-full":
+				mustContain(
+					"waitGroupOrFatal: still waiting for "+deadlineChildWhat,
+					"which is a deadlock or a lost signal, not slowness",
+					"--- all goroutines at wait timeout (TestAwaitOrFatalDeadline_Child) ---",
+					deadlineChildWorkerFinished,
+					"after the wait bound expired; failing only now",
 					"--- FAIL: TestAwaitOrFatalDeadline_Child",
-				} {
-					if !strings.Contains(out, want) {
-						t.Errorf("slow child output is missing %q\n%s", want, out)
-					}
-				}
-				if strings.Contains(out, "EXITING THE TEST BINARY") {
-					t.Errorf("slow child's worker finished inside the grace; it must not have exited the binary\n%s", out)
-				}
-				if strings.Contains(out, "returned normally") {
-					t.Errorf("waitGroupOrFatal returned instead of failing the test\n%s", out)
-				}
+				)
+				mustNotContain("a full-bound timeout must still fail, by FailNow, after the worker exits",
+					"EXITING THE TEST BINARY", "returned normally", deadlineChildReturned)
 			case "stuck":
-				if !strings.Contains(out, "EXITING THE TEST BINARY") {
-					t.Errorf("stuck child must exit the binary after the grace, with the reason\n%s", out)
-				}
-				if strings.Contains(out, deadlineChildWorkerFinished) {
-					t.Errorf("stuck child's worker cannot have finished\n%s", out)
-				}
+				mustContain(
+					"PACKAGE -timeout NEARLY EXHAUSTED, not evidence of a deadlock",
+					"--- all goroutines at grace expiry (TestAwaitOrFatalDeadline_Child) ---",
+					"EXITING THE TEST BINARY",
+				)
+				mustNotContain("the stuck worker never finishes", deadlineChildWorkerFinished, deadlineChildReturned)
 			}
 		})
 	}

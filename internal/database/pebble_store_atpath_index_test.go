@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_atpath_index_test.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 9e4b2d7a-1c86-4f35-8a0e-5b3c7d9f1e62
-// last-edited: 2026-10-03
+// last-edited: 2026-10-04
 
 package database
 
@@ -847,5 +847,48 @@ func TestVerifyBookAtPathIndex_ClassifiesEveryDefect(t *testing.T) {
 	}
 	if len(rep.SampleMissingLive) != 1 || rep.SampleMissingLive[0] != live.ID+" /live" {
 		t.Fatalf("missing-live sample = %v", rep.SampleMissingLive)
+	}
+}
+
+// TestBackfill_CancelUnblocksTheProducer covers the producer's cancel branch.
+// With one worker and a one-row chunk, the producer fills the rows channel
+// (workers*64) long before the worker's first commit. Cancelling on that commit
+// makes the worker return, and the producer, parked on a full channel, must
+// take its gctx.Done branch and return too; otherwise g.Wait never returns and
+// the backfill hangs. The wait is bounded so a regression fails instead of
+// hanging the package.
+func TestBackfill_CancelUnblocksTheProducer(t *testing.T) {
+	s := newAtPathStore(t)
+	defer s.Close()
+	const rows = 200 // > workers*64 with one worker, so the producer must block
+	for i := range rows {
+		if _, err := s.CreateBook(&Book{Title: "x", FilePath: fmt.Sprintf("/p/%d", i)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resetAtPathIndex(t, s)
+
+	oldChunk, oldWorkers, oldHook := bookAtPathBackfillChunk, bookAtPathBackfillWorkers, bookAtPathBackfillAfterChunk
+	t.Cleanup(func() {
+		bookAtPathBackfillChunk, bookAtPathBackfillWorkers, bookAtPathBackfillAfterChunk = oldChunk, oldWorkers, oldHook
+	})
+	bookAtPathBackfillChunk, bookAtPathBackfillWorkers = 1, 1
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	bookAtPathBackfillAfterChunk = func(commits int) {
+		if commits == 1 {
+			cancel()
+		}
+	}
+
+	var err error
+	waitOrFatal(t, "BackfillBookAtPathIndex to return after a cancel with the producer blocked", func() {
+		_, err = s.BackfillBookAtPathIndex(ctx)
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if built, berr := s.bookAtPathIndexBuilt(); berr != nil || built {
+		t.Fatalf("a cancelled run must not set the sentinel: built=%v err=%v", built, berr)
 	}
 }
