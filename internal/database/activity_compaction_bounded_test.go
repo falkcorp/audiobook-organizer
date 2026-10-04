@@ -1,7 +1,7 @@
 // file: internal/database/activity_compaction_bounded_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 5b7e0a34-16cf-4d29-8e71-c30a9d4f2b16
-// last-edited: 2026-09-13
+// last-edited: 2026-10-03
 
 package database
 
@@ -17,11 +17,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// recordDayEntries writes n change-tier entries spread across one UTC day.
-func recordDayEntries(t *testing.T, rec func(ActivityEntry) (int64, error), day time.Time, n int) {
-	t.Helper()
-	for i := range n {
-		_, err := rec(ActivityEntry{
+// dayEntries builds n change-tier entries one second apart from day.
+func dayEntries(day time.Time, n int) []ActivityEntry {
+	entries := make([]ActivityEntry, n)
+	for i := range entries {
+		entries[i] = ActivityEntry{
 			Tier:      "change",
 			Type:      "metadata_applied",
 			Level:     "info",
@@ -29,9 +29,56 @@ func recordDayEntries(t *testing.T, rec func(ActivityEntry) (int64, error), day 
 			BookID:    "book-1",
 			Summary:   "applied metadata",
 			Timestamp: day.Add(time.Duration(i) * time.Second),
-		})
+		}
+	}
+	return entries
+}
+
+// recordDayEntries writes n change-tier entries spread across one UTC day, one
+// Record call per entry.
+func recordDayEntries(t *testing.T, rec func(ActivityEntry) (int64, error), day time.Time, n int) {
+	t.Helper()
+	for _, e := range dayEntries(day, n) {
+		_, err := rec(e)
 		require.NoError(t, err)
 	}
+}
+
+// sqlActTestChunk is the chunk size shrinkSQLActChunksForTest installs. It stays
+// above maxDigestItems so a chunk can still fill the digest's sample on its
+// own, as production's 5,000 does; a smaller chunk would send digest sampling
+// through a merge pattern production never sees.
+const sqlActTestChunk = 1000
+
+// shrinkSQLActChunksForTest sets sqlActDeleteChunk and sqlActSampleWindow to
+// sqlActTestChunk for the calling test and restores both in Cleanup. A
+// multi-chunk test asserts behaviour at chunk boundaries, which does not depend
+// on the chunk being 5,000 rows; at 5,000 the fixtures were 10-15k rows and
+// under -race the tests spent their time inserting them. Call it first, before
+// any fixture size is computed from either value.
+func shrinkSQLActChunksForTest(t *testing.T) {
+	t.Helper()
+	if sqlActTestChunk <= maxDigestItems {
+		t.Fatalf("sqlActTestChunk %d must exceed maxDigestItems %d", sqlActTestChunk, maxDigestItems)
+	}
+	oldChunk, oldWindow := sqlActDeleteChunk, sqlActSampleWindow
+	sqlActDeleteChunk, sqlActSampleWindow = sqlActTestChunk, sqlActTestChunk
+	t.Cleanup(func() { sqlActDeleteChunk, sqlActSampleWindow = oldChunk, oldWindow })
+}
+
+// recordDayEntriesSQL writes the same rows as recordDayEntries into a SQL store
+// in ONE RecordBatch transaction. RecordBatch runs the same clamp, content key
+// and INSERT ... ON CONFLICT DO NOTHING as Record; only the commit count
+// differs. These tests are about compaction, not the write path, and a
+// separate commit per row made seeding 5,001 rows take 20x as long as the
+// compaction it set up (34 s vs 1.6 s under -race on 2026-10-03). The write
+// path's per-commit behaviour is pinned by the checkpointer tests, which still
+// call Record row by row.
+func recordDayEntriesSQL(t *testing.T, s *SQLActivityStore, day time.Time, n int) {
+	t.Helper()
+	got, err := s.RecordBatch(dayEntries(day, n))
+	require.NoError(t, err)
+	require.Equal(t, n, got, "every seeded row must be inserted, none deduplicated away")
 }
 
 // countRows returns how many non-digest rows remain in the SQL store.
@@ -60,10 +107,11 @@ func countDigestRows(t *testing.T, s *SQLActivityStore) int {
 // off-by-one that stopped after the first chunk (n < chunk breaks the loop) would
 // leave exactly 1 row behind and pass any assertion looser than "zero remain".
 func TestSQLCompactByDay_DeletesMoreThanOneChunk(t *testing.T) {
+	shrinkSQLActChunksForTest(t)
 	s := newTestSQLStore(t)
 	day := time.Date(2025, 6, 10, 0, 0, 0, 0, time.UTC)
 	total := sqlActDeleteChunk + 1
-	recordDayEntries(t, s.Record, day, total)
+	recordDayEntriesSQL(t, s, day, total)
 
 	require.Equal(t, total, countNonDigestRows(t, s))
 
@@ -98,10 +146,11 @@ func TestSQLCompactByDay_DeletesMoreThanOneChunk(t *testing.T) {
 // is the true post-kill state — 1 row remaining, a digest describing the 5,000
 // that are gone.
 func TestSQLCompactByDay_InterruptedDeleteDoesNotDoubleCount(t *testing.T) {
+	shrinkSQLActChunksForTest(t)
 	s := newTestSQLStore(t)
 	day := time.Date(2025, 6, 10, 0, 0, 0, 0, time.UTC)
 	total := sqlActDeleteChunk + 1
-	recordDayEntries(t, s.Record, day, total)
+	recordDayEntriesSQL(t, s, day, total)
 
 	lo := day.UnixNano()
 	hi := day.Add(24 * time.Hour).UnixNano()
@@ -138,13 +187,13 @@ func TestSQLCompactByDay_InterruptedDeleteDoesNotDoubleCount(t *testing.T) {
 func TestSQLCompactByDay_LateArrivalsStillMerge(t *testing.T) {
 	s := newTestSQLStore(t)
 	day := time.Date(2025, 6, 10, 0, 0, 0, 0, time.UTC)
-	recordDayEntries(t, s.Record, day, 40)
+	recordDayEntriesSQL(t, s, day, 40)
 
 	_, err := s.CompactByDay(context.Background(), day.Add(24*time.Hour))
 	require.NoError(t, err)
 	require.Equal(t, 40, digestOriginalCount(t, s))
 
-	recordDayEntries(t, s.Record, day, 15)
+	recordDayEntriesSQL(t, s, day, 15)
 	_, err = s.CompactByDay(context.Background(), day.Add(24*time.Hour))
 	require.NoError(t, err)
 
@@ -177,7 +226,7 @@ func digestOriginalCount(t *testing.T, s *SQLActivityStore) int {
 func TestSQLOptimizeStatistics_BootstrapsThenIncremental(t *testing.T) {
 	s := newTestSQLStore(t)
 	day := time.Date(2025, 6, 10, 0, 0, 0, 0, time.UTC)
-	recordDayEntries(t, s.Record, day, 200)
+	recordDayEntriesSQL(t, s, day, 200)
 
 	// Precondition: a fresh database has no statistics, which is the production
 	// state this method exists for.

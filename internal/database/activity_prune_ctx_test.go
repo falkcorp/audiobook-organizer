@@ -1,7 +1,7 @@
 // file: internal/database/activity_prune_ctx_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 91ca4695-f1b7-4b53-8d7e-8e460d059f2e
-// last-edited: 2026-09-11
+// last-edited: 2026-10-03
 
 package database
 
@@ -112,8 +112,9 @@ func TestPebbleActivityStore_PruneStopsOnCancel(t *testing.T) {
 // TestSQLActivityStore_PruneStopsOnCancel: three sqlActDeleteChunk chunks (the
 // last one partial); the hook cancels after the first commit.
 func TestSQLActivityStore_PruneStopsOnCancel(t *testing.T) {
+	shrinkSQLActChunksForTest(t)
 	s := newTestSQLStore(t)
-	const rows = 2*sqlActDeleteChunk + 1
+	rows := 2*sqlActDeleteChunk + 1
 	seedPruneRows(t, s, "debug", rows)
 
 	ctx, cancel := context.WithCancel(context.Background())

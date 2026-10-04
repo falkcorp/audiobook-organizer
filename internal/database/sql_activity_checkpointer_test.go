@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_checkpointer_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 8d3f6a1e-2b7c-4e90-9f15-6a4c0b8e7d23
-// last-edited: 2026-09-19
+// last-edited: 2026-10-03
 
 // Tests for the SQLActivityStore's WAL checkpointing (sql_activity_checkpointer.go):
 // foreground writes never checkpoint, the background checkpointer does, the
@@ -143,6 +143,7 @@ func TestSQLActivityStore_BackgroundCheckpointerRunsAndTruncatesWhenIdle(t *test
 // (~950 chunks) accumulate in the WAL, and a deploy that interrupted it left
 // the multi-GB WAL the next boot had to copy.
 func TestSQLCompactByDay_CheckpointsBetweenChunks(t *testing.T) {
+	shrinkSQLActChunksForTest(t)
 	s, _ := openCkptTestStore(t, time.Hour)
 	day := time.Date(2025, 6, 10, 0, 0, 0, 0, time.UTC)
 
@@ -176,7 +177,7 @@ func TestSQLCompactByDay_CheckpointsBetweenChunks(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	// 3 chunks (5000 + 5000 + 1) each checkpoint, plus the end-of-day pass.
+	// 3 chunks (chunk + chunk + 1) each checkpoint, plus the end-of-day pass.
 	assert.GreaterOrEqual(t, passiveAfterChunk, 4,
 		"compaction must checkpoint after every committed chunk, not only at the end of the day")
 }
