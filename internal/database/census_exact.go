@@ -288,7 +288,7 @@ func (f *exactHistoryFold) finish(m *MemStore) *HistoryCensus {
 // format, so progress saved under a different one is not resumed.
 func censusRegistryFingerprint() string {
 	h := sha256.New()
-	fmt.Fprintf(h, "format:%d\x00", censusExactFormatVersion)
+	h.Write([]byte("format:" + strconv.Itoa(censusExactFormatVersion) + "\x00")) // hash.Hash.Write never returns an error
 	for _, f := range KeyFamilies() {
 		h.Write([]byte(f.Prefix))
 		h.Write([]byte{0})
