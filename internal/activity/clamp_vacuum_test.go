@@ -1,5 +1,5 @@
 // file: internal/activity/clamp_vacuum_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 6a3e1c7d-90b4-4f28-8d51-2b7c40e9af63
 // last-edited: 2026-10-04
 
@@ -28,18 +28,22 @@ import (
 // reach the code that would have released the space. Restarting does not help
 // either: SQLite deletes the -wal only on a clean last-connection close.
 //
-// The background checkpointer runs every millisecond here on purpose. This test
-// used to flake under load ("WAL 11.19 MB before, 11.57 MB after"): when the run
-// took long enough for the 30 s checkpointer to tick during the vacuum, the
-// vacuum's TRUNCATE came back busy, VacuumActivity discarded the busy result,
-// and the WAL kept the rebuilt database VACUUM had just written through it.
-// Forcing the collision on every run makes that path deterministic, and the
-// assertion is that the WAL is actually EMPTY afterwards, which only a
-// TRUNCATE that ran can produce.
+// The background checkpointer is held off (1 h interval) so the fixture is
+// deterministic. This test used to flake under load ("WAL 11.19 MB before,
+// 11.57 MB after"): when the run took long enough for the 30 s checkpointer to
+// tick during the vacuum, the vacuum's TRUNCATE came back busy and
+// VacuumActivity discarded the busy result. That collision is now impossible
+// (the vacuum's checkpoints share the checkpointer's single connection) and is
+// pinned in internal/database by
+// TestVacuumActivity_TruncatesTheWALWhileTheCheckpointerRuns. A fast checkpointer
+// here would instead reset the WAL on its own idle ticks: the WAL could be empty
+// before the vacuum (nothing to prove) or after it whether the vacuum ran or
+// not. With it held off, nothing but the vacuum can empty the WAL, so an EMPTY
+// WAL afterwards proves the explicit request was honoured.
 func TestClampSummaries_VacuumRunsEvenWhenNothingWasClamped(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "activity.sqlite")
-	store, err := database.OpenSQLiteActivityStoreWithCheckpointIntervalForTest(path, time.Millisecond)
+	store, err := database.OpenSQLiteActivityStoreWithCheckpointIntervalForTest(path, time.Hour)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -65,7 +69,9 @@ func TestClampSummaries_VacuumRunsEvenWhenNothingWasClamped(t *testing.T) {
 	walPath := path + "-wal"
 	before, err := os.Stat(walPath)
 	if err != nil || before.Size() == 0 {
-		t.Skipf("no WAL to reclaim at %s (%v); nothing to assert", walPath, err)
+		// Every connection runs with wal_autocheckpoint(0) and the background
+		// checkpointer is held off, so 400 writes always leave a WAL.
+		t.Fatalf("fixture: no WAL to reclaim at %s (%v)", walPath, err)
 	}
 
 	res, err := svc.ClampSummaries(context.Background(), 0, false, true)

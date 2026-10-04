@@ -1,5 +1,5 @@
 // file: internal/server/handlers/activity.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: d4e5f6a7-b8c9-0123-def0-234567890123
 // last-edited: 2026-10-04
 
@@ -22,6 +22,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/gin-gonic/gin"
 	"golang.org/x/sync/errgroup"
@@ -670,6 +671,12 @@ func operationLogTags(opID, level, opType string, attrs map[string]any) []string
 	return entry.Tags
 }
 
+// clampVacuumFailedMessage is the fixed vacuum_error text for a committed clamp
+// whose vacuum or WAL reset failed. The underlying error is logged, never sent:
+// it can carry file paths, as the 500 path's errors can.
+const clampVacuumFailedMessage = "the clamp committed, but the vacuum or WAL reset that returns the freed space to disk failed; " +
+	"the space is still held and the next idle checkpoint or vacuum can release it (details in the server log)"
+
 // ClampActivitySummaries handles POST /api/v1/activity/clamp-summaries.
 //
 // Retroactively applies the write-path summary cap to rows written before that
@@ -710,6 +717,10 @@ func (h *ActivityHandler) ClampActivitySummaries(c *gin.Context) {
 	var vacuumErr error
 	if errors.Is(err, activity.ErrClampVacuumFailed) {
 		vacuumErr, err = err, nil
+		// The detail goes to the log only, sanitized, like the 500 path's
+		// InternalError; the response carries a fixed message.
+		slog.Warn("[activity] summary clamp committed but the vacuum or WAL reset failed; space still held",
+			"scanned", res.Scanned, "clamped", res.Clamped, "error", logging.SanitizeErr(vacuumErr))
 	}
 	if err != nil {
 		httputil.InternalError(c, "activity summary clamp failed", err)
@@ -727,7 +738,7 @@ func (h *ActivityHandler) ClampActivitySummaries(c *gin.Context) {
 		"space_still_held": vacuumErr != nil,
 	}
 	if vacuumErr != nil {
-		body["vacuum_error"] = vacuumErr.Error()
+		body["vacuum_error"] = clampVacuumFailedMessage
 	}
 	httputil.RespondWithOK(c, body)
 }

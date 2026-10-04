@@ -12,26 +12,29 @@ vacuum reported success with the WAL untouched.
 
 The truncate now goes through `walCheckpoint` on the checkpoint connection,
 which reads the row and queues behind the background loop. Each attempt runs a
-PASSIVE checkpoint first, which copies the frames without blocking writers, and
-then the TRUNCATE, which only has to reset an already-copied WAL. Running
-TRUNCATE alone would hold the WAL write lock for the whole copy of the rebuilt
-database, and foreground activity writes would fail with `SQLITE_BUSY` after
-their 10 s busy timeout. A busy TRUNCATE is retried up to 8 times with backoff.
-The worst case is about 9 s, because each attempt can wait up to 1 s in
-SQLite's busy handler. If the truncate is still busy after that,
-`VacuumActivity` returns its existing "space still held" error, and the
-background checkpointer resets the WAL on its next idle tick.
+PASSIVE checkpoint, which copies frames without blocking writers, and issues
+the TRUNCATE only when that PASSIVE copied everything. The TRUNCATE then just
+resets the file. This is the same gate the background loop uses. Without the
+gate, a TRUNCATE holds the WAL write lock while it copies the rebuilt database
+or waits for a reader, and foreground activity writes fail with `SQLITE_BUSY`
+after their 10 s busy timeout. Attempts are retried up to 8 times with backoff.
+The worst case is about 9 s if every TRUNCATE has to wait its 1 s for readers.
+When a reader pins the WAL, no TRUNCATE is issued and the vacuum gives up after
+about 1 s of backoff. In either case `VacuumActivity` returns its existing
+"space still held" error, and the background checkpointer resets the WAL on its
+next idle tick once the reader is gone.
 
 `POST /api/v1/activity/clamp-summaries` no longer answers 500 when the clamp
 committed but the vacuum or WAL reset failed. It returns 200 with the clamp
-counts, `space_still_held: true` and `vacuum_error`. Prod currently runs the
-Pebble activity backend (`ACTIVITY_BACKEND=pebble`), so none of this has run
-there yet.
+counts, `space_still_held: true` and a fixed `vacuum_error` message. The
+underlying error is logged as a warning and is not sent to the client. Prod
+currently runs the Pebble activity backend (`ACTIVITY_BACKEND=pebble`), so
+none of this has run there yet.
 
 The flaky `internal/activity` test
 `TestClampSummaries_VacuumRunsEvenWhenNothingWasClamped` ("WAL 11.19 MB before,
-11.57 MB after") had the same cause. It now forces the collision with a 1 ms
-checkpointer interval and requires an empty WAL.
+11.57 MB after") had the same cause. It now holds the background checkpointer
+off, never skips, and requires an empty WAL after the vacuum.
 
 #### Test harness: a wait cut short by the package deadline no longer fails finished work
 
