@@ -43,3 +43,16 @@
   a crash right after a change cannot strand the row. That log is now read in
   one pass per resume instead of once per book (measured: 0.4 s instead of
   about 99 s for a 346-file set with 300 books already retired).
+- **A cut-off repair whose job was cleared from the job list still resumes.**
+  Each job-log entry a Repairs fixer writes now names the fixer itself.
+  Clearing a failed or interrupted job deletes the job but keeps its log, so
+  the repair used to stop recognising its own earlier work. A fresh plan
+  could then split one work into two live books. An entry from another
+  fixer is never counted as this repair's, even if its job claims otherwise.
+  Old entries without the name are still judged by their job; if that job is
+  gone, the row is planned again.
+- **A resume accepts a raised primary flag only when this repair raised it.**
+  The flag must be on the member that the repair's own hand-off note names,
+  or the hand-off must still be owed (its crown written, its note cut off).
+  A lowered flag counts only when the repair lowered it after the plan was
+  made. A plan stored without its flags or plan time is planned again.
