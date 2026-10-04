@@ -1,7 +1,7 @@
 // file: internal/server/apply_when_scanned_op.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 4c1f7e2a-9b3d-4e85-a6f0-2d8c5b71e934
-// last-edited: 2026-09-30
+// last-edited: 2026-10-04
 
 package server
 
@@ -250,6 +250,8 @@ func (s *Server) loadOpResultApplyInputs(ctx context.Context, opID string) (map[
 func (s *Server) applyOpResultBooks(ctx context.Context, opID string, bookIDs []string, byBook map[string]database.OperationResult, claims *applygate.ClaimIndex) []opResultApplyOutcome {
 	outcomes := make([]opResultApplyOutcome, len(bookIDs))
 	busy := make([]bool, len(bookIDs))
+	// One import-path read shared by every book of this call.
+	books := withCachedImportPaths(s.store)
 
 	pass := func(waitCtx context.Context, only []bool) {
 		g, gctx := errgroup.WithContext(ctx)
@@ -280,7 +282,7 @@ func (s *Server) applyOpResultBooks(ctx context.Context, opID string, bookIDs []
 					hold = h
 				}
 				defer hold.Release()
-				outcomes[i] = s.applyOpResultCandidateLocked(opID, bookID, byBook, claims)
+				outcomes[i] = s.applyOpResultCandidateLocked(books, opID, bookID, byBook, claims)
 				return nil
 			})
 		}
@@ -338,7 +340,7 @@ func (s *Server) runQueuedOpResultCandidate(ctx context.Context, q metadatahandl
 	if err != nil {
 		return err
 	}
-	o := s.applyOpResultCandidateLocked(q.OperationID, q.BookID, byBook, claims)
+	o := s.applyOpResultCandidateLocked(s.store, q.OperationID, q.BookID, byBook, claims)
 	switch {
 	case o.blocked:
 		return fmt.Errorf("not applied: %s", o.blockMsg)
@@ -352,7 +354,7 @@ func (s *Server) runQueuedOpResultCandidate(ctx context.Context, q metadatahandl
 // holds the book's scan lock; the file work is submitted before this returns,
 // so the pool's pending mark is in place before the lock is released and the
 // scanner cannot read the old tags in between.
-func (s *Server) applyOpResultCandidateLocked(opID, bookID string, byBook map[string]database.OperationResult, claims *applygate.ClaimIndex) opResultApplyOutcome {
+func (s *Server) applyOpResultCandidateLocked(books bookReader, opID, bookID string, byBook map[string]database.OperationResult, claims *applygate.ClaimIndex) opResultApplyOutcome {
 	mfs := s.metadataFetchService
 	opResult, ok := byBook[bookID]
 	if !ok {
@@ -369,7 +371,7 @@ func (s *Server) applyOpResultCandidateLocked(opID, bookID string, byBook map[st
 	// Certainty gate: score floor, fetch-time identity, and the
 	// sequence-number guard. The "matched" status above is only "the
 	// top non-rejected candidate", with no floor behind it.
-	plan := planOpResultApply(s.store, bookID, cr, claims)
+	plan := planOpResultApply(books, bookID, cr, claims)
 	if plan.Reason == applySkipMarkedNoMatch {
 		// Marked "no match" since the fetch: nothing to apply.
 		return opResultApplyOutcome{skipped: true}

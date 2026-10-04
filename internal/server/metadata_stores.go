@@ -1,5 +1,5 @@
 // file: internal/server/metadata_stores.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: b8e04c27-5a91-4f36-9d18-2c73e5a081f4
 // last-edited: 2026-10-04
 
@@ -76,13 +76,38 @@ type candidateFetchStore interface {
 	GetBookByID(id string) (*database.Book, error)
 }
 
-// newFolderMemo returns a metabatch.FolderMemo for one pass over many books
-// (a candidate fetch op, a bulk fetch): each folder is listed once, and the
-// import roots are read once per minute from the store the resolver is
-// handed (metabatch.ImportPathReader), so the apply paths reach the same
-// verdict.
-func (s *Server) newFolderMemo() *metabatch.FolderMemo {
-	return metabatch.NewFolderMemo()
+// newFolderMemo returns a metabatch.FolderMemo for one pass over store (a
+// candidate fetch op, a bulk fetch): each folder is listed once, and the
+// import roots are read at most once per minute, both from store alone.
+func (s *Server) newFolderMemo(store metabatch.FolderMemoStore) *metabatch.FolderMemo {
+	return metabatch.NewFolderMemo(store)
+}
+
+// importRootsCachedBooks is a bookReader whose GetAllImportPaths is served by
+// one metabatch.ImportRootsCache: every resolver call made through it during
+// one apply call shares one import-path read, instead of each book reading
+// the list up to three times (the gate guard, the transcribed-search check,
+// the op-result check). Folder listings still go to the store per call: an
+// apply moves files, so they are not cached across books.
+type importRootsCachedBooks struct {
+	bookReader
+	roots *metabatch.ImportRootsCache
+}
+
+func (b *importRootsCachedBooks) GetAllImportPaths() ([]database.ImportPath, error) {
+	return b.roots.GetAllImportPaths()
+}
+
+// withCachedImportPaths puts one import-root cache in front of books for the
+// length of an apply call. Wrapping an already-wrapped reader is a no-op.
+func withCachedImportPaths(books bookReader) bookReader {
+	if books == nil {
+		return nil
+	}
+	if _, ok := books.(*importRootsCachedBooks); ok {
+		return books
+	}
+	return &importRootsCachedBooks{bookReader: books, roots: metabatch.NewImportRootsCache(books)}
 }
 
 // metadataResultsReader is the cache-refresh path: it only reads op history.

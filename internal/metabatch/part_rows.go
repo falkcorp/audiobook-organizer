@@ -1,5 +1,5 @@
 // file: internal/metabatch/part_rows.go
-// version: 1.6.2
+// version: 1.7.0
 // guid: 0e87a518-a04c-44d3-8d4d-3539bfc91b85
 // last-edited: 2026-10-04
 //
@@ -130,12 +130,19 @@ type FolderMemo struct {
 	dirs     map[memoKey]folderListing
 	inflight singleflight.Group
 
-	// rootsMu guards the import-root set (importRoots). Held across the load
-	// on purpose, so concurrent first callers wait for it instead of reading
-	// an empty set.
-	rootsMu sync.Mutex
-	roots   map[string]bool
-	rootsAt time.Time
+	// store is the one store this memo serves: every folder listing and the
+	// import-root set come from it, whatever reader a resolver call carries,
+	// so one pass can never mix two stores' rows or roots.
+	store FolderMemoStore
+	// roots is the store's import-root set, shared by every row of the pass.
+	roots *ImportRootsCache
+}
+
+// FolderMemoStore is what a FolderMemo reads: the rows under a folder and the
+// import paths.
+type FolderMemoStore interface {
+	database.BookDirLister
+	ImportPathReader
 }
 
 // memoKey keys one listing: a folder's direct children, or (wrapped) the
@@ -151,9 +158,10 @@ type folderListing struct {
 	err  error
 }
 
-// NewFolderMemo returns an empty memo for one pass.
-func NewFolderMemo() *FolderMemo {
-	return &FolderMemo{dirs: map[memoKey]folderListing{}}
+// NewFolderMemo returns an empty memo for one pass over store. The memo is
+// bound to store: its listings and import roots are read from it alone.
+func NewFolderMemo(store FolderMemoStore) *FolderMemo {
+	return &FolderMemo{dirs: map[memoKey]folderListing{}, store: store, roots: NewImportRootsCache(store)}
 }
 
 // listDirectChildren is l's listing of dir (recursive) cut down to the rows
@@ -287,74 +295,6 @@ func isWrappedFile(dir, p string) bool {
 	}
 	base := strings.TrimSpace(strings.TrimSuffix(filepath.Base(p), filepath.Ext(p)))
 	return folder == normTitle(base) || folder == normTitle(countedFileName(base))
-}
-
-// importRootsTTL bounds how stale a FolderMemo's import-root list may get
-// over a long pass (a fetch op can run for hours): the list is re-read at
-// most once per window.
-const importRootsTTL = time.Minute
-
-// ImportPathReader is the one read the resolver needs for import roots: a
-// folder that is a registered import path is never listed for sibling rows,
-// on every path -- fetch, stale scan, apply and gate alike -- because its
-// other rows are other books and listing it would read a whole import tree.
-//
-// The roots come from the SAME store the caller hands the resolver, never
-// from a process-wide registration. Until 2026-10-04 they came from a
-// package global the server set in NewServer (SetImportRootsSource); the
-// global outlived the store it closed over, so a later caller resolved
-// through a closed Pebble store and panicked "pebble: closed" (the
-// TestApplyCachedCandidate_GateRefuses flake). Reading from the caller's own
-// store makes that impossible by construction, and two stores in one
-// process can no longer see each other's roots.
-type ImportPathReader interface {
-	GetAllImportPaths() ([]database.ImportPath, error)
-}
-
-// importRootLog rate-limits the Warn for an unreadable import-path list.
-var importRootLog warnLimiter
-
-// readImportRoots loads the cleaned import-path set from r. ok is false when
-// the read failed; the failure is logged here at Warn (rate-limited), and the
-// caller keeps its previous list rather than replacing it with nothing.
-func readImportRoots(r ImportPathReader) (roots map[string]bool, ok bool) {
-	if r == nil {
-		return nil, true
-	}
-	paths, err := r.GetAllImportPaths()
-	if err != nil {
-		importRootLog.warn("import paths unreadable; keeping the previous root list (none on a first read): err=%s suppressed_since_last=%d",
-			logger.SanitizeLogValue(err.Error()))
-		return nil, false
-	}
-	out := make(map[string]bool, len(paths))
-	for _, p := range paths {
-		if c := strings.TrimSpace(p.Path); c != "" {
-			out[filepath.Clean(c)] = true
-		}
-	}
-	return out, true
-}
-
-// importRoots returns the memo's import-root set, read from r at most once
-// per importRootsTTL. Concurrent callers wait on the one in-flight load
-// rather than reading a still-empty list -- the candidate op starts 16-32
-// workers at once, and a worker answering "not a root" during the first
-// load would list a whole import root. A failed read keeps the previous list
-// (none, on a first read) and is retried after one TTL window, not by every
-// row: the read runs under the lock, so retrying a failing store per row
-// would serialize every worker of the pass behind it.
-func (m *FolderMemo) importRoots(r ImportPathReader) map[string]bool {
-	m.rootsMu.Lock()
-	defer m.rootsMu.Unlock()
-	if !m.rootsAt.IsZero() && time.Since(m.rootsAt) < importRootsTTL {
-		return m.roots
-	}
-	m.rootsAt = time.Now() // this window's read, success or failure
-	if fresh, ok := readImportRoots(r); ok {
-		m.roots = fresh
-	}
-	return m.roots
 }
 
 // warnLimiter logs a Warn at most once a minute and counts the rest; the
@@ -619,19 +559,30 @@ func (j *titleJudge) isRootDir(dir string) bool {
 	return j.importRoots()[dir]
 }
 
-// importRoots is the import-root set for this row: the memo's shared,
-// TTL-bounded set when there is a memo, else one read of j.files, made only
-// when a row actually reaches a root check and kept for the rest of this
-// judge.
+// lister is where this row's folder listings come from: the memo's bound
+// store when there is a memo (one pass never mixes two stores' rows), else
+// the reader the call carries.
+func (j *titleJudge) lister() database.BookDirLister {
+	if j.memo != nil && j.memo.store != nil {
+		return j.memo.store
+	}
+	return j.files
+}
+
+// importRoots is the import-root set for this row: the memo's shared set
+// when there is a memo, else one read of j.files, made only when a row
+// actually reaches a root check and kept for the rest of this judge. A caller
+// resolving many rows without a memo (an apply call) puts an
+// ImportRootsCache in front of its store so those reads are shared.
 func (j *titleJudge) importRoots() map[string]bool {
 	if j.memo != nil {
-		return j.memo.importRoots(j.files)
+		return j.memo.roots.set()
 	}
 	if !j.rootsLoaded {
 		j.rootsLoaded = true
 		// A failed read is logged inside; the row is then judged with no
-		// import roots, as a first-read failure on the memo path is.
-		if roots, ok := readImportRoots(j.files); ok {
+		// import roots, as a cold failure on the memo path is.
+		if roots, _, ok := readImportRoots(j.files); ok {
 			j.roots = roots
 		}
 	}
@@ -697,7 +648,7 @@ func (j *titleJudge) siblingPaths() []string {
 	if dir == "" || j.files == nil {
 		return nil
 	}
-	rows, err := j.memo.list(j.files, dir)
+	rows, err := j.memo.list(j.lister(), dir)
 	if err != nil {
 		j.siblingsFailed = true // logged by the memo's read
 		return nil
@@ -760,7 +711,7 @@ func (j *titleJudge) cousinPaths() []string {
 	if parent == dir || j.isCousinParentExcluded(parent) {
 		return nil
 	}
-	rows, err := j.memo.listWrapped(j.files, parent)
+	rows, err := j.memo.listWrapped(j.lister(), parent)
 	if err != nil {
 		return nil // logged by the memo's read
 	}

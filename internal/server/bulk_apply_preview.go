@@ -1,7 +1,7 @@
 // file: internal/server/bulk_apply_preview.go
-// version: 1.12.2
+// version: 1.13.0
 // guid: 6a2e9c15-4f70-4b3d-8e21-d5c7a0f9b384
-// last-edited: 2026-09-27
+// last-edited: 2026-10-04
 //
 // The bulk-apply DRY RUN: "metadata.bulk-apply-preview".
 //
@@ -359,6 +359,8 @@ func runBulkApplyPreview(
 	}
 
 	var nApply, nBlocked, nSkipped, nWriteErr, nNoMatch atomic.Int64
+	// One import-path read shared by every row of this dry run.
+	planBooks := withCachedImportPaths(books)
 	previewOne := func(_ context.Context, id string) error {
 		var plan cachedApplyPlan
 		if source == previewSourceOpResults {
@@ -369,12 +371,12 @@ func runBulkApplyPreview(
 			case cr.Status != "matched" || cr.Candidate == nil:
 				plan = cachedApplyPlan{Reason: "status_" + cr.Status}
 			default:
-				plan = planOpResultApply(books, id, cr, claims)
+				plan = planOpResultApply(planBooks, id, cr, claims)
 			}
 		} else {
 			// No pin: the dry run always reports the hard gate, and says in
 			// owner_reviewed_would_apply what a reviewed Apply would do.
-			plan = planCachedApply(svc, books, id, claims, nil)
+			plan = planCachedApply(svc, planBooks, id, claims, nil)
 		}
 		// The owner rejected every match for this book: it is not a
 		// candidate for a bulk apply, so it gets no row and no verdict count.

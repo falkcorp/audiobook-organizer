@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_op.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: 8a3f21d7-6c04-4b91-a2e5-7d0f3b8c5194
-// last-edited: 2026-09-28
+// last-edited: 2026-10-04
 //
 // batch_apply_op registers the "metadata.batch-apply-cached" v2 OperationDef.
 // The HTTP handler BatchApplyFromCache enqueues this and returns the op id
@@ -475,6 +475,9 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 				_ = reporter.Log(slog.LevelWarn, "sibling-part index could not read some books; rows in a related folder or with the same ASIN are blocked for manual review",
 					slog.Int("unreadable", n))
 			}
+			// One import-path read shared by every book of this call
+			// (withCachedImportPaths), not one per resolver call per book.
+			applyBooks := withCachedImportPaths(s.store)
 			runOne := func(ctx context.Context, id string) error {
 				// One timer per book, from before the gate wait to the end of
 				// its file work; FinishApplyFileWorkTimed logs it as the
@@ -514,7 +517,7 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 					}
 					defer releaseFileWrite()
 				}
-				out := applyCachedCandidateForBookTimed(svc, s.store, itunes, id, p.WriteBack,
+				out := applyCachedCandidateForBookTimed(svc, applyBooks, itunes, id, p.WriteBack,
 					func() error { return opsregistry.ScanStandDownCheckpoint(ctx) }, pt, claims, p.pinOf(id), p.Mode)
 
 				if out.OwnerReviewed && out.Gate != nil {

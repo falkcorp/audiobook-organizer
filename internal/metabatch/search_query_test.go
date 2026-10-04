@@ -1,5 +1,5 @@
 // file: internal/metabatch/search_query_test.go
-// version: 1.14.1
+// version: 1.15.0
 // guid: f94991be-ebe4-4d6d-8f4e-922b68a3dda0
 // last-edited: 2026-10-04
 
@@ -361,7 +361,7 @@ func TestResolveCandidateSearchQuery_SiblingPartRowsAreSkipped(t *testing.T) {
 				book := database.Book{ID: "self", Title: tc.title, FilePath: path, TranscribedTitle: strp("Whole Work Title"), Duration: ip(dur)}
 				file := database.BookFile{FilePath: path, Duration: dur, FileSize: int64(dur) * 8000, TranscribedTitle: strp("Whole Work Title")}
 				files := fakeBookFiles{files: []database.BookFile{file}, dir: siblingRows(tc.dir, tc.self, tc.sibs...)}
-				for _, memo := range []*FolderMemo{nil, NewFolderMemo()} {
+				for _, memo := range []*FolderMemo{nil, NewFolderMemo(files)} {
 					q := ResolveCandidateSearchQueryMemo(files, &book, memo)
 					if q.Usable {
 						t.Fatalf("got usable %+v, want a skip", q)
@@ -525,7 +525,7 @@ func TestResolveCandidateSearchQuery_SiblingShapesWithoutSiblingsAreSearched(t *
 			if tc.importRoot != "" {
 				f.importRoots = []string{tc.importRoot}
 			}
-			q := ResolveCandidateSearchQueryMemo(f, &tc.book, NewFolderMemo())
+			q := ResolveCandidateSearchQueryMemo(f, &tc.book, NewFolderMemo(f))
 			if !q.Usable || q.Title != tc.want || q.Source != tc.wantSrc {
 				t.Fatalf("got %+v, want %q from %s", q, tc.want, tc.wantSrc)
 			}
@@ -544,7 +544,7 @@ func TestFolderMemo_ListsEachFolderOnce(t *testing.T) {
 	const dir = "/library/Paolini/Eldest"
 	calls := 0
 	rows := siblingRows(dir, "01.mp3", "02.mp3", "03.mp3")
-	memo := NewFolderMemo()
+	memo := NewFolderMemo(fakeBookFiles{dir: rows, dirCalls: &calls})
 	for _, name := range []string{"01.mp3", "02.mp3", "03.mp3"} {
 		book := database.Book{ID: name, Title: strings.TrimSuffix(name, ".mp3"), FilePath: dir + "/" + name}
 		f := fakeBookFiles{dir: rows, dirCalls: &calls}
@@ -581,7 +581,7 @@ func TestResolveCandidateSearchQuery_FetchAndApplyAgree(t *testing.T) {
 		calls := 0
 		f := fakeBookFiles{dir: r.dir, dirCalls: &calls, importRoots: []string{"/imports/Zahn Rips"}}
 		apply := ResolveCandidateSearchQuery(f, &r.book)
-		fetch := ResolveCandidateSearchQueryMemo(f, &r.book, NewFolderMemo())
+		fetch := ResolveCandidateSearchQueryMemo(f, &r.book, NewFolderMemo(f))
 		if apply != fetch {
 			t.Errorf("%s: apply %+v, fetch %+v", r.book.FilePath, apply, fetch)
 		}
@@ -694,87 +694,178 @@ func TestResolveCandidateSearchQuery_PartRowEvidence(t *testing.T) {
 func TestImportRoots_ComeFromTheStoreHandedIn(t *testing.T) {
 	rows := siblingRows("/imports/a", "Cobra 100 of 151.mp3", "Cobra 099 of 151.mp3", "Cobra 101 of 151.mp3")
 	book := database.Book{ID: "self", Title: "Cobra 100 of 151", FilePath: "/imports/a/Cobra 100 of 151.mp3"}
-	for _, memo := range []*FolderMemo{nil, NewFolderMemo()} {
+	for _, withMemo := range []bool{false, true} {
 		rootCalls, otherCalls := 0, 0
 		root := fakeBookFiles{dir: rows, dirCalls: &rootCalls, importRoots: []string{"/imports/a"}}
 		other := fakeBookFiles{dir: rows, dirCalls: &otherCalls, importRoots: []string{"/imports/b"}}
-		if memo != nil {
-			// Separate passes: a memo belongs to one pass over one store.
-			ResolveCandidateSearchQueryMemo(root, &book, memo)
-			ResolveCandidateSearchQueryMemo(other, &book, NewFolderMemo())
+		if withMemo {
+			ResolveCandidateSearchQueryMemo(root, &book, NewFolderMemo(root))
+			ResolveCandidateSearchQueryMemo(other, &book, NewFolderMemo(other))
 		} else {
 			ResolveCandidateSearchQuery(root, &book)
 			ResolveCandidateSearchQuery(other, &book)
 		}
 		if rootCalls != 0 {
-			t.Errorf("memo=%v: the store whose import root holds the row listed it %d times", memo != nil, rootCalls)
+			t.Errorf("memo=%v: the store whose import root holds the row listed it %d times", withMemo, rootCalls)
 		}
 		if otherCalls == 0 {
-			t.Errorf("memo=%v: a store without that import root saw the other store's roots", memo != nil)
+			t.Errorf("memo=%v: a store without that import root saw the other store's roots", withMemo)
 		}
 	}
 }
 
-// Concurrent resolves on one memo read the import paths once and never see
-// an empty list while the first read is in flight: the candidate op starts
-// 16-32 workers at once, and a worker answering "not a root" during the
-// first load would list a whole import root.
-func TestFolderMemo_ImportRootsLoadOnceUnderConcurrency(t *testing.T) {
-	const workers = 32
-	var reads atomic.Int32
-	var listed atomic.Int32
-	rows := siblingRows("/imports/Zahn Rips", "Cobra 100 of 151.mp3", "Cobra 099 of 151.mp3", "Cobra 101 of 151.mp3")
-	memo := NewFolderMemo()
-	var wg sync.WaitGroup
-	for range workers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			calls := 0
-			f := fakeBookFiles{dir: rows, dirCalls: &calls, importRoots: []string{"/imports/Zahn Rips"}, importCalls: &reads}
-			book := database.Book{ID: "self", Title: "Cobra 100 of 151", FilePath: "/imports/Zahn Rips/Cobra 100 of 151.mp3"}
-			ResolveCandidateSearchQueryMemo(f, &book, memo)
-			listed.Add(int32(calls))
-		}()
-	}
-	wg.Wait()
-	if n := reads.Load(); n != 1 {
-		t.Errorf("import paths read %d times across %d concurrent resolves, want 1", n, workers)
-	}
-	if n := listed.Load(); n != 0 {
-		t.Errorf("an import root was listed %d times: some worker read an empty root list", n)
+// A memo is bound to the store it was built for: a resolver call carrying a
+// different reader still lists through, and reads the roots of, the memo's
+// store, so one pass can never mix two stores' rows or roots.
+func TestFolderMemo_IsBoundToItsStore(t *testing.T) {
+	rows := siblingRows("/imports/a", "Cobra 100 of 151.mp3", "Cobra 099 of 151.mp3", "Cobra 101 of 151.mp3")
+	book := database.Book{ID: "self", Title: "Cobra 100 of 151", FilePath: "/imports/a/Cobra 100 of 151.mp3"}
+	boundCalls, strayCalls := 0, 0
+	bound := fakeBookFiles{dir: rows, dirCalls: &boundCalls, importRoots: []string{"/imports/a"}}
+	stray := fakeBookFiles{dir: rows, dirCalls: &strayCalls, importRoots: []string{"/imports/b"}}
+	ResolveCandidateSearchQueryMemo(stray, &book, NewFolderMemo(bound))
+	if strayCalls != 0 || boundCalls != 0 {
+		t.Fatalf("listings: bound store %d, stray reader %d; want none (the bound store's root holds the row)", boundCalls, strayCalls)
 	}
 }
 
-// A failed import-path read keeps the previous list (none, on a first read)
-// and is retried after one TTL window, not by every row; a later success is
-// used.
-func TestFolderMemo_ImportRootsReadFailureIsRetriedNextWindow(t *testing.T) {
+// blockingRoots is an ImportPathReader whose read blocks until release is
+// closed, counting reads.
+type blockingRoots struct {
+	release <-chan struct{}
+	reads   *atomic.Int32
+	roots   []string
+	err     error
+	panics  bool
+}
+
+func (b blockingRoots) GetAllImportPaths() ([]database.ImportPath, error) {
+	b.reads.Add(1)
+	if b.release != nil {
+		<-b.release
+	}
+	if b.panics {
+		panic("store exploded")
+	}
+	if b.err != nil {
+		return nil, b.err
+	}
+	out := make([]database.ImportPath, 0, len(b.roots))
+	for _, r := range b.roots {
+		out = append(out, database.ImportPath{Path: r})
+	}
+	return out, nil
+}
+
+// waitForWaiters blocks until n callers are parked on c's in-flight read.
+func waitForWaiters(t *testing.T, c *ImportRootsCache, n int32) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for c.waiting.Load() < n {
+		if time.Now().After(deadline) {
+			t.Fatalf("only %d of %d callers reached the in-flight read", c.waiting.Load(), n)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// Concurrent callers share one read, and every caller -- including the ones
+// that arrived while that read was still in flight -- sees the loaded roots,
+// never an empty list. The read is held until every other caller is
+// provably parked on it, so the overlap is guaranteed rather than hoped for.
+func TestImportRootsCache_ConcurrentCallersShareOneRead(t *testing.T) {
+	const workers = 32
 	var reads atomic.Int32
-	rows := siblingRows("/imports/Zahn Rips", "Cobra 100 of 151.mp3", "Cobra 099 of 151.mp3")
-	book := database.Book{ID: "self", Title: "Cobra 100 of 151", FilePath: "/imports/Zahn Rips/Cobra 100 of 151.mp3"}
-	memo := NewFolderMemo()
-	calls := 0
-	bad := fakeBookFiles{dir: rows, dirCalls: &calls, importErr: errors.New("store down"), importCalls: &reads}
-	good := fakeBookFiles{dir: rows, dirCalls: &calls, importRoots: []string{"/imports/Zahn Rips"}, importCalls: &reads}
-
-	ResolveCandidateSearchQueryMemo(bad, &book, memo)
-	ResolveCandidateSearchQueryMemo(good, &book, memo)
+	release := make(chan struct{})
+	c := NewImportRootsCache(blockingRoots{release: release, reads: &reads, roots: []string{"/imports/Zahn Rips"}})
+	results := make(chan bool, workers)
+	for range workers {
+		go func() { results <- c.set()["/imports/Zahn Rips"] }()
+	}
+	// One caller is reading; the rest must be waiting on it.
+	waitForWaiters(t, c, workers-1)
+	close(release)
+	for range workers {
+		if !<-results {
+			t.Fatal("a caller saw no roots: it read the list before the in-flight load finished")
+		}
+	}
 	if n := reads.Load(); n != 1 {
-		t.Fatalf("import paths read %d times within one window, want 1 (a failure must not be retried per row)", n)
+		t.Fatalf("import paths read %d times by %d concurrent callers, want 1", n, workers)
 	}
+}
 
-	memo.rootsMu.Lock()
-	memo.rootsAt = time.Now().Add(-importRootsTTL) // the window has passed
-	memo.rootsMu.Unlock()
-	calls = 0
-	ResolveCandidateSearchQueryMemo(good, &book, memo)
+// A waiter is bounded: a read that never returns degrades the waiter to "no
+// roots" after importRootsLoadWait instead of parking it forever, and the
+// mutex is never held across the read.
+func TestImportRootsCache_WaitersAreBounded(t *testing.T) {
+	prev := importRootsLoadWait
+	importRootsLoadWait = 50 * time.Millisecond
+	t.Cleanup(func() { importRootsLoadWait = prev })
+	var reads atomic.Int32
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	c := NewImportRootsCache(blockingRoots{release: release, reads: &reads, roots: []string{"/imports/x"}})
+	go c.set() // the stuck reader
+	for reads.Load() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	done := make(chan map[string]bool, 1)
+	go func() { done <- c.set() }()
+	select {
+	case got := <-done:
+		if len(got) != 0 {
+			t.Fatalf("got %v from a read that never finished", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a waiter was parked behind a stuck read with no bound")
+	}
+	if !c.mu.TryLock() {
+		t.Fatal("the cache mutex is held across the store read")
+	}
+	c.mu.Unlock()
+}
+
+// A failed read does not start the TTL window: the next caller reads again,
+// and its success is used.
+func TestImportRootsCache_FailedReadIsRetriedByTheNextCaller(t *testing.T) {
+	var reads atomic.Int32
+	src := &switchRoots{inner: blockingRoots{reads: &reads, err: errors.New("store down")}}
+	c := NewImportRootsCache(src)
+	if got := c.set(); len(got) != 0 {
+		t.Fatalf("got %v from a failed read", got)
+	}
+	src.inner = blockingRoots{reads: &reads, roots: []string{"/imports/x"}}
+	if !c.set()["/imports/x"] {
+		t.Fatal("the read after a failure was not retried")
+	}
 	if n := reads.Load(); n != 2 {
-		t.Fatalf("import paths read %d times, want 2 (the next window must retry)", n)
+		t.Fatalf("reads = %d, want 2", n)
 	}
-	if calls != 0 {
-		t.Fatalf("after a successful re-read the import root was still listed %d times", calls)
+}
+
+// A read that panics releases its waiters and does not consume the window:
+// the next caller reads again.
+func TestImportRootsCache_PanickingReadConsumesNothing(t *testing.T) {
+	var reads atomic.Int32
+	src := &switchRoots{inner: blockingRoots{reads: &reads, panics: true}}
+	c := NewImportRootsCache(src)
+	func() {
+		defer func() { _ = recover() }()
+		c.set()
+	}()
+	src.inner = blockingRoots{reads: &reads, roots: []string{"/imports/x"}}
+	if !c.set()["/imports/x"] {
+		t.Fatal("a panicking first read used up the window")
 	}
+}
+
+// switchRoots forwards to inner, which a test swaps between calls (not
+// concurrently).
+type switchRoots struct{ inner blockingRoots }
+
+func (s *switchRoots) GetAllImportPaths() ([]database.ImportPath, error) {
+	return s.inner.GetAllImportPaths()
 }
 
 // wrappedPath is parent/<name less extension>/<name>: a file alone in a
@@ -831,7 +922,7 @@ func TestResolveCandidateSearchQuery_FolderWrappedPartRowsAreSkipped(t *testing.
 			book := database.Book{ID: "self", Title: tc.title, FilePath: path, TranscribedTitle: strp("Whole Work Title")}
 			file := database.BookFile{FilePath: path, Duration: tc.dur, FileSize: int64(tc.dur) * 8000}
 			files := fakeBookFiles{files: []database.BookFile{file}, dir: wrappedRows(tc.parent, tc.self, tc.cousins...)}
-			for _, memo := range []*FolderMemo{nil, NewFolderMemo()} {
+			for _, memo := range []*FolderMemo{nil, NewFolderMemo(files)} {
 				q := ResolveCandidateSearchQueryMemo(files, &book, memo)
 				if q.Usable || q.SkipKind != SkipKindCousinPart {
 					t.Fatalf("memo=%v: got %+v, want a %q skip", memo != nil, q, SkipKindCousinPart)
@@ -968,7 +1059,7 @@ func TestResolveCandidateSearchQuery_FolderWrappedWholeBooksAreSearched(t *testi
 				f.importRoots = []string{tc.importRoot}
 			}
 			book := database.Book{ID: "self", Title: tc.title, FilePath: path}
-			for _, memo := range []*FolderMemo{nil, NewFolderMemo()} {
+			for _, memo := range []*FolderMemo{nil, NewFolderMemo(f)} {
 				clear(calls)
 				q := ResolveCandidateSearchQueryMemo(f, &book, memo)
 				if q.SkipKind != "" {
@@ -997,7 +1088,7 @@ func TestResolveCandidateSearchQuery_CousinParentCapIsReported(t *testing.T) {
 	f := fakeBookFiles{dir: rows, files: []database.BookFile{{FilePath: path, Duration: 68, FileSize: 68 * 8000}}}
 	book := database.Book{ID: "self", Title: "Great Sky River 18 6", FilePath: path}
 	before, listBefore := cousinCapWarn.failures.Load(), listWarn.failures.Load()
-	memo := NewFolderMemo()
+	memo := NewFolderMemo(f)
 	for range 3 {
 		if q := ResolveCandidateSearchQueryMemo(f, &book, memo); q.SkipKind != "" {
 			t.Fatalf("got %+v, want no part skip", q)
@@ -1021,7 +1112,7 @@ func TestFolderMemo_ListsWrappedParentOnce(t *testing.T) {
 	// memo entry from the wrapped one.
 	rows["loose"] = parent + "/Timescape.m4b"
 	calls := map[string]int{}
-	memo := NewFolderMemo()
+	memo := NewFolderMemo(fakeBookFiles{dir: rows, callsByDir: calls})
 	for i, name := range names {
 		path := wrappedPath(parent, name)
 		id := "self"
@@ -1107,7 +1198,7 @@ func TestFolderMemo_ConcurrentCallersShareOneRead(t *testing.T) {
 				if failing {
 					l.err = errors.New("boom")
 				}
-				memo := NewFolderMemo()
+				memo := NewFolderMemo(nil) // listings go through l directly
 				failuresBefore := listWarn.failures.Load()
 				var done sync.WaitGroup
 				errs := make(chan error, callers)

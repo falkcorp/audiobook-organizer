@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_stale.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: ba7b75e1-2940-4864-ac78-6a8982bcd9a3
-// last-edited: 2026-10-03
+// last-edited: 2026-10-04
 
 package handlers
 
@@ -192,7 +192,7 @@ type cacheRowLoader struct {
 }
 
 func newCacheRowLoader(store cacheRowBookReader, svc cacheRowCandidateReader) *cacheRowLoader {
-	l := &cacheRowLoader{store: store, svc: svc, memo: metabatch.NewFolderMemo()}
+	l := &cacheRowLoader{store: store, svc: svc, memo: metabatch.NewFolderMemo(store)}
 	l.preloaded, l.canPreload = svc.(preloadedCandidateReader)
 	return l
 }
