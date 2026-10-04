@@ -1,7 +1,7 @@
 // file: internal/audiobooks/update_service.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: b2c3d4e5-f6g7-h8i9-j0k1-l2m3n4o5p6q7
-// last-edited: 2026-10-03
+// last-edited: 2026-10-04
 
 package audiobooks
 
@@ -49,19 +49,28 @@ func (aus *AudiobookUpdateService) ExtractOverrides(payload map[string]any) (map
 
 // UpdateAudiobook is the main business logic method
 func (aus *AudiobookUpdateService) UpdateAudiobook(ctx context.Context, id string, payload map[string]any) (*database.Book, error) {
+	book, _, err := aus.UpdateAudiobookWithWarnings(ctx, id, payload)
+	return book, err
+}
+
+// UpdateAudiobookWithWarnings is UpdateAudiobook that also returns the
+// partial-save warnings of an edit that landed
+// (AudiobookService.UpdateAudiobookWithWarnings). The PUT handler returns
+// them to the client.
+func (aus *AudiobookUpdateService) UpdateAudiobookWithWarnings(ctx context.Context, id string, payload map[string]any) (*database.Book, []string, error) {
 	if id == "" {
-		return nil, fmt.Errorf("audiobook ID is required")
+		return nil, nil, fmt.Errorf("audiobook ID is required")
 	}
 	if len(payload) == 0 {
-		return nil, fmt.Errorf("no updates provided")
+		return nil, nil, fmt.Errorf("no updates provided")
 	}
 	if aus.audiobookService == nil {
-		return nil, fmt.Errorf("audiobook service not initialized")
+		return nil, nil, fmt.Errorf("audiobook service not initialized")
 	}
 
 	currentBook, err := aus.db.GetBookByID(id)
 	if err != nil || currentBook == nil {
-		return nil, fmt.Errorf("audiobook not found")
+		return nil, nil, fmt.Errorf("audiobook not found")
 	}
 
 	// updates holds only what the payload carries. It used to start as a
@@ -182,5 +191,5 @@ func (aus *AudiobookUpdateService) UpdateAudiobook(ctx context.Context, id strin
 		RawPayload: rawPayload,
 	}
 
-	return aus.audiobookService.UpdateAudiobook(ctx, id, req)
+	return aus.audiobookService.UpdateAudiobookWithWarnings(ctx, id, req)
 }

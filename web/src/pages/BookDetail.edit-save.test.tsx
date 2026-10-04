@@ -1,7 +1,7 @@
 // file: web/src/pages/BookDetail.edit-save.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: e1363ab6-cc3e-4440-bbae-cdb5b60a4672
-// last-edited: 2026-10-03
+// last-edited: 2026-10-04
 
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -9,6 +9,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { BookDetail } from './BookDetail';
 import * as api from '../services/api';
+import { ToastProvider } from '../components/toast/ToastProvider';
 
 vi.mock('../services/api', async () => ({
   ...(await vi.importActual('../services/api')),
@@ -36,11 +37,13 @@ const stored = {
 
 const renderPage = () =>
   render(
-    <MemoryRouter initialEntries={['/library/book-1']}>
-      <Routes>
-        <Route path="/library/:id" element={<BookDetail />} />
-      </Routes>
-    </MemoryRouter>
+    <ToastProvider>
+      <MemoryRouter initialEntries={['/library/book-1']}>
+        <Routes>
+          <Route path="/library/:id" element={<BookDetail />} />
+        </Routes>
+      </MemoryRouter>
+    </ToastProvider>
   );
 
 const openEditor = async () => {
@@ -122,5 +125,23 @@ describe('BookDetail handleEditSave', () => {
     const payload = sentPayload();
     expect(payload.series_position).toBe(2.5);
     expect(payload.overrides?.series_position).toEqual({ value: 2.5, locked: true });
+  });
+
+  // An edit that committed only in part comes back as a 200 with "warnings":
+  // the user is told what was not saved, not shown a plain success.
+  it('shows the partial-save warning instead of a plain success', async () => {
+    vi.mocked(api.updateBook).mockResolvedValue({
+      ...stored,
+      warnings: ['the edit was saved but its field locks and overrides were not: disk full'],
+    } as unknown as api.Book);
+    renderPage();
+    const title = (await openEditor()) as HTMLInputElement;
+    fireEvent.change(title, { target: { value: 'Redshirts (Unabridged)' } });
+    fireEvent.click(screen.getByRole('button', { name: /^save/i }));
+
+    expect(
+      await screen.findByText(/Metadata saved, but not completely: .*field locks and overrides were not: disk full/)
+    ).toBeInTheDocument();
+    expect(screen.queryByText('Metadata saved. Edited fields are now locked.')).toBeNull();
   });
 });

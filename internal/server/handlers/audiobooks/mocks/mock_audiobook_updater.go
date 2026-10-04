@@ -17,10 +17,19 @@ func NewMockAudiobookUpdater(t interface {
 	mock.TestingT
 	Cleanup(func())
 }) *MockAudiobookUpdater {
+	if helper, ok := t.(interface{ Helper() }); ok {
+		helper.Helper()
+	}
+
 	mock := &MockAudiobookUpdater{}
 	mock.Mock.Test(t)
 
-	t.Cleanup(func() { mock.AssertExpectations(t) })
+	t.Cleanup(func() {
+		if helper, ok := t.(interface{ Helper() }); ok {
+			helper.Helper()
+		}
+		mock.AssertExpectations(t)
+	})
 
 	return mock
 }
@@ -38,17 +47,18 @@ func (_m *MockAudiobookUpdater) EXPECT() *MockAudiobookUpdater_Expecter {
 	return &MockAudiobookUpdater_Expecter{mock: &_m.Mock}
 }
 
-// UpdateAudiobook provides a mock function for the type MockAudiobookUpdater
-func (_mock *MockAudiobookUpdater) UpdateAudiobook(ctx context.Context, id string, payload map[string]any) (*database.Book, error) {
+// UpdateAudiobookWithWarnings provides a mock function for the type MockAudiobookUpdater
+func (_mock *MockAudiobookUpdater) UpdateAudiobookWithWarnings(ctx context.Context, id string, payload map[string]any) (*database.Book, []string, error) {
 	ret := _mock.Called(ctx, id, payload)
 
 	if len(ret) == 0 {
-		panic("no return value specified for UpdateAudiobook")
+		panic("no return value specified for UpdateAudiobookWithWarnings")
 	}
 
 	var r0 *database.Book
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, map[string]any) (*database.Book, error)); ok {
+	var r1 []string
+	var r2 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, map[string]any) (*database.Book, []string, error)); ok {
 		return returnFunc(ctx, id, payload)
 	}
 	if returnFunc, ok := ret.Get(0).(func(context.Context, string, map[string]any) *database.Book); ok {
@@ -58,28 +68,35 @@ func (_mock *MockAudiobookUpdater) UpdateAudiobook(ctx context.Context, id strin
 			r0 = ret.Get(0).(*database.Book)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, string, map[string]any) error); ok {
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, map[string]any) []string); ok {
 		r1 = returnFunc(ctx, id, payload)
 	} else {
-		r1 = ret.Error(1)
+		if ret.Get(1) != nil {
+			r1 = ret.Get(1).([]string)
+		}
 	}
-	return r0, r1
+	if returnFunc, ok := ret.Get(2).(func(context.Context, string, map[string]any) error); ok {
+		r2 = returnFunc(ctx, id, payload)
+	} else {
+		r2 = ret.Error(2)
+	}
+	return r0, r1, r2
 }
 
-// MockAudiobookUpdater_UpdateAudiobook_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'UpdateAudiobook'
-type MockAudiobookUpdater_UpdateAudiobook_Call struct {
+// MockAudiobookUpdater_UpdateAudiobookWithWarnings_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'UpdateAudiobookWithWarnings'
+type MockAudiobookUpdater_UpdateAudiobookWithWarnings_Call struct {
 	*mock.Call
 }
 
-// UpdateAudiobook is a helper method to define mock.On call
+// UpdateAudiobookWithWarnings is a helper method to define mock.On call
 //   - ctx context.Context
 //   - id string
 //   - payload map[string]any
-func (_e *MockAudiobookUpdater_Expecter) UpdateAudiobook(ctx any, id any, payload any) *MockAudiobookUpdater_UpdateAudiobook_Call {
-	return &MockAudiobookUpdater_UpdateAudiobook_Call{Call: _e.mock.On("UpdateAudiobook", ctx, id, payload)}
+func (_e *MockAudiobookUpdater_Expecter) UpdateAudiobookWithWarnings(ctx any, id any, payload any) *MockAudiobookUpdater_UpdateAudiobookWithWarnings_Call {
+	return &MockAudiobookUpdater_UpdateAudiobookWithWarnings_Call{Call: _e.mock.On("UpdateAudiobookWithWarnings", ctx, id, payload)}
 }
 
-func (_c *MockAudiobookUpdater_UpdateAudiobook_Call) Run(run func(ctx context.Context, id string, payload map[string]any)) *MockAudiobookUpdater_UpdateAudiobook_Call {
+func (_c *MockAudiobookUpdater_UpdateAudiobookWithWarnings_Call) Run(run func(ctx context.Context, id string, payload map[string]any)) *MockAudiobookUpdater_UpdateAudiobookWithWarnings_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -102,12 +119,12 @@ func (_c *MockAudiobookUpdater_UpdateAudiobook_Call) Run(run func(ctx context.Co
 	return _c
 }
 
-func (_c *MockAudiobookUpdater_UpdateAudiobook_Call) Return(book *database.Book, err error) *MockAudiobookUpdater_UpdateAudiobook_Call {
-	_c.Call.Return(book, err)
+func (_c *MockAudiobookUpdater_UpdateAudiobookWithWarnings_Call) Return(book *database.Book, strings []string, err error) *MockAudiobookUpdater_UpdateAudiobookWithWarnings_Call {
+	_c.Call.Return(book, strings, err)
 	return _c
 }
 
-func (_c *MockAudiobookUpdater_UpdateAudiobook_Call) RunAndReturn(run func(ctx context.Context, id string, payload map[string]any) (*database.Book, error)) *MockAudiobookUpdater_UpdateAudiobook_Call {
+func (_c *MockAudiobookUpdater_UpdateAudiobookWithWarnings_Call) RunAndReturn(run func(ctx context.Context, id string, payload map[string]any) (*database.Book, []string, error)) *MockAudiobookUpdater_UpdateAudiobookWithWarnings_Call {
 	_c.Call.Return(run)
 	return _c
 }

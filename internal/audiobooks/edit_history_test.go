@@ -1,7 +1,7 @@
 // file: internal/audiobooks/edit_history_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6f1a8c34-2d9b-4e70-a5c3-0b7e4d2f9a51
-// last-edited: 2026-10-03
+// last-edited: 2026-10-04
 
 package audiobooks_test
 
@@ -167,4 +167,38 @@ func TestUpdateAudiobook_FailedStateSaveWritesNoOverrideHistory(t *testing.T) {
 	states, err := store.GetMetadataFieldStates(book.ID)
 	require.NoError(t, err)
 	require.Empty(t, states)
+}
+
+// A field-state save failure is a 200 for the landed edit, but the caller is
+// told: UpdateAudiobookWithWarnings returns one warning saying the locks and
+// overrides were not saved (the PUT handler returns it to the client).
+func TestUpdateAudiobookWithWarnings_FailedStateSaveIsReported(t *testing.T) {
+	store, book := editFixture(t)
+	got, warnings, err := audiobooks.NewAudiobookUpdateService(stateFailStore{store}).UpdateAudiobookWithWarnings(
+		context.Background(), book.ID, map[string]any{"isbn13": "9780000000002"})
+	require.NoError(t, err, "a landed edit was reported as failed")
+	require.NotNil(t, got)
+	require.Len(t, warnings, 1, "%v", warnings)
+	require.Contains(t, warnings[0], "the edit was saved but its field locks and overrides were not")
+	require.Contains(t, warnings[0], "field state store down")
+}
+
+// A history failure is reported the same way.
+func TestUpdateAudiobookWithWarnings_HistoryFailureIsReported(t *testing.T) {
+	store, book := editFixture(t)
+	fs := historyFailStore{store, func(*database.MetadataChangeRecord) bool { return true }}
+	_, warnings, err := audiobooks.NewAudiobookUpdateService(fs).UpdateAudiobookWithWarnings(
+		context.Background(), book.ID, map[string]any{"format": "mp3"})
+	require.NoError(t, err)
+	require.Len(t, warnings, 1, "%v", warnings)
+	require.Contains(t, warnings[0], "the edit was saved but its change history was not fully recorded")
+}
+
+// A clean edit has no warnings.
+func TestUpdateAudiobookWithWarnings_CleanEditHasNone(t *testing.T) {
+	store, book := editFixture(t)
+	_, warnings, err := audiobooks.NewAudiobookUpdateService(store).UpdateAudiobookWithWarnings(
+		context.Background(), book.ID, map[string]any{"isbn13": "9780000000002"})
+	require.NoError(t, err)
+	require.Empty(t, warnings)
 }

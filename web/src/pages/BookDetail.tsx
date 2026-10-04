@@ -1,7 +1,7 @@
 // file: web/src/pages/BookDetail.tsx
-// version: 1.61.0
+// version: 1.62.0
 // guid: 4d2f7c6a-1b3e-4c5d-8f7a-9b0c1d2e3f4a
-// last-edited: 2026-10-03
+// last-edited: 2026-10-04
 
 import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -999,9 +999,13 @@ export const BookDetail = () => {
     }
 
     try {
-      const saved = await api.updateBook(book.id, payload);
+      const { book: saved, warnings } = api.splitUpdateWarnings(await api.updateBook(book.id, payload));
       setBook(saved);
-      toast('Metadata saved. Edited fields are now locked.', 'success');
+      if (warnings.length > 0) {
+        toast(`Metadata saved, but not completely: ${warnings.join('; ')}`, 'warning');
+      } else {
+        toast('Metadata saved. Edited fields are now locked.', 'success');
+      }
       setEditDialogOpen(false);
       refreshFilesTab(); // reload tags/changelog to reflect saved changes
     } catch (error) {
@@ -1046,12 +1050,18 @@ export const BookDetail = () => {
     setActionLoading(true);
     setActionLabel('Overwriting...');
     try {
-      const saved = await api.updateBook(book.id, {
-        ...pendingUpdate,
-        force_update: true,
-      });
+      const { book: saved, warnings } = api.splitUpdateWarnings(
+        await api.updateBook(book.id, {
+          ...pendingUpdate,
+          force_update: true,
+        })
+      );
       setBook(saved);
-      toast('Metadata saved to database (overwrite).', 'success');
+      if (warnings.length > 0) {
+        toast(`Metadata saved (overwrite), but not completely: ${warnings.join('; ')}`, 'warning');
+      } else {
+        toast('Metadata saved to database (overwrite).', 'success');
+      }
       setEditDialogOpen(false);
       setConflictDialogOpen(false);
       setPendingUpdate(null);

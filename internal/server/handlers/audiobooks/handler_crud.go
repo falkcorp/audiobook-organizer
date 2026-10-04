@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_crud.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 7f0f10bf-7554-4af5-b2d2-ce0a6af6b46e
-// last-edited: 2026-10-03
+// last-edited: 2026-10-04
 
 // Write-side CRUD + batch endpoints for the audiobooks domain: update
 // (full-column replacement with change-history recording + file write-back),
@@ -11,6 +11,7 @@
 package audiobookshandler
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -43,7 +44,7 @@ func (h *Handler) UpdateAudiobook(c *gin.Context) {
 		return
 	}
 
-	updatedBook, err := h.audiobookUpdater.UpdateAudiobook(c.Request.Context(), id, payload)
+	updatedBook, warnings, err := h.audiobookUpdater.UpdateAudiobookWithWarnings(c.Request.Context(), id, payload)
 	if err != nil {
 		if errors.Is(err, audiobookspkg.ErrInvalidAudiobookUpdate) {
 			httputil.RespondWithBadRequest(c, err.Error())
@@ -145,7 +146,38 @@ func (h *Handler) UpdateAudiobook(c *gin.Context) {
 		h.audiobookService.InvalidateBookCaches()
 	}
 
-	httputil.RespondWithOK(c, h.enrichBook(updatedBook))
+	if len(warnings) == 0 {
+		httputil.RespondWithOK(c, h.enrichBook(updatedBook))
+		return
+	}
+	httputil.RespondWithOK(c, bookWithWarnings{book: h.enrichBook(updatedBook), warnings: warnings})
+}
+
+// bookWithWarnings is the PUT /audiobooks/:id response of an edit that
+// committed only in part: the enriched book's own JSON object with one more
+// key, "warnings" (each says what was saved and what was not, as the batch
+// update reports a partial save in its per-book error). The book stays a flat
+// object, so a client that does not read "warnings" sees the same shape.
+type bookWithWarnings struct {
+	book     any
+	warnings []string
+}
+
+func (r bookWithWarnings) MarshalJSON() ([]byte, error) {
+	raw, err := json.Marshal(r.book)
+	if err != nil {
+		return nil, err
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil, fmt.Errorf("book response is not a JSON object: %w", err)
+	}
+	w, err := json.Marshal(r.warnings)
+	if err != nil {
+		return nil, err
+	}
+	obj["warnings"] = w
+	return json.Marshal(obj)
 }
 
 // DeleteAudiobook handles DELETE /audiobooks/:id.

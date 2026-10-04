@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.143.0
+// version: 2.144.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-10-03
+// last-edited: 2026-10-04
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -1621,6 +1621,20 @@ export type OverridePayload = {
   clear?: boolean;
 };
 
+/**
+ * PUT /audiobooks/:id's response: the saved book, plus `warnings` when the
+ * edit committed only in part (its field locks and overrides, change history
+ * or author credits were not saved). The request still succeeds -- the edit
+ * landed -- so a caller must show the warnings rather than a plain success.
+ */
+export type UpdateBookResult = Book & { warnings?: string[] };
+
+/** Splits an updateBook result into the book and its partial-save warnings. */
+export function splitUpdateWarnings(saved: UpdateBookResult): { book: Book; warnings: string[] } {
+  const { warnings, ...book } = saved;
+  return { book: book as Book, warnings: warnings ?? [] };
+}
+
 export async function updateBook(
   bookId: string,
   updates: Partial<Book> & {
@@ -1628,7 +1642,7 @@ export async function updateBook(
     unlock_overrides?: string[];
     force_update?: boolean;
   }
-): Promise<Book> {
+): Promise<UpdateBookResult> {
   const response = await apiFetch(`${API_BASE}/audiobooks/${bookId}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
