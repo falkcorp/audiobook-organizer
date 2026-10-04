@@ -181,8 +181,12 @@ size of A2's `GetDBCensus`. Re-grep and use the current numbers.
      other UI.
 8. **Field meaning changes.** List these in the PR body and in the
    changelog fragment:
-   - `pebble.key_count`: was an exact iterator count; is now the sstable
-     property sum (excludes the memtable). `estimated: true`.
+   - `pebble.key_count`: was an exact count of live keys from a full
+     iteration. It is now the census `TotalKeys`: entries in sstables,
+     excluding tombstones, but including overwritten versions not yet
+     compacted, and excluding the memtable. `estimated: true`. It can read
+     higher than the old live count on a store with many uncompacted
+     rewrites.
    - `metadata_cache.total_entries`: was an exact count; is now the census
      family estimate, `estimated: true`.
    - `metadata_cache.expired_entries`: is now `-1` unless `?deep=true`.
@@ -253,7 +257,11 @@ Run `bash scripts/check-interface-width.sh` because `CacheMetadataStore`'s
 doc changed. Its width must not change.
 
 Timing check (local): `GET /api/v1/diagnostics/db-health` must answer in
-under 1 s. Record the time.
+under 1 s. Record the total, and time each section separately with
+temporary `time.Since` logging, removed before commit: census call,
+embeddings `HealthStats`, AI-scan `HealthStats` (it still runs `ListScans`,
+a full decode), and the metadata-cache section. If any section dominates,
+name it in the report, so a miss on prod can be attributed.
 
 ## 9. Deliverables
 
@@ -300,6 +308,6 @@ PR: <url>
 files changed: <list>
 field meaning changes: <list>
 tests: <name> PASS (<time>) ...; prefix-bound test before fix: FAIL (<msg>)
-db-health local latency: <ms>
+db-health local latency: <ms> total; census <ms>, embeddings <ms>, ai-scans <ms>, metadata-cache <ms>
 not done / deviations: <list or "none">
 ```

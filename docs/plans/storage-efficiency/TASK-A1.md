@@ -129,9 +129,10 @@ Do not follow that precedent here, for three reasons:
      `FilterMisses`, `ReadAmp`, `L0Files`, `L0Sublevels`, `Compactions`,
      `CompactionDebtBytes`, `CompactionsInProgress`,
      `CompactionInProgressBytes`, `MemTableBytes`, `MemTables`, `WALBytes`,
-     `WALPhysicalBytes`, `WALFiles`, `DiskUsageBytes`, `LevelBytes [7]int64`,
-     `LevelFiles [7]int64`. Use `float64` for every scalar field, so the
-     collector needs no conversions.
+     `WALPhysicalBytes`, `WALFiles`, `DiskUsageBytes`, `LevelBytes [7]float64`,
+     `LevelFiles [7]float64`. Every field is `float64` (the arrays too), so
+     the collector passes values straight to `MustNewConstMetric` with no
+     conversions.
    - `type PebbleSource func() (PebbleSample, bool)`. `ok == false` means "no
      database right now" (closed, removed, not opened). The collector then
      emits nothing for that store. It never emits zeros for it.
