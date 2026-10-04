@@ -1,7 +1,7 @@
 // file: internal/server/server_test.go
-// version: 2.9.0
+// version: 2.10.0
 // guid: b2c3d4e5-f6a7-8901-bcde-234567890abc
-// last-edited: 2026-10-01
+// last-edited: 2026-10-04
 
 // NOTE(fable5 T022): setupTestServer ported from NewSQLiteStore to NewPebbleStore.
 
@@ -25,7 +25,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/database/mocks"
-	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
@@ -68,9 +67,6 @@ func setupTestServerFS(t *testing.T, inMemory bool) (*Server, func()) {
 	// A fresh test server stands in for a fresh PROCESS, so it must not inherit
 	// provider throttles an earlier test installed — see the helper's comment.
 	metadata.ResetThrottlesForTesting()
-	// NewServer registers this server's store as the resolver's import-root
-	// source (a process global); unregister it so it never outlives the store.
-	t.Cleanup(func() { metabatch.SetImportRootsSource(nil) })
 
 	// Create temporary directory for test database
 	tempDir, err := os.MkdirTemp("", "audiobook-test-*")
@@ -179,9 +175,6 @@ func setupTestServerWithStore(t *testing.T, store database.Store) (*Server, func
 	// A fresh test server stands in for a fresh PROCESS, so it must not inherit
 	// provider throttles an earlier test installed — see the helper's comment.
 	metadata.ResetThrottlesForTesting()
-	// NewServer registers this server's store as the resolver's import-root
-	// source (a process global); unregister it so it never outlives the store.
-	t.Cleanup(func() { metabatch.SetImportRootsSource(nil) })
 	config.AppConfig.RootDir = ""
 
 	// Boot registers every OperationDef unconditionally (it used to be gated

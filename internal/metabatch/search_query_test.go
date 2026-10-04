@@ -1,7 +1,7 @@
 // file: internal/metabatch/search_query_test.go
-// version: 1.13.1
+// version: 1.14.0
 // guid: f94991be-ebe4-4d6d-8f4e-922b68a3dda0
-// last-edited: 2026-10-01
+// last-edited: 2026-10-04
 
 package metabatch
 
@@ -29,6 +29,25 @@ type fakeBookFiles struct {
 	dirCalls *int
 	// callsByDir counts listings per folder, shared across copies.
 	callsByDir map[string]int
+	// importRoots are this store's import paths; importErr fails the read;
+	// importCalls counts reads, shared across copies.
+	importRoots []string
+	importErr   error
+	importCalls *atomic.Int32
+}
+
+func (f fakeBookFiles) GetAllImportPaths() ([]database.ImportPath, error) {
+	if f.importCalls != nil {
+		f.importCalls.Add(1)
+	}
+	if f.importErr != nil {
+		return nil, f.importErr
+	}
+	out := make([]database.ImportPath, 0, len(f.importRoots))
+	for i, r := range f.importRoots {
+		out = append(out, database.ImportPath{ID: i + 1, Path: r})
+	}
+	return out, nil
 }
 
 func (f fakeBookFiles) GetBookFiles(string) ([]database.BookFile, error) { return f.files, f.err }
@@ -456,8 +475,8 @@ func TestResolveCandidateSearchQuery_SiblingShapesWithoutSiblingsAreSearched(t *
 		{name: "Mistborn Series 1 of 3 with a whole-book duration", book: database.Book{ID: "self", Title: "Mistborn Series 1 of 3", FilePath: author + "/Mistborn Series 1 of 3.m4b", Duration: ip(long), FileSize: i64p(longSize)},
 			dir: siblingRows(author, "Mistborn Series 1 of 3.m4b", "Mistborn Series 2 of 3.m4b", "Mistborn Series 3 of 3.m4b"), want: "Mistborn Series 1 of 3", wantSrc: SearchQuerySourceTitle, noList: true},
 		// W2: a row filed directly under a configured root never lists it.
-		{name: "row directly under an import root", book: database.Book{ID: "self", Title: "Cobra 100 of 151", FilePath: "/imports/incoming/Cobra 100 of 151.mp3"},
-			dir: siblingRows("/imports/incoming", "Cobra 100 of 151.mp3", "a.mp3", "b.mp3"), importRoot: "/imports/incoming",
+		{name: "row directly under an import root", book: database.Book{ID: "self", Title: "Cobra 100 of 151", FilePath: "/imports/Zahn Rips/Cobra 100 of 151.mp3"},
+			dir: siblingRows("/imports/Zahn Rips", "Cobra 100 of 151.mp3", "a.mp3", "b.mp3"), importRoot: "/imports/Zahn Rips",
 			want: "Cobra 100 of 151", wantSrc: SearchQuerySourceTitle, noList: true},
 		// W-b: same-stem counted siblings only.
 		{name: "Golden Son beside other products' parts", book: database.Book{ID: "self", Title: "Golden Son (Part 1 of 2)", FilePath: "/library/Authors/Pierce Brown/Golden Son (Part 1 of 2).m4b", Duration: ip(1500)},
@@ -504,7 +523,7 @@ func TestResolveCandidateSearchQuery_SiblingShapesWithoutSiblingsAreSearched(t *
 				f.dirErr = errors.New("boom")
 			}
 			if tc.importRoot != "" {
-				setImportRoots(t, tc.importRoot)
+				f.importRoots = []string{tc.importRoot}
 			}
 			q := ResolveCandidateSearchQueryMemo(f, &tc.book, NewFolderMemo())
 			if !q.Usable || q.Title != tc.want || q.Source != tc.wantSrc {
@@ -538,25 +557,17 @@ func TestFolderMemo_ListsEachFolderOnce(t *testing.T) {
 	}
 }
 
-// setImportRoots registers roots as the resolver's import paths for one test.
-func setImportRoots(t *testing.T, roots ...string) {
-	t.Helper()
-	SetImportRootsSource(func() ([]string, error) { return roots, nil })
-	t.Cleanup(func() { SetImportRootsSource(nil) })
-}
-
 // The fetch paths pass a FolderMemo; the apply and gate paths
 // (batch_apply_one.go) call ResolveCandidateSearchQuery with none. Both must
 // reach the same verdict for the same row -- including a row directly under
 // an import root, which neither may list.
 func TestResolveCandidateSearchQuery_FetchAndApplyAgree(t *testing.T) {
-	setImportRoots(t, "/imports/incoming")
 	rows := []struct {
 		book database.Book
 		dir  map[string]string
 	}{
-		{database.Book{ID: "self", Title: "Cobra 100 of 151", FilePath: "/imports/incoming/Cobra 100 of 151.mp3"},
-			siblingRows("/imports/incoming", "Cobra 100 of 151.mp3", "Cobra 099 of 151.mp3", "Cobra 101 of 151.mp3")},
+		{database.Book{ID: "self", Title: "Cobra 100 of 151", FilePath: "/imports/Zahn Rips/Cobra 100 of 151.mp3"},
+			siblingRows("/imports/Zahn Rips", "Cobra 100 of 151.mp3", "Cobra 099 of 151.mp3", "Cobra 101 of 151.mp3")},
 		{database.Book{ID: "self", Title: "Cobra 100 of 151", FilePath: "/library/Authors/Timothy Zahn/Cobra/Cobra 100 of 151.mp3", Duration: ip(1200)},
 			siblingRows("/library/Authors/Timothy Zahn/Cobra", "Cobra 100 of 151.mp3", "Cobra 099 of 151.mp3", "Cobra 101 of 151.mp3")},
 		{database.Book{ID: "self", Title: "98", FilePath: "/library/Paolini/Eldest/98.mp3"},
@@ -568,7 +579,7 @@ func TestResolveCandidateSearchQuery_FetchAndApplyAgree(t *testing.T) {
 	}
 	for _, r := range rows {
 		calls := 0
-		f := fakeBookFiles{dir: r.dir, dirCalls: &calls}
+		f := fakeBookFiles{dir: r.dir, dirCalls: &calls, importRoots: []string{"/imports/Zahn Rips"}}
 		apply := ResolveCandidateSearchQuery(f, &r.book)
 		fetch := ResolveCandidateSearchQueryMemo(f, &r.book, NewFolderMemo())
 		if apply != fetch {
@@ -577,7 +588,7 @@ func TestResolveCandidateSearchQuery_FetchAndApplyAgree(t *testing.T) {
 		if strings.Contains(r.book.FilePath, "/Great Sky River 18 6/") && apply.SkipKind != SkipKindCousinPart {
 			t.Errorf("%s: got %+v, want a %q skip on both paths", r.book.FilePath, apply, SkipKindCousinPart)
 		}
-		if strings.HasPrefix(r.book.FilePath, "/imports/incoming/") && calls != 0 {
+		if strings.HasPrefix(r.book.FilePath, "/imports/Zahn Rips/") && calls != 0 {
 			t.Errorf("%s: an import root was listed %d times", r.book.FilePath, calls)
 		}
 	}
@@ -675,54 +686,84 @@ func TestResolveCandidateSearchQuery_PartRowEvidence(t *testing.T) {
 	}
 }
 
-// The import-roots source is called outside the registry's lock: a source
-// that itself consults the registry (re-entrant) does not deadlock, and a
-// refresh that finishes after the source was replaced is dropped.
-func TestImportRoots_SourceRunsOutsideTheLock(t *testing.T) {
-	t.Cleanup(func() { SetImportRootsSource(nil) })
-	SetImportRootsSource(func() ([]string, error) {
-		_ = isImportRoot("/elsewhere") // would self-deadlock under the lock
-		SetImportRootsSource(func() ([]string, error) { return []string{"/new"}, nil })
-		return []string{"/stale"}, nil
-	})
-	done := make(chan bool, 1)
-	go func() { done <- isImportRoot("/stale") }()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("isImportRoot deadlocked calling its source")
-	}
-	if isImportRoot("/stale") || !isImportRoot("/new") {
-		t.Error("a refresh from a replaced source was kept")
+// Import roots come from the store the resolver is handed, never from
+// process state: two stores in one process each see only their own roots.
+// Until 2026-10-04 the roots were a package global the server set in
+// NewServer; a test's closed store stayed registered and a later resolve
+// panicked "pebble: closed" inside it (TestApplyCachedCandidate_GateRefuses).
+func TestImportRoots_ComeFromTheStoreHandedIn(t *testing.T) {
+	rows := siblingRows("/imports/a", "Cobra 100 of 151.mp3", "Cobra 099 of 151.mp3", "Cobra 101 of 151.mp3")
+	book := database.Book{ID: "self", Title: "Cobra 100 of 151", FilePath: "/imports/a/Cobra 100 of 151.mp3"}
+	for _, memo := range []*FolderMemo{nil, NewFolderMemo()} {
+		rootCalls, otherCalls := 0, 0
+		root := fakeBookFiles{dir: rows, dirCalls: &rootCalls, importRoots: []string{"/imports/a"}}
+		other := fakeBookFiles{dir: rows, dirCalls: &otherCalls, importRoots: []string{"/imports/b"}}
+		if memo != nil {
+			// Separate passes: a memo belongs to one pass over one store.
+			ResolveCandidateSearchQueryMemo(root, &book, memo)
+			ResolveCandidateSearchQueryMemo(other, &book, NewFolderMemo())
+		} else {
+			ResolveCandidateSearchQuery(root, &book)
+			ResolveCandidateSearchQuery(other, &book)
+		}
+		if rootCalls != 0 {
+			t.Errorf("memo=%v: the store whose import root holds the row listed it %d times", memo != nil, rootCalls)
+		}
+		if otherCalls == 0 {
+			t.Errorf("memo=%v: a store without that import root saw the other store's roots", memo != nil)
+		}
 	}
 }
 
-// Callers that arrive while a generation's first load is in flight wait for
-// it rather than reading the still-nil list: every concurrent caller at cold
-// start must see the registered import root.
-func TestImportRoots_ColdStartCallersWaitForFirstLoad(t *testing.T) {
-	t.Cleanup(func() { SetImportRootsSource(nil) })
-	release := make(chan struct{})
-	SetImportRootsSource(func() ([]string, error) {
-		<-release
-		return []string{"/imports"}, nil
-	})
-	const callers = 16
-	results := make(chan bool, callers)
-	for range callers {
-		go func() { results <- isImportRoot("/imports") }()
+// Concurrent resolves on one memo read the import paths once and never see
+// an empty list while the first read is in flight: the candidate op starts
+// 16-32 workers at once, and a worker answering "not a root" during the
+// first load would list a whole import root.
+func TestFolderMemo_ImportRootsLoadOnceUnderConcurrency(t *testing.T) {
+	const workers = 32
+	var reads atomic.Int32
+	var listed atomic.Int32
+	rows := siblingRows("/imports/Zahn Rips", "Cobra 100 of 151.mp3", "Cobra 099 of 151.mp3", "Cobra 101 of 151.mp3")
+	memo := NewFolderMemo()
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			calls := 0
+			f := fakeBookFiles{dir: rows, dirCalls: &calls, importRoots: []string{"/imports/Zahn Rips"}, importCalls: &reads}
+			book := database.Book{ID: "self", Title: "Cobra 100 of 151", FilePath: "/imports/Zahn Rips/Cobra 100 of 151.mp3"}
+			ResolveCandidateSearchQueryMemo(f, &book, memo)
+			listed.Add(int32(calls))
+		}()
 	}
-	time.Sleep(50 * time.Millisecond) // let every caller reach the registry
-	close(release)
-	for range callers {
-		select {
-		case ok := <-results:
-			if !ok {
-				t.Fatal("a cold-start caller answered 'not a root' before the first load finished")
-			}
-		case <-time.After(5 * time.Second):
-			t.Fatal("a cold-start caller never returned")
-		}
+	wg.Wait()
+	if n := reads.Load(); n != 1 {
+		t.Errorf("import paths read %d times across %d concurrent resolves, want 1", n, workers)
+	}
+	if n := listed.Load(); n != 0 {
+		t.Errorf("an import root was listed %d times: some worker read an empty root list", n)
+	}
+}
+
+// A failed import-path read is not kept: the memo reads again on the next
+// row, and a later success is used.
+func TestFolderMemo_ImportRootsReadFailureIsRetried(t *testing.T) {
+	var reads atomic.Int32
+	rows := siblingRows("/imports/Zahn Rips", "Cobra 100 of 151.mp3", "Cobra 099 of 151.mp3")
+	book := database.Book{ID: "self", Title: "Cobra 100 of 151", FilePath: "/imports/Zahn Rips/Cobra 100 of 151.mp3"}
+	memo := NewFolderMemo()
+	calls := 0
+	bad := fakeBookFiles{dir: rows, dirCalls: &calls, importErr: errors.New("store down"), importCalls: &reads}
+	ResolveCandidateSearchQueryMemo(bad, &book, memo)
+	good := fakeBookFiles{dir: rows, dirCalls: &calls, importRoots: []string{"/imports/Zahn Rips"}, importCalls: &reads}
+	calls = 0
+	ResolveCandidateSearchQueryMemo(good, &book, memo)
+	if reads.Load() != 2 {
+		t.Fatalf("import paths read %d times, want 2 (the failure must not be cached)", reads.Load())
+	}
+	if calls != 0 {
+		t.Fatalf("after a successful re-read the import root was still listed %d times", calls)
 	}
 }
 
@@ -883,8 +924,8 @@ func TestResolveCandidateSearchQuery_FolderWrappedWholeBooksAreSearched(t *testi
 			dur:     300, want: "American Gods"},
 
 		// Parents never listed.
-		{name: "a parent that is an import root", parent: "/imports/incoming", self: "Great Sky River 18 6.mp3", title: "Great Sky River 18 6",
-			cousins: gsr, dur: 68, importRoot: "/imports/incoming", want: "Great Sky River 18 6"},
+		{name: "a parent that is an import root", parent: "/imports/Zahn Rips", self: "Great Sky River 18 6.mp3", title: "Great Sky River 18 6",
+			cousins: gsr, dur: 68, importRoot: "/imports/Zahn Rips", want: "Great Sky River 18 6"},
 		{name: "a genre-shelf parent", parent: "/library/Science Fiction", self: "Great Sky River 18 6.mp3", title: "Great Sky River 18 6",
 			cousins: gsr, dur: 68, want: "Great Sky River 18 6"},
 		{name: "an Authors parent", parent: "/library/Authors", self: "Great Sky River 18 6.mp3", title: "Great Sky River 18 6",
@@ -898,9 +939,6 @@ func TestResolveCandidateSearchQuery_FolderWrappedWholeBooksAreSearched(t *testi
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if tc.importRoot != "" {
-				setImportRoots(t, tc.importRoot)
-			}
 			path := wrappedPath(tc.parent, tc.self)
 			dir := tc.dir
 			if dir == nil {
@@ -915,6 +953,9 @@ func TestResolveCandidateSearchQuery_FolderWrappedWholeBooksAreSearched(t *testi
 				files: []database.BookFile{{FilePath: path, Duration: tc.dur, FileSize: size}}}
 			if tc.dirErr {
 				f.dirErr = errors.New("boom")
+			}
+			if tc.importRoot != "" {
+				f.importRoots = []string{tc.importRoot}
 			}
 			book := database.Book{ID: "self", Title: tc.title, FilePath: path}
 			for _, memo := range []*FolderMemo{nil, NewFolderMemo()} {

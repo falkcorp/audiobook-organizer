@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_one_test.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 9d2b71fa-30c8-4e57-a614-8b5e0c7f2d93
-// last-edited: 2026-09-28
+// last-edited: 2026-10-04
 //
 // Regression tests for applying ONE book's cached metadata candidate.
 //
@@ -154,6 +154,9 @@ func (f *fakeApplySvc) CachedQueryMatchesIdentity(_ *metafetch.MetadataCandidate
 // 0.95 candidate passes the certainty gate and these tests keep pinning the
 // apply sequel. The gate's refusals are pinned in batch_apply_gate_test.go.
 type fakeBooks map[string]*database.Book
+
+// GetAllImportPaths: no import roots, so the resolver lists folders as usual.
+func (f fakeBooks) GetAllImportPaths() ([]database.ImportPath, error) { return nil, nil }
 
 func (f fakeBooks) GetBookByID(id string) (*database.Book, error) {
 	if b, ok := f[id]; ok {

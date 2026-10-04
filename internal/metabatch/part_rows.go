@@ -1,7 +1,7 @@
 // file: internal/metabatch/part_rows.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: 0e87a518-a04c-44d3-8d4d-3539bfc91b85
-// last-edited: 2026-10-01
+// last-edited: 2026-10-04
 //
 // Tells a book row that is one file of a set the scanner filed as separate
 // book rows ("06 Chapter 6", "Cobra 100 of 151", "The Sunrise Lands 1" beside
@@ -129,6 +129,13 @@ type FolderMemo struct {
 	mu       sync.Mutex
 	dirs     map[memoKey]folderListing
 	inflight singleflight.Group
+
+	// rootsMu guards the import-root set (importRoots). Held across the load
+	// on purpose, so concurrent first callers wait for it instead of reading
+	// an empty set.
+	rootsMu sync.Mutex
+	roots   map[string]bool
+	rootsAt time.Time
 }
 
 // memoKey keys one listing: a folder's direct children, or (wrapped) the
@@ -282,105 +289,70 @@ func isWrappedFile(dir, p string) bool {
 	return folder == normTitle(base) || folder == normTitle(countedFileName(base))
 }
 
-// importRoots is the shared source of the import-path roots every resolver
-// call consults (isRootDir), so the fetch paths and the apply/gate paths
-// reach the same verdict for the same row. The server registers the source
-// once (SetImportRootsSource); the list is re-read at most once a minute.
-var importRoots struct {
-	mu     sync.Mutex
-	source func() ([]string, error)
-	gen    uint64 // bumped by SetImportRootsSource; a stale refresh is dropped
-	roots  map[string]bool
-	at     time.Time
-	// ready is closed when this generation's FIRST load finishes (success or
-	// error). Callers that arrive while it is in flight wait on it instead of
-	// reading the still-nil list, which would answer "not a root" for every
-	// import path -- the candidate op starts 16-32 workers at once, so the
-	// first pass after start-up would otherwise list whole import roots.
-	ready chan struct{}
-}
-
+// importRootsTTL bounds how stale a FolderMemo's import-root list may get
+// over a long pass (a fetch op can run for hours): the list is re-read at
+// most once per window.
 const importRootsTTL = time.Minute
 
-// importRootsFirstLoadWait bounds how long a caller waits for a generation's
-// first load; the load is one store read, normally milliseconds.
-var importRootsFirstLoadWait = 2 * time.Second
-
-// SetImportRootsSource registers where the import paths come from (the
-// store's GetAllImportPaths) and drops the cached list. nil unregisters.
-func SetImportRootsSource(source func() ([]string, error)) {
-	importRoots.mu.Lock()
-	defer importRoots.mu.Unlock()
-	importRoots.source = source
-	importRoots.gen++
-	importRoots.roots = nil
-	importRoots.at = time.Time{}
-	// Release anyone waiting on the replaced generation's first load.
-	if importRoots.ready != nil {
-		close(importRoots.ready)
-		importRoots.ready = nil
-	}
-	if source != nil {
-		importRoots.ready = make(chan struct{})
-	}
+// ImportPathReader is the one read the resolver needs for import roots: a
+// folder that is a registered import path is never listed for sibling rows,
+// on every path -- fetch, stale scan, apply and gate alike -- because its
+// other rows are other books and listing it would read a whole import tree.
+//
+// The roots come from the SAME store the caller hands the resolver, never
+// from a process-wide registration. Until 2026-10-04 they came from a
+// package global the server set in NewServer (SetImportRootsSource); the
+// global outlived the store it closed over, so a later caller resolved
+// through a closed Pebble store and panicked "pebble: closed" (the
+// TestApplyCachedCandidate_GateRefuses flake). Reading from the caller's own
+// store makes that impossible by construction, and two stores in one
+// process can no longer see each other's roots.
+type ImportPathReader interface {
+	GetAllImportPaths() ([]database.ImportPath, error)
 }
 
-// isImportRoot reports whether dir is a registered import path. The source
-// is called outside the lock (it is a store read), by one caller per TTL
-// window; the others use the list on hand. A read error is logged at Warn
-// and keeps the previous list.
-func isImportRoot(dir string) bool {
-	importRoots.mu.Lock()
-	source, gen, ready := importRoots.source, importRoots.gen, importRoots.ready
-	refresh := source != nil && time.Since(importRoots.at) >= importRootsTTL
-	if refresh {
-		importRoots.at = time.Now() // claim this window's refresh
+// importRootLog rate-limits the Warn for an unreadable import-path list.
+var importRootLog warnLimiter
+
+// readImportRoots loads the cleaned import-path set from r. A read error is
+// logged at Warn (rate-limited) and returned so the caller does not cache it.
+func readImportRoots(r ImportPathReader) (map[string]bool, error) {
+	if r == nil {
+		return nil, nil
 	}
-	roots := importRoots.roots
-	importRoots.mu.Unlock()
-	if !refresh {
-		if roots == nil && ready != nil {
-			// The first load of this generation is in flight: wait for it,
-			// bounded so a source that re-enters the registry (or a stuck
-			// store read) degrades to "not a root" instead of hanging.
-			select {
-			case <-ready:
-			case <-time.After(importRootsFirstLoadWait):
-			}
-			importRoots.mu.Lock()
-			roots = importRoots.roots
-			importRoots.mu.Unlock()
-		}
-		return roots[dir]
-	}
-	paths, err := source()
-	var fresh map[string]bool
-	if err == nil {
-		fresh = make(map[string]bool, len(paths))
-		for _, p := range paths {
-			if p = strings.TrimSpace(p); p != "" {
-				fresh[filepath.Clean(p)] = true
-			}
-		}
-	}
-	importRoots.mu.Lock()
-	if importRoots.gen == gen {
-		if err == nil {
-			importRoots.roots = fresh
-		}
-		// First load of this generation done (even on error): release waiters.
-		if importRoots.ready != nil && importRoots.ready == ready {
-			close(importRoots.ready)
-			importRoots.ready = nil
-		}
-	}
-	importRoots.mu.Unlock()
+	paths, err := r.GetAllImportPaths()
 	if err != nil {
-		partRowLog.Warn("import paths unreadable; keeping the previous root list: err=%s",
+		importRootLog.warn("import paths unreadable; keeping the previous root list (none on a first read): err=%s suppressed_since_last=%d",
 			logger.SanitizeLogValue(err.Error()))
-		return roots[dir]
+		return nil, err
 	}
-	return fresh[dir]
+	out := make(map[string]bool, len(paths))
+	for _, p := range paths {
+		if c := strings.TrimSpace(p.Path); c != "" {
+			out[filepath.Clean(c)] = true
+		}
+	}
+	return out, nil
+}
+
+// importRoots returns the memo's import-root set, read from r at most once
+// per importRootsTTL. Concurrent callers wait on the one in-flight load
+// rather than reading a still-empty list -- the candidate op starts 16-32
+// workers at once, and a worker answering "not a root" during the first
+// load would list a whole import root. A failed read is not kept: the next
+// caller reads again, and until then the previous list (if any) is used.
+func (m *FolderMemo) importRoots(r ImportPathReader) map[string]bool {
+	m.rootsMu.Lock()
+	defer m.rootsMu.Unlock()
+	if m.roots != nil && time.Since(m.rootsAt) < importRootsTTL {
+		return m.roots
+	}
+	fresh, err := readImportRoots(r)
+	if err != nil {
+		return m.roots // previous list, or nil on a first-load failure
+	}
+	m.roots, m.rootsAt = fresh, time.Now()
+	return m.roots
 }
 
 // warnLimiter logs a Warn at most once a minute and counts the rest; the
@@ -632,7 +604,7 @@ func trustedDurationSec(d int, size int64) int {
 }
 
 // isRootDir reports whether dir is the library root (config RootDir), a
-// registered import path (isImportRoot), or a generic folder
+// registered import path (importRoots), or a generic folder
 // (metadata.IsGenericDirName): its other rows are other books, and listing it
 // would read the whole library.
 func (j *titleJudge) isRootDir(dir string) bool {
@@ -642,7 +614,22 @@ func (j *titleJudge) isRootDir(dir string) bool {
 	if root := strings.TrimSpace(config.AppConfig.RootDir); root != "" && filepath.Clean(root) == dir {
 		return true
 	}
-	return isImportRoot(dir)
+	return j.importRoots()[dir]
+}
+
+// importRoots is the import-root set for this row: the memo's shared,
+// TTL-bounded set when there is a memo, else one read of j.files, made only
+// when a row actually reaches a root check and kept for the rest of this
+// judge.
+func (j *titleJudge) importRoots() map[string]bool {
+	if j.memo != nil {
+		return j.memo.importRoots(j.files)
+	}
+	if !j.rootsLoaded {
+		j.rootsLoaded = true
+		j.roots, _ = readImportRoots(j.files) // error already logged; nil = no roots
+	}
+	return j.roots
 }
 
 // rowFilePath returns the path of the row's one file, or "" when the row

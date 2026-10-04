@@ -36,6 +36,61 @@ func (_m *MockMetadataCacheBookStore) EXPECT() *MockMetadataCacheBookStore_Expec
 	return &MockMetadataCacheBookStore_Expecter{mock: &_m.Mock}
 }
 
+// GetAllImportPaths provides a mock function for the type MockMetadataCacheBookStore
+func (_mock *MockMetadataCacheBookStore) GetAllImportPaths() ([]database.ImportPath, error) {
+	ret := _mock.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetAllImportPaths")
+	}
+
+	var r0 []database.ImportPath
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func() ([]database.ImportPath, error)); ok {
+		return returnFunc()
+	}
+	if returnFunc, ok := ret.Get(0).(func() []database.ImportPath); ok {
+		r0 = returnFunc()
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]database.ImportPath)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func() error); ok {
+		r1 = returnFunc()
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockMetadataCacheBookStore_GetAllImportPaths_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetAllImportPaths'
+type MockMetadataCacheBookStore_GetAllImportPaths_Call struct {
+	*mock.Call
+}
+
+// GetAllImportPaths is a helper method to define mock.On call
+func (_e *MockMetadataCacheBookStore_Expecter) GetAllImportPaths() *MockMetadataCacheBookStore_GetAllImportPaths_Call {
+	return &MockMetadataCacheBookStore_GetAllImportPaths_Call{Call: _e.mock.On("GetAllImportPaths")}
+}
+
+func (_c *MockMetadataCacheBookStore_GetAllImportPaths_Call) Run(run func()) *MockMetadataCacheBookStore_GetAllImportPaths_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *MockMetadataCacheBookStore_GetAllImportPaths_Call) Return(importPaths []database.ImportPath, err error) *MockMetadataCacheBookStore_GetAllImportPaths_Call {
+	_c.Call.Return(importPaths, err)
+	return _c
+}
+
+func (_c *MockMetadataCacheBookStore_GetAllImportPaths_Call) RunAndReturn(run func() ([]database.ImportPath, error)) *MockMetadataCacheBookStore_GetAllImportPaths_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetAuthorByID provides a mock function for the type MockMetadataCacheBookStore
 func (_mock *MockMetadataCacheBookStore) GetAuthorByID(id int) (*database.Author, error) {
 	ret := _mock.Called(id)
