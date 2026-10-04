@@ -1,5 +1,5 @@
 // file: internal/metabatch/part_rows.go
-// version: 1.6.1
+// version: 1.6.2
 // guid: 0e87a518-a04c-44d3-8d4d-3539bfc91b85
 // last-edited: 2026-10-04
 //
@@ -314,18 +314,18 @@ type ImportPathReader interface {
 // importRootLog rate-limits the Warn for an unreadable import-path list.
 var importRootLog warnLimiter
 
-// readImportRoots loads the cleaned import-path set from r. A read error is
-// logged at Warn (rate-limited) and returned, so a caller keeps its previous
-// list rather than replacing it with nothing.
-func readImportRoots(r ImportPathReader) (map[string]bool, error) {
+// readImportRoots loads the cleaned import-path set from r. ok is false when
+// the read failed; the failure is logged here at Warn (rate-limited), and the
+// caller keeps its previous list rather than replacing it with nothing.
+func readImportRoots(r ImportPathReader) (roots map[string]bool, ok bool) {
 	if r == nil {
-		return nil, nil
+		return nil, true
 	}
 	paths, err := r.GetAllImportPaths()
 	if err != nil {
 		importRootLog.warn("import paths unreadable; keeping the previous root list (none on a first read): err=%s suppressed_since_last=%d",
 			logger.SanitizeLogValue(err.Error()))
-		return nil, err
+		return nil, false
 	}
 	out := make(map[string]bool, len(paths))
 	for _, p := range paths {
@@ -333,7 +333,7 @@ func readImportRoots(r ImportPathReader) (map[string]bool, error) {
 			out[filepath.Clean(c)] = true
 		}
 	}
-	return out, nil
+	return out, true
 }
 
 // importRoots returns the memo's import-root set, read from r at most once
@@ -351,7 +351,7 @@ func (m *FolderMemo) importRoots(r ImportPathReader) map[string]bool {
 		return m.roots
 	}
 	m.rootsAt = time.Now() // this window's read, success or failure
-	if fresh, err := readImportRoots(r); err == nil {
+	if fresh, ok := readImportRoots(r); ok {
 		m.roots = fresh
 	}
 	return m.roots
@@ -629,7 +629,11 @@ func (j *titleJudge) importRoots() map[string]bool {
 	}
 	if !j.rootsLoaded {
 		j.rootsLoaded = true
-		j.roots, _ = readImportRoots(j.files) // error already logged; nil = no roots
+		// A failed read is logged inside; the row is then judged with no
+		// import roots, as a first-read failure on the memo path is.
+		if roots, ok := readImportRoots(j.files); ok {
+			j.roots = roots
+		}
 	}
 	return j.roots
 }
