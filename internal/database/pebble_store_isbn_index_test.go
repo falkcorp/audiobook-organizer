@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_isbn_index_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 // last-edited: 2026-10-03
 
@@ -10,7 +10,6 @@
 package database
 
 import (
-	"path/filepath"
 	"slices"
 	"testing"
 )
@@ -20,7 +19,7 @@ import (
 // methods directly.
 func newPebbleStoreForISBN(t *testing.T) *PebbleStore {
 	t.Helper()
-	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "isbn-db"))
+	store, err := NewPebbleStoreInMemory("isbn-db")
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
 	}

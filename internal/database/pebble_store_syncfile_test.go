@@ -1,19 +1,18 @@
 // file: internal/database/pebble_store_syncfile_test.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 80186a0c-f2d2-4c17-9ef2-cfb78d441e1f
 // last-edited: 2026-10-03
 
 package database
 
 import (
-	"path/filepath"
 	"sync"
 	"testing"
 )
 
 func newSyncFileTestStore(t *testing.T) *PebbleStore {
 	t.Helper()
-	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
+	store, err := NewPebbleStoreInMemory("db")
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

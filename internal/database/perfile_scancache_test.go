@@ -1,5 +1,5 @@
 // file: internal/database/perfile_scancache_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: e6e0e819-5a54-4dc7-9dd6-823894e21a75
 // last-edited: 2026-10-03
 
@@ -14,7 +14,7 @@ import (
 
 func newScanCacheStore(t *testing.T) *PebbleStore {
 	t.Helper()
-	s, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
+	s, err := NewPebbleStoreInMemory("db")
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}

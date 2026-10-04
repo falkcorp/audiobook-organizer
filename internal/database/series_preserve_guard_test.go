@@ -1,5 +1,5 @@
 // file: internal/database/series_preserve_guard_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: d326551d-56ac-4803-a326-a38f5176bb35
 // last-edited: 2026-10-03
 
@@ -12,7 +12,7 @@ import "testing"
 // that also nils SeriesID is removing the series, and restoring the object
 // there kept the series on display after a user cleared it (2026-10-03).
 func TestUpdateBook_SeriesPreserveGuardFollowsSeriesID(t *testing.T) {
-	store, err := NewPebbleStoreInMemory(t.TempDir())
+	store, err := NewPebbleStoreInMemory("db")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestUpdateBook_SeriesPreserveGuardFollowsSeriesID(t *testing.T) {
 // only the link -- batch series_id null or another id, the cleanup/reconcile
 // unlinks -- cannot leave the old series' object (which reads prefer) behind.
 func TestUpdateBook_SeriesObjectFollowsALinkOnlyChange(t *testing.T) {
-	store, err := NewPebbleStoreInMemory(t.TempDir())
+	store, err := NewPebbleStoreInMemory("db")
 	if err != nil {
 		t.Fatal(err)
 	}

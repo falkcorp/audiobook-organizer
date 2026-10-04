@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_atpath_index_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 9e4b2d7a-1c86-4f35-8a0e-5b3c7d9f1e62
-// last-edited: 2026-10-02
+// last-edited: 2026-10-03
 
 package database
 
@@ -29,7 +29,7 @@ var hostilePaths = []string{"", "/a", "/a:x", "/a:x:y", "/a/b", "/a\x00b", "/ä"
 
 func newAtPathStore(t testing.TB) *PebbleStore {
 	t.Helper()
-	s, err := NewPebbleStoreInMemory(t.TempDir())
+	s, err := NewPebbleStoreInMemory("db")
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

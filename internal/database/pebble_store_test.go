@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_test.go
-// version: 1.8.2
+// version: 1.8.3
 // guid: 4d5e6f7a-8b9c-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-10-03
 
@@ -45,15 +45,35 @@ func setupPebbleTestDB(t *testing.T) (Store, func()) {
 	return store, cleanup
 }
 
-// TestNewPebbleStore tests Pebble store creation
+// TestNewPebbleStore opens a store on the REAL filesystem, writes through it,
+// and reads the write back after reopening the directory. Almost every other
+// test in this package uses NewPebbleStoreInMemory, so this is the one that
+// keeps the production constructor's on-disk path (pebble.Open with the
+// default FS, counter initialisation, warmup) exercised end to end.
 func TestNewPebbleStore(t *testing.T) {
-	// Arrange-Act
-	store, cleanup := setupPebbleTestDB(t)
-	defer cleanup()
+	dir := t.TempDir()
+	store, err := NewPebbleStore(dir)
+	if err != nil {
+		t.Fatalf("NewPebbleStore: %v", err)
+	}
+	store.WaitForWarmup()
+	book, err := store.CreateBook(&Book{Title: "On Disk", FilePath: "/lib/on-disk"})
+	if err != nil {
+		t.Fatalf("CreateBook: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
 
-	// Assert
-	if store == nil {
-		t.Fatal("Expected non-nil store")
+	reopened, err := NewPebbleStore(dir)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopened.Close()
+	reopened.WaitForWarmup()
+	got, err := reopened.GetBookByID(book.ID)
+	if err != nil || got == nil || got.Title != "On Disk" {
+		t.Fatalf("after reopen GetBookByID = %+v, %v; want the book written before Close", got, err)
 	}
 }
 

@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_versiongroup_index_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: c21ecc4a-5ca1-4492-b1a9-c1bf8c4c9d4f
 // last-edited: 2026-10-03
 
@@ -29,7 +29,7 @@ import (
 // exactly ONE row — not all of them — because damaging all of them hits the
 // fallback and passes even with the bug present.
 func TestGetBooksByVersionGroup_PartialIndexUnderReports(t *testing.T) {
-	s, err := NewPebbleStoreInMemory(t.TempDir())
+	s, err := NewPebbleStoreInMemory("db")
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestGetBooksByVersionGroup_PartialIndexUnderReports(t *testing.T) {
 // considered and rejected: a genuinely missing row would then return EMPTY
 // instead of the correct set, trading a silent under-report for a silent zero.
 func TestGetBooksByVersionGroup_EmptyIndexFallsBackToCorrectAnswer(t *testing.T) {
-	s, err := NewPebbleStoreInMemory(t.TempDir())
+	s, err := NewPebbleStoreInMemory("db")
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestGetBooksByVersionGroup_EmptyIndexFallsBackToCorrectAnswer(t *testing.T)
 // CreateBook must write the index row itself, so a freshly created book is
 // discoverable by its group without waiting for the startup backfill.
 func TestCreateBook_WritesVersionGroupIndexRow(t *testing.T) {
-	s, err := NewPebbleStoreInMemory(t.TempDir())
+	s, err := NewPebbleStoreInMemory("db")
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}

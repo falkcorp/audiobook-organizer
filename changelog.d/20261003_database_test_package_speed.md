@@ -20,9 +20,10 @@ blocked in fsync.
   `sqlActSampleWindow` become vars, like `sqlActSummarizeChunk`). The
   checkpointer tests still write row by row.
 
-After the change the package takes 35 s under `-short` and 161 s under
-`-race`. Those runs had a load average of about 19 and 33-46, against 3-6 for
-the before runs. Inside the full parallel `-short` suite the package went from
-1,317 s to 340 s. CI runs on Linux, where fsync costs far less than macOS's
-`F_FULLFSYNC`, so the gain there will be smaller than these Mac numbers. No
-assertion was removed and no test was gated behind `-short`.
+Timings depend heavily on machine load, so read these as rough figures. In a
+back-to-back review run on a Mac at load average 4-10, `-short` took 1,079.8 s
+before the change and 41.3 s after; `-short -race` took 513.9 s after. Inside
+the full parallel `-short` suite the package went from 1,317 s to 340 s. CI
+runs on Linux, where fsync costs far less than macOS's `F_FULLFSYNC`, so the
+gain there will be smaller than these Mac numbers. No assertion was removed
+and no test was gated behind `-short`.

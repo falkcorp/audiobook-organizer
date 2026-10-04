@@ -1,5 +1,5 @@
 // file: internal/database/book_files_with_hash_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 5d27b9e0-8c14-4f6a-a3d1-0e9f72b6c845
 // last-edited: 2026-10-03
 
@@ -50,7 +50,7 @@ func hashLookup(t *testing.T, s *PebbleStore, h string) []string {
 // brute-force oracle for every hash ever used. A write path that skips the
 // memdb write-through shows up here as a missing row.
 func TestBookFilesWithHash_MatchesBruteForceAcrossWrites(t *testing.T) {
-	s, err := NewPebbleStoreInMemory(t.TempDir())
+	s, err := NewPebbleStoreInMemory("db")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = s.Close() })
 	s.WaitForWarmup()
@@ -116,7 +116,7 @@ func TestBookFilesWithHash_MatchesBruteForceAcrossWrites(t *testing.T) {
 // the last), and a stale single-owner index entry naming a row that no longer
 // carries the hash is dropped by the Pebble verification.
 func TestBookFilesWithHash_SharedOriginalHashAndStaleIndex(t *testing.T) {
-	s, err := NewPebbleStoreInMemory(t.TempDir())
+	s, err := NewPebbleStoreInMemory("db")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = s.Close() })
 	s.WaitForWarmup()
@@ -137,7 +137,7 @@ func TestBookFilesWithHash_SharedOriginalHashAndStaleIndex(t *testing.T) {
 // TestBookFilesWithHash_FailsClosedWithoutMemdb: with memdb not serving the
 // lookup refuses rather than answering from the single-owner index alone.
 func TestBookFilesWithHash_FailsClosedWithoutMemdb(t *testing.T) {
-	s, err := NewPebbleStoreInMemory(t.TempDir())
+	s, err := NewPebbleStoreInMemory("db")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = s.Close() })
 	s.WaitForWarmup()
@@ -154,7 +154,7 @@ func TestBookFilesWithHash_FailsClosedWithoutMemdb(t *testing.T) {
 // ErrMemdbIncomplete reachable, so a caller can tell the owner "wait for
 // warmup / restart" rather than a generic unreadable.
 func TestBookFilesWithHash_IncompleteMemdbKeepsTheCause(t *testing.T) {
-	s, err := NewPebbleStoreInMemory(t.TempDir())
+	s, err := NewPebbleStoreInMemory("db")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = s.Close() })
 	s.WaitForWarmup()
@@ -169,7 +169,7 @@ func TestBookFilesWithHash_IncompleteMemdbKeepsTheCause(t *testing.T) {
 // TestClaimBookFilePathKey_PointsTheKeyOnlyWhileTheRowIsThere: the key names
 // the claimed row; a row since moved is not claimed.
 func TestClaimBookFilePathKey_PointsTheKeyOnlyWhileTheRowIsThere(t *testing.T) {
-	s, err := NewPebbleStoreInMemory(t.TempDir())
+	s, err := NewPebbleStoreInMemory("db")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = s.Close() })
 	s.WaitForWarmup()
@@ -211,7 +211,7 @@ func TestClaimBookFilePathKey_PointsTheKeyOnlyWhileTheRowIsThere(t *testing.T) {
 // the claim holds the source's owner stripe, so the move commits after it and
 // its own path-key write is the last one.
 func TestClaimBookFilePathKey_SerializesWithAMove(t *testing.T) {
-	s, err := NewPebbleStoreInMemory(t.TempDir())
+	s, err := NewPebbleStoreInMemory("db")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = s.Close() })
 	s.WaitForWarmup()
@@ -256,7 +256,7 @@ func TestClaimBookFilePathKey_SerializesWithAMove(t *testing.T) {
 // find the owner stripe free. A failed fsync still reports the claim, since
 // the key is already visible.
 func TestClaimBookFilePathKey_FsyncsOutsideTheOwnerStripe(t *testing.T) {
-	s, err := NewPebbleStoreInMemory(t.TempDir())
+	s, err := NewPebbleStoreInMemory("db")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = s.Close() })
 	s.WaitForWarmup()

@@ -1,5 +1,5 @@
 // file: internal/database/bookfile_rescan_content_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 3b8e1f52-6c4d-4a97-9e20-7d5b1c8a4f63
 // last-edited: 2026-10-03
 
@@ -22,7 +22,7 @@ func TestBookFileFieldClasses_DerivationOnlyOnRestoredFields(t *testing.T) {
 
 func openRescanStore(t *testing.T) *PebbleStore {
 	t.Helper()
-	s, err := NewPebbleStoreInMemory(t.TempDir())
+	s, err := NewPebbleStoreInMemory("db")
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}

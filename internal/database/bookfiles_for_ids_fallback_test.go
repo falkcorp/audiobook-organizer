@@ -1,5 +1,5 @@
 // file: internal/database/bookfiles_for_ids_fallback_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 8c2f6d14-7a39-4e05-b1d8-3e9a5c07f2b6
 // last-edited: 2026-10-03
 
@@ -7,7 +7,6 @@ package database
 
 import (
 	"fmt"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -18,7 +17,7 @@ import (
 // every row above that. Both must give the same answer: rows grouped by book,
 // a book with no rows absent, an unknown or deleted book absent.
 func TestGetBookFilesForIDsCore_PebbleFallbackPerBookMatchesFullScan(t *testing.T) {
-	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
+	store, err := NewPebbleStoreInMemory("db")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
 	// The memdb warmup is asynchronous, so asserting that it has NOT published
@@ -63,7 +62,7 @@ func TestGetBookFilesForIDsCore_PebbleFallbackPerBookMatchesFullScan(t *testing.
 // MetadataCacheGeneration moves on every cache write, Put and Delete alike,
 // and on nothing else: the review snapshot rebuilds exactly when it moves.
 func TestMetadataCacheGeneration_CountsCacheWrites(t *testing.T) {
-	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
+	store, err := NewPebbleStoreInMemory("db")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
 	g0 := store.MetadataCacheGeneration()
@@ -85,7 +84,7 @@ func TestMetadataCacheGeneration_CountsCacheWrites(t *testing.T) {
 // generation (after the commit), or the review snapshot keeps serving a
 // candidate that no longer exists. A write that deletes no row must not.
 func TestMetadataCacheGeneration_MovesOnBookWritesThatDeleteTheRow(t *testing.T) {
-	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
+	store, err := NewPebbleStoreInMemory("db")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
 	book, err := store.CreateBook(&Book{Title: "T", FilePath: "/lib/t", Format: "mp3"})

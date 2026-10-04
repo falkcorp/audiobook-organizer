@@ -1,5 +1,5 @@
 // file: internal/database/activity_compaction_bounded_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 5b7e0a34-16cf-4d29-8e71-c30a9d4f2b16
 // last-edited: 2026-10-03
 
@@ -137,14 +137,15 @@ func TestSQLCompactByDay_DeletesMoreThanOneChunk(t *testing.T) {
 // the assertion passed against code that was wrong: compaction used to build the
 // whole day's digest, commit it, and delete afterwards, and on resume it
 // recounted the survivors and ADDED them to a digest that already included them.
-// A day of 5,001 rows interrupted after 5,000 would report 10,001.
+// A day of chunk+1 rows interrupted after one chunk would report 2*chunk+1
+// (with the 1,000-row test chunk: 1,001 rows reported as 2,001).
 //
 // The interruption here is real and deterministic: compactDayChunk is called
 // once, which is exactly one committed unit of work, and the process "dies"
 // simply by the test not calling it again. Because that unit folds the counts
 // and deletes the rows it counted in a single transaction, the state left behind
-// is the true post-kill state — 1 row remaining, a digest describing the 5,000
-// that are gone.
+// is the true post-kill state — 1 row remaining, a digest describing the one
+// chunk of rows that are gone.
 func TestSQLCompactByDay_InterruptedDeleteDoesNotDoubleCount(t *testing.T) {
 	shrinkSQLActChunksForTest(t)
 	s := newTestSQLStore(t)

@@ -1,12 +1,11 @@
 // file: internal/database/provider_throttle_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: b66678de-73cb-4f2b-8d84-94bea576add7
 // last-edited: 2026-10-03
 
 package database
 
 import (
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -15,7 +14,7 @@ import (
 
 func newThrottleTestStore(t *testing.T) *PebbleStore {
 	t.Helper()
-	s, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
+	s, err := NewPebbleStoreInMemory("db")
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}

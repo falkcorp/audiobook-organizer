@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_chapters_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: efc1583b-2f69-4546-980f-92bea6798fb2
 // last-edited: 2026-10-03
 
@@ -39,7 +39,7 @@ func odysseyChapters() []Chapter {
 // able to distinguish "no chapters yet" from a store failure without
 // inspecting error text.
 func TestGetChaptersForBook_Absent_ReturnsNilNil(t *testing.T) {
-	store, err := NewPebbleStoreInMemory(t.TempDir())
+	store, err := NewPebbleStoreInMemory("db")
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestGetChaptersForBook_Absent_ReturnsNilNil(t *testing.T) {
 // SaveChaptersForBook must not re-sort or coerce the float seconds on write,
 // and GetChaptersForBook must not re-sort on read.
 func TestSaveAndGetChaptersForBook_RoundTrip(t *testing.T) {
-	store, err := NewPebbleStoreInMemory(t.TempDir())
+	store, err := NewPebbleStoreInMemory("db")
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestSaveAndGetChaptersForBook_RoundTrip(t *testing.T) {
 // saving an empty/nil chapter list is equivalent to deleting the entry, not
 // storing an empty JSON array blob -- a subsequent Get must return (nil, nil).
 func TestSaveChaptersForBook_EmptySlice_DeletesExistingEntry(t *testing.T) {
-	store, err := NewPebbleStoreInMemory(t.TempDir())
+	store, err := NewPebbleStoreInMemory("db")
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestSaveChaptersForBook_EmptySlice_DeletesExistingEntry(t *testing.T) {
 // book that never had any is not an error (matches Pebble delete-absent-key
 // semantics, mirroring DeleteMetadataCache).
 func TestDeleteChaptersForBook_Idempotent(t *testing.T) {
-	store, err := NewPebbleStoreInMemory(t.TempDir())
+	store, err := NewPebbleStoreInMemory("db")
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}
@@ -147,7 +147,7 @@ func TestDeleteChaptersForBook_Idempotent(t *testing.T) {
 // down the book's persisted chapter list, so chapters never outlive their
 // book as orphaned, unreadable Pebble rows.
 func TestDeleteBook_CascadesChapters(t *testing.T) {
-	store, err := NewPebbleStoreInMemory(t.TempDir())
+	store, err := NewPebbleStoreInMemory("db")
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}

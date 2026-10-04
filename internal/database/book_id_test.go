@@ -1,13 +1,12 @@
 // file: internal/database/book_id_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8b2e6d91-4c3a-4f7e-a1d5-6e9c0b3f2a47
-// last-edited: 2026-09-13
+// last-edited: 2026-10-03
 
 package database
 
 import (
 	"errors"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -41,7 +40,7 @@ func TestValidateBookID(t *testing.T) {
 // real write path: the create fails with ErrInvalidBookID and neither the
 // colon-bearing key nor the key its first segment would alias is written.
 func TestCreateBook_RejectsColonInCallerSuppliedID(t *testing.T) {
-	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
+	store, err := NewPebbleStoreInMemory("db")
 	if err != nil {
 		t.Fatalf("pebble: %v", err)
 	}
@@ -75,7 +74,7 @@ func TestCreateBook_RejectsColonInCallerSuppliedID(t *testing.T) {
 // TestCreateBook_ColonGuardLeavesValidIDsAlone is the positive control: a
 // minted ID and a colon-free caller-supplied ID still create normally.
 func TestCreateBook_ColonGuardLeavesValidIDsAlone(t *testing.T) {
-	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
+	store, err := NewPebbleStoreInMemory("db")
 	if err != nil {
 		t.Fatalf("pebble: %v", err)
 	}

@@ -1,5 +1,5 @@
 // file: internal/database/store_coverage_test.go
-// version: 2.9.1
+// version: 2.9.2
 // guid: a1b2c3d4-e5f6-7890-abcd-ef0123456789
 // last-edited: 2026-10-03
 
@@ -24,7 +24,7 @@ import (
 // NOTE(fable5 T022): Previously created a SQLiteStore; now uses PebbleStore.
 func setupCoverageDB(t *testing.T) Store {
 	t.Helper()
-	store, err := NewPebbleStoreInMemory(t.TempDir())
+	store, err := NewPebbleStoreInMemory("db")
 	require.NoError(t, err)
 	require.NoError(t, RunMigrations(store))
 	t.Cleanup(func() { store.Close() })

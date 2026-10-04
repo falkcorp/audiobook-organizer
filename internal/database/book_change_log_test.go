@@ -1,5 +1,5 @@
 // file: internal/database/book_change_log_test.go
-// version: 2.1.1
+// version: 2.1.2
 // guid: 0b1d4a52-6f0e-4c1a-9d37-5e8a2c7b1f63
 // last-edited: 2026-10-03
 
@@ -90,7 +90,7 @@ func TestIDChangeLog_RecordsMustCoverExactlyTheRange(t *testing.T) {
 // TestPebbleStore_BooksChangedSince: create, update and delete are logged
 // against their book.
 func TestPebbleStore_BooksChangedSince(t *testing.T) {
-	s, err := NewPebbleStoreInMemory(t.TempDir())
+	s, err := NewPebbleStoreInMemory("db")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = s.Close() })
 	s.WaitForWarmup()
@@ -141,7 +141,7 @@ func TestIDChangeLog_BumpAllForgetsEverything(t *testing.T) {
 // suffix), a raw batch delete, UpdateBook's identity-change delete and
 // DeleteBook -- and Reset makes every earlier generation unlistable.
 func TestPebbleStore_MetadataCacheChangedSince(t *testing.T) {
-	s, err := NewPebbleStoreInMemory(t.TempDir())
+	s, err := NewPebbleStoreInMemory("db")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = s.Close() })
 	s.WaitForWarmup()
@@ -202,7 +202,7 @@ func TestPebbleStore_MetadataCacheChangedSince(t *testing.T) {
 // moves only the cache log.
 func TestPebbleStore_ResetAndWipeMakeBookLogUnlistable(t *testing.T) {
 	open := func(t *testing.T) (*PebbleStore, *Book) {
-		s, err := NewPebbleStoreInMemory(t.TempDir())
+		s, err := NewPebbleStoreInMemory("db")
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = s.Close() })
 		s.WaitForWarmup()

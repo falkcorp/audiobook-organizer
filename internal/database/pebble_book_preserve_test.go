@@ -1,5 +1,5 @@
 // file: internal/database/pebble_book_preserve_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 9a2f1c6e-4d3b-4a71-8e2c-6b7d8f9012ab
 // last-edited: 2026-10-03
 
@@ -19,7 +19,7 @@ import (
 // pebble-direct so it reflects the actually-stored row, not the stripped
 // memdb copy.
 func TestUpdateBook_PreservesMemDBStrippedFieldsOnNilIncoming(t *testing.T) {
-	s, err := NewPebbleStoreInMemory(t.TempDir())
+	s, err := NewPebbleStoreInMemory("db")
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestUpdateBook_PreservesMemDBStrippedFieldsOnNilIncoming(t *testing.T) {
 // never on a non-nil "clear" value. This proves the escape hatch for
 // user-initiated edits (internal/audiobooks/update_service.go) still works.
 func TestUpdateBook_ExplicitClearStillOverwrites(t *testing.T) {
-	s, err := NewPebbleStoreInMemory(t.TempDir())
+	s, err := NewPebbleStoreInMemory("db")
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestUpdateBook_ExplicitClearStillOverwrites(t *testing.T) {
 // recomputed display objects, never user-cleared to nil, so preserve-on-nil is
 // correct — the same class of fix as the seven memdb-stripped fields above.
 func TestUpdateBook_PreservesAuthorSeriesOnNilIncoming(t *testing.T) {
-	s, err := NewPebbleStoreInMemory(t.TempDir())
+	s, err := NewPebbleStoreInMemory("db")
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}

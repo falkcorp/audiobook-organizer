@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_closed_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7bcf71c3-3a7a-48f4-93ee-6399233ce17c
-// last-edited: 2026-09-14
+// last-edited: 2026-10-03
 
 // Package database — regression suite for PebbleActivityStore on a closed DB.
 //
@@ -18,7 +18,6 @@ package database
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -31,7 +30,7 @@ import (
 // and then closes the main store underneath it: the production ownership shape.
 func newClosedActivityStore(t *testing.T) *PebbleActivityStore {
 	t.Helper()
-	main, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "main.pebble"))
+	main, err := NewPebbleStoreInMemory("main.pebble")
 	require.NoError(t, err)
 	act := NewPebbleActivityStoreFromStore(main)
 	require.NotNil(t, act)
