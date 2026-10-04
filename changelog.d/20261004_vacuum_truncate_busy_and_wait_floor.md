@@ -8,14 +8,30 @@ freed from the main file and the same amount still held by the `-wal`). It ran
 the pragma through `ExecContext` and discarded its result row. A TRUNCATE that
 collides with the background checkpointer, which runs every 30 s on its own
 connection, returns `busy=1` as an ordinary row rather than an error, so the
-vacuum reported success with the WAL untouched. The truncate now goes through
-`walCheckpoint` on the checkpoint connection, which reads the row and queues
-behind the background loop. A busy result is retried with a bounded backoff
-that honours cancellation. If the truncate is still busy after that,
-`VacuumActivity` returns its existing "space still held" error. The flaky
-`internal/activity` test `TestClampSummaries_VacuumRunsEvenWhenNothingWasClamped`
-("WAL 11.19 MB before, 11.57 MB after") had the same cause. It now forces the
-collision with a 1 ms checkpointer interval and requires an empty WAL.
+vacuum reported success with the WAL untouched.
+
+The truncate now goes through `walCheckpoint` on the checkpoint connection,
+which reads the row and queues behind the background loop. Each attempt runs a
+PASSIVE checkpoint first, which copies the frames without blocking writers, and
+then the TRUNCATE, which only has to reset an already-copied WAL. Running
+TRUNCATE alone would hold the WAL write lock for the whole copy of the rebuilt
+database, and foreground activity writes would fail with `SQLITE_BUSY` after
+their 10 s busy timeout. A busy TRUNCATE is retried up to 8 times with backoff.
+The worst case is about 9 s, because each attempt can wait up to 1 s in
+SQLite's busy handler. If the truncate is still busy after that,
+`VacuumActivity` returns its existing "space still held" error, and the
+background checkpointer resets the WAL on its next idle tick.
+
+`POST /api/v1/activity/clamp-summaries` no longer answers 500 when the clamp
+committed but the vacuum or WAL reset failed. It returns 200 with the clamp
+counts, `space_still_held: true` and `vacuum_error`. Prod currently runs the
+Pebble activity backend (`ACTIVITY_BACKEND=pebble`), so none of this has run
+there yet.
+
+The flaky `internal/activity` test
+`TestClampSummaries_VacuumRunsEvenWhenNothingWasClamped` ("WAL 11.19 MB before,
+11.57 MB after") had the same cause. It now forces the collision with a 1 ms
+checkpointer interval and requires an empty WAL.
 
 #### Test harness: a wait cut short by the package deadline no longer fails finished work
 

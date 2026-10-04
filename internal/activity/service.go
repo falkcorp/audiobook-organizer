@@ -1,7 +1,7 @@
 // file: internal/activity/service.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-09-19
+// last-edited: 2026-10-04
 
 package activity
 
@@ -289,6 +289,13 @@ func (s *Service) Store() database.ActivityStorer {
 // mean opposite things about whether the work still has to happen.
 var ErrSummaryClampUnsupported = errors.New("activity: summary clamp requires the SQLite backend")
 
+// ErrClampVacuumFailed marks a ClampSummaries error where the clamp itself
+// COMMITTED and only the follow-up vacuum (or its WAL reset) failed. The
+// returned result is then real and complete; the space it freed is simply still
+// held by the file or its -wal. Callers report that as a successful clamp with
+// the space still held, not as a failed request.
+var ErrClampVacuumFailed = errors.New("activity: clamp committed but vacuum failed")
+
 // ClampSummaries retroactively applies the write-path summary cap to rows
 // written before that cap existed, optionally VACUUMing afterwards to hand the
 // freed pages back to the filesystem.
@@ -322,7 +329,7 @@ func (s *Service) ClampSummaries(ctx context.Context, max int, dryRun, vacuum bo
 		if _, verr := clamper.VacuumActivity(ctx); verr != nil {
 			// The clamp already committed. Surface the vacuum failure without
 			// discarding a successful pass that may have taken hours.
-			return res, fmt.Errorf("clamp committed but vacuum failed: %w", verr)
+			return res, fmt.Errorf("%w: %w", ErrClampVacuumFailed, verr)
 		}
 	}
 	return res, nil

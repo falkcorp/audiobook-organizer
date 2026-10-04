@@ -1,5 +1,5 @@
 // file: internal/activity/clamp_vacuum_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 6a3e1c7d-90b4-4f28-8d51-2b7c40e9af63
 // last-edited: 2026-10-04
 
@@ -39,7 +39,7 @@ import (
 func TestClampSummaries_VacuumRunsEvenWhenNothingWasClamped(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "activity.sqlite")
-	store, err := database.OpenSQLiteActivityStoreWithCheckpointInterval(path, time.Millisecond)
+	store, err := database.OpenSQLiteActivityStoreWithCheckpointIntervalForTest(path, time.Millisecond)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
