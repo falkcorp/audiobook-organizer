@@ -2685,12 +2685,12 @@ func (p *PebbleStore) writeThroughThenBump(id string, writeThrough func()) {
 //     writer that moved the book to another series by ID alone used to
 //     keep the OLD series' name on display.
 //
-// It returns every embedded Series object the write discards that is the
-// only record of a series (seriesObjectLosses); the caller stages one
-// change-history row per object in the same batch as the book row
-// (stageSeriesObjectDrops), so a drop is never silent.
-func enforceSeriesInvariant(book, old *Book) []Series {
-	incoming := book.Series
+// On update it returns the stored row's Series object when the write removes
+// it and it was the only record of a series (seriesObjectLoss); the caller
+// stages one change-history row for it in the same batch as the book row
+// (stageSeriesObjectDrop), so that drop is never silent. On create it returns
+// nil: nothing was stored, so nothing was lost.
+func enforceSeriesInvariant(book, old *Book) *Series {
 	switch {
 	case book.SeriesID == nil:
 		book.Series = nil
@@ -2701,15 +2701,26 @@ func enforceSeriesInvariant(book, old *Book) []Series {
 			book.Series = nil
 		}
 	}
-	return seriesObjectLosses(incoming, old, book.Series)
+	return seriesObjectLoss(old, book.Series)
 }
 
-// seriesObjectLosses lists the embedded Series objects a write discards that
-// nothing else records. The candidates are the object the writer passed
-// (incoming) and the object the stored row carried (old.Series): a writer
-// that sourced its book from the memdb projection passes no object at all,
-// and the stored one is still lost. A candidate is NOT a loss when:
-//   - it survives in the written row (kept), or
+// seriesObjectLoss is the stored Series object a write removes that nothing
+// else records, or nil.
+//
+// Only STORED state can be lost. The object the writer passes is never
+// counted: it is a copy of a row read earlier, and the stored row may no
+// longer hold it. Counting it recorded one loss twice when two writers held
+// the same stale copy, recorded "dropped A" for an ordinary clear racing a
+// move of the row to B, and recorded a drop on a new book created from a copy
+// of a stale one (where the source book still holds the object). A writer's
+// object that the invariant refuses was never stored state, so refusing it
+// loses nothing. A revert to a CoW snapshot that held a stale object is that
+// case too: the snapshot keeps the object, and the revert drops it without a
+// row.
+//
+// The stored object (old.Series) is NOT a loss when:
+//   - there is no stored row (create), or no stored object;
+//   - it survives in the written row (kept, same id and name); or
 //   - its id is the stored row's own SeriesID. That object is only the
 //     display copy of the series the book was linked to, and carries nothing
 //     beyond that link; the write that drops it is a series clear or move.
@@ -2721,71 +2732,55 @@ func enforceSeriesInvariant(book, old *Book) []Series {
 //
 // What remains is a stale object (SeriesID nil, or naming another series)
 // that older builds left in the row: the only record of a series, which the
-// stale-series relink fixer reads. Duplicates (by id and name) are folded.
-func seriesObjectLosses(incoming *Series, old *Book, kept *Series) []Series {
-	var lost []Series
-	consider := func(c *Series) {
-		if c == nil {
-			return
-		}
-		if kept != nil && kept.ID == c.ID && kept.Name == c.Name {
-			return
-		}
-		if old != nil && old.SeriesID != nil && *old.SeriesID == c.ID {
-			return
-		}
-		for _, l := range lost {
-			if l.ID == c.ID && l.Name == c.Name {
-				return
-			}
-		}
-		lost = append(lost, *c)
+// stale-series relink fixer reads.
+func seriesObjectLoss(old *Book, kept *Series) *Series {
+	if old == nil || old.Series == nil {
+		return nil
 	}
-	consider(incoming)
-	if old != nil {
-		consider(old.Series)
+	c := old.Series
+	if kept != nil && kept.ID == c.ID && kept.Name == c.Name {
+		return nil
 	}
-	return lost
+	if old.SeriesID != nil && *old.SeriesID == c.ID {
+		return nil
+	}
+	lost := *c
+	return &lost
 }
 
-// stageSeriesObjectDrops stages one metadata change-history row
-// (HistoryFieldSeriesObject, ChangeTypeSeriesObjectDrop) per lost object in
-// the book write's own batch, so the record commits atomically with the drop
-// and never before it (no ledger-before-write). The key shape and the
-// nanosecond ID are RecordMetadataChange's; two objects lost by one write get
-// distinct nanoseconds, because the key is book:field:nanos and the second
-// row would otherwise overwrite the first.
-func stageSeriesObjectDrops(batch *pebble.Batch, bookID string, lost []Series, kept *Series, keptID *int, at time.Time) error {
-	at = at.UTC()
+// stageSeriesObjectDrop stages one metadata change-history row
+// (HistoryFieldSeriesObject, ChangeTypeSeriesObjectDrop) for a lost stored
+// object in the book write's own batch, so the record commits atomically with
+// the drop and never before it (no ledger-before-write). The key shape and the
+// nanosecond ID are RecordMetadataChange's. A nil lost stages nothing.
+func stageSeriesObjectDrop(batch *pebble.Batch, bookID string, lost, kept *Series, keptID *int, at time.Time) error {
+	if lost == nil {
+		return nil
+	}
+	ts := at.UTC()
 	newName := ""
 	if kept != nil {
 		newName = kept.Name
 	}
-	for i, l := range lost {
-		ts := at.Add(time.Duration(i))
-		id := l.ID
-		rec := &MetadataChangeRecord{
-			ID:          int(ts.UnixNano()),
-			BookID:      bookID,
-			Field:       HistoryFieldSeriesObject,
-			ChangeType:  ChangeTypeSeriesObjectDrop,
-			Source:      SeriesObjectDropSource,
-			ChangedAt:   ts,
-			PreviousRef: &MetadataChangeRef{SeriesID: &id},
-			NewRef:      &MetadataChangeRef{SeriesID: cloneIntPtr(keptID)},
-		}
-		oldJSON, newJSON := jsonString(l.Name), jsonString(newName)
-		rec.PreviousValue, rec.NewValue = &oldJSON, &newJSON
-		data, err := json.Marshal(rec)
-		if err != nil {
-			return fmt.Errorf("encode series object drop of %s: %w", bookID, err)
-		}
-		key := fmt.Sprintf("metadata_change:%s:%s:%d", bookID, HistoryFieldSeriesObject, ts.UnixNano())
-		if err := batch.Set([]byte(key), data, nil); err != nil {
-			return err
-		}
+	id := lost.ID
+	rec := &MetadataChangeRecord{
+		ID:          int(ts.UnixNano()),
+		BookID:      bookID,
+		Field:       HistoryFieldSeriesObject,
+		ChangeType:  ChangeTypeSeriesObjectDrop,
+		Source:      SeriesObjectDropSource,
+		ChangedAt:   ts,
+		PreviousRef: &MetadataChangeRef{SeriesID: &id},
+		NewRef:      &MetadataChangeRef{SeriesID: cloneIntPtr(keptID)},
 	}
-	return nil
+	oldJSON, newJSON := jsonString(lost.Name), jsonString(newName)
+	rec.PreviousValue, rec.NewValue = &oldJSON, &newJSON
+	data, err := json.Marshal(rec)
+	if err != nil {
+		return fmt.Errorf("encode series object drop of %s: %w", bookID, err)
+	}
+	key := fmt.Sprintf("metadata_change:%s:%s:%d", bookID, HistoryFieldSeriesObject, ts.UnixNano())
+	return batch.Set([]byte(key), data, nil)
 }
 
 func cloneIntPtr(p *int) *int {
@@ -2828,9 +2823,9 @@ func (p *PebbleStore) createBook(book *Book) (*Book, error) {
 	book.UpdatedAt = &now
 
 	// Series follows SeriesID on create exactly as on update; there is no
-	// stored row to take an object from. A dropped object is recorded in the
-	// batch below.
-	seriesLost := enforceSeriesInvariant(book, nil)
+	// stored row to take an object from, and none to lose one from, so
+	// nothing is recorded (the result is always nil here).
+	enforceSeriesInvariant(book, nil)
 
 	// The row is marshalled WITHOUT the five BookSig* fields; they go to the
 	// book_sig: sidecar below, in this same batch. See pebble_store_booksig.go.
@@ -2844,11 +2839,6 @@ func (p *PebbleStore) createBook(book *Book) (*Book, error) {
 	// Main key
 	key := []byte(fmt.Sprintf("book:%s", book.ID))
 	if err := batch.Set(key, data, nil); err != nil {
-		batch.Close()
-		return nil, err
-	}
-	// A series object the invariant dropped is recorded with the row.
-	if err := stageSeriesObjectDrops(batch, book.ID, seriesLost, book.Series, book.SeriesID, now); err != nil {
 		batch.Close()
 		return nil, err
 	}
@@ -3091,7 +3081,7 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, opts bookWrite
 	//
 	// Series, unlike Author, is held to SeriesID on every write (create and
 	// update alike); see enforceSeriesInvariant.
-	var seriesLost []Series
+	var seriesLost *Series
 	if !opts.legacySeries {
 		seriesLost = enforceSeriesInvariant(book, oldBook)
 	}
@@ -3135,9 +3125,10 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, opts bookWrite
 		batch.Close()
 		return nil, err
 	}
-	// A series object the invariant dropped or replaced is recorded in the
-	// same batch as the row, so the record and the drop commit together.
-	if err := stageSeriesObjectDrops(batch, id, seriesLost, book.Series, book.SeriesID, now); err != nil {
+	// A stored series object the invariant dropped or replaced is recorded
+	// in the same batch as the row, so the record and the drop commit
+	// together.
+	if err := stageSeriesObjectDrop(batch, id, seriesLost, book.Series, book.SeriesID, now); err != nil {
 		batch.Close()
 		return nil, err
 	}

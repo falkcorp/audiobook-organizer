@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/swapped_title_author_fixer.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: a80ddfb1-95dc-402f-941a-142b9388bcf0
 // last-edited: 2026-10-04
 
@@ -62,9 +62,10 @@ const (
 	// swapSkipRelinkSeriesFirst: the stored book row still embeds a series
 	// object its SeriesID does not name (SeriesID nil, or another series):
 	// a stale row older builds left. Any write of the row drops that object
-	// (the store's series invariant), and it is the stale-series relink's
-	// only evidence of the series the book belonged to, so this fixer does
-	// not write the book until that is settled. A row with SeriesID nil is
+	// (the store's series invariant; the drop is recorded as a series_object
+	// history row), and the stale-series relink reads the live object to
+	// offer the series back, so this fixer does not write the book until the
+	// owner has chosen the series. A row with SeriesID nil is
 	// the relink fixer's (maintenance.relink-stale-series); one whose
 	// SeriesID names another series is not, and a person decides.
 	swapSkipRelinkSeriesFirst = "skipped_relink_series_first"
@@ -810,8 +811,10 @@ func swapJournalRows(store OpsStore, bookID, op string) ([]*database.OperationCh
 
 // swapStaleSeriesHold holds a book whose stored row embeds a series object
 // its SeriesID does not name: writing the row (the title, or the author id)
-// would drop that object without a trace (database enforceSeriesInvariant),
-// and the stale-series relink reads it to restore the book's series.
+// would drop that object (database enforceSeriesInvariant). The drop is
+// recorded in the book's change history (series_object), but the
+// stale-series relink reads the live object to offer the series back, so the
+// owner chooses the series before this fixer writes the book.
 func swapStaleSeriesHold(store OpsStore, bookID string) (skip, why string, err error) {
 	book, err := store.GetBookByID(bookID)
 	if err != nil {
