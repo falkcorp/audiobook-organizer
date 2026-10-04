@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retire_into_test.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 90cd2c0f-e6c5-4176-8d2c-bc587eea86cd
-// last-edited: 2026-10-02
+// last-edited: 2026-10-04
 
 package maintenance
 
@@ -39,8 +39,8 @@ func (s *journalCountingStore) GetBookChanges(bookID string) ([]*database.Operat
 	return s.inner.GetBookChanges(bookID)
 }
 
-func (s *journalCountingStore) GetBookChangeHistory(bookID string, limit int) ([]database.MetadataChangeRecord, error) {
-	return s.inner.GetBookChangeHistory(bookID, limit)
+func (s *journalCountingStore) GetMetadataChangeHistory(bookID, field string, limit int) ([]database.MetadataChangeRecord, error) {
+	return s.inner.GetMetadataChangeHistory(bookID, field, limit)
 }
 
 // A version group whose primary carries a nil flag (read as primary by every

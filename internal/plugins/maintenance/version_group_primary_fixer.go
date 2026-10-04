@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_group_primary_fixer.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 2c7e5a19-8b43-4f06-9d21-4e8b0c6a3f75
-// last-edited: 2026-10-01
+// last-edited: 2026-10-04
 
 package maintenance
 
@@ -368,18 +368,17 @@ func vgStateOf(g *vgRepairGroupReport) json.RawMessage {
 	return raw
 }
 
-// bookHistoryReader is the one read resumesOwnWrite (and the fragment
-// fixer's resumeHandOff) needs: a book's change
-// history, newest first. Asserted on the ops store rather than widening
-// OpsStore (at the interfacebloat cap).
+// bookHistoryReader is the one read resumesOwnWrite (and retire_into's
+// hand-off check) needs: ONE field's change history, newest first. Asserted
+// on the ops store rather than widening OpsStore (at the interfacebloat cap).
+//
+// Per field, not the whole book: GetBookChangeHistory orders rows by field
+// and then time and applies its limit after that, so a fixed window over the
+// whole book could cut the very field a check reads (every other field's
+// rows, a series_object drop row included, compete for the same window).
 type bookHistoryReader interface {
-	GetBookChangeHistory(bookID string, limit int) ([]database.MetadataChangeRecord, error)
+	GetMetadataChangeHistory(bookID string, field string, limit int) ([]database.MetadataChangeRecord, error)
 }
-
-// vgHistoryWindow bounds the history read per field check. The rows a
-// resume looks for are the newest for their field, so a short window holds
-// them unless the book was rewritten many times since (then: strict).
-const vgHistoryWindow = 200
 
 // resumesOwnWrite reports whether fresh (the group as planned now) differs
 // from the stored plan only by writes this fixer made for this row, with the
@@ -434,7 +433,7 @@ func (f *vgPrimaryFixer) resumesOwnWrite(store OpsStore, planned repairs.Row, g 
 		if err != nil {
 			return false
 		}
-		rows, err := hist.GetBookChangeHistory(b.ID, vgHistoryWindow)
+		rows, err := hist.GetMetadataChangeHistory(b.ID, field, 1)
 		if err != nil {
 			return false
 		}

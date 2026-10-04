@@ -25,12 +25,13 @@ const (
 
 // A dropped embedded series object. The store's series invariant
 // (enforceSeriesInvariant) drops or replaces a Book.Series object that does
-// not match Book.SeriesID; when that object was the only record of a series
-// (a stale object older builds left), the store writes one history row in
-// the same batch as the book row: field HistoryFieldSeriesObject, change type
+// not match Book.SeriesID; when the STORED row's object was the only record
+// of a series (a stale object older builds left), the store writes one
+// history row in the same batch as the book row: field HistoryFieldSeriesObject, change type
 // ChangeTypeSeriesObjectDrop, source SeriesObjectDropSource. PreviousValue is
 // the dropped object's name, PreviousRef.SeriesID its id; NewValue / NewRef
-// are the object and SeriesID the row was written with.
+// are the object and SeriesID the row was written with. An object only the
+// writer held (never stored) is refused without a row: it was not lost.
 //
 // The change type is not a field edit: the queued apply ignores it
 // (metafetch isFieldEdit), because the scanner's own writes drop these

@@ -1,5 +1,5 @@
 // file: internal/database/series_object_drop_history_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 988e17ab-3613-427f-a33a-da7c6215bc39
 // last-edited: 2026-10-04
 
@@ -14,11 +14,12 @@ import (
 )
 
 // The store's series invariant (enforceSeriesInvariant) drops or replaces an
-// embedded Series object that does not match SeriesID. When that object was
-// the only record of a series, the drop is recorded as one series_object
-// history row in the same batch as the book write. These tests pin: one row
-// per lost object, the right old value, and no row for an ordinary series
-// edit (the writer records that as its own "series" row).
+// embedded Series object that does not match SeriesID. When the STORED row's
+// object was the only record of a series, the drop is recorded as one
+// series_object history row in the same batch as the book write. These tests
+// pin: exactly one row per lost stored object, the right old value, no row
+// for an ordinary series edit (the writer records that as its own "series"
+// row), and no row for an object only the writer held (never stored state).
 
 type dropFixture struct {
 	t     *testing.T
@@ -167,9 +168,9 @@ func TestSeriesObjectDrop_IDMismatchRecordsTheStaleObject(t *testing.T) {
 }
 
 // Replace path: the stored row is consistent, the writer passes an object
-// for another series. The stored object replaces it; the writer's object is
-// recorded, the kept one is not.
-func TestSeriesObjectDrop_ReplaceRecordsTheWritersObject(t *testing.T) {
+// for another series. The stored object replaces it, and nothing is recorded:
+// the writer's object was never stored state.
+func TestSeriesObjectDrop_ReplaceOfAWritersObjectRecordsNothing(t *testing.T) {
 	f := newDropFixture(t)
 	bk := f.book("/lib/replace.m4b", f.b)
 	row := f.reread(bk.ID)
@@ -180,14 +181,12 @@ func TestSeriesObjectDrop_ReplaceRecordsTheWritersObject(t *testing.T) {
 	got := f.reread(bk.ID)
 	require.NotNil(t, got.Series)
 	require.Equal(t, f.b.ID, got.Series.ID, "the linked series' object is kept")
-	rows := f.drops(bk.ID)
-	require.Len(t, rows, 1)
-	bID := f.b.ID
-	requireDrop(t, rows[0], 777, "Wrong Object", &bID, f.b.Name)
+	require.Empty(t, f.drops(bk.ID))
 }
 
-// Two different objects lost by one write get two rows (distinct keys).
-func TestSeriesObjectDrop_TwoLostObjectsTwoRows(t *testing.T) {
+// The stored row holds a stale object and the writer passes a different one:
+// only the stored object is a loss, so exactly one row, naming it.
+func TestSeriesObjectDrop_StoredAndWritersObjectOneRow(t *testing.T) {
 	f := newDropFixture(t)
 	bk := f.book("/lib/two.m4b", f.b)
 	bID := f.b.ID
@@ -198,25 +197,67 @@ func TestSeriesObjectDrop_TwoLostObjectsTwoRows(t *testing.T) {
 	require.NoError(t, err)
 
 	rows := f.drops(bk.ID)
-	require.Len(t, rows, 2)
-	got := map[int]string{}
-	for _, r := range rows {
-		got[*r.PreviousRef.SeriesID] = decodeName(t, r.PreviousValue)
-	}
-	require.Equal(t, map[int]string{778: "Writer Object", f.a.ID: f.a.Name}, got)
+	require.Len(t, rows, 1)
+	requireDrop(t, rows[0], f.a.ID, f.a.Name, &bID, "")
 }
 
-// Create: a new book written with an object but no SeriesID drops it, and
-// the drop is recorded.
-func TestSeriesObjectDrop_CreateRecords(t *testing.T) {
+// P3: a new book created from a copy of a stale book (object kept, no
+// SeriesID) records nothing: nothing was stored on the new book, and the
+// source book still holds the object.
+func TestSeriesObjectDrop_CreateFromAStaleCopyRecordsNothing(t *testing.T) {
 	f := newDropFixture(t)
-	bk, err := f.store.CreateBook(&Book{Title: "C", FilePath: "/lib/create.m4b", Format: "m4b",
-		Series: &Series{ID: f.a.ID, Name: f.a.Name}})
+	src := f.book("/lib/src.m4b", nil)
+	f.legacy(src.ID, nil, &Series{ID: f.a.ID, Name: f.a.Name})
+	cp := *f.reread(src.ID)
+	cp.ID, cp.FilePath = "", "/lib/copy.m4b"
+	bk, err := f.store.CreateBook(&cp)
 	require.NoError(t, err)
 	require.Nil(t, f.reread(bk.ID).Series)
+	require.Empty(t, f.drops(bk.ID))
+	require.NotNil(t, f.reread(src.ID).Series, "the source book still holds the object")
+	require.Empty(t, f.drops(src.ID))
+}
+
+// P1: two writers hold the same stale copy and write in turn. The first
+// write drops the stored object (one row); the second finds nothing stored
+// and records nothing. One loss, one row.
+func TestSeriesObjectDrop_TwoStaleCopiesOneRow(t *testing.T) {
+	f := newDropFixture(t)
+	bk := f.book("/lib/p1.m4b", nil)
+	f.legacy(bk.ID, nil, &Series{ID: 9010, Name: "Copied Series"})
+	c1, c2 := f.reread(bk.ID), f.reread(bk.ID)
+	c1.Title, c2.Title = "first", "second"
+	_, err := f.store.UpdateBook(bk.ID, c1)
+	require.NoError(t, err)
+	_, err = f.store.UpdateBook(bk.ID, c2)
+	require.NoError(t, err)
 	rows := f.drops(bk.ID)
 	require.Len(t, rows, 1)
-	requireDrop(t, rows[0], f.a.ID, f.a.Name, nil, "")
+	requireDrop(t, rows[0], 9010, "Copied Series", nil, "")
+}
+
+// P2: a writer holding series A's object clears the series while another
+// writer has already moved the row to series B. The stored object is B's own
+// (consistent), so the clear is an ordinary series edit: no row, and above
+// all no "dropped A".
+func TestSeriesObjectDrop_ClearRacingAMoveRecordsNothing(t *testing.T) {
+	f := newDropFixture(t)
+	bk := f.book("/lib/p2.m4b", f.a)
+	stale := f.reread(bk.ID) // holds A
+
+	moved := f.reread(bk.ID)
+	bID, bObj := f.b.ID, *f.b
+	moved.SeriesID, moved.Series = &bID, &bObj
+	_, err := f.store.UpdateBook(bk.ID, moved)
+	require.NoError(t, err)
+
+	stale.SeriesID = nil // clear, still carrying A's object
+	_, err = f.store.UpdateBook(bk.ID, stale)
+	require.NoError(t, err)
+	got := f.reread(bk.ID)
+	require.Nil(t, got.SeriesID)
+	require.Nil(t, got.Series)
+	require.Empty(t, f.drops(bk.ID))
 }
 
 // No row when nothing is lost: an ordinary write of a consistent book, a
@@ -259,10 +300,11 @@ func TestSeriesObjectDrop_NoRowForOrdinaryWrites(t *testing.T) {
 }
 
 // A revert to a snapshot that held the stale object writes that object back
-// through the invariant: it is dropped again and the drop recorded again.
-// The revert cannot restore a stale object; the relink does (by setting the
-// series id the object names).
-func TestSeriesObjectDrop_RevertToStaleSnapshotRecordsAgain(t *testing.T) {
+// through the invariant: it is dropped again, and NOT recorded again -- the
+// object is the snapshot's, not stored state, and the first drop's row is
+// still there. The revert cannot restore a stale object; the relink does (by
+// setting the series id the object names).
+func TestSeriesObjectDrop_RevertToStaleSnapshotRecordsNothingMore(t *testing.T) {
 	f := newDropFixture(t)
 	bk := f.book("/lib/revert.m4b", nil)
 	f.legacy(bk.ID, nil, &Series{ID: 9005, Name: "Snapshot Series"})
@@ -282,7 +324,7 @@ func TestSeriesObjectDrop_RevertToStaleSnapshotRecordsAgain(t *testing.T) {
 	_, err = f.store.RevertBookToVersion(bk.ID, staleAt)
 	require.NoError(t, err)
 	require.Nil(t, f.reread(bk.ID).Series)
-	require.Len(t, f.drops(bk.ID), 2)
+	require.Len(t, f.drops(bk.ID), 1)
 }
 
 // The legacy seed path writes the object as given and records nothing.

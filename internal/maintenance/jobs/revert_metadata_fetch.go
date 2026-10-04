@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/revert_metadata_fetch.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: c8d4e2b3-5f6a-7b8c-9d0e-1f2a3b4c5d6e
-// last-edited: 2026-09-25
+// last-edited: 2026-10-04
 
 package jobs
 
@@ -195,7 +195,10 @@ func (j *revertMetadataFetchJob) Run(ctx context.Context, store maintenance.JobS
 			continue
 		}
 
-		history, err := store.GetBookChangeHistory(bookID, 50)
+		// The whole history: the store orders it by field, then time, and
+		// applies a limit after that, so a window (it was 50) cut whole
+		// fields out of the revert depending only on their names.
+		history, err := store.GetBookChangeHistory(bookID, 1<<30)
 		if err != nil {
 			errors++
 			continue
