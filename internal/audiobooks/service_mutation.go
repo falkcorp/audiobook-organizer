@@ -944,7 +944,7 @@ func (svc *AudiobookService) updateAudiobook(ctx context.Context, id string, req
 			if fmt.Sprintf("%v", old) == fmt.Sprintf("%v", r.new) {
 				continue
 			}
-			if mss.recordChange(id, r.field, "override", "user_edit", old, r.new) {
+			if mss.recordChange(id, r.field, "override", "user_edit", old, r.new) == nil {
 				noteOverride(r.field)
 			}
 		}
@@ -978,10 +978,10 @@ func (svc *AudiobookService) updateAudiobook(ctx context.Context, id string, req
 	// (series_id did not change). One row per rename: skipped when the
 	// series_name override/lock row above already recorded it.
 	if seriesRenamed && !overrideRecorded[database.HistoryFieldSeries] {
-		if !newMetadataStateSvc(svc.store).recordChange(id, database.HistoryFieldSeries,
-			database.ChangeTypeManual, "manual", seriesPlan.renameFrom, seriesPlan.name) {
+		if rerr := newMetadataStateSvc(svc.store).recordChange(id, database.HistoryFieldSeries,
+			database.ChangeTypeManual, "manual", seriesPlan.renameFrom, seriesPlan.name); rerr != nil {
 			warn("the edit was saved but its series rename was not recorded in the change history (a queued " +
-				"metadata apply may not see it)")
+				"metadata apply may not see it): " + rerr.Error())
 		}
 	}
 

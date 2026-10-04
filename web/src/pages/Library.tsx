@@ -1,5 +1,5 @@
 // file: web/src/pages/Library.tsx
-// version: 1.97.0
+// version: 1.98.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
 // last-edited: 2026-10-04
 
@@ -34,6 +34,7 @@ import { useLibraryScrollKeeper } from '../hooks/useLibraryScrollKeeper';
 import { useLibrarySelection } from '../hooks/useLibrarySelection';
 import { useToast } from '../components/toast/ToastProvider';
 import type { Audiobook } from '../types';
+import { runOrganizeRollback } from './organizeRollback';
 import { SortField, SortOrder } from '../types';
 import { parseSearch, type ParsedSearch } from '../utils/searchParser';
 import * as api from '../services/api';
@@ -1820,36 +1821,22 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
       return;
     }
 
-    try {
-      // Each book's partial-save warnings, labelled with its title: a
-      // rollback whose rows landed but whose history did not is not a plain
-      // success.
-      const perBook: Array<{ label: string; warnings: string[] }> = [];
-      for (const book of snapshot.values()) {
-        const { warnings } = api.splitUpdateWarnings(
-          await api.updateBook(book.id, {
-            library_state: book.library_state,
-            file_path: book.file_path,
-            organized_file_hash: book.organized_file_hash,
-          })
-        );
-        perBook.push({ label: book.title || book.id, warnings });
-      }
-      const warned = api.summarizeUpdateWarnings(perBook);
-      if (warned) {
-        toast(
-          `Rollback complete, but ${warned.count} book(s) not saved completely: ${warned.text}`,
-          'warning'
-        );
-      } else {
-        toast('Rollback complete.', 'success');
-      }
+    // runOrganizeRollback never throws: it stops at the first failed book
+    // and reports how many were restored before it, with every warning so
+    // far. Books before a failure did change, so the cache is cleared and the
+    // list reloaded either way.
+    const result = await runOrganizeRollback([...snapshot.values()]);
+    if (result.failed) {
+      console.error('Failed to rollback organize:', result.failed);
+    } else {
       setBulkOrganizeError(null);
-      clearLibraryCache();
+    }
+    toast(result.message, result.severity);
+    clearLibraryCache();
+    try {
       await loadAudiobooks();
     } catch (error) {
-      console.error('Failed to rollback organize:', error);
-      toast('Rollback failed.', 'error');
+      console.error('Failed to reload the library after a rollback:', error);
     }
   };
 
