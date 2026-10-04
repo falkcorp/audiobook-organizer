@@ -414,3 +414,20 @@ func TestResolve_UnknownSingleWordStaysRefused(t *testing.T) {
 	require.Equal(t, []string{"Shirtaloon", "Travis Deverell"}, SingleWordParts("Shirtaloon, Travis Deverell", PrepareGate))
 	require.Nil(t, SingleWordParts("The Wandering Inn, Pirateaba", PrepareGate))
 }
+
+func TestOnePersonShape_GivenNameParticlesAndInitials(t *testing.T) {
+	for name, want := range map[string]bool{
+		"Le Guin, Ursula K.":       true,
+		"Van Vogt, A. E.":          true,
+		"Van Der Berg, Jan Willem": true,
+		"De La Cruz, Maria":        true,
+		"Martin Luther King, Jr.":  true,
+		"Ben Wolf, Luke Messa":     false,
+		"Ben Hale, Kel Kade":       false,
+		"Al Gore, Tipper Gore":     false,
+		"Mashton XX, Mashton XY":   false,
+		"J. N. Chaney, A. B.":      false,
+	} {
+		require.Equal(t, want, OnePersonShape(name), name)
+	}
+}

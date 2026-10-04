@@ -290,6 +290,22 @@ func SplitNames(name string, gate Gate) []string {
 	return out
 }
 
+// bylineTitle reports whether "By <name>" is the title of a book or series in
+// the library ("By Schism Rent Asunder"), so name is what a byline strip left
+// of a title. A store without the title listing, or a listing error, reads as
+// false (fail open: today's create).
+func bylineTitle(store Store, name string) bool {
+	ts, ok := database.AsCapability[TitleSource](store)
+	if !ok {
+		return false
+	}
+	titles, err := titlesOf(ts)
+	if err != nil {
+		return false
+	}
+	return titles[LettersKey("by "+name)]
+}
+
 // SingleWordParts is the split SplitNames refuses only because a piece is a
 // single word ("Shirtaloon, Travis Deverell": the shared splitter wants every
 // piece person-shaped, and a one-word pen name is not). It returns the loose
@@ -348,13 +364,32 @@ func SingleWordParts(name string, gate Gate) []string {
 // IsSingleWord reports whether a name is one word ("Shirtaloon").
 func IsSingleWord(name string) bool { return len(strings.Fields(name)) == 1 }
 
-// surnameParticles lead a surname written first ("Le Guin, Ursula K.", "Van
-// Vogt, A. E.", "Van Der Berg, Jan Willem").
+// surnameParticles lead a surname written first ("Le Guin, Ursula K.", "De
+// La Cruz, Maria").
 var surnameParticles = map[string]bool{
-	"le": true, "la": true, "van": true, "von": true, "de": true, "del": true, "della": true, "di": true,
-	"du": true, "des": true, "da": true, "dos": true, "das": true, "der": true, "den": true, "ter": true,
-	"ten": true, "mac": true, "mc": true, "st": true, "st.": true, "al": true, "el": true, "bin": true,
-	"ben": true, "o'": true,
+	"le": true, "la": true, "von": true, "de": true, "della": true, "di": true, "du": true, "des": true,
+	"da": true, "dos": true, "das": true, "der": true, "den": true, "ter": true, "ten": true, "o'": true,
+}
+
+// weakSurnameParticles are particles that are also common given names ("Ben
+// Wolf, Luke Messa", "Al Gore", "Van Morrison"): they lead a surname only
+// when another particle follows ("Van Der Berg, Jan Willem").
+var weakSurnameParticles = map[string]bool{
+	"van": true, "ben": true, "bin": true, "al": true, "el": true, "del": true, "mac": true, "mc": true,
+	"st": true, "st.": true,
+}
+
+// particleLed reports whether a surname written first opens with a particle.
+func particleLed(left []string) bool {
+	if len(left) < 2 {
+		return false
+	}
+	first := strings.ToLower(left[0])
+	if surnameParticles[first] {
+		return true
+	}
+	second := strings.ToLower(left[1])
+	return weakSurnameParticles[first] && (surnameParticles[second] || weakSurnameParticles[second]) && len(left) >= 3
 }
 
 // suffixRe is a name suffix or degree written as its own comma piece ("Jr.",
@@ -397,8 +432,11 @@ func givenNameShaped(s string) bool {
 //     Hayes, M.A.");
 //   - the right side is given-name shaped ("Tolkien, J. R. R.", "Martin,
 //     George R. R.", "Le Guin, Ursula K.");
-//   - the left side starts with a surname particle ("Van Der Berg, Jan
-//     Willem").
+//   - the left side starts with a surname particle ("De La Cruz, Maria"; a
+//     particle that is also a given name, "Van", "Ben", "Al", only when
+//     another particle follows: "Van Der Berg, Jan Willem").
+//
+// A left side that carries an initial is a full name, never a surname.
 //
 // "Travis Deverell, Shirtaloon" is two people: a two-word left side and a
 // right side that is neither initials nor a particle-led surname.
@@ -411,14 +449,24 @@ func surnameFirst(name string, parts []string) bool {
 	if len(left) == 0 || len(right) == 0 {
 		return false
 	}
+	// A surname never carries an initial: "Mashton XX, Mashton XY" and
+	// "J. N. Chaney, A. B." have a full name on the left.
+	leftInitial := false
+	for _, w := range left {
+		if initialRe.MatchString(w) {
+			leftInitial = true
+		}
+	}
 	switch {
 	case len(left) == 1 && len(right) == 1:
 		return true
 	case IsNameSuffix(parts[1]):
 		return true
+	case leftInitial:
+		return false
 	case givenNameShaped(parts[1]):
 		return true
-	case surnameParticles[strings.ToLower(left[0])]:
+	case particleLed(left):
 		return true
 	}
 	return false
@@ -523,8 +571,10 @@ func personPiece(p string) bool {
 			letters++
 		}
 	}
-	first := []rune(f[0])[0]
-	return letters >= 4 && unicode.IsUpper(first)
+	// Case is not asked: a lowercase pen name ("pirateaba") is a name, and
+	// every caller also requires an existing author (or, in the combined-credit
+	// fixer, a provider credit) for the piece.
+	return letters >= 4
 }
 
 func piecesVerdict(store Store, name string) (same *database.Author, combined bool, err error) {
@@ -679,6 +729,12 @@ func resolve(store Store, name string, gate Gate, create bool) ([]database.Autho
 		return nil, ErrCombinedCredit
 	}
 	if !create {
+		return nil, nil
+	}
+	if bylineTitle(store, name) {
+		// "Heresies Distressed" from the title "By Heresies Distressed": the
+		// byline strip (here or in the creation gate) cut a book title, so
+		// there is no author to create.
 		return nil, nil
 	}
 	a, err := store.CreateAuthor(name)

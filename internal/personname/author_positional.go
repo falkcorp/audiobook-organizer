@@ -144,9 +144,11 @@ func IsPositionalArtifactName(name string) bool {
 }
 
 // byPrefixRe is a leading byline word: "By:", "By " or "by ", in any case,
-// with optional whitespace around the colon. "Byron" does not match: the word
-// must end in a colon or whitespace.
-var byPrefixRe = regexp.MustCompile(`(?i)^\s*by(?:\s*:\s*|\s+)`)
+// with optional whitespace around the colon, and the "By - " folder form (a
+// dash in place of the colon: 20 prod folders on 2026-10-04, "By - Rick
+// Partlow"). "Byron" does not match: the word must end in a colon, a dash or
+// whitespace.
+var byPrefixRe = regexp.MustCompile(`(?i)^\s*by(?:\s*[:\-\x{2013}\x{2014}]\s*|\s+)`)
 
 // StripByPrefix removes a leading byline ("By: Brandon Sanderson" ->
 // "Brandon Sanderson"). Every creation gate and author lookup applies it
