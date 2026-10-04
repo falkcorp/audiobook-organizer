@@ -1,5 +1,5 @@
 <!-- file: docs/design/2026-10-03-storage-efficiency-design.md -->
-<!-- version: 0.2.0 -->
+<!-- version: 0.3.0 -->
 <!-- guid: 332dcbd9-73e2-4814-b1a0-723afa60e605 -->
 <!-- last-edited: 2026-10-03 -->
 
@@ -88,6 +88,13 @@ Non-goals:
   list, apply by explicit ids, owner approval.
 - P6. **Measure before and after.** Phase 0 builds the census; every later
   phase states the number it expects to move and is checked against it.
+- P7. **Expensive derived data is never deleted by this work.** Audio
+  signatures, fingerprints and transcripts cost processor time to produce;
+  the owner keeps book and file records precisely so these survive (owner,
+  2026-10-03). No retention rule, prune, conversion or delete path in this
+  design removes the current signature, fingerprint or transcript of any book
+  or file. Where a record that owns such data is removed, the data is kept
+  and stays findable (sections 4.7 and 5.3).
 
 ## 4. Book history: change-only versions (replaces full copies)
 
@@ -240,9 +247,13 @@ the previous value of any key it changed.
   middle.
 - Pins are released when their merge journal entry is finalized or after 90
   days, by the same nightly op.
-- `DeleteBook` (hard delete) removes `book_ver:`, `book_sig_ver:` and
-  `book_verhead:` for the book in its batch. Today it leaves them forever
-  (`pebble_store.go:3351`).
+- `DeleteBook` (hard delete) removes the change history (`bookhist:`, legacy
+  `book_ver:`, `book_verhead:`) in its batch; today it leaves it forever
+  (`pebble_store.go:3351`). It does **not** remove the signature: the live
+  `book_sig:` entry and `book_sig_ver:` history move to
+  `book_sig_kept:<bookID>` so the computed signature outlives the row (P7).
+  Today `DeleteBook` deletes `book_sig:`. Whether hard delete should exist at
+  all for books with computed signals is open question Q6.
 - The prune runs nightly. Today it is manual and defaults to dry run.
 
 ### 4.8 Converting existing copies (space reclaim only)
@@ -336,8 +347,14 @@ never be rewritten without its cold data being carried over. A background op
 (resumable, parallel by file id, modelled on `MigrateBookSigToSidecar` and
 `SweepBookFileSegDrop`) finishes the rest without `UpdateBookFile`.
 
-Delete paths drop both side keys (`deleteBookFileAt`, `DeleteBookFilesForBook`,
-`DeleteBookFilesByIDs`, `WipeByPrefixes` in `maintenance_fixups.go:361`).
+Delete paths (`deleteBookFileAt`, `DeleteBookFilesForBook`,
+`DeleteBookFilesByIDs`) do not drop the side keys (P7). They re-key them to
+`book_file_fp_kept:<content hash or fileID>` / `book_file_cold_kept:<...>` with
+the file's path and hashes recorded, so a later row for the same audio can
+re-adopt the fingerprint and transcript without recomputing. Only
+`ClearBookFileFingerprint` (the audio itself changed) and the explicit
+reset-all op delete a fingerprint. `WipeByPrefixes` (`maintenance_fixups.go:361`)
+is a rollback tool and wipes the side prefixes with the rows.
 
 ### 5.4 Changed-detection in the file chokepoint
 
@@ -529,6 +546,10 @@ phase 2 has verified on prod and the owner approves the per-book list.
   not a cached verdict?
 - Q4. Stop the weekly full compaction and shorten ZFS snapshot retention on
   the app data dataset?
+- Q6. Hard delete removes a book's computed signature today. Proposed: keep
+  the signature, fingerprints and transcripts when a book or file record is
+  removed, and let a later record for the same audio re-adopt them. Agree, or
+  should hard delete of a book with computed signals be refused outright?
 - Q5. Phase 5 (fingerprint index): the index holds an estimated 61-78M keys.
   Fingerprints cover only the first 120 s of each file. Shrink the index, or
   decide first whether it stays?
