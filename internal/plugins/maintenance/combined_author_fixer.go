@@ -601,6 +601,9 @@ func (f *combinedAuthorFixer) evaluate(store OpsStore, idx *combinedAuthorIndex,
 	// spellings, so a change in them is a change of decision.
 	credited, uncredited, created := 0, 0, 0
 	display := map[int]string{}
+	// resolvedID maps an uncredited part's name to the existing author it
+	// resolves to (absent: apply creates it).
+	resolvedID := map[string]int{}
 	for ri := range recs {
 		for pi := range recs[ri].parts {
 			p := recs[ri].parts[pi]
@@ -615,6 +618,7 @@ func (f *combinedAuthorFixer) evaluate(store OpsStore, idx *combinedAuthorIndex,
 			}
 			if existing != nil && !inRec[existing.ID] && !idx.combined[existing.ID] {
 				display[existing.ID] = existing.Name
+				resolvedID[p.name] = existing.ID
 				continue
 			}
 			vs := combinedVariants(idx, p.name)
@@ -624,6 +628,7 @@ func (f *combinedAuthorFixer) evaluate(store OpsStore, idx *combinedAuthorIndex,
 				r.Evidence = append(r.Evidence, fmt.Sprintf("no author is named %q; apply creates it", p.name))
 			case 1:
 				display[vs[0].ID] = vs[0].Name
+				resolvedID[p.name] = vs[0].ID
 				r.Evidence = append(r.Evidence, fmt.Sprintf("%q resolves to the existing author %q (id %d)", p.name, vs[0].Name, vs[0].ID))
 			default:
 				var spell []string
@@ -667,13 +672,8 @@ func (f *combinedAuthorFixer) evaluate(store OpsStore, idx *combinedAuthorIndex,
 			case p.creditedID != 0:
 				targets[ri] = append(targets[ri], p.creditedID)
 			default:
-				id := 0
-				if existing, _ := store.GetAuthorByName(p.name); existing != nil && !inRec[existing.ID] && !idx.combined[existing.ID] {
-					id = existing.ID
-				} else if vs := combinedVariants(idx, p.name); len(vs) == 1 {
-					id = vs[0].ID
-				}
-				if id == 0 {
+				id, ok := resolvedID[p.name]
+				if !ok {
 					id = next
 					newNames[id] = p.name + " (new author)"
 					next--
