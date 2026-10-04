@@ -1,7 +1,7 @@
 // file: tests/e2e/metadata-provenance.spec.ts
-// version: 2.3.0
+// version: 2.4.0
 // guid: 9a8b7c6d-5e4f-3d2c-1b0a-9f8e7d6c5b4a
-// last-edited: 2026-08-09
+// last-edited: 2026-10-03
 
 /**
  * E2E tests for MetadataEditDialog provenance features.
@@ -511,7 +511,7 @@ test.describe('MetadataEditDialog Provenance E2E', () => {
 
     // Should show locked tooltip
     await expect(
-      page.getByText(/Locked — will not be overwritten/)
+      page.getByText(/Your lock — will not be overwritten/)
     ).toBeVisible();
   });
 

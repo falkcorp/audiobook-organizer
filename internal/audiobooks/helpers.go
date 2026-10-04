@@ -1,5 +1,5 @@
 // file: internal/audiobooks/helpers.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234560010
 // last-edited: 2026-10-03
 //
@@ -21,9 +21,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"reflect"
 	"log/slog"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -90,36 +90,140 @@ func copyMetadataState(state map[string]metadataFieldState) map[string]metadataF
 	return out
 }
 
-// saveEditedMetadataState saves a person's edit of a book's field state: the
-// fields edited changed relative to loaded (the state as the edit read it,
-// outside the stripe) are written onto the rows as they stand now, under the
-// book's field-state stripe (metafetch.WithStateSnapshot); a field the edit
-// removed is deleted. Every other field keeps what it holds now, so a
-// concurrent write the edit never saw (a fetch, a repair lock, another edit)
-// survives. A field this edit changed is the person's: its LockSource is
-// cleared, so a repair's lock they touched becomes theirs.
-func (svc *AudiobookService) saveEditedMetadataState(bookID string, loaded, edited map[string]metadataFieldState) error {
-	return svc.modifyMetadataState(bookID, func(cur map[string]metadataFieldState) error {
-		changed := false
-		for field, e := range edited {
-			if was, ok := loaded[field]; ok && reflect.DeepEqual(was, e) {
-				continue
-			}
-			e.LockSource = ""
-			cur[field] = e
-			changed = true
-		}
-		for field := range loaded {
-			if _, kept := edited[field]; !kept {
-				delete(cur, field)
-				changed = true
-			}
-		}
-		if !changed {
+// saveEditedMetadataState saves a person's edit of a book's field state onto
+// the rows as they stand now, under the book's field-state stripe
+// (metafetch.WithStateSnapshot). loaded is the state as the edit read it
+// (outside the stripe), edited the state the edit produced.
+//
+// The merge is per SUB-FIELD, not per entry: for each field, only the
+// sub-fields that differ between loaded and edited (OverrideValue,
+// OverrideLocked, FetchedValue, LockSource -- every field of the struct but
+// UpdatedAt, see stateSubFieldsDiffer) are written onto the current row, and
+// every other sub-field keeps what it holds now. So a write the edit never
+// saw survives its save: a fetch's FetchedValue on a field the person locked,
+// a repair lock on a field the edit only re-timestamped, another field
+// entirely.
+//
+//   - A field whose override or lock this edit changed is the person's: its
+//     LockSource is cleared, so a repair's lock they touched becomes theirs.
+//   - A field the edit removed is deleted only while its row still holds what
+//     the edit read (sub-fields compared, UpdatedAt ignored); a row changed
+//     since is left as it is.
+//   - A row deleted concurrently is not resurrected: the edit's changed
+//     sub-fields land on an empty entry, and an entry with none stays gone.
+//
+// It returns the book's state as read under the stripe, before the merge, so
+// the caller's override history records what this save replaced rather than
+// what the unlocked read saw.
+func (svc *AudiobookService) saveEditedMetadataState(bookID string, loaded, edited map[string]metadataFieldState) (map[string]metadataFieldState, error) {
+	var before map[string]metadataFieldState
+	err := svc.modifyMetadataState(bookID, func(cur map[string]metadataFieldState) error {
+		before = copyMetadataState(cur)
+		if !mergeEditedMetadataState(cur, loaded, edited, time.Now()) {
 			return metafetch.ErrNoStateChange
 		}
 		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
+	return before, nil
+}
+
+// mergeEditedMetadataState applies the edit (loaded -> edited) onto cur, sub-
+// field by sub-field, as saveEditedMetadataState describes. It reports
+// whether cur changed.
+func mergeEditedMetadataState(cur, loaded, edited map[string]metadataFieldState, now time.Time) bool {
+	changed := false
+	fields := make(map[string]struct{}, len(loaded)+len(edited))
+	for f := range loaded {
+		fields[f] = struct{}{}
+	}
+	for f := range edited {
+		fields[f] = struct{}{}
+	}
+	for field := range fields {
+		l, inLoaded := loaded[field]
+		e, inEdited := edited[field]
+		c, inCur := cur[field]
+		if !inEdited {
+			// Removed by the edit: deleted only while the row still holds
+			// what the edit read. A row changed since (or already gone) is
+			// left as it is; the removal never saw that write.
+			if inLoaded && inCur && !stateSubFieldsDiffer(c, l) {
+				delete(cur, field)
+				changed = true
+			}
+			continue
+		}
+		// Added or changed by the edit. A field the edit added has no
+		// loaded entry: every non-zero sub-field of it is the edit's.
+		merged, wrote := mergeStateSubFields(c, l, e)
+		if !wrote {
+			continue
+		}
+		merged.UpdatedAt = e.UpdatedAt
+		if merged.UpdatedAt.IsZero() {
+			merged.UpdatedAt = now
+		}
+		cur[field] = merged
+		changed = true
+	}
+	return changed
+}
+
+// stateUpdatedAtField is the one MetadataFieldState field the sub-field merge
+// does not treat as data: a timestamp-only "change" is no change.
+const stateUpdatedAtField = "UpdatedAt"
+
+// stateOverrideFields are the sub-fields whose change makes the field the
+// person's (its LockSource is cleared).
+var stateOverrideFields = map[string]bool{"OverrideValue": true, "OverrideLocked": true}
+
+// stateSubFieldsDiffer reports whether a and b differ in any field but
+// UpdatedAt. Every field of the struct is compared, so a field added to
+// MetadataFieldState later is merged and compared without a change here.
+func stateSubFieldsDiffer(a, b metadataFieldState) bool {
+	va, vb := reflect.ValueOf(a), reflect.ValueOf(b)
+	t := va.Type()
+	for i := 0; i < t.NumField(); i++ {
+		if t.Field(i).Name == stateUpdatedAtField {
+			continue
+		}
+		if !reflect.DeepEqual(va.Field(i).Interface(), vb.Field(i).Interface()) {
+			return true
+		}
+	}
+	return false
+}
+
+// mergeStateSubFields returns cur with every sub-field that differs between
+// loaded and edited set to edited's value, and whether any did. When the
+// override value or the lock flag changed, LockSource is cleared (a person
+// touched the field). UpdatedAt is left to the caller.
+func mergeStateSubFields(cur, loaded, edited metadataFieldState) (metadataFieldState, bool) {
+	vc := reflect.ValueOf(&cur).Elem()
+	vl, ve := reflect.ValueOf(loaded), reflect.ValueOf(edited)
+	t := vc.Type()
+	wrote, touchedOverride := false, false
+	for i := 0; i < t.NumField(); i++ {
+		name := t.Field(i).Name
+		if name == stateUpdatedAtField {
+			continue
+		}
+		if reflect.DeepEqual(vl.Field(i).Interface(), ve.Field(i).Interface()) {
+			continue
+		}
+		vc.Field(i).Set(ve.Field(i))
+		wrote = true
+		if stateOverrideFields[name] {
+			touchedOverride = true
+		}
+	}
+	if touchedOverride {
+		cur.LockSource = ""
+	}
+	return cur, wrote
 }
 
 // modifyMetadataState runs fn on the book's state under its field-state

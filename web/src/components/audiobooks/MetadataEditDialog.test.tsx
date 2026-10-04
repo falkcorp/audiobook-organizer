@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/MetadataEditDialog.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 217b8da3-cea9-45bb-bcda-ca895cd7b6e0
 // last-edited: 2026-10-03
 
@@ -8,6 +8,7 @@ import { useState } from 'react';
 import { screen, fireEvent, waitFor } from '@testing-library/react';
 import { renderWithProviders } from '../../test/renderWithProviders';
 import { MetadataEditDialog } from './MetadataEditDialog';
+import * as api from '../../services/api';
 import type { Audiobook } from '../../types';
 
 vi.mock('../../services/api', async (importOriginal) => {
@@ -120,5 +121,24 @@ describe('MetadataEditDialog', () => {
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     const dirty = onSave.mock.calls[0][1] as Set<string>;
     expect(dirty.has('author')).toBe(false);
+  });
+
+  it('names the repair that set a repair lock in the lock tooltip', async () => {
+    vi.mocked(api.getAudiobookFieldStates).mockResolvedValueOnce({
+      title: { override_locked: true, lock_source: 'repair:op-1' },
+      narrator: { override_locked: true },
+    } as unknown as Awaited<ReturnType<typeof api.getAudiobookFieldStates>>);
+    renderWithProviders(
+      <MetadataEditDialog open audiobook={book} onClose={vi.fn()} onSave={vi.fn()} />
+    );
+
+    // The aria-label flips to "Unlock" once the field states have loaded.
+    const titleLock = await screen.findByRole('button', { name: 'Unlock Title *' });
+    fireEvent.mouseOver(titleLock);
+    expect(await screen.findByText(/Repair lock \(repair:op-1\)/)).toBeInTheDocument();
+
+    const narratorLock = screen.getByRole('button', { name: 'Unlock Narrator' });
+    fireEvent.mouseOver(narratorLock);
+    expect(await screen.findByText(/Your lock — will not be overwritten/)).toBeInTheDocument();
   });
 });
