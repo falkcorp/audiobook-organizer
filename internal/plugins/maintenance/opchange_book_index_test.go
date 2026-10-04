@@ -9,9 +9,11 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
 type fakeOpChangeRebuilder struct {
@@ -88,5 +90,46 @@ func TestOpchangeBookIndexRebuild_RealStore(t *testing.T) {
 	got, err := store.GetBookChanges("b1")
 	if err != nil || len(got) != 1 {
 		t.Fatalf("GetBookChanges after rebuild = %v, %v", got, err)
+	}
+}
+
+// progressCountingReporter counts UpdateProgress calls (the liveness stamps a
+// LivenessManual op owes).
+type progressCountingReporter struct {
+	fakeReporter
+	mu    sync.Mutex
+	stamp int
+}
+
+func (r *progressCountingReporter) UpdateProgress(_, _ int, _ string) error {
+	r.mu.Lock()
+	r.stamp++
+	r.mu.Unlock()
+	return nil
+}
+
+// TestOpchangeBookIndexRebuild_ManualLivenessStamps: the op declares
+// LivenessManual, so the rebuild must stamp UpdateProgress from the store's
+// per-chunk callback, not only at start and end.
+func TestOpchangeBookIndexRebuild_ManualLivenessStamps(t *testing.T) {
+	if def := (&Plugin{}).opChangeBookIndexRebuildDef(); def.Liveness != sdk.LivenessManual {
+		t.Fatalf("liveness = %v, want manual", def.Liveness)
+	}
+	store, err := database.NewPebbleStoreInMemory(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if err := store.CreateOperationChange(&database.OperationChange{OperationID: "op1", BookID: "b1"}); err != nil {
+		t.Fatal(err)
+	}
+	rep := &progressCountingReporter{}
+	r, _ := database.AsCapability[opChangeIndexRebuilder](store)
+	if err := rebuildOpChangeBookIndex(context.Background(), r, rep); err != nil {
+		t.Fatal(err)
+	}
+	// start + one chunk + end.
+	if rep.stamp < 3 {
+		t.Fatalf("UpdateProgress calls = %d, want at least 3 (start, per chunk, end)", rep.stamp)
 	}
 }
