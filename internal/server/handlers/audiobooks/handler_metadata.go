@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_metadata.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 591661c3-5e87-4559-9a08-3203eec4fb68
-// last-edited: 2026-09-28
+// last-edited: 2026-10-04
 
 // Metadata-history / undo / field-state / path-history / external-id /
 // changelog / changes endpoints for the audiobooks domain. Split out of
@@ -21,6 +21,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
+	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/gin-gonic/gin"
 )
 
@@ -309,13 +310,21 @@ func (h *Handler) GetBookChangelog(c *gin.Context) {
 }
 
 // GetBookChanges returns change tracking records for a book.
-// GET /audiobooks/:id/changes.
+// GET /audiobooks/:id/changes. Ledger-only rows (undo.IsLedgerOnly: a
+// Repairs plan record, which changes nothing about the book) are left out;
+// GET /operations/:id/changes still lists them.
 func (h *Handler) GetBookChanges(c *gin.Context) {
 	id := c.Param("id")
-	changes, err := h.store.GetBookChanges(id)
+	all, err := h.store.GetBookChanges(id)
 	if err != nil {
 		httputil.InternalError(c, "failed to get book changes", err)
 		return
+	}
+	changes := make([]*database.OperationChange, 0, len(all))
+	for _, ch := range all {
+		if !undo.IsLedgerOnly(ch) {
+			changes = append(changes, ch)
+		}
 	}
 	httputil.RespondWithOK(c, gin.H{"changes": changes})
 }

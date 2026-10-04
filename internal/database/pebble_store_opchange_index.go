@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_opchange_index.go
-// version: 1.2.3
+// version: 1.3.0
 // guid: 7ce04252-7ac9-421a-ba5e-5f230bbf0ab4
 // last-edited: 2026-10-03
 
@@ -276,6 +276,16 @@ func (p *PebbleStore) opChangeByBookIndexUsable() (bool, error) {
 		return false, nil
 	}
 	return p.opChangeByBookIndexBuilt()
+}
+
+// OpChangeByBookIndexUsable reports whether GetBookChanges reads the
+// opchange_by_book index right now (trusted this boot and the sentinel
+// present) rather than scanning every opchange row. A caller choosing
+// between one GetBookChanges per book and one full ScanOperationChanges pass
+// asks this. A failed sentinel read answers false (the scan is never wrong).
+func (p *PebbleStore) OpChangeByBookIndexUsable() bool {
+	ok, err := p.opChangeByBookIndexUsable()
+	return err == nil && ok
 }
 
 // lockOpChangeIdxRun takes the one-at-a-time slot for index passes, giving up

@@ -573,7 +573,7 @@ func (rs *RevertService) revertChangeIn(c *database.OperationChange, plan *undo.
 	case undo.ChangeTypeSeriesRename:
 		return rs.revertSeriesRename(c)
 	case undo.ChangeTypeBookFileReassign:
-		return rs.revertBookFileReassign(c)
+		return rs.revertBookFileReassign(c, stamps)
 	case undo.ChangeTypeBookFileRepoint:
 		return rs.revertBookFileRepoint(c)
 	case undo.ChangeTypeBookFileTrack:
@@ -912,7 +912,14 @@ func (r revertHistoryRecorder) GetSeriesByID(id int) (*database.Series, error) {
 // move when the row is no longer under BookID, so a row something else has
 // moved since fails the change instead of being taken from its new owner.
 // Nothing is deleted either way.
-func (rs *RevertService) revertBookFileReassign(c *database.OperationChange) error {
+//
+// A source book that is retired now is moved back onto only when THIS
+// operation retired it (its soft-delete stamp is among the operation's,
+// stamps): the revert restores that book after its rows are back. A source
+// something else retired since (a user merge that finished an interrupted
+// repair by hand, a dedup merge) is refused: the row would land on a deleted
+// book, out of every view, while the book that now holds it stays live.
+func (rs *RevertService) revertBookFileReassign(c *database.OperationChange, stamps undo.SoftDeleteStamps) error {
 	fileID, ok := undo.BookFileIDFromField(c.FieldName)
 	if !ok {
 		return fmt.Errorf("no book_file id in field %q", c.FieldName)
@@ -920,8 +927,17 @@ func (rs *RevertService) revertBookFileReassign(c *database.OperationChange) err
 	if _, err := rs.loadBook(c.BookID); err != nil {
 		return err
 	}
-	if _, err := rs.loadBook(c.OldValue); err != nil {
+	src, err := rs.loadBook(c.OldValue)
+	if err != nil {
 		return err
+	}
+	if src != nil && src.IsSoftDeleted() && !retiredByThisOp(src, stamps) {
+		merged := ""
+		if src.MergedIntoBookID != nil {
+			merged = " (merged into " + *src.MergedIntoBookID + ")"
+		}
+		return driftRefusal("book %s, which this operation moved file %s off, was retired by something else since%s; moving the file back would leave it on a deleted book, so it stays on %s",
+			c.OldValue, fileID, merged, c.BookID)
 	}
 	// Not found is (nil, nil); an error is a failed read, never "absent".
 	onTarget, err := rs.db.GetBookFileByID(c.BookID, fileID)
@@ -939,6 +955,20 @@ func (rs *RevertService) revertBookFileReassign(c *database.OperationChange) err
 		return fmt.Errorf("move book_file %s from %s back to %s: %w", fileID, c.BookID, c.OldValue, err)
 	}
 	return nil
+}
+
+// retiredByThisOp reports whether retired book b carries one of the
+// operation's own soft-delete stamps (so the revert restores it).
+func retiredByThisOp(b *database.Book, stamps undo.SoftDeleteStamps) bool {
+	if b.MarkedForDeletionAt == nil {
+		return false
+	}
+	for _, t := range stamps[b.ID] {
+		if t.Equal(*b.MarkedForDeletionAt) {
+			return true
+		}
+	}
+	return false
 }
 
 // partialTagRestore reports a snapshot tag_write row put back only in part:

@@ -728,6 +728,14 @@ func NotRestorableLabel(c *database.OperationChange) string {
 	return c.ChangeType
 }
 
+// IsLedgerOnly reports whether c records no change to its book at all, only
+// evidence an operation keeps for itself (a Repairs plan record). User-facing
+// per-book change lists leave such rows out; the operation's own change list
+// keeps them.
+func IsLedgerOnly(c *database.OperationChange) bool {
+	return c != nil && c.ChangeType == ChangeTypeRepairPlanRecord
+}
+
 // IsRestorable reports whether the revert engine can reverse c.
 func IsRestorable(c *database.OperationChange) bool {
 	return NotRestorableLabel(c) == ""
