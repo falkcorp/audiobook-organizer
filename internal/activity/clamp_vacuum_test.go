@@ -1,7 +1,7 @@
 // file: internal/activity/clamp_vacuum_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6a3e1c7d-90b4-4f28-8d51-2b7c40e9af63
-// last-edited: 2026-09-08
+// last-edited: 2026-10-04
 
 package activity
 

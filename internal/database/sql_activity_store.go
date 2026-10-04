@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_store.go
-// version: 1.18.1
+// version: 1.19.0
 // guid: 2c9a7e14-8b30-4d6f-a1e2-5f7b9c0d3e28
-// last-edited: 2026-10-03
+// last-edited: 2026-10-04
 
 // Package database — backend-agnostic SQL activity store.
 //

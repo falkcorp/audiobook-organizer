@@ -1,7 +1,7 @@
 // file: internal/database/test_deadline_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: e4cb4c5c-b25d-414e-815a-01772db5bb16
-// last-edited: 2026-09-26
+// last-edited: 2026-10-04
 
 package database
 
@@ -50,6 +50,19 @@ import (
 //     using the store crashed the binary with a misleading panic. The helper
 //     cannot tell those apart, so it takes the one outcome that is never
 //     misleading.
+//
+// A bound that was SHORTENED or FLOORED because the package deadline is near
+// (waitShortened, waitFloored) is handled differently in one respect: if the
+// goroutines then finish inside the grace period, the wait logs and returns
+// normally and the test passes. Such a bound measures how much package time is
+// left, not how long the work may take, so work that finishes is not a
+// deadlock and failing it only reports that the package was slow. Before this,
+// TestCandidateWritePath_ConcurrentNoRace failed whenever it happened to run
+// within ~35 s of the package -timeout (reproduced 84 times with 6 parallel
+// copies at -test.timeout=4800ms, every one "collapsed to the 100ms floor").
+// A shortened or floored wait whose goroutines are STILL running when the
+// grace expires is treated exactly as before: dump and exit the binary. A full
+// bound that expires still fails the test even if the work finishes later.
 //
 // A t.Cleanup-registered join was considered and rejected: most callers close
 // their store with a defer, which runs during FailNow's Goexit BEFORE any
@@ -196,6 +209,11 @@ func awaitOrFatal(t *testing.T, helper, what string, block func()) {
 	case <-bound.C:
 	}
 
+	if budget.regime != waitFull {
+		awaitStarvedWait(t, helper, what, budget, done)
+		return
+	}
+
 	diag := fmt.Sprintf("%s: %s: still waiting for %s after %v (per-test wait bound, see test_deadline_test.go): %s",
 		t.Name(), helper, what, budget.bound.Round(time.Millisecond), budget.diagnosis())
 	fmt.Fprintf(os.Stderr, "%s\n--- all goroutines at wait timeout (%s) ---\n%s--- end goroutine dump ---\n",
@@ -214,6 +232,40 @@ func awaitOrFatal(t *testing.T, helper, what string, block func()) {
 	case <-grace.C:
 	}
 
+	exitStillRunning(t, helper, what, budget)
+}
+
+// awaitStarvedWait handles a timed-out wait whose bound was shortened or
+// floored by the package deadline. If done closes within the grace the work
+// finished, so it logs and returns and the test continues; otherwise it reports
+// with a goroutine dump and exits the binary, as a full-bound timeout does.
+func awaitStarvedWait(t *testing.T, helper, what string, budget waitBudget, done <-chan struct{}) {
+	t.Helper()
+	fmt.Fprintf(os.Stderr, "%s: %s: %s not done after its %v bound, which was cut by the package deadline: "+
+		"waiting up to %v more before calling it a hang. %s\n", t.Name(), helper, what,
+		budget.bound.Round(time.Millisecond), budget.grace.Round(time.Millisecond), budget.diagnosis())
+	expired := time.Now()
+	grace := time.NewTimer(budget.grace)
+	defer grace.Stop()
+	select {
+	case <-done:
+		t.Logf("%s: %s finished %v after its deadline-shortened %v bound expired; finished work is not a "+
+			"deadlock, so the wait passes (see test_deadline_test.go)", helper, what,
+			time.Since(expired).Round(time.Millisecond), budget.bound.Round(time.Millisecond))
+		return
+	case <-grace.C:
+	}
+	fmt.Fprintf(os.Stderr, "--- all goroutines at grace expiry (%s) ---\n%s--- end goroutine dump ---\n",
+		t.Name(), allGoroutineStacks())
+	t.Errorf("%s: %s: still waiting for %s after its bound and grace (goroutine dump written to stderr): %s",
+		t.Name(), helper, what, budget.diagnosis())
+	exitStillRunning(t, helper, what, budget)
+}
+
+// exitStillRunning ends the test binary because the awaited goroutines outlived
+// the grace period; the file comment explains why it cannot fail normally.
+func exitStillRunning(t *testing.T, helper, what string, budget waitBudget) {
+	t.Helper()
 	fmt.Fprintf(os.Stderr, "%s: %s: %s still running %v after the wait bound expired; EXITING THE TEST BINARY "+
 		"instead of failing the test normally, because that would run this test's deferred calls and t.Cleanup "+
 		"funcs, which close state (the Pebble store) those goroutines are still using and would turn this failure "+

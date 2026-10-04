@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_summary_clamp.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f1d8a24-6c05-4b9e-8d72-51ac07e4b6f3
-// last-edited: 2026-09-08
+// last-edited: 2026-10-04
 
 // Package database — retroactive clamp of oversized activity `summary` values.
 //
