@@ -1,5 +1,5 @@
 // file: internal/database/census.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: be43e3c6-39e4-4a3e-a43c-cd5651ff141c
 // last-edited: 2026-10-03
 
@@ -341,6 +341,9 @@ const censusMaxAttempts = 3
 // changed, the whole pass is retried; after censusMaxAttempts, tables that
 // disappeared are split evenly across the ranges their key bounds overlap,
 // and a note says how many.
+//
+// Shares and disk bytes then go only to ranges that hold a live key, found by
+// one bounded seek per range (censusNonEmptyRanges).
 func (p *PebbleStore) censusFamilies(out *DBCensus) error {
 	ranges := keyFamilyRanges(keyFamilies)
 	var (
@@ -358,6 +361,10 @@ func (p *PebbleStore) censusFamilies(out *DBCensus) error {
 		if len(gone) == 0 {
 			break
 		}
+	}
+	nonEmpty, err := p.censusNonEmptyRanges(ranges)
+	if err != nil {
+		return err
 	}
 
 	var missingProps, virtual int
@@ -393,7 +400,9 @@ func (p *PebbleStore) censusFamilies(out *DBCensus) error {
 		return a
 	}
 	for ri, du := range disk {
-		acc(ranges[ri].Family).disk += du
+		if nonEmpty[ri] {
+			acc(ranges[ri].Family).disk += du
+		}
 	}
 
 	for fn, t := range tables {
@@ -401,6 +410,7 @@ func (p *PebbleStore) censusFamilies(out *DBCensus) error {
 		if gone[fn] || len(overlaps) == 0 {
 			overlaps = censusBoundsOverlap(ranges, t.smallest, t.largest)
 		}
+		overlaps = censusOnlyNonEmpty(overlaps, nonEmpty)
 		var total uint64
 		for _, b := range overlaps {
 			total += b
@@ -463,6 +473,53 @@ func (p *PebbleStore) censusFamilies(out *DBCensus) error {
 	m := p.db.Metrics()
 	out.DiskSpaceUsage = m.DiskSpaceUsage()
 	return nil
+}
+
+// censusNonEmptyRanges reports, per range, whether the range holds at least
+// one live key. It is one bounded seek per range on a single iterator, never a
+// scan: span bytes are block-granular, so without this a small table that
+// straddles several families hands its keys and bytes to every empty family
+// and gap range inside its data blocks.
+func (p *PebbleStore) censusNonEmptyRanges(ranges []keyRange) (_ []bool, err error) {
+	out := make([]bool, len(ranges))
+	if len(ranges) == 0 {
+		return out, nil
+	}
+	it, err := p.db.NewIter(&pebble.IterOptions{LowerBound: ranges[0].Lo, UpperBound: ranges[0].Hi})
+	if err != nil {
+		return nil, fmt.Errorf("db census: range probe iterator: %w", err)
+	}
+	defer func() {
+		if cerr := it.Close(); cerr != nil && err == nil {
+			err = fmt.Errorf("db census: range probe iterator: %w", cerr)
+		}
+	}()
+	for ri, r := range ranges {
+		it.SetBounds(r.Lo, r.Hi)
+		out[ri] = it.First()
+	}
+	if err := it.Error(); err != nil {
+		return nil, fmt.Errorf("db census: range probe: %w", err)
+	}
+	return out, nil
+}
+
+// censusOnlyNonEmpty drops the ranges that hold no live key from a table's
+// overlap set, so their shares go to the ranges that do. When every
+// overlapped range is empty (a table of tombstones and shadowed versions only)
+// the set is returned unchanged, so the table's entries still land somewhere
+// and the totals stay conserved.
+func censusOnlyNonEmpty(overlaps map[int]uint64, nonEmpty []bool) map[int]uint64 {
+	kept := make(map[int]uint64, len(overlaps))
+	for ri, b := range overlaps {
+		if nonEmpty[ri] {
+			kept[ri] = b
+		}
+	}
+	if len(kept) == 0 {
+		return overlaps
+	}
+	return kept
 }
 
 // censusSnapshot reads the table set with properties, the per-range span bytes

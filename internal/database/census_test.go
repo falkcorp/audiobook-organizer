@@ -1,5 +1,5 @@
 // file: internal/database/census_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b6c66985-8717-4b85-b9df-85f7eb9291f3
 // last-edited: 2026-10-03
 
@@ -111,6 +111,49 @@ func TestDBCensus_StraddlingTableIsEstimatedAndConserved(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, censusFamily(t, c, "book_file:").Estimated)
 	require.True(t, censusFamily(t, c, "fpidx:").Estimated)
+	requireCensusConserved(t, c)
+}
+
+// TestDBCensus_EmptyFamiliesInsideAStraddlingTableGetZero pins the range
+// probe: one small table holds book_file: and book_ver: keys, and every family
+// and gap range between them in key order is empty (book_file_*:,
+// book_narrators:, book_sig:, book_tag: and the unregistered gaps). Span bytes
+// are block-granular, so without the probe each of those empty ranges received
+// a share of the table. No startup key (counter:, system:) sorts between the
+// two, so the table's 400 keys must all stay with the two families.
+func TestDBCensus_EmptyFamiliesInsideAStraddlingTableGetZero(t *testing.T) {
+	p := newCensusTestStore(t, true)
+	b := p.db.NewBatch()
+	for i := 0; i < 200; i++ {
+		require.NoError(t, b.Set([]byte(fmt.Sprintf("book_file:BK:%05d", i)), []byte("file-row"), nil))
+		require.NoError(t, b.Set([]byte(fmt.Sprintf("book_ver:BK:%020d", i)), []byte("snapshot"), nil))
+	}
+	require.NoError(t, b.Commit(pebble.Sync))
+	require.NoError(t, p.db.Flush())
+
+	c, err := p.DBCensus(context.Background(), CensusOptions{Fresh: true})
+	require.NoError(t, err)
+
+	empty := []string{
+		"book_file_acoustid:", "book_file_error:", "book_file_errors_by_book:", "book_file_gone:",
+		"book_file_hash:", "book_file_id:", "book_file_orig_hash:", "book_file_path:", "book_file_pid:",
+		"book_narrators:", "book_sig:", "book_tag:", unregisteredFamily,
+	}
+	for _, prefix := range empty {
+		f := censusFamily(t, c, prefix)
+		require.Zero(t, f.Keys, "empty family %s must get no keys", prefix)
+		require.Zero(t, f.Deletions, "empty family %s must get no deletions", prefix)
+		require.Zero(t, f.RawKeyBytes, "empty family %s must get no key bytes", prefix)
+		require.Zero(t, f.DiskBytes, "empty family %s must get no disk bytes", prefix)
+		require.Zero(t, f.Tables, "empty family %s must count no tables", prefix)
+		require.False(t, f.Estimated, "empty family %s must not be flagged", prefix)
+	}
+	bf, bv := censusFamily(t, c, "book_file:"), censusFamily(t, c, "book_ver:")
+	require.Equal(t, int64(400), bf.Keys+bv.Keys, "the table's 400 keys stay with the two families that hold keys")
+	require.Positive(t, bf.Keys)
+	require.Positive(t, bv.Keys)
+	require.True(t, bf.Estimated)
+	require.True(t, bv.Estimated)
 	requireCensusConserved(t, c)
 }
 

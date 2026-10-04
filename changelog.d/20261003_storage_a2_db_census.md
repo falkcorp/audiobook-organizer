@@ -13,7 +13,14 @@ The endpoint (`PermSettingsManage`, same as db-health) reports totals and, per
 family, keys, deletions, raw key and value bytes, disk bytes and table count.
 It reads `SSTables(WithProperties)` plus span bytes and `EstimateDiskUsage` for
 each key range, and never iterates the store. A table that straddles several
-families is apportioned by span bytes and flagged `estimated`. Keys are sstable
+families is apportioned by span bytes and flagged `estimated`. Span bytes are
+block-granular, so one bounded seek per range first checks which ranges hold a
+live key, and only those ranges receive shares and disk bytes. Without that
+check, a small straddling table spread its keys over every empty family and gap
+it covered: on a local store, 24% of the keys landed in `(unregistered)`
+against 0 in a full walk. With the check the census also reports 0. If the
+table set changes during the census because of a flush or compaction, the pass
+is retried. Keys are sstable
 entries minus deletions, so overwritten versions that are not yet compacted
 count once each. Unflushed memtable contents are not counted. Every response
 carries `family_figures_basis`, which labels the figures as on-disk entries.
