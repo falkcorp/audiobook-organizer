@@ -1,5 +1,5 @@
 // file: internal/metrics/metrics.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 9f8e7d6c-5b4a-3210-9fed-cba876543210
 // last-edited: 2026-10-03
 
@@ -137,6 +137,15 @@ var (
 		Namespace: "audiobook_organizer",
 		Name:      "search_index_dirty_backlog",
 		Help:      "Books in the durable search-index dirty set still waiting for the reconciler, sampled at each reconcile tick",
+	})
+	// opChangeByBookIndexTrustedGauge is 1 while this process lets
+	// GetBookChanges read the opchange_by_book: index and 0 while it falls
+	// back to the full journal scan (before the boot's verify finishes, after
+	// a failed or interrupted ensure, during a rebuild).
+	opChangeByBookIndexTrustedGauge = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "audiobook_organizer",
+		Name:      "opchange_by_book_index_trusted",
+		Help:      "1 when GetBookChanges reads the opchange_by_book index, 0 when it uses the full journal scan",
 	})
 	// mergeUserStatePendingGauge is the number of pending user-state repair
 	// records (moves a merge still owes), sampled by the repair ticker. A
@@ -294,7 +303,7 @@ var (
 func Register() {
 	registerOnce.Do(func() {
 		prometheus.MustRegister(operationStarted, operationCompleted, operationFailed, operationCanceled, operationDuration,
-			booksGauge, searchIndexDocsGauge, searchIndexDroppedTotal, searchIndexDirtyBacklogGauge, searchCachePatchCapRebuildsTotal, searchCacheRebuildsTotal, foldersGauge, memoryAllocGauge, goroutinesGauge, mergeUserStatePendingGauge,
+			booksGauge, searchIndexDocsGauge, searchIndexDroppedTotal, searchIndexDirtyBacklogGauge, opChangeByBookIndexTrustedGauge, searchCachePatchCapRebuildsTotal, searchCacheRebuildsTotal, foldersGauge, memoryAllocGauge, goroutinesGauge, mergeUserStatePendingGauge,
 			catalogHarvestAuthorsGauge, catalogEntriesStaleGauge,
 			opActivityMirrorDroppedTotal, sortByRequestedTotal, operationDeprecatedDefIDTotal,
 			cacheHits, cacheMisses, cacheSets, cacheInvalidations, cacheEvictions, cacheSize, cacheGetDuration,
@@ -378,6 +387,16 @@ func IncSortByRequested(field string) { sortByRequestedTotal.WithLabelValues(fie
 // SetSearchIndexDirtyBacklog records the dirty-set size at a reconcile tick (TASK-130).
 func SetSearchIndexDirtyBacklog(n int) { searchIndexDirtyBacklogGauge.Set(float64(n)) }
 func SetMergeUserStatePending(n int)   { mergeUserStatePendingGauge.Set(float64(n)) }
+
+// SetOpChangeByBookIndexTrusted publishes whether GetBookChanges is reading the
+// opchange_by_book index (1) or the full scan (0).
+func SetOpChangeByBookIndexTrusted(trusted bool) {
+	v := 0.0
+	if trusted {
+		v = 1
+	}
+	opChangeByBookIndexTrustedGauge.Set(v)
+}
 
 // SetCatalogHarvestAuthors publishes the per-state author counts.
 func SetCatalogHarvestAuthors(byState map[string]int) {

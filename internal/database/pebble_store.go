@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.197.0
+// version: 1.197.1
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-03
 
@@ -5160,6 +5160,7 @@ func (p *PebbleStore) Reset() error {
 	// used the index between the commit and this bump read a wiped index
 	// over a wiped journal, which is the same empty answer the scan gives.
 	p.opChangeByBookGen.Add(1)
+	p.publishOpChangeTrust()
 	// The wipe removed every book: and metadata_cache: row; no record can
 	// name them, so a reader behind either generation rebuilds (the review
 	// snapshot would otherwise keep serving the wiped books as live rows

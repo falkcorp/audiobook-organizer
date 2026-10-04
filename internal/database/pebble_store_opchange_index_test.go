@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_opchange_index_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 9e202853-2ab3-4f8f-b567-6c435e5bebb3
 // last-edited: 2026-10-03
 
@@ -1004,6 +1004,90 @@ func TestOpchangeIndex_PruneSparesRowRewrittenMidPrune(t *testing.T) {
 		t.Fatalf("rewritten row entries = %v, want [b2]", e)
 	}
 	assertIndexedMatchesScan(t, p, []string{"b1", "b2"})
+}
+
+// TestOpchangeIndex_JournalLockBlocksRewriteDuringPruneCommit pins the journal
+// RWMutex. The hook runs inside the prune chunk's locked section, after it
+// re-read row c1 as old (book b1) and staged the delete of c1 and its b1
+// entry. A CreateOperationChange rewriting c1 onto b2 starts there; it must
+// block on the read lock until the chunk commits. Without the lock it would
+// commit first and the chunk's delete would then erase the rewrite, leaving an
+// orphan b2 entry.
+func TestOpchangeIndex_JournalLockBlocksRewriteDuringPruneCommit(t *testing.T) {
+	p := newOpChangeTestStore(t)
+	t.Cleanup(func() { opChangePruneBeforeCommit = nil })
+	old := time.Now().Add(-48 * time.Hour)
+	rawPutOpChange(t, p, &OperationChange{ID: "c1", OperationID: "op1", BookID: "b1", CreatedAt: old})
+	mustTrustOpChange(t, p) // the raw row gets its entry via the ensure's rebuild
+
+	rewriteDone := make(chan error, 1)
+	var doneBeforeCommit bool
+	opChangePruneBeforeCommit = func() {
+		opChangePruneBeforeCommit = nil
+		go func() {
+			rewriteDone <- p.CreateOperationChange(&OperationChange{ID: "c1", OperationID: "op1", BookID: "b2"})
+		}()
+		select {
+		case <-rewriteDone:
+			doneBeforeCommit = true
+		case <-time.After(300 * time.Millisecond):
+		}
+	}
+	n, err := p.PruneOperationChanges(time.Now().Add(-time.Hour))
+	if err != nil || n != 1 {
+		t.Fatalf("prune = %d, %v; want 1 (the stale view of c1)", n, err)
+	}
+	if doneBeforeCommit {
+		t.Fatal("rewrite completed while the prune chunk held the journal lock")
+	}
+	select {
+	case err := <-rewriteDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("rewrite never completed after the prune released the lock")
+	}
+	got, err := getBookChangesVia(t, p, "b2")
+	if err != nil || len(got) != 1 || got[0].ID != "c1" {
+		t.Fatalf("GetBookChanges(b2) = %v, %v; want the rewritten row to survive", changeIDs(got), err)
+	}
+	if e := opChangeEntries(t, p, "op1", "c1"); !reflect.DeepEqual(e, []string{"b2"}) {
+		t.Fatalf("entries for c1 = %v, want exactly [b2] (no orphan, no b1)", e)
+	}
+	assertIndexedMatchesScan(t, p, []string{"b1", "b2"})
+}
+
+// TestOpchangeIndex_MarkRevertedSkipsRowPrunedAfterScan: a row pruned between
+// MarkOperationChangesReverted's scan and its lock is not resurrected, and the
+// rows still present are marked in the same call.
+func TestOpchangeIndex_MarkRevertedSkipsRowPrunedAfterScan(t *testing.T) {
+	p := newOpChangeTestStore(t)
+	mustTrustOpChange(t, p)
+	t.Cleanup(func() { opChangeMarkAfterScan = nil })
+	old := time.Now().Add(-48 * time.Hour)
+	rawPutOpChange(t, p, &OperationChange{ID: "c1", OperationID: "op1", BookID: "b1", CreatedAt: old})
+	if err := p.CreateOperationChange(&OperationChange{ID: "c2", OperationID: "op1", BookID: "b1"}); err != nil {
+		t.Fatal(err)
+	}
+	mustTrustOpChange(t, p)
+	opChangeMarkAfterScan = func() {
+		opChangeMarkAfterScan = nil
+		if n, err := p.PruneOperationChanges(time.Now().Add(-time.Hour)); err != nil || n != 1 {
+			t.Errorf("prune = %d, %v; want 1 (c1)", n, err)
+		}
+	}
+	if err := p.MarkOperationChangesReverted("op1", []string{"c1", "c2"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := p.GetOperationChanges("op1")
+	if err != nil || len(got) != 1 || got[0].ID != "c2" || got[0].RevertedAt == nil {
+		t.Fatalf("rows after mark = %v, %v; want only c2, reverted (c1 stays pruned)", changeIDs(got), err)
+	}
+	if e := opChangeEntries(t, p, "op1", "c1"); len(e) != 0 {
+		t.Fatalf("pruned row regained entries %v", e)
+	}
+	assertIndexedMatchesScan(t, p, []string{"b1"})
 }
 
 // TestOpchangeIndex_RebuildWaitRespectsContext: a rebuild queued behind
