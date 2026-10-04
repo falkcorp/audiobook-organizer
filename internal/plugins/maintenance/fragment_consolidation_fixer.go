@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.28.1
+// version: 1.28.2
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
 // last-edited: 2026-10-04
 
@@ -1595,12 +1595,14 @@ type fragCarry struct {
 //     sync redirect a dedup merge records, in its loser shape) to one live
 //     terminal book: the survivor, or the book the survivor went into;
 //   - every member's planned file row (copies keep theirs by design) is on
-//     the terminal, or on its own member when a dedup merge retired that
-//     member into the terminal (a dedup loser keeps its own files, as that
-//     version's own). A planned file on any other retired book is not done:
-//     it is out of every view while the run looks finished (review 9: a
-//     survivor deleted outright hid 5 such files), and when that book
-//     resolves to the terminal the file is carried;
+//     the terminal, or on a retired book that resolves to the terminal with
+//     evidence (survivorOf). A planned file on a retired book nothing
+//     resolves (deleted outright) is not done: it is out of every view while
+//     the run looks finished (review 9: such a survivor hid 5 files). Of the
+//     retired books that do resolve, one retired through merged_into keeps
+//     the rows its retirer left on it (the duplicate-copies fixer keeps a
+//     loser's hash twins); a dedup loser (MergeBooks redirect) keeps its own
+//     planned file, and the run's other planned files on it are carried;
 //   - no book demoted after its newest hand-off note is in a group still
 //     without its one explicit live primary (resumeHandOff's rule);
 //   - when this fixer itself retired every book into the survivor, the
@@ -1670,11 +1672,17 @@ func (f *fragmentFixer) recordDone(store OpsStore, lib *fragLibrary, pj *fragPla
 		if t != terminal {
 			return false, terminal, "", nil, nil
 		}
-		if o == id && dedupLoser[o] {
+		if !dedupLoser[o] {
+			// Retired through merged_into (a retireInto, a combine) into
+			// the terminal: whoever retired it chose which rows stay on
+			// it. The duplicate-copies fixer keeps a loser's hash-twin
+			// rows there on purpose (retireInto never moves rows), so
+			// carrying them would put duplicate audio on the terminal.
+			continue
+		}
+		if o == id {
 			// A dedup loser keeps its own file (owner decision
-			// 2026-10-04). A book retired through merged_into (a retire,
-			// a combine) has its files moved first, so its own file left
-			// behind is carried like any other.
+			// 2026-10-04).
 			continue
 		}
 		if !slices.Contains(rec.BookIDs, o) && o != rec.Survivor {
@@ -2252,8 +2260,8 @@ func carryRow(lib *fragLibrary, rec fragPlanRecord, ops []string, terminal strin
 	r := repairs.Row{RowID: fragClassCarry + ":" + rec.RowID, Class: fragClassCarry, BookIDs: ids,
 		Title: tb.Title, Author: lib.authorName(tb), Risk: repairs.RiskReview,
 		Proposed: map[string]string{"survivor": terminal, "from": strings.Join(froms, ",")},
-		Reason: fmt.Sprintf("finishes an interrupted consolidation of %s: its survivor %s went into %s, and the %d planned file(s) the run left on %s move onto %s (%s keeps its own files, as a dedup merge leaves them)",
-			rec.Dir, rec.Survivor, terminal, len(carry), strings.Join(froms, ", "), terminal, rec.Survivor),
+		Reason: fmt.Sprintf("finishes an interrupted consolidation of %s into %s: a duplicate merge retired %s into %s with %d planned file(s) of the run still on it; they move onto %s (each retired book keeps its own planned file, as a duplicate merge leaves it)",
+			rec.Dir, rec.Survivor, strings.Join(froms, ", "), terminal, len(carry), terminal),
 		Evidence: []string{fmt.Sprintf("plan record of %s, planned %s, written by apply operation(s) %s; every other book and file of that run already resolves to %s",
 			rec.RowID, rec.PlannedAt.UTC().Format(time.RFC3339), strings.Join(ops, ", "), terminal)},
 		State:       state,

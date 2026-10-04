@@ -1,11 +1,12 @@
 // file: internal/plugins/maintenance/fragment_review9_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3bc1296c-6b8c-481b-b190-a196671cd4a8
 // last-edited: 2026-10-04
 
 package maintenance
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -641,4 +642,72 @@ func TestFragmentFixer_RecordsOfOneFolderOfferOneActionSet(t *testing.T) {
 			require.Zero(t, tl.bad(), "%v", tl.notes)
 		})
 	}
+}
+
+// TestFragmentFixer_RetireKeepingRowsIsNotCarried (review 10 blocker): a
+// finished run's survivor S is later folded by the duplicate-copies fixer
+// into x, which moves only the rows x has no twin of and retires S with
+// retireInto, keeping the twin on S (merged_into = x). The run stays done:
+// no carry row and no held row, and nothing moves the twin onto x, where it
+// would be duplicate audio.
+func TestFragmentFixer_RetireKeepingRowsIsNotCarried(t *testing.T) {
+	ctx := context.Background()
+	f, r, closeF := newCutFixture(t, "none", cutVGNone)
+	defer closeF()
+	survivor := r.Proposed["survivor"]
+	require.NoError(t, newFragmentFixer(f.p).Apply(ctx, f.fragWriter(t, "op-full"), r))
+	rows, err := f.s.GetBookFiles(survivor)
+	require.NoError(t, err)
+	require.Greater(t, len(rows), 1, "the finished run's survivor holds the work")
+
+	// x holds a hash twin of the survivor's first row.
+	x := f.newLiveBook(t, "dc-survivor")
+	twin := rows[0]
+	if twin.FileHash == "" {
+		twin.FileHash = "review10-twin-hash"
+		require.NoError(t, f.s.UpdateBookFile(twin.ID, &twin))
+	}
+	require.NoError(t, f.s.CreateBookFile(&database.BookFile{BookID: x, FilePath: twin.FilePath + ".x.mp3",
+		OriginalFilename: twin.OriginalFilename, FileSize: twin.FileSize, Duration: twin.Duration, FileHash: twin.FileHash}))
+
+	// The fold: every row but the twin moves onto x, then S is retired into
+	// x with the twin kept on it.
+	f.applyOp("op-dc", dcFixerID)
+	wd := repairs.NewWriter(f.s, f.s, dcFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-dc")
+	var move []string
+	for _, br := range rows[1:] {
+		move = append(move, br.ID)
+	}
+	require.NoError(t, wd.MoveBookFiles(move, survivor, x))
+	_, err = retireInto(ctx, f.p, f.s, wd, time.Now, dcFixerID, survivor, x, nil)
+	require.NoError(t, err)
+	sb, err := f.s.GetBookByID(survivor)
+	require.NoError(t, err)
+	require.True(t, sb.IsSoftDeleted())
+	require.Equal(t, x, dcStr(sb.MergedIntoBookID))
+	before, err := f.s.GetBookFiles(x)
+	require.NoError(t, err)
+
+	res := f.plan(t, "op-plan2")
+	for _, row := range res.Rows {
+		require.False(t, row.Class == fragClassCarry, "no carry row: %s %s", row.RowID, row.Reason)
+	}
+	require.Empty(t, heldOver(res, r.BookIDs), "the run is done")
+	f.applyAllOver(t, r, "op-plan3")
+
+	after, err := f.s.GetBookFiles(x)
+	require.NoError(t, err)
+	require.Len(t, after, len(before), "nothing moved onto x")
+	hashes := map[string]bool{}
+	for _, br := range after {
+		if br.FileHash == "" {
+			continue
+		}
+		require.False(t, hashes[br.FileHash], "x holds the same audio twice (%s)", br.FileHash)
+		hashes[br.FileHash] = true
+	}
+	kept, err := f.s.GetBookFiles(survivor)
+	require.NoError(t, err)
+	require.Len(t, kept, 1, "the retired survivor keeps its twin row")
+	require.Equal(t, twin.ID, kept[0].ID)
 }
