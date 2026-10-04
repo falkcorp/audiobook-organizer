@@ -1,7 +1,7 @@
 // file: internal/server/handlers/aibackends/endpoints_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5a7c9e13-2b4d-4f86-a0c1-7d3e5b9f2a68
-// last-edited: 2026-09-19
+// last-edited: 2026-10-04
 
 package aibackendshandler_test
 
@@ -107,10 +107,13 @@ func TestEndpointsStatus_RoutingSwitchAndAttribution(t *testing.T) {
 			ChatModel: "m", Priority: 1, Enabled: true, Capabilities: []string{"llm.filename_parse"}}}
 		c.AIEndpointsRouting = true
 	})
-	aidispatch.DefaultAttribution().Record(id, "llm.filename_parse", aidispatch.ClassOK, time.Now())
-	aidispatch.DefaultAttribution().Record(id, "llm.filename_parse", aidispatch.ClassFailover, time.Now())
+	// A ledger this test owns. The process-wide one keeps every earlier
+	// iteration's counts, so under -count>1 this test read 4, then 6.
+	ledger := aidispatch.NewAttribution()
+	ledger.Record(id, "llm.filename_parse", aidispatch.ClassOK, time.Now())
+	ledger.Record(id, "llm.filename_parse", aidispatch.ClassFailover, time.Now())
 
-	h := aibackendshandler.New(nil, nil)
+	h := aibackendshandler.New(nil, nil, aibackendshandler.WithAttribution(ledger))
 	w := serve(t, "/ai/endpoints/status", h.EndpointsStatus)
 	var body struct {
 		Data aibackendshandler.EndpointsStatusResponse `json:"data"`
@@ -130,4 +133,27 @@ func TestEndpointsStatus_RoutingSwitchAndAttribution(t *testing.T) {
 	w = serve(t, "/ai/endpoints/status", h.EndpointsStatus)
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
 	require.False(t, body.Data.RoutingActive)
+}
+
+// Production wiring (no option) reports the process-wide ledger that every
+// dispatcher records into.
+func TestEndpointsStatus_DefaultsToTheProcessLedger(t *testing.T) {
+	prev := config.Snapshot()
+	t.Cleanup(func() { config.Mutate(func(c *config.Config) { c.AIEndpoints = prev.AIEndpoints }) })
+	// Unique per run, so a count carried over from an earlier -count
+	// iteration cannot land on this ID.
+	id := "default-ledger-" + time.Now().Format("150405.000000000")
+	config.Mutate(func(c *config.Config) {
+		c.AIEndpoints = []config.AIEndpoint{{ID: id, Protocol: "openai_compat", URL: "http://192.0.2.9:11434/v1",
+			ChatModel: "m", Priority: 1, Enabled: true, Capabilities: []string{"llm.filename_parse"}}}
+	})
+	aidispatch.DefaultAttribution().Record(id, "llm.filename_parse", aidispatch.ClassOK, time.Now())
+
+	w := serve(t, "/ai/endpoints/status", aibackendshandler.New(nil, nil).EndpointsStatus)
+	var body struct {
+		Data aibackendshandler.EndpointsStatusResponse `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	require.Len(t, body.Data.Endpoints, 1)
+	require.EqualValues(t, 1, body.Data.Endpoints[0].Attribution.Requests)
 }

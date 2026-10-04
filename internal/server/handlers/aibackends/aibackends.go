@@ -1,7 +1,7 @@
 // file: internal/server/handlers/aibackends/aibackends.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7c3d9e21-4a5b-4f6c-9d8e-1a2b3c4d5e6f
-// last-edited: 2026-09-19
+// last-edited: 2026-10-04
 
 // Package aibackendshandler provides HTTP handlers for the AI backend-mode
 // toggle (TASK-10's AIBackendConfig): a status probe that reports the
@@ -44,6 +44,26 @@ const statusProbeTimeout = 3 * time.Second
 type Handler struct {
 	registry *tools.ToolRegistry
 	daemon   *tools.OllamaDaemon
+	// attribution is the request ledger EndpointsStatus reports. It defaults
+	// to the process-wide aidispatch.DefaultAttribution, which every
+	// dispatcher records into (dispatchers are built per call, so the ledger
+	// has to outlive them). Injected so a test reads a ledger it owns: reading
+	// the process global made TestEndpointsStatus_RoutingSwitchAndAttribution
+	// see the previous iteration's counts under -count>1.
+	attribution *aidispatch.Attribution
+}
+
+// Option configures a Handler.
+type Option func(*Handler)
+
+// WithAttribution makes EndpointsStatus report a from a instead of the
+// process-wide ledger. Production wiring leaves the default.
+func WithAttribution(a *aidispatch.Attribution) Option {
+	return func(h *Handler) {
+		if a != nil {
+			h.attribution = a
+		}
+	}
 }
 
 // New constructs a Handler. registry may be nil in tests that only exercise
@@ -51,8 +71,12 @@ type Handler struct {
 // binary). daemon may also be nil (e.g. Ollama tool mode disabled); PullModel
 // then falls back to invoking the CLI directly without ensuring a managed
 // daemon is running.
-func New(registry *tools.ToolRegistry, daemon *tools.OllamaDaemon) *Handler {
-	return &Handler{registry: registry, daemon: daemon}
+func New(registry *tools.ToolRegistry, daemon *tools.OllamaDaemon, opts ...Option) *Handler {
+	h := &Handler{registry: registry, daemon: daemon, attribution: aidispatch.DefaultAttribution()}
+	for _, o := range opts {
+		o(h)
+	}
+	return h
 }
 
 // ModelStatus reports whether a single named model has been pulled into the
@@ -297,7 +321,7 @@ func (h *Handler) EndpointsStatus(c *gin.Context) {
 	rows := snap.AIEndpoints
 	health := aidispatch.DefaultHealth()
 	slots := aidispatch.DefaultSlots()
-	attribution := aidispatch.DefaultAttribution()
+	attribution := h.attribution
 
 	masked := config.MaskAIEndpoints(rows)
 	eps := make([]EndpointStatus, 0, len(rows))
