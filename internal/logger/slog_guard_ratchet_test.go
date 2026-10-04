@@ -1,7 +1,7 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
-// last-edited: 2026-10-03
+// last-edited: 2026-10-04
 
 package logger
 
@@ -9,7 +9,7 @@ package logger
 // is the exact change TestGuard_NoDirectSlogCalls exists to stop.
 const (
 	slogRatchetFileCeiling = 309
-	slogRatchetCallCeiling = 1771
+	slogRatchetCallCeiling = 1769
 )
 
 // slogRatchet is every non-test file under internal/ and cmd/ that called
@@ -154,7 +154,7 @@ var slogRatchet = map[string]int{
 	"internal/maintenance/jobs/purge_ua_duplicates.go":           4,
 	"internal/maintenance/jobs/recompute_book_aggregates.go":     11,
 	"internal/maintenance/jobs/recompute_itunes_paths.go":        4,
-	"internal/maintenance/jobs/refetch_missing_authors.go":       13,
+	"internal/maintenance/jobs/refetch_missing_authors.go":       11,
 	"internal/maintenance/jobs/relink_missing_to_itunes.go":      7,
 	"internal/maintenance/jobs/relink_report.go":                 4,
 	"internal/maintenance/jobs/repair_missing_files.go":          12,

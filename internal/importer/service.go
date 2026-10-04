@@ -22,6 +22,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
@@ -259,8 +260,8 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 			authors, err := authorcredit.Resolve(is.db, prepared, authorcredit.CleanGate)
 			switch {
 			case errors.Is(err, authorcredit.ErrCombinedCredit):
-				slog.Warn("importer: artist tag joins existing authors the splitter will not split; not crediting it",
-					"artist", logging.Sanitize(meta.Artist), "path", logging.Sanitize(req.FilePath))
+				logger.New("importer").Warn("artist tag %q joins existing authors the splitter will not split; not crediting it (path %s)",
+					logger.SanitizeLogValue(meta.Artist), logger.SanitizeLogValue(req.FilePath))
 			case errors.Is(err, database.ErrImplausibleAuthorName):
 				// The store's gate refused it: no author, as above.
 			case err != nil:
@@ -319,7 +320,7 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 	// The book exists, so a failure here is logged, not an import failure.
 	if len(importAuthors) > 1 {
 		if err := is.db.SetBookAuthors(created.ID, authorcredit.Credits(created.ID, importAuthors)); err != nil {
-			slog.Warn("importer: could not record the co-authors", "id", created.ID, "err", err)
+			logger.New("importer").Warn("could not record the co-authors of book %s: %s", created.ID, logger.SanitizeLogValue(err.Error()))
 		}
 	}
 
