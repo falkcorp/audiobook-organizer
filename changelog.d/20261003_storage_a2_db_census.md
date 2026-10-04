@@ -1,41 +1,35 @@
 ### Added
 
-#### `GET /api/v1/diagnostics/db-census` — per-key-family census of the main Pebble store
+#### `GET /api/v1/diagnostics/db-census` and the `maintenance.db-census-exact` op: a per-key-family census of the main Pebble store
 
 A new key-family registry (`internal/database/keyfamilies.go`) lists every key
 prefix in the main Pebble store with a description and owning file. It is the
-single source for the census and, later, the generated key-schema doc. Families
-nest: a parent's figures exclude its registered children, and every key range
-no family covers is reported as `(unregistered)`. The registry pre-registers
-the TASK-A5 timeline indexes `opv2:open:` and `opv2:done:`, and breaks the
-`_system` user's records under `pref:_system:` out by sub-prefix.
+single source for the census and, later, for the generated key-schema doc.
+Families nest: a parent's figures exclude its registered children, and every
+key range that no family covers is reported as `(unregistered)`. The registry
+pre-registers the TASK-A5 timeline indexes `opv2:open:` and `opv2:done:`, and
+breaks the `_system` user's records under `pref:_system:` out by sub-prefix.
 
-The endpoint (`PermSettingsManage`, the same as db-health) reports, for each
-family, keys, deletions, entries, raw key and value bytes, disk bytes, table
-count and a `method`:
+The endpoint (`PermSettingsManage`, the same as db-health) stays cheap. It
+flushes the memtable, then reads sstable properties and span bytes and makes
+one bounded seek per family range; it reads no values and iterates no family.
+It splits each table between the families that hold anything, and that
+includes families holding only tombstones or keys under uncompacted range
+deletions, which the seek detects from the iterator stats and from the table's
+`NumRangeDeletions`. The response reports each family's figures with an
+`error_bound_keys`, and the per-family entries and disk bytes add up to the
+totals. If a compaction changes the table set mid-read, the read is retried.
+The response also carries `last_exact`, the last census the op wrote, with its
+timestamp, and `exact_in_progress` while a run is unfinished. The estimated
+part is cached for 5 minutes, in a cache bounded to 8 stores. Concurrent
+callers share one computation that runs detached from any single caller.
 
-- `exact`: the family's estimated size is under 1M entries, so a bounded
-  keys-only pass counts its live keys, tombstones and shadowed versions exactly.
-  On a 72-table test store the counts matched an sstable-level reference exactly.
-- `estimated`: a large family is apportioned from `SSTables(WithProperties)`
-  span bytes once the exact families' entries are taken out. It reports an
-  `error_bound_keys`.
-- `empty`: the family has no entries.
-
-One bounded seek per range finds the ranges that hold anything, including
-tombstone-only ranges, which it detects through the iterator's `PointCount`.
-Only those ranges receive shares. As a result, a fully purged family keeps its
-tombstones and disk bytes, and empty families get 0. Disk bytes are apportioned
-from table sizes, so the per-family sum equals the total.
-
-Retired books (soft-deleted or merged) and the files they still own, plus
-fingerprint and transcript counts, come from memdb. When memdb is cold these
-fields are null with a note, never zero, and that census is not cached.
-`?deep=true` adds a keys-only `book_ver:` pass for the distribution of history
-entries per book; it has a 2-minute budget and reports partial results when the
-budget runs out. Results are cached for 5 minutes, in a cache bounded to 8
-stores. Concurrent callers share one computation that runs detached from any
-single caller, so a disconnecting client no longer fails the others.
-`?fresh=true` refreshes the cache. Before this, the only full count was
-db-health's `KeyCount`, which iterates all 174M production keys in about 5
-minutes.
+`maintenance.db-census-exact` is a manual, low-priority op. It counts every
+family exactly with a keys-only pass, limited to `db_census_exact_read_mb_per_sec`
+(default 50 MB/s), so it does not evict the cache the library is served from.
+It saves progress after each family and resumes after a restart. It refuses to
+start within `db_census_exact_cooldown_hours` (default 6) of the last run
+unless `force=true`. The same pass builds the per-book `book_ver:` history
+distribution and the retired-book and signal counts. Before this, the only full
+count was db-health's `KeyCount`, which iterates all 174M production keys in
+about 5 minutes.
