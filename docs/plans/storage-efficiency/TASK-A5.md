@@ -1,5 +1,5 @@
 <!-- file: docs/plans/storage-efficiency/TASK-A5.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 10c73217-17fc-4334-a120-d0c82a7c9e9b -->
 <!-- last-edited: 2026-10-03 -->
 
@@ -36,7 +36,7 @@ used `since=129600m`, 90 days) stays slow until operation retention exists
 (release D). The target is under 100 ms for `since` up to 24 h. State the
 measured numbers for both a 24 h and a 90 d window in the report.
 
-## 2. Setup
+## 2. ⛔ START HERE (run this first)
 
 ```bash
 cd /Users/jdfalk/repos/github.com/jdfalk/audiobook-organizer
@@ -51,8 +51,36 @@ npm ci --prefix web
 - Do NOT spawn subagents.
 - Never edit the primary checkout.
 - Commit work in progress every 15 minutes, and push it to your own branch.
+- Next, run the "already done if" check in `## Idempotency / Rollback` below.
+  If it says the work exists, stop and report instead of redoing it.
+
+## Idempotency / Rollback
+
+This task replaces the way operation rows are written, so "done" needs the old
+thing absent AND the new thing present. Already done if both hold (worktree
+root):
+
+```bash
+test -f internal/database/pebble_store_ops_v2_timeline.go && echo "timeline file present"
+grep -c 'pebbleSetJSON(opv2OpKey' internal/database/pebble_store_ops_v2.go   # must print 0
+```
+
+On `origin/main` at `373ba19d2` the file is absent and the count is above 0
+(it lists the raw write sites), so the task is not done. Both true: stop and
+report "already done". Mixed: a previous attempt stopped half way; finish the
+missing steps instead of starting over.
+
+Rollback: before the first push, remove the worktree and branch, or `git reset
+--hard origin/main` inside it. After the PR merges, `git revert` it. The
+`opv2:open:` and `opv2:done:` keys are ignored by the old binary, which keeps
+scanning `opv2:op:` rows. When rolling forward again after a rollback to a
+pre-A5 binary, set `AORG_OPSV2_TIMELINE_RECONCILE=1` for one start so the
+reconcile repairs the rows the old binary wrote.
 
 ## 3. Read before editing
+
+Line numbers in this section come from `origin/main` at `373ba19d2`. Section 4
+re-greps each one; where a number differs, use the grep result.
 
 - `internal/database/pebble_store_ops_v2.go`, ALL of it (1,485 lines). In
   particular:
@@ -76,7 +104,8 @@ npm ci --prefix web
   (`system:backfill:book_atpath_index_v1_done`), using a bounded worker pool
   (`bookAtPathBackfillWorkers = runtime.NumCPU()`, `:88`).
 - `internal/server/server_lifecycle.go:1033-1066` (how that build is started
-  after memdb warmup) and `:1697-1710` (capability resolution).
+  after memdb warmup; the `opchange_by_book` block from #3704 follows at
+  `:1068`) and `:1742-1755` (capability resolution).
 - `internal/server/handlers/operations_v2.go:154-200` and `:284-367`. The
   timeline handler: `timelineScanBound = 5000`, `matched`, `scan_capped`.
   Their meaning depends on the store sorting the whole window before it
@@ -89,12 +118,14 @@ npm ci --prefix web
 ## 4. Re-verify anchors
 
 1. `grep -n 'opv2OpKey(' internal/database/pebble_store_ops_v2.go | grep -E 'Set|pebbleSetJSON'`
-   → exactly these 12 write sites: `151, 269, 339, 382, 436, 569, 586, 619,
-   654, 670, 687, 812`.
+   → exactly 14 lines, and these are **all the write sites: 151, 269, 339,
+   382, 436, 569, 586, 619, 654, 670, 687, 812, 1309, 1392.** (An earlier
+   draft of this brief said 12; the list above is what the grep prints at
+   `373ba19d2`, and `1309` and `1392` are in it.)
 2. `grep -n 'return p.pebbleSetJSON(opv2OpKey(id), &row) == nil\|if err := p.pebbleSetJSON(opv2OpKey(id), &row); err != nil' internal/database/pebble_store_ops_v2.go`
    → `654`, `1309` (stampCompletedAtIfPhantom), `1392` (PromoteToQueued).
-   With anchor 1, the **write sites are: 151, 269, 339, 382, 436, 569, 586,
-   619, 654, 670, 687, 812, 1309, 1392.**
+   These are three of the 14 lines from anchor 1, listed again because their
+   line shapes differ from the others.
 3. `grep -n 'opv2OpKey(id), opv2ActKey(id), opv2StateKey(id)' internal/database/pebble_store_ops_v2.go`
    → `547` (SweepHollowOperationsV2) and `776` (DeleteOperationV2). These
    are the **delete sites**.
@@ -119,6 +150,28 @@ npm ci --prefix web
     → `445: func Timestamp(t time.Time) uint64`,
     `460: func (id *ULID) SetTime(ms uint64) error`.
 16. `grep -n 'opv2:op:<op_id>' docs/database-pebble-schema.md` → `348:`
+17. `grep -n 'type bookAtPathBackfiller interface\|func resolveBookAtPathBackfiller' internal/server/server_lifecycle.go`
+    → `1744`, `1753`. Step 12 adds the new interface and resolver beside them.
+18. `grep -n '// opchange_by_book: index over the operation-change journal' internal/server/server_lifecycle.go`
+    → `1068:`. #3704 added that block right after the `book-atpath-backfill`
+    block (anchor 12), which closes with `})` at `1066`. Step 12 inserts the
+    new block between them.
+19. `grep -n 'var bookAtPathBackfillWorkers = runtime.NumCPU()' internal/database/pebble_store_atpath_index.go`
+    → `88:` (the worker-pool precedent step 11 cites).
+20. `grep -n 'func (p \*PebbleStore) RepairOpsV2MissingCompletedAt\|func (p \*PebbleStore) stampCompletedAtIfPhantom\|func (p \*PebbleStore) PromoteToQueued' internal/database/pebble_store_ops_v2.go`
+    → `1249`, `1296`, `1374` (the repair pattern step 11 reuses and the write
+    sites at `1309` and `1392`).
+21. `grep -nE 'CompletedAt = |\*row\.CompletedAt' internal/database/pebble_store_ops_v2.go`
+    → exactly `249`, `329`, `1225`, `1308`, each of the form
+    `row.CompletedAt = <pointer or nil>`. This is the evidence for the
+    pointer rule in step 4.
+22. `grep -n 'SweepHollowOperationsV2' internal/database/migrations.go`
+    → `45` (the interface method) and `1256` (its only caller, cited in step 5).
+23. `grep -n 'r.store.DeleteOperationV2(opID' internal/operations/registry/registry.go`
+    → `1272:` (the discard path that is the only record delete, step 5).
+24. `grep -n 'opID := ulid.Make().String()' internal/operations/registry/registry.go internal/operations/registry/batch.go`
+    → `registry.go:915`, `batch.go:312` (op ids are ULIDs, step 8.3);
+    `resume.go:497` also mints one (`newID := ulid.Make().String()`).
 
 ## 5. Steps
 
@@ -159,9 +212,16 @@ npm ci --prefix web
 
 ### 5.2 Every write site (in `pebble_store_ops_v2.go`)
 
-4. Before each mutation, capture `prev := row`, a struct copy. Mutations
-   assign new pointers to `CompletedAt` and never write through the old one,
-   so the copy is safe. Check each site to confirm. Then:
+4. Before each mutation, capture `prev := row`, a struct copy. **Pointer
+   rule for `CompletedAt` (concrete check):** run anchor 21. Every hit must
+   assign a new pointer or nil (`row.CompletedAt = completedAt`,
+   `= nil`, `= &now`); at `373ba19d2` they are lines 249, 329, 1225 and 1308,
+   and none writes through the old pointer, so the plain struct copy is safe.
+   If, when you run it, any hit writes through the pointer
+   (`*row.CompletedAt = ...`, or an in-place method call on it), then at every
+   site that reaches that code take a deep copy instead:
+   `prev := row; if row.CompletedAt != nil { c := *row.CompletedAt; prev.CompletedAt = &c }`.
+   Then:
    - `:151` `InsertOperationV2`. Read the existing row first
      (`pebbleGetJSON`). `prev` = that row if `ID != ""`, else nil. Replace
      the three separate Sets (row, queue key, act key) with one
@@ -306,7 +366,9 @@ npm ci --prefix web
     - Log one line at the end:
       `slog.Info("opsv2-timeline-reconcile", "rows", ..., "missing", ..., "orphans", ..., "fixed", ..., "duration_ms", ...)`.
 12. **`internal/server/server_lifecycle.go`.** Directly after the
-    `book-atpath-backfill` block (ending at `:1066`), add
+    `book-atpath-backfill` block (its closing `})` is at `:1066`, anchor 12;
+    the next line of code is the `opchange_by_book` comment at `:1068`,
+    anchor 18), add
     `s.bgWG.Go("opsv2-timeline-reconcile", func() { ... })` with the same
     shape:
     - return early on `s.bgCtx.Err()`;
@@ -323,7 +385,7 @@ npm ci --prefix web
     Add the interface
     `opsV2TimelineReconciler { WaitForWarmup(); ReconcileOpsV2TimelineIndex(ctx context.Context) (database.OpsV2TimelineReconcileResult, error) }`
     and `resolveOpsV2TimelineReconciler`, next to `bookAtPathBackfiller`
-    (`:1697-1710`).
+    (`:1742-1755`, anchor 17).
 
 ### 5.5 `GetOpLogsV2` tail read
 
@@ -406,6 +468,12 @@ File: `internal/database/pebble_store_ops_v2_timeline_test.go` (new). Use
   - Then apply 100 more random writes (no reconcile) and compare again. This
     proves the writers keep the index without reconcile.
   - On failure, print the seed and the first differing position.
+- Anti-over-suppression: `TestOpsV2Timeline_EquivalenceRandomHistories` is the
+  named test. It compares the indexed read with the full scan over random
+  histories, so an index that hides any row the scan returns (a missing open or
+  done key, a wrong window, a dropped skewed-clock row) fails it. The test
+  list below also holds `TestOpsV2Timeline_ZeroSinceReturnsAll` for the
+  unfiltered case.
 - `TestOpsV2Timeline_FallbackScanUntilStamp`. A raw legacy row completed
   inside the window and with no index key. Before reconcile,
   `ListOperationsV2Since` returns it (scan path). After reconcile it still
@@ -483,12 +551,12 @@ required.
   read, with the benchmark numbers.
 - Check that `git diff origin/main | grep -nE "ab""k_[A-Za-z0-9]{16,}|172\.16\.[0-9]{1,3}\.[0-9]{1,3}"` prints
   nothing.
-- Commit, for example
-  `perf(ops): timeline reads open/done indexes; startup reconcile; op-log tail read`,
-  ending with:
+- Commit with exactly
+  `perf(ops): timeline reads open/done indexes; startup reconcile; op-log tail read`
+  (`<type>(<scope>): ...` form), ending with:
 
   ```
-  Co-Authored-By: <model name> <noreply@anthropic.com>
+  Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_017MtQ5LP2n3t3bs7AhptkKJ
   ```
 - `sha=$(git rev-parse HEAD); git push origin "${sha}:refs/heads/perf/storage-a5-timeline-index"`
@@ -505,8 +573,20 @@ required.
 - [ ] The benchmark shows the indexed 24 h window under 100 ms on 50,000 ops.
 - [ ] On the first boot the reconcile runs once and sets the stamp; on the
       next boot it does not run unless `AORG_OPSV2_TIMELINE_RECONCILE=1`.
-- [ ] `TestOpsV2RowWritesGoThroughStageOpRow` passes and fails when a raw
-      `pebbleSetJSON(opv2OpKey(...))` is added (show the failing run).
+- [ ] `TestOpsV2RowWritesGoThroughStageOpRow` passes, and fails when a raw
+      write is injected. Run exactly this and paste the output:
+
+      ```bash
+      # 1. inject (temporary, never commit)
+      printf '\nfunc ratchetProbe(p *PebbleStore) { _ = p.pebbleSetJSON(opv2OpKey("x"), struct{}{}) }\n' >> internal/database/pebble_store_ops_v2.go
+      # 2. this run MUST FAIL (non-zero exit, message names ratchetProbe)
+      go test -race -count=1 -run 'TestOpsV2RowWritesGoThroughStageOpRow' ./internal/database/; echo "exit=$?"
+      # 3. remove the probe line, and prove it is gone
+      perl -ni -e 'print unless /^func ratchetProbe/' internal/database/pebble_store_ops_v2.go
+      grep -c ratchetProbe internal/database/pebble_store_ops_v2.go   # must print 0
+      # 4. the same test now PASSES
+      go test -race -count=1 -run 'TestOpsV2RowWritesGoThroughStageOpRow' ./internal/database/; echo "exit=$?"
+      ```
 - [ ] All packages listed in section 8 pass with `-race`.
 - [ ] PR open, not merged.
 

@@ -1,5 +1,5 @@
 <!-- file: docs/plans/storage-efficiency/TASK-A3.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 2dde370d-4e23-41f2-8820-7ef7d8c7e189 -->
 <!-- last-edited: 2026-10-03 -->
 
@@ -24,7 +24,7 @@ build.
 
 **Why.**
 - db-health iterates all 174,165,047 keys (`KeyCount`,
-  `pebble_store.go:5582`) and takes about 5 minutes (eval R1, F6a). It also
+  `pebble_store.go:5662`) and takes about 5 minutes (eval R1, F6a). It also
   decodes every `metadata_fetch_cache:` value, 141,043 rows, to count the
   expired ones (`diagnostics.go:744`).
 - `/cache/stats` took 2.963 s measured, because `CountPrefix` reads every
@@ -33,10 +33,10 @@ build.
   (`ai_scan_store.go:129`), yet its `size_bytes` reports the whole main
   store (`:851`).
 - `ScanPrefix` and `CountPrefix` build their upper bound by incrementing the
-  last byte (`:4831`, `:4923`). A prefix ending in `0xff` wraps to `0x00`,
+  last byte (`:4903`, `:4995`). A prefix ending in `0xff` wraps to `0x00`,
   which gives an empty or wrong range.
 
-## 2. Setup
+## 2. ⛔ START HERE (run this first)
 
 ```bash
 cd /Users/jdfalk/repos/github.com/jdfalk/audiobook-organizer
@@ -52,8 +52,33 @@ npm ci --prefix web
 - Do NOT spawn subagents.
 - Never edit the primary checkout.
 - Commit work in progress every 15 minutes, and push it to your own branch.
+- Next, run the "already done if" check in `## Idempotency / Rollback` below.
+  If it says the work exists, stop and report instead of redoing it.
+
+## Idempotency / Rollback
+
+This task removes and replaces code, so "done" needs the old thing absent AND
+the new thing present. Already done if all of these hold (worktree root):
+
+```bash
+grep -c 'func (p \*PebbleStore) KeyCount' internal/database/pebble_store.go   # must print 0
+grep -c 'prefixUpperBound(prefixBytes)' internal/database/pebble_store.go      # must print 2 or more (3 once ScanPrefix, CountPrefix and ScanPrefixPage all use it)
+```
+
+On `origin/main` at `373ba19d2` the first prints 1 and the second prints 1
+(only `ScanPrefixPage`), so the task is not done. Both conditions true: stop
+and report "already done". Mixed: a previous attempt stopped half way; finish
+the missing steps.
+
+Rollback: before the first push, remove the worktree and branch, or
+`git reset --hard origin/main` inside it. After the PR merges, `git revert`
+it, and say in the revert PR that the JSON field meanings of db-health and
+`/cache/stats` change back (step 8 lists them). No stored data changes.
 
 ## 3. Read before editing
+
+Line numbers in this section come from `origin/main` at `373ba19d2`. Section 4
+re-greps each one; where a number differs, use the grep result.
 
 - `internal/database/census.go` and `keyfamilies.go`, both from A2. Note:
   - `DBCensusProvider`, `CensusOptions`, `DBCensus.TotalKeys`, `DBCensus.Families`;
@@ -67,26 +92,30 @@ npm ci --prefix web
   decorator test for `resolveKeyCounter`. You replace it.
 - `internal/server/handlers/cache.go:26-115`. `CacheStat`,
   `CacheMetadataStore`, `HandleCacheStats`.
-- `internal/database/pebble_store.go:4827-4848` (`ScanPrefix`),
-  `:4919-4937` (`CountPrefix`), `:5578-5594` (`KeyCount`).
+- `internal/database/pebble_store.go:4899` (`ScanPrefix`), `:4991`
+  (`CountPrefix`), `:4928` (`ScanPrefixPage`, already correct) and
+  `:5660-5673` (`KeyCount`, from its first doc-comment line to the closing
+  brace).
 - `internal/database/embedding_store.go:2342-2352`, `prefixUpperBound`. It
   returns nil when every byte is `0xff`, which means "no upper bound".
 - `internal/database/ai_scan_store.go:100-135` (owned vs shared) and
-  `:830-857` (`AIScanHealthStats`, `HealthStats`).
-- `web/src/services/api.ts:5783-5812` (`DBHealthStats`) and
+  `:831-858` (`AIScanHealthStats`, `HealthStats`).
+- `web/src/services/api.ts:5787-5811` (`DBHealthStats`) and
   `web/src/pages/Diagnostics.tsx:745-935` (how the UI renders `key_count`,
   `ai_scans.size_bytes` and `expired_entries`).
 
 ## 4. Re-verify anchors
 
-Line numbers are from `d1f069fac`. A2 does not edit these files except
-`diagnostics.go`, so the `diagnostics.go` lines may have shifted down by the
-size of A2's `GetDBCensus`. Re-grep and use the current numbers.
+Line numbers were re-run on `origin/main` at `373ba19d2`, before A2 merged.
+A2 edits `diagnostics.go` and `wire_media_routes.go`, so the `diagnostics.go`
+lines will have shifted down by the size of A2's `GetDBCensus` by the time you
+run these. Re-grep and use the current numbers; the pattern matching, not the
+number, is what each anchor checks.
 
 1. `grep -n 'func (p \*PebbleStore) ScanPrefix(\|func (p \*PebbleStore) CountPrefix(\|func (p \*PebbleStore) KeyCount(' internal/database/pebble_store.go`
-   → `4827`, `4919`, `5582`.
+   → `4899`, `4991`, `5662`.
 2. `grep -n 'upperBound\[len(upperBound)-1\]++' internal/database/pebble_store.go`
-   → `4831`, `4923`.
+   → `4903`, `4995`.
 3. `grep -n 'store.ScanPrefix("metadata_fetch_cache:")\|st.KeyCount()\|database.CountCachedMetadataFetches(store)' internal/server/handlers/diagnostics.go`
    → `699 st.KeyCount()`, `735 CountCachedMetadataFetches`,
    `744 store.ScanPrefix("metadata_fetch_cache:")`.
@@ -95,29 +124,51 @@ size of A2's `GetDBCensus`. Re-grep and use the current numbers.
 5. `grep -n 'sizeBytes := s.db.Metrics().DiskSpaceUsage()\|prefix: "aiscan:", owned: false' internal/database/ai_scan_store.go`
    → `129`, `851`.
 6. `grep -n 'expired_entries\|key_count' web/src/services/api.ts web/src/pages/Diagnostics.tsx`
-   → `api.ts:5789`, `api.ts:5804`, `Diagnostics.tsx:754`,
+   → `api.ts:5793`, `api.ts:5808`, `Diagnostics.tsx:754`,
    `Diagnostics.tsx:929`.
 7. `grep -rn '\.KeyCount()\|KeyCount() (' --include='*.go' internal cmd | grep -v _test`
-   → only `pebble_store.go:5582` and `diagnostics.go:699` / `:773`. That is
+   → only `pebble_store.go:5662` and `diagnostics.go:699` / `:773`. That is
    one caller, so `KeyCount` can be deleted.
 8. `grep -n 'func CountCachedMetadataFetches' internal/database/metadata_fetch_cache.go` → `298:`
 9. `grep -n 'func prefixUpperBound' internal/database/embedding_store.go` → `2342:`
 10. `grep -n 'type DBCensusProvider\|func (p \*PebbleStore) DBCensus' internal/database/census.go`
-    → both present once A2 has merged. (On `d1f069fac` this prints nothing,
-    which is expected: the file does not exist yet.) If they are missing, stop:
-    A2 has not merged.
+    → both present once A2 has merged. (On `origin/main` at `373ba19d2` this
+    prints a "No such file" error, which is expected: A2 has not merged yet,
+    so this is the one anchor that cannot pass before A2 lands.) If they are
+    missing when you run it, stop: A2 has not merged.
+11. `grep -n 'func (p \*PebbleStore) ScanPrefixPage' internal/database/pebble_store.go`
+    → `4928:`. This is the correct-bound implementation step 1 copies
+    (`UpperBound: prefixUpperBound(prefixBytes)` at `4935`).
+12. `grep -n 'json:"cached_at"' internal/database/metadata_fetch_cache.go`
+    → `55:` (the tag step 4's local struct must match).
+13. `grep -n 'type CacheMetadataStore interface' internal/server/handlers/cache.go`
+    → `69:` (its doc comment at `:66-68` is the one step 6 rewrites).
+14. `grep -n 'export interface DBHealthStats' web/src/services/api.ts`
+    → `5787:` (step 7 adds optional fields to it).
+15. `grep -n '^// KeyCount returns the total number of keys' internal/database/pebble_store.go`
+    → `5660:` (the first line of the block step 2 deletes; the closing
+    brace of `KeyCount` is `5673`, and nothing else is deleted).
+16. `grep -n 'type dbHealthPebble struct\|type dbHealthMetadataCache struct\|type dbHealthAiScans struct' internal/server/handlers/diagnostics.go`
+    → `121`, `137`, `131` (the response structs steps 3-5 add fields to).
 
 ## 5. Steps
 
-1. **Prefix bounds (`pebble_store.go`).** In `ScanPrefix` and
-   `CountPrefix`, replace the copy-and-increment block with
-   `UpperBound: prefixUpperBound(prefixBytes)`. Copy `ScanPrefixPage`
-   (`:4863`), which already does this. Also guard the empty prefix: with
+1. **Prefix bounds (`pebble_store.go`). Test first.** Write
+   `TestScanPrefix_TrailingFFPrefix` and `TestScanPrefix_NormalPrefixStillMatches`
+   (section 7) before touching the code. Run
+   `go test -race -count=1 -run 'TestScanPrefix_TrailingFFPrefix' ./internal/database/`
+   and confirm it FAILS on the unfixed code (the bound wraps to `"b\x00"`
+   and the scan returns nothing). Record the FAIL line for the report. Then
+   fix: in `ScanPrefix` and `CountPrefix`, replace the copy-and-increment
+   block with `UpperBound: prefixUpperBound(prefixBytes)`. Copy
+   `ScanPrefixPage` (`:4928`), which already does this. Also guard the empty prefix: with
    `prefix == ""` the old code panicked on `upperBound[-1]`. The new code
    must return every key, which is what `LowerBound: nil` and
    `UpperBound: nil` give.
-2. **Delete `KeyCount`** (`pebble_store.go:5578-5594`, doc comment
-   included). Also delete `keyCounter` and `resolveKeyCounter` from
+2. **Delete `KeyCount`**: from its first doc-comment line (`// KeyCount
+   returns the total number of keys`, anchor 15) down to the closing brace of
+   the function, `pebble_store.go:5660-5673`. Leave the `// --- AIJobsStore`
+   comment above it and `SweepBookFileSegDropResult` below it alone. Also delete `keyCounter` and `resolveKeyCounter` from
    `diagnostics.go`. Delete `key_counter_capability_test.go` and replace it
    with the census decorator test in section 7.
 3. **db-health main-store section.** In `GetDBHealth`:
@@ -216,6 +267,13 @@ size of A2's `GetDBCensus`. Re-grep and use the current numbers.
     and `CountPrefix("a\xff") == 2`. On the old code this returns 0, because
     the bound wraps to `"b\x00"`. Run the test before the fix to see it fail.
   - `TestCountPrefix_EmptyPrefixCountsAll`.
+  - `TestScanPrefix_NormalPrefixStillMatches`. Write `"ab1"`, `"ab2"`, `"ac1"`.
+    Assert `ScanPrefix("ab")` returns exactly the two `ab` keys and
+    `CountPrefix("ab") == 2`.
+  - Anti-over-suppression: `TestScanPrefix_NormalPrefixStillMatches` is the
+    named test. Keys that carry no `0xff` byte must still match an ordinary
+    prefix through the new bound, so the fix cannot have narrowed the common
+    case.
 - `internal/database/ai_scan_store_health_test.go` (new):
   - `TestAIScanHealthStats_SharedReportsPrefixEstimate`. Use
     `NewAIScanStoreFromDB` on a PebbleStore DB that also holds 10,000
@@ -276,12 +334,12 @@ name it in the report, so a miss on prod can be attributed.
   prefix-bound bug. `####` entries only.
 - Check that `git diff origin/main | grep -nE "ab""k_[A-Za-z0-9]{16,}|172\.16\.[0-9]{1,3}\.[0-9]{1,3}"` prints
   nothing.
-- Commit, for example
-  `perf(diagnostics): db-health and cache stats read the census; fix prefix upper bound`,
-  ending with:
+- Commit with exactly
+  `perf(diagnostics): db-health and cache stats read the census; fix prefix upper bound`
+  (`<type>(<scope>): ...` form), ending with:
 
   ```
-  Co-Authored-By: <model name> <noreply@anthropic.com>
+  Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_017MtQ5LP2n3t3bs7AhptkKJ
   ```
 - `sha=$(git rev-parse HEAD); git push origin "${sha}:refs/heads/perf/storage-a3-db-health-census"`

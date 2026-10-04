@@ -1,5 +1,5 @@
 <!-- file: docs/plans/storage-efficiency/TASK-A9.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 3affcaa2-a70c-44b8-8097-7daeb7da62b2 -->
 <!-- last-edited: 2026-10-03 -->
 
@@ -65,7 +65,7 @@ release B status listener (B6b) answers while migrating; a 404 there means
 unauthenticated is an open design question for the owner; say so in the PR
 body.
 
-## 2. Setup
+## 2. ⛔ START HERE (run this first)
 
 ```bash
 cd /Users/jdfalk/repos/github.com/jdfalk/audiobook-organizer
@@ -80,8 +80,33 @@ npm ci --prefix web
 - Do NOT spawn subagents.
 - Never edit the primary checkout.
 - Commit work in progress every 15 minutes, and push it to your own branch.
+- Next, run the "already done if" check in `## Idempotency / Rollback` below.
+  If it says the work exists, stop and report instead of redoing it.
+
+## Idempotency / Rollback
+
+Already done if both of these hold (worktree root):
+
+```bash
+test -f scripts/deploy_cutover.py && echo "script present"
+grep -c 'deploy-cutover.sh' Makefile.local.example   # must print 2 or more (one call per deploy target)
+```
+
+On `origin/main` at `373ba19d2` the file is absent and the count is 0, so the
+task is not done. Both true: stop and report "already done". Mixed: finish the
+missing steps.
+
+Rollback: before the first push, remove the worktree and branch, or `git reset
+--hard origin/main` inside it. After the PR merges, `git revert` it; the task
+adds scripts and edits only the template and one doc, and changes no stored
+data. Never delete a `<bin>.pre-format-<N>` file on a host by hand: it is the
+only copy of the pre-cut-over binary. Use `make rollback`, whose guard (A4)
+reads the same file name and decides whether a swap is safe.
 
 ## 3. Read before editing
+
+Line numbers in this section come from `origin/main` at `373ba19d2`. Section 4
+re-greps each one; where a number differs, use the grep result.
 
 - `Makefile.local.example`, all of it: the warnings about `GOTOOLCHAIN` and
   pipes (`:19-48`), the deploy variables (`:50-60`, plus `DEPLOY_DB` from
@@ -90,11 +115,11 @@ npm ci --prefix web
 - `Makefile:725-736` (`rollback`, with A4's guard) and A4's
   `scripts/storage_format_guard.py`: the same sidecar and flag, read the same
   way.
-- `internal/server/handlers/system/handler.go:149-200` (`HealthCheck`,
-  `GetSystemStatus`) and `internal/sysinfo/service.go:62-66` (the `version`
+- `internal/server/handlers/system/handler.go:149-200` (`HealthCheck` `:168`,
+  `GetSystemStatus` `:188`) and `internal/sysinfo/service.go:62-66` (the `version`
   field of the status response).
 - `scripts/test_ci_remote.py:1-30`: how a script's unit test loads the script
-  (`importlib`) with no network and no ssh. CI runs
+  (`importlib`, `:14`, `:24`) with no network and no ssh. CI runs
   `python3 -m unittest discover -s scripts -p 'test_*.py'`
   (`.github/workflows/ci.yml:310`).
 - Design `docs/design/2026-10-03-storage-efficiency-design.md`, section 9:
@@ -104,20 +129,50 @@ npm ci --prefix web
 
 ## 4. Re-verify anchors
 
-1. `grep -n 'sudo cp $(DEPLOY_BIN) $(DEPLOY_BIN).prev' Makefile.local.example` → `82`, `111`.
-2. `grep -n 'curl -ksf $(DEPLOY_URL)/api/v1/system/version' Makefile.local.example` → `88`, `117`.
+1. `grep -nF 'sudo cp $(DEPLOY_BIN) $(DEPLOY_BIN).prev' Makefile.local.example` → `82`, `111`.
+   (`-F` here and in anchor 2: the patterns hold `$(`, which is special in a
+   basic regular expression.)
+2. `grep -nF 'curl -ksf $(DEPLOY_URL)/api/v1/system/version' Makefile.local.example` → `88`, `117`.
 3. `grep -n 'bash scripts/deploy-preflight.sh origin/main' Makefile.local.example` → `72`, `100`.
 4. `grep -rn 'system/version' --include='*.go' internal cmd` → nothing.
 5. `grep -n 'protected.GET("/system/status"' internal/server/wire_system_routes.go` → `28:`.
 6. `grep -n 'json:"version"' internal/sysinfo/service.go` → `64:` (the
    `Version` field of `SystemStatus`).
 7. `grep -n "unittest discover -s scripts -p 'test_\*.py'" .github/workflows/ci.yml` → `310:`.
-8. `grep -n 'print-storage-format' main.go` → A4's flag (one line).
+8. `grep -n 'print-storage-format' main.go` → A4's flag (one line). This
+   prints nothing at `373ba19d2`; it must print one line after A4 merges, and
+   if it does not, stop.
+9. `grep -n 'sleep 3' Makefile.local.example` → `86`, `115` (the fixed wait step
+   4 deletes), and `grep -n 'scp ' Makefile.local.example` → `80`, `109` (the
+   upload commands whose destination `/home/USER/audiobook-organizer` step 4
+   copies into `DEPLOY_STAGED`).
+10. `grep -n 'func (h \*Handler) HealthCheck\|func (h \*Handler) GetSystemStatus' internal/server/handlers/system/handler.go`
+    → `168`, `188`; and `grep -n 'LIVENESS ONLY' internal/server/handlers/system/handler.go`
+    → `151:` (the comment at `:149-166` that explains why no unauthenticated
+    endpoint reports the build string).
+11. `grep -n 'var nonSPAPrefixes' internal/server/spa_fallback.go` → `56:`, and
+    `grep -n 'isNonSPAPath(c.Request.URL.Path)' internal/server/static_embed.go`
+    → `45:` (the `NoRoute` handler at `:41` answers 404 for `/api` paths; this
+    is why `curl -f` on a missing route fails).
+12. `grep -n 'importlib' scripts/test_ci_remote.py` → `14`, `24`, `25` (how the
+    test loads the script under test).
 
 ## 5. Steps
 
-1. **`scripts/deploy_cutover.py` (new).** Python 3, standard library only,
-   `#` header lines after the shebang. Arguments (all required unless a
+1. **`scripts/deploy_cutover.py` (new).**
+
+   **Exit codes (one table; the script, its tests, the Makefile hint and the
+   docs all use these):**
+
+   | Code | Meaning |
+   |---|---|
+   | 0 | serving: the app reports the new version, is not migrating, and the sidecar reads N |
+   | 2 | the app reported `stopped:<reason>` (printed) |
+   | 3 | timeout, including an unreachable endpoint or a crash loop |
+   | 4 | refused before install: nothing was installed (unreadable or older format, existing `.pre-format-<N>`, or a bad argument: override `ArgumentParser.error` to print the usage and `sys.exit(4)`, because argparse's default exit 2 would read as `stopped`) |
+   | 5 | install failed (the `cp`/`mv`/restart command returned non-zero) |
+
+   Python 3, standard library only, `#` header lines after the shebang. Arguments (all required unless a
    default is given): `--host`, `--bin` (DEPLOY_BIN), `--db` (DEPLOY_DB),
    `--url` (DEPLOY_URL), `--staged` (the uploaded binary's path on the host),
    `--expected-version` (the `git describe` string), `--token-file` (a local
@@ -173,7 +228,8 @@ npm ci --prefix web
    - `test_format_change_saves_pre_format_binary`: N=2, S=1, no target →
      `sudo cp` to `.pre-format-2` happens before the `mv`.
    - `test_routine_deploy_makes_no_copy`: N=1, S=1 → no `.pre-format-*`
-     command at all.
+     command at all, the `mv` and the restart DO happen, and with the status
+     endpoint reporting the expected version the exit is 0.
    - `test_existing_pre_format_refuses_and_installs_nothing`: N=2, S=1,
      target exists → exit 4, no `mv`, no restart.
    - `test_older_binary_refuses`: N=1, S=2 → exit 4, no `mv`.
@@ -191,13 +247,19 @@ npm ci --prefix web
    - `test_token_never_printed`: the token string does not appear in stdout
      or stderr in any case above.
 4. **`Makefile.local.example`.**
+   - Add `DEPLOY_STAGED ?= /home/USER/audiobook-organizer`, with a comment:
+     the path the new binary is uploaded to on DEPLOY_HOST. Copy the value
+     character for character from the `scp` destination at lines `80` and `109`
+     (anchor 9); `USER` stays the template's literal placeholder, and you must
+     never invent a user name. Then use `$(DEPLOY_STAGED)` as the destination in
+     both `scp` lines, and in `--staged` below, so the two can never differ.
    - Add `DEPLOY_TOKEN_FILE ?=` with a comment: a local file whose first line
      is an API token with `settings.manage`, used by the post-deploy wait.
      Never commit the token.
    - In both `deploy` and `deploy-debug`, keep `deploy-preflight`, the build
      and the `scp`. Replace the install line, the `sleep 3` and the version
      `case` (`:81-95`, `:110-124`) with one call:
-     `@bash scripts/deploy-cutover.sh --host $(DEPLOY_HOST) --bin $(DEPLOY_BIN) --db $(DEPLOY_DB) --url $(DEPLOY_URL) --staged /home/USER/audiobook-organizer --expected-version "$$(git describe --tags --always)" --token-file $(DEPLOY_TOKEN_FILE) --insecure`.
+     `@bash scripts/deploy-cutover.sh --host $(DEPLOY_HOST) --bin $(DEPLOY_BIN) --db $(DEPLOY_DB) --url $(DEPLOY_URL) --staged $(DEPLOY_STAGED) --expected-version "$$(git describe --tags --always)" --token-file $(DEPLOY_TOKEN_FILE) --insecure`.
      While the app reports `migrating: true` the script prints the status
      instead of "Roll back with: make rollback"; keep that final hint only
      on exit 0.
@@ -221,6 +283,12 @@ npm ci --prefix web
 
 - `python3 -m unittest discover -s scripts -p 'test_deploy_cutover.py' -v`:
   every case in step 3 passes.
+- Anti-over-suppression: `test_routine_deploy_makes_no_copy` is the named
+  test. A routine deploy with no format change (N equal to S) must proceed:
+  no `.pre-format-*` copy, but the install and the restart happen and the run
+  exits 0 once the expected version is serving. `test_serving_at_n_exits_zero`
+  covers the same path from the polling side. The refusals (N below S, an
+  existing `.pre-format-<N>`) must never fire on it.
 - One real routine deploy to the A8 sandbox. The sandbox's bind mounts are
   private to its namespace, so every path the script reads over ssh must be
   the host-visible one: `--db` is the clone's path
@@ -233,6 +301,9 @@ npm ci --prefix web
   `sandbox-run.sh` in the background with `nohup ... &`. Do not run
   `sandbox-reset.sh` as part of it. The deploy exits 0, prints "serving at
   storage format 1", and `ls <SANDBOX_BIN>.pre-format-*` finds nothing.
+- If the A8 sandbox is not available when you reach this step, do not
+  substitute a prod deploy. Write `sandbox routine deploy: not run (A8 sandbox
+  unavailable)` in the report, and leave the exit criterion below unchecked.
 - Not here, because they need release B (they are B9 pass criteria): a
   `.pre-format-<N>` file from a real format change, and a non-zero exit on a
   forced 1% stop while polling the B6b listener.
@@ -256,12 +327,12 @@ grep -n 'scripts/deploy-cutover.sh' Makefile.local.example   # two lines, one pe
   `DEPLOY_TOKEN_FILE` variable.
 - `git diff origin/main | grep -nE "ab""k_[A-Za-z0-9]{16,}|172\.16\.[0-9]{1,3}\.[0-9]{1,3}"`
   prints nothing. Use `192.0.2.x` placeholders in docs.
-- Commit, for example
-  `feat(deploy): deploy-cutover script saves the pre-format binary and waits for serving`,
-  ending with:
+- Commit with exactly
+  `feat(deploy): deploy-cutover script saves the pre-format binary and waits for serving`
+  (`<type>(<scope>): ...` form), ending with:
 
   ```
-  Co-Authored-By: <model name> <noreply@anthropic.com>
+  Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_017MtQ5LP2n3t3bs7AhptkKJ
   ```
 - `sha=$(git rev-parse HEAD); git push origin "${sha}:refs/heads/feat/storage-a9-deploy-cutover"`
@@ -278,7 +349,9 @@ grep -n 'scripts/deploy-cutover.sh' Makefile.local.example   # two lines, one pe
       installed.
 - [ ] Unreachable → exit 3 at the timeout; `stopped` → exit 2 with the
       reason; serving at N → exit 0.
-- [ ] One routine sandbox deploy exits 0 and leaves no `.pre-format-*` file.
+- [ ] One routine sandbox deploy exits 0 and leaves no `.pre-format-*` file,
+      or the report says `not run (A8 sandbox unavailable)` and this box stays
+      unchecked.
 - [ ] `Makefile.local.example` calls the script from both deploy targets,
       with `deploy-preflight` still first.
 - [ ] PR open, not merged.
@@ -291,7 +364,7 @@ head sha: <sha>
 PR: <url>
 files changed: <list>
 unit tests: <n>/10 PASS (<time>)
-sandbox routine deploy: exit <code>, output tail <3 lines>, pre-format files: <none | list>
+sandbox routine deploy: exit <code>, output tail <3 lines>, pre-format files: <none | list>   (or: not run (A8 sandbox unavailable))
 gap reported: /api/v1/system/version absent on main; version read from /api/v1/system/status
 owner action: add DEPLOY_TOKEN_FILE and the deploy-cutover call to Makefile.local
 not done / deviations: <list or "none">

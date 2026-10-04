@@ -1,5 +1,5 @@
 <!-- file: docs/plans/storage-efficiency/TASK-A4.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: e67a43a5-ec7c-49e3-a081-4ebc3c9bdab7 -->
 <!-- last-edited: 2026-10-03 -->
 
@@ -45,7 +45,9 @@ backward compatibility (design P3). `make rollback` today swaps the binary
 with no data check (`Makefile:725-735`). An older binary started on converted
 file rows would read every file as fingerprint-less, and its first scan would
 erase the fingerprint index (design 9, `pebble_store_bookfiles.go:840`,
-`pebble_store.go:5507`). The guard is what makes "the backup is the only way
+`pebble_store.go:5507`; these two are the design's read-only evidence cites
+from `d1f069fac`, nothing in this task edits them, and `pebble_store.go:5507`
+has since moved to about `:5512`). The guard is what makes "the backup is the only way
 back" true. It must ship and be deployed before any format change.
 
 `pebble.Open` ratchets the on-disk format up to whatever the options ask for
@@ -61,7 +63,7 @@ cut-over changes; it passes no format version, which pebble resolves to
 `FormatMinSupported`, `options.go:1495-1496`, so it can never ratchet the
 store). They must keep working on a store the guard refuses.
 
-## 2. Setup
+## 2. ⛔ START HERE (run this first)
 
 ```bash
 cd /Users/jdfalk/repos/github.com/jdfalk/audiobook-organizer
@@ -76,17 +78,43 @@ npm ci --prefix web
 - Do NOT spawn subagents.
 - Never edit the primary checkout.
 - Commit work in progress every 15 minutes, and push it to your own branch.
+- Next, run the "already done if" check in `## Idempotency / Rollback` below.
+  If it says the work exists, stop and report instead of redoing it.
+
+## Idempotency / Rollback
+
+Already done if both of these hold (worktree root):
+
+```bash
+test -f internal/database/storage_format.go && echo "format file present"
+grep -c 'print-storage-format' main.go     # the flag is defined in main.go; prints 1 or more when done
+```
+
+Both present: stop and report "already done". Only one present: a previous
+attempt stopped half way; finish the missing steps instead of starting over.
+
+Rollback: before the first push, remove the worktree and branch, or
+`git reset --hard origin/main` inside it. After the PR merges, `git revert`
+it. The `storage_format` stamp and the sidecar file are ignored by the
+previous build (it never reads `preference:storage_format` or the
+`.storage-format` file), so a binary swap back is safe; the pinned Pebble
+format equals `FormatNewest` on v2.1.7, so no on-disk format changes either way.
 
 ## 3. Read before editing
 
-- `internal/database/pebble_store.go:355-492`. `NewPebbleStore`,
-  `NewPebbleStoreInMemory`, and `newPebbleStore`: open (`:393-400`), the
-  undecodable-marker load (`:410`), the import-path migration (`:417`), the
-  `counter:` init loop (`:423-437`), and the warmup block (`:439-489`).
-- `internal/database/pebble_store.go:5151-5185`. `Reset()` wipes every key
+Line numbers in this section come from `origin/main` at `373ba19d2`. Section 4
+re-greps each one; where a number differs, use the grep result.
+
+- `internal/database/pebble_store.go:379-516`. `NewPebbleStore` (`:379`),
+  `NewPebbleStoreInMemory` (`:409`), and `newPebbleStore` (`:415-516`): open
+  (`:416-424`), the undecodable-marker load (`:433`), the import-path
+  migration (`:440`), the `counter:` init loop (`:446-460`), and the warmup
+  block (`:462-514`).
+- `internal/database/pebble_store.go:5174-5245`. `Reset()` wipes every key
   and re-creates the counters. It wipes the stamp too.
-- `internal/database/store.go:1455-1477`. `InitializeStore`: `NewPebbleStore`
-  then `RunMigrations`. Every CLI entry point reaches the store through it.
+- `internal/database/store.go:1454-1477`. `InitializeStore` (`:1454`):
+  `NewPebbleStore` (`:1463`) then `RunMigrations` (`:1474`). Every CLI entry
+  point reaches the store through it.
 - `internal/database/migration_bookkeeping.go:1-125`. `db_version` is a
   preference (`dbVersionPreferenceKey = "db_version"`, `:26`). The value is a
   JSON `DatabaseVersion{version, updated_at}` (`migrations.go:94`) inside a
@@ -118,21 +146,22 @@ npm ci --prefix web
 
 ## 4. Re-verify anchors
 
-Line numbers are from `main` at `543827ef7`. If a number moved, use the grep
-result, not the number.
+Line numbers were re-run on `origin/main` at `373ba19d2` (they had drifted
+from `543827ef7` after #3704 grew `pebble_store.go`). If a number moved, use
+the grep result, not the number.
 
 1. `grep -n 'opts := &pebble.Options{FormatMajorVersion: pebble.FormatNewest}\|db, err := pebble.Open(path, opts)\|counters := \[\]string{\|store.ensureUndecodableMarkersLoaded()' internal/database/pebble_store.go`
-   → `393`, `397`, `410`, `423`, and `5169` (inside `Reset`).
+   → `416`, `420`, `433`, `446`, and `5192` (inside `Reset`).
 2. `grep -n 'const dbVersionPreferenceKey = "db_version"\|^func databaseVersionPayload\|^func (p \*PebbleStore) setPreferencesAtomic' internal/database/migration_bookkeeping.go` → `26`, `56`, `117`.
 3. `grep -n 'type DatabaseVersion struct' internal/database/migrations.go` → `94:`
 4. `grep -n 'LowerBound: \[\]byte("preference:")' internal/database/pebble_store_preferences.go` → `84:`
 5. `grep -n '^rollback:\|DEPLOY_BIN).prev' Makefile` → `727`, `731`, `733`.
 6. `grep -n 'if registry.IsChildMode()' main.go` → `37:`
 7. `grep -n 'fmt.Println("Using config file:"' cmd/root.go` → `550:`
-8. `grep -n 'func (p \*PebbleStore) Reset' internal/database/pebble_store.go` → `5151:`
-9. `grep -n 's, err = NewPebbleStore(path)' internal/database/store.go` → `1465:`
+8. `grep -n 'func (p \*PebbleStore) Reset' internal/database/pebble_store.go` → `5174:`
+9. `grep -n 's, err = NewPebbleStore(path)' internal/database/store.go` → `1463:`
 10. `grep -rn 'pebble.Open(' --include='*.go' internal cmd | grep -v _test` →
-    - `internal/database/pebble_store.go:397`: the main store. This task.
+    - `internal/database/pebble_store.go:420`: the main store. This task.
     - `cmd/diagnostics.go:208`: raw mode. This task pins its format and
       leaves it exempt from the stamp guard.
     - `cmd/pebble-inject-skip/main.go:34`: exempt; no edit.
@@ -148,11 +177,29 @@ result, not the number.
     → `97: Create(name string, category DiskWriteCategory) (File, error)`,
     `122: Rename(oldname, newname string) error`. `vfs.WriteCategoryUnspecified`
     exists.
-14. `grep -n 'sudo cp $(DEPLOY_BIN) $(DEPLOY_BIN).prev' Makefile.local.example` → `82`, `111`.
+14. `grep -nF 'sudo cp $(DEPLOY_BIN) $(DEPLOY_BIN).prev' Makefile.local.example` → `82`, `111`.
+    (`-F` because the pattern holds `$(`, which is special in a basic
+    regular expression.)
 15. `grep -n 'Environment="DATABASE_PATH' deploy/audiobook-organizer.service`
     → `70:`. This is the default path only; prod overrides it. Never
     hard-code it.
-
+16. `grep -n '^## Backup and Restore\|^### Restore\|^## memdb Warmup Recovery' docs/system/runbooks.md`
+    → `110`, `121`, `128`. Step 10 inserts `## Storage Format Restore` after
+    the restore subsection, before line `128`.
+17. `grep -n '^## 2. Rollback flow' docs/system/deploy-and-gpu-ops.md`
+    → `36:` (the rollback flow step 10 edits; the example `make rollback`
+    command is at `:54`).
+18. `grep -n 'DEPLOY_BIN *?=\|DEPLOY_HOST *?=' Makefile` → `46`, `47` (step 7
+    adds `DEPLOY_DB ?=` after line `47`).
+19. `grep -n 'func initConfig' cmd/root.go` → `525:` (section 3's reason the
+    flag is handled in `main.go`; the `Using config file:` print is anchor 7).
+20. `grep -n 'func NewPebbleStore\|func NewPebbleStoreInMemory\|func newPebbleStore' internal/database/pebble_store.go`
+    → `379`, `409`, `415` (the three functions steps 2-3 split and rewire).
+21. `grep -n '^DEPLOY_BIN :=\|^DEPLOY_URL :=' Makefile.local.example`
+    → `57`, `60` (step 9 adds `DEPLOY_DB ?=` after `57`).
+22. `head -3 Makefile` → `# file: Makefile`, `# version: 2.31.1`, a `# guid:` line.
+    The Makefile carries a version header, so the version bump in section 9 applies; if the
+    second line no longer starts with `# version:`, skip the bump.
 ## 5. Steps
 
 1. **`internal/database/storage_format.go` (new).**
@@ -237,7 +284,7 @@ result, not the number.
    - `mode == openForServe` and (effective stamp below `buildStorageFormat`
      or marker present) → close, return `*StorageMigrationRequiredError`.
    - Nothing in this function writes to the store.
-3. **Init phase.** Move the rest of `newPebbleStore` (`:402-489`) into
+3. **Init phase.** Move the rest of `newPebbleStore` (`:426-514`, everything after the `pebble.Open` error check) into
    `func initPebbleStore(db *pebble.DB, path string, fs vfs.FS, st storageFormatState) (*PebbleStore, error)`,
    unchanged except: after the counter loop and BEFORE the warmup block,
    call `p.ensureStorageFormatStamp(st.emptyAtOpen)` (close and return on
@@ -249,7 +296,7 @@ result, not the number.
    `slog.Info("storage format", "stamp", stamp, "supported", SupportedStorageFormat, "sidecar", sidecarPath)`.
    `newPebbleStore(path, fs)` becomes `openPebbleChecked(path, fs, openForServe)`
    followed by `initPebbleStore`. Keep the comment block above the warmup.
-4. **`Reset()` (`pebble_store.go:5151`).** After the batch commit, call
+4. **`Reset()` (`pebble_store.go:5174`).** After the batch commit, call
    `p.ensureStorageFormatStamp(true)` and return its error. The wipe deleted
    the stamp, and a reset store is empty.
 5. **`cmd/diagnostics.go` raw mode.** In `runRawPebbleQuery` (`:208-210`),
@@ -309,10 +356,21 @@ result, not the number.
         instead of a path;
      3. write the restored store's format into `<db>.storage-format` (the
         value `<bin>.pre-format-<store> --print-storage-format` prints);
-     4. install `<bin>.pre-format-<store>` as `<bin>` (never `.prev`);
+     4. install `<bin>.pre-format-<store>` as `<bin>` (never `.prev`). The
+        guard prints this step even when no such file exists: A9's
+        `scripts/deploy-cutover.sh` is what creates it, and A9 merges after
+        this task. Alongside the step the guard prints
+        `note: <bin>.pre-format-<store> is saved by scripts/deploy-cutover.sh at deploy time; if it is absent, build the release that matches format <store> and install that binary`;
      5. start, and check the `storage format` log line;
      6. `See docs/system/runbooks.md#storage-format-restore`.
    - Otherwise exit 0 (the Makefile then swaps in `.prev` as today).
+   - Case list for the unit tests: (1) prev 1, store 1; (2) prev empty;
+     (3) prev is an error string; (4) store above prev, with a checkpoint;
+     (5) store above prev, `ROLLBACK_IGNORE_FORMAT=1`, no checkpoint;
+     (6) sidecar unreadable; (7) sidecar unreadable with
+     `ROLLBACK_IGNORE_FORMAT=1`. Case 4 also asserts the restore steps contain
+     the `.pre-format-<store>` step and the "saved by scripts/deploy-cutover.sh"
+     note even though no such file exists in the test.
 9. **`Makefile.local.example`.** Add a `DEPLOY_DB ?=` example line with a
    placeholder path, plus the same comment as step 7. Bump its header.
 10. **Docs.**
@@ -385,6 +443,12 @@ result, not the number.
 - `TestStorageFormat_SidecarWrittenAtOpen`. Temp dir: `<dir>.storage-format`
   contains `1\n`.
 - `TestStorageFormat_ResetRestamps`. `Reset()`, then the stamp is present.
+- `TestStorageFormat_CurrentStampStoreOpensAndServes`. Anti-over-suppression:
+  temp dir; `NewPebbleStore`, create one book, close; reopen with
+  `NewPebbleStore` (stamp equals `buildStorageFormat`, sidecar `1\n`, no
+  marker). The reopen must succeed with no error, and the book must read back.
+  This proves the guard refuses only older, newer and marked stores, never a
+  current one.
 - `TestStorageFormat_ListUserPreferencesStillDecodes`. `ListUserPreferences`
   includes a `storage_format` entry.
 - `TestStorageFormat_PinnedFormatLeavesOnDiskVersionUnchanged`. Temp dir:
@@ -450,8 +514,9 @@ required.
 
 - Version headers: new Go files use the Go header; the new Python script and
   its test use the `#` header. Bump the version and `last-edited` on `pebble_store.go`,
-  `cmd/diagnostics.go`, `main.go`, `main_test.go`, `Makefile` (if it carries
-  a header; check the top of the file), `Makefile.local.example`,
+  `cmd/diagnostics.go`, `main.go`, `main_test.go`, `Makefile` (run
+  `head -3 Makefile` first and bump only if a `# version:` line exists; at
+  `373ba19d2` it does, anchor 22), `Makefile.local.example`,
   `docs/system/runbooks.md` and `docs/system/deploy-and-gpu-ops.md`. Generate
   guids with `uuidgen | tr A-Z a-z`.
 - Fragment `changelog.d/<YYYYMMDD>_storage_a4_format_stamp.md`, no header,
@@ -459,12 +524,12 @@ required.
   rollback guard. Mention the new required `DEPLOY_DB` variable.
 - Check that `git diff origin/main | grep -nE "ab""k_[A-Za-z0-9]{16,}|172\.16\.[0-9]{1,3}\.[0-9]{1,3}"` prints
   nothing. Use placeholders such as `192.0.2.10` in docs.
-- Commit, for example
-  `feat(database): storage_format stamp checked at open; pinned Pebble format; make rollback refuses past a format change`,
-  ending with:
+- Commit with exactly
+  `feat(database): storage_format stamp checked at open; pinned Pebble format; make rollback refuses past a format change`
+  (`<type>(<scope>): ...` form), ending with:
 
   ```
-  Co-Authored-By: <model name> <noreply@anthropic.com>
+  Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_017MtQ5LP2n3t3bs7AhptkKJ
   ```
 - `sha=$(git rev-parse HEAD); git push origin "${sha}:refs/heads/feat/storage-a4-format-stamp"`
