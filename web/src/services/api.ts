@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.146.0
+// version: 2.147.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-04
 
@@ -5831,6 +5831,7 @@ export interface DBHealthStats {
   pebble?: {
     key_count: number;
     size_bytes: number;
+    estimated?: boolean;
   };
   embeddings: {
     vector_count: number;
@@ -5840,11 +5841,15 @@ export interface DBHealthStats {
     job_count: number;
     pending_count: number;
     size_bytes: number;
+    size_source?: string;
   };
   metadata_cache: {
     total_entries: number;
+    estimated?: boolean;
     ttl_days: number;
+    /** -1 unless the request passed ?deep=true. */
     expired_entries: number;
+    expired_entries_computed?: boolean;
   };
   book_path_prefixes?: Array<{ prefix: string; book_count: number }>;
 }

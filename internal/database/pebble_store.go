@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.204.0
+// version: 1.205.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-04
 
@@ -5171,15 +5171,23 @@ func (p *PebbleStore) DeleteRaw(key string) error {
 	return nil
 }
 
-func (p *PebbleStore) ScanPrefix(prefix string) ([]KVPair, error) {
+// prefixIterOptions returns iterator bounds covering exactly the keys that
+// start with prefix. The upper bound comes from prefixUpperBound
+// (embedding_store.go), which carries past a trailing 0xff byte and returns nil
+// (unbounded) for an all-0xff prefix; the empty prefix covers every key.
+func prefixIterOptions(prefix string) *pebble.IterOptions {
+	if prefix == "" {
+		return &pebble.IterOptions{}
+	}
 	prefixBytes := []byte(prefix)
-	upperBound := make([]byte, len(prefixBytes))
-	copy(upperBound, prefixBytes)
-	upperBound[len(upperBound)-1]++
-	iter, err := p.db.NewIter(&pebble.IterOptions{
+	return &pebble.IterOptions{
 		LowerBound: prefixBytes,
-		UpperBound: upperBound,
-	})
+		UpperBound: prefixUpperBound(prefixBytes),
+	}
+}
+
+func (p *PebbleStore) ScanPrefix(prefix string) ([]KVPair, error) {
+	iter, err := p.db.NewIter(prefixIterOptions(prefix))
 	if err != nil {
 		return nil, err
 	}
@@ -5198,8 +5206,8 @@ func (p *PebbleStore) ScanPrefix(prefix string) ([]KVPair, error) {
 // it reads at most limit+1 keys (the extra one only to learn whether another
 // page exists), so memory is bounded by limit however large the keyspace is.
 // The upper bound comes from prefixUpperBound (embedding_store.go), which
-// handles a trailing 0xff byte; the older ScanPrefix increments the last byte
-// in place and does not.
+// handles a trailing 0xff byte, as ScanPrefix and CountPrefix now do through
+// prefixIterOptions.
 func (p *PebbleStore) ScanPrefixPage(prefix, after string, limit int) ([]KVPair, string, error) {
 	if limit <= 0 {
 		return nil, "", fmt.Errorf("ScanPrefixPage: limit must be positive, got %d", limit)
@@ -5270,14 +5278,7 @@ func (p *PebbleStore) DeleteRawBatch(keys []string) error {
 }
 
 func (p *PebbleStore) CountPrefix(prefix string) (int64, error) {
-	prefixBytes := []byte(prefix)
-	upperBound := make([]byte, len(prefixBytes))
-	copy(upperBound, prefixBytes)
-	upperBound[len(upperBound)-1]++
-	iter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: prefixBytes,
-		UpperBound: upperBound,
-	})
+	iter, err := p.db.NewIter(prefixIterOptions(prefix))
 	if err != nil {
 		return 0, err
 	}
@@ -5954,21 +5955,6 @@ func deleteFingerprintLSHIndexesByID(_ *pebble.Batch, _ string) error {
 //   aijob:<id>           → JSON-encoded AIJob
 //   aijob_payload:<id>   → raw payload bytes
 //   aijob_batch:<bid>    → job ID (secondary index; batch_id → job_id)
-
-// KeyCount returns the total number of keys stored in the PebbleDB instance
-// and the estimated on-disk byte size. Used by the DB health diagnostics endpoint.
-func (p *PebbleStore) KeyCount() (count int64, sizeBytes uint64, err error) {
-	iter, iterErr := p.db.NewIter(nil)
-	if iterErr != nil {
-		return 0, 0, fmt.Errorf("pebble key count iterator: %w", iterErr)
-	}
-	defer iter.Close()
-	for iter.First(); iter.Valid(); iter.Next() {
-		count++
-	}
-	sizeBytes = p.db.Metrics().DiskSpaceUsage()
-	return count, sizeBytes, nil
-}
 
 // SweepBookFileSegDropResult holds the outcome of a SweepBookFileSegDrop run.
 type SweepBookFileSegDropResult struct {
