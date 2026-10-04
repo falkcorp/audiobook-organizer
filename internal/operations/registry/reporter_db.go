@@ -1,5 +1,5 @@
 // file: internal/operations/registry/reporter_db.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 1a2b3c4d-5e6f-7890-abcd-ef0123456789
 // last-edited: 2026-10-04
 
@@ -89,6 +89,7 @@ type dbReporter struct {
 	lastLoggedAt      time.Time
 	pendingLog        *pendingProgressLine // newest suppressed line, written at run end
 	nowFn             func() time.Time     // clock for the throttle; time.Now unless a test replaces it
+	shapeLogsInWindow int                  // shape-change lines written since the last time-based line
 
 	// setCurrentItemFn, if non-nil, updates the runHandle's in-memory label.
 	setCurrentItemFn func(string)
@@ -119,23 +120,46 @@ type pendingProgressLine struct {
 // 15,894 (eval R6), each with pebble.Sync and kept forever.
 const progressLogInterval = 30 * time.Second
 
-// progressShape normalises a progress message by replacing every maximal run
-// of ASCII digits with a single '#', so "Books 3/76994" and "Books 4/76994"
-// share the shape "Books #/#".
+// maxShapeLogsPerWindow caps how many shape-change lines may be written
+// between two time-based lines. A handful of phase changes per run is normal;
+// a message that embeds a basename, path or ULID ("Processed: 3/76994 books
+// (The Hobbit)") is a new shape on every call, and without this cap the shape
+// rule would log every one of them (the library.scan case). Past the cap the
+// stream falls back to the time-only rule.
+const maxShapeLogsPerWindow = 4
+
+// progressShape normalises a progress message by replacing every number with a
+// single '#', so "Books 3/76994" and "Books 4/76994" share the shape
+// "Books #/#". A number is a run of ASCII digits with an optional decimal part
+// ("1.5") and an optional leading sign when the sign is not glued to a word
+// ("-3", but not the hyphen in "part-3").
 func progressShape(msg string) string {
+	isDigit := func(c byte) bool { return c >= '0' && c <= '9' }
+	isWord := func(c byte) bool {
+		return isDigit(c) || c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+	}
 	var b strings.Builder
 	b.Grow(len(msg))
-	inDigits := false
-	for i := 0; i < len(msg); i++ {
+	for i := 0; i < len(msg); {
 		c := msg[i]
-		if c >= '0' && c <= '9' {
-			if !inDigits {
-				b.WriteByte('#')
-				inDigits = true
+		start := i
+		if (c == '-' || c == '+') && i+1 < len(msg) && isDigit(msg[i+1]) && (i == 0 || !isWord(msg[i-1])) {
+			i++
+		}
+		if i < len(msg) && isDigit(msg[i]) {
+			for i < len(msg) && isDigit(msg[i]) {
+				i++
 			}
+			if i+1 < len(msg) && msg[i] == '.' && isDigit(msg[i+1]) {
+				i++
+				for i < len(msg) && isDigit(msg[i]) {
+					i++
+				}
+			}
+			b.WriteByte('#')
 			continue
 		}
-		inDigits = false
+		i = start + 1
 		b.WriteByte(c)
 	}
 	return b.String()
@@ -411,7 +435,7 @@ func (r *dbReporter) UpdateProgress(current, total int, message string) error {
 	r.progressCurrent = current
 	r.progressTotal = total
 	r.lastProgressMessage = message
-	emitLog := r.decideProgressLogLocked(current, total, message)
+	flushPending, emitLog := r.decideProgressLogLocked(current, total, message)
 	r.progressMu.Unlock()
 	r.progressGen.Add(1)
 
@@ -438,6 +462,11 @@ func (r *dbReporter) UpdateProgress(current, total int, message string) error {
 	// or the run ends (emitPendingProgressLine). The progress columns, bus event
 	// and Prometheus gauges above still fire on every update. Logging every
 	// distinct message wrote ~300K rows for one library.scan (eval R6).
+	// A shape change first writes the line the old phase was last on, so a
+	// phase's final tally is not dropped.
+	if flushPending != nil {
+		r.logProgressLine(flushPending.message, flushPending.current, flushPending.total)
+	}
 	if emitLog {
 		r.logProgressLine(message, current, total)
 	}
@@ -445,28 +474,40 @@ func (r *dbReporter) UpdateProgress(current, total int, message string) error {
 }
 
 // decideProgressLogLocked applies the progress log throttle. The caller must
-// hold progressMu. It reports whether the line should be logged now; otherwise
-// the line is remembered as the pending terminal line.
-func (r *dbReporter) decideProgressLogLocked(current, total int, message string) bool {
+// hold progressMu. It reports whether the line should be logged now, and the
+// previously suppressed line (if any) that must be written before it. When
+// the line is not logged it is remembered as the pending terminal line.
+func (r *dbReporter) decideProgressLogLocked(current, total int, message string) (flushPending *pendingProgressLine, emit bool) {
 	if message == "" {
-		return false
+		return nil, false
 	}
 	if message == r.lastLoggedMessage {
 		// An identical message is never logged twice in a row.
 		r.pendingLog = nil
-		return false
+		return nil, false
 	}
 	now := r.nowFn()
 	shape := progressShape(message)
-	if r.lastLoggedAt.IsZero() || shape != r.lastLoggedShape || now.Sub(r.lastLoggedAt) >= progressLogInterval {
-		r.lastLoggedShape = shape
-		r.lastLoggedMessage = message
-		r.lastLoggedAt = now
+	switch {
+	case r.lastLoggedAt.IsZero():
+		r.shapeLogsInWindow = 0
+	case now.Sub(r.lastLoggedAt) >= progressLogInterval:
+		// Time-based line: opens a new window and supersedes any pending line.
+		r.shapeLogsInWindow = 0
 		r.pendingLog = nil
-		return true
+	case shape != r.lastLoggedShape && r.shapeLogsInWindow < maxShapeLogsPerWindow:
+		r.shapeLogsInWindow++
+		flushPending = r.pendingLog
+		r.pendingLog = nil
+	default:
+		r.pendingLog = &pendingProgressLine{message: message, current: current, total: total}
+		return nil, false
 	}
-	r.pendingLog = &pendingProgressLine{message: message, current: current, total: total}
-	return false
+	r.lastLoggedShape = shape
+	r.lastLoggedMessage = message
+	r.lastLoggedAt = now
+	r.pendingLog = nil
+	return flushPending, true
 }
 
 func (r *dbReporter) logProgressLine(message string, current, total int) {
@@ -478,7 +519,9 @@ func (r *dbReporter) logProgressLine(message string, current, total int) {
 }
 
 // emitPendingProgressLine writes the newest suppressed progress line, if any.
-// flushLoop calls it on normal completion before the terminal log flush.
+// The worker calls it before the "operation finished" line (so the final
+// progress line precedes it); flushLoop calls it again on normal completion as
+// a backstop, which is a no-op once the worker has drained the pending line.
 // markTerminal deliberately does not: after abandonment Log drops lines.
 func (r *dbReporter) emitPendingProgressLine() {
 	r.progressMu.Lock()
