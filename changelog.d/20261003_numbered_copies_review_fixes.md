@@ -46,13 +46,43 @@
 - **A cut-off repair whose job was cleared from the job list still resumes.**
   Each job-log entry a Repairs fixer writes now names the fixer itself.
   Clearing a failed or interrupted job deletes the job but keeps its log, so
-  the repair used to stop recognising its own earlier work. A fresh plan
-  could then split one work into two live books. An entry from another
-  fixer is never counted as this repair's, even if its job claims otherwise.
-  Old entries without the name are still judged by their job; if that job is
-  gone, the row is planned again.
-- **A resume accepts a raised primary flag only when this repair raised it.**
-  The flag must be on the member that the repair's own hand-off note names,
-  or the hand-off must still be owed (its crown written, its note cut off).
-  A lowered flag counts only when the repair lowered it after the plan was
-  made. A plan stored without its flags or plan time is planned again.
+  the repair used to stop recognising its own earlier work when the original
+  plan was resumed. An entry from another fixer is never counted as this
+  repair's, even if its job claims otherwise. Old entries without the name are
+  still judged by their job; if that job is gone, the row is planned again.
+- **A new plan made after a cut-off chapter repair now finishes that repair
+  instead of splitting the book in two.** Before, a fresh plan saw the
+  half-built book as an ordinary book and grouped the remaining chapters
+  without it, around a different book; applying that row left two live books
+  for one work (tested: 36 of 122 cut points with no version group, 10 of 122
+  in the shape prod has). Each run of a chapter repair now writes its plan
+  into the job log before its first change. A later plan finds that entry and
+  continues the run with the same surviving book, the same chapters and the
+  same plan time, so the end state is the same as a run that was never cut,
+  and resuming the original plan afterwards changes nothing. When the run
+  cannot be continued (two surviving books chosen for one folder, the
+  surviving book retired or changed, a missing file), the row is held for
+  review and names the books. A cut-off run that left no plan entry (older
+  code) also holds every new row for that folder rather than guess. A test
+  now cuts the repair at every single write and makes a fresh plan at each
+  point.
+- **A changed primary flag is credited only to this row's own runs.** A
+  member's primary flag counts as this repair's change only when a run of
+  THIS row made it: a run whose plan entry names this row and its plan time.
+  A run of a different plan of the same folder no longer counts, even if it
+  ran after this plan was made. A flag raised or lowered by a hand-off counts
+  when a hand-off note names the crowned member. The note may come from this
+  row's run, or from another repair that finished the hand-off this row's
+  demote left owed. In the crash window, the crown is written but its note is
+  not. There the flag counts only on the member that the hand-off would
+  crown, worked out again from the group as it stood before the hand-off. A
+  crown that anyone else gave to another member stops the row. A crown given
+  to that same member is accepted, because it leaves the state the repair
+  would leave. The surviving book's own flag is now judged the same way: it
+  can be crowned or demoted by the row's own hand-off when it shares a
+  version group with a retired member.
+- **A failed primary hand-off now stops the row.** When retiring a group's
+  primary could not hand the group to another member, the row used to carry
+  on. The group was left without a primary and no note was written. The
+  error is now returned, so the row reports partially applied and its resume
+  makes the hand-off. This applies to the duplicate-copies repair as well.
