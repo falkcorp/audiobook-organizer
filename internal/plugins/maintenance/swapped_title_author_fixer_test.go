@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/swapped_title_author_fixer_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 8223b479-ea79-40ca-a48a-1b7bc0f3bea2
 // last-edited: 2026-10-03
 
@@ -1151,4 +1151,52 @@ func TestSwappedTitleAuthorFixer_ContinuationNeedsTheSameProviderRecord(t *testi
 	_, rows = l.plan()
 	require.Equal(t, junkSkipNeedsManual, rows["swap"].Skipped, rows["swap"].SkipReason)
 	require.Contains(t, rows["swap"].SkipReason, "nothing but the title ties")
+}
+
+// A book whose stored row keeps a stale embedded series object (SeriesID nil,
+// or naming another series) is held: any write of the row drops that object
+// (the store's series invariant), and it is the stale-series relink's only
+// evidence. Held at plan time, and at apply time when the row went stale
+// after the plan.
+func TestSwappedTitleAuthorFixer_StaleEmbeddedSeriesIsHeld(t *testing.T) {
+	l := newSwapLib(t)
+	other, err := l.store.CreateSeries("Other Saga", nil)
+	require.NoError(t, err)
+	stale, err := l.store.CreateSeries("Ultimate Level", nil)
+	require.NoError(t, err)
+	mk := func(name, stored, prov, folder string) {
+		l.add(swapBook{name: name, title: "read by Jack Voraces", narrator: "Jack Voraces",
+			storedAuthor: stored, provTitle: prov, provAuthor: "Shawn Wilson",
+			files: []string{"/lib/Shelf/" + folder + "/book.m4b"}})
+	}
+	mk("nil-id", "Ultimate Level 1_ Divine Creation", "Ultimate Level 1: Divine Creation", "UL1")
+	mk("mismatch", "Ultimate Level 2_ Ascension", "Ultimate Level 2: Ascension", "UL2")
+	mk("later", "Ultimate Level 3_ Rebirth", "Ultimate Level 3: Rebirth", "UL3")
+
+	seed := func(name string, seriesID *int) {
+		_, err := l.store.SeedLegacyBookRowForTest(l.ids[name], func(b *database.Book) error {
+			b.SeriesID = seriesID
+			b.Series = &database.Series{ID: stale.ID, Name: stale.Name}
+			return nil
+		})
+		require.NoError(t, err)
+	}
+	seed("nil-id", nil)
+	seed("mismatch", &other.ID)
+
+	plan, rows := l.plan()
+	require.Equal(t, swapSkipRelinkSeriesFirst, rows["nil-id"].Skipped, rows["nil-id"].SkipReason)
+	require.Contains(t, rows["nil-id"].SkipReason, "stale-series relink")
+	require.Equal(t, swapSkipRelinkSeriesFirst, rows["mismatch"].Skipped, rows["mismatch"].SkipReason)
+	require.Contains(t, rows["mismatch"].SkipReason, "a person decides")
+	require.True(t, rows["later"].Applicable(), "%s %s", rows["later"].Skipped, rows["later"].SkipReason)
+
+	// The row goes stale after the plan: the apply's re-plan holds it and
+	// writes nothing, so the embedded series survives.
+	seed("later", nil)
+	l.apply(plan, []string{l.ids["later"]})
+	b := l.book("later")
+	require.Equal(t, "read by Jack Voraces", b.Title, "the book was written")
+	require.NotNil(t, b.Series, "the stale series object was dropped")
+	require.Equal(t, stale.ID, b.Series.ID)
 }

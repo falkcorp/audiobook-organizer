@@ -1,7 +1,7 @@
 // file: internal/audiobooks/edit_history_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6f1a8c34-2d9b-4e70-a5c3-0b7e4d2f9a51
-// last-edited: 2026-09-30
+// last-edited: 2026-10-03
 
 package audiobooks_test
 
@@ -133,4 +133,38 @@ func TestUpdateAudiobook_HistoryFailureDoesNotFailALandedEdit(t *testing.T) {
 	row, err := store.GetBookByID(book.ID)
 	require.NoError(t, err)
 	require.Equal(t, "mp3", row.Format)
+}
+
+// stateFailStore fails every field-state write.
+type stateFailStore struct{ *database.PebbleStore }
+
+func (s stateFailStore) UpsertMetadataFieldState(*database.MetadataFieldState) error {
+	return errors.New("field state store down")
+}
+
+// The field-state save runs before the history that describes it. When it
+// fails, the edit (which committed) still succeeds, and no "override" row
+// claims a lock that was never written: the column diff records the field as
+// a "manual" row instead, so a queued metadata apply still sees the edit.
+// Until 2026-10-03 the override rows were written first and the request then
+// returned 500 for a landed edit.
+func TestUpdateAudiobook_FailedStateSaveWritesNoOverrideHistory(t *testing.T) {
+	store, book := editFixture(t)
+	mfs := metafetch.NewService(store)
+	mark, err := mfs.ApplyEditMark(book.ID)
+	require.NoError(t, err)
+
+	got, err := audiobooks.NewAudiobookUpdateService(stateFailStore{store}).UpdateAudiobook(context.Background(), book.ID,
+		map[string]any{"isbn13": "9780000000002"})
+	require.NoError(t, err, "a landed edit was reported as failed")
+	require.NotNil(t, got.ISBN13)
+	require.Equal(t, "9780000000002", *got.ISBN13)
+
+	edits, err := mfs.ApplyEditsSince(book.ID, mark, "apply-queued-own")
+	require.NoError(t, err)
+	require.NotContains(t, edits.Others, "isbn13 (override, user_edit)", "an override row claims a lock that was never written")
+	require.Contains(t, edits.Others, "isbn13 (manual, manual)", "the edit left no history a queued apply can see")
+	states, err := store.GetMetadataFieldStates(book.ID)
+	require.NoError(t, err)
+	require.Empty(t, states)
 }

@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_mutation.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: e7b1f6a5-b8c9-0d12-ce3f-4a5b6c7d8e9f
 // last-edited: 2026-10-03
 
@@ -885,12 +885,34 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 		svc.syncEditedNarratorJunction(id, pre, updatedBook, narratorClear)
 	}
 
+	// Save metadata state -- this edit's changes only, merged sub-field by
+	// sub-field onto the rows as they stand under the book's field-state
+	// stripe (saveEditedMetadataState) -- BEFORE any history row that
+	// describes it: a history row is never written for a lock or override
+	// that did not land. The book edit has committed, so a failure here is
+	// logged, not returned (a 500 for a landed edit would make the user
+	// retry an edit that then changes nothing). Its override rows are then
+	// dropped, and the column diff below records those columns as "manual"
+	// rows instead, so a queued metadata apply still sees the edit.
+	stateBefore, stateErr := svc.saveEditedMetadataState(id, loadedState, state)
+	if stateErr != nil {
+		editHistoryLog.Error("UpdateAudiobook %s: the edit was saved but its field locks and overrides were not "+
+			"(a later fetch may overwrite the edited fields): %v", logger.SanitizeLogValue(id), stateErr)
+		pendingHistory = nil
+	}
+
 	// Override history rows, before the column diff so they are never newer
-	// than the "manual" rows that follow.
+	// than the "manual" rows that follow. The previous value is the override
+	// the save replaced under the stripe, not the one the unlocked read saw;
+	// a row whose previous value is now the new one records nothing.
 	if len(pendingHistory) > 0 {
 		mss := newMetadataStateSvc(svc.store)
 		for _, r := range pendingHistory {
-			if mss.recordChange(id, r.field, "override", "user_edit", r.old, r.new) {
+			old := stateBefore[r.field].OverrideValue
+			if fmt.Sprintf("%v", old) == fmt.Sprintf("%v", r.new) {
+				continue
+			}
+			if mss.recordChange(id, r.field, "override", "user_edit", old, r.new) {
 				noteOverride(r.field)
 			}
 		}
@@ -924,12 +946,6 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 	if seriesRenamed && !overrideRecorded[database.HistoryFieldSeries] {
 		newMetadataStateSvc(svc.store).recordChange(id, database.HistoryFieldSeries,
 			database.ChangeTypeManual, "manual", seriesPlan.renameFrom, seriesPlan.name)
-	}
-
-	// Save metadata state: this edit's changes only, under the stripe.
-	if err := svc.saveEditedMetadataState(id, loadedState, state); err != nil {
-		slog.Info("[ERROR] UpdateAudiobook failed to save metadata state", "err", err)
-		return nil, fmt.Errorf("failed to persist metadata state")
 	}
 
 	svc.InvalidateBookCaches()

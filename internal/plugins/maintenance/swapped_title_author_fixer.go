@@ -59,6 +59,15 @@ const (
 	// has the swapped shape (its title is no longer junk, or its author is
 	// no longer the provider's title). A plan never lists one.
 	swapSkipNotSwapped = "skipped_not_swapped"
+	// swapSkipRelinkSeriesFirst: the stored book row still embeds a series
+	// object its SeriesID does not name (SeriesID nil, or another series):
+	// a stale row older builds left. Any write of the row drops that object
+	// (the store's series invariant), and it is the stale-series relink's
+	// only evidence of the series the book belonged to, so this fixer does
+	// not write the book until that is settled. A row with SeriesID nil is
+	// the relink fixer's (maintenance.relink-stale-series); one whose
+	// SeriesID names another series is not, and a person decides.
+	swapSkipRelinkSeriesFirst = "skipped_relink_series_first"
 )
 
 // swapIndexTTL bounds how long Replan reuses the author index during an apply.
@@ -518,6 +527,14 @@ func (f *swappedTitleAuthorFixer) evaluate(idx *junkIndex, aidx *swapAuthorIndex
 		kind, why := lockHold(authorState, "author")
 		return finish(kind, why, true)
 	}
+	// A stale embedded series is held before anything is written (see
+	// swapSkipRelinkSeriesFirst). Read here, once the book has the swapped
+	// shape, not for every book in the library.
+	if skip, why, err := swapStaleSeriesHold(store, b.ID); err != nil {
+		return repairs.Row{}, false, err
+	} else if skip != "" {
+		return finish(skip, why, true)
+	}
 	continuation, contOp, err := swapContinuation(store, b.ID, authorState, fetched)
 	if err != nil {
 		return repairs.Row{}, false, err
@@ -758,6 +775,32 @@ func swapContinuation(store OpsStore, bookID string, author *database.MetadataFi
 		return true, op, nil
 	}
 	return false, "", nil
+}
+
+// swapStaleSeriesHold holds a book whose stored row embeds a series object
+// its SeriesID does not name: writing the row (the title, or the author id)
+// would drop that object without a trace (database enforceSeriesInvariant),
+// and the stale-series relink reads it to restore the book's series.
+func swapStaleSeriesHold(store OpsStore, bookID string) (skip, why string, err error) {
+	book, err := store.GetBookByID(bookID)
+	if err != nil {
+		return "", "", fmt.Errorf("read book %s: %w", bookID, err)
+	}
+	if book == nil || book.Series == nil {
+		return "", "", nil
+	}
+	emb := book.Series
+	switch {
+	case book.SeriesID == nil:
+		return swapSkipRelinkSeriesFirst, fmt.Sprintf(
+			"the book row keeps a stale series object (%q, id %d) with no series id; writing the book would drop it -- "+
+				"run the stale-series relink fixer first", emb.Name, emb.ID), nil
+	case *book.SeriesID != emb.ID:
+		return swapSkipRelinkSeriesFirst, fmt.Sprintf(
+			"the book row keeps a series object (%q, id %d) that is not its series id %d; writing the book would drop it -- "+
+				"a person decides which series is right", emb.Name, emb.ID, *book.SeriesID), nil
+	}
+	return "", "", nil
 }
 
 // swapHistoryAll asks GetMetadataChangeHistory for every row of a field.
