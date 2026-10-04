@@ -4282,7 +4282,7 @@ func (f *fragmentFixer) replanGroup(ctx context.Context, store OpsStore, lib *fr
 		if !ok || b.SoftDeleted {
 			continue
 		}
-		if why := jr.liveFlagsExplained(b, st.Flags[id], crowns); why != "" {
+		if why := jr.liveFlagsExplained(b, st.Flags[id], crowns, id != survivorID); why != "" {
 			return changedRow(planned, why), nil
 		}
 	}
@@ -4785,9 +4785,15 @@ func (jr *fragJournal) noteCrowns(b fragBook, cr *fragCrowns) {
 // One the outside actor happened to give the same member is accepted: it is
 // the state this row's hand-off leaves anyway.
 //
+// A member (retiree, not the survivor) whose journal rows the 90-day prune
+// removed (jr.pruned) has no demote row left either: its primary flag
+// dropped is this row's own demote, since the run demotes every member it
+// retires (retireInto demotes before it soft-deletes) and the row retires
+// it anyway.
+//
 // Any other difference (a member organized in place, demoted or crowned by
 // someone else) is a change.
-func (jr *fragJournal) liveFlagsExplained(b fragBook, fl fragPlannedFlags, crowns fragCrowns) string {
+func (jr *fragJournal) liveFlagsExplained(b fragBook, fl fragPlannedFlags, crowns fragCrowns, retiree bool) string {
 	if b.Organized != fl.Organized {
 		return fmt.Sprintf("book %s is now organized=%t, not %t as planned", b.ID, b.Organized, fl.Organized)
 	}
@@ -4796,7 +4802,7 @@ func (jr *fragJournal) liveFlagsExplained(b fragBook, fl fragPlannedFlags, crown
 	}
 	g := b.VersionGroup
 	if fl.Primary {
-		if len(jr.runRows(b.ID, undo.ChangeTypeBookPrimaryDemote)) > 0 {
+		if len(jr.runRows(b.ID, undo.ChangeTypeBookPrimaryDemote)) > 0 || (retiree && jr.pruned(b.ID)) {
 			return ""
 		}
 		if g != "" {
