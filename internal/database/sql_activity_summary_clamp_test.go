@@ -1,5 +1,5 @@
 // file: internal/database/sql_activity_summary_clamp_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 8b47e0c9-2f13-45da-9e60-c4a1d5382bf7
 // last-edited: 2026-10-04
 
@@ -464,16 +464,18 @@ func TestVacuumActivity_IdleTickReclaimsWhatAGivenUpTruncateLeft(t *testing.T) {
 //   - the slowest Record is well under the time the frame copy took, which is
 //     only true if writers were not blocked for the copy.
 func TestVacuumActivity_TruncateDoesNotStallForegroundWrites(t *testing.T) {
-	s := newTestSQLStore(t)
-	// ~16 MB of rows, so the rebuilt database VACUUM writes through the WAL
-	// takes measurable time to copy back. One transaction: 500 separate commits
+	// The background checkpointer is held off (1 h interval): its own ticks would
+	// show up in the hook and copy frames this test attributes to the vacuum.
+	s, _ := openCkptTestStore(t, time.Hour)
+	// ~6.5 MB of rows, so the rebuilt database VACUUM writes through the WAL
+	// takes measurable time to copy back. One transaction: separate commits
 	// took over a minute on a loaded disk.
 	tx, err := s.writer.Begin()
 	if err != nil {
 		t.Fatal(err)
 	}
 	big := strings.Repeat("v", activitySummaryMax*8)
-	for i := range 250 {
+	for i := range 100 {
 		if _, err := tx.Exec(s.dialect.rebind(sqlActInsert), fmt.Sprintf("stall-fixture-%d", i),
 			time.Now().UnixMilli(), "info", "system", "error", "itunes", "", "", big, nil, "[]", nil); err != nil {
 			t.Fatalf("insert: %v", err)
@@ -485,14 +487,30 @@ func TestVacuumActivity_TruncateDoesNotStallForegroundWrites(t *testing.T) {
 	if _, err := s.writer.Exec(`VACUUM`); err != nil {
 		t.Fatalf("vacuum: %v", err)
 	}
+	// Frames the VACUUM left in the WAL: a 32-byte header, then frames of a
+	// 24-byte header plus one page each.
+	var pageSize int64
+	if err := s.reader.QueryRow(`PRAGMA page_size`).Scan(&pageSize); err != nil {
+		t.Fatal(err)
+	}
+	walInfo, err := os.Stat(s.path + "-wal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	vacuumFrames := int((walInfo.Size() - 32) / (pageSize + 24))
+	if vacuumFrames < 100 {
+		t.Fatalf("fixture: VACUUM left only %d WAL frames", vacuumFrames)
+	}
 
 	var mu sync.Mutex
 	var modes []string
+	var results []walCheckpointResult
 	var copyTime time.Duration
 	hook := ckptHookFn(func(mode string, res walCheckpointResult, _ error) {
 		mu.Lock()
 		defer mu.Unlock()
 		modes = append(modes, mode)
+		results = append(results, res)
 		copyTime = max(copyTime, res.Elapsed)
 	})
 	s.ckptr.hook.Store(&hook)
@@ -539,13 +557,24 @@ func TestVacuumActivity_TruncateDoesNotStallForegroundWrites(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	lat := time.Duration(maxLatency.Load())
-	t.Logf("frame copy took %v; slowest Record %v; checkpoints %v", copyTime, lat, modes)
-	if copyTime >= 50*time.Millisecond && lat >= copyTime/2 {
-		t.Errorf("slowest Record took %v against a %v frame copy: writers were blocked for the copy", lat, copyTime)
-	} else if copyTime < 50*time.Millisecond {
-		t.Logf("frame copy took only %v, too fast to compare Record latency against; order and error checks still run", copyTime)
-	}
+	t.Logf("frame copy took %v; slowest Record %v; checkpoints %v %+v; vacuum frames %d",
+		copyTime, lat, modes, results, vacuumFrames)
+	// The deterministic check: the first checkpoint is PASSIVE and it copied
+	// every frame the VACUUM wrote, so the TRUNCATE that holds the write lock
+	// had none of them left to copy.
 	if len(modes) == 0 || modes[0] != "PASSIVE" {
-		t.Errorf("checkpoint order = %v; the copy must be done by a PASSIVE checkpoint before any TRUNCATE", modes)
+		t.Fatalf("checkpoint order = %v; the copy must be done by a PASSIVE checkpoint before any TRUNCATE", modes)
+	}
+	if results[0].Checkpointed < vacuumFrames {
+		t.Errorf("the PASSIVE checkpoint copied %d frames, fewer than the %d the VACUUM left: the TRUNCATE "+
+			"would copy the rest while holding the write lock", results[0].Checkpointed, vacuumFrames)
+	}
+	// The timing check, only where it can discriminate. With the write lock
+	// held for the copy, the slowest Record matches the copy time (measured on
+	// a TRUNCATE-only build: 3.67 s against 3.55 s, 1.26 s against 1.24 s).
+	// Without it, Record latency is unrelated to the copy, but is noisy under
+	// -race and load (up to ~280 ms seen), so a short copy proves nothing.
+	if copyTime >= time.Second && lat >= copyTime/2 {
+		t.Errorf("slowest Record took %v against a %v frame copy: writers were blocked for the copy", lat, copyTime)
 	}
 }
