@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_search_hydrate_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9b2e4c7a-1d38-4f65-8a0c-3e5d7b1f9a24
-// last-edited: 2026-09-25
+// last-edited: 2026-10-03
 
 package database
 
@@ -16,7 +16,7 @@ import (
 
 func seedSearchHydrateStore(t *testing.T) (*PebbleStore, []string) {
 	t.Helper()
-	store := seedAuthorRefStore(t, t.TempDir())
+	store := seedAuthorRefStore(t)
 	a, err := store.CreateAuthor("Quill Writer")
 	require.NoError(t, err)
 	var ids []string

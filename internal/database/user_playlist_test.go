@@ -1,7 +1,7 @@
 // file: internal/database/user_playlist_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8b1e2c4d-6f5a-4a70-b8c5-3d7e0f1b9a59
-// last-edited: 2026-09-02
+// last-edited: 2026-10-03
 
 package database
 
@@ -12,7 +12,7 @@ import (
 
 func newPlaylistTestStore(t *testing.T) *PebbleStore {
 	t.Helper()
-	store, err := NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

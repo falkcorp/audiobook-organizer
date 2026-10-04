@@ -1,7 +1,7 @@
 // file: internal/database/store_capability_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6f2b0a91-4d3c-4e57-9a10-2c8d5b7e4f13
-// last-edited: 2026-07-30
+// last-edited: 2026-10-03
 
 package database
 
@@ -28,7 +28,7 @@ type decoratorNoUnwrap struct {
 
 func newCapabilityTestStore(t *testing.T) *PebbleStore {
 	t.Helper()
-	ps, err := NewPebbleStore(t.TempDir())
+	ps, err := NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
 	}

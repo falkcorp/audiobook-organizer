@@ -1,7 +1,7 @@
 // file: internal/database/delete_book_files_by_ids_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4e7a1c92-3d58-4b6f-9a0e-2c8f5b1d7e43
-// last-edited: 2026-08-06
+// last-edited: 2026-10-03
 
 package database
 
@@ -68,7 +68,7 @@ func seedBookWithFiles(t *testing.T, s *PebbleStore, title string, durations []i
 
 func newBatchDeleteStore(t *testing.T) *PebbleStore {
 	t.Helper()
-	s, err := NewPebbleStore(t.TempDir())
+	s, err := NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}

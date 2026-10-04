@@ -1,24 +1,28 @@
 // file: internal/database/pebble_warmup_close_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 6b3a1e9c-2f47-4d80-9a15-7c0e8b2d4f63
-// last-edited: 2026-09-02
+// last-edited: 2026-10-03
 
 package database
 
 import (
 	"fmt"
-	"path/filepath"
 	"testing"
 
 	"github.com/cockroachdb/pebble/v2"
+	"github.com/cockroachdb/pebble/v2/vfs"
 )
 
 // seedPebbleDir writes enough book:/author:/series: keys directly (no warmup)
 // that a subsequent NewPebbleStore's async memdb warmup takes long enough to
 // still be iterating when Close is called.
-func seedPebbleDir(t *testing.T, path string, n int) {
+//
+// fs is the filesystem both the seed and the store open; the test passes one
+// vfs.NewMem per iteration so the reopen sees the seeded keys without paying an
+// fsync for them.
+func seedPebbleDir(t *testing.T, fs vfs.FS, path string, n int) {
 	t.Helper()
-	db, err := pebble.Open(path, &pebble.Options{})
+	db, err := pebble.Open(path, &pebble.Options{FS: fs})
 	if err != nil {
 		t.Fatalf("seed open: %v", err)
 	}
@@ -48,12 +52,18 @@ func seedPebbleDir(t *testing.T, path string, n int) {
 //
 // Repeated open+immediate-close over a seeded DB reliably triggered the panic
 // pre-fix; post-fix every iteration is clean.
+//
+// Each iteration seeds and reopens the database on its own in-memory
+// filesystem (newPebbleStore with a vfs.NewMem), which runs the same
+// constructor and warmup goroutine as NewPebbleStore without an fsync per
+// write. The race is between Close and the warmup goroutine, not the disk.
 func TestPebbleStore_CloseDuringWarmupDoesNotPanic(t *testing.T) {
 	for i := range 40 {
-		dir := filepath.Join(t.TempDir(), fmt.Sprintf("db-%d", i))
-		seedPebbleDir(t, dir, 6000)
+		fs := vfs.NewMem()
+		dir := fmt.Sprintf("db-%d", i)
+		seedPebbleDir(t, fs, dir, 6000)
 
-		store, err := NewPebbleStore(dir)
+		store, err := newPebbleStore(dir, fs)
 		if err != nil {
 			t.Fatalf("iter %d: NewPebbleStore: %v", i, err)
 		}

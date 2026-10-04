@@ -1,7 +1,7 @@
 // file: internal/database/user_state_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5d9e2c1a-4b8f-4f70-a7c6-2e8d0f1b9a47
-// last-edited: 2026-09-13
+// last-edited: 2026-10-03
 
 package database
 
@@ -16,7 +16,7 @@ import (
 // A Finished write over an unfinished stored row keeps a stamp the caller
 // carried in (merge carry, undo restore), rather than dating it now.
 func TestSetUserBookState_CarriedStampOverUnfinishedRowIsKept(t *testing.T) {
-	store, err := NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestSetUserBookState_CarriedStampOverUnfinishedRowIsKept(t *testing.T) {
 // A stored row that cannot be decoded is overwritten, but a Finished write
 // over it is not dated now: the unreadable row may already be that finish.
 func TestSetUserBookState_UnreadablePrevIsNotStampedNow(t *testing.T) {
-	store, err := NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestSetUserBookState_UnreadablePrevIsNotStampedNow(t *testing.T) {
 }
 
 func TestUserPosition_Lifecycle(t *testing.T) {
-	store, err := NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestUserPosition_Lifecycle(t *testing.T) {
 }
 
 func TestUserBookState_SetGet(t *testing.T) {
-	store, err := NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -153,7 +153,7 @@ func TestUserBookState_SetGet(t *testing.T) {
 }
 
 func TestUserBookState_StatusIndexMaintained(t *testing.T) {
-	store, err := NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -189,7 +189,7 @@ func TestUserBookState_StatusIndexMaintained(t *testing.T) {
 }
 
 func TestUserBookState_ListByStatus_MultipleBooks(t *testing.T) {
-	store, err := NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -222,7 +222,7 @@ func TestUserBookState_ListByStatus_MultipleBooks(t *testing.T) {
 }
 
 func TestListUserPositionsSince(t *testing.T) {
-	store, err := NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

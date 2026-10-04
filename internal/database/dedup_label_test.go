@@ -1,23 +1,17 @@
 // file: internal/database/dedup_label_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 28cfcafd-ac95-4175-8fe7-b0fc46bd05bb
-// last-edited: 2026-06-13
+// last-edited: 2026-10-03
 
 package database
 
 import (
-	"os"
 	"testing"
 )
 
 func newTestLabelStore(t *testing.T) *EmbeddingStore {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "abk-label-*")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	ps, err := NewPebbleStore(dir)
+	ps, err := NewPebbleStoreInMemory("labels")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_playback_corrupt_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2f7c9a1e-5b36-4d80-8e4a-a1c6d3b9f025
-// last-edited: 2026-09-19
+// last-edited: 2026-10-03
 
 package database
 
@@ -15,7 +15,7 @@ import (
 
 func openPlaybackStore(t *testing.T) *PebbleStore {
 	t.Helper()
-	p, err := NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	p, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatal(err)
 	}

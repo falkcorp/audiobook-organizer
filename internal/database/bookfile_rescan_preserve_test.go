@@ -1,7 +1,7 @@
 // file: internal/database/bookfile_rescan_preserve_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 65fa9323-39c2-4f89-a480-e74c18c02036
-// last-edited: 2026-09-13
+// last-edited: 2026-10-03
 
 package database
 
@@ -228,7 +228,7 @@ func assertRescanPreserved(t *testing.T, before, after *BookFile) {
 // media info, hashes, Missing/SkipScan, fingerprint state, iTunes and Deluge
 // provenance — must keep its stored value.
 func TestBatchUpsertBookFiles_ScannerRescanPreservesUnownedFields(t *testing.T) {
-	s, err := NewPebbleStore(t.TempDir())
+	s, err := NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}
@@ -247,7 +247,7 @@ func TestBatchUpsertBookFiles_ScannerRescanPreservesUnownedFields(t *testing.T) 
 
 // UpsertBookFile is the single-row twin and must apply the same rule.
 func TestUpsertBookFile_ScannerRescanPreservesUnownedFields(t *testing.T) {
-	s, err := NewPebbleStore(t.TempDir())
+	s, err := NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}
@@ -270,7 +270,7 @@ func TestUpsertBookFile_ScannerRescanPreservesUnownedFields(t *testing.T) {
 // read-modify-write that zeroes a field must land as written — except the two
 // memdb-stripped heavy fields, which a slim round-trip cannot carry.
 func TestUpdateBookFile_IntentionalClearsLand(t *testing.T) {
-	s, err := NewPebbleStore(t.TempDir())
+	s, err := NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}

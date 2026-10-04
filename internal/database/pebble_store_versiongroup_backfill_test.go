@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_versiongroup_backfill_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 4b8e1d07-9a3c-4f52-8e61-7d0c2a9f4b13
-// last-edited: 2026-09-02
+// last-edited: 2026-10-03
 
 package database
 
@@ -66,7 +66,7 @@ func seedGroupedBooks(t *testing.T, s *PebbleStore, gid string, n int) []string 
 // the inverse too: if the sentinel read ever misreports, a six-figure library
 // rebuilds its whole index on every boot.
 func TestBackfillVersionGroupIndex_SecondRunIsANoOp(t *testing.T) {
-	s, err := NewPebbleStore(t.TempDir())
+	s, err := NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestBackfillVersionGroupIndex_SecondRunIsANoOp(t *testing.T) {
 // state, not accumulate or drop rows. This is the property that makes an
 // interrupted run safe to resume.
 func TestBackfillVersionGroupIndex_RerunConvergesToSameState(t *testing.T) {
-	s, err := NewPebbleStore(t.TempDir())
+	s, err := NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}
@@ -148,7 +148,7 @@ func TestBackfillVersionGroupIndex_ChunkedCommitWritesEveryRow(t *testing.T) {
 			versionGroupBackfillChunk = tc.chunk
 			t.Cleanup(func() { versionGroupBackfillChunk = orig })
 
-			s, err := NewPebbleStore(t.TempDir())
+			s, err := NewPebbleStoreInMemory(t.TempDir())
 			if err != nil {
 				t.Fatalf("NewPebbleStore: %v", err)
 			}
@@ -187,7 +187,7 @@ func TestBackfillVersionGroupIndex_ChunkedCommitWritesEveryRow(t *testing.T) {
 // now structural: book IDs are ULIDs and carry no colons, so a primary row has
 // exactly one.
 func TestBackfillVersionGroupIndex_IgnoresSecondaryIndexRows(t *testing.T) {
-	s, err := NewPebbleStore(t.TempDir())
+	s, err := NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}
@@ -244,7 +244,7 @@ func TestBackfillVersionGroupIndex_IgnoresSecondaryIndexRows(t *testing.T) {
 // point: 'A' (0x41) sorts after ';' (0x3B), so the old upper bound excludes
 // this row entirely.
 func TestBackfillVersionGroupIndex_IncludesLetterLeadingBookID(t *testing.T) {
-	s, err := NewPebbleStore(t.TempDir())
+	s, err := NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}

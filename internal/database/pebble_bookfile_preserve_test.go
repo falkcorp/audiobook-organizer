@@ -1,7 +1,7 @@
 // file: internal/database/pebble_bookfile_preserve_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 7e1a9c43-2b86-4d05-9f71-3c6e8a0d2b54
-// last-edited: 2026-09-02
+// last-edited: 2026-10-03
 
 package database
 
@@ -17,7 +17,7 @@ import (
 // ~275K-fingerprint library. GetBookFiles is pebble-direct so it reflects the
 // actually-stored row, not the stripped memdb copy.
 func TestBatchUpsertBookFiles_PreservesFingerprintOnEmptyIncoming(t *testing.T) {
-	s, err := NewPebbleStore(t.TempDir())
+	s, err := NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestBatchUpsertBookFiles_PreservesFingerprintOnEmptyIncoming(t *testing.T) 
 // A legitimate fingerprint WRITE (non-empty incoming) must still overwrite —
 // the preserve guard only fires when the incoming value is empty.
 func TestBatchUpsertBookFiles_OverwritesFingerprintWhenProvided(t *testing.T) {
-	s, err := NewPebbleStore(t.TempDir())
+	s, err := NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestBatchUpsertBookFiles_OverwritesFingerprintWhenProvided(t *testing.T) {
 // sets some non-fingerprint fields, then calls UpsertBookFile — without the
 // preserve guard, the nil AcoustIDFingerprint overwrites the real value in Pebble.
 func TestUpsertBookFile_PreservesFingerprintOnEmptyIncoming(t *testing.T) {
-	s, err := NewPebbleStore(t.TempDir())
+	s, err := NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}
@@ -163,7 +163,7 @@ func TestUpsertBookFile_PreservesFingerprintOnEmptyIncoming(t *testing.T) {
 // A genuine fingerprint write via UpsertBookFile must still overwrite — the
 // preserve guard fires only when the incoming value is empty.
 func TestUpsertBookFile_OverwritesFingerprintWhenProvided(t *testing.T) {
-	s, err := NewPebbleStore(t.TempDir())
+	s, err := NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestUpsertBookFile_OverwritesFingerprintWhenProvided(t *testing.T) {
 
 // UpsertBookFile's iTunes PID lookup path must also preserve fingerprint data.
 func TestUpsertBookFile_PreservesFingerprintViaPIDLookup(t *testing.T) {
-	s, err := NewPebbleStore(t.TempDir())
+	s, err := NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}
@@ -227,7 +227,7 @@ func TestUpsertBookFile_PreservesFingerprintViaPIDLookup(t *testing.T) {
 // tweak one unrelated field, and write the whole struct back via UpdateBookFile —
 // without the preserve-on-empty guard the nil fingerprint erases the stored value.
 func TestUpdateBookFile_PreservesFingerprintOnEmptyIncoming(t *testing.T) {
-	s, err := NewPebbleStore(t.TempDir())
+	s, err := NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}
@@ -287,7 +287,7 @@ func TestUpdateBookFile_PreservesFingerprintOnEmptyIncoming(t *testing.T) {
 // (This is the regression the guard could have introduced if it mirrored
 // UpsertBookFile's 4-field guard — it must not.)
 func TestUpdateBookFile_WritesFreshFingerprintAndClearsFailureDiagnostics(t *testing.T) {
-	s, err := NewPebbleStore(t.TempDir())
+	s, err := NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}
@@ -337,7 +337,7 @@ func TestUpdateBookFile_WritesFreshFingerprintAndClearsFailureDiagnostics(t *tes
 // Without the post-commit UpsertBookFileToMemDB, the row would be absent
 // from memdb until the next warmup — the tag-backfill non-convergence bug.
 func TestBatchUpsertBookFiles_RefreshesMemDB(t *testing.T) {
-	s, err := NewPebbleStore(t.TempDir())
+	s, err := NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}

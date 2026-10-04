@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_lsh_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 4c5d6e7f-8091-a2b3-c4d5-e6f708192a3b
-// last-edited: 2026-09-19
+// last-edited: 2026-10-03
 
 package database
 
@@ -18,7 +18,7 @@ import (
 
 func newPebbleStoreForLSH(t *testing.T) *PebbleStore {
 	t.Helper()
-	store, err := NewPebbleStore(filepath.Join(t.TempDir(), "lsh-db"))
+	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "lsh-db"))
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
 	}

@@ -1,5 +1,5 @@
 // file: internal/database/scan_fail_count_errors_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e3b2b2ee-6483-4490-92fa-10a0ad4059f8
 // last-edited: 2026-10-03
 
@@ -19,7 +19,7 @@ import (
 // still (0, nil); a corrupt one is an error; and IncrScanFailCount must not
 // paper over it by restarting the count at 1.
 func TestPebbleScanFailCount_ErrorsAreReturned(t *testing.T) {
-	store, err := NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
 

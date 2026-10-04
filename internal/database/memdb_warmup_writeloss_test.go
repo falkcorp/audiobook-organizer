@@ -1,7 +1,7 @@
 // file: internal/database/memdb_warmup_writeloss_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 5e1c9f27-3a64-4b18-9d02-c7f5a8e3b410
-// last-edited: 2026-09-12
+// last-edited: 2026-10-03
 
 package database
 
@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
+	"github.com/cockroachdb/pebble/v2/vfs"
 )
 
 // Acceptance tests for the memdb warmup lost-update window.
@@ -340,7 +341,7 @@ func TestWarmupWriteLoss_BufferOverflowDegradesLoudly(t *testing.T) {
 
 	dir := t.TempDir()
 	// Seed raw keys: fast to write, slow to warm, so the window is wide.
-	seedPebbleDir(t, dir, 20000)
+	seedPebbleDir(t, vfs.Default, dir, 20000)
 
 	store, err := NewPebbleStore(dir)
 	if err != nil {

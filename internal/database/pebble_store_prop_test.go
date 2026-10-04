@@ -1,17 +1,15 @@
 // file: internal/database/pebble_store_prop_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 15afe4d2-3a00-4326-be15-1e3f0b11a10e
 
 // Black-box test package: internal/testutil/rapidgen imports the database
 // package, so these property tests live in database_test (not database) to
 // avoid an import cycle.
-// last-edited: 2026-09-02
+// last-edited: 2026-10-03
 
 package database_test
 
 import (
-	"os"
-	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -32,25 +30,17 @@ import (
 // single-active-version guarantee, tag add/remove, session lifecycle,
 // and operation-change persistence.
 
-// newPropStore spins up a fresh PebbleStore rooted at a temp dir scoped
-// to the current rapid iteration. rapid.T doesn't forward TempDir/Helper
-// from testing.T, so we call os.MkdirTemp directly and register both the
-// store close and the dir RemoveAll with t.Cleanup (which rapid.T *does*
-// expose). Every shrunk input lands in its own fresh empty DB.
+// newPropStore spins up a fresh in-memory PebbleStore scoped to the current
+// rapid iteration, closed via t.Cleanup (which rapid.T exposes). Each call gets
+// its own vfs.NewMem filesystem, so every shrunk input lands in its own fresh
+// empty DB. In-memory because each iteration's writes would otherwise each pay
+// an fsync, and nothing here reopens the database.
 func newPropStore(t *rapid.T) *database.PebbleStore {
-	dir, err := os.MkdirTemp("", "pebble-prop-*")
+	store, err := database.NewPebbleStoreInMemory("db")
 	if err != nil {
-		t.Fatalf("mkdirtemp: %v", err)
-	}
-	store, err := database.NewPebbleStore(filepath.Join(dir, "db"))
-	if err != nil {
-		_ = os.RemoveAll(dir)
 		t.Fatalf("open store: %v", err)
 	}
-	t.Cleanup(func() {
-		_ = store.Close()
-		_ = os.RemoveAll(dir)
-	})
+	t.Cleanup(func() { _ = store.Close() })
 	return store
 }
 

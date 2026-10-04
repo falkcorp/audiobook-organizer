@@ -1,7 +1,7 @@
 // file: internal/database/pebble_ops_v2_closed_test.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 9e4b2c17-5a6d-4f38-8c01-7d2e9f4a6b53
-// last-edited: 2026-07-03
+// last-edited: 2026-10-03
 
 // pebble_ops_v2_closed_test.go covers the PEBBLE-CLOSED-SWEEPTICK-RESIDUAL
 // defense-in-depth guard: every opv2 read/write on a closed PebbleStore must
@@ -17,7 +17,6 @@ package database
 
 import (
 	"errors"
-	"os"
 	"testing"
 	"time"
 
@@ -29,12 +28,12 @@ import (
 // returning the closed store for post-Close access tests.
 func openClosedOpsStore(t *testing.T) *PebbleStore {
 	t.Helper()
-	tmpdir := "/tmp/test_pebble_" + ulid.Make().String()
-	store, err := NewPebbleStore(tmpdir)
+	// In-memory: the closed-store guard is about pebble.ErrClosed, which an
+	// in-memory DB returns exactly as an on-disk one does.
+	store, err := NewPebbleStoreInMemory("test_pebble_" + ulid.Make().String())
 	if err != nil {
-		t.Fatalf("NewPebbleStore: %v", err)
+		t.Fatalf("NewPebbleStoreInMemory: %v", err)
 	}
-	t.Cleanup(func() { os.RemoveAll(tmpdir) })
 	store.WaitForWarmup()
 	if err := store.Close(); err != nil {
 		t.Fatalf("Close: %v", err)

@@ -1,27 +1,19 @@
 // file: internal/database/do_not_import_test.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-06-10
+// last-edited: 2026-10-03
 
 // NOTE(fable5 T022): TestDoNotImport_SQLite removed (SQLite store deleted).
 
 package database
 
 import (
-	"os"
 	"testing"
 	"time"
 )
 
 func TestDoNotImport_Pebble(t *testing.T) {
-	// Create temporary database
-	tmpDir, err := os.MkdirTemp("", "test-pebble-*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	store, err := NewPebbleStore(tmpDir)
+	store, err := NewPebbleStoreInMemory("do_not_import")
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
 	}

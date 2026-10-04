@@ -1,7 +1,7 @@
 // file: internal/database/catalog_entry_store_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a6a750aa-9895-4d5f-ba74-2479200df2d3
-// last-edited: 2026-10-01
+// last-edited: 2026-10-03
 
 package database
 
@@ -12,11 +12,13 @@ import (
 	"testing"
 
 	"github.com/cockroachdb/pebble/v2"
+	"github.com/cockroachdb/pebble/v2/vfs"
 )
 
 func openTestCatalogStore(t *testing.T) *CatalogStore {
 	t.Helper()
-	db, err := pebble.Open(t.TempDir(), &pebble.Options{})
+	// In-memory: these writes fsync on a real filesystem and nothing reopens.
+	db, err := pebble.Open("catalog.pebble", &pebble.Options{FS: vfs.NewMem()})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,7 +1,7 @@
 // file: internal/database/author_relink_getter_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3f6a0d92-7c14-4b8e-9e51-b2d7c84a16f3
-// last-edited: 2026-09-12
+// last-edited: 2026-10-03
 
 package database
 
@@ -62,7 +62,7 @@ func TestGetBooksByAuthorIDForRelinkCore_MemDBAndPebbleAgree(t *testing.T) {
 // buckets under both bodies, and that they sum to the flat count every existing
 // guard reads.
 func TestGetAllAuthorBookRefBuckets_ClassifiesLiveTrashedDangling(t *testing.T) {
-	store := seedAuthorRefStore(t, t.TempDir())
+	store := seedAuthorRefStore(t)
 	const author = 7101
 
 	mkAuthorRefBook(t, store, "relink-live", author, true, false)
@@ -110,7 +110,7 @@ func TestAuthorRefBucketCounts_FailsClosed(t *testing.T) {
 // pre-delete gate: a trashed book still crediting the author must block the
 // delete, and an author nothing credits must pass.
 func TestVerifyAuthorUnlinked_RefusesWhileATrashedBookStillCredits(t *testing.T) {
-	store := seedAuthorRefStore(t, t.TempDir())
+	store := seedAuthorRefStore(t)
 	const linked, unlinked = 7201, 7202
 
 	mkAuthorRefBook(t, store, "verify-trashed", linked, true, true)

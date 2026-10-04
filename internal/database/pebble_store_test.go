@@ -1,14 +1,13 @@
 // file: internal/database/pebble_store_test.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: 4d5e6f7a-8b9c-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-09-02
+// last-edited: 2026-10-03
 
 package database
 
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -18,14 +17,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// setupPebbleTestDB creates a temporary PebbleDB database for testing
-// Returns the store and a cleanup function
+// setupPebbleTestDB creates an in-memory PebbleDB database for testing.
+// Returns the store and a cleanup function.
+//
+// The store is backed by vfs.NewMem (NewPebbleStoreInMemory). Every Pebble write
+// in this package passes pebble.Sync, so an on-disk store pays a real fsync per
+// write; on macOS that is F_FULLFSYNC and it made the package spend ~97% of its
+// wall time blocked in Sync (859 s at 3% CPU on 2026-10-03). Nothing that calls
+// this helper reopens the database by path, so the in-memory store runs the
+// identical code. A test that needs bytes on disk must call NewPebbleStore.
 func setupPebbleTestDB(t *testing.T) (Store, func()) {
-	// Create temporary database directory with unique name
-	tmpdir := "/tmp/test_pebble_" + ulid.Make().String()
-
-	// Create the store
-	store, err := NewPebbleStore(tmpdir)
+	store, err := NewPebbleStoreInMemory("test_pebble_" + ulid.Make().String())
 	if err != nil {
 		t.Fatalf("Failed to create test Pebble database: %v", err)
 	}
@@ -36,10 +38,8 @@ func setupPebbleTestDB(t *testing.T) (Store, func()) {
 	// (e.g. TestPebbleGetAllAuthors).
 	store.WaitForWarmup()
 
-	// Cleanup function removes the database directory
 	cleanup := func() {
 		store.Close()
-		os.RemoveAll(tmpdir)
 	}
 
 	return store, cleanup

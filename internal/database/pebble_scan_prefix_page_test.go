@@ -1,7 +1,7 @@
 // file: internal/database/pebble_scan_prefix_page_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c0c043a1-4b1d-4cc2-8ddb-61a8be59cea2
-// last-edited: 2026-09-19
+// last-edited: 2026-10-03
 
 package database
 
@@ -13,7 +13,7 @@ import (
 
 func newRawPebble(t *testing.T) *PebbleStore {
 	t.Helper()
-	s, err := NewPebbleStore(t.TempDir())
+	s, err := NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}
