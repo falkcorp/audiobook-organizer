@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_legacy_seed_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 0a0ee936-5fe1-42bb-9d1a-8739a9561bbe
 // last-edited: 2026-10-03
 
@@ -12,7 +12,7 @@ import "testing"
 // write normalizes it. It skips exactly the Series rule: other fields fn
 // sets land as with ModifyBook.
 func TestSeedLegacyBookRowForTest_WritesAVisibleLegacyRowThatTheNextWriteNormalizes(t *testing.T) {
-	store, err := NewPebbleStoreInMemory(t.TempDir())
+	store, err := NewPebbleStoreInMemory("db")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestSeedLegacyBookRowForTest_WritesAVisibleLegacyRowThatTheNextWriteNormali
 
 // A missing book is (nil, nil), as with ModifyBook.
 func TestSeedLegacyBookRowForTest_MissingBook(t *testing.T) {
-	store, err := NewPebbleStoreInMemory(t.TempDir())
+	store, err := NewPebbleStoreInMemory("db")
 	if err != nil {
 		t.Fatal(err)
 	}

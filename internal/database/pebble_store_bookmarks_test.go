@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_bookmarks_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: c95887b8-c5f3-4469-b0e8-d053d02bf1ea
 // last-edited: 2026-10-03
 
@@ -7,7 +7,6 @@ package database
 
 import (
 	"fmt"
-	"path/filepath"
 	"sync"
 	"testing"
 
@@ -16,7 +15,7 @@ import (
 
 func newPebbleStoreForBookmarks(t *testing.T) *PebbleStore {
 	t.Helper()
-	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "bookmarks-db"))
+	store, err := NewPebbleStoreInMemory("bookmarks-db")
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
 	}

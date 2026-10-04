@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_syncid_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: c4877e93-ba6a-468d-b428-30be15fdfa27
 // last-edited: 2026-10-03
 
@@ -14,7 +14,6 @@ package database
 import (
 	"errors"
 	"fmt"
-	"path/filepath"
 	"regexp"
 	"slices"
 	"sync"
@@ -26,7 +25,7 @@ import (
 // methods directly.
 func newPebbleStoreForSyncID(t *testing.T) *PebbleStore {
 	t.Helper()
-	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "syncid-db"))
+	store, err := NewPebbleStoreInMemory("syncid-db")
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
 	}

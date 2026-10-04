@@ -1,19 +1,18 @@
 // file: internal/database/pebble_store_abssession_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5a3f8c21-9e04-4b7d-8c16-2f5b9d0e7a34
 // last-edited: 2026-10-03
 
 package database
 
 import (
-	"path/filepath"
 	"testing"
 	"time"
 )
 
 func newABSSessionStore(t *testing.T) *PebbleStore {
 	t.Helper()
-	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
+	store, err := NewPebbleStoreInMemory("db")
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}

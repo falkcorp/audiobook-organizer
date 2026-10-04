@@ -1,17 +1,16 @@
 // file: internal/database/book_version_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7a3d9e1c-5b4f-4a60-b8c5-2e7f0c1b9a48
 // last-edited: 2026-10-03
 
 package database
 
 import (
-	"path/filepath"
 	"testing"
 )
 
 func TestBookVersion_CreateAndGet(t *testing.T) {
-	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
+	store, err := NewPebbleStoreInMemory("db")
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -41,7 +40,7 @@ func TestBookVersion_CreateAndGet(t *testing.T) {
 }
 
 func TestBookVersion_SingleActiveInvariant(t *testing.T) {
-	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
+	store, err := NewPebbleStoreInMemory("db")
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -76,7 +75,7 @@ func TestBookVersion_SingleActiveInvariant(t *testing.T) {
 }
 
 func TestBookVersion_GetActiveForBook(t *testing.T) {
-	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
+	store, err := NewPebbleStoreInMemory("db")
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -96,7 +95,7 @@ func TestBookVersion_GetActiveForBook(t *testing.T) {
 }
 
 func TestBookVersion_GetByTorrentHash(t *testing.T) {
-	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
+	store, err := NewPebbleStoreInMemory("db")
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -125,7 +124,7 @@ func TestBookVersion_GetByTorrentHash(t *testing.T) {
 }
 
 func TestBookVersion_UpdateStatusTransitions(t *testing.T) {
-	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
+	store, err := NewPebbleStoreInMemory("db")
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -155,7 +154,7 @@ func TestBookVersion_UpdateStatusTransitions(t *testing.T) {
 }
 
 func TestBookVersion_ListTrashedAndPurged(t *testing.T) {
-	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
+	store, err := NewPebbleStoreInMemory("db")
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

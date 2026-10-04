@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_search_dirty_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: b3960a75-0209-4970-a35e-e139faf95d0b
 // last-edited: 2026-10-03
 //
@@ -20,7 +20,7 @@ import (
 
 func newDirtyTestStore(t *testing.T) *PebbleStore {
 	t.Helper()
-	s, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
+	s, err := NewPebbleStoreInMemory("db")
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}

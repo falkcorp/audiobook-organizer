@@ -1,5 +1,5 @@
 // file: internal/database/alt_titles_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: e1f2a3b4-c5d6-7890-abcd-ef0123456789
 // last-edited: 2026-10-03
 
@@ -72,7 +72,7 @@ func TestBookAlternativeTitles_Pebble(t *testing.T) {
 // setupTestPebbleStore is a minimal PebbleStore factory for tests.
 func setupTestPebbleStore(t *testing.T) *PebbleStore {
 	t.Helper()
-	s, err := NewPebbleStoreInMemory(t.TempDir())
+	s, err := NewPebbleStoreInMemory("db")
 	require.NoError(t, err)
 	t.Cleanup(func() { s.Close() })
 	return s

@@ -1,12 +1,11 @@
 // file: internal/database/pid_uniqueness_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 4d7c2e91-8a63-4b05-9f18-2e6c1a4b7d33
 // last-edited: 2026-10-03
 
 package database
 
 import (
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -18,7 +17,7 @@ import (
 // owner's PID is cleared — with no audio file touched. This is the forward fix for
 // the duplicate-PID ("shared_skipped") anomaly.
 func TestCreateBookFilePIDUniquenessTransfer(t *testing.T) {
-	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
+	store, err := NewPebbleStoreInMemory("db")
 	require.NoError(t, err)
 	defer store.Close()
 
@@ -62,7 +61,7 @@ func TestCreateBookFilePIDUniquenessTransfer(t *testing.T) {
 // TestCreateBookFileSamePIDSameRowNoop verifies re-creating the same row (same ID
 // + same PID) does not clear itself — the guard is scoped to a DIFFERENT prior row.
 func TestCreateBookFileSamePIDSameRowNoop(t *testing.T) {
-	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
+	store, err := NewPebbleStoreInMemory("db")
 	require.NoError(t, err)
 	defer store.Close()
 

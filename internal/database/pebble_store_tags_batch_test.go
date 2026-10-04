@@ -1,12 +1,11 @@
 // file: internal/database/pebble_store_tags_batch_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9c224f63-19ee-44cb-a550-22d5ec756246
-// last-edited: 2026-09-11
+// last-edited: 2026-10-03
 
 package database
 
 import (
-	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -16,7 +15,7 @@ import (
 // books, dedupe repeated IDs, and not bleed tags across IDs that are
 // string prefixes of each other ("b1" vs "b10").
 func TestGetBookTagsByBookIDs_MatchesPerBookReads(t *testing.T) {
-	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
+	store, err := NewPebbleStoreInMemory("db")
 	if err != nil {
 		t.Fatalf("pebble: %v", err)
 	}

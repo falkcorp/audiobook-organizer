@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_series_rename_if_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7c3e9b14-52d8-4a6f-9e01-b8d4f2a6c935
 // last-edited: 2026-10-03
 
@@ -8,7 +8,6 @@ package database
 import (
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -16,7 +15,7 @@ import (
 
 func newRenameIfStore(t *testing.T) *PebbleStore {
 	t.Helper()
-	s, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
+	s, err := NewPebbleStoreInMemory("db")
 	if err != nil {
 		t.Fatalf("pebble: %v", err)
 	}

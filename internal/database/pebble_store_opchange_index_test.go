@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_opchange_index_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 9e202853-2ab3-4f8f-b567-6c435e5bebb3
 // last-edited: 2026-10-03
 
@@ -21,7 +21,7 @@ import (
 
 func newOpChangeTestStore(t testing.TB) *PebbleStore {
 	t.Helper()
-	p, err := NewPebbleStoreInMemory(t.TempDir())
+	p, err := NewPebbleStoreInMemory("db")
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
 	}
@@ -845,8 +845,7 @@ func TestOpchangeIndex_RollbackRowNotHidden(t *testing.T) {
 // index, then a rollback binary writes, then a new process opens the same
 // store: it must not inherit trust from the sentinel.
 func TestOpchangeIndex_TrustedRollbackAcrossReboot(t *testing.T) {
-	dir := t.TempDir()
-	p, err := NewPebbleStoreInMemory(dir)
+	p, err := NewPebbleStoreInMemory("db")
 	if err != nil {
 		t.Fatal(err)
 	}

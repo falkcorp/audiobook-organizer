@@ -1,5 +1,5 @@
 // file: internal/database/narrator_bookref_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: b32d6c74-f0e6-45be-ba7c-52dae7be0ce2
 // last-edited: 2026-10-03
 
@@ -19,7 +19,7 @@ func seedNarratorRefStore(t *testing.T) *PebbleStore {
 	if testing.Short() {
 		t.Skip("seeds a real PebbleStore; skipped in -short")
 	}
-	store, err := NewPebbleStoreInMemory(t.TempDir())
+	store, err := NewPebbleStoreInMemory("db")
 	require.NoError(t, err)
 	store.WaitForWarmup()
 	t.Cleanup(func() { _ = store.Close() })

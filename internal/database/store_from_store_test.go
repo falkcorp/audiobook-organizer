@@ -1,7 +1,7 @@
 // file: internal/database/store_from_store_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1c4e7b28-6d93-4051-8f2a-9b6c3e5d7a14
-// last-edited: 2026-08-19
+// last-edited: 2026-10-03
 
 package database
 
@@ -21,7 +21,7 @@ func (d fromStoreDecorator) Unwrap() Store { return d.inner }
 // and a bare assertion at any of those sites failed through the decorator and
 // silently disabled embeddings / metrics / AI scan / the activity log.
 func TestNewFromStoreConstructorsResolveThroughDecorator(t *testing.T) {
-	inner, err := NewPebbleStoreInMemory(t.TempDir())
+	inner, err := NewPebbleStoreInMemory("db")
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
 	}

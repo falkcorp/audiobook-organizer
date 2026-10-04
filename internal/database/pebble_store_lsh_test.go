@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_lsh_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 4c5d6e7f-8091-a2b3-c4d5-e6f708192a3b
 // last-edited: 2026-10-03
 
@@ -8,17 +8,17 @@ package database
 import (
 	"context"
 	"encoding/binary"
-	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"math/rand"
-	"path/filepath"
 	"testing"
+
+	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 
 	"github.com/cockroachdb/pebble/v2"
 )
 
 func newPebbleStoreForLSH(t *testing.T) *PebbleStore {
 	t.Helper()
-	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "lsh-db"))
+	store, err := NewPebbleStoreInMemory("lsh-db")
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
 	}

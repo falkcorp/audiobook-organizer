@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_collections_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 7a6f1e4c-92b8-4d13-9a5e-3c8f0d6e1b27
 // last-edited: 2026-10-03
 
@@ -7,7 +7,6 @@ package database
 
 import (
 	"errors"
-	"path/filepath"
 	"testing"
 )
 
@@ -17,7 +16,7 @@ import (
 // implementation that actually carries the compare-and-swap logic.
 func newTestCollectionsStore(t *testing.T) *PebbleStore {
 	t.Helper()
-	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
+	store, err := NewPebbleStoreInMemory("db")
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

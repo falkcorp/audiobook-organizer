@@ -1,5 +1,5 @@
 // file: internal/database/optimize_context_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8d3f5b21-7e64-4c09-9b18-45a2e0c7d193
 // last-edited: 2026-10-03
 
@@ -38,7 +38,7 @@ func seedForCompaction(t *testing.T, store *PebbleStore) {
 }
 
 func TestPebbleStoreOptimize_HonoursCancelledContext(t *testing.T) {
-	store, err := NewPebbleStoreInMemory(t.TempDir())
+	store, err := NewPebbleStoreInMemory("db")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
 	seedForCompaction(t, store)
@@ -56,7 +56,7 @@ func TestPebbleStoreOptimize_HonoursCancelledContext(t *testing.T) {
 func TestPebbleStoreOptimize_SucceedsOnLiveContext(t *testing.T) {
 	// The guard against over-correcting: a live context must still compact.
 	// Without this, "return ctx.Err() always" would pass the test above.
-	store, err := NewPebbleStoreInMemory(t.TempDir())
+	store, err := NewPebbleStoreInMemory("db")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
 	seedForCompaction(t, store)
