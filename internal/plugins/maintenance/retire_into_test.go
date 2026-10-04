@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retire_into_test.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: 90cd2c0f-e6c5-4176-8d2c-bc587eea86cd
 // last-edited: 2026-10-04
 
@@ -23,24 +23,16 @@ import (
 )
 
 // journalCountingStore is the ops store with GetBookChanges (the unindexed
-// opchange scan) counted, and the history read resumeHandOff asserts passed
-// through.
+// opchange scan) counted.
 type journalCountingStore struct {
 	OpsStore
-	inner interface {
-		bookJournalReader
-		bookHistoryReader
-	}
+	inner bookJournalReader
 	scans int
 }
 
 func (s *journalCountingStore) GetBookChanges(bookID string) ([]*database.OperationChange, error) {
 	s.scans++
 	return s.inner.GetBookChanges(bookID)
-}
-
-func (s *journalCountingStore) GetMetadataChangeHistory(bookID, field string, limit int) ([]database.MetadataChangeRecord, error) {
-	return s.inner.GetMetadataChangeHistory(bookID, field, limit)
 }
 
 // A version group whose primary carries a nil flag (read as primary by every

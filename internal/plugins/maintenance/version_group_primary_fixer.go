@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/version_group_primary_fixer.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 2c7e5a19-8b43-4f06-9d21-4e8b0c6a3f75
 // last-edited: 2026-10-04
 
@@ -368,18 +368,6 @@ func vgStateOf(g *vgRepairGroupReport) json.RawMessage {
 	return raw
 }
 
-// bookHistoryReader is the one read resumesOwnWrite (and retire_into's
-// hand-off check) needs: ONE field's change history, newest first. Asserted
-// on the ops store rather than widening OpsStore (at the interfacebloat cap).
-//
-// Per field, not the whole book: GetBookChangeHistory orders rows by field
-// and then time and applies its limit after that, so a fixed window over the
-// whole book could cut the very field a check reads (every other field's
-// rows, a series_object drop row included, compete for the same window).
-type bookHistoryReader interface {
-	GetMetadataChangeHistory(bookID string, field string, limit int) ([]database.MetadataChangeRecord, error)
-}
-
 // resumesOwnWrite reports whether fresh (the group as planned now) differs
 // from the stored plan only by writes this fixer made for this row, with the
 // rest of the row still to do a subset of what was approved. It returns how
@@ -397,10 +385,6 @@ type bookHistoryReader interface {
 // state (a plan made before this) or readable history the answer is no.
 func (f *vgPrimaryFixer) resumesOwnWrite(store OpsStore, planned repairs.Row, g *vgRepairGroupReport) (int, bool) {
 	if len(planned.State) == 0 || g.Error != "" || !vgWritable(g.Kind) {
-		return 0, false
-	}
-	hist, ok := store.(bookHistoryReader)
-	if !ok {
 		return 0, false
 	}
 	var st vgPlanState
@@ -433,7 +417,11 @@ func (f *vgPrimaryFixer) resumesOwnWrite(store OpsStore, planned repairs.Row, g 
 		if err != nil {
 			return false
 		}
-		rows, err := hist.GetMetadataChangeHistory(b.ID, field, 1)
+		// ONE field's newest row (OpsStore.GetMetadataChangeHistory), not a
+		// window of the whole book's history: GetBookChangeHistory orders
+		// rows by field and then time and applies its limit after that, so
+		// a fixed window could cut the very field this check reads.
+		rows, err := store.GetMetadataChangeHistory(b.ID, field, 1)
 		if err != nil {
 			return false
 		}

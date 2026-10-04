@@ -13,7 +13,9 @@ row. An ordinary series clear or move does not get a second row: the object
 it drops is the old link's own, which the writer records as `series`. Only
 stored state counts: an object only the writer passed (a stale copy read
 earlier, a create from a copy of a stale book, a snapshot revert) is refused
-without a row, so one loss is never recorded twice. The
+without a row, so one loss is never recorded twice. A write that links the
+book to the very series the stored object names (a renamed object) records
+nothing either: the series is kept by its link. The
 queued apply ignores the new change type (it is not a later edit), the
 activity changelog renders it as "Stale series object dropped — was …", and
 the book history dialog labels it and offers no undo (the server refuses one).
@@ -35,4 +37,8 @@ field's newest history row (`GetMetadataChangeHistory(book, field, 1)`)
 instead of a 200-row window of the whole book's history. The store orders
 that history by field before applying the limit, so the window could cut the
 field the check needed. The revert-metadata-fetch job reads a book's whole
-history instead of its first 50 rows, for the same reason.
+history instead of its first 50 rows, for the same reason: its dry runs will
+now show HIGHER "would revert" counts, because fields such as author_name,
+the release year and the ISBNs used to fall outside the 50-row window. The
+book changelog (`GET /audiobooks/:id/changelog`) reads the whole history too
+(it was 100 rows) and still shows the newest 50 entries by time.

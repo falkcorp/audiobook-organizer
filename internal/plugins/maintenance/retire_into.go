@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retire_into.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: dadb4da5-0f2d-4678-abf3-4ac97f3ecb66
 // last-edited: 2026-10-04
 
@@ -413,11 +413,8 @@ func resumeHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Wr
 	if demote == "" || handOff > demote {
 		return nil // never demoted by a retire, or handed off since
 	}
-	hist, ok := store.(bookHistoryReader)
-	if !ok {
-		return refuse("the store has no change history to check it with")
-	}
-	rows, err := hist.GetMetadataChangeHistory(b.ID, "is_primary_version", 1)
+	// The flag's newest row only (see resumesOwnWrite on why not a window).
+	rows, err := store.GetMetadataChangeHistory(b.ID, "is_primary_version", 1)
 	if err != nil {
 		return refuse("change history unreadable: %v", err)
 	}

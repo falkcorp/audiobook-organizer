@@ -1,5 +1,5 @@
 // file: internal/database/series_object_drop_history_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 988e17ab-3613-427f-a33a-da7c6215bc39
 // last-edited: 2026-10-04
 
@@ -29,7 +29,7 @@ type dropFixture struct {
 
 func newDropFixture(t *testing.T) *dropFixture {
 	t.Helper()
-	st, err := NewPebbleStore(t.TempDir())
+	st, err := NewPebbleStoreInMemory("db")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = st.Close() })
 	a, err := st.CreateSeries("The Expanse", nil)
@@ -333,4 +333,31 @@ func TestSeriesObjectDrop_LegacySeedRecordsNothing(t *testing.T) {
 	bk := f.book("/lib/seed.m4b", nil)
 	f.legacy(bk.ID, nil, &Series{ID: 1, Name: "x"})
 	require.Empty(t, f.drops(bk.ID))
+}
+
+// Probe Q: a stale stored object (SeriesID nil) is re-linked to the very
+// series it names, with a renamed object. The series is kept by the link, so
+// nothing is lost: no row. The same with the link set by id alone (the
+// stored object then names the new SeriesID and stays as the display copy).
+func TestSeriesObjectDrop_RelinkToTheSameSeriesWithARenamedObjectRecordsNothing(t *testing.T) {
+	f := newDropFixture(t)
+	bk := f.book("/lib/q.m4b", nil)
+	f.legacy(bk.ID, nil, &Series{ID: f.a.ID, Name: "Expanse (old name)"})
+	row := f.reread(bk.ID)
+	aID := f.a.ID
+	row.SeriesID, row.Series = &aID, &Series{ID: f.a.ID, Name: f.a.Name}
+	_, err := f.store.UpdateBook(bk.ID, row)
+	require.NoError(t, err)
+	got := f.reread(bk.ID)
+	require.NotNil(t, got.Series)
+	require.Equal(t, f.a.Name, got.Series.Name)
+	require.Empty(t, f.drops(bk.ID))
+
+	bk2 := f.book("/lib/q2.m4b", nil)
+	f.legacy(bk2.ID, nil, &Series{ID: f.a.ID, Name: "Expanse (old name)"})
+	row = f.reread(bk2.ID)
+	row.SeriesID, row.Series = &aID, nil
+	_, err = f.store.UpdateBook(bk2.ID, row)
+	require.NoError(t, err)
+	require.Empty(t, f.drops(bk2.ID))
 }

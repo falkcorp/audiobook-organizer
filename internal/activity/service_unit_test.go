@@ -1,5 +1,5 @@
 // file: internal/activity/service_unit_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 33be7b20-e994-4c24-9017-3f20f6ea2fe4
 // last-edited: 2026-10-04
 
@@ -32,7 +32,7 @@ func TestChangelogService_EmptyHistory(t *testing.T) {
 	mockStore := mocks.NewMockStore(t)
 
 	mockStore.EXPECT().GetBookPathHistory("book-1").Return([]database.BookPathChange{}, nil)
-	mockStore.EXPECT().GetBookChangeHistory("book-1", 100).Return([]database.MetadataChangeRecord{}, nil)
+	mockStore.EXPECT().GetBookChangeHistory("book-1", 1<<30).Return([]database.MetadataChangeRecord{}, nil)
 	mockStore.EXPECT().GetBookChanges("book-1").Return([]*database.OperationChange{}, nil)
 
 	svc := NewChangelogService(mockStore)
@@ -53,7 +53,7 @@ func TestChangelogService_MergesAndSortsByTimestamp(t *testing.T) {
 	}, nil)
 
 	newVal := "New Title"
-	mockStore.EXPECT().GetBookChangeHistory("book-1", 100).Return([]database.MetadataChangeRecord{
+	mockStore.EXPECT().GetBookChangeHistory("book-1", 1<<30).Return([]database.MetadataChangeRecord{
 		{BookID: "book-1", Field: "title", NewValue: &newVal, ChangeType: "fetched", Source: "Open Library", ChangedAt: t3},
 	}, nil)
 
@@ -90,7 +90,7 @@ func TestChangelogService_LimitsToMax(t *testing.T) {
 		}
 	}
 	mockStore.EXPECT().GetBookPathHistory("book-1").Return(changes, nil)
-	mockStore.EXPECT().GetBookChangeHistory("book-1", 100).Return([]database.MetadataChangeRecord{}, nil)
+	mockStore.EXPECT().GetBookChangeHistory("book-1", 1<<30).Return([]database.MetadataChangeRecord{}, nil)
 	mockStore.EXPECT().GetBookChanges("book-1").Return([]*database.OperationChange{}, nil)
 
 	svc := NewChangelogService(mockStore)
@@ -104,7 +104,7 @@ func TestChangelogService_StoreErrorsNonFatal(t *testing.T) {
 
 	// All three sources return errors — should still succeed with empty results
 	mockStore.EXPECT().GetBookPathHistory("book-1").Return(nil, errors.New("path error"))
-	mockStore.EXPECT().GetBookChangeHistory("book-1", 100).Return(nil, errors.New("meta error"))
+	mockStore.EXPECT().GetBookChangeHistory("book-1", 1<<30).Return(nil, errors.New("meta error"))
 	mockStore.EXPECT().GetBookChanges("book-1").Return(nil, errors.New("op error"))
 
 	svc := NewChangelogService(mockStore)
@@ -119,7 +119,7 @@ func TestChangelogService_TagWriteEntryType(t *testing.T) {
 	mockStore.EXPECT().GetBookPathHistory("book-1").Return(nil, nil)
 
 	newVal := "overridden"
-	mockStore.EXPECT().GetBookChangeHistory("book-1", 100).Return([]database.MetadataChangeRecord{
+	mockStore.EXPECT().GetBookChangeHistory("book-1", 1<<30).Return([]database.MetadataChangeRecord{
 		{BookID: "book-1", Field: "title", NewValue: &newVal, ChangeType: "override", Source: "manual", ChangedAt: time.Now()},
 	}, nil)
 	mockStore.EXPECT().GetBookChanges("book-1").Return(nil, nil)
@@ -139,7 +139,7 @@ func TestChangelogService_SeriesObjectDropSummary(t *testing.T) {
 	mockStore.EXPECT().GetBookPathHistory("book-1").Return(nil, nil)
 	prev, next := `"Vanished Series"`, `""`
 	oldID, linked := 9004, 12
-	mockStore.EXPECT().GetBookChangeHistory("book-1", 100).Return([]database.MetadataChangeRecord{
+	mockStore.EXPECT().GetBookChangeHistory("book-1", 1<<30).Return([]database.MetadataChangeRecord{
 		{BookID: "book-1", Field: database.HistoryFieldSeriesObject, PreviousValue: &prev, NewValue: &next,
 			ChangeType: database.ChangeTypeSeriesObjectDrop, Source: database.SeriesObjectDropSource, ChangedAt: time.Now(),
 			PreviousRef: &database.MetadataChangeRef{SeriesID: &oldID}, NewRef: &database.MetadataChangeRef{SeriesID: &linked}},
@@ -158,7 +158,7 @@ func TestChangelogService_OperationChangeTypes(t *testing.T) {
 	mockStore := mocks.NewMockStore(t)
 
 	mockStore.EXPECT().GetBookPathHistory("book-1").Return(nil, nil)
-	mockStore.EXPECT().GetBookChangeHistory("book-1", 100).Return(nil, nil)
+	mockStore.EXPECT().GetBookChangeHistory("book-1", 1<<30).Return(nil, nil)
 
 	now := time.Now()
 	mockStore.EXPECT().GetBookChanges("book-1").Return([]*database.OperationChange{
@@ -202,7 +202,7 @@ func TestChangelogService_ImportPathChangeLabeledImport(t *testing.T) {
 	mockStore.EXPECT().GetBookPathHistory("book-1").Return([]database.BookPathChange{
 		{BookID: "book-1", OldPath: "", NewPath: "/mnt/lib/book.mp3", ChangeType: "import", CreatedAt: ts},
 	}, nil)
-	mockStore.EXPECT().GetBookChangeHistory("book-1", 100).Return(nil, nil)
+	mockStore.EXPECT().GetBookChangeHistory("book-1", 1<<30).Return(nil, nil)
 	mockStore.EXPECT().GetBookChanges("book-1").Return(nil, nil)
 
 	svc := NewChangelogService(mockStore)
@@ -224,7 +224,7 @@ func TestChangelogService_RealRenameStillLabeledRename(t *testing.T) {
 	mockStore.EXPECT().GetBookPathHistory("book-1").Return([]database.BookPathChange{
 		{BookID: "book-1", OldPath: "/old/name.mp3", NewPath: "/new/name.mp3", ChangeType: "rename", CreatedAt: ts},
 	}, nil)
-	mockStore.EXPECT().GetBookChangeHistory("book-1", 100).Return(nil, nil)
+	mockStore.EXPECT().GetBookChangeHistory("book-1", 1<<30).Return(nil, nil)
 	mockStore.EXPECT().GetBookChanges("book-1").Return(nil, nil)
 
 	svc := NewChangelogService(mockStore)
@@ -246,7 +246,7 @@ func TestChangelogService_OrganizePathChangeLabeledOrganize(t *testing.T) {
 	mockStore.EXPECT().GetBookPathHistory("book-1").Return([]database.BookPathChange{
 		{BookID: "book-1", OldPath: "/staging/Star Wars: The Force Unleashed.mp3", NewPath: "/mnt/lib/2-03 (SW-022) Star Wars_ The Force U.mp3", ChangeType: "organize", CreatedAt: ts},
 	}, nil)
-	mockStore.EXPECT().GetBookChangeHistory("book-1", 100).Return(nil, nil)
+	mockStore.EXPECT().GetBookChangeHistory("book-1", 1<<30).Return(nil, nil)
 	mockStore.EXPECT().GetBookChanges("book-1").Return(nil, nil)
 
 	svc := NewChangelogService(mockStore)
