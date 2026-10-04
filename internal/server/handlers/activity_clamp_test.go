@@ -1,5 +1,5 @@
 // file: internal/server/handlers/activity_clamp_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3b9e6f12-7c4a-4d85-9a10-e2f5c8d71b46
 // last-edited: 2026-10-04
 
@@ -56,7 +56,10 @@ func TestClampActivitySummaries_VacuumFailureAfterCommitIs200WithSpaceStillHeld(
 	assert.EqualValues(t, 40, data["scanned"])
 	assert.EqualValues(t, 6000, data["bytes_reclaimed"])
 	assert.Equal(t, true, data["space_still_held"])
-	assert.Contains(t, data["vacuum_error"], "space still held")
+	assert.Contains(t, data["vacuum_error"], "space is still held")
+	// The raw error (which can name files) must not reach the client.
+	assert.NotContains(t, data["vacuum_error"], "checkpoint still busy")
+	assert.NotContains(t, data["vacuum_error"], "sql_activity")
 }
 
 // A clean run reports space_still_held=false and no vacuum_error.

@@ -1,5 +1,5 @@
 // file: internal/database/sql_activity_summary_clamp.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3f1d8a24-6c05-4b9e-8d72-51ac07e4b6f3
 // last-edited: 2026-10-04
 
@@ -286,16 +286,19 @@ func (s *SQLActivityStore) VacuumActivity(ctx context.Context) (time.Duration, e
 }
 
 // vacuumTruncateAttempts and vacuumTruncateMaxBackoff bound how long
-// truncateWALAfterVacuum keeps retrying a busy TRUNCATE. Each TRUNCATE attempt
-// can itself sit in SQLite's busy handler for up to sqlActCkptBusyTimeoutMS
-// (1 s), and the backoffs between the 8 attempts add 10+20+40+80+160+320+500 ms,
-// so the worst case is about 8 x 1 s + 1.13 s, roughly 9 s. Vars so a test can
-// shorten them.
+// truncateWALAfterVacuum keeps trying. Each attempt runs a PASSIVE checkpoint,
+// which never waits in SQLite's busy handler, and issues the TRUNCATE only when
+// that PASSIVE copied every frame. The backoffs between the 8 attempts add
+// 10+20+40+80+160+320+500 ms = 1.13 s. A TRUNCATE, when one is issued, can wait
+// up to sqlActCkptBusyTimeoutMS (1 s) for readers, so the worst case is about
+// 8 x 1 s + 1.13 s, roughly 9 s; the common give-up case, a reader pinning an
+// older snapshot so PASSIVE never completes, issues no TRUNCATE and takes about
+// 1.13 s plus the PASSIVE copies. Vars so a test can shorten them.
 //
 // Giving up does not strand the space for good: the background checkpointer's
-// idle tick (checkpointAndMaybeTruncate) runs PASSIVE and then TRUNCATE whenever
-// a tick sees no foreground writes, so a WAL the vacuum could not reset is reset
-// on the first quiet tick after whatever held it lets go
+// idle tick (checkpointAndMaybeTruncate) runs the same PASSIVE-then-TRUNCATE
+// sequence whenever a tick sees no foreground writes, so a WAL the vacuum could
+// not reset is reset on the first quiet tick after whatever held it lets go
 // (TestVacuumActivity_IdleTickReclaimsWhatAGivenUpTruncateLeft).
 var (
 	vacuumTruncateAttempts   = 8
@@ -303,18 +306,22 @@ var (
 )
 
 // truncateWALAfterVacuum empties the -wal VACUUM just filled: a PASSIVE
-// checkpoint to copy the frames, then wal_checkpoint(TRUNCATE) to reset the
-// file, retrying with backoff while the TRUNCATE reports busy.
+// checkpoint copies the frames, and wal_checkpoint(TRUNCATE) resets the file
+// once nothing is left to copy, retrying with backoff until both succeed.
 //
-// PASSIVE FIRST, every attempt. TRUNCATE holds the WAL write lock for the whole
-// time it copies frames into the database file. After a VACUUM that copy is the
-// entire rebuilt database (11 GB on prod on 2026-09-08), and every foreground
-// Record waiting on the lock gives up after its busy_timeout(10000) with
-// SQLITE_BUSY: a review probe on a 66 MB WAL took 33.8 s to copy and failed 3
-// Records. PASSIVE copies the same frames without taking the write lock, so
-// writers keep committing; the TRUNCATE that follows only has to copy what
-// arrived meanwhile and reset an already-copied WAL. Same order as the
-// background loop's checkpointAndMaybeTruncate.
+// TRUNCATE ONLY AFTER A COMPLETE PASSIVE. TRUNCATE holds the WAL write lock for
+// the whole time it copies frames into the database file, and while it waits
+// for readers. After a VACUUM the frames are the entire rebuilt database (11 GB
+// on prod on 2026-09-08), and every foreground Record waiting on that lock
+// gives up after its busy_timeout(10000) with SQLITE_BUSY: a review probe on a
+// 66 MB WAL took 33.8 s to copy and failed 3 Records. PASSIVE copies the same
+// frames without the write lock, so writers keep committing. It stops short
+// while a reader still holds an older snapshot; issuing TRUNCATE then would copy
+// the rest UNDER the lock (measured: ~16k frames when the reader let go 300 ms
+// in, and a 2.78 s Record when it never did). So each attempt issues TRUNCATE
+// only when its PASSIVE reports complete(), and that TRUNCATE has only the few
+// frames written since to copy before it resets the file. This is the same gate
+// the background loop's checkpointAndMaybeTruncate applies.
 //
 // A busy TRUNCATE is not an SQL error. It returns an ordinary row with busy=1
 // (and log/checkpointed of -1) and leaves the -wal exactly as it was. This used
@@ -323,29 +330,29 @@ var (
 // WAL still holding the space VACUUM freed. walCheckpoint scans the row and
 // runs on the checkpoint connection, the single-connection handle the
 // background loop also uses, so the two queue behind each other instead of
-// colliding; the retry covers what remains (a long-lived reader snapshot,
-// another process).
+// colliding.
 //
 // ctx is checked between attempts and interrupts a checkpoint's copy loop, but
-// it is NOT honoured inside SQLite's busy handler: an attempt already waiting
-// on a lock returns only when the lock frees or sqlActCkptBusyTimeoutMS (1 s)
+// it is NOT honoured inside SQLite's busy handler: a TRUNCATE already waiting on
+// a lock returns only when the lock frees or sqlActCkptBusyTimeoutMS (1 s)
 // expires.
 func (s *SQLActivityStore) truncateWALAfterVacuum(ctx context.Context) error {
 	backoff := 10 * time.Millisecond
 	var res walCheckpointResult
 	for attempt := 1; ; attempt++ {
-		// A busy or incomplete PASSIVE is fine: it copied what it could, and
-		// TRUNCATE below is the step that must succeed.
-		if _, err := s.walCheckpoint(ctx, "PASSIVE"); err != nil {
+		passive, err := s.walCheckpoint(ctx, "PASSIVE")
+		if err != nil {
 			return fmt.Errorf("passive checkpoint before truncate: %w", err)
 		}
-		var err error
-		res, err = s.walCheckpoint(ctx, "TRUNCATE")
-		if err != nil {
-			return err
-		}
-		if res.complete() {
-			return nil
+		res = passive
+		if passive.complete() {
+			res, err = s.walCheckpoint(ctx, "TRUNCATE")
+			if err != nil {
+				return err
+			}
+			if res.complete() {
+				return nil
+			}
 		}
 		if attempt >= vacuumTruncateAttempts {
 			break
@@ -354,12 +361,13 @@ func (s *SQLActivityStore) truncateWALAfterVacuum(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return fmt.Errorf("checkpoint still busy (busy=%d wal_frames=%d checkpointed=%d) when cancelled: %w",
+			return fmt.Errorf("WAL not yet reset (busy=%d wal_frames=%d checkpointed=%d) when cancelled: %w",
 				res.Busy, res.Log, res.Checkpointed, ctx.Err())
 		case <-timer.C:
 		}
 		backoff = min(2*backoff, vacuumTruncateMaxBackoff)
 	}
-	return fmt.Errorf("checkpoint still busy after %d attempts (busy=%d wal_frames=%d checkpointed=%d)",
+	return fmt.Errorf("WAL not reset after %d attempts (last checkpoint busy=%d wal_frames=%d checkpointed=%d): "+
+		"a reader or another connection kept it from being fully copied or reset",
 		vacuumTruncateAttempts, res.Busy, res.Log, res.Checkpointed)
 }

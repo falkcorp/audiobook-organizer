@@ -1,5 +1,5 @@
 // file: internal/database/sql_activity_summary_clamp_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 8b47e0c9-2f13-45da-9e60-c4a1d5382bf7
 // last-edited: 2026-10-04
 
@@ -302,56 +302,96 @@ func TestVacuumActivity_TruncatesTheWALWhileTheCheckpointerRuns(t *testing.T) {
 	}
 }
 
-// TestVacuumActivity_ReportsSpaceStillHeldWhenTruncateStaysBusy: a reader that
-// keeps a WAL snapshot open blocks TRUNCATE for as long as it lives. Retrying
-// cannot fix that, so after the bounded retries VacuumActivity must return the
-// "space still held" error rather than claim the WAL was emptied.
-func TestVacuumActivity_ReportsSpaceStillHeldWhenTruncateStaysBusy(t *testing.T) {
-	s := newTestSQLStore(t)
+// ckptCall is one checkpoint the hook observed.
+type ckptCall struct {
+	mode string
+	res  walCheckpointResult
+}
+
+// recordCheckpoints installs a hook that records every checkpoint in order and
+// returns a snapshot function. Use it on a store whose background checkpointer
+// is held off (openCkptTestStore with a long interval) so only the code under
+// test shows up.
+func recordCheckpoints(t *testing.T, s *SQLActivityStore, also func(ckptCall)) (calls func() []ckptCall) {
+	t.Helper()
+	var mu sync.Mutex
+	var got []ckptCall
+	hook := ckptHookFn(func(mode string, res walCheckpointResult, _ error) {
+		c := ckptCall{mode: mode, res: res}
+		mu.Lock()
+		got = append(got, c)
+		mu.Unlock()
+		if also != nil {
+			also(c)
+		}
+	})
+	s.ckptr.hook.Store(&hook)
+	t.Cleanup(func() { s.ckptr.hook.Store(nil) })
+	return func() []ckptCall {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]ckptCall(nil), got...)
+	}
+}
+
+// requireTruncateOnlyAfterCompletePassive fails if any TRUNCATE in calls was
+// not immediately preceded by a PASSIVE that reported complete(): such a
+// TRUNCATE copied the remaining frames while holding the WAL write lock.
+func requireTruncateOnlyAfterCompletePassive(t *testing.T, calls []ckptCall) {
+	t.Helper()
+	for k, c := range calls {
+		if c.mode != "TRUNCATE" {
+			continue
+		}
+		if k == 0 || calls[k-1].mode != "PASSIVE" || !calls[k-1].res.complete() {
+			t.Fatalf("checkpoint %d is a TRUNCATE not preceded by a complete PASSIVE: %+v", k, calls)
+		}
+	}
+}
+
+// TestVacuumActivity_ReportsSpaceStillHeldWhileAReaderPinsTheWAL: a reader
+// that opened its snapshot before the VACUUM keeps PASSIVE from copying the
+// VACUUM's frames for as long as it lives. Retrying cannot fix that, so after
+// the bounded attempts VacuumActivity must return the "space still held" error
+// rather than claim the WAL was emptied, and it must never issue a TRUNCATE in
+// the meantime: that TRUNCATE would hold the write lock while waiting for the
+// reader and while copying.
+func TestVacuumActivity_ReportsSpaceStillHeldWhileAReaderPinsTheWAL(t *testing.T) {
+	s, _ := openCkptTestStore(t, time.Hour)
 	oldAttempts, oldBackoff := vacuumTruncateAttempts, vacuumTruncateMaxBackoff
-	vacuumTruncateAttempts, vacuumTruncateMaxBackoff = 2, 10*time.Millisecond
+	vacuumTruncateAttempts, vacuumTruncateMaxBackoff = 3, 10*time.Millisecond
 	t.Cleanup(func() { vacuumTruncateAttempts, vacuumTruncateMaxBackoff = oldAttempts, oldBackoff })
 
 	for range 10 {
 		insertLegacyOversizedSummary(t, s, strings.Repeat("v", activitySummaryMax*8))
 	}
+	holdReaderSnapshot(t, s)
+	calls := recordCheckpoints(t, s, nil)
 
-	ctx := context.Background()
-	conn, err := s.reader.Conn(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = conn.Close() }()
-	if _, err := conn.ExecContext(ctx, "BEGIN"); err != nil {
-		t.Fatal(err)
-	}
-	var n int
-	if err := conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM activity").Scan(&n); err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _, _ = conn.ExecContext(ctx, "ROLLBACK") }()
-
-	var busySeen atomic.Int32 // the hook also fires from the checkpointer goroutine
-	hook := ckptHookFn(func(mode string, res walCheckpointResult, _ error) {
-		if mode == "TRUNCATE" && res.Busy != 0 {
-			busySeen.Add(1)
-		}
-	})
-	s.ckptr.hook.Store(&hook)
-	t.Cleanup(func() { s.ckptr.hook.Store(nil) })
-
-	_, err = s.VacuumActivity(ctx)
+	_, err := s.VacuumActivity(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "space still held") {
 		t.Fatalf("VacuumActivity err = %v; want the space-still-held error while a reader pins the WAL", err)
 	}
-	if got := int(busySeen.Load()); got < vacuumTruncateAttempts {
-		t.Errorf("busy TRUNCATE attempts = %d, want at least %d (every attempt retried, none skipped)", got, vacuumTruncateAttempts)
+	got := calls()
+	passives := 0
+	for _, c := range got {
+		if c.mode == "TRUNCATE" {
+			t.Fatalf("a TRUNCATE was issued although PASSIVE never completed: %+v", got)
+		}
+		if c.res.complete() {
+			t.Fatalf("fixture: a PASSIVE completed although the reader pins the WAL: %+v", got)
+		}
+		passives++
+	}
+	if passives != vacuumTruncateAttempts {
+		t.Errorf("PASSIVE attempts = %d, want %d (every attempt retried): %+v", passives, vacuumTruncateAttempts, got)
 	}
 }
 
 // holdReaderSnapshot opens a read transaction on its own connection, which pins
-// the current WAL snapshot so a TRUNCATE checkpoint reports busy until release
-// is called. release is idempotent.
+// the current WAL snapshot: PASSIVE cannot copy frames written after it, and
+// TRUNCATE cannot reset the WAL, until release is called. release is
+// idempotent and safe to call from another goroutine.
 func holdReaderSnapshot(t *testing.T, s *SQLActivityStore) (release func()) {
 	t.Helper()
 	ctx := context.Background()
@@ -377,49 +417,139 @@ func holdReaderSnapshot(t *testing.T, s *SQLActivityStore) (release func()) {
 	return release
 }
 
-// TestVacuumActivity_BusyTruncateSucceedsOnALaterAttempt: a TRUNCATE that is
-// busy on its first attempt must be retried, and a later attempt that gets
-// through must count as success with the WAL emptied.
+// TestVacuumActivity_BusyTruncateSucceedsOnALaterAttempt: once PASSIVE has
+// copied everything, a TRUNCATE can still be busy, because a reader that opened
+// after a later write keeps the WAL from being reset. That attempt must be retried,
+// and the later attempt that gets through counts as success with the WAL empty.
 func TestVacuumActivity_BusyTruncateSucceedsOnALaterAttempt(t *testing.T) {
-	s := newTestSQLStore(t)
+	s, _ := openCkptTestStore(t, time.Hour)
 	for range 10 {
 		insertLegacyOversizedSummary(t, s, strings.Repeat("v", activitySummaryMax*8))
 	}
-	release := holdReaderSnapshot(t, s)
 
-	var busy, truncates atomic.Int32
-	hook := ckptHookFn(func(mode string, res walCheckpointResult, _ error) {
-		if mode != "TRUNCATE" {
-			return
-		}
-		truncates.Add(1)
-		if res.Busy != 0 && busy.Add(1) == 1 {
-			release() // whatever held the WAL lets go before the retry
+	var release func()
+	var busy atomic.Int32
+	calls := recordCheckpoints(t, s, func(c ckptCall) {
+		switch {
+		case c.mode == "PASSIVE" && c.res.complete() && release == nil:
+			// A write and then a reader arrive between the copy and the reset.
+			// The write matters: with every frame already copied, a new
+			// reader reads the database file alone and does not hold the WAL.
+			if _, err := s.Record(ActivityEntry{Timestamp: time.Now(), Tier: "info", Type: "t",
+				Level: "info", Source: "s", Summary: "between copy and reset"}); err != nil {
+				t.Errorf("record: %v", err)
+			}
+			release = holdReaderSnapshot(t, s)
+		case c.mode == "TRUNCATE" && c.res.Busy != 0 && busy.Add(1) == 1:
+			release() // and lets go before the retry
 		}
 	})
-	s.ckptr.hook.Store(&hook)
-	t.Cleanup(func() { s.ckptr.hook.Store(nil) })
 
 	if _, err := s.VacuumActivity(context.Background()); err != nil {
-		t.Fatalf("vacuum: %v (a busy first attempt must be retried, not reported)", err)
+		t.Fatalf("vacuum: %v (a busy TRUNCATE must be retried, not reported)", err)
 	}
-	if got := busy.Load(); got != 1 {
-		t.Fatalf("busy TRUNCATE attempts = %d, want exactly 1 (the fixture must make the first attempt busy)", got)
-	}
-	if got := truncates.Load(); got < 2 {
-		t.Fatalf("TRUNCATE attempts = %d, want at least 2 (busy, then the retry that succeeded)", got)
+	got := calls()
+	requireTruncateOnlyAfterCompletePassive(t, got)
+	if n := busy.Load(); n != 1 {
+		t.Fatalf("busy TRUNCATE attempts = %d, want exactly 1 (the fixture must make the first TRUNCATE busy): %+v", n, got)
 	}
 	if fi, err := os.Stat(s.path + "-wal"); err == nil && fi.Size() != 0 {
 		t.Fatalf("vacuum reported success but the -wal still holds %d bytes", fi.Size())
 	}
 }
 
+// TestVacuumActivity_ReaderReleasedMidTruncateNeverTruncatesUnderTheCopy is the
+// SF-A regression test. A reader that opened before the VACUUM keeps PASSIVE
+// short of the VACUUM's frames; it lets go part-way through the truncate phase.
+// The old code issued TRUNCATE after every PASSIVE regardless, so once the
+// reader left that TRUNCATE copied the remaining frames (about 16k in review)
+// while holding the write lock, and with the reader held throughout each of
+// the 8 TRUNCATEs held the lock for about 1 s (a 2.78 s Record). Now a TRUNCATE
+// is issued only after a PASSIVE that copied everything, and Records running
+// through the whole phase must never fail or stall.
+func TestVacuumActivity_ReaderReleasedMidTruncateNeverTruncatesUnderTheCopy(t *testing.T) {
+	s, _ := openCkptTestStore(t, time.Hour)
+	for range 40 {
+		insertLegacyOversizedSummary(t, s, strings.Repeat("v", activitySummaryMax*8))
+	}
+	release := holdReaderSnapshot(t, s)
+	if _, err := s.writer.Exec(`VACUUM`); err != nil {
+		t.Fatalf("vacuum: %v", err)
+	}
+
+	var incomplete atomic.Int32
+	calls := recordCheckpoints(t, s, func(c ckptCall) {
+		// Let go after the reader has visibly blocked one PASSIVE.
+		if c.mode == "PASSIVE" && !c.res.complete() && incomplete.Add(1) == 1 {
+			go func() {
+				time.Sleep(100 * time.Millisecond)
+				release()
+			}()
+		}
+	})
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	var recErrs atomic.Int32
+	var maxLatency atomic.Int64
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		base := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			start := time.Now()
+			if _, err := s.Record(ActivityEntry{Timestamp: base.Add(time.Duration(i) * time.Millisecond),
+				Tier: "info", Type: "t", Level: "info", Source: "s", Summary: fmt.Sprintf("mid-truncate-%d", i)}); err != nil {
+				recErrs.Add(1)
+				fmt.Fprintf(os.Stderr, "Record during truncate failed: %v\n", err)
+			}
+			if d := int64(time.Since(start)); d > maxLatency.Load() {
+				maxLatency.Store(d)
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+
+	err := s.truncateWALAfterVacuum(context.Background())
+	close(stop)
+	waitGroupOrFatal(t, &wg, "the Record loop")
+	if err != nil {
+		t.Fatalf("truncateWALAfterVacuum: %v (the reader let go, so a later attempt must succeed)", err)
+	}
+	got := calls()
+	t.Logf("checkpoints %+v; slowest Record %v", got, time.Duration(maxLatency.Load()))
+	if incomplete.Load() == 0 {
+		t.Fatalf("fixture: no PASSIVE was held short by the reader: %+v", got)
+	}
+	requireTruncateOnlyAfterCompletePassive(t, got)
+	if n := recErrs.Load(); n != 0 {
+		t.Fatalf("%d Records failed during the truncate phase", n)
+	}
+	// Generous for -race on a loaded disk; the old behaviour held the lock for
+	// whole seconds per attempt.
+	if lat := time.Duration(maxLatency.Load()); lat > 2*time.Second {
+		t.Fatalf("slowest Record took %v during the truncate phase: writers were blocked", lat)
+	}
+}
+
 // TestVacuumActivity_IdleTickReclaimsWhatAGivenUpTruncateLeft: when the vacuum
-// gives up on a busy TRUNCATE and reports the space still held, the background
-// checkpointer's idle tick must reset the WAL once the holder lets go, so the
-// space is not stranded until a restart.
+// gives up because a reader pins the WAL and reports the space still held, the
+// background checkpointer's idle-tick step must reset the WAL once the reader
+// lets go, so the space is not stranded until a restart.
+//
+// The tick is driven directly (checkpointAndMaybeTruncate with idle=true, the
+// call runCheckpointer makes) on a store whose own loop is held off. Running a
+// fast real loop instead let its TRUNCATE hold the write lock while it waited
+// on the test's reader, and the VACUUM starved behind it ("database is locked").
+// That the loop calls this step on idle ticks is covered by
+// TestSQLActivityStore_BackgroundCheckpointerRunsAndTruncatesWhenIdle.
 func TestVacuumActivity_IdleTickReclaimsWhatAGivenUpTruncateLeft(t *testing.T) {
-	s, _ := openCkptTestStore(t, 20*time.Millisecond)
+	s, _ := openCkptTestStore(t, time.Hour)
 	oldAttempts, oldBackoff := vacuumTruncateAttempts, vacuumTruncateMaxBackoff
 	vacuumTruncateAttempts, vacuumTruncateMaxBackoff = 1, time.Millisecond
 	t.Cleanup(func() { vacuumTruncateAttempts, vacuumTruncateMaxBackoff = oldAttempts, oldBackoff })
@@ -437,16 +567,9 @@ func TestVacuumActivity_IdleTickReclaimsWhatAGivenUpTruncateLeft(t *testing.T) {
 	}
 
 	release()
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		fi, err := os.Stat(walPath)
-		if err != nil || fi.Size() == 0 {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the background checkpointer never reset the -wal (%d bytes) after the reader let go", fi.Size())
-		}
-		time.Sleep(20 * time.Millisecond)
+	s.checkpointAndMaybeTruncate(context.Background(), true)
+	if fi, err := os.Stat(walPath); err == nil && fi.Size() != 0 {
+		t.Fatalf("the idle-tick checkpoint did not reset the -wal (%d bytes) after the reader let go", fi.Size())
 	}
 }
 
