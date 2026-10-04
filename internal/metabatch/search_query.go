@@ -1,7 +1,7 @@
 // file: internal/metabatch/search_query.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: e0ed5705-b771-4cc2-9c8c-bca9f78ead8b
-// last-edited: 2026-10-01
+// last-edited: 2026-10-04
 //
 // Resolves the title a metadata search asks providers for a book.
 
@@ -235,19 +235,26 @@ type titleJudge struct {
 	// and only when a title's shape needs them.
 	cousinsLoaded bool
 	cousins       []string
-	// memo shares folder listings across rows and knows the roots; nil
+	// memo shares folder listings and the import-root set across rows; nil
 	// lists through files directly.
 	memo *FolderMemo
+	// rootsLoaded/roots: the import-root set read from files, once, when
+	// there is no memo (titleJudge.importRoots).
+	rootsLoaded bool
+	roots       map[string]bool
 }
 
 // SearchQueryReader is what ResolveCandidateSearchQuery reads: the book's
 // files (fallback titles, heading corroboration), its authors (a folder
 // named for the author is not a work folder) and the other book rows in its
-// folder (a file of a set filed as separate rows; titleJudge.siblingPaths).
+// folder (a file of a set filed as separate rows; titleJudge.siblingPaths),
+// and the import paths (a folder that is an import root is never listed;
+// titleJudge.isRootDir).
 type SearchQueryReader interface {
 	BookFilesGetter
 	database.BookAuthorReader
 	database.BookDirLister
+	ImportPathReader
 }
 
 // presentFiles returns the book's present files in play order

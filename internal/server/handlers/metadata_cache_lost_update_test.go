@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_lost_update_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6f1c2a84-9d3e-4b7a-a5c1-2e8f0d4b9c71
-// last-edited: 2026-10-02
+// last-edited: 2026-10-04
 
 package handlers_test
 
@@ -82,6 +82,9 @@ func (s *lostUpdateCacheStore) GetBookAuthors(string) ([]database.BookAuthor, er
 func (s *lostUpdateCacheStore) GetAuthorByID(int) (*database.Author, error) { return nil, nil }
 
 func (s *lostUpdateCacheStore) LiveBookPathsUnderDir(string) (map[string]string, error) {
+	return nil, nil
+}
+func (s *lostUpdateCacheStore) GetAllImportPaths() ([]database.ImportPath, error) {
 	return nil, nil
 }
 

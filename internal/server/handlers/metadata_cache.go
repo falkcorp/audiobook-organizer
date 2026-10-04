@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.27.0
+// version: 1.28.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-10-03
+// last-edited: 2026-10-04
 
 // Package handlers contains extracted HTTP handler types for the audiobook
 // organizer server. MetadataCacheHandler covers the persistent metadata-cache
@@ -88,21 +88,18 @@ type MetadataCacheBookStore interface {
 	// ModifyBook is the column-scoped read-modify-write ClearMetadataNoMatch
 	// uses (database.BookMutator.ModifyBook).
 	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
-	// GetBookFiles is required to satisfy metabatch.BookFilesGetter.
-	GetBookFiles(bookID string) ([]database.BookFile, error)
 	// GetBookFilesForIDsCore is the batch file read the review listing's
 	// loader uses (loadCacheRows): one call per chunk of books instead of a
 	// GetBookFiles range scan per book, read once and shared by the legacy
 	// filter, the search-title resolver and the row's book info.
 	GetBookFilesForIDsCore(bookIDs []string) (map[string][]database.BookFileCore, error)
-	// The book's live authors, which metabatch.ResolveCandidateSearchQuery
-	// reads (with GetBookFiles) to decide whether a stale row is one a
-	// refetch would actually search -- see cacheRowStale.
-	database.BookAuthorReader
-	// The other book rows in a book's folder, which the resolver reads to
-	// refuse one file of a set filed as separate rows
-	// (metabatch.SkipKindSiblingPart).
-	database.BookDirLister
+	// SearchQueryReader is everything metabatch.ResolveCandidateSearchQuery
+	// reads to decide whether a stale row is one a refetch would actually
+	// search (cacheRowStale): the book's files (also metabatch.BookFilesGetter
+	// for BuildCandidateBookInfo), its live authors, the other rows in its
+	// folder (metabatch.SkipKindSiblingPart), and the import paths, read from
+	// THIS store so a folder that is an import root is never listed.
+	metabatch.SearchQueryReader
 }
 
 // ActiveOpsLister is the shape of database.Store's ListActiveOperationsV2. It

@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.30.0
+// version: 1.31.0
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
-// last-edited: 2026-09-30
+// last-edited: 2026-10-04
 
 package server
 
@@ -76,6 +76,9 @@ type bookReader interface {
 	// BookDirLister: metabatch.ResolveCandidateSearchQuery reads the other
 	// rows in a book's folder (metabatch.SkipKindSiblingPart).
 	database.BookDirLister
+	// ImportPathReader: the resolver reads the import roots from this same
+	// store, so an import root is never listed for sibling rows.
+	metabatch.ImportPathReader
 }
 
 // bulkManualOnlyGuard builds the certainty gate's owner-manual-only input

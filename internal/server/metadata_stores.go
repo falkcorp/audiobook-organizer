@@ -1,7 +1,7 @@
 // file: internal/server/metadata_stores.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: b8e04c27-5a91-4f36-9d18-2c73e5a081f4
-// last-edited: 2026-10-01
+// last-edited: 2026-10-04
 
 package server
 
@@ -69,37 +69,20 @@ type candidateFetchStore interface {
 	// BookDirLister: metabatch.ResolveCandidateSearchQuery reads the other
 	// rows in a book's folder (metabatch.SkipKindSiblingPart).
 	database.BookDirLister
+	// ImportPathReader: the resolver reads the import roots from this same
+	// store, so an import root is never listed for sibling rows.
+	metabatch.ImportPathReader
 
 	GetBookByID(id string) (*database.Book, error)
 }
 
 // newFolderMemo returns a metabatch.FolderMemo for one pass over many books
-// (a candidate fetch op, a bulk fetch): each folder is listed once. Roots
-// (RootDir, import paths) are the resolver's own concern
-// (registerImportRootsSource), so the apply paths reach the same verdict.
+// (a candidate fetch op, a bulk fetch): each folder is listed once, and the
+// import roots are read once per minute from the store the resolver is
+// handed (metabatch.ImportPathReader), so the apply paths reach the same
+// verdict.
 func (s *Server) newFolderMemo() *metabatch.FolderMemo {
 	return metabatch.NewFolderMemo()
-}
-
-// registerImportRootsSource points the metadata search-title resolver at the
-// store's import paths (metabatch.SetImportRootsSource): a folder that is an
-// import root is never listed for sibling rows, on every path -- fetch,
-// stale scan, apply and gate alike.
-func registerImportRootsSource(store database.ImportPathStore) {
-	if store == nil {
-		return
-	}
-	metabatch.SetImportRootsSource(func() ([]string, error) {
-		paths, err := store.GetAllImportPaths()
-		if err != nil {
-			return nil, err
-		}
-		out := make([]string, 0, len(paths))
-		for _, p := range paths {
-			out = append(out, p.Path)
-		}
-		return out, nil
-	})
 }
 
 // metadataResultsReader is the cache-refresh path: it only reads op history.
