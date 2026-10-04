@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer_test.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: 8e2d5b19-6a4c-4f37-b1d8-2c9e7a3f5d60
 // last-edited: 2026-10-03
 
@@ -473,6 +473,7 @@ func TestFragmentFixer_ResumesAPartiallyAppliedGroup(t *testing.T) {
 		}
 	}
 	w := f.fragWriter(t, "op-cut")
+	f.journalPlanRecord(t, w, findRow(t, res, id))
 	require.NoError(t, w.MoveBookFiles([]string{otherRow}, other, survivor))
 	// The cut-off run also retitled the survivor and pointed its path at the
 	// folder: the survivor's own row is found by its stored id, not its path.
@@ -1019,8 +1020,9 @@ func TestFragmentFixer_SurvivorTitleChangedAfterPlan(t *testing.T) {
 }
 
 // TestFragmentFixer_ReplanReformsAnAbandonedGroup (M6): a run cut off after
-// moving one member's row is re-attributed by a NEW plan, which re-forms the
-// same group instead of stranding the emptied member.
+// moving one member's row is continued by a NEW plan from the run's plan
+// record: the same row, survivor and members, the emptied member included,
+// instead of stranding it.
 func TestFragmentFixer_ReplanReformsAnAbandonedGroup(t *testing.T) {
 	f := newFragFixture(t)
 	f.seed(t)
@@ -1035,6 +1037,7 @@ func TestFragmentFixer_ReplanReformsAnAbandonedGroup(t *testing.T) {
 		}
 	}
 	w := f.fragWriter(t, "op-cut")
+	f.journalPlanRecord(t, w, findRow(t, res, id))
 	require.NoError(t, w.MoveBookFiles([]string{otherRow}, other, survivor))
 
 	res2 := f.plan(t, "op-plan2")
@@ -1066,8 +1069,8 @@ func TestFragmentFixer_JournalDedupesOnResume(t *testing.T) {
 }
 
 // TestFragmentFixer_ReplanReformsAGroupCutMidRetire (M6): a run cut off
-// after every row moved and one member was retired re-forms the whole group
-// on a new plan (the retired member included), and the apply finishes it.
+// after every row moved and one member was retired is continued whole by a
+// new plan (the retired member included), and the apply finishes it.
 func TestFragmentFixer_ReplanReformsAGroupCutMidRetire(t *testing.T) {
 	f := newFragFixture(t)
 	f.seed(t)
@@ -1082,6 +1085,7 @@ func TestFragmentFixer_ReplanReformsAGroupCutMidRetire(t *testing.T) {
 		}
 	}
 	w := f.fragWriter(t, "op-cut")
+	f.journalPlanRecord(t, w, findRow(t, res, id))
 	for i := range others {
 		require.NoError(t, w.MoveBookFiles([]string{otherRows[i]}, others[i], survivor))
 	}
@@ -1106,6 +1110,49 @@ func TestFragmentFixer_ReplanReformsAGroupCutMidRetire(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, b.IsSoftDeleted(), "%s retired, not stranded", o)
 	}
+}
+
+// TestFragmentFixer_UnrecordedCutIsHeld: a run that moved and retired
+// members and left no plan record (older code, or a record that is gone)
+// cannot be continued. A new plan never forms an applicable row over the
+// folder's remaining fragments with another survivor: the row is held, and
+// the emptied member is listed as stranded.
+func TestFragmentFixer_UnrecordedCutIsHeld(t *testing.T) {
+	f := newFragFixture(t)
+	ids := f.looseGroup(t, "lib/Walk", "Chap", 8, func(int) bool { return true })
+	r := rowWithBooks(t, f.plan(t, "op-plan"), ids)
+	require.True(t, r.Applicable(), r.SkipReason)
+	plan := r.Detail.(*fragGroupPlan)
+	w := f.fragWriter(t, "op-cut")
+	moved := 0
+	var emptied string
+	for _, m := range plan.Members {
+		if m.Frag.Book.ID == plan.SurvivorID || moved >= 3 {
+			continue
+		}
+		moved++
+		require.NoError(t, w.MoveBookFiles([]string{m.Frag.File.ID}, m.Frag.Book.ID, plan.SurvivorID))
+		if moved < 3 {
+			_, err := retireInto(context.Background(), f.p, f.s, w, time.Now, fragFixerID, m.Frag.Book.ID, plan.SurvivorID,
+				&merge.SliceMapping{OffsetSeconds: m.Offset, Mappable: true})
+			require.NoError(t, err)
+		} else {
+			emptied = m.Frag.Book.ID
+		}
+	}
+	res := f.plan(t, "op-plan2")
+	require.Empty(t, applicableRowsWith(res, ids), "no applicable row over the cut set")
+	held := 0
+	for _, row := range res.Rows {
+		if row.Skipped == fragSkipInterrupted {
+			held++
+			require.Contains(t, row.SkipReason, plan.SurvivorID, "the hold names the book holding the moved files")
+			require.NotContains(t, row.BookIDs, plan.SurvivorID)
+		}
+	}
+	require.Equal(t, 1, held, "the folder's four remaining fragments form one row, held")
+	st := findRow(t, res, "stranded:"+emptied)
+	require.Equal(t, fragSkipStranded, st.Skipped)
 }
 
 // TestFragmentFixer_StrandedMemberIsListed (M6): an emptied member whose
@@ -3110,6 +3157,7 @@ func TestFragmentFixer_NumberedPinnedResume(t *testing.T) {
 		f.organizeCopiesFixture(t, "all", orig, copies)
 		r, plan := f.p7Plan(t, dir)
 		w := f.fragWriter(t, "op-cut")
+		f.journalPlanRecord(t, w, r)
 		var m fragGroupMember
 		for _, x := range plan.Members {
 			if x.Frag.Book.ID != plan.SurvivorID {
@@ -3144,6 +3192,7 @@ func TestFragmentFixer_NumberedPinnedResume(t *testing.T) {
 		r, plan := f.p7Plan(t, dir)
 		require.NotEqual(t, orig[0], plan.SurvivorID)
 		w := f.fragWriter(t, "op-cut")
+		f.journalPlanRecord(t, w, r)
 		var m fragGroupMember
 		for _, x := range plan.Members {
 			if x.Frag.Book.ID == orig[2] {

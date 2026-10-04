@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_attribution_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 02ce91e2-c227-4b3c-b13d-45a89faf23c9
 // last-edited: 2026-10-03
 
@@ -51,6 +51,20 @@ func (f *fragFixture) moveAndRetire(t *testing.T, w *repairs.Writer, fixerID, su
 		_, err := retireInto(context.Background(), f.p, f.s, w, time.Now, fixerID, others[i], survivor, &merge.SliceMapping{Mappable: true})
 		require.NoError(t, err)
 	}
+}
+
+// journalPlanRecord journals r's plan record through w, as Apply does before
+// a run's first write: a run simulated step by step through w is then one of
+// the row's own runs, whose flag changes a re-plan credits to the row.
+func (f *fragFixture) journalPlanRecord(t *testing.T, w *repairs.Writer, r repairs.Row) {
+	t.Helper()
+	plan, ok := r.Detail.(*fragGroupPlan)
+	require.True(t, ok, "a no-parent row")
+	var st fragGroupState
+	require.NoError(t, json.Unmarshal(r.State, &st))
+	rec, err := planRecordOf(r, plan, st)
+	require.NoError(t, err)
+	require.NoError(t, w.Journal(plan.SurvivorID, undo.ChangeTypeRepairPlanRecord, fragRecordField(r.RowID), "", rec))
 }
 
 // discardOp deletes op id's row, as registry.Discard does for a failed or
@@ -213,19 +227,22 @@ func (d noScanDeps) FragmentRepairReader() FragmentRepairReader { return d.hist 
 // the re-plan reaches the same verdicts (a resumable cut-off row keeps its
 // fingerprint; another fixer's retire still refuses).
 func TestFragmentFixer_JournalFallbackWithoutScanner(t *testing.T) {
-	setup := func(t *testing.T) (*fragFixture, *noScanHist) {
-		f := newFragFixture(t)
+	// Plan needs the one-pass scan (an interrupted run would go unseen
+	// without it, so it fails closed); the swap to the per-book store is
+	// made after the plan, for the re-plan this test is about.
+	setup := func(t *testing.T, f *fragFixture) *noScanHist {
 		h := &noScanHist{s: f.s}
 		_, ok := database.AsCapability[opChangeScanner](FragmentRepairReader(h))
 		require.False(t, ok, "the wrapper hides the scan")
 		sd, ok := f.p.deps.(scanDeps)
 		require.True(t, ok)
 		f.p.deps = noScanDeps{scanDeps: sd, hist: h}
-		return f, h
+		return h
 	}
 	t.Run("ours resumes", func(t *testing.T) {
-		f, h := setup(t)
+		f := newFragFixture(t)
 		planned, survivor, others, otherRows := f.looseCut(t)
+		h := setup(t, f)
 		f.moveAndRetire(t, f.fragWriter(t, "op-cut"), fragFixerID, survivor, others, otherRows, 1)
 		h.calls.Store(0)
 		got, err := newFragmentFixer(f.p).Replan(context.Background(), nil, planned, nil)
@@ -237,8 +254,9 @@ func TestFragmentFixer_JournalFallbackWithoutScanner(t *testing.T) {
 		f.requireOneLiveBookHoldsAll(t, planned, survivor)
 	})
 	t.Run("another fixer's retire refuses", func(t *testing.T) {
-		f, h := setup(t)
+		f := newFragFixture(t)
 		planned, survivor, others, otherRows := f.looseCut(t)
+		h := setup(t, f)
 		f.applyOp("op-x", "some-other-fixer")
 		w := repairs.NewWriter(f.s, f.s, "some-other-fixer", "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-x")
 		f.moveAndRetire(t, w, "some-other-fixer", survivor, others, otherRows, 1)
@@ -286,6 +304,7 @@ func TestFragmentFixer_ForeignCrownIsAChange(t *testing.T) {
 		require.NotContains(t, []string{orig[0], orig[2], orig[4]}, plan.SurvivorID)
 		f.applyOp("op-cut", fragFixerID)
 		w := repairs.NewWriter(f.s, f.s, fragFixerID, "bulk_update", "repairs-").WithJournal(f.s, journal(f.s), "op-cut")
+		f.journalPlanRecord(t, w, r)
 		var m fragGroupMember
 		for _, x := range plan.Members {
 			if x.Frag.Book.ID == orig[2] {
