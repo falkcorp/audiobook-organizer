@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer_test.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: 8e2d5b19-6a4c-4f37-b1d8-2c9e7a3f5d60
 // last-edited: 2026-10-03
 
@@ -3336,7 +3336,14 @@ func (f *fragFixture) copiesFixtureState(t *testing.T) map[string]string {
 //
 // The returned close frees the store at once (a cut loop opens one per cut
 // point, ~120 per shape; left to the subtest's cleanup they all stay open).
-func newCutFixture(t *testing.T, org string, vg bool) (*fragFixture, repairs.Row, func()) {
+//
+// vg links books in one version group: cutVGNone links none; cutVGOrig the
+// eight originals with the fourth primary (the survivor, a renamed copy, is
+// NOT in the group: its members' retires demote and hand off); cutVGSurvivor
+// the originals AND the survivor, the survivor the group's one primary (the
+// retired members are not primary, so no demote and no hand-off: the
+// hand-off is resumeHandOff's "the group has its one primary" check).
+func newCutFixture(t *testing.T, org, vg string) (*fragFixture, repairs.Row, func()) {
 	t.Helper()
 	const folder = "lib/Clarke/02_light_of_other_days"
 	root, err := filepath.EvalSymlinks(t.TempDir())
@@ -3353,17 +3360,40 @@ func newCutFixture(t *testing.T, org string, vg bool) (*fragFixture, repairs.Row
 	withRoot(t, root)
 	orig, copies := f.seedChapterCopies(t, folder, nil)
 	f.organizeCopiesFixture(t, org, orig, copies)
-	if vg {
-		group := "vg-ch"
+	group := "vg-ch"
+	setVG := func(id string, primary bool) {
+		_, err := s.ModifyBook(id, func(b *database.Book) error { b.VersionGroupID = &group; b.IsPrimaryVersion = &primary; return nil })
+		require.NoError(t, err)
+	}
+	switch vg {
+	case cutVGNone:
+	case cutVGOrig:
 		for i, id := range orig {
-			primary := i == 3
-			_, err := s.ModifyBook(id, func(b *database.Book) error { b.VersionGroupID = &group; b.IsPrimaryVersion = &primary; return nil })
-			require.NoError(t, err)
+			setVG(id, i == 3)
 		}
+	case cutVGSurvivor:
+		_, plan := f.p7Plan(t, folder)
+		survivor := plan.SurvivorID
+		for _, id := range orig {
+			setVG(id, id == survivor)
+		}
+		setVG(survivor, true)
+		r, plan := f.p7Plan(t, folder)
+		require.Equal(t, survivor, plan.SurvivorID, "the group keeps the survivor")
+		return f, r, closeStore
+	default:
+		t.Fatalf("unknown version-group shape %q", vg)
 	}
 	r, _ := f.p7Plan(t, folder)
 	return f, r, closeStore
 }
+
+// The version-group shapes of newCutFixture.
+const (
+	cutVGNone     = "none"
+	cutVGOrig     = "originals"
+	cutVGSurvivor = "originals+survivor"
+)
 
 // TestFragmentFixer_NumberedCopiesCutAtEveryStep cuts a numbered set with
 // renamed copies at EVERY write event of Apply (each journal row and each
@@ -3373,6 +3403,10 @@ func newCutFixture(t *testing.T, org string, vg bool) (*fragFixture, repairs.Row
 // plan's fingerprint and the end state must equal an uninterrupted run's.
 // Organized none / all / copies, with and without a version group linking
 // the originals.
+//
+// Shapes: organized none / all / copies, crossed with the version-group
+// shapes of newCutFixture (none; the originals, survivor outside the group;
+// the originals and the survivor, survivor the group's primary).
 //
 // One event does not stop the run: the version-group hand-off's journal row
 // (retireHandOff) is written AFTER versionprimary.EnsureSinglePrimary has
@@ -3384,19 +3418,20 @@ func newCutFixture(t *testing.T, org string, vg bool) (*fragFixture, repairs.Row
 // events too, a shape is ~230 events. Measured 2026-10-03: the package's
 // TestFragment run under -race took 716s with two shapes and history cuts,
 // over CI's comfort and the 10-minute default. So the default run covers ONE
-// shape, organized=all with the version group (the prod shape: demote
-// before soft-delete, a hand-off crowning a live member, the survivor in the
-// group, copies), cutting at every journal row and write.
-// AORG_FRAG_CUT_MATRIX=full runs all six shapes and also cuts at every
-// history row (the crash-before-history window).
+// shape, organized=all with the originals in a version group (the prod
+// shape: demote before soft-delete, a hand-off crowning a live member,
+// copies; the survivor is a renamed copy, outside the group), cutting at
+// every journal row and write. AORG_FRAG_CUT_MATRIX=full runs all nine
+// shapes and also cuts at every history row (the crash-before-history
+// window).
 func TestFragmentFixer_NumberedCopiesCutAtEveryStep(t *testing.T) {
 	full := os.Getenv("AORG_FRAG_CUT_MATRIX") == "full"
 	for _, org := range []string{"none", "all", "copies"} {
-		for _, vg := range []bool{false, true} {
-			if !full && !(org == "all" && vg) {
+		for _, vg := range []string{cutVGNone, cutVGOrig, cutVGSurvivor} {
+			if !full && !(org == "all" && vg == cutVGOrig) {
 				continue
 			}
-			t.Run(fmt.Sprintf("organized=%s vg=%t", org, vg), func(t *testing.T) {
+			t.Run(fmt.Sprintf("organized=%s vg=%s", org, vg), func(t *testing.T) {
 				ref, rr, closeRef := newCutFixture(t, org, vg)
 				out := ref.apply(t, "op-plan", "op-apply", []string{rr.RowID}, nil)
 				require.Equal(t, 1, out.Applied, "outcomes %v %+v", out.ByOutcome, out.Rows)
@@ -3431,7 +3466,7 @@ func TestFragmentFixer_NumberedCopiesCutAtEveryStep(t *testing.T) {
 					require.Equal(t, want, f.copiesFixtureState(t), "cut at event %d: end state", at)
 					closeCut()
 				}
-				t.Logf("organized=%s vg=%t: %d cut points resumed to the same end state; %d best-effort events ran through", org, vg, cuts, through)
+				t.Logf("organized=%s vg=%s: %d cut points resumed to the same end state; %d best-effort events ran through", org, vg, cuts, through)
 				require.Greater(t, cuts, 40)
 			})
 		}

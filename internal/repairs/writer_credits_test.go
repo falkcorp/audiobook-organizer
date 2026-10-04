@@ -1,5 +1,5 @@
 // file: internal/repairs/writer_credits_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 1b72196d-b654-4270-bd15-c54923102210
 // last-edited: 2026-10-03
 
@@ -97,6 +97,25 @@ func TestWriter_ModifyCredits_JournalsFirstUnderLock(t *testing.T) {
 	require.Equal(t, "op-1", f.journal[0].OperationID)
 	require.Equal(t, 1, w.Journaled())
 	require.Equal(t, 1, w.Writes())
+}
+
+// TestWriter_JournalStampsSource: every journal row carries the Writer's
+// source, so a fixer can recognise its own rows after the op row that ran
+// them is discarded (registry.Discard keeps the opchange rows).
+func TestWriter_JournalStampsSource(t *testing.T) {
+	s := newMemStore()
+	f := &creditFake{credits: map[string][]database.BookAuthor{"b1": {{BookID: "b1", AuthorID: 7, Role: "author"}}}}
+	w := credWriter(s, f)
+	require.NoError(t, w.Journal("b1", "book_merged_into", "merged_into_book_id", "", "b2"))
+	_, err := w.ModifyCredits("b1", func(cur []database.BookAuthor) ([]database.BookAuthor, UndoEntry, error) {
+		return []database.BookAuthor{{BookID: "b1", AuthorID: 9, Role: "author"}},
+			UndoEntry{ChangeType: "junk_author_credits", Field: "book_authors", Old: "old", New: "new"}, nil
+	})
+	require.NoError(t, err)
+	require.Len(t, f.journal, 2)
+	for _, c := range f.journal {
+		require.Equal(t, "junk", c.Source, "row %s/%s", c.ChangeType, c.FieldName)
+	}
 }
 
 func TestWriter_ModifyCredits_JournalFailureWritesNothing(t *testing.T) {
