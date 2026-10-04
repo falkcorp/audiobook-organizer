@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -67,6 +68,7 @@ const (
 	deadlineChildWorkerErr      = "DEADLINE-CHILD: worker store write failed"
 	deadlineChildWhat           = "the deadline child's store-writing worker"
 	deadlineChildReturned       = "DEADLINE-CHILD: wait returned after the worker finished"
+	deadlineChildTempDirPrefix  = "DEADLINE-CHILD: tempdir "
 )
 
 // TestAwaitOrFatalDeadline_Child is the body run in a child process by
@@ -98,6 +100,11 @@ func TestAwaitOrFatalDeadline_Child(t *testing.T) {
 	}
 
 	s := newReviewTestStore(t)
+	// The parent removes this directory itself: the "stuck" child exits the
+	// binary before any t.Cleanup runs, so t.TempDir's own removal never
+	// happens. The parent points TMPDIR at a directory it owns and checks
+	// that this path was inside it and is gone afterwards.
+	fmt.Fprintf(os.Stderr, "%s%s\n", deadlineChildTempDirPrefix, filepath.Dir(t.TempDir()))
 	it, err := s.UpsertReviewItem(mkReviewItem("regroup.multidisc", "dk-deadline-child", "/f", "s", `{}`))
 	if err != nil {
 		t.Fatalf("upsert: %v", err)
@@ -152,9 +159,15 @@ func TestAwaitOrFatalDeadline_TimedOutWaitNeverClosesStoreUnderWorkers(t *testin
 			defer cancel()
 			cmd := exec.CommandContext(ctx, os.Args[0],
 				"-test.run=^TestAwaitOrFatalDeadline_Child$", "-test.count=1", "-test.timeout=2m", "-test.v")
-			cmd.Env = append(os.Environ(), deadlineChildEnv+"="+mode)
+			// The child's t.TempDir (which holds its on-disk Pebble store) goes
+			// under a directory this test owns. A child that exits the binary
+			// skips its own cleanup, so without this every "stuck" run leaked
+			// its whole temp dir, store included.
+			childTmp := t.TempDir()
+			cmd.Env = append(os.Environ(), deadlineChildEnv+"="+mode, "TMPDIR="+childTmp)
 			raw, err := cmd.CombinedOutput()
 			out := string(raw)
+			assertChildTempDirRemoved(t, out, childTmp)
 
 			var exitErr *exec.ExitError
 			if mode == "slow" {
@@ -217,5 +230,38 @@ func TestAwaitOrFatalDeadline_TimedOutWaitNeverClosesStoreUnderWorkers(t *testin
 				mustNotContain("the stuck worker never finishes", deadlineChildWorkerFinished, deadlineChildReturned)
 			}
 		})
+	}
+}
+
+// assertChildTempDirRemoved finds the temp dir the deadline child reported,
+// checks it was created under childTmp (the TMPDIR the parent gave it, not the
+// system temp dir), removes childTmp's contents, and asserts the child's dir is
+// gone, so a killed child cannot leave its store behind.
+func assertChildTempDirRemoved(t *testing.T, out, childTmp string) {
+	t.Helper()
+	var childDir string
+	for _, line := range strings.Split(out, "\n") {
+		if rest, ok := strings.CutPrefix(line, deadlineChildTempDirPrefix); ok {
+			childDir = strings.TrimSpace(rest)
+		}
+	}
+	if childDir == "" {
+		t.Fatalf("child did not report its temp dir\n%s", out)
+	}
+	rel, err := filepath.Rel(childTmp, childDir)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		t.Fatalf("child temp dir %s is outside the parent-owned %s: a killed child would leak it", childDir, childTmp)
+	}
+	entries, err := os.ReadDir(childTmp)
+	if err != nil {
+		t.Fatalf("read %s: %v", childTmp, err)
+	}
+	for _, e := range entries {
+		if err := os.RemoveAll(filepath.Join(childTmp, e.Name())); err != nil {
+			t.Fatalf("remove child temp entry %s: %v", e.Name(), err)
+		}
+	}
+	if _, err := os.Stat(childDir); !os.IsNotExist(err) {
+		t.Errorf("child temp dir %s still exists after cleanup (stat err=%v)", childDir, err)
 	}
 }
