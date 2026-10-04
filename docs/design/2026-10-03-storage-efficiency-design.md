@@ -1,5 +1,5 @@
 <!-- file: docs/design/2026-10-03-storage-efficiency-design.md -->
-<!-- version: 0.3.0 -->
+<!-- version: 0.4.0 -->
 <!-- guid: 332dcbd9-73e2-4814-b1a0-723afa60e605 -->
 <!-- last-edited: 2026-10-03 -->
 
@@ -384,6 +384,81 @@ Warmup: file-row phase reads 2,436 MB and keeps 583 MB (`memdb_warmup.go:116`).
 With cold data out of the range it reads roughly the 583 MB plus tags. File
 rows are 82% of a 109 s warmup (`memdb_store.go:156`); expect roughly 40-50 s.
 Estimate, to be confirmed by timing on the deployed build.
+
+### 5.7 Signal store: where the cold data lives (owner direction 2026-10-03)
+
+The owner's roadmap is whole-book fingerprints and whole-book transcripts
+(the transcripts with timing, for aligning an ebook to the audio position).
+Sizing, as estimates with the arithmetic:
+
+- Chromaprint emits about 8 32-bit values per second = 115 KB per audio hour.
+  77k books x roughly 10 hours = 770k hours -> about 88 GB raw, and it barely
+  compresses. Today's prints cover 120 s per file.
+- Speech is about 9,000 words per hour = 55 KB of text per hour -> about
+  42 GB of plain text for the library; word-level timing multiplies that
+  before compression.
+
+That is two to three times the whole current database, written once and
+almost never changed. An LSM rewrites its values during compaction, so
+keeping this in the main store would undo this design. Decision: the side
+entries of section 5.1 do not live in the main store. They live in a
+**signal store**:
+
+- A second Pebble instance, `signals.pebble`, beside the main one, with its
+  own cache and compaction settings tuned for large write-once values. Keys:
+  `fp:<fileID>`, `cold:<fileID>`, `booksig:<bookID>`, `booksighist:<bookID>:<seq>`,
+  later `fpfull:<fileID>` and `transcript:<fileID>`.
+- For values past a size threshold (whole-book transcripts with timing), the
+  value is a compressed file under a blob directory and the key holds a
+  pointer plus checksum. Pebble's own value separation is checked against the
+  pinned version before choosing; either way the interface is the same.
+- Cross-store ordering replaces the single batch: write the signal (synced),
+  then commit the main-store batch that records "has fingerprint, version,
+  duration, checksum". A crash between the two leaves an unreferenced signal,
+  which is harmless and re-adoptable. A row that claims a signal the store
+  does not have is reported as `ErrSignalMissing`, never read as "no
+  fingerprint".
+- P7 becomes structural: no main-store delete path can reach the signal
+  store. Removing a file or book record leaves its signals in place, keyed by
+  id and indexed by audio content hash where one exists, for re-adoption.
+- Backups and ZFS snapshot policy are set separately for it: write-once data
+  snapshots cheaply, unlike a churning LSM.
+
+The fingerprint index (`fpidx:`) stays in the main store for now; it is small
+values and many keys, and phase 5 decides its shape.
+
+## 5A. Archive: retired books leave the live keyspace
+
+Books that are soft-deleted or merged away stay in `book:` today, with their
+file rows, index entries and history. Every warmup, whole-library scan and
+count pays for them. Proposal: an **archive** in a third key space, physically
+in the signal store's Pebble instance (`archive:book:<id>`,
+`archive:file:<bookID>:<fileID>`, `archive:hist:<bookID>:<seq>`), not a
+separate database engine.
+
+- **What moves:** the book row, its file rows, its change history, its
+  metadata field state and history. Signals do not move; they are already in
+  the signal store under the same ids.
+- **When:** only after the record is out of every undo window: retired or
+  soft-deleted for longer than the journal retention (90 days), no unreverted
+  journal row, no unresolved merge journal entry, no pin. The fragment fixer
+  and merge undo read retired books (`retireInto`, `merged_into` chains), so
+  nothing inside a window moves.
+- **How:** copy to the archive (synced), then delete from the main store in
+  one batch, recorded in the operation journal; resumable; dry run, row list
+  and owner approval like every destructive step. The copy-then-delete order
+  means a crash leaves a duplicate, never a loss; the main-store copy wins
+  until its delete commits.
+- **Reads:** a narrow `GetArchivedBook(id)` and a restore op. Ordinary reads
+  do not fall through to the archive; a lookup that needs to follow a
+  `merged_into` link past the archive horizon gets a small forwarding entry
+  left in the main store (`book_fwd:<id>` -> survivor id).
+- **Hard delete** then means "remove from the archive", is refused while
+  signals exist unless the owner passes an explicit flag, and is the only
+  place change history is deleted for good.
+
+Whether this is worth doing depends on how many retired rows exist; the
+census (section 7) counts them before this phase is scheduled.
 
 ## 6. Operation logs and history
 
