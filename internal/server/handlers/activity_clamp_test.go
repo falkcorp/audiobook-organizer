@@ -1,5 +1,5 @@
 // file: internal/server/handlers/activity_clamp_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 3b9e6f12-7c4a-4d85-9a10-e2f5c8d71b46
 // last-edited: 2026-10-04
 
@@ -83,4 +83,27 @@ func TestClampActivitySummaries_ClampFailureIsStill500(t *testing.T) {
 
 	w, _ := postClamp(t, svc, `{"apply":true,"vacuum":true}`)
 	assert.Equal(t, http.StatusInternalServerError, w.Code, w.Body.String())
+}
+
+// The 200 space_still_held path must still leave a warning in the log, with
+// the real error, sanitized: the response carries only a fixed message, so the
+// log is the only place the reason survives.
+func TestClampActivitySummaries_VacuumFailureAfterCommitLogsAWarning(t *testing.T) {
+	logs := captureSlog(t)
+	svc := handlersmocks.NewMockActivityService(t)
+	res := database.ClampSummariesResult{Scanned: 40, Clamped: 12}
+	// A newline in the cause stands in for a forged log line from a file name.
+	verr := fmt.Errorf("%w: %w", activity.ErrClampVacuumFailed,
+		errors.New("WAL not reset after 8 attempts\nforged-line level=ERROR"))
+	svc.EXPECT().ClampSummaries(mock.Anything, 0, false, true).Return(res, verr)
+
+	w, _ := postClamp(t, svc, `{"apply":true,"vacuum":true}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	out := logs.String()
+	assert.Contains(t, out, "level=WARN")
+	assert.Contains(t, out, "space still held")
+	assert.Contains(t, out, "scanned=40 clamped=12")
+	assert.Contains(t, out, "WAL not reset after 8 attempts")
+	assert.NotContains(t, out, "\nforged-line", "the error must be sanitized before it is logged")
 }

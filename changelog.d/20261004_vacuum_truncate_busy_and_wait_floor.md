@@ -17,12 +17,15 @@ the TRUNCATE only when that PASSIVE copied everything. The TRUNCATE then just
 resets the file. This is the same gate the background loop uses. Without the
 gate, a TRUNCATE holds the WAL write lock while it copies the rebuilt database
 or waits for a reader, and foreground activity writes fail with `SQLITE_BUSY`
-after their 10 s busy timeout. Attempts are retried up to 8 times with backoff.
-The worst case is about 9 s if every TRUNCATE has to wait its 1 s for readers.
-When a reader pins the WAL, no TRUNCATE is issued and the vacuum gives up after
-about 1 s of backoff. In either case `VacuumActivity` returns its existing
-"space still held" error, and the background checkpointer resets the WAL on its
-next idle tick once the reader is gone.
+after their 10 s busy timeout. The checkpoint connection's busy timeout is now
+0, so a TRUNCATE that would have to wait for a reader reports busy at once
+instead of holding the lock. That applies to the background loop's idle-tick
+TRUNCATE too. Attempts are retried up to 8 times with backoff, about 1.1 s in
+all. A reader that opened before the VACUUM keeps PASSIVE from finishing, so no
+TRUNCATE is issued. A reader that opened after it lets PASSIVE finish, and each
+TRUNCATE then reports busy. Either way, if the reader stays, `VacuumActivity`
+returns its existing "space still held" error, and the background checkpointer
+resets the WAL on its next idle tick once the reader is gone.
 
 `POST /api/v1/activity/clamp-summaries` no longer answers 500 when the clamp
 committed but the vacuum or WAL reset failed. It returns 200 with the clamp

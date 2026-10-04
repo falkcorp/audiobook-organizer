@@ -1,5 +1,5 @@
 // file: internal/database/sql_activity_summary_clamp.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 3f1d8a24-6c05-4b9e-8d72-51ac07e4b6f3
 // last-edited: 2026-10-04
 
@@ -286,14 +286,14 @@ func (s *SQLActivityStore) VacuumActivity(ctx context.Context) (time.Duration, e
 }
 
 // vacuumTruncateAttempts and vacuumTruncateMaxBackoff bound how long
-// truncateWALAfterVacuum keeps trying. Each attempt runs a PASSIVE checkpoint,
-// which never waits in SQLite's busy handler, and issues the TRUNCATE only when
-// that PASSIVE copied every frame. The backoffs between the 8 attempts add
-// 10+20+40+80+160+320+500 ms = 1.13 s. A TRUNCATE, when one is issued, can wait
-// up to sqlActCkptBusyTimeoutMS (1 s) for readers, so the worst case is about
-// 8 x 1 s + 1.13 s, roughly 9 s; the common give-up case, a reader pinning an
-// older snapshot so PASSIVE never completes, issues no TRUNCATE and takes about
-// 1.13 s plus the PASSIVE copies. Vars so a test can shorten them.
+// truncateWALAfterVacuum keeps trying. Each attempt runs a PASSIVE checkpoint
+// and issues the TRUNCATE only when that PASSIVE copied every frame. Neither
+// waits in SQLite's busy handler (sqlActCkptBusyTimeoutMS is 0): a busy
+// TRUNCATE reports busy at once. So giving up takes the 10+20+40+80+160+320+500
+// ms = 1.13 s of backoff between the 8 attempts plus the PASSIVE copies, about
+// 1.1 s plus the copy time. A reader that predates the VACUUM keeps PASSIVE
+// short and no TRUNCATE is issued; a reader that arrived after it lets PASSIVE
+// finish and makes the TRUNCATE report busy. Vars so a test can shorten them.
 //
 // Giving up does not strand the space for good: the background checkpointer's
 // idle tick (checkpointAndMaybeTruncate) runs the same PASSIVE-then-TRUNCATE
@@ -332,10 +332,10 @@ var (
 // background loop also uses, so the two queue behind each other instead of
 // colliding.
 //
-// ctx is checked between attempts and interrupts a checkpoint's copy loop, but
-// it is NOT honoured inside SQLite's busy handler: a TRUNCATE already waiting on
-// a lock returns only when the lock frees or sqlActCkptBusyTimeoutMS (1 s)
-// expires.
+// ctx is checked between attempts and interrupts a checkpoint's copy loop.
+// There is no busy-handler wait for it to miss: the checkpoint connection's
+// busy_timeout is 0, so a TRUNCATE that cannot reset the WAL returns busy at
+// once instead of holding the write lock while it waits for readers.
 func (s *SQLActivityStore) truncateWALAfterVacuum(ctx context.Context) error {
 	backoff := 10 * time.Millisecond
 	var res walCheckpointResult
