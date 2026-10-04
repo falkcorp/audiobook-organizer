@@ -1,7 +1,7 @@
 // file: internal/operations/registry/subprocess.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 2b3c4d5e-6f7a-8901-bcde-f01234567890
-// last-edited: 2026-09-25
+// last-edited: 2026-10-04
 
 // Package registry — subprocess runner for Isolate=true operations.
 //
@@ -124,13 +124,22 @@ func RunChildMode(r *Registry) {
 	}
 
 	// Create reporter.
-	ctx := context.Background()
+	ctx, cancelRun := context.WithCancel(context.Background())
+	defer cancelRun()
 	// Subprocess runs in a separate process; no runHandle to stamp, so
 	// touchProgressFn is nil and synchronous mode preserves DB writes.
 	reporter := newDBReporter(ctx, opID, def.ID, def.DisplayName, def.Plugin, "", "", r.store, nil, r.activityRecorder, r.logger, nil, nil, 0, true)
 
 	// Run.
 	runErr := def.Run(ctx, hs.Params, reporter)
+	// os.Exit skips defers, so drain the reporter explicitly: write the progress
+	// line the throttle held back, then cancel and join the flush loop so its
+	// terminal log and progress flush reach the store before the process exits.
+	emitPendingProgress(reporter)
+	cancelRun()
+	if dbr, ok := reporter.(*dbReporter); ok {
+		dbr.awaitFlush(10 * time.Second)
+	}
 	if runErr != nil {
 		writeChildResult(conn, false, runErr.Error())
 		os.Exit(1)

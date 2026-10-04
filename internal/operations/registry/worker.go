@@ -1,7 +1,7 @@
 // file: internal/operations/registry/worker.go
-// version: 2.26.0
+// version: 2.27.0
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-10-03
+// last-edited: 2026-10-04
 
 package registry
 
@@ -474,6 +474,7 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 		// C-5: notify the dep scheduler on ALL terminal transitions (the
 		// subprocess path previously notified on none of them).
 		r.notifyDepTerminal(finalStatus, qr)
+		emitPendingProgress(reporter)
 		emitOpFinishedLog(runCtx, reporter, runStartedAt, finalStatus, runErr, true, h.lastProgressAt.Load() != 0)
 		r.logger.Info("registry: subprocess run finished", "op_id", qr.opID, "status", finalStatus)
 		return false
@@ -649,6 +650,7 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 	// for the same subject can be re-evaluated or failed as appropriate.
 	r.notifyDepTerminal(finalStatus, qr)
 
+	emitPendingProgress(reporter)
 	emitOpFinishedLog(runCtx, reporter, runStartedAt, finalStatus, runErr, false, h.lastProgressAt.Load() != 0)
 	r.logger.Info("registry: run finished", "op_id", qr.opID, "status", finalStatus)
 	return false
@@ -709,6 +711,15 @@ const neverReportedGrace = 60 * time.Second
 // tested without standing up a registry, a store and a worker pool.
 func shouldWarnNeverReported(runDuration time.Duration, everReported bool) bool {
 	return !everReported && runDuration >= neverReportedGrace
+}
+
+// emitPendingProgress writes the progress line the log throttle was holding
+// back, so a run's final progress line lands before its "operation finished"
+// line. A reporter that is not DB-backed has nothing pending.
+func emitPendingProgress(rep Reporter) {
+	if dbr, ok := rep.(*dbReporter); ok {
+		dbr.emitPendingProgressLine()
+	}
 }
 
 // emitOpFinishedLog emits the canonical "operation finished" line through
