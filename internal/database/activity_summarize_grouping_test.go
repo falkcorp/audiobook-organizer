@@ -1,7 +1,7 @@
 // file: internal/database/activity_summarize_grouping_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: d4544dd5-4577-4b7b-8e9c-59e9fdfba58b
-// last-edited: 2026-09-19
+// last-edited: 2026-10-03
 
 package database
 
@@ -44,9 +44,10 @@ func TestSummarize_DoesNotGroupByOperationID(t *testing.T) {
 			ctx := context.Background()
 			day := time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC)
 			const ops = 500
+			entries := make([]ActivityEntry, 0, 2*ops)
 			for i := range ops {
 				for _, src := range []string{"library", "metadata"} {
-					_, err := s.Record(ActivityEntry{
+					entries = append(entries, ActivityEntry{
 						Tier:        "change",
 						Type:        "library.scan",
 						Level:       "info",
@@ -55,9 +56,9 @@ func TestSummarize_DoesNotGroupByOperationID(t *testing.T) {
 						Summary:     "progress",
 						Timestamp:   day.Add(time.Duration(i) * time.Second),
 					})
-					require.NoError(t, err)
 				}
 			}
+			seedSummarizeEntries(t, s, entries)
 
 			deleted, err := s.Summarize(ctx, day.Add(48*time.Hour), "change")
 			require.NoError(t, err)
@@ -123,18 +124,39 @@ func TestSummarize_OldFormatSummaryStillReadable(t *testing.T) {
 	}
 }
 
+// seedSummarizeEntries writes entries through RecordBatch on a backend that
+// has one (Pebble, SQLite) and through Record otherwise (Nuts). RecordBatch
+// runs the same per-row encoding and content key as Record in one commit;
+// these tests are about Summarize, and on SQLite a commit per row made seeding
+// 1,000 rows take 25 s on a loaded Mac (2026-10-03), against a few
+// milliseconds for the Summarize it set up.
+func seedSummarizeEntries(t *testing.T, s summarizeBackend, entries []ActivityEntry) {
+	t.Helper()
+	if b, ok := s.(batchRecorder); ok {
+		got, err := b.RecordBatch(entries)
+		require.NoError(t, err)
+		require.Equal(t, len(entries), got, "every seeded row must be inserted")
+		return
+	}
+	for _, e := range entries {
+		_, err := s.Record(e)
+		require.NoError(t, err)
+	}
+}
+
 // seedSummarizeGroup records n change-tier rows of one (day, type, source)
 // group, each under its own operation id OP00000.. so the ids sort by index.
 func seedSummarizeGroup(t *testing.T, s summarizeBackend, day time.Time, n int) {
 	t.Helper()
+	entries := make([]ActivityEntry, 0, n)
 	for i := range n {
-		_, err := s.Record(ActivityEntry{
+		entries = append(entries, ActivityEntry{
 			Tier: "change", Type: "library.scan", Level: "info", Source: "library",
 			OperationID: fmt.Sprintf("OP%05d", i), Summary: "progress",
 			Timestamp: day.Add(time.Duration(i) * time.Second),
 		})
-		require.NoError(t, err)
 	}
+	seedSummarizeEntries(t, s, entries)
 }
 
 // TestSummarize_OperationIDFindsSummary: a sampled operation id must lead to
