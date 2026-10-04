@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_opchange_index.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 7ce04252-7ac9-421a-ba5e-5f230bbf0ab4
 // last-edited: 2026-10-03
 
@@ -103,6 +103,8 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
+
+	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 )
 
 const (
@@ -252,6 +254,14 @@ func (p *PebbleStore) opChangeByBookIndexBuilt() (bool, error) {
 // TRUST GATE section of the file comment. No I/O.
 func (p *PebbleStore) opChangeByBookIndexTrusted() bool {
 	return p.opChangeByBookTrustedAt.Load() == p.opChangeByBookGen.Load()+1
+}
+
+// publishOpChangeTrust mirrors the trust state into the
+// opchange_by_book_index_trusted gauge. Call it after every change to
+// opChangeByBookTrustedAt or opChangeByBookGen. The gauge is process-global,
+// so with several stores in one process (tests) the last writer wins.
+func (p *PebbleStore) publishOpChangeTrust() {
+	metrics.SetOpChangeByBookIndexTrusted(p.opChangeByBookIndexTrusted())
 }
 
 // opChangeByBookIndexUsable is GetBookChanges' gate: trusted this boot AND the
@@ -478,12 +488,18 @@ func (p *PebbleStore) EnsureOpChangeByBookIndex(ctx context.Context) (OpChangeBy
 	gen := p.opChangeByBookGen.Load()
 	out.Verify, err = p.verifyOpChangeByBook(ctx, nil)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			slog.Info("opchange-index-ensure: verify interrupted by shutdown; GetBookChanges reads the full scan until the next boot verifies",
+				"err", err)
+			return out, err
+		}
 		slog.Error("opchange-index-ensure: verify failed; GetBookChanges stays on the full scan", "err", err)
 		return out, err
 	}
 	rep := out.Verify
 	if rep.SentinelSet && rep.MissingEntries == 0 && rep.UnmarkedUndecodable == 0 {
 		p.opChangeByBookTrustedAt.Store(gen + 1)
+		p.publishOpChangeTrust()
 		out.Trusted = p.opChangeByBookIndexTrusted()
 		slog.Info("opchange-index-ensure: index verified, readers now use it",
 			"rows", rep.Rows, "indexable", rep.Indexable, "undecodable", rep.Undecodable, "trusted", out.Trusted)
@@ -537,6 +553,7 @@ func (p *PebbleStore) backfillOpChangeByBook(ctx context.Context, force bool, pr
 		// Readers leave the index before the sentinel goes: the gate checks
 		// trust first.
 		p.opChangeByBookTrustedAt.Store(0)
+		p.publishOpChangeTrust()
 		reset := p.db.NewBatch()
 		if err := reset.Delete([]byte(opChangeByBookBackfillKey), nil); err != nil {
 			reset.Close()
@@ -650,6 +667,7 @@ func (p *PebbleStore) backfillOpChangeByBook(ctx context.Context, force bool, pr
 		// written since was written by this binary with its entry, so the
 		// index is complete for this generation.
 		p.opChangeByBookTrustedAt.Store(gen + 1)
+		p.publishOpChangeTrust()
 	}
 	if res.Undecodable > 0 {
 		slog.Error("opchange-index-backfill: opchange rows cannot be decoded; GetBookChanges fails "+
