@@ -1,5 +1,5 @@
 // file: web/src/pages/Library.tsx
-// version: 1.96.0
+// version: 1.97.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
 // last-edited: 2026-10-04
 
@@ -1821,14 +1821,29 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     }
 
     try {
+      // Each book's partial-save warnings, labelled with its title: a
+      // rollback whose rows landed but whose history did not is not a plain
+      // success.
+      const perBook: Array<{ label: string; warnings: string[] }> = [];
       for (const book of snapshot.values()) {
-        await api.updateBook(book.id, {
-          library_state: book.library_state,
-          file_path: book.file_path,
-          organized_file_hash: book.organized_file_hash,
-        });
+        const { warnings } = api.splitUpdateWarnings(
+          await api.updateBook(book.id, {
+            library_state: book.library_state,
+            file_path: book.file_path,
+            organized_file_hash: book.organized_file_hash,
+          })
+        );
+        perBook.push({ label: book.title || book.id, warnings });
       }
-      toast('Rollback complete.', 'success');
+      const warned = api.summarizeUpdateWarnings(perBook);
+      if (warned) {
+        toast(
+          `Rollback complete, but ${warned.count} book(s) not saved completely: ${warned.text}`,
+          'warning'
+        );
+      } else {
+        toast('Rollback complete.', 'success');
+      }
       setBulkOrganizeError(null);
       clearLibraryCache();
       await loadAudiobooks();

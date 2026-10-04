@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_mutation.go
-// version: 1.24.0
+// version: 1.25.0
 // guid: e7b1f6a5-b8c9-0d12-ce3f-4a5b6c7d8e9f
 // last-edited: 2026-10-04
 
@@ -910,7 +910,9 @@ func (svc *AudiobookService) updateAudiobook(ctx context.Context, id string, req
 	// The narrator junction: only when the client sent the narrator and the
 	// edit changed it (or cleared a junction-only cast).
 	if narratorSent && !blankNoop[database.FieldKeyNarrator] && pre != nil {
-		svc.syncEditedNarratorJunction(id, pre, updatedBook, narratorClear)
+		for _, w := range svc.syncEditedNarratorJunction(id, pre, updatedBook, narratorClear) {
+			warn(w)
+		}
 	}
 
 	// Save metadata state -- this edit's changes only, merged sub-field by
@@ -976,8 +978,11 @@ func (svc *AudiobookService) updateAudiobook(ctx context.Context, id string, req
 	// (series_id did not change). One row per rename: skipped when the
 	// series_name override/lock row above already recorded it.
 	if seriesRenamed && !overrideRecorded[database.HistoryFieldSeries] {
-		newMetadataStateSvc(svc.store).recordChange(id, database.HistoryFieldSeries,
-			database.ChangeTypeManual, "manual", seriesPlan.renameFrom, seriesPlan.name)
+		if !newMetadataStateSvc(svc.store).recordChange(id, database.HistoryFieldSeries,
+			database.ChangeTypeManual, "manual", seriesPlan.renameFrom, seriesPlan.name) {
+			warn("the edit was saved but its series rename was not recorded in the change history (a queued " +
+				"metadata apply may not see it)")
+		}
 	}
 
 	svc.InvalidateBookCaches()
@@ -1014,7 +1019,11 @@ func (svc *AudiobookService) updateAudiobook(ctx context.Context, id string, req
 //
 // Narrator entities are created here, after the commit, and only for names
 // that go into the junction.
-func (svc *AudiobookService) syncEditedNarratorJunction(id string, pre, written *database.Book, cleared bool) {
+//
+// It returns a warning for each part of the junction it could not write; each
+// is logged as well. The book edit has already committed.
+func (svc *AudiobookService) syncEditedNarratorJunction(id string, pre, written *database.Book, cleared bool) []string {
+	var warnings []string
 	credit := ""
 	if written.Narrator != nil {
 		credit = *written.Narrator
@@ -1027,13 +1036,14 @@ func (svc *AudiobookService) syncEditedNarratorJunction(id string, pre, written 
 	switch {
 	case cleared:
 	case credit == preCredit:
-		return
+		return nil
 	default:
 		authors, aErr := database.LiveBookAuthorNames(svc.store, written)
 		if aErr != nil {
 			singleLog.Warn("UpdateAudiobook %s: narrator junction not updated, book authors unreadable: %v",
 				logger.SanitizeLogValue(id), aErr)
-			return
+			return []string{"the edit was saved but its narrator list (book_narrators) was not updated: the " +
+				"book's authors could not be read: " + aErr.Error()}
 		}
 		people, verdict := util.CleanNarratorCredit(credit, authors)
 		switch verdict {
@@ -1058,6 +1068,11 @@ func (svc *AudiobookService) syncEditedNarratorJunction(id string, pre, written 
 			if err != nil || narrator == nil {
 				singleLog.Warn("UpdateAudiobook %s: narrator %q not created: %v",
 					logger.SanitizeLogValue(id), logger.SanitizeLogValue(name), err)
+				if err == nil {
+					err = errors.New("the narrator was not created")
+				}
+				warnings = append(warnings, fmt.Sprintf("the edit was saved but narrator %q was not added to its "+
+					"narrator list (book_narrators): %v", name, err))
 				continue
 			}
 		}
@@ -1070,7 +1085,9 @@ func (svc *AudiobookService) syncEditedNarratorJunction(id string, pre, written 
 	if err := svc.store.SetBookNarrators(id, rows); err != nil {
 		singleLog.Warn("UpdateAudiobook %s: the edit was saved but book_narrators was not updated: %v",
 			logger.SanitizeLogValue(id), err)
+		warnings = append(warnings, "the edit was saved but its narrator list (book_narrators) was not updated: "+err.Error())
 	}
+	return warnings
 }
 
 // seriesEditPlan is UpdateAudiobook's decision for a sent series name,
