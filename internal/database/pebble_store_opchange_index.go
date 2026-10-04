@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_opchange_index.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7ce04252-7ac9-421a-ba5e-5f230bbf0ab4
 // last-edited: 2026-10-03
 
@@ -15,7 +15,17 @@
 // key order (it was a filtered scan of the whole opchange: range); reading the
 // index in key order keeps that contract byte for byte.
 //
-// Invariant (completeness): for every opchange row with a non-empty BookID B
+// Indexable book ids: non-empty and free of ':'. Only those ids get entries.
+// A book id that contained ':' would make the key ambiguous: book "a:b" with
+// row op1:c1 and book "a" with row b:op1:c1 both map to
+// opchange_by_book:a:b:op1:c1, so deleting one row's entry would delete the
+// other's. Without ':' in the book id the first ':' after the family prefix
+// always ends the book id, so every key names exactly one (book, row) pair and
+// a book's scan prefix holds that book's entries only. Every writer, the
+// backfill and the verify apply the same opChangeIndexable test, and
+// GetBookChanges always full-scans for an id that fails it (as for "").
+//
+// Invariant (completeness): for every opchange row with an indexable BookID B
 // whose JSON decodes, the key opchange_by_book:B:<suffix> exists. Extras are
 // allowed: the reader point-gets each row and keeps it only when the decoded
 // BookID still equals the requested one, so an entry whose row is gone or has
@@ -24,9 +34,9 @@
 // the row:
 //
 //   - CreateOperationChange Sets the entry unconditionally (a rewrite with the
-//     same BookID re-Sets the same key: still one entry), and when the caller
-//     supplied an id whose stored row named another book, Deletes that book's
-//     entry in the same batch (a BookID change moves it).
+//     same BookID re-Sets the same key: still one entry), and when a stored row
+//     under that id named another book, Deletes that book's entry in the same
+//     batch (a BookID change moves it).
 //   - MarkOperationChangesReverted re-Sets each rewritten row's entry.
 //   - PruneOperationChanges Deletes each pruned row's entry.
 //
@@ -34,21 +44,51 @@
 // DeleteOperationV2 never touch opchange rows, and Reset wipes the whole
 // keyspace (index and sentinel included).
 //
-// Rows with an empty BookID are not indexed; GetBookChanges("") keeps the
-// full scan. Rows whose JSON does not decode have no readable BookID; the
-// backfill gives each an opchange_undecodable: marker instead, and the indexed
-// reader fails closed (returns the decode error) while any marked row is still
-// present and still undecodable, exactly as the full scan does.
+// TRUST GATE. This binary keeps the invariant for every row it writes, but it
+// cannot vouch for rows written while it was not running: a binary that
+// predates the index (a rollback) writes rows with no entry, and if a backfill
+// was cut, such rows can sort before its cursor and be skipped when it
+// resumes. The sentinel alone therefore does not let readers use the index.
+// GetBookChanges reads the index only while the store is TRUSTED for the
+// current generation, and trust is set in exactly two places:
+//
+//   - EnsureOpChangeByBookIndex, the startup path: after the backfill, a
+//     read-only VerifyOpChangeByBookIndex pass must report MissingEntries == 0
+//     and UnmarkedUndecodable == 0 with the sentinel set. Either count
+//     non-zero is logged at ERROR and answered with a rebuild, and trust
+//     follows only the rebuild's success.
+//   - RebuildOpChangeByBookIndex, which clears trust before it touches the
+//     sentinel and sets it only after its sentinel commit succeeds.
+//
+// Until then (and after a Reset, which bumps the generation, until the next
+// boot) every GetBookChanges uses the full scan, which is the pre-index
+// behaviour.
+//
+// Undecodable rows have no readable BookID, so they cannot be indexed. The
+// backfill gives each an opchange_undecodable: marker instead, and the
+// indexed reader returns the decode error of any marked row that is still
+// present and still undecodable, as the full scan fails on any undecodable
+// row. What holds exactly: every undecodable row that existed when this
+// boot's verify ran (or when the last rebuild ran) is marked, because the
+// verify counts unmarked ones and a non-zero count forces a rebuild before
+// trust. This binary's writers only ever write valid JSON, so a row that
+// becomes undecodable later can only be corrupted by something outside them;
+// such a row is invisible to the indexed reader until the next boot's verify
+// finds it unmarked and rebuilds, while the scan would fail on it at once.
 //
 // The families sit outside the "opchange:" scan range on purpose ('_' sorts
 // after ':' and after ';'), so GetBookChanges' fallback scan, GetOperationChanges
 // and PruneOperationChanges never walk index keys.
 //
-// ROLLBACK HAZARD: a binary that predates this index does not maintain it. If
-// one writes opchange rows after the sentinel is set, those rows have no entry
-// and GetBookChanges silently under-reports them. After any rollback-then-
-// roll-forward, run maintenance.opchange-book-index-rebuild, which clears the
-// sentinel (readers fall back to the full scan) and rebuilds from the start.
+// LOCKS. opChangeIdxRunSem admits one backfill, rebuild or startup ensure at
+// a time (ctx-aware, see lockOpChangeIdxRun). opChangeJournalMu is an RWMutex
+// over journal writes: CreateOperationChange and MarkOperationChangesReverted
+// hold the read side from their read of the stored row to their commit, and
+// each PruneOperationChanges chunk holds the write side while it re-reads and
+// deletes its rows, so a row rewritten during a prune is re-checked rather
+// than deleted from a stale view. Lock order: a book stripe (ModifyBook) may
+// be held when the journal lock is taken, never the reverse; no journal-lock
+// holder takes a book lock.
 
 package database
 
@@ -59,6 +99,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
@@ -79,6 +120,22 @@ const (
 // never reassign in prod code.
 var opChangeByBookBackfillChunk = 5_000
 
+// opChangeIdxWaitHeartbeat is how often lockOpChangeIdxRun reports progress
+// while it waits for another index pass to finish. A var only so tests can
+// shorten it.
+var opChangeIdxWaitHeartbeat = 30 * time.Second
+
+// OpChangeIndexProgress receives progress from the long opchange index passes.
+// phase is "waiting" (queued behind another index pass), "verify" or
+// "rebuild"; rows is how many journal rows the pass has read so far. It is
+// called once per backfill chunk, every opChangeVerifyProgressRows rows of a
+// verify, and every opChangeIdxWaitHeartbeat while waiting. It may be nil.
+type OpChangeIndexProgress func(phase string, rows int)
+
+// opChangeVerifyProgressRows is how often a verify reports progress (and
+// checks its context).
+const opChangeVerifyProgressRows = 10_000
+
 // opChangeByBookBackfillAfterChunk, when non-nil, runs after each durable
 // chunk commit with the run's commit count so far. A non-nil return aborts the
 // run as if the process had been cut at that point. Test-only; nil in
@@ -90,8 +147,16 @@ func opChangeKey(operationID, changeID string) []byte {
 	return []byte(opChangeKeyPrefix + operationID + ":" + changeID)
 }
 
+// opChangeIndexable reports whether rows naming bookID get index entries:
+// the id must be non-empty and free of ':' (see the file comment for why a ':'
+// would make index keys collide). Every writer, the backfill, the verify and
+// GetBookChanges use this one test.
+func opChangeIndexable(bookID string) bool {
+	return bookID != "" && !strings.Contains(bookID, ":")
+}
+
 // opChangeByBookKey is the index key for the row at primary key primary,
-// filed under bookID.
+// filed under bookID. Callers must have checked opChangeIndexable(bookID).
 func opChangeByBookKey(bookID string, primary []byte) []byte {
 	suffix := primary[len(opChangeKeyPrefix):]
 	k := make([]byte, 0, len(opChangeByBookPrefix)+len(bookID)+1+len(suffix))
@@ -101,9 +166,8 @@ func opChangeByBookKey(bookID string, primary []byte) []byte {
 	return append(k, suffix...)
 }
 
-// opChangeByBookBookPrefix is the scan prefix holding bookID's entries. A book
-// id that itself continues with ':' would share it; the reader's BookID check
-// drops those rows.
+// opChangeByBookBookPrefix is the scan prefix holding bookID's entries. For an
+// indexable bookID (no ':') no other book's entry can share it.
 func opChangeByBookBookPrefix(bookID string) []byte {
 	return []byte(opChangeByBookPrefix + bookID + ":")
 }
@@ -116,10 +180,10 @@ func opChangeUndecodableKey(primary []byte) []byte {
 	return append(k, suffix...)
 }
 
-// stageOpChangeIndex adds the row's index entry to batch. Rows with no book
-// are not indexed (GetBookChanges("") scans).
+// stageOpChangeIndex adds the row's index entry to batch. Rows whose book id
+// is not indexable get none (GetBookChanges scans for those ids).
 func stageOpChangeIndex(batch *pebble.Batch, bookID string, primary []byte) error {
-	if bookID == "" {
+	if !opChangeIndexable(bookID) {
 		return nil
 	}
 	if err := batch.Set(opChangeByBookKey(bookID, primary), nil, nil); err != nil {
@@ -130,7 +194,7 @@ func stageOpChangeIndex(batch *pebble.Batch, bookID string, primary []byte) erro
 
 // unstageOpChangeIndex adds the deletion of the row's index entry to batch.
 func unstageOpChangeIndex(batch *pebble.Batch, bookID string, primary []byte) error {
-	if bookID == "" {
+	if !opChangeIndexable(bookID) {
 		return nil
 	}
 	if err := batch.Delete(opChangeByBookKey(bookID, primary), nil); err != nil {
@@ -183,6 +247,52 @@ func (p *PebbleStore) opChangeByBookIndexBuilt() (bool, error) {
 	}
 }
 
+// opChangeByBookIndexTrusted reports whether readers may use the index: this
+// process verified it (or rebuilt it) for the current generation. See the
+// TRUST GATE section of the file comment. No I/O.
+func (p *PebbleStore) opChangeByBookIndexTrusted() bool {
+	return p.opChangeByBookTrustedAt.Load() == p.opChangeByBookGen.Load()+1
+}
+
+// opChangeByBookIndexUsable is GetBookChanges' gate: trusted this boot AND the
+// sentinel present. Trust is never set without the sentinel, and every path
+// that deletes the sentinel clears trust first, so the sentinel read is a
+// second guard, not the first.
+func (p *PebbleStore) opChangeByBookIndexUsable() (bool, error) {
+	if !p.opChangeByBookIndexTrusted() {
+		return false, nil
+	}
+	return p.opChangeByBookIndexBuilt()
+}
+
+// lockOpChangeIdxRun takes the one-at-a-time slot for index passes, giving up
+// when ctx ends. While it waits it reports phase "waiting" every
+// opChangeIdxWaitHeartbeat, so an op queued behind a long startup verify or
+// rebuild keeps its liveness clock fresh. The returned func releases the slot.
+func (p *PebbleStore) lockOpChangeIdxRun(ctx context.Context, progress OpChangeIndexProgress) (func(), error) {
+	p.opChangeIdxRunOnce.Do(func() { p.opChangeIdxRunSem = make(chan struct{}, 1) })
+	release := func() { <-p.opChangeIdxRunSem }
+	select {
+	case p.opChangeIdxRunSem <- struct{}{}:
+		return release, nil
+	default:
+	}
+	tick := time.NewTicker(opChangeIdxWaitHeartbeat)
+	defer tick.Stop()
+	for {
+		select {
+		case p.opChangeIdxRunSem <- struct{}{}:
+			return release, nil
+		case <-ctx.Done():
+			return nil, fmt.Errorf("waiting for another opchange_by_book index pass: %w", ctx.Err())
+		case <-tick.C:
+			if progress != nil {
+				progress("waiting", 0)
+			}
+		}
+	}
+}
+
 // getBookChangesScan is the pre-index GetBookChanges: every opchange row,
 // decoded, filtered by BookID, in primary key order. Any undecodable row fails
 // the whole call.
@@ -209,7 +319,8 @@ func (p *PebbleStore) getBookChangesScan(bookID string) ([]*OperationChange, err
 	return changes, iter.Error()
 }
 
-// getBookChangesIndexed serves GetBookChanges from the index. The marker
+// getBookChangesIndexed serves GetBookChanges from the index. bookID must be
+// indexable. The marker
 // check, the index walk and every point read come from one snapshot, so the
 // result is one consistent view of the journal, as the single-iterator scan's
 // was: a row moved between books mid-call is seen under exactly one of them.
@@ -246,7 +357,7 @@ func (p *PebbleStore) getBookChangesIndexed(bookID string) ([]*OperationChange, 
 			return nil, uerr
 		}
 		if c.BookID != bookID {
-			continue // stale entry (row moved) or a "<bookID>:..." neighbour
+			continue // stale entry: the row moved to another book
 		}
 		changes = append(changes, &c)
 	}
@@ -299,19 +410,96 @@ type OpChangeByBookBackfillResult struct {
 }
 
 // BackfillOpChangeByBookIndex builds the opchange_by_book: index once, gated by
-// its sentinel, resuming from the cursor an interrupted run left. It is the
-// startup migration: after the first successful run it is a logged no-op.
+// its sentinel, resuming from the cursor an interrupted run left. It never
+// sets trust: readers stay on the full scan until EnsureOpChangeByBookIndex
+// (the startup path, which calls this and then verifies) or a rebuild trusts
+// the index.
 func (p *PebbleStore) BackfillOpChangeByBookIndex(ctx context.Context) (OpChangeByBookBackfillResult, error) {
-	return p.backfillOpChangeByBook(ctx, false)
+	unlock, err := p.lockOpChangeIdxRun(ctx, nil)
+	if err != nil {
+		return OpChangeByBookBackfillResult{}, err
+	}
+	defer unlock()
+	return p.backfillOpChangeByBook(ctx, false, nil)
 }
 
-// RebuildOpChangeByBookIndex is the rollback runbook's repair: it deletes the
-// sentinel and the cursor in one batch, so every GetBookChanges falls back to
-// the full scan, then rebuilds from the first row and sets the sentinel again.
-// If it is cut, the next startup backfill resumes it from its cursor. It only
-// ever Sets entries and markers, so it is safe on a live store.
-func (p *PebbleStore) RebuildOpChangeByBookIndex(ctx context.Context) (OpChangeByBookBackfillResult, error) {
-	return p.backfillOpChangeByBook(ctx, true)
+// RebuildOpChangeByBookIndex is the rollback runbook's repair: it clears
+// trust, deletes the sentinel and the cursor in one batch, so every
+// GetBookChanges falls back to the full scan, then rebuilds from the first row,
+// sets the sentinel again and, only on success, trusts the index. If it is cut,
+// the next startup ensure resumes it from its cursor and verifies before
+// trusting. It only ever Sets entries and markers, so it is safe on a live
+// store. progress (may be nil) is called once per committed chunk, and while
+// waiting behind another index pass.
+func (p *PebbleStore) RebuildOpChangeByBookIndex(ctx context.Context, progress OpChangeIndexProgress) (OpChangeByBookBackfillResult, error) {
+	unlock, err := p.lockOpChangeIdxRun(ctx, progress)
+	if err != nil {
+		return OpChangeByBookBackfillResult{}, err
+	}
+	defer unlock()
+	return p.backfillOpChangeByBook(ctx, true, progress)
+}
+
+// OpChangeByBookEnsureResult summarises one EnsureOpChangeByBookIndex run.
+type OpChangeByBookEnsureResult struct {
+	Backfill OpChangeByBookBackfillResult `json:"backfill"`
+	Verify   OpChangeByBookIndexReport    `json:"verify"`
+	// Rebuilt is true when the verify found missing entries or unmarked
+	// undecodable rows and a rebuild ran; Rebuild is its result.
+	Rebuilt bool                         `json:"rebuilt"`
+	Rebuild OpChangeByBookBackfillResult `json:"rebuild"`
+	// Trusted is true when GetBookChanges may now read the index.
+	Trusted bool `json:"trusted"`
+}
+
+// EnsureOpChangeByBookIndex is the startup path: it runs (or resumes, or
+// skips) the one-time backfill, then a read-only verify, and trusts the index
+// only when the verify finds the sentinel set, no missing entry and no
+// unmarked undecodable row. Otherwise it logs at ERROR, rebuilds, and trusts
+// the index only if the rebuild succeeds. It holds the index-pass slot
+// throughout, so a rebuild op cannot interleave with it.
+//
+// The generation is read once, under the slot, before the verify starts, and
+// trust is stored against that value: a Reset during the verify bumps the
+// generation, so the stored trust no longer matches and readers stay on the
+// scan.
+func (p *PebbleStore) EnsureOpChangeByBookIndex(ctx context.Context) (OpChangeByBookEnsureResult, error) {
+	var out OpChangeByBookEnsureResult
+	unlock, err := p.lockOpChangeIdxRun(ctx, nil)
+	if err != nil {
+		return out, err
+	}
+	defer unlock()
+
+	out.Backfill, err = p.backfillOpChangeByBook(ctx, false, nil)
+	if err != nil {
+		return out, err
+	}
+	gen := p.opChangeByBookGen.Load()
+	out.Verify, err = p.verifyOpChangeByBook(ctx, nil)
+	if err != nil {
+		slog.Error("opchange-index-ensure: verify failed; GetBookChanges stays on the full scan", "err", err)
+		return out, err
+	}
+	rep := out.Verify
+	if rep.SentinelSet && rep.MissingEntries == 0 && rep.UnmarkedUndecodable == 0 {
+		p.opChangeByBookTrustedAt.Store(gen + 1)
+		out.Trusted = p.opChangeByBookIndexTrusted()
+		slog.Info("opchange-index-ensure: index verified, readers now use it",
+			"rows", rep.Rows, "indexable", rep.Indexable, "undecodable", rep.Undecodable, "trusted", out.Trusted)
+		return out, nil
+	}
+	slog.Error("opchange-index-ensure: index does not cover the journal (rows written without entries, "+
+		"e.g. by a binary that predates the index); rebuilding, GetBookChanges stays on the full scan until it finishes",
+		"sentinel_set", rep.SentinelSet, "missing_entries", rep.MissingEntries,
+		"unmarked_undecodable", rep.UnmarkedUndecodable, "sample_missing", rep.SampleMissing)
+	out.Rebuilt = true
+	out.Rebuild, err = p.backfillOpChangeByBook(ctx, true, nil)
+	if err != nil {
+		return out, err
+	}
+	out.Trusted = p.opChangeByBookIndexTrusted()
+	return out, nil
 }
 
 // backfillOpChangeByBook is one streaming pass over the opchange: rows.
@@ -333,7 +521,11 @@ func (p *PebbleStore) RebuildOpChangeByBookIndex(ctx context.Context) (OpChangeB
 // Resume: each chunk's entries and the cursor naming its last row commit in one
 // pebble.Sync batch, so the cursor never runs ahead of a durable entry. The
 // sentinel is written (and the cursor deleted) only after the last chunk.
-func (p *PebbleStore) backfillOpChangeByBook(ctx context.Context, force bool) (OpChangeByBookBackfillResult, error) {
+// Trust: a non-force run never sets it. A force run (rebuild) zeroes it
+// before the sentinel delete and sets it after the sentinel commit succeeds.
+//
+// The caller must hold the index-pass slot (lockOpChangeIdxRun).
+func (p *PebbleStore) backfillOpChangeByBook(ctx context.Context, force bool, progress OpChangeIndexProgress) (OpChangeByBookBackfillResult, error) {
 	var res OpChangeByBookBackfillResult
 	start := time.Now()
 	mode := "backfill"
@@ -341,10 +533,10 @@ func (p *PebbleStore) backfillOpChangeByBook(ctx context.Context, force bool) (O
 		mode = "rebuild"
 	}
 
-	p.opChangeIdxRunMu.Lock()
-	defer p.opChangeIdxRunMu.Unlock()
-
 	if force {
+		// Readers leave the index before the sentinel goes: the gate checks
+		// trust first.
+		p.opChangeByBookTrustedAt.Store(0)
 		reset := p.db.NewBatch()
 		if err := reset.Delete([]byte(opChangeByBookBackfillKey), nil); err != nil {
 			reset.Close()
@@ -417,6 +609,9 @@ func (p *PebbleStore) backfillOpChangeByBook(ctx context.Context, force bool) (O
 			break
 		}
 		res.Commits++
+		if progress != nil {
+			progress(mode, res.Scanned)
+		}
 		if res.Scanned >= nextLog {
 			slog.Info("opchange-index-backfill: progress", "scanned", res.Scanned,
 				"indexed", res.Indexed, "elapsed", time.Since(start).Round(time.Second).String())
@@ -448,7 +643,14 @@ func (p *PebbleStore) backfillOpChangeByBook(ctx context.Context, force bool) (O
 		return res, err
 	}
 	res.Commits++
-	p.opChangeByBookBuiltAt.Store(p.opChangeByBookGen.Load() + 1)
+	gen := p.opChangeByBookGen.Load()
+	p.opChangeByBookBuiltAt.Store(gen + 1)
+	if force {
+		// The rebuild visited every row after clearing trust, and every row
+		// written since was written by this binary with its entry, so the
+		// index is complete for this generation.
+		p.opChangeByBookTrustedAt.Store(gen + 1)
+	}
 	if res.Undecodable > 0 {
 		slog.Error("opchange-index-backfill: opchange rows cannot be decoded; GetBookChanges fails "+
 			"for every book until each is rewritten or removed, as it did before the index",
@@ -482,7 +684,7 @@ func (p *PebbleStore) opChangeBackfillChunk(lower, upper []byte, chunk int, res 
 				return 0, nil, err
 			}
 			undecodable++
-		} else if c.BookID != "" {
+		} else if opChangeIndexable(c.BookID) {
 			if err := batch.Set(opChangeByBookKey(c.BookID, k), nil, nil); err != nil {
 				iter.Close()
 				return 0, nil, err
@@ -521,7 +723,8 @@ const opChangeByBookSampleCap = 50
 type OpChangeByBookIndexReport struct {
 	SentinelSet bool `json:"sentinel_set"`
 	Rows        int  `json:"rows"`
-	// Indexable rows decode and name a book, so they must have an entry.
+	// Indexable rows decode and name an indexable book (non-empty, no ':'),
+	// so they must have an entry.
 	Indexable int `json:"indexable"`
 	// MissingEntries are indexable rows with no entry: once the sentinel is
 	// set, GetBookChanges cannot see them. This is the count a rebuild fixes.
@@ -535,9 +738,15 @@ type OpChangeByBookIndexReport struct {
 }
 
 // VerifyOpChangeByBookIndex checks every journal row against the index from
-// one snapshot. Read-only. One sequential pass with a point read per row: the
-// work is Pebble reads in a single instance, as in the backfill.
-func (p *PebbleStore) VerifyOpChangeByBookIndex(ctx context.Context) (OpChangeByBookIndexReport, error) {
+// one snapshot. Read-only; it neither takes the index-pass slot nor changes
+// trust. One sequential pass with a point read per row: the work is Pebble
+// reads in a single instance, as in the backfill. progress (may be nil) is
+// called every opChangeVerifyProgressRows rows.
+func (p *PebbleStore) VerifyOpChangeByBookIndex(ctx context.Context, progress OpChangeIndexProgress) (OpChangeByBookIndexReport, error) {
+	return p.verifyOpChangeByBook(ctx, progress)
+}
+
+func (p *PebbleStore) verifyOpChangeByBook(ctx context.Context, progress OpChangeIndexProgress) (OpChangeByBookIndexReport, error) {
 	var rep OpChangeByBookIndexReport
 	built, err := p.opChangeByBookIndexBuilt()
 	if err != nil {
@@ -567,9 +776,12 @@ func (p *PebbleStore) VerifyOpChangeByBookIndex(ctx context.Context) (OpChangeBy
 		return true, nil
 	}
 	for iter.First(); iter.Valid(); iter.Next() {
-		if rep.Rows%10_000 == 0 {
+		if rep.Rows%opChangeVerifyProgressRows == 0 {
 			if err := ctx.Err(); err != nil {
 				return rep, err
+			}
+			if progress != nil && rep.Rows > 0 {
+				progress("verify", rep.Rows)
 			}
 		}
 		rep.Rows++
@@ -586,7 +798,7 @@ func (p *PebbleStore) VerifyOpChangeByBookIndex(ctx context.Context) (OpChangeBy
 			}
 			continue
 		}
-		if c.BookID == "" {
+		if !opChangeIndexable(c.BookID) {
 			continue
 		}
 		rep.Indexable++

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/opchange_book_index_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 58b6fa0d-49f4-40bf-b1fe-a55af85a5098
 // last-edited: 2026-10-03
 
@@ -21,11 +21,11 @@ type fakeOpChangeRebuilder struct {
 	rebuilt *bool
 }
 
-func (f fakeOpChangeRebuilder) VerifyOpChangeByBookIndex(context.Context) (database.OpChangeByBookIndexReport, error) {
+func (f fakeOpChangeRebuilder) VerifyOpChangeByBookIndex(context.Context, database.OpChangeIndexProgress) (database.OpChangeByBookIndexReport, error) {
 	return f.rep, nil
 }
 
-func (f fakeOpChangeRebuilder) RebuildOpChangeByBookIndex(context.Context) (database.OpChangeByBookBackfillResult, error) {
+func (f fakeOpChangeRebuilder) RebuildOpChangeByBookIndex(context.Context, database.OpChangeIndexProgress) (database.OpChangeByBookBackfillResult, error) {
 	if f.rebuilt != nil {
 		*f.rebuilt = true
 	}
