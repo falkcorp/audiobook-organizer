@@ -2710,11 +2710,14 @@ func enforceSeriesInvariant(book, old *Book) []Series {
 // that sourced its book from the memdb projection passes no object at all,
 // and the stored one is still lost. A candidate is NOT a loss when:
 //   - it survives in the written row (kept), or
-//   - its id is the stored row's own SeriesID. That object is the display
-//     copy of the series the book was linked to; the write that drops it is
-//     a series clear or move, which the writer records as its own "series"
-//     history row. Recording it again here would double-record every
-//     ordinary series edit.
+//   - its id is the stored row's own SeriesID. That object is only the
+//     display copy of the series the book was linked to, and carries nothing
+//     beyond that link; the write that drops it is a series clear or move.
+//     Writers that record history record that as their own "series" row
+//     (RecordBookEditHistory, the repairs Writer), so a row here would
+//     double-record every ordinary series edit. A writer that records no
+//     history for the move loses only the old link, which the book_ver:
+//     snapshot of this same write keeps.
 //
 // What remains is a stale object (SeriesID nil, or naming another series)
 // that older builds left in the row: the only record of a series, which the
