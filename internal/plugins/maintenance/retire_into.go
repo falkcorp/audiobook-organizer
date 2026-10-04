@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retire_into.go
-// version: 1.9.1
+// version: 1.9.2
 // guid: dadb4da5-0f2d-4678-abf3-4ac97f3ecb66
 // last-edited: 2026-10-04
 
@@ -268,16 +268,22 @@ func followUserStateInto(p *Plugin, w *repairs.Writer, target, id string, slice 
 // demotes whichever sibling this hand-off promoted. Once the hand-off
 // succeeded it is journaled (undo.ChangeTypeBookPrimaryHandoff): that row is
 // the revert's evidence the group's flags were changed, the only case in
-// which it re-crowns over an already-restored demote. A failure is logged,
-// not returned: the retirement itself is done and journaled, and a missing
-// hand-off row only keeps a revert from touching the group's flags.
+// which it re-crowns over an already-restored demote.
 //
-// EXCEPT a lost scan stand-down lease (repairs.ErrStandDownLost), which is
-// returned: EnsureSinglePrimary writes the store directly, so the lease is
-// renewed (Writer.Beat) before it runs, and a refusal there or at the
-// journal must stop the row. Swallowed, it let the rest of the row write on
-// a lapsed lease and a row's last retire report applied with no hand-off;
-// returned, the row aborts and resumeHandOff finishes it on the retry.
+// A failed hand-off (EnsureSinglePrimary's error) is RETURNED, and the row
+// stops: the book is demoted and retired with its group owed a primary.
+// Until 2026-10-03 it was logged and the row went on, so the group could
+// stay without a primary with no note ever written, and a re-plan read the
+// owed hand-off as still pending for as long as the demote stood (a crown by
+// anyone in that group then passed as ours). Returned, the row reports
+// partially applied and its resume re-runs the hand-off (resumeHandOff).
+//
+// A lost scan stand-down lease (repairs.ErrStandDownLost) at the note is
+// returned as well: EnsureSinglePrimary writes the store directly, so the
+// lease is renewed (Writer.Beat) before it runs, and a refusal there or at
+// the journal must stop the row. Any other failure to journal the note is
+// logged: the crown is written, and a missing note only keeps a revert from
+// touching the group's flags.
 func retireHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Writer, fixerID, id, groupID string) error {
 	vps := p.deps.VersionPrimaryStore()
 	if vps == nil {
@@ -292,7 +298,7 @@ func retireHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Wr
 	if err != nil {
 		fragLog.Warn("%s: primary hand-off in group %s: %s", fixerID,
 			logger.SanitizeLogValue(groupID), logger.SanitizeLogValue(err.Error()))
-		return nil
+		return fmt.Errorf("primary hand-off of %s in group %s: %w", id, groupID, err)
 	}
 	if err := w.Journal(id, undo.ChangeTypeBookPrimaryHandoff, "version_group_id", undo.HandOffCrownedValue(res.PrimaryID), groupID); err != nil {
 		if errors.Is(err, repairs.ErrStandDownLost) {
