@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_summarize_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e0e16a93-b555-4a92-bfc9-537f0f51543e
-// last-edited: 2026-09-19
+// last-edited: 2026-10-03
 
 package database
 
@@ -24,7 +24,13 @@ func TestSQLSummarize_StatsDescribeExactlyTheDeletedRows(t *testing.T) {
 	day := time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC)
 	seedSummarizeGroup(t, s, day, 5)
 	summarizeTestHooks.beforeGroup = func() {
-		seedSummarizeGroup(t, s, day.Add(time.Hour), 1)
+		// A live write landing mid-Summarize: one Record, the call production's
+		// live writers make (seedSummarizeGroup seeds through RecordBatch).
+		_, err := s.Record(ActivityEntry{
+			Tier: "change", Type: "library.scan", Level: "info", Source: "library",
+			OperationID: "OP00000", Summary: "progress", Timestamp: day.Add(time.Hour),
+		})
+		require.NoError(t, err)
 	}
 	t.Cleanup(func() { summarizeTestHooks.beforeGroup = nil })
 
