@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.27.0
+// version: 1.28.0
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
 // last-edited: 2026-10-04
 
@@ -2196,8 +2196,9 @@ func (f *fragmentFixer) continueInterrupted(ctx context.Context, lib *fragLibrar
 }
 
 // The actions a held interrupted row offers. Each is one the tests carry out
-// (fragment_review8_test.go) and that clears the hold; a held row offers
-// only the ones that work for its reason.
+// (fragment_review8_test.go, and fragment_review9_test.go's action matrix:
+// every shape, scenario and offered action) and that clears the hold; a held
+// row offers only the ones that work for its reason.
 
 // actRevert: a full revert of the run's apply operation(s) marks the plan
 // record reverted with them (only a revert that restores every row does).

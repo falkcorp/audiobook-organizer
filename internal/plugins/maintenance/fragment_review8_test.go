@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_review8_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2dc36c12-0ba5-4ca9-90b1-ea5c5c5b27c9
 // last-edited: 2026-10-04
 
@@ -308,7 +308,7 @@ func TestFragmentFixer_HeldRowActionsClearTheHold(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, sb.IsSoftDeleted())
 		row := held(t, f, r)
-		require.Contains(t, row.SkipReason, actFinish(x), "the dedup merge's winner is found through the version group")
+		require.Contains(t, row.SkipReason, actFinish(x), "the dedup merge's winner is found through the redirect the merge records")
 		require.NotContains(t, row.SkipReason, "deleted")
 		f.finishInto(t, r.BookIDs, x)
 		requireCleared(t, f.plan(t, "op-plan3"), r.RowID)

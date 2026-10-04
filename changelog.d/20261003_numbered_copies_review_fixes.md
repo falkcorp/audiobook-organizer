@@ -148,3 +148,24 @@
   their own entries are gone.
 - **A revert error lists every refused change** (the first five, then a
   count) instead of only the first.
+- **A surviving book that was deleted no longer looks merged.** A repair
+  whose surviving book had been deleted outright was read as merged into its
+  version group's main book. The offered "finish into that book" then cleared
+  the hold while five chapter files stayed on the deleted book, out of every
+  view. A retired survivor now counts as merged only when the merge left
+  evidence: the book it was merged into, or the redirect a duplicate merge
+  records. Otherwise the row says the book was deleted and offers a restore.
+  Duplicate merges now always record that redirect, including for books no
+  listening app had seen.
+- **Finishing a repair into the book a duplicate merge chose moves the
+  repair's chapters too.** When a duplicate merge retired the surviving book
+  into another book, finishing the repair left the chapters it had already
+  gathered on the retired book (all 86 tested cut points). A new row now
+  moves those chapters onto the winning book. It is undoable, and the retired
+  book keeps only its own files.
+- **A repair whose job log aged out continues at every point it was cut
+  off.** The repair's own version-group changes are worked out from its plan
+  once their log entries are gone (12 of 24 cut points were refused before).
+- **"Revert" is offered only when the revert can succeed,** and repairs of
+  one folder that name different books get one shared set of actions that
+  works for all of them.
