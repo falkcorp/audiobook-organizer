@@ -1,5 +1,5 @@
 // file: internal/database/sql_activity_summary_clamp.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3f1d8a24-6c05-4b9e-8d72-51ac07e4b6f3
 // last-edited: 2026-10-04
 
@@ -286,31 +286,59 @@ func (s *SQLActivityStore) VacuumActivity(ctx context.Context) (time.Duration, e
 }
 
 // vacuumTruncateAttempts and vacuumTruncateMaxBackoff bound how long
-// truncateWALAfterVacuum keeps retrying a busy TRUNCATE. Each attempt can
-// itself wait up to sqlActCkptBusyTimeoutMS in SQLite's busy handler, so the
-// worst case is about attempts x (1 s + backoff). Vars so a test can shorten
-// them.
+// truncateWALAfterVacuum keeps retrying a busy TRUNCATE. Each TRUNCATE attempt
+// can itself sit in SQLite's busy handler for up to sqlActCkptBusyTimeoutMS
+// (1 s), and the backoffs between the 8 attempts add 10+20+40+80+160+320+500 ms,
+// so the worst case is about 8 x 1 s + 1.13 s, roughly 9 s. Vars so a test can
+// shorten them.
+//
+// Giving up does not strand the space for good: the background checkpointer's
+// idle tick (checkpointAndMaybeTruncate) runs PASSIVE and then TRUNCATE whenever
+// a tick sees no foreground writes, so a WAL the vacuum could not reset is reset
+// on the first quiet tick after whatever held it lets go
+// (TestVacuumActivity_IdleTickReclaimsWhatAGivenUpTruncateLeft).
 var (
 	vacuumTruncateAttempts   = 8
 	vacuumTruncateMaxBackoff = 500 * time.Millisecond
 )
 
-// truncateWALAfterVacuum runs wal_checkpoint(TRUNCATE) until it reports that
-// it actually ran, retrying with backoff while it is busy.
+// truncateWALAfterVacuum empties the -wal VACUUM just filled: a PASSIVE
+// checkpoint to copy the frames, then wal_checkpoint(TRUNCATE) to reset the
+// file, retrying with backoff while the TRUNCATE reports busy.
+//
+// PASSIVE FIRST, every attempt. TRUNCATE holds the WAL write lock for the whole
+// time it copies frames into the database file. After a VACUUM that copy is the
+// entire rebuilt database (11 GB on prod on 2026-09-08), and every foreground
+// Record waiting on the lock gives up after its busy_timeout(10000) with
+// SQLITE_BUSY: a review probe on a 66 MB WAL took 33.8 s to copy and failed 3
+// Records. PASSIVE copies the same frames without taking the write lock, so
+// writers keep committing; the TRUNCATE that follows only has to copy what
+// arrived meanwhile and reset an already-copied WAL. Same order as the
+// background loop's checkpointAndMaybeTruncate.
 //
 // A busy TRUNCATE is not an SQL error. It returns an ordinary row with busy=1
 // (and log/checkpointed of -1) and leaves the -wal exactly as it was. This used
 // to go through ExecContext, which discards that row, so a TRUNCATE that lost
-// the race with the background checkpointer (sql_activity_checkpointer.go, its
-// own connection, every 30 s) was reported as success with the WAL still
-// holding the space VACUUM freed. walCheckpoint scans the row and also runs on
-// the checkpoint connection, the same single-connection handle the background
-// loop uses, so the two now queue behind each other instead of colliding; the
-// retry covers what remains (a long-lived reader snapshot, another process).
+// the race with the background checkpointer was reported as success with the
+// WAL still holding the space VACUUM freed. walCheckpoint scans the row and
+// runs on the checkpoint connection, the single-connection handle the
+// background loop also uses, so the two queue behind each other instead of
+// colliding; the retry covers what remains (a long-lived reader snapshot,
+// another process).
+//
+// ctx is checked between attempts and interrupts a checkpoint's copy loop, but
+// it is NOT honoured inside SQLite's busy handler: an attempt already waiting
+// on a lock returns only when the lock frees or sqlActCkptBusyTimeoutMS (1 s)
+// expires.
 func (s *SQLActivityStore) truncateWALAfterVacuum(ctx context.Context) error {
 	backoff := 10 * time.Millisecond
 	var res walCheckpointResult
 	for attempt := 1; ; attempt++ {
+		// A busy or incomplete PASSIVE is fine: it copied what it could, and
+		// TRUNCATE below is the step that must succeed.
+		if _, err := s.walCheckpoint(ctx, "PASSIVE"); err != nil {
+			return fmt.Errorf("passive checkpoint before truncate: %w", err)
+		}
 		var err error
 		res, err = s.walCheckpoint(ctx, "TRUNCATE")
 		if err != nil {

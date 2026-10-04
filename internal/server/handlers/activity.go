@@ -1,7 +1,7 @@
 // file: internal/server/handlers/activity.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: d4e5f6a7-b8c9-0123-def0-234567890123
-// last-edited: 2026-09-26
+// last-edited: 2026-10-04
 
 package handlers
 
@@ -702,18 +702,32 @@ func (h *ActivityHandler) ClampActivitySummaries(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "summary clamp requires the SQLite activity backend")
 		return
 	}
+	// A committed clamp whose vacuum or WAL reset failed is a SUCCESSFUL clamp:
+	// the rows were rewritten and res is complete. Answering 500 would tell the
+	// caller nothing happened and invite a re-run of a pass that may have taken
+	// hours. Report it as 200 with space_still_held, so the caller knows the
+	// freed space is not back on disk yet and why.
+	var vacuumErr error
+	if errors.Is(err, activity.ErrClampVacuumFailed) {
+		vacuumErr, err = err, nil
+	}
 	if err != nil {
 		httputil.InternalError(c, "activity summary clamp failed", err)
 		return
 	}
 
-	httputil.RespondWithOK(c, gin.H{
-		"dry_run":         !req.Apply,
-		"scanned":         res.Scanned,
-		"clamped":         res.Clamped,
-		"bytes_before":    res.BytesBefore,
-		"bytes_after":     res.BytesAfter,
-		"bytes_reclaimed": res.Reclaimed(),
-		"truncated":       res.Truncated,
-	})
+	body := gin.H{
+		"dry_run":          !req.Apply,
+		"scanned":          res.Scanned,
+		"clamped":          res.Clamped,
+		"bytes_before":     res.BytesBefore,
+		"bytes_after":      res.BytesAfter,
+		"bytes_reclaimed":  res.Reclaimed(),
+		"truncated":        res.Truncated,
+		"space_still_held": vacuumErr != nil,
+	}
+	if vacuumErr != nil {
+		body["vacuum_error"] = vacuumErr.Error()
+	}
+	httputil.RespondWithOK(c, body)
 }

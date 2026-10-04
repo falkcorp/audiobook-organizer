@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_checkpointer.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5e0b7c2a-91d4-4f3e-8a6b-2c7d9e1f4a08
-// last-edited: 2026-09-14
+// last-edited: 2026-10-04
 
 // WAL checkpointing for SQLActivityStore.
 //
@@ -78,6 +78,8 @@ var ckptLog = logger.New("activity-checkpoint")
 // and checkpointed is how many of them are now in the database file.
 type walCheckpointResult struct {
 	Busy, Log, Checkpointed int
+	// Elapsed is how long the pragma took, including any busy-handler wait.
+	Elapsed time.Duration
 }
 
 // complete reports whether every WAL frame is in the database file.
@@ -172,8 +174,10 @@ func (s *SQLActivityStore) noteWrite() { s.ckptr.writes.Add(1) }
 // the checkpoint's copy loop honours the interrupt).
 func (s *SQLActivityStore) walCheckpoint(ctx context.Context, mode string) (walCheckpointResult, error) {
 	var res walCheckpointResult
+	start := time.Now()
 	err := s.ckpt.QueryRowContext(ctx, "PRAGMA wal_checkpoint("+mode+")").
 		Scan(&res.Busy, &res.Log, &res.Checkpointed)
+	res.Elapsed = time.Since(start)
 	if hook := s.ckptr.hook.Load(); hook != nil {
 		(*hook)(mode, res, err)
 	}

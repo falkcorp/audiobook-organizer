@@ -1,5 +1,5 @@
 // file: internal/database/sql_activity_summary_clamp_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 8b47e0c9-2f13-45da-9e60-c4a1d5382bf7
 // last-edited: 2026-10-04
 
@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -273,6 +274,11 @@ func TestVacuumActivity_TruncatesTheWAL(t *testing.T) {
 // reported success with the -wal still full: the 2026-09-08 incident the
 // truncate exists to prevent. A 1 ms checkpointer interval makes the collision
 // near-certain, so this test failed on every run before the fix.
+//
+// It passes now mainly because the vacuum's checkpoints run on the same single
+// connection (s.ckpt) as the background loop's, so the two can no longer run at
+// the same moment; the busy retry is the second line of defence, exercised by
+// TestVacuumActivity_BusyTruncateSucceedsOnALaterAttempt.
 func TestVacuumActivity_TruncatesTheWALWhileTheCheckpointerRuns(t *testing.T) {
 	s, _ := openCkptTestStore(t, time.Millisecond)
 
@@ -340,5 +346,206 @@ func TestVacuumActivity_ReportsSpaceStillHeldWhenTruncateStaysBusy(t *testing.T)
 	}
 	if got := int(busySeen.Load()); got < vacuumTruncateAttempts {
 		t.Errorf("busy TRUNCATE attempts = %d, want at least %d (every attempt retried, none skipped)", got, vacuumTruncateAttempts)
+	}
+}
+
+// holdReaderSnapshot opens a read transaction on its own connection, which pins
+// the current WAL snapshot so a TRUNCATE checkpoint reports busy until release
+// is called. release is idempotent.
+func holdReaderSnapshot(t *testing.T, s *SQLActivityStore) (release func()) {
+	t.Helper()
+	ctx := context.Background()
+	conn, err := s.reader.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.ExecContext(ctx, "BEGIN"); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM activity").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	var once sync.Once
+	release = func() {
+		once.Do(func() {
+			_, _ = conn.ExecContext(ctx, "ROLLBACK")
+			_ = conn.Close()
+		})
+	}
+	t.Cleanup(release)
+	return release
+}
+
+// TestVacuumActivity_BusyTruncateSucceedsOnALaterAttempt: a TRUNCATE that is
+// busy on its first attempt must be retried, and a later attempt that gets
+// through must count as success with the WAL emptied.
+func TestVacuumActivity_BusyTruncateSucceedsOnALaterAttempt(t *testing.T) {
+	s := newTestSQLStore(t)
+	for range 10 {
+		insertLegacyOversizedSummary(t, s, strings.Repeat("v", activitySummaryMax*8))
+	}
+	release := holdReaderSnapshot(t, s)
+
+	var busy, truncates atomic.Int32
+	hook := ckptHookFn(func(mode string, res walCheckpointResult, _ error) {
+		if mode != "TRUNCATE" {
+			return
+		}
+		truncates.Add(1)
+		if res.Busy != 0 && busy.Add(1) == 1 {
+			release() // whatever held the WAL lets go before the retry
+		}
+	})
+	s.ckptr.hook.Store(&hook)
+	t.Cleanup(func() { s.ckptr.hook.Store(nil) })
+
+	if _, err := s.VacuumActivity(context.Background()); err != nil {
+		t.Fatalf("vacuum: %v (a busy first attempt must be retried, not reported)", err)
+	}
+	if got := busy.Load(); got != 1 {
+		t.Fatalf("busy TRUNCATE attempts = %d, want exactly 1 (the fixture must make the first attempt busy)", got)
+	}
+	if got := truncates.Load(); got < 2 {
+		t.Fatalf("TRUNCATE attempts = %d, want at least 2 (busy, then the retry that succeeded)", got)
+	}
+	if fi, err := os.Stat(s.path + "-wal"); err == nil && fi.Size() != 0 {
+		t.Fatalf("vacuum reported success but the -wal still holds %d bytes", fi.Size())
+	}
+}
+
+// TestVacuumActivity_IdleTickReclaimsWhatAGivenUpTruncateLeft: when the vacuum
+// gives up on a busy TRUNCATE and reports the space still held, the background
+// checkpointer's idle tick must reset the WAL once the holder lets go, so the
+// space is not stranded until a restart.
+func TestVacuumActivity_IdleTickReclaimsWhatAGivenUpTruncateLeft(t *testing.T) {
+	s, _ := openCkptTestStore(t, 20*time.Millisecond)
+	oldAttempts, oldBackoff := vacuumTruncateAttempts, vacuumTruncateMaxBackoff
+	vacuumTruncateAttempts, vacuumTruncateMaxBackoff = 1, time.Millisecond
+	t.Cleanup(func() { vacuumTruncateAttempts, vacuumTruncateMaxBackoff = oldAttempts, oldBackoff })
+
+	for range 10 {
+		insertLegacyOversizedSummary(t, s, strings.Repeat("v", activitySummaryMax*8))
+	}
+	release := holdReaderSnapshot(t, s)
+	if _, err := s.VacuumActivity(context.Background()); err == nil || !strings.Contains(err.Error(), "space still held") {
+		t.Fatalf("VacuumActivity err = %v; want space still held while a reader pins the WAL", err)
+	}
+	walPath := s.path + "-wal"
+	if fi, err := os.Stat(walPath); err != nil || fi.Size() == 0 {
+		t.Fatalf("fixture: the -wal should still hold the vacuum's frames (stat %v, err %v)", fi, err)
+	}
+
+	release()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		fi, err := os.Stat(walPath)
+		if err != nil || fi.Size() == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the background checkpointer never reset the -wal (%d bytes) after the reader let go", fi.Size())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// TestVacuumActivity_TruncateDoesNotStallForegroundWrites is the regression
+// test for the post-vacuum TRUNCATE holding the WAL write lock for the whole
+// frame copy. After a VACUUM the WAL holds the entire rebuilt database, and a
+// TRUNCATE that copies it blocks every Record for that long; on prod (an 11 GB
+// WAL) Records would wait out busy_timeout(10000) and fail with SQLITE_BUSY.
+// truncateWALAfterVacuum now copies with PASSIVE first, which does not block
+// writers, so the TRUNCATE only resets an already-copied WAL.
+//
+// It asserts three things while Records run continuously through the truncate:
+//   - no Record fails;
+//   - the first checkpoint the truncate runs is PASSIVE, and it does the copy;
+//   - the slowest Record is well under the time the frame copy took, which is
+//     only true if writers were not blocked for the copy.
+func TestVacuumActivity_TruncateDoesNotStallForegroundWrites(t *testing.T) {
+	s := newTestSQLStore(t)
+	// ~16 MB of rows, so the rebuilt database VACUUM writes through the WAL
+	// takes measurable time to copy back. One transaction: 500 separate commits
+	// took over a minute on a loaded disk.
+	tx, err := s.writer.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	big := strings.Repeat("v", activitySummaryMax*8)
+	for i := range 250 {
+		if _, err := tx.Exec(s.dialect.rebind(sqlActInsert), fmt.Sprintf("stall-fixture-%d", i),
+			time.Now().UnixMilli(), "info", "system", "error", "itunes", "", "", big, nil, "[]", nil); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.writer.Exec(`VACUUM`); err != nil {
+		t.Fatalf("vacuum: %v", err)
+	}
+
+	var mu sync.Mutex
+	var modes []string
+	var copyTime time.Duration
+	hook := ckptHookFn(func(mode string, res walCheckpointResult, _ error) {
+		mu.Lock()
+		defer mu.Unlock()
+		modes = append(modes, mode)
+		copyTime = max(copyTime, res.Elapsed)
+	})
+	s.ckptr.hook.Store(&hook)
+	t.Cleanup(func() { s.ckptr.hook.Store(nil) })
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	var recErrs atomic.Int32
+	var maxLatency atomic.Int64
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		base := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			start := time.Now()
+			_, err := s.Record(ActivityEntry{Timestamp: base.Add(time.Duration(i) * time.Millisecond),
+				Tier: "info", Type: "t", Level: "info", Source: "s", Summary: fmt.Sprintf("during-truncate-%d", i)})
+			if err != nil {
+				recErrs.Add(1)
+				fmt.Fprintf(os.Stderr, "Record during truncate failed: %v\n", err)
+			}
+			if d := int64(time.Since(start)); d > maxLatency.Load() {
+				maxLatency.Store(d)
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+
+	err = s.truncateWALAfterVacuum(context.Background())
+	close(stop)
+	waitGroupOrFatal(t, &wg, "the Record loop")
+	if err != nil {
+		t.Fatalf("truncateWALAfterVacuum: %v", err)
+	}
+
+	if n := recErrs.Load(); n != 0 {
+		t.Fatalf("%d Records failed during the post-vacuum truncate; writers must never error", n)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	lat := time.Duration(maxLatency.Load())
+	t.Logf("frame copy took %v; slowest Record %v; checkpoints %v", copyTime, lat, modes)
+	if copyTime >= 50*time.Millisecond && lat >= copyTime/2 {
+		t.Errorf("slowest Record took %v against a %v frame copy: writers were blocked for the copy", lat, copyTime)
+	} else if copyTime < 50*time.Millisecond {
+		t.Logf("frame copy took only %v, too fast to compare Record latency against; order and error checks still run", copyTime)
+	}
+	if len(modes) == 0 || modes[0] != "PASSIVE" {
+		t.Errorf("checkpoint order = %v; the copy must be done by a PASSIVE checkpoint before any TRUNCATE", modes)
 	}
 }

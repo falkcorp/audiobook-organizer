@@ -1,5 +1,5 @@
 // file: internal/database/sql_activity_store.go
-// version: 1.19.0
+// version: 1.19.1
 // guid: 2c9a7e14-8b30-4d6f-a1e2-5f7b9c0d3e28
 // last-edited: 2026-10-04
 
@@ -124,12 +124,12 @@ func OpenSQLiteActivityStore(path string) (*SQLActivityStore, error) {
 	return openSQLiteActivityStore(path, sqlActCheckpointInterval)
 }
 
-// OpenSQLiteActivityStoreWithCheckpointInterval is OpenSQLiteActivityStore with
+// OpenSQLiteActivityStoreWithCheckpointIntervalForTest is OpenSQLiteActivityStore with
 // the background checkpointer's interval chosen by the caller. It exists for
 // tests outside this package that need the checkpointer to run often enough to
 // collide with a foreground checkpoint (internal/activity's vacuum test); the
 // server always uses OpenSQLiteActivityStore.
-func OpenSQLiteActivityStoreWithCheckpointInterval(path string, interval time.Duration) (*SQLActivityStore, error) {
+func OpenSQLiteActivityStoreWithCheckpointIntervalForTest(path string, interval time.Duration) (*SQLActivityStore, error) {
 	return openSQLiteActivityStore(path, interval)
 }
 

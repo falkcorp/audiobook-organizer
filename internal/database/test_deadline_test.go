@@ -1,5 +1,5 @@
 // file: internal/database/test_deadline_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: e4cb4c5c-b25d-414e-815a-01772db5bb16
 // last-edited: 2026-10-04
 
@@ -221,15 +221,11 @@ func awaitOrFatal(t *testing.T, helper, what string, block func()) {
 	t.Errorf("%s (goroutine dump written to stderr)", diag)
 
 	expired := time.Now()
-	grace := time.NewTimer(budget.grace)
-	defer grace.Stop()
-	select {
-	case <-done:
+	if waitDoneWithin(done, budget.grace) {
 		t.Logf("%s: %s: %s finished %v after the wait bound expired; failing only now, so this test's deferred "+
 			"calls and cleanups cannot close state under them", t.Name(), helper, what,
 			time.Since(expired).Round(time.Millisecond))
 		t.FailNow()
-	case <-grace.C:
 	}
 
 	exitStillRunning(t, helper, what, budget)
@@ -245,21 +241,42 @@ func awaitStarvedWait(t *testing.T, helper, what string, budget waitBudget, done
 		"waiting up to %v more before calling it a hang. %s\n", t.Name(), helper, what,
 		budget.bound.Round(time.Millisecond), budget.grace.Round(time.Millisecond), budget.diagnosis())
 	expired := time.Now()
-	grace := time.NewTimer(budget.grace)
-	defer grace.Stop()
-	select {
-	case <-done:
+	if waitDoneWithin(done, budget.grace) {
 		t.Logf("%s: %s finished %v after its deadline-shortened %v bound expired; finished work is not a "+
 			"deadlock, so the wait passes (see test_deadline_test.go)", helper, what,
 			time.Since(expired).Round(time.Millisecond), budget.bound.Round(time.Millisecond))
 		return
-	case <-grace.C:
 	}
 	fmt.Fprintf(os.Stderr, "--- all goroutines at grace expiry (%s) ---\n%s--- end goroutine dump ---\n",
 		t.Name(), allGoroutineStacks())
 	t.Errorf("%s: %s: still waiting for %s after its bound and grace (goroutine dump written to stderr): %s",
 		t.Name(), helper, what, budget.diagnosis())
 	exitStillRunning(t, helper, what, budget)
+}
+
+// waitDoneWithin reports whether done is closed within d. It checks done
+// before starting the timer, so work that has already finished counts as
+// finished even when d is 0: a select over a closed channel and an expired
+// zero timer picks either case at random.
+func waitDoneWithin(done <-chan struct{}, d time.Duration) bool {
+	select {
+	case <-done:
+		return true
+	default:
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return true
+	case <-timer.C:
+		select {
+		case <-done:
+			return true
+		default:
+			return false
+		}
+	}
 }
 
 // exitStillRunning ends the test binary because the awaited goroutines outlived
