@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_book_lock.go
-// version: 1.6.2
+// version: 1.6.3
 // guid: 3f8c2a91-6d4e-4b7a-9e15-c0d2a8b47f63
 // last-edited: 2026-10-03
 
@@ -98,6 +98,12 @@ func (p *PebbleStore) ModifyBook(id string, fn func(*Book) error) (*Book, error)
 // Narrator the stored row held before fn ran, read under the same hold, so the
 // junction sync compares against what was really overwritten.
 func (p *PebbleStore) modifyBookLocked(id string, fn func(*Book) error) (*Book, string, error) {
+	return p.modifyBookLockedMode(id, fn, bookWriteOpts{})
+}
+
+// modifyBookLockedMode is the read-fn-write body shared by ModifyBook and
+// SeedLegacyBookRowForTest; opts selects the write variation.
+func (p *PebbleStore) modifyBookLockedMode(id string, fn func(*Book) error, opts bookWriteOpts) (*Book, string, error) {
 	unlock := p.lockBook(id)
 	defer unlock()
 
@@ -115,7 +121,7 @@ func (p *PebbleStore) modifyBookLocked(id string, fn func(*Book) error) (*Book, 
 		}
 		return nil, "", err
 	}
-	updated, err := p.updateBookLocked(id, fresh)
+	updated, err := p.updateBookLockedMode(id, fresh, opts)
 	return updated, before, err
 }
 
