@@ -1,5 +1,5 @@
 // file: internal/database/metadata_field_lock_source.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: bee79451-3875-44ce-b66f-6dda1128e3ce
 // last-edited: 2026-10-03
 
@@ -59,12 +59,27 @@ func (s MetadataFieldState) IsRepairLock() bool {
 // ClaimRepairLocks and the revert's lock lift take the same stripe. A snapshot
 // read outside it and saved later erased whatever landed in between: a
 // person's override, a clear, a repair lock. Striped by book id like the book
-// write stripes; no code path holds two at once, and none takes a book write
-// stripe while holding one of these.
+// write stripes; no code path holds two at once.
+//
+// LOCK ORDER: field-state stripe, then book write stripe -- never the other
+// way. The operation revert's metadata_update restore
+// (audiobooks.RevertService.revertMetadataUpdate) holds a book's field-state
+// stripe across its paired-lock check and the ModifyBook that puts the value
+// back, so a person's lock take-over cannot land between the two. Nothing may
+// take one of these stripes inside a ModifyBook/UpdateBook callback or from
+// the book change observer: with both kinds hashed into buckets, two
+// different books can share stripes, so a book->state path anywhere would
+// deadlock against the revert. Audited 2026-10-03: every caller of
+// RecordUserOverrides, ClaimRepairLocks, repairs.Writer.LockFields,
+// metafetch.WithStateSnapshot and the revert's lock lift runs after its book
+// write returns, and the observer (realtime.BookChangeCoalescer) only records
+// the id.
 var metadataStateLocks [256]sync.Mutex
 
 // LockMetadataState takes bookID's field-state stripe and returns its
-// release. Nothing slow may run under it: Pebble reads and writes only.
+// release. Nothing slow may run under it: Pebble reads and writes only (the
+// operation revert's single-book ModifyBook is the one book write that does,
+// in the lock order above).
 func LockMetadataState(bookID string) func() {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(bookID))
