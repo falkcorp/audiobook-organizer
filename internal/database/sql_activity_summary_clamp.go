@@ -279,8 +279,59 @@ func (s *SQLActivityStore) VacuumActivity(ctx context.Context) (time.Duration, e
 	// Failure here is not fatal to the vacuum, which has already committed:
 	// report it so the caller can say the space is still held, rather than
 	// discarding a successful multi-GB rebuild.
-	if _, err := s.writer.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+	if err := s.truncateWALAfterVacuum(ctx); err != nil {
 		return time.Since(start), fmt.Errorf("sql_activity: vacuum succeeded but WAL truncate failed (space still held): %w", err)
 	}
 	return time.Since(start), nil
+}
+
+// vacuumTruncateAttempts and vacuumTruncateMaxBackoff bound how long
+// truncateWALAfterVacuum keeps retrying a busy TRUNCATE. Each attempt can
+// itself wait up to sqlActCkptBusyTimeoutMS in SQLite's busy handler, so the
+// worst case is about attempts x (1 s + backoff). Vars so a test can shorten
+// them.
+var (
+	vacuumTruncateAttempts   = 8
+	vacuumTruncateMaxBackoff = 500 * time.Millisecond
+)
+
+// truncateWALAfterVacuum runs wal_checkpoint(TRUNCATE) until it reports that
+// it actually ran, retrying with backoff while it is busy.
+//
+// A busy TRUNCATE is not an SQL error. It returns an ordinary row with busy=1
+// (and log/checkpointed of -1) and leaves the -wal exactly as it was. This used
+// to go through ExecContext, which discards that row, so a TRUNCATE that lost
+// the race with the background checkpointer (sql_activity_checkpointer.go, its
+// own connection, every 30 s) was reported as success with the WAL still
+// holding the space VACUUM freed. walCheckpoint scans the row and also runs on
+// the checkpoint connection, the same single-connection handle the background
+// loop uses, so the two now queue behind each other instead of colliding; the
+// retry covers what remains (a long-lived reader snapshot, another process).
+func (s *SQLActivityStore) truncateWALAfterVacuum(ctx context.Context) error {
+	backoff := 10 * time.Millisecond
+	var res walCheckpointResult
+	for attempt := 1; ; attempt++ {
+		var err error
+		res, err = s.walCheckpoint(ctx, "TRUNCATE")
+		if err != nil {
+			return err
+		}
+		if res.complete() {
+			return nil
+		}
+		if attempt >= vacuumTruncateAttempts {
+			break
+		}
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("checkpoint still busy (busy=%d wal_frames=%d checkpointed=%d) when cancelled: %w",
+				res.Busy, res.Log, res.Checkpointed, ctx.Err())
+		case <-timer.C:
+		}
+		backoff = min(2*backoff, vacuumTruncateMaxBackoff)
+	}
+	return fmt.Errorf("checkpoint still busy after %d attempts (busy=%d wal_frames=%d checkpointed=%d)",
+		vacuumTruncateAttempts, res.Busy, res.Log, res.Checkpointed)
 }

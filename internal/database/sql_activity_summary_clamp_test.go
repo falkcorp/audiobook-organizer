@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -259,5 +260,85 @@ func TestVacuumActivity_TruncatesTheWAL(t *testing.T) {
 			"VACUUM in WAL mode must be followed by PRAGMA wal_checkpoint(TRUNCATE); "+
 			"the automatic checkpoint is PASSIVE and never shrinks the file, so the "+
 			"space VACUUM freed stays held by the -wal", before.Size(), after.Size())
+	}
+}
+
+// TestVacuumActivity_TruncatesTheWALWhileTheCheckpointerRuns is the regression
+// test for VacuumActivity treating a busy TRUNCATE as success.
+//
+// The background checkpointer runs PASSIVE/TRUNCATE on its own connection. A
+// TRUNCATE issued while that one holds the checkpoint lock returns a normal
+// result row with busy=1 and does nothing, which is NOT an SQL error. The old
+// code ran the pragma through ExecContext and threw that row away, so the vacuum
+// reported success with the -wal still full: the 2026-09-08 incident the
+// truncate exists to prevent. A 1 ms checkpointer interval makes the collision
+// near-certain, so this test failed on every run before the fix.
+func TestVacuumActivity_TruncatesTheWALWhileTheCheckpointerRuns(t *testing.T) {
+	s, _ := openCkptTestStore(t, time.Millisecond)
+
+	for range 40 {
+		insertLegacyOversizedSummary(t, s, strings.Repeat("v", activitySummaryMax*8))
+	}
+	if _, err := s.ClampOversizedSummaries(context.Background(), ClampSummariesOptions{}); err != nil {
+		t.Fatalf("clamp: %v", err)
+	}
+
+	for i := range 5 {
+		if _, err := s.VacuumActivity(context.Background()); err != nil {
+			t.Fatalf("vacuum %d: %v", i, err)
+		}
+		// Success must mean the WAL really is empty. Writes are quiescent, so
+		// a 0-byte (or removed) -wal is the only state a completed TRUNCATE
+		// can leave.
+		if fi, err := os.Stat(s.path + "-wal"); err == nil && fi.Size() != 0 {
+			t.Fatalf("vacuum %d reported success but the -wal still holds %d bytes", i, fi.Size())
+		}
+	}
+}
+
+// TestVacuumActivity_ReportsSpaceStillHeldWhenTruncateStaysBusy: a reader that
+// keeps a WAL snapshot open blocks TRUNCATE for as long as it lives. Retrying
+// cannot fix that, so after the bounded retries VacuumActivity must return the
+// "space still held" error rather than claim the WAL was emptied.
+func TestVacuumActivity_ReportsSpaceStillHeldWhenTruncateStaysBusy(t *testing.T) {
+	s := newTestSQLStore(t)
+	oldAttempts, oldBackoff := vacuumTruncateAttempts, vacuumTruncateMaxBackoff
+	vacuumTruncateAttempts, vacuumTruncateMaxBackoff = 2, 10*time.Millisecond
+	t.Cleanup(func() { vacuumTruncateAttempts, vacuumTruncateMaxBackoff = oldAttempts, oldBackoff })
+
+	for range 10 {
+		insertLegacyOversizedSummary(t, s, strings.Repeat("v", activitySummaryMax*8))
+	}
+
+	ctx := context.Background()
+	conn, err := s.reader.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	if _, err := conn.ExecContext(ctx, "BEGIN"); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM activity").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _, _ = conn.ExecContext(ctx, "ROLLBACK") }()
+
+	var busySeen atomic.Int32 // the hook also fires from the checkpointer goroutine
+	hook := ckptHookFn(func(mode string, res walCheckpointResult, _ error) {
+		if mode == "TRUNCATE" && res.Busy != 0 {
+			busySeen.Add(1)
+		}
+	})
+	s.ckptr.hook.Store(&hook)
+	t.Cleanup(func() { s.ckptr.hook.Store(nil) })
+
+	_, err = s.VacuumActivity(ctx)
+	if err == nil || !strings.Contains(err.Error(), "space still held") {
+		t.Fatalf("VacuumActivity err = %v; want the space-still-held error while a reader pins the WAL", err)
+	}
+	if got := int(busySeen.Load()); got < vacuumTruncateAttempts {
+		t.Errorf("busy TRUNCATE attempts = %d, want at least %d (every attempt retried, none skipped)", got, vacuumTruncateAttempts)
 	}
 }
