@@ -1,7 +1,7 @@
 // file: internal/organizer/landing_contract_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 5b7d2c19-8e4a-4f63-9a1c-2d7e6f0b3c58
-// last-edited: 2026-09-19
+// last-edited: 2026-10-04
 
 package organizer
 
@@ -815,4 +815,40 @@ func TestCreateOrganizedVersion_DurabilityUnknownIsNotRolledBack(t *testing.T) {
 	require.Len(t, authors, 1, "the organized copy lost its authors to a rollback of a write that was applied")
 	_, err = os.Stat(dst)
 	require.NoError(t, err, "the landed file must not be removed")
+}
+
+// The organized copy keeps its credits' positions. Dropping them put every
+// credit at position 0, and a later add-only metadata apply appended at
+// max+1 = 1: the "J. N. Chaney @0, Jonathan P. Brazee @0, combined @1"
+// shape found on production on 2026-10-04.
+func TestCreateOrganizedVersion_CopiesCreditPositions(t *testing.T) {
+	store := newLandingTestStore(t)
+	rootDir := t.TempDir()
+	config.AppConfig = config.Config{RootDir: rootDir}
+	srcDir := t.TempDir()
+	src := filepath.Join(srcDir, "ch01.mp3")
+	require.NoError(t, os.WriteFile(src, []byte("audio"), 0o644))
+	targetDir := filepath.Join(rootDir, "Author", "Title")
+	require.NoError(t, os.MkdirAll(targetDir, 0o775))
+	dst := filepath.Join(targetDir, "Title - 01.mp3")
+	require.NoError(t, os.WriteFile(dst, []byte("audio"), 0o644))
+
+	a, err := store.CreateAuthor("J. N. Chaney")
+	require.NoError(t, err)
+	b, err := store.CreateAuthor("Jonathan P. Brazee")
+	require.NoError(t, err)
+	book, err := store.CreateBook(&database.Book{Title: "Title", FilePath: srcDir, AuthorID: &a.ID})
+	require.NoError(t, err)
+	require.NoError(t, store.SetBookAuthors(book.ID, []database.BookAuthor{
+		{BookID: book.ID, AuthorID: a.ID, Role: "author", Position: 0},
+		{BookID: book.ID, AuthorID: b.ID, Role: "author", Position: 1}}))
+	require.NoError(t, store.CreateBookFile(&database.BookFile{BookID: book.ID, FilePath: src, TrackNumber: 1}))
+
+	created, err := NewService(store).CreateOrganizedVersion(book, &Landing{Path: targetDir, Files: map[string]string{src: dst}, Created: []string{dst}}, "", &noopLogger{})
+	require.NoError(t, err)
+	authors, err := store.GetBookAuthors(created.ID)
+	require.NoError(t, err)
+	require.Len(t, authors, 2)
+	require.Equal(t, 0, authors[0].Position)
+	require.Equal(t, 1, authors[1].Position, "the second credit keeps position 1, not 0")
 }

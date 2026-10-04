@@ -1,7 +1,7 @@
 // file: internal/server/handlers/versions_split_one_book_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6f8a0c2e-4b1d-4a3f-9c5e-7d9f1b3a5c64
-// last-edited: 2026-09-13
+// last-edited: 2026-10-04
 
 package handlers_test
 
@@ -54,9 +54,13 @@ func TestSplitSegmentsToBooks_AsOneBook(t *testing.T) {
 		out.ID = "new"
 		return &out, nil
 	})
-	store.EXPECT().GetBookAuthors("src").Return([]database.BookAuthor{{BookID: "src", AuthorID: 7, Role: "author"}}, nil)
+	// Two credits: the copy keeps their positions (dropping them put every
+	// credit at position 0).
+	store.EXPECT().GetBookAuthors("src").Return([]database.BookAuthor{{BookID: "src", AuthorID: 7, Role: "author"},
+		{BookID: "src", AuthorID: 8, Role: "author", Position: 1}}, nil)
 	store.EXPECT().SetBookAuthors("new", mock.MatchedBy(func(a []database.BookAuthor) bool {
-		return len(a) == 1 && a[0].BookID == "new" && a[0].AuthorID == 7
+		return len(a) == 2 && a[0].BookID == "new" && a[0].AuthorID == 7 && a[0].Position == 0 &&
+			a[1].AuthorID == 8 && a[1].Position == 1
 	})).Return(nil)
 	store.EXPECT().MoveBookFilesToBook([]string{"f1", "f2"}, "src", "new").Return(nil).Once()
 	store.EXPECT().GetExternalIDsForBook("src").Return(nil, nil).Maybe()

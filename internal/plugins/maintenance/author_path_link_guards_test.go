@@ -1,14 +1,17 @@
 // file: internal/plugins/maintenance/author_path_link_guards_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 8f21c5a7-4d63-4b90-a1e8-6c07f2d95b31
-// last-edited: 2026-09-19
+// last-edited: 2026-10-04
 
 package maintenance
 
 import (
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // The SAFETY BARS of maintenance.author-path-link, in their own file because
@@ -192,4 +195,33 @@ func TestAuthorPathLinkNonPersonRow(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A folder naming several people (or matching a row that does) is held, never
+// linked or minted: one author row named after two people is the combined
+// record maintenance.repair-combined-author-credits exists to repair.
+func TestAuthorPathLinkClassify_CompositeNameIsHeld(t *testing.T) {
+	idx := &authorPathLinkIndex{
+		byNormalized: map[string]database.Author{}, bookCount: map[int]int{}, ownBookCount: map[int]int{},
+		byLength: map[int][]string{}, titleFragment: map[string]bool{},
+	}
+	add := func(id int, name string) {
+		n := normalizeAuthorNameForLink(name)
+		idx.byNormalized[n] = database.Author{ID: id, Name: name}
+		idx.byLength[len(n)] = append(idx.byLength[len(n)], n)
+		idx.bookCount[id], idx.ownBookCount[id] = 50, 50
+	}
+	add(1, "Shirtaloon")
+	add(2, "Travis Deverell")
+	add(3, "J.N. Chaney, Jonathan P. Brazee")
+
+	// Derived, not a row: the splitter splits it.
+	ch := authorPathLinkClassify(&database.BookCore{ID: "b1", FilePath: "/lib/Ann Leckie, Zed Newperson/Book One/book.m4b"}, idx)
+	require.Equal(t, authorPathLinkSuspectComposite, ch.Outcome, "%+v", ch)
+	// Derived, both pieces existing authors.
+	ch = authorPathLinkClassify(&database.BookCore{ID: "b2", FilePath: "/lib/Travis Deverell, Shirtaloon/Book One/book.m4b"}, idx)
+	require.Equal(t, authorPathLinkSuspectComposite, ch.Outcome, "%+v", ch)
+	// An exact match to an existing combined row.
+	ch = authorPathLinkClassify(&database.BookCore{ID: "b3", FilePath: "/lib/J.N. Chaney, Jonathan P. Brazee/Mission Creep/book.m4b"}, idx)
+	require.Equal(t, authorPathLinkSuspectComposite, ch.Outcome, "%+v", ch)
 }

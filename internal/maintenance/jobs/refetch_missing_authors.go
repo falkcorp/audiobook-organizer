@@ -173,63 +173,19 @@ func (j *refetchMissingAuthorsJob) Run(ctx context.Context, store maintenance.Jo
 			continue
 		}
 
-		// Find or create the author records, then link them to the book. A
-		// tag naming several people is split by the shared splitter
-		// (authorcredit.Resolve) and each part resolved or created; until
-		// 2026-10-04 the whole tag was created as one author. A combined tag
-		// of existing authors the splitter will not split is no author.
-		authors, err := authorcredit.Resolve(store, authorName, authorcredit.PrepareGate)
-		if stderrors.Is(err, authorcredit.ErrCombinedCredit) {
+		switch outcome, lerr := linkTagAuthors(store, b.ID, authorName); outcome {
+		case tagAuthorsCombined:
 			logger.New("refetch-missing-authors").Warn("book %s: tag author %q joins existing authors the splitter will not split; leaving it authorless",
 				b.ID, logger.SanitizeLogValue(authorName))
 			skipped++
 			continue
-		}
-		if err != nil || len(authors) == 0 {
-			slog.Error("failed to create author for book", "authorName", authorName, "bookID", b.ID, "err", err)
+		case tagAuthorsFailed:
+			slog.Error("failed to set author for book", "authorName", authorName, "bookID", b.ID, "err", lerr)
 			errors++
 			continue
-		}
-		author := &authors[0]
-
-		// Write through ModifyBook: it re-reads the full row (b is a slim
-		// Core projection) under the book's write lock and sets only
-		// AuthorID, so a column another writer commits while the tags were
-		// being read from disk is not reverted (audit A1#15). "Still has no
-		// author" is decided on the fresh row: one filled meanwhile is kept.
-		authorID := author.ID
-		full, err := store.ModifyBook(b.ID, func(cur *database.Book) error {
-			if cur.AuthorID != nil {
-				return database.ErrSkipBookWrite
-			}
-			cur.AuthorID = &authorID
-			return nil
-		})
-		if err != nil {
-			slog.Error("failed to update book", "b", b.ID, "err", err)
+		case tagAuthorsPartial:
+			slog.Error("failed to credit co-authors", "b", b.ID, "err", lerr)
 			errors++
-			continue
-		}
-		if full == nil {
-			slog.Error("book vanished before author update", "b", b.ID)
-			errors++
-			continue
-		}
-
-		// A multi-author tag: every author in the junction, add-only, only
-		// when the row's primary is the tag's first author (a primary another
-		// writer filled meanwhile is theirs).
-		if len(authors) > 1 && full.AuthorID != nil && *full.AuthorID == authors[0].ID {
-			if _, cerr := store.ModifyBookAuthors(b.ID, func(cur []database.BookAuthor) ([]database.BookAuthor, error) {
-				next, changed := authorcredit.AddCredits(cur, b.ID, full.AuthorID, authors)
-				if !changed {
-					return nil, database.ErrSkipBookAuthorsWrite
-				}
-				return next, nil
-			}); cerr != nil {
-				slog.Error("failed to credit co-authors", "b", b.ID, "err", cerr)
-				errors++
-			}
 		}
 
 		slog.Info("refetch-missing-authors set author on book", "opID", opID, "authorName", authorName, "bookID", b.ID, "bookTitle", b.Title)
@@ -241,6 +197,74 @@ func (j *refetchMissingAuthorsJob) Run(ctx context.Context, store maintenance.Jo
 	slog.Info(summary)
 	slog.Info("", "opID", opID, "summary", summary)
 	return nil
+}
+
+// Outcomes of linkTagAuthors.
+const (
+	tagAuthorsLinked   = "linked"
+	tagAuthorsCombined = "combined"
+	tagAuthorsFailed   = "failed"
+	// tagAuthorsPartial: the primary was set but the co-authors were not
+	// credited.
+	tagAuthorsPartial = "partial"
+)
+
+// tagAuthorStore is what linkTagAuthors reads and writes.
+type tagAuthorStore interface {
+	authorcredit.Store
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
+	ModifyBookAuthors(bookID string, fn func([]database.BookAuthor) ([]database.BookAuthor, error)) ([]database.BookAuthor, error)
+}
+
+// linkTagAuthors finds or creates the author records a tag names and links
+// them to the book. A tag naming several people is split by the shared
+// splitter (authorcredit.Resolve) and each part resolved or created; until
+// 2026-10-04 the whole tag was created as one author. A combined tag of
+// existing authors the splitter will not split is no author
+// (tagAuthorsCombined).
+//
+// The primary goes through ModifyBook: it re-reads the full row under the
+// book's write lock and sets only AuthorID, so a column another writer
+// commits while the tags were being read from disk is not reverted (audit
+// A1#15). "Still has no author" is decided on the fresh row: one filled
+// meanwhile is kept, and then no co-author is added either.
+func linkTagAuthors(store tagAuthorStore, bookID, authorName string) (string, error) {
+	authors, err := authorcredit.Resolve(store, authorName, authorcredit.PrepareGate)
+	if stderrors.Is(err, authorcredit.ErrCombinedCredit) {
+		return tagAuthorsCombined, nil
+	}
+	if err != nil {
+		return tagAuthorsFailed, err
+	}
+	if len(authors) == 0 {
+		return tagAuthorsFailed, fmt.Errorf("no author resolved from %q", authorName)
+	}
+	authorID := authors[0].ID
+	full, err := store.ModifyBook(bookID, func(cur *database.Book) error {
+		if cur.AuthorID != nil {
+			return database.ErrSkipBookWrite
+		}
+		cur.AuthorID = &authorID
+		return nil
+	})
+	if err != nil {
+		return tagAuthorsFailed, fmt.Errorf("update book: %w", err)
+	}
+	if full == nil {
+		return tagAuthorsFailed, fmt.Errorf("book vanished before author update")
+	}
+	if len(authors) > 1 && full.AuthorID != nil && *full.AuthorID == authorID {
+		if _, cerr := store.ModifyBookAuthors(bookID, func(cur []database.BookAuthor) ([]database.BookAuthor, error) {
+			next, changed := authorcredit.AddCredits(cur, bookID, full.AuthorID, authors)
+			if !changed {
+				return nil, database.ErrSkipBookAuthorsWrite
+			}
+			return next, nil
+		}); cerr != nil {
+			return tagAuthorsPartial, cerr
+		}
+	}
+	return tagAuthorsLinked, nil
 }
 
 // fileExt returns the lowercase file extension including the leading dot.

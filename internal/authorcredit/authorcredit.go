@@ -153,10 +153,13 @@ func SplitNames(name string, gate Gate) []string {
 }
 
 // surnameFirst reports the one shape of a two-piece comma credit that is one
-// person: "King, Stephen" (a single word after the comma).
+// person: a bare surname, a comma, a given name ("King, Stephen"). Both sides
+// one word: "Travis Deverell, Shirtaloon" is two people even though its
+// right side is one word, and when both are existing authors it must not be
+// created as one.
 func surnameFirst(name string, parts []string) bool {
 	return len(parts) == 2 && strings.Count(name, ",") == 1 && !strings.ContainsAny(name, ";/&") &&
-		len(strings.Fields(parts[1])) == 1
+		len(strings.Fields(parts[0])) == 1 && len(strings.Fields(parts[1])) == 1
 }
 
 // LooksCombined reports whether name is a credit of several people: the

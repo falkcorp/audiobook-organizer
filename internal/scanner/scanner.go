@@ -4266,7 +4266,7 @@ func resolveAuthorIDs(authorName string) ([]int, error) {
 		// through. Same meaning -- no author -- never a failed save.
 		return nil, nil
 	case err != nil:
-		return nil, fmt.Errorf("author resolve failed: %w", err)
+		return nil, err
 	}
 	ids := make([]int, 0, len(authors))
 	for _, a := range authors {
@@ -4284,13 +4284,20 @@ var scannerInitialsRe = regexp.MustCompile(`([A-Z]\.)([A-Z])`)
 type scannerAuthorStore struct{}
 
 func (scannerAuthorStore) GetAuthorByName(name string) (*database.Author, error) {
-	return getStore().GetAuthorByName(name)
+	a, err := getStore().GetAuthorByName(name)
+	if err != nil {
+		return nil, fmt.Errorf("author lookup failed: %w", err)
+	}
+	return a, nil
 }
 
 func (scannerAuthorStore) CreateAuthor(name string) (*database.Author, error) {
 	author, err := getStore().CreateAuthor(name)
-	if err == nil || !isUniqueConstraintError(err) {
-		return author, err
+	if err != nil && !isUniqueConstraintError(err) {
+		return nil, fmt.Errorf("author create failed: %w", err)
+	}
+	if err == nil {
+		return author, nil
 	}
 	author, err = getStore().GetAuthorByName(name)
 	if err != nil {
