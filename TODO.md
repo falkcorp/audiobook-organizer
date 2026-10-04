@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.75.5 -->
+<!-- version: 10.75.6 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-10-03 -->
+<!-- last-edited: 2026-10-04 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,188 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **HISTORY-LIMIT-FIELD-ORDER** `PebbleStore.GetBookChangeHistory(bookID, limit)`
+      is not newest-first across fields. Keys are
+      `metadata_change:<book>:<FIELD>:<nanos>`, so the scan comes back sorted
+      field by field. The function reverses that list and cuts it at `limit`
+      (`internal/database/pebble_store_metadata.go`, `GetBookChangeHistory`).
+      Any caller passing a limit therefore drops whole fields, starting with
+      the ones early in the alphabet, whatever their age:
+      - the activity changelog (limit 100);
+      - `revert_metadata_fetch` (limit 50). Its "fetched" rows of
+        `author_name` and `description` sort first, so they are the first
+        to be cut;
+      - the version-group fixer and `retire_into` (limit 200).
+
+      Since 2026-10-03 operation reverts record history rows, and those rows
+      land in late-sorting fields (`series`, `marked_for_deletion`,
+      `is_primary_version`), which makes the cut slightly worse.
+      Callers that need correctness today must read with `1<<30` or field
+      by field (`GetMetadataChangeHistory`), as the relink-stale-series fixer
+      does.
+
+      Done means: the function returns rows newest-first across fields before
+      applying `limit`, by merging the per-field iterators on `ChangedAt` or
+      by adding a time-ordered secondary index. Also add a test where 200
+      newer rows of a late field must not hide an older row of an early field
+      beyond the limit, and an older row must not displace a newer one.
+
+- [ ] **EDIT-AUTHOR-CASE-RENAME** A case-only author edit in the book editor
+      ("alice able" -> "Alice Able") resolves to the same author row and does
+      not rename it; the book keeps showing the row's spelling. Series got
+      this fix in PR #3698 (a sole-member row is renamed after the commit
+      through the guarded RenameSeriesIf; a shared row keeps its name). The
+      store has no guarded author rename yet (only UpdateAuthorName), so
+      authors need a RenameAuthorIf (compare-and-set under the author name
+      index lock, refusing a name another author answers to), then the same
+      sole-credited rule in audiobooks.UpdateAudiobook, with tests.
+
+- [ ] **CLAIM-LOCK-RACE** A hand-picked metadata apply claims the repair locks of the fields it changed AFTER its commit (`metafetch/service_apply.go`, `database.ClaimRepairLocks`). A revert of that repair landing in between lifts the lock first; the claim then finds nothing and the person's new value is left unlocked. Tiny window; close it by claiming inside the commit's hold or re-locking as the person when the repair lock is already gone. (PR #3699 third review, NIT 6.)
+
+- [ ] **EDIT-DIALOG-LOCK-TOGGLES** The lock buttons in the metadata edit
+      dialog do nothing on save. MetadataEditDialog keeps them in local
+      `lockOverrides` state (toggleLock / isFieldLocked) but handleSave calls
+      `onSave(audiobook, dirtyFields)` only, and BookDetail.handleEditSave
+      builds overrides from dirtyFields alone, so a lock or unlock the user
+      toggled without editing the field never reaches the server. Send the
+      toggles (lock-only overrides `{"locked": true|false}` are already
+      handled by PUT /audiobooks/:id), with a Vitest covering a toggle-only
+      save.
+
+- [ ] **EDIT-DIALOG-YEAR-CLEAR** Clearing the Year box in the book editor does
+      not clear the year. BookDetail.handleEditSave sends
+      `audiobook_release_year: updated.audiobook_release_year || updated.year
+      || book.audiobook_release_year || undefined`, so an emptied box falls
+      back to the stored year, and the dirty-field override sends null, which
+      ApplyOverrideToPayload ignores (it only accepts a number for
+      audiobook_release_year). Make an emptied box send a clear end to end
+      (null top-level and override, applied as a nil year), with a Go test and
+      a Vitest.
+
+- [ ] **EDIT-JOIN-WRITE-STRIPE** Run the book edit endpoint's post-commit
+      join writes (book_authors from SetBookAuthors, book_narrators from
+      SetBookNarrators, in audiobooks.UpdateAudiobook) under the book's write
+      stripe. They now run after ModifyBook commits but outside the stripe,
+      because PebbleStore.lockBook is unexported and the join writers cannot
+      be called from inside ModifyBook's callback. A concurrent apply or
+      narrator sync touching the same join in that window can be lost either
+      way. Done = a store API that commits the row and its join rows under
+      one stripe hold (or a stripe-aware join writer), used by the endpoint,
+      with a race test.
+
+- [ ] **EDIT-STALE-SERIES-NOTE** Tell the user when a book edit resolved a
+      field to something other than what they typed. Today the only case is
+      a series name that matched the book's stale embedded series name after
+      the series row was renamed: the edit keeps the link and shows the row's
+      current name, and logs it (audiobooks.planSeriesEdit). PUT
+      /audiobooks/:id returns the bare book with no notes or warnings field,
+      so the editor cannot show it. Done = a notes/warnings field on the
+      response, filled by UpdateAudiobook, shown by BookDetail.
+
+- [ ] **HISTORY-BATCH-SYNC** Every metadata history row is its own synced
+      Pebble write (`PebbleStore.RecordMetadataChange` → `p.db.Set(..., pebble.Sync)`),
+      so `database.RecordBookEditHistory` costs one fsync per changed column.
+      Since 2026-10-03 an operation revert records history for every column it
+      restores (`internal/audiobooks/revert.go` `recordedModifyBook`), on top of
+      the manual-edit and batch-edit paths. Estimate: a revert restoring 1–3
+      columns on each of 1,000 books is 1,000–3,000 extra fsyncs, about 1–15 s
+      at 1–5 ms per fsync on the app-data NVMe, serialized under the merge lock.
+      A clean batch method was not added in PR #3703: it means a new method on
+      `database.MetadataChangeStore`, which every store and mock must then
+      implement. Done means: `RecordMetadataChanges([]*MetadataChangeRecord)`
+      writes one book's rows in one `pebble.Batch` with a single sync,
+      `RecordBookEditHistory` uses it, and a test proves partial failure
+      records nothing.
+
+- [ ] **MERGE-UNDO-STRIPE** The merge undo (`internal/merge/combine_journal.go` ~994-1003) restores field-state rows without `database.LockMetadataState`, so a restore can race `repairs.Writer.LockFields` / `database.ClaimRepairLocks` (which upsert the copy they read), and it can restore a repair lock (`LockSource` "repair:<op>") whose operation has since been reverted. Take the stripe around the restore and drop a repair lock source whose operation is reverted. Manual and rare. (PR #3699 third review, NIT 5.)
+
+- [ ] **OPCHANGE-INDEX-FOLLOWUPS** Two gaps left in the `opchange_by_book:`
+      index (PR #3704). (1) `PruneOperationChanges` and
+      `verifyOpChangeByBook` each hold one iterator (one Pebble snapshot, and
+      the sstables it pins) for the whole pass over the journal. Re-open an
+      iterator per chunk at a cursor, as `backfillOpChangeByBook` does. (2)
+      Index entries orphaned by a rollback binary (one that deletes or
+      rewrites journal rows without maintaining the index) are never
+      collected: verify only counts journal rows missing an entry, and the
+      rebuild only Sets entries. Done means: verify counts extra entries whose
+      journal row is gone or names another book, reports them, and the
+      rebuild deletes them in the same chunked batches, with a test that
+      plants an orphan and sees it removed.
+
+- [ ] **OPS-V2-RESTART-FLAG** `Registry.Start` never clears `shuttingDown`, so a
+      registry restarted after `Shutdown` never dispatches anything again.
+      `Shutdown` sets the flag at `internal/operations/registry/registry.go`
+      (`r.shuttingDown.Store(true)`), and nothing ever stores `false`.
+      `dispatchCycle` returns at its first line while the flag is set, and
+      since 2026-10-03 (PR #3701) `executeRun`'s shutdown pickup gate also
+      drops every run while it is set. Yet `Start` resets `notifyStopped`, and
+      the `logWriteSetDeferral` comment in `dispatcher.go` says Start is
+      "explicitly restartable after Shutdown". Production builds a new
+      registry per process, so it is not affected today; the trap is for
+      tests and any future in-process restart. Done means: decide whether
+      restart is supported. If it is, clear the flag at the top of `Start`
+      (before the dispatcher and workers start) and add a
+      Start→Shutdown→Start test that dispatches an op on the second Start. If
+      it is not, have `Start` refuse a second call and fix the comment.
+
+- [ ] **EDIT-BLANK-LOCKS** Repair the field locks the book edit endpoint wrote
+      before PR #3698. Every BookDetail save sent description, publisher,
+      language, narrator, author and series as "" or as their current value,
+      and the endpoint locked each one: at "" for an empty field, at the old
+      value for every other field present. Those locks stop metadata fetches
+      from filling or upgrading the field. Count them on prod first (locked
+      overrides whose value is "" or equals the column, with no matching
+      user_edit history row that changed the value), then build a dry-run
+      repair op that unlocks them; owner approves before the live run. Done
+      = count reported, op merged, dry run reviewed, live run applied.
+
+- [ ] **SCAN-FAIL-RESET-SYNC** Every successful file parse in a scan does a
+      synced Pebble delete, even when the file has no scan-fail counter.
+      `scanner.resetScanFailCount` runs after every successful read in
+      `ProcessBooksParallel`, and `PebbleStore.ResetScanFailCount`
+      (`internal/database/pebble_store_quarantine.go`) is
+      `p.db.Delete(key, pebble.Sync)`. A full-library scan re-reads tens of
+      thousands of files, so that is one fsync per file to delete keys that
+      almost never exist: the counter only exists for a file that failed. Done
+      means: measure the cost on a real scan first. If it matters, delete only
+      when a counter exists (a `Get` is cheap), or use `pebble.NoSync` for the
+      reset. A lost reset only means one extra counted failure toward
+      auto-quarantine, so keep `Sync` on `IncrScanFailCount`, where it is the
+      quarantine evidence. Whatever changes, keep the reset's error logging
+      added in PR #3701.
+
+- [ ] **SERIES-CLEAR-STALE-NO-TRACE** A top-level `series_name: ""` edit of a
+      book whose `series_id` is already nil (but whose stored row still has the
+      embedded `Series` object, so GET shows a series) records no history and
+      no lock. `SeriesID` goes nil to nil, so `RecordBookEditHistory` sees no
+      change, `Series` is not a tracked column, and the field extractor writes
+      no lock for `""`. Verified 2026-10-03 against a real Pebble store. The
+      web BookDetail dialog is NOT affected: a dirty series field also sends
+      `overrides.series_name = {value: "", locked: true}`, which records an
+      override history row and a lock. Any client that sends only the
+      top-level key (API, batch) leaves no trace. `maintenance.relink-stale-series`
+      then cannot tell that clear from a lost link (its relink rows are risk
+      review for this reason). PR #3698 is reworking this path in
+      `service_mutation.go`. Done means: a series clear always records a
+      history row (field `series`, new value `""`) and a `series_name` lock,
+      even when `SeriesID` was already nil, with a test on a stale book.
+
+- [ ] **SWAP-COAUTHOR-TITLES** The swapped title/author fixer's "real author" hold (`authorTitles`, built in `junk_title_fixer.go` buildJunkIndexSnapshot) counts only books whose PRIMARY author is the record. A real author credited only as a co-author in `book_authors` is not counted (errs toward rewriting), and a junk record that also credits a transposed person-name book (not classed as junk) is held with a misleading "real author" reason. Count `book_authors` credits too, and word the reason for the transposed case. (PR #3699 third review, NIT 2.)
+
+- [ ] **EDIT-UNLOCK-KEEPS-OVERRIDE** `unlock_overrides` (and an override with
+      `locked:false`) on the book edit endpoint only clears a field's
+      OverrideLocked flag; the stored OverrideValue stays, and
+      MetadataFieldState.HasUserOverride / database.LockedUserFields treat any
+      stored override value as a user override. So an "unlocked" field is
+      still locked for every guard (metadata apply, StripLockedFields).
+      Evidence (PR #3698 review probe TestP15_UnlockIsNotAnUnlockForGuards):
+      PUT {"unlock_overrides": ["publisher"]} after a locked publisher edit
+      leaves OverrideLocked=false, OverrideValue="NP" and
+      LockedUserFields[publisher]=true. Decide what an unlock means (drop the
+      value, or make the guards read the flag), fix it in one place, and
+      re-check every caller of HasUserOverride. The edit endpoint already
+      stores no value for a changed field sent with locked:false.
 
 - [ ] **Version-group membership lock: rows created straight into a group.** Every writer that moves an EXISTING book between version groups now holds the shared group locks (and the no-group sentinel) across the write (#3666). Rows that are CREATED already carrying a `version_group_id` still join that group with no lock, so a group-lock holder (`itunes.regroup`'s apply-time recheck, a hand-off) can see a member appear mid-check. For each, hold `versionprimary.LockGroups(groupID)` across the `CreateBook` (and any follow-up flag write), released before any hand-off. Sites: `internal/server/transcode_version.go` recordTranscodedVersion's M4B version row (~148, `store.CreateBook(nb)`); `internal/scanner/version_link.go` the new scanned row that takes the auto-linked group (~453, `dbBook.VersionGroupID = &groupID` before the scanner's create); `internal/dedup/split_book_merge.go` (~594, the split/combine source plan carrying `VersionGroupID`); `internal/server/handlers/versions.go` (~865/876, the version row created into a group). `organizer.CreateOrganizedVersion` is done: it creates its copy under the locks (#3666).
 
