@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.55.0
+// version: 1.56.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-04
 
@@ -401,14 +401,17 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 		restorable = append(restorable, c)
 	}
 
-	if restorableTotal == 0 && len(ledger) > 0 {
+	// undo.OperationRevertible is the same rule the Repairs fragment fixer
+	// asks before it offers this revert on a held row; restorableTotal
+	// counts exactly its rows.
+	if !undo.OperationRevertible(changes) && len(ledger) > 0 {
 		// Only the plan record is left (the run's other rows were pruned,
 		// or the op wrote nothing else): nothing here can be restored, and
 		// reporting it restored would clear the run's hold.
 		return nil, fmt.Errorf("operation %s has nothing left to revert but its plan record: the rows its run wrote are gone, so nothing can be restored; finish the run's books by hand (merge them into the book that holds the work) to clear its hold",
 			operationID)
 	}
-	if restorableTotal == 0 {
+	if !undo.OperationRevertible(changes) {
 		revertLog.Warn("revert refused: no restorable changes: operation=%s not_restorable=%d types=%s",
 			logger.SanitizeLogValue(operationID), result.NotRestorable, formatTypeCounts(result.NotRestorableTypes))
 		return nil, &NotRestorableError{OperationID: operationID, Total: result.Total, Types: result.NotRestorableTypes}
@@ -961,14 +964,18 @@ func (r revertHistoryRecorder) GetSeriesByID(id int) (*database.Series, error) {
 // moved since fails the change instead of being taken from its new owner.
 // Nothing is deleted either way.
 //
-// A source book that is retired now is moved back onto only when THIS
-// operation retired it (one of its book_soft_delete rows still matches the
-// book, undo.CheckSoftDeleteCurrent): the revert restores that book after
-// its rows are back. A source something else retired since (a user merge
-// that finished an interrupted repair by hand, a dedup merge) is refused:
-// the row would land on a deleted book, out of every view, while the book
-// that now holds it stays live. A row reverted alone (plan nil) has no view
-// of its operation's other rows and is not checked.
+// A source book that is retired now is moved back onto when THIS operation
+// retired it (one of its book_soft_delete rows still matches the book,
+// undo.CheckSoftDeleteCurrent: the revert restores that book after its rows
+// are back), or when it was already retired before this move (its deletion
+// is older than the row: the move took the file off a retired book, as the
+// fragment fixer's carry row takes a run's files off a survivor a dedup
+// merge retired, and moving it back is exactly the state before). A source
+// something else retired after the move (a user merge that finished an
+// interrupted repair by hand, a dedup merge) is refused: the row would land
+// on a deleted book, out of every view, while the book that now holds it
+// stays live. A row reverted alone (plan nil) has no view of its
+// operation's other rows and is not checked.
 func (rs *RevertService) revertBookFileReassign(c *database.OperationChange, plan *undo.RevertPlan) error {
 	fileID, ok := undo.BookFileIDFromField(c.FieldName)
 	if !ok {
@@ -981,7 +988,7 @@ func (rs *RevertService) revertBookFileReassign(c *database.OperationChange, pla
 	if err != nil {
 		return err
 	}
-	if src != nil && src.IsSoftDeleted() && plan != nil && !retiredByThisOp(src, plan) {
+	if src != nil && src.IsSoftDeleted() && plan != nil && !retiredByThisOp(src, plan) && !retiredBefore(src, c) {
 		merged := ""
 		if src.MergedIntoBookID != nil {
 			merged = " (merged into " + *src.MergedIntoBookID + ")"
@@ -1018,6 +1025,13 @@ func retiredByThisOp(b *database.Book, plan *undo.RevertPlan) bool {
 		}
 	}
 	return false
+}
+
+// retiredBefore reports whether retired book b's deletion is older than
+// journal row c (the move off it): b was retired when the move ran. A book
+// with no deletion time is not.
+func retiredBefore(b *database.Book, c *database.OperationChange) bool {
+	return b.MarkedForDeletionAt != nil && b.MarkedForDeletionAt.Before(c.CreatedAt)
 }
 
 // partialTagRestore reports a snapshot tag_write row put back only in part:

@@ -1,5 +1,5 @@
 // file: internal/undo/restorable.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: 6c1f0e9a-4b27-4d3e-9a58-e2b7c41d0f93
 // last-edited: 2026-10-04
 
@@ -739,6 +739,27 @@ func IsLedgerOnly(c *database.OperationChange) bool {
 // IsRestorable reports whether the revert engine can reverse c.
 func IsRestorable(c *database.OperationChange) bool {
 	return NotRestorableLabel(c) == ""
+}
+
+// CountsTowardRevert reports whether row c is one a revert of its operation
+// restores (or already restored): it describes a write that happened (not
+// Voided), is not ledger-only (IsLedgerOnly), and the engine can reverse it.
+func CountsTowardRevert(c *database.OperationChange) bool {
+	return c != nil && !c.Voided && !IsLedgerOnly(c) && IsRestorable(c)
+}
+
+// OperationRevertible reports whether a revert of the operation whose rows
+// are changes can succeed: at least one row counts toward it
+// (CountsTowardRevert). audiobooks.RevertService.RevertOperation refuses an
+// operation without one, and the Repairs fragment fixer offers "revert" on
+// a held row only for operations this holds for, so the two cannot drift.
+func OperationRevertible(changes []*database.OperationChange) bool {
+	for _, c := range changes {
+		if CountsTowardRevert(c) {
+			return true
+		}
+	}
+	return false
 }
 
 // handOffCrownedPrefix starts a ChangeTypeBookPrimaryHandoff row's OldValue
