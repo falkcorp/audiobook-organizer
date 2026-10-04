@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.53.0
+// version: 1.54.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-03
 
@@ -616,24 +616,28 @@ func (rs *RevertService) revertChangeIn(c *database.OperationChange, plan *undo.
 	}
 }
 
-// checkPairedFieldLock runs undo.CheckPairedFieldLock for a metadata_update
-// row whose operation also locked that field. The lock rows come from the
-// plan (every row of the operation); a lone row reverted without a plan reads
-// the operation's journal.
-func (rs *RevertService) checkPairedFieldLock(c *database.OperationChange, plan *undo.RevertPlan) error {
-	var locks []*database.OperationChange
+// pairedFieldLocks returns the lock rows undo.CheckPairedFieldLock reads for
+// a metadata_update row: from the plan (every row of the operation), or, for
+// a lone row reverted without a plan, from the operation's journal. It reads
+// the journal, so it runs before the field-state stripe is taken (nothing
+// slow runs under that stripe).
+func (rs *RevertService) pairedFieldLocks(c *database.OperationChange, plan *undo.RevertPlan) ([]*database.OperationChange, error) {
 	if plan != nil {
-		locks = plan.FieldLocksOf(c)
-	} else {
-		all, err := rs.db.GetOperationChanges(c.OperationID)
-		if err != nil {
-			return fmt.Errorf("read the journal of %s: %w", c.OperationID, err)
-		}
-		locks = all
+		return plan.FieldLocksOf(c), nil
 	}
-	if len(locks) == 0 {
-		return nil
+	all, err := rs.db.GetOperationChanges(c.OperationID)
+	if err != nil {
+		return nil, fmt.Errorf("read the journal of %s: %w", c.OperationID, err)
 	}
+	return all, nil
+}
+
+// checkPairedFieldLock runs undo.CheckPairedFieldLock against the book's
+// field state as it stands now. The caller holds the book's field-state
+// stripe (database.LockMetadataState) across this check AND the value write
+// it gates, so a person's take-over of the lock lands either before the check
+// (and refuses the revert) or after the value is back.
+func (rs *RevertService) checkPairedFieldLock(c *database.OperationChange, locks []*database.OperationChange) error {
 	states, err := rs.db.GetMetadataFieldStates(c.BookID)
 	if err != nil {
 		return fmt.Errorf("read field states of %s: %w", c.BookID, err)
@@ -1477,8 +1481,24 @@ func (rs *RevertService) revertMetadataUpdate(c *database.OperationChange, plan 
 	// gone: one a person took over makes the value theirs
 	// (undo.CheckPairedFieldLock). The lock row is newer, so in this run it
 	// was lifted first when it was still the repair's.
-	if err := rs.checkPairedFieldLock(c, plan); err != nil {
+	//
+	// The check and the value write below run under the book's field-state
+	// stripe, held across both: a lock check outside it, followed by the
+	// value compare-and-set, let a person's take-over land in between and be
+	// left holding the junk value the revert put back. Lock order: field-state
+	// stripe, then the book write stripe (modifyBook) -- see
+	// database.LockMetadataState. Taken only when the operation locked
+	// something, so a row with no lock rows pays nothing.
+	locks, err := rs.pairedFieldLocks(c, plan)
+	if err != nil {
 		return fmt.Errorf("book %s: not restored, %w", c.BookID, err)
+	}
+	if len(locks) > 0 {
+		unlock := database.LockMetadataState(c.BookID)
+		defer unlock()
+		if err := rs.checkPairedFieldLock(c, locks); err != nil {
+			return fmt.Errorf("book %s: not restored, %w", c.BookID, err)
+		}
 	}
 	// Compare-and-set, the same three-way check series_rename rows get, on the
 	// row as read under the book's write stripe: restore only while the field
