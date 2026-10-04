@@ -1,7 +1,7 @@
 // file: internal/database/deletebook_sidecar_rows_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c125e490-ad49-4fbd-8185-e0ae632b4de3
-// last-edited: 2026-09-11
+// last-edited: 2026-10-03
 
 package database
 
@@ -97,7 +97,7 @@ func seedSidecars(t *testing.T, s *PebbleStore, bookID string, authorID, narrato
 // the author-side junction scan kept surfacing the deleted book as a phantom
 // credit.
 func TestDeleteBook_RemovesPerBookSidecarRows(t *testing.T) {
-	store, err := NewPebbleStore(t.TempDir() + "/db")
+	store, err := NewPebbleStoreInMemory(t.TempDir() + "/db")
 	require.NoError(t, err)
 	defer store.Close()
 	db := store.DB()
@@ -160,7 +160,7 @@ func TestDeleteBook_RemovesPerBookSidecarRows(t *testing.T) {
 // still a clean success (absent-key Deletes are no-ops), and after the call the
 // book row and every family are absent together.
 func TestDeleteBook_SidecarTeardownIsAtomicWithBookRow(t *testing.T) {
-	store, err := NewPebbleStore(t.TempDir() + "/db")
+	store, err := NewPebbleStoreInMemory(t.TempDir() + "/db")
 	require.NoError(t, err)
 	defer store.Close()
 	db := store.DB()

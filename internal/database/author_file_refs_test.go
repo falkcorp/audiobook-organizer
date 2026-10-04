@@ -1,7 +1,7 @@
 // file: internal/database/author_file_refs_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4d889ab5-fb0f-4d3a-af64-09f66cdaa453
-// last-edited: 2026-09-10
+// last-edited: 2026-10-03
 
 package database
 
@@ -28,7 +28,7 @@ import (
 // about book STATE and attachment ROUTE, not about arithmetic.
 func seedAuthorFileRefFixture(t *testing.T) (*PebbleStore, map[string]int) {
 	t.Helper()
-	store := seedAuthorRefStore(t, t.TempDir())
+	store := seedAuthorRefStore(t)
 
 	ids := map[string]int{
 		"healthy":    9200, // legacy author of a live primary book, 2 files
@@ -100,7 +100,7 @@ func TestGetAllAuthorFileRefCounts_SeesAllThreeMissedPopulations(t *testing.T) {
 // require_zero_files and ZeroBooksWithFiles are file-shaped names and must
 // report file-shaped numbers.
 func TestGetAllAuthorFileRefCounts_NoMinOneFudge(t *testing.T) {
-	store := seedAuthorRefStore(t, t.TempDir())
+	store := seedAuthorRefStore(t)
 	const fileless = 9210
 	mkAuthorRefBook(t, store, "filerefs-fileless", fileless, true, false)
 

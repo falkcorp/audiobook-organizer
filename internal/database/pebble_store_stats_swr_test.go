@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_stats_swr_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8ddc1437-dc75-40db-b1b8-b1c641ead8e8
-// last-edited: 2026-09-07
+// last-edited: 2026-10-03
 //
 // Stale-while-revalidate tests for the dashboard stats cache. Every test here is
 // written to FAIL against the pre-2026-09-07 implementation, where
@@ -22,7 +22,7 @@ const sentinelTotalBooks = 424242
 
 func statsTestStore(t *testing.T) *PebbleStore {
 	t.Helper()
-	s, err := NewPebbleStore(t.TempDir())
+	s, err := NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestRefreshThresholdIsFiveMinutes(t *testing.T) {
 // recompute must not begin once Close has run. Passing means the mutex was
 // released rather than handed to a goroutine.
 func TestStartLibraryStatsRecompute_RefusesAfterClose(t *testing.T) {
-	s, err := NewPebbleStore(t.TempDir())
+	s, err := NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestStartLibraryStatsRecompute_RefusesAfterClose(t *testing.T) {
 // libraryCountsRecomputeMu for its whole life, so Close taking that mutex is the
 // join — this asserts Close cannot return while it is held.
 func TestClose_JoinsInFlightRecompute(t *testing.T) {
-	s, err := NewPebbleStore(t.TempDir())
+	s, err := NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}

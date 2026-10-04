@@ -1,7 +1,7 @@
 // file: internal/database/path_containment_boundary_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5c0e7a41-9b2d-4f63-8e15-2a7d4c9b6f08
-// last-edited: 2026-09-12
+// last-edited: 2026-10-03
 
 package database
 
@@ -19,7 +19,7 @@ import (
 
 func newBoundaryPebble(t *testing.T) *PebbleStore {
 	t.Helper()
-	p, err := NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	p, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

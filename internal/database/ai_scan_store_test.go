@@ -1,5 +1,5 @@
 // file: internal/database/ai_scan_store_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: b8c4d0e2-5f6a-7b8c-9d0e-1f2a3b4c5d6e
 
 package database
@@ -147,7 +147,7 @@ func TestAIScanStore_Optimize(t *testing.T) {
 func TestNewAIScanStoreFromDB(t *testing.T) {
 	// Verify shared-DB mode: all operations work, Close is a no-op.
 	tmpdir := t.TempDir()
-	ps, err := NewPebbleStore(tmpdir + "/main.pebble")
+	ps, err := NewPebbleStoreInMemory(tmpdir + "/main.pebble")
 	require.NoError(t, err)
 	defer ps.Close()
 

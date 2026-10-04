@@ -1,7 +1,7 @@
 // file: internal/database/narrator_credit_sync_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3345795a-09fa-4889-a511-4bb98ed412d5
-// last-edited: 2026-09-23
+// last-edited: 2026-10-03
 
 package database
 
@@ -157,7 +157,7 @@ func mustResolve(t *testing.T, s *PebbleStore, bookID, credit string) []BookNarr
 
 func newNarratorSyncTestStore(t *testing.T) *PebbleStore {
 	t.Helper()
-	s, err := NewPebbleStore(t.TempDir())
+	s, err := NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_books_by_ids_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7e5d4c3b-2a19-4f8e-9d0c-1b2a3c4d5e6f
-// last-edited: 2026-07-11
+// last-edited: 2026-10-03
 
 package database
 
@@ -16,7 +16,7 @@ import (
 // (see pebble_store_lsh_test.go) for a fresh, isolated PebbleStore per test.
 func newPebbleStoreForBooksByIDs(t *testing.T) *PebbleStore {
 	t.Helper()
-	store, err := NewPebbleStore(filepath.Join(t.TempDir(), "books-by-ids-db"))
+	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "books-by-ids-db"))
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
 	}

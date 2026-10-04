@@ -1,7 +1,7 @@
 // file: internal/database/pebble_file_provenance_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5a3c7e21-8b40-4f96-a2d1-7c9e0b4f6835
-// last-edited: 2026-08-21
+// last-edited: 2026-10-03
 
 package database
 
@@ -17,7 +17,7 @@ import (
 // are deliberately not part of the wide Store interface.
 func newProvStore(t *testing.T) *PebbleStore {
 	t.Helper()
-	store, err := NewPebbleStore(t.TempDir())
+	store, err := NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
 	return store

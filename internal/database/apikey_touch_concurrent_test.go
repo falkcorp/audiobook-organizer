@@ -1,7 +1,7 @@
 // file: internal/database/apikey_touch_concurrent_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7d4a9e02-5b81-4c37-a6f0-2e9c8b31d570
-// last-edited: 2026-09-12
+// last-edited: 2026-10-03
 
 package database
 
@@ -30,7 +30,7 @@ import (
 // The count is the assertion because it is the only field whose correct value is
 // knowable independent of scheduling.
 func TestTouchAPIKeyLastUsed_ConcurrentTouchesDoNotLoseIncrements(t *testing.T) {
-	store, err := NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

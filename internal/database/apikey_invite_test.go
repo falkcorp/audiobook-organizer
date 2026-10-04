@@ -1,7 +1,7 @@
 // file: internal/database/apikey_invite_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5d1e8a2f-4c3b-4f70-a9d6-2e7f0c1b9a48
-// last-edited: 2026-07-03
+// last-edited: 2026-10-03
 
 package database
 
@@ -12,7 +12,7 @@ import (
 )
 
 func TestAPIKey_Lifecycle(t *testing.T) {
-	store, err := NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestAPIKey_Lifecycle(t *testing.T) {
 // grace window): it updates only ExpiresAt, leaving Status untouched so the
 // key keeps working until the new expiry via the existing middleware check.
 func TestAPIKey_SetAPIKeyExpiry_RoundTrips(t *testing.T) {
-	store, err := NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestAPIKey_SetAPIKeyExpiry_RoundTrips(t *testing.T) {
 }
 
 func TestInvite_CreateAndConsume(t *testing.T) {
-	store, err := NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -176,7 +176,7 @@ func TestInvite_CreateAndConsume(t *testing.T) {
 }
 
 func TestInvite_ExpiresRejected(t *testing.T) {
-	store, err := NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

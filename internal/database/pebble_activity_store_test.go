@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_store_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: c9d0e1f2-a3b4-0010-3456-000000000010
-// last-edited: 2026-09-11
+// last-edited: 2026-10-03
 
 // Package database — parity test suite for PebbleActivityStore.
 //
@@ -22,15 +22,18 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
+	"github.com/cockroachdb/pebble/v2/vfs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// newTestPebbleActivityStore creates a temp PebbleDB directory and a PebbleActivityStore.
+// newTestPebbleActivityStore opens an in-memory PebbleDB and a PebbleActivityStore.
+// The database lives on vfs.NewMem: these writes pass pebble.Sync, and on a
+// real filesystem each one is an fsync, which dominated this package's run time.
+// Nothing here reopens the database, so no on-disk state is needed.
 func newTestPebbleActivityStore(t *testing.T) *PebbleActivityStore {
 	t.Helper()
-	dir := t.TempDir()
-	db, err := pebble.Open(filepath.Join(dir, "test.pebble"), &pebble.Options{})
+	db, err := pebble.Open("test.pebble", &pebble.Options{FS: vfs.NewMem()})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	return NewPebbleActivityStore(db)

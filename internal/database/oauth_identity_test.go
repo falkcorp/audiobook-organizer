@@ -1,5 +1,5 @@
 // file: internal/database/oauth_identity_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9f2c7b04-5a18-4d63-8e17-3b6a0c9e2d51
 
 package database
@@ -8,7 +8,7 @@ import "testing"
 
 func newOAuthTestStore(t *testing.T) *PebbleStore {
 	t.Helper()
-	s, err := NewPebbleStore(t.TempDir())
+	s, err := NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}

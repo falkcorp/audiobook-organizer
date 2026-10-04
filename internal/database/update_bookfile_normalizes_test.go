@@ -1,7 +1,7 @@
 // file: internal/database/update_bookfile_normalizes_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1ba802ee-d7e8-478f-a5e3-a82dbef6ac2c
-// last-edited: 2026-08-04
+// last-edited: 2026-10-03
 
 package database
 
@@ -15,7 +15,7 @@ import "testing"
 // That is not theoretical: production held ~6,000 millisecond rows, and a book
 // reading 9,906h was 34 rows of milliseconds (9,906h/1000 ≈ 9.9h — a real audiobook).
 func TestUpdateBookFile_NormalizesMillisecondDurationToSeconds(t *testing.T) {
-	s, err := NewPebbleStore(t.TempDir())
+	s, err := NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestUpdateBookFile_NormalizesMillisecondDurationToSeconds(t *testing.T) {
 // 🔑 The guard must be inert on correct data. A plausible duration is never touched,
 // so this can be applied unconditionally on every update without risk.
 func TestUpdateBookFile_LeavesPlausibleDurationsAlone(t *testing.T) {
-	s, err := NewPebbleStore(t.TempDir())
+	s, err := NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestUpdateBookFile_LeavesPlausibleDurationsAlone(t *testing.T) {
 // would turn a correct 9,906-second book into 9 seconds. Updating twice must be a
 // no-op after the first conversion.
 func TestUpdateBookFile_NormalizationIsIdempotent(t *testing.T) {
-	s, err := NewPebbleStore(t.TempDir())
+	s, err := NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestUpdateBookFile_NormalizationIsIdempotent(t *testing.T) {
 // The guard must not wipe the fingerprint it travels alongside. UpdateBookFile writes
 // the whole struct, and this repo has already shipped a fingerprint-wipe bug once.
 func TestUpdateBookFile_NormalizationPreservesFingerprint(t *testing.T) {
-	s, err := NewPebbleStore(t.TempDir())
+	s, err := NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}

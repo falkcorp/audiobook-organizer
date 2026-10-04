@@ -1,7 +1,7 @@
 // file: internal/database/dedup_entity_index_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 42d58947-e661-49b8-bdef-32b171b2b68d
-// last-edited: 2026-10-01
+// last-edited: 2026-10-03
 
 package database
 
@@ -63,7 +63,7 @@ func TestEntityIndex_MarkMergedIndexesALegacyCandidate(t *testing.T) {
 // touched since, and a label stored before the label index, are both found
 // by entity after migration 64; a corrupt label is counted, not fatal.
 func TestMigration064_BackfillsBothEntityIndexes(t *testing.T) {
-	ps, err := NewPebbleStore(t.TempDir())
+	ps, err := NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = ps.Close() })
 	s := NewEmbeddingStore(ps.DB())
@@ -165,7 +165,7 @@ func (r *recordingLog) Warn(msg string, args ...any) {
 // and unreadable rows (which could not be indexed) are a Warn, not buried in
 // an Info line's counters.
 func TestMigration064_LogsProgressAndWarnsOnUnreadable(t *testing.T) {
-	ps, err := NewPebbleStore(t.TempDir())
+	ps, err := NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = ps.Close() })
 	s := NewEmbeddingStore(ps.DB())

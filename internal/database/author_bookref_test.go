@@ -1,7 +1,7 @@
 // file: internal/database/author_bookref_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 53e2c4ec-167f-4096-990e-5e348ba07236
-// last-edited: 2026-09-12
+// last-edited: 2026-10-03
 
 package database
 
@@ -20,9 +20,9 @@ import (
 // DISAGREE: a fixture where they agree passes with or without the fix.
 
 // seedAuthorRefStore builds a warm store the way production runs it.
-func seedAuthorRefStore(t *testing.T, dir string) *PebbleStore {
+func seedAuthorRefStore(t *testing.T) *PebbleStore {
 	t.Helper()
-	store, err := NewPebbleStore(dir)
+	store, err := NewPebbleStoreInMemory("db")
 	require.NoError(t, err)
 	store.WaitForWarmup()
 	t.Cleanup(func() { _ = store.Close() })
@@ -53,7 +53,7 @@ func mkAuthorRefBook(t *testing.T, s *PebbleStore, title string, legacyAuthor in
 // version, is still REFERENCED — the book keeps the author_id and renders with
 // a dangling author once the row is gone.
 func TestGetAllAuthorBookRefCounts_CountsTrashedAndNonPrimary(t *testing.T) {
-	store := seedAuthorRefStore(t, t.TempDir())
+	store := seedAuthorRefStore(t)
 
 	const onlyTrashed = 8100 // every book in the trash
 	const onlyNonPrim = 8101 // every book a secondary version
@@ -89,7 +89,7 @@ func TestGetAllAuthorBookRefCounts_CountsTrashedAndNonPrimary(t *testing.T) {
 // book_authors junction table, and the per-author listing the delete handlers
 // used to consult drops them once the book is trashed or non-primary.
 func TestGetAllAuthorBookRefCounts_CountsJunctionOnlyCoAuthor(t *testing.T) {
-	store := seedAuthorRefStore(t, t.TempDir())
+	store := seedAuthorRefStore(t)
 
 	const primaryAuthor = 8110
 	const coAuthor = 8111 // exists only as a junction row, on a TRASHED book
@@ -118,7 +118,7 @@ func TestGetAllAuthorBookRefCounts_CountsJunctionOnlyCoAuthor(t *testing.T) {
 // whole book (which is what GetAllAuthorBookCounts does) loses the legacy
 // author's reference entirely and makes a referenced author deletable.
 func TestGetAllAuthorBookRefCounts_JunctionWithoutLegacyAuthorStillCounts(t *testing.T) {
-	store := seedAuthorRefStore(t, t.TempDir())
+	store := seedAuthorRefStore(t)
 
 	const legacyOnly = 8120 // named ONLY by Book.AuthorID
 	const junctionOnly = 8121
@@ -146,7 +146,7 @@ func TestGetAllAuthorBookRefCounts_JunctionWithoutLegacyAuthorStillCounts(t *tes
 // junction and the legacy field for the SAME author counts once, so the guard
 // refuses on real references rather than on arithmetic.
 func TestGetAllAuthorBookRefCounts_NoDoubleCounting(t *testing.T) {
-	store := seedAuthorRefStore(t, t.TempDir())
+	store := seedAuthorRefStore(t)
 
 	const both = 8130
 	b := mkAuthorRefBook(t, store, "both-links", both, true, false)
@@ -166,7 +166,7 @@ func TestGetAllAuthorBookRefCounts_NoDoubleCounting(t *testing.T) {
 // the database layer: without it, a counter that returned every author id would
 // pass every assertion above.
 func TestGetAllAuthorBookRefCounts_UnreferencedAuthorsAreAbsent(t *testing.T) {
-	store := seedAuthorRefStore(t, t.TempDir())
+	store := seedAuthorRefStore(t)
 	mkAuthorRefBook(t, store, "somewhere", 8140, true, false)
 
 	refs, err := store.GetAllAuthorBookRefCounts()
@@ -181,7 +181,7 @@ func TestGetAllAuthorBookRefCounts_UnreferencedAuthorsAreAbsent(t *testing.T) {
 // type assertion against a wrapped store is indistinguishable from an
 // unsupported backend — which is how several ops silently no-opped in prod.
 func TestAsAuthorBookRefStore_ResolvesPebbleStore(t *testing.T) {
-	store := seedAuthorRefStore(t, t.TempDir())
+	store := seedAuthorRefStore(t)
 	// Seed a real reference the FILTERED counter cannot see, so the count
 	// comparison below is about data rather than about two empty maps.
 	mkAuthorRefBook(t, store, "Trashed But Still Referenced", 7, true, true)
@@ -231,7 +231,7 @@ func TestAsAuthorBookRefStore_ResolvesPebbleStore(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestGetAllAuthorBookRefCountsPebble_UndecodableJunctionRowIsFatal(t *testing.T) {
-	store := seedAuthorRefStore(t, t.TempDir())
+	store := seedAuthorRefStore(t)
 	mkAuthorRefBook(t, store, "Readable", 1, true, false)
 
 	require.NoError(t, store.db.Set([]byte("book_authors:corrupt-book"), []byte("{not json"), nil))
@@ -243,7 +243,7 @@ func TestGetAllAuthorBookRefCountsPebble_UndecodableJunctionRowIsFatal(t *testin
 }
 
 func TestGetAllAuthorBookRefCountsPebble_UndecodableBookRowIsFatal(t *testing.T) {
-	store := seedAuthorRefStore(t, t.TempDir())
+	store := seedAuthorRefStore(t)
 	mkAuthorRefBook(t, store, "Readable", 1, true, false)
 
 	// The key must satisfy BOTH range conditions or the test would pass
@@ -263,7 +263,7 @@ func TestGetAllAuthorBookRefCountsPebble_UndecodableBookRowIsFatal(t *testing.T)
 // store must still answer. Positive control for the two tests above: without it
 // they would pass against a scan that always errored.
 func TestGetAllAuthorBookRefCountsPebble_HealthyStoreStillAnswers(t *testing.T) {
-	store := seedAuthorRefStore(t, t.TempDir())
+	store := seedAuthorRefStore(t)
 	mkAuthorRefBook(t, store, "Trashed", 9, true, true)
 
 	counts, err := store.getAllAuthorBookRefCountsPebble()
@@ -275,7 +275,7 @@ func TestGetAllAuthorBookRefCountsPebble_HealthyStoreStillAnswers(t *testing.T) 
 // use: it fails closed on a store that cannot answer, and resolves through a
 // decorator on one that can.
 func TestAuthorRefCounts_SharedGuard(t *testing.T) {
-	store := seedAuthorRefStore(t, t.TempDir())
+	store := seedAuthorRefStore(t)
 	mkAuthorRefBook(t, store, "Trashed", 4, true, true)
 
 	counts, err := AuthorRefCounts(&decoratorStore{Store: store})
@@ -309,7 +309,7 @@ func TestAuthorRefCounts_SharedGuard(t *testing.T) {
 // TestSetBookAuthors_CreditWithoutBookIDStillReachesMemDB is the regression.
 // The author-split op in handlers/operations built exactly this literal.
 func TestSetBookAuthors_CreditWithoutBookIDStillReachesMemDB(t *testing.T) {
-	store := seedAuthorRefStore(t, t.TempDir())
+	store := seedAuthorRefStore(t)
 	book := mkAuthorRefBook(t, store, "SplitSource", 0, true, false)
 	author, err := store.CreateAuthor("Credit Without BookID")
 	require.NoError(t, err)
@@ -354,7 +354,7 @@ func TestSetBookAuthors_CreditWithoutBookIDStillReachesMemDB(t *testing.T) {
 // is logged. Every copy-shaped caller (metafetch, versions, organizer) already
 // stamps the target ID, so nothing relied on the old behaviour.
 func TestSetBookAuthors_MismatchedBookIDFollowsTheKey(t *testing.T) {
-	store := seedAuthorRefStore(t, t.TempDir())
+	store := seedAuthorRefStore(t)
 	keep := mkAuthorRefBook(t, store, "SuppliedBookID", 0, true, false)
 	other := mkAuthorRefBook(t, store, "CalledWithThisID", 0, true, false)
 	author, err := store.CreateAuthor("Explicit BookID Author")
@@ -410,7 +410,7 @@ func seedAuthorRefFixture(t *testing.T, store *PebbleStore) (legacy, coauthor in
 // TestGetAllAuthorBookRefCounts_MemdbRefusesWhenBookAuthorsIncomplete is the
 // refusal itself. A short count here is the fail-open.
 func TestGetAllAuthorBookRefCounts_MemdbRefusesWhenBookAuthorsIncomplete(t *testing.T) {
-	store := seedAuthorRefStore(t, t.TempDir())
+	store := seedAuthorRefStore(t)
 	seedAuthorRefFixture(t, store)
 
 	m := store.mem()
@@ -430,7 +430,7 @@ func TestGetAllAuthorBookRefCounts_MemdbRefusesWhenBookAuthorsIncomplete(t *test
 // A guard that named only book_authors would still fail open on a lost book row
 // carrying a legacy AuthorID.
 func TestGetAllAuthorBookRefCounts_LostBookRowAlsoRefuses(t *testing.T) {
-	store := seedAuthorRefStore(t, t.TempDir())
+	store := seedAuthorRefStore(t)
 	seedAuthorRefFixture(t, store)
 
 	m := store.mem()
@@ -448,7 +448,7 @@ func TestGetAllAuthorBookRefCounts_LostBookRowAlsoRefuses(t *testing.T) {
 // Asserting only errors.Is(ErrMemdbIncomplete) would not prove the caller ever
 // gets a usable number, so this asserts the number.
 func TestGetAllAuthorBookRefCounts_FallsThroughWithTheCORRECTAnswer(t *testing.T) {
-	store := seedAuthorRefStore(t, t.TempDir())
+	store := seedAuthorRefStore(t)
 	legacy, coauthor := seedAuthorRefFixture(t, store)
 
 	before, err := store.GetAllAuthorBookRefCounts()
@@ -508,7 +508,7 @@ func mustMemAuthorCountsErr(m *MemStore) error {
 // row getAllAuthorBookRefCountsPebble refuses outright.
 
 func TestUpsertBookToMemDB_UnreadableCreditListDoesNotSilentlyEmptyMemdb(t *testing.T) {
-	store := seedAuthorRefStore(t, t.TempDir())
+	store := seedAuthorRefStore(t)
 	book := mkAuthorRefBook(t, store, "CorruptCredits", 0, true, false)
 	author, err := store.CreateAuthor("Only Credited Here")
 	require.NoError(t, err)
@@ -574,7 +574,7 @@ func memBookAuthorRows(t *testing.T, s *PebbleStore) []*BookAuthor {
 // AuthorID credit while pass 1 still counted (nonexistent) junction rows for
 // it, undercounting exactly the author purge-empty-authors is about to delete.
 func TestGetAllAuthorBookRefCounts_CountsACallerSuppliedNonULIDBookID(t *testing.T) {
-	store := seedAuthorRefStore(t, t.TempDir())
+	store := seedAuthorRefStore(t)
 
 	const letterLeading = 8200     // referenced only via a letter-leading book ID
 	const underscoreLeading = 8201 // referenced only via an "_"-leading book ID
@@ -616,7 +616,7 @@ func TestGetAllAuthorBookRefCounts_CountsACallerSuppliedNonULIDBookID(t *testing
 // unmarshal becoming fatal on every scan, since book:path:/book:hash:/
 // book:versiongroup: keys are now inside the scanned range.
 func TestGetAllAuthorBookRefCounts_WidenedBoundsSkipSecondaryIndexes(t *testing.T) {
-	store := seedAuthorRefStore(t, t.TempDir())
+	store := seedAuthorRefStore(t)
 
 	const healthy = 8210
 	mkAuthorRefBook(t, store, "Healthy", healthy, true, false)

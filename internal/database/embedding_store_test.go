@@ -1,5 +1,5 @@
 // file: internal/database/embedding_store_test.go
-// version: 2.2.0
+// version: 2.2.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 
 package database
@@ -9,16 +9,19 @@ import (
 	"testing"
 
 	"github.com/cockroachdb/pebble/v2"
+	"github.com/cockroachdb/pebble/v2/vfs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// newTestEmbeddingStore creates a temporary EmbeddingStore backed by an
-// isolated PebbleDB for use in tests.
+// newTestEmbeddingStore creates an EmbeddingStore backed by an isolated
+// in-memory PebbleDB for use in tests.
+// The database lives on vfs.NewMem: these writes pass pebble.Sync, and on a
+// real filesystem each one is an fsync, which dominated this package's run time.
+// Nothing here reopens the database, so no on-disk state is needed.
 func newTestEmbeddingStore(t *testing.T) *EmbeddingStore {
 	t.Helper()
-	dir := t.TempDir()
-	db, err := pebble.Open(dir, &pebble.Options{})
+	db, err := pebble.Open("embeddings.pebble", &pebble.Options{FS: vfs.NewMem()})
 	require.NoError(t, err)
 	store := &EmbeddingStore{db: db, owned: true}
 	t.Cleanup(func() { _ = store.Close() })

@@ -1,7 +1,7 @@
 // file: internal/database/author_create_race_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 7a1c0f2e-9b64-4d3a-8c51-2f8e6d4b7a09
-// last-edited: 2026-09-12
+// last-edited: 2026-10-03
 
 package database
 
@@ -34,7 +34,7 @@ func TestCreateAuthorIsAtomicUnderConcurrency(t *testing.T) {
 	const workers = 24
 	const name = "Terry Pratchett"
 
-	store, err := NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}

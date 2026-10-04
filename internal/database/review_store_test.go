@@ -1,7 +1,7 @@
 // file: internal/database/review_store_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 9d3b7f21-4a58-4c69-b8e2-1f0a6c5d4e37
-// last-edited: 2026-09-02
+// last-edited: 2026-10-03
 
 package database
 
@@ -11,7 +11,7 @@ import (
 
 func newReviewTestStore(t *testing.T) *PebbleStore {
 	t.Helper()
-	s, err := NewPebbleStore(t.TempDir())
+	s, err := NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}

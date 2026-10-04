@@ -1,7 +1,7 @@
 // file: internal/database/migration063_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: e059ecc0-ab71-4ae2-8d64-0f07261fabc2
-// last-edited: 2026-09-12
+// last-edited: 2026-10-03
 
 package database
 
@@ -36,7 +36,7 @@ func rawJunctionBytes(t *testing.T, s *PebbleStore, key string) []byte {
 // checks the stored bytes (not the getters, which stamp on read), memdb, and a
 // second run.
 func TestMigration063StampsDamagedJunctionRows(t *testing.T) {
-	store := seedAuthorRefStore(t, t.TempDir())
+	store := seedAuthorRefStore(t)
 	book := mkAuthorRefBook(t, store, "Mig63Damaged", 0, true, false)
 	other := mkAuthorRefBook(t, store, "Mig63Other", 0, true, false)
 	healthy := mkAuthorRefBook(t, store, "Mig63Healthy", 0, true, false)
@@ -111,7 +111,7 @@ func pendingOps(s *PebbleStore) int {
 // repair Pebble and leave the buffer alone; warmup's own key stamping loads the
 // right rows.
 func TestMigration063SendsNoMemdbWritesWhileWarmupBuffers(t *testing.T) {
-	store := seedAuthorRefStore(t, t.TempDir())
+	store := seedAuthorRefStore(t)
 	book := mkAuthorRefBook(t, store, "Mig63Buffering", 0, true, false)
 	control := mkAuthorRefBook(t, store, "Mig63BufferingControl", 0, true, false)
 	narrator, err := store.CreateNarrator("Mig63 Buffering Narrator")
@@ -142,7 +142,7 @@ func TestMigration063SendsNoMemdbWritesWhileWarmupBuffers(t *testing.T) {
 // TestMigration063CountsWhatItRepaired pins the report: the startup log is the
 // only record of what the migration touched in production.
 func TestMigration063CountsWhatItRepaired(t *testing.T) {
-	store := seedAuthorRefStore(t, t.TempDir())
+	store := seedAuthorRefStore(t)
 	book := mkAuthorRefBook(t, store, "Mig63Counts", 0, true, false)
 	writeRawJunction(t, store, "book_narrators:", book.ID, []BookNarrator{{NarratorID: 1}, {NarratorID: 2}, {BookID: book.ID, NarratorID: 3}})
 	require.NoError(t, store.db.Set([]byte("book_authors:"+book.ID), []byte("not json"), pebble.Sync))
@@ -171,7 +171,12 @@ func TestWarmupAdmitsJunctionRowWithoutBookID(t *testing.T) {
 	writeRawJunction(t, first, "book_narrators:", book.ID, []BookNarrator{{NarratorID: narrator.ID}})
 	require.NoError(t, first.Close())
 
-	store := seedAuthorRefStore(t, dir) // reopens and waits for warmup; no migrations run
+	// Reopen the SAME on-disk directory. seedAuthorRefStore is in-memory and
+	// would open an empty database here, so this reopen opens by path directly.
+	store, err := NewPebbleStore(dir) // no migrations run
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	store.WaitForWarmup()
 	require.Empty(t, store.mem().LostRows(), "warmup must admit the row, not reject it")
 	rows := memBookNarratorRows(t, store)
 	require.Len(t, rows, 1)

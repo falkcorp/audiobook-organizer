@@ -1,7 +1,7 @@
 // file: internal/database/transcribe_stats_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4c1f8a92-7d63-4b05-9e21-8f6a3c0d51e4
-// last-edited: 2026-07-01
+// last-edited: 2026-10-03
 
 package database
 
@@ -14,7 +14,7 @@ import (
 // TestTranscribeStats_RoundTrip verifies the aggregate persists and reads back
 // through PebbleDB, and that an absent key yields (nil, nil) rather than an error.
 func TestTranscribeStats_RoundTrip(t *testing.T) {
-	store, err := NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestTranscribeStats_RoundTrip(t *testing.T) {
 // TestTranscribeStatsStore_Interface confirms *PebbleStore satisfies the narrow
 // capability interface the op and handler type-assert to.
 func TestTranscribeStatsStore_Interface(t *testing.T) {
-	store, err := NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestTranscribeStatsStore_Interface(t *testing.T) {
 // persist through CreateBook/UpdateBook/GetBookByID (Book is JSON-marshaled
 // wholesale, so this guards against an accidental memdb strip of the fields).
 func TestBook_TranscribeFields_RoundTrip(t *testing.T) {
-	store, err := NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

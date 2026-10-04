@@ -1,7 +1,7 @@
 // file: internal/database/deletebook_dedup_cascade_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7c2a9e14-6b83-4f51-9d27-3ea5c8b04f16
-// last-edited: 2026-08-19
+// last-edited: 2026-10-03
 
 package database
 
@@ -40,7 +40,7 @@ func mkCascadeBook(t *testing.T, s *PebbleStore, id, title string) {
 // every producer iterates live books only, so it sits in the pending queue
 // forever.
 func TestDeleteBook_CascadesToDedupCandidates(t *testing.T) {
-	store, err := NewPebbleStore(t.TempDir() + "/db")
+	store, err := NewPebbleStoreInMemory(t.TempDir() + "/db")
 	require.NoError(t, err)
 	defer store.Close()
 	db := store.DB()
@@ -111,7 +111,7 @@ func TestDeleteBook_CascadesToDedupCandidates(t *testing.T) {
 // converts a candidate orphan into a stale *index* orphan, which is strictly
 // worse because no later pass ever revisits it.
 func TestDeleteBook_CascadeRemovesStaleEntityIndexEntry(t *testing.T) {
-	store, err := NewPebbleStore(t.TempDir() + "/db")
+	store, err := NewPebbleStoreInMemory(t.TempDir() + "/db")
 	require.NoError(t, err)
 	defer store.Close()
 	db := store.DB()
@@ -140,7 +140,7 @@ func TestDeleteBook_CascadeRemovesStaleEntityIndexEntry(t *testing.T) {
 // very same DeleteBook call that completes the merge, emptying the tab. This is
 // the same rule PurgeStaleCandidates enforces, and for the same reason.
 func TestDeleteBook_CascadeSparesNonPendingCandidates(t *testing.T) {
-	store, err := NewPebbleStore(t.TempDir() + "/db")
+	store, err := NewPebbleStoreInMemory(t.TempDir() + "/db")
 	require.NoError(t, err)
 	defer store.Close()
 	db := store.DB()

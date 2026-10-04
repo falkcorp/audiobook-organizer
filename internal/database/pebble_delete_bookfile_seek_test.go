@@ -1,7 +1,7 @@
 // file: internal/database/pebble_delete_bookfile_seek_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: e8187d63-0c08-49b4-9879-6cab49841d0b
-// last-edited: 2026-09-02
+// last-edited: 2026-10-03
 
 package database
 
@@ -22,7 +22,7 @@ import (
 // O(N)-per-delete that only starts to matter at production row counts. These tests
 // exist to keep the resolution CORRECT, not to assert a speedup.
 func TestDeleteBookFile_ResolvesViaIDIndexNotAScan(t *testing.T) {
-	s, err := NewPebbleStore(t.TempDir())
+	s, err := NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestDeleteBookFile_ResolvesViaIDIndexNotAScan(t *testing.T) {
 // slowly. Simulating that by removing ONLY the index entry proves the scan path is
 // still reachable and still correct.
 func TestDeleteBookFile_FallsBackToScanWhenIndexEntryMissing(t *testing.T) {
-	s, err := NewPebbleStore(t.TempDir())
+	s, err := NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestDeleteBookFile_FallsBackToScanWhenIndexEntryMissing(t *testing.T) {
 // A dangling index entry (index present, primary row already gone) must not make a
 // live row invisible, and must not error. Deleting an unknown id is a no-op.
 func TestDeleteBookFile_UnknownIDIsANoOp(t *testing.T) {
-	s, err := NewPebbleStore(t.TempDir())
+	s, err := NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestDeleteBookFile_UnknownIDIsANoOp(t *testing.T) {
 // Deleting one row must not disturb its siblings — the index resolves exactly one
 // primary key, so a suffix collision or an off-by-one prefix bound would show here.
 func TestDeleteBookFile_LeavesSiblingRowsIntact(t *testing.T) {
-	s, err := NewPebbleStore(t.TempDir())
+	s, err := NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}

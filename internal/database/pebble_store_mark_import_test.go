@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_mark_import_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-09-19
+// last-edited: 2026-10-03
 
 package database
 
@@ -13,7 +13,7 @@ import (
 
 func newPebbleStoreForMarkImport(t *testing.T) *PebbleStore {
 	t.Helper()
-	store, err := NewPebbleStore(filepath.Join(t.TempDir(), "mark-import-db"))
+	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "mark-import-db"))
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
 	}

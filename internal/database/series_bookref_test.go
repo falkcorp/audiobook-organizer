@@ -1,7 +1,7 @@
 // file: internal/database/series_bookref_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 8f2c14ba-6d97-4e35-b0a1-72e5c9d38a04
-// last-edited: 2026-09-02
+// last-edited: 2026-10-03
 
 package database
 
@@ -22,9 +22,9 @@ import (
 // seedRefStore writes books through the normal path, then applies raw flag
 // updates. Books are created with CreateBook so the memdb and Pebble both see
 // them exactly as production does.
-func seedRefStore(t *testing.T, dir string) *PebbleStore {
+func seedRefStore(t *testing.T) *PebbleStore {
 	t.Helper()
-	store, err := NewPebbleStore(dir)
+	store, err := NewPebbleStoreInMemory("db")
 	require.NoError(t, err)
 	store.WaitForWarmup()
 	t.Cleanup(func() { _ = store.Close() })
@@ -48,7 +48,7 @@ func mkBook(t *testing.T, s *PebbleStore, title string, seriesID int, primary, t
 // unfiltered counter must see books the display counter deliberately hides.
 // Without this, a series holding only trash reads as "referenced by nothing".
 func TestSeriesBookRefCounts_CountsTrashedAndNonPrimary(t *testing.T) {
-	store := seedRefStore(t, t.TempDir())
+	store := seedRefStore(t)
 
 	const onlyTrashed = 900 // every book in the trash
 	const onlyNonPrim = 901 // every book a secondary version
@@ -80,7 +80,7 @@ func TestSeriesBookRefCounts_CountsTrashedAndNonPrimary(t *testing.T) {
 // signal is absence from the map, so absence must actually mean "nothing points
 // here", not "no book passed a filter".
 func TestSeriesBookRefCounts_UnreferencedSeriesAreAbsent(t *testing.T) {
-	store := seedRefStore(t, t.TempDir())
+	store := seedRefStore(t)
 	mkBook(t, store, "somewhere", 910, true, false)
 
 	refs, err := store.GetAllSeriesBookRefCounts()
@@ -96,7 +96,7 @@ func TestSeriesBookRefCounts_UnreferencedSeriesAreAbsent(t *testing.T) {
 // them, because whoever writes a path also writes its expectation. One fixture,
 // both implementations, assert EQUAL.
 func TestSeriesBookRefCounts_MemDBAndPebbleAgree(t *testing.T) {
-	store := seedRefStore(t, t.TempDir())
+	store := seedRefStore(t)
 
 	// A deliberately mixed population: trashed, non-primary, both, neither,
 	// nil-flags, and books with no series at all.
@@ -148,7 +148,7 @@ func sumCounts(m map[int]int) int {
 // assertion against a wrapped store is indistinguishable from an unsupported
 // backend — which is how several ops silently no-opped in production.
 func TestAsSeriesBookRefStore_ResolvesPebbleStore(t *testing.T) {
-	store := seedRefStore(t, t.TempDir())
+	store := seedRefStore(t)
 	require.NotNil(t, AsSeriesBookRefStore(store))
 	require.Nil(t, AsSeriesBookRefStore(nil))
 	require.Nil(t, AsSeriesBookRefStore(struct{}{}))
@@ -192,7 +192,7 @@ func TestAsSeriesBookRefStore_ResolvesPebbleStore(t *testing.T) {
 // A counter that undercounts reports "referenced by nothing" -- the permissive
 // answer -- and the delete proceeds, stranding the book it could not see.
 func TestSeriesBookRefCounts_CountsALetterLeadingBookID(t *testing.T) {
-	store := seedRefStore(t, t.TempDir())
+	store := seedRefStore(t)
 
 	const lonely = 940 // referenced by exactly one book, so the count is unambiguous
 	b, err := store.CreateBook(&Book{

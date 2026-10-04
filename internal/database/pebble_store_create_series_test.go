@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_create_series_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7d0b6f1e-3c52-4a8e-9b14-5e2f8a6c1d93
 // last-edited: 2026-10-03
 
@@ -10,7 +10,7 @@ import "testing"
 // CreateBook holds Book.Series to SeriesID exactly as UpdateBook does, so a
 // create cannot write the legacy shapes the stale-series relink repairs.
 func TestCreateBook_HoldsSeriesToSeriesID(t *testing.T) {
-	store, err := NewPebbleStore(t.TempDir())
+	store, err := NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

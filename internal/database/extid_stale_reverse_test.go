@@ -1,7 +1,7 @@
 // file: internal/database/extid_stale_reverse_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4c183811-eda8-4a4f-b762-58bae6229260
-// last-edited: 2026-09-22
+// last-edited: 2026-10-03
 
 package database
 
@@ -19,7 +19,7 @@ import (
 
 func newExtIDTestStore(t *testing.T) *PebbleStore {
 	t.Helper()
-	s, err := NewPebbleStore(t.TempDir())
+	s, err := NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)
 	}

@@ -1,5 +1,5 @@
 // file: internal/database/role_store_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4d8a2e1f-5c3b-4f80-a9d6-2f7e0c1b9a48
 
 package database
@@ -10,7 +10,7 @@ import (
 )
 
 func TestRoleStore_CreateGetUpdate(t *testing.T) {
-	store, err := NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestRoleStore_CreateGetUpdate(t *testing.T) {
 }
 
 func TestRoleStore_DuplicateName(t *testing.T) {
-	store, err := NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestRoleStore_DuplicateName(t *testing.T) {
 }
 
 func TestRoleStore_SeedNotDeletable(t *testing.T) {
-	store, err := NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestRoleStore_SeedNotDeletable(t *testing.T) {
 }
 
 func TestRoleStore_ListRoles(t *testing.T) {
-	store, err := NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

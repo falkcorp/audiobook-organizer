@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_isbn_index_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-09-02
+// last-edited: 2026-10-03
 
 // Tests for the book:isbn10:, book:isbn13:, and book:asin: secondary indexes.
 // Covers: create → index present, update ISBN → old row gone/new row present,
@@ -20,7 +20,7 @@ import (
 // methods directly.
 func newPebbleStoreForISBN(t *testing.T) *PebbleStore {
 	t.Helper()
-	store, err := NewPebbleStore(filepath.Join(t.TempDir(), "isbn-db"))
+	store, err := NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "isbn-db"))
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
 	}

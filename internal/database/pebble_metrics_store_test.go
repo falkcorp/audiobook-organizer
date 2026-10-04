@@ -1,7 +1,7 @@
 // file: internal/database/pebble_metrics_store_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: d0e1f2a3-b4c5-0011-4567-000000000011
-// last-edited: 2026-09-02
+// last-edited: 2026-10-03
 
 package database
 
@@ -11,15 +11,18 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
+	"github.com/cockroachdb/pebble/v2/vfs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// newTestPebbleMetricsStore creates a temp PebbleDB and a PebbleMetricsStore.
+// newTestPebbleMetricsStore opens an in-memory PebbleDB and a PebbleMetricsStore.
+// The database lives on vfs.NewMem: these writes pass pebble.Sync, and on a
+// real filesystem each one is an fsync, which dominated this package's run time.
+// Nothing here reopens the database, so no on-disk state is needed.
 func newTestPebbleMetricsStore(t *testing.T) *PebbleMetricsStore {
 	t.Helper()
-	dir := t.TempDir()
-	db, err := pebble.Open(filepath.Join(dir, "metrics.pebble"), &pebble.Options{})
+	db, err := pebble.Open("metrics.pebble", &pebble.Options{FS: vfs.NewMem()})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 	return NewPebbleMetricsStore(db)

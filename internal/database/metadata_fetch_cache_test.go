@@ -1,7 +1,7 @@
 // file: internal/database/metadata_fetch_cache_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 6f5e4d3c-2b1a-0f9e-8d7c-6b5a4f3e2d1c
-// last-edited: 2026-09-14
+// last-edited: 2026-10-03
 
 package database
 
@@ -20,7 +20,7 @@ import (
 func newCacheTestStore(t *testing.T) *PebbleStore {
 	t.Helper()
 	dbPath := t.TempDir()
-	store, err := NewPebbleStore(dbPath)
+	store, err := NewPebbleStoreInMemory(dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
 	return store
