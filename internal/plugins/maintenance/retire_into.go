@@ -389,12 +389,40 @@ func resumeHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Wr
 	if live == 1 && explicit == 1 {
 		return nil // the group has its one explicit primary: nothing owed
 	}
-	// A group whose one primary is a nil flag (Incumbent's rule) goes on to
-	// the journal: if a retire's demote of b is still owed its hand-off,
+	// A group whose one primary is a nil flag (Incumbent's rule) is not
+	// settled by it when a retire's demote of b is still owed its hand-off:
 	// the uninterrupted run would have run EnsureSinglePrimary there, which
 	// writes an explicit winner (and may elect another member than the nil
 	// one). Returning early left a resumed run with a different group than
 	// an uninterrupted one (2026-10-03, the cut test's hand-off shapes).
+	// The cheap reads decide first, so a book no retire demoted (the common
+	// first-run retire of a non-primary copy) still pays no journal scan:
+	// b must be explicit false with a retire's demote as its newest
+	// primary-flag history row. Anything else owes nothing here: the group
+	// has its primary.
+	if live == 1 {
+		if storedPrimaryFlag(b.IsPrimaryVersion) != "false" {
+			return nil
+		}
+		hist, ok := store.(bookHistoryReader)
+		if !ok {
+			return nil
+		}
+		rows, err := hist.GetBookChangeHistory(b.ID, vgHistoryWindow)
+		if err != nil {
+			return refuse("change history unreadable: %v", err)
+		}
+		retireDemote := false
+		for i := range rows {
+			if rows[i].Field == "is_primary_version" {
+				retireDemote = retireFixerIDs[rows[i].Source] && rows[i].NewValue != nil && *rows[i].NewValue == `"false"`
+				break
+			}
+		}
+		if !retireDemote {
+			return nil
+		}
+	}
 	journal, ok := store.(bookJournalReader)
 	if !ok {
 		return refuse("the store has no operation journal to check it with")
