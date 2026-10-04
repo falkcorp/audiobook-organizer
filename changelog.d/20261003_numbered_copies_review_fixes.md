@@ -122,3 +122,29 @@
   no change to the book. It is still listed under the repair job's own
   changes. The version-group hand-off note now reads "Version group primary
   handed to <book>" instead of raw values.
+- **Reverting a cut-off chapter repair no longer drops its hold while the
+  revert is incomplete.** The repair's plan entry used to be marked undone by
+  any revert of the job, even one that could not put the files back (another
+  repair had moved them on). The next plan then split the work again (tested:
+  22 of 24 cut points with organized books, 24 of 24 without). The plan entry
+  is now marked undone only when every other change of the job was undone.
+  A job whose only remaining entry is the plan (the rest aged out of the job
+  log) is refused with an error that says nothing can be restored, instead of
+  being reported as reverted.
+- **A held row now offers only the actions that clear it, and names the
+  right book.** When the surviving book was merged into another book, the
+  row says to merge the remaining books into that other book, not into the
+  retired survivor, and it no longer suggests a resume that cannot work. A
+  survivor retired by a duplicate merge is followed to the book that won the
+  merge, so finishing into that book clears the hold. A survivor deleted
+  outright is offered a restore. Each offered action is carried out by a
+  test.
+- **A chapter file that ended up on an unrelated book keeps the folder
+  held.** A run counted as done while one of its chapter files sat on a third
+  live book, so the split went unnoticed. The row now names that book and
+  says to move the file back first.
+- **A cut-off repair whose other job-log entries aged out still finishes.**
+  The repair's own earlier retires are recognised from its plan entry once
+  their own entries are gone.
+- **A revert error lists every refused change** (the first five, then a
+  count) instead of only the first.

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
 // version: 1.70.2
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-10-02
+// last-edited: 2026-10-04
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
