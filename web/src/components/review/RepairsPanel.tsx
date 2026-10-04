@@ -1,5 +1,5 @@
 // file: web/src/components/review/RepairsPanel.tsx
-// version: 1.15.2
+// version: 1.15.3
 // guid: 9c4f1a73-2e58-4b06-a9d1-6e3b8c7f0d52
 // last-edited: 2026-10-04
 
@@ -278,6 +278,7 @@ function classLabel(c: string): string {
     'manual-only': 'Manual only',
     ambiguous: 'Ambiguous',
     held: 'Held',
+    carry: 'Finish an interrupted repair (move its files off a merged survivor)',
     relink: 'Relink (history agrees or none)',
     'held-cleared-by-history': 'Cleared (history)',
     'held-name-mismatch': 'Name mismatch',
