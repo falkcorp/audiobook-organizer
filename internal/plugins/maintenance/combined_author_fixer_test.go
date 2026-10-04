@@ -551,3 +551,119 @@ func TestCombinedAuthorFixer_ReviewRowsApply(t *testing.T) {
 		require.Nil(t, a, "%s is never created", n)
 	}
 }
+
+// Prod dry run 2026-10-04 (op 01M44K51SZRXRHPF8FW03SZKR2): the five proposal
+// bugs, one book each.
+func TestCombinedAuthorFixer_DryRunProposalBugs(t *testing.T) {
+	l := newCombinedLib(t)
+	// Created in this order so author ids never happen to sort the answer.
+	for _, n := range []string{"Michael Anderle", "P. T. Hylton", "A. F. Harrold", "Allie Piper", "Matt Hicks",
+		"Alvin Atwater", "Neil Hellegers", "Shane Purdy", "Brandon Q Morris", "Brandon Q. Morris", "Ashton McLee",
+		"Arthur C. Clarke", "Gentry Lee", "Travis Baldree", "Mark Gatiss"} {
+		l.author(n)
+	}
+	// 1. Two records of one book name the same new author: proposed once.
+	l.book("dup-new", "The Worlds We Leave Behind", "Levi Pinfold, A.F. Harrold", combinedLibRoot+"Worlds/a.m4b",
+		credit{"A.F. Harrold, Levi Pinfold", "author", 0})
+	// 1. Two author rows spelled "Brandon Q Morris" / "Brandon Q. Morris":
+	// one person, credited once.
+	l.book("dup-spelling", "The Clouds of Venus", "", combinedLibRoot+"Venus/a.m4b",
+		credit{"Brandon Q Morris", "author", 0}, credit{"Ashton McLee", "author", 0},
+		credit{"Brandon Q. Morris", "author", 2}, credit{"Brandon Q. Morris, Ashton McLee", "author", 3})
+	// 2. A part that still joins two names is never one new author.
+	l.book("slash", "The Brightwood", "Travis Baldree, Sarah Lin/Travis Baldree", combinedLibRoot+"Bright/a.m4b",
+		credit{"Travis Baldree, Sarah Lin/Travis Baldree", "author", 0})
+	// 3. The credited first name keeps its place.
+	l.book("order-primary", "The Lord Ruler", "Alvin Atwater, Matt Hicks, Allie Piper", combinedLibRoot+"Ruler/a.m4b",
+		credit{"Alvin Atwater", "author", 0})
+	l.book("order-primary2", "Threat from the Deep", "Shane Purdy, Neil Hellegers", combinedLibRoot+"Threat/a.m4b",
+		credit{"Shane Purdy", "author", 0})
+	// 3. A tie at one position is broken by the primary record's order.
+	// Two records (the real Storm Warrior shape): the junction one lists
+	// Michael Anderle first, the primary lists P. T. Hylton first.
+	l.book("order-tie", "Storm Warrior", "P. T. Hylton, Michael Anderle", combinedLibRoot+"Storm/a.m4b",
+		credit{"Michael Anderle", "author", 0}, credit{"P. T. Hylton", "author", 0},
+		credit{"Michael Anderle, P. T. Hylton", "author", 1})
+	// 5. A one-letter misspelling of a credited author is held.
+	l.book("misspelt", "Rama II", "Artur C. Clarke, Gentry Lee", combinedLibRoot+"Rama/a.m4b",
+		credit{"Arthur C. Clarke", "author", 0}, credit{"Artur C. Clarke, Gentry Lee", "author", 1})
+	// 4. A credit of an author id that no longer exists is dropped.
+	dangling := l.book("dangling", "Sherlock", "", combinedLibRoot+"Sherlock/a.m4b",
+		credit{"Mark Gatiss", "author", 0}, credit{"Mark Gatiss, Steven Moffat", "author", 1})
+	cs, err := l.store.GetBookAuthors(dangling)
+	require.NoError(t, err)
+	cs = append(cs, database.BookAuthor{BookID: dangling, AuthorID: 987654, Role: "author", Position: 2})
+	require.NoError(t, l.store.SetBookAuthors(dangling, cs))
+
+	plan, rows := l.plan()
+	require.Equal(t, "Levi Pinfold (new author) @0, A. F. Harrold @1", rows["dup-new"].Proposed["credits"])
+	require.Equal(t, "Brandon Q Morris @0, Ashton McLee @1", rows["dup-spelling"].Proposed["credits"])
+	require.Contains(t, rows["dup-spelling"].Reason, `the second credit of "Brandon Q. Morris"`)
+	require.Equal(t, "Travis Baldree @0, Sarah Lin (new author) @1", rows["slash"].Proposed["credits"])
+	require.Equal(t, "Alvin Atwater @0, Matt Hicks @1, Allie Piper @2", rows["order-primary"].Proposed["credits"])
+	require.Equal(t, "Alvin Atwater", rows["order-primary"].Proposed["primary"])
+	require.Equal(t, "Shane Purdy @0, Neil Hellegers @1", rows["order-primary2"].Proposed["credits"])
+	require.Equal(t, "Shane Purdy", rows["order-primary2"].Proposed["primary"])
+	require.Equal(t, "P. T. Hylton @0, Michael Anderle @1", rows["order-tie"].Proposed["credits"])
+	require.Equal(t, swapSkipAmbiguousAuthor, rows["misspelt"].Skipped, rows["misspelt"].SkipReason)
+	require.Contains(t, rows["misspelt"].SkipReason, `"Arthur C. Clarke"`)
+	require.Equal(t, "Mark Gatiss @0, Steven Moffat (new author) @1", rows["dangling"].Proposed["credits"])
+	require.Contains(t, rows["dangling"].Reason, "author id 987654 (no such author)")
+
+	// Apply writes what the plan shows.
+	var sel []string
+	for _, k := range []string{"dup-new", "dup-spelling", "order-primary", "order-tie", "dangling"} {
+		sel = append(sel, rows[k].RowID)
+	}
+	out := l.apply(plan, sel)
+	require.Equal(t, 5, out.Applied, "outcomes %v", out.ByOutcome)
+	require.Equal(t, []string{"Levi Pinfold@0/author", "A. F. Harrold@1/author"}, l.credits("dup-new"))
+	require.Equal(t, []string{"Brandon Q Morris@0/author", "Ashton McLee@1/author"}, l.credits("dup-spelling"))
+	require.Equal(t, []string{"Alvin Atwater@0/author", "Matt Hicks@1/author", "Allie Piper@2/author"}, l.credits("order-primary"))
+	require.Equal(t, "Alvin Atwater", l.primary("order-primary"))
+	require.Equal(t, []string{"P. T. Hylton@0/author", "Michael Anderle@1/author"}, l.credits("order-tie"))
+	require.Equal(t, []string{"Mark Gatiss@0/author", "Steven Moffat@1/author"}, l.credits("dangling"))
+}
+
+func TestCombinedProposal_DedupesByPersonKey(t *testing.T) {
+	ba := func(id int, pos int) database.BookAuthor {
+		return database.BookAuthor{BookID: "b", AuthorID: id, Role: "author", Position: pos}
+	}
+	keys := map[int]string{1: "jkrowling", 2: "jkrowling", 3: "", 9: "x"} // 2 is an alias of 1; 3 is dangling
+	out, dropped := combinedProposal([]database.BookAuthor{ba(1, 0), ba(2, 1), ba(3, 2), ba(4, 3)}, "b", nil, nil,
+		func(id int) string {
+			if k, ok := keys[id]; ok {
+				return k
+			}
+			return "k" + strconv.Itoa(id)
+		})
+	require.Equal(t, []int{1, 4}, combinedIDs(out))
+	require.Equal(t, []int{0, 1}, combinedPositions(out))
+	require.Equal(t, []int{2, 3}, combinedIDs(dropped))
+}
+
+func TestEditDistanceAtMostOne(t *testing.T) {
+	for _, c := range []struct {
+		a, b string
+		want bool
+	}{{"arthurcclarke", "arturcclarke", true}, {"abc", "abd", true}, {"abc", "abc", true},
+		{"abc", "ab", true}, {"abcd", "abdc", false}, {"jonsmith", "janesmith", false}} {
+		require.Equal(t, c.want, editDistanceAtMostOne(c.a, c.b), "%s %s", c.a, c.b)
+	}
+}
+
+func combinedIDs(cs []database.BookAuthor) []int {
+	out := make([]int, len(cs))
+	for i, c := range cs {
+		out[i] = c.AuthorID
+	}
+	return out
+}
+
+func combinedPositions(cs []database.BookAuthor) []int {
+	out := make([]int, len(cs))
+	for i, c := range cs {
+		out[i] = c.Position
+	}
+	return out
+}
