@@ -1,5 +1,5 @@
 // file: internal/repairs/writer_files.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: 4d8a2f61-3c7e-4b19-8e05-9a1f6c3d7b28
 // last-edited: 2026-10-04
 
