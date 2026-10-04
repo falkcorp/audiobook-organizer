@@ -1,9 +1,20 @@
 <!-- file: docs/plans/storage-efficiency/TASK-A5.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 10c73217-17fc-4334-a120-d0c82a7c9e9b -->
-<!-- last-edited: 2026-10-03 -->
+<!-- last-edited: 2026-10-04 -->
 
 # TASK-A5: Timeline indexes (`opv2:open:`, `opv2:done:`), startup reconcile, `GetOpLogsV2` tail read
+
+> **Amended 2026-10-04 (review of #3709).** The persisted stamp
+> (`system:backfill:opv2_timeline_index_v1_done`) and the
+> `AORG_OPSV2_TIMELINE_RECONCILE` env var were removed. A rollback to a pre-A5
+> binary followed by a roll-forward without the env var hid operations (the
+> review's probe returned 1 of 3 rows). The index now follows the
+> `opchange_by_book` trust model (#3704): untrusted at every boot, the
+> timeline reads the scan until that boot's background reconcile completes,
+> and the `opsv2_timeline_index_trusted` gauge reports it. The ratchet (step 6)
+> became a module-wide allowlist of every reference to the row key. Text below
+> that describes the stamp or the env var is superseded by this note.
 
 Wave W1. Start only after PR #3704 has merged to `main`: it edits
 `internal/server/server_lifecycle.go`, which step 12 edits. Runs in parallel
@@ -73,9 +84,9 @@ missing steps instead of starting over.
 Rollback: before the first push, remove the worktree and branch, or `git reset
 --hard origin/main` inside it. After the PR merges, `git revert` it. The
 `opv2:open:` and `opv2:done:` keys are ignored by the old binary, which keeps
-scanning `opv2:op:` rows. When rolling forward again after a rollback to a
-pre-A5 binary, set `AORG_OPSV2_TIMELINE_RECONCILE=1` for one start so the
-reconcile repairs the rows the old binary wrote.
+scanning `opv2:op:` rows. Rolling forward again needs no step: the index is
+untrusted at every boot and that boot's reconcile repairs the rows the old
+binary wrote (amended 2026-10-04).
 
 ## 3. Read before editing
 
@@ -186,8 +197,11 @@ re-greps each one; where a number differs, use the grep result.
      byte order is time order.
    - `func parseOpv2DoneKey(k []byte) (nanos int64, opID string, ok bool)`.
      The fixed layout is: prefix (10 bytes), 20 digits, `:`, then the id.
-   - `const opsV2TimelineIndexStamp = "system:backfill:opv2_timeline_index_v1_done"`.
-     It follows the atpath sentinel naming (`pebble_store_atpath_index.go:63`).
+   - No persisted sentinel (amended 2026-10-04). Trust is an in-process
+     `opsV2TimelineTrusted atomic.Bool` on `PebbleStore`, false at every boot
+     and after `Close`, set only when that boot's
+     `ReconcileOpsV2TimelineIndex` completes; the
+     `opsv2_timeline_index_trusted` gauge publishes it.
 2. `func stageOpRow(b *pebble.Batch, prev, next *OperationV2Row) error`
    (the plan and design 8 call it `stageOpRow(batch, old, new)`; use that
    name).
@@ -310,14 +324,13 @@ re-greps each one; where a number differs, use the grep result.
    5. Apply `opV2InWindow` to every row. Dedupe by id. Sort with
       `opV2TimelineLess`. Truncate to `limit`.
 9. `ListOperationsV2Since`. Keep the signature, the `limit <= 0` → 200
-   default and the `recoverPebbleClosed` guard. Do a point `Get` of
-   `opsV2TimelineIndexStamp`. If the stamp is present, use the indexed path;
-   otherwise use `listOperationsV2SinceScan`. Do NOT add a field to the
-   `PebbleStore` struct to cache this: that means editing
-   `pebble_store.go`, which A4 owns in this wave. One point `Get` per call is
-   cheap.
+   default and the `recoverPebbleClosed` guard. If
+   `OpsV2TimelineIndexTrusted()` (this boot's reconcile has completed), use
+   the indexed path; otherwise use `listOperationsV2SinceScan` (amended
+   2026-10-04: the trust flag lives on the `PebbleStore` struct now that A4
+   has merged; there is no stamp Get).
 10. Update the doc comment of `ListOperationsV2Since` and the key-schema
-    comment at `:1-16` with the two new families and the stamp.
+    comment at `:1-16` with the two new families and the trust model.
 
 ### 5.4 Startup reconcile
 
@@ -331,6 +344,8 @@ re-greps each one; where a number differs, use the grep result.
     the reconcile also runs when the environment variable
     `AORG_OPSV2_TIMELINE_RECONCILE=1` is set at startup. Document it (step
     14) as a one-time step on the first start after rolling forward past A5.
+    **Superseded 2026-10-04:** it runs on every boot and sets an in-process
+    trust flag instead of the stamp; there is no env var.
     - **Pass 1, find missing keys, no lock.** One producer goroutine owns a
       single iterator over `opv2:op:` and sends copied (key, value) pairs
       over a bounded channel to `runtime.NumCPU()` workers. Each worker
@@ -375,10 +390,8 @@ re-greps each one; where a number differs, use the grep result.
     - resolve `resolveOpsV2TimelineReconciler(s.Ops())` through
       `database.AsCapability`;
     - log a warning and return if it fails;
-    - return early, with one `slog.Debug` line, when the stamp is present
-      and `AORG_OPSV2_TIMELINE_RECONCILE` is not `1` (expose a small
-      `OpsV2TimelineIndexBuilt() (bool, error)` on the capability for the
-      check);
+    - (superseded 2026-10-04: no stamp/env gate; the reconcile runs on
+      every boot);
     - wait for `WaitForWarmup` or `s.bgCtx.Done()`;
     - call `ReconcileOpsV2TimelineIndex(s.bgCtx)` and log a warning on error.
 
@@ -400,10 +413,8 @@ re-greps each one; where a number differs, use the grep result.
 14. `docs/database-pebble-schema.md`, operations table (`:347-354`):
     - add rows for `opv2:open:<op_id>` and
       `opv2:done:<completed_nanos:020d>:<op_id>`, both with empty values;
-    - mention `system:backfill:opv2_timeline_index_v1_done`, that the
-      reconcile runs only while it is absent, and the
-      `AORG_OPSV2_TIMELINE_RECONCILE=1` one-time step after rolling forward
-      past A5 (do not edit `docs/system/runbooks.md`; A4 edits it in this
+    - describe the trust model (superseded 2026-10-04: untrusted at every
+      boot until that boot's reconcile completes; no stamp, no env var) (do not edit `docs/system/runbooks.md`; A4 edits it in this
       wave);
     - change the `opv2:op:` row text "No status index exists" to say which
       reads still scan (`ListWaitingDepsOps`, `ListResumableOperationsV2`,
@@ -497,10 +508,9 @@ File: `internal/database/pebble_store_ops_v2_timeline_test.go` (new). Use
   `Commit`; a non-nil error aborts the commit and is returned. With the hook
   failing on every Nth write of a random history (seeded), the scan and the
   indexed read agree after every step.
-- `TestOpsV2Timeline_ReconcileOnlyWhenStampMissingOrForced`. With the stamp
-  present, the lifecycle gate skips the reconcile; with
-  `t.Setenv("AORG_OPSV2_TIMELINE_RECONCILE", "1")` it runs and repairs a
-  planted raw row with no index key.
+- Superseded 2026-10-04: `TestOpsV2Timeline_RollbackForward` (boot, pre-A5
+  writes, boot again: all rows returned before and after that boot's
+  reconcile) and `TestOpsV2Timeline_ReadBeforeReconcileUsesScan`.
 - `TestOpsV2Timeline_SweepHollowRemovesDoneKey`. A hollow row with a planted
   done key: after `SweepHollowOperationsV2`, no index key names it.
 - `TestOpsV2RowWritesGoThroughStageOpRow` (step 6).
@@ -571,8 +581,9 @@ required.
 - [ ] The equivalence test passes for all 200 seeds, both before and after
       the extra writes.
 - [ ] The benchmark shows the indexed 24 h window under 100 ms on 50,000 ops.
-- [ ] On the first boot the reconcile runs once and sets the stamp; on the
-      next boot it does not run unless `AORG_OPSV2_TIMELINE_RECONCILE=1`.
+- [ ] (amended 2026-10-04) Every boot reads the scan until that boot's
+      reconcile completes, then the index; a rollback and roll-forward
+      returns every row with no operator step.
 - [ ] `TestOpsV2RowWritesGoThroughStageOpRow` passes, and fails when a raw
       write is injected. Run exactly this and paste the output:
 

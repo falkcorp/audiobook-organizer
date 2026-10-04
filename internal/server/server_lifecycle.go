@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.17.2
+// version: 4.20.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-10-03
+// last-edited: 2026-10-04
 
 package server
 
@@ -1065,6 +1065,50 @@ func (s *Server) startBackfills() {
 		}
 	})
 
+	// opv2 timeline index (pebble_store_ops_v2_timeline.go): opv2:open: and
+	// opv2:done: keys that let ListOperationsV2Since skip decoding every
+	// operation row. Same trust model as opchange_by_book below: the index
+	// is UNTRUSTED at every boot and the timeline serves from the full scan
+	// (correct, only slower) until this boot's reconcile has checked and
+	// repaired it, because a rollback to a build that predates the index
+	// writes rows with no index keys and nothing persisted could know. The
+	// reconcile is read-mostly, grows with the operation count until op
+	// retention (D2) lands (see the cost note in
+	// pebble_store_ops_v2_timeline.go), and logs its duration.
+	// Waits for memdb warmup first. Resolved through AsCapability for the
+	// same reason as the version-group backfill above.
+	s.bgWG.Go("opsv2-timeline-reconcile", func() {
+		if err := s.bgCtx.Err(); err != nil {
+			return
+		}
+		r, ok := resolveOpsV2TimelineReconciler(s.Ops())
+		if !ok {
+			// %T renders only the dynamic type name, never a field value (same
+			// reasoning as the book-atpath warn above).
+			lifecycleLog.Warn("opsv2-timeline-reconcile: store does not implement ReconcileOpsV2TimelineIndex, index will NOT be used; the operations timeline stays on the full scan: store_type=%T",
+				s.Ops())
+			return
+		}
+		warm := make(chan struct{})
+		go func() { r.WaitForWarmup(); close(warm) }()
+		select {
+		case <-warm:
+		case <-s.bgCtx.Done():
+			lifecycleLog.Info("opsv2-timeline-reconcile: shutdown before memdb warmup finished; the timeline used the full scan this boot")
+			return
+		}
+		if _, err := r.ReconcileOpsV2TimelineIndex(s.bgCtx); err != nil {
+			if errors.Is(err, context.Canceled) {
+				lifecycleLog.Info("opsv2-timeline-reconcile: interrupted by shutdown; the timeline used the full scan this boot: err=%s",
+					logger.SanitizeLogValue(err.Error()))
+				return
+			}
+			// Error, not Warn: the index is not in use this boot.
+			lifecycleLog.Error("opsv2-timeline-reconcile: index not trusted this boot; the timeline stays on the full scan and the next boot retries: err=%s",
+				logger.SanitizeLogValue(err.Error()))
+		}
+	})
+
 	// opchange_by_book: index over the operation-change journal
 	// (pebble_store_opchange_index.go). EnsureOpChangeByBookIndex runs the
 	// one-time backfill (sentinel-gated, resumable from a cursor), then a
@@ -1752,6 +1796,22 @@ type bookAtPathBackfiller interface {
 // exercise the production resolution path.
 func resolveBookAtPathBackfiller(s any) (bookAtPathBackfiller, bool) {
 	return database.AsCapability[bookAtPathBackfiller](s)
+}
+
+// opsV2TimelineReconciler is the opv2 timeline index boot reconcile plus the
+// warmup gate it waits on. Both are *PebbleStore methods outside
+// database.Store.
+type opsV2TimelineReconciler interface {
+	WaitForWarmup()
+	ReconcileOpsV2TimelineIndex(ctx context.Context) (database.OpsV2TimelineReconcileResult, error)
+}
+
+// resolveOpsV2TimelineReconciler finds the timeline reconcile through the
+// indexedStore decorator (see resolveVGBackfiller for why a bare assertion
+// misses). A named function so a test can exercise the production
+// resolution path.
+func resolveOpsV2TimelineReconciler(s any) (opsV2TimelineReconciler, bool) {
+	return database.AsCapability[opsV2TimelineReconciler](s)
 }
 
 // opChangeIndexBackfiller is the opchange_by_book: index startup

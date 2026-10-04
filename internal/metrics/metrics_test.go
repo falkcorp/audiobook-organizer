@@ -1,7 +1,7 @@
 // file: internal/metrics/metrics_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-10-03
+// last-edited: 2026-10-04
 
 package metrics
 
@@ -398,6 +398,18 @@ func TestSetOpChangeByBookIndexTrusted(t *testing.T) {
 		SetOpChangeByBookIndexTrusted(tc.trusted)
 		if got := testutil.ToFloat64(opChangeByBookIndexTrustedGauge); got != tc.want {
 			t.Errorf("SetOpChangeByBookIndexTrusted(%t): gauge reads %v, want %v", tc.trusted, got, tc.want)
+		}
+	}
+}
+
+func TestSetOpsV2TimelineIndexTrusted(t *testing.T) {
+	for _, tc := range []struct {
+		trusted bool
+		want    float64
+	}{{true, 1}, {false, 0}} {
+		SetOpsV2TimelineIndexTrusted(tc.trusted)
+		if got := testutil.ToFloat64(opsV2TimelineIndexTrustedGauge); got != tc.want {
+			t.Errorf("SetOpsV2TimelineIndexTrusted(%t): gauge reads %v, want %v", tc.trusted, got, tc.want)
 		}
 	}
 }

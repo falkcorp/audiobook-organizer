@@ -1,7 +1,7 @@
 // file: internal/metrics/metrics.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: 9f8e7d6c-5b4a-3210-9fed-cba876543210
-// last-edited: 2026-10-03
+// last-edited: 2026-10-04
 
 package metrics
 
@@ -146,6 +146,15 @@ var (
 		Namespace: "audiobook_organizer",
 		Name:      "opchange_by_book_index_trusted",
 		Help:      "1 when GetBookChanges reads the opchange_by_book index, 0 when it uses the full journal scan",
+	})
+	// opsV2TimelineIndexTrustedGauge is 1 while this process lets
+	// ListOperationsV2Since read the opv2:open:/opv2:done: timeline index and
+	// 0 while it uses the full opv2:op: scan (every boot until the reconcile
+	// completes, or after a failed/interrupted reconcile).
+	opsV2TimelineIndexTrustedGauge = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "audiobook_organizer",
+		Name:      "opsv2_timeline_index_trusted",
+		Help:      "1 when ListOperationsV2Since reads the opv2 timeline index, 0 when it uses the full operation scan",
 	})
 	// mergeUserStatePendingGauge is the number of pending user-state repair
 	// records (moves a merge still owes), sampled by the repair ticker. A
@@ -303,7 +312,7 @@ var (
 func Register() {
 	registerOnce.Do(func() {
 		prometheus.MustRegister(operationStarted, operationCompleted, operationFailed, operationCanceled, operationDuration,
-			booksGauge, searchIndexDocsGauge, searchIndexDroppedTotal, searchIndexDirtyBacklogGauge, opChangeByBookIndexTrustedGauge, searchCachePatchCapRebuildsTotal, searchCacheRebuildsTotal, foldersGauge, memoryAllocGauge, goroutinesGauge, mergeUserStatePendingGauge,
+			booksGauge, searchIndexDocsGauge, searchIndexDroppedTotal, searchIndexDirtyBacklogGauge, opChangeByBookIndexTrustedGauge, opsV2TimelineIndexTrustedGauge, searchCachePatchCapRebuildsTotal, searchCacheRebuildsTotal, foldersGauge, memoryAllocGauge, goroutinesGauge, mergeUserStatePendingGauge,
 			catalogHarvestAuthorsGauge, catalogEntriesStaleGauge,
 			opActivityMirrorDroppedTotal, sortByRequestedTotal, operationDeprecatedDefIDTotal,
 			cacheHits, cacheMisses, cacheSets, cacheInvalidations, cacheEvictions, cacheSize, cacheGetDuration,
@@ -396,6 +405,16 @@ func SetOpChangeByBookIndexTrusted(trusted bool) {
 		v = 1
 	}
 	opChangeByBookIndexTrustedGauge.Set(v)
+}
+
+// SetOpsV2TimelineIndexTrusted publishes whether ListOperationsV2Since is
+// reading the opv2 timeline index (1) or the full scan (0).
+func SetOpsV2TimelineIndexTrusted(trusted bool) {
+	v := 0.0
+	if trusted {
+		v = 1
+	}
+	opsV2TimelineIndexTrustedGauge.Set(v)
 }
 
 // SetCatalogHarvestAuthors publishes the per-state author counts.

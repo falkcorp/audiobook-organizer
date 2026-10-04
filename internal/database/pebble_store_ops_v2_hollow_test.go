@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v2_hollow_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6b1f4c2e-9d3a-4e7b-8c5f-2a0d9e7b3c14
-// last-edited: 2026-09-11
+// last-edited: 2026-10-04
 
 package database
 
@@ -88,7 +88,11 @@ func TestSweepHollowOperationsV2RemovesOnlyShells(t *testing.T) {
 
 	rows, err := p.ListOperationsV2Since(now.Add(-time.Hour), 100)
 	require.NoError(t, err)
-	require.Len(t, rows, 2, "before the sweep the timeline carries the shell")
+	// The timeline skips a row with no id (it can carry no timeline index
+	// key and rendered as a blank card), so even before the sweep only the
+	// real row is listed. The sweep below still has to remove the shell.
+	require.Len(t, rows, 1, "the timeline must not list the nameless shell")
+	require.Equal(t, real.ID, rows[0].ID)
 
 	n, err := p.SweepHollowOperationsV2()
 	require.NoError(t, err)

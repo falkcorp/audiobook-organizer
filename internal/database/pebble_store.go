@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.201.0
+// version: 1.202.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-04
 
@@ -127,6 +127,20 @@ type PebbleStore struct {
 	// verified (or rebuilt) the index for the current generation; only then
 	// does GetBookChanges read it (TRUST GATE in pebble_store_opchange_index.go).
 	opChangeByBookTrustedAt atomic.Uint64
+	// opsV2TimelineTrusted is true once this process's
+	// ReconcileOpsV2TimelineIndex has completed; only then does
+	// ListOperationsV2Since read the opv2:open:/opv2:done: index (TRUST MODEL
+	// in pebble_store_ops_v2_timeline.go). False at every boot and after Close.
+	// Writes go through setOpsV2TimelineTrusted under opsV2TimelineTrustMu;
+	// reads are lock-free.
+	opsV2TimelineTrusted atomic.Bool
+	// opsV2TimelineTrustMu orders trust flips against Close:
+	// opsV2TimelineClosed is set under it by Close, and a flip to trusted
+	// under it is refused once the store is closed, so a reconcile finishing
+	// concurrently with Close can never leave a closed store (or the gauge)
+	// reporting trusted.
+	opsV2TimelineTrustMu sync.Mutex
+	opsV2TimelineClosed  bool
 	// opChangeIdxRunSem is the one-at-a-time slot for opchange_by_book
 	// backfill/rebuild/ensure passes, created on first use so a zero-value
 	// PebbleStore works (lockOpChangeIdxRun, which waits with a context).
@@ -669,6 +683,10 @@ func (p *PebbleStore) Close() error {
 	p.libraryCountsRecomputeMu.Lock()
 	p.libraryStatsClosed = true
 	p.libraryCountsRecomputeMu.Unlock()
+
+	// A closed store reports the timeline index untrusted, and refuses any
+	// later flip to trusted (markOpsV2TimelineClosed).
+	p.markOpsV2TimelineClosed()
 
 	return p.db.Close()
 }
@@ -5100,7 +5118,13 @@ func (p *PebbleStore) recomputeDurationMap(bookNumericID int) error {
 
 // ---- Operation State Persistence (resumable operations) ----
 
+// SetRaw, DeleteRaw and DeleteRawBatch refuse opv2:op: keys
+// (rejectOpv2OpRawKey): those rows must be written through commitOpV2Row so
+// the timeline index changes in the same batch.
 func (p *PebbleStore) SetRaw(key string, value []byte) error {
+	if err := rejectOpv2OpRawKey(key); err != nil {
+		return err
+	}
 	if err := p.db.Set([]byte(key), value, pebble.Sync); err != nil {
 		return err
 	}
@@ -5127,6 +5151,9 @@ func (p *PebbleStore) GetRaw(key string) ([]byte, error) {
 }
 
 func (p *PebbleStore) DeleteRaw(key string) error {
+	if err := rejectOpv2OpRawKey(key); err != nil {
+		return err
+	}
 	if err := p.db.Delete([]byte(key), pebble.Sync); err != nil {
 		return err
 	}
@@ -5209,6 +5236,12 @@ func (p *PebbleStore) ScanPrefixPage(prefix, after string, limit int) ([]KVPair,
 func (p *PebbleStore) DeleteRawBatch(keys []string) error {
 	if len(keys) == 0 {
 		return nil
+	}
+	// Refuse the whole batch before staging anything.
+	for _, k := range keys {
+		if err := rejectOpv2OpRawKey(k); err != nil {
+			return err
+		}
 	}
 	b := p.db.NewBatch()
 	defer b.Close()
