@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.54.0
+// version: 1.54.1
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-03
 
@@ -607,7 +607,8 @@ func (rs *RevertService) revertChangeIn(c *database.OperationChange, plan *undo.
 		return rs.revertRepairBookCreate(c)
 	case undo.ChangeTypeFieldLock:
 		return rs.revertFieldLock(c)
-	case "organize_failed", "organize_skipped", "organize_summary":
+	case "organize_failed", "organize_skipped", "organize_summary",
+		undo.ChangeTypeRepairPlanRecord:
 		// No filesystem or DB mutation recorded; nothing to reverse.
 		return nil
 	default:

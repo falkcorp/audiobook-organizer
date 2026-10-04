@@ -115,6 +115,14 @@ const (
 	// 2026-10-02): the revert re-crowns BookID only while no OTHER member
 	// is explicit primary (HandOffCrowned).
 	ChangeTypeBookPrimaryHandoff = "book_primary_handoff"
+	// ChangeTypeRepairPlanRecord: the decision a Repairs apply run worked
+	// from, journaled on the row's main book (BookID) before the run's first
+	// write. FieldName is "row:<row id>"; NewValue is the fixer's own JSON
+	// (the fragment-consolidation fixer stores the planned group: survivor,
+	// members, roles, flags and plan time). A ledger note, nothing to undo:
+	// it lets a later plan CONTINUE an interrupted run with the decision it
+	// started, instead of re-electing from state the run already changed.
+	ChangeTypeRepairPlanRecord = "repair_plan_record"
 	// ChangeTypeExternalIDReassign: one external id, named in FieldName as
 	// "external_id:<source>/<id>", moved from the book BookID (== OldValue) to
 	// the book NewValue. Restorable: it moves back while it still names
@@ -603,7 +611,8 @@ func CheckRestoreBook(store BookLookup, bookID string) (*database.Book, error) {
 func NotRestorableLabel(c *database.OperationChange) string {
 	switch c.ChangeType {
 	case "file_move", "organize_rename",
-		"organize_failed", "organize_skipped", "organize_summary":
+		"organize_failed", "organize_skipped", "organize_summary",
+		ChangeTypeRepairPlanRecord:
 		return ""
 	case ChangeTypeTagWrite:
 		// A tag_write row restores exactly OldValue into one book_file. Rows

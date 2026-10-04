@@ -1,7 +1,7 @@
 // file: internal/versionprimary/ensure.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 0b7e4c52-9a1d-4f38-8c6e-2d51f0a7b9e3
-// last-edited: 2026-10-02
+// last-edited: 2026-10-03
 
 package versionprimary
 
@@ -361,33 +361,15 @@ func EnsureSinglePrimary(ctx context.Context, store EnsureStore, gid string, env
 		return res, nil
 	}
 	alive := storeAlive(store)
-	loader := Loader{Files: store, Chapters: store, RootDir: env.RootDir, Probe: env.Probe, Stat: env.Stat}
-
-	var incumbents []*database.Book
-	for i := range members {
-		m := &members[i]
-		if Electable(m, alive) && explicitTrue(m) {
-			incumbents = append(incumbents, m)
-		}
-	}
-	if len(incumbents) == 1 {
-		inc := incumbents[0]
-		s, lerr := loader.Load(ctx, inc, true)
-		if lerr != nil {
-			return res, lerr
-		}
-		if IneligibleReason(inc, s) == "" {
-			res.Outcome, res.PrimaryID = OutcomeHealthy, inc.ID
-			res.Writes, err = demoteOthers(store, gid, members, inc.ID, alive)
-			return res, err
-		}
-	}
-
-	ms, err := loader.LoadMembers(ctx, members, alive)
+	inc, d, err := decideSingle(ctx, store, members, env, alive)
 	if err != nil {
 		return res, err
 	}
-	d := Elect(ms)
+	if inc != nil {
+		res.Outcome, res.PrimaryID = OutcomeHealthy, inc.ID
+		res.Writes, err = demoteOthers(store, gid, members, inc.ID, alive)
+		return res, err
+	}
 	res.Decision = &d
 	if d.Kind == DecisionHeld {
 		res.Outcome = OutcomeHeld
@@ -401,6 +383,55 @@ func EnsureSinglePrimary(ctx context.Context, store EnsureStore, gid string, env
 		return res, nil
 	}
 	return writeWinner(store, gid, members, d.WinnerID, alive, OutcomeElected, res)
+}
+
+// decideSingle is EnsureSinglePrimary's decision, with no writes: the
+// healthy incumbent it keeps (one live explicit primary that is eligible),
+// else the election over every member.
+func decideSingle(ctx context.Context, store EnsureStore, members []database.Book, env Env, alive func(string) bool) (*database.Book, Decision, error) {
+	loader := Loader{Files: store, Chapters: store, RootDir: env.RootDir, Probe: env.Probe, Stat: env.Stat}
+	var incumbents []*database.Book
+	for i := range members {
+		m := &members[i]
+		if Electable(m, alive) && explicitTrue(m) {
+			incumbents = append(incumbents, m)
+		}
+	}
+	if len(incumbents) == 1 {
+		inc := incumbents[0]
+		s, err := loader.Load(ctx, inc, true)
+		if err != nil {
+			return nil, Decision{}, err
+		}
+		if IneligibleReason(inc, s) == "" {
+			return inc, Decision{}, nil
+		}
+	}
+	ms, err := loader.LoadMembers(ctx, members, alive)
+	if err != nil {
+		return nil, Decision{}, err
+	}
+	return nil, Elect(ms), nil
+}
+
+// ChooseSinglePrimary is the member EnsureSinglePrimary would leave as the
+// primary of a group whose rows are members, or "" when it would hold the
+// group. Read-only: the caller passes the rows as it wants them judged (a
+// replay of a hand-off passes them as they stood before it), and nothing is
+// written or locked. The disk access is Loader's stat, plus a probe when
+// Env.Probe is set.
+func ChooseSinglePrimary(ctx context.Context, store EnsureStore, members []database.Book, env Env) (string, error) {
+	inc, d, err := decideSingle(ctx, store, members, env, storeAlive(store))
+	if err != nil {
+		return "", err
+	}
+	if inc != nil {
+		return inc.ID, nil
+	}
+	if d.Kind == DecisionHeld {
+		return "", nil
+	}
+	return d.WinnerID, nil
 }
 
 // Crown makes keepID the explicit primary of group gid and every other live
