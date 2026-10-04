@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_opchange_index_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 9e202853-2ab3-4f8f-b567-6c435e5bebb3
 // last-edited: 2026-10-03
 
@@ -491,8 +491,9 @@ func TestOpchangeIndex_PropertyMatchesScan(t *testing.T) {
 				t.Fatal(err)
 			}
 			assertIndexedMatchesScan(t, p, books)
-			// And the public entry point takes the index path for every
-			// non-empty book.
+			// And the public entry point returns the scan's rows for every
+			// book: through the index for indexable ids (trusted above),
+			// through the scan for "" and "b1:x".
 			for _, b := range books {
 				got, err := p.GetBookChanges(b)
 				want, _ := p.getBookChangesScan(b)
@@ -1079,5 +1080,33 @@ func TestOpchangeIndex_ResetClearsTrust(t *testing.T) {
 	}
 	if got, err := p.GetBookChanges("b1"); err != nil || len(got) != 1 {
 		t.Fatalf("GetBookChanges after Reset = %v, %v", changeIDs(got), err)
+	}
+}
+
+// TestOpchangeIndex_FailedRebuildLeavesUntrusted: a rebuild clears trust at
+// its start and sets it only on success, so a cut rebuild leaves readers on
+// the scan, where an entry-less row is still returned.
+func TestOpchangeIndex_FailedRebuildLeavesUntrusted(t *testing.T) {
+	p := newOpChangeTestStore(t)
+	oldChunk := opChangeByBookBackfillChunk
+	opChangeByBookBackfillChunk = 2
+	t.Cleanup(func() { opChangeByBookBackfillChunk = oldChunk; opChangeByBookBackfillAfterChunk = nil })
+	for i := 0; i < 5; i++ {
+		if err := p.CreateOperationChange(&OperationChange{OperationID: "op1", BookID: "b1"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustTrustOpChange(t, p)
+	rawPutOpChange(t, p, &OperationChange{ID: "raw", OperationID: "op0", BookID: "b1"})
+	errCut := errors.New("cut")
+	opChangeByBookBackfillAfterChunk = func(int) error { return errCut }
+	if _, err := p.RebuildOpChangeByBookIndex(context.Background(), nil); !errors.Is(err, errCut) {
+		t.Fatalf("rebuild err = %v, want the cut", err)
+	}
+	if p.opChangeByBookIndexTrusted() {
+		t.Fatal("a failed rebuild left the index trusted")
+	}
+	if got, err := p.GetBookChanges("b1"); err != nil || len(got) != 6 {
+		t.Fatalf("GetBookChanges after a failed rebuild = %v, %v; want all 6 rows (scan)", changeIDs(got), err)
 	}
 }
