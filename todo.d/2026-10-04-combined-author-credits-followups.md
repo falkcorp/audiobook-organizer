@@ -20,3 +20,19 @@
       combined-credit fixer holds them as `skipped_split_refused`: about 436 books
       in the offline estimate from the 2026-10-04 census. Owner decision: a
       reviewed allow-list of pen names, a "By:" strip, or manual splits.
+- [ ] **COMBINED-AUTHOR-REVIEW-FOLLOWUPS** Follow-ups from the #3717 review,
+      deliberately left out of that PR:
+      - "Surname, First" names whose surname has several words ("Le Guin, Ursula
+        K."): `authorcredit` exempts only a one-word surname, so a new author of
+        that shape is now refused as a multi-person credit.
+      - Undo of a partly applied combined-credit row: `revertJunkAuthorCredits`
+        when the credits were written but the primary was not.
+      - Rescans: primary versus position 0, and duplicate series rows.
+      - The fixer's 2-minute cached author index can resolve a part to a stale
+        variant and create a near-duplicate author.
+      - The purge's `seriesRefs` guard has no per-item re-check at delete time.
+      - Cast-list folders split into 2-3 "authors" at scan time (63 of the 239
+        splits in the 2026-10-04 offline run carry "&", mostly Big Finish / Dark
+        Shadows casts such as "Lisa Bowerman & Harry Myers"). Their parts are
+        narrators. "Full Dark, No Stars" is a book title the library does not
+        hold, so the title check misses it.
