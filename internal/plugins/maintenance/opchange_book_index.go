@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/opchange_book_index.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d634d53a-0455-470e-8154-9d375b37ef69
 // last-edited: 2026-10-03
 
@@ -23,10 +23,19 @@ import (
 // internal/database/pebble_store_opchange_index.go. This op is the operator's
 // handle for the rollback runbook: a binary that predates the index writes
 // opchange rows without entries, so after any rollback-then-roll-forward the
-// index can under-report a book's journal. The rebuild clears the sentinel
-// (GetBookChanges falls back to the full scan at once), re-indexes every row
-// from the start, and sets the sentinel again. If it is cut, the next startup
-// backfill resumes from its cursor.
+// index can under-report a book's journal. Every boot's
+// EnsureOpChangeByBookIndex already verifies the index before readers trust
+// it and rebuilds on its own when the verify is not clean, so this op is the
+// manual handle for the same repair. The rebuild clears trust and the
+// sentinel (GetBookChanges falls back to the full scan at once), re-indexes
+// every row from the start, sets the sentinel again and trusts the index only
+// on success. If it is cut, the next startup ensure resumes from its cursor
+// and verifies before trusting.
+//
+// Liveness is manual: the store calls back once per committed chunk (rebuild),
+// every 10,000 rows (verify), and every 30s while queued behind another index
+// pass (the startup ensure holds the same slot); each callback stamps
+// UpdateProgress. The wait for that slot gives up when ctx ends.
 //
 // It resolves the store method through database.AsCapability, not a bare
 // assertion: OpsStore() is server.indexedStore in production, which hides
@@ -38,8 +47,8 @@ import (
 // rebuilds.
 
 type opChangeIndexRebuilder interface {
-	VerifyOpChangeByBookIndex(ctx context.Context) (database.OpChangeByBookIndexReport, error)
-	RebuildOpChangeByBookIndex(ctx context.Context) (database.OpChangeByBookBackfillResult, error)
+	VerifyOpChangeByBookIndex(ctx context.Context, progress database.OpChangeIndexProgress) (database.OpChangeByBookIndexReport, error)
+	RebuildOpChangeByBookIndex(ctx context.Context, progress database.OpChangeIndexProgress) (database.OpChangeByBookBackfillResult, error)
 }
 
 const opChangeBookIndexRebuildID = "maintenance.opchange-book-index-rebuild"
@@ -47,7 +56,7 @@ const opChangeBookIndexRebuildID = "maintenance.opchange-book-index-rebuild"
 func (p *Plugin) opChangeBookIndexRebuildDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		ID:          opChangeBookIndexRebuildID,
-		Liveness:    sdk.LivenessRunItems,
+		Liveness:    sdk.LivenessManual,
 		Plugin:      "maintenance",
 		DisplayName: "Operation-journal by-book index rebuild",
 		Description: "Rebuilds the opchange_by_book: index that GetBookChanges reads, ignoring the " +
@@ -91,11 +100,24 @@ func (p *Plugin) runOpChangeBookIndexRebuild(ctx context.Context, raw json.RawMe
 	return rebuildOpChangeBookIndex(ctx, r, reporter)
 }
 
+// opChangeIndexProgressTo turns the store's progress callbacks into liveness
+// stamps. The row total is unknown up front, so total is 0 and the message
+// carries the count.
+func opChangeIndexProgressTo(reporter sdk.Reporter) database.OpChangeIndexProgress {
+	return func(phase string, rows int) {
+		msg := fmt.Sprintf("opchange_by_book index %s: %d journal rows read", phase, rows)
+		if phase == "waiting" {
+			msg = "waiting for another opchange_by_book index pass (e.g. the startup verify) to finish"
+		}
+		_ = reporter.UpdateProgress(rows, 0, msg)
+	}
+}
+
 // previewOpChangeBookIndex is the read-only mode: it reports what a rebuild
 // would fix and writes nothing.
 func previewOpChangeBookIndex(ctx context.Context, r opChangeIndexRebuilder, reporter sdk.Reporter) error {
 	_ = reporter.UpdateProgress(0, 1, "verifying opchange_by_book: index (preview, writes nothing)")
-	rep, err := r.VerifyOpChangeByBookIndex(ctx)
+	rep, err := r.VerifyOpChangeByBookIndex(ctx, opChangeIndexProgressTo(reporter))
 	if err != nil {
 		return fmt.Errorf("verify opchange_by_book index: %w", err)
 	}
@@ -112,11 +134,11 @@ func previewOpChangeBookIndex(ctx context.Context, r opChangeIndexRebuilder, rep
 
 func rebuildOpChangeBookIndex(ctx context.Context, r opChangeIndexRebuilder, reporter sdk.Reporter) error {
 	_ = reporter.UpdateProgress(0, 1, "rebuilding opchange_by_book: index")
-	res, err := r.RebuildOpChangeByBookIndex(ctx)
+	res, err := r.RebuildOpChangeByBookIndex(ctx, opChangeIndexProgressTo(reporter))
 	if err != nil {
 		return fmt.Errorf("rebuild opchange_by_book index (scanned %d before failing; the sentinel "+
-			"stays cleared, so GetBookChanges uses the full scan until the next startup backfill "+
-			"resumes and finishes it): %w", res.Scanned, err)
+			"and trust stay cleared, so GetBookChanges uses the full scan until the next startup "+
+			"ensure resumes, verifies and trusts it): %w", res.Scanned, err)
 	}
 	msg := fmt.Sprintf("rebuilt opchange_by_book index: %d rows scanned, %d indexed, %d undecodable, %d commits",
 		res.Scanned, res.Indexed, res.Undecodable, res.Commits)

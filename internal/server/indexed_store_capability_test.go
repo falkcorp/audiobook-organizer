@@ -1,5 +1,5 @@
 // file: internal/server/indexed_store_capability_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 2c7f4b18-6e93-4a52-9d81-5f0a3b6c8e27
 // last-edited: 2026-10-03
 
@@ -332,10 +332,10 @@ func TestIndexedStoreExposesBookAtPathBackfill(t *testing.T) {
 }
 
 // TestIndexedStoreExposesOpChangeIndexBackfill pins the opchange_by_book:
-// startup wiring through the production decorator: the backfill (a
+// startup wiring through the production decorator: the ensure (a
 // *PebbleStore method outside Store) resolves through
-// resolveOpChangeIndexBackfiller, builds the index, and GetBookChanges through
-// the decorator returns the indexed rows.
+// resolveOpChangeIndexBackfiller, builds and verifies the index, trusts it,
+// and GetBookChanges through the decorator returns the indexed rows.
 func TestIndexedStoreExposesOpChangeIndexBackfill(t *testing.T) {
 	inner, err := database.NewPebbleStoreInMemory(t.TempDir())
 	if err != nil {
@@ -361,12 +361,15 @@ func TestIndexedStoreExposesOpChangeIndexBackfill(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CreateOperationChange: %v", err)
 	}
-	res, err := b.BackfillOpChangeByBookIndex(context.Background())
+	res, err := b.EnsureOpChangeByBookIndex(context.Background())
 	if err != nil {
-		t.Fatalf("BackfillOpChangeByBookIndex through the decorator: %v", err)
+		t.Fatalf("EnsureOpChangeByBookIndex through the decorator: %v", err)
 	}
-	if res.Skipped || res.Scanned != 1 || res.Indexed != 1 {
-		t.Fatalf("backfill result = %+v, want one row scanned and indexed", res)
+	if res.Backfill.Skipped || res.Backfill.Scanned != 1 || res.Backfill.Indexed != 1 {
+		t.Fatalf("backfill result = %+v, want one row scanned and indexed", res.Backfill)
+	}
+	if !res.Trusted || res.Rebuilt || res.Verify.MissingEntries != 0 {
+		t.Fatalf("ensure result = %+v, want a clean verify and a trusted index without a rebuild", res)
 	}
 	got, err := wrapped.GetBookChanges("book-a")
 	if err != nil {
