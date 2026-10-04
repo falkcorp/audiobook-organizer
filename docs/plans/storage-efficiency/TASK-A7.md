@@ -1,14 +1,16 @@
 <!-- file: docs/plans/storage-efficiency/TASK-A7.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: cb342533-a38a-4e11-a78c-49b2f54cecaf -->
 <!-- last-edited: 2026-10-03 -->
 
 # TASK-A7: Pebble store-open settings from the environment; shared block cache
 
 Wave W3. Start only after A1 (Pebble metrics), A3 (db-health census) and A4
-(format stamp) have merged to `main`. A3 and A7 both edit
+(format stamp, which defines `database.PebbleFormatMajorVersion`) have
+merged to `main` (they wait on PR #3704, plan P-1). A3 and A7 both edit
 `internal/database/pebble_store.go` and `ai_scan_store.go`, so they cannot
-run in parallel. Model: sonnet. Reviewer: code-reviewer.
+run in parallel. Runs in parallel with A9 (disjoint files). Model: sonnet.
+Reviewer: code-reviewer.
 
 ## 1. Goal and why
 
@@ -19,8 +21,15 @@ run in parallel. Model: sonnet. Reviewer: code-reviewer.
 - When a cache size is set, the main and OpenLibrary stores share one block
   cache.
 - Log the effective values at every open.
+- Pin the AI-scan and OpenLibrary opens to A4's
+  `database.PebbleFormatMajorVersion` instead of `pebble.FormatNewest` (A4
+  pinned the main store and raw diagnostics; these two files were left to
+  this task because A1 and A3 edit them first). In pebble v2.1.7 the two
+  values are equal, so nothing changes on disk.
+- Raise `MemoryMax` in `deploy/audiobook-organizer.service` to the value the
+  design section 8 formula gives, with a comment that states the formula.
 - With no variable set, behaviour is exactly today's. This PR changes nothing
-  on prod until the operator sets a variable.
+  on prod until the operator installs the unit and sets a variable.
 
 **Why.** Every Pebble knob is at its library default (eval R2): an 8 MB block
 cache against 50.6 GB, a 4 MB memtable, no bloom filters, and one compaction
@@ -100,7 +109,15 @@ npm ci --prefix web
 6. `grep -n 'return p.db.Compact(ctx, nil, \[\]byte{0xff}, false)' internal/database/pebble_store.go` → `5276:`
 7. `grep -n 'return s.db.Compact(ctx, nil, \[\]byte{0xff}, false)' internal/database/ai_scan_store.go internal/openlibrary/store.go`
    → `ai_scan_store.go:175`, `openlibrary/store.go:50`.
-8. `grep -n 'opts := &pebble.Options{FormatMajorVersion: pebble.FormatNewest}' internal/database/pebble_store.go` → `393:`
+8. `grep -n 'FormatMajorVersion: PebbleFormatMajorVersion' internal/database/pebble_store.go`
+   → one line in A4's open function. `grep -n 'FormatMajorVersion: pebble.FormatNewest' internal/database/ai_scan_store.go internal/openlibrary/store.go`
+   → `ai_scan_store.go:109`, `openlibrary/store.go:34`.
+8a. `grep -n '^var NoFilterPolicy' $P/options.go` → `58:`. `grep -n 'o.FilterPolicy = previousLevel.FilterPolicy' $P/options.go`
+   → `480:`: a level with no policy inherits the level above's, so L6 must be
+   set to `pebble.NoFilterPolicy` explicitly.
+8b. `grep -n 'o.MemTableStopWritesThreshold = 2' $P/options.go` → `1480:`
+   (the default number of queued memtables, used in the `MemoryMax`
+   formula).
 9. `grep -n 'db, err := pebble.Open(path, &pebble.Options{' internal/openlibrary/store.go internal/database/ai_scan_store.go`
    → `openlibrary/store.go:33`, `ai_scan_store.go:108`.
 10. `grep -n 'Compacting main database (Pebble, full keyspace)' internal/plugins/maintenance/db.go` → `69:`
@@ -119,7 +136,7 @@ after A3 and A4 merged. Re-grep and use the current lines.
      | Variable | Type and range | Effect when set |
      |---|---|---|
      | `AORG_PEBBLE_CACHE_BYTES` | int64, > 0, plain bytes (for example `4294967296`) | One shared `pebble.NewCache(n)` for the main and OpenLibrary stores (`Options.Cache`). Unset: each store gets Pebble's own 8 MB cache, as today. |
-     | `AORG_PEBBLE_BLOOM_BITS_PER_KEY` | int, 1..32 | `opts.Levels[i].FilterPolicy = bloom.FilterPolicy(n)` for i = 0..6, main store only. Applies to sstables written from then on. Old tables stay readable whether or not this is set. |
+     | `AORG_PEBBLE_BLOOM_BITS_PER_KEY` | int, 1..32 | `opts.Levels[i].FilterPolicy = bloom.FilterPolicy(n)` for i = 0..5 and `opts.Levels[6].FilterPolicy = pebble.NoFilterPolicy`, main store only. L6 is set explicitly because a level with no policy inherits the level above's (`options.go:479-480`), and a Get never reads L6 filters unless `UseL6Filters` is set (design 8), so L6 filters would cost about 200 MB and never be read. Applies to sstables written from then on. Old tables stay readable whether or not this is set. |
      | `AORG_PEBBLE_MEMTABLE_BYTES` | uint64, from 1 MiB to below 4 GiB | `opts.MemTableSize`, main store only. |
      | `AORG_PEBBLE_COMPACTION_CONCURRENCY` | `"N"` or `"L-U"`, 1 ≤ L ≤ U ≤ 64 | `opts.CompactionConcurrencyRange = func() (int, int) { return L, U }`, main store only. |
      | `AORG_PEBBLE_PARALLEL_MANUAL_COMPACTION` | `strconv.ParseBool` | The `parallelize` argument of `Compact` in every `Optimize` (main, owned AI-scan, OpenLibrary). |
@@ -160,13 +177,16 @@ after A3 and A4 merged. Re-grep and use the current lines.
    error, return `fmt.Errorf("pebble settings: %w", err)` before opening.
    Then call `settings.ApplyMain(opts)`, keep the test `FS` override, open,
    and call `settings.LogEffective("main", opts)`.
-3. **OpenLibrary (`openlibrary/store.go`, `NewOLStore`).** Parse the
-   settings the same way; on error, return it. The caller already logs OL
+3. **OpenLibrary (`openlibrary/store.go`, `NewOLStore`).** Replace
+   `pebble.FormatNewest` with `database.PebbleFormatMajorVersion` (the
+   package already imports `internal/database`). Parse the settings the same
+   way; on error, return it. The caller already logs OL
    open failures (`metafetch/openlibrary.go:57`). Call `ApplyShared` on the
    options, open, then `LogEffective("openlibrary", ...)`.
-4. **AI-scan store (`ai_scan_store.go`, `NewAIScanStore`).** Do not change
-   its open options. On prod it is not opened at all: it shares the main DB
-   (`NewAIScanStoreFromDB`). Only `Optimize` changes (step 5).
+4. **AI-scan store (`ai_scan_store.go`, `NewAIScanStore`).** Replace
+   `pebble.FormatNewest` with `PebbleFormatMajorVersion`; change no other
+   open option. On prod it is not opened at all: it shares the main DB
+   (`NewAIScanStoreFromDB`). Otherwise only `Optimize` changes (step 5).
 5. **Parallel manual compaction.** In all three `Optimize` methods
    (`pebble_store.go` `:5276`, `ai_scan_store.go` `:175`,
    `openlibrary/store.go` `:50`), replace the literal `false` with
@@ -181,11 +201,16 @@ after A3 and A4 merged. Re-grep and use the current lines.
    - `deploy/audiobook-organizer.service`. Below the `GOGC` line, add a
      commented block listing the five variables, each with a commented-out
      example line (for example `# Environment="AORG_PEBBLE_CACHE_BYTES=4294967296"`).
-     Add this warning, verbatim in substance: the block cache is allocated
-     outside the Go heap when cgo is enabled, and inside it when cgo is
-     disabled. Either way it counts toward `MemoryMax=12G`. With app RSS at
-     about 8.5 GB (design 8), a 4 GiB cache needs `MemoryMax` raised first,
-     and needs `GOMEMLIMIT` reviewed. Bump the header.
+     Change `MemoryMax=12G` to `MemoryMax=18G` and replace its comment with
+     the formula from design section 8, for example: "MemoryMax must cover
+     GOMEMLIMIT (9 GiB, Go heap) + the Pebble block cache (4 GiB planned;
+     allocated outside the Go heap under cgo, so GOMEMLIMIT does not limit
+     it) + memtable size x queued memtables (64 MiB x 2,
+     MemTableStopWritesThreshold) x open stores (main, OpenLibrary; signals
+     from release C) + headroom for the startup migration workers: about
+     18G. 8.5 GB RSS + a 4 GiB cache would already exceed 12G and the cgroup
+     would OOM-kill the service into a restart loop." Leave `GOMEMLIMIT`
+     unchanged. Bump the header.
    - `docs/configuration.md`. Add a section "Pebble store settings
      (environment only)". It contains:
      - the table above;
@@ -193,7 +218,19 @@ after A3 and A4 merged. Re-grep and use the current lines.
        configure);
      - the one-setting-per-deploy procedure, with the metric each should
        move (section 1);
-     - the `MemoryMax` warning;
+     - the `MemoryMax` formula, and the install runbook: `deploy/` is not
+       the installed copy, so copy the unit to `/etc/systemd/system/`,
+       `sudo systemctl daemon-reload`, restart, and confirm with
+       `systemctl show -p MemoryMax audiobook-organizer.service` before the
+       cache step is taken;
+     - the operator order (plan, release A): install the unit and confirm
+       `MemoryMax`; block cache 4 GB (record the service cgroup's
+       `memory.peak` before and 24 h after; roll back if the peak is above
+       80% of `MemoryMax`); bloom 10 on L0-L5; memtable 64 MB; compaction
+       concurrency 1-4 with parallel manual compaction, taken only after a
+       sandbox (A8) timing of one parallel full compaction against a serial
+       one is recorded; write amplification (A1's per-level counters)
+       recorded before and after each step;
      - that bloom filters apply only to newly written sstables until a full
        compaction rewrites the rest;
      - that once the cache is shared, A1's `pebble_block_cache_*` series for
@@ -223,6 +260,9 @@ after A3 and A4 merged. Re-grep and use the current lines.
   `MemTableSize == 0`, `CompactionConcurrencyRange == nil`, and every
   `Levels[i].FilterPolicy == nil`. Then `opts.EnsureDefaults()` yields
   `MemTableSize == 4<<20` and `CompactionConcurrencyRange()` returns `1, 1`.
+- `TestPebbleSettings_BloomSkipsL6`. With bloom set to 10, `Levels[0..5]`
+  hold `bloom.FilterPolicy(10)` and `Levels[6].FilterPolicy` is
+  `pebble.NoFilterPolicy`, also after `opts.EnsureDefaults()`.
 - `TestPebbleSettings_ParsesEachVariable`, table-driven: each variable's
   valid value maps to the expected option. For example `"1-4"` gives
   `CompactionConcurrencyRange()` = `1, 4`, and `"2"` gives `2, 2`.
@@ -271,7 +311,7 @@ Then run with `AORG_PEBBLE_COMPACTION_CONCURRENCY=1-4` and confirm `1-4`.
 - Fragment `changelog.d/<YYYYMMDD>_storage_a7_pebble_env_settings.md`, no
   header, `### Added`, one `####` entry listing the five variables and
   stating that the defaults are unchanged.
-- Check that `git diff origin/main | grep -nE 'abk_[A-Za-z0-9]{16,}|172\.16\.[0-9]{1,3}\.[0-9]{1,3}'` prints
+- Check that `git diff origin/main | grep -nE "ab""k_[A-Za-z0-9]{16,}|172\.16\.[0-9]{1,3}\.[0-9]{1,3}"` prints
   nothing.
 - Commit, for example
   `feat(database): Pebble open settings from AORG_PEBBLE_* env, shared block cache, parallel manual compaction`,
@@ -296,8 +336,15 @@ Then run with `AORG_PEBBLE_COMPACTION_CONCURRENCY=1-4` and confirm `1-4`.
       `AORG_PEBBLE_CACHE_BYTES` is set.
 - [ ] All three `Optimize` methods honour
       `AORG_PEBBLE_PARALLEL_MANUAL_COMPACTION`.
-- [ ] The deploy unit and `docs/configuration.md` document all five variables
-      and the `MemoryMax` warning.
+- [ ] Bloom filters are set on L0-L5 only, with `NoFilterPolicy` on L6.
+- [ ] The AI-scan and OpenLibrary opens use `database.PebbleFormatMajorVersion`;
+      `grep -rn 'pebble.FormatNewest' --include='*.go' internal cmd | grep -v _test`
+      prints nothing.
+- [ ] The deploy unit carries `MemoryMax=18G` with the formula comment, and
+      documents all five variables; `docs/configuration.md` documents them,
+      the formula, the install runbook (`systemctl show -p MemoryMax` before
+      the cache step), the parallel-versus-serial sandbox timing before the
+      parallel step, and write amplification before and after each step.
 - [ ] All tests pass with `-race`; `make lint-errcheck-ratchet`,
       `make lint-width` and `make sdkguard` pass.
 - [ ] PR open, not merged.

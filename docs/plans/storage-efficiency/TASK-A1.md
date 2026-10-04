@@ -1,12 +1,13 @@
 <!-- file: docs/plans/storage-efficiency/TASK-A1.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 64eab7cd-1fed-411b-bff5-1946bf95ffa0 -->
 <!-- last-edited: 2026-10-03 -->
 
 # TASK-A1: Export Pebble engine metrics to Prometheus
 
-Wave W1, in parallel with A2, A4, A5 and A6. Model: sonnet. Reviewer:
-code-reviewer.
+Wave W1. Start only after PR #3704 has merged to `main`: it edits
+`internal/metrics/metrics.go`, which step 2 edits (plan P-1). Runs in
+parallel with A2, A4, A5 and A6. Model: sonnet. Reviewer: code-reviewer.
 
 ## 1. Goal and why
 
@@ -18,7 +19,10 @@ scrape time. Change no store behaviour.
 50.6 GB store with 174,165,047 keys, no bloom filters, and one compaction at a
 time (eval R1, R2, F2). A later task (A7) changes those settings one deploy at
 a time, and each change needs a metric that shows whether it worked: cache hit
-rate, read amplification, L0 sublevels, compaction debt. None of these is
+rate, read amplification, L0 sublevels, compaction debt, and write
+amplification per level (the plan records it before and after each setting,
+and the design defers `LBaseMaxBytes` and target file sizes until it is
+measured). None of these is
 exported today, so there is no baseline. The plan requires 24 hours of these
 metrics before the first setting changes.
 
@@ -27,6 +31,7 @@ metrics before the first setting changes.
 ```bash
 cd /Users/jdfalk/repos/github.com/jdfalk/audiobook-organizer
 git fetch origin main
+gh pr view 3704 --json state -q .state   # must print MERGED; if not, stop
 git worktree add ../aorg-storage-a1-pebble-metrics -b feat/storage-a1-pebble-metrics origin/main
 cd ../aorg-storage-a1-pebble-metrics
 npm ci --prefix web
@@ -90,6 +95,11 @@ report it.
     → `211`, `283`, `285`, `287`, `454`.
 13. `grep -n '^func (m \*Metrics) ReadAmp\|^func (m \*Metrics) DiskSpaceUsage' $P/metrics.go`
     → `514` (DiskSpaceUsage), `556` (ReadAmp).
+14. `grep -n '^	TableBytesIn uint64\|^	TableBytesFlushed uint64\|^	TableBytesCompacted uint64\|^	BlobBytesFlushed uint64\|^	BlobBytesCompacted uint64\|^func (m \*LevelMetrics) WriteAmp' $P/metrics.go`
+    → `76`, `89`, `93`, `112`, `116`, `192`. `WriteAmp()` is
+    (TableBytesFlushed + TableBytesCompacted + BlobBytesFlushed +
+    BlobBytesCompacted) / TableBytesIn, and 0 when TableBytesIn is 0. For L0,
+    TableBytesIn is the bytes written to the WAL.
 
 Pebble v2.1.7 field paths, verified. `BlockCache` is `cache.Metrics`
 (`internal/cache/cache.go:23`).
@@ -107,6 +117,10 @@ Pebble v2.1.7 field paths, verified. `BlockCache` is `cache.Metrics`
 | WAL bytes / physical bytes / files | `m.WAL.Size`, `m.WAL.PhysicalSize` (uint64), `m.WAL.Files` (int64) |
 | disk usage | `m.DiskSpaceUsage()` (uint64) |
 | per-level bytes / files | `m.Levels[i].TablesSize`, `m.Levels[i].TablesCount` (int64), i = 0..6 |
+| per-level bytes in | `m.Levels[i].TableBytesIn` (uint64) |
+| per-level bytes flushed | `m.Levels[i].TableBytesFlushed + m.Levels[i].BlobBytesFlushed` (uint64) |
+| per-level bytes compacted | `m.Levels[i].TableBytesCompacted + m.Levels[i].BlobBytesCompacted` (uint64) |
+| per-level write amplification | `m.Levels[i].WriteAmp()` (float64, cumulative since open) |
 
 ## 5. Steps
 
@@ -130,7 +144,9 @@ Do not follow that precedent here, for three reasons:
      `CompactionDebtBytes`, `CompactionsInProgress`,
      `CompactionInProgressBytes`, `MemTableBytes`, `MemTables`, `WALBytes`,
      `WALPhysicalBytes`, `WALFiles`, `DiskUsageBytes`, `LevelBytes [7]float64`,
-     `LevelFiles [7]float64`. Every field is `float64` (the arrays too), so
+     `LevelFiles [7]float64`, `LevelBytesIn [7]float64`,
+     `LevelBytesFlushed [7]float64`, `LevelBytesCompacted [7]float64`,
+     `LevelWriteAmp [7]float64`. Every field is `float64` (the arrays too), so
      the collector passes values straight to `MustNewConstMetric` with no
      conversions.
    - `type PebbleSource func() (PebbleSample, bool)`. `ok == false` means "no
@@ -154,10 +170,18 @@ Do not follow that precedent here, for three reasons:
        `pebble_compaction_in_progress_bytes`, `pebble_memtable_bytes`,
        `pebble_memtables`, `pebble_wal_bytes`, `pebble_wal_physical_bytes`,
        `pebble_wal_files`, `pebble_disk_usage_bytes`, `pebble_level_bytes`,
-       `pebble_level_files`.
+       `pebble_level_files`, `pebble_level_write_amplification`
+       (cumulative since the store opened).
      - Counters (`prometheus.CounterValue`): `pebble_block_cache_hits_total`,
        `pebble_block_cache_misses_total`, `pebble_filter_hits_total`,
-       `pebble_filter_misses_total`, `pebble_compactions_total`.
+       `pebble_filter_misses_total`, `pebble_compactions_total`,
+       `pebble_level_bytes_in_total`, `pebble_level_bytes_flushed_total`,
+       `pebble_level_bytes_compacted_total`. The three per-level counters are
+       what the plan's write-amplification readings use: over a window, a
+       level's write amplification is (rate of flushed + rate of compacted) /
+       rate of bytes in, and the whole store's is the sum over levels of
+       flushed + compacted divided by L0's bytes in. Say this in their help
+       text.
      - Help text says where the value comes from, for example "Pebble
        Metrics().BlockCache.Hits, cumulative since the store opened".
    - Store label values are exactly `main` and `openlibrary`. Export them as
@@ -225,7 +249,8 @@ Do not follow that precedent here, for three reasons:
     `prometheus.NewRegistry()` that holds only the collector. Assert:
     - every metric name listed in step 1 is present with `store="main"`;
     - the counters have type COUNTER;
-    - `pebble_level_bytes` has 7 series.
+    - `pebble_level_bytes` has 7 series, and so does each of the three
+      per-level byte counters and `pebble_level_write_amplification`.
   - `TestPebbleCollector_SourceNotOKEmitsNothing`. A source that returns
     `false`. Assert zero series for that store.
   - `TestPebbleCollector_PanickingSourceIsolated`. One source panics, one
@@ -235,8 +260,8 @@ Do not follow that precedent here, for three reasons:
 - `internal/database/pebble_metrics_export_test.go`:
   - `TestPebbleSampleFromDB_RealStore`. Use `NewPebbleStoreInMemory`, write
     1,000 keys, call `p.db.Flush()`, sample. Assert `ok`,
-    `DiskUsageBytes > 0`, `MemTables >= 1`, and that the sum of `LevelFiles`
-    is `>= 1`.
+    `DiskUsageBytes > 0`, `MemTables >= 1`, that the sum of `LevelFiles`
+    is `>= 1`, and that `LevelBytesFlushed[0] > 0` and `LevelBytesIn[0] > 0`.
   - `TestPebbleSampleFromDB_ClosedStore`. Close the store, then sample. Assert
     `ok == false` and no panic.
   - `TestPebbleSampleFromDB_Nil`. Assert `ok == false`.
@@ -274,9 +299,9 @@ The `store="main"` series must appear.
 - Changelog fragment `changelog.d/<YYYYMMDD>_storage_a1_pebble_metrics.md`,
   with NO header. Category `### Added`. One `####` entry naming the metrics
   and the `store` label. Never use a `#` or `##` heading.
-- No `172.16.` addresses and no `abk_` strings in any committed file. Check
+- No `172.16.` addresses and no API-key-shaped strings in any committed file. Check
   with `git diff origin/main --stat` and
-  `git diff origin/main | grep -nE 'abk_[A-Za-z0-9]{16,}|172\.16\.[0-9]{1,3}\.[0-9]{1,3}'`, which must print
+  `git diff origin/main | grep -nE "ab""k_[A-Za-z0-9]{16,}|172\.16\.[0-9]{1,3}\.[0-9]{1,3}"`, which must print
   nothing.
 - Commit with conventional commits, for example
   `feat(metrics): export Pebble engine metrics for main and OpenLibrary stores`,
@@ -295,7 +320,8 @@ The `store="main"` series must appear.
 
 Exit criteria, each checkable:
 
-- [ ] `/metrics` on a local run shows `audiobook_organizer_pebble_block_cache_hits_total{store="main"}`.
+- [ ] `/metrics` on a local run shows `audiobook_organizer_pebble_block_cache_hits_total{store="main"}`
+      and `audiobook_organizer_pebble_level_bytes_compacted_total{store="main",level="6"}`.
 - [ ] All tests in section 7 exist and pass with `-race`.
 - [ ] `make sdkguard`, `make lint-errcheck-ratchet` and `make lint-width` pass.
 - [ ] `git diff origin/main --name-only` lists only the files in steps 1-7,

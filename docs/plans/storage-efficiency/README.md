@@ -1,56 +1,69 @@
 <!-- file: docs/plans/storage-efficiency/README.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: dbffee11-8cb8-403f-86a9-d887ac6f38dc -->
 <!-- last-edited: 2026-10-03 -->
 
 # Storage efficiency, Release A: task briefs
 
-Design: `docs/design/2026-10-03-storage-efficiency-design.md` (v1.0).
-Plan: `docs/plans/2026-10-03-storage-efficiency-plan.md`, table "Release A".
+Design: `docs/design/2026-10-03-storage-efficiency-design.md` (v1.3).
+Plan: `docs/plans/2026-10-03-storage-efficiency-plan.md` (v1.3), table
+"Release A".
 Evidence: `.claude/notes/db-optimization-eval-2026-10-03.md` in the primary
 checkout (R1-R7, F1-F13).
 
-Every brief was written against `d1f069fac`, and every anchor grep in it was
-run on that commit. Each brief is self-contained: an executor reads only its
-own brief.
+The A1-A7 briefs were written against `d1f069fac` and revised on 2026-10-03
+to match plan v1.3; the A4, A8 and A9 anchors were re-run on `543827ef7`
+(A8's on `falkcorp/infra-docs` at `5602791`). Each brief is self-contained:
+an executor reads only its own brief, and re-runs its anchor greps first.
 
 ## Briefs
 
 | Task | Brief | Branch | Model | Depends |
 |---|---|---|---|---|
-| A1 | [TASK-A1.md](TASK-A1.md): Pebble metrics on `/metrics` | `feat/storage-a1-pebble-metrics` | sonnet | none |
+| A1 | [TASK-A1.md](TASK-A1.md): Pebble metrics on `/metrics`, incl. per-level write amplification | `feat/storage-a1-pebble-metrics` | sonnet | #3704 merged (P-1) |
 | A2 | [TASK-A2.md](TASK-A2.md): key-family registry and `GET /diagnostics/db-census` | `feat/storage-a2-db-census` | opus | none |
-| A3 | [TASK-A3.md](TASK-A3.md): db-health and `/cache/stats` read the census; safe prefix bound | `perf/storage-a3-db-health-census` | sonnet | A2 merged |
-| A4 | [TASK-A4.md](TASK-A4.md): `storage_format` stamp and `make rollback` guard | `feat/storage-a4-format-stamp` | opus | none |
-| A5 | [TASK-A5.md](TASK-A5.md): timeline indexes, reconcile, `GetOpLogsV2` tail read | `perf/storage-a5-timeline-index` | opus | none |
+| A3 | [TASK-A3.md](TASK-A3.md): db-health and `/cache/stats` read the census; safe prefix bound | `perf/storage-a3-db-health-census` | sonnet | A2 merged, #3704 merged |
+| A4 | [TASK-A4.md](TASK-A4.md): `storage_format` stamp, open/init split, pinned Pebble format, `make rollback` guard | `feat/storage-a4-format-stamp` | opus | #3704 merged |
+| A5 | [TASK-A5.md](TASK-A5.md): timeline indexes through `stageOpRow`, stamp-gated reconcile, `GetOpLogsV2` tail read | `perf/storage-a5-timeline-index` | opus | #3704 merged |
 | A6 | [TASK-A6.md](TASK-A6.md): progress-log throttle | `perf/storage-a6-progress-log-throttle` | sonnet | none |
-| A7 | [TASK-A7.md](TASK-A7.md): store-open settings from environment, shared cache | `feat/storage-a7-pebble-env-settings` | sonnet | A1, A3, A4 merged |
+| A7 | [TASK-A7.md](TASK-A7.md): store-open settings from environment, shared cache, AI-scan and OpenLibrary format pin, `MemoryMax` | `feat/storage-a7-pebble-env-settings` | sonnet | A1, A3, A4 merged |
+| A8 | [TASK-A8.md](TASK-A8.md): rebuild the rehearsal sandbox on a ZFS clone (repo `falkcorp/infra-docs`) | `feat/sandbox-zfs-clone` in `infra-docs` | main session | A2 merged |
+| A9 | [TASK-A9.md](TASK-A9.md): `scripts/deploy-cutover.sh` and its Python body | `feat/storage-a9-deploy-cutover` | sonnet | A4 merged, A8 done |
+
+PR #3698 (also in P-1) merged on 2026-10-03; #3704 is the remaining gate.
 
 ## Wave order
 
-- **W1, in parallel:** A1, A2, A4, A5, A6. Their file sets are disjoint
-  (matrix below). That holds only because of three constraints written into
-  the briefs:
+- **W1:** A2 and A6 now; A1, A4 and A5 as soon as #3704 has merged (it edits
+  `pebble_store.go`, `metrics/metrics.go` and `server_lifecycle.go`, which A4,
+  A1 and A5 edit). The five W1 file sets are disjoint (matrix below). That
+  holds only because of four constraints written into the briefs:
   - A1 registers its collector from `internal/server/server.go`, not from
     the ticker in `server_lifecycle.go`, which A5 edits.
   - A5 adds no field to the `PebbleStore` struct (which would mean editing
     `pebble_store.go`, owned by A4). It reads its sentinel with one point
-    `Get` per call.
+    `Get` per call. Its ratchet is a Go source-scan test, not a Makefile
+    target, because A4 edits the `Makefile`. Its docs note goes into
+    `docs/database-pebble-schema.md`, not `docs/system/runbooks.md` (A4).
   - A2 registers the families `opv2:open:` and `opv2:done:` in advance, so A5
     never edits `keyfamilies.go`. A2 does not edit
     `docs/database-pebble-schema.md`, which A5 owns.
-- **W2:** A3 (needs A2's census).
-- **W3:** A7. **Collision found:** the plan put A3 and A7 together in W2, but
-  both edit `internal/database/pebble_store.go` (A3: `ScanPrefix`,
-  `CountPrefix`, `KeyCount`; A7: `newPebbleStore` options and `Optimize`) and
-  `internal/database/ai_scan_store.go` (A3: `HealthStats`; A7: open options
-  and `Optimize`). A7 therefore moves to its own wave after A3. It also
-  depends on A1 and A4 (plan).
+  - A4 pins the Pebble format only at the main store and raw diagnostics. The
+    AI-scan and OpenLibrary pins are in A7, so A4 never edits
+    `internal/openlibrary/store.go` (A1) or `ai_scan_store.go` (A3, A7).
+- **W2:** A3 (needs A2's census) and A8 (separate repository).
+- **W3:** A7 and A9. A3 and A7 both edit `internal/database/pebble_store.go`
+  (A3: `ScanPrefix`, `CountPrefix`, `KeyCount`; A7: `newPebbleStore`
+  options and `Optimize`) and `internal/database/ai_scan_store.go` (A3:
+  `HealthStats`; A7: open options and `Optimize`), so A7 waits for A3. A9
+  needs A4's `--print-storage-format` and sidecar, and A8's sandbox for its
+  one real deploy. A7 and A9 share no file.
 
-No task in any wave edits `database.Store`, an `iface_*.go` file, or
-`internal/database/mocks/`. `make ci` runs `mocks-check`, so two parallel
-regenerations of `mocks/mock_store.go` would collide. New store methods are
-reached through capability interfaces resolved with `database.AsCapability`.
+No task in any wave edits `database.Store`, an `iface_*.go` file,
+`internal/database/mocks/` or `.interface-width-baseline`. `make ci` runs
+`mocks-check`, so two parallel regenerations of `mocks/mock_store.go` would
+collide. New store methods are reached through capability interfaces
+resolved with `database.AsCapability`.
 
 ## Same-file collision matrix, W1
 
@@ -79,9 +92,11 @@ at most one mark, so the W1 tasks touch disjoint files.
 | `internal/database/storage_format.go` (new) | | | X | | |
 | `internal/database/storage_format_test.go` (new) | | | X | | |
 | `internal/database/pebble_store.go` | | | X | | |
+| `internal/testutil/` (one new test file) | | | X | | |
+| `cmd/diagnostics.go`, `cmd/diagnostics_test.go` | | | X | | |
 | `main.go`, `main_test.go` | | | X | | |
 | `Makefile`, `Makefile.local.example` | | | X | | |
-| `scripts/storage_format_guard.sh` (new) | | | X | | |
+| `scripts/storage_format_guard.py`, `scripts/test_storage_format_guard.py` (new) | | | X | | |
 | `docs/system/runbooks.md`, `docs/system/deploy-and-gpu-ops.md` | | | X | | |
 | `internal/database/pebble_store_ops_v2.go` | | | | X | |
 | `internal/database/pebble_store_ops_v2_timeline.go` (new) | | | | X | |
@@ -94,15 +109,23 @@ at most one mark, so the W1 tasks touch disjoint files.
 | `internal/operations/registry/reporter_progress_shape_internal_test.go` (new) | | | | | X |
 | `changelog.d/<date>_storage_a<N>_<slug>.md` (new, distinct slug per task) | X | X | X | X | X |
 
-Later waves: A3 edits `pebble_store.go`, `ai_scan_store.go`,
-`handlers/diagnostics.go`, `handlers/cache.go`, `web/src/services/api.ts`,
-`web/src/pages/Diagnostics.tsx`, replaces
-`handlers/key_counter_capability_test.go` with
-`handlers/census_capability_test.go`, and adds new test files. A7 edits `pebble_store.go`,
-`ai_scan_store.go`, `openlibrary/store.go`, `plugins/maintenance/db.go`,
-`deploy/audiobook-organizer.service`, `docs/configuration.md`, and adds
-`internal/database/pebble_settings.go` with its test. Each starts from an `origin/main` that
-already holds its predecessors.
+## Later waves
+
+- **W2.** A3 edits `pebble_store.go`, `ai_scan_store.go`,
+  `handlers/diagnostics.go`, `handlers/cache.go`, `web/src/services/api.ts`,
+  `web/src/pages/Diagnostics.tsx`, replaces
+  `handlers/key_counter_capability_test.go` with
+  `handlers/census_capability_test.go`, and adds new test files. A8 edits
+  only `scripts/dedup-sandbox/*` in `falkcorp/infra-docs`. Disjoint.
+- **W3.** A7 edits `pebble_store.go`, `ai_scan_store.go`,
+  `openlibrary/store.go`, `plugins/maintenance/db.go`,
+  `deploy/audiobook-organizer.service`, `docs/configuration.md`, and adds
+  `internal/database/pebble_settings.go` with its test. A9 adds
+  `scripts/deploy-cutover.sh`, `scripts/deploy_cutover.py` and
+  `scripts/test_deploy_cutover.py`, and edits `Makefile.local.example`
+  (after A4's edit to it has merged). Disjoint.
+
+Each task starts from an `origin/main` that already holds its predecessors.
 
 ## Anchors from the design and plan that did not hold on `d1f069fac`
 
@@ -110,9 +133,6 @@ already holds its predecessors.
   (the function starts at `:736`).
 - Eval note F6(a), "`diagnostics.go:741-755`": the `ScanPrefix` decode loop is
   at `:744-753`.
-- Plan, A4 "`migrations.go`": not needed. The stamp lives in a new
-  `storage_format.go`. `db_version` is stored through `UserPreference`
-  (`migration_bookkeeping.go:26`), and A4 copies that shape under its own key.
 - Plan, A5 "`handlers/operations_v2.go`": no behaviour change is needed. The
   `scan_capped` and `matched` meanings hold because the store keeps "sort the
   whole window, then truncate".
@@ -130,3 +150,7 @@ already holds its predecessors.
   transcripts counted.
 - The timeline answers in under 100 ms on prod for `since` up to 24 h.
 - db-health answers in under 1 s.
+- The plan's decision rules run before any release B brief is written: the
+  census `book_ver:` bytes are compared with design 4.9 (restate it if the
+  total is below 12 GB), and any held or undecodable legacy shape gets a
+  named B7 handler or an owner acceptance.
