@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_operations.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: e4277998-6d7e-4f2a-9b5c-0a620a98105e
 // last-edited: 2026-10-03
 
@@ -547,12 +547,18 @@ func (p *PebbleStore) GetRecentCompletedOperations(limit int) ([]Operation, erro
 
 // CreateOperationChange stores an operation change in PebbleDB, together with
 // its opchange_by_book: index entry in the same batch
-// (pebble_store_opchange_index.go). When the caller supplies an id, the call
-// may rewrite an existing row: if that row named a different book, its old
-// entry is deleted in the same batch, so the entry moves with the BookID. The
-// new entry is Set unconditionally, so a rewrite self-heals a missing one. Two
-// concurrent rewrites of one id can at worst leave an extra entry, which the
-// reader drops; neither can leave the stored row without its entry.
+// (pebble_store_opchange_index.go), committed with pebble.Sync. When the
+// caller supplies an id, the call may rewrite an existing row: if that row
+// named a different book, its old entry is deleted in the same batch, so the
+// entry moves with the BookID. The new entry is Set unconditionally, so a
+// rewrite self-heals a missing one. Two concurrent rewrites of one id can at
+// worst leave an extra entry, which the reader drops; neither can leave the
+// stored row without its entry.
+//
+// The read of the stored row through the commit runs under the read side of
+// opChangeJournalMu, so a concurrent PruneOperationChanges chunk (write side)
+// sees either the old row or the rewritten one, never deletes the rewrite
+// from a stale view. Writers do not exclude each other.
 func (p *PebbleStore) CreateOperationChange(change *OperationChange) error {
 	supplied := change.ID != ""
 	if !supplied {
@@ -566,8 +572,12 @@ func (p *PebbleStore) CreateOperationChange(change *OperationChange) error {
 	key := opChangeKey(change.OperationID, change.ID)
 	batch := p.db.NewBatch()
 	defer batch.Close()
-	// A freshly minted ULID cannot name a stored row, so only a supplied id
-	// pays the read.
+	p.opChangeJournalMu.RLock()
+	defer p.opChangeJournalMu.RUnlock()
+	// An id minted here cannot name a stored row, so it skips the read. Almost
+	// every caller in the tree supplies its own id (usually a fresh ULID), and
+	// the store cannot tell a fresh id from a reused one, so in practice
+	// nearly every call pays one point read; for a fresh id it is a miss.
 	if supplied {
 		oldBook, found, err := p.storedOpChangeBookID(key)
 		if err != nil {
@@ -612,18 +622,20 @@ func (p *PebbleStore) GetOperationChanges(operationID string) ([]*OperationChang
 }
 
 // GetBookChanges returns all changes for a given book, in primary key order
-// (operation id, then change id). Once the opchange_by_book: backfill sentinel
-// is set it reads the index and point-gets each row; until then, and always
-// for an empty bookID, it scans and decodes every opchange row. Both paths
-// return the same rows in the same order, and both fail on an undecodable row
-// (see pebble_store_opchange_index.go for how the index keeps that).
+// (operation id, then change id). Once this process has verified (or rebuilt)
+// the opchange_by_book: index and its sentinel is set, it reads the index and
+// point-gets each row; until then, and always for a book id that is not
+// indexable (empty, or containing ':'), it scans and decodes every opchange
+// row. Both paths return the same rows in the same order, and both fail on an
+// undecodable row (see the TRUST GATE section of pebble_store_opchange_index.go
+// for exactly when that holds).
 func (p *PebbleStore) GetBookChanges(bookID string) ([]*OperationChange, error) {
-	if bookID != "" {
-		built, err := p.opChangeByBookIndexBuilt()
+	if opChangeIndexable(bookID) {
+		usable, err := p.opChangeByBookIndexUsable()
 		if err != nil {
 			return nil, err
 		}
-		if built {
+		if usable {
 			return p.getBookChangesIndexed(bookID)
 		}
 	}
@@ -634,6 +646,9 @@ func (p *PebbleStore) GetBookChanges(bookID string) ([]*OperationChange, error) 
 // reverted. IDs that are not changes of this operation are ignored; rows not
 // listed are left untouched. Every rewritten row and its re-Set
 // opchange_by_book: entry commit in one batch, so the marks land together.
+// The read through the commit holds the read side of opChangeJournalMu, so a
+// prune chunk cannot interleave with it (a prune either removed the row before
+// the read, or re-checks the rewritten row after the commit).
 func (p *PebbleStore) MarkOperationChangesReverted(operationID string, changeIDs []string) error {
 	if len(changeIDs) == 0 {
 		return nil
@@ -642,6 +657,8 @@ func (p *PebbleStore) MarkOperationChangesReverted(operationID string, changeIDs
 	for _, id := range changeIDs {
 		want[id] = struct{}{}
 	}
+	p.opChangeJournalMu.RLock()
+	defer p.opChangeJournalMu.RUnlock()
 	changes, err := p.GetOperationChanges(operationID)
 	if err != nil {
 		return err

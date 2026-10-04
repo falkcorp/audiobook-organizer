@@ -122,8 +122,19 @@ type PebbleStore struct {
 	// opChangeByBookIndexBuilt).
 	opChangeByBookGen     atomic.Uint64
 	opChangeByBookBuiltAt atomic.Uint64
-	// opChangeIdxRunMu admits one opchange_by_book backfill/rebuild at a time.
-	opChangeIdxRunMu sync.Mutex
+	// opChangeByBookTrustedAt == opChangeByBookGen+1 while this process has
+	// verified (or rebuilt) the index for the current generation; only then
+	// does GetBookChanges read it (TRUST GATE in pebble_store_opchange_index.go).
+	opChangeByBookTrustedAt atomic.Uint64
+	// opChangeIdxRunSem is the one-at-a-time slot for opchange_by_book
+	// backfill/rebuild/ensure passes, created on first use so a zero-value
+	// PebbleStore works (lockOpChangeIdxRun, which waits with a context).
+	opChangeIdxRunOnce sync.Once
+	opChangeIdxRunSem  chan struct{}
+	// opChangeJournalMu: journal writers hold the read side, each
+	// PruneOperationChanges chunk the write side (LOCKS in
+	// pebble_store_opchange_index.go).
+	opChangeJournalMu sync.RWMutex
 	// worksGen is the works generation counter (see WorksGeneration in
 	// pebble_store_works.go). Every writer of a work: key bumps it after its
 	// commit, so a cache of the works table can tell whether it is still current.
@@ -5168,9 +5179,6 @@ func (p *PebbleStore) Reset() error {
 	// liveBookIDsAtPathIndex can snapshot after the wipe and return an empty
 	// set. Reset is a factory-reset path with no concurrent library work.
 	p.bookAtPathBuilt.Store(false)
-	// Same for the opchange_by_book: sentinel: GetBookChanges falls back to
-	// the full scan instead of trusting a wiped index.
-	p.opChangeByBookGen.Add(1)
 
 	// Use DeleteRange to wipe the entire keyspace in one operation.
 	// The range ["\x00", "\xff\xff") covers all possible keys.
@@ -5194,6 +5202,13 @@ func (p *PebbleStore) Reset() error {
 	if err := batch.Commit(pebble.Sync); err != nil {
 		return fmt.Errorf("failed to commit reset batch: %w", err)
 	}
+	// The wipe removed the opchange_by_book: sentinel. Bump the generation
+	// now that the DeleteRange is durable: that drops both the cached
+	// sentinel read and this boot's trust, so GetBookChanges uses the full
+	// scan until the next boot's EnsureOpChangeByBookIndex. A reader that
+	// used the index between the commit and this bump read a wiped index
+	// over a wiped journal, which is the same empty answer the scan gives.
+	p.opChangeByBookGen.Add(1)
 	// The wipe removed every book: and metadata_cache: row; no record can
 	// name them, so a reader behind either generation rebuilds (the review
 	// snapshot would otherwise keep serving the wiped books as live rows

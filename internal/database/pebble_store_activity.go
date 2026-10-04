@@ -1,12 +1,14 @@
 // file: internal/database/pebble_store_activity.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2e007a48-ab98-4cd4-bd6a-f85b75de0cfa
 // last-edited: 2026-10-03
 
 package database
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -98,13 +100,32 @@ func (p *PebbleStore) PruneOperationLogs(olderThan time.Time) (int, error) {
 	return 0, nil
 }
 
-// PruneOperationChanges deletes operation change entries older than the given time,
-// each with its opchange_by_book: index entry. Undecodable rows are skipped
-// (never deleted), as before.
+// opChangePruneChunk is how many journal rows one PruneOperationChanges commit
+// deletes. A var only so tests can exercise multi-chunk prunes; never
+// reassign in prod code.
+var opChangePruneChunk = 5_000
+
+// opChangePruneBeforeFlush, when non-nil, runs after a prune chunk's
+// candidates are collected and before the chunk takes the journal lock to
+// re-check and delete them. Test-only; nil in production.
+var opChangePruneBeforeFlush func()
+
+// PruneOperationChanges deletes operation change entries older than the given
+// time, each with its opchange_by_book: index entry. Undecodable rows are
+// skipped (never deleted), as before.
 // Key format: opchange:<operation_id>:<ulid>
+//
+// It commits every opChangePruneChunk rows, so no batch grows with the
+// journal; each row and its index entry are always in the same batch. The
+// iterator only nominates candidates: each chunk takes the write side of
+// opChangeJournalMu, re-reads every candidate from the store, and deletes it
+// only if it still decodes and is still older than the cutoff, unstaging the
+// entry of the BookID it has NOW. A row rewritten under the same id after the
+// iterator read it (CreateOperationChange with a supplied id, which holds the
+// read side from its read to its commit) therefore survives with its entry.
+// On a failure it returns the rows deleted by the chunks already committed.
 func (p *PebbleStore) PruneOperationChanges(olderThan time.Time) (int, error) {
-	prefix := "opchange:"
-	prefixBytes := []byte(prefix)
+	prefixBytes := []byte(opChangeKeyPrefix)
 	iter, err := p.db.NewIter(&pebble.IterOptions{
 		LowerBound: prefixBytes,
 		UpperBound: append(append([]byte{}, prefixBytes...), 0xFF),
@@ -114,31 +135,89 @@ func (p *PebbleStore) PruneOperationChanges(olderThan time.Time) (int, error) {
 	}
 	defer iter.Close()
 
+	chunk := opChangePruneChunk
+	if chunk < 1 {
+		chunk = 1
+	}
 	deleted := 0
-	batch := p.db.NewBatch()
-	defer batch.Close()
-
+	cands := make([][]byte, 0, chunk)
+	flush := func() error {
+		if len(cands) == 0 {
+			return nil
+		}
+		n, err := p.pruneOpChangeChunk(cands, olderThan)
+		deleted += n
+		cands = cands[:0]
+		return err
+	}
 	for iter.First(); iter.Valid(); iter.Next() {
 		var change OperationChange
 		if jsonErr := json.Unmarshal(iter.Value(), &change); jsonErr != nil {
 			continue
 		}
-		if change.CreatedAt.Before(olderThan) {
-			if bErr := batch.Delete(iter.Key(), nil); bErr != nil {
-				return 0, fmt.Errorf("pebble batch delete opchange: %w", bErr)
+		if !change.CreatedAt.Before(olderThan) {
+			continue
+		}
+		cands = append(cands, bytes.Clone(iter.Key()))
+		if len(cands) >= chunk {
+			if err := flush(); err != nil {
+				return deleted, err
 			}
-			// The row's opchange_by_book: entry goes in the same batch
-			// (pebble_store_opchange_index.go).
-			if bErr := unstageOpChangeIndex(batch, change.BookID, iter.Key()); bErr != nil {
-				return 0, bErr
-			}
-			deleted++
 		}
 	}
-	if deleted > 0 {
-		return deleted, batch.Commit(pebble.Sync)
+	if err := iter.Error(); err != nil {
+		return deleted, err
 	}
-	return 0, nil
+	if err := flush(); err != nil {
+		return deleted, err
+	}
+	return deleted, nil
+}
+
+// pruneOpChangeChunk re-checks each candidate under the journal write lock and
+// deletes the ones still older than olderThan, with their index entries, in
+// one Sync batch. It returns how many it deleted (zero on error: nothing in
+// the batch committed).
+func (p *PebbleStore) pruneOpChangeChunk(keys [][]byte, olderThan time.Time) (int, error) {
+	if opChangePruneBeforeFlush != nil {
+		opChangePruneBeforeFlush()
+	}
+	p.opChangeJournalMu.Lock()
+	defer p.opChangeJournalMu.Unlock()
+	batch := p.db.NewBatch()
+	defer batch.Close()
+	n := 0
+	for _, k := range keys {
+		v, closer, err := p.db.Get(k)
+		if errors.Is(err, pebble.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return 0, fmt.Errorf("re-read opchange row for prune: %w", err)
+		}
+		var change OperationChange
+		uerr := json.Unmarshal(v, &change)
+		closer.Close()
+		if uerr != nil || !change.CreatedAt.Before(olderThan) {
+			continue // now undecodable (never deleted) or rewritten since
+		}
+		if err := batch.Delete(k, nil); err != nil {
+			return 0, fmt.Errorf("pebble batch delete opchange: %w", err)
+		}
+		// The row's opchange_by_book: entry goes in the same batch
+		// (pebble_store_opchange_index.go).
+		if err := unstageOpChangeIndex(batch, change.BookID, k); err != nil {
+			return 0, err
+		}
+		n++
+	}
+	if n == 0 {
+		return 0, nil
+	}
+	if err := batch.Commit(pebble.Sync); err != nil {
+		return 0, fmt.Errorf("commit opchange prune chunk: %w", err)
+	}
+	return n, nil
 }
 
 // PruneSystemActivityLogs deletes system activity log entries older than the given time.

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series_phantom_repair.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 7c2dfefe-ccbe-4a60-b69b-5baee504d537
-// last-edited: 2026-09-15
+// last-edited: 2026-10-03
 
 package maintenance
 
@@ -532,7 +532,10 @@ func seriesPhantomRepointOne(store OpsStore, opID string, h seriesPhantomHolder,
 	// that never happened would replay the phantom id over whatever the
 	// concurrent writer committed), and a ledger failure aborts ModifyBook
 	// so the book is NOT written. CreateOperationChange is one synced Pebble
-	// put on an opchange key — no book stripe, no store book write.
+	// batch (the opchange row plus its opchange_by_book: index entry) under
+	// the read side of the journal lock; it takes no book stripe and writes
+	// no book, so calling it while ModifyBook holds this book's stripe keeps
+	// the store's lock order (book stripe, then journal lock).
 	written, uerr := store.ModifyBook(full.ID, func(cur *database.Book) error {
 		if cur.SeriesID == nil || *cur.SeriesID != h.SeriesID {
 			skip = "changed_underneath"

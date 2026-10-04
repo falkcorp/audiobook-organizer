@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_opchange_index_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9e202853-2ab3-4f8f-b567-6c435e5bebb3
 // last-edited: 2026-10-03
 
@@ -92,6 +92,21 @@ func mustBackfillOpChange(t testing.TB, p *PebbleStore) OpChangeByBookBackfillRe
 	return res
 }
 
+// mustTrustOpChange runs the startup path (backfill, verify, trust) and fails
+// unless the index ends up trusted, so the test's GetBookChanges calls take
+// the indexed path rather than the scan.
+func mustTrustOpChange(t testing.TB, p *PebbleStore) OpChangeByBookEnsureResult {
+	t.Helper()
+	res, err := p.EnsureOpChangeByBookIndex(context.Background())
+	if err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+	if !res.Trusted || !p.opChangeByBookIndexTrusted() {
+		t.Fatalf("ensure = %+v; index not trusted", res)
+	}
+	return res
+}
+
 func changeIDs(cs []*OperationChange) []string {
 	out := make([]string, len(cs))
 	for i, c := range cs {
@@ -142,7 +157,7 @@ func TestOpchangeIndex_RewriteSameBookKeepsOneEntry(t *testing.T) {
 
 func TestOpchangeIndex_RewriteNewBookMovesEntry(t *testing.T) {
 	p := newOpChangeTestStore(t)
-	mustBackfillOpChange(t, p)
+	mustTrustOpChange(t, p)
 	if err := p.CreateOperationChange(&OperationChange{ID: "c1", OperationID: "op1", BookID: "b1"}); err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +184,7 @@ func TestOpchangeIndex_RewriteNewBookMovesEntry(t *testing.T) {
 
 func TestOpchangeIndex_MarkRevertedKeepsEntry(t *testing.T) {
 	p := newOpChangeTestStore(t)
-	mustBackfillOpChange(t, p)
+	mustTrustOpChange(t, p)
 	a := &OperationChange{OperationID: "op1", BookID: "b1"}
 	b := &OperationChange{OperationID: "op1", BookID: "b2"}
 	for _, c := range []*OperationChange{a, b} {
@@ -193,7 +208,7 @@ func TestOpchangeIndex_MarkRevertedKeepsEntry(t *testing.T) {
 
 func TestOpchangeIndex_PruneDeletesEntry(t *testing.T) {
 	p := newOpChangeTestStore(t)
-	mustBackfillOpChange(t, p)
+	mustTrustOpChange(t, p)
 	old := &OperationChange{OperationID: "op1", BookID: "b1"}
 	if err := p.CreateOperationChange(old); err != nil {
 		t.Fatal(err)
@@ -221,9 +236,10 @@ func TestOpchangeIndex_PruneDeletesEntry(t *testing.T) {
 	}
 }
 
-// TestOpChangeIndex_FallbackBeforeSentinel: until the backfill sentinel is
-// set, GetBookChanges must scan, so rows a pre-index binary wrote (no entry)
-// are still returned; once it is set, it reads the index.
+// TestOpChangeIndex_FallbackBeforeSentinel: until the index is trusted,
+// GetBookChanges must scan, so rows a pre-index binary wrote (no entry) are
+// still returned, and a backfill alone (sentinel set) does not change that;
+// once the startup ensure trusts it, it reads the index.
 func TestOpchangeIndex_FallbackBeforeSentinel(t *testing.T) {
 	p := newOpChangeTestStore(t)
 	rawPutOpChange(t, p, &OperationChange{ID: "c1", OperationID: "op1", BookID: "b1"})
@@ -239,24 +255,24 @@ func TestOpchangeIndex_FallbackBeforeSentinel(t *testing.T) {
 	}
 
 	mustBackfillOpChange(t, p)
-	got, err = p.GetBookChanges("b1")
-	if err != nil || len(got) != 2 {
-		t.Fatalf("post-backfill GetBookChanges = %v, %v; want both rows", changeIDs(got), err)
+	if p.opChangeByBookIndexTrusted() {
+		t.Fatal("a backfill alone trusted the index")
 	}
-	// Prove the index path is in use now: a row written without an entry is
-	// invisible to it (this is exactly the rollback hazard the rebuild fixes).
+	// Sentinel set, not trusted: a row written without an entry is still
+	// returned, because readers are on the scan.
 	rawPutOpChange(t, p, &OperationChange{ID: "c3", OperationID: "op3", BookID: "b1"})
-	got, _ = p.GetBookChanges("b1")
-	if len(got) != 2 {
-		t.Fatalf("GetBookChanges after a raw write = %v; want the index path (2 rows)", changeIDs(got))
+	got, err = p.GetBookChanges("b1")
+	if err != nil || len(got) != 3 {
+		t.Fatalf("post-backfill GetBookChanges = %v, %v; want all 3 rows (full scan)", changeIDs(got), err)
 	}
-	res, err := p.RebuildOpChangeByBookIndex(context.Background())
-	if err != nil || res.Indexed != 3 {
-		t.Fatalf("rebuild = %+v, %v; want 3 indexed", res, err)
+	// The startup ensure finds the entry-less row and rebuilds before trusting.
+	ens := mustTrustOpChange(t, p)
+	if ens.Verify.MissingEntries != 1 || !ens.Rebuilt || ens.Rebuild.Indexed != 3 {
+		t.Fatalf("ensure = %+v; want 1 missing entry found and a rebuild indexing 3", ens)
 	}
-	got, _ = p.GetBookChanges("b1")
-	if len(got) != 3 {
-		t.Fatalf("GetBookChanges after rebuild = %v; want 3 rows", changeIDs(got))
+	got, err = getBookChangesVia(t, p, "b1")
+	if err != nil || len(got) != 3 {
+		t.Fatalf("indexed GetBookChanges after ensure = %v, %v; want 3 rows", changeIDs(got), err)
 	}
 	if again := mustBackfillOpChange(t, p); !again.Skipped {
 		t.Fatalf("second backfill = %+v; want skipped", again)
@@ -303,6 +319,9 @@ func TestOpchangeIndex_BackfillResumesAfterCut(t *testing.T) {
 	if err := p.CreateOperationChange(&OperationChange{ID: "c00x", OperationID: "op0", BookID: "b0"}); err != nil {
 		t.Fatal(err)
 	}
+	// A pre-index binary (rollback during the gap) writes a row that sorts
+	// BEFORE the cursor: the resumed run never visits it.
+	rawPutOpChange(t, p, &OperationChange{ID: "c00y", OperationID: "op0", BookID: "b0"})
 
 	opChangeByBookBackfillAfterChunk = nil
 	res, err = p.BackfillOpChangeByBookIndex(context.Background())
@@ -316,9 +335,18 @@ func TestOpchangeIndex_BackfillResumesAfterCut(t *testing.T) {
 		closer.Close()
 		t.Fatal("cursor survived a completed backfill")
 	}
+	// Sentinel set, but the skipped row has no entry: readers must still be
+	// on the scan, and the startup ensure must find it and rebuild.
+	if got, _ := p.GetBookChanges("b0"); len(got) != 6 {
+		t.Fatalf("GetBookChanges(b0) before ensure = %v, want 6 (full scan)", changeIDs(got))
+	}
+	ens := mustTrustOpChange(t, p)
+	if ens.Verify.MissingEntries != 1 || !ens.Rebuilt {
+		t.Fatalf("ensure = %+v; want the skipped row reported missing and a rebuild", ens)
+	}
 	assertIndexedMatchesScan(t, p, []string{"b0", "b1", "b2"})
-	if got, _ := p.GetBookChanges("b0"); len(got) != 5 {
-		t.Fatalf("GetBookChanges(b0) = %v, want 5", changeIDs(got))
+	if got, _ := getBookChangesVia(t, p, "b0"); len(got) != 6 {
+		t.Fatalf("indexed GetBookChanges(b0) = %v, want 6", changeIDs(got))
 	}
 }
 
@@ -353,7 +381,11 @@ func TestOpchangeIndex_UndecodableFailsClosed(t *testing.T) {
 	if res.Undecodable != 1 {
 		t.Fatalf("backfill = %+v, want 1 undecodable", res)
 	}
-	if _, err := p.GetBookChanges("b1"); err == nil {
+	ens := mustTrustOpChange(t, p)
+	if ens.Rebuilt || ens.Verify.UnmarkedUndecodable != 0 || ens.Verify.Undecodable != 1 {
+		t.Fatalf("ensure = %+v; want the backfill's marker to satisfy the verify", ens)
+	}
+	if _, err := getBookChangesVia(t, p, "b1"); err == nil {
 		t.Fatal("indexed GetBookChanges ignored an undecodable row; the scan fails on it")
 	}
 	// Rewriting the row repairs it: the marker goes stale and both paths agree.
@@ -366,14 +398,32 @@ func TestOpchangeIndex_UndecodableFailsClosed(t *testing.T) {
 	}
 }
 
-// assertIndexedMatchesScan compares both read paths for each book.
+// getBookChangesVia calls GetBookChanges after asserting that it will take
+// the indexed path (trusted, sentinel set, indexable id).
+func getBookChangesVia(t *testing.T, p *PebbleStore, bookID string) ([]*OperationChange, error) {
+	t.Helper()
+	usable, err := p.opChangeByBookIndexUsable()
+	if err != nil || !usable || !opChangeIndexable(bookID) {
+		t.Fatalf("GetBookChanges(%q) would not use the index (usable=%t, err=%v)", bookID, usable, err)
+	}
+	return p.GetBookChanges(bookID)
+}
+
+// assertIndexedMatchesScan compares both read paths for each book. A book id
+// that is not indexable (empty, or containing ':') has no entries by design,
+// so for it the check is that GetBookChanges itself returns the scan's rows.
 func assertIndexedMatchesScan(t *testing.T, p *PebbleStore, books []string) {
 	t.Helper()
 	for _, book := range books {
-		if book == "" {
-			continue // never indexed: GetBookChanges("") always scans
-		}
 		want, werr := p.getBookChangesScan(book)
+		if !opChangeIndexable(book) {
+			got, gerr := p.GetBookChanges(book)
+			if (werr == nil) != (gerr == nil) || !reflect.DeepEqual(changeIDs(want), changeIDs(got)) {
+				t.Fatalf("non-indexable book %q: GetBookChanges = %v, %v; scan = %v, %v",
+					book, changeIDs(got), gerr, changeIDs(want), werr)
+			}
+			continue
+		}
 		got, gerr := p.getBookChangesIndexed(book)
 		if (werr == nil) != (gerr == nil) {
 			t.Fatalf("book %q: scan err %v, indexed err %v", book, werr, gerr)
@@ -408,7 +458,7 @@ func TestOpchangeIndex_PropertyMatchesScan(t *testing.T) {
 				rawPutOpChange(t, p, &OperationChange{ID: r.id, OperationID: r.op, BookID: pick(), NewValue: "raw"})
 				all = append(all, r)
 			}
-			mustBackfillOpChange(t, p)
+			mustTrustOpChange(t, p)
 
 			var cut time.Time
 			for step := 0; step < 200; step++ {
@@ -513,6 +563,11 @@ func TestOpchangeIndex_BackfillRacesLiveWrites(t *testing.T) {
 		t.Fatalf("backfill = %+v; want a multi-chunk run", res)
 	}
 	assertIndexedMatchesScan(t, p, books)
+	// Completeness under the race is what lets the startup ensure trust the
+	// index without a rebuild.
+	if ens := mustTrustOpChange(t, p); ens.Rebuilt || ens.Verify.MissingEntries != 0 {
+		t.Fatalf("ensure after a raced backfill = %+v; want a clean verify", ens)
+	}
 }
 
 // seedOpChangeJournal writes rows journal rows spread over books books, the
@@ -617,12 +672,12 @@ func TestOpchangeIndex_RebuildInvalidatesCachedSentinel(t *testing.T) {
 	if err := p.CreateOperationChange(&OperationChange{OperationID: "op1", BookID: "b1"}); err != nil {
 		t.Fatal(err)
 	}
-	mustBackfillOpChange(t, p)
+	mustTrustOpChange(t, p)
 	if built, _ := p.opChangeByBookIndexBuilt(); !built {
 		t.Fatal("not built after backfill")
 	}
 	staleGen := p.opChangeByBookGen.Load()
-	sawScan := false
+	sawScan, sawTrusted := false, false
 	opChangeByBookBackfillAfterChunk = func(int) error {
 		// A reader that read the sentinel just before the delete committed.
 		p.opChangeByBookBuiltAt.Store(staleGen + 1)
@@ -631,16 +686,22 @@ func TestOpchangeIndex_RebuildInvalidatesCachedSentinel(t *testing.T) {
 			return err
 		}
 		sawScan = !built
+		if p.opChangeByBookIndexTrusted() {
+			sawTrusted = true
+		}
 		return nil
 	}
-	if _, err := p.RebuildOpChangeByBookIndex(context.Background()); err != nil {
+	if _, err := p.RebuildOpChangeByBookIndex(context.Background(), nil); err != nil {
 		t.Fatal(err)
 	}
-	if !sawScan {
-		t.Fatal("a reader trusted the index mid-rebuild")
+	if !sawScan || sawTrusted {
+		t.Fatalf("a reader could use the index mid-rebuild (sentinel seen missing=%t, trusted=%t)", sawScan, sawTrusted)
 	}
 	if built, _ := p.opChangeByBookIndexBuilt(); !built {
 		t.Fatal("not built after rebuild")
+	}
+	if !p.opChangeByBookIndexTrusted() {
+		t.Fatal("a successful rebuild did not trust the index")
 	}
 }
 
@@ -651,7 +712,7 @@ func TestOpchangeIndex_Verify(t *testing.T) {
 	if err := p.db.Set(opChangeKey("op9", "bad"), []byte("{"), pebble.Sync); err != nil {
 		t.Fatal(err)
 	}
-	rep, err := p.VerifyOpChangeByBookIndex(context.Background())
+	rep, err := p.VerifyOpChangeByBookIndex(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -660,7 +721,7 @@ func TestOpchangeIndex_Verify(t *testing.T) {
 		t.Fatalf("pre-backfill report = %+v", rep)
 	}
 	mustBackfillOpChange(t, p)
-	rep, err = p.VerifyOpChangeByBookIndex(context.Background())
+	rep, err = p.VerifyOpChangeByBookIndex(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -673,7 +734,7 @@ func TestOpchangeIndex_Verify(t *testing.T) {
 // pruned row's index entry with it, so no orphan entries accumulate.
 func TestOpchangeIndex_PruneLeavesNoOrphans(t *testing.T) {
 	p := newOpChangeTestStore(t)
-	mustBackfillOpChange(t, p)
+	mustTrustOpChange(t, p)
 	for i := 0; i < 50; i++ {
 		if err := p.CreateOperationChange(&OperationChange{
 			OperationID: fmt.Sprintf("op%d", i%5), BookID: fmt.Sprintf("b%d", i%7),
@@ -709,7 +770,7 @@ func TestOpchangeIndex_PruneLeavesNoOrphans(t *testing.T) {
 // an error.
 func TestOpchangeIndex_DanglingEntrySkipped(t *testing.T) {
 	p := newOpChangeTestStore(t)
-	mustBackfillOpChange(t, p)
+	mustTrustOpChange(t, p)
 	keep := &OperationChange{OperationID: "op1", BookID: "b1"}
 	if err := p.CreateOperationChange(keep); err != nil {
 		t.Fatal(err)
@@ -729,7 +790,7 @@ func TestOpchangeIndex_DanglingEntrySkipped(t *testing.T) {
 // if either ever starts deleting opchange rows, it must take the entries too.
 func TestOpchangeIndex_OperationDeletesKeepJournal(t *testing.T) {
 	p := newOpChangeTestStore(t)
-	mustBackfillOpChange(t, p)
+	mustTrustOpChange(t, p)
 	if err := p.InsertOperationV2(OperationV2Row{ID: "op1", DefID: "test.def", Status: "completed"}); err != nil {
 		t.Fatal(err)
 	}
@@ -750,4 +811,273 @@ func TestOpchangeIndex_OperationDeletesKeepJournal(t *testing.T) {
 		t.Fatalf("index keys = %d, want 1 (row and entry both kept)", n)
 	}
 	assertIndexedMatchesScan(t, p, []string{"b1"})
+}
+
+// TestOpchangeIndex_RollbackRowNotHidden (review probe P1): a row a pre-index
+// binary writes after the sentinel is set must never be hidden. Before this
+// boot's ensure the reader scans; the ensure's verify finds the row missing,
+// rebuilds, and only then trusts the index, which then returns the row.
+func TestOpchangeIndex_RollbackRowNotHidden(t *testing.T) {
+	p := newOpChangeTestStore(t)
+	mustBackfillOpChange(t, p)
+	rawPutOpChange(t, p, &OperationChange{ID: "c1", OperationID: "op1", BookID: "B", CreatedAt: time.Now()})
+	got, err := p.GetBookChanges("B")
+	if err != nil {
+		t.Fatal(err)
+	}
+	scan, _ := p.getBookChangesScan("B")
+	if len(got) != len(scan) || len(got) != 1 {
+		t.Fatalf("ROLLBACK HAZARD: GetBookChanges returns %d rows, scan returns %d", len(got), len(scan))
+	}
+
+	ens := mustTrustOpChange(t, p)
+	if ens.Verify.MissingEntries != 1 || !ens.Rebuilt {
+		t.Fatalf("ensure = %+v; want MissingEntries=1 and a rebuild", ens)
+	}
+	got, err = getBookChangesVia(t, p, "B")
+	if err != nil || len(got) != 1 || got[0].ID != "c1" {
+		t.Fatalf("indexed GetBookChanges(B) = %v, %v; want the rolled-back row", changeIDs(got), err)
+	}
+}
+
+// TestOpchangeIndex_TrustedRollbackAcrossReboot: a process that trusted the
+// index, then a rollback binary writes, then a new process opens the same
+// store: it must not inherit trust from the sentinel.
+func TestOpchangeIndex_TrustedRollbackAcrossReboot(t *testing.T) {
+	dir := t.TempDir()
+	p, err := NewPebbleStoreInMemory(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustTrustOpChange(t, p)
+	// Simulate "the old binary ran" by writing a raw row, then a fresh
+	// process: a new PebbleStore value over the same db has no trust.
+	rawPutOpChange(t, p, &OperationChange{ID: "c1", OperationID: "op1", BookID: "B"})
+	fresh := &PebbleStore{db: p.db}
+	if fresh.opChangeByBookIndexTrusted() {
+		t.Fatal("a new process trusted the index without verifying")
+	}
+	if got, err := fresh.GetBookChanges("B"); err != nil || len(got) != 1 {
+		t.Fatalf("fresh GetBookChanges(B) = %v, %v; want the row via the scan", changeIDs(got), err)
+	}
+	_ = p.Close()
+}
+
+// TestOpchangeIndex_ColonBookIDNotIndexed (review probe P2): book ids with ':'
+// would collide on the index key ("a:b" + op1:c1 and "a" + b:op1:c1 share
+// opchange_by_book:a:b:op1:c1), so they get no entries and GetBookChanges
+// scans for them; pruning the "a" row must not disturb "a:b".
+func TestOpchangeIndex_ColonBookIDNotIndexed(t *testing.T) {
+	p := newOpChangeTestStore(t)
+	mustTrustOpChange(t, p)
+	old := time.Now().Add(-48 * time.Hour)
+	if err := p.CreateOperationChange(&OperationChange{ID: "c1", OperationID: "op1", BookID: "a:b"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := opChangeEntries(t, p, "op1", "c1"); len(got) != 0 {
+		t.Fatalf("colon book id got index entries %v", got)
+	}
+	if err := p.CreateOperationChange(&OperationChange{ID: "op1:c1", OperationID: "b", BookID: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	// Exactly one index key exists, and it is row Y's (book "a").
+	if n := countOpChangeIndexKeys(t, p); n != 1 {
+		t.Fatalf("index keys = %d, want 1 (only book a's row)", n)
+	}
+	rawPutOpChange(t, p, &OperationChange{ID: "op1:c1", OperationID: "b", BookID: "a", CreatedAt: old})
+	if n, err := p.PruneOperationChanges(time.Now().Add(-time.Hour)); err != nil || n != 1 {
+		t.Fatalf("prune = %d, %v; want 1", n, err)
+	}
+	got, err := p.GetBookChanges("a:b")
+	scan, _ := p.getBookChangesScan("a:b")
+	if err != nil || len(got) != 1 || len(got) != len(scan) {
+		t.Fatalf("COLLISION: book a:b GetBookChanges = %v, %v; scan = %v", changeIDs(got), err, changeIDs(scan))
+	}
+	assertIndexedMatchesScan(t, p, []string{"a", "a:b"})
+	if n := countOpChangeIndexKeys(t, p); n != 0 {
+		t.Fatalf("index keys after prune = %d, want 0", n)
+	}
+	// Backfill and verify apply the same rule: a raw colon row is neither
+	// indexed by a rebuild nor counted as missing by the verify.
+	rawPutOpChange(t, p, &OperationChange{ID: "c2", OperationID: "op2", BookID: "x:y"})
+	rep, err := p.VerifyOpChangeByBookIndex(context.Background(), nil)
+	if err != nil || rep.MissingEntries != 0 || rep.Indexable != 0 {
+		t.Fatalf("verify = %+v, %v; want colon rows not indexable", rep, err)
+	}
+	res, err := p.RebuildOpChangeByBookIndex(context.Background(), nil)
+	if err != nil || res.Indexed != 0 {
+		t.Fatalf("rebuild = %+v, %v; want nothing indexed", res, err)
+	}
+}
+
+// TestOpchangeIndex_UndecodableAfterBackfill (review probe P3): a row that
+// becomes undecodable after the backfill has no marker. Before the ensure the
+// reader scans and fails on it; the ensure's verify counts it unmarked and
+// rebuilds (marking it) before trusting, and the indexed reader then fails
+// on it too.
+func TestOpchangeIndex_UndecodableAfterBackfill(t *testing.T) {
+	p := newOpChangeTestStore(t)
+	if err := p.CreateOperationChange(&OperationChange{OperationID: "op1", BookID: "B"}); err != nil {
+		t.Fatal(err)
+	}
+	mustBackfillOpChange(t, p)
+	if err := p.db.Set([]byte("opchange:op2:zz"), []byte("{not json"), nil); err != nil {
+		t.Fatal(err)
+	}
+	_, ierr := p.GetBookChanges("B")
+	_, serr := p.getBookChangesScan("B")
+	if serr == nil || ierr == nil {
+		t.Fatalf("DIVERGENCE: GetBookChanges err=%v scan err=%v; both must fail", ierr, serr)
+	}
+	ens := mustTrustOpChange(t, p)
+	if ens.Verify.UnmarkedUndecodable != 1 || !ens.Rebuilt || ens.Rebuild.Undecodable != 1 {
+		t.Fatalf("ensure = %+v; want UnmarkedUndecodable=1 and a rebuild that marks it", ens)
+	}
+	if _, err := getBookChangesVia(t, p, "B"); err == nil {
+		t.Fatal("indexed GetBookChanges ignored an undecodable row after the ensure")
+	}
+}
+
+// TestOpchangeIndex_PruneChunksLeaveNoOrphans: a prune larger than one chunk
+// commits in several batches and still takes every row's entry with it.
+func TestOpchangeIndex_PruneChunksLeaveNoOrphans(t *testing.T) {
+	p := newOpChangeTestStore(t)
+	oldChunk := opChangePruneChunk
+	opChangePruneChunk = 4
+	t.Cleanup(func() { opChangePruneChunk = oldChunk })
+	mustTrustOpChange(t, p)
+	const rows = 23 // > 5 chunks, last one partial
+	for i := 0; i < rows; i++ {
+		if err := p.CreateOperationChange(&OperationChange{
+			OperationID: fmt.Sprintf("op%d", i%3), BookID: fmt.Sprintf("b%d", i%5),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	keep := &OperationChange{OperationID: "op9", BookID: "b1"}
+	time.Sleep(2 * time.Millisecond)
+	cut := time.Now()
+	time.Sleep(2 * time.Millisecond)
+	if err := p.CreateOperationChange(keep); err != nil {
+		t.Fatal(err)
+	}
+	n, err := p.PruneOperationChanges(cut)
+	if err != nil || n != rows {
+		t.Fatalf("prune = %d, %v; want %d", n, err, rows)
+	}
+	if k := countOpChangeIndexKeys(t, p); k != 1 {
+		t.Fatalf("index keys after prune = %d, want 1 (the kept row)", k)
+	}
+	rep, err := p.VerifyOpChangeByBookIndex(context.Background(), nil)
+	if err != nil || rep.Rows != 1 || rep.MissingEntries != 0 {
+		t.Fatalf("verify after prune = %+v, %v", rep, err)
+	}
+}
+
+// TestOpchangeIndex_PruneSparesRowRewrittenMidPrune: a row the prune's
+// iterator saw as old, then rewritten under the same id (new CreatedAt, new
+// book) before the chunk commits, must survive with its new entry.
+func TestOpchangeIndex_PruneSparesRowRewrittenMidPrune(t *testing.T) {
+	p := newOpChangeTestStore(t)
+	mustTrustOpChange(t, p)
+	t.Cleanup(func() { opChangePruneBeforeFlush = nil })
+	old := time.Now().Add(-48 * time.Hour)
+	rawPutOpChange(t, p, &OperationChange{ID: "c1", OperationID: "op1", BookID: "b1", CreatedAt: old})
+	rawPutOpChange(t, p, &OperationChange{ID: "c2", OperationID: "op1", BookID: "b1", CreatedAt: old})
+	mustTrustOpChange(t, p) // the raw rows get entries via the ensure's rebuild
+	opChangePruneBeforeFlush = func() {
+		opChangePruneBeforeFlush = nil
+		if err := p.CreateOperationChange(&OperationChange{ID: "c1", OperationID: "op1", BookID: "b2"}); err != nil {
+			t.Error(err)
+		}
+	}
+	n, err := p.PruneOperationChanges(time.Now().Add(-time.Hour))
+	if err != nil || n != 1 {
+		t.Fatalf("prune = %d, %v; want 1 (only the untouched old row)", n, err)
+	}
+	got, err := getBookChangesVia(t, p, "b2")
+	if err != nil || len(got) != 1 || got[0].ID != "c1" {
+		t.Fatalf("GetBookChanges(b2) = %v, %v; want the rewritten row", changeIDs(got), err)
+	}
+	if e := opChangeEntries(t, p, "op1", "c1"); !reflect.DeepEqual(e, []string{"b2"}) {
+		t.Fatalf("rewritten row entries = %v, want [b2]", e)
+	}
+	assertIndexedMatchesScan(t, p, []string{"b1", "b2"})
+}
+
+// TestOpchangeIndex_RebuildWaitRespectsContext: a rebuild queued behind
+// another index pass gives up when its context ends, and heartbeats while it
+// waits.
+func TestOpchangeIndex_RebuildWaitRespectsContext(t *testing.T) {
+	p := newOpChangeTestStore(t)
+	oldBeat := opChangeIdxWaitHeartbeat
+	opChangeIdxWaitHeartbeat = 5 * time.Millisecond
+	t.Cleanup(func() { opChangeIdxWaitHeartbeat = oldBeat })
+	unlock, err := p.lockOpChangeIdxRun(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Millisecond)
+	defer cancel()
+	var mu sync.Mutex
+	waits := 0
+	_, err = p.RebuildOpChangeByBookIndex(ctx, func(phase string, _ int) {
+		if phase == "waiting" {
+			mu.Lock()
+			waits++
+			mu.Unlock()
+		}
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want the context deadline", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if waits == 0 {
+		t.Fatal("no heartbeat while waiting for the slot")
+	}
+}
+
+// TestOpchangeIndex_RebuildProgressPerChunk: the rebuild reports once per
+// committed chunk.
+func TestOpchangeIndex_RebuildProgressPerChunk(t *testing.T) {
+	p := newOpChangeTestStore(t)
+	oldChunk := opChangeByBookBackfillChunk
+	opChangeByBookBackfillChunk = 3
+	t.Cleanup(func() { opChangeByBookBackfillChunk = oldChunk })
+	for i := 0; i < 10; i++ {
+		rawPutOpChange(t, p, &OperationChange{ID: fmt.Sprintf("c%02d", i), OperationID: "op1", BookID: "b1"})
+	}
+	var calls []int
+	res, err := p.RebuildOpChangeByBookIndex(context.Background(), func(phase string, rows int) {
+		if phase == "rebuild" {
+			calls = append(calls, rows)
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []int{3, 6, 9, 10}; !reflect.DeepEqual(calls, want) {
+		t.Fatalf("progress calls = %v, want %v (res %+v)", calls, want, res)
+	}
+}
+
+// TestOpchangeIndex_ResetClearsTrust: Reset wipes the journal and the index;
+// it drops trust after its commit, so readers scan until the next ensure.
+func TestOpchangeIndex_ResetClearsTrust(t *testing.T) {
+	p := newOpChangeTestStore(t)
+	mustTrustOpChange(t, p)
+	if err := p.Reset(); err != nil {
+		t.Fatal(err)
+	}
+	if p.opChangeByBookIndexTrusted() {
+		t.Fatal("trust survived Reset")
+	}
+	if err := p.CreateOperationChange(&OperationChange{OperationID: "op1", BookID: "b1"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := p.GetBookChanges("b1"); err != nil || len(got) != 1 {
+		t.Fatalf("GetBookChanges after Reset = %v, %v", changeIDs(got), err)
+	}
 }
