@@ -1,7 +1,7 @@
 // file: internal/merge/service.go
-// version: 1.38.0
+// version: 1.39.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
-// last-edited: 2026-10-02
+// last-edited: 2026-10-04
 
 package merge
 
@@ -879,6 +879,24 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 	for _, book := range books {
 		if book.ID != resolvedPrimaryID {
 			losers = append(losers, book.ID)
+		}
+	}
+	// Every loser gets a syncID before the follow, so RecordSyncMerge always
+	// leaves a redirect from it to the winner. A loser no client had seen
+	// had none, and RecordSyncMerge records nothing for a book without one:
+	// the merge then left no trace of where the loser went (MergeBooks does
+	// not set merged_into_book_id, see the doc comment), and a reader asking
+	// "what did this retired book become" (merge.ResolveSurvivor; the
+	// Repairs fragment fixer finishing a run whose survivor a dedup merge
+	// retired) could not tell it from a book deleted outright. A mint
+	// failure is logged and the merge goes on: that loser is left as it was
+	// before this step (no redirect), which readers treat as deleted.
+	if ms.syncFollower != nil {
+		for _, id := range losers {
+			if _, err := ms.syncFollower.MintOrGetSyncID(id); err != nil {
+				mlog.Warn("merge: syncID for loser %s not minted; no redirect to %s will be recorded: %s",
+					logger.SanitizeLogValue(id), logger.SanitizeLogValue(resolvedPrimaryID), logger.SanitizeLogValue(fmt.Sprint(err)))
+			}
 		}
 	}
 	// The losers are already soft-deleted here, so a follow error (a move that
