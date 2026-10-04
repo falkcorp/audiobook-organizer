@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v2.go
-// version: 3.23.0
+// version: 3.26.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-14
+// last-edited: 2026-10-04
 
 // pebble_store_ops_v2 implements OpsV2Store for PebbleDB (the primary production
 // database). Key schema (all prefixed with "opv2:"):
@@ -14,6 +14,14 @@
 //	opv2:log:{op_id}:{ts_nano:020d}:{seq:010d}      → JSON(OpLogV2Row)
 //	opv2:err:{op_id}:{ts_nano:020d}                 → JSON(OpErrorV2Row)
 //	opv2:strike:{def_id}:{ts_nano:020d}:{op_id}     → JSON(OpStrikeV2Row)
+//	opv2:open:{op_id}                               → ""      (timeline: CompletedAt == nil)
+//	opv2:done:{completed_nanos:020d}:{op_id}        → ""      (timeline: CompletedAt != nil)
+//
+// The open/done timeline index (pebble_store_ops_v2_timeline.go) is staged by
+// every opv2:op: writer in the row's own batch (stageOpRow), and is read by
+// ListOperationsV2Since once this boot's ReconcileOpsV2TimelineIndex has
+// completed (the index is untrusted at every boot). No raw Set of an opv2:op: key is allowed;
+// TestOpsV2RowWritesGoThroughStageOpRow enforces it.
 
 package database
 
@@ -22,7 +30,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sort"
 	"strings"
 	"time"
 
@@ -145,21 +152,61 @@ func (p *PebbleStore) DeleteOrphanOpDefsV2(keepIDs []string) (err error) {
 // liveness signal and a terminal row without one reads as in-flight forever.
 // No production caller inserts a terminal row today; this closes the door
 // before one does.
+//
+// The row, its timeline index key and (for a queued row) the queue and active
+// keys are one batch. It takes opsMu because it reads the existing row to
+// compute the index delta, and that read-then-write must not interleave with
+// another writer or the reconcile's locked re-check.
 func (p *PebbleStore) InsertOperationV2(row OperationV2Row) (err error) {
 	defer recoverPebbleClosed("InsertOperationV2", &err)
+	if row.ID == "" {
+		return errors.New("opv2: InsertOperationV2: row has no id")
+	}
+	p.opsMu.Lock()
+	defer p.opsMu.Unlock()
 	stampCompletedAtIfTerminal(&row)
-	if err := p.pebbleSetJSON(opv2OpKey(row.ID), &row); err != nil {
-		return err
+	var prev *OperationV2Row
+	// staleKeys: index keys of an existing row that does not decode (its
+	// CompletedAt is unknown, so stageOpRow cannot derive them). Insert has
+	// always overwritten such a row; it still does, and drops its keys too.
+	var staleKeys [][]byte
+	if raw, closer, gerr := p.db.Get(opv2OpKey(row.ID)); gerr == nil {
+		var existing OperationV2Row
+		uerr := json.Unmarshal(raw, &existing)
+		_ = closer.Close()
+		if uerr == nil && existing.ID != "" {
+			prev = &existing
+		} else {
+			doneKeys, err := p.doneKeysForIDs(map[string]struct{}{row.ID: {}})
+			if err != nil {
+				return err
+			}
+			staleKeys = append(doneKeys, opv2OpenKey(row.ID))
+		}
+	} else if !errors.Is(gerr, pebble.ErrNotFound) {
+		return gerr
 	}
-	if row.Status == "queued" {
-		if err := p.db.Set(opv2QueueKey(row.Priority, row.QueuedAt, row.ID), []byte(row.ID), pebble.Sync); err != nil {
+	return p.commitOpV2Row(prev, &row, func(b *pebble.Batch) error {
+		for _, k := range staleKeys {
+			if err := b.Delete(k, nil); err != nil {
+				return err
+			}
+		}
+		if len(staleKeys) > 0 {
+			// commitOpV2Row staged this row's key before the stale Deletes;
+			// Set it again in case one of them named it.
+			if err := stageOpRow(b, nil, &row); err != nil {
+				return err
+			}
+		}
+		if row.Status != "queued" {
+			return nil
+		}
+		if err := b.Set(opv2QueueKey(row.Priority, row.QueuedAt, row.ID), []byte(row.ID), nil); err != nil {
 			return err
 		}
-		if err := p.db.Set(opv2ActKey(row.ID), nil, pebble.Sync); err != nil {
-			return err
-		}
-	}
-	return nil
+		return b.Set(opv2ActKey(row.ID), nil, nil)
+	})
 }
 
 // ListQueuedOperationsV2 returns queued ops ordered by priority DESC, queued_at ASC.
@@ -240,6 +287,7 @@ func (p *PebbleStore) UpdateOperationV2Status(id, status string, startedAt, comp
 		return fmt.Errorf("opv2: operation not found: %s", id)
 	}
 
+	prev := row
 	oldStatus := row.Status
 	row.Status = status
 	if startedAt != nil {
@@ -269,6 +317,9 @@ func (p *PebbleStore) UpdateOperationV2Status(id, status string, startedAt, comp
 	if err := batch.Set(opv2OpKey(id), data, nil); err != nil {
 		return err
 	}
+	if err := stageOpRow(batch, &prev, &row); err != nil {
+		return err
+	}
 
 	// Maintain queue index.
 	if oldStatus == "queued" && status != "queued" {
@@ -291,6 +342,9 @@ func (p *PebbleStore) UpdateOperationV2Status(id, status string, startedAt, comp
 		if err := batch.Delete(opv2ActKey(id), nil); err != nil {
 			return err
 		}
+	}
+	if err := p.runOpsV2BeforeCommitHook(); err != nil {
+		return err
 	}
 	return batch.Commit(pebble.Sync)
 }
@@ -324,6 +378,7 @@ func (p *PebbleStore) ResetOperationV2ForResume(id string) (err error) {
 		return fmt.Errorf("opv2: operation not found: %s", id)
 	}
 
+	prev := row
 	oldStatus := row.Status
 	row.Status = "queued"
 	row.CompletedAt = nil
@@ -339,6 +394,10 @@ func (p *PebbleStore) ResetOperationV2ForResume(id string) (err error) {
 	if err := batch.Set(opv2OpKey(id), data, nil); err != nil {
 		return err
 	}
+	// Terminal/interrupted → queued moves the row from opv2:done: to opv2:open:.
+	if err := stageOpRow(batch, &prev, &row); err != nil {
+		return err
+	}
 	if oldStatus != "queued" {
 		if err := batch.Set(opv2QueueKey(row.Priority, row.QueuedAt, id), []byte(id), nil); err != nil {
 			return err
@@ -348,6 +407,9 @@ func (p *PebbleStore) ResetOperationV2ForResume(id string) (err error) {
 	if err := batch.Delete(opv2ActKey(id), nil); err != nil {
 		return err
 	}
+	if err := p.runOpsV2BeforeCommitHook(); err != nil {
+		return err
+	}
 	return batch.Commit(pebble.Sync)
 }
 
@@ -355,7 +417,9 @@ func (p *PebbleStore) ResetOperationV2ForResume(id string) (err error) {
 //
 // Read-modify-write under opsMu, mirroring UpdateOperationV2Status. Unlike that
 // method this touches no secondary index — result data does not participate in the
-// queue or active sets — so it is a plain Set rather than a batch.
+// queue or active sets, and the timeline delta is empty because CompletedAt
+// does not change; it still goes through commitOpV2Row so every opv2:op:
+// write has one shape.
 //
 // A missing row is an error, not a no-op. The v1 twin of this method
 // (UpdateOperationResultData) behaves the same way, and roughly half its callers
@@ -373,13 +437,9 @@ func (p *PebbleStore) SetOperationV2Result(id string, resultData string) (err er
 		return fmt.Errorf("opv2: operation not found: %s", id)
 	}
 
+	prev := row
 	row.ResultData = &resultData
-
-	data, err := json.Marshal(&row)
-	if err != nil {
-		return err
-	}
-	return p.db.Set(opv2OpKey(id), data, pebble.Sync)
+	return p.commitOpV2Row(&prev, &row, nil)
 }
 
 // SetOperationV2StatusIfQueued atomically transitions status only when current status is 'queued'.
@@ -401,6 +461,7 @@ func (p *PebbleStore) SetOperationV2StatusIfQueued(id, newStatus string) (update
 		return false, nil
 	}
 
+	prev := row
 	row.Status = newStatus
 	// Stamp CompletedAt whenever this transition takes the row out of the live
 	// states. CompletedAt is the CANONICAL liveness signal in this store --
@@ -436,6 +497,9 @@ func (p *PebbleStore) SetOperationV2StatusIfQueued(id, newStatus string) (update
 	if err := batch.Set(opv2OpKey(id), data, nil); err != nil {
 		return false, err
 	}
+	if err := stageOpRow(batch, &prev, &row); err != nil {
+		return false, err
+	}
 	if err := batch.Delete(opv2QueueKey(row.Priority, row.QueuedAt, id), nil); err != nil {
 		return false, err
 	}
@@ -443,6 +507,9 @@ func (p *PebbleStore) SetOperationV2StatusIfQueued(id, newStatus string) (update
 		if err := batch.Delete(opv2ActKey(id), nil); err != nil {
 			return false, err
 		}
+	}
+	if err := p.runOpsV2BeforeCommitHook(); err != nil {
+		return false, err
 	}
 	if err := batch.Commit(pebble.Sync); err != nil {
 		return false, err
@@ -541,14 +608,35 @@ func (p *PebbleStore) SweepHollowOperationsV2() (n int, err error) {
 	if len(hollow) == 0 {
 		return 0, nil
 	}
+	// The row did not decode, so its CompletedAt (and therefore its done key)
+	// is unknown: find any done key naming a swept id by a key-only pass over
+	// the done index. Sweep runs once, from migration 62. The boot reconcile
+	// would also delete these keys as orphans, but only on the next boot;
+	// deleting them in the same batch keeps the index exact meanwhile.
+	hollowSet := make(map[string]struct{}, len(hollow))
+	for _, id := range hollow {
+		hollowSet[id] = struct{}{}
+	}
+	doneKeys, err := p.doneKeysForIDs(hollowSet)
+	if err != nil {
+		return 0, err
+	}
 	batch := p.db.NewBatch()
 	defer batch.Close()
 	for _, id := range hollow {
-		for _, key := range [][]byte{opv2OpKey(id), opv2ActKey(id), opv2StateKey(id)} {
+		for _, key := range [][]byte{opv2OpKey(id), opv2ActKey(id), opv2StateKey(id), opv2OpenKey(id)} {
 			if err := batch.Delete(key, nil); err != nil {
 				return 0, err
 			}
 		}
+	}
+	for _, key := range doneKeys {
+		if err := batch.Delete(key, nil); err != nil {
+			return 0, err
+		}
+	}
+	if err := p.runOpsV2BeforeCommitHook(); err != nil {
+		return 0, err
 	}
 	if err := batch.Commit(pebble.Sync); err != nil {
 		return 0, err
@@ -565,8 +653,9 @@ func (p *PebbleStore) IncrementResumeCountV2(id string) error {
 	if err != nil {
 		return err
 	}
+	prev := row
 	row.ResumeCount++
-	return p.pebbleSetJSON(opv2OpKey(id), &row)
+	return p.commitOpV2Row(&prev, &row, nil)
 }
 
 // MarkOperationV2ManualRetry records an operator-initiated same-row retry:
@@ -581,9 +670,10 @@ func (p *PebbleStore) MarkOperationV2ManualRetry(id string) error {
 	if err != nil {
 		return err
 	}
+	prev := row
 	row.ManualRetryCount++
 	row.ResumeCountAtManualRetry = row.ResumeCount
-	return p.pebbleSetJSON(opv2OpKey(id), &row)
+	return p.commitOpV2Row(&prev, &row, nil)
 }
 
 // UpdateOpProgressV2 updates the progress fields and last_progress_at.
@@ -595,6 +685,7 @@ func (p *PebbleStore) UpdateOpProgressV2(id string, current, total int, message 
 	if err != nil {
 		return err
 	}
+	prev := row
 	now := time.Now().UTC()
 	row.ProgressCurrent = current
 	row.ProgressTotal = total
@@ -616,7 +707,9 @@ func (p *PebbleStore) UpdateOpProgressV2(id string, current, total int, message 
 		// The row is already being written here, so this costs nothing.
 		row.HighWaterProgress = current
 	}
-	return p.pebbleSetJSON(opv2OpKey(id), &row)
+	// CompletedAt is unchanged, so stageOpRow stages no index key: a progress
+	// tick costs exactly the row write it always did.
+	return p.commitOpV2Row(&prev, &row, nil)
 }
 
 // SetOpQueuedProgressV2 writes the progress columns on a row that has not
@@ -648,10 +741,14 @@ func (p *PebbleStore) SetOpQueuedProgressV2(id string, current, total int, messa
 	if row.Status != "queued" && row.Status != "waiting_deps" {
 		return false, nil
 	}
+	if row.ID == "" {
+		return false, nil // unreachable today (the status guard above declines ""), kept explicit
+	}
+	prev := row
 	row.ProgressCurrent = current
 	row.ProgressTotal = total
 	row.ProgressMessage = message
-	if err := p.pebbleSetJSON(opv2OpKey(id), &row); err != nil {
+	if err := p.commitOpV2Row(&prev, &row, nil); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -666,8 +763,9 @@ func (p *PebbleStore) UpdateOpPhaseV2(id string, phase *string) error {
 	if err != nil {
 		return err
 	}
+	prev := row
 	row.CurrentPhase = phase
-	return p.pebbleSetJSON(opv2OpKey(id), &row)
+	return p.commitOpV2Row(&prev, &row, nil)
 }
 
 // UpdateOpCheckpointV2 sets last_checkpoint_at and updates high_water_progress.
@@ -679,12 +777,13 @@ func (p *PebbleStore) UpdateOpCheckpointV2(id string, newHWM int) error {
 	if err != nil {
 		return err
 	}
+	prev := row
 	now := time.Now().UTC()
 	row.LastCheckpointAt = &now
 	if newHWM > row.HighWaterProgress {
 		row.HighWaterProgress = newHWM
 	}
-	return p.pebbleSetJSON(opv2OpKey(id), &row)
+	return p.commitOpV2Row(&prev, &row, nil)
 }
 
 // UpsertOpStateV2 inserts or replaces the checkpoint state for an operation.
@@ -733,6 +832,13 @@ func (p *PebbleStore) DeleteOpStateV2(opID string) (err error) {
 // was written. A row whose JSON no longer decodes has no derivable queue key
 // and no checkable status; it is deleted anyway, minus the queue key, and
 // reported as "undecodable" — see the interface comment.
+//
+// The timeline index keys go in the same batch: stageOpRow(batch, &row, nil)
+// for a decoded row; for an undecodable one (CompletedAt unknown) the open key
+// and every done key naming the id, found by a key-only pass over the done
+// index. This is the only operation-record delete today (its caller is the
+// registry's discard). Any future record pruner (release D, task D2) must
+// delete through stageOpRow(batch, old, nil) in the same batch as the row.
 func (p *PebbleStore) DeleteOperationV2(id string, allowedStatuses []string) (status string, deleted bool, err error) {
 	defer recoverPebbleClosed("DeleteOperationV2", &err)
 	if id == "" {
@@ -771,14 +877,29 @@ func (p *PebbleStore) DeleteOperationV2(id string, allowedStatuses []string) (st
 		}
 	}
 
+	var undecodableDoneKeys [][]byte
+	if queueKey == nil {
+		undecodableDoneKeys, err = p.doneKeysForIDs(map[string]struct{}{id: {}})
+		if err != nil {
+			return status, false, err
+		}
+	}
+
 	batch := p.db.NewBatch()
 	defer batch.Close()
-	keys := [][]byte{opv2OpKey(id), opv2ActKey(id), opv2StateKey(id)}
+	keys := [][]byte{opv2OpKey(id), opv2ActKey(id), opv2StateKey(id), opv2OpenKey(id)}
 	if queueKey != nil {
 		keys = append(keys, queueKey)
 	}
+	keys = append(keys, undecodableDoneKeys...)
 	for _, key := range keys {
 		if err := batch.Delete(key, nil); err != nil {
+			return status, false, err
+		}
+	}
+	if queueKey != nil {
+		// Decoded row: deletes its open key, or its done key when completed.
+		if err := stageOpRow(batch, &row, nil); err != nil {
 			return status, false, err
 		}
 	}
@@ -789,6 +910,9 @@ func (p *PebbleStore) DeleteOperationV2(id string, allowedStatuses []string) (st
 		if err := batch.DeleteRange(prefix, prefixEnd(prefix), nil); err != nil {
 			return status, false, err
 		}
+	}
+	if err := p.runOpsV2BeforeCommitHook(); err != nil {
+		return status, false, err
 	}
 	if err := batch.Commit(pebble.Sync); err != nil {
 		return status, false, err
@@ -808,8 +932,9 @@ func (p *PebbleStore) UpdateOperationV2Params(id string, params []byte) error {
 	if row.ID == "" {
 		return fmt.Errorf("opv2: operation not found: %s", id)
 	}
+	prev := row
 	row.Params = string(params)
-	return p.pebbleSetJSON(opv2OpKey(id), &row)
+	return p.commitOpV2Row(&prev, &row, nil)
 }
 
 // AppendOpLogsV2 bulk-inserts log rows.
@@ -847,95 +972,37 @@ func (p *PebbleStore) InsertOpStrikeV2(row OpStrikeV2Row) error {
 // ListOperationsV2Since returns operations that were active at or after `since`
 // — every operation still in flight regardless of age, plus every finished one
 // that COMPLETED at or after `since` — ordered by started_at DESC NULLS LAST,
-// queued_at DESC, up to `limit` rows.
+// queued_at DESC, id DESC, up to `limit` rows (the predicate and its history
+// are on opV2InWindow; the order on opV2TimelineLess).
 //
 // "Queued at or after since" is what this used to say and do, and the difference
 // is not cosmetic: it excluded any long operation that started before the window
 // and finished inside it.
+//
+// It reads the opv2:open: / opv2:done: timeline index
+// (listOperationsV2SinceIndexed) once this boot's reconcile has completed
+// (OpsV2TimelineIndexTrusted), and the full opv2:op: scan
+// (listOperationsV2SinceScan) until then. Both sort the WHOLE window before
+// truncating, so the timeline handler's matched / scan_capped keep their
+// meaning.
 func (p *PebbleStore) ListOperationsV2Since(since time.Time, limit int) (rows []OperationV2Row, err error) {
 	defer recoverPebbleClosed("ListOperationsV2Since", &err)
 	if limit <= 0 {
 		limit = 200
 	}
-	prefix := []byte("opv2:op:")
-	iter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: prefix,
-		UpperBound: prefixEnd(prefix),
-	})
-	if err != nil {
-		return nil, err
+	if p.OpsV2TimelineIndexTrusted() {
+		return p.listOperationsV2SinceIndexed(since, limit)
 	}
-	defer iter.Close()
-
-	var all []OperationV2Row
-	for iter.First(); iter.Valid(); iter.Next() {
-		var row OperationV2Row
-		if err := json.Unmarshal(iter.Value(), &row); err != nil {
-			continue
-		}
-		// The window bounds HISTORY, not live work. An operation that has not
-		// completed is current by definition, however long ago it was queued —
-		// filtering on QueuedAt alone meant an op simply had to RUN longer than
-		// the window to disappear from its own timeline. A library.scan running
-		// 1h50m returned an empty timeline in production on 2026-08-16 while it
-		// was logging once a second, and an empty list reads as "nothing is
-		// running."
-		//
-		// Keyed on CompletedAt rather than a set of status strings on purpose: a
-		// status list has to be updated every time a new terminal state is added,
-		// and silently under-reports until someone remembers.
-		//
-		// For a FINISHED operation the window is tested against CompletedAt, not
-		// QueuedAt. Asking "what completed in the last 24h" and answering "what
-		// was QUEUED in the last 24h" drops exactly the operations most worth
-		// seeing: the long ones. A backfill queued 30h ago that finished twenty
-		// minutes ago is history from the last twenty minutes, but a QueuedAt test
-		// rules it out — and the longer an operation runs, the more likely it is to
-		// fall outside. That is the same defect the in-flight clause above was
-		// added for (an op vanishing from its own timeline for running too long),
-		// left half-fixed: live rows were rescued, finished ones were not.
-		//
-		// QueuedAt is still accepted as an alternative rather than replaced.
-		// CompletedAt >= QueuedAt should make it redundant, so it changes nothing
-		// in normal operation; it means a row with a clock-skewed or malformed
-		// CompletedAt degrades to the old behaviour instead of disappearing.
-		inWindow := row.CompletedAt == nil ||
-			!row.CompletedAt.Before(since) ||
-			!row.QueuedAt.Before(since)
-		if inWindow {
-			all = append(all, row)
-		}
-	}
-	if err := iter.Error(); err != nil {
-		return nil, err
-	}
-
-	sort.Slice(all, func(i, j int) bool {
-		si, sj := all[i].StartedAt, all[j].StartedAt
-		// NULLS LAST: nil StartedAt sorts after non-nil.
-		if si == nil && sj == nil {
-			return all[i].QueuedAt.After(all[j].QueuedAt)
-		}
-		if si == nil {
-			return false
-		}
-		if sj == nil {
-			return true
-		}
-		if !si.Equal(*sj) {
-			return si.After(*sj)
-		}
-		return all[i].QueuedAt.After(all[j].QueuedAt)
-	})
-
-	if len(all) > limit {
-		all = all[:limit]
-	}
-	return all, nil
+	return p.listOperationsV2SinceScan(since, limit)
 }
 
 // GetOpLogsV2 returns up to `limit` log lines for the given operation, ordered by created_at ASC.
 // A limit ≤ 0 returns all rows.
+//
+// With a limit it reads only the tail: it walks backwards from the last key
+// and stops after `limit` decoded rows (undecodable rows are skipped, as in
+// the full read), then reverses into ascending order. One library.scan has
+// ~300k log rows, and the old read decoded all of them to keep the last few.
 func (p *PebbleStore) GetOpLogsV2(opID string, limit int) (rows []OpLogV2Row, err error) {
 	defer recoverPebbleClosed("GetOpLogsV2", &err)
 	prefix := []byte("opv2:log:" + opID + ":")
@@ -949,6 +1016,22 @@ func (p *PebbleStore) GetOpLogsV2(opID string, limit int) (rows []OpLogV2Row, er
 	defer iter.Close()
 
 	var result []OpLogV2Row
+	if limit > 0 {
+		for iter.Last(); iter.Valid() && len(result) < limit; iter.Prev() {
+			var row OpLogV2Row
+			if err := json.Unmarshal(iter.Value(), &row); err != nil {
+				continue
+			}
+			result = append(result, row)
+		}
+		if err := iter.Error(); err != nil {
+			return nil, err
+		}
+		for a, b := 0, len(result)-1; a < b; a, b = a+1, b-1 {
+			result[a], result[b] = result[b], result[a]
+		}
+		return result, nil
+	}
 	for iter.First(); iter.Valid(); iter.Next() {
 		var row OpLogV2Row
 		if err := json.Unmarshal(iter.Value(), &row); err != nil {
@@ -958,10 +1041,6 @@ func (p *PebbleStore) GetOpLogsV2(opID string, limit int) (rows []OpLogV2Row, er
 	}
 	if err := iter.Error(); err != nil {
 		return nil, err
-	}
-
-	if limit > 0 && len(result) > limit {
-		result = result[len(result)-limit:]
 	}
 	return result, nil
 }
@@ -1304,9 +1383,11 @@ func (p *PebbleStore) stampCompletedAtIfPhantom(id string) bool {
 	if !isTerminalV2Status(row.Status) || row.CompletedAt != nil {
 		return false
 	}
+	prev := row
 	now := time.Now().UTC()
 	row.CompletedAt = &now
-	return p.pebbleSetJSON(opv2OpKey(id), &row) == nil
+	// Moves the row from opv2:open: to opv2:done: in the same batch.
+	return p.commitOpV2Row(&prev, &row, nil) == nil
 }
 
 // ListResumableOperationsV2 returns the rows the startup resume sweep should
@@ -1388,17 +1469,13 @@ func (p *PebbleStore) PromoteToQueued(id string) (err error) {
 			"waiting_deps", row.Status, id)
 	}
 
+	prev := row
 	row.Status = "queued"
-	if err := p.pebbleSetJSON(opv2OpKey(id), &row); err != nil {
-		return err
-	}
-
-	// Write the queue-index key so ListQueuedOperationsV2 can find this op.
-	// Mirror the exact encoding used by InsertOperationV2.
-	if err := p.db.Set(opv2QueueKey(row.Priority, row.QueuedAt, id), []byte(id), pebble.Sync); err != nil {
-		return err
-	}
-	return nil
+	// The row and the queue-index key (so ListQueuedOperationsV2 can find this
+	// op; same encoding as InsertOperationV2) are one batch.
+	return p.commitOpV2Row(&prev, &row, func(b *pebble.Batch) error {
+		return b.Set(opv2QueueKey(row.Priority, row.QueuedAt, id), []byte(id), nil)
+	})
 }
 
 // ── M3 batch bucket (journaled pending subjects) ────────────────────────────

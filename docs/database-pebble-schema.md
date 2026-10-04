@@ -1,7 +1,7 @@
 <!-- file: docs/database-pebble-schema.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 8f6e2c1b-7d4a-4f86-9f2a-5a6b7c8d9e0f -->
-<!-- last-edited: 2026-07-17 -->
+<!-- last-edited: 2026-10-04 -->
 
 # PebbleDB Keyspace Schema and Data Model
 
@@ -345,7 +345,9 @@ zero-padded so prefix scans return rows in stable order.
 | Key pattern | Value | Notes |
 |-------------|-------|-------|
 | `opv2:def:<def_id>` | `OpDefinitionV2Row` JSON | Registered operation definition (one per `<plugin>.<op-name>`) |
-| `opv2:op:<op_id>` | `OperationV2Row` JSON | One operation run. No status index exists — status-filtered queries (e.g. `waiting_deps`) scan all `opv2:op:` rows |
+| `opv2:op:<op_id>` | `OperationV2Row` JSON | One operation run. There is no status index: `ListWaitingDepsOps`, `ListResumableOperationsV2` and the repairs (`RepairOpsV2MissingCompletedAt`, `SweepHollowOperationsV2`) still scan all `opv2:op:` rows. The timeline (`ListOperationsV2Since`) reads the `opv2:open:` / `opv2:done:` indexes below once they are built |
+| `opv2:open:<op_id>` | empty | Timeline index: present while the row has no `CompletedAt` (in flight, waiting, or resumed) |
+| `opv2:done:<completed_nanos:020d>:<op_id>` | empty | Timeline index: present once the row has a `CompletedAt` (including `interrupted_*` rows, which have one but are not terminal). Nanos are `UnixNano`, clamped to 0 before 1970, so byte order is completion order |
 | `opv2:q:<999-priority:03d>:<ts_nano:020d>:<op_id>` | `<op_id>` | Queue index. Priority is stored as `999-priority` so higher priority sorts FIRST in byte order; timestamp gives FIFO within a priority. Deleted when the op leaves `queued` |
 | `opv2:act:<op_id>` | empty | Active index: present while the op is `queued` or `running`; removed on terminal status. Startup resume scans this instead of all rows |
 | `opv2:state:<op_id>` | `OpStateV2Row` JSON | Checkpoint state for resume (`ResumePolicy`: restart with saved state vs requeue fresh) |
@@ -357,6 +359,27 @@ Index maintenance: enqueue writes the row JSON + `opv2:q:` + `opv2:act:` keys
 together; dispatch deletes the `opv2:q:` entry; terminal status deletes
 `opv2:act:`. Anything that flips a row's status by hand must mirror those
 index writes or startup resume / the dispatcher will see phantom ops.
+
+Timeline index: exactly one of `opv2:open:<op_id>` / `opv2:done:…:<op_id>`
+exists per decodable `opv2:op:` row. Every writer of an `opv2:op:` row stages
+the change in the row's own batch (`stageOpRow`, through `commitOpV2Row` or
+the batch-based status writers), so a write that changes nothing about
+`CompletedAt` (a progress tick) costs no index write.
+`TestOpsV2RowWritesGoThroughStageOpRow` fails CI on any mention of the
+`opv2:op:` key (`opv2OpKey`, `opv2OpPrefix`, or the literal) anywhere in the
+module outside its reviewed allowlist.
+
+Trust (same model as `opchange_by_book`): the index is UNTRUSTED at every
+boot. `ListOperationsV2Since` serves from the full scan until this process's
+reconcile (`ReconcileOpsV2TimelineIndex`, run in the background after memdb
+warmup on every boot; one row walk plus two key walks, ~0.12 s steady on 50k
+ops and ~0.5 s on 200k in-memory, more on disk; duration logged) has checked and
+repaired the index; only then does it read the index. The gauge
+`opsv2_timeline_index_trusted` is 1 while the index is in use. Nothing is
+persisted to mark the index built: a binary that predates the index ignores
+both families and writes rows without index keys (or leaves a stale done key
+on a row it resumes), so after a rollback and roll-forward the next boot's
+reconcile repairs them, with no operator step.
 
 ## Write patterns & atomicity
 
