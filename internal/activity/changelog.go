@@ -1,5 +1,5 @@
 // file: internal/activity/changelog.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 93167949-a587-41e9-8ef9-92d03f86aea6
 // last-edited: 2026-10-04
 
@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 
 // changelogStore is the narrow slice of database.Store this service uses.
@@ -129,10 +130,23 @@ func (svc *ChangelogService) GetBookChangelog(bookID string) ([]ChangeLogEntry, 
 			if oc.Voided {
 				continue // a refused write that never happened
 			}
+			if undo.IsLedgerOnly(oc) {
+				// A Repairs plan record: the decision an apply started from,
+				// kept so an interrupted run can be continued. It changes
+				// nothing about the book, and its value is internal JSON;
+				// it stays visible under the operation's own changes.
+				continue
+			}
 			entryType := "import"
 			summary := fmt.Sprintf("Operation change — %s: %s → %s", oc.FieldName, oc.OldValue, oc.NewValue)
 
 			switch oc.ChangeType {
+			case undo.ChangeTypeBookPrimaryHandoff:
+				entryType = "metadata_apply"
+				summary = "Version group handed to another primary"
+				if id, ok := undo.HandOffCrowned(oc); ok && id != "" {
+					summary = fmt.Sprintf("Version group primary handed to %s", id)
+				}
 			case "file_move":
 				entryType = "rename"
 				summary = fmt.Sprintf("File moved — %s → %s", oc.OldValue, oc.NewValue)

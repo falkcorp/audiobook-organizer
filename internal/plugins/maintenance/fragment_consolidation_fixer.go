@@ -1444,6 +1444,11 @@ type fragPlanJournal struct {
 	// opFixer answers, for a move journaled before rows carried their
 	// fixer (Source ""), which fixer's apply op wrote it.
 	ops repairs.OpReader
+	// owner is the live library's book_file owner by row id.
+	owner map[string]string
+	// merged is each book's newest un-reverted book_merged_into row from
+	// anyone: who folded a record's survivor into another book.
+	merged map[string]*database.OperationChange
 }
 
 // fragMove is one un-reverted book_file_reassign still standing: row now on
@@ -1523,6 +1528,8 @@ func (f *fragmentFixer) scanPlanJournal(ctx context.Context, lib *fragLibrary, h
 		demote: map[string]string{}, handOff: map[string]string{}}
 	ours := f.newFragJournal()
 	pj.ops = ours.ops
+	pj.owner = owner
+	pj.merged = map[string]*database.OperationChange{}
 	n := 0
 	take := func(c *database.OperationChange) error {
 		if n++; n%fragJournalBeatEvery == 0 {
@@ -1535,7 +1542,10 @@ func (f *fragmentFixer) scanPlanJournal(ctx context.Context, lib *fragLibrary, h
 		}
 		switch c.ChangeType {
 		case undo.ChangeTypeRepairPlanRecord:
-			if c.Source == fragFixerID && live(c.BookID) {
+			// Kept whether or not the survivor is still live: a survivor
+			// another merge retired leaves the run's other books behind,
+			// and they must stay held, not regroup around a new survivor.
+			if c.Source == fragFixerID {
 				pj.records = append(pj.records, c)
 			}
 		case undo.ChangeTypeBookFileReassign:
@@ -1543,6 +1553,9 @@ func (f *fragmentFixer) scanPlanJournal(ctx context.Context, lib *fragLibrary, h
 				pj.moves = append(pj.moves, fragMove{target: c.BookID, from: c.OldValue, row: row, source: c.Source, op: c.OperationID})
 			}
 		case undo.ChangeTypeBookMergedInto:
+			if prev := pj.merged[c.BookID]; prev == nil || c.ID > prev.ID {
+				pj.merged[c.BookID] = c
+			}
 			if c.ID > pj.mergedID[c.BookID] && ours.ourChange(c) {
 				pj.mergedID[c.BookID], pj.mergedInto[c.BookID] = c.ID, c.NewValue
 			}
@@ -1588,53 +1601,116 @@ func (f *fragmentFixer) scanPlanJournal(ctx context.Context, lib *fragLibrary, h
 	return pj, nil
 }
 
-// recordDone is groupRunDone for a plan, from the snapshot and the one
-// journal pass instead of a point read per book: every book but the
-// survivor is out of the live listing with this fixer's retire into the
-// survivor journaled, none was demoted (by anyone: resumeHandOff's rule)
-// after its newest hand-off note unless its group has its one explicit live
-// primary, and the survivor's folder and title steps are done.
-func (f *fragmentFixer) recordDone(store OpsStore, lib *fragLibrary, pj *fragPlanJournal, rec fragPlanRecord, st fragGroupState) (bool, error) {
-	if b, ok := lib.books[rec.Survivor]; !ok || b.SoftDeleted {
-		return false, nil
+// recordDone reports whether the run of record rec has nothing left to do,
+// whoever finished it, and terminal, the live book its work ended in (""
+// when there is none). Done means:
+//   - every book of the record resolves, through merged_into, to one live
+//     terminal book (the survivor, or the book the survivor was itself
+//     merged into);
+//   - every member's planned row (copies keep theirs by design) is owned by a
+//     live book, so nothing sits out of view on a retired one;
+//   - no book demoted after its newest hand-off note is in a group still
+//     without its one explicit live primary (resumeHandOff's rule);
+//   - when this fixer itself retired every book into the survivor, the
+//     survivor's folder and title steps are done (a run finished by anyone
+//     else leaves those to whoever finished it).
+//
+// Whoever merged the books counts: an owner who finished an interrupted run
+// by hand clears its hold (review 7). The common case, this fixer's own
+// finished run, is decided from the snapshot and the journal summaries
+// without a point read per book.
+func (f *fragmentFixer) recordDone(store OpsStore, lib *fragLibrary, pj *fragPlanJournal, rec fragPlanRecord, st fragGroupState) (done bool, terminal string, err error) {
+	live := func(id string) bool {
+		b, ok := lib.books[id]
+		return ok && !b.SoftDeleted
 	}
+	resolve := func(id string) (string, error) {
+		for hop := 0; hop < 16 && id != ""; hop++ {
+			if live(id) {
+				return id, nil
+			}
+			b, err := store.GetBookByID(id)
+			if err != nil {
+				return "", fmt.Errorf("read %s: %w", id, err)
+			}
+			if b == nil || !b.IsSoftDeleted() || b.MergedIntoBookID == nil {
+				return "", nil
+			}
+			id = *b.MergedIntoBookID
+		}
+		return "", nil
+	}
+	if terminal, err = resolve(rec.Survivor); err != nil || terminal == "" {
+		return false, terminal, err
+	}
+	byOthers := false
 	for _, id := range rec.BookIDs {
 		if id == rec.Survivor {
 			continue
 		}
-		if b, ok := lib.books[id]; ok && !b.SoftDeleted {
-			return false, nil
+		if live(id) {
+			if id != terminal {
+				return false, terminal, nil
+			}
+			continue
 		}
-		if pj.mergedInto[id] != rec.Survivor {
-			return false, nil
+		if terminal != rec.Survivor || pj.mergedInto[id] != rec.Survivor {
+			byOthers = true
+			t, err := resolve(id)
+			if err != nil {
+				return false, terminal, err
+			}
+			if t != terminal {
+				return false, terminal, nil
+			}
 		}
 		if pj.demote[id] > pj.handOff[id] {
 			b, err := store.GetBookByID(id)
 			if err != nil {
-				return false, fmt.Errorf("read %s: %w", id, err)
+				return false, terminal, fmt.Errorf("read %s: %w", id, err)
 			}
-			if b == nil {
-				continue
-			}
-			if g := dcStr(b.VersionGroupID); g != "" {
+			if g := bookGroup(b); g != "" {
 				members, err := store.GetBooksByVersionGroup(g)
 				if err != nil {
-					return false, fmt.Errorf("read version group %s: %w", g, err)
+					return false, terminal, fmt.Errorf("read version group %s: %w", g, err)
 				}
 				if len(members) > 0 && !handOffSettled(store, members, id) {
-					return false, nil
+					return false, terminal, nil
 				}
 			}
 		}
 	}
+	for id, fid := range st.Files {
+		if st.Roles[id].Copy {
+			continue
+		}
+		if o := pj.owner[fid]; o == "" || !live(o) {
+			return false, terminal, nil
+		}
+	}
+	if terminal != rec.Survivor || byOthers {
+		// Finished by someone else (an owner merging the rest by hand, or
+		// another merge): the folder and title steps were this run's, and
+		// whoever finished it decides them.
+		return true, terminal, nil
+	}
 	sb, err := store.GetBookByID(rec.Survivor)
 	if err != nil {
-		return false, fmt.Errorf("read %s: %w", rec.Survivor, err)
+		return false, terminal, fmt.Errorf("read %s: %w", rec.Survivor, err)
 	}
 	if sb == nil {
-		return false, nil
+		return false, terminal, nil
 	}
-	return survivorStepsDone(store, sb, st, rec.Proposed["title"], rec.Proposed["book_path"])
+	done, err = survivorStepsDone(store, sb, st, rec.Proposed["title"], rec.Proposed["book_path"])
+	return done, terminal, err
+}
+
+// bookGroup is b's version group ("" for none or a nil book).
+func bookGroup(b *database.Book) string {
+	if b == nil {
+		return ""
+	}
+	return dcStr(b.VersionGroupID)
 }
 
 // continueInterrupted finds, in ONE pass of the journal, every apply run of
@@ -1688,6 +1764,7 @@ func (f *fragmentFixer) continueInterrupted(ctx context.Context, lib *fragLibrar
 		at            int64
 	}
 	newest, newestID := map[recKey]fragPlanRecord{}, map[recKey]string{}
+	opsOf := map[recKey][]string{}
 	recorded := map[string]bool{}
 	for _, c := range pj.records {
 		rec, ok := decodePlanRecord(c)
@@ -1699,6 +1776,9 @@ func (f *fragmentFixer) continueInterrupted(ctx context.Context, lib *fragLibrar
 		}
 		recorded[rec.Survivor] = true
 		k := recKey{rec.Survivor, rec.RowID, rec.PlannedAt.UnixNano()}
+		if !slices.Contains(opsOf[k], c.OperationID) {
+			opsOf[k] = append(opsOf[k], c.OperationID)
+		}
 		if c.ID > newestID[k] {
 			newest[k], newestID[k] = rec, c.ID
 		}
@@ -1708,54 +1788,85 @@ func (f *fragmentFixer) continueInterrupted(ctx context.Context, lib *fragLibrar
 		keys = append(keys, k)
 	}
 	sort.Slice(keys, func(i, j int) bool { return newestID[keys[i]] < newestID[keys[j]] })
-	var pending []fragPlanRecord
-	for _, k := range keys {
-		rec := newest[k]
-		if only != nil && !only[rec.Survivor] && !slices.ContainsFunc(rec.BookIDs, func(id string) bool { return only[id] }) {
-			continue
+	// hold keeps a run's books out of every other row and holds the other
+	// rows of its folder. It applies to every unfinished run, in or out of
+	// a book_ids-scoped plan's scope: a scoped plan must not form a row over
+	// the folder either.
+	hold := func(rec fragPlanRecord, why string) {
+		out.exclude[rec.Survivor] = true
+		for _, id := range rec.BookIDs {
+			out.exclude[id] = true
 		}
+		out.dirs[rec.Dir] = why
+	}
+	type pendingRec struct {
+		rec fragPlanRecord
+		ops []string
+	}
+	var pending []pendingRec
+	for _, k := range keys {
+		rec, ops := newest[k], opsOf[k]
+		inScope := only == nil || only[rec.Survivor] || slices.ContainsFunc(rec.BookIDs, func(id string) bool { return only[id] })
 		var st fragGroupState
 		if err := json.Unmarshal(rec.State, &st); err != nil {
 			// No decision to continue, and the run may be unfinished: held,
 			// with its books kept out of every other row.
-			out.rows = append(out.rows, interruptedRow(lib, rec, "the run's plan record is unreadable: "+err.Error()))
-			out.exclude[rec.Survivor] = true
-			for _, id := range rec.BookIDs {
-				out.exclude[id] = true
+			if inScope {
+				out.rows = append(out.rows, interruptedRow(lib, rec, ops, "the run's plan record is unreadable: "+err.Error()))
 			}
-			out.dirs[rec.Dir] = fmt.Sprintf("an interrupted consolidation of this folder into %s has an unreadable plan record (row %s)", rec.Survivor, rec.RowID)
+			hold(rec, fmt.Sprintf("an interrupted consolidation of this folder into %s has an unreadable plan record (row %s, operation(s) %s)",
+				rec.Survivor, rec.RowID, strings.Join(ops, ", ")))
 			continue
 		}
-		done, err := f.recordDone(store, lib, pj, rec, st)
+		done, terminal, err := f.recordDone(store, lib, pj, rec, st)
 		if err != nil {
 			return nil, err
 		}
-		if !done {
-			pending = append(pending, rec)
+		if done {
+			continue
+		}
+		if b, ok := lib.books[rec.Survivor]; !ok || b.SoftDeleted {
+			// The survivor itself was retired (another fixer, a dedup or a
+			// user merge) with the run unfinished: nothing can continue it,
+			// and the remaining fragments must not regroup around another
+			// survivor. Held until someone finishes or reverts it.
+			why := survivorGoneWhy(pj, rec.Survivor, terminal)
+			if inScope {
+				out.rows = append(out.rows, interruptedRow(lib, rec, ops, why))
+			}
+			hold(rec, fmt.Sprintf("an interrupted consolidation of this folder into %s is held: %s (row %s, operation(s) %s)",
+				rec.Survivor, why, rec.RowID, strings.Join(ops, ", ")))
+			continue
+		}
+		hold(rec, fmt.Sprintf("an interrupted consolidation of this folder into %s is continued (or held) by row %s (operation(s) %s)",
+			rec.Survivor, rec.RowID, strings.Join(ops, ", ")))
+		if inScope {
+			pending = append(pending, pendingRec{rec, ops})
 		}
 	}
 	if len(pending) > 0 {
 		ids := map[string]bool{}
 		bySurvivor := map[string]int{}
 		byDir := map[string]map[string]bool{}
-		for _, rec := range pending {
-			for _, id := range rec.BookIDs {
+		for _, p := range pending {
+			for _, id := range p.rec.BookIDs {
 				ids[id] = true
 			}
-			ids[rec.Survivor] = true
-			bySurvivor[rec.Survivor]++
-			if byDir[rec.Dir] == nil {
-				byDir[rec.Dir] = map[string]bool{}
+			ids[p.rec.Survivor] = true
+			bySurvivor[p.rec.Survivor]++
+			if byDir[p.rec.Dir] == nil {
+				byDir[p.rec.Dir] = map[string]bool{}
 			}
-			byDir[rec.Dir][rec.Survivor] = true
+			byDir[p.rec.Dir][p.rec.Survivor] = true
 		}
-		// The rows of these books only, in a second pass: the first kept
-		// per-book summaries, not rows, to stay small over a large journal.
+		// The rows of these books only (the by-book index, or a second
+		// pass): the first pass kept per-book summaries, not rows.
 		jr, err := f.loadJournal(ctx, hist, ids, nil)
 		if err != nil {
 			return nil, err
 		}
-		for _, rec := range pending {
+		for _, p := range pending {
+			rec := p.rec
 			why := ""
 			switch {
 			case len(byDir[rec.Dir]) > 1:
@@ -1783,19 +1894,14 @@ func (f *fragmentFixer) continueInterrupted(ctx context.Context, lib *fragLibrar
 				default:
 					row = got
 					row.Evidence = append(row.Evidence, fmt.Sprintf(
-						"continues an interrupted apply of the plan made %s: the same survivor %s, members, chapter order and copies that run started with",
-						rec.PlannedAt.UTC().Format(time.RFC3339), rec.Survivor))
+						"continues an interrupted apply (operation(s) %s) of the plan made %s: the same survivor %s, members, chapter order and copies that run started with",
+						strings.Join(p.ops, ", "), rec.PlannedAt.UTC().Format(time.RFC3339), rec.Survivor))
 				}
 			}
 			if why != "" {
-				row = interruptedRow(lib, rec, why)
+				row = interruptedRow(lib, rec, p.ops, why)
 			}
 			out.rows = append(out.rows, row)
-			out.exclude[rec.Survivor] = true
-			for _, id := range rec.BookIDs {
-				out.exclude[id] = true
-			}
-			out.dirs[rec.Dir] = fmt.Sprintf("an interrupted consolidation of this folder into %s is continued (or held) by row %s", rec.Survivor, rec.RowID)
 		}
 	}
 	emptied := map[string]bool{}
@@ -1824,18 +1930,41 @@ func (f *fragmentFixer) continueInterrupted(ctx context.Context, lib *fragLibrar
 	return out, nil
 }
 
+// survivorGoneWhy says how a record's survivor left the live library: the
+// newest merge of it (who, by which operation, into which book), or that it
+// was deleted.
+func survivorGoneWhy(pj *fragPlanJournal, survivor, terminal string) string {
+	if c := pj.merged[survivor]; c != nil {
+		by := c.Source
+		if by == "" {
+			by = "an operation"
+		}
+		why := fmt.Sprintf("survivor %s was merged into %s by %s (operation %s)", survivor, c.NewValue, by, c.OperationID)
+		if terminal != "" && terminal != c.NewValue {
+			why += fmt.Sprintf(", which now lives on as %s", terminal)
+		}
+		return why
+	}
+	if terminal != "" {
+		return fmt.Sprintf("survivor %s was merged into %s", survivor, terminal)
+	}
+	return fmt.Sprintf("survivor %s was deleted", survivor)
+}
+
 // interruptedRow is the held row for a run continueInterrupted cannot
 // continue with the survivor it chose.
-func interruptedRow(lib *fragLibrary, rec fragPlanRecord, why string) repairs.Row {
+func interruptedRow(lib *fragLibrary, rec fragPlanRecord, ops []string, why string) repairs.Row {
 	ids := append([]string(nil), rec.BookIDs...)
 	sort.Strings(ids)
 	sb := lib.books[rec.Survivor]
 	r := repairs.Row{RowID: rec.RowID, Class: fragClassHeld, BookIDs: ids, Title: sb.Title, Author: lib.authorName(sb),
 		Risk: repairs.RiskReview, Proposed: map[string]string{"survivor": rec.Survivor},
-		Reason:      fmt.Sprintf("an apply of this fixer started consolidating %s into %s and did not finish", rec.Dir, rec.Survivor),
-		Skipped:     fragSkipInterrupted,
-		SkipReason:  why + "; never applied with another survivor: resume or revert that apply, or resolve by hand",
-		Evidence:    []string{fmt.Sprintf("plan record of %s, planned %s", rec.RowID, rec.PlannedAt.UTC().Format(time.RFC3339))},
+		Reason:  fmt.Sprintf("an apply of this fixer started consolidating %s into %s and did not finish", rec.Dir, rec.Survivor),
+		Skipped: fragSkipInterrupted,
+		SkipReason: why + fmt.Sprintf("; never applied with another survivor: resume or revert apply operation(s) %s, or finish it by hand (merge every book into %s)",
+			strings.Join(ops, ", "), rec.Survivor),
+		Evidence: []string{fmt.Sprintf("plan record of %s, planned %s, written by apply operation(s) %s",
+			rec.RowID, rec.PlannedAt.UTC().Format(time.RFC3339), strings.Join(ops, ", "))},
 		Fingerprint: fragFingerprint("interrupted", rec.RowID, rec.Survivor, why)}
 	for _, id := range ids {
 		b, ok := lib.books[id]
@@ -3909,11 +4038,19 @@ type fragCrowns struct {
 	winners map[string]string
 }
 
-// opChangeScanner is PebbleStore's one-pass journal read. Resolved with
-// database.AsCapability; without it each book costs a GetBookChanges, which
-// is itself a full scan of the journal (no by-book index).
+// opChangeScanner is PebbleStore's one-pass journal read, for a caller that
+// needs the WHOLE journal (Plan's search for interrupted runs). Resolved with
+// database.AsCapability.
 type opChangeScanner interface {
 	ScanOperationChanges(fn func(*database.OperationChange) error) error
+}
+
+// opChangeIndexReporter tells whether GetBookChanges is indexed (the
+// opchange_by_book index, trusted). When it is, a re-plan reads its few books
+// one GetBookChanges each instead of scanning the whole journal; when it is
+// not, each GetBookChanges is itself a full scan and the one-pass scan wins.
+type opChangeIndexReporter interface {
+	OpChangeByBookIndexUsable() bool
 }
 
 // fragJournalBeatEvery is how many journal rows a pass reads between lease
@@ -3929,7 +4066,11 @@ func (f *fragmentFixer) newFragJournal() *fragJournal {
 	return jr
 }
 
-// loadJournal reads the journal rows of books ids. The scan runs under the
+// loadJournal reads the journal rows of books ids: one GetBookChanges per
+// book when the store's opchange_by_book index is usable (a point read per
+// row of those books), else one full ScanOperationChanges pass (cheaper than
+// N unindexed GetBookChanges, each a full scan of its own), else one
+// GetBookChanges per book on a store with neither. A read runs under the
 // merge lock during an apply, so it renews the stand-down lease (beat) as it
 // goes rather than let a long journal outlast it.
 func (f *fragmentFixer) loadJournal(ctx context.Context, hist FragmentRepairReader, ids map[string]bool, beat func(string) error) (*fragJournal, error) {
@@ -3948,7 +4089,11 @@ func (f *fragmentFixer) loadJournal(ctx context.Context, hist FragmentRepairRead
 			jr.byBook[c.BookID] = append(jr.byBook[c.BookID], c)
 		}
 	}
-	if sc, ok := database.AsCapability[opChangeScanner](hist); ok {
+	indexed := false
+	if ix, ok := database.AsCapability[opChangeIndexReporter](hist); ok {
+		indexed = ix.OpChangeByBookIndexUsable()
+	}
+	if sc, ok := database.AsCapability[opChangeScanner](hist); ok && !indexed {
 		n := 0
 		err := sc.ScanOperationChanges(func(c *database.OperationChange) error {
 			if n++; n%fragJournalBeatEvery == 0 {

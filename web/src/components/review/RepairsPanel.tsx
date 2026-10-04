@@ -1,5 +1,5 @@
 // file: web/src/components/review/RepairsPanel.tsx
-// version: 1.15.1
+// version: 1.15.2
 // guid: 9c4f1a73-2e58-4b06-a9d1-6e3b8c7f0d52
 // last-edited: 2026-10-04
 
@@ -378,6 +378,19 @@ export const SKIP_KIND_LABEL: Record<string, string> = {
   skipped_names_a_title: 'The name is a book or series title',
   skipped_not_combined: 'No longer a combined credit',
   skipped_same_audio_other_row: 'Same chapters in another row of the folder',
+  skipped_ambiguous: 'Matches more than one parent',
+  skipped_copy_unproven: 'Copy not proven (no import path or hash)',
+  skipped_moved_unproven: 'Move not proven (name and size only)',
+  skipped_duration_gate: 'Files too long to be chapters',
+  skipped_duration_unknown: 'Chapter durations unknown',
+  skipped_files_missing: 'Files missing on disk',
+  skipped_unreadable: 'Could not read a file',
+  skipped_track_order: 'Chapter order cannot be told',
+  skipped_no_survivor: 'No book can keep the chapters',
+  skipped_stranded: 'Emptied by an unfinished repair',
+  skipped_numbered_set_unsure: 'Numbered files may be several works',
+  skipped_what_if: 'What-if plan (never applied)',
+  skipped_interrupted_run: 'An earlier repair of this folder did not finish',
   error: 'Error',
 };
 

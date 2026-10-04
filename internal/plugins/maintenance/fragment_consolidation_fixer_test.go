@@ -3823,6 +3823,18 @@ func TestFragmentFixer_ReplanJournalCost(t *testing.T) {
 	_, err = s.GetBookChanges(plan.SurvivorID)
 	require.NoError(t, err)
 	one := time.Since(start)
-	t.Logf("346-fragment row: fresh re-plan %v (no journal read); after %d retires with %d other journal rows: re-plan %v (one pass); one GetBookChanges %v (x%d books per-book = ~%v)",
-		fresh, cut, noise, resumed, one, cut, one*cut)
+	start = time.Now()
+	rows := 0
+	require.NoError(t, s.ScanOperationChanges(func(*database.OperationChange) error { rows++; return nil }))
+	scan := time.Since(start)
+	// Plan's whole-journal read: one pass, against one GetBookChanges per
+	// book the library lists (what the per-book path would cost there).
+	start = time.Now()
+	for i := 0; i < 5000; i++ {
+		_, err := s.GetBookChanges(fmt.Sprintf("noise-%d", i))
+		require.NoError(t, err)
+	}
+	perBook5000 := time.Since(start)
+	t.Logf("346-fragment row: fresh re-plan %v (no journal read); after %d retires with %d other journal rows: re-plan %v (index usable=%t); one GetBookChanges %v; one full scan of %d rows %v; GetBookChanges for 5000 books %v",
+		fresh, cut, noise, resumed, s.OpChangeByBookIndexUsable(), one, rows, scan, perBook5000)
 }

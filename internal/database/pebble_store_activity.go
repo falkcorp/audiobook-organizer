@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_activity.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 2e007a48-ab98-4cd4-bd6a-f85b75de0cfa
 // last-edited: 2026-10-03
 
@@ -115,9 +115,19 @@ var opChangePruneBeforeFlush func()
 // the batch commits. Test-only; nil in production.
 var opChangePruneBeforeCommit func()
 
+// OpChangeTypesKeptByPrune are change types PruneOperationChanges never
+// deletes, whatever their age. "repair_plan_record" (undo.ChangeTypeRepairPlanRecord,
+// spelled out here because undo imports this package) is the decision an
+// interrupted Repairs apply started from: while it stands, a later plan
+// continues or holds that run, and once it aged out the folder would be
+// planned afresh around another survivor, splitting one work into two live
+// books. One row per apply run, so keeping them costs little.
+var OpChangeTypesKeptByPrune = map[string]bool{"repair_plan_record": true}
+
 // PruneOperationChanges deletes operation change entries older than the given
 // time, each with its opchange_by_book: index entry. Undecodable rows are
-// skipped (never deleted), as before.
+// skipped (never deleted), as before, and so is every row of a type in
+// OpChangeTypesKeptByPrune.
 // Key format: opchange:<operation_id>:<ulid>
 //
 // It commits every opChangePruneChunk rows, so no batch grows with the
@@ -160,7 +170,7 @@ func (p *PebbleStore) PruneOperationChanges(olderThan time.Time) (int, error) {
 		if jsonErr := json.Unmarshal(iter.Value(), &change); jsonErr != nil {
 			continue
 		}
-		if !change.CreatedAt.Before(olderThan) {
+		if !change.CreatedAt.Before(olderThan) || OpChangeTypesKeptByPrune[change.ChangeType] {
 			continue
 		}
 		cands = append(cands, bytes.Clone(iter.Key()))
@@ -203,8 +213,8 @@ func (p *PebbleStore) pruneOpChangeChunk(keys [][]byte, olderThan time.Time) (in
 		var change OperationChange
 		uerr := json.Unmarshal(v, &change)
 		closer.Close()
-		if uerr != nil || !change.CreatedAt.Before(olderThan) {
-			continue // now undecodable (never deleted) or rewritten since
+		if uerr != nil || !change.CreatedAt.Before(olderThan) || OpChangeTypesKeptByPrune[change.ChangeType] {
+			continue // now undecodable (never deleted), rewritten since, or kept by type
 		}
 		if err := batch.Delete(k, nil); err != nil {
 			return 0, fmt.Errorf("pebble batch delete opchange: %w", err)
