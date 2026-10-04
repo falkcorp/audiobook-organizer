@@ -1,7 +1,7 @@
 // file: internal/database/keyfamilies_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8b2a931b-6ce8-4a3d-89ad-38f8bb08e66b
-// last-edited: 2026-10-03
+// last-edited: 2026-10-04
 
 package database
 
@@ -59,26 +59,35 @@ func TestKeyFamilyRanges_PartitionWholeKeyspace(t *testing.T) {
 func TestKeyFamilyRanges_ParentExcludesChildren(t *testing.T) {
 	ranges := keyFamilyRanges(keyFamilies)
 	cases := map[string]string{
-		"book:asin:x":             "book:asin:",
-		"book:01ABC":              "book:",
-		"book:":                   "book:",
-		"book;":                   unregisteredFamily,
-		"opv2:log:x":              "opv2:log:",
-		"opv2:open:x":             "opv2:open:",
-		"opv2:op:01X":             "opv2:op:",
-		"opv2:zzz":                "opv2:",
-		"zzz:":                    unregisteredFamily,
-		"":                        unregisteredFamily,
-		"\xff\xff":                unregisteredFamily,
-		"act:info:000:1":          "act:info:",
-		"act:x":                   "act:",
-		"book_file:1:2":           "book_file:",
-		"book_file_acoustid:abc":  "book_file_acoustid:",
-		"author:name:smith":       "author:name:",
-		"author:12":               "author:",
-		"sync_alias_use_seeded:u": "sync_alias_use_seeded:",
-		"system:backfill:x":       "system:backfill:",
-		"system:flag:y":           "system:",
+		"book:asin:x":                       "book:asin:",
+		"book:01ABC":                        "book:",
+		"book:":                             "book:",
+		"book;":                             unregisteredFamily,
+		"opv2:log:x":                        "opv2:log:",
+		"opv2:open:x":                       "opv2:open:",
+		"opv2:op:01X":                       "opv2:op:",
+		"opv2:zzz":                          "opv2:",
+		"zzz:":                              unregisteredFamily,
+		"":                                  unregisteredFamily,
+		"\xff\xff":                          unregisteredFamily,
+		"act:info:000:1":                    "act:info:",
+		"act:x":                             "act:",
+		"book_file:1:2":                     "book_file:",
+		"book_file_acoustid:abc":            "book_file_acoustid:",
+		"author:name:smith":                 "author:name:",
+		"author:12":                         "author:",
+		"sync_alias_use_seeded:u":           "sync_alias_use_seeded:",
+		"system:backfill:x":                 "system:backfill:",
+		"system:flag:y":                     "system:",
+		"chapters:01ABC":                    "chapters:",
+		"narrator_counter":                  "narrator_counter",
+		"sync_alias_use_seed_cutoff":        "sync_alias_use_seed_cutoff",
+		"merge:combine-journal:01X":         "merge:combine-journal:",
+		"scanner:ai_parse_single_fail:ab12": "scanner:ai_parse_single_fail:",
+		"pref:_system:outbox:writeback:B1":  "pref:_system:outbox:writeback:",
+		"pref:_system:other":                "pref:_system:",
+		"pref:u1:theme":                     "pref:",
+		"setting:repairs_last_plan_op:fx":   "setting:repairs_last_plan_op:",
 	}
 	for key, want := range cases {
 		require.Equal(t, want, familyForKey(ranges, []byte(key)), "key %q", key)

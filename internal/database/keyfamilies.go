@@ -1,7 +1,7 @@
 // file: internal/database/keyfamilies.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 12fbfb04-5d87-4708-8975-48081212acb1
-// last-edited: 2026-10-03
+// last-edited: 2026-10-04
 
 package database
 
@@ -76,6 +76,7 @@ var keyFamilies = []KeyFamily{
 	{"author_tag_idx:", "author tag reverse index", "internal/database/pebble_store.go"},
 	{"author_tombstone:", "merged-away author id redirects", "internal/database/pebble_store_authors.go"},
 	{"narrator:", "narrator rows", "internal/database/pebble_store_authors.go"},
+	{"narrator_counter", "narrator id counter (single bare key)", "internal/database/pebble_store_authors.go"},
 	{"narrator_name:", "narrator index by normalized name", "internal/database/pebble_store_name_index.go"},
 	{"series:", "series rows", "internal/database/pebble_store_series.go"},
 	{"series:name:", "series index by normalized name and author", "internal/database/pebble_store_name_index.go"},
@@ -115,6 +116,8 @@ var keyFamilies = []KeyFamily{
 	{"itunes:", "iTunes library fingerprints", "internal/database/pebble_store_stats.go"},
 	{"library:", "legacy library paths, migrated to import_path:", "internal/database/pebble_store.go"},
 	{"merge_user_state_pending:", "pending user-state repairs after a merge", "internal/merge/pending_repair.go"},
+	{"merge:combine-journal:", "book combine journal", "internal/merge/combine_journal.go"},
+	{"scanner:ai_parse_single_fail:", "single-file AI parse give-up markers by path hash", "internal/scanner/ai_parse_giveup.go"},
 	{"metadata_cache:", "metadata provider response cache", "internal/database/pebble_store_metadata_cache.go"},
 	{"metadata_change:", "metadata change records", "internal/database/pebble_store_metadata.go"},
 	{"metadata_fetch_cache:", "metadata fetch cache per book and source", "internal/database/metadata_fetch_cache.go"},
@@ -141,6 +144,7 @@ var keyFamilies = []KeyFamily{
 	{"book_file_orig_hash:", "book file index by original hash", "internal/database/pebble_store.go"},
 	{"book_file_path:", "book file index by path CRC", "internal/database/pebble_store.go"},
 	{"book_file_pid:", "book file index by iTunes persistent id", "internal/database/pebble_store.go"},
+	{"chapters:", "per-book chapter lists", "internal/database/pebble_store_chapters.go"},
 	{"file_prov:", "file provenance records", "internal/database/pebble_file_provenance.go"},
 	{"file_prov_hash:", "file provenance index by hash", "internal/database/pebble_file_provenance.go"},
 	{"file_prov_orphan:", "orphaned file provenance records", "internal/database/pebble_file_provenance.go"},
@@ -186,10 +190,19 @@ var keyFamilies = []KeyFamily{
 	{"cursor:", "export cursors", "internal/database/pebble_file_provenance.go"},
 	{"met:", "metrics store", "internal/database/pebble_metrics_store.go"},
 	{"pref:", "per-user preferences", "internal/database/pebble_store_preferences.go"},
+	{"pref:_system:", "the _system user's records (other than the sub-families below)", "internal/database/pebble_store_preferences.go"},
+	{"pref:_system:apply_rename_failure:", "durable organizer apply-rename failure records", "internal/organizer/apply_failure.go"},
+	{"pref:_system:itunes_clone_record:", "iTunes clone-into-library records", "internal/plugins/maintenance/itunes_clone_into_library.go"},
+	{"pref:_system:organize_collision_skip:", "durable organize collision-skip records", "internal/organizer/apply_failure.go"},
+	{"pref:_system:outbox:writeback:", "tag write-back outbox", "internal/writeback/outbox.go"},
+	{"pref:_system:pipeline_checkpoint:", "organizer per-book phase checkpoints", "internal/organizer/checkpoint.go"},
+	{"pref:_system:rename_path_write_failure:", "rename path-write failure records", "internal/organizer/rename_path_failure.go"},
 	{"preference:", "global preferences", "internal/database/pebble_store_preferences.go"},
 	{"provider_throttle:", "metadata provider throttles", "internal/database/provider_throttle.go"},
 	{"quick_query_cache:", "quick query result cache", "internal/database/pebble_quick_queries.go"},
 	{"setting:", "settings", "internal/database/settings.go"},
+	{"setting:repairs_last_apply_op:", "last repairs apply op per fixer", "internal/server/handlers/repairs/handler.go"},
+	{"setting:repairs_last_plan_op:", "last repairs plan op per fixer", "internal/server/handlers/repairs/handler.go"},
 	{"stats:", "cached library, transcribe and playback stats", "internal/database/pebble_store.go"},
 	{"system:", "system flags and markers", "internal/database/pebble_store_atpath_index.go"},
 	{"system:backfill:", "backfill completion markers and cursors", "internal/database/pebble_store_atpath_index.go"},
@@ -229,6 +242,7 @@ var keyFamilies = []KeyFamily{
 	{"playp:", "playback progress", "internal/database/pebble_store_playback.go"},
 	{"sync_alias_use:", "sync alias use records", "internal/database/pebble_store_sync_alias_use.go"},
 	{"sync_alias_use_seeded:", "sync alias use seeded markers", "internal/database/pebble_store_sync_alias_use.go"},
+	{"sync_alias_use_seed_cutoff", "sync alias seed cutoff (single bare key)", "internal/database/pebble_store_sync_alias_use.go"},
 	{"sync_file:", "sync file lookups", "internal/database/pebble_store_syncfile.go"},
 	{"sync_item:", "sync item ids", "internal/database/pebble_store_syncid.go"},
 	{"ubs:", "user book state", "internal/database/pebble_store_playback.go"},
