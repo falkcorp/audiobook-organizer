@@ -1438,22 +1438,76 @@ type fragPlanJournal struct {
 	// written by this fixer.
 	mergedInto map[string]string
 	mergedID   map[string]string
-	// demote / handOff are each book's newest un-reverted demote (this
-	// fixer's) and hand-off note (anyone's) ids.
+	// demote / handOff are each book's newest un-reverted demote and
+	// hand-off note ids (anyone's, as resumeHandOff reads them).
 	demote, handOff map[string]string
+	// opFixer answers, for a move journaled before rows carried their
+	// fixer (Source ""), which fixer's apply op wrote it.
+	ops repairs.OpReader
 }
 
 // fragMove is one un-reverted book_file_reassign still standing: row now on
-// target, moved there from book from by fixer source ("" before Source).
-type fragMove struct{ target, from, row, source string }
+// target, moved there from book from by fixer source ("" before Source),
+// under operation op.
+type fragMove struct{ target, from, row, source, op string }
+
+// unrecordedOurs reports whether move m may be a run of this fixer that
+// left no plan record: stamped with this fixer, or written before the stamp
+// existed by an op that is gone (a discarded run: unknown, so held) or that
+// names this fixer. A legacy move whose op names another fixer (a
+// folder-books or duplicate-copies fold) is that fixer's business.
+func (pj *fragPlanJournal) unrecordedOurs(m fragMove, cache map[string]bool) bool {
+	switch m.source {
+	case fragFixerID:
+		return true
+	case "":
+	default:
+		return false
+	}
+	if v, ok := cache[m.op]; ok {
+		return v
+	}
+	ours := true
+	if pj.ops != nil {
+		if row, err := pj.ops.GetOperationV2(m.op); err == nil && row != nil {
+			var p repairs.ApplyParams
+			ours = row.DefID == repairs.ApplyOpID && json.Unmarshal([]byte(row.Params), &p) == nil && p.FixerID == fragFixerID
+		}
+	}
+	cache[m.op] = ours
+	return ours
+}
 
 // scanPlanJournal reads the journal once for continueInterrupted.
 func (f *fragmentFixer) scanPlanJournal(ctx context.Context, lib *fragLibrary, hist FragmentRepairReader) (*fragPlanJournal, error) {
-	sc, ok := database.AsCapability[opChangeScanner](hist)
-	if !ok {
-		// Fail closed: without the journal an interrupted consolidation
-		// cannot be seen, and planning past one is how a work splits.
-		return nil, fmt.Errorf("%s: the store cannot scan the operation journal; an interrupted consolidation would go unseen", fragFixerID)
+	sc, oneScan := database.AsCapability[opChangeScanner](hist)
+	scan := func(fn func(*database.OperationChange) error) error {
+		if oneScan {
+			return sc.ScanOperationChanges(fn)
+		}
+		// No one-pass scan (a backend other than Pebble): every live book's
+		// rows, one book at a time. The records and moves are journaled on
+		// live books (a survivor, a move's target); the retirees' rows are
+		// read afterwards through the records' own books.
+		ids := make([]string, 0, len(lib.books))
+		for id, b := range lib.books {
+			if !b.SoftDeleted {
+				ids = append(ids, id)
+			}
+		}
+		sort.Strings(ids)
+		for _, id := range ids {
+			cs, err := hist.GetBookChanges(id)
+			if err != nil {
+				return fmt.Errorf("changes of %s: %w", id, err)
+			}
+			for _, c := range cs {
+				if err := fn(c); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
 	}
 	owner := map[string]string{}
 	for id, rows := range lib.files {
@@ -1468,8 +1522,9 @@ func (f *fragmentFixer) scanPlanJournal(ctx context.Context, lib *fragLibrary, h
 	pj := &fragPlanJournal{mergedInto: map[string]string{}, mergedID: map[string]string{},
 		demote: map[string]string{}, handOff: map[string]string{}}
 	ours := f.newFragJournal()
+	pj.ops = ours.ops
 	n := 0
-	err := sc.ScanOperationChanges(func(c *database.OperationChange) error {
+	take := func(c *database.OperationChange) error {
 		if n++; n%fragJournalBeatEvery == 0 {
 			if err := ctx.Err(); err != nil {
 				return err
@@ -1485,14 +1540,15 @@ func (f *fragmentFixer) scanPlanJournal(ctx context.Context, lib *fragLibrary, h
 			}
 		case undo.ChangeTypeBookFileReassign:
 			if row, ok := undo.BookFileIDFromField(c.FieldName); ok && live(c.BookID) && owner[row] == c.BookID {
-				pj.moves = append(pj.moves, fragMove{target: c.BookID, from: c.OldValue, row: row, source: c.Source})
+				pj.moves = append(pj.moves, fragMove{target: c.BookID, from: c.OldValue, row: row, source: c.Source, op: c.OperationID})
 			}
 		case undo.ChangeTypeBookMergedInto:
 			if c.ID > pj.mergedID[c.BookID] && ours.ourChange(c) {
 				pj.mergedID[c.BookID], pj.mergedInto[c.BookID] = c.ID, c.NewValue
 			}
 		case undo.ChangeTypeBookPrimaryDemote:
-			if c.ID > pj.demote[c.BookID] && ours.ourChange(c) {
+			// Anyone's demote, as resumeHandOff and groupRunDone read it.
+			if c.ID > pj.demote[c.BookID] {
 				pj.demote[c.BookID] = c.ID
 			}
 		case undo.ChangeTypeBookPrimaryHandoff:
@@ -1501,9 +1557,33 @@ func (f *fragmentFixer) scanPlanJournal(ctx context.Context, lib *fragLibrary, h
 			}
 		}
 		return nil
-	})
-	if err != nil {
+	}
+	if err := scan(take); err != nil {
 		return nil, fmt.Errorf("%s: read the operation journal: %w", fragFixerID, err)
+	}
+	if !oneScan {
+		seen := map[string]bool{}
+		for _, c := range append([]*database.OperationChange(nil), pj.records...) {
+			rec, ok := decodePlanRecord(c)
+			if !ok {
+				continue
+			}
+			for _, id := range rec.BookIDs {
+				if seen[id] || live(id) {
+					continue
+				}
+				seen[id] = true
+				cs, err := hist.GetBookChanges(id)
+				if err != nil {
+					return nil, fmt.Errorf("%s: changes of %s: %w", fragFixerID, id, err)
+				}
+				for _, c := range cs {
+					if err := take(c); err != nil {
+						return nil, err
+					}
+				}
+			}
+		}
 	}
 	return pj, nil
 }
@@ -1511,9 +1591,9 @@ func (f *fragmentFixer) scanPlanJournal(ctx context.Context, lib *fragLibrary, h
 // recordDone is groupRunDone for a plan, from the snapshot and the one
 // journal pass instead of a point read per book: every book but the
 // survivor is out of the live listing with this fixer's retire into the
-// survivor journaled, none was demoted by this fixer after its newest
-// hand-off note unless its group has its one live primary again, and the
-// survivor's folder and title steps are done.
+// survivor journaled, none was demoted (by anyone: resumeHandOff's rule)
+// after its newest hand-off note unless its group has its one explicit live
+// primary, and the survivor's folder and title steps are done.
 func (f *fragmentFixer) recordDone(store OpsStore, lib *fragLibrary, pj *fragPlanJournal, rec fragPlanRecord, st fragGroupState) (bool, error) {
 	if b, ok := lib.books[rec.Survivor]; !ok || b.SoftDeleted {
 		return false, nil
@@ -1612,6 +1692,9 @@ func (f *fragmentFixer) continueInterrupted(ctx context.Context, lib *fragLibrar
 	for _, c := range pj.records {
 		rec, ok := decodePlanRecord(c)
 		if !ok {
+			// Unreadable: its survivor is not marked recorded, so the
+			// folder of that run's moves is held below like any run that
+			// left no record.
 			continue
 		}
 		recorded[rec.Survivor] = true
@@ -1633,7 +1716,15 @@ func (f *fragmentFixer) continueInterrupted(ctx context.Context, lib *fragLibrar
 		}
 		var st fragGroupState
 		if err := json.Unmarshal(rec.State, &st); err != nil {
-			continue // unreadable: no decision to continue (the books stay where they are)
+			// No decision to continue, and the run may be unfinished: held,
+			// with its books kept out of every other row.
+			out.rows = append(out.rows, interruptedRow(lib, rec, "the run's plan record is unreadable: "+err.Error()))
+			out.exclude[rec.Survivor] = true
+			for _, id := range rec.BookIDs {
+				out.exclude[id] = true
+			}
+			out.dirs[rec.Dir] = fmt.Sprintf("an interrupted consolidation of this folder into %s has an unreadable plan record (row %s)", rec.Survivor, rec.RowID)
+			continue
 		}
 		done, err := f.recordDone(store, lib, pj, rec, st)
 		if err != nil {
@@ -1708,12 +1799,13 @@ func (f *fragmentFixer) continueInterrupted(ctx context.Context, lib *fragLibrar
 		}
 	}
 	emptied := map[string]bool{}
+	legacyOps := map[string]bool{}
 	for _, m := range pj.moves {
 		if b, ok := lib.books[m.from]; ok && !b.SoftDeleted && b.FilePath != "" && len(lib.files[m.from]) == 0 &&
 			!out.exclude[m.from] && (only == nil || only[m.from]) {
 			emptied[m.from] = true
 		}
-		if recorded[m.target] || out.exclude[m.target] || (m.source != fragFixerID && m.source != "") {
+		if recorded[m.target] || out.exclude[m.target] || !pj.unrecordedOurs(m, legacyOps) {
 			continue
 		}
 		for _, r := range lib.files[m.target] {

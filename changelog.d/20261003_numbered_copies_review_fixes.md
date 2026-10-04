@@ -86,3 +86,11 @@
   on. The group was left without a primary and no note was written. The
   error is now returned, so the row reports partially applied and its resume
   makes the hand-off. This applies to the duplicate-copies repair as well.
+- **A group whose only primary is an unset flag no longer skips an owed
+  hand-off.** When a retire demoted a group's primary and was cut off before
+  the hand-off, the resumed run counted a member with an unset primary flag
+  as the group's primary and stopped there. An uninterrupted run would have
+  chosen a primary explicitly, and sometimes a different member. The resume
+  now checks the job log in that case and makes the same hand-off. This
+  applies to the duplicate-copies repair too, and costs one job-log read for
+  such groups only.
