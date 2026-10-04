@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert.go
-// version: 1.54.1
+// version: 1.54.2
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
-// last-edited: 2026-10-03
+// last-edited: 2026-10-04
 
 package audiobooks
 
