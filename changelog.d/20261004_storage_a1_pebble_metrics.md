@@ -1,0 +1,5 @@
+### Added
+
+#### Pebble engine metrics on /metrics for the main and OpenLibrary stores
+
+`/metrics` now exports the Pebble engine's own numbers, read at scrape time, with a `store` label (`main` or `openlibrary`): `audiobook_organizer_pebble_block_cache_{bytes,blocks}`, `..._block_cache_{hits,misses}_total`, `..._filter_{hits,misses}_total`, `..._read_amplification`, `..._l0_files`, `..._l0_sublevels`, `..._compactions_total`, `..._compaction_debt_bytes`, `..._compactions_in_progress`, `..._compaction_in_progress_bytes`, `..._memtable_bytes`, `..._memtables`, `..._wal_{bytes,physical_bytes,files}`, `..._disk_usage_bytes`, and per level (extra `level` label, 0 to 6) `..._level_{bytes,files,write_amplification}` plus the counters `..._level_bytes_{in,flushed,compacted}_total` that give a windowed write amplification. A store that is closed or absent emits no series. Nothing about the stores themselves changed; this is the baseline the planned cache and bloom-filter tuning will be measured against.

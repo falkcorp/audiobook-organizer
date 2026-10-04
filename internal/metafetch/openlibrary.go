@@ -1,7 +1,7 @@
 // file: internal/metafetch/openlibrary.go
-// version: 1.4.0
+// version: 1.6.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
-// last-edited: 2026-10-02
+// last-edited: 2026-10-04
 
 package metafetch
 
@@ -15,6 +15,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/compactprogress"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	"github.com/falkcorp/audiobook-organizer/internal/openlibrary"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 )
@@ -82,6 +83,19 @@ func (svc *OpenLibraryService) CompactionStats() (stats compactprogress.Stats, o
 		return compactprogress.Stats{Absent: true}, false
 	}
 	return svc.OLStore.CompactionStats(), true
+}
+
+// PebbleMetricsSample samples the OL store's Pebble metrics under Mu, for the
+// same reason CompactionStats does: the delete and factory-reset handlers
+// close the store and nil it while holding that lock. ok is false when there
+// is no store.
+func (svc *OpenLibraryService) PebbleMetricsSample() (metrics.PebbleSample, bool) {
+	svc.Mu.Lock()
+	defer svc.Mu.Unlock()
+	if svc.OLStore == nil {
+		return metrics.PebbleSample{}, false
+	}
+	return svc.OLStore.PebbleMetricsSample()
 }
 
 // Close closes the underlying store.

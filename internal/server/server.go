@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.75.0
+// version: 2.76.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-10-02
+// last-edited: 2026-10-04
 
 package server
 
@@ -687,6 +687,7 @@ func NewServer(store database.Store) *Server {
 	wireServerFromContainer(server, regContainer)
 	server.initSearchResultCache()
 	server.container = regContainer
+	server.registerPebbleMetricsSources()
 
 	// Register batch poller handlers now that batchPoller is wired from container.
 	if server.batchPoller != nil {
