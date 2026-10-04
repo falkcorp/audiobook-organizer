@@ -284,6 +284,10 @@ function classLabel(c: string): string {
     'held-series-id-mismatch': 'Series id ≠ stored object',
     'name-match': 'Name match',
     orphan: 'Orphan',
+    duplicate_link: 'Combined credit beside its authors',
+    combined_only: 'Only the combined credit',
+    partial_link: 'Some of its authors credited',
+    split_new_authors: 'Creates a missing author',
     error: 'Error',
   };
   return labels[c] ?? c;
@@ -366,6 +370,12 @@ export const SKIP_KIND_LABEL: Record<string, string> = {
   skipped_swapped_title_author: 'Title and author swapped — use the swapped fixer',
   skipped_not_swapped: 'No longer swapped',
   skipped_relink_series_first: 'Stale series object — relink the series first',
+  skipped_split_refused: 'Splitter will not split the name',
+  skipped_implausible_part: 'A part looks like a title or junk',
+  skipped_contributor_role: 'Names contributor roles (translator, editor)',
+  skipped_doubled_author: 'Same author repeated',
+  skipped_anthology: 'Too many names (anthology or cast)',
+  skipped_not_combined: 'No longer a combined credit',
   error: 'Error',
 };
 
