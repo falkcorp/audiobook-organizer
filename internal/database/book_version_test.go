@@ -1,6 +1,7 @@
 // file: internal/database/book_version_test.go
 // version: 1.0.1
 // guid: 7a3d9e1c-5b4f-4a60-b8c5-2e7f0c1b9a48
+// last-edited: 2026-10-03
 
 package database
 
