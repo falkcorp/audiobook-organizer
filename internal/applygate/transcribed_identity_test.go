@@ -1,7 +1,7 @@
 // file: internal/applygate/transcribed_identity_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 329bd78d-e4ca-434d-aa8d-65f766d386a1
-// last-edited: 2026-09-28
+// last-edited: 2026-10-04
 
 package applygate
 
@@ -272,6 +272,9 @@ func TestEvaluateTranscribed_OwnerManualOnly(t *testing.T) {
 		transcribed string
 		candTitle   string
 		candSeries  string
+		// author is the candidate's (and the book's live) author; "" means
+		// "Big Finish Productions".
+		author      string
 		guard       ManualOnlyGuard
 		wantAllowed bool
 		wantReason  string
@@ -294,16 +297,27 @@ func TestEvaluateTranscribed_OwnerManualOnly(t *testing.T) {
 			wantReason: ReasonOwnerManualCheckFailed},
 		{name: "single-book caller: allowed", path: "/library/Unknown Author/Unknown Title/book.m4b",
 			transcribed: chimes, candTitle: chimes, wantAllowed: true},
+		// Its author must be unrelated too: a candidate authored by "Big
+		// Finish Productions" is a Big Finish record and is held (the
+		// candidate author is checked since 2026-10-04).
 		{name: "bulk: an unrelated book is not caught", path: "/library/Unknown Author/Unknown Title/book.m4b",
-			transcribed: "Marvel's Planet Hulk", candTitle: "Marvel's Planet Hulk", guard: ManualOnlyGuard{Bulk: true}, wantAllowed: true},
+			transcribed: "Marvel's Planet Hulk", candTitle: "Marvel's Planet Hulk", author: "Greg Pak",
+			guard: ManualOnlyGuard{Bulk: true}, wantAllowed: true},
+		{name: "bulk: only the candidate's author names Big Finish", path: "/library/Unknown Author/Unknown Title/book.m4b",
+			transcribed: "Marvel's Planet Hulk", candTitle: "Marvel's Planet Hulk",
+			guard: ManualOnlyGuard{Bulk: true}, wantReason: ReasonOwnerManualOnly},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			author := tc.author
+			if author == "" {
+				author = "Big Finish Productions"
+			}
 			book := &database.Book{ID: "b1", Title: "", FilePath: tc.path, TranscribedTitle: strp(tc.transcribed), Duration: intp(36000)}
-			cand := metafetch.MetadataCandidate{Title: tc.candTitle, Series: tc.candSeries, Author: "Big Finish Productions",
+			cand := metafetch.MetadataCandidate{Title: tc.candTitle, Series: tc.candSeries, Author: author,
 				Score: 0.95, DurationSec: 36000, Source: "Audible"}
 			ts := TranscribedSearch{Query: tc.transcribed, Source: "transcribed_title", ExplainsStaleIdentity: true}
-			v := EvaluateTranscribed(book, Authors{"Big Finish Productions"}, database.ComputeBookRuntime(book, nil), &cand,
+			v := EvaluateTranscribed(book, Authors{author}, database.ComputeBookRuntime(book, nil), &cand,
 				errors.Join(metafetch.ErrStaleMetadataCache), nil, ts, tc.guard)
 			if v.Allowed != tc.wantAllowed {
 				t.Fatalf("allowed = %v (reason %q: %s), want %v", v.Allowed, v.Reason, v.Detail, tc.wantAllowed)

@@ -1,5 +1,5 @@
 // file: internal/applygate/manual_only.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: a2f62ab5-314e-427a-8ca7-de28de936b75
 // last-edited: 2026-10-04
 
@@ -161,6 +161,12 @@ func BulkManualOnlyGuard(files ManualOnlyFilesReader, series ManualOnlySeriesRea
 		g.StoreDetail = manualOnlyWhy + "transcribed title " + strconv.Quote(*t)
 		return g
 	}
+	// An intro naming the producer ("Big Finish Productions presents...")
+	// often lands in the transcribed author, not the title.
+	if a := book.TranscribedAuthor; a != nil && IsOwnerManualOnly(*a, "") {
+		g.StoreDetail = manualOnlyWhy + "transcribed author " + strconv.Quote(*a)
+		return g
+	}
 	if series != nil && book.SeriesID != nil {
 		sr, err := series.GetSeriesByID(*book.SeriesID)
 		switch {
@@ -186,6 +192,10 @@ func BulkManualOnlyGuard(files ManualOnlyFilesReader, series ManualOnlySeriesRea
 			g.StoreDetail = manualOnlyWhy + "file transcribed title " + strconv.Quote(*t)
 			return g
 		}
+		if a := f.TranscribedAuthor; a != nil && IsOwnerManualOnly(*a, "") {
+			g.StoreDetail = manualOnlyWhy + "file transcribed author " + strconv.Quote(*a)
+			return g
+		}
 	}
 	return g
 }
@@ -198,7 +208,8 @@ func BulkManualOnlyGuard(files ManualOnlyFilesReader, series ManualOnlySeriesRea
 // everything the gate holds without a store read: the book's path and title,
 // the query it was found by (ts.Query: a blank-titled Big Finish book whose
 // intro says "Doctor Who: The Chimes of Midnight"), and the candidate's own
-// title and series (Audible answering with a Doctor Who record). The caller's
+// title, series, publisher and author (Audible answering with a Doctor Who
+// record, which may say so only in its publisher). The caller's
 // store-backed finding (series row, book_file paths) comes in g.StoreDetail.
 func ManualOnlyDetail(book *database.Book, c *metafetch.MetadataCandidate, ts TranscribedSearch, g ManualOnlyGuard) (reason, detail string) {
 	if !g.Bulk {
@@ -219,6 +230,12 @@ func ManualOnlyDetail(book *database.Book, c *metafetch.MetadataCandidate, ts Tr
 		checks = append(checks,
 			struct{ what, value string }{"candidate title", c.Title},
 			struct{ what, value string }{"candidate series", c.Series},
+			// A Big Finish record often carries its franchise ONLY in the
+			// publisher ("The Chimes of Midnight", publisher "Big Finish
+			// Productions", no series): a blank-titled rip outside any
+			// franchise folder had nothing else to match.
+			struct{ what, value string }{"candidate publisher", c.Publisher},
+			struct{ what, value string }{"candidate author", c.Author},
 		)
 	}
 	for _, ch := range checks {

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/aibackends/endpoints_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5a7c9e13-2b4d-4f86-a0c1-7d3e5b9f2a68
 // last-edited: 2026-10-04
 
@@ -156,4 +156,9 @@ func TestEndpointsStatus_DefaultsToTheProcessLedger(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
 	require.Len(t, body.Data.Endpoints, 1)
 	require.EqualValues(t, 1, body.Data.Endpoints[0].Attribution.Requests)
+}
+
+// A nil Option is ignored rather than called.
+func TestNew_IgnoresNilOption(t *testing.T) {
+	require.NotPanics(t, func() { aibackendshandler.New(nil, nil, nil) })
 }

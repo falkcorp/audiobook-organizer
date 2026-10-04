@@ -1,5 +1,5 @@
 // file: internal/metabatch/search_query_test.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: f94991be-ebe4-4d6d-8f4e-922b68a3dda0
 // last-edited: 2026-10-04
 
@@ -826,21 +826,65 @@ func TestImportRootsCache_WaitersAreBounded(t *testing.T) {
 	c.mu.Unlock()
 }
 
-// A failed read does not start the TTL window: the next caller reads again,
-// and its success is used.
-func TestImportRootsCache_FailedReadIsRetriedByTheNextCaller(t *testing.T) {
+// A failed read does not start the TTL window, but it does start a short
+// backoff: a store that keeps failing is read once per backoff, not once per
+// root check. After the backoff the next caller reads again and its success
+// is used.
+func TestImportRootsCache_FailedReadBacksOffThenRetries(t *testing.T) {
 	var reads atomic.Int32
 	src := &switchRoots{inner: blockingRoots{reads: &reads, err: errors.New("store down")}}
 	c := NewImportRootsCache(src)
-	if got := c.set(); len(got) != 0 {
-		t.Fatalf("got %v from a failed read", got)
+	for range 50 {
+		if got := c.set(); len(got) != 0 {
+			t.Fatalf("got %v from a failing store", got)
+		}
+		if _, err := c.GetAllImportPaths(); err == nil {
+			t.Fatal("GetAllImportPaths reported a list it never read")
+		}
 	}
+	if n := reads.Load(); n != 1 {
+		t.Fatalf("a failing store was read %d times inside one backoff, want 1", n)
+	}
+
 	src.inner = blockingRoots{reads: &reads, roots: []string{"/imports/x"}}
+	c.mu.Lock()
+	c.failedAt = time.Now().Add(-importRootsFailBackoff) // the backoff has passed
+	c.mu.Unlock()
 	if !c.set()["/imports/x"] {
-		t.Fatal("the read after a failure was not retried")
+		t.Fatal("the read after the backoff was not retried")
 	}
 	if n := reads.Load(); n != 2 {
 		t.Fatalf("reads = %d, want 2", n)
+	}
+	c.mu.Lock()
+	cleared := c.failedAt.IsZero()
+	c.mu.Unlock()
+	if !cleared {
+		t.Error("a successful read left the failure backoff armed")
+	}
+}
+
+// A caller that gives up waiting on another caller's read logs its own Warn
+// (a slow store), distinct from the unreadable-list Warn (a failed one).
+func TestImportRootsCache_WaiterTimeoutWarns(t *testing.T) {
+	prev := importRootsLoadWait
+	importRootsLoadWait = 20 * time.Millisecond
+	t.Cleanup(func() { importRootsLoadWait = prev })
+	var reads atomic.Int32
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	c := NewImportRootsCache(blockingRoots{release: release, reads: &reads, roots: []string{"/imports/x"}})
+	go c.set()
+	for reads.Load() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	waitBefore, readBefore := importRootWaitLog.failures.Load(), importRootLog.failures.Load()
+	c.set()
+	if importRootWaitLog.failures.Load() != waitBefore+1 {
+		t.Error("a waiter timeout was not reported")
+	}
+	if importRootLog.failures.Load() != readBefore {
+		t.Error("a waiter timeout was reported as an unreadable list")
 	}
 }
 

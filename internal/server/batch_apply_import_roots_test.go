@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_import_roots_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9e4b27c1-5a3d-4f80-b6c2-0d7e18a9f354
 // last-edited: 2026-10-04
 
@@ -86,9 +86,10 @@ func TestBulkApply_ManualOnlyGuardSurvivesAMissedImportRoot(t *testing.T) {
 	if q := metabatch.ResolveCandidateSearchQuery(books, book); q.Usable || q.Title != "" {
 		t.Fatalf("fixture: resolver returned %+v; the test needs the missed-root skip (no query)", q)
 	}
-	// Without the rule the gate would refuse identity_stale, which a review
-	// page bulk button's pin overrides: the bulk-pin case is the one that
-	// would have applied a Doctor Who book.
+	// Without the rule this fixture is refused identity_stale, which no pin
+	// overrides either; it pins the guard's verdict and detail. The real
+	// pre-fix bypass (an overridable refusal under a bulk pin) is
+	// TestBulkApply_MissedRootTranscriptionUnderABulkPinIsRefused.
 	bulkPin := metafetch.PinOf(cand)
 	bulkPin.Origin = metafetch.PinOriginReviewBulk
 	for _, pin := range []*metafetch.CandidatePin{nil, &bulkPin} {
@@ -133,4 +134,121 @@ func TestWithCachedImportPaths_OneReadPerApplyCall(t *testing.T) {
 	if again, ok := withCachedImportPaths(books).(*importRootsCachedBooks); !ok || again != books.(*importRootsCachedBooks) {
 		t.Error("wrapping an already-wrapped reader added a second cache")
 	}
+}
+
+// bulkPinOf is the pin a review-page bulk button sends for c.
+func bulkPinOf(c metafetch.MetadataCandidate) *metafetch.CandidatePin {
+	p := metafetch.PinOf(c)
+	p.Origin = metafetch.PinOriginReviewBulk
+	return &p
+}
+
+// planWithBulkPin plans book b1 from a cached candidate c (identity current)
+// under a review-page bulk pin.
+func planWithBulkPin(t *testing.T, books bookReader, c metafetch.MetadataCandidate) cachedApplyPlan {
+	t.Helper()
+	blob, err := json.Marshal(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := planCachedApply(&fakeApplySvc{candidates: []json.RawMessage{blob}}, books, "b1", nil, bulkPinOf(c))
+	if plan.Gate == nil {
+		t.Fatalf("gate did not run: %+v", plan)
+	}
+	return plan
+}
+
+func requireManualOnlyRefusal(t *testing.T, plan cachedApplyPlan, wantDetail string) {
+	t.Helper()
+	if plan.Gate.Allowed || plan.OwnerReviewed || plan.Gate.Reason != applygate.ReasonOwnerManualOnly {
+		t.Fatalf("gate = %q (%s), owner-reviewed %v; want a hard %q",
+			plan.Gate.Reason, plan.Gate.Detail, plan.OwnerReviewed, applygate.ReasonOwnerManualOnly)
+	}
+	if !strings.Contains(plan.Gate.Detail, wantDetail) {
+		t.Errorf("detail %q does not name %q", plan.Gate.Detail, wantDetail)
+	}
+}
+
+// The bypass the missed-root guard fix closed: the identity is current, the
+// only refusal is an overridable one (score_below_floor), a review-page bulk
+// pin lifts it, the intro transcription is the only Doctor Who signal, and
+// the import-root read fails so the resolver skips the row with no query.
+// Before BulkManualOnlyGuard checked the transcribed stand-ins itself, the
+// guard saw an empty query and this applied.
+func TestBulkApply_MissedRootTranscriptionUnderABulkPinIsRefused(t *testing.T) {
+	const (
+		root   = "/imports/Rips"
+		chimes = "Doctor Who: The Chimes of Midnight"
+	)
+	dur := 1800
+	path := root + "/01.mp3"
+	book := &database.Book{ID: "b1", Title: "", TranscribedTitle: strPtr(chimes), FilePath: path, Duration: &dur}
+	books := importRootBooks{fakeBooks: fakeBooks{"b1": book},
+		rows:     map[string]string{"b1": path, "b2": root + "/02.mp3", "b3": root + "/03.mp3", "b4": root + "/04.mp3"},
+		files:    map[string][]database.BookFile{"b1": {{FilePath: path, Duration: dur, FileSize: int64(dur) * 8000, TranscribedTitle: strPtr(chimes)}}},
+		rootsErr: errors.New("store down")}
+	if q := metabatch.ResolveCandidateSearchQuery(books, book); q.Usable || q.Title != "" {
+		t.Fatalf("fixture: resolver returned %+v; the test needs the missed-root skip (no query)", q)
+	}
+	cand := metafetch.MetadataCandidate{Title: "The Chimes of Midnight", Author: "Robert Shearman", Score: 0.85, DurationSec: dur, Source: "Audible"}
+	requireManualOnlyRefusal(t, planWithBulkPin(t, books, cand), "transcribed title")
+}
+
+// A Big Finish record that names its franchise only in the publisher: a
+// blank-titled rip outside any franchise folder, no transcription, Audible
+// answering "The Chimes of Midnight" from "Big Finish Productions" with no
+// series. A bulk pin over an overridable leg applied it until the candidate
+// publisher and author were checked.
+func TestBulkApply_ManualOnlyPublisherOrAuthorIsRefused(t *testing.T) {
+	dur := 36000
+	book := &database.Book{ID: "b1", Title: "", FilePath: "/lib/Unknown Author/Unknown Title/book.m4b", Duration: &dur}
+	books := fakeBooks{"b1": book}
+	cases := []struct {
+		name, detail string
+		cand         metafetch.MetadataCandidate
+	}{
+		{"publisher", "candidate publisher", metafetch.MetadataCandidate{Title: "The Chimes of Midnight", Author: "Robert Shearman",
+			Publisher: "Big Finish Productions", Score: 0.85, DurationSec: dur, Source: "Audible"}},
+		{"author", "candidate author", metafetch.MetadataCandidate{Title: "The Chimes of Midnight", Author: "Big Finish Productions",
+			Score: 0.85, DurationSec: dur, Source: "Audible"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			requireManualOnlyRefusal(t, planWithBulkPin(t, books, tc.cand), tc.detail)
+		})
+	}
+}
+
+// The same shape with an ordinary publisher and author is not refused by the
+// manual-only rule: the bulk pin still overrides the score leg and it applies.
+func TestBulkApply_OrdinaryPublisherIsNotManualOnly(t *testing.T) {
+	dur := 36000
+	book := &database.Book{ID: "b1", Title: "", FilePath: "/lib/Unknown Author/Unknown Title/book.m4b", Duration: &dur}
+	cand := metafetch.MetadataCandidate{Title: "The Long Walk", Author: "Stephen King",
+		Publisher: "Penguin Random House Audio", Score: 0.85, DurationSec: dur, Source: "Audible"}
+	plan := planWithBulkPin(t, fakeBooks{"b1": book}, cand)
+	if plan.Gate.Reason == applygate.ReasonOwnerManualOnly || plan.Gate.Reason == applygate.ReasonOwnerManualCheckFailed {
+		t.Fatalf("an ordinary book was held by the manual-only rule: %q (%s)", plan.Gate.Reason, plan.Gate.Detail)
+	}
+	if !plan.Gate.Allowed && !plan.OwnerReviewed {
+		t.Fatalf("gate %q (%s) was not lifted by the bulk pin; the control must apply", plan.Gate.Reason, plan.Gate.Detail)
+	}
+}
+
+// A producer named only in the transcribed author ("Big Finish Productions
+// presents ...") is caught on the book and on its files.
+func TestBulkApply_ManualOnlyTranscribedAuthorIsRefused(t *testing.T) {
+	dur := 36000
+	path := "/lib/Unknown Author/Unknown Title/book.m4b"
+	cand := metafetch.MetadataCandidate{Title: "The Chimes of Midnight", Author: "Robert Shearman", Score: 0.85, DurationSec: dur, Source: "Audible"}
+	t.Run("book", func(t *testing.T) {
+		book := &database.Book{ID: "b1", Title: "", TranscribedAuthor: strPtr("Big Finish Productions"), FilePath: path, Duration: &dur}
+		requireManualOnlyRefusal(t, planWithBulkPin(t, fakeBooks{"b1": book}, cand), "transcribed author")
+	})
+	t.Run("file", func(t *testing.T) {
+		book := &database.Book{ID: "b1", Title: "", FilePath: path, Duration: &dur}
+		books := importRootBooks{fakeBooks: fakeBooks{"b1": book}, rows: map[string]string{"b1": path},
+			files: map[string][]database.BookFile{"b1": {{FilePath: path, Duration: dur, TranscribedAuthor: strPtr("Big Finish Productions")}}}}
+		requireManualOnlyRefusal(t, planWithBulkPin(t, books, cand), "file transcribed author")
+	})
 }
