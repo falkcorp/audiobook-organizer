@@ -1,5 +1,5 @@
 <!-- file: docs/design/2026-10-03-storage-efficiency-design.md -->
-<!-- version: 0.5.0 -->
+<!-- version: 0.6.0 -->
 <!-- guid: 332dcbd9-73e2-4814-b1a0-723afa60e605 -->
 <!-- last-edited: 2026-10-03 -->
 
@@ -474,12 +474,29 @@ census (section 7) counts them before this phase is scheduled.
   last progress line, or the operation reaches a terminal state. Live
   progress (`UpdateOpProgressV2`, the event bus) is unchanged. Expected: a
   300,935-row scan log becomes a few hundred rows.
-- **Retention op** `maintenance.prune-op-history`, nightly, dry-run flag,
-  defaults: log rows of terminal ops older than 30 days; whole op records
-  (row, state, errors, strikes) older than 180 days; failed ops keep logs 90
-  days. 180 days is longer than the 90-day journal retention
-  (`cleanup.go:310-338`), so no journal row outlives its op record. The 30-day
-  figure is the owner's call (open question Q2).
+- **Nightly consolidation op** `maintenance.compact-op-logs` (owner,
+  2026-10-03: do for operation logs what the nightly activity compaction does
+  for the activity log). Two tiers, per operation:
+  1. **Pack (lossless).** One day after an operation reaches a terminal
+     state, its `opv2:log:<op>:*` rows are replaced by a single row
+     `opv2:logpack:<op>` holding the whole log zstd-compressed, plus a small
+     digest `opv2:logdigest:<op>`: line counts by level, first and last
+     timestamps, every warning and error line verbatim (capped), the first
+     and last 20 lines. The per-row range is removed with one `DeleteRange`
+     in the same batch. Nothing is lost, so this tier needs no per-run
+     approval. A 300,935-row scan log becomes 2 keys; log text compresses
+     roughly 10x (estimate; measured on the first run).
+  2. **Age out.** After the retention period (proposed 90 days, Q2) the pack
+     is deleted and the digest stays for as long as the operation record
+     does. This tier deletes data, so its first run is a dry run with a
+     summary for the owner, and each run is capped.
+  `GetOpLogsV2`, the log download and the operation detail page read a pack
+  transparently. Whole operation records (row, state, errors, strikes,
+  digest, `opv2:done:` entry) are removed after 180 days in one batch per
+  operation; failed operations keep their pack as long as their record. The
+  operation-log retention setting is its own setting: the undo journal is
+  pruned by the general log-retention setting (`internal/logger/retention.go:27-39`)
+  and must not be shortened by this.
 - **Tail read.** `GetOpLogsV2` reverse-iterates for a limited read; today it
   decodes the whole range then slices (`pebble_store_ops_v2.go:963`).
 - **Dead code.** The legacy `operationlog:` family has no writer
