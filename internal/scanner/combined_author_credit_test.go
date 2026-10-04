@@ -1,5 +1,5 @@
 // file: internal/scanner/combined_author_credit_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f2cc271-d7d5-4284-9075-9184112447ee
 // last-edited: 2026-10-04
 
@@ -75,11 +75,11 @@ func TestResolveAuthorIDs_UnknownPartKeepsTheWholeString(t *testing.T) {
 // A combined tag the splitter will not split, whose parts are existing
 // authors, is no author rather than a new combined row.
 func TestResolveAuthorIDs_RefusesAnUnsplittableCombinedOfExistingAuthors(t *testing.T) {
-	st := usePebbleForCombined(t, "Shirtaloon", "Travis Deverell")
-	ids, err := resolveAuthorIDs("Shirtaloon, Travis Deverell")
+	st := usePebbleForCombined(t, "Amy Adams", "Ben Brown", "Cat Cole", "Dan Dorn")
+	ids, err := resolveAuthorIDs("Amy Adams, Ben Brown, Cat Cole, Dan Dorn")
 	require.NoError(t, err, "never a failed save")
 	require.Empty(t, ids)
-	a, err := st.GetAuthorByName("Shirtaloon, Travis Deverell")
+	a, err := st.GetAuthorByName("Amy Adams, Ben Brown, Cat Cole, Dan Dorn")
 	require.NoError(t, err)
 	require.Nil(t, a)
 }
@@ -148,4 +148,31 @@ func TestResolveAuthorIDs_ReviewCases(t *testing.T) {
 		require.NoError(t, err)
 		require.Nil(t, a, "%s must not be created from a split", n)
 	}
+}
+
+// A single-word pen name that is an author already splits with its co-author
+// (owner decision 2026-10-04); nothing is created.
+func TestResolveAuthorIDs_SingleWordPenNameThatExistsSplits(t *testing.T) {
+	st := usePebbleForCombined(t, "Shirtaloon", "Travis Deverell")
+	ids, err := resolveAuthorIDs("Shirtaloon, Travis Deverell")
+	require.NoError(t, err)
+	require.Len(t, ids, 2)
+	a, err := st.GetAuthorByName("Shirtaloon, Travis Deverell")
+	require.NoError(t, err)
+	require.Nil(t, a)
+}
+
+// A byline is stripped before the lookup: "By: Brandon Sanderson" links
+// Brandon Sanderson and creates nothing.
+func TestResolveAuthorIDs_ByPrefixLinksTheAuthor(t *testing.T) {
+	st := usePebbleForCombined(t, "Brandon Sanderson")
+	ids, err := resolveAuthorIDs("By: Brandon Sanderson")
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	a, err := st.GetAuthorByName("Brandon Sanderson")
+	require.NoError(t, err)
+	require.Equal(t, a.ID, ids[0])
+	n, err := st.GetAuthorByName("By: Brandon Sanderson")
+	require.NoError(t, err)
+	require.Nil(t, n)
 }

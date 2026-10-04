@@ -1,5 +1,5 @@
 // file: internal/importer/combined_author_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f25295a-33d6-4702-bedb-e8807a41713a
 // last-edited: 2026-10-04
 

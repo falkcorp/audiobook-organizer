@@ -1,7 +1,7 @@
 // file: internal/personname/author_positional.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 1b54b5ba-45b5-4f3a-8674-43ad240b4c53
-// last-edited: 2026-09-25
+// last-edited: 2026-10-04
 
 package personname
 
@@ -143,6 +143,21 @@ func IsPositionalArtifactName(name string) bool {
 	return false
 }
 
+// byPrefixRe is a leading byline word: "By:", "By " or "by ", in any case,
+// with optional whitespace around the colon. "Byron" does not match: the word
+// must end in a colon or whitespace.
+var byPrefixRe = regexp.MustCompile(`(?i)^\s*by(?:\s*:\s*|\s+)`)
+
+// StripByPrefix removes a leading byline ("By: Brandon Sanderson" ->
+// "Brandon Sanderson"). Every creation gate and author lookup applies it
+// first. A name that is only the byline ("By:") becomes empty.
+func StripByPrefix(s string) string {
+	return strings.TrimSpace(byPrefixRe.ReplaceAllString(s, ""))
+}
+
+// HasByPrefix reports whether s opens with a byline StripByPrefix removes.
+func HasByPrefix(s string) bool { return byPrefixRe.MatchString(s) }
+
 // CleanAuthorNameForCreation resolves a raw artist tag to the author name that
 // should be stored, reporting false when the tag carries no usable name.
 //
@@ -159,7 +174,9 @@ func IsPositionalArtifactName(name string) bool {
 // not a junk fix.
 func CleanAuthorNameForCreation(raw string) (string, bool) {
 	s := NormalizeAuthorName(strings.TrimSpace(raw))
-	if s == "" || IsDirtyAuthorName(s) {
+	// The dirty check reads the name without its "By:" lead-in (StripByPrefix),
+	// so the prefix never decides a refusal on its own.
+	if s == "" || IsDirtyAuthorName(NormalizeAuthorName(StripByPrefix(s))) {
 		return "", false
 	}
 	cleaned, why := PrepareAuthorNameForCreation(s)
@@ -188,10 +205,17 @@ func PrepareAuthorNameForCreation(raw string) (string, AuthorNameRejection) {
 	if s == "" {
 		return "", RejectEmpty
 	}
-	if IsPositionalArtifactName(s) {
+	// "By: Brandon Sanderson" is a byline, not a name: the lead-in is salvage
+	// like positional numbering, and the one-bare-word rule below applies to
+	// what it leaves ("By: Zork" is refused; owner decision 2026-10-04).
+	unled := NormalizeAuthorName(StripByPrefix(s))
+	if unled == "" {
+		return "", RejectEmpty
+	}
+	if IsPositionalArtifactName(unled) {
 		return "", RejectPositional
 	}
-	stripped := NormalizeAuthorName(StripPositionalPrefix(s))
+	stripped := NormalizeAuthorName(StripPositionalPrefix(unled))
 	if stripped == "" {
 		return "", RejectPositional
 	}

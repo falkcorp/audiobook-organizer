@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/combined_author_fixer_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d8097de1-71d8-4949-8195-fec97df8ae52
 // last-edited: 2026-10-04
 
@@ -171,8 +171,33 @@ func (l *combinedLib) populate() {
 	l.book("narrator-too", "Narrated", "J.N. Chaney, Jonathan P. Brazee", combinedLibRoot+"Narrated/a.m4b",
 		credit{"J.N. Chaney, Jonathan P. Brazee", "author", 0}, credit{"J.N. Chaney, Jonathan P. Brazee", "narrator", 1})
 	// ---- held ----
-	l.book("refused", "He Who Fights", "Shirtaloon, Travis Deverell", combinedLibRoot+"HWFWM/a.m4b",
+	// A single-word pen name that is an author already: a review row.
+	l.book("single-word", "He Who Fights", "Shirtaloon, Travis Deverell", combinedLibRoot+"HWFWM/a.m4b",
 		credit{"Shirtaloon, Travis Deverell", "author", 0})
+	// A single-word name no author carries, but a provider credited it to
+	// the book on its own: a review row that creates it.
+	l.book("single-provider", "The Wandering Inn", "Pirateaba, Travis Deverell", combinedLibRoot+"TWI/a.m4b",
+		credit{"Pirateaba, Travis Deverell", "author", 0})
+	pv := `"Pirateaba"`
+	require.NoError(t, l.store.RecordMetadataChange(&database.MetadataChangeRecord{BookID: l.ids["single-provider"],
+		Field: database.HistoryFieldAuthor, NewValue: &pv, ChangeType: "fetched", Source: "Audible"}))
+	// A byline record: replaced by the name after it, a review row.
+	l.book("by-prefix", "Ancillary Justice", "By: Ann Leckie", combinedLibRoot+"AJ/a.m4b",
+		credit{"By: Ann Leckie", "author", 0})
+	// An unknown single word with no provider credit stays held, even when
+	// a provider credited the joined string (that is where the record came
+	// from, so it proves nothing).
+	l.book("refused", "Zork Book", "Zorkington, Travis Deverell", combinedLibRoot+"Zork/a.m4b",
+		credit{"Zorkington, Travis Deverell", "author", 0})
+	jv := `"Zorkington, Travis Deverell"`
+	require.NoError(t, l.store.RecordMetadataChange(&database.MetadataChangeRecord{BookID: l.ids["refused"],
+		Field: database.HistoryFieldAuthor, NewValue: &jv, ChangeType: "fetched", Source: "Audible"}))
+	// A one-word name a person typed is not a provider credit.
+	l.book("refused-manual", "Manual Book", "Quxworth, Travis Deverell", combinedLibRoot+"Qux/a.m4b",
+		credit{"Quxworth, Travis Deverell", "author", 0})
+	mv := `"Quxworth"`
+	require.NoError(t, l.store.RecordMetadataChange(&database.MetadataChangeRecord{BookID: l.ids["refused-manual"],
+		Field: database.HistoryFieldAuthor, NewValue: &mv, ChangeType: "override", Source: "manual"}))
 	l.book("title-part", "Some Tide", "A Dark and Drowning Tide", combinedLibRoot+"Tide/a.m4b",
 		credit{"A Dark and Drowning Tide", "author", 0})
 	l.book("title", "Jonathan Strange and Mr Norrell", "Jonathan Strange and Mr Norrell", combinedLibRoot+"JSMN/a.m4b",
@@ -206,7 +231,8 @@ func TestCombinedAuthorFixer_PlanDecisions(t *testing.T) {
 	want := map[string]string{
 		"duplicate": combinedClassDuplicate, "only": combinedClassOnly, "partial": combinedClassPartial,
 		"primary-only": combinedClassOnly, "new-author": combinedClassNewAuthors, "keep-primary": combinedClassPartial,
-		"narrator-too": combinedClassOnly,
+		"narrator-too": combinedClassOnly, "single-word": combinedClassSingleWord,
+		"single-provider": combinedClassSingleWord, "by-prefix": combinedClassByPrefix,
 	}
 	for key, class := range want {
 		r, ok := rows[key]
@@ -215,7 +241,7 @@ func TestCombinedAuthorFixer_PlanDecisions(t *testing.T) {
 		require.Equal(t, class, r.Class, key)
 	}
 	held := map[string]string{
-		"refused": combinedSkipSplitRefused, "title-part": combinedSkipImplausiblePart, "title": combinedSkipTitle,
+		"refused": combinedSkipSplitRefused, "refused-manual": combinedSkipSplitRefused, "title-part": combinedSkipImplausiblePart, "title": combinedSkipTitle,
 		"role": combinedSkipRole, "doubled": combinedSkipDoubled, "anthology": combinedSkipAnthology,
 		"ambiguous": swapSkipAmbiguousAuthor, "locked": junkSkipUserLocked, "itunes": repairs.SkipITunes,
 		"dw": repairs.SkipOwnerManual,
@@ -231,6 +257,15 @@ func TestCombinedAuthorFixer_PlanDecisions(t *testing.T) {
 	require.Equal(t, "J. N. Chaney @0, Jonathan P. Brazee @1", rows["duplicate"].Proposed["credits"])
 	require.Equal(t, "J. N. Chaney", rows["duplicate"].Proposed["primary"])
 	require.Contains(t, rows["new-author"].Proposed["credits"], "Zed Newperson (new author)")
+	// Owner decision 2026-10-04: byline and single-word rows are review
+	// rows, never low risk.
+	for _, key := range []string{"single-word", "single-provider", "by-prefix"} {
+		require.Equal(t, repairs.RiskReview, rows[key].Risk, key)
+	}
+	require.Equal(t, "Shirtaloon @0, Travis Deverell @1", rows["single-word"].Proposed["credits"])
+	require.Equal(t, "Pirateaba (new author) @0, Travis Deverell @1", rows["single-provider"].Proposed["credits"])
+	require.Equal(t, "Ann Leckie @0", rows["by-prefix"].Proposed["credits"])
+	require.Equal(t, "Ann Leckie", rows["by-prefix"].Proposed["primary"])
 }
 
 func TestCombinedAuthorFixer_ApplyAndRevert(t *testing.T) {
@@ -363,7 +398,10 @@ func TestCombinedClassify(t *testing.T) {
 		"J.N. Chaney, Jonathan P. Brazee":                     "",
 		"Adam Lance, Leon West, Adam Lance, Leon West":        "",
 		"A. G. Riddle, A. G. Riddle":                          combinedSkipDoubled,
-		"Shirtaloon, Travis Deverell":                         combinedSkipSplitRefused,
+		"Shirtaloon, Travis Deverell":                         "",
+		"Deverell, Travis":                                    combinedSkipSplitRefused,
+		"By: Brandon Sanderson":                               "",
+		"By: Zork":                                            "",
 		"A Dark and Drowning Tide":                            combinedSkipImplausiblePart,
 		"Reuben Woolley - translator, Alex Toxic":             combinedSkipRole,
 		"Greg Bear, Ben Bova, David Brin, Larry Niven":        combinedSkipAnthology,
@@ -379,8 +417,17 @@ func TestCombinedClassify(t *testing.T) {
 		_, skip, why := combinedClassify(name)
 		require.Equal(t, want, skip, "%s: %s", name, why)
 	}
-	names, _, _ := combinedClassify("Adam Lance, Leon West, Adam Lance, Leon West")
-	require.Equal(t, []string{"Adam Lance", "Leon West"}, names)
+	c, _, _ := combinedClassify("Adam Lance, Leon West, Adam Lance, Leon West")
+	require.Equal(t, []string{"Adam Lance", "Leon West"}, c.names)
+	c, _, _ = combinedClassify("Shirtaloon, Travis Deverell")
+	require.Equal(t, []string{"Shirtaloon", "Travis Deverell"}, c.names)
+	require.Equal(t, []string{"Shirtaloon"}, c.singleWord)
+	c, _, _ = combinedClassify("By: Brandon Sanderson")
+	require.True(t, c.byLed)
+	require.Equal(t, []string{"Brandon Sanderson"}, c.names)
+	require.Empty(t, c.singleWord)
+	c, _, _ = combinedClassify("By: Zork")
+	require.Equal(t, []string{"Zork"}, c.singleWord, "a one-word byline needs evidence")
 }
 
 // Build 3: once the fixer has moved every credit off a combined record, the
@@ -478,4 +525,29 @@ func TestCombinedAuthorFixer_AuthorNamedSeriesIsNotATitle(t *testing.T) {
 		credit{"Michael Anderle, Craig Martelle", "author", 0})
 	_, rows := l.plan()
 	require.True(t, rows["series"].Applicable(), "%s %s", rows["series"].Skipped, rows["series"].SkipReason)
+}
+
+// Owner decision 2026-10-04: the byline and single-word review rows apply
+// like any other row once the owner selects them; the held ones never do.
+func TestCombinedAuthorFixer_ReviewRowsApply(t *testing.T) {
+	l := newCombinedLib(t)
+	l.populate()
+	plan, rows := l.plan()
+	var sel []string
+	for _, k := range []string{"single-word", "single-provider", "by-prefix", "refused", "refused-manual"} {
+		sel = append(sel, rows[k].RowID)
+	}
+	out := l.apply(plan, sel)
+	require.Equal(t, 3, out.Applied, "outcomes %v", out.ByOutcome)
+	require.Equal(t, []string{"Shirtaloon@0/author", "Travis Deverell@1/author"}, l.credits("single-word"))
+	require.Equal(t, "Shirtaloon", l.primary("single-word"))
+	require.Equal(t, []string{"Pirateaba@0/author", "Travis Deverell@1/author"}, l.credits("single-provider"))
+	require.Equal(t, []string{"Ann Leckie@0/author"}, l.credits("by-prefix"))
+	require.Equal(t, "Ann Leckie", l.primary("by-prefix"))
+	require.Equal(t, []string{"Zorkington, Travis Deverell@0/author"}, l.credits("refused"))
+	for _, n := range []string{"Zorkington", "Quxworth"} {
+		a, err := l.store.GetAuthorByName(n)
+		require.NoError(t, err)
+		require.Nil(t, a, "%s is never created", n)
+	}
 }

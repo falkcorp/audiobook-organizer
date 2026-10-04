@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/refetch_missing_authors_combined_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9491d68a-a546-43db-9cd6-39abba52f631
 // last-edited: 2026-10-04
 
@@ -46,13 +46,13 @@ func TestLinkTagAuthors_RefusesAnUnsplittableCombinedOfExistingAuthors(t *testin
 	st, err := database.NewPebbleStore(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = st.Close() })
-	for _, n := range []string{"Shirtaloon", "Travis Deverell"} {
+	for _, n := range []string{"Amy Adams", "Ben Brown", "Cat Cole", "Dan Dorn"} {
 		_, err := st.CreateAuthor(n)
 		require.NoError(t, err)
 	}
 	b, err := st.CreateBook(&database.Book{Title: "HWFWM", FilePath: "/l/h.m4b", Format: "m4b"})
 	require.NoError(t, err)
-	out, err := linkTagAuthors(st, b.ID, "Shirtaloon, Travis Deverell")
+	out, err := linkTagAuthors(st, b.ID, "Amy Adams, Ben Brown, Cat Cole, Dan Dorn")
 	require.NoError(t, err)
 	require.Equal(t, tagAuthorsCombined, out)
 	got, err := st.GetBookByID(b.ID)

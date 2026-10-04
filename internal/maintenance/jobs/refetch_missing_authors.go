@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/refetch_missing_authors.go
-// version: 2.12.0
+// version: 2.13.0
 // guid: a1000012-0000-0000-0000-000000000012
 // last-edited: 2026-10-04
 

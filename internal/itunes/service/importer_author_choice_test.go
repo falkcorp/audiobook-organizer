@@ -1,5 +1,5 @@
 // file: internal/itunes/service/importer_author_choice_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4a1d8e63-9f2b-4c75-b3e0-7d6c1f9a2b58
 // last-edited: 2026-10-04
 
@@ -89,16 +89,43 @@ func expectTitles(m *dbmocks.MockStore) {
 // not created as one combined author row (authorcredit.ErrCombinedCredit):
 // the book is left without an author, and the mock fails on any CreateAuthor.
 func TestAssignAuthorAndSeries_CombinedOfExistingAuthorsIsNotCreated(t *testing.T) {
+	// Four existing names is past the split cap: refused, never created.
 	m := dbmocks.NewMockStore(t)
 	expectTitles(m)
-	m.EXPECT().GetAuthorByName("Shirtaloon, Travis Deverell").Return(nil, nil)
-	m.EXPECT().GetAuthorByName("Shirtaloon").Return(&database.Author{ID: 1, Name: "Shirtaloon"}, nil)
-	m.EXPECT().GetAuthorByName("Travis Deverell").Return(&database.Author{ID: 2, Name: "Travis Deverell"}, nil)
+	known := map[string]int{"Amy Adams": 1, "Ben Brown": 2, "Cat Cole": 3, "Dan Dorn": 4}
+	m.EXPECT().GetAuthorByName(mock.Anything).RunAndReturn(func(n string) (*database.Author, error) {
+		if id, ok := known[n]; ok {
+			return &database.Author{ID: id, Name: n}, nil
+		}
+		return nil, nil
+	})
+
+	imp := newMockImporter(m)
+	book := &database.Book{}
+	imp.assignAuthorAndSeries(book, &itunes.Track{AlbumArtist: "Amy Adams, Ben Brown, Cat Cole, Dan Dorn"})
+	assert.Nil(t, book.AuthorID)
+}
+
+// A single-word pen name that is an author already splits with its co-author
+// (owner decision 2026-10-04); nothing is created.
+func TestAssignAuthorAndSeries_SingleWordPenNameThatExistsSplits(t *testing.T) {
+	m := dbmocks.NewMockStore(t)
+	expectTitles(m)
+	known := map[string]int{"Shirtaloon": 1, "Travis Deverell": 2}
+	m.EXPECT().GetAuthorByName(mock.Anything).RunAndReturn(func(n string) (*database.Author, error) {
+		if id, ok := known[n]; ok {
+			return &database.Author{ID: id, Name: n}, nil
+		}
+		return nil, nil
+	})
 
 	imp := newMockImporter(m)
 	book := &database.Book{}
 	imp.assignAuthorAndSeries(book, &itunes.Track{AlbumArtist: "Shirtaloon, Travis Deverell"})
-	assert.Nil(t, book.AuthorID)
+	require.NotNil(t, book.AuthorID)
+	assert.Equal(t, 1, *book.AuthorID)
+	require.Len(t, book.Authors, 2)
+	assert.Equal(t, 2, book.Authors[1].AuthorID)
 }
 
 // A credit of two existing authors credits each, in order; nothing created.
