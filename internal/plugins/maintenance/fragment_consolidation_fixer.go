@@ -1720,10 +1720,10 @@ func interruptedRow(lib *fragLibrary, rec fragPlanRecord, why string) repairs.Ro
 	sb := lib.books[rec.Survivor]
 	r := repairs.Row{RowID: rec.RowID, Class: fragClassHeld, BookIDs: ids, Title: sb.Title, Author: lib.authorName(sb),
 		Risk: repairs.RiskReview, Proposed: map[string]string{"survivor": rec.Survivor},
-		Reason:     fmt.Sprintf("an apply of this fixer started consolidating %s into %s and did not finish", rec.Dir, rec.Survivor),
-		Skipped:    fragSkipInterrupted,
-		SkipReason: why + "; never applied with another survivor: resume or revert that apply, or resolve by hand",
-		Evidence:   []string{fmt.Sprintf("plan record of %s, planned %s", rec.RowID, rec.PlannedAt.UTC().Format(time.RFC3339))},
+		Reason:      fmt.Sprintf("an apply of this fixer started consolidating %s into %s and did not finish", rec.Dir, rec.Survivor),
+		Skipped:     fragSkipInterrupted,
+		SkipReason:  why + "; never applied with another survivor: resume or revert that apply, or resolve by hand",
+		Evidence:    []string{fmt.Sprintf("plan record of %s, planned %s", rec.RowID, rec.PlannedAt.UTC().Format(time.RFC3339))},
 		Fingerprint: fragFingerprint("interrupted", rec.RowID, rec.Survivor, why)}
 	for _, id := range ids {
 		b, ok := lib.books[id]

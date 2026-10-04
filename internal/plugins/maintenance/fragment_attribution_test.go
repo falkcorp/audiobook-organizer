@@ -348,6 +348,35 @@ func TestFragmentFixer_ForeignCrownIsAChange(t *testing.T) {
 		require.Equal(t, 0, out.Applied)
 	})
 
+	t.Run("a fresh plan continues the cut run with its plan time", func(t *testing.T) {
+		// Review 6 S1: the continuation keeps the cut run's plan time, so
+		// the run's own demote, crown and note (written before the fresh
+		// plan) still explain the flags.
+		f, r, plan, _ := setup(t, plain)
+		row := findRow(t, f.plan(t, "op-plan2"), r.RowID)
+		require.True(t, row.Applicable(), "%s: %s", row.Skipped, row.SkipReason)
+		require.Equal(t, r.Fingerprint, row.Fingerprint)
+		require.Equal(t, plan.SurvivorID, row.Proposed["survivor"])
+		var st0, st1 fragGroupState
+		require.NoError(t, json.Unmarshal(r.State, &st0))
+		require.NoError(t, json.Unmarshal(row.State, &st1))
+		require.True(t, st0.PlannedAt.Equal(st1.PlannedAt), "the continuation keeps the run's plan time")
+		out := f.apply(t, "op-plan2", "op-apply2", []string{row.RowID}, nil)
+		require.Equal(t, 1, out.Applied, "outcomes %v %+v", out.ByOutcome, out.Rows)
+		f.requireAllRetiredBut(t, r.BookIDs, plan.SurvivorID)
+	})
+
+	t.Run("crown written, note cut off, then an outside actor moves the crown", func(t *testing.T) {
+		// Review 6 N1: the pending window accepts only the member a replay
+		// of the hand-off crowns (orig[0]); orig[4] is a change.
+		f, r, _, orig := setup(t, func(s *database.PebbleStore) repairs.ChangeJournal { return dropHandOffNote{s} })
+		recrown(t, f, orig[0], orig[4])
+		got, err := newFragmentFixer(f.p).Replan(context.Background(), nil, r, nil)
+		require.NoError(t, err)
+		require.NotEqual(t, r.Fingerprint, got.Fingerprint)
+		require.Contains(t, got.Reason, "book "+orig[4]+" is now primary=true")
+	})
+
 	t.Run("crown written, its note cut off: resumes", func(t *testing.T) {
 		f, r, plan, orig := setup(t, func(s *database.PebbleStore) repairs.ChangeJournal { return dropHandOffNote{s} })
 		cs, err := f.s.GetBookChanges(orig[2])
@@ -410,4 +439,121 @@ func TestFragmentFixer_PlanStateGates(t *testing.T) {
 		require.NotEqual(t, r.Fingerprint, got.Fingerprint)
 		require.Contains(t, got.Reason, "did not change it")
 	})
+}
+
+// failGroupStore fails every version-group read, so
+// versionprimary.EnsureSinglePrimary errors inside a retire's hand-off.
+type failGroupStore struct{ *database.PebbleStore }
+
+func (failGroupStore) GetBooksByVersionGroup(string) ([]database.Book, error) {
+	return nil, errors.New("injected group read failure")
+}
+
+// crownSet seeds the copies folder with orig[0], orig[2] and orig[4] in one
+// version group, orig[2] its explicit primary, plans it, and returns orig[2]'s
+// member (retiring it demotes it and hands the group off).
+func crownSet(t *testing.T) (*fragFixture, repairs.Row, *fragGroupPlan, []string, fragGroupMember) {
+	t.Helper()
+	f := newFragFixture(t)
+	orig, _ := f.seedChapterCopies(t, "lib/Clarke/02_light_of_other_days", nil)
+	for _, id := range orig {
+		f.organized(t, id)
+	}
+	group := "vg-ch"
+	for _, i := range []int{0, 2, 4} {
+		primary := i == 2
+		_, err := f.s.ModifyBook(orig[i], func(b *database.Book) error { b.VersionGroupID = &group; b.IsPrimaryVersion = &primary; return nil })
+		require.NoError(t, err)
+	}
+	r, plan := f.p7Plan(t, "lib/Clarke/02_light_of_other_days")
+	var m fragGroupMember
+	for _, x := range plan.Members {
+		if x.Frag.Book.ID == orig[2] {
+			m = x
+		}
+	}
+	require.NotNil(t, m.Frag)
+	return f, r, plan, orig, m
+}
+
+// TestRetireInto_FailedHandOffIsReturned (review 6 N2): a hand-off whose
+// EnsureSinglePrimary fails stops the row (the error is returned) instead of
+// leaving the group owed a primary with no note while the row reports
+// applied; the next run finishes the hand-off.
+func TestRetireInto_FailedHandOffIsReturned(t *testing.T) {
+	f, _, plan, orig, m := crownSet(t)
+	w := f.fragWriter(t, "op-cut")
+	require.NoError(t, w.MoveBookFiles([]string{m.Frag.File.ID}, m.Frag.Book.ID, plan.SurvivorID))
+	_, err := retireInto(context.Background(), f.p, failGroupStore{f.s}, w, time.Now, fragFixerID, orig[2], plan.SurvivorID,
+		&merge.SliceMapping{OffsetSeconds: m.Offset, Mappable: true})
+	require.ErrorContains(t, err, "primary hand-off of "+orig[2])
+	require.False(t, f.live(t, "c:02_003"), "the retire itself is written")
+	require.False(t, handoffJournaled(t, f.s, "op-cut", orig[2]), "no note for a hand-off that failed")
+	require.Empty(t, f.livePrimaries(t, "vg-ch"), "the group is owed its primary")
+
+	_, err = retireInto(context.Background(), f.p, f.s, f.fragWriter(t, "op-retry"), time.Now, fragFixerID, orig[2], plan.SurvivorID,
+		&merge.SliceMapping{OffsetSeconds: m.Offset, Mappable: true})
+	require.NoError(t, err)
+	require.True(t, handoffJournaled(t, f.s, "op-retry", orig[2]))
+	require.Len(t, f.livePrimaries(t, "vg-ch"), 1)
+}
+
+// TestFragmentFixer_AnotherRetireFixerFinishesOurHandOff (review 6 N3): our
+// retire demoted the group's primary and its hand-off failed; the
+// duplicate-copies fixer's row then finished that owed hand-off (its note
+// carries its own Source). The member it crowned is credited to our demote,
+// so our row resumes instead of stalling.
+func TestFragmentFixer_AnotherRetireFixerFinishesOurHandOff(t *testing.T) {
+	f, r, plan, orig, m := crownSet(t)
+	w := f.fragWriter(t, "op-cut")
+	f.journalPlanRecord(t, w, r)
+	require.NoError(t, w.MoveBookFiles([]string{m.Frag.File.ID}, m.Frag.Book.ID, plan.SurvivorID))
+	_, err := retireInto(context.Background(), f.p, failGroupStore{f.s}, w, time.Now, fragFixerID, orig[2], plan.SurvivorID,
+		&merge.SliceMapping{OffsetSeconds: m.Offset, Mappable: true})
+	require.Error(t, err)
+
+	f.applyOp("op-dc", dcFixerID)
+	wdc := repairs.NewWriter(f.s, f.s, dcFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-dc")
+	require.NoError(t, resumeHandOff(context.Background(), f.p, f.s, wdc, dcFixerID, orig[2], plan.SurvivorID))
+	require.True(t, handoffJournaled(t, f.s, "op-dc", orig[2]), "the other fixer journaled the hand-off")
+	crowned := f.livePrimaries(t, "vg-ch")
+	require.Len(t, crowned, 1)
+
+	f.requireResumes(t, r, "op-apply")
+	f.requireAllRetiredBut(t, r.BookIDs, plan.SurvivorID)
+}
+
+// TestFragmentFixer_AnotherPlansRunExplainsNothing (review 6 N4): a flag
+// change made by an apply of a DIFFERENT plan of the same row (written after
+// this row's plan time) is not this row's: only the runs whose plan record
+// names this row id AND plan time explain a flag.
+func TestFragmentFixer_AnotherPlansRunExplainsNothing(t *testing.T) {
+	f, r, _, orig, _ := crownSet(t)
+	time.Sleep(2 * time.Millisecond)
+	r2, plan2 := f.p7Plan(t, "lib/Clarke/02_light_of_other_days")
+	require.Equal(t, r.RowID, r2.RowID)
+	var st1, st2 fragGroupState
+	require.NoError(t, json.Unmarshal(r.State, &st1))
+	require.NoError(t, json.Unmarshal(r2.State, &st2))
+	require.False(t, st1.PlannedAt.Equal(st2.PlannedAt))
+	var m fragGroupMember
+	for _, x := range plan2.Members {
+		if x.Frag.Book.ID == orig[2] {
+			m = x
+		}
+	}
+	w := f.fragWriter(t, "op-other")
+	f.journalPlanRecord(t, w, r2)
+	require.NoError(t, w.MoveBookFiles([]string{m.Frag.File.ID}, m.Frag.Book.ID, plan2.SurvivorID))
+	_, err := retireInto(context.Background(), f.p, f.s, w, time.Now, fragFixerID, orig[2], plan2.SurvivorID,
+		&merge.SliceMapping{OffsetSeconds: m.Offset, Mappable: true})
+	require.NoError(t, err)
+
+	got, err := newFragmentFixer(f.p).Replan(context.Background(), nil, r, nil)
+	require.NoError(t, err)
+	require.NotEqual(t, r.Fingerprint, got.Fingerprint, "the first plan's row does not claim the second plan's run")
+	require.Contains(t, got.Reason, "did not change it")
+	got2, err := newFragmentFixer(f.p).Replan(context.Background(), nil, r2, nil)
+	require.NoError(t, err)
+	require.Equal(t, r2.Fingerprint, got2.Fingerprint, "the second plan's row resumes its own run: %s", got2.Reason)
 }
