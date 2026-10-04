@@ -1,12 +1,13 @@
 <!-- file: docs/plans/storage-efficiency/TASK-A3.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 2dde370d-4e23-41f2-8820-7ef7d8c7e189 -->
 <!-- last-edited: 2026-10-03 -->
 
 # TASK-A3: db-health and `/cache/stats` read the census; safe prefix bounds
 
-Wave W2. Start only after TASK-A2 (`feat/storage-a2-db-census`) has merged
-to `main`. TASK-A7 runs after this task, because both edit
+Wave W2, in parallel with A8. Start only after TASK-A2
+(`feat/storage-a2-db-census`) and PR #3704 (it edits `pebble_store.go`; plan
+P-1) have merged to `main`. TASK-A7 runs after this task, because both edit
 `pebble_store.go` and `ai_scan_store.go`. Model: sonnet. Reviewer:
 code-reviewer.
 
@@ -41,6 +42,7 @@ build.
 cd /Users/jdfalk/repos/github.com/jdfalk/audiobook-organizer
 git fetch origin main
 git log --oneline origin/main | grep -m1 'db-census'   # must print A2's commit; if not, stop
+gh pr view 3704 --json state -q .state   # must print MERGED; if not, stop
 git worktree add ../aorg-storage-a3-db-health-census -b perf/storage-a3-db-health-census origin/main
 cd ../aorg-storage-a3-db-health-census
 npm ci --prefix web
@@ -272,7 +274,7 @@ name it in the report, so a miss on prod can be attributed.
 - Fragment `changelog.d/<YYYYMMDD>_storage_a3_db_health_census.md`, no
   header. Use `### Changed` for the field-meaning list and `### Fixed` for the
   prefix-bound bug. `####` entries only.
-- Check that `git diff origin/main | grep -nE 'abk_[A-Za-z0-9]{16,}|172\.16\.[0-9]{1,3}\.[0-9]{1,3}'` prints
+- Check that `git diff origin/main | grep -nE "ab""k_[A-Za-z0-9]{16,}|172\.16\.[0-9]{1,3}\.[0-9]{1,3}"` prints
   nothing.
 - Commit, for example
   `perf(diagnostics): db-health and cache stats read the census; fix prefix upper bound`,

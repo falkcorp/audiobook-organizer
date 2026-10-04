@@ -1,13 +1,16 @@
 <!-- file: docs/plans/storage-efficiency/TASK-A5.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 10c73217-17fc-4334-a120-d0c82a7c9e9b -->
 <!-- last-edited: 2026-10-03 -->
 
 # TASK-A5: Timeline indexes (`opv2:open:`, `opv2:done:`), startup reconcile, `GetOpLogsV2` tail read
 
-Wave W1, in parallel with A1, A2, A4 and A6. Model: opus. Reviewer:
-code-reviewer, with an equivalence probe (old scan against new, on random
-operation histories).
+Wave W1. Start only after PR #3704 has merged to `main`: it edits
+`internal/server/server_lifecycle.go`, which step 12 edits. Runs in parallel
+with A1, A2, A4 and A6. Model: opus. Reviewer: code-reviewer, with an
+equivalence probe (old scan against new, on random operation histories; a
+batch failure injected between staging and commit must leave old and new
+agreeing).
 
 ## 1. Goal and why
 
@@ -38,6 +41,7 @@ measured numbers for both a 24 h and a 90 d window in the report.
 ```bash
 cd /Users/jdfalk/repos/github.com/jdfalk/audiobook-organizer
 git fetch origin main
+gh pr view 3704 --json state -q .state   # must print MERGED; if not, stop
 git worktree add ../aorg-storage-a5-timeline-index -b perf/storage-a5-timeline-index origin/main
 cd ../aorg-storage-a5-timeline-index
 npm ci --prefix web
@@ -131,7 +135,9 @@ npm ci --prefix web
      The fixed layout is: prefix (10 bytes), 20 digits, `:`, then the id.
    - `const opsV2TimelineIndexStamp = "system:backfill:opv2_timeline_index_v1_done"`.
      It follows the atpath sentinel naming (`pebble_store_atpath_index.go:63`).
-2. `func stageOpV2TimelineIndex(b *pebble.Batch, prev, next *OperationV2Row) error`.
+2. `func stageOpRow(b *pebble.Batch, prev, next *OperationV2Row) error`
+   (the plan and design 8 call it `stageOpRow(batch, old, new)`; use that
+   name).
    `prev` is the row as stored before this write; nil means none or unknown.
    `next` is the row being written; nil means the row is being deleted. Rules:
    - `prev` had a `CompletedAt`, and `next` is nil, or has no `CompletedAt`,
@@ -147,7 +153,7 @@ npm ci --prefix web
      zero writes.
 3. `func (p *PebbleStore) commitOpV2Row(prev *OperationV2Row, row *OperationV2Row, extra func(*pebble.Batch) error) error`.
    It marshals `row`, opens a batch, Sets `opv2OpKey(row.ID)`, calls
-   `stageOpV2TimelineIndex(b, prev, row)`, calls `extra(b)` when it is
+   `stageOpRow(b, prev, row)`, calls `extra(b)` when it is
    non-nil (queue and active keys), and commits with `pebble.Sync`. Guard it
    with `recoverPebbleClosed`.
 
@@ -163,7 +169,7 @@ npm ci --prefix web
      act keys when `row.Status == "queued"`. Same keys as today, now atomic.
    - `:269` `UpdateOperationV2Status`, `:339` `ResetOperationV2ForResume`,
      `:436` `SetOperationV2StatusIfQueued`. These already use a batch. Add
-     `stageOpV2TimelineIndex(batch, &prev, &row)` before the commit.
+     `stageOpRow(batch, &prev, &row)` before the commit.
    - `:382` `SetOperationV2Result`. Use `commitOpV2Row(&prev, &row, nil)`.
      The delta is empty, but the call is uniform.
    - `:569, :586, :619, :654, :670, :687, :812` (IncrementResumeCount,
@@ -180,14 +186,34 @@ npm ci --prefix web
      the queue key.
 5. Delete sites:
    - `:547` `SweepHollowOperationsV2`. The row did not decode, so its
-     `CompletedAt` is unknown. Add `opv2OpenKey(id)` to the deleted keys. Any
-     stale done key is removed by the reconcile orphan pass (step 9).
+     `CompletedAt` is unknown. Add `opv2OpenKey(id)` to the deleted keys, and
+     delete any done key for that id: iterate the `opv2:done:` keys only (no
+     values), and stage a Delete for each key whose id part
+     (`parseOpv2DoneKey`) equals the swept id. The reconcile does not run on
+     every boot (5.4), so it cannot be relied on to clean up. Sweep runs once,
+     from a migration (`migrations.go:1256`), so a key-only pass over the done
+     index is acceptable there. A stale done key is harmless to readers in any
+     case: the reader point-gets each id and skips not-found rows (step 8.4).
    - `:776` `DeleteOperationV2`. Add `opv2OpenKey(id)` to `keys`. When the
      row decoded and `row.CompletedAt != nil`, also add
-     `opv2DoneKey(*row.CompletedAt, id)`.
+     `opv2DoneKey(*row.CompletedAt, id)`. Stage both through
+     `stageOpRow(batch, &row, nil)`. This is the only operation-record delete
+     today (the plan's "record pruner's delete"; its caller is the registry's
+     discard, `registry.go:1272`). Say in its doc comment that any future
+     record pruner (release D, task D2) must delete through
+     `stageOpRow(batch, old, nil)` in the same batch as the row.
 6. After this, `pebbleSetJSON` must have no caller with `opv2OpKey`.
    `grep -n 'pebbleSetJSON(opv2OpKey' internal/database/pebble_store_ops_v2.go`
    must print nothing. Keep `pebbleSetJSON` itself; other families use it.
+   Make it a CI ratchet, not a one-off check: add
+   `TestOpsV2RowWritesGoThroughStageOpRow` to the new test file. It reads
+   every non-test `.go` file in `internal/database` and fails on any line
+   that Sets an `opv2OpKey(` key (`.Set(opv2OpKey(`, `pebbleSetJSON(opv2OpKey(`)
+   outside `commitOpV2Row` and the batch-based writers that call `stageOpRow`
+   before their commit (list them by function name in the test, with a
+   comment saying a new writer must be added there and must call
+   `stageOpRow`). A Go test runs in `make ci` with no Makefile edit; A4
+   edits the `Makefile` in this wave.
 
 ### 5.3 Reader
 
@@ -237,9 +263,14 @@ npm ci --prefix web
 
 11. `type OpsV2TimelineReconcileResult struct { Rows, Missing, Orphans, Fixed int; Duration time.Duration }`.
     Add `func (p *PebbleStore) ReconcileOpsV2TimelineIndex(ctx context.Context) (OpsV2TimelineReconcileResult, error)`
-    in the new file. It runs on **every** startup, not only when the stamp
-    is absent. A pre-A5 binary started after a rollback writes rows without
-    index keys, and an every-boot pass repairs that with no runbook step.
+    in the new file. It runs only when `opsV2TimelineIndexStamp` is absent
+    (design 8): every writer stages the index in the row's own batch (steps
+    4-5) and the ratchet (step 6) keeps it that way, so once built the index
+    cannot drift. One case can still leave rows without index keys: a
+    rollback to a pre-A5 binary that then writes or updates rows. For that,
+    the reconcile also runs when the environment variable
+    `AORG_OPSV2_TIMELINE_RECONCILE=1` is set at startup. Document it (step
+    14) as a one-time step on the first start after rolling forward past A5.
     - **Pass 1, find missing keys, no lock.** One producer goroutine owns a
       single iterator over `opv2:op:` and sends copied (key, value) pairs
       over a bounded channel to `runtime.NumCPU()` workers. Each worker
@@ -282,6 +313,10 @@ npm ci --prefix web
     - resolve `resolveOpsV2TimelineReconciler(s.Ops())` through
       `database.AsCapability`;
     - log a warning and return if it fails;
+    - return early, with one `slog.Debug` line, when the stamp is present
+      and `AORG_OPSV2_TIMELINE_RECONCILE` is not `1` (expose a small
+      `OpsV2TimelineIndexBuilt() (bool, error)` on the capability for the
+      check);
     - wait for `WaitForWarmup` or `s.bgCtx.Done()`;
     - call `ReconcileOpsV2TimelineIndex(s.bgCtx)` and log a warning on error.
 
@@ -303,7 +338,11 @@ npm ci --prefix web
 14. `docs/database-pebble-schema.md`, operations table (`:347-354`):
     - add rows for `opv2:open:<op_id>` and
       `opv2:done:<completed_nanos:020d>:<op_id>`, both with empty values;
-    - mention `system:backfill:opv2_timeline_index_v1_done`;
+    - mention `system:backfill:opv2_timeline_index_v1_done`, that the
+      reconcile runs only while it is absent, and the
+      `AORG_OPSV2_TIMELINE_RECONCILE=1` one-time step after rolling forward
+      past A5 (do not edit `docs/system/runbooks.md`; A4 edits it in this
+      wave);
     - change the `opv2:op:` row text "No status index exists" to say which
       reads still scan (`ListWaitingDepsOps`, `ListResumableOperationsV2`,
       the repairs) and that the timeline now uses the indexes;
@@ -382,8 +421,21 @@ File: `internal/database/pebble_store_ops_v2_timeline_test.go` (new). Use
 - `TestOpsV2Timeline_ProgressWritesStageNoIndexKeys`. Count the keys under
   `opv2:open:` and `opv2:done:` before and after 1,000 `UpdateOpProgressV2`
   calls on a running op. Assert equal. Also unit-test
-  `stageOpV2TimelineIndex` with `prev == next` (same `CompletedAt`) on a
+  `stageOpRow` with `prev == next` (same `CompletedAt`) on a
   fresh batch: assert `batch.Count() == 0`.
+- `TestOpsV2Timeline_FailedCommitLeavesRowAndIndexAgreeing`. Add an
+  unexported test hook `opsV2BeforeCommitHook func() error` in the new file,
+  called by `commitOpV2Row` and by the batch-based writers just before
+  `Commit`; a non-nil error aborts the commit and is returned. With the hook
+  failing on every Nth write of a random history (seeded), the scan and the
+  indexed read agree after every step.
+- `TestOpsV2Timeline_ReconcileOnlyWhenStampMissingOrForced`. With the stamp
+  present, the lifecycle gate skips the reconcile; with
+  `t.Setenv("AORG_OPSV2_TIMELINE_RECONCILE", "1")` it runs and repairs a
+  planted raw row with no index key.
+- `TestOpsV2Timeline_SweepHollowRemovesDoneKey`. A hollow row with a planted
+  done key: after `SweepHollowOperationsV2`, no index key names it.
+- `TestOpsV2RowWritesGoThroughStageOpRow` (step 6).
 - `TestOpsV2Timeline_ResumeMovesDoneToOpen`. Complete at T1 (done key T1),
   reset (no done key, open key present), complete at T2 (done key T2 only).
 - `TestOpsV2Timeline_DeleteRemovesIndexKeys`. Delete a completed op and an
@@ -429,7 +481,7 @@ required.
 - Fragment `changelog.d/<YYYYMMDD>_storage_a5_timeline_index.md`, no header,
   `### Changed`, `####` entries for the timeline indexes and the log tail
   read, with the benchmark numbers.
-- Check that `git diff origin/main | grep -nE 'abk_[A-Za-z0-9]{16,}|172\.16\.[0-9]{1,3}\.[0-9]{1,3}'` prints
+- Check that `git diff origin/main | grep -nE "ab""k_[A-Za-z0-9]{16,}|172\.16\.[0-9]{1,3}\.[0-9]{1,3}"` prints
   nothing.
 - Commit, for example
   `perf(ops): timeline reads open/done indexes; startup reconcile; op-log tail read`,
@@ -451,7 +503,10 @@ required.
 - [ ] The equivalence test passes for all 200 seeds, both before and after
       the extra writes.
 - [ ] The benchmark shows the indexed 24 h window under 100 ms on 50,000 ops.
-- [ ] After boot, the reconcile log line appears once and the stamp is set.
+- [ ] On the first boot the reconcile runs once and sets the stamp; on the
+      next boot it does not run unless `AORG_OPSV2_TIMELINE_RECONCILE=1`.
+- [ ] `TestOpsV2RowWritesGoThroughStageOpRow` passes and fails when a raw
+      `pebbleSetJSON(opv2OpKey(...))` is added (show the failing run).
 - [ ] All packages listed in section 8 pass with `-race`.
 - [ ] PR open, not merged.
 

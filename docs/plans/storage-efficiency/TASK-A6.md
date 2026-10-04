@@ -1,5 +1,5 @@
 <!-- file: docs/plans/storage-efficiency/TASK-A6.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: e6e114c8-759a-4c70-ba14-a4a5628796af -->
 <!-- last-edited: 2026-10-03 -->
 
@@ -211,7 +211,7 @@ required.
 - Fragment `changelog.d/<YYYYMMDD>_storage_a6_progress_log_throttle.md`, no
   header, `### Changed`, one `####` entry with the R6 numbers and the new
   rule.
-- Check that `git diff origin/main | grep -nE 'abk_[A-Za-z0-9]{16,}|172\.16\.[0-9]{1,3}\.[0-9]{1,3}'` prints
+- Check that `git diff origin/main | grep -nE "ab""k_[A-Za-z0-9]{16,}|172\.16\.[0-9]{1,3}\.[0-9]{1,3}"` prints
   nothing.
 - Commit, for example
   `perf(registry): throttle progress log lines by shape change, 30 s, or terminal`,

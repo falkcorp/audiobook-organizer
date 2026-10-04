@@ -1,5 +1,5 @@
 <!-- file: docs/plans/storage-efficiency/TASK-A2.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: f3a0c6be-5f0f-4f00-b712-007dd0053997 -->
 <!-- last-edited: 2026-10-03 -->
 
@@ -190,7 +190,12 @@ npm ci --prefix web
      `"1000+"`. `Top` holds the 20 books with the most entries,
      `{book_id, entries}`. An orphan is a book id with history but no row in
      memdb's books table. `OrphansKnown` is false when memdb is not warm.
-   - `DBCensus{ GeneratedAt time.Time; DurationMS int64; Cached bool; TotalKeys, TotalDeletions int64; TotalTables int; TotalTableBytes uint64; DiskSpaceUsage uint64; Families []FamilyCensus; Retired *RetiredCensus; Signals *SignalCensus; History *HistoryCensus; Notes []string }`.
+   - `DBCensus{ GeneratedAt time.Time; DurationMS int64; Cached bool; TotalKeys, TotalDeletions int64; TotalTables int; TotalTableBytes uint64; DiskSpaceUsage uint64; Families []FamilyCensus; Retired *RetiredCensus; Signals *SignalCensus; History *HistoryCensus; FamilyFiguresBasis string; Notes []string }`.
+     `FamilyFiguresBasis` is always
+     `"on-disk entries incl. tombstones and shadowed versions; deletions reported separately; figures move only after compaction"`
+     (design 8: per-family figures are labelled as on-disk entries). Every
+     consumer that shows per-family figures (A3's db-health and
+     `/cache/stats`, the census page) shows this label next to them.
 7. `func (p *PebbleStore) DBCensus(ctx context.Context, opts CensusOptions) (*DBCensus, error)`,
    plus `type DBCensusProvider interface { DBCensus(ctx context.Context, opts CensusOptions) (*DBCensus, error) }`
    and `var _ DBCensusProvider = (*PebbleStore)(nil)`. Wrap the method body
@@ -373,7 +378,7 @@ are what predict prod.
   `uuidgen | tr A-Z a-z`.
 - Fragment `changelog.d/<YYYYMMDD>_storage_a2_db_census.md`, no header,
   category `### Added`, one `####` entry. Never use `#` or `##`.
-- Check that `git diff origin/main | grep -nE 'abk_[A-Za-z0-9]{16,}|172\.16\.[0-9]{1,3}\.[0-9]{1,3}'` prints
+- Check that `git diff origin/main | grep -nE "ab""k_[A-Za-z0-9]{16,}|172\.16\.[0-9]{1,3}\.[0-9]{1,3}"` prints
   nothing.
 - Commit, for example
   `feat(diagnostics): key-family registry and db-census endpoint from sstable properties`,

@@ -1,13 +1,16 @@
 <!-- file: docs/design/2026-10-03-storage-efficiency-design.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 332dcbd9-73e2-4814-b1a0-723afa60e605 -->
 <!-- last-edited: 2026-10-03 -->
 
 # Storage efficiency redesign: store changes, not copies
 
-Status: v1.2, revised after three adversarial reviews (correctness, operations,
-simplicity) and a red-team workflow (46 confirmed findings, F01-F46, applied
-2026-10-03). Awaiting owner approval. No code has been written.
+Status: v1.3, revised after three adversarial reviews (correctness, operations,
+simplicity), a red-team workflow and a critic pass, all on 2026-10-03. The
+red-team workflow confirmed 45 findings (F01-F43, F45, F46), all applied. Two
+were refuted and dropped: F44 ("`DeleteBook` history is not undo data") and
+F47 ("the Doctor Who exclusion and the archive rule do not apply"). Awaiting
+owner approval. No code has been written.
 
 Evidence: `.claude/notes/db-optimization-eval-2026-10-03.md` (measurements
 R1-R7, findings F1-F13), three code scouts and three design reviews run on
@@ -83,8 +86,9 @@ audio files (nothing here touches them); compatibility with older builds (P3).
   flags, no dual-write period, no legacy format kept readable. Each format
   change is one release that converts every legacy record, verifies the
   conversion, and deletes the legacy records. Legacy-reading code exists only
-  inside the converter and is deleted in the next release, once nothing is
-  left in the legacy format (section 9, release E gate). The way back from a
+  inside the converter and is deleted in release E, which is gated on held =
+  0 and orphan-listed = 0 for releases B and C, so nothing is left in the
+  legacy format when it goes (section 9, release E gate). The way back from a
   bad migration is the pre-migration backup.
 - P4. **Verify, then purge; fail closed.** A conversion that cannot prove it
   reproduced the old data keeps the old data and reports it. A history entry
@@ -514,13 +518,18 @@ bytes are lost outright). Rules:
 - **Delete:** the store's file-row delete primitives (`DeleteBookFile`
   `:1340`, `DeleteBookFilesForBook` `:1433` and `DeleteBookFilesByIDs` `:1578`
   in `pebble_store_bookfiles.go`, plus any future primitive; the P1 ratchet
-  rejects a raw `book_file:` Delete outside them) read each row and its
-  `bfsig:` keys under its stripe. If the row holds any signal reference, the
-  primitive writes `orphan:file:<fileID>:<sum>` to the signal store, synced
-  and read back, before committing the main delete. A crash between the two
-  leaves an orphan record for a row that still exists, and reconcile clears
-  that record. A batch delete writes all of its orphan records first, then
-  commits one main batch. Callers today: `combine_journal.go:850`,
+  rejects a raw `book_file:` Delete outside them) read each file's row, its
+  `bfsig:` keys and its `fpidx_meta:<fileID>` under the owner stripe. For
+  every `bfsig:` key the file has, the primitive writes
+  `orphan:file:<fileID>:<sum>` to the signal store, synced and read back.
+  Then each of the three primitives stages, in the same main batch as the row
+  delete, the deletion of that file's `bfsig:` keys, its `fpidx` keys (the
+  ones its `fpidx_meta` names) and its `fpidx_meta`, and commits that one
+  batch. The references and the index go with the row in one atomic write;
+  the signal bytes stay (P7), covered by the orphan record. A crash between
+  the orphan write and the main commit leaves an orphan record for a row that
+  still exists, and reconcile clears that record. A batch delete writes all of
+  its orphan records first, then commits one main batch. Callers today: `combine_journal.go:850`,
   `itunes_clone_into_library.go:1061`,
   `dedupe_book_file_rows_crossfolder.go:230`, `maintenance_fixups.go:373`.
 - **Read:** every read verifies length and checksum against the `bfsig:`
@@ -536,9 +545,10 @@ bytes are lost outright). Rules:
 - **Reconcile op**, nightly and on demand, read-only, runs at `NumCPU`
   (section 9, concurrency): every `bfsig:` and `sigref` reference resolves
   and matches; lists rows whose signal is missing or corrupt. Signal keys are
-  classified four ways: referenced by a live `book_file:` row, referenced by
-  a `zarch:file:` row (section 6), covered by an `orphan:file:` /
-  `orphan:book:` record, or unexplained. Only "unexplained" is reported as a
+  classified four ways: referenced by a live reference (a `bfsig:` key, a
+  book's `sigref`, or a book transcript reference), referenced by an archived
+  `zarch:bfsig:` key (section 6, once release G lands), covered by an
+  `orphan:file:` / `orphan:book:` record, or unexplained. Only "unexplained" is reported as a
   defect and exported as a metric. Index checks: `fpidx_meta:<fileID>` exists
   if and only if a current fingerprint `bfsig:` exists; `fpidx_meta`'s
   recorded sum equals `bfsig.sum`; every `fpidx` value equals the file's
@@ -621,7 +631,11 @@ for release F (5.6).
 **Held rows (until release E deletes the converter):** the file chokepoint
 checks the stored row's raw JSON for any legacy signal key
 (`acoustid_fingerprint`, `intro_transcription`,
-`fingerprint_diagnostic_json`). If it finds one, the write is refused with
+`fingerprint_diagnostic_json`, `acoustid_fp_version`,
+`acoustid_fingerprint_duration_sec`). The last two are on the list because
+the converter holds a row that has fingerprint metadata without fingerprint
+bytes (section 9, release C); without them, such a row would be decoded and
+re-marshalled and its metadata stripped. If it finds one, the write is refused with
 `ErrRecordHeld` and counted in a metric shown on the held-list page.
 `updateBookFileLocked` decodes the stored row into the struct and marshals
 the struct back (`pebble_store_bookfiles.go:766`, `:831`); once the fields
@@ -925,9 +939,11 @@ checkpoint is removed in release E.
 **Guard, shipped in release A:** a `storage_format` stamp in the main store,
 mirrored in a sidecar file beside the store (A4). Every store open refuses a
 store whose stamp is above what the build understands
-(`StorageFormatTooNewError`, from the stamp or the sidecar), and `make
-rollback` refuses when the previous binary predates the stamp and prints the
-restore steps instead. Today `make rollback` swaps the binary with no data
+(`StorageFormatTooNewError`, from the stamp or the sidecar). `make
+rollback` follows one rule: it swaps in the previous binary only when the
+store's stamp is not above the format that binary supports; otherwise it
+refuses, swaps nothing, and prints the restore-from-checkpoint steps
+(below). Today `make rollback` swaps the binary with no data
 restore (`Makefile:725-735`), and an older binary on converted file rows
 would read every file as fingerprint-less and erase the fingerprint index
 during its first scan (`pebble_store_bookfiles.go:840`,
@@ -967,8 +983,8 @@ the memdb warmup goroutine (`store.go:1463-1477`,
 `pebble_store.go:451-488`), so a conversion there would run under a warmup
 that is snapshotting the rows it rewrites. Instead the cut-over is a
 separate step, `database.RunCutover`, that only `serve` invokes, after
-config, logging and TLS are loaded and before `initializeStore`
-(`cmd/root.go:266`). It opens Pebble itself (`pebble.Open` only: no writes,
+the config file and flags, logging and TLS settings are loaded and before
+`initializeStore` (`cmd/root.go:266`). It opens Pebble itself (`pebble.Open` only: no writes,
 no goroutines, no memdb warmup, no counter initialization), runs steps
 2a-2e, closes the store, and only then does the normal store open proceed.
 `newPebbleStore` is split into open (`pebble.Open` and the stamp check) and
@@ -977,9 +993,21 @@ init (undecodable markers, `migrateImportPathKeys`, counters, `NewMemStore`,
 any write. Converters write raw Pebble batches and never call memSync. No
 deploy script runs the conversion, no separate tool: deploying the new build
 is the migration. Every other entry point (`scan`, `playlist`, `tag`,
-`organize`, `diagnostics`, `seed`, `dedup_bench`, child mode, testutil,
-`cmd/pid-census`) goes through the shared open and refuses an older or
-in-progress store.
+`organize`, `diagnostics` in its store-backed mode, `seed`, `dedup_bench`,
+child mode, testutil, `cmd/pid-census`) goes through the shared open and
+refuses an older or in-progress store.
+
+Two recovery tools are exempt from the stamp guard, by name: `cmd/diagnostics`
+raw Pebble mode (`diagnostics query --raw`, `runRawPebbleQuery`,
+`cmd/diagnostics.go:207-240`) and `cmd/pebble-inject-skip`. Raw mode only
+reads: it iterates one prefix and prints keys and value previews.
+`pebble-inject-skip` writes two `setting:transcode_skip_*` keys
+(`cmd/pebble-inject-skip/main.go:41-58`), outside every family a cut-over
+changes. Neither can ratchet the on-disk format: raw mode passes the pinned
+`FormatMajorVersion` (below), and `pebble-inject-skip` passes none, which
+pebble resolves to `FormatMinSupported` (v2.1.7 `options.go:1495-1496`), so
+it never raises the stored version. Both stay usable on a store the guard
+refuses, which is when an operator needs them.
 
 At start `serve` compares the store's `storage_format` stamp with its own:
 
@@ -993,10 +1021,13 @@ At start `serve` compares the store's `storage_format` stamp with its own:
       the real version plus `migrating: true`, and returns JSON with the
       state ("migrating" or "stopped"), the step, progress, held count, the
       stop reason if any, and an ETA. It returns no record contents (no
-      paths, titles or ids) and accepts no writes: it runs before auth,
-      config and telemetry exist (`cmd/root.go:266-310`; sessions and API
-      keys live in the store, `pebble_store_auth.go`), so it must stay free
-      of anything that needs them. The cut-over deploy's wait step
+      paths, titles or ids) and accepts no writes. The config file, flags,
+      logging and TLS settings are loaded at this point; what does not exist
+      yet is everything that comes from the store or after it: the persisted
+      configuration and settings (`loadConfigFromDB`), settings encryption,
+      sessions and API keys (they live in the store,
+      `pebble_store_auth.go`), and telemetry (`cmd/root.go:266-310`). The
+      listener must stay free of anything that needs them. The cut-over deploy's wait step
       (`scripts/deploy-cutover.sh`, plan A9) polls it and fails the deploy on
       `stopped` or timeout. The unit is `Type=simple`
       (`deploy/audiobook-organizer.service:59`), so no systemd start-timeout
@@ -1019,9 +1050,17 @@ At start `serve` compares the store's `storage_format` stamp with its own:
       against a converter bug. Then, in one synced batch, it writes the stamp
       at the **target** format and the marker `storage_migration = {from, to,
       checkpoint_dir, started_at}`, and rewrites the A4 sidecar to the target
-      value, all before the first legacy delete. This is how the previous
-      build and `make rollback` see a half-converted store as too new and
-      refuse it. A restart that finds the marker resumes and takes no new
+      value, all before the first legacy delete. The sidecar is rewritten
+      first, so a crash between the two leaves the sidecar ahead of the
+      stamp (the previous build and `make rollback` refuse, which is safe),
+      never behind it. It also writes
+      `checkpoint_dir` to a plain file beside the store,
+      `<store path>.migration-checkpoint` (written to a temp name, synced,
+      renamed), because `make rollback` reads files over ssh and cannot open
+      the store, and the marker itself is cleared in 2e. That file stays until
+      release E removes the checkpoint. The stamp and sidecar written
+      before the first delete are how the previous build and `make rollback`
+      see a half-converted store as too new and refuse it. A restart that finds the marker resumes and takes no new
       checkpoint, so there is exactly one checkpoint per cut-over, byte-equal
       to the store before migration. A ZFS snapshot is not required. The
       checkpoint does not protect against losing the pool; the app's backup
@@ -1140,12 +1179,19 @@ owner approval after, section 11), means: stop; replace the store directories
 with the directory named in the marker's `checkpoint_dir` (never "the newest
 `.migration-backups/` entry"); start `<bin>.pre-format-<N>`, the binary of
 the release before the cut-over, which `scripts/deploy-cutover.sh` saved
-before it replaced the binary (today both deploy targets `sudo mv` over
-`DEPLOY_BIN` and nothing creates the `.prev` that `make rollback` requires,
-`Makefile:731`). That binary must be able to open the checkpoint, which the
-pinned `FormatMajorVersion` guarantees. When a marker is present, `make
-rollback` prints these steps using `checkpoint_dir` and refuses to fall back
-to `.prev`. The post-deploy check in `Makefile.local.example` (and the
+before it replaced the binary. `.prev` is not that binary: the deploy
+template copies the running binary to `.prev` on every deploy
+(`Makefile.local.example:82`), so after one routine deploy following the
+cut-over `.prev` is a post-cut-over build. (The untracked `Makefile.local`
+on the owner's machine has not been checked.) The `.pre-format-<N>` binary
+must be able to open the checkpoint, which the pinned `FormatMajorVersion`
+guarantees. `make
+rollback` applies the rule above: it swaps in `.prev` only when the store's
+stamp (read from the A4 sidecar) is not above the format `.prev` supports
+(`.prev --print-storage-format`). Otherwise it refuses, swaps nothing, and
+prints these restore steps, naming the `checkpoint_dir` the cut-over
+recorded (the marker's field, read from `<store path>.migration-checkpoint`;
+never the newest `.migration-backups/` entry). The post-deploy check in `Makefile.local.example` (and the
 untracked `Makefile.local`, which the owner changes the same way) accepts a
 matching version while `migrating` is true and prints the status instead of
 "Roll back with: make rollback".
@@ -1298,7 +1344,13 @@ store, 5.2a).
   restart; `WarmFromPebble` and `beginMemWarmupBuffering` never run while the
   stored stamp is older than the build's; a fresh in-memory store and a
   testutil store come out stamped current and never reach the converter; a
-  non-serve entry point given an older stamp refuses and does not convert.
+  non-serve entry point given an older stamp refuses and does not convert;
+  with `deviceIDFn` (`internal/backup/backup.go:558`) stubbed to report a
+  cross-device layout, the migration refuses and converts nothing: it stops
+  in the migrating state with the reason, `.migration-backups/` stays empty,
+  stamp, marker, sidecar and `.migration-checkpoint` file are unchanged, and
+  the legacy key count is unchanged; `diagnostics query --raw` and
+  `pebble-inject-skip` still open a store the guard refuses.
 - Signal store: kill between signal write and `bfsig` commit; replace; clear;
   move between books; start with a missing or mismatched store; reconcile
   finds a planted missing and a planted corrupt signal; race probes with
