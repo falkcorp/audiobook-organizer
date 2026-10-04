@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.76.0
+// version: 2.77.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-10-04
 
@@ -192,8 +192,10 @@ type Server struct {
 	metadataStateService   *metafetch.MetadataStateService
 	dashboardService       *sysinfo.DashboardService
 	olService              *metafetch.OpenLibraryService
-	dedupCache             *cache.Cache[gin.H]
-	listCache              *cache.Cache[gin.H]
+	// releasePebbleMetricsSources undoes registerPebbleMetricsSources; nil until it runs.
+	releasePebbleMetricsSources func()
+	dedupCache                  *cache.Cache[gin.H]
+	listCache                   *cache.Cache[gin.H]
 	// libGenWarnOnce keeps the "store has no generation counter" warning to a
 	// single line instead of one per list request.
 	libGenWarnOnce  sync.Once

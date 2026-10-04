@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.20.0
+// version: 4.21.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-10-04
 
@@ -488,6 +488,9 @@ func (s *Server) Start(cfg ServerConfig) error {
 	if err := s.httpServer.Shutdown(ctx); err != nil {
 		slog.Warn("HTTP server forced shutdown", "err", err)
 	}
+	// No more scrapes can arrive; drop the pebble metrics closures so they stop
+	// pinning this Server and its stores.
+	s.unregisterPebbleMetricsSources()
 
 	// Stop the metadata-apply ASIN backfill queue BEFORE the registry
 	// drains: its debounce timer enqueues metafetch.asin-backfill runs, and

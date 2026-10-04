@@ -1,5 +1,5 @@
 // file: internal/metafetch/openlibrary.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
 // last-edited: 2026-10-04
 
@@ -89,8 +89,16 @@ func (svc *OpenLibraryService) CompactionStats() (stats compactprogress.Stats, o
 // same reason CompactionStats does: the delete and factory-reset handlers
 // close the store and nil it while holding that lock. ok is false when there
 // is no store.
+//
+// It uses TryLock, not Lock: deleteOLData (os.RemoveAll) and EnsureStore
+// (Pebble open and WAL replay) hold Mu across slow I/O, and a blocking Lock here
+// would hang the whole /metrics scrape behind them. When Mu is busy the OL
+// store is simply absent from that scrape (ok false); every other series is
+// unaffected.
 func (svc *OpenLibraryService) PebbleMetricsSample() (metrics.PebbleSample, bool) {
-	svc.Mu.Lock()
+	if !svc.Mu.TryLock() {
+		return metrics.PebbleSample{}, false
+	}
 	defer svc.Mu.Unlock()
 	if svc.OLStore == nil {
 		return metrics.PebbleSample{}, false

@@ -1,5 +1,5 @@
 // file: internal/database/pebble_metrics_export.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7efe29c0-d5f8-489a-bdaa-2715b790979d
 // last-edited: 2026-10-04
 
@@ -23,19 +23,22 @@ var _ PebbleMetricsSampler = (*PebbleStore)(nil)
 
 // PebbleMetricsSample samples the main store's database.
 func (p *PebbleStore) PebbleMetricsSample() (metrics.PebbleSample, bool) {
+	if p.dbClosed.Load() {
+		return metrics.PebbleSample{}, false
+	}
 	return PebbleSampleFromDB(p.db)
 }
 
 // PebbleSampleFromDB reads db.Metrics() into a metrics.PebbleSample. ok is
-// false for a nil db and for one that has been closed; any other panic is
-// re-raised, the same rule recoverPebbleClosed applies.
+// false for a nil db, and for a panic matching pebble.ErrClosed; any other
+// panic is re-raised, the same rule recoverPebbleClosed applies.
 //
 // pebble v2.1.7's DB.Metrics() does NOT check for a closed DB (it reads the
-// closed engine's state and returns), so the closed check is an explicit probe:
-// NewSnapshot panics with an error matching pebble.ErrClosed on a closed DB and
-// costs one mutex round trip. The probe is best effort against a Close that
-// lands between it and Metrics(); callers that can race Close (the OpenLibrary
-// service) hold the lock that serialises it.
+// closed engine's state and returns), so this function cannot tell a closed DB
+// from an open one. Callers that own the store check their own closed flag
+// first (PebbleStore.dbClosed, OLStore.closed). Probing the engine instead was
+// tried and rejected: db.NewSnapshot() as a probe can leave a snapshot open
+// when Close lands, and Close then fails with "leaked snapshots".
 func PebbleSampleFromDB(db *pebble.DB) (s metrics.PebbleSample, ok bool) {
 	if db == nil {
 		return metrics.PebbleSample{}, false
@@ -49,7 +52,6 @@ func PebbleSampleFromDB(db *pebble.DB) (s metrics.PebbleSample, ok bool) {
 			panic(rec)
 		}
 	}()
-	db.NewSnapshot().Close()
 	m := db.Metrics()
 	s = metrics.PebbleSample{
 		BlockCacheBytes:           float64(m.BlockCache.Size),

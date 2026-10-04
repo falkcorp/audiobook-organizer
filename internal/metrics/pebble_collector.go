@@ -1,5 +1,5 @@
 // file: internal/metrics/pebble_collector.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7dc3409f-5419-47d8-8770-916f33b019ae
 // last-edited: 2026-10-04
 
@@ -66,22 +66,43 @@ type PebbleSource func() (PebbleSample, bool)
 
 var (
 	pebbleSourcesMu sync.RWMutex
-	pebbleSources   = map[string]PebbleSource{}
+	pebbleSources   = map[string]pebbleEntry{}
+	pebbleSourceSeq uint64
 
 	pebbleCollectorInstance = &pebbleCollector{}
 )
 
+// pebbleEntry is an installed source plus the id release uses to tell its own
+// installation from a later replacement.
+type pebbleEntry struct {
+	src PebbleSource
+	id  uint64
+}
+
 // SetPebbleSource installs (or replaces) the source for a store label. A nil
 // src removes the entry. Replacing is expected: NewServer runs many times in
 // one test binary.
-func SetPebbleSource(store string, src PebbleSource) {
+//
+// The returned release removes the entry only if it is still the one this call
+// installed, so a shut-down server cannot remove the source of a newer server
+// that replaced it. Calling release more than once is harmless.
+func SetPebbleSource(store string, src PebbleSource) (release func()) {
 	pebbleSourcesMu.Lock()
 	defer pebbleSourcesMu.Unlock()
 	if src == nil {
 		delete(pebbleSources, store)
-		return
+		return func() {}
 	}
-	pebbleSources[store] = src
+	pebbleSourceSeq++
+	id := pebbleSourceSeq
+	pebbleSources[store] = pebbleEntry{src: src, id: id}
+	return func() {
+		pebbleSourcesMu.Lock()
+		defer pebbleSourcesMu.Unlock()
+		if cur, ok := pebbleSources[store]; ok && cur.id == id {
+			delete(pebbleSources, store)
+		}
+	}
 }
 
 type pebbleDesc struct {
@@ -161,7 +182,7 @@ func (*pebbleCollector) Collect(ch chan<- prometheus.Metric) {
 	pebbleSourcesMu.RLock()
 	srcs := make(map[string]PebbleSource, len(pebbleSources))
 	for k, v := range pebbleSources {
-		srcs[k] = v
+		srcs[k] = v.src
 	}
 	pebbleSourcesMu.RUnlock()
 

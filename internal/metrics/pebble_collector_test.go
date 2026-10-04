@@ -1,5 +1,5 @@
 // file: internal/metrics/pebble_collector_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8944f3d7-bd99-440c-990c-923b3b696d06
 // last-edited: 2026-10-04
 
@@ -29,9 +29,13 @@ func fixedSample() PebbleSample {
 // restores the previous map afterwards.
 func withPebbleSources(t *testing.T, srcs map[string]PebbleSource) {
 	t.Helper()
+	entries := make(map[string]pebbleEntry, len(srcs))
+	for k, v := range srcs {
+		entries[k] = pebbleEntry{src: v}
+	}
 	pebbleSourcesMu.Lock()
 	saved := pebbleSources
-	pebbleSources = srcs
+	pebbleSources = entries
 	pebbleSourcesMu.Unlock()
 	t.Cleanup(func() {
 		pebbleSourcesMu.Lock()
@@ -166,4 +170,25 @@ func TestPebbleCollector_SetPebbleSourceReplacesAndNilDeletes(t *testing.T) {
 	if _, ok := readAmp(); ok {
 		t.Fatal("nil should delete the source")
 	}
+}
+
+func TestPebbleCollector_ReleaseOnlyRemovesOwnInstallation(t *testing.T) {
+	withPebbleSources(t, map[string]PebbleSource{})
+	src := func(v float64) PebbleSource {
+		return func() (PebbleSample, bool) { return PebbleSample{ReadAmp: v}, true }
+	}
+	present := func() bool {
+		return gatherPebble(t)["audiobook_organizer_pebble_read_amplification"] != nil
+	}
+	releaseOld := SetPebbleSource("x", src(1))
+	releaseNew := SetPebbleSource("x", src(2)) // a newer server replaces it
+	releaseOld()                               // the old server shuts down late
+	if !present() {
+		t.Fatal("old release removed the newer installation")
+	}
+	releaseNew()
+	if present() {
+		t.Fatal("release did not remove its own installation")
+	}
+	releaseNew() // idempotent
 }
