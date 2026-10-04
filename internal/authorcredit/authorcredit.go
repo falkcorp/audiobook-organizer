@@ -17,23 +17,37 @@
 // One helper, used by every creation path, so the split rule cannot drift
 // between them:
 //
-//   - the credit is split with the shared splitter
-//     (personname.SplitCompositeAuthorName) and every part must pass the
-//     caller's creation gate; the parts are then resolved or created in order;
-//   - when the splitter refuses, the credit is handled as before (the whole
-//     string is looked up, and created when missing) with one exception: a
-//     whole string that is not an author yet and whose every loosely split
-//     part already IS an author is never created. That is a combined record
-//     the splitter could not prove safe to split, and creating it would add
-//     another one; the caller treats ErrCombinedCredit as "no author", the
-//     same as a junk name.
+//   - a bracketed segment is never an author: it is stripped before the
+//     split ("Dante King (Dragon Born)" is a series tag, "Virgil
+//     Knightley(Master Class)" a series tag on one of two authors), so the
+//     splitter's bracket branch is never used here;
+//   - the rest is split with the shared splitter
+//     (personname.SplitCompositeAuthorName); every part must pass the
+//     publisher/role gate (CleanGate) and the caller's gate, must not be a
+//     collective credit ("Full Cast"), must not be the title of a book or the
+//     name of a series in the library, and there may be at most MaxSplitParts
+//     of them (longer lists are anthologies and cast lists);
+//   - when anything refuses the split, the credit is handled as before (the
+//     whole string is looked up) with one exception: a whole string that is
+//     not an author yet and names several people is never created. That is a
+//     combined record, and creating it would add another one; the caller
+//     treats ErrCombinedCredit as "no author", the same as a junk name.
+//
+// Review of #3717 (2026-10-04) found the first version of this helper split
+// on the bracket branch and gated parts with PrepareGate only: through the
+// real scanner it credited "Dragon Born", "Star Wars", "LitForge Press" and
+// "Full Cast" as authors, and minted a new combined record from
+// "Annabelle Hawthorne, Virgil Knightley(Master Class)".
 package authorcredit
 
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"regexp"
 	"strings"
+	"sync"
+	"time"
 	"unicode"
 
 	"golang.org/x/text/unicode/norm"
@@ -65,11 +79,105 @@ func CleanGate(raw string) (string, bool) {
 	return personname.CleanAuthorNameForCreation(raw)
 }
 
-// ErrCombinedCredit is returned by Resolve for a credit the splitter will not
-// split, that is not an author yet, and whose every loosely split part already
-// is one. The caller leaves the book without that author, exactly as for a
-// junk name; it must not create the whole string.
-var ErrCombinedCredit = errors.New("authorcredit: combined credit of existing authors the splitter will not split")
+// ErrCombinedCredit is returned by Resolve for a credit that names several
+// people, is not an author yet, and will not split safely. The caller leaves
+// the book without that author, exactly as for a junk name; it must not
+// create the whole string.
+var ErrCombinedCredit = errors.New("authorcredit: combined credit the splitter will not split safely")
+
+// MaxSplitParts is the most names a credit may be split into at creation:
+// longer lists are anthologies and cast lists ("4-name narrator lists"), and
+// the combined-credit fixer holds them for the same reason.
+const MaxSplitParts = 3
+
+// collectiveCredits are the letters keys of credits that name no person.
+var collectiveCredits = map[string]bool{
+	"fullcast": true, "cast": true, "fullcastproduction": true, "fullcastdramatization": true,
+	"various": true, "variousauthors": true, "variousnarrators": true, "variousartists": true,
+	"dramatized": true, "dramatization": true, "others": true, "etal": true, "andothers": true,
+	"multipleauthors": true, "multiplenarrators": true, "uncredited": true,
+}
+
+// IsCollectiveCredit reports whether a credit names no person ("Full Cast",
+// "Various Authors", "et al.").
+func IsCollectiveCredit(s string) bool { return collectiveCredits[LettersKey(s)] }
+
+// bracketRe matches a bracketed segment, with or without a space before it.
+var bracketRe = regexp.MustCompile(`\s*[\(\[][^\)\]]*[\)\]]`)
+
+// StripBrackets removes every bracketed segment ("(Dragon Born)",
+// "[Unabridged]") from a credit and tidies the spacing.
+func StripBrackets(s string) string {
+	return strings.Join(strings.Fields(bracketRe.ReplaceAllString(s, " ")), " ")
+}
+
+// TitleSource is what the title check reads. A store that has it (resolved
+// through decorators with database.AsCapability) gets the check; one that
+// does not (a test fake) does not.
+type TitleSource interface {
+	GetAllSeries() ([]database.Series, error)
+	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
+}
+
+// titleIndexTTL bounds how long one store's title index is reused.
+const titleIndexTTL = 5 * time.Minute
+
+type titleIndex struct {
+	keys  map[string]bool
+	built time.Time
+}
+
+var (
+	titleMu    sync.Mutex
+	titleCache = map[any]*titleIndex{}
+)
+
+// titlesOf returns the letters keys of every live book title and series name
+// of ts, cached per store for titleIndexTTL.
+func titlesOf(ts TitleSource) (map[string]bool, error) {
+	cacheable := reflect.TypeOf(ts).Kind() == reflect.Ptr
+	titleMu.Lock()
+	defer titleMu.Unlock()
+	if cacheable {
+		if e := titleCache[ts]; e != nil && time.Since(e.built) < titleIndexTTL {
+			return e.keys, nil
+		}
+	}
+	series, err := ts.GetAllSeries()
+	if err != nil {
+		return nil, fmt.Errorf("list series: %w", err)
+	}
+	books, err := ts.GetAllBooksCore(0, 0)
+	if err != nil {
+		return nil, fmt.Errorf("list books: %w", err)
+	}
+	keys := make(map[string]bool, len(series)+len(books))
+	for i := range series {
+		if k := LettersKey(series[i].Name); k != "" {
+			keys[k] = true
+		}
+	}
+	for i := range books {
+		if books[i].IsSoftDeleted() {
+			continue
+		}
+		if k := LettersKey(books[i].Title); k != "" {
+			keys[k] = true
+		}
+	}
+	if cacheable {
+		titleCache[ts] = &titleIndex{keys: keys, built: time.Now()}
+	}
+	return keys, nil
+}
+
+// ResetTitleCache drops every cached title index (tests that add titles to
+// a store after a first resolve).
+func ResetTitleCache() {
+	titleMu.Lock()
+	defer titleMu.Unlock()
+	titleCache = map[any]*titleIndex{}
+}
 
 // LettersKey is a name's letters and digits, lower-cased and NFC-normalized:
 // "J.N. Chaney" and "J N Chaney" share one key.
@@ -109,15 +217,22 @@ func LooseParts(name string) []string {
 //   - the splitter keeps fewer distinct names than the credit lists (its
 //     slash branch drops a piece that is not person-shaped, which may be a
 //     single-word pen name: splitting would silently lose that credit);
+//   - the credit carries a bracket: the splitter's bracket branch reads
+//     "Dante King (Dragon Born)" as two people (callers strip brackets
+//     first, StripBrackets);
 //   - a part reads as a work title (personname.LooksLikeWorkTitle: it leads
 //     with an article or carries a series marker), the "A Dark and Drowning
 //     Tide" shape the splitter's " and " branch would otherwise cut into the
 //     authors "A Dark" and "Drowning Tide";
-//   - a part fails gate;
+//   - a part is a collective credit ("Full Cast"), or fails CleanGate (a
+//     publisher, a role credit) or gate;
 //   - every part is one name ("A. G. Riddle, A. G. Riddle").
 func SplitNames(name string, gate Gate) []string {
 	if gate == nil {
 		gate = PrepareGate
+	}
+	if strings.ContainsAny(name, "()[]") {
+		return nil
 	}
 	parts := personname.SplitCompositeAuthorName(name)
 	if len(parts) < 2 {
@@ -130,7 +245,10 @@ func SplitNames(name string, gate Gate) []string {
 	seen := map[string]bool{}
 	var out []string
 	for _, p := range parts {
-		if personname.LooksLikeWorkTitle(p) {
+		if personname.LooksLikeWorkTitle(p) || IsCollectiveCredit(p) {
+			return nil
+		}
+		if _, ok := CleanGate(p); !ok {
 			return nil
 		}
 		clean, ok := gate(p)
@@ -183,40 +301,56 @@ func LooksCombined(name string, exists func(piece string) bool) bool {
 	return true
 }
 
-// allPartsAreAuthors reports whether name loosely splits into two or more
-// pieces of which every one is already an author row.
-func allPartsAreAuthors(store Store, name string) (bool, error) {
-	parts := LooseParts(name)
-	if len(parts) < 2 || surnameFirst(name, parts) {
-		return false, nil
+// isMultiName reports whether name, its brackets stripped, lists two or more
+// people: two or more list pieces, other than a bare "Surname, First".
+func isMultiName(name string) bool {
+	stripped := StripBrackets(name)
+	parts := LooseParts(stripped)
+	return len(parts) >= 2 && !surnameFirst(stripped, parts)
+}
+
+// splitForCreation returns the names a creation path may credit for name,
+// or nil when it must not split it (see the package comment).
+func splitForCreation(store Store, name string, gate Gate) ([]string, error) {
+	parts := SplitNames(StripBrackets(name), gate)
+	if len(parts) < 2 || len(parts) > MaxSplitParts {
+		return nil, nil
+	}
+	ts, ok := database.AsCapability[TitleSource](store)
+	if !ok {
+		return parts, nil
+	}
+	titles, err := titlesOf(ts)
+	if err != nil {
+		return nil, fmt.Errorf("read titles for the split check: %w", err)
 	}
 	for _, p := range parts {
-		a, err := store.GetAuthorByName(p)
-		if err != nil {
-			return false, fmt.Errorf("look up author %q: %w", p, err)
-		}
-		if a == nil {
-			return false, nil
+		if titles[LettersKey(p)] {
+			return nil, nil
 		}
 	}
-	return true, nil
+	return parts, nil
 }
 
 // Resolve returns the authors to credit for name, in credit order. name must
 // already have passed the caller's own gate for the whole string (the callers
-// log their refusals in their own words); each split part is cleaned by gate
-// (PrepareGate when nil).
+// log their refusals in their own words); each split part must pass CleanGate
+// and gate (PrepareGate when nil).
 //
 // A part the store refuses as implausible (database.ErrImplausibleAuthorName)
 // is dropped; any other store error is returned. Resolve returns
-// ErrCombinedCredit (and no authors) for a combined record the splitter will
-// not split; see the package comment.
+// ErrCombinedCredit (and no authors) for a credit naming several people that
+// does not split safely and is not an author already; see the package comment.
 func Resolve(store Store, name string, gate Gate) ([]database.Author, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return nil, nil
 	}
-	if parts := SplitNames(name, gate); len(parts) >= 2 {
+	parts, err := splitForCreation(store, name, gate)
+	if err != nil {
+		return nil, err
+	}
+	if len(parts) >= 2 {
 		out := make([]database.Author, 0, len(parts))
 		seen := map[int]bool{}
 		for _, p := range parts {
@@ -241,11 +375,7 @@ func Resolve(store Store, name string, gate Gate) ([]database.Author, error) {
 	if existing != nil {
 		return []database.Author{*existing}, nil
 	}
-	combined, err := allPartsAreAuthors(store, name)
-	if err != nil {
-		return nil, err
-	}
-	if combined {
+	if isMultiName(name) {
 		return nil, ErrCombinedCredit
 	}
 	a, err := store.CreateAuthor(name)

@@ -4288,6 +4288,13 @@ var scannerInitialsRe = regexp.MustCompile(`([A-Z]\.)([A-Z])`)
 // parallel worker's create re-reads the row.
 type scannerAuthorStore struct{}
 
+// Unwrap exposes the package store to database.AsCapability, so the shared
+// resolver's title check (authorcredit.TitleSource) reaches it.
+func (scannerAuthorStore) Unwrap() database.Store {
+	s, _ := getStore().(database.Store)
+	return s
+}
+
 func (scannerAuthorStore) GetAuthorByName(name string) (*database.Author, error) {
 	a, err := getStore().GetAuthorByName(name)
 	if err != nil {

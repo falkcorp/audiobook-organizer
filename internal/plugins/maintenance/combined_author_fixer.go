@@ -438,6 +438,12 @@ func combinedClassify(name string) (names []string, skip, why string) {
 	if swapRoleRe.MatchString(name) {
 		return nil, combinedSkipRole, fmt.Sprintf("%q names contributor roles (translator, editor, ...); a person decides who the authors are", name)
 	}
+	if strings.ContainsAny(name, "()[]") {
+		// The splitter's bracket branch reads "Dante King (Dragon Born)" as
+		// two people; a bracket holds a series, a reader or an edition, never
+		// a co-author. Held for a person rather than split.
+		return nil, combinedSkipSplitRefused, fmt.Sprintf("%q carries a bracketed part (a series, reader or edition, not an author); a person decides", name)
+	}
 	loose := authorcredit.LooseParts(name)
 	keys := map[string]bool{}
 	for _, p := range loose {
@@ -461,6 +467,9 @@ func combinedClassify(name string) (names []string, skip, why string) {
 	for _, p := range split {
 		if personname.LooksLikeWorkTitle(p) {
 			return nil, combinedSkipImplausiblePart, fmt.Sprintf("the part %q of %q reads as a title (an article or a series marker)", p, name)
+		}
+		if authorcredit.IsCollectiveCredit(p) {
+			return nil, combinedSkipImplausiblePart, fmt.Sprintf("the part %q of %q names no person (a cast or collective credit)", p, name)
 		}
 		if _, ok := authorcredit.CleanGate(p); !ok {
 			return nil, combinedSkipImplausiblePart, fmt.Sprintf("the part %q of %q is not a plausible author name (a title, publisher or junk)", p, name)

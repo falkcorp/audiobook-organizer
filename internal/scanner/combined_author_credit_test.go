@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/falkcorp/audiobook-organizer/internal/authorcredit"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
@@ -109,4 +110,39 @@ func TestRescanMayCreditAuthors(t *testing.T) {
 	require.False(t, rescanMayCreditAuthors(map[string]bool{database.FieldKeyAuthorName: true}, true))
 	require.False(t, rescanMayCreditAuthors(database.AllUserLockableFieldsLocked(), false))
 	require.False(t, rescanMayCreditAuthors(map[string]bool{}, false))
+}
+
+// The review of #3717 cases through the real scanner path: no series,
+// publisher or cast credit becomes an author, and no combined record is made.
+func TestResolveAuthorIDs_ReviewCases(t *testing.T) {
+	st := usePebbleForCombined(t, "Annabelle Hawthorne")
+	for _, s := range []string{"Dragon Born", "Star Wars", "Master Class"} {
+		_, err := st.CreateSeries(s, nil)
+		require.NoError(t, err)
+	}
+	authorcredit.ResetTitleCache()
+	exists := func(n string) bool {
+		a, err := st.GetAuthorByName(n)
+		require.NoError(t, err)
+		return a != nil
+	}
+	ids, err := resolveAuthorIDs("Dante King (Dragon Born)")
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	ids, err = resolveAuthorIDs("Alphabet Squadron (Star Wars)")
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	ids, err = resolveAuthorIDs("Annabelle Hawthorne, Virgil Knightley(Master Class)")
+	require.NoError(t, err)
+	require.Equal(t, []string{"Annabelle Hawthorne", "Virgil Knightley"}, authorNamesOf(t, st, ids))
+	for _, n := range []string{"Cassius Lange, LitForge Press, Damien Hanson", "Terry Pratchett, Full Cast",
+		"Ray Porter, Kate Reading, Michael Kramer, Tim Gerard Reynolds"} {
+		ids, err := resolveAuthorIDs(n)
+		require.NoError(t, err, n)
+		require.Empty(t, ids, n)
+	}
+	for _, n := range []string{"Dragon Born", "Star Wars", "Master Class", "LitForge Press", "Full Cast",
+		"Annabelle Hawthorne, Virgil Knightley", "Cassius Lange, LitForge Press, Damien Hanson", "Terry Pratchett, Full Cast"} {
+		require.False(t, exists(n), "%s must not be an author", n)
+	}
 }

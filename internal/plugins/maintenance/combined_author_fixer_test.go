@@ -360,14 +360,18 @@ func TestCombinedNextCredits(t *testing.T) {
 
 func TestCombinedClassify(t *testing.T) {
 	cases := map[string]string{
-		"J.N. Chaney, Jonathan P. Brazee":              "",
-		"Adam Lance, Leon West, Adam Lance, Leon West": "",
-		"A. G. Riddle, A. G. Riddle":                   combinedSkipDoubled,
-		"Shirtaloon, Travis Deverell":                  combinedSkipSplitRefused,
-		"A Dark and Drowning Tide":                     combinedSkipImplausiblePart,
-		"Reuben Woolley - translator, Alex Toxic":      combinedSkipRole,
-		"Greg Bear, Ben Bova, David Brin, Larry Niven": combinedSkipAnthology,
-		"SPEC -- Drew, Hayes – Villains', Code 02":     combinedSkipSplitRefused,
+		"J.N. Chaney, Jonathan P. Brazee":                     "",
+		"Adam Lance, Leon West, Adam Lance, Leon West":        "",
+		"A. G. Riddle, A. G. Riddle":                          combinedSkipDoubled,
+		"Shirtaloon, Travis Deverell":                         combinedSkipSplitRefused,
+		"A Dark and Drowning Tide":                            combinedSkipImplausiblePart,
+		"Reuben Woolley - translator, Alex Toxic":             combinedSkipRole,
+		"Greg Bear, Ben Bova, David Brin, Larry Niven":        combinedSkipAnthology,
+		"SPEC -- Drew, Hayes – Villains', Code 02":            combinedSkipSplitRefused,
+		"Dante King (Dragon Born)":                            combinedSkipSplitRefused,
+		"Annabelle Hawthorne, Virgil Knightley(Master Class)": combinedSkipSplitRefused,
+		"Terry Pratchett, Full Cast":                          combinedSkipImplausiblePart,
+		"Cassius Lange, LitForge Press, Damien Hanson":        combinedSkipImplausiblePart,
 	}
 	for name, want := range cases {
 		_, skip, why := combinedClassify(name)
