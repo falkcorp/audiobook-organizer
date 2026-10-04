@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retire_into.go
-// version: 1.9.2
+// version: 1.9.3
 // guid: dadb4da5-0f2d-4678-abf3-4ac97f3ecb66
 // last-edited: 2026-10-04
 
@@ -404,11 +404,10 @@ func resumeHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Wr
 		if storedPrimaryFlag(b.IsPrimaryVersion) != "false" {
 			return nil
 		}
-		hist, ok := store.(bookHistoryReader)
-		if !ok {
-			return nil
-		}
-		rows, err := hist.GetBookChangeHistory(b.ID, vgHistoryWindow)
+		// The flag's newest row only (OpsStore.GetMetadataChangeHistory, as
+		// the check below reads it; see resumesOwnWrite on why not a window
+		// of the whole book's history).
+		rows, err := store.GetMetadataChangeHistory(b.ID, "is_primary_version", 1)
 		if err != nil {
 			return refuse("change history unreadable: %v", err)
 		}
