@@ -1,5 +1,5 @@
 // file: internal/server/handlers/activity.go
-// version: 1.11.1
+// version: 1.11.2
 // guid: d4e5f6a7-b8c9-0123-def0-234567890123
 // last-edited: 2026-10-04
 
@@ -671,6 +671,11 @@ func operationLogTags(opID, level, opType string, attrs map[string]any) []string
 	return entry.Tags
 }
 
+// activityClampLog carries the clamp handler's warnings through the
+// sanitizing logger (direct slog calls are ratcheted by
+// internal/logger's TestGuard_NoDirectSlogCalls).
+var activityClampLog = logger.New("handlers.activity")
+
 // clampVacuumFailedMessage is the fixed vacuum_error text for a committed clamp
 // whose vacuum or WAL reset failed. The underlying error is logged, never sent:
 // it can carry file paths, as the 500 path's errors can.
@@ -719,8 +724,8 @@ func (h *ActivityHandler) ClampActivitySummaries(c *gin.Context) {
 		vacuumErr, err = err, nil
 		// The detail goes to the log only, sanitized, like the 500 path's
 		// InternalError; the response carries a fixed message.
-		slog.Warn("[activity] summary clamp committed but the vacuum or WAL reset failed; space still held",
-			"scanned", res.Scanned, "clamped", res.Clamped, "error", logging.SanitizeErr(vacuumErr))
+		activityClampLog.Warn("summary clamp committed (scanned=%d clamped=%d) but the vacuum or WAL reset failed; space still held: %s",
+			res.Scanned, res.Clamped, logging.SanitizeErr(vacuumErr))
 	}
 	if err != nil {
 		httputil.InternalError(c, "activity summary clamp failed", err)
