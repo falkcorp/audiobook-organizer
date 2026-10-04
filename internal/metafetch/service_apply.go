@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.48.0
+// version: 1.49.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
 // last-edited: 2026-10-03
 
@@ -860,8 +860,8 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 		}
 	}
 	if cerr := database.ClaimRepairLocks(mfs.db, id, changedLocks); cerr != nil {
-		slog.Error("hand-picked apply: repair locks not claimed; reverting that repair may lift them",
-			"id", logger.SanitizeLogValue(id), "fields", claimedLocks, "error", logger.SanitizeLogValue(cerr.Error()))
+		applyMarkerLog.Error("hand-picked apply: repair locks not claimed; reverting that repair may lift them id=%s fields=%v error=%s",
+			logger.SanitizeLogValue(id), changedLocks, logger.SanitizeLogValue(cerr.Error()))
 	}
 	// An owner-reviewed apply went through past legs the certainty gate
 	// refused, and its change history is the only record to audit or revert

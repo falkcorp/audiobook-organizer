@@ -1,5 +1,5 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
 // last-edited: 2026-10-03
 
@@ -8,8 +8,8 @@ package logger
 // The ceilings may only go DOWN. Raising one to fit a new file or a new call
 // is the exact change TestGuard_NoDirectSlogCalls exists to stop.
 const (
-	slogRatchetFileCeiling = 310
-	slogRatchetCallCeiling = 1776
+	slogRatchetFileCeiling = 309
+	slogRatchetCallCeiling = 1772
 )
 
 // slogRatchet is every non-test file under internal/ and cmd/ that called
@@ -46,7 +46,7 @@ var slogRatchet = map[string]int{
 	"internal/aidispatch/dispatch.go":                            1,
 	"internal/aidispatch/inflight.go":                            2,
 	"internal/aiscan/pipeline.go":                                15,
-	"internal/audiobooks/helpers.go":                             2,
+	"internal/audiobooks/helpers.go":                             1,
 	"internal/audiobooks/service.go":                             1,
 	"internal/audiobooks/service_filtering.go":                   3,
 	"internal/audiobooks/service_mutation.go":                    5,
@@ -180,9 +180,9 @@ var slogRatchet = map[string]int{
 	"internal/metafetch/apply_fields.go":                         1,
 	"internal/metafetch/cache.go":                                2,
 	"internal/metafetch/file_pipeline.go":                        1,
-	"internal/metafetch/helpers.go":                              2,
+	"internal/metafetch/helpers.go":                              1,
 	"internal/metafetch/lifecycle.go":                            2,
-	"internal/metafetch/metadata_state_service.go":               2,
+	"internal/metafetch/metadata_state_service.go":               1,
 	"internal/metafetch/openlibrary.go":                          8,
 	"internal/metafetch/service.go":                              11,
 	"internal/metafetch/service_apply.go":                        27,
@@ -307,7 +307,6 @@ var slogRatchet = map[string]int{
 	"internal/server/server_helpers.go":                          3,
 	"internal/server/server_lifecycle.go":                        56,
 	"internal/server/server_maintenance_deps.go":                 8,
-	"internal/server/server_metadata.go":                         1,
 	"internal/server/server_middleware.go":                       2,
 	"internal/server/server_search.go":                           13,
 	"internal/server/version_lifecycle.go":                       1,
