@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.26.0
+// version: 1.27.0
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
 // last-edited: 2026-10-04
 
@@ -1656,6 +1656,31 @@ func (f *fragmentFixer) recordDone(store OpsStore, lib *fragLibrary, pj *fragPla
 	if terminal, err = resolve(rec.Survivor); err != nil || terminal == "" {
 		return false, terminal, "", err
 	}
+	ids := make([]string, 0, len(st.Files))
+	for id := range st.Files {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		if st.Roles[id].Copy {
+			continue
+		}
+		fid := st.Files[id]
+		o := pj.owner[fid]
+		if o == "" {
+			return false, terminal, "", nil
+		}
+		t, err := resolve(o)
+		if err != nil {
+			return false, terminal, "", err
+		}
+		if t != terminal {
+			if live(o) && !slices.Contains(rec.BookIDs, o) {
+				outside = fmt.Sprintf("planned file %s of book %s is now on book %s, outside the run", fid, id, o)
+			}
+			return false, terminal, outside, nil
+		}
+	}
 	byOthers := false
 	for _, id := range rec.BookIDs {
 		if id == rec.Survivor {
@@ -1691,31 +1716,6 @@ func (f *fragmentFixer) recordDone(store OpsStore, lib *fragLibrary, pj *fragPla
 					return false, terminal, "", nil
 				}
 			}
-		}
-	}
-	ids := make([]string, 0, len(st.Files))
-	for id := range st.Files {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	for _, id := range ids {
-		if st.Roles[id].Copy {
-			continue
-		}
-		fid := st.Files[id]
-		o := pj.owner[fid]
-		if o == "" {
-			return false, terminal, "", nil
-		}
-		t, err := resolve(o)
-		if err != nil {
-			return false, terminal, "", err
-		}
-		if t != terminal {
-			if live(o) {
-				outside = fmt.Sprintf("planned file %s of book %s is now on book %s, outside the run", fid, id, o)
-			}
-			return false, terminal, outside, nil
 		}
 	}
 	if terminal != rec.Survivor || byOthers {
@@ -1868,6 +1868,11 @@ func (f *fragmentFixer) continueInterrupted(ctx context.Context, lib *fragLibrar
 		}
 		out.dirs[rec.Dir] = why
 	}
+	var emitted []fragPlanRecord
+	emit := func(rec fragPlanRecord, row repairs.Row) {
+		out.rows = append(out.rows, row)
+		emitted = append(emitted, rec)
+	}
 	type pendingRec struct {
 		rec fragPlanRecord
 		ops []string
@@ -1881,7 +1886,7 @@ func (f *fragmentFixer) continueInterrupted(ctx context.Context, lib *fragLibrar
 			// No decision to continue, and the run may be unfinished: held,
 			// with its books kept out of every other row.
 			if inScope {
-				out.rows = append(out.rows, interruptedRow(lib, rec, ops, "the run's plan record is unreadable: "+err.Error(), actRevert(ops)))
+				emit(rec, interruptedRow(lib, rec, ops, "the run's plan record is unreadable: "+err.Error(), actRevert(ops)))
 			}
 			hold(rec, fmt.Sprintf("an interrupted consolidation of this folder into %s has an unreadable plan record (row %s, operation(s) %s)",
 				rec.Survivor, rec.RowID, strings.Join(ops, ", ")))
@@ -1899,7 +1904,7 @@ func (f *fragmentFixer) continueInterrupted(ctx context.Context, lib *fragLibrar
 			// run can be neither continued (the row is not the plan's any
 			// more) nor called done (one work, two live books).
 			if inScope {
-				out.rows = append(out.rows, interruptedRow(lib, rec, ops, outside, actFinishOutside(terminal)))
+				emit(rec, interruptedRow(lib, rec, ops, outside, actFinishOutside(terminal)))
 			}
 			hold(rec, fmt.Sprintf("an interrupted consolidation of this folder into %s is held: %s (row %s, operation(s) %s)",
 				terminal, outside, rec.RowID, strings.Join(ops, ", ")))
@@ -1917,7 +1922,7 @@ func (f *fragmentFixer) continueInterrupted(ctx context.Context, lib *fragLibrar
 				act = actFinish(terminal)
 			}
 			if inScope {
-				out.rows = append(out.rows, interruptedRow(lib, rec, ops, why, act))
+				emit(rec, interruptedRow(lib, rec, ops, why, act))
 			}
 			hold(rec, fmt.Sprintf("an interrupted consolidation of this folder into %s is held: %s (row %s, operation(s) %s)",
 				rec.Survivor, why, rec.RowID, strings.Join(ops, ", ")))
@@ -1990,7 +1995,20 @@ func (f *fragmentFixer) continueInterrupted(ctx context.Context, lib *fragLibrar
 			if why != "" {
 				row = interruptedRow(lib, rec, p.ops, why, act)
 			}
-			out.rows = append(out.rows, row)
+			emit(rec, row)
+		}
+	}
+	// Several records can name one row id (two survivors of a folder, two
+	// plans on one survivor): each colliding row gets its own id, so the
+	// plan never lists one id twice (the engine refuses such a plan whole).
+	seen := map[string]int{}
+	for _, r := range out.rows {
+		seen[r.RowID]++
+	}
+	for i := range out.rows {
+		if seen[out.rows[i].RowID] > 1 {
+			rec := emitted[i]
+			out.rows[i].RowID = fmt.Sprintf("%s@%s@%d", rec.RowID, rec.Survivor, rec.PlannedAt.UnixNano())
 		}
 	}
 	emptied := map[string]bool{}
