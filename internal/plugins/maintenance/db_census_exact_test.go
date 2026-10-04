@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/db_census_exact_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2e7cd14b-bfab-4670-8ca5-b918e74112e6
 // last-edited: 2026-10-04
 
@@ -14,18 +14,23 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
 // fakeCensusRunner records how it was called.
 type fakeCensusRunner struct {
-	last  *database.DBCensus
-	runs  int
-	gotBP int64
+	last     *database.DBCensus
+	runs     int
+	gotBP    int64
+	restarts int
 }
 
 func (f *fakeCensusRunner) RunExactCensus(_ context.Context, opts database.ExactCensusOptions) (*database.DBCensus, error) {
 	f.runs++
 	f.gotBP = opts.ReadBytesPerSec
+	if opts.Restart {
+		f.restarts++
+	}
 	if opts.Progress != nil {
 		opts.Progress(database.ExactCensusProgress{FamiliesDone: 1, FamiliesAll: 2}, "book:")
 	}
@@ -73,6 +78,7 @@ func TestDBCensusExact_CooldownRefusesBackToBackRuns(t *testing.T) {
 
 	require.NoError(t, runDBCensusExactWith(context.Background(), r, dbCensusExactParams{Force: true}, 0, 6, rep, now.Add(time.Hour)))
 	require.Equal(t, 2, r.runs, "force runs inside the cooldown")
+	require.Equal(t, 1, r.restarts, "force discards saved progress")
 
 	require.NoError(t, runDBCensusExactWith(context.Background(), r, dbCensusExactParams{}, 0, 6, rep, r.last.GeneratedAt.Add(7*time.Hour)))
 	require.Equal(t, 3, r.runs, "past the cooldown it runs")
@@ -83,4 +89,11 @@ func TestDBCensusExact_IsRegistered(t *testing.T) {
 	require.Equal(t, dbCensusExactOpID, def.ID)
 	require.Nil(t, def.Schedule, "manual op")
 	require.NotNil(t, def.Run)
+	require.Contains(t, def.Capabilities, sdk.CapLibraryWrite)
+}
+
+func TestDBCensusExact_RestartParamDiscardsProgress(t *testing.T) {
+	r := &fakeCensusRunner{}
+	require.NoError(t, runDBCensusExactWith(context.Background(), r, dbCensusExactParams{Restart: true}, 0, 6, &mockReporter{}, time.Now()))
+	require.Equal(t, 1, r.restarts)
 }

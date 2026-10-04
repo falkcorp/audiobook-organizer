@@ -1,5 +1,5 @@
 // file: internal/database/census_exact.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5d2b8e71-0c4a-4f3e-9b6d-2a7c1e8f4b90
 // last-edited: 2026-10-04
 
@@ -28,17 +28,35 @@ const (
 	exactCensusProgressKey = "system:census:exact_progress"
 )
 
-const (
+// Tunables of the exact pass. Variables only so tests can shrink them;
+// nothing changes them in production.
+var (
 	// exactCensusIterRefresh bounds how long one iterator (and so one pinned
-	// Pebble version) lives: past it the pass reopens after the last key, so
-	// obsolete sstables can be deleted while a large family is being read.
+	// Pebble version) lives: past it the pass closes it, saves its position
+	// and reopens after the last key, so obsolete sstables can be deleted
+	// while a large family is being read and a restart loses at most this
+	// much work.
 	exactCensusIterRefresh = 30 * time.Second
-	// exactCensusCheckBytes is how many key+value bytes the pass reads between
-	// rate-limit, context and refresh checks.
-	exactCensusCheckBytes = 256 << 10
+	// exactCensusCheckBytes is how many bytes the iterator steps over (keys
+	// and values, tombstones and shadowed versions included, from its own
+	// stats) between rate-limit, context, progress and refresh checks.
+	exactCensusCheckBytes int64 = 256 << 10
+	// exactCensusLongWait: a budget wait longer than this happens with the
+	// iterator closed, so no version stays pinned while the pass sleeps.
+	exactCensusLongWait = time.Second
+	// exactCensusAfterRefresh, when set (tests only), runs after each saved
+	// in-family position.
+	exactCensusAfterRefresh func(family string)
+)
+
+const (
 	// exactCensusProgressMaxAge: older saved progress is discarded instead of
 	// resumed, so a run abandoned long ago does not mix with today's data.
-	exactCensusProgressMaxAge = 7 * 24 * time.Hour
+	exactCensusProgressMaxAge = 24 * time.Hour
+	// exactCensusStatsEvery: the iterator stats are read every this many
+	// live keys (a tombstone run between two live keys is charged when the
+	// next one is reached).
+	exactCensusStatsEvery = 16
 
 	censusNoteExactDefinition = "exact census: every family counted by a keys-only pass; keys = live keys when the family was read; deletions = point tombstones plus shadowed versions not yet compacted (points under an uncompacted range deletion are mostly skipped unseen, see range_deleted_keys and the range-deletion note); families were read one after another, so the census is not a single point-in-time snapshot; disk bytes and table counts are apportioned from sstable properties at the end of the run"
 )
@@ -51,6 +69,8 @@ type ExactCensusOptions struct {
 	// Progress, when set, is called after every family and at least every
 	// few seconds inside a large one.
 	Progress func(p ExactCensusProgress, family string)
+	// Restart discards any saved progress and starts a fresh run.
+	Restart bool
 }
 
 // DBCensusExactRunner is the capability the maintenance.db-census-exact op
@@ -72,7 +92,8 @@ type exactFamilyCount struct {
 }
 
 // exactCensusState is the saved progress of a run: the families finished so
-// far, so a restarted run resumes after the last one.
+// far, plus the position inside the family being read, so a restarted run
+// resumes where the last one stopped.
 type exactCensusState struct {
 	Registry  string                      `json:"registry"`
 	StartedAt time.Time                   `json:"started_at"`
@@ -80,6 +101,17 @@ type exactCensusState struct {
 	Done      map[string]exactFamilyCount `json:"done"`
 	BytesRead int64                       `json:"bytes_read"`
 	History   *HistoryCensus              `json:"history,omitempty"`
+	Partial   *exactPartial               `json:"partial,omitempty"`
+}
+
+// exactPartial is the position inside an unfinished family: the range piece,
+// the key to resume at, and the counts (and book_ver: history) so far.
+type exactPartial struct {
+	Family   string           `json:"family"`
+	Piece    int              `json:"piece"`
+	ResumeAt []byte           `json:"resume_at"`
+	Count    exactFamilyCount `json:"count"`
+	Hist     map[string]int64 `json:"hist,omitempty"`
 }
 
 // censusRegistryFingerprint identifies the family registry, so progress saved
@@ -172,37 +204,50 @@ func (p *PebbleStore) saveExactCensusState(st *exactCensusState, sync bool) erro
 // endpoint (LastExactCensus). It also builds the book_ver: history
 // distribution while reading that family.
 //
-// It resumes: progress is saved after every family, and a later call with the
-// same registry continues after the last finished family (progress older than
-// a week is discarded). Values are not decoded, but Pebble reads them with
-// their blocks, so the budget counts key and value bytes.
+// It resumes: progress is saved after every family and at every iterator
+// refresh inside one, and a later call with the same registry continues from
+// there (progress older than exactCensusProgressMaxAge is discarded;
+// opts.Restart discards it too). Values are not decoded, but Pebble reads
+// them with their blocks, so the budget counts the uncompressed key and value
+// bytes the iterator steps over.
+//
+// A cancelled context stops the pass at the next check and leaves the saved
+// progress unfinished; nothing is published.
 //
 // The families are read one after another: each family is internally
 // consistent, but the census as a whole is not one point-in-time snapshot.
 func (p *PebbleStore) RunExactCensus(ctx context.Context, opts ExactCensusOptions) (_ *DBCensus, err error) {
 	defer recoverPebbleClosed("RunExactCensus", &err)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	start := time.Now()
 	if err := p.db.Flush(); err != nil {
 		return nil, fmt.Errorf("exact census: flush: %w", err)
 	}
 
 	reg := censusRegistryFingerprint()
-	st, err := p.loadExactCensusState()
-	if err != nil {
-		return nil, err
+	var st *exactCensusState
+	if !opts.Restart {
+		if st, err = p.loadExactCensusState(); err != nil {
+			return nil, err
+		}
 	}
 	resumed := st != nil && st.Registry == reg && time.Since(st.StartedAt) < exactCensusProgressMaxAge
 	if !resumed {
 		st = &exactCensusState{Registry: reg, StartedAt: start, Done: map[string]exactFamilyCount{}}
+		if err := p.saveExactCensusState(st, true); err != nil {
+			return nil, err
+		}
 	}
 
 	var lim *rate.Limiter
 	if opts.ReadBytesPerSec > 0 {
-		burst := int(opts.ReadBytesPerSec)
+		burst := opts.ReadBytesPerSec
 		if burst < exactCensusCheckBytes*2 {
 			burst = exactCensusCheckBytes * 2
 		}
-		lim = rate.NewLimiter(rate.Limit(opts.ReadBytesPerSec), burst)
+		lim = rate.NewLimiter(rate.Limit(opts.ReadBytesPerSec), int(burst))
 	}
 
 	ranges := keyFamilyRanges(keyFamilies)
@@ -227,20 +272,51 @@ func (p *PebbleStore) RunExactCensus(ctx context.Context, opts ExactCensusOption
 	}
 
 	for _, fam := range names {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if _, done := st.Done[fam]; done {
 			continue
 		}
+		c := exactFamilyCount{}
 		var hist map[string]int64
 		if fam == "book_ver:" {
 			hist = map[string]int64{}
 		}
-		c := exactFamilyCount{}
-		for _, r := range pieces[fam] {
-			if err := p.exactCountRange(ctx, r, lim, &c, hist, &st.BytesRead, func() { report(fam) }); err != nil {
+		startPiece := 0
+		var resumeAt []byte
+		if pt := st.Partial; pt != nil && pt.Family == fam {
+			c, startPiece, resumeAt = pt.Count, pt.Piece, pt.ResumeAt
+			if hist != nil && pt.Hist != nil {
+				hist = pt.Hist
+			}
+		}
+		for pi := startPiece; pi < len(pieces[fam]); pi++ {
+			r := pieces[fam][pi]
+			lo := r.Lo
+			if pi == startPiece && resumeAt != nil {
+				lo = resumeAt
+			}
+			onRefresh := func(at []byte) error {
+				st.Partial = &exactPartial{Family: fam, Piece: pi, ResumeAt: at, Count: c, Hist: hist}
+				st.UpdatedAt = time.Now()
+				if err := p.saveExactCensusState(st, true); err != nil {
+					return err
+				}
+				if exactCensusAfterRefresh != nil {
+					exactCensusAfterRefresh(fam)
+				}
+				return nil
+			}
+			if err := p.exactCountRange(ctx, lo, r.Hi, lim, &c, hist, &st.BytesRead, func() { report(fam) }, onRefresh); err != nil {
 				return nil, err
 			}
 		}
+		if c.Points < c.Live {
+			c.Points = c.Live
+		}
 		st.Done[fam] = c
+		st.Partial = nil
 		if hist != nil {
 			st.History = p.historyFromCounts(hist)
 		}
@@ -249,6 +325,9 @@ func (p *PebbleStore) RunExactCensus(ctx context.Context, opts ExactCensusOption
 			return nil, err
 		}
 		report(fam)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 
 	out, err := p.assembleExactCensus(ctx, st, names, resumed, start)
@@ -275,28 +354,39 @@ func (p *PebbleStore) RunExactCensus(ctx context.Context, opts ExactCensusOption
 	return out, nil
 }
 
-// exactCountRange counts one range keys-only into c. The iterator is reopened
-// after the last key every exactCensusIterRefresh, and the byte budget,
-// context and progress are checked every exactCensusCheckBytes.
+// exactCountRange counts [lo, hi) keys-only into c.
+//
+// The budget is charged on what the iterator itself reports stepping over
+// (InternalStats KeyBytes + ValueBytes, tombstones and shadowed versions
+// included), read every exactCensusStatsEvery live keys; every
+// exactCensusCheckBytes of that the pass waits for the budget, checks ctx,
+// reports progress and, past exactCensusIterRefresh, closes the iterator,
+// saves its position through onRefresh and reopens after the last key. A
+// budget wait longer than exactCensusLongWait is also done with the iterator
+// closed.
 func (p *PebbleStore) exactCountRange(
-	ctx context.Context, r keyRange, lim *rate.Limiter, c *exactFamilyCount,
-	hist map[string]int64, bytesRead *int64, progress func(),
-) (err error) {
-	lower := r.Lo
+	ctx context.Context, lo, hi []byte, lim *rate.Limiter, c *exactFamilyCount,
+	hist map[string]int64, bytesRead *int64, progress func(), onRefresh func(resumeAt []byte) error,
+) error {
+	lastProgress := time.Now()
 	for {
-		it, err := p.db.NewIter(&pebble.IterOptions{LowerBound: lower, UpperBound: r.Hi})
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		it, err := p.db.NewIter(&pebble.IterOptions{LowerBound: lo, UpperBound: hi})
 		if err != nil {
 			return fmt.Errorf("exact census iterator: %w", err)
 		}
+		if err := ctx.Err(); err != nil {
+			return errors.Join(err, it.Close())
+		}
 		opened := time.Now()
-		lastProgress := opened
-		var pending int64
+		var charged, waitAfterClose int64
 		var resumeAt []byte
 		var loopErr error
+		n := 0
 		for valid := it.First(); valid; valid = it.Next() {
 			k := it.Key()
-			lv := it.LazyValue()
-			pending += int64(len(k) + lv.Len())
 			c.Live++
 			if hist != nil {
 				rest := k[len("book_ver:"):]
@@ -304,15 +394,27 @@ func (p *PebbleStore) exactCountRange(
 					hist[string(rest[:i])]++
 				}
 			}
-			if pending < exactCensusCheckBytes {
+			n++
+			if n%exactCensusStatsEvery != 0 {
 				continue
 			}
-			*bytesRead += pending
-			if werr := censusWaitBytes(ctx, lim, pending); werr != nil {
+			ist := it.Stats().InternalStats
+			used := int64(ist.KeyBytes + ist.ValueBytes)
+			delta := used - charged
+			if delta < exactCensusCheckBytes {
+				continue
+			}
+			charged = used
+			*bytesRead += delta
+			if censusWaitIsLong(lim, delta) {
+				waitAfterClose = delta
+				resumeAt = append(append([]byte(nil), k...), 0x00)
+				break
+			}
+			if werr := censusWaitBytes(ctx, lim, delta); werr != nil {
 				loopErr = werr
 				break
 			}
-			pending = 0
 			if cerr := ctx.Err(); cerr != nil {
 				loopErr = cerr
 				break
@@ -321,17 +423,20 @@ func (p *PebbleStore) exactCountRange(
 				progress()
 				lastProgress = time.Now()
 			}
-			if time.Since(opened) > exactCensusIterRefresh {
+			if time.Since(opened) >= exactCensusIterRefresh {
 				resumeAt = append(append([]byte(nil), k...), 0x00)
 				break
 			}
 		}
-		*bytesRead += pending
-		stats := it.Stats().InternalStats
-		c.Points += int64(stats.PointCount)
-		c.Covered += int64(stats.PointsCoveredByRangeTombstones)
-		c.KeyBytes += int64(stats.KeyBytes)
-		c.ValBytes += int64(stats.ValueBytes)
+		ist := it.Stats().InternalStats
+		if rest := int64(ist.KeyBytes+ist.ValueBytes) - charged; rest > 0 && loopErr == nil {
+			*bytesRead += rest
+			waitAfterClose += rest
+		}
+		c.Points += int64(ist.PointCount)
+		c.Covered += int64(ist.PointsCoveredByRangeTombstones)
+		c.KeyBytes += int64(ist.KeyBytes)
+		c.ValBytes += int64(ist.ValueBytes)
 		iterErr := it.Error()
 		closeErr := it.Close()
 		if loopErr != nil {
@@ -340,14 +445,29 @@ func (p *PebbleStore) exactCountRange(
 		if iterErr != nil || closeErr != nil {
 			return fmt.Errorf("exact census iterator: %w", errors.Join(iterErr, closeErr))
 		}
+		if err := censusWaitBytes(ctx, lim, waitAfterClose); err != nil {
+			return err
+		}
 		if resumeAt == nil {
-			if c.Points < c.Live {
-				c.Points = c.Live
-			}
 			return nil
 		}
-		lower = resumeAt
+		if onRefresh != nil {
+			if err := onRefresh(resumeAt); err != nil {
+				return err
+			}
+		}
+		lo = resumeAt
 	}
+}
+
+// censusWaitIsLong reports whether charging n bytes would block longer than
+// exactCensusLongWait.
+func censusWaitIsLong(lim *rate.Limiter, n int64) bool {
+	if lim == nil {
+		return false
+	}
+	short := float64(n) - lim.Tokens()
+	return short > float64(lim.Limit())*exactCensusLongWait.Seconds()
 }
 
 // censusWaitBytes charges n bytes to the limiter, in burst-sized chunks so a
@@ -372,6 +492,10 @@ func censusWaitBytes(ctx context.Context, lim *rate.Limiter, n int64) error {
 // assembleExactCensus turns the per-family counts into a DBCensus. Disk bytes
 // and table counts come from an estimated census taken now.
 func (p *PebbleStore) assembleExactCensus(ctx context.Context, st *exactCensusState, names []string, resumed bool, start time.Time) (*DBCensus, error) {
+	// Flush so the disk-byte split covers what the pass counted.
+	if err := p.db.Flush(); err != nil {
+		return nil, fmt.Errorf("exact census: flush: %w", err)
+	}
 	est := &DBCensus{}
 	if err := p.censusFamilies(ctx, est); err != nil {
 		return nil, err
@@ -390,9 +514,6 @@ func (p *PebbleStore) assembleExactCensus(ctx context.Context, st *exactCensusSt
 		Kind:               CensusKindExact,
 		GeneratedAt:        time.Now(),
 		DurationMS:         time.Since(st.StartedAt).Milliseconds(),
-		TotalKeys:          est.TotalKeys,
-		TotalDeletions:     est.TotalDeletions,
-		TotalEntries:       est.TotalEntries,
 		TotalTables:        est.TotalTables,
 		TotalTableBytes:    est.TotalTableBytes,
 		DiskSpaceUsage:     est.DiskSpaceUsage,
@@ -420,6 +541,10 @@ func (p *PebbleStore) assembleExactCensus(ctx context.Context, st *exactCensusSt
 		d := diskByFam[name]
 		fc.DiskBytes, fc.Tables, fc.rangeDel = d.DiskBytes, d.Tables, d.rangeDel
 		out.Families = append(out.Families, fc)
+		// Totals are the sums of the exact figures, not the estimate's.
+		out.TotalKeys += fc.Keys
+		out.TotalDeletions += fc.Deletions
+		out.TotalEntries += fc.Entries
 	}
 	if note := censusRangeDelNote(out.Families); note != "" {
 		out.Notes = append(out.Notes, note)

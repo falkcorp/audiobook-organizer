@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/db_census_exact.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7b09d3be-0012-432e-91e0-ea0f2491bea2
 // last-edited: 2026-10-04
 
@@ -24,8 +24,11 @@ const dbCensusExactOpID = "maintenance.db-census-exact"
 
 // dbCensusExactParams are the op's optional parameters.
 type dbCensusExactParams struct {
-	// Force runs even inside the cooldown after the last completed run.
+	// Force runs even inside the cooldown after the last completed run, and
+	// starts fresh: any saved progress of an unfinished run is discarded.
 	Force bool `json:"force"`
+	// Restart discards saved progress without overriding the cooldown.
+	Restart bool `json:"restart"`
 	// ReadMBPerSec overrides config db_census_exact_read_mb_per_sec for this
 	// run (> 0 only).
 	ReadMBPerSec int `json:"read_mb_per_sec"`
@@ -41,7 +44,7 @@ func (p *Plugin) dbCensusExactDef() sdk.OperationDef {
 		DisplayName: "Exact database census",
 		Description: "Counts every key family of the main database exactly with a rate-limited keys-only pass " +
 			"(config db_census_exact_read_mb_per_sec, default 50 MB/s) and builds the per-book history distribution. " +
-			"Resumes after a restart; refuses to start again within db_census_exact_cooldown_hours (default 6) unless force=true. " +
+			"Resumes after a restart (restart=true discards saved progress); refuses to start again within db_census_exact_cooldown_hours (default 6) unless force=true. " +
 			"The result is what /diagnostics/db-census shows as last_exact.",
 		// ResumeRestart: a restarted run continues after the last family it
 		// finished (progress is saved per family in the store).
@@ -50,11 +53,14 @@ func (p *Plugin) dbCensusExactDef() sdk.OperationDef {
 		ConcurrencyKey:  dbCensusExactOpID,
 		Cancellable:     true,
 		Isolate:         false,
-		// At 50 MB/s the production store (~50 GB) takes ~17 minutes; the
+		// The budget counts UNCOMPRESSED key and value bytes, which came to
+		// 2.4-6x the on-disk size on test stores; at 50 MB/s the production
+		// store (~50 GB on disk) should take roughly 40-100 minutes. The
 		// timeout leaves room for a much lower budget.
 		Timeout: 12 * time.Hour,
 		// No Schedule: an operator (or a release checklist) runs it.
-		Capabilities: []sdk.Capability{sdk.CapLibraryRead},
+		// CapLibraryWrite: it writes its result and progress keys.
+		Capabilities: []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},
 		Run:          p.runDBCensusExact,
 	}
 }
@@ -115,6 +121,7 @@ func runDBCensusExactWith(
 	_ = reporter.UpdateProgress(0, 1, "Starting exact database census...")
 	c, err := runner.RunExactCensus(ctx, database.ExactCensusOptions{
 		ReadBytesPerSec: int64(mbps) << 20,
+		Restart:         args.Force || args.Restart,
 		Progress: func(pr database.ExactCensusProgress, family string) {
 			reporter.SetCurrentItem(family)
 			_ = reporter.UpdateProgress(pr.FamiliesDone, pr.FamiliesAll, fmt.Sprintf(

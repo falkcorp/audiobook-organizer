@@ -1,5 +1,5 @@
 // file: internal/database/census_families.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c3f3063e-7a83-4402-9443-4ec19031525d
 // last-edited: 2026-10-04
 
@@ -19,6 +19,12 @@ import (
 // censusMaxAttempts bounds how often censusFamilies re-reads the table set
 // when a flush or compaction changed it mid-census.
 const censusMaxAttempts = 3
+
+// censusProbeMaxSpan: a range whose tables put more span bytes than this
+// inside it is treated as holding data without a seek. Only ranges with
+// almost nothing in them need the seek to tell "empty" from "a few keys" —
+// and a seek into a large range of tombstones would walk all of them.
+const censusProbeMaxSpan = 1 << 20
 
 // censusTable is one sstable's per-table figures.
 type censusTable struct {
@@ -76,7 +82,7 @@ func (p *PebbleStore) censusFamilies(ctx context.Context, out *DBCensus) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		snap, err = p.censusSnapshot(ranges)
+		snap, err = p.censusSnapshot(ctx, ranges)
 		if err != nil {
 			return err
 		}
@@ -241,7 +247,7 @@ type censusSnap struct {
 
 // censusSnapshot reads the table set with properties, the per-range span
 // bytes, the range probe, and then the table set again.
-func (p *PebbleStore) censusSnapshot(ranges []keyRange) (*censusSnap, error) {
+func (p *PebbleStore) censusSnapshot(ctx context.Context, ranges []keyRange) (*censusSnap, error) {
 	levels, err := p.db.SSTables(pebble.WithProperties())
 	if err != nil {
 		return nil, fmt.Errorf("db census: list sstables: %w", err)
@@ -291,7 +297,13 @@ func (p *PebbleStore) censusSnapshot(ranges []keyRange) (*censusSnap, error) {
 		}
 	}
 
-	if snap.probes, err = p.censusProbeRanges(ranges); err != nil {
+	spanTotal := make([]uint64, len(ranges))
+	for _, overlaps := range snap.span {
+		for ri, b := range overlaps {
+			spanTotal[ri] += b
+		}
+	}
+	if snap.probes, err = p.censusProbeRanges(ctx, ranges, spanTotal); err != nil {
 		return nil, err
 	}
 	// A range overlapped by a table with range deletions is not known to be
@@ -326,13 +338,14 @@ func (p *PebbleStore) censusSnapshot(ranges []keyRange) (*censusSnap, error) {
 	return snap, nil
 }
 
-// censusProbeRanges does one bounded seek per range on a single iterator,
-// never a scan. When First() finds no live key, the iterator stats say
-// whether it stepped over tombstones, shadowed versions or range-deleted
-// points on the way, so a family whose keys were all deleted still counts as
-// holding entries. (A range of many tombstones costs First() a walk over
-// them, the same as any read of that range.)
-func (p *PebbleStore) censusProbeRanges(ranges []keyRange) (_ []censusRangeProbe, err error) {
+// censusProbeRanges decides, per range, whether it holds anything. A range
+// with more than censusProbeMaxSpan span bytes is taken as non-empty without
+// a seek. The others get one bounded seek each, on a single iterator, never a
+// scan: when First() finds no live key, the iterator stats say whether it
+// stepped over tombstones, shadowed versions or range-deleted points, so a
+// family whose keys were all deleted still counts as holding entries.
+// spanTotal may be nil (every range is seeked).
+func (p *PebbleStore) censusProbeRanges(ctx context.Context, ranges []keyRange, spanTotal []uint64) (_ []censusRangeProbe, err error) {
 	out := make([]censusRangeProbe, len(ranges))
 	if len(ranges) == 0 {
 		return out, nil
@@ -347,6 +360,13 @@ func (p *PebbleStore) censusProbeRanges(ranges []keyRange) (_ []censusRangeProbe
 		}
 	}()
 	for ri, r := range ranges {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if spanTotal != nil && spanTotal[ri] > censusProbeMaxSpan {
+			out[ri] = censusRangeProbe{live: true, entries: true}
+			continue
+		}
 		it.SetBounds(r.Lo, r.Hi)
 		it.ResetStats()
 		pr := censusRangeProbe{live: it.First()}

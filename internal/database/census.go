@@ -1,5 +1,5 @@
 // file: internal/database/census.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: be43e3c6-39e4-4a3e-a43c-cd5651ff141c
 // last-edited: 2026-10-04
 
@@ -39,14 +39,22 @@ const (
 
 const (
 	censusNoteKeyDefinition = "estimated census: keys = sstable entries minus deletions; overwritten versions not yet compacted count once each; per-family figures are apportioned by span bytes within shared tables (error_bound_keys bounds the error); exact per-family counts are in last_exact, written by the maintenance.db-census-exact op"
-	censusNoteFlushed       = "the memtable was flushed at the start of the census so sstable properties cover recent writes"
 	censusNoteMemdbCold     = "memdb not warm: retired and signal counts unavailable"
 	censusNoteHiddenSystem  = "some system records live inside other families and are counted there: settings-backed markers under setting: (repairs_last_*_op:, *_index_v1_done flags), the _system user's records under pref:_system: (broken out below it by sub-prefix), and global preferences under preference:"
 
-	censusCacheTTL       = 5 * time.Minute
-	censusCacheMaxStores = 8
-	censusHistoryTopN    = 20
-	censusFlightTimeout  = 2 * time.Minute
+	censusCacheTTL = 5 * time.Minute
+	// censusColdCacheTTL caches a census taken while memdb is still cold
+	// only briefly, so the retired/signal counts appear soon after warmup
+	// but a burst of requests during warmup does not recompute each time.
+	censusColdCacheTTL = 15 * time.Second
+	// censusFlushMinInterval and censusFlushMinMemtable gate the flush at the
+	// start of a census: at most one per store per interval (fresh=true
+	// included), and none for a nearly empty memtable.
+	censusFlushMinInterval = 60 * time.Second
+	censusFlushMinMemtable = 1 << 20
+	censusCacheMaxStores   = 8
+	censusHistoryTopN      = 20
+	censusFlightTimeout    = 2 * time.Minute
 )
 
 // Bound substitutes for the open ends of the key space. Pebble's
@@ -200,10 +208,12 @@ type DBCensusProvider interface {
 
 var _ DBCensusProvider = (*PebbleStore)(nil)
 
-// censusCacheEntry is one cached census and when it was computed.
+// censusCacheEntry is one cached census, when it was computed and how long
+// it may be served.
 type censusCacheEntry struct {
 	value *DBCensus
 	at    time.Time
+	ttl   time.Duration
 }
 
 // censusCache holds the estimated census per *pebble.DB, for at most
@@ -230,13 +240,13 @@ func censusCacheGet(db *pebble.DB, now time.Time) *DBCensus {
 	censusCache.mu.Lock()
 	defer censusCache.mu.Unlock()
 	e, ok := censusCache.m[db]
-	if !ok || e.value == nil || now.Sub(e.at) > censusCacheTTL {
+	if !ok || e.value == nil || now.Sub(e.at) > e.ttl {
 		return nil
 	}
 	return e.value
 }
 
-func censusCachePut(db *pebble.DB, v *DBCensus, at time.Time) {
+func censusCachePut(db *pebble.DB, v *DBCensus, at time.Time, ttl time.Duration) {
 	censusCache.mu.Lock()
 	defer censusCache.mu.Unlock()
 	if _, ok := censusCache.m[db]; !ok {
@@ -251,7 +261,7 @@ func censusCachePut(db *pebble.DB, v *DBCensus, at time.Time) {
 			delete(censusCache.m, victim)
 		}
 	}
-	censusCache.m[db] = censusCacheEntry{value: v, at: at}
+	censusCache.m[db] = censusCacheEntry{value: v, at: at, ttl: ttl}
 }
 
 // clone returns a copy that shares nothing mutable with c, so a cached value
@@ -331,9 +341,11 @@ func (p *PebbleStore) DBCensus(ctx context.Context, opts CensusOptions) (_ *DBCe
 			if cerr != nil {
 				return nil, cerr
 			}
-			if !c.memdbCold {
-				censusCachePut(p.db, c, c.GeneratedAt)
+			ttl := censusCacheTTL
+			if c.memdbCold {
+				ttl = censusColdCacheTTL
 			}
+			censusCachePut(p.db, c, c.GeneratedAt, ttl)
 			return c, nil
 		})
 		select {
@@ -372,17 +384,16 @@ func (p *PebbleStore) computeDBCensus(ctx context.Context) (_ *DBCensus, err err
 	if _, err := p.db.EstimateDiskUsage(censusMinKey, censusMaxKey); err != nil {
 		return nil, fmt.Errorf("db census: estimate disk usage: %w", err)
 	}
-	// Flush so the sstable properties cover recent writes; otherwise up to
-	// two memtables of writes are invisible and skew the apportioning.
-	if err := p.db.Flush(); err != nil {
-		return nil, fmt.Errorf("db census: flush: %w", err)
+	flushNote, err := p.censusMaybeFlush(start)
+	if err != nil {
+		return nil, err
 	}
 
 	out := &DBCensus{
 		Kind:               CensusKindEstimated,
 		GeneratedAt:        start,
 		FamilyFiguresBasis: CensusFamilyFiguresBasis,
-		Notes:              []string{censusNoteKeyDefinition, censusNoteFlushed, censusNoteHiddenSystem},
+		Notes:              []string{censusNoteKeyDefinition, flushNote, censusNoteHiddenSystem},
 	}
 	if err := p.censusFamilies(ctx, out); err != nil {
 		return nil, err
@@ -393,6 +404,50 @@ func (p *PebbleStore) computeDBCensus(ctx context.Context) (_ *DBCensus, err err
 	p.censusMemdb(out)
 	out.DurationMS = time.Since(start).Milliseconds()
 	return out, nil
+}
+
+// censusFlushes remembers the last census flush per store (bounded like the
+// cache).
+var censusFlushes = struct {
+	mu sync.Mutex
+	m  map[*pebble.DB]time.Time
+}{m: map[*pebble.DB]time.Time{}}
+
+// censusMaybeFlush flushes the memtable so the sstable properties cover recent
+// writes — unless the memtable is nearly empty or this store was flushed for a
+// census less than censusFlushMinInterval ago — and returns the note saying
+// which happened. A request, fresh or not, can therefore cause at most one
+// flush per store per interval.
+func (p *PebbleStore) censusMaybeFlush(now time.Time) (string, error) {
+	mt := p.db.Metrics().MemTable.Size
+	if mt < censusFlushMinMemtable {
+		return fmt.Sprintf("memtable not flushed: it holds only %d bytes; those writes are not in the figures", mt), nil
+	}
+	censusFlushes.mu.Lock()
+	last, seen := censusFlushes.m[p.db]
+	if seen && now.Sub(last) < censusFlushMinInterval {
+		censusFlushes.mu.Unlock()
+		return fmt.Sprintf("memtable not flushed: the last census flush was %s ago (minimum interval %s); its %d bytes are not in the figures",
+			now.Sub(last).Round(time.Second), censusFlushMinInterval, mt), nil
+	}
+	if !seen {
+		for len(censusFlushes.m) >= censusCacheMaxStores {
+			var victim *pebble.DB
+			var victimAt time.Time
+			for k, at := range censusFlushes.m {
+				if victim == nil || at.Before(victimAt) {
+					victim, victimAt = k, at
+				}
+			}
+			delete(censusFlushes.m, victim)
+		}
+	}
+	censusFlushes.m[p.db] = now
+	censusFlushes.mu.Unlock()
+	if err := p.db.Flush(); err != nil {
+		return "", fmt.Errorf("db census: flush: %w", err)
+	}
+	return "the memtable was flushed at the start of the census so sstable properties cover recent writes", nil
 }
 
 // censusMemdb fills the retired and signal counts from memdb, or a note.
