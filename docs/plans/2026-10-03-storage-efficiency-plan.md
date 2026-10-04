@@ -1,5 +1,5 @@
 <!-- file: docs/plans/2026-10-03-storage-efficiency-plan.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: e18dc87d-ee27-4372-a90a-e904900a79c1 -->
 <!-- last-edited: 2026-10-03 -->
 
@@ -89,7 +89,7 @@ transcripts counted); timeline under 100 ms on prod; db-health under 1 s.
 | B3 | Pins; merge code pins winner and loser; delete baseline discovery | B2 | go-specialist / opus | code-reviewer with merge-undo probes |
 | B4 | Store surface and consumers: list, get, revert, `LastHistoryValue`; handler; audit; tag comparison; delete `GetBookSnapshots`, `BookSnapshot`, old prune job; mocks regenerated | B2 | go-specialist / sonnet | pr-test-analyzer |
 | B5 | UI: version list shows kind, pinned, changed fields | B4 | typescript-specialist / sonnet | code-reviewer |
-| B6 | Migration mode at startup, marker check, cursor, held list and its page, 1% stop, invariant gates, stamp advance | A4, B2 | go-specialist / opus | silent-failure-hunter + schema-auditor |
+| B6 | Startup migration framework in the existing migration runner: status listener and systemd start handling, self-taken Pebble checkpoint in `migration-backups/`, cursor, held list and its page, 1% stop, invariant gates, stamp advance | A4, B2 | go-specialist / opus | silent-failure-hunter + schema-auditor |
 | B7 | History converter (legacy copies to change entries; pins for journal-referenced ids; inline signature move finished; orphan list), verified through the production reader; cut-at-every-step tests | B1, B6 | go-specialist / opus | code-reviewer / opus, then fable |
 | B8 | `DeleteBook` removes history, keeps the transcript record; nightly prune op (first run dry) | B4 | go-specialist / sonnet | code-reviewer |
 | B9 | Sandbox rehearsal on a restored prod snapshot: time, census, invariants, restore drill | B7 | main session | owner sees the numbers |
@@ -109,7 +109,7 @@ Cut-over on prod only after B9 and owner approval of the downtime.
 | C5 | File chokepoint changed-detection; recompute projection and its reflection test | C4 | go-specialist / opus | code-reviewer with stale-index probes |
 | C6 | Reconcile op and metrics for the row-to-signal invariants | C2 | go-specialist / sonnet | silent-failure-hunter |
 | C7 | File converter (raw JSON key surgery, read-back compare, row rewrite), book signature move, cut-at-every-step tests | C4, B6 | go-specialist / opus | code-reviewer / opus, then fable |
-| C8 | Deploy procedure: sibling datasets, recursive snapshot, send to second pool, marker | C1 | main session | owner |
+| C8 | Signal store location and dataset layout; checkpoint of both stores in the startup backup | C1 | main session | owner |
 | C9 | Sandbox rehearsal: time, warmup before and after, invariants, restore drill | C7 | main session | owner sees the numbers |
 
 ## Release D: consolidate and purge
@@ -147,7 +147,7 @@ ratchet, coverage floor, leak scan).
 
 There is none by design (owner decision 2026-10-03). Release A changes no
 format and can be reverted like any PR. For B and C the way back is the
-recursive ZFS snapshot named in the marker file, restored together with the
+Pebble checkpoint the app took before migrating, restored together with the
 previous build; `make rollback` refuses to run past the format stamp.
 
 ## Order of briefs
