@@ -1062,14 +1062,11 @@ func TestFragmentFixer_ReplanReformsAGroupCutMidRetire(t *testing.T) {
 	for i := range others {
 		require.NoError(t, w.MoveBookFiles([]string{otherRows[i]}, others[i], survivor))
 	}
-	// The first member was retired before the cut.
-	_, err := f.s.ModifyBook(others[0], func(b *database.Book) error {
-		yes := true
-		b.MarkedForDeletion = &yes
-		b.MergedIntoBookID = &survivor
-		b.FilePath = ""
-		return nil
-	})
+	// The first member was retired before the cut, by this fixer's own
+	// retire (a resume accepts only a retire this fixer journaled into the
+	// survivor; a bare merged_into write is somebody else's change).
+	_, err := retireInto(context.Background(), f.p, f.s, w, time.Now, fragFixerID, others[0], survivor,
+		&merge.SliceMapping{Mappable: true})
 	require.NoError(t, err)
 
 	res2 := f.plan(t, "op-plan2")
@@ -3341,9 +3338,22 @@ func newCutFixture(t *testing.T, org string, vg bool) (*fragFixture, repairs.Row
 // written the crown straight to the store, and a failure to journal it is
 // logged, not returned, by design. A cut there must still end in the same
 // state. The crown write itself goes past the Writer and cannot be cut here.
+//
+// Cost: every cut point re-seeds and re-applies, ~130 events per shape.
+// Measured 2026-10-03: the six shapes take 92s, and 589s under -race (each
+// shape ~100s), which with the rest of the package passes the 10-minute
+// default and crowds CI's 25-minute budget. So the default run covers two
+// shapes at every cut point: organized=all with the version group (the
+// prod shape: demote before soft-delete, a hand-off crowning a live member,
+// the survivor in the group) and organized=copies (every copy kept, the
+// originals set aside). AORG_FRAG_CUT_MATRIX=full runs all six.
 func TestFragmentFixer_NumberedCopiesCutAtEveryStep(t *testing.T) {
+	full := os.Getenv("AORG_FRAG_CUT_MATRIX") == "full"
 	for _, org := range []string{"none", "all", "copies"} {
 		for _, vg := range []bool{false, true} {
+			if !full && !(org == "all" && vg) && !(org == "copies" && !vg) {
+				continue
+			}
 			t.Run(fmt.Sprintf("organized=%s vg=%t", org, vg), func(t *testing.T) {
 				ref, rr := newCutFixture(t, org, vg)
 				out := ref.apply(t, "op-plan", "op-apply", []string{rr.RowID}, nil)

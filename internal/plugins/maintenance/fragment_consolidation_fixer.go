@@ -1913,7 +1913,7 @@ type fragGroupState struct {
 	// so a re-election after a cut could keep a different file per chapter
 	// or another survivor, and the row would never resume. Rows planned
 	// before these fields existed derive them from Row.Members' roles.
-	Survivor string                      `json:"survivor,omitempty"`
+	Survivor string                     `json:"survivor,omitempty"`
 	Roles    map[string]fragPlannedRole `json:"roles,omitempty"`
 }
 
