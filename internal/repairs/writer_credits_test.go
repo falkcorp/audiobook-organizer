@@ -1,5 +1,5 @@
 // file: internal/repairs/writer_credits_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 1b72196d-b654-4270-bd15-c54923102210
 // last-edited: 2026-10-04
 
