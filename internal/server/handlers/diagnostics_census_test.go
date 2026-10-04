@@ -1,11 +1,12 @@
 // file: internal/server/handlers/diagnostics_census_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 90aa916c-0432-4200-8e35-00b08069563b
-// last-edited: 2026-10-03
+// last-edited: 2026-10-04
 
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -65,14 +66,22 @@ func TestGetDBCensus_ReturnsFamilies(t *testing.T) {
 	require.NotNil(t, payload["signals"])
 }
 
-func TestGetDBCensus_DeepAddsHistory(t *testing.T) {
+func TestGetDBCensus_IncludesTheLastExactCensus(t *testing.T) {
 	p := newCensusHandlerStore(t)
 	for i := 0; i < 4; i++ {
 		require.NoError(t, p.SetRaw(fmt.Sprintf("book_ver:BOOKX:%020d", i), []byte("{}")))
 	}
-	payload := callDBCensus(t, p, "deep=true&fresh=true")
-	h, ok := payload["history"].(map[string]any)
-	require.True(t, ok, "deep=true must add history: %v", payload)
+	payload := callDBCensus(t, p, "fresh=true")
+	require.Nil(t, payload["last_exact"], "no exact census has run yet")
+
+	_, err := p.RunExactCensus(context.Background(), database.ExactCensusOptions{})
+	require.NoError(t, err)
+	payload = callDBCensus(t, p, "fresh=true")
+	last, ok := payload["last_exact"].(map[string]any)
+	require.True(t, ok, "last_exact must be present after a run: %v", payload)
+	require.Equal(t, "exact", last["kind"])
+	h, ok := last["history"].(map[string]any)
+	require.True(t, ok)
 	require.EqualValues(t, 4, h["entries"])
 	require.EqualValues(t, 1, h["books_with_history"])
 }

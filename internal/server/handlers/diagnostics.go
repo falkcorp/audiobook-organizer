@@ -1,5 +1,5 @@
 // file: internal/server/handlers/diagnostics.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 14e70c44-73ca-456a-bc67-8dc6ba6e5736
 // last-edited: 2026-10-04
 
@@ -783,26 +783,27 @@ func resolveKeyCounter(s any) keyCounter {
 }
 
 // GetDBCensus reports the main Pebble store's per-key-family census.
-// GET /api/v1/diagnostics/db-census[?deep=true][&fresh=true]
+// GET /api/v1/diagnostics/db-census[?fresh=true]
 //
-// Large families are apportioned from sstable metadata; families under 1M
-// entries are counted exactly by a bounded keys-only pass (time-budgeted).
-// No call iterates the whole store. deep=true adds the book_ver: keys-only
-// pass (history entries per book), which iterates millions of keys, has its
-// own time budget and is never the default. fresh=true bypasses the 5-minute
-// cache and refreshes it. The computation is shared by concurrent callers and
-// does not stop when one of them disconnects.
+// The response is the cheap estimated census — sstable properties apportioned
+// by span bytes plus one bounded seek per family range; it reads no values and
+// iterates no family — together with last_exact, the last census written by
+// the maintenance.db-census-exact op (exact per-family counts and the
+// book_ver: history distribution, with its generated_at), and
+// exact_in_progress while a run is unfinished. The endpoint never runs the
+// exact pass itself. fresh=true bypasses the 5-minute cache of the estimated
+// part. The computation is shared by concurrent callers and does not stop
+// when one of them disconnects.
 func (h *DiagnosticsHandler) GetDBCensus(c *gin.Context) {
-	deep := c.Query("deep") == "true"
 	fresh := c.Query("fresh") == "true"
 	provider, ok := database.AsCapability[database.DBCensusProvider](h.store)
 	if !ok {
 		httputil.RespondWithInternalError(c, "db census requires the Pebble store")
 		return
 	}
-	census, err := provider.DBCensus(c.Request.Context(), database.CensusOptions{Deep: deep, Fresh: fresh})
+	census, err := provider.DBCensus(c.Request.Context(), database.CensusOptions{Fresh: fresh})
 	if err != nil {
-		diagnosticsLog.Warn("db-census failed (deep=%t fresh=%t): %v", deep, fresh, err)
+		diagnosticsLog.Warn("db-census failed (fresh=%t): %v", fresh, err)
 		httputil.RespondWithInternalError(c, "db census failed: "+err.Error())
 		return
 	}

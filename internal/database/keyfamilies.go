@@ -1,5 +1,5 @@
 // file: internal/database/keyfamilies.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 12fbfb04-5d87-4708-8975-48081212acb1
 // last-edited: 2026-10-04
 
@@ -206,6 +206,7 @@ var keyFamilies = []KeyFamily{
 	{"stats:", "cached library, transcribe and playback stats", "internal/database/pebble_store.go"},
 	{"system:", "system flags and markers", "internal/database/pebble_store_atpath_index.go"},
 	{"system:backfill:", "backfill completion markers and cursors", "internal/database/pebble_store_atpath_index.go"},
+	{"system:census:", "last exact db census and its run progress", "internal/database/census_exact.go"},
 
 	// ── Operations ──
 	{"op:", "legacy op dedup and completion records", "internal/database/pebble_store_ops_v2.go"},

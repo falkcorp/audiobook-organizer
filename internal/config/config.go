@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.131.0
+// version: 1.132.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-10-03
+// last-edited: 2026-10-04
 
 package config
 
@@ -22,6 +22,12 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/backup"
 	"github.com/falkcorp/audiobook-organizer/internal/tools"
 	"github.com/spf13/viper"
+)
+
+// Defaults for the exact db census op (maintenance.db-census-exact).
+const (
+	DefaultDBCensusExactReadMBPerSec  = 50
+	DefaultDBCensusExactCooldownHours = 6
 )
 
 // ITunesPathMap defines a bidirectional path prefix mapping between iTunes and local paths.
@@ -1375,6 +1381,14 @@ type Config struct {
 	CoalesceShatteredSiblings bool `json:"coalesce_shattered_siblings"`
 	// Background operation timeout in minutes (0 disables timeout)
 	OperationTimeoutMinutes int `json:"operation_timeout_minutes"`
+	// DBCensusExactReadMBPerSec caps how many MB/s of keys and values the
+	// maintenance.db-census-exact op reads (Pebble reads values with their
+	// blocks even on a keys-only pass). Keeps the pass from evicting the
+	// page/ARC cache the library is served from. 0 means the default (50).
+	DBCensusExactReadMBPerSec int `json:"db_census_exact_read_mb_per_sec"`
+	// DBCensusExactCooldownHours is the minimum time between two exact census
+	// runs; a run inside it is refused unless forced. 0 means the default (6).
+	DBCensusExactCooldownHours int `json:"db_census_exact_cooldown_hours"`
 	// MinBookSizeBytes: single-file books below this size are flagged as suspicious and
 	// skipped for heavy processing. Set to -1 to disable. Defaults to 5242880 (5 MB).
 	MinBookSizeBytes int64 `json:"min_book_size_bytes"`
@@ -2333,6 +2347,8 @@ func InitConfig() {
 	viper.SetDefault("chapter_consolidation_threshold_min", DefaultChapterConsolidationThresholdMin)
 	viper.SetDefault("repair_chapter_max_min", 120)
 	viper.SetDefault("operation_timeout_minutes", 30)
+	viper.SetDefault("db_census_exact_read_mb_per_sec", DefaultDBCensusExactReadMBPerSec)
+	viper.SetDefault("db_census_exact_cooldown_hours", DefaultDBCensusExactCooldownHours)
 	viper.SetDefault("log_retention_days", 90)
 	viper.SetDefault("activity_log_nightly_compaction_enabled", true)
 	viper.SetDefault("activity_log_full_detail_days", 0)
@@ -2859,6 +2875,8 @@ func InitConfig() {
 			MetadataCandidateFetchWorkers:       viper.GetInt("metadata_candidate_fetch_workers"),
 			CoalesceShatteredSiblings:           viper.GetBool("coalesce_shattered_siblings"),
 			OperationTimeoutMinutes:             viper.GetInt("operation_timeout_minutes"),
+			DBCensusExactReadMBPerSec:           viper.GetInt("db_census_exact_read_mb_per_sec"),
+			DBCensusExactCooldownHours:          viper.GetInt("db_census_exact_cooldown_hours"),
 			MinBookSizeBytes:                    viper.GetInt64("min_book_size_bytes"),
 			MinRescanAgeHours:                   viper.GetInt("min_rescan_age_hours"),
 			APIRateLimitPerMinute:               viper.GetInt("api_rate_limit_per_minute"),
@@ -3491,6 +3509,12 @@ func (c *Config) Validate() error {
 	if c.OperationTimeoutMinutes < 0 {
 		errs = append(errs, "operation_timeout_minutes must be >= 0")
 	}
+	if c.DBCensusExactReadMBPerSec < 0 {
+		errs = append(errs, "db_census_exact_read_mb_per_sec must be >= 0")
+	}
+	if c.DBCensusExactCooldownHours < 0 {
+		errs = append(errs, "db_census_exact_cooldown_hours must be >= 0")
+	}
 	if c.APIRateLimitPerMinute < 0 {
 		errs = append(errs, "api_rate_limit_per_minute must be >= 0")
 	}
@@ -3630,6 +3654,8 @@ func ResetToDefaults() {
 			ChapterConsolidationThresholdMin: DefaultChapterConsolidationThresholdMin,
 			RepairChapterMaxMin:              120,
 			OperationTimeoutMinutes:          30,
+			DBCensusExactReadMBPerSec:        DefaultDBCensusExactReadMBPerSec,
+			DBCensusExactCooldownHours:       DefaultDBCensusExactCooldownHours,
 			MinBookSizeBytes:                 5 * 1024 * 1024,
 			MinRescanAgeHours:                144,
 			APIRateLimitPerMinute:            100,
