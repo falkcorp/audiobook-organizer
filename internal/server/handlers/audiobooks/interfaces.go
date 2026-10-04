@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/interfaces.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 110386de-3e07-4ef3-b0e0-2e717a249e91
-// last-edited: 2026-09-14
+// last-edited: 2026-10-04
 
 // Narrow dependency interfaces for the audiobooks-domain HTTP handlers (the
 // main library list / CRUD domain: list, count, facets, soft-delete /
@@ -193,10 +193,12 @@ type AudiobookService interface {
 }
 
 // AudiobookUpdater is the narrow *audiobookspkg.AudiobookUpdateService subset
-// used by updateAudiobook. UpdateAudiobook performs the full-column replacement
-// and returns the updated book.
+// used by updateAudiobook. UpdateAudiobookWithWarnings performs the
+// full-column replacement and returns the updated book, plus the warnings of
+// an edit that committed only in part (its field locks, change history or
+// author credits were not saved), which the handler returns to the client.
 type AudiobookUpdater interface {
-	UpdateAudiobook(ctx context.Context, id string, payload map[string]any) (*database.Book, error)
+	UpdateAudiobookWithWarnings(ctx context.Context, id string, payload map[string]any) (*database.Book, []string, error)
 }
 
 // WriteBackEnqueuer is the narrow *itunesservice.WriteBackBatcher subset used by

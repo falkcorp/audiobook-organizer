@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_test.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 5cd764d5-8036-425c-842e-c49d0d44acec
-// last-edited: 2026-09-30
+// last-edited: 2026-10-04
 
 // Tests for the audiobooks-domain handlers (main library list / CRUD). The
 // store / audiobook-service / updater / write-back / metadata-state /
@@ -824,7 +824,7 @@ func TestRemoveBookAlternativeTitle_MissingTitle(t *testing.T) {
 
 func TestUpdateAudiobook_NotFound(t *testing.T) {
 	h, d := newHandler(t)
-	d.updater.EXPECT().UpdateAudiobook(mock.Anything, "x", mock.Anything).Return(nil, errString("not found"))
+	d.updater.EXPECT().UpdateAudiobookWithWarnings(mock.Anything, "x", mock.Anything).Return(nil, nil, errString("not found"))
 	c, w := newCtx("PUT", "/audiobooks/x", map[string]any{"title": "T"}, p("id", "x"))
 	h.UpdateAudiobook(c)
 	if w.Code != http.StatusNotFound {
@@ -834,8 +834,8 @@ func TestUpdateAudiobook_NotFound(t *testing.T) {
 
 func TestUpdateAudiobook_Success(t *testing.T) {
 	h, d := newHandler(t)
-	d.updater.EXPECT().UpdateAudiobook(mock.Anything, "b1", mock.Anything).
-		Return(&database.Book{ID: "b1", Title: "New"}, nil)
+	d.updater.EXPECT().UpdateAudiobookWithWarnings(mock.Anything, "b1", mock.Anything).
+		Return(&database.Book{ID: "b1", Title: "New"}, nil, nil)
 	d.svc.EXPECT().InvalidateBookCaches().Return()
 	d.writeBack.EXPECT().Enqueue("b1").Return()
 	c, w := newCtx("PUT", "/audiobooks/b1", map[string]any{"title": "New"}, p("id", "b1"))
@@ -845,11 +845,54 @@ func TestUpdateAudiobook_Success(t *testing.T) {
 	}
 }
 
+// An edit that committed only in part (its field locks were not saved) is a
+// 200 -- the edit landed -- whose body is the book plus "warnings", so the
+// client can say so. A clean edit carries no "warnings" key.
+func TestUpdateAudiobook_PartialSaveReturnsWarnings(t *testing.T) {
+	h, d := newHandler(t)
+	warn := "the edit was saved but its field locks and overrides were not (a later metadata fetch may overwrite the edited fields): disk full"
+	d.updater.EXPECT().UpdateAudiobookWithWarnings(mock.Anything, "b1", mock.Anything).
+		Return(&database.Book{ID: "b1", Title: "New"}, []string{warn}, nil)
+	d.svc.EXPECT().InvalidateBookCaches().Return()
+	d.writeBack.EXPECT().Enqueue("b1").Return()
+	c, w := newCtx("PUT", "/audiobooks/b1", map[string]any{"title": "New"}, p("id", "b1"))
+	h.UpdateAudiobook(c)
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	var body struct {
+		Data map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v (%s)", err, w.Body.String())
+	}
+	if body.Data["title"] != "New" || body.Data["id"] != "b1" {
+		t.Fatalf("the book stays a flat object: %v", body.Data)
+	}
+	ws, ok := body.Data["warnings"].([]any)
+	if !ok || len(ws) != 1 || ws[0] != warn {
+		t.Fatalf("want warnings [%q], got %v", warn, body.Data["warnings"])
+	}
+}
+
+func TestUpdateAudiobook_CleanSaveHasNoWarningsKey(t *testing.T) {
+	h, d := newHandler(t)
+	d.updater.EXPECT().UpdateAudiobookWithWarnings(mock.Anything, "b1", mock.Anything).
+		Return(&database.Book{ID: "b1", Title: "New"}, nil, nil)
+	d.svc.EXPECT().InvalidateBookCaches().Return()
+	d.writeBack.EXPECT().Enqueue("b1").Return()
+	c, w := newCtx("PUT", "/audiobooks/b1", map[string]any{"title": "New"}, p("id", "b1"))
+	h.UpdateAudiobook(c)
+	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), `"warnings"`) {
+		t.Fatalf("want 200 without warnings, got %d (%s)", w.Code, w.Body.String())
+	}
+}
+
 func TestUpdateAudiobook_ProtectedPathSkipsWriteBack(t *testing.T) {
 	h, d := newHandler(t)
 	d.rec.protectedReturn = true // isProtectedPath returns true → write-back skipped
-	d.updater.EXPECT().UpdateAudiobook(mock.Anything, "b1", mock.Anything).
-		Return(&database.Book{ID: "b1", Title: "New", FilePath: "/protected/book.m4b"}, nil)
+	d.updater.EXPECT().UpdateAudiobookWithWarnings(mock.Anything, "b1", mock.Anything).
+		Return(&database.Book{ID: "b1", Title: "New", FilePath: "/protected/book.m4b"}, nil, nil)
 	// The write-back tagMap gets "title" but no "artist"/"narrator", so the
 	// handler probes the author/narrator join tables; return ≤1 each so the
 	// multi-value join branch is skipped. (Protected-path short-circuits before

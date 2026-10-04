@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/swapped_title_author_fixer.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: a80ddfb1-95dc-402f-941a-142b9388bcf0
-// last-edited: 2026-10-03
+// last-edited: 2026-10-04
 
 package maintenance
 
@@ -760,12 +760,9 @@ func swapContinuation(store OpsStore, bookID string, author *database.MetadataFi
 	if !ok {
 		return false, "", nil
 	}
-	// The book's rows (GetBookChanges reads the opchange_by_book: index, and
-	// falls back to the journal scan while the index is not trusted), not the
-	// operation's: an apply's journal holds every row of every book it wrote.
-	changes, err := store.GetBookChanges(bookID)
+	changes, err := swapJournalRows(store, bookID, op)
 	if err != nil {
-		return false, "", fmt.Errorf("read the journal rows of %s: %w", bookID, err)
+		return false, "", err
 	}
 	for _, c := range changes {
 		if c.Voided || c.OperationID != op || c.BookID != bookID || c.ChangeType != undo.ChangeTypeFieldLock || c.FieldName != database.FieldKeyAuthorName {
@@ -778,6 +775,37 @@ func swapContinuation(store OpsStore, bookID string, author *database.MetadataFi
 		return true, op, nil
 	}
 	return false, "", nil
+}
+
+// swapJournalRows reads the journal rows of bookID that can name op.
+//
+// The book's rows first (GetBookChanges reads the opchange_by_book: index, and
+// falls back to the journal scan while the index is not trusted), not the
+// operation's: an apply's journal holds every row of every book it wrote.
+// But GetBookChanges fails when ANY journal row anywhere is undecodable (the
+// indexed path's undecodable-row gate and the full scan both do), so one
+// corrupt row in an unrelated operation would turn every continuation
+// candidate into an error row. On that error the operation's own rows are
+// read instead (GetOperationChanges, which decodes only op's rows) and
+// filtered to the book; the caller filters by operation, book, change type
+// and field either way. When that read fails too, the error is returned:
+// fail closed, never "no continuation".
+func swapJournalRows(store OpsStore, bookID, op string) ([]*database.OperationChange, error) {
+	changes, bookErr := store.GetBookChanges(bookID)
+	if bookErr == nil {
+		return changes, nil
+	}
+	opRows, opErr := store.GetOperationChanges(op)
+	if opErr != nil {
+		return nil, fmt.Errorf("read the journal rows of %s: %w (and of operation %s: %w)", bookID, bookErr, op, opErr)
+	}
+	out := make([]*database.OperationChange, 0, len(opRows))
+	for _, c := range opRows {
+		if c != nil && c.BookID == bookID {
+			out = append(out, c)
+		}
+	}
+	return out, nil
 }
 
 // swapStaleSeriesHold holds a book whose stored row embeds a series object

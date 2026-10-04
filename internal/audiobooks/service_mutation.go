@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_mutation.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: e7b1f6a5-b8c9-0d12-ce3f-4a5b6c7d8e9f
-// last-edited: 2026-10-03
+// last-edited: 2026-10-04
 
 package audiobooks
 
@@ -63,6 +63,33 @@ func authorOverrideClears(o OverridePayload) bool {
 // history, the book_authors join and the book_narrators junction all follow
 // the successful ModifyBook, so a refused or failed edit leaves no trace.
 func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req *UpdateAudiobookRequest) (*database.Book, error) {
+	return svc.updateAudiobook(ctx, id, req, nil)
+}
+
+// UpdateAudiobookWithWarnings is UpdateAudiobook that also returns the
+// warnings of an edit that committed only in part: the book row was written,
+// but its field locks and overrides, its change history or its book_authors
+// join was not. Each is logged as well. The edit has landed, so these are not
+// errors (a 500 would make the user retry an edit that then changes nothing);
+// the PUT handler returns them beside the book, so the user is told the
+// partial save happened instead of seeing a plain success.
+func (svc *AudiobookService) UpdateAudiobookWithWarnings(ctx context.Context, id string, req *UpdateAudiobookRequest) (*database.Book, []string, error) {
+	var warnings []string
+	book, err := svc.updateAudiobook(ctx, id, req, &warnings)
+	if err != nil {
+		return nil, nil, err
+	}
+	return book, warnings, nil
+}
+
+// updateAudiobook is UpdateAudiobook's body. Each partial-save warning is
+// appended to *warnings when warnings is non-nil.
+func (svc *AudiobookService) updateAudiobook(ctx context.Context, id string, req *UpdateAudiobookRequest, warnings *[]string) (*database.Book, error) {
+	warn := func(msg string) {
+		if warnings != nil {
+			*warnings = append(*warnings, msg)
+		}
+	}
 	if svc.store == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
@@ -876,6 +903,7 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 		if err := svc.store.SetBookAuthors(id, pendingAuthors); err != nil {
 			singleLog.Warn("UpdateAudiobook %s: the edit was saved but book_authors was not updated: %v",
 				logger.SanitizeLogValue(id), err)
+			warn("the edit was saved but its author credits (book_authors) were not updated: " + err.Error())
 		}
 	}
 
@@ -898,6 +926,8 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 	if stateErr != nil {
 		editHistoryLog.Error("UpdateAudiobook %s: the edit was saved but its field locks and overrides were not "+
 			"(a later fetch may overwrite the edited fields): %v", logger.SanitizeLogValue(id), stateErr)
+		warn("the edit was saved but its field locks and overrides were not (a later metadata fetch may overwrite " +
+			"the edited fields): " + stateErr.Error())
 		pendingHistory = nil
 	}
 
@@ -937,6 +967,8 @@ func (svc *AudiobookService) UpdateAudiobook(ctx context.Context, id string, req
 			database.ChangeTypeManual, "manual", time.Now(), overrideRecorded); herr != nil {
 			editHistoryLog.Error("UpdateAudiobook %s: the edit was saved but its change history was not fully recorded "+
 				"(a queued metadata apply may not see it): %v", logger.SanitizeLogValue(id), herr)
+			warn("the edit was saved but its change history was not fully recorded (a queued metadata apply may not " +
+				"see it): " + herr.Error())
 		}
 	}
 

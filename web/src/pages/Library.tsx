@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.tsx
-// version: 1.95.0
+// version: 1.96.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
-// last-edited: 2026-09-30
+// last-edited: 2026-10-04
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -1263,11 +1263,17 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
 
   const handleSaveMetadata = async (audiobook: Audiobook) => {
     try {
-      const saved = await api.updateBook(audiobook.id, audiobook);
+      const { book: saved, warnings } = api.splitUpdateWarnings(
+        await api.updateBook(audiobook.id, audiobook)
+      );
       // Update local state with server response
       setAudiobooks((prev) => prev.map((ab) => (ab.id === audiobook.id ? saved : ab)));
       setEditingAudiobook(null);
-      toast('Metadata saved.', 'success');
+      if (warnings.length > 0) {
+        toast(`Metadata saved, but not completely: ${warnings.join('; ')}`, 'warning');
+      } else {
+        toast('Metadata saved.', 'success');
+      }
     } catch (error) {
       console.error('Failed to save audiobook:', error);
       toast('Failed to save metadata. Please try again.', 'error');

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/swapped_title_author_fixer_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 8223b479-ea79-40ca-a48a-1b7bc0f3bea2
-// last-edited: 2026-10-03
+// last-edited: 2026-10-04
 
 package maintenance
 
@@ -1199,4 +1199,51 @@ func TestSwappedTitleAuthorFixer_StaleEmbeddedSeriesIsHeld(t *testing.T) {
 	require.Equal(t, "read by Jack Voraces", b.Title, "the book was written")
 	require.NotNil(t, b.Series, "the stale series object was dropped")
 	require.Equal(t, stale.ID, b.Series.ID)
+}
+
+// One undecodable journal row in an unrelated operation makes GetBookChanges
+// fail for every book (the full scan and the indexed path's undecodable gate
+// both refuse). The continuation check falls back to the repair op's own rows
+// and still finishes the cut apply; an undecodable row in the repair op
+// itself keeps it fail-closed (the row is an error, never applicable).
+func TestSwappedTitleAuthorFixer_ContinuationSurvivesAnUnrelatedUndecodableJournalRow(t *testing.T) {
+	setup := func(t *testing.T) (*swapLib, string) {
+		l := newSwapLib(t)
+		id := l.add(swapBook{name: "swap", title: "read by narrator",
+			storedAuthor: "Ultimate Level 1_ Divine Creation", provTitle: "Ultimate Level 1: Divine Creation",
+			provAuthor: "Shawn Wilson", prov: map[string]any{"narrator": "Jack Voraces"}, files: []string{"/lib/S/X/book.m4b"}})
+		cw := repairs.NewWriter(l.store, l.store, swappedFixerID, "bulk_update", "repairs-").
+			WithJournal(l.store, l.store, "op-cut").WithCredits(l.store).WithFieldStates(l.store)
+		require.NoError(t, cw.LockFields(id, database.FieldKeyAuthorName))
+		require.NoError(t, writeTitleOnly(cw, l.store, id, "read by narrator", "Ultimate Level 1: Divine Creation"))
+		return l, id
+	}
+
+	t.Run("unrelated op: the continuation still finishes", func(t *testing.T) {
+		l, id := setup(t)
+		require.NoError(t, l.store.SetRaw("opchange:op-unrelated:corrupt", []byte("{not json")))
+		_, err := l.store.GetBookChanges(id)
+		require.Error(t, err, "precondition: one undecodable row fails GetBookChanges for every book")
+
+		plan, rows := l.plan()
+		r, listed := rows["swap"]
+		require.True(t, listed)
+		require.True(t, r.Applicable(), "the continuation is read from the repair op's rows: %s %s", r.Skipped, r.SkipReason)
+		out := l.apply(plan, []string{r.RowID})
+		require.Equal(t, 1, out.Applied, "outcomes %v", out.ByOutcome)
+		require.Equal(t, "Ultimate Level 1: Divine Creation", l.book("swap").Title)
+		require.Equal(t, l.authorID("Shawn Wilson"), *l.book("swap").AuthorID)
+	})
+
+	t.Run("corrupt row in the repair op: fail closed", func(t *testing.T) {
+		l, id := setup(t)
+		require.NoError(t, l.store.SetRaw("opchange:op-cut:corrupt", []byte("{not json")))
+		_, err := swapJournalRows(l.store, id, "op-cut")
+		require.Error(t, err, "both reads failed")
+		_, rows := l.plan()
+		r, listed := rows["swap"]
+		require.True(t, listed, "the book is an error row, not silently dropped")
+		require.False(t, r.Applicable(), "no continuation is assumed when the journal cannot be read")
+		require.Equal(t, l.holder["swap"], *l.book("swap").AuthorID, "the author was not written")
+	})
 }
