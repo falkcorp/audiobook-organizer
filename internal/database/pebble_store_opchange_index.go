@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_opchange_index.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 7ce04252-7ac9-421a-ba5e-5f230bbf0ab4
 // last-edited: 2026-10-03
 
@@ -98,14 +98,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
 
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 )
+
+// opChangeIndexLog is the subsystem logger for the opchange_by_book index.
+var opChangeIndexLog = logger.New("database.opchange-index")
 
 const (
 	opChangeKeyPrefix          = "opchange:"
@@ -489,11 +492,11 @@ func (p *PebbleStore) EnsureOpChangeByBookIndex(ctx context.Context) (OpChangeBy
 	out.Verify, err = p.verifyOpChangeByBook(ctx, nil)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
-			slog.Info("opchange-index-ensure: verify interrupted by shutdown; GetBookChanges reads the full scan until the next boot verifies",
-				"err", err)
+			opChangeIndexLog.Info("opchange-index-ensure: verify interrupted by shutdown; GetBookChanges reads the full scan until the next boot verifies: err=%s",
+				logger.SanitizeLogValue(err.Error()))
 			return out, err
 		}
-		slog.Error("opchange-index-ensure: verify failed; GetBookChanges stays on the full scan", "err", err)
+		opChangeIndexLog.Error("opchange-index-ensure: verify failed; GetBookChanges stays on the full scan: err=%s", logger.SanitizeLogValue(err.Error()))
 		return out, err
 	}
 	rep := out.Verify
@@ -501,14 +504,15 @@ func (p *PebbleStore) EnsureOpChangeByBookIndex(ctx context.Context) (OpChangeBy
 		p.opChangeByBookTrustedAt.Store(gen + 1)
 		p.publishOpChangeTrust()
 		out.Trusted = p.opChangeByBookIndexTrusted()
-		slog.Info("opchange-index-ensure: index verified, readers now use it",
-			"rows", rep.Rows, "indexable", rep.Indexable, "undecodable", rep.Undecodable, "trusted", out.Trusted)
+		opChangeIndexLog.Info("opchange-index-ensure: index verified, readers now use it: rows=%d indexable=%d undecodable=%d trusted=%t",
+			rep.Rows, rep.Indexable, rep.Undecodable, out.Trusted)
 		return out, nil
 	}
-	slog.Error("opchange-index-ensure: index does not cover the journal (rows written without entries, "+
-		"e.g. by a binary that predates the index); rebuilding, GetBookChanges stays on the full scan until it finishes",
-		"sentinel_set", rep.SentinelSet, "missing_entries", rep.MissingEntries,
-		"unmarked_undecodable", rep.UnmarkedUndecodable, "sample_missing", rep.SampleMissing)
+	opChangeIndexLog.Error("opchange-index-ensure: index does not cover the journal (rows written without entries, "+
+		"e.g. by a binary that predates the index); rebuilding, GetBookChanges stays on the full scan until it finishes: "+
+		"sentinel_set=%t missing_entries=%d unmarked_undecodable=%d sample_missing=%s",
+		rep.SentinelSet, rep.MissingEntries, rep.UnmarkedUndecodable,
+		logger.SanitizeLogValue(fmt.Sprintf("%v", rep.SampleMissing)))
 	out.Rebuilt = true
 	out.Rebuild, err = p.backfillOpChangeByBook(ctx, true, nil)
 	if err != nil {
@@ -577,11 +581,11 @@ func (p *PebbleStore) backfillOpChangeByBook(ctx context.Context, force bool, pr
 	} else {
 		built, err := p.opChangeByBookIndexBuilt()
 		if err != nil {
-			slog.Error("opchange-index-backfill: cannot read sentinel, aborting", "err", err)
+			opChangeIndexLog.Error("opchange-index-backfill: cannot read sentinel, aborting: err=%s", logger.SanitizeLogValue(err.Error()))
 			return res, err
 		}
 		if built {
-			slog.Info("opchange-index-backfill: already complete, skipping", "sentinel", opChangeByBookBackfillKey)
+			opChangeIndexLog.Info("opchange-index-backfill: already complete, skipping: sentinel=%s", opChangeByBookBackfillKey)
 			res.Skipped = true
 			return res, nil
 		}
@@ -601,8 +605,8 @@ func (p *PebbleStore) backfillOpChangeByBook(ctx context.Context, force bool, pr
 	default:
 		return res, fmt.Errorf("read opchange_by_book cursor: %w", err)
 	}
-	slog.Info("opchange-index-backfill: starting", "mode", mode,
-		"chunk", opChangeByBookBackfillChunk, "resumed_after", res.ResumedAfter)
+	opChangeIndexLog.Info("opchange-index-backfill: starting: mode=%s chunk=%d resumed_after=%s",
+		mode, opChangeByBookBackfillChunk, logger.SanitizeLogValue(res.ResumedAfter))
 
 	upper := []byte(opChangeScanUpperBound)
 	chunk := opChangeByBookBackfillChunk
@@ -612,14 +616,14 @@ func (p *PebbleStore) backfillOpChangeByBook(ctx context.Context, force bool, pr
 	nextLog := opChangeByBookLogEveryRows
 	for {
 		if err := ctx.Err(); err != nil {
-			slog.Warn("opchange-index-backfill: canceled, sentinel NOT set; resumes next run",
-				"scanned", res.Scanned, "commits", res.Commits)
+			opChangeIndexLog.Warn("opchange-index-backfill: canceled, sentinel NOT set; resumes next run: scanned=%d commits=%d",
+				res.Scanned, res.Commits)
 			return res, err
 		}
 		n, last, err := p.opChangeBackfillChunk(lower, upper, chunk, &res)
 		if err != nil {
-			slog.Error("opchange-index-backfill: failed, sentinel NOT set", "mode", mode,
-				"scanned", res.Scanned, "commits", res.Commits, "err", err)
+			opChangeIndexLog.Error("opchange-index-backfill: failed, sentinel NOT set: mode=%s scanned=%d commits=%d err=%s",
+				mode, res.Scanned, res.Commits, logger.SanitizeLogValue(err.Error()))
 			return res, err
 		}
 		if n == 0 {
@@ -630,8 +634,8 @@ func (p *PebbleStore) backfillOpChangeByBook(ctx context.Context, force bool, pr
 			progress(mode, res.Scanned)
 		}
 		if res.Scanned >= nextLog {
-			slog.Info("opchange-index-backfill: progress", "scanned", res.Scanned,
-				"indexed", res.Indexed, "elapsed", time.Since(start).Round(time.Second).String())
+			opChangeIndexLog.Info("opchange-index-backfill: progress: scanned=%d indexed=%d elapsed=%s",
+				res.Scanned, res.Indexed, time.Since(start).Round(time.Second).String())
 			nextLog += opChangeByBookLogEveryRows
 		}
 		if opChangeByBookBackfillAfterChunk != nil {
@@ -656,7 +660,7 @@ func (p *PebbleStore) backfillOpChangeByBook(ctx context.Context, force bool, pr
 	// Every chunk committed with pebble.Sync before this, so every entry the
 	// sentinel vouches for is already durable.
 	if err := done.Commit(pebble.Sync); err != nil {
-		slog.Error("opchange-index-backfill: sentinel commit failed", "scanned", res.Scanned, "err", err)
+		opChangeIndexLog.Error("opchange-index-backfill: sentinel commit failed: scanned=%d err=%s", res.Scanned, logger.SanitizeLogValue(err.Error()))
 		return res, err
 	}
 	res.Commits++
@@ -670,13 +674,13 @@ func (p *PebbleStore) backfillOpChangeByBook(ctx context.Context, force bool, pr
 		p.publishOpChangeTrust()
 	}
 	if res.Undecodable > 0 {
-		slog.Error("opchange-index-backfill: opchange rows cannot be decoded; GetBookChanges fails "+
-			"for every book until each is rewritten or removed, as it did before the index",
-			"undecodable", res.Undecodable)
+		opChangeIndexLog.Error("opchange-index-backfill: opchange rows cannot be decoded; GetBookChanges fails "+
+			"for every book until each is rewritten or removed, as it did before the index: undecodable=%d",
+			res.Undecodable)
 	}
-	slog.Info("opchange-index-backfill: complete", "mode", mode, "scanned", res.Scanned,
-		"indexed", res.Indexed, "undecodable", res.Undecodable, "commits", res.Commits,
-		"duration", time.Since(start).Round(time.Millisecond).String())
+	opChangeIndexLog.Info("opchange-index-backfill: complete: mode=%s scanned=%d indexed=%d undecodable=%d commits=%d duration=%s",
+		mode, res.Scanned, res.Indexed, res.Undecodable, res.Commits,
+		time.Since(start).Round(time.Millisecond).String())
 	return res, nil
 }
 

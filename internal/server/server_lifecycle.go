@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.17.1
+// version: 4.17.2
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-10-03
 
@@ -1085,8 +1085,8 @@ func (s *Server) startBackfills() {
 		if !ok {
 			// %T renders only the dynamic type name, never a field value (same
 			// reasoning as the book-atpath warn above).
-			slog.Warn("opchange-index-backfill: store does not implement EnsureOpChangeByBookIndex, index will NOT be built; GetBookChanges stays on the full scan",
-				"store_type", fmt.Sprintf("%T", s.Ops()))
+			lifecycleLog.Warn("opchange-index-backfill: store does not implement EnsureOpChangeByBookIndex, index will NOT be built; GetBookChanges stays on the full scan: store_type=%T",
+				s.Ops())
 			return
 		}
 		warm := make(chan struct{})
@@ -1094,7 +1094,7 @@ func (s *Server) startBackfills() {
 		select {
 		case <-warm:
 		case <-s.bgCtx.Done():
-			slog.Info("opchange-index-backfill: shutdown before memdb warmup finished; will run next boot")
+			lifecycleLog.Info("opchange-index-backfill: shutdown before memdb warmup finished; will run next boot")
 			return
 		}
 		if _, err := b.EnsureOpChangeByBookIndex(s.bgCtx); err != nil {
@@ -1103,10 +1103,10 @@ func (s *Server) startBackfills() {
 			// A cancelled bgCtx is a clean shutdown interrupting the check,
 			// not a failure.
 			if errors.Is(err, context.Canceled) {
-				slog.Info("opchange-index-backfill: check interrupted by shutdown; reads use the full scan until the next boot", "err", err)
+				lifecycleLog.Info("opchange-index-backfill: check interrupted by shutdown; reads use the full scan until the next boot: err=%s", logger.SanitizeLogValue(err.Error()))
 				return
 			}
-			slog.Error("opchange-index-backfill: index not trusted this boot; GetBookChanges stays on the full scan", "err", err)
+			lifecycleLog.Error("opchange-index-backfill: index not trusted this boot; GetBookChanges stays on the full scan: err=%s", logger.SanitizeLogValue(err.Error()))
 		}
 	})
 
