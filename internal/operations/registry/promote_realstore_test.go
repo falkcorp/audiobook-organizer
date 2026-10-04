@@ -1,7 +1,7 @@
 // file: internal/operations/registry/promote_realstore_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: b5c6d7e8-f9a0-1b2c-3d4e-5f6a7b8c9d0e
-// last-edited: 2026-06-13
+// last-edited: 2026-10-04
 
 // promote_realstore_test.go contains the regression test for the critical
 // "promoted ops never reach the dispatcher" bug. It uses a REAL PebbleStore
@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -27,7 +28,9 @@ import (
 // cleanup function. Mirrors setupPebbleTestDB in pebble_store_test.go.
 func openTestPebbleStore(t *testing.T) (*database.PebbleStore, func()) {
 	t.Helper()
-	tmpdir := "/tmp/registry_promote_test_" + ulid.Make().String()
+	// t.TempDir, not /tmp: the store's sidecar (<dir>.storage-format) is a
+	// sibling of the directory and must be cleaned up with it.
+	tmpdir := filepath.Join(t.TempDir(), "store.pebble")
 	store, err := database.NewPebbleStore(tmpdir)
 	if err != nil {
 		t.Fatalf("NewPebbleStore: %v", err)

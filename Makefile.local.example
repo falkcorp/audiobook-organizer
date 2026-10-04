@@ -1,7 +1,7 @@
 # file: Makefile.local.example
-# version: 1.4.0
+# version: 1.5.0
 # guid: a2b4c6d8-e0f2-4a6b-8c0d-2e4f6a8b0c2d
-# last-edited: 2026-09-11
+# last-edited: 2026-10-03
 #
 # TEMPLATE — copy to Makefile.local (gitignored) and fill in your own values.
 # Makefile.local is included by the committed Makefile via `-include
@@ -55,6 +55,14 @@ DEPLOY_HOST := 192.168.0.10
 # Absolute path to the deployed binary on DEPLOY_HOST. Required by the
 # committed `make rollback` target as well as this file's `deploy:` recipe.
 DEPLOY_BIN := /usr/local/bin/audiobook-organizer
+
+# Path of the main Pebble store on DEPLOY_HOST (the --db / DATABASE_PATH
+# value); required by rollback. `make rollback` reads <DEPLOY_DB>.storage-format
+# and refuses to swap in .prev past a storage format change. Replace the
+# placeholder with your own store path. Use `:=`, not `?=`: the committed
+# Makefile already defines DEPLOY_DB (empty) before it includes this file, so
+# a `?=` here would silently leave it empty.
+DEPLOY_DB := /path/to/audiobooks.pebble
 
 # Base URL of the deployed server, used by the post-deploy version check.
 DEPLOY_URL := https://$(DEPLOY_HOST):8484

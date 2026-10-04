@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler_test.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: af6670e5-d640-4339-b0b2-3b0cf1596ce7
-// last-edited: 2026-09-25
+// last-edited: 2026-10-04
 
 // Unit tests for the system-domain HTTP handlers. Each public method has at
 // least one test; happy paths plus key branches (config mask-secrets path,
@@ -848,6 +848,55 @@ func TestDeleteUserPreference_OK(t *testing.T) {
 		r.DELETE("/preferences/:key", h.DeleteUserPreference)
 	})
 	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+// --- Reserved preference keys ---
+
+// The store is a strict mock with no expectations: any SetUserPreference or
+// DeleteUserPreference call reaching it fails the test, which proves the
+// handler rejects the key before the store sees it.
+var reservedPreferenceKeys = []string{"storage_format", "storage_migration", "db_version", "migration_42"}
+
+func TestSetUserPreference_ReservedKeyIs400(t *testing.T) {
+	for _, key := range reservedPreferenceKeys {
+		t.Run(key, func(t *testing.T) {
+			h, _ := newTestHandler(t)
+			w := run(http.MethodPut, "/preferences/:key", "/preferences/"+key, []byte(`{"value":"garbage"}`), func(r *gin.Engine) {
+				r.PUT("/preferences/:key", h.SetUserPreference)
+			})
+			assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+			assert.Contains(t, w.Body.String(), "reserved")
+		})
+	}
+}
+
+func TestDeleteUserPreference_ReservedKeyIs400(t *testing.T) {
+	for _, key := range reservedPreferenceKeys {
+		t.Run(key, func(t *testing.T) {
+			h, _ := newTestHandler(t)
+			w := run(http.MethodDelete, "/preferences/:key", "/preferences/"+key, nil, func(r *gin.Engine) {
+				r.DELETE("/preferences/:key", h.DeleteUserPreference)
+			})
+			assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+		})
+	}
+}
+
+// A store that reports ErrReservedPreferenceKey for a key the handler's list
+// does not name still yields 400, not 500.
+func TestUserPreference_StoreReservedSentinelIs400(t *testing.T) {
+	h, d := newTestHandler(t)
+	d.store.EXPECT().SetUserPreference("col", "abc").Return(fmt.Errorf("wrapped: %w", database.ErrReservedPreferenceKey))
+	d.store.EXPECT().DeleteUserPreference("col").Return(fmt.Errorf("wrapped: %w", database.ErrReservedPreferenceKey))
+
+	w := run(http.MethodPut, "/preferences/:key", "/preferences/col", []byte(`{"value":"abc"}`), func(r *gin.Engine) {
+		r.PUT("/preferences/:key", h.SetUserPreference)
+	})
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	w = run(http.MethodDelete, "/preferences/:key", "/preferences/col", nil, func(r *gin.Engine) {
+		r.DELETE("/preferences/:key", h.DeleteUserPreference)
+	})
+	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
 // --- HandlePolicyTags ---

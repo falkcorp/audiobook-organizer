@@ -1,7 +1,7 @@
 // file: cmd/diagnostics.go
-// version: 1.4.0
+// version: 1.7.0
 // guid: c8f6a0d4-2a8b-48cf-9d08-02cc9915d9fc
-// last-edited: 2026-09-11
+// last-edited: 2026-10-04
 
 package cmd
 
@@ -9,12 +9,15 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/spf13/cobra"
 )
 
@@ -32,6 +35,45 @@ var (
 			force, _ := cmd.Flags().GetBool("yes")
 			dryRun, _ := cmd.Flags().GetBool("dry-run")
 			return runCleanupInvalidBooks(force, dryRun)
+		},
+	}
+
+	reservedPrefsCmd = &cobra.Command{
+		Use:   "reserved-prefs",
+		Short: "Show, delete or rewrite the reserved preference rows (storage_format, storage_migration, db_version, migration_<n>)",
+		Long: `Recovery for a store that will not open because a reserved preference row
+holds a bad value. It opens Pebble directly, bypassing the storage-format guard
+(and passing no Pebble format version, so nothing ratchets), so it works on a
+store the guard refuses. Stop the service first.
+
+With no flag it lists the rows and the storage format sidecar. --delete KEY
+removes one row; --set KEY=N rewrites storage_format or db_version as a valid
+row. A change asks for confirmation (or --yes) and prints exactly what it
+changed. Deleting storage_format also removes the sidecar: the next open
+restamps a store with data as format 1.`,
+		// A refusal is one line: no usage text, and no second "Error:" copy
+		// from cobra (main.go already prints the returned error).
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			flags := cmd.Flags()
+			del, err := flags.GetString("delete")
+			if err != nil {
+				return err
+			}
+			set, err := flags.GetString("set")
+			if err != nil {
+				return err
+			}
+			yes, err := flags.GetBool("yes")
+			if err != nil {
+				return err
+			}
+			all, err := flags.GetBool("all")
+			if err != nil {
+				return err
+			}
+			return runReservedPrefs(config.AppConfig.DatabasePath, del, set, yes, all, promptYesNo)
 		},
 	}
 
@@ -55,7 +97,13 @@ func init() {
 	queryCmd.Flags().String("prefix", "book:", "Key prefix to inspect when --raw is set")
 	queryCmd.Flags().Bool("raw", false, "Show raw Pebble key/value data (Pebble only)")
 
+	reservedPrefsCmd.Flags().String("delete", "", "Delete this reserved preference row")
+	reservedPrefsCmd.Flags().String("set", "", "Rewrite storage_format or db_version: KEY=N")
+	reservedPrefsCmd.Flags().Bool("yes", false, "Skip the confirmation prompt")
+	reservedPrefsCmd.Flags().Bool("all", false, "List every migration_<n> row instead of a count")
+
 	diagnosticsCmd.AddCommand(cleanupCmd)
+	diagnosticsCmd.AddCommand(reservedPrefsCmd)
 	diagnosticsCmd.AddCommand(queryCmd)
 }
 
@@ -205,9 +253,13 @@ func runDiagnosticsQuery(limit int, prefix string, raw bool) error {
 }
 
 func runRawPebbleQuery(limit int, prefix string) error {
-	db, err := pebble.Open(config.AppConfig.DatabasePath, &pebble.Options{
-		FormatMajorVersion: pebble.FormatNewest,
-	})
+	// Raw mode is exempt from the storage-format guard by design (storage
+	// efficiency design, section 9): it only reads, and it must work on a
+	// store the guard refuses. It passes no FormatMajorVersion, which Pebble
+	// resolves to FormatMinSupported; Open only ratchets UP to the requested
+	// version, so an inspection can never raise the on-disk format. (Passing
+	// PebbleFormatMajorVersion here would raise an older store to the pin.)
+	db, err := pebble.Open(config.AppConfig.DatabasePath, &pebble.Options{})
 	if err != nil {
 		return fmt.Errorf("failed to open Pebble database: %w", err)
 	}
@@ -264,6 +316,123 @@ func hasPlaceholder(path string, tokens []string) bool {
 		}
 	}
 	return false
+}
+
+// reservedPrefsLog records every change `diagnostics reserved-prefs` makes,
+// in addition to the stdout report.
+var reservedPrefsLog = logger.New("cli.diagnostics.reserved-prefs")
+
+func runReservedPrefs(dbPath, del, set string, yes, all bool, confirm func(string) (bool, error)) error {
+	if dbPath == "" {
+		return errors.New("database path is not set (--db / DATABASE_PATH)")
+	}
+	if del != "" && set != "" {
+		return errors.New("use --delete or --set, not both")
+	}
+	if del == "" && set == "" {
+		rows, sidecar, sidecarPresent, err := database.ListReservedPreferences(dbPath)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Reserved preference rows in %s:\n", dbPath)
+		if len(rows) == 0 {
+			fmt.Println("  (none)")
+		}
+		migrationRows := 0
+		for _, r := range rows {
+			if strings.HasPrefix(r.Key, "migration_") && !all {
+				migrationRows++
+				continue
+			}
+			fmt.Printf("  %s = %s\n", r.Key, truncateString(r.Raw, 300))
+		}
+		if migrationRows > 0 {
+			fmt.Printf("  migration_<n>: %d rows (--all lists them)\n", migrationRows)
+		}
+		if sidecarPresent {
+			fmt.Printf("Sidecar %s = %q\n", database.StorageFormatSidecarPath(dbPath), sidecar)
+		} else {
+			fmt.Printf("Sidecar %s is absent\n", database.StorageFormatSidecarPath(dbPath))
+		}
+		return nil
+	}
+
+	key, version, action := del, 0, "Delete"
+	if set != "" {
+		k, v, ok := strings.Cut(set, "=")
+		n, err := strconv.Atoi(strings.TrimSpace(v))
+		if !ok || err != nil || n < 1 {
+			return fmt.Errorf("--set wants KEY=N with N >= 1, got %q", set)
+		}
+		key, version, action = strings.TrimSpace(k), n, fmt.Sprintf("Rewrite as version %d", n)
+	}
+	if !database.IsReservedPreferenceKey(key) {
+		return fmt.Errorf("%q is not a reserved preference key", key)
+	}
+	if !yes {
+		ok, err := confirm(fmt.Sprintf("%s the reserved preference %q in %s (stop the service first)", action, key, dbPath))
+		if errors.Is(err, io.EOF) {
+			fmt.Println()
+			return errors.New("confirmation needed: pass --yes or run interactively")
+		}
+		if err != nil {
+			return err
+		}
+		if !ok {
+			fmt.Println("Aborted. Nothing changed.")
+			return nil
+		}
+	}
+	change, err := repairReservedPreference(dbPath, key, version)
+	// Report whatever was committed EVEN WHEN err is set: an error after the
+	// commit (sidecar removal, closing the store) means the row DID change,
+	// and the operator must see exactly what.
+	if change.Committed {
+		reportReservedChange(dbPath, change)
+	}
+	if err != nil {
+		if change.Committed {
+			return fmt.Errorf("the change above WAS committed, but: %w", err)
+		}
+		return err
+	}
+	return nil
+}
+
+// repairReservedPreference is database.RepairReservedPreference; a variable so
+// a test can return a committed change together with an error.
+var repairReservedPreference = database.RepairReservedPreference
+
+// reportReservedChange prints every key a repair changed and WARN-logs it.
+func reportReservedChange(dbPath string, change database.ReservedPreferenceChange) {
+	describe := func(v string, present bool) string {
+		if !present {
+			return "<absent>"
+		}
+		return fmt.Sprintf("%q", v)
+	}
+	fmt.Printf("Changed preference %s in %s: before=%s after=%s\n", change.Key, dbPath,
+		describe(change.Before, change.BeforePresent), describe(change.After, change.AfterPresent))
+	reservedPrefsLog.Warn("reserved preference changed: db=%s key=%s before=%s after=%s",
+		logger.SanitizeLogValue(dbPath), logger.SanitizeLogValue(change.Key),
+		logger.SanitizeLogValue(describe(change.Before, change.BeforePresent)),
+		logger.SanitizeLogValue(describe(change.After, change.AfterPresent)))
+	if change.CounterTouched {
+		fmt.Printf("Changed counter:preference in %s: before=%q after=%q (allocated the row's ID)\n",
+			dbPath, change.CounterBefore, change.CounterAfter)
+		reservedPrefsLog.Warn("preference counter changed: db=%s key=counter:preference before=%s after=%s",
+			logger.SanitizeLogValue(dbPath), logger.SanitizeLogValue(change.CounterBefore),
+			logger.SanitizeLogValue(change.CounterAfter))
+	}
+	if change.SidecarTouched {
+		fmt.Printf("Changed sidecar %s: before=%s after=%s\n", change.SidecarPath,
+			describe(change.SidecarBefore, change.SidecarBeforePresent),
+			describe(change.SidecarAfter, change.SidecarAfterPresent))
+		reservedPrefsLog.Warn("storage format sidecar changed: path=%s before=%s after=%s",
+			logger.SanitizeLogValue(change.SidecarPath),
+			logger.SanitizeLogValue(describe(change.SidecarBefore, change.SidecarBeforePresent)),
+			logger.SanitizeLogValue(describe(change.SidecarAfter, change.SidecarAfterPresent)))
+	}
 }
 
 func promptYesNo(action string) (bool, error) {

@@ -1,6 +1,7 @@
 // file: main.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 5f6a7b8c-9d0e-1f2a-3b4c-5d6e7f8a9b0c
+// last-edited: 2026-10-03
 
 package main
 
@@ -9,6 +10,7 @@ import (
 	"os"
 
 	"github.com/falkcorp/audiobook-organizer/cmd"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/server"
 )
@@ -27,6 +29,15 @@ func run() int {
 	cmd.SetVersion(version)
 	server.SetVersion(version)
 	server.SetEmbeddedFS(WebFS)
+
+	// `make rollback` asks the previous binary which storage format it
+	// supports. Handled before cobra parses (like the child-mode sentinel
+	// below) because cobra's PersistentPreRun prints "Using config file: ..."
+	// to stdout, and this output must be exactly one line.
+	if len(os.Args) == 2 && os.Args[1] == "--print-storage-format" {
+		fmt.Println(database.SupportedStorageFormat)
+		return 0
+	}
 
 	// MAYDEPLOY-A: operation-runner child mode must be detected BEFORE
 	// cobra parses os.Args, because --operation-runner is a sentinel arg

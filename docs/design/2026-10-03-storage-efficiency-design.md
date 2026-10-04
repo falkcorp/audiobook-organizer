@@ -1,7 +1,7 @@
 <!-- file: docs/design/2026-10-03-storage-efficiency-design.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.4.1 -->
 <!-- guid: 332dcbd9-73e2-4814-b1a0-723afa60e605 -->
-<!-- last-edited: 2026-10-03 -->
+<!-- last-edited: 2026-10-04 -->
 
 # Storage efficiency redesign: store changes, not copies
 
@@ -950,9 +950,10 @@ during its first scan (`pebble_store_bookfiles.go:840`,
 `pebble_store.go:5507`). The guard is what makes "the backup is the only way
 back" true, so the converter raises the stamp **before its first legacy
 delete**, not at the end (step 2b). Every store open also refuses a store
-whose stamp is older than the build or whose `storage_migration` marker is
-present, with the message "start serve to migrate", unless it is the
-cut-over itself (below). A store that has no keys when Pebble opens is
+whose stamp is older than the build (message "start serve to migrate") or
+whose `storage_migration` marker is present (message: restore the checkpoint
+named in the marker, or re-run the cut-over mode), unless it is the cut-over
+itself (below). A store that has no keys when Pebble opens is
 checked **before** the counter writes in `newPebbleStore`
 (`pebble_store.go:423-437`), stamped current on creation and never
 converted; a store that has data but no stamp is legacy.

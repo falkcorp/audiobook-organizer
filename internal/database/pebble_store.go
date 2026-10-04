@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.199.1
+// version: 1.200.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-04
 
@@ -28,6 +28,7 @@ import (
 	"github.com/cockroachdb/pebble/v2/vfs"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/matcher"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	"github.com/falkcorp/audiobook-organizer/internal/titleutil"
@@ -411,15 +412,121 @@ func NewPebbleStoreInMemory(path string) (*PebbleStore, error) {
 }
 
 // newPebbleStore is the shared constructor. A nil fs means the real filesystem,
-// which is what production uses.
+// which is what production uses. It is the open phase (which writes nothing
+// and refuses a store whose storage format this build cannot serve) followed
+// by the init phase.
 func newPebbleStore(path string, fs vfs.FS) (*PebbleStore, error) {
-	opts := &pebble.Options{FormatMajorVersion: pebble.FormatNewest}
+	db, st, err := openPebbleChecked(path, fs, openForServe)
+	if err != nil {
+		return nil, err
+	}
+	return initPebbleStore(db, path, fs, st)
+}
+
+// pebbleOpenMode selects which storage-format refusals openPebbleChecked
+// applies.
+type pebbleOpenMode int
+
+const (
+	// openForServe is every normal open: it refuses a store that is newer
+	// than this build, older than this build, or carries the storage
+	// migration marker.
+	openForServe pebbleOpenMode = iota
+	// openForCutover refuses only a store that is newer than this build. The
+	// release B cut-over (RunCutover) is its only intended production caller;
+	// it is the one open allowed to see an older or marked store.
+	openForCutover
+)
+
+// openPebbleChecked is the open phase: pebble.Open, then the storage-format
+// checks. It writes nothing to the store, so a refused open leaves the store
+// exactly as it found it, and "empty at open" is decided here, before the init
+// phase writes its first counter.
+//
+// It passes no FormatMajorVersion. Pebble resolves that to
+// FormatMinSupported (options.go: FormatDefault), and Open only ratchets the
+// on-disk format UP to the requested version, so an existing store keeps its
+// format and a refused open cannot ratchet it. initPebbleStore ratchets to
+// PebbleFormatMajorVersion once the checks have passed; a cut-over caller of
+// openForCutover must do the same before it writes.
+func openPebbleChecked(path string, fs vfs.FS, mode pebbleOpenMode) (*pebble.DB, storageFormatState, error) {
+	var st storageFormatState
+	opts := &pebble.Options{}
 	if fs != nil {
 		opts.FS = fs
 	}
 	db, err := pebble.Open(path, opts)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open PebbleDB: %w", err)
+		return nil, st, fmt.Errorf("failed to open PebbleDB: %w", err)
+	}
+	fail := func(err error) (*pebble.DB, storageFormatState, error) {
+		if closeErr := db.Close(); closeErr != nil {
+			storageFormatLog.Error("close PebbleDB after refused open: path=%s error=%s",
+				logger.SanitizeLogValue(path), logger.SanitizeLogValue(closeErr.Error()))
+		}
+		return nil, st, err
+	}
+
+	if st.stamp, st.stampPresent, err = readStorageFormatStamp(db); err != nil {
+		return fail(fmt.Errorf("%s: %w", path, err))
+	}
+	if st.markerPresent, err = storageMigrationMarkerPresent(db); err != nil {
+		return fail(fmt.Errorf("%s: %w", path, err))
+	}
+	if st.emptyAtOpen, err = storeIsEmpty(db); err != nil {
+		return fail(fmt.Errorf("%s: %w", path, err))
+	}
+	sidecarFS := fs
+	if sidecarFS == nil {
+		sidecarFS = vfs.Default
+	}
+	if sc, ok, scErr := readStorageFormatSidecar(sidecarFS, path); scErr != nil {
+		// Unreadable content: the init phase rewrites the sidecar from the
+		// stamp. The stamp itself is still checked below.
+		storageFormatLog.Error("storage format sidecar unreadable; it will be rewritten from the stamp: path=%s error=%s",
+			logger.SanitizeLogValue(StorageFormatSidecarPath(path)), logger.SanitizeLogValue(scErr.Error()))
+	} else {
+		st.sidecar, st.sidecarPresent = sc, ok
+	}
+
+	switch {
+	case st.stampPresent:
+		st.effective = st.stamp
+	case !st.emptyAtOpen:
+		st.effective = legacyStorageFormat
+	default:
+		st.effective = buildStorageFormat
+	}
+
+	if st.stampPresent && st.stamp > buildStorageFormat {
+		return fail(&StorageFormatTooNewError{Path: path, Source: "stamp", Stamp: st.stamp, Supported: buildStorageFormat})
+	}
+	if st.sidecarPresent && st.sidecar > buildStorageFormat {
+		return fail(&StorageFormatTooNewError{Path: path, Source: "sidecar", Stamp: st.sidecar, Supported: buildStorageFormat})
+	}
+	if mode == openForServe && (st.effective < buildStorageFormat || st.markerPresent) {
+		return fail(&StorageMigrationRequiredError{
+			Path:          path,
+			Stamp:         st.effective,
+			Supported:     buildStorageFormat,
+			MarkerPresent: st.markerPresent,
+		})
+	}
+	return db, st, nil
+}
+
+// initPebbleStore is the init phase: undecodable markers, the import-path key
+// migration, counters, the storage format stamp and sidecar, then the async
+// memdb warmup. db must come from openPebbleChecked, and st is what it found.
+func initPebbleStore(db *pebble.DB, path string, fs vfs.FS, st storageFormatState) (*PebbleStore, error) {
+	// The open phase opened at whatever format the store was already at; now
+	// that the store passed the checks, bring it to the pinned format.
+	if err := db.RatchetFormatMajorVersion(PebbleFormatMajorVersion); err != nil {
+		if closeErr := db.Close(); closeErr != nil {
+			storageFormatLog.Error("close PebbleDB after format ratchet failure: path=%s error=%s",
+				logger.SanitizeLogValue(path), logger.SanitizeLogValue(closeErr.Error()))
+		}
+		return nil, fmt.Errorf("ratchet %s to Pebble format %d: %w", path, PebbleFormatMajorVersion, err)
 	}
 
 	store := &PebbleStore{
@@ -458,6 +565,32 @@ func newPebbleStore(path string, fs vfs.FS) (*PebbleStore, error) {
 			return nil, fmt.Errorf("failed to check counter %s: %w", counter, err)
 		}
 	}
+
+	// Stamp the storage format (after the counters: the stamp is a preference
+	// row and takes a preference ID) and mirror it in the sidecar that
+	// `make rollback` reads.
+	stamp, err := store.ensureStorageFormatStamp(st.emptyAtOpen)
+	if err != nil {
+		if closeErr := db.Close(); closeErr != nil {
+			storageFormatLog.Error("close PebbleDB after storage format stamp failure: path=%s error=%s",
+				logger.SanitizeLogValue(path), logger.SanitizeLogValue(closeErr.Error()))
+		}
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	sidecarFS := fs
+	if sidecarFS == nil {
+		sidecarFS = vfs.Default
+	}
+	sidecarPath := StorageFormatSidecarPath(path)
+	if err := writeStorageFormatSidecar(sidecarFS, path, stamp); err != nil {
+		// Serve anyway: the app must not refuse to start over a sidecar. The
+		// rollback guard refuses when the sidecar is missing or unreadable, so
+		// this failure stays visible at the one place it matters.
+		storageFormatLog.Error("storage format sidecar write failed: path=%s error=%s",
+			logger.SanitizeLogValue(sidecarPath), logger.SanitizeLogValue(err.Error()))
+	}
+	storageFormatLog.Info("storage format: stamp=%d supported=%d sidecar=%s",
+		stamp, SupportedStorageFormat, logger.SanitizeLogValue(sidecarPath))
 
 	// Initialize in-memory query layer. Warmup runs in a goroutine so the
 	// server is available immediately — reads transparently fall back to
@@ -5191,6 +5324,23 @@ func (p *PebbleStore) Reset() error {
 			batch.Close()
 			return fmt.Errorf("failed to initialize counter %s: %w", counter, err)
 		}
+	}
+	// The wipe deletes the storage format stamp, and a reset store is empty,
+	// so it is restamped at the build's format in the same batch: there is no
+	// moment at which the reset store is durable without a stamp. The stamp
+	// takes preference ID 1, so the preference counter starts at 2.
+	stampRecord, err := storageFormatStampRecord(1, buildStorageFormat)
+	if err != nil {
+		batch.Close()
+		return fmt.Errorf("reset: %w", err)
+	}
+	if err := batch.Set([]byte("counter:preference"), []byte("2"), pebble.NoSync); err != nil {
+		batch.Close()
+		return fmt.Errorf("reset: stage preference counter: %w", err)
+	}
+	if err := batch.Set([]byte("preference:"+storageFormatPreferenceKey), stampRecord, pebble.NoSync); err != nil {
+		batch.Close()
+		return fmt.Errorf("reset: stage storage format stamp: %w", err)
 	}
 
 	// Commit with sync for durability

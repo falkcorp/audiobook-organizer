@@ -1,7 +1,7 @@
 // file: cmd/diagnostics_test.go
-// version: 2.0.0
+// version: 2.3.0
 // guid: 5480d7f7-4a6a-4b7f-9d16-6b589c8a3c0b
-// last-edited: 2026-06-10
+// last-edited: 2026-10-04
 
 // NOTE(fable5 T022): Tests that used NewSQLiteStore have been ported to
 // PebbleStore. Tests that set DatabaseType="sqlite" now verify that
@@ -11,9 +11,16 @@ package cmd
 
 import (
 	"bytes"
+	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/cockroachdb/pebble/v2"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -289,6 +296,216 @@ func TestRunRawPebbleQuery(t *testing.T) {
 	config.AppConfig.DatabasePath = tempDir
 	if err := runRawPebbleQuery(1, "book:"); err != nil {
 		t.Fatalf("runRawPebbleQuery failed: %v", err)
+	}
+}
+
+// TestRawPebbleQuery_OpensStoreTheGuardRefuses: raw diagnostics mode is
+// exempt from the storage-format guard by design, so it must still read a
+// store whose stamp is newer than this build supports.
+func TestRawPebbleQuery_OpensStoreTheGuardRefuses(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "too-new.pebble")
+	versionJSON, err := json.Marshal(database.DatabaseVersion{Version: database.SupportedStorageFormat + 1, UpdatedAt: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := string(versionJSON)
+	prefJSON, err := json.Marshal(database.UserPreference{ID: 1, Key: "storage_format", Value: &value, UpdatedAt: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := pebble.Open(dbPath, &pebble.Options{FormatMajorVersion: database.PebbleFormatMajorVersion})
+	if err != nil {
+		t.Fatalf("raw open: %v", err)
+	}
+	if err := db.Set([]byte("preference:storage_format"), prefJSON, pebble.Sync); err != nil {
+		t.Fatalf("raw set: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("raw close: %v", err)
+	}
+
+	// Premise: the guard refuses this store.
+	if s, err := database.NewPebbleStore(dbPath); err == nil {
+		_ = s.Close()
+		t.Fatal("NewPebbleStore opened a store stamped newer than this build")
+	} else {
+		var tooNew *database.StorageFormatTooNewError
+		if !errors.As(err, &tooNew) {
+			t.Fatalf("NewPebbleStore: want *StorageFormatTooNewError, got %T: %v", err, err)
+		}
+	}
+
+	origPath := config.AppConfig.DatabasePath
+	t.Cleanup(func() { config.AppConfig.DatabasePath = origPath })
+	config.AppConfig.DatabasePath = dbPath
+	if err := runRawPebbleQuery(1, "preference:"); err != nil {
+		t.Fatalf("runRawPebbleQuery on a store the guard refuses: %v", err)
+	}
+}
+
+// TestRawPebbleQuery_DoesNotRatchetPebbleFormat: raw inspection must leave
+// the on-disk format of a store below the pin exactly where it was.
+func TestRawPebbleQuery_DoesNotRatchetPebbleFormat(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "min-format.pebble")
+	db, err := pebble.Open(dbPath, &pebble.Options{FormatMajorVersion: pebble.FormatMinSupported})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Set([]byte("book:x"), []byte("{}"), pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	origPath := config.AppConfig.DatabasePath
+	t.Cleanup(func() { config.AppConfig.DatabasePath = origPath })
+	config.AppConfig.DatabasePath = dbPath
+	if err := runRawPebbleQuery(1, "book:"); err != nil {
+		t.Fatalf("runRawPebbleQuery: %v", err)
+	}
+
+	db, err = pebble.Open(dbPath, &pebble.Options{FormatMajorVersion: pebble.FormatMinSupported})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := db.FormatMajorVersion()
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got != pebble.FormatMinSupported {
+		t.Fatalf("raw query ratcheted the on-disk format to %d", got)
+	}
+}
+
+// TestRunReservedPrefs_RecoversStoreWithBadStamp: a store whose stamp holds
+// garbage is refused by every open; `diagnostics reserved-prefs --delete`
+// is the recovery path. Declining the prompt changes nothing; confirming
+// deletes the row and the store opens again.
+func TestRunReservedPrefs_RecoversStoreWithBadStamp(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "bad-stamp.pebble")
+	s, err := database.NewPebbleStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := pebble.Open(dbPath, &pebble.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Set([]byte("preference:storage_format"), []byte("garbage"), pebble.Sync); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if s, err := database.NewPebbleStore(dbPath); err == nil {
+		_ = s.Close()
+		t.Fatal("premise: a garbage stamp must refuse the open")
+	}
+
+	// Listing is read-only and works on the refused store.
+	if err := runReservedPrefs(dbPath, "", "", false, false, nil); err != nil {
+		t.Fatalf("list: %v", err)
+	}
+
+	asked := ""
+	decline := func(q string) (bool, error) { asked = q; return false, nil }
+	if err := runReservedPrefs(dbPath, "storage_format", "", false, false, decline); err != nil {
+		t.Fatalf("declined delete: %v", err)
+	}
+	if !strings.Contains(asked, "storage_format") {
+		t.Fatalf("confirmation prompt did not name the key: %q", asked)
+	}
+	if s, err := database.NewPebbleStore(dbPath); err == nil {
+		_ = s.Close()
+		t.Fatal("a declined confirmation changed the store")
+	}
+
+	if err := runReservedPrefs(dbPath, "storage_format", "", true, false, nil); err != nil {
+		t.Fatalf("delete --yes: %v", err)
+	}
+	s, err = database.NewPebbleStore(dbPath)
+	if err != nil {
+		t.Fatalf("store still refused after the repair: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runReservedPrefs(dbPath, "theme", "", true, false, nil); err == nil {
+		t.Fatal("a non-reserved key must be rejected")
+	}
+	if err := runReservedPrefs(dbPath, "", "storage_format=abc", true, false, nil); err == nil {
+		t.Fatal("--set with a non-integer must be rejected")
+	}
+}
+
+// captureStdout runs fn with os.Stdout redirected and returns what it wrote.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	orig := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	type result struct {
+		b   []byte
+		err error
+	}
+	done := make(chan result)
+	go func() {
+		b, err := io.ReadAll(r)
+		done <- result{b, err}
+	}()
+	fn()
+	os.Stdout = orig
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	res := <-done
+	if res.err != nil {
+		t.Fatal(res.err)
+	}
+	return string(res.b)
+}
+
+// A repair that committed and THEN failed (sidecar removal, store close) must
+// still print every key it changed before returning the error.
+func TestRunReservedPrefs_ReportsCommittedChangeOnError(t *testing.T) {
+	prev := repairReservedPreference
+	t.Cleanup(func() { repairReservedPreference = prev })
+	repairReservedPreference = func(dbPath, key string, v int) (database.ReservedPreferenceChange, error) {
+		return database.ReservedPreferenceChange{
+			Key: key, Before: "old", BeforePresent: true, Committed: true,
+			SidecarTouched: true, SidecarPath: dbPath + ".storage-format",
+			SidecarBefore: "2\n", SidecarBeforePresent: true,
+			SidecarAfter: "2\n", SidecarAfterPresent: true,
+		}, errors.New("removing the sidecar failed: is a directory")
+	}
+
+	var err error
+	out := captureStdout(t, func() {
+		err = runReservedPrefs("/srv/x.pebble", "storage_format", "", true, false, nil)
+	})
+	if err == nil || !strings.Contains(err.Error(), "WAS committed") {
+		t.Fatalf("want an error saying the change was committed, got %v", err)
+	}
+	for _, want := range []string{"Changed preference storage_format", `before="old"`, "after=<absent>", "Changed sidecar"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("stdout missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestRunReservedPrefs_ClosedStdinAsksForYes(t *testing.T) {
+	eof := func(string) (bool, error) { return false, io.EOF }
+	err := runReservedPrefs("/srv/x.pebble", "storage_migration", "", false, false, eof)
+	if err == nil || err.Error() != "confirmation needed: pass --yes or run interactively" {
+		t.Fatalf("got %v", err)
 	}
 }
 

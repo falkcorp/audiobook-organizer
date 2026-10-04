@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: 8475f406-df31-4286-95b0-30787397603e
-// last-edited: 2026-09-25
+// last-edited: 2026-10-04
 
 // Package system hosts the system-level HTTP handlers extracted from the server
 // package: health, status, announcements, storage, logs, activity-log,
@@ -938,12 +938,23 @@ func (h *Handler) GetUserPreference(c *gin.Context) {
 	httputil.RespondWithOK(c, gin.H{"key": pref.Key, "value": pref.Value})
 }
 
+// reservedPreferenceMessage is the 400 body for a PUT or DELETE of a
+// reserved preference key (database.IsReservedPreferenceKey): the storage
+// format stamp and migration marker, db_version and migration_<n>. A bad
+// value in any of them makes the next boot refuse to open the store or
+// replay migrations, so no client may write them.
+const reservedPreferenceMessage = "preference key is reserved for the application and cannot be changed through this API"
+
 // SetUserPreference creates or updates a user preference. Implements PUT
-// /preferences/:key.
+// /preferences/:key. Reserved keys are rejected with 400.
 func (h *Handler) SetUserPreference(c *gin.Context) {
 	key := c.Param("key")
 	if key == "" {
 		httputil.RespondWithBadRequest(c, "key is required")
+		return
+	}
+	if database.IsReservedPreferenceKey(key) {
+		httputil.RespondWithBadRequest(c, reservedPreferenceMessage)
 		return
 	}
 	var body struct {
@@ -954,6 +965,10 @@ func (h *Handler) SetUserPreference(c *gin.Context) {
 		return
 	}
 	if err := h.resolveStore().SetUserPreference(key, body.Value); err != nil {
+		if errors.Is(err, database.ErrReservedPreferenceKey) {
+			httputil.RespondWithBadRequest(c, reservedPreferenceMessage)
+			return
+		}
 		httputil.RespondWithInternalError(c, "failed to save preference")
 		return
 	}
@@ -970,7 +985,15 @@ func (h *Handler) DeleteUserPreference(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "key is required")
 		return
 	}
+	if database.IsReservedPreferenceKey(key) {
+		httputil.RespondWithBadRequest(c, reservedPreferenceMessage)
+		return
+	}
 	if err := h.resolveStore().DeleteUserPreference(key); err != nil {
+		if errors.Is(err, database.ErrReservedPreferenceKey) {
+			httputil.RespondWithBadRequest(c, reservedPreferenceMessage)
+			return
+		}
 		httputil.RespondWithInternalError(c, "failed to delete preference")
 		return
 	}
