@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_review9_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3bc1296c-6b8c-481b-b190-a196671cd4a8
 // last-edited: 2026-10-04
 
@@ -651,6 +651,14 @@ func TestFragmentFixer_RecordsOfOneFolderOfferOneActionSet(t *testing.T) {
 // no carry row and no held row, and nothing moves the twin onto x, where it
 // would be duplicate audio.
 func TestFragmentFixer_RetireKeepingRowsIsNotCarried(t *testing.T) {
+	t.Run("twin on the winner: done", func(t *testing.T) { retireKeepingRows(t, true) })
+	// The invariant the done verdict relies on, broken: the kept row has no
+	// twin on x, so its audio is out of view. The run is held, and the
+	// offered action (move it onto x, then finish into x) clears it.
+	t.Run("no twin on the winner: held", func(t *testing.T) { retireKeepingRows(t, false) })
+}
+
+func retireKeepingRows(t *testing.T, twinOnX bool) {
 	ctx := context.Background()
 	f, r, closeF := newCutFixture(t, "none", cutVGNone)
 	defer closeF()
@@ -667,8 +675,10 @@ func TestFragmentFixer_RetireKeepingRowsIsNotCarried(t *testing.T) {
 		twin.FileHash = "review10-twin-hash"
 		require.NoError(t, f.s.UpdateBookFile(twin.ID, &twin))
 	}
-	require.NoError(t, f.s.CreateBookFile(&database.BookFile{BookID: x, FilePath: twin.FilePath + ".x.mp3",
-		OriginalFilename: twin.OriginalFilename, FileSize: twin.FileSize, Duration: twin.Duration, FileHash: twin.FileHash}))
+	if twinOnX {
+		require.NoError(t, f.s.CreateBookFile(&database.BookFile{BookID: x, FilePath: twin.FilePath + ".x.mp3",
+			OriginalFilename: twin.OriginalFilename, FileSize: twin.FileSize, Duration: twin.Duration, FileHash: twin.FileHash}))
+	}
 
 	// The fold: every row but the twin moves onto x, then S is retired into
 	// x with the twin kept on it.
@@ -691,6 +701,17 @@ func TestFragmentFixer_RetireKeepingRowsIsNotCarried(t *testing.T) {
 	res := f.plan(t, "op-plan2")
 	for _, row := range res.Rows {
 		require.False(t, row.Class == fragClassCarry, "no carry row: %s %s", row.RowID, row.Reason)
+	}
+	if !twinOnX {
+		held := heldOver(res, r.BookIDs)
+		require.Len(t, held, 1, "a kept row with no twin on the winner holds the run")
+		require.Contains(t, held[0].SkipReason, "no row with its hash is on "+x)
+		require.Equal(t, []string{actFinishOutside(x)}, heldActions(held[0].SkipReason))
+		require.Empty(t, f.doHeldAction(t, held[0], actFinishOutside(x)))
+		tl := &actionMatrixTally{}
+		f.settle(t, r, "", "after moving the row onto x", tl)
+		require.Zero(t, tl.bad(), "%v", tl.notes)
+		return
 	}
 	require.Empty(t, heldOver(res, r.BookIDs), "the run is done")
 	f.applyAllOver(t, r, "op-plan3")
