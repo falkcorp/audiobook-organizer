@@ -1,5 +1,5 @@
 // file: internal/server/handlers/diagnostics.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 14e70c44-73ca-456a-bc67-8dc6ba6e5736
 // last-edited: 2026-10-04
 
@@ -121,6 +121,9 @@ type dbHealthSQLite struct {
 type dbHealthPebble struct {
 	KeyCount  int64  `json:"key_count"`
 	SizeBytes uint64 `json:"size_bytes"`
+	// Estimated: KeyCount is the census TotalKeys (sstable entries minus
+	// deletions), not an exact count of live keys.
+	Estimated bool `json:"estimated"`
 }
 
 type dbHealthEmbeddings struct {
@@ -132,12 +135,17 @@ type dbHealthAiScans struct {
 	JobCount     int    `json:"job_count"`
 	PendingCount int    `json:"pending_count"`
 	SizeBytes    uint64 `json:"size_bytes"`
+	SizeSource   string `json:"size_source"`
 }
 
 type dbHealthMetadataCache struct {
-	TotalEntries   int64 `json:"total_entries"`
-	TTLDays        int   `json:"ttl_days"`
-	ExpiredEntries int64 `json:"expired_entries"`
+	TotalEntries int64 `json:"total_entries"`
+	// Estimated: TotalEntries is the census family estimate.
+	Estimated bool `json:"estimated"`
+	TTLDays   int  `json:"ttl_days"`
+	// ExpiredEntries is -1 (ExpiredComputed false) unless ?deep=true.
+	ExpiredEntries  int64 `json:"expired_entries"`
+	ExpiredComputed bool  `json:"expired_entries_computed"`
 }
 
 // diagnosticsStore is everything the diagnostics endpoints need from the store.
@@ -684,25 +692,21 @@ func (h *DiagnosticsHandler) GetDBHealth(c *gin.Context) {
 
 	resp := dbHealthResponse{}
 
-	// Main store stats — PebbleDB only since fable5 T022.
+	// Main store stats: the estimated census, not a key iteration. A census
+	// reads sstable properties only, so this answers in milliseconds where the
+	// old full KeyCount walk took minutes on a production-size store.
 	//
-	// resolveKeyCounter, not a bare assertion and no longer the concrete type.
-	// Traced 2026-08-19: this handler is built in wireHandlers, which runs
-	// setupRoutes -> NewServer, so the s.Ops() it captured was then the BARE
-	// store and the bare form was not failing. Since 2026-09-13 NewServer wraps
-	// the store before anything captures it, so this now holds the indexedStore
-	// decorator and a bare assertion WOULD fail here. The
-	// failure mode is invisible either way: a nil here just drops resp.Pebble
-	// from the payload, so db-health reports a healthy store with no Pebble
-	// section rather than an error.
-	if st := resolveKeyCounter(store); st != nil {
-		keyCount, sizeBytes, err := st.KeyCount()
-		if err != nil {
-			slog.Warn("db-health pebble key count", "err", err)
-		}
+	// The capability is resolved through the decorator chain with
+	// database.AsCapability, never a bare assertion: NewServer wraps the store
+	// (indexedStore) before anything captures it, so a bare assertion fails
+	// here, and the failure is invisible -- a nil census just drops resp.Pebble
+	// from the payload.
+	census := h.healthCensus(c.Request.Context())
+	if census != nil {
 		resp.Pebble = &dbHealthPebble{
-			KeyCount:  keyCount,
-			SizeBytes: sizeBytes,
+			KeyCount:  census.TotalKeys,
+			SizeBytes: census.DiskSpaceUsage,
+			Estimated: true,
 		}
 	}
 
@@ -710,7 +714,7 @@ func (h *DiagnosticsHandler) GetDBHealth(c *gin.Context) {
 	if h.embeddingStore != nil {
 		estats, err := h.embeddingStore.HealthStats()
 		if err != nil {
-			slog.Warn("db-health embedding stats", "err", err)
+			diagnosticsLog.Warn("db-health embedding stats: %v", err)
 		}
 		resp.Embeddings = dbHealthEmbeddings{
 			VectorCount: estats.VectorCount,
@@ -722,64 +726,106 @@ func (h *DiagnosticsHandler) GetDBHealth(c *gin.Context) {
 	if h.aiScanStore != nil {
 		astats, err := h.aiScanStore.HealthStats()
 		if err != nil {
-			slog.Warn("db-health ai scan stats", "err", err)
+			diagnosticsLog.Warn("db-health ai scan stats: %v", err)
 		}
 		resp.AiScans = dbHealthAiScans{
 			JobCount:     astats.JobCount,
 			PendingCount: astats.PendingCount,
 			SizeBytes:    astats.SizeBytes,
+			SizeSource:   astats.SizeSource,
 		}
 	}
 
-	// Metadata fetch cache — works against whatever backend is active.
-	totalEntries, err := database.CountCachedMetadataFetches(store)
-	if err != nil {
-		slog.Warn("db-health metadata cache count", "err", err)
-	}
+	// Metadata fetch cache. The entry count comes from the census family when
+	// the backend has one, and from a counting scan otherwise. Expired entries
+	// need every row decoded, so they are counted only on ?deep=true.
 	ttlDays := config.AppConfig.MetadataFetchCacheTTLDays
-
-	var expiredEntries int64
-	if ttlDays > 0 {
-		cutoff := time.Now().Add(-time.Duration(ttlDays) * 24 * time.Hour)
-		pairs, scanErr := store.ScanPrefix("metadata_fetch_cache:")
-		if scanErr == nil {
-			for _, kv := range pairs {
-				var entry database.CachedMetadataEntry
-				if jsonErr := json.Unmarshal(kv.Value, &entry); jsonErr == nil {
-					if entry.CachedAt.Before(cutoff) {
-						expiredEntries++
-					}
-				}
-			}
+	mc := dbHealthMetadataCache{TTLDays: ttlDays, ExpiredEntries: -1}
+	if n, ok := censusFamilyKeys(census, metadataFetchCachePrefix); ok {
+		mc.TotalEntries = n
+		mc.Estimated = true
+	} else {
+		total, err := database.CountCachedMetadataFetches(store)
+		if err != nil {
+			diagnosticsLog.Warn("db-health metadata cache count: %v", err)
+		}
+		mc.TotalEntries = total
+	}
+	if c.Query("deep") == "true" && ttlDays > 0 {
+		expired, err := countExpiredMetadataFetches(store, time.Now().Add(-time.Duration(ttlDays)*24*time.Hour))
+		if err != nil {
+			diagnosticsLog.Warn("db-health metadata cache expired count: %v", err)
+		} else {
+			mc.ExpiredEntries = expired
+			mc.ExpiredComputed = true
 		}
 	}
-
-	resp.MetadataCache = dbHealthMetadataCache{
-		TotalEntries:   totalEntries,
-		TTLDays:        ttlDays,
-		ExpiredEntries: expiredEntries,
-	}
+	resp.MetadataCache = mc
 
 	httputil.RespondWithOK(c, resp)
 }
 
-// keyCounter is the single Pebble-only statistic the db-health endpoint reports.
-//
-// Not on database.Store (compile-probed 2026-08-19), so a bare assertion fails
-// through the Bleve indexedStore decorator. Named rather than resolved with
-// database.AsPebbleStore so this package does not depend on the concrete type
-// by name -- see docs/plans/2026-08-19-split-the-pebblestore-surface.md.
-type keyCounter interface {
-	KeyCount() (count int64, sizeBytes uint64, err error)
+const metadataFetchCachePrefix = "metadata_fetch_cache:"
+
+// healthCensus returns the cached estimated census for db-health and
+// /cache/stats, or nil when the backend keeps none (a non-Pebble store) or the
+// census fails; a failure is logged and the caller falls back or omits the
+// section.
+func (h *DiagnosticsHandler) healthCensus(ctx context.Context) *database.DBCensus {
+	return resolveHealthCensus(ctx, h.store)
 }
 
-// resolveKeyCounter walks the decorator chain, returning nil on a backend that
-// does not keep Pebble key statistics.
-func resolveKeyCounter(s any) keyCounter {
-	if c, ok := database.AsCapability[keyCounter](s); ok {
-		return c
+func resolveHealthCensus(ctx context.Context, store any) *database.DBCensus {
+	provider, ok := database.AsCapability[database.DBCensusProvider](store)
+	if !ok {
+		return nil
 	}
-	return nil
+	census, err := provider.DBCensus(ctx, database.CensusOptions{})
+	if err != nil {
+		diagnosticsLog.Warn("health census: %v", err)
+		return nil
+	}
+	return census
+}
+
+// censusFamilyKeys returns the Keys of the census family with the given
+// prefix.
+func censusFamilyKeys(census *database.DBCensus, prefix string) (int64, bool) {
+	if census == nil {
+		return 0, false
+	}
+	for _, f := range census.Families {
+		if f.Prefix == prefix {
+			return f.Keys, true
+		}
+	}
+	return 0, false
+}
+
+// countExpiredMetadataFetches counts fetch-cache rows cached before cutoff. It
+// pages through the family 1000 rows at a time and decodes only cached_at, so
+// memory stays bounded however many rows there are.
+func countExpiredMetadataFetches(store database.RawKVStore, cutoff time.Time) (int64, error) {
+	var expired int64
+	after := ""
+	for {
+		pairs, next, err := store.ScanPrefixPage(metadataFetchCachePrefix, after, 1000)
+		if err != nil {
+			return 0, err
+		}
+		for _, kv := range pairs {
+			var entry struct {
+				CachedAt time.Time `json:"cached_at"`
+			}
+			if json.Unmarshal(kv.Value, &entry) == nil && entry.CachedAt.Before(cutoff) {
+				expired++
+			}
+		}
+		if next == "" {
+			return expired, nil
+		}
+		after = next
+	}
 }
 
 // GetDBCensus reports the main Pebble store's per-key-family census.

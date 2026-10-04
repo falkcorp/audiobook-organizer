@@ -1,6 +1,6 @@
 // file: web/src/pages/Diagnostics.tsx
-// version: 1.7.0
-// last-edited: 2026-08-23
+// version: 1.8.0
+// last-edited: 2026-10-04
 // guid: f2323fc4-b3e7-4298-9ec5-759447cbd643
 
 import { useState, useCallback, useRef, useEffect } from 'react';
@@ -37,6 +37,7 @@ import {
   TableHead,
   TableRow,
   TextField,
+  Tooltip,
   Typography,
 } from '@mui/material';
 import BugReportIcon from '@mui/icons-material/BugReport';
@@ -751,7 +752,10 @@ export function Diagnostics() {
                         >
                           Keys
                         </Typography>
-                        <Typography>{dbHealth.pebble.key_count.toLocaleString()}</Typography>
+                        <Typography>
+                          {dbHealth.pebble.estimated ? '~' : ''}
+                          {dbHealth.pebble.key_count.toLocaleString()}
+                        </Typography>
                       </Box>
                       <Box>
                         <Typography
@@ -902,6 +906,7 @@ export function Diagnostics() {
                             Total entries
                           </Typography>
                           <Typography>
+                            {dbHealth.metadata_cache.estimated ? '~' : ''}
                             {dbHealth.metadata_cache.total_entries.toLocaleString()}
                           </Typography>
                         </Box>
@@ -925,9 +930,16 @@ export function Diagnostics() {
                           >
                             Expired
                           </Typography>
-                          <Typography>
-                            {dbHealth.metadata_cache.expired_entries.toLocaleString()}
-                          </Typography>
+                          {dbHealth.metadata_cache.expired_entries_computed === false ||
+                          dbHealth.metadata_cache.expired_entries < 0 ? (
+                            <Tooltip title="pass ?deep=true to count; decodes every cache row">
+                              <Typography sx={{ color: 'text.secondary' }}>not computed</Typography>
+                            </Tooltip>
+                          ) : (
+                            <Typography>
+                              {dbHealth.metadata_cache.expired_entries.toLocaleString()}
+                            </Typography>
+                          )}
                         </Box>
                       </Stack>
                     </Paper>

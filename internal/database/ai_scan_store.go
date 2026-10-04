@@ -1,6 +1,6 @@
 // file: internal/database/ai_scan_store.go
-// version: 2.9.0
-// last-edited: 2026-10-02
+// version: 2.10.0
+// last-edited: 2026-10-04
 // guid: a7b3c9d1-4e5f-6a7b-8c9d-0e1f2a3b4c5d
 
 package database
@@ -833,10 +833,21 @@ type AIScanHealthStats struct {
 	JobCount     int    `json:"job_count"`
 	PendingCount int    `json:"pending_count"`
 	SizeBytes    uint64 `json:"size_bytes"`
+	// SizeSource says what SizeBytes measures: "store_disk_usage" (the store
+	// owns its DB, so the whole DB) or "aiscan_prefix_estimate" (shared DB,
+	// only the "aiscan:" key range).
+	SizeSource string `json:"size_source"`
 }
 
+// Values of AIScanHealthStats.SizeSource.
+const (
+	AIScanSizeSourceStore  = "store_disk_usage"
+	AIScanSizeSourcePrefix = "aiscan_prefix_estimate"
+)
+
 // HealthStats returns diagnostic counts and disk usage for the AI scan store.
-// SizeBytes reflects the entire shared DB when not in standalone mode.
+// SizeBytes is the whole DB when the store owns it, and an estimate of the
+// "aiscan:" key range when it shares the main DB.
 func (s *AIScanStore) HealthStats() (AIScanHealthStats, error) {
 	scans, err := s.ListScans()
 	if err != nil {
@@ -848,10 +859,27 @@ func (s *AIScanStore) HealthStats() (AIScanHealthStats, error) {
 			pending++
 		}
 	}
-	sizeBytes := s.db.Metrics().DiskSpaceUsage()
+	var sizeBytes uint64
+	source := AIScanSizeSourceStore
+	if s.owned {
+		sizeBytes = s.db.Metrics().DiskSpaceUsage()
+	} else {
+		source = AIScanSizeSourcePrefix
+		start := []byte(s.prefix)
+		end := prefixUpperBound(start)
+		if end == nil {
+			end = []byte{0xff, 0xff, 0xff, 0xff}
+		}
+		var err error
+		sizeBytes, err = s.db.EstimateDiskUsage(start, end)
+		if err != nil {
+			return AIScanHealthStats{}, fmt.Errorf("estimate aiscan prefix disk usage: %w", err)
+		}
+	}
 	return AIScanHealthStats{
 		JobCount:     len(scans),
 		PendingCount: pending,
 		SizeBytes:    sizeBytes,
+		SizeSource:   source,
 	}, nil
 }

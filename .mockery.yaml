@@ -1,7 +1,7 @@
 # file: .mockery.yaml
-# version: 1.25.2
+# version: 1.26.0
 # guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
-# last-edited: 2026-09-11
+# last-edited: 2026-10-04
 
 # Mockery configuration (v3)
 # NOTE: with-expecter is enabled by default in v3
@@ -116,11 +116,12 @@ packages:
   # taking its store as a parameter -- the way spawnContributorWarm was -- the
   # mock becomes cheap and should be added.
   #
-  # keyCounter and chapterStore are NOT declared here: their packages already
-  # have blocks further up, and mockery rejects a duplicate package key outright
-  # (it does not silently merge or last-write-win). Their entries live in those
-  # blocks, each overriding the package-level mocks-subpackage config with an
-  # in-package _test.go file, because both interfaces are unexported.
+  # chapterStore is NOT declared here: its package already has a block further
+  # up, and mockery rejects a duplicate package key outright (it does not
+  # silently merge or last-write-win). Its entry lives in that block,
+  # overriding the package-level mocks-subpackage config with an in-package
+  # _test.go file, because the interface is unexported. (keyCounter had the same
+  # arrangement until db-health moved to the census capability.)
   #
   # These mocks are for CALL-SITE BEHAVIOUR tests only. They must never be used
   # to test resolveX: a mock satisfies its interface by construction, so it
@@ -175,17 +176,6 @@ packages:
       filename: "mock_{{.InterfaceName | snakecase}}.go"
       pkgname: handlersmocks
     interfaces:
-      # keyCounter is unexported, so it overrides the mocks-subpackage config
-      # above with an in-package _test.go file. It gates the Pebble section of
-      # the db-health payload: absent the capability the section is OMITTED and
-      # db-health still reports healthy. Note the asymmetry the mock makes
-      # visible -- a KeyCount() ERROR does not omit the section, it reports zeros.
-      keyCounter:
-        config:
-          dir: internal/server/handlers
-          pkgname: handlers
-          filename: mock_key_counter_test.go
-          structname: mockKeyCounter
       AuthStore:
       APIKeyHandlerStore:
       PluginRegistrar:

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/cache.go
-// version: 2.4.1
+// version: 2.5.0
 // guid: c9d0e1f2-a3b4-5678-cdef-678901234567
-// last-edited: 2026-09-13
+// last-edited: 2026-10-04
 
 package handlers
 
@@ -40,6 +40,8 @@ type CacheStat struct {
 	Size              int64             `json:"size"`
 	HitRate           *float64          `json:"hit_rate,omitempty"`
 	GetDurationMetric GetDurationMetric `json:"get_duration_seconds"`
+	// SizeEstimated: Size came from the census estimate, not an exact count.
+	SizeEstimated bool `json:"size_estimated,omitempty"`
 }
 
 // GetDurationMetric represents count and sum of cache get durations.
@@ -65,7 +67,12 @@ type CacheMetricsStore interface {
 }
 
 // CacheMetadataStore is the narrow interface CacheHandler requires for DB-backed cache counts.
-// CountPrefix("metadata_fetch_cache:") is equivalent to database.CountCachedMetadataFetches.
+// HandleCacheStats prefers the store's database.DBCensusProvider capability,
+// resolved at runtime (not part of this interface): the metadata_fetch_cache:
+// census family gives an estimated size without reading any value block.
+// Without that capability it falls back to CountPrefix("metadata_fetch_cache:"),
+// which is equivalent to database.CountCachedMetadataFetches and iterates every
+// row.
 type CacheMetadataStore interface {
 	CountPrefix(prefix string) (int64, error)
 }
@@ -94,12 +101,29 @@ func (h *CacheHandler) HandleCacheStats(c *gin.Context) {
 	stats := aggregateCacheMetrics(metrics)
 
 	// Patch DB-backed caches that have no in-memory size gauge.
-	// metadata_fetch lives in PebbleDB; count its keys via prefix scan.
+	// metadata_fetch lives in PebbleDB. Its size is the census family
+	// estimate when the store has a census, else an exact key count by prefix
+	// scan.
 	if h.metadataStore != nil {
-		if n, err := h.metadataStore.CountPrefix("metadata_fetch_cache:"); err == nil {
+		var (
+			n         int64
+			estimated bool
+			ok        bool
+		)
+		if census := resolveHealthCensus(c.Request.Context(), h.metadataStore); census != nil {
+			n, ok = censusFamilyKeys(census, metadataFetchCachePrefix)
+			estimated = ok
+		}
+		if !ok {
+			if cnt, err := h.metadataStore.CountPrefix(metadataFetchCachePrefix); err == nil {
+				n, ok = cnt, true
+			}
+		}
+		if ok {
 			for i := range stats {
 				if stats[i].Name == "metadata_fetch" {
 					stats[i].Size = n
+					stats[i].SizeEstimated = estimated
 					break
 				}
 			}
