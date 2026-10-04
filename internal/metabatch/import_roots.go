@@ -1,5 +1,5 @@
 // file: internal/metabatch/import_roots.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3c8e51a2-7d94-4b0f-a6e3-91f2c4d7b805
 // last-edited: 2026-10-04
 //
@@ -163,16 +163,28 @@ func (c *ImportRootsCache) get() (roots map[string]bool, paths []database.Import
 		}
 		c.mu.Unlock()
 		c.waiting.Add(1)
+		timedOut := false
 		select {
 		case <-ch:
 		case <-time.After(importRootsLoadWait):
-			importRootWaitLog.warn("import-path read still in flight after %s; judging this row with no import roots: suppressed_since_last=%d",
-				importRootsLoadWait)
+			timedOut = true
 		}
 		c.waiting.Add(-1)
 		c.mu.Lock()
-		defer c.mu.Unlock()
-		return c.roots, c.paths, c.loaded
+		roots, paths, ok = c.roots, c.paths, c.loaded
+		c.mu.Unlock()
+		if timedOut {
+			// Say what the row is judged with: a read may have landed between
+			// the timeout and the re-check, and then its list is used.
+			if ok {
+				importRootWaitLog.warn("import-path read took longer than %s; using the list that arrived meanwhile: suppressed_since_last=%d",
+					importRootsLoadWait)
+			} else {
+				importRootWaitLog.warn("import-path read still in flight after %s; judging this row with no import roots: suppressed_since_last=%d",
+					importRootsLoadWait)
+			}
+		}
+		return roots, paths, ok
 	}
 	ch := make(chan struct{})
 	c.inflight = ch

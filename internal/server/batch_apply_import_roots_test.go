@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_import_roots_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9e4b27c1-5a3d-4f80-b6c2-0d7e18a9f354
 // last-edited: 2026-10-04
 
@@ -221,17 +221,32 @@ func TestBulkApply_ManualOnlyPublisherOrAuthorIsRefused(t *testing.T) {
 
 // The same shape with an ordinary publisher and author is not refused by the
 // manual-only rule: the bulk pin still overrides the score leg and it applies.
+//
+// BBC Audio is the sharper control: it publishes Doctor Who audiobooks too,
+// so it must not be treated as a franchise name -- a BBC Audio book that is
+// not Doctor Who stays bulk-appliable.
 func TestBulkApply_OrdinaryPublisherIsNotManualOnly(t *testing.T) {
 	dur := 36000
-	book := &database.Book{ID: "b1", Title: "", FilePath: "/lib/Unknown Author/Unknown Title/book.m4b", Duration: &dur}
-	cand := metafetch.MetadataCandidate{Title: "The Long Walk", Author: "Stephen King",
-		Publisher: "Penguin Random House Audio", Score: 0.85, DurationSec: dur, Source: "Audible"}
-	plan := planWithBulkPin(t, fakeBooks{"b1": book}, cand)
-	if plan.Gate.Reason == applygate.ReasonOwnerManualOnly || plan.Gate.Reason == applygate.ReasonOwnerManualCheckFailed {
-		t.Fatalf("an ordinary book was held by the manual-only rule: %q (%s)", plan.Gate.Reason, plan.Gate.Detail)
+	cases := []struct {
+		name string
+		cand metafetch.MetadataCandidate
+	}{
+		{"Penguin", metafetch.MetadataCandidate{Title: "The Long Walk", Author: "Stephen King",
+			Publisher: "Penguin Random House Audio", Score: 0.85, DurationSec: dur, Source: "Audible"}},
+		{"BBC Audio, not Doctor Who", metafetch.MetadataCandidate{Title: "Pride and Prejudice", Author: "Jane Austen",
+			Publisher: "BBC Audio", Score: 0.85, DurationSec: dur, Source: "Audible"}},
 	}
-	if !plan.Gate.Allowed && !plan.OwnerReviewed {
-		t.Fatalf("gate %q (%s) was not lifted by the bulk pin; the control must apply", plan.Gate.Reason, plan.Gate.Detail)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			book := &database.Book{ID: "b1", Title: "", FilePath: "/lib/Unknown Author/Unknown Title/book.m4b", Duration: &dur}
+			plan := planWithBulkPin(t, fakeBooks{"b1": book}, tc.cand)
+			if plan.Gate.Reason == applygate.ReasonOwnerManualOnly || plan.Gate.Reason == applygate.ReasonOwnerManualCheckFailed {
+				t.Fatalf("an ordinary book was held by the manual-only rule: %q (%s)", plan.Gate.Reason, plan.Gate.Detail)
+			}
+			if !plan.Gate.Allowed && !plan.OwnerReviewed {
+				t.Fatalf("gate %q (%s) was not lifted by the bulk pin; the control must apply", plan.Gate.Reason, plan.Gate.Detail)
+			}
+		})
 	}
 }
 
