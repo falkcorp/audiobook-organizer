@@ -1,7 +1,7 @@
 // file: internal/organizer/service.go
-// version: 1.56.0
+// version: 1.57.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
-// last-edited: 2026-10-02
+// last-edited: 2026-10-04
 
 package organizer
 
@@ -2469,10 +2469,15 @@ func (orgSvc *Service) CreateOrganizedVersion(book *database.Book, landing *Land
 	if authors, err := orgSvc.db.GetBookAuthors(book.ID); err == nil && len(authors) > 0 {
 		var newAuthors []database.BookAuthor
 		for _, ba := range authors {
+			// Position is copied too: leaving it out put every credit of
+			// the copy at position 0, and a later add-only metadata apply
+			// then appended at max+1 = 1 -- the "A @0, B @0, A+B @1" shape
+			// found on production on 2026-10-04.
 			newAuthors = append(newAuthors, database.BookAuthor{
 				BookID:   newBookID,
 				AuthorID: ba.AuthorID,
 				Role:     ba.Role,
+				Position: ba.Position,
 			})
 		}
 		_ = orgSvc.db.SetBookAuthors(newBookID, newAuthors)
