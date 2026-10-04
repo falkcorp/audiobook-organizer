@@ -1,5 +1,5 @@
 // file: internal/metabatch/part_rows.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 0e87a518-a04c-44d3-8d4d-3539bfc91b85
 // last-edited: 2026-10-04
 //
