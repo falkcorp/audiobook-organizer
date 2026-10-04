@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.28.0
+// version: 1.28.1
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
 // last-edited: 2026-10-04
 
@@ -885,53 +885,6 @@ func (lib *fragLibrary) moveRow(id, from, to string) bool {
 		}
 	}
 	return false
-}
-
-// fragReassign is one journaled, unreverted move of a book_file row onto
-// owner: the row and the book it came from.
-type fragReassign struct{ row, from string }
-
-// emptiedRowOn finds the row a partly applied consolidation moved off book z:
-// the row now owned by another live book at z's own path, whose move from z
-// is journaled (book_file_reassign, OldValue z) and not reverted. It also
-// returns every other unreverted reassign onto that owner under the SAME
-// operation (the rest of the group's moves). owner is "" when there is none.
-func emptiedRowOn(lib *fragLibrary, hist FragmentRepairReader, z fragBook) (owner, rowID string, same []fragReassign, err error) {
-	owners, err := database.BookFileRowsAtPathStrict(hist, z.FilePath)
-	if err != nil {
-		return "", "", nil, fmt.Errorf("who owns %s: %w", z.FilePath, err)
-	}
-	for _, o := range owners {
-		if o.BookID == z.ID {
-			continue
-		}
-		ob, ok := lib.books[o.BookID]
-		if !ok || ob.SoftDeleted {
-			continue
-		}
-		changes, err := hist.GetBookChanges(o.BookID)
-		if err != nil {
-			return "", "", nil, fmt.Errorf("changes of %s: %w", o.BookID, err)
-		}
-		reassign := func(c *database.OperationChange) (string, bool) {
-			if c.ChangeType != undo.ChangeTypeBookFileReassign || c.BookID != o.BookID || c.RevertedAt != nil {
-				return "", false
-			}
-			return strings.CutPrefix(c.FieldName, "book_file:")
-		}
-		for _, c := range changes {
-			if id, ok := reassign(c); !ok || id != o.ID || c.OldValue != z.ID {
-				continue
-			}
-			for _, d := range changes {
-				if id, ok := reassign(d); ok && d.OperationID == c.OperationID && d.OldValue != z.ID {
-					same = append(same, fragReassign{row: id, from: d.OldValue})
-				}
-			}
-			return o.BookID, o.ID, same, nil
-		}
-	}
-	return "", "", nil, nil
 }
 
 // ---- plan -----------------------------------------------------------------
