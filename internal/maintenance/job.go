@@ -1,7 +1,7 @@
 // file: internal/maintenance/job.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: 11111111-1111-1111-1111-111111111111
-// last-edited: 2026-09-24
+// last-edited: 2026-10-04
 
 package maintenance
 
@@ -307,6 +307,9 @@ type jobContributorStore interface {
 	GetAllAuthors() ([]database.Author, error)
 	GetAuthorByID(id int) (*database.Author, error)
 	GetAuthorByName(name string) (*database.Author, error)
+	// ModifyBookAuthors credits every author of a multi-author tag
+	// (refetch-missing-authors), add-only under the junction lock.
+	ModifyBookAuthors(bookID string, fn func([]database.BookAuthor) ([]database.BookAuthor, error)) ([]database.BookAuthor, error)
 	GetAllSeries() ([]database.Series, error)
 	GetAllSeriesBookCounts() (map[int]int, error)
 	DeleteSeries(id int) error

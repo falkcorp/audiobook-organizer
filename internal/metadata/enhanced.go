@@ -1,7 +1,7 @@
 // file: internal/metadata/enhanced.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: 7e8d9c0b-1a2f-3e4d-5c6b-7a8d9c0b1a2f
-// last-edited: 2026-09-25
+// last-edited: 2026-10-04
 
 package metadata
 
@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/authorcredit"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -205,6 +206,8 @@ type batchUpdateStore interface {
 	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	CreateAuthor(name string) (*database.Author, error)
 	GetAuthorByName(name string) (*database.Author, error)
+	// ModifyBookAuthors credits every author of a multi-author name.
+	ModifyBookAuthors(bookID string, fn func([]database.BookAuthor) ([]database.BookAuthor, error)) ([]database.BookAuthor, error)
 	CreateSeries(name string, authorID *int) (*database.Series, error)
 	GetSeriesByName(name string, authorID *int) (*database.Series, error)
 	RecordMetadataChange(record *database.MetadataChangeRecord) error
@@ -326,21 +329,31 @@ func BatchUpdateMetadata(updates []MetadataUpdate, store batchUpdateStore, valid
 				authorName = cleaned
 			}
 		}
+		// A name naming several people ("J.N. Chaney, Jonathan P. Brazee") is
+		// split by the shared splitter (authorcredit.Resolve): the first part
+		// is the primary AuthorID and every part is credited after the write.
+		// Until 2026-10-04 the whole string was created as one author. A
+		// combined name of existing authors the splitter will not split is
+		// no change, like a junk name.
+		var resolvedAuthors []database.Author
 		if name := authorName; name != "" {
 			resolveMu.Lock()
-			author, aerr := store.GetAuthorByName(name)
-			if aerr == nil && author == nil {
-				author, aerr = store.CreateAuthor(name)
-			}
+			authors, aerr := authorcredit.Resolve(store, name, authorcredit.PrepareGate)
 			resolveMu.Unlock()
 			switch {
+			case errors.Is(aerr, authorcredit.ErrCombinedCredit):
+				logger.New("metadata").Warn("BatchUpdateMetadata: book %s: %q joins existing authors the splitter will not split; leaving AuthorID unchanged",
+					logger.SanitizeLogValue(update.BookID), logger.SanitizeLogValue(name))
 			case aerr != nil:
 				slog.Warn("BatchUpdateMetadata: author resolution failed; leaving AuthorID unset (fail-open)",
 					"book", update.BookID, "author", name, "error", aerr)
-			case author != nil && (book.AuthorID == nil || *book.AuthorID != author.ID):
-				newID := author.ID
-				book.AuthorID = &newID
-				pendingIDs = append(pendingIDs, &pendingIDChange{field: "author_id", newID: newID})
+			case len(authors) > 0:
+				resolvedAuthors = authors
+				if book.AuthorID == nil || *book.AuthorID != authors[0].ID {
+					newID := authors[0].ID
+					book.AuthorID = &newID
+					pendingIDs = append(pendingIDs, &pendingIDChange{field: "author_id", newID: newID})
+				}
 			}
 		}
 		// Resolve series name → book.SeriesID, scoped to the (possibly
@@ -395,6 +408,22 @@ func BatchUpdateMetadata(updates []MetadataUpdate, store batchUpdateStore, valid
 			errs = append(errs, fmt.Errorf("update %d: book %s no longer exists", i, update.BookID))
 			mu.Unlock()
 			return nil
+		}
+
+		// A multi-author name: every author in the junction, add-only, only
+		// while the written primary is the name's first author.
+		if len(resolvedAuthors) > 1 && written.AuthorID != nil && *written.AuthorID == resolvedAuthors[0].ID {
+			if _, cerr := store.ModifyBookAuthors(update.BookID, func(cur []database.BookAuthor) ([]database.BookAuthor, error) {
+				next, changed := authorcredit.AddCredits(cur, update.BookID, written.AuthorID, resolvedAuthors)
+				if !changed {
+					return nil, database.ErrSkipBookAuthorsWrite
+				}
+				return next, nil
+			}); cerr != nil {
+				mu.Lock()
+				errs = append(errs, fmt.Errorf("update %d: book %s: co-authors not credited: %w", i, update.BookID, cerr))
+				mu.Unlock()
+			}
 		}
 
 		// The write landed, so the ledger can now claim it. A resolution whose

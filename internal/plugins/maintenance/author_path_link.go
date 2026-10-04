@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_path_link.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 4a1b9de2-6c07-4f35-8b1a-9d2e5c7f0a63
-// last-edited: 2026-09-26
+// last-edited: 2026-10-04
 
 package maintenance
 
@@ -20,6 +20,7 @@ import (
 	"github.com/oklog/ulid/v2"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
+	"github.com/falkcorp/audiobook-organizer/internal/authorcredit"
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/linkintegrity"
@@ -164,6 +165,13 @@ const (
 	// meaning -- "author-title-fragment-scan would flag this row" -- and so a
 	// dry run says which bar refused a row.
 	authorPathLinkSuspectNonPerson = "suspect_non_person_row"
+	// authorPathLinkSuspectComposite is a derived name (or the row it
+	// matches) that names several people ("J.N. Chaney, Jonathan P.
+	// Brazee"): authorcredit.LooksCombined. This op links ONE author per
+	// book, and linking or minting a row named after several people is how
+	// the 1,597 combined author records of 2026-10-04 were made, so the book
+	// is held for review rather than written.
+	authorPathLinkSuspectComposite = "suspect_composite_credit"
 )
 
 // authorPathLinkDetailed reports whether an outcome's full entry belongs in the
@@ -179,7 +187,7 @@ func authorPathLinkDetailed(outcome string) bool {
 		authorPathLinkCreatedAndLinked, authorPathLinkWouldCreate, authorPathLinkCreateDisabled,
 		authorPathLinkNearMiss, authorPathLinkSuspectThin, authorPathLinkSuspectLeaf,
 		authorPathLinkAmbiguous, authorPathLinkExistingCredits, authorPathLinkSuspectFragment,
-		authorPathLinkSuspectPlaceholder, authorPathLinkSuspectNonPerson,
+		authorPathLinkSuspectPlaceholder, authorPathLinkSuspectNonPerson, authorPathLinkSuspectComposite,
 		authorPathLinkChangedSinceScan, authorPathLinkFailed:
 		return true
 	}
@@ -655,6 +663,15 @@ func (idx *authorPathLinkIndex) nearest(name string) (database.Author, int, bool
 	return best, bestDist, true
 }
 
+// looksCombined reports whether name names several people, judged against
+// the frozen index (authorcredit.LooksCombined).
+func (idx *authorPathLinkIndex) looksCombined(name string) bool {
+	return authorcredit.LooksCombined(name, func(p string) bool {
+		_, ok := idx.byNormalized[normalizeAuthorNameForLink(p)]
+		return ok
+	})
+}
+
 // authorPathLinkClassify decides one book's bucket from the frozen index alone.
 // It performs no store read, so it is safe to call from any worker.
 func authorPathLinkClassify(b *database.BookCore, idx *authorPathLinkIndex) authorPathLinkChange {
@@ -718,6 +735,8 @@ func authorPathLinkClassify(b *database.BookCore, idx *authorPathLinkIndex) auth
 		switch {
 		case matched.IsLeaf:
 			ch.Outcome = authorPathLinkSuspectLeaf
+		case idx.looksCombined(matchedAuthor.Name):
+			ch.Outcome = authorPathLinkSuspectComposite
 		case authorname.IsPlaceholder(matchedAuthor.Name):
 			ch.Outcome = authorPathLinkSuspectPlaceholder
 		case idx.titleFragment[normalizeAuthorNameForLink(matchedAuthor.Name)]:
@@ -749,6 +768,10 @@ func authorPathLinkClassify(b *database.BookCore, idx *authorPathLinkIndex) auth
 		return ch
 	}
 	ch.DerivedName, ch.MatchKind = derived.Name, derived.Kind
+	if idx.looksCombined(derived.Name) {
+		ch.Outcome = authorPathLinkSuspectComposite
+		return ch
+	}
 	if near, dist, ok := idx.nearest(derived.Name); ok {
 		ch.Outcome = authorPathLinkNearMiss
 		ch.NearestAuthorID, ch.NearestAuthorName, ch.NearestDistance = near.ID, near.Name, dist

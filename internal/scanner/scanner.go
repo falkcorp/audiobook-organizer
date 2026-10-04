@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.122.0
+// version: 1.123.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-03
+// last-edited: 2026-10-04
 
 package scanner
 
@@ -28,6 +28,7 @@ import (
 	"github.com/oklog/ulid/v2"
 
 	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
+	"github.com/falkcorp/audiobook-organizer/internal/authorcredit"
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
 	"github.com/falkcorp/audiobook-organizer/internal/bookfileaudio"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -3453,9 +3454,13 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 		}
 
 		// Resolve author/series with conflict-aware get-or-create semantics.
-		authorID, err := resolveAuthorID(book.Author)
+		authorIDs, err := resolveAuthorIDs(book.Author)
 		if err != nil {
 			return err
+		}
+		var authorID *int
+		if len(authorIDs) > 0 {
+			authorID = &authorIDs[0]
 		}
 		seriesID, seriesPos, err := resolveSeriesID(book.Series, authorID)
 		if err != nil {
@@ -3945,7 +3950,8 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 					}
 				}
 
-				_, err = getStore().CreateBook(dbBook)
+				var createdBook *database.Book
+				createdBook, err = getStore().CreateBook(dbBook)
 				unlockVersionLink()
 				// The path stripe is held across the re-read and the create, and
 				// released only once the row exists (or failed to): that span is
@@ -3955,6 +3961,10 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 					// The scanner's own write: an AI-phase re-save must see it as
 					// the baseline, not as another writer's change.
 					book.rememberRow(dbBook)
+					// A multi-author credit's co-authors go into the junction.
+					if createdBook != nil {
+						creditScannedAuthors(getStore(), createdBook.ID, createdBook.AuthorID, authorIDs)
+					}
 					// After both stripes are released: the hand-off takes the
 					// group lock and then each member's write stripe.
 					handOffLinkedGroup(ctx, linkedVersionGroup, rootDir)
@@ -4038,6 +4048,9 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 				existing.ID, kept)
 		}
 		book.rememberRow(written)
+		// A multi-author credit's co-authors, only when the scanner's primary
+		// author is what the row now holds (creditScannedAuthors).
+		creditScannedAuthors(getStore(), written.ID, written.AuthorID, authorIDs)
 		// Check for metadata hash duplicates after update, against the row that
 		// was actually written rather than a local copy of it.
 		detectMetadataHashDuplicate(written, defaultLog)
@@ -4210,16 +4223,24 @@ func rowHasRealAuthor(authorID *int, placeholders *placeholderAuthors) bool {
 	return !placeholders.is(*authorID)
 }
 
-func resolveAuthorID(authorName string) (*int, error) {
+// resolveAuthorIDs resolves the book's author credit to the author rows it
+// names, in credit order: the first is the primary AuthorID, every one is a
+// book_authors credit. A credit naming several people ("J.N. Chaney, Jonathan
+// P. Brazee") is split by the shared splitter (authorcredit.Resolve) and each
+// part resolved or created; until 2026-10-04 the WHOLE string was looked up and
+// created, minting one author row named after both people (1,597 such rows on
+// production). A junk name, or a combined credit the splitter will not split
+// whose parts already exist as authors (authorcredit.ErrCombinedCredit), is no
+// author: the book is saved without one rather than failing the save.
+func resolveAuthorIDs(authorName string) ([]int, error) {
 	trimmed := strings.TrimSpace(authorName)
 	if trimmed == "" {
 		return nil, nil
 	}
 
 	// Normalize collapsed initials: "J.B." → "J. B."
-	initialsRe := regexp.MustCompile(`([A-Z]\.)([A-Z])`)
-	for initialsRe.MatchString(trimmed) {
-		trimmed = initialsRe.ReplaceAllString(trimmed, "$1 $2")
+	for scannerInitialsRe.MatchString(trimmed) {
+		trimmed = scannerInitialsRe.ReplaceAllString(trimmed, "$1 $2")
 	}
 	trimmed = strings.TrimSpace(trimmed)
 
@@ -4233,36 +4254,92 @@ func resolveAuthorID(authorName string) (*int, error) {
 		defaultLog.Debug("scanner: not creating author %q (%s)", logger.SanitizeLogValue(trimmed), why)
 		return nil, nil
 	}
-	trimmed = cleaned
 
-	author, err := getStore().GetAuthorByName(trimmed)
-	if err != nil {
-		return nil, fmt.Errorf("author lookup failed: %w", err)
+	authors, err := authorcredit.Resolve(scannerAuthorStore{}, cleaned, authorcredit.PrepareGate)
+	switch {
+	case errors.Is(err, authorcredit.ErrCombinedCredit):
+		defaultLog.Debug("scanner: not creating combined author %q (its parts are existing authors the splitter will not split)",
+			logger.SanitizeLogValue(cleaned))
+		return nil, nil
+	case errors.Is(err, database.ErrImplausibleAuthorName):
+		// Backstop: the store's gate refused a name the gate above let
+		// through. Same meaning -- no author -- never a failed save.
+		return nil, nil
+	case err != nil:
+		return nil, fmt.Errorf("author resolve failed: %w", err)
 	}
-	if author != nil {
-		return &author.ID, nil
+	ids := make([]int, 0, len(authors))
+	for _, a := range authors {
+		ids = append(ids, a.ID)
 	}
+	return ids, nil
+}
 
-	author, err = getStore().CreateAuthor(trimmed)
-	if err != nil {
-		if errors.Is(err, database.ErrImplausibleAuthorName) {
-			// Backstop: the store's gate refused a name the gate above let
-			// through. Same meaning -- no author -- never a failed save.
-			return nil, nil
-		}
-		if !isUniqueConstraintError(err) {
-			return nil, fmt.Errorf("author create failed: %w", err)
-		}
-		// Concurrent create: re-fetch existing record.
-		author, err = getStore().GetAuthorByName(trimmed)
-		if err != nil {
-			return nil, fmt.Errorf("author lookup after conflict failed: %w", err)
-		}
-		if author == nil {
-			return nil, fmt.Errorf("author conflict detected but author not found: %s", trimmed)
-		}
+// scannerInitialsRe matches collapsed initials ("J.B.").
+var scannerInitialsRe = regexp.MustCompile(`([A-Z]\.)([A-Z])`)
+
+// scannerAuthorStore adapts the package store to authorcredit.Store, with the
+// scanner's concurrent-create recovery: a unique-constraint error from a
+// parallel worker's create re-reads the row.
+type scannerAuthorStore struct{}
+
+func (scannerAuthorStore) GetAuthorByName(name string) (*database.Author, error) {
+	return getStore().GetAuthorByName(name)
+}
+
+func (scannerAuthorStore) CreateAuthor(name string) (*database.Author, error) {
+	author, err := getStore().CreateAuthor(name)
+	if err == nil || !isUniqueConstraintError(err) {
+		return author, err
 	}
-	return &author.ID, nil
+	author, err = getStore().GetAuthorByName(name)
+	if err != nil {
+		return nil, fmt.Errorf("author lookup after conflict failed: %w", err)
+	}
+	if author == nil {
+		return nil, fmt.Errorf("author conflict detected but author not found: %s", name)
+	}
+	return author, nil
+}
+
+// bookAuthorsModifier is the junction write creditScannedAuthors needs.
+type bookAuthorsModifier interface {
+	ModifyBookAuthors(bookID string, fn func([]database.BookAuthor) ([]database.BookAuthor, error)) ([]database.BookAuthor, error)
+}
+
+// resolveAuthorID is resolveAuthorIDs' primary author alone, nil for none.
+func resolveAuthorID(authorName string) (*int, error) {
+	ids, err := resolveAuthorIDs(authorName)
+	if err != nil || len(ids) == 0 {
+		return nil, err
+	}
+	return &ids[0], nil
+}
+
+// creditScannedAuthors records a multi-author credit's co-authors in the
+// book's book_authors junction (the scanner writes only the primary AuthorID
+// otherwise). Add-only, under the junction's lock (authorcredit.AddCredits):
+// a credit a person or another writer added is never removed or reordered.
+// Only when the written row's primary is the credit's first author, so a
+// rescan whose author write was refused (a lock, a foreign edit) adds nothing.
+// Best effort: a failure is logged, never fails the save.
+func creditScannedAuthors(store bookAuthorsModifier, bookID string, primary *int, ids []int) {
+	if len(ids) < 2 || primary == nil || *primary != ids[0] {
+		return
+	}
+	authors := make([]database.Author, len(ids))
+	for i, id := range ids {
+		authors[i] = database.Author{ID: id}
+	}
+	if _, err := store.ModifyBookAuthors(bookID, func(cur []database.BookAuthor) ([]database.BookAuthor, error) {
+		next, changed := authorcredit.AddCredits(cur, bookID, primary, authors)
+		if !changed {
+			return nil, database.ErrSkipBookAuthorsWrite
+		}
+		return next, nil
+	}); err != nil {
+		defaultLog.Warn("scanner: could not record the co-authors of book %s: %v", bookID, err)
+	}
 }
 
 // resolveSeriesID resolves (get-or-create) the series row for seriesName and
