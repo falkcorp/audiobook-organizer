@@ -1,7 +1,7 @@
 <!-- file: docs/plans/2026-10-03-storage-efficiency-plan.md -->
 <!-- version: 1.5.1 -->
 <!-- guid: e18dc87d-ee27-4372-a90a-e904900a79c1 -->
-<!-- last-edited: 2026-10-03 -->
+<!-- last-edited: 2026-10-04 -->
 
 # Storage efficiency: implementation plan
 

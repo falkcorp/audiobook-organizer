@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache.go
 // version: 1.28.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-10-03
+// last-edited: 2026-10-04
 
 // Package handlers contains extracted HTTP handler types for the audiobook
 // organizer server. MetadataCacheHandler covers the persistent metadata-cache

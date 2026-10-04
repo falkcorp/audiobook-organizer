@@ -1,7 +1,7 @@
 // file: internal/operations/registry/reporter_db.go
 // version: 1.13.0
 // guid: 1a2b3c4d-5e6f-7890-abcd-ef0123456789
-// last-edited: 2026-09-13
+// last-edited: 2026-10-04
 
 package registry
 
