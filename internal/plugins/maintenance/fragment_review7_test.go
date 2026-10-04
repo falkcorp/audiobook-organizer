@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_review7_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 05f9ce23-f920-4f23-9612-af3d87fce747
 // last-edited: 2026-10-04
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -107,7 +108,9 @@ func TestFragmentFixer_SurvivorRetiredByAnotherFixer(t *testing.T) {
 				}
 				require.Equal(t, fragSkipInterrupted, row.Skipped, "cut at %d", at)
 				require.Contains(t, row.SkipReason, "merged into "+x, "cut at %d", at)
-				require.Contains(t, row.SkipReason, "op-cut", "cut at %d: the hold names the run's operation", at)
+				require.Contains(t, strings.Join(row.Evidence, " "), "op-cut", "cut at %d: the hold names the run's operation", at)
+				require.Contains(t, row.SkipReason, actFinish(x), "cut at %d: it offers finishing into X, the book the survivor became", at)
+				require.NotContains(t, row.SkipReason, "revert", "cut at %d: a revert cannot clear this hold, so it is not offered", at)
 				held++
 				closeF()
 			}

@@ -353,7 +353,7 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 		if msgs := rs.settleGroups(operationID, settleInput{
 			crowned: crownedByHandOff(changes), priorPending: rs.settlePendingGroups(operationID),
 		}, result); len(msgs) > 0 {
-			return result, fmt.Errorf("partially reverted with %d errors: %s", len(msgs), msgs[0])
+			return result, fmt.Errorf("partially reverted with %d errors: %s", len(msgs), joinRevertErrors(msgs))
 		}
 		return result, nil
 	}
@@ -366,10 +366,24 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 	}
 
 	var restorable []*database.OperationChange
+	// ledger are the operation's un-reverted ledger-only rows (a Repairs plan
+	// record, undo.IsLedgerOnly). They restore nothing, and they are marked
+	// reverted only together with the whole operation: a plan record
+	// marked while a move or retire of its run still stands would drop the
+	// hold that keeps the run's leftover books from regrouping around
+	// another survivor (review 8). They count in neither total.
+	var ledger []string
 	restorableTotal := 0
 	for _, c := range changes {
 		if c.Voided {
 			continue // the write it describes never happened
+		}
+		if undo.IsLedgerOnly(c) {
+			result.Total--
+			if c.RevertedAt == nil {
+				ledger = append(ledger, c.ID)
+			}
+			continue
 		}
 		if label := undo.NotRestorableLabel(c); label != "" {
 			result.NotRestorable++
@@ -387,6 +401,13 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 		restorable = append(restorable, c)
 	}
 
+	if restorableTotal == 0 && len(ledger) > 0 {
+		// Only the plan record is left (the run's other rows were pruned,
+		// or the op wrote nothing else): nothing here can be restored, and
+		// reporting it restored would clear the run's hold.
+		return nil, fmt.Errorf("operation %s has nothing left to revert but its plan record: the rows its run wrote are gone, so nothing can be restored; finish the run's books by hand (merge them into the book that holds the work) to clear its hold",
+			operationID)
+	}
 	if restorableTotal == 0 {
 		revertLog.Warn("revert refused: no restorable changes: operation=%s not_restorable=%d types=%s",
 			logger.SanitizeLogValue(operationID), result.NotRestorable, formatTypeCounts(result.NotRestorableTypes))
@@ -401,6 +422,13 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 		// A pending intent alone is stale here (rows are marked only after
 		// their settle ran): drop it, nothing is owed.
 		rs.clearSettleOwed(operationID)
+		if len(ledger) > 0 {
+			// Every other row is reverted: the whole run is undone, so its
+			// plan record goes with it.
+			if err := rs.db.MarkOperationChangesReverted(operationID, ledger); err != nil {
+				return nil, fmt.Errorf("mark the plan record of %s reverted: %w", operationID, err)
+			}
+		}
 		return nil, fmt.Errorf("operation %s has already been reverted: all %d restorable changes are marked reverted",
 			operationID, restorableTotal)
 	}
@@ -511,8 +539,15 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 	}, result)...)
 
 	// Mark only the rows that were actually restored, and the superseded
-	// ones (done, with nothing to write).
-	if mark := append(append([]string(nil), restoredIDs...), markedIDs...); len(mark) > 0 {
+	// ones (done, with nothing to write). The ledger rows go only when every
+	// other row of the operation is now reverted (no failure, nothing left
+	// from an earlier partial run).
+	mark := append(append([]string(nil), restoredIDs...), markedIDs...)
+	if len(ledger) > 0 && len(errMsgs) == 0 && result.Failed == 0 &&
+		len(restoredIDs)+len(markedIDs) == len(restorable) {
+		mark = append(mark, ledger...)
+	}
+	if len(mark) > 0 {
 		if err := rs.db.MarkOperationChangesReverted(operationID, mark); err != nil {
 			return nil, fmt.Errorf("restored %d changes but failed to mark them reverted: %w", len(restoredIDs), err)
 		}
@@ -523,9 +558,22 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 		result.NotRestorable, formatTypeCounts(result.NotRestorableTypes))
 
 	if len(errMsgs) > 0 {
-		return result, fmt.Errorf("partially reverted with %d errors: %s", len(errMsgs), errMsgs[0])
+		return result, fmt.Errorf("partially reverted with %d errors: %s", len(errMsgs), joinRevertErrors(errMsgs))
 	}
 	return result, nil
+}
+
+// revertErrorsShown is how many refusals a revert error spells out.
+const revertErrorsShown = 5
+
+// joinRevertErrors lists the first revertErrorsShown refusals and counts
+// the rest, so an operator sees every kind of refusal a revert met, not only
+// the first.
+func joinRevertErrors(msgs []string) string {
+	if len(msgs) <= revertErrorsShown {
+		return strings.Join(msgs, "; ")
+	}
+	return strings.Join(msgs[:revertErrorsShown], "; ") + fmt.Sprintf("; and %d more", len(msgs)-revertErrorsShown)
 }
 
 // formatTypeCounts renders {"author_delete": 3} as "3 author_delete rows",
