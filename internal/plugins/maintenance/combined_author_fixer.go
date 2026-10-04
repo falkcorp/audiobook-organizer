@@ -115,6 +115,10 @@ const (
 	combinedSkipRole            = "skipped_contributor_role"
 	combinedSkipDoubled         = "skipped_doubled_author"
 	combinedSkipAnthology       = "skipped_anthology"
+	// combinedSkipTitle: the record's name is (or begins, or is the start
+	// of) the title of a book or the name of a series in the library: "Jonathan
+	// Strange and Mr Norrell" is person-shaped on both sides of its "and".
+	combinedSkipTitle = "skipped_names_a_title"
 	// combinedSkipNotCombined: what a re-plan reports for a book that no
 	// longer credits a combined record. A plan never lists one.
 	combinedSkipNotCombined = "skipped_not_combined"
@@ -174,6 +178,34 @@ type combinedAuthorIndex struct {
 	byKey    map[string][]database.Author
 	names    map[int]string
 	combined map[int]bool
+	// titles holds the letters key of every live book title and series name.
+	titles map[string]bool
+}
+
+// combinedTitlePrefixMin is the shortest letters key a title-prefix match
+// counts for, so a short title ("Dune") is not a prefix of a credit.
+const combinedTitlePrefixMin = 10
+
+// namesTitle reports whether name is a book title or series name in the
+// library, or one begins with the other (a truncated tag, "A Dark and Drowning
+// Tide_ A D"), with the matching title for the reason.
+func (idx *combinedAuthorIndex) namesTitle(name string) bool {
+	k := authorcredit.LettersKey(name)
+	if k == "" {
+		return false
+	}
+	if idx.titles[k] {
+		return true
+	}
+	if len(k) < combinedTitlePrefixMin {
+		return false
+	}
+	for i := combinedTitlePrefixMin; i < len(k); i++ {
+		if idx.titles[k[:i]] {
+			return true
+		}
+	}
+	return false
 }
 
 // combinedRecordOf reports whether an author name is a combined record:
@@ -221,6 +253,28 @@ func (f *combinedAuthorFixer) buildIndex() (*combinedAuthorIndex, error) {
 	for i := range all {
 		if idx.isCombinedName(all[i].ID, all[i].Name) {
 			idx.combined[all[i].ID] = true
+		}
+	}
+	books, err := store.GetAllBooksCore(0, 0)
+	if err != nil {
+		return nil, fmt.Errorf("GetAllBooksCore: %w", err)
+	}
+	series, err := store.GetAllSeries()
+	if err != nil {
+		return nil, fmt.Errorf("GetAllSeries: %w", err)
+	}
+	idx.titles = make(map[string]bool, len(books)+len(series))
+	for i := range books {
+		if books[i].IsSoftDeleted() {
+			continue
+		}
+		if k := authorcredit.LettersKey(books[i].Title); k != "" {
+			idx.titles[k] = true
+		}
+	}
+	for i := range series {
+		if k := authorcredit.LettersKey(series[i].Name); k != "" {
+			idx.titles[k] = true
 		}
 	}
 	return idx, nil
@@ -392,6 +446,9 @@ func combinedClassify(name string) (names []string, skip, why string) {
 			name, len(splitKeys), len(keys))
 	}
 	for _, p := range split {
+		if personname.LooksLikeWorkTitle(p) {
+			return nil, combinedSkipImplausiblePart, fmt.Sprintf("the part %q of %q reads as a title (an article or a series marker)", p, name)
+		}
 		if _, ok := authorcredit.CleanGate(p); !ok {
 			return nil, combinedSkipImplausiblePart, fmt.Sprintf("the part %q of %q is not a plausible author name (a title, publisher or junk)", p, name)
 		}
@@ -516,6 +573,9 @@ func (f *combinedAuthorFixer) evaluate(store OpsStore, idx *combinedAuthorIndex,
 	var recs []combinedRecordPlan
 	for _, id := range recIDs {
 		name := nameOf(id)
+		if idx.namesTitle(name) {
+			return finish(combinedSkipTitle, fmt.Sprintf("%q is (or begins) the title of a book or series in the library, not a list of authors", name), true)
+		}
 		names, skip, why := combinedClassify(name)
 		if skip != "" {
 			return finish(skip, why, true)
