@@ -1,5 +1,5 @@
 // file: internal/audiobooks/edit_clears_fields_test.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 451212a4-52da-4236-9a22-658fce80859a
 // last-edited: 2026-10-03
 
@@ -187,7 +187,15 @@ func TestUpdateAudiobook_SeriesClearRepairsAStaleSeriesObject(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 	series, err := store.CreateSeries("Redshirts", nil)
 	require.NoError(t, err)
-	book, err := store.CreateBook(&database.Book{Title: "Redshirts", FilePath: "/library/r.m4b", Format: "m4b", Series: series})
+	book, err := store.CreateBook(&database.Book{Title: "Redshirts", FilePath: "/library/r.m4b", Format: "m4b"})
+	require.NoError(t, err)
+	// The stale object (Series set, SeriesID nil) is a row an older build left;
+	// no ordinary create or update can store it any more.
+	stale := *series
+	_, err = store.SeedLegacyBookRowForTest(book.ID, func(b *database.Book) error {
+		b.SeriesID, b.Series = nil, &stale
+		return nil
+	})
 	require.NoError(t, err)
 	row, err := store.GetBookByID(book.ID)
 	require.NoError(t, err)
@@ -897,8 +905,19 @@ func TestUpdateAudiobook_ResentStaleSeriesNameRelinksTheBook(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 	series, err := store.CreateSeries("Redshirts", nil)
 	require.NoError(t, err)
-	book, err := store.CreateBook(&database.Book{Title: "Redshirts", FilePath: "/library/stale.m4b", Format: "m4b", Series: series})
+	book, err := store.CreateBook(&database.Book{Title: "Redshirts", FilePath: "/library/stale.m4b", Format: "m4b"})
 	require.NoError(t, err)
+	// The stale object is a row an older build left; see the seeder.
+	stale := *series
+	_, err = store.SeedLegacyBookRowForTest(book.ID, func(b *database.Book) error {
+		b.SeriesID, b.Series = nil, &stale
+		return nil
+	})
+	require.NoError(t, err)
+	seeded, err := store.GetBookByID(book.ID)
+	require.NoError(t, err)
+	require.NotNil(t, seeded.Series, "fixture: stale object not stored")
+	require.Nil(t, seeded.SeriesID, "fixture: the row must have no series id")
 
 	body := bookDetailSave("Redshirts (Unabridged)")
 	body["series_name"] = "Redshirts"
@@ -1833,7 +1852,14 @@ func TestUpdateAudiobook_MoveFromAStaleEmbeddedSeriesClearsThePosition(t *testin
 	require.NoError(t, err)
 	seq, raw := 3, "3"
 	book, err := store.CreateBook(&database.Book{Title: "T", FilePath: "/library/s.m4b", Format: "m4b",
-		Series: alpha, SeriesSequence: &seq, SeriesPositionRaw: &raw})
+		SeriesSequence: &seq, SeriesPositionRaw: &raw})
+	require.NoError(t, err)
+	// The stale embedded series is a row an older build left; see the seeder.
+	stale := *alpha
+	_, err = store.SeedLegacyBookRowForTest(book.ID, func(b *database.Book) error {
+		b.SeriesID, b.Series = nil, &stale
+		return nil
+	})
 	require.NoError(t, err)
 	_, err = audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), book.ID, seriesWebSave("Beta"))
 	require.NoError(t, err)
