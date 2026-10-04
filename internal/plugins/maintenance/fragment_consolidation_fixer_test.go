@@ -3341,8 +3341,12 @@ func (f *fragFixture) copiesFixtureState(t *testing.T) map[string]string {
 // eight originals with the fourth primary (the survivor, a renamed copy, is
 // NOT in the group: its members' retires demote and hand off); cutVGSurvivor
 // the originals AND the survivor, the survivor the group's one primary (the
-// retired members are not primary, so no demote and no hand-off: the
-// hand-off is resumeHandOff's "the group has its one primary" check).
+// retired group members are not primary, so no demote and no hand-off: the
+// hand-off is resumeHandOff's "the group has its one primary" check). With
+// every book organized that linking leaves each copy primary beside a
+// non-primary original, the plan keeps the copies as a block and is held
+// (nothing to cut), so organized=all links the copies into the group too;
+// linking them in the other two shapes holds the plan the same way.
 func newCutFixture(t *testing.T, org, vg string) (*fragFixture, repairs.Row, func()) {
 	t.Helper()
 	const folder = "lib/Clarke/02_light_of_other_days"
@@ -3374,7 +3378,11 @@ func newCutFixture(t *testing.T, org, vg string) (*fragFixture, repairs.Row, fun
 	case cutVGSurvivor:
 		_, plan := f.p7Plan(t, folder)
 		survivor := plan.SurvivorID
-		for _, id := range orig {
+		linked := append([]string(nil), orig...)
+		if org == "all" {
+			linked = append(linked, copies...)
+		}
+		for _, id := range linked {
 			setVG(id, id == survivor)
 		}
 		setVG(survivor, true)
@@ -3392,7 +3400,7 @@ func newCutFixture(t *testing.T, org, vg string) (*fragFixture, repairs.Row, fun
 const (
 	cutVGNone     = "none"
 	cutVGOrig     = "originals"
-	cutVGSurvivor = "originals+survivor"
+	cutVGSurvivor = "with-survivor"
 )
 
 // TestFragmentFixer_NumberedCopiesCutAtEveryStep cuts a numbered set with
@@ -3406,7 +3414,7 @@ const (
 //
 // Shapes: organized none / all / copies, crossed with the version-group
 // shapes of newCutFixture (none; the originals, survivor outside the group;
-// the originals and the survivor, survivor the group's primary).
+// a group holding the survivor as its one primary).
 //
 // One event does not stop the run: the version-group hand-off's journal row
 // (retireHandOff) is written AFTER versionprimary.EnsureSinglePrimary has
