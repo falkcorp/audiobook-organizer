@@ -1,5 +1,5 @@
 <!-- file: docs/design/2026-10-03-storage-efficiency-design.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 332dcbd9-73e2-4814-b1a0-723afa60e605 -->
 <!-- last-edited: 2026-10-03 -->
 
@@ -478,32 +478,55 @@ index during its first scan (`pebble_store_bookfiles.go:840`,
 `pebble_store.go:5507`). The guard is what makes "the backup is the only way
 back" true.
 
-**Cut-over procedure, used by releases B and C.** The conversion runs with
-the application offline. That removes mixed-format books, conversion on
-read, temporary legacy readers and any need to pause repairs.
+**Cut-over procedure, used by releases B and C: a startup migration, inside
+the app.** (Owner, 2026-10-03: do it when the app starts, before anything
+else, like the database migrations other apps use.) The conversions are
+registered in the existing migration runner (`internal/database/migrations.go`),
+which already runs synchronously at open before the server serves. No deploy
+script, no separate tool: deploying the new build is the migration.
 
-1. Rehearse on the sandbox against a restored prod snapshot: run the
-   converter to completion, compare census and invariant counts, time it.
-   The measured time is the downtime the owner approves.
-2. Deploy step: stop the service; take one recursive ZFS snapshot of the
-   parent dataset; write a marker file naming it. For release C also send
-   that snapshot to a second pool, because the legacy bytes are about to be
-   deleted from the main store.
-3. The new build starts in migration mode before it serves anything. The
-   converter refuses to run unless the marker names an existing snapshot
-   newer than the last shutdown.
-4. Per record, in one batch: read legacy, write new, verify by running the
-   production read path over the staged batch, delete legacy. Work is
-   computed in parallel (about 8 workers); a crash resumes from a cursor.
-5. **Held records.** A record that fails verification keeps its legacy data
-   and goes on a persisted held list with the reason and the first differing
-   field. Unparseable legacy keys (ignored today, `pebble_store.go:3242`) and
-   undecodable values count as held. The converter stops if more than 1% of
-   the first 1,000 records are held. The owner rules on each held record:
-   re-run after a fix, or purge with the loss recorded.
-6. Gates before serving: invariant counts equal before and after (books,
-   files, fingerprints, transcripts, signatures); legacy family census equals
-   the held count; the stamp is advanced.
+At start the app compares the store's `storage_format` stamp with its own:
+
+1. **Stamp current:** start normally.
+2. **Stamp older:** before any other subsystem starts (no scan, no scheduler,
+   no operation resume, no API), the app:
+   a. opens a minimal status listener that answers every request with
+      "migrating", the step and the progress, so the deploy health check, the
+      UI and the operator can see it. It must also keep systemd from timing
+      the start out (start timeout extended or notified while migrating);
+   b. takes its own backup: a Pebble checkpoint of each store into a
+      dedicated directory, `migration-backups/<from>-<to>-<time>/`. A
+      checkpoint is a set of hard links to files Pebble never modifies, so it
+      preserves the exact pre-migration state against a converter bug. The
+      existing staging sweep that deletes checkpoints after 24 hours
+      (`internal/backup/backup.go:541-551`) does not cover this directory; it
+      is removed only in release E with owner sign-off. A ZFS snapshot is not
+      required. The checkpoint does not protect against losing the pool; the
+      existing backups do that;
+   c. per record, in one batch: read legacy, write new, verify by running the
+      production read path over the staged batch, delete legacy. Work is
+      computed by about 8 workers; a cursor makes a restart resume;
+   d. **held records:** a record that fails verification keeps its legacy
+      data and goes on a persisted held list with the reason and the first
+      differing field. Unparseable legacy keys (ignored today,
+      `pebble_store.go:3242`) and undecodable values count as held. If more
+      than 1% of the first 1,000 records are held, the migration stops, the
+      app stays in the "migrating" state with the reason shown, and nothing
+      has been lost. The owner rules on each held record: re-run after a
+      fix, or purge with the loss recorded;
+   e. gates: invariant counts equal before and after (books, files,
+      fingerprints, transcripts, signatures); legacy family count equals the
+      held count; then the stamp is advanced and normal startup continues.
+3. **Stamp newer than the build:** refuse to start (the guard above).
+
+Because nothing else is running, there are no mixed-format records, no
+conversion on read, no temporary legacy readers and no need to pause repairs.
+Restoring means: stop, replace the store directories with the checkpoint,
+start the previous build.
+
+Before each cut-over reaches prod, the same build is started on the sandbox
+against a copy of prod. That rehearsal gives the real duration (first
+estimate 15-40 minutes), the census and the invariant counts.
 
 **Release A: measure and speed up, no format change.** Pebble metrics;
 census; db-health; format stamp and rollback guard; timeline indexes; op-log
@@ -588,7 +611,7 @@ defined here).
 | Converter is wrong on some legacy shape | verification through the production reader; held list; 1% stop; sandbox rehearsal on real data |
 | Row and signal disagree | immutable content-addressed keys; read-back on write; checksum on read; nightly reconcile; pairing stamp |
 | Old binary started on converted data | format stamp; `make rollback` guard |
-| Restore loses work done since the cut-over | conversion is offline and gated before serving, so the window is the downtime itself |
+| Restore loses work done since the cut-over | the migration runs before the app serves, so the window is the migration itself |
 | First purge floods compaction | range deletes; per-run caps; purges after the cut-overs, before the final compaction |
 | Estimates rest on a 55-book sample | census in release A; each release re-measured |
 
