@@ -1,7 +1,7 @@
 <!-- file: docs/database-pebble-schema.md -->
 <!-- version: 1.7.0 -->
 <!-- guid: 8f6e2c1b-7d4a-4f86-9f2a-5a6b7c8d9e0f -->
-<!-- last-edited: 2026-10-04 -->
+<!-- last-edited: 2026-07-17 -->
 
 # PebbleDB Keyspace Schema and Data Model
 

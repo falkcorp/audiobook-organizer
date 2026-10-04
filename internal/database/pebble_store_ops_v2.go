@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v2.go
 // version: 3.26.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-04
+// last-edited: 2026-09-14
 
 // pebble_store_ops_v2 implements OpsV2Store for PebbleDB (the primary production
 // database). Key schema (all prefixed with "opv2:"):
