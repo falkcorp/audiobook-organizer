@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_opchange_index.go
 // version: 1.3.0
 // guid: 7ce04252-7ac9-421a-ba5e-5f230bbf0ab4
-// last-edited: 2026-10-03
+// last-edited: 2026-10-04
 
 // The opchange_by_book: secondary index over the operation-change journal.
 //

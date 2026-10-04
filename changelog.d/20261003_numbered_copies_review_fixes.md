@@ -94,3 +94,31 @@
   now checks the job log in that case and makes the same hand-off. This
   applies to the duplicate-copies repair too, and costs one job-log read for
   such groups only.
+- **A cut-off chapter repair stays held when its surviving book is merged
+  away.** If another repair, a dedup merge or a user merge folded the
+  surviving book into some other book, a new plan used to regroup the
+  remaining chapters around a new survivor and split the work again (tested:
+  68 of 120 cut points in the shape prod has, 106 of 120 with no version
+  group). The repair's plan entry now holds the folder in that case too. The
+  held row says which book the survivor went into, by whom, and names the
+  repair's own job(s) to resume or revert.
+- **Finishing a cut-off repair by hand now clears its hold.** When every book
+  of the cut-off repair ends up merged into one live book and every chapter
+  file sits on a live book, the repair counts as done whoever did the
+  merging. Reverting the cut-off repair afterwards no longer moves a file
+  back onto a book that someone else retired since, where it would vanish
+  from view. The revert refuses that file and says so; it stays on the book
+  that holds it.
+- **The plan entries are never aged out of the job log.** The 90-day job-log
+  cleanup used to delete them, which would have let a still-unfinished repair
+  be planned afresh. They are one entry per repair run.
+- **A plan limited to some books still respects a cut-off repair of their
+  folder.** The folder is held even when the cut-off repair's own books are
+  outside the plan's scope.
+- **Resuming a repair reads its books' job-log entries through the new
+  per-book index** once that index is trusted, instead of reading the whole
+  job log twice per row (once at the check, once under the merge lock).
+- **The plan entry no longer shows in a book's change history.** It records
+  no change to the book. It is still listed under the repair job's own
+  changes. The version-group hand-off note now reads "Version group primary
+  handed to <book>" instead of raw values.
