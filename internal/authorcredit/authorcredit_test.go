@@ -431,3 +431,12 @@ func TestOnePersonShape_GivenNameParticlesAndInitials(t *testing.T) {
 		require.Equal(t, want, OnePersonShape(name), name)
 	}
 }
+
+func TestFlattenParts_NoPartKeepsASeparator(t *testing.T) {
+	require.Equal(t, []string{"Travis Baldree", "Sarah Lin", "Travis Baldree"},
+		FlattenParts([]string{"Travis Baldree", "Sarah Lin/Travis Baldree"}))
+	require.Equal(t, []string{"Travis Baldree", "Sarah Lin"}, SplitNames("Travis Baldree, Sarah Lin/Travis Baldree", PrepareGate))
+	for _, p := range SplitNames("Annette Marie & Nelson Hobbs, Annette Marie", PrepareGate) {
+		require.False(t, HasSeparator(p), p)
+	}
+}

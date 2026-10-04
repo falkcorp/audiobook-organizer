@@ -215,6 +215,30 @@ func LettersKey(s string) string {
 // commas, semicolons, slashes, ampersands and a whole-word "and".
 var looseSepRe = regexp.MustCompile(`(?i)\s*(?:[,;/&]|\band\b)\s*`)
 
+// HasSeparator reports whether s still holds a list separator (",", ";",
+// "/", "&" or a whole-word "and"): a name that does is not one person.
+func HasSeparator(s string) bool { return looseSepRe.MatchString(s) }
+
+// FlattenParts re-splits every part that still holds a list separator. The
+// shared splitter tries one separator per credit, so "Travis Baldree, Sarah
+// Lin/Travis Baldree" comes back as "Travis Baldree" and "Sarah Lin/Travis
+// Baldree", and the second piece would be created as one author (prod dry
+// run 2026-10-04). The pieces are normalized and kept in order; the callers
+// apply their shape checks and de-duplication to the result.
+func FlattenParts(parts []string) []string {
+	var out []string
+	for _, p := range parts {
+		if !HasSeparator(p) {
+			out = append(out, p)
+			continue
+		}
+		for _, q := range LooseParts(p) {
+			out = append(out, personname.NormalizeAuthorName(q))
+		}
+	}
+	return out
+}
+
 // LooseParts splits a credit on every list separator, with no shape test and
 // no de-duplication, in order: "A, B, A" is three parts. It is NOT a splitter
 // to credit from (it cuts titles and "Surname, First" names alike); it only
@@ -254,7 +278,7 @@ func SplitNames(name string, gate Gate) []string {
 	if strings.ContainsAny(name, "()[]") {
 		return nil
 	}
-	parts := personname.SplitCompositeAuthorName(name)
+	parts := FlattenParts(personname.SplitCompositeAuthorName(name))
 	if len(parts) < 2 {
 		return nil
 	}

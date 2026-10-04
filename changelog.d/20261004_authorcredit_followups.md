@@ -22,3 +22,17 @@
   exactly that word to the book. Byline and single-word rows are new classes
   (`by_prefix` and `single_word_name`) and are always review rows. An unknown
   single word without a provider credit stays `skipped_split_refused`.
+- Combined-credit fixer proposals, from the prod dry run of 2026-10-04:
+  - A new author named by two records of one book is proposed once.
+  - Credits that name one person (same letters, or an alias) are kept once, at
+    the first position, and the row's reason says which credit was dropped.
+  - A part that still holds a separator ("Sarah Lin/Travis Baldree") is split
+    again and is never created as one author.
+  - The primary record's order of names decides the order and breaks ties at
+    one position, so the primary stays the first name. A credited part of a
+    primary-only record keeps its place.
+  - A credit of an author id that no longer exists is dropped, and the reason
+    says so.
+  - A new part one letter away from an author the book already credits
+    ("Artur C. Clarke" beside "Arthur C. Clarke") is held as
+    `skipped_ambiguous_author` instead of being created.

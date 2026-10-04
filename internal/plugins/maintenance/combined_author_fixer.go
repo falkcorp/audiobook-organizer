@@ -510,7 +510,7 @@ func combinedClassifyList(name string) (names, singleWord []string, skip, why st
 	if len(keys) == 1 {
 		return nil, nil, combinedSkipDoubled, fmt.Sprintf("%q repeats one name; collapsing it to a single credit is a separate decision", name)
 	}
-	split := personname.SplitCompositeAuthorName(name)
+	split := authorcredit.FlattenParts(personname.SplitCompositeAuthorName(name))
 	splitKeys := map[string]bool{}
 	for _, p := range split {
 		splitKeys[authorcredit.LettersKey(p)] = true
@@ -614,6 +614,62 @@ func combinedProviderCredited(store OpsStore, bookID, name string) (string, erro
 	return "", nil
 }
 
+// combinedNearMin is the shortest letters key the one-letter misspelling
+// check applies to; shorter names differ by one letter too often.
+const combinedNearMin = 6
+
+// combinedNearCredited reports an author the book already credits whose name
+// is one edit (by letters key) from name: "Artur C. Clarke" beside a
+// credited "Arthur C. Clarke". The row is held rather than mapped to that
+// author: one letter also separates real different people ("Jon Smith",
+// "Jan Smith"), and holding never writes a wrong credit.
+func combinedNearCredited(name string, creditedByKey map[string]int, nameOf func(int) string) (string, bool) {
+	k := authorcredit.LettersKey(name)
+	if len(k) < combinedNearMin {
+		return "", false
+	}
+	keys := make([]string, 0, len(creditedByKey))
+	for ck := range creditedByKey {
+		keys = append(keys, ck)
+	}
+	sort.Strings(keys) // the reason is fingerprinted: one answer per state
+	for _, ck := range keys {
+		if ck != k && editDistanceAtMostOne(k, ck) {
+			return nameOf(creditedByKey[ck]), true
+		}
+	}
+	return "", false
+}
+
+// editDistanceAtMostOne reports whether a and b differ by at most one
+// insertion, deletion or substitution.
+func editDistanceAtMostOne(a, b string) bool {
+	ra, rb := []rune(a), []rune(b)
+	if len(ra) < len(rb) {
+		ra, rb = rb, ra
+	}
+	if len(ra)-len(rb) > 1 {
+		return false
+	}
+	i, j, edits := 0, 0, 0
+	for i < len(ra) && j < len(rb) {
+		if ra[i] == rb[j] {
+			i++
+			j++
+			continue
+		}
+		edits++
+		if edits > 1 {
+			return false
+		}
+		if len(ra) == len(rb) {
+			j++
+		}
+		i++
+	}
+	return edits+(len(ra)-i) <= 1
+}
+
 // combinedIsAuthorRole is the credit roles this fixer reads and writes.
 func combinedIsAuthorRole(role string) bool { return isPrimaryAuthorRole(role) }
 
@@ -674,9 +730,21 @@ func (f *combinedAuthorFixer) evaluate(store OpsStore, idx *combinedAuthorIndex,
 	if b.AuthorID != nil {
 		primary = *b.AuthorID
 	}
-	if primary != 0 && idx.combined[primary] && !inRec[primary] {
-		inRec[primary] = true
-		recIDs = append(recIDs, primary)
+	if primary != 0 && idx.combined[primary] {
+		// The primary record goes first: its order of names decides the
+		// order of the result and ties between credits at one position, so
+		// the primary stays the first name it lists.
+		if !inRec[primary] {
+			inRec[primary] = true
+			recIDs = append(recIDs, primary)
+		}
+		ordered := []int{primary}
+		for _, id := range recIDs {
+			if id != primary {
+				ordered = append(ordered, id)
+			}
+		}
+		recIDs = ordered
 	}
 
 	r := repairs.Row{RowID: bookID, BookIDs: []string{bookID}, Title: b.Title, Risk: repairs.RiskLow,
@@ -784,6 +852,12 @@ func (f *combinedAuthorFixer) evaluate(store OpsStore, idx *combinedAuthorIndex,
 			vs := combinedVariants(idx, p.name)
 			switch len(vs) {
 			case 0:
+				if authorcredit.HasSeparator(p.name) {
+					return finish(combinedSkipImplausiblePart, fmt.Sprintf("the part %q still joins several names; it is never created as one author", p.name), true)
+				}
+				if near, ok := combinedNearCredited(p.name, creditedByKey, nameOf); ok {
+					return finish(swapSkipAmbiguousAuthor, fmt.Sprintf("no author is named %q, but the book already credits %q, one letter away (a misspelling?); a person decides", p.name, near), true)
+				}
 				if singleWord[p.name] {
 					// A one-word name is created only on a provider credit.
 					src, perr := combinedProviderCredited(store, bookID, p.name)
@@ -842,6 +916,10 @@ func (f *combinedAuthorFixer) evaluate(store OpsStore, idx *combinedAuthorIndex,
 	// The proposed credits, with a placeholder id per author apply creates.
 	targets := make([][]int, len(recs))
 	newNames := map[int]string{}
+	newKey := map[int]string{}
+	// One placeholder per new NAME: two records of one book that both name
+	// "Levi Pinfold" create him once, so he is proposed once.
+	placeholder := map[string]int{}
 	next := -1
 	for ri := range recs {
 		for _, p := range recs[ri].parts {
@@ -851,15 +929,20 @@ func (f *combinedAuthorFixer) evaluate(store OpsStore, idx *combinedAuthorIndex,
 			default:
 				id, ok := resolvedID[p.name]
 				if !ok {
-					id = next
-					newNames[id] = p.name + " (new author)"
-					next--
+					k := authorcredit.LettersKey(p.name)
+					if id, ok = placeholder[k]; !ok {
+						id = next
+						placeholder[k] = id
+						newNames[id] = p.name + " (new author)"
+						newKey[id] = k
+						next--
+					}
 				}
 				targets[ri] = append(targets[ri], id)
 			}
 		}
 	}
-	proposed := combinedNextCredits(credits, bookID, recIDsOf(recs), targets)
+	proposed, dropped := combinedProposal(credits, bookID, recIDsOf(recs), targets, f.creditKeyer(store, idx, newKey))
 	var show []string
 	for _, ba := range proposed {
 		n := newNames[ba.AuthorID]
@@ -883,6 +966,23 @@ func (f *combinedAuthorFixer) evaluate(store OpsStore, idx *combinedAuthorIndex,
 			strings.Join(recNames, ", "))
 	default:
 		r.Reason = fmt.Sprintf("credits the combined record %s; it is replaced by its authors", strings.Join(recNames, ", "))
+	}
+	if len(dropped) > 0 {
+		var ds []string
+		for _, ba := range dropped {
+			n := newNames[ba.AuthorID]
+			if ba.AuthorID > 0 {
+				if a, gerr := store.GetAuthorByID(ba.AuthorID); gerr == nil && a != nil && a.ID == ba.AuthorID {
+					n = a.Name
+				}
+			}
+			if n == "" {
+				ds = append(ds, fmt.Sprintf("the credit of author id %d (no such author)", ba.AuthorID))
+				continue
+			}
+			ds = append(ds, fmt.Sprintf("the second credit of %q (the same person as an earlier credit)", n))
+		}
+		r.Reason += "; drops " + strings.Join(ds, ", ")
 	}
 	if primaryMoves {
 		pid := combinedFirstAuthor(proposed)
@@ -958,6 +1058,83 @@ func combinedVariants(idx *combinedAuthorIndex, name string) []database.Author {
 // Non-author-role rows (a narrator credit, even of a combined record) keep
 // their role and relative order; every row is renumbered.
 func combinedNextCredits(cur []database.BookAuthor, bookID string, recIDs []int, targets [][]int) []database.BookAuthor {
+	out, _ := combinedProposal(cur, bookID, recIDs, targets, nil)
+	return out
+}
+
+// combinedProposal is combinedNextCredits followed by the clean-up a
+// rewritten list needs (keyOf nil skips it): a credit whose author no longer
+// exists (keyOf returns "") is dropped, and of credits naming one person
+// (keyOf returns one key: same letters, or one an alias of the other) only
+// the first is kept. dropped lists what was removed, for the row's reason.
+func combinedProposal(cur []database.BookAuthor, bookID string, recIDs []int, targets [][]int, keyOf func(id int) string) (out, dropped []database.BookAuthor) {
+	next := combinedRewrite(cur, bookID, recIDs, targets)
+	if keyOf == nil {
+		return next, nil
+	}
+	seen := map[string]bool{}
+	for _, ba := range next {
+		k := keyOf(ba.AuthorID)
+		if k == "" {
+			dropped = append(dropped, ba)
+			continue
+		}
+		if combinedIsAuthorRole(ba.Role) {
+			if seen[k] {
+				dropped = append(dropped, ba)
+				continue
+			}
+			seen[k] = true
+		}
+		out = append(out, ba)
+	}
+	for i := range out {
+		out[i].Position = i
+	}
+	return out, dropped
+}
+
+// creditKeyer returns the person key of an author id for combinedProposal:
+// the letters key of its name, or of the author it is an alias of; "" for an
+// id no author has (a dangling credit). newKey names the plan's placeholder
+// ids (negative) for authors apply creates.
+func (f *combinedAuthorFixer) creditKeyer(store OpsStore, idx *combinedAuthorIndex, newKey map[int]string) func(int) string {
+	cache := map[int]string{}
+	return func(id int) string {
+		if id < 0 {
+			return newKey[id]
+		}
+		if k, ok := cache[id]; ok {
+			return k
+		}
+		name, ok := idx.names[id]
+		if !ok {
+			a, err := store.GetAuthorByID(id)
+			if err != nil {
+				// Fail open: an unreadable author is kept, under its own id.
+				cache[id] = "id:" + strconv.Itoa(id)
+				return cache[id]
+			}
+			if a == nil || a.ID != id {
+				cache[id] = ""
+				return ""
+			}
+			name = a.Name
+		}
+		k := authorcredit.LettersKey(name)
+		if al, err := authorcredit.FindByAlias(store, name); err == nil && al != nil && al.ID != id {
+			k = authorcredit.LettersKey(al.Name)
+		}
+		if k == "" {
+			k = "id:" + strconv.Itoa(id)
+		}
+		cache[id] = k
+		return k
+	}
+}
+
+// combinedRewrite replaces each combined record's credit by its parts.
+func combinedRewrite(cur []database.BookAuthor, bookID string, recIDs []int, targets [][]int) []database.BookAuthor {
 	isRec := map[int]int{}
 	for i, id := range recIDs {
 		isRec[id] = i
@@ -999,6 +1176,25 @@ func combinedNextCredits(cur []database.BookAuthor, bookID string, recIDs []int,
 		}
 		start = end
 	}
+
+	// A record the junction does not credit (a primary-only record) takes
+	// the front: its parts, credited or not, go first in its order of names
+	// ("Alvin Atwater, Matt Hicks, Allie Piper" keeps the credited Alvin
+	// Atwater first). Records are in recIDs order, the primary's first.
+	present := map[int]bool{}
+	for _, ba := range rows {
+		if _, rec := isRec[ba.AuthorID]; rec && combinedIsAuthorRole(ba.Role) {
+			present[ba.AuthorID] = true
+		}
+	}
+	var synthetic []database.BookAuthor
+	for _, id := range recIDs {
+		if !present[id] {
+			present[id] = true
+			synthetic = append(synthetic, database.BookAuthor{BookID: bookID, AuthorID: id, Role: "author", Position: -1})
+		}
+	}
+	rows = append(synthetic, rows...)
 
 	// existing is each part's own author-role row (its role is kept when the
 	// row moves to the combined credit's slot).
@@ -1056,14 +1252,6 @@ func combinedNextCredits(cur []database.BookAuthor, bookID string, recIDs []int,
 			out = append(out, ba)
 		}
 	}
-	var front []database.BookAuthor
-	for ri, id := range recIDs {
-		if !placed[id] {
-			placed[id] = true
-			front = fill(ri, "author", front)
-		}
-	}
-	out = append(front, out...)
 	for i := range out {
 		out[i].Position = i
 	}
@@ -1139,6 +1327,7 @@ func (f *combinedAuthorFixer) Apply(_ context.Context, w *repairs.Writer, fresh 
 		}
 	}
 
+	keyOf := f.creditKeyer(store, idx, nil)
 	var oldPrimary int
 	if d.primary != nil {
 		oldPrimary = *d.primary
@@ -1153,7 +1342,8 @@ func (f *combinedAuthorFixer) Apply(_ context.Context, w *repairs.Writer, fresh 
 		// The primary is the first author credit of the rewritten list: the
 		// organizer files a book under its lowest-position author
 		// (organizer.authorNameFromJoin), so the two must agree.
-		pid := combinedFirstAuthor(combinedNextCredits(d.credits, id, recIDs, targets))
+		first, _ := combinedProposal(d.credits, id, recIDs, targets, keyOf)
+		pid := combinedFirstAuthor(first)
 		if pid == 0 {
 			return fmt.Errorf("%s: row %s: the rewritten credits name no author", combinedAuthorFixerID, fresh.RowID)
 		}
@@ -1184,7 +1374,7 @@ func (f *combinedAuthorFixer) Apply(_ context.Context, w *repairs.Writer, fresh 
 		if b == nil || !sameIntPtr(b.AuthorID, d.primary) {
 			return nil, repairs.UndoEntry{}, fmt.Errorf("%w: book %s primary author changed", repairs.ErrChangedSincePlan, id)
 		}
-		next := combinedNextCredits(cur, id, recIDs, targets)
+		next, _ := combinedProposal(cur, id, recIDs, targets, keyOf)
 		after := make([]database.BookAuthor, len(next))
 		copy(after, next)
 		var afterID *int
