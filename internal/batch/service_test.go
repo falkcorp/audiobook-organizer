@@ -1,5 +1,5 @@
 // file: internal/batch/service_test.go
-// version: 1.8.0
+// version: 1.9.0
 // last-edited: 2026-10-03
 // guid: b2c3d4e5-f6a7-b8c9-0d1e-2f3a4b5c6d7e
 

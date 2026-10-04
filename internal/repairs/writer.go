@@ -1,5 +1,5 @@
 // file: internal/repairs/writer.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: c71e0d93-4b28-4a5f-8e6c-2f9a1d7b3e48
 // last-edited: 2026-10-03
 

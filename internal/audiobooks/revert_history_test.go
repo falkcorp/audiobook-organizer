@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_history_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 829118c5-b507-4c65-8bb6-eaf346c88634
 // last-edited: 2026-10-03
 
@@ -80,7 +80,7 @@ func TestRevertHistory_EverySiteRecords(t *testing.T) {
 			bk, err := s.CreateBook(&database.Book{Title: "B", FilePath: "/x/b", SeriesID: &b2.ID})
 			require.NoError(t, err)
 			require.NoError(t, rs.revertMetadataUpdate(&database.OperationChange{OperationID: opID, BookID: bk.ID,
-				ChangeType: "metadata_update", FieldName: "series_id", OldValue: itoaT(a.ID), NewValue: itoaT(b2.ID)}))
+				ChangeType: "metadata_update", FieldName: "series_id", OldValue: itoaT(a.ID), NewValue: itoaT(b2.ID)}, nil))
 			return bk.ID, []string{database.HistoryFieldSeries}
 		}},
 		{"merged_into", func(t *testing.T, s *database.PebbleStore, rs *RevertService, opID string) (string, []string) {
