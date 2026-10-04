@@ -1,5 +1,7 @@
 // file: internal/activity/service_unit_test.go
-// version: 1.1.0
+// version: 1.2.0
+// guid: 33be7b20-e994-4c24-9017-3f20f6ea2fe4
+// last-edited: 2026-10-04
 
 package activity
 
@@ -128,6 +130,28 @@ func TestChangelogService_TagWriteEntryType(t *testing.T) {
 	require.Len(t, entries, 1)
 	assert.Equal(t, "tag_write", entries[0].Type)
 	assert.Contains(t, entries[0].Summary, "Tag written")
+}
+
+// A dropped stale series object reads as what it is, with the dropped
+// series' name and id, not as "Metadata applied — series_object: \"\"".
+func TestChangelogService_SeriesObjectDropSummary(t *testing.T) {
+	mockStore := mocks.NewMockStore(t)
+	mockStore.EXPECT().GetBookPathHistory("book-1").Return(nil, nil)
+	prev, next := `"Vanished Series"`, `""`
+	oldID, linked := 9004, 12
+	mockStore.EXPECT().GetBookChangeHistory("book-1", 100).Return([]database.MetadataChangeRecord{
+		{BookID: "book-1", Field: database.HistoryFieldSeriesObject, PreviousValue: &prev, NewValue: &next,
+			ChangeType: database.ChangeTypeSeriesObjectDrop, Source: database.SeriesObjectDropSource, ChangedAt: time.Now(),
+			PreviousRef: &database.MetadataChangeRef{SeriesID: &oldID}, NewRef: &database.MetadataChangeRef{SeriesID: &linked}},
+	}, nil)
+	mockStore.EXPECT().GetBookChanges("book-1").Return(nil, nil)
+
+	entries, err := NewChangelogService(mockStore).GetBookChangelog("book-1")
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "metadata_apply", entries[0].Type)
+	assert.Equal(t, `Stale series object dropped — was "Vanished Series" (series 9004); the book keeps series id 12`, entries[0].Summary)
+	assert.Equal(t, prev, entries[0].Details["previous_value"])
 }
 
 func TestChangelogService_OperationChangeTypes(t *testing.T) {
