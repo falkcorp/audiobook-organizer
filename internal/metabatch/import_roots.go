@@ -1,5 +1,5 @@
 // file: internal/metabatch/import_roots.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3c8e51a2-7d94-4b0f-a6e3-91f2c4d7b805
 // last-edited: 2026-10-04
 //
@@ -32,6 +32,13 @@ const importRootsTTL = time.Minute
 // global's behaviour) instead of parking every worker of a pass behind it.
 var importRootsLoadWait = 2 * time.Second
 
+// importRootsFailBackoff is how long a failed read is trusted before the next
+// one: inside it every caller gets the previous list (or "unavailable")
+// without touching the store. Without it a failing store took one read per
+// root check, plus a waiter stall each, where the old memo made one per TTL;
+// short, so a transient fault costs seconds of evidence, not a minute.
+var importRootsFailBackoff = 5 * time.Second
+
 // ImportPathReader is the one read the resolver needs for import roots.
 //
 // The roots come from the SAME store the caller hands the resolver, never
@@ -44,8 +51,10 @@ type ImportPathReader interface {
 	GetAllImportPaths() ([]database.ImportPath, error)
 }
 
-// importRootLog rate-limits the Warn for an unreadable import-path list.
-var importRootLog warnLimiter
+// importRootLog rate-limits the Warn for an unreadable import-path list;
+// importRootWaitLog the Warn for a caller that gave up waiting on another
+// caller's read, which is a slow store, not a failed one.
+var importRootLog, importRootWaitLog warnLimiter
 
 // readImportRoots loads the cleaned import-path set from r. ok is false when
 // the read failed; the failure is logged here at Warn (rate-limited).
@@ -83,8 +92,9 @@ func cleanRoots(paths []database.ImportPath) map[string]bool {
 //     importRootsLoadWait; a caller that already has a list uses it while a
 //     refresh runs.
 //   - The TTL window starts only on a SUCCESSFUL read. A failed read keeps the
-//     previous list and the next caller tries again; a read that panics
-//     releases its waiters and consumes nothing.
+//     previous list and starts a short backoff (importRootsFailBackoff) in
+//     which nobody reads; a read that panics releases its waiters and
+//     consumes nothing.
 //
 // Safe for concurrent use.
 type ImportRootsCache struct {
@@ -95,6 +105,7 @@ type ImportRootsCache struct {
 	paths    []database.ImportPath
 	loaded   bool      // a read has succeeded at least once
 	at       time.Time // when the last successful read finished
+	failedAt time.Time // when the last read failed (zero after a success)
 	inflight chan struct{}
 
 	// waiting counts callers parked on an in-flight first read (tests).
@@ -140,6 +151,11 @@ func (c *ImportRootsCache) get() (roots map[string]bool, paths []database.Import
 		defer c.mu.Unlock()
 		return c.roots, c.paths, true
 	}
+	if c.inflight == nil && !c.failedAt.IsZero() && time.Since(c.failedAt) < importRootsFailBackoff {
+		// The last read failed moments ago: do not hit the store again yet.
+		defer c.mu.Unlock()
+		return c.roots, c.paths, c.loaded
+	}
 	if ch := c.inflight; ch != nil {
 		if c.loaded {
 			defer c.mu.Unlock()
@@ -150,6 +166,8 @@ func (c *ImportRootsCache) get() (roots map[string]bool, paths []database.Import
 		select {
 		case <-ch:
 		case <-time.After(importRootsLoadWait):
+			importRootWaitLog.warn("import-path read still in flight after %s; judging this row with no import roots: suppressed_since_last=%d",
+				importRootsLoadWait)
 		}
 		c.waiting.Add(-1)
 		c.mu.Lock()
@@ -162,14 +180,20 @@ func (c *ImportRootsCache) get() (roots map[string]bool, paths []database.Import
 
 	var fresh map[string]bool
 	var freshPaths []database.ImportPath
-	succeeded := false
+	succeeded, returned := false, false
 	defer func() {
 		// Runs on success, failure and panic alike: waiters are released and
 		// the next caller can read again. Only a success starts the window;
 		// otherwise the previous list (if any) is what every caller gets.
 		c.mu.Lock()
-		if succeeded {
+		switch {
+		case succeeded:
 			c.roots, c.paths, c.loaded, c.at = fresh, freshPaths, true, time.Now()
+			c.failedAt = time.Time{}
+		case returned:
+			// A failed read starts the short backoff. A panic (returned
+			// still false) records nothing: the next caller reads again.
+			c.failedAt = time.Now()
 		}
 		roots, paths, ok = c.roots, c.paths, c.loaded
 		c.inflight = nil
@@ -177,5 +201,6 @@ func (c *ImportRootsCache) get() (roots map[string]bool, paths []database.Import
 		close(ch)
 	}()
 	fresh, freshPaths, succeeded = readImportRoots(c.r)
+	returned = true
 	return nil, nil, false // replaced by the deferred block
 }

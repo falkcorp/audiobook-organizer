@@ -1,5 +1,5 @@
 // file: internal/server/handlers/aibackends/aibackends.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 7c3d9e21-4a5b-4f6c-9d8e-1a2b3c4d5e6f
 // last-edited: 2026-10-04
 
@@ -74,7 +74,9 @@ func WithAttribution(a *aidispatch.Attribution) Option {
 func New(registry *tools.ToolRegistry, daemon *tools.OllamaDaemon, opts ...Option) *Handler {
 	h := &Handler{registry: registry, daemon: daemon, attribution: aidispatch.DefaultAttribution()}
 	for _, o := range opts {
-		o(h)
+		if o != nil {
+			o(h)
+		}
 	}
 	return h
 }
