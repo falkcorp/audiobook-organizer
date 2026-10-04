@@ -1,7 +1,7 @@
 // file: internal/metrics/metrics_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-09-26
+// last-edited: 2026-10-03
 
 package metrics
 
@@ -387,5 +387,17 @@ func TestIncSearchCacheRebuild(t *testing.T) {
 	IncSearchCacheRebuild()
 	if got := testutil.ToFloat64(searchCacheRebuildsTotal) - before; got != 1 {
 		t.Fatalf("search_cache_rebuilds_total rose by %v; want 1", got)
+	}
+}
+
+func TestSetOpChangeByBookIndexTrusted(t *testing.T) {
+	for _, tc := range []struct {
+		trusted bool
+		want    float64
+	}{{true, 1}, {false, 0}} {
+		SetOpChangeByBookIndexTrusted(tc.trusted)
+		if got := testutil.ToFloat64(opChangeByBookIndexTrustedGauge); got != tc.want {
+			t.Errorf("SetOpChangeByBookIndexTrusted(%t): gauge reads %v, want %v", tc.trusted, got, tc.want)
+		}
 	}
 }

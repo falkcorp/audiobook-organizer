@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.17.0
+// version: 4.17.1
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-10-03
 
@@ -1100,6 +1100,12 @@ func (s *Server) startBackfills() {
 		if _, err := b.EnsureOpChangeByBookIndex(s.bgCtx); err != nil {
 			// GetBookChanges stays on the full scan (correct, only slower);
 			// the next boot retries. Error, not Warn: the index is not in use.
+			// A cancelled bgCtx is a clean shutdown interrupting the check,
+			// not a failure.
+			if errors.Is(err, context.Canceled) {
+				slog.Info("opchange-index-backfill: check interrupted by shutdown; reads use the full scan until the next boot", "err", err)
+				return
+			}
 			slog.Error("opchange-index-backfill: index not trusted this boot; GetBookChanges stays on the full scan", "err", err)
 		}
 	})

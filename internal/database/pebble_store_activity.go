@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_activity.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 2e007a48-ab98-4cd4-bd6a-f85b75de0cfa
 // last-edited: 2026-10-03
 
@@ -110,6 +110,11 @@ var opChangePruneChunk = 5_000
 // re-check and delete them. Test-only; nil in production.
 var opChangePruneBeforeFlush func()
 
+// opChangePruneBeforeCommit, when non-nil, runs inside pruneOpChangeChunk's
+// locked section, after every candidate was re-read and staged and just before
+// the batch commits. Test-only; nil in production.
+var opChangePruneBeforeCommit func()
+
 // PruneOperationChanges deletes operation change entries older than the given
 // time, each with its opchange_by_book: index entry. Undecodable rows are
 // skipped (never deleted), as before.
@@ -213,6 +218,9 @@ func (p *PebbleStore) pruneOpChangeChunk(keys [][]byte, olderThan time.Time) (in
 	}
 	if n == 0 {
 		return 0, nil
+	}
+	if opChangePruneBeforeCommit != nil {
+		opChangePruneBeforeCommit()
 	}
 	if err := batch.Commit(pebble.Sync); err != nil {
 		return 0, fmt.Errorf("commit opchange prune chunk: %w", err)

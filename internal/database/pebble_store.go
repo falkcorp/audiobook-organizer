@@ -5209,6 +5209,7 @@ func (p *PebbleStore) Reset() error {
 	// used the index between the commit and this bump read a wiped index
 	// over a wiped journal, which is the same empty answer the scan gives.
 	p.opChangeByBookGen.Add(1)
+	p.publishOpChangeTrust()
 	// The wipe removed every book: and metadata_cache: row; no record can
 	// name them, so a reader behind either generation rebuilds (the review
 	// snapshot would otherwise keep serving the wiped books as live rows

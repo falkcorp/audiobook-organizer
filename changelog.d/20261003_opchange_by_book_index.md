@@ -52,3 +52,13 @@ with `{}` it is a read-only preview that reports journal rows with no index
 entry; with `{"dry_run": false}` it clears trust and the done-marker (reads
 fall back to the full scan at once), rebuilds from the first row, and trusts
 the index again on success. It reports progress per 5,000-row chunk.
+
+**Shutdown and observability.** A shutdown that interrupts the boot's index
+check now logs at INFO (`verify interrupted by shutdown`, `check interrupted by
+shutdown`) instead of ERROR; reads use the full scan until the next boot
+verifies. The gauge `audiobook_organizer_opchange_by_book_index_trusted` is 1
+while `GetBookChanges` reads the index and 0 while it uses the scan, updated on
+every trust change, so a failed or interrupted ensure shows up on a dashboard.
+`MarkOperationChangesReverted` scans outside the journal lock and holds the
+read side only to point-get and commit the rows it marks; a row pruned in
+between is skipped, not resurrected.
