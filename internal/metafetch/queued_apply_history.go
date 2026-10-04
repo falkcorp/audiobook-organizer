@@ -1,13 +1,15 @@
 // file: internal/metafetch/queued_apply_history.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: de7ac5f2-cd18-4dc9-8b95-a2f28a9fb8b5
-// last-edited: 2026-09-30
+// last-edited: 2026-10-04
 
 package metafetch
 
 import (
 	"fmt"
 	"slices"
+
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // The queued single-book apply (metadata.apply-when-scanned) is enqueued
@@ -26,8 +28,11 @@ import (
 //     edit and the apply refuses.
 
 // fileSideChangeTypes are history rows that record file work (rename, tag
-// write-back, cover archive), not a change to a field the apply writes.
-var fileSideChangeTypes = []string{"rename", "write-back", "cover-archive"}
+// write-back, cover archive) or the store's own bookkeeping (a dropped stale
+// series object, database.ChangeTypeSeriesObjectDrop, which any write of the
+// row records, the scanner's included), not a change to a field the apply
+// writes.
+var fileSideChangeTypes = []string{"rename", "write-back", "cover-archive", database.ChangeTypeSeriesObjectDrop}
 
 func isFieldEdit(changeType string) bool {
 	return !slices.Contains(fileSideChangeTypes, changeType)

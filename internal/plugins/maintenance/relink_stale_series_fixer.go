@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/relink_stale_series_fixer.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 1d26959f-7774-48db-b0ea-fa7813f655ef
-// last-edited: 2026-10-03
+// last-edited: 2026-10-04
 
 package maintenance
 
@@ -53,6 +53,14 @@ const (
 	// relinkClassOrphan: no series row by id and no unique name match. The
 	// embedded object is the only record of the series.
 	relinkClassOrphan = "orphan"
+	// relinkClassIDMismatch: the book HAS a series id, but the stored
+	// embedded object names another series (a writer of an older build moved
+	// the book by id alone and left the old object). Usually the object is
+	// the OLD series, but nothing proves which one is right, so it is held
+	// for the owner, with both series shown. The next write of the book
+	// drops the object (the store's series invariant) and records the drop
+	// in the book's change history (field series_object).
+	relinkClassIDMismatch = "held-series-id-mismatch"
 )
 
 // Skip kinds of the relink fixer besides the framework's and junkSkip*.
@@ -69,11 +77,15 @@ const (
 	// has SeriesID == nil with an embedded Series object. A plan never lists
 	// it.
 	relinkSkipNotStale = "skipped_not_stale"
+	// relinkSkipIDMismatch: the series id and the embedded object name two
+	// different series; a person decides which is right.
+	relinkSkipIDMismatch = "skipped_series_id_mismatch"
 )
 
 // relinkSeriesFixer finds books whose SeriesID is nil but whose stored row
 // still carries an embedded Series object (left by older series-clear and
-// projection bugs).
+// projection bugs), and lists, held, the books whose embedded object names a
+// different series than their SeriesID (relinkClassIDMismatch).
 //
 // WHY NOW: PR #3698 makes the Pebble store drop Book.Series whenever
 // Book.SeriesID is nil, on the book's next write. For these books the
@@ -102,12 +114,14 @@ func newRelinkSeriesFixer(p *Plugin) *relinkSeriesFixer { return &relinkSeriesFi
 var _ repairs.Fixer = (*relinkSeriesFixer)(nil)
 
 func (f *relinkSeriesFixer) ID() string    { return relinkSeriesFixerID }
-func (f *relinkSeriesFixer) Title() string { return "Stale series objects (series id lost)" }
+func (f *relinkSeriesFixer) Title() string { return "Stale series objects" }
 func (f *relinkSeriesFixer) Description() string {
 	return "Books whose series id is empty but whose stored row still carries the series object. " +
 		"\"relink\" rows point the series id back at the series the object names (it still exists); " +
 		"\"name-match\" and \"orphan\" rows are held for review. Writes the series id only; the series " +
-		"object and position are left as they are. Must run before the store starts dropping the object (#3698)."
+		"object and position are left as they are. \"held-series-id-mismatch\" rows are books that have a series id but " +
+		"whose stored object names another series; both are shown and the owner decides. The store drops a stale object " +
+		"on the book's next write (#3698) and records the drop in the book's history (series_object)."
 }
 
 // relinkSeriesIndex is every series row, by id and by normalized name.
@@ -141,11 +155,14 @@ type relinkDecision struct {
 	embedded database.Series
 }
 
-// Plan lists every live book with SeriesID == nil and an embedded Series.
+// Plan lists every live book with SeriesID == nil and an embedded Series,
+// and every live book whose embedded Series names another series than its
+// SeriesID.
 //
 // BookCore carries no Series and the memdb projection strips it, so every
-// series-less book is point-read in full from Pebble (GetBookByID) on a
-// bounded worker pool.
+// live book is point-read in full from Pebble (GetBookByID) on a bounded
+// worker pool: the series-less ones for the relink classes, the linked ones
+// for the id-mismatch class. That is one point read per live book.
 func (f *relinkSeriesFixer) Plan(ctx context.Context, _ json.RawMessage, rep registry.Reporter) ([]repairs.Row, error) {
 	store := f.p.deps.OpsStore()
 	if store == nil {
@@ -159,7 +176,7 @@ func (f *relinkSeriesFixer) Plan(ctx context.Context, _ json.RawMessage, rep reg
 	}
 	var cands []string
 	for i := range cores {
-		if cores[i].IsSoftDeleted() || cores[i].SeriesID != nil {
+		if cores[i].IsSoftDeleted() {
 			continue
 		}
 		cands = append(cands, cores[i].ID)
@@ -181,10 +198,15 @@ func (f *relinkSeriesFixer) Plan(ctx context.Context, _ json.RawMessage, rep reg
 			found[i] = &r
 			return nil
 		}
-		if !relinkStale(b) {
+		var r repairs.Row
+		switch {
+		case relinkStale(b):
+			r, err = f.evaluate(store, idx, idx.lookup, b)
+		case relinkIDMismatch(b):
+			r, err = f.evaluateIDMismatch(store, idx.lookup, b)
+		default:
 			return nil
 		}
-		r, err := f.evaluate(store, idx, idx.lookup, b)
 		if err != nil {
 			r = relinkErrorRow(b.ID, b.Title, err)
 		}
@@ -215,6 +237,12 @@ func relinkStale(b *database.Book) bool {
 	return b != nil && !b.IsSoftDeleted() && b.SeriesID == nil && b.Series != nil
 }
 
+// relinkIDMismatch reports whether b is a live book with a SeriesID whose
+// embedded Series object names another series.
+func relinkIDMismatch(b *database.Book) bool {
+	return b != nil && !b.IsSoftDeleted() && b.SeriesID != nil && b.Series != nil && b.Series.ID != *b.SeriesID
+}
+
 // relinkClassError is the class of a row whose book could not be read or
 // classified, so the census (PlanResult.ByClass) still counts it.
 const relinkClassError = "error"
@@ -243,6 +271,9 @@ func (f *relinkSeriesFixer) Replan(_ context.Context, _ json.RawMessage, planned
 		r.Reason = r.SkipReason
 		r.Fingerprint = relinkFingerprint(r, "gone")
 		return r, nil
+	}
+	if relinkIDMismatch(b) {
+		return f.evaluateIDMismatch(store, freshSeriesByID(store), b)
 	}
 	if !relinkStale(b) {
 		r := repairs.Row{RowID: b.ID, BookIDs: []string{b.ID}, Title: b.Title, Skipped: relinkSkipNotStale,
@@ -436,6 +467,84 @@ func (f *relinkSeriesFixer) evaluate(store OpsStore, idx *relinkSeriesIndex, byI
 		"cannot prove the unlink was not deliberate"
 	r.Detail = &relinkDecision{bookID: b.ID, seriesID: target.ID, embedded: emb}
 	r.Fingerprint = relinkFingerprint(r, extra)
+	return r, nil
+}
+
+// evaluateIDMismatch classifies a book whose embedded Series object names
+// another series than its SeriesID (relinkIDMismatch must hold). The row is
+// always held: it shows the linked series (by id, with its row's name) and
+// the embedded object (id, name, and whether a series row has that id), so
+// the owner can choose. Keeping the linked series is what the store does on
+// the book's next write (the object is dropped and the drop recorded in the
+// book's history); relinking to the embedded series is a series edit.
+//
+// byID finds a series row by id: Plan answers from its index, Replan with a
+// fresh point read.
+func (f *relinkSeriesFixer) evaluateIDMismatch(store OpsStore, byID relinkSeriesByID, b *database.Book) (repairs.Row, error) {
+	emb, linkedID := *b.Series, *b.SeriesID
+	r := repairs.Row{RowID: b.ID, BookIDs: []string{b.ID}, Title: b.Title, Risk: repairs.RiskReview,
+		Class: relinkClassIDMismatch, Skipped: relinkSkipIDMismatch}
+	if b.AuthorID != nil {
+		a, err := store.GetAuthorByID(*b.AuthorID)
+		if err != nil {
+			return repairs.Row{}, fmt.Errorf("read author %d of %s: %w", *b.AuthorID, b.ID, err)
+		}
+		if a != nil {
+			r.Author = a.Name
+		}
+	}
+	linked, linkedOK, err := byID(linkedID)
+	if err != nil {
+		return repairs.Row{}, err
+	}
+	embRow, embOK, err := byID(emb.ID)
+	if err != nil {
+		return repairs.Row{}, err
+	}
+	linkedName := ""
+	if linkedOK {
+		linkedName = linked.Name
+	}
+	r.Current = map[string]string{
+		"series_id":             strconv.Itoa(linkedID),
+		"series_name":           linkedName,
+		"embedded_series_id":    strconv.Itoa(emb.ID),
+		"embedded_series_name":  emb.Name,
+		"embedded_series_found": strconv.FormatBool(embOK && emb.ID > 0),
+	}
+	r.Evidence = append(r.Evidence, fmt.Sprintf("series_id is %d; the stored series object names id %d %q", linkedID, emb.ID, emb.Name))
+	if linkedOK {
+		r.Evidence = append(r.Evidence, fmt.Sprintf("linked series row %d: %q", linked.ID, linked.Name))
+	} else {
+		r.Evidence = append(r.Evidence, fmt.Sprintf("no series row has the linked id %d", linkedID))
+	}
+	if embOK && emb.ID > 0 {
+		r.Evidence = append(r.Evidence, fmt.Sprintf("embedded series row %d exists: %q", embRow.ID, embRow.Name))
+	} else {
+		r.Evidence = append(r.Evidence, fmt.Sprintf("no series row has the embedded id %d", emb.ID))
+	}
+	if b.ITunesPersistentID != nil && *b.ITunesPersistentID != "" {
+		r.Evidence = append(r.Evidence, fmt.Sprintf("book carries iTunes persistent id %s (database write only; no file is touched)", *b.ITunesPersistentID))
+	}
+	r.SkipReason = fmt.Sprintf("the book is linked to series %d %q but its stored series object names series %d %q; "+
+		"a person decides: keep the linked series (the next write of the book drops the object and records the drop "+
+		"in its history), or relink the book to the embedded series", linkedID, linkedName, emb.ID, emb.Name)
+	for _, name := range []string{linkedName, emb.Name, embRow.Name} {
+		if name != "" && applygate.IsOwnerManualOnly("", name) {
+			r.Skipped = repairs.SkipOwnerManual
+			r.SkipReason = fmt.Sprintf("series %q is Doctor Who / Big Finish / Torchwood; owner applies these by hand", name)
+			break
+		}
+	}
+	r.Reason = r.SkipReason
+	var lk, er *database.Series
+	if linkedOK {
+		lk = &linked
+	}
+	if embOK {
+		er = &embRow
+	}
+	r.Fingerprint = relinkFingerprint(r, fmt.Sprintf("sid=%d|", linkedID)+relinkFingerprintExtra(b, emb, r.Class, lk, er))
 	return r, nil
 }
 

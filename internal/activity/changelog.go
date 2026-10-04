@@ -1,14 +1,16 @@
 // file: internal/activity/changelog.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 93167949-a587-41e9-8ef9-92d03f86aea6
-// last-edited: 2026-10-03
+// last-edited: 2026-10-04
 
 package activity
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -85,7 +87,10 @@ func (svc *ChangelogService) GetBookChangelog(bookID string) ([]ChangeLogEntry, 
 			entryType := "metadata_apply"
 			summary := fmt.Sprintf("Metadata applied — %s: %s (%s)", mh.Field, DerefStrDisplay(mh.NewValue), mh.Source)
 
-			if mh.ChangeType == "override" || mh.ChangeType == "clear" || mh.ChangeType == "undo" {
+			switch {
+			case mh.ChangeType == database.ChangeTypeSeriesObjectDrop:
+				summary = seriesObjectDropSummary(mh)
+			case mh.ChangeType == "override" || mh.ChangeType == "clear" || mh.ChangeType == "undo":
 				entryType = "tag_write"
 				summary = fmt.Sprintf("Tag written — %s set to %s (%s)", mh.Field, DerefStrDisplay(mh.NewValue), mh.ChangeType)
 			}
@@ -172,6 +177,28 @@ func (svc *ChangelogService) GetBookChangelog(bookID string) ([]ChangeLogEntry, 
 	}
 
 	return entries, nil
+}
+
+// seriesObjectDropSummary renders a database.ChangeTypeSeriesObjectDrop row:
+// the stale embedded series object the store dropped, by name and id, and
+// what the row was left with. The generic "Metadata applied" wording would
+// read as an apply that set the series to empty.
+func seriesObjectDropSummary(mh database.MetadataChangeRecord) string {
+	oldName := ""
+	if mh.PreviousValue != nil {
+		if err := json.Unmarshal([]byte(*mh.PreviousValue), &oldName); err != nil {
+			oldName = *mh.PreviousValue
+		}
+	}
+	oldID := "?"
+	if mh.PreviousRef != nil && mh.PreviousRef.SeriesID != nil {
+		oldID = strconv.Itoa(*mh.PreviousRef.SeriesID)
+	}
+	linked := "no series id"
+	if mh.NewRef != nil && mh.NewRef.SeriesID != nil {
+		linked = "series id " + strconv.Itoa(*mh.NewRef.SeriesID)
+	}
+	return fmt.Sprintf("Stale series object dropped — was %q (series %s); the book keeps %s", oldName, oldID, linked)
 }
 
 // pathChangeEntry maps a BookPathChange to a changelog (type, summary) pair.
