@@ -4231,12 +4231,13 @@ func rowHasRealAuthor(authorID *int, placeholders *placeholderAuthors) bool {
 // resolveAuthorIDs resolves the book's author credit to the author rows it
 // names, in credit order: the first is the primary AuthorID, every one is a
 // book_authors credit. A credit naming several people ("J.N. Chaney, Jonathan
-// P. Brazee") is split by the shared splitter (authorcredit.Resolve) and each
-// part resolved or created; until 2026-10-04 the WHOLE string was looked up and
-// created, minting one author row named after both people (1,597 such rows on
-// production). A junk name, or a combined credit the splitter will not split
-// whose parts already exist as authors (authorcredit.ErrCombinedCredit), is no
-// author: the book is saved without one rather than failing the save.
+// P. Brazee") is split only into authors that already exist
+// (authorcredit.Resolve); otherwise the whole string is looked up and created
+// when missing, as before 2026-10-04, when that whole-string create minted
+// 1,597 author rows named after several people on production. A junk name, or
+// a combined credit whose pieces are all different existing authors
+// (authorcredit.ErrCombinedCredit), is no author: the book is saved without
+// one rather than failing the save.
 func resolveAuthorIDs(authorName string) ([]int, error) {
 	trimmed := strings.TrimSpace(authorName)
 	if trimmed == "" {

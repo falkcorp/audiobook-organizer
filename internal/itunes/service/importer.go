@@ -2558,66 +2558,36 @@ func (imp *Importer) assignAuthorAndSeries(book *database.Book, track *itunes.Tr
 }
 
 func (imp *Importer) ensureAuthorIDs(name string) ([]int, error) {
-	parts := dedup.SplitCompositeAuthorName(name)
-	if len(parts) == 0 {
-		parts = []string{name}
+	// Creation gate for positional shrapnel. iTunes tracks carry the chapter
+	// file's own numbering in the artist tag, so this path minted rows like
+	// "Track 01", "001_Celestia" and "000m_00s__056m_16s_43h".
+	// CleanAuthorNameForCreation strips the numbering rather than rejecting
+	// outright, because "001-147 Kevin J Anderson" carries a real person that
+	// a blanket reject would discard. (The older IsDirtyAuthorName gate, C413,
+	// recognised only 435 of the 2,793 leading-digit author rows.)
+	cleaned, ok := dedup.CleanAuthorNameForCreation(strings.TrimSpace(name))
+	if !ok {
+		slog.Warn("itunes import: artist rejected as author name", "full_name", name)
+		return nil, fmt.Errorf("no valid author names in %q", name)
 	}
-
-	var ids []int
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		// Creation gate for positional shrapnel. iTunes tracks carry the
-		// chapter file's own numbering in the artist tag, so this path mints
-		// rows like "Track 01", "001_Celestia" and "000m_00s__056m_16s_43h".
-		// CleanAuthorNameForCreation strips the numbering rather than
-		// rejecting outright, because "001-147 Kevin J Anderson" carries a
-		// real person that a blanket reject would discard.
-		//
-		// The older IsDirtyAuthorName gate (C413) does NOT cover this class:
-		// measured against the 2,793 leading-digit author rows in production
-		// it recognised 435 of them, so calling it here would guard a sixth
-		// of the problem and look from this line like guarding all of it.
-		cleaned, ok := dedup.CleanAuthorNameForCreation(part)
-		if !ok {
-			slog.Warn("itunes import: artist fragment rejected as author name",
-				"fragment", part, "full_name", name)
-			continue
-		}
-		part = cleaned
-		if len(parts) == 1 {
-			// The splitter left the credit whole. The shared resolver
-			// (authorcredit.Resolve) keeps that behaviour -- look the name
-			// up, create it when missing -- except for a combined credit
-			// whose every piece is already an author, which it refuses
-			// (ErrCombinedCredit) instead of minting one more combined row.
-			resolved, err := authorcredit.Resolve(imp.store, part, authorcredit.CleanGate)
-			if errors.Is(err, authorcredit.ErrCombinedCredit) {
-				logger.New("itunes-import").Warn("artist %q joins existing authors the splitter will not split; not creating it",
-					logger.SanitizeLogValue(name))
-				continue
-			}
-			if err != nil {
-				return nil, err
-			}
-			for _, a := range resolved {
-				ids = append(ids, a.ID)
-			}
-			continue
-		}
-		author, err := imp.store.GetAuthorByName(part)
-		if err != nil {
-			return nil, err
-		}
-		if author == nil {
-			author, err = imp.store.CreateAuthor(part)
-			if err != nil {
-				return nil, err
-			}
-		}
-		ids = append(ids, author.ID)
+	// The shared resolver (authorcredit.Resolve), the same rule as every
+	// other creation path: a credit naming several people is split ONLY into
+	// authors that already exist; otherwise the whole artist string is looked
+	// up and created when missing. Until 2026-10-04 this path split with the
+	// shared splitter and created every part, so "Dante King (Dragon Born)"
+	// minted an author named after the series.
+	resolved, err := authorcredit.Resolve(imp.store, cleaned, authorcredit.CleanGate)
+	if errors.Is(err, authorcredit.ErrCombinedCredit) {
+		logger.New("itunes-import").Warn("artist %q joins existing authors the splitter will not split; not creating it",
+			logger.SanitizeLogValue(name))
+		return nil, fmt.Errorf("no valid author names in %q", name)
+	}
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]int, 0, len(resolved))
+	for _, a := range resolved {
+		ids = append(ids, a.ID)
 	}
 	if len(ids) == 0 {
 		return nil, fmt.Errorf("no valid author names in %q", name)

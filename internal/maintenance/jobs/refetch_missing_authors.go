@@ -217,11 +217,10 @@ type tagAuthorStore interface {
 }
 
 // linkTagAuthors finds or creates the author records a tag names and links
-// them to the book. A tag naming several people is split by the shared
-// splitter (authorcredit.Resolve) and each part resolved or created; until
-// 2026-10-04 the whole tag was created as one author. A combined tag of
-// existing authors the splitter will not split is no author
-// (tagAuthorsCombined).
+// them to the book. A tag naming several people is split only into authors
+// that already exist (authorcredit.Resolve); otherwise the whole tag is looked
+// up and created when missing, as before. A combined tag whose pieces are all
+// different existing authors is no author (tagAuthorsCombined).
 //
 // The primary goes through ModifyBook: it re-reads the full row under the
 // book's write lock and sets only AuthorID, so a column another writer

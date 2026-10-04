@@ -249,15 +249,17 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 			slog.Warn("importer: artist tag rejected as author name",
 				"artist", logging.Sanitize(meta.Artist), "path", logging.Sanitize(req.FilePath), "reason", string(why))
 		} else {
-			// Resolved with the shared helper: a credit naming several people
-			// is split and each part resolved or created (the first is the
-			// primary, all of them are credited once the book exists), and a
-			// combined credit of existing authors the splitter will not split
-			// is no author (ErrCombinedCredit). Until 2026-10-04 this created
-			// the author only when the LOOKUP FAILED: a plain miss (nil, nil)
-			// left the book authorless, and a store error minted the whole
-			// credit string as one author.
-			authors, err := authorcredit.Resolve(is.db, prepared, authorcredit.CleanGate)
+			// Looked up with the shared helper (authorcredit.Lookup), which
+			// never creates: a credit naming several existing authors links
+			// them (the first is the primary, all are credited once the book
+			// exists); a single existing author links it; anything else
+			// leaves the book authorless, as this importer always did on a
+			// plain lookup miss. It used to create the author only when the
+			// lookup returned an ERROR, minting the whole credit string; a
+			// lookup error is now a failed import instead. A combined credit
+			// whose pieces are all different existing authors is no author
+			// (ErrCombinedCredit).
+			authors, err := authorcredit.Lookup(is.db, prepared, authorcredit.CleanGate)
 			switch {
 			case errors.Is(err, authorcredit.ErrCombinedCredit):
 				logger.New("importer").Warn("artist tag %q joins existing authors the splitter will not split; not crediting it (path %s)",
@@ -265,7 +267,7 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 			case errors.Is(err, database.ErrImplausibleAuthorName):
 				// The store's gate refused it: no author, as above.
 			case err != nil:
-				return nil, fmt.Errorf("failed to create author: %w", err)
+				return nil, fmt.Errorf("failed to resolve author: %w", err)
 			case len(authors) > 0:
 				book.AuthorID = &authors[0].ID
 				importAuthors = authors

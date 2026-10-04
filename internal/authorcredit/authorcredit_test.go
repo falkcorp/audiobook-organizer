@@ -242,3 +242,80 @@ func TestStripBracketsAndCollective(t *testing.T) {
 	require.False(t, IsCollectiveCredit("Terry Pratchett"))
 	require.Nil(t, SplitNames("Dante King (Dragon Born)", PrepareGate), "never the bracket branch")
 }
+
+// SF1: a name written surname first is one person, never split, even when its
+// fragments exist as author rows; an existing whole row is found first.
+func TestResolve_SurnameFirstIsOnePerson(t *testing.T) {
+	st := newStore(t, "Le Guin, Ursula K.", "Le Guin", "Ursula K.", "Van Vogt", "A. E.", "Van Der Berg", "Jan Willem",
+		"Rob J. Hayes", "M.A.")
+	got, err := Resolve(st, "Le Guin, Ursula K.", PrepareGate)
+	require.NoError(t, err)
+	require.Equal(t, []string{"Le Guin, Ursula K."}, names(got))
+	for _, n := range []string{"Van Vogt, A. E.", "Van Der Berg, Jan Willem", "Rob J. Hayes, M.A."} {
+		got, err := Resolve(st, n, PrepareGate)
+		require.NoError(t, err, n)
+		require.Equal(t, []string{n}, names(got), "%s is one person, created whole", n)
+	}
+	for _, n := range []string{"Le Guin, Ursula K.", "Van Vogt, A. E.", "Van Der Berg, Jan Willem", "Rob J. Hayes, M.A.",
+		"Tolkien, J. R. R.", "Martin, George R. R.", "Martin Luther King, Jr.", "King, Stephen"} {
+		require.True(t, OnePersonShape(n), n)
+	}
+	for _, n := range []string{"Travis Deverell, Shirtaloon", "J.N. Chaney, Jonathan P. Brazee", "A, B and C"} {
+		require.False(t, OnePersonShape(n), n)
+	}
+}
+
+// SF2: every piece the same author (a doubled name, a pen name and its alias)
+// is that author, not a refusal.
+func TestResolve_SameAuthorPiecesResolveToIt(t *testing.T) {
+	st := newStore(t, "A. G. Riddle", "J. K. Rowling")
+	got, err := Resolve(st, "A. G. Riddle, A. G. Riddle", PrepareGate)
+	require.NoError(t, err)
+	require.Equal(t, []string{"A. G. Riddle"}, names(got))
+	jk, err := st.GetAuthorByName("J. K. Rowling")
+	require.NoError(t, err)
+	_, err = st.CreateAuthorAlias(jk.ID, "Robert Galbraith", "pen_name")
+	require.NoError(t, err)
+	got, err = Resolve(st, "Robert Galbraith, J. K. Rowling", PrepareGate)
+	require.NoError(t, err)
+	require.Equal(t, []string{"J. K. Rowling"}, names(got))
+}
+
+// SF3: suffix and degree pieces are not people, and a non-person piece means
+// the string is not a list of authors: none of these is refused.
+func TestResolve_SuffixesAndShapesAreNotCombined(t *testing.T) {
+	st := newStore(t, "Martin Luther King", "Jr.", "Tolkien", "J. R. R.", "Martin", "George R. R.")
+	for _, n := range []string{"Martin Luther King, Jr.", "Tolkien, J. R. R.", "Martin, George R. R."} {
+		got, err := Resolve(st, n, PrepareGate)
+		require.NoError(t, err, n)
+		require.Equal(t, []string{n}, names(got), n)
+	}
+}
+
+// Lookup never creates.
+func TestLookup_NeverCreates(t *testing.T) {
+	st := newStore(t, "J. N. Chaney", "Jonathan P. Brazee")
+	got, err := Lookup(st, "J.N. Chaney, Jonathan P. Brazee", PrepareGate)
+	require.NoError(t, err)
+	require.Equal(t, []string{"J. N. Chaney", "Jonathan P. Brazee"}, names(got))
+	got, err = Lookup(st, "Somebody Unknown", PrepareGate)
+	require.NoError(t, err)
+	require.Empty(t, got)
+	a, err := st.GetAuthorByName("Somebody Unknown")
+	require.NoError(t, err)
+	require.Nil(t, a)
+}
+
+// NIT2b: an alias lookup failure fails open to the whole-string path.
+type aliasFailStore struct{ *database.PebbleStore }
+
+func (aliasFailStore) FindAuthorByAlias(string) (*database.Author, error) {
+	return nil, errors.New("alias index down")
+}
+
+func TestResolve_AliasFailureFailsOpen(t *testing.T) {
+	st := newStore(t, "J. N. Chaney")
+	got, err := Resolve(aliasFailStore{st}, "J.N. Chaney, Jonathan P. Brazee", PrepareGate)
+	require.NoError(t, err)
+	require.Equal(t, []string{"J.N. Chaney, Jonathan P. Brazee"}, names(got))
+}

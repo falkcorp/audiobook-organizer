@@ -330,10 +330,10 @@ func BatchUpdateMetadata(updates []MetadataUpdate, store batchUpdateStore, valid
 			}
 		}
 		// A name naming several people ("J.N. Chaney, Jonathan P. Brazee") is
-		// split by the shared splitter (authorcredit.Resolve): the first part
-		// is the primary AuthorID and every part is credited after the write.
-		// Until 2026-10-04 the whole string was created as one author. A
-		// combined name of existing authors the splitter will not split is
+		// split only into authors that already exist (authorcredit.Resolve):
+		// the first is the primary AuthorID and every one is credited after
+		// the write. Otherwise the whole string is resolved as before. A
+		// combined name whose pieces are all different existing authors is
 		// no change, like a junk name.
 		var resolvedAuthors []database.Author
 		if name := authorName; name != "" {

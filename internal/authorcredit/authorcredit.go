@@ -89,7 +89,8 @@ func CleanGate(raw string) (string, bool) {
 
 // ErrCombinedCredit is returned by Resolve for a credit that does not split
 // safely, is not an author yet, and whose every loosely split piece already
-// is one. The caller leaves the book without that author, exactly as for a
+// is a DIFFERENT existing author (a doubled name or an alias pair resolves to
+// its one author instead). The caller leaves the book without that author, exactly as for a
 // junk name; it must not create the whole string.
 var ErrCombinedCredit = errors.New("authorcredit: combined credit of existing authors the splitter will not split")
 
@@ -149,13 +150,17 @@ var (
 // of ts, cached per store for titleIndexTTL.
 func titlesOf(ts TitleSource) (map[string]bool, error) {
 	cacheable := reflect.TypeOf(ts).Kind() == reflect.Ptr
-	titleMu.Lock()
-	defer titleMu.Unlock()
 	if cacheable {
-		if e := titleCache[ts]; e != nil && time.Since(e.built) < titleIndexTTL {
+		titleMu.Lock()
+		e := titleCache[ts]
+		titleMu.Unlock()
+		if e != nil && time.Since(e.built) < titleIndexTTL {
 			return e.keys, nil
 		}
 	}
+	// Built outside the lock: a full series and book listing must not hold
+	// up every other resolve. Two concurrent rebuilds both read; the later
+	// swap wins, which is harmless.
 	series, err := ts.GetAllSeries()
 	if err != nil {
 		return nil, fmt.Errorf("list series: %w", err)
@@ -179,7 +184,9 @@ func titlesOf(ts TitleSource) (map[string]bool, error) {
 		}
 	}
 	if cacheable {
+		titleMu.Lock()
 		titleCache[ts] = &titleIndex{keys: keys, built: time.Now()}
+		titleMu.Unlock()
 	}
 	return keys, nil
 }
@@ -283,14 +290,90 @@ func SplitNames(name string, gate Gate) []string {
 	return out
 }
 
-// surnameFirst reports the one shape of a two-piece comma credit that is one
-// person: a bare surname, a comma, a given name ("King, Stephen"). Both sides
-// one word: "Travis Deverell, Shirtaloon" is two people even though its
-// right side is one word, and when both are existing authors it must not be
-// created as one.
+// surnameParticles lead a surname written first ("Le Guin, Ursula K.", "Van
+// Vogt, A. E.", "Van Der Berg, Jan Willem").
+var surnameParticles = map[string]bool{
+	"le": true, "la": true, "van": true, "von": true, "de": true, "del": true, "della": true, "di": true,
+	"du": true, "des": true, "da": true, "dos": true, "das": true, "der": true, "den": true, "ter": true,
+	"ten": true, "mac": true, "mc": true, "st": true, "st.": true, "al": true, "el": true, "bin": true,
+	"ben": true, "o'": true,
+}
+
+// suffixRe is a name suffix or degree written as its own comma piece ("Jr.",
+// "Sr.", "III", "PhD", "M.A."): part of the name before it, not a person.
+var suffixRe = regexp.MustCompile(`(?i)^(?:jr|sr|ii|iii|iv|phd|ph\.?\s?d|md|m\.?\s?a|m\.?\s?d|b\.?\s?a|m\.?\s?s|esq|dds|rn|ret)\.?$`)
+
+// IsNameSuffix reports whether a credit piece is a suffix or degree.
+func IsNameSuffix(s string) bool { return suffixRe.MatchString(strings.TrimSpace(s)) }
+
+// initialRe is one initial ("A", "A.") or run of initials ("J.R.R.").
+var initialRe = regexp.MustCompile(`^(?:\p{Lu}\.?)+$`)
+
+// givenNameShaped reports whether a piece reads as given names written after
+// a surname: initials only ("A. E.", "J. R. R."), or one name followed by
+// initials ("Ursula K.", "George R. R.").
+func givenNameShaped(s string) bool {
+	f := strings.Fields(s)
+	if len(f) == 0 {
+		return false
+	}
+	start := 0
+	if !initialRe.MatchString(f[0]) {
+		if len(f) == 1 {
+			return false
+		}
+		start = 1
+	}
+	for _, w := range f[start:] {
+		if !initialRe.MatchString(w) {
+			return false
+		}
+	}
+	return true
+}
+
+// surnameFirst reports whether a two-piece comma credit is ONE person written
+// surname first, or a name with its suffix:
+//   - both sides one word ("King, Stephen");
+//   - the right side is a suffix or degree ("Martin Luther King, Jr.", "Rob J.
+//     Hayes, M.A.");
+//   - the right side is given-name shaped ("Tolkien, J. R. R.", "Martin,
+//     George R. R.", "Le Guin, Ursula K.");
+//   - the left side starts with a surname particle ("Van Der Berg, Jan
+//     Willem").
+//
+// "Travis Deverell, Shirtaloon" is two people: a two-word left side and a
+// right side that is neither initials nor a particle-led surname.
 func surnameFirst(name string, parts []string) bool {
-	return len(parts) == 2 && strings.Count(name, ",") == 1 && !strings.ContainsAny(name, ";/&") &&
-		len(strings.Fields(parts[0])) == 1 && len(strings.Fields(parts[1])) == 1
+	if len(parts) != 2 || strings.Count(name, ",") != 1 || strings.ContainsAny(name, ";/&") ||
+		looseAndRe.MatchString(name) {
+		return false
+	}
+	left, right := strings.Fields(parts[0]), strings.Fields(parts[1])
+	if len(left) == 0 || len(right) == 0 {
+		return false
+	}
+	switch {
+	case len(left) == 1 && len(right) == 1:
+		return true
+	case IsNameSuffix(parts[1]):
+		return true
+	case givenNameShaped(parts[1]):
+		return true
+	case surnameParticles[strings.ToLower(left[0])]:
+		return true
+	}
+	return false
+}
+
+// looseAndRe is a whole-word "and" (a list, never a surname-first name).
+var looseAndRe = regexp.MustCompile(`(?i)\band\b`)
+
+// OnePersonShape reports whether a credit is one person written surname
+// first or with a suffix (surnameFirst), so it must never be split.
+func OnePersonShape(name string) bool {
+	stripped := StripBrackets(name)
+	return surnameFirst(stripped, LooseParts(stripped))
 }
 
 // LooksCombined reports whether name is a credit of several people: the
@@ -339,30 +422,81 @@ func lookupExisting(store Store, name string) (*database.Author, error) {
 	return a, nil
 }
 
-// allPartsAreAuthors reports whether name loosely splits into two or more
-// pieces of which every one is already an author row.
-func allPartsAreAuthors(store Store, name string) (bool, error) {
-	parts := LooseParts(name)
-	if len(parts) < 2 || surnameFirst(name, parts) {
-		return false, nil
+// piecesVerdict looks every loosely split piece of name up. A suffix or
+// degree piece ("Jr.", "PhD") is dropped. It reports:
+//   - same: every remaining piece resolves to ONE author (a doubled name, "A.
+//     G. Riddle, A. G. Riddle", or a pen name with its alias, "Robert
+//     Galbraith, J. K. Rowling"): that author is the credit;
+//   - combined: two or more person-shaped pieces, every one an existing
+//     author, and not all the same one: a combined record that must not be
+//     created.
+//
+// A piece that is not person-shaped (personPiece) means the string is not a
+// list of people: neither verdict.
+// personPiece reports whether a credit piece can be one person: person-shaped
+// (personname.LooksLikePersonName), or a single-word pen name of four or more
+// letters ("Shirtaloon", "Zogarth"). Initials alone ("J. R. R.") are not.
+func personPiece(p string) bool {
+	n := personname.NormalizeAuthorName(p)
+	if personname.LooksLikePersonName(n) {
+		return true
 	}
-	for _, p := range parts {
+	f := strings.Fields(n)
+	if len(f) != 1 || initialRe.MatchString(f[0]) {
+		return false
+	}
+	letters := 0
+	for _, r := range f[0] {
+		if unicode.IsLetter(r) {
+			letters++
+		}
+	}
+	first := []rune(f[0])[0]
+	return letters >= 4 && unicode.IsUpper(first)
+}
+
+func piecesVerdict(store Store, name string) (same *database.Author, combined bool, err error) {
+	var pieces []string
+	for _, p := range LooseParts(name) {
+		if !IsNameSuffix(p) {
+			pieces = append(pieces, p)
+		}
+	}
+	if len(pieces) < 2 || OnePersonShape(name) {
+		return nil, false, nil
+	}
+	for _, p := range pieces {
+		if !personPiece(p) {
+			return nil, false, nil
+		}
+	}
+	var first *database.Author
+	allSame := true
+	for _, p := range pieces {
 		a, err := lookupExisting(store, p)
 		if err != nil {
-			return false, err
+			return nil, false, err
 		}
 		if a == nil {
-			return false, nil
+			return nil, false, nil
+		}
+		if first == nil {
+			first = a
+		} else if a.ID != first.ID {
+			allSame = false
 		}
 	}
-	return true, nil
+	if allSame {
+		return first, false, nil
+	}
+	return nil, true, nil
 }
 
 // splitExisting returns the existing authors a creation path credits for
 // name, in order, or nil when it must not split it: a gate refuses (see the
 // package comment) or any part would need a new author record.
 func splitExisting(store Store, name string, gate Gate) ([]database.Author, error) {
-	if roleRe.MatchString(name) {
+	if roleRe.MatchString(name) || OnePersonShape(name) {
 		return nil, nil
 	}
 	parts := SplitNames(StripBrackets(name), gate)
@@ -406,35 +540,61 @@ func splitExisting(store Store, name string, gate Gate) ([]database.Author, erro
 // log their refusals in their own words); each split part must pass CleanGate
 // and gate (PrepareGate when nil).
 //
-// It splits only into existing authors; otherwise it looks the whole string
-// up and creates it when missing, as before. It returns ErrCombinedCredit
-// (and no authors) for an unsplittable whole string made only of existing
-// authors; see the package comment.
+// Order:
+//  1. the whole string, when it is already an author ("Le Guin, Ursula K."),
+//     unless it is a combined record whose parts all exist (then 2 links
+//     them instead of the combined row);
+//  2. a split, only into existing authors (splitExisting);
+//  3. every piece the same author (a doubled name, a pen name and its
+//     alias): that author;
+//  4. every piece a different existing author: ErrCombinedCredit, never
+//     created;
+//  5. otherwise the whole string is created, as before this package.
+//
+// A failure of the optional checks (the title index, an alias lookup) fails
+// OPEN to the whole-string path: it never fails the caller's save. A failure
+// of the whole-string lookup or create is returned.
 func Resolve(store Store, name string, gate Gate) ([]database.Author, error) {
+	return resolve(store, name, gate, true)
+}
+
+// Lookup is Resolve without step 5: it never creates an author, and returns
+// no authors when the credit names no existing one. For a path that did not
+// create authors on a miss before this package (the file importer).
+func Lookup(store Store, name string, gate Gate) ([]database.Author, error) {
+	return resolve(store, name, gate, false)
+}
+
+func resolve(store Store, name string, gate Gate, create bool) ([]database.Author, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return nil, nil
-	}
-	split, err := splitExisting(store, name, gate)
-	if err != nil {
-		return nil, err
-	}
-	if len(split) >= 2 {
-		return split, nil
 	}
 	existing, err := store.GetAuthorByName(name)
 	if err != nil {
 		return nil, fmt.Errorf("look up author %q: %w", name, err)
 	}
+	split, serr := splitExisting(store, name, gate)
+	if serr != nil {
+		split = nil // fail open: the whole-string path
+	}
+	if len(split) >= 2 {
+		return split, nil
+	}
 	if existing != nil {
 		return []database.Author{*existing}, nil
 	}
-	combined, err := allPartsAreAuthors(store, name)
-	if err != nil {
-		return nil, err
-	}
-	if combined {
+	same, combined, verr := piecesVerdict(store, name)
+	switch {
+	case verr != nil:
+		// fail open: treat as not a list of existing authors
+	case same != nil:
+		return []database.Author{*same}, nil
+	case combined:
 		return nil, ErrCombinedCredit
+	}
+	if !create {
+		return nil, nil
 	}
 	a, err := store.CreateAuthor(name)
 	if err != nil {

@@ -152,11 +152,11 @@ func (mfs *Service) applyMetadataUnguarded(book *database.Book, meta metadata.Bo
 		}
 	}
 	// A provider credit naming several people ("J.N. Chaney, Jonathan P.
-	// Brazee") credits each of them, split by the shared splitter
-	// (authorcredit.Resolve); until 2026-10-04 the whole string was looked up
-	// and created, minting a combined author row and appending it beside the
-	// separate authors. A combined credit the splitter will not split whose
-	// parts already exist as authors credits no one (ErrCombinedCredit), the
+	// Brazee") credits each of them when every one is an existing author
+	// (authorcredit.Resolve); otherwise the whole string is looked up and
+	// created as before 2026-10-04, when that minted combined author rows
+	// appended beside the separate authors. A combined credit whose pieces are
+	// all different existing authors credits no one (ErrCombinedCredit), the
 	// same as a junk name. A store error resolving the author is logged and
 	// the book keeps its credits, as before.
 	if extractedAuthor != "" && !IsGarbageValue(extractedAuthor) {

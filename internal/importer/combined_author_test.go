@@ -66,11 +66,11 @@ func TestImportFile_MultiAuthorArtistIsSplit(t *testing.T) {
 	require.Equal(t, 1, credited[1].Position)
 }
 
-// One part is no author yet: not split at import; the whole artist string is
-// resolved as before (and, with the lookup-miss fix, created rather than left
-// authorless: until 2026-10-04 a plain miss (nil, nil) left the book without
-// an author).
-func TestImportFile_UnknownPartKeepsTheWholeArtist(t *testing.T) {
+// SF5: the importer never creates an author. One part is no author yet, so
+// the credit does not split, and the whole artist string is not created
+// either: the book stays authorless, as it did before 2026-10-04 on a plain
+// lookup miss.
+func TestImportFile_UnknownPartLeavesTheBookAuthorless(t *testing.T) {
 	withSupportedExt(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "J.N. Chaney, Jonathan P. Brazee - Mission Creep.m4b")
@@ -79,17 +79,20 @@ func TestImportFile_UnknownPartKeepsTheWholeArtist(t *testing.T) {
 	var rows []*database.BookFile
 	store := importStore(dir, &rows)
 	authors := map[string]*database.Author{"J. N. Chaney": {ID: 1, Name: "J. N. Chaney"}}
-	var created []string
 	store.GetAuthorByNameFunc = func(name string) (*database.Author, error) { return authors[name], nil }
 	store.CreateAuthorFunc = func(name string) (*database.Author, error) {
-		created = append(created, name)
-		a := &database.Author{ID: 50, Name: name}
-		authors[name] = a
-		return a, nil
+		t.Fatalf("the importer must not create an author (%q)", name)
+		return nil, nil
 	}
-	store.SetBookAuthorsFunc = func(string, []database.BookAuthor) error { t.Fatal("no co-author credits"); return nil }
+	var book *database.Book
+	store.CreateBookFunc = func(b *database.Book) (*database.Book, error) {
+		out := *b
+		out.ID = "01JIMPORTEDBOOK000000000"
+		book = &out
+		return &out, nil
+	}
 	_, err := NewImportService(store).ImportFile(&ImportFileRequest{FilePath: path})
 	require.NoError(t, err)
-	require.Len(t, created, 1)
-	require.NotEqual(t, "Jonathan P. Brazee", created[0], "no author is created from a split")
+	require.NotNil(t, book)
+	require.Nil(t, book.AuthorID)
 }
