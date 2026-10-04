@@ -1,7 +1,7 @@
 // file: internal/server/metadata_candidate_op.go
-// version: 3.9.0
+// version: 3.10.0
 // guid: 3f7e2c91-b4a0-4d8e-9c5f-1a6b7d8e0f23
-// last-edited: 2026-10-02
+// last-edited: 2026-10-04
 //
 // Registers the metadata.candidate-fetch v2 OperationDef. Pure params
 // type moved to internal/metabatch.FetchOpParams.
@@ -238,7 +238,7 @@ func (s *Server) runMetadataCandidateFetchOp(ctx context.Context, rawParams json
 	budget := metafetch.EnabledSourcesBudget()
 	limiter := candidateFetchLimiter(budget.RPS, budget.Burst)
 	// One folder memo per run, shared by every worker (resolver folder reads).
-	folderMemo := s.newFolderMemo()
+	folderMemo := s.newFolderMemo(store)
 
 	workCh := make(chan string, len(p.BookIDs))
 	for _, id := range p.BookIDs {

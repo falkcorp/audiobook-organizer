@@ -1,7 +1,7 @@
 // file: internal/applygate/manual_only.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: a2f62ab5-314e-427a-8ca7-de28de936b75
-// last-edited: 2026-09-29
+// last-edited: 2026-10-04
 
 package applygate
 
@@ -149,6 +149,18 @@ func BulkManualOnlyGuard(files ManualOnlyFilesReader, series ManualOnlySeriesRea
 		g.ReadErr = "no book to check for the owner-manual rule"
 		return g
 	}
+	// The stand-ins the resolver searches a blank or unsearchable title by,
+	// checked here whatever the resolver decided. searchQuery is empty when the
+	// resolver SKIPS the row (a part row, or a row whose import root it could
+	// not read and so listed as siblings), and a blank-titled Big Finish file
+	// whose intro transcription ("Doctor Who: The Chimes of Midnight") is the
+	// only signal would otherwise reach the gate with nothing to match. The
+	// folder name needs no stand-in check: it is part of every path checked
+	// below and in ManualOnlyDetail.
+	if t := book.TranscribedTitle; t != nil && IsOwnerManualOnly(*t, "") {
+		g.StoreDetail = manualOnlyWhy + "transcribed title " + strconv.Quote(*t)
+		return g
+	}
 	if series != nil && book.SeriesID != nil {
 		sr, err := series.GetSeriesByID(*book.SeriesID)
 		switch {
@@ -168,6 +180,10 @@ func BulkManualOnlyGuard(files ManualOnlyFilesReader, series ManualOnlySeriesRea
 	for _, f := range bookFiles {
 		if IsOwnerManualOnly(f.FilePath, "") {
 			g.StoreDetail = manualOnlyWhy + "file " + strconv.Quote(f.FilePath)
+			return g
+		}
+		if t := f.TranscribedTitle; t != nil && IsOwnerManualOnly(*t, "") {
+			g.StoreDetail = manualOnlyWhy + "file transcribed title " + strconv.Quote(*t)
 			return g
 		}
 	}

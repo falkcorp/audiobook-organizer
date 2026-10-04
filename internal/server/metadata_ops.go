@@ -1,7 +1,7 @@
 // file: internal/server/metadata_ops.go
-// version: 1.35.0
+// version: 1.36.0
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
-// last-edited: 2026-10-02
+// last-edited: 2026-10-04
 //
 // Async-operation machinery for the metadata domain, relocated verbatim from
 // metadata_handlers.go (ADR-003 Phase 4) when the 19 metadata HTTP handlers
@@ -332,7 +332,7 @@ func (s *Server) runBulkMetadataFetchAll(
 	sem := metafetch.NewProviderSemaphore(sourceChain, metafetch.DefaultPerProviderFetchCap)
 	// One folder memo per run: the resolver lists each book's folder once
 	// across all workers, and never lists a library or import root.
-	folderMemo := s.newFolderMemo()
+	folderMemo := s.newFolderMemo(store)
 
 	// progressMu serializes ProgressReporter calls — the reporter is not assumed
 	// concurrency-safe (see runBulkWriteBack for the same precaution).
@@ -836,7 +836,7 @@ func (s *Server) runBulkMetadataFetchForBookIDs(
 	sem := metafetch.NewProviderSemaphore(sourceChain, metafetch.DefaultPerProviderFetchCap)
 	// One folder memo per run: the resolver lists each book's folder once
 	// across all workers, and never lists a library or import root.
-	folderMemo := s.newFolderMemo()
+	folderMemo := s.newFolderMemo(store)
 
 	var progressMu sync.Mutex
 	reportProgress := func(current, total int, message string) {

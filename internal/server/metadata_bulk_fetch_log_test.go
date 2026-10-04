@@ -1,7 +1,7 @@
 // file: internal/server/metadata_bulk_fetch_log_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 8966af00-704c-4a19-99e8-b832e27d9f7c
-// last-edited: 2026-10-01
+// last-edited: 2026-10-04
 
 package server
 
@@ -197,7 +197,7 @@ func TestResolveBulkFetchQuery_FolderEvidenceTitles(t *testing.T) {
 			}, nil
 		},
 	}
-	memo := metabatch.NewFolderMemo()
+	memo := metabatch.NewFolderMemo(store)
 	q := resolveBulkFetchQuery(store, "b-apollo", "Apollo 13", "/library/Authors/Jim Lovell/Apollo 13.m4b", "Jim Lovell", "pre-loop-identity", nil, nil, memo)
 	if !q.query.Usable || q.query.Title != "Apollo 13" || q.identity != "pre-loop-identity" {
 		t.Errorf("Apollo 13: %+v identity %q, want its own title on the pre-loop identity", q.query, q.identity)
