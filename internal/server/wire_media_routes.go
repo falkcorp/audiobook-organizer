@@ -1,7 +1,7 @@
 // file: internal/server/wire_media_routes.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: c9d0e1f2-a3b4-5678-cdef-901234567890
-// last-edited: 2026-09-13
+// last-edited: 2026-10-03
 
 package server
 
@@ -66,6 +66,7 @@ func (s *Server) wireMediaRoutes(
 
 	// Diagnostics (migrated from server_lifecycle.go).
 	protected.GET("/diagnostics/db-health", s.perm(auth.PermSettingsManage), diagH.GetDBHealth)
+	protected.GET("/diagnostics/db-census", s.perm(auth.PermSettingsManage), diagH.GetDBCensus)
 	protected.POST("/diagnostics/export", s.perm(auth.PermSettingsManage), diagH.StartExport)
 	protected.GET("/diagnostics/export/:operationId/download", s.perm(auth.PermSettingsManage), diagH.DownloadExport)
 	protected.POST("/diagnostics/submit-ai", s.perm(auth.PermSettingsManage), diagH.SubmitAI)
