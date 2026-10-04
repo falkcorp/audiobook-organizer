@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/interfaces.go
-// version: 1.26.0
+// version: 1.27.0
 // guid: b1ab2e4a-1f73-42f2-955d-c4a30f0fbaac
-// last-edited: 2026-10-02
+// last-edited: 2026-10-04
 
 // Narrow dependency interfaces for the metadata-domain HTTP handlers (the 19
 // per-book + library metadata endpoints extracted from the server package's
@@ -51,6 +51,9 @@ type MetadataEntityResolver interface {
 	CreateAuthor(name string) (*database.Author, error)
 	GetSeriesByName(name string, authorID *int) (*database.Series, error)
 	CreateSeries(name string, authorID *int) (*database.Series, error)
+	// ModifyBookAuthors: BatchUpdateMetadata credits every author of a
+	// multi-author name (authorcredit.AddCredits), add-only.
+	ModifyBookAuthors(bookID string, fn func([]database.BookAuthor) ([]database.BookAuthor, error)) ([]database.BookAuthor, error)
 }
 
 // MetadataAuditWriter writes the bookkeeping rows that accompany a metadata

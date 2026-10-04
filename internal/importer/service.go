@@ -1,7 +1,7 @@
 // file: internal/importer/service.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: d0e1f2a3-b4c5-6d7e-8f9a-0b1c2d3e4f5b
-// last-edited: 2026-09-25
+// last-edited: 2026-10-04
 
 package importer
 
@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/falkcorp/audiobook-organizer/internal/authorcredit"
 	"github.com/falkcorp/audiobook-organizer/internal/bookfileaudio"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -55,6 +56,8 @@ type importForwarded interface {
 type importEntityStore interface {
 	GetAuthorByName(name string) (*database.Author, error)
 	CreateAuthor(name string) (*database.Author, error)
+	// SetBookAuthors credits every author of a multi-author credit.
+	SetBookAuthors(bookID string, authors []database.BookAuthor) error
 	GetSeriesByName(name string, authorID *int) (*database.Series, error)
 	CreateSeries(name string, authorID *int) (*database.Series, error)
 }
@@ -227,7 +230,9 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 		OriginalFilename: new(filepath.Base(req.FilePath)),
 	}
 
-	// Set author if available
+	// Set author if available. importAuthors holds every author of a
+	// multi-author credit; they are credited once the book exists.
+	var importAuthors []database.Author
 	if meta.Artist != "" {
 		normalizedArtist := dedup.NormalizeAuthorName(meta.Artist)
 		// Creation gate (C413): copyright fragments and entity shrapnel from
@@ -243,19 +248,26 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 			slog.Warn("importer: artist tag rejected as author name",
 				"artist", logging.Sanitize(meta.Artist), "path", logging.Sanitize(req.FilePath), "reason", string(why))
 		} else {
-			normalizedArtist = prepared
-			author, err := is.db.GetAuthorByName(normalizedArtist)
-			if err != nil {
-				author, err = is.db.CreateAuthor(normalizedArtist)
-				if errors.Is(err, database.ErrImplausibleAuthorName) {
-					author, err = nil, nil
-				}
-				if err != nil {
-					return nil, fmt.Errorf("failed to create author: %w", err)
-				}
-			}
-			if author != nil {
-				book.AuthorID = &author.ID
+			// Resolved with the shared helper: a credit naming several people
+			// is split and each part resolved or created (the first is the
+			// primary, all of them are credited once the book exists), and a
+			// combined credit of existing authors the splitter will not split
+			// is no author (ErrCombinedCredit). Until 2026-10-04 this created
+			// the author only when the LOOKUP FAILED: a plain miss (nil, nil)
+			// left the book authorless, and a store error minted the whole
+			// credit string as one author.
+			authors, err := authorcredit.Resolve(is.db, prepared, authorcredit.CleanGate)
+			switch {
+			case errors.Is(err, authorcredit.ErrCombinedCredit):
+				slog.Warn("importer: artist tag joins existing authors the splitter will not split; not crediting it",
+					"artist", logging.Sanitize(meta.Artist), "path", logging.Sanitize(req.FilePath))
+			case errors.Is(err, database.ErrImplausibleAuthorName):
+				// The store's gate refused it: no author, as above.
+			case err != nil:
+				return nil, fmt.Errorf("failed to create author: %w", err)
+			case len(authors) > 0:
+				book.AuthorID = &authors[0].ID
+				importAuthors = authors
 			}
 		}
 	}
@@ -301,6 +313,14 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 	created, err := is.db.CreateBook(book)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create book: %w", err)
+	}
+
+	// A multi-author credit: every author in the junction, in credit order.
+	// The book exists, so a failure here is logged, not an import failure.
+	if len(importAuthors) > 1 {
+		if err := is.db.SetBookAuthors(created.ID, authorcredit.Credits(created.ID, importAuthors)); err != nil {
+			slog.Warn("importer: could not record the co-authors", "id", created.ID, "err", err)
+		}
 	}
 
 	// Create version row for the imported file (spec 3.1).

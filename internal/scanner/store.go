@@ -1,7 +1,7 @@
 // file: internal/scanner/store.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 0a5f8c34-9b26-4e71-83d0-6f2a41e75b98
-// last-edited: 2026-09-28
+// last-edited: 2026-10-04
 
 package scanner
 
@@ -71,6 +71,9 @@ type scanEntityStore interface {
 	GetAuthorByName(name string) (*database.Author, error)
 	GetAuthorByID(id int) (*database.Author, error)
 	CreateAuthor(name string) (*database.Author, error)
+	// ModifyBookAuthors records a multi-author credit's co-authors
+	// (creditScannedAuthors), add-only under the junction lock.
+	ModifyBookAuthors(bookID string, fn func([]database.BookAuthor) ([]database.BookAuthor, error)) ([]database.BookAuthor, error)
 	GetSeriesByName(name string, authorID *int) (*database.Series, error)
 	CreateSeries(name string, authorID *int) (*database.Series, error)
 	scanWorksStore

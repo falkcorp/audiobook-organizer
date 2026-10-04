@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_parse_async.go
-// version: 1.11.1
+// version: 1.12.0
 // guid: 5c5dc851-ad6d-4624-b836-a85e38ae5d02
-// last-edited: 2026-10-01
+// last-edited: 2026-10-04
 
 package scanner
 
@@ -376,13 +376,17 @@ func saveAIFieldsToPrimary(_ context.Context, id string, book *Book) (string, er
 		row.Title = book.Title
 		changed = true
 	}
+	// authorIDs is a multi-author credit's every author, the first being the
+	// primary; the co-authors are credited after the write.
+	var authorIDs []int
 	if (row.AuthorID == nil || *row.AuthorID == 0) && book.Author != "" && !locks.Locked(database.FieldKeyAuthorName) {
-		authorID, aerr := resolveAuthorID(book.Author)
+		ids, aerr := resolveAuthorIDs(book.Author)
 		if aerr != nil {
 			return "", fmt.Errorf("resolve author %q: %w", book.Author, aerr)
 		}
-		if authorID != nil {
-			row.AuthorID = authorID
+		if len(ids) > 0 {
+			authorIDs = ids
+			row.AuthorID = &ids[0]
 			changed = true
 		}
 	}
@@ -488,6 +492,7 @@ func saveAIFieldsToPrimary(_ context.Context, id string, book *Book) (string, er
 		return "", uerr
 	}
 	if updated != nil {
+		creditScannedAuthors(store, updated.ID, updated.AuthorID, authorIDs)
 		return updated.FilePath, nil
 	}
 	// Deleted between the read and the write: nothing to fill, but the book

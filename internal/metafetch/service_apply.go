@@ -1,13 +1,14 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.49.0
+// version: 1.50.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
-// last-edited: 2026-10-03
+// last-edited: 2026-10-04
 
 package metafetch
 
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/authorcredit"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -149,13 +151,25 @@ func (mfs *Service) applyMetadataUnguarded(book *database.Book, meta metadata.Bo
 			extractedAuthor = cleaned
 		}
 	}
+	// A provider credit naming several people ("J.N. Chaney, Jonathan P.
+	// Brazee") credits each of them, split by the shared splitter
+	// (authorcredit.Resolve); until 2026-10-04 the whole string was looked up
+	// and created, minting a combined author row and appending it beside the
+	// separate authors. A combined credit the splitter will not split whose
+	// parts already exist as authors credits no one (ErrCombinedCredit), the
+	// same as a junk name. A store error resolving the author is logged and
+	// the book keeps its credits, as before.
 	if extractedAuthor != "" && !IsGarbageValue(extractedAuthor) {
-		author, err := mfs.db.GetAuthorByName(extractedAuthor)
-		if err == nil && author == nil {
-			author, err = mfs.db.CreateAuthor(extractedAuthor)
-		}
-		if err == nil && author != nil {
-			c, aerr := mfs.applyAuthorCredit(book, author.ID)
+		authors, err := authorcredit.Resolve(mfs.db, extractedAuthor, authorcredit.PrepareGate)
+		switch {
+		case errors.Is(err, authorcredit.ErrCombinedCredit):
+			logger.New("metafetch").Info("applyMetadataToBook: book %s: provider author %q joins existing authors the splitter will not split; not crediting it",
+				book.ID, logger.SanitizeLogValue(extractedAuthor))
+		case err != nil:
+			logger.New("metafetch").Warn("applyMetadataToBook: book %s: could not resolve provider author %q: %v",
+				book.ID, logger.SanitizeLogValue(extractedAuthor), err)
+		case len(authors) > 0:
+			c, aerr := mfs.applyAuthorCredit(book, authors)
 			if aerr != nil {
 				return nil, aerr
 			}
@@ -264,11 +278,16 @@ func (mfs *Service) applyMetadataUnguarded(book *database.Book, meta metadata.Bo
 //
 // It returns the join it read and the join it left, both under the lock, for
 // history: undo removes exactly what this call added.
-func (mfs *Service) applyAuthorCredit(book *database.Book, authorID int) (*AuthorCredits, error) {
+func (mfs *Service) applyAuthorCredit(book *database.Book, authors []database.Author) (*AuthorCredits, error) {
 	// The read-merge-write runs inside ModifyBookAuthors, under the store's
 	// book_authors stripe: two concurrent applies to one book each adding a
 	// different author both land. A caller-side Get -> merge -> Set lost one
 	// of them (TestApplyMetadataToBook_ConcurrentFillOnlyAppliesKeepBothAuthors).
+	// Every author of a multi-author credit is added in this one call, so one
+	// history pair describes the whole apply.
+	if len(authors) == 0 {
+		return nil, nil
+	}
 	primary := book.AuthorID
 	added, kept := false, 0
 	var before []database.BookAuthor
@@ -276,34 +295,23 @@ func (mfs *Service) applyAuthorCredit(book *database.Book, authorID int) (*Autho
 		before = append([]database.BookAuthor(nil), existing...)
 		// A book whose primary author lives only in the author_id column (no
 		// join rows) keeps it as a credit: the append must not orphan it.
-		if len(existing) == 0 && primary != nil && *primary != authorID {
-			existing = append(existing, database.BookAuthor{
-				BookID: book.ID, AuthorID: *primary, Role: "author", Position: 0,
-			})
-		}
-		nextPos := 0
-		for _, ba := range existing {
-			if ba.AuthorID == authorID {
-				return nil, database.ErrSkipBookAuthorsWrite
-			}
-			if ba.Position >= nextPos {
-				nextPos = ba.Position + 1
-			}
+		next, changed := authorcredit.AddCredits(existing, book.ID, primary, authors)
+		if !changed {
+			return nil, database.ErrSkipBookAuthorsWrite
 		}
 		added, kept = true, len(existing)
-		return append(existing, database.BookAuthor{
-			BookID: book.ID, AuthorID: authorID, Role: "author", Position: nextPos,
-		}), nil
+		return next, nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("add author credit (add-only): %w", err)
 	}
 	if added && kept > 0 {
-		applyAuthorLog.Info("fill-only apply added author %d to book %s alongside %d existing credit(s)",
-			authorID, logger.SanitizeLogValue(book.ID), kept)
+		applyAuthorLog.Info("fill-only apply added %d author(s) to book %s alongside %d existing credit(s)",
+			len(authors), logger.SanitizeLogValue(book.ID), kept)
 	}
 	if book.AuthorID == nil {
-		book.AuthorID = &authorID
+		id := authors[0].ID
+		book.AuthorID = &id
 	}
 	return &AuthorCredits{Before: before, After: after}, nil
 }

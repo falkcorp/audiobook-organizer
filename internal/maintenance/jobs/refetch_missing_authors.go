@@ -1,16 +1,18 @@
 // file: internal/maintenance/jobs/refetch_missing_authors.go
-// version: 2.11.0
+// version: 2.12.0
 // guid: a1000012-0000-0000-0000-000000000012
-// last-edited: 2026-09-25
+// last-edited: 2026-10-04
 
 package jobs
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
 	"log/slog"
 	"strings"
 
+	"github.com/falkcorp/audiobook-organizer/internal/authorcredit"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -171,17 +173,24 @@ func (j *refetchMissingAuthorsJob) Run(ctx context.Context, store maintenance.Jo
 			continue
 		}
 
-		// Find or create the author record, then link it to the book.
-		author, err := store.GetAuthorByName(authorName)
-		if err != nil || author == nil {
-			author, err = store.CreateAuthor(authorName)
-			if err != nil {
-				slog.Error("failed to create author for book", "authorName", authorName, "bookID", b.ID, "err", err)
-				errors++
-				continue
-			}
-			slog.Info("refetch-missing-authors created author", "opID", opID, "authorName", authorName, "authorID", author.ID)
+		// Find or create the author records, then link them to the book. A
+		// tag naming several people is split by the shared splitter
+		// (authorcredit.Resolve) and each part resolved or created; until
+		// 2026-10-04 the whole tag was created as one author. A combined tag
+		// of existing authors the splitter will not split is no author.
+		authors, err := authorcredit.Resolve(store, authorName, authorcredit.PrepareGate)
+		if stderrors.Is(err, authorcredit.ErrCombinedCredit) {
+			logger.New("refetch-missing-authors").Warn("book %s: tag author %q joins existing authors the splitter will not split; leaving it authorless",
+				b.ID, logger.SanitizeLogValue(authorName))
+			skipped++
+			continue
 		}
+		if err != nil || len(authors) == 0 {
+			slog.Error("failed to create author for book", "authorName", authorName, "bookID", b.ID, "err", err)
+			errors++
+			continue
+		}
+		author := &authors[0]
 
 		// Write through ModifyBook: it re-reads the full row (b is a slim
 		// Core projection) under the book's write lock and sets only
@@ -205,6 +214,22 @@ func (j *refetchMissingAuthorsJob) Run(ctx context.Context, store maintenance.Jo
 			slog.Error("book vanished before author update", "b", b.ID)
 			errors++
 			continue
+		}
+
+		// A multi-author tag: every author in the junction, add-only, only
+		// when the row's primary is the tag's first author (a primary another
+		// writer filled meanwhile is theirs).
+		if len(authors) > 1 && full.AuthorID != nil && *full.AuthorID == authors[0].ID {
+			if _, cerr := store.ModifyBookAuthors(b.ID, func(cur []database.BookAuthor) ([]database.BookAuthor, error) {
+				next, changed := authorcredit.AddCredits(cur, b.ID, full.AuthorID, authors)
+				if !changed {
+					return nil, database.ErrSkipBookAuthorsWrite
+				}
+				return next, nil
+			}); cerr != nil {
+				slog.Error("failed to credit co-authors", "b", b.ID, "err", cerr)
+				errors++
+			}
 		}
 
 		slog.Info("refetch-missing-authors set author on book", "opID", opID, "authorName", authorName, "bookID", b.ID, "bookTitle", b.Title)

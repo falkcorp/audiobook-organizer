@@ -143,6 +143,27 @@ func surnameFirst(name string, parts []string) bool {
 		len(strings.Fields(parts[1])) == 1
 }
 
+// LooksCombined reports whether name is a credit of several people: the
+// shared splitter splits it, or it loosely splits into two or more pieces of
+// which every one is an author (exists reports that for one piece). A
+// two-piece "Surname, First" is one person. For a caller that holds its own
+// author index and cannot create on the spot (a dry run, a frozen snapshot).
+func LooksCombined(name string, exists func(piece string) bool) bool {
+	if len(personname.SplitCompositeAuthorName(name)) >= 2 {
+		return true
+	}
+	parts := LooseParts(name)
+	if len(parts) < 2 || surnameFirst(name, parts) {
+		return false
+	}
+	for _, p := range parts {
+		if !exists(p) {
+			return false
+		}
+	}
+	return true
+}
+
 // allPartsAreAuthors reports whether name loosely splits into two or more
 // pieces of which every one is already an author row.
 func allPartsAreAuthors(store Store, name string) (bool, error) {
