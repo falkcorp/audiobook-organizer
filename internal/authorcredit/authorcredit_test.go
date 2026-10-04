@@ -1,5 +1,5 @@
 // file: internal/authorcredit/authorcredit_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4a5f7bee-3d1d-427b-bc5f-baaa4b6fb584
 // last-edited: 2026-10-04
 
@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/personname"
 )
 
 func newStore(t *testing.T, names ...string) *database.PebbleStore {
@@ -100,13 +101,15 @@ func TestResolve_PartFoundByAlias(t *testing.T) {
 }
 
 func TestResolve_RefusesAnUnsplittableCombinedOfExistingAuthors(t *testing.T) {
-	// The shared splitter refuses a single-word pen name ("Shirtaloon"), so
-	// the credit is not split; both pieces exist, so it must not be created.
-	st := newStore(t, "Shirtaloon", "Travis Deverell")
-	got, err := Resolve(st, "Shirtaloon, Travis Deverell", PrepareGate)
+	// Four names is past MaxSplitParts, so the credit is not split; every
+	// piece exists, so it must not be created either. (Until 2026-10-04 the
+	// example was "Shirtaloon, Travis Deverell"; a single-word piece that is
+	// an author now splits, TestResolve_SingleWordNameThatExists.)
+	st := newStore(t, "Amy Adams", "Ben Brown", "Cat Cole", "Dan Dorn")
+	got, err := Resolve(st, "Amy Adams, Ben Brown, Cat Cole, Dan Dorn", PrepareGate)
 	require.True(t, errors.Is(err, ErrCombinedCredit), "err %v", err)
 	require.Empty(t, got)
-	a, err := st.GetAuthorByName("Shirtaloon, Travis Deverell")
+	a, err := st.GetAuthorByName("Amy Adams, Ben Brown, Cat Cole, Dan Dorn")
 	require.NoError(t, err)
 	require.Nil(t, a)
 }
@@ -318,4 +321,96 @@ func TestResolve_AliasFailureFailsOpen(t *testing.T) {
 	got, err := Resolve(aliasFailStore{st}, "J.N. Chaney, Jonathan P. Brazee", PrepareGate)
 	require.NoError(t, err)
 	require.Equal(t, []string{"J.N. Chaney, Jonathan P. Brazee"}, names(got))
+}
+
+// countingStore counts CreateAuthor calls.
+type countingStore struct {
+	*database.PebbleStore
+	creates []string
+}
+
+func (c *countingStore) CreateAuthor(name string) (*database.Author, error) {
+	c.creates = append(c.creates, name)
+	return c.PebbleStore.CreateAuthor(name)
+}
+
+func TestResolve_ByPrefixIsStripped(t *testing.T) {
+	st := &countingStore{PebbleStore: newStore(t, "Brandon Sanderson", "Shirtaloon")}
+	for _, raw := range []string{"By: Brandon Sanderson", "by Brandon Sanderson", "BY:Brandon Sanderson", "By :  Brandon Sanderson"} {
+		got, err := Resolve(st, raw, PrepareGate)
+		require.NoError(t, err, raw)
+		require.Equal(t, []string{"Brandon Sanderson"}, names(got), raw)
+	}
+	// A byline before an existing single-word author links it.
+	got, err := Resolve(st, "By: Shirtaloon", PrepareGate)
+	require.NoError(t, err)
+	require.Equal(t, []string{"Shirtaloon"}, names(got))
+	// A byline before an unknown single word is never created.
+	got, err = Resolve(st, "By: Zork", PrepareGate)
+	require.NoError(t, err)
+	require.Empty(t, got)
+	require.Empty(t, st.creates)
+	// A byline before an unknown full name is created WITHOUT the byline.
+	got, err = Resolve(st, "By: Newly Seen", PrepareGate)
+	require.NoError(t, err)
+	require.Equal(t, []string{"Newly Seen"}, names(got))
+	require.Equal(t, []string{"Newly Seen"}, st.creates)
+	// "Byron" is a name, not a byline.
+	require.Equal(t, "Byron Smith", personname.StripByPrefix("Byron Smith"))
+}
+
+func TestGates_StripByPrefix(t *testing.T) {
+	for _, g := range []struct {
+		name string
+		gate Gate
+	}{{"prepare", PrepareGate}, {"clean", CleanGate}} {
+		got, ok := g.gate("By: Brandon Sanderson")
+		require.True(t, ok, g.name)
+		require.Equal(t, "Brandon Sanderson", got, g.name)
+		_, ok = g.gate("By: Zork")
+		require.False(t, ok, g.name+": a byline leaving one bare word is refused")
+		_, ok = g.gate("By:")
+		require.False(t, ok, g.name)
+	}
+}
+
+func TestResolve_SingleWordNameThatExists(t *testing.T) {
+	st := &countingStore{PebbleStore: newStore(t, "Shirtaloon", "Travis Deverell")}
+	got, err := Resolve(st, "Shirtaloon", PrepareGate)
+	require.NoError(t, err)
+	require.Equal(t, []string{"Shirtaloon"}, names(got))
+	for _, raw := range []string{"Shirtaloon, Travis Deverell", "Travis Deverell & Shirtaloon", "Shirtaloon; Travis Deverell"} {
+		got, err = Resolve(st, raw, PrepareGate)
+		require.NoError(t, err, raw)
+		require.ElementsMatch(t, []string{"Shirtaloon", "Travis Deverell"}, names(got), raw)
+	}
+	require.Empty(t, st.creates)
+}
+
+func TestResolve_SingleWordNameByAlias(t *testing.T) {
+	st := newStore(t, "Travis Deverell", "Shirtaloon Writer")
+	a, err := st.GetAuthorByName("Shirtaloon Writer")
+	require.NoError(t, err)
+	_, err = st.CreateAuthorAlias(a.ID, "Shirtaloon", "pen_name")
+	require.NoError(t, err)
+	got, err := Resolve(st, "Shirtaloon, Travis Deverell", PrepareGate)
+	require.NoError(t, err)
+	require.Equal(t, []string{"Shirtaloon Writer", "Travis Deverell"}, names(got))
+}
+
+func TestResolve_UnknownSingleWordStaysRefused(t *testing.T) {
+	st := &countingStore{PebbleStore: newStore(t, "Travis Deverell")}
+	// Split refused: "Zorkington" is no author, so the credit is not split
+	// into a new author; the whole string follows today's path.
+	got, err := Resolve(st, "Zorkington, Travis Deverell", PrepareGate)
+	require.NoError(t, err)
+	require.Equal(t, []string{"Zorkington, Travis Deverell"}, names(got))
+	require.Equal(t, []string{"Zorkington, Travis Deverell"}, st.creates)
+	got, err = Lookup(st, "Zorkington & Travis Deverell", PrepareGate)
+	require.NoError(t, err)
+	require.Empty(t, got)
+	// "Deverell, Travis" is one person surname first, never two.
+	require.Nil(t, SingleWordParts("Deverell, Travis", PrepareGate))
+	require.Equal(t, []string{"Shirtaloon", "Travis Deverell"}, SingleWordParts("Shirtaloon, Travis Deverell", PrepareGate))
+	require.Nil(t, SingleWordParts("The Wandering Inn, Pirateaba", PrepareGate))
 }

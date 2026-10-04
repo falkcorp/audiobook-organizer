@@ -1,5 +1,5 @@
 // file: web/src/components/review/RepairsPanel.tsx
-// version: 1.15.3
+// version: 1.16.0
 // guid: 9c4f1a73-2e58-4b06-a9d1-6e3b8c7f0d52
 // last-edited: 2026-10-04
 
@@ -289,6 +289,8 @@ function classLabel(c: string): string {
     combined_only: 'Only the combined credit',
     partial_link: 'Some of its authors credited',
     split_new_authors: 'Creates a missing author',
+    by_prefix: 'Byline ("By: ...") removed',
+    single_word_name: 'Single-word pen name',
     error: 'Error',
   };
   return labels[c] ?? c;

@@ -1,5 +1,5 @@
 // file: internal/authorcredit/authorcredit.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7000d1fc-e16c-47e1-bb94-6180fe3ec1de
 // last-edited: 2026-10-04
 
@@ -290,6 +290,64 @@ func SplitNames(name string, gate Gate) []string {
 	return out
 }
 
+// SingleWordParts is the split SplitNames refuses only because a piece is a
+// single word ("Shirtaloon, Travis Deverell": the shared splitter wants every
+// piece person-shaped, and a one-word pen name is not). It returns the loose
+// pieces, cleaned by gate and de-duplicated by LettersKey, when:
+//
+//   - at least one piece is a single word, and every other piece is
+//     person-shaped (personPiece, the test piecesVerdict uses);
+//   - the credit is not one person written surname first ("Deverell,
+//     Travis", OnePersonShape) and carries no bracket or role word;
+//   - no piece reads as a title, is a collective credit, or fails CleanGate
+//     or gate.
+//
+// It is a SHAPE test only. A single word is a name only when it already is an
+// author or alias, or a provider credited it to the book (owner decision
+// 2026-10-04): Resolve requires every piece to exist, and the combined-credit
+// fixer asks for the provider credit. Nil when the credit does not qualify.
+func SingleWordParts(name string, gate Gate) []string {
+	if gate == nil {
+		gate = PrepareGate
+	}
+	if strings.ContainsAny(name, "()[]") || roleRe.MatchString(name) || OnePersonShape(name) {
+		return nil
+	}
+	loose := LooseParts(name)
+	if len(loose) < 2 {
+		return nil
+	}
+	single := false
+	seen := map[string]bool{}
+	var out []string
+	for _, p := range loose {
+		if IsNameSuffix(p) || personname.LooksLikeWorkTitle(p) || IsCollectiveCredit(p) || !personPiece(p) {
+			return nil
+		}
+		if _, ok := CleanGate(p); !ok {
+			return nil
+		}
+		clean, ok := gate(p)
+		if !ok {
+			return nil
+		}
+		if len(strings.Fields(clean)) == 1 {
+			single = true
+		}
+		if k := LettersKey(clean); k != "" && !seen[k] {
+			seen[k] = true
+			out = append(out, clean)
+		}
+	}
+	if !single || len(out) < 2 {
+		return nil
+	}
+	return out
+}
+
+// IsSingleWord reports whether a name is one word ("Shirtaloon").
+func IsSingleWord(name string) bool { return len(strings.Fields(name)) == 1 }
+
 // surnameParticles lead a surname written first ("Le Guin, Ursula K.", "Van
 // Vogt, A. E.", "Van Der Berg, Jan Willem").
 var surnameParticles = map[string]bool{
@@ -397,6 +455,20 @@ func LooksCombined(name string, exists func(piece string) bool) bool {
 	return true
 }
 
+// FindByAlias returns the author whose alias is name, through the store's
+// optional alias lookup (nil when the store has none or no alias matches).
+func FindByAlias(store any, name string) (*database.Author, error) {
+	af, ok := database.AsCapability[aliasFinder](store)
+	if !ok {
+		return nil, nil
+	}
+	a, err := af.FindAuthorByAlias(name)
+	if err != nil {
+		return nil, fmt.Errorf("look up author alias %q: %w", name, err)
+	}
+	return a, nil
+}
+
 // aliasFinder is the optional alias lookup a part may resolve through.
 type aliasFinder interface {
 	FindAuthorByAlias(aliasName string) (*database.Author, error)
@@ -500,6 +572,9 @@ func splitExisting(store Store, name string, gate Gate) ([]database.Author, erro
 		return nil, nil
 	}
 	parts := SplitNames(StripBrackets(name), gate)
+	if parts == nil {
+		parts = SingleWordParts(StripBrackets(name), gate)
+	}
 	if len(parts) < 2 || len(parts) > MaxSplitParts {
 		return nil, nil
 	}
@@ -567,6 +642,16 @@ func Lookup(store Store, name string, gate Gate) ([]database.Author, error) {
 
 func resolve(store Store, name string, gate Gate, create bool) ([]database.Author, error) {
 	name = strings.TrimSpace(name)
+	if personname.HasByPrefix(name) {
+		// "By: Brandon Sanderson" names Brandon Sanderson. What a byline
+		// leaves as one bare word ("By: Zork") is linked when it is an
+		// author or alias already and never created: the creation gates
+		// refuse that residue the same way (PrepareAuthorNameForCreation).
+		name = personname.NormalizeAuthorName(personname.StripByPrefix(name))
+		if !strings.ContainsAny(name, " \t") {
+			create = false
+		}
+	}
 	if name == "" {
 		return nil, nil
 	}

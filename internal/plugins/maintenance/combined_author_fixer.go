@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/combined_author_fixer.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5c0f4a3e-2b7d-4e61-9a8c-3f1d6b2e7a90
 // last-edited: 2026-10-04
 
@@ -109,6 +109,15 @@ const (
 	combinedClassOnly       = "combined_only"
 	combinedClassPartial    = "partial_link"
 	combinedClassNewAuthors = "split_new_authors"
+	// combinedClassByPrefix: the record's name opens with a byline ("By:
+	// Brandon Sanderson"); it is replaced by the name after it. Always a
+	// review row (owner decision 2026-10-04).
+	combinedClassByPrefix = "by_prefix"
+	// combinedClassSingleWord: a part is a single-word name ("Shirtaloon")
+	// the shared splitter will not split off, accepted because it is an
+	// author or alias already or a provider credited it to the book. Always a
+	// review row (owner decision 2026-10-04).
+	combinedClassSingleWord = "single_word_name"
 )
 
 // Skip kinds of this fixer (the framework adds skipped_itunes and
@@ -171,7 +180,10 @@ func (f *combinedAuthorFixer) Description() string {
 		"Brazee\"). Where the separate authors are already credited the combined credit is removed and the " +
 		"positions renumbered; where it is the only credit it is replaced by its parts, each resolved to its " +
 		"existing author (created only when none exists). A primary author that is the combined record moves " +
-		"to the first author credit. Names the shared splitter will not split, parts that look like titles or junk, " +
+		"to the first author credit. A record that opens with a byline (\"By: Brandon Sanderson\") is replaced by " +
+		"the name after it, and a single-word pen name (\"Shirtaloon\") splits off when it is an author or alias " +
+		"already or a metadata provider credited it to the book; both are always review rows. " +
+		"Names the shared splitter will not split, parts that look like titles or junk, " +
 		"contributor roles, a doubled name, credits of more than three names, user-locked authors, iTunes " +
 		"books and Doctor Who / Big Finish / Torchwood are listed, not changed. Only author credits are " +
 		"touched; narrator credits stay. The emptied records are left for maintenance.purge-empty-authors. " +
@@ -225,6 +237,12 @@ func (idx *combinedAuthorIndex) namesTitle(name string) bool {
 // every loosely split piece is another existing author (the census rule), or
 // the shared splitter splits it.
 func (idx *combinedAuthorIndex) isCombinedName(id int, name string) bool {
+	if personname.HasByPrefix(name) && personname.StripByPrefix(name) != "" {
+		return true // a byline record: replaced by the name after it
+	}
+	if authorcredit.SingleWordParts(name, authorcredit.CleanGate) != nil {
+		return true // a single-word part: each book's evidence decides
+	}
 	parts := authorcredit.LooseParts(name)
 	if len(parts) < 2 {
 		return false
@@ -434,18 +452,55 @@ type combinedDecision struct {
 // combinedClassify splits a combined record's name, or says why it is held.
 // names are cleaned by the creation gate and de-duplicated by letters key,
 // in the combined string's order.
-func combinedClassify(name string) (names []string, skip, why string) {
+func combinedClassify(raw string) (c combinedNames, skip, why string) {
+	name := raw
+	if personname.HasByPrefix(raw) {
+		c.byLed = true
+		name = personname.NormalizeAuthorName(personname.StripByPrefix(raw))
+		if len(authorcredit.LooseParts(name)) == 1 {
+			clean, ok := authorcredit.CleanGate(name)
+			if !ok || personname.LooksLikeWorkTitle(name) || authorcredit.IsCollectiveCredit(name) {
+				return combinedNames{}, combinedSkipImplausiblePart, fmt.Sprintf("%q after its byline is not a plausible author name", raw)
+			}
+			c.names = []string{clean}
+			if authorcredit.IsSingleWord(clean) {
+				c.singleWord = []string{clean}
+			}
+			return c, "", ""
+		}
+	}
+	names, singleWord, skip, why := combinedClassifyList(name)
+	if skip != "" {
+		return combinedNames{}, skip, why
+	}
+	c.names, c.singleWord = names, singleWord
+	return c, "", ""
+}
+
+// combinedNames is what combinedClassify splits a record into.
+type combinedNames struct {
+	names []string
+	// singleWord lists the names that are one word: each needs an existing
+	// author or alias, or a provider credit for the book (evaluate checks).
+	singleWord []string
+	// byLed: the record's name opened with a byline ("By: ...").
+	byLed bool
+}
+
+// combinedClassifyList splits a record's name (its byline already removed),
+// or says why it is held.
+func combinedClassifyList(name string) (names, singleWord []string, skip, why string) {
 	if swapRoleRe.MatchString(name) {
-		return nil, combinedSkipRole, fmt.Sprintf("%q names contributor roles (translator, editor, ...); a person decides who the authors are", name)
+		return nil, nil, combinedSkipRole, fmt.Sprintf("%q names contributor roles (translator, editor, ...); a person decides who the authors are", name)
 	}
 	if strings.ContainsAny(name, "()[]") {
 		// The splitter's bracket branch reads "Dante King (Dragon Born)" as
 		// two people; a bracket holds a series, a reader or an edition, never
 		// a co-author. Held for a person rather than split.
-		return nil, combinedSkipSplitRefused, fmt.Sprintf("%q carries a bracketed part (a series, reader or edition, not an author); a person decides", name)
+		return nil, nil, combinedSkipSplitRefused, fmt.Sprintf("%q carries a bracketed part (a series, reader or edition, not an author); a person decides", name)
 	}
 	if authorcredit.OnePersonShape(name) {
-		return nil, combinedSkipSplitRefused, fmt.Sprintf("%q is one person written surname first or with a suffix (\"Le Guin, Ursula K.\", \"King, Jr.\")", name)
+		return nil, nil, combinedSkipSplitRefused, fmt.Sprintf("%q is one person written surname first or with a suffix (\"Le Guin, Ursula K.\", \"King, Jr.\")", name)
 	}
 	loose := authorcredit.LooseParts(name)
 	keys := map[string]bool{}
@@ -453,40 +508,110 @@ func combinedClassify(name string) (names []string, skip, why string) {
 		keys[authorcredit.LettersKey(p)] = true
 	}
 	if len(keys) == 1 {
-		return nil, combinedSkipDoubled, fmt.Sprintf("%q repeats one name; collapsing it to a single credit is a separate decision", name)
+		return nil, nil, combinedSkipDoubled, fmt.Sprintf("%q repeats one name; collapsing it to a single credit is a separate decision", name)
 	}
 	split := personname.SplitCompositeAuthorName(name)
-	if len(split) < 2 {
-		return nil, combinedSkipSplitRefused, fmt.Sprintf("the shared author splitter will not split %q (a title, a \"Last, First\" name, or junk)", name)
-	}
 	splitKeys := map[string]bool{}
 	for _, p := range split {
 		splitKeys[authorcredit.LettersKey(p)] = true
 	}
-	if len(splitKeys) != len(keys) {
-		return nil, combinedSkipSplitRefused, fmt.Sprintf("the shared author splitter splits %q into %d name(s) but it lists %d; a piece would be dropped",
+	if len(split) < 2 || len(splitKeys) != len(keys) {
+		// The splitter wants every piece person-shaped; a single-word pen
+		// name ("Shirtaloon") is not. That shape is offered for review when
+		// each single word is an author, an alias or a provider credit.
+		if sw := authorcredit.SingleWordParts(name, authorcredit.CleanGate); sw != nil {
+			if len(sw) > combinedMaxAuthorParts {
+				return nil, nil, combinedSkipAnthology, fmt.Sprintf("%q joins %d names; a credit that long is usually an anthology or a cast list, so a person decides",
+					name, len(sw))
+			}
+			for _, n := range sw {
+				if authorcredit.IsSingleWord(n) {
+					singleWord = append(singleWord, n)
+				}
+			}
+			return sw, singleWord, "", ""
+		}
+		if len(split) < 2 {
+			return nil, nil, combinedSkipSplitRefused, fmt.Sprintf("the shared author splitter will not split %q (a title, a \"Last, First\" name, or junk)", name)
+		}
+		return nil, nil, combinedSkipSplitRefused, fmt.Sprintf("the shared author splitter splits %q into %d name(s) but it lists %d; a piece would be dropped",
 			name, len(splitKeys), len(keys))
 	}
 	for _, p := range split {
 		if personname.LooksLikeWorkTitle(p) {
-			return nil, combinedSkipImplausiblePart, fmt.Sprintf("the part %q of %q reads as a title (an article or a series marker)", p, name)
+			return nil, nil, combinedSkipImplausiblePart, fmt.Sprintf("the part %q of %q reads as a title (an article or a series marker)", p, name)
 		}
 		if authorcredit.IsCollectiveCredit(p) {
-			return nil, combinedSkipImplausiblePart, fmt.Sprintf("the part %q of %q names no person (a cast or collective credit)", p, name)
+			return nil, nil, combinedSkipImplausiblePart, fmt.Sprintf("the part %q of %q names no person (a cast or collective credit)", p, name)
 		}
 		if _, ok := authorcredit.CleanGate(p); !ok {
-			return nil, combinedSkipImplausiblePart, fmt.Sprintf("the part %q of %q is not a plausible author name (a title, publisher or junk)", p, name)
+			return nil, nil, combinedSkipImplausiblePart, fmt.Sprintf("the part %q of %q is not a plausible author name (a title, publisher or junk)", p, name)
 		}
 	}
 	names = authorcredit.SplitNames(name, authorcredit.CleanGate)
 	if len(names) < 2 {
-		return nil, combinedSkipSplitRefused, fmt.Sprintf("the shared author splitter will not split %q", name)
+		return nil, nil, combinedSkipSplitRefused, fmt.Sprintf("the shared author splitter will not split %q", name)
 	}
 	if len(names) > combinedMaxAuthorParts {
-		return nil, combinedSkipAnthology, fmt.Sprintf("%q joins %d names; a credit that long is usually an anthology or a cast list, so a person decides",
+		return nil, nil, combinedSkipAnthology, fmt.Sprintf("%q joins %d names; a credit that long is usually an anthology or a cast list, so a person decides",
 			name, len(names))
 	}
-	return names, "", ""
+	return names, nil, "", ""
+}
+
+// combinedExistingPart is the author a part names: by name, then by alias
+// (a pen name such as "Shirtaloon" may be an alias of its author's row).
+func combinedExistingPart(store OpsStore, name string) (*database.Author, error) {
+	a, err := store.GetAuthorByName(name)
+	if err != nil {
+		return nil, fmt.Errorf("read author %q: %w", name, err)
+	}
+	if a != nil {
+		return a, nil
+	}
+	return authorcredit.FindByAlias(store, name)
+}
+
+// combinedHistorySource is the metadata change history a provider credit is
+// read from.
+type combinedHistorySource interface {
+	GetMetadataChangeHistory(bookID string, field string, limit int) ([]database.MetadataChangeRecord, error)
+}
+
+// combinedHistoryLimit bounds the author history read per book.
+const combinedHistoryLimit = 200
+
+// combinedProviderCredited returns the source of a metadata fetch that wrote
+// exactly name (by letters key) as this book's author, or "" when none did.
+// Only a whole fetched value counts: a provider's joined credit
+// ("Shirtaloon, Travis Deverell") is the string the record came from, so
+// reading a piece of it as evidence would prove nothing. Manual and AI-parse
+// rows are not provider credits. A store without the history reads as no
+// credit (the row stays held), and a read error fails the plan.
+func combinedProviderCredited(store OpsStore, bookID, name string) (string, error) {
+	hs, ok := database.AsCapability[combinedHistorySource](store)
+	if !ok {
+		return "", nil
+	}
+	recs, err := hs.GetMetadataChangeHistory(bookID, database.HistoryFieldAuthor, combinedHistoryLimit)
+	if err != nil {
+		return "", fmt.Errorf("read author history of %s: %w", bookID, err)
+	}
+	want := authorcredit.LettersKey(name)
+	for _, rec := range recs {
+		src := strings.ToLower(strings.TrimSpace(rec.Source))
+		if rec.ChangeType != "fetched" || rec.NewValue == nil || src == "" || src == "manual" || strings.HasPrefix(src, "ai") {
+			continue
+		}
+		var v string
+		if json.Unmarshal([]byte(*rec.NewValue), &v) != nil {
+			v = *rec.NewValue
+		}
+		if authorcredit.LettersKey(personname.StripByPrefix(v)) == want {
+			return rec.Source, nil
+		}
+	}
+	return "", nil
 }
 
 // combinedIsAuthorRole is the credit roles this fixer reads and writes.
@@ -596,21 +721,28 @@ func (f *combinedAuthorFixer) evaluate(store OpsStore, idx *combinedAuthorIndex,
 	}
 
 	var recs []combinedRecordPlan
+	// byLed / singleWord: review-only shapes (owner decision 2026-10-04).
+	byLed := false
+	singleWord := map[string]bool{}
 	for _, id := range recIDs {
 		name := nameOf(id)
 		if idx.namesTitle(name) {
 			return finish(combinedSkipTitle, fmt.Sprintf("%q is (or begins) the title of a book or series in the library, not a list of authors", name), true)
 		}
-		names, skip, why := combinedClassify(name)
+		cn, skip, why := combinedClassify(name)
 		if skip != "" {
 			return finish(skip, why, true)
 		}
+		byLed = byLed || cn.byLed
+		for _, n := range cn.singleWord {
+			singleWord[n] = true
+		}
 		rec := combinedRecordPlan{id: id, name: name}
-		for _, n := range names {
+		for _, n := range cn.names {
 			rec.parts = append(rec.parts, combinedPart{name: n, creditedID: creditedByKey[authorcredit.LettersKey(n)]})
 		}
 		recs = append(recs, rec)
-		fp = append(fp, "names", strings.Join(names, "\x1f"))
+		fp = append(fp, "names", strings.Join(cn.names, "\x1f"))
 	}
 
 	locks, err := database.LoadFieldLocks(store, bookID)
@@ -637,18 +769,32 @@ func (f *combinedAuthorFixer) evaluate(store OpsStore, idx *combinedAuthorIndex,
 				continue
 			}
 			uncredited++
-			existing, gerr := store.GetAuthorByName(p.name)
+			existing, gerr := combinedExistingPart(store, p.name)
 			if gerr != nil {
-				return repairs.Row{}, false, fmt.Errorf("read author %q: %w", p.name, gerr)
+				return repairs.Row{}, false, gerr
 			}
 			if existing != nil && !inRec[existing.ID] && !idx.combined[existing.ID] {
 				display[existing.ID] = existing.Name
 				resolvedID[p.name] = existing.ID
+				if !strings.EqualFold(existing.Name, p.name) {
+					r.Evidence = append(r.Evidence, fmt.Sprintf("%q is an alias of the existing author %q (id %d)", p.name, existing.Name, existing.ID))
+				}
 				continue
 			}
 			vs := combinedVariants(idx, p.name)
 			switch len(vs) {
 			case 0:
+				if singleWord[p.name] {
+					// A one-word name is created only on a provider credit.
+					src, perr := combinedProviderCredited(store, bookID, p.name)
+					if perr != nil {
+						return repairs.Row{}, false, perr
+					}
+					if src == "" {
+						return finish(combinedSkipSplitRefused, fmt.Sprintf("%q is one word, is no author or alias, and no metadata provider credited it to this book", p.name), true)
+					}
+					r.Evidence = append(r.Evidence, fmt.Sprintf("%s credited %q to this book", src, p.name))
+				}
 				created++
 				r.Evidence = append(r.Evidence, fmt.Sprintf("no author is named %q; apply creates it", p.name))
 			case 1:
@@ -676,6 +822,12 @@ func (f *combinedAuthorFixer) evaluate(store OpsStore, idx *combinedAuthorIndex,
 	}
 
 	switch {
+	case byLed:
+		r.Class = combinedClassByPrefix
+		r.Risk = repairs.RiskReview
+	case len(singleWord) > 0:
+		r.Class = combinedClassSingleWord
+		r.Risk = repairs.RiskReview
 	case created > 0:
 		r.Class = combinedClassNewAuthors
 		r.Risk = repairs.RiskReview
@@ -1079,9 +1231,9 @@ func (f *combinedAuthorFixer) Apply(_ context.Context, w *repairs.Writer, fresh 
 // journaled by mintJournaledAuthor. Two or more same-spelled authors is a
 // change since the plan, which held such a row.
 func (f *combinedAuthorFixer) resolvePart(w *repairs.Writer, store OpsStore, idx *combinedAuthorIndex, bookID, name string, isRec map[int]bool) (*database.Author, bool, error) {
-	existing, err := store.GetAuthorByName(name)
+	existing, err := combinedExistingPart(store, name)
 	if err != nil {
-		return nil, false, fmt.Errorf("read author %q: %w", name, err)
+		return nil, false, err
 	}
 	if existing != nil && !isRec[existing.ID] && !idx.combined[existing.ID] {
 		return existing, false, nil

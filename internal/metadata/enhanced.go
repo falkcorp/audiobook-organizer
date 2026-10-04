@@ -1,5 +1,5 @@
 // file: internal/metadata/enhanced.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: 7e8d9c0b-1a2f-3e4d-5c6b-7a8d9c0b1a2f
 // last-edited: 2026-10-04
 
