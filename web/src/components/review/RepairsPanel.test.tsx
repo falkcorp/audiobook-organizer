@@ -1,7 +1,7 @@
 // file: web/src/components/review/RepairsPanel.test.tsx
-// version: 1.5.0
+// version: 1.6.0
 // guid: 3a7e0c95-4d21-4b8f-b6e3-8f1c2d9a5e47
-// last-edited: 2026-09-29
+// last-edited: 2026-10-04
 //
 // The repairs surface, rendered over the real lane hook with a mocked API, so
 // the clicks go through the same dispatch the workspace uses.
@@ -12,7 +12,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../services/api';
 import type { OperationV2, RepairFixer, RepairRow, RepairRowsFilter } from '../../services/api';
-import { RepairsPanel } from './RepairsPanel';
+import { RepairsPanel, SKIP_KIND_LABEL } from './RepairsPanel';
 import { useRepairsLane } from './lanes/useRepairsLane';
 
 vi.mock('../../services/api');
@@ -562,5 +562,27 @@ describe('RepairsPanel — apply all under a selected class', () => {
     await user.click(await screen.findByTestId('repairs-class-copy'));
     await vi.waitFor(() => expect(screen.queryByTestId('repairs-row-a-moved')).not.toBeInTheDocument());
     expect(screen.getByTestId('repairs-apply-all')).toHaveTextContent('Apply all applicable in this class (1)');
+  });
+});
+
+describe('SKIP_KIND_LABEL', () => {
+  it('words every hold of the combined author credits fixer', () => {
+    for (const kind of [
+      'skipped_split_refused',
+      'skipped_implausible_part',
+      'skipped_contributor_role',
+      'skipped_doubled_author',
+      'skipped_anthology',
+      'skipped_names_a_title',
+      'skipped_not_combined',
+      'skipped_ambiguous_author',
+      'skipped_user_locked',
+      'skipped_relink_series_first',
+      'skipped_itunes',
+      'skipped_owner_manual',
+    ]) {
+      expect(SKIP_KIND_LABEL[kind], kind).toBeTruthy();
+      expect(SKIP_KIND_LABEL[kind]).not.toEqual(kind);
+    }
   });
 });
