@@ -1,7 +1,7 @@
 // file: web/src/components/review/RepairsPanel.tsx
-// version: 1.13.0
+// version: 1.14.0
 // guid: 9c4f1a73-2e58-4b06-a9d1-6e3b8c7f0d52
-// last-edited: 2026-10-03
+// last-edited: 2026-10-04
 
 /**
  * The repairs lane's surface: a rail of fixers and the selected fixer's trial.
@@ -281,6 +281,7 @@ function classLabel(c: string): string {
     relink: 'Relink (history agrees or none)',
     'held-cleared-by-history': 'Cleared (history)',
     'held-name-mismatch': 'Name mismatch',
+    'held-series-id-mismatch': 'Series id ≠ stored object',
     'name-match': 'Name match',
     orphan: 'Orphan',
     error: 'Error',

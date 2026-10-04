@@ -1,7 +1,7 @@
 // file: web/src/components/MetadataHistory.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: e539214d-79fe-4fb5-b93b-36d9f7076346
-// last-edited: 2026-10-03
+// last-edited: 2026-10-04
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
@@ -60,5 +60,29 @@ describe('MetadataHistory', () => {
       args.some((a) => typeof a === 'string' && a.includes('same key')),
     );
     expect(duplicateKey).toBe(false);
+  });
+
+  // A dropped stale series object is the store's bookkeeping: the server
+  // refuses its undo (409), so no undo button is offered, and the field has a
+  // readable label.
+  it('offers no undo on a series-object-drop row', async () => {
+    vi.mocked(api.getBookMetadataHistory).mockResolvedValue([
+      {
+        ...row(7, 'series_object', '2026-10-04T12:00:00Z'),
+        previous_value: '"Vanished Series"',
+        new_value: '""',
+        change_type: 'series-object-drop',
+        source: 'series_invariant',
+      },
+      row(5, 'title', '2026-10-03T11:00:00Z'),
+    ]);
+    vi.mocked(api.getBookCOWVersions).mockResolvedValue([]);
+
+    renderWithProviders(<MetadataHistory bookId="b1" open onClose={() => {}} />);
+
+    await waitFor(() => expect(screen.getByText('Vanished Series')).toBeInTheDocument());
+    expect(screen.getByText('Stale series object')).toBeInTheDocument();
+    expect(screen.getAllByLabelText(/^Undo this /)).toHaveLength(1);
+    expect(screen.queryByLabelText('Undo this Stale series object change')).toBeNull();
   });
 });

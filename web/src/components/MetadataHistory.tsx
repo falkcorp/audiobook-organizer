@@ -1,7 +1,7 @@
 // file: web/src/components/MetadataHistory.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: 8e3a7b2c-5d1f-4a9e-b6c0-2f8d4e7a1b3c
-// last-edited: 2026-10-03
+// last-edited: 2026-10-04
 
 import { useCallback, useEffect, useState } from 'react';
 import {
@@ -52,7 +52,16 @@ const FIELD_LABELS: Record<string, string> = {
   isbn: 'ISBN',
   edition: 'Edition',
   work_id: 'Work ID',
+  series_object: 'Stale series object',
 };
+
+/**
+ * Change types that record the store's own bookkeeping, not an edit, and that
+ * the undo endpoint refuses (409). A "series-object-drop" row is the store
+ * dropping a stale embedded series object; it is restored by relinking the
+ * series (Repairs, "Stale series objects"), not by undo.
+ */
+const NOT_UNDOABLE_CHANGE_TYPES = new Set(['series-object-drop']);
 
 const CHANGE_TYPE_COLORS: Record<
   string,
@@ -65,6 +74,7 @@ const CHANGE_TYPE_COLORS: Record<
   bulk_update: 'secondary',
   search: 'default',
   revert: 'success',
+  'series-object-drop': 'warning',
 };
 
 function parseJsonValue(raw?: string): string {
@@ -337,7 +347,8 @@ export const MetadataHistory = ({
                         <TableCell align="right">
                           {!isSearch &&
                           latestIds.has(historyRowKey(record)) &&
-                          record.change_type !== 'undo' ? (
+                          record.change_type !== 'undo' &&
+                          !NOT_UNDOABLE_CHANGE_TYPES.has(record.change_type) ? (
                             <Tooltip title={`Undo this ${fieldLabel(record.field)} change`}>
                               <span>
                                 <IconButton

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/relink_stale_series_fixer_test.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: edaf6525-dcbd-426d-b672-c3293aff05f5
-// last-edited: 2026-10-03
+// last-edited: 2026-10-04
 
 package maintenance
 
@@ -728,4 +728,76 @@ func TestRelinkClearBucket(t *testing.T) {
 	} {
 		require.Equal(t, tc.want, relinkClearBucket(tc.source, tc.changeType), "%+v", tc)
 	}
+}
+
+// TestRelinkStaleSeries_IDMismatchIsHeldWithBothSeries: a book whose
+// SeriesID names one series while its stored object names another is a
+// held row (held-series-id-mismatch) that shows both series; once a write
+// drops the object (and records the drop), it is no longer a row.
+func TestRelinkStaleSeries_IDMismatchIsHeldWithBothSeries(t *testing.T) {
+	lib := newRelinkLib(t)
+	st := lib.store
+	linked, live := lib.series["linked"], lib.series["live"]
+	mkMismatch := func(key, path string, emb database.Series) {
+		t.Helper()
+		lid := linked.ID
+		b, err := st.CreateBook(&database.Book{Title: key, FilePath: path, SeriesID: &lid, Format: "mp3"})
+		require.NoError(t, err)
+		_, err = st.SeedLegacyBookRowForTest(b.ID, func(row *database.Book) error {
+			row.Series = &emb
+			return nil
+		})
+		require.NoError(t, err)
+		lib.ids[key] = b.ID
+	}
+	mkMismatch("mismatch", "/lib/A/Mismatch", database.Series{ID: live.ID, Name: live.Name})
+	mkMismatch("mismatch-gone", "/lib/A/MismatchGone", database.Series{ID: 9100, Name: "Gone Series"})
+	mkMismatch("mismatch-dw", "/lib/A/MismatchDW", database.Series{ID: lib.series["dw"].ID, Name: lib.series["dw"].Name})
+
+	f, res, rows := lib.plan(t)
+	require.Equal(t, 12, res.Total)
+	require.Equal(t, 3, res.ByClass[relinkClassIDMismatch], "the census counts the class, owner-manual row included")
+	require.Equal(t, 2, res.Applicable, "the mismatch rows are never applicable")
+
+	r := rows["mismatch"]
+	require.Equal(t, relinkClassIDMismatch, r.Class)
+	require.Equal(t, relinkSkipIDMismatch, r.Skipped)
+	require.False(t, r.Applicable())
+	require.Equal(t, map[string]string{
+		"series_id": itoa(linked.ID), "series_name": linked.Name,
+		"embedded_series_id": itoa(live.ID), "embedded_series_name": live.Name, "embedded_series_found": "true",
+	}, r.Current)
+	require.Contains(t, r.SkipReason, linked.Name)
+	require.Contains(t, r.SkipReason, live.Name)
+	ev := strings.Join(r.Evidence, "\n")
+	require.Contains(t, ev, "linked series row "+itoa(linked.ID))
+	require.Contains(t, ev, "embedded series row "+itoa(live.ID)+" exists")
+
+	g := rows["mismatch-gone"]
+	require.Equal(t, relinkClassIDMismatch, g.Class)
+	require.Equal(t, "false", g.Current["embedded_series_found"])
+	require.Contains(t, strings.Join(g.Evidence, "\n"), "no series row has the embedded id 9100")
+
+	dw := rows["mismatch-dw"]
+	require.Equal(t, relinkClassIDMismatch, dw.Class)
+	require.Equal(t, repairs.SkipOwnerManual, dw.Skipped)
+
+	// Replan of an unchanged book reproduces the row (same fingerprint).
+	fresh, err := f.Replan(context.Background(), nil, r, &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, r.Fingerprint, fresh.Fingerprint)
+	require.Equal(t, relinkClassIDMismatch, fresh.Class)
+
+	// An ordinary write keeps the linked series, drops the object and
+	// records the drop; the book is no longer a row.
+	_, err = st.ModifyBook(lib.ids["mismatch"], func(b *database.Book) error { b.Title = "retitled"; return nil })
+	require.NoError(t, err)
+	drops, err := st.GetMetadataChangeHistory(lib.ids["mismatch"], database.HistoryFieldSeriesObject, 10)
+	require.NoError(t, err)
+	require.Len(t, drops, 1)
+	require.Equal(t, live.ID, *drops[0].PreviousRef.SeriesID)
+	after, err := f.Replan(context.Background(), nil, r, &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, relinkSkipNotStale, after.Skipped)
+	require.NotEqual(t, r.Fingerprint, after.Fingerprint)
 }
