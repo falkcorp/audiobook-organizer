@@ -1,5 +1,5 @@
 // file: internal/server/handlers/activity.go
-// version: 1.11.2
+// version: 1.11.3
 // guid: d4e5f6a7-b8c9-0123-def0-234567890123
 // last-edited: 2026-10-04
 
@@ -718,7 +718,8 @@ func (h *ActivityHandler) ClampActivitySummaries(c *gin.Context) {
 	// the rows were rewritten and res is complete. Answering 500 would tell the
 	// caller nothing happened and invite a re-run of a pass that may have taken
 	// hours. Report it as 200 with space_still_held, so the caller knows the
-	// freed space is not back on disk yet and why.
+	// freed space is not back on disk yet. The reason is logged, not returned:
+	// vacuum_error is a fixed message.
 	var vacuumErr error
 	if errors.Is(err, activity.ErrClampVacuumFailed) {
 		vacuumErr, err = err, nil

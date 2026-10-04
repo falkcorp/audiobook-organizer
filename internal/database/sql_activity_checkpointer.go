@@ -1,5 +1,5 @@
 // file: internal/database/sql_activity_checkpointer.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5e0b7c2a-91d4-4f3e-8a6b-2c7d9e1f4a08
 // last-edited: 2026-10-04
 
@@ -64,11 +64,16 @@ const (
 	// file to after a reset (PRAGMA journal_size_limit).
 	sqlActJournalSizeLimit = 64 << 20
 
-	// sqlActCkptBusyTimeoutMS is the checkpoint connection's busy_timeout. Only
-	// TRUNCATE consults the busy handler (PASSIVE never does); a short wait is
-	// right because TRUNCATE blocks new writers while it waits, and the
-	// checkpointer will simply try again on the next tick.
-	sqlActCkptBusyTimeoutMS = 1000
+	// sqlActCkptBusyTimeoutMS is the checkpoint connection's busy_timeout, and
+	// it is ZERO on purpose. Only TRUNCATE consults the busy handler (PASSIVE
+	// never does), and TRUNCATE takes the WAL write lock BEFORE it waits for
+	// readers to leave, so every millisecond it waits is a millisecond no
+	// Record can commit. At 1000 a reader that opened after a VACUUM made each
+	// post-vacuum TRUNCATE attempt hold the lock for a full second, and Records
+	// stalled for 2.5 s in review; at 0 the slowest Record was 4-10 ms. A busy
+	// TRUNCATE costs nothing to repeat: truncateWALAfterVacuum retries with
+	// backoff and the background loop retries on its next idle tick.
+	sqlActCkptBusyTimeoutMS = 0
 )
 
 var ckptLog = logger.New("activity-checkpoint")

@@ -1,5 +1,5 @@
 // file: internal/database/sql_activity_summary_clamp_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 8b47e0c9-2f13-45da-9e60-c4a1d5382bf7
 // last-edited: 2026-10-04
 
@@ -543,11 +543,13 @@ func TestVacuumActivity_ReaderReleasedMidTruncateNeverTruncatesUnderTheCopy(t *t
 // lets go, so the space is not stranded until a restart.
 //
 // The tick is driven directly (checkpointAndMaybeTruncate with idle=true, the
-// call runCheckpointer makes) on a store whose own loop is held off. Running a
-// fast real loop instead let its TRUNCATE hold the write lock while it waited
-// on the test's reader, and the VACUUM starved behind it ("database is locked").
-// That the loop calls this step on idle ticks is covered by
-// TestSQLActivityStore_BackgroundCheckpointerRunsAndTruncatesWhenIdle.
+// call runCheckpointer makes) on a store whose own loop is held off, so the
+// test does not depend on when a real loop's ticks land or whether one sees
+// the store idle. An earlier version ran a 20 ms loop; while the checkpoint
+// connection had busy_timeout(1000), that loop's TRUNCATE held the write lock
+// for a second at a time waiting on the test's reader and starved the VACUUM
+// ("database is locked"). That the loop calls this step on idle ticks is
+// covered by TestSQLActivityStore_BackgroundCheckpointerRunsAndTruncatesWhenIdle.
 func TestVacuumActivity_IdleTickReclaimsWhatAGivenUpTruncateLeft(t *testing.T) {
 	s, _ := openCkptTestStore(t, time.Hour)
 	oldAttempts, oldBackoff := vacuumTruncateAttempts, vacuumTruncateMaxBackoff
@@ -699,5 +701,104 @@ func TestVacuumActivity_TruncateDoesNotStallForegroundWrites(t *testing.T) {
 	// -race and load (up to ~280 ms seen), so a short copy proves nothing.
 	if copyTime >= time.Second && lat >= copyTime/2 {
 		t.Errorf("slowest Record took %v against a %v frame copy: writers were blocked for the copy", lat, copyTime)
+	}
+}
+
+// TestVacuumActivity_LateReaderDoesNotStallWritersThroughTheTruncate is the
+// regression test for the checkpoint connection's busy_timeout. A reader that
+// opens AFTER the VACUUM does not stop PASSIVE from copying every frame, so
+// the TRUNCATE is issued; it takes the WAL write lock and then has to wait for
+// that reader. With busy_timeout(1000) on the checkpoint connection each
+// attempt held the lock for a full second while it waited, and Records stalled
+// for 2.5 s in review. With busy_timeout 0 the TRUNCATE reports busy at once
+// and releases the lock, so writers barely notice.
+func TestVacuumActivity_LateReaderDoesNotStallWritersThroughTheTruncate(t *testing.T) {
+	s, _ := openCkptTestStore(t, time.Hour)
+	oldAttempts, oldBackoff := vacuumTruncateAttempts, vacuumTruncateMaxBackoff
+	vacuumTruncateAttempts, vacuumTruncateMaxBackoff = 4, 20*time.Millisecond
+	t.Cleanup(func() { vacuumTruncateAttempts, vacuumTruncateMaxBackoff = oldAttempts, oldBackoff })
+
+	for range 20 {
+		insertLegacyOversizedSummary(t, s, strings.Repeat("v", activitySummaryMax*8))
+	}
+	if _, err := s.writer.Exec(`VACUUM`); err != nil {
+		t.Fatalf("vacuum: %v", err)
+	}
+	// One write after the VACUUM, then the reader: with every frame already
+	// copied a new reader would read the database file alone and not hold the
+	// WAL, so the write keeps it on the WAL.
+	if _, err := s.Record(ActivityEntry{Timestamp: time.Now(), Tier: "info", Type: "t", Level: "info",
+		Source: "s", Summary: "before the late reader"}); err != nil {
+		t.Fatal(err)
+	}
+	holdReaderSnapshot(t, s)
+
+	// Slow writers: one Record every 10 ms. They start from the hook, right
+	// after the first PASSIVE that copied everything and before the TRUNCATE
+	// it unlocks, so that TRUNCATE is issued (a write before it would leave
+	// frames past the reader's snapshot and keep PASSIVE short) and the
+	// writers are queued on the write lock while it runs.
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	var started sync.Once
+	var recErrs atomic.Int32
+	var maxLatency atomic.Int64
+	writers := func() {
+		defer wg.Done()
+		base := time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			start := time.Now()
+			if _, err := s.Record(ActivityEntry{Timestamp: base.Add(time.Duration(i) * time.Millisecond),
+				Tier: "info", Type: "t", Level: "info", Source: "s", Summary: fmt.Sprintf("late-reader-%d", i)}); err != nil {
+				recErrs.Add(1)
+				fmt.Fprintf(os.Stderr, "Record during truncate failed: %v\n", err)
+			}
+			if d := int64(time.Since(start)); d > maxLatency.Load() {
+				maxLatency.Store(d)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	calls := recordCheckpoints(t, s, func(c ckptCall) {
+		if c.mode == "PASSIVE" && c.res.complete() {
+			started.Do(func() {
+				wg.Add(1)
+				go writers()
+			})
+		}
+	})
+
+	err := s.truncateWALAfterVacuum(context.Background())
+	close(stop)
+	waitGroupOrFatal(t, &wg, "the Record loop")
+	got := calls()
+	lat := time.Duration(maxLatency.Load())
+	t.Logf("truncate err=%v; slowest Record %v; checkpoints %+v", err, lat, got)
+
+	if err == nil {
+		t.Fatalf("truncateWALAfterVacuum succeeded although a reader held the WAL throughout")
+	}
+	truncates := 0
+	for _, c := range got {
+		if c.mode == "TRUNCATE" {
+			truncates++
+		}
+	}
+	if truncates == 0 {
+		t.Fatalf("fixture: no TRUNCATE was issued, so the late reader was never waited on: %+v", got)
+	}
+	requireTruncateOnlyAfterCompletePassive(t, got)
+	if n := recErrs.Load(); n != 0 {
+		t.Fatalf("%d Records failed during the truncate phase", n)
+	}
+	// Each TRUNCATE used to hold the write lock for the 1 s busy timeout; the
+	// bound leaves room for -race on a loaded disk without allowing that.
+	if lat > 500*time.Millisecond {
+		t.Fatalf("slowest Record took %v across %d busy TRUNCATEs: the TRUNCATE waited on the reader while holding the write lock", lat, truncates)
 	}
 }
