@@ -1,7 +1,7 @@
 // file: internal/audiobooks/author_name_gate_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 706fca22-946e-4028-b4d1-f6d7c0bbcbb7
-// last-edited: 2026-10-03
+// last-edited: 2026-10-04
 
 package audiobooks
 
@@ -68,3 +68,31 @@ func TestUpdateAudiobook_AllAuthorNamesRejectedReturnsError(t *testing.T) {
 // would be testing the fixture. The rejection above is the case with teeth,
 // and dedup.CleanAuthorNameForCreation carries its own tests for which names
 // survive.
+
+// A name the credit splitter leaves whole ("Travis Deverell, Shirtaloon" reads as
+// "Surname, First") that the shared splitter will not split either, whose
+// parts are both existing authors, is refused rather than created as one
+// combined author row (authorcredit.ErrCombinedCredit).
+func TestUpdateAudiobook_CombinedNameOfExistingAuthorsIsNotCreated(t *testing.T) {
+	var created []string
+	var written []database.Book
+	svc := gateTestService(&created, &written)
+	store := svc.store.(*database.MockStore)
+	existing := map[string]*database.Author{
+		"Travis Deverell": {ID: 1, Name: "Travis Deverell"},
+		"Shirtaloon":      {ID: 2, Name: "Shirtaloon"},
+	}
+	store.GetAuthorByNameFunc = func(n string) (*database.Author, error) { return existing[n], nil }
+
+	name := "Travis Deverell, Shirtaloon"
+	_, err := svc.UpdateAudiobook(context.Background(), "bk1", &UpdateAudiobookRequest{
+		Updates:    &AudiobookUpdate{Book: &database.Book{}, AuthorName: &name},
+		RawPayload: map[string]json.RawMessage{"author_name": json.RawMessage(`"Travis Deverell, Shirtaloon"`)},
+	})
+	if err == nil || !strings.Contains(err.Error(), "no usable author name") {
+		t.Fatalf("err = %v, want the no-usable-name refusal", err)
+	}
+	if len(created) != 0 {
+		t.Errorf("created %v; a combined row must not be created", created)
+	}
+}

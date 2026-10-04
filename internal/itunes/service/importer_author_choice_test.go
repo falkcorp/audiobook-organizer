@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_author_choice_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4a1d8e63-9f2b-4c75-b3e0-7d6c1f9a2b58
-// last-edited: 2026-09-14
+// last-edited: 2026-10-04
 
 package itunesservice
 
@@ -75,4 +75,36 @@ func TestBuildBookFromAlbumGroup_NarratorFromArtistWhenAlbumArtistDiffers(t *tes
 			assert.Equal(t, tc.wantNarrator, *book.Narrator)
 		})
 	}
+}
+
+// A credit the splitter will not split whose pieces are existing authors is
+// not created as one combined author row (authorcredit.ErrCombinedCredit):
+// the book is left without an author, and the mock fails on any CreateAuthor.
+func TestAssignAuthorAndSeries_CombinedOfExistingAuthorsIsNotCreated(t *testing.T) {
+	m := dbmocks.NewMockStore(t)
+	m.EXPECT().GetAuthorByName("Shirtaloon, Travis Deverell").Return(nil, nil).Once()
+	m.EXPECT().GetAuthorByName("Shirtaloon").Return(&database.Author{ID: 1, Name: "Shirtaloon"}, nil).Once()
+	m.EXPECT().GetAuthorByName("Travis Deverell").Return(&database.Author{ID: 2, Name: "Travis Deverell"}, nil).Once()
+
+	imp := newMockImporter(m)
+	book := &database.Book{}
+	imp.assignAuthorAndSeries(book, &itunes.Track{AlbumArtist: "Shirtaloon, Travis Deverell"})
+	assert.Nil(t, book.AuthorID)
+}
+
+// A splittable credit still credits each person, in order (unchanged).
+func TestAssignAuthorAndSeries_SplittableCreditCreditsEachPerson(t *testing.T) {
+	m := dbmocks.NewMockStore(t)
+	m.EXPECT().GetAuthorByName("J. N. Chaney").Return(&database.Author{ID: 5, Name: "J. N. Chaney"}, nil).Once()
+	m.EXPECT().GetAuthorByName("Jonathan P. Brazee").Return(nil, nil).Once()
+	m.EXPECT().CreateAuthor("Jonathan P. Brazee").Return(&database.Author{ID: 6, Name: "Jonathan P. Brazee"}, nil).Once()
+
+	imp := newMockImporter(m)
+	book := &database.Book{}
+	imp.assignAuthorAndSeries(book, &itunes.Track{AlbumArtist: "J.N. Chaney, Jonathan P. Brazee"})
+	require.NotNil(t, book.AuthorID)
+	assert.Equal(t, 5, *book.AuthorID)
+	require.Len(t, book.Authors, 2)
+	assert.Equal(t, 6, book.Authors[1].AuthorID)
+	assert.Equal(t, 1, book.Authors[1].Position)
 }

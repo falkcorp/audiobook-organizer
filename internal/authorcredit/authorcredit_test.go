@@ -132,6 +132,7 @@ func TestLooksCombined(t *testing.T) {
 	require.True(t, LooksCombined("Shirtaloon, Travis Deverell", exists), "every piece is an author")
 	require.False(t, LooksCombined("King, Stephen", exists), "Last, First")
 	require.False(t, LooksCombined("Shirtaloon, Nobody", exists))
+	require.True(t, LooksCombined("Travis Deverell, Shirtaloon", exists), "a two-word left side is not a bare surname")
 	require.False(t, LooksCombined("Stephen King", exists))
 }
 
