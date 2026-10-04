@@ -1,7 +1,7 @@
 // file: internal/dedup/authorname_reexport.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: add8e266-e06d-42ca-baeb-ede8df3f4716
-// last-edited: 2026-09-03
+// last-edited: 2026-10-04
 
 package dedup
 
@@ -39,4 +39,11 @@ func IsPositionalArtifactName(name string) bool { return personname.IsPositional
 // should be stored. See personname.CleanAuthorNameForCreation.
 func CleanAuthorNameForCreation(raw string) (string, bool) {
 	return personname.CleanAuthorNameForCreation(raw)
+}
+
+// SplitCompositeAuthorName splits a credit list ("A / B", "A, B", "A and B")
+// into person-shaped parts, or returns nil / one element when it will not
+// split safely. See personname.SplitCompositeAuthorName.
+func SplitCompositeAuthorName(name string) []string {
+	return personname.SplitCompositeAuthorName(name)
 }
