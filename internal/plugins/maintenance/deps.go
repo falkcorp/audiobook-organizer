@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.69.0
+// version: 1.70.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-10-03
 
@@ -281,11 +281,14 @@ type opsFieldStateStore interface {
 	DeleteUserPreference(key string) error
 }
 
-// opsOperationJournalReader lists an operation's change rows. The Repairs
+// opsOperationJournalReader lists change rows: an operation's (the Repairs
 // apply reads its own op's journal before writing a step, so a resumed run
-// does not journal a step twice (repairs.ChangeJournal).
+// does not journal a step twice -- repairs.ChangeJournal), or a book's,
+// through the opchange_by_book: index (the swapped title/author fixer's
+// continuation check reads one book's rows, not a whole apply's journal).
 type opsOperationJournalReader interface {
 	GetOperationChanges(operationID string) ([]*database.OperationChange, error)
+	GetBookChanges(bookID string) ([]*database.OperationChange, error)
 }
 
 // opsRecordsAndQueue is opsHousekeeping's original method set.

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/swapped_title_author_fixer.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: a80ddfb1-95dc-402f-941a-142b9388bcf0
 // last-edited: 2026-10-03
 
@@ -760,12 +760,15 @@ func swapContinuation(store OpsStore, bookID string, author *database.MetadataFi
 	if !ok {
 		return false, "", nil
 	}
-	changes, err := store.GetOperationChanges(op)
+	// The book's rows (GetBookChanges reads the opchange_by_book: index, and
+	// falls back to the journal scan while the index is not trusted), not the
+	// operation's: an apply's journal holds every row of every book it wrote.
+	changes, err := store.GetBookChanges(bookID)
 	if err != nil {
-		return false, "", fmt.Errorf("read the journal of %s: %w", op, err)
+		return false, "", fmt.Errorf("read the journal rows of %s: %w", bookID, err)
 	}
 	for _, c := range changes {
-		if c.Voided || c.BookID != bookID || c.ChangeType != undo.ChangeTypeFieldLock || c.FieldName != database.FieldKeyAuthorName {
+		if c.Voided || c.OperationID != op || c.BookID != bookID || c.ChangeType != undo.ChangeTypeFieldLock || c.FieldName != database.FieldKeyAuthorName {
 			continue
 		}
 		t, a := fetched["title"], fetched["author_name"]
