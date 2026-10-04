@@ -254,9 +254,9 @@ func TestCombinedAuthorFixer_ApplyAndRevert(t *testing.T) {
 	require.Equal(t, "J. N. Chaney", l.primary("duplicate"))
 	require.Equal(t, []string{"Turner Tellborn@0/author", "Marcus Sloss@1/author", "Some Narrator@2/narrator"}, l.credits("only"))
 	require.Equal(t, "Turner Tellborn", l.primary("only"))
-	require.Equal(t, []string{"Michael Anderle@0/author", "Amy DuBoff@1/author"}, l.credits("partial"),
-		"the missing part takes the combined credit's place; the credited one keeps its own")
-	require.Equal(t, "Amy DuBoff", l.primary("partial"), "the primary is the combined name's first author")
+	require.Equal(t, []string{"Amy DuBoff@0/author", "Michael Anderle@1/author"}, l.credits("partial"),
+		"the combined credit's slot takes every part credited after it, in the combined name's order")
+	require.Equal(t, "Amy DuBoff", l.primary("partial"), "the primary is the first author credit")
 	require.Equal(t, []string{"Turner Tellborn@0/author", "Marcus Sloss@1/author"}, l.credits("primary-only"))
 	require.Equal(t, "Turner Tellborn", l.primary("primary-only"))
 	require.Equal(t, []string{"Ann Leckie@0/author", "Zed Newperson@1/author"}, l.credits("new-author"))
@@ -344,6 +344,9 @@ func TestCombinedNextCredits(t *testing.T) {
 	// Distinct positions are the real order and win over the combined string.
 	got = combinedNextCredits([]database.BookAuthor{ba(2, "author", 0), ba(1, "author", 1), ba(9, "author", 2)}, "b", []int{9}, [][]int{{1, 2}})
 	require.Equal(t, [][3]any{{2, "author", 0}, {1, "author", 1}}, ids(got))
+	// A part credited after the combined credit moves up into its slot.
+	got = combinedNextCredits([]database.BookAuthor{ba(9, "author", 0), ba(2, "co-author", 1)}, "b", []int{9}, [][]int{{1, 2}})
+	require.Equal(t, [][3]any{{1, "author", 0}, {2, "co-author", 1}}, ids(got))
 	// Combined-only, with an unrelated co-author after it and a narrator.
 	got = combinedNextCredits([]database.BookAuthor{ba(9, "", 0), ba(5, "co-author", 1), ba(7, "narrator", 2)}, "b", []int{9}, [][]int{{1, 2}})
 	require.Equal(t, [][3]any{{1, "author", 0}, {2, "author", 1}, {5, "co-author", 2}, {7, "narrator", 3}}, ids(got))
@@ -434,4 +437,39 @@ func TestCombinedAuthorFixer_SiblingCreateDoesNotRefuseTheNextRow(t *testing.T) 
 		}
 	}
 	require.Equal(t, 1, zeds, "one author created, not one per row")
+}
+
+// The primary moves to the first author credit of the result, so it agrees
+// with the organizer, which files a book under its lowest-position author.
+// Where the existing credits put the combined name's second part first, that
+// author is the primary and the reason says why.
+func TestCombinedAuthorFixer_PrimaryIsTheFirstCredit(t *testing.T) {
+	l := newCombinedLib(t)
+	l.author("J. N. Chaney")
+	l.author("Jonathan P. Brazee")
+	l.book("order", "Order", "J.N. Chaney, Jonathan P. Brazee", combinedLibRoot+"Order/a.m4b",
+		credit{"Jonathan P. Brazee", "author", 0}, credit{"J. N. Chaney", "author", 1}, credit{"J.N. Chaney, Jonathan P. Brazee", "author", 2})
+	plan, rows := l.plan()
+	r := rows["order"]
+	require.True(t, r.Applicable(), r.SkipReason)
+	require.Equal(t, "Jonathan P. Brazee", r.Proposed["primary"])
+	require.Contains(t, r.Reason, "not \"J. N. Chaney\"")
+	out := l.apply(plan, []string{r.RowID})
+	require.Equal(t, 1, out.Applied, "outcomes %v", out.ByOutcome)
+	require.Equal(t, []string{"Jonathan P. Brazee@0/author", "J. N. Chaney@1/author"}, l.credits("order"))
+	require.Equal(t, "Jonathan P. Brazee", l.primary("order"))
+}
+
+// A series named like the credit's first author does not hold the credit as
+// a title.
+func TestCombinedAuthorFixer_AuthorNamedSeriesIsNotATitle(t *testing.T) {
+	l := newCombinedLib(t)
+	l.author("Michael Anderle")
+	l.author("Craig Martelle")
+	_, err := l.store.CreateSeries("Michael Anderle", nil)
+	require.NoError(t, err)
+	l.book("series", "Some Book", "Michael Anderle, Craig Martelle", combinedLibRoot+"Some/a.m4b",
+		credit{"Michael Anderle, Craig Martelle", "author", 0})
+	_, rows := l.plan()
+	require.True(t, rows["series"].Applicable(), "%s %s", rows["series"].Skipped, rows["series"].SkipReason)
 }

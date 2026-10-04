@@ -100,3 +100,13 @@ func TestCreditScannedAuthors(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, cs2)
 }
+
+// A rescan never puts back a co-author on a book whose author the user locked,
+// nor when the locks could not be read (treated as locked).
+func TestRescanMayCreditAuthors(t *testing.T) {
+	require.True(t, rescanMayCreditAuthors(map[string]bool{}, true))
+	require.True(t, rescanMayCreditAuthors(map[string]bool{database.FieldKeyTitle: true}, true))
+	require.False(t, rescanMayCreditAuthors(map[string]bool{database.FieldKeyAuthorName: true}, true))
+	require.False(t, rescanMayCreditAuthors(database.AllUserLockableFieldsLocked(), false))
+	require.False(t, rescanMayCreditAuthors(map[string]bool{}, false))
+}
