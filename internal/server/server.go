@@ -683,6 +683,7 @@ func NewServer(store database.Store) *Server {
 	wireServerFromContainer(server, regContainer)
 	server.initSearchResultCache()
 	server.container = regContainer
+	server.registerPebbleMetricsSources()
 
 	// Register batch poller handlers now that batchPoller is wired from container.
 	if server.batchPoller != nil {

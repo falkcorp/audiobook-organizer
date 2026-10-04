@@ -1,0 +1,85 @@
+// file: internal/database/pebble_metrics_export.go
+// version: 1.0.0
+// guid: 7efe29c0-d5f8-489a-bdaa-2715b790979d
+// last-edited: 2026-10-04
+
+package database
+
+import (
+	"errors"
+
+	"github.com/cockroachdb/pebble/v2"
+
+	"github.com/falkcorp/audiobook-organizer/internal/metrics"
+)
+
+// PebbleMetricsSampler is implemented by stores backed by a Pebble database
+// that can be sampled for the pebble_* Prometheus series.
+type PebbleMetricsSampler interface {
+	PebbleMetricsSample() (metrics.PebbleSample, bool)
+}
+
+var _ PebbleMetricsSampler = (*PebbleStore)(nil)
+
+// PebbleMetricsSample samples the main store's database.
+func (p *PebbleStore) PebbleMetricsSample() (metrics.PebbleSample, bool) {
+	return PebbleSampleFromDB(p.db)
+}
+
+// PebbleSampleFromDB reads db.Metrics() into a metrics.PebbleSample. ok is
+// false for a nil db and for one that has been closed; any other panic is
+// re-raised, the same rule recoverPebbleClosed applies.
+//
+// pebble v2.1.7's DB.Metrics() does NOT check for a closed DB (it reads the
+// closed engine's state and returns), so the closed check is an explicit probe:
+// NewSnapshot panics with an error matching pebble.ErrClosed on a closed DB and
+// costs one mutex round trip. The probe is best effort against a Close that
+// lands between it and Metrics(); callers that can race Close (the OpenLibrary
+// service) hold the lock that serialises it.
+func PebbleSampleFromDB(db *pebble.DB) (s metrics.PebbleSample, ok bool) {
+	if db == nil {
+		return metrics.PebbleSample{}, false
+	}
+	defer func() {
+		if rec := recover(); rec != nil {
+			if err, isErr := rec.(error); isErr && errors.Is(err, pebble.ErrClosed) {
+				s, ok = metrics.PebbleSample{}, false
+				return
+			}
+			panic(rec)
+		}
+	}()
+	db.NewSnapshot().Close()
+	m := db.Metrics()
+	s = metrics.PebbleSample{
+		BlockCacheBytes:           float64(m.BlockCache.Size),
+		BlockCacheBlocks:          float64(m.BlockCache.Count),
+		BlockCacheHits:            float64(m.BlockCache.Hits),
+		BlockCacheMisses:          float64(m.BlockCache.Misses),
+		FilterHits:                float64(m.Filter.Hits),
+		FilterMisses:              float64(m.Filter.Misses),
+		ReadAmp:                   float64(m.ReadAmp()),
+		L0Files:                   float64(m.Levels[0].TablesCount),
+		L0Sublevels:               float64(m.Levels[0].Sublevels),
+		Compactions:               float64(m.Compact.Count),
+		CompactionDebtBytes:       float64(m.Compact.EstimatedDebt),
+		CompactionsInProgress:     float64(m.Compact.NumInProgress),
+		CompactionInProgressBytes: float64(m.Compact.InProgressBytes),
+		MemTableBytes:             float64(m.MemTable.Size),
+		MemTables:                 float64(m.MemTable.Count),
+		WALBytes:                  float64(m.WAL.Size),
+		WALPhysicalBytes:          float64(m.WAL.PhysicalSize),
+		WALFiles:                  float64(m.WAL.Files),
+		DiskUsageBytes:            float64(m.DiskSpaceUsage()),
+	}
+	for i := range s.LevelBytes {
+		l := &m.Levels[i]
+		s.LevelBytes[i] = float64(l.TablesSize)
+		s.LevelFiles[i] = float64(l.TablesCount)
+		s.LevelBytesIn[i] = float64(l.TableBytesIn)
+		s.LevelBytesFlushed[i] = float64(l.TableBytesFlushed + l.BlobBytesFlushed)
+		s.LevelBytesCompacted[i] = float64(l.TableBytesCompacted + l.BlobBytesCompacted)
+		s.LevelWriteAmp[i] = l.WriteAmp()
+	}
+	return s, true
+}
