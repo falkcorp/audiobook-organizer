@@ -3531,11 +3531,13 @@ const (
 // state. The crown write itself goes past the Writer and cannot be cut here.
 //
 // Cost: every cut point re-seeds and re-applies. The default run covers the
-// prod shape (organized=all, the originals in a version group) and no
-// version group in both modes, and the survivor-in-group hand-off shape
-// (cutVGHandOffPast) in fresh mode. AORG_FRAG_CUT_MATRIX=full runs every
-// shape in both modes and also cuts at every history row (the
-// crash-before-history window).
+// prod shape (organized=all, the originals in a version group) in both
+// modes and the survivor-in-group hand-off shape (cutVGHandOffPast) in fresh
+// mode; without -short it adds no version group in fresh mode (probe F's
+// other shape). Measured 2026-10-03 under -race: all/originals 145 s per
+// mode, hand-off-past 97 s, none/none 111 s, so CI's -short -race run pays
+// about 390 s here. AORG_FRAG_CUT_MATRIX=full runs every shape in both modes
+// and also cuts at every history row (the crash-before-history window).
 func TestFragmentFixer_NumberedCopiesCutAtEveryStep(t *testing.T) {
 	full := os.Getenv("AORG_FRAG_CUT_MATRIX") == "full"
 	type shape struct{ org, vg, mode string }
@@ -3552,8 +3554,10 @@ func TestFragmentFixer_NumberedCopiesCutAtEveryStep(t *testing.T) {
 	} else {
 		shapes = []shape{
 			{"all", cutVGOrig, "resume"}, {"all", cutVGOrig, "fresh"},
-			{"none", cutVGNone, "fresh"},
 			{"all", cutVGHandOffPast, "fresh"},
+		}
+		if !testing.Short() {
+			shapes = append(shapes, shape{"none", cutVGNone, "fresh"})
 		}
 	}
 	for _, sh := range shapes {
