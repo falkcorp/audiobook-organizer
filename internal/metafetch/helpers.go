@@ -1,7 +1,7 @@
 // file: internal/metafetch/helpers.go
-// version: 1.21.0
+// version: 1.21.1
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
-// last-edited: 2026-10-03
+// last-edited: 2026-10-04
 
 package metafetch
 
@@ -684,16 +684,6 @@ type MetadataFieldState struct {
 // provenance unification listed it for deletion "if it has no users left", and
 // it has plenty -- checked rather than assumed.
 type metadataFieldState = MetadataFieldState
-
-// loadMetadataState is the read-only load (LoadStateSnapshot). A *Service
-// method so it uses mfs.db rather than the package global
-// (SERVER-GLOBAL-STORE-AUDIT phase 4).
-func (mfs *Service) loadMetadataState(bookID string) (map[string]metadataFieldState, error) {
-	if mfs == nil || mfs.db == nil {
-		return map[string]metadataFieldState{}, fmt.Errorf("database not initialized")
-	}
-	return LoadStateSnapshot(mfs.db, bookID)
-}
 
 // updateFetchedMetadataState records provider values as each field's fetched
 // value, under the book's field-state stripe (WithStateSnapshot). Each field
