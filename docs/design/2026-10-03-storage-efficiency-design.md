@@ -1,5 +1,5 @@
 <!-- file: docs/design/2026-10-03-storage-efficiency-design.md -->
-<!-- version: 0.4.0 -->
+<!-- version: 0.5.0 -->
 <!-- guid: 332dcbd9-73e2-4814-b1a0-723afa60e605 -->
 <!-- last-edited: 2026-10-03 -->
 
@@ -78,10 +78,17 @@ Non-goals:
   fields (`pebble_store.go:2753`, `bookfile_merge.go:211`). For data moved to a
   side entry, the field is removed from the main struct, so the bug cannot be
   written. Clearing becomes an explicit call.
-- P3. **Expand, then contract.** Each storage format change ships as: (a) a
-  build that reads old and new and still writes old; (b) a flag flip to write
-  new; (c) a background conversion; (d) removal of the old write path. The
-  build from step (a) is the rollback floor for everything after it.
+- P3. **Cut over. No backward compatibility.** (Owner, 2026-10-03: "cut us
+  over, convert the old, purge the old ... we cut off compatibility as long
+  as we migrate to the new system.") There are no format flags, no dual-write
+  period, no promise that an older build can run against the data, and no
+  legacy format kept "forever". Each format change ships as one release that
+  writes only the new format, converts every legacy record, verifies the
+  conversion, and deletes the legacy records. The code that reads the legacy
+  format exists only inside the converter and is deleted in the following
+  release. The way back from a bad migration is the pre-migration backup, not
+  an older binary. What stays is verification: a conversion that cannot prove
+  it reproduced the old data exactly does not purge it (P4).
 - P4. **Fail closed, verifiably.** A history entry that cannot be rebuilt
   exactly returns an error naming the entry. It never returns a best guess.
 - P5. **Destructive steps follow the standing rule**: dry run, reviewable row
@@ -547,37 +554,43 @@ data dataset. A full compaction followed by a snapshot pins a whole extra copy
   call sites each do a synced Set); delete `metadata_change:` on hard delete;
   `file_prov_hash:` stores a pointer, not a second full copy.
 
-## 10. Rollout
+## 10. Rollout (cut-over; supersedes any flag or shadow wording above)
 
-Each phase is one or more PRs through the normal gate, with an adversarial
-review before push for any change to a write path.
+Every release below writes only the new format from its first start. Legacy
+data is read by the converter and by nothing else, except the narrow window
+in which a converter is still running, when a read that meets an unconverted
+record converts it on the spot.
 
-- **Phase 0, no data format change:** Pebble options and metrics; census and
-  db-health; timeline index; op-log throttle and tail read; version list
-  reverse iteration.
-- **Phase 1, expand:** readers for the new book-version formats, chokepoint,
-  verhead, pins, signature history, consumers moved. Writes stay legacy behind
-  `storage.book_versions_v2=false`. Deploy. This build is the rollback floor.
-- **Phase 2, shadow then flip:** with `storage.book_versions_shadow=true` the
-  writer stores both the legacy copy and the change entry, and a verify op
-  reconstructs every shadowed entry and compares it with its legacy twin. When
-  a full day verifies clean on prod, set `book_versions_v2=true` and turn
-  shadow off. No-op skip turns on with the same flag.
-- **Phase 3, file records:** accessors and call-site moves with storage still
-  inline; then side-entry writes and the type change behind
-  `storage.bookfile_cold_v2`; then the background migration.
-- **Phase 4, cleanup, each with dry run, row list and owner approval:**
-  convert legacy copies; delete history of deleted books; prune operation
-  history; reap fetch cache; embedding GC. Then the owner deletes ZFS
-  snapshots and one parallel compaction returns the space.
-- **Phase 5, optional, decided on census data:** fingerprint-index key shrink
-  or band reduction; compression change.
+- **Release A, no format change:** Pebble options and metrics; census;
+  db-health; timeline index; op-log throttle and tail read. Establishes the
+  before-numbers.
+- **Release B, book history cut-over:** new history format, pins, no-op skip.
+  At first start it takes a backup (a Pebble checkpoint plus a ZFS snapshot,
+  named and logged), then runs the converter as a startup operation: per
+  book, convert, verify in memory against the legacy copies, write new,
+  delete legacy, in one batch. A book that fails verification keeps its
+  legacy copies and is listed; the operation ends "converted N, held M" and
+  the release is not finished until M is zero or the owner has ruled on each
+  held book.
+- **Release C, file records and signal store cut-over:** same shape. Backup,
+  then move fingerprints, transcripts, diagnostics and book signatures to the
+  signal store with a byte-for-byte check, then rewrite each row without
+  them.
+- **Release D, purge:** operation history retention, fetch-cache reaper,
+  legacy fingerprint-index rows, embedding duplicates, history of
+  hard-deleted books, the dead `operationlog:` family. Each is a deletion of
+  data that has no new-format equivalent, so each keeps dry run, row list and
+  owner approval (P5).
+- **Release E:** delete the converters and every legacy reader. Then the
+  owner deletes the old ZFS snapshots and one parallel compaction returns the
+  space.
+- **Later, on census data:** archive for retired books; fingerprint-index
+  shape.
 
-Rollback: before a flag flip, redeploy the previous build. After a flip, turn
-the flag off; the phase 1 build reads both formats, so nothing written under
-the flag is lost. After conversion (phase 4) there is no way back to full
-copies except from a database backup; conversion therefore runs only after
-phase 2 has verified on prod and the owner approves the per-book list.
+There is no rollback path by design. Each cut-over release states its backup
+name in the operation log, and restoring that backup with the previous
+release is the only way back. A converter that is interrupted resumes at the
+next start; the application serves requests while it runs.
 
 ## 11. Test strategy
 
