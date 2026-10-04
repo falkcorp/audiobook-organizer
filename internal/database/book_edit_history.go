@@ -1,7 +1,7 @@
 // file: internal/database/book_edit_history.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5b8e2f71-0c4d-4a96-b3e7-9d1a6c2f8e40
-// last-edited: 2026-09-30
+// last-edited: 2026-10-04
 
 package database
 
@@ -21,6 +21,26 @@ const (
 	HistoryFieldAuthor   = "author_name"
 	HistoryFieldSeries   = "series"
 	HistoryFieldSeriesNo = "series_position"
+)
+
+// A dropped embedded series object. The store's series invariant
+// (enforceSeriesInvariant) drops or replaces a Book.Series object that does
+// not match Book.SeriesID; when that object was the only record of a series
+// (a stale object older builds left), the store writes one history row in
+// the same batch as the book row: field HistoryFieldSeriesObject, change type
+// ChangeTypeSeriesObjectDrop, source SeriesObjectDropSource. PreviousValue is
+// the dropped object's name, PreviousRef.SeriesID its id; NewValue / NewRef
+// are the object and SeriesID the row was written with.
+//
+// The change type is not a field edit: the queued apply ignores it
+// (metafetch isFieldEdit), because the scanner's own writes drop these
+// objects and the scanner is not a later edit. An undo of the row is refused
+// (the field is not a Book column); the object is restored by relinking the
+// book to that series.
+const (
+	HistoryFieldSeriesObject   = "series_object"
+	ChangeTypeSeriesObjectDrop = "series-object-drop"
+	SeriesObjectDropSource     = "series_invariant"
 )
 
 // HistoryFieldToJSON maps each history field name that differs from its Book
