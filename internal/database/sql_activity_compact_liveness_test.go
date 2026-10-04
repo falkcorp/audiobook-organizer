@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_compact_liveness_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4d1f8b62-3a7e-4c95-b0d8-6e2a9f13c7b4
-// last-edited: 2026-09-13
+// last-edited: 2026-10-03
 
 // Liveness tests for SQLActivityStore.CompactByDay.
 //
@@ -86,8 +86,9 @@ func progressCounts(evs []CompactProgressEvent) []int {
 // THE HEADLINE TEST. A single day of several chunks must report after EVERY
 // committed chunk, carrying the day, so the op watchdog hears from a 4.8M-row
 // day ~960 times instead of once at the end. The expected sequence is exact:
-// dropping the per-chunk report leaves only the per-day [15001].
+// dropping the per-chunk report leaves only the per-day [3*chunk+1].
 func TestSQLCompactByDay_ReportsProgressPerChunk(t *testing.T) {
+	shrinkSQLActChunksForTest(t)
 	s := newTestSQLStore(t)
 	day := time.Date(2026, 9, 7, 0, 0, 0, 0, time.UTC)
 	total := 3*sqlActDeleteChunk + 1
@@ -115,6 +116,7 @@ func TestSQLCompactByDay_ReportsProgressPerChunk(t *testing.T) {
 // very END of the day (the case that forced the old statement to walk it all)
 // and rank it ahead of the normal rows.
 func TestSQLCompactByDay_SampleScanHeartbeatsPerWindowAndFindsLateErrors(t *testing.T) {
+	shrinkSQLActChunksForTest(t)
 	s := newTestSQLStore(t)
 	day := time.Date(2026, 9, 7, 0, 0, 0, 0, time.UTC)
 	normal := 2*sqlActSampleWindow + 10
@@ -156,6 +158,7 @@ func TestSQLCompactByDay_SampleScanHeartbeatsPerWindowAndFindsLateErrors(t *test
 // intended — making the day one transaction is the 29-minute, unkillable
 // statement this design replaced; see CompactByDay.)
 func TestSQLCompactByDay_CancelMidDayLeavesNoTornDigest(t *testing.T) {
+	shrinkSQLActChunksForTest(t)
 	s := newTestSQLStore(t)
 	day := time.Date(2026, 9, 7, 0, 0, 0, 0, time.UTC)
 	total := 2*sqlActDeleteChunk + 1
@@ -188,6 +191,7 @@ func TestSQLCompactByDay_CancelMidDayLeavesNoTornDigest(t *testing.T) {
 // A cancel during the sample walk — before any chunk — must write nothing: no
 // digest, no deleted row.
 func TestSQLCompactByDay_CancelDuringSampleWritesNothing(t *testing.T) {
+	shrinkSQLActChunksForTest(t)
 	s := newTestSQLStore(t)
 	day := time.Date(2026, 9, 7, 0, 0, 0, 0, time.UTC)
 	total := 2*sqlActSampleWindow + 1

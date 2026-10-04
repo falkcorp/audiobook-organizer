@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_store.go
-// version: 1.18.0
+// version: 1.18.1
 // guid: 2c9a7e14-8b30-4d6f-a1e2-5f7b9c0d3e28
-// last-edited: 2026-09-26
+// last-edited: 2026-10-03
 
 // Package database — backend-agnostic SQL activity store.
 //
@@ -106,7 +106,12 @@ const sqlActCountCap = 100000
 // sqlActDeleteChunk bounds each DELETE so an unbounded wipe/prune cannot build
 // one enormous WAL frame; it also makes WipeAllActivity's "rows actually
 // deleted on cancel" contract real (it sums committed chunks).
-const sqlActDeleteChunk = 5000
+//
+// A var only so a multi-chunk test can shrink it (shrinkSQLActChunksForTest):
+// at 5,000 a three-chunk fixture is 15,001 rows, and under -race those tests
+// spent their time pushing rows through SQLite rather than testing chunking.
+// Production never writes it. sqlActSampleWindow moves with it.
+var sqlActDeleteChunk = 5000
 
 // sqlActSummarizeChunk bounds each Summarize delete the same way. A var only so
 // a test can shrink it to exercise the chunk boundary.
@@ -942,7 +947,7 @@ func (s *SQLActivityStore) Prune(ctx context.Context, olderThan time.Time, tier 
 		n, _ := res.RowsAffected()
 		deleted += int(n)
 		ReportMaintenanceProgress(ctx, MaintenancePhasePrune, "sqlite", deleted)
-		if n < sqlActDeleteChunk {
+		if n < int64(sqlActDeleteChunk) {
 			break
 		}
 	}
@@ -971,7 +976,7 @@ func (s *SQLActivityStore) WipeAllActivity(ctx context.Context) (int64, error) {
 		n, _ := res.RowsAffected()
 		deleted += n
 		s.checkpointBetweenBatches(ctx)
-		if n < sqlActDeleteChunk {
+		if n < int64(sqlActDeleteChunk) {
 			break
 		}
 	}
@@ -1378,8 +1383,9 @@ func (s *SQLActivityStore) sampleDayItems(ctx context.Context, lo, hi int64, bea
 
 // sqlActSampleWindow is how many rows one step of sampleDayItems' keyset walk
 // reads. Same size as a compaction chunk's claim, which reads the same columns'
-// row pages, so one window costs no more than one chunk.
-const sqlActSampleWindow = sqlActDeleteChunk
+// row pages, so one window costs no more than one chunk. A var for the same
+// test-only reason as sqlActDeleteChunk, and set with it.
+var sqlActSampleWindow = sqlActDeleteChunk
 
 // sampleWindow reads the next sqlActSampleWindow rows after (lastTS, lastID) in
 // (ts, id) order below hi, calling visit for each, and returns how many it read.

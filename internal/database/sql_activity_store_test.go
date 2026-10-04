@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_store_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 9f1c4b70-3d21-4a58-b0e6-1c8a2f5d6e30
-// last-edited: 2026-09-11
+// last-edited: 2026-10-03
 
 package database
 
@@ -134,6 +134,9 @@ func TestSQLActivity_CompactByDay_Bounded(t *testing.T) {
 	day := time.Date(2026, 3, 15, 0, 0, 0, 0, time.UTC)
 	// More than maxDigestItems entries on one day, across tiers/levels.
 	const n = maxDigestItems + 250
+	// Seeded in one RecordBatch (same clamp, content key and INSERT as Record):
+	// this test is about compaction, and a commit per row dominated its run time.
+	entries := make([]ActivityEntry, 0, n)
 	for i := range n {
 		tier, level := "info", "info"
 		switch {
@@ -142,11 +145,14 @@ func TestSQLActivity_CompactByDay_Bounded(t *testing.T) {
 		case i%7 == 0:
 			level = "error"
 		}
-		mustRecord(t, s, ActivityEntry{
+		entries = append(entries, ActivityEntry{
 			Timestamp: day.Add(time.Duration(i) * time.Second),
 			Tier:      tier, Type: "scan_progress", Level: level, Source: "scanner",
 			Summary: fmt.Sprintf("entry %d", i),
 		})
+	}
+	if got, err := s.RecordBatch(entries); err != nil || got != n {
+		t.Fatalf("seed: inserted %d/%d err=%v", got, n, err)
 	}
 	// A newer day that must NOT be compacted.
 	newer := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
