@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.28.2
+// version: 1.28.3
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
 // last-edited: 2026-10-04
 
@@ -1675,9 +1675,19 @@ func (f *fragmentFixer) recordDone(store OpsStore, lib *fragLibrary, pj *fragPla
 		if !dedupLoser[o] {
 			// Retired through merged_into (a retireInto, a combine) into
 			// the terminal: whoever retired it chose which rows stay on
-			// it. The duplicate-copies fixer keeps a loser's hash-twin
-			// rows there on purpose (retireInto never moves rows), so
-			// carrying them would put duplicate audio on the terminal.
+			// it. The invariant this relies on: a planned row left on a
+			// merged_into retiree has its hash twin on the winner (the
+			// duplicate-copies fold moves every row the winner has no twin
+			// of and keeps the rest; retireInto itself never moves rows),
+			// so its audio is in view and carrying it would put duplicate
+			// audio on the terminal. Checked, not assumed: a row with no
+			// twin on the terminal (or no hash to tell) is out of view, and
+			// the run is held until it is moved onto the terminal.
+			if !hashTwinOn(lib, o, fid, terminal) {
+				outside = fmt.Sprintf("planned file %s of book %s is now on book %s, outside the run: %s was merged into %s without it, and no row with its hash is on %s",
+					fid, id, o, o, terminal, terminal)
+				return false, terminal, outside, nil, nil
+			}
 			continue
 		}
 		if o == id {
@@ -1746,6 +1756,21 @@ func (f *fragmentFixer) recordDone(store OpsStore, lib *fragLibrary, pj *fragPla
 	}
 	done, err = survivorStepsDone(store, sb, st, rec.Proposed["title"], rec.Proposed["book_path"])
 	return done, terminal, "", nil, err
+}
+
+// hashTwinOn reports whether row fid on book from has a twin on book to:
+// a row of to with the same non-empty content hash.
+func hashTwinOn(lib *fragLibrary, from, fid, to string) bool {
+	hash := ""
+	for _, r := range lib.files[from] {
+		if r.ID == fid {
+			hash = r.Hash
+		}
+	}
+	if hash == "" {
+		return false
+	}
+	return slices.ContainsFunc(lib.files[to], func(r fragFile) bool { return r.Hash == hash })
 }
 
 // survivorOf is the live book retired book id's work went into, or "" when
