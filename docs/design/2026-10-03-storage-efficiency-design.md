@@ -1,5 +1,5 @@
 <!-- file: docs/design/2026-10-03-storage-efficiency-design.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 332dcbd9-73e2-4814-b1a0-723afa60e605 -->
 <!-- last-edited: 2026-10-03 -->
 
@@ -1383,34 +1383,29 @@ store, 5.2a).
 | Estimates rest on a 55-book sample | census in release A; each release re-measured; release A exit states the rule if the census contradicts the estimate |
 | Partial new format reaches prod from an intermediate PR | B and C tasks merge to integration branches; main receives the rehearsed tip only inside the deploy window (plan) |
 
-## 12. Open questions for the owner
+## 12. Owner decisions (2026-10-03, 23:07 EDT)
+
+Spec and plan approved; release A starts. Releases B and C get briefs after
+release A's census, and each cut-over is scheduled separately.
 
 - Q1. Book history retention: newest 50 entries of real change per book plus
-  pins (proposed).
-- Q2. Operation logs: packed after 1 day; packs kept 90 days; operation
-  records 180 days (proposed; `interrupted_*` and non-terminal rows exempt).
-- Q3. Downtime: two offline cut-overs. The rehearsal on the rebuilt sandbox
-  gives the real duration before either is scheduled; there is no derived
-  estimate before that (the earlier "15-40 minutes" was a placeholder).
-- Q4. Stop the weekly scheduled full compaction (two ops run one today,
-  `plugins/maintenance/db.go:22`, `scheduler/extra_ops.go:603`) and shorten
-  ZFS snapshot retention on the app data dataset. A full compaction followed
-  by a snapshot pins a whole extra copy (F12).
-- Q5. Fold the per-field metadata history (`metadata_change:`, 36 call sites,
-  each its own synced write outside the book's batch) into the new change
-  entries, so there is one book history written atomically with the row?
-  Cost: provenance fields added to the change entry and 36 call sites moved.
-  Proposed as a follow-up release, not part of B.
-- Q6. Restore horizon: wholesale checkpoint restore allowed only until the
-  first request is served after the cut-over (proposed), or up to N hours;
-  after that, fix-forward (section 11).
-- Q7. LSH Hamming tier (Tier-0) is dead today (5.4): revive it (two reads per
-  candidate, up to 200 candidates per print, about 605k prints; C9 reports
-  dedup full-scan wall time, candidate count and signal-store reads per
-  print before cut-over) or delete it. Decide before C3.
-- Q8. Set `primarycache=metadata` on the Pebble dataset once the 4 GB block
-  cache is in place, to stop double caching with the ARC? Deciding metric:
-  ARC hit rate before and after.
-- Q9. Each orphan `book_ver:` range (history of hard-deleted books) and each
-  held record: convert to an orphan record, or purge with the loss recorded
-  (P5). Release E is gated on these rulings.
+  pins. **Decided.**
+- Q2. Operation logs packed after 1 day; packs kept 90 days; operation records
+  180 days; `interrupted_*` and non-terminal rows exempt. **Decided.**
+- Q3. Each offline cut-over is scheduled from its measured sandbox rehearsal
+  figure; the owner picks the window. **Decided.**
+- Q4. Stop the weekly scheduled full compaction (both ops) and shorten ZFS
+  snapshot retention on the app data dataset. **Decided.**
+- Q5. Fold `metadata_change:` into the change entries: yes, as a follow-up
+  release after C, not part of B. **Decided.**
+- Q6. Wholesale checkpoint restore only until the first request is served
+  after a cut-over; fix-forward after that. **Decided.**
+- Q7. LSH Hamming tier: measure on the release C rehearsal (full-scan wall
+  time, candidates and signal-store reads per print with the tier revived),
+  then the owner decides before C3. **Decided: measure first.**
+- Q8. `primarycache=metadata`: record the ARC hit rate with the 4 GB block
+  cache in place, switch, compare, revert if reads get slower. **Decided:
+  measure, then switch.**
+- Q9. Orphan `book_ver:` ranges become orphan records (nothing purged);
+  records the converter cannot read go to the owner as a list, ruled per id.
+  **Decided.**

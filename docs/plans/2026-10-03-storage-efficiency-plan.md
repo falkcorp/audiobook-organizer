@@ -1,12 +1,12 @@
 <!-- file: docs/plans/2026-10-03-storage-efficiency-plan.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: e18dc87d-ee27-4372-a90a-e904900a79c1 -->
 <!-- last-edited: 2026-10-03 -->
 
 # Storage efficiency: implementation plan
 
 Design: `docs/design/2026-10-03-storage-efficiency-design.md` (v1.3). This plan
-turns it into tasks. Status: awaiting owner approval; no code written. Revised
+turns it into tasks. Status: approved by the owner 2026-10-03 23:07 EDT (decisions in design section 12); release A in progress. Revised
 2026-10-03 after the red-team workflow: 45 confirmed findings (F01-F43, F45,
 F46) applied to design and plan together; F44 ("`DeleteBook` history is not
 undo data") and F47 ("the Doctor Who exclusion and the archive rule do not
