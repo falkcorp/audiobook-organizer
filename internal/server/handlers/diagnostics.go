@@ -1,7 +1,7 @@
 // file: internal/server/handlers/diagnostics.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 14e70c44-73ca-456a-bc67-8dc6ba6e5736
-// last-edited: 2026-09-24
+// last-edited: 2026-10-03
 
 // DiagnosticsHandler hosts the diagnostics HTTP endpoints extracted from the
 // server package: ZIP export start/download, AI batch submit + results, applying
@@ -780,6 +780,31 @@ func resolveKeyCounter(s any) keyCounter {
 		return c
 	}
 	return nil
+}
+
+// GetDBCensus reports the main Pebble store's per-key-family census.
+// GET /api/v1/diagnostics/db-census[?deep=true][&fresh=true]
+//
+// The default census reads sstable metadata only and never iterates the store,
+// so it answers in well under a second on the production store. deep=true adds
+// the book_ver: keys-only pass (history entries per book), which iterates
+// millions of keys and is never the default. fresh=true bypasses the 5-minute
+// cache and refreshes it.
+func (h *DiagnosticsHandler) GetDBCensus(c *gin.Context) {
+	deep := c.Query("deep") == "true"
+	fresh := c.Query("fresh") == "true"
+	provider, ok := database.AsCapability[database.DBCensusProvider](h.store)
+	if !ok {
+		httputil.RespondWithInternalError(c, "db census requires the Pebble store")
+		return
+	}
+	census, err := provider.DBCensus(c.Request.Context(), database.CensusOptions{Deep: deep, Fresh: fresh})
+	if err != nil {
+		diagnosticsLog.Warn("db-census failed (deep=%t fresh=%t): %v", deep, fresh, err)
+		httputil.RespondWithInternalError(c, "db census failed: "+err.Error())
+		return
+	}
+	httputil.RespondWithOK(c, census)
 }
 
 var diagnosticsLog = logger.New("handlers.diagnostics")
