@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_booksig_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b6d2417f-90ce-4a83-b512-8e7c04f9a3d1
-// last-edited: 2026-08-13
+// last-edited: 2026-10-03
 
 package database
 
@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
+	"github.com/cockroachdb/pebble/v2/vfs"
 	"github.com/stretchr/testify/require"
 )
 
@@ -79,32 +80,40 @@ func requireSigPresent(t *testing.T, b *Book, tag string) {
 // panics ("pebble: closed") rather than returning an error — which then eats
 // the actual assertion failure. The env keeps exactly one live handle and the
 // cleanup closes that one.
+//
+// The database lives on an in-memory filesystem (fs) that the env owns for the
+// whole test, so reopen sees exactly the bytes the closed store left behind,
+// as it would on disk, without an fsync per write. The reopened PebbleStore
+// starts with an empty memdb either way, so it can still only answer from the
+// stored bytes.
 type bookSigEnv struct {
 	store *PebbleStore
 	dir   string
+	fs    vfs.FS
 }
 
 func newBookSigEnv(t *testing.T) *bookSigEnv {
 	t.Helper()
-	env := &bookSigEnv{dir: t.TempDir()}
-	store, err := NewPebbleStore(env.dir)
+	env := &bookSigEnv{dir: "booksig", fs: vfs.NewMem()}
+	store, err := newPebbleStore(env.dir, env.fs)
 	require.NoError(t, err)
 	env.store = store
 	t.Cleanup(func() { _ = env.store.Close() })
 	return env
 }
 
-// reopen closes the live store and opens a NEW one over the same directory.
+// reopen closes the live store and opens a NEW one over the same directory
+// on the same filesystem.
 //
 // This is not ceremony. Every write path here returns the *Book it was handed,
 // and the store keeps an in-memory layer; a round-trip that never leaves the
 // process can report success while nothing durable was written, which is
 // precisely the failure class this change is meant to remove rather than add.
-// A reopened store can only answer from bytes on disk.
+// A reopened store can only answer from the stored bytes.
 func (e *bookSigEnv) reopen(t *testing.T) *PebbleStore {
 	t.Helper()
 	require.NoError(t, e.store.Close())
-	fresh, err := NewPebbleStore(e.dir)
+	fresh, err := newPebbleStore(e.dir, e.fs)
 	require.NoError(t, err)
 	e.store = fresh
 	return fresh
