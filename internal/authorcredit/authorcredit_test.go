@@ -151,7 +151,6 @@ func positions(cs []database.BookAuthor) []int {
 	return out
 }
 
-
 // The review of #3717 cases, through the real Pebble store (which has the
 // title check). None may credit a series, a publisher or a cast credit as an
 // author, and none may create a combined record.
