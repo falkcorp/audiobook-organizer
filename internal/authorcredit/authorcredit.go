@@ -25,8 +25,10 @@
 //     (personname.SplitCompositeAuthorName); every part must pass the
 //     publisher/role gate (CleanGate) and the caller's gate, must not be a
 //     collective credit ("Full Cast"), must not be the title of a book or the
-//     name of a series in the library, and there may be at most MaxSplitParts
-//     of them (longer lists are anthologies and cast lists);
+//     name of a series in the library (nor may the whole credit), and there
+//     may be at most MaxSplitParts of them (longer lists are anthologies and
+//     cast lists); a credit naming a contributor role ("(translator)") is not
+//     split;
 //   - when anything refuses the split, the credit is handled as before (the
 //     whole string is looked up) with one exception: a whole string that is
 //     not an author yet and names several people is never created. That is a
@@ -101,6 +103,11 @@ var collectiveCredits = map[string]bool{
 // IsCollectiveCredit reports whether a credit names no person ("Full Cast",
 // "Various Authors", "et al.").
 func IsCollectiveCredit(s string) bool { return collectiveCredits[LettersKey(s)] }
+
+// roleRe is a contributor role written into a credit ("Mikhail Yagupov
+// (translator)", "Gardner Dozois - editor"): the credit names people who are
+// not authors, so it is never split at creation.
+var roleRe = regexp.MustCompile(`(?i)\b(?:translat\w*|editor|edited|illustrat\w*|foreword|introduction|narrat\w*|read by|contributor|adapt\w*)\b`)
 
 // bracketRe matches a bracketed segment, with or without a space before it.
 var bracketRe = regexp.MustCompile(`\s*[\(\[][^\)\]]*[\)\]]`)
@@ -312,7 +319,11 @@ func isMultiName(name string) bool {
 // splitForCreation returns the names a creation path may credit for name,
 // or nil when it must not split it (see the package comment).
 func splitForCreation(store Store, name string, gate Gate) ([]string, error) {
-	parts := SplitNames(StripBrackets(name), gate)
+	if roleRe.MatchString(name) {
+		return nil, nil
+	}
+	stripped := StripBrackets(name)
+	parts := SplitNames(stripped, gate)
 	if len(parts) < 2 || len(parts) > MaxSplitParts {
 		return nil, nil
 	}
@@ -323,6 +334,12 @@ func splitForCreation(store Store, name string, gate Gate) ([]string, error) {
 	titles, err := titlesOf(ts)
 	if err != nil {
 		return nil, fmt.Errorf("read titles for the split check: %w", err)
+	}
+	// The whole credit a title ("Full Dark, No Stars", "David Starr, Space
+	// Ranger") or any part a title or series ("Dragon Born"): not a list of
+	// authors.
+	if titles[LettersKey(stripped)] || titles[LettersKey(name)] {
+		return nil, nil
 	}
 	for _, p := range parts {
 		if titles[LettersKey(p)] {

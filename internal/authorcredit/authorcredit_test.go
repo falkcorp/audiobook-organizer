@@ -161,6 +161,8 @@ func TestResolve_ReviewCases(t *testing.T) {
 		_, err := st.CreateSeries(s, nil)
 		require.NoError(t, err)
 	}
+	_, err := st.CreateBook(&database.Book{Title: "Full Dark, No Stars", FilePath: "/l/fdns.m4b", Format: "m4b"})
+	require.NoError(t, err)
 	ResetTitleCache()
 	created := func(n string) bool {
 		a, err := st.GetAuthorByName(n)
@@ -169,7 +171,8 @@ func TestResolve_ReviewCases(t *testing.T) {
 	}
 
 	// A bracket is stripped, never split: the series is not an author.
-	got, err := Resolve(st, "Dante King (Dragon Born)", PrepareGate)
+	var got []database.Author
+	got, err = Resolve(st, "Dante King (Dragon Born)", PrepareGate)
 	require.NoError(t, err)
 	require.Len(t, got, 1, "one credit, as before")
 	require.False(t, created("Dragon Born"))
@@ -193,6 +196,8 @@ func TestResolve_ReviewCases(t *testing.T) {
 		"Terry Pratchett, Full Cast",
 		"Michael Anderle, Kurtherian Gambit",
 		"Ray Porter, Kate Reading, Michael Kramer, Tim Gerard Reynolds",
+		"Full Dark, No Stars",
+		"Arthur Stone, Mikhail Yagupov (translator)",
 	} {
 		got, err := Resolve(st, n, PrepareGate)
 		require.True(t, errors.Is(err, ErrCombinedCredit), "%s: err %v", n, err)
