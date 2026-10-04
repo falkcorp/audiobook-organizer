@@ -1,7 +1,7 @@
 // file: internal/operations/registry/subprocess.go
 // version: 1.4.0
 // guid: 2b3c4d5e-6f7a-8901-bcde-f01234567890
-// last-edited: 2026-09-25
+// last-edited: 2026-10-04
 
 // Package registry — subprocess runner for Isolate=true operations.
 //

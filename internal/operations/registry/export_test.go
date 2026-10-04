@@ -1,7 +1,7 @@
 // file: internal/operations/registry/export_test.go
 // version: 1.2.0
 // guid: 5c45952c-3393-4f33-9784-efd565ec8c49
-// last-edited: 2026-10-03
+// last-edited: 2026-10-04
 
 package registry
 

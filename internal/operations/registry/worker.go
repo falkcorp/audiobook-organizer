@@ -1,7 +1,7 @@
 // file: internal/operations/registry/worker.go
 // version: 2.27.0
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-10-03
+// last-edited: 2026-10-04
 
 package registry
 
