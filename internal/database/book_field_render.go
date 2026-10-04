@@ -1,7 +1,7 @@
 // file: internal/database/book_field_render.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7c1e4b2a-93d5-4f60-8a1b-5e2d9c0f7a34
-// last-edited: 2026-09-27
+// last-edited: 2026-10-04
 
 package database
 
@@ -131,7 +131,7 @@ func RestoreRenderedBookField(b *Book, jsonName, rendered string) error {
 		return err
 	}
 	if rendered == "" {
-		// A *string is emptied to a pointer to "", not nil: updateBookLocked
+		// A *string is emptied to a pointer to "", not nil: updateBookLockedMode
 		// reads a nil Description/VersionNotes as "stripped by the memdb
 		// projection" and puts the stored value back, so nil cannot clear
 		// them. "" renders the same as nil, so the compare-and-set still holds.
