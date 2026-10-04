@@ -1,18 +1,21 @@
 // file: internal/metrics/pebble_collector.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7dc3409f-5419-47d8-8770-916f33b019ae
 // last-edited: 2026-10-04
 
 package metrics
 
 import (
-	"log/slog"
 	"sort"
 	"strconv"
 	"sync"
 
 	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
+
+var pebbleLog = logger.New("metrics.pebble")
 
 // Store label values for the pebble_* series.
 const (
@@ -181,7 +184,7 @@ func (*pebbleCollector) Collect(ch chan<- prometheus.Metric) {
 func samplePebbleSource(store string, src PebbleSource) (s PebbleSample, ok bool) {
 	defer func() {
 		if rec := recover(); rec != nil {
-			slog.Warn("pebble metrics source panicked; dropping this store from the scrape", "store", store, "panic", rec)
+			pebbleLog.Warn("pebble metrics source for store %q panicked; dropping it from this scrape: %v", store, rec)
 			s, ok = PebbleSample{}, false
 		}
 	}()
