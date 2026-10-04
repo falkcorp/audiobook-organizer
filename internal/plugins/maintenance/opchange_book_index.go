@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/opchange_book_index.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: d634d53a-0455-470e-8154-9d375b37ef69
 // last-edited: 2026-10-03
 
@@ -59,11 +59,12 @@ func (p *Plugin) opChangeBookIndexRebuildDef() sdk.OperationDef {
 		Liveness:    sdk.LivenessManual,
 		Plugin:      "maintenance",
 		DisplayName: "Operation-journal by-book index rebuild",
-		Description: "Rebuilds the opchange_by_book: index that GetBookChanges reads, ignoring the " +
-			"one-time startup sentinel. Run after any rollback to a build that predates the index. " +
+		Description: "Manual rebuild of the opchange_by_book: index that GetBookChanges reads. Every " +
+			"boot already verifies the index before reads use it and rebuilds on its own when rows " +
+			"lack entries (e.g. after a rollback), so this is the manual handle for the same repair. " +
 			"Preview by default: reports journal rows with no index entry, writes nothing. With " +
-			"dry_run=false it rebuilds; GetBookChanges uses the full journal scan while it runs. " +
-			"Writes index keys only, never journal rows.",
+			"dry_run=false it rebuilds; GetBookChanges uses the full journal scan while it runs and " +
+			"trusts the index again only if it succeeds. Writes index keys only, never journal rows.",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
 		ConcurrencyKey:  "maintenance.opchange-book-index",

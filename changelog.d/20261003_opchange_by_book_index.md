@@ -40,7 +40,10 @@ check fails) it keeps the full scan, so no caller ever sees a partial index.
 If the check finds gaps, it logs at ERROR
 (`opchange-index-ensure: index does not cover the journal`) and rebuilds the
 index, then trusts it. Look for `opchange-index-ensure: index verified` in
-the log.
+the log. The check is a full journal pass with one point read per row,
+measured at 4.5 s for 300k rows on disk (expect roughly 15 s for about 1M
+rows), paid on every boot in the background after warmup; book history reads
+use the slower full scan until it finishes.
 
 **Rollback.** A build from before this change does not maintain the index,
 and the next boot's verify finds and repairs what it wrote, so no manual step
