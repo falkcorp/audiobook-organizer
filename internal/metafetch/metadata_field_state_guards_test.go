@@ -1,7 +1,7 @@
 // file: internal/metafetch/metadata_field_state_guards_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4673e12e-5c70-456a-a4c6-11a63dd02ed2
-// last-edited: 2026-09-01
+// last-edited: 2026-10-04
 
 package metafetch
 
@@ -72,7 +72,7 @@ func TestMetadataFieldStateGuardsConform(t *testing.T) {
 
 			// The database view holds the stored *string verbatim.
 			dbRow := database.MetadataFieldState{OverrideValue: raw, FetchedValue: raw}
-			// The metafetch view holds it decoded, exactly as loadMetadataState builds it.
+			// The metafetch view holds it decoded, exactly as LoadStateSnapshot builds it.
 			mfRow := MetadataFieldState{
 				OverrideValue: metastate.Decode(raw),
 				FetchedValue:  metastate.Decode(raw),
