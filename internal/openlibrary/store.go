@@ -1,5 +1,5 @@
 // file: internal/openlibrary/store.go
-// version: 2.9.0
+// version: 2.10.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-10-04
 
@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
@@ -27,6 +28,8 @@ import (
 // OLStore provides local lookup of Open Library data dump records stored in PebbleDB.
 type OLStore struct {
 	db *pebble.DB
+	// closed is set immediately before db.Close; see PebbleMetricsSample.
+	closed atomic.Bool
 }
 
 // NewOLStore opens or creates a PebbleDB instance for Open Library dump data.
@@ -43,6 +46,7 @@ func NewOLStore(path string) (*OLStore, error) {
 
 // Close closes the underlying PebbleDB.
 func (s *OLStore) Close() error {
+	s.closed.Store(true)
 	return s.db.Close()
 }
 
@@ -60,6 +64,9 @@ func (s *OLStore) CompactionStats() database.CompactionStats {
 // PebbleMetricsSample samples the OpenLibrary cache's PebbleDB for the
 // pebble_* Prometheus series. ok is false when the database is closed.
 func (s *OLStore) PebbleMetricsSample() (metrics.PebbleSample, bool) {
+	if s.closed.Load() {
+		return metrics.PebbleSample{}, false
+	}
 	return database.PebbleSampleFromDB(s.db)
 }
 
