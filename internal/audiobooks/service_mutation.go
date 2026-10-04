@@ -432,10 +432,10 @@ func (svc *AudiobookService) updateAudiobook(ctx context.Context, id string, req
 			}
 			// The shared resolver (authorcredit.Resolve): a piece the
 			// credit splitter above left whole that still names several
-			// people is split by the shared splitter, and a piece the
-			// shared splitter will not split whose parts already exist as
-			// authors is refused (ErrCombinedCredit) rather than created
-			// as one combined author row.
+			// people is split only into existing authors, and one whose
+			// pieces are all different existing authors is refused
+			// (ErrCombinedCredit) rather than created as one combined
+			// author row.
 			resolved, err := authorcredit.Resolve(svc.store, normalizedName, authorcredit.CleanGate)
 			if errors.Is(err, authorcredit.ErrCombinedCredit) {
 				singleLog.Warn("UpdateAudiobook %s: author name %q joins existing authors and will not be created as one author",

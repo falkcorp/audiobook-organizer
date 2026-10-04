@@ -444,6 +444,9 @@ func combinedClassify(name string) (names []string, skip, why string) {
 		// a co-author. Held for a person rather than split.
 		return nil, combinedSkipSplitRefused, fmt.Sprintf("%q carries a bracketed part (a series, reader or edition, not an author); a person decides", name)
 	}
+	if authorcredit.OnePersonShape(name) {
+		return nil, combinedSkipSplitRefused, fmt.Sprintf("%q is one person written surname first or with a suffix (\"Le Guin, Ursula K.\", \"King, Jr.\")", name)
+	}
 	loose := authorcredit.LooseParts(name)
 	keys := map[string]bool{}
 	for _, p := range loose {

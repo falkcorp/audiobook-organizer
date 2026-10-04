@@ -368,6 +368,8 @@ func TestCombinedClassify(t *testing.T) {
 		"Reuben Woolley - translator, Alex Toxic":             combinedSkipRole,
 		"Greg Bear, Ben Bova, David Brin, Larry Niven":        combinedSkipAnthology,
 		"SPEC -- Drew, Hayes – Villains', Code 02":            combinedSkipSplitRefused,
+		"Le Guin, Ursula K.":                                  combinedSkipSplitRefused,
+		"Martin Luther King, Jr.":                             combinedSkipSplitRefused,
 		"Dante King (Dragon Born)":                            combinedSkipSplitRefused,
 		"Annabelle Hawthorne, Virgil Knightley(Master Class)": combinedSkipSplitRefused,
 		"Terry Pratchett, Full Cast":                          combinedSkipImplausiblePart,

@@ -14,6 +14,7 @@ import (
 	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -77,14 +78,22 @@ func TestBuildBookFromAlbumGroup_NarratorFromArtistWhenAlbumArtistDiffers(t *tes
 	}
 }
 
+// expectTitles lets the shared resolver read the (empty) title index.
+func expectTitles(m *dbmocks.MockStore) {
+	m.EXPECT().GetAllSeries().Return(nil, nil).Maybe()
+	m.EXPECT().GetAllBooksCore(mock.Anything, mock.Anything).Return(nil, nil).Maybe()
+	m.EXPECT().FindAuthorByAlias(mock.Anything).Return(nil, nil).Maybe()
+}
+
 // A credit the splitter will not split whose pieces are existing authors is
 // not created as one combined author row (authorcredit.ErrCombinedCredit):
 // the book is left without an author, and the mock fails on any CreateAuthor.
 func TestAssignAuthorAndSeries_CombinedOfExistingAuthorsIsNotCreated(t *testing.T) {
 	m := dbmocks.NewMockStore(t)
-	m.EXPECT().GetAuthorByName("Shirtaloon, Travis Deverell").Return(nil, nil).Once()
-	m.EXPECT().GetAuthorByName("Shirtaloon").Return(&database.Author{ID: 1, Name: "Shirtaloon"}, nil).Once()
-	m.EXPECT().GetAuthorByName("Travis Deverell").Return(&database.Author{ID: 2, Name: "Travis Deverell"}, nil).Once()
+	expectTitles(m)
+	m.EXPECT().GetAuthorByName("Shirtaloon, Travis Deverell").Return(nil, nil)
+	m.EXPECT().GetAuthorByName("Shirtaloon").Return(&database.Author{ID: 1, Name: "Shirtaloon"}, nil)
+	m.EXPECT().GetAuthorByName("Travis Deverell").Return(&database.Author{ID: 2, Name: "Travis Deverell"}, nil)
 
 	imp := newMockImporter(m)
 	book := &database.Book{}
@@ -92,12 +101,13 @@ func TestAssignAuthorAndSeries_CombinedOfExistingAuthorsIsNotCreated(t *testing.
 	assert.Nil(t, book.AuthorID)
 }
 
-// A splittable credit still credits each person, in order (unchanged).
+// A credit of two existing authors credits each, in order; nothing created.
 func TestAssignAuthorAndSeries_SplittableCreditCreditsEachPerson(t *testing.T) {
 	m := dbmocks.NewMockStore(t)
-	m.EXPECT().GetAuthorByName("J. N. Chaney").Return(&database.Author{ID: 5, Name: "J. N. Chaney"}, nil).Once()
-	m.EXPECT().GetAuthorByName("Jonathan P. Brazee").Return(nil, nil).Once()
-	m.EXPECT().CreateAuthor("Jonathan P. Brazee").Return(&database.Author{ID: 6, Name: "Jonathan P. Brazee"}, nil).Once()
+	expectTitles(m)
+	m.EXPECT().GetAuthorByName("J. N. Chaney, Jonathan P. Brazee").Return(nil, nil)
+	m.EXPECT().GetAuthorByName("J. N. Chaney").Return(&database.Author{ID: 5, Name: "J. N. Chaney"}, nil)
+	m.EXPECT().GetAuthorByName("Jonathan P. Brazee").Return(&database.Author{ID: 6, Name: "Jonathan P. Brazee"}, nil)
 
 	imp := newMockImporter(m)
 	book := &database.Book{}
@@ -107,4 +117,34 @@ func TestAssignAuthorAndSeries_SplittableCreditCreditsEachPerson(t *testing.T) {
 	require.Len(t, book.Authors, 2)
 	assert.Equal(t, 6, book.Authors[1].AuthorID)
 	assert.Equal(t, 1, book.Authors[1].Position)
+}
+
+// SF4: the iTunes path no longer creates part authors. A bracketed series tag
+// and a credit with one unknown person both keep the whole artist string;
+// "Dragon Born" and "Jonathan P. Brazee" are never created.
+func TestAssignAuthorAndSeries_NoPartAuthorsCreated(t *testing.T) {
+	for _, tc := range []struct{ artist string }{{"Dante King (Dragon Born)"}, {"J.N. Chaney, Jonathan P. Brazee"}} {
+		t.Run(tc.artist, func(t *testing.T) {
+			m := dbmocks.NewMockStore(t)
+			expectTitles(m)
+			m.EXPECT().GetAuthorByName(mock.Anything).RunAndReturn(func(n string) (*database.Author, error) {
+				if n == "J. N. Chaney" {
+					return &database.Author{ID: 5, Name: n}, nil
+				}
+				return nil, nil
+			})
+			var created []string
+			m.EXPECT().CreateAuthor(mock.Anything).RunAndReturn(func(n string) (*database.Author, error) {
+				created = append(created, n)
+				return &database.Author{ID: 9, Name: n}, nil
+			}).Once()
+			imp := newMockImporter(m)
+			book := &database.Book{}
+			imp.assignAuthorAndSeries(book, &itunes.Track{AlbumArtist: tc.artist})
+			require.NotNil(t, book.AuthorID)
+			assert.Equal(t, 9, *book.AuthorID)
+			require.Len(t, created, 1)
+			assert.NotContains(t, []string{"Dragon Born", "Jonathan P. Brazee", "Dante King"}, created[0])
+		})
+	}
 }
