@@ -2595,8 +2595,8 @@ func (imp *Importer) ensureAuthorIDs(name string) ([]int, error) {
 			// (ErrCombinedCredit) instead of minting one more combined row.
 			resolved, err := authorcredit.Resolve(imp.store, part, authorcredit.CleanGate)
 			if errors.Is(err, authorcredit.ErrCombinedCredit) {
-				slog.Warn("itunes import: artist joins existing authors the splitter will not split; not creating it",
-					"full_name", name)
+				logger.New("itunes-import").Warn("artist %q joins existing authors the splitter will not split; not creating it",
+					logger.SanitizeLogValue(name))
 				continue
 			}
 			if err != nil {
