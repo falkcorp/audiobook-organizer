@@ -2,7 +2,7 @@
 
 #### `internal/database` tests: in-memory Pebble and batched fixtures
 
-On a Mac the package's `-short` run took 859 s at 3% CPU, and the `-race` run
+The package's `-short` run took 859 s on a Mac at 3% CPU, and its `-race` run
 took 992 s. Every Pebble write in the package passes `pebble.Sync`, and each
 test opened its own on-disk store, so nearly all of that time was spent
 blocked in fsync.
@@ -20,6 +20,9 @@ blocked in fsync.
   `sqlActSampleWindow` become vars, like `sqlActSummarizeChunk`). The
   checkpointer tests still write row by row.
 
-After the change: `-short` 35 s, `-race` 161 s, both on the same loaded Mac.
-No assertion was removed, no test was gated behind `-short`, and statement
-coverage went from 75.9% to 76.1%.
+After the change the package takes 35 s under `-short` and 161 s under
+`-race`. Those runs had a load average of about 19 and 33-46, against 3-6 for
+the before runs. Inside the full parallel `-short` suite the package went from
+1,317 s to 340 s. CI runs on Linux, where fsync costs far less than macOS's
+`F_FULLFSYNC`, so the gain there will be smaller than these Mac numbers. No
+assertion was removed and no test was gated behind `-short`.
