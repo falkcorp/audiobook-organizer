@@ -1,6 +1,7 @@
 // file: internal/database/role_store_test.go
 // version: 1.0.1
 // guid: 4d8a2e1f-5c3b-4f80-a9d6-2f7e0c1b9a48
+// last-edited: 2026-10-03
 
 package database
 
