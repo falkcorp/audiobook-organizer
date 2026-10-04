@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.195.0
+// version: 1.197.1
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-03
 
@@ -79,6 +79,9 @@ func serializeBookForIndex(book *Book) ([]byte, error) {
 // - import_path:path:<path>    -> import_path_id (for lookups)
 // - operation:<id>             -> Operation JSON
 // - operationlog:<operation_id>:<timestamp>:<seq> -> OperationLog JSON
+// - opchange:<operation_id>:<change_id> -> OperationChange JSON (undo journal)
+// - opchange_by_book:<book_id>:<operation_id>:<change_id> -> empty (by-book index; see pebble_store_opchange_index.go)
+// - opchange_undecodable:<operation_id>:<change_id> -> empty (journal rows the index backfill could not decode)
 // - preference:<key>           -> UserPreference JSON
 // - playlist:<id>              -> Playlist JSON
 // - playlist:series:<series_id> -> playlist_id
@@ -112,6 +115,26 @@ type PebbleStore struct {
 	// bookAtPathBuilt caches a positive read of the book_atpath: backfill
 	// sentinel. Only true is ever stored; see bookAtPathIndexBuilt.
 	bookAtPathBuilt atomic.Bool
+	// opChangeByBookGen and opChangeByBookBuiltAt cache a positive read of the
+	// opchange_by_book: backfill sentinel. The cache is valid only while
+	// opChangeByBookBuiltAt == opChangeByBookGen+1; the rebuild and Reset bump
+	// the generation to invalidate it (pebble_store_opchange_index.go,
+	// opChangeByBookIndexBuilt).
+	opChangeByBookGen     atomic.Uint64
+	opChangeByBookBuiltAt atomic.Uint64
+	// opChangeByBookTrustedAt == opChangeByBookGen+1 while this process has
+	// verified (or rebuilt) the index for the current generation; only then
+	// does GetBookChanges read it (TRUST GATE in pebble_store_opchange_index.go).
+	opChangeByBookTrustedAt atomic.Uint64
+	// opChangeIdxRunSem is the one-at-a-time slot for opchange_by_book
+	// backfill/rebuild/ensure passes, created on first use so a zero-value
+	// PebbleStore works (lockOpChangeIdxRun, which waits with a context).
+	opChangeIdxRunOnce sync.Once
+	opChangeIdxRunSem  chan struct{}
+	// opChangeJournalMu: journal writers hold the read side, each
+	// PruneOperationChanges chunk the write side (LOCKS in
+	// pebble_store_opchange_index.go).
+	opChangeJournalMu sync.RWMutex
 	// worksGen is the works generation counter (see WorksGeneration in
 	// pebble_store_works.go). Every writer of a work: key bumps it after its
 	// commit, so a cache of the works table can tell whether it is still current.
@@ -5130,6 +5153,14 @@ func (p *PebbleStore) Reset() error {
 	if err := batch.Commit(pebble.Sync); err != nil {
 		return fmt.Errorf("failed to commit reset batch: %w", err)
 	}
+	// The wipe removed the opchange_by_book: sentinel. Bump the generation
+	// now that the DeleteRange is durable: that drops both the cached
+	// sentinel read and this boot's trust, so GetBookChanges uses the full
+	// scan until the next boot's EnsureOpChangeByBookIndex. A reader that
+	// used the index between the commit and this bump read a wiped index
+	// over a wiped journal, which is the same empty answer the scan gives.
+	p.opChangeByBookGen.Add(1)
+	p.publishOpChangeTrust()
 	// The wipe removed every book: and metadata_cache: row; no record can
 	// name them, so a reader behind either generation rebuilds (the review
 	// snapshot would otherwise keep serving the wiped books as live rows

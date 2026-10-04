@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.63.0
+// version: 1.64.0
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
 // last-edited: 2026-10-03
 
@@ -161,6 +161,8 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		// book_atpath: index: read-only verify + rollback-runbook rebuild.
 		p.bookAtPathIndexVerifyDef(),
 		p.bookAtPathIndexBackfillDef(),
+		// opchange_by_book: index: rollback-runbook rebuild.
+		p.opChangeBookIndexRebuildDef(),
 		p.missingFileRepairDef(),
 		p.missingFileRepointDef(),
 		// repoint-missing-to-folder-audio: the folder-content complement of

@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.15.0
+// version: 4.17.1
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-10-03
 
@@ -1065,6 +1065,51 @@ func (s *Server) startBackfills() {
 		}
 	})
 
+	// opchange_by_book: index over the operation-change journal
+	// (pebble_store_opchange_index.go). EnsureOpChangeByBookIndex runs the
+	// one-time backfill (sentinel-gated, resumable from a cursor), then a
+	// read-only verify of every journal row against the index, and only when
+	// that finds nothing missing does GetBookChanges start reading the index;
+	// a non-clean verify is logged at ERROR and answered with a rebuild. This
+	// runs on EVERY boot, because a rollback to a build that predates the
+	// index writes rows with no entry and the sentinel cannot know. Until it
+	// finishes, GetBookChanges serves from the full journal scan, so nothing
+	// is wrong while it is pending, only slow. Waits for memdb warmup first so
+	// it does not compete with warmup's own reads. Resolved through
+	// AsCapability for the same reason as the version-group backfill above.
+	s.bgWG.Go("opchange-index-backfill", func() {
+		if err := s.bgCtx.Err(); err != nil {
+			return
+		}
+		b, ok := resolveOpChangeIndexBackfiller(s.Ops())
+		if !ok {
+			// %T renders only the dynamic type name, never a field value (same
+			// reasoning as the book-atpath warn above).
+			slog.Warn("opchange-index-backfill: store does not implement EnsureOpChangeByBookIndex, index will NOT be built; GetBookChanges stays on the full scan",
+				"store_type", fmt.Sprintf("%T", s.Ops()))
+			return
+		}
+		warm := make(chan struct{})
+		go func() { b.WaitForWarmup(); close(warm) }()
+		select {
+		case <-warm:
+		case <-s.bgCtx.Done():
+			slog.Info("opchange-index-backfill: shutdown before memdb warmup finished; will run next boot")
+			return
+		}
+		if _, err := b.EnsureOpChangeByBookIndex(s.bgCtx); err != nil {
+			// GetBookChanges stays on the full scan (correct, only slower);
+			// the next boot retries. Error, not Warn: the index is not in use.
+			// A cancelled bgCtx is a clean shutdown interrupting the check,
+			// not a failure.
+			if errors.Is(err, context.Canceled) {
+				slog.Info("opchange-index-backfill: check interrupted by shutdown; reads use the full scan until the next boot", "err", err)
+				return
+			}
+			slog.Error("opchange-index-backfill: index not trusted this boot; GetBookChanges stays on the full scan", "err", err)
+		}
+	})
+
 	// Strip shwm/©mvi/©mvn atoms from audiobook files (one-time). These
 	// classical-music atoms crash Apple Devices for Windows at sync.
 	// Checks bgCtx per file (SYS-1) so shutdown stops the walk early instead
@@ -1707,6 +1752,22 @@ type bookAtPathBackfiller interface {
 // exercise the production resolution path.
 func resolveBookAtPathBackfiller(s any) (bookAtPathBackfiller, bool) {
 	return database.AsCapability[bookAtPathBackfiller](s)
+}
+
+// opChangeIndexBackfiller is the opchange_by_book: index startup
+// build-and-verify plus the warmup gate it waits on. Both are *PebbleStore
+// methods outside database.Store.
+type opChangeIndexBackfiller interface {
+	WaitForWarmup()
+	EnsureOpChangeByBookIndex(ctx context.Context) (database.OpChangeByBookEnsureResult, error)
+}
+
+// resolveOpChangeIndexBackfiller finds the opchange_by_book: backfill through
+// the indexedStore decorator (see resolveVGBackfiller for why a bare assertion
+// misses). A named function so TestIndexedStoreExposesOpChangeIndexBackfill can
+// exercise the production resolution path.
+func resolveOpChangeIndexBackfiller(s any) (opChangeIndexBackfiller, bool) {
+	return database.AsCapability[opChangeIndexBackfiller](s)
 }
 
 // expiredSessionPruner is the narrow slice of the ops store that the periodic

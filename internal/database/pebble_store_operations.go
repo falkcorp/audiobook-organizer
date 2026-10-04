@@ -1,12 +1,13 @@
 // file: internal/database/pebble_store_operations.go
-// version: 1.6.0
+// version: 1.8.1
 // guid: e4277998-6d7e-4f2a-9b5c-0a620a98105e
-// last-edited: 2026-09-12
+// last-edited: 2026-10-03
 
 package database
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -545,9 +546,23 @@ func (p *PebbleStore) GetRecentCompletedOperations(limit int) ([]Operation, erro
 	return ops, nil
 }
 
-// CreateOperationChange stores an operation change in PebbleDB.
+// CreateOperationChange stores an operation change in PebbleDB, together with
+// its opchange_by_book: index entry in the same batch
+// (pebble_store_opchange_index.go), committed with pebble.Sync. When the
+// caller supplies an id, the call may rewrite an existing row: if that row
+// named a different book, its old entry is deleted in the same batch, so the
+// entry moves with the BookID. The new entry is Set unconditionally, so a
+// rewrite self-heals a missing one. Two concurrent rewrites of one id can at
+// worst leave an extra entry, which the reader drops; neither can leave the
+// stored row without its entry.
+//
+// The read of the stored row through the commit runs under the read side of
+// opChangeJournalMu, so a concurrent PruneOperationChanges chunk (write side)
+// sees either the old row or the rewritten one, never deletes the rewrite
+// from a stale view. Writers do not exclude each other.
 func (p *PebbleStore) CreateOperationChange(change *OperationChange) error {
-	if change.ID == "" {
+	supplied := change.ID != ""
+	if !supplied {
 		change.ID = ulid.Make().String()
 	}
 	change.CreatedAt = time.Now()
@@ -555,8 +570,33 @@ func (p *PebbleStore) CreateOperationChange(change *OperationChange) error {
 	if err != nil {
 		return err
 	}
-	key := fmt.Sprintf("opchange:%s:%s", change.OperationID, change.ID)
-	return p.db.Set([]byte(key), data, pebble.Sync)
+	key := opChangeKey(change.OperationID, change.ID)
+	batch := p.db.NewBatch()
+	defer batch.Close()
+	p.opChangeJournalMu.RLock()
+	defer p.opChangeJournalMu.RUnlock()
+	// An id minted here cannot name a stored row, so it skips the read. Almost
+	// every caller in the tree supplies its own id (usually a fresh ULID), and
+	// the store cannot tell a fresh id from a reused one, so in practice
+	// nearly every call pays one point read; for a fresh id it is a miss.
+	if supplied {
+		oldBook, found, err := p.storedOpChangeBookID(key)
+		if err != nil {
+			return err
+		}
+		if found && oldBook != change.BookID {
+			if err := unstageOpChangeIndex(batch, oldBook, key); err != nil {
+				return err
+			}
+		}
+	}
+	if err := batch.Set(key, data, nil); err != nil {
+		return err
+	}
+	if err := stageOpChangeIndex(batch, change.BookID, key); err != nil {
+		return err
+	}
+	return batch.Commit(pebble.Sync)
 }
 
 // GetOperationChanges returns all changes for a given operation.
@@ -582,35 +622,45 @@ func (p *PebbleStore) GetOperationChanges(operationID string) ([]*OperationChang
 	return changes, iter.Error()
 }
 
-// GetBookChanges returns all changes for a given book.
+// GetBookChanges returns all changes for a given book, in primary key order
+// (operation id, then change id). Once this process has verified (or rebuilt)
+// the opchange_by_book: index and its sentinel is set, it reads the index and
+// point-gets each row; until then, and always for a book id that is not
+// indexable (empty, or containing ':'), it scans and decodes every opchange
+// row. Both paths return the same rows in the same order, and both fail on an
+// undecodable row (see the TRUST GATE section of pebble_store_opchange_index.go
+// for exactly when that holds).
 func (p *PebbleStore) GetBookChanges(bookID string) ([]*OperationChange, error) {
-	prefix := []byte("opchange:")
-	upperBound := []byte("opchange;") // ':' + 1 = ';'
-	iter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: prefix,
-		UpperBound: upperBound,
-	})
-	if err != nil {
-		return nil, err
-	}
-	defer iter.Close()
-
-	var changes []*OperationChange
-	for iter.First(); iter.Valid(); iter.Next() {
-		var c OperationChange
-		if err := json.Unmarshal(iter.Value(), &c); err != nil {
+	if opChangeIndexable(bookID) {
+		usable, err := p.opChangeByBookIndexUsable()
+		if err != nil {
 			return nil, err
 		}
-		if c.BookID == bookID {
-			changes = append(changes, &c)
+		if usable {
+			return p.getBookChangesIndexed(bookID)
 		}
 	}
-	return changes, iter.Error()
+	return p.getBookChangesScan(bookID)
 }
+
+// opChangeMarkAfterScan, when non-nil, runs in MarkOperationChangesReverted
+// after the unlocked scan and before it takes the read lock. Test-only; nil in
+// production.
+var opChangeMarkAfterScan func()
 
 // MarkOperationChangesReverted marks the listed changes of an operation as
 // reverted. IDs that are not changes of this operation are ignored; rows not
-// listed are left untouched.
+// listed are left untouched. Every rewritten row and its re-Set
+// opchange_by_book: entry commit in one batch, so the marks land together.
+//
+// The scan that finds the wanted rows runs outside opChangeJournalMu (it is a
+// full read of the operation's rows). Under the read side the function then
+// point-gets only the wanted keys, re-decodes each, and commits, so the mark
+// is built from the row as it is now, not as the scan saw it. A row that
+// vanished between the scan and the lock (a prune) is skipped, not
+// resurrected: the same as an id the scan never returned. A row that is
+// already reverted by then is skipped too. A prune either removed the row
+// before the point read, or re-checks the rewritten row after the commit.
 func (p *PebbleStore) MarkOperationChangesReverted(operationID string, changeIDs []string) error {
 	if len(changeIDs) == 0 {
 		return nil
@@ -623,22 +673,56 @@ func (p *PebbleStore) MarkOperationChangesReverted(operationID string, changeIDs
 	if err != nil {
 		return err
 	}
-	now := time.Now()
+	var keys [][]byte
 	for _, c := range changes {
-		if _, ok := want[c.ID]; !ok {
-			continue
-		}
-		if c.RevertedAt == nil {
-			c.RevertedAt = &now
-			data, err := json.Marshal(c)
-			if err != nil {
-				return err
-			}
-			key := fmt.Sprintf("opchange:%s:%s", c.OperationID, c.ID)
-			if err := p.db.Set([]byte(key), data, pebble.Sync); err != nil {
-				return err
-			}
+		if _, ok := want[c.ID]; ok && c.RevertedAt == nil {
+			keys = append(keys, opChangeKey(c.OperationID, c.ID))
 		}
 	}
-	return nil
+	if len(keys) == 0 {
+		return nil
+	}
+	if opChangeMarkAfterScan != nil {
+		opChangeMarkAfterScan()
+	}
+	p.opChangeJournalMu.RLock()
+	defer p.opChangeJournalMu.RUnlock()
+	batch := p.db.NewBatch()
+	defer batch.Close()
+	staged := 0
+	now := time.Now()
+	for _, key := range keys {
+		v, closer, err := p.db.Get(key)
+		if errors.Is(err, pebble.ErrNotFound) {
+			continue // pruned since the scan
+		}
+		if err != nil {
+			return fmt.Errorf("re-read opchange row to mark reverted: %w", err)
+		}
+		var c OperationChange
+		uerr := json.Unmarshal(v, &c)
+		closer.Close()
+		if uerr != nil {
+			return uerr
+		}
+		if c.RevertedAt != nil {
+			continue
+		}
+		c.RevertedAt = &now
+		data, err := json.Marshal(&c)
+		if err != nil {
+			return err
+		}
+		if err := batch.Set(key, data, nil); err != nil {
+			return err
+		}
+		if err := stageOpChangeIndex(batch, c.BookID, key); err != nil {
+			return err
+		}
+		staged++
+	}
+	if staged == 0 {
+		return nil
+	}
+	return batch.Commit(pebble.Sync)
 }

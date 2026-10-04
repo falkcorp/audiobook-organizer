@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retire_into.go
-// version: 1.8.0
+// version: 1.8.2
 // guid: dadb4da5-0f2d-4678-abf3-4ac97f3ecb66
 // last-edited: 2026-10-03
 
@@ -352,9 +352,10 @@ func retireHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Wr
 // by someone else since the demote, two or more live primaries after a
 // demote of ours) refuses the row as changed since plan rather than guess.
 //
-// GetBookChanges has no by-book index (PebbleStore scans every opchange
-// row), so the lease is renewed before it, and the live-primary count above
-// keeps the scan off the common path.
+// GetBookChanges reads PebbleStore's opchange_by_book: index only once this
+// boot's startup verify (or a rebuild) has trusted it, and scans every
+// opchange row until then, so the lease is still renewed before it, and the
+// live-primary count above keeps the read off the common path.
 func resumeHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Writer, fixerID, id, target string) error {
 	b, err := store.GetBookByID(id)
 	if err != nil {
@@ -374,7 +375,8 @@ func resumeHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Wr
 	if len(members) == 0 {
 		// Nobody is left to crown: the retired book was the group's only
 		// live member (a lone fragment). Nothing is owed, and the journal
-		// scan below (every opchange row, no by-book index) is not paid.
+		// read below (a full opchange scan until this boot's verify trusts
+		// the by-book index) is not paid.
 		return nil
 	}
 	live := livePrimaries(store, members, b.ID)

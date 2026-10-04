@@ -1,7 +1,7 @@
 # file: internal/server/testdata/op_ids.golden
-# version: 1.5.0
+# version: 1.6.0
 # guid: 6d1f8a42-9c3e-4b75-a2d6-0e7b4c9f3a18
-# last-edited: 2026-10-01
+# last-edited: 2026-10-03
 #
 # Ledger of every operation def ID this server has registered, canonical IDs
 # and FormerIDs (aliases) alike. APPEND-ONLY. Read by
@@ -260,3 +260,4 @@ dedup.run-all
 metadata.apply-when-scanned
 library.organize-when-scanned
 catalog.harvest-authors
+maintenance.opchange-book-index-rebuild

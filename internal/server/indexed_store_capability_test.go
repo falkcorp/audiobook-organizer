@@ -1,7 +1,7 @@
 // file: internal/server/indexed_store_capability_test.go
-// version: 1.6.0
+// version: 1.8.0
 // guid: 2c7f4b18-6e93-4a52-9d81-5f0a3b6c8e27
-// last-edited: 2026-09-25
+// last-edited: 2026-10-03
 
 package server
 
@@ -328,5 +328,54 @@ func TestIndexedStoreExposesBookAtPathBackfill(t *testing.T) {
 	}
 	if len(ids) != 1 || ids[0] != created.ID {
 		t.Fatalf("LiveBookIDsAtPath = %v, want [%s]", ids, created.ID)
+	}
+}
+
+// TestIndexedStoreExposesOpChangeIndexBackfill pins the opchange_by_book:
+// startup wiring through the production decorator: the ensure (a
+// *PebbleStore method outside Store) resolves through
+// resolveOpChangeIndexBackfiller, builds and verifies the index, trusts it,
+// and GetBookChanges through the decorator returns the indexed rows.
+func TestIndexedStoreExposesOpChangeIndexBackfill(t *testing.T) {
+	inner, err := database.NewPebbleStoreInMemory(t.TempDir())
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	t.Cleanup(func() { _ = inner.Close() })
+	inner.WaitForWarmup()
+
+	var wrapped database.Store = &indexedStore{Store: inner, server: nil}
+
+	if _, ok := wrapped.(opChangeIndexBackfiller); ok {
+		t.Fatal("a bare assertion now resolves opChangeIndexBackfiller through the " +
+			"decorator; this test no longer reproduces the production shape")
+	}
+	b, ok := resolveOpChangeIndexBackfiller(wrapped)
+	if !ok {
+		t.Fatal("resolveOpChangeIndexBackfiller through indexedStore failed; the " +
+			"opchange_by_book index would never be built")
+	}
+
+	if err := inner.CreateOperationChange(&database.OperationChange{
+		OperationID: "op1", BookID: "book-a", ChangeType: "metadata_update", FieldName: "title",
+	}); err != nil {
+		t.Fatalf("CreateOperationChange: %v", err)
+	}
+	res, err := b.EnsureOpChangeByBookIndex(context.Background())
+	if err != nil {
+		t.Fatalf("EnsureOpChangeByBookIndex through the decorator: %v", err)
+	}
+	if res.Backfill.Skipped || res.Backfill.Scanned != 1 || res.Backfill.Indexed != 1 {
+		t.Fatalf("backfill result = %+v, want one row scanned and indexed", res.Backfill)
+	}
+	if !res.Trusted || res.Rebuilt || res.Verify.MissingEntries != 0 {
+		t.Fatalf("ensure result = %+v, want a clean verify and a trusted index without a rebuild", res)
+	}
+	got, err := wrapped.GetBookChanges("book-a")
+	if err != nil {
+		t.Fatalf("GetBookChanges through the decorator: %v", err)
+	}
+	if len(got) != 1 || got[0].OperationID != "op1" {
+		t.Fatalf("GetBookChanges = %+v, want the one op1 row", got)
 	}
 }
