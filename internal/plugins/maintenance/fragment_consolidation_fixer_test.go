@@ -3827,14 +3827,30 @@ func TestFragmentFixer_ReplanJournalCost(t *testing.T) {
 	rows := 0
 	require.NoError(t, s.ScanOperationChanges(func(*database.OperationChange) error { rows++; return nil }))
 	scan := time.Since(start)
-	// Plan's whole-journal read: one pass, against one GetBookChanges per
-	// book the library lists (what the per-book path would cost there).
+	// Now trust the opchange_by_book index (startup does this on prod) and
+	// measure the indexed paths: the same re-plan (one GetBookChanges per
+	// judged book), one GetBookChanges, and the per-book cost Plan's
+	// whole-journal read would pay for a 5000-book library instead of its
+	// one pass.
+	_, err = s.RebuildOpChangeByBookIndex(context.Background(), nil)
+	require.NoError(t, err)
+	require.True(t, s.OpChangeByBookIndexUsable())
+	start = time.Now()
+	got, err = newFragmentFixer(f.p).Replan(context.Background(), nil, r, nil)
+	require.NoError(t, err)
+	indexedReplan := time.Since(start)
+	require.Equal(t, r.Fingerprint, got.Fingerprint, got.Reason)
+	start = time.Now()
+	_, err = s.GetBookChanges(plan.SurvivorID)
+	require.NoError(t, err)
+	oneIndexed := time.Since(start)
 	start = time.Now()
 	for i := 0; i < 5000; i++ {
 		_, err := s.GetBookChanges(fmt.Sprintf("noise-%d", i))
 		require.NoError(t, err)
 	}
 	perBook5000 := time.Since(start)
-	t.Logf("346-fragment row: fresh re-plan %v (no journal read); after %d retires with %d other journal rows: re-plan %v (index usable=%t); one GetBookChanges %v; one full scan of %d rows %v; GetBookChanges for 5000 books %v",
-		fresh, cut, noise, resumed, s.OpChangeByBookIndexUsable(), one, rows, scan, perBook5000)
+	t.Logf("346-fragment row, %d retires, %d other journal rows. Unindexed: re-plan %v (one pass), one GetBookChanges %v, one full scan of %d rows %v. Indexed: re-plan %v, one GetBookChanges %v, GetBookChanges x5000 books %v",
+		cut, noise, resumed, one, rows, scan, indexedReplan, oneIndexed, perBook5000)
+	_ = fresh
 }

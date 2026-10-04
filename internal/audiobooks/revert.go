@@ -573,7 +573,7 @@ func (rs *RevertService) revertChangeIn(c *database.OperationChange, plan *undo.
 	case undo.ChangeTypeSeriesRename:
 		return rs.revertSeriesRename(c)
 	case undo.ChangeTypeBookFileReassign:
-		return rs.revertBookFileReassign(c, stamps)
+		return rs.revertBookFileReassign(c, plan)
 	case undo.ChangeTypeBookFileRepoint:
 		return rs.revertBookFileRepoint(c)
 	case undo.ChangeTypeBookFileTrack:
@@ -914,12 +914,14 @@ func (r revertHistoryRecorder) GetSeriesByID(id int) (*database.Series, error) {
 // Nothing is deleted either way.
 //
 // A source book that is retired now is moved back onto only when THIS
-// operation retired it (its soft-delete stamp is among the operation's,
-// stamps): the revert restores that book after its rows are back. A source
-// something else retired since (a user merge that finished an interrupted
-// repair by hand, a dedup merge) is refused: the row would land on a deleted
-// book, out of every view, while the book that now holds it stays live.
-func (rs *RevertService) revertBookFileReassign(c *database.OperationChange, stamps undo.SoftDeleteStamps) error {
+// operation retired it (one of its book_soft_delete rows still matches the
+// book, undo.CheckSoftDeleteCurrent): the revert restores that book after
+// its rows are back. A source something else retired since (a user merge
+// that finished an interrupted repair by hand, a dedup merge) is refused:
+// the row would land on a deleted book, out of every view, while the book
+// that now holds it stays live. A row reverted alone (plan nil) has no view
+// of its operation's other rows and is not checked.
+func (rs *RevertService) revertBookFileReassign(c *database.OperationChange, plan *undo.RevertPlan) error {
 	fileID, ok := undo.BookFileIDFromField(c.FieldName)
 	if !ok {
 		return fmt.Errorf("no book_file id in field %q", c.FieldName)
@@ -931,7 +933,7 @@ func (rs *RevertService) revertBookFileReassign(c *database.OperationChange, sta
 	if err != nil {
 		return err
 	}
-	if src != nil && src.IsSoftDeleted() && !retiredByThisOp(src, stamps) {
+	if src != nil && src.IsSoftDeleted() && plan != nil && !retiredByThisOp(src, plan) {
 		merged := ""
 		if src.MergedIntoBookID != nil {
 			merged = " (merged into " + *src.MergedIntoBookID + ")"
@@ -957,14 +959,13 @@ func (rs *RevertService) revertBookFileReassign(c *database.OperationChange, sta
 	return nil
 }
 
-// retiredByThisOp reports whether retired book b carries one of the
-// operation's own soft-delete stamps (so the revert restores it).
-func retiredByThisOp(b *database.Book, stamps undo.SoftDeleteStamps) bool {
-	if b.MarkedForDeletionAt == nil {
-		return false
-	}
-	for _, t := range stamps[b.ID] {
-		if t.Equal(*b.MarkedForDeletionAt) {
+// retiredByThisOp reports whether retired book b was retired by the
+// operation plan reverts: one of its book_soft_delete rows for b still
+// matches b (the revert's own soft-delete check, so the revert restores it).
+func retiredByThisOp(b *database.Book, plan *undo.RevertPlan) bool {
+	for _, r := range plan.Order {
+		if r.ChangeType == undo.ChangeTypeBookSoftDelete && r.BookID == b.ID &&
+			undo.CheckSoftDeleteCurrent(b, r, plan.Stamps) == nil {
 			return true
 		}
 	}
