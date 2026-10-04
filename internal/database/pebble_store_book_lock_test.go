@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_book_lock_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 8b1e4d27-5c93-4f0a-a6d2-7e39c1f5b084
-// last-edited: 2026-09-19
+// last-edited: 2026-10-04
 
 package database
 
@@ -286,7 +286,7 @@ func sameStripePair(t *testing.T, s *PebbleStore) (string, string) {
 // TestBookLock_SameStripeDifferentBooksDoNotDeadlock: two different books on
 // ONE stripe, written concurrently through every locked entry point
 // (UpdateBook, ModifyBook, FillBookMediaInfo, which nests ModifyBook ->
-// updateBookLocked, and UpdateBookRating). They must queue, never hang.
+// updateBookLockedMode, and UpdateBookRating). They must queue, never hang.
 func TestBookLock_SameStripeDifferentBooksDoNotDeadlock(t *testing.T) {
 	s := newAtPathStore(t)
 	defer s.Close()

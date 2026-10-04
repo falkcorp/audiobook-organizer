@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.199.0
+// version: 1.199.1
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-10-03
+// last-edited: 2026-10-04
 
 package database
 
@@ -2760,12 +2760,6 @@ func (p *PebbleStore) UpdateBook(id string, book *Book) (*Book, error) {
 	return updated, err
 }
 
-// updateBookLocked is UpdateBook's body. The caller must hold id's write
-// stripe (lockBook).
-func (p *PebbleStore) updateBookLocked(id string, book *Book) (*Book, error) {
-	return p.updateBookLockedMode(id, book, bookWriteOpts{})
-}
-
 // bookWriteOpts are the variations of the one book update path. The zero value
 // is UpdateBook.
 type bookWriteOpts struct {
@@ -2783,7 +2777,8 @@ type bookWriteOpts struct {
 	legacySeries bool
 }
 
-// updateBookLockedMode is updateBookLocked with the variations in opts.
+// updateBookLockedMode is UpdateBook's body with the variations in opts. The
+// caller must hold id's write stripe (lockBook).
 func (p *PebbleStore) updateBookLockedMode(id string, book *Book, opts bookWriteOpts) (*Book, error) {
 	clearSig, onOld := opts.clearSig, opts.onOld
 	// Get old book to clean up old indexes
