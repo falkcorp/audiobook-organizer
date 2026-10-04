@@ -411,3 +411,27 @@ func TestCombinedAuthorFixer_PurgeRemovesTheEmptiedRecord(t *testing.T) {
 		require.NotNil(t, got, "%s stays", n)
 	}
 }
+
+// Two rows creating the same missing author: the first apply creates it, and
+// the second row (whose re-plan now finds the author) still applies rather
+// than being refused as changed_since_plan, and credits the same row.
+func TestCombinedAuthorFixer_SiblingCreateDoesNotRefuseTheNextRow(t *testing.T) {
+	l := newCombinedLib(t)
+	l.author("Ann Leckie")
+	l.book("one", "Book One", "Ann Leckie, Zed Newperson", combinedLibRoot+"One/a.m4b", credit{"Ann Leckie, Zed Newperson", "author", 0})
+	l.book("two", "Book Two", "Ann Leckie, Zed Newperson", combinedLibRoot+"Two/a.m4b", credit{"Ann Leckie, Zed Newperson", "author", 0})
+	plan, rows := l.plan()
+	require.Equal(t, combinedClassNewAuthors, rows["one"].Class)
+	out := l.apply(plan, []string{rows["one"].RowID, rows["two"].RowID})
+	require.Equal(t, 2, out.Applied, "outcomes %v", out.ByOutcome)
+	require.Equal(t, l.credits("one"), l.credits("two"))
+	all, err := l.store.GetAllAuthors()
+	require.NoError(t, err)
+	zeds := 0
+	for _, a := range all {
+		if a.Name == "Zed Newperson" {
+			zeds++
+		}
+	}
+	require.Equal(t, 1, zeds, "one author created, not one per row")
+}

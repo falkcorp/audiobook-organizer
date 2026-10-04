@@ -187,8 +187,8 @@ type combinedAuthorIndex struct {
 const combinedTitlePrefixMin = 10
 
 // namesTitle reports whether name is a book title or series name in the
-// library, or one begins with the other (a truncated tag, "A Dark and Drowning
-// Tide_ A D"), with the matching title for the reason.
+// library, or begins with one ("A Dark and Drowning Tide_ A D", a title with a
+// truncated tail).
 func (idx *combinedAuthorIndex) namesTitle(name string) bool {
 	k := authorcredit.LettersKey(name)
 	if k == "" {
@@ -208,7 +208,7 @@ func (idx *combinedAuthorIndex) namesTitle(name string) bool {
 	return false
 }
 
-// combinedRecordOf reports whether an author name is a combined record:
+// isCombinedName reports whether an author name is a combined record:
 // every loosely split piece is another existing author (the census rule), or
 // the shared splitter splits it.
 func (idx *combinedAuthorIndex) isCombinedName(id int, name string) bool {
@@ -720,7 +720,10 @@ func (f *combinedAuthorFixer) evaluate(store OpsStore, idx *combinedAuthorIndex,
 		}
 	}
 	r.Detail = &combinedDecision{bookID: bookID, primary: b.AuthorID, credits: credits, records: recs}
-	r.Fingerprint = fingerprintStrings(append(fp, "apply", r.Class, strconv.FormatBool(primaryMoves))...)
+	// Not the class: split_new_authors turns into combined_only when a
+	// sibling row's apply creates the missing author, and that must not
+	// refuse this row. Which parts are credited is in the credit list.
+	r.Fingerprint = fingerprintStrings(append(fp, "apply", strconv.FormatBool(primaryMoves))...)
 	return r, true, nil
 }
 
