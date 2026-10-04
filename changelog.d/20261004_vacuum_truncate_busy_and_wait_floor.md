@@ -27,3 +27,9 @@ shortened or floored bound expires but the work finishes within the grace
 period, the wait logs and passes. A full-length bound that expires still fails
 the test, and work still running after the grace still exits the binary with
 a goroutine dump.
+
+The harness's own child-process self-test also leaked its temp directory,
+with its on-disk Pebble store inside it. The `stuck` child exits the binary
+before `t.Cleanup` runs, so 78 of these directories had built up in the
+system temp dir. The parent now points the child's `TMPDIR` at a directory
+it owns, removes it, and asserts that the child's directory is gone.
