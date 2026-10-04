@@ -1,7 +1,7 @@
 <!-- file: docs/plans/storage-efficiency/TASK-A4.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: e67a43a5-ec7c-49e3-a081-4ebc3c9bdab7 -->
-<!-- last-edited: 2026-10-03 -->
+<!-- last-edited: 2026-10-04 -->
 
 # TASK-A4: `storage_format` stamp, open/init split, pinned Pebble format, `make rollback` guard
 
@@ -20,9 +20,11 @@ silent-failure-hunter.
   mirror it in a sidecar file beside the store. Every open refuses a store
   whose stamp or sidecar is above what the build supports
   (`StorageFormatTooNewError`).
-- Every open also refuses a store whose stamp is below the build's, or whose
-  `storage_migration` marker is present, with a message that contains
-  "start serve to migrate". Only an unexported cut-over open mode, used by
+- Every open also refuses a store whose stamp is below the build's (message
+  contains "start serve to migrate"), or whose `storage_migration` marker is
+  present (message says to restore the checkpoint named in the marker or
+  re-run the cut-over mode; "start serve" would be circular there, since serve
+  is what refuses). Only an unexported cut-over open mode, used by
   `RunCutover` in release B (B6a), skips that refusal. In release A no real
   store can be older than the build; the refusal is wired and tested now so
   B6a only adds the caller.
@@ -237,9 +239,12 @@ the grep result, not the number.
      `storage format <Stamp> (<Source>) in <Path> is newer than this build supports (<Supported>); refusing to open. Restore the pre-migration checkpoint and the binary that match this store: docs/system/runbooks.md#storage-format-restore`.
    - `type StorageMigrationRequiredError struct { Path string; Stamp, Supported int; MarkerPresent bool }`
      with `Error()` returning
-     `storage format <Stamp> in <Path> needs migration to <Supported>` (plus
-     `; a storage migration is in progress` when `MarkerPresent`) and ending
-     `; start serve to migrate`.
+     `storage format <Stamp> in <Path> needs migration to <Supported>; start serve to migrate`
+     when only the stamp is old. When `MarkerPresent` it instead says the
+     cut-over to `<Supported>` did not finish and to restore the pre-migration
+     checkpoint named in the marker (`docs/system/runbooks.md#storage-format-restore`)
+     or re-run the cut-over mode (review N5 on #3707: serve itself refuses a
+     marked store, so "start serve to migrate" was circular).
    - `func readStorageFormatStamp(db *pebble.DB) (stamp int, present bool, err error)`.
      `db.Get([]byte("preference:storage_format"))`; `pebble.ErrNotFound`
      → `(0, false, nil)`. Decode `UserPreference`, then decode `*Value` as

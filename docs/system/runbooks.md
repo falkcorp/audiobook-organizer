@@ -1,7 +1,7 @@
 <!-- file: docs/system/runbooks.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: e5f6a7b8-c9d0-1234-ef01-234567890123 -->
-<!-- last-edited: 2026-09-25 -->
+<!-- last-edited: 2026-10-04 -->
 
 # Operator Runbooks
 
@@ -124,6 +124,91 @@ This uses PebbleDB's built-in checkpoint API (`PebbleStore.Checkpoint`) for a co
 2. Replace the PebbleDB directory: `cp -a /backup/audiobooks.pebble /var/lib/audiobook-organizer/audiobooks.pebble`
 3. Restart: `sudo systemctl start audiobook-organizer`
 4. Wait for memdb warmup (~30s on a 50K-book library)
+
+## Storage Format Restore
+
+**What the stamp is.** The main Pebble store carries an integer storage format
+stamp in the preference `storage_format` (same JSON shape as `db_version`). The
+same number is mirrored in a sidecar file beside the store directory,
+`<db>.storage-format` (for example `/data/audiobooks.pebble.storage-format`),
+one line with one integer. Format `1` is the format before the
+storage-efficiency program. Each binary prints the format it supports with
+`<bin> --print-storage-format`, and logs
+`storage format: stamp=… supported=… sidecar=…` on every open.
+
+**What the app does at open.** It refuses a store whose stamp or sidecar is
+above what the build supports ("is newer than this build supports … refusing to
+open"), refuses a store whose stamp is below the build's ("start serve to
+migrate"), and refuses a store that carries the `storage_migration` marker (a
+cut-over that did not finish: restore the checkpoint named in the marker, or
+re-run the cut-over mode). A refused open writes nothing, and it does not
+raise the Pebble on-disk format either. `diagnostics query --raw`,
+`diagnostics reserved-prefs` and `cmd/pebble-inject-skip` are exempt by design
+and still work on a refused store.
+
+**Reserved preference rows.** `storage_format`, `storage_migration`,
+`db_version` and `migration_<n>` are app bookkeeping. `PUT`/`DELETE
+/api/v1/preferences/:key` rejects all four with 400, and the store's own
+preference API refuses the first two. If one of them still ends up holding a
+bad value and the app refuses to start, stop the service and, as the service
+user so file ownership does not change (`sudo -u audiobook
+audiobook-organizer diagnostics reserved-prefs --db <db>`), list them, then
+`--delete KEY` or `--set storage_format=N` / `--set db_version=N`. It asks for
+confirmation (or `--yes`) and prints the before and after value of every key it
+changed (the row, `counter:preference` when it allocates an ID, the sidecar),
+also when a later step fails. `--set db_version` cannot exceed the highest
+registered migration. Deleting `storage_format` also removes the sidecar, and
+the next open restamps a store with data as format 1; once a build supports a
+format above 1 the delete is refused (it would make a converted store look
+legacy), so use `--set storage_format=N`.
+
+**A stale sidecar outlives its store.** The sidecar sits beside the store
+directory, so removing the directory (`rm -rf <db>`, `os.RemoveAll`) leaves
+`<db>.storage-format` behind. If it holds a higher format, a fresh store
+created at the same path is refused as too new. Remove the sidecar together
+with the directory.
+
+**What `make rollback` does.** It swaps in `<bin>.prev` only when the store's
+format (read from `<db>.storage-format`, so `DEPLOY_DB` must be set) is not
+above the format `<bin>.prev --print-storage-format` reports (a build older
+than the flag counts as `1`). Otherwise it refuses, swaps nothing, and prints
+the steps below. An unreadable or missing sidecar also refuses;
+`ROLLBACK_IGNORE_FORMAT=1` overrides only that case, after you have checked the
+store is at format 1. Nothing overrides a store that is newer than `.prev`.
+
+**Nothing short of the checkpoint restores a converted store.** A release that
+converts the store (release B, release C) writes a checkpoint first, and the
+converted rows cannot be read by the previous binary. A binary swap cannot go
+back past a format change.
+
+**A restore discards every write made since the cut-over**, including anything
+the app did after it started serving on the new format. Get the owner's
+approval before running it.
+
+### Restore steps
+
+`<db>` is the store path (`DEPLOY_DB`), `<bin>` the binary path (`DEPLOY_BIN`),
+`<N>` the store's current format.
+
+1. Stop the service: `sudo systemctl stop audiobook-organizer.service`
+2. Move the converted store aside and put the checkpoint in its place. The
+   checkpoint is the one named in `<db>.migration-checkpoint` (written by the
+   release B and C cut-overs), never "the newest `.migration-backups/` entry":
+   ```bash
+   CKPT=$(cat <db>.migration-checkpoint)
+   sudo mv <db> <db>.format-<N>-aside
+   sudo cp -a "$CKPT/$(basename <db>)" <db>
+   ```
+   If `<db>.migration-checkpoint` is empty or missing, do not guess; read the
+   `storage_migration` report for the checkpoint path.
+3. Write the restored store's format into `<db>.storage-format`: the value
+   `<bin>.pre-format-<N> --print-storage-format` prints.
+4. Install `<bin>.pre-format-<N>` as `<bin>`, never `<bin>.prev`.
+   `scripts/deploy-cutover.sh` saves that binary at deploy time; if it is
+   absent, build the release that matches the restored format and install that.
+5. Start the service (`sudo systemctl start audiobook-organizer.service`) and
+   check that the `storage format: stamp=… supported=…` log line shows the
+   restored stamp.
 
 ## memdb Warmup Recovery
 

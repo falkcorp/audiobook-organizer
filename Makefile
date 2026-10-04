@@ -1,7 +1,7 @@
 # file: Makefile
-# version: 2.31.1
+# version: 2.33.0
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
-# last-edited: 2026-09-26
+# last-edited: 2026-10-04
 
 BINARY := audiobook-organizer
 ROOT_DIR := $(shell git rev-parse --show-toplevel 2>/dev/null || pwd)
@@ -45,6 +45,9 @@ export GOTOOLCHAIN := go1.27.1
 # Overridable deployment variables (set in Makefile.local or via environment)
 DEPLOY_HOST ?=
 DEPLOY_BIN  ?=
+# Path of the main Pebble store on DEPLOY_HOST (the --db / DATABASE_PATH
+# value); required by rollback.
+DEPLOY_DB   ?=
 BACKUP_DIR  ?= $(CURDIR)/backups
 
 # Include local overrides (not committed — see Makefile.local.example)
@@ -722,13 +725,39 @@ backup:
 		ssh $(DEPLOY_HOST) "rm -f /tmp/aobackup-$$STAMP.tar.gz"; \
 		echo "✅ Backup saved to $(BACKUP_DIR)/aobackup-$$STAMP.tar.gz"
 
-## rollback: Swap in the previous deployed binary and restart (requires DEPLOY_HOST, DEPLOY_BIN)
+## rollback: Swap in the previous deployed binary and restart (requires DEPLOY_HOST, DEPLOY_BIN, DEPLOY_DB)
+#
+# Storage-format guard (docs/system/runbooks.md#storage-format-restore): the
+# swap happens only when the store's storage format (DEPLOY_DB.storage-format)
+# is not above the format DEPLOY_BIN.prev supports. Past a format change it
+# refuses, swaps nothing and prints the restore-from-checkpoint steps.
+# ROLLBACK_IGNORE_FORMAT=1 only covers an unreadable sidecar; it never
+# overrides a format change, and even then the guard refuses when the CURRENT
+# binary reports a format above .prev's.
+#
+# The sidecar and checkpoint record are read with `sudo -n cat` (the store's
+# parent directory belongs to the service user); `-n` fails at once instead
+# of waiting for a password no tty can type. Each ssh command's stderr is
+# captured and handed to the guard, so a refusal names its cause. The sudoers
+# lines this needs are in docs/system/deploy-and-gpu-ops.md.
 .PHONY: rollback
 rollback:
 	@[ -n "$(DEPLOY_HOST)" ] || (echo "ERROR: DEPLOY_HOST is not set. Add it to Makefile.local or export it."; exit 1)
 	@[ -n "$(DEPLOY_BIN)" ] || (echo "ERROR: DEPLOY_BIN is not set. Add it to Makefile.local or export it."; exit 1)
+	@[ -n "$(DEPLOY_DB)" ] || (echo "ERROR: DEPLOY_DB is not set. Set it to the main Pebble store path on DEPLOY_HOST (the --db / DATABASE_PATH value) in Makefile.local or export it."; exit 1)
 	@echo "→ Rolling back $(DEPLOY_BIN) on $(DEPLOY_HOST)..."
 	@ssh $(DEPLOY_HOST) 'test -f $(DEPLOY_BIN).prev' || (echo "ERROR: no $(DEPLOY_BIN).prev found on $(DEPLOY_HOST) — nothing to roll back to."; exit 1)
+	@errs=$$(mktemp -d) && trap 'rm -rf "$$errs"' EXIT; \
+	  prev_fmt=$$(ssh $(DEPLOY_HOST) '$(DEPLOY_BIN).prev --print-storage-format' 2>"$$errs/prev"); \
+	  current_fmt=$$(ssh $(DEPLOY_HOST) '$(DEPLOY_BIN) --print-storage-format' 2>"$$errs/current"); \
+	  sidecar=$$(ssh $(DEPLOY_HOST) 'sudo -n cat $(DEPLOY_DB).storage-format' 2>"$$errs/sidecar"); \
+	  checkpoint=$$(ssh $(DEPLOY_HOST) 'sudo -n cat $(DEPLOY_DB).migration-checkpoint' 2>"$$errs/checkpoint"); \
+	  ROLLBACK_IGNORE_FORMAT="$(ROLLBACK_IGNORE_FORMAT)" python3 scripts/storage_format_guard.py \
+	    --db="$(DEPLOY_DB)" --bin="$(DEPLOY_BIN)" \
+	    --prev="$$prev_fmt" --prev-err="$$(cat "$$errs/prev")" \
+	    --current="$$current_fmt" --current-err="$$(cat "$$errs/current")" \
+	    --sidecar="$$sidecar" --sidecar-err="$$(cat "$$errs/sidecar")" \
+	    --checkpoint="$$checkpoint" --checkpoint-err="$$(cat "$$errs/checkpoint")"
 	ssh $(DEPLOY_HOST) 'sudo cp $(DEPLOY_BIN) $(DEPLOY_BIN).rolled-back && \
 	  sudo cp $(DEPLOY_BIN).prev $(DEPLOY_BIN) && \
 	  sudo systemctl restart audiobook-organizer.service'

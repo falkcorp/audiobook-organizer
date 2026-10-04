@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_test.go
-// version: 1.8.3
+// version: 1.8.4
 // guid: 4d5e6f7a-8b9c-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-10-03
+// last-edited: 2026-10-04
 
 package database
 
@@ -1002,8 +1002,16 @@ func TestPebbleUserPreferences(t *testing.T) {
 		t.Fatalf("Failed to get all preferences: %v", err)
 	}
 
-	if len(prefs) != 1 {
-		t.Errorf("Expected 1 preference, got %d", len(prefs))
+	// Every store carries the storage_format stamp the open writes
+	// (storage_format.go); count only the rows this test set.
+	var userSet []UserPreference
+	for _, p := range prefs {
+		if p.Key != storageFormatPreferenceKey {
+			userSet = append(userSet, p)
+		}
+	}
+	if len(userSet) != 1 {
+		t.Errorf("Expected 1 preference besides %s, got %d: %+v", storageFormatPreferenceKey, len(userSet), userSet)
 	}
 }
 

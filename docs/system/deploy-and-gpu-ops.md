@@ -1,7 +1,7 @@
 <!-- file: docs/system/deploy-and-gpu-ops.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: d5e7f9a1-b3c5-4d7e-9f1a-3b5c7d9e1f3a -->
-<!-- last-edited: 2026-07-17 -->
+<!-- last-edited: 2026-10-04 -->
 
 # Deploy Rollback & Windows GPU Keepalive
 
@@ -51,19 +51,65 @@ Once your real `Makefile.local`'s `deploy` target includes this same
    installing the new one and restarting the service.
 2. If the new deploy is bad, run the committed rollback target:
    ```bash
-   make rollback DEPLOY_HOST=192.168.0.10 DEPLOY_BIN=/usr/local/bin/audiobook-organizer
+   make rollback DEPLOY_HOST=192.0.2.10 DEPLOY_BIN=/usr/local/bin/audiobook-organizer DEPLOY_DB=/path/to/audiobooks.pebble
    ```
-   (`DEPLOY_HOST`/`DEPLOY_BIN` are normally already set in your
-   `Makefile.local`, so you can usually just run `make rollback`.)
+   (`DEPLOY_HOST`/`DEPLOY_BIN`/`DEPLOY_DB` are normally already set in your
+   `Makefile.local`, so you can usually just run `make rollback`. `DEPLOY_DB`
+   is the main Pebble store path on the server, the `--db` /
+   `DATABASE_PATH` value; `rollback` refuses to run without it.)
 3. `rollback` first checks that `$(DEPLOY_BIN).prev` exists on the server
    (errors out cleanly if not — e.g. right after a fresh install with no
-   prior deploy), then copies the *currently installed* (bad) binary to
-   `$(DEPLOY_BIN).rolled-back` for forensics, restores `.prev` back to
-   `$(DEPLOY_BIN)`, and restarts `audiobook-organizer.service`.
-4. Dry-run without touching any host:
+   prior deploy).
+4. **Storage-format guard.** `rollback` then reads the store's format from
+   `$(DEPLOY_DB).storage-format` and asks `$(DEPLOY_BIN).prev
+   --print-storage-format` which format it supports (a build older than the
+   flag counts as `1`), and runs `scripts/storage_format_guard.py`. If the
+   store is above the format `.prev` supports, it refuses, swaps nothing, and
+   prints the restore-from-checkpoint steps (see
+   [`runbooks.md`](runbooks.md#storage-format-restore)). If the sidecar is
+   missing or unreadable it also refuses, and the refusal quotes the stderr of
+   the ssh command that tried to read it (for example `sudo: a password is
+   required`). `ROLLBACK_IGNORE_FORMAT=1 make rollback` overrides only that
+   case, after you have checked the store is at format 1, and even then the
+   guard asks the *current* binary for its format (`$(DEPLOY_BIN)
+   --print-storage-format`) and refuses if it is above `.prev`'s, or if it
+   gives no answer at all (a crash, an ssh failure). Only a printed format, or
+   the old-build "unknown flag: --print-storage-format" error, counts. Nothing
+   overrides a format change.
+5. Only then does it copy the *currently installed* (bad) binary to
+   `$(DEPLOY_BIN).rolled-back` for forensics, restore `.prev` back to
+   `$(DEPLOY_BIN)`, and restart `audiobook-organizer.service`.
+6. Dry-run without touching any host:
    ```bash
-   make -n rollback DEPLOY_HOST=test-host DEPLOY_BIN=/tmp/x
+   make -n rollback DEPLOY_HOST=test-host DEPLOY_BIN=/tmp/x DEPLOY_DB=/tmp/db
    ```
+
+### sudoers for `make rollback` (owner action)
+
+`make rollback` runs every privileged step over a plain `ssh HOST 'cmd'`,
+which has no tty, so `sudo` cannot prompt for a password. The sidecar and the
+checkpoint record are read with `sudo -n cat` (fail at once instead of
+hanging), and the store's parent directory (`.appdata` on prod) is not
+readable without sudo. Without passwordless rules for exactly these commands,
+every rollback refuses with "cannot read the store's storage format", and the
+swap itself would fail too.
+
+Add a drop-in with `sudo visudo -f /etc/sudoers.d/audiobook-organizer-rollback`
+on the deploy host. Replace `deploy` with the ssh user, and the two paths with
+the real `DEPLOY_DB` and `DEPLOY_BIN` values (sudoers needs literal paths, so
+no variables):
+
+```
+deploy ALL=(root) NOPASSWD: /usr/bin/cat /path/to/audiobooks.pebble.storage-format, \
+    /usr/bin/cat /path/to/audiobooks.pebble.migration-checkpoint, \
+    /usr/bin/cp /usr/local/bin/audiobook-organizer /usr/local/bin/audiobook-organizer.rolled-back, \
+    /usr/bin/cp /usr/local/bin/audiobook-organizer.prev /usr/local/bin/audiobook-organizer, \
+    /usr/bin/systemctl restart audiobook-organizer.service
+```
+
+Check it with `ssh HOST 'sudo -n cat /path/to/audiobooks.pebble.storage-format'`.
+It should print one integer and not ask for a password. Use `command -v cat cp
+systemctl` on the host if those binaries live somewhere other than `/usr/bin`.
 
 Note this only preserves **one** prior version — a second consecutive `make
 deploy` overwrites `.prev` with the (now second-to-last) binary. If you need
