@@ -557,3 +557,93 @@ func TestFragmentFixer_AnotherPlansRunExplainsNothing(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, r2.Fingerprint, got2.Fingerprint, "the second plan's row resumes its own run: %s", got2.Reason)
 }
+
+// TestFragmentFixer_PlanContinuesWithoutTheScanner: a backend with no
+// one-pass journal scan still finds a cut run's plan record (each live
+// book's rows, then the record's retired books) and continues the run.
+func TestFragmentFixer_PlanContinuesWithoutTheScanner(t *testing.T) {
+	f := newFragFixture(t)
+	planned, survivor, others, otherRows := f.looseCut(t)
+	w := f.fragWriter(t, "op-cut")
+	f.journalPlanRecord(t, w, planned)
+	f.moveAndRetire(t, w, fragFixerID, survivor, others, otherRows, 1)
+	h := &noScanHist{s: f.s}
+	sd, ok := f.p.deps.(scanDeps)
+	require.True(t, ok)
+	f.p.deps = noScanDeps{scanDeps: sd, hist: h}
+
+	row := findRow(t, f.plan(t, "op-plan2"), planned.RowID)
+	require.True(t, row.Applicable(), "%s: %s", row.Skipped, row.SkipReason)
+	require.Equal(t, planned.Fingerprint, row.Fingerprint)
+	require.Positive(t, h.calls.Load(), "the journal came from GetBookChanges")
+	out := f.apply(t, "op-plan2", "op-apply2", []string{row.RowID}, nil)
+	require.Equal(t, 1, out.Applied, "outcomes %v %+v", out.ByOutcome, out.Rows)
+	f.requireOneLiveBookHoldsAll(t, planned, survivor)
+
+	// Finished: the next plan drops it (no row over the set at all).
+	for _, r := range f.plan(t, "op-plan3").Rows {
+		require.NotEqual(t, planned.RowID, r.RowID, "a finished run is not offered again")
+	}
+}
+
+// TestFragmentFixer_UnreadablePlanRecordIsHeld: a plan record whose stored
+// state cannot be read gives no decision to continue; the set is held and
+// kept out of every other row rather than re-formed.
+func TestFragmentFixer_UnreadablePlanRecordIsHeld(t *testing.T) {
+	f := newFragFixture(t)
+	planned, survivor, others, otherRows := f.looseCut(t)
+	bad := planned
+	bad.State = json.RawMessage(`{"files":5}`)
+	w := f.fragWriter(t, "op-cut")
+	plan := planned.Detail.(*fragGroupPlan)
+	rec, err := json.Marshal(fragPlanRecord{RowID: planned.RowID, Fingerprint: planned.Fingerprint, Dir: plan.Dir, Key: plan.Key,
+		Survivor: survivor, BookIDs: planned.BookIDs, Proposed: planned.Proposed, PlannedAt: time.Now().UTC(), State: bad.State})
+	require.NoError(t, err)
+	require.NoError(t, w.Journal(survivor, undo.ChangeTypeRepairPlanRecord, fragRecordField(planned.RowID), "", string(rec)))
+	f.moveAndRetire(t, w, fragFixerID, survivor, others, otherRows, 1)
+
+	res := f.plan(t, "op-plan2")
+	row := findRow(t, res, planned.RowID)
+	require.Equal(t, fragSkipInterrupted, row.Skipped)
+	require.Contains(t, row.SkipReason, "unreadable")
+	require.Empty(t, applicableRowsWith(res, planned.BookIDs))
+}
+
+// TestFragmentFixer_LegacyMoveHoldsOnlyOurOrUnknownRuns: a row moved by a
+// run that left no plan record holds the folder's new rows when the move is
+// this fixer's or of unknown origin (written before rows named their fixer,
+// with the op gone), never when its op names another fixer.
+func TestFragmentFixer_LegacyMoveHoldsOnlyOurOrUnknownRuns(t *testing.T) {
+	for _, tc := range []struct {
+		name, source, opFixer string
+		discard, held         bool
+	}{
+		{"stamped with this fixer", fragFixerID, fragFixerID, false, true},
+		{"legacy, op names this fixer", "", fragFixerID, false, true},
+		{"legacy, op discarded", "", fragFixerID, true, true},
+		{"legacy, op names another fixer", "", "folder-books", false, false},
+		{"stamped with another fixer", "folder-books", "folder-books", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFragFixture(t)
+			ids := f.looseGroup(t, "lib/Walk", "Chap", 6, func(int) bool { return true })
+			f.applyOp("op-old", tc.opFixer)
+			w := repairs.NewWriter(f.s, f.s, tc.source, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-old")
+			rows, err := f.s.GetBookFiles(ids[5])
+			require.NoError(t, err)
+			require.Len(t, rows, 1)
+			require.NoError(t, w.MoveBookFiles([]string{rows[0].ID}, ids[5], ids[4]))
+			if tc.discard {
+				f.discardOp("op-old")
+			}
+			res := f.plan(t, "op-plan")
+			r := rowWithBooks(t, res, ids[:4])
+			if tc.held {
+				require.Equal(t, fragSkipInterrupted, r.Skipped, r.SkipReason)
+				require.Contains(t, r.SkipReason, ids[4])
+			} else {
+				require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+			}
+		})
+	}
+}
