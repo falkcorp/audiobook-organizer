@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_purge_empty_test.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: b83c47f1-2065-4ade-9c18-31d70f5b62ea
-// last-edited: 2026-09-12
+// last-edited: 2026-10-04
 
 package maintenance
 
@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
@@ -481,7 +483,7 @@ func TestPurgeEmptyAuthors_ShortMemdbFileCountAbortsRatherThanDeleting(t *testin
 // are eligible junk and must NOT appear in it; author 1 has books.
 func TestPurgeEmptyAuthors_HeldBackSample_Populated(t *testing.T) {
 	authors, books, files := purgeFixture()
-	report, eligible := classifyEmptyAuthors(authors, books, nil, files, true)
+	report, eligible := classifyEmptyAuthors(authors, books, nil, nil, files, true)
 
 	want := []heldBackAuthor{{AuthorID: 4, Name: "Has Files But No Books", FileCount: 7}}
 	if len(report.HeldBackSample) != len(want) || report.HeldBackSample[0] != want[0] {
@@ -505,7 +507,7 @@ func TestPurgeEmptyAuthors_HeldBackSample_Populated(t *testing.T) {
 // means nothing is held back on file grounds, so nothing is sampled either.
 func TestPurgeEmptyAuthors_HeldBackSample_EmptyWhenNothingHeldBack(t *testing.T) {
 	authors, books, files := purgeFixture()
-	report, eligible := classifyEmptyAuthors(authors, books, nil, files, false)
+	report, eligible := classifyEmptyAuthors(authors, books, nil, nil, files, false)
 	if len(report.HeldBackSample) != 0 || report.ZeroBooksWithFiles != 0 {
 		t.Fatalf("require_zero_files=false: HeldBackSample=%+v ZeroBooksWithFiles=%d, want empty/0",
 			report.HeldBackSample, report.ZeroBooksWithFiles)
@@ -515,7 +517,7 @@ func TestPurgeEmptyAuthors_HeldBackSample_EmptyWhenNothingHeldBack(t *testing.T)
 	}
 
 	// Still-referenced authors are HeldByRefs, not held back on files.
-	report, _ = classifyEmptyAuthors(authors, books, map[int]int{4: 1}, files, true)
+	report, _ = classifyEmptyAuthors(authors, books, map[int]int{4: 1}, nil, files, true)
 	if len(report.HeldBackSample) != 0 || report.HeldByRefs != 1 {
 		t.Fatalf("referenced author: HeldBackSample=%+v HeldByRefs=%d, want empty/1",
 			report.HeldBackSample, report.HeldByRefs)
@@ -529,7 +531,7 @@ func TestPurgeEmptyAuthors_HeldBackSample_EmptyWhenNothingHeldBack(t *testing.T)
 // sample the 822-author population would again be only a number.
 func TestPurgeEmptyAuthors_HeldByRefsSample_ProductionShape(t *testing.T) {
 	authors, books, files := purgeFixture()
-	report, eligible := classifyEmptyAuthors(authors, books, map[int]int{4: 3}, files, true)
+	report, eligible := classifyEmptyAuthors(authors, books, map[int]int{4: 3}, nil, files, true)
 
 	want := heldBackAuthor{AuthorID: 4, Name: "Has Files But No Books", FileCount: 7, RefCount: 3}
 	if len(report.HeldByRefsSample) != 1 || report.HeldByRefsSample[0] != want {
@@ -551,7 +553,7 @@ func TestPurgeEmptyAuthors_HeldByRefsSample_ProductionShape(t *testing.T) {
 		many = append(many, database.Author{ID: i, Name: fmt.Sprintf("Ref %d", i)})
 		refs[i] = 1
 	}
-	report, _ = classifyEmptyAuthors(many, map[int]int{}, refs, map[int]int{}, true)
+	report, _ = classifyEmptyAuthors(many, map[int]int{}, refs, nil, map[int]int{}, true)
 	if report.HeldByRefs != held || len(report.HeldByRefsSample) != emptyAuthorSampleLimit {
 		t.Fatalf("HeldByRefs=%d sample=%d, want %d/%d", report.HeldByRefs, len(report.HeldByRefsSample), held, emptyAuthorSampleLimit)
 	}
@@ -576,7 +578,7 @@ func TestPurgeEmptyAuthors_HeldBackSample_CapAtLimit(t *testing.T) {
 	junk := heldBack + 1
 	authors = append(authors, database.Author{ID: junk, Name: "- junk"})
 
-	report, eligible := classifyEmptyAuthors(authors, books, nil, files, true)
+	report, eligible := classifyEmptyAuthors(authors, books, nil, nil, files, true)
 	if len(report.HeldBackSample) != emptyAuthorSampleLimit {
 		t.Fatalf("len(HeldBackSample) = %d, want the cap %d", len(report.HeldBackSample), emptyAuthorSampleLimit)
 	}
@@ -834,4 +836,32 @@ func TestPurgeEmptyAuthors_ApplyWithNothingEligibleTakesNoStandDown(t *testing.T
 	if len(events) != 0 {
 		t.Fatalf("wrote %v with nothing eligible", events)
 	}
+}
+
+// An author no book references but a series still names is held: DeleteAuthor
+// does not touch series, so the delete would leave Series.AuthorID dangling.
+func TestPurgeEmptyAuthors_HoldsSeriesOwner(t *testing.T) {
+	authors, books, files := purgeFixture()
+	report, eligible := classifyEmptyAuthors(authors, books, nil, map[int]int{2: 1}, files, true)
+	require.Equal(t, []int{3}, eligible)
+	require.Equal(t, 1, report.HeldBySeries)
+	require.Len(t, report.HeldBySeriesSample, 1)
+	require.Equal(t, 2, report.HeldBySeriesSample[0].AuthorID)
+
+	// End to end through the op: the series listing feeds the guard, and a
+	// failed listing aborts rather than deleting.
+	var deleted []int
+	p := newPurgePlugin(authors, books, files, &deleted)
+	store := p.deps.OpsStore().(*database.MockStore)
+	owner := 2
+	store.GetAllSeriesFunc = func() ([]database.Series, error) {
+		return []database.Series{{ID: 1, Name: "Edgedancer", AuthorID: &owner}}, nil
+	}
+	require.NoError(t, p.runPurgeEmptyAuthors(context.Background(), json.RawMessage(`{"apply":true}`), &fakeReporter{}))
+	require.Equal(t, []int{3}, deleted)
+
+	deleted = nil
+	store.GetAllSeriesFunc = func() ([]database.Series, error) { return nil, errors.New("boom") }
+	require.Error(t, p.runPurgeEmptyAuthors(context.Background(), json.RawMessage(`{"apply":true}`), &fakeReporter{}))
+	require.Empty(t, deleted)
 }

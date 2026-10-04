@@ -1,5 +1,5 @@
 // file: web/src/components/review/RepairsPanel.tsx
-// version: 1.14.0
+// version: 1.15.0
 // guid: 9c4f1a73-2e58-4b06-a9d1-6e3b8c7f0d52
 // last-edited: 2026-10-04
 
@@ -375,6 +375,7 @@ export const SKIP_KIND_LABEL: Record<string, string> = {
   skipped_contributor_role: 'Names contributor roles (translator, editor)',
   skipped_doubled_author: 'Same author repeated',
   skipped_anthology: 'Too many names (anthology or cast)',
+  skipped_names_a_title: 'The name is a book or series title',
   skipped_not_combined: 'No longer a combined credit',
   error: 'Error',
 };

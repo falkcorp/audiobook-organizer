@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_purge_empty.go
-// version: 1.5.2
+// version: 1.6.0
 // guid: 6a2f9c31-84d7-4e05-b1a3-7f92c60d8e54
-// last-edited: 2026-09-12
+// last-edited: 2026-10-04
 
 package maintenance
 
@@ -83,9 +83,17 @@ type emptyAuthorReport struct {
 	// junction-only co-author credit. Before this guard existed they were
 	// deleted; surfacing the number is how an operator sees the divergence.
 	HeldByRefs int
-	Eligible   int
-	Deleted    int
-	Failed     int
+	// HeldBySeries are authors referenced by no book but still named as the
+	// AuthorID of a series row. DeleteAuthor does not touch series, so a
+	// delete would leave that series pointing at an author id no row has.
+	// The scanner and the metadata apply create a series under the book's
+	// primary author, so the combined author records the combined-credit
+	// fixer empties (maintenance.repair-combined-author-credits) are often
+	// series owners. Held until the series is re-pointed.
+	HeldBySeries int
+	Eligible     int
+	Deleted      int
+	Failed       int
 	// HeldLinkedDuringRun are eligible authors the apply's per-item re-check
 	// found linked to a book at delete time, although the whole-library count
 	// taken at the start of the run said zero. A running library.scan (or an
@@ -126,6 +134,9 @@ type emptyAuthorReport struct {
 	// HeldBackSample above would be empty on the real library, and the reviewer
 	// would again have only a count.
 	HeldByRefsSample []heldBackAuthor
+	// HeldBySeriesSample names up to emptyAuthorSampleLimit authors from the
+	// HeldBySeries population; RefCount is the number of series naming it.
+	HeldBySeriesSample []heldBackAuthor
 }
 
 // heldBackAuthor is one row of emptyAuthorReport.HeldBackSample or
@@ -142,9 +153,9 @@ type heldBackAuthor struct {
 
 func (r emptyAuthorReport) summary() string {
 	return fmt.Sprintf(
-		"authors=%d zero-book=%d held-back(still referenced)=%d held-back(has files)=%d eligible=%d deleted=%d failed=%d "+
+		"authors=%d zero-book=%d held-back(still referenced)=%d held-back(series owner)=%d held-back(has files)=%d eligible=%d deleted=%d failed=%d "+
 			"held(linked during run)=%d held(re-check failed)=%d held(journal failed)=%d",
-		r.TotalAuthors, r.ZeroBooks, r.HeldByRefs, r.ZeroBooksWithFiles, r.Eligible, r.Deleted, r.Failed,
+		r.TotalAuthors, r.ZeroBooks, r.HeldByRefs, r.HeldBySeries, r.ZeroBooksWithFiles, r.Eligible, r.Deleted, r.Failed,
 		r.HeldLinkedDuringRun, r.HeldLookupFailed, r.JournalFailed)
 }
 
@@ -264,10 +275,25 @@ func (p *Plugin) runPurgeEmptyAuthors(ctx context.Context, rawParams json.RawMes
 		return fmt.Errorf("purge-empty-authors: %w", err)
 	}
 
+	// Series rows name an author too (Series.AuthorID), and neither the ref
+	// counter above nor DeleteAuthor sees them: a delete would leave the
+	// series pointing at a missing author. Fatal when unreadable, like the
+	// other guards -- a missing signal is not permission.
+	allSeries, err := store.GetAllSeries()
+	if err != nil {
+		return fmt.Errorf("purge-empty-authors: list series (needed for the series-owner guard): %w", err)
+	}
+	seriesRefs := make(map[int]int)
+	for i := range allSeries {
+		if allSeries[i].AuthorID != nil {
+			seriesRefs[*allSeries[i].AuthorID]++
+		}
+	}
+
 	// Built BEFORE the dry-run branch below, so `apply=false` and `apply=true`
 	// report and delete exactly the same set. A guard applied only on the apply
 	// path would make the dry run a lie.
-	report, eligible := classifyEmptyAuthors(authors, bookCounts, refCounts, fileCounts, params.requireZeroFiles())
+	report, eligible := classifyEmptyAuthors(authors, bookCounts, refCounts, seriesRefs, fileCounts, params.requireZeroFiles())
 	if params.Limit > 0 && len(eligible) > params.Limit {
 		eligible = eligible[:params.Limit]
 	}
@@ -280,6 +306,12 @@ func (p *Plugin) runPurgeEmptyAuthors(ctx context.Context, rawParams json.RawMes
 			"held_back", report.ZeroBooksWithFiles,
 			"sampled", len(report.HeldBackSample),
 			"held_back_sample", report.HeldBackSample)
+	}
+	if report.HeldBySeries > 0 {
+		reporter.Logger().Info("purge-empty-authors held back (no books, still a series owner)",
+			"held_by_series", report.HeldBySeries,
+			"sampled", len(report.HeldBySeriesSample),
+			"held_by_series_sample", report.HeldBySeriesSample)
 	}
 	if report.HeldByRefs > 0 {
 		reporter.Logger().Info("purge-empty-authors held back (zero books by the display count, still referenced)",
@@ -465,10 +497,11 @@ func (p *Plugin) runPurgeEmptyAuthors(ctx context.Context, rawParams json.RawMes
 // report out — so the classification can be tested without a store or reporter,
 // and so the dry-run and apply paths are fed by the same code.
 //
-// bookCounts only picks the candidate set; refCounts is the delete guard; a nil
-// fileCounts is only valid when requireZeroFiles is false (the caller skips the
-// file pass in that case).
-func classifyEmptyAuthors(authors []database.Author, bookCounts, refCounts, fileCounts map[int]int, requireZeroFiles bool) (emptyAuthorReport, []int) {
+// bookCounts only picks the candidate set; refCounts and seriesRefs (series
+// rows naming the author) are the delete guards; a nil fileCounts is only
+// valid when requireZeroFiles is false (the caller skips the file pass in that
+// case).
+func classifyEmptyAuthors(authors []database.Author, bookCounts, refCounts, seriesRefs, fileCounts map[int]int, requireZeroFiles bool) (emptyAuthorReport, []int) {
 	report := emptyAuthorReport{TotalAuthors: len(authors)}
 	var eligible []int
 	for _, a := range authors {
@@ -486,6 +519,17 @@ func classifyEmptyAuthors(authors []database.Author, bookCounts, refCounts, file
 					Name:      a.Name,
 					FileCount: fileCounts[a.ID], // nil map (require_zero_files=false) reads 0
 					RefCount:  refCounts[a.ID],
+				})
+			}
+			continue
+		}
+		if seriesRefs[a.ID] != 0 {
+			report.HeldBySeries++
+			if len(report.HeldBySeriesSample) < emptyAuthorSampleLimit {
+				report.HeldBySeriesSample = append(report.HeldBySeriesSample, heldBackAuthor{
+					AuthorID: a.ID,
+					Name:     a.Name,
+					RefCount: seriesRefs[a.ID],
 				})
 			}
 			continue

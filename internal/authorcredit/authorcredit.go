@@ -103,9 +103,18 @@ func LooseParts(name string) []string {
 
 // SplitNames returns the names a credit splits into, each cleaned by gate and
 // de-duplicated by LettersKey ("A, B, A, B" is A and B), in credit order; nil
-// when the shared splitter will not split it or any part fails the gate. A
-// credit whose parts are all one name ("A. G. Riddle, A. G. Riddle") is not a
-// split: it returns nil.
+// when it does not split safely:
+//
+//   - the shared splitter (personname.SplitCompositeAuthorName) refuses it;
+//   - the splitter keeps fewer distinct names than the credit lists (its
+//     slash branch drops a piece that is not person-shaped, which may be a
+//     single-word pen name: splitting would silently lose that credit);
+//   - a part reads as a work title (personname.LooksLikeWorkTitle: it leads
+//     with an article or carries a series marker), the "A Dark and Drowning
+//     Tide" shape the splitter's " and " branch would otherwise cut into the
+//     authors "A Dark" and "Drowning Tide";
+//   - a part fails gate;
+//   - every part is one name ("A. G. Riddle, A. G. Riddle").
 func SplitNames(name string, gate Gate) []string {
 	if gate == nil {
 		gate = PrepareGate
@@ -114,9 +123,16 @@ func SplitNames(name string, gate Gate) []string {
 	if len(parts) < 2 {
 		return nil
 	}
+	listed := map[string]bool{}
+	for _, p := range LooseParts(name) {
+		listed[LettersKey(p)] = true
+	}
 	seen := map[string]bool{}
 	var out []string
 	for _, p := range parts {
+		if personname.LooksLikeWorkTitle(p) {
+			return nil
+		}
 		clean, ok := gate(p)
 		if !ok {
 			return nil
@@ -130,7 +146,7 @@ func SplitNames(name string, gate Gate) []string {
 			out = append(out, clean)
 		}
 	}
-	if len(out) < 2 {
+	if len(out) < 2 || len(out) < len(listed) {
 		return nil
 	}
 	return out
