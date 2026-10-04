@@ -77,12 +77,14 @@ func TestBuildBookFromAlbumGroup_NarratorFromArtistWhenAlbumArtistDiffers(t *tes
 	}
 }
 
-// A credit naming two people that the splitter will not split is not created
-// as one combined author row (authorcredit.ErrCombinedCredit):
+// A credit the splitter will not split whose pieces are existing authors is
+// not created as one combined author row (authorcredit.ErrCombinedCredit):
 // the book is left without an author, and the mock fails on any CreateAuthor.
 func TestAssignAuthorAndSeries_CombinedOfExistingAuthorsIsNotCreated(t *testing.T) {
 	m := dbmocks.NewMockStore(t)
 	m.EXPECT().GetAuthorByName("Shirtaloon, Travis Deverell").Return(nil, nil).Once()
+	m.EXPECT().GetAuthorByName("Shirtaloon").Return(&database.Author{ID: 1, Name: "Shirtaloon"}, nil).Once()
+	m.EXPECT().GetAuthorByName("Travis Deverell").Return(&database.Author{ID: 2, Name: "Travis Deverell"}, nil).Once()
 
 	imp := newMockImporter(m)
 	book := &database.Book{}
