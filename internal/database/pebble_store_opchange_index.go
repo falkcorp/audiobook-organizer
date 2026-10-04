@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_opchange_index.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7ce04252-7ac9-421a-ba5e-5f230bbf0ab4
 // last-edited: 2026-10-03
 
@@ -726,8 +726,9 @@ type OpChangeByBookIndexReport struct {
 	// Indexable rows decode and name an indexable book (non-empty, no ':'),
 	// so they must have an entry.
 	Indexable int `json:"indexable"`
-	// MissingEntries are indexable rows with no entry: once the sentinel is
-	// set, GetBookChanges cannot see them. This is the count a rebuild fixes.
+	// MissingEntries are indexable rows with no entry: an index read would
+	// not see them, so a non-zero count keeps readers on the scan and forces
+	// a rebuild (EnsureOpChangeByBookIndex). This is the count a rebuild fixes.
 	MissingEntries int `json:"missing_entries"`
 	// Undecodable rows; UnmarkedUndecodable have no opchange_undecodable:
 	// marker, so the indexed reader does not fail closed on them.
