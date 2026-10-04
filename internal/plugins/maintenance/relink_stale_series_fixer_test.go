@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/relink_stale_series_fixer_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: edaf6525-dcbd-426d-b672-c3293aff05f5
 // last-edited: 2026-10-03
 
@@ -243,7 +243,7 @@ func TestRelinkStaleSeries_ApplyRefusesALockAddedAfterReplan(t *testing.T) {
 	require.Nil(t, b.SeriesID)
 }
 
-func TestRelinkStaleSeries_ApplyRelinksAndUndoRestores(t *testing.T) {
+func TestRelinkStaleSeries_ApplyRelinksAndUndoUnlinks(t *testing.T) {
 	lib := newRelinkLib(t)
 	f, res, rows := lib.plan(t)
 	raw, err := json.Marshal(res)
