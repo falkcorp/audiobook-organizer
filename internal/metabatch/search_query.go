@@ -1,7 +1,7 @@
 // file: internal/metabatch/search_query.go
 // version: 1.13.0
 // guid: e0ed5705-b771-4cc2-9c8c-bca9f78ead8b
-// last-edited: 2026-10-04
+// last-edited: 2026-10-01
 //
 // Resolves the title a metadata search asks providers for a book.
 

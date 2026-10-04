@@ -37,14 +37,16 @@ The scanner (including the AI-parse gap fill), the metadata-provider apply,
 the batch metadata update, the file importer and refetch-missing-authors
 previously looked up and created the whole credit string. A credit naming two
 people therefore became one author record named after both. All of these now
-go through one shared helper, `internal/authorcredit`. It strips bracketed
-segments (a series tag, a reader, an edition), splits the rest with the shared
-splitter (now in `personname`), and credits every part in order. A credit is
-not split when it names a contributor role, when a part is a publisher, a role
-credit or a collective credit ("Full Cast"), when the whole credit or any part
-is a book title or series name in the library, or when it names more than
-three people. When the split is refused, the whole string is looked up as
-before, but a credit naming several people is never created as one author.
+go through one shared helper, `internal/authorcredit`. It splits a credit only
+into authors that **already exist** (by name or alias) and credits them in
+order. Brackets are stripped first, never split. Parts must pass the
+publisher/role gate, must not be a cast credit ("Full Cast") or a book/series
+title, and there are at most three. A credit naming a role is not split. Any
+part that would need a new author record means no split at import: the whole
+string is looked up and created as before. New authors from a split come only
+from the fixer's owner-reviewed `split_new_authors` rows. The one exception: an
+unsplittable whole string made only of existing authors is not created
+(`ErrCombinedCredit`, treated as no author).
 
 The iTunes importer and the single-book edit already split the credit. They
 now refuse that same combined case instead of creating it.

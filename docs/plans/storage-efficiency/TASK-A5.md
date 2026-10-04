@@ -1,7 +1,7 @@
 <!-- file: docs/plans/storage-efficiency/TASK-A5.md -->
 <!-- version: 1.4.0 -->
 <!-- guid: 10c73217-17fc-4334-a120-d0c82a7c9e9b -->
-<!-- last-edited: 2026-10-04 -->
+<!-- last-edited: 2026-10-03 -->
 
 # TASK-A5: Timeline indexes (`opv2:open:`, `opv2:done:`), startup reconcile, `GetOpLogsV2` tail read
 

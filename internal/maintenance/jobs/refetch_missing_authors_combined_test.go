@@ -19,6 +19,8 @@ func TestLinkTagAuthors_SplitsAMultiAuthorTag(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 	chaney, err := st.CreateAuthor("J. N. Chaney")
 	require.NoError(t, err)
+	_, err = st.CreateAuthor("Jonathan P. Brazee")
+	require.NoError(t, err)
 	b, err := st.CreateBook(&database.Book{Title: "Mission Creep", FilePath: "/l/mc.m4b", Format: "m4b"})
 	require.NoError(t, err)
 

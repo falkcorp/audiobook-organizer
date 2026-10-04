@@ -19,7 +19,7 @@ func TestBatchUpdateMetadata_MultiAuthorNameIsSplit(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 	b, err := st.CreateBook(&database.Book{Title: "Mission Creep", FilePath: "/l/mc.m4b", Format: "m4b"})
 	require.NoError(t, err)
-	for _, n := range []string{"Shirtaloon", "Travis Deverell"} {
+	for _, n := range []string{"Shirtaloon", "Travis Deverell", "J. N. Chaney", "Jonathan P. Brazee"} {
 		_, err := st.CreateAuthor(n)
 		require.NoError(t, err)
 	}

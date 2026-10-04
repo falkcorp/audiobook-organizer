@@ -41,10 +41,10 @@ func authorNamesOf(t *testing.T, st *database.PebbleStore, ids []int) []string {
 	return out
 }
 
-// A tag naming two people resolves to both authors, never to one combined
+// A tag naming two existing authors resolves to both, never to one combined
 // author row (1,597 of them on production on 2026-10-04 came from here).
 func TestResolveAuthorIDs_SplitsAMultiAuthorTag(t *testing.T) {
-	st := usePebbleForCombined(t, "J. N. Chaney")
+	st := usePebbleForCombined(t, "J. N. Chaney", "Jonathan P. Brazee")
 	ids, err := resolveAuthorIDs("J.N. Chaney, Jonathan P. Brazee")
 	require.NoError(t, err)
 	require.Equal(t, []string{"J. N. Chaney", "Jonathan P. Brazee"}, authorNamesOf(t, st, ids))
@@ -57,6 +57,19 @@ func TestResolveAuthorIDs_SplitsAMultiAuthorTag(t *testing.T) {
 	id, err := resolveAuthorID("J.N. Chaney, Jonathan P. Brazee")
 	require.NoError(t, err)
 	require.Equal(t, ids[0], *id)
+}
+
+// A tag with one part that is no author yet is not split at scan time (new
+// authors from a split come only through the fixer's reviewed rows): the
+// whole string is looked up and created, as before.
+func TestResolveAuthorIDs_UnknownPartKeepsTheWholeString(t *testing.T) {
+	st := usePebbleForCombined(t, "J. N. Chaney")
+	ids, err := resolveAuthorIDs("J.N. Chaney, Jonathan P. Brazee")
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	b, err := st.GetAuthorByName("Jonathan P. Brazee")
+	require.NoError(t, err)
+	require.Nil(t, b, "no author created from a split")
 }
 
 // A combined tag the splitter will not split, whose parts are existing
@@ -74,7 +87,7 @@ func TestResolveAuthorIDs_RefusesAnUnsplittableCombinedOfExistingAuthors(t *test
 // The co-authors go into the junction in order, add-only, and only when the
 // row's primary is the tag's first author.
 func TestCreditScannedAuthors(t *testing.T) {
-	st := usePebbleForCombined(t)
+	st := usePebbleForCombined(t, "J. N. Chaney", "Jonathan P. Brazee")
 	ids, err := resolveAuthorIDs("J.N. Chaney, Jonathan P. Brazee")
 	require.NoError(t, err)
 	b, err := st.CreateBook(&database.Book{Title: "Mission Creep", AuthorID: &ids[0], Format: "m4b", FilePath: "/lib/mc.m4b"})
@@ -112,37 +125,27 @@ func TestRescanMayCreditAuthors(t *testing.T) {
 	require.False(t, rescanMayCreditAuthors(map[string]bool{}, false))
 }
 
-// The review of #3717 cases through the real scanner path: no series,
-// publisher or cast credit becomes an author, and no combined record is made.
+// The review of #3717 cases through the real scanner path: every one has a
+// part that is no author yet, so none is split and no author is created from
+// a split; each keeps one credit, the whole string, as before.
 func TestResolveAuthorIDs_ReviewCases(t *testing.T) {
-	st := usePebbleForCombined(t, "Annabelle Hawthorne")
+	st := usePebbleForCombined(t, "Annabelle Hawthorne", "Cassius Lange", "Damien Hanson", "Terry Pratchett")
 	for _, s := range []string{"Dragon Born", "Star Wars", "Master Class"} {
 		_, err := st.CreateSeries(s, nil)
 		require.NoError(t, err)
 	}
 	authorcredit.ResetTitleCache()
-	exists := func(n string) bool {
-		a, err := st.GetAuthorByName(n)
-		require.NoError(t, err)
-		return a != nil
-	}
-	ids, err := resolveAuthorIDs("Dante King (Dragon Born)")
-	require.NoError(t, err)
-	require.Len(t, ids, 1)
-	ids, err = resolveAuthorIDs("Alphabet Squadron (Star Wars)")
-	require.NoError(t, err)
-	require.Len(t, ids, 1)
-	ids, err = resolveAuthorIDs("Annabelle Hawthorne, Virgil Knightley(Master Class)")
-	require.NoError(t, err)
-	require.Equal(t, []string{"Annabelle Hawthorne", "Virgil Knightley"}, authorNamesOf(t, st, ids))
-	for _, n := range []string{"Cassius Lange, LitForge Press, Damien Hanson", "Terry Pratchett, Full Cast",
-		"Ray Porter, Kate Reading, Michael Kramer, Tim Gerard Reynolds"} {
+	for _, n := range []string{"Dante King (Dragon Born)", "Alphabet Squadron (Star Wars)",
+		"Annabelle Hawthorne, Virgil Knightley(Master Class)", "Cassius Lange, LitForge Press, Damien Hanson",
+		"Terry Pratchett, Full Cast"} {
 		ids, err := resolveAuthorIDs(n)
 		require.NoError(t, err, n)
-		require.Empty(t, ids, n)
+		require.Len(t, ids, 1, n)
 	}
-	for _, n := range []string{"Dragon Born", "Star Wars", "Master Class", "LitForge Press", "Full Cast",
-		"Annabelle Hawthorne, Virgil Knightley", "Cassius Lange, LitForge Press, Damien Hanson", "Terry Pratchett, Full Cast"} {
-		require.False(t, exists(n), "%s must not be an author", n)
+	for _, n := range []string{"Dragon Born", "Star Wars", "Master Class", "Virgil Knightley", "LitForge Press",
+		"Full Cast", "Dante King", "Alphabet Squadron"} {
+		a, err := st.GetAuthorByName(n)
+		require.NoError(t, err)
+		require.Nil(t, a, "%s must not be created from a split", n)
 	}
 }

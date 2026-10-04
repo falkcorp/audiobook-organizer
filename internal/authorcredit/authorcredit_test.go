@@ -52,8 +52,9 @@ func TestSplitNames(t *testing.T) {
 	require.Nil(t, SplitNames("Stephen King", PrepareGate))
 }
 
-func TestResolve_SplitsAndCreatesMissingParts(t *testing.T) {
-	st := newStore(t, "J. N. Chaney")
+// Two existing authors: split and linked, no combined row.
+func TestResolve_SplitsIntoExistingAuthors(t *testing.T) {
+	st := newStore(t, "J. N. Chaney", "Jonathan P. Brazee")
 	got, err := Resolve(st, "J.N. Chaney, Jonathan P. Brazee", PrepareGate)
 	require.NoError(t, err)
 	require.Equal(t, []string{"J. N. Chaney", "Jonathan P. Brazee"}, names(got))
@@ -62,9 +63,38 @@ func TestResolve_SplitsAndCreatesMissingParts(t *testing.T) {
 	require.Nil(t, combined, "no combined row is created")
 }
 
+// An existing combined row is not linked when its parts exist.
 func TestResolve_ExistingCombinedRowIsNotReusedWhenItSplits(t *testing.T) {
-	st := newStore(t, "J.N. Chaney, Jonathan P. Brazee")
+	st := newStore(t, "J.N. Chaney, Jonathan P. Brazee", "J. N. Chaney", "Jonathan P. Brazee")
 	got, err := Resolve(st, "J.N. Chaney, Jonathan P. Brazee", PrepareGate)
+	require.NoError(t, err)
+	require.Equal(t, []string{"J. N. Chaney", "Jonathan P. Brazee"}, names(got))
+}
+
+// One unknown part: no split, no new part author; the whole string is looked
+// up and created exactly as before this package existed.
+func TestResolve_UnknownPartFallsBackToTheWholeString(t *testing.T) {
+	st := newStore(t, "J. N. Chaney")
+	got, err := Resolve(st, "J.N. Chaney, Jonathan P. Brazee", PrepareGate)
+	require.NoError(t, err)
+	require.Equal(t, []string{"J.N. Chaney, Jonathan P. Brazee"}, names(got))
+	b, err := st.GetAuthorByName("Jonathan P. Brazee")
+	require.NoError(t, err)
+	require.Nil(t, b, "no author is created from a split at import")
+	// And an existing whole row is found again.
+	again, err := Resolve(st, "J.N. Chaney, Jonathan P. Brazee", PrepareGate)
+	require.NoError(t, err)
+	require.Equal(t, got[0].ID, again[0].ID)
+}
+
+// A part found through an alias counts as existing.
+func TestResolve_PartFoundByAlias(t *testing.T) {
+	st := newStore(t, "J. N. Chaney", "Jonathan P. Brazee")
+	b, err := st.GetAuthorByName("Jonathan P. Brazee")
+	require.NoError(t, err)
+	_, err = st.CreateAuthorAlias(b.ID, "Jonathan Brazee", "pen_name")
+	require.NoError(t, err)
+	got, err := Resolve(st, "J. N. Chaney, Jonathan Brazee", PrepareGate)
 	require.NoError(t, err)
 	require.Equal(t, []string{"J. N. Chaney", "Jonathan P. Brazee"}, names(got))
 }
@@ -95,9 +125,10 @@ func TestResolve_KeepsTodaysBehaviourWhenNotCombined(t *testing.T) {
 	got, err = Resolve(st, "Zogarth", PrepareGate)
 	require.NoError(t, err)
 	require.Equal(t, []string{"Zogarth"}, names(got))
-	// One piece missing still names two people: never created as one row.
-	_, err = Resolve(st, "Shirtaloon, Somebody New", PrepareGate)
-	require.True(t, errors.Is(err, ErrCombinedCredit), "err %v", err)
+	// One piece missing: created whole, as before.
+	got, err = Resolve(st, "Shirtaloon, Somebody New", PrepareGate)
+	require.NoError(t, err)
+	require.Equal(t, []string{"Shirtaloon, Somebody New"}, names(got))
 }
 
 func TestCredits(t *testing.T) {
@@ -151,61 +182,56 @@ func positions(cs []database.BookAuthor) []int {
 	return out
 }
 
-// The review of #3717 cases, through the real Pebble store (which has the
-// title check). None may credit a series, a publisher or a cast credit as an
-// author, and none may create a combined record.
+// The review of #3717 cases, through the real Pebble store. Every part that
+// would be a NEW author (a series tag, a publisher, a cast credit, a narrator
+// list, a missing co-author) refuses the split, so no author is created from
+// a split; the credit falls back to the whole string exactly as before.
 func TestResolve_ReviewCases(t *testing.T) {
-	st := newStore(t, "Dante King", "Annabelle Hawthorne")
-	for _, s := range []string{"Dragon Born", "Star Wars", "Master Class", "Kurtherian Gambit"} {
+	st := newStore(t, "Dante King", "Annabelle Hawthorne", "Cassius Lange", "Damien Hanson", "Terry Pratchett",
+		"Ray Porter", "Kate Reading", "Michael Kramer", "Tim Gerard Reynolds", "Amie Kaufman", "Jay Kristoff")
+	for _, s := range []string{"Dragon Born", "Star Wars", "Master Class"} {
 		_, err := st.CreateSeries(s, nil)
 		require.NoError(t, err)
 	}
-	_, err := st.CreateBook(&database.Book{Title: "Full Dark, No Stars", FilePath: "/l/fdns.m4b", Format: "m4b"})
+	// A junk book row titled with a real co-author credit.
+	_, err := st.CreateBook(&database.Book{Title: "Amie Kaufman, Jay Kristoff", FilePath: "/l/ak.m4b", Format: "m4b"})
 	require.NoError(t, err)
 	ResetTitleCache()
-	created := func(n string) bool {
+	exists := func(n string) bool {
 		a, err := st.GetAuthorByName(n)
 		require.NoError(t, err)
 		return a != nil
 	}
-
-	// A bracket is stripped, never split: the series is not an author.
-	var got []database.Author
-	got, err = Resolve(st, "Dante King (Dragon Born)", PrepareGate)
-	require.NoError(t, err)
-	require.Len(t, got, 1, "one credit, as before")
-	require.False(t, created("Dragon Born"))
-	got, err = Resolve(st, "Alphabet Squadron (Star Wars)", PrepareGate)
-	require.NoError(t, err)
-	require.Len(t, got, 1)
-	require.False(t, created("Star Wars"))
-
-	// Two people, one with a series tag: the two people, no combined row.
-	got, err = Resolve(st, "Annabelle Hawthorne, Virgil Knightley(Master Class)", PrepareGate)
-	require.NoError(t, err)
-	require.Equal(t, []string{"Annabelle Hawthorne", "Virgil Knightley"}, names(got))
-	require.False(t, created("Master Class"))
-	require.False(t, created("Annabelle Hawthorne, Virgil Knightley"))
-	require.False(t, created("Annabelle Hawthorne, Virgil Knightley(Master Class)"))
-
-	// A publisher, a cast credit, a series name, or a long list refuses the
-	// split, and the whole string is not created either.
 	for _, n := range []string{
+		"Dante King (Dragon Born)",
+		"Alphabet Squadron (Star Wars)",
+		"Annabelle Hawthorne, Virgil Knightley(Master Class)",
 		"Cassius Lange, LitForge Press, Damien Hanson",
 		"Terry Pratchett, Full Cast",
-		"Michael Anderle, Kurtherian Gambit",
-		"Ray Porter, Kate Reading, Michael Kramer, Tim Gerard Reynolds",
-		"Full Dark, No Stars",
 		"Arthur Stone, Mikhail Yagupov (translator)",
 	} {
 		got, err := Resolve(st, n, PrepareGate)
-		require.True(t, errors.Is(err, ErrCombinedCredit), "%s: err %v", n, err)
-		require.Empty(t, got, n)
-		require.False(t, created(n), n)
+		require.NoError(t, err, n)
+		require.Equal(t, []string{n}, names(got), "%s falls back to the whole string", n)
 	}
-	for _, n := range []string{"LitForge Press", "Full Cast", "Kurtherian Gambit", "Cassius Lange", "Ray Porter"} {
-		require.False(t, created(n), "%s created", n)
+	for _, n := range []string{"Dragon Born", "Star Wars", "Master Class", "Virgil Knightley", "LitForge Press",
+		"Full Cast", "Mikhail Yagupov", "Arthur Stone", "Alphabet Squadron"} {
+		require.False(t, exists(n), "%s must not be created from a split", n)
 	}
+	// Four existing narrators: over the cap, so not split, and as a list of
+	// existing authors not created whole either (ErrCombinedCredit).
+	_, err = Resolve(st, "Ray Porter, Kate Reading, Michael Kramer, Tim Gerard Reynolds", PrepareGate)
+	require.True(t, errors.Is(err, ErrCombinedCredit), "err %v", err)
+	// Both people exist: linked, even though a junk book carries the credit
+	// as its title.
+	got, err := Resolve(st, "Amie Kaufman, Jay Kristoff", PrepareGate)
+	require.NoError(t, err)
+	require.Equal(t, []string{"Amie Kaufman", "Jay Kristoff"}, names(got))
+	// A series-name part refuses the split even when it is an author row.
+	_, err = st.CreateAuthor("Dragon Born")
+	require.NoError(t, err)
+	got, err = Resolve(st, "Dante King, Dragon Born", PrepareGate)
+	require.True(t, errors.Is(err, ErrCombinedCredit), "err %v, got %v", err, names(got))
 }
 
 func TestStripBracketsAndCollective(t *testing.T) {
