@@ -3404,9 +3404,9 @@ func (f *fragFixture) copiesFixtureState(t *testing.T) map[string]string {
 // a nil flag and make a RETIRED member the group's explicit primary, so the
 // retire's demote, hand-off and note run with the survivor's own flag in
 // play: cutVGHandOffToSurvivor lets the hand-off crown the survivor (nil to
-// explicit true); cutVGHandOffPast gives another member better metadata, so
-// the hand-off crowns it and demotes the survivor, and that member's own
-// retire later hands the group off again.
+// explicit true); cutVGHandOffPast gives a renamed copy better metadata, so
+// the hand-off crowns it and demotes the survivor, and that copy's own
+// retire later hands the group back to the survivor.
 func newCutFixture(t *testing.T, org, vg string) (*fragFixture, repairs.Row, func()) {
 	t.Helper()
 	const folder = "lib/Clarke/02_light_of_other_days"
@@ -3453,25 +3453,31 @@ func newCutFixture(t *testing.T, org, vg string) (*fragFixture, repairs.Row, fun
 		require.Equal(t, "all", org, "the hand-off shapes need eligible (organized) members")
 		_, plan := f.p7Plan(t, folder)
 		survivor := plan.SurvivorID
-		// The retired primary R and (for cutVGHandOffPast) the better member
-		// X: kept members after the survivor in chapter order, so the
-		// survivor stays the lowest-id electable member.
+		// The retired primary R: a kept member after the survivor in chapter
+		// order, so the survivor stays the lowest-id electable member. The
+		// better book X (cutVGHandOffPast) is a renamed copy: every member's
+		// row is on the survivor by the time R retires, so only the copies
+		// (retired last, each still holding its own file) can outrank it.
 		var later []string
 		for _, m := range plan.Members {
 			if m.Frag.Book.ID > survivor {
 				later = append(later, m.Frag.Book.ID)
 			}
 		}
-		require.GreaterOrEqual(t, len(later), 3)
-		retired, better := later[0], later[2]
+		require.NotEmpty(t, later)
+		require.Len(t, plan.Copies, 8)
+		retired, better := later[0], plan.Copies[3].Frag.Book.ID
 		for _, id := range append(append([]string(nil), orig...), copies...) {
 			setVG(id, id == retired)
 		}
 		_, err := s.ModifyBook(survivor, func(b *database.Book) error { b.VersionGroupID = &group; b.IsPrimaryVersion = nil; return nil })
 		require.NoError(t, err)
 		if vg == cutVGHandOffPast {
-			pub := "Better Publisher"
-			_, err := s.ModifyBook(better, func(b *database.Book) error { b.Publisher = &pub; return nil })
+			pub, desc, narr := "Better Publisher", "A description", "A Narrator"
+			_, err := s.ModifyBook(better, func(b *database.Book) error {
+				b.Publisher, b.Description, b.Narrator = &pub, &desc, &narr
+				return nil
+			})
 			require.NoError(t, err)
 		}
 		r, plan := f.p7Plan(t, folder)
@@ -3592,6 +3598,42 @@ func TestFragmentFixer_NumberedCopiesCutAtEveryStep(t *testing.T) {
 			}
 			t.Logf("organized=%s vg=%s %s: %d cut points finished to the same end state; %d best-effort events ran through", sh.org, sh.vg, sh.mode, cuts, through)
 			require.Greater(t, cuts, 40)
+		})
+	}
+}
+
+// TestFragmentFixer_HandOffShapesReachTheSurvivor pins what the two hand-off
+// shapes of newCutFixture exercise: the first hand-off crowns the survivor
+// (nil to explicit true), or crowns another member and so demotes the
+// survivor, whose flag a later hand-off raises again. Either way the
+// survivor's own stored flag changes during the run.
+func TestFragmentFixer_HandOffShapesReachTheSurvivor(t *testing.T) {
+	for _, vg := range []string{cutVGHandOffToSurvivor, cutVGHandOffPast} {
+		t.Run(vg, func(t *testing.T) {
+			f, r, closeF := newCutFixture(t, "all", vg)
+			defer closeF()
+			survivor := r.Proposed["survivor"]
+			out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
+			require.Equal(t, 1, out.Applied, "outcomes %v %+v", out.ByOutcome, out.Rows)
+			changes, err := f.s.GetOperationChanges("op-apply")
+			require.NoError(t, err)
+			sort.Slice(changes, func(i, j int) bool { return changes[i].ID < changes[j].ID })
+			var crowned []string
+			for _, c := range changes {
+				if id, ok := undo.HandOffCrowned(c); ok && c.ChangeType == undo.ChangeTypeBookPrimaryHandoff {
+					crowned = append(crowned, id)
+				}
+			}
+			require.NotEmpty(t, crowned, "the run hands the group off")
+			if vg == cutVGHandOffToSurvivor {
+				require.Equal(t, survivor, crowned[0], "the first hand-off crowns the survivor")
+			} else {
+				require.NotEqual(t, survivor, crowned[0], "the first hand-off crowns another member, demoting the survivor")
+				require.Contains(t, crowned, survivor, "a later hand-off crowns the survivor again")
+			}
+			b, err := f.s.GetBookByID(survivor)
+			require.NoError(t, err)
+			require.Equal(t, "true", storedPrimaryFlag(b.IsPrimaryVersion), "the survivor ends the explicit primary")
 		})
 	}
 }

@@ -1350,11 +1350,12 @@ func survivorStepsDone(store OpsStore, sb *database.Book, st fragGroupState, tit
 }
 
 // groupRunDone reports whether a no-parent row has nothing left to write:
-// every book but the survivor is retired into it, no retired book's version
-// group still has live members and no live primary (a hand-off owed), and
-// the survivor's folder and title steps are done (survivorStepsDone). Apply
-// journals no plan record for such a row, so a resume of a finished row
-// writes nothing at all.
+// every book but the survivor is retired into it, no retired book may still
+// be owed its hand-off (its group has live members but not one explicit live
+// primary, and its newest demote is newer than every hand-off note on it:
+// resumeHandOff's test), and the survivor's folder and title steps are done
+// (survivorStepsDone). Apply journals no plan record for such a row, so a
+// resume of a finished row writes nothing at all.
 func (f *fragmentFixer) groupRunDone(store OpsStore, ids []string, survivor string, st fragGroupState, title, folder string) (bool, error) {
 	sb, err := store.GetBookByID(survivor)
 	if err != nil {
@@ -1363,7 +1364,6 @@ func (f *fragmentFixer) groupRunDone(store OpsStore, ids []string, survivor stri
 	if sb == nil || sb.IsSoftDeleted() {
 		return false, nil
 	}
-	groups := map[string]bool{}
 	for _, id := range ids {
 		if id == survivor {
 			continue
@@ -1375,16 +1375,36 @@ func (f *fragmentFixer) groupRunDone(store OpsStore, ids []string, survivor stri
 		if b == nil || !b.IsSoftDeleted() || b.MergedIntoBookID == nil || *b.MergedIntoBookID != survivor {
 			return false, nil
 		}
-		if g := dcStr(b.VersionGroupID); g != "" {
-			groups[g] = true
+		g := dcStr(b.VersionGroupID)
+		if g == "" {
+			continue
 		}
-	}
-	for g := range groups {
 		members, err := store.GetBooksByVersionGroup(g)
 		if err != nil {
 			return false, fmt.Errorf("read version group %s: %w", g, err)
 		}
-		if len(members) > 0 && livePrimaries(store, members, "") != 1 {
+		if len(members) == 0 || handOffSettled(store, members, id) {
+			continue
+		}
+		journal, ok := store.(bookJournalReader)
+		if !ok {
+			return false, nil
+		}
+		changes, err := journal.GetBookChanges(id)
+		if err != nil {
+			return false, fmt.Errorf("changes of %s: %w", id, err)
+		}
+		demote, handOff := "", ""
+		for _, c := range changes {
+			switch {
+			case c == nil || c.RevertedAt != nil:
+			case c.ChangeType == undo.ChangeTypeBookPrimaryDemote && c.ID > demote:
+				demote = c.ID
+			case c.ChangeType == undo.ChangeTypeBookPrimaryHandoff && c.ID > handOff:
+				handOff = c.ID
+			}
+		}
+		if demote > handOff {
 			return false, nil
 		}
 	}
@@ -1521,7 +1541,7 @@ func (f *fragmentFixer) recordDone(store OpsStore, lib *fragLibrary, pj *fragPla
 				if err != nil {
 					return false, fmt.Errorf("read version group %s: %w", g, err)
 				}
-				if len(members) > 0 && livePrimaries(store, members, "") != 1 {
+				if len(members) > 0 && !handOffSettled(store, members, id) {
 					return false, nil
 				}
 			}

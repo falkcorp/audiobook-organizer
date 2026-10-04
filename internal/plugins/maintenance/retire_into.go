@@ -385,10 +385,16 @@ func resumeHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Wr
 		// the by-book index) is not paid.
 		return nil
 	}
-	live := livePrimaries(store, members, b.ID)
-	if live == 1 {
-		return nil // the group has its one primary: nothing owed
+	live, explicit := livePrimaries(store, members, b.ID)
+	if live == 1 && explicit == 1 {
+		return nil // the group has its one explicit primary: nothing owed
 	}
+	// A group whose one primary is a nil flag (Incumbent's rule) goes on to
+	// the journal: if a retire's demote of b is still owed its hand-off,
+	// the uninterrupted run would have run EnsureSinglePrimary there, which
+	// writes an explicit winner (and may elect another member than the nil
+	// one). Returning early left a resumed run with a different group than
+	// an uninterrupted one (2026-10-03, the cut test's hand-off shapes).
 	journal, ok := store.(bookJournalReader)
 	if !ok {
 		return refuse("the store has no operation journal to check it with")
@@ -459,10 +465,10 @@ var retireFixerIDs = map[string]bool{fragFixerID: true, dcFixerID: true}
 // Electable member whose flag is nil (every visibility path reads a nil flag
 // as primary, database.EffectiveIsPrimaryVersion). Two or more nil members
 // and no explicit true count as none: Incumbent cannot tell them apart.
-// Counting only explicit true read a nil-flag primary's group as having
-// none and sent every first-run retire in it through the unindexed journal
-// scan.
-func livePrimaries(store OpsStore, members []database.Book, except string) int {
+// explicit is the explicit-true count alone. resumeHandOff skips its
+// journal read only when both are 1; a group with a nil-flag primary and a
+// book a retire demoted still pays it (see there).
+func livePrimaries(store OpsStore, members []database.Book, except string) (live, explicit int) {
 	others := make([]database.Book, 0, len(members))
 	for i := range members {
 		if members[i].ID != except {
@@ -482,7 +488,6 @@ func livePrimaries(store OpsStore, members []database.Book, except string) int {
 		sb, err := store.GetBookByID(id)
 		return err != nil || (sb != nil && !sb.IsSoftDeleted())
 	}
-	explicit := 0
 	for i := range others {
 		m := &others[i]
 		if versionprimary.Electable(m, alive) && m.IsPrimaryVersion != nil && *m.IsPrimaryVersion {
@@ -490,12 +495,20 @@ func livePrimaries(store OpsStore, members []database.Book, except string) int {
 		}
 	}
 	if explicit > 0 {
-		return explicit
+		return explicit, explicit
 	}
 	if versionprimary.Incumbent(others, alive) != nil {
-		return 1
+		return 1, 0
 	}
-	return 0
+	return 0, 0
+}
+
+// handOffSettled reports whether a group (members, except excluded) has
+// exactly one live primary, and it explicit: a retire's owed hand-off is
+// then certainly not owed (resumeHandOff's first check).
+func handOffSettled(store OpsStore, members []database.Book, except string) bool {
+	live, explicit := livePrimaries(store, members, except)
+	return live == 1 && explicit == 1
 }
 
 // bookJournalReader reads every operation's journal rows for one book.
