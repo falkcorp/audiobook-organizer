@@ -1,7 +1,7 @@
 // file: internal/operations/registry/reporter_db.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 1a2b3c4d-5e6f-7890-abcd-ef0123456789
-// last-edited: 2026-09-13
+// last-edited: 2026-10-04
 
 package registry
 
@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -82,6 +83,13 @@ type dbReporter struct {
 	lastProgressMessage string
 	progressGen         atomic.Uint64 // incremented on every UpdateProgress; flush goroutine tracks last-flushed gen
 
+	// Progress log throttle state (guarded by progressMu). See UpdateProgress.
+	lastLoggedShape   string
+	lastLoggedMessage string
+	lastLoggedAt      time.Time
+	pendingLog        *pendingProgressLine // newest suppressed line, written at run end
+	nowFn             func() time.Time     // clock for the throttle; time.Now unless a test replaces it
+
 	// setCurrentItemFn, if non-nil, updates the runHandle's in-memory label.
 	setCurrentItemFn func(string)
 	// touchProgressFn, if non-nil, stamps the owning runHandle's lastProgressAt
@@ -93,6 +101,44 @@ type dbReporter struct {
 	progressFlushInterval time.Duration // how often lazy flush fires (0 = no lazy flush)
 
 	runCtx context.Context
+}
+
+// pendingProgressLine is the newest progress message the throttle suppressed.
+// It is written as the terminal line when the run ends so the final state of a
+// throttled stream is never lost.
+type pendingProgressLine struct {
+	message        string
+	current, total int
+}
+
+// progressLogInterval is the longest a progress stream may go without a log
+// line while its message shape stays the same. Before the throttle every
+// distinct message was logged, and counter messages ("Books 3/76994") are
+// always distinct: one library.scan wrote about 300,935 log rows, one full
+// metafetch.asin-backfill about 76,996 and one 8-second repairs.plan about
+// 15,894 (eval R6), each with pebble.Sync and kept forever.
+const progressLogInterval = 30 * time.Second
+
+// progressShape normalises a progress message by replacing every maximal run
+// of ASCII digits with a single '#', so "Books 3/76994" and "Books 4/76994"
+// share the shape "Books #/#".
+func progressShape(msg string) string {
+	var b strings.Builder
+	b.Grow(len(msg))
+	inDigits := false
+	for i := 0; i < len(msg); i++ {
+		c := msg[i]
+		if c >= '0' && c <= '9' {
+			if !inDigits {
+				b.WriteByte('#')
+				inDigits = true
+			}
+			continue
+		}
+		inDigits = false
+		b.WriteByte(c)
+	}
+	return b.String()
 }
 
 // fanoutHandler is a slog.Handler that writes to slog.Default() and also
@@ -200,6 +246,7 @@ func newDBReporter(
 		touchProgressFn:       touchProgressFn,
 		synchronous:           synchronous,
 		progressFlushInterval: flushInterval,
+		nowFn:                 time.Now,
 	}
 
 	// Every log line emitted via reporter.Logger() inherits these attrs.
@@ -274,6 +321,7 @@ func (r *dbReporter) flushLoop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			r.emitPendingProgressLine()
 			r.flushLogs()
 			r.flushProgressLazy(&lastFlushedGen) // terminal flush — final state persisted
 			return
@@ -360,10 +408,10 @@ func (r *dbReporter) UpdateProgress(current, total int, message string) error {
 	}
 
 	r.progressMu.Lock()
-	last := r.lastProgressMessage
 	r.progressCurrent = current
 	r.progressTotal = total
 	r.lastProgressMessage = message
+	emitLog := r.decideProgressLogLocked(current, total, message)
 	r.progressMu.Unlock()
 	r.progressGen.Add(1)
 
@@ -385,17 +433,61 @@ func (r *dbReporter) UpdateProgress(current, total int, message string) error {
 			"progress_total":   total,
 		})
 	}
-	// Emit one log line per *distinct* progress message so the op_log feed
-	// has a searchable trail of the phases the Run went through. Skipping
-	// duplicates keeps a 50K-row scan from producing 50K log lines.
-	if message != "" && message != last {
-		r.logger.LogAttrs(r.runCtx, slog.LevelInfo, message,
-			slog.String("phase", "progress"),
-			slog.Int("progress_current", current),
-			slog.Int("progress_total", total),
-		)
+	// Log a progress line only when the message shape changes (digits
+	// normalised), progressLogInterval has passed since the last progress line,
+	// or the run ends (emitPendingProgressLine). The progress columns, bus event
+	// and Prometheus gauges above still fire on every update. Logging every
+	// distinct message wrote ~300K rows for one library.scan (eval R6).
+	if emitLog {
+		r.logProgressLine(message, current, total)
 	}
 	return nil
+}
+
+// decideProgressLogLocked applies the progress log throttle. The caller must
+// hold progressMu. It reports whether the line should be logged now; otherwise
+// the line is remembered as the pending terminal line.
+func (r *dbReporter) decideProgressLogLocked(current, total int, message string) bool {
+	if message == "" {
+		return false
+	}
+	if message == r.lastLoggedMessage {
+		// An identical message is never logged twice in a row.
+		r.pendingLog = nil
+		return false
+	}
+	now := r.nowFn()
+	shape := progressShape(message)
+	if r.lastLoggedAt.IsZero() || shape != r.lastLoggedShape || now.Sub(r.lastLoggedAt) >= progressLogInterval {
+		r.lastLoggedShape = shape
+		r.lastLoggedMessage = message
+		r.lastLoggedAt = now
+		r.pendingLog = nil
+		return true
+	}
+	r.pendingLog = &pendingProgressLine{message: message, current: current, total: total}
+	return false
+}
+
+func (r *dbReporter) logProgressLine(message string, current, total int) {
+	r.logger.LogAttrs(r.runCtx, slog.LevelInfo, message,
+		slog.String("phase", "progress"),
+		slog.Int("progress_current", current),
+		slog.Int("progress_total", total),
+	)
+}
+
+// emitPendingProgressLine writes the newest suppressed progress line, if any.
+// flushLoop calls it on normal completion before the terminal log flush.
+// markTerminal deliberately does not: after abandonment Log drops lines.
+func (r *dbReporter) emitPendingProgressLine() {
+	r.progressMu.Lock()
+	p := r.pendingLog
+	r.pendingLog = nil
+	r.progressMu.Unlock()
+	if p != nil {
+		r.logProgressLine(p.message, p.current, p.total)
+	}
 }
 
 // maxBufferedLogEntries caps logBuf. When a run is abandoned its flushLoop has
