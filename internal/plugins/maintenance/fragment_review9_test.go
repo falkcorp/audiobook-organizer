@@ -47,29 +47,52 @@ func heldOver(res *repairs.PlanResult, ids []string) []repairs.Row {
 // that sit on a soft-deleted book, out of every view. keepOwn, when set, is
 // a dedup merge's loser: it keeps its OWN planned file, as a dedup loser
 // keeps its files (owner decision 2026-10-04); every other planned file on
-// it, the ones the run moved there, counts. also are rows applied over r's
-// books since (a fresh plan after a revert may keep a different copy of a
-// chapter): a file counts only when it is a member's under r AND under
-// every one of them.
+// it, the ones the run moved there, counts. also are no-parent rows applied
+// over r's books since: a fresh plan after a revert may keep another copy of
+// a chapter, so a file is excused only when one of them planned that same
+// file as a copy AND the file of the member it is a copy of is on a live
+// book. A row that does not mention the file excuses nothing.
 func (f *fragFixture) hiddenFiles(t *testing.T, r repairs.Row, keepOwn string, also ...repairs.Row) []string {
 	t.Helper()
-	member := func(row repairs.Row) map[string]string { // file -> its member
-		var st fragGroupState
-		require.NoError(t, json.Unmarshal(row.State, &st))
-		out := map[string]string{}
-		for id, fid := range st.Files {
-			if !st.Roles[id].Copy {
-				out[fid] = id
+	var st fragGroupState
+	require.NoError(t, json.Unmarshal(r.State, &st))
+	planned := map[string]string{} // file -> its member
+	for id, fid := range st.Files {
+		if !st.Roles[id].Copy {
+			planned[fid] = id
+		}
+	}
+	liveFile := func(fid string) bool {
+		for _, id := range append(append([]string(nil), r.BookIDs...), r.Proposed["survivor"]) {
+			b, err := f.s.GetBookByID(id)
+			require.NoError(t, err)
+			if b == nil || b.IsSoftDeleted() {
+				continue
+			}
+			rows, err := f.s.GetBookFiles(id)
+			require.NoError(t, err)
+			if slices.ContainsFunc(rows, func(br database.BookFile) bool { return br.ID == fid }) {
+				return true
 			}
 		}
-		return out
+		return false
 	}
-	planned := member(r)
-	var others []map[string]string
-	for _, row := range also {
-		if row.Class == fragClassNoParent && len(row.State) > 0 {
-			others = append(others, member(row))
+	// excused: a fresh row planned fid as a copy of a member whose file is
+	// on a live book.
+	excused := func(fid string) bool {
+		for _, row := range also {
+			if row.Class != fragClassNoParent || len(row.State) == 0 {
+				continue
+			}
+			var fs fragGroupState
+			require.NoError(t, json.Unmarshal(row.State, &fs))
+			for id, f2 := range fs.Files {
+				if f2 == fid && fs.Roles[id].Copy && fs.Roles[id].Of != "" && liveFile(fs.Files[fs.Roles[id].Of]) {
+					return true
+				}
+			}
 		}
+		return false
 	}
 	var out []string
 	for _, id := range r.BookIDs {
@@ -80,16 +103,10 @@ func (f *fragFixture) hiddenFiles(t *testing.T, r repairs.Row, keepOwn string, a
 		}
 		rows, err := f.s.GetBookFiles(id)
 		require.NoError(t, err)
-	file:
 		for _, br := range rows {
 			m, ok := planned[br.ID]
-			if !ok || (id == keepOwn && m == keepOwn) {
+			if !ok || (id == keepOwn && m == keepOwn) || excused(br.ID) {
 				continue
-			}
-			for _, o := range others {
-				if _, ok := o[br.ID]; !ok {
-					continue file
-				}
 			}
 			out = append(out, id+"/"+br.ID)
 		}
