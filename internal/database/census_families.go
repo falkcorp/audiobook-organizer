@@ -1,5 +1,5 @@
 // file: internal/database/census_families.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c3f3063e-7a83-4402-9443-4ec19031525d
 // last-edited: 2026-10-04
 
@@ -38,7 +38,7 @@ type censusTable struct {
 
 // censusRangeProbe is what one bounded seek learned about a range.
 type censusRangeProbe struct {
-	live    bool   // First() found a live key
+	live    bool   // a seek ran and First() found a live key (false when not seeked)
 	points  uint64 // internal points stepped over when no live key was found
 	covered uint64 // points stepped over that a range deletion covers
 	// rangeDel: a table overlapping the range holds range deletions, which
@@ -364,7 +364,8 @@ func (p *PebbleStore) censusProbeRanges(ctx context.Context, ranges []keyRange, 
 			return nil, err
 		}
 		if spanTotal != nil && spanTotal[ri] > censusProbeMaxSpan {
-			out[ri] = censusRangeProbe{live: true, entries: true}
+			// Not seeked: known to hold entries, not known to hold a live key.
+			out[ri] = censusRangeProbe{entries: true}
 			continue
 		}
 		it.SetBounds(r.Lo, r.Hi)

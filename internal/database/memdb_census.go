@@ -1,7 +1,7 @@
 // file: internal/database/memdb_census.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1e761a4e-5430-4277-ab3b-531d3b193ad1
-// last-edited: 2026-10-03
+// last-edited: 2026-10-04
 
 package database
 
@@ -67,23 +67,18 @@ func (m *MemStore) retiredAndSignalCensus() (RetiredCensus, SignalCensus, error)
 	return retired, signals, nil
 }
 
-// historyOrphans counts the book ids in counts that have no row in memdb's
-// books table, and the history entries those ids hold.
-func (m *MemStore) historyOrphans(counts map[string]int64) (books, entries int64, err error) {
+// bookRowExists reports whether memdb's books table has a row with this id.
+// It refuses (error) when memdb lost book rows at warmup, since a missing row
+// would then read as an orphan.
+func (m *MemStore) bookRowExists(id string) (bool, error) {
 	if err := m.requireTablesComplete("db census history orphans", memTableBooks); err != nil {
-		return 0, 0, err
+		return false, err
 	}
 	txn := m.db.Txn(false)
 	defer txn.Abort()
-	for id, c := range counts {
-		obj, err := txn.First(memTableBooks, memIdxID, id)
-		if err != nil {
-			return 0, 0, fmt.Errorf("memdb census book %s: %w", id, err)
-		}
-		if obj == nil {
-			books++
-			entries += c
-		}
+	obj, err := txn.First(memTableBooks, memIdxID, id)
+	if err != nil {
+		return false, fmt.Errorf("memdb census book %s: %w", id, err)
 	}
-	return books, entries, nil
+	return obj != nil, nil
 }

@@ -1,5 +1,5 @@
 // file: internal/database/census_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: b6c66985-8717-4b85-b9df-85f7eb9291f3
 // last-edited: 2026-10-04
 
@@ -176,12 +176,26 @@ func TestDBCensus_FlushesTheMemtableAtMostOncePerInterval(t *testing.T) {
 	require.Equal(t, int64(1200), censusFamily(t, c, "cat:").Keys, "inside the interval the new writes stay in the memtable")
 }
 
+// SF1: the gate reads unflushed bytes (WAL.Size), not the memtable arena
+// size. The store's memtables are grown to 4 MiB first — MemTable.Size then
+// reads ≥ 4 MiB however little is unflushed, which is what made the old gate
+// flush on every census.
 func TestDBCensus_SmallMemtableIsNotFlushed(t *testing.T) {
 	p := newCensusRawStore(t)
-	writeCensusKeys(t, p, 10, func(i int) string { return fmt.Sprintf("cat:%05d", i) })
+	for round := 0; round < 4; round++ {
+		writeBigCatKeys(t, p, round*3000, 3000) // ~3 MB per memtable
+		require.NoError(t, p.db.Flush())
+	}
+	writeCensusKeys(t, p, 10, func(i int) string { return fmt.Sprintf("work:%05d", i) })
+	m := p.db.Metrics()
+	require.GreaterOrEqual(t, m.MemTable.Size, uint64(censusFlushMinMemtable),
+		"fixture: the memtable arena has grown past the gate")
+	require.Less(t, m.WAL.Size, uint64(censusFlushMinMemtable), "fixture: only 10 small writes are unflushed")
+
 	c := freshCensus(t, p)
 	requireNoteContains(t, c.Notes, "memtable not flushed")
-	require.Zero(t, censusFamily(t, c, "cat:").Keys)
+	require.Zero(t, censusFamily(t, c, "work:").Keys, "the 10 writes stay unflushed")
+	require.Equal(t, int64(12000), censusFamily(t, c, "cat:").Keys)
 }
 
 func TestDBCensus_StraddlingTableIsEstimatedAndConserved(t *testing.T) {
@@ -469,7 +483,7 @@ func TestRunExactCensus_CancelledBeforeTheCallDoesNothing(t *testing.T) {
 }
 
 // A context cancelled mid-family (after the first iterator refresh) leaves
-// the in-family position saved; the next run resumes at k+0x00 and counts
+// the in-family position saved; the next run resumes at the saved key and counts
 // every key exactly once, history included. Also exercises the refresh path
 // on every check (N5).
 func TestRunExactCensus_ResumesInsideAFamily(t *testing.T) {
@@ -477,14 +491,14 @@ func TestRunExactCensus_ResumesInsideAFamily(t *testing.T) {
 	exactCensusIterRefresh, exactCensusCheckBytes = 0, 1
 	t.Cleanup(func() {
 		exactCensusIterRefresh, exactCensusCheckBytes = oldRefresh, oldCheck
-		exactCensusAfterRefresh = nil
+		exactCensusAfterSave = nil
 	})
 	p := newCensusRawStore(t)
 	writeCensusKeys(t, p, 2000, func(i int) string { return fmt.Sprintf("book_ver:BOOK%02d:%020d", i%10, i) })
 
 	ctx, cancel := context.WithCancel(context.Background())
 	refreshes := 0
-	exactCensusAfterRefresh = func(fam string) {
+	exactCensusAfterSave = func(fam string) {
 		if fam == "book_ver:" {
 			refreshes++
 			if refreshes == 3 {
@@ -500,12 +514,14 @@ func TestRunExactCensus_ResumesInsideAFamily(t *testing.T) {
 	require.Equal(t, "book_ver:", st.Partial.Family)
 	require.Positive(t, st.Partial.Count.Live)
 	require.Less(t, st.Partial.Count.Live, int64(2000))
-	require.NotEmpty(t, st.Partial.Hist)
+	require.NotNil(t, st.Partial.Fold)
+	require.NotEmpty(t, st.Partial.Fold.CurBook)
 
-	exactCensusAfterRefresh = nil
+	exactCensusAfterSave = nil
 	ex := runExact(t, p)
 	bv := censusFamily(t, ex, "book_ver:")
 	require.Equal(t, int64(2000), bv.Keys, "no key lost or counted twice across the resume")
+	require.Equal(t, int64(2000), bv.Entries, "no point lost or counted twice across refreshes")
 	require.Equal(t, int64(2000), ex.History.Entries)
 	require.Equal(t, int64(10), ex.History.BooksWithHistory)
 	require.Equal(t, int64(200), ex.History.Max)
