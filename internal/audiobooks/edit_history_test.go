@@ -1,5 +1,5 @@
 // file: internal/audiobooks/edit_history_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6f1a8c34-2d9b-4e70-a5c3-0b7e4d2f9a51
 // last-edited: 2026-10-04
 
@@ -8,6 +8,7 @@ package audiobooks_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -201,4 +202,46 @@ func TestUpdateAudiobookWithWarnings_CleanEditHasNone(t *testing.T) {
 		context.Background(), book.ID, map[string]any{"isbn13": "9780000000002"})
 	require.NoError(t, err)
 	require.Empty(t, warnings)
+}
+
+// A case-only series rename whose history row cannot be recorded is
+// reported (the rename landed; a queued apply would not see it).
+func TestUpdateAudiobookWithWarnings_SeriesRenameHistoryFailureIsReported(t *testing.T) {
+	store, book, _, _ := caseFixture(t, false)
+	// Both rows that can carry the rename fail: the series_name override row
+	// (then the rename falls back to its own "series" row) and that row.
+	fs := historyFailStore{store, func(r *database.MetadataChangeRecord) bool {
+		return r.Field == database.HistoryFieldSeries || r.Field == database.FieldKeySeriesName
+	}}
+	_, warnings, err := audiobooks.NewAudiobookUpdateService(fs).UpdateAudiobookWithWarnings(
+		context.Background(), book.ID, map[string]any{"series_name": "The Saga"})
+	require.NoError(t, err)
+	found := false
+	for _, w := range warnings {
+		found = found || strings.Contains(w, "series rename was not recorded")
+	}
+	require.True(t, found, "%v", warnings)
+}
+
+// narratorFailStore fails the book_narrators write.
+type narratorFailStore struct{ *database.PebbleStore }
+
+func (s narratorFailStore) SetBookNarrators(string, []database.BookNarrator) error {
+	return errors.New("junction store down")
+}
+
+// A narrator edit whose junction write fails is reported.
+func TestUpdateAudiobookWithWarnings_NarratorJunctionFailureIsReported(t *testing.T) {
+	store, book := editFixture(t)
+	_, warnings, err := audiobooks.NewAudiobookUpdateService(narratorFailStore{store}).UpdateAudiobookWithWarnings(
+		context.Background(), book.ID, map[string]any{"narrator": "Jane Reader"})
+	require.NoError(t, err)
+	require.NotEmpty(t, warnings)
+	found := false
+	for _, w := range warnings {
+		if strings.Contains(w, "narrator list (book_narrators) was not updated") && strings.Contains(w, "junction store down") {
+			found = true
+		}
+	}
+	require.True(t, found, "%v", warnings)
 }

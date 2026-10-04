@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.144.0
+// version: 2.145.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-04
 
@@ -1628,6 +1628,19 @@ export type OverridePayload = {
  * landed -- so a caller must show the warnings rather than a plain success.
  */
 export type UpdateBookResult = Book & { warnings?: string[] };
+
+/**
+ * One line for the partial-save warnings of several books ("title: w1; w2 |
+ * title2: w3"), or null when none of them has any.
+ */
+export function summarizeUpdateWarnings(
+  perBook: Array<{ label: string; warnings: string[] }>
+): { count: number; text: string } | null {
+  const lines = perBook
+    .filter((b) => b.warnings.length > 0)
+    .map((b) => `${b.label}: ${b.warnings.join('; ')}`);
+  return lines.length > 0 ? { count: lines.length, text: lines.join(' | ') } : null;
+}
 
 /** Splits an updateBook result into the book and its partial-save warnings. */
 export function splitUpdateWarnings(saved: UpdateBookResult): { book: Book; warnings: string[] } {

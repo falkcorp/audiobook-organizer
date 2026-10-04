@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/swapped_title_author_fixer.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: a80ddfb1-95dc-402f-941a-142b9388bcf0
 // last-edited: 2026-10-04
 
@@ -244,10 +244,12 @@ func (f *swappedTitleAuthorFixer) Plan(ctx context.Context, _ json.RawMessage, r
 	var done atomic.Int64
 	// Each worker writes only rows[i] and keep[i] for its own i; idx and
 	// aidx are read-only here apart from the junk fixer's author-name cache,
-	// which authorName locks.
+	// which authorName locks. journal is this plan's memo of operation
+	// journals (the continuation fallback), locked internally.
+	journal := newSwapOpJournalMemo()
 	runErr := registry.RunItems(ctx, rep, indexesOf(len(cands)), func(_ context.Context, i int) error {
 		defer done.Add(1)
-		r, swapped, err := f.evaluate(idx, aidx, cands[i])
+		r, swapped, err := f.evaluate(idx, aidx, journal, cands[i])
 		if err != nil {
 			r = repairs.Row{RowID: cands[i].ID, BookIDs: []string{cands[i].ID}, Title: cands[i].Title,
 				Skipped: "error", SkipReason: err.Error(), Reason: err.Error(), Risk: repairs.RiskReview}
@@ -343,7 +345,9 @@ func (f *swappedTitleAuthorFixer) Replan(_ context.Context, _ json.RawMessage, p
 	if err != nil {
 		return repairs.Row{}, err
 	}
-	r, _, err := f.evaluate(idx, aidx, b.Core())
+	// No journal memo: a re-plan reads the journal fresh (a row voided or
+	// reverted since the plan must be seen).
+	r, _, err := f.evaluate(idx, aidx, nil, b.Core())
 	return r, err
 }
 
@@ -378,7 +382,7 @@ type swapDecision struct {
 // Nothing that another row's apply changes goes into the fingerprint: whether
 // an author with the provider's name already exists flips when a sibling row
 // creates it, so the fingerprint carries the names, never their ids.
-func (f *swappedTitleAuthorFixer) evaluate(idx *junkIndex, aidx *swapAuthorIndex, b database.BookCore) (repairs.Row, bool, error) {
+func (f *swappedTitleAuthorFixer) evaluate(idx *junkIndex, aidx *swapAuthorIndex, journal *swapOpJournalMemo, b database.BookCore) (repairs.Row, bool, error) {
 	store := f.p.deps.OpsStore()
 	if store == nil {
 		return repairs.Row{}, false, fmt.Errorf("database not initialized")
@@ -536,7 +540,7 @@ func (f *swappedTitleAuthorFixer) evaluate(idx *junkIndex, aidx *swapAuthorIndex
 	} else if skip != "" {
 		return finish(skip, why, true)
 	}
-	continuation, contOp, err := swapContinuation(store, b.ID, authorState, fetched)
+	continuation, contOp, err := swapContinuation(store, journal, b.ID, authorState, fetched)
 	if err != nil {
 		return repairs.Row{}, false, err
 	}
@@ -753,7 +757,10 @@ const swapRuntimeTolerance = 0.10
 // were recorded no later than that lock. The last condition ties the waiver
 // to the provider record the cut apply's plan passed: a record fetched since
 // is judged like any other.
-func swapContinuation(store OpsStore, bookID string, author *database.MetadataFieldState, fetched map[string]swapFetched) (bool, string, error) {
+//
+// journal memoizes the fallback read of an operation's whole journal for one
+// plan; nil reads it fresh.
+func swapContinuation(store OpsStore, journal *swapOpJournalMemo, bookID string, author *database.MetadataFieldState, fetched map[string]swapFetched) (bool, string, error) {
 	if author == nil || !author.IsRepairLock() {
 		return false, "", nil
 	}
@@ -761,7 +768,7 @@ func swapContinuation(store OpsStore, bookID string, author *database.MetadataFi
 	if !ok {
 		return false, "", nil
 	}
-	changes, err := swapJournalRows(store, bookID, op)
+	changes, err := swapJournalRows(store, journal, bookID, op)
 	if err != nil {
 		return false, "", err
 	}
@@ -791,22 +798,70 @@ func swapContinuation(store OpsStore, bookID string, author *database.MetadataFi
 // filtered to the book; the caller filters by operation, book, change type
 // and field either way. When that read fails too, the error is returned:
 // fail closed, never "no continuation".
-func swapJournalRows(store OpsStore, bookID, op string) ([]*database.OperationChange, error) {
+//
+// The undecodable-row gate fails GetBookChanges for EVERY book at once, so
+// without a memo each repair-locked candidate of the same apply would decode
+// that apply's whole journal again. journal (one per Plan) reads each
+// operation's journal once, grouped by book; nil reads it fresh.
+func swapJournalRows(store OpsStore, journal *swapOpJournalMemo, bookID, op string) ([]*database.OperationChange, error) {
 	changes, bookErr := store.GetBookChanges(bookID)
 	if bookErr == nil {
 		return changes, nil
 	}
-	opRows, opErr := store.GetOperationChanges(op)
+	byBook, opErr := journal.rows(store, op)
 	if opErr != nil {
 		return nil, fmt.Errorf("read the journal rows of %s: %w (and of operation %s: %w)", bookID, bookErr, op, opErr)
 	}
-	out := make([]*database.OperationChange, 0, len(opRows))
-	for _, c := range opRows {
-		if c != nil && c.BookID == bookID {
-			out = append(out, c)
+	return byBook[bookID], nil
+}
+
+// swapOpJournalMemo holds each operation's journal rows, grouped by book,
+// read at most once per plan (GetOperationChanges). A read error is memoized
+// too, so every candidate of that operation fails closed alike without
+// re-reading. Safe for the plan's concurrent workers; a nil memo reads fresh
+// on every call.
+type swapOpJournalMemo struct {
+	mu  sync.Mutex
+	ops map[string]*swapOpJournalEntry
+}
+
+type swapOpJournalEntry struct {
+	once   sync.Once
+	byBook map[string][]*database.OperationChange
+	err    error
+}
+
+func newSwapOpJournalMemo() *swapOpJournalMemo {
+	return &swapOpJournalMemo{ops: map[string]*swapOpJournalEntry{}}
+}
+
+func (m *swapOpJournalMemo) rows(store OpsStore, op string) (map[string][]*database.OperationChange, error) {
+	if m == nil {
+		return readOpJournalByBook(store, op)
+	}
+	m.mu.Lock()
+	e, ok := m.ops[op]
+	if !ok {
+		e = &swapOpJournalEntry{}
+		m.ops[op] = e
+	}
+	m.mu.Unlock()
+	e.once.Do(func() { e.byBook, e.err = readOpJournalByBook(store, op) })
+	return e.byBook, e.err
+}
+
+func readOpJournalByBook(store OpsStore, op string) (map[string][]*database.OperationChange, error) {
+	rows, err := store.GetOperationChanges(op)
+	if err != nil {
+		return nil, err
+	}
+	byBook := map[string][]*database.OperationChange{}
+	for _, c := range rows {
+		if c != nil {
+			byBook[c.BookID] = append(byBook[c.BookID], c)
 		}
 	}
-	return out, nil
+	return byBook, nil
 }
 
 // swapStaleSeriesHold holds a book whose stored row embeds a series object

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/swapped_title_author_fixer_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 8223b479-ea79-40ca-a48a-1b7bc0f3bea2
 // last-edited: 2026-10-04
 
@@ -8,6 +8,8 @@ package maintenance
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1238,7 +1240,7 @@ func TestSwappedTitleAuthorFixer_ContinuationSurvivesAnUnrelatedUndecodableJourn
 	t.Run("corrupt row in the repair op: fail closed", func(t *testing.T) {
 		l, id := setup(t)
 		require.NoError(t, l.store.SetRaw("opchange:op-cut:corrupt", []byte("{not json")))
-		_, err := swapJournalRows(l.store, id, "op-cut")
+		_, err := swapJournalRows(l.store, nil, id, "op-cut")
 		require.Error(t, err, "both reads failed")
 		_, rows := l.plan()
 		r, listed := rows["swap"]
@@ -1246,4 +1248,61 @@ func TestSwappedTitleAuthorFixer_ContinuationSurvivesAnUnrelatedUndecodableJourn
 		require.False(t, r.Applicable(), "no continuation is assumed when the journal cannot be read")
 		require.Equal(t, l.holder["swap"], *l.book("swap").AuthorID, "the author was not written")
 	})
+}
+
+// opChangesCountingStore counts GetOperationChanges (the whole-op journal
+// read the continuation falls back to).
+type opChangesCountingStore struct {
+	*database.PebbleStore
+	opReads atomic.Int64
+}
+
+func (s *opChangesCountingStore) GetOperationChanges(op string) ([]*database.OperationChange, error) {
+	s.opReads.Add(1)
+	return s.PebbleStore.GetOperationChanges(op)
+}
+
+// With the global undecodable gate failing GetBookChanges for every book,
+// one plan reads each operation's journal once, however many of its books
+// are candidates (the memo), and still finds each book's own rows; a nil memo
+// reads it per call; a memoized read error fails every book of that op.
+func TestSwapJournalRows_FallbackReadsEachOpJournalOncePerPlan(t *testing.T) {
+	l := newSwapLib(t)
+	var ids []string
+	for i, name := range []string{"a", "b", "c"} {
+		id := l.add(swapBook{name: name, title: "read by narrator " + name,
+			storedAuthor: "Stored Author " + name, provTitle: "T " + name, provAuthor: "P " + name,
+			files: []string{fmt.Sprintf("/lib/S/%d/book.m4b", i)}})
+		cw := repairs.NewWriter(l.store, l.store, swappedFixerID, "bulk_update", "repairs-").
+			WithJournal(l.store, l.store, "op-cut").WithCredits(l.store).WithFieldStates(l.store)
+		require.NoError(t, cw.LockFields(id, database.FieldKeyAuthorName))
+		ids = append(ids, id)
+	}
+	require.NoError(t, l.store.SetRaw("opchange:op-unrelated:corrupt", []byte("{not json")))
+	cs := &opChangesCountingStore{PebbleStore: l.store}
+
+	memo := newSwapOpJournalMemo()
+	for _, id := range ids {
+		rows, err := swapJournalRows(cs, memo, id, "op-cut")
+		require.NoError(t, err)
+		require.NotEmpty(t, rows, "the book's own lock row is found")
+		for _, c := range rows {
+			require.Equal(t, id, c.BookID)
+		}
+	}
+	require.Equal(t, int64(1), cs.opReads.Load(), "one journal read per op per plan")
+
+	for _, id := range ids {
+		_, err := swapJournalRows(cs, nil, id, "op-cut")
+		require.NoError(t, err)
+	}
+	require.Equal(t, int64(4), cs.opReads.Load(), "no memo: a fresh read per call (Replan)")
+
+	require.NoError(t, l.store.SetRaw("opchange:op-cut:corrupt", []byte("{not json")))
+	bad := newSwapOpJournalMemo()
+	for _, id := range ids {
+		_, err := swapJournalRows(cs, bad, id, "op-cut")
+		require.Error(t, err, "fail closed for every book of the op")
+	}
+	require.Equal(t, int64(5), cs.opReads.Load(), "the failed read is memoized too")
 }
