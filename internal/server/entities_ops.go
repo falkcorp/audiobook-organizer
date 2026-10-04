@@ -1,7 +1,7 @@
 // file: internal/server/entities_ops.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 3f7e2a91-b4c6-4d85-9e13-7a2f10c84d32
-// last-edited: 2026-09-25
+// last-edited: 2026-10-04
 
 // entities_ops registers the UOS-02 OperationDefs for author entity
 // operations: author-merge and resolve-production-author. Each def is
@@ -406,19 +406,13 @@ func assignResolvedAuthorPreservingRecord(store authorAssignStore, bookID string
 	// Rewrite the book_authors join: drop the production-company author, add the
 	// resolved author. Best-effort, as before — a failure here is logged but does
 	// not fail the resolution (the denormalized AuthorID already points correctly).
+	//
+	// The resolved author takes the production company's slot (its position
+	// and role) rather than being appended at position 0, which collided
+	// with whatever credit already held position 0; a book already crediting
+	// the resolved author keeps that one credit.
 	bookAuthors, _ := store.GetBookAuthors(bookID)
-	var updated []database.BookAuthor
-	for _, ba := range bookAuthors {
-		if ba.AuthorID != prodAuthorID {
-			updated = append(updated, ba)
-		}
-	}
-	updated = append(updated, database.BookAuthor{
-		BookID:   bookID,
-		AuthorID: resolvedAuthorID,
-		Role:     "author",
-		Position: 0,
-	})
+	updated := replaceAuthorCredit(bookID, bookAuthors, prodAuthorID, resolvedAuthorID)
 	if err := store.SetBookAuthors(bookID, updated); err != nil {
 		slog.Warn("resolve-production-author: failed to rewrite book_authors join", "book", bookID, "err", err)
 	}
@@ -428,4 +422,39 @@ func assignResolvedAuthorPreservingRecord(store authorAssignStore, bookID string
 func init() {
 	addOpRegistrar(func(s *Server, reg *opsregistry.Registry) error { return s.RegisterAuthorMergeOp(reg) })
 	addOpRegistrar(func(s *Server, reg *opsregistry.Registry) error { return s.RegisterResolveProductionAuthorOp(reg) })
+}
+
+// replaceAuthorCredit returns credits with every credit of fromID removed and
+// toID credited once, in the first removed credit's position and role ("author"
+// when that role is empty), or after the last position when fromID was not
+// credited. A credit of toID already present is kept where it is.
+func replaceAuthorCredit(bookID string, credits []database.BookAuthor, fromID, toID int) []database.BookAuthor {
+	has := false
+	maxPos := -1
+	for _, ba := range credits {
+		has = has || ba.AuthorID == toID
+		if ba.Position > maxPos {
+			maxPos = ba.Position
+		}
+	}
+	var out []database.BookAuthor
+	placed := has
+	for _, ba := range credits {
+		if ba.AuthorID != fromID {
+			out = append(out, ba)
+			continue
+		}
+		if !placed {
+			placed = true
+			role := ba.Role
+			if role == "" {
+				role = "author"
+			}
+			out = append(out, database.BookAuthor{BookID: bookID, AuthorID: toID, Role: role, Position: ba.Position})
+		}
+	}
+	if !placed {
+		out = append(out, database.BookAuthor{BookID: bookID, AuthorID: toID, Role: "author", Position: maxPos + 1})
+	}
+	return out
 }

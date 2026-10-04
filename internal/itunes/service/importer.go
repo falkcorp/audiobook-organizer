@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer.go
-// version: 1.34.0
+// version: 1.35.0
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
-// last-edited: 2026-10-02
+// last-edited: 2026-10-04
 
 package itunesservice
 
@@ -22,6 +22,7 @@ import (
 
 	"github.com/oklog/ulid/v2"
 
+	"github.com/falkcorp/audiobook-organizer/internal/authorcredit"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
@@ -2586,6 +2587,26 @@ func (imp *Importer) ensureAuthorIDs(name string) ([]int, error) {
 			continue
 		}
 		part = cleaned
+		if len(parts) == 1 {
+			// The splitter left the credit whole. The shared resolver
+			// (authorcredit.Resolve) keeps that behaviour -- look the name
+			// up, create it when missing -- except for a combined credit
+			// whose every piece is already an author, which it refuses
+			// (ErrCombinedCredit) instead of minting one more combined row.
+			resolved, err := authorcredit.Resolve(imp.store, part, authorcredit.CleanGate)
+			if errors.Is(err, authorcredit.ErrCombinedCredit) {
+				slog.Warn("itunes import: artist joins existing authors the splitter will not split; not creating it",
+					"full_name", name)
+				continue
+			}
+			if err != nil {
+				return nil, err
+			}
+			for _, a := range resolved {
+				ids = append(ids, a.ID)
+			}
+			continue
+		}
 		author, err := imp.store.GetAuthorByName(part)
 		if err != nil {
 			return nil, err

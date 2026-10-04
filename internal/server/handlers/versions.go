@@ -1,7 +1,7 @@
 // file: internal/server/handlers/versions.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 7e3c1a92-4b8d-4f60-9a2e-1c0d5f8b6a47
-// last-edited: 2026-10-02
+// last-edited: 2026-10-04
 
 package handlers
 
@@ -1174,7 +1174,8 @@ func (h *VersionsHandler) SplitSegmentsToBooks(c *gin.Context) {
 		if len(authors) > 0 {
 			newAuthors := make([]database.BookAuthor, 0, len(authors))
 			for _, ba := range authors {
-				newAuthors = append(newAuthors, database.BookAuthor{BookID: created.ID, AuthorID: ba.AuthorID, Role: ba.Role})
+				// Position copied: without it every credit lands at position 0.
+				newAuthors = append(newAuthors, database.BookAuthor{BookID: created.ID, AuthorID: ba.AuthorID, Role: ba.Role, Position: ba.Position})
 			}
 			if sErr := h.store.SetBookAuthors(created.ID, newAuthors); sErr != nil {
 				fail(fileID, fmt.Sprintf("file %s moved to book %s, but copying the authors failed: %v", fileID, created.ID, sErr), nil)
@@ -1328,7 +1329,8 @@ func (h *VersionsHandler) splitSegmentsToOneBook(c *gin.Context, sourceBook *dat
 	} else if len(authors) > 0 {
 		newAuthors := make([]database.BookAuthor, 0, len(authors))
 		for _, ba := range authors {
-			newAuthors = append(newAuthors, database.BookAuthor{BookID: created.ID, AuthorID: ba.AuthorID, Role: ba.Role})
+			// Position copied: without it every credit lands at position 0.
+			newAuthors = append(newAuthors, database.BookAuthor{BookID: created.ID, AuthorID: ba.AuthorID, Role: ba.Role, Position: ba.Position})
 		}
 		if sErr := h.store.SetBookAuthors(created.ID, newAuthors); sErr != nil {
 			warn("could not copy the source book's authors onto the new book: %v", sErr)

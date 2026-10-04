@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/authorcredit"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
@@ -414,7 +415,8 @@ func (svc *AudiobookService) updateAudiobook(ctx context.Context, id string, req
 		var bookAuthors []database.BookAuthor
 		var primaryAuthorID int
 		var rowNames []string
-		for i, aName := range authorNames {
+		seenAuthor := map[int]bool{}
+		for _, aName := range authorNames {
 			aName = strings.TrimSpace(aName)
 			if aName == "" {
 				continue
@@ -428,26 +430,38 @@ func (svc *AudiobookService) updateAudiobook(ctx context.Context, id string, req
 					logger.SanitizeLogValue(id), logger.SanitizeLogValue(aName))
 				continue
 			}
-			author, err := svc.store.GetAuthorByName(normalizedName)
+			// The shared resolver (authorcredit.Resolve): a piece the
+			// credit splitter above left whole that still names several
+			// people is split by the shared splitter, and a piece the
+			// shared splitter will not split whose parts already exist as
+			// authors is refused (ErrCombinedCredit) rather than created
+			// as one combined author row.
+			resolved, err := authorcredit.Resolve(svc.store, normalizedName, authorcredit.CleanGate)
+			if errors.Is(err, authorcredit.ErrCombinedCredit) {
+				singleLog.Warn("UpdateAudiobook %s: author name %q joins existing authors and will not be created as one author",
+					logger.SanitizeLogValue(id), logger.SanitizeLogValue(aName))
+				continue
+			}
 			if err != nil {
 				return nil, fmt.Errorf("failed to resolve author")
 			}
-			if author == nil {
-				author, err = svc.store.CreateAuthor(normalizedName)
-				if err != nil {
-					return nil, fmt.Errorf("failed to create author")
+			for _, author := range resolved {
+				if seenAuthor[author.ID] {
+					continue
 				}
-			}
-			role := "author"
-			if i > 0 {
-				role = "co-author"
-			}
-			rowNames = append(rowNames, author.Name)
-			bookAuthors = append(bookAuthors, database.BookAuthor{
-				BookID: id, AuthorID: author.ID, Role: role, Position: i,
-			})
-			if i == 0 {
-				primaryAuthorID = author.ID
+				seenAuthor[author.ID] = true
+				pos := len(bookAuthors)
+				role := "author"
+				if pos > 0 {
+					role = "co-author"
+				}
+				rowNames = append(rowNames, author.Name)
+				bookAuthors = append(bookAuthors, database.BookAuthor{
+					BookID: id, AuthorID: author.ID, Role: role, Position: pos,
+				})
+				if pos == 0 {
+					primaryAuthorID = author.ID
+				}
 			}
 		}
 		// Every part was rejected by the gate. Say so instead of writing
