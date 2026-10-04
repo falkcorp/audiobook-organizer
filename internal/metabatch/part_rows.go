@@ -315,7 +315,8 @@ type ImportPathReader interface {
 var importRootLog warnLimiter
 
 // readImportRoots loads the cleaned import-path set from r. A read error is
-// logged at Warn (rate-limited) and returned so the caller does not cache it.
+// logged at Warn (rate-limited) and returned, so a caller keeps its previous
+// list rather than replacing it with nothing.
 func readImportRoots(r ImportPathReader) (map[string]bool, error) {
 	if r == nil {
 		return nil, nil
@@ -339,19 +340,20 @@ func readImportRoots(r ImportPathReader) (map[string]bool, error) {
 // per importRootsTTL. Concurrent callers wait on the one in-flight load
 // rather than reading a still-empty list -- the candidate op starts 16-32
 // workers at once, and a worker answering "not a root" during the first
-// load would list a whole import root. A failed read is not kept: the next
-// caller reads again, and until then the previous list (if any) is used.
+// load would list a whole import root. A failed read keeps the previous list
+// (none, on a first read) and is retried after one TTL window, not by every
+// row: the read runs under the lock, so retrying a failing store per row
+// would serialize every worker of the pass behind it.
 func (m *FolderMemo) importRoots(r ImportPathReader) map[string]bool {
 	m.rootsMu.Lock()
 	defer m.rootsMu.Unlock()
-	if m.roots != nil && time.Since(m.rootsAt) < importRootsTTL {
+	if !m.rootsAt.IsZero() && time.Since(m.rootsAt) < importRootsTTL {
 		return m.roots
 	}
-	fresh, err := readImportRoots(r)
-	if err != nil {
-		return m.roots // previous list, or nil on a first-load failure
+	m.rootsAt = time.Now() // this window's read, success or failure
+	if fresh, err := readImportRoots(r); err == nil {
+		m.roots = fresh
 	}
-	m.roots, m.rootsAt = fresh, time.Now()
 	return m.roots
 }
 

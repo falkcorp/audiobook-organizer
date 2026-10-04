@@ -746,21 +746,31 @@ func TestFolderMemo_ImportRootsLoadOnceUnderConcurrency(t *testing.T) {
 	}
 }
 
-// A failed import-path read is not kept: the memo reads again on the next
-// row, and a later success is used.
-func TestFolderMemo_ImportRootsReadFailureIsRetried(t *testing.T) {
+// A failed import-path read keeps the previous list (none, on a first read)
+// and is retried after one TTL window, not by every row; a later success is
+// used.
+func TestFolderMemo_ImportRootsReadFailureIsRetriedNextWindow(t *testing.T) {
 	var reads atomic.Int32
 	rows := siblingRows("/imports/Zahn Rips", "Cobra 100 of 151.mp3", "Cobra 099 of 151.mp3")
 	book := database.Book{ID: "self", Title: "Cobra 100 of 151", FilePath: "/imports/Zahn Rips/Cobra 100 of 151.mp3"}
 	memo := NewFolderMemo()
 	calls := 0
 	bad := fakeBookFiles{dir: rows, dirCalls: &calls, importErr: errors.New("store down"), importCalls: &reads}
-	ResolveCandidateSearchQueryMemo(bad, &book, memo)
 	good := fakeBookFiles{dir: rows, dirCalls: &calls, importRoots: []string{"/imports/Zahn Rips"}, importCalls: &reads}
+
+	ResolveCandidateSearchQueryMemo(bad, &book, memo)
+	ResolveCandidateSearchQueryMemo(good, &book, memo)
+	if n := reads.Load(); n != 1 {
+		t.Fatalf("import paths read %d times within one window, want 1 (a failure must not be retried per row)", n)
+	}
+
+	memo.rootsMu.Lock()
+	memo.rootsAt = time.Now().Add(-importRootsTTL) // the window has passed
+	memo.rootsMu.Unlock()
 	calls = 0
 	ResolveCandidateSearchQueryMemo(good, &book, memo)
-	if reads.Load() != 2 {
-		t.Fatalf("import paths read %d times, want 2 (the failure must not be cached)", reads.Load())
+	if n := reads.Load(); n != 2 {
+		t.Fatalf("import paths read %d times, want 2 (the next window must retry)", n)
 	}
 	if calls != 0 {
 		t.Fatalf("after a successful re-read the import root was still listed %d times", calls)
