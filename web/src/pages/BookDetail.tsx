@@ -1,9 +1,9 @@
 // file: web/src/pages/BookDetail.tsx
-// version: 1.59.0
+// version: 1.61.0
 // guid: 4d2f7c6a-1b3e-4c5d-8f7a-9b0c1d2e3f4a
-// last-edited: 2026-09-30
+// last-edited: 2026-10-03
 
-import { useCallback, useEffect, useState, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   Alert,
@@ -40,6 +40,74 @@ import {
 } from '../components/bookdetail/BookDetailDialogs';
 import { sanitizeReturn } from '../utils/safeReturn';
 import { describeDeleteBookError } from '../utils/deleteBookError';
+
+// seriesNumberOf is the series number the edit dialog opens with: the raw
+// position as entered when it parses (it keeps a decimal like 2.5), else the
+// int series_sequence, else series_position.
+export const seriesNumberOf = (book: Book): number | undefined => {
+  if (book.series_position_raw != null && book.series_position_raw.trim() !== '') {
+    const raw = Number(book.series_position_raw.trim());
+    if (Number.isFinite(raw)) return raw;
+  }
+  return book.series_sequence ?? book.series_position ?? undefined;
+};
+
+// mapBookToAudiobook is the edit dialog's view of a book.
+export const mapBookToAudiobook = (current: Book): Audiobook => ({
+  id: current.id,
+  title: current.title,
+  author: current.author_name,
+  narrator: current.narrator,
+  series: current.series_name,
+  // GET returns the position as series_sequence (the int column) and
+  // series_position_raw (as entered, decimal kept); series_position is
+  // only a request key. Reading only series_position left the Series
+  // Number box empty for every book.
+  series_number: seriesNumberOf(current),
+  // Genre was missing, so the Edit Metadata dialog rendered an empty Genre
+  // box no matter what was stored. Safe to add: `genre` is not part of the
+  // payload handleEditSave builds, so populating it cannot change what a
+  // save writes — it only stops the dialog lying about the current value.
+  genre: current.genre,
+  // Year, ISBN-10 and ISBN-13 were omitted, so those boxes rendered empty
+  // whatever was stored. `year` maps to audiobook_release_year — see
+  // FIELD_TO_API below, which is the declared meaning of this field.
+  //
+  // Populating `year` was previously unsafe because handleEditSave did
+  //   print_year: updated.year || book.print_year
+  // i.e. ONE form box wrote TWO different semantic fields. That is fixed
+  // below (print_year is now preserve-only), so this is safe now.
+  year: current.audiobook_release_year,
+  isbn10: current.isbn10,
+  isbn13: current.isbn13,
+  language: current.language,
+  publisher: current.publisher,
+  description: current.description,
+  duration_seconds: current.duration,
+  file_path: current.file_path,
+  original_filename: current.original_filename,
+  cover_path: current.cover_image,
+  format: current.format,
+  bitrate_kbps: current.bitrate,
+  codec: current.codec,
+  sample_rate_hz: current.sample_rate,
+  channels: current.channels,
+  bit_depth: current.bit_depth,
+  quality: current.quality,
+  is_primary_version: current.is_primary_version,
+  version_group_id: current.version_group_id,
+  version_notes: current.version_notes,
+  file_hash: current.file_hash,
+  original_file_hash: current.original_file_hash,
+  organized_file_hash: current.organized_file_hash,
+  library_state: current.library_state,
+  quantity: current.quantity,
+  marked_for_deletion: current.marked_for_deletion,
+  marked_for_deletion_at: current.marked_for_deletion_at,
+  created_at: current.created_at,
+  updated_at: current.updated_at,
+  work_id: current.work_id,
+});
 
 export const BookDetail = () => {
   const { id } = useParams();
@@ -848,57 +916,11 @@ export const BookDetail = () => {
 
   // versionSummary removed — tab label is now static "Files & History"
 
-  const mapBookToAudiobook = (current: Book): Audiobook => ({
-    id: current.id,
-    title: current.title,
-    author: current.author_name,
-    narrator: current.narrator,
-    series: current.series_name,
-    series_number: current.series_position,
-    // Genre was missing, so the Edit Metadata dialog rendered an empty Genre
-    // box no matter what was stored. Safe to add: `genre` is not part of the
-    // payload handleEditSave builds, so populating it cannot change what a
-    // save writes — it only stops the dialog lying about the current value.
-    genre: current.genre,
-    // Year, ISBN-10 and ISBN-13 were omitted, so those boxes rendered empty
-    // whatever was stored. `year` maps to audiobook_release_year — see
-    // FIELD_TO_API below, which is the declared meaning of this field.
-    //
-    // Populating `year` was previously unsafe because handleEditSave did
-    //   print_year: updated.year || book.print_year
-    // i.e. ONE form box wrote TWO different semantic fields. That is fixed
-    // below (print_year is now preserve-only), so this is safe now.
-    year: current.audiobook_release_year,
-    isbn10: current.isbn10,
-    isbn13: current.isbn13,
-    language: current.language,
-    publisher: current.publisher,
-    description: current.description,
-    duration_seconds: current.duration,
-    file_path: current.file_path,
-    original_filename: current.original_filename,
-    cover_path: current.cover_image,
-    format: current.format,
-    bitrate_kbps: current.bitrate,
-    codec: current.codec,
-    sample_rate_hz: current.sample_rate,
-    channels: current.channels,
-    bit_depth: current.bit_depth,
-    quality: current.quality,
-    is_primary_version: current.is_primary_version,
-    version_group_id: current.version_group_id,
-    version_notes: current.version_notes,
-    file_hash: current.file_hash,
-    original_file_hash: current.original_file_hash,
-    organized_file_hash: current.organized_file_hash,
-    library_state: current.library_state,
-    quantity: current.quantity,
-    marked_for_deletion: current.marked_for_deletion,
-    marked_for_deletion_at: current.marked_for_deletion_at,
-    created_at: current.created_at,
-    updated_at: current.updated_at,
-    work_id: current.work_id,
-  });
+  // The edit dialog's book, rebuilt only when the book changes. A new object
+  // on every render reset the dialog's form: a failed save toggles
+  // actionLoading around the request, the re-render handed the dialog a
+  // "new" book, and the user's edits were wiped while the dialog stayed open.
+  const editAudiobook = useMemo(() => (book ? mapBookToAudiobook(book) : null), [book]);
 
   const handleEditSave = async (updated: Audiobook, dirtyFields: Set<string>) => {
     if (!book) return;
@@ -928,7 +950,13 @@ export const BookDetail = () => {
       publisher: updated.publisher ?? '',
       language: updated.language ?? '',
       narrator: updated.narrator ?? '',
-      series_position: updated.series_number ?? undefined,
+      // Only when the user changed it (the override below carries the same
+      // value, and null for a cleared box). Now that the box opens with the
+      // stored number, re-sending it on every save would rewrite a raw
+      // position the box cannot show exactly (e.g. "Book 3").
+      series_position: dirtyFields?.has('series_number')
+        ? (updated.series_number ?? undefined)
+        : undefined,
       audiobook_release_year:
         updated.audiobook_release_year || updated.year || book.audiobook_release_year || undefined,
       // PRESERVE-ONLY. This used to be `updated.year || book.print_year`, which
@@ -990,8 +1018,17 @@ export const BookDetail = () => {
           return;
         }
       }
+      // Any other failure keeps the dialog open with the user's edits: the
+      // error is rethrown so MetadataEditDialog shows it and does not close.
+      // A 400 carries the server's reason (e.g. "the author cannot be
+      // cleared; set a different author"), so that text is what is shown.
       console.error('Failed to update metadata', error);
-      toast('Failed to update metadata.', 'error');
+      const message =
+        error instanceof api.ApiError && error.message
+          ? error.message
+          : 'Failed to update metadata.';
+      toast(message, 'error');
+      throw error instanceof Error ? error : new Error(message);
     } finally {
       setActionLabel(null);
       setActionLoading(false);
@@ -1261,7 +1298,7 @@ export const BookDetail = () => {
         }}
         onPurge={handlePurge}
         editDialogOpen={editDialogOpen}
-        editAudiobook={mapBookToAudiobook(book)}
+        editAudiobook={editAudiobook}
         onCloseEdit={() => setEditDialogOpen(false)}
         onEditSave={handleEditSave}
         conflictDialogOpen={conflictDialogOpen}

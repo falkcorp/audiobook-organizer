@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/relink_stale_series_fixer.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 1d26959f-7774-48db-b0ea-fa7813f655ef
 // last-edited: 2026-10-03
 
@@ -36,9 +36,10 @@ const (
 	// series history clears or contradicts it. The only applicable class.
 	relinkClassRelink = "relink"
 	// relinkClassCleared: the newest series history row (or a series_name
-	// lock) cleared the series. Almost every series clear ever made leaves
-	// this exact state: the store kept the old object when SeriesID went nil
-	// (pebble_store.go preserve-on-nil). The clearing source is in the skip
+	// lock) cleared the series. Almost every series clear made before #3698
+	// left this exact state: older builds of the store kept the old object
+	// when SeriesID went nil (preserve-on-nil; the store now drops it). The
+	// clearing source is in the skip
 	// kind (skipped_cleared_by_<source>), so SkippedByKind groups the rows by
 	// who cleared them, and in Evidence.
 	relinkClassCleared = "held-cleared-by-history"

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/ai.go
-// version: 1.9.0
+// version: 1.13.0
 // guid: 6ccf0c64-9654-46c5-aed0-584943acb1c5
-// last-edited: 2026-09-19
+// last-edited: 2026-10-03
 
 // AIHandler hosts the AI HTTP endpoints extracted from the server package:
 // filename parsing, OpenAI / metadata-source connection tests, per-book AI
@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
@@ -31,6 +32,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
+	"github.com/falkcorp/audiobook-organizer/internal/util"
 	"github.com/gin-gonic/gin"
 )
 
@@ -160,6 +162,9 @@ type aiStore interface {
 	// BookFilesGetter feeds the parse context's runtime
 	// (database.LoadBookRuntime), which sums the book's files.
 	database.BookFilesGetter
+	// GetSeriesByID resolves the series a parsed series is compared with
+	// (shownSeriesName).
+	GetSeriesByID(id int) (*database.Series, error)
 }
 
 // aiReviewGroupsStore is the two methods AIReviewGroupsMode itself touches. It
@@ -379,6 +384,97 @@ func (h *AIHandler) TestMetadataSource(c *gin.Context) {
 	}
 }
 
+// AIParsedUpdatePayload is the PUT-shaped payload ParseAudiobook sends to
+// the update service: only the fields the parser filled, under the update
+// service's own keys. The series number goes as series_position; it was sent
+// as series_sequence, a key the update service never reads, so every
+// AI-parsed series number was dropped.
+//
+// The series number depends on whether the parse keeps the book's series.
+// shownSeries is the series name the book shows now.
+//   - Same series (the names normalize alike, the parse names none, or the
+//     book shows no series): the
+//     number only fills a book with no stored position. A parse yields a
+//     whole number, and sending it would overwrite a stored "1.5" with 1 and
+//     lock it like a user edit.
+//   - A different series: the parsed number is sent, and with no parsed
+//     number the position is cleared (null). A number from the old series is
+//     wrong in the new one, and the new series' lock would stop a fetch from
+//     correcting it.
+func AIParsedUpdatePayload(metadata *ai.ParsedMetadata, book *database.Book, shownSeries string) map[string]any {
+	payload := map[string]any{}
+	if metadata == nil {
+		return payload
+	}
+	if metadata.Title != "" {
+		payload["title"] = metadata.Title
+	}
+	if metadata.Author != "" {
+		payload["author_name"] = metadata.Author
+	}
+	if metadata.Narrator != "" {
+		payload["narrator"] = metadata.Narrator
+	}
+	if metadata.Publisher != "" {
+		payload["publisher"] = metadata.Publisher
+	}
+	if metadata.Year > 0 {
+		payload["audiobook_release_year"] = metadata.Year
+	}
+	if metadata.Series != "" {
+		payload["series_name"] = metadata.Series
+	}
+	// A book that shows no series (none, or a dangling link with no embedded
+	// object) has no position from another series to replace: the parse is
+	// treated like its own series, fill-only, and never clears the number.
+	seriesChanges := metadata.Series != "" && shownSeries != "" &&
+		util.NormalizeAuthor(metadata.Series) != util.NormalizeAuthor(shownSeries)
+	switch {
+	case metadata.SeriesNum > 0 && (seriesChanges || !hasSeriesPosition(book)):
+		payload["series_position"] = metadata.SeriesNum
+	case metadata.SeriesNum <= 0 && seriesChanges:
+		payload["series_position"] = nil
+	}
+	return payload
+}
+
+// hasSeriesPosition reports whether book already has a series position (the
+// int or the raw value). 0 is no position, as everywhere else that reads it
+// (organizer, scanner, applygate).
+func hasSeriesPosition(book *database.Book) bool {
+	if book == nil {
+		return false
+	}
+	if book.SeriesSequence != nil && *book.SeriesSequence != 0 {
+		return true
+	}
+	if book.SeriesPositionRaw == nil {
+		return false
+	}
+	raw := strings.TrimSpace(*book.SeriesPositionRaw)
+	if raw == "" {
+		return false
+	}
+	if f, err := strconv.ParseFloat(raw, 64); err == nil && f == 0 {
+		return false
+	}
+	return true
+}
+
+// shownSeriesName is the series name a GET shows for book: the embedded
+// object, else the series row by SeriesID.
+func (h *AIHandler) shownSeriesName(book *database.Book) string {
+	if book.Series != nil {
+		return book.Series.Name
+	}
+	if book.SeriesID != nil {
+		if s, err := h.store.GetSeriesByID(*book.SeriesID); err == nil && s != nil {
+			return s.Name
+		}
+	}
+	return ""
+}
+
 // ParseAudiobook parses an audiobook's filename with AI and updates its metadata.
 func (h *AIHandler) ParseAudiobook(c *gin.Context) {
 	id := c.Param("id")
@@ -440,28 +536,7 @@ func (h *AIHandler) ParseAudiobook(c *gin.Context) {
 
 	// Build payload for the update service (routes through AudiobookService
 	// which handles "&" splitting for authors/narrators, junction tables, etc.)
-	payload := map[string]any{}
-	if metadata.Title != "" {
-		payload["title"] = metadata.Title
-	}
-	if metadata.Author != "" {
-		payload["author_name"] = metadata.Author
-	}
-	if metadata.Narrator != "" {
-		payload["narrator"] = metadata.Narrator
-	}
-	if metadata.Publisher != "" {
-		payload["publisher"] = metadata.Publisher
-	}
-	if metadata.Year > 0 {
-		payload["audiobook_release_year"] = metadata.Year
-	}
-	if metadata.Series != "" {
-		payload["series_name"] = metadata.Series
-	}
-	if metadata.SeriesNum > 0 {
-		payload["series_sequence"] = metadata.SeriesNum
-	}
+	payload := AIParsedUpdatePayload(metadata, book, h.shownSeriesName(book))
 
 	// Route through the service layer for proper multi-author/narrator handling
 	updatedBook, err := h.updater.UpdateAudiobook(c.Request.Context(), id, payload)

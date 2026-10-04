@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.141.0
+// version: 2.142.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-10-02
+// last-edited: 2026-10-03
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -113,7 +113,11 @@ export interface Book {
   author_name?: string;
   series_id?: number;
   series_name?: string;
+  // Request-only key for a PUT; a GET returns the position as
+  // series_sequence (int) and series_position_raw (as entered).
   series_position?: number;
+  series_sequence?: number;
+  series_position_raw?: string;
   file_path: string;
   format?: string;
   duration?: number;

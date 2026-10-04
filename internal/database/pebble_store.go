@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.195.0
+// version: 1.198.1
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-03
 
@@ -2514,6 +2514,33 @@ func (p *PebbleStore) writeThroughThenBump(id string, writeThrough func()) {
 	writeThrough()
 }
 
+// enforceSeriesInvariant holds book.Series to book.SeriesID, because every
+// read prefers the embedded object over the link. It is the one rule shared by
+// createBook (old == nil: there is no stored row) and updateBookLockedMode, so
+// the two write paths cannot drift:
+//   - SeriesID nil: no series. The object is dropped. A projection strips
+//     the object, never the ID, so a nil ID is a removed series; restoring
+//     the old object kept the series on display after a user cleared it,
+//     and so did a writer that nilled only the ID (batch series_id null,
+//     cleanup/reconcile unlinks).
+//   - Series missing or naming another series: the stored object is kept
+//     only when it is the object for this SeriesID (the projection case);
+//     otherwise it is dropped and reads fall back to GetSeriesByID. A
+//     writer that moved the book to another series by ID alone used to
+//     keep the OLD series' name on display.
+func enforceSeriesInvariant(book, old *Book) {
+	switch {
+	case book.SeriesID == nil:
+		book.Series = nil
+	case book.Series == nil || book.Series.ID != *book.SeriesID:
+		if old != nil && old.Series != nil && old.Series.ID == *book.SeriesID {
+			book.Series = old.Series
+		} else {
+			book.Series = nil
+		}
+	}
+}
+
 // createBook is CreateBook's body; it takes and releases the book stripe
 // itself, so CreateBook can run the narrator junction sync after it.
 func (p *PebbleStore) createBook(book *Book) (*Book, error) {
@@ -2544,6 +2571,10 @@ func (p *PebbleStore) createBook(book *Book) (*Book, error) {
 	now := time.Now()
 	book.CreatedAt = &now
 	book.UpdatedAt = &now
+
+	// Series follows SeriesID on create exactly as on update; there is no
+	// stored row to take an object from.
+	enforceSeriesInvariant(book, nil)
 
 	// The row is marshalled WITHOUT the five BookSig* fields; they go to the
 	// book_sig: sidecar below, in this same batch. See pebble_store_booksig.go.
@@ -2698,7 +2729,7 @@ func (p *PebbleStore) UpdateBook(id string, book *Book) (*Book, error) {
 	updated, err := func() (*Book, error) {
 		unlock := p.lockBook(id)
 		defer unlock()
-		return p.updateBookLockedMode(id, book, false, func(old *Book) { before = narratorOf(old) })
+		return p.updateBookLockedMode(id, book, bookWriteOpts{onOld: func(old *Book) { before = narratorOf(old) }})
 	}()
 	if err == nil && updated != nil {
 		p.syncNarratorJunctionAfterWrite(id, before, updated)
@@ -2709,14 +2740,29 @@ func (p *PebbleStore) UpdateBook(id string, book *Book) (*Book, error) {
 // updateBookLocked is UpdateBook's body. The caller must hold id's write
 // stripe (lockBook).
 func (p *PebbleStore) updateBookLocked(id string, book *Book) (*Book, error) {
-	return p.updateBookLockedMode(id, book, false, nil)
+	return p.updateBookLockedMode(id, book, bookWriteOpts{})
 }
 
-// updateBookLockedMode is updateBookLocked; clearSig=true drops the book's
-// signature (sidecar deleted, row written without it) instead of preserving
-// it. Only ClearBookSignature passes true. onOld, when set, is handed the
-// stored row as read under the stripe, before anything is written.
-func (p *PebbleStore) updateBookLockedMode(id string, book *Book, clearSig bool, onOld func(*Book)) (*Book, error) {
+// bookWriteOpts are the variations of the one book update path. The zero value
+// is UpdateBook.
+type bookWriteOpts struct {
+	// clearSig drops the book's signature (sidecar deleted, row written
+	// without it) instead of preserving it. Only ClearBookSignature sets it.
+	clearSig bool
+	// onOld, when set, is handed the stored row as read under the stripe,
+	// before anything is written.
+	onOld func(*Book)
+	// legacySeries writes Book.Series exactly as given, skipping the rule (enforceSeriesInvariant, which every other create and update applies)
+	// that holds the object to SeriesID. It exists so tests can seed the rows
+	// older builds wrote (object kept with SeriesID nil, or naming another
+	// series), which the stale-series relink repairs. Only
+	// SeedLegacyBookRowForTest sets it (pebble_store_legacy_seed.go).
+	legacySeries bool
+}
+
+// updateBookLockedMode is updateBookLocked with the variations in opts.
+func (p *PebbleStore) updateBookLockedMode(id string, book *Book, opts bookWriteOpts) (*Book, error) {
+	clearSig, onOld := opts.clearSig, opts.onOld
 	// Get old book to clean up old indexes
 	oldBook, err := p.GetBookByID(id)
 	if err != nil {
@@ -2777,7 +2823,7 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, clearSig bool,
 	// Author/Series are denormalized display objects derived from
 	// AuthorID/SeriesID; they are recomputed on read, never user-cleared to
 	// nil (no empty-string-style sentinel exists for these pointer structs),
-	// so preserve-on-nil is correct — the same class of fix as the seven
+	// so preserve-on-nil is correct for Author — the same class of fix as the seven
 	// fields above (STOREFID W5d-1 / #1887; the CreateOrganizedVersion write
 	// wiped these before the call-site hydrate landed). A write that
 	// legitimately changes the author must set BOTH AuthorID and a fresh
@@ -2786,8 +2832,11 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, clearSig bool,
 	if book.Author == nil {
 		book.Author = oldBook.Author
 	}
-	if book.Series == nil {
-		book.Series = oldBook.Series
+	//
+	// Series, unlike Author, is held to SeriesID on every write (create and
+	// update alike); see enforceSeriesInvariant.
+	if !opts.legacySeries {
+		enforceSeriesInvariant(book, oldBook)
 	}
 	if clearSig {
 		book.BookSigV1, book.BookSigV1Mask, book.BookSigSegments = nil, nil, nil
