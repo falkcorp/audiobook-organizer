@@ -1,5 +1,5 @@
 // file: internal/applygate/transcribed_identity_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 329bd78d-e4ca-434d-aa8d-65f766d386a1
 // last-edited: 2026-10-04
 
@@ -267,54 +267,62 @@ func TestTranscribedSearchConfirms(t *testing.T) {
 func TestEvaluateTranscribed_OwnerManualOnly(t *testing.T) {
 	const chimes = "Doctor Who: The Chimes of Midnight"
 	cases := []struct {
-		name        string
-		path        string
-		transcribed string
-		candTitle   string
-		candSeries  string
-		// author is the candidate's (and the book's live) author; "" means
-		// "Big Finish Productions".
+		name          string
+		path          string
+		transcribed   string
+		candTitle     string
+		candSeries    string
+		candPublisher string
+		// author is the candidate's (and the book's live) author; "" means a
+		// neutral one, so each case is held by the ONE field it names and a
+		// mutation dropping that field's check fails it.
 		author      string
 		guard       ManualOnlyGuard
 		wantAllowed bool
 		wantReason  string
+		// wantDetail must appear in the refusal's detail: it names which
+		// check fired, so a case cannot pass on some other field.
+		wantDetail string
 	}{
 		{name: "bulk: transcription and candidate name Doctor Who", path: "/library/Unknown Author/Unknown Title/book.m4b",
-			transcribed: chimes, candTitle: chimes, guard: ManualOnlyGuard{Bulk: true}, wantReason: ReasonOwnerManualOnly},
+			transcribed: chimes, candTitle: chimes, guard: ManualOnlyGuard{Bulk: true}, wantReason: ReasonOwnerManualOnly,
+			wantDetail: `search query "Doctor Who: The Chimes of Midnight"`},
 		{name: "bulk: only the candidate's series names Big Finish", path: "/library/Unknown Author/Unknown Title/book.m4b",
 			transcribed: "The Chimes of Midnight", candTitle: "The Chimes of Midnight", candSeries: "Big Finish Main Range",
-			guard: ManualOnlyGuard{Bulk: true}, wantReason: ReasonOwnerManualOnly},
+			guard: ManualOnlyGuard{Bulk: true}, wantReason: ReasonOwnerManualOnly, wantDetail: `candidate series "Big Finish Main Range"`},
 		{name: "bulk: only the path names Torchwood", path: "/library/Torchwood/Unknown Title/book.m4b",
-			transcribed: "Border Princes", candTitle: "Border Princes", guard: ManualOnlyGuard{Bulk: true}, wantReason: ReasonOwnerManualOnly},
+			transcribed: "Border Princes", candTitle: "Border Princes", guard: ManualOnlyGuard{Bulk: true}, wantReason: ReasonOwnerManualOnly,
+			wantDetail: `path "/library/Torchwood/Unknown Title/book.m4b"`},
 		{name: "bulk: the store found a Doctor Who file", path: "/library/Unknown Author/Unknown Title/book.m4b",
 			transcribed: "Spare Parts", candTitle: "Spare Parts",
-			guard: ManualOnlyGuard{Bulk: true, StoreDetail: "file \"/library/Doctor Who/Spare Parts/01.mp3\""}, wantReason: ReasonOwnerManualOnly},
+			guard:      ManualOnlyGuard{Bulk: true, StoreDetail: "file \"/library/Doctor Who/Spare Parts/01.mp3\""},
+			wantReason: ReasonOwnerManualOnly, wantDetail: `file "/library/Doctor Who/Spare Parts/01.mp3"`},
 		// A store read fault is its own reason: the check could not be done.
 		// It still refuses (fail closed), and no bulk pin lifts it.
 		{name: "bulk: the store read failed", path: "/library/Unknown Author/Unknown Title/book.m4b",
 			transcribed: "Marvel's Planet Hulk", candTitle: "Marvel's Planet Hulk",
 			guard:      ManualOnlyGuard{Bulk: true, ReadErr: "could not read the files for the owner-manual check: disk"},
-			wantReason: ReasonOwnerManualCheckFailed},
+			wantReason: ReasonOwnerManualCheckFailed, wantDetail: "could not read the files"},
 		{name: "single-book caller: allowed", path: "/library/Unknown Author/Unknown Title/book.m4b",
 			transcribed: chimes, candTitle: chimes, wantAllowed: true},
-		// Its author must be unrelated too: a candidate authored by "Big
-		// Finish Productions" is a Big Finish record and is held (the
-		// candidate author is checked since 2026-10-04).
 		{name: "bulk: an unrelated book is not caught", path: "/library/Unknown Author/Unknown Title/book.m4b",
-			transcribed: "Marvel's Planet Hulk", candTitle: "Marvel's Planet Hulk", author: "Greg Pak",
+			transcribed: "Marvel's Planet Hulk", candTitle: "Marvel's Planet Hulk",
 			guard: ManualOnlyGuard{Bulk: true}, wantAllowed: true},
 		{name: "bulk: only the candidate's author names Big Finish", path: "/library/Unknown Author/Unknown Title/book.m4b",
-			transcribed: "Marvel's Planet Hulk", candTitle: "Marvel's Planet Hulk",
-			guard: ManualOnlyGuard{Bulk: true}, wantReason: ReasonOwnerManualOnly},
+			transcribed: "Marvel's Planet Hulk", candTitle: "Marvel's Planet Hulk", author: "Big Finish Productions",
+			guard: ManualOnlyGuard{Bulk: true}, wantReason: ReasonOwnerManualOnly, wantDetail: `candidate author "Big Finish Productions"`},
+		{name: "bulk: only the candidate's publisher names Big Finish", path: "/library/Unknown Author/Unknown Title/book.m4b",
+			transcribed: "The Chimes of Midnight", candTitle: "The Chimes of Midnight", candPublisher: "Big Finish Productions",
+			guard: ManualOnlyGuard{Bulk: true}, wantReason: ReasonOwnerManualOnly, wantDetail: `candidate publisher "Big Finish Productions"`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			author := tc.author
 			if author == "" {
-				author = "Big Finish Productions"
+				author = "Robert Shearman"
 			}
 			book := &database.Book{ID: "b1", Title: "", FilePath: tc.path, TranscribedTitle: strp(tc.transcribed), Duration: intp(36000)}
-			cand := metafetch.MetadataCandidate{Title: tc.candTitle, Series: tc.candSeries, Author: author,
+			cand := metafetch.MetadataCandidate{Title: tc.candTitle, Series: tc.candSeries, Publisher: tc.candPublisher, Author: author,
 				Score: 0.95, DurationSec: 36000, Source: "Audible"}
 			ts := TranscribedSearch{Query: tc.transcribed, Source: "transcribed_title", ExplainsStaleIdentity: true}
 			v := EvaluateTranscribed(book, Authors{author}, database.ComputeBookRuntime(book, nil), &cand,
@@ -327,6 +335,9 @@ func TestEvaluateTranscribed_OwnerManualOnly(t *testing.T) {
 			}
 			if v.Reason != tc.wantReason {
 				t.Errorf("reason = %q (%s), want %q", v.Reason, v.Detail, tc.wantReason)
+			}
+			if !strings.Contains(v.Detail, tc.wantDetail) {
+				t.Errorf("detail %q does not name %q: the case was held by some other field", v.Detail, tc.wantDetail)
 			}
 			if v.OwnerReviewOverridable() {
 				t.Error("an owner-manual-only refusal must not be overridable by a bulk owner pin")
