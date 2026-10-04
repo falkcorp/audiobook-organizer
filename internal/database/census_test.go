@@ -1,5 +1,5 @@
 // file: internal/database/census_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: b6c66985-8717-4b85-b9df-85f7eb9291f3
 // last-edited: 2026-10-04
 
@@ -133,20 +133,55 @@ func TestDBCensus_EstimatedFamiliesInSeparateTables(t *testing.T) {
 
 	require.Equal(t, CensusFamilyFiguresBasis, c.FamilyFiguresBasis)
 	require.Contains(t, c.Notes, censusNoteKeyDefinition)
-	require.Contains(t, c.Notes, censusNoteFlushed)
+	requireNoteContains(t, c.Notes, "memtable")
 	require.Contains(t, c.Notes, censusNoteHiddenSystem)
 	require.Nil(t, c.LastExact, "no exact census has run")
 	require.Nil(t, c.History, "history comes only from the exact census")
 	requireCensusConserved(t, c)
 }
 
-// S1: unflushed writes are flushed first and counted.
-func TestDBCensus_FlushesTheMemtableFirst(t *testing.T) {
+func requireNoteContains(t *testing.T, notes []string, sub string) {
+	t.Helper()
+	for _, n := range notes {
+		if strings.Contains(n, sub) {
+			return
+		}
+	}
+	t.Fatalf("no note containing %q in %v", sub, notes)
+}
+
+func writeBigCatKeys(t *testing.T, p *PebbleStore, from, n int) {
+	t.Helper()
+	val := make([]byte, 1024)
+	b := p.db.NewBatch()
+	for i := from; i < from+n; i++ {
+		require.NoError(t, b.Set([]byte(fmt.Sprintf("cat:%06d", i)), val, nil))
+	}
+	require.NoError(t, b.Commit(pebble.Sync))
+}
+
+// S1/S4: a census flushes a memtable worth flushing, at most once per store
+// per censusFlushMinInterval (fresh included), and says so in a note.
+func TestDBCensus_FlushesTheMemtableAtMostOncePerInterval(t *testing.T) {
 	p := newCensusRawStore(t)
-	writeCensusKeys(t, p, 250, func(i int) string { return fmt.Sprintf("cat:%05d", i) })
+	writeBigCatKeys(t, p, 0, 1200) // > censusFlushMinMemtable
 	c := freshCensus(t, p)
-	require.Equal(t, int64(250), censusFamily(t, c, "cat:").Keys)
+	require.Equal(t, int64(1200), censusFamily(t, c, "cat:").Keys)
+	requireNoteContains(t, c.Notes, "was flushed")
 	requireCensusConserved(t, c)
+
+	writeBigCatKeys(t, p, 1200, 1200)
+	c = freshCensus(t, p)
+	requireNoteContains(t, c.Notes, "last census flush")
+	require.Equal(t, int64(1200), censusFamily(t, c, "cat:").Keys, "inside the interval the new writes stay in the memtable")
+}
+
+func TestDBCensus_SmallMemtableIsNotFlushed(t *testing.T) {
+	p := newCensusRawStore(t)
+	writeCensusKeys(t, p, 10, func(i int) string { return fmt.Sprintf("cat:%05d", i) })
+	c := freshCensus(t, p)
+	requireNoteContains(t, c.Notes, "memtable not flushed")
+	require.Zero(t, censusFamily(t, c, "cat:").Keys)
 }
 
 func TestDBCensus_StraddlingTableIsEstimatedAndConserved(t *testing.T) {
@@ -253,7 +288,7 @@ func TestDBCensus_ProbeSeesTombstonesButNotEmptiness(t *testing.T) {
 	p := newCensusRawStore(t)
 	writeThenDeleteAuthors(t, p)
 	ranges := keyFamilyRanges(keyFamilies)
-	probes, err := p.censusProbeRanges(ranges)
+	probes, err := p.censusProbeRanges(context.Background(), ranges, nil)
 	require.NoError(t, err)
 	byFam := map[string]censusRangeProbe{}
 	for ri, r := range ranges {
@@ -357,6 +392,13 @@ func TestRunExactCensus_CountsEveryFamilyAndStoresTheResult(t *testing.T) {
 	}
 	require.Equal(t, CensusMethodEmpty, censusFamily(t, ex, "cat:").Method)
 	require.Positive(t, ex.BytesRead)
+	var keys, dels, entries int64
+	for _, f := range ex.Families {
+		keys, dels, entries = keys+f.Keys, dels+f.Deletions, entries+f.Entries
+	}
+	require.Equal(t, keys, ex.TotalKeys, "exact totals are the sums of the exact figures")
+	require.Equal(t, dels, ex.TotalDeletions)
+	require.Equal(t, entries, ex.TotalEntries)
 	require.NotNil(t, ex.History)
 	require.Equal(t, int64(15), ex.History.Entries)
 	require.Equal(t, int64(12), ex.History.Max)
@@ -379,7 +421,8 @@ func TestRunExactCensus_CountsEveryFamilyAndStoresTheResult(t *testing.T) {
 	require.Equal(t, int64(15), c.LastExact.History.Entries)
 }
 
-// An interrupted run saves progress per family and the next run resumes.
+// B1: an interrupted run stops mid-run, publishes nothing, and the next run
+// resumes from the saved progress.
 func TestRunExactCensus_ResumesAfterInterruption(t *testing.T) {
 	p := newCensusRawStore(t)
 	writeCensusKeys(t, p, 100, func(i int) string { return fmt.Sprintf("act:info:%05d", i) })
@@ -396,18 +439,106 @@ func TestRunExactCensus_ResumesAfterInterruption(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, prog)
 	require.GreaterOrEqual(t, prog.FamiliesDone, 3)
+	require.Less(t, prog.FamiliesDone, prog.FamiliesAll, "the cancel stopped the pass mid-run")
+	last, err := p.LastExactCensus()
+	require.NoError(t, err)
+	require.Nil(t, last, "a cancelled run publishes nothing")
 	require.NotNil(t, freshCensus(t, p).ExactInProgress)
 
 	ex := runExact(t, p)
 	require.Equal(t, int64(100), censusFamily(t, ex, "act:info:").Keys)
 	require.Equal(t, int64(100), censusFamily(t, ex, "work:").Keys)
-	found := false
-	for _, n := range ex.Notes {
-		if len(n) > 7 && n[:7] == "resumed" {
-			found = true
+	requireNoteContains(t, ex.Notes, "resumed")
+}
+
+// B1, the reviewer's case: a context cancelled before the call reads nothing
+// and marks nothing done.
+func TestRunExactCensus_CancelledBeforeTheCallDoesNothing(t *testing.T) {
+	p := newCensusRawStore(t)
+	writeCensusKeys(t, p, 100, func(i int) string { return fmt.Sprintf("work:%05d", i) })
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := p.RunExactCensus(ctx, ExactCensusOptions{})
+	require.ErrorIs(t, err, context.Canceled)
+	prog, err := p.exactCensusProgress()
+	require.NoError(t, err)
+	require.Nil(t, prog)
+	last, err := p.LastExactCensus()
+	require.NoError(t, err)
+	require.Nil(t, last)
+}
+
+// A context cancelled mid-family (after the first iterator refresh) leaves
+// the in-family position saved; the next run resumes at k+0x00 and counts
+// every key exactly once, history included. Also exercises the refresh path
+// on every check (N5).
+func TestRunExactCensus_ResumesInsideAFamily(t *testing.T) {
+	oldRefresh, oldCheck := exactCensusIterRefresh, exactCensusCheckBytes
+	exactCensusIterRefresh, exactCensusCheckBytes = 0, 1
+	t.Cleanup(func() {
+		exactCensusIterRefresh, exactCensusCheckBytes = oldRefresh, oldCheck
+		exactCensusAfterRefresh = nil
+	})
+	p := newCensusRawStore(t)
+	writeCensusKeys(t, p, 2000, func(i int) string { return fmt.Sprintf("book_ver:BOOK%02d:%020d", i%10, i) })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	refreshes := 0
+	exactCensusAfterRefresh = func(fam string) {
+		if fam == "book_ver:" {
+			refreshes++
+			if refreshes == 3 {
+				cancel()
+			}
 		}
 	}
-	require.True(t, found, "the result says it resumed: %v", ex.Notes)
+	_, err := p.RunExactCensus(ctx, ExactCensusOptions{})
+	require.ErrorIs(t, err, context.Canceled)
+	st, err := p.loadExactCensusState()
+	require.NoError(t, err)
+	require.NotNil(t, st.Partial)
+	require.Equal(t, "book_ver:", st.Partial.Family)
+	require.Positive(t, st.Partial.Count.Live)
+	require.Less(t, st.Partial.Count.Live, int64(2000))
+	require.NotEmpty(t, st.Partial.Hist)
+
+	exactCensusAfterRefresh = nil
+	ex := runExact(t, p)
+	bv := censusFamily(t, ex, "book_ver:")
+	require.Equal(t, int64(2000), bv.Keys, "no key lost or counted twice across the resume")
+	require.Equal(t, int64(2000), ex.History.Entries)
+	require.Equal(t, int64(10), ex.History.BooksWithHistory)
+	require.Equal(t, int64(200), ex.History.Max)
+}
+
+// S3: tombstone and shadowed-version walks are charged to the budget.
+func TestRunExactCensus_ChargesTombstoneWalks(t *testing.T) {
+	p := newCensusRawStore(t)
+	writeThenDeleteAuthors(t, p)
+	ex := runExact(t, p)
+	au, h := censusFamily(t, ex, "book:author:"), censusFamily(t, ex, "book:hash:")
+	require.Zero(t, au.Keys)
+	require.GreaterOrEqual(t, ex.BytesRead, au.RawKeyBytes+h.RawKeyBytes,
+		"the bytes stepped over under the tombstones count, not only live keys")
+	require.Positive(t, au.RawKeyBytes)
+}
+
+func TestRunExactCensus_RestartDiscardsProgress(t *testing.T) {
+	p := newCensusRawStore(t)
+	writeCensusKeys(t, p, 100, func(i int) string { return fmt.Sprintf("work:%05d", i) })
+	ctx, cancel := context.WithCancel(context.Background())
+	_, err := p.RunExactCensus(ctx, ExactCensusOptions{Progress: func(pr ExactCensusProgress, _ string) {
+		if pr.FamiliesDone >= 2 {
+			cancel()
+		}
+	}})
+	require.ErrorIs(t, err, context.Canceled)
+	ex, err := p.RunExactCensus(context.Background(), ExactCensusOptions{Restart: true})
+	require.NoError(t, err)
+	for _, n := range ex.Notes {
+		require.NotContains(t, n, "resumed", "a restart does not resume")
+	}
+	require.Equal(t, int64(100), censusFamily(t, ex, "work:").Keys)
 }
 
 func TestRunExactCensus_RespectsTheReadBudget(t *testing.T) {
@@ -501,8 +632,8 @@ func TestDBCensus_OneCallerCancellingDoesNotFailTheOthers(t *testing.T) {
 	require.NotEmpty(t, b.c.Families)
 }
 
-// N1: a census taken before memdb is warm must not be cached.
-func TestDBCensus_ColdMemdbIsNotCached(t *testing.T) {
+// A census taken before memdb is warm is cached only for censusColdCacheTTL.
+func TestDBCensus_ColdMemdbIsCachedBriefly(t *testing.T) {
 	p := newCensusRawStore(t) // no memdb: mem() is nil
 	first, err := p.DBCensus(context.Background(), CensusOptions{})
 	require.NoError(t, err)
@@ -510,14 +641,17 @@ func TestDBCensus_ColdMemdbIsNotCached(t *testing.T) {
 	require.Contains(t, first.Notes, censusNoteMemdbCold)
 	second, err := p.DBCensus(context.Background(), CensusOptions{})
 	require.NoError(t, err)
-	require.False(t, second.Cached)
+	require.True(t, second.Cached, "a burst during warmup is served from cache")
+	require.Nil(t, censusCacheGet(p.db, first.GeneratedAt.Add(censusColdCacheTTL+time.Second)),
+		"but only for censusColdCacheTTL")
+	require.NotNil(t, censusCacheGet(p.db, first.GeneratedAt.Add(censusColdCacheTTL/2)))
 }
 
 // N3: the package cache never holds more than censusCacheMaxStores stores.
 func TestCensusCache_IsBounded(t *testing.T) {
 	now := time.Now()
 	for i := 0; i < censusCacheMaxStores+5; i++ {
-		censusCachePut(new(pebble.DB), &DBCensus{}, now.Add(time.Duration(i)*time.Second))
+		censusCachePut(new(pebble.DB), &DBCensus{}, now.Add(time.Duration(i)*time.Second), censusCacheTTL)
 	}
 	censusCache.mu.Lock()
 	n := len(censusCache.m)
