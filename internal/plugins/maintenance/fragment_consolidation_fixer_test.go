@@ -3372,8 +3372,11 @@ func (f *fragFixture) copiesFixtureState(t *testing.T) map[string]string {
 		if b.FilePath == "" {
 			rel = ""
 		}
-		out[stem] = fmt.Sprintf("deleted=%t merged=%q primary=%t title=%q path=%q rows=%v",
-			b.IsSoftDeleted(), merged, b.IsPrimaryVersion == nil || *b.IsPrimaryVersion, b.Title, rel, rs)
+		// The stored flag, not the effective one: a hand-off that crowns a
+		// nil-flag member writes explicit true, and the end states must
+		// agree on that too.
+		out[stem] = fmt.Sprintf("deleted=%t merged=%q primary=%s title=%q path=%q rows=%v",
+			b.IsSoftDeleted(), merged, storedPrimaryFlag(b.IsPrimaryVersion), b.Title, rel, rs)
 	}
 	return out
 }
@@ -3396,6 +3399,14 @@ func (f *fragFixture) copiesFixtureState(t *testing.T) map[string]string {
 // non-primary original, the plan keeps the copies as a block and is held
 // (nothing to cut), so organized=all links the copies into the group too;
 // linking them in the other two shapes holds the plan the same way.
+//
+// Two more shapes (organized=all only) put the survivor in the group with
+// a nil flag and make a RETIRED member the group's explicit primary, so the
+// retire's demote, hand-off and note run with the survivor's own flag in
+// play: cutVGHandOffToSurvivor lets the hand-off crown the survivor (nil to
+// explicit true); cutVGHandOffPast gives another member better metadata, so
+// the hand-off crowns it and demotes the survivor, and that member's own
+// retire later hands the group off again.
 func newCutFixture(t *testing.T, org, vg string) (*fragFixture, repairs.Row, func()) {
 	t.Helper()
 	const folder = "lib/Clarke/02_light_of_other_days"
@@ -3438,6 +3449,37 @@ func newCutFixture(t *testing.T, org, vg string) (*fragFixture, repairs.Row, fun
 		r, plan := f.p7Plan(t, folder)
 		require.Equal(t, survivor, plan.SurvivorID, "the group keeps the survivor")
 		return f, r, closeStore
+	case cutVGHandOffToSurvivor, cutVGHandOffPast:
+		require.Equal(t, "all", org, "the hand-off shapes need eligible (organized) members")
+		_, plan := f.p7Plan(t, folder)
+		survivor := plan.SurvivorID
+		// The retired primary R and (for cutVGHandOffPast) the better member
+		// X: kept members after the survivor in chapter order, so the
+		// survivor stays the lowest-id electable member.
+		var later []string
+		for _, m := range plan.Members {
+			if m.Frag.Book.ID > survivor {
+				later = append(later, m.Frag.Book.ID)
+			}
+		}
+		require.GreaterOrEqual(t, len(later), 3)
+		retired, better := later[0], later[2]
+		for _, id := range append(append([]string(nil), orig...), copies...) {
+			setVG(id, id == retired)
+		}
+		_, err := s.ModifyBook(survivor, func(b *database.Book) error { b.VersionGroupID = &group; b.IsPrimaryVersion = nil; return nil })
+		require.NoError(t, err)
+		if vg == cutVGHandOffPast {
+			pub := "Better Publisher"
+			_, err := s.ModifyBook(better, func(b *database.Book) error { b.Publisher = &pub; return nil })
+			require.NoError(t, err)
+		}
+		r, plan := f.p7Plan(t, folder)
+		require.Equal(t, survivor, plan.SurvivorID, "the survivor is still elected")
+		var st fragGroupState
+		require.NoError(t, json.Unmarshal(r.State, &st))
+		require.True(t, st.Flags[retired].Primary)
+		return f, r, closeStore
 	default:
 		t.Fatalf("unknown version-group shape %q", vg)
 	}
@@ -3450,20 +3492,31 @@ const (
 	cutVGNone     = "none"
 	cutVGOrig     = "originals"
 	cutVGSurvivor = "with-survivor"
+	// cutVGHandOffToSurvivor / cutVGHandOffPast: see newCutFixture.
+	cutVGHandOffToSurvivor = "hand-off-to-survivor"
+	cutVGHandOffPast       = "hand-off-past-survivor"
 )
 
 // TestFragmentFixer_NumberedCopiesCutAtEveryStep cuts a numbered set with
 // renamed copies at EVERY write event of Apply (each journal row and each
-// write: moves, track numbers, each retire's demote, merged-into, path and
-// soft-delete steps and its hand-off note, the copy retires, the folder and
-// the title), then resumes through the engine: the re-plan must keep the
-// plan's fingerprint and the end state must equal an uninterrupted run's.
-// Organized none / all / copies, with and without a version group linking
-// the originals.
+// write: the plan record, moves, track numbers, each retire's demote,
+// merged-into, path and soft-delete steps and its hand-off note, the copy
+// retires, the folder and the title), then finishes it one of two ways:
+//
+//   - resume: the ORIGINAL plan is applied again. Its re-plan must keep the
+//     fingerprint, and the end state must equal an uninterrupted run's.
+//   - fresh: a NEW plan is made and every applicable row touching the set is
+//     applied. The only such row must be the cut row itself (same row id,
+//     same survivor: the fresh plan continues the run from its plan record),
+//     and the end state must equal an uninterrupted run's: one live book
+//     holds every file, no second live book. The original plan's resume
+//     afterwards must find nothing to write (no journal row) and leave the
+//     state as it is. Before 2026-10-03 the fresh plan re-formed the leftover
+//     fragments around another survivor at 36 of 122 cut points (no version
+//     group) and 10 of 122 (the prod shape), splitting the work in two.
 //
 // Shapes: organized none / all / copies, crossed with the version-group
-// shapes of newCutFixture (none; the originals, survivor outside the group;
-// a group holding the survivor as its one primary).
+// shapes of newCutFixture, plus the two hand-off shapes (organized=all).
 //
 // One event does not stop the run: the version-group hand-off's journal row
 // (retireHandOff) is written AFTER versionprimary.EnsureSinglePrimary has
@@ -3471,63 +3524,103 @@ const (
 // logged, not returned, by design. A cut there must still end in the same
 // state. The crown write itself goes past the Writer and cannot be cut here.
 //
-// Cost: every cut point re-seeds and re-applies. With history rows as
-// events too, a shape is ~230 events. Measured 2026-10-03: the package's
-// TestFragment run under -race took 716s with two shapes and history cuts,
-// over CI's comfort and the 10-minute default. So the default run covers ONE
-// shape, organized=all with the originals in a version group (the prod
-// shape: demote before soft-delete, a hand-off crowning a live member,
-// copies; the survivor is a renamed copy, outside the group), cutting at
-// every journal row and write. AORG_FRAG_CUT_MATRIX=full runs all nine
-// shapes and also cuts at every history row (the crash-before-history
-// window).
+// Cost: every cut point re-seeds and re-applies. The default run covers the
+// prod shape (organized=all, the originals in a version group) and no
+// version group in both modes, and the survivor-in-group hand-off shape
+// (cutVGHandOffPast) in fresh mode. AORG_FRAG_CUT_MATRIX=full runs every
+// shape in both modes and also cuts at every history row (the
+// crash-before-history window).
 func TestFragmentFixer_NumberedCopiesCutAtEveryStep(t *testing.T) {
 	full := os.Getenv("AORG_FRAG_CUT_MATRIX") == "full"
-	for _, org := range []string{"none", "all", "copies"} {
-		for _, vg := range []string{cutVGNone, cutVGOrig, cutVGSurvivor} {
-			if !full && !(org == "all" && vg == cutVGOrig) {
-				continue
+	type shape struct{ org, vg, mode string }
+	var shapes []shape
+	if full {
+		for _, mode := range []string{"resume", "fresh"} {
+			for _, org := range []string{"none", "all", "copies"} {
+				for _, vg := range []string{cutVGNone, cutVGOrig, cutVGSurvivor} {
+					shapes = append(shapes, shape{org, vg, mode})
+				}
 			}
-			t.Run(fmt.Sprintf("organized=%s vg=%s", org, vg), func(t *testing.T) {
-				ref, rr, closeRef := newCutFixture(t, org, vg)
-				out := ref.apply(t, "op-plan", "op-apply", []string{rr.RowID}, nil)
-				require.Equal(t, 1, out.Applied, "outcomes %v %+v", out.ByOutcome, out.Rows)
-				want := ref.copiesFixtureState(t)
-				closeRef()
-				cuts, through := 0, 0
-				for at := 1; ; at++ {
-					f, r, closeCut := newCutFixture(t, org, vg)
-					cs := &cutStore{PebbleStore: f.s, at: at, history: full}
-					f.applyOp("op-cut", fragFixerID)
-					w := repairs.NewWriter(cs, cs, fragFixerID, "bulk_update", "repairs-").WithJournal(cs, cs, "op-cut")
-					err := newFragmentFixer(f.p).Apply(context.Background(), w, r)
-					if !cs.hit {
-						require.NoError(t, err, "event %d never reached", at)
-						closeCut()
-						break
-					}
-					if err == nil {
-						// A best-effort write (the hand-off note, a history
-						// row): the run went on.
-						through++
-						require.Equal(t, want, f.copiesFixtureState(t), "cut at event %d (not stopping): end state", at)
-						closeCut()
-						continue
-					}
-					cuts++
+			shapes = append(shapes, shape{"all", cutVGHandOffToSurvivor, mode}, shape{"all", cutVGHandOffPast, mode})
+		}
+	} else {
+		shapes = []shape{
+			{"all", cutVGOrig, "resume"}, {"all", cutVGOrig, "fresh"},
+			{"none", cutVGNone, "fresh"},
+			{"all", cutVGHandOffPast, "fresh"},
+		}
+	}
+	for _, sh := range shapes {
+		t.Run(fmt.Sprintf("organized=%s vg=%s %s", sh.org, sh.vg, sh.mode), func(t *testing.T) {
+			ref, rr, closeRef := newCutFixture(t, sh.org, sh.vg)
+			out := ref.apply(t, "op-plan", "op-apply", []string{rr.RowID}, nil)
+			require.Equal(t, 1, out.Applied, "outcomes %v %+v", out.ByOutcome, out.Rows)
+			want := ref.copiesFixtureState(t)
+			closeRef()
+			cuts, through := 0, 0
+			for at := 1; ; at++ {
+				f, r, closeCut := newCutFixture(t, sh.org, sh.vg)
+				cs := &cutStore{PebbleStore: f.s, at: at, history: full}
+				f.applyOp("op-cut", fragFixerID)
+				w := repairs.NewWriter(cs, cs, fragFixerID, "bulk_update", "repairs-").WithJournal(cs, cs, "op-cut")
+				err := newFragmentFixer(f.p).Apply(context.Background(), w, r)
+				if !cs.hit {
+					require.NoError(t, err, "event %d never reached", at)
+					closeCut()
+					break
+				}
+				if err == nil {
+					// A best-effort write (the hand-off note, a history
+					// row): the run went on.
+					through++
+					require.Equal(t, want, f.copiesFixtureState(t), "cut at event %d (not stopping): end state", at)
+					closeCut()
+					continue
+				}
+				cuts++
+				if sh.mode == "fresh" {
+					f.finishByFreshPlan(t, r, at, want)
+				} else {
 					got, rerr := newFragmentFixer(f.p).Replan(context.Background(), nil, r, nil)
 					require.NoError(t, rerr, "cut at event %d: re-plan", at)
 					require.Equal(t, r.Fingerprint, got.Fingerprint, "cut at event %d: re-plan reason %q", at, got.Reason)
 					res := f.apply(t, "op-plan", "op-resume", []string{r.RowID}, nil)
 					require.Equal(t, 1, res.Applied, "cut at event %d: outcomes %v %+v", at, res.ByOutcome, res.Rows)
 					require.Equal(t, want, f.copiesFixtureState(t), "cut at event %d: end state", at)
-					closeCut()
 				}
-				t.Logf("organized=%s vg=%s: %d cut points resumed to the same end state; %d best-effort events ran through", org, vg, cuts, through)
-				require.Greater(t, cuts, 40)
-			})
-		}
+				closeCut()
+			}
+			t.Logf("organized=%s vg=%s %s: %d cut points finished to the same end state; %d best-effort events ran through", sh.org, sh.vg, sh.mode, cuts, through)
+			require.Greater(t, cuts, 40)
+		})
 	}
+}
+
+// journalRows counts every row of the operation journal.
+func (f *fragFixture) journalRows(t *testing.T) int {
+	t.Helper()
+	n := 0
+	require.NoError(t, f.s.ScanOperationChanges(func(*database.OperationChange) error { n++; return nil }))
+	return n
+}
+
+// finishByFreshPlan is the cut test's fresh mode (see
+// TestFragmentFixer_NumberedCopiesCutAtEveryStep).
+func (f *fragFixture) finishByFreshPlan(t *testing.T, r repairs.Row, at int, want map[string]string) {
+	t.Helper()
+	res := f.plan(t, "op-plan2")
+	rows := applicableRowsWith(res, r.BookIDs)
+	require.Len(t, rows, 1, "cut at event %d: one applicable row over the set", at)
+	require.Equal(t, r.RowID, rows[0].RowID, "cut at event %d: the fresh plan continues the cut row", at)
+	require.Equal(t, r.Proposed["survivor"], rows[0].Proposed["survivor"], "cut at event %d: same survivor", at)
+	out := f.apply(t, "op-plan2", "op-fresh", []string{rows[0].RowID}, nil)
+	require.Equal(t, 1, out.Applied, "cut at event %d: fresh apply outcomes %v %+v", at, out.ByOutcome, out.Rows)
+	require.Equal(t, want, f.copiesFixtureState(t), "cut at event %d: end state after the fresh plan", at)
+	before := f.journalRows(t)
+	orig := f.apply(t, "op-plan", "op-resume", []string{r.RowID}, nil)
+	require.Equal(t, 1, orig.Applied+orig.ChangedSincePlan, "cut at event %d: original resume outcomes %v %+v", at, orig.ByOutcome, orig.Rows)
+	require.Equal(t, before, f.journalRows(t), "cut at event %d: the original plan's resume writes nothing", at)
+	require.Equal(t, want, f.copiesFixtureState(t), "cut at event %d: end state after the original resume", at)
 }
 
 // TestFragmentFixer_NumberedLiveFlagChecks: the pin does not let a re-plan
