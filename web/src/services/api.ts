@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.145.0
+// version: 2.146.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-04
 
@@ -1629,9 +1629,14 @@ export type OverridePayload = {
  */
 export type UpdateBookResult = Book & { warnings?: string[] };
 
+/** How many books summarizeUpdateWarnings lists before "and N more". */
+export const UPDATE_WARNINGS_SHOWN = 3;
+
 /**
  * One line for the partial-save warnings of several books ("title: w1; w2 |
- * title2: w3"), or null when none of them has any.
+ * title2: w3"), listing the first UPDATE_WARNINGS_SHOWN books that have any
+ * and "and N more" after them, or null when none of them has any. count is
+ * every book with a warning, listed or not.
  */
 export function summarizeUpdateWarnings(
   perBook: Array<{ label: string; warnings: string[] }>
@@ -1639,7 +1644,10 @@ export function summarizeUpdateWarnings(
   const lines = perBook
     .filter((b) => b.warnings.length > 0)
     .map((b) => `${b.label}: ${b.warnings.join('; ')}`);
-  return lines.length > 0 ? { count: lines.length, text: lines.join(' | ') } : null;
+  if (lines.length === 0) return null;
+  const shown = lines.slice(0, UPDATE_WARNINGS_SHOWN).join(' | ');
+  const more = lines.length - UPDATE_WARNINGS_SHOWN;
+  return { count: lines.length, text: more > 0 ? `${shown} and ${more} more` : shown };
 }
 
 /** Splits an updateBook result into the book and its partial-save warnings. */

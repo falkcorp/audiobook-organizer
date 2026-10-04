@@ -1,5 +1,5 @@
 // file: web/src/services/api.updateWarnings.test.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 96e196d0-c392-43a2-9c17-4bd43bbbde52
 // last-edited: 2026-10-04
 
@@ -32,5 +32,13 @@ describe('update warnings', () => {
   it('is null when no book has a warning', () => {
     expect(summarizeUpdateWarnings([{ label: 'A', warnings: [] }])).toBeNull();
     expect(summarizeUpdateWarnings([])).toBeNull();
+  });
+
+  it('lists the first three books and counts the rest', () => {
+    const books = ['A', 'B', 'C', 'D', 'E'].map((label) => ({ label, warnings: ['w'] }));
+    expect(summarizeUpdateWarnings(books)).toEqual({
+      count: 5,
+      text: 'A: w | B: w | C: w and 2 more',
+    });
   });
 });

@@ -1,7 +1,7 @@
 // file: internal/audiobooks/helpers.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234560010
-// last-edited: 2026-10-03
+// last-edited: 2026-10-04
 //
 // Private utilities needed by the audiobooks service package. Most still mirror
 // equivalent helpers in internal/server/ (stringPtr, boolPtr, decodeRawValue,
@@ -20,6 +20,7 @@ package audiobooks
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -258,12 +259,16 @@ func newMetadataStateSvc(db metadataStateStore) *metadataStateSvc {
 	return &metadataStateSvc{db: db}
 }
 
-// recordChange records one override history row and reports whether it was
-// recorded. A caller that skips the field elsewhere because this row covers it
-// (UpdateAudiobook's column diff) must only do so on true.
-func (mss *metadataStateSvc) recordChange(bookID, field, changeType, source string, previousValue, newValue any) bool {
+// errNoMetadataStateStore: recordChange was called with no store.
+var errNoMetadataStateStore = errors.New("database not initialized")
+
+// recordChange records one override history row and returns why it was not
+// recorded (nil when it was). A caller that skips the field elsewhere because
+// this row covers it (UpdateAudiobook's column diff) must only do so on nil.
+// The failure is logged here too.
+func (mss *metadataStateSvc) recordChange(bookID, field, changeType, source string, previousValue, newValue any) error {
 	if mss.db == nil {
-		return false
+		return errNoMetadataStateStore
 	}
 	prev, _ := metastate.Encode(previousValue)
 	next, _ := metastate.Encode(newValue)
@@ -278,9 +283,9 @@ func (mss *metadataStateSvc) recordChange(bookID, field, changeType, source stri
 	}
 	if err := mss.db.RecordMetadataChange(record); err != nil {
 		slog.Warn("failed to record metadata change for /", "bookID", bookID, "field", field, "err", err)
-		return false
+		return err
 	}
-	return true
+	return nil
 }
 
 // --- path helpers -----------------------------------------------------------

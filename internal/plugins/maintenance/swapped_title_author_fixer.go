@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/swapped_title_author_fixer.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: a80ddfb1-95dc-402f-941a-142b9388bcf0
 // last-edited: 2026-10-04
 

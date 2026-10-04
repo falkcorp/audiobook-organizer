@@ -1,5 +1,5 @@
 // file: internal/audiobooks/edit_history_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 6f1a8c34-2d9b-4e70-a5c3-0b7e4d2f9a51
 // last-edited: 2026-10-04
 
@@ -218,7 +218,7 @@ func TestUpdateAudiobookWithWarnings_SeriesRenameHistoryFailureIsReported(t *tes
 	require.NoError(t, err)
 	found := false
 	for _, w := range warnings {
-		found = found || strings.Contains(w, "series rename was not recorded")
+		found = found || (strings.Contains(w, "series rename was not recorded") && strings.Contains(w, "history store down"))
 	}
 	require.True(t, found, "%v", warnings)
 }
@@ -230,13 +230,24 @@ func (s narratorFailStore) SetBookNarrators(string, []database.BookNarrator) err
 	return errors.New("junction store down")
 }
 
-// A narrator edit whose junction write fails is reported.
-func TestUpdateAudiobookWithWarnings_NarratorJunctionFailureIsReported(t *testing.T) {
+// A narrator CLEAR whose junction write fails is reported, and the failure
+// is real: the store's own credit sync skips an empty credit, so only the
+// service's SetBookNarrators would empty the junction. With that write
+// failing, the old cast stays in book_narrators (which ABS prefers over the
+// column) and the response says so. (A non-empty credit would not exercise
+// the failure: the store's own sync already writes that cast.)
+func TestUpdateAudiobookWithWarnings_NarratorClearJunctionFailureIsReported(t *testing.T) {
 	store, book := editFixture(t)
-	_, warnings, err := audiobooks.NewAudiobookUpdateService(narratorFailStore{store}).UpdateAudiobookWithWarnings(
-		context.Background(), book.ID, map[string]any{"narrator": "Jane Reader"})
+	_, err := audiobooks.NewAudiobookUpdateService(store).UpdateAudiobook(context.Background(), book.ID,
+		map[string]any{"narrator": "Jane Reader"})
 	require.NoError(t, err)
-	require.NotEmpty(t, warnings)
+	before, err := store.GetBookNarrators(book.ID)
+	require.NoError(t, err)
+	require.Len(t, before, 1, "precondition: the junction holds the cast")
+
+	_, warnings, err := audiobooks.NewAudiobookUpdateService(narratorFailStore{store}).UpdateAudiobookWithWarnings(
+		context.Background(), book.ID, map[string]any{"narrator": ""})
+	require.NoError(t, err)
 	found := false
 	for _, w := range warnings {
 		if strings.Contains(w, "narrator list (book_narrators) was not updated") && strings.Contains(w, "junction store down") {
@@ -244,4 +255,7 @@ func TestUpdateAudiobookWithWarnings_NarratorJunctionFailureIsReported(t *testin
 		}
 	}
 	require.True(t, found, "%v", warnings)
+	after, err := store.GetBookNarrators(book.ID)
+	require.NoError(t, err)
+	require.Len(t, after, 1, "the failed write left the old cast in the junction, which is what the warning reports")
 }
