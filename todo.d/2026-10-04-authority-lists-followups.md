@@ -1,9 +1,3 @@
-- [ ] **AUTH-LISTS-PR2** Authority lists PR 2: feed `authority.Lookup` into
-      authorcredit as person evidence behind a flag (default off), via a
-      store-capability decorator over the PersonEvidence seam. A hit adds
-      evidence only, single-word names stay review-only at import, nothing is
-      ever created from a hit, and cast_author never counts as author. Load
-      one `authority.Snapshot` per run; never a per-call store read in a loop.
 - [ ] **AUTH-LISTS-PR3** Authority lists PR 3: catalog-harvest feed. After
       `catalog.harvest-authors` stores new `cat_raw:` payloads, rebuild the
       authority lists (or ingest the harvested products incrementally through
