@@ -1,5 +1,5 @@
 // file: internal/metadata/enhanced.go
-// version: 1.23.0
+// version: 1.23.1
 // guid: 7e8d9c0b-1a2f-3e4d-5c6b-7a8d9c0b1a2f
 // last-edited: 2026-10-04
 
@@ -338,7 +338,7 @@ func BatchUpdateMetadata(updates []MetadataUpdate, store batchUpdateStore, valid
 		var resolvedAuthors []database.Author
 		if name := authorName; name != "" {
 			resolveMu.Lock()
-			authors, aerr := authorcredit.Resolve(store, name, authorcredit.PrepareGate)
+			authors, aerr := authorcredit.ResolveBook(store, update.BookID, name, authorcredit.PrepareGate)
 			resolveMu.Unlock()
 			switch {
 			case errors.Is(aerr, authorcredit.ErrCombinedCredit):

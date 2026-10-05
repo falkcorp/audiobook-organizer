@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/refetch_missing_authors.go
-// version: 2.13.0
+// version: 2.13.1
 // guid: a1000012-0000-0000-0000-000000000012
 // last-edited: 2026-10-04
 
@@ -228,7 +228,7 @@ type tagAuthorStore interface {
 // A1#15). "Still has no author" is decided on the fresh row: one filled
 // meanwhile is kept, and then no co-author is added either.
 func linkTagAuthors(store tagAuthorStore, bookID, authorName string) (string, error) {
-	authors, err := authorcredit.Resolve(store, authorName, authorcredit.PrepareGate)
+	authors, err := authorcredit.ResolveBook(store, bookID, authorName, authorcredit.PrepareGate)
 	if stderrors.Is(err, authorcredit.ErrCombinedCredit) {
 		return tagAuthorsCombined, nil
 	}

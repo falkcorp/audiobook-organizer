@@ -1,5 +1,5 @@
 // file: internal/authorcredit/authorcredit_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 4a5f7bee-3d1d-427b-bc5f-baaa4b6fb584
 // last-edited: 2026-10-04
 
@@ -231,13 +231,15 @@ func TestResolve_ReviewCases(t *testing.T) {
 	got, err := Resolve(st, "Amie Kaufman, Jay Kristoff", PrepareGate)
 	require.NoError(t, err)
 	require.Equal(t, []string{"Amie Kaufman", "Jay Kristoff"}, names(got))
-	// A part that is also a series name is linked when it is an author row
-	// (#3729 review B1): nothing is created.
+	// A part that is also a series name is NOT linked on its author row
+	// alone: a junk "Dragon Born" record with no person evidence is dropped
+	// and the real author is the credit (owner decision 2026-10-04, "usage
+	// check + never first").
 	_, err = st.CreateAuthor("Dragon Born")
 	require.NoError(t, err)
 	got, err = Resolve(st, "Dante King, Dragon Born", PrepareGate)
 	require.NoError(t, err)
-	require.Equal(t, []string{"Dante King", "Dragon Born"}, names(got))
+	require.Equal(t, []string{"Dante King"}, names(got))
 }
 
 func TestStripBracketsAndCollective(t *testing.T) {
@@ -459,7 +461,8 @@ func TestResolve_BareBylineThatIsATitleIsKeptWhole(t *testing.T) {
 }
 
 // #3729 review B1: a split into EXISTING authors links them whatever the
-// part count and even when a part is also a series name; nothing is created.
+// part count; a part that is also a series name links only on person
+// evidence and never first (owner decision 2026-10-04); nothing is created.
 func TestResolve_ExistingAuthorsLinkedDespiteTitleOrCount(t *testing.T) {
 	st := &countingStore{PebbleStore: newStore(t, "Michael Anderle", "Craig Martelle", "Amy Adams", "Ben Brown", "Cat Cole", "Dan Dorn")}
 	ma, err := st.GetAuthorByName("Michael Anderle")
@@ -470,9 +473,169 @@ func TestResolve_ExistingAuthorsLinkedDespiteTitleOrCount(t *testing.T) {
 	t.Cleanup(ResetTitleCache)
 	got, err := Resolve(st, "Michael Anderle, Craig Martelle", PrepareGate)
 	require.NoError(t, err)
-	require.Equal(t, []string{"Michael Anderle", "Craig Martelle"}, names(got))
+	require.Equal(t, []string{"Craig Martelle"}, names(got), "no book outside the series: dropped")
+	_, err = st.CreateBook(&database.Book{Title: "Death Becomes Her", FilePath: "/l/dbh.m4b", Format: "m4b", AuthorID: &ma.ID})
+	require.NoError(t, err)
+	got, err = Resolve(st, "Michael Anderle, Craig Martelle", PrepareGate)
+	require.NoError(t, err)
+	require.Equal(t, []string{"Craig Martelle", "Michael Anderle"}, names(got), "a book outside the series: linked, not first")
 	got, err = Resolve(st, "Amy Adams, Ben Brown, Cat Cole, Dan Dorn", PrepareGate)
 	require.NoError(t, err)
 	require.Equal(t, []string{"Amy Adams", "Ben Brown", "Cat Cole", "Dan Dorn"}, names(got))
 	require.Empty(t, st.creates)
+}
+
+// titleStore is a Pebble store with the named authors and series, plus one
+// book per series credited to the author named like it (the shape a junk
+// "Dante King (Dragon Born)" credit leaves behind).
+func titleStore(t *testing.T, authors []string, series ...string) *database.PebbleStore {
+	t.Helper()
+	st := newStore(t, authors...)
+	for _, s := range series {
+		sr, err := st.CreateSeries(s, nil)
+		require.NoError(t, err)
+		a, err := st.GetAuthorByName(s)
+		require.NoError(t, err)
+		if a == nil {
+			continue
+		}
+		_, err = st.CreateBook(&database.Book{Title: s + " 1", FilePath: "/l/" + s + "/1.m4b", Format: "m4b",
+			AuthorID: &a.ID, SeriesID: &sr.ID})
+		require.NoError(t, err)
+	}
+	ResetTitleCache()
+	return st
+}
+
+// Owner decision 2026-10-04, "usage check + never first": a part named like
+// a series or book links only on person evidence, and never as the primary.
+func TestResolve_TitleNamedPartNeedsPersonEvidence(t *testing.T) {
+	st := titleStore(t, []string{"Dante King", "Dragon Born", "Brandon Sanderson", "Mistborn", "Alexander Freed",
+		"Alphabet Squadron"}, "Dragon Born", "Mistborn", "Alphabet Squadron")
+	// A junk author titled like its own book, outside any series, is not
+	// evidence either: the book's title is the part's name.
+	mb, err := st.GetAuthorByName("Mistborn")
+	require.NoError(t, err)
+	_, err = st.CreateBook(&database.Book{Title: "Mistborn", FilePath: "/l/mb.m4b", Format: "m4b", AuthorID: &mb.ID})
+	require.NoError(t, err)
+	for credit, want := range map[string][]string{
+		"Dragon Born, Dante King":            {"Dante King"},
+		"Dante King, Dragon Born":            {"Dante King"},
+		"Dante King & Dragon Born":           {"Dante King"},
+		"Mistborn, Brandon Sanderson":        {"Brandon Sanderson"},
+		"Brandon Sanderson, Mistborn":        {"Brandon Sanderson"},
+		"Alexander Freed, Alphabet Squadron": {"Alexander Freed"},
+	} {
+		got, err := Resolve(st, credit, PrepareGate)
+		require.NoError(t, err, credit)
+		require.Equal(t, want, names(got), credit)
+	}
+	// A title-named part with no author record is dropped too: the combined
+	// string is not created.
+	st2 := titleStore(t, []string{"Alexander Freed"}, "Alphabet Squadron")
+	got, err := Resolve(st2, "Alexander Freed, Alphabet Squadron", PrepareGate)
+	require.NoError(t, err)
+	require.Equal(t, []string{"Alexander Freed"}, names(got))
+	whole, err := st2.GetAuthorByName("Alexander Freed, Alphabet Squadron")
+	require.NoError(t, err)
+	require.Nil(t, whole)
+}
+
+// #3729 review B1 under the owner decision: "Michael Anderle" is also a
+// (junk) series name. With only that series' books he is dropped; once he is
+// credited on a book outside it he links, after Craig Martelle (never first).
+func TestResolve_AuthorNamedLikeASeriesNeedsOutsideBooks(t *testing.T) {
+	st := titleStore(t, []string{"Michael Anderle", "Craig Martelle"}, "Michael Anderle")
+	for _, credit := range []string{"Michael Anderle, Craig Martelle", "Craig Martelle, Michael Anderle"} {
+		got, err := Resolve(st, credit, PrepareGate)
+		require.NoError(t, err, credit)
+		require.Equal(t, []string{"Craig Martelle"}, names(got), credit)
+	}
+	ma, err := st.GetAuthorByName("Michael Anderle")
+	require.NoError(t, err)
+	kg, err := st.CreateSeries("The Kurtherian Gambit", nil)
+	require.NoError(t, err)
+	_, err = st.CreateBook(&database.Book{Title: "Death Becomes Her", FilePath: "/l/kg/1.m4b", Format: "m4b",
+		AuthorID: &ma.ID, SeriesID: &kg.ID})
+	require.NoError(t, err)
+	ResetTitleCache()
+	for _, credit := range []string{"Michael Anderle, Craig Martelle", "Craig Martelle, Michael Anderle"} {
+		got, err := Resolve(st, credit, PrepareGate)
+		require.NoError(t, err, credit)
+		require.Equal(t, []string{"Craig Martelle", "Michael Anderle"}, names(got), credit)
+	}
+	// Only title-named parts with evidence: credit order is kept.
+	got, err := Resolve(st, "Michael Anderle", PrepareGate)
+	require.NoError(t, err)
+	require.Equal(t, []string{"Michael Anderle"}, names(got), "the only part may be first")
+}
+
+// Evidence (b): a provider credited exactly the part's name to the book. A
+// provider's joined credit is not evidence for its pieces.
+func TestResolveBook_ProviderCreditIsPersonEvidence(t *testing.T) {
+	st := titleStore(t, []string{"Dante King", "Dragon Born"}, "Dragon Born")
+	b, err := st.CreateBook(&database.Book{Title: "Some Book", FilePath: "/l/sb.m4b", Format: "m4b"})
+	require.NoError(t, err)
+	joined := `"Dragon Born, Dante King"`
+	require.NoError(t, st.RecordMetadataChange(&database.MetadataChangeRecord{BookID: b.ID,
+		Field: database.HistoryFieldAuthor, NewValue: &joined, ChangeType: "fetched", Source: "Audible"}))
+	got, err := ResolveBook(st, b.ID, "Dragon Born, Dante King", PrepareGate)
+	require.NoError(t, err)
+	require.Equal(t, []string{"Dante King"}, names(got), "the joined credit proves nothing")
+	single := `"Dragon Born"`
+	require.NoError(t, st.RecordMetadataChange(&database.MetadataChangeRecord{BookID: b.ID,
+		Field: database.HistoryFieldAuthor, NewValue: &single, ChangeType: "fetched", Source: "Audible"}))
+	got, err = ResolveBook(st, b.ID, "Dragon Born, Dante King", PrepareGate)
+	require.NoError(t, err)
+	require.Equal(t, []string{"Dante King", "Dragon Born"}, names(got), "linked, never first")
+	got, err = Resolve(st, "Dragon Born, Dante King", PrepareGate)
+	require.NoError(t, err)
+	require.Equal(t, []string{"Dante King"}, names(got), "no book, no provider credit")
+}
+
+// authorityStore is the seam a future master authority list plugs into: a
+// store that is itself a PersonEvidence source.
+type authorityStore struct {
+	*database.PebbleStore
+	people map[string]bool
+}
+
+func (s authorityStore) PersonEvidence(q PersonQuery) (string, error) {
+	if s.people[LettersKey(q.Name)] {
+		return "on the authority list", nil
+	}
+	return "", nil
+}
+
+func TestResolve_StorePersonEvidenceSeam(t *testing.T) {
+	st := titleStore(t, []string{"Alexander Freed", "Alphabet Squadron"}, "Alphabet Squadron")
+	got, err := Resolve(authorityStore{PebbleStore: st, people: map[string]bool{"alphabetsquadron": true}},
+		"Alphabet Squadron, Alexander Freed", PrepareGate)
+	require.NoError(t, err)
+	require.Equal(t, []string{"Alexander Freed", "Alphabet Squadron"}, names(got))
+}
+
+// failingBooksStore fails the by-author listing the outside-series evidence
+// reads.
+type failingBooksStore struct{ *database.PebbleStore }
+
+func (failingBooksStore) GetBooksByAuthorIDWithRoleCore(int) ([]database.BookCore, error) {
+	return nil, errors.New("listing down")
+}
+
+// An evidence read error drops the title-named part (fail closed) but never
+// fails the resolve.
+func TestResolve_EvidenceReadErrorDropsOnlyThePart(t *testing.T) {
+	st := titleStore(t, []string{"Michael Anderle", "Craig Martelle"}, "Michael Anderle")
+	ma, err := st.GetAuthorByName("Michael Anderle")
+	require.NoError(t, err)
+	_, err = st.CreateBook(&database.Book{Title: "Death Becomes Her", FilePath: "/l/kg/1.m4b", Format: "m4b", AuthorID: &ma.ID})
+	require.NoError(t, err)
+	got, err := Resolve(failingBooksStore{st}, "Michael Anderle, Craig Martelle", PrepareGate)
+	require.NoError(t, err)
+	require.Equal(t, []string{"Craig Martelle"}, names(got))
+	_, dropped, err := splitExisting(failingBooksStore{st}, "", "Michael Anderle, Craig Martelle", PrepareGate)
+	require.NoError(t, err)
+	require.Len(t, dropped, 1)
+	require.Contains(t, dropped[0].Reason, "listing down")
 }

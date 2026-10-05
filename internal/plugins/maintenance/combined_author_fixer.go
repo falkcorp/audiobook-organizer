@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/combined_author_fixer.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 5c0f4a3e-2b7d-4e61-9a8c-3f1d6b2e7a90
 // last-edited: 2026-10-04
 
@@ -575,46 +575,15 @@ func combinedExistingPart(store OpsStore, name string) (*database.Author, error)
 	return authorcredit.FindByAlias(store, name)
 }
 
-// combinedHistorySource is the metadata change history a provider credit is
-// read from.
-type combinedHistorySource interface {
-	GetMetadataChangeHistory(bookID string, field string, limit int) ([]database.MetadataChangeRecord, error)
-}
-
-// combinedHistoryLimit bounds the author history read per book.
-const combinedHistoryLimit = 200
-
 // combinedProviderCredited returns the source of a metadata fetch that wrote
-// exactly name (by letters key) as this book's author, or "" when none did.
-// Only a whole fetched value counts: a provider's joined credit
-// ("Shirtaloon, Travis Deverell") is the string the record came from, so
-// reading a piece of it as evidence would prove nothing. Manual and AI-parse
-// rows are not provider credits. A store without the history reads as no
-// credit (the row stays held), and a read error fails the plan.
+// exactly name (by letters key) as this book's author, or "" when none did:
+// authorcredit.ProviderCredited, the rule the resolver also uses for a
+// credit part named like a series, so the two cannot drift. Only a whole
+// fetched value counts; manual and AI-parse rows are not provider credits. A
+// store without the history reads as no credit (the row stays held), and a
+// read error fails the plan.
 func combinedProviderCredited(store OpsStore, bookID, name string) (string, error) {
-	hs, ok := database.AsCapability[combinedHistorySource](store)
-	if !ok {
-		return "", nil
-	}
-	recs, err := hs.GetMetadataChangeHistory(bookID, database.HistoryFieldAuthor, combinedHistoryLimit)
-	if err != nil {
-		return "", fmt.Errorf("read author history of %s: %w", bookID, err)
-	}
-	want := authorcredit.LettersKey(name)
-	for _, rec := range recs {
-		src := strings.ToLower(strings.TrimSpace(rec.Source))
-		if rec.ChangeType != "fetched" || rec.NewValue == nil || src == "" || src == "manual" || strings.HasPrefix(src, "ai") {
-			continue
-		}
-		var v string
-		if json.Unmarshal([]byte(*rec.NewValue), &v) != nil {
-			v = *rec.NewValue
-		}
-		if authorcredit.LettersKey(personname.StripByPrefix(v)) == want {
-			return rec.Source, nil
-		}
-	}
-	return "", nil
+	return authorcredit.ProviderCredited(store, bookID, name)
 }
 
 // combinedNearMin is the shortest letters key the one-letter misspelling

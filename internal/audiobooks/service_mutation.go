@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_mutation.go
-// version: 1.27.0
+// version: 1.27.1
 // guid: e7b1f6a5-b8c9-0d12-ce3f-4a5b6c7d8e9f
 // last-edited: 2026-10-04
 
@@ -436,7 +436,7 @@ func (svc *AudiobookService) updateAudiobook(ctx context.Context, id string, req
 			// pieces are all different existing authors is refused
 			// (ErrCombinedCredit) rather than created as one combined
 			// author row.
-			resolved, err := authorcredit.Resolve(svc.store, normalizedName, authorcredit.CleanGate)
+			resolved, err := authorcredit.ResolveBook(svc.store, id, normalizedName, authorcredit.CleanGate)
 			if errors.Is(err, authorcredit.ErrCombinedCredit) {
 				singleLog.Warn("UpdateAudiobook %s: author name %q joins existing authors and will not be created as one author",
 					logger.SanitizeLogValue(id), logger.SanitizeLogValue(aName))

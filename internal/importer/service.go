@@ -1,5 +1,5 @@
 // file: internal/importer/service.go
-// version: 1.11.1
+// version: 1.11.2
 // guid: d0e1f2a3-b4c5-6d7e-8f9a-0b1c2d3e4f5b
 // last-edited: 2026-10-04
 
@@ -258,9 +258,11 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 			// only a credit of several names none of which exists stays
 			// authorless (owner decision; #3729 review). A lookup error is a
 			// failed import. A combined credit whose pieces are all different
-			// existing authors is no author (ErrCombinedCredit).
+			// existing authors is no author (ErrCombinedCredit). A collective
+			// credit ("Full Cast") names no person and is never created.
 			authors, err := authorcredit.Lookup(is.db, prepared, authorcredit.CleanGate)
-			if err == nil && len(authors) == 0 && !authorcredit.IsMultiName(prepared) && personname.LooksLikePersonName(prepared) {
+			if err == nil && len(authors) == 0 && !authorcredit.IsMultiName(prepared) && personname.LooksLikePersonName(prepared) &&
+				!authorcredit.IsCollectiveCredit(prepared) {
 				if _, ok := authorcredit.CleanGate(prepared); ok {
 					authors, err = authorcredit.Resolve(is.db, prepared, authorcredit.CleanGate)
 				}
