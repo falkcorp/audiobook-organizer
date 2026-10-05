@@ -1,5 +1,5 @@
 // file: internal/authorcredit/authorcredit_test.go
-// version: 1.3.2
+// version: 1.4.0
 // guid: 4a5f7bee-3d1d-427b-bc5f-baaa4b6fb584
 // last-edited: 2026-10-05
 
@@ -860,4 +860,43 @@ func TestAuthorityEvidence_KnownWithoutEntryIsWeak(t *testing.T) {
 	ev, err := authorityEvidence{lookup: entrylessLookup{authority.Empty()}}.PersonEvidence(PersonQuery{Name: "Dragon Born"})
 	require.NoError(t, err)
 	require.Equal(t, EvidenceWeak, ev.Strength)
+}
+
+// Owner decision 2026-10-05: an author found in the authority lists only at
+// tier B is WEAK evidence (helps ranking, never first alone); strong is an
+// author role at tier O or tier A only. Tier C never counts
+// (authority.AuthorEvidenceRule), and one tier-B observation does not
+// qualify either; both answer none. AwaitAuthority on a store offering only
+// AuthoritySource is ready exactly when it answers a real snapshot.
+func TestAuthorityPersonEvidence_Tiers(t *testing.T) {
+	st := newStore(t)
+	for name, stat := range map[string]authority.RoleStat{
+		"Owner Tier": authorStat(authority.TierO, 1),
+		"Asin Tier":  authorStat(authority.TierA, 1),
+		"Bee Twice":  authorStat(authority.TierB, 2),
+		"Bee Once":   authorStat(authority.TierB, 1),
+		"Cee Many":   authorStat(authority.TierC, 5),
+	} {
+		putPerson(t, st, authority.Person{Display: name, Roles: map[authority.Role]authority.RoleStat{authority.RoleAuthor: stat}})
+	}
+	l := snapshot(t, st)
+	for name, want := range map[string]EvidenceStrength{
+		"Owner Tier": EvidenceStrong,
+		"Asin Tier":  EvidenceStrong,
+		"Bee Twice":  EvidenceWeak,
+		"Bee Once":   EvidenceNone,
+		"Cee Many":   EvidenceNone,
+		"Nobody":     EvidenceNone,
+	} {
+		require.Equal(t, want, AuthorityPersonEvidence(l, name).Strength, name)
+	}
+	require.Equal(t, EvidenceNone, AuthorityPersonEvidence(nil, "Owner Tier").Strength)
+
+	got, ready := AwaitAuthority(context.Background(), authorityLookupStore{PebbleStore: st, lookup: l})
+	require.True(t, ready)
+	require.Same(t, l, got)
+	_, ready = AwaitAuthority(context.Background(), authorityLookupStore{PebbleStore: st, lookup: authority.Empty()})
+	require.False(t, ready, "an Empty answer is not a snapshot")
+	_, ready = AwaitAuthority(context.Background(), st)
+	require.False(t, ready, "a store without the capability")
 }

@@ -1,5 +1,5 @@
 // file: internal/server/authority_evidence_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4492804b-1186-4576-8833-2d1d7a405363
 // last-edited: 2026-10-05
 
@@ -8,6 +8,7 @@ package server
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -143,4 +144,51 @@ func TestAuthorityEvidence_LoadFailureAnswersEmpty(t *testing.T) {
 	require.True(t, next.After(time.Now()), "a failed load backs off")
 	var nilA *authorityEvidence
 	require.Nil(t, nilA.Lookup().Person("anyone"), "a nil source answers Empty")
+}
+
+// Await (a plan reading the lists): flag off answers Empty, not ready, and
+// starts no load; flag on waits for the first load and answers the snapshot,
+// ready; a failed load answers Empty, not ready; a cancelled caller context
+// stops the wait.
+func TestAuthorityEvidence_Await(t *testing.T) {
+	inner, err := database.NewPebbleStoreInMemory(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = inner.Close() })
+	require.NoError(t, authority.PutPersonOverride(inner, authority.PersonOverride{Name: "Zed Newperson",
+		Roles: map[authority.Role]bool{authority.RoleAuthor: true}, SetAt: time.Now()}))
+
+	var on bool
+	var mu sync.Mutex
+	enabled := func() bool { mu.Lock(); defer mu.Unlock(); return on }
+	a := newAuthorityEvidence(context.Background(), inner, enabled, nil)
+	l, ready := a.Await(context.Background())
+	require.False(t, ready, "flag off")
+	require.Nil(t, l.Person("Zed Newperson"))
+	a.mu.Lock()
+	require.Nil(t, a.loadDone, "flag off: no load started")
+	a.mu.Unlock()
+
+	mu.Lock()
+	on = true
+	mu.Unlock()
+	l, ready = a.Await(context.Background())
+	require.True(t, ready, "flag on: the first load is waited for")
+	require.True(t, l.IsKnownPerson("Zed Newperson", authority.RoleAuthor))
+
+	failed := newAuthorityEvidence(context.Background(), failingScanner{}, func() bool { return true }, nil)
+	l, ready = failed.Await(context.Background())
+	require.False(t, ready, "a failed load is not ready")
+	require.Nil(t, l.Person("anyone"))
+
+	// A load that never finishes: the caller's context ends the wait.
+	stuck := newAuthorityEvidence(context.Background(), inner, func() bool { return true },
+		func(string, func()) {}) // the spawn hook never runs the load
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, ready = stuck.Await(ctx)
+	require.False(t, ready, "the caller's context bounds the wait")
+
+	var nilA *authorityEvidence
+	_, ready = nilA.Await(context.Background())
+	require.False(t, ready)
 }

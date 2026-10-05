@@ -1,5 +1,5 @@
 // file: internal/authorcredit/authorcredit.go
-// version: 1.3.2
+// version: 1.4.0
 // guid: 7000d1fc-e16c-47e1-bb94-6180fe3ec1de
 // last-edited: 2026-10-05
 
@@ -61,6 +61,7 @@
 package authorcredit
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -853,9 +854,53 @@ func (e providerCreditEvidence) PersonEvidence(q PersonQuery) (Evidence, error) 
 	return Evidence{Strength: EvidenceWeak, Detail: fmt.Sprintf("metadata provider %s credited %q to this book", src, q.Name)}, nil
 }
 
+// AuthorityWaiter is the store capability a plan uses to read the authority
+// lists: unlike AuthoritySource.AuthorityLookup, which never blocks and
+// answers authority.Empty() until a background load lands, it waits (bounded
+// by ctx) for a load in flight or due, so a plan run right after
+// authority_evidence_enabled is turned on reads the lists instead of an empty
+// answer indistinguishable from "no list knows this name". ready is false
+// when no snapshot is in hand: the flag is off, the load failed, or ctx ended
+// first.
+type AuthorityWaiter interface {
+	AwaitAuthorityLookup(ctx context.Context) (lookup authority.Lookup, ready bool)
+}
+
+// AwaitAuthority returns the authority lists a plan reads and whether a real
+// snapshot is in hand. A store offering AuthorityWaiter is waited on; one
+// offering only AuthoritySource is read as is (ready when it answers anything
+// but authority.Empty()); any other store answers authority.Empty(), false.
+// A caller must not treat a name missing from a not-ready Lookup as evidence
+// of anything.
+func AwaitAuthority(ctx context.Context, store any) (authority.Lookup, bool) {
+	if w, ok := database.AsCapability[AuthorityWaiter](store); ok {
+		if l, ready := w.AwaitAuthorityLookup(ctx); l != nil {
+			return l, ready
+		}
+		return authority.Empty(), false
+	}
+	l := authorityOf(store)
+	return l, l != authority.Empty()
+}
+
+// AuthorityPersonEvidence is the authority-list evidence that name is an
+// author, graded exactly as credit resolution grades it: strong only for an
+// author role observed at tier O or tier A; weak for an author entry that
+// qualifies without either (tier B, owner decision 2026-10-05: it helps
+// ranking but never puts a name first alone); none otherwise, which includes
+// an author role seen only at tier C (authority.AuthorEvidenceRule never
+// counts tier C) and a single tier-B observation.
+func AuthorityPersonEvidence(lookup authority.Lookup, name string) Evidence {
+	if lookup == nil {
+		return Evidence{}
+	}
+	ev, _ := authorityEvidence{lookup: lookup}.PersonEvidence(PersonQuery{Name: name})
+	return ev
+}
+
 // authorityOf returns the authority lists the store offers, or
 // authority.Empty() when it offers none (or a nil one).
-func authorityOf(store Store) authority.Lookup {
+func authorityOf(store any) authority.Lookup {
 	if as, ok := database.AsCapability[AuthoritySource](store); ok {
 		if l := as.AuthorityLookup(); l != nil {
 			return l

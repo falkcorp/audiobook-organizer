@@ -1,5 +1,5 @@
 // file: internal/server/authority_evidence.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3c15fa27-276b-44c2-a6e0-a9c9604af632
 // last-edited: 2026-10-05
 
@@ -22,6 +22,10 @@ const authorityRefreshTTL = 10 * time.Minute
 
 // authorityRetryAfter is how long a failed load waits before the next try.
 const authorityRetryAfter = time.Minute
+
+// authorityAwaitMax bounds how long Await (a plan reading the lists) waits
+// for a load, on top of the caller's own context.
+const authorityAwaitMax = 2 * time.Minute
 
 // authorityEvidence hands authorcredit the authority lists (the
 // AuthoritySource store capability, offered by indexedStore). It holds one
@@ -96,9 +100,44 @@ func (a *authorityEvidence) Lookup() authority.Lookup {
 	return snap
 }
 
+// Await is Lookup for a caller that must not read an empty answer as "no
+// list knows this name" (a repairs plan): it starts a due load like Lookup
+// and, while no snapshot is held and a load is in flight, waits for it (at
+// most authorityAwaitMax, and never past ctx). ready reports whether a real
+// snapshot is returned. Turning authority_evidence_enabled on by PUT /config
+// starts no load (Start's Prime ran with the flag off), and Lookup never
+// blocks, so without this a plan run right after the flip read Empty for
+// every name (prod 2026-10-05). The flag on with no snapshot afterwards is
+// logged, so a plan without authority lines is never silent.
+func (a *authorityEvidence) Await(ctx context.Context) (authority.Lookup, bool) {
+	if a == nil || a.enabled == nil || !a.enabled() {
+		return authority.Empty(), false
+	}
+	_ = a.Lookup() // starts the load when one is due
+	a.mu.Lock()
+	snap, loading, done := a.snap, a.loading, a.loadDone
+	a.mu.Unlock()
+	if snap == nil && loading && done != nil {
+		wait := time.NewTimer(authorityAwaitMax)
+		defer wait.Stop()
+		select {
+		case <-done:
+		case <-ctx.Done():
+		case <-wait.C:
+		}
+	}
+	l := a.Lookup()
+	if s, ok := l.(*authority.Snapshot); ok && s != nil {
+		return s, true
+	}
+	logger.New("authority").Warn("authority evidence: enabled but no snapshot is loaded (load in flight, failed, or the caller gave up); this plan reads no authority lists")
+	return authority.Empty(), false
+}
+
 func (a *authorityEvidence) load(done chan struct{}) {
 	defer close(done)
 	start := time.Now()
+	logger.New("authority").Info("authority evidence: loading the authority snapshot")
 	snap, err := authority.LoadSnapshot(a.ctx, a.kv)
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -111,6 +150,7 @@ func (a *authorityEvidence) load(done chan struct{}) {
 	if !a.enabled() {
 		// Turned off while loading: do not hold a snapshot nobody reads.
 		a.nextLoad = time.Time{}
+		logger.New("authority").Info("authority evidence: authority_evidence_enabled turned off during the load; snapshot discarded")
 		return
 	}
 	a.snap = snap
@@ -127,4 +167,13 @@ func (s *indexedStore) AuthorityLookup() authority.Lookup {
 	return s.authority.Lookup()
 }
 
-var _ authorcredit.AuthoritySource = (*indexedStore)(nil)
+// AwaitAuthorityLookup implements authorcredit.AuthorityWaiter: the lists for
+// a plan, waiting for a load in flight (authorityEvidence.Await).
+func (s *indexedStore) AwaitAuthorityLookup(ctx context.Context) (authority.Lookup, bool) {
+	return s.authority.Await(ctx)
+}
+
+var (
+	_ authorcredit.AuthoritySource = (*indexedStore)(nil)
+	_ authorcredit.AuthorityWaiter = (*indexedStore)(nil)
+)

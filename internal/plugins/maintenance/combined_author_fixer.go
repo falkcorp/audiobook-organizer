@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/combined_author_fixer.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: 5c0f4a3e-2b7d-4e61-9a8c-3f1d6b2e7a90
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 package maintenance
 
@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorcredit"
+	"github.com/falkcorp/audiobook-organizer/internal/authority"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/personname"
@@ -201,6 +202,28 @@ type combinedAuthorIndex struct {
 	combined map[int]bool
 	// titles holds the letters key of every live book title and series name.
 	titles map[string]bool
+	// authority is the authority lists (authorcredit.AwaitAuthority), read
+	// for every part apply would create; authorityReady is false when no
+	// snapshot was in hand (flag off, load failed), and then no authority
+	// line is written, so a missing line is never read as "no list knows
+	// this name". Display only: it is never fingerprinted, because a
+	// snapshot reload between plan and apply would otherwise refuse rows
+	// whose decision did not change.
+	authority      authority.Lookup
+	authorityReady bool
+}
+
+// authorityLine is the evidence line for a part apply would create, or ""
+// when the authority lists were not read.
+func (idx *combinedAuthorIndex) authorityLine(name string) string {
+	if !idx.authorityReady {
+		return ""
+	}
+	ev := authorcredit.AuthorityPersonEvidence(idx.authority, name)
+	if ev.Strength == authorcredit.EvidenceNone {
+		return fmt.Sprintf("the authority lists hold no author entry for %q", name)
+	}
+	return fmt.Sprintf("%s (%s evidence)", ev.Detail, ev.Strength)
 }
 
 // combinedTitlePrefixMin is the shortest letters key a title-prefix match
@@ -267,7 +290,7 @@ func (idx *combinedAuthorIndex) isCombinedName(id int, name string) bool {
 	return all || len(personname.SplitCompositeAuthorName(name)) >= 2
 }
 
-func (f *combinedAuthorFixer) buildIndex() (*combinedAuthorIndex, error) {
+func (f *combinedAuthorFixer) buildIndex(ctx context.Context) (*combinedAuthorIndex, error) {
 	store := f.p.deps.OpsStore()
 	if store == nil {
 		return nil, fmt.Errorf("database not initialized")
@@ -311,16 +334,17 @@ func (f *combinedAuthorFixer) buildIndex() (*combinedAuthorIndex, error) {
 			idx.titles[k] = true
 		}
 	}
+	idx.authority, idx.authorityReady = authorcredit.AwaitAuthority(ctx, store)
 	return idx, nil
 }
 
-func (f *combinedAuthorFixer) cachedIndex() (*combinedAuthorIndex, error) {
+func (f *combinedAuthorFixer) cachedIndex(ctx context.Context) (*combinedAuthorIndex, error) {
 	f.idxMu.Lock()
 	defer f.idxMu.Unlock()
 	if f.idx != nil && time.Since(f.idxBuiltAt) < combinedIndexTTL {
 		return f.idx, nil
 	}
-	idx, err := f.buildIndex()
+	idx, err := f.buildIndex(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -335,7 +359,7 @@ func (f *combinedAuthorFixer) Plan(ctx context.Context, _ json.RawMessage, rep r
 	if store == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
-	idx, err := f.buildIndex()
+	idx, err := f.buildIndex(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -416,12 +440,12 @@ func (f *combinedAuthorFixer) Plan(ctx context.Context, _ json.RawMessage, rep r
 // Replan re-reads the book and decides it again; it always returns
 // planned.RowID, so a book that is gone or no longer credits a combined
 // record comes back as a skipped row whose fingerprint differs.
-func (f *combinedAuthorFixer) Replan(_ context.Context, _ json.RawMessage, planned repairs.Row, _ registry.Reporter) (repairs.Row, error) {
+func (f *combinedAuthorFixer) Replan(ctx context.Context, _ json.RawMessage, planned repairs.Row, _ registry.Reporter) (repairs.Row, error) {
 	store := f.p.deps.OpsStore()
 	if store == nil {
 		return repairs.Row{}, fmt.Errorf("database not initialized")
 	}
-	idx, err := f.cachedIndex()
+	idx, err := f.cachedIndex(ctx)
 	if err != nil {
 		return repairs.Row{}, err
 	}
@@ -837,12 +861,18 @@ func (f *combinedAuthorFixer) evaluate(store OpsStore, idx *combinedAuthorIndex,
 						return repairs.Row{}, false, perr
 					}
 					if src == "" {
+						if line := idx.authorityLine(p.name); line != "" {
+							r.Evidence = append(r.Evidence, line)
+						}
 						return finish(combinedSkipSplitRefused, fmt.Sprintf("%q is one word, is no author or alias, and no metadata provider credited it to this book", p.name), true)
 					}
 					r.Evidence = append(r.Evidence, fmt.Sprintf("%s credited %q to this book", src, p.name))
 				}
 				created++
 				r.Evidence = append(r.Evidence, fmt.Sprintf("no author is named %q; apply creates it", p.name))
+				if line := idx.authorityLine(p.name); line != "" {
+					r.Evidence = append(r.Evidence, line)
+				}
 			case 1:
 				display[vs[0].ID] = vs[0].Name
 				resolvedID[p.name] = vs[0].ID
@@ -1257,7 +1287,7 @@ func combinedRewrite(cur []database.BookAuthor, bookID string, recIDs []int, tar
 // none exists, journaled), the credit list rewritten under the book's author
 // lock (compare-and-set, journaled first), then the primary moved. Every
 // check that can refuse the row runs before the first write.
-func (f *combinedAuthorFixer) Apply(_ context.Context, w *repairs.Writer, fresh repairs.Row) error {
+func (f *combinedAuthorFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repairs.Row) error {
 	d, ok := fresh.Detail.(*combinedDecision)
 	if !ok || d == nil {
 		return fmt.Errorf("%s: row %s carries no decision", combinedAuthorFixerID, fresh.RowID)
@@ -1291,7 +1321,7 @@ func (f *combinedAuthorFixer) Apply(_ context.Context, w *repairs.Writer, fresh 
 	if !sameCreditList(cur, d.credits) {
 		return fmt.Errorf("%w: book %s credits changed", repairs.ErrChangedSincePlan, id)
 	}
-	idx, err := f.cachedIndex()
+	idx, err := f.cachedIndex(ctx)
 	if err != nil {
 		return err
 	}
