@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.45.0
+// version: 1.46.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-10-05
 
@@ -1485,6 +1485,16 @@ const (
 	HiddenFromABSExplicitPrimaryNotOrganized = "explicit_primary_not_organized"
 	// HiddenFromABSQuarantined: the flag holder is organized but quarantined.
 	HiddenFromABSQuarantined = "flag_holder_quarantined"
+	// HiddenFromABSNotLive: the flag holder's stored row is in the trash
+	// (soft-deleted), which Audiobookshelf never lists.
+	HiddenFromABSNotLive = "flag_holder_not_live"
+	// HiddenFromABSNotPrimary: the flag holder's stored row is explicitly
+	// not its group's primary (a concurrent writer moved the flag after the
+	// merge wrote it).
+	HiddenFromABSNotPrimary = "flag_holder_not_primary"
+	// HiddenFromABSNotListed: the row fails ABSLibraryFilter for a reason
+	// none of the above names. Never "" for a row ABS does not list.
+	HiddenFromABSNotListed = "flag_holder_not_listed"
 )
 
 // absHiddenReason is Result.HiddenFromABS: "" when Audiobookshelf lists the
@@ -1503,13 +1513,25 @@ func (ms *Service) absHiddenReason(holderID, notOrganizedWhy string) (string, er
 	if database.ABSLibraryFilter().Matches(b) {
 		return "", nil
 	}
-	if !isOrganized(b) {
+	// Every branch below returns a reason: the filter said ABS does not list
+	// the row, so "" (listed) would be wrong whatever the cause.
+	switch {
+	case b.IsSoftDeleted():
+		return HiddenFromABSNotLive, nil
+	case !isOrganized(b):
+		if notOrganizedWhy == "" {
+			return HiddenFromABSNotListed, nil
+		}
 		return notOrganizedWhy, nil
-	}
-	if b.QuarantinedAt != nil {
+	case b.QuarantinedAt != nil:
 		return HiddenFromABSQuarantined, nil
+	case b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion:
+		// A nil flag counts as primary (ABSLibraryFilter), so only an
+		// explicit false is this reason.
+		return HiddenFromABSNotPrimary, nil
+	default:
+		return HiddenFromABSNotListed, nil
 	}
-	return "", nil
 }
 
 // groupPrimaryID is Result.GroupPrimaryID: the flag holder when it is not the
