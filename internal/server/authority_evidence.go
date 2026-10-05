@@ -1,5 +1,5 @@
 // file: internal/server/authority_evidence.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 3c15fa27-276b-44c2-a6e0-a9c9604af632
 // last-edited: 2026-10-05
 
@@ -174,7 +174,7 @@ func (a *authorityEvidence) Await(ctx context.Context) (authority.Lookup, bool) 
 		return s, true
 	}
 	if ended == awaitNone {
-		logger.New("authority").Warn("authority evidence: enabled but no snapshot is loaded and no load is in flight (the last load failed or was discarded); this plan reads no authority lists")
+		logger.New("authority").Warn("authority evidence: enabled but no snapshot is loaded and no load is in flight (the last load failed or was discarded, or the server is shutting down); this plan reads no authority lists")
 	} else {
 		logger.New("authority").Warn("authority evidence: enabled but no snapshot after waiting %s (%s); this plan reads no authority lists",
 			waited.Round(time.Millisecond), ended.reason(a.awaitMax))
