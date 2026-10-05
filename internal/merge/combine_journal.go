@@ -1005,8 +1005,9 @@ func writePositionsDiff(db userPositionStore, userID, bookID string, have, want 
 //     (the caller clears them off the book: writePositionsDiff) and added to
 //     the reset's discarded positions, with the older side's own discarded
 //     positions, so offline replay cannot resurrect them. Hide is still
-//     OR'd: the follow drained hide off this book, so a reset made here
-//     after it did not un-hide anything the user had hidden.
+//     OR'd, in both directions: it has no timestamp of its own to say
+//     whether the reset came after the user hid the book, and the owner
+//     rule is that hide is never destroyed by a merge or its undo.
 //
 // Clock skew: position UpdatedAt is stamped by this server when the write
 // arrives (SetUserPosition uses time.Now; only carried copies keep an earlier
