@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_files.go
-// version: 1.8.2
+// version: 1.9.0
 // guid: 4d8a2f61-3c7e-4b19-8e05-9a1f6c3d7b28
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 package repairs
 
@@ -174,6 +174,9 @@ func (w *Writer) Touch() {
 // identical row (same book, type, field and values) is already in the op's
 // journal: a resumed apply re-journals the step it was cut off in.
 func (w *Writer) Journal(bookID, changeType, field, oldV, newV string) error {
+	if err := w.denyTagsOnly("Journal"); err != nil {
+		return err
+	}
 	_, err := w.journalRow(bookID, changeType, field, oldV, newV)
 	return err
 }
@@ -279,6 +282,15 @@ func (w *Writer) voidRow(row journaledRow) error {
 // old value back over the later one's write. Voiding covers refusals only;
 // the crash window stays.
 func (w *Writer) JournalStep(bookID string, e UndoEntry, write func() error) error {
+	if err := w.denyTagsOnly("JournalStep"); err != nil {
+		return err
+	}
+	return w.journalStep(bookID, e, write)
+}
+
+// journalStep is JournalStep without the tags-only refusal: the tag
+// primitive (AddBookTag) journals through it.
+func (w *Writer) journalStep(bookID string, e UndoEntry, write func() error) error {
 	row, err := w.journalRow(bookID, e.ChangeType, e.Field, e.Old, e.New)
 	if err != nil {
 		return err
@@ -296,6 +308,9 @@ func (w *Writer) JournalStep(bookID string, e UndoEntry, write func() error) err
 // Step journals one change and then makes it (write). write's error is
 // returned as is; the journal row stands (see JOURNAL FIRST).
 func (w *Writer) Step(bookID, changeType, field, oldV, newV string, write func() error) error {
+	if err := w.denyTagsOnly("Step"); err != nil {
+		return err
+	}
 	if err := w.Journal(bookID, changeType, field, oldV, newV); err != nil {
 		return err
 	}
@@ -317,6 +332,9 @@ func (w *Writer) Journaled() int { return int(w.journaled.Load()) }
 // single-owner path key (KeyOwnerBook/KeyOwnerRow), read before the write:
 // the revert hands the key back to that row and no other.
 func (w *Writer) RepointBookFile(bookID, fileID string, expect, to undo.BookFileLocation) error {
+	if err := w.denyTagsOnly("RepointBookFile"); err != nil {
+		return err
+	}
 	if w.files == nil {
 		return errors.New("repairs: writer has no book_file store")
 	}
@@ -362,6 +380,9 @@ func (w *Writer) RepointBookFile(bookID, fileID string, expect, to undo.BookFile
 // then moves fileIDs from source onto target (the store refuses a row no
 // longer on source).
 func (w *Writer) MoveBookFiles(fileIDs []string, source, target string) error {
+	if err := w.denyTagsOnly("MoveBookFiles"); err != nil {
+		return err
+	}
 	if w.files == nil {
 		return errors.New("repairs: writer has no book_file store")
 	}
@@ -384,6 +405,9 @@ func (w *Writer) MoveBookFiles(fileIDs []string, source, target string) error {
 // SetTrackNumber journals undo.ChangeTypeBookFileTrack and then sets one
 // row's track while it is still from.
 func (w *Writer) SetTrackNumber(bookID, fileID string, from, to int) error {
+	if err := w.denyTagsOnly("SetTrackNumber"); err != nil {
+		return err
+	}
 	if w.files == nil {
 		return errors.New("repairs: writer has no book_file store")
 	}
@@ -412,6 +436,9 @@ func (w *Writer) SetTrackNumber(bookID, fileID string, from, to int) error {
 // Recompute recomputes a book's duration and size aggregates after its rows
 // changed.
 func (w *Writer) Recompute(bookID string) error {
+	if err := w.denyTagsOnly("Recompute"); err != nil {
+		return err
+	}
 	if w.files == nil {
 		return errors.New("repairs: writer has no book_file store")
 	}

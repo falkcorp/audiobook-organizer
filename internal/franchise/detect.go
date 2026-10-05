@@ -1,7 +1,7 @@
 // file: internal/franchise/detect.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5b0e6d2a-8c4f-4e71-9a3d-1f7c2b9e4d60
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 package franchise
 
@@ -40,8 +40,8 @@ type Signal struct {
 	Hit   Hit    `json:"hit"`
 	// Weak marks evidence that holds the book but is not enough on its own
 	// to tag it without a person reading the row: a title only the broad
-	// rule names, a credit named only by "Missy", or a library-wide
-	// folder/twin signal.
+	// rule names or one named only by a census range term, a credit named
+	// only by "Missy", or a library-wide folder/twin signal.
 	Weak bool `json:"weak,omitempty"`
 }
 
@@ -83,6 +83,17 @@ func weakCreditTerm(hits []Hit) bool {
 	return len(hits) > 0
 }
 
+// MatchesCreditStrong reports whether a credit value (narrator, publisher)
+// names the franchise by more than "Missy" alone. Owner decision 2026-10-05:
+// in the credit checks the bulk-apply guard added on 2026-10-04 (narrator and
+// publisher), a credit named only by "Missy" ("Missy Cambridge", "Missy
+// Elliott") does not hold a book. Title, path and series keep the original
+// pattern, "Missy" included: the old guard held on those.
+func MatchesCreditStrong(s string) bool {
+	hits := MatchAll(s)
+	return len(hits) > 0 && !weakCreditTerm(hits)
+}
+
 // Detect returns every signal in e, strong and weak.
 func Detect(e Evidence) Result {
 	var r Result
@@ -101,7 +112,12 @@ func Detect(e Evidence) Result {
 	one(FieldPath, e.Path)
 	if e.Title != "" {
 		if h, ok := MatchTitle(e.Title); ok {
-			r.Signals = append(r.Signals, Signal{Field: FieldTitle, Value: e.Title, Hit: h})
+			// Only the franchise's own words in a title are strong
+			// ("Doctor Who: ...", "Torchwood: ...", the studio). A title named
+			// only by a census range term ("Genesis of the Cybermen", "The
+			// Sirens of Time") is weak: the words also name novels, episodes
+			// of other shows and prose. The guards still hold on it.
+			r.Signals = append(r.Signals, Signal{Field: FieldTitle, Value: e.Title, Hit: h, Weak: h.Term != "title"})
 		} else {
 			// The bulk-apply guard has always held a title the broad rule
 			// names ("Big Finish to the Season"); not enough to tag.

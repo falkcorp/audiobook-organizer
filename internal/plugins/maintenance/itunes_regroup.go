@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_regroup.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-10-02
+// last-edited: 2026-10-05
 
 package maintenance
 
@@ -397,8 +397,7 @@ func regroupBookMeta(b *database.Book, ff *regroupFileFacts, incumbent string, l
 		HasNonITunesFile:    ff.nonITunes,
 		Organized:           b.LibraryState != nil && *b.LibraryState == "organized",
 		FilesWithoutPID:     ff.withoutPID,
-		ManualOnly: ff.manualPath || applygate.IsOwnerManualOnly(b.FilePath, seriesName) ||
-			applygate.IsOwnerManualOnly(b.Title, ""),
+		ManualOnly:          ff.manualPath || bookRowManualOnly(b, seriesName),
 	}
 }
 
@@ -826,4 +825,13 @@ func regroupExamples(plan itunesservice.RegroupPlan, n int) []string {
 		}
 	}
 	return out
+}
+
+// bookRowManualOnly is applygate.BookRowManualOnly on a full book row.
+func bookRowManualOnly(b *database.Book, seriesName string) bool {
+	if b == nil {
+		return false
+	}
+	core := b.Core()
+	return applygate.BookRowManualOnly(&core, seriesName)
 }

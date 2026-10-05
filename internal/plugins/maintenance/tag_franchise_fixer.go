@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/tag_franchise_fixer.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 8c8a3b12-5d98-45d2-9751-c25bf96df34e
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 package maintenance
 
@@ -55,7 +55,8 @@ const tfFolderMaxFiles = 150
 const tfTwinMinSize = 1 << 20
 
 // tagFranchiseFixer proposes franchise tags (franchise:doctor-who,
-// franchise:big-finish, franchise:torchwood, plus range:<range>) for every
+// franchise:big-finish, franchise:torchwood, plus range:<range>, with source
+// franchise.RunSource(<apply op id>)) for every
 // book the shared matcher (internal/franchise) finds, so the owner-manual
 // guards still recognise the book after its title or path changes, and the
 // Doctor Who cleanup can select its books by tag.
@@ -80,7 +81,7 @@ func (f *tagFranchiseFixer) Title() string {
 }
 func (f *tagFranchiseFixer) Description() string {
 	return "Tags every Doctor Who, Big Finish and Torchwood book the shared franchise matcher finds with " +
-		"franchise:<name> and range:<range> (source franchise-matcher), showing the signals that matched. " +
+		"franchise:<name> and range:<range> (source franchise-matcher:<apply op id>), showing the signals that matched. " +
 		"Once tagged, the owner-manual guards hold the book even if its title or path changes. Rows found " +
 		"only by weak evidence (the book's folder holds franchise files, a same-name file sits in a franchise " +
 		"folder, a title only the broad rule names, a \"Missy\" credit) are review rows. Writes tags only -- " +
@@ -146,8 +147,10 @@ func (f *tagFranchiseFixer) buildIndex(ctx context.Context, files []database.Boo
 		go func(w int) {
 			defer wg.Done()
 			pt := part{folder: map[string]franchise.Signal{}, twin: map[string]franchise.Signal{}}
-			for i := w; i < len(files); i += workers {
-				if i%4096 == 0 && ctx.Err() != nil {
+			for i, n := w, 0; i < len(files); i, n = i+workers, n+1 {
+				// n counts this worker's own items: i itself steps by
+				// workers, so i%4096 was zero only for some workers.
+				if n%4096 == 0 && ctx.Err() != nil {
 					return
 				}
 				p := files[i].FilePath
@@ -508,15 +511,23 @@ func tfFingerprint(r repairs.Row, missing []string) string {
 	return hex.EncodeToString(sum[:])[:32]
 }
 
-// Apply adds the missing tags, each journaled; a tag the book gained since
-// the re-plan is left alone (Writer.AddBookTag).
+// Apply adds the missing tags, each journaled under this run's source; a tag
+// the book gained since the re-plan is left alone (Writer.AddBookTag).
 func (f *tagFranchiseFixer) Apply(_ context.Context, w *repairs.Writer, fresh repairs.Row) error {
 	d, ok := fresh.Detail.(*tfDecision)
 	if !ok || d == nil {
 		return fmt.Errorf("%s: row %s carries no decision", tagFranchiseFixerID, fresh.RowID)
 	}
+	// Each apply stamps its own source (franchise.RunSource), so reverting
+	// this run removes only the tags this run wrote.
+	//
+	// The store has no compare-and-set for tags: a person adding the same
+	// tag between AddBookTag's read and its write ends up with this run's
+	// source, and this run's revert would then remove it. The window is one
+	// point read wide.
+	src := franchise.RunSource(w.OpID())
 	for i, t := range d.tags {
-		if _, err := w.AddBookTag(d.bookID, t, franchise.TagSource); err != nil {
+		if _, err := w.AddBookTag(d.bookID, t, src); err != nil {
 			if i > 0 {
 				return fmt.Errorf("tag %s %q after %v: %w: %w", d.bookID, t, d.tags[:i], repairs.ErrPartiallyApplied, err)
 			}

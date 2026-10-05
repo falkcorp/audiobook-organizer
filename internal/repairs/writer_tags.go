@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_tags.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 637b4ad2-17cd-41f7-9b6f-361a057071bf
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 package repairs
 
@@ -39,6 +39,10 @@ type TagStore interface {
 	AddBookTagWithSource(bookID, tag, source string) error
 }
 
+// OpID is the apply operation's id ("" without WithJournal): a fixer that
+// stamps its writes with the run (franchise.RunSource) reads it here.
+func (w *Writer) OpID() string { return w.opID }
+
 // WithTags wires w to write book tags through store. Without WithJournal,
 // AddBookTag fails with ErrNotJournaled.
 func (w *Writer) WithTags(store TagStore) *Writer {
@@ -69,11 +73,27 @@ func (w *Writer) AddBookTag(bookID, tag, source string) (bool, error) {
 			return false, nil
 		}
 	}
-	err = w.JournalStep(bookID, UndoEntry{ChangeType: undo.ChangeTypeBookTagAdd, Field: tag, Old: undo.BookTagAbsent, New: source},
+	err = w.journalStep(bookID, UndoEntry{ChangeType: undo.ChangeTypeBookTagAdd, Field: tag, Old: undo.BookTagAbsent, New: source},
 		func() error { return w.tags.AddBookTagWithSource(bookID, tag, source) })
 	if err != nil {
 		return false, err
 	}
 	w.writes.Add(1)
 	return true, nil
+}
+
+// ErrTagsOnlyWriter is returned by every Writer method except the tag
+// primitive when the apply's fixer declared BookTagsOnly: the framework guard
+// was skipped for it on that promise, so the Writer enforces it.
+var ErrTagsOnlyWriter = errors.New("repairs: this fixer is book-tags-only; the writer refuses any other write")
+
+// restrictToTags makes every non-tag method of w refuse (ErrTagsOnlyWriter).
+// RunApply sets it for a BookTagsOnly fixer before the first Apply.
+func (w *Writer) restrictToTags() { w.tagsOnly.Store(true) }
+
+func (w *Writer) denyTagsOnly(method string) error {
+	if w.tagsOnly.Load() {
+		return fmt.Errorf("%w (%s)", ErrTagsOnlyWriter, method)
+	}
+	return nil
 }

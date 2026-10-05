@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_locks.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 37c8abdf-afee-4662-8fc6-4e18d4194825
-// last-edited: 2026-10-03
+// last-edited: 2026-10-05
 
 package repairs
 
@@ -62,6 +62,9 @@ func (w *Writer) WithFieldStates(store FieldStateStore) *Writer {
 // field's value was last recorded (a fetch, a person's edit), which the
 // swapped title/author fixer compares across fields.
 func (w *Writer) LockFields(bookID string, keys ...string) error {
+	if err := w.denyTagsOnly("LockFields"); err != nil {
+		return err
+	}
 	if w.fieldStates == nil {
 		return errors.New("repairs: writer has no field-state store")
 	}

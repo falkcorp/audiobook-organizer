@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_credits.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2d552bb6-33a3-4168-9c64-c78bec530ec4
-// last-edited: 2026-10-01
+// last-edited: 2026-10-05
 
 package repairs
 
@@ -57,6 +57,9 @@ func (w *Writer) WithCredits(store CreditStore) *Writer {
 // credit write (an author row just created, a series link about to be
 // written). A failure is ErrNotJournaled: do not make the write.
 func (w *Writer) RecordChange(bookID string, e UndoEntry) error {
+	if err := w.denyTagsOnly("RecordChange"); err != nil {
+		return err
+	}
 	return w.Journal(bookID, e.ChangeType, e.Field, e.Old, e.New)
 }
 
@@ -67,6 +70,9 @@ func (w *Writer) RecordChange(bookID string, e UndoEntry) error {
 // journals and writes nothing; any other error from fn is returned as is
 // (wrap ErrChangedSincePlan for a compare-and-set refusal).
 func (w *Writer) ModifyCredits(bookID string, fn func(cur []database.BookAuthor) ([]database.BookAuthor, UndoEntry, error)) ([]database.BookAuthor, error) {
+	if err := w.denyTagsOnly("ModifyCredits"); err != nil {
+		return nil, err
+	}
 	if w.credits == nil {
 		return nil, errors.New("repairs: writer has no credit store")
 	}
@@ -106,6 +112,9 @@ func (w *Writer) ModifyCredits(bookID string, fn func(cur []database.BookAuthor)
 // which undo-last-apply refuses too. Returns ErrChangedSincePlan when the
 // primary no longer names from.
 func (w *Writer) SetPrimaryAuthor(bookID string, from int, to *database.Author) error {
+	if err := w.denyTagsOnly("SetPrimaryAuthor"); err != nil {
+		return err
+	}
 	if err := w.beat("primary author of book " + bookID); err != nil {
 		return err
 	}

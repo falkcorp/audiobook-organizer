@@ -1,7 +1,7 @@
 // file: internal/repairs/writer.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: c71e0d93-4b28-4a5f-8e6c-2f9a1d7b3e48
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 package repairs
 
@@ -83,6 +83,9 @@ type Writer struct {
 	// tags is the book_tag surface (writer_tags.go); nil until WithTags. Its
 	// rows are journaled through journal above.
 	tags TagStore
+	// tagsOnly: the apply's fixer is BookTagsOnly; every non-tag method
+	// refuses (restrictToTags).
+	tagsOnly atomic.Bool
 
 	// lease renews the apply's scan stand-down lease and reports whether it
 	// is still held; nil when no lease is held (RunApply installs it for the
@@ -113,6 +116,9 @@ func NewWriter(store BookModifier, history HistoryRecorder, source, changeType, 
 // database.TrackedBookFields order. An error from fn aborts the write and is
 // returned as is.
 func (w *Writer) Modify(bookID string, fn func(*database.Book) error) ([]string, error) {
+	if err := w.denyTagsOnly("Modify"); err != nil {
+		return nil, err
+	}
 	if err := w.beat("book " + bookID); err != nil {
 		return nil, err
 	}

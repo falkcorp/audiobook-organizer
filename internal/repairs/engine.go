@@ -1,7 +1,7 @@
 // file: internal/repairs/engine.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 9b3e7f40-2d15-4a86-9c1f-6e0a4d8b7c25
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 package repairs
 
@@ -445,6 +445,11 @@ func RunApply(ctx context.Context, f Fixer, plan *PlanResult, planOpID string, r
 	}
 	if !dryRun && deps.Writer == nil {
 		return res, fmt.Errorf("repairs: apply %s: no writer", f.ID())
+	}
+	// A BookTagsOnly fixer skipped the framework guard on the promise that it
+	// writes book tags only; its writer refuses anything else.
+	if deps.Writer != nil && AllowsBookTagsOnly(f) {
+		deps.Writer.restrictToTags()
 	}
 	// One resolver for the run (the guard's per-folder symlink memo).
 	deps.paths = NewPathResolver()

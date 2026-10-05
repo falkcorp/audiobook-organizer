@@ -1,7 +1,7 @@
 // file: internal/applygate/manual_only.go
-// version: 1.10.0
+// version: 1.12.0
 // guid: a2f62ab5-314e-427a-8ca7-de28de936b75
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 package applygate
 
@@ -61,8 +61,10 @@ type ManualOnlyGuard struct {
 	// Bulk is set by a caller applying without a human choosing this one book
 	// (a bulk apply, including the review page's bulk buttons).
 	Bulk bool
-	// StoreDetail is the caller's store-backed finding ("" = none): what its
-	// read of the book's series name and every book_file path matched.
+	// StoreDetail is the caller's store-backed finding ("" = none): what
+	// BulkManualOnlyGuard's reads matched (the transcribed fields, narrator,
+	// publisher, franchise tags, author credits, series name or a book_file
+	// path or its transcribed fields).
 	StoreDetail string
 	// ReadErr is set instead of StoreDetail when the caller's store read
 	// failed: the check could not be done, and the gate refuses with
@@ -154,8 +156,10 @@ func BulkManualOnlyGuard(r ManualOnlyReaders, book *database.Book, searchQuery s
 	}
 	// The narrator and publisher fields (no store read): the album and the
 	// studio of an iTunes-imported Big Finish book live there.
+	// A credit named only by "Missy" does not count here (owner decision
+	// 2026-10-05; franchise.MatchesCreditStrong).
 	for _, ch := range []struct{ what, v string }{{"narrator", strDeref(book.Narrator)}, {"publisher", strDeref(book.Publisher)}} {
-		if matchesManualOnly(ch.v) {
+		if franchise.MatchesCreditStrong(ch.v) {
 			g.StoreDetail = manualOnlyWhy + ch.what + " " + strconv.Quote(ch.v)
 			return g
 		}
@@ -212,6 +216,14 @@ func BulkManualOnlyGuard(r ManualOnlyReaders, book *database.Book, searchQuery s
 	return g
 }
 
+// manualOnlyCheck is one value ManualOnlyDetail matches. credit marks a
+// book credit the guard began reading on 2026-10-04 (narrator, publisher),
+// where "Missy" alone does not count (franchise.MatchesCreditStrong).
+type manualOnlyCheck struct {
+	what, value string
+	credit      bool
+}
+
 // ManualOnlyDetail reports why a bulk apply of candidate c onto book must be
 // refused, as a reason and detail, or two "" when nothing marks it. The
 // reason is ReasonOwnerManualCheckFailed when the caller's store read failed
@@ -233,30 +245,36 @@ func ManualOnlyDetail(book *database.Book, c *metafetch.MetadataCandidate, ts Tr
 	if g.StoreDetail != "" {
 		return ReasonOwnerManualOnly, g.StoreDetail
 	}
-	checks := []struct{ what, value string }{
-		{"path", book.FilePath},
-		{"title", book.Title},
-		{"search query", ts.Query},
+	checks := []manualOnlyCheck{
+		{what: "path", value: book.FilePath},
+		{what: "title", value: book.Title},
+		{what: "search query", value: ts.Query},
 		// iTunes-imported Big Finish books keep the album in the narrator
 		// ("Stargate SG-1 - Series 2", "The War Master - Series 12") and
 		// the studio in the narrator or publisher.
-		{"narrator", strDeref(book.Narrator)},
-		{"publisher", strDeref(book.Publisher)},
+		{what: "narrator", value: strDeref(book.Narrator), credit: true},
+		{what: "publisher", value: strDeref(book.Publisher), credit: true},
 	}
 	if c != nil {
 		checks = append(checks,
-			struct{ what, value string }{"candidate title", c.Title},
-			struct{ what, value string }{"candidate series", c.Series},
+			manualOnlyCheck{what: "candidate title", value: c.Title},
+			manualOnlyCheck{what: "candidate series", value: c.Series},
 			// A Big Finish record often carries its franchise ONLY in the
 			// publisher ("The Chimes of Midnight", publisher "Big Finish
 			// Productions", no series): a blank-titled rip outside any
 			// franchise folder had nothing else to match.
-			struct{ what, value string }{"candidate publisher", c.Publisher},
-			struct{ what, value string }{"candidate author", c.Author},
+			manualOnlyCheck{what: "candidate publisher", value: c.Publisher},
+			manualOnlyCheck{what: "candidate author", value: c.Author},
 		)
 	}
 	for _, ch := range checks {
-		if matchesManualOnly(ch.value) {
+		match := matchesManualOnly
+		if ch.credit {
+			// Owner decision 2026-10-05: "Missy" alone in a narrator or
+			// publisher credit does not hold a book.
+			match = franchise.MatchesCreditStrong
+		}
+		if match(ch.value) {
 			return ReasonOwnerManualOnly, manualOnlyWhy +
 				ch.what + " " + strconv.Quote(ch.value)
 		}
@@ -269,4 +287,23 @@ func strDeref(p *string) string {
 		return ""
 	}
 	return *p
+}
+
+// BookRowManualOnly is the owner-manual check on everything a book ROW
+// carries, with no store read: its path, title, series name, narrator and
+// publisher (where "Missy" alone does not count, as in BulkManualOnlyGuard)
+// and its transcribed title and author. A whole-library op that decides from
+// rows it already loaded uses it; it does NOT see the book's author credits,
+// franchise tags or book_file rows, which only BulkManualOnlyGuard reads.
+func BookRowManualOnly(core *database.BookCore, seriesName string) bool {
+	if core == nil {
+		return false
+	}
+	if IsOwnerManualOnly(core.FilePath, seriesName) || matchesManualOnly(core.Title) {
+		return true
+	}
+	if franchise.MatchesCreditStrong(strDeref(core.Narrator)) || franchise.MatchesCreditStrong(strDeref(core.Publisher)) {
+		return true
+	}
+	return matchesManualOnly(strDeref(core.TranscribedTitle)) || matchesManualOnly(strDeref(core.TranscribedAuthor))
 }

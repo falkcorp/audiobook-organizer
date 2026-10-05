@@ -1,7 +1,7 @@
 // file: internal/metabatch/upgrade.go
-// version: 2.2.1
+// version: 2.3.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-02
+// last-edited: 2026-10-05
 //
 // Background job that upgrades metadata from lower-quality sources
 // (Open Library, Google Books, Wikipedia) to richer ones (Hardcover,
@@ -113,7 +113,7 @@ type UpgradeResult struct {
 	Skipped  int `json:"skipped"`
 	Errors   int `json:"errors"`
 	// OwnerManualOnly counts books left alone because they are Doctor Who /
-	// Big Finish / Torchwood (applygate.IsOwnerManualOnly). They are counted
+	// Big Finish / Torchwood (applygate.BulkManualOnlyGuard). They are counted
 	// in Checked, not in Skipped.
 	OwnerManualOnly int `json:"owner_manual_only"`
 	// CursorStart and CursorEnd are the sweep positions this run started
@@ -359,35 +359,20 @@ func transcriptionConfirmsCandidate(book *database.Book, c *metafetch.MetadataCa
 }
 
 // isOwnerManualOnly reports whether the book belongs to a library the owner
-// curates by hand (applygate.IsOwnerManualOnly: Doctor Who / Big Finish /
-// Torchwood), judged on the book's path, title, series name and every file
-// row's path, the same inputs the maintenance ops check. A read failure is
+// curates by hand (Doctor Who / Big Finish / Torchwood), through the same
+// guard every bulk apply uses (applygate.BulkManualOnlyGuard with all four
+// readers, then ManualOnlyDetail): the book's path, title, narrator,
+// publisher, transcribed fields, series name, author credits, franchise tags
+// and every file row's path and transcribed fields. A read failure is
 // returned rather than read as "not manual-only", which would loosen the
 // rule.
 func (s *MetadataUpgradeService) isOwnerManualOnly(book *database.Book) (bool, error) {
-	series := ""
-	if book.SeriesID != nil {
-		sr, err := s.DB.GetSeriesByID(*book.SeriesID)
-		if err != nil {
-			return false, fmt.Errorf("read series for the owner-manual check: %w", err)
-		}
-		if sr != nil {
-			series = sr.Name
-		}
+	g := applygate.BulkManualOnlyGuard(applygate.ManualOnlyReaders{Files: s.DB, Series: s.DB, Authors: s.DB, Tags: s.DB}, book, "")
+	if g.ReadErr != "" {
+		return false, errors.New(g.ReadErr)
 	}
-	if applygate.IsOwnerManualOnly(book.FilePath, series) || applygate.IsOwnerManualOnly(book.Title, "") {
-		return true, nil
-	}
-	files, err := s.DB.GetBookFiles(book.ID)
-	if err != nil {
-		return false, fmt.Errorf("read files for the owner-manual check: %w", err)
-	}
-	for _, f := range files {
-		if applygate.IsOwnerManualOnly(f.FilePath, "") {
-			return true, nil
-		}
-	}
-	return false, nil
+	reason, _ := applygate.ManualOnlyDetail(book, nil, applygate.TranscribedSearch{}, g)
+	return reason == applygate.ReasonOwnerManualOnly, nil
 }
 
 // tryUpgradeBook re-searches metadata for a single book and applies the best
