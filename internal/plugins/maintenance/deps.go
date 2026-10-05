@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.73.0
+// version: 1.74.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-10-05
 
@@ -15,7 +15,6 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/compactprogress"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/childop"
@@ -365,10 +364,12 @@ type OpsStore interface {
 // ReconcileStore is what reconcile.RunITunesHeal requires. It is spelled out
 // here rather than imported because reconcile's own requirement is unexported;
 // Go assigns interface to interface on method-set superset, so naming it is
-// unnecessary. dedup.Store is embedded BY NAME so this re-narrows on its own
-// when dedup narrows further.
+// unnecessary. merge.Store is embedded BY NAME so this re-narrows on its own
+// when merge narrows further: the heal collapses duplicates through
+// merge.Service since 2026-10-05 (it used to be dedup.MergeBooks, whose
+// dedup.Store this embedded).
 type ReconcileStore interface {
-	dedup.Store
+	merge.Store
 
 	GetBookByID(id string) (*database.Book, error)
 	GetBookFileByPID(itunesPID string) (*database.BookFile, error)

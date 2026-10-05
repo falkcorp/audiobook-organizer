@@ -20,6 +20,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/personname"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 	ulid "github.com/oklog/ulid/v2"
@@ -233,8 +234,9 @@ func IsRefusal(err error) bool {
 	var fileless *FilelessPrimaryError
 	var softDeleted *SoftDeletedInputError
 	var provisional *ProvisionalScanError
+	var shared *SharedAudioPathError
 	return errors.As(err, &fileless) || errors.As(err, &softDeleted) || errors.As(err, &provisional) ||
-		errors.Is(err, ErrITunesProtected)
+		errors.As(err, &shared) || errors.Is(err, ErrITunesProtected)
 }
 
 // HasAudioRoute reports whether a book row can reach audio at all: it has at
@@ -397,6 +399,66 @@ type MergeOptions struct {
 	// merge lock and in the same write that marks the survivor primary. An
 	// error writing it fails the merge before any loser is soft-deleted.
 	CarryITunesFields bool
+	// RefuseSharedAudioPaths refuses the merge, before any write, when a live
+	// loser's audio path (its FilePath or a book_file path) equals or lies
+	// inside one of the survivor's, or the other way round
+	// (SharedAudioPathError). A purge with delete-files removes a
+	// soft-deleted book's own FilePath and its book_file paths, so retiring
+	// such a loser would put audio the survivor reaches on the purge clock.
+	// The iTunes heal sets it: the organize-bug duplicates it collapses are
+	// the rows most likely to share a folder. Not on by default: two rows at
+	// one path are a routine dedup merge, and the purge's own refusal of a
+	// book that still owns file rows covers the common shape.
+	RefuseSharedAudioPaths bool
+}
+
+// SharedAudioPathError is MergeOptions.RefuseSharedAudioPaths' refusal.
+type SharedAudioPathError struct {
+	LoserID    string
+	SurvivorID string
+	Paths      []string
+}
+
+func (e *SharedAudioPathError) Error() string {
+	return fmt.Sprintf("loser %s shares audio path(s) %s with survivor %s; a purge with file deletion would remove the kept audio",
+		e.LoserID, strings.Join(e.Paths, ", "), e.SurvivorID)
+}
+
+// audioPaths is a book's FilePath and its book_file paths, cleaned.
+func audioPaths(b *database.Book, files []database.BookFile) []string {
+	set := map[string]bool{}
+	if b.FilePath != "" {
+		set[filepath.Clean(b.FilePath)] = true
+	}
+	for _, f := range files {
+		if f.FilePath != "" {
+			set[filepath.Clean(f.FilePath)] = true
+		}
+	}
+	return slices.Sorted(maps.Keys(set))
+}
+
+// refuseSharedAudioPaths is the RefuseSharedAudioPaths check.
+func refuseSharedAudioPaths(books []*database.Book, filesByID map[string][]database.BookFile, survivorIdx int) error {
+	keep := audioPaths(books[survivorIdx], filesByID[books[survivorIdx].ID])
+	for i, b := range books {
+		if i == survivorIdx || b.IsSoftDeleted() {
+			continue
+		}
+		var shared []string
+		for _, lp := range audioPaths(b, filesByID[b.ID]) {
+			for _, kp := range keep {
+				if pathutil.IsWithin(lp, kp) || pathutil.IsWithin(kp, lp) {
+					shared = append(shared, lp)
+					break
+				}
+			}
+		}
+		if len(shared) > 0 {
+			return &SharedAudioPathError{LoserID: b.ID, SurvivorID: books[survivorIdx].ID, Paths: shared}
+		}
+	}
+	return nil
 }
 
 // MergeBooksWithOptions is MergeBooks with MergeOptions; MergeBooks is this
@@ -586,6 +648,12 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 		}
 		if len(fileBearing) > 0 {
 			return nil, &FilelessPrimaryError{PrimaryID: books[bestIdx].ID, FileBearing: fileBearing}
+		}
+	}
+
+	if opts.RefuseSharedAudioPaths {
+		if err := refuseSharedAudioPaths(books, filesByID, bestIdx); err != nil {
+			return nil, err
 		}
 	}
 

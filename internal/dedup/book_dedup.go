@@ -1,7 +1,7 @@
 // file: internal/dedup/book_dedup.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-09-26
+// last-edited: 2026-10-05
 
 // Package dedup: book_dedup.go contains the extracted execution logic for the
 // "dedup.book-scan" and "dedup.book-merge" async operations.  The *Server
@@ -527,8 +527,13 @@ func handOffRetiredPrimaries(ctx context.Context, store Store, groups map[string
 //
 // F6 (2026-07-18): the POST /audiobooks/merge endpoint (dedup.book-merge op) no
 // longer uses this function — it was rerouted to merge.Service.MergeBooks.
-// This function is retained solely for internal/reconcile/itunes_heal.go,
-// which collapses acoustically identical organize-bug duplicate rows.
+// 2026-10-05: neither does internal/reconcile/itunes_heal.go, its last caller;
+// it collapses its duplicates through merge.Service with RefuseSharedAudioPaths
+// and CarryITunesFields. This function has no production caller.
+//
+// Deprecated: use merge.Service.MergeBooksWithOptions. This path does not
+// unite version groups (MergeBooks item 6): a loser's other versions stay
+// behind in a group of their own.
 //
 // Loser retirement (A1#11, 2026-09-14): losers used to be HARD-deleted with
 // store.DeleteBook, which destroyed the row and its metadata for good, left

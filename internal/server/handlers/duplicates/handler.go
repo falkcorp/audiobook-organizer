@@ -1,5 +1,5 @@
 // file: internal/server/handlers/duplicates/handler.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 9f41f363-34fc-4ad2-b2f1-46d5ac0ba2f3
 // last-edited: 2026-10-05
 
@@ -326,9 +326,11 @@ func (h *Handler) ListCombineJournals(c *gin.Context) {
 // UndoSiblingMove puts back the version-group siblings one merge carried into
 // its group (merge.MergeBooks item 6). POST /merge/sibling-undo/:journal_id.
 //
-// 404 when no such journal exists; 200 with the restored, already-back and
-// moved-on book ids otherwise. A sibling moved to another group since the
-// merge is left there and listed in moved_on.
+// 404 when no such journal exists; 409 when the undo is refused (the journal
+// is already undone or aborted, or a later merge moved one of its siblings
+// into the same group again; see merge.ErrSiblingUndoRefused); 200 with the
+// restored, already-back and moved-on book ids otherwise. A sibling moved to
+// another group since the merge is left there and listed in moved_on.
 func (h *Handler) UndoSiblingMove(c *gin.Context) {
 	journalID := c.Param("journal_id")
 	ms := h.getMergeService()
@@ -341,6 +343,9 @@ func (h *Handler) UndoSiblingMove(c *gin.Context) {
 	case errors.Is(err, merge.ErrSiblingJournalNotFound):
 		httputil.RespondWithNotFound(c, "sibling-move journal", journalID)
 		return
+	case errors.Is(err, merge.ErrSiblingUndoRefused):
+		httputil.RespondWithConflict(c, err.Error())
+		return
 	case err != nil:
 		httputil.InternalError(c, "failed to undo sibling move", err)
 		return
@@ -352,17 +357,28 @@ func (h *Handler) UndoSiblingMove(c *gin.Context) {
 	httputil.RespondWithOK(c, res)
 }
 
+// Sibling-journal list paging: limit=0 or absent is the default, and a larger
+// limit is capped, so one request never returns the whole journal history.
+const (
+	siblingJournalListDefault = 50
+	siblingJournalListMax     = 500
+)
+
 // ListSiblingMoveJournals lists sibling-move journals newest-first.
-// GET /merge/sibling-journal?limit=N (default 50).
+// GET /merge/sibling-journal?limit=N (default 50, 0 means the default, capped
+// at 500). Each pending journal older than merge.SiblingJournalStaleAfter
+// carries stale=true: its merge failed or crashed part way.
 func (h *Handler) ListSiblingMoveJournals(c *gin.Context) {
-	limit := 50
+	limit := siblingJournalListDefault
 	if raw := c.Query("limit"); raw != "" {
 		n, err := strconv.Atoi(raw)
 		if err != nil || n < 0 {
 			httputil.RespondWithBadRequest(c, "limit must be a non-negative integer")
 			return
 		}
-		limit = n
+		if n > 0 {
+			limit = min(n, siblingJournalListMax)
+		}
 	}
 	ms := h.getMergeService()
 	if ms == nil {

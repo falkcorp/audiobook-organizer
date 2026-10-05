@@ -398,14 +398,16 @@ func (de *Engine) preMergeSnapshotNanos(bookID string, baselineNanos int64) int6
 // UnmergeAuto reverses a Tier-1 auto-merge recorded in the journal at journalKey
 // by reverting both the winner and loser books to their pre-merge book_ver
 // snapshots (restoring IsPrimaryVersion / VersionGroupID / MarkedForDeletion),
-// then putting back the siblings the merge carried along with this loser
-// through the merge's sibling-move journal
+// after first putting back the siblings the merge carried along with this
+// loser through the merge's sibling-move journal
 // (merge.Service.UndoSiblingMoveForLoser), and finally handing the primary on
-// in every group the undo touched.
+// in every group the undo touched and marking the entry undone.
 //
-// It refuses, writing nothing, an entry still marked Provisional: its merge
+// It refuses, writing nothing, an entry still marked Provisional (its merge
 // failed, or the post-merge patch could not be written, so the entry records
-// no snapshot to revert to and no siblings.
+// no snapshot to revert to and no siblings), an entry already undone
+// (UndoneAt; a replay would revert any later merge of the same books), and an
+// entry whose sibling undo the sibling-move journal refuses.
 //
 // The sibling restore goes through the journal, not the entry's own sibling
 // list, so its refusals apply here too: once an undo has put a sibling back, a
@@ -436,6 +438,10 @@ func (de *Engine) UnmergeAuto(journalKey string) error {
 	if entry == nil {
 		return fmt.Errorf("unmerge-auto: no journal entry at %s", journalKey)
 	}
+	if entry.UndoneAt != 0 {
+		return fmt.Errorf("unmerge-auto: journal entry %s was already undone at %s; replaying it could revert a later merge of these books, nothing reverted",
+			journalKey, time.Unix(0, entry.UndoneAt).UTC().Format(time.RFC3339))
+	}
 	if entry.Provisional {
 		return fmt.Errorf("unmerge-auto: journal entry %s was never finalized (the merge failed, or its post-merge record could not be written); nothing reverted. Restore loser %s from the trash, and undo any sibling moves with the sibling-move journal the merge logged",
 			journalKey, entry.LoserID)
@@ -448,6 +454,22 @@ func (de *Engine) UnmergeAuto(journalKey string) error {
 	}
 
 	var errs []string
+	// The siblings first: their undo is the one that can be refused (already
+	// undone by another path, or superseded by a later merge), and a refusal
+	// must leave the two books unreverted too.
+	if entry.SiblingJournalID != "" {
+		res, err := de.mergeService.UndoSiblingMoveForLoser(entry.SiblingJournalID, entry.LoserID)
+		if errors.Is(err, merge.ErrSiblingUndoRefused) {
+			return fmt.Errorf("unmerge-auto: siblings (journal %s): %w; nothing reverted", entry.SiblingJournalID, err)
+		}
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("siblings (journal %s): %v", entry.SiblingJournalID, err))
+		} else {
+			for _, id := range slices.Sorted(maps.Keys(res.MovedOn)) {
+				errs = append(errs, fmt.Sprintf("sibling %s: moved to version group %s since the merge; left there", id, res.MovedOn[id]))
+			}
+		}
+	}
 	groups := map[string]bool{}
 	if entry.IntoGroupID != "" {
 		groups[entry.IntoGroupID] = true
@@ -473,18 +495,15 @@ func (de *Engine) UnmergeAuto(journalKey string) error {
 	}
 	revert("loser", entry.LoserID, entry.LoserPreMergeTS)
 	revert("winner", entry.WinnerID, entry.WinnerPreMergeTS)
-	if entry.SiblingJournalID != "" {
-		res, err := de.mergeService.UndoSiblingMoveForLoser(entry.SiblingJournalID, entry.LoserID)
-		switch {
-		case err != nil:
-			errs = append(errs, fmt.Sprintf("siblings (journal %s): %v", entry.SiblingJournalID, err))
-		default:
-			for _, id := range slices.Sorted(maps.Keys(res.MovedOn)) {
-				errs = append(errs, fmt.Sprintf("sibling %s: moved to version group %s since the merge; left there", id, res.MovedOn[id]))
-			}
-		}
-	}
 	handOffRetiredPrimaries(context.Background(), de.bookStore, groups)
+
+	// Marked undone whether or not some step reported an error: the reverts
+	// that ran have rewritten the rows, and a replay would rewrite them again
+	// over whatever happened since. A step that failed is in the error.
+	entry.UndoneAt = time.Now().UnixNano()
+	if _, err := de.putJournal(*entry); err != nil {
+		errs = append(errs, fmt.Sprintf("journal entry not marked undone (a repeat would not be refused): %v", err))
+	}
 
 	if len(errs) > 0 {
 		return fmt.Errorf("unmerge-auto: %s", strings.Join(errs, "; "))

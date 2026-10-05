@@ -82,6 +82,12 @@ type AutoMergeJournalEntry struct {
 	// Entries written before this field existed read as not provisional,
 	// which is what every patched one of them is.
 	Provisional bool `json:"provisional,omitempty"`
+
+	// UndoneAt is when UnmergeAuto reverted this entry (UnixNano), zero
+	// before. UnmergeAuto refuses an entry already undone: its reverts
+	// rewrite both books' whole rows from the pre-merge snapshots, so a
+	// replay after the books were merged again would revert that later merge.
+	UndoneAt int64 `json:"undone_at,omitempty"`
 }
 
 // AutoMergeJournalSibling records one sibling a merge moved: from FromGroupID

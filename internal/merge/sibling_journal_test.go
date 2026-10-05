@@ -1,5 +1,5 @@
 // file: internal/merge/sibling_journal_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c4377415-6df2-417a-99f1-a4bdef8080f0
 // last-edited: 2026-10-05
 
@@ -109,7 +109,7 @@ func TestMergeBooks_RefusesProvisionalSibling(t *testing.T) {
 // Every merge that moves a sibling writes an applied sibling-move journal;
 // UndoSiblingMove puts the sibling back with its exact flag pointer and
 // hands its group a primary (the loser stays retired, so without the
-// hand-off the group would come back with none). A second undo is a no-op.
+// hand-off the group would come back with none). A second undo is refused.
 // A merge that moves no sibling writes no journal.
 func TestUndoSiblingMove_RestoresSiblingsAndGroupPrimary(t *testing.T) {
 	f := siblingFixture(t)
@@ -144,10 +144,10 @@ func TestUndoSiblingMove_RestoresSiblingsAndGroupPrimary(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, SiblingJournalUndone, j.Status)
 
-	u, err = svc.UndoSiblingMove(res.SiblingJournalID)
-	require.NoError(t, err)
-	require.Empty(t, u.Restored)
-	require.ElementsMatch(t, []string{ls, lsNil}, u.AlreadyBack)
+	// A repeat is refused: replaying an undone journal could revert a later
+	// merge that moved the same sibling again.
+	_, err = svc.UndoSiblingMove(res.SiblingJournalID)
+	require.ErrorIs(t, err, ErrSiblingUndoRefused)
 
 	_, err = svc.UndoSiblingMove("nope")
 	require.ErrorIs(t, err, ErrSiblingJournalNotFound)

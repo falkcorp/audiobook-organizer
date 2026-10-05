@@ -238,19 +238,27 @@ func (ms *Service) scanSiblingJournals() ([]SiblingMoveJournal, error) {
 // status, records LastError and the siblings that were resolved, and the
 // undo can be re-run.
 func (ms *Service) UndoSiblingMove(journalID string) (*SiblingUndoResult, error) {
-	return ms.undoSiblingJournal(journalID, func(MovedSibling) bool { return true })
+	return ms.undoSiblingJournal(journalID, "")
 }
 
 // UndoSiblingMoveForLoser is UndoSiblingMove limited to the siblings that left
 // with loserID (MovedSibling.WithLosers). dedup's UnmergeAuto undoes one
 // loser at a time and calls this, so undoing one loser neither restores
 // another loser's siblings nor marks the journal undone while that other
-// loser's siblings are still in the merge's group.
+// loser's siblings are still in the merge's group. When every one of
+// loserID's siblings is already resolved (an earlier UndoSiblingMove, say) it
+// does nothing and succeeds, whatever the journal's status: there is nothing
+// left for it to replay.
 func (ms *Service) UndoSiblingMoveForLoser(journalID, loserID string) (*SiblingUndoResult, error) {
-	return ms.undoSiblingJournal(journalID, func(s MovedSibling) bool { return slices.Contains(s.WithLosers, loserID) })
+	if loserID == "" {
+		return nil, fmt.Errorf("%w: no loser named", ErrSiblingUndoRefused)
+	}
+	return ms.undoSiblingJournal(journalID, loserID)
 }
 
-func (ms *Service) undoSiblingJournal(journalID string, pick func(MovedSibling) bool) (*SiblingUndoResult, error) {
+// undoSiblingJournal undoes the journal's siblings: all of them when loserID
+// is empty, else those that left with loserID.
+func (ms *Service) undoSiblingJournal(journalID, loserID string) (*SiblingUndoResult, error) {
 	mergeSerializeMu.Lock()
 	defer mergeSerializeMu.Unlock()
 
@@ -258,20 +266,23 @@ func (ms *Service) undoSiblingJournal(journalID string, pick func(MovedSibling) 
 	if err != nil {
 		return nil, err
 	}
+	var todo []MovedSibling
+	for _, sib := range j.Siblings {
+		if (loserID == "" || slices.Contains(sib.WithLosers, loserID)) && !slices.Contains(j.UndoneSiblings, sib.BookID) {
+			todo = append(todo, sib)
+		}
+	}
 	switch j.Status {
 	case SiblingJournalUndone:
+		if loserID != "" && len(todo) == 0 {
+			return &SiblingUndoResult{JournalID: j.ID, Status: j.Status}, nil
+		}
 		return nil, fmt.Errorf("%w: journal %s is already undone; replaying it could revert a later merge", ErrSiblingUndoRefused, j.ID)
 	case SiblingJournalAborted:
 		return nil, fmt.Errorf("%w: journal %s is aborted; its merge moved nothing", ErrSiblingUndoRefused, j.ID)
 	case SiblingJournalPending, SiblingJournalApplied:
 	default:
 		return nil, fmt.Errorf("%w: journal %s has unknown status %q", ErrSiblingUndoRefused, j.ID, j.Status)
-	}
-	var todo []MovedSibling
-	for _, sib := range j.Siblings {
-		if pick(sib) && !slices.Contains(j.UndoneSiblings, sib.BookID) {
-			todo = append(todo, sib)
-		}
 	}
 	if err := ms.requireNoNewerSiblingMove(j, todo); err != nil {
 		return nil, err
