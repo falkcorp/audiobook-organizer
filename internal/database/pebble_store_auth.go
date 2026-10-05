@@ -1,19 +1,36 @@
 // file: internal/database/pebble_store_auth.go
-// version: 1.2.4
+// version: 1.3.0
 // guid: d9815a3d-0997-4c62-89a2-73f3c57e7fa9
-// last-edited: 2026-10-03
+// last-edited: 2026-10-05
 
 package database
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
+
+var authLog = logger.New("database.auth")
+
+// ErrUndecodableUserRows is returned by ListUsersStrict when one or more user
+// rows could not be decoded. ListUsers skips such a row (logged); a caller
+// that must account for EVERY user -- the user-state probe the hard deletes
+// use (merge.UserStateProbe) -- uses ListUsersStrict and fails closed, since
+// a user it cannot see may hold state on the book about to be deleted.
+var ErrUndecodableUserRows = errors.New("database: undecodable user rows")
+
+// StrictUserLister is ListUsers that fails instead of skipping an
+// undecodable user row. Resolve it with AsCapability: it is not on Store.
+type StrictUserLister interface {
+	ListUsersStrict() ([]User, error)
+}
 
 // Users & Auth
 func (p *PebbleStore) CreateUser(username, email, passwordHashAlgo, passwordHash string, roles []string, status string) (*User, error) {
@@ -103,17 +120,47 @@ func (p *PebbleStore) UpdateUser(user *User) error {
 	return p.db.Set([]byte("u:"+user.ID), data, pebble.Sync)
 }
 
+// ListUsers lists every user whose row decodes. An undecodable row is logged
+// and skipped; ListUsersStrict reports it instead.
 func (p *PebbleStore) ListUsers() ([]User, error) {
+	users, bad, err := p.listUsers()
+	if err != nil {
+		return nil, err
+	}
+	for _, k := range bad {
+		authLog.Warn("ListUsers: skipping undecodable user row %s", logger.SanitizeLogValue(k))
+	}
+	return users, nil
+}
+
+// ListUsersStrict is ListUsers, but any undecodable user row is an error
+// (ErrUndecodableUserRows) naming how many and the first key. The decodable
+// users are returned alongside it.
+func (p *PebbleStore) ListUsersStrict() ([]User, error) {
+	users, bad, err := p.listUsers()
+	if err != nil {
+		return nil, err
+	}
+	if len(bad) > 0 {
+		return users, fmt.Errorf("%w: %d row(s), first %s", ErrUndecodableUserRows, len(bad), bad[0])
+	}
+	return users, nil
+}
+
+// listUsers returns the decodable users and the keys of the rows that did
+// not decode.
+func (p *PebbleStore) listUsers() ([]User, []string, error) {
 	prefix := []byte("u:")
 	iter, err := p.db.NewIter(&pebble.IterOptions{
 		LowerBound: prefix,
 		UpperBound: prefixEnd(prefix),
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer iter.Close()
 	var users []User
+	var bad []string
 	for iter.First(); iter.Valid(); iter.Next() {
 		key := string(iter.Key())
 		if strings.Contains(key, ":idx:") || strings.Contains(key, ":username:") || strings.Contains(key, ":email:") {
@@ -121,11 +168,15 @@ func (p *PebbleStore) ListUsers() ([]User, error) {
 		}
 		var u User
 		if err := json.Unmarshal(iter.Value(), &u); err != nil {
+			bad = append(bad, key)
 			continue
 		}
 		users = append(users, u)
 	}
-	return users, nil
+	if err := iter.Error(); err != nil {
+		return nil, nil, err
+	}
+	return users, bad, nil
 }
 
 func (p *PebbleStore) GetRoleByID(id string) (*Role, error) {

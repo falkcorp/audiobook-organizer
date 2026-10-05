@@ -1,5 +1,5 @@
 // file: internal/reconcile/reconcile.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-10-05
 
@@ -161,11 +161,20 @@ type VersionGroupCleanupResult struct {
 	// book_file rows: removing them would orphan those rows
 	// (database.ErrBookOwnsFiles), and their files are not deleted either.
 	SkippedOwnsFiles int `json:"skipped_owns_files"`
-	// SkippedHasUserState counts duplicates left in place because a user
-	// still has listening state on them (merge.BookHasCarryableUserState):
-	// the delete is a hard delete with no follow, so it would drop that
-	// state. Their files are not deleted either.
+	// StateCarried counts duplicates a user had listening state on whose
+	// state (progress, positions, bookmarks, ABS identity) was carried to
+	// the kept copy before the duplicate was removed
+	// (merge.CarryStateBeforeHardDelete). A dry run counts the duplicates
+	// an apply would carry and remove. Included in DuplicatesRemoved.
+	StateCarried int `json:"state_carried"`
+	// SkippedHasUserState counts duplicates left in place because a user's
+	// listening state on them could not be carried to the kept copy (the
+	// carry is all or nothing, and was put back): removing them would drop
+	// it. Their files are not deleted either.
 	SkippedHasUserState int `json:"skipped_has_user_state"`
+	// StateCheckErrors counts duplicates left in place because whether a
+	// user has listening state on them could not be read (fail closed).
+	StateCheckErrors int `json:"state_check_errors"`
 	// PrimaryHeld counts cleaned groups versionprimary held: no member is an
 	// organized library copy with its files present, so nothing was crowned
 	// and the group is left for version-group-primary-repair.
@@ -877,21 +886,35 @@ func CleanupDuplicateVersionGroups(store VersionGroupStore, rootDir string, dryR
 				result.SkippedOwnsFiles++
 				continue
 			}
-			// Nor one a user still has listening state on: this is a hard
-			// delete and nothing carries that state to the kept copy first.
-			// Same point (before the disk), same fail-closed rule. Users are
-			// listed once per pass.
+			// A duplicate a user has listening state on is a hard delete
+			// that would drop that state, so the state is carried to the
+			// kept copy first, all or nothing; a carry that does not fully
+			// land is put back and the duplicate kept. Same point (before
+			// the disk), same fail-closed rule: a state read that fails
+			// keeps the duplicate. Users are listed once per pass.
 			if stateProbe == nil {
 				if stateProbe, err = merge.NewUserStateProbe(store); err != nil {
 					return nil, fmt.Errorf("version-group cleanup: cannot list users to check their listening state: %w", err)
 				}
 			}
 			hasState, stateErr := stateProbe.Has(dup.ID)
-			if stateErr != nil || hasState {
-				pkgLog.Warn("version-group cleanup keeping duplicate %s of group %s: a user still has listening state on it (read error: %v)",
+			if stateErr != nil {
+				pkgLog.Warn("version-group cleanup keeping duplicate %s of group %s: could not read its users' listening state: %v",
 					logger.SanitizeLogValue(dup.ID), logger.SanitizeLogValue(groupID), stateErr)
-				result.SkippedHasUserState++
+				result.StateCheckErrors++
 				continue
+			}
+			keepID := libraryCopies[keepIdx].ID
+			if hasState && !dryRun {
+				if cerr := carryDuplicateState(store, keepID, dup.ID); cerr != nil {
+					pkgLog.Warn("version-group cleanup keeping duplicate %s of group %s: its users' listening state could not be carried to %s: %v",
+						logger.SanitizeLogValue(dup.ID), logger.SanitizeLogValue(groupID), logger.SanitizeLogValue(keepID), cerr)
+					result.SkippedHasUserState++
+					continue
+				}
+			}
+			if hasState {
+				result.StateCarried++
 			}
 
 			// Logged only past the guard, so the log never says a duplicate
@@ -936,6 +959,17 @@ func CleanupDuplicateVersionGroups(store VersionGroupStore, rootDir string, dryR
 	}
 
 	return result, nil
+}
+
+// carryDuplicateState carries dupID's users' listening state onto keepID
+// (merge.CarryStateBeforeHardDelete). A store that cannot move user state
+// is an error, so the duplicate is kept.
+func carryDuplicateState(store VersionGroupStore, keepID, dupID string) error {
+	um, ok := database.AsCapability[merge.UserProgressMerger](store)
+	if !ok {
+		return errors.New("store cannot move users' listening state")
+	}
+	return merge.CarryStateBeforeHardDelete(um, keepID, dupID)
 }
 
 // handOffPrimary runs versionprimary.EnsureSinglePrimary on group gid after

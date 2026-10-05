@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_clone_user_state_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 25096c43-be96-4bd4-8926-6b0af7861373
 // last-edited: 2026-10-05
 
@@ -17,15 +17,17 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 
-// icFailingStateStore fails every user-state write onto one book, so a
-// follow onto it cannot complete (its pending-repair record still lands).
+// icFailingStateStore fails every user-state write onto one book (only
+// failUser's, when set), so a follow onto it cannot complete (its
+// pending-repair record still lands).
 type icFailingStateStore struct {
 	*database.PebbleStore
-	failOn string
+	failOn   string
+	failUser string
 }
 
 func (s *icFailingStateStore) SetUserBookState(st *database.UserBookState) error {
-	if st.BookID == s.failOn {
+	if st.BookID == s.failOn && (s.failUser == "" || st.UserID == s.failUser) {
 		return fmt.Errorf("injected SetUserBookState failure for %s", st.BookID)
 	}
 	return s.PebbleStore.SetUserBookState(st)
@@ -117,4 +119,64 @@ func TestITunesClone_RollbackRefusedWhenStateCarryFails(t *testing.T) {
 	st, err = f.s.GetUserBookState(user.ID, "T")
 	require.NoError(t, err)
 	require.Equal(t, 55, st.ProgressPct)
+}
+
+// #3764 follow-up item 6a: a source in the trash refuses the rollback before
+// anything moves; the state stays on the clone.
+func TestITunesClone_RollbackRefusedWhenSourceTrashed(t *testing.T) {
+	f := newICFixture(t)
+	cloneID, user := applyCloneWithProgress(t, f)
+	require.NoError(t, merge.SoftDeleteBook(f.s, "T"))
+
+	g := icGroup(t, f.run(t, icParams{Rollback: true, GroupIDs: []string{"vg-t"}}), "vg-t")
+	require.Equal(t, icOutcomeFailed, g.Outcome)
+	require.Contains(t, g.Error, "is in the trash")
+	st, err := f.s.GetUserBookState(user.ID, cloneID)
+	require.NoError(t, err)
+	require.Equal(t, 55, st.ProgressPct, "the state is still on the clone")
+	src, err := f.s.GetUserBookState(user.ID, "T")
+	require.NoError(t, err)
+	require.Nil(t, src, "nothing moved to the trashed source")
+	rows, err := f.s.ScanPrefix(merge.PendingUserStateRepairPrefix)
+	require.NoError(t, err)
+	require.Empty(t, rows)
+}
+
+// #3764 follow-up item 6b: a partial carry (reader A moves, reader B's write
+// onto the source fails) is put back, so both readers keep their state on
+// the clone that stays live and primary, and no repair is left owed.
+func TestITunesClone_PartialCarryIsPutBackOnClone(t *testing.T) {
+	f := newICFixture(t)
+	cloneID, userA := applyCloneWithProgress(t, f)
+	userB, err := f.s.CreateUser("reader2", "reader2@example.com", "argon2id", "x", []string{"user"}, "active")
+	require.NoError(t, err)
+	require.NoError(t, f.s.SetUserBookState(&database.UserBookState{UserID: userB.ID, BookID: cloneID,
+		Status: database.UserBookStatusInProgress, ProgressPct: 80, LastActivityAt: time.Now()}))
+	require.NoError(t, f.s.SetUserPosition(userB.ID, cloneID, "seg", 4321))
+	sf := &icFailingStateStore{PebbleStore: f.s, failOn: "T", failUser: userB.ID}
+
+	p := &Plugin{deps: icStateDeps{icTestDeps: f.deps, userState: sf}}
+	rep, err := p.itunesCloneIntoLibrary(t.Context(), icParams{Rollback: true, GroupIDs: []string{"vg-t"}}, f.root, &opIDReporter{id: "op-ic-test"})
+	require.NoError(t, err)
+	g := icGroup(t, rep, "vg-t")
+	require.Equal(t, icOutcomeFailed, g.Outcome)
+	require.Contains(t, g.Error, "put back on")
+
+	for _, c := range []struct {
+		u   *database.User
+		pct int
+	}{{userA, 55}, {userB, 80}} {
+		st, err := f.s.GetUserBookState(c.u.ID, cloneID)
+		require.NoError(t, err)
+		require.Equal(t, c.pct, st.ProgressPct, "user %s's state is on the clone", c.u.ID)
+		pos, err := f.s.ListUserPositionsForBook(c.u.ID, cloneID)
+		require.NoError(t, err)
+		require.NotEmpty(t, pos)
+		srcSt, err := f.s.GetUserBookState(c.u.ID, "T")
+		require.NoError(t, err)
+		require.True(t, srcSt == nil || srcSt.ProgressPct == 0, "nothing of user %s's is left on the hidden source", c.u.ID)
+	}
+	rows, err := f.s.ScanPrefix(merge.PendingUserStateRepairPrefix)
+	require.NoError(t, err)
+	require.Empty(t, rows, "nothing is owed: every user's state is where it was")
 }
