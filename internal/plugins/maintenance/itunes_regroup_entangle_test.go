@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_regroup_entangle_test.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 9743f8e7-3f4d-43c2-976c-eb2ff7c3e4cc
 // last-edited: 2026-10-05
 
@@ -545,7 +545,7 @@ func TestITunesRegroupApply_GroupedEditionReceivesFragment(t *testing.T) {
 	if plan.Consolidated != 1 || plan.Groups[0].Target != ed.ID {
 		t.Fatalf("plan = %+v, want consolidate onto the edition %s", plan.Groups, ed.ID)
 	}
-	if err := p.applyRegroupPlan(context.Background(), s, plan, rgRoot, rep); err != nil {
+	if _, err := p.applyRegroupPlan(context.Background(), s, plan, rgRoot, rep); err != nil {
 		t.Fatalf("applyRegroupPlan: %v (logs %v)", err, rep.logs)
 	}
 
@@ -830,7 +830,7 @@ func TestITunesRegroupApply_RecheckSkipsChangedGroup(t *testing.T) {
 
 			tc.change(t, s, frag, other)
 
-			if err := p.applyRegroupPlan(context.Background(), s, plan, rgRoot, rep); err != nil {
+			if _, err := p.applyRegroupPlan(context.Background(), s, plan, rgRoot, rep); err != nil {
 				t.Fatalf("applyRegroupPlan: %v (logs %v)", err, rep.logs)
 			}
 			var found bool
@@ -942,7 +942,7 @@ func TestITunesRegroupApply_LibraryCopyKeepsTitle(t *testing.T) {
 			if tc.afterPlan != nil {
 				tc.afterPlan(t, s, b.ID)
 			}
-			if err := p.applyRegroupPlan(context.Background(), s, plan, rgRoot, rep); err != nil {
+			if _, err := p.applyRegroupPlan(context.Background(), s, plan, rgRoot, rep); err != nil {
 				t.Fatalf("applyRegroupPlan: %v (logs %v)", err, rep.logs)
 			}
 			after, err := s.GetBookByID(b.ID)
@@ -1126,7 +1126,7 @@ func TestITunesRegroupApply_HoldsGroupLockAcrossRecheckAndMoves(t *testing.T) {
 	}
 	probe.onMove = func() { notCrowned("before the moves") }
 	probe.onModify = func() { notCrowned("before the title write") }
-	if err := p.applyRegroupPlan(context.Background(), probe, plan, rgRoot, rep); err != nil {
+	if _, err := p.applyRegroupPlan(context.Background(), probe, plan, rgRoot, rep); err != nil {
 		t.Fatalf("applyRegroupPlan: %v (logs %v)", err, rep.logs)
 	}
 	if !started.Load() {
@@ -1198,7 +1198,7 @@ func TestITunesRegroupApply_TargetJoinedGroupRefused(t *testing.T) {
 	target := plan.Groups[0].Target
 
 	wrapped := &rgJoinGroupStore{PebbleStore: s, id: target, vg: "vg-joined"}
-	if err := p.applyRegroupPlan(context.Background(), wrapped, plan, rgRoot, rep); err != nil {
+	if _, err := p.applyRegroupPlan(context.Background(), wrapped, plan, rgRoot, rep); err != nil {
 		t.Fatalf("applyRegroupPlan: %v (logs %v)", err, rep.logs)
 	}
 	var found bool

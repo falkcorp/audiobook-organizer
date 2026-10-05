@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/manual_only_followups_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 414c97a5-21fa-425f-81df-a00e9bf95fd6
 // last-edited: 2026-10-05
 
@@ -89,7 +89,8 @@ func TestITunesRegroupApply_SkipsCheckFailedGroup(t *testing.T) {
 		{Title: "Album G", PIDs: []string{"q1", "q2"}},
 	}, snap)
 	require.True(t, plan.Groups[0].ManualCheckFailed)
-	require.NoError(t, p.applyRegroupPlan(context.Background(), s, plan, rgRoot, rep))
+	_, err = p.applyRegroupPlan(context.Background(), s, plan, rgRoot, rep)
+	require.NoError(t, err)
 
 	for _, id := range []string{f1, f2} {
 		files, err := s.GetBookFiles(id)
@@ -162,7 +163,7 @@ func TestITunesRegroupApply_RecheckReadFailureSkipsGroup(t *testing.T) {
 	require.Equal(t, 2, plan.Consolidated)
 
 	s.failID, s.armed = plan.Groups[0].Target, true
-	err = p.applyRegroupPlan(context.Background(), s, plan, rgRoot, rep)
+	_, err = p.applyRegroupPlan(context.Background(), s, plan, rgRoot, rep)
 	require.Error(t, err, "a recheck read failure is reported at the end of the run")
 
 	var skipped bool
