@@ -1,7 +1,7 @@
 // file: internal/database/keyfamilies.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 12fbfb04-5d87-4708-8975-48081212acb1
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 package database
 
@@ -117,6 +117,7 @@ var keyFamilies = []KeyFamily{
 	{"library:", "legacy library paths, migrated to import_path:", "internal/database/pebble_store.go"},
 	{"merge_user_state_pending:", "pending user-state repairs after a merge", "internal/merge/pending_repair.go"},
 	{"merge:combine-journal:", "book combine journal", "internal/merge/combine_journal.go"},
+	{"merge:survivor-reconcile:", "per-user markers that make a touched survivor's put-back safe to re-run", "internal/merge/combine_journal.go"},
 	{"scanner:ai_parse_single_fail:", "single-file AI parse give-up markers by path hash", "internal/scanner/ai_parse_giveup.go"},
 	{"metadata_cache:", "metadata provider response cache", "internal/database/pebble_store_metadata_cache.go"},
 	{"metadata_change:", "metadata change records", "internal/database/pebble_store_metadata.go"},

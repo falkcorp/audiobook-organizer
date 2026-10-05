@@ -4,3 +4,4 @@
 - `itunes.regroup`: a book ABS lists with users' listening state is no longer carried onto a target ABS does not list; the delete is skipped and counted as `skipped-target-not-listed` (re-checked under the merge lock). Unlisted to unlisted carries are still made and reported.
 - `reconcile`: `CleanupDuplicateVersionGroups` re-checks that the kept copy is listed under the merge lock right before the carry.
 - `itunes.clone-into-library`: a rollback whose state moved back to the clone but whose redirect could not be cleared now says the state is on the clone.
+- `merge`: the touched-survivor reconcile is now safe to re-run (a retried `UndoCombine` or `user_state_follow` revert). A per-user marker (`merge:survivor-reconcile:`, keyed by the follow's after-snapshot stamp) is journaled before the state write, so a re-run neither double-counts nor wipes out listened time.
