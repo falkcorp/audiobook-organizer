@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_clone_into_library.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 9c4e1b27-6a3f-4d80-b5e2-3f7a0c8d1e64
 // last-edited: 2026-10-05
 
@@ -266,27 +266,32 @@ func (r *icRunner) icUserStateStore() merge.UserProgressMerger {
 }
 
 // carryCloneStateToSource moves every user's state on the clone (progress,
-// read status, positions, bookmarks) and its ABS identity back onto the
-// source with merge.FollowMerge, then re-reads the clone and fails unless
-// nothing carryable is left on it. FollowMerge reports success when a
-// pending-repair record holds a move that failed; that record would name a
-// clone about to be deleted, so here only a completed move counts.
+// read status, positions), their bookmarks and the clone's ABS identity back
+// onto the source with merge.CarryStateBeforeHardDelete, which is all or
+// nothing: a carry that does not fully land -- a user's state, a bookmark
+// copy or the sync redirect -- is put back on the clone and reported, so the
+// clone, which stays live and primary when the rollback is refused, keeps
+// every user's state instead of some of it having moved to the hidden source.
+//
+// It refuses before moving anything when the source is missing or in the
+// trash: the state would land on a book nobody sees, which the rollback is
+// about to make the only copy.
 func (r *icRunner) carryCloneStateToSource(rec *icRecord) error {
+	src, err := r.store.GetBookByID(rec.SourceBookID)
+	if err != nil {
+		return fmt.Errorf("read source %s: %w", rec.SourceBookID, err)
+	}
+	if src == nil {
+		return fmt.Errorf("source %s no longer exists", rec.SourceBookID)
+	}
+	if src.IsSoftDeleted() {
+		return fmt.Errorf("source %s is in the trash", rec.SourceBookID)
+	}
 	um := r.icUserStateStore()
 	if um == nil {
 		return fmt.Errorf("store cannot read or move users' listening state")
 	}
-	if err := merge.FollowMergeWithStore(um, rec.SourceBookID, []string{rec.CloneBookID}); err != nil {
-		return err
-	}
-	left, err := merge.BookHasCarryableUserState(um, rec.CloneBookID)
-	if err != nil {
-		return fmt.Errorf("verify the move: %w", err)
-	}
-	if left {
-		return fmt.Errorf("listening state is still on the clone after the move (a pending user-state repair holds it)")
-	}
-	return nil
+	return merge.CarryStateBeforeHardDelete(um, rec.SourceBookID, rec.CloneBookID)
 }
 
 func (p *Plugin) itunesCloneIntoLibrary(ctx context.Context, params icParams, rootDir string, reporter sdk.Reporter) (*icReport, error) {

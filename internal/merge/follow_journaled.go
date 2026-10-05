@@ -1,5 +1,5 @@
 // file: internal/merge/follow_journaled.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: 6a7e0c1a-cb17-41e5-bf0f-dd8903735f64
 // last-edited: 2026-10-05
 
@@ -230,8 +230,9 @@ type UserStateReader interface {
 // single-book delete (audiobooks service_mutation.go DeleteAudiobook), the
 // batch hard delete (batch/service.go) and the diagnostics CLI's confirmed
 // delete of invalid records (cmd/diagnostics.go). Those remove the book and
-// its state together because that is what the user asked for. The rollbacks that delete a row a request
-// just created (organizer, the versions handlers) are not guarded either.
+// its state together because that is what the user asked for. The rollbacks
+// that delete a row a request just created (organizer, the versions
+// handlers) are not guarded either.
 func BookHasCarryableUserState(db UserStateReader, bookID string) (bool, error) {
 	probe, err := NewUserStateProbe(db)
 	if err != nil {
@@ -248,9 +249,19 @@ type UserStateProbe struct {
 	users []database.User
 }
 
-// NewUserStateProbe lists db's users once.
+// NewUserStateProbe lists db's users once. It fails closed on a user row it
+// cannot decode: when the store can say so (database.StrictUserLister,
+// resolved through decorators), such a row is an error, not a user silently
+// left out, because the probe's "no state" would then be a guess for that
+// user and the caller is about to hard-delete on it.
 func NewUserStateProbe(db UserStateReader) (*UserStateProbe, error) {
-	users, err := db.ListUsers()
+	var users []database.User
+	var err error
+	if strict, ok := database.AsCapability[database.StrictUserLister](db); ok {
+		users, err = strict.ListUsersStrict()
+	} else {
+		users, err = db.ListUsers()
+	}
 	if err != nil {
 		return nil, fmt.Errorf("list users: %w", err)
 	}
