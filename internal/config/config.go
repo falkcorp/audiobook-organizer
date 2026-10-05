@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.133.0
+// version: 1.133.1
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-10-05
 
@@ -1247,8 +1247,9 @@ type Config struct {
 	// AuthorityEvidenceEnabled feeds the authority lists (internal/authority,
 	// built by maintenance.authority-build) into authorcredit as person
 	// evidence for credit parts named like a book or series: an author entry
-	// links such a part, and a tier O (owner library) or contributor-ASIN
-	// entry may make it the primary. Off by default: the store then answers
+	// links such a part, and an author role seen at tier O (owner library) or
+	// tier A (an author credit with a contributor ASIN) may make it the
+	// primary. Off by default: the store then answers
 	// authority.Empty() and credit resolution is unchanged. Read on every
 	// resolve, so flipping it needs no restart.
 	AuthorityEvidenceEnabled bool `json:"authority_evidence_enabled" mapstructure:"authority_evidence_enabled"`

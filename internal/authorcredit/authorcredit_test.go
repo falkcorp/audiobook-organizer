@@ -1,5 +1,5 @@
 // file: internal/authorcredit/authorcredit_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 4a5f7bee-3d1d-427b-bc5f-baaa4b6fb584
 // last-edited: 2026-10-05
 
@@ -768,19 +768,30 @@ func TestResolve_StrongAuthorityEvidenceMayGoFirst(t *testing.T) {
 // Strength comes from the AUTHOR role's own tiers and the contributor ASINs:
 //   - tier A (a structured credit with an ASIN): strong;
 //   - a narrator seen at tier O who is an author only at tier B: weak (the
-//     entry's best tier, O, is from another role);
+//     entry's best tier, O, is from another role), even though the entry
+//     carries a contributor ASIN;
+//   - a narrator credited WITH an ASIN (narrator tier A) who is an author
+//     only at tier B: weak. The entry's ASINs belong to every role it was
+//     credited in, so they are never author evidence by themselves (#3741
+//     review B1);
 //   - cast_author only, or an author role an owner override blocked: no
 //     evidence at all;
 //   - Dragon Born on weak evidence is never first.
 func TestResolve_AuthorityEvidenceStrength(t *testing.T) {
 	st := titleStore(t, []string{"Dante King", "Dragon Born", "Alexander Freed", "Alphabet Squadron", "Rogue One",
-		"Jane Doe", "Star Cast"}, "Dragon Born", "Alphabet Squadron", "Rogue One", "Star Cast")
+		"Jane Doe", "Star Cast", "Brandon Sanderson", "Mistborn"}, "Dragon Born", "Alphabet Squadron", "Rogue One",
+		"Star Cast", "Mistborn")
 	t.Cleanup(ResetTitleCache)
 	putPerson(t, st, authority.Person{Display: "Alphabet Squadron", ASINs: []string{"B000TEST01"},
 		Roles: map[authority.Role]authority.RoleStat{authority.RoleAuthor: authorStat(authority.TierA, 1)}})
-	putPerson(t, st, authority.Person{Display: "Dragon Born",
+	putPerson(t, st, authority.Person{Display: "Dragon Born", ASINs: []string{"B0NARRATOR"},
 		Roles: map[authority.Role]authority.RoleStat{
 			authority.RoleNarrator: authorStat(authority.TierO, 1),
+			authority.RoleAuthor:   authorStat(authority.TierB, 2),
+		}})
+	putPerson(t, st, authority.Person{Display: "Mistborn", ASINs: []string{"B0NARRATR2"},
+		Roles: map[authority.Role]authority.RoleStat{
+			authority.RoleNarrator: authorStat(authority.TierA, 1),
 			authority.RoleAuthor:   authorStat(authority.TierB, 2),
 		}})
 	putPerson(t, st, authority.Person{Display: "Star Cast",
@@ -793,6 +804,7 @@ func TestResolve_AuthorityEvidenceStrength(t *testing.T) {
 	for credit, want := range map[string][]string{
 		"Alphabet Squadron, Alexander Freed": {"Alphabet Squadron", "Alexander Freed"},
 		"Dragon Born, Dante King":            {"Dante King", "Dragon Born"},
+		"Mistborn, Brandon Sanderson":        {"Brandon Sanderson", "Mistborn"},
 		"Star Cast, Jane Doe":                {"Jane Doe"},
 		"Rogue One, Jane Doe":                {"Jane Doe"},
 	} {
