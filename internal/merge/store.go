@@ -1,7 +1,7 @@
 // file: internal/merge/store.go
-// version: 1.11.1
+// version: 1.11.2
 // guid: 3f9a7c21-6d84-4e05-b13f-8a2c5e097d64
-// last-edited: 2026-09-26
+// last-edited: 2026-10-05
 
 package merge
 
@@ -110,9 +110,12 @@ type mergeExternalIDReader interface {
 // SoftDeleteBook, and widening either would force a method on callers that do
 // not need it. Only Store composes this.
 //
-// It also carries versionprimary.EnsureStore: MergeBooks hands the primary
-// flag on in each group a participant left (handOffLeftGroups), which reads
+// It also carries versionprimary.EnsureStore: CombineBooks hands the primary
+// flag on in each group a participant left (handOffLeftGroups), and MergeBooks
+// does the same when its membership writes fail part-way; the hand-off reads
 // the group, its members' files and chapter rows and writes the flags.
+// MergeBooks also reads each left group's live members here, to move them
+// with the loser (MergeBooks item 6).
 type mergeVersionGroupStore interface {
 	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
 	versionprimary.EnsureStore

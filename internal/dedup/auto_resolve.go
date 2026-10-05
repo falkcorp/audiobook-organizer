@@ -1,7 +1,7 @@
 // file: internal/dedup/auto_resolve.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 6d1e9b52-4f70-4c83-a2b9-1e5c8d0f7a34
-// last-edited: 2026-09-25
+// last-edited: 2026-10-05
 
 package dedup
 
@@ -19,6 +19,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
+	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
 
 // autoResolveSampleCapDefault bounds the per-run sample list in the dry-run
@@ -396,7 +397,10 @@ func (de *Engine) preMergeSnapshotNanos(bookID string, baselineNanos int64) int6
 
 // UnmergeAuto reverses a Tier-1 auto-merge recorded in the journal at journalKey
 // by reverting both the winner and loser books to their pre-merge book_ver
-// snapshots (restoring IsPrimaryVersion / VersionGroupID / MarkedForDeletion).
+// snapshots (restoring IsPrimaryVersion / VersionGroupID / MarkedForDeletion),
+// then putting each sibling the merge carried along with the loser
+// (entry.Siblings) back in its original group with its original flag; see
+// restoreMovedSibling.
 //
 // SCOPE LIMIT: this restores the BOOK RECORD state only. It does NOT reverse the
 // external-ID reassignment (loser→winner) that MergeBooks performed, nor any
@@ -431,11 +435,62 @@ func (de *Engine) UnmergeAuto(journalKey string) error {
 	} else {
 		errs = append(errs, fmt.Sprintf("winner %s: no pre-merge snapshot recorded", entry.WinnerID))
 	}
+	for _, sib := range entry.Siblings {
+		if err := de.restoreMovedSibling(sib); err != nil {
+			errs = append(errs, fmt.Sprintf("sibling %s: %v", sib.BookID, err))
+		}
+	}
 
 	if len(errs) > 0 {
 		return fmt.Errorf("unmerge-auto: %s", strings.Join(errs, "; "))
 	}
 	slog.Info("dedup auto-resolve unmerged", "journal", journalKey,
-		"winner", entry.WinnerID, "loser", entry.LoserID)
+		"winner", entry.WinnerID, "loser", entry.LoserID, "siblings", len(entry.Siblings))
+	return nil
+}
+
+// restoreMovedSibling puts one sibling a merge carried into the winner's group
+// back where it was: FromGroupID, with its pre-merge flag pointer. Only those
+// two fields are written, through ModifyBook on the fresh row, under both
+// groups' locks. A sibling already back (an earlier undo of another loser that
+// shared its group) is left alone. One that has moved to some third group
+// since the merge is NOT pulled back -- that move was someone's later
+// decision -- and is reported as an error instead.
+func (de *Engine) restoreMovedSibling(sib database.AutoMergeJournalSibling) error {
+	unlock := versionprimary.LockGroups(sib.FromGroupID, sib.IntoGroupID)
+	defer unlock()
+	var movedOn string
+	stored, err := de.bookStore.ModifyBook(sib.BookID, func(b *database.Book) error {
+		cur := ""
+		if b.VersionGroupID != nil {
+			cur = strings.TrimSpace(*b.VersionGroupID)
+		}
+		switch cur {
+		case strings.TrimSpace(sib.FromGroupID):
+			return database.ErrSkipBookWrite
+		case strings.TrimSpace(sib.IntoGroupID):
+		default:
+			movedOn = cur
+			return database.ErrSkipBookWrite
+		}
+		from := sib.FromGroupID
+		b.VersionGroupID = &from
+		if sib.WasPrimary == nil {
+			b.IsPrimaryVersion = nil
+		} else {
+			was := *sib.WasPrimary
+			b.IsPrimaryVersion = &was
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if stored == nil {
+		return fmt.Errorf("book not found")
+	}
+	if movedOn != "" {
+		return fmt.Errorf("moved to version group %s since the merge; left there", movedOn)
+	}
 	return nil
 }
