@@ -1,5 +1,5 @@
 // file: internal/applygate/transcribed_identity_test.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: 329bd78d-e4ca-434d-aa8d-65f766d386a1
 // last-edited: 2026-10-04
 
@@ -269,6 +269,7 @@ func TestEvaluateTranscribed_OwnerManualOnly(t *testing.T) {
 	cases := []struct {
 		name          string
 		path          string
+		title         string // the book's stored title ("" = blank)
 		transcribed   string
 		candTitle     string
 		candSeries    string
@@ -311,6 +312,16 @@ func TestEvaluateTranscribed_OwnerManualOnly(t *testing.T) {
 		{name: "bulk: only the candidate's author names Big Finish", path: "/library/Unknown Author/Unknown Title/book.m4b",
 			transcribed: "Marvel's Planet Hulk", candTitle: "Marvel's Planet Hulk", author: "Big Finish Productions",
 			guard: ManualOnlyGuard{Bulk: true}, wantReason: ReasonOwnerManualOnly, wantDetail: `candidate author "Big Finish Productions"`},
+		// The book's own title is the only signal: query and candidate are
+		// neutral, so no earlier or later leg can hold it.
+		{name: "bulk: only the book's title names Doctor Who", path: "/library/Unknown Author/Unknown Title/book.m4b",
+			title: "Doctor Who: Spare Parts", transcribed: "Spare Parts", candTitle: "Spare Parts",
+			guard: ManualOnlyGuard{Bulk: true}, wantReason: ReasonOwnerManualOnly, wantDetail: `title "Doctor Who: Spare Parts"`},
+		// The candidate's title is the only signal: the transcription (and so
+		// ts.Query, which is checked first) stays neutral.
+		{name: "bulk: only the candidate's title names Doctor Who", path: "/library/Unknown Author/Unknown Title/book.m4b",
+			transcribed: "Spare Parts", candTitle: "Doctor Who: Spare Parts",
+			guard: ManualOnlyGuard{Bulk: true}, wantReason: ReasonOwnerManualOnly, wantDetail: `candidate title "Doctor Who: Spare Parts"`},
 		{name: "bulk: only the candidate's publisher names Big Finish", path: "/library/Unknown Author/Unknown Title/book.m4b",
 			transcribed: "The Chimes of Midnight", candTitle: "The Chimes of Midnight", candPublisher: "Big Finish Productions",
 			guard: ManualOnlyGuard{Bulk: true}, wantReason: ReasonOwnerManualOnly, wantDetail: `candidate publisher "Big Finish Productions"`},
@@ -321,7 +332,7 @@ func TestEvaluateTranscribed_OwnerManualOnly(t *testing.T) {
 			if author == "" {
 				author = "Robert Shearman"
 			}
-			book := &database.Book{ID: "b1", Title: "", FilePath: tc.path, TranscribedTitle: strp(tc.transcribed), Duration: intp(36000)}
+			book := &database.Book{ID: "b1", Title: tc.title, FilePath: tc.path, TranscribedTitle: strp(tc.transcribed), Duration: intp(36000)}
 			cand := metafetch.MetadataCandidate{Title: tc.candTitle, Series: tc.candSeries, Publisher: tc.candPublisher, Author: author,
 				Score: 0.95, DurationSec: 36000, Source: "Audible"}
 			ts := TranscribedSearch{Query: tc.transcribed, Source: "transcribed_title", ExplainsStaleIdentity: true}
@@ -332,6 +343,9 @@ func TestEvaluateTranscribed_OwnerManualOnly(t *testing.T) {
 			}
 			if tc.wantReason == "" {
 				return
+			}
+			if tc.wantDetail == "" {
+				t.Fatal("a refusing case must set wantDetail: without it the case passes whichever field held it")
 			}
 			if v.Reason != tc.wantReason {
 				t.Errorf("reason = %q (%s), want %q", v.Reason, v.Detail, tc.wantReason)

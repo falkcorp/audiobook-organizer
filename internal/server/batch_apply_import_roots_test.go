@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_import_roots_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 9e4b27c1-5a3d-4f80-b6c2-0d7e18a9f354
 // last-edited: 2026-10-04
 
@@ -266,4 +266,30 @@ func TestBulkApply_ManualOnlyTranscribedAuthorIsRefused(t *testing.T) {
 			files: map[string][]database.BookFile{"b1": {{FilePath: path, Duration: dur, TranscribedAuthor: strPtr("Big Finish Productions")}}}}
 		requireManualOnlyRefusal(t, planWithBulkPin(t, books, cand), "file transcribed author")
 	})
+}
+
+// The book-level transcribed title is the ONLY signal: the file rows carry no
+// transcription and the import-root read fails, so the resolver skips the row
+// with no query and neither the search-query nor the file-level check can
+// catch it. Removing BulkManualOnlyGuard's book.TranscribedTitle check must
+// fail this test.
+func TestBulkApply_BookTranscribedTitleAloneIsRefused(t *testing.T) {
+	const (
+		root   = "/imports/Rips"
+		chimes = "Doctor Who: The Chimes of Midnight"
+	)
+	dur := 1800
+	path := root + "/01.mp3"
+	book := &database.Book{ID: "b1", Title: "", TranscribedTitle: strPtr(chimes), FilePath: path, Duration: &dur}
+	books := importRootBooks{fakeBooks: fakeBooks{"b1": book},
+		rows:     map[string]string{"b1": path, "b2": root + "/02.mp3", "b3": root + "/03.mp3", "b4": root + "/04.mp3"},
+		files:    map[string][]database.BookFile{"b1": {{FilePath: path, Duration: dur, FileSize: int64(dur) * 8000}}},
+		rootsErr: errors.New("store down")}
+	if q := metabatch.ResolveCandidateSearchQuery(books, book); q.Usable || q.Title != "" {
+		t.Fatalf("fixture: resolver returned %+v; the test needs the missed-root skip (no query)", q)
+	}
+	cand := metafetch.MetadataCandidate{Title: "The Chimes of Midnight", Author: "Robert Shearman", Score: 0.85, DurationSec: dur, Source: "Audible"}
+	plan := planWithBulkPin(t, books, cand)
+	// "; transcribed title" -- the book-level leg, not "file transcribed title".
+	requireManualOnlyRefusal(t, plan, "; transcribed title ")
 }

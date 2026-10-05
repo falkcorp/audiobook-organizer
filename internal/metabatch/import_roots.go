@@ -1,5 +1,5 @@
 // file: internal/metabatch/import_roots.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 3c8e51a2-7d94-4b0f-a6e3-91f2c4d7b805
 // last-edited: 2026-10-04
 //
@@ -55,6 +55,15 @@ type ImportPathReader interface {
 // importRootWaitLog the Warn for a caller that gave up waiting on another
 // caller's read, which is a slow store, not a failed one.
 var importRootLog, importRootWaitLog warnLimiter
+
+// importRootLateLog rate-limits the Warn for a waiter that timed out but
+// found a list that arrived between its timeout and its re-check. Separate
+// from importRootWaitLog so the two outcomes are counted apart.
+var importRootLateLog warnLimiter
+
+// importRootsAfterTimeoutHook, when set, runs after a waiter's timeout and
+// before it re-reads the cache (tests: it lands the read in that gap).
+var importRootsAfterTimeoutHook func()
 
 // readImportRoots loads the cleaned import-path set from r. ok is false when
 // the read failed; the failure is logged here at Warn (rate-limited).
@@ -170,6 +179,9 @@ func (c *ImportRootsCache) get() (roots map[string]bool, paths []database.Import
 			timedOut = true
 		}
 		c.waiting.Add(-1)
+		if timedOut && importRootsAfterTimeoutHook != nil {
+			importRootsAfterTimeoutHook()
+		}
 		c.mu.Lock()
 		roots, paths, ok = c.roots, c.paths, c.loaded
 		c.mu.Unlock()
@@ -177,7 +189,7 @@ func (c *ImportRootsCache) get() (roots map[string]bool, paths []database.Import
 			// Say what the row is judged with: a read may have landed between
 			// the timeout and the re-check, and then its list is used.
 			if ok {
-				importRootWaitLog.warn("import-path read took longer than %s; using the list that arrived meanwhile: suppressed_since_last=%d",
+				importRootLateLog.warn("import-path read took longer than %s; using the list that arrived meanwhile: suppressed_since_last=%d",
 					importRootsLoadWait)
 			} else {
 				importRootWaitLog.warn("import-path read still in flight after %s; judging this row with no import roots: suppressed_since_last=%d",
