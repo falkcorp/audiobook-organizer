@@ -314,11 +314,10 @@ func SplitNames(name string, gate Gate) []string {
 	return out
 }
 
-// bylineTitle reports whether "By <name>" is the title of a book or series in
-// the library ("By Schism Rent Asunder"), so name is what a byline strip left
-// of a title. A store without the title listing, or a listing error, reads as
-// false (fail open: today's create).
-func bylineTitle(store Store, name string) bool {
+// namesLibraryTitle reports whether name is the title of a book or series in
+// the library. A store without the title listing, or a listing error, reads
+// as false.
+func namesLibraryTitle(store Store, name string) bool {
 	ts, ok := database.AsCapability[TitleSource](store)
 	if !ok {
 		return false
@@ -327,7 +326,7 @@ func bylineTitle(store Store, name string) bool {
 	if err != nil {
 		return false
 	}
-	return titles[LettersKey("by "+name)]
+	return titles[LettersKey(name)]
 }
 
 // SingleWordParts is the split SplitNames refuses only because a piece is a
@@ -716,11 +715,14 @@ func Lookup(store Store, name string, gate Gate) ([]database.Author, error) {
 
 func resolve(store Store, name string, gate Gate, create bool) ([]database.Author, error) {
 	name = strings.TrimSpace(name)
-	if personname.HasByPrefix(name) {
-		// "By: Brandon Sanderson" names Brandon Sanderson. What a byline
-		// leaves as one bare word ("By: Zork") is linked when it is an
-		// author or alias already and never created: the creation gates
-		// refuse that residue the same way (PrepareAuthorNameForCreation).
+	// "By: Brandon Sanderson" and "by Brandon Sanderson" name Brandon
+	// Sanderson. The bare form is kept whole when "By ..." is a book or
+	// series title in the library ("By Schism Rent Asunder"); the title
+	// listing is read only for a name that opens with a byline. What a
+	// byline leaves as one bare word ("By: Zork") is linked when it is an
+	// author or alias already and never created: the creation gates refuse
+	// that residue the same way (PrepareAuthorNameForCreation).
+	if personname.HasByPrefix(name) && (personname.HasMarkedByPrefix(name) || !namesLibraryTitle(store, name)) {
 		name = personname.NormalizeAuthorName(personname.StripByPrefix(name))
 		if !strings.ContainsAny(name, " \t") {
 			create = false
@@ -753,12 +755,6 @@ func resolve(store Store, name string, gate Gate, create bool) ([]database.Autho
 		return nil, ErrCombinedCredit
 	}
 	if !create {
-		return nil, nil
-	}
-	if bylineTitle(store, name) {
-		// "Heresies Distressed" from the title "By Heresies Distressed": the
-		// byline strip (here or in the creation gate) cut a book title, so
-		// there is no author to create.
 		return nil, nil
 	}
 	a, err := store.CreateAuthor(name)

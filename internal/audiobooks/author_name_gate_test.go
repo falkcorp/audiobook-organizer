@@ -1,5 +1,5 @@
 // file: internal/audiobooks/author_name_gate_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 706fca22-946e-4028-b4d1-f6d7c0bbcbb7
 // last-edited: 2026-10-04
 
@@ -70,29 +70,43 @@ func TestUpdateAudiobook_AllAuthorNamesRejectedReturnsError(t *testing.T) {
 // survive.
 
 // A name the credit splitter leaves whole ("Travis Deverell, Shirtaloon" reads as
-// "Surname, First") that the shared splitter will not split either, whose
-// parts are both existing authors, is refused rather than created as one
-// combined author row (authorcredit.ErrCombinedCredit).
+// "Surname, First") whose parts are both existing authors is never created as
+// one combined author row.
 func TestUpdateAudiobook_CombinedNameOfExistingAuthorsIsNotCreated(t *testing.T) {
+	// "Travis Deverell, Shirtaloon" stays whole through the editor's own
+	// "Surname, First" guard (util.SplitCreditNames), so the shared resolver
+	// decides. Both pieces are existing authors: since 2026-10-04 (owner
+	// decision) an existing single-word pen name splits off, so each is
+	// credited; the combined string is never created as one author.
 	var created []string
 	var written []database.Book
-	svc := gateTestService(&created, &written)
-	store := svc.store.(*database.MockStore)
+	base := gateTestService(&created, &written)
+	store := base.store.(*database.MockStore)
+	svc := NewAudiobookService(store)
 	existing := map[string]*database.Author{
 		"Travis Deverell": {ID: 1, Name: "Travis Deverell"},
 		"Shirtaloon":      {ID: 2, Name: "Shirtaloon"},
 	}
 	store.GetAuthorByNameFunc = func(n string) (*database.Author, error) { return existing[n], nil }
+	var credited []database.BookAuthor
+	store.SetBookAuthorsFunc = func(_ string, cs []database.BookAuthor) error { credited = cs; return nil }
 
 	name := "Travis Deverell, Shirtaloon"
 	_, err := svc.UpdateAudiobook(context.Background(), "bk1", &UpdateAudiobookRequest{
 		Updates:    &AudiobookUpdate{Book: &database.Book{}, AuthorName: &name},
 		RawPayload: map[string]json.RawMessage{"author_name": json.RawMessage(`"Travis Deverell, Shirtaloon"`)},
 	})
-	if err == nil || !strings.Contains(err.Error(), "no usable author name") {
-		t.Fatalf("err = %v, want the no-usable-name refusal", err)
+	if err != nil {
+		t.Fatalf("err = %v", err)
 	}
 	if len(created) != 0 {
 		t.Errorf("created %v; a combined row must not be created", created)
+	}
+	var ids []int
+	for _, c := range credited {
+		ids = append(ids, c.AuthorID)
+	}
+	if len(ids) != 2 || ids[0] != 1 || ids[1] != 2 {
+		t.Errorf("credited %v, want [1 2] (Travis Deverell, Shirtaloon)", ids)
 	}
 }
