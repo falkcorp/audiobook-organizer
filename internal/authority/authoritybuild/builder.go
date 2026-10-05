@@ -1,5 +1,5 @@
 // file: internal/authority/authoritybuild/builder.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 69528b02-de24-4411-8a5e-ac3831986a80
 // last-edited: 2026-10-05
 
@@ -367,8 +367,9 @@ func classifyCredit(raw string, inAuthors, cast bool) (string, authority.Role) {
 
 // AddProduct ingests one decoded product from source (SourceCatalog or
 // SourceLibraryExport). tiebreak orders duplicates: of two payloads with the
-// same product ASIN in one source, the smaller tiebreak wins (pass the
-// cat_raw key, or the export item's zero-padded position). Only contributor
+// same product ASIN in one source, the smaller tiebreak wins, and an equal
+// tiebreak means the same payload again (pass a unique tiebreak per payload:
+// the cat_raw key, or the export item's zero-padded position). Only contributor
 // names, contributor ASINs and the publisher are kept; the title, subtitle
 // and series are read in memory for the cast decision and never stored.
 // Nothing is accumulated until Finish, so the result is independent of the
@@ -396,8 +397,14 @@ func (b *Builder) AddProduct(source, tiebreak string, p metadata.CatalogProduct)
 	}
 	key := authority.SourceKey(source, id)
 	if old, dup := b.pending[key]; dup {
+		// Duplicates counts payloads DROPPED: exactly one per collision of two
+		// different payloads (the larger tiebreak). The same payload handed in
+		// twice (same tiebreak) is not a second product and drops nothing.
+		if tiebreak == old.tiebreak {
+			return
+		}
 		st.Duplicates++
-		if tiebreak >= old.tiebreak {
+		if tiebreak > old.tiebreak {
 			return
 		}
 	}

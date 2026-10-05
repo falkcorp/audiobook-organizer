@@ -1,5 +1,5 @@
 // file: internal/authority/authoritybuild/builder_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4b1eb286-eaec-4b35-9e85-3ce90684f4d1
 // last-edited: 2026-10-05
 
@@ -119,8 +119,8 @@ func TestBuilder_CastContextIsCastAuthorOnly(t *testing.T) {
 
 func TestBuilder_SkipsCollectiveDuplicatesAndEmpty(t *testing.T) {
 	b := NewBuilder()
-	b.AddProduct(authority.SourceCatalog, "", prod("P1", []metadata.CatalogContributor{c("Full Cast", "")}, []metadata.CatalogContributor{c("Various Narrators", "")}))
-	b.AddProduct(authority.SourceCatalog, "", prod("p1", []metadata.CatalogContributor{c("Ann Leckie", "")}, nil)) // same ASIN, other case
+	b.AddProduct(authority.SourceCatalog, "cat_raw:1", prod("P1", []metadata.CatalogContributor{c("Full Cast", "")}, []metadata.CatalogContributor{c("Various Narrators", "")}))
+	b.AddProduct(authority.SourceCatalog, "cat_raw:2", prod("p1", []metadata.CatalogContributor{c("Ann Leckie", "")}, nil)) // same ASIN, other case
 	b.AddProduct(authority.SourceCatalog, "", prod("", []metadata.CatalogContributor{c("Ann Leckie", "")}, nil))
 	res := b.Finish()
 	require.Empty(t, res.Persons, "collective credits are never persons; the duplicate and id-less products add nothing")
@@ -216,4 +216,24 @@ func TestBuilder_DuplicateProductIsDeterministic(t *testing.T) {
 	require.Nil(t, r2.Persons["adjoaandoh"])
 	require.Equal(t, 1, r1.Report.Sources[authority.SourceCatalog].Duplicates)
 	require.Equal(t, 1, r1.Report.Sources[authority.SourceCatalog].Items)
+}
+
+// TestBuilder_DuplicatesCountOnlyDroppedPayloads: the same payload handed in
+// twice drops nothing; two different payloads for one ASIN drop one.
+func TestBuilder_DuplicatesCountOnlyDroppedPayloads(t *testing.T) {
+	p := prod("P1", []metadata.CatalogContributor{c("Ann Leckie", "")}, nil)
+	b := NewBuilder()
+	b.AddProduct(authority.SourceCatalog, "cat_raw:A", p)
+	b.AddProduct(authority.SourceCatalog, "cat_raw:A", p)
+	st := b.Finish().Report.Sources[authority.SourceCatalog]
+	require.Zero(t, st.Duplicates)
+	require.Equal(t, 1, st.Items)
+
+	b = NewBuilder()
+	b.AddProduct(authority.SourceCatalog, "cat_raw:B", p)
+	b.AddProduct(authority.SourceCatalog, "cat_raw:A", p)
+	b.AddProduct(authority.SourceCatalog, "cat_raw:C", p)
+	st = b.Finish().Report.Sources[authority.SourceCatalog]
+	require.Equal(t, 2, st.Duplicates, "three payloads, one kept, two dropped")
+	require.Equal(t, 1, st.Items)
 }

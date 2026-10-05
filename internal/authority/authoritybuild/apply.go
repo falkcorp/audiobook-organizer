@@ -1,5 +1,5 @@
 // file: internal/authority/authoritybuild/apply.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5d1b8e27-9c4a-4f63-b0d2-7a6e3f18c945
 // last-edited: 2026-10-05
 
@@ -170,6 +170,7 @@ func PlanApply(ctx context.Context, kv authority.Scanner, res *Result, ran map[s
 	for _, t := range targets {
 		want[t.key] = true
 	}
+	personSources := storedPersonSources(kv)
 	for _, prefix := range authority.RebuildablePrefixes() {
 		after := ""
 		for {
@@ -185,7 +186,7 @@ func PlanApply(ctx context.Context, kv authority.Scanner, res *Result, ran map[s
 					continue
 				}
 				plan.staleSums[p.Key] = sha256.Sum256(p.Value)
-				if allSourcesRan(p.Key, p.Value, ran) {
+				if allSourcesRan(p.Key, p.Value, ran, personSources) {
 					plan.Stale = append(plan.Stale, p.Key)
 					plan.Counts[prefix].Stale++
 				} else {
@@ -205,9 +206,18 @@ func PlanApply(ctx context.Context, kv authority.Scanner, res *Result, ran map[s
 
 // allSourcesRan reports whether every source a stored row records ran. A
 // ref_src: key names its source; person, publisher and ASIN rows carry a
-// Sources list. A row that does not decode, or records no sources, is never
-// pruned.
-func allSourcesRan(key string, value []byte, ran map[string]bool) bool {
+// Sources list. A row that does not decode, or whose sources cannot be
+// established, is never pruned.
+//
+// Legacy ASIN rows. ref_asin: rows written before ASINRef carried Sources
+// (authority-lists PR 1) have none. Their sources are assigned on read: the
+// union of the Sources of the stored person rows they point at, which are
+// exactly the rows that credited the ASIN. If any of those person rows is
+// missing or undecodable the row stays held. A legacy row that a build still
+// produces is rewritten with Sources by the next apply (its content differs),
+// so the migration completes on its own; only an orphaned legacy row whose
+// persons are gone remains held, and it is listed in the plan's held keys.
+func allSourcesRan(key string, value []byte, ran map[string]bool, personSources func(fold string) ([]string, bool)) bool {
 	var sources []string
 	if rest, ok := strings.CutPrefix(key, authority.SourcePrefix); ok {
 		src, _, found := strings.Cut(rest, ":")
@@ -218,11 +228,21 @@ func allSourcesRan(key string, value []byte, ran map[string]bool) bool {
 	} else {
 		var row struct {
 			Sources []string `json:"sources"`
+			Folds   []string `json:"folds"`
 		}
 		if json.Unmarshal(value, &row) != nil {
 			return false
 		}
 		sources = row.Sources
+		if len(sources) == 0 && strings.HasPrefix(key, authority.ASINPrefix) && len(row.Folds) > 0 {
+			for _, f := range row.Folds {
+				ps, ok := personSources(f)
+				if !ok {
+					return false
+				}
+				sources = append(sources, ps...)
+			}
+		}
 	}
 	if len(sources) == 0 {
 		return false
@@ -233,6 +253,25 @@ func allSourcesRan(key string, value []byte, ran map[string]bool) bool {
 		}
 	}
 	return true
+}
+
+// storedPersonSources reads a stored person row's Sources (the legacy
+// ASIN-row migration above). ok is false when the row is missing,
+// unreadable or records no sources.
+func storedPersonSources(kv authority.Scanner) func(fold string) ([]string, bool) {
+	return func(fold string) ([]string, bool) {
+		raw, err := kv.GetRaw(authority.PersonPrefix + fold)
+		if err != nil || raw == nil {
+			return nil, false
+		}
+		var p struct {
+			Sources []string `json:"sources"`
+		}
+		if json.Unmarshal(raw, &p) != nil || len(p.Sources) == 0 {
+			return nil, false
+		}
+		return p.Sources, true
+	}
 }
 
 // planDigest hashes the plan's writes (key, prior-value hash and
