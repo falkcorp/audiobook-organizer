@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.206.0
+// version: 1.207.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 package database
 
@@ -3342,17 +3342,27 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, opts bookWrite
 		}
 	}
 
-	// METADATA-CACHED-MATCHER: invalidate cached candidates when any
-	// identity-bearing field (title, author, narrator, series, ISBN,
-	// ASIN) changes. The cache stored top-N matches for the prior
-	// identity; they may no longer apply. Done as a batch.Delete so
-	// the same transaction that updates the book row also clears the
-	// cache. Staged only when an entry exists: most books have none, and an
-	// unconditional Delete leaves a tombstone that ListMetadataCacheKeys'
-	// range scan (the cache review page) walks until compaction. An ASIN/ISBN
-	// backfill changes identity on every book it writes.
+	// METADATA-CACHED-MATCHER: drop the cached candidates only when the
+	// write changed what the search for this book asks: its title or its
+	// author (candidateSearchIdentityChanged). The row is deleted in the same
+	// batch that writes the book. It is staged only when an entry exists:
+	// most books have none, and an unconditional Delete leaves a tombstone
+	// that ListMetadataCacheKeys' range scan (the cache review page) walks
+	// until compaction.
+	//
+	// ASIN, ISBN and series changes keep the row. Until 2026-10-05 they
+	// dropped it too, and metafetch.asin-backfill -- which fills an EMPTY ASIN
+	// every six hours, often the very ASIN the cached candidate carries --
+	// wiped the candidate it was confirming on 1,078 production books. None
+	// of those fields is a search input (metafetch.hashSearchInputs hashes
+	// title, author, narrator and series; the batch fetch passes series as
+	// ""), and the apply gate already judges a kept row against the book as
+	// it is now: a candidate whose ASIN differs from the book's is refused as
+	// asin_conflict (applygate CheckEvidenceInBatch), so a REPLACED ASIN
+	// flags the old candidates rather than deleting them, and a filled or
+	// matching one leaves them applicable.
 	cacheRowDeleted := false
-	if identityChanged(oldBook, book) {
+	if p.candidateSearchIdentityChanged(oldBook, book) {
 		staged, err := p.stageDeleteIfPresent(batch, metadataCacheKey(id))
 		if err != nil {
 			batch.Close()
@@ -3413,45 +3423,50 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, opts bookWrite
 	return book, nil
 }
 
-// identityChanged reports whether any field that drives the metadata
-// cache key has changed between the two book snapshots. Limited to the
-// fields the search chain inspects.
-func identityChanged(oldBook, newBook *Book) bool {
+// candidateSearchIdentityChanged reports whether a write from oldBook to
+// newBook changed the question a metadata search for the book asks, so the
+// candidates cached for the old question may answer the wrong book: the title,
+// or the author. An AuthorID change counts only when the author's NAME
+// changes (or cannot be read): a relink to another row of the same name -- a
+// dedup merge onto the master author -- searches exactly as before.
+//
+// Identifiers are deliberately absent. Filling an empty ASIN or ISBN never
+// makes a candidate wrong, an ASIN equal to the candidate's confirms it, and a
+// candidate whose ASIN differs from a replaced one is refused by the apply
+// gate (asin_conflict) while staying visible. Series is absent for the same
+// reason: the batch fetch never searches by it. See the caller.
+func (p *PebbleStore) candidateSearchIdentityChanged(oldBook, newBook *Book) bool {
 	if oldBook == nil || newBook == nil {
 		return true
 	}
 	if oldBook.Title != newBook.Title {
 		return true
 	}
-	if !intPtrEq(oldBook.AuthorID, newBook.AuthorID) {
+	if intPtrEq(oldBook.AuthorID, newBook.AuthorID) {
+		return false
+	}
+	if oldBook.AuthorID == nil || newBook.AuthorID == nil {
 		return true
 	}
-	if !intPtrEq(oldBook.SeriesID, newBook.SeriesID) {
-		return true
+	return !p.sameAuthorName(*oldBook.AuthorID, *newBook.AuthorID)
+}
+
+// sameAuthorName reports whether two author ids resolve to authors with the
+// same (trimmed) name. An unreadable or missing author is "not the same": the
+// caller then drops the cached candidates, as it did before the name check.
+func (p *PebbleStore) sameAuthorName(a, b int) bool {
+	oldA, err := p.GetAuthorByID(a)
+	if err != nil || oldA == nil {
+		return false
 	}
-	if !strPtrEq(oldBook.ISBN10, newBook.ISBN10) {
-		return true
+	newA, err := p.GetAuthorByID(b)
+	if err != nil || newA == nil {
+		return false
 	}
-	if !strPtrEq(oldBook.ISBN13, newBook.ISBN13) {
-		return true
-	}
-	if !strPtrEq(oldBook.ASIN, newBook.ASIN) {
-		return true
-	}
-	return false
+	return strings.TrimSpace(oldA.Name) == strings.TrimSpace(newA.Name)
 }
 
 func intPtrEq(a, b *int) bool {
-	if a == nil && b == nil {
-		return true
-	}
-	if a == nil || b == nil {
-		return false
-	}
-	return *a == *b
-}
-
-func strPtrEq(a, b *string) bool {
 	if a == nil && b == nil {
 		return true
 	}
@@ -3931,9 +3946,9 @@ func (p *PebbleStore) DeleteBook(id string) error {
 	//   book_narrators:<id>    SetBookNarrators   — the narrator junction row.
 	//   user_tag:book:<id>     SetBookUserTags
 	//   alt_titles:book:<id>   SetBookAlternativeTitles
-	//   metadata_cache:<id>    PutMetadataCache   — UpdateBook already drops it
-	//                          on an identity change; a delete is the ultimate
-	//                          identity change.
+	//   metadata_cache:<id>    PutMetadataCache   — UpdateBook drops it when
+	//                          the title or author changes; a delete leaves
+	//                          nothing for the candidates to answer for.
 	//
 	// The memdb projection of the two junction rows is cleared by
 	// DeleteBookFromMemDB below; none of the others has a memdb table.

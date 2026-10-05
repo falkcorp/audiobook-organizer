@@ -1,7 +1,7 @@
 // file: internal/database/bookfiles_for_ids_fallback_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 8c2f6d14-7a39-4e05-b1d8-3e9a5c07f2b6
-// last-edited: 2026-10-03
+// last-edited: 2026-10-05
 
 package database
 
@@ -92,18 +92,16 @@ func TestMetadataCacheGeneration_MovesOnBookWritesThatDeleteTheRow(t *testing.T)
 	require.NoError(t, store.PutMetadataCache(&MetadataCandidateCache{BookID: book.ID}))
 
 	g := store.MetadataCacheGeneration()
-	asin := "B000NEWASIN"
-	book.ASIN = &asin
+	book.Title = "T Retitled"
 	_, err = store.UpdateBook(book.ID, book)
 	require.NoError(t, err)
-	require.Equal(t, g+1, store.MetadataCacheGeneration(), "the ASIN change deleted the cache row")
+	require.Equal(t, g+1, store.MetadataCacheGeneration(), "the title change deleted the cache row")
 	entry, err := store.GetMetadataCache(book.ID)
 	require.NoError(t, err)
 	require.Nil(t, entry)
 
 	// No row left: another identity change deletes nothing and moves nothing.
-	asin2 := "B000OTHER"
-	book.ASIN = &asin2
+	book.Title = "T Retitled Again"
 	_, err = store.UpdateBook(book.ID, book)
 	require.NoError(t, err)
 	require.Equal(t, g+1, store.MetadataCacheGeneration())
