@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/combined_author_fixer.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: 5c0f4a3e-2b7d-4e61-9a8c-3f1d6b2e7a90
 // last-edited: 2026-10-05
 
@@ -339,9 +339,11 @@ func (f *combinedAuthorFixer) buildIndex(ctx context.Context, await bool) (*comb
 		}
 	}
 	if await {
-		// May block up to two minutes on a snapshot load; every repairs.plan
-		// shares one ConcurrencyKey, so other fixers' plans wait behind it
-		// (see authorityEvidence.Await in internal/server).
+		// May block on a snapshot load for up to authorityAwaitMax
+		// (internal/server/authority_evidence.go; unexported there, so
+		// named rather than referenced). Every repairs.plan shares one
+		// ConcurrencyKey, so other fixers' plans wait behind it (see
+		// authorityEvidence.Await in internal/server).
 		idx.authority, idx.authorityReady = authorcredit.AwaitAuthority(ctx, store)
 	} else {
 		idx.authority, idx.authorityReady = authorcredit.CurrentAuthority(store)

@@ -1,5 +1,5 @@
 // file: internal/server/authority_evidence.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 3c15fa27-276b-44c2-a6e0-a9c9604af632
 // last-edited: 2026-10-05
 
@@ -7,6 +7,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -24,11 +25,14 @@ const authorityRefreshTTL = 10 * time.Minute
 const authorityRetryAfter = time.Minute
 
 // authorityAwaitMax bounds how long Await (a plan reading the lists) waits
-// for a load, on top of the caller's own context.
+// for a load, on top of the caller's own context. It is the default of
+// authorityEvidence.awaitMax.
 const authorityAwaitMax = 2 * time.Minute
 
-// authorityAwaitLogAfter is how long Await waits before the wait is logged
-// (at Info, with its length).
+// authorityAwaitLogAfter is how long Await waits before a wait that ends
+// with a snapshot is logged (at Info, with its length and why it ended). It
+// is the default of authorityEvidence.awaitLogAfter. A wait that ends
+// without one is always logged, once, at Warn.
 const authorityAwaitLogAfter = time.Second
 
 // authorityEvidence hands authorcredit the authority lists (the
@@ -49,6 +53,10 @@ type authorityEvidence struct {
 	// goroutine (tests).
 	spawn func(name string, fn func())
 	ttl   time.Duration
+	// awaitMax and awaitLogAfter are authorityAwaitMax and
+	// authorityAwaitLogAfter; fields so a test can shorten them.
+	awaitMax      time.Duration
+	awaitLogAfter time.Duration
 
 	mu       sync.Mutex
 	snap     *authority.Snapshot
@@ -59,7 +67,8 @@ type authorityEvidence struct {
 
 func newAuthorityEvidence(ctx context.Context, kv authority.Scanner, enabled func() bool,
 	spawn func(name string, fn func())) *authorityEvidence {
-	return &authorityEvidence{ctx: ctx, kv: kv, enabled: enabled, spawn: spawn, ttl: authorityRefreshTTL}
+	return &authorityEvidence{ctx: ctx, kv: kv, enabled: enabled, spawn: spawn, ttl: authorityRefreshTTL,
+		awaitMax: authorityAwaitMax, awaitLogAfter: authorityAwaitLogAfter}
 }
 
 // Prime starts the first load when the flag is on (Server.Start), so the
@@ -107,12 +116,16 @@ func (a *authorityEvidence) Lookup() authority.Lookup {
 // Await is Lookup for a caller that must not read an empty answer as "no
 // list knows this name" (a repairs plan): it starts a due load like Lookup
 // and, while no snapshot is held and a load is in flight, waits for it (at
-// most authorityAwaitMax, and never past ctx). ready reports whether a real
+// most awaitMax, and never past ctx). ready reports whether a real
 // snapshot is returned. Turning authority_evidence_enabled on by PUT /config
 // starts no load (Start's Prime ran with the flag off), and Lookup never
 // blocks, so without this a plan run right after the flip read Empty for
-// every name (prod 2026-10-05). The flag on with no snapshot afterwards is
-// logged, so a plan without authority lines is never silent.
+// every name (prod 2026-10-05).
+//
+// Each Await logs at most one line. With the flag on and no snapshot
+// afterwards, one Warn, carrying the wait's length and why it ended when it
+// waited, so a plan without authority lines is never silent. With a snapshot
+// after a wait longer than awaitLogAfter, one Info with the same two facts.
 func (a *authorityEvidence) Await(ctx context.Context) (authority.Lookup, bool) {
 	if a == nil || a.enabled == nil || !a.enabled() {
 		return authority.Empty(), false
@@ -121,32 +134,74 @@ func (a *authorityEvidence) Await(ctx context.Context) (authority.Lookup, bool) 
 	a.mu.Lock()
 	snap, loading, done := a.snap, a.loading, a.loadDone
 	a.mu.Unlock()
+	var waited time.Duration
+	var ended awaitEnd
 	if snap == nil && loading && done != nil {
 		// Every repairs.plan op shares one ConcurrencyKey
 		// (repairs.PlanOpID, internal/plugins/maintenance/repairs_ops.go),
 		// so plans run one at a time: while this plan waits here (up to
-		// authorityAwaitMax), other fixers' plans queued behind it wait too.
-		// A wait past authorityAwaitLogAfter is logged with its length, so a
-		// slow plan queue can be traced to the snapshot load.
+		// awaitMax), other fixers' plans queued behind it wait too. The wait
+		// is logged with its length and why it ended, so a slow plan queue
+		// can be traced to the snapshot load.
 		start := time.Now()
-		wait := time.NewTimer(authorityAwaitMax)
+		wait := time.NewTimer(a.awaitMax)
 		defer wait.Stop()
 		select {
 		case <-done:
+			ended = awaitLoadEnded
 		case <-ctx.Done():
+			ended = awaitCtxDone
 		case <-wait.C:
+			ended = awaitTimedOut
 		}
-		if waited := time.Since(start); waited > authorityAwaitLogAfter {
-			logger.New("authority").Info("authority evidence: a plan waited %s for the authority snapshot load (repairs.plan ops queued behind it waited too)",
-				waited.Round(time.Millisecond))
+		// select picks at random among ready cases: a load that ended at the
+		// same moment the caller gave up still counts as ended.
+		if ended != awaitLoadEnded {
+			select {
+			case <-done:
+				ended = awaitLoadEnded
+			default:
+			}
 		}
+		waited = time.Since(start)
 	}
 	l := a.Lookup()
 	if s, ok := l.(*authority.Snapshot); ok && s != nil {
+		if ended != awaitNone && waited > a.awaitLogAfter {
+			logger.New("authority").Info("authority evidence: a plan waited %s for the authority snapshot load (%s; repairs.plan ops queued behind it waited too)",
+				waited.Round(time.Millisecond), ended.reason(a.awaitMax))
+		}
 		return s, true
 	}
-	logger.New("authority").Warn("authority evidence: enabled but no snapshot is loaded (load in flight, failed, or the caller gave up); this plan reads no authority lists")
+	if ended == awaitNone {
+		logger.New("authority").Warn("authority evidence: enabled but no snapshot is loaded and no load is in flight (the last load failed or was discarded); this plan reads no authority lists")
+	} else {
+		logger.New("authority").Warn("authority evidence: enabled but no snapshot after waiting %s (%s); this plan reads no authority lists",
+			waited.Round(time.Millisecond), ended.reason(a.awaitMax))
+	}
 	return authority.Empty(), false
+}
+
+// awaitEnd is why Await's wait for a load ended.
+type awaitEnd int
+
+const (
+	awaitNone      awaitEnd = iota // no wait: a snapshot was held, or no load was in flight
+	awaitLoadEnded                 // the load finished (with or without a snapshot)
+	awaitCtxDone                   // the caller's context ended first
+	awaitTimedOut                  // awaitMax elapsed first
+)
+
+func (e awaitEnd) reason(limit time.Duration) string {
+	switch e {
+	case awaitLoadEnded:
+		return "the snapshot load finished"
+	case awaitCtxDone:
+		return "the caller's context ended first"
+	case awaitTimedOut:
+		return fmt.Sprintf("gave up after the %s wait limit", limit)
+	}
+	return "no wait"
 }
 
 func (a *authorityEvidence) load(done chan struct{}) {

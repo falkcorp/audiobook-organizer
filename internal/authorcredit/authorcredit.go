@@ -1,5 +1,5 @@
 // file: internal/authorcredit/authorcredit.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: 7000d1fc-e16c-47e1-bb94-6180fe3ec1de
 // last-edited: 2026-10-05
 
@@ -903,6 +903,12 @@ func CurrentAuthority(store any) (authority.Lookup, bool) {
 // (a typed-nil *authority.Snapshot). Such a Lookup compares unequal to both
 // nil and authority.Empty(), yet calling it dereferences nil, so it must be
 // read as "no lists" rather than as a real snapshot.
+//
+// The check is by kind, not by type: a Lookup implemented on any nilable
+// kind (pointer, map, slice, func, chan or interface) whose value is nil is
+// read as "no lists" too. That includes a nil pointer to a type whose methods
+// are nil-safe and would have answered: such a value is never treated as a
+// real snapshot, so a custom Lookup must be non-nil to be read.
 func isNilLookup(l authority.Lookup) bool {
 	if l == nil {
 		return true
