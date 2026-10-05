@@ -1,5 +1,5 @@
 // file: internal/authorcredit/authorcredit.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: 7000d1fc-e16c-47e1-bb94-6180fe3ec1de
 // last-edited: 2026-10-05
 
@@ -880,7 +880,7 @@ type AuthorityWaiter interface {
 // of anything.
 func AwaitAuthority(ctx context.Context, store any) (authority.Lookup, bool) {
 	if w, ok := database.AsCapability[AuthorityWaiter](store); ok {
-		if l, ready := w.AwaitAuthorityLookup(ctx); l != nil {
+		if l, ready := w.AwaitAuthorityLookup(ctx); !isNilLookup(l) {
 			return l, ready
 		}
 		return authority.Empty(), false
@@ -891,10 +891,31 @@ func AwaitAuthority(ctx context.Context, store any) (authority.Lookup, bool) {
 // CurrentAuthority is AwaitAuthority without the wait, for a path that must
 // not block (a repairs apply holding the scan stand-down lease): the lists
 // the store answers right now through AuthoritySource, and whether that is a
-// real snapshot rather than authority.Empty().
+// real snapshot rather than authority.Empty(). A nil or typed-nil Lookup (a
+// custom AuthoritySource returning a nil *authority.Snapshot) is not ready:
+// authorityOf answers authority.Empty() for it.
 func CurrentAuthority(store any) (authority.Lookup, bool) {
 	l := authorityOf(store)
 	return l, l != authority.Empty()
+}
+
+// isNilLookup reports whether l is nil or an interface holding a nil pointer
+// (a typed-nil *authority.Snapshot). Such a Lookup compares unequal to both
+// nil and authority.Empty(), yet calling it dereferences nil, so it must be
+// read as "no lists" rather than as a real snapshot.
+func isNilLookup(l authority.Lookup) bool {
+	if l == nil {
+		return true
+	}
+	if s, ok := l.(*authority.Snapshot); ok {
+		return s == nil
+	}
+	v := reflect.ValueOf(l)
+	switch v.Kind() {
+	case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Func, reflect.Chan, reflect.Interface:
+		return v.IsNil()
+	}
+	return false
 }
 
 // AuthorityPersonEvidence is the authority-list evidence that name is an
@@ -912,7 +933,7 @@ func AuthorityPersonEvidence(lookup authority.Lookup, name string) Evidence {
 // authority.Empty() when it offers none (or a nil one).
 func authorityOf(store any) authority.Lookup {
 	if as, ok := database.AsCapability[AuthoritySource](store); ok {
-		if l := as.AuthorityLookup(); l != nil {
+		if l := as.AuthorityLookup(); !isNilLookup(l) {
 			return l
 		}
 	}

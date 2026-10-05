@@ -1,5 +1,5 @@
 // file: internal/server/authority_evidence.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3c15fa27-276b-44c2-a6e0-a9c9604af632
 // last-edited: 2026-10-05
 
@@ -26,6 +26,10 @@ const authorityRetryAfter = time.Minute
 // authorityAwaitMax bounds how long Await (a plan reading the lists) waits
 // for a load, on top of the caller's own context.
 const authorityAwaitMax = 2 * time.Minute
+
+// authorityAwaitLogAfter is how long Await waits before the wait is logged
+// (at Info, with its length).
+const authorityAwaitLogAfter = time.Second
 
 // authorityEvidence hands authorcredit the authority lists (the
 // AuthoritySource store capability, offered by indexedStore). It holds one
@@ -118,12 +122,23 @@ func (a *authorityEvidence) Await(ctx context.Context) (authority.Lookup, bool) 
 	snap, loading, done := a.snap, a.loading, a.loadDone
 	a.mu.Unlock()
 	if snap == nil && loading && done != nil {
+		// Every repairs.plan op shares one ConcurrencyKey
+		// (repairs.PlanOpID, internal/plugins/maintenance/repairs_ops.go),
+		// so plans run one at a time: while this plan waits here (up to
+		// authorityAwaitMax), other fixers' plans queued behind it wait too.
+		// A wait past authorityAwaitLogAfter is logged with its length, so a
+		// slow plan queue can be traced to the snapshot load.
+		start := time.Now()
 		wait := time.NewTimer(authorityAwaitMax)
 		defer wait.Stop()
 		select {
 		case <-done:
 		case <-ctx.Done():
 		case <-wait.C:
+		}
+		if waited := time.Since(start); waited > authorityAwaitLogAfter {
+			logger.New("authority").Info("authority evidence: a plan waited %s for the authority snapshot load (repairs.plan ops queued behind it waited too)",
+				waited.Round(time.Millisecond))
 		}
 	}
 	l := a.Lookup()
