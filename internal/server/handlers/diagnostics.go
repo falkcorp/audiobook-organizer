@@ -1,7 +1,7 @@
 // file: internal/server/handlers/diagnostics.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: 14e70c44-73ca-456a-bc67-8dc6ba6e5736
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 // DiagnosticsHandler hosts the diagnostics HTTP endpoints extracted from the
 // server package: ZIP export start/download, AI batch submit + results, applying
@@ -564,6 +564,14 @@ func (h *DiagnosticsHandler) ApplySuggestions(c *gin.Context) {
 	skipped := 0
 	var errors []string
 	var skippedReasons []string
+	// merges reports each merge_versions suggestion's outcome as the link
+	// endpoints do: the survivor, the flag and user-state holder, and whether
+	// Audiobookshelf lists it.
+	type mergeOutcome struct {
+		SuggestionID string `json:"suggestion_id"`
+		merge.FlagOutcome
+	}
+	merges := []mergeOutcome{}
 
 	for _, suggestion := range suggestions {
 		if !approvedSet[suggestion.ID] {
@@ -575,7 +583,11 @@ func (h *DiagnosticsHandler) ApplySuggestions(c *gin.Context) {
 		switch suggestion.Action {
 		case "merge_versions":
 			if len(suggestion.BookIDs) >= 2 {
-				_, applyErr = ms.MergeBooks(suggestion.BookIDs, suggestion.PrimaryID)
+				var res *merge.Result
+				res, applyErr = ms.MergeBooks(suggestion.BookIDs, suggestion.PrimaryID)
+				if applyErr == nil {
+					merges = append(merges, mergeOutcome{SuggestionID: suggestion.ID, FlagOutcome: res.FlagOutcome()})
+				}
 			}
 
 		case "delete_orphan":
@@ -656,6 +668,7 @@ func (h *DiagnosticsHandler) ApplySuggestions(c *gin.Context) {
 		"errors":          errors,
 		"skipped":         skipped,
 		"skipped_reasons": skippedReasons,
+		"merges":          merges,
 	})
 }
 

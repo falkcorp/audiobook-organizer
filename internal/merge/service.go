@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.44.0
+// version: 1.45.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-10-05
 
@@ -102,12 +102,6 @@ type Result struct {
 	// per-loser error. On a fully successful clean-group merge it is
 	// len(participants)-1.
 	SoftDeleted int `json:"soft_deleted"`
-	// ElectedWithoutUserState is set when the automatic election kept a
-	// different book than the pre-2026-09-26 rule would have, because that
-	// book was the only candidate a user had client-visible state on
-	// (PreferUserStateSurvivor). It names the book the old rule picked, so the
-	// flip is visible in the merge output.
-	ElectedWithoutUserState string `json:"elected_without_user_state,omitempty"`
 	// MovedSiblings are the live version-group siblings of the losers that the
 	// merge carried into VersionGroupID (see MergeBooks item 6). They stay live
 	// and non-primary; nothing else about them changes. Each one records what
@@ -119,19 +113,58 @@ type Result struct {
 	// GroupPrimaryID is set when the group's primary flag went to a book
 	// other than PrimaryID: with no explicit primary and a survivor that is
 	// not organized, an organized moved sibling or member of the reused group
-	// holds it, so the title stays listed in Audiobookshelf.
-	GroupPrimaryID string `json:"group_primary_id,omitempty"`
-	// HiddenFromABS is set when the merged group's primary is a book
-	// Audiobookshelf will not list (it lists only an organized primary), with
-	// the reason. The one case today is HiddenFromABSITunesSurvivor: no
-	// explicit primary, an unorganized survivor whose files carry iTunes
-	// persistent IDs keeps the flag rather than lose its iTunes track (owner
-	// decision 2026-10-05: iTunes wins). Logged with the prefix "abs-hidden
-	// keep" so these can be listed.
-	HiddenFromABS string `json:"hidden_from_abs,omitempty"`
+	// holds it, so the title stays listed in Audiobookshelf. Empty means
+	// PrimaryID holds the flag. Always serialized, so every merge endpoint
+	// reports it.
+	GroupPrimaryID string `json:"group_primary_id"`
+	// HiddenFromABS is set, with the reason, when the book holding the
+	// merged group's primary flag (GroupPrimaryID, else PrimaryID) is one
+	// Audiobookshelf will not list: ABS lists a group's primary only when it
+	// is organized and not quarantined (database.ABSLibraryFilter). Read from
+	// the flag holder's row as stored after the merge. The reasons:
+	//
+	//   - HiddenFromABSITunesSurvivor: no explicit primary; the unorganized
+	//     survivor kept the flag because its files carry iTunes persistent
+	//     IDs (owner decision 2026-10-05: iTunes wins);
+	//   - HiddenFromABSNoOrganizedCandidate: no explicit primary; the
+	//     survivor is not organized and no organized copy could take the flag;
+	//   - HiddenFromABSExplicitPrimaryNotOrganized: the caller named the
+	//     primary and it is not organized;
+	//   - HiddenFromABSQuarantined: the flag holder is organized but
+	//     quarantined.
+	//
+	// Logged with the prefix "abs-hidden keep" so these can be listed. Empty
+	// when ABS lists the title. Always serialized.
+	HiddenFromABS string `json:"hidden_from_abs"`
 	// StateHolderID is set when the losers' user state and sync redirect went
-	// to a book other than PrimaryID: the flag holder (GroupPrimaryID).
-	StateHolderID string `json:"state_holder_id,omitempty"`
+	// to a book other than PrimaryID: the flag holder (GroupPrimaryID). Empty
+	// means they went to PrimaryID. Always serialized.
+	StateHolderID string `json:"state_holder_id"`
+}
+
+// FlagOutcome is the part of a Result every merge endpoint reports, the bulk
+// ones once per merge: which book survived, which holds the group's primary
+// flag and the losers' user state, and whether Audiobookshelf lists it.
+type FlagOutcome struct {
+	PrimaryID      string `json:"primary_id"`
+	VersionGroupID string `json:"version_group_id"`
+	GroupPrimaryID string `json:"group_primary_id"`
+	HiddenFromABS  string `json:"hidden_from_abs"`
+	StateHolderID  string `json:"state_holder_id"`
+}
+
+// FlagOutcome returns r's FlagOutcome (the zero value for a nil r).
+func (r *Result) FlagOutcome() FlagOutcome {
+	if r == nil {
+		return FlagOutcome{}
+	}
+	return FlagOutcome{
+		PrimaryID:      r.PrimaryID,
+		VersionGroupID: r.VersionGroupID,
+		GroupPrimaryID: r.GroupPrimaryID,
+		HiddenFromABS:  r.HiddenFromABS,
+		StateHolderID:  r.StateHolderID,
+	}
 }
 
 // MovedSibling is one loser sibling a merge carried into the merge's version
@@ -390,9 +423,11 @@ func preferOnTie(a, b *database.Book) bool {
 //     journaled so an undo reverses it.
 //
 // If primaryID is empty, the best book is auto-selected by ElectPrimary
-// (a book with an audio route beats one without; then BookIsBetter:
-// organized path, curation, M4B, bitrate, size; then a deterministic
-// tie-break). If primaryID is provided, that book is set as the primary
+// (a book with an audio route beats one without; then BookIsBetter: not an
+// iTunes ghost path, curation, M4B, bitrate, size; then a deterministic
+// tie-break). Neither organized state nor which copy a user has listening
+// state on plays a part (owner decisions 2026-10-05); the losers' state
+// follows the flag holder (item 7). If primaryID is provided, that book is set as the primary
 // unless it has no audio route while another does (FilelessPrimaryError). A
 // soft-deleted participant is refused (SoftDeletedInputError) unless it is a
 // loser already in the group this merge resolves to — that is a completed
@@ -630,15 +665,14 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 	// purge clock. Merging books that ALL lack file rows is still allowed —
 	// there is no audio to lose, and refusing would make the file-less ghost
 	// class impossible to tidy until it is repaired.
-	electedWithoutUserState := ""
+	//
+	// Audio quality alone picks the survivor (owner decision 2026-10-05
+	// 13:00). Which copy a user has listening state on no longer counts: that
+	// state follows the group's flag holder whichever copy survives (the
+	// sync-identity follow below), so preferring the stateful copy only kept
+	// a worse recording to save a redirect.
 	if bestIdx < 0 {
 		bestIdx = ElectPrimary(books, filesByID)
-		if bestIdx >= 0 {
-			if pref := ms.preferUserStateSurvivor(books, filesByID, bestIdx); pref != bestIdx {
-				electedWithoutUserState = books[bestIdx].ID
-				bestIdx = pref
-			}
-		}
 		if bestIdx < 0 {
 			// Unreachable after the guard above (a live participant always
 			// exists once any soft-deleted one was admitted), kept so a future
@@ -910,13 +944,15 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 		}
 	}
 
-	// The owner's iTunes-wins exception (2026-10-05 11:55) can leave the title
-	// out of Audiobookshelf: an unorganized survivor holding iTunes PIDs keeps
-	// the flag, and ABS lists a group's primary only when it is organized.
-	// Recorded on the Result and logged so these can be listed.
-	hiddenFromABS := ""
-	if primaryID == "" && !isOrganized(books[bestIdx]) && survivorHasPID {
-		hiddenFromABS = HiddenFromABSITunesSurvivor
+	// Why the flag holder may be one Audiobookshelf does not list; whether it
+	// is, is decided from its stored row once the merge has written it
+	// (absHiddenReason, below).
+	hiddenWhy := HiddenFromABSNoOrganizedCandidate
+	switch {
+	case primaryID != "":
+		hiddenWhy = HiddenFromABSExplicitPrimaryNotOrganized
+	case survivorHasPID:
+		hiddenWhy = HiddenFromABSITunesSurvivor
 	}
 
 	guarded := slices.Clone(siblingBooks)
@@ -1372,12 +1408,15 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 		}
 	}
 	// Every loser gets a syncID before the follow, so RecordSyncMerge always
-	// leaves a redirect from it to the winner. A loser no client had seen
-	// had none, and RecordSyncMerge records nothing for a book without one:
-	// the merge then left no trace of where the loser went (MergeBooks does
-	// not set merged_into_book_id, see the doc comment), and a reader asking
-	// "what did this retired book become" (merge.ResolveSurvivor; the
-	// Repairs fragment fixer finishing a run whose survivor a dedup merge
+	// leaves a redirect from it to the book its state went to (the survivor,
+	// or the flag holder when that is another book). A loser no client had
+	// seen had none, and RecordSyncMerge records nothing for a book without
+	// one: the merge then left no trace of where the loser went (MergeBooks
+	// does not set merged_into_book_id, see the doc comment), and a reader
+	// asking "what did this retired book become" (merge.ResolveSurvivor for
+	// its state; merge.ResolveMergeSurvivor for its work, which corrects a
+	// flag-holder redirect to the survivor from the sibling-move journal --
+	// the Repairs fragment fixer finishing a run whose survivor a dedup merge
 	// retired) could not tell it from a book deleted outright. A mint
 	// failure is logged and the merge goes on: that loser is left as it was
 	// before this step (no redirect), which readers treat as deleted.
@@ -1404,9 +1443,15 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 	} else {
 		followErr = FollowMerge(ms.db, ms.syncFollower, resolvedPrimaryID, losers)
 	}
+	hiddenFromABS, hiddenErr := ms.absHiddenReason(flagHolderID, hiddenWhy)
+	if hiddenErr != nil {
+		mlog.Warn("merge: could not tell whether Audiobookshelf lists flag holder %s of version group %s: %s",
+			logger.SanitizeLogValue(flagHolderID), logger.SanitizeLogValue(versionGroupID), logger.SanitizeLogValue(fmt.Sprint(hiddenErr)))
+	}
 	if hiddenFromABS != "" {
-		mlog.Warn("merge: abs-hidden keep: survivor %s keeps the primary flag of version group %s although it is not organized, because its files carry iTunes persistent IDs (owner decision: iTunes wins); Audiobookshelf will not list this title until it is organized",
-			logger.SanitizeLogValue(resolvedPrimaryID), logger.SanitizeLogValue(versionGroupID))
+		mlog.Warn("merge: abs-hidden keep: %s holds the primary flag of version group %s (survivor %s) but Audiobookshelf will not list it: %s",
+			logger.SanitizeLogValue(flagHolderID), logger.SanitizeLogValue(versionGroupID),
+			logger.SanitizeLogValue(resolvedPrimaryID), hiddenFromABS)
 	}
 
 	if followErr != nil {
@@ -1415,22 +1460,57 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 	}
 
 	return &Result{
-		PrimaryID:               resolvedPrimaryID,
-		VersionGroupID:          versionGroupID,
-		MergedCount:             len(books),
-		SoftDeleted:             softDeleted,
-		ElectedWithoutUserState: electedWithoutUserState,
-		MovedSiblings:           siblings,
-		SiblingJournalID:        siblingJournalID,
-		GroupPrimaryID:          groupPrimaryID(flagHolderID, resolvedPrimaryID),
-		HiddenFromABS:           hiddenFromABS,
-		StateHolderID:           groupPrimaryID(flagHolderID, resolvedPrimaryID),
+		PrimaryID:        resolvedPrimaryID,
+		VersionGroupID:   versionGroupID,
+		MergedCount:      len(books),
+		SoftDeleted:      softDeleted,
+		MovedSiblings:    siblings,
+		SiblingJournalID: siblingJournalID,
+		GroupPrimaryID:   groupPrimaryID(flagHolderID, resolvedPrimaryID),
+		HiddenFromABS:    hiddenFromABS,
+		StateHolderID:    groupPrimaryID(flagHolderID, resolvedPrimaryID),
 	}, nil
 }
 
-// HiddenFromABSITunesSurvivor is Result.HiddenFromABS when the survivor kept
-// the flag, unorganized, because its files carry iTunes persistent IDs.
-const HiddenFromABSITunesSurvivor = "itunes_survivor_not_organized"
+// Result.HiddenFromABS reasons (see Result.HiddenFromABS).
+const (
+	// HiddenFromABSITunesSurvivor: the survivor kept the flag, unorganized,
+	// because its files carry iTunes persistent IDs.
+	HiddenFromABSITunesSurvivor = "itunes_survivor_not_organized"
+	// HiddenFromABSNoOrganizedCandidate: no explicit primary, the survivor is
+	// not organized, and no organized live copy could take the flag.
+	HiddenFromABSNoOrganizedCandidate = "no_organized_candidate"
+	// HiddenFromABSExplicitPrimaryNotOrganized: the caller named a primary
+	// that is not organized.
+	HiddenFromABSExplicitPrimaryNotOrganized = "explicit_primary_not_organized"
+	// HiddenFromABSQuarantined: the flag holder is organized but quarantined.
+	HiddenFromABSQuarantined = "flag_holder_quarantined"
+)
+
+// absHiddenReason is Result.HiddenFromABS: "" when Audiobookshelf lists the
+// flag holder's stored row as its group's primary (database.ABSLibraryFilter),
+// else why not. notOrganizedWhy is the reason to give when the holder is not
+// organized, which only the merge's own choice can explain. An unreadable or
+// missing row is reported as an error and "" (unknown is not "hidden").
+func (ms *Service) absHiddenReason(holderID, notOrganizedWhy string) (string, error) {
+	b, err := ms.db.GetBookByID(holderID)
+	if err != nil {
+		return "", fmt.Errorf("read flag holder %s: %w", holderID, err)
+	}
+	if b == nil {
+		return "", fmt.Errorf("flag holder %s: no row", holderID)
+	}
+	if database.ABSLibraryFilter().Matches(b) {
+		return "", nil
+	}
+	if !isOrganized(b) {
+		return notOrganizedWhy, nil
+	}
+	if b.QuarantinedAt != nil {
+		return HiddenFromABSQuarantined, nil
+	}
+	return "", nil
+}
 
 // groupPrimaryID is Result.GroupPrimaryID: the flag holder when it is not the
 // survivor, else empty.
@@ -1439,6 +1519,12 @@ func groupPrimaryID(flagHolderID, survivorID string) string {
 		return ""
 	}
 	return flagHolderID
+}
+
+// isOrganized reports library_state=organized, the state Audiobookshelf
+// requires of a group's primary (database.ABSLibraryFilter).
+func isOrganized(b *database.Book) bool {
+	return b.LibraryState != nil && *b.LibraryState == "organized"
 }
 
 func anyITunesPID(files []database.BookFile) bool {
@@ -1545,25 +1631,6 @@ func requireReplayedLosersInGroup(books []*database.Book, versionGroupID string,
 		return &SoftDeletedInputError{BookID: b.ID}
 	}
 	return nil
-}
-
-// preferUserStateSurvivor applies PreferUserStateSurvivor to an automatic
-// election. A failure to read user state keeps the elected book: the state
-// move reconciles whatever the survivor turns out to be, so an unknown answer
-// must not block or skew the merge.
-func (ms *Service) preferUserStateSurvivor(books []*database.Book, filesByID map[string][]database.BookFile, electedIdx int) int {
-	ids := make([]string, 0, len(books))
-	for _, b := range books {
-		if !b.IsSoftDeleted() {
-			ids = append(ids, b.ID)
-		}
-	}
-	stateful, err := BooksWithClientVisibleState(ms.db, ids)
-	if err != nil {
-		mlog.Warn("merge: user-state survivor preference skipped, state unreadable: %s", logger.SanitizeLogValue(fmt.Sprint(err)))
-		return electedIdx
-	}
-	return PreferUserStateSurvivor(books, filesByID, stateful, electedIdx)
 }
 
 // handOffLeftGroups runs versionprimary.EnsureSinglePrimary on each group a

@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
-// last-edited: 2026-10-01
+// last-edited: 2026-10-05
 
 package audiobooks
 
@@ -445,6 +445,23 @@ func (svc *AudiobookService) PurgeSoftDeletedBooks(ctx context.Context, deleteFi
 		if len(ownedFiles) > 0 {
 			result.SkippedOwnsFiles++
 			result.SkippedOwnsFilesIDs = append(result.SkippedOwnsFilesIDs, book.ID)
+			continue
+		}
+		// Step 0b: refuse a book a user still has listening state on, for
+		// the same reason and at the same point (before any side effect). A
+		// merge moves a loser's progress to the book holding the group's
+		// flag; progress still here is progress that never reached a live
+		// book (the move failed with no repair record, or a pending repair
+		// still holds it), and the hard delete would drop it. Fail closed: an
+		// unreadable answer is not proof there is none.
+		hasState, stateErr := merge.BookHasCarryableUserState(svc.store, book.ID)
+		if stateErr != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("%s: not purged: cannot read users' listening state on it: %v", book.ID, stateErr))
+			continue
+		}
+		if hasState {
+			result.SkippedHasUserState++
+			result.SkippedHasUserStateIDs = append(result.SkippedHasUserStateIDs, book.ID)
 			continue
 		}
 

@@ -1,5 +1,5 @@
 // file: internal/server/merge_sibling_undo_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 43e2fa1b-c761-4fd6-a2f1-e668c89b5335
 // last-edited: 2026-10-05
 
@@ -52,7 +52,8 @@ func requireSiblingUndo(t *testing.T, f *vptest.Fixture, k, ls string) {
 // dedup.book-merge (applyBookMergeReroute) writes no dedup journal.
 func TestApplyBookMergeReroute_SiblingMoveIsUndoable(t *testing.T) {
 	f, k, l, ls := siblingUndoFixture(t)
-	require.NoError(t, applyBookMergeReroute(merge.NewService(f.S), k, []string{l}))
+	_, err := applyBookMergeReroute(merge.NewService(f.S), k, []string{l})
+	require.NoError(t, err)
 	requireSiblingUndo(t, f, k, ls)
 }
 

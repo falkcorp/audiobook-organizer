@@ -1,5 +1,5 @@
 // file: internal/database/dedup_automerge_journal.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 8b2f7d14-6c93-4a05-9e21-3f8a5c0d7e46
 // last-edited: 2026-10-05
 
@@ -67,7 +67,10 @@ type AutoMergeJournalEntry struct {
 	Siblings []AutoMergeJournalSibling `json:"siblings,omitempty"`
 
 	// SiblingJournalID is the merge's sibling-move journal
-	// (merge.Result.SiblingJournalID), set when Siblings is non-empty.
+	// (merge.Result.SiblingJournalID), set whenever the merge wrote one:
+	// when siblings moved with this loser or another, or when the group's
+	// flag holder is not the survivor and this loser's user state followed
+	// it (the journal's StateFollows).
 	SiblingJournalID string `json:"sibling_journal_id,omitempty"`
 
 	// IntoGroupID is the merge's version group (merge.Result.VersionGroupID).

@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_types.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: a3f9b2c1-d4e5-6f70-8a9b-0c1d2e3f4a5b
-// last-edited: 2026-10-03
+// last-edited: 2026-10-05
 
 package audiobooks
 
@@ -55,7 +55,18 @@ type PurgeResult struct {
 	// real errors. The nightly job reports the count once per run.
 	SkippedOwnsFiles    int      `json:"skipped_owns_files"`
 	SkippedOwnsFilesIDs []string `json:"skipped_owns_files_ids,omitempty"`
-	Errors              []string `json:"errors"`
+	// SkippedHasUserState counts books left soft-deleted because a user
+	// still has listening state on them (merge.BookHasCarryableUserState):
+	// progress, a position, a finished flag. A merge moves a loser's state to
+	// the book that holds the group's flag; state still here means that move
+	// did not happen (it failed with no repair record, or a pending repair
+	// still holds it), and hard-deleting the row would lose it for good.
+	// Named in SkippedHasUserStateIDs, reported once per run like
+	// SkippedOwnsFiles. A book the user deleted while listening to it stays
+	// here too until the state is cleared or moved.
+	SkippedHasUserState    int      `json:"skipped_has_user_state"`
+	SkippedHasUserStateIDs []string `json:"skipped_has_user_state_ids,omitempty"`
+	Errors                 []string `json:"errors"`
 }
 
 // AudiobookUpdate represents a partial update to an audiobook

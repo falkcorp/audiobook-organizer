@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/handler.go
-// version: 1.24.1
+// version: 1.25.0
 // guid: d1b9e024-d28c-4d62-8f90-96d7064559c4
-// last-edited: 2026-09-27
+// last-edited: 2026-10-05
 
 // Package deduphandler hosts the dedup-domain HTTP handlers extracted from the
 // server package: dedup candidate / cluster / series listing, merge / dismiss /
@@ -991,6 +991,9 @@ func (h *Handler) LinkDedupCandidateSeries(c *gin.Context) {
 	mergedClusters := 0
 	mergedBooks := 0
 	candidatesUpdated := 0
+	// Each merge's survivor, flag and user-state holder, and whether
+	// Audiobookshelf lists it, as the single link endpoints report them.
+	merges := []merge.FlagOutcome{}
 	for _, bookIDs := range clusters {
 		if len(bookIDs) < 2 {
 			continue
@@ -1003,10 +1006,12 @@ func (h *Handler) LinkDedupCandidateSeries(c *gin.Context) {
 		// behind it, hence the zero candidate id — MergeBooksJournaled records
 		// one undo entry per loser. The tag is journal provenance only; this
 		// endpoint applies no survivor tag.
-		if _, _, err := h.dedupEngine.MergeBooksJournaled(0, bookIDs, "", "dedup:merge-source:bulk-series-cluster"); err != nil {
+		res, _, err := h.dedupEngine.MergeBooksJournaled(0, bookIDs, "", "dedup:merge-source:bulk-series-cluster")
+		if err != nil {
 			failures = append(failures, fmt.Sprintf("cluster of %d: %v", len(bookIDs), err))
 			continue
 		}
+		merges = append(merges, res.FlagOutcome())
 		mergedClusters++
 		mergedBooks += len(bookIDs)
 
@@ -1036,6 +1041,7 @@ func (h *Handler) LinkDedupCandidateSeries(c *gin.Context) {
 		"books_merged":       mergedBooks,
 		"candidates_updated": candidatesUpdated,
 		"failures":           failures,
+		"merges":             merges,
 	})
 }
 
@@ -1231,6 +1237,13 @@ func (h *Handler) BulkLinkDedupCandidates(c *gin.Context) {
 		return
 	}
 	linked := newLinkComponents()
+	// Each merge's survivor, flag and user-state holder, and whether
+	// Audiobookshelf lists it, as the single link endpoint reports them.
+	type bulkMerge struct {
+		CandidateID int64 `json:"candidate_id"`
+		merge.FlagOutcome
+	}
+	merges := []bulkMerge{}
 
 	for _, cand := range candidates {
 		if why, refused := guard.pairRefusal(cand); refused {
@@ -1253,12 +1266,13 @@ func (h *Handler) BulkLinkDedupCandidates(c *gin.Context) {
 		// it uses the pairwise wrapper and the undo entry carries the candidate
 		// id. The tag is journal provenance only; this endpoint applies no
 		// survivor tag.
-		_, _, mergeErr := h.dedupEngine.MergeJournaled(cand.ID, cand.EntityAID, cand.EntityBID, "", "dedup:merge-source:bulk-filter")
+		mergeRes, _, mergeErr := h.dedupEngine.MergeJournaled(cand.ID, cand.EntityAID, cand.EntityBID, "", "dedup:merge-source:bulk-filter")
 		if mergeErr != nil {
 			failures = append(failures, failure{CandidateID: cand.ID, Reason: mergeErr.Error()})
 			slog.Info("dedup bulk merge candidate failed", "cand", cand.ID, "mergeErr", mergeErr)
 			continue
 		}
+		merges = append(merges, bulkMerge{CandidateID: cand.ID, FlagOutcome: mergeRes.FlagOutcome()})
 		linked.union(cand.EntityAID, cand.EntityBID)
 		if err := es.UpdateCandidateStatus(cand.ID, "merged"); err != nil {
 			// The books were merged on the server side, but we couldn't
@@ -1278,6 +1292,7 @@ func (h *Handler) BulkLinkDedupCandidates(c *gin.Context) {
 		"merged":    merged,
 		"failed":    len(failures),
 		"failures":  failures,
+		"merges":    merges,
 	})
 }
 

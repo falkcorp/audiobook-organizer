@@ -1,0 +1,22 @@
+### Fixed
+
+#### Merge: user state that follows a flag holder is never lost, and always undoable
+
+- **The purge no longer drops listening state.** `PurgeSoftDeletedBooks` refuses a soft-deleted book that a user still has listening state on: a status, progress, a position, or the hide flag (`merge.BookHasCarryableUserState`). It reports such books as `skipped_has_user_state` / `skipped_has_user_state_ids`, not as errors. The drained row a completed merge follow leaves behind does not count, so ordinary merge losers still purge. Both purge reporters (scheduler and server) print the count.
+- **A journal write failure no longer strands a loser's state.** When the sibling-move journal could not record a loser's state follow onto the flag holder, the follow used to stop before moving anything and before writing a repair record. It now falls back to the unjournaled `FollowMerge` onto the flag holder, which writes its own pending-repair record first. Only a move that fails with no repair record fails the merge.
+- **UnmergeAuto returns a loser's state from a flag holder.** The dedup journal entry now names the sibling-move journal whenever the merge wrote one, not only when siblings moved with that loser. Before this, a reused-group member holding the flag, or a holder that moved in with another loser, left the loser's state and ABS redirect on the holder after an undo.
+- **A whole undo's refollow is journaled.** When a whole sibling undo sends the flag holder back, each still-retired loser's state goes onto the survivor. That move is now recorded as a new `state_follows` entry, so a later `UnmergeAuto` puts it back on the loser. A follow is marked undone only after its refollow lands, so a failed undo is completed by a retry. If the survivor has been merged away since, the refollow goes to the live end of its chain. If nothing is live, a pending user-state repair holds the move.
+- **An undone journal keeps its `undone_at`.** A later per-loser undo no longer rewrites it.
+- **The fragment fixer finishes into the survivor.** A dedup loser's sync redirect now leads to the flag holder, which is the right target for user state and Audiobookshelf. The Repairs fragment fixer, however, wants the book audio quality kept. It now resolves through `merge.ResolveMergeSurvivor`, which corrects a flag-holder hop to the merge's survivor using the sibling-move journals (`merge.FlagHolderFollows`). The state readers (pending-repair sweep, repair-merged-user-state, the ABS handlers) still follow the redirect.
+
+### Changed
+
+#### Merge: audio quality alone picks the keeper; every endpoint reports the flag holder
+
+- **The user-state survivor preference is gone.** Owner decision 2026-10-05 13:00: audio quality always picks the copy a merge keeps. `merge.PreferUserStateSurvivor`, `BooksWithClientVisibleState` and `Result.ElectedWithoutUserState` (`elected_without_user_state`) are removed, from `MergeBooks` and from dedup's survivor prediction. A copy someone listened to is retired like any other loser, and its state follows the flag holder.
+- **`hidden_from_abs` covers every unlisted flag holder.** It is computed from the flag holder's stored row against the Audiobookshelf filter. The reasons are `itunes_survivor_not_organized`, `no_organized_candidate`, `explicit_primary_not_organized` and `flag_holder_quarantined`.
+- **Every merge endpoint reports the outcome.** `group_primary_id`, `hidden_from_abs` and `state_holder_id` are always in the JSON. The fields come back from these endpoints:
+  - `/audiobooks/duplicates/link`
+  - `dedup/candidates/:id/link` and `link-cluster`, as the full result
+  - `bulk-link`, `link-series` and diagnostics `apply-suggestions`, as a new `merges` list with one entry per merge
+  - the async `/audiobooks/link` op, in its log and activity line

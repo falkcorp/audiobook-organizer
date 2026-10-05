@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/handler_test.go
-// version: 1.9.1
+// version: 1.10.0
 // guid: 6d8011eb-bed6-430b-959e-2a2b0738ffbc
-// last-edited: 2026-09-25
+// last-edited: 2026-10-05
 
 // Tests for the dedup-domain handlers. The embedding store is exercised through
 // a REAL pebble-backed *database.EmbeddingStore (it is a concrete db type the
@@ -430,10 +430,35 @@ func TestBulkLinkDedupCandidates(t *testing.T) {
 	allowLabelCaptureReads(d)
 	insertCandidate(t, d.es, "book-a", "book-b")
 	d.engine.EXPECT().MergeJournaled(mock.Anything, mock.Anything, mock.Anything, "", mock.Anything).
-		Return(&merge.Result{PrimaryID: "book-a"}, "dedup:automerge:k", nil).Once()
+		Return(&merge.Result{PrimaryID: "book-a", GroupPrimaryID: "book-c", StateHolderID: "book-c",
+			HiddenFromABS: merge.HiddenFromABSNoOrganizedCandidate}, "dedup:automerge:k", nil).Once()
 	w := doReq(t, h.BulkLinkDedupCandidates, http.MethodPost, "/api/v1/dedup/candidates/bulk-link", map[string]any{}, nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d want 200; body=%s", w.Code, w.Body.String())
+	}
+	// Each merge reports its survivor, flag/state holder and ABS listing, as
+	// the single link endpoint does.
+	var env struct {
+		Data struct {
+			Merges []struct {
+				CandidateID    int64  `json:"candidate_id"`
+				PrimaryID      string `json:"primary_id"`
+				GroupPrimaryID string `json:"group_primary_id"`
+				HiddenFromABS  string `json:"hidden_from_abs"`
+				StateHolderID  string `json:"state_holder_id"`
+			} `json:"merges"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode: %v; body=%s", err, w.Body.String())
+	}
+	if len(env.Data.Merges) != 1 {
+		t.Fatalf("merges=%d want 1; body=%s", len(env.Data.Merges), w.Body.String())
+	}
+	m := env.Data.Merges[0]
+	if m.PrimaryID != "book-a" || m.GroupPrimaryID != "book-c" || m.StateHolderID != "book-c" ||
+		m.HiddenFromABS != merge.HiddenFromABSNoOrganizedCandidate || m.CandidateID == 0 {
+		t.Fatalf("merge outcome not reported: %+v; body=%s", m, w.Body.String())
 	}
 }
 

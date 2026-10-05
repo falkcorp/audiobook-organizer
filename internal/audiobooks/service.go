@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service.go
-// version: 1.48.0
+// version: 1.49.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-10-03
+// last-edited: 2026-10-05
 
 // Package audiobooks provides the core business logic for managing audiobooks,
 // including CRUD operations, metadata management, search, deduplication, and
@@ -164,6 +164,10 @@ type perUserStateStore interface {
 	// per-field rows have been written (database.DeleteLegacyMetadataState).
 	DeleteUserPreference(key string) error
 	GetUserBookState(userID, bookID string) (*database.UserBookState, error)
+	// ListUsers and ListUserPositionsForBook let the purge refuse a book a
+	// user still has listening state on (merge.BookHasCarryableUserState).
+	ListUsers() ([]database.User, error)
+	ListUserPositionsForBook(userID, bookID string) ([]database.UserPosition, error)
 	GetMetadataFieldStates(bookID string) ([]database.MetadataFieldState, error)
 	UpsertMetadataFieldState(state *database.MetadataFieldState) error
 	DeleteMetadataFieldState(bookID, field string) error
