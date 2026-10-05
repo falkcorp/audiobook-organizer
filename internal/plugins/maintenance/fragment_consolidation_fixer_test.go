@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer_test.go
-// version: 1.26.1
+// version: 1.26.2
 // guid: 8e2d5b19-6a4c-4f37-b1d8-2c9e7a3f5d60
 // last-edited: 2026-10-05
 
@@ -3913,6 +3913,35 @@ func TestFragTitleKey(t *testing.T) {
 	for _, title := range []string{"", "c5", "ab", "Part 3", "Chapter 12", "01", "New Folder"} {
 		require.Empty(t, id(title).key, "%q names no work", title)
 	}
+	rel := func(a, b string) int { return id(a).relate(id(b)) }
+	for _, tc := range [][2]string{
+		{"Eldest, Book 2", "Book 2 - Eldest"},
+		{"Eldest (Book 2)", "Eldest, Book 2"},
+		{"Eldest: Inheritance, Book 2", "Eldest (Book 2)"},
+		{"Book 2 - Eldest", "Eldest"},
+	} {
+		require.Equal(t, fragTitleSame, rel(tc[0], tc[1]), "%q / %q", tc[0], tc[1])
+		require.Equal(t, fragTitleSame, rel(tc[1], tc[0]), "%q / %q", tc[1], tc[0])
+	}
+	for _, tc := range [][2]string{
+		{"Eldest, Book 2", "Eldest"},
+		{"Eldest (Book 2)", "Eldest"},
+		{"Eldest: Inheritance, Book 2", "Eldest"},
+		{"Dragon Born, Book 3", "Dragon Born"},
+	} {
+		require.Equal(t, fragTitleUncertain, rel(tc[0], tc[1]), "%q / %q: a trailing position on one side only", tc[0], tc[1])
+		require.Equal(t, fragTitleUncertain, rel(tc[1], tc[0]), "%q / %q", tc[1], tc[0])
+	}
+	for _, tc := range [][2]string{
+		{"Saga, Vol 3", "Saga, Vol 1"},
+		{"Harry Potter, Book 1", "Harry Potter Book 7"},
+		{"The Expanse Volume 1", "The Expanse Volume 2"},
+		{"Book 2 - Eldest", "Book 3 - Eldest"},
+		{"Eldest, Book 2", "Book 3 - Eldest"},
+	} {
+		require.Equal(t, fragTitleOther, rel(tc[0], tc[1]), "%q / %q", tc[0], tc[1])
+		require.Equal(t, fragTitleOther, rel(tc[1], tc[0]), "%q / %q", tc[1], tc[0])
+	}
 }
 
 // existingBook creates a live, organized multi-file book of n files of dur
@@ -3920,10 +3949,13 @@ func TestFragTitleKey(t *testing.T) {
 func (f *fragFixture) existingBook(t *testing.T, role, title, dir string, n, dur int) string {
 	t.Helper()
 	id := f.book(t, role, title, f.path(dir), nil)
+	f.setAuthor(t, id, f.authorID(t, "Christopher Paolini"))
 	for i := 1; i <= n; i++ {
 		name := fmt.Sprintf("track %03d.mp3", i)
-		p := f.file(t, filepath.Join(dir, name), 5000+i)
-		f.row(t, fmt.Sprintf("%s%d", role, i), id, p, name, int64(5000+i), dur, i)
+		// Sizes step by 37 bytes: no constant difference from any fragment,
+		// so the re-tag rule never reads these as copies.
+		p := f.file(t, filepath.Join(dir, name), 5000+37*i)
+		f.row(t, fmt.Sprintf("%s%d", role, i), id, p, name, int64(5000+37*i), dur, i)
 	}
 	f.organized(t, id)
 	return id
@@ -4012,6 +4044,7 @@ func TestFragmentFixer_ExistingBook(t *testing.T) {
 		f := newFragFixture(t)
 		p := f.file(t, "lib/Other/Eldest.m4b", 4999)
 		single := f.book(t, "single", "Eldest", p, nil)
+		f.setAuthor(t, single, f.authorID(t, "Christopher Paolini"))
 		f.row(t, "s", single, p, "Eldest.m4b", 3_500_000, 3500, 0)
 		f.chapterFrags(t, fragDir, "Eldest", 6, 600)
 		r := findRow(t, f.plan(t, "op-plan"), existingRowID(f.path(fragDir), "eldest"))
@@ -4124,6 +4157,90 @@ func TestFragmentFixer_ExistingBookIdentity(t *testing.T) {
 		r := rowWithBooks(t, res, ids)
 		require.Equal(t, fragSkipNoTitleKey, r.Skipped, "%s %s: %s", r.RowID, r.Class, r.SkipReason)
 		require.Zero(t, res.Applicable)
+	})
+}
+
+// TestFragmentFixer_TrailingPositionProbes: the second review's probes. A
+// live title carrying a trailing position the group's lacks, or the reverse,
+// is found and held (never a plain assemble, never a join), even with
+// agreeing totals and the same author.
+func TestFragmentFixer_TrailingPositionProbes(t *testing.T) {
+	for _, tc := range []struct{ name, live, dir string }{
+		{"live (Book 2), bare folder", "Eldest (Book 2)", "lib/Christopher Paolini/Eldest"},
+		{"live bare, folder (Book 2)", "Eldest", "lib/Christopher Paolini/Eldest (Book 2)"},
+		{"live , Book 2, import folder", "Eldest, Book 2", "import/Eldest"},
+		{"live bare, folder , Book 2", "Eldest", "lib/Christopher Paolini/Eldest, Book 2"},
+		{"live series subtitle, bare folder", "Eldest: Inheritance, Book 2", "lib/Christopher Paolini/Eldest"},
+		{"live bare, series subtitle folder", "Eldest", "lib/Christopher Paolini/Eldest - Inheritance, Book 2"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFragFixture(t)
+			existing := f.existingBook(t, "live", tc.live, "lib/Shelf/Live", 3, 600)
+			f.chapterFrags(t, tc.dir, "Eldest", 3, 600)
+			res := f.plan(t, "op-plan")
+			require.Zero(t, res.Applicable, "nothing assembles or joins beside the live book")
+			found := false
+			for _, r := range res.Rows {
+				if r.Class == fragClassExistingBook {
+					found = true
+					require.Equal(t, fragSkipExistingBook, r.Skipped, r.SkipReason)
+					require.Contains(t, r.SkipReason, existing)
+					require.Contains(t, r.SkipReason, "series position on one side only")
+				}
+			}
+			require.True(t, found, "the live book is found: %+v", res.Rows)
+		})
+	}
+	t.Run("same position on both sides joins", func(t *testing.T) {
+		f := newFragFixture(t)
+		existing := f.existingBook(t, "live", "Eldest, Book 2", "lib/Shelf/Live", 3, 600)
+		dir := "lib/Christopher Paolini/Book 2 - Eldest"
+		f.chapterFrags(t, dir, "Eldest", 3, 600)
+		r := findRow(t, f.plan(t, "op-plan"), existingRowID(f.path(dir), "eldest"))
+		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+		require.Equal(t, existing, r.Proposed["join"])
+	})
+}
+
+// TestFragmentFixer_FolderAuthor: untagged fragments take their author from
+// the author folder above the work folder, so they never join another
+// author's book of the same name, nor a book with no author.
+func TestFragmentFixer_FolderAuthor(t *testing.T) {
+	const dir = "lib/Jessica Khoury/Origin"
+	t.Run("another author's book of the name: held", func(t *testing.T) {
+		f := newFragFixture(t)
+		existing := f.existingBook(t, "dan", "Origin", "lib/Dan Brown/Origin", 3, 600)
+		f.setAuthor(t, existing, f.authorID(t, "Dan Brown"))
+		f.chapterFrags(t, dir, "Origin", 3, 600)
+		res := f.plan(t, "op-plan")
+		r := findRow(t, res, existingRowID(f.path(dir), "origin"))
+		require.Equal(t, fragSkipExistingBook, r.Skipped)
+		require.Contains(t, r.SkipReason, "Jessica Khoury")
+		require.Contains(t, r.SkipReason, "Dan Brown")
+		require.Zero(t, res.Applicable)
+	})
+	t.Run("a book with no author: held", func(t *testing.T) {
+		f := newFragFixture(t)
+		existing := f.book(t, "anon", "Origin", f.path("lib/Shelf/Origin"), nil)
+		for i := 1; i <= 3; i++ {
+			name := fmt.Sprintf("track %03d.mp3", i)
+			p := f.file(t, filepath.Join("lib/Shelf/Origin", name), 5000+37*i)
+			f.row(t, fmt.Sprintf("anon%d", i), existing, p, name, int64(5000+37*i), 600, i)
+		}
+		f.chapterFrags(t, dir, "Origin", 3, 600)
+		res := f.plan(t, "op-plan")
+		r := findRow(t, res, existingRowID(f.path(dir), "origin"))
+		require.Equal(t, fragSkipExistingBook, r.Skipped)
+		require.Contains(t, r.SkipReason, "with no author")
+		require.Zero(t, res.Applicable)
+	})
+	t.Run("the same author's book joins", func(t *testing.T) {
+		f := newFragFixture(t)
+		existing := f.existingBook(t, "jk", "Origin", "lib/Shelf/Origin", 3, 600)
+		f.setAuthor(t, existing, f.authorID(t, "Jessica Khoury"))
+		f.chapterFrags(t, dir, "Origin", 3, 600)
+		r := findRow(t, f.plan(t, "op-plan"), existingRowID(f.path(dir), "origin"))
+		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
 	})
 }
 
@@ -4295,6 +4412,9 @@ func TestFragmentFixer_CoOwnerRule(t *testing.T) {
 // authorID creates (or finds) an author named name.
 func (f *fragFixture) authorID(t *testing.T, name string) int {
 	t.Helper()
+	if a, err := f.s.GetAuthorByName(name); err == nil && a != nil {
+		return a.ID
+	}
 	a, err := f.s.CreateAuthor(name)
 	require.NoError(t, err)
 	return a.ID
