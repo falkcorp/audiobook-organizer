@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.150.0
+// version: 2.151.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -167,6 +167,14 @@ export interface Book {
   quantity?: number;
   marked_for_deletion?: boolean;
   marked_for_deletion_at?: string;
+  // Trash listing only (GET /audiobooks/soft-deleted): a user still has
+  // listening progress on this trashed book, which the nightly purge keeps
+  // it for when no live version exists to carry the progress to.
+  has_progress?: boolean;
+  // Short per-user description, e.g. "reader: finished; bob: 42%, at 1:02:03".
+  progress_summary?: string;
+  // The progress could not be read: has_progress is then not an answer.
+  progress_unknown?: boolean;
   quarantine_reason?: string;
   quarantined_at?: string;
   organize_error?: string;
@@ -1498,6 +1506,12 @@ export async function purgeSoftDeletedBooks(
   attempted: number;
   purged: number;
   files_deleted: number;
+  skipped_owns_files?: number;
+  // Books holding users' listening progress: carried to a live version and
+  // purged, kept for lack of one, or kept because the carry failed.
+  carried_to_sibling?: number;
+  kept_has_progress?: number;
+  carry_failed?: number;
   errors: string[];
 }> {
   const params = new URLSearchParams({
@@ -1537,6 +1551,33 @@ export async function unquarantineBook(bookId: string): Promise<void> {
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to unquarantine audiobook');
   }
+}
+
+export interface DiscardProgressResult {
+  book_id: string;
+  title: string;
+  progress_summary?: string;
+  users_cleared: number;
+  bookmarks_cleared: number;
+  files_deleted: number;
+  warnings?: string[];
+}
+
+/**
+ * Discard every user's listening progress on one book in the trash and purge
+ * it. The server refuses (409) a book that is not in the trash or still owns
+ * files, and records the action in the activity log.
+ */
+export async function discardProgressAndPurge(bookId: string): Promise<DiscardProgressResult> {
+  const response = await apiFetch(
+    `${API_BASE}/audiobooks/${encodeURIComponent(bookId)}/discard-progress-and-purge`,
+    { method: 'POST' }
+  );
+  if (!response.ok) {
+    throw await buildApiError(response, 'Failed to discard progress and purge');
+  }
+  const body = await response.json();
+  return body.data;
 }
 
 export async function restoreSoftDeletedBook(bookId: string): Promise<void> {

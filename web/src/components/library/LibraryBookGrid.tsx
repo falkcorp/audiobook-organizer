@@ -1,7 +1,7 @@
 // file: web/src/components/library/LibraryBookGrid.tsx
-// version: 1.11.0
+// version: 1.12.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-09-12
+// last-edited: 2026-10-05
 
 import {
   Typography,
@@ -127,6 +127,8 @@ interface LibraryBookGridProps {
   loadSoftDeleted: () => void;
   handleRestoreOne: LibrarySoftDeletedSectionProps['onRestoreOne'];
   handlePurgeOne: LibrarySoftDeletedSectionProps['onPurgeOne'];
+  discardingBookId?: string | null;
+  handleDiscardProgressOne?: LibrarySoftDeletedSectionProps['onDiscardProgressOne'];
   filterOpen: boolean;
   setFilterOpen: (open: boolean) => void;
   filters: FilterOptions;
@@ -199,6 +201,8 @@ export const LibraryBookGrid = ({
   loadSoftDeleted,
   handleRestoreOne,
   handlePurgeOne,
+  discardingBookId,
+  handleDiscardProgressOne,
   filterOpen,
   setFilterOpen,
   filters,
@@ -511,6 +515,8 @@ export const LibraryBookGrid = ({
       onRefresh={loadSoftDeleted}
       onRestoreOne={handleRestoreOne}
       onPurgeOne={handlePurgeOne}
+      discardingBookId={discardingBookId}
+      onDiscardProgressOne={handleDiscardProgressOne}
     />
 
     <FilterSidebar

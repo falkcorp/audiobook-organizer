@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.tsx
-// version: 1.98.0
+// version: 1.99.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -378,6 +378,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
   const [purgeDeleteFiles, setPurgeDeleteFiles] = useState(false);
   const [purgeInProgress, setPurgeInProgress] = useState(false);
   const [purgingBookId, setPurgingBookId] = useState<string | null>(null);
+  const [discardingBookId, setDiscardingBookId] = useState<string | null>(null);
   const [restoringBookId, setRestoringBookId] = useState<string | null>(null);
   const [batchDeleteDialogOpen, setBatchDeleteDialogOpen] = useState(false);
   const [batchDeleteInProgress, setBatchDeleteInProgress] = useState(false);
@@ -1455,6 +1456,29 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     }
   };
 
+  // "Discard progress and purge" for a trashed book the nightly purge keeps
+  // because a user has listening progress on it. The section's confirm
+  // dialog has already been accepted when this runs.
+  const handleDiscardProgressOne = async (book: Audiobook) => {
+    setDiscardingBookId(book.id);
+    try {
+      const result = await api.discardProgressAndPurge(book.id);
+      const warn = result.warnings?.length ? ` (${result.warnings.join('; ')})` : '';
+      toast(
+        `"${book.title}" was purged and its listening progress discarded.${warn}`,
+        result.warnings?.length ? 'warning' : 'success'
+      );
+      clearLibraryCache();
+      await loadAudiobooks();
+      await refreshSoftDeleted();
+    } catch (error) {
+      console.error('Failed to discard progress and purge', error);
+      toast(describeDeleteBookError(error, 'Failed to discard progress and purge.'), 'error');
+    } finally {
+      setDiscardingBookId(null);
+    }
+  };
+
   const handleRestoreOne = async (book: Audiobook) => {
     setRestoringBookId(book.id);
     try {
@@ -2349,6 +2373,8 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
           loadSoftDeleted={refreshSoftDeleted}
           handleRestoreOne={handleRestoreOne}
           handlePurgeOne={handlePurgeOne}
+          discardingBookId={discardingBookId}
+          handleDiscardProgressOne={handleDiscardProgressOne}
           filterOpen={filterOpen}
           setFilterOpen={setFilterOpen}
           filters={filters}
