@@ -27,6 +27,14 @@ type operationResultReader interface {
 	GetOperationResults(operationID string) ([]database.OperationResult, error)
 }
 
+// ownerManualReader is the series name and franchise tags the
+// owner-manual-only guard (applygate.BulkManualOnlyGuard) reads before the
+// metadata upgrade searches a book.
+type ownerManualReader interface {
+	GetSeriesByID(id int) (*database.Series, error)
+	GetBookTagsDetailed(bookID string) ([]database.BookTag, error)
+}
+
 // Store is the metabatch consumer slice. Exported so a caller that constructs a
 // MetadataUpgradeService (internal/scheduler) can name this instead of reaching
 // for database.Store.
@@ -36,11 +44,7 @@ type Store interface {
 	GetBookByID(id string) (*database.Book, error)
 	GetBookFiles(bookID string) ([]database.BookFile, error)
 	GetBooksByTag(tag string) ([]string, error)
-	// The series name and franchise tags the owner-manual-only guard
-	// (applygate.BulkManualOnlyGuard) checks before the metadata upgrade
-	// searches a book.
-	GetSeriesByID(id int) (*database.Series, error)
-	GetBookTagsDetailed(bookID string) ([]database.BookTag, error)
+	ownerManualReader
 	// The metadata upgrade's persisted sweep cursor (upgradeCursorKey).
 	GetOperationState(opID string) ([]byte, error)
 	SaveOperationState(opID string, state []byte) error
