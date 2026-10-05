@@ -1,5 +1,5 @@
 // file: internal/merge/sibling_followups_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3e8c5a71-0d2b-4f69-9a14-7b6e2c8d1f53
 // last-edited: 2026-10-05
 
@@ -304,18 +304,6 @@ func TestUndoSiblingMove_MergeGroupKeepsOnePrimary(t *testing.T) {
 // a moved sibling, or a member of the reused group -- so Audiobookshelf still
 // lists the title; an explicit primary still wins.
 func TestMergeBooks_OrganizedCopyHoldsFlag(t *testing.T) {
-	absListed := func(t *testing.T, f *vptest.Fixture, gid string) []string {
-		t.Helper()
-		members, err := f.S.GetBooksByVersionGroup(gid)
-		require.NoError(t, err)
-		var out []string
-		for i := range members {
-			if database.ABSLibraryFilter().Matches(&members[i]) {
-				out = append(out, members[i].ID)
-			}
-		}
-		return out
-	}
 	t.Run("moved sibling", func(t *testing.T) {
 		f := siblingFixture(t)
 		k := f.Book(t, vptest.Spec{ID: "k", Group: "H", Primary: "true", State: "imported"})
@@ -340,14 +328,38 @@ func TestMergeBooks_OrganizedCopyHoldsFlag(t *testing.T) {
 		f.RequireSinglePrimary(t, "H", p)
 		require.Equal(t, []string{p}, absListed(t, f, "H"))
 	})
-	t.Run("participant", func(t *testing.T) {
+	t.Run("participant: audio quality picks the survivor", func(t *testing.T) {
+		// Owner 2026-10-05 12:03: organized does not pick the copy a merge
+		// keeps. The unorganized m4b survives; the organized mp3 is the
+		// loser and is retired, so it cannot hold the flag.
 		f := siblingFixture(t)
-		a := f.Book(t, vptest.Spec{ID: "a", Group: "A", Primary: "true", State: "imported"})
-		b := f.Book(t, vptest.Spec{ID: "b", Group: "B", Primary: "true"})
-		res, err := NewService(f.S).MergeBooks([]string{a, b}, "")
+		m4b := f.Book(t, vptest.Spec{ID: "m4b", Group: "A", Primary: "true", State: "imported"})
+		mp3 := f.Book(t, vptest.Spec{ID: "mp3", Group: "B", Primary: "true"})
+		setAudio(t, f, m4b, "m4b", 256)
+		setAudio(t, f, mp3, "mp3", 64)
+		res, err := NewService(f.S).MergeBooks([]string{mp3, m4b}, "")
 		require.NoError(t, err)
-		require.Equal(t, b, res.PrimaryID, "the organized participant is elected")
-		require.Empty(t, res.GroupPrimaryID)
+		require.Equal(t, m4b, res.PrimaryID, "the m4b survives")
+		b, err := f.S.GetBookByID(mp3)
+		require.NoError(t, err)
+		require.True(t, b.IsSoftDeleted())
+	})
+	t.Run("m4b survives and the organized mp3 holds the flag", func(t *testing.T) {
+		// The organized low-bitrate mp3 is a version of the loser, so it
+		// stays live and takes the flag; the m4b is still the survivor.
+		f := siblingFixture(t)
+		m4b := f.Book(t, vptest.Spec{ID: "m4b", Group: "H", Primary: "true", State: "imported"})
+		l := f.Book(t, vptest.Spec{ID: "l", Group: "G", Primary: "false", State: "imported"})
+		mp3 := f.Book(t, vptest.Spec{ID: "mp3", Group: "G", Primary: "true"})
+		setAudio(t, f, m4b, "m4b", 256)
+		setAudio(t, f, l, "mp3", 32)
+		setAudio(t, f, mp3, "mp3", 64)
+		res, err := NewService(f.S).MergeBooks([]string{l, m4b}, "")
+		require.NoError(t, err)
+		require.Equal(t, m4b, res.PrimaryID)
+		require.Equal(t, mp3, res.GroupPrimaryID)
+		f.RequireSinglePrimary(t, "H", mp3)
+		require.Equal(t, []string{mp3}, absListed(t, f, "H"))
 	})
 	t.Run("survivor with an iTunes PID keeps the flag", func(t *testing.T) {
 		f := siblingFixture(t)
@@ -361,6 +373,8 @@ func TestMergeBooks_OrganizedCopyHoldsFlag(t *testing.T) {
 		res, err := NewService(f.S).MergeBooks([]string{l, k}, "")
 		require.NoError(t, err)
 		require.Empty(t, res.GroupPrimaryID, "demoting k would take its track out of iTunes")
+		require.Equal(t, HiddenFromABSITunesSurvivor, res.HiddenFromABS, "the hidden title is recorded")
+		require.Empty(t, absListed(t, f, "H"))
 		f.RequireSinglePrimary(t, "H", k)
 		require.Equal(t, "false", f.Flag(t, ls))
 	})
@@ -575,4 +589,106 @@ func TestListSiblingMoveJournals_MarksStalePending(t *testing.T) {
 	require.Equal(t, map[string]bool{old.ID: true, fresh.ID: false, oldApplied.ID: false}, stale)
 	got := journalByID(t, svc, old.ID)
 	require.False(t, got.Stale, "Stale is computed, never stored")
+}
+
+func absListed(t *testing.T, f *vptest.Fixture, gid string) []string {
+	t.Helper()
+	members, err := f.S.GetBooksByVersionGroup(gid)
+	require.NoError(t, err)
+	var out []string
+	for i := range members {
+		if database.ABSLibraryFilter().Matches(&members[i]) {
+			out = append(out, members[i].ID)
+		}
+	}
+	return out
+}
+
+func setAudio(t *testing.T, f *vptest.Fixture, id, format string, kbps int) {
+	t.Helper()
+	_, err := f.S.ModifyBook(id, func(b *database.Book) error {
+		b.Format = format
+		b.Bitrate = &kbps
+		return nil
+	})
+	require.NoError(t, err)
+}
+
+// SF2: the losers' user state and sync redirect go to the flag holder (the
+// book Audiobookshelf shows) when it is not the survivor, journaled; a whole
+// undo that sends the flag holder back puts the loser's state on the
+// survivor instead, and a per-loser undo puts it back on the loser.
+func TestMergeBooks_UserStateFollowsFlagHolder(t *testing.T) {
+	setup := func(t *testing.T) (*vptest.Fixture, *Service, *database.User, string, string, string, *Result) {
+		f := siblingFixture(t)
+		k := f.Book(t, vptest.Spec{ID: "k", Group: "H", Primary: "true", State: "imported"})
+		// No audio route, so the user state on l does not make it the
+		// survivor (PreferUserStateSurvivor keeps a book with audio).
+		l := f.Book(t, vptest.Spec{ID: "l", Group: "G", Primary: "false", State: "imported", NoFile: true})
+		ls := f.Book(t, vptest.Spec{ID: "ls", Group: "G", Primary: "true"})
+		user := seedSyncUser(t, f.S)
+		require.NoError(t, f.S.SetUserBookState(&database.UserBookState{
+			UserID: user.ID, BookID: l, Status: database.UserBookStatusInProgress,
+			ProgressPct: 60, LastActivityAt: time.Now(),
+		}))
+		require.NoError(t, f.S.SetUserPosition(user.ID, l, "seg-1", 1234))
+		ids := database.AsSyncIdentityStore(f.S)
+		_, err := ids.MintOrGetSyncID(l)
+		require.NoError(t, err)
+		svc := NewService(f.S)
+		res, err := svc.MergeBooks([]string{l, k}, "")
+		require.NoError(t, err)
+		require.Equal(t, k, res.PrimaryID)
+		require.Equal(t, ls, res.GroupPrimaryID)
+		require.Equal(t, ls, res.StateHolderID)
+		return f, svc, user, k, l, ls, res
+	}
+	progressOn := func(t *testing.T, f *vptest.Fixture, userID, bookID string) int {
+		t.Helper()
+		st, err := f.S.GetUserBookState(userID, bookID)
+		require.NoError(t, err)
+		pos, err := f.S.ListUserPositionsForBook(userID, bookID)
+		require.NoError(t, err)
+		if st == nil || len(pos) == 0 {
+			return 0
+		}
+		return st.ProgressPct
+	}
+	redirectOf := func(t *testing.T, f *vptest.Fixture, bookID string) string {
+		t.Helper()
+		ids := database.AsSyncIdentityStore(f.S)
+		sid, _, err := ids.GetSyncIDForBook(bookID)
+		require.NoError(t, err)
+		item, err := ids.ResolveSyncItem(sid)
+		require.NoError(t, err)
+		require.NotNil(t, item)
+		return item.CurrentBookID
+	}
+
+	t.Run("merge moves state onto the flag holder", func(t *testing.T) {
+		f, svc, user, k, l, ls, res := setup(t)
+		require.Equal(t, 60, progressOn(t, f, user.ID, ls))
+		require.Zero(t, progressOn(t, f, user.ID, k))
+		require.Equal(t, ls, redirectOf(t, f, l), "the loser's ABS id reaches the flag holder")
+		j := journalByID(t, svc, res.SiblingJournalID)
+		require.Equal(t, ls, j.FlagHolderID)
+		require.Len(t, j.StateFollows, 1)
+		require.Equal(t, l, j.StateFollows[0].LoserID)
+	})
+	t.Run("whole undo puts it on the survivor", func(t *testing.T) {
+		f, svc, user, k, l, ls, res := setup(t)
+		_, err := svc.UndoSiblingMove(res.SiblingJournalID)
+		require.NoError(t, err)
+		require.Equal(t, "G", f.GroupOf(t, ls))
+		require.Zero(t, progressOn(t, f, user.ID, ls), "the flag holder's own (empty) state is back")
+		require.Equal(t, 60, progressOn(t, f, user.ID, k))
+		require.Equal(t, k, redirectOf(t, f, l))
+	})
+	t.Run("per-loser undo puts it back on the loser", func(t *testing.T) {
+		f, svc, user, _, l, ls, res := setup(t)
+		_, err := svc.UndoSiblingMoveForLoser(res.SiblingJournalID, l)
+		require.NoError(t, err)
+		require.Zero(t, progressOn(t, f, user.ID, ls))
+		require.Equal(t, 60, progressOn(t, f, user.ID, l))
+	})
 }

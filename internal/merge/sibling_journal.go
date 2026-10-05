@@ -1,5 +1,5 @@
 // file: internal/merge/sibling_journal.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 225d6301-f6b7-4f2d-8c27-1d6865ecf11c
 // last-edited: 2026-10-05
 
@@ -122,6 +122,102 @@ type SiblingMoveJournal struct {
 	// Stale is set by ListSiblingMoveJournals on a journal still pending
 	// SiblingJournalStaleAfter after it was written. Never stored.
 	Stale bool `json:"stale,omitempty"`
+	// FlagHolderID is the book that took the group's primary flag when it is
+	// not SurvivorID (Result.GroupPrimaryID). The losers' user state and sync
+	// redirect followed it, one StateFollows entry per loser.
+	FlagHolderID string        `json:"flag_holder_id,omitempty"`
+	StateFollows []StateFollow `json:"state_follows,omitempty"`
+}
+
+// StateFollow is one loser's journaled user-state follow onto the flag
+// holder (FollowAbsorbedJournaled): what RestoreFollowedProgress needs to put
+// it back.
+type StateFollow struct {
+	LoserID        string                `json:"loser_id"`
+	HolderID       string                `json:"holder_id"`
+	SyncRedirected bool                  `json:"sync_redirected"`
+	Progress       []CombineUserProgress `json:"progress,omitempty"`
+	// Undone is set once an undo has reversed this follow.
+	Undone bool `json:"undone,omitempty"`
+}
+
+// followOntoFlagHolder carries each loser's user state and sync redirect onto
+// j.FlagHolderID, journaling each follow on j before it drains anything
+// (FollowAbsorbedJournaled's persist hook), so an undo can reverse it. A store
+// with no sync layer cannot journal the follow; it then falls back to the
+// unjournaled FollowMerge onto the flag holder, logged. The caller holds
+// mergeSerializeMu.
+func (ms *Service) followOntoFlagHolder(j *SiblingMoveJournal, losers []string) error {
+	var errs []error
+	for _, loser := range losers {
+		idx := len(j.StateFollows)
+		j.StateFollows = append(j.StateFollows, StateFollow{LoserID: loser, HolderID: j.FlagHolderID})
+		progress, redirected, err := FollowAbsorbedJournaled(ms.db, j.FlagHolderID, loser, nil, func(before []CombineUserProgress) error {
+			j.StateFollows[idx].Progress = before
+			j.StateFollows[idx].SyncRedirected = true
+			return ms.putSiblingJournal(j)
+		})
+		if errors.Is(err, ErrNoSyncFollower) {
+			j.StateFollows = j.StateFollows[:idx]
+			mlog.Warn("merge: store has no sync layer; loser %s state follows flag holder %s unjournaled",
+				logger.SanitizeLogValue(loser), logger.SanitizeLogValue(j.FlagHolderID))
+			if ferr := FollowMerge(ms.db, ms.syncFollower, j.FlagHolderID, []string{loser}); ferr != nil {
+				errs = append(errs, ferr)
+			}
+			continue
+		}
+		if progress != nil {
+			j.StateFollows[idx].Progress = progress
+		}
+		j.StateFollows[idx].SyncRedirected = redirected
+		if err != nil {
+			errs = append(errs, fmt.Errorf("follow loser %s onto flag holder %s: %w", loser, j.FlagHolderID, err))
+		}
+	}
+	if err := ms.putSiblingJournal(j); err != nil {
+		// The before-snapshots are already stored (persist hook), which is
+		// what an undo needs to put each loser's state back; without the
+		// after-snapshots it leaves the flag holder's own progress as is.
+		mlog.Warn("merge: sibling-move journal %s: state-follow after-snapshots not recorded: %s",
+			logger.SanitizeLogValue(j.ID), logger.SanitizeLogValue(fmt.Sprint(err)))
+	}
+	return errors.Join(errs...)
+}
+
+// undoStateFollows reverses the journaled follows pick selects
+// (RestoreFollowedProgress: each loser's state and positions back on the
+// loser, the flag holder's back to what it was unless the user has listened
+// there since, the redirect cleared). With refollow, each loser still retired
+// afterwards then has its state followed onto the survivor, which is where it
+// would have gone had the flag stayed there: a retired loser must not keep
+// state the purge would drop. It returns the warnings and the first error.
+func (ms *Service) undoStateFollows(j *SiblingMoveJournal, pick func(StateFollow) bool, refollow bool) ([]string, error) {
+	var warnings []string
+	for i := range j.StateFollows {
+		f := &j.StateFollows[i]
+		if f.Undone || !pick(*f) {
+			continue
+		}
+		w, err := RestoreFollowedProgress(ms.db, f.HolderID, f.LoserID, f.SyncRedirected, f.Progress)
+		warnings = append(warnings, w...)
+		if err != nil {
+			return warnings, fmt.Errorf("put loser %s's state back from %s: %w", f.LoserID, f.HolderID, err)
+		}
+		f.Undone = true
+		if !refollow {
+			continue
+		}
+		b, err := ms.db.GetBookByID(f.LoserID)
+		if err != nil {
+			return warnings, fmt.Errorf("read loser %s: %w", f.LoserID, err)
+		}
+		if b != nil && b.IsSoftDeleted() {
+			if err := FollowMerge(ms.db, ms.syncFollower, j.SurvivorID, []string{f.LoserID}); err != nil {
+				return warnings, fmt.Errorf("follow loser %s onto survivor %s: %w", f.LoserID, j.SurvivorID, err)
+			}
+		}
+	}
+	return warnings, nil
 }
 
 // SiblingRestoreResult is what restoreMovedSiblings did.
@@ -272,12 +368,31 @@ func (ms *Service) undoSiblingJournal(journalID, loserID string) (*SiblingUndoRe
 			todo = append(todo, sib)
 		}
 	}
+	// The state follows this undo reverses. One loser's undo (UnmergeAuto,
+	// which brings the loser back) reverses that loser's follow. A whole
+	// undo reverses the follows onto a flag holder it moves back out of the
+	// merge's group, and refollows those losers onto the survivor; a flag
+	// holder that stays in the group (a reused-group member) keeps them.
+	followsTodo := 0
+	pickFollow := func(f StateFollow) bool {
+		if loserID != "" {
+			return f.LoserID == loserID
+		}
+		return slices.ContainsFunc(todo, func(s MovedSibling) bool { return s.BookID == f.HolderID })
+	}
+	for _, f := range j.StateFollows {
+		if !f.Undone && pickFollow(f) {
+			followsTodo++
+		}
+	}
 	switch j.Status {
 	case SiblingJournalUndone:
-		if loserID != "" && len(todo) == 0 {
+		if loserID != "" && len(todo) == 0 && followsTodo == 0 {
 			return &SiblingUndoResult{JournalID: j.ID, Status: j.Status}, nil
 		}
-		return nil, fmt.Errorf("%w: journal %s is already undone; replaying it could revert a later merge", ErrSiblingUndoRefused, j.ID)
+		if loserID == "" {
+			return nil, fmt.Errorf("%w: journal %s is already undone; replaying it could revert a later merge", ErrSiblingUndoRefused, j.ID)
+		}
 	case SiblingJournalAborted:
 		return nil, fmt.Errorf("%w: journal %s is aborted; its merge moved nothing", ErrSiblingUndoRefused, j.ID)
 	case SiblingJournalPending, SiblingJournalApplied:
@@ -286,6 +401,15 @@ func (ms *Service) undoSiblingJournal(journalID, loserID string) (*SiblingUndoRe
 	}
 	if err := ms.requireNoNewerSiblingMove(j, todo); err != nil {
 		return nil, err
+	}
+	followWarnings, followErr := ms.undoStateFollows(j, pickFollow, loserID == "")
+	j.Warnings = append(j.Warnings, followWarnings...)
+	if followErr != nil {
+		j.LastError = followErr.Error()
+		if err := ms.putSiblingJournal(j); err != nil {
+			mlog.Warn("sibling-move undo: journal %s error not recorded: %s", logger.SanitizeLogValue(j.ID), logger.SanitizeLogValue(fmt.Sprint(err)))
+		}
+		return nil, fmt.Errorf("undo sibling move %s: %w", j.ID, followErr)
 	}
 	res, restoreErr := ms.restoreMovedSiblings(j.IntoGroupID, todo)
 	j.UndoneSiblings = append(j.UndoneSiblings, res.Restored...)

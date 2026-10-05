@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.43.0
+// version: 1.44.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-10-05
 
@@ -121,6 +121,17 @@ type Result struct {
 	// not organized, an organized moved sibling or member of the reused group
 	// holds it, so the title stays listed in Audiobookshelf.
 	GroupPrimaryID string `json:"group_primary_id,omitempty"`
+	// HiddenFromABS is set when the merged group's primary is a book
+	// Audiobookshelf will not list (it lists only an organized primary), with
+	// the reason. The one case today is HiddenFromABSITunesSurvivor: no
+	// explicit primary, an unorganized survivor whose files carry iTunes
+	// persistent IDs keeps the flag rather than lose its iTunes track (owner
+	// decision 2026-10-05: iTunes wins). Logged with the prefix "abs-hidden
+	// keep" so these can be listed.
+	HiddenFromABS string `json:"hidden_from_abs,omitempty"`
+	// StateHolderID is set when the losers' user state and sync redirect went
+	// to a book other than PrimaryID: the flag holder (GroupPrimaryID).
+	StateHolderID string `json:"state_holder_id,omitempty"`
 }
 
 // MovedSibling is one loser sibling a merge carried into the merge's version
@@ -260,13 +271,14 @@ func HasAudioRoute(b *database.Book, files []database.BookFile) bool {
 
 // ElectPrimary picks the index of the book to keep, or -1 if no book is
 // eligible. Soft-deleted rows are never eligible. A book with an audio route
-// (HasAudioRoute) always beats one with none; inside that tier an organized
-// book (library_state "organized") beats one that is not, because
-// Audiobookshelf lists only a group's primary and only when it is organized
-// (database.ABSLibraryFilter), so electing an unorganized copy over an
-// organized one hides the title there (owner decision 2026-10-05). Inside
-// both tiers BookIsBetter decides, and an exact tie is broken
-// deterministically (see preferOnTie).
+// (HasAudioRoute) always beats one with none; inside that tier BookIsBetter
+// decides, and an exact tie is broken deterministically (see preferOnTie).
+//
+// Whether a book is organized deliberately plays no part here (owner decision
+// 2026-10-05): audio quality picks the copy a merge keeps, so an unorganized
+// high-bitrate m4b is never retired in favour of an organized low-bitrate
+// mp3. Organized decides only which live book holds the group's primary flag
+// (MergeBooksWithOptions' flag holder).
 // filesByID must hold an entry for every book (nil is "no files").
 //
 // The tier is binary on purpose. Counting files would let a twelve-track mp3
@@ -287,14 +299,10 @@ func ElectPrimary(books []*database.Book, filesByID map[string][]database.BookFi
 		}
 		iHas := HasAudioRoute(b, filesByID[b.ID])
 		bestHas := HasAudioRoute(books[bestIdx], filesByID[books[bestIdx].ID])
-		iOrg, bestOrg := isOrganized(b), isOrganized(books[bestIdx])
 		switch {
 		case iHas && !bestHas:
 			bestIdx = i
-		case iHas != bestHas:
-		case iOrg && !bestOrg:
-			bestIdx = i
-		case iOrg == bestOrg && preferOnTie(b, books[bestIdx]):
+		case iHas == bestHas && preferOnTie(b, books[bestIdx]):
 			bestIdx = i
 		}
 	}
@@ -376,11 +384,13 @@ func preferOnTie(a, b *database.Book) bool {
 //     so the title stays listed in Audiobookshelf (owner
 //     decision 2026-10-05) -- unless one of the survivor's
 //     files carries an iTunes persistent ID, which the ITL
-//     clean-up would remove from a non-primary row.
+//     clean-up would remove from a non-primary row
+//     (Result.HiddenFromABS records that case). The losers'
+//     user state and sync redirect follow the flag holder,
+//     journaled so an undo reverses it.
 //
 // If primaryID is empty, the best book is auto-selected by ElectPrimary
-// (a book with an audio route beats one without; then an organized book
-// beats one that is not; then BookIsBetter:
+// (a book with an audio route beats one without; then BookIsBetter:
 // organized path, curation, M4B, bitrate, size; then a deterministic
 // tie-break). If primaryID is provided, that book is set as the primary
 // unless it has no audio route while another does (FilelessPrimaryError). A
@@ -863,9 +873,9 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 	// in Audiobookshelf, which shows a group's primary only when it is
 	// organized (database.ABSLibraryFilter; owner decision 2026-10-05). The
 	// survivor stays the survivor (it keeps the losers' external IDs and user
-	// state); it is only not the flag holder. ElectPrimary chooses among the
-	// survivor and those organized members, so an organized copy with no
-	// audio route does not take the flag from a survivor that has one.
+	// state); it is only not the flag holder. ElectPrimary chooses among those
+	// organized members; an organized copy with no audio route does not take
+	// the flag from a survivor that has one.
 	//
 	// Not when the survivor's files carry an iTunes persistent ID: the ITL
 	// clean-up (itunes.ComputeMergedTrackCleanup) removes every non-primary
@@ -874,24 +884,39 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 	// The participant iTunes guard does not cover this: it refuses files
 	// under the iTunes root, and a PID can sit on a file outside it.
 	flagHolderID := resolvedPrimaryID
-	if primaryID == "" && !isOrganized(books[bestIdx]) && !anyITunesPID(filesByID[books[bestIdx].ID]) {
-		cands := []*database.Book{books[bestIdx]}
-		candFiles := map[string][]database.BookFile{books[bestIdx].ID: filesByID[books[bestIdx].ID]}
-		for _, sb := range siblingBooks {
-			if isOrganized(sb) {
-				cands = append(cands, sb)
-				candFiles[sb.ID] = siblingFiles[sb.ID]
+	survivorHasPID := anyITunesPID(filesByID[books[bestIdx].ID])
+	if primaryID == "" && !isOrganized(books[bestIdx]) && !survivorHasPID {
+		// Only organized books compete; with no explicit organized tier in
+		// ElectPrimary any more (survivor choice is audio quality), the
+		// organized filter is applied here. One with no audio route never
+		// takes the flag from a survivor that has one.
+		survivorRoute := HasAudioRoute(books[bestIdx], filesByID[books[bestIdx].ID])
+		var cands []*database.Book
+		candFiles := map[string][]database.BookFile{}
+		consider := func(b *database.Book, files []database.BookFile) {
+			if isOrganized(b) && (!survivorRoute || HasAudioRoute(b, files)) {
+				cands = append(cands, b)
+				candFiles[b.ID] = files
 			}
 		}
+		for _, sb := range siblingBooks {
+			consider(sb, siblingFiles[sb.ID])
+		}
 		for _, mb := range memberBooks {
-			if isOrganized(mb) {
-				cands = append(cands, mb)
-				candFiles[mb.ID] = memberFiles[mb.ID]
-			}
+			consider(mb, memberFiles[mb.ID])
 		}
 		if idx := ElectPrimary(cands, candFiles); idx >= 0 {
 			flagHolderID = cands[idx].ID
 		}
+	}
+
+	// The owner's iTunes-wins exception (2026-10-05 11:55) can leave the title
+	// out of Audiobookshelf: an unorganized survivor holding iTunes PIDs keeps
+	// the flag, and ABS lists a group's primary only when it is organized.
+	// Recorded on the Result and logged so these can be listed.
+	hiddenFromABS := ""
+	if primaryID == "" && !isOrganized(books[bestIdx]) && survivorHasPID {
+		hiddenFromABS = HiddenFromABSITunesSurvivor
 	}
 
 	guarded := slices.Clone(siblingBooks)
@@ -914,8 +939,13 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 	// every merge path that moves a sibling leaves an undo record, whether or
 	// not its caller journals the merge itself. A journal that cannot be
 	// written refuses the merge with nothing changed.
+	//
+	// The journal is also written when the flag goes to a book other than
+	// the survivor and no sibling moves (a reused-group member holds it):
+	// the losers' user state then follows the flag holder, and the journal
+	// is what an undo reverses that follow from (StateFollows).
 	var siblingJournal *SiblingMoveJournal
-	if len(siblings) > 0 {
+	if len(siblings) > 0 || flagHolderID != resolvedPrimaryID {
 		var losersOfMerge []string
 		for _, b := range books {
 			if b.ID != resolvedPrimaryID {
@@ -923,6 +953,9 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 			}
 		}
 		siblingJournal = newSiblingJournal(resolvedPrimaryID, versionGroupID, losersOfMerge, siblings)
+		if flagHolderID != resolvedPrimaryID {
+			siblingJournal.FlagHolderID = flagHolderID
+		}
 		if err := ms.putSiblingJournal(siblingJournal); err != nil {
 			return nil, fmt.Errorf("refusing to move version-group siblings with no undo record: %w", err)
 		}
@@ -1359,7 +1392,22 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 	// The losers are already soft-deleted here, so a follow error (a move that
 	// failed with NO pending-repair record to hold it) cannot stop the retire;
 	// it fails the merge instead, after the group hand-off still runs.
-	followErr := FollowMerge(ms.db, ms.syncFollower, resolvedPrimaryID, losers)
+	//
+	// The losers' user state (progress, read status) and their sync/ABS-id
+	// redirect go to the book Audiobookshelf shows: the flag holder. That is
+	// the survivor unless an organized sibling or member holds the flag, and
+	// then the follow is journaled per loser on the sibling-move journal
+	// (StateFollows), so an undo puts it back (undoSiblingJournal).
+	var followErr error
+	if siblingJournal != nil && siblingJournal.FlagHolderID != "" {
+		followErr = ms.followOntoFlagHolder(siblingJournal, losers)
+	} else {
+		followErr = FollowMerge(ms.db, ms.syncFollower, resolvedPrimaryID, losers)
+	}
+	if hiddenFromABS != "" {
+		mlog.Warn("merge: abs-hidden keep: survivor %s keeps the primary flag of version group %s although it is not organized, because its files carry iTunes persistent IDs (owner decision: iTunes wins); Audiobookshelf will not list this title until it is organized",
+			logger.SanitizeLogValue(resolvedPrimaryID), logger.SanitizeLogValue(versionGroupID))
+	}
 
 	if followErr != nil {
 		return nil, fmt.Errorf("merge into %s applied but users' listening state could not be carried and no repair record was written: %w",
@@ -1375,8 +1423,14 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 		MovedSiblings:           siblings,
 		SiblingJournalID:        siblingJournalID,
 		GroupPrimaryID:          groupPrimaryID(flagHolderID, resolvedPrimaryID),
+		HiddenFromABS:           hiddenFromABS,
+		StateHolderID:           groupPrimaryID(flagHolderID, resolvedPrimaryID),
 	}, nil
 }
+
+// HiddenFromABSITunesSurvivor is Result.HiddenFromABS when the survivor kept
+// the flag, unorganized, because its files carry iTunes persistent IDs.
+const HiddenFromABSITunesSurvivor = "itunes_survivor_not_organized"
 
 // groupPrimaryID is Result.GroupPrimaryID: the flag holder when it is not the
 // survivor, else empty.
