@@ -1,5 +1,5 @@
 // file: web/src/pages/Diagnostics.tsx
-// version: 1.8.0
+// version: 1.9.0
 // last-edited: 2026-10-04
 // guid: f2323fc4-b3e7-4298-9ec5-759447cbd643
 
@@ -114,6 +114,35 @@ export function Diagnostics() {
   const [dbHealth, setDbHealth] = useState<api.DBHealthStats | null>(null);
   const [dbHealthLoading, setDbHealthLoading] = useState(false);
   const [dbHealthError, setDbHealthError] = useState<string | null>(null);
+
+  const [countingExpired, setCountingExpired] = useState(false);
+
+  // Count expired metadata-cache rows on demand: ?deep=true decodes every row,
+  // so it is never part of the default load. Only the expired fields are
+  // merged, so the other figures on the card do not shift under the user.
+  const countExpired = useCallback(async () => {
+    setCountingExpired(true);
+    setDbHealthError(null);
+    try {
+      const deep = await api.getDBHealthStats(true);
+      setDbHealth((prev) =>
+        prev
+          ? {
+              ...prev,
+              metadata_cache: {
+                ...prev.metadata_cache,
+                expired_entries: deep.metadata_cache.expired_entries,
+                expired_entries_computed: deep.metadata_cache.expired_entries_computed,
+              },
+            }
+          : deep
+      );
+    } catch (e) {
+      setDbHealthError(e instanceof Error ? e.message : 'Failed to count expired entries');
+    } finally {
+      setCountingExpired(false);
+    }
+  }, []);
 
   const fetchDBHealth = useCallback(async () => {
     setDbHealthLoading(true);
@@ -932,9 +961,22 @@ export function Diagnostics() {
                           </Typography>
                           {dbHealth.metadata_cache.expired_entries_computed === false ||
                           dbHealth.metadata_cache.expired_entries < 0 ? (
-                            <Tooltip title="pass ?deep=true to count; decodes every cache row">
-                              <Typography sx={{ color: 'text.secondary' }}>not computed</Typography>
-                            </Tooltip>
+                            dbHealth.metadata_cache.ttl_days === 0 ? (
+                              <Typography sx={{ color: 'text.secondary' }}>TTL off</Typography>
+                            ) : (
+                              <Tooltip title="Decodes every cache row; can take a while on a large cache">
+                                <span>
+                                  <Button
+                                    size="small"
+                                    variant="outlined"
+                                    onClick={countExpired}
+                                    disabled={countingExpired}
+                                  >
+                                    {countingExpired ? 'Counting…' : 'Count expired'}
+                                  </Button>
+                                </span>
+                              </Tooltip>
+                            )
                           ) : (
                             <Typography>
                               {dbHealth.metadata_cache.expired_entries.toLocaleString()}

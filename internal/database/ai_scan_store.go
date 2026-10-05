@@ -1,5 +1,5 @@
 // file: internal/database/ai_scan_store.go
-// version: 2.10.0
+// version: 2.11.0
 // last-edited: 2026-10-04
 // guid: a7b3c9d1-4e5f-6a7b-8c9d-0e1f2a3b4c5d
 
@@ -845,6 +845,19 @@ const (
 	AIScanSizeSourcePrefix = "aiscan_prefix_estimate"
 )
 
+// estimatePrefixDiskUsage wraps pebble's EstimateDiskUsage, which panics when
+// the shared DB has been closed underneath the store (the host owns the DB's
+// lifecycle, so a health request can race its shutdown). The panic becomes an
+// error.
+func (s *AIScanStore) estimatePrefixDiskUsage(start, end []byte) (n uint64, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			n, err = 0, fmt.Errorf("pebble closed during disk usage estimate: %v", r)
+		}
+	}()
+	return s.db.EstimateDiskUsage(start, end)
+}
+
 // HealthStats returns diagnostic counts and disk usage for the AI scan store.
 // SizeBytes is the whole DB when the store owns it, and an estimate of the
 // "aiscan:" key range when it shares the main DB.
@@ -865,13 +878,10 @@ func (s *AIScanStore) HealthStats() (AIScanHealthStats, error) {
 		sizeBytes = s.db.Metrics().DiskSpaceUsage()
 	} else {
 		source = AIScanSizeSourcePrefix
+		// s.prefix is the constant "aiscan:", so its upper bound is never nil.
 		start := []byte(s.prefix)
-		end := prefixUpperBound(start)
-		if end == nil {
-			end = []byte{0xff, 0xff, 0xff, 0xff}
-		}
 		var err error
-		sizeBytes, err = s.db.EstimateDiskUsage(start, end)
+		sizeBytes, err = s.estimatePrefixDiskUsage(start, prefixUpperBound(start))
 		if err != nil {
 			return AIScanHealthStats{}, fmt.Errorf("estimate aiscan prefix disk usage: %w", err)
 		}

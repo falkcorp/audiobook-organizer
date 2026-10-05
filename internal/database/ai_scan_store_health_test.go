@@ -1,5 +1,5 @@
 // file: internal/database/ai_scan_store_health_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 32eddfe1-cb1f-4009-9b7c-a3e3c626c050
 // last-edited: 2026-10-04
 
@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/cockroachdb/pebble/v2"
+	"github.com/cockroachdb/pebble/v2/vfs"
 	"github.com/stretchr/testify/require"
 )
 
@@ -40,4 +41,19 @@ func TestAIScanHealthStats_OwnedReportsStoreUsage(t *testing.T) {
 	stats, err := s.HealthStats()
 	require.NoError(t, err)
 	require.Equal(t, "store_disk_usage", stats.SizeSource)
+}
+
+// A shared DB closed under the store (shutdown racing a health request) must
+// surface as an error, not a panic.
+func TestAIScanHealthStats_ClosedSharedDBReturnsError(t *testing.T) {
+	db, err := pebble.Open("", &pebble.Options{FS: vfs.NewMem()})
+	require.NoError(t, err)
+	s, err := NewAIScanStoreFromDB(db)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	require.NotPanics(t, func() {
+		_, err = s.estimatePrefixDiskUsage([]byte("aiscan:"), prefixUpperBound([]byte("aiscan:")))
+	})
+	require.Error(t, err)
 }

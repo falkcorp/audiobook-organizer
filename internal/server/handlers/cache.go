@@ -1,5 +1,5 @@
 // file: internal/server/handlers/cache.go
-// version: 2.5.0
+// version: 2.6.0
 // guid: c9d0e1f2-a3b4-5678-cdef-678901234567
 // last-edited: 2026-10-04
 
@@ -42,6 +42,8 @@ type CacheStat struct {
 	GetDurationMetric GetDurationMetric `json:"get_duration_seconds"`
 	// SizeEstimated: Size came from the census estimate, not an exact count.
 	SizeEstimated bool `json:"size_estimated,omitempty"`
+	// SizeErrorBoundKeys bounds the estimate's error (set with SizeEstimated).
+	SizeErrorBoundKeys int64 `json:"size_error_bound_keys,omitempty"`
 }
 
 // GetDurationMetric represents count and sum of cache get durations.
@@ -105,26 +107,28 @@ func (h *CacheHandler) HandleCacheStats(c *gin.Context) {
 	// estimate when the store has a census, else an exact key count by prefix
 	// scan.
 	if h.metadataStore != nil {
-		var (
-			n         int64
-			estimated bool
-			ok        bool
-		)
-		if census := resolveHealthCensus(c.Request.Context(), h.metadataStore); census != nil {
-			n, ok = censusFamilyKeys(census, metadataFetchCachePrefix)
-			estimated = ok
-		}
-		if !ok {
-			if cnt, err := h.metadataStore.CountPrefix(metadataFetchCachePrefix); err == nil {
-				n, ok = cnt, true
+		// Only compute the size when there is a metadata_fetch row to show it
+		// on: the CountPrefix fallback walks every cache row.
+		idx := -1
+		for i := range stats {
+			if stats[i].Name == "metadata_fetch" {
+				idx = i
+				break
 			}
 		}
-		if ok {
-			for i := range stats {
-				if stats[i].Name == "metadata_fetch" {
-					stats[i].Size = n
-					stats[i].SizeEstimated = estimated
-					break
+		if idx >= 0 {
+			ctx := c.Request.Context()
+			if census := resolveHealthCensus(ctx, h.metadataStore); census != nil {
+				if fam, ok := censusFamily(census, metadataFetchCachePrefix); ok {
+					stats[idx].Size = fam.Keys
+					stats[idx].SizeEstimated = true
+					stats[idx].SizeErrorBoundKeys = fam.ErrorBoundKeys
+				}
+			}
+			// No census family: exact count, unless the client is gone.
+			if !stats[idx].SizeEstimated && ctx.Err() == nil {
+				if cnt, err := h.metadataStore.CountPrefix(metadataFetchCachePrefix); err == nil {
+					stats[idx].Size = cnt
 				}
 			}
 		}

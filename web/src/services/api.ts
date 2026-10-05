@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.147.0
+// version: 2.148.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-04
 
@@ -5832,10 +5832,13 @@ export interface DBHealthStats {
     key_count: number;
     size_bytes: number;
     estimated?: boolean;
+    error_bound_keys?: number;
   };
   embeddings: {
     vector_count: number;
     size_bytes: number;
+    estimated?: boolean;
+    error_bound_keys?: number;
   };
   ai_scans: {
     job_count: number;
@@ -5846,6 +5849,7 @@ export interface DBHealthStats {
   metadata_cache: {
     total_entries: number;
     estimated?: boolean;
+    error_bound_keys?: number;
     ttl_days: number;
     /** -1 unless the request passed ?deep=true. */
     expired_entries: number;
@@ -5854,8 +5858,9 @@ export interface DBHealthStats {
   book_path_prefixes?: Array<{ prefix: string; book_count: number }>;
 }
 
-export async function getDBHealthStats(): Promise<DBHealthStats> {
-  const response = await apiFetch(`${API_BASE}/diagnostics/db-health`);
+/** deep=true also counts expired metadata-cache rows (decodes every row). */
+export async function getDBHealthStats(deep = false): Promise<DBHealthStats> {
+  const response = await apiFetch(`${API_BASE}/diagnostics/db-health${deep ? '?deep=true' : ''}`);
   if (!response.ok) throw await buildApiError(response, 'Failed to fetch DB health stats');
   const body = await response.json();
   return body.data;
