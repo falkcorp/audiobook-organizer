@@ -1,13 +1,16 @@
 // file: internal/server/authority_evidence_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4492804b-1186-4576-8833-2d1d7a405363
 // last-edited: 2026-10-05
 
 package server
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -191,4 +194,134 @@ func TestAuthorityEvidence_Await(t *testing.T) {
 	var nilA *authorityEvidence
 	_, ready = nilA.Await(context.Background())
 	require.False(t, ready)
+}
+
+// lockedBuffer is a bytes.Buffer safe for the load goroutine and the test to
+// share.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+// lines returns the captured lines holding substr.
+func (b *lockedBuffer) lines(substr string) []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var out []string
+	for _, l := range strings.Split(b.buf.String(), "\n") {
+		if strings.Contains(l, substr) {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// captureInfoLogs swaps the default slog handler for one writing INFO+ into
+// a locked buffer, restored at cleanup.
+func captureInfoLogs(t *testing.T) *lockedBuffer {
+	t.Helper()
+	buf := &lockedBuffer{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return buf
+}
+
+// Await logs one line per call: a wait past awaitLogAfter that ends with a
+// snapshot is one Info naming the wait and why it ended (the load finished);
+// a wait that ends without one is one Warn naming why (the wait limit, or the
+// caller's context), never an Info as well; a wait under awaitLogAfter logs
+// nothing. awaitLogAfter (1s in production) and awaitMax are shortened so
+// the test does not sleep a second; the code path is the same.
+func TestAuthorityEvidence_AwaitLogsWhyTheWaitEnded(t *testing.T) {
+	inner, err := database.NewPebbleStoreInMemory(t.TempDir())
+	require.NoError(t, err)
+	var loads sync.WaitGroup
+	t.Cleanup(func() { loads.Wait(); _ = inner.Close() }) // loads end before the store closes
+	logs := captureInfoLogs(t)
+	const (
+		waitInfo = "a plan waited"
+		noSnap   = "enabled but no snapshot"
+	)
+	count := func() (info, warn []string) {
+		for _, l := range logs.lines("authority evidence: ") {
+			switch {
+			case strings.Contains(l, waitInfo):
+				require.Contains(t, l, "level=INFO", l)
+				info = append(info, l)
+			case strings.Contains(l, noSnap):
+				require.Contains(t, l, "level=WARN", l)
+				warn = append(warn, l)
+			}
+		}
+		return info, warn
+	}
+	reset := func() {
+		logs.mu.Lock()
+		logs.buf.Reset()
+		logs.mu.Unlock()
+	}
+	// delayed runs each load after d, tracked by loads.
+	delayed := func(d time.Duration) func(string, func()) {
+		return func(_ string, fn func()) {
+			loads.Add(1)
+			go func() {
+				defer loads.Done()
+				time.Sleep(d)
+				fn()
+			}()
+		}
+	}
+	on := func() bool { return true }
+
+	// Slow load, ready: one Info naming the finished load, no Warn.
+	a := newAuthorityEvidence(context.Background(), inner, on, delayed(60*time.Millisecond))
+	a.awaitLogAfter = 10 * time.Millisecond
+	_, ready := a.Await(context.Background())
+	require.True(t, ready)
+	info, warn := count()
+	require.Len(t, info, 1, "logs: %v", logs.lines(""))
+	require.Contains(t, info[0], "the snapshot load finished")
+	require.Empty(t, warn)
+
+	// Fast load, ready: under awaitLogAfter, no wait line.
+	reset()
+	a = newAuthorityEvidence(context.Background(), inner, on, delayed(0))
+	a.awaitLogAfter = time.Minute
+	_, ready = a.Await(context.Background())
+	require.True(t, ready)
+	info, warn = count()
+	require.Empty(t, info)
+	require.Empty(t, warn)
+
+	// A load that never ends, bounded by awaitMax: one Warn naming the
+	// limit, and no Info for the same wait.
+	reset()
+	a = newAuthorityEvidence(context.Background(), inner, on, func(string, func()) {})
+	a.awaitLogAfter, a.awaitMax = time.Millisecond, 30*time.Millisecond
+	_, ready = a.Await(context.Background())
+	require.False(t, ready)
+	info, warn = count()
+	require.Empty(t, info, "a wait that ends without a snapshot is not also logged at Info")
+	require.Len(t, warn, 1, "logs: %v", logs.lines(""))
+	require.Contains(t, warn[0], "wait limit")
+
+	// The same, bounded by the caller's context: one Warn naming it.
+	reset()
+	a = newAuthorityEvidence(context.Background(), inner, on, func(string, func()) {})
+	a.awaitLogAfter = time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	_, ready = a.Await(ctx)
+	require.False(t, ready)
+	info, warn = count()
+	require.Empty(t, info)
+	require.Len(t, warn, 1, "logs: %v", logs.lines(""))
+	require.Contains(t, warn[0], "the caller's context ended first")
 }
