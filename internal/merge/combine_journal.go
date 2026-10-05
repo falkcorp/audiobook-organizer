@@ -1,5 +1,5 @@
 // file: internal/merge/combine_journal.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
 // last-edited: 2026-10-05
 
@@ -715,10 +715,13 @@ func intPtrEqual(a, b *int) bool {
 // user-state repair for the pair is dropped (the absorbed book is coming back,
 // and the sweep would otherwise drain it onto the survivor again), every
 // user's absorbed-book state and positions are written back, and the
-// survivor's are put back only while they still hold what the follow left. A
-// survivor a user has listened to since keeps its newer state; that is
-// returned as a warning, not an error. Safe to run twice: a survivor already
-// back at its before-state is left alone.
+// survivor's are put back to their before-state. A survivor a user has
+// listened to since is reconciled instead (reconcileTouchedSurvivor): what
+// the follow brought is taken back off it and what the user did there since
+// stays, so the carried state ends up on exactly one book -- the absorbed
+// one -- and its listened time is not counted on both. That is returned as a
+// warning, not an error. Safe to run twice: a survivor already back at its
+// before-state is left alone.
 //
 // The absorbed side gets the same care (restoreAbsorbedSide): the absorbed
 // book is often still live when this runs (CarryStateBeforeHardDelete puts a
@@ -761,10 +764,21 @@ func RestoreFollowedProgress(db UserProgressMerger, survivorID, absorbedID strin
 			continue
 		}
 		if !sameProgress(curSurv, p.SurvivorStateAfter, curSurvPos, p.SurvivorPosAfter) {
-			// The user has listened to the survivor since. Their newer
-			// position there is theirs; leave it rather than rewind it.
+			if p.SurvivorStateAfter == nil && len(p.SurvivorPosAfter) == 0 {
+				// No after-snapshot (the follow failed, or its re-read did):
+				// what the follow wrote cannot be told from the user's own
+				// listening, so nothing is taken off the survivor.
+				warnings = append(warnings, fmt.Sprintf(
+					"user %s progress on survivor %s changed after the merge and no after-merge record exists to separate it; left as is", p.UserID, survivorID))
+				continue
+			}
+			// The user has listened to the survivor since. Take back only
+			// what the follow brought, keep what they did there since.
+			if err := reconcileTouchedSurvivor(db, p, survivorID, curSurv, curSurvPos); err != nil {
+				return warnings, err
+			}
 			warnings = append(warnings, fmt.Sprintf(
-				"user %s progress on survivor %s changed after the merge; left as is", p.UserID, survivorID))
+				"user %s progress on survivor %s changed after the merge; the carried state was taken back off it and their listening there since was kept", p.UserID, survivorID))
 			continue
 		}
 		if err := writeProgress(db, p.UserID, survivorID, p.SurvivorStateBefore, p.SurvivorPosBefore, curSurv); err != nil {
@@ -772,6 +786,105 @@ func RestoreFollowedProgress(db UserProgressMerger, survivorID, absorbedID strin
 		}
 	}
 	return warnings, nil
+}
+
+// reconcileTouchedSurvivor puts one user's survivor progress back to its
+// before-follow state when the user has listened there since the follow,
+// keeping that listening. It is a three-way merge per field with the
+// after-follow snapshot as the base: a field still equal to what the follow
+// left goes back to its before value; a field the user changed since keeps
+// the user's value.
+//
+//   - positions, per segment: a row still equal to the follow's goes back to
+//     the before row (or is removed when the survivor had none there); a row
+//     written since stays; a segment the follow left but the user cleared
+//     since (a reset) is not brought back. A before row the follow did not
+//     leave and is not there now is put back (never dropped).
+//   - status, manual flag, progress %, FinishedAt (one group, as the client
+//     writes them together), last played, hide, the reset tombstone: each
+//     goes back to before when unchanged since the follow.
+//   - listened time: before + what the user added since the follow, so the
+//     carried seconds -- which go back to the absorbed book -- are not on
+//     both books. A counter that went DOWN since (a reset) keeps its value.
+//   - LastSegmentID names the newest remaining position's segment.
+func reconcileTouchedSurvivor(db userPositionStore, p CombineUserProgress, survivorID string, cur *database.UserBookState, curPos []database.UserPosition) error {
+	afterBy := map[string]database.UserPosition{}
+	for _, a := range p.SurvivorPosAfter {
+		afterBy[a.SegmentID] = a
+	}
+	beforeBy := map[string]database.UserPosition{}
+	for _, b := range p.SurvivorPosBefore {
+		beforeBy[b.SegmentID] = b
+	}
+	var want []database.UserPosition
+	seen := map[string]bool{}
+	for _, c := range curPos {
+		seen[c.SegmentID] = true
+		a, inAfter := afterBy[c.SegmentID]
+		if !inAfter || a.PositionSeconds != c.PositionSeconds || !a.UpdatedAt.Equal(c.UpdatedAt) {
+			want = append(want, c) // written since the follow
+			continue
+		}
+		if b, ok := beforeBy[c.SegmentID]; ok {
+			want = append(want, b)
+		}
+	}
+	for _, b := range p.SurvivorPosBefore {
+		if _, inAfter := afterBy[b.SegmentID]; !inAfter && !seen[b.SegmentID] {
+			want = append(want, b)
+		}
+	}
+	if err := writePositionsDiff(db, p.UserID, survivorID, curPos, want); err != nil {
+		return err
+	}
+	if cur == nil {
+		return nil
+	}
+	var before, after database.UserBookState
+	if p.SurvivorStateBefore != nil {
+		before = *p.SurvivorStateBefore
+	}
+	if p.SurvivorStateAfter != nil {
+		after = *p.SurvivorStateAfter
+	}
+	st := *cur
+	st.UserID, st.BookID = p.UserID, survivorID
+	if cur.Status == after.Status && cur.StatusManual == after.StatusManual && cur.ProgressPct == after.ProgressPct {
+		st.Status, st.StatusManual, st.ProgressPct, st.FinishedAt = before.Status, before.StatusManual, before.ProgressPct, before.FinishedAt
+	}
+	if cur.LastActivityAt.Equal(after.LastActivityAt) {
+		st.LastActivityAt = before.LastActivityAt
+	}
+	if cur.HideFromContinueListening == after.HideFromContinueListening {
+		st.HideFromContinueListening = before.HideFromContinueListening
+	}
+	if timePtrEqual(cur.ProgressResetAt, after.ProgressResetAt) && slices.Equal(cur.ProgressResetPositions, after.ProgressResetPositions) {
+		st.ProgressResetAt, st.ProgressResetPositions = before.ProgressResetAt, before.ProgressResetPositions
+	}
+	if added := cur.TotalListenedSeconds - after.TotalListenedSeconds; added >= 0 {
+		st.TotalListenedSeconds = before.TotalListenedSeconds + added
+	}
+	st.LastSegmentID = before.LastSegmentID
+	var newest *database.UserPosition
+	for i := range want {
+		if newest == nil || want[i].UpdatedAt.After(newest.UpdatedAt) {
+			newest = &want[i]
+		}
+	}
+	if newest != nil {
+		st.LastSegmentID = newest.SegmentID
+	}
+	if err := db.SetUserBookState(&st); err != nil {
+		return fmt.Errorf("reconcile state user=%s book=%s: %w", p.UserID, survivorID, err)
+	}
+	return nil
+}
+
+func timePtrEqual(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.Equal(*b)
 }
 
 // restoreAbsorbedSide puts one user's before-snapshot (snapSt, snapPos) back
@@ -784,8 +897,11 @@ func RestoreFollowedProgress(db UserProgressMerger, survivorID, absorbedID strin
 //     the book after the follow drained it, or the follow stopped part way
 //     for this user. The two are combined (combineOnRestore) -- the newer
 //     side wins the position, nothing on either side is dropped -- and
-//     written without clearing first, so no row the client wrote is removed.
-//     A newer write is reported as a warning.
+//     written (writePositionsDiff): rows the combined set keeps as they are
+//     are not rewritten, and the book's rows are cleared first only when the
+//     combined set drops one (a reset kept over older positions), so the
+//     rows on the book always match the state's LastSegmentID. A newer write
+//     is reported as a warning.
 func restoreAbsorbedSide(db userPositionStore, userID, absorbedID string, snapSt *database.UserBookState, snapPos []database.UserPosition) (string, error) {
 	cur, err := db.GetUserBookState(userID, absorbedID)
 	if err != nil {
@@ -804,17 +920,8 @@ func restoreAbsorbedSide(db userPositionStore, userID, absorbedID string, snapSt
 	snap := userStateSide{state: snapSt, positions: snapPos}
 	now := userStateSide{state: cur, positions: curPos}
 	st, positions := combineOnRestore(userID, absorbedID, snap, now)
-	have := make(map[string]database.UserPosition, len(curPos))
-	for _, cp := range curPos {
-		have[cp.SegmentID] = cp
-	}
-	for _, np := range sortPositionsOldestFirst(positions) {
-		if hp, ok := have[np.SegmentID]; ok && hp.PositionSeconds == np.PositionSeconds && hp.UpdatedAt.Equal(np.UpdatedAt) {
-			continue
-		}
-		if err := carryPosition(db, userID, absorbedID, np); err != nil {
-			return "", fmt.Errorf("restore position %s user=%s book=%s: %w", np.SegmentID, userID, absorbedID, err)
-		}
+	if err := writePositionsDiff(db, userID, absorbedID, curPos, positions); err != nil {
+		return "", err
 	}
 	if st != nil {
 		if err := db.SetUserBookState(st); err != nil {
@@ -827,33 +934,97 @@ func restoreAbsorbedSide(db userPositionStore, userID, absorbedID string, snapSt
 	return "", nil
 }
 
+// writePositionsDiff makes bookID's position rows for userID equal want,
+// given that have is what is there now. A row want keeps unchanged is not
+// rewritten; a changed or new row is written keeping its UpdatedAt
+// (carryPosition). Only when want drops a segment that have holds are the
+// book's rows cleared first and every wanted row written, because there is
+// no single-row delete.
+func writePositionsDiff(db userPositionStore, userID, bookID string, have, want []database.UserPosition) error {
+	wantBy := make(map[string]database.UserPosition, len(want))
+	for _, w := range want {
+		wantBy[w.SegmentID] = w
+	}
+	haveBy := make(map[string]database.UserPosition, len(have))
+	dropped := false
+	for _, h := range have {
+		haveBy[h.SegmentID] = h
+		if _, ok := wantBy[h.SegmentID]; !ok {
+			dropped = true
+		}
+	}
+	if dropped {
+		if err := db.ClearUserPositions(userID, bookID); err != nil {
+			return fmt.Errorf("clear positions user=%s book=%s: %w", userID, bookID, err)
+		}
+		haveBy = nil
+	}
+	for _, w := range sortPositionsOldestFirst(want) {
+		if h, ok := haveBy[w.SegmentID]; ok && h.PositionSeconds == w.PositionSeconds && h.UpdatedAt.Equal(w.UpdatedAt) {
+			continue
+		}
+		if err := carryPosition(db, userID, bookID, w); err != nil {
+			return fmt.Errorf("restore position %s user=%s book=%s: %w", w.SegmentID, userID, bookID, err)
+		}
+	}
+	return nil
+}
+
 // combineOnRestore combines a follow's before-snapshot of one user's progress
-// on bookID with what is on bookID now, losing neither:
+// on bookID with what is on bookID now, losing neither. Both sides are the
+// SAME book, so this is not the two-book merge rule (planUserStateMerge)
+// although it shares its parts:
 //
+//   - which side is newer: the later lastUpdate. A side with nothing
+//     carryable is never the newer one. When either side has no timestamp at
+//     all (a legacy row written before positions were stamped reads as the
+//     zero time), the side whose furthest position is farther ahead is the
+//     newer one, the current side on a tie (owner decision 2026-10-05: with
+//     no time to compare, the farther-ahead position wins).
 //   - positions: the union by segment; where both have a segment, the newer
-//     UpdatedAt wins (the current row on a tie);
-//   - state: the merge rule (planUserStateMerge) with the newer side as the
-//     winner, so the newer side's status and progress stand, finished stays
-//     sticky, last played is the later, hide is OR'd and the reset tombstones
+//     UpdatedAt wins (the current row on a tie). When either row of a
+//     segment has no timestamp, the farther-ahead position wins instead (the
+//     current row on a tie), by the same owner decision: a legacy 4000s row
+//     is not rewound to a dated 3500s one.
+//   - state: the newer side's row (status, progress %, manual flag) stands;
+//     finished is sticky -- an older Finished is kept over a newer
+//     unfinished status -- EXCEPT over a newer deliberate status: a newer
+//     side whose status is manual (StatusManual, set by readstatus' mark
+//     unfinished/in progress, which stamps LastActivityAt) and was set after
+//     the older side's last update wins, because on one book the user's
+//     later explicit choice is their state. Last played is the later, hide
+//     is OR'd, the reset tombstone is the later and its discarded positions
 //     are unioned. A current state that is only the drained residue of the
-//     follow counts as no state: it would otherwise win with an empty status;
-//   - listened time: the larger of the two. This departs from the merge rule,
-//     which takes it from the position side: both sides here are the SAME
-//     book's counter, the drained side restarted it at zero, and taking the
-//     newer side's would throw away the user's listened time;
-//   - a newer side that RESET its progress after the older side's last update
-//     keeps the reset: the older side's positions and listened time are not
-//     brought back over it.
+//     follow counts as no state: it would otherwise win with an empty status.
+//   - listened time: the larger of the two (owner-confirmed 2026-10-05: the
+//     farther-ahead time). Both sides are the same book's counter; the
+//     drained side restarted it at zero.
+//   - a newer side that RESET its progress after the older side's last
+//     update keeps the reset: the older side's positions and listened time
+//     are not brought back over it, its positions are left out of the result
+//     (the caller clears them off the book: writePositionsDiff) and added to
+//     the reset's discarded positions, with the older side's own discarded
+//     positions, so offline replay cannot resurrect them. Hide is still
+//     OR'd: the follow drained hide off this book, so a reset made here
+//     after it did not un-hide anything the user had hidden.
+//
+// Clock skew: position UpdatedAt is stamped by this server when the write
+// arrives (SetUserPosition uses time.Now; only carried copies keep an earlier
+// stamp, which was itself a server stamp), and LastActivityAt and
+// ProgressResetAt are server-stamped too (readstatus, the ABS progress
+// handlers). So a client's clock never orders the two sides; there is no
+// client-supplied time to prefer or reject. The one ordering a server stamp
+// gets wrong is an offline backlog replayed late: it is stamped at receipt,
+// so it counts as newer than a listen it predates. That is the reset
+// tombstone's job (ProgressResetPositions), which is why the reset path
+// unions the discarded positions.
 //
 // The state's LastSegmentID names the newest position's segment.
 func combineOnRestore(userID, bookID string, snap, now userStateSide) (*database.UserBookState, []database.UserPosition) {
 	if now.state != nil && !hasCarryableState(now.state, nil) {
 		now.state = nil
 	}
-	older, newer := snap, now
-	if lastUpdate(snap.state, snap.positions).After(lastUpdate(now.state, now.positions)) {
-		older, newer = now, snap
-	}
+	older, newer, newerIsNow := restoreOrder(snap, now)
 	resetSince := newer.state != nil && newer.state.ProgressResetAt != nil &&
 		newer.state.ProgressResetAt.After(lastUpdate(older.state, older.positions))
 
@@ -864,8 +1035,10 @@ func combineOnRestore(userID, bookID string, snap, now userStateSide) (*database
 			prev, ok := bySeg[p.SegmentID]
 			if !ok {
 				segs = append(segs, p.SegmentID)
+				bySeg[p.SegmentID] = p
+				continue
 			}
-			if !ok || p.UpdatedAt.After(prev.UpdatedAt) || (winsTie && p.UpdatedAt.Equal(prev.UpdatedAt)) {
+			if positionWins(p, prev, winsTie) {
 				bySeg[p.SegmentID] = p
 			}
 		}
@@ -873,7 +1046,10 @@ func combineOnRestore(userID, bookID string, snap, now userStateSide) (*database
 	if !resetSince {
 		add(older.positions, false)
 	}
-	add(newer.positions, true)
+	// The current row wins a tie: added last with winsTie when now is the
+	// newer side; when it is the older side its rows went in first and the
+	// snapshot's must beat them outright.
+	add(newer.positions, newerIsNow)
 	positions := make([]database.UserPosition, 0, len(segs))
 	var newest *database.UserPosition
 	for _, sg := range segs {
@@ -884,31 +1060,131 @@ func combineOnRestore(userID, bookID string, snap, now userStateSide) (*database
 		}
 	}
 
-	var st *database.UserBookState
-	switch {
-	case older.state == nil && newer.state == nil:
-	case resetSince:
-		kept := *newer.state
-		st = &kept
-	case hasCarryableState(older.state, older.positions):
-		st = planUserStateMerge(userID, bookID, older, newer).state
-	default:
-		st = planUserStateMerge(userID, bookID, newer, older).state
+	if older.state == nil && newer.state == nil {
+		return nil, positions
 	}
-	if st != nil {
-		st.UserID, st.BookID = userID, bookID
-		if !resetSince {
-			for _, s := range []*database.UserBookState{older.state, newer.state} {
-				if s != nil && s.TotalListenedSeconds > st.TotalListenedSeconds {
-					st.TotalListenedSeconds = s.TotalListenedSeconds
-				}
+	var st database.UserBookState
+	if newer.state != nil {
+		st = *newer.state
+	} else {
+		st = *older.state
+	}
+	st.UserID, st.BookID = userID, bookID
+	if !resetSince {
+		if fin := olderFinished(older, newer); fin != nil && !newerDeliberateStatus(older, newer) {
+			st.Status = database.UserBookStatusFinished
+			st.StatusManual = fin.StatusManual
+			st.FinishedAt = fin.FinishedAt
+			st.ProgressPct = fin.ProgressPct
+		}
+		for _, s := range []*database.UserBookState{older.state, newer.state} {
+			if s != nil && s.TotalListenedSeconds > st.TotalListenedSeconds {
+				st.TotalListenedSeconds = s.TotalListenedSeconds
 			}
 		}
-		if newest != nil {
-			st.LastSegmentID = newest.SegmentID
+	}
+	for _, s := range []*database.UserBookState{older.state, newer.state} {
+		if s == nil {
+			continue
+		}
+		if s.LastActivityAt.After(st.LastActivityAt) {
+			st.LastActivityAt = s.LastActivityAt
+		}
+		if s.HideFromContinueListening {
+			st.HideFromContinueListening = true
+		}
+		if s.ProgressResetAt != nil && (st.ProgressResetAt == nil || s.ProgressResetAt.After(*st.ProgressResetAt)) {
+			t := *s.ProgressResetAt
+			st.ProgressResetAt = &t
 		}
 	}
-	return st, positions
+	var discarded *database.UserBookState
+	if resetSince && len(older.positions) > 0 {
+		d := database.UserBookState{}
+		for _, p := range sortPositionsOldestFirst(older.positions) {
+			d.ProgressResetPositions = append(d.ProgressResetPositions, p.PositionSeconds)
+		}
+		discarded = &d
+	}
+	st.ProgressResetPositions = unionResetPositions(older.state, discarded, newer.state)
+	switch {
+	case newest != nil:
+		st.LastSegmentID = newest.SegmentID
+	case resetSince:
+		st.LastSegmentID = ""
+	}
+	return &st, positions
+}
+
+// restoreOrder returns snap and now as (older, newer) for combineOnRestore,
+// and whether the newer one is now.
+func restoreOrder(snap, now userStateSide) (older, newer userStateSide, newerIsNow bool) {
+	switch {
+	case !hasCarryableState(now.state, now.positions):
+		return now, snap, false
+	case !hasCarryableState(snap.state, snap.positions):
+		return snap, now, true
+	}
+	su, nu := lastUpdate(snap.state, snap.positions), lastUpdate(now.state, now.positions)
+	if su.IsZero() || nu.IsZero() || undatedPosition(snap.positions) || undatedPosition(now.positions) {
+		if furthestPosition(snap.positions) > furthestPosition(now.positions) {
+			return now, snap, false
+		}
+		return snap, now, true
+	}
+	if su.After(nu) {
+		return now, snap, false
+	}
+	return snap, now, true
+}
+
+// positionWins reports whether p replaces prev for one segment: the newer
+// UpdatedAt, or -- when either has no timestamp -- the farther-ahead
+// position; winsTie settles an equal comparison in p's favour.
+func positionWins(p, prev database.UserPosition, winsTie bool) bool {
+	if p.UpdatedAt.IsZero() || prev.UpdatedAt.IsZero() {
+		return p.PositionSeconds > prev.PositionSeconds || (winsTie && p.PositionSeconds == prev.PositionSeconds)
+	}
+	return p.UpdatedAt.After(prev.UpdatedAt) || (winsTie && p.UpdatedAt.Equal(prev.UpdatedAt))
+}
+
+func undatedPosition(ps []database.UserPosition) bool {
+	for i := range ps {
+		if ps[i].UpdatedAt.IsZero() {
+			return true
+		}
+	}
+	return false
+}
+
+func furthestPosition(ps []database.UserPosition) float64 {
+	var f float64
+	for i := range ps {
+		f = max(f, ps[i].PositionSeconds)
+	}
+	return f
+}
+
+// olderFinished is the Finished state finished-is-sticky keeps: the newer
+// side's when it is finished, else the older side's, else nil.
+func olderFinished(older, newer userStateSide) *database.UserBookState {
+	switch {
+	case isFinished(newer.state):
+		return newer.state
+	case isFinished(older.state):
+		return older.state
+	}
+	return nil
+}
+
+// newerDeliberateStatus reports whether the newer side holds a manual
+// (user-set) status that is not Finished and was set after the older side's
+// last update: the user un-finished the book after it was finished, so the
+// sticky Finished must not override it.
+func newerDeliberateStatus(older, newer userStateSide) bool {
+	n := newer.state
+	return n != nil && n.StatusManual && !isFinished(n) &&
+		n.LastActivityAt.After(lastUpdate(older.state, older.positions))
 }
 
 // applyUndo performs the reversal. Preconditions have passed.

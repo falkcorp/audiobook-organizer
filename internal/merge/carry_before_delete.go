@@ -1,5 +1,5 @@
 // file: internal/merge/carry_before_delete.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3f1c9a52-7d4e-4b8a-a6c0-8e2b5d7f1a93
 // last-edited: 2026-10-05
 
@@ -85,6 +85,16 @@ var ErrUserStateCheckFailed = errors.New("merge: could not check the book about 
 // not state found or owed.
 var errCarryCheckFailed = errors.New("check failed")
 
+// ErrCarryPrecheckRefused is returned by CarryStateThenHardDelete when the
+// caller's precheck, run under the merge lock before anything moved, refused
+// the carry. It wraps the precheck's own error. Nothing was moved or deleted.
+var ErrCarryPrecheckRefused = errors.New("merge: carry refused by its precheck")
+
+// ErrSyncRedirectNotCleared is returned by CarryStateBetweenLiveBooks when the
+// state moved but the ABS sync redirect between the two books could not be
+// cleared. Unlike ErrStateCarryIncomplete, the state IS on the target book.
+var ErrSyncRedirectNotCleared = errors.New("merge: listening state moved but the sync redirect was not cleared")
+
 // CarryStateThenHardDelete is CarryStateBeforeHardDelete followed by del (the
 // caller's hard delete of doomedID) in ONE hold of the merge lock, so no
 // merge, sweep or revert can put state back on doomedID between the carry's
@@ -92,16 +102,28 @@ var errCarryCheckFailed = errors.New("check failed")
 // error is returned wrapped. A carry that is not complete returns
 // ErrStateCarryIncomplete (and was put back) with del not run.
 //
+// precheck, when non-nil, runs under that same hold before the carry: a
+// condition the caller decided on before taking the lock (e.g. "keepID is a
+// book ABS lists") is re-checked where no merge can change it before the
+// carry starts. Its error refuses the carry with nothing moved, returned
+// wrapped in ErrCarryPrecheckRefused (errors.Is reaches the caller's own
+// error too).
+//
 // Client writes (ABS and web progress) do not take the merge lock, so this
 // narrows that window to the carry's own last read, it cannot close it: a
 // position a client writes to a book being deleted is lost with the book,
 // the same as one written after the delete.
-func CarryStateThenHardDelete(db UserProgressMerger, keepID, doomedID string, del func() error) error {
+func CarryStateThenHardDelete(db UserProgressMerger, keepID, doomedID string, precheck, del func() error) error {
 	if keepID == "" || doomedID == "" || keepID == doomedID {
 		return fmt.Errorf("%w: invalid pair keep=%q doomed=%q", ErrStateCarryIncomplete, keepID, doomedID)
 	}
 	mergeSerializeMu.Lock()
 	defer mergeSerializeMu.Unlock()
+	if precheck != nil {
+		if err := precheck(); err != nil {
+			return fmt.Errorf("%w: %s -> %s: %w", ErrCarryPrecheckRefused, doomedID, keepID, err)
+		}
+	}
 	if err := carryStateLocked(db, keepID, doomedID); err != nil {
 		return err
 	}
@@ -144,8 +166,8 @@ func HardDeleteWithoutUserState(db UserProgressMerger, bookID string, del func()
 // stays, so once the state has moved the redirect is cleared again, in both
 // directions (an earlier carry the other way recorded toID -> fromID), and
 // each book's sync id resolves to itself. A redirect that cannot be cleared
-// is an error: the state has moved, but an ABS client holding one book's id
-// would still land on the other.
+// is an error wrapping ErrSyncRedirectNotCleared: the state has moved, but an
+// ABS client holding one book's id would still land on the other.
 func CarryStateBetweenLiveBooks(db UserProgressMerger, toID, fromID string) error {
 	if toID == "" || fromID == "" || toID == fromID {
 		return fmt.Errorf("%w: invalid pair to=%q from=%q", ErrStateCarryIncomplete, toID, fromID)
@@ -157,11 +179,11 @@ func CarryStateBetweenLiveBooks(db UserProgressMerger, toID, fromID string) erro
 	}
 	clearer, ok := database.AsCapability[syncMergeClearer](db)
 	if !ok {
-		return fmt.Errorf("state moved %s -> %s, but the store cannot clear the sync redirect between them", fromID, toID)
+		return fmt.Errorf("%w: state moved %s -> %s, but the store cannot clear the sync redirect between them", ErrSyncRedirectNotCleared, fromID, toID)
 	}
 	for _, pair := range [][2]string{{fromID, toID}, {toID, fromID}} {
 		if err := clearer.ClearSyncMerge(pair[0], pair[1]); err != nil {
-			return fmt.Errorf("state moved %s -> %s, but clearing the sync redirect %s -> %s failed: %w", fromID, toID, pair[0], pair[1], err)
+			return fmt.Errorf("%w: state moved %s -> %s, but clearing the sync redirect %s -> %s failed: %w", ErrSyncRedirectNotCleared, fromID, toID, pair[0], pair[1], err)
 		}
 	}
 	return nil

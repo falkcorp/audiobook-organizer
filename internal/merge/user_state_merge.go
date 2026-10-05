@@ -1,7 +1,7 @@
 // file: internal/merge/user_state_merge.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 9b1f6c2e-4d7a-4e83-a5c9-2f8e0d3b7a61
-// last-edited: 2026-09-26
+// last-edited: 2026-10-05
 
 package merge
 
@@ -193,12 +193,13 @@ func planUserStateMerge(userID, winnerBookID string, loser, winner userStateSide
 	return plan
 }
 
-// unionResetPositions unions both sides' discarded positions, older side's
-// first so the newest resets sort last, and keeps the newest
-// database.MaxProgressResetPositions (the store's own bound).
-func unionResetPositions(older, newer *database.UserBookState) []float64 {
+// unionResetPositions unions the given sides' discarded positions in order
+// (oldest side first, so the newest resets sort last), and keeps the newest
+// database.MaxProgressResetPositions (the store's own bound). A nil side is
+// skipped.
+func unionResetPositions(sides ...*database.UserBookState) []float64 {
 	var out []float64
-	for _, s := range []*database.UserBookState{older, newer} {
+	for _, s := range sides {
 		if s == nil {
 			continue
 		}
