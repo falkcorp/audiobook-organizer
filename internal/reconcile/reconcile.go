@@ -1,7 +1,7 @@
 // file: internal/reconcile/reconcile.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-02
+// last-edited: 2026-10-05
 
 package reconcile
 
@@ -26,6 +26,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
@@ -97,6 +98,9 @@ type Store interface {
 type VersionGroupStore interface {
 	Store
 	database.ChapterReader
+	// merge.UserStateReader: the duplicate cleanup refuses to delete a copy a
+	// user still has listening state on (merge.UserStateProbe).
+	merge.UserStateReader
 }
 
 // ReconcileMatch represents a potential match between a broken DB record and an untracked file.
@@ -157,6 +161,11 @@ type VersionGroupCleanupResult struct {
 	// book_file rows: removing them would orphan those rows
 	// (database.ErrBookOwnsFiles), and their files are not deleted either.
 	SkippedOwnsFiles int `json:"skipped_owns_files"`
+	// SkippedHasUserState counts duplicates left in place because a user
+	// still has listening state on them (merge.BookHasCarryableUserState):
+	// the delete is a hard delete with no follow, so it would drop that
+	// state. Their files are not deleted either.
+	SkippedHasUserState int `json:"skipped_has_user_state"`
 	// PrimaryHeld counts cleaned groups versionprimary held: no member is an
 	// organized library copy with its files present, so nothing was crowned
 	// and the group is left for version-group-primary-repair.
@@ -802,6 +811,7 @@ func CountMatchType(matches []ReconcileMatch, matchType string) int {
 // created by the organize-reprocessing bug.
 func CleanupDuplicateVersionGroups(store VersionGroupStore, rootDir string, dryRun bool) (*VersionGroupCleanupResult, error) {
 	result := &VersionGroupCleanupResult{}
+	var stateProbe *merge.UserStateProbe
 
 	// Fetch all books and group by version_group_id. Core-typed: grouping and
 	// dup-selection only need ID/FilePath/VersionGroupID, all Core-safe fields.
@@ -865,6 +875,22 @@ func CleanupDuplicateVersionGroups(store VersionGroupStore, rootDir string, dryR
 				pkgLog.Warn("version-group cleanup keeping duplicate %s of group %s: it still owns %d book_file row(s) (read error: %v)",
 					logger.SanitizeLogValue(dup.ID), logger.SanitizeLogValue(groupID), len(owned), ownErr)
 				result.SkippedOwnsFiles++
+				continue
+			}
+			// Nor one a user still has listening state on: this is a hard
+			// delete and nothing carries that state to the kept copy first.
+			// Same point (before the disk), same fail-closed rule. Users are
+			// listed once per pass.
+			if stateProbe == nil {
+				if stateProbe, err = merge.NewUserStateProbe(store); err != nil {
+					return nil, fmt.Errorf("version-group cleanup: cannot list users to check their listening state: %w", err)
+				}
+			}
+			hasState, stateErr := stateProbe.Has(dup.ID)
+			if stateErr != nil || hasState {
+				pkgLog.Warn("version-group cleanup keeping duplicate %s of group %s: a user still has listening state on it (read error: %v)",
+					logger.SanitizeLogValue(dup.ID), logger.SanitizeLogValue(groupID), stateErr)
+				result.SkippedHasUserState++
 				continue
 			}
 

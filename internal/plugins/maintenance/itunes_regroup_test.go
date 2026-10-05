@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_regroup_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-10-01
+// last-edited: 2026-10-05
 
 package maintenance
 
@@ -176,5 +176,44 @@ func TestITunesRegroupApply_DeleteGuardFailsClosedOnReadError(t *testing.T) {
 	// Fail-closed: the loser must survive because its emptiness could not be verified.
 	if b, _ := s.GetBookByID(loser); b == nil {
 		t.Fatalf("loser %s deleted despite ext-id read error (guard failed open)", loser)
+	}
+}
+
+// The delete guard must also refuse a projected-empty book a user still has
+// listening state on: the delete is a hard delete and nothing carries that
+// state onto the regrouped book.
+func TestITunesRegroupApply_DeleteGuardSkipsBookHoldingUserState(t *testing.T) {
+	s := regroupStore(t)
+	b1 := seedBook(t, s, "Frag A")
+	b2 := seedBook(t, s, "Frag B")
+	seedFilePID(t, s, b1, "p1")
+	seedFilePID(t, s, b2, "p2")
+	u, err := s.CreateUser("reader", "reader@example.com", "argon2id", "x", []string{"user"}, "active")
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	for _, id := range []string{b1, b2} {
+		if err := s.SetUserBookState(&database.UserBookState{UserID: u.ID, BookID: id, Status: database.UserBookStatusInProgress, ProgressPct: 30}); err != nil {
+			t.Fatalf("SetUserBookState: %v", err)
+		}
+	}
+
+	p := &Plugin{}
+	rep := &fakeReporter{}
+	groups := []itunesservice.HealGroup{{Title: "Merged Book", PIDs: []string{"p1", "p2"}}}
+	snap, err := p.buildRegroupSnapshot(context.Background(), s, rgRoot, rep)
+	if err != nil {
+		t.Fatalf("buildRegroupSnapshot: %v", err)
+	}
+	plan := itunesservice.PlanRegroup(groups, snap)
+	if len(plan.DeleteBooks) != 1 {
+		t.Fatalf("plan deletes=%d, want 1", len(plan.DeleteBooks))
+	}
+	if err := p.applyRegroupPlan(context.Background(), s, plan, rgRoot, rep); err != nil {
+		t.Fatalf("applyRegroupPlan: %v", err)
+	}
+	loser := plan.DeleteBooks[0]
+	if b, _ := s.GetBookByID(loser); b == nil {
+		t.Fatalf("book %s holding a user's listening state was deleted", loser)
 	}
 }

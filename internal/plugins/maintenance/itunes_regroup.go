@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_regroup.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-10-05
 
@@ -23,6 +23,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
@@ -228,6 +229,22 @@ func regroupCheckFailedBooks(snap itunesservice.Snapshot) []string {
 	}
 	sort.Strings(ids)
 	return ids
+}
+
+// regroupUserStateReader is where the empty-book delete reads users'
+// listening state: the wired merge user-state store, else the run's store
+// when it can answer (a bare PebbleStore in tests). nil fails the delete
+// closed.
+func (p *Plugin) regroupUserStateReader(store itunesRegroupStore) merge.UserStateReader {
+	if p.deps != nil {
+		if um := p.deps.MergeUserStateStore(); um != nil {
+			return um
+		}
+	}
+	if r, ok := database.AsCapability[merge.UserStateReader](store); ok {
+		return r
+	}
+	return nil
 }
 
 // regroupRunStore is the run's store: OpsStore plus the tag reads the
@@ -696,6 +713,7 @@ func (p *Plugin) applyRegroupPlan(ctx context.Context, store itunesRegroupStore,
 	touched := make(map[string]bool)
 	var c regroupApplyCounts
 	var deleted, deleteSkipped int
+	var stateProbe *merge.UserStateProbe
 
 	for gi, a := range plan.Groups {
 		if ctx.Err() != nil {
@@ -728,6 +746,28 @@ func (p *Plugin) applyRegroupPlan(ctx context.Context, store itunesRegroupStore,
 		if len(files) != 0 || len(exts) != 0 {
 			deleteSkipped++
 			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: %d files, %d ext-ids remain", id, len(files), len(exts)))
+			continue
+		}
+		// Nor one a user still has listening state on: the delete is a hard
+		// delete and nothing carries that state onto the regrouped book.
+		// Users are listed once per pass, through the merge user-state store
+		// (OpsStore is at its interface cap); fail closed like the reads above.
+		if stateProbe == nil {
+			var probe *merge.UserStateProbe
+			perr := errors.New("no user-state store wired")
+			if um := p.regroupUserStateReader(store); um != nil {
+				probe, perr = merge.NewUserStateProbe(um)
+			}
+			if perr != nil {
+				deleteSkipped++
+				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: could not list users to check their listening state: %v", id, perr))
+				continue
+			}
+			stateProbe = probe
+		}
+		if has, herr := stateProbe.Has(id); herr != nil || has {
+			deleteSkipped++
+			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: a user still has listening state on it (read error: %v)", id, herr))
 			continue
 		}
 		if err := store.DeleteBook(id); err != nil {

@@ -1,7 +1,7 @@
 // file: internal/reconcile/cleanup_owns_files_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0e41a60d-a159-4c2a-9e4d-ff27e052715f
-// last-edited: 2026-09-19
+// last-edited: 2026-10-05
 
 package reconcile
 
@@ -44,5 +44,36 @@ func TestCleanupDuplicateVersionGroups_DuplicateOwningFilesIsKept(t *testing.T) 
 	}
 	if _, ok := s.byID["02"]; !ok {
 		t.Error("duplicate owning a book_file row was deleted")
+	}
+}
+
+// A duplicate a user still has listening state on is kept too: the cleanup
+// hard-deletes it with no merge follow, so the state would be lost.
+func TestCleanupDuplicateVersionGroups_DuplicateHoldingUserStateIsKept(t *testing.T) {
+	root := t.TempDir()
+	dupFile := filepath.Join(root, "b.m4b")
+	if err := os.WriteFile(dupFile, []byte("audio"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := newFakeStore()
+	vg := "vg-1"
+	addCore(s, database.BookCore{ID: "01", Title: "t", FilePath: filepath.Join(root, "a.m4b"), VersionGroupID: &vg})
+	addCore(s, database.BookCore{ID: "02", Title: "t", FilePath: dupFile, VersionGroupID: &vg})
+	addCore(s, database.BookCore{ID: "03", Title: "t", FilePath: "/src/a.m4b", VersionGroupID: &vg})
+	s.users = []database.User{{ID: "u1"}}
+	s.states["02"] = &database.UserBookState{UserID: "u1", BookID: "02", Status: database.UserBookStatusInProgress, ProgressPct: 30}
+
+	res, err := CleanupDuplicateVersionGroups(s, root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.DuplicatesRemoved != 0 || res.FilesDeleted != 0 || res.SkippedHasUserState != 1 {
+		t.Errorf("result = %+v, want DuplicatesRemoved=0 FilesDeleted=0 SkippedHasUserState=1", res)
+	}
+	if _, err := os.Stat(dupFile); err != nil {
+		t.Errorf("duplicate's file removed from disk: %v", err)
+	}
+	if _, ok := s.byID["02"]; !ok {
+		t.Error("duplicate holding user state was deleted")
 	}
 }

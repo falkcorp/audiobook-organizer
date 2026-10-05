@@ -416,6 +416,14 @@ func (svc *AudiobookService) PurgeSoftDeletedBooks(ctx context.Context, deleteFi
 		Attempted: len(books),
 		Errors:    []string{},
 	}
+	// Users are listed once per pass, not once per book (step 0b).
+	var stateProbe *merge.UserStateProbe
+	if len(books) > 0 {
+		stateProbe, err = merge.NewUserStateProbe(svc.store)
+		if err != nil {
+			return nil, fmt.Errorf("purge refused: cannot list users to check their listening state: %w", err)
+		}
+	}
 
 	for _, book := range books {
 		// Step 0: refuse a book that still owns book_file rows — BEFORE any
@@ -454,7 +462,7 @@ func (svc *AudiobookService) PurgeSoftDeletedBooks(ctx context.Context, deleteFi
 		// book (the move failed with no repair record, or a pending repair
 		// still holds it), and the hard delete would drop it. Fail closed: an
 		// unreadable answer is not proof there is none.
-		hasState, stateErr := merge.BookHasCarryableUserState(svc.store, book.ID)
+		hasState, stateErr := stateProbe.Has(book.ID)
 		if stateErr != nil {
 			result.Errors = append(result.Errors, fmt.Sprintf("%s: not purged: cannot read users' listening state on it: %v", book.ID, stateErr))
 			continue
