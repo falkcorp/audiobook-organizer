@@ -1,7 +1,7 @@
 // file: internal/merge/follow_journaled.go
-// version: 1.3.2
+// version: 1.4.0
 // guid: 6a7e0c1a-cb17-41e5-bf0f-dd8903735f64
-// last-edited: 2026-09-26
+// last-edited: 2026-10-05
 
 package merge
 
@@ -201,6 +201,49 @@ func BookHasUserProgress(db UserProgressMerger, bookID string) (bool, error) {
 		return false, err
 	}
 	return len(states) > 0 || len(positions) > 0, nil
+}
+
+// UserStateReader is what reading every user's listening state on one book
+// needs.
+type UserStateReader interface {
+	ListUsers() ([]database.User, error)
+	GetUserBookState(userID, bookID string) (*database.UserBookState, error)
+	ListUserPositionsForBook(userID, bookID string) ([]database.UserPosition, error)
+}
+
+// BookHasCarryableUserState reports whether any user still has listening
+// state on bookID that a merge follow would carry: a stored position, or a
+// book state with a status, progress, listened time, segment or hide flag
+// (hasCarryableState). Unlike BookHasUserProgress it does not count the
+// drained row a completed follow leaves on a merge loser, so a loser whose
+// state moved reads false. An error means the answer is unknown.
+//
+// The purge (audiobooks.PurgeSoftDeletedBooks) refuses a book this reports
+// true for: hard-deleting it would drop state that never reached a live
+// book (a follow that failed with no repair record, a follow still pending
+// repair).
+func BookHasCarryableUserState(db UserStateReader, bookID string) (bool, error) {
+	users, err := db.ListUsers()
+	if err != nil {
+		return false, fmt.Errorf("list users: %w", err)
+	}
+	for _, u := range users {
+		if u.ID == "" {
+			continue
+		}
+		st, err := db.GetUserBookState(u.ID, bookID)
+		if err != nil {
+			return false, fmt.Errorf("read progress state user=%s book=%s: %w", u.ID, bookID, err)
+		}
+		pos, err := db.ListUserPositionsForBook(u.ID, bookID)
+		if err != nil {
+			return false, fmt.Errorf("read positions user=%s book=%s: %w", u.ID, bookID, err)
+		}
+		if hasCarryableState(st, pos) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // logSkippedFollow logs each user skipped by a journaled follow.

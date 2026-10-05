@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_ops.go
-// version: 2.22.0
+// version: 2.23.0
 // guid: 8b3e1f92-d4c7-4a6e-b5f0-2a7c9d1e3f45
-// last-edited: 2026-09-28
+// last-edited: 2026-10-05
 
 // duplicates_ops registers v2 OperationDefs for the 8 async dedup operations
 // that previously used s.queue.Enqueue.  HTTP handlers in duplicates_handlers.go
@@ -28,6 +28,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -192,11 +193,22 @@ func (s *Server) RegisterBookMergeOp(reg *opsregistry.Registry) error {
 				// are skipped in that mode (tests / iTunes write-back disabled).
 				ms = merge.NewService(store)
 			}
-			if err := applyBookMergeReroute(ms, p.KeepID, p.MergeIDs); err != nil {
+			mergeRes, err := applyBookMergeReroute(ms, p.KeepID, p.MergeIDs)
+			if err != nil {
 				op.SetStatus("failed")
 				logging.Error(ctx, "book merge failed", "err", err)
 				return err
 			}
+			// The async twin of the link endpoints' response: which book holds
+			// the group's flag and the losers' user state, and whether
+			// Audiobookshelf lists it. Logged on the op and in the activity
+			// line, since this op has no response body.
+			out := mergeRes.FlagOutcome()
+			_ = reporter.Log(slog.LevelInfo, "book merge outcome",
+				slog.String("primary_id", out.PrimaryID),
+				slog.String("group_primary_id", out.GroupPrimaryID),
+				slog.String("hidden_from_abs", out.HiddenFromABS),
+				slog.String("state_holder_id", out.StateHolderID))
 			// Service takes no ProgressReporter; emit a final 100% so the op UI
 			// completes cleanly.
 			_ = progress.UpdateProgress(len(p.MergeIDs), len(p.MergeIDs), "Book merge complete")
@@ -210,8 +222,14 @@ func (s *Server) RegisterBookMergeOp(reg *opsregistry.Registry) error {
 
 			if s.activityWriter != nil && opID != "" {
 				activity.FlushOperation(s.activityWriter, opID)
-				activity.EmitInfo(s.activityWriter, opID, "dedup.book-merge", "dedup",
-					fmt.Sprintf("Book merge completed: merged %d books into %s", len(p.MergeIDs), p.KeepID),
+				msg := fmt.Sprintf("Book merge completed: merged %d books into %s", len(p.MergeIDs), p.KeepID)
+				if out.GroupPrimaryID != "" {
+					msg += fmt.Sprintf("; %s holds the group's primary flag and the listening state", out.GroupPrimaryID)
+				}
+				if out.HiddenFromABS != "" {
+					msg += fmt.Sprintf("; Audiobookshelf will not list it (%s)", out.HiddenFromABS)
+				}
+				activity.EmitInfo(s.activityWriter, opID, "dedup.book-merge", "dedup", msg,
 					activity.AlwaysShow)
 			}
 			return nil
@@ -239,7 +257,9 @@ func (s *Server) RegisterBookMergeOp(reg *opsregistry.Registry) error {
 //
 // Extracted from the op Run body so the reroute (soft-delete + external-ID
 // reassignment, NOT hard delete) is unit-testable on a real store.
-func applyBookMergeReroute(ms *merge.Service, keepID string, mergeIDs []string) error {
+//
+// It returns the merge's Result (nil when there was nothing to merge).
+func applyBookMergeReroute(ms *merge.Service, keepID string, mergeIDs []string) (*merge.Result, error) {
 	// Build the loser set once, excluding the keep book and de-duping. Callers
 	// (the handler binds keep_id/merge_ids without validation) may include the
 	// keep book in mergeIDs; legacy dedup.MergeBooks guarded this with a
@@ -258,13 +278,12 @@ func applyBookMergeReroute(ms *merge.Service, keepID string, mergeIDs []string) 
 		losers = append(losers, mid)
 	}
 	if len(losers) == 0 {
-		return nil // nothing to merge (every id was the keep book / duplicate)
+		return nil, nil // nothing to merge (every id was the keep book / duplicate)
 	}
 
 	// Service takes ALL ids (losers + winner) and the winner id.
-	_, err := ms.MergeBooksWithOptions(append(append([]string{}, losers...), keepID), keepID,
+	return ms.MergeBooksWithOptions(append(append([]string{}, losers...), keepID), keepID,
 		merge.MergeOptions{CarryITunesFields: true})
-	return err
 }
 
 // RegisterAuthorDedupScanOp registers the "dedup.author-scan" v2 OperationDef.

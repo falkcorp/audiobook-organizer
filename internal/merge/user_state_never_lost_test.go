@@ -1,7 +1,7 @@
 // file: internal/merge/user_state_never_lost_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5e9a3c17-2b8d-4f60-a4e7-1c6d8b0f3a92
-// last-edited: 2026-09-26
+// last-edited: 2026-10-05
 
 package merge
 
@@ -328,56 +328,29 @@ func TestRepairMergedUserState_ApplyMovesState(t *testing.T) {
 	require.Zero(t, again.BookmarksOwed)
 }
 
-// --- survivor preference ---
+// --- survivor choice ignores user state ---
 
-func prefBooks() []*database.Book {
-	organized := "organized"
-	return []*database.Book{
-		{ID: "a", Format: "m4b", FilePath: "/lib/a.m4b", LibraryState: &organized},
-		{ID: "b", Format: "mp3", FilePath: "/lib/b.mp3", LibraryState: &organized},
-	}
-}
-
-func TestPreferUserStateSurvivor(t *testing.T) {
-	files := map[string][]database.BookFile{}
-	t.Run("state on the would-be loser flips the survivor", func(t *testing.T) {
-		books := prefBooks()
-		elected := ElectPrimary(books, files)
-		require.Equal(t, 0, elected, "m4b wins without state")
-		require.Equal(t, 1, PreferUserStateSurvivor(books, files, map[string]bool{"b": true}, elected))
-	})
-	t.Run("several stateful candidates keep the current rule", func(t *testing.T) {
-		books := prefBooks()
-		require.Equal(t, 0, PreferUserStateSurvivor(books, files, map[string]bool{"a": true, "b": true}, 0))
-	})
-	t.Run("hard rule: an iTunes ghost never beats a library book", func(t *testing.T) {
-		books := prefBooks()
-		books[1].FilePath = "/Music/iTunes/iTunes Media/Audiobooks/b.mp3"
-		require.Equal(t, 0, PreferUserStateSurvivor(books, files, map[string]bool{"b": true}, 0))
-	})
-	t.Run("hard rule: organized beats not organized", func(t *testing.T) {
-		books := prefBooks()
-		imported := "imported"
-		books[1].LibraryState = &imported
-		require.Equal(t, 0, PreferUserStateSurvivor(books, files, map[string]bool{"b": true}, 0))
-	})
-	t.Run("hard rule: an audio route beats none", func(t *testing.T) {
-		books := prefBooks()
-		books[1].FilePath = ""
-		require.Equal(t, 0, PreferUserStateSurvivor(books, files, map[string]bool{"b": true}, 0))
-	})
-}
-
-func TestMergeBooks_UserStateSurvivor(t *testing.T) {
-	t.Run("automatic election keeps the book the user listens to", func(t *testing.T) {
+// Owner decision 2026-10-05 13:00: audio quality always picks the merge's
+// keeper, and the progress moves to the copy holding the flag. A
+// lower-quality copy a user listened to is retired like any other loser.
+func TestMergeBooks_QualityPicksSurvivorOverUserState(t *testing.T) {
+	t.Run("survivor holds the flag: the state follows it", func(t *testing.T) {
 		store := setupTestStore(t)
 		user := seedSyncUser(t, store)
-		winnerID, loserID := seedSyncBooks(t, store) // m4b vs mp3: m4b elected without state
+		winnerID, loserID := seedSyncBooks(t, store) // m4b vs mp3
 		seedProgress(t, store, user.ID, loserID, 30)
 		res, err := NewService(store).MergeBooks([]string{winnerID, loserID}, "")
 		require.NoError(t, err)
-		require.Equal(t, loserID, res.PrimaryID)
-		require.Equal(t, winnerID, res.ElectedWithoutUserState, "the flip is visible in the output")
+		require.Equal(t, winnerID, res.PrimaryID, "the m4b survives although the mp3 holds the progress")
+		require.Empty(t, res.GroupPrimaryID)
+		require.Empty(t, res.StateHolderID)
+		got, err := store.GetUserBookState(user.ID, winnerID)
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		require.Equal(t, 30, got.ProgressPct, "the progress moved onto the survivor")
+		has, err := BookHasCarryableUserState(store, loserID)
+		require.NoError(t, err)
+		require.False(t, has, "nothing is left on the retired copy")
 	})
 	t.Run("an explicit keep id is respected", func(t *testing.T) {
 		store := setupTestStore(t)
@@ -387,10 +360,9 @@ func TestMergeBooks_UserStateSurvivor(t *testing.T) {
 		res, err := NewService(store).MergeBooks([]string{winnerID, loserID}, winnerID)
 		require.NoError(t, err)
 		require.Equal(t, winnerID, res.PrimaryID)
-		require.Empty(t, res.ElectedWithoutUserState)
 		got, err := store.GetUserBookState(user.ID, winnerID)
 		require.NoError(t, err)
-		require.Equal(t, 30, got.ProgressPct, "the state move carries it instead")
+		require.Equal(t, 30, got.ProgressPct, "the state move carries it")
 	})
 }
 

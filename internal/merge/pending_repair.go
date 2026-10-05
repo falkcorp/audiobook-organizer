@@ -1,7 +1,7 @@
 // file: internal/merge/pending_repair.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 4c8a2e71-9f3d-4b06-8e5a-1d7c3b9f2e84
-// last-edited: 2026-09-26
+// last-edited: 2026-10-05
 
 package merge
 
@@ -143,9 +143,44 @@ var ErrNoLiveSurvivor = errors.New("merge: no live survivor")
 // ResolveSurvivor follows a book forward to the live book that now holds it:
 // the sync redirect chain first (the identity a client resolves), then
 // MergedIntoBookID. Returns bookID itself when it is live. Capped at 10 hops.
+//
+// The sync redirect leads to where a retired book's USER STATE went, which
+// since 2026-10-05 is the merge group's flag holder, not necessarily the
+// merge's survivor (MergeBooks item 7). That is the right answer for the
+// user-state readers (the pending-repair sweep, repair-merged-user-state)
+// and for Audiobookshelf. A reader asking where the book's WORK went (which
+// book kept the audio) wants ResolveMergeSurvivor.
 func ResolveSurvivor(db interface {
 	GetBookByID(id string) (*database.Book, error)
 }, bookID string) (string, error) {
+	return resolveForward(db, bookID, nil)
+}
+
+// ResolveMergeSurvivor is ResolveSurvivor for a reader asking which live book
+// a retired book's work went into: the merge's survivor, which audio quality
+// picked. A sync-redirect hop from a loser whose state a merge sent to its
+// group's flag holder (follows, from FlagHolderFollows) is taken to that
+// merge's survivor instead, and the chain goes on from there. The redirect
+// itself is not compared with the flag holder: ResolveSyncItem returns the
+// END of the redirect chain, which is past the flag holder once that book is
+// merged again. FlagHolderFollows already leaves out a follow an undo
+// reversed (and the survivor refollow such an undo writes names the
+// survivor, not the flag holder), so an entry there is a live follow. A hop
+// the follows do not name is taken as ResolveSurvivor takes it.
+func ResolveMergeSurvivor(db interface {
+	GetBookByID(id string) (*database.Book, error)
+}, bookID string, follows map[string]FlagFollow) (string, error) {
+	return resolveForward(db, bookID, func(cur, next string) string {
+		if ff, ok := follows[cur]; ok && ff.SurvivorID != "" && ff.SurvivorID != cur {
+			return ff.SurvivorID
+		}
+		return next
+	})
+}
+
+func resolveForward(db interface {
+	GetBookByID(id string) (*database.Book, error)
+}, bookID string, redirectHop func(cur, next string) string) (string, error) {
 	ids := database.AsSyncIdentityStore(db)
 	cur := bookID
 	seen := map[string]bool{}
@@ -172,6 +207,9 @@ func ResolveSurvivor(db interface {
 				}
 				if item != nil && item.CurrentBookID != "" && item.CurrentBookID != cur {
 					next = item.CurrentBookID
+					if redirectHop != nil {
+						next = redirectHop(cur, next)
+					}
 				}
 			}
 		}

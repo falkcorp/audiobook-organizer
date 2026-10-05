@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.30.0
+// version: 1.31.0
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
 // last-edited: 2026-10-05
 
@@ -783,6 +783,27 @@ type fragLibrary struct {
 	// book that is not one agrees (S3, 2026-10-05: 13 such books were second
 	// copies of an existing book).
 	assembled map[string]bool
+	// flagFollows maps each dedup loser whose state a merge sent to its
+	// group's flag holder (not the survivor) to that merge's survivor
+	// (merge.FlagHolderFollows), read once per plan on first use by
+	// survivorOf; flagFollowsLoaded says it was read.
+	flagFollows       map[string]merge.FlagFollow
+	flagFollowsLoaded bool
+}
+
+// mergeFlagFollows is lib.flagFollows, read from the sibling-move journals
+// on first use. An unreadable journal list fails the caller: without it a
+// dedup loser's redirect to a flag holder would be read as its survivor.
+func (lib *fragLibrary) mergeFlagFollows(store OpsStore) (map[string]merge.FlagFollow, error) {
+	if lib.flagFollowsLoaded {
+		return lib.flagFollows, nil
+	}
+	follows, err := merge.FlagHolderFollowsFrom(store)
+	if err != nil {
+		return nil, err
+	}
+	lib.flagFollows, lib.flagFollowsLoaded = follows, true
+	return follows, nil
 }
 
 // folderNamesAnyAuthor returns the author the folder is named for, among the
@@ -1730,7 +1751,7 @@ func (f *fragmentFixer) recordDone(store OpsStore, lib *fragLibrary, pj *fragPla
 		if t, ok := resolved[id]; ok {
 			return t, nil
 		}
-		t, viaRedirect, err := survivorOf(store, id)
+		t, viaRedirect, err := survivorOf(store, lib, id)
 		if err != nil {
 			return "", err
 		}
@@ -1877,22 +1898,34 @@ func hashTwinOn(lib *fragLibrary, from, fid, to string) bool {
 // redirect (a dedup loser). The evidence is what a merge leaves on the
 // record:
 //   - merged_into_book_id (every retireInto, a combine): followed as
-//     merge.ResolveSurvivor follows it. Undo restores the column, so it is
-//     never stale;
+//     merge.ResolveMergeSurvivor follows it. Undo restores the column, so it
+//     is never stale;
 //   - otherwise the sync redirect merge.Service.MergeBooks records from a
-//     loser to its winner (since 2026-10-04 for every loser; before, only
-//     for one a client had seen), trusted only in MergeBooks's loser shape:
-//     id is explicitly non-primary in the version group of the book the
-//     redirect leads to, or of a book there that merged_into leads on from.
-//     A dedup undo (UnmergeAuto) puts the loser's pre-merge row back and
-//     does not clear the redirect, so a redirect alone may be stale.
+//     loser (since 2026-10-04 for every loser; before, only for one a client
+//     had seen), trusted only in MergeBooks's loser shape: id is explicitly
+//     non-primary in the version group of the book it resolves to, or of a
+//     book there that merged_into leads on from. A dedup undo (UnmergeAuto)
+//     puts the loser's pre-merge row back and does not clear the redirect,
+//     so a redirect alone may be stale.
+//
+// The redirect leads to where the loser's USER STATE went, which since
+// 2026-10-05 is the merged group's flag holder when that is not the
+// survivor (an organized sibling or group member holds the flag of an
+// unorganized survivor). The run finishes into the SURVIVOR, the book audio
+// quality picked (owner, 2026-10-05), so that hop is corrected to the merge's
+// survivor from the sibling-move journal (merge.ResolveMergeSurvivor with
+// lib's flag follows) rather than read as the survivor.
 //
 // A version group's live incumbent alone is no evidence (review 9): the
 // round-9 fallback read a survivor deleted outright as merged into the
 // group's primary, offered finishing into it, and that cleared the hold
 // with 5 planned files left on the deleted survivor.
-func survivorOf(store OpsStore, id string) (t string, viaRedirect bool, err error) {
-	t, err = merge.ResolveSurvivor(store, id)
+func survivorOf(store OpsStore, lib *fragLibrary, id string) (t string, viaRedirect bool, err error) {
+	follows, err := lib.mergeFlagFollows(store)
+	if err != nil {
+		return "", false, fmt.Errorf("read merge flag follows: %w", err)
+	}
+	t, err = merge.ResolveMergeSurvivor(store, id, follows)
 	switch {
 	case errors.Is(err, merge.ErrNoLiveSurvivor):
 		return "", false, nil
@@ -2429,7 +2462,7 @@ func (f *fragmentFixer) replanCarry(store OpsStore, lib *fragLibrary, planned re
 		if !ok || !fb.SoftDeleted {
 			return changedRow(planned, fmt.Sprintf("book %s, which holds the files, is not retired any more", c.From)), nil
 		}
-		t, _, err := survivorOf(store, c.From)
+		t, _, err := survivorOf(store, lib, c.From)
 		if err != nil {
 			return repairs.Row{}, err
 		}

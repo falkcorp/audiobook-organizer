@@ -1,5 +1,5 @@
 // file: internal/merge/sibling_followups_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3e8c5a71-0d2b-4f69-9a14-7b6e2c8d1f53
 // last-edited: 2026-10-05
 
@@ -622,8 +622,7 @@ func TestMergeBooks_UserStateFollowsFlagHolder(t *testing.T) {
 	setup := func(t *testing.T) (*vptest.Fixture, *Service, *database.User, string, string, string, *Result) {
 		f := siblingFixture(t)
 		k := f.Book(t, vptest.Spec{ID: "k", Group: "H", Primary: "true", State: "imported"})
-		// No audio route, so the user state on l does not make it the
-		// survivor (PreferUserStateSurvivor keeps a book with audio).
+		// No audio route, so k (which has one) is the survivor.
 		l := f.Book(t, vptest.Spec{ID: "l", Group: "G", Primary: "false", State: "imported", NoFile: true})
 		ls := f.Book(t, vptest.Spec{ID: "ls", Group: "G", Primary: "true"})
 		user := seedSyncUser(t, f.S)

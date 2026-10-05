@@ -1,5 +1,5 @@
 // file: internal/server/handlers/duplicates/sibling_undo_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: cefc1ee2-288b-4ccf-a693-5940c218a848
 // last-edited: 2026-10-05
 
@@ -109,4 +109,36 @@ func TestListSiblingMoveJournals_LimitCap(t *testing.T) {
 	require.Equal(t, 50, count("/merge/sibling-journal?limit=0"))
 	require.Equal(t, 7, count("/merge/sibling-journal?limit=7"))
 	require.Equal(t, 500, count("/merge/sibling-journal?limit=100000"))
+}
+
+// The link endpoint reports which book holds the merged group's flag and the
+// losers' user state, and whether Audiobookshelf lists it: always present,
+// set here because an organized sibling of the loser holds the flag of an
+// unorganized survivor.
+func TestLinkBookDuplicatesAsVersions_ReportsFlagAndStateHolder(t *testing.T) {
+	f := vptest.New(t)
+	prev := config.AppConfig.RootDir
+	config.AppConfig.RootDir = f.Root
+	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	k := f.Book(t, vptest.Spec{ID: "k", Group: "H", Primary: "true", State: "imported"})
+	l := f.Book(t, vptest.Spec{ID: "l", Group: "G", Primary: "false", State: "imported", NoFile: true})
+	ls := f.Book(t, vptest.Spec{ID: "ls", Group: "G", Primary: "true"})
+
+	ms := merge.NewService(f.S)
+	h := duplicates.New(f.S, nil, nil, nil, nil,
+		func() duplicates.MergeService { return ms }, nil, nil, nil, nil)
+	w := doReq(t, h.LinkBookDuplicatesAsVersions, http.MethodPost, "/audiobooks/duplicates/link",
+		map[string]any{"book_ids": []string{l, k}})
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var env struct {
+		Data map[string]any `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &env), w.Body.String())
+	require.Equal(t, k, env.Data["primary_id"])
+	require.Equal(t, ls, env.Data["group_primary_id"])
+	require.Equal(t, ls, env.Data["state_holder_id"])
+	hidden, ok := env.Data["hidden_from_abs"]
+	require.True(t, ok, "hidden_from_abs is always reported")
+	require.Equal(t, "", hidden)
+	require.NotContains(t, env.Data, "elected_without_user_state", "the user-state survivor preference is gone")
 }

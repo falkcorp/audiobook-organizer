@@ -1,7 +1,7 @@
 // file: internal/scheduler/extra_ops.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: a9b8c7d6-e5f4-3210-fedc-ba9876543210
-// last-edited: 2026-10-02
+// last-edited: 2026-10-05
 
 // extra_ops registers OperationDefs for 13 scheduler tasks that previously
 // used the legacy triggerOperation / triggerOperationWithID helpers.  Each def
@@ -1044,8 +1044,8 @@ func (r *ExtraOpsRegistrar) runAutoPurgeSoftDeleted(ctx context.Context, opID st
 	// loser keeps its files for good), so they are summarized as one count per
 	// run rather than one activity line per book per run; only real errors
 	// are itemized below.
-	msg := fmt.Sprintf("Purged %d/%d soft-deleted books (%d files deleted, %d skipped: still own book_file rows, %d errors)",
-		result.Purged, result.Attempted, result.FilesDeleted, result.SkippedOwnsFiles, len(result.Errors))
+	msg := fmt.Sprintf("Purged %d/%d soft-deleted books (%d files deleted, %d skipped: still own book_file rows, %d skipped: a user still has listening state on them, %d errors)",
+		result.Purged, result.Attempted, result.FilesDeleted, result.SkippedOwnsFiles, result.SkippedHasUserState, len(result.Errors))
 	slog.Info("Auto-purge", "msg", msg)
 	activity.EmitInfo(r.Deps.ActivityWriter, opID, "purge-deleted", "purge-deleted", msg,
 		activity.TagsIf(result.Purged == 0, activity.NoOpTag)...)

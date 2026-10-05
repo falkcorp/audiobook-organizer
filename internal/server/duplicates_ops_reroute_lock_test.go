@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_ops_reroute_lock_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 511d8e1c-2f2f-49f7-a5f0-1e48bce72f0f
-// last-edited: 2026-09-14
+// last-edited: 2026-10-05
 
 // A1#10: applyBookMergeReroute used to copy the losers' iTunes stats onto the
 // keep book itself -- GetBookByID + full-row UpdateBook, outside
@@ -110,7 +110,7 @@ func TestApplyBookMergeReroute_CarryWriteFailureAbortsBeforeSoftDelete(t *testin
 	loserID := createRerouteBook(t, inner, "Loser", new(80))
 
 	store := &rerouteFaultStore{PebbleStore: inner, keepID: keepID, failKeepWrite: true}
-	err := applyBookMergeReroute(merge.NewService(store), keepID, []string{loserID})
+	_, err := applyBookMergeReroute(merge.NewService(store), keepID, []string{loserID})
 	if !errors.Is(err, errInjectedKeepWrite) {
 		t.Fatalf("applyBookMergeReroute err = %v, want the injected keep-write failure", err)
 	}
@@ -142,7 +142,7 @@ func TestApplyBookMergeReroute_ConcurrentKeepEditSurvives(t *testing.T) {
 			t.Errorf("concurrent edit: %v", err)
 		}
 	}
-	if err := applyBookMergeReroute(merge.NewService(store), keepID, []string{loserID}); err != nil {
+	if _, err := applyBookMergeReroute(merge.NewService(store), keepID, []string{loserID}); err != nil {
 		t.Fatalf("applyBookMergeReroute: %v", err)
 	}
 
@@ -167,10 +167,10 @@ func TestApplyBookMergeReroute_ConsumedLoserDoesNotCarry(t *testing.T) {
 	loserID := createRerouteBook(t, store, "Loser", new(80))
 	ms := merge.NewService(store)
 
-	if err := applyBookMergeReroute(ms, keepA, []string{loserID}); err != nil {
+	if _, err := applyBookMergeReroute(ms, keepA, []string{loserID}); err != nil {
 		t.Fatalf("first merge: %v", err)
 	}
-	err := applyBookMergeReroute(ms, keepB, []string{loserID})
+	_, err := applyBookMergeReroute(ms, keepB, []string{loserID})
 	var sd *merge.SoftDeletedInputError
 	if !errors.As(err, &sd) {
 		t.Fatalf("second merge err = %v, want SoftDeletedInputError for the consumed loser", err)
@@ -199,7 +199,7 @@ func TestApplyBookMergeReroute_ConcurrentMergesShareLoser(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			errs[i] = applyBookMergeReroute(ms, k, []string{loserID})
+			_, errs[i] = applyBookMergeReroute(ms, k, []string{loserID})
 		}()
 	}
 	close(start)

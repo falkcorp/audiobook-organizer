@@ -1,5 +1,5 @@
 // file: internal/dedup/merge_journaled.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 1d7c3e58-4a09-42b6-8f31-5c0e9b247a63
 // last-edited: 2026-10-05
 
@@ -237,9 +237,15 @@ func (de *Engine) MergeBooksJournaled(candidateID int64, bookIDs []string, keepI
 			Siblings:         sibs,
 			IntoGroupID:      result.VersionGroupID,
 		}
-		if len(sibs) > 0 {
-			entry.SiblingJournalID = result.SiblingJournalID
-		}
+		// Named on every entry whenever the merge wrote a sibling-move
+		// journal, not only on a loser some siblings left with: the journal
+		// also records each loser's user-state follow onto a flag holder that
+		// is not the survivor (a reused-group member, or a sibling that moved
+		// with ANOTHER loser), and UnmergeAuto reverses that follow through
+		// it (UndoSiblingMoveForLoser). An entry without it brought the loser
+		// back with its state left on the flag holder and its ABS id still
+		// redirected there.
+		entry.SiblingJournalID = result.SiblingJournalID
 		if _, err := de.putJournal(entry); err != nil {
 			// The merge is complete, so log rather than fail a done merge.
 			// The provisional entry stands and UnmergeAuto refuses it (it
@@ -287,13 +293,10 @@ func (de *Engine) predictPrimary(ids []string) (string, error) {
 		books = append(books, book)
 		filesByID[id] = files
 	}
+	// The same election MergeBooks makes: audio quality alone (owner
+	// decision 2026-10-05 13:00; which copy a user listened to plays no part,
+	// the state follows the flag holder).
 	if best := merge.ElectPrimary(books, filesByID); best >= 0 {
-		// Same user-state preference MergeBooks applies to an automatic
-		// election, so the prediction names the book it will keep. An
-		// unreadable answer keeps the plain election, as MergeBooks does.
-		if stateful, err := merge.BooksWithClientVisibleState(de.bookStore, ids); err == nil {
-			best = merge.PreferUserStateSurvivor(books, filesByID, stateful, best)
-		}
 		return books[best].ID, nil
 	}
 	// -1 means every participant is soft-deleted, so MergeBooks is about to

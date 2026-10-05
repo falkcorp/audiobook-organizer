@@ -1,11 +1,11 @@
 <!-- file: docs/executive-summaries/2026-10-05-linking-versions-brings-the-whole-family-executive-summary.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 0b6f6f3e-7a52-4c1b-9d0e-5e2c8a41d7b9 -->
 <!-- last-edited: 2026-10-05 -->
 
 # Linking versions brings the whole family
 
-PRs: [#3758](https://github.com/falkcorp/audiobook-organizer/pull/3758) (follow-up to #3756), and a follow-up that makes undo safe
+PRs: [#3758](https://github.com/falkcorp/audiobook-organizer/pull/3758) (follow-up to #3756), a follow-up that makes undo safe, [#3762](https://github.com/falkcorp/audiobook-organizer/pull/3762), and its review follow-up
 
 ## Executive Summary
 
@@ -34,9 +34,11 @@ PRs: [#3758](https://github.com/falkcorp/audiobook-organizer/pull/3758) (follow-
   been fully scanned yet, the merge is refused and nothing changes. This
   matters because an iTunes original usually sits in the same family as its
   organized copy, and that copy is a common book to merge away.
-- **Which copy is kept has not changed.** Sound quality still decides which
-  copy a merge keeps. A better-sounding copy is never thrown away just
-  because a worse one has already been filed into the library.
+- **Sound quality alone decides which copy is kept.** A better-sounding copy
+  is never thrown away because a worse one is already filed into the library.
+  Since the owner's decision at 13:00 on 5 October 2026, it is also never
+  thrown away because someone has listened to the worse one. Their progress
+  moves to the version Audiobookshelf shows.
 - **The family's main version stays visible.** If the kept book is not yet
   filed into the library but another version in the family is, that version
   becomes the main version, so the title stays listed in Audiobookshelf. The
@@ -44,11 +46,22 @@ PRs: [#3758](https://github.com/falkcorp/audiobook-organizer/pull/3758) (follow-
   still wins.
 - **iTunes comes first.** If the kept book is in iTunes, it stays the main
   version so its iTunes track is not removed. If it is not filed into the
-  library yet, Audiobookshelf will not show the title. The merge records
-  each such case so they can be listed.
+  library yet, Audiobookshelf will not show the title.
+- **Every merge says whether Audiobookshelf will show the title.** Each merge
+  reports which version is the main one and which holds the listening
+  progress. When Audiobookshelf will not list the title, it also gives the
+  reason: an iTunes book kept, no filed copy, a main version picked by hand
+  that is not filed, or a quarantined copy. Every merge button and repair now
+  reports this, not only one of them.
 - **Listening progress follows the visible version.** Progress, read status
   and the Audiobookshelf link from the merged-away book go to the version
-  Audiobookshelf shows. An undo reverses this too.
+  Audiobookshelf shows. Every undo reverses this, including the undo of an
+  automatic merge. Undoing a whole family move and then undoing the automatic
+  merge also gives the listener their progress back.
+- **Progress is never deleted with a retired book.** If the progress could not
+  be moved at merge time, the book stays in the trash and is not
+  permanently deleted. Before this, one rare failure moved nothing and left
+  no record, and the nightly purge then deleted the progress for good.
 - **Deleted versions come back to the right family.** A version that was in
   the trash when its family was merged away now comes back into the merged
   family when it is restored, not into the old family that no longer has
@@ -100,3 +113,45 @@ undo.
 back. A finished undo is refused, and so is one where a newer merge holds the
 same version. The undo of an automatic merge is refused the second time as
 well.
+
+## Listening progress lost at the purge
+
+**What it was.** A merge moves a listener's progress to the version
+Audiobookshelf shows, writing it down first so an undo can reverse it. If that
+note could not be saved, the move stopped before anything moved and before the
+usual safety record was written.
+
+**Why it mattered.** The progress stayed on the retired book. Weeks later the
+nightly purge permanently deleted that book, and the progress with it.
+
+**The fix.** If the note cannot be saved, the progress is now moved anyway, with
+its own safety record. Separately, the purge now refuses any retired book that
+still holds someone's progress and lists it instead. Ordinary merged-away books,
+whose progress has already moved, still purge.
+
+## Undo that left progress on the wrong book
+
+**What it was.** Some undo paths did not have the information they needed to
+return a listener's progress. Undoing an automatic merge could not find its
+record when the version holding the progress was already in the family, or
+came in with a different book. Undoing a whole family move put progress back on
+the kept book without writing that down. And a failed undo could not be retried.
+
+**Why it mattered.** The restored book came back with no progress, and the
+listener's Audiobookshelf link still pointed at another version.
+
+**The fix.** Every such move is now recorded, every undo can find its record,
+and an undo that fails part way finishes when it is run again.
+
+## A repair that finished into the wrong book
+
+**What it was.** The repair that rebuilds books from loose chapter files
+follows a merged-away book to the book it went into. It did this using the
+Audiobookshelf link, which now leads to the visible version rather than the
+kept one.
+
+**Why it mattered.** The repair would have moved chapters onto a version the
+owner did not choose to keep.
+
+**The fix.** The repair now reads the merge's own record to find the kept book.
+
