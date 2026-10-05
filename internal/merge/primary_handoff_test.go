@@ -1,23 +1,26 @@
 // file: internal/merge/primary_handoff_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4c1e8b27-6a9f-4d53-b0e2-7f3a5d91c846
 // last-edited: 2026-10-05
 
 package merge
 
 import (
+	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary/vptest"
 )
 
 // A loser that was its old group's primary and is pulled into the keep
 // book's group hands its old group's flag on to the sibling it leaves behind.
 // The loser's siblings do NOT follow it: a merge only moves the books it was
-// given (see the leftGroups comment in MergeBooksWithOptions).
+// given (see the resolveVersionGroup doc comment).
 //
 // Until 2026-10-05 this test merged a KEEP book that had a sibling into the
 // loser's group and asserted that outcome -- which was the bug: the keep book
@@ -148,4 +151,80 @@ func TestMergeBooks_UngroupedSurvivorJoinsLargestGroup(t *testing.T) {
 	require.Equal(t, "g-big", f.GroupOf(t, keep))
 	require.Equal(t, "g-big", f.GroupOf(t, bigSib))
 	f.RequireSinglePrimary(t, "g-big", keep)
+}
+
+// With an ungrouped survivor and two live groups of EQUAL live-member count,
+// the smallest group ID wins in either input order (resolveVersionGroup's
+// tie-break), so the outcome never depends on how the caller listed the IDs.
+func TestMergeBooks_UngroupedSurvivorTieGoesToSmallestGroupID(t *testing.T) {
+	for _, order := range [][]string{{"g2", "g1", "keep"}, {"g1", "g2", "keep"}, {"keep", "g2", "g1"}} {
+		t.Run(fmt.Sprint(order), func(t *testing.T) {
+			f := vptest.New(t)
+			prev := config.AppConfig.RootDir
+			config.AppConfig.RootDir = f.Root
+			t.Cleanup(func() { config.AppConfig.RootDir = prev })
+
+			keep := f.Book(t, vptest.Spec{ID: "keep"})
+			f.Book(t, vptest.Spec{ID: "g2", Group: "grp-2", Primary: "true"})
+			f.Book(t, vptest.Spec{ID: "g1", Group: "grp-1", Primary: "true"})
+
+			res, err := NewService(f.S).MergeBooks(order, keep)
+			require.NoError(t, err)
+			require.Equal(t, "grp-1", res.VersionGroupID, "a tie goes to the smallest group ID")
+			require.Equal(t, "grp-1", f.GroupOf(t, keep))
+			f.RequireSinglePrimary(t, "grp-1", keep)
+		})
+	}
+}
+
+// A soft-deleted loser passes the first half of the soft-deleted guard when a
+// LIVE participant shares its group, but the merge resolves to the survivor's
+// group: here survivor S is in H while live loser L and soft-deleted D are in
+// G, so D is not a replay into the resolved group and must be refused by
+// requireReplayedLosersInGroup -- before anything is written. Without that
+// check D (a book some earlier merge already retired) would be pulled into H.
+// Every input order is tried against the same store, which must be unchanged
+// after each refusal.
+func TestMergeBooks_SoftDeletedLoserNotInSurvivorGroup_Refused(t *testing.T) {
+	f := vptest.New(t)
+	prev := config.AppConfig.RootDir
+	config.AppConfig.RootDir = f.Root
+	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+
+	s := f.Book(t, vptest.Spec{ID: "s", Group: "H", Primary: "true"})
+	sSib := f.Book(t, vptest.Spec{ID: "ssib", Group: "H", Primary: "false"})
+	l := f.Book(t, vptest.Spec{ID: "l", Group: "G", Primary: "true"})
+	d := f.Book(t, vptest.Spec{ID: "d", Group: "G", Primary: "false"})
+	f.SoftDelete(t, d)
+
+	type snap struct {
+		Book  database.Book
+		Files []database.BookFile
+	}
+	snapshot := func() map[string]snap {
+		out := map[string]snap{}
+		for _, id := range []string{s, sSib, l, d} {
+			b, err := f.S.GetBookByID(id)
+			require.NoError(t, err)
+			require.NotNil(t, b, "book %s", id)
+			files, err := f.S.GetBookFiles(id)
+			require.NoError(t, err)
+			out[id] = snap{Book: *b, Files: files}
+		}
+		return out
+	}
+	before := snapshot()
+
+	svc := NewService(f.S)
+	for _, order := range [][]string{
+		{s, l, d}, {s, d, l}, {l, s, d}, {l, d, s}, {d, s, l}, {d, l, s},
+	} {
+		res, err := svc.MergeBooks(order, s)
+		require.Nil(t, res, "order %v", order)
+		var sd *SoftDeletedInputError
+		require.True(t, errors.As(err, &sd), "order %v: want SoftDeletedInputError, got %v", order, err)
+		require.Equal(t, d, sd.BookID, "order %v", order)
+		require.False(t, sd.AsPrimary, "order %v", order)
+		require.Equal(t, before, snapshot(), "order %v: a refused merge must write nothing", order)
+	}
 }

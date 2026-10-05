@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.40.0
+// version: 1.40.1
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-10-05
 
@@ -937,7 +937,8 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 //     chosen book where it is: its existing versions (an organized_source
 //     copy, a prior merge's members) stay its siblings, and the losers join
 //     them. A loser's OTHER group members do not follow it: a merge moves only
-//     the books it was given (the demotion loop below is scoped the same way),
+//     the books it was given (MergeBooksWithOptions' primary-flag demotion
+//     loop is scoped the same way),
 //     and the group a loser leaves is handed a new primary (handOffLeftGroups).
 //  2. Otherwise the live participants' group with the most live members, so
 //     the fewest books are split from their versions; a tie goes to the
