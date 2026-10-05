@@ -1,5 +1,5 @@
 # file: .github/workflows/ci.yml
-# version: 3.16.0
+# version: 3.17.0
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
 # last-edited: 2026-10-05
 
@@ -539,8 +539,13 @@ jobs:
             ${{ runner.os }}-go-1.27-
             ${{ runner.os }}-go-
 
+      # ffmpeg (ffmpeg + ffprobe) and libchromaprint-tools (fpcalc): the
+      # selected packages include internal/audiobooks, internal/organizer,
+      # internal/scanner and internal/server, whose real-audio-file tests
+      # skip when exec.LookPath cannot find these tools. Without them this job
+      # would report those tests as passing while running none of them.
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libtag1-dev
+        run: sudo apt-get update && sudo apt-get install -y libtag1-dev ffmpeg libchromaprint-tools
 
       - name: Run fixture tests without -short (shard ${{ matrix.shard }})
         run: make test-fixtures FIXTURE_SHARD=${{ matrix.shard }}

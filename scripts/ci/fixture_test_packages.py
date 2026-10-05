@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/ci/fixture_test_packages.py
-# version: 1.0.0
+# version: 1.1.0
 # guid: 92f31101-2399-4ce9-9b83-0af332666123
 # last-edited: 2026-10-05
 """List the Go packages whose tests skip under -short, for `make test-fixtures`.
@@ -14,9 +14,11 @@ can run exactly those packages WITHOUT -short.
 
 A package is selected when either:
   * one of its _test.go files calls testing.Short(), or
-  * its tests import a package whose non-test .go files call testing.Short()
-    (a fixture helper such as vptest). Helpers are found generically, so the
-    next one is picked up without editing this script.
+  * its tests import a fixture helper: a package whose non-test .go files
+    call testing.Short() (such as vptest), or a package that reaches one
+    through its non-test imports, at any depth (a wrapper around vptest is a
+    helper too). Helpers are found generically, so the next one is picked up
+    without editing this script.
 
 Discovery goes through `go list ./...`, which honors go.mod's `ignore ./web`,
 so Go files under web/node_modules are never picked up.
@@ -27,9 +29,10 @@ Usage:
 
 Shards are balanced by the per-package durations in _WEIGHTS (measured on the
 nightly full run); unknown packages weigh _DEFAULT_WEIGHT. Exits non-zero if
-nothing is selected or a shard comes out empty, so a broken discovery can never
-turn into a `go test` with no packages (which would test only the module root
-and pass).
+nothing is selected, if a known helper in _REQUIRED_HELPERS is not detected as
+one, or if a shard comes out empty, so a broken discovery can never turn into a
+`go test` with no packages (which would test only the module root and pass) or
+into a list that silently dropped every vptest-based package.
 """
 
 from __future__ import annotations
@@ -40,6 +43,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Callable, NamedTuple
 
 MODULE = "github.com/falkcorp/audiobook-organizer"
 
@@ -72,6 +76,15 @@ _WEIGHTS = {
 }
 _DEFAULT_WEIGHT = 10
 
+# Helpers that must be detected. vptest.New is the fixture the merge, undo and
+# redirect state-machine tests are built on; if the detector stops seeing it
+# (a rename of testing.Short, a refactor that moves the skip), the selected
+# list would still be non-empty -- the direct testing.Short() callers keep it
+# populated -- while every vptest-based package silently fell out of the gate.
+_REQUIRED_HELPERS = ("internal/versionprimary/vptest",)
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
 _SHORT_RE = re.compile(r"\btesting\.Short\(\)")
 
 
@@ -85,8 +98,8 @@ def _calls_short(directory: str, files: list[str]) -> bool:
     return False
 
 
-def discover() -> list[str]:
-    res = subprocess.run(["go", "list", "-json", "./..."], capture_output=True, text=True)
+def _load_packages(root: Path) -> list[dict]:
+    res = subprocess.run(["go", "list", "-json", "./..."], capture_output=True, text=True, cwd=root)
     if res.returncode != 0:
         sys.stderr.write(res.stderr)
         raise SystemExit(f"fixture_test_packages: go list failed (exit {res.returncode})")
@@ -100,19 +113,58 @@ def discover() -> list[str]:
             break
         obj, i = dec.raw_decode(text, i)
         pkgs.append(obj)
+    return pkgs
 
-    # Fixture helpers: non-test code that calls testing.Short().
-    helpers = {p["ImportPath"] for p in pkgs if _calls_short(p["Dir"], p.get("GoFiles", []))}
 
+def find_helpers(pkgs: list[dict], calls_short: Callable[[str, list[str]], bool] = _calls_short) -> set[str]:
+    """Fixture helpers: non-test code that calls testing.Short(), closed over
+    non-test Imports. A package importing a helper is itself a helper, at any
+    depth, so a wrapper around vptest (or a wrapper around that) is found."""
+    helpers = {p["ImportPath"] for p in pkgs if calls_short(p["Dir"], p.get("GoFiles", []))}
+    importers: dict[str, set[str]] = {}
+    for p in pkgs:
+        for imp in p.get("Imports", []):
+            importers.setdefault(imp, set()).add(p["ImportPath"])
+    queue = list(helpers)
+    while queue:
+        for parent in importers.get(queue.pop(), ()):
+            if parent not in helpers:
+                helpers.add(parent)
+                queue.append(parent)
+    return helpers
+
+
+def select(pkgs: list[dict], helpers: set[str], calls_short: Callable[[str, list[str]], bool] = _calls_short) -> list[str]:
     selected = []
     for p in pkgs:
         test_files = p.get("TestGoFiles", []) + p.get("XTestGoFiles", [])
         if not test_files:
             continue
         imports = set(p.get("TestImports", [])) | set(p.get("XTestImports", []))
-        if _calls_short(p["Dir"], test_files) or imports & helpers:
+        if calls_short(p["Dir"], test_files) or imports & helpers:
             selected.append(p["ImportPath"])
     return sorted(selected)
+
+
+class Discovery(NamedTuple):
+    selected: list[str]
+    helpers: set[str]
+
+
+def discover(root: Path = _REPO_ROOT) -> Discovery:
+    """Select the packages and fail closed on a discovery that is visibly broken."""
+    pkgs = _load_packages(root)
+    helpers = find_helpers(pkgs)
+    missing = [h for h in _REQUIRED_HELPERS if f"{MODULE}/{h}" not in helpers]
+    if missing:
+        raise SystemExit(
+            f"fixture_test_packages: {', '.join(missing)} not detected as a fixture helper; "
+            "discovery is broken (it would silently drop every package built on it)"
+        )
+    selected = select(pkgs, helpers)
+    if not selected:
+        raise SystemExit("fixture_test_packages: no package selected; discovery is broken")
+    return Discovery(selected, helpers)
 
 
 def shard(pkgs: list[str], index: int, count: int) -> list[str]:
@@ -137,9 +189,7 @@ def main() -> None:
     ap.add_argument("--shard", help="i/n, 1-based: print only shard i of n")
     args = ap.parse_args()
 
-    pkgs = discover()
-    if not pkgs:
-        raise SystemExit("fixture_test_packages: no package selected; discovery is broken")
+    pkgs = discover().selected
     if args.shard:
         m = re.fullmatch(r"(\d+)/(\d+)", args.shard)
         if not m or not 1 <= int(m.group(1)) <= int(m.group(2)):
