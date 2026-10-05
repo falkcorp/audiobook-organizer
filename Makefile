@@ -1,7 +1,7 @@
 # file: Makefile
-# version: 2.33.0
+# version: 2.34.0
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
-# last-edited: 2026-10-04
+# last-edited: 2026-10-05
 
 BINARY := audiobook-organizer
 ROOT_DIR := $(shell git rev-parse --show-toplevel 2>/dev/null || pwd)
@@ -55,7 +55,7 @@ BACKUP_DIR  ?= $(CURDIR)/backups
 
 .PHONY: all build build-api run run-api install clean help \
         web-install web-build web-dev web-test web-lint web-lint-memory \
-        test test-short test-all test-all-short test-nightly test-frontend test-e2e test-e2e-demo \
+        test test-short test-fixtures test-all test-all-short test-nightly test-frontend test-e2e test-e2e-demo \
         coverage coverage-check coverage-check-short ci \
         vet mocks mocks-check staticcheck oplint sdkguard bench-check fmt-check \
         docker docker-run docker-stop \
@@ -270,6 +270,30 @@ test-short: vet
 	@echo "🧪 Running backend tests (-short — slow prop tests skipped, with coverage)..."
 	@go test ./... -short -race -coverprofile=coverage.out -covermode=atomic -timeout 25m
 	@echo "✅ Short backend tests passed, coverage profile generated"
+
+## test-fixtures: Run, WITHOUT -short and with -race, every package whose
+## tests skip under -short (a direct testing.Short() call, or a fixture helper
+## such as internal/versionprimary/vptest that skips in its constructor).
+## test-short and every Woodpecker test workflow pass -short, so before this
+## target those tests -- the merge, undo and redirect state-machine tests on a
+## real PebbleStore among them -- gated nothing; only the post-merge nightly
+## ran them. The package list is discovered at run time by
+## scripts/ci/fixture_test_packages.py, so a new short-skipped test is covered
+## without editing this target.
+##
+## FIXTURE_SHARD=i/n runs shard i of n (ci.yml's fixture-tests matrix). The
+## script fails on an empty list or an empty shard: `go test` with no package
+## arguments would test only the module root and pass.
+##
+## No `vet` prerequisite: the CI jobs that run vet already gate it, and each
+## matrix shard would pay for it again.
+FIXTURE_SHARD ?=
+test-fixtures:
+	@PKGS="$$(python3 scripts/ci/fixture_test_packages.py $(if $(FIXTURE_SHARD),--shard $(FIXTURE_SHARD)))" || exit 1; \
+	echo "🧪 Running short-skipped fixture tests without -short$(if $(FIXTURE_SHARD), (shard $(FIXTURE_SHARD))):"; \
+	echo "$$PKGS" | sed 's/^/   /'; \
+	go test $$PKGS -race -count=1 -timeout 25m
+	@echo "✅ Fixture tests passed"
 
 ## vet: Run go vet across every package. Catches hand-written mock
 ## drift (the stubStore / PR #234 incident) before tests even compile.

@@ -1,7 +1,7 @@
 <!-- file: docs/ci/woodpecker.md -->
-<!-- version: 1.7.0 -->
+<!-- version: 1.8.0 -->
 <!-- guid: 2c8e5a14-9b3d-4f07-8e61-a4d0c7b2f913 -->
-<!-- last-edited: 2026-09-29 -->
+<!-- last-edited: 2026-10-05 -->
 
 # Woodpecker CI: install runbook
 
@@ -33,6 +33,7 @@ test a branch with no PR, use `make ci-woodpecker`.
 | `test-database` | `host=u1` | `internal/database` alone in 8 shards, `-timeout 50m` | see Sharding |
 | `test-server-scanner` | `host=u1` | `internal/server` and `internal/scanner` in 8 shards each, `internal/server/handlers/abs` in 6 | every shard under 55 s on U1 (538 s on llm1 with 4 each) |
 | `test-rest` | `host=u1` | every other package, including maintenance, registry and applygate | about 450–600 s |
+| `test-fixtures` | `host=u1` | `make test-fixtures`: every package whose tests skip under `-short`, run without `-short` (vptest fixtures and other `testing.Short()` skips); no coverage line | not yet measured on U1 |
 | `checks-lint` | `host=u0` | staticcheck, errcheck ratchet, mocks-check | 566 s as one `checks` workflow with cold caches; see The CI cache |
 | `checks-build` | `host=u1` | vet, fmt-check, sdkguard, bench-check, web tests | split out of `checks` on 2026-09-29 |
 | `coverage` | `host=u0` | coverage floor across the three test workflows | seconds |
