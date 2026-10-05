@@ -1,5 +1,5 @@
 // file: internal/franchise/franchise_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0e7a3c51-2d94-4b8f-a6e1-7c5d9f3b2a18
 // last-edited: 2026-10-05
 
@@ -268,6 +268,15 @@ var parityCorpus = []string{
 
 func TestGuardParity(t *testing.T) {
 	for _, s := range parityCorpus {
+		// The narrator/publisher checks weaken only a credit named by
+		// "Missy" alone, never anything else the old guard held.
+		if oldMatches(s) && !MatchesCreditStrong(s) {
+			for _, h := range MatchAll(s) {
+				if h.Term != "core" || !strings.EqualFold(h.Text, "missy") {
+					t.Errorf("MatchesCreditStrong(%q) = false but hit %+v is not core \"missy\"", s, h)
+				}
+			}
+		}
 		if oldMatches(s) && !Matches(s) {
 			t.Errorf("Matches(%q) = false; the old guard held it", s)
 		}
@@ -303,4 +312,26 @@ func FuzzGuardParity(f *testing.F) {
 			}
 		}
 	})
+}
+
+// "Missy" in the range's album shape is strong in a credit; a first name is
+// not (owner decision 2026-10-05, refined).
+func TestMissyCreditAlbumShape(t *testing.T) {
+	for s, want := range map[string]bool{
+		"Missy - Series 2":       true,
+		"Missy Series 2":         true,
+		"Missy: The Lumiat":      true,
+		"Missy \u2013 Series 3":  true,
+		"Michelle Gomez - Missy": true,
+		"Missy Cambridge":        false,
+		"Missy Elliott":          false,
+		"Missy":                  false,
+	} {
+		if got := MatchesCreditStrong(s); got != want {
+			t.Errorf("MatchesCreditStrong(%q) = %v, want %v", s, got, want)
+		}
+		if got := Detect(Evidence{Narrators: []string{s}}).Strong(); got != want {
+			t.Errorf("Detect narrator %q strong = %v, want %v", s, got, want)
+		}
+	}
 }

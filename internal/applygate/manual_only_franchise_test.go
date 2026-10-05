@@ -1,5 +1,5 @@
 // file: internal/applygate/manual_only_franchise_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4c1e8a73-9b2d-4f60-a5e7-3d8f1b6c2a94
 // last-edited: 2026-10-05
 
@@ -104,6 +104,20 @@ func TestMissyCreditNotHeld_TitleStillHeld(t *testing.T) {
 	b = &database.Book{ID: "b", Title: "x", FilePath: "/lib/x", Publisher: sp("Missy Elliott Publishing")}
 	if r, d := ManualOnlyDetail(b, nil, TranscribedSearch{}, ManualOnlyGuard{Bulk: true}); r != "" {
 		t.Errorf("publisher Missy held: %s", d)
+	}
+	// The range's album shape in a narrator still holds.
+	for _, n := range []string{"Missy - Series 2", "Missy Series 2", "Missy: The Lumiat", "Michelle Gomez - Missy"} {
+		b = &database.Book{ID: "b", Title: "x", FilePath: "/lib/x", Narrator: sp(n)}
+		if r, _ := ManualOnlyDetail(b, nil, TranscribedSearch{}, ManualOnlyGuard{Bulk: true}); r != ReasonOwnerManualOnly {
+			t.Errorf("narrator %q not held", n)
+		}
+		if g := BulkManualOnlyGuard(moReaders(moFake{}), b, ""); g.StoreDetail == "" {
+			t.Errorf("narrator %q not held by the store guard", n)
+		}
+	}
+	b = &database.Book{ID: "b", Title: "x", FilePath: "/lib/x", Narrator: sp("Missy Elliott")}
+	if r, _ := ManualOnlyDetail(b, nil, TranscribedSearch{}, ManualOnlyGuard{Bulk: true}); r != "" {
+		t.Error("narrator Missy Elliott held")
 	}
 	// A narrator naming more than Missy still holds.
 	b = &database.Book{ID: "b", Title: "x", FilePath: "/lib/x", Narrator: sp("Missy - Big Finish Productions")}
