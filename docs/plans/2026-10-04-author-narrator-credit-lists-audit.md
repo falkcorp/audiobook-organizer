@@ -1,5 +1,5 @@
 <!-- file: docs/plans/2026-10-04-author-narrator-credit-lists-audit.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: 04983320-f7be-4c13-a8f7-5f8d35e67516 -->
 <!-- last-edited: 2026-10-04 -->
 
@@ -19,7 +19,11 @@ flat joined string exists only when tags are written to a file ("A", "A and B",
   the LSP tool) run in the audit worktree. The LSP tool itself did not index the
   new worktree; it returned the same 861-reference set for `Book.AuthorID` from the
   primary checkout, which is 4 commits behind `origin/main`, so the CLI was run
-  where the line numbers are current.
+  where the line numbers are current. The CLI reports 975 references for
+  `Book.AuthorID` against the LSP tool's 861. Part of the gap is the 4-commit
+  difference; the rest is unexplained, most likely references counted again in
+  test-variant package builds. Non-test sites are deduplicated by `file:line`
+  below, so the gap does not affect the counts.
 - gopls finds Go selector references only. Access by string key (JSON binding, map
   keys, sort/filter/undo keys, field-lock keys) is invisible to it. Section 1.4
   covers that class separately with a literal-key grep.
@@ -53,10 +57,10 @@ flat joined string exists only when tags are written to a file ("A", "A and B",
 | `Book.Authors` (`[]BookAuthor`, `db:"-"`, transient) | 13 | 10 | 3 | 2 | 8 |
 | `Book.Narrator` (`*string`) | 131 | 100 | 31 | 28 | 272 |
 | `Book.NarratorsJSON` (`*string`) | 9 | 6 | 3 | 2 | 4 |
-| `BookSummary.AuthorID` | 3 | 1 | 2 | 1 | 1 |
-| `BookSummary.Narrator` | 4 | 2 | 2 | 1 | 6 |
-| `BookSummary.NarratorsJSON` | 3 | 1 | 2 | 1 | 1 |
-| **Total (selector access)** | **573** | **454** | **119** | **106** | **1,136** |
+| `BookSummary.AuthorID` | 3 | 1 | 2 | 0 | 1 |
+| `BookSummary.Narrator` | 4 | 2 | 2 | 0 | 6 |
+| `BookSummary.NarratorsJSON` | 3 | 1 | 2 | 0 | 1 |
+| **Total (selector access)** | **573** | **454** | **119** | **103** | **1,136** |
 | String-keyed access (`"author_id"`, `"author_name"`, `"narrator"`, `"narrators_json"`) | 173 lines | heuristic | 18 map/literal writes | n/a | n/a |
 
 `BookCore` (`internal/database/bookcore.go:27`) mirrors `AuthorID`, `Narrator` and
@@ -205,10 +209,12 @@ every `book_narrators:` value. memdb holds the reverse indexes:
 memdb also indexes the **book row's** `AuthorID` (`memdb_schema.go:159-163`,
 `nullableIntFieldIndex{Field: "AuthorID"}`), and the sort indexes read
 `Book.Author.Name` (`memdb_sort_indexers.go:184-189`) and `Book.Narrator`
-(`:198-203`). Note that `stripBookForMemdb` sets `Author = nil`
-(`memdb_strip.go:54`), so unless the sort index is computed before the strip,
-`sort_author` on memdb sorts on an empty string. That needs checking before PR 6
-touches it; either way it has to move to the credit list.
+(`:198-203`). Both memdb insert paths insert the **stripped** row
+(`memdb_sync.go:204`, `memdb_warmup.go:221` call `stripBookForMemdb`, which sets
+`Author = nil`, `memdb_strip.go:54`). The `sort_author` index key is therefore
+empty for every book. This audit did not trace whether the library's
+sort-by-author is served from that index or from a hydrated path. Either way the
+index has to move to the primary credit's name.
 
 ### 2.2 Is ordering stored, and is it stable?
 
@@ -428,7 +434,7 @@ backfilled join with no fallbacks) and must keep `authorName` and `narratorName`
 populated. Keep `", "` there, because that is the ABS convention; the owner's
 "and" format applies to file tags and our own UI. The decode proof plus
 `narrator_tiers_test.go` must stay green at every step. Removing tiers 2 and 3 is
-only safe after the backfill (PR 4).
+only safe after the backfill (PR 3).
 
 ---
 
@@ -495,16 +501,16 @@ Sizes are rough line-churn estimates including tests.
 | 0 | `feat(ops): credits census (read-only)` | A read-only maintenance op (dry-run only) counting: books with `AuthorID` set and an empty join; `AuthorID` != position-0 credit; `AuthorID` not in the join at all; duplicate or non-contiguous positions; all-zero positions with more than one row; `Narrator` set with an empty junction; junction != `CleanNarratorCredit(Narrator)`; `NarratorsJSON` set with an empty junction; `NarratorsJSON` != junction; combined author records (`authorcredit.LooksCombined`) and combined narrator records; dangling credit ids; `Book.Author` snapshot != `AuthorID`. Each count is clickable through to its books (standing rule). Parallel via `registry.RunItems` **with `Concurrency` set** | M (~600) | owner reads the numbers |
 | 1 | `feat(database): credit accessors and store invariants` | `credits.go` accessors and joiners; `GetBookCredits` batched and sorted; position normalisation inside `setBookAuthorsLocked` / `SetBookNarrators`; a narrator stripe and `ModifyBookNarrators`; `ModifyBookCredits` with a single-batch commit and `BooksNeedReindex`. No reader changes yet. Interface-width: new methods go on narrow interfaces only (`.interface-width-baseline` is 0) | L (~1,200) | unit + `-race` tests for lost updates and position normalisation |
 | 2 | `feat(metadata): lists end to end` | `BookMetadata.Authors/Narrators []string`; all 5 providers stop joining; candidates, pins, preview and bulk-apply rows carry lists; cache version bump with dual-read; `authorcredit.ResolveList(names)` that resolves each name individually (create allowed per *person*, through the existing gates) and never re-splits a provider list; route the 5 whole-string sites in 3.2 through it; one splitter for genuinely single strings. **Close the tag round-trip**: write the ordered list to a custom tag (`AUDIOBOOK_ORGANIZER_AUTHORS` / `_NARRATORS`, JSON array) next to the joined ARTIST/NARRATOR, have the scanner prefer it, and have the scanner never overwrite existing credits from a re-derived tag string | XL (~2,500) | scoring regression tests (calibrate_scoring), provider fixtures, a scan round-trip test |
-| 3 | `refactor: one writer path for credits` | every persistent writer in Appendix A (48 `AuthorID`, 28 `Narrator`, 23 `Book.Author`, 2 `NarratorsJSON`) writes via `ModifyBookCredits` and stops writing the flat fields. The flat fields are then **derived on write** from the credits inside the same batch, so the old readers keep working unchanged. Copy paths (versions split, transcode, dedup merge, reconcile, library copy, organizer copy) copy credits with positions. the PUT path (`update_service.go` / `service_mutation.go`) stops writing `author_id` / `narrator` onto the row and takes explicit `authors: [..]` / `narrators: [..]`; `AudiobookUpdate` stops embedding `*database.Book` | XL (~2,500), split by package into 3a database/audiobooks/server, 3b metafetch/metadata/scanner/importer/itunes, 3c fixers (plugins/maintenance, maintenance/jobs, scheduler, repairs) | per-package tests; the existing `lost_update_test.go` suites |
-| 4 | `feat(ops): credits backfill` | A dry-run + apply op using PR 0's classes: build the credit list for every book whose join is empty or disagrees, from (in order) the existing join, `AuthorID`, the `Book.Author` snapshot, `NarratorsJSON`, and `CleanNarratorCredit(Narrator)`; renumber positions; never create a person from a split unless the owner-reviewed class allows it (same rule as `repair-combined-author-credits`). Disjoint partition by book ID so workers never touch the same row. Writes through `ModifyBookCredits`, journaled for undo. **Dry run, then the owner runs the apply** (standing prod-apply rule); iTunes books follow the iTunes rule | L (~1,000) | dry run on prod, owner approval, census re-run shows 0 in every disagreement class |
+| 3 | `feat(ops): credits backfill` | **Runs before any writer starts deriving flat fields from credits.** A dry-run + apply op using PR 0's classes: build the credit list for every book whose join is empty or disagrees, from (in order) the existing join, `AuthorID` (always position 0 when it is missing from the join, and the tie-breaker when all positions are 0), the `Book.Author` snapshot, `NarratorsJSON`, and `CleanNarratorCredit(Narrator)`; renumber positions; never create a person from a split unless the owner-reviewed class allows it (same rule as `repair-combined-author-credits`). Disjoint partition by book ID so workers never touch the same row. Writes through `ModifyBookCredits`, journaled per book (pre-image of the join, the junction and all four flat fields) for undo. **Dry run, then the owner runs the apply** (standing prod-apply rule); iTunes books follow the iTunes rule | L (~1,000) | dry run on prod, owner approval, census re-run shows 0 in every disagreement class |
+| 4 | `refactor: one writer path for credits` | every persistent writer in Appendix A (48 `AuthorID`, 28 `Narrator`, 23 `Book.Author`, 2 `NarratorsJSON`) writes via `ModifyBookCredits`. **Guard:** `ModifyBookCredits` hydrates an empty list from the flat fields before calling `fn` (`AuthorID` first, the rule `LiveBookAuthorNames` already uses; then `CleanNarratorCredit(Narrator)`), so a book the backfill missed, or one created between PR 3 and PR 4, cannot lose its author when a writer adds a co-author. `AuthorID` is then derived as the position-0 credit inside the same batch, so the old readers keep working. **The `Narrator` column is not derived from the junction**: a derived column would replace the raw credit with a cleaned join, and feeding that back through the sync's `CleanNarratorCredit` drops self-reading co-narrators. Instead, `syncNarratorJunctionAfterWrite` is removed in this same PR, writers that receive a raw credit store it unchanged in the column (provenance only, never read as truth after PR 5), and the junction is written explicitly. Copy paths (versions split, transcode, dedup merge, reconcile, library copy, organizer copy) copy credits with positions. The PUT path (`update_service.go` / `service_mutation.go`) stops writing `author_id` / `narrator` onto the row and takes explicit `authors: [..]` / `narrators: [..]`; `AudiobookUpdate` stops embedding `*database.Book` | XL (~2,500), split by package into 4a database/audiobooks/server, 4b metafetch/metadata/scanner/importer/itunes, 4c fixers (plugins/maintenance, maintenance/jobs, scheduler, repairs) | per-package tests; the existing `lost_update_test.go` suites; a test that adding a co-author to a book with `AuthorID` set and an empty join keeps the original author at position 0 |
 | 5 | `refactor: readers use credits` | migrate the 281 + 53 + 100 + 6 reads, grouped: ABS mapper and browse (drop tiers 2/3; sort by position; one `GetBookCredits` per page); search (`BookToDoc` indexes every author and narrator; a multi-valued Bleve field, which needs an index rebuild); dedup (candidate generation by any credited author, not `AuthorID`; author comparison over sets; embedding text uses the joined list, so embeddings change and need a re-embed or a version tag); organizer path (**primary author only, unchanged**; a path built from joined names would move files across the library); tag write-back (all four paths call `JoinCreditNames` on the sorted list; iTunes Artist gets the joined list); memdb indexes (`author_id` on books -> the `book_authors` table index; `sort_author` / `sort_narrator` -> the primary credit's name); counts drop the `AuthorID` pass; API JSON derives `author_id` / `author_name` / `narrator`; frontend reads `authors[]` / `narrators[]` everywhere and drops the `narrators_json` column | XL (~3,000), split 5a ABS+API+frontend, 5b search+memdb, 5c dedup, 5d tags+organizer+iTunes, 5e fixers | decode proof, `narrator_tiers_test.go`, search conformance, dedup round-4 tests, E2E |
-| 6 | `refactor(database): drop flat fields` | remove `AuthorID`, `Author`, `Narrator` and `NarratorsJSON` from `Book`, `BookCore`, `BookSummary` and the mock store; remove the derive-on-write shim; legacy JSON keys are ignored on read (no Pebble rewrite needed, since unknown keys are dropped on decode); optional cleanup op to strip the dead keys from rows | L (~1,500, mostly the 1,136 test refs) | full `make ci`, Woodpecker, GitHub-only checks (interface-width, coverage floor) |
+| 6 | `refactor(database): drop flat fields` | ship the re-derive op first (6.5); then remove `AuthorID`, `Author`, `Narrator` and `NarratorsJSON` from `Book`, `BookCore`, `BookSummary` and the mock store; remove the derive-on-write shim; legacy JSON keys are ignored on read (no Pebble rewrite needed, since unknown keys are ignored on decode; rows lose them on their next write); optional cleanup op to strip the dead keys from rows | L (~1,500, mostly the 1,136 test refs) | full `make ci`, Woodpecker, GitHub-only checks (interface-width, coverage floor) |
 
-PRs 0 and 1 can merge in either order. Then 2 -> 3 -> 4 -> 5 -> 6, one at a time.
+PRs 0 and 1 can merge in either order. Then 2 -> 3 (backfill) -> 4 (writers) -> 5 -> 6, one at a time.
 Each later PR touches many of the same files, so no parallel waves (CLAUDE.md
 parallel coordination rule). The sequence must also be scheduled against the
 approved **ModifyBook migration** (`.claude/notes/modifybook-migration-plan-2026-09-13.md`),
-which rewrites about 200 Get->UpdateBook sites. Doing PR 3 after (or as part of)
+which rewrites about 200 Get->UpdateBook sites. Doing PR 4 after (or as part of)
 that migration avoids touching the same sites twice.
 
 ### 6.3 Risks
@@ -542,7 +548,7 @@ that migration avoids touching the same sites twice.
 - **Interface-width ratchet.** The baseline is 0. New methods must go on narrow
   per-consumer interfaces; do not widen `Store` or `BookStore`.
 - **API compatibility.** External scripts that PUT `author_id` / `narrator` lose
-  write access when PR 3 stops binding them. Keep accepting them for one release,
+  write access when PR 4 stops writing them onto the row. Keep accepting them for one release,
   translated into a credit write with a deprecation log line.
 - **Field locks.** `author_name` / `narrator` locks currently gate single values.
   After the change a lock means "the credit list is locked". The semantics stay
@@ -558,10 +564,12 @@ that migration avoids touching the same sites twice.
 - PR 2: per-provider fixture tests asserting lists; a scan round-trip test (write
   tags with "A and New B", rescan, assert two credits and no combined record);
   `calibrate_scoring` before/after.
-- PR 3: for each package, a test that a write leaves the credits and the derived
-  flat fields consistent; reuse the `lost_update_test.go` suites.
-- PR 4: dry run on prod first; the census (PR 0) re-run must show zero in each
+- PR 3: dry run on prod first; the census (PR 0) re-run must show zero in each
   disagreement class; spot-check a sample of books in ABS/AudioBooth and in the UI.
+- PR 4: for each package, a test that a write leaves the credits and the derived
+  `AuthorID` consistent; the hydrate-guard test (co-author added to a book whose
+  join is empty keeps its `AuthorID` author at position 0); a test that a
+  self-reading co-narrator survives a write; reuse the `lost_update_test.go` suites.
 - PR 5: `make audiobooth-decode` on a Mac; `narrator_tiers_test.go` rewritten to
   the single tier; search conformance tests extended with a co-author query;
   dedup round-4 / data-loss suites; Playwright book detail and library.
@@ -573,17 +581,27 @@ that migration avoids touching the same sites twice.
 ### 6.5 Rollback
 
 - PRs 0-2 are additive. Revert the PR.
-- PR 3 keeps writing the flat fields (derived inside the same batch), so readers
-  are unaffected and a revert is clean.
-- PR 4 is journaled. Each book's previous credits are stored per row, and an undo
-  op restores them. Do not run PR 5 until the census is clean and the owner has
-  looked at it.
+- PR 3 (backfill) is journaled. Each touched book's pre-image (join, junction and
+  all four flat fields) is stored per row, and an undo op restores it. Do not
+  merge PR 4 until the census is clean and the owner has looked at it.
+- PR 4 keeps `AuthorID` (derived as the position-0 credit) and the raw `Narrator`
+  column, so readers are unaffected. A revert is **not** fully clean: `AuthorID`
+  values written in the meantime are the derived primary, which after the
+  backfill equals the old value except where a writer reordered credits on
+  purpose, and the narrator junction is no longer re-synced from the column, so
+  reverting restores `syncNarratorJunctionAfterWrite` against junctions that
+  PR 4 writers maintained directly. Neither loses data; the reverted sync only
+  rewrites a junction when the column next changes.
 - PR 5 reverts per sub-PR. Search needs a reindex after a revert; dedup
   embeddings need the previous version tag.
-- PR 6 is the only one-way door in code, not in data: Pebble rows still hold the
-  old keys until the optional cleanup op runs, so reverting PR 6 restores the
-  fields with their last derived values. Do not run the key-strip cleanup until
-  one release has passed.
+- PR 6 is the risky revert. Once the fields leave the struct, every `UpdateBook`
+  or `ModifyBook` re-marshals the row without those keys, so only rows nothing
+  has written since still hold them. Reverting PR 6 would hand `AuthorID == nil`
+  and `Narrator == nil` to every reader for every touched book. Before PR 6
+  merges, ship and test a **re-derive op** (rebuild `AuthorID` from the
+  position-0 credit and the `Narrator` display string from the junction for
+  every book), so a revert is "revert, then run the op". The optional key-strip
+  cleanup waits one release.
 
 ### 6.6 Real cost
 
