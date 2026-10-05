@@ -1,5 +1,5 @@
 // file: internal/server/authority_evidence.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3c15fa27-276b-44c2-a6e0-a9c9604af632
 // last-edited: 2026-10-05
 
@@ -30,11 +30,17 @@ const authorityRetryAfter = time.Minute
 // authority.Empty() while the flag is off, before the first load finishes,
 // and after a first load fails; that is exactly the behaviour with no
 // authority lists at all. A failed reload keeps the previous snapshot.
+// Turning the flag off releases the snapshot (and discards a load that
+// finishes after it), so a later flag-on starts from a fresh load.
 type authorityEvidence struct {
 	ctx     context.Context
 	kv      authority.Scanner
 	enabled func() bool
-	ttl     time.Duration
+	// spawn starts a load goroutine. The server passes bgWG.Go, so Shutdown
+	// waits for an in-flight load before the store closes; nil uses a bare
+	// goroutine (tests).
+	spawn func(name string, fn func())
+	ttl   time.Duration
 
 	mu       sync.Mutex
 	snap     *authority.Snapshot
@@ -43,23 +49,45 @@ type authorityEvidence struct {
 	loadDone chan struct{} // closed when the in-flight load ends (tests)
 }
 
-func newAuthorityEvidence(ctx context.Context, kv authority.Scanner, enabled func() bool) *authorityEvidence {
-	return &authorityEvidence{ctx: ctx, kv: kv, enabled: enabled, ttl: authorityRefreshTTL}
+func newAuthorityEvidence(ctx context.Context, kv authority.Scanner, enabled func() bool,
+	spawn func(name string, fn func())) *authorityEvidence {
+	return &authorityEvidence{ctx: ctx, kv: kv, enabled: enabled, spawn: spawn, ttl: authorityRefreshTTL}
 }
+
+// Prime starts the first load when the flag is on (Server.Start), so the
+// lists are ready before the first resolve asks. A no-op with the flag off.
+func (a *authorityEvidence) Prime() { _ = a.Lookup() }
 
 // Lookup returns the current snapshot, or authority.Empty(). The flag is read
 // on every call, so turning it on or off needs no restart. A due load starts
-// in the background and never blocks the caller.
+// in the background and never blocks the caller. With the flag off it never
+// starts a load and releases any snapshot it holds.
 func (a *authorityEvidence) Lookup() authority.Lookup {
-	if a == nil || a.enabled == nil || !a.enabled() {
+	if a == nil || a.enabled == nil {
+		return authority.Empty()
+	}
+	if !a.enabled() {
+		a.mu.Lock()
+		if a.snap != nil {
+			a.snap, a.nextLoad = nil, time.Time{}
+		}
+		a.mu.Unlock()
 		return authority.Empty()
 	}
 	a.mu.Lock()
 	snap := a.snap
-	if !a.loading && !time.Now().Before(a.nextLoad) {
+	// No new load once the server is shutting down: bgWG may already be in
+	// Wait.
+	if !a.loading && !time.Now().Before(a.nextLoad) && a.ctx.Err() == nil {
 		a.loading = true
-		a.loadDone = make(chan struct{})
-		go a.load(a.loadDone)
+		done := make(chan struct{})
+		a.loadDone = done
+		run := func() { a.load(done) }
+		if a.spawn != nil {
+			a.spawn("authority-evidence-load", run)
+		} else {
+			go run()
+		}
 	}
 	a.mu.Unlock()
 	if snap == nil {
@@ -78,6 +106,11 @@ func (a *authorityEvidence) load(done chan struct{}) {
 	if err != nil {
 		a.nextLoad = time.Now().Add(authorityRetryAfter)
 		logger.New("authority").Warn("authority evidence: snapshot load failed, keeping the previous one: %v", err)
+		return
+	}
+	if !a.enabled() {
+		// Turned off while loading: do not hold a snapshot nobody reads.
+		a.nextLoad = time.Time{}
 		return
 	}
 	a.snap = snap

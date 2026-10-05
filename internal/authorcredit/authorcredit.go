@@ -1,5 +1,5 @@
 // file: internal/authorcredit/authorcredit.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 7000d1fc-e16c-47e1-bb94-6180fe3ec1de
 // last-edited: 2026-10-05
 
@@ -742,7 +742,13 @@ func (e authorityEvidence) PersonEvidence(q PersonQuery) (Evidence, error) {
 	if !e.lookup.IsKnownPerson(q.Name, authority.RoleAuthor) {
 		return Evidence{}, nil
 	}
-	st := e.lookup.Person(q.Name).Roles[authority.RoleAuthor]
+	p := e.lookup.Person(q.Name)
+	if p == nil {
+		// A Lookup that answers IsKnownPerson without an entry (not Snapshot,
+		// whose answer comes from the entry): known, tiers unknown, so weak.
+		return Evidence{Strength: EvidenceWeak, Detail: fmt.Sprintf("the authority lists know %q as an author (no entry to read tiers from)", q.Name)}, nil
+	}
+	st := p.Roles[authority.RoleAuthor]
 	switch {
 	case st.ByTier[authority.TierO] > 0:
 		return Evidence{Strength: EvidenceStrong, Detail: fmt.Sprintf("the authority lists hold %q as an author from the owner's library (tier O)", q.Name)}, nil
@@ -858,29 +864,42 @@ func authorityOf(store Store) authority.Lookup {
 	return authority.Empty()
 }
 
+// evidenceSource is one PersonEvidence source and whether it can ever answer
+// strong.
+type evidenceSource struct {
+	src         PersonEvidence
+	canBeStrong bool
+}
+
 // evidenceSources returns the PersonEvidence sources for store: the
-// authority lists first (an in-memory read, and the only strong source),
-// then the built-in ones it can serve, then the store's own when it has one.
-func evidenceSources(store Store, ti *titleIndex) []PersonEvidence {
-	out := []PersonEvidence{authorityEvidence{lookup: authorityOf(store)}}
+// authority lists first (an in-memory read, and the only built-in strong
+// source), then the built-in weak ones it can serve, then the store's own
+// when it has one (which may answer strong).
+func evidenceSources(store Store, ti *titleIndex) []evidenceSource {
+	out := []evidenceSource{{src: authorityEvidence{lookup: authorityOf(store)}, canBeStrong: true}}
 	if bs, ok := database.AsCapability[authorBooksSource](store); ok {
-		out = append(out, outsideSeriesEvidence{books: bs, series: ti.seriesKey})
+		out = append(out, evidenceSource{src: outsideSeriesEvidence{books: bs, series: ti.seriesKey}})
 	}
-	out = append(out, providerCreditEvidence{store: store})
+	out = append(out, evidenceSource{src: providerCreditEvidence{store: store}})
 	if pe, ok := database.AsCapability[PersonEvidence](store); ok {
-		out = append(out, pe)
+		out = append(out, evidenceSource{src: pe, canBeStrong: true})
 	}
 	return out
 }
 
 // personEvidence asks the sources about q and returns the strongest evidence
 // found: it stops at the first strong answer, so a weak outside-series hit
-// never hides a strong authority hit. With no evidence it returns the reason
-// the part is not linked.
-func personEvidence(sources []PersonEvidence, q PersonQuery) (best Evidence, why string) {
+// never hides a strong authority hit. Once it holds weak evidence it skips
+// every source that can only answer weak (a by-author listing and a history
+// read that could not change the outcome) but still asks one that can answer
+// strong. With no evidence it returns the reason the part is not linked.
+func personEvidence(sources []evidenceSource, q PersonQuery) (best Evidence, why string) {
 	var errs []string
-	for _, src := range sources {
-		ev, err := src.PersonEvidence(q)
+	for _, s := range sources {
+		if best.Strength >= EvidenceWeak && !s.canBeStrong {
+			continue
+		}
+		ev, err := s.src.PersonEvidence(q)
 		if err != nil {
 			errs = append(errs, err.Error())
 			continue
@@ -955,7 +974,7 @@ func splitExisting(store Store, bookID, name string, gate Gate) (authors []datab
 	}
 	out := make([]linked, 0, len(parts))
 	seen := map[int]bool{}
-	var sources []PersonEvidence
+	var sources []evidenceSource
 	for _, p := range parts {
 		title := ti != nil && ti.keys[LettersKey(p)]
 		a, err := lookupExisting(store, p)

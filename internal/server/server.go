@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.78.0
+// version: 2.79.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-10-05
 
@@ -328,6 +328,9 @@ type Server struct {
 	shutdownArmed chan struct{}
 	armShutdown   sync.Once
 	bgWG          namedWaitGroup
+	// authorityEvidence serves indexedStore's authorcredit.AuthoritySource
+	// (authority_evidence.go); Start primes its first load.
+	authorityEvidence *authorityEvidence
 
 	// container is the SERVER-PLUGIN-REG service registry built during
 	// NewServer. Stashed so handlers/tests can pull services dynamically
@@ -608,10 +611,12 @@ func NewServer(store database.Store) *Server {
 	// Bind the decorator to its server before anything can write through it.
 	indexed.server = server
 	// The authority lists as person evidence for authorcredit, behind
-	// authority_evidence_enabled (read per resolve; off answers
-	// authority.Empty()). Snapshots load from the bare store in the
-	// background, cancelled with the server.
-	indexed.authority = newAuthorityEvidence(bgCtx, store, func() bool { return config.AppConfig.AuthorityEvidenceEnabled })
+	// authority_evidence_enabled (read per resolve under the config read
+	// lock; off answers authority.Empty()). Snapshots load from the bare
+	// store in the background, enrolled in bgWG and cancelled with the
+	// server, so Shutdown waits for a load before Pebble closes.
+	server.authorityEvidence = newAuthorityEvidence(bgCtx, store, config.AuthorityEvidenceEnabled, server.bgWG.Go)
+	indexed.authority = server.authorityEvidence
 	// Wire the scanner package's local store so its free helpers
 	// (createBookFilesForBook, saveBookToDatabase, ProcessBooksParallel
 	// inline DB calls) no longer reach for database.GetGlobalStore
