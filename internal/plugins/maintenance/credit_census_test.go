@@ -513,6 +513,16 @@ func TestCreditCensus_RunOnPebblePersistsResultWithoutWrites(t *testing.T) {
 	a := repairAuthor(t, s, "Robin Hobb")
 	repairBook(t, s, "book-ok", &a.ID, a.ID)
 	repairBook(t, s, "book-nojoin", &a.ID)
+	// A stale persisted snapshot. memdb strips Book.Author, so this proves the
+	// census reads the full Pebble row: a memdb read would hide the snapshot
+	// and author_snapshot_stale would read 0 in prod.
+	if _, err := s.CreateBook(&database.Book{ID: "book-snap", Title: "T book-snap", FilePath: "/lib/book-snap.m4b",
+		AuthorID: &a.ID, Author: &database.Author{ID: a.ID, Name: "R. Hobb"}}); err != nil {
+		t.Fatalf("CreateBook(book-snap): %v", err)
+	}
+	if err := s.SetBookAuthors("book-snap", []database.BookAuthor{{BookID: "book-snap", AuthorID: a.ID, Role: "author"}}); err != nil {
+		t.Fatalf("SetBookAuthors(book-snap): %v", err)
+	}
 
 	before := map[string]*database.Book{}
 	for _, id := range []string{"book-ok", "book-nojoin"} {
@@ -538,6 +548,9 @@ func TestCreditCensus_RunOnPebblePersistsResultWithoutWrites(t *testing.T) {
 	for _, c := range res.Classes {
 		if c.Key == ccAuthorIDJoinEmpty && (len(c.BookIDs) != 1 || c.BookIDs[0] != "book-nojoin") {
 			t.Errorf("author_id_join_empty books = %v, want [book-nojoin]", c.BookIDs)
+		}
+		if c.Key == ccAuthorSnapshotStale && (len(c.BookIDs) != 1 || c.BookIDs[0] != "book-snap") {
+			t.Errorf("author_snapshot_stale books = %v, want [book-snap] (snapshot must survive the real store's read path)", c.BookIDs)
 		}
 	}
 	for id, b := range before {
