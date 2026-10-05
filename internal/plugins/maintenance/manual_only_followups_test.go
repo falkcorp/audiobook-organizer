@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/manual_only_followups_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 414c97a5-21fa-425f-81df-a00e9bf95fd6
 // last-edited: 2026-10-05
 
@@ -370,6 +370,8 @@ func (rgRecomputeFailStore) RecomputeBookAggregates(string) error {
 func TestJoinRegroupErrs(t *testing.T) {
 	applyErr, checkErr := errors.New("apply"), errors.New("check")
 	require.Same(t, applyErr, joinRegroupErrs(applyErr, nil))
+	require.Same(t, checkErr, joinRegroupErrs(nil, checkErr))
+	require.NoError(t, joinRegroupErrs(nil, nil))
 	joined := joinRegroupErrs(applyErr, checkErr)
 	require.Equal(t, "apply; check", joined.Error())
 	require.ErrorIs(t, joined, applyErr)

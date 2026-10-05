@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_regroup.go
-// version: 1.24.0
+// version: 1.24.1
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-10-05
 
@@ -221,10 +221,14 @@ func regroupCheckFailedErr(plan itunesservice.RegroupPlan, dryRun bool) error {
 // joinRegroupErrs ends an apply that failed AND skipped check-failed groups
 // with one single-line error naming both. errors.Join separates with a
 // newline, which the op's error_message shows as two lines; "; " keeps it on
-// one. Both stay matchable with errors.Is/As. A nil checkErr returns applyErr.
+// one. Both stay matchable with errors.Is/As. A nil side returns the other
+// unchanged (a nil applyErr would otherwise format as "%!w(<nil>)").
 func joinRegroupErrs(applyErr, checkErr error) error {
 	if checkErr == nil {
 		return applyErr
+	}
+	if applyErr == nil {
+		return checkErr
 	}
 	return fmt.Errorf("%w; %w", applyErr, checkErr)
 }

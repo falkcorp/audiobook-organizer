@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/test_fixture_test_packages.py
-# version: 1.0.0
+# version: 1.1.0
 # guid: 3c6e9a41-7f2d-4b85-9e10-d4a8b25c7f93
 # last-edited: 2026-10-05
 
@@ -49,7 +49,19 @@ class RealModuleDiscovery(unittest.TestCase):
         self.assertEqual(got, self.result.selected)
 
 
-def _pkg(path, imports=(), test_imports=(), short_in_go=False, short_in_test=False, has_tests=True):
+def _pkg(
+    path,
+    imports=(),
+    test_imports=(),
+    xtest_imports=(),
+    short_in_go=False,
+    short_in_test=False,
+    has_tests=True,
+    has_xtests=False,
+):
+    """A fake `go list -json` entry. has_tests gives it in-package _test.go
+    files; has_xtests gives it external (package foo_test) ones, whose imports
+    go list reports separately as XTestImports."""
     return {
         "ImportPath": path,
         "Dir": path,
@@ -57,6 +69,8 @@ def _pkg(path, imports=(), test_imports=(), short_in_go=False, short_in_test=Fal
         "Imports": list(imports),
         "TestGoFiles": (["short_test.go"] if short_in_test else ["plain_test.go"]) if has_tests else [],
         "TestImports": list(test_imports),
+        "XTestGoFiles": ["plain_x_test.go"] if has_xtests else [],
+        "XTestImports": list(xtest_imports),
     }
 
 
@@ -78,6 +92,29 @@ class HelperClosure(unittest.TestCase):
         helpers = ftp.find_helpers(pkgs, _fake_calls_short)
         self.assertEqual(helpers, {"vptest", "wrap1", "wrap2"})
         self.assertEqual(ftp.select(pkgs, helpers, _fake_calls_short), ["direct", "uses_wrap2"])
+
+
+class Selection(unittest.TestCase):
+    def test_helper_with_its_own_tests_is_selected(self):
+        # vptest's own tests import nothing that is a helper (TestImports never
+        # lists the package itself), so only the helper rule can select them.
+        pkgs = [
+            _pkg("vptest", short_in_go=True),
+            _pkg("vptest_x_only", imports=["vptest"], has_tests=False, has_xtests=True),
+            _pkg("helper_no_tests", imports=["vptest"], has_tests=False),
+        ]
+        helpers = ftp.find_helpers(pkgs, _fake_calls_short)
+        self.assertEqual(helpers, {"vptest", "vptest_x_only", "helper_no_tests"})
+        self.assertEqual(ftp.select(pkgs, helpers, _fake_calls_short), ["vptest", "vptest_x_only"])
+
+    def test_package_importing_helper_only_from_external_tests_is_selected(self):
+        pkgs = [
+            _pkg("vptest", short_in_go=True, has_tests=False),
+            _pkg("xonly", has_tests=False, has_xtests=True, xtest_imports=["vptest"]),
+            _pkg("xunrelated", has_tests=False, has_xtests=True, xtest_imports=["fmt"]),
+        ]
+        helpers = ftp.find_helpers(pkgs, _fake_calls_short)
+        self.assertEqual(ftp.select(pkgs, helpers, _fake_calls_short), ["xonly"])
 
 
 if __name__ == "__main__":

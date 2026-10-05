@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/ci/fixture_test_packages.py
-# version: 1.1.0
+# version: 1.2.0
 # guid: 92f31101-2399-4ce9-9b83-0af332666123
 # last-edited: 2026-10-05
 """List the Go packages whose tests skip under -short, for `make test-fixtures`.
@@ -12,13 +12,15 @@ internal/versionprimary/vptest (whose `New` skips under -short), therefore
 never gates a merge. This script finds every such package so a separate job
 can run exactly those packages WITHOUT -short.
 
-A package is selected when either:
+A package is selected when any of these holds:
   * one of its _test.go files calls testing.Short(), or
   * its tests import a fixture helper: a package whose non-test .go files
     call testing.Short() (such as vptest), or a package that reaches one
     through its non-test imports, at any depth (a wrapper around vptest is a
     helper too). Helpers are found generically, so the next one is picked up
-    without editing this script.
+    without editing this script, or
+  * it is itself a fixture helper and has tests: a package's TestImports
+    never list the package itself, so the import rule alone would miss them.
 
 Discovery goes through `go list ./...`, which honors go.mod's `ignore ./web`,
 so Go files under web/node_modules are never picked up.
@@ -141,7 +143,10 @@ def select(pkgs: list[dict], helpers: set[str], calls_short: Callable[[str, list
         if not test_files:
             continue
         imports = set(p.get("TestImports", [])) | set(p.get("XTestImports", []))
-        if calls_short(p["Dir"], test_files) or imports & helpers:
+        # A helper's own tests are never reached by the import rule (a package's
+        # TestImports do not list the package itself), yet they run against the
+        # code that calls testing.Short(), so they belong in the list too.
+        if p["ImportPath"] in helpers or calls_short(p["Dir"], test_files) or imports & helpers:
             selected.append(p["ImportPath"])
     return sorted(selected)
 
