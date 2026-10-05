@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-05-linking-versions-brings-the-whole-family-executive-summary.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 0b6f6f3e-7a52-4c1b-9d0e-5e2c8a41d7b9 -->
 <!-- last-edited: 2026-10-05 -->
 
@@ -34,10 +34,21 @@ PRs: [#3758](https://github.com/falkcorp/audiobook-organizer/pull/3758) (follow-
   been fully scanned yet, the merge is refused and nothing changes. This
   matters because an iTunes original usually sits in the same family as its
   organized copy, and that copy is a common book to merge away.
+- **Which copy is kept has not changed.** Sound quality still decides which
+  copy a merge keeps. A better-sounding copy is never thrown away just
+  because a worse one has already been filed into the library.
 - **The family's main version stays visible.** If the kept book is not yet
-  organized but a copy that came along is, that copy becomes the main version,
-  so the title stays listed in Audiobookshelf. The owner chose this on
-  5 October 2026. Choosing the main version by hand still wins.
+  filed into the library but another version in the family is, that version
+  becomes the main version, so the title stays listed in Audiobookshelf. The
+  owner chose this on 5 October 2026. Choosing the main version by hand
+  still wins.
+- **iTunes comes first.** If the kept book is in iTunes, it stays the main
+  version so its iTunes track is not removed. If it is not filed into the
+  library yet, Audiobookshelf will not show the title. The merge records
+  each such case so they can be listed.
+- **Listening progress follows the visible version.** Progress, read status
+  and the Audiobookshelf link from the merged-away book go to the version
+  Audiobookshelf shows. An undo reverses this too.
 - **Deleted versions come back to the right family.** A version that was in
   the trash when its family was merged away now comes back into the merged
   family when it is restored, not into the old family that no longer has

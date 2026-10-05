@@ -14,6 +14,9 @@
 
 ### Changed
 
-#### Merge: an organized copy holds the group's primary
+#### Merge: survivor choice unchanged; an organized copy holds the group's primary
 
-- With no explicit primary, the election now prefers an organized book (after the audio-route tier). If the survivor is not organized, an organized sibling that moved, or a member of the reused group, holds the group's primary flag instead (`Result.GroupPrimaryID`), so Audiobookshelf still lists the title. The survivor is unchanged and still keeps the losers' external IDs and user state. An explicit primary still wins. Owner decision 2026-10-05.
+- **Survivor choice is unchanged.** Audio quality still picks the copy a merge keeps (audio route, then curation, m4b, bitrate, size). Being organized plays no part, so an unorganized high-bitrate m4b is never retired in favour of an organized low-bitrate mp3. Owner decision 2026-10-05.
+- **The primary flag goes to the organized copy.** With no explicit primary and a survivor that is not organized, an organized sibling that moved, or a member of the reused group, holds the group's primary flag instead (`Result.GroupPrimaryID`), so Audiobookshelf still lists the title. An explicit primary still wins.
+- **iTunes wins.** A survivor whose files carry an iTunes persistent ID keeps the flag, because the ITL clean-up removes non-primary PIDs. When that survivor is not organized, Audiobookshelf will not list the title. The merge records this as `Result.HiddenFromABS = "itunes_survivor_not_organized"` (also `hidden_from_abs` on link-as-versions) and logs it with the prefix `abs-hidden keep`.
+- **User state follows the flag holder.** The losers' progress, read status and ABS-id redirect go to the book Audiobookshelf shows (`Result.StateHolderID`), not to a hidden survivor. Each loser's follow is journaled on the sibling-move journal (`state_follows`). A whole undo that sends the flag holder back out of the group puts each still-retired loser's state on the survivor instead. A per-loser undo (`UnmergeAuto`) puts it back on the loser.
