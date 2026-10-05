@@ -51,7 +51,6 @@ func requireCandidates(t *testing.T, s *PebbleStore, bookID string, want int, ms
 	require.Len(t, entry.Candidates, want, msg)
 }
 
-
 // TestUpdateBook_FillingAnEmptyIdentifierKeepsCandidates: an ASIN, ISBN-13 or
 // ISBN-10 written onto a book that had none keeps the cached candidates, on
 // both write paths (UpdateBook and ModifyBook, which asin-backfill uses), and
