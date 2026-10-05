@@ -1,5 +1,5 @@
 // file: internal/merge/state_follow_followups_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1056ccb5-89ca-4487-9ff7-533be24d6942
 // last-edited: 2026-10-05
 
@@ -35,6 +35,19 @@ type sfFaultStore struct {
 	failStateOn string
 	// failGetBookOnce fails the next GetBookByID of each id, once.
 	failGetBookOnce map[string]bool
+	// failModifyBookOnce fails the next ModifyBook of each id, once.
+	failModifyBookOnce map[string]bool
+}
+
+func (s *sfFaultStore) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	s.mu.Lock()
+	fail := s.failModifyBookOnce[id]
+	delete(s.failModifyBookOnce, id)
+	s.mu.Unlock()
+	if fail {
+		return nil, fmt.Errorf("injected ModifyBook failure for %s", id)
+	}
+	return s.PebbleStore.ModifyBook(id, fn)
 }
 
 func (s *sfFaultStore) SetRaw(key string, value []byte) error {
@@ -284,7 +297,7 @@ func TestResolveMergeSurvivor_CorrectsFlagHolderRedirect(t *testing.T) {
 	require.Equal(t, m.ls, got, "the state chain ends at the flag holder")
 	follows, err := FlagHolderFollowsFrom(m.f.S)
 	require.NoError(t, err)
-	require.Equal(t, FlagFollow{SurvivorID: m.k, HolderID: m.ls, JournalID: res.SiblingJournalID}, follows[m.l])
+	require.Equal(t, FlagFollow{SurvivorID: m.k, HolderID: m.ls, JournalID: res.SiblingJournalID, IntoGroupID: res.VersionGroupID}, follows[m.l])
 	got, err = ResolveMergeSurvivor(m.f.S, m.l, follows)
 	require.NoError(t, err)
 	require.Equal(t, m.k, got, "the work went to the survivor")

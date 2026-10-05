@@ -1,5 +1,5 @@
 // file: internal/merge/pending_repair.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4c8a2e71-9f3d-4b06-8e5a-1d7c3b9f2e84
 // last-edited: 2026-10-05
 
@@ -165,22 +165,29 @@ func ResolveSurvivor(db interface {
 // END of the redirect chain, which is past the flag holder once that book is
 // merged again. FlagHolderFollows already leaves out a follow an undo
 // reversed (and the survivor refollow such an undo writes names the
-// survivor, not the flag holder), so an entry there is a live follow. A hop
-// the follows do not name is taken as ResolveSurvivor takes it.
+// survivor, not the flag holder), so an entry there is a live follow. The
+// correction applies only while the book still sits in that merge's group
+// (FlagFollow.IntoGroupID): one restored from the trash and merged again
+// since has left it, and its redirect is then taken as ResolveSurvivor takes
+// it. A hop the follows do not name is taken the same way.
 func ResolveMergeSurvivor(db interface {
 	GetBookByID(id string) (*database.Book, error)
 }, bookID string, follows map[string]FlagFollow) (string, error) {
-	return resolveForward(db, bookID, func(cur, next string) string {
-		if ff, ok := follows[cur]; ok && ff.SurvivorID != "" && ff.SurvivorID != cur {
-			return ff.SurvivorID
+	return resolveForward(db, bookID, func(cur *database.Book, next string) string {
+		ff, ok := follows[cur.ID]
+		if !ok || ff.SurvivorID == "" || ff.SurvivorID == cur.ID {
+			return next
 		}
-		return next
+		if ff.IntoGroupID != "" && (cur.VersionGroupID == nil || *cur.VersionGroupID != ff.IntoGroupID) {
+			return next
+		}
+		return ff.SurvivorID
 	})
 }
 
 func resolveForward(db interface {
 	GetBookByID(id string) (*database.Book, error)
-}, bookID string, redirectHop func(cur, next string) string) (string, error) {
+}, bookID string, redirectHop func(cur *database.Book, next string) string) (string, error) {
 	ids := database.AsSyncIdentityStore(db)
 	cur := bookID
 	seen := map[string]bool{}
@@ -207,8 +214,8 @@ func resolveForward(db interface {
 				}
 				if item != nil && item.CurrentBookID != "" && item.CurrentBookID != cur {
 					next = item.CurrentBookID
-					if redirectHop != nil {
-						next = redirectHop(cur, next)
+					if redirectHop != nil && b != nil {
+						next = redirectHop(b, next)
 					}
 				}
 			}
