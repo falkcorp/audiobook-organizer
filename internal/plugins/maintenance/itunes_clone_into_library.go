@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_clone_into_library.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 9c4e1b27-6a3f-4d80-b5e2-3f7a0c8d1e64
 // last-edited: 2026-10-05
 
@@ -240,7 +240,9 @@ type icRunner struct {
 	// production indexedStore decorator (see chapters_backfill.go).
 	chapters chapterPersister
 	// tags reads the source's franchise: tags for the owner-manual check
-	// (OpsStore does not carry tags). nil skips only the tag leg.
+	// (OpsStore does not carry tags). It is required: applygate.BookManualOnly
+	// refuses a nil reader, so with none every group is skipped as
+	// owner_manual_check_failed rather than checked without its tags.
 	tags applygate.ManualOnlyTagReader
 }
 

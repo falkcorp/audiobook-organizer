@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_strip_merge_relink_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9444cf3d-482c-4380-9243-4bcfd66af5ee
 // last-edited: 2026-10-05
 
@@ -37,8 +37,10 @@ type relinkFixture struct {
 	// coCredits adds junction credits to a book beside its primary.
 	coCredits map[string][]database.BookAuthor
 	// tags serves GetBookTagsDetailed (the owner-manual check's tag leg).
-	tags  map[string][]database.BookTag
-	store *database.MockStore
+	tags map[string][]database.BookTag
+	// tagErr fails GetBookTagsDetailed for a book.
+	tagErr map[string]error
+	store  *database.MockStore
 }
 
 func newRelinkFixture() *relinkFixture {
@@ -65,7 +67,12 @@ func (f *relinkFixture) run(t *testing.T, params string) (*stripMergeCalls, stri
 	p := newTitleAsAuthorPluginWith(calls, authors, f.books, nil)
 	store := p.deps.(*fakeDeps).store.(*database.MockStore)
 	store.GetBookFilesFunc = func(bookID string) ([]database.BookFile, error) { return f.files[bookID], nil }
-	store.GetBookTagsDetailedFunc = func(bookID string) ([]database.BookTag, error) { return f.tags[bookID], nil }
+	store.GetBookTagsDetailedFunc = func(bookID string) ([]database.BookTag, error) {
+		if err := f.tagErr[bookID]; err != nil {
+			return nil, err
+		}
+		return f.tags[bookID], nil
+	}
 	store.GetMetadataFieldStatesFunc = func(bookID string) ([]database.MetadataFieldState, error) {
 		v, ok := f.fetched[bookID]
 		if !ok {

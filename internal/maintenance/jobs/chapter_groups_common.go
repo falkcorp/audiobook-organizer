@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/chapter_groups_common.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: c619d4b3-ba60-4e76-b0ea-a5ff309d39f7
 // last-edited: 2026-10-05
 
@@ -176,8 +176,14 @@ type chapterGroupsResult struct {
 // (applygate.BookManualOnly) over books in order and returns what held the
 // first held one ("" = none). A read failure is returned as an error: the
 // caller must leave the books alone without counting them as owner-manual.
-func jobsBookManualOnly(store maintenance.JobStore, books ...*database.Book) (string, error) {
-	r := applygate.ManualOnlyReaders{Files: store, Series: store, Authors: store, Tags: store}
+//
+// files serves the books' book_file rows. A caller that already read them
+// (merge-chapter-groups' chapterGroupState.files) passes
+// applygate.ManualOnlyFilesByBook over those rows, so the check sees exactly
+// the rows the group's fingerprint was built from and makes no second read;
+// a caller that has not passes the store.
+func jobsBookManualOnly(store maintenance.JobStore, files applygate.ManualOnlyFilesReader, books ...*database.Book) (string, error) {
+	r := applygate.ManualOnlyReaders{Files: files, Series: store, Authors: store, Tags: store}
 	for _, b := range books {
 		if b == nil {
 			continue

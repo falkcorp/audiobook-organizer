@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_regroup.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-10-05
 
@@ -46,7 +46,9 @@ import (
 // (any book with a row under RootDir, or organized) are skipped
 // (itunesservice.entanglement holds the exact rule). Trashed and merged-away
 // books are never a target or a source, and Doctor Who / Big Finish /
-// Torchwood (applygate.IsOwnerManualOnly) are never touched. The apply
+// Torchwood (applygate.BookManualOnly) are never touched; a book whose
+// owner-manual check could not be done is not touched either, and only the
+// groups holding it are skipped. The apply
 // re-reads each group's books and re-runs the same rule just before writing
 // it (itunesservice.RegroupPlan.Recheck).
 //
@@ -131,6 +133,13 @@ func (p *Plugin) runITunesRegroup(ctx context.Context, raw json.RawMessage, repo
 
 	// The owner-manual check reads each book's tags, which OpsStore does not
 	// carry; they come from their own accessor, composed in statically.
+	//
+	// This refusal is a wiring precondition of the run, not a nil-reader
+	// fallback of the owner-manual check (applygate.BookManualOnly refuses a
+	// nil reader itself). regroupRunStore EMBEDS the tag reader, so with a
+	// nil one the struct is still a non-nil interface value: BookManualOnly
+	// could not see the hole, and the snapshot's bulk GetBookTagsByBookIDs
+	// and the recheck's GetBookTagsDetailed would panic on the nil embed.
 	rstore := regroupRunStore{OpsStore: store, BookTagReader: p.deps.BookTagReader()}
 	if rstore.BookTagReader == nil {
 		return fmt.Errorf("itunes.regroup: no book-tag reader for the owner-manual check")
@@ -145,12 +154,19 @@ func (p *Plugin) runITunesRegroup(ctx context.Context, raw json.RawMessage, repo
 	_ = reporter.UpdateProgress(2, 4, "Phase 3/4: planning…")
 	plan := itunesservice.PlanRegroup(groups, snap)
 
+	checkFailed := regroupCheckFailedBooks(snap)
 	summary := fmt.Sprintf(
-		"groups=%d already-correct=%d consolidate=%d entangled-skipped=%d manual-only-skipped=%d library-title-kept=%d fresh-books=%d delete-empty=%d | PIDs resolved=%d unresolved=%d | %s",
-		plan.TotalGroups, plan.AlreadyCorrect, plan.Consolidated, plan.EntangledSkipped, plan.ManualOnlySkipped, plan.LibraryTitleKept,
+		"groups=%d already-correct=%d consolidate=%d entangled-skipped=%d manual-only-skipped=%d manual-check-failed-skipped=%d (books=%d) library-title-kept=%d fresh-books=%d delete-empty=%d | PIDs resolved=%d unresolved=%d | %s",
+		plan.TotalGroups, plan.AlreadyCorrect, plan.Consolidated, plan.EntangledSkipped, plan.ManualOnlySkipped,
+		plan.ManualCheckFailedSkipped, len(checkFailed), plan.LibraryTitleKept,
 		plan.FreshBooks, len(plan.DeleteBooks), plan.PIDsResolved, plan.PIDsUnresolved,
 		regroupRuleDelta(plan))
 	_ = reporter.Log(slog.LevelInfo, "PLAN: "+summary)
+	if len(checkFailed) > 0 {
+		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
+			"owner-manual check could not be done for %d book(s); %d group(s) holding them were skipped (first ids: %s)",
+			len(checkFailed), plan.ManualCheckFailedSkipped, strings.Join(firstN(checkFailed, 20), ", ")))
+	}
 	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
 		"RULE CHANGE (2026-10-01): %s | legacy-rule-skipped=%d | skips by reason: %s | unblocked examples: %s",
 		regroupRuleDelta(plan), plan.LegacyEntangledSkipped, regroupSkipReasons(plan),
@@ -174,7 +190,27 @@ func (p *Plugin) runITunesRegroup(ctx context.Context, raw json.RawMessage, repo
 		return err
 	}
 	_ = reporter.UpdateProgress(4, 4, "APPLIED — "+summary)
+	// Every other group was applied; the ones holding a book whose check
+	// failed were not, and the run says so the way a recheck read failure
+	// does (an error at the end, not an abort at the start).
+	if len(checkFailed) > 0 {
+		return fmt.Errorf("itunes.regroup: owner-manual check failed for %d book(s); %d group(s) skipped (see op log)",
+			len(checkFailed), plan.ManualCheckFailedSkipped)
+	}
 	return nil
+}
+
+// regroupCheckFailedBooks lists, sorted, the snapshot's books whose
+// owner-manual check could not be done.
+func regroupCheckFailedBooks(snap itunesservice.Snapshot) []string {
+	var ids []string
+	for id, b := range snap.Books {
+		if b.ManualCheckFailed {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 // regroupRunStore is the run's store: OpsStore plus the tag reads the
@@ -186,26 +222,87 @@ type regroupRunStore struct {
 }
 
 // itunesRegroupSnapshotReader is what buildRegroupSnapshot reads: the shared
-// regroup snapshot reader plus every series row, every live book's tags in
-// one call, and the author-credit reads, so the whole-book owner-manual
-// check (applygate.BookManualOnly) runs without a per-book file, series or
-// tag read.
+// regroup snapshot reader plus every series row, every author row, every
+// live book's tags in one call, and the author-credit reads, so the
+// whole-book owner-manual check (applygate.BookManualOnly) runs without a
+// per-book file, series, tag or author-row read.
 type itunesRegroupSnapshotReader interface {
 	regroupSnapshotReader
 	GetAllSeries() ([]database.Series, error)
+	GetAllAuthors() ([]database.Author, error)
 	GetBookTagsByBookIDs(bookIDs []string) (map[string][]string, error)
 	database.BookAuthorReader
 }
 
-// manualOnlyFilesByBook serves book_file rows a caller already read to the
-// owner-manual check (applygate.ManualOnlyFilesReader), so the check sees
-// exactly the rows the caller's own decision was built from -- no second read
-// that could disagree with them. itunes.regroup's snapshot and recheck and
-// author-strip-merge's relink use it.
-type manualOnlyFilesByBook map[string][]database.BookFile
+// regroupSnapshotFiles serves the snapshot's bulk GetAllBookFilesCore read to
+// the owner-manual check (applygate.ManualOnlyFilesReader) without copying
+// it. It holds only an int32 index per live row into the slice the snapshot
+// already read; GetBookFiles builds that book's []database.BookFile (the
+// three fields the check reads, plus the ids) per call, and the caller drops
+// it when the check returns.
+//
+// It replaced a map of one database.BookFile (792 B, larger than the 624 B
+// BookFileCore it was copied from) per live row, held for the whole check
+// pass: about 240 MB at 308k rows and 590 MB at 742k, before append's slack,
+// on a host with OOM history. The index costs 4 B per row plus one slice
+// header and map entry per book.
+type regroupSnapshotFiles struct {
+	rows   []database.BookFileCore
+	byBook map[string][]int32
+}
 
-func (r manualOnlyFilesByBook) GetBookFiles(bookID string) ([]database.BookFile, error) {
-	return r[bookID], nil
+// newRegroupSnapshotFiles indexes rows by book, keeping only rows whose book
+// keep reports true (the snapshot's live books).
+func newRegroupSnapshotFiles(rows []database.BookFileCore, keep func(bookID string) bool) (regroupSnapshotFiles, error) {
+	if len(rows) > math.MaxInt32 {
+		return regroupSnapshotFiles{}, fmt.Errorf("%d book_file rows exceed the snapshot's int32 index", len(rows))
+	}
+	r := regroupSnapshotFiles{rows: rows, byBook: make(map[string][]int32)}
+	for i := range rows {
+		if keep(rows[i].BookID) {
+			r.byBook[rows[i].BookID] = append(r.byBook[rows[i].BookID], int32(i))
+		}
+	}
+	return r, nil
+}
+
+// GetBookFiles builds bookID's rows with what the owner-manual check reads
+// (applygate.BulkManualOnlyGuard: the path and the two transcribed fields).
+func (r regroupSnapshotFiles) GetBookFiles(bookID string) ([]database.BookFile, error) {
+	idx := r.byBook[bookID]
+	if len(idx) == 0 {
+		return nil, nil
+	}
+	out := make([]database.BookFile, len(idx))
+	for j, i := range idx {
+		f := &r.rows[i]
+		out[j] = database.BookFile{ID: f.ID, BookID: f.BookID, FilePath: f.FilePath,
+			TranscribedTitle: f.TranscribedTitle, TranscribedAuthor: f.TranscribedAuthor}
+	}
+	return out, nil
+}
+
+// regroupAuthorReader serves the owner-manual check's author-credit reads in
+// the snapshot: the book's credits (GetBookAuthors) from the store, one point
+// read per book, and each credited author row from the snapshot's one
+// GetAllAuthors read. An id the bulk read did not return -- a merged-away
+// author whose tombstone redirects, or a row created since -- falls back to
+// the store's GetAuthorByID, so the map can only save reads, never drop a
+// credit.
+type regroupAuthorReader struct {
+	store database.BookAuthorReader
+	byID  map[int]*database.Author
+}
+
+func (r regroupAuthorReader) GetBookAuthors(bookID string) ([]database.BookAuthor, error) {
+	return r.store.GetBookAuthors(bookID)
+}
+
+func (r regroupAuthorReader) GetAuthorByID(id int) (*database.Author, error) {
+	if a, ok := r.byID[id]; ok {
+		return a, nil
+	}
+	return r.store.GetAuthorByID(id)
 }
 
 // regroupSeriesReader serves series rows from the snapshot's GetAllSeries.
@@ -224,15 +321,6 @@ func (r regroupTagsReader) GetBookTagsDetailed(bookID string) ([]database.BookTa
 		out[i] = database.BookTag{BookID: bookID, Tag: t}
 	}
 	return out, nil
-}
-
-// regroupManualOnlyFile is the part of a book_file row the owner-manual check
-// reads (applygate.BulkManualOnlyGuard: the path and the two transcribed
-// fields). The snapshot keeps only these: a full BookFile per row for a
-// 300,000-row library would be the snapshot's largest allocation by far.
-func regroupManualOnlyFile(f *database.BookFileCore) database.BookFile {
-	return database.BookFile{ID: f.ID, BookID: f.BookID, FilePath: f.FilePath,
-		TranscribedTitle: f.TranscribedTitle, TranscribedAuthor: f.TranscribedAuthor}
 }
 
 // regroupManualOnly is the planner's BookMeta.ManualOnly for one book: the
@@ -272,6 +360,14 @@ func (p *Plugin) buildRegroupSnapshot(ctx context.Context, store itunesRegroupSn
 	seriesByID := make(regroupSeriesReader, len(seriesRows))
 	for i := range seriesRows {
 		seriesByID[seriesRows[i].ID] = &seriesRows[i]
+	}
+	authorRows, err := store.GetAllAuthors()
+	if err != nil {
+		return snap, fmt.Errorf("GetAllAuthors: %w", err)
+	}
+	authorsByID := make(map[int]*database.Author, len(authorRows))
+	for i := range authorRows {
+		authorsByID[authorRows[i].ID] = &authorRows[i]
 	}
 
 	// Pass 1: all books → per-book rows + version-group membership.
@@ -321,13 +417,15 @@ func (p *Plugin) buildRegroupSnapshot(ctx context.Context, store itunesRegroupSn
 		return snap, fmt.Errorf("GetAllBookFilesCore: %w", err)
 	}
 	facts := make(map[string]*regroupFileFacts, len(books))
-	moFiles := make(manualOnlyFilesByBook, len(books))
+	moFiles, err := newRegroupSnapshotFiles(files, func(id string) bool { return live[id] })
+	if err != nil {
+		return snap, err
+	}
 	for i := range files {
 		f := &files[i]
 		if !live[f.BookID] {
 			continue
 		}
-		moFiles[f.BookID] = append(moFiles[f.BookID], regroupManualOnlyFile(f))
 		ff := facts[f.BookID]
 		if ff == nil {
 			ff = &regroupFileFacts{}
@@ -364,14 +462,17 @@ func (p *Plugin) buildRegroupSnapshot(ctx context.Context, store itunesRegroupSn
 		}
 	}
 
-	// The whole-book owner-manual check for every live book. Files, series and
-	// tags are served from the bulk reads (one call each); the author credits
-	// are the one per-book read (GetBookAuthors, a point get, plus
-	// GetAuthorByID per credit) since the store has no bulk credit read.
-	// Run on a NumCPU worker pool (CLAUDE.md: a per-item DB read over the
-	// whole library). Each worker writes only its own slot of manual, so no
-	// lock is needed. A read failure fails the snapshot: the planner cannot be
-	// told a book is not owner-manual when that could not be checked.
+	// The whole-book owner-manual check for every live book. Files, series,
+	// author rows and tags are served from the bulk reads (one call each); the
+	// book's credits are the one per-book read (GetBookAuthors, a point get)
+	// since the store has no bulk credit read. Run on a NumCPU worker pool
+	// (CLAUDE.md: a per-item DB read over the whole library). Each worker
+	// writes only its own slots of manual and failed, so no lock is needed.
+	//
+	// A read failure fails that BOOK, not the snapshot: it is marked
+	// ManualCheckFailed and the planner skips only the groups holding it
+	// (fail closed per group, as the apply-time recheck does), so one bad
+	// credit row cannot stop the nightly run for the whole library.
 	liveIDs := make([]string, 0, len(books))
 	for id := range books {
 		if live[id] {
@@ -383,8 +484,10 @@ func (p *Plugin) buildRegroupSnapshot(ctx context.Context, store itunesRegroupSn
 	if err != nil {
 		return snap, fmt.Errorf("GetBookTagsByBookIDs: %w", err)
 	}
-	mo := applygate.ManualOnlyReaders{Files: moFiles, Series: seriesByID, Authors: store, Tags: regroupTagsReader(tagMap)}
+	mo := applygate.ManualOnlyReaders{Files: moFiles, Series: seriesByID,
+		Authors: regroupAuthorReader{store: store, byID: authorsByID}, Tags: regroupTagsReader(tagMap)}
 	manual := make([]bool, len(liveIDs))
+	failed := make([]error, len(liveIDs))
 	eg, ectx := errgroup.WithContext(ctx)
 	eg.SetLimit(runtime.NumCPU())
 	for i, id := range liveIDs {
@@ -392,13 +495,26 @@ func (p *Plugin) buildRegroupSnapshot(ctx context.Context, store itunesRegroupSn
 			if err := ectx.Err(); err != nil {
 				return err
 			}
-			held, err := regroupManualOnly(mo, books[id])
-			manual[i] = held
-			return err
+			manual[i], failed[i] = regroupManualOnly(mo, books[id])
+			return nil
 		})
 	}
 	if err := eg.Wait(); err != nil {
 		return snap, err
+	}
+	const logFailures = 20
+	nFailed := 0
+	for i := range failed {
+		if failed[i] == nil {
+			continue
+		}
+		if nFailed < logFailures {
+			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("owner-manual check failed; groups holding %s will be skipped: %v", liveIDs[i], failed[i]))
+		}
+		nFailed++
+	}
+	if nFailed > logFailures {
+		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("owner-manual check failed for %d more book(s) (not listed)", nFailed-logFailures))
 	}
 
 	for i, id := range liveIDs {
@@ -411,7 +527,9 @@ func (p *Plugin) buildRegroupSnapshot(ctx context.Context, store itunesRegroupSn
 		if ff == nil {
 			ff = &regroupFileFacts{}
 		}
-		snap.Books[id] = regroupBookMeta(b, ff, incumbent[vg], vgLegacyNonPrimary[vg], manual[i])
+		meta := regroupBookMeta(b, ff, incumbent[vg], vgLegacyNonPrimary[vg], manual[i])
+		meta.ManualCheckFailed = failed[i] != nil
+		snap.Books[id] = meta
 	}
 	_ = reporter.UpdateProgress(2, 4, fmt.Sprintf("Phase 2/4: snapshot ready (%d books, %d PID locations)", len(snap.Books), len(snap.PIDLoc)))
 	return snap, nil
@@ -564,7 +682,7 @@ func (p *Plugin) applyRegroupPlan(ctx context.Context, store itunesRegroupStore,
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if a.Entangled || a.ManualOnly || (a.Target == "" && !a.FreshBook) {
+		if a.Entangled || a.ManualOnly || a.ManualCheckFailed || (a.Target == "" && !a.FreshBook) {
 			continue // skipped or nothing-in-DB
 		}
 		applyRegroupGroup(store, plan, gi, rootDir, reporter, touched, &c)
@@ -832,7 +950,7 @@ func regroupRecheck(store itunesRegroupStore, plan itunesservice.RegroupPlan, gi
 		// The same whole-book check the snapshot made, over the rows read
 		// here: these files, and the store's series, credits and tags.
 		manual, err := regroupManualOnly(applygate.ManualOnlyReaders{
-			Files: manualOnlyFilesByBook{id: files}, Series: store, Authors: store, Tags: store,
+			Files: applygate.ManualOnlyFilesByBook{id: files}, Series: store, Authors: store, Tags: store,
 		}, b)
 		if err != nil {
 			return "", false, err
@@ -911,6 +1029,8 @@ func regroupExamples(plan itunesservice.RegroupPlan, n int) []string {
 		switch {
 		case a.ManualOnly:
 			out = append(out, fmt.Sprintf("SKIP(owner-manual-only) %q", a.Title))
+		case a.ManualCheckFailed:
+			out = append(out, fmt.Sprintf("SKIP(owner-manual-check-failed) %q", a.Title))
 		case a.Entangled:
 			out = append(out, fmt.Sprintf("SKIP(entangled:%s) %q", a.EntangleReason, a.Title))
 		case len(a.Moves) > 0 && a.FreshBook:

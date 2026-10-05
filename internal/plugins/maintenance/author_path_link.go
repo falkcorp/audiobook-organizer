@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_path_link.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 4a1b9de2-6c07-4f35-8b1a-9d2e5c7f0a63
 // last-edited: 2026-10-05
 
@@ -920,7 +920,7 @@ func (p *Plugin) authorPathLink(ctx context.Context, params authorPathLinkParams
 
 	creator := newAuthorPathLinkCreator(linkStore, dryRun)
 	runErr := registry.RunItems(ctx, reporter, actionable, func(ctx context.Context, ch authorPathLinkChange) error {
-		out := p.authorPathLinkApplyOne(ch, linkStore, creator, dryRun, opID, lost, res, &mu)
+		out := p.authorPathLinkApplyOne(ch, linkStore, mo, creator, dryRun, opID, lost, res, &mu)
 		record(out)
 		return nil
 	}, registry.RunItemsOptions{
@@ -1221,6 +1221,7 @@ func (c *authorPathLinkCreator) created() []authorPathLinkCreatedAuthor {
 func (p *Plugin) authorPathLinkApplyOne(
 	ch authorPathLinkChange,
 	store authorPathLinkBookStore,
+	mo applygate.ManualOnlyReaders,
 	creator *authorPathLinkCreator,
 	dryRun bool,
 	opID string,
@@ -1240,6 +1241,17 @@ func (p *Plugin) authorPathLinkApplyOne(
 	}
 	if full == nil || full.AuthorID != nil {
 		ch.Outcome = authorPathLinkChangedSinceScan
+		return ch
+	}
+	// The whole-book owner-manual check again, on the fresh row and fresh
+	// reads: the classify pass ran it on the snapshot, and a franchise: tag,
+	// a credit or a file added since must still hold the book. Before the
+	// dry-run return, so a preview and an apply decide alike. A read failure
+	// fails the book (nothing written), as in classify.
+	if held, _, err := applygate.BookManualOnly(mo, full); err != nil {
+		return fail(fmt.Errorf("owner-manual check: %w", err))
+	} else if held {
+		ch.Outcome = authorPathLinkOwnerManual
 		return ch
 	}
 

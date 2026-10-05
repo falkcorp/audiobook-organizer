@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_strip_merge_relink.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 771dc90a-8f91-40e6-93bc-60611ebe58b5
 // last-edited: 2026-10-05
 
@@ -421,7 +421,7 @@ func relinkOneTitleBook(store titleRelinkStore, mo applygate.ManualOnlyReaders, 
 	// and every file path as before, plus the series row, the author
 	// credits, the franchise: tags and the files' transcribed fields. A read
 	// failure fails the book (nothing written), not owner-manual.
-	mo.Files = manualOnlyFilesByBook{book.ID: files}
+	mo.Files = applygate.ManualOnlyFilesByBook{book.ID: files}
 	full := book.ToBook()
 	if held, _, err := applygate.BookManualOnly(mo, &full); err != nil {
 		r.Outcome = titleRelinkOutcomeFailed
