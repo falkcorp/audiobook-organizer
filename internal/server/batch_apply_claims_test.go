@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_claims_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: e4b9c7a2-1f36-4d80-b5c9-8a0d2e6f3b71
-// last-edited: 2026-09-30
+// last-edited: 2026-10-04
 
 package server
 
@@ -31,6 +31,9 @@ func (f fakeBooks) LiveBookPathsUnderDir(string) (map[string]string, error) { re
 // GetSeriesByID gives fakeBooks the owner-manual-only guard's series read:
 // no series rows.
 func (f fakeBooks) GetSeriesByID(int) (*database.Series, error) { return nil, nil }
+
+// GetBookTagsDetailed: no tags (the owner-manual guard reads them).
+func (f fakeBooks) GetBookTagsDetailed(string) ([]database.BookTag, error) { return nil, nil }
 
 // filesBooks is fakeBooks with per-book file rows and read errors.
 type filesBooks struct {
