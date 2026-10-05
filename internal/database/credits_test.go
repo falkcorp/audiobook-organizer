@@ -112,16 +112,20 @@ func TestNormalizeBookAuthors_SortsGapsDuplicatesAndZeroIDs(t *testing.T) {
 	in := []BookAuthor{
 		{AuthorID: 3, Role: "co-author", Position: 7},
 		{AuthorID: 1, Role: "author", Position: 2},
-		{AuthorID: 0, Role: "author", Position: 0},  // no author: dropped
+		{AuthorID: 0, Role: "author", Position: 0}, // no author: dropped
 		{AuthorID: 2, Role: "editor", Position: 5},
-		{AuthorID: 1, Role: "editor", Position: 9},  // repeat of 1: dropped
-		{AuthorID: -4, Role: "author", Position: 1}, // invalid: dropped
+		{AuthorID: 1, Role: "author", Position: 9},   // exact (author, role) repeat: dropped
+		{AuthorID: 2, Role: "narrator", Position: 6}, // same person, another role: kept
+		{AuthorID: -4, Role: "author", Position: 1},  // invalid: dropped
 	}
 	got := NormalizeBookAuthors(in)
-	if ids := creditAuthorIDs(got); !reflect.DeepEqual(ids, []int{1, 2, 3}) {
-		t.Fatalf("order = %v, want [1 2 3]", ids)
+	if ids := creditAuthorIDs(got); !reflect.DeepEqual(ids, []int{1, 2, 2, 3}) {
+		t.Fatalf("order = %v, want [1 2 2 3]", ids)
 	}
-	if pos := positionsOfAuthors(got); !reflect.DeepEqual(pos, []int{0, 1, 2}) {
+	if got[1].Role != "editor" || got[2].Role != "narrator" {
+		t.Errorf("an author credited in two roles must keep both rows, got %+v", got)
+	}
+	if pos := positionsOfAuthors(got); !reflect.DeepEqual(pos, []int{0, 1, 2, 3}) {
 		t.Fatalf("positions = %v", pos)
 	}
 	if got[0].Role != "author" {
@@ -137,7 +141,7 @@ func TestNormalizeBookNarrators(t *testing.T) {
 		{NarratorID: 5, Role: "narrator", Position: 0},
 		{NarratorID: 6, Role: "narrator", Position: 0},
 		{NarratorID: 7, Role: "co-narrator", Position: 1},
-		{NarratorID: 5, Role: "co-narrator", Position: 3},
+		{NarratorID: 5, Role: "narrator", Position: 3},
 		{NarratorID: 0, Position: 0},
 	}
 	got := NormalizeBookNarrators(in)

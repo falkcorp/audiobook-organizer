@@ -1,7 +1,7 @@
 ### Changed
 
 - A book's author and narrator credit lists are now stored in canonical form
-  on every write: sorted by position, one row per person, positions numbered
+  on every write: sorted by position, one row per person and role (an author who also narrates keeps both rows), positions numbered
   0, 1, 2 and so on. Ties keep their stored order, so rows that an older copy
   path wrote all at position 0 come out in the order they were credited.
   Narrator credit writes now take a per-book lock, as author credit writes

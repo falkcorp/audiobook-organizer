@@ -120,17 +120,23 @@ func JoinCreditNamesABS(names []string) string {
 }
 
 // NormalizeBookAuthors returns rows in canonical form: ordered by Position
-// (ties keep their stored order), one row per author (the first, i.e. the
-// lowest position, wins), and Position renumbered 0..n-1. Rows with a
-// non-positive AuthorID are dropped. The input slice is not modified.
+// (ties keep their stored order), one row per (author, role) pair (the
+// first, i.e. the lowest position, wins), and Position renumbered 0..n-1.
+// Rows with a non-positive AuthorID are dropped. The input slice is not
+// modified.
 //
 // Ties keep stored order because production holds rows that an old copy
 // path wrote all at position 0, followed by rows a later add-only apply
 // appended at max+1 (the "A @0, B @0, A+B @1" shape found on 2026-10-04).
 // Stored order is the order they were credited in, so A, B, A+B becomes
-// positions 0, 1, 2. One row per author matches memdb, whose book_authors
-// primary index is {BookID, AuthorID}: a duplicate in Pebble was already a
-// single row in memdb, so dropping it makes the two agree.
+// positions 0, 1, 2.
+//
+// The same author may legitimately appear twice with DIFFERENT roles: an
+// author who also narrates keeps an "author" row and a "narrator" row, and
+// the swapped-title and combined-author fixers rely on that. Only an exact
+// (author, role) repeat is dropped. memdb's book_authors primary index is
+// {BookID, AuthorID}, so memdb holds one of such a pair; that existing gap
+// is not changed here.
 func NormalizeBookAuthors(rows []BookAuthor) []BookAuthor {
 	sorted := make([]BookAuthor, 0, len(rows))
 	for _, r := range rows {
@@ -139,21 +145,26 @@ func NormalizeBookAuthors(rows []BookAuthor) []BookAuthor {
 		}
 	}
 	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Position < sorted[j].Position })
-	seen := make(map[int]bool, len(sorted))
+	type key struct {
+		id   int
+		role string
+	}
+	seen := make(map[key]bool, len(sorted))
 	out := sorted[:0]
 	for _, r := range sorted {
-		if seen[r.AuthorID] {
+		k := key{r.AuthorID, r.Role}
+		if seen[k] {
 			continue
 		}
-		seen[r.AuthorID] = true
+		seen[k] = true
 		r.Position = len(out)
 		out = append(out, r)
 	}
 	return out
 }
 
-// NormalizeBookNarrators is NormalizeBookAuthors for narrator credits; memdb's
-// book_narrators primary index is {BookID, NarratorID}.
+// NormalizeBookNarrators is NormalizeBookAuthors for narrator credits: one row
+// per (narrator, role) pair.
 func NormalizeBookNarrators(rows []BookNarrator) []BookNarrator {
 	sorted := make([]BookNarrator, 0, len(rows))
 	for _, r := range rows {
@@ -162,13 +173,18 @@ func NormalizeBookNarrators(rows []BookNarrator) []BookNarrator {
 		}
 	}
 	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Position < sorted[j].Position })
-	seen := make(map[int]bool, len(sorted))
+	type key struct {
+		id   int
+		role string
+	}
+	seen := make(map[key]bool, len(sorted))
 	out := sorted[:0]
 	for _, r := range sorted {
-		if seen[r.NarratorID] {
+		k := key{r.NarratorID, r.Role}
+		if seen[k] {
 			continue
 		}
-		seen[r.NarratorID] = true
+		seen[k] = true
 		r.Position = len(out)
 		out = append(out, r)
 	}
