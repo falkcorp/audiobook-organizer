@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_atpath_markers_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 4b7e0c2d-9f13-4a68-b5d1-7e2c8a90f346
-// last-edited: 2026-10-02
+// last-edited: 2026-10-05
 
 package database
 
@@ -110,13 +110,12 @@ func TestUpdateBook_ExistingCacheEntryStillDropped(t *testing.T) {
 	if err := s.PutMetadataCache(&MetadataCandidateCache{BookID: b.ID}); err != nil {
 		t.Fatal(err)
 	}
-	asin := "B000TEST02"
-	b.ASIN = &asin
+	b.Title = "t retitled"
 	if _, err := s.UpdateBook(b.ID, b); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := s.GetMetadataCache(b.ID); err != nil || got != nil {
-		t.Fatalf("cache entry survived an identity change: %v %v", got, err)
+		t.Fatalf("cache entry survived a title change: %v %v", got, err)
 	}
 }
 
