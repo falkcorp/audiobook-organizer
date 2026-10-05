@@ -1,5 +1,5 @@
 // file: internal/metafetch/apply_authors_combined_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4cc97c58-fb54-465a-bc6d-5358ffddf182
 // last-edited: 2026-10-04
 
@@ -77,26 +77,26 @@ func TestApplyMetadataToBook_MultiAuthorProviderCreditIsSplit(t *testing.T) {
 	}
 }
 
-// A combined credit too long to split (four names), whose parts exist, credits
+// A combined credit the splitter refuses (a publisher part), whose parts exist, credits
 // no one: the book keeps its credits and no combined row is created.
 func TestApplyMetadataToBook_UnsplittableCombinedOfExistingAuthorsIsNotCreated(t *testing.T) {
 	st, err := database.NewPebbleStore(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = st.Close() })
 	svc := NewService(st)
-	s, err := st.CreateAuthor("Amy Adams")
+	s, err := st.CreateAuthor("Nicholas Briggs")
 	require.NoError(t, err)
-	for _, n := range []string{"Ben Brown", "Cat Cole", "Dan Dorn"} {
+	for _, n := range []string{"Big Finish Productions"} {
 		_, err = st.CreateAuthor(n)
 		require.NoError(t, err)
 	}
 	b, err := st.CreateBook(&database.Book{Title: "HWFWM", FilePath: "/l/h.m4b", Format: "m4b", AuthorID: &s.ID})
 	require.NoError(t, err)
 	require.NoError(t, st.SetBookAuthors(b.ID, []database.BookAuthor{{BookID: b.ID, AuthorID: s.ID, Role: "author", Position: 0}}))
-	_, err = svc.ApplyMetadataToBook(b, metadata.BookMetadata{Author: "Amy Adams, Ben Brown, Cat Cole, Dan Dorn"})
+	_, err = svc.ApplyMetadataToBook(b, metadata.BookMetadata{Author: "Big Finish Productions, Nicholas Briggs"})
 	require.NoError(t, err)
-	require.Equal(t, []string{"Amy Adams"}, combinedCredits(t, st, b.ID))
-	a, err := st.GetAuthorByName("Amy Adams, Ben Brown, Cat Cole, Dan Dorn")
+	require.Equal(t, []string{"Nicholas Briggs"}, combinedCredits(t, st, b.ID))
+	a, err := st.GetAuthorByName("Big Finish Productions, Nicholas Briggs")
 	require.NoError(t, err)
 	require.Nil(t, a)
 }

@@ -1,5 +1,5 @@
 // file: internal/authorcredit/authorcredit.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7000d1fc-e16c-47e1-bb94-6180fe3ec1de
 // last-edited: 2026-10-04
 
@@ -26,9 +26,10 @@
 //   - the rest is split with the shared splitter
 //     (personname.SplitCompositeAuthorName); every part must pass the
 //     publisher/role gate (CleanGate) and the caller's gate, must not be a
-//     collective credit ("Full Cast") or the title of a book or name of a
-//     series in the library, there may be at most MaxSplitParts of them, and
-//     a credit naming a contributor role ("(translator)") is not split;
+//     collective credit ("Full Cast"), and a credit naming a contributor
+//     role ("(translator)") is not split; any number of parts is linked,
+//     even a part that is also a book or series title, because nothing new
+//     is created;
 //   - and EVERY part must already be an author record (by name, or by alias
 //     when the store has aliases). Then those authors are credited in order.
 //
@@ -93,11 +94,6 @@ func CleanGate(raw string) (string, bool) {
 // its one author instead). The caller leaves the book without that author, exactly as for a
 // junk name; it must not create the whole string.
 var ErrCombinedCredit = errors.New("authorcredit: combined credit of existing authors the splitter will not split")
-
-// MaxSplitParts is the most names a credit may be split into at creation:
-// longer lists are anthologies and cast lists ("4-name narrator lists"), and
-// the combined-credit fixer holds them for the same reason.
-const MaxSplitParts = 3
 
 // collectiveCredits are the letters keys of credits that name no person.
 var collectiveCredits = map[string]bool{
@@ -384,6 +380,13 @@ func SingleWordParts(name string, gate Gate) []string {
 	return out
 }
 
+// IsMultiName reports whether a credit lists several names: it loosely splits
+// into two or more pieces (brackets aside) and is not one person written
+// surname first ("Le Guin, Ursula K.").
+func IsMultiName(name string) bool {
+	return len(LooseParts(StripBrackets(name))) >= 2 && !OnePersonShape(name)
+}
+
 // IsSingleWord reports whether a name is one word ("Shirtaloon").
 func IsSingleWord(name string) bool { return len(strings.Fields(name)) == 1 }
 
@@ -648,19 +651,14 @@ func splitExisting(store Store, name string, gate Gate) ([]database.Author, erro
 	if parts == nil {
 		parts = SingleWordParts(StripBrackets(name), gate)
 	}
-	if len(parts) < 2 || len(parts) > MaxSplitParts {
+	// No part-count cap and no title check here: this split only LINKS
+	// authors that already exist, so a long credit list or a part that is
+	// also a series name ("Michael Anderle, Craig Martelle" beside a series
+	// called "Michael Anderle") is still its authors, in order. Those gates
+	// guard the creation of NEW authors, which only the combined-credit
+	// fixer's reviewed rows do (#3729 review, B1).
+	if len(parts) < 2 {
 		return nil, nil
-	}
-	if ts, ok := database.AsCapability[TitleSource](store); ok {
-		titles, err := titlesOf(ts)
-		if err != nil {
-			return nil, fmt.Errorf("read titles for the split check: %w", err)
-		}
-		for _, p := range parts {
-			if titles[LettersKey(p)] {
-				return nil, nil
-			}
-		}
 	}
 	out := make([]database.Author, 0, len(parts))
 	seen := map[int]bool{}

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/combined_author_fixer_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: d8097de1-71d8-4949-8195-fec97df8ae52
 // last-edited: 2026-10-04
 
@@ -630,7 +630,7 @@ func TestCombinedProposal_DedupesByPersonKey(t *testing.T) {
 		return database.BookAuthor{BookID: "b", AuthorID: id, Role: "author", Position: pos}
 	}
 	keys := map[int]string{1: "jkrowling", 2: "jkrowling", 3: "", 9: "x"} // 2 is an alias of 1; 3 is dangling
-	out, dropped := combinedProposal([]database.BookAuthor{ba(1, 0), ba(2, 1), ba(3, 2), ba(4, 3)}, "b", nil, nil,
+	out, dropped := combinedProposal([]database.BookAuthor{ba(1, 0), ba(2, 1), ba(3, 2), ba(4, 3)}, "b", nil, nil, 0,
 		func(id int) string {
 			if k, ok := keys[id]; ok {
 				return k
@@ -666,4 +666,31 @@ func combinedPositions(cs []database.BookAuthor) []int {
 		out[i] = c.Position
 	}
 	return out
+}
+
+// #3729 review B2: a real primary tied at @0 with another part stays first,
+// and a proposal that would not keep the primary at position 0 is refused.
+func TestCombinedAuthorFixer_RealPrimaryTiedAtZeroStaysFirst(t *testing.T) {
+	l := newCombinedLib(t)
+	for _, n := range []string{"Jia Shen", "J. N. Chaney", "Other Person", "Amy Writer", "Bob Writer"} {
+		l.author(n)
+	}
+	l.book("tie", "Digital Chimera", "J. N. Chaney", combinedLibRoot+"Chimera/a.m4b",
+		credit{"J. N. Chaney", "author", 0}, credit{"Jia Shen", "author", 0}, credit{"Jia Shen, J. N. Chaney", "author", 1})
+	// Stored order the other way round: the primary is still sorted first.
+	l.book("tie-rev", "Digital Chimera 2", "J. N. Chaney", combinedLibRoot+"Chimera2/a.m4b",
+		credit{"Jia Shen", "author", 0}, credit{"J. N. Chaney", "author", 0}, credit{"Jia Shen, J. N. Chaney", "author", 1})
+	// The primary is an author the credits do not list first at all.
+	l.book("uncredited-primary", "Elsewhere", "Other Person", combinedLibRoot+"Else/a.m4b",
+		credit{"Amy Writer, Bob Writer", "author", 0})
+	plan, rows := l.plan()
+	require.Equal(t, "J. N. Chaney @0, Jia Shen @1", rows["tie"].Proposed["credits"])
+	require.Equal(t, "J. N. Chaney @0, Jia Shen @1", rows["tie-rev"].Proposed["credits"])
+	require.Equal(t, combinedSkipPrimaryOrder, rows["uncredited-primary"].Skipped, rows["uncredited-primary"].SkipReason)
+	out := l.apply(plan, []string{rows["tie"].RowID, rows["tie-rev"].RowID})
+	require.Equal(t, 2, out.Applied, "outcomes %v", out.ByOutcome)
+	for _, k := range []string{"tie", "tie-rev"} {
+		require.Equal(t, []string{"J. N. Chaney@0/author", "Jia Shen@1/author"}, l.credits(k), k)
+		require.Equal(t, "J. N. Chaney", l.primary(k), k)
+	}
 }

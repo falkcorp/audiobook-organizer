@@ -1,5 +1,5 @@
 // file: internal/importer/combined_author_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3f25295a-33d6-4702-bedb-e8807a41713a
 // last-edited: 2026-10-04
 
@@ -22,7 +22,7 @@ import (
 func TestImportFile_MultiAuthorArtistIsSplit(t *testing.T) {
 	withSupportedExt(t)
 	dir := t.TempDir()
-	path := filepath.Join(dir, "J.N. Chaney, Jonathan P. Brazee - Mission Creep.m4b")
+	path := filepath.Join(dir, "Mission Creep - J.N. Chaney, Jonathan P. Brazee.m4b")
 	body := append([]byte("\x00\x00\x00\x1cftypM4A \x00\x00\x02\x00M4A isomiso2"), bytes.Repeat([]byte("audio-payload"), 64)...)
 	require.NoError(t, os.WriteFile(path, body, 0o600))
 
@@ -73,7 +73,7 @@ func TestImportFile_MultiAuthorArtistIsSplit(t *testing.T) {
 func TestImportFile_UnknownPartLeavesTheBookAuthorless(t *testing.T) {
 	withSupportedExt(t)
 	dir := t.TempDir()
-	path := filepath.Join(dir, "J.N. Chaney, Jonathan P. Brazee - Mission Creep.m4b")
+	path := filepath.Join(dir, "Mission Creep - J.N. Chaney, Jonathan P. Brazee.m4b")
 	body := append([]byte("\x00\x00\x00\x1cftypM4A \x00\x00\x02\x00M4A isomiso2"), bytes.Repeat([]byte("audio-payload"), 64)...)
 	require.NoError(t, os.WriteFile(path, body, 0o600))
 	var rows []*database.BookFile
@@ -94,5 +94,51 @@ func TestImportFile_UnknownPartLeavesTheBookAuthorless(t *testing.T) {
 	_, err := NewImportService(store).ImportFile(&ImportFileRequest{FilePath: path})
 	require.NoError(t, err)
 	require.NotNil(t, book)
+	require.Nil(t, book.AuthorID)
+}
+
+// importArtist imports a file named "Mission Creep - <artist>.m4b" against
+// a store with no authors, returning the book and the names created.
+func importArtist(t *testing.T, artist string) (*database.Book, []string) {
+	t.Helper()
+	withSupportedExt(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "Mission Creep - "+artist+".m4b")
+	body := append([]byte("\x00\x00\x00\x1cftypM4A \x00\x00\x02\x00M4A isomiso2"), bytes.Repeat([]byte("audio-payload"), 64)...)
+	require.NoError(t, os.WriteFile(path, body, 0o600))
+	var rows []*database.BookFile
+	store := importStore(dir, &rows)
+	store.GetAuthorByNameFunc = func(string) (*database.Author, error) { return nil, nil }
+	var created []string
+	store.CreateAuthorFunc = func(name string) (*database.Author, error) {
+		created = append(created, name)
+		return &database.Author{ID: 50 + len(created), Name: name}, nil
+	}
+	var book *database.Book
+	store.CreateBookFunc = func(b *database.Book) (*database.Book, error) {
+		out := *b
+		out.ID = "01JIMPORTEDBOOK000000000"
+		book = &out
+		return &out, nil
+	}
+	_, err := NewImportService(store).ImportFile(&ImportFileRequest{FilePath: path})
+	require.NoError(t, err)
+	require.NotNil(t, book)
+	return book, created
+}
+
+// #3729 review: a plain NEW single author is created on import, as before
+// (every Deluge auto-import goes through here).
+func TestImportFile_NewSingleAuthorIsCreated(t *testing.T) {
+	book, created := importArtist(t, "Stephen King")
+	require.Equal(t, []string{"Stephen King"}, created)
+	require.NotNil(t, book.AuthorID)
+	require.Equal(t, 51, *book.AuthorID)
+}
+
+// Only a credit of several names, none of which exists, stays authorless.
+func TestImportFile_MultiNameNoneExistingStaysAuthorless(t *testing.T) {
+	book, created := importArtist(t, "Newt Alpha, Newt Beta")
+	require.Empty(t, created)
 	require.Nil(t, book.AuthorID)
 }

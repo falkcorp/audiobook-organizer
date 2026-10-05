@@ -1,5 +1,5 @@
 // file: internal/scanner/combined_author_credit_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 3f2cc271-d7d5-4284-9075-9184112447ee
 // last-edited: 2026-10-04
 
@@ -75,11 +75,11 @@ func TestResolveAuthorIDs_UnknownPartKeepsTheWholeString(t *testing.T) {
 // A combined tag the splitter will not split, whose parts are existing
 // authors, is no author rather than a new combined row.
 func TestResolveAuthorIDs_RefusesAnUnsplittableCombinedOfExistingAuthors(t *testing.T) {
-	st := usePebbleForCombined(t, "Amy Adams", "Ben Brown", "Cat Cole", "Dan Dorn")
-	ids, err := resolveAuthorIDs("Amy Adams, Ben Brown, Cat Cole, Dan Dorn")
+	st := usePebbleForCombined(t, "Big Finish Productions", "Nicholas Briggs")
+	ids, err := resolveAuthorIDs("Big Finish Productions, Nicholas Briggs")
 	require.NoError(t, err, "never a failed save")
 	require.Empty(t, ids)
-	a, err := st.GetAuthorByName("Amy Adams, Ben Brown, Cat Cole, Dan Dorn")
+	a, err := st.GetAuthorByName("Big Finish Productions, Nicholas Briggs")
 	require.NoError(t, err)
 	require.Nil(t, a)
 }
