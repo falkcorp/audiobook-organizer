@@ -1,5 +1,5 @@
 // file: internal/franchise/franchise_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0e7a3c51-2d94-4b8f-a6e1-7c5d9f3b2a18
 // last-edited: 2026-10-04
 
@@ -156,6 +156,9 @@ func TestTitleStrength(t *testing.T) {
 func TestTagsHold(t *testing.T) {
 	if _, ok := HeldByTags([]string{"favourite", "Franchise:Doctor-Who"}); !ok {
 		t.Error("franchise tag not held")
+	}
+	if _, ok := HeldByTags([]string{"franchise:star-wars", "franchise:discworld"}); ok {
+		t.Error("another franchise's tag is not an owner-manual hold")
 	}
 	if _, ok := HeldByTags([]string{"range:war-master", "policy:no-organize"}); ok {
 		t.Error("a range tag alone is not a franchise tag")

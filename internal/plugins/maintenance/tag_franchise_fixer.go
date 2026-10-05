@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/tag_franchise_fixer.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8c8a3b12-5d98-45d2-9751-c25bf96df34e
 // last-edited: 2026-10-04
 
@@ -415,7 +415,7 @@ func (f *tagFranchiseFixer) evaluate(store tfReader, tagReader BookTagReader, se
 		if strings.HasPrefix(tag, franchise.FranchiseTagPrefix) || strings.HasPrefix(tag, franchise.RangeTagPrefix) {
 			have = append(have, tag)
 		}
-		if strings.HasPrefix(tag, franchise.FranchiseTagPrefix) && tag != franchise.FranchiseTagPrefix+fr && otherFranchise == "" {
+		if franchise.IsHeldTag(tag) && tag != franchise.FranchiseTagPrefix+fr && otherFranchise == "" {
 			otherFranchise = tag
 		}
 	}

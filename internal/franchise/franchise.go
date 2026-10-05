@@ -1,5 +1,5 @@
 // file: internal/franchise/franchise.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: ddd241fe-c7e3-4ff5-b3df-7e2908d49f7b
 // last-edited: 2026-10-04
 
@@ -430,11 +430,26 @@ func MatchTitle(title string) (Hit, bool) {
 	return best(ext)
 }
 
-// HeldByTags reports whether a book's tags mark it: any franchise: tag,
-// whatever its source (a person may tag a book by hand).
+// heldFranchiseTags are the franchise tags that hold a book: the owner-manual
+// libraries only. Another franchise: tag (franchise:discworld) is not this
+// rule's business.
+var heldFranchiseTags = map[string]bool{
+	FranchiseTagPrefix + DoctorWho: true,
+	FranchiseTagPrefix + BigFinish: true,
+	FranchiseTagPrefix + Torchwood: true,
+}
+
+// IsHeldTag reports whether one tag is a Doctor Who / Big Finish / Torchwood
+// franchise tag (case-insensitive), whatever its source (a person may tag a
+// book by hand).
+func IsHeldTag(tag string) bool {
+	return heldFranchiseTags[strings.ToLower(strings.TrimSpace(tag))]
+}
+
+// HeldByTags reports whether a book's tags mark it (IsHeldTag).
 func HeldByTags(tags []string) (string, bool) {
 	for _, t := range tags {
-		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(t)), FranchiseTagPrefix) {
+		if IsHeldTag(t) {
 			return t, true
 		}
 	}

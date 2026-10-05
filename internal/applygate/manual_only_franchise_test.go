@@ -1,5 +1,5 @@
 // file: internal/applygate/manual_only_franchise_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4c1e8a73-9b2d-4f60-a5e7-3d8f1b6c2a94
 // last-edited: 2026-10-04
 
@@ -60,6 +60,10 @@ func TestBulkManualOnlyGuard_CreditsAndTags(t *testing.T) {
 	f = moFake{tags: []database.BookTag{{Tag: "franchise:doctor-who", Source: "franchise-matcher"}}}
 	if g := BulkManualOnlyGuard(moReaders(f), neutral(), ""); !strings.Contains(g.StoreDetail, "franchise:doctor-who") {
 		t.Errorf("franchise tag not held: %+v", g)
+	}
+	f = moFake{tags: []database.BookTag{{Tag: "franchise:star-wars", Source: "user"}}}
+	if g := BulkManualOnlyGuard(moReaders(f), neutral(), ""); g.StoreDetail != "" {
+		t.Errorf("another franchise's tag held: %+v", g)
 	}
 	f = moFake{tagErr: errors.New("down")}
 	if g := BulkManualOnlyGuard(moReaders(f), neutral(), ""); g.ReadErr == "" {
