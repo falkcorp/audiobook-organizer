@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/manual_only_followups_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 414c97a5-21fa-425f-81df-a00e9bf95fd6
 // last-edited: 2026-10-05
 
@@ -7,8 +7,11 @@ package maintenance
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -17,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/franchise"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
@@ -181,6 +185,131 @@ func TestITunesRegroupApply_RecheckReadFailureSkipsGroup(t *testing.T) {
 	require.Len(t, files, 2, "group G must still be applied")
 }
 
+// --- itunes.regroup: end-of-run status ---
+
+// rgStatusXML is two two-track albums: "Album F" (PIDs F1/F2) and "Album G"
+// (PIDs G1/G2).
+func rgStatusXML() string {
+	track := func(id int, pid, album string) string {
+		return fmt.Sprintf(`		<key>%[1]d</key>
+		<dict>
+			<key>Track ID</key><integer>%[1]d</integer>
+			<key>Persistent ID</key><string>%[2]s</string>
+			<key>Name</key><string>%[3]s Part %[1]d</string>
+			<key>Album</key><string>%[3]s</string>
+			<key>Artist</key><string>Status Author</string>
+			<key>Kind</key><string>Audiobook</string>
+			<key>Location</key><string>file://localhost/missing/%[2]s.m4b</string>
+		</dict>
+`, id, pid, album)
+	}
+	return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Major Version</key><integer>1</integer>
+	<key>Minor Version</key><integer>1</integer>
+	<key>Tracks</key>
+	<dict>
+` + track(1, rgPIDF1, "Album F") + track(2, rgPIDF2, "Album F") +
+		track(3, rgPIDG1, "Album G") + track(4, rgPIDG2, "Album G") + `	</dict>
+	<key>Playlists</key><array/>
+</dict>
+</plist>
+`
+}
+
+const (
+	rgPIDF1 = "F1F1F1F1F1F1F1F1"
+	rgPIDF2 = "F2F2F2F2F2F2F2F2"
+	rgPIDG1 = "A1A1A1A1A1A1A1A1"
+	rgPIDG2 = "A2A2A2A2A2A2A2A2"
+)
+
+// The run's end status keys on the groups skipped for a failed owner-manual
+// check, not on the snapshot's check-failed books, and the dry run and the
+// apply agree. A check-failed book in no heal group (the snapshot checks
+// every live book) withholds nothing: no error, in either mode. One in a
+// group skips that group: an error, in either mode. The other group is
+// planned (and applied) either way.
+func TestITunesRegroup_CheckFailedStatus(t *testing.T) {
+	prevRoot := config.AppConfig.RootDir
+	config.AppConfig.RootDir = rgRoot
+	t.Cleanup(func() { config.AppConfig.RootDir = prevRoot })
+	xmlPath := filepath.Join(t.TempDir(), "lib.xml")
+	require.NoError(t, os.WriteFile(xmlPath, []byte(rgStatusXML()), 0o600))
+
+	for _, inGroup := range []bool{false, true} {
+		for _, dryRun := range []bool{true, false} {
+			name := fmt.Sprintf("in-group=%v/dry-run=%v", inGroup, dryRun)
+			t.Run(name, func(t *testing.T) {
+				s := regroupStore(t)
+				f1, f2 := seedBook(t, s, "Frag F1"), seedBook(t, s, "Frag F2")
+				g1, g2 := seedBook(t, s, "Frag G1"), seedBook(t, s, "Frag G2")
+				loner := seedBook(t, s, "Loner")
+				seedFilePID(t, s, f1, rgPIDF1)
+				seedFilePID(t, s, f2, rgPIDF2)
+				seedFilePID(t, s, g1, rgPIDG1)
+				seedFilePID(t, s, g2, rgPIDG2)
+				seedFilePID(t, s, loner, "0000000000000001") // in no album of the XML
+				failID := loner
+				if inGroup {
+					failID = f1
+				}
+
+				raw, err := json.Marshal(map[string]any{"xmlPath": xmlPath, "dry_run": dryRun})
+				require.NoError(t, err)
+				p := New(fakeDeps{store: rgLinkFailStore{s, failID}})
+				rep := &fakeReporter{}
+				runErr := p.runITunesRegroup(context.Background(), raw, rep)
+
+				wantSkipped := 0
+				if inGroup {
+					wantSkipped = 1
+				}
+				warn := fmt.Sprintf("owner-manual check could not be done for 1 book(s); %d group(s) holding them were skipped", wantSkipped)
+				var warned bool
+				for _, l := range rep.logs {
+					if strings.Contains(l, warn) {
+						warned = true
+					}
+				}
+				require.True(t, warned, "the check failure must be logged with its book count (%q): %v", warn, rep.logs)
+
+				if inGroup {
+					require.Error(t, runErr, "a group withheld for a failed check ends the run with an error")
+					require.Contains(t, runErr.Error(), "1 group(s)")
+				} else {
+					require.NoError(t, runErr, "a check-failed book in no group withholds nothing")
+				}
+
+				// Group G is planned and, on an apply, consolidated, whatever
+				// happened to F.
+				onG := 0
+				for _, id := range []string{g1, g2} {
+					files, err := s.GetBookFiles(id)
+					require.NoError(t, err)
+					if len(files) > 0 {
+						onG++
+					}
+				}
+				if dryRun {
+					require.Equal(t, 2, onG, "a dry run moves nothing")
+				} else {
+					require.Equal(t, 1, onG, "group G must be consolidated onto one book")
+				}
+				if inGroup || dryRun {
+					for _, id := range []string{f1, f2} {
+						files, err := s.GetBookFiles(id)
+						require.NoError(t, err)
+						require.Len(t, files, 1, "book %s keeps its file", id)
+					}
+				}
+			})
+		}
+	}
+}
+
 // --- itunes.regroup: snapshot memory ---
 
 // The snapshot's owner-manual files reader holds an int32 index per row into
@@ -223,7 +352,7 @@ func TestRegroupSnapshotFiles_HoldsNoBookFilePerRow(t *testing.T) {
 		{ID: "d1", BookID: "D", FilePath: "/x/d1.m4b"},
 		{ID: "a2", BookID: "A", FilePath: "/x/a2.m4b", TranscribedTitle: &dw},
 	}
-	r, err := newRegroupSnapshotFiles(rows, func(id string) bool { return id == "A" })
+	r, err := newRegroupSnapshotFiles(rows, 2, func(id string) bool { return id == "A" })
 	require.NoError(t, err)
 	got, err := r.GetBookFiles("A")
 	require.NoError(t, err)
@@ -247,34 +376,41 @@ func rgSyntheticFiles(rows, perBook int) []database.BookFileCore {
 }
 
 // BenchmarkRegroupSnapshotFiles compares what the snapshot's owner-manual
-// files reader allocates over 300k rows (B/op): the former map of one
-// BookFile per row against the int32 index. Run with -benchmem.
+// files reader allocates over 300k rows (B/op, cumulative over the build, not
+// resident memory): the former map of one BookFile per row against the int32
+// index, at five files per book and at one (every book a single file, the
+// most map entries per row). Run with -benchmem.
 func BenchmarkRegroupSnapshotFiles(b *testing.B) {
-	const rows, perBook = 300_000, 5
-	files := rgSyntheticFiles(rows, perBook)
+	const rows = 300_000
 	all := func(string) bool { return true }
-	b.Run("bookfile-per-row", func(b *testing.B) {
-		b.ReportAllocs()
-		for range b.N {
-			m := make(map[string][]database.BookFile, rows/perBook)
-			for i := range files {
-				f := &files[i]
-				m[f.BookID] = append(m[f.BookID], database.BookFile{ID: f.ID, BookID: f.BookID, FilePath: f.FilePath,
-					TranscribedTitle: f.TranscribedTitle, TranscribedAuthor: f.TranscribedAuthor})
+	for _, perBook := range []int{5, 1} {
+		files := rgSyntheticFiles(rows, perBook)
+		nBooks := rows / perBook
+		b.Run(fmt.Sprintf("bookfile-per-row/per-book=%d", perBook), func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				m := make(map[string][]database.BookFile, nBooks)
+				for i := range files {
+					f := &files[i]
+					m[f.BookID] = append(m[f.BookID], database.BookFile{ID: f.ID, BookID: f.BookID, FilePath: f.FilePath,
+						TranscribedTitle: f.TranscribedTitle, TranscribedAuthor: f.TranscribedAuthor})
+				}
+				_ = m
 			}
-			_ = m
-		}
-	})
-	b.Run("int32-index", func(b *testing.B) {
-		b.ReportAllocs()
-		for range b.N {
-			r, err := newRegroupSnapshotFiles(files, all)
-			if err != nil {
-				b.Fatal(err)
+		})
+		b.Run(fmt.Sprintf("int32-index/per-book=%d", perBook), func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				r, err := newRegroupSnapshotFiles(files, nBooks, all)
+				if err != nil {
+					b.Fatal(err)
+				}
+				_ = r
 			}
-			_ = r
-		}
-	})
+		})
+	}
 }
 
 // --- itunes.regroup: author rows from one bulk read ---

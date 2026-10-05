@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_regroup.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-10-05
 
@@ -182,22 +182,39 @@ func (p *Plugin) runITunesRegroup(ctx context.Context, raw json.RawMessage, repo
 		examples := regroupExamples(plan, 8)
 		_ = reporter.Log(slog.LevelInfo, "DRY RUN examples: "+strings.Join(examples, " | "))
 		_ = reporter.UpdateProgress(4, 4, "DRY RUN — "+summary)
-		return nil
+		return regroupCheckFailedErr(plan, true)
 	}
 
 	_ = reporter.UpdateProgress(3, 4, "Phase 4/4: applying plan…")
 	if err := p.applyRegroupPlan(ctx, rstore, plan, rootDir, reporter); err != nil {
-		return err
+		return errors.Join(err, regroupCheckFailedErr(plan, false))
 	}
 	_ = reporter.UpdateProgress(4, 4, "APPLIED — "+summary)
-	// Every other group was applied; the ones holding a book whose check
-	// failed were not, and the run says so the way a recheck read failure
-	// does (an error at the end, not an abort at the start).
-	if len(checkFailed) > 0 {
-		return fmt.Errorf("itunes.regroup: owner-manual check failed for %d book(s); %d group(s) skipped (see op log)",
-			len(checkFailed), plan.ManualCheckFailedSkipped)
+	return regroupCheckFailedErr(plan, false)
+}
+
+// regroupCheckFailedErr is the run's end status for the groups the planner
+// skipped because a book in them could not be owner-manual checked: every
+// other group was planned (and, on an apply, applied), and the run says so
+// the way a recheck read failure does -- an error at the end, not an abort at
+// the start.
+//
+// It keys on the skipped GROUPS, not on the snapshot's check-failed books:
+// the snapshot checks every live book in the library, so one bad credit row
+// on a book in no heal group would otherwise fail every nightly run although
+// nothing was withheld. That book count stays in the Warn log. The dry run
+// and the apply share this one rule, so the same plan ends with the same
+// status in either mode.
+func regroupCheckFailedErr(plan itunesservice.RegroupPlan, dryRun bool) error {
+	if plan.ManualCheckFailedSkipped == 0 {
+		return nil
 	}
-	return nil
+	verb := "skipped"
+	if dryRun {
+		verb = "would be skipped"
+	}
+	return fmt.Errorf("itunes.regroup: owner-manual check failed for a book in %d group(s); those groups %s (see op log)",
+		plan.ManualCheckFailedSkipped, verb)
 }
 
 // regroupCheckFailedBooks lists, sorted, the snapshot's books whose
@@ -252,12 +269,14 @@ type regroupSnapshotFiles struct {
 }
 
 // newRegroupSnapshotFiles indexes rows by book, keeping only rows whose book
-// keep reports true (the snapshot's live books).
-func newRegroupSnapshotFiles(rows []database.BookFileCore, keep func(bookID string) bool) (regroupSnapshotFiles, error) {
+// keep reports true (the snapshot's live books). nBooks sizes the index map
+// (the snapshot passes its book count, an upper bound on the kept books) so
+// it is not grown by rehashing as rows are added.
+func newRegroupSnapshotFiles(rows []database.BookFileCore, nBooks int, keep func(bookID string) bool) (regroupSnapshotFiles, error) {
 	if len(rows) > math.MaxInt32 {
 		return regroupSnapshotFiles{}, fmt.Errorf("%d book_file rows exceed the snapshot's int32 index", len(rows))
 	}
-	r := regroupSnapshotFiles{rows: rows, byBook: make(map[string][]int32)}
+	r := regroupSnapshotFiles{rows: rows, byBook: make(map[string][]int32, nBooks)}
 	for i := range rows {
 		if keep(rows[i].BookID) {
 			r.byBook[rows[i].BookID] = append(r.byBook[rows[i].BookID], int32(i))
@@ -417,7 +436,7 @@ func (p *Plugin) buildRegroupSnapshot(ctx context.Context, store itunesRegroupSn
 		return snap, fmt.Errorf("GetAllBookFilesCore: %w", err)
 	}
 	facts := make(map[string]*regroupFileFacts, len(books))
-	moFiles, err := newRegroupSnapshotFiles(files, func(id string) bool { return live[id] })
+	moFiles, err := newRegroupSnapshotFiles(files, len(books), func(id string) bool { return live[id] })
 	if err != nil {
 		return snap, err
 	}
