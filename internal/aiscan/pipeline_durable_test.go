@@ -1,7 +1,7 @@
 // file: internal/aiscan/pipeline_durable_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: e3808e03-3f51-4f6d-83b8-9621db7b7f15
-// last-edited: 2026-09-19
+// last-edited: 2026-10-05
 
 package aiscan
 
@@ -152,9 +152,14 @@ type fakeLLM struct {
 	// createGate, when set, holds CreateBatch* after OpenAI accepted the
 	// batch, until the channel is closed.
 	createGate chan struct{}
-	// checkDelay slows every CheckBatchStatus (a slow listing/API).
-	checkDelay  time.Duration
-	canceledIDs []string
+	// checkGate, when set, holds every CheckBatchStatus (a slow listing/API)
+	// until it is closed. It deliberately ignores the call's context: the
+	// test using it proves the caller does not wait for the poll, so the
+	// poll must not end early on cancel. checkEntered is signaled
+	// (non-blocking, buffered 1) once a call is held at the gate.
+	checkGate    chan struct{}
+	checkEntered chan struct{}
+	canceledIDs  []string
 }
 
 func newFakeLLM(acct *fakeAccount) *fakeLLM {
@@ -261,10 +266,14 @@ func (f *fakeLLM) CreateBatchAuthorDedup(_ context.Context, inputs []ai.AuthorDi
 
 func (f *fakeLLM) CheckBatchStatus(_ context.Context, batchID string) (string, string, error) {
 	f.mu.Lock()
-	delay := f.checkDelay
+	gate, entered := f.checkGate, f.checkEntered
 	f.mu.Unlock()
-	if delay > 0 {
-		time.Sleep(delay)
+	if gate != nil {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		<-gate
 	}
 	f.acct.mu.Lock()
 	defer f.acct.mu.Unlock()
