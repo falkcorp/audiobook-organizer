@@ -17,7 +17,15 @@ Matching:
   author surname.
 - These become review rows and are never applied: ambiguous matches, runtime
   mismatches, junk-titled targets, a title found only in an author field, and
-  two items claiming one book.
+  an ASIN match whose series number disagrees with the item's (a book row
+  carrying another volume's ASIN).
+- Not-started items are matched too, and are never applied. When two items
+  resolve to one book, every applicable row on that book becomes
+  `review_duplicate_target`. This applies whatever the other row's outcome:
+  local progress, not started, already finished, or review. A wrong ASIN on
+  Book 1 therefore cannot let Book 2's finish mark Book 1 finished.
+- A match whose runtime could not be compared (unknown on either side) is
+  planned at review risk, not low.
 
 What it writes:
 
