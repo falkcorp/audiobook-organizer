@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_regroup.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-10-05
 
@@ -187,7 +187,7 @@ func (p *Plugin) runITunesRegroup(ctx context.Context, raw json.RawMessage, repo
 
 	_ = reporter.UpdateProgress(3, 4, "Phase 4/4: applying plan…")
 	if err := p.applyRegroupPlan(ctx, rstore, plan, rootDir, reporter); err != nil {
-		return errors.Join(err, regroupCheckFailedErr(plan, false))
+		return joinRegroupErrs(err, regroupCheckFailedErr(plan, false))
 	}
 	_ = reporter.UpdateProgress(4, 4, "APPLIED — "+summary)
 	return regroupCheckFailedErr(plan, false)
@@ -201,8 +201,8 @@ func (p *Plugin) runITunesRegroup(ctx context.Context, raw json.RawMessage, repo
 //
 // It keys on the skipped GROUPS, not on the snapshot's check-failed books:
 // the snapshot checks every live book in the library, so one bad credit row
-// on a book in no heal group would otherwise fail every nightly run although
-// nothing was withheld. That book count stays in the Warn log. The dry run
+// on a book in no heal group would otherwise fail every run although nothing
+// was withheld. That book count stays in the Warn log. The dry run
 // and the apply share this one rule, so the same plan ends with the same
 // status in either mode.
 func regroupCheckFailedErr(plan itunesservice.RegroupPlan, dryRun bool) error {
@@ -215,6 +215,17 @@ func regroupCheckFailedErr(plan itunesservice.RegroupPlan, dryRun bool) error {
 	}
 	return fmt.Errorf("itunes.regroup: owner-manual check failed for a book in %d group(s); those groups %s (see op log)",
 		plan.ManualCheckFailedSkipped, verb)
+}
+
+// joinRegroupErrs ends an apply that failed AND skipped check-failed groups
+// with one single-line error naming both. errors.Join separates with a
+// newline, which the op's error_message shows as two lines; "; " keeps it on
+// one. Both stay matchable with errors.Is/As. A nil checkErr returns applyErr.
+func joinRegroupErrs(applyErr, checkErr error) error {
+	if checkErr == nil {
+		return applyErr
+	}
+	return fmt.Errorf("%w; %w", applyErr, checkErr)
 }
 
 // regroupCheckFailedBooks lists, sorted, the snapshot's books whose
@@ -491,7 +502,7 @@ func (p *Plugin) buildRegroupSnapshot(ctx context.Context, store itunesRegroupSn
 	// A read failure fails that BOOK, not the snapshot: it is marked
 	// ManualCheckFailed and the planner skips only the groups holding it
 	// (fail closed per group, as the apply-time recheck does), so one bad
-	// credit row cannot stop the nightly run for the whole library.
+	// credit row cannot stop the run for the whole library.
 	liveIDs := make([]string, 0, len(books))
 	for id := range books {
 		if live[id] {

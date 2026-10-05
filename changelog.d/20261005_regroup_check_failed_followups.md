@@ -4,7 +4,7 @@
   - The end-of-run error now keys on the groups skipped for a failed
     owner-manual check, not on every live book whose check failed. The
     snapshot checks the whole library, so one bad credit row on a book in no
-    heal group used to fail every nightly apply although nothing was withheld.
+    heal group used to fail every apply although nothing was withheld.
     The Warn log still gives the book count.
   - The dry run and the apply now end with the same status for the same plan:
     a dry run that would skip a group for a failed check returns the error

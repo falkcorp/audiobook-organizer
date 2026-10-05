@@ -1,5 +1,5 @@
 // file: internal/authorcredit/authorcredit.go
-// version: 1.4.3
+// version: 1.4.4
 // guid: 7000d1fc-e16c-47e1-bb94-6180fe3ec1de
 // last-edited: 2026-10-05
 
@@ -905,10 +905,12 @@ func CurrentAuthority(store any) (authority.Lookup, bool) {
 // read as "no lists" rather than as a real snapshot.
 //
 // The check is by kind, not by type: a Lookup implemented on any nilable
-// kind (pointer, map, slice, func, chan or interface) whose value is nil is
-// read as "no lists" too. That includes a nil pointer to a type whose methods
-// are nil-safe and would have answered: such a value is never treated as a
-// real snapshot, so a custom Lookup must be non-nil to be read.
+// kind (pointer, map, slice, func or chan) whose value is nil is read as
+// "no lists" too. That includes a nil pointer to a type whose methods are
+// nil-safe and would have answered: such a value is never treated as a real
+// snapshot, so a custom Lookup must be non-nil to be read. Interface is not
+// among the kinds: reflect.ValueOf takes the dynamic value out of l, so its
+// Kind is never Interface.
 func isNilLookup(l authority.Lookup) bool {
 	if l == nil {
 		return true
@@ -918,7 +920,7 @@ func isNilLookup(l authority.Lookup) bool {
 	}
 	v := reflect.ValueOf(l)
 	switch v.Kind() {
-	case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Func, reflect.Chan, reflect.Interface:
+	case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Func, reflect.Chan:
 		return v.IsNil()
 	}
 	return false
