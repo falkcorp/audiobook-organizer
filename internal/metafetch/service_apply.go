@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.51.0
+// version: 1.51.1
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
 // last-edited: 2026-10-04
 
@@ -160,7 +160,7 @@ func (mfs *Service) applyMetadataUnguarded(book *database.Book, meta metadata.Bo
 	// same as a junk name. A store error resolving the author is logged and
 	// the book keeps its credits, as before.
 	if extractedAuthor != "" && !IsGarbageValue(extractedAuthor) {
-		authors, err := authorcredit.Resolve(mfs.db, extractedAuthor, authorcredit.PrepareGate)
+		authors, err := authorcredit.ResolveBook(mfs.db, book.ID, extractedAuthor, authorcredit.PrepareGate)
 		switch {
 		case errors.Is(err, authorcredit.ErrCombinedCredit):
 			logger.New("metafetch").Info("applyMetadataToBook: book %s: provider author %q joins existing authors the splitter will not split; not crediting it",

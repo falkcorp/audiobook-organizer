@@ -38,10 +38,21 @@
     `skipped_ambiguous_author` instead of being created.
 - Review of #3729:
   - A credit whose every part is an existing author links all of them in
-    order, whatever the number of parts and even when a part is also a series
-    or book title ("Michael Anderle, Craig Martelle"). The part cap and the
-    title check guard only new authors. Before this, iTunes imports of such
-    credits got no author.
+    order, whatever the number of parts. The part cap guards only new
+    authors. Before this, iTunes imports of such credits got no author.
+  - A part named like a series or book in the library is linked only when
+    something shows it is a person: the author is credited on a book outside
+    that series, or a metadata provider credited exactly that name to the
+    book. Otherwise the part is dropped, the reason is logged, and the other
+    parts are linked. "Dragon Born, Dante King" and "Mistborn, Brandon
+    Sanderson" credit only the real author; "Alexander Freed, Alphabet
+    Squadron" credits only Alexander Freed.
+  - A series-named part is never the primary unless it is the only part.
+    "Michael Anderle, Craig Martelle" (with a "Michael Anderle" series)
+    credits Craig Martelle first and Michael Anderle second, and Michael
+    Anderle only when he has a book outside that series.
+  - The file importer never creates a collective credit ("Full Cast") as an
+    author.
   - A real primary author tied at one position with another credited author
     stays first. A combined-credit row whose rewrite would not keep the
     primary at position 0 is held as `skipped_primary_not_first`.

@@ -1,5 +1,5 @@
 // file: internal/importer/combined_author_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 3f25295a-33d6-4702-bedb-e8807a41713a
 // last-edited: 2026-10-04
 
@@ -139,6 +139,14 @@ func TestImportFile_NewSingleAuthorIsCreated(t *testing.T) {
 // Only a credit of several names, none of which exists, stays authorless.
 func TestImportFile_MultiNameNoneExistingStaysAuthorless(t *testing.T) {
 	book, created := importArtist(t, "Newt Alpha, Newt Beta")
+	require.Empty(t, created)
+	require.Nil(t, book.AuthorID)
+}
+
+// #3729 review NIT1: a collective credit ("Full Cast") passes the name gates
+// (it is two capitalized words) but names no person: never created.
+func TestImportFile_CollectiveCreditIsNotCreated(t *testing.T) {
+	book, created := importArtist(t, "Full Cast")
 	require.Empty(t, created)
 	require.Nil(t, book.AuthorID)
 }

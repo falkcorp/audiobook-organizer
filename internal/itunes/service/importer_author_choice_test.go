@@ -1,5 +1,5 @@
 // file: internal/itunes/service/importer_author_choice_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 4a1d8e63-9f2b-4c75-b3e0-7d6c1f9a2b58
 // last-edited: 2026-10-04
 
@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/authorcredit"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
@@ -114,28 +115,48 @@ func TestAssignAuthorAndSeries_CombinedOfExistingAuthorsIsNotCreated(t *testing.
 	}
 }
 
-// #3729 review B1 repro: a part that is also a series name ("Michael
-// Anderle") does not stop two existing authors from being linked.
+// #3729 review B1 repro under the owner decision of 2026-10-04 ("usage check
+// + never first"): "Michael Anderle" is also a series name. Credited only on
+// that series' books he is dropped and Craig Martelle is the credit; credited
+// on a book outside it he links too, but never as the primary.
 func TestAssignAuthorAndSeries_ExistingAuthorNamedLikeASeriesIsLinked(t *testing.T) {
-	m := dbmocks.NewMockStore(t)
-	m.EXPECT().GetAllSeries().Return([]database.Series{{ID: 9, Name: "Michael Anderle"}}, nil).Maybe()
-	m.EXPECT().GetAllBooksCore(mock.Anything, mock.Anything).Return(nil, nil).Maybe()
-	m.EXPECT().FindAuthorByAlias(mock.Anything).Return(nil, nil).Maybe()
-	known := map[string]int{"Michael Anderle": 1, "Craig Martelle": 2}
-	m.EXPECT().GetAuthorByName(mock.Anything).RunAndReturn(func(n string) (*database.Author, error) {
-		if id, ok := known[n]; ok {
-			return &database.Author{ID: id, Name: n}, nil
-		}
-		return nil, nil
-	})
+	seriesID := 9
+	for _, tc := range []struct {
+		name  string
+		books []database.BookCore
+		want  []int
+	}{
+		{"only that series", []database.BookCore{{ID: "b1", Title: "Junk", SeriesID: &seriesID}}, []int{2}},
+		{"a book outside it", []database.BookCore{{ID: "b1", Title: "Junk", SeriesID: &seriesID},
+			{ID: "b2", Title: "Death Becomes Her"}}, []int{2, 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			authorcredit.ResetTitleCache()
+			m := dbmocks.NewMockStore(t)
+			m.EXPECT().GetAllSeries().Return([]database.Series{{ID: seriesID, Name: "Michael Anderle"}}, nil).Maybe()
+			m.EXPECT().GetAllBooksCore(mock.Anything, mock.Anything).Return(nil, nil).Maybe()
+			m.EXPECT().FindAuthorByAlias(mock.Anything).Return(nil, nil).Maybe()
+			m.EXPECT().GetBooksByAuthorIDWithRoleCore(1).Return(tc.books, nil)
+			known := map[string]int{"Michael Anderle": 1, "Craig Martelle": 2}
+			m.EXPECT().GetAuthorByName(mock.Anything).RunAndReturn(func(n string) (*database.Author, error) {
+				if id, ok := known[n]; ok {
+					return &database.Author{ID: id, Name: n}, nil
+				}
+				return nil, nil
+			})
 
-	imp := newMockImporter(m)
-	book := &database.Book{}
-	imp.assignAuthorAndSeries(book, &itunes.Track{AlbumArtist: "Michael Anderle, Craig Martelle"})
-	require.NotNil(t, book.AuthorID)
-	assert.Equal(t, 1, *book.AuthorID)
-	require.Len(t, book.Authors, 2)
-	assert.Equal(t, 2, book.Authors[1].AuthorID)
+			imp := newMockImporter(m)
+			book := &database.Book{}
+			imp.assignAuthorAndSeries(book, &itunes.Track{AlbumArtist: "Michael Anderle, Craig Martelle"})
+			require.NotNil(t, book.AuthorID)
+			assert.Equal(t, 2, *book.AuthorID, "a series-named part is never the primary")
+			require.Len(t, book.Authors, len(tc.want))
+			for i, id := range tc.want {
+				assert.Equal(t, id, book.Authors[i].AuthorID)
+				assert.Equal(t, i, book.Authors[i].Position)
+			}
+		})
+	}
 }
 
 // A single-word pen name that is an author already splits with its co-author

@@ -1,5 +1,5 @@
 // file: internal/authorcredit/authorcredit.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 7000d1fc-e16c-47e1-bb94-6180fe3ec1de
 // last-edited: 2026-10-04
 
@@ -27,11 +27,18 @@
 //     (personname.SplitCompositeAuthorName); every part must pass the
 //     publisher/role gate (CleanGate) and the caller's gate, must not be a
 //     collective credit ("Full Cast"), and a credit naming a contributor
-//     role ("(translator)") is not split; any number of parts is linked,
-//     even a part that is also a book or series title, because nothing new
-//     is created;
-//   - and EVERY part must already be an author record (by name, or by alias
-//     when the store has aliases). Then those authors are credited in order.
+//     role ("(translator)") is not split; any number of parts is linked;
+//   - a part whose name is also a book title or series name in the library
+//     ("Dragon Born, Dante King", "Mistborn, Brandon Sanderson") is linked
+//     ONLY on non-name evidence that it is a person (PersonEvidence: the
+//     author is credited on a book outside the series named after it, or a
+//     metadata provider credited exactly that name to the book); otherwise
+//     it is dropped with a logged reason and the other parts are linked. A
+//     title-named part is never the first credit (the primary) unless it is
+//     the only one (owner decision 2026-10-04, "usage check + never first");
+//   - and EVERY other part must already be an author record (by name, or by
+//     alias when the store has aliases). Then those authors are credited in
+//     order.
 //
 // Otherwise the credit is handled exactly as before this package existed: the
 // whole string is looked up and created when missing. The one exception is
@@ -50,6 +57,7 @@
 package authorcredit
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -62,6 +70,7 @@ import (
 	"golang.org/x/text/unicode/norm"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/personname"
 )
 
@@ -132,9 +141,13 @@ type TitleSource interface {
 // titleIndexTTL bounds how long one store's title index is reused.
 const titleIndexTTL = 5 * time.Minute
 
+// titleIndex is one store's library titles: the letters keys of every live
+// book title and series name, and each series' name key by series ID (the
+// outside-series evidence reads it).
 type titleIndex struct {
-	keys  map[string]bool
-	built time.Time
+	keys      map[string]bool
+	seriesKey map[int]string
+	built     time.Time
 }
 
 var (
@@ -142,16 +155,16 @@ var (
 	titleCache = map[any]*titleIndex{}
 )
 
-// titlesOf returns the letters keys of every live book title and series name
-// of ts, cached per store for titleIndexTTL.
-func titlesOf(ts TitleSource) (map[string]bool, error) {
+// titlesOf returns the title index of ts (every live book title and series
+// name), cached per store for titleIndexTTL.
+func titlesOf(ts TitleSource) (*titleIndex, error) {
 	cacheable := reflect.TypeOf(ts).Kind() == reflect.Ptr
 	if cacheable {
 		titleMu.Lock()
 		e := titleCache[ts]
 		titleMu.Unlock()
 		if e != nil && time.Since(e.built) < titleIndexTTL {
-			return e.keys, nil
+			return e, nil
 		}
 	}
 	// Built outside the lock: a full series and book listing must not hold
@@ -166,9 +179,11 @@ func titlesOf(ts TitleSource) (map[string]bool, error) {
 		return nil, fmt.Errorf("list books: %w", err)
 	}
 	keys := make(map[string]bool, len(series)+len(books))
+	seriesKey := make(map[int]string, len(series))
 	for i := range series {
 		if k := LettersKey(series[i].Name); k != "" {
 			keys[k] = true
+			seriesKey[series[i].ID] = k
 		}
 	}
 	for i := range books {
@@ -179,12 +194,13 @@ func titlesOf(ts TitleSource) (map[string]bool, error) {
 			keys[k] = true
 		}
 	}
+	idx := &titleIndex{keys: keys, seriesKey: seriesKey, built: time.Now()}
 	if cacheable {
 		titleMu.Lock()
-		titleCache[ts] = &titleIndex{keys: keys, built: time.Now()}
+		titleCache[ts] = idx
 		titleMu.Unlock()
 	}
-	return keys, nil
+	return idx, nil
 }
 
 // ResetTitleCache drops every cached title index (tests that add titles to
@@ -322,7 +338,7 @@ func namesLibraryTitle(store Store, name string) bool {
 	if err != nil {
 		return false
 	}
-	return titles[LettersKey(name)]
+	return titles.keys[LettersKey(name)]
 }
 
 // SingleWordParts is the split SplitNames refuses only because a piece is a
@@ -640,45 +656,260 @@ func piecesVerdict(store Store, name string) (same *database.Author, combined bo
 	return nil, true, nil
 }
 
+// PersonQuery is one credit part whose name is also a book title or series
+// name in the library, put to a PersonEvidence source.
+type PersonQuery struct {
+	// Name is the part as credited ("Michael Anderle").
+	Name string
+	// Author is the existing author record the part names.
+	Author database.Author
+	// BookID is the book the credit is for; "" when it is not stored yet
+	// (an import through Resolve or Lookup).
+	BookID string
+}
+
+// PersonEvidence is a source of non-name evidence that a credit part named
+// like a book or series is a person (owner decision 2026-10-04, "usage check
+// + never first"). The name alone proves nothing: "Dragon Born" and
+// "Mistborn" are author records too, minted from junk credits.
+//
+// splitExisting asks the built-in sources (outsideSeriesEvidence,
+// providerCreditEvidence) and, when the store offers it (resolved through
+// decorators with database.AsCapability), the store itself. That is the seam
+// for a further source, such as a master list of authors, narrators,
+// publishers and series built from the provider metadata cache and the
+// owner's Audible library: it plugs in as a store capability without
+// changing any caller.
+type PersonEvidence interface {
+	// PersonEvidence describes the evidence that q's part is a person, or
+	// returns "" when this source has none. An error means the source could
+	// not be read; unless another source has evidence, the part is then not
+	// linked (fail closed).
+	PersonEvidence(q PersonQuery) (string, error)
+}
+
+// authorBooksSource is the by-author book listing the outside-series
+// evidence reads: one lookup per title-named part (a memdb index in
+// production).
+type authorBooksSource interface {
+	GetBooksByAuthorIDWithRoleCore(authorID int) ([]database.BookCore, error)
+}
+
+// outsideSeriesEvidence is evidence (a): the author is credited on a book
+// that is not in the series named like the part and is not titled like it,
+// other than the book being credited (a credit is not evidence for itself).
+// A book with no series counts as outside.
+type outsideSeriesEvidence struct {
+	books  authorBooksSource
+	series map[int]string // series ID -> name letters key (titleIndex)
+}
+
+func (e outsideSeriesEvidence) PersonEvidence(q PersonQuery) (string, error) {
+	books, err := e.books.GetBooksByAuthorIDWithRoleCore(q.Author.ID)
+	if err != nil {
+		return "", fmt.Errorf("list the books of author %d: %w", q.Author.ID, err)
+	}
+	k := LettersKey(q.Name)
+	for i := range books {
+		b := &books[i]
+		if b.ID == q.BookID || b.IsSoftDeleted() || LettersKey(b.Title) == k {
+			continue
+		}
+		if b.SeriesID != nil && e.series[*b.SeriesID] == k {
+			continue
+		}
+		return fmt.Sprintf("credited on book %s, outside the series named %q", b.ID, q.Name), nil
+	}
+	return "", nil
+}
+
+// HistorySource is the metadata change history a provider credit is read
+// from.
+type HistorySource interface {
+	GetMetadataChangeHistory(bookID string, field string, limit int) ([]database.MetadataChangeRecord, error)
+}
+
+// providerHistoryLimit bounds the author history read per book.
+const providerHistoryLimit = 200
+
+// ProviderCredited returns the source of a metadata fetch that wrote exactly
+// name (by letters key) as book bookID's author, or "" when none did. Only a
+// whole fetched value counts: a provider's joined credit ("Shirtaloon,
+// Travis Deverell") is the string the record came from, so reading a piece of
+// it as evidence would prove nothing. Manual and AI-parse rows are not
+// provider credits. A store without the history reads as no credit; a read
+// error is returned. The combined-credit fixer's single-word rule and the
+// title-named part rule here share it, so the two cannot drift.
+func ProviderCredited(store any, bookID, name string) (string, error) {
+	hs, ok := database.AsCapability[HistorySource](store)
+	if !ok || bookID == "" {
+		return "", nil
+	}
+	recs, err := hs.GetMetadataChangeHistory(bookID, database.HistoryFieldAuthor, providerHistoryLimit)
+	if err != nil {
+		return "", fmt.Errorf("read author history of %s: %w", bookID, err)
+	}
+	want := LettersKey(name)
+	for _, rec := range recs {
+		src := strings.ToLower(strings.TrimSpace(rec.Source))
+		if rec.ChangeType != "fetched" || rec.NewValue == nil || src == "" || src == "manual" || strings.HasPrefix(src, "ai") {
+			continue
+		}
+		var v string
+		if json.Unmarshal([]byte(*rec.NewValue), &v) != nil {
+			v = *rec.NewValue
+		}
+		if LettersKey(personname.StripByPrefix(v)) == want {
+			return rec.Source, nil
+		}
+	}
+	return "", nil
+}
+
+// providerCreditEvidence is evidence (b): a metadata provider credited
+// exactly the part's name to the book (ProviderCredited). A credit for a book
+// not stored yet has no history.
+type providerCreditEvidence struct{ store any }
+
+func (e providerCreditEvidence) PersonEvidence(q PersonQuery) (string, error) {
+	src, err := ProviderCredited(e.store, q.BookID, q.Name)
+	if err != nil || src == "" {
+		return "", err
+	}
+	return fmt.Sprintf("metadata provider %s credited %q to this book", src, q.Name), nil
+}
+
+// evidenceSources returns the PersonEvidence sources for store: the
+// built-in ones it can serve, then the store's own when it has one.
+func evidenceSources(store Store, ti *titleIndex) []PersonEvidence {
+	var out []PersonEvidence
+	if bs, ok := database.AsCapability[authorBooksSource](store); ok {
+		out = append(out, outsideSeriesEvidence{books: bs, series: ti.seriesKey})
+	}
+	out = append(out, providerCreditEvidence{store: store})
+	if pe, ok := database.AsCapability[PersonEvidence](store); ok {
+		out = append(out, pe)
+	}
+	return out
+}
+
+// personEvidence asks every source about q and returns the first evidence
+// found, or "" and the reason the part is not linked.
+func personEvidence(sources []PersonEvidence, q PersonQuery) (evidence, why string) {
+	var errs []string
+	for _, src := range sources {
+		ev, err := src.PersonEvidence(q)
+		if err != nil {
+			errs = append(errs, err.Error())
+			continue
+		}
+		if ev != "" {
+			return ev, ""
+		}
+	}
+	why = "it is a book or series title in the library and nothing shows it is a person " +
+		"(no book outside that series, no provider credit of that name)"
+	if len(errs) > 0 {
+		why += "; evidence could not be read: " + strings.Join(errs, "; ")
+	}
+	return "", why
+}
+
+// droppedPart is a credit part splitExisting did not link, and why.
+type droppedPart struct {
+	Name   string
+	Reason string
+}
+
 // splitExisting returns the existing authors a creation path credits for
 // name, in order, or nil when it must not split it: a gate refuses (see the
-// package comment) or any part would need a new author record.
-func splitExisting(store Store, name string, gate Gate) ([]database.Author, error) {
+// package comment) or a part that is not a library title would need a new
+// author record.
+//
+// A part whose name is a book title or series name in the library is linked
+// only on PersonEvidence; without it the part is dropped (returned in
+// dropped) and the other parts are the credit, even a single one. A
+// title-named part is never first unless every linked part is title-named.
+// The title index is read once per resolve (cached, built outside locks) and
+// the evidence costs one lookup per title-named part. A title index read
+// error is returned (the caller takes the whole-string path); an evidence
+// read error drops only that part.
+//
+// No part-count cap: a long credit list of existing authors is still its
+// authors, in order (#3729 review, B1). The cap guards the creation of NEW
+// authors, which only the combined-credit fixer's reviewed rows do.
+func splitExisting(store Store, bookID, name string, gate Gate) (authors []database.Author, dropped []droppedPart, err error) {
 	if roleRe.MatchString(name) || OnePersonShape(name) {
-		return nil, nil
+		return nil, nil, nil
 	}
 	parts := SplitNames(StripBrackets(name), gate)
 	if parts == nil {
 		parts = SingleWordParts(StripBrackets(name), gate)
 	}
-	// No part-count cap and no title check here: this split only LINKS
-	// authors that already exist, so a long credit list or a part that is
-	// also a series name ("Michael Anderle, Craig Martelle" beside a series
-	// called "Michael Anderle") is still its authors, in order. Those gates
-	// guard the creation of NEW authors, which only the combined-credit
-	// fixer's reviewed rows do (#3729 review, B1).
 	if len(parts) < 2 {
-		return nil, nil
+		return nil, nil, nil
 	}
-	out := make([]database.Author, 0, len(parts))
+	var ti *titleIndex
+	if ts, ok := database.AsCapability[TitleSource](store); ok {
+		ti, err = titlesOf(ts)
+		if err != nil {
+			return nil, nil, fmt.Errorf("read titles for the split check: %w", err)
+		}
+	}
+	type linked struct {
+		author database.Author
+		title  bool
+	}
+	out := make([]linked, 0, len(parts))
 	seen := map[int]bool{}
+	var sources []PersonEvidence
 	for _, p := range parts {
+		title := ti != nil && ti.keys[LettersKey(p)]
 		a, err := lookupExisting(store, p)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if a == nil {
-			return nil, nil // a new author would be needed: never at import
+			if title {
+				dropped = append(dropped, droppedPart{Name: p, Reason: "it is a book or series title in the library and no author record"})
+				continue
+			}
+			return nil, nil, nil // a new author would be needed: never at import
+		}
+		if title {
+			if sources == nil {
+				sources = evidenceSources(store, ti)
+			}
+			if _, why := personEvidence(sources, PersonQuery{Name: p, Author: *a, BookID: bookID}); why != "" {
+				dropped = append(dropped, droppedPart{Name: p, Reason: why})
+				continue
+			}
 		}
 		if !seen[a.ID] {
 			seen[a.ID] = true
-			out = append(out, *a)
+			out = append(out, linked{author: *a, title: title})
 		}
 	}
-	if len(out) < 2 {
-		return nil, nil
+	if len(out) == 0 || (len(dropped) == 0 && len(out) < 2) {
+		return nil, dropped, nil
 	}
-	return out, nil
+	// Never first: the first part that is not title-named becomes the
+	// primary; the others keep their credit order.
+	if out[0].title {
+		for i := 1; i < len(out); i++ {
+			if !out[i].title {
+				first := out[i]
+				copy(out[1:i+1], out[:i])
+				out[0] = first
+				break
+			}
+		}
+	}
+	authors = make([]database.Author, len(out))
+	for i := range out {
+		authors[i] = out[i].author
+	}
+	return authors, dropped, nil
 }
 
 // Resolve returns the authors to credit for name, in credit order. name must
@@ -690,7 +921,10 @@ func splitExisting(store Store, name string, gate Gate) ([]database.Author, erro
 //  1. the whole string, when it is already an author ("Le Guin, Ursula K."),
 //     unless it is a combined record whose parts all exist (then 2 links
 //     them instead of the combined row);
-//  2. a split, only into existing authors (splitExisting);
+//  2. a split, only into existing authors (splitExisting); a part named
+//     like a book or series is linked only on PersonEvidence and never
+//     first, and when such a part is dropped the remaining authors are the
+//     credit even if only one is left;
 //  3. every piece the same author (a doubled name, a pen name and its
 //     alias): that author;
 //  4. every piece a different existing author: ErrCombinedCredit, never
@@ -699,19 +933,29 @@ func splitExisting(store Store, name string, gate Gate) ([]database.Author, erro
 //
 // A failure of the optional checks (the title index, an alias lookup) fails
 // OPEN to the whole-string path: it never fails the caller's save. A failure
-// of the whole-string lookup or create is returned.
+// to read person evidence drops only the title-named part. A failure of the
+// whole-string lookup or create is returned.
+//
+// Resolve is for a credit whose book is not stored yet (an import); a path
+// that holds the book's ID uses ResolveBook, so a provider credit recorded
+// for that book counts as person evidence.
 func Resolve(store Store, name string, gate Gate) ([]database.Author, error) {
-	return resolve(store, name, gate, true)
+	return resolve(store, "", name, gate, true)
+}
+
+// ResolveBook is Resolve for the credit of the stored book bookID.
+func ResolveBook(store Store, bookID, name string, gate Gate) ([]database.Author, error) {
+	return resolve(store, bookID, name, gate, true)
 }
 
 // Lookup is Resolve without step 5: it never creates an author, and returns
 // no authors when the credit names no existing one. For a path that did not
 // create authors on a miss before this package (the file importer).
 func Lookup(store Store, name string, gate Gate) ([]database.Author, error) {
-	return resolve(store, name, gate, false)
+	return resolve(store, "", name, gate, false)
 }
 
-func resolve(store Store, name string, gate Gate, create bool) ([]database.Author, error) {
+func resolve(store Store, bookID, name string, gate Gate, create bool) ([]database.Author, error) {
 	name = strings.TrimSpace(name)
 	// "By: Brandon Sanderson" and "by Brandon Sanderson" name Brandon
 	// Sanderson. The bare form is kept whole when "By ..." is a book or
@@ -733,11 +977,18 @@ func resolve(store Store, name string, gate Gate, create bool) ([]database.Autho
 	if err != nil {
 		return nil, fmt.Errorf("look up author %q: %w", name, err)
 	}
-	split, serr := splitExisting(store, name, gate)
+	split, dropped, serr := splitExisting(store, bookID, name, gate)
 	if serr != nil {
-		split = nil // fail open: the whole-string path
+		split, dropped = nil, nil // fail open: the whole-string path
 	}
-	if len(split) >= 2 {
+	for _, d := range dropped {
+		logger.New("authorcredit").Info("not crediting %q from the credit %q: %s",
+			logger.SanitizeLogValue(d.Name), logger.SanitizeLogValue(name), logger.SanitizeLogValue(d.Reason))
+	}
+	// A dropped title-named part decides the split even when one author is
+	// left: the whole-string path would read "Dragon Born, Dante King" as a
+	// combined credit of two existing authors and credit no one.
+	if len(split) >= 2 || (len(split) == 1 && len(dropped) > 0) {
 		return split, nil
 	}
 	if existing != nil {
