@@ -1,7 +1,7 @@
 // file: internal/authority/model.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2e7a9c14-6b3f-4d58-8a1e-f04c9d2b7e61
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 package authority
 
@@ -55,6 +55,9 @@ type Publisher struct {
 type ASINRef struct {
 	ASIN  string   `json:"asin"`
 	Folds []string `json:"folds"`
+	// Sources are the sources that credited the ASIN; a rebuild prunes the
+	// row only when every one of them ran.
+	Sources []string `json:"sources,omitempty"`
 }
 
 // AuthorEvidenceRule reports whether a person's author role is author

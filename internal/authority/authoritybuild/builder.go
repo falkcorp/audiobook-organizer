@@ -1,7 +1,7 @@
 // file: internal/authority/authoritybuild/builder.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 69528b02-de24-4411-8a5e-ac3831986a80
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 package authoritybuild
 
@@ -123,6 +123,20 @@ type Builder struct {
 	pubs    map[string]*pubAcc
 	ledger  map[string]string
 	sources map[string]*SourceStats
+	// asinSources: which sources credited each contributor ASIN.
+	asinSources map[string]map[string]bool
+	// pending holds one product per ledger key until Finish. Products are
+	// accumulated in Finish in key order, so the result never depends on
+	// worker order, and of two payloads with the same product ASIN in one
+	// source (two marketplaces) the one with the smaller tiebreak (its
+	// cat_raw key, or its export position) is kept.
+	pending map[string]*pendingProduct
+}
+
+type pendingProduct struct {
+	source, id, tiebreak string
+	d                    productDigest
+	manual               bool
 }
 
 // NewBuilder returns an empty Builder.
@@ -132,7 +146,17 @@ func NewBuilder() *Builder {
 		pubs:    map[string]*pubAcc{},
 		ledger:  map[string]string{},
 		sources: map[string]*SourceStats{},
+
+		asinSources: map[string]map[string]bool{},
+		pending:     map[string]*pendingProduct{},
 	}
+}
+
+func (b *Builder) noteASIN(asin, source string) {
+	if b.asinSources[asin] == nil {
+		b.asinSources[asin] = map[string]bool{}
+	}
+	b.asinSources[asin][source] = true
 }
 
 func (b *Builder) stats(source string) *SourceStats {
@@ -179,6 +203,7 @@ func (b *Builder) addPerson(source, name, asin, product string, role authority.R
 	p.displays[name]++
 	if a := authority.NormalizeASIN(asin); a != "" {
 		p.asins[a] = true
+		b.noteASIN(a, source)
 	}
 	if p.roles[role] == nil {
 		p.roles[role] = map[authority.Tier]int{}
@@ -253,7 +278,7 @@ func (b *Builder) AddSeed(s *Seed) {
 		case SeedKindAuthor:
 			b.addSeedRoles(e, authority.RoleAuthor, e.AlsoNarrator, authority.RoleNarrator, s.Tier)
 		case SeedKindNarrator:
-			b.addSeedRoles(e, authority.RoleNarrator, e.AlsoAuthor, authority.RoleAuthor, s.Tier)
+			b.addSeedRoles(e, authority.RoleNarrator, false, "", s.Tier)
 		}
 	}
 }
@@ -264,6 +289,7 @@ func (b *Builder) addSeedRoles(e SeedEntry, primary authority.Role, alsoOther bo
 	for _, a := range e.ASINs {
 		if n := authority.NormalizeASIN(a); n != "" {
 			acc.asins[n] = true
+			b.noteASIN(n, authority.SourceSeed)
 		}
 	}
 	if alsoOther {
@@ -301,68 +327,109 @@ func productTier(source, asin string) authority.Tier {
 	return authority.TierB
 }
 
+// credit is one classified contributor credit.
+type credit struct {
+	Name string         `json:"name"`
+	ASIN string         `json:"asin,omitempty"`
+	Role authority.Role `json:"role"`
+}
+
 // productDigest is what one product contributed, for the ledger.
 type productDigest struct {
-	Cast      bool        `json:"cast"`
-	Authors   [][2]string `json:"authors"`
-	Narrators [][2]string `json:"narrators"`
-	Publisher string      `json:"publisher"`
+	Cast      bool     `json:"cast"`
+	Credits   []credit `json:"credits"`
+	Publisher string   `json:"publisher"`
+}
+
+// classifyCredit strips a role marker from a credit
+// (metadata.ClassifyContributor: "Jane Doe - translator", "Read by Jane
+// Doe") and returns the bare name with the role it is recorded under. A
+// marked translator / illustrator / editor / introduction credit is
+// RoleOther wherever it appears, never author evidence. In the author array
+// an unmarked credit is an author (cast_author in a cast-context product); in
+// the narrator array it is a narrator.
+func classifyCredit(raw string, inAuthors, cast bool) (string, authority.Role) {
+	name, role := metadata.ClassifyContributor(raw)
+	switch role {
+	case metadata.RoleOther:
+		return name, authority.RoleOther
+	case metadata.RoleNarrator:
+		return name, authority.RoleNarrator
+	}
+	switch {
+	case !inAuthors:
+		return name, authority.RoleNarrator
+	case cast:
+		return name, authority.RoleCastAuthor
+	}
+	return name, authority.RoleAuthor
 }
 
 // AddProduct ingests one decoded product from source (SourceCatalog or
-// SourceLibraryExport). Only contributor names, contributor ASINs and the
-// publisher are kept; the title, subtitle and series are read in memory for
-// the cast decision and never stored. A product ASIN already ingested from
-// the same source in this build is counted as a duplicate and skipped.
-func (b *Builder) AddProduct(source string, p metadata.CatalogProduct) {
+// SourceLibraryExport). tiebreak orders duplicates: of two payloads with the
+// same product ASIN in one source, the smaller tiebreak wins (pass the
+// cat_raw key, or the export item's zero-padded position). Only contributor
+// names, contributor ASINs and the publisher are kept; the title, subtitle
+// and series are read in memory for the cast decision and never stored.
+// Nothing is accumulated until Finish, so the result is independent of the
+// order workers call this in.
+func (b *Builder) AddProduct(source, tiebreak string, p metadata.CatalogProduct) {
 	id := authority.NormalizeASIN(p.ASIN)
 	cast := IsCastContext(p)
-	manual := catalog.IsManualOnly(p)
-	d := productDigest{Cast: cast, Publisher: strings.TrimSpace(p.Publisher)}
+	pp := &pendingProduct{source: source, id: id, tiebreak: tiebreak, manual: catalog.IsManualOnly(p),
+		d: productDigest{Cast: cast, Publisher: strings.TrimSpace(p.Publisher)}}
 	for _, a := range p.Authors {
-		d.Authors = append(d.Authors, [2]string{strings.TrimSpace(a.Name), authority.NormalizeASIN(a.ASIN)})
+		name, role := classifyCredit(a.Name, true, cast)
+		pp.d.Credits = append(pp.d.Credits, credit{Name: name, ASIN: authority.NormalizeASIN(a.ASIN), Role: role})
 	}
 	for _, n := range p.Narrators {
-		d.Narrators = append(d.Narrators, [2]string{strings.TrimSpace(n.Name), authority.NormalizeASIN(n.ASIN)})
+		name, role := classifyCredit(n.Name, false, cast)
+		pp.d.Credits = append(pp.d.Credits, credit{Name: name, ASIN: authority.NormalizeASIN(n.ASIN), Role: role})
 	}
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	st := b.stats(source)
-	if id == "" || (len(d.Authors) == 0 && len(d.Narrators) == 0 && d.Publisher == "") {
+	if id == "" || (len(pp.d.Credits) == 0 && pp.d.Publisher == "") {
 		st.Skipped++
 		return
 	}
 	key := authority.SourceKey(source, id)
-	if _, dup := b.ledger[key]; dup {
+	if old, dup := b.pending[key]; dup {
 		st.Duplicates++
-		return
-	}
-	b.ledger[key] = digestOf(d)
-	st.Items++
-	if cast {
-		st.CastContext++
-	}
-	if manual {
-		st.ManualOnly++
-	}
-	authorRole := authority.RoleAuthor
-	if cast {
-		authorRole = authority.RoleCastAuthor
-	}
-	for _, a := range d.Authors {
-		b.addPerson(source, a[0], a[1], id, authorRole, productTier(source, a[1]))
-	}
-	for _, n := range d.Narrators {
-		b.addPerson(source, n[0], n[1], id, authority.RoleNarrator, productTier(source, n[1]))
-	}
-	if d.Publisher != "" {
-		pubTier := authority.TierB
-		if source == authority.SourceLibraryExport {
-			pubTier = authority.TierO
+		if tiebreak >= old.tiebreak {
+			return
 		}
-		b.addPublisher(source, d.Publisher, id, pubTier, manual, true)
 	}
+	b.pending[key] = pp
+}
+
+// accumulatePending folds the pending products into the accumulators, in
+// ledger-key order. Called by Finish with b.mu held.
+func (b *Builder) accumulatePending() {
+	for _, key := range sortedKeys(b.pending) {
+		pp := b.pending[key]
+		st := b.stats(pp.source)
+		b.ledger[key] = digestOf(pp.d)
+		st.Items++
+		if pp.d.Cast {
+			st.CastContext++
+		}
+		if pp.manual {
+			st.ManualOnly++
+		}
+		for _, c := range pp.d.Credits {
+			b.addPerson(pp.source, c.Name, c.ASIN, pp.id, c.Role, productTier(pp.source, c.ASIN))
+		}
+		if pp.d.Publisher != "" {
+			pubTier := authority.TierB
+			if pp.source == authority.SourceLibraryExport {
+				pubTier = authority.TierO
+			}
+			b.addPublisher(pp.source, pp.d.Publisher, pp.id, pubTier, pp.manual, true)
+		}
+	}
+	b.pending = map[string]*pendingProduct{}
 }
 
 func digestOf(v any) string {
@@ -409,6 +476,7 @@ func sortedKeys[V any](m map[string]V) []string {
 func (b *Builder) Finish() *Result {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	b.accumulatePending()
 	res := &Result{
 		Persons:    make(map[string]*authority.Person, len(b.persons)),
 		Publishers: make(map[string]*authority.Publisher, len(b.pubs)),
@@ -472,7 +540,7 @@ func (b *Builder) Finish() *Result {
 		}
 	}
 	for _, a := range sortedKeys(asinFolds) {
-		ref := &authority.ASINRef{ASIN: a, Folds: sortedKeys(asinFolds[a])}
+		ref := &authority.ASINRef{ASIN: a, Folds: sortedKeys(asinFolds[a]), Sources: sortedKeys(b.asinSources[a])}
 		res.ASINs[a] = ref
 		if len(ref.Folds) > 1 {
 			rep.SpellingASINs++

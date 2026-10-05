@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/authority_build.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7b057b54-4781-486b-b075-fe627504dcf1
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 package maintenance
 
@@ -42,10 +42,26 @@ import (
 //
 // DRY RUN BY DEFAULT (owner rule 2026-09-25): the run reports per-source and
 // per-tier counts, homonym conflicts, the cast-context population,
-// single-word persons, samples, and what an apply would write and prune, and
-// writes nothing. An apply writes ref_person/ref_pub/ref_asin/ref_src keys
-// only, and never touches owner overrides (ref_ovr:). Nothing reads the index
-// yet; consumers come behind a flag in later PRs.
+// single-word persons, samples, and what an apply would write, and stores
+// the plan as the op result: its digest, the FULL list of keys it would
+// prune, the rows it holds back, and any reason an apply would be refused.
+//
+// APPLY BY EXPLICIT PLAN (owner rule: dry run -> list -> apply the reviewed
+// plan). dry_run=false requires plan_op_id, the id of a completed dry run.
+// The apply re-runs the build with that dry run's sources, recomputes the
+// plan, and refuses unless the digest is identical, so it applies exactly the
+// reviewed plan and nothing else (a store or source change since the dry run
+// is a refusal, not a silent different apply). It also refuses while any
+// source is skipped (skip_seed, skip_catalog, or no export while export rows
+// exist) or any payload failed to decode, because a partial build must not
+// prune. Pruning itself is per row: a row is pruned only when every source it
+// records ran. An apply writes ref_person/ref_pub/ref_asin/ref_src keys only,
+// and never touches owner overrides (ref_ovr:).
+//
+// The ref_src: ledger is the per-source record of what each item
+// contributed: it is how a later build knows owner-export rows exist (and so
+// refuses to prune without the export), and its digests make the plan diff
+// per item.
 
 const authorityBuildOpID = "maintenance.authority-build"
 
@@ -72,6 +88,41 @@ type authorityBuildParams struct {
 	// Concurrency is the worker count for decoding and for the plan/apply
 	// reads and writes (default runtime.NumCPU(), max 32).
 	Concurrency int `json:"concurrency,omitempty"`
+	// PlanOpID is the completed dry run an apply carries out. Required with
+	// dry_run=false; the sources come from that dry run, so the source
+	// fields above must be left unset on an apply.
+	PlanOpID string `json:"plan_op_id,omitempty"`
+}
+
+// authoritySources are the source choices a plan was built with.
+type authoritySources struct {
+	SkipSeed          bool   `json:"skip_seed,omitempty"`
+	SkipCatalog       bool   `json:"skip_catalog,omitempty"`
+	LibraryExportPath string `json:"library_export_path,omitempty"`
+}
+
+func (p authorityBuildParams) sources() authoritySources {
+	return authoritySources{SkipSeed: p.SkipSeed, SkipCatalog: p.SkipCatalog, LibraryExportPath: p.LibraryExportPath}
+}
+
+// authorityPlanResult is the op result: the reviewed plan of a dry run, or
+// what an apply did.
+type authorityPlanResult struct {
+	DryRun   bool             `json:"dry_run"`
+	PlanOpID string           `json:"plan_op_id,omitempty"`
+	Digest   string           `json:"digest"`
+	Sources  authoritySources `json:"sources"`
+	Ran      []string         `json:"ran"`
+	// Refusals are the reasons an apply of this plan would be refused.
+	Refusals []string                                `json:"refusals,omitempty"`
+	Writes   int                                     `json:"writes"`
+	Counts   map[string]*authoritybuild.PrefixCounts `json:"counts"`
+	// Prune is every key the plan deletes; Held every stale row it keeps
+	// because a source it came from did not run.
+	Prune  []string                    `json:"prune"`
+	Held   []string                    `json:"held"`
+	Report authoritybuild.Report       `json:"report"`
+	Apply  *authoritybuild.ApplyResult `json:"apply,omitempty"`
 }
 
 func (p *Plugin) authorityBuildDef() sdk.OperationDef {
@@ -85,9 +136,11 @@ func (p *Plugin) authorityBuildDef() sdk.OperationDef {
 			"catalog's stored provider payloads, and optionally an owner library export " +
 			"(library_export_path). DRY RUN BY DEFAULT: reports per-source and per-tier counts, homonym " +
 			"conflicts (one name, several ASINs: reported, never picked), cast-only names, single-word " +
-			"names and samples, and what an apply would write or prune. dry_run=false writes only the " +
-			"ref_person/ref_pub/ref_asin/ref_src keys and never touches owner overrides. No network. " +
-			"Nothing reads the lists yet.",
+			"names and samples, and stores the plan (digest, the full prune list, held rows, refusals) as " +
+			"the op result. dry_run=false needs plan_op_id (a reviewed dry run) and applies exactly that " +
+			"plan, refusing if the store or sources changed, any source was skipped or any payload failed " +
+			"to decode. It writes only ref_person/ref_pub/ref_asin/ref_src keys, prunes only rows whose " +
+			"every source ran, and never touches owner overrides. No network. Nothing reads the lists yet.",
 		// ResumeDrop: a rebuild is idempotent and cheap to re-trigger.
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
@@ -114,12 +167,67 @@ func (p *Plugin) runAuthorityBuild(ctx context.Context, raw json.RawMessage, rep
 	if store == nil {
 		return errors.New("database not initialized")
 	}
-	_, err = buildAuthorityLists(ctx, store, params, dryRun, reporter, time.Now())
+	expect := ""
+	if !dryRun {
+		if params.PlanOpID == "" {
+			return fmt.Errorf("%s: dry_run=false needs plan_op_id (the reviewed dry run to apply)", authorityBuildOpID)
+		}
+		if params.sources() != (authoritySources{}) {
+			return fmt.Errorf("%s: an apply takes its sources from plan %s; leave skip_seed, skip_catalog and library_export_path unset", authorityBuildOpID, params.PlanOpID)
+		}
+		r, ok := p.deps.OperationQueueStore().(authorityPlanReader)
+		if !ok {
+			return fmt.Errorf("%s: operation store cannot read the plan op", authorityBuildOpID)
+		}
+		plan, err := loadAuthorityPlan(r, params.PlanOpID)
+		if err != nil {
+			return err
+		}
+		params.SkipSeed, params.SkipCatalog, params.LibraryExportPath = plan.Sources.SkipSeed, plan.Sources.SkipCatalog, plan.Sources.LibraryExportPath
+		expect = plan.Digest
+	}
+	out, err := buildAuthorityLists(ctx, store, params, dryRun, expect, reporter, time.Now())
+	if out != nil {
+		if serr := registry.ReporterSetResult(reporter, out.Result); serr != nil && err == nil {
+			err = fmt.Errorf("%s: store result: %w", authorityBuildOpID, serr)
+		}
+	}
 	return err
+}
+
+// authorityPlanReader reads a stored op row (database.Store has it; the
+// production queue store is the full store).
+type authorityPlanReader interface {
+	GetOperationV2(id string) (*database.OperationV2Row, error)
+}
+
+// loadAuthorityPlan reads a completed authority-build dry run's result.
+func loadAuthorityPlan(r authorityPlanReader, id string) (*authorityPlanResult, error) {
+	row, err := r.GetOperationV2(id)
+	if err != nil {
+		return nil, fmt.Errorf("%s: read plan op %s: %w", authorityBuildOpID, id, err)
+	}
+	switch {
+	case row == nil:
+		return nil, fmt.Errorf("%s: plan op %s not found", authorityBuildOpID, id)
+	case row.DefID != authorityBuildOpID:
+		return nil, fmt.Errorf("%s: op %s is %s, not an authority-build dry run", authorityBuildOpID, id, row.DefID)
+	case row.Status != "completed" || row.ResultData == nil:
+		return nil, fmt.Errorf("%s: plan op %s is %s, not a completed dry run", authorityBuildOpID, id, row.Status)
+	}
+	var plan authorityPlanResult
+	if err := json.Unmarshal([]byte(*row.ResultData), &plan); err != nil {
+		return nil, fmt.Errorf("%s: decode plan %s: %w", authorityBuildOpID, id, err)
+	}
+	if !plan.DryRun || plan.Digest == "" {
+		return nil, fmt.Errorf("%s: op %s is not a dry run with a plan", authorityBuildOpID, id)
+	}
+	return &plan, nil
 }
 
 // authorityBuildOutcome is what one run did; tests read it.
 type authorityBuildOutcome struct {
+	Result authorityPlanResult
 	Report authoritybuild.Report
 	Counts map[string]*authoritybuild.PrefixCounts
 	Stale  int
@@ -135,16 +243,36 @@ func authorityWorkers(n int) int {
 	return min(max(1, n), authorityMaxConcurrency)
 }
 
+// authorityProgress maps plan, apply and prune onto one 0..1000 scale so the
+// progress bar never moves backwards between phases (each phase has its own
+// total). Every call stamps the watchdog.
+func authorityProgress(reporter sdk.Reporter) func(phase string, done, total int) {
+	spans := map[string][2]int{"plan": {0, 500}, "apply": {500, 950}, "prune": {950, 1000}}
+	return func(phase string, done, total int) {
+		sp, ok := spans[phase]
+		if !ok || total <= 0 {
+			return
+		}
+		cur := sp[0] + (sp[1]-sp[0])*min(done, total)/total
+		_ = reporter.UpdateProgress(cur, 1000, fmt.Sprintf("authority-build %s: %d/%d", phase, done, total))
+	}
+}
+
 // buildAuthorityLists runs the build on any raw KV store. The production
 // store is OpsStore, which embeds database.RawKVStore, so the indexedStore
-// wrapper serves it directly.
+// wrapper serves it directly. On an apply, expectDigest is the reviewed dry
+// run's plan digest: the apply refuses unless the recomputed plan matches it.
 func buildAuthorityLists(ctx context.Context, kv database.RawKVStore, params authorityBuildParams, dryRun bool,
-	reporter sdk.Reporter, now time.Time) (*authorityBuildOutcome, error) {
+	expectDigest string, reporter sdk.Reporter, now time.Time) (*authorityBuildOutcome, error) {
+	if !dryRun && expectDigest == "" {
+		return nil, errors.New("authority-build: an apply needs the reviewed plan's digest")
+	}
 	workers := authorityWorkers(params.Concurrency)
 	mode := map[bool]string{true: "DRY RUN (nothing written)", false: "APPLY"}[dryRun]
 	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("authority-build: %s, %d workers", mode, workers))
 
 	b := authoritybuild.NewBuilder()
+	ran := map[string]bool{}
 
 	if !params.SkipSeed {
 		seed, err := authoritybuild.LoadSeed()
@@ -152,6 +280,7 @@ func buildAuthorityLists(ctx context.Context, kv database.RawKVStore, params aut
 			return nil, err
 		}
 		b.AddSeed(seed)
+		ran[authority.SourceSeed] = true
 		_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("authority-build: seed v%s, %d entries", seed.Version, len(seed.Entries)))
 	}
 
@@ -159,39 +288,117 @@ func buildAuthorityLists(ctx context.Context, kv database.RawKVStore, params aut
 		if err := ingestLibraryExport(ctx, b, params.LibraryExportPath, workers, reporter); err != nil {
 			return nil, err
 		}
+		ran[authority.SourceLibraryExport] = true
 	}
 
 	if !params.SkipCatalog {
 		if err := ingestCatalogRaw(ctx, kv, b, workers, reporter); err != nil {
 			return nil, err
 		}
+		ran[authority.SourceCatalog] = true
 	}
 
 	res := b.Finish()
+	refusals, err := authorityRefusals(kv, params, res.Report)
+	if err != nil {
+		return nil, err
+	}
 	opt := authoritybuild.Options{
 		Workers: workers,
 		// Plan and apply are errgroup pools, not RunItems, so they stamp the
 		// watchdog through UpdateProgress themselves (throttled).
-		Progress: func(phase string, done, total int) {
-			_ = reporter.UpdateProgress(done, total, fmt.Sprintf("authority-build %s: %d/%d", phase, done, total))
-		},
+		Progress: authorityProgress(reporter),
 	}
-	plan, err := authoritybuild.PlanApply(ctx, kv, res, now, opt)
+	plan, err := authoritybuild.PlanApply(ctx, kv, res, ran, now, opt)
 	if err != nil {
 		return nil, fmt.Errorf("plan: %w", err)
 	}
 	out := &authorityBuildOutcome{Report: res.Report, Counts: plan.Counts, Stale: len(plan.Stale), Writes: len(plan.Writes), DryRun: dryRun}
+	out.Result = authorityPlanResult{
+		DryRun: dryRun, Digest: plan.Digest, Sources: params.sources(), Ran: sortedSet(ran),
+		Refusals: refusals, Writes: len(plan.Writes), Counts: plan.Counts,
+		Prune: nonNil(plan.Stale), Held: nonNil(plan.Held), Report: res.Report,
+	}
+	if !dryRun {
+		out.Result.PlanOpID = params.PlanOpID
+	}
 	logAuthorityReport(reporter, mode, out)
+	for _, r := range refusals {
+		_ = reporter.Log(slog.LevelWarn, "authority-build: an apply would be refused: "+r)
+	}
 
 	if dryRun {
+		_ = reporter.UpdateProgress(1000, 1000, "authority-build: dry run planned")
 		return out, nil
 	}
+	if len(refusals) > 0 {
+		return out, fmt.Errorf("authority-build: apply refused: %s", strings.Join(refusals, "; "))
+	}
+	if plan.Digest != expectDigest {
+		return out, fmt.Errorf("authority-build: apply refused: the plan changed since dry run %s "+
+			"(digest %s, now %s): the store or the sources changed; run a new dry run and review it",
+			params.PlanOpID, expectDigest, plan.Digest)
+	}
 	out.Apply, err = authoritybuild.Apply(ctx, kv, plan, opt)
+	out.Result.Apply = &out.Apply
 	if err != nil {
 		return out, fmt.Errorf("apply: %w", err)
 	}
-	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("authority-build: APPLIED written=%d deleted=%d", out.Apply.Written, out.Apply.Deleted))
+	_ = reporter.UpdateProgress(1000, 1000, "authority-build: applied")
+	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("authority-build: APPLIED plan %s written=%d deleted=%d", params.PlanOpID, out.Apply.Written, out.Apply.Deleted))
 	return out, nil
+}
+
+// authorityRefusals lists why an apply of this build must not run: a
+// skipped source, owner-export rows in the store with no export supplied, or
+// any payload that failed to decode. Each would make the build partial, and
+// a partial build must not prune.
+func authorityRefusals(kv database.RawKVStore, params authorityBuildParams, rep authoritybuild.Report) ([]string, error) {
+	var out []string
+	if params.SkipSeed {
+		out = append(out, "skip_seed is set: the seed did not run")
+	}
+	if params.SkipCatalog {
+		out = append(out, "skip_catalog is set: the catalog payloads did not run")
+	}
+	if params.LibraryExportPath == "" {
+		n, err := kv.CountPrefix(authority.SourcePrefix + authority.SourceLibraryExport + ":")
+		if err != nil {
+			return nil, fmt.Errorf("count owner-export ledger rows: %w", err)
+		}
+		if n > 0 {
+			out = append(out, fmt.Sprintf("the store holds %d owner-export ledger rows but no library_export_path was given", n))
+		}
+	}
+	for _, src := range []string{authority.SourceCatalog, authority.SourceLibraryExport} {
+		if st := rep.Sources[src]; st != nil && st.Undecodable > 0 {
+			out = append(out, fmt.Sprintf("%d %s payloads did not decode", st.Undecodable, src))
+		}
+	}
+	return out, nil
+}
+
+func sortedSet(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func nonNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
+}
+
+// authorityExportItem is one export item with its position (the duplicate
+// tiebreak).
+type authorityExportItem struct {
+	i   int
+	raw json.RawMessage
 }
 
 func ingestLibraryExport(ctx context.Context, b *authoritybuild.Builder, path string, workers int, reporter sdk.Reporter) error {
@@ -219,10 +426,14 @@ func ingestLibraryExport(ctx context.Context, b *authoritybuild.Builder, path st
 	}
 	b.NoteSource(authority.SourceLibraryExport)
 	var done, bad atomic.Int64
-	err = registry.RunItems(ctx, reporter, items, func(_ context.Context, item json.RawMessage) error {
+	indexed := make([]authorityExportItem, len(items))
+	for i, it := range items {
+		indexed[i] = authorityExportItem{i: i, raw: it}
+	}
+	err = registry.RunItems(ctx, reporter, indexed, func(_ context.Context, it authorityExportItem) error {
 		// An undecodable item is counted by the builder and reported; one
 		// bad item does not fail the export.
-		if err := b.AddRawProduct(authority.SourceLibraryExport, item); err != nil {
+		if err := b.AddRawProduct(authority.SourceLibraryExport, authoritybuild.ExportTiebreak(it.i), it.raw); err != nil {
 			logUndecodable(reporter, &bad, authority.SourceLibraryExport, err)
 		}
 		done.Add(1)
@@ -252,7 +463,7 @@ func ingestCatalogRaw(ctx context.Context, kv database.RawKVStore, b *authorityb
 	offset := 0
 	err = authoritybuild.ScanCatalogRaw(ctx, kv, authorityCatalogPageSize, func(pairs []database.KVPair) error {
 		err := registry.RunItems(ctx, reporter, pairs, func(_ context.Context, kvp database.KVPair) error {
-			if err := b.AddRawProduct(authority.SourceCatalog, kvp.Value); err != nil {
+			if err := b.AddRawProduct(authority.SourceCatalog, kvp.Key, kvp.Value); err != nil {
 				logUndecodable(reporter, &bad, authority.SourceCatalog+" "+kvp.Key, err)
 			}
 			done.Add(1)
@@ -298,20 +509,19 @@ func logAuthorityReport(reporter sdk.Reporter, mode string, out *authorityBuildO
 			s, st.Items, st.Duplicates, st.Skipped, st.Undecodable, st.CastContext, st.ManualOnly))
 	}
 	summary := fmt.Sprintf("authority-build %s: persons=%d (O=%d A=%d B=%d C=%d) publishers=%d asins=%d "+
-		"author_evidence=%d cast_only=%d homonyms=%d asin_spellings=%d single_word=%d | would write=%d prune=%d | %s",
+		"author_evidence=%d cast_only=%d homonyms=%d asin_spellings=%d single_word=%d | would write=%d prune=%d held=%d | %s",
 		mode, r.Persons, r.PersonsByTier[authority.TierO], r.PersonsByTier[authority.TierA],
 		r.PersonsByTier[authority.TierB], r.PersonsByTier[authority.TierC], r.Publishers, r.ASINs,
-		r.AuthorEvidence, r.CastOnly, r.Homonyms, r.SpellingASINs, r.SingleWord, out.Writes, out.Stale,
+		r.AuthorEvidence, r.CastOnly, r.Homonyms, r.SpellingASINs, r.SingleWord, out.Writes, out.Stale, len(out.Result.Held),
 		strings.Join(srcs, " "))
 	_ = reporter.Log(slog.LevelInfo, summary)
-	_ = reporter.UpdateProgress(1, 1, summary)
 
 	for _, prefix := range authority.RebuildablePrefixes() {
 		c := out.Counts[prefix]
 		if c == nil {
 			continue
 		}
-		_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("authority-build: %s write=%d unchanged=%d stale=%d", prefix, c.Write, c.Unchanged, c.Stale),
+		_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("authority-build: %s write=%d unchanged=%d stale=%d held=%d", prefix, c.Write, c.Unchanged, c.Stale, c.Held),
 			slog.String("prefix", prefix), slog.Int("write", c.Write), slog.Int("unchanged", c.Unchanged), slog.Int("stale", c.Stale))
 	}
 	for label, samples := range map[string][]authoritybuild.NameSample{

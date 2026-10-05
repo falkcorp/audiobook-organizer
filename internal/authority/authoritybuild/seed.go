@@ -1,7 +1,7 @@
 // file: internal/authority/authoritybuild/seed.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1fa99998-4e64-4748-854c-89c0a091fab0
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 package authoritybuild
 
@@ -45,15 +45,17 @@ type Seed struct {
 	Entries    []SeedEntry    `json:"entries"`
 }
 
-// SeedEntry is one seed row. These five fields are the whole allowed shape:
+// SeedEntry is one seed row. These four fields are the whole allowed shape:
 // DecodeSeed rejects any other field, so a title or product ASIN cannot ride
 // in under a new key.
 type SeedEntry struct {
-	Kind         string   `json:"kind"`
-	Name         string   `json:"name"`
-	ASINs        []string `json:"asins"`
-	AlsoAuthor   bool     `json:"also_author"`
-	AlsoNarrator bool     `json:"also_narrator"`
+	Kind  string   `json:"kind"`
+	Name  string   `json:"name"`
+	ASINs []string `json:"asins"`
+	// AlsoNarrator marks an author who also narrates. There is no
+	// also_author: a person with any plain author credit is kind author, so
+	// a narrator entry is by construction never an author.
+	AlsoNarrator bool `json:"also_narrator"`
 }
 
 // asinRe is the shape of an Audible contributor ASIN.
@@ -92,9 +94,13 @@ func DecodeSeed(b []byte) (*Seed, error) {
 			return nil, fmt.Errorf("authority seed: entry %d: %q is a collective credit", i, e.Name)
 		}
 		switch e.Kind {
-		case SeedKindAuthor, SeedKindNarrator:
+		case SeedKindAuthor:
+		case SeedKindNarrator:
+			if e.AlsoNarrator {
+				return nil, fmt.Errorf("authority seed: entry %d: narrator %q carries also_narrator", i, e.Name)
+			}
 		case SeedKindPublisher:
-			if len(e.ASINs) > 0 || e.AlsoAuthor || e.AlsoNarrator {
+			if len(e.ASINs) > 0 || e.AlsoNarrator {
 				return nil, fmt.Errorf("authority seed: entry %d: publisher %q carries person fields", i, e.Name)
 			}
 		default:

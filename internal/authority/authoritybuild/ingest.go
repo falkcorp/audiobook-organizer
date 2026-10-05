@@ -1,7 +1,7 @@
 // file: internal/authority/authoritybuild/ingest.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c21642cf-8b47-4c22-a6d1-debe423b7a8e
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 package authoritybuild
 
@@ -33,15 +33,21 @@ const MaxLibraryExportBytes = 256 << 20
 // AddRawProduct decodes one Audible product payload (a cat_raw: value or a
 // library-export item) and ingests it. A payload the decoder refuses is
 // counted as undecodable and returned as an error.
-func (b *Builder) AddRawProduct(source string, raw []byte) error {
+//
+// tiebreak orders duplicate product ASINs (see AddProduct).
+func (b *Builder) AddRawProduct(source, tiebreak string, raw []byte) error {
 	p, err := metadata.DecodeAudibleProduct(raw)
 	if err != nil {
 		b.NoteUndecodable(source)
 		return err
 	}
-	b.AddProduct(source, p)
+	b.AddProduct(source, tiebreak, p)
 	return nil
 }
+
+// ExportTiebreak is the tiebreak for export item i: zero-padded so string
+// order is numeric order.
+func ExportTiebreak(i int) string { return fmt.Sprintf("%09d", i) }
 
 // ScanCatalogRaw hands every cat_raw: payload to fn, a page at a time.
 // Memory is bounded by pageSize. An empty catalog calls fn zero times.

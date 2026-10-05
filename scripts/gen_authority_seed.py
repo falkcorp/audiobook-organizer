@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/gen_authority_seed.py
-# version: 1.0.0
+# version: 1.1.0
 # guid: dff4675b-1040-403a-a41d-de92bbf943e7
-# last-edited: 2026-10-04
+# last-edited: 2026-10-05
 
 """Generate the authority-list seed from an Audible library export.
 
@@ -36,7 +36,13 @@ fails toward cast. These rules are a port of internal/catalog/entry.go
 opt-in Go test TestSeed_AuthorsAreNotCastOnlyUnderGoRules (set
 AUTHORITY_EXPORT_PATH) checks this port against the Go rules on a real export.
 A cast-only person is left out of the seed entirely unless they also narrate;
-then they appear as a narrator with also_author false. Absence means nothing,
+then they appear as a narrator.
+
+Role-marked credits ("Jane Doe - translator", "Read by Jane Doe") are split
+with a port of internal/metadata/contributor_roles.go ClassifyContributor:
+the bare name is kept, and a translator / illustrator / editor / introduction
+credit is never author evidence. A person known only from such credits is
+left out. Absence means nothing,
 so leaving a name out is always safe.
 
 Collective credits ("Full Cast", "Various Authors", ...) are never emitted.
@@ -88,6 +94,36 @@ COUNTER_MEASURES_RE = re.compile(r"(?:^|[\W_])counter[._-]+measures(?:$|[\W_])",
 
 MAX_PLAIN_AUTHORS = 3
 
+# internal/metadata/contributor_roles.go ClassifyContributor: a role written
+# after or before the name. Translator / illustrator / editor / introduction
+# credits are "other" and never author evidence.
+ROLE_SUFFIX_RE = re.compile(
+    r"^(.*?)\s*(?:[-\u2013\u2014,]\s*|\(\s*|\[\s*)(editor|compiler|translator|trans\.|illustrator|"
+    r"narrator|reader|foreword|introduction|afterword|contributor|adapter)\s*[)\]]?\s*$", re.I)
+ROLE_ED_ABBREV_RE = re.compile(r"^(.*?)\s*(?:\(\s*eds?\.?\s*\)|\[\s*eds?\.?\s*\]|,\s*eds?\.)\s*$", re.I)
+ROLE_PREFIX_RE = re.compile(
+    r"^\s*(edited|compiled|translated|illustrated|narrated|read|adapted|introduced)\s+by\s+(.+?)\s*$", re.I)
+
+
+def role_from_word(w: str) -> str:
+    w = w.strip().lower()
+    return "narrator" if w.startswith("narrat") or w.startswith("read") else "other"
+
+
+def classify_contributor(credit: str) -> tuple[str, str]:
+    """Port of metadata.ClassifyContributor: (bare name, author|narrator|other)."""
+    credit = credit.strip()
+    m = ROLE_PREFIX_RE.match(credit)
+    if m:
+        return m.group(2).strip(), role_from_word(m.group(1))
+    m = ROLE_SUFFIX_RE.match(credit)
+    if m and m.group(1).strip():
+        return m.group(1).strip(), role_from_word(m.group(2))
+    m = ROLE_ED_ABBREV_RE.match(credit)
+    if m and m.group(1).strip():
+        return m.group(1).strip(), "other"
+    return credit, "author"
+
 
 def letters_key(s: str) -> str:
     """internal/authorcredit.LettersKey: NFC, lower-cased, letters and digits."""
@@ -134,6 +170,7 @@ class Person:
         self.author = 0
         self.cast = 0
         self.narrator = 0
+        self.other = 0
 
 
 def pick_display(c: collections.Counter) -> str:
@@ -171,7 +208,7 @@ def build(items: list[dict]) -> tuple[list[dict], dict]:
             for c in it.get(field) or []:
                 if not isinstance(c, dict):
                     continue
-                name = clean(c.get("name"))
+                name, marked = classify_contributor(clean(c.get("name")))
                 key = letters_key(name)
                 if not key or key in COLLECTIVE:
                     continue
@@ -180,7 +217,9 @@ def build(items: list[dict]) -> tuple[list[dict], dict]:
                 asin = clean(c.get("asin")).upper()
                 if asin:
                     p.asins.add(asin)
-                if role == "narrator":
+                if marked == "other":
+                    p.other += 1  # translator, illustrator, ...: never an author
+                elif role == "narrator" or marked == "narrator":
                     p.narrator += 1
                 elif cast:
                     p.cast += 1
@@ -208,17 +247,15 @@ def build(items: list[dict]) -> tuple[list[dict], dict]:
             dropped["name_equals_title"].append(display)
             continue
         if p.author > 0:
-            kind, also_author, also_narrator = "author", False, p.narrator > 0
+            kind, also_narrator = "author", p.narrator > 0
         elif p.narrator > 0:
-            # Cast-only author credits never set also_author.
-            kind, also_author, also_narrator = "narrator", False, False
+            kind, also_narrator = "narrator", False
         else:
-            continue  # cast-only: left out (absence means nothing)
+            continue  # cast-only or role-only (translator ...): left out
         entries.append({
             "kind": kind,
             "name": display,
             "asins": keep_asins(p.asins, display),
-            "also_author": also_author,
             "also_narrator": also_narrator,
         })
     for key, c in pubs.items():
@@ -226,8 +263,7 @@ def build(items: list[dict]) -> tuple[list[dict], dict]:
         if key in title_keys:
             dropped["name_equals_title"].append(display)
             continue
-        entries.append({"kind": "publisher", "name": display, "asins": [],
-                        "also_author": False, "also_narrator": False})
+        entries.append({"kind": "publisher", "name": display, "asins": [], "also_narrator": False})
 
     entries.sort(key=lambda e: (e["kind"], letters_key(e["name"]), e["name"]))
     return entries, dropped
