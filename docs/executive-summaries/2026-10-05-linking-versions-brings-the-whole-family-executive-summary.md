@@ -1,11 +1,11 @@
 <!-- file: docs/executive-summaries/2026-10-05-linking-versions-brings-the-whole-family-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: 0b6f6f3e-7a52-4c1b-9d0e-5e2c8a41d7b9 -->
 <!-- last-edited: 2026-10-05 -->
 
 # Linking versions brings the whole family
 
-PR: test/merge-group-followups (follow-up to #3756)
+PR: [#3758](https://github.com/falkcorp/audiobook-organizer/pull/3758) (follow-up to #3756)
 
 ## Executive Summary
 
