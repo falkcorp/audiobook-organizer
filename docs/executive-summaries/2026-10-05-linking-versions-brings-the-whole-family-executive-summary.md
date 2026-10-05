@@ -1,11 +1,11 @@
 <!-- file: docs/executive-summaries/2026-10-05-linking-versions-brings-the-whole-family-executive-summary.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: 0b6f6f3e-7a52-4c1b-9d0e-5e2c8a41d7b9 -->
 <!-- last-edited: 2026-10-05 -->
 
 # Linking versions brings the whole family
 
-PRs: [#3758](https://github.com/falkcorp/audiobook-organizer/pull/3758) (follow-up to #3756), a follow-up that makes undo safe, [#3762](https://github.com/falkcorp/audiobook-organizer/pull/3762), its review follow-up, and a second review follow-up
+PRs: [#3758](https://github.com/falkcorp/audiobook-organizer/pull/3758) (follow-up to #3756), a follow-up that makes undo safe, [#3762](https://github.com/falkcorp/audiobook-organizer/pull/3762), its review follow-up, a second review follow-up, and a third
 
 ## Executive Summary
 
@@ -138,6 +138,18 @@ one listener's progress could move while another's did not. The undo also
 refuses straight away when the original is in the trash. A user account the
 safety check cannot read now stops the delete instead of being skipped.
 Ordinary merged-away books, whose progress has already moved, still purge.
+
+A third review found four more ways progress could end up rewound or out of
+sight, now closed. If a listener kept playing a duplicate while its progress
+was being moved, and the move was then called off, their newer position was
+wound back; it is now kept, along with everything they had before. Progress
+is only moved onto a kept copy that Audiobookshelf shows; if the kept copy is
+hidden, the duplicate stays. When the iTunes regroup can only move progress to
+a book Audiobookshelf does not show, it still moves it and now says so,
+naming the books. Undoing an iTunes library copy puts the original back
+first, and if any later step fails the progress goes to whichever copy
+Audiobookshelf shows; running the undo again finishes it. Every one of these
+deletes now checks one last time for new progress right before it deletes.
 
 ## Undo that left progress on the wrong book
 
