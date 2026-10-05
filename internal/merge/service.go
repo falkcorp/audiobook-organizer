@@ -374,7 +374,9 @@ func preferOnTie(a, b *database.Book) bool {
 //     is organized; when it is not, an organized moved sibling
 //     or reused-group member holds it (Result.GroupPrimaryID),
 //     so the title stays listed in Audiobookshelf (owner
-//     decision 2026-10-05).
+//     decision 2026-10-05) -- unless one of the survivor's
+//     files carries an iTunes persistent ID, which the ITL
+//     clean-up would remove from a non-primary row.
 //
 // If primaryID is empty, the best book is auto-selected by ElectPrimary
 // (a book with an audio route beats one without; then an organized book
@@ -864,8 +866,15 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 	// state); it is only not the flag holder. ElectPrimary chooses among the
 	// survivor and those organized members, so an organized copy with no
 	// audio route does not take the flag from a survivor that has one.
+	//
+	// Not when the survivor's files carry an iTunes persistent ID: the ITL
+	// clean-up (itunes.ComputeMergedTrackCleanup) removes every non-primary
+	// book_file's PID from the iTunes library unless a primary also owns it,
+	// so demoting such a survivor would take its live track out of iTunes.
+	// The participant iTunes guard does not cover this: it refuses files
+	// under the iTunes root, and a PID can sit on a file outside it.
 	flagHolderID := resolvedPrimaryID
-	if primaryID == "" && !isOrganized(books[bestIdx]) {
+	if primaryID == "" && !isOrganized(books[bestIdx]) && !anyITunesPID(filesByID[books[bestIdx].ID]) {
 		cands := []*database.Book{books[bestIdx]}
 		candFiles := map[string][]database.BookFile{books[bestIdx].ID: filesByID[books[bestIdx].ID]}
 		for _, sb := range siblingBooks {
@@ -1376,6 +1385,15 @@ func groupPrimaryID(flagHolderID, survivorID string) string {
 		return ""
 	}
 	return flagHolderID
+}
+
+func anyITunesPID(files []database.BookFile) bool {
+	for _, f := range files {
+		if strings.TrimSpace(f.ITunesPersistentID) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func siblingIDs(sibs []MovedSibling) []string {

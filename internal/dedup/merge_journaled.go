@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 
@@ -61,6 +62,8 @@ func (de *Engine) MergeJournaled(candidateID int64, aID, bID, keepID, tag string
 	}
 	return result, journalKey, err
 }
+
+var journaledMergeLog = logger.New("dedup.merge-journaled")
 
 // putJournal writes one auto-merge journal entry (see Engine.journalPut).
 func (de *Engine) putJournal(e database.AutoMergeJournalEntry) (string, error) {
@@ -206,9 +209,9 @@ func (de *Engine) MergeBooksJournaled(candidateID int64, bookIDs []string, keepI
 		// them); the sibling journal is the undo for those moves.
 		var partial *merge.PartialMergeError
 		if errors.As(mergeErr, &partial) && partial.SiblingJournalID != "" {
-			slog.Error("merge-journaled: merge failed part way; undo its sibling moves with the sibling-move journal",
-				"candidate", candidateID, "sibling_journal", partial.SiblingJournalID,
-				"version_group", partial.VersionGroupID, "moved_siblings", len(partial.MovedSiblings))
+			journaledMergeLog.Error("merge failed part way; undo its sibling moves with sibling-move journal %s (candidate=%d version_group=%s moved_siblings=%d)",
+				logger.SanitizeLogValue(partial.SiblingJournalID), candidateID,
+				logger.SanitizeLogValue(partial.VersionGroupID), len(partial.MovedSiblings))
 		}
 		return nil, journalKeys, fmt.Errorf("merge-journaled: merge books: %w", mergeErr)
 	}
