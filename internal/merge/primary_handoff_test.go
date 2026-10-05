@@ -1,5 +1,5 @@
 // file: internal/merge/primary_handoff_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4c1e8b27-6a9f-4d53-b0e2-7f3a5d91c846
 // last-edited: 2026-10-05
 
@@ -17,16 +17,18 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary/vptest"
 )
 
-// A loser that was its old group's primary and is pulled into the keep
-// book's group hands its old group's flag on to the sibling it leaves behind.
-// The loser's siblings do NOT follow it: a merge only moves the books it was
-// given (see the resolveVersionGroup doc comment).
+// A loser that was its old group's primary is pulled into the keep book's
+// group, and its sibling comes with it as a live, non-primary version: the
+// merge unites the loser's group into the survivor's (owner decision
+// 2026-10-05; MergeBooks item 6 and the resolveVersionGroup doc comment).
+// The emptied group needs no new primary.
 //
-// Until 2026-10-05 this test merged a KEEP book that had a sibling into the
-// loser's group and asserted that outcome -- which was the bug: the keep book
-// was split from its own versions. See
+// Until 2026-10-05 this test (then TestMergeBooks_LeftGroupPrimaryHandsOn)
+// asserted that the sibling stayed behind and inherited its group's flag.
+// Before that it merged a KEEP book that had a sibling into the loser's group
+// -- which was the bug: the keep book was split from its own versions. See
 // TestMergeBooks_KeepBookStaysInItsOwnGroup.
-func TestMergeBooks_LeftGroupPrimaryHandsOn(t *testing.T) {
+func TestMergeBooks_PrimaryLoserSiblingJoinsSurvivorGroup(t *testing.T) {
 	f := vptest.New(t)
 	prev := config.AppConfig.RootDir
 	config.AppConfig.RootDir = f.Root
@@ -39,11 +41,61 @@ func TestMergeBooks_LeftGroupPrimaryHandsOn(t *testing.T) {
 	res, err := NewService(f.S).MergeBooks([]string{b, a}, a)
 	require.NoError(t, err)
 	require.Equal(t, "g-a", res.VersionGroupID)
+	require.Equal(t, 1, res.SoftDeleted, "only the named loser is soft-deleted")
 
 	f.RequireSinglePrimary(t, "g-a", a)
 	require.Equal(t, "g-a", f.GroupOf(t, b), "the loser joins the keep book's group")
-	require.Equal(t, "g-b", f.GroupOf(t, bSib), "the loser's sibling stays where it was")
-	f.RequireSinglePrimary(t, "g-b", bSib)
+	require.Equal(t, "g-a", f.GroupOf(t, bSib), "the loser's sibling joins with it")
+	require.Equal(t, "false", f.Flag(t, bSib))
+	left, err := f.S.GetBooksByVersionGroup("g-b")
+	require.NoError(t, err)
+	require.Empty(t, left, "the loser's old group has no live members left")
+}
+
+// K in H; loser L and its siblings in G. Merging K<-L unites G into H: every
+// sibling lands in H live and explicitly non-primary (G's primary sibling
+// included, and a nil flag written as an explicit false), only L is
+// soft-deleted, and G has no live member. Result.MovedSiblings records each
+// sibling's old group and its exact old flag pointer for the undo.
+func TestMergeBooks_LoserSiblingsMoveLiveAndNonPrimary(t *testing.T) {
+	f := vptest.New(t)
+	prev := config.AppConfig.RootDir
+	config.AppConfig.RootDir = f.Root
+	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+
+	k := f.Book(t, vptest.Spec{ID: "k", Group: "H", Primary: "true"})
+	l := f.Book(t, vptest.Spec{ID: "l", Group: "G", Primary: "false"})
+	ls := f.Book(t, vptest.Spec{ID: "ls", Group: "G", Primary: "true"})
+	lsNil := f.Book(t, vptest.Spec{ID: "lsnil", Group: "G", Primary: "nil"})
+
+	res, err := NewService(f.S).MergeBooks([]string{l, k}, k)
+	require.NoError(t, err)
+	require.Equal(t, k, res.PrimaryID)
+	require.Equal(t, "H", res.VersionGroupID)
+	require.Equal(t, 1, res.SoftDeleted)
+
+	for _, id := range []string{ls, lsNil} {
+		require.Equal(t, "H", f.GroupOf(t, id), "sibling %s joins H", id)
+		require.Equal(t, "false", f.Flag(t, id), "sibling %s is stored as an explicit false", id)
+		b, err := f.S.GetBookByID(id)
+		require.NoError(t, err)
+		require.False(t, b.IsSoftDeleted(), "sibling %s stays live", id)
+	}
+	require.Equal(t, "H", f.GroupOf(t, l))
+	lb, err := f.S.GetBookByID(l)
+	require.NoError(t, err)
+	require.True(t, lb.IsSoftDeleted(), "the named loser is soft-deleted")
+	f.RequireSinglePrimary(t, "H", k)
+
+	left, err := f.S.GetBooksByVersionGroup("G")
+	require.NoError(t, err)
+	require.Empty(t, left, "G has no live members left")
+
+	yes := true
+	require.Equal(t, []MovedSibling{
+		{BookID: ls, FromGroupID: "G", WasPrimary: &yes, WithLosers: []string{l}},
+		{BookID: lsNil, FromGroupID: "G", WasPrimary: nil, WithLosers: []string{l}},
+	}, res.MovedSiblings)
 }
 
 // Regression for the 2026-10-05 prod split (POST /audiobooks/link ->

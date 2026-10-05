@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.40.1
+// version: 1.41.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-10-05
 
@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -106,6 +107,27 @@ type Result struct {
 	// (PreferUserStateSurvivor). It names the book the old rule picked, so the
 	// flip is visible in the merge output.
 	ElectedWithoutUserState string `json:"elected_without_user_state,omitempty"`
+	// MovedSiblings are the live version-group siblings of the losers that the
+	// merge carried into VersionGroupID (see MergeBooks item 6). They stay live
+	// and non-primary; nothing else about them changes. Each one records what
+	// an undo needs to put it back.
+	MovedSiblings []MovedSibling `json:"moved_siblings,omitempty"`
+}
+
+// MovedSibling is one loser sibling a merge carried into the merge's version
+// group: a live book that was in FromGroupID with the loser(s) in WithLosers
+// and was not itself named in the merge.
+type MovedSibling struct {
+	BookID      string `json:"book_id"`
+	FromGroupID string `json:"from_group_id"`
+	// WasPrimary is the sibling's IsPrimaryVersion exactly as stored before
+	// the merge, nil included: readers disagree on what nil means (see the
+	// demotion comment in MergeBooksWithOptions), so an undo must restore the
+	// pointer, not a boolean.
+	WasPrimary *bool `json:"was_primary,omitempty"`
+	// WithLosers are the merge's losers that were in FromGroupID, so a
+	// per-loser undo record can carry the siblings that left with that loser.
+	WithLosers []string `json:"with_losers"`
 }
 
 // NewService creates a new Service. The sync-identity follower is wired
@@ -311,6 +333,16 @@ func preferOnTie(a, b *database.Book) bool {
 //     refuses a book that still owns file rows
 //     (database.ErrBookOwnsFiles), and the archive sweep that
 //     once deleted them was retired on 2026-09-19.
+//  6. A live loser's version group is united into the merge's
+//     group (owner decision 2026-10-05): the loser's live
+//     siblings -- the other live members of the group it was
+//     in, not named in the merge -- move into the merge's
+//     version group as non-primary versions. They stay live
+//     and are NOT soft-deleted; only the named losers are.
+//     The group they left has no live member afterwards, so no
+//     primary is elected for it. Result.MovedSiblings lists
+//     them with their old group and flag; dedup's journaled
+//     merge records them so UnmergeAuto puts them back.
 //
 // If primaryID is empty, the best book is auto-selected by ElectPrimary
 // (a book with an audio route beats one without; then BookIsBetter:
@@ -572,14 +604,15 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 	// no-group sentinel for an ungrouped one) and versionGroupID, in one
 	// versionprimary.LockPlannedGroups acquisition under mergeSerializeMu
 	// (merge lock, then group stripes, then book locks). Held across the
-	// reused group's member read, the membership writes and the demotions,
-	// and released before handOffLeftGroups, which takes the group locks
-	// itself. versionGroupID and leftGroups were planned from the live
-	// participants' groups as read at the top of this call, so a
-	// participant whose group changed since is refused here
+	// reused group's member read, the left groups' sibling read, the
+	// membership writes and the demotions. versionGroupID and leftGroups were
+	// planned from the live participants' groups as read at the top of this
+	// call, so a participant whose group changed since is refused here
 	// (ErrMembershipChanged) before anything is written: otherwise it would
-	// leave a group nobody locked and handOffLeftGroups would hand off the
-	// wrong one.
+	// leave a group nobody locked, and its siblings would be read from the
+	// wrong one. Every left group is a planned participant's group, so its
+	// lock is part of this acquisition and its live membership (the siblings
+	// read below) cannot change until the release.
 	//
 	// Soft-deleted participants are planned too: the loop below moves them
 	// into versionGroupID as well, so one that changed group since the read
@@ -621,16 +654,58 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 	// queryable and the relationship survives through the
 	// soft-delete call below.
 	resolvedPrimaryID := books[bestIdx].ID
-	// Groups a live participant is about to LEAVE for versionGroupID. If it
-	// was that group's primary, the group would be left with none; each is
-	// handed on after the merge (handOffLeftGroups). The merge's own group is
-	// not: its primary is this call's explicit or elected choice.
+	// Groups a live participant is about to LEAVE for versionGroupID. The
+	// merge unites each one into versionGroupID (MergeBooks item 6): its live
+	// members not named in this call -- the siblings -- move too, so the group
+	// is left with no live member and needs no new primary. leftLosers maps
+	// each such group to the participants that were in it, for
+	// Result.MovedSiblings.
 	leftGroups := map[string]bool{}
+	leftLosers := map[string][]string{}
 	for _, b := range books {
 		if !b.IsSoftDeleted() && b.VersionGroupID != nil && *b.VersionGroupID != "" && *b.VersionGroupID != versionGroupID {
 			leftGroups[*b.VersionGroupID] = true
+			leftLosers[*b.VersionGroupID] = append(leftLosers[*b.VersionGroupID], b.ID)
 		}
 	}
+	// Read every left group's siblings under the locks and BEFORE any write,
+	// so a read failure aborts the merge with nothing written. Sorted by group
+	// then book ID so the writes (and Result.MovedSiblings) are deterministic.
+	var siblings []MovedSibling
+	for _, gid := range slices.Sorted(maps.Keys(leftGroups)) {
+		members, err := ms.db.GetBooksByVersionGroup(gid)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load version group %s membership: %w", gid, err)
+		}
+		slices.SortFunc(members, func(a, b database.Book) int { return strings.Compare(a.ID, b.ID) })
+		for i := range members {
+			m := &members[i]
+			if seen[m.ID] || m.IsSoftDeleted() {
+				continue
+			}
+			siblings = append(siblings, MovedSibling{
+				BookID:      m.ID,
+				FromGroupID: gid,
+				WasPrimary:  m.IsPrimaryVersion,
+				WithLosers:  slices.Clone(leftLosers[gid]),
+			})
+		}
+	}
+	// A failure part-way through the membership writes leaves a left group
+	// with only some of its live members moved, and possibly no primary (its
+	// primary may be one that already moved). On that path only, hand each
+	// left group's flag on after the locks are released (handOffLeftGroups
+	// takes them itself). On success every left group is empty of live
+	// members and this does not run. Registered here, after releaseGroups'
+	// defer, so it runs first; it releases the locks itself before the
+	// hand-off.
+	membershipWritten := false
+	defer func() {
+		if !membershipWritten {
+			releaseGroups()
+			handOffLeftGroups(ms.db, leftGroups)
+		}
+	}()
 	for i, book := range books {
 		isPrimary := i == bestIdx
 		if !isPrimary && book.IsSoftDeleted() &&
@@ -686,6 +761,31 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 			return nil, &BookNotFoundError{BookID: book.ID}
 		}
 		books[i] = stored
+	}
+
+	// Carry each loser's siblings into versionGroupID as non-primary versions
+	// (MergeBooks item 6). Only the group and the flag are set, through
+	// ModifyBook on the fresh row; the sibling stays live and keeps
+	// everything else. CheckMembership re-confirms, under the book's write
+	// lock, that it is still in the group it was read from.
+	for _, sib := range siblings {
+		notPrimary := false
+		stored, err := ms.db.ModifyBook(sib.BookID, func(fresh *database.Book) error {
+			if err := versionprimary.CheckMembership(fresh, sib.FromGroupID); err != nil {
+				return err
+			}
+			fresh.VersionGroupID = &versionGroupID
+			fresh.IsPrimaryVersion = &notPrimary
+			return nil
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to move version-group sibling %s from %s: %w", sib.BookID, sib.FromGroupID, err)
+		}
+		if stored == nil {
+			return nil, &BookNotFoundError{BookID: sib.BookID}
+		}
+		slog.Info("merge moved loser's version-group sibling",
+			"id", sib.BookID, "from", sib.FromGroupID, "to", versionGroupID, "primary", resolvedPrimaryID)
 	}
 
 	// Demote every pre-existing member of a REUSED group that the loop above
@@ -760,6 +860,7 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 		slog.Info("merge demoted pre-existing version-group member",
 			"id", member.ID, "group", versionGroupID, "primary", resolvedPrimaryID)
 	}
+	membershipWritten = true
 	releaseGroups()
 
 	// --- Per-loser cleanup ---
@@ -914,7 +1015,8 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 	// it fails the merge instead, after the group hand-off still runs.
 	followErr := FollowMerge(ms.db, ms.syncFollower, resolvedPrimaryID, losers)
 
-	handOffLeftGroups(ms.db, leftGroups)
+	// No hand-off for leftGroups: the siblings moved above, so each left group
+	// has no live member left to be its primary (MergeBooks item 6).
 
 	if followErr != nil {
 		return nil, fmt.Errorf("merge into %s applied but users' listening state could not be carried and no repair record was written: %w",
@@ -927,6 +1029,7 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 		MergedCount:             len(books),
 		SoftDeleted:             softDeleted,
 		ElectedWithoutUserState: electedWithoutUserState,
+		MovedSiblings:           siblings,
 	}, nil
 }
 
@@ -936,13 +1039,13 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 //  1. The survivor's group, when it has one. "Link as versions" keeps the
 //     chosen book where it is: its existing versions (an organized_source
 //     copy, a prior merge's members) stay its siblings, and the losers join
-//     them. A loser's OTHER group members do not follow it: a merge moves only
-//     the books it was given (MergeBooksWithOptions' primary-flag demotion
-//     loop is scoped the same way),
-//     and the group a loser leaves is handed a new primary (handOffLeftGroups).
+//     them. A live loser's OTHER group members (its siblings) follow it into
+//     this group as non-primary versions, and the group it leaves is left
+//     with no live member (MergeBooks item 6; MergeBooksWithOptions moves
+//     them).
 //  2. Otherwise the live participants' group with the most live members, so
-//     the fewest books are split from their versions; a tie goes to the
-//     smallest group ID. Deliberately NOT input order: callers order their
+//     the fewest books change group (every other live participant's group is
+//     moved into it, siblings included); a tie goes to the smallest group ID. Deliberately NOT input order: callers order their
 //     IDs arbitrarily (applyBookMergeReroute puts the losers first), and a
 //     choice that depends on it is how the 2026-10-05 split happened.
 //  3. A new group when no live participant has one.

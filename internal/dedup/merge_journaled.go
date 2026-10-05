@@ -1,13 +1,14 @@
 // file: internal/dedup/merge_journaled.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 1d7c3e58-4a09-42b6-8f31-5c0e9b247a63
-// last-edited: 2026-09-26
+// last-edited: 2026-10-05
 
 package dedup
 
 import (
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -57,6 +58,25 @@ func (de *Engine) MergeJournaled(candidateID int64, aID, bID, keepID, tag string
 		journalKey = keys[0]
 	}
 	return result, journalKey, err
+}
+
+// journalSiblings is the part of result.MovedSiblings that left with loserID:
+// the siblings of the group loserID was in. A sibling of a group several
+// losers shared is recorded on each of their entries; restoring it is
+// idempotent, so undoing any one of them puts it back.
+func journalSiblings(result *merge.Result, loserID string) []database.AutoMergeJournalSibling {
+	var out []database.AutoMergeJournalSibling
+	for _, sib := range result.MovedSiblings {
+		if slices.Contains(sib.WithLosers, loserID) {
+			out = append(out, database.AutoMergeJournalSibling{
+				BookID:      sib.BookID,
+				FromGroupID: sib.FromGroupID,
+				IntoGroupID: result.VersionGroupID,
+				WasPrimary:  sib.WasPrimary,
+			})
+		}
+	}
+	return out
 }
 
 // MergeBooksJournaled is the N-ary form of MergeJournaled: it merges an
@@ -190,6 +210,7 @@ func (de *Engine) MergeBooksJournaled(candidateID int64, bookIDs []string, keepI
 			LoserPreMergeTS:  de.preMergeSnapshotNanos(loserID, baselines[loserID]),
 			Tag:              tag,
 			MergedAt:         mergedAt + int64(i),
+			Siblings:         journalSiblings(result, loserID),
 		}); err != nil {
 			// The merge is complete. The provisional entry already names the
 			// candidate and both books, so log rather than fail a done merge.

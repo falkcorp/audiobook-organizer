@@ -1,7 +1,7 @@
 // file: internal/database/dedup_automerge_journal.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8b2f7d14-6c93-4a05-9e21-3f8a5c0d7e46
-// last-edited: 2026-07-03
+// last-edited: 2026-10-05
 
 package database
 
@@ -57,6 +57,22 @@ type AutoMergeJournalEntry struct {
 	// MergedAt is the wall-clock time (UnixNano) the merge was applied; this is
 	// also the value embedded in Key.
 	MergedAt int64 `json:"merged_at"`
+
+	// Siblings are the loser's live version-group siblings the merge carried
+	// into the winner's group (merge.Result.MovedSiblings). They have no
+	// pre-merge snapshot -- nobody knew them before the merge -- so UnmergeAuto
+	// restores them field by field from these records instead.
+	Siblings []AutoMergeJournalSibling `json:"siblings,omitempty"`
+}
+
+// AutoMergeJournalSibling records one sibling a merge moved: from FromGroupID
+// into IntoGroupID, with its IsPrimaryVersion exactly as stored before (nil
+// included, so an undo restores the pointer, not a boolean).
+type AutoMergeJournalSibling struct {
+	BookID      string `json:"book_id"`
+	FromGroupID string `json:"from_group_id"`
+	IntoGroupID string `json:"into_group_id"`
+	WasPrimary  *bool  `json:"was_primary,omitempty"`
 }
 
 // PutAutoMergeJournalEntry writes an auto-merge journal entry keyed by
