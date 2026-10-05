@@ -35,11 +35,7 @@
         Shadows casts such as "Lisa Bowerman & Harry Myers"). Their parts are
         narrators. "Full Dark, No Stars" is a book title the library does not
         hold, so the title check misses it.
-- [ ] **AUTHORCREDIT-SERIESLESS-EVIDENCE** A series- or title-named credit part
-      ("Dragon Born") links when its author is credited on a book outside that
-      series. A book with NO series counts as outside (the literal owner rule
-      of 2026-10-04), so a junk record left on books whose series was never set
-      still links, though never first. The owner decides whether to require a
-      different series. Related: the drop reason is logged at Info on every
-      resolve, so rescans repeat it. During memdb warmup the by-author lookup
-      falls back to a full Pebble scan for each title-named part.
+- [ ] **AUTHORCREDIT-WARMUP-FULL-SCAN** During memdb warmup the by-author
+      lookup that authorcredit's outside-series evidence reads falls back to a
+      full Pebble scan for each title-named credit part. A rescan during
+      warmup pays that per part.
