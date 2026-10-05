@@ -1,5 +1,5 @@
 // file: internal/authorcredit/authorcredit.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 7000d1fc-e16c-47e1-bb94-6180fe3ec1de
 // last-edited: 2026-10-05
 
@@ -37,8 +37,8 @@
 //     logged reason and the other parts are linked. A title-named part is
 //     never the first credit (the primary) unless it is the only one or its
 //     evidence is STRONG: the authority lists hold it as an author from the
-//     owner's own library (tier O) or with an Audible contributor ASIN
-//     (owner decisions 2026-10-04 "usage check + never first" and
+//     owner's own library (tier O) or from an author credit that carried
+//     an Audible contributor ASIN (tier A) (owner decisions 2026-10-04 "usage check + never first" and
 //     2026-10-05 "strong evidence may go first");
 //   - and EVERY other part must already be an author record (by name, or by
 //     alias when the store has aliases). Then those authors are credited in
@@ -676,7 +676,8 @@ const (
 	// name, or an authority-list author entry below tier O / A.
 	EvidenceWeak
 	// EvidenceStrong: the authority lists hold the name as an author from the
-	// owner's own library (tier O) or with an Audible contributor ASIN.
+	// owner's own library (tier O) or from an author credit that carried an
+	// Audible contributor ASIN (tier A).
 	EvidenceStrong
 )
 
@@ -728,11 +729,13 @@ type AuthoritySource interface {
 // authorityEvidence is evidence from the authority lists. Strong when the
 // name qualifies as an author (Entry.Qualifies: an owner override blocking
 // the role, or cast_author-only credits, never count) AND that author role
-// was observed at tier O (owner library or override) or tier A, or the
-// person carries contributor ASINs (Lookup.AuthorASINs). The role's own
-// tiers are read, never Entry.Tier: that is the best tier over every role,
-// so a narrator seen at tier O who is an author only at tier B would read as
-// strong. An author entry that qualifies on tier B alone is weak.
+// was observed at tier O (owner library or override) or tier A (an author
+// credit with a contributor ASIN). The role's own tiers are read, never
+// Entry.Tier (the best tier over every role) and never the entry's ASINs
+// (Lookup.AuthorASINs): an entry carries the ASINs of every role it was
+// credited in, so a narrator or cast member seen with an ASIN who is an
+// author only at tier B would read as strong and go first (#3741 review
+// B1). An author entry that qualifies on tier B alone is weak.
 type authorityEvidence struct{ lookup authority.Lookup }
 
 func (e authorityEvidence) PersonEvidence(q PersonQuery) (Evidence, error) {
@@ -740,12 +743,11 @@ func (e authorityEvidence) PersonEvidence(q PersonQuery) (Evidence, error) {
 		return Evidence{}, nil
 	}
 	st := e.lookup.Person(q.Name).Roles[authority.RoleAuthor]
-	asins := e.lookup.AuthorASINs(q.Name)
 	switch {
 	case st.ByTier[authority.TierO] > 0:
 		return Evidence{Strength: EvidenceStrong, Detail: fmt.Sprintf("the authority lists hold %q as an author from the owner's library (tier O)", q.Name)}, nil
-	case st.ByTier[authority.TierA] > 0 || len(asins) > 0:
-		return Evidence{Strength: EvidenceStrong, Detail: fmt.Sprintf("the authority lists hold %q as an author with a contributor ASIN", q.Name)}, nil
+	case st.ByTier[authority.TierA] > 0:
+		return Evidence{Strength: EvidenceStrong, Detail: fmt.Sprintf("the authority lists hold %q as an author credited with a contributor ASIN (tier A)", q.Name)}, nil
 	}
 	return Evidence{Strength: EvidenceWeak, Detail: fmt.Sprintf("the authority lists hold %q as an author (no tier O / A credit)", q.Name)}, nil
 }

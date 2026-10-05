@@ -8,7 +8,8 @@
   in a different series, a provider credit) links such a part but never makes
   it the primary author. Strong evidence lets it be the primary: the authority
   lists hold the name as an author from the owner's own library (tier O) or
-  with an Audible contributor ASIN. Strong evidence keeps the credit order and
+  from an author credit that carried an Audible contributor ASIN (tier A). A
+  contributor ASIN seen only on a narrator or cast credit does not count. Strong evidence keeps the credit order and
   does not move a part forward.
 - The authority lists feed author-credit resolution through the server's
   store when the new setting `authority_evidence_enabled` is on. It is off by
