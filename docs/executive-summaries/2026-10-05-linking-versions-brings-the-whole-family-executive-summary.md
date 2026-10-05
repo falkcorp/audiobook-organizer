@@ -1,11 +1,11 @@
 <!-- file: docs/executive-summaries/2026-10-05-linking-versions-brings-the-whole-family-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 0b6f6f3e-7a52-4c1b-9d0e-5e2c8a41d7b9 -->
 <!-- last-edited: 2026-10-05 -->
 
 # Linking versions brings the whole family
 
-PR: [#3758](https://github.com/falkcorp/audiobook-organizer/pull/3758) (follow-up to #3756)
+PRs: [#3758](https://github.com/falkcorp/audiobook-organizer/pull/3758) (follow-up to #3756), and a follow-up that makes undo safe
 
 ## Executive Summary
 
@@ -16,17 +16,35 @@ PR: [#3758](https://github.com/falkcorp/audiobook-organizer/pull/3758) (follow-u
   family, as extra versions, and nothing about them is deleted.
 - **Only the books you name are retired.** The book folded in is retired as
   before; the versions that come along with it stay in the library.
-- **It can always be undone.** Every merge that brings versions along first
-  writes down which versions moved and where they came from. If it cannot
-  write that down, it does not merge. Undo sends those versions back to their
-  old family with their old "main version" setting, unless someone has moved
-  them somewhere else since, and makes sure the old family has one main
-  version again.
+- **It can be undone.** Every merge that brings versions along first writes
+  down which versions moved and where they came from. If it cannot write that
+  down, it does not merge.
+- **What an undo reverses: only the versions that came along.** Undo sends
+  those versions back to their old family with their old "main version"
+  setting, and makes sure both families have one main version afterwards. It
+  does not bring back the book that was folded in; that is restored from the
+  trash, or by the separate undo for automatic merges.
+- **When an undo is refused.** An undo that has already been done is refused,
+  and so is the undo of a merge that never happened (refused before it changed
+  anything). It is also refused when a later merge moved the same version into
+  the same family again: undoing the old merge would quietly reverse the newer
+  one. A version someone has moved to a third family since is left there.
 - **iTunes books and half-scanned books are protected.** If a version that
   would come along is an iTunes library book, or one whose files have not
   been fully scanned yet, the merge is refused and nothing changes. This
   matters because an iTunes original usually sits in the same family as its
   organized copy, and that copy is a common book to merge away.
+- **The family's main version stays visible.** If the kept book is not yet
+  organized but a copy that came along is, that copy becomes the main version,
+  so the title stays listed in Audiobookshelf. The owner chose this on
+  5 October 2026. Choosing the main version by hand still wins.
+- **Deleted versions come back to the right family.** A version that was in
+  the trash when its family was merged away now comes back into the merged
+  family when it is restored, not into the old family that no longer has
+  anyone in it.
+- **The iTunes clean-up uses the same merge.** It used to merge duplicates the
+  old way and left their other versions behind. It now uses the same merge,
+  with the same safety checks it had before.
 - **Two safety checks are now tested.** A check that stops a merge from pulling
   an already-deleted book into the wrong family, and the rule that picks a
   family when two are equally large, now have tests that fail if either is
@@ -57,3 +75,17 @@ the kept book's family while the folded-in book went back to its old one.
 **The fix.** Every merge that moves versions now keeps its own record of
 them, whichever button or repair started it, and an undo action reads that
 record to put them back.
+
+## Undo that could reverse a later merge
+
+**What it was.** An undo could be run twice. If the same versions had been
+merged again in between, the second undo moved them back out of the newer
+merge's family.
+
+**Why it mattered.** One click could quietly unpick a merge nobody asked to
+undo.
+
+**The fix.** Each undo record now remembers which versions it has already sent
+back. A finished undo is refused, and so is one where a newer merge holds the
+same version. The undo of an automatic merge is refused the second time as
+well.
