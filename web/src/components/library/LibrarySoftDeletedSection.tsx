@@ -1,8 +1,9 @@
 // file: web/src/components/library/LibrarySoftDeletedSection.tsx
-// version: 1.1.2
+// version: 1.2.0
 // guid: 26804E8D-51BA-462C-9BBE-45ED69E17B9F
-// last-edited: 2026-08-19
+// last-edited: 2026-10-05
 
+import { useState } from 'react';
 import {
   Paper,
   Stack,
@@ -15,6 +16,12 @@ import {
   ListItem,
   ListItemText,
   ListItemSecondaryAction,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogContentText,
+  DialogActions,
+  Tooltip,
 } from '@mui/material';
 import { ExpandMore as ExpandMoreIcon, Refresh as RefreshIcon } from '@mui/icons-material';
 import type { Audiobook } from '../../types';
@@ -31,6 +38,10 @@ export interface LibrarySoftDeletedSectionProps {
   onRefresh: () => void;
   onRestoreOne: (book: Audiobook) => void;
   onPurgeOne: (book: Audiobook) => void;
+  // The book whose "discard progress and purge" is in flight, if any.
+  discardingBookId?: string | null;
+  // Called once the user confirmed the dialog for a book with progress.
+  onDiscardProgressOne?: (book: Audiobook) => void;
 }
 
 export function LibrarySoftDeletedSection({
@@ -45,7 +56,13 @@ export function LibrarySoftDeletedSection({
   onRefresh,
   onRestoreOne,
   onPurgeOne,
+  discardingBookId = null,
+  onDiscardProgressOne,
 }: LibrarySoftDeletedSectionProps) {
+  // The book the confirm dialog is open for. The discard is irreversible, so
+  // the button only opens this; the handler runs on Confirm.
+  const [confirmDiscard, setConfirmDiscard] = useState<Audiobook | null>(null);
+
   return (
     <Paper sx={{ p: 2, mt: 3 }}>
       <Stack
@@ -156,7 +173,26 @@ export function LibrarySoftDeletedSection({
                 return (
                   <ListItem key={book.id} alignItems="flex-start" data-testid="soft-deleted-item">
                     <ListItemText
-                      primary={book.title || 'Untitled'}
+                      primary={
+                        <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+                          <span>{book.title || 'Untitled'}</span>
+                          {book.has_progress && (
+                            <Tooltip
+                              title={
+                                book.progress_summary ||
+                                'A user has listening progress on this book'
+                              }
+                            >
+                              <Chip
+                                size="small"
+                                color="info"
+                                label="has progress"
+                                data-testid="soft-deleted-has-progress"
+                              />
+                            </Tooltip>
+                          )}
+                        </Stack>
+                      }
                       secondary={
                         <Stack spacing={0.5}>
                           <Typography
@@ -175,6 +211,18 @@ export function LibrarySoftDeletedSection({
                               }}
                             >
                               Soft deleted at {deletedAt.toLocaleString()}
+                            </Typography>
+                          )}
+                          {book.has_progress && (
+                            <Typography
+                              variant="caption"
+                              sx={{
+                                color: 'text.secondary',
+                              }}
+                            >
+                              Kept in the trash because of listening progress
+                              {book.progress_summary ? `: ${book.progress_summary}` : ''}. There is
+                              no other copy of this book to move it to.
                             </Typography>
                           )}
                           {book.file_path && (
@@ -204,6 +252,25 @@ export function LibrarySoftDeletedSection({
                       >
                         {restoringBookId === book.id ? 'Restoring...' : 'Restore'}
                       </Button>
+                      {book.has_progress && onDiscardProgressOne && (
+                        <Button
+                          size="small"
+                          color="error"
+                          variant="outlined"
+                          sx={{ mr: 1 }}
+                          onClick={() => setConfirmDiscard(book)}
+                          disabled={
+                            discardingBookId === book.id ||
+                            purgeInProgress ||
+                            purgingBookId === book.id ||
+                            restoringBookId === book.id
+                          }
+                        >
+                          {discardingBookId === book.id
+                            ? 'Discarding...'
+                            : 'Discard progress and purge'}
+                        </Button>
+                      )}
                       <Button
                         size="small"
                         color="error"
@@ -221,6 +288,42 @@ export function LibrarySoftDeletedSection({
           </>
         )}
       </Collapse>
+      <Dialog
+        open={confirmDiscard !== null}
+        onClose={() => setConfirmDiscard(null)}
+        aria-labelledby="discard-progress-title"
+      >
+        <DialogTitle id="discard-progress-title">Discard progress and purge?</DialogTitle>
+        <DialogContent>
+          <DialogContentText component="div">
+            <Typography variant="body1" sx={{ mb: 1 }}>
+              &ldquo;{confirmDiscard?.title || 'Untitled'}&rdquo; will be permanently deleted from
+              the library, and every user&apos;s listening progress on it will be lost:
+            </Typography>
+            <Typography variant="body2" sx={{ mb: 1 }} data-testid="discard-progress-summary">
+              {confirmDiscard?.progress_summary || 'listening progress'}
+            </Typography>
+            <Typography variant="body2">
+              That includes positions, finished status, percent listened and bookmarks. This cannot
+              be undone. To keep the progress, restore the book instead.
+            </Typography>
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmDiscard(null)}>Cancel</Button>
+          <Button
+            color="error"
+            variant="contained"
+            onClick={() => {
+              const book = confirmDiscard;
+              setConfirmDiscard(null);
+              if (book && onDiscardProgressOne) onDiscardProgressOne(book);
+            }}
+          >
+            Discard progress and purge
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Paper>
   );
 }
