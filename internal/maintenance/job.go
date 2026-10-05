@@ -1,7 +1,7 @@
 // file: internal/maintenance/job.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: 11111111-1111-1111-1111-111111111111
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 package maintenance
 
@@ -266,9 +266,21 @@ type jobBookWriter interface {
 	PruneBookSnapshots(id string, keepCount int) (int, error)
 }
 
+// jobManualOnlyReader is what applygate.BookManualOnly reads beyond a book's
+// files (jobBookFileReader) and author rows (jobContributorStore): its series
+// row, its author credits and its tags. A job that decides which books it
+// may touch runs the whole owner-manual check (Doctor Who / Big Finish /
+// Torchwood), not one read from the row alone (owner decision 2026-10-05).
+type jobManualOnlyReader interface {
+	GetSeriesByID(id int) (*database.Series, error)
+	GetBookAuthors(bookID string) ([]database.BookAuthor, error)
+	GetBookTagsDetailed(bookID string) ([]database.BookTag, error)
+}
+
 type jobBookStore interface {
 	jobBookReader
 	jobBookWriter
+	jobManualOnlyReader
 	// The user's field locks. A job that fills or overwrites a user-lockable
 	// column (dedup-books' keeper fill, the title/series repairs) goes through
 	// database.LoadFieldLocks / ApplyRespectingLocks -- the one guard every

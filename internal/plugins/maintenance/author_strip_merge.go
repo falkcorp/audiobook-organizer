@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_strip_merge.go
-// version: 1.9.1
+// version: 1.10.0
 // guid: dbd16a1f-eada-4c33-b5c4-6a61ce342396
-// last-edited: 2026-09-28
+// last-edited: 2026-10-05
 
 package maintenance
 
@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/applygate"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -675,7 +676,10 @@ func (p *Plugin) runAuthorStripMerge(ctx context.Context, rawParams json.RawMess
 		}
 		idx := newTitleRelinkIndex(allBooksCore, authors, byName, seriesByID, junkIDs)
 		creator := newAuthorPathLinkCreator(store, !relinkWrite)
-		rel, rErr := relinkTitleAsAuthorBooks(ctx, store, creator, junkRows, &idx, relinkWrite, params.Limit, registry.ReporterOpID(reporter), log)
+		// The owner-manual check's readers; tags come from their own accessor
+		// (OpsStore does not carry them).
+		mo := applygate.ManualOnlyReaders{Files: store, Series: store, Authors: store, Tags: p.deps.BookTagReader()}
+		rel, rErr := relinkTitleAsAuthorBooks(ctx, store, mo, creator, junkRows, &idx, relinkWrite, params.Limit, registry.ReporterOpID(reporter), log)
 		if rErr != nil {
 			return rErr
 		}

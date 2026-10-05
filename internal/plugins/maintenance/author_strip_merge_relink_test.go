@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_strip_merge_relink_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9444cf3d-482c-4380-9243-4bcfd66af5ee
-// last-edited: 2026-09-26
+// last-edited: 2026-10-05
 
 package maintenance
 
@@ -36,7 +36,9 @@ type relinkFixture struct {
 	journalErr error
 	// coCredits adds junction credits to a book beside its primary.
 	coCredits map[string][]database.BookAuthor
-	store     *database.MockStore
+	// tags serves GetBookTagsDetailed (the owner-manual check's tag leg).
+	tags  map[string][]database.BookTag
+	store *database.MockStore
 }
 
 func newRelinkFixture() *relinkFixture {
@@ -63,6 +65,7 @@ func (f *relinkFixture) run(t *testing.T, params string) (*stripMergeCalls, stri
 	p := newTitleAsAuthorPluginWith(calls, authors, f.books, nil)
 	store := p.deps.(*fakeDeps).store.(*database.MockStore)
 	store.GetBookFilesFunc = func(bookID string) ([]database.BookFile, error) { return f.files[bookID], nil }
+	store.GetBookTagsDetailedFunc = func(bookID string) ([]database.BookTag, error) { return f.tags[bookID], nil }
 	store.GetMetadataFieldStatesFunc = func(bookID string) ([]database.MetadataFieldState, error) {
 		v, ok := f.fetched[bookID]
 		if !ok {

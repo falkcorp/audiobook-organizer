@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_regroup.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-10-05
 
@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"math"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -26,6 +27,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"golang.org/x/sync/errgroup"
 )
 
 // CONS-FRAG-HEAL: the iTunes importer historically grouped tracks with an
@@ -127,8 +129,15 @@ func (p *Plugin) runITunesRegroup(ctx context.Context, raw json.RawMessage, repo
 	}
 	groups := itunesservice.GroupLibraryForHeal(lib)
 
+	// The owner-manual check reads each book's tags, which OpsStore does not
+	// carry; they come from their own accessor, composed in statically.
+	rstore := regroupRunStore{OpsStore: store, BookTagReader: p.deps.BookTagReader()}
+	if rstore.BookTagReader == nil {
+		return fmt.Errorf("itunes.regroup: no book-tag reader for the owner-manual check")
+	}
+
 	_ = reporter.UpdateProgress(1, 4, fmt.Sprintf("Phase 2/4: snapshotting DB for %d target groups…", len(groups)))
-	snap, err := p.buildRegroupSnapshot(ctx, store, rootDir, reporter)
+	snap, err := p.buildRegroupSnapshot(ctx, rstore, rootDir, reporter)
 	if err != nil {
 		return err
 	}
@@ -161,19 +170,81 @@ func (p *Plugin) runITunesRegroup(ctx context.Context, raw json.RawMessage, repo
 	}
 
 	_ = reporter.UpdateProgress(3, 4, "Phase 4/4: applying plan…")
-	if err := p.applyRegroupPlan(ctx, store, plan, rootDir, reporter); err != nil {
+	if err := p.applyRegroupPlan(ctx, rstore, plan, rootDir, reporter); err != nil {
 		return err
 	}
 	_ = reporter.UpdateProgress(4, 4, "APPLIED — "+summary)
 	return nil
 }
 
+// regroupRunStore is the run's store: OpsStore plus the tag reads the
+// owner-manual check makes (BookTagReader, its own accessor because OpsStore
+// is at the interfacebloat cap). The two method sets do not overlap.
+type regroupRunStore struct {
+	OpsStore
+	BookTagReader
+}
+
 // itunesRegroupSnapshotReader is what buildRegroupSnapshot reads: the shared
-// regroup snapshot reader plus every series row, so the owner-manual-only
-// check can read series names without one point read per book.
+// regroup snapshot reader plus every series row, every live book's tags in
+// one call, and the author-credit reads, so the whole-book owner-manual
+// check (applygate.BookManualOnly) runs without a per-book file, series or
+// tag read.
 type itunesRegroupSnapshotReader interface {
 	regroupSnapshotReader
 	GetAllSeries() ([]database.Series, error)
+	GetBookTagsByBookIDs(bookIDs []string) (map[string][]string, error)
+	database.BookAuthorReader
+}
+
+// manualOnlyFilesByBook serves book_file rows a caller already read to the
+// owner-manual check (applygate.ManualOnlyFilesReader), so the check sees
+// exactly the rows the caller's own decision was built from -- no second read
+// that could disagree with them. itunes.regroup's snapshot and recheck and
+// author-strip-merge's relink use it.
+type manualOnlyFilesByBook map[string][]database.BookFile
+
+func (r manualOnlyFilesByBook) GetBookFiles(bookID string) ([]database.BookFile, error) {
+	return r[bookID], nil
+}
+
+// regroupSeriesReader serves series rows from the snapshot's GetAllSeries.
+type regroupSeriesReader map[int]*database.Series
+
+func (r regroupSeriesReader) GetSeriesByID(id int) (*database.Series, error) { return r[id], nil }
+
+// regroupTagsReader serves the bulk GetBookTagsByBookIDs result to the
+// owner-manual check, which only reads BookTag.Tag.
+type regroupTagsReader map[string][]string
+
+func (r regroupTagsReader) GetBookTagsDetailed(bookID string) ([]database.BookTag, error) {
+	tags := r[bookID]
+	out := make([]database.BookTag, len(tags))
+	for i, t := range tags {
+		out[i] = database.BookTag{BookID: bookID, Tag: t}
+	}
+	return out, nil
+}
+
+// regroupManualOnlyFile is the part of a book_file row the owner-manual check
+// reads (applygate.BulkManualOnlyGuard: the path and the two transcribed
+// fields). The snapshot keeps only these: a full BookFile per row for a
+// 300,000-row library would be the snapshot's largest allocation by far.
+func regroupManualOnlyFile(f *database.BookFileCore) database.BookFile {
+	return database.BookFile{ID: f.ID, BookID: f.BookID, FilePath: f.FilePath,
+		TranscribedTitle: f.TranscribedTitle, TranscribedAuthor: f.TranscribedAuthor}
+}
+
+// regroupManualOnly is the planner's BookMeta.ManualOnly for one book: the
+// whole-book owner-manual check. The snapshot and the apply-time recheck both
+// call it, with readers over the rows each of them read, so the two can only
+// disagree when the data changed between them.
+func regroupManualOnly(r applygate.ManualOnlyReaders, b *database.Book) (bool, error) {
+	held, _, err := applygate.BookManualOnly(r, b)
+	if err != nil {
+		return false, fmt.Errorf("owner-manual check of %s: %w", b.ID, err)
+	}
+	return held, nil
 }
 
 // buildRegroupSnapshot reads the immutable DB state the planner reasons over via
@@ -198,9 +269,9 @@ func (p *Plugin) buildRegroupSnapshot(ctx context.Context, store itunesRegroupSn
 	if err != nil {
 		return snap, fmt.Errorf("GetAllSeries: %w", err)
 	}
-	seriesName := make(map[int]string, len(seriesRows))
+	seriesByID := make(regroupSeriesReader, len(seriesRows))
 	for i := range seriesRows {
-		seriesName[seriesRows[i].ID] = seriesRows[i].Name
+		seriesByID[seriesRows[i].ID] = &seriesRows[i]
 	}
 
 	// Pass 1: all books → per-book rows + version-group membership.
@@ -250,11 +321,13 @@ func (p *Plugin) buildRegroupSnapshot(ctx context.Context, store itunesRegroupSn
 		return snap, fmt.Errorf("GetAllBookFilesCore: %w", err)
 	}
 	facts := make(map[string]*regroupFileFacts, len(books))
+	moFiles := make(manualOnlyFilesByBook, len(books))
 	for i := range files {
 		f := &files[i]
 		if !live[f.BookID] {
 			continue
 		}
+		moFiles[f.BookID] = append(moFiles[f.BookID], regroupManualOnlyFile(f))
 		ff := facts[f.BookID]
 		if ff == nil {
 			ff = &regroupFileFacts{}
@@ -291,10 +364,45 @@ func (p *Plugin) buildRegroupSnapshot(ctx context.Context, store itunesRegroupSn
 		}
 	}
 
-	for id, b := range books {
-		if !live[id] {
-			continue
+	// The whole-book owner-manual check for every live book. Files, series and
+	// tags are served from the bulk reads (one call each); the author credits
+	// are the one per-book read (GetBookAuthors, a point get, plus
+	// GetAuthorByID per credit) since the store has no bulk credit read.
+	// Run on a NumCPU worker pool (CLAUDE.md: a per-item DB read over the
+	// whole library). Each worker writes only its own slot of manual, so no
+	// lock is needed. A read failure fails the snapshot: the planner cannot be
+	// told a book is not owner-manual when that could not be checked.
+	liveIDs := make([]string, 0, len(books))
+	for id := range books {
+		if live[id] {
+			liveIDs = append(liveIDs, id)
 		}
+	}
+	sort.Strings(liveIDs)
+	tagMap, err := store.GetBookTagsByBookIDs(liveIDs)
+	if err != nil {
+		return snap, fmt.Errorf("GetBookTagsByBookIDs: %w", err)
+	}
+	mo := applygate.ManualOnlyReaders{Files: moFiles, Series: seriesByID, Authors: store, Tags: regroupTagsReader(tagMap)}
+	manual := make([]bool, len(liveIDs))
+	eg, ectx := errgroup.WithContext(ctx)
+	eg.SetLimit(runtime.NumCPU())
+	for i, id := range liveIDs {
+		eg.Go(func() error {
+			if err := ectx.Err(); err != nil {
+				return err
+			}
+			held, err := regroupManualOnly(mo, books[id])
+			manual[i] = held
+			return err
+		})
+	}
+	if err := eg.Wait(); err != nil {
+		return snap, err
+	}
+
+	for i, id := range liveIDs {
+		b := books[id]
 		vg := ""
 		if b.VersionGroupID != nil {
 			vg = *b.VersionGroupID
@@ -303,7 +411,7 @@ func (p *Plugin) buildRegroupSnapshot(ctx context.Context, store itunesRegroupSn
 		if ff == nil {
 			ff = &regroupFileFacts{}
 		}
-		snap.Books[id] = regroupBookMeta(b, ff, incumbent[vg], vgLegacyNonPrimary[vg], regroupSeriesName(b, seriesName))
+		snap.Books[id] = regroupBookMeta(b, ff, incumbent[vg], vgLegacyNonPrimary[vg], manual[i])
 	}
 	_ = reporter.UpdateProgress(2, 4, fmt.Sprintf("Phase 2/4: snapshot ready (%d books, %d PID locations)", len(snap.Books), len(snap.PIDLoc)))
 	return snap, nil
@@ -315,14 +423,6 @@ func regroupEligible(b *database.Book) bool {
 	return !b.IsSoftDeleted() && (b.MergedIntoBookID == nil || *b.MergedIntoBookID == "")
 }
 
-// regroupSeriesName returns b's series name from names, or "" when it has none.
-func regroupSeriesName(b *database.Book, names map[int]string) string {
-	if b.SeriesID == nil {
-		return ""
-	}
-	return names[*b.SeriesID]
-}
-
 // regroupFileFacts is what the planner needs from one book's book_file rows.
 // The full snapshot and the apply-time recheck both build it through add, so
 // the two predicates read the same facts.
@@ -331,7 +431,6 @@ type regroupFileFacts struct {
 	withoutPID  int
 	libraryFile bool // a row (missing or not) under the root, outside the frozen iTunes tree
 	nonITunes   bool // a row outside the frozen iTunes tree (anywhere)
-	manualPath  bool // a row path names an owner-manual-only library
 }
 
 func (ff *regroupFileFacts) add(path, pid, rootDir string) {
@@ -355,14 +454,12 @@ func (ff *regroupFileFacts) add(path, pid, rootDir string) {
 	if rootDir != "" && pathutil.IsWithin(clean, filepath.Clean(rootDir)) && !inITunes {
 		ff.libraryFile = true
 	}
-	if applygate.IsOwnerManualOnly(path, "") {
-		ff.manualPath = true
-	}
 }
 
 // regroupBookMeta assembles the planner's view of one live book. incumbent is
 // the ID of its version group's incumbent primary ("" = none or ungrouped).
-func regroupBookMeta(b *database.Book, ff *regroupFileFacts, incumbent string, legacyNonPrimary bool, seriesName string) itunesservice.BookMeta {
+// manualOnly is regroupManualOnly's answer for the book.
+func regroupBookMeta(b *database.Book, ff *regroupFileFacts, incumbent string, legacyNonPrimary bool, manualOnly bool) itunesservice.BookMeta {
 	vg := ""
 	if b.VersionGroupID != nil {
 		vg = *b.VersionGroupID
@@ -397,7 +494,7 @@ func regroupBookMeta(b *database.Book, ff *regroupFileFacts, incumbent string, l
 		HasNonITunesFile:    ff.nonITunes,
 		Organized:           b.LibraryState != nil && *b.LibraryState == "organized",
 		FilesWithoutPID:     ff.withoutPID,
-		ManualOnly:          ff.manualPath || bookRowManualOnly(b, seriesName),
+		ManualOnly:          manualOnly,
 	}
 }
 
@@ -732,15 +829,13 @@ func regroupRecheck(store itunesRegroupStore, plan itunesservice.RegroupPlan, gi
 				fresh.PIDLoc[pid] = itunesservice.PIDLoc{FileID: files[i].ID, BookID: id}
 			}
 		}
-		series := ""
-		if b.SeriesID != nil {
-			sr, err := store.GetSeriesByID(*b.SeriesID)
-			if err != nil {
-				return "", false, fmt.Errorf("GetSeriesByID %d: %w", *b.SeriesID, err)
-			}
-			if sr != nil {
-				series = sr.Name
-			}
+		// The same whole-book check the snapshot made, over the rows read
+		// here: these files, and the store's series, credits and tags.
+		manual, err := regroupManualOnly(applygate.ManualOnlyReaders{
+			Files: manualOnlyFilesByBook{id: files}, Series: store, Authors: store, Tags: store,
+		}, b)
+		if err != nil {
+			return "", false, err
 		}
 		incumbent, legacy := "", false
 		if b.VersionGroupID != nil && *b.VersionGroupID != "" {
@@ -749,7 +844,7 @@ func regroupRecheck(store itunesRegroupStore, plan itunesservice.RegroupPlan, gi
 				return "", false, err
 			}
 		}
-		fresh.Books[id] = regroupBookMeta(b, ff, incumbent, legacy, series)
+		fresh.Books[id] = regroupBookMeta(b, ff, incumbent, legacy, manual)
 	}
 	keep := a.KeepTitle
 	if t, ok := fresh.Books[a.Target]; ok && !a.FreshBook && itunesservice.LibraryCopy(t) {
@@ -825,13 +920,4 @@ func regroupExamples(plan itunesservice.RegroupPlan, n int) []string {
 		}
 	}
 	return out
-}
-
-// bookRowManualOnly is applygate.BookRowManualOnly on a full book row.
-func bookRowManualOnly(b *database.Book, seriesName string) bool {
-	if b == nil {
-		return false
-	}
-	core := b.Core()
-	return applygate.BookRowManualOnly(&core, seriesName)
 }

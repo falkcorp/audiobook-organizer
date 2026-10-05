@@ -1,5 +1,5 @@
 // file: internal/applygate/manual_only_franchise_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4c1e8a73-9b2d-4f60-a5e7-3d8f1b6c2a94
 // last-edited: 2026-10-05
 
@@ -138,7 +138,7 @@ func TestMissyCreditNotHeld_TitleStillHeld(t *testing.T) {
 	}
 }
 
-// BookRowManualOnly reads every field of the row, with the Missy credit rule.
+// bookRowManualOnly reads every field of the row, with the Missy credit rule.
 func TestBookRowManualOnly(t *testing.T) {
 	cases := []struct {
 		core database.BookCore
@@ -153,11 +153,50 @@ func TestBookRowManualOnly(t *testing.T) {
 		{database.BookCore{FilePath: "/lib/Adrian Tchaikovsky/War Master's Gate", Title: "War Master's Gate"}, false},
 	}
 	for _, c := range cases {
-		if got := BookRowManualOnly(&c.core, ""); got != c.want {
+		if got := bookRowManualOnly(&c.core, "") != ""; got != c.want {
 			t.Errorf("%+v: got %v, want %v", c.core, got, c.want)
 		}
 	}
-	if !BookRowManualOnly(&database.BookCore{FilePath: "/lib/x"}, "Torchwood") {
+	if bookRowManualOnly(&database.BookCore{FilePath: "/lib/x"}, "Torchwood") == "" {
 		t.Error("series not read")
+	}
+}
+
+// BookManualOnly is the row check plus every store read: a book whose row is
+// clean is held by a file, a credit or a tag alone, and a read failure is an
+// error, never "not held".
+func TestBookManualOnly_RowAndStore(t *testing.T) {
+	clean := func() *database.Book {
+		return &database.Book{ID: "b", Title: "Spare Parts", FilePath: "/lib/Unknown Author/Spare Parts"}
+	}
+	if held, d, err := BookManualOnly(moReaders(moFake{}), clean()); held || err != nil {
+		t.Fatalf("clean book: held=%v detail=%q err=%v", held, d, err)
+	}
+	b := clean()
+	b.FilePath = "/lib/Doctor Who/Spare Parts"
+	if held, d, err := BookManualOnly(moReaders(moFake{}), b); !held || err != nil || !strings.Contains(d, "path") {
+		t.Errorf("row path: held=%v detail=%q err=%v", held, d, err)
+	}
+	f := moFake{files: []database.BookFile{{FilePath: "/lib/Big Finish/Spare Parts/01.mp3"}}}
+	if held, d, err := BookManualOnly(moReaders(f), clean()); !held || err != nil || !strings.Contains(d, "file") {
+		t.Errorf("file path: held=%v detail=%q err=%v", held, d, err)
+	}
+	id := 9
+	b = clean()
+	b.AuthorID = &id
+	f = moFake{authors: map[int]*database.Author{9: {ID: 9, Name: "Big Finish Productions"}}}
+	if held, d, err := BookManualOnly(moReaders(f), b); !held || err != nil || !strings.Contains(d, "author") {
+		t.Errorf("author credit: held=%v detail=%q err=%v", held, d, err)
+	}
+	f = moFake{tags: []database.BookTag{{Tag: "franchise:doctor-who"}}}
+	if held, d, err := BookManualOnly(moReaders(f), clean()); !held || err != nil || !strings.Contains(d, "tag") {
+		t.Errorf("tag: held=%v detail=%q err=%v", held, d, err)
+	}
+	f = moFake{tagErr: errors.New("boom")}
+	if held, _, err := BookManualOnly(moReaders(f), clean()); held || err == nil {
+		t.Errorf("tag read failure: held=%v err=%v, want an error and not held", held, err)
+	}
+	if _, _, err := BookManualOnly(ManualOnlyReaders{}, clean()); err == nil {
+		t.Error("no file reader: want an error")
 	}
 }
