@@ -1,5 +1,5 @@
 // file: internal/authorcredit/authorcredit.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 7000d1fc-e16c-47e1-bb94-6180fe3ec1de
 // last-edited: 2026-10-05
 
@@ -740,23 +740,29 @@ type AuthoritySource interface {
 type authorityEvidence struct{ lookup authority.Lookup }
 
 func (e authorityEvidence) PersonEvidence(q PersonQuery) (Evidence, error) {
-	if !e.lookup.IsKnownPerson(q.Name, authority.RoleAuthor) {
-		return Evidence{}, nil
+	return gradeAuthorityAuthor(e.lookup, q.Name), nil
+}
+
+// gradeAuthorityAuthor grades the authority-list evidence that name is an
+// author (see authorityEvidence). It cannot fail: the lists are in memory.
+func gradeAuthorityAuthor(lookup authority.Lookup, name string) Evidence {
+	if lookup == nil || !lookup.IsKnownPerson(name, authority.RoleAuthor) {
+		return Evidence{}
 	}
-	p := e.lookup.Person(q.Name)
+	p := lookup.Person(name)
 	if p == nil {
 		// A Lookup that answers IsKnownPerson without an entry (not Snapshot,
 		// whose answer comes from the entry): known, tiers unknown, so weak.
-		return Evidence{Strength: EvidenceWeak, Detail: fmt.Sprintf("the authority lists know %q as an author (no entry to read tiers from)", q.Name)}, nil
+		return Evidence{Strength: EvidenceWeak, Detail: fmt.Sprintf("the authority lists know %q as an author (no entry to read tiers from)", name)}
 	}
 	st := p.Roles[authority.RoleAuthor]
 	switch {
 	case st.ByTier[authority.TierO] > 0:
-		return Evidence{Strength: EvidenceStrong, Detail: fmt.Sprintf("the authority lists hold %q as an author from the owner's library (tier O)", q.Name)}, nil
+		return Evidence{Strength: EvidenceStrong, Detail: fmt.Sprintf("the authority lists hold %q as an author from the owner's library (tier O)", name)}
 	case st.ByTier[authority.TierA] > 0:
-		return Evidence{Strength: EvidenceStrong, Detail: fmt.Sprintf("the authority lists hold %q as an author credited with a contributor ASIN (tier A)", q.Name)}, nil
+		return Evidence{Strength: EvidenceStrong, Detail: fmt.Sprintf("the authority lists hold %q as an author credited with a contributor ASIN (tier A)", name)}
 	}
-	return Evidence{Strength: EvidenceWeak, Detail: fmt.Sprintf("the authority lists hold %q as an author (no tier O / A credit)", q.Name)}, nil
+	return Evidence{Strength: EvidenceWeak, Detail: fmt.Sprintf("the authority lists hold %q as an author (no tier O / A credit)", name)}
 }
 
 // authorBooksSource is the by-author book listing the outside-series
@@ -899,11 +905,7 @@ func CurrentAuthority(store any) (authority.Lookup, bool) {
 // an author role seen only at tier C (authority.AuthorEvidenceRule never
 // counts tier C) and a single tier-B observation.
 func AuthorityPersonEvidence(lookup authority.Lookup, name string) Evidence {
-	if lookup == nil {
-		return Evidence{}
-	}
-	ev, _ := authorityEvidence{lookup: lookup}.PersonEvidence(PersonQuery{Name: name})
-	return ev
+	return gradeAuthorityAuthor(lookup, name)
 }
 
 // authorityOf returns the authority lists the store offers, or
