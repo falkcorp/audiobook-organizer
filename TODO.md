@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.75.6 -->
+<!-- version: 10.75.7 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-10-04 -->
+<!-- last-edited: 2026-10-05 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,114 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **AUTH-LISTS-PR3** Authority lists PR 3: catalog-harvest feed. After
+      `catalog.harvest-authors` stores new `cat_raw:` payloads, rebuild the
+      authority lists (or ingest the harvested products incrementally through
+      the `ref_src:` ledger), plus LookupProduct for owned-ASIN books missing
+      from the catalog at 8 req/s.
+- [ ] **AUTH-LISTS-CONSUMERS** Wire the remaining authority-list consumers,
+      one at a time behind the same flag, each loading one Snapshot:
+      at import (authorcredit.Resolve in the file importer, scanner, iTunes
+      and metafetch apply; the narrator splitter; CleanGate publisher
+      refusal); in backfill and repair (combined-author fixer, junk-author
+      fixers, narrator cleanup/split, the credits backfill of the credits plan
+      PR 3, and new publisher normalisation: merge publisher spellings via
+      `CanonicalPublisher`, pull publishers out of author fields); and in
+      metadata matching (filename/folder token roles via `ClassifyTokens`,
+      which also flags transposed title/author books; metafetch candidate
+      scoring, known person in the right role up and cast in the author field
+      down; provider search by `AuthorASINs` instead of a fuzzy name; later
+      the catalog as an offline match target).
+- [ ] **AUTH-LISTS-TIER-C** Ingest tier-C single whole values from the
+      joined caches (metadata_cache, metadata_fetch_cache, metadata_state)
+      once credits PR 2 makes them lossless; never re-split joined strings.
+
+- [ ] **COMBINED-AUTHOR-SERIES-REPOINT** Re-point the series that combined author
+      records own before purging those records. `maintenance.purge-empty-authors`
+      now holds any author that is still a `Series.AuthorID` (`held-back(series
+      owner)`), because `DeleteAuthor` leaves the series pointing at a deleted id.
+      The scanner and metafetch create series under the book's primary author, so
+      many combined records the new fixer (`maintenance.repair-combined-author-credits`,
+      #3717) empties will stay listed until something re-points their series. The
+      obvious target is the record's first part. The owner decides the rule. The
+      hold applies to every purge target, not only combined records.
+- [ ] **COMBINED-AUTHOR-PATH-LINK-PARTS** `maintenance.author-path-link` now holds a
+      folder that names several people (`suspect_composite_credit`) instead of
+      linking or minting it. It does not credit the parts, because the op links
+      ONE author per book and its half-write resume logic recognises a single
+      credit only. Decide whether it should credit every part (resume logic and
+      dry-run counts need reworking) or keep holding them.
+- [ ] **COMBINED-AUTHOR-TITLE-HOLD-HIDES-PEN-NAMES** The combined-credit fixer
+      holds a record as `skipped_names_a_title` when a live book's title equals
+      the credit string. Prod has junk book titles of that shape ("Shirtaloon,
+      Travis Deverell" is itself a book title), so in the 2026-10-04 offline
+      census 92 of the 93 "Shirtaloon, Travis Deverell" books, 44 "J. N.
+      Chaney, Terry Maggert" and 11 "Robert Jordan, Brandon Sanderson" books
+      are held as titles, not split. Owner decision: exempt a title that is
+      the whole credit when every part is an existing author, or repair the
+      junk titles first.
+- [ ] **COMBINED-AUTHOR-REVIEW-FOLLOWUPS** Follow-ups from the #3717 review,
+      deliberately left out of that PR:
+      - Undo of a partly applied combined-credit row: `revertJunkAuthorCredits`
+        when the credits were written but the primary was not.
+      - Rescans: primary versus position 0, and duplicate series rows.
+      - The fixer's 2-minute cached author index can resolve a part to a stale
+        variant and create a near-duplicate author.
+      - The purge's `seriesRefs` guard has no per-item re-check at delete time.
+      - Cast-list folders split into 2-3 "authors" at scan time (63 of the 239
+        splits in the 2026-10-04 offline run carry "&", mostly Big Finish / Dark
+        Shadows casts such as "Lisa Bowerman & Harry Myers"). Their parts are
+        narrators. "Full Dark, No Stars" is a book title the library does not
+        hold, so the title check misses it.
+- [ ] **AUTHORCREDIT-WARMUP-FULL-SCAN** During memdb warmup the by-author
+      lookup that authorcredit's outside-series evidence reads falls back to a
+      full Pebble scan for each title-named credit part. A rescan during
+      warmup pays that per part.
+
+- [ ] **SERIES-ID-MISMATCH-COUNT** After the series-object drop history PR
+      deploys, run a `maintenance.relink-stale-series` trial on prod and record
+      the library-wide `held-series-id-mismatch` count (`by_class`). The list
+      endpoints read memdb, which strips the embedded object, so the only API
+      count today is the 52 books the swapped title/author dry run held
+      (01M42PT0K9KXH6YB0ECR9H3077, all 52 confirmed by single-book GET on
+      2026-10-04). The count shrinks with every book write since #3698
+      deployed; drops before this PR are only in `book_ver:` snapshots.
+
+- [ ] **ARS-UI** Repairs tab: add an upload control for the
+      `maintenance.audible-read-status` fixer. The Plan button sends no params,
+      and this fixer needs `target_user_id` and the export's `items`. Today the
+      plan has to be started with `POST /api/v1/repairs/maintenance.audible-read-status/plan`;
+      after that, the tab shows the plan and can approve and apply rows. The
+      control needs a user picker that never defaults to the caller, plus a
+      JSON file input that strips each item down to the fields the fixer reads,
+      so the body stays under the JSON body limit.
+- [ ] **ARS-EXTID** `maintenance.audible-read-status` matches ASINs only
+      against the book-level `asin` field. An ASIN stored only in external ids
+      falls through to the title tier or to unmatched. Consider indexing the
+      external-id ASINs as well.
+
+- [ ] **ARS-Q1** Owner question: a book the listener marked *unstarted* by hand,
+      but that Audible says is finished or in progress, is now skipped as the
+      user's choice (`skipped_manual_unstarted`), like abandoned. This applies
+      whether the mark is older or newer than Audible's timestamp. Confirm,
+      or say which way it should go.
+- [ ] **ARS-LOCK** Move the remaining user-state writers under
+      `database.LockUserBookState`: `readstatus` Recompute/Rebuild together
+      with the position writes before them (web reading heartbeat, iTunes
+      position sync), the iTunes position backfill job, and the merge follow
+      and merge combine paths, taken inside `merge.LockMergeRMW`. Each is
+      listed on the lock. SetManualStatus and the iTunes finished seed take
+      it since the ARS review follow-ups.
+
+- [ ] **AUTH-SNAPSHOT-MEM** `authority.LoadSnapshot` retains about 1 KB per
+      person (about 78 MiB for 80,000 persons, about 199 MiB allocated while
+      loading; measured 2026-10-05 by the opt-in
+      TestSnapshot_MemoryAtRealisticSize). Most of it is the per-entry role
+      and tier maps. Before the first bulk consumer loads one, consider a
+      compact entry (fixed role/tier arrays, interned sources).
+
+- [ ] **Fragment fixer: the 13 duplicate books from the 2026-10-05 no-parent apply — revert first, then plan.** The existing-book guard (#3747 and its follow-up) stops new ones; it does not touch the 13 rows of op 01M4542GMTTJSQTJDBJHVG3ZA3 that assembled a second copy of an existing book ("Book 2 - Eldest" beside "Eldest", "Before They Are Hanged", "Book 4 - The Sunrise Lands", ...). Order matters: revert those rows from the apply op's undo log FIRST, then plan again. The fixer now never picks a book a no-parent apply of its own assembled (a survivor of an unreverted plan record) as a join target while another agrees, and holds the row when only such a book agrees ("revert that apply first"); once reverted, the next plan offers an applicable existing-book join into the real book where the durations agree, and holds the rest. Merge by hand only what still holds after that.
 
 - [ ] **HISTORY-LIMIT-FIELD-ORDER** `PebbleStore.GetBookChangeHistory(bookID, limit)`
       is not newest-first across fields. Keys are
