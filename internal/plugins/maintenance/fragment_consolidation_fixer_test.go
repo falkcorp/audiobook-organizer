@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer_test.go
-// version: 1.26.0
+// version: 1.26.1
 // guid: 8e2d5b19-6a4c-4f37-b1d8-2c9e7a3f5d60
 // last-edited: 2026-10-05
 
@@ -4205,24 +4205,21 @@ func TestFragmentFixer_CoOwnerRule(t *testing.T) {
 		f.row(t, "co", co, first, "co.mp3", int64(coDur)*1000+1, coDur, 0)
 		return parent, frags, co
 	}
-	t.Run("same title, agreeing with the parent: the fragments join the co-owner", func(t *testing.T) {
+	t.Run("same title, agreeing with the parent: a second copy, held", func(t *testing.T) {
 		f := newFragFixture(t)
 		parent, frags, co := seed(t, f, "Smartest Camp", "Smartest Camp", 3, 2400)
 		res := f.plan(t, "op-plan")
-		noRow(t, res, "moved:"+parent, "replaced by the join")
-		var r repairs.Row
+		r := findRow(t, res, "moved:"+parent)
+		require.Equal(t, fragSkipCoOwnerDuplicate, r.Skipped, r.SkipReason)
+		require.Equal(t, repairs.RiskReview, r.Risk)
+		require.Contains(t, r.SkipReason, co)
+		require.Contains(t, r.SkipReason, "parent "+parent)
+		require.Contains(t, r.SkipReason, "deduplicate the two books first")
+		require.ElementsMatch(t, append(append([]string(nil), frags...), parent), r.BookIDs, "the co-owner is listed, never written")
+		require.Zero(t, res.Applicable)
 		for _, row := range res.Rows {
-			if row.Class == fragClassExistingBook {
-				r = row
-			}
+			require.NotEqual(t, fragClassExistingBook, row.Class, "never joined into the copy")
 		}
-		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
-		require.Equal(t, co, r.Proposed["join"])
-		require.ElementsMatch(t, append(append([]string(nil), frags...), co), r.BookIDs, "the parent is not written")
-		out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
-		require.Equal(t, 1, out.Applied, "%+v", out.Rows)
-		f.requireRetiredInto(t, frags, co)
-		require.Equal(t, f.path("lib/P/02.mp3"), f.fileRow(t, "parent", "p02.mp3").FilePath, "the parent's stale row is untouched")
 	})
 	t.Run("same title, a whole book that disagrees with the parent: held", func(t *testing.T) {
 		// The review probe: parent "Eldest" with 3 moved fragments beside a

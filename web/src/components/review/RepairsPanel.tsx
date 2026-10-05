@@ -1,5 +1,5 @@
 // file: web/src/components/review/RepairsPanel.tsx
-// version: 1.17.0
+// version: 1.17.1
 // guid: 9c4f1a73-2e58-4b06-a9d1-6e3b8c7f0d52
 // last-edited: 2026-10-05
 
@@ -356,6 +356,7 @@ export const SKIP_KIND_LABEL: Record<string, string> = {
   skipped_owner_manual: 'Doctor Who / Big Finish / Torchwood (manual)',
   skipped_guard_unreadable: 'Could not read for the guard',
   skipped_co_owner: 'Another book owns the same file',
+  skipped_co_owner_duplicate_copy: 'A second copy of the parent owns the same file (deduplicate first)',
   skipped_existing_book: 'A book of this title exists (durations differ)',
   skipped_retagged_copies: "Re-tagged copies of an existing book's chapters",
   skipped_lone_chapter: 'Fewer than three chapters share its name',
