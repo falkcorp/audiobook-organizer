@@ -194,6 +194,15 @@ func (b *Builder) stats(source string) *SourceStats {
 	return s
 }
 
+// NoteSource records that source ran, so a source that produced nothing (an
+// empty catalog) still appears in the report with zero counts instead of
+// being indistinguishable from a source that was skipped.
+func (b *Builder) NoteSource(source string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.stats(source)
+}
+
 // NoteUndecodable counts a payload of source the decoder refused.
 func (b *Builder) NoteUndecodable(source string) {
 	b.mu.Lock()

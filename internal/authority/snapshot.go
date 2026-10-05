@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -21,7 +22,13 @@ import (
 //   - in backfill and repair: the combined-author fixer, the junk-author
 //     fixers, narrator cleanup and split, the credits backfill, and
 //     publisher normalisation (merging publisher spellings, pulling
-//     publishers out of author fields).
+//     publishers out of author fields);
+//   - in metadata matching: filename/folder parsing (which token is the
+//     author, title, narrator or series, which also catches transposed
+//     title/author books), metafetch candidate scoring (a known person in
+//     the right role scores up, a cast member in the author field down),
+//     provider search by author ASIN instead of a fuzzy name, and later the
+//     catalog as an offline match target.
 //
 // Every answer is evidence only. A nil Person / Publisher or a false
 // IsKnownPerson means "the index knows nothing", never "not a person" or
@@ -46,6 +53,28 @@ type Lookup interface {
 	// spelling, and false when the name is not a known publisher (unknown or
 	// blocked by an override).
 	CanonicalPublisher(name string) (string, bool)
+	// ClassifyTokens answers, for each token of a parsed filename, folder or
+	// credit list, whether it is a known person and in which qualifying
+	// roles, with its contributor ASINs. Output is in input order, one per
+	// token; Entry is nil for an unknown token.
+	ClassifyTokens(tokens []string) []TokenMatch
+	// AuthorASINs returns the contributor ASINs of name when the index holds
+	// author evidence for it (for a provider search by author ASIN), nil
+	// otherwise. A homonym returns every ASIN; the caller must not pick one
+	// blindly (Entry.HomonymASINs).
+	AuthorASINs(name string) []string
+}
+
+// TokenMatch is one ClassifyTokens answer.
+type TokenMatch struct {
+	Token string `json:"token"`
+	// Entry is the person the token folds to, nil when unknown.
+	Entry *Entry `json:"entry,omitempty"`
+	// Roles are the roles the entry qualifies for (Entry.Qualifies), in
+	// author, narrator, cast_author order.
+	Roles []Role `json:"roles,omitempty"`
+	// Publisher is set when the token is a known, unblocked publisher.
+	Publisher *PublisherEntry `json:"publisher,omitempty"`
 }
 
 // Snapshot is an in-memory copy of the persons, publishers and overrides,
@@ -168,6 +197,40 @@ func canonicalOf(e *PublisherEntry) (string, bool) {
 	return e.Canonical, true
 }
 
+// ClassifyTokens implements Lookup.
+func (s *Snapshot) ClassifyTokens(tokens []string) []TokenMatch {
+	return classifyTokens(s, tokens)
+}
+
+// AuthorASINs implements Lookup.
+func (s *Snapshot) AuthorASINs(name string) []string {
+	return authorASINs(s.Person(name))
+}
+
+func classifyTokens(l Lookup, tokens []string) []TokenMatch {
+	out := make([]TokenMatch, len(tokens))
+	for i, tok := range tokens {
+		m := TokenMatch{Token: tok, Entry: l.Person(tok)}
+		for _, r := range []Role{RoleAuthor, RoleNarrator, RoleCastAuthor} {
+			if m.Entry.Qualifies(r) {
+				m.Roles = append(m.Roles, r)
+			}
+		}
+		if p := l.Publisher(tok); p != nil && !p.Blocked {
+			m.Publisher = p
+		}
+		out[i] = m
+	}
+	return out
+}
+
+func authorASINs(e *Entry) []string {
+	if !e.Qualifies(RoleAuthor) || len(e.ASINs) == 0 {
+		return nil
+	}
+	return slices.Clone(e.ASINs)
+}
+
 // Empty returns a Lookup that knows nothing: every answer is "no evidence".
 // A consumer whose feature flag is off uses it, so its code path is the same
 // with the flag on or off.
@@ -175,7 +238,9 @@ func Empty() Lookup { return emptyLookup{} }
 
 type emptyLookup struct{}
 
-func (emptyLookup) Person(string) *Entry                     { return nil }
-func (emptyLookup) IsKnownPerson(string, Role) bool          { return false }
-func (emptyLookup) Publisher(string) *PublisherEntry         { return nil }
-func (emptyLookup) CanonicalPublisher(string) (string, bool) { return "", false }
+func (emptyLookup) Person(string) *Entry                          { return nil }
+func (emptyLookup) IsKnownPerson(string, Role) bool               { return false }
+func (emptyLookup) Publisher(string) *PublisherEntry              { return nil }
+func (emptyLookup) CanonicalPublisher(string) (string, bool)      { return "", false }
+func (e emptyLookup) ClassifyTokens(tokens []string) []TokenMatch { return classifyTokens(e, tokens) }
+func (emptyLookup) AuthorASINs(string) []string                   { return nil }
