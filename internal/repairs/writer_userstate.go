@@ -1,15 +1,17 @@
 // file: internal/repairs/writer_userstate.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7c7635eb-815c-443d-830a-34ca2ca14c4a
 // last-edited: 2026-10-05
 
 package repairs
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 
@@ -58,7 +60,7 @@ func (w *Writer) WithUserState(store UserStateStore) *Writer {
 // nothing written and voids the journal row. A state write that fails after
 // positions were written keeps the row (the revert's per-part check puts the
 // positions back) and the error wraps ErrPartiallyApplied.
-func (w *Writer) SetUserState(userID, bookID string, expect, next undo.UserStateSnapshot) error {
+func (w *Writer) SetUserState(ctx context.Context, userID, bookID string, expect, next undo.UserStateSnapshot) error {
 	if err := w.denyTagsOnly("SetUserState"); err != nil {
 		return err
 	}
@@ -75,8 +77,15 @@ func (w *Writer) SetUserState(userID, bookID string, expect, next undo.UserState
 		return err
 	}
 	// The read, the compare and the write are one step against the other
-	// user-state writers that hold this lock (the ABS paths, the revert);
-	// see database.LockUserBookState for the writers that do not yet.
+	// user-state writers. The merge lock first (a merge follow moves user
+	// state under it, and the revert of these rows holds it), then the
+	// per-(user, book) stripe the ABS paths hold: the same order as the
+	// revert, never the reverse. LockWaiting keeps the scan stand-down
+	// lease alive while it waits for the merge lock.
+	if err := w.LockWaiting(ctx, "the merge lock for "+userID+" on "+bookID, merge.LockMergeRMW, merge.UnlockMergeRMW); err != nil {
+		return err
+	}
+	defer merge.UnlockMergeRMW()
 	defer database.LockUserBookState(userID, bookID)()
 	cur, err := undo.ReadUserStateSnapshot(w.userState, userID, bookID)
 	if err != nil {

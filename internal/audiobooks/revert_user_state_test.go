@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_user_state_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4b5ee81e-d142-4889-b411-a97b06ed7baa
 // last-edited: 2026-10-05
 
@@ -133,4 +133,35 @@ func TestRevertUserBookStateSet_NeedsCapabilities(t *testing.T) {
 	s, gerr := st.GetUserBookState("u1", "b1")
 	require.NoError(t, gerr)
 	require.Equal(t, database.UserBookStatusFinished, s.Status)
+}
+
+// The revert of a user_book_state_set row waits for the per-(user, book)
+// user-state stripe the ABS write paths and the Repairs writer hold.
+func TestRevertUserBookStateSet_HoldsUserStateLock(t *testing.T) {
+	st := rusStore(t)
+	created := rusFinished("b1", false)
+	rusWrite(t, st, "b1", created)
+	rusRow(t, st, "op3", "b1", undo.UserStateSnapshot{}, created)
+	unlock := database.LockUserBookState("u1", "b1")
+	done := make(chan error, 1)
+	go func() {
+		_, err := NewRevertService(st).RevertOperation("op3")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		unlock()
+		t.Fatalf("the revert ran while the user-state lock was held: %v", err)
+	case <-time.After(150 * time.Millisecond):
+	}
+	unlock()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the revert never ran after the lock was released")
+	}
+	s, err := st.GetUserBookState("u1", "b1")
+	require.NoError(t, err)
+	require.Nil(t, s)
 }

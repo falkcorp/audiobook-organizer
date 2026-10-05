@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/progress.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 4f0a7d21-9c63-4b58-8e17-52d9a0b3fc84
 // last-edited: 2026-10-05
 
@@ -359,6 +359,17 @@ func (h *Handler) applyProgressUpdate(userID, bookID string, req progressPatchRe
 	if h.progress == nil {
 		return errNoProgressStore
 	}
+	// The duration reads the library (book files), not user state, so it is
+	// read before the user-state stripe is taken and the stripe is held only
+	// across the user-state read-merge-write.
+	var duration float64
+	if req.CurrentTime != nil || req.IsFinished != nil {
+		d, err := h.durationForBook(bookID, req.Duration)
+		if err != nil {
+			return err
+		}
+		duration = d
+	}
 	// Read, merge and write as one step against the other user-state
 	// writers (database.LockUserBookState); the state writes below use the
 	// Locked variant.
@@ -403,9 +414,7 @@ func (h *Handler) applyProgressUpdate(userID, bookID string, req progressPatchRe
 			stored.UpdatedAtMs = ms
 		}
 	}
-	if stored.Duration, err = h.durationForBook(bookID, req.Duration); err != nil {
-		return err
-	}
+	stored.Duration = duration
 
 	now := h.now().UnixMilli()
 	incoming := progress.Progress{

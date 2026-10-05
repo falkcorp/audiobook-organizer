@@ -1,7 +1,7 @@
 // file: internal/readstatus/readstatus.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: 6e2f8a1d-4c5b-4f70-a9c7-2d8e0f1b9a57
-// last-edited: 2026-09-19
+// last-edited: 2026-10-05
 //
 // RecomputeUserBookState derives a UserBookState from the current
 // UserPosition rows for a given (user, book), honoring the
@@ -178,10 +178,15 @@ func deriveState(store Store, userID, bookID string, existing *database.UserBook
 // RecomputeUserBookState leaves it alone going forward. Passing
 // empty string reverts to auto — next Recompute call derives a
 // fresh status from positions.
+//
+// The read and the write are one step under database.LockUserBookState, the
+// per-(user, book) stripe the ABS write paths, the Repairs writer and the
+// revert hold. It takes no other lock while holding it.
 func SetManualStatus(store Store, userID, bookID, status string) (*database.UserBookState, error) {
 	if store == nil {
 		return nil, nil
 	}
+	defer database.LockUserBookState(userID, bookID)()
 	existing, err := store.GetUserBookState(userID, bookID)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s/%s: %w", ErrStateUnreadable, userID, bookID, err)
