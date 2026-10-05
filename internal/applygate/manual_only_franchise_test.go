@@ -1,5 +1,5 @@
 // file: internal/applygate/manual_only_franchise_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4c1e8a73-9b2d-4f60-a5e7-3d8f1b6c2a94
 // last-edited: 2026-10-05
 
@@ -27,9 +27,10 @@ func (f moFake) GetBookTagsDetailed(string) ([]database.BookTag, error) {
 }
 func (f moFake) GetBookAuthors(string) ([]database.BookAuthor, error) { return f.links, nil }
 func (f moFake) GetAuthorByID(id int) (*database.Author, error)       { return f.authors[id], nil }
+func (f moFake) GetSeriesByID(int) (*database.Series, error)          { return nil, nil }
 
 func moReaders(f moFake) ManualOnlyReaders {
-	return ManualOnlyReaders{Files: f, Authors: f, Tags: f}
+	return ManualOnlyReaders{Files: f, Series: f, Authors: f, Tags: f}
 }
 
 func sp(s string) *string { return &s }
@@ -198,5 +199,32 @@ func TestBookManualOnly_RowAndStore(t *testing.T) {
 	}
 	if _, _, err := BookManualOnly(ManualOnlyReaders{}, clean()); err == nil {
 		t.Error("no file reader: want an error")
+	}
+}
+
+// A nil reader is an error, never a skipped leg -- whichever of the four it
+// is, and even when the row alone would hold the book (a caller wired
+// without a reader must fail on every book, not only on the clean ones).
+func TestBookManualOnly_NilReaderIsAnError(t *testing.T) {
+	full := moReaders(moFake{})
+	cases := map[string]func(*ManualOnlyReaders){
+		"book_file": func(r *ManualOnlyReaders) { r.Files = nil },
+		"series":    func(r *ManualOnlyReaders) { r.Series = nil },
+		"author":    func(r *ManualOnlyReaders) { r.Authors = nil },
+		"tag":       func(r *ManualOnlyReaders) { r.Tags = nil },
+	}
+	for leg, drop := range cases {
+		r := full
+		drop(&r)
+		for _, path := range []string{"/lib/Unknown Author/Spare Parts", "/lib/Doctor Who/Spare Parts"} {
+			b := &database.Book{ID: "b", Title: "Spare Parts", FilePath: path}
+			held, _, err := BookManualOnly(r, b)
+			if err == nil || held || !strings.Contains(err.Error(), leg) {
+				t.Errorf("nil %s reader, path %q: held=%v err=%v, want an error naming %q", leg, path, held, err, leg)
+			}
+		}
+	}
+	if held, _, err := BookManualOnly(full, &database.Book{ID: "b", Title: "Spare Parts", FilePath: "/lib/x"}); held || err != nil {
+		t.Errorf("all four readers: held=%v err=%v, want not held and no error", held, err)
 	}
 }

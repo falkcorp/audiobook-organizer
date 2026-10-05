@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/manual_only_full_guard_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f3165568-40ba-4911-bf92-4619f0de4387
 // last-edited: 2026-10-05
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -176,5 +177,108 @@ func TestMergeChapterGroups_OwnerManualOffTheRow(t *testing.T) {
 	chSeedGroup(t, s, "/lib/Some Author/Story", "Story", 3, 300)
 	if res := chRun(t, &mergeChapterGroupsJob{}, s, `{"dry_run":true}`, true); len(res.Groups) != 1 || res.Groups[0].Status != "would_merge" {
 		t.Fatalf("unmarked control not offered: %+v", res)
+	}
+}
+
+// merge-chapter-groups: when the owner-manual check cannot be done (a tag
+// read fails), the preview reports the group would_skip and an apply fails
+// it; neither merges, and neither calls it owner-manual.
+func TestMergeChapterGroups_OwnerManualReadFailure(t *testing.T) {
+	s := ddRealStore(t)
+	books := chSeedGroup(t, s, "/lib/Some Author/Story", "Story", 3, 300)
+	res := chRun(t, &mergeChapterGroupsJob{}, rvpTagFailStore{s}, `{"dry_run":true}`, true)
+	if len(res.Groups) != 1 || res.Groups[0].Status != "would_skip" || res.BooksMerged != 0 || res.GroupsBlocked != 0 {
+		t.Fatalf("preview with a failed owner-manual read: %+v", res)
+	}
+	if len(res.Groups[0].Errors) == 0 || !strings.Contains(res.Groups[0].Errors[0], "owner-manual check could not be done") {
+		t.Fatalf("preview error does not name the owner-manual check: %+v", res.Groups[0])
+	}
+
+	ids := []string{books[0].ID, books[1].ID, books[2].ID}
+	out := chApply(t, rvpTagFailStore{s}, chSelectionFor(t, s, ids))
+	if len(out.Groups) != 1 || out.Groups[0].Status != "failed" || out.BooksMerged != 0 || out.GroupsFailed != 1 {
+		t.Fatalf("apply with a failed owner-manual read: %+v", out)
+	}
+	if len(out.Groups[0].Errors) == 0 || !strings.Contains(out.Groups[0].Errors[0], "owner-manual check could not be done") {
+		t.Fatalf("apply error does not name the owner-manual check: %+v", out.Groups[0])
+	}
+	for _, id := range ids[1:] {
+		if b, _ := s.GetBookByID(id); b == nil || b.IsSoftDeleted() || (b.MergedIntoBookID != nil && *b.MergedIntoBookID != "") {
+			t.Fatalf("source %s was merged away: %+v", id, b)
+		}
+	}
+}
+
+// mgLaterReadStore serves each book's first GetBookFiles (the fingerprint
+// read) as stored, and every later one with a Doctor Who transcribed title:
+// a later read disagrees with the rows the group was fingerprinted from.
+type mgLaterReadStore struct {
+	*database.PebbleStore
+	mu    sync.Mutex
+	calls map[string]int
+}
+
+func (s *mgLaterReadStore) GetBookFiles(bookID string) ([]database.BookFile, error) {
+	s.mu.Lock()
+	s.calls[bookID]++
+	n := s.calls[bookID]
+	s.mu.Unlock()
+	files, err := s.PebbleStore.GetBookFiles(bookID)
+	if err != nil || n == 1 {
+		return files, err
+	}
+	dw := "Doctor Who: The Chimes of Midnight"
+	for i := range files {
+		files[i].TranscribedTitle = &dw
+	}
+	return files, nil
+}
+
+// The preview's owner-manual check reads the files the group's fingerprint
+// was built from (chapterGroupState.files), not a second GetBookFiles that
+// could disagree with them: a later read naming Doctor Who does not reach
+// the check, so the group is still offered.
+func TestMergeChapterGroups_PreviewChecksTheFingerprintedFiles(t *testing.T) {
+	s := ddRealStore(t)
+	chSeedGroup(t, s, "/lib/Some Author/Story", "Story", 3, 300)
+	ls := &mgLaterReadStore{PebbleStore: s, calls: map[string]int{}}
+	res := chRun(t, &mergeChapterGroupsJob{}, ls, `{"dry_run":true}`, true)
+	if len(res.Groups) != 1 || res.Groups[0].Status != "would_merge" {
+		t.Fatalf("the owner-manual check read files other than the fingerprinted ones: %+v", res)
+	}
+}
+
+// The preview describes groups on a worker pool. Many disjoint groups, a
+// held one and a failed one among them, come back complete, in detection
+// order, with the same counters a sequential run would give. Run with -race.
+func TestMergeChapterGroups_PreviewPoolKeepsOrderAndCounts(t *testing.T) {
+	s := ddRealStore(t)
+	const n = 12
+	for i := 0; i < n; i++ {
+		books := chSeedGroup(t, s, "/lib/Author "+string(rune('A'+i))+"/Story", "Story", 3, 300)
+		if i == 4 {
+			mgTagBigFinish(t, s, books[1].ID)
+		}
+	}
+	res := chRun(t, &mergeChapterGroupsJob{}, s, `{"dry_run":true}`, true)
+	if len(res.Groups) != n {
+		t.Fatalf("got %d groups, want %d: %+v", len(res.Groups), n, res)
+	}
+	var merge, blocked int
+	for i, g := range res.Groups {
+		if i > 0 && res.Groups[i-1].Directory > g.Directory {
+			t.Fatalf("groups out of detection order at %d: %q after %q", i, g.Directory, res.Groups[i-1].Directory)
+		}
+		switch g.Status {
+		case "would_merge":
+			merge++
+		case "blocked":
+			blocked++
+		default:
+			t.Fatalf("group %d: unexpected status %q: %+v", i, g.Status, g)
+		}
+	}
+	if merge != n-1 || blocked != 1 || res.BooksMerged != 2*(n-1) || res.GroupsBlocked != 1 || res.BooksSkipped != 2 || res.TotalBooksAffected != 3*n {
+		t.Fatalf("counts: merge=%d blocked=%d result=%+v", merge, blocked, res)
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/repoint_version_primary.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 5e1c8a07-3d42-4f96-b8d1-c07a9e25f4b3
 // last-edited: 2026-10-05
 
@@ -555,7 +555,7 @@ func (j *repointVersionPrimaryJob) classify(store maintenance.JobStore, idx *rep
 	// (applygate.BookManualOnly: files, credits, tags and series as well as the
 	// row), on both sides; detection's Exclude hook reads the path alone.
 	twinRow, memberRow := twin.ToBook(), b.ToBook()
-	if detail, err := jobsBookManualOnly(store, &twinRow, &memberRow); err != nil {
+	if detail, err := jobsBookManualOnly(store, store, &twinRow, &memberRow); err != nil {
 		d.Bucket = bucketOwnerManualCheckFailed
 		d.Reason = "owner-manual check could not be done: " + err.Error()
 		return d

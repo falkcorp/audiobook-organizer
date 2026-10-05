@@ -1,5 +1,5 @@
 // file: internal/applygate/manual_only.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: a2f62ab5-314e-427a-8ca7-de28de936b75
 // last-edited: 2026-10-05
 
@@ -8,6 +8,7 @@ package applygate
 import (
 	"errors"
 	"strconv"
+	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/franchise"
@@ -90,16 +91,51 @@ type ManualOnlyTagReader interface {
 	GetBookTagsDetailed(bookID string) ([]database.BookTag, error)
 }
 
-// ManualOnlyReaders are the store reads BulkManualOnlyGuard makes. Files is
-// required. Series, Authors and Tags may be nil for a caller whose store
-// cannot read them; that part of the check is then skipped and the caller
-// must re-check where it can (the server's apply re-runs the guard with
-// every reader before it writes). Every production caller passes all four.
+// ManualOnlyReaders are the store reads BulkManualOnlyGuard and
+// BookManualOnly make.
+//
+// BookManualOnly requires all four: a nil reader is an error (the check
+// could not be done), never a skipped leg -- a skipped leg reads as "nothing
+// there", which is the unsafe direction for a whole-book decision.
+//
+// BulkManualOnlyGuard requires Files; Series, Authors and Tags may be nil
+// there for a caller whose store cannot read them, and that caller must
+// re-check where it can (the server's apply re-runs the guard with every
+// reader before it writes).
 type ManualOnlyReaders struct {
 	Files   ManualOnlyFilesReader
 	Series  ManualOnlySeriesReader
 	Authors database.BookAuthorReader
 	Tags    ManualOnlyTagReader
+}
+
+// ManualOnlyFilesByBook serves book_file rows a caller already read to the
+// owner-manual check (ManualOnlyFilesReader), keyed by book id, so the check
+// sees exactly the rows the caller's own decision was built from -- no second
+// read that could disagree with them. A book with no entry has no files.
+type ManualOnlyFilesByBook map[string][]database.BookFile
+
+// GetBookFiles returns the rows held for bookID.
+func (r ManualOnlyFilesByBook) GetBookFiles(bookID string) ([]database.BookFile, error) {
+	return r[bookID], nil
+}
+
+// missingReaders names the nil readers in r ("" = none).
+func (r ManualOnlyReaders) missingReaders() string {
+	var missing []string
+	if r.Files == nil {
+		missing = append(missing, "book_file")
+	}
+	if r.Series == nil {
+		missing = append(missing, "series")
+	}
+	if r.Authors == nil {
+		missing = append(missing, "author")
+	}
+	if r.Tags == nil {
+		missing = append(missing, "tag")
+	}
+	return strings.Join(missing, ", ")
 }
 
 // manualOnlyWhy prefixes every owner_manual_only detail.
@@ -334,9 +370,12 @@ func bookRowManualOnly(core *database.BookCore, seriesName string) string {
 // author credits, every book_file path and its transcribed fields). detail
 // says what matched.
 //
-// err is set when one of those reads failed: the check could not be done.
-// The caller must fail closed -- leave the book alone -- and must not count
-// it as an owner-manual book (the ReasonOwnerManualCheckFailed split).
+// err is set when one of those reads failed, or when any of r's four
+// readers is nil: the check could not be done. The caller must fail closed
+// -- leave the book alone -- and must not count it as an owner-manual book
+// (the ReasonOwnerManualCheckFailed split). A nil reader is refused rather
+// than skipped so no caller can drop a leg of the check by leaving a field
+// out.
 //
 // The row part runs first and needs no read, so a book held by its row
 // costs nothing more than the row-only check did.
@@ -344,12 +383,14 @@ func BookManualOnly(r ManualOnlyReaders, book *database.Book) (held bool, detail
 	if book == nil {
 		return false, "", errors.New("no book to check for the owner-manual rule")
 	}
+	// Refused before the row check, so a caller wired without a reader fails
+	// on every book, not only on the books its row does not hold.
+	if m := r.missingReaders(); m != "" {
+		return false, "", errors.New("no " + m + " reader for the owner-manual check")
+	}
 	core := book.Core()
 	if d := bookRowManualOnly(&core, ""); d != "" {
 		return true, manualOnlyWhy + d, nil
-	}
-	if r.Files == nil {
-		return false, "", errors.New("no book_file reader for the owner-manual check")
 	}
 	g := BulkManualOnlyGuard(r, book, "")
 	if g.ReadErr != "" {

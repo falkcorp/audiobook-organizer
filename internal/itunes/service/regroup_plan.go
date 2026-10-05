@@ -1,5 +1,5 @@
 // file: internal/itunes/service/regroup_plan.go
-// version: 1.7.1
+// version: 1.8.0
 // guid: 2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-10-05
 
@@ -65,6 +65,11 @@ type BookMeta struct {
 	// tags, every file path and the files' transcribed fields). The regroup
 	// never touches it.
 	ManualOnly bool
+	// ManualCheckFailed: that check could not be done for the book (one of
+	// its reads failed). Not the same as ManualOnly -- a read fault is not a
+	// Doctor Who book -- but treated the same way: no group touching the book
+	// is planned (applygate.ReasonOwnerManualCheckFailed).
+	ManualCheckFailed bool
 }
 
 // Entanglement skip reasons (GroupAction.EntangleReason). See entanglement.
@@ -84,6 +89,10 @@ const (
 // because its title or a holder names an owner-manual-only library
 // (applygate.IsOwnerManualOnly on the title, BookMeta.ManualOnly on holders).
 const ReasonOwnerManualOnly = applygate.ReasonOwnerManualOnly
+
+// ReasonOwnerManualCheckFailed is the refusal of a group with a holder whose
+// owner-manual check could not be done (BookMeta.ManualCheckFailed).
+const ReasonOwnerManualCheckFailed = applygate.ReasonOwnerManualCheckFailed
 
 // Snapshot is an immutable read of the DB state the planner reasons over. It is
 // built ONCE before planning and never changes during planning — so the plan is
@@ -118,6 +127,10 @@ type GroupAction struct {
 	// owner-manual-only (Doctor Who / Big Finish / Torchwood). No mutation,
 	// not even a retitle.
 	ManualOnly bool
+	// ManualCheckFailed: skipped because the owner-manual check of one of
+	// its holders could not be done (BookMeta.ManualCheckFailed). Fail
+	// closed: no mutation, not even a retitle.
+	ManualCheckFailed bool
 	// KeepTitle: the existing target is a library-folder copy (LibraryCopy).
 	// Its metadata comes from the metadata pipeline, never from iTunes album
 	// tags, so the apply must not retitle it (or write any other field).
@@ -141,6 +154,9 @@ type RegroupPlan struct {
 	FreshBooks        int
 	// ManualOnlySkipped counts groups skipped as owner-manual-only.
 	ManualOnlySkipped int
+	// ManualCheckFailedSkipped counts groups skipped because a holder's
+	// owner-manual check could not be done.
+	ManualCheckFailedSkipped int
 	// LibraryTitleKept counts planned groups whose existing target is a
 	// library-folder copy, so its title is left as it is (KeepTitle).
 	LibraryTitleKept int
@@ -267,6 +283,14 @@ func PlanRegroup(groups []HealGroup, snap Snapshot) RegroupPlan {
 		if applygate.IsOwnerManualOnly(g.Title, "") || anyHolder(resolved, snap, func(b BookMeta) bool { return b.ManualOnly }) {
 			act.ManualOnly = true
 			plan.ManualOnlySkipped++
+			plan.Groups = append(plan.Groups, act)
+			continue
+		}
+		// A holder whose owner-manual check failed may be one: fail closed for
+		// this group only, and count it apart from the owner-manual ones.
+		if anyHolder(resolved, snap, func(b BookMeta) bool { return b.ManualCheckFailed }) {
+			act.ManualCheckFailed = true
+			plan.ManualCheckFailedSkipped++
 			plan.Groups = append(plan.Groups, act)
 			continue
 		}
@@ -506,7 +530,8 @@ func unknownHolder(resolved []PIDLoc, snap Snapshot) bool {
 // Recheck re-runs the plan's refusal rules for plan.Groups[gi] on FRESH rows,
 // read immediately before the apply writes that group, and returns "" when
 // the group may still be applied or the reason it must now be skipped
-// (ReasonOwnerManualOnly or an Entangle* constant). fresh must hold the
+// (ReasonOwnerManualOnly, ReasonOwnerManualCheckFailed or an Entangle*
+// constant). fresh must hold the
 // group's target (unless FreshBook) and every move source, each with every
 // PID on its current book_file rows in fresh.PIDLoc; a book that is no longer
 // live is left out of fresh.Books and refused as EntangleUnknownBook.
@@ -518,7 +543,7 @@ func (p RegroupPlan) Recheck(gi int, fresh Snapshot) string {
 		return EntangleUnknownBook
 	}
 	a := p.Groups[gi]
-	if a.Entangled || a.ManualOnly || (a.Target == "" && !a.FreshBook) {
+	if a.Entangled || a.ManualOnly || a.ManualCheckFailed || (a.Target == "" && !a.FreshBook) {
 		return ""
 	}
 	ids := make([]string, 0, len(a.Moves)+1)
@@ -535,6 +560,9 @@ func (p RegroupPlan) Recheck(gi int, fresh Snapshot) string {
 		}
 		if b.ManualOnly {
 			return ReasonOwnerManualOnly
+		}
+		if b.ManualCheckFailed {
+			return ReasonOwnerManualCheckFailed
 		}
 	}
 	if len(a.Moves) == 0 {

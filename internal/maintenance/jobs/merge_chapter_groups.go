@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/merge_chapter_groups.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: a1000020-0000-0000-0000-000000000020
 // last-edited: 2026-10-05
 
@@ -11,16 +11,20 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/applygate"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
+	"golang.org/x/sync/errgroup"
 )
 
 func init() { maintenance.Register(&mergeChapterGroupsJob{}) }
@@ -97,10 +101,11 @@ func (j *mergeChapterGroupsJob) ValidateParams(raw json.RawMessage, dryRun bool)
 // playlist entries, ratings, a metadata conflict between sources) blocks the
 // group; see chapterGroupBlockers.
 //
-// Groups are merged one at a time. They are disjoint by construction (a book is
-// in at most one reviewed group, which verification enforces), but
+// A real run merges groups one at a time. They are disjoint by construction (a
+// book is in at most one reviewed group, which verification enforces), but
 // MergeSplitBookCluster holds the process-wide merge.LockMergeRMW for its whole
-// run, so parallel workers would only queue on that lock.
+// run, so parallel workers would only queue on that lock. The preview only
+// reads, and runs its groups on a worker pool (see preview).
 func (j *mergeChapterGroupsJob) Run(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, dryRun bool) error {
 	p, err := decodeChapterGroupParams(ctx)
 	if err != nil {
@@ -148,6 +153,16 @@ func (j *mergeChapterGroupsJob) Run(ctx context.Context, store maintenance.JobSt
 
 // preview detects groups and describes what a merge of each would do. It only
 // reads.
+//
+// Each detected group costs a member and file read per book, the iTunes
+// guard, the whole-book owner-manual check (series, credit and tag reads per
+// member) and the carry check (bookmark reads per source per user), over a
+// whole-library detection, so the groups are described on a NumCPU worker
+// pool (CLAUDE.md concurrency rules). Detection's groups are disjoint -- a
+// book is in at most one -- so no two workers ever read or describe the same
+// book; each worker writes only its own slot of outs, and the counters and
+// res.Groups are built from outs afterwards, in detection order, so the
+// result is the same as a sequential run's.
 func (j *mergeChapterGroupsJob) preview(ctx context.Context, store maintenance.JobStore, reporter maintenance.ProgressReporter, cc *chapterCarryContext, res *chapterGroupsResult) error {
 	det, err := detectChapterGroupsForRun(ctx, store, res.Params)
 	if err != nil {
@@ -156,42 +171,34 @@ func (j *mergeChapterGroupsJob) preview(ctx context.Context, store maintenance.J
 	res.applyDetectionCounts(det)
 	res.Groups = make([]chapterGroupOutcome, 0, len(det.Groups)+len(det.Blocked))
 	reporter.SetTotal(len(det.Groups) + len(det.Blocked))
-	for _, g := range det.Groups {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		reporter.Increment()
-		out := newChapterGroupOutcome(g)
-		res.TotalBooksAffected += len(g.BookIDs)
-		st, rerr := readChapterGroup(store, g.BookIDs)
-		switch {
-		case rerr != nil:
-			out.Status = "would_skip"
-			out.Errors = append(out.Errors, rerr.Error())
-		default:
-			out.Members = st.members
-			out.Fingerprint = chapterFingerprint(st.members)
-			out.PrimaryTitle = st.books[0].Title
-			_, out.TitleAction = chapterTitleDecision(st.books[0], out.CommonTitle)
-			manual, merr := jobsBookManualOnly(store, st.books...)
-			if gerr := merge.GuardITunesProtected(store, out.BookIDs); gerr != nil {
-				out.Status = "would_skip"
-				out.Errors = append(out.Errors, gerr.Error())
-			} else if merr != nil {
-				out.Status = "would_skip"
-				out.Errors = append(out.Errors, "owner-manual check could not be done: "+merr.Error())
-			} else if manual != "" {
-				out.Status = "blocked"
-				out.Blockers = append(out.Blockers, chapterManualOnlyBlocker(manual))
-			} else if out.Blockers, out.MetadataFills = cc.chapterGroupBlockers(st.books[0], st.books[1:]); len(out.Blockers) > 0 {
-				out.Status = "blocked"
-			} else if out.Blockers = chapterFileCountBlockers(st); len(out.Blockers) > 0 {
-				out.Status = "blocked"
-			} else {
-				out.Status = "would_merge"
-				out.BooksMerged = len(out.SourceBookIDs)
+
+	outs := make([]chapterGroupOutcome, len(det.Groups))
+	done := make([]bool, len(det.Groups))
+	var progressMu sync.Mutex // ProgressReporter.Increment is not goroutine-safe
+	eg, ectx := errgroup.WithContext(ctx)
+	eg.SetLimit(runtime.NumCPU())
+	for i := range det.Groups {
+		eg.Go(func() error {
+			if err := ectx.Err(); err != nil {
+				return err
 			}
+			outs[i] = previewChapterGroup(store, cc, det.Groups[i])
+			done[i] = true
+			progressMu.Lock()
+			reporter.Increment()
+			progressMu.Unlock()
+			return nil
+		})
+	}
+	waitErr := eg.Wait()
+	// Groups a cancel stopped before they ran are left out, not reported as
+	// zero-value outcomes.
+	for i := range outs {
+		if !done[i] {
+			continue
 		}
+		out := outs[i]
+		res.TotalBooksAffected += len(out.BookIDs)
 		switch out.Status {
 		case "would_merge":
 			res.BooksMerged += len(out.SourceBookIDs)
@@ -203,6 +210,9 @@ func (j *mergeChapterGroupsJob) preview(ctx context.Context, store maintenance.J
 		}
 		res.Groups = append(res.Groups, out)
 	}
+	if waitErr != nil {
+		return waitErr
+	}
 	// Groups the detector blocked (non-primary versions, iTunes library,
 	// duplicate or sparse positions...) are reported with their reasons and
 	// no fingerprint: they cannot be selected for a merge.
@@ -213,6 +223,50 @@ func (j *mergeChapterGroupsJob) preview(ctx context.Context, store maintenance.J
 		res.Groups = append(res.Groups, out)
 	}
 	return nil
+}
+
+// previewChapterGroup describes what a merge of one detected group would do.
+// It only reads, and touches only g's own books (preview's worker pool
+// relies on that).
+func previewChapterGroup(store maintenance.JobStore, cc *chapterCarryContext, g scanner.ChapterGroup) chapterGroupOutcome {
+	out := newChapterGroupOutcome(g)
+	st, rerr := readChapterGroup(store, g.BookIDs)
+	if rerr != nil {
+		out.Status = "would_skip"
+		out.Errors = append(out.Errors, rerr.Error())
+		return out
+	}
+	out.Members = st.members
+	out.Fingerprint = chapterFingerprint(st.members)
+	out.PrimaryTitle = st.books[0].Title
+	_, out.TitleAction = chapterTitleDecision(st.books[0], out.CommonTitle)
+	if gerr := merge.GuardITunesProtected(store, out.BookIDs); gerr != nil {
+		out.Status = "would_skip"
+		out.Errors = append(out.Errors, gerr.Error())
+		return out
+	}
+	// The whole-book owner-manual check, run only once the iTunes guard has
+	// passed (a guarded group needs none of its reads), over the files just
+	// read for the fingerprint.
+	manual, merr := jobsBookManualOnly(store, applygate.ManualOnlyFilesByBook(st.files), st.books...)
+	switch {
+	case merr != nil:
+		out.Status = "would_skip"
+		out.Errors = append(out.Errors, "owner-manual check could not be done: "+merr.Error())
+	case manual != "":
+		out.Status = "blocked"
+		out.Blockers = append(out.Blockers, chapterManualOnlyBlocker(manual))
+	default:
+		if out.Blockers, out.MetadataFills = cc.chapterGroupBlockers(st.books[0], st.books[1:]); len(out.Blockers) > 0 {
+			out.Status = "blocked"
+		} else if out.Blockers = chapterFileCountBlockers(st); len(out.Blockers) > 0 {
+			out.Status = "blocked"
+		} else {
+			out.Status = "would_merge"
+			out.BooksMerged = len(out.SourceBookIDs)
+		}
+	}
+	return out
 }
 
 // apply merges exactly the reviewed groups in res.Params.Groups.
@@ -406,7 +460,7 @@ func (j *mergeChapterGroupsJob) applyOne(store maintenance.JobStore, lister chap
 	// hook (re-run by verifyChapterSelection) reads the path alone, so a Big
 	// Finish chapter whose only signal is a credit, a tag or a file's
 	// transcribed title would otherwise be merged.
-	if manual, merr := jobsBookManualOnly(store, st.books...); merr != nil {
+	if manual, merr := jobsBookManualOnly(store, applygate.ManualOnlyFilesByBook(st.files), st.books...); merr != nil {
 		out.Status = "failed"
 		out.Errors = append(out.Errors, "owner-manual check could not be done: "+merr.Error())
 		return

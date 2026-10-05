@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_regroup_entangle_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 9743f8e7-3f4d-43c2-976c-eb2ff7c3e4cc
 // last-edited: 2026-10-05
 
@@ -36,6 +36,9 @@ type regroupFakeReader struct {
 	tags    map[string][]string
 	links   map[string][]database.BookAuthor
 	authors map[int]*database.Author
+	// linkErr fails GetBookAuthors for a book (the owner-manual check's
+	// one per-book read).
+	linkErr map[string]error
 }
 
 func (r *regroupFakeReader) GetBookTagsByBookIDs(ids []string) (map[string][]string, error) {
@@ -49,7 +52,18 @@ func (r *regroupFakeReader) GetBookTagsByBookIDs(ids []string) (map[string][]str
 }
 
 func (r *regroupFakeReader) GetBookAuthors(bookID string) ([]database.BookAuthor, error) {
+	if err := r.linkErr[bookID]; err != nil {
+		return nil, err
+	}
 	return r.links[bookID], nil
+}
+
+func (r *regroupFakeReader) GetAllAuthors() ([]database.Author, error) {
+	out := make([]database.Author, 0, len(r.authors))
+	for _, a := range r.authors {
+		out = append(out, *a)
+	}
+	return out, nil
 }
 
 func (r *regroupFakeReader) GetAuthorByID(id int) (*database.Author, error) {
@@ -686,9 +700,10 @@ func TestITunesRegroupManualOnlySkipped(t *testing.T) {
 
 // The owner-manual signal is on what the book ROW does not carry -- a file's
 // transcribed title, an author credit, a franchise: tag -- and title, path,
-// series, narrator and publisher are all clean. The row-only check
-// (applygate.BookRowManualOnly) let each of these through; the whole-book
-// check holds them (owner decision 2026-10-05).
+// series, narrator and publisher are all clean. The row-only check (the
+// former applygate.BookRowManualOnly, now the unexported bookRowManualOnly
+// inside applygate.BookManualOnly) let each of these through; the
+// whole-book check holds them (owner decision 2026-10-05).
 func TestITunesRegroupManualOnlySkipped_SignalOffTheRow(t *testing.T) {
 	dw := "Doctor Who: The Chimes of Midnight"
 	transcribed := rgFile("f1", "F1", "p1")
