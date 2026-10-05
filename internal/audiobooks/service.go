@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service.go
-// version: 1.50.0
+// version: 1.51.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-10-05
 
@@ -233,6 +233,10 @@ type AudiobookService struct {
 	// filter (runtime_index.go). Nil-safe: a nil index falls back to the
 	// stored Book.Duration aggregate.
 	runtimeIdx *runtimeIndex
+	// auditOverride replaces the activity service as the recorder of the
+	// audit rows DiscardProgressAndPurge writes. Tests only; nil in
+	// production, where activityService records them.
+	auditOverride activityRecorder
 }
 
 // SetActivityService wires the activity service for snapshot fallback in GetAudiobookTags.

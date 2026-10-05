@@ -311,6 +311,80 @@ func (_c *MockAudiobookService_DeleteAudiobook_Call) RunAndReturn(run func(ctx c
 	return _c
 }
 
+// DiscardProgressAndPurge provides a mock function for the type MockAudiobookService
+func (_mock *MockAudiobookService) DiscardProgressAndPurge(ctx context.Context, id string, actor string) (*audiobooks.DiscardProgressResult, error) {
+	ret := _mock.Called(ctx, id, actor)
+
+	if len(ret) == 0 {
+		panic("no return value specified for DiscardProgressAndPurge")
+	}
+
+	var r0 *audiobooks.DiscardProgressResult
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) (*audiobooks.DiscardProgressResult, error)); ok {
+		return returnFunc(ctx, id, actor)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) *audiobooks.DiscardProgressResult); ok {
+		r0 = returnFunc(ctx, id, actor)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*audiobooks.DiscardProgressResult)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, string) error); ok {
+		r1 = returnFunc(ctx, id, actor)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockAudiobookService_DiscardProgressAndPurge_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DiscardProgressAndPurge'
+type MockAudiobookService_DiscardProgressAndPurge_Call struct {
+	*mock.Call
+}
+
+// DiscardProgressAndPurge is a helper method to define mock.On call
+//   - ctx context.Context
+//   - id string
+//   - actor string
+func (_e *MockAudiobookService_Expecter) DiscardProgressAndPurge(ctx any, id any, actor any) *MockAudiobookService_DiscardProgressAndPurge_Call {
+	return &MockAudiobookService_DiscardProgressAndPurge_Call{Call: _e.mock.On("DiscardProgressAndPurge", ctx, id, actor)}
+}
+
+func (_c *MockAudiobookService_DiscardProgressAndPurge_Call) Run(run func(ctx context.Context, id string, actor string)) *MockAudiobookService_DiscardProgressAndPurge_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 string
+		if args[2] != nil {
+			arg2 = args[2].(string)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockAudiobookService_DiscardProgressAndPurge_Call) Return(discardProgressResult *audiobooks.DiscardProgressResult, err error) *MockAudiobookService_DiscardProgressAndPurge_Call {
+	_c.Call.Return(discardProgressResult, err)
+	return _c
+}
+
+func (_c *MockAudiobookService_DiscardProgressAndPurge_Call) RunAndReturn(run func(ctx context.Context, id string, actor string) (*audiobooks.DiscardProgressResult, error)) *MockAudiobookService_DiscardProgressAndPurge_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // EnrichAudiobooksWithNames provides a mock function for the type MockAudiobookService
 func (_mock *MockAudiobookService) EnrichAudiobooksWithNames(books []database.Book) []audiobooks.AudiobookDetail {
 	ret := _mock.Called(books)
@@ -880,6 +954,74 @@ func (_c *MockAudiobookService_RestoreAudiobook_Call) Return(book *database.Book
 }
 
 func (_c *MockAudiobookService_RestoreAudiobook_Call) RunAndReturn(run func(ctx context.Context, id string) (*database.Book, error)) *MockAudiobookService_RestoreAudiobook_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// TrashProgress provides a mock function for the type MockAudiobookService
+func (_mock *MockAudiobookService) TrashProgress(ctx context.Context, bookIDs []string) (map[string]audiobooks.TrashProgressInfo, error) {
+	ret := _mock.Called(ctx, bookIDs)
+
+	if len(ret) == 0 {
+		panic("no return value specified for TrashProgress")
+	}
+
+	var r0 map[string]audiobooks.TrashProgressInfo
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, []string) (map[string]audiobooks.TrashProgressInfo, error)); ok {
+		return returnFunc(ctx, bookIDs)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, []string) map[string]audiobooks.TrashProgressInfo); ok {
+		r0 = returnFunc(ctx, bookIDs)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(map[string]audiobooks.TrashProgressInfo)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, []string) error); ok {
+		r1 = returnFunc(ctx, bookIDs)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockAudiobookService_TrashProgress_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'TrashProgress'
+type MockAudiobookService_TrashProgress_Call struct {
+	*mock.Call
+}
+
+// TrashProgress is a helper method to define mock.On call
+//   - ctx context.Context
+//   - bookIDs []string
+func (_e *MockAudiobookService_Expecter) TrashProgress(ctx any, bookIDs any) *MockAudiobookService_TrashProgress_Call {
+	return &MockAudiobookService_TrashProgress_Call{Call: _e.mock.On("TrashProgress", ctx, bookIDs)}
+}
+
+func (_c *MockAudiobookService_TrashProgress_Call) Run(run func(ctx context.Context, bookIDs []string)) *MockAudiobookService_TrashProgress_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 []string
+		if args[1] != nil {
+			arg1 = args[1].([]string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockAudiobookService_TrashProgress_Call) Return(stringToTrashProgressInfo map[string]audiobooks.TrashProgressInfo, err error) *MockAudiobookService_TrashProgress_Call {
+	_c.Call.Return(stringToTrashProgressInfo, err)
+	return _c
+}
+
+func (_c *MockAudiobookService_TrashProgress_Call) RunAndReturn(run func(ctx context.Context, bookIDs []string) (map[string]audiobooks.TrashProgressInfo, error)) *MockAudiobookService_TrashProgress_Call {
 	_c.Call.Return(run)
 	return _c
 }

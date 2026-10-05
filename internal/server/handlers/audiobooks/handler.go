@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
-// last-edited: 2026-09-30
+// last-edited: 2026-10-05
 
 // Package audiobookshandler hosts the main library list / CRUD HTTP handlers
 // extracted from the server package's audiobooks_handlers.go: book listing
@@ -51,6 +51,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"os"
 	"sort"
@@ -821,12 +822,70 @@ func (h *Handler) ListSoftDeletedAudiobooks(c *gin.Context) {
 	}
 
 	httputil.RespondWithOK(c, gin.H{
-		"items":  books,
+		"items":  h.withTrashProgress(c, books),
 		"count":  len(books),
 		"total":  total,
 		"limit":  params.Limit,
 		"offset": params.Offset,
 	})
+}
+
+// trashListItem is one trash row: the book plus whether a user still has
+// listening state on it (the state the nightly purge keeps it for when no
+// live version of the book exists to carry it to).
+type trashListItem struct {
+	database.Book
+	audiobookspkg.TrashProgressInfo
+}
+
+// withTrashProgress attaches has_progress / progress_summary to each trash
+// row. A failure to read the state marks every row progress_unknown rather
+// than failing the listing (or, worse, reading as "no progress").
+func (h *Handler) withTrashProgress(c *gin.Context, books []database.Book) []trashListItem {
+	ids := make([]string, len(books))
+	for i := range books {
+		ids[i] = books[i].ID
+	}
+	info, err := h.audiobookService.TrashProgress(c.Request.Context(), ids)
+	if err != nil {
+		slog.Warn("trash listing: cannot read listening state", "err", err)
+	}
+	items := make([]trashListItem, len(books))
+	for i := range books {
+		p, ok := info[books[i].ID]
+		if !ok {
+			p = audiobookspkg.TrashProgressInfo{Unknown: true}
+		}
+		items[i] = trashListItem{Book: books[i], TrashProgressInfo: p}
+	}
+	return items
+}
+
+// DiscardProgressAndPurge handles POST /audiobooks/:id/discard-progress-and-purge:
+// the owner's explicit choice to drop every user's listening state on one
+// book in the trash and purge it. 404 for an unknown book, 409 for a book
+// that is not in the trash or still owns book_file rows (nothing changed),
+// 503 when there is no activity log to record it in.
+func (h *Handler) DiscardProgressAndPurge(c *gin.Context) {
+	id := c.Param("id")
+	actor := "unknown"
+	if u, ok := servermiddleware.CurrentUser(c); ok && u != nil {
+		actor = u.Username + " (" + u.ID + ")"
+	}
+	res, err := h.audiobookService.DiscardProgressAndPurge(c.Request.Context(), id, actor)
+	switch {
+	case err == nil:
+		httputil.RespondWithOK(c, res)
+	case errors.Is(err, audiobookspkg.ErrAudiobookNotFound):
+		httputil.RespondWithNotFound(c, "audiobook", id)
+	case errors.Is(err, audiobookspkg.ErrNotInTrash), errors.Is(err, database.ErrBookOwnsFiles),
+		errors.Is(err, audiobookspkg.ErrDiscardRefused):
+		httputil.RespondWithConflict(c, err.Error())
+	case errors.Is(err, audiobookspkg.ErrAuditUnavailable):
+		httputil.RespondWithServiceUnavailable(c, err.Error())
+	default:
+		httputil.InternalError(c, "failed to discard progress and purge", err)
+	}
 }
 
 // PurgeSoftDeletedAudiobooks handles DELETE /audiobooks/purge-soft-deleted.
