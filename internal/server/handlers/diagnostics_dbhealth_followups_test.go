@@ -1,5 +1,5 @@
 // file: internal/server/handlers/diagnostics_dbhealth_followups_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: de17f8c2-593a-4eea-9ce9-4dac637b04e8
 // last-edited: 2026-10-04
 
@@ -7,16 +7,20 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 )
@@ -29,7 +33,14 @@ func TestGetDBHealth_EmbeddingsFromCensus(t *testing.T) {
 	for i := 0; i < 60; i++ {
 		require.NoError(t, p.SetRaw(fmt.Sprintf("emb:v:book:%d", i), pad))
 	}
-	emb := database.NewEmbeddingStore(p.DB())
+	// The embedding store sits on its OWN empty DB, so a walk through it would
+	// count 0 vectors; a positive vector_count can only come from the census
+	// of the main store.
+	other := newCensusHandlerStore(t)
+	emb := database.NewEmbeddingStore(other.DB())
+	walked, err := emb.CountByType("book")
+	require.NoError(t, err)
+	require.Zero(t, walked)
 
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
@@ -69,15 +80,123 @@ func TestHandleCacheStats_FallbackCountSkippedOnCancelledContext(t *testing.T) {
 	require.Zero(t, cs.calls)
 }
 
+// censusMetaStub serves a fixed census family with an error bound.
+type censusMetaStub struct{ countingStore }
+
+func (*censusMetaStub) DBCensus(context.Context, database.CensusOptions) (*database.DBCensus, error) {
+	return &database.DBCensus{Families: []database.FamilyCensus{
+		{Prefix: "metadata_fetch_cache:", Keys: 5, ErrorBoundKeys: 17},
+	}}, nil
+}
+
 // The census path reports its error bound beside the size.
 func TestHandleCacheStats_CensusSizeCarriesErrorBound(t *testing.T) {
 	metrics.Register()
 	metrics.RecordCacheSet("metadata_fetch")
-	p := newCensusHandlerStore(t)
-	for i := 0; i < 50; i++ {
-		putFetchCacheRow(t, p, i, time.Now())
-	}
-	stat := metadataFetchStat(t, NewCacheHandler(nil, p))
+	stub := &censusMetaStub{}
+	stat := metadataFetchStat(t, NewCacheHandler(nil, stub))
 	require.Equal(t, true, stat["size_estimated"])
-	_ = stat["size_error_bound_keys"] // omitempty: zero is a legitimate bound
+	require.EqualValues(t, 5, stat["size"])
+	require.EqualValues(t, 17, stat["size_error_bound_keys"])
+	require.Zero(t, stub.calls, "census path must not run the CountPrefix walk")
+}
+
+// walkSpyStore counts deep walks (first-page reads) and can fail or stall.
+type walkSpyStore struct {
+	database.RawKVStore
+	walks   atomic.Int32
+	delay   time.Duration
+	err     error
+	forever bool
+}
+
+func (s *walkSpyStore) ScanPrefixPage(prefix, after string, limit int) ([]database.KVPair, string, error) {
+	if after == "" {
+		s.walks.Add(1)
+		time.Sleep(s.delay)
+	}
+	if s.err != nil {
+		return nil, "", s.err
+	}
+	if s.forever {
+		return nil, "more", nil
+	}
+	return nil, "", nil
+}
+
+func TestExpiredCounter_ConcurrentCallsShareOneWalk(t *testing.T) {
+	spy := &walkSpyStore{delay: 300 * time.Millisecond}
+	var ec expiredCounter
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := ec.count(context.Background(), spy, 30)
+			require.NoError(t, err)
+		}()
+	}
+	wg.Wait()
+	require.EqualValues(t, 1, spy.walks.Load())
+
+	// A finished count is served from the cache for a while: no second walk.
+	_, err := ec.count(context.Background(), spy, 30)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, spy.walks.Load())
+
+	// A different TTL is a different question.
+	_, err = ec.count(context.Background(), spy, 7)
+	require.NoError(t, err)
+	require.EqualValues(t, 2, spy.walks.Load())
+}
+
+// ctx is checked between pages.
+func TestCountExpiredMetadataFetches_StopsOnCancelledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	spy := &walkSpyStore{forever: true}
+	_, err := countExpiredMetadataFetches(ctx, spy, time.Now())
+	require.ErrorIs(t, err, context.Canceled)
+	require.Zero(t, spy.walks.Load())
+}
+
+// A caller that disconnects gets its own ctx error, and the shared walk still
+// finishes for the cache.
+func TestExpiredCounter_CallerCancelDoesNotAbortSharedWalk(t *testing.T) {
+	spy := &walkSpyStore{delay: 200 * time.Millisecond}
+	var ec expiredCounter
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := ec.count(ctx, spy, 30)
+	require.ErrorIs(t, err, context.Canceled)
+
+	require.Eventually(t, func() bool {
+		ec.mu.Lock()
+		defer ec.mu.Unlock()
+		return ec.last.valid
+	}, 5*time.Second, 20*time.Millisecond)
+}
+
+// A failed deep count reaches the client as expired_entries_error.
+func TestGetDBHealth_DeepFailureReturnsError(t *testing.T) {
+	prev := config.AppConfig.MetadataFetchCacheTTLDays
+	config.AppConfig.MetadataFetchCacheTTLDays = 30
+	t.Cleanup(func() { config.AppConfig.MetadataFetchCacheTTLDays = prev })
+
+	spy := &walkSpyStore{err: errors.New("disk on fire")}
+	store := deepSpyStore{spy: spy}
+	mc := dbHealthPayload(t, callDBHealthQuery(t, store, "deep=true"))["metadata_cache"].(map[string]any)
+	require.Equal(t, false, mc["expired_entries_computed"])
+	require.Contains(t, mc["expired_entries_error"], "disk on fire")
+	require.EqualValues(t, -1, mc["expired_entries"])
+}
+
+// deepSpyStore is the db-health stub with ScanPrefixPage routed to a spy.
+type deepSpyStore struct {
+	dbHealthStoreStub
+	spy *walkSpyStore
+}
+
+func (s deepSpyStore) ScanPrefixPage(prefix, after string, limit int) ([]database.KVPair, string, error) {
+	return s.spy.ScanPrefixPage(prefix, after, limit)
 }

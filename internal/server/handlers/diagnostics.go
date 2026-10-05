@@ -1,5 +1,5 @@
 // file: internal/server/handlers/diagnostics.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: 14e70c44-73ca-456a-bc67-8dc6ba6e5736
 // last-edited: 2026-10-04
 
@@ -22,7 +22,9 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applycap"
@@ -35,6 +37,7 @@ import (
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 	"github.com/gin-gonic/gin"
+	"golang.org/x/sync/singleflight"
 )
 
 // --- narrow dependency interfaces ---
@@ -153,6 +156,9 @@ type dbHealthMetadataCache struct {
 	// ExpiredEntries is -1 (ExpiredComputed false) unless ?deep=true.
 	ExpiredEntries  int64 `json:"expired_entries"`
 	ExpiredComputed bool  `json:"expired_entries_computed"`
+	// ExpiredError says why a ?deep=true count did not complete (timeout,
+	// cancelled, read error). Empty otherwise.
+	ExpiredError string `json:"expired_entries_error,omitempty"`
 }
 
 // diagnosticsStore is everything the diagnostics endpoints need from the store.
@@ -204,6 +210,7 @@ type DiagnosticsHandler struct {
 	embeddingStore *database.EmbeddingStore // embeddings health stats; may be nil
 	aiScanStore    *database.AIScanStore    // ai-scan health stats; may be nil
 	registry       OperationsRegistry       // shared ops registry (EnqueueOp only)
+	expired        expiredCounter           // ?deep=true expired-row count: single-flight + short cache
 }
 
 // NewDiagnosticsHandler constructs a DiagnosticsHandler. Field/param order:
@@ -778,9 +785,10 @@ func (h *DiagnosticsHandler) GetDBHealth(c *gin.Context) {
 		mc.TotalEntries = total
 	}
 	if c.Query("deep") == "true" && ttlDays > 0 {
-		expired, err := countExpiredMetadataFetches(store, time.Now().Add(-time.Duration(ttlDays)*24*time.Hour))
+		expired, err := h.expired.count(c.Request.Context(), store, ttlDays)
 		if err != nil {
 			diagnosticsLog.Warn("db-health metadata cache expired count: %v", err)
+			mc.ExpiredError = err.Error()
 		} else {
 			mc.ExpiredEntries = expired
 			mc.ExpiredComputed = true
@@ -839,13 +847,80 @@ func censusErrorBound(census *database.DBCensus) int64 {
 	return n
 }
 
+const (
+	// expiredCountTimeout bounds one deep walk, which runs detached from the
+	// caller that started it (a disconnect must not waste a half-done walk
+	// the other waiters share).
+	expiredCountTimeout = 2 * time.Minute
+	// expiredCountCacheTTL is how long a finished deep count is served again.
+	expiredCountCacheTTL = 60 * time.Second
+)
+
+// expiredCounter runs the deep expired-row count of ?deep=true. Concurrent
+// callers share one walk (it decodes every cache row, so N clicks must not
+// cost N walks), the walk is bounded by expiredCountTimeout independent of any
+// caller, and a finished result is served for expiredCountCacheTTL.
+type expiredCounter struct {
+	flight singleflight.Group
+	mu     sync.Mutex
+	last   struct {
+		ttlDays int
+		count   int64
+		at      time.Time
+		valid   bool
+	}
+}
+
+func (e *expiredCounter) count(ctx context.Context, store database.RawKVStore, ttlDays int) (int64, error) {
+	e.mu.Lock()
+	if e.last.valid && e.last.ttlDays == ttlDays && time.Since(e.last.at) < expiredCountCacheTTL {
+		n := e.last.count
+		e.mu.Unlock()
+		return n, nil
+	}
+	e.mu.Unlock()
+
+	ch := e.flight.DoChan(strconv.Itoa(ttlDays), func() (_ any, ferr error) {
+		// DoChan re-panics a panic from here on a fresh goroutine, which
+		// would take the process down; a diagnostics endpoint must not.
+		defer func() {
+			if rec := recover(); rec != nil {
+				ferr = fmt.Errorf("expired count panicked: %v", rec)
+			}
+		}()
+		fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), expiredCountTimeout)
+		defer cancel()
+		n, err := countExpiredMetadataFetches(fctx, store, time.Now().Add(-time.Duration(ttlDays)*24*time.Hour))
+		if err != nil {
+			return nil, err
+		}
+		e.mu.Lock()
+		e.last.ttlDays, e.last.count, e.last.at, e.last.valid = ttlDays, n, time.Now(), true
+		e.mu.Unlock()
+		return n, nil
+	})
+	select {
+	case res := <-ch:
+		if res.Err != nil {
+			return 0, res.Err
+		}
+		return res.Val.(int64), nil
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	}
+}
+
 // countExpiredMetadataFetches counts fetch-cache rows cached before cutoff. It
 // pages through the family 1000 rows at a time and decodes only cached_at, so
-// memory stays bounded however many rows there are.
-func countExpiredMetadataFetches(store database.RawKVStore, cutoff time.Time) (int64, error) {
+// memory stays bounded however many rows there are. ctx is checked between
+// pages.
+func countExpiredMetadataFetches(ctx context.Context, store database.RawKVStore, cutoff time.Time) (int64, error) {
 	var expired int64
 	after := ""
 	for {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
 		pairs, next, err := store.ScanPrefixPage(metadataFetchCachePrefix, after, 1000)
 		if err != nil {
 			return 0, err
