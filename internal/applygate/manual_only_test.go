@@ -1,5 +1,5 @@
 // file: internal/applygate/manual_only_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: ed721904-7696-436b-95ae-8ef5a85c91aa
 // last-edited: 2026-10-04
 
@@ -151,7 +151,7 @@ func TestBulkManualOnlyGuard_EachLegAlone(t *testing.T) {
 			if series == "" {
 				series = "Discworld"
 			}
-			g := BulkManualOnlyGuard(tc.files, series, &tc.book, tc.query)
+			g := BulkManualOnlyGuard(ManualOnlyReaders{Files: tc.files, Series: series}, &tc.book, tc.query)
 			if g.ReadErr != "" {
 				t.Fatalf("read error %q", g.ReadErr)
 			}
