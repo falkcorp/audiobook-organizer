@@ -1,5 +1,5 @@
 // file: internal/repairs/franchise_guard_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2b7d4e19-6a3c-4f05-8e91-c4d7a2b6f3e0
 // last-edited: 2026-10-04
 
@@ -35,14 +35,14 @@ func TestGuardBooks_FranchiseTagHolds(t *testing.T) {
 	s.add("plain", "Escape from Reality", "/lib/neutral/y", nil)
 	s.add("boom", "Escape from Reality", "/lib/neutral/z", nil)
 	tags := tagMap{"tagged": {{Tag: "franchise:doctor-who", Source: "franchise-matcher"}},
-		"plain": {{Tag: "range:war-master", Source: "user"}}}
+		"plain": {{Tag: "range:war-master", Source: "user"}, {Tag: "franchise:star-wars", Source: "user"}}}
 	k, why, err := GuardBooks(s, tags, nil, NewPathResolver(), []string{"tagged"})
 	require.NoError(t, err)
 	require.Equal(t, SkipOwnerManual, k, why)
 	require.Contains(t, why, "franchise:doctor-who")
 	k, _, err = GuardBooks(s, tags, nil, NewPathResolver(), []string{"plain"})
 	require.NoError(t, err)
-	require.Empty(t, k, "a range tag alone is not a franchise tag")
+	require.Empty(t, k, "a range tag, or another franchise's tag, is not an owner-manual hold")
 	_, _, err = GuardBooks(s, tags, nil, NewPathResolver(), []string{"boom"})
 	require.Error(t, err, "a tag read failure fails closed")
 }
