@@ -1,5 +1,5 @@
 // file: internal/reconcile/cleanup_keep_listed_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1dc7f095-72fa-4bc6-ae78-4d04a33e1aac
 // last-edited: 2026-10-05
 
@@ -139,4 +139,82 @@ func TestCleanupDuplicateVersionGroups_StateAfterProbeRefusesDelete(t *testing.T
 	require.NoError(t, err)
 	require.Len(t, pos, 1)
 	require.Equal(t, 77.0, pos[0].PositionSeconds)
+}
+
+// #3770 review N1: a dry run where the kept copy would be listed after the
+// hand-off goes through keepListed's projection: the dry run counts the
+// carry and the removal, and writes nothing (no hand-off, no carry). The
+// apply that follows does what the dry run said.
+func TestCleanupDuplicateVersionGroups_DryRunProjectsListedKeep(t *testing.T) {
+	f, keep, dup, u := stateDupFixture(t, "organized")
+
+	res, err := CleanupDuplicateVersionGroups(f.S, f.Root, true)
+	require.NoError(t, err)
+	require.Equal(t, 1, res.StateCarried, "the projected hand-off crowns the kept copy, so the carry is counted")
+	require.Equal(t, 1, res.DuplicatesRemoved)
+	require.Zero(t, res.SkippedKeepNotListed)
+	b, err := f.S.GetBookByID(dup)
+	require.NoError(t, err)
+	require.NotNil(t, b, "a dry run removes nothing")
+	require.Equal(t, "true", f.Flag(t, dup), "a dry run hands nothing off")
+	require.Equal(t, "false", f.Flag(t, keep))
+	st, err := f.S.GetUserBookState(u.ID, dup)
+	require.NoError(t, err)
+	require.Equal(t, 35, st.ProgressPct, "a dry run carries nothing")
+
+	res, err = CleanupDuplicateVersionGroups(f.S, f.Root, false)
+	require.NoError(t, err)
+	require.Equal(t, 1, res.StateCarried)
+	require.Equal(t, 1, res.DuplicatesRemoved)
+	kst, err := f.S.GetUserBookState(u.ID, keep)
+	require.NoError(t, err)
+	require.NotNil(t, kst)
+	require.Equal(t, 35, kst.ProgressPct, "the apply carried the state to the listed kept copy")
+}
+
+// unlistAfterCheckStore un-lists the kept copy (imported) right after the
+// first read of it that finds it listed -- the cleanup's keepListed check
+// after the hand-off -- as a write landing between that check and the carry
+// would.
+type unlistAfterCheckStore struct {
+	*database.PebbleStore
+	keep string
+	once sync.Once
+}
+
+func (s *unlistAfterCheckStore) GetBookByID(id string) (*database.Book, error) {
+	b, err := s.PebbleStore.GetBookByID(id)
+	if id == s.keep && err == nil && database.ABSLibraryFilter().Matches(b) {
+		s.once.Do(func() {
+			_, _ = s.PebbleStore.ModifyBook(id, func(r *database.Book) error {
+				st := "imported"
+				r.LibraryState = &st
+				return nil
+			})
+		})
+	}
+	return b, err
+}
+
+// #3770 review N1: keepListed is re-checked under the merge lock right before
+// the carry, so a kept copy that stops being listed after the first check is
+// not drained onto: the duplicate keeps its state and is counted.
+func TestCleanupDuplicateVersionGroups_KeepUnlistedBeforeCarryRefuses(t *testing.T) {
+	f, keep, dup, u := stateDupFixture(t, "organized")
+	s := &unlistAfterCheckStore{PebbleStore: f.S, keep: keep}
+
+	res, err := CleanupDuplicateVersionGroups(s, f.Root, false)
+	require.NoError(t, err)
+	require.Equal(t, 1, res.SkippedKeepNotListed)
+	require.Zero(t, res.StateCarried)
+	require.Zero(t, res.DuplicatesRemoved)
+	b, err := f.S.GetBookByID(dup)
+	require.NoError(t, err)
+	require.NotNil(t, b, "the duplicate is kept")
+	st, err := f.S.GetUserBookState(u.ID, dup)
+	require.NoError(t, err)
+	require.Equal(t, 35, st.ProgressPct, "the state stays on the duplicate")
+	kst, err := f.S.GetUserBookState(u.ID, keep)
+	require.NoError(t, err)
+	require.Nil(t, kst, "nothing moved onto the copy that stopped being listed")
 }

@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_syncid_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: c4877e93-ba6a-468d-b428-30be15fdfa27
 // last-edited: 2026-10-05
 
@@ -553,4 +553,33 @@ func TestSyncID_RecordSyncMerge_NeverClosesACycle(t *testing.T) {
 		}
 		resolvesTo(t, s, ids["x"], "y")
 	})
+}
+
+// #3770 review N2: two books that share one sync item (the reverse index of
+// both names the same sync id) are a no-op for RecordSyncMerge. Without the
+// guard the item would redirect to itself and ResolveSyncItem would fail for
+// it for good.
+func TestSyncID_RecordSyncMerge_SharedSyncItemIsANoOp(t *testing.T) {
+	store := newPebbleStoreForSyncID(t)
+	sid, err := store.MintOrGetSyncID("book-a")
+	if err != nil {
+		t.Fatalf("MintOrGetSyncID: %v", err)
+	}
+	if err := store.db.Set(syncItemBookKey("book-b"), []byte(sid), nil); err != nil {
+		t.Fatalf("alias book-b onto %s: %v", sid, err)
+	}
+	if err := store.RecordSyncMerge("book-a", "book-b"); err != nil {
+		t.Fatalf("RecordSyncMerge: %v", err)
+	}
+	item, err := store.getSyncItem(sid)
+	if err != nil || item == nil {
+		t.Fatalf("getSyncItem: %v %v", item, err)
+	}
+	if item.RedirectTo != "" || len(item.MergedFrom) != 0 {
+		t.Fatalf("shared item was changed: RedirectTo=%q MergedFrom=%v", item.RedirectTo, item.MergedFrom)
+	}
+	resolved, err := store.ResolveSyncItem(sid)
+	if err != nil || resolved == nil || resolved.SyncID != sid {
+		t.Fatalf("ResolveSyncItem(%s) = %v, %v; want the item itself", sid, resolved, err)
+	}
 }

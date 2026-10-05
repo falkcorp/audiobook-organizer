@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_clone_rollback_failures_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b07ff01f-6cf6-482c-a79d-2b4cbad437be
 // last-edited: 2026-10-05
 
@@ -7,6 +7,7 @@ package maintenance
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -162,4 +163,47 @@ func rollbackFailureCase(t *testing.T, step string, hiddenSource, minted bool) {
 	require.NotNil(t, st)
 	require.Equal(t, 55, st.ProgressPct, "the retry leaves the state on the source")
 	icRequireSyncResolves(t, f.s, []string{"T", cloneID}, "T")
+}
+
+// icClearFailStore fails ClearSyncMerge, so CarryStateBetweenLiveBooks moves
+// the state and then cannot clear the redirect between the two books.
+type icClearFailStore struct {
+	*database.PebbleStore
+}
+
+func (s *icClearFailStore) ClearSyncMerge(loser, winner string) error {
+	return fmt.Errorf("injected ClearSyncMerge failure")
+}
+
+// #3770 review N3: when the state did move back to the clone but clearing
+// the redirect failed, the message says the state is on the clone, as the
+// wrapped error does, not that it is on the source.
+func TestITunesClone_KeepVisibleReportsMovedStateWhenRedirectClearFails(t *testing.T) {
+	f := newICFixture(t)
+	f.book(t, "C", "vg-n3", "Clone", []string{f.root + "/c/1.m4b"})
+	f.book(t, "S", "vg-n3", "Source", []string{f.base + "/s/1.m4b"})
+	_, err := f.s.ModifyBook("S", func(b *database.Book) error {
+		st, no := "imported", false
+		b.LibraryState, b.IsPrimaryVersion = &st, &no
+		return nil
+	})
+	require.NoError(t, err)
+	for _, id := range []string{"S", "C"} {
+		_, err := database.AsSyncIdentityStore(f.s).MintOrGetSyncID(id)
+		require.NoError(t, err)
+	}
+	u, err := f.s.CreateUser("n3", "n3@example.com", "argon2id", "x", []string{"user"}, "active")
+	require.NoError(t, err)
+	require.NoError(t, f.s.SetUserBookState(&database.UserBookState{UserID: u.ID, BookID: "S", Status: database.UserBookStatusInProgress, ProgressPct: 55}))
+	require.NoError(t, f.s.SetUserPosition(u.ID, "S", "seg", 55))
+
+	runner := &icRunner{store: icStore{OpsStore: f.s}, userState: &icClearFailStore{PebbleStore: f.s}}
+	msg := runner.keepCloneStateVisible(&icRecord{SourceBookID: "S", CloneBookID: "C"})
+	require.True(t, strings.Contains(msg, "was moved back to clone C"), msg)
+	require.True(t, strings.Contains(msg, "could not be cleared"), msg)
+	require.False(t, strings.Contains(msg, "is on source"), msg)
+	st, err := f.s.GetUserBookState(u.ID, "C")
+	require.NoError(t, err)
+	require.NotNil(t, st)
+	require.Equal(t, 55, st.ProgressPct, "the state is on the clone, as the message says")
 }

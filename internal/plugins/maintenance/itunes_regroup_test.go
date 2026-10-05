@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_regroup_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-10-05
 
@@ -397,5 +397,88 @@ func TestITunesRegroupApply_StateAfterProbeRefusesDelete(t *testing.T) {
 	}
 	if logs := strings.Join(rep.logs, "\n"); !strings.Contains(logs, "state-reappeared=1") {
 		t.Fatalf("refusal not counted:\n%s", logs)
+	}
+}
+
+// rgListLater makes book `on` a book ABS lists once the apply reaches its
+// delete (a regroup source is never organized when its group is applied --
+// the recheck refuses an organized source -- so a doomed book becomes listed
+// only by a write landing after that, e.g. an organize or a primary
+// hand-off). early: it is listed by the time the delete loop checks it.
+// Otherwise: the delete loop's first read still sees it unlisted and it is
+// listed right after, so only the re-check under the merge lock sees it.
+type rgListLater struct {
+	*database.PebbleStore
+	on    string
+	early bool
+	armed bool
+	once  sync.Once
+}
+
+func (s *rgListLater) GetExternalIDsForBook(id string) ([]database.ExternalIDMapping, error) {
+	if id == s.on {
+		if s.early {
+			s.once.Do(func() { rgMakeListed(s.PebbleStore, id) })
+		}
+		s.armed = true
+	}
+	return s.PebbleStore.GetExternalIDsForBook(id)
+}
+
+func (s *rgListLater) GetBookByID(id string) (*database.Book, error) {
+	b, err := s.PebbleStore.GetBookByID(id)
+	if id == s.on && s.armed {
+		s.once.Do(func() { rgMakeListed(s.PebbleStore, id) })
+	}
+	return b, err
+}
+
+func rgMakeListed(s *database.PebbleStore, id string) {
+	_, _ = s.ModifyBook(id, func(b *database.Book) error {
+		st, primary := "organized", true
+		b.LibraryState, b.IsPrimaryVersion = &st, &primary
+		return nil
+	})
+}
+
+// #3770 review S3: a doomed book ABS lists is not drained onto a target ABS
+// does not list (the reconcile cleanup's rule): the delete is skipped,
+// counted as skipped-target-not-listed and the state stays on the listed
+// book. Checked before the carry and again under the merge lock (late: the
+// book becomes listed between the two). The target's own state is untouched. An unlisted doomed book is still
+// carried to an unlisted target and reported
+// (TestITunesRegroupApply_CarryToUnlistedTargetIsReported).
+func TestITunesRegroupApply_ListedDoomedBookKeepsStateOffUnlistedTarget(t *testing.T) {
+	for _, late := range []bool{false, true} {
+		s, u, plan, rep := regroupWithState(t)
+		loser, target := plan.DeleteBooks[0], plan.Groups[0].Target
+		store := &rgListLater{PebbleStore: s, on: loser, early: !late}
+		got, err := (&Plugin{}).applyRegroupPlan(context.Background(), store, plan, rgRoot, rep)
+		if err != nil {
+			t.Fatalf("late=%v: applyRegroupPlan: %v", late, err)
+		}
+		if len(got.SkippedTargetNotListed) != 1 || got.SkippedTargetNotListed[0] != loser {
+			t.Fatalf("late=%v: SkippedTargetNotListed = %v, want [%s]\n%s", late, got.SkippedTargetNotListed, loser, strings.Join(rep.logs, "\n"))
+		}
+		if len(got.StateCarriedUnlisted) != 0 {
+			t.Fatalf("late=%v: StateCarriedUnlisted = %v, want none", late, got.StateCarriedUnlisted)
+		}
+		logs := strings.Join(rep.logs, "\n")
+		if !strings.Contains(logs, "skipped-target-not-listed=1") || !strings.Contains(logs, "deleted=0") {
+			t.Fatalf("late=%v: skip not counted:\n%s", late, logs)
+		}
+		if b, err := s.GetBookByID(loser); err != nil || b == nil {
+			t.Fatalf("late=%v: the listed book was deleted (err=%v)", late, err)
+		}
+		st, err := s.GetUserBookState(u.ID, loser)
+		if err != nil || st == nil || st.ProgressPct != 30 {
+			t.Fatalf("late=%v: the state left the listed book: %+v err=%v", late, st, err)
+		}
+		if pos, _ := s.ListUserPositionsForBook(u.ID, loser); len(pos) != 1 {
+			t.Fatalf("late=%v: positions on the listed book = %v, want its own one", late, pos)
+		}
+		if pos, _ := s.ListUserPositionsForBook(u.ID, target); len(pos) != 1 || pos[0].PositionSeconds != 30 {
+			t.Fatalf("late=%v: target positions = %v, want only its own", late, pos)
+		}
 	}
 }
