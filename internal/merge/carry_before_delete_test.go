@@ -1,5 +1,5 @@
 // file: internal/merge/carry_before_delete_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8b2e4d61-3c7a-4f95-b1d8-6a0c9e2f5b47
 // last-edited: 2026-10-05
 
@@ -191,6 +191,38 @@ func TestCarryStateBeforeHardDelete_StateWrittenDuringCarryRefuses(t *testing.T)
 	require.ErrorIs(t, err, ErrStateCarryIncomplete)
 	require.ErrorContains(t, err, "still on")
 	require.Equal(t, 70, c.pct(t, c.usB, c.dup), "the carry was put back")
+}
+
+// Through a decorator that hides the concrete store, as the production
+// indexedStore does: the sync layer, bookmarks and copier still resolve, so
+// the carry moves the redirect and the bookmarks, not only the progress.
+func TestCarryStateBeforeHardDelete_ThroughDecorator(t *testing.T) {
+	c := newCarryFixture(t)
+	ids := database.AsSyncIdentityStore(c.s)
+	dupSync, _, err := ids.GetSyncIDForBook(c.dup)
+	require.NoError(t, err)
+	keepSync, _, err := ids.GetSyncIDForBook(c.keep)
+	require.NoError(t, err)
+	require.NoError(t, c.s.CreateBookmark(progress.Bookmark{UserID: c.userA.ID, ItemID: dupSync, TimeSec: 12, Title: "mark"}))
+
+	require.NoError(t, CarryStateBeforeHardDelete(probeDecorator{Store: c.s}, c.keep, c.dup))
+	require.Equal(t, c.keep, sfCurrentBook(t, c.s, c.dup), "the redirect is set")
+	marks, err := c.s.ListBookmarks(c.userA.ID, keepSync)
+	require.NoError(t, err)
+	require.Len(t, marks, 1, "the bookmark landed on keep")
+	require.Equal(t, 40, c.pct(t, c.userA, c.keep))
+}
+
+// An undecodable repair record blocks only the carry its key names.
+func TestCarryStateBeforeHardDelete_UndecodableRecordBlocksOnlyItsPair(t *testing.T) {
+	c := newCarryFixture(t)
+	require.NoError(t, c.s.SetRaw(PendingUserStateRepairPrefix+"elsewhere:other", []byte("{bad")))
+	require.NoError(t, CarryStateBeforeHardDelete(c.fs, c.keep, c.dup), "an unrelated bad record does not block")
+
+	c2 := newCarryFixture(t)
+	require.NoError(t, c2.s.SetRaw(PendingUserStateRepairPrefix+"x:"+c2.dup, []byte("{bad")))
+	require.ErrorIs(t, CarryStateBeforeHardDelete(c2.fs, c2.keep, c2.dup), ErrStateCarryIncomplete)
+	require.Equal(t, 40, c2.pct(t, c2.userA, c2.dup))
 }
 
 // An open repair naming dup (a move still owed into it) refuses the carry.

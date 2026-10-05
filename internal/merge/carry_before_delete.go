@@ -1,5 +1,5 @@
 // file: internal/merge/carry_before_delete.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f1c9a52-7d4e-4b8a-a6c0-8e2b5d7f1a93
 // last-edited: 2026-10-05
 
@@ -8,6 +8,8 @@ package merge
 import (
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -41,7 +43,13 @@ var ErrStateCarryIncomplete = errors.New("merge: listening state was not fully c
 // the users who did move are not left on keepID while doomedID -- the book
 // the caller now keeps live -- holds the rest. The returned error wraps
 // ErrStateCarryIncomplete either way. Bookmarks copied to keepID stay there
-// (a copy; doomedID keeps its own). If the reversal itself fails part way,
+// (a copy; doomedID keeps its own). One path keeps more on keepID: when the
+// follow itself returns an error (a move failed AND its repair record could
+// not be written), it took no after-snapshot, so the reversal cannot tell
+// the follow's writes on keepID from a user's own listening and leaves them
+// (logged as warnings). doomedID still gets every user's state back; keepID
+// may then hold a copy of what moved. Nothing is lost. If the reversal itself
+// fails part way,
 // a pending repair doomed -> keep is written again, so the owed move is held:
 // the sweep defers it while doomedID is live, and the next carry attempt
 // completes it forward (FollowAbsorbedJournaled runs completePendingInvolving
@@ -96,8 +104,13 @@ func carryLeftover(db UserProgressMerger, doomedID string) error {
 	if err != nil {
 		return err
 	}
-	if len(undecodable) > 0 {
-		return fmt.Errorf("%d undecodable pending user-state repair record(s); cannot tell whether one names %s", len(undecodable), doomedID)
+	// An undecodable record still has its key, which names its pair
+	// (pendingRepairKey): only one naming doomedID blocks this carry.
+	for _, k := range undecodable {
+		pair := strings.Split(strings.TrimPrefix(k, PendingUserStateRepairPrefix), ":")
+		if slices.Contains(pair, doomedID) {
+			return fmt.Errorf("undecodable pending user-state repair %s names %s", k, doomedID)
+		}
 	}
 	for _, r := range recs {
 		if r.LoserBookID == doomedID || r.WinnerBookID == doomedID {
