@@ -1,5 +1,5 @@
 // file: internal/merge/carry_before_delete.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3f1c9a52-7d4e-4b8a-a6c0-8e2b5d7f1a93
 // last-edited: 2026-10-05
 
@@ -70,11 +70,19 @@ func CarryStateBeforeHardDelete(db UserProgressMerger, keepID, doomedID string) 
 	return carryStateLocked(db, keepID, doomedID)
 }
 
-// ErrUserStateOnDoomedBook is returned by HardDeleteWithoutUserState and
-// CarryStateThenHardDelete when, right before the delete, doomedID holds
-// listening state or a pending user-state repair names it. Nothing was
-// deleted.
+// ErrUserStateOnDoomedBook is returned by HardDeleteWithoutUserState when,
+// right before the delete, the book holds listening state or a pending
+// user-state repair names it. Nothing was deleted.
 var ErrUserStateOnDoomedBook = errors.New("merge: listening state is on the book about to be hard-deleted")
+
+// ErrUserStateCheckFailed is returned by HardDeleteWithoutUserState when the
+// re-check right before the delete could not be made (a read failed, or a
+// user row could not be decoded). Nothing was deleted.
+var ErrUserStateCheckFailed = errors.New("merge: could not check the book about to be hard-deleted for listening state")
+
+// errCarryCheckFailed marks a carryLeftover result that is a failed read,
+// not state found or owed.
+var errCarryCheckFailed = errors.New("check failed")
 
 // CarryStateThenHardDelete is CarryStateBeforeHardDelete followed by del (the
 // caller's hard delete of doomedID) in ONE hold of the merge lock, so no
@@ -107,9 +115,10 @@ func CarryStateThenHardDelete(db UserProgressMerger, keepID, doomedID string, de
 // has carryable state on bookID and no pending user-state repair names it
 // (the post-check CarryStateBeforeHardDelete uses: strict user listing, so an
 // undecodable user row refuses). It is for a delete whose earlier probe found
-// no state: anything that landed since refuses with ErrUserStateOnDoomedBook
-// and nothing is deleted. A check that cannot be made refuses the same way.
-// The same limit as CarryStateThenHardDelete applies to client writes.
+// no state: anything that landed since refuses with ErrUserStateOnDoomedBook,
+// a check that cannot be made with ErrUserStateCheckFailed, and nothing is
+// deleted. The same limit as CarryStateThenHardDelete applies to client
+// writes.
 func HardDeleteWithoutUserState(db UserProgressMerger, bookID string, del func() error) error {
 	if bookID == "" {
 		return fmt.Errorf("%w: empty book id", ErrUserStateOnDoomedBook)
@@ -117,6 +126,9 @@ func HardDeleteWithoutUserState(db UserProgressMerger, bookID string, del func()
 	mergeSerializeMu.Lock()
 	defer mergeSerializeMu.Unlock()
 	if err := carryLeftover(db, bookID); err != nil {
+		if errors.Is(err, errCarryCheckFailed) {
+			return fmt.Errorf("%w: %s: %w", ErrUserStateCheckFailed, bookID, err)
+		}
 		return fmt.Errorf("%w: %s: %w", ErrUserStateOnDoomedBook, bookID, err)
 	}
 	return del()
@@ -155,11 +167,11 @@ func carryStateLocked(db UserProgressMerger, keepID, doomedID string) error {
 
 // carryLeftover is nil when nothing of doomedID's is still owed or left: no
 // pending user-state repair names it, and no user has carryable state on
-// it.
+// it. A read that fails is wrapped with errCarryCheckFailed.
 func carryLeftover(db UserProgressMerger, doomedID string) error {
 	recs, undecodable, err := ListPendingUserStateRepairs(db)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %w", errCarryCheckFailed, err)
 	}
 	// An undecodable record still has its key, which names its pair
 	// (pendingRepairKey): only one naming doomedID blocks this carry.
@@ -176,7 +188,7 @@ func carryLeftover(db UserProgressMerger, doomedID string) error {
 	}
 	left, err := BookHasCarryableUserState(db, doomedID)
 	if err != nil {
-		return fmt.Errorf("verify the move: %w", err)
+		return fmt.Errorf("verify the move: %w: %w", errCarryCheckFailed, err)
 	}
 	if left {
 		return fmt.Errorf("listening state is still on %s after the move", doomedID)

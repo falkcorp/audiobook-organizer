@@ -1,5 +1,5 @@
 // file: internal/reconcile/reconcile.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-10-05
 
@@ -155,7 +155,8 @@ type VersionGroupCleanupResult struct {
 	DuplicatesRemoved int `json:"duplicates_removed"`
 	FilesDeleted      int `json:"files_deleted"`
 	// WriteErrors counts is_primary_version writes that failed or found the
-	// row gone. Until 2026-09-15 those writes discarded their error.
+	// row gone (until 2026-09-15 those writes discarded their error), and
+	// duplicate book rows whose delete failed.
 	WriteErrors int `json:"write_errors"`
 	// SkippedOwnsFiles counts duplicates left in place because they still own
 	// book_file rows: removing them would orphan those rows
@@ -1070,6 +1071,10 @@ func removeDuplicate(store VersionGroupStore, um merge.UserProgressMerger, keepI
 		pkgLog.Warn("version-group cleanup keeping duplicate %s of group %s: its users' listening state could not be carried to %s: %v",
 			logger.SanitizeLogValue(dup.ID), logger.SanitizeLogValue(groupID), logger.SanitizeLogValue(keepID), err)
 		result.SkippedHasUserState++
+	case errors.Is(err, merge.ErrUserStateCheckFailed):
+		pkgLog.Warn("version-group cleanup keeping duplicate %s of group %s: could not re-check its users' listening state right before the delete: %v",
+			logger.SanitizeLogValue(dup.ID), logger.SanitizeLogValue(groupID), err)
+		result.StateCheckErrors++
 	case errors.Is(err, merge.ErrUserStateOnDoomedBook):
 		pkgLog.Warn("version-group cleanup keeping duplicate %s of group %s: listening state found on it right before the delete: %v",
 			logger.SanitizeLogValue(dup.ID), logger.SanitizeLogValue(groupID), err)

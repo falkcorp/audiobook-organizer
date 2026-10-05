@@ -1,5 +1,5 @@
 // file: internal/merge/carry_before_delete_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8b2e4d61-3c7a-4f95-b1d8-6a0c9e2f5b47
 // last-edited: 2026-10-05
 
@@ -337,3 +337,25 @@ func TestUserStateProbe_UndecodableUserRowFailsClosed(t *testing.T) {
 type probeDecorator struct{ database.Store }
 
 func (d probeDecorator) Unwrap() database.Store { return d.Store }
+
+// HardDeleteWithoutUserState runs the delete only when the re-check finds
+// nothing, and says whether a refusal is state found or a check that failed.
+func TestHardDeleteWithoutUserState(t *testing.T) {
+	c := newCarryFixture(t)
+	ran := false
+	del := func() error { ran = true; return nil }
+
+	err := HardDeleteWithoutUserState(c.fs, c.dup, del)
+	require.ErrorIs(t, err, ErrUserStateOnDoomedBook, "dup holds A's and B's state")
+	require.False(t, ran)
+
+	require.NoError(t, HardDeleteWithoutUserState(c.fs, c.keep, del))
+	require.True(t, ran, "keep holds nothing")
+
+	ran = false
+	require.NoError(t, c.s.SetRaw("u:broken", []byte("{not json")))
+	err = HardDeleteWithoutUserState(c.fs, c.keep, del)
+	require.ErrorIs(t, err, ErrUserStateCheckFailed)
+	require.NotErrorIs(t, err, ErrUserStateOnDoomedBook)
+	require.False(t, ran)
+}

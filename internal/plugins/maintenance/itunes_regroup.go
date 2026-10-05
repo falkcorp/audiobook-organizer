@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_regroup.go
-// version: 1.26.0
+// version: 1.27.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-10-05
 
@@ -882,6 +882,11 @@ func (p *Plugin) applyRegroupPlan(ctx context.Context, store itunesRegroupStore,
 			continue
 		}
 		if err := merge.HardDeleteWithoutUserState(stateStore, id, del); err != nil {
+			if errors.Is(err, merge.ErrUserStateCheckFailed) {
+				deleteSkipped++
+				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: could not re-check its users' listening state right before the delete: %v", id, err))
+				continue
+			}
 			if errors.Is(err, merge.ErrUserStateOnDoomedBook) {
 				deleteSkipped++
 				stateReappeared++
