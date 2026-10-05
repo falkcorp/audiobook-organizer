@@ -1,12 +1,17 @@
 <!-- file: docs/plans/2026-10-04-author-narrator-credit-lists-audit.md -->
-<!-- version: 1.0.1 -->
+<!-- version: 1.0.2 -->
 <!-- guid: 04983320-f7be-4c13-a8f7-5f8d35e67516 -->
 <!-- last-edited: 2026-10-04 -->
 
 # Author and narrator credit lists: read-only audit and draft migration plan
 
-**Status:** audit only. Nothing in this document has been implemented. No code was
-changed to produce it.
+**Status:** plan APPROVED by the owner (2026-10-04): all 7 steps, run together
+with the approved ModifyBook migration. The audit itself changed no code.
+
+**Owner decision, tag format (2026-10-04):** the normal tags (ARTIST/ALBUMARTIST,
+NARRATOR) carry the joined "A, B and C" string, and an `AUDIOBOOK_ORGANIZER_*`
+custom tag carries the ordered list. The scanner prefers the custom tag. This
+settles the round-trip question in sections 5 and 6.2 (PR 2).
 **Base:** `origin/main` at `5fbcf57d8` (2026-10-04).
 **Owner decision being planned (2026-10-04):** authors AND narrators are always
 ordered credit lists of individual records (position 0..n, even for one name). The
