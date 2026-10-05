@@ -1,7 +1,7 @@
 // file: internal/repairs/guards.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 5a2c9e14-6f3b-4d87-b0e1-9c7d4a8f2e56
-// last-edited: 2026-10-01
+// last-edited: 2026-10-04
 
 package repairs
 
@@ -11,13 +11,13 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"sync"
 	"syscall"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/franchise"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 )
 
@@ -66,6 +66,25 @@ type ITunesDatabaseOnly interface {
 func AllowsITunesDatabaseOnly(f Fixer) bool {
 	x, ok := f.(ITunesDatabaseOnly)
 	return ok && x.ITunesDatabaseOnly()
+}
+
+// BookTagsOnly is implemented by a fixer whose apply writes nothing but
+// book_tag rows (maintenance.tag-franchise): no book field, no book_file row,
+// no file on disk and nothing an iTunes library file reads. Tagging Doctor
+// Who / Big Finish / Torchwood books -- iTunes ones included -- is that
+// fixer's whole job, so for it the framework guard is skipped entirely: the
+// owner-manual and iTunes rules protect metadata, files and the ITL, none of
+// which it can reach. Writer gives it the tag primitive (AddBookTag) and
+// nothing else it uses.
+type BookTagsOnly interface {
+	BookTagsOnly() bool
+}
+
+// AllowsBookTagsOnly reports whether f opted out of the framework guard
+// (BookTagsOnly).
+func AllowsBookTagsOnly(f Fixer) bool {
+	x, ok := f.(BookTagsOnly)
+	return ok && x.BookTagsOnly()
 }
 
 func guardBookPaths(res *PathResolver, bookID string, paths []string, seriesName string, allowITunes bool) (kind, reason string) {
@@ -316,55 +335,21 @@ func (r *PathResolver) withResolved(paths []string) (out []string, doubt error) 
 	return out, doubt
 }
 
-// manualOnlyTitleRe: see GuardBookTitle. Separators inside the names vary
-// across rips ("Doctor.Who", "DoctorWho") as in applygate's path pattern.
-var manualOnlyTitleRe = regexp.MustCompile(`(?i)` +
-	`^\s*torchwood\b` + // leading
-	`|[-–—:|(\[]\s*torchwood\s*[)\]]?\s*$` + // trailing tag
-	`|\bbig[\s._-]*finish[\s._-]*(?:productions|ident|audio)\b`) // the studio
-
-// doctorWhoTitleRe finds "Doctor Who" anywhere in a title; a title naming it
-// is manual-only unless every mention is the prose shape doctorWhoProseRe.
-var doctorWhoTitleRe = regexp.MustCompile(`(?i)\bdoctor[\s._-]*who\b`)
-
-// doctorWhoProseRe is the one known false-positive shape: an article, then
-// "doctor who" and a past-tense verb ("The Doctor Who Fooled the World", "A
-// Doctor Who Cared") -- a doctor, not the franchise.
-var doctorWhoProseRe = regexp.MustCompile(`(?i)\b(?:the|a|an)\s+(doctor\s+who)\s+[a-z]+ed\b`)
-
-// namesDoctorWho reports whether title mentions Doctor Who other than in the
-// prose shape. It fails toward true: a false positive only skips a row, a
-// miss bulk-applies owner-manual content. The caller folds "_" first
-// (applygate.FoldUnderscores).
-func namesDoctorWho(title string) bool {
-	prose := map[int]bool{}
-	for _, m := range doctorWhoProseRe.FindAllStringSubmatchIndex(title, -1) {
-		prose[m[2]] = true
-	}
-	for _, m := range doctorWhoTitleRe.FindAllStringIndex(title, -1) {
-		if !prose[m[0]] {
-			return true
-		}
-	}
-	return false
-}
-
 // GuardBookTitle is the owner-manual check on a book's title. Paths and
 // series miss a Doctor Who / Big Finish / Torchwood book whose files sit on a
 // neutral path with no series row; its title still names it.
 //
 // "Doctor Who" anywhere in the title counts ("Nelvana Doctor Who", "The
 // Language of Doctor Who"), except the prose shape "The Doctor Who Fooled
-// the World" (namesDoctorWho); the check fails toward skipping, since a false
+// the World" (franchise.MatchTitle); the check fails toward skipping, since a false
 // positive only holds a row. Torchwood must lead ("Torchwood: ...") or be a
 // separated tag ("... - Torchwood"), and the studio must be named in full
 // ("Big Finish Productions"): "Secrets of the Torchwood Estate" and "Big
 // Finish to the Season" are prose.
 func GuardBookTitle(bookID, title string) (kind, reason string) {
-	// "_" is a regexp word character, so \b misses "Doctor Who_ Mindwarp"
-	// (the organizer's "_ " for a colon) until it is folded to a space.
-	folded := applygate.FoldUnderscores(title)
-	if namesDoctorWho(folded) || manualOnlyTitleRe.MatchString(folded) {
+	// The rule lives in internal/franchise (MatchTitle), with the census
+	// range terms ("Genesis of the Cybermen", "Short Trips - ...").
+	if _, ok := franchise.MatchTitle(title); ok {
 		return SkipOwnerManual, fmt.Sprintf("member %s is Doctor Who / Big Finish / Torchwood (title %q); owner applies these by hand", bookID, title)
 	}
 	return "", ""
@@ -492,22 +477,74 @@ func SeriesNamesFrom(all []database.Series) SeriesNamer {
 	return func(id int) string { return m[id] }
 }
 
+// GuardTagReader reads a book's tag rows for the framework guard: a book
+// carrying a franchise: tag (maintenance.tag-franchise's, or a person's) is
+// owner-manual whatever its title or path says now.
+type GuardTagReader interface {
+	GetBookTagsDetailed(bookID string) ([]database.BookTag, error)
+}
+
+// GuardBookTags is the owner-manual check on a book's tags.
+func GuardBookTags(bookID string, tags []database.BookTag) (kind, reason string) {
+	for _, t := range tags {
+		if tag, ok := franchise.HeldByTags([]string{t.Tag}); ok {
+			return SkipOwnerManual, fmt.Sprintf("member %s is Doctor Who / Big Finish / Torchwood (tag %q); owner applies these by hand", bookID, tag)
+		}
+	}
+	return "", ""
+}
+
+// GuardBookTranscribed is the owner-manual check on what the intro
+// transcription heard, on the book and on each of its files: a blank-titled
+// Big Finish rip whose intro says "Doctor Who: The Chimes of Midnight" or
+// "Big Finish Productions presents" names it nowhere else.
+func GuardBookTranscribed(bookID string, b *database.Book, files []database.BookFile) (kind, reason string) {
+	check := func(field string, v *string) (string, string) {
+		if v != nil && *v != "" && applygate.IsOwnerManualOnly(*v, "") {
+			return SkipOwnerManual, fmt.Sprintf("member %s is Doctor Who / Big Finish / Torchwood (%s %q); owner applies these by hand", bookID, field, *v)
+		}
+		return "", ""
+	}
+	if k, w := check("transcribed title", b.TranscribedTitle); k != "" {
+		return k, w
+	}
+	if k, w := check("transcribed author", b.TranscribedAuthor); k != "" {
+		return k, w
+	}
+	for i := range files {
+		if k, w := check("file transcribed title", files[i].TranscribedTitle); k != "" {
+			return k, w
+		}
+		if k, w := check("file transcribed author", files[i].TranscribedAuthor); k != "" {
+			return k, w
+		}
+	}
+	return "", ""
+}
+
 // GuardBooks runs GuardBookPathsWith (through res) over every book id, reading each book and
 // its files fresh. A book that is gone or soft-deleted is not checked (it
 // has nothing left to protect), matching the vg op's member guard. A read
 // error is returned: without the paths the guard cannot see a hands-off book,
 // so the caller must not treat the row as clear.
-func GuardBooks(r GuardReader, series SeriesNamer, res *PathResolver, bookIDs []string) (kind, reason string, err error) {
-	return guardBooks(r, series, res, bookIDs, false)
+//
+// tags may be nil (a caller with no tag store); the tag check is then
+// skipped. Every production caller (repairs_ops.go) passes one.
+func GuardBooks(r GuardReader, tags GuardTagReader, series SeriesNamer, res *PathResolver, bookIDs []string) (kind, reason string, err error) {
+	return guardBooks(r, tags, series, res, bookIDs, false)
 }
 
 // GuardBooksFor is GuardBooks for fixer f: the iTunes path check is skipped
-// when f opted out of it (ITunesDatabaseOnly).
-func GuardBooksFor(f Fixer, r GuardReader, series SeriesNamer, res *PathResolver, bookIDs []string) (kind, reason string, err error) {
-	return guardBooks(r, series, res, bookIDs, AllowsITunesDatabaseOnly(f))
+// when f opted out of it (ITunesDatabaseOnly), and the whole guard when f
+// writes only book tags (BookTagsOnly).
+func GuardBooksFor(f Fixer, r GuardReader, tags GuardTagReader, series SeriesNamer, res *PathResolver, bookIDs []string) (kind, reason string, err error) {
+	if AllowsBookTagsOnly(f) {
+		return "", "", nil
+	}
+	return guardBooks(r, tags, series, res, bookIDs, AllowsITunesDatabaseOnly(f))
 }
 
-func guardBooks(r GuardReader, series SeriesNamer, res *PathResolver, bookIDs []string, allowITunes bool) (kind, reason string, err error) {
+func guardBooks(r GuardReader, tags GuardTagReader, series SeriesNamer, res *PathResolver, bookIDs []string, allowITunes bool) (kind, reason string, err error) {
 	ids := append([]string(nil), bookIDs...)
 	sort.Strings(ids)
 	for _, id := range ids {
@@ -550,6 +587,20 @@ func guardBooks(r GuardReader, series SeriesNamer, res *PathResolver, bookIDs []
 		}
 		if k, why := GuardBookCredits(id, strOf(b.Publisher), narrators, authors); k != "" {
 			return k, why, nil
+		}
+		// What the intro transcription heard, on the book and its files.
+		if k, why := GuardBookTranscribed(id, b, files); k != "" {
+			return k, why, nil
+		}
+		// And its tags: a franchise: tag holds it whatever else changed.
+		if tags != nil {
+			rows, err := tags.GetBookTagsDetailed(id)
+			if err != nil {
+				return "", "", fmt.Errorf("guard: read tags of %s: %w", id, err)
+			}
+			if k, why := GuardBookTags(id, rows); k != "" {
+				return k, why, nil
+			}
 		}
 	}
 	return "", "", nil

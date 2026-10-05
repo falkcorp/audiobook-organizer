@@ -1,87 +1,41 @@
 // file: internal/applygate/manual_only.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: a2f62ab5-314e-427a-8ca7-de28de936b75
 // last-edited: 2026-10-04
 
 package applygate
 
 import (
-	"regexp"
 	"strconv"
-	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/franchise"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 
-// manualOnlyRe matches the libraries the owner curates by hand: Doctor Who,
-// Big Finish and Torchwood. Owner rule (standing): these are never touched by
-// a bulk apply or bulk merge -- the owner applies them manually, by explicit
-// book id. Separators between words vary across rips ("Doctor.Who",
-// "Doctor_Who", "DoctorWho"), so any run of separators, or none, is accepted.
-// Match it through matchesManualOnly, never directly: see FoldUnderscores.
-//
-// The Doctor ranges count too, not only the literal "Doctor Who": Big Finish
-// sells "The Thirteenth Doctor Adventures", "The War Doctor", "The Fugitive
-// Doctor" and "The 13th Doctor" series whose names never say "Doctor Who",
-// and on 2026-09-29 a junk-author trial would have minted "The Thirteenth
-// Doctor Adventures" as an author for them. An ordinal ("First" ..
-// "Fifteenth", or "1st" .. "15th"), "War" or "Fugitive" directly before
-// "Doctor" is one. "War Doctor" also names a surgeon's memoir; the check
-// fails toward holding a row, as every owner-manual guard does. A bare
-// "Doctor" is not ("Doctor Sleep", "Doctors Orders"), and neither is "The
-// Doctor's Wife": it is a Doctor Who episode title, but also a novel, and a
-// title with no range, franchise or studio word names neither.
-//
-// "Dr Who" / "Dr. Who" / "DrWho" count as "Doctor Who". So do the Big Finish
-// Doctor Who spin-off ranges whose names carry no Doctor word: Gallifrey
-// (and "Gallifreyan", a Doctor Who word only), the Daleks, Jago & Litefoot,
-// The Diary of River Song, Bernice Summerfield, Counter-Measures, The
-// Paternoster Gang, Missy, and Blake's 7 (Big Finish produces it). "Missy"
-// is also a given name; holding a book by a Missy costs a manual apply,
-// missing a Doctor Who book breaks the owner rule. Counter-Measures counts
-// only with its separator (counterMeasuresRe). UNIT counts only in its
-// series forms, which manualOnlyUnitRe matches case-sensitively. "Class" is
-// left out: too generic.
-var manualOnlyRe = regexp.MustCompile(`(?i)\b(doctor[\s._-]*who|dr\.?[\s._-]*who|big[\s._-]*finish|torchwood|` +
-	`(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|thirteenth|fourteenth|fifteenth|` +
-	`[1-9](?:st|nd|rd|th)|1[0-5]th|war|fugitive)[\s._-]*doctor|` +
-	`gallifrey(?:an)?|daleks?|jago[\s._-]*(?:&|and)[\s._-]*litefoot|diary[\s._-]*of[\s._-]*river[\s._-]*song|` +
-	`bernice[\s._-]*summerfield|paternoster[\s._-]*gang|missy|blake[\x{2019}']?s[\s._-]*7)\b`)
-
-// manualOnlyUnitRe matches Big Finish's UNIT range in its series forms only:
-// all-caps "UNIT" opening a path segment or the name, then a separator or a
-// space ("UNIT: Dominion", "UNIT - Extinction", "UNIT Silenced", "UNIT_
-// Assembled" once folded). The word "unit" in any other case ("Unit
-// Operations", "The Unit", "/lib/Unit - 01/") is not matched.
-var manualOnlyUnitRe = regexp.MustCompile(`(?:^|[/\\])\s*UNIT(?:\s*[:\x{2013}\x{2014}-]|\s)`)
-
-// counterMeasuresRe matches Big Finish's Counter-Measures range with its
-// separator ("Counter-Measures", "Counter_Measures", "Counter.Measures"),
-// never the word "countermeasures" or the phrase "counter measures". It reads
-// the UNFOLDED text: FoldUnderscores would make "Counter_Measures" the
-// phrase.
-var counterMeasuresRe = regexp.MustCompile(`(?i)(?:^|[^\p{L}\p{N}])counter[._-]+measures(?:$|[^\p{L}\p{N}])`)
+// The owner-manual libraries are Doctor Who, Big Finish and Torchwood. Owner
+// rule (standing): these are never touched by a bulk apply or bulk merge --
+// the owner applies them manually, by explicit book id. What names them is
+// decided in ONE place, internal/franchise (the original pattern plus the
+// 2026-10-04 census range terms); this file only decides which fields of a
+// book the bulk-apply guard reads.
 
 // FoldUnderscores turns every "_" into a space so a \b pattern sees a word
-// boundary there. "_" is a regexp word character, so \b never fires next to
-// it, and the organizer writes a colon as "_ " in folder names: "Doctor Who_
-// Mindwarp" escaped every manual-only guard until this fold. Every
-// owner-manual pattern (here and in repairs' title guard) matches the folded
-// text.
-func FoldUnderscores(s string) string {
-	return strings.ReplaceAll(s, "_", " ")
-}
+// boundary there (franchise.Fold). Kept for the callers that fold before
+// their own checks.
+func FoldUnderscores(s string) string { return franchise.Fold(s) }
 
-// matchesManualOnly is manualOnlyRe on the folded text.
-func matchesManualOnly(s string) bool {
-	f := FoldUnderscores(s)
-	return manualOnlyRe.MatchString(f) || manualOnlyUnitRe.MatchString(f) || counterMeasuresRe.MatchString(s)
-}
+// matchesManualOnly reports whether one value names an owner-manual library.
+func matchesManualOnly(s string) bool { return franchise.Matches(s) }
 
 // IsOwnerManualOnly reports whether a book with this path or series name
 // belongs to a manual-only library and must be left out of every bulk apply or
 // bulk merge.
+//
+// It reads ONE value per argument; a caller with the whole book should use
+// franchise.Detect (or BulkManualOnlyGuard), which also reads the credits,
+// the transcribed fields, every book_file path and the book's franchise
+// tags.
 func IsOwnerManualOnly(path, seriesName string) bool {
 	return matchesManualOnly(path) || matchesManualOnly(seriesName)
 }
@@ -126,6 +80,25 @@ type ManualOnlySeriesReader interface {
 	GetSeriesByID(id int) (*database.Series, error)
 }
 
+// ManualOnlyTagReader reads a book's tag rows for BulkManualOnlyGuard: a
+// franchise: tag (the tag-franchise fixer's, or a person's) holds the book
+// whatever its title or path says now.
+type ManualOnlyTagReader interface {
+	GetBookTagsDetailed(bookID string) ([]database.BookTag, error)
+}
+
+// ManualOnlyReaders are the store reads BulkManualOnlyGuard makes. Files is
+// required. Series, Authors and Tags may be nil for a caller whose store
+// cannot read them; that part of the check is then skipped and the caller
+// must re-check where it can (the server's apply re-runs the guard with
+// every reader before it writes). Every production caller passes all four.
+type ManualOnlyReaders struct {
+	Files   ManualOnlyFilesReader
+	Series  ManualOnlySeriesReader
+	Authors database.BookAuthorReader
+	Tags    ManualOnlyTagReader
+}
+
 // manualOnlyWhy prefixes every owner_manual_only detail.
 const manualOnlyWhy = "Doctor Who / Big Finish / Torchwood are applied by hand, one book at a time; "
 
@@ -139,7 +112,8 @@ const manualOnlyWhy = "Doctor Who / Big Finish / Torchwood are applied by hand, 
 // series is then not checked, and that caller must re-check where it can (the
 // auto-match-transcribed op's pre-check does, and the server's apply re-runs
 // the guard with both readers before it writes).
-func BulkManualOnlyGuard(files ManualOnlyFilesReader, series ManualOnlySeriesReader, book *database.Book, searchQuery string) ManualOnlyGuard {
+func BulkManualOnlyGuard(r ManualOnlyReaders, book *database.Book, searchQuery string) ManualOnlyGuard {
+	files, series := r.Files, r.Series
 	g := ManualOnlyGuard{Bulk: true}
 	if IsOwnerManualOnly(searchQuery, "") {
 		g.StoreDetail = manualOnlyWhy + "search query " + strconv.Quote(searchQuery)
@@ -176,6 +150,44 @@ func BulkManualOnlyGuard(files ManualOnlyFilesReader, series ManualOnlySeriesRea
 		case sr != nil && IsOwnerManualOnly("", sr.Name):
 			g.StoreDetail = manualOnlyWhy + "series " + strconv.Quote(sr.Name)
 			return g
+		}
+	}
+	// The narrator and publisher fields (no store read): the album and the
+	// studio of an iTunes-imported Big Finish book live there.
+	for _, ch := range []struct{ what, v string }{{"narrator", strDeref(book.Narrator)}, {"publisher", strDeref(book.Publisher)}} {
+		if matchesManualOnly(ch.v) {
+			g.StoreDetail = manualOnlyWhy + ch.what + " " + strconv.Quote(ch.v)
+			return g
+		}
+	}
+	// The book's tags: a franchise: tag holds it, whatever its title or
+	// path says now.
+	if r.Tags != nil {
+		tags, err := r.Tags.GetBookTagsDetailed(book.ID)
+		if err != nil {
+			g.ReadErr = "could not read the tags for the owner-manual check: " + err.Error()
+			return g
+		}
+		for _, t := range tags {
+			if tag, ok := franchise.HeldByTags([]string{t.Tag}); ok {
+				g.StoreDetail = manualOnlyWhy + "tag " + strconv.Quote(tag)
+				return g
+			}
+		}
+	}
+	// Its author credits: iTunes-imported Big Finish books carry "Big
+	// Finish Productions" as the author while path and title are junk.
+	if r.Authors != nil {
+		names, err := database.LiveBookAuthorNames(r.Authors, book)
+		if err != nil {
+			g.ReadErr = "could not read the authors for the owner-manual check: " + err.Error()
+			return g
+		}
+		for _, n := range names {
+			if matchesManualOnly(n) {
+				g.StoreDetail = manualOnlyWhy + "author " + strconv.Quote(n)
+				return g
+			}
 		}
 	}
 	bookFiles, err := files.GetBookFiles(book.ID)
@@ -225,6 +237,11 @@ func ManualOnlyDetail(book *database.Book, c *metafetch.MetadataCandidate, ts Tr
 		{"path", book.FilePath},
 		{"title", book.Title},
 		{"search query", ts.Query},
+		// iTunes-imported Big Finish books keep the album in the narrator
+		// ("Stargate SG-1 - Series 2", "The War Master - Series 12") and
+		// the studio in the narrator or publisher.
+		{"narrator", strDeref(book.Narrator)},
+		{"publisher", strDeref(book.Publisher)},
 	}
 	if c != nil {
 		checks = append(checks,
@@ -245,4 +262,11 @@ func ManualOnlyDetail(book *database.Book, c *metafetch.MetadataCandidate, ts Tr
 		}
 	}
 	return "", ""
+}
+
+func strDeref(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }

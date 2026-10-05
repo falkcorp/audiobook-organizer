@@ -223,7 +223,7 @@ func (p *Plugin) runAutoMatchTranscribed(ctx context.Context, rawParams json.Raw
 		// ApplyTranscriptionCandidate re-runs before it writes, so a dry run
 		// and a real run skip the same books; a refusal there (the cache
 		// changed since this read) is still counted below.
-		guard := applygate.BulkManualOnlyGuard(store, seriesNames, b, transTitle)
+		guard := applygate.BulkManualOnlyGuard(applygate.ManualOnlyReaders{Files: store, Series: seriesNames, Authors: store, Tags: p.deps.BookTagReader()}, b, transTitle)
 		if reason, detail := applygate.ManualOnlyDetail(b,
 			&metafetch.MetadataCandidate{Title: candTitle, Author: candAuthor, Series: top.Series},
 			applygate.TranscribedSearch{Query: transTitle}, guard); reason != "" {

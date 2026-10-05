@@ -560,10 +560,10 @@ func TestFolderBooksFixer_ITunesOptOutIsThisFixerOnly(t *testing.T) {
 	f := newFragFixture(t)
 	f.seedWolfe(t, fbITunes, "citadel")
 	ids := []string{f.ids["fb"], f.ids["fb2"]}
-	kind, _, err := repairs.GuardBooks(f.s, nil, repairs.NewPathResolver(), ids)
+	kind, _, err := repairs.GuardBooks(f.s, nil, nil, repairs.NewPathResolver(), ids)
 	require.NoError(t, err)
 	require.Equal(t, repairs.SkipITunes, kind, "without the opt-out the iTunes guard holds the row")
-	kind, _, err = repairs.GuardBooksFor(newFolderBooksFixer(f.p), f.s, nil, repairs.NewPathResolver(), ids)
+	kind, _, err = repairs.GuardBooksFor(newFolderBooksFixer(f.p), f.s, nil, nil, repairs.NewPathResolver(), ids)
 	require.NoError(t, err)
 	require.Empty(t, kind, "the folder-books fixer is cleared for iTunes database rows")
 

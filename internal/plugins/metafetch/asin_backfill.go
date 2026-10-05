@@ -189,6 +189,8 @@ type asinBackfillStore interface {
 	database.BookFilesGetter
 	asinBackfillBookStore
 	asinBackfillMarkerStore
+	// The owner-manual guard reads the book's franchise tags.
+	applygate.ManualOnlyTagReader
 }
 
 var _ asinBackfillStore = (database.Store)(nil)
@@ -1109,7 +1111,7 @@ func (r *asinBackfillRun) fillISBNByASIN(ctx context.Context, b *database.Book, 
 // by hand (applygate's Doctor Who / Big Finish / Torchwood rule). A store
 // read failure is an error, never "not manual-only".
 func (r *asinBackfillRun) manualOnly(b *database.Book, searchTitle string) (bool, error) {
-	g := applygate.BulkManualOnlyGuard(r.store, r.store, b, searchTitle)
+	g := applygate.BulkManualOnlyGuard(applygate.ManualOnlyReaders{Files: r.store, Series: r.store, Authors: r.store, Tags: r.store}, b, searchTitle)
 	if g.ReadErr != "" {
 		return false, errors.New(g.ReadErr)
 	}

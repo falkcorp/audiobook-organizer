@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.56.0
+// version: 1.57.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-04
 
@@ -49,9 +49,17 @@ type revertServiceStore interface {
 	revertBookFileStore
 	revertAuthorStore
 	revertFieldStateStore
+	revertTagStore
 	// revertBookPrimaryDemote re-crowns a restored primary and demotes the
 	// rest of its group (versionprimary.Crown).
 	versionprimary.EnsureStore
+}
+
+// revertTagStore reads and removes book tags: the revert of a repair's
+// book_tag_add row (undo.ChangeTypeBookTagAdd).
+type revertTagStore interface {
+	GetBookTagsDetailed(bookID string) ([]database.BookTag, error)
+	RemoveBookTag(bookID, tag string) error
 }
 
 // revertLedgerStore reads the operation's ledger, marks rows reverted, and
@@ -658,6 +666,8 @@ func (rs *RevertService) revertChangeIn(c *database.OperationChange, plan *undo.
 		return rs.revertRepairBookCreate(c)
 	case undo.ChangeTypeFieldLock:
 		return rs.revertFieldLock(c)
+	case undo.ChangeTypeBookTagAdd:
+		return rs.revertBookTagAdd(c)
 	case "organize_failed", "organize_skipped", "organize_summary",
 		undo.ChangeTypeRepairPlanRecord:
 		// No filesystem or DB mutation recorded; nothing to reverse.
@@ -735,6 +745,27 @@ func (rs *RevertService) revertFieldLock(c *database.OperationChange) error {
 		return nil
 	}
 	return undo.ErrAlreadyRestored
+}
+
+// revertBookTagAdd removes the tag a repair added, while the book still
+// carries it with the source the repair wrote (undo.CheckBookTagAdd): a tag
+// that is gone is already restored, one a person claimed since is refused.
+// Tags are database rows only; nothing on disk changes.
+func (rs *RevertService) revertBookTagAdd(c *database.OperationChange) error {
+	if _, err := rs.loadBook(c.BookID); err != nil {
+		return err
+	}
+	tags, err := rs.db.GetBookTagsDetailed(c.BookID)
+	if err != nil {
+		return fmt.Errorf("read tags of %s: %w", c.BookID, err)
+	}
+	if err := undo.CheckBookTagAdd(tags, c); err != nil {
+		return err
+	}
+	if err := rs.db.RemoveBookTag(c.BookID, c.FieldName); err != nil {
+		return fmt.Errorf("remove tag %q of %s: %w", c.FieldName, c.BookID, err)
+	}
+	return nil
 }
 
 // loadBook returns the change's book, or a refusal when it cannot be read or no

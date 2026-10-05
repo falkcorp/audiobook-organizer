@@ -1,7 +1,7 @@
 // file: internal/repairs/engine.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 9b3e7f40-2d15-4a86-9c1f-6e0a4d8b7c25
-// last-edited: 2026-10-03
+// last-edited: 2026-10-04
 
 package repairs
 
@@ -75,7 +75,10 @@ type PlanResult struct {
 
 // PlanDeps is what RunPlan needs besides the fixer.
 type PlanDeps struct {
-	Guard  GuardReader
+	Guard GuardReader
+	// Tags reads each book's tags for the guard (a franchise: tag holds the
+	// book). nil skips the tag check; production always sets it.
+	Tags   GuardTagReader
 	Series SeriesNamer
 	// Concurrency of the guard pass; 0 means runtime.NumCPU().
 	Concurrency int
@@ -123,7 +126,7 @@ func RunPlan(ctx context.Context, f Fixer, params json.RawMessage, deps PlanDeps
 	// row, so the slice needs no lock.
 	gerr := registry.RunItems(ctx, reporter, idx, func(_ context.Context, i int) error {
 		defer done.Add(1)
-		kind, why, err := GuardBooksFor(f, deps.Guard, deps.Series, paths, rows[i].BookIDs)
+		kind, why, err := GuardBooksFor(f, deps.Guard, deps.Tags, deps.Series, paths, rows[i].BookIDs)
 		switch {
 		case err != nil:
 			rows[i].Skipped, rows[i].SkipReason = SkipGuardUnreadable, err.Error()
@@ -374,7 +377,9 @@ type ApplyDeps struct {
 	// paths is the run's guard resolver; RunApply sets it.
 	paths *PathResolver
 
-	Guard  GuardReader
+	Guard GuardReader
+	// Tags: as PlanDeps.Tags.
+	Tags   GuardTagReader
 	Series SeriesNamer
 	// StandDown may be nil only where there is no registry (tests, degraded
 	// contexts); the writes then run with no interlock, as every other
@@ -607,7 +612,7 @@ func applyOne(ctx context.Context, f Fixer, params json.RawMessage, planned Row,
 		lost.Store(true)
 		return abort()
 	}
-	if kind, why, err := GuardBooksFor(f, deps.Guard, deps.Series, deps.paths, planned.BookIDs); err != nil {
+	if kind, why, err := GuardBooksFor(f, deps.Guard, deps.Tags, deps.Series, deps.paths, planned.BookIDs); err != nil {
 		out.Outcome, out.Skipped, out.Error = OutcomeGuarded, SkipGuardUnreadable, err.Error()
 		return out
 	} else if kind != "" {
@@ -636,7 +641,7 @@ func applyOne(ctx context.Context, f Fixer, params json.RawMessage, planned Row,
 	}
 	// A book the re-plan added to the row must pass the guard too.
 	if extra := newIDs(planned.BookIDs, fresh.BookIDs); len(extra) > 0 {
-		if kind, why, err := GuardBooksFor(f, deps.Guard, deps.Series, deps.paths, extra); err != nil {
+		if kind, why, err := GuardBooksFor(f, deps.Guard, deps.Tags, deps.Series, deps.paths, extra); err != nil {
 			out.Outcome, out.Skipped, out.Error = OutcomeGuarded, SkipGuardUnreadable, err.Error()
 			return out
 		} else if kind != "" {

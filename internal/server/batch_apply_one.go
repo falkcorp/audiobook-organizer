@@ -72,6 +72,8 @@ type bookReader interface {
 	// GetSeriesByID feeds the owner-manual-only guard the book's series name
 	// (bulkManualOnlyGuard).
 	GetSeriesByID(id int) (*database.Series, error)
+	// GetBookTagsDetailed feeds it the book's franchise tags.
+	GetBookTagsDetailed(bookID string) ([]database.BookTag, error)
 	database.BookAuthorReader
 	// BookDirLister: metabatch.ResolveCandidateSearchQuery reads the other
 	// rows in a book's folder (metabatch.SkipKindSiblingPart).
@@ -102,7 +104,7 @@ func bulkManualOnlyGuard(books bookReader, book *database.Book, rowApproval bool
 	if rowApproval {
 		return applygate.ManualOnlyGuard{}
 	}
-	return applygate.BulkManualOnlyGuard(books, books, book, searchQuery)
+	return applygate.BulkManualOnlyGuard(applygate.ManualOnlyReaders{Files: books, Series: books, Authors: books, Tags: books}, book, searchQuery)
 }
 
 // itunesEnqueuer mirrors handlers.WriteBackEnqueuer: the iTunes library sync
