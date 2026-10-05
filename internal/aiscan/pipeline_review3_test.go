@@ -1,7 +1,7 @@
 // file: internal/aiscan/pipeline_review3_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: f2827fb9-b355-4830-8e1c-f6fe5a025cd8
-// last-edited: 2026-09-19
+// last-edited: 2026-10-05
 
 package aiscan
 
@@ -135,6 +135,15 @@ func (c *countingSink) count() int {
 // registry watchdog cancels an op silent past ProgressTimeout, and that cancel
 // would cancel the paid batches) and polls the scan's batches. A slow poll must
 // not stall the progress reports or the response to ctx.Done.
+//
+// The poll is held at a gate the test controls rather than slowed by a sleep,
+// so both properties are asserted without a wall-clock bound: progress must
+// arrive and RunScan must return while the poll is provably still in flight.
+// A loop that waited for the poll would never report or return before the
+// gate opens. (This used to sleep 400ms per status check and require cancel
+// to return within 200ms, which flaked under -race at 201ms and could not
+// catch a regression anyway: the poll in flight at cancel had only ~110ms
+// of its 400ms left.)
 func TestSlowCollectionKeepsHeartbeat(t *testing.T) {
 	main := newFakeMainStore(3)
 	store := newScanStore(t)
@@ -146,21 +155,42 @@ func TestSlowCollectionKeepsHeartbeat(t *testing.T) {
 	require.NoError(t, err)
 	sink := &countingSink{}
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	run := make(chan error, 1)
 	go func() { run <- pm.RunScan(ctx, scan.ID, sink) }()
 	waitPhase(t, store, scan.ID, "full_scan", "submitted")
 
+	gate, entered := make(chan struct{}), make(chan struct{}, 1)
 	llm.mu.Lock()
-	llm.checkDelay = 400 * time.Millisecond // each status check is slow
+	llm.checkGate, llm.checkEntered = gate, entered
 	llm.mu.Unlock()
-	before := sink.count()
-	time.Sleep(300 * time.Millisecond)
-	require.GreaterOrEqual(t, sink.count()-before, 5, "progress must keep flowing while a slow poll runs")
+	// Release the held poll and wait for it to drain before the store closes
+	// (cleanups run LIFO, so this runs before newScanStore's).
+	t.Cleanup(func() {
+		close(gate)
+		require.Eventually(t, func() bool {
+			pm.mu.Lock()
+			defer pm.mu.Unlock()
+			return !pm.polling[scan.ID]
+		}, 5*time.Second, 5*time.Millisecond, "the released poll must finish")
+	})
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no heartbeat poll reached CheckBatchStatus")
+	}
 
-	start := time.Now()
+	before := sink.count()
+	require.Eventually(t, func() bool { return sink.count()-before >= 5 }, 5*time.Second, 5*time.Millisecond,
+		"progress must keep flowing while a poll is held")
+
 	cancel()
-	require.Error(t, awaitRun(t, run))
-	require.Less(t, time.Since(start), 200*time.Millisecond, "ctx.Done must be serviced during a slow poll")
+	select {
+	case err := <-run:
+		require.Error(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("ctx.Done must be serviced while a poll is held: RunScan did not return")
+	}
 }
 
 // --- 4: external results replay ------------------------------------------------
