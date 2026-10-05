@@ -1,5 +1,5 @@
 // file: internal/aiscan/pipeline_review3_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: f2827fb9-b355-4830-8e1c-f6fe5a025cd8
 // last-edited: 2026-10-05
 
@@ -156,18 +156,32 @@ func TestSlowCollectionKeepsHeartbeat(t *testing.T) {
 	sink := &countingSink{}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	run := make(chan error, 1)
-	go func() { run <- pm.RunScan(ctx, scan.ID, sink) }()
+	// run carries RunScan's result to the test body; runDone closes when the
+	// goroutine exits, so the cleanup can wait on it whether or not the body
+	// already received from run.
+	run, runDone := make(chan error, 1), make(chan struct{})
+	go func() {
+		defer close(runDone)
+		run <- pm.RunScan(ctx, scan.ID, sink)
+	}()
 	waitPhase(t, store, scan.ID, "full_scan", "submitted")
 
 	gate, entered := make(chan struct{}), make(chan struct{}, 1)
 	llm.mu.Lock()
 	llm.checkGate, llm.checkEntered = gate, entered
 	llm.mu.Unlock()
-	// Release the held poll and wait for it to drain before the store closes
-	// (cleanups run LIFO, so this runs before newScanStore's).
+	// Release the held poll, stop RunScan, and wait for both to drain before
+	// the store closes (cleanups run LIFO, so this runs before newScanStore's).
+	// RunScan must be drained here too: a failure before the test's own
+	// cancel() would otherwise leave it running against a closed store.
 	t.Cleanup(func() {
 		close(gate)
+		cancel()
+		select {
+		case <-runDone:
+		case <-time.After(5 * time.Second):
+			t.Error("RunScan did not return after cancel in cleanup")
+		}
 		require.Eventually(t, func() bool {
 			pm.mu.Lock()
 			defer pm.mu.Unlock()
