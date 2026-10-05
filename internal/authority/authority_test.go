@@ -1,7 +1,7 @@
 // file: internal/authority/authority_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6f4c2a85-1e9b-4d37-a8c6-0b5e7d3f9a12
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 package authority
 
@@ -62,4 +62,16 @@ func TestKeyPrefixes_AreRegisteredFamilies(t *testing.T) {
 		require.True(t, registered[p], "%s is not in internal/database/keyfamilies.go", p)
 		require.False(t, strings.HasPrefix(p, "author"), "%s would nest under the author families", p)
 	}
+}
+
+// TestMergePerson_RecomputesHomonymAfterOverride: an override that adds a
+// second ASIN makes the merged entry a homonym even though the rebuilt row
+// was not.
+func TestMergePerson_RecomputesHomonymAfterOverride(t *testing.T) {
+	base := &Person{Fold: "johnsmith", Display: "John Smith", ASINs: []string{"B000000001"},
+		Roles: map[Role]RoleStat{RoleAuthor: {Count: 1, Tier: TierA, ByTier: map[Tier]int{TierA: 1}}}, Sources: []string{SourceCatalog}}
+	e := mergePerson("johnsmith", base, &PersonOverride{Name: "John Smith", ASINs: []string{"B000000002"}})
+	require.True(t, e.HomonymASINs)
+	require.Equal(t, []string{"B000000001", "B000000002"}, e.ASINs)
+	require.False(t, mergePerson("johnsmith", base, nil).HomonymASINs)
 }

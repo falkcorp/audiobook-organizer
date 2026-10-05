@@ -1,7 +1,7 @@
 // file: internal/authority/authoritybuild/apply_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1174eeba-dc3c-4dc8-a8fe-ed7d13c8bb81
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 package authoritybuild
 
@@ -44,17 +44,20 @@ func countOwned(t *testing.T, kv database.RawKVStore) map[string]int64 {
 
 func sampleResult() *Result {
 	b := NewBuilder()
-	b.AddProduct(authority.SourceCatalog, prod("P1", []metadata.CatalogContributor{c("Ann Leckie", "B001JP7W9E")}, []metadata.CatalogContributor{c("Adjoa Andoh", "")}))
-	b.AddProduct(authority.SourceCatalog, prod("P2", []metadata.CatalogContributor{c("Dennis E. Taylor", "B00LDQ7AWU")}, []metadata.CatalogContributor{c("Ray Porter", "B00AAAAAAA")}))
+	b.AddProduct(authority.SourceCatalog, "", prod("P1", []metadata.CatalogContributor{c("Ann Leckie", "B001JP7W9E")}, []metadata.CatalogContributor{c("Adjoa Andoh", "")}))
+	b.AddProduct(authority.SourceCatalog, "", prod("P2", []metadata.CatalogContributor{c("Dennis E. Taylor", "B00LDQ7AWU")}, []metadata.CatalogContributor{c("Ray Porter", "B00AAAAAAA")}))
 	return b.Finish()
 }
+
+// allRan is every source, as a full build runs them.
+var allRan = map[string]bool{authority.SourceSeed: true, authority.SourceCatalog: true, authority.SourceLibraryExport: true}
 
 var t0 = time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
 
 func TestPlan_DryRunWritesNothing(t *testing.T) {
 	ps := newStore(t)
 	before := countOwned(t, ps)
-	plan, err := PlanApply(context.Background(), ps, sampleResult(), t0, Options{Workers: 4})
+	plan, err := PlanApply(context.Background(), ps, sampleResult(), allRan, t0, Options{Workers: 4})
 	require.NoError(t, err)
 	require.NotEmpty(t, plan.Writes)
 	require.Equal(t, before, countOwned(t, ps), "planning must not write")
@@ -64,7 +67,7 @@ func TestApply_IsIdempotent(t *testing.T) {
 	ps := newStore(t)
 	ctx := context.Background()
 	res := sampleResult()
-	plan, err := PlanApply(ctx, ps, res, t0, Options{Workers: 4})
+	plan, err := PlanApply(ctx, ps, res, allRan, t0, Options{Workers: 4})
 	require.NoError(t, err)
 	got, err := Apply(ctx, ps, plan, Options{Workers: 4})
 	require.NoError(t, err)
@@ -73,7 +76,7 @@ func TestApply_IsIdempotent(t *testing.T) {
 
 	// Same sources an hour later: nothing changed, so nothing is written
 	// (timestamps are not content) and nothing is stale.
-	plan2, err := PlanApply(ctx, ps, sampleResult(), t0.Add(time.Hour), Options{Workers: 4})
+	plan2, err := PlanApply(ctx, ps, sampleResult(), allRan, t0.Add(time.Hour), Options{Workers: 4})
 	require.NoError(t, err)
 	require.Empty(t, plan2.Writes)
 	require.Empty(t, plan2.Stale)
@@ -83,9 +86,9 @@ func TestApply_IsIdempotent(t *testing.T) {
 
 	// A changed product rewrites its rows and keeps FirstSeen.
 	b := NewBuilder()
-	b.AddProduct(authority.SourceCatalog, prod("P1", []metadata.CatalogContributor{c("Ann Leckie", "B001JP7W9E")}, []metadata.CatalogContributor{c("Adjoa Andoh", ""), c("Celeste Ciulla", "")}))
-	b.AddProduct(authority.SourceCatalog, prod("P2", []metadata.CatalogContributor{c("Dennis E. Taylor", "B00LDQ7AWU")}, []metadata.CatalogContributor{c("Ray Porter", "B00AAAAAAA")}))
-	plan3, err := PlanApply(ctx, ps, b.Finish(), t0.Add(2*time.Hour), Options{Workers: 4})
+	b.AddProduct(authority.SourceCatalog, "", prod("P1", []metadata.CatalogContributor{c("Ann Leckie", "B001JP7W9E")}, []metadata.CatalogContributor{c("Adjoa Andoh", ""), c("Celeste Ciulla", "")}))
+	b.AddProduct(authority.SourceCatalog, "", prod("P2", []metadata.CatalogContributor{c("Dennis E. Taylor", "B00LDQ7AWU")}, []metadata.CatalogContributor{c("Ray Porter", "B00AAAAAAA")}))
+	plan3, err := PlanApply(ctx, ps, b.Finish(), allRan, t0.Add(2*time.Hour), Options{Workers: 4})
 	require.NoError(t, err)
 	require.Equal(t, 1, plan3.Counts[authority.SourcePrefix].Write, "only P1's ledger digest changed")
 	_, err = Apply(ctx, ps, plan3, Options{Workers: 4})
@@ -103,7 +106,7 @@ func TestApply_IsIdempotent(t *testing.T) {
 func TestApply_StaleRowsGoOverridesSurvive(t *testing.T) {
 	ps := newStore(t)
 	ctx := context.Background()
-	plan, err := PlanApply(ctx, ps, sampleResult(), t0, Options{Workers: 4})
+	plan, err := PlanApply(ctx, ps, sampleResult(), allRan, t0, Options{Workers: 4})
 	require.NoError(t, err)
 	_, err = Apply(ctx, ps, plan, Options{Workers: 4})
 	require.NoError(t, err)
@@ -114,7 +117,7 @@ func TestApply_StaleRowsGoOverridesSurvive(t *testing.T) {
 
 	// Rebuild from nothing: every rebuilt row is stale, overrides stay.
 	empty := NewBuilder().Finish()
-	plan2, err := PlanApply(ctx, ps, empty, t0, Options{Workers: 4})
+	plan2, err := PlanApply(ctx, ps, empty, allRan, t0, Options{Workers: 4})
 	require.NoError(t, err)
 	require.NotEmpty(t, plan2.Stale)
 	for _, k := range plan2.Stale {
@@ -152,11 +155,11 @@ func TestLookup_SnapshotMatchesIndex(t *testing.T) {
 	ps := newStore(t)
 	ctx := context.Background()
 	b := NewBuilder()
-	b.AddProduct(authority.SourceCatalog, prod("P1", []metadata.CatalogContributor{c("Ann Leckie", "B001JP7W9E")}, []metadata.CatalogContributor{c("Adjoa Andoh", "")}))
+	b.AddProduct(authority.SourceCatalog, "", prod("P1", []metadata.CatalogContributor{c("Ann Leckie", "B001JP7W9E")}, []metadata.CatalogContributor{c("Adjoa Andoh", "")}))
 	cast := prod("P2", []metadata.CatalogContributor{c("Nicholas Briggs", "")}, nil)
 	cast.Publisher = "Big Finish Productions"
-	b.AddProduct(authority.SourceCatalog, cast)
-	plan, err := PlanApply(ctx, ps, b.Finish(), t0, Options{Workers: 4})
+	b.AddProduct(authority.SourceCatalog, "", cast)
+	plan, err := PlanApply(ctx, ps, b.Finish(), allRan, t0, Options{Workers: 4})
 	require.NoError(t, err)
 	_, err = Apply(ctx, ps, plan, Options{Workers: 4})
 	require.NoError(t, err)
@@ -224,7 +227,7 @@ func TestCatalogRaw_ReadableThroughRawKV(t *testing.T) {
 	require.NoError(t, ScanCatalogRaw(ctx, ps, 10, func(pairs []database.KVPair) error {
 		calls++
 		for _, p := range pairs {
-			require.NoError(t, b.AddRawProduct(authority.SourceCatalog, p.Value))
+			require.NoError(t, b.AddRawProduct(authority.SourceCatalog, "", p.Value))
 		}
 		return nil
 	}))
@@ -250,11 +253,67 @@ func TestPlanApply_ReportsProgress(t *testing.T) {
 			last[phase] = [2]int{done, total}
 		}
 	}}
-	plan, err := PlanApply(ctx, ps, sampleResult(), t0, opt)
+	plan, err := PlanApply(ctx, ps, sampleResult(), allRan, t0, opt)
 	require.NoError(t, err)
 	_, err = Apply(ctx, ps, plan, opt)
 	require.NoError(t, err)
 	require.Equal(t, last["plan"][1], last["plan"][0], "plan reported its last item")
 	require.Positive(t, last["plan"][0])
 	require.Equal(t, [2]int{len(plan.Writes), len(plan.Writes)}, last["apply"])
+}
+
+// TestPlan_PartialBuildHoldsRowsFromSourcesThatDidNotRun: a build in which
+// the seed did not run prunes catalog rows no longer produced, but holds
+// every row the seed contributed to.
+func TestPlan_PartialBuildHoldsRowsFromSourcesThatDidNotRun(t *testing.T) {
+	ps := newStore(t)
+	ctx := context.Background()
+	b := NewBuilder()
+	b.AddSeed(&Seed{Source: authority.SourceSeed, Tier: authority.TierO, Entries: []SeedEntry{
+		{Kind: SeedKindAuthor, Name: "Ann Leckie", ASINs: []string{"B001JP7W9E"}},
+	}})
+	b.AddProduct(authority.SourceCatalog, "", prod("P1", []metadata.CatalogContributor{c("Ann Leckie", "B001JP7W9E")}, nil))
+	b.AddProduct(authority.SourceCatalog, "", prod("P2", []metadata.CatalogContributor{c("Dennis E. Taylor", "B00LDQ7AWU")}, nil))
+	plan, err := PlanApply(ctx, ps, b.Finish(), allRan, t0, Options{Workers: 4})
+	require.NoError(t, err)
+	_, err = Apply(ctx, ps, plan, Options{Workers: 4})
+	require.NoError(t, err)
+
+	// Catalog only, now empty; the seed did not run.
+	b = NewBuilder()
+	b.NoteSource(authority.SourceCatalog)
+	plan2, err := PlanApply(ctx, ps, b.Finish(), map[string]bool{authority.SourceCatalog: true}, t0, Options{Workers: 4})
+	require.NoError(t, err)
+	require.Contains(t, plan2.Stale, authority.PersonPrefix+"dennisetaylor", "catalog-only row: its source ran")
+	require.Contains(t, plan2.Stale, authority.SourceKey(authority.SourceCatalog, "P2"))
+	require.Contains(t, plan2.Held, authority.PersonPrefix+"annleckie", "seed+catalog row: the seed did not run")
+	require.Contains(t, plan2.Held, authority.PersonASINKey("B001JP7W9E"))
+	require.Contains(t, plan2.Held, authority.SourceKey(authority.SourceSeed, "author:annleckie"))
+	require.NotContains(t, plan2.Stale, authority.PersonPrefix+"annleckie")
+	require.Equal(t, len(plan2.Held), sumHeld(plan2))
+}
+
+func sumHeld(p *Plan) int {
+	n := 0
+	for _, c := range p.Counts {
+		n += c.Held
+	}
+	return n
+}
+
+// TestPlan_DigestIsStableAndSeesStoreChanges: the same build against the
+// same store gives the same digest (timestamps are not content); a store
+// change gives a different one.
+func TestPlan_DigestIsStableAndSeesStoreChanges(t *testing.T) {
+	ps := newStore(t)
+	ctx := context.Background()
+	p1, err := PlanApply(ctx, ps, sampleResult(), allRan, t0, Options{Workers: 1})
+	require.NoError(t, err)
+	p2, err := PlanApply(ctx, ps, sampleResult(), allRan, t0.Add(time.Hour), Options{Workers: 8})
+	require.NoError(t, err)
+	require.Equal(t, p1.Digest, p2.Digest)
+	require.NoError(t, ps.SetRaw(authority.PersonPrefix+"annleckie", []byte(`{"fold":"annleckie","sources":["catalog"]}`)))
+	p3, err := PlanApply(ctx, ps, sampleResult(), allRan, t0, Options{Workers: 1})
+	require.NoError(t, err)
+	require.NotEqual(t, p1.Digest, p3.Digest)
 }

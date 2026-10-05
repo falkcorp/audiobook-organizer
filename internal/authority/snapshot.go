@@ -1,7 +1,7 @@
 // file: internal/authority/snapshot.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 678e6da9-151e-45a7-a8d7-d77a71ac98ce
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 package authority
 
@@ -71,7 +71,7 @@ type TokenMatch struct {
 	// Entry is the person the token folds to, nil when unknown.
 	Entry *Entry `json:"entry,omitempty"`
 	// Roles are the roles the entry qualifies for (Entry.Qualifies), in
-	// author, narrator, cast_author order.
+	// author, narrator, cast_author, other order.
 	Roles []Role `json:"roles,omitempty"`
 	// Publisher is set when the token is a known, unblocked publisher.
 	Publisher *PublisherEntry `json:"publisher,omitempty"`
@@ -92,8 +92,12 @@ var (
 )
 
 // LoadSnapshot reads ref_person:, ref_pub: and ref_ovr: into memory. Memory
-// is the size of the index (tens of thousands of small rows), not of the
-// library; reads are paged. A row that does not decode fails the load: a
+// is the size of the index, not of the library; reads are paged. Measured
+// 2026-10-05 (authoritybuild TestSnapshot_MemoryAtRealisticSize, opt-in):
+// 80,000 persons + 5,000 publishers retain about 78 MiB after load and
+// allocate about 199 MiB during it (about 1 KB retained per person, mostly
+// the per-entry role and tier maps); 20,000 persons retain about 21 MiB. Load
+// one per run and share it; do not load one per book. A row that does not decode fails the load: a
 // fixer must not run on an index with silent holes.
 func LoadSnapshot(ctx context.Context, kv Scanner) (*Snapshot, error) {
 	persons := map[string]*Person{}
@@ -211,7 +215,7 @@ func classifyTokens(l Lookup, tokens []string) []TokenMatch {
 	out := make([]TokenMatch, len(tokens))
 	for i, tok := range tokens {
 		m := TokenMatch{Token: tok, Entry: l.Person(tok)}
-		for _, r := range []Role{RoleAuthor, RoleNarrator, RoleCastAuthor} {
+		for _, r := range []Role{RoleAuthor, RoleNarrator, RoleCastAuthor, RoleOther} {
 			if m.Entry.Qualifies(r) {
 				m.Roles = append(m.Roles, r)
 			}

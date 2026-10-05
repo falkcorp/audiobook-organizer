@@ -1,7 +1,7 @@
 // file: internal/authority/authority.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5baf3d40-9887-4365-8743-452d7a73c619
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 // Package authority keeps the authority lists: a rebuildable reference index
 // of known people (authors, narrators, cast members) and publishers, with
@@ -40,7 +40,7 @@
 //	ref_person:<fold>          Person JSON           (rebuilt)
 //	ref_pub:<fold>             Publisher JSON        (rebuilt)
 //	ref_asin:person:<ASIN>     ASINRef JSON          (rebuilt)
-//	ref_src:<source>:<item>    ingest digest         (rebuilt; idempotence ledger)
+//	ref_src:<source>:<item>    ingest digest         (rebuilt; per-source ledger)
 //	ref_ovr:person:<fold>      PersonOverride JSON   (owner; never rebuilt)
 //	ref_ovr:pub:<fold>         PublisherOverride JSON (owner; never rebuilt)
 //
@@ -87,7 +87,9 @@ func RebuildablePrefixes() []string {
 }
 
 // KeyPrefixes is every prefix this package owns, overrides included. Tests
-// use it to prove a dry run writes nothing; a rollback drops exactly these.
+// use it to prove a dry run writes nothing. A rollback drops
+// RebuildablePrefixes only, never ref_ovr: (owner decisions outlive any
+// rebuild or revert).
 func KeyPrefixes() []string {
 	return append(RebuildablePrefixes(), OverridePrefix)
 }
@@ -146,6 +148,11 @@ const (
 	RoleAuthor     Role = "author"
 	RoleNarrator   Role = "narrator"
 	RoleCastAuthor Role = "cast_author"
+	// RoleOther is a translator, illustrator, editor, introduction or
+	// foreword writer: a role-suffixed credit ("Jane Doe - translator",
+	// metadata.ClassifyContributor). Recorded so the person is known, and
+	// NEVER author evidence.
+	RoleOther Role = "other"
 )
 
 // Fold is the index key of a name: personname.LettersKey, the function

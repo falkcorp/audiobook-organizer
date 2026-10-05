@@ -1,7 +1,7 @@
 // file: internal/authority/authoritybuild/seed_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8ac98f24-09ff-4862-bdb2-36d9269ae71a
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 package authoritybuild
 
@@ -52,7 +52,7 @@ func TestSeed_HasOnlyAllowedFields(t *testing.T) {
 
 	var entries []map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(top["entries"], &entries))
-	allowed := []string{"kind", "name", "asins", "also_author", "also_narrator"}
+	allowed := []string{"kind", "name", "asins", "also_narrator"}
 	for i, e := range entries {
 		require.ElementsMatch(t, allowed, keysOf(e), "entry %d", i)
 	}
@@ -76,18 +76,18 @@ func TestSeed_NoTitleShapedNames(t *testing.T) {
 
 func TestDecodeSeed_RejectsBadShapes(t *testing.T) {
 	head := `{"file":"f","version":"1.0.0","guid":"g","last_edited":"d","source":"owner_library_seed","tier":"O","entries":[`
-	ok := `{"kind":"author","name":"Ann Leckie","asins":["B001JP7W9E"],"also_author":false,"also_narrator":false}`
+	ok := `{"kind":"author","name":"Ann Leckie","asins":["B001JP7W9E"],"also_narrator":false}`
 	_, err := DecodeSeed([]byte(head + ok + `]}`))
 	require.NoError(t, err)
 
 	for name, body := range map[string]string{
-		"title field":    `{"kind":"author","name":"Ann Leckie","asins":[],"also_author":false,"also_narrator":false,"title":"Ancillary Justice"}`,
-		"unknown kind":   `{"kind":"series","name":"Imperial Radch","asins":[],"also_author":false,"also_narrator":false}`,
-		"collective":     `{"kind":"narrator","name":"Full Cast","asins":[],"also_author":false,"also_narrator":false}`,
-		"bad asin":       `{"kind":"author","name":"Ann Leckie","asins":["not-an-asin"],"also_author":false,"also_narrator":false}`,
-		"publisher asin": `{"kind":"publisher","name":"Orbit","asins":["B001JP7W9E"],"also_author":false,"also_narrator":false}`,
-		"duplicate":      ok + `,{"kind":"author","name":"ANN LECKIE","asins":[],"also_author":false,"also_narrator":false}`,
-		"empty fold":     `{"kind":"author","name":"...","asins":[],"also_author":false,"also_narrator":false}`,
+		"title field":    `{"kind":"author","name":"Ann Leckie","asins":[],"also_narrator":false,"title":"Ancillary Justice"}`,
+		"unknown kind":   `{"kind":"series","name":"Imperial Radch","asins":[],"also_narrator":false}`,
+		"collective":     `{"kind":"narrator","name":"Full Cast","asins":[],"also_narrator":false}`,
+		"bad asin":       `{"kind":"author","name":"Ann Leckie","asins":["not-an-asin"],"also_narrator":false}`,
+		"publisher asin": `{"kind":"publisher","name":"Orbit","asins":["B001JP7W9E"],"also_narrator":false}`,
+		"duplicate":      ok + `,{"kind":"author","name":"ANN LECKIE","asins":[],"also_narrator":false}`,
+		"empty fold":     `{"kind":"author","name":"...","asins":[],"also_narrator":false}`,
 	} {
 		_, err := DecodeSeed([]byte(head + body + `]}`))
 		require.Error(t, err, name)
@@ -113,8 +113,8 @@ func TestSeed_AuthorsAreNotCastOnlyUnderGoRules(t *testing.T) {
 	items, err := ReadLibraryExport(f, MaxLibraryExportBytes)
 	require.NoError(t, err)
 	b := NewBuilder()
-	for _, it := range items {
-		require.NoError(t, b.AddRawProduct(authority.SourceLibraryExport, it))
+	for i, it := range items {
+		require.NoError(t, b.AddRawProduct(authority.SourceLibraryExport, ExportTiebreak(i), it))
 	}
 	res := b.Finish()
 	require.Zero(t, res.Report.Sources[authority.SourceLibraryExport].Undecodable)
@@ -124,7 +124,7 @@ func TestSeed_AuthorsAreNotCastOnlyUnderGoRules(t *testing.T) {
 	for _, e := range s.Entries {
 		p := res.Persons[authority.Fold(e.Name)]
 		switch {
-		case e.Kind == SeedKindAuthor || e.AlsoAuthor:
+		case e.Kind == SeedKindAuthor:
 			require.NotNil(t, p, e.Name)
 			_, author := p.Roles[authority.RoleAuthor]
 			require.True(t, author, "seed lists %q as an author but Go's rules see only cast credits", e.Name)

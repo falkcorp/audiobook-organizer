@@ -1,7 +1,7 @@
 // file: internal/authority/lookup.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8214ae7d-59fb-46c8-9d73-9301ffdd21eb
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 package authority
 
@@ -195,6 +195,9 @@ func mergePerson(f string, base *Person, ovr *PersonOverride) *Entry {
 			e.Roles[r] = st
 		}
 	}
+	// An override can add ASINs, so recompute the homonym flag on the merged
+	// set rather than trusting the rebuilt row's.
+	e.HomonymASINs = len(e.ASINs) > 1
 	e.Tier = ""
 	for _, st := range e.Roles {
 		e.Tier = Better(e.Tier, st.Tier)
@@ -212,9 +215,9 @@ func sortedRoles(m map[Role]bool) []Role {
 }
 
 // Qualifies reports whether the entry is evidence that the person holds
-// role: author per AuthorEvidenceRule (cast_author never counts), narrator
-// for any structured observation, cast_author for any observation. A role an
-// override blocked never qualifies.
+// role: author per AuthorEvidenceRule (cast_author and other never count),
+// narrator for any structured observation, cast_author and other for any
+// observation. A role an override blocked never qualifies.
 func (e *Entry) Qualifies(role Role) bool {
 	if e == nil || slices.Contains(e.Blocked, role) {
 		return false
@@ -228,7 +231,7 @@ func (e *Entry) Qualifies(role Role) bool {
 		return AuthorEvidenceRule(st)
 	case RoleNarrator:
 		return NarratorEvidenceRule(st)
-	case RoleCastAuthor:
+	case RoleCastAuthor, RoleOther:
 		return st.Count >= 1
 	}
 	return false
