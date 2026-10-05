@@ -98,7 +98,8 @@ const arsPlanWorkers = 8
 //
 // ACTIONS, for the target user only (never the caller; required):
 //   - Audible finished: set Finished (StatusManual, 100%, finished_at and
-//     last activity = Audible's timestamp), unless the book is already
+//     last activity = Audible's timestamp; a book with no position also gets
+//     one at its end, so ABS clients list it), unless the book is already
 //     finished, abandoned, or has local activity (state, position or a
 //     progress reset) newer than Audible's timestamp.
 //   - Audible in progress: write Audible's position (scaled to the local
@@ -555,11 +556,29 @@ func (f *audibleReadStatusFixer) decide(us UserReadStateStore, base repairs.Row,
 		finished := ts
 		next.FinishedAt = &finished
 		next.LastActivityAt = ts
+		positions := cur.Positions
+		// The ABS progress list (GET /api/me, AudioBooth) is enumerated from
+		// position rows, so a finished state with no position never reaches
+		// a client. A book with no position gets one at its end, on the ABS
+		// whole-book segment, at Audible's time; a book with one keeps it
+		// (ABS reports a finished state as finished, 100%, whatever the
+		// position says).
+		if len(positions) == 0 {
+			end := t.durationSec
+			if end <= 0 {
+				end = it.runtimeSeconds()
+			}
+			if end > 0 {
+				positions = []database.UserPosition{{UserID: st.User, BookID: t.id, SegmentID: arsSegmentID, PositionSeconds: end, UpdatedAt: ts}}
+				next.LastSegmentID = arsSegmentID
+				next.TotalListenedSeconds = end
+			}
+		}
 		r.Class, r.Risk = arsWouldFinish, repairs.RiskLow
 		r.Reason = "finished on Audible at " + ts.Format(time.RFC3339)
 		r.Proposed = arsDisplay(next)
 		r.Detail = &arsDecision{user: st.User, book: t.id, expect: cur,
-			next: undo.UserStateSnapshot{State: next, Positions: cur.Positions}}
+			next: undo.UserStateSnapshot{State: next, Positions: positions}}
 	case arsAudibleInProgress:
 		switch {
 		case cur.State != nil && cur.State.Status == database.UserBookStatusFinished:

@@ -25,7 +25,9 @@ What it writes:
   and last activity set to Audible's timestamp, never "now". A book that is
   already finished or abandoned is left alone, and so is one with local
   activity (a state, position or progress reset) newer than Audible's
-  timestamp.
+  timestamp. A finished book that has no position row gets one at its end,
+  on the ABS whole-book segment and stamped with Audible's time, because the
+  ABS progress list that AudioBooth reads is built from position rows.
 - **In-progress titles** get Audible's position, scaled to the local duration,
   only when the user has no local progress on the book at all.
 - **Not-started titles** are left alone. Nothing is ever un-finished.

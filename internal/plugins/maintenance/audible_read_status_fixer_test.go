@@ -387,6 +387,13 @@ func TestAudibleReadStatus_ApplyAndRevert(t *testing.T) {
 	require.NotNil(t, s.FinishedAt)
 	require.True(t, s.FinishedAt.Equal(arsAudibleTS), "finished_at %v", s.FinishedAt)
 	require.True(t, s.LastActivityAt.Equal(arsAudibleTS))
+	// A finished book with no position gets one at its end, at Audible's
+	// time: the ABS progress list is built from positions.
+	pos := l.positions("fresh")
+	require.Len(t, pos, 1)
+	require.Equal(t, "abs", pos[0].SegmentID)
+	require.InDelta(t, 600*60, pos[0].PositionSeconds, 0.1)
+	require.True(t, pos[0].UpdatedAt.Equal(arsAudibleTS))
 
 	// The partial book keeps its hide flag and its position.
 	s = l.state("partial")
@@ -403,7 +410,7 @@ func TestAudibleReadStatus_ApplyAndRevert(t *testing.T) {
 	require.False(t, s.StatusManual)
 	require.Equal(t, 40, s.ProgressPct)
 	require.True(t, s.LastActivityAt.Equal(arsAudibleTS))
-	pos := l.positions("prog")
+	pos = l.positions("prog")
 	require.Len(t, pos, 1)
 	require.Equal(t, "abs", pos[0].SegmentID)
 	require.InDelta(t, 500*60*0.4, pos[0].PositionSeconds, 1)
@@ -440,6 +447,7 @@ func TestAudibleReadStatus_ApplyAndRevert(t *testing.T) {
 	require.Equal(t, 1, rr.Failed, "%+v", rr)
 
 	require.Nil(t, l.state("fresh"), "a row the import created is deleted")
+	require.Empty(t, l.positions("fresh"), "and so is the position it wrote")
 	s = l.state("partial")
 	require.Equal(t, database.UserBookStatusInProgress, s.Status)
 	require.False(t, s.StatusManual)
