@@ -1,5 +1,5 @@
 // file: web/src/pages/Diagnostics.tsx
-// version: 1.10.0
+// version: 1.11.0
 // last-edited: 2026-10-04
 // guid: f2323fc4-b3e7-4298-9ec5-759447cbd643
 
@@ -141,6 +141,8 @@ export function Diagnostics() {
                 ...prev.metadata_cache,
                 expired_entries: deep.metadata_cache.expired_entries,
                 expired_entries_computed: deep.metadata_cache.expired_entries_computed,
+                expired_entries_elapsed_ms: deep.metadata_cache.expired_entries_elapsed_ms,
+                expired_entries_pages_walked: deep.metadata_cache.expired_entries_pages_walked,
               },
             }
           : deep
@@ -157,6 +159,9 @@ export function Diagnostics() {
   const fetchDBHealth = useCallback(async () => {
     setDbHealthLoading(true);
     setDbHealthError(null);
+    // A refresh drops the expired fields, so a caption from an earlier failed
+    // count no longer describes anything on the card.
+    setExpiredError(null);
     try {
       const stats = await api.getDBHealthStats();
       setDbHealth(stats);
@@ -967,7 +972,11 @@ export function Diagnostics() {
                           >
                             TTL
                           </Typography>
-                          <Typography>{dbHealth.metadata_cache.ttl_days} days</Typography>
+                          <Typography>
+                            {dbHealth.metadata_cache.ttl_days <= 0
+                              ? 'TTL off'
+                              : `${dbHealth.metadata_cache.ttl_days} days`}
+                          </Typography>
                         </Box>
                         <Box>
                           <Typography
@@ -997,9 +1006,20 @@ export function Diagnostics() {
                               </Tooltip>
                             )
                           ) : (
-                            <Typography>
-                              {dbHealth.metadata_cache.expired_entries.toLocaleString()}
-                            </Typography>
+                            <>
+                              <Typography>
+                                {dbHealth.metadata_cache.expired_entries.toLocaleString()}
+                              </Typography>
+                              {dbHealth.metadata_cache.expired_entries_elapsed_ms !== undefined && (
+                                <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                                  {`Counted in ${(
+                                    dbHealth.metadata_cache.expired_entries_elapsed_ms / 1000
+                                  ).toFixed(1)} s (${(
+                                    dbHealth.metadata_cache.expired_entries_pages_walked ?? 0
+                                  ).toLocaleString()} pages)`}
+                                </Typography>
+                              )}
+                            </>
                           )}
                           {expiredError && (
                             <Typography variant="caption" color="error" role="alert">
