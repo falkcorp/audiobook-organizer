@@ -1,5 +1,5 @@
 // file: internal/repairs/writer_userstate.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c7635eb-815c-443d-830a-34ca2ca14c4a
 // last-edited: 2026-10-05
 
@@ -21,10 +21,11 @@ import (
 // revert (POST /operations/:id/revert) puts them back while they still hold
 // what the apply wrote, and refuses once the user has moved on.
 //
-// The store has no compare-and-set for user state (the ABS handlers
-// read-modify-write it with no lock either), so SetUserState re-reads the
-// state immediately before journaling and writing and refuses when it is not
-// what the fixer decided on. The window left is that one read wide.
+// The store has no compare-and-set for user state, so SetUserState holds
+// database.LockUserBookState (shared with the ABS write paths and the
+// revert) across re-reading the state, comparing it with what the fixer
+// decided on, journaling and writing. Writers that do not take that lock yet
+// are listed on it.
 
 // UserStateStore is the user listening-state surface Writer offers a fixer.
 // It has no delete method: an apply only creates or changes rows (the revert
@@ -73,6 +74,10 @@ func (w *Writer) SetUserState(userID, bookID string, expect, next undo.UserState
 	if err := w.beat("listening state of " + userID + " on book " + bookID); err != nil {
 		return err
 	}
+	// The read, the compare and the write are one step against the other
+	// user-state writers that hold this lock (the ABS paths, the revert);
+	// see database.LockUserBookState for the writers that do not yet.
+	defer database.LockUserBookState(userID, bookID)()
 	cur, err := undo.ReadUserStateSnapshot(w.userState, userID, bookID)
 	if err != nil {
 		return err

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/play.go
-// version: 1.7.2
+// version: 1.8.0
 // guid: b06d4a13-5f28-4c71-9e0a-38f2c7d915e6
-// last-edited: 2026-09-25
+// last-edited: 2026-10-05
 
 package abs
 
@@ -528,6 +528,9 @@ func (h *Handler) persistProgress(s *playSession, position float64, clientDurati
 	if h.progress == nil || position <= 0 {
 		return
 	}
+	// The position write and the state update are one step against the
+	// other user-state writers (database.LockUserBookState).
+	defer database.LockUserBookState(s.UserID, s.BookID)()
 
 	stored := snap.position
 
@@ -586,7 +589,7 @@ func (h *Handler) persistProgress(s *playSession, position float64, clientDurati
 	//
 	// The state was read readable just before (readStoredProgress); a failure
 	// here is a race with a concurrent writer or a write error, and is logged.
-	if err := h.updateUserBookState(s.UserID, s.BookID, func(state *database.UserBookState) {
+	if err := h.updateUserBookStateLocked(s.UserID, s.BookID, func(state *database.UserBookState) {
 		setDerivedStatus(state, status)
 		state.LastActivityAt = now
 		state.LastSegmentID = absProgressSegmentID
@@ -639,6 +642,14 @@ func setDerivedStatus(state *database.UserBookState, status string) {
 // never thought about. mutate receives either the stored row or a zero-valued one
 // with the keys already set, so it never has to branch on existence.
 func (h *Handler) updateUserBookState(userID, bookID string, mutate func(*database.UserBookState)) error {
+	defer database.LockUserBookState(userID, bookID)()
+	return h.updateUserBookStateLocked(userID, bookID, mutate)
+}
+
+// updateUserBookStateLocked is updateUserBookState for a caller that already
+// holds database.LockUserBookState for (userID, bookID) across a longer
+// read-merge-write.
+func (h *Handler) updateUserBookStateLocked(userID, bookID string, mutate func(*database.UserBookState)) error {
 	if h.progress == nil {
 		return nil
 	}

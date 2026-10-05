@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/progress.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 4f0a7d21-9c63-4b58-8e17-52d9a0b3fc84
-// last-edited: 2026-09-25
+// last-edited: 2026-10-05
 
 package abs
 
@@ -242,6 +242,9 @@ func (h *Handler) MediaProgressDelete(c *gin.Context) {
 		respondError(c, http.StatusInternalServerError, "progress is unavailable")
 		return
 	}
+	// The position check, the tombstone and the clear are one step against
+	// the other user-state writers (database.LockUserBookState).
+	defer database.LockUserBookState(user.ID, bookID)()
 
 	// 404 when there was nothing to reset, matching real ABS. Checked BEFORE the
 	// delete so the answer describes what actually happened.
@@ -265,7 +268,7 @@ func (h *Handler) MediaProgressDelete(c *gin.Context) {
 	//     record the same position twice).
 	// The reverse order left positions cleared with no tombstone, and the
 	// retry then answered 404 with nothing recorded.
-	if err := h.updateUserBookState(user.ID, bookID, func(state *database.UserBookState) {
+	if err := h.updateUserBookStateLocked(user.ID, bookID, func(state *database.UserBookState) {
 		state.Status = database.UserBookStatusUnstarted
 		state.StatusManual = false
 		state.ProgressPct = 0
@@ -356,10 +359,14 @@ func (h *Handler) applyProgressUpdate(userID, bookID string, req progressPatchRe
 	if h.progress == nil {
 		return errNoProgressStore
 	}
+	// Read, merge and write as one step against the other user-state
+	// writers (database.LockUserBookState); the state writes below use the
+	// Locked variant.
+	defer database.LockUserBookState(userID, bookID)()
 
 	if req.HideFromContinueListening != nil {
 		hide := *req.HideFromContinueListening
-		if err := h.updateUserBookState(userID, bookID, func(state *database.UserBookState) {
+		if err := h.updateUserBookStateLocked(userID, bookID, func(state *database.UserBookState) {
 			state.HideFromContinueListening = hide
 		}); err != nil {
 			return err
@@ -444,7 +451,7 @@ func (h *Handler) applyProgressUpdate(userID, bookID string, req progressPatchRe
 	if merged.Duration > 0 {
 		pct = min(int(merged.CurrentTime/merged.Duration*100), 100)
 	}
-	return h.updateUserBookState(userID, bookID, func(state *database.UserBookState) {
+	return h.updateUserBookStateLocked(userID, bookID, func(state *database.UserBookState) {
 		state.Status = status
 		state.ProgressPct = pct
 		state.LastSegmentID = absProgressSegmentID

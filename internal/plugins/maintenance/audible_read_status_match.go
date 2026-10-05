@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/audible_read_status_match.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4fe74359-29db-4163-a16f-6d8b17834356
 // last-edited: 2026-10-05
 
@@ -56,7 +56,7 @@ type arsItem struct {
 	Authors         arsNames      `json:"authors,omitempty"`
 	Narrators       arsNames      `json:"narrators,omitempty"`
 	RuntimeMin      arsNum        `json:"runtime_length_min,omitempty"`
-	IsFinished      arsBool       `json:"is_finished,omitempty"`
+	IsFinished      *arsBool      `json:"is_finished,omitempty"`
 	PercentComplete arsNum        `json:"percent_complete,omitempty"`
 	Listening       *arsListening `json:"listening_status,omitempty"`
 }
@@ -77,15 +77,34 @@ const (
 )
 
 // status classifies the item. is_finished decides first: a finished title
-// usually reports percent_complete 99, not 100.
+// usually reports percent_complete 99, not 100. The top-level flag is read
+// first and listening_status's only when the top level has none; when both
+// are present and disagree, finishedConflict reports it and the fixer makes
+// the item a review row.
 func (it arsItem) status() string {
-	if bool(it.IsFinished) || (it.Listening != nil && it.Listening.IsFinished != nil && bool(*it.Listening.IsFinished)) {
+	fin := false
+	switch {
+	case it.IsFinished != nil:
+		fin = bool(*it.IsFinished)
+	case it.Listening != nil && it.Listening.IsFinished != nil:
+		fin = bool(*it.Listening.IsFinished)
+	}
+	if fin {
 		return arsAudibleFinished
 	}
 	if it.percent() > 0 {
 		return arsAudibleInProgress
 	}
 	return arsAudibleNotStarted
+}
+
+// finishedConflict: the export's top-level is_finished and
+// listening_status.is_finished are both present and disagree. The real
+// export has such titles (finished at the top level, not in
+// listening_status, or the reverse), and nothing says which is right.
+func (it arsItem) finishedConflict() bool {
+	return it.IsFinished != nil && it.Listening != nil && it.Listening.IsFinished != nil &&
+		bool(*it.IsFinished) != bool(*it.Listening.IsFinished)
 }
 
 func (it arsItem) percent() float64 {
@@ -98,24 +117,28 @@ func (it arsItem) percent() float64 {
 	return 0
 }
 
-// timestamp is Audible's listening time for the item
-// (listening_status.finished_at_timestamp): the finish on a finished item,
-// the last update on an in-progress one. ok=false when absent or unreadable;
-// the fixer never substitutes "now".
-func (it arsItem) timestamp() (time.Time, bool) {
+// timestamp is Audible's listening time for the item. The export has one
+// timestamp field for it, listening_status.finished_at_timestamp: the
+// finish on a finished title, and (checked against a real export: present
+// on about half the in-progress titles, always after the purchase date) the
+// last listen on an in-progress one. present=false when the field is absent
+// or empty. ok=false when it is present but not an RFC 3339 time WITH a zone
+// ("Z" or an offset): a zone-less time is not read as UTC or as local time,
+// and the fixer makes the item a review row. The fixer never substitutes
+// "now".
+func (it arsItem) timestamp() (t time.Time, present, ok bool) {
 	if it.Listening == nil {
-		return time.Time{}, false
+		return time.Time{}, false, false
 	}
 	v := strings.TrimSpace(it.Listening.FinishedAt)
 	if v == "" {
-		return time.Time{}, false
+		return time.Time{}, false, false
 	}
-	for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04:05.999999999", "2006-01-02 15:04:05"} {
-		if t, err := time.Parse(layout, v); err == nil {
-			return t.UTC(), true
-		}
+	t, err := time.Parse(time.RFC3339Nano, v)
+	if err != nil {
+		return time.Time{}, true, false
 	}
-	return time.Time{}, false
+	return t.UTC(), true, true
 }
 
 // runtimeSeconds is Audible's runtime of its edition (0 = unknown).
@@ -350,14 +373,16 @@ type arsLibrary struct {
 	byTitle   map[string][]string
 	byAuthor  map[string][]string
 	primaries map[string][]string
-	authors   map[int]string
-	keys      map[string]arsTitleKey
+	// members is every live book of each version group, primary or not.
+	members map[string][]string
+	authors map[int]string
+	keys    map[string]arsTitleKey
 }
 
 func buildARSLibrary(cores []database.BookCore, authors []database.Author) *arsLibrary {
 	lib := &arsLibrary{books: map[string]*database.BookCore{}, byASIN: map[string][]string{},
 		byTitle: map[string][]string{}, byAuthor: map[string][]string{}, primaries: map[string][]string{},
-		authors: map[int]string{}, keys: map[string]arsTitleKey{}}
+		authors: map[int]string{}, keys: map[string]arsTitleKey{}, members: map[string][]string{}}
 	for i := range authors {
 		lib.authors[authors[i].ID] = authors[i].Name
 	}
@@ -384,6 +409,9 @@ func buildARSLibrary(cores []database.BookCore, authors []database.Author) *arsL
 			if n := arsKeyOf(lib.authors[*b.AuthorID]).full; n != "" {
 				lib.byAuthor[n] = append(lib.byAuthor[n], b.ID)
 			}
+		}
+		if b.VersionGroupID != nil && *b.VersionGroupID != "" {
+			lib.members[*b.VersionGroupID] = append(lib.members[*b.VersionGroupID], b.ID)
 		}
 		if b.VersionGroupID != nil && *b.VersionGroupID != "" && b.IsPrimaryVersion != nil && *b.IsPrimaryVersion {
 			lib.primaries[*b.VersionGroupID] = append(lib.primaries[*b.VersionGroupID], b.ID)

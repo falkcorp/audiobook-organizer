@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/audible_read_status_fixer.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 36d6036c-05ce-48d1-9997-a65d6a8b67ce
 // last-edited: 2026-10-05
 
@@ -55,6 +55,11 @@ const (
 	arsReviewSwappedTitle    = "review_swapped_title"
 	arsReviewDuplicateTarget = "review_duplicate_target"
 	arsReviewSeriesMismatch  = "review_series_mismatch"
+
+	arsReviewAudibleConflict     = "review_audible_conflict"
+	arsReviewTimestampUnreadable = "review_timestamp_unreadable"
+	arsReviewFutureTimestamp     = "review_future_timestamp"
+	arsSkipManualUnstarted       = "skipped_manual_unstarted"
 
 	arsUnmatchedNoCandidate    = "unmatched_no_candidate"
 	arsUnmatchedAuthorMismatch = "unmatched_author_mismatch"
@@ -145,6 +150,9 @@ type arsRowState struct {
 	Target     string   `json:"target,omitempty"`
 	Tier       string   `json:"tier,omitempty"`
 	Candidates []string `json:"candidates,omitempty"`
+	// Hits are the books the ASIN or the title hit, before resolution to a
+	// version-group primary: their listening state counts as the target's.
+	Hits []string `json:"hits,omitempty"`
 }
 
 // arsDecision is what Apply writes for one row (Row.Detail).
@@ -159,12 +167,48 @@ type arsTarget struct {
 	primary         bool
 	durationSec     float64
 	gone            bool
+	// related are the book's other copies whose listening state also counts
+	// (arsRelatedIDs), sorted.
+	related []string
 }
+
+// arsRelatedState is one related copy's state, read for a decision.
+type arsRelatedState struct {
+	id   string
+	snap undo.UserStateSnapshot
+}
+
+// arsRelatedIDs are the copies of the target whose local listening the
+// newer-local and local-progress checks must also respect: every live member
+// of its version group and every book the ASIN or title hit (before the hit
+// was resolved to its group's primary). The target itself is left out.
+func arsRelatedIDs(target string, members, hits []string) []string {
+	seen := map[string]bool{target: true}
+	var out []string
+	for _, ids := range [][]string{members, hits} {
+		for _, id := range ids {
+			if !seen[id] {
+				seen[id] = true
+				out = append(out, id)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// arsFutureSlack is how far past now an Audible timestamp may be (clock
+// skew between Audible and this server) before it is refused as a future
+// time: a future stamp would beat every real listen that comes after the
+// import. arsNow is a variable so tests can fix the clock.
+const arsFutureSlack = 10 * time.Minute
+
+var arsNow = time.Now
 
 // key is the target in a stable form for the fingerprint.
 func (t arsTarget) key() []string {
 	return []string{t.id, t.title, t.vgid, strconv.FormatBool(t.primary),
-		strconv.FormatFloat(t.durationSec, 'f', -1, 64), strconv.FormatBool(t.gone)}
+		strconv.FormatFloat(t.durationSec, 'f', -1, 64), strconv.FormatBool(t.gone), strings.Join(t.related, ",")}
 }
 
 func (f *audibleReadStatusFixer) store() (OpsStore, UserReadStateStore, error) {
@@ -362,9 +406,10 @@ func (f *audibleReadStatusFixer) planItem(store OpsStore, us UserReadStateStore,
 		return ok, nil
 	}
 	var target, tier string
-	var cands []string
+	var cands, rawHits []string
 	if a := strings.ToUpper(strings.TrimSpace(it.ASIN)); a != "" && len(lib.byASIN[a]) > 0 {
-		cands = lib.targets(lib.byASIN[a])
+		rawHits = append([]string(nil), lib.byASIN[a]...)
+		cands = lib.targets(rawHits)
 		tier = arsTierASIN
 		if len(cands) == 1 {
 			target = cands[0]
@@ -382,7 +427,8 @@ func (f *audibleReadStatusFixer) planItem(store OpsStore, us UserReadStateStore,
 		}
 	} else {
 		key := arsKeyOf(it.Title)
-		hits := lib.targets(lib.titleHits(key))
+		rawHits = lib.titleHits(key)
+		hits := lib.targets(rawHits)
 		var byAuthor []string
 		for _, id := range hits {
 			names, err := arsBookAuthorNames(store, lib, id)
@@ -433,7 +479,8 @@ func (f *audibleReadStatusFixer) planItem(store OpsStore, us UserReadStateStore,
 			return arsSkipRow(base, st, arsUnmatchedNoCandidate, "no book carries the ASIN, the title, or the title as an author", nil)
 		}
 	}
-	st.Target, st.Tier, st.Candidates = target, tier, cands
+	sort.Strings(rawHits)
+	st.Target, st.Tier, st.Candidates, st.Hits = target, tier, cands, rawHits
 	b := lib.books[target]
 	d, err := duration(target)
 	if err != nil {
@@ -444,6 +491,7 @@ func (f *audibleReadStatusFixer) planItem(store OpsStore, us UserReadStateStore,
 	if b.VersionGroupID != nil {
 		t.vgid = *b.VersionGroupID
 	}
+	t.related = arsRelatedIDs(target, lib.members[t.vgid], st.Hits)
 	return f.decide(us, base, st, t)
 }
 
@@ -562,26 +610,89 @@ func (f *audibleReadStatusFixer) decide(us UserReadStateStore, base repairs.Row,
 	if arsJunkTitle(t.title) {
 		return skip(arsReviewJunkTitle, fmt.Sprintf("the matched book's title %q is not a title; confirm it is this book", t.title), nil)
 	}
+	// The export disagrees with itself about whether the title is finished.
+	if it.finishedConflict() {
+		return skip(arsReviewAudibleConflict,
+			"the export's is_finished and listening_status.is_finished disagree; which one is right is the owner's call", nil)
+	}
+	status := it.status()
+	if status == arsAudibleNotStarted {
+		// Matched (so it claims its target for arsMarkDuplicateTargets),
+		// never applied.
+		return skip(arsSkipNotStarted, "not started on Audible; nothing to import", nil)
+	}
+	ts, hasTS, tsOK := it.timestamp()
+	if hasTS && !tsOK {
+		return skip(arsReviewTimestampUnreadable, fmt.Sprintf("Audible's time %q is not an RFC 3339 time with a zone; it is not guessed as UTC or local time",
+			it.Listening.FinishedAt), nil)
+	}
+	if tsOK && ts.After(arsNow().Add(arsFutureSlack)) {
+		return skip(arsReviewFutureTimestamp, fmt.Sprintf("Audible's time %s is in the future; a clock or export error, and it would beat every real listen",
+			ts.Format(time.RFC3339)), nil)
+	}
 	cur, err := undo.ReadUserStateSnapshot(us, st.User, t.id)
 	if err != nil {
 		// Fail closed: an unreadable state is not "no state".
 		return skip(arsSkipUnreadable, err.Error(), nil)
 	}
 	sum := arsStateSummary(cur)
+	// The same book's other copies (every member of the target's version
+	// group, and the book the ASIN or title actually hit): listening there is
+	// listening to this book.
+	related := make([]arsRelatedState, 0, len(t.related))
+	for _, id := range t.related {
+		snap, err := undo.ReadUserStateSnapshot(us, st.User, id)
+		if err != nil {
+			return skip(arsSkipUnreadable, err.Error(), nil)
+		}
+		related = append(related, arsRelatedState{id: id, snap: snap})
+		sum = append(sum, append([]string{"related:" + id}, arsStateSummary(snap)...)...)
+	}
 	r.Current = arsDisplay(cur.State)
-	ts, hasTS := it.timestamp()
-	local := arsLocalActivity(cur)
-	switch it.status() {
+	local, localBook := arsLocalActivity(cur), t.id
+	for _, rs := range related {
+		if a := arsLocalActivity(rs.snap); a.After(local) {
+			local, localBook = a, rs.id
+		}
+	}
+	where := func(id string) string {
+		if id == t.id {
+			return "here"
+		}
+		return "on " + id + ", another copy of this book"
+	}
+	anyOf := func(pred func(*database.UserBookState) bool) (string, bool) {
+		if cur.State != nil && pred(cur.State) {
+			return t.id, true
+		}
+		for _, rs := range related {
+			if rs.snap.State != nil && pred(rs.snap.State) {
+				return rs.id, true
+			}
+		}
+		return "", false
+	}
+	abandoned := func(s *database.UserBookState) bool { return s.Status == database.UserBookStatusAbandoned }
+	manualUnstarted := func(s *database.UserBookState) bool {
+		return s.StatusManual && s.Status == database.UserBookStatusUnstarted
+	}
+	switch status {
 	case arsAudibleFinished:
-		switch {
-		case cur.State != nil && cur.State.Status == database.UserBookStatusFinished:
+		if cur.State != nil && cur.State.Status == database.UserBookStatusFinished {
 			return skip(arsSkipAlreadyFinished, "already finished here; left alone (its finish date is kept)", sum)
-		case cur.State != nil && cur.State.Status == database.UserBookStatusAbandoned:
-			return skip(arsSkipAbandoned, "marked abandoned here; a user's choice is never overwritten", sum)
+		}
+		if id, ok := anyOf(abandoned); ok {
+			return skip(arsSkipAbandoned, "marked abandoned "+where(id)+"; a user's choice is never overwritten", sum)
+		}
+		if id, ok := anyOf(manualUnstarted); ok {
+			return skip(arsSkipManualUnstarted, "marked unstarted by hand "+where(id)+"; treated as the user's choice, like abandoned", sum)
+		}
+		switch {
 		case !hasTS:
 			return skip(arsSkipNoTimestamp, "Audible gives no finish time for this title, and the import never dates a finish now", sum)
 		case local.After(ts):
-			return skip(arsSkipNewerLocal, fmt.Sprintf("local activity %s is newer than Audible's finish %s", local.Format(time.RFC3339), ts.Format(time.RFC3339)), sum)
+			return skip(arsSkipNewerLocal, fmt.Sprintf("local activity %s (%s) is newer than Audible's finish %s",
+				local.Format(time.RFC3339), where(localBook), ts.Format(time.RFC3339)), sum)
 		}
 		next := arsCopyState(cur.State, st.User, t.id)
 		next.Status = database.UserBookStatusFinished
@@ -605,7 +716,7 @@ func (f *audibleReadStatusFixer) decide(us UserReadStateStore, base repairs.Row,
 			if end > 0 {
 				positions = []database.UserPosition{{UserID: st.User, BookID: t.id, SegmentID: arsSegmentID, PositionSeconds: end, UpdatedAt: ts}}
 				next.LastSegmentID = arsSegmentID
-				next.TotalListenedSeconds = end
+				next.TotalListenedSeconds = max(next.TotalListenedSeconds, end)
 			}
 		}
 		r.Class, r.Risk = arsWouldFinish, arsRisk(known)
@@ -614,18 +725,30 @@ func (f *audibleReadStatusFixer) decide(us UserReadStateStore, base repairs.Row,
 		r.Detail = &arsDecision{user: st.User, book: t.id, expect: cur,
 			next: undo.UserStateSnapshot{State: next, Positions: positions}}
 	case arsAudibleInProgress:
-		switch {
-		case cur.State != nil && cur.State.Status == database.UserBookStatusFinished:
+		if cur.State != nil && cur.State.Status == database.UserBookStatusFinished {
 			return skip(arsSkipAlreadyFinished, "finished here; never un-finished", sum)
-		case cur.State != nil && cur.State.Status == database.UserBookStatusAbandoned:
-			return skip(arsSkipAbandoned, "marked abandoned here; a user's choice is never overwritten", sum)
-		case arsHasLocalProgress(cur):
+		}
+		if id, ok := anyOf(abandoned); ok {
+			return skip(arsSkipAbandoned, "marked abandoned "+where(id)+"; a user's choice is never overwritten", sum)
+		}
+		if id, ok := anyOf(manualUnstarted); ok {
+			return skip(arsSkipManualUnstarted, "marked unstarted by hand "+where(id)+"; treated as the user's choice, like abandoned", sum)
+		}
+		if arsHasLocalProgress(cur) {
 			return skip(arsSkipLocalProgress, "the book already has local progress; the import cannot prove Audible's is newer", sum)
+		}
+		for _, rs := range related {
+			if arsHasLocalProgress(rs.snap) {
+				return skip(arsSkipLocalProgress, "another copy of this book ("+rs.id+") has local progress; the import cannot prove Audible's is newer", sum)
+			}
+		}
+		switch {
 		case !hasTS:
 			return skip(arsSkipNoTimestamp, "Audible gives no listening time for this title, and the import never stamps a position now", sum)
 		case local.After(ts):
 			// No progress, but a newer reset or activity: the user cleared it.
-			return skip(arsSkipNewerLocal, fmt.Sprintf("local activity %s (a reset or a mark) is newer than Audible's %s", local.Format(time.RFC3339), ts.Format(time.RFC3339)), sum)
+			return skip(arsSkipNewerLocal, fmt.Sprintf("local activity %s (%s; a reset or a mark) is newer than Audible's %s",
+				local.Format(time.RFC3339), where(localBook), ts.Format(time.RFC3339)), sum)
 		}
 		pos, pct := arsPosition(it, t.durationSec)
 		next := arsCopyState(cur.State, st.User, t.id)
@@ -642,8 +765,6 @@ func (f *audibleReadStatusFixer) decide(us UserReadStateStore, base repairs.Row,
 		r.Proposed["position_seconds"] = strconv.FormatFloat(pos, 'f', 0, 64)
 		r.Detail = &arsDecision{user: st.User, book: t.id, expect: cur, next: undo.UserStateSnapshot{State: next,
 			Positions: []database.UserPosition{{UserID: st.User, BookID: t.id, SegmentID: arsSegmentID, PositionSeconds: pos, UpdatedAt: ts}}}}
-	default:
-		return skip(arsSkipNotStarted, "not started on Audible; nothing to import", nil)
 	}
 	r.Fingerprint = arsFingerprint(r.RowID, r.Class, t.key(), st.Tier, it, sum)
 	return r
@@ -791,7 +912,7 @@ func (f *audibleReadStatusFixer) Replan(_ context.Context, _ json.RawMessage, pl
 	if err != nil {
 		return repairs.Row{}, fmt.Errorf("read book %s: %w", st.Target, err)
 	}
-	t := arsTarget{id: st.Target}
+	t := arsTarget{id: st.Target, related: arsRelatedIDs(st.Target, nil, st.Hits)}
 	if b == nil || b.IsSoftDeleted() {
 		t.gone = true
 		return f.decide(us, base, st, t), nil
@@ -804,6 +925,19 @@ func (f *audibleReadStatusFixer) Replan(_ context.Context, _ json.RawMessage, pl
 	if t.durationSec, err = arsLocalDuration(store, b.ID, b.Duration); err != nil {
 		return repairs.Row{}, err
 	}
+	var members []string
+	if t.vgid != "" {
+		group, err := store.GetBooksByVersionGroup(t.vgid)
+		if err != nil {
+			return repairs.Row{}, fmt.Errorf("read version group %s: %w", t.vgid, err)
+		}
+		for i := range group {
+			if !group[i].IsSoftDeleted() {
+				members = append(members, group[i].ID)
+			}
+		}
+	}
+	t.related = arsRelatedIDs(st.Target, members, st.Hits)
 	return f.decide(us, base, st, t), nil
 }
 

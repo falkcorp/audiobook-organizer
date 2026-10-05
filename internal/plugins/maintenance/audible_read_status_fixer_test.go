@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/audible_read_status_fixer_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 569aec15-d845-4f39-9a8e-63ba7e93162a
 // last-edited: 2026-10-05
 
@@ -522,9 +522,17 @@ func TestAudibleReadStatus_ExportShapes(t *testing.T) {
 	require.Equal(t, []string{"A One", "B Two"}, []string(it.Authors))
 	require.Equal(t, 36000.0, it.runtimeSeconds())
 	require.Equal(t, arsAudibleFinished, it.status())
-	ts, ok := it.timestamp()
+	ts, present, ok := it.timestamp()
+	require.True(t, present)
 	require.True(t, ok)
 	require.True(t, ts.Equal(arsAudibleTS))
+
+	// A zone-less time is present but not read (neither UTC nor local).
+	var zl arsItem
+	require.NoError(t, json.Unmarshal([]byte(`{"listening_status":{"finished_at_timestamp":"2026-09-01 12:00:00"}}`), &zl))
+	_, present, ok = zl.timestamp()
+	require.True(t, present)
+	require.False(t, ok)
 
 	require.NoError(t, json.Unmarshal([]byte(`{"authors":[{"name":"C Three"},"D Four"],"percent_complete":12.5}`), &it))
 	require.Equal(t, []string{"C Three", "D Four"}, []string(it.Authors))
@@ -600,4 +608,130 @@ func TestAudibleReadStatus_UnknownRuntimeIsReviewRisk(t *testing.T) {
 		require.Equal(t, repairs.RiskReview, rows[id].Risk, id)
 	}
 	require.Equal(t, repairs.RiskLow, rows["asin:B0TEST0303"].Risk)
+}
+
+// S1: listening on any copy of the book counts: every member of the
+// target's version group and the book the ASIN actually hit. An unchanged
+// group row re-plans to the same fingerprint and applies.
+func TestAudibleReadStatus_VersionGroupCopiesCount(t *testing.T) {
+	yes, no := true, false
+	newer := arsAudibleTS.Add(time.Hour)
+	l := newARSLib(t)
+	// Group g1: the ASIN is on non-primary m1, which has a newer listen.
+	l.book("p1", arsBook{title: "Theta", author: "Pat Example", vg: "g1", primary: &yes, minutes: 600})
+	l.book("m1", arsBook{title: "Theta", author: "Pat Example", asin: "B0TEST0401", vg: "g1", primary: &no, minutes: 600})
+	require.NoError(t, l.store.SetUserPositionAt(l.user, l.ids["m1"], "abs", 100, newer))
+	l.item("B0TEST0401", "Theta", "Pat Example", 600, "finished", 0, ptrTime(arsAudibleTS))
+	// Group g2: the ASIN is on the primary; another member s2 has progress.
+	l.book("p2", arsBook{title: "Iota", author: "Pat Example", asin: "B0TEST0402", vg: "g2", primary: &yes, minutes: 600})
+	l.book("s2", arsBook{title: "Iota", author: "Pat Example", vg: "g2", primary: &no, minutes: 600})
+	require.NoError(t, l.store.SetUserPositionAt(l.user, l.ids["s2"], "abs", 100, arsAudibleTS.Add(-time.Hour)))
+	l.item("B0TEST0402", "Iota", "Pat Example", 600, "progress", 30, ptrTime(arsAudibleTS))
+	// Group g3: a sibling marked unstarted by hand.
+	l.book("p3", arsBook{title: "Kappa", author: "Pat Example", asin: "B0TEST0403", vg: "g3", primary: &yes, minutes: 600})
+	l.book("s3", arsBook{title: "Kappa", author: "Pat Example", vg: "g3", primary: &no, minutes: 600})
+	l.setState("s3", database.UserBookState{Status: database.UserBookStatusUnstarted, StatusManual: true, LastActivityAt: arsAudibleTS.Add(-time.Hour)})
+	l.item("B0TEST0403", "Kappa", "Pat Example", 600, "finished", 0, ptrTime(arsAudibleTS))
+	// Group g4: a quiet sibling: applies.
+	l.book("p4", arsBook{title: "Lambda", author: "Pat Example", asin: "B0TEST0404", vg: "g4", primary: &yes, minutes: 600})
+	l.book("s4", arsBook{title: "Lambda", author: "Pat Example", vg: "g4", primary: &no, minutes: 600})
+	l.setState("s4", database.UserBookState{Status: database.UserBookStatusInProgress, ProgressPct: 10, LastActivityAt: arsAudibleTS.Add(-time.Hour)})
+	l.item("B0TEST0404", "Lambda", "Pat Example", 600, "finished", 0, ptrTime(arsAudibleTS))
+
+	plan, rows := l.plan()
+	require.Equal(t, arsSkipNewerLocal, rows["asin:B0TEST0401"].Class, rows["asin:B0TEST0401"].Reason)
+	require.Contains(t, rows["asin:B0TEST0401"].Reason, l.ids["m1"])
+	require.Equal(t, []string{l.ids["p1"]}, rows["asin:B0TEST0401"].BookIDs)
+	require.Equal(t, arsSkipLocalProgress, rows["asin:B0TEST0402"].Class, rows["asin:B0TEST0402"].Reason)
+	require.Equal(t, arsSkipManualUnstarted, rows["asin:B0TEST0403"].Class, rows["asin:B0TEST0403"].Reason)
+	require.Equal(t, arsWouldFinish, rows["asin:B0TEST0404"].Class, rows["asin:B0TEST0404"].Reason)
+
+	res := l.apply(plan, []string{"asin:B0TEST0404"})
+	require.Equal(t, repairs.OutcomeApplied, res["asin:B0TEST0404"].Outcome, "%+v", res)
+
+	// A listen on the sibling after the plan: changed since plan.
+	l2 := newARSLib(t)
+	l2.book("p", arsBook{title: "Mu", author: "Pat Example", asin: "B0TEST0405", vg: "g5", primary: &yes, minutes: 600})
+	l2.book("s", arsBook{title: "Mu", author: "Pat Example", vg: "g5", primary: &no, minutes: 600})
+	l2.item("B0TEST0405", "Mu", "Pat Example", 600, "finished", 0, ptrTime(arsAudibleTS))
+	plan2, rows2 := l2.plan()
+	require.True(t, rows2["asin:B0TEST0405"].Applicable())
+	require.NoError(t, l2.store.SetUserPositionAt(l2.user, l2.ids["s"], "abs", 50, newer))
+	res2 := l2.apply(plan2, []string{"asin:B0TEST0405"})
+	require.Equal(t, repairs.OutcomeChangedSincePlan, res2["asin:B0TEST0405"].Outcome)
+	require.Nil(t, l2.state("p"))
+}
+
+// S2, N1, N2, N4 on the target itself.
+func TestAudibleReadStatus_TimestampsAndOwnerIntent(t *testing.T) {
+	l := newARSLib(t)
+	fixed := arsAudibleTS.Add(24 * time.Hour)
+	prev := arsNow
+	arsNow = func() time.Time { return fixed }
+	t.Cleanup(func() { arsNow = prev })
+
+	l.book("future", arsBook{title: "Nu", author: "Pat Example", asin: "B0TEST0501", minutes: 600})
+	l.item("B0TEST0501", "Nu", "Pat Example", 600, "finished", 0, ptrTime(fixed.Add(time.Hour)))
+	l.book("skew", arsBook{title: "Xi", author: "Pat Example", asin: "B0TEST0502", minutes: 600})
+	l.item("B0TEST0502", "Xi", "Pat Example", 600, "finished", 0, ptrTime(fixed.Add(5*time.Minute)))
+	l.book("zoneless", arsBook{title: "Omicron", author: "Pat Example", asin: "B0TEST0503", minutes: 600})
+	l.items = append(l.items, map[string]any{"asin": "B0TEST0503", "title": "Omicron", "runtime_length_min": 600,
+		"authors": []map[string]string{{"name": "Pat Example"}}, "is_finished": true, "percent_complete": 99.0,
+		"listening_status": map[string]any{"finished_at_timestamp": "2026-09-01T12:00:00"}})
+	l.book("manual", arsBook{title: "Pi", author: "Pat Example", asin: "B0TEST0504", minutes: 600})
+	l.setState("manual", database.UserBookState{Status: database.UserBookStatusUnstarted, StatusManual: true, LastActivityAt: arsAudibleTS.Add(time.Hour)})
+	l.item("B0TEST0504", "Pi", "Pat Example", 600, "finished", 0, ptrTime(arsAudibleTS))
+	l.book("listened", arsBook{title: "Rho", author: "Pat Example", asin: "B0TEST0505", minutes: 600})
+	l.setState("listened", database.UserBookState{Status: database.UserBookStatusUnstarted, TotalListenedSeconds: 50000, LastActivityAt: arsAudibleTS.Add(-time.Hour)})
+	l.item("B0TEST0505", "Rho", "Pat Example", 600, "finished", 0, ptrTime(arsAudibleTS))
+
+	plan, rows := l.plan()
+	require.Equal(t, arsReviewFutureTimestamp, rows["asin:B0TEST0501"].Class, rows["asin:B0TEST0501"].Reason)
+	require.Equal(t, arsWouldFinish, rows["asin:B0TEST0502"].Class, "within the slack: %s", rows["asin:B0TEST0502"].Reason)
+	require.Equal(t, arsReviewTimestampUnreadable, rows["asin:B0TEST0503"].Class, rows["asin:B0TEST0503"].Reason)
+	require.Equal(t, arsSkipManualUnstarted, rows["asin:B0TEST0504"].Class, rows["asin:B0TEST0504"].Reason)
+	require.Equal(t, arsWouldFinish, rows["asin:B0TEST0505"].Class, rows["asin:B0TEST0505"].Reason)
+
+	res := l.apply(plan, []string{"asin:B0TEST0505"})
+	require.Equal(t, repairs.OutcomeApplied, res["asin:B0TEST0505"].Outcome, "%+v", res)
+	s := l.state("listened")
+	require.InDelta(t, 50000, s.TotalListenedSeconds, 0.1, "never lowered to the end position")
+	require.Len(t, l.positions("listened"), 1)
+}
+
+// N3: items in the real export's shape (every listening_status key present,
+// values synthetic). The export has one timestamp field; about half the
+// in-progress titles carry it. A title whose two is_finished flags disagree
+// is a review row.
+func TestAudibleReadStatus_RealExportShape(t *testing.T) {
+	l := newARSLib(t)
+	add := func(asin, title string, topFin bool, pct float64, lsFin bool, ts any, remaining float64) {
+		l.book(asin, arsBook{title: title, author: "Pat Example", asin: asin, minutes: 600})
+		l.items = append(l.items, map[string]any{"asin": asin, "title": title, "runtime_length_min": 600,
+			"authors":     []map[string]string{{"asin": "AUTHOR0001", "name": "Pat Example"}},
+			"narrators":   []map[string]string{{"name": "Sam Voice"}},
+			"is_finished": topFin, "percent_complete": pct, "purchase_date": "2026-01-01T00:00:00.000Z",
+			"listening_status": map[string]any{"finished_at_timestamp": ts, "is_finished": lsFin,
+				"percent_complete": pct, "time_remaining_seconds": remaining}})
+	}
+	stamp := arsAudibleTS.Format("2006-01-02T15:04:05.000Z")
+	add("B0TEST0601", "Sigma", true, 99, true, stamp, 0)
+	add("B0TEST0602", "Tau", false, 40, false, stamp, 21600)
+	add("B0TEST0603", "Upsilon", false, 40, false, nil, 21600)
+	add("B0TEST0604", "Phi", true, 93, false, stamp, 2520)
+	add("B0TEST0605", "Chiaroscuro Tale", false, 0, true, stamp, 36000)
+	add("B0TEST0606", "Psi", false, 0, false, stamp, 36000)
+
+	_, rows := l.plan()
+	want := map[string]string{
+		"asin:B0TEST0601": arsWouldFinish,
+		"asin:B0TEST0602": arsWouldProgress,
+		"asin:B0TEST0603": arsSkipNoTimestamp,
+		"asin:B0TEST0604": arsReviewAudibleConflict,
+		"asin:B0TEST0605": arsReviewAudibleConflict,
+		"asin:B0TEST0606": arsSkipNotStarted,
+	}
+	for id, class := range want {
+		require.Equal(t, class, rows[id].Class, "%s: %s", id, rows[id].Reason)
+	}
 }
