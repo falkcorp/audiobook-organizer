@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/auto_match_transcribed.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 7a3b5c1d-2e4f-6a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-09-28
+// last-edited: 2026-10-04
 
 package maintenance
 
