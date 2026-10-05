@@ -474,6 +474,7 @@ func (de *Engine) UnmergeAuto(journalKey string) error {
 	if entry.IntoGroupID != "" {
 		groups[entry.IntoGroupID] = true
 	}
+	revertFailed := false
 	revert := func(role, id string, ts int64) {
 		if ts == 0 {
 			errs = append(errs, fmt.Sprintf("%s %s: no pre-merge snapshot recorded", role, id))
@@ -481,6 +482,7 @@ func (de *Engine) UnmergeAuto(journalKey string) error {
 		}
 		b, err := de.bookStore.RevertBookToVersion(id, time.Unix(0, ts))
 		if err != nil {
+			revertFailed = true
 			errs = append(errs, fmt.Sprintf("%s %s: %v", role, id, err))
 			return
 		}
@@ -497,12 +499,16 @@ func (de *Engine) UnmergeAuto(journalKey string) error {
 	revert("winner", entry.WinnerID, entry.WinnerPreMergeTS)
 	handOffRetiredPrimaries(context.Background(), de.bookStore, groups)
 
-	// Marked undone whether or not some step reported an error: the reverts
-	// that ran have rewritten the rows, and a replay would rewrite them again
-	// over whatever happened since. A step that failed is in the error.
-	entry.UndoneAt = time.Now().UnixNano()
-	if _, err := de.putJournal(*entry); err != nil {
-		errs = append(errs, fmt.Sprintf("journal entry not marked undone (a repeat would not be refused): %v", err))
+	// Marked undone unless a revert failed: a failed revert is retried by
+	// running UnmergeAuto again (as UndoCombine's undo_failed is), and the
+	// retry is safe on the sibling side because the journal skips siblings
+	// it already resolved. A side with no pre-merge snapshot is not a
+	// failure; there is nothing a retry could revert it to.
+	if !revertFailed {
+		entry.UndoneAt = time.Now().UnixNano()
+		if _, err := de.putJournal(*entry); err != nil {
+			errs = append(errs, fmt.Sprintf("journal entry not marked undone (a repeat would not be refused): %v", err))
+		}
 	}
 
 	if len(errs) > 0 {

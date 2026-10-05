@@ -8,6 +8,7 @@ package dedup
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/stretchr/testify/require"
@@ -166,4 +167,41 @@ func TestUnmergeAuto_HandsOffWithoutSiblings(t *testing.T) {
 	require.NoError(t, engine.UnmergeAuto(keys[0]))
 	f.RequireSinglePrimary(t, "H", "")
 	f.RequireSinglePrimary(t, "G", l)
+}
+
+// revertFailStore fails RevertBookToVersion for one book until cleared.
+type revertFailStore struct {
+	Store
+	failFor string
+}
+
+func (s *revertFailStore) RevertBookToVersion(id string, ts time.Time) (*database.Book, error) {
+	if id == s.failFor {
+		return nil, fmt.Errorf("injected revert failure")
+	}
+	return s.Store.RevertBookToVersion(id, ts)
+}
+
+// A failed revert leaves the entry retryable: it is not marked undone, and a
+// second UnmergeAuto finishes the job.
+func TestUnmergeAuto_FailedRevertIsRetryable(t *testing.T) {
+	engine, f, _, es := vpEngine(t)
+	k := f.Book(t, vptest.Spec{ID: "k", Group: "H", Primary: "true"})
+	l := f.Book(t, vptest.Spec{ID: "l", Group: "G", Primary: "true"})
+	_, keys, err := engine.MergeBooksJournaled(0, []string{l, k}, k, "t")
+	require.NoError(t, err)
+
+	fs := &revertFailStore{Store: f.S, failFor: l}
+	engine.bookStore = fs
+	require.ErrorContains(t, engine.UnmergeAuto(keys[0]), "injected revert failure")
+	entry, err := es.GetAutoMergeJournalEntry(keys[0])
+	require.NoError(t, err)
+	require.Zero(t, entry.UndoneAt)
+
+	fs.failFor = ""
+	require.NoError(t, engine.UnmergeAuto(keys[0]))
+	require.Equal(t, "G", f.GroupOf(t, l))
+	entry, err = es.GetAutoMergeJournalEntry(keys[0])
+	require.NoError(t, err)
+	require.NotZero(t, entry.UndoneAt)
 }

@@ -349,6 +349,21 @@ func TestMergeBooks_OrganizedCopyHoldsFlag(t *testing.T) {
 		require.Equal(t, b, res.PrimaryID, "the organized participant is elected")
 		require.Empty(t, res.GroupPrimaryID)
 	})
+	t.Run("survivor with an iTunes PID keeps the flag", func(t *testing.T) {
+		f := siblingFixture(t)
+		k := f.Book(t, vptest.Spec{ID: "k", Group: "H", Primary: "true", State: "imported"})
+		files, err := f.S.GetBookFiles(k)
+		require.NoError(t, err)
+		files[0].ITunesPersistentID = "ABCDEF0123456789"
+		require.NoError(t, f.S.UpdateBookFile(files[0].ID, &files[0]))
+		l := f.Book(t, vptest.Spec{ID: "l", Group: "G", Primary: "false", State: "imported"})
+		ls := f.Book(t, vptest.Spec{ID: "ls", Group: "G", Primary: "true"})
+		res, err := NewService(f.S).MergeBooks([]string{l, k}, "")
+		require.NoError(t, err)
+		require.Empty(t, res.GroupPrimaryID, "demoting k would take its track out of iTunes")
+		f.RequireSinglePrimary(t, "H", k)
+		require.Equal(t, "false", f.Flag(t, ls))
+	})
 	t.Run("explicit primary wins", func(t *testing.T) {
 		f := siblingFixture(t)
 		k := f.Book(t, vptest.Spec{ID: "k", Group: "H", Primary: "true", State: "imported"})
