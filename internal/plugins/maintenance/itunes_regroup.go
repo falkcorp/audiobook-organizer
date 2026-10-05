@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_regroup.go
-// version: 1.24.1
+// version: 1.25.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-10-05
 
@@ -246,20 +246,45 @@ func regroupCheckFailedBooks(snap itunesservice.Snapshot) []string {
 	return ids
 }
 
-// regroupUserStateReader is where the empty-book delete reads users'
-// listening state: the wired merge user-state store, else the run's store
-// when it can answer (a bare PebbleStore in tests). nil fails the delete
-// closed.
-func (p *Plugin) regroupUserStateReader(store itunesRegroupStore) merge.UserStateReader {
+// regroupUserStateStore is where the empty-book delete reads users'
+// listening state and carries it to the regrouped book: the wired merge
+// user-state store, else the run's store when it can (a bare PebbleStore in
+// tests). nil fails the delete closed.
+func (p *Plugin) regroupUserStateStore(store itunesRegroupStore) merge.UserProgressMerger {
 	if p.deps != nil {
 		if um := p.deps.MergeUserStateStore(); um != nil {
 			return um
 		}
 	}
-	if r, ok := database.AsCapability[merge.UserStateReader](store); ok {
+	if r, ok := database.AsCapability[merge.UserProgressMerger](store); ok {
 		return r
 	}
 	return nil
+}
+
+// regroupStateTarget is the applied target a deleted book's users' state
+// goes to: the target of the applied group that took the most of its files
+// (ties to the earlier group), "" when no applied group took any. targets
+// maps a plan group index to the book its files went to (a fresh book's id
+// exists only once the apply created it).
+func regroupStateTarget(plan itunesservice.RegroupPlan, targets map[int]string, bookID string) string {
+	best, bestN := "", 0
+	for gi, a := range plan.Groups {
+		t, ok := targets[gi]
+		if !ok || t == bookID {
+			continue
+		}
+		n := 0
+		for _, m := range a.Moves {
+			if m.From == bookID {
+				n++
+			}
+		}
+		if n > bestN {
+			best, bestN = t, n
+		}
+	}
+	return best
 }
 
 // regroupRunStore is the run's store: OpsStore plus the tag reads the
@@ -727,8 +752,9 @@ func enrichScore(b *database.Book) int {
 func (p *Plugin) applyRegroupPlan(ctx context.Context, store itunesRegroupStore, plan itunesservice.RegroupPlan, rootDir string, reporter sdk.Reporter) error {
 	touched := make(map[string]bool)
 	var c regroupApplyCounts
-	var deleted, deleteSkipped int
+	var deleted, deleteSkipped, stateCarried int
 	var stateProbe *merge.UserStateProbe
+	var stateStore merge.UserProgressMerger
 
 	for gi, a := range plan.Groups {
 		if ctx.Err() != nil {
@@ -763,14 +789,17 @@ func (p *Plugin) applyRegroupPlan(ctx context.Context, store itunesRegroupStore,
 			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: %d files, %d ext-ids remain", id, len(files), len(exts)))
 			continue
 		}
-		// Nor one a user still has listening state on: the delete is a hard
-		// delete and nothing carries that state onto the regrouped book.
+		// A book a user has listening state on: the delete is a hard
+		// delete, so the state is first carried to the regrouped book that
+		// took its files, all or nothing (merge.CarryStateBeforeHardDelete);
+		// a carry that does not fully land is put back and the book kept.
 		// Users are listed once per pass, through the merge user-state store
 		// (OpsStore is at its interface cap); fail closed like the reads above.
 		if stateProbe == nil {
 			var probe *merge.UserStateProbe
 			perr := errors.New("no user-state store wired")
-			if um := p.regroupUserStateReader(store); um != nil {
+			if um := p.regroupUserStateStore(store); um != nil {
+				stateStore = um
 				probe, perr = merge.NewUserStateProbe(um)
 			}
 			if perr != nil {
@@ -780,10 +809,25 @@ func (p *Plugin) applyRegroupPlan(ctx context.Context, store itunesRegroupStore,
 			}
 			stateProbe = probe
 		}
-		if has, herr := stateProbe.Has(id); herr != nil || has {
+		has, herr := stateProbe.Has(id)
+		if herr != nil {
 			deleteSkipped++
-			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: a user still has listening state on it (read error: %v)", id, herr))
+			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: could not read its users' listening state: %v", id, herr))
 			continue
+		}
+		if has {
+			target := regroupStateTarget(plan, c.targets, id)
+			if target == "" {
+				deleteSkipped++
+				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: a user has listening state on it and no applied group took its files to carry it to", id))
+				continue
+			}
+			if cerr := merge.CarryStateBeforeHardDelete(stateStore, target, id); cerr != nil {
+				deleteSkipped++
+				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: its users' listening state could not be carried to %s: %v", id, target, cerr))
+				continue
+			}
+			stateCarried++
 		}
 		if err := store.DeleteBook(id); err != nil {
 			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("delete %s failed: %v", id, err))
@@ -802,8 +846,8 @@ func (p *Plugin) applyRegroupPlan(ctx context.Context, store itunesRegroupStore,
 	}
 
 	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
-		"APPLIED: moved=%d titled=%d library-title-kept=%d fresh=%d deleted=%d delete-skipped=%d recheck-skipped=%d errors=%d",
-		moved, titled, titleKept, created, deleted, deleteSkipped, recheckSkipped, errCount))
+		"APPLIED: moved=%d titled=%d library-title-kept=%d fresh=%d deleted=%d state-carried=%d delete-skipped=%d recheck-skipped=%d errors=%d",
+		moved, titled, titleKept, created, deleted, stateCarried, deleteSkipped, recheckSkipped, errCount))
 	if errCount > 0 {
 		return fmt.Errorf("%d errors during itunes-regroup (see op log)", errCount)
 	}
@@ -813,6 +857,9 @@ func (p *Plugin) applyRegroupPlan(ctx context.Context, store itunesRegroupStore,
 // regroupApplyCounts are applyRegroupPlan's per-group tallies.
 type regroupApplyCounts struct {
 	moved, titled, titleKept, created, recheckSkipped, errCount int
+	// targets maps each written group's plan index to the book its files
+	// went to (regroupStateTarget).
+	targets map[int]string
 }
 
 // applyRegroupGroup rechecks and writes plan.Groups[gi].
@@ -881,6 +928,10 @@ func applyRegroupGroup(store itunesRegroupStore, plan itunesservice.RegroupPlan,
 		target = nb.ID
 		c.created++
 	}
+	if c.targets == nil {
+		c.targets = map[int]string{}
+	}
+	c.targets[gi] = target
 
 	// Move this group's files in ONE batch. Each MoveBookFilesToBook call
 	// recomputes both of its books, so the previous per-file loop cost two
