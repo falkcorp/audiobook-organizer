@@ -35,13 +35,6 @@
         Shadows casts such as "Lisa Bowerman & Harry Myers"). Their parts are
         narrators. "Full Dark, No Stars" is a book title the library does not
         hold, so the title check misses it.
-- [ ] **CHAPTERS-BACKFILL-LABEL-FLAKE** `TestChaptersBackfill_ProgressLabelReportsEligibleCount`
-      failed once in a full `./internal/plugins/maintenance/` run under load
-      (2026-10-04, on #3729) and passed 5 of 5 alone. The `RunItems` `Label`
-      closure runs inside each worker, so the second-to-last label to arrive
-      can read `persisted`/`wouldPersist` before another worker's increments
-      land. Either the test should assert the maximum label count, or the op
-      should emit a final label after the pool drains.
 - [ ] **AUTHORCREDIT-SERIESLESS-EVIDENCE** A series- or title-named credit part
       ("Dragon Born") links when its author is credited on a book outside that
       series. A book with NO series counts as outside (the literal owner rule
