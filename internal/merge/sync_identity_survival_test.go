@@ -1,7 +1,7 @@
 // file: internal/merge/sync_identity_survival_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 44a928e0-6f46-412d-826b-198c12f52dc7
-// last-edited: 2026-07-30
+// last-edited: 2026-10-05
 
 // Package merge: cross-mechanism ID-survival acceptance suite.
 //
@@ -23,6 +23,7 @@
 package merge
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -295,18 +296,14 @@ func TestSyncIdentitySurvives_FileReplace_Primitive(t *testing.T) {
 // test does not repeat that; it is the pathological case neither of them
 // covers.
 //
-// A 2-node cycle (A redirects to B, B redirects to A) is reachable through
-// nothing more exotic than two ordinary RecordSyncMerge calls in opposite
-// directions -- e.g. two conflicting merge operations resolved against each
-// other, or a retried merge racing a reversed one. RecordSyncMerge never
-// touches the reverse index (sync_item:book:<bookID>), only the SyncItem
-// records' RedirectTo, so book A's reverse index still resolves to A's
-// original syncID even after A's SyncItem has been redirected away -- which
-// is exactly what lets the second call construct the cycle instead of a
-// third-party record. A real occurrence of this would be a data
-// inconsistency bug, not a designed code path; ResolveSyncItem must fail
-// loudly (a bounded error) rather than loop forever or silently return
-// stale/wrong data.
+// Two ordinary RecordSyncMerge calls in opposite directions (two conflicting
+// merges resolved against each other, or a carry put back the other way)
+// used to build a 2-node cycle: A redirects to B, B redirects to A, and
+// ResolveSyncItem then failed for both ids for good. Since #3770's review
+// (B1) RecordSyncMerge clears the winner's stale reverse redirect instead,
+// so the newer merge wins and both ids resolve. A cycle written some other
+// way (corrupt data) must still make ResolveSyncItem fail loudly, a bounded
+// error, rather than loop forever or return stale data.
 func TestSyncIdentitySurvives_RedirectChain_PathologicalCycle(t *testing.T) {
 	store := setupTestStore(t)
 	ids := database.AsSyncIdentityStore(store)
@@ -321,19 +318,25 @@ func TestSyncIdentitySurvives_RedirectChain_PathologicalCycle(t *testing.T) {
 
 	aSync, err := ids.MintOrGetSyncID(aID)
 	require.NoError(t, err)
-	_, err = ids.MintOrGetSyncID(bID)
+	bSync, err := ids.MintOrGetSyncID(bID)
 	require.NoError(t, err)
 
-	// A "merges into" B: A's SyncItem now redirects to B's.
 	require.NoError(t, ids.RecordSyncMerge(aID, bID))
-	// B "merges into" A: B's SyncItem now redirects to A's. A's reverse index
-	// (sync_item:book:<aID>) was never touched by the first call, so this
-	// resolves to A's ORIGINAL syncID and completes the cycle:
-	// aSync.RedirectTo == bSync, bSync.RedirectTo == aSync.
 	require.NoError(t, ids.RecordSyncMerge(bID, aID))
+	for _, sid := range []string{aSync, bSync} {
+		item, err := ids.ResolveSyncItem(sid)
+		require.NoError(t, err, "opposite merges must not leave a cycle")
+		require.Equal(t, aID, item.CurrentBookID, "the newer merge (B into A) wins")
+	}
 
+	// A cycle written directly (as corrupt data would be).
+	for _, e := range [][3]string{{aSync, aID, bSync}, {bSync, bID, aSync}} {
+		raw, err := json.Marshal(database.SyncItem{SyncID: e[0], CurrentBookID: e[1], RedirectTo: e[2]})
+		require.NoError(t, err)
+		require.NoError(t, store.SetRaw("sync_item:"+e[0], raw))
+	}
 	_, err = ids.ResolveSyncItem(aSync)
-	require.Error(t, err, "a redirect cycle must return an error, not loop forever or return stale data")
+	require.ErrorIs(t, err, database.ErrSyncRedirectChainBroken, "a redirect cycle must return an error, not loop forever or return stale data")
 }
 
 // TestSyncIdentitySurvives_ComposedLifecycle is this suite's centerpiece.

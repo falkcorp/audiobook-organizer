@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_syncid_test.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: c4877e93-ba6a-468d-b428-30be15fdfa27
-// last-edited: 2026-10-03
+// last-edited: 2026-10-05
 
 // Tests for the sync_item:/sync_item:book: keyspace (durable ABS libraryItemId
 // identity). Covers: mint-on-first-encounter idempotency, distinct IDs per book,
@@ -470,4 +470,87 @@ func TestSyncID_ListSyncAliases_CapStillBounds(t *testing.T) {
 	if _, err := store.ListSyncAliases(winnerID); !errors.Is(err, ErrSyncAliasLimit) {
 		t.Fatalf("ListSyncAliases over the cap: err = %v, want ErrSyncAliasLimit", err)
 	}
+}
+
+// #3770 review B1: recording a redirect whose winner already redirects back
+// to the loser (directly, or through a chain) must not close a cycle, which
+// ResolveSyncItem reports as a permanently broken chain for every item on it.
+// The winner's stale outgoing link is cleared in the same write; both halves
+// (RedirectTo and MergedFrom) agree afterwards.
+func TestSyncID_RecordSyncMerge_NeverClosesACycle(t *testing.T) {
+	mint := func(t *testing.T, s *PebbleStore, books ...string) map[string]string {
+		t.Helper()
+		ids := map[string]string{}
+		for _, b := range books {
+			id, err := s.MintOrGetSyncID(b)
+			if err != nil {
+				t.Fatalf("mint %s: %v", b, err)
+			}
+			ids[b] = id
+		}
+		return ids
+	}
+	resolvesTo := func(t *testing.T, s *PebbleStore, syncID, wantBook string) {
+		t.Helper()
+		item, err := s.ResolveSyncItem(syncID)
+		if err != nil {
+			t.Fatalf("ResolveSyncItem(%s): %v", syncID, err)
+		}
+		if item == nil || item.CurrentBookID != wantBook {
+			t.Fatalf("ResolveSyncItem(%s) = %+v, want book %s", syncID, item, wantBook)
+		}
+	}
+
+	t.Run("direct reverse edge", func(t *testing.T) {
+		s := newPebbleStoreForSyncID(t)
+		ids := mint(t, s, "src", "clone")
+		if err := s.RecordSyncMerge("src", "clone"); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.RecordSyncMerge("clone", "src"); err != nil {
+			t.Fatal(err)
+		}
+		resolvesTo(t, s, ids["clone"], "src")
+		resolvesTo(t, s, ids["src"], "src")
+		src, _ := s.getSyncItem(ids["src"])
+		clone, _ := s.getSyncItem(ids["clone"])
+		if src.RedirectTo != "" || slices.Contains(clone.MergedFrom, ids["src"]) {
+			t.Fatalf("stale src -> clone link kept: src=%+v clone=%+v", src, clone)
+		}
+		if !slices.Contains(src.MergedFrom, ids["clone"]) {
+			t.Fatalf("src does not list clone as merged: %+v", src)
+		}
+		aliases, err := s.ListSyncAliases(ids["src"])
+		if err != nil || !slices.Equal(aliases, []string{ids["clone"]}) {
+			t.Fatalf("aliases of src = %v (err=%v), want [clone]", aliases, err)
+		}
+	})
+	t.Run("through a chain", func(t *testing.T) {
+		s := newPebbleStoreForSyncID(t)
+		ids := mint(t, s, "a", "b", "c")
+		// c -> b -> a, then a -> c would close a -> c -> b -> a.
+		if err := s.RecordSyncMerge("b", "a"); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.RecordSyncMerge("c", "b"); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.RecordSyncMerge("a", "c"); err != nil {
+			t.Fatal(err)
+		}
+		for _, b := range []string{"a", "b", "c"} {
+			resolvesTo(t, s, ids[b], "c")
+		}
+	})
+	t.Run("one shared item is a no-op", func(t *testing.T) {
+		s := newPebbleStoreForSyncID(t)
+		ids := mint(t, s, "x")
+		if err := s.RepointSyncItem("x", "y"); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.RecordSyncMerge("y", "y"); err != nil {
+			t.Fatal(err)
+		}
+		resolvesTo(t, s, ids["x"], "y")
+	})
 }
