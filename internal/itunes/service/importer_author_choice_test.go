@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_author_choice_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4a1d8e63-9f2b-4c75-b3e0-7d6c1f9a2b58
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 package itunesservice
 
@@ -118,22 +118,26 @@ func TestAssignAuthorAndSeries_CombinedOfExistingAuthorsIsNotCreated(t *testing.
 // #3729 review B1 repro under the owner decision of 2026-10-04 ("usage check
 // + never first"): "Michael Anderle" is also a series name. Credited only on
 // that series' books he is dropped and Craig Martelle is the credit; credited
-// on a book outside it he links too, but never as the primary.
+// on a book in a different named series he links too, but never as the
+// primary. A book with no series is not evidence (owner decision 2026-10-05).
 func TestAssignAuthorAndSeries_ExistingAuthorNamedLikeASeriesIsLinked(t *testing.T) {
-	seriesID := 9
+	seriesID, otherID := 9, 10
 	for _, tc := range []struct {
 		name  string
 		books []database.BookCore
 		want  []int
 	}{
 		{"only that series", []database.BookCore{{ID: "b1", Title: "Junk", SeriesID: &seriesID}}, []int{2}},
-		{"a book outside it", []database.BookCore{{ID: "b1", Title: "Junk", SeriesID: &seriesID},
-			{ID: "b2", Title: "Death Becomes Her"}}, []int{2, 1}},
+		{"a series-less book", []database.BookCore{{ID: "b1", Title: "Junk", SeriesID: &seriesID},
+			{ID: "b2", Title: "Death Becomes Her"}}, []int{2}},
+		{"a book in a different series", []database.BookCore{{ID: "b1", Title: "Junk", SeriesID: &seriesID},
+			{ID: "b2", Title: "Death Becomes Her", SeriesID: &otherID}}, []int{2, 1}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			authorcredit.ResetTitleCache()
 			m := dbmocks.NewMockStore(t)
-			m.EXPECT().GetAllSeries().Return([]database.Series{{ID: seriesID, Name: "Michael Anderle"}}, nil).Maybe()
+			m.EXPECT().GetAllSeries().Return([]database.Series{{ID: seriesID, Name: "Michael Anderle"},
+				{ID: otherID, Name: "The Kurtherian Gambit"}}, nil).Maybe()
 			m.EXPECT().GetAllBooksCore(mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 			m.EXPECT().FindAuthorByAlias(mock.Anything).Return(nil, nil).Maybe()
 			m.EXPECT().GetBooksByAuthorIDWithRoleCore(1).Return(tc.books, nil)
