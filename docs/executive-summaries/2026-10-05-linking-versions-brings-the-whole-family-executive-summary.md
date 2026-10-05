@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-05-linking-versions-brings-the-whole-family-executive-summary.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 0b6f6f3e-7a52-4c1b-9d0e-5e2c8a41d7b9 -->
 <!-- last-edited: 2026-10-05 -->
 
@@ -150,6 +150,19 @@ naming the books. Undoing an iTunes library copy puts the original back
 first, and if any later step fails the progress goes to whichever copy
 Audiobookshelf shows; running the undo again finishes it. Every one of these
 deletes now checks one last time for new progress right before it deletes.
+
+A fourth review tightened how called-off moves put progress back. If the
+listener marked a book unfinished after finishing it, that later choice now
+stands instead of the book snapping back to finished. When the two copies of
+the progress cannot be put in time order, the one that is further ahead wins
+and listened time keeps the larger value (owner decision). A reset is kept
+cleanly, with the old positions cleared rather than left half in place. If
+the listener played the kept book while the move was being called off, only
+what the move brought there is taken back, so their listened time is no
+longer counted on both books. The iTunes regroup no longer moves progress off
+a book Audiobookshelf shows onto one it does not; it keeps the book and says
+so. The duplicate clean-up checks that the kept copy is still shown at the
+moment it moves the progress, not only a moment before.
 
 ## Undo that left progress on the wrong book
 
