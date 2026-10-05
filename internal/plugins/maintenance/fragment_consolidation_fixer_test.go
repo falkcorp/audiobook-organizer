@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer_test.go
-// version: 1.24.0
+// version: 1.25.0
 // guid: 8e2d5b19-6a4c-4f37-b1d8-2c9e7a3f5d60
 // last-edited: 2026-10-04
 
@@ -3560,7 +3560,14 @@ func TestFragmentFixer_NumberedCopiesCutAtEveryStep(t *testing.T) {
 			shapes = append(shapes, shape{"none", cutVGNone, "fresh"})
 		}
 	}
-	for _, sh := range shapes {
+	// Every cut point under AORG_FRAG_CUT_MATRIX=full; otherwise every 15th,
+	// staggered per shape (GitHub's -race Go job has 10 minutes for the
+	// whole package, and every point of these shapes took 377 s there).
+	stride := fragSweepStride(1, 15)
+	if full {
+		stride = 1
+	}
+	for si, sh := range shapes {
 		t.Run(fmt.Sprintf("organized=%s vg=%s %s", sh.org, sh.vg, sh.mode), func(t *testing.T) {
 			ref, rr, closeRef := newCutFixture(t, sh.org, sh.vg)
 			out := ref.apply(t, "op-plan", "op-apply", []string{rr.RowID}, nil)
@@ -3568,7 +3575,7 @@ func TestFragmentFixer_NumberedCopiesCutAtEveryStep(t *testing.T) {
 			want := ref.copiesFixtureState(t)
 			closeRef()
 			cuts, through := 0, 0
-			for at := 1; ; at++ {
+			for at := fragSweepStart(si, stride); ; at += stride {
 				f, r, closeCut := newCutFixture(t, sh.org, sh.vg)
 				cs := &cutStore{PebbleStore: f.s, at: at, history: full}
 				f.applyOp("op-cut", fragFixerID)
@@ -3601,7 +3608,7 @@ func TestFragmentFixer_NumberedCopiesCutAtEveryStep(t *testing.T) {
 				closeCut()
 			}
 			t.Logf("organized=%s vg=%s %s: %d cut points finished to the same end state; %d best-effort events ran through", sh.org, sh.vg, sh.mode, cuts, through)
-			require.Greater(t, cuts, 40)
+			require.Greater(t, cuts, 40/stride)
 		})
 	}
 }

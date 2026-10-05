@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_review8_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 2dc36c12-0ba5-4ca9-90b1-ea5c5c5b27c9
 // last-edited: 2026-10-04
 
@@ -163,10 +163,11 @@ func (f *fragFixture) applyAllOver(t *testing.T, r repairs.Row, planOp string) {
 // revert always succeeded (22 of 24 cut points split with organized=all, 24
 // of 24 with none).
 func TestFragmentFixer_RevertKeepsTheHoldOfARetiredSurvivor(t *testing.T) {
-	for _, sh := range [][2]string{{"all", cutVGOrig}, {"none", cutVGNone}} {
+	stride := fragSweepStride(5, 20)
+	for i, sh := range [][2]string{{"all", cutVGOrig}, {"none", cutVGNone}} {
 		t.Run(sh[0]+"/"+sh[1], func(t *testing.T) {
 			tried := 0
-			for at := 1; ; at += 5 {
+			for at := fragSweepStart(i, stride); ; at += stride {
 				f, r, closeF := newCutFixture(t, sh[0], sh[1])
 				cut, more := f.cutAt(t, r, at)
 				if !more {
@@ -189,7 +190,7 @@ func TestFragmentFixer_RevertKeepsTheHoldOfARetiredSurvivor(t *testing.T) {
 				tried++
 				closeF()
 			}
-			require.Greater(t, tried, 15)
+			require.Greater(t, tried, 75/stride)
 		})
 	}
 }
