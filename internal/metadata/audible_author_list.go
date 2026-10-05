@@ -1,7 +1,7 @@
 // file: internal/metadata/audible_author_list.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6f2d9a14-3b7e-4c58-a1d0-8e5f7c2b9a63
-// last-edited: 2026-10-01
+// last-edited: 2026-10-04
 
 package metadata
 
@@ -196,6 +196,15 @@ func (c *AudibleClient) getBody(ctx context.Context, u string) ([]byte, error) {
 		return nil, StatusError(SourceIDAudible, resp)
 	}
 	return io.ReadAll(resp.Body)
+}
+
+// DecodeAudibleProduct decodes one Audible product object: a cat_raw:
+// payload the catalog harvest stored, or one item of an audible-cli library
+// export (same field names). It is the decoder LookupProduct and the author
+// listing use, exported so the authority-list ingest (internal/authority)
+// re-decodes stored payloads the same way instead of keeping a second copy.
+func DecodeAudibleProduct(raw []byte) (CatalogProduct, error) {
+	return decodeCatalogProduct(jsontext.Value(raw))
 }
 
 // decodeCatalogProduct turns one raw product object into a CatalogProduct.
