@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.21.0
+// version: 4.22.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 package server
 
@@ -166,6 +166,11 @@ func (s *Server) Start(cfg ServerConfig) error {
 	}
 
 	s.externalURL = strings.TrimRight(cfg.ExternalURL, "/")
+
+	// With authority_evidence_enabled on, start the authority snapshot load
+	// now rather than on the first credit resolve, so a scan that starts
+	// right after boot already has the lists. A no-op with the flag off.
+	s.authorityEvidence.Prime()
 
 	// SERVER-LIFECYCLE-FLIP: drive Starter services via the container.
 	// Container.Start runs services in resolved dep order; failures

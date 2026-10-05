@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.133.1
+// version: 1.134.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-10-05
 
@@ -1791,6 +1791,16 @@ func SupportedExtensionSet() audioext.Set {
 	mu.RLock()
 	defer mu.RUnlock()
 	return audioext.Resolve(AppConfig.SupportedExtensions)
+}
+
+// AuthorityEvidenceEnabled reports authority_evidence_enabled under the read
+// lock. authorcredit's evidence source reads it on every credit resolve while
+// PUT /config may flip it, so the read must be synchronised; one field under
+// RLock, not a whole-struct Snapshot copy per resolve.
+func AuthorityEvidenceEnabled() bool {
+	mu.RLock()
+	defer mu.RUnlock()
+	return AppConfig.AuthorityEvidenceEnabled
 }
 
 // Mutate applies fn to AppConfig under a write lock.

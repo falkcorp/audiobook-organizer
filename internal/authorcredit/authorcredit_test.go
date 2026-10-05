@@ -1,5 +1,5 @@
 // file: internal/authorcredit/authorcredit_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 4a5f7bee-3d1d-427b-bc5f-baaa4b6fb584
 // last-edited: 2026-10-05
 
@@ -812,4 +812,52 @@ func TestResolve_AuthorityEvidenceStrength(t *testing.T) {
 		require.NoError(t, err, credit)
 		require.Equal(t, want, names(got), credit)
 	}
+}
+
+// fakeEvidence is a PersonEvidence that answers a fixed strength and counts
+// its calls.
+type fakeEvidence struct {
+	strength EvidenceStrength
+	calls    *int
+}
+
+func (f fakeEvidence) PersonEvidence(PersonQuery) (Evidence, error) {
+	*f.calls++
+	return Evidence{Strength: f.strength, Detail: f.strength.String()}, nil
+}
+
+// #3741 review N1: once weak evidence is held, a source that can only answer
+// weak is skipped (it cannot change the outcome), but one that can answer
+// strong is still asked and wins.
+func TestPersonEvidence_SkipsWeakOnlySourcesOnceWeakIsHeld(t *testing.T) {
+	var first, weakOnly, strongCapable int
+	got, why := personEvidence([]evidenceSource{
+		{src: fakeEvidence{strength: EvidenceWeak, calls: &first}, canBeStrong: true},
+		{src: fakeEvidence{strength: EvidenceWeak, calls: &weakOnly}},
+		{src: fakeEvidence{strength: EvidenceStrong, calls: &strongCapable}, canBeStrong: true},
+	}, PersonQuery{Name: "Dragon Born"})
+	require.Empty(t, why)
+	require.Equal(t, EvidenceStrong, got.Strength)
+	require.Equal(t, []int{1, 0, 1}, []int{first, weakOnly, strongCapable})
+	// With no evidence yet, a weak-only source is asked.
+	first, weakOnly = 0, 0
+	got, _ = personEvidence([]evidenceSource{
+		{src: fakeEvidence{strength: EvidenceNone, calls: &first}, canBeStrong: true},
+		{src: fakeEvidence{strength: EvidenceWeak, calls: &weakOnly}},
+	}, PersonQuery{Name: "Dragon Born"})
+	require.Equal(t, EvidenceWeak, got.Strength)
+	require.Equal(t, []int{1, 1}, []int{first, weakOnly})
+}
+
+// entrylessLookup knows a name as an author but has no entry for it.
+type entrylessLookup struct{ authority.Lookup }
+
+func (entrylessLookup) IsKnownPerson(string, authority.Role) bool { return true }
+
+// #3741 review N2: a Lookup that answers IsKnownPerson with no entry gives
+// weak evidence instead of a nil dereference.
+func TestAuthorityEvidence_KnownWithoutEntryIsWeak(t *testing.T) {
+	ev, err := authorityEvidence{lookup: entrylessLookup{authority.Empty()}}.PersonEvidence(PersonQuery{Name: "Dragon Born"})
+	require.NoError(t, err)
+	require.Equal(t, EvidenceWeak, ev.Strength)
 }
