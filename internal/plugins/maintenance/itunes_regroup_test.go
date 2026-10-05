@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_regroup_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-10-05
 
@@ -8,10 +8,12 @@ package maintenance
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 
 // errExtIDStore wraps a Store and makes GetExternalIDsForBook error for one book
@@ -179,10 +181,71 @@ func TestITunesRegroupApply_DeleteGuardFailsClosedOnReadError(t *testing.T) {
 	}
 }
 
-// The delete guard must also refuse a projected-empty book a user still has
-// listening state on: the delete is a hard delete and nothing carries that
-// state onto the regrouped book.
-func TestITunesRegroupApply_DeleteGuardSkipsBookHoldingUserState(t *testing.T) {
+// #3764 follow-up item 5: a projected-empty book a user has listening state
+// on is no longer stranded. Its state is carried to the regrouped book that
+// took its files, then it is deleted.
+func TestITunesRegroupApply_DeleteCarriesUserStateToTarget(t *testing.T) {
+	s, u, plan, rep := regroupWithState(t)
+	p := &Plugin{}
+	if err := p.applyRegroupPlan(context.Background(), s, plan, rgRoot, rep); err != nil {
+		t.Fatalf("applyRegroupPlan: %v", err)
+	}
+	loser, target := plan.DeleteBooks[0], plan.Groups[0].Target
+	if b, _ := s.GetBookByID(loser); b != nil {
+		t.Fatalf("book %s was kept; its state should have been carried and the book deleted", loser)
+	}
+	pos, err := s.ListUserPositionsForBook(u.ID, target)
+	if err != nil || len(pos) == 0 {
+		t.Fatalf("target %s has no position after the carry (err=%v)", target, err)
+	}
+	if rows, _ := s.ScanPrefix(merge.PendingUserStateRepairPrefix); len(rows) != 0 {
+		t.Fatalf("pending repairs left: %d", len(rows))
+	}
+	if !strings.Contains(strings.Join(rep.logs, "\n"), "state-carried=1") {
+		t.Fatalf("summary does not count the carry: %v", rep.logs)
+	}
+}
+
+// When the carry cannot fully land, the book is kept with every user's state
+// on it, and the skip says why (no "(read error: <nil>)").
+func TestITunesRegroupApply_DeleteKeepsBookWhenCarryFails(t *testing.T) {
+	s, u, plan, rep := regroupWithState(t)
+	loser, target := plan.DeleteBooks[0], plan.Groups[0].Target
+	fs := &rgFailStateStore{PebbleStore: s, failOn: target}
+	p := &Plugin{}
+	if err := p.applyRegroupPlan(context.Background(), fs, plan, rgRoot, rep); err != nil {
+		t.Fatalf("applyRegroupPlan: %v", err)
+	}
+	if b, _ := s.GetBookByID(loser); b == nil {
+		t.Fatalf("book %s deleted though its users' state could not be carried", loser)
+	}
+	st, err := s.GetUserBookState(u.ID, loser)
+	if err != nil || st == nil || st.ProgressPct != 30 {
+		t.Fatalf("loser state = %+v (err=%v), want 30%% still on it", st, err)
+	}
+	logs := strings.Join(rep.logs, "\n")
+	if !strings.Contains(logs, "could not be carried to "+target) || strings.Contains(logs, "<nil>") {
+		t.Fatalf("skip message: %s", logs)
+	}
+}
+
+// rgFailStateStore fails every user-state write onto one book.
+type rgFailStateStore struct {
+	*database.PebbleStore
+	failOn string
+}
+
+func (s *rgFailStateStore) SetUserBookState(st *database.UserBookState) error {
+	if st.BookID == s.failOn {
+		return fmt.Errorf("injected SetUserBookState failure for %s", st.BookID)
+	}
+	return s.PebbleStore.SetUserBookState(st)
+}
+
+// regroupWithState plans two one-file fragments into one book, a user
+// holding 30% (state and position) on each.
+func regroupWithState(t *testing.T) (*database.PebbleStore, *database.User, itunesservice.RegroupPlan, *fakeReporter) {
+	t.Helper()
 	s := regroupStore(t)
 	b1 := seedBook(t, s, "Frag A")
 	b2 := seedBook(t, s, "Frag B")
@@ -196,8 +259,10 @@ func TestITunesRegroupApply_DeleteGuardSkipsBookHoldingUserState(t *testing.T) {
 		if err := s.SetUserBookState(&database.UserBookState{UserID: u.ID, BookID: id, Status: database.UserBookStatusInProgress, ProgressPct: 30}); err != nil {
 			t.Fatalf("SetUserBookState: %v", err)
 		}
+		if err := s.SetUserPosition(u.ID, id, "seg", 30); err != nil {
+			t.Fatalf("SetUserPosition: %v", err)
+		}
 	}
-
 	p := &Plugin{}
 	rep := &fakeReporter{}
 	groups := []itunesservice.HealGroup{{Title: "Merged Book", PIDs: []string{"p1", "p2"}}}
@@ -206,14 +271,8 @@ func TestITunesRegroupApply_DeleteGuardSkipsBookHoldingUserState(t *testing.T) {
 		t.Fatalf("buildRegroupSnapshot: %v", err)
 	}
 	plan := itunesservice.PlanRegroup(groups, snap)
-	if len(plan.DeleteBooks) != 1 {
-		t.Fatalf("plan deletes=%d, want 1", len(plan.DeleteBooks))
+	if len(plan.DeleteBooks) != 1 || plan.Groups[0].FreshBook {
+		t.Fatalf("plan deletes=%d fresh=%v, want 1 delete onto an existing target", len(plan.DeleteBooks), plan.Groups[0].FreshBook)
 	}
-	if err := p.applyRegroupPlan(context.Background(), s, plan, rgRoot, rep); err != nil {
-		t.Fatalf("applyRegroupPlan: %v", err)
-	}
-	loser := plan.DeleteBooks[0]
-	if b, _ := s.GetBookByID(loser); b == nil {
-		t.Fatalf("book %s holding a user's listening state was deleted", loser)
-	}
+	return s, u, plan, rep
 }
