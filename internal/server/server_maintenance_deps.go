@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.50.0
+// version: 1.51.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
-// last-edited: 2026-10-02
+// last-edited: 2026-10-04
 
 // This file implements the maintenance.ServerDeps interface on *Server, giving
 // the maintenance plugin access to server internals without creating an import
@@ -33,6 +33,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/childop"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	maintenanceplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance"
+	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/sweep"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
@@ -142,6 +143,9 @@ func (s *Server) DedupVerdictReader() maintenanceplugin.DedupVerdictReader {
 // BookTagReader hands the duplicate-copies fixer a book's tags. Both methods
 // are part of database.Store.
 func (s *Server) BookTagReader() maintenanceplugin.BookTagReader { return s.store }
+
+// BookTagWriter hands the tag-franchise fixer's apply the store's tag writes.
+func (s *Server) BookTagWriter() repairs.TagStore { return s.store }
 
 // ---- delegated run helpers ----
 
@@ -808,7 +812,7 @@ func (s *Server) ApplyTranscriptionCandidate(_ context.Context, bookID, gatedTit
 	if book.TranscribedTitle != nil {
 		transcribed = *book.TranscribedTitle
 	}
-	guard := applygate.BulkManualOnlyGuard(s.store, s.store, book, transcribed)
+	guard := applygate.BulkManualOnlyGuard(applygate.ManualOnlyReaders{Files: s.store, Series: s.store, Authors: s.store, Tags: s.store}, book, transcribed)
 	if reason, detail := applygate.ManualOnlyDetail(book, &cand,
 		applygate.TranscribedSearch{Query: transcribed}, guard); reason != "" {
 		return fmt.Errorf("book %s: %w: %s: %s", bookID, maintenanceplugin.ErrTranscriptionOwnerManualOnly, reason, detail)

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repairs_ops.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6f1a8d37-2e59-4b0c-8a74-3d9e5b1c7f82
-// last-edited: 2026-10-03
+// last-edited: 2026-10-04
 
 package maintenance
 
@@ -97,9 +97,7 @@ func (p *Plugin) runRepairsPlan(ctx context.Context, raw json.RawMessage, report
 		// path does not say so: fail rather than plan past it.
 		return fmt.Errorf("%s: list series: %w", repairs.PlanOpID, err)
 	}
-	res, err := repairs.RunPlan(ctx, f, params.Params, repairs.PlanDeps{
-		Guard: store, Series: repairs.SeriesNamesFrom(all),
-	}, reporter)
+	res, err := repairs.RunPlan(ctx, f, params.Params, p.repairsPlanDeps(store, all), reporter)
 	if err != nil {
 		return err
 	}
@@ -109,6 +107,21 @@ func (p *Plugin) runRepairsPlan(ctx context.Context, raw json.RawMessage, report
 	_ = reporter.UpdateProgress(res.Total, res.Total, fmt.Sprintf("PLANNED %s — rows=%d applicable=%d skipped=%v",
 		f.ID(), res.Total, res.Applicable, res.SkippedByKind))
 	return nil
+}
+
+// repairsGuardTags is the tag reader the framework guard reads franchise
+// tags through. A book tagged franchise:* is held even after its title or
+// path stops naming the library, so production must always pass one.
+func (p *Plugin) repairsGuardTags() repairs.GuardTagReader {
+	if tr := p.deps.BookTagReader(); tr != nil {
+		return tr
+	}
+	return nil
+}
+
+// repairsPlanDeps is the plan op's guard input.
+func (p *Plugin) repairsPlanDeps(store OpsStore, all []database.Series) repairs.PlanDeps {
+	return repairs.PlanDeps{Guard: store, Tags: p.repairsGuardTags(), Series: repairs.SeriesNamesFrom(all)}
 }
 
 func (p *Plugin) runRepairsApply(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) error {
@@ -150,7 +163,7 @@ func (p *Plugin) runRepairsApply(ctx context.Context, raw json.RawMessage, repor
 		return repairs.ErrNoHolderID
 	}
 	deps := repairs.ApplyDeps{
-		Guard: store, Series: repairs.SeriesNamesFrom(all),
+		Guard: store, Tags: p.repairsGuardTags(), Series: repairs.SeriesNamesFrom(all),
 		StandDown: p.deps, OpID: opID, Wait: p.standDownWait,
 		Resumed: params.Resume,
 	}
@@ -166,7 +179,10 @@ func (p *Plugin) runRepairsApply(ctx context.Context, raw json.RawMessage, repor
 			// The title repairs lock the fields they wrote so a forced
 			// rescan cannot restore the file tags' values; journaled, so
 			// the op revert lifts the lock.
-			WithFieldStates(store)
+			WithFieldStates(store).
+			// The tag-franchise fixer adds book_tag rows; journaled, so the
+			// op revert removes them.
+			WithTags(p.deps.BookTagWriter())
 		deps.Checkpoint = func(cp repairs.ApplyCheckpoint) error {
 			return reporter.Checkpoint(map[string]any{"resume": cp})
 		}

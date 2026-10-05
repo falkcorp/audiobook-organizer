@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.35.0
+// version: 1.36.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
-// last-edited: 2026-10-02
+// last-edited: 2026-10-04
 
 package maintenance
 
@@ -20,6 +20,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/childop"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -124,6 +125,9 @@ func (d fakeDeps) DedupVerdictReader() DedupVerdictReader { return d.labels }
 
 // BookTagReader hands back the store unchanged, as Server's does.
 func (d fakeDeps) BookTagReader() BookTagReader { return d.store }
+
+// BookTagWriter hands back the store unchanged, as Server's does.
+func (d fakeDeps) BookTagWriter() repairs.TagStore { return d.store }
 
 // VersionPrimaryStore hands back the store unchanged, as Server's does.
 func (d fakeDeps) VersionPrimaryStore() VersionPrimaryStore { return d.store }

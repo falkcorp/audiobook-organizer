@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.70.3
+// version: 1.71.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-10-04
 
@@ -19,6 +19,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/childop"
+	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -479,6 +480,9 @@ type keyspaceStoreProvider interface {
 	// BookTagReader serves the duplicate-copies fixer: a copy's user tags,
 	// which a retire would leave behind on the hidden book.
 	BookTagReader() BookTagReader
+	// BookTagWriter serves the tag-franchise fixer's apply (Writer.WithTags):
+	// it adds book_tag rows and nothing else. OpsStore is at the embed cap.
+	BookTagWriter() repairs.TagStore
 }
 
 // DedupVerdictReader reads the owner's dedup pair verdicts

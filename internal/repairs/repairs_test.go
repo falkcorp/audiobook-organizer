@@ -388,10 +388,10 @@ func TestGuardBooks_OwnerManualByTitle(t *testing.T) {
 	s := newMemStore()
 	s.add("dw", "Doctor Who: Placebo Effect", "/lib/bbc/pe", nil)
 	s.add("ok", "Placebo Effect", "/lib/bbc/pe2", nil)
-	k, why, err := GuardBooks(s, nil, NewPathResolver(), []string{"dw"})
+	k, why, err := GuardBooks(s, nil, nil, NewPathResolver(), []string{"dw"})
 	require.NoError(t, err)
 	require.Equal(t, SkipOwnerManual, k, why)
-	k, _, err = GuardBooks(s, nil, NewPathResolver(), []string{"ok"})
+	k, _, err = GuardBooks(s, nil, nil, NewPathResolver(), []string{"ok"})
 	require.NoError(t, err)
 	require.Empty(t, k)
 }
@@ -1280,7 +1280,7 @@ func TestGuardBooks_Credits(t *testing.T) {
 			s.bookNarrators = map[string][]database.BookNarrator{"b": {{BookID: "b", NarratorID: 7}}}
 		},
 	} {
-		k, why, err := GuardBooks(seedOne(mut), nil, NewPathResolver(), []string{"b"})
+		k, why, err := GuardBooks(seedOne(mut), nil, nil, NewPathResolver(), []string{"b"})
 		require.NoError(t, err, name)
 		require.Equal(t, SkipOwnerManual, k, "%s: %s", name, why)
 	}
@@ -1288,10 +1288,10 @@ func TestGuardBooks_Credits(t *testing.T) {
 		one := 1
 		b.AuthorID, b.Publisher, b.Narrator = &one, str("Audible Studios"), str("Michael Fenton Stevens")
 	})
-	k, why, err := GuardBooks(clean, nil, NewPathResolver(), []string{"b"})
+	k, why, err := GuardBooks(clean, nil, nil, NewPathResolver(), []string{"b"})
 	require.NoError(t, err)
 	require.Empty(t, k, why)
 	broken := seedOne(func(s *memStore, b *database.Book) { one := 1; b.AuthorID = &one; s.authorErr = errors.New("boom") })
-	_, _, err = GuardBooks(broken, nil, NewPathResolver(), []string{"b"})
+	_, _, err = GuardBooks(broken, nil, nil, NewPathResolver(), []string{"b"})
 	require.Error(t, err, "an unreadable author never clears the book")
 }
