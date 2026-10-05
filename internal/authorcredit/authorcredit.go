@@ -1,7 +1,7 @@
 // file: internal/authorcredit/authorcredit.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 7000d1fc-e16c-47e1-bb94-6180fe3ec1de
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 // Package authorcredit turns one author credit string ("J.N. Chaney, Jonathan
 // P. Brazee") into the author rows a book should be credited to, in order.
@@ -31,11 +31,15 @@
 //   - a part whose name is also a book title or series name in the library
 //     ("Dragon Born, Dante King", "Mistborn, Brandon Sanderson") is linked
 //     ONLY on non-name evidence that it is a person (PersonEvidence: the
-//     author is credited on a book outside the series named after it, or a
-//     metadata provider credited exactly that name to the book); otherwise
-//     it is dropped with a logged reason and the other parts are linked. A
-//     title-named part is never the first credit (the primary) unless it is
-//     the only one (owner decision 2026-10-04, "usage check + never first");
+//     author is credited on a book in a DIFFERENT named series, a metadata
+//     provider credited exactly that name to the book, or the authority
+//     lists know the name as an author); otherwise it is dropped with a
+//     logged reason and the other parts are linked. A title-named part is
+//     never the first credit (the primary) unless it is the only one or its
+//     evidence is STRONG: the authority lists hold it as an author from the
+//     owner's own library (tier O) or with an Audible contributor ASIN
+//     (owner decisions 2026-10-04 "usage check + never first" and
+//     2026-10-05 "strong evidence may go first");
 //   - and EVERY other part must already be an author record (by name, or by
 //     alias when the store has aliases). Then those authors are credited in
 //     order.
@@ -67,6 +71,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/falkcorp/audiobook-organizer/internal/authority"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/personname"
@@ -659,24 +664,90 @@ type PersonQuery struct {
 	BookID string
 }
 
+// EvidenceStrength is how much a piece of person evidence proves (owner
+// decision 2026-10-05). Weak evidence links a title-named part but never as
+// the primary; strong evidence may make it the primary.
+type EvidenceStrength int
+
+const (
+	// EvidenceNone: the source has no evidence.
+	EvidenceNone EvidenceStrength = iota
+	// EvidenceWeak: an outside-series credit, a provider credit of the exact
+	// name, or an authority-list author entry below tier O / A.
+	EvidenceWeak
+	// EvidenceStrong: the authority lists hold the name as an author from the
+	// owner's own library (tier O) or with an Audible contributor ASIN.
+	EvidenceStrong
+)
+
+// String names the strength for logs.
+func (s EvidenceStrength) String() string {
+	switch s {
+	case EvidenceWeak:
+		return "weak"
+	case EvidenceStrong:
+		return "strong"
+	}
+	return "none"
+}
+
+// Evidence is one PersonEvidence answer.
+type Evidence struct {
+	Strength EvidenceStrength
+	// Detail describes the evidence for logs and reports.
+	Detail string
+}
+
 // PersonEvidence is a source of non-name evidence that a credit part named
 // like a book or series is a person (owner decision 2026-10-04, "usage check
 // + never first"). The name alone proves nothing: "Dragon Born" and
 // "Mistborn" are author records too, minted from junk credits.
 //
-// splitExisting asks the built-in sources (outsideSeriesEvidence,
-// providerCreditEvidence) and, when the store offers it (resolved through
-// decorators with database.AsCapability), the store itself. That is the seam
-// for a further source, such as a master list of authors, narrators,
-// publishers and series built from the provider metadata cache and the
-// owner's Audible library: it plugs in as a store capability without
+// splitExisting asks the built-in sources (authorityEvidence,
+// outsideSeriesEvidence, providerCreditEvidence) and, when the store offers
+// it (resolved through decorators with database.AsCapability), the store
+// itself, so a further source plugs in as a store capability without
 // changing any caller.
 type PersonEvidence interface {
-	// PersonEvidence describes the evidence that q's part is a person, or
-	// returns "" when this source has none. An error means the source could
-	// not be read; unless another source has evidence, the part is then not
-	// linked (fail closed).
-	PersonEvidence(q PersonQuery) (string, error)
+	// PersonEvidence returns the evidence that q's part is a person, or an
+	// Evidence with Strength EvidenceNone when this source has none. An
+	// error means the source could not be read; unless another source has
+	// evidence, the part is then not linked (fail closed).
+	PersonEvidence(q PersonQuery) (Evidence, error)
+}
+
+// AuthoritySource is the store capability that hands authorcredit the
+// authority lists (internal/authority). The server's store decorator offers
+// it and answers authority.Empty() while authority_evidence_enabled is off or
+// no snapshot is loaded, so production behaviour changes only with the flag
+// on. It must not read the store per call: it returns an in-memory Snapshot.
+type AuthoritySource interface {
+	AuthorityLookup() authority.Lookup
+}
+
+// authorityEvidence is evidence from the authority lists. Strong when the
+// name qualifies as an author (Entry.Qualifies: an owner override blocking
+// the role, or cast_author-only credits, never count) AND that author role
+// was observed at tier O (owner library or override) or tier A, or the
+// person carries contributor ASINs (Lookup.AuthorASINs). The role's own
+// tiers are read, never Entry.Tier: that is the best tier over every role,
+// so a narrator seen at tier O who is an author only at tier B would read as
+// strong. An author entry that qualifies on tier B alone is weak.
+type authorityEvidence struct{ lookup authority.Lookup }
+
+func (e authorityEvidence) PersonEvidence(q PersonQuery) (Evidence, error) {
+	if !e.lookup.IsKnownPerson(q.Name, authority.RoleAuthor) {
+		return Evidence{}, nil
+	}
+	st := e.lookup.Person(q.Name).Roles[authority.RoleAuthor]
+	asins := e.lookup.AuthorASINs(q.Name)
+	switch {
+	case st.ByTier[authority.TierO] > 0:
+		return Evidence{Strength: EvidenceStrong, Detail: fmt.Sprintf("the authority lists hold %q as an author from the owner's library (tier O)", q.Name)}, nil
+	case st.ByTier[authority.TierA] > 0 || len(asins) > 0:
+		return Evidence{Strength: EvidenceStrong, Detail: fmt.Sprintf("the authority lists hold %q as an author with a contributor ASIN", q.Name)}, nil
+	}
+	return Evidence{Strength: EvidenceWeak, Detail: fmt.Sprintf("the authority lists hold %q as an author (no tier O / A credit)", q.Name)}, nil
 }
 
 // authorBooksSource is the by-author book listing the outside-series
@@ -686,32 +757,36 @@ type authorBooksSource interface {
 	GetBooksByAuthorIDWithRoleCore(authorID int) ([]database.BookCore, error)
 }
 
-// outsideSeriesEvidence is evidence (a): the author is credited on a book
-// that is not in the series named like the part and is not titled like it,
-// other than the book being credited (a credit is not evidence for itself).
-// A book with no series counts as outside.
+// outsideSeriesEvidence is evidence (a), weak: the author is credited on a
+// book whose series is a DIFFERENT named series than the one named like the
+// part, the book is not titled like the part, and it is not the book being
+// credited (a credit is not evidence for itself). A book with no series, or
+// whose series has no name in the index, is NOT evidence (owner decision
+// 2026-10-05): a junk record left on books whose series was never set would
+// otherwise link.
 type outsideSeriesEvidence struct {
 	books  authorBooksSource
 	series map[int]string // series ID -> name letters key (titleIndex)
 }
 
-func (e outsideSeriesEvidence) PersonEvidence(q PersonQuery) (string, error) {
+func (e outsideSeriesEvidence) PersonEvidence(q PersonQuery) (Evidence, error) {
 	books, err := e.books.GetBooksByAuthorIDWithRoleCore(q.Author.ID)
 	if err != nil {
-		return "", fmt.Errorf("list the books of author %d: %w", q.Author.ID, err)
+		return Evidence{}, fmt.Errorf("list the books of author %d: %w", q.Author.ID, err)
 	}
 	k := LettersKey(q.Name)
 	for i := range books {
 		b := &books[i]
-		if b.ID == q.BookID || b.IsSoftDeleted() || LettersKey(b.Title) == k {
+		if b.ID == q.BookID || b.IsSoftDeleted() || LettersKey(b.Title) == k || b.SeriesID == nil {
 			continue
 		}
-		if b.SeriesID != nil && e.series[*b.SeriesID] == k {
+		if sk := e.series[*b.SeriesID]; sk == "" || sk == k {
 			continue
 		}
-		return fmt.Sprintf("credited on book %s, outside the series named %q", b.ID, q.Name), nil
+		return Evidence{Strength: EvidenceWeak,
+			Detail: fmt.Sprintf("credited on book %s, in a different series than the one named %q", b.ID, q.Name)}, nil
 	}
-	return "", nil
+	return Evidence{}, nil
 }
 
 // HistorySource is the metadata change history a provider credit is read
@@ -757,23 +832,35 @@ func ProviderCredited(store any, bookID, name string) (string, error) {
 	return "", nil
 }
 
-// providerCreditEvidence is evidence (b): a metadata provider credited
+// providerCreditEvidence is evidence (b), weak: a metadata provider credited
 // exactly the part's name to the book (ProviderCredited). A credit for a book
 // not stored yet has no history.
 type providerCreditEvidence struct{ store any }
 
-func (e providerCreditEvidence) PersonEvidence(q PersonQuery) (string, error) {
+func (e providerCreditEvidence) PersonEvidence(q PersonQuery) (Evidence, error) {
 	src, err := ProviderCredited(e.store, q.BookID, q.Name)
 	if err != nil || src == "" {
-		return "", err
+		return Evidence{}, err
 	}
-	return fmt.Sprintf("metadata provider %s credited %q to this book", src, q.Name), nil
+	return Evidence{Strength: EvidenceWeak, Detail: fmt.Sprintf("metadata provider %s credited %q to this book", src, q.Name)}, nil
+}
+
+// authorityOf returns the authority lists the store offers, or
+// authority.Empty() when it offers none (or a nil one).
+func authorityOf(store Store) authority.Lookup {
+	if as, ok := database.AsCapability[AuthoritySource](store); ok {
+		if l := as.AuthorityLookup(); l != nil {
+			return l
+		}
+	}
+	return authority.Empty()
 }
 
 // evidenceSources returns the PersonEvidence sources for store: the
-// built-in ones it can serve, then the store's own when it has one.
+// authority lists first (an in-memory read, and the only strong source),
+// then the built-in ones it can serve, then the store's own when it has one.
 func evidenceSources(store Store, ti *titleIndex) []PersonEvidence {
-	var out []PersonEvidence
+	out := []PersonEvidence{authorityEvidence{lookup: authorityOf(store)}}
 	if bs, ok := database.AsCapability[authorBooksSource](store); ok {
 		out = append(out, outsideSeriesEvidence{books: bs, series: ti.seriesKey})
 	}
@@ -784,9 +871,11 @@ func evidenceSources(store Store, ti *titleIndex) []PersonEvidence {
 	return out
 }
 
-// personEvidence asks every source about q and returns the first evidence
-// found, or "" and the reason the part is not linked.
-func personEvidence(sources []PersonEvidence, q PersonQuery) (evidence, why string) {
+// personEvidence asks the sources about q and returns the strongest evidence
+// found: it stops at the first strong answer, so a weak outside-series hit
+// never hides a strong authority hit. With no evidence it returns the reason
+// the part is not linked.
+func personEvidence(sources []PersonEvidence, q PersonQuery) (best Evidence, why string) {
 	var errs []string
 	for _, src := range sources {
 		ev, err := src.PersonEvidence(q)
@@ -794,16 +883,22 @@ func personEvidence(sources []PersonEvidence, q PersonQuery) (evidence, why stri
 			errs = append(errs, err.Error())
 			continue
 		}
-		if ev != "" {
-			return ev, ""
+		if ev.Strength > best.Strength {
+			best = ev
+		}
+		if best.Strength == EvidenceStrong {
+			break
 		}
 	}
+	if best.Strength > EvidenceNone {
+		return best, ""
+	}
 	why = "it is a book or series title in the library and nothing shows it is a person " +
-		"(no book outside that series, no provider credit of that name)"
+		"(no book in a different named series, no provider credit of that name, no authority-list author entry)"
 	if len(errs) > 0 {
 		why += "; evidence could not be read: " + strings.Join(errs, "; ")
 	}
-	return "", why
+	return Evidence{}, why
 }
 
 // droppedPart is a credit part splitExisting did not link, and why.
@@ -820,7 +915,10 @@ type droppedPart struct {
 // A part whose name is a book title or series name in the library is linked
 // only on PersonEvidence; without it the part is dropped (returned in
 // dropped) and the other parts are the credit, even a single one. A
-// title-named part is never first unless every linked part is title-named.
+// title-named part with only weak evidence is never first unless every
+// linked part is such a part; one with strong evidence keeps its credit
+// position, first included (strong evidence permits first, it does not
+// promote).
 // The title index is read once per resolve (cached, built outside locks) and
 // the evidence costs one lookup per title-named part. A title index read
 // error is returned (the caller takes the whole-string path); an evidence
@@ -849,7 +947,9 @@ func splitExisting(store Store, bookID, name string, gate Gate) (authors []datab
 	}
 	type linked struct {
 		author database.Author
-		title  bool
+		// demote: a title-named part without strong evidence, never first
+		// while a part without that flag is linked.
+		demote bool
 	}
 	out := make([]linked, 0, len(parts))
 	seen := map[int]bool{}
@@ -867,28 +967,31 @@ func splitExisting(store Store, bookID, name string, gate Gate) (authors []datab
 			}
 			return nil, nil, nil // a new author would be needed: never at import
 		}
+		demote := false
 		if title {
 			if sources == nil {
 				sources = evidenceSources(store, ti)
 			}
-			if _, why := personEvidence(sources, PersonQuery{Name: p, Author: *a, BookID: bookID}); why != "" {
+			ev, why := personEvidence(sources, PersonQuery{Name: p, Author: *a, BookID: bookID})
+			if why != "" {
 				dropped = append(dropped, droppedPart{Name: p, Reason: why})
 				continue
 			}
+			demote = ev.Strength < EvidenceStrong
 		}
 		if !seen[a.ID] {
 			seen[a.ID] = true
-			out = append(out, linked{author: *a, title: title})
+			out = append(out, linked{author: *a, demote: demote})
 		}
 	}
 	if len(out) == 0 || (len(dropped) == 0 && len(out) < 2) {
 		return nil, dropped, nil
 	}
-	// Never first: the first part that is not title-named becomes the
-	// primary; the others keep their credit order.
-	if out[0].title {
+	// Never first on weak evidence: the first part that is not demoted
+	// becomes the primary; the others keep their credit order.
+	if out[0].demote {
 		for i := 1; i < len(out); i++ {
-			if !out[i].title {
+			if !out[i].demote {
 				first := out[i]
 				copy(out[1:i+1], out[:i])
 				out[0] = first
@@ -914,8 +1017,8 @@ func splitExisting(store Store, bookID, name string, gate Gate) (authors []datab
 //     them instead of the combined row);
 //  2. a split, only into existing authors (splitExisting); a part named
 //     like a book or series is linked only on PersonEvidence and never
-//     first, and when such a part is dropped the remaining authors are the
-//     credit even if only one is left;
+//     first unless that evidence is strong, and when such a part is dropped
+//     the remaining authors are the credit even if only one is left;
 //  3. every piece the same author (a doubled name, a pen name and its
 //     alias): that author;
 //  4. every piece a different existing author: ErrCombinedCredit, never
@@ -972,8 +1075,10 @@ func resolve(store Store, bookID, name string, gate Gate, create bool) ([]databa
 	if serr != nil {
 		split, dropped = nil, nil // fail open: the whole-string path
 	}
+	// Debug, not Info: every rescan resolves the same credits and would
+	// repeat the line. There is no batch resolve API to summarize at Info.
 	for _, d := range dropped {
-		logger.New("authorcredit").Info("not crediting %q from the credit %q: %s",
+		logger.New("authorcredit").Debug("not crediting %q from the credit %q: %s",
 			logger.SanitizeLogValue(d.Name), logger.SanitizeLogValue(name), logger.SanitizeLogValue(d.Reason))
 	}
 	// A dropped title-named part decides the split even when one author is

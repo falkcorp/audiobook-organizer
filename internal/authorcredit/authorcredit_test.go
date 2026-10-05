@@ -1,16 +1,20 @@
 // file: internal/authorcredit/authorcredit_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 4a5f7bee-3d1d-427b-bc5f-baaa4b6fb584
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 package authorcredit
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/falkcorp/audiobook-organizer/internal/authority"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/personname"
 )
@@ -474,11 +478,15 @@ func TestResolve_ExistingAuthorsLinkedDespiteTitleOrCount(t *testing.T) {
 	got, err := Resolve(st, "Michael Anderle, Craig Martelle", PrepareGate)
 	require.NoError(t, err)
 	require.Equal(t, []string{"Craig Martelle"}, names(got), "no book outside the series: dropped")
-	_, err = st.CreateBook(&database.Book{Title: "Death Becomes Her", FilePath: "/l/dbh.m4b", Format: "m4b", AuthorID: &ma.ID})
+	kg, err := st.CreateSeries("The Kurtherian Gambit", nil)
 	require.NoError(t, err)
+	_, err = st.CreateBook(&database.Book{Title: "Death Becomes Her", FilePath: "/l/dbh.m4b", Format: "m4b", AuthorID: &ma.ID,
+		SeriesID: &kg.ID})
+	require.NoError(t, err)
+	ResetTitleCache()
 	got, err = Resolve(st, "Michael Anderle, Craig Martelle", PrepareGate)
 	require.NoError(t, err)
-	require.Equal(t, []string{"Craig Martelle", "Michael Anderle"}, names(got), "a book outside the series: linked, not first")
+	require.Equal(t, []string{"Craig Martelle", "Michael Anderle"}, names(got), "a book in a different series: linked, not first")
 	got, err = Resolve(st, "Amy Adams, Ben Brown, Cat Cole, Dan Dorn", PrepareGate)
 	require.NoError(t, err)
 	require.Equal(t, []string{"Amy Adams", "Ben Brown", "Cat Cole", "Dan Dorn"}, names(got))
@@ -600,12 +608,19 @@ type authorityStore struct {
 	people map[string]bool
 }
 
-func (s authorityStore) PersonEvidence(q PersonQuery) (string, error) {
+func (s authorityStore) PersonEvidence(q PersonQuery) (Evidence, error) {
 	if s.people[LettersKey(q.Name)] {
-		return "on the authority list", nil
+		return Evidence{Strength: EvidenceWeak, Detail: "on the list"}, nil
 	}
-	return "", nil
+	return Evidence{}, nil
 }
+
+var (
+	_ PersonEvidence = authorityStore{}
+	_ PersonEvidence = authorityEvidence{}
+	_ PersonEvidence = outsideSeriesEvidence{}
+	_ PersonEvidence = providerCreditEvidence{}
+)
 
 func TestResolve_StorePersonEvidenceSeam(t *testing.T) {
 	st := titleStore(t, []string{"Alexander Freed", "Alphabet Squadron"}, "Alphabet Squadron")
@@ -629,9 +644,16 @@ func TestResolve_EvidenceReadErrorDropsOnlyThePart(t *testing.T) {
 	st := titleStore(t, []string{"Michael Anderle", "Craig Martelle"}, "Michael Anderle")
 	ma, err := st.GetAuthorByName("Michael Anderle")
 	require.NoError(t, err)
-	_, err = st.CreateBook(&database.Book{Title: "Death Becomes Her", FilePath: "/l/kg/1.m4b", Format: "m4b", AuthorID: &ma.ID})
+	kg, err := st.CreateSeries("The Kurtherian Gambit", nil)
 	require.NoError(t, err)
-	got, err := Resolve(failingBooksStore{st}, "Michael Anderle, Craig Martelle", PrepareGate)
+	_, err = st.CreateBook(&database.Book{Title: "Death Becomes Her", FilePath: "/l/kg/1.m4b", Format: "m4b", AuthorID: &ma.ID,
+		SeriesID: &kg.ID})
+	require.NoError(t, err)
+	ResetTitleCache()
+	got, err := Resolve(st, "Michael Anderle, Craig Martelle", PrepareGate)
+	require.NoError(t, err)
+	require.Equal(t, []string{"Craig Martelle", "Michael Anderle"}, names(got), "the listing works: linked")
+	got, err = Resolve(failingBooksStore{st}, "Michael Anderle, Craig Martelle", PrepareGate)
 	require.NoError(t, err)
 	require.Equal(t, []string{"Craig Martelle"}, names(got))
 	_, dropped, err := splitExisting(failingBooksStore{st}, "", "Michael Anderle, Craig Martelle", PrepareGate)
@@ -640,11 +662,10 @@ func TestResolve_EvidenceReadErrorDropsOnlyThePart(t *testing.T) {
 	require.Contains(t, dropped[0].Reason, "listing down")
 }
 
-// Rule (a) is literal: a book with no series counts as outside the series
-// named like the part, so a junk record credited on a book whose series was
-// never set links, never first. Pinned so the behaviour is deliberate
-// (AUTHORCREDIT-SERIESLESS-EVIDENCE asks the owner whether to tighten it).
-func TestResolve_SeriesLessBookCountsAsOutsideSeries(t *testing.T) {
+// Owner decision 2026-10-05: a book with NO series is not outside-series
+// evidence. A junk "Dragon Born" record credited on a book whose series was
+// never set is dropped; only a book in a different NAMED series links it.
+func TestResolve_SeriesLessBookIsNotEvidence(t *testing.T) {
 	st := titleStore(t, []string{"Dante King", "Dragon Born"}, "Dragon Born")
 	db, err := st.GetAuthorByName("Dragon Born")
 	require.NoError(t, err)
@@ -652,5 +673,131 @@ func TestResolve_SeriesLessBookCountsAsOutsideSeries(t *testing.T) {
 	require.NoError(t, err)
 	got, err := Resolve(st, "Dragon Born, Dante King", PrepareGate)
 	require.NoError(t, err)
-	require.Equal(t, []string{"Dante King", "Dragon Born"}, names(got))
+	require.Equal(t, []string{"Dante King"}, names(got), "a series-less book is not evidence")
+	other, err := st.CreateSeries("Other Saga", nil)
+	require.NoError(t, err)
+	_, err = st.CreateBook(&database.Book{Title: "Other Saga 1", FilePath: "/l/os.m4b", Format: "m4b", AuthorID: &db.ID,
+		SeriesID: &other.ID})
+	require.NoError(t, err)
+	ResetTitleCache()
+	got, err = Resolve(st, "Dragon Born, Dante King", PrepareGate)
+	require.NoError(t, err)
+	require.Equal(t, []string{"Dante King", "Dragon Born"}, names(got), "a different named series: linked, never first")
+}
+
+// authorityLookupStore offers authority lists through the AuthoritySource
+// store capability, the seam the server's store decorator implements.
+type authorityLookupStore struct {
+	*database.PebbleStore
+	lookup authority.Lookup
+}
+
+func (s authorityLookupStore) AuthorityLookup() authority.Lookup { return s.lookup }
+
+var _ AuthoritySource = authorityLookupStore{}
+
+// putPerson writes a ref_person: row (the rebuilt authority entry).
+func putPerson(t *testing.T, st *database.PebbleStore, p authority.Person) {
+	t.Helper()
+	p.Fold = authority.Fold(p.Display)
+	p.FirstSeen, p.LastSeen = time.Now(), time.Now()
+	raw, err := json.Marshal(p)
+	require.NoError(t, err)
+	require.NoError(t, st.SetRaw(authority.PersonKey(p.Display), raw))
+}
+
+// snapshot loads the store's authority lists, the way production does.
+func snapshot(t *testing.T, st *database.PebbleStore) authority.Lookup {
+	t.Helper()
+	snap, err := authority.LoadSnapshot(context.Background(), st)
+	require.NoError(t, err)
+	return snap
+}
+
+func authorStat(tier authority.Tier, n int) authority.RoleStat {
+	return authority.RoleStat{Count: n, Tier: tier, ByTier: map[authority.Tier]int{tier: n}}
+}
+
+// Owner decision 2026-10-05, "strong evidence may go first": Michael Anderle
+// is also a (junk) series name. With the authority lists holding him as an
+// author from the owner's library (tier O) he links even with no other
+// evidence and keeps his credit position, first included. Strong evidence
+// permits first; it does not promote ("Craig Martelle, Michael Anderle"
+// stays Martelle first). Without the lists (authority.Empty(), the flag-off
+// answer) the weak outside-series credit links him, never first.
+func TestResolve_StrongAuthorityEvidenceMayGoFirst(t *testing.T) {
+	st := titleStore(t, []string{"Michael Anderle", "Craig Martelle"}, "Michael Anderle")
+	t.Cleanup(ResetTitleCache)
+	require.NoError(t, authority.PutPersonOverride(st, authority.PersonOverride{Name: "Michael Anderle",
+		Roles: map[authority.Role]bool{authority.RoleAuthor: true}, SetAt: time.Now()}))
+	listed := authorityLookupStore{PebbleStore: st, lookup: snapshot(t, st)}
+	for credit, want := range map[string][]string{
+		"Michael Anderle, Craig Martelle": {"Michael Anderle", "Craig Martelle"},
+		"Craig Martelle, Michael Anderle": {"Craig Martelle", "Michael Anderle"},
+	} {
+		got, err := Resolve(listed, credit, PrepareGate)
+		require.NoError(t, err, credit)
+		require.Equal(t, want, names(got), "tier O, no outside book: "+credit)
+	}
+	// Flag off: no evidence at all without an outside book.
+	off := authorityLookupStore{PebbleStore: st, lookup: authority.Empty()}
+	got, err := Resolve(off, "Michael Anderle, Craig Martelle", PrepareGate)
+	require.NoError(t, err)
+	require.Equal(t, []string{"Craig Martelle"}, names(got), "flag off, no outside book: dropped")
+	// Weak outside-series evidence links him, never first; the strong
+	// authority hit still wins over it when both are present.
+	ma, err := st.GetAuthorByName("Michael Anderle")
+	require.NoError(t, err)
+	kg, err := st.CreateSeries("The Kurtherian Gambit", nil)
+	require.NoError(t, err)
+	_, err = st.CreateBook(&database.Book{Title: "Death Becomes Her", FilePath: "/l/kg/1.m4b", Format: "m4b",
+		AuthorID: &ma.ID, SeriesID: &kg.ID})
+	require.NoError(t, err)
+	ResetTitleCache()
+	got, err = Resolve(off, "Michael Anderle, Craig Martelle", PrepareGate)
+	require.NoError(t, err)
+	require.Equal(t, []string{"Craig Martelle", "Michael Anderle"}, names(got), "flag off, weak evidence: Martelle first")
+	got, err = Resolve(st, "Michael Anderle, Craig Martelle", PrepareGate)
+	require.NoError(t, err)
+	require.Equal(t, []string{"Craig Martelle", "Michael Anderle"}, names(got), "a store with no AuthoritySource: Martelle first")
+	got, err = Resolve(listed, "Michael Anderle, Craig Martelle", PrepareGate)
+	require.NoError(t, err)
+	require.Equal(t, []string{"Michael Anderle", "Craig Martelle"}, names(got), "strong beats weak: Anderle first")
+}
+
+// Strength comes from the AUTHOR role's own tiers and the contributor ASINs:
+//   - tier A (a structured credit with an ASIN): strong;
+//   - a narrator seen at tier O who is an author only at tier B: weak (the
+//     entry's best tier, O, is from another role);
+//   - cast_author only, or an author role an owner override blocked: no
+//     evidence at all;
+//   - Dragon Born on weak evidence is never first.
+func TestResolve_AuthorityEvidenceStrength(t *testing.T) {
+	st := titleStore(t, []string{"Dante King", "Dragon Born", "Alexander Freed", "Alphabet Squadron", "Rogue One",
+		"Jane Doe", "Star Cast"}, "Dragon Born", "Alphabet Squadron", "Rogue One", "Star Cast")
+	t.Cleanup(ResetTitleCache)
+	putPerson(t, st, authority.Person{Display: "Alphabet Squadron", ASINs: []string{"B000TEST01"},
+		Roles: map[authority.Role]authority.RoleStat{authority.RoleAuthor: authorStat(authority.TierA, 1)}})
+	putPerson(t, st, authority.Person{Display: "Dragon Born",
+		Roles: map[authority.Role]authority.RoleStat{
+			authority.RoleNarrator: authorStat(authority.TierO, 1),
+			authority.RoleAuthor:   authorStat(authority.TierB, 2),
+		}})
+	putPerson(t, st, authority.Person{Display: "Star Cast",
+		Roles: map[authority.Role]authority.RoleStat{authority.RoleCastAuthor: authorStat(authority.TierO, 3)}})
+	putPerson(t, st, authority.Person{Display: "Rogue One", ASINs: []string{"B000TEST02"},
+		Roles: map[authority.Role]authority.RoleStat{authority.RoleAuthor: authorStat(authority.TierA, 1)}})
+	require.NoError(t, authority.PutPersonOverride(st, authority.PersonOverride{Name: "Rogue One",
+		Roles: map[authority.Role]bool{authority.RoleAuthor: false}, SetAt: time.Now()}))
+	listed := authorityLookupStore{PebbleStore: st, lookup: snapshot(t, st)}
+	for credit, want := range map[string][]string{
+		"Alphabet Squadron, Alexander Freed": {"Alphabet Squadron", "Alexander Freed"},
+		"Dragon Born, Dante King":            {"Dante King", "Dragon Born"},
+		"Star Cast, Jane Doe":                {"Jane Doe"},
+		"Rogue One, Jane Doe":                {"Jane Doe"},
+	} {
+		got, err := Resolve(listed, credit, PrepareGate)
+		require.NoError(t, err, credit)
+		require.Equal(t, want, names(got), credit)
+	}
 }
