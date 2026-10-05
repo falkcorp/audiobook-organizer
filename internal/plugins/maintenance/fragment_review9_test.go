@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_review9_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 3bc1296c-6b8c-481b-b190-a196671cd4a8
 // last-edited: 2026-10-04
 
@@ -40,6 +40,17 @@ func fragSweepStride(fine, sampled int) int {
 		return fine
 	}
 	return sampled
+}
+
+// fragOrgs are the organized states (none, all, copies) a numbered-copies
+// test runs: all three under fragSweepFull, otherwise only the k-th (mod 3),
+// so the sampled tests between them still cover every state.
+func fragOrgs(k int) []string {
+	all := []string{"none", "all", "copies"}
+	if fragSweepFull() {
+		return all
+	}
+	return all[k%3 : k%3+1]
 }
 
 // fragSweepStart staggers sampled sweeps: shape i starts at a different
