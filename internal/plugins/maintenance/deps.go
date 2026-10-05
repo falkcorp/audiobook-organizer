@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.71.0
+// version: 1.72.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -483,6 +483,44 @@ type keyspaceStoreProvider interface {
 	// BookTagWriter serves the tag-franchise fixer's apply (Writer.WithTags):
 	// it adds book_tag rows and nothing else. OpsStore is at the embed cap.
 	BookTagWriter() repairs.TagStore
+	// UserReadStateStore serves the Audible read-status fixer: the target
+	// user's row, their listening state and positions, and the timestamped
+	// position write (Writer.WithUserState). Returns nil when no layer of the
+	// store can write a position with its own timestamp; the fixer then
+	// refuses to plan. Build it with NewUserReadStateStore.
+	UserReadStateStore() UserReadStateStore
+}
+
+// UserReadStateStore is what the Audible read-status fixer reads and writes:
+// the target user's row and their listening state on a book.
+type UserReadStateStore interface {
+	GetUserByID(id string) (*database.User, error)
+	repairs.UserStateStore
+}
+
+// userReadState joins the store's user and state methods (all on
+// database.Store, so the production decorator forwards them) with the
+// timestamped position write, which is a capability.
+type userReadState struct {
+	database.UserReader
+	database.UserPositionStore
+	database.UserPositionTimestampWriter
+}
+
+// NewUserReadStateStore builds the UserReadStateStore over s, resolving
+// SetUserPositionAt with database.AsCapability (it is not on database.Store,
+// and a bare assertion misses it behind the production decorator; user
+// state is not search-indexed, so reaching past the decorator skips
+// nothing it does). nil when s is nil or no layer of it has the capability.
+func NewUserReadStateStore(s database.Store) UserReadStateStore {
+	if s == nil {
+		return nil
+	}
+	at, ok := database.AsCapability[database.UserPositionTimestampWriter](s)
+	if !ok {
+		return nil
+	}
+	return userReadState{UserReader: s, UserPositionStore: s, UserPositionTimestampWriter: at}
 }
 
 // DedupVerdictReader reads the owner's dedup pair verdicts

@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert.go
-// version: 1.57.0
+// version: 1.58.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 package audiobooks
 
@@ -668,6 +668,8 @@ func (rs *RevertService) revertChangeIn(c *database.OperationChange, plan *undo.
 		return rs.revertFieldLock(c)
 	case undo.ChangeTypeBookTagAdd:
 		return rs.revertBookTagAdd(c)
+	case undo.ChangeTypeUserBookStateSet:
+		return rs.revertUserBookStateSet(c)
 	case "organize_failed", "organize_skipped", "organize_summary",
 		undo.ChangeTypeRepairPlanRecord:
 		// No filesystem or DB mutation recorded; nothing to reverse.
@@ -764,6 +766,77 @@ func (rs *RevertService) revertBookTagAdd(c *database.OperationChange) error {
 	}
 	if err := rs.db.RemoveBookTag(c.BookID, c.FieldName); err != nil {
 		return fmt.Errorf("remove tag %q of %s: %w", c.FieldName, c.BookID, err)
+	}
+	return nil
+}
+
+// userStateRevertStore is what the revert of a user_book_state_set row
+// writes. SetUserPositionAt and DeleteUserBookState are not on
+// database.Store, so the surface is resolved with database.AsCapability
+// (user state is not search-indexed, so reaching past the production
+// decorator skips nothing it does).
+type userStateRevertStore interface {
+	undo.UserStateReader
+	SetUserBookState(state *database.UserBookState) error
+	ClearUserPositions(userID, bookID string) error
+	database.UserPositionTimestampWriter
+	database.UserBookStateDeleter
+}
+
+// revertUserBookStateSet puts back one user's listening state on one book as
+// it was before a repair wrote it (the Audible read-status import), part by
+// part, while each part still holds exactly what the repair wrote
+// (undo.CheckUserBookStateSet). A later listen, mark or reset refuses the
+// whole row and writes nothing. A state row the repair created is deleted;
+// one it changed is written back whole (status, flags, stamps), and the
+// positions are replaced by the old ones with their own timestamps. Runs
+// under the merge lock, like the other user-state restores, so a merge
+// follow cannot move the rows between the check and the write. The book
+// itself need not exist: user state outlives it.
+func (rs *RevertService) revertUserBookStateSet(c *database.OperationChange) error {
+	user, ok := undo.UserFromStateField(c.FieldName)
+	if !ok {
+		return &undo.ReferentError{Reason: undo.ReasonOldValueUnparsable, Detail: fmt.Sprintf("no user in field %q", c.FieldName)}
+	}
+	old, err := undo.DecodeUserStateSnapshot(c.OldValue)
+	if err != nil {
+		return &undo.ReferentError{Reason: undo.ReasonOldValueUnparsable, Detail: err.Error()}
+	}
+	db, ok := database.AsCapability[userStateRevertStore](rs.db)
+	if !ok {
+		return fmt.Errorf("store cannot restore user listening state; %s on %s left as the import wrote it", user, c.BookID)
+	}
+	merge.LockMergeRMW()
+	defer merge.UnlockMergeRMW()
+	cur, err := undo.ReadUserStateSnapshot(db, user, c.BookID)
+	if err != nil {
+		return &undo.ReferentError{Reason: undo.ReasonFieldUnreadable, Detail: err.Error()}
+	}
+	parts, err := undo.CheckUserBookStateSet(cur, c)
+	if err != nil {
+		return err
+	}
+	if parts.Positions {
+		if err := db.ClearUserPositions(user, c.BookID); err != nil {
+			return fmt.Errorf("clear positions of %s on %s: %w", user, c.BookID, err)
+		}
+		for _, p := range old.Positions {
+			if err := db.SetUserPositionAt(user, c.BookID, p.SegmentID, p.PositionSeconds, p.UpdatedAt); err != nil {
+				return fmt.Errorf("restore position %s of %s on %s: %w", p.SegmentID, user, c.BookID, err)
+			}
+		}
+	}
+	if parts.State {
+		if old.State == nil {
+			if err := db.DeleteUserBookState(user, c.BookID); err != nil {
+				return fmt.Errorf("delete the listening state of %s on %s: %w", user, c.BookID, err)
+			}
+		} else {
+			st := *old.State
+			if err := db.SetUserBookState(&st); err != nil {
+				return fmt.Errorf("restore the listening state of %s on %s: %w", user, c.BookID, err)
+			}
+		}
 	}
 	return nil
 }

@@ -1,7 +1,7 @@
 // file: internal/undo/engine.go
-// version: 1.28.0
+// version: 1.29.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 //
 // Undo preflight. PreflightUndoConflicts predicts what POST
 // /operations/:id/revert (audiobooks.RevertService) will do with each change
@@ -312,6 +312,22 @@ func preflightRow(store ConflictChecker, c *database.OperationChange, stamps Sof
 			return rowVerdict{refusal: refuse(ReasonFieldUnreadable, "read tags of %s: %v", c.BookID, err)}
 		}
 		return verdictOf(CheckBookTagAdd(tags, c))
+	case ChangeTypeUserBookStateSet:
+		// The revert puts the user's state and positions back only while
+		// they still hold what the import wrote (CheckUserBookStateSet). It
+		// does not need the book. A store that cannot read user state gets
+		// no prediction; the revert still runs the compare-and-set.
+		r, ok := store.(UserStateReader)
+		if !ok {
+			return rowVerdict{}
+		}
+		user, _ := UserFromStateField(c.FieldName)
+		cur, err := ReadUserStateSnapshot(r, user, c.BookID)
+		if err != nil {
+			return rowVerdict{refusal: refuse(ReasonFieldUnreadable, "%v", err)}
+		}
+		_, cerr := CheckUserBookStateSet(cur, c)
+		return verdictOf(cerr)
 	case ChangeTypeRepairBookCreate:
 		// The revert soft-deletes the created book; one that is absent or
 		// already soft-deleted counts restored, one whose rows moved or that
