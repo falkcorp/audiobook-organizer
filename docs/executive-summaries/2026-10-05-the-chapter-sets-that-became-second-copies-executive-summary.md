@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-05-the-chapter-sets-that-became-second-copies-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 947b3d82-2669-4187-8065-4f7e76ee4cf8 -->
 <!-- last-edited: 2026-10-05 -->
 
@@ -29,8 +29,9 @@
 - **Shared files follow the owner's rule.** When another book also holds one
   of the chapter files, it is compared with the whole book being repaired: a
   different title or author blocks the repair, a same-titled book of the same
-  length takes the chapters, a same-titled book of a different length holds
-  the repair for review, and only an untitled stray lets it go ahead.
+  length is a second copy that must be deduplicated first, a same-titled book
+  of a different length holds the repair for review, and only an untitled
+  stray lets it go ahead.
 - **Not yet addressed.** The 13 duplicates already made that night are not
   touched by this change; undoing or merging them is a separate decision.
 

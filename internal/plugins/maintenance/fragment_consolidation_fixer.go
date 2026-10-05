@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.29.0
+// version: 1.29.1
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
 // last-edited: 2026-10-05
 
@@ -273,6 +273,11 @@ const (
 	// no-parent group names a work, so the library cannot be checked for an
 	// existing book of it; the group is held rather than assembled blind.
 	fragSkipNoTitleKey = "skipped_no_title_key"
+	// fragSkipCoOwnerDuplicate: a moved or copy row's same-titled co-owner
+	// whose total agrees with the parent's whole total is a second copy of
+	// the parent. The row is held until the two books are deduplicated,
+	// never joined into the copy (coordinator decision 2026-10-05).
+	fragSkipCoOwnerDuplicate = "skipped_co_owner_duplicate_copy"
 )
 
 // Evidence kinds of a fragment-to-parent match, strongest first.
@@ -5930,6 +5935,9 @@ func (f *fragmentFixer) holdCoOwned(lib *fragLibrary, rows []repairs.Row) {
 		// chips keep counting the row where the owner looks for it, and the
 		// skip kind says why it is held.
 		r.Risk, r.Skipped = repairs.RiskReview, fragSkipCoOwner
+		if v.skip != "" {
+			r.Skipped = v.skip
+		}
 		r.SkipReason = fmt.Sprintf("%d file(s) of this row are also owned by %d live book(s) outside it: %s; %s; decide which book keeps each file (merge or retire the other by hand), then plan again",
 			len(shared), len(ids), strings.Join(names, ", "), v.why)
 	}
@@ -5945,6 +5953,8 @@ const (
 type fragCoVerdict struct {
 	kind int
 	why  string
+	// skip is the hold's skip kind ("" is fragSkipCoOwner).
+	skip string
 }
 
 // rowWorkKeys are the title ids of the work a row folds into: a no-parent
@@ -6050,8 +6060,11 @@ func rowFragTotal(r *repairs.Row) (sec, unknown int) {
 //     "c5") contradicts nothing;
 //   - a co-owner by another author (fragAuthorsDiffer): hold;
 //   - a total unknown on either side: hold;
-//   - a same-titled co-owner: join into it when it is the only co-owner and
-//     its total agrees (fragDurationsAgree); with a total that disagrees, or
+//   - a same-titled co-owner: on a moved or copy row, one whose total agrees
+//     with the parent's is a second copy of the parent: hold
+//     (skipped_co_owner_duplicate_copy) until they are deduplicated. On a
+//     no-parent row, join into it when it is the only co-owner and its total
+//     agrees (fragDurationsAgree); with a total that disagrees, or
 //     beside other co-owners, hold (a second copy or edition the owner sorts
 //     out first, as existingBookCheck holds a separate same-titled book);
 //   - junk-titled co-owners only: when one's total agrees, hold (nothing
@@ -6068,50 +6081,56 @@ func (f *fragmentFixer) coOwnerVerdict(lib *fragLibrary, r *repairs.Row, ids []s
 			continue
 		}
 		if !fragIDsMatch(keys, tid) {
-			return fragCoVerdict{fragCoHold, fmt.Sprintf(
+			return fragCoVerdict{kind: fragCoHold, why: fmt.Sprintf(
 				"book %s's title %q is not (or cannot be shown to be) this row's work: a different work, not an edition of it, so the fragments are neither joined into it nor folded beside it", id, b.Title)}
 		}
 		titled = append(titled, id)
 	}
 	for _, id := range ids {
 		if a := lib.authorName(lib.books[id]); fragAuthorsDiffer(workAuthor, a) {
-			return fragCoVerdict{fragCoHold, fmt.Sprintf("co-owner %s is by %q, this row's work by %q: different authors", id, a, workAuthor)}
+			return fragCoVerdict{kind: fragCoHold, why: fmt.Sprintf("co-owner %s is by %q, this row's work by %q: different authors", id, a, workAuthor)}
 		}
 	}
 	sec, unknown, what := rowWorkTotal(lib, r)
 	if unknown > 0 || sec == 0 {
-		return fragCoVerdict{fragCoHold, fmt.Sprintf("%s has %d file(s) with no duration, so the co-owner(s) cannot be compared with it", what, unknown)}
+		return fragCoVerdict{kind: fragCoHold, why: fmt.Sprintf("%s has %d file(s) with no duration, so the co-owner(s) cannot be compared with it", what, unknown)}
 	}
 	var agree []string
 	for _, id := range ids {
 		total, unk, _ := lib.bookTotal(id)
 		if unk > 0 || total == 0 {
-			return fragCoVerdict{fragCoHold, fmt.Sprintf("co-owner %s has a file with no duration, so it cannot be compared with %s", id, what)}
+			return fragCoVerdict{kind: fragCoHold, why: fmt.Sprintf("co-owner %s has a file with no duration, so it cannot be compared with %s", id, what)}
 		}
 		if fragDurationsAgree(sec, total) {
 			agree = append(agree, id)
 		}
 	}
 	if len(titled) > 0 {
+		if parentID := rowParent(r); parentID != "" && len(ids) == 1 && len(agree) == 1 {
+			total, _, n := lib.bookTotal(ids[0])
+			return fragCoVerdict{kind: fragCoHold, skip: fragSkipCoOwnerDuplicate, why: fmt.Sprintf(
+				"the same-titled co-owner %s (%q, %d file(s), %s) agrees within max(2%%, 5 min) with %s (%q): it is a second copy of the parent, so the fragments are neither folded into the parent beside it nor joined into it; deduplicate the two books first, then plan again",
+				ids[0], lib.books[ids[0]].Title, n, fragHours(total), what, lib.books[parentID].Title)}
+		}
 		if len(ids) == 1 && len(agree) == 1 {
 			total, _, _ := lib.bookTotal(ids[0])
-			return fragCoVerdict{fragCoJoin, fmt.Sprintf(
+			return fragCoVerdict{kind: fragCoJoin, why: fmt.Sprintf(
 				"%s agrees within max(2%%, 5 min) with the same-titled co-owner %s (%s), which already holds the files: the fragments join it (owner rule 2026-10-05)",
 				what, ids[0], fragHours(total))}
 		}
-		return fragCoVerdict{fragCoHold, fmt.Sprintf(
+		return fragCoVerdict{kind: fragCoHold, why: fmt.Sprintf(
 			"same-titled co-owner(s) %s beside %s, and the totals do not agree within max(2%%, 5 min) (or there are several co-owners): a second copy or edition of the work, so neither folding the fragments beside it nor joining them into it is proven",
 			strings.Join(titled, ", "), what)}
 	}
 	if len(agree) > 0 {
-		return fragCoVerdict{fragCoHold, fmt.Sprintf(
+		return fragCoVerdict{kind: fragCoHold, why: fmt.Sprintf(
 			"%s agrees with co-owner(s) %s, but nothing proves the same work (a title of no work)", what, strings.Join(agree, ", "))}
 	}
 	proceed := "the fragments make their own book beside them"
 	if parentID := rowParent(r); parentID != "" {
 		proceed = "the row proceeds into its parent " + parentID
 	}
-	return fragCoVerdict{fragCoAccept, fmt.Sprintf(
+	return fragCoVerdict{kind: fragCoAccept, why: fmt.Sprintf(
 		"no co-owner's total agrees with %s and none is titled as a work: %s, and the co-owner(s) keep their rows (owner rule 2026-10-05)", what, proceed)}
 }
 

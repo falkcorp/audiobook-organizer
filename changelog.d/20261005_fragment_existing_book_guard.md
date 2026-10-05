@@ -40,7 +40,10 @@ held. Now (owner rule 2026-10-05) the co-owner is compared with the row's
 work (a moved or copy row's whole parent, a no-parent row's chapters): a
 co-owner titled as another work ("Prelude to Foundation" beside
 "Foundation"), by another author, of unknown duration, or same-titled with a
-total that disagrees still holds the row; a single same-titled co-owner whose
-total agrees is joined; only junk-titled co-owners ("", "c5") whose totals
+total that disagrees still holds the row; on a moved or copy row a
+same-titled co-owner whose total agrees with the parent's is a second copy of
+the parent and holds the row as `skipped_co_owner_duplicate_copy` until they
+are deduplicated; on a no-parent row a single same-titled co-owner whose total
+agrees is joined; only junk-titled co-owners ("", "c5") whose totals
 disagree let the row proceed, and they keep their rows. All such rows are
 review risk.
