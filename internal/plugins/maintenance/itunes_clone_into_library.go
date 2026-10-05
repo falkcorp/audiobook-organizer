@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_clone_into_library.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 9c4e1b27-6a3f-4d80-b5e2-3f7a0c8d1e64
 // last-edited: 2026-10-05
 
@@ -277,15 +277,8 @@ func (r *icRunner) icUserStateStore() merge.UserProgressMerger {
 // trash: the state would land on a book nobody sees, which the rollback is
 // about to make the only copy.
 func (r *icRunner) carryCloneStateToSource(rec *icRecord) error {
-	src, err := r.store.GetBookByID(rec.SourceBookID)
-	if err != nil {
-		return fmt.Errorf("read source %s: %w", rec.SourceBookID, err)
-	}
-	if src == nil {
-		return fmt.Errorf("source %s no longer exists", rec.SourceBookID)
-	}
-	if src.IsSoftDeleted() {
-		return fmt.Errorf("source %s is in the trash", rec.SourceBookID)
+	if err := r.checkUndoSource(rec); err != nil {
+		return err
 	}
 	um := r.icUserStateStore()
 	if um == nil {
@@ -1081,11 +1074,20 @@ func (r *icRunner) rollback(ctx context.Context, gid string) icGroupReport {
 	return res
 }
 
-// undo reverses one clone from its record. Order: a version clone's users'
-// listening state carried back to the source (refused, with nothing changed,
-// when it cannot fully move), PIDs back to the source's rows, the clone's rows and files removed, the source's prior state
-// restored, the primary handed on, then the record cleared. A step that finds
-// a row no longer as the record left it stops and keeps the record.
+// undo reverses one clone from its record. A version clone: the source put
+// back as it was before the clone (library state and primary flag), then the
+// clone's users' listening state carried back to it (refused, with the
+// source's restore undone, when it cannot fully move), then PIDs back to the
+// source's rows and the clone's rows, authors and book removed. The primary
+// is handed on and the record cleared last. A step that finds a row no longer
+// as the record left it stops and keeps the record; every step is safe to
+// repeat, so a retry finishes what a failed attempt started.
+//
+// The source is restored BEFORE the clone is removed so the books never pass
+// through a state where the users' state sits on a hidden source while the
+// clone stays live: when a step after the carry fails, the state is put on
+// whichever of the two ABS lists (keepCloneStateVisible) and the failure
+// says where it is.
 func (r *icRunner) undo(ctx context.Context, rec *icRecord) icGroupReport {
 	g := icGroupReport{GroupID: rec.GroupID, Kind: rec.Kind, SourceBookID: rec.SourceBookID, CloneBookID: rec.CloneBookID}
 	fail := func(format string, a ...any) icGroupReport {
@@ -1094,64 +1096,33 @@ func (r *icRunner) undo(ctx context.Context, rec *icRecord) icGroupReport {
 	}
 	switch rec.Kind {
 	case icKindVersion:
-		// First, before anything changes: the clone book is deleted below,
-		// and with it any listening state on it. Carry that state back to
-		// the source; if it does not fully move, refuse the rollback with
-		// nothing changed and the record kept, so a retry can finish it.
-		if err := r.carryCloneStateToSource(rec); err != nil {
+		if err := r.checkUndoSource(rec); err != nil {
 			return fail("refusing to delete clone %s: its users' listening state could not be moved to source %s: %v",
 				rec.CloneBookID, rec.SourceBookID, err)
 		}
-		for _, pr := range rec.Pairs {
-			if pr.PID == "" || pr.SourceFileID == "" {
-				continue
+		// First the source, as it was before the clone.
+		undoRestore, err := r.restoreSourceState(rec)
+		if err != nil {
+			return fail("restore source state: %v", err)
+		}
+		// Then, before the clone is touched: its users' state goes back to
+		// the source, all or nothing. If it does not fully move, refuse with
+		// the source's restore undone, so nothing has changed and a retry
+		// can finish it.
+		if err := r.carryCloneStateToSource(rec); err != nil {
+			msg := fmt.Sprintf("refusing to delete clone %s: its users' listening state could not be moved to source %s: %v",
+				rec.CloneBookID, rec.SourceBookID, err)
+			if uerr := undoRestore(); uerr != nil {
+				msg += fmt.Sprintf("; the source's restored state could not be undone (%v), so both copies may be listed until a retry", uerr)
 			}
-			if _, err := r.store.ModifyBookFile(rec.CloneBookID, pr.CloneFileID, func(bf *database.BookFile) error {
-				if bf.ITunesPersistentID != pr.PID {
-					return errVGChangedSincePlan
-				}
-				bf.ITunesPersistentID = ""
-				return nil
-			}); err != nil {
-				return fail("release PID %s from clone row %s: %v", pr.PID, pr.CloneFileID, err)
-			}
-			if _, err := r.store.ModifyBookFile(rec.SourceBookID, pr.SourceFileID, func(bf *database.BookFile) error {
-				bf.ITunesPersistentID = pr.PID
-				return nil
-			}); err != nil {
-				return fail("return PID %s to source row %s: %v", pr.PID, pr.SourceFileID, err)
-			}
+			return fail("%s", msg)
 		}
-		var ids []string
-		for _, pr := range rec.Pairs {
-			ids = append(ids, pr.CloneFileID)
-		}
-		if err := r.store.DeleteBookFilesByIDs(ids); err != nil {
-			return fail("delete clone rows: %v", err)
-		}
-		if err := r.store.SetBookAuthors(rec.CloneBookID, nil); err != nil {
-			return fail("clear clone authors: %v", err)
-		}
-		if err := r.store.DeleteBook(rec.CloneBookID); err != nil {
-			return fail("delete clone book %s: %v", rec.CloneBookID, err)
+		if err := r.removeVersionClone(rec); err != nil {
+			return fail("%v; %s", err, r.keepCloneStateVisible(rec))
 		}
 		// Saving nil deletes the table; a clone with none is a no-op.
 		if err := r.chapters.SaveChaptersForBook(rec.CloneBookID, nil); err != nil {
 			g.Error = strings.TrimSpace(g.Error + " clone chapters not removed: " + err.Error())
-		}
-		if _, err := r.store.ModifyBook(rec.SourceBookID, func(b *database.Book) error {
-			st := rec.SourcePriorState
-			b.LibraryState = &st
-			switch rec.SourcePriorPrimary {
-			case "true", "false":
-				v := rec.SourcePriorPrimary == "true"
-				b.IsPrimaryVersion = &v
-			default:
-				b.IsPrimaryVersion = nil
-			}
-			return nil
-		}); err != nil {
-			return fail("restore source state: %v", err)
 		}
 	case icKindMixed:
 		for _, pr := range rec.Pairs {
@@ -1201,6 +1172,158 @@ func (r *icRunner) undo(ctx context.Context, rec *icRecord) icGroupReport {
 	}
 	g.Outcome = icOutcomeRolled
 	return g
+}
+
+// checkUndoSource refuses a rollback whose source is missing or in the trash
+// before anything changes: the clone's users' state would land on a book
+// nobody sees, which the rollback is about to make the only copy.
+func (r *icRunner) checkUndoSource(rec *icRecord) error {
+	src, err := r.store.GetBookByID(rec.SourceBookID)
+	if err != nil {
+		return fmt.Errorf("read source %s: %w", rec.SourceBookID, err)
+	}
+	if src == nil {
+		return fmt.Errorf("source %s no longer exists", rec.SourceBookID)
+	}
+	if src.IsSoftDeleted() {
+		return fmt.Errorf("source %s is in the trash", rec.SourceBookID)
+	}
+	return nil
+}
+
+// restoreSourceState puts the source's library state and primary flag back
+// as they were before the clone. The returned func undoes that write (back
+// to what the source held when this ran), for a rollback refused right after.
+// Safe to repeat.
+func (r *icRunner) restoreSourceState(rec *icRecord) (func() error, error) {
+	var prevState *string
+	var prevPrimary *bool
+	_, err := r.store.ModifyBook(rec.SourceBookID, func(b *database.Book) error {
+		prevState, prevPrimary = b.LibraryState, b.IsPrimaryVersion
+		st := rec.SourcePriorState
+		b.LibraryState = &st
+		switch rec.SourcePriorPrimary {
+		case "true", "false":
+			v := rec.SourcePriorPrimary == "true"
+			b.IsPrimaryVersion = &v
+		default:
+			b.IsPrimaryVersion = nil
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return func() error {
+		_, err := r.store.ModifyBook(rec.SourceBookID, func(b *database.Book) error {
+			b.LibraryState, b.IsPrimaryVersion = prevState, prevPrimary
+			return nil
+		})
+		return err
+	}, nil
+}
+
+// removeVersionClone gives each PID back to the source's row and removes the
+// clone's rows, authors and book. Every step is safe to repeat: a clone row
+// whose PID is already released, a row or a book already gone, is skipped.
+// Right before the book is removed, the clone is re-checked for listening
+// state under the merge lock (merge.HardDeleteWithoutUserState): a client
+// that wrote to it since the carry refuses the delete.
+func (r *icRunner) removeVersionClone(rec *icRecord) error {
+	for _, pr := range rec.Pairs {
+		if pr.PID == "" || pr.SourceFileID == "" {
+			continue
+		}
+		if _, err := r.store.ModifyBookFile(rec.CloneBookID, pr.CloneFileID, func(bf *database.BookFile) error {
+			switch bf.ITunesPersistentID {
+			case pr.PID:
+				bf.ITunesPersistentID = ""
+				return nil
+			case "":
+				return database.ErrSkipBookFileWrite // released by an earlier attempt
+			default:
+				return errVGChangedSincePlan
+			}
+		}); err != nil {
+			return fmt.Errorf("release PID %s from clone row %s: %w", pr.PID, pr.CloneFileID, err)
+		}
+		if _, err := r.store.ModifyBookFile(rec.SourceBookID, pr.SourceFileID, func(bf *database.BookFile) error {
+			if bf.ITunesPersistentID == pr.PID {
+				return database.ErrSkipBookFileWrite
+			}
+			bf.ITunesPersistentID = pr.PID
+			return nil
+		}); err != nil {
+			return fmt.Errorf("return PID %s to source row %s: %w", pr.PID, pr.SourceFileID, err)
+		}
+	}
+	rows, err := r.store.GetBookFiles(rec.CloneBookID)
+	if err != nil {
+		return fmt.Errorf("read clone rows: %w", err)
+	}
+	present := make(map[string]bool, len(rows))
+	for _, f := range rows {
+		present[f.ID] = true
+	}
+	var ids []string
+	for _, pr := range rec.Pairs {
+		if present[pr.CloneFileID] {
+			ids = append(ids, pr.CloneFileID)
+		}
+	}
+	if err := r.store.DeleteBookFilesByIDs(ids); err != nil {
+		return fmt.Errorf("delete clone rows: %w", err)
+	}
+	clone, err := r.store.GetBookByID(rec.CloneBookID)
+	if err != nil {
+		return fmt.Errorf("read clone book %s: %w", rec.CloneBookID, err)
+	}
+	if clone == nil {
+		return nil // removed by an earlier attempt
+	}
+	if err := r.store.SetBookAuthors(rec.CloneBookID, nil); err != nil {
+		return fmt.Errorf("clear clone authors: %w", err)
+	}
+	um := r.icUserStateStore()
+	if um == nil {
+		return fmt.Errorf("delete clone book %s: store cannot re-check users' listening state", rec.CloneBookID)
+	}
+	if err := merge.HardDeleteWithoutUserState(um, rec.CloneBookID, func() error {
+		return r.store.DeleteBook(rec.CloneBookID)
+	}); err != nil {
+		return fmt.Errorf("delete clone book %s: %w", rec.CloneBookID, err)
+	}
+	return nil
+}
+
+// keepCloneStateVisible runs when a rollback fails after the clone's users'
+// state was carried to the source: the clone is still there and may still be
+// the copy ABS lists. The state must not be left on a book ABS does not list
+// while one it does is live, so: a source ABS lists keeps it; otherwise a
+// clone ABS lists gets it back (merge.CarryStateBeforeHardDelete, source ->
+// clone, all or nothing); otherwise it stays on the source. It returns where
+// the state is, for the group's error. A retry carries it to the source
+// again.
+func (r *icRunner) keepCloneStateVisible(rec *icRecord) string {
+	listed := func(id string) bool {
+		b, err := r.store.GetBookByID(id)
+		return err == nil && database.ABSLibraryFilter().Matches(b)
+	}
+	note := "the source and the clone may both be listed until a retry finishes the rollback"
+	if listed(rec.SourceBookID) {
+		return fmt.Sprintf("users' listening state is on source %s, which ABS lists; %s", rec.SourceBookID, note)
+	}
+	if !listed(rec.CloneBookID) {
+		return fmt.Sprintf("users' listening state is on source %s; neither it nor clone %s is listed by ABS", rec.SourceBookID, rec.CloneBookID)
+	}
+	um := r.icUserStateStore()
+	if um == nil {
+		return fmt.Sprintf("users' listening state is on source %s, which ABS does not list, and the store cannot move it back to clone %s", rec.SourceBookID, rec.CloneBookID)
+	}
+	if err := merge.CarryStateBeforeHardDelete(um, rec.CloneBookID, rec.SourceBookID); err != nil {
+		return fmt.Sprintf("users' listening state is on source %s, which ABS does not list; moving it back to clone %s failed: %v", rec.SourceBookID, rec.CloneBookID, err)
+	}
+	return fmt.Sprintf("users' listening state was moved back to clone %s, which ABS lists", rec.CloneBookID)
 }
 
 // restorePriorPrimaries puts back each member's stored primary flag from the
