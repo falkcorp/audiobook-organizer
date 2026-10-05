@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/combined_author_fixer.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 5c0f4a3e-2b7d-4e61-9a8c-3f1d6b2e7a90
 // last-edited: 2026-10-05
 
@@ -339,6 +339,9 @@ func (f *combinedAuthorFixer) buildIndex(ctx context.Context, await bool) (*comb
 		}
 	}
 	if await {
+		// May block up to two minutes on a snapshot load; every repairs.plan
+		// shares one ConcurrencyKey, so other fixers' plans wait behind it
+		// (see authorityEvidence.Await in internal/server).
 		idx.authority, idx.authorityReady = authorcredit.AwaitAuthority(ctx, store)
 	} else {
 		idx.authority, idx.authorityReady = authorcredit.CurrentAuthority(store)
@@ -869,10 +872,13 @@ func (f *combinedAuthorFixer) evaluate(store OpsStore, idx *combinedAuthorIndex,
 						return repairs.Row{}, false, perr
 					}
 					if src == "" {
+						// The authority line can grade the name strong, so the
+						// reason says what is missing (a library author and a
+						// provider credit), never that it is no author at all.
 						if line := idx.authorityLine(p.name); line != "" {
 							r.Evidence = append(r.Evidence, line)
 						}
-						return finish(combinedSkipSplitRefused, fmt.Sprintf("%q is one word, is no author or alias, and no metadata provider credited it to this book", p.name), true)
+						return finish(combinedSkipSplitRefused, fmt.Sprintf("%q is one word and no existing author or alias in the library; a single-word name also needs a provider credit, and no metadata provider credited it to this book", p.name), true)
 					}
 					r.Evidence = append(r.Evidence, fmt.Sprintf("%s credited %q to this book", src, p.name))
 				}

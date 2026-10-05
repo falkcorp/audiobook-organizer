@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/combined_author_fixer_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: d8097de1-71d8-4949-8195-fec97df8ae52
 // last-edited: 2026-10-05
 
@@ -746,4 +746,29 @@ func TestCombinedAuthorFixer_AuthorityLinesAreDisplayOnly(t *testing.T) {
 	for _, e := range fresh.Evidence {
 		require.NotContains(t, e, "authority lists", "no lists in hand: no authority line")
 	}
+}
+
+// A one-word name the authority lists grade strong is still refused without a
+// provider credit, and the reason must not read as contradicting the strong
+// authority line beside it (PR #3755 review): it names what is missing, a
+// library author and a provider credit, never "is no author".
+func TestCombinedAuthorFixer_SingleWordRefusalReasonAgreesWithAuthorityLine(t *testing.T) {
+	l := newCombinedLib(t)
+	l.author("Ann Leckie")
+	l.book("one", "Book One", "Ann Leckie, Zedd", combinedLibRoot+"One/a.m4b", credit{"Ann Leckie, Zedd", "author", 0})
+	require.NoError(t, authority.PutPersonOverride(l.store, authority.PersonOverride{Name: "Zedd",
+		Roles: map[authority.Role]bool{authority.RoleAuthor: true}, SetAt: time.Now()}))
+	snap, err := authority.LoadSnapshot(context.Background(), l.store)
+	require.NoError(t, err)
+	as := &combinedAuthorityStore{PebbleStore: l.store, lookup: snap}
+	l.fixer = newCombinedAuthorFixer(&Plugin{deps: fakeDeps{store: as}, standDownWait: noWait})
+
+	_, rows := l.plan()
+	r := rows["one"]
+	require.Equal(t, combinedSkipSplitRefused, r.Skipped, r.SkipReason)
+	require.Contains(t, r.Evidence,
+		`the authority lists hold "Zedd" as an author from the owner's library (tier O) (strong evidence)`)
+	require.Contains(t, r.SkipReason, `"Zedd" is one word and no existing author or alias in the library`)
+	require.Contains(t, r.SkipReason, "a single-word name also needs a provider credit")
+	require.NotContains(t, r.SkipReason, "is no author")
 }

@@ -1,5 +1,5 @@
 // file: internal/authorcredit/authorcredit_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 4a5f7bee-3d1d-427b-bc5f-baaa4b6fb584
 // last-edited: 2026-10-05
 
@@ -899,4 +899,43 @@ func TestAuthorityPersonEvidence_Tiers(t *testing.T) {
 	require.False(t, ready, "an Empty answer is not a snapshot")
 	_, ready = AwaitAuthority(context.Background(), st)
 	require.False(t, ready, "a store without the capability")
+}
+
+// authorityWaiterStore offers the AuthorityWaiter capability with a fixed
+// answer.
+type authorityWaiterStore struct {
+	*database.PebbleStore
+	lookup authority.Lookup
+	ready  bool
+}
+
+func (s authorityWaiterStore) AwaitAuthorityLookup(context.Context) (authority.Lookup, bool) {
+	return s.lookup, s.ready
+}
+
+var _ AuthorityWaiter = authorityWaiterStore{}
+
+// A custom AuthoritySource (or AuthorityWaiter) answering a typed-nil
+// *authority.Snapshot compares unequal to both nil and authority.Empty(), so
+// it used to read as a ready snapshot, and calling it dereferences nil. It is
+// read as no lists: authority.Empty(), not ready (PR #3755 review).
+func TestCurrentAuthority_TypedNilSnapshotIsNotReady(t *testing.T) {
+	st := newStore(t)
+	var nilSnap *authority.Snapshot
+
+	l, ready := CurrentAuthority(authorityLookupStore{PebbleStore: st, lookup: nilSnap})
+	require.False(t, ready, "a typed-nil snapshot is not ready")
+	require.Equal(t, authority.Empty(), l)
+	require.NotPanics(t, func() { _ = AuthorityPersonEvidence(l, "Anyone") })
+
+	l, ready = AwaitAuthority(context.Background(), authorityLookupStore{PebbleStore: st, lookup: nilSnap})
+	require.False(t, ready)
+	require.Equal(t, authority.Empty(), l)
+
+	l, ready = AwaitAuthority(context.Background(), authorityWaiterStore{PebbleStore: st, lookup: nilSnap, ready: true})
+	require.False(t, ready, "a waiter answering a typed-nil snapshot is not ready, whatever it claims")
+	require.Equal(t, authority.Empty(), l)
+
+	require.Equal(t, authority.Empty(), authorityOf(authorityLookupStore{PebbleStore: st, lookup: nilSnap}),
+		"credit resolution reads Empty, never the typed nil")
 }
