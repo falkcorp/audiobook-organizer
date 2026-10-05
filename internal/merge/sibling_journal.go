@@ -1,5 +1,5 @@
 // file: internal/merge/sibling_journal.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 225d6301-f6b7-4f2d-8c27-1d6865ecf11c
 // last-edited: 2026-10-05
 
@@ -44,6 +44,24 @@ import (
 // WHERE IT LIVES. Raw keys on the main store, like the combine journal:
 //
 //	merge:sibling-journal:<ULID> -> SiblingMoveJournal JSON
+//
+// WHEN AN UNDO IS REFUSED. An undo puts a sibling back only when this
+// journal's merge is the latest one that moved it into IntoGroupID. Modelled
+// on UndoCombine's state rules (undoPreconditions): the status decides first,
+// then the current state of each row.
+//
+//   - undone: refused. Every sibling is already back, and replaying the
+//     journal after a later merge moved one of them again would revert that
+//     later merge.
+//   - aborted: refused. The merge was refused after the journal was written
+//     and before its first write, so it moved nothing.
+//   - pending or applied: allowed, sibling by sibling. A sibling an earlier
+//     undo already resolved (UndoneSiblings) is skipped. The whole undo is
+//     refused when a NEWER journal that is applied or pending names one of
+//     the remaining siblings with the same IntoGroupID and has not undone it:
+//     that sibling is in the group because of the newer merge, not this one.
+//     Pending counts as well as applied because a pending journal is a merge
+//     that failed part way, and it may have moved the sibling.
 const siblingJournalPrefix = "merge:sibling-journal:"
 
 // Sibling-move journal statuses.
@@ -51,16 +69,32 @@ const (
 	// SiblingJournalPending is written before the merge's first write. A
 	// journal left in this state names a merge that failed or crashed part
 	// way; it is still undoable, because the restore checks each sibling's
-	// current group and leaves one that never moved alone.
+	// current group and leaves one that never moved alone. Moved records the
+	// siblings whose write landed when the merge saw its own failure.
 	SiblingJournalPending = "pending"
 	// SiblingJournalApplied marks a merge that moved every sibling.
 	SiblingJournalApplied = "applied"
-	// SiblingJournalUndone marks a journal UndoSiblingMove reversed.
+	// SiblingJournalUndone marks a journal whose every sibling an undo has
+	// resolved (put back, found already back, or found moved on).
 	SiblingJournalUndone = "undone"
+	// SiblingJournalAborted marks a merge refused after the journal was
+	// written and before its first membership write. Nothing moved, so it
+	// cannot be undone.
+	SiblingJournalAborted = "aborted"
 )
+
+// SiblingJournalStaleAfter is how long a journal may stay pending before the
+// list marks it Stale. A merge holds a journal pending for the length of its
+// membership writes, which is well under a second; one still pending minutes
+// later is a merge that failed or crashed part way.
+const SiblingJournalStaleAfter = 10 * time.Minute
 
 // ErrSiblingJournalNotFound is returned for an unknown journal id.
 var ErrSiblingJournalNotFound = errors.New("sibling-move journal not found")
+
+// ErrSiblingUndoRefused wraps every reason an undo is refused (see "WHEN AN
+// UNDO IS REFUSED" above). Nothing is written when it is returned.
+var ErrSiblingUndoRefused = errors.New("sibling-move undo refused")
 
 // SiblingMoveJournal is the undo record for the siblings one merge moved.
 type SiblingMoveJournal struct {
@@ -71,18 +105,31 @@ type SiblingMoveJournal struct {
 	IntoGroupID string         `json:"into_group_id"`
 	Losers      []string       `json:"losers"`
 	Siblings    []MovedSibling `json:"siblings"`
-	UndoneAt    *time.Time     `json:"undone_at,omitempty"`
+	// Moved names the siblings whose move landed. Set when the merge
+	// finishes, and when it fails part way, so the record says what actually
+	// moved; Siblings stays the full plan, because a write that reported an
+	// error may still have landed and the undo checks each row anyway.
+	Moved []string `json:"moved,omitempty"`
+	// UndoneSiblings are the siblings an undo has resolved. An undo of one
+	// loser's entry (UndoSiblingMoveForLoser) resolves only that loser's
+	// siblings; the journal is undone once every sibling is here.
+	UndoneSiblings []string   `json:"undone_siblings,omitempty"`
+	UndoneAt       *time.Time `json:"undone_at,omitempty"`
 	// Warnings names siblings an undo left where they were because they had
 	// moved to some other group since the merge.
 	Warnings  []string `json:"warnings,omitempty"`
 	LastError string   `json:"last_error,omitempty"`
+	// Stale is set by ListSiblingMoveJournals on a journal still pending
+	// SiblingJournalStaleAfter after it was written. Never stored.
+	Stale bool `json:"stale,omitempty"`
 }
 
-// SiblingRestoreResult is what RestoreMovedSiblings did.
+// SiblingRestoreResult is what restoreMovedSiblings did.
 type SiblingRestoreResult struct {
 	// Restored were in the merge's group and are back in their old one.
 	Restored []string `json:"restored"`
-	// AlreadyBack were already in their old group (an earlier undo).
+	// AlreadyBack were already in their old group (an earlier undo, or a
+	// pending journal's sibling that never moved).
 	AlreadyBack []string `json:"already_back,omitempty"`
 	// MovedOn maps a sibling that has moved to a third group since the merge
 	// to that group. It is left there: that move was a later decision.
@@ -92,13 +139,18 @@ type SiblingRestoreResult struct {
 // SiblingUndoResult is the outcome of UndoSiblingMove.
 type SiblingUndoResult struct {
 	JournalID string `json:"journal_id"`
+	// Status is the journal's status after this undo: undone once every
+	// sibling is resolved, otherwise what it was.
+	Status string `json:"status"`
 	SiblingRestoreResult
 }
 
 func siblingJournalKey(id string) string { return siblingJournalPrefix + id }
 
 func (ms *Service) putSiblingJournal(j *SiblingMoveJournal) error {
-	data, err := json.Marshal(j)
+	stored := *j
+	stored.Stale = false
+	data, err := json.Marshal(&stored)
 	if err != nil {
 		return fmt.Errorf("marshal sibling-move journal %s: %w", j.ID, err)
 	}
@@ -141,8 +193,26 @@ func (ms *Service) GetSiblingMoveJournal(id string) (*SiblingMoveJournal, error)
 }
 
 // ListSiblingMoveJournals returns journals newest-first, capped at limit
-// (0 = all).
+// (0 = all), with Stale set on each pending one older than
+// SiblingJournalStaleAfter.
 func (ms *Service) ListSiblingMoveJournals(limit int) ([]SiblingMoveJournal, error) {
+	out, err := ms.scanSiblingJournals()
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC()
+	for i := range out {
+		out[i].Stale = out[i].Status == SiblingJournalPending && now.Sub(out[i].CreatedAt) > SiblingJournalStaleAfter
+	}
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+// scanSiblingJournals reads every journal, newest-first. An undecodable row
+// is logged and skipped.
+func (ms *Service) scanSiblingJournals() ([]SiblingMoveJournal, error) {
 	rows, err := ms.db.ScanPrefix(siblingJournalPrefix)
 	if err != nil {
 		return nil, fmt.Errorf("list sibling-move journals: %w", err)
@@ -157,20 +227,30 @@ func (ms *Service) ListSiblingMoveJournals(limit int) ([]SiblingMoveJournal, err
 		out = append(out, j)
 	}
 	sort.Slice(out, func(i, k int) bool { return out[i].ID > out[k].ID })
-	if limit > 0 && len(out) > limit {
-		out = out[:limit]
-	}
 	return out, nil
 }
 
 // UndoSiblingMove puts every sibling one merge moved back in its old group
-// with its old flag (RestoreMovedSiblings). It accepts a pending journal (a
-// merge that failed part way) and an undone one (a repeat): the restore is
-// idempotent. It does not touch the merge's named books; undoing the merge
-// itself is the caller's own path (UnmergeAuto, or restoring a loser from the
-// trash). On a store error the journal keeps its status and records
-// LastError, and the undo can be re-run.
+// with its old flag (restoreMovedSiblings), subject to the refusals in "WHEN
+// AN UNDO IS REFUSED" above. It does not touch the merge's named books;
+// undoing the merge itself is the caller's own path (UnmergeAuto, or
+// restoring a loser from the trash). On a store error the journal keeps its
+// status, records LastError and the siblings that were resolved, and the
+// undo can be re-run.
 func (ms *Service) UndoSiblingMove(journalID string) (*SiblingUndoResult, error) {
+	return ms.undoSiblingJournal(journalID, func(MovedSibling) bool { return true })
+}
+
+// UndoSiblingMoveForLoser is UndoSiblingMove limited to the siblings that left
+// with loserID (MovedSibling.WithLosers). dedup's UnmergeAuto undoes one
+// loser at a time and calls this, so undoing one loser neither restores
+// another loser's siblings nor marks the journal undone while that other
+// loser's siblings are still in the merge's group.
+func (ms *Service) UndoSiblingMoveForLoser(journalID, loserID string) (*SiblingUndoResult, error) {
+	return ms.undoSiblingJournal(journalID, func(s MovedSibling) bool { return slices.Contains(s.WithLosers, loserID) })
+}
+
+func (ms *Service) undoSiblingJournal(journalID string, pick func(MovedSibling) bool) (*SiblingUndoResult, error) {
 	mergeSerializeMu.Lock()
 	defer mergeSerializeMu.Unlock()
 
@@ -178,7 +258,34 @@ func (ms *Service) UndoSiblingMove(journalID string) (*SiblingUndoResult, error)
 	if err != nil {
 		return nil, err
 	}
-	res, restoreErr := ms.restoreMovedSiblings(j.IntoGroupID, j.Siblings)
+	switch j.Status {
+	case SiblingJournalUndone:
+		return nil, fmt.Errorf("%w: journal %s is already undone; replaying it could revert a later merge", ErrSiblingUndoRefused, j.ID)
+	case SiblingJournalAborted:
+		return nil, fmt.Errorf("%w: journal %s is aborted; its merge moved nothing", ErrSiblingUndoRefused, j.ID)
+	case SiblingJournalPending, SiblingJournalApplied:
+	default:
+		return nil, fmt.Errorf("%w: journal %s has unknown status %q", ErrSiblingUndoRefused, j.ID, j.Status)
+	}
+	var todo []MovedSibling
+	for _, sib := range j.Siblings {
+		if pick(sib) && !slices.Contains(j.UndoneSiblings, sib.BookID) {
+			todo = append(todo, sib)
+		}
+	}
+	if err := ms.requireNoNewerSiblingMove(j, todo); err != nil {
+		return nil, err
+	}
+	res, restoreErr := ms.restoreMovedSiblings(j.IntoGroupID, todo)
+	j.UndoneSiblings = append(j.UndoneSiblings, res.Restored...)
+	j.UndoneSiblings = append(j.UndoneSiblings, res.AlreadyBack...)
+	for _, id := range slices.Sorted(maps.Keys(res.MovedOn)) {
+		j.UndoneSiblings = append(j.UndoneSiblings, id)
+		j.Warnings = append(j.Warnings, fmt.Sprintf("book %s moved to version group %s since the merge; left there", id, res.MovedOn[id]))
+	}
+	// A group every one of whose siblings is back is no longer one the merge
+	// emptied; drop its trash-restore redirect (group_redirect.go).
+	ms.clearRestoredGroupRedirects(j, res.Restored)
 	if restoreErr != nil {
 		j.LastError = restoreErr.Error()
 		if err := ms.putSiblingJournal(j); err != nil {
@@ -186,40 +293,75 @@ func (ms *Service) UndoSiblingMove(journalID string) (*SiblingUndoResult, error)
 		}
 		return nil, fmt.Errorf("undo sibling move %s: %w", j.ID, restoreErr)
 	}
-	now := time.Now().UTC()
-	j.Status, j.UndoneAt, j.LastError = SiblingJournalUndone, &now, ""
-	j.Warnings = nil
-	for _, id := range slices.Sorted(maps.Keys(res.MovedOn)) {
-		j.Warnings = append(j.Warnings, fmt.Sprintf("book %s moved to version group %s since the merge; left there", id, res.MovedOn[id]))
+	j.LastError = ""
+	if siblingJournalFullyUndone(j) {
+		now := time.Now().UTC()
+		j.Status, j.UndoneAt = SiblingJournalUndone, &now
 	}
 	if err := ms.putSiblingJournal(j); err != nil {
-		return nil, fmt.Errorf("siblings restored but sibling-move journal %s not marked undone: %w", j.ID, err)
+		return nil, fmt.Errorf("siblings restored but sibling-move journal %s not updated: %w", j.ID, err)
 	}
-	return &SiblingUndoResult{JournalID: j.ID, SiblingRestoreResult: res}, nil
+	return &SiblingUndoResult{JournalID: j.ID, Status: j.Status, SiblingRestoreResult: res}, nil
 }
 
-// RestoreMovedSiblings is the shared sibling restore: UndoSiblingMove and
-// dedup's UnmergeAuto both call it. It takes the merge lock; a caller already
-// holding it uses restoreMovedSiblings.
-func (ms *Service) RestoreMovedSiblings(intoGroupID string, siblings []MovedSibling) (SiblingRestoreResult, error) {
-	mergeSerializeMu.Lock()
-	defer mergeSerializeMu.Unlock()
-	return ms.restoreMovedSiblings(intoGroupID, siblings)
+func siblingJournalFullyUndone(j *SiblingMoveJournal) bool {
+	for _, sib := range j.Siblings {
+		if !slices.Contains(j.UndoneSiblings, sib.BookID) {
+			return false
+		}
+	}
+	return true
+}
+
+// requireNoNewerSiblingMove refuses an undo when a newer applied or pending
+// journal moved one of todo's siblings into the same group and has not undone
+// it: that sibling is where it is because of the newer merge.
+func (ms *Service) requireNoNewerSiblingMove(j *SiblingMoveJournal, todo []MovedSibling) error {
+	if len(todo) == 0 {
+		return nil
+	}
+	want := map[string]bool{}
+	for _, s := range todo {
+		want[s.BookID] = true
+	}
+	all, err := ms.scanSiblingJournals()
+	if err != nil {
+		return fmt.Errorf("check later sibling moves before undoing %s: %w", j.ID, err)
+	}
+	for _, n := range all {
+		if n.ID <= j.ID || n.IntoGroupID != j.IntoGroupID {
+			continue
+		}
+		if n.Status != SiblingJournalApplied && n.Status != SiblingJournalPending {
+			continue
+		}
+		for _, s := range n.Siblings {
+			if want[s.BookID] && !slices.Contains(n.UndoneSiblings, s.BookID) {
+				return fmt.Errorf("%w: book %s was moved into version group %s again by the later merge journal %s; undo that one first",
+					ErrSiblingUndoRefused, s.BookID, j.IntoGroupID, n.ID)
+			}
+		}
+	}
+	return nil
 }
 
 // restoreMovedSiblings puts each sibling still in intoGroupID back in its
 // FromGroupID with its exact pre-merge flag pointer. Only those two fields are
 // written, through ModifyBook on the fresh row, under both groups' locks. A
 // sibling already back is left alone; one that moved to a third group since
-// is left there and reported in MovedOn.
+// is left there and reported in MovedOn. The caller holds mergeSerializeMu.
 //
-// Each group a sibling went back to then gets versionprimary.
-// EnsureSinglePrimary, after the locks are released (it takes them itself):
-// on a path that leaves the loser retired, the restored group has no primary
-// unless one of its siblings was it, and a merge that failed part way may
-// have elected one in the left group that a restored sibling's old flag now
-// duplicates. A hand-off failure is logged, as handOffLeftGroups does: the
-// membership is restored, and version-group-primary-repair covers the flag.
+// Each group a sibling went back to, and intoGroupID itself when anything was
+// restored, then gets versionprimary.EnsureSinglePrimary after the locks are
+// released (it takes them itself). The left group needs it because on a path
+// that leaves the loser retired it has no primary unless one of its siblings
+// was it, and a merge that failed part way may have elected one there that a
+// restored sibling's old flag now duplicates. The merge's own group needs it
+// because a restored sibling may have been that group's primary (the merge
+// elects an organized sibling when the survivor is not organized), which
+// leaves the group with none. A hand-off failure is logged, as
+// handOffLeftGroups does: the membership is restored, and
+// version-group-primary-repair covers the flag.
 func (ms *Service) restoreMovedSiblings(intoGroupID string, siblings []MovedSibling) (SiblingRestoreResult, error) {
 	res := SiblingRestoreResult{}
 	touched := map[string]bool{}
@@ -240,6 +382,9 @@ func (ms *Service) restoreMovedSiblings(intoGroupID string, siblings []MovedSibl
 			}
 			res.MovedOn[sib.BookID] = movedOn
 		}
+	}
+	if len(res.Restored) > 0 && strings.TrimSpace(intoGroupID) != "" {
+		touched[intoGroupID] = true
 	}
 	handOffLeftGroups(ms.db, touched)
 	if len(errs) > 0 {

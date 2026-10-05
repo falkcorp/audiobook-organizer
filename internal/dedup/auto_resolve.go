@@ -1,5 +1,5 @@
 // file: internal/dedup/auto_resolve.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 6d1e9b52-4f70-4c83-a2b9-1e5c8d0f7a34
 // last-edited: 2026-10-05
 
@@ -398,9 +398,26 @@ func (de *Engine) preMergeSnapshotNanos(bookID string, baselineNanos int64) int6
 // UnmergeAuto reverses a Tier-1 auto-merge recorded in the journal at journalKey
 // by reverting both the winner and loser books to their pre-merge book_ver
 // snapshots (restoring IsPrimaryVersion / VersionGroupID / MarkedForDeletion),
-// then putting each sibling the merge carried along with the loser
-// (entry.Siblings) back in its original group with its original flag; see
-// restoreMovedSiblings.
+// then putting back the siblings the merge carried along with this loser
+// through the merge's sibling-move journal
+// (merge.Service.UndoSiblingMoveForLoser), and finally handing the primary on
+// in every group the undo touched.
+//
+// It refuses, writing nothing, an entry still marked Provisional: its merge
+// failed, or the post-merge patch could not be written, so the entry records
+// no snapshot to revert to and no siblings.
+//
+// The sibling restore goes through the journal, not the entry's own sibling
+// list, so its refusals apply here too: once an undo has put a sibling back, a
+// repeat UnmergeAuto does not move it again, and a sibling a later merge moved
+// into the same group again is left alone. Undoing one loser's entry restores
+// only the siblings that left with that loser.
+//
+// After the reverts, versionprimary.EnsureSinglePrimary runs on the loser's
+// group, the winner's group and the merge's group: the reverts write each
+// book's whole pre-merge row, flag included, with no regard for what the
+// group's other members did since, so a group can come back with two
+// primaries or none.
 //
 // SCOPE LIMIT: this restores the BOOK RECORD state only. It does NOT reverse the
 // external-ID reassignment (loser→winner) that MergeBooks performed, nor any
@@ -419,67 +436,60 @@ func (de *Engine) UnmergeAuto(journalKey string) error {
 	if entry == nil {
 		return fmt.Errorf("unmerge-auto: no journal entry at %s", journalKey)
 	}
+	if entry.Provisional {
+		return fmt.Errorf("unmerge-auto: journal entry %s was never finalized (the merge failed, or its post-merge record could not be written); nothing reverted. Restore loser %s from the trash, and undo any sibling moves with the sibling-move journal the merge logged",
+			journalKey, entry.LoserID)
+	}
+	if len(entry.Siblings) > 0 && entry.SiblingJournalID == "" {
+		return fmt.Errorf("unmerge-auto: journal entry %s lists %d moved sibling(s) but no sibling-move journal; nothing reverted", journalKey, len(entry.Siblings))
+	}
+	if entry.SiblingJournalID != "" && de.mergeService == nil {
+		return fmt.Errorf("unmerge-auto: merge service not initialised; the siblings of %s cannot be restored, nothing reverted", journalKey)
+	}
 
 	var errs []string
-	if entry.LoserPreMergeTS != 0 {
-		if _, err := de.bookStore.RevertBookToVersion(entry.LoserID, time.Unix(0, entry.LoserPreMergeTS)); err != nil {
-			errs = append(errs, fmt.Sprintf("loser %s: %v", entry.LoserID, err))
+	groups := map[string]bool{}
+	if entry.IntoGroupID != "" {
+		groups[entry.IntoGroupID] = true
+	}
+	revert := func(role, id string, ts int64) {
+		if ts == 0 {
+			errs = append(errs, fmt.Sprintf("%s %s: no pre-merge snapshot recorded", role, id))
+			return
 		}
-	} else {
-		errs = append(errs, fmt.Sprintf("loser %s: no pre-merge snapshot recorded", entry.LoserID))
-	}
-	if entry.WinnerPreMergeTS != 0 {
-		if _, err := de.bookStore.RevertBookToVersion(entry.WinnerID, time.Unix(0, entry.WinnerPreMergeTS)); err != nil {
-			errs = append(errs, fmt.Sprintf("winner %s: %v", entry.WinnerID, err))
+		b, err := de.bookStore.RevertBookToVersion(id, time.Unix(0, ts))
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s %s: %v", role, id, err))
+			return
 		}
-	} else {
-		errs = append(errs, fmt.Sprintf("winner %s: no pre-merge snapshot recorded", entry.WinnerID))
+		if b != nil && b.VersionGroupID != nil && *b.VersionGroupID != "" {
+			groups[*b.VersionGroupID] = true
+			if role == "loser" && entry.IntoGroupID != "" && *b.VersionGroupID != entry.IntoGroupID {
+				// The loser is back in its old group, which therefore has a
+				// live member again: drop the redirect the merge left on it.
+				merge.ClearGroupRedirect(de.bookStore, *b.VersionGroupID, entry.IntoGroupID)
+			}
+		}
 	}
-	if err := de.restoreMovedSiblings(entry.Siblings); err != nil {
-		errs = append(errs, err.Error())
+	revert("loser", entry.LoserID, entry.LoserPreMergeTS)
+	revert("winner", entry.WinnerID, entry.WinnerPreMergeTS)
+	if entry.SiblingJournalID != "" {
+		res, err := de.mergeService.UndoSiblingMoveForLoser(entry.SiblingJournalID, entry.LoserID)
+		switch {
+		case err != nil:
+			errs = append(errs, fmt.Sprintf("siblings (journal %s): %v", entry.SiblingJournalID, err))
+		default:
+			for _, id := range slices.Sorted(maps.Keys(res.MovedOn)) {
+				errs = append(errs, fmt.Sprintf("sibling %s: moved to version group %s since the merge; left there", id, res.MovedOn[id]))
+			}
+		}
 	}
+	handOffRetiredPrimaries(context.Background(), de.bookStore, groups)
 
 	if len(errs) > 0 {
 		return fmt.Errorf("unmerge-auto: %s", strings.Join(errs, "; "))
 	}
 	slog.Info("dedup auto-resolve unmerged", "journal", journalKey,
 		"winner", entry.WinnerID, "loser", entry.LoserID, "siblings", len(entry.Siblings))
-	return nil
-}
-
-// restoreMovedSiblings hands one journal entry's sibling records to
-// merge.Service.RestoreMovedSiblings, the one sibling restore shared with
-// merge.Service.UndoSiblingMove. A sibling that has moved to some third group
-// since the merge is left there and reported as an error.
-func (de *Engine) restoreMovedSiblings(recs []database.AutoMergeJournalSibling) error {
-	if len(recs) == 0 {
-		return nil
-	}
-	if de.mergeService == nil {
-		return fmt.Errorf("siblings %d: merge service not initialised, not restored", len(recs))
-	}
-	byInto := map[string][]merge.MovedSibling{}
-	var intos []string
-	for _, r := range recs {
-		if _, ok := byInto[r.IntoGroupID]; !ok {
-			intos = append(intos, r.IntoGroupID)
-		}
-		byInto[r.IntoGroupID] = append(byInto[r.IntoGroupID], merge.MovedSibling{
-			BookID: r.BookID, FromGroupID: r.FromGroupID, WasPrimary: r.WasPrimary,
-		})
-	}
-	var errs []string
-	for _, into := range intos {
-		res, err := de.mergeService.RestoreMovedSiblings(into, byInto[into])
-		if err != nil {
-			errs = append(errs, err.Error())
-		}
-		for _, id := range slices.Sorted(maps.Keys(res.MovedOn)) {
-			errs = append(errs, fmt.Sprintf("sibling %s: moved to version group %s since the merge; left there", id, res.MovedOn[id]))
-		}
-	}
-	if len(errs) > 0 {
-		return errors.New(strings.Join(errs, "; "))
-	}
 	return nil
 }

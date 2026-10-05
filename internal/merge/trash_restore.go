@@ -1,13 +1,14 @@
 // file: internal/merge/trash_restore.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 59c79d7e-300f-40f3-aec2-d7d290bdb7ab
-// last-edited: 2026-10-02
+// last-edited: 2026-10-05
 
 package merge
 
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -56,6 +57,11 @@ type pendingRepairScanner interface {
 //
 // When the row is in the trash (database.IsInTrash) it:
 //
+//  0. when the row's version group was emptied by a merge (every live member
+//     moved to another group, MergeBooks item 6) and the row went into the
+//     trash before that, restores it into the group its group went to, so it
+//     comes back with its family (trashRestoreTarget, group_redirect.go); the
+//     steps below then run against that group;
 //  1. under the book's version-group lock, reads the group's incumbent and
 //     works out the row the restore will write (database.RestoreBookFromTrash
 //     plus versionprimary.YieldToIncumbent);
@@ -132,6 +138,23 @@ func RestoreFromTrash(store TrashRestoreStore, id string, apply func(*database.B
 	LockMergeRMW()
 	defer UnlockMergeRMW()
 
+	// A row in a group a merge emptied is restored into the group that group
+	// went to (group_redirect.go), so it comes back with its family instead
+	// of alone. The target is read here, before the locks, so it can be
+	// locked with the row's group; it is read again under the locks below and
+	// followed only if it still holds.
+	redirectTo := ""
+	if pre, err := store.GetBookByID(id); err != nil {
+		return res, fmt.Errorf("read %s: %w", id, err)
+	} else if pre != nil && database.IsInTrash(pre) {
+		if redirectTo, err = trashRestoreTarget(store, pre); err != nil {
+			return res, err
+		}
+		if redirectTo != "" {
+			joinGroups = append(slices.Clone(joinGroups), redirectTo)
+		}
+	}
+
 	unlockGroups, lockedGroups, err := versionprimary.LockBookGroups(store, []string{id}, joinGroups...)
 	if err != nil {
 		return res, err
@@ -174,6 +197,20 @@ func RestoreFromTrash(store TrashRestoreStore, id string, apply func(*database.B
 	if trashed && book.VersionGroupID != nil {
 		gid = strings.TrimSpace(*book.VersionGroupID)
 	}
+	// Re-check the redirect under the locks. Only a target locked above is
+	// followed; one that changed in between is not (the row is restored
+	// where it is, as before redirects existed).
+	fromGroup := ""
+	if trashed && redirectTo != "" {
+		target, err := trashRestoreTarget(store, book)
+		if err != nil {
+			unlockGroup()
+			return res, err
+		}
+		if target == redirectTo {
+			fromGroup, gid = gid, target
+		}
+	}
 	incumbent := ""
 	if gid != "" {
 		// The incumbent is read and the yield written under the group's lock
@@ -189,6 +226,10 @@ func RestoreFromTrash(store TrashRestoreStore, id string, apply func(*database.B
 	restoreRow := func(row *database.Book) bool {
 		if !database.RestoreBookFromTrash(row, files, env) {
 			return false
+		}
+		if fromGroup != "" && row.VersionGroupID != nil && strings.TrimSpace(*row.VersionGroupID) == fromGroup {
+			to := gid
+			row.VersionGroupID = &to
 		}
 		// Yield only in the group whose incumbent was read; a row moved to
 		// another group since is left to the caller's hand-off.
@@ -208,6 +249,10 @@ func RestoreFromTrash(store TrashRestoreStore, id string, apply func(*database.B
 			return false
 		}
 		return database.RestoredRowIsABSListable(row, files, env)
+	}
+	if fromGroup != "" {
+		mlog.Info("restore from trash: book=%s was in version group %s, which a merge emptied into %s; restoring it there",
+			logger.SanitizeLogValue(id), logger.SanitizeLogValue(fromGroup), logger.SanitizeLogValue(gid))
 	}
 	if trashed {
 		// RestoreBookFromTrash and YieldToIncumbent assign fresh pointers and

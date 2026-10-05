@@ -1,7 +1,7 @@
 // file: internal/dedup/engine.go
-// version: 1.90.0
+// version: 1.91.0
 // guid: 8f3a1c6e-d472-4b9a-a5e1-7c2d9f0b3e84
-// last-edited: 2026-09-27
+// last-edited: 2026-10-05
 
 package dedup
 
@@ -89,6 +89,10 @@ type Engine struct {
 	llmParser     *ai.OpenAIParser
 	mergeService  *merge.Service
 	aiJobsStore   database.AIJobsStore
+	// journalPut, when set, replaces embedStore.PutAutoMergeJournalEntry for
+	// the merge journal writes (putJournal). Tests set it to inject a write
+	// failure; production leaves it nil.
+	journalPut func(database.AutoMergeJournalEntry) (string, error)
 
 	// Thresholds (read from config or set directly)
 	BookHighThreshold   float64
