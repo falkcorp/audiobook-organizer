@@ -1,7 +1,7 @@
 // file: internal/franchise/franchise_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 0e7a3c51-2d94-4b8f-a6e1-7c5d9f3b2a18
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 package franchise
 
@@ -137,7 +137,8 @@ func TestTitleStrength(t *testing.T) {
 		"Frontios - Doctor Who":           true,
 		"Torchwood: Aliens Among Us":      true,
 		"Big Finish Productions Presents": true,
-		"Genesis of the Cybermen":         true,
+		"Genesis of the Cybermen":         false, // census term only: weak
+		"The Sirens of Time":              false,
 		"The Doctor Who Fooled the World": false,
 		"Big Finish to the Season":        false,
 		"Secrets of the Torchwood Estate": false,

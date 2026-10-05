@@ -1,7 +1,7 @@
 // file: internal/applygate/manual_only_franchise_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 4c1e8a73-9b2d-4f60-a5e7-3d8f1b6c2a94
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 package applygate
 
@@ -88,5 +88,62 @@ func TestManualOnlyDetail_NarratorPublisher(t *testing.T) {
 	b = &database.Book{ID: "b", Title: "War Master's Gate", FilePath: "/lib/Adrian Tchaikovsky/x"}
 	if r, d := ManualOnlyDetail(b, nil, TranscribedSearch{}, ManualOnlyGuard{Bulk: true}); r != "" {
 		t.Errorf("Tchaikovsky held: %s", d)
+	}
+}
+
+// Owner decision 2026-10-05: "Missy" alone in a narrator or publisher credit
+// no longer holds a book; in a title, path or series it still does.
+func TestMissyCreditNotHeld_TitleStillHeld(t *testing.T) {
+	b := &database.Book{ID: "b", Title: "To Boldly Go", FilePath: "/lib/Em Stevens/To Boldly Go", Narrator: sp("Missy Cambridge")}
+	if g := BulkManualOnlyGuard(moReaders(moFake{}), b, ""); g.StoreDetail != "" || g.ReadErr != "" {
+		t.Errorf("narrator Missy Cambridge held by the store guard: %+v", g)
+	}
+	if r, d := ManualOnlyDetail(b, nil, TranscribedSearch{}, ManualOnlyGuard{Bulk: true}); r != "" {
+		t.Errorf("narrator Missy Cambridge held: %s", d)
+	}
+	b = &database.Book{ID: "b", Title: "x", FilePath: "/lib/x", Publisher: sp("Missy Elliott Publishing")}
+	if r, d := ManualOnlyDetail(b, nil, TranscribedSearch{}, ManualOnlyGuard{Bulk: true}); r != "" {
+		t.Errorf("publisher Missy held: %s", d)
+	}
+	// A narrator naming more than Missy still holds.
+	b = &database.Book{ID: "b", Title: "x", FilePath: "/lib/x", Narrator: sp("Missy - Big Finish Productions")}
+	if r, _ := ManualOnlyDetail(b, nil, TranscribedSearch{}, ManualOnlyGuard{Bulk: true}); r != ReasonOwnerManualOnly {
+		t.Error("narrator naming Big Finish not held")
+	}
+	// Title, path and series keep the original pattern.
+	for _, b := range []*database.Book{
+		{ID: "b", Title: "Missy and the Doctor", FilePath: "/lib/x"},
+		{ID: "b", Title: "x", FilePath: "/lib/Missy/Series 2/01.mp3"},
+	} {
+		if r, _ := ManualOnlyDetail(b, nil, TranscribedSearch{}, ManualOnlyGuard{Bulk: true}); r != ReasonOwnerManualOnly {
+			t.Errorf("%q / %q not held", b.Title, b.FilePath)
+		}
+	}
+	if !IsOwnerManualOnly("", "Missy Series 2") {
+		t.Error("series Missy Series 2 not held")
+	}
+}
+
+// BookRowManualOnly reads every field of the row, with the Missy credit rule.
+func TestBookRowManualOnly(t *testing.T) {
+	cases := []struct {
+		core database.BookCore
+		want bool
+	}{
+		{database.BookCore{FilePath: "/lib/Doctor Who/x"}, true},
+		{database.BookCore{FilePath: "/lib/x", Title: "Genesis of the Cybermen"}, true},
+		{database.BookCore{FilePath: "/lib/x", Narrator: sp("Stargate SG-1 - Series 2")}, true},
+		{database.BookCore{FilePath: "/lib/x", Publisher: sp("Big Finish Productions")}, true},
+		{database.BookCore{FilePath: "/lib/x", TranscribedTitle: sp("Doctor Who: The Chimes of Midnight")}, true},
+		{database.BookCore{FilePath: "/lib/x", Narrator: sp("Missy Cambridge")}, false},
+		{database.BookCore{FilePath: "/lib/Adrian Tchaikovsky/War Master's Gate", Title: "War Master's Gate"}, false},
+	}
+	for _, c := range cases {
+		if got := BookRowManualOnly(&c.core, ""); got != c.want {
+			t.Errorf("%+v: got %v, want %v", c.core, got, c.want)
+		}
+	}
+	if !BookRowManualOnly(&database.BookCore{FilePath: "/lib/x"}, "Torchwood") {
+		t.Error("series not read")
 	}
 }

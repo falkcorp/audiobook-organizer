@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/tag_franchise_fixer_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9f3a6c28-1e74-4b5d-8c02-7a6e4d9b1f35
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 package maintenance
 
@@ -155,8 +155,9 @@ func TestTagFranchise_PlanApplyRevert(t *testing.T) {
 	require.Equal(t, repairs.OutcomeApplied, byRow[dw.RowID], "%+v", res.Rows)
 	require.Equal(t, repairs.OutcomeApplied, byRow[it.RowID], "%+v", res.Rows)
 	require.Equal(t, repairs.OutcomeApplied, byRow[tw.RowID], "a weak row applies only when chosen by id: %+v", res.Rows)
-	require.Equal(t, map[string]string{"franchise:doctor-who": "franchise-matcher"}, l.tags("dw"))
-	require.Equal(t, map[string]string{"franchise:big-finish": "franchise-matcher", "range:stargate": "franchise-matcher"}, l.tags("itunes"))
+	src := "franchise-matcher:" + tfTestOpID
+	require.Equal(t, map[string]string{"franchise:doctor-who": src}, l.tags("dw"))
+	require.Equal(t, map[string]string{"franchise:big-finish": src, "range:stargate": src}, l.tags("itunes"))
 
 	// Tags do not touch files: the book and its file rows are unchanged.
 	b, err := l.store.GetBookByID(l.ids["itunes"])

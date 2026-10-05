@@ -1,7 +1,7 @@
 // file: internal/repairs/franchise_guard_test.go
-// version: 1.0.1
+// version: 1.1.1
 // guid: 2b7d4e19-6a3c-4f05-8e91-c4d7a2b6f3e0
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 package repairs
 
@@ -155,4 +155,47 @@ func TestWriterAddBookTag(t *testing.T) {
 	for _, tg := range tags {
 		require.NotEqual(t, "franchise:torchwood", tg.Tag)
 	}
+}
+
+// tagsOnlyTrim claims BookTagsOnly but writes a title: the writer refuses.
+type tagsOnlyTrim struct{ *trimFixer }
+
+func (tagsOnlyTrim) BookTagsOnly() bool { return true }
+
+func TestRunApply_BookTagsOnlyWriterRefusesModify(t *testing.T) {
+	s := newMemStore()
+	seed(s)
+	f := tagsOnlyTrim{&trimFixer{s: s}}
+	plan := planFor(t, s, f)
+	before := s.title("b1")
+	res, err := RunApply(context.Background(), f, plan, "op-plan", []string{"b1"}, false, deps(s, &fakeStandDown{renewsLeft: -1}), nopReporter{})
+	require.NoError(t, err)
+	require.Len(t, res.Rows, 1)
+	require.Equal(t, OutcomeFailed, res.Rows[0].Outcome, "%+v", res.Rows[0])
+	require.Contains(t, res.Rows[0].Error, "book-tags-only")
+	require.Equal(t, before, s.title("b1"), "the title must not be written")
+}
+
+// Per-run sources: run A's revert never removes the tag run B re-added after
+// a person removed A's.
+func TestBookTagAdd_PerRunSource(t *testing.T) {
+	st, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+	b, err := st.CreateBook(&database.Book{Title: "x", FilePath: "/lib/x", Format: "m4b"})
+	require.NoError(t, err)
+	wa := NewWriter(st, st, "fx", "bulk_update", "repairs-").WithJournal(st, st, "op-a").WithTags(st)
+	_, err = wa.AddBookTag(b.ID, "franchise:doctor-who", "franchise-matcher:op-a")
+	require.NoError(t, err)
+	require.NoError(t, st.RemoveBookTag(b.ID, "franchise:doctor-who"))
+	wb := NewWriter(st, st, "fx", "bulk_update", "repairs-").WithJournal(st, st, "op-b").WithTags(st)
+	_, err = wb.AddBookTag(b.ID, "franchise:doctor-who", "franchise-matcher:op-b")
+	require.NoError(t, err)
+	rowsA, err := st.GetOperationChanges("op-a")
+	require.NoError(t, err)
+	require.Len(t, rowsA, 1)
+	tags, err := st.GetBookTagsDetailed(b.ID)
+	require.NoError(t, err)
+	require.Error(t, undo.CheckBookTagAdd(tags, rowsA[0]), "run A's revert must not remove run B's tag")
+	require.NotErrorIs(t, undo.CheckBookTagAdd(tags, rowsA[0]), undo.ErrAlreadyRestored)
 }

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_path_link.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 4a1b9de2-6c07-4f35-8b1a-9d2e5c7f0a63
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 package maintenance
 
@@ -685,7 +685,7 @@ func authorPathLinkClassify(b *database.BookCore, idx *authorPathLinkIndex) auth
 		ch.Outcome = authorPathLinkITunesHandsOff
 		return ch
 	}
-	if applygate.IsOwnerManualOnly(b.FilePath, "") {
+	if applygate.BookRowManualOnly(b, "") {
 		ch.Outcome = authorPathLinkOwnerManual
 		return ch
 	}

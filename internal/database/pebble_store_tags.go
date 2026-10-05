@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_tags.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: c2ad6d2b-75c3-446d-9f67-08cc517050e2
-// last-edited: 2026-09-25
+// last-edited: 2026-10-05
 
 package database
 
@@ -56,15 +56,20 @@ func (p *PebbleStore) AddBookTagWithSource(bookID, tag, source string) (err erro
 		return err
 	}
 
-	// Primary key: book_tag:<bookID>:<tag>
-	bookTagKey := []byte(fmt.Sprintf("book_tag:%s:%s", bookID, tag))
-	if err := p.db.Set(bookTagKey, data, pebble.Sync); err != nil {
+	// Primary key book_tag:<bookID>:<tag> and reverse index
+	// tag_idx:<tag>:<bookID>, in ONE batch: a failure between two separate
+	// writes left a tag row with no index entry (or the reverse) that the
+	// caller was told failed -- an untracked tag a journaled write then
+	// voided its undo row for.
+	batch := p.db.NewBatch()
+	defer func() { _ = batch.Close() }()
+	if err := batch.Set([]byte(fmt.Sprintf("book_tag:%s:%s", bookID, tag)), data, nil); err != nil {
 		return err
 	}
-
-	// Reverse index: tag_idx:<tag>:<bookID>
-	tagIdxKey := []byte(fmt.Sprintf("tag_idx:%s:%s", tag, bookID))
-	return p.db.Set(tagIdxKey, []byte{}, pebble.Sync)
+	if err := batch.Set([]byte(fmt.Sprintf("tag_idx:%s:%s", tag, bookID)), []byte{}, nil); err != nil {
+		return err
+	}
+	return batch.Commit(pebble.Sync)
 }
 
 // RemoveBookTag removes a tag from a book regardless of source.
@@ -80,17 +85,16 @@ func (p *PebbleStore) RemoveBookTag(bookID, tag string) (err error) {
 		return fmt.Errorf("tag cannot be empty")
 	}
 
-	bookTagKey := []byte(fmt.Sprintf("book_tag:%s:%s", bookID, tag))
-	if err := p.db.Delete(bookTagKey, pebble.Sync); err != nil && err != pebble.ErrNotFound {
+	// Both keys in one batch, as AddBookTagWithSource writes them.
+	batch := p.db.NewBatch()
+	defer func() { _ = batch.Close() }()
+	if err := batch.Delete([]byte(fmt.Sprintf("book_tag:%s:%s", bookID, tag)), nil); err != nil {
 		return err
 	}
-
-	tagIdxKey := []byte(fmt.Sprintf("tag_idx:%s:%s", tag, bookID))
-	if err := p.db.Delete(tagIdxKey, pebble.Sync); err != nil && err != pebble.ErrNotFound {
+	if err := batch.Delete([]byte(fmt.Sprintf("tag_idx:%s:%s", tag, bookID)), nil); err != nil {
 		return err
 	}
-
-	return nil
+	return batch.Commit(pebble.Sync)
 }
 
 // RemoveBookTagsByPrefix removes every tag on a book whose name

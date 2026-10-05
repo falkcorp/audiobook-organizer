@@ -1,7 +1,7 @@
 // file: internal/metabatch/store.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 9d4e6b02-8a15-4c73-b2f9-7e1a3d508c62
-// last-edited: 2026-09-27
+// last-edited: 2026-10-05
 
 package metabatch
 
@@ -36,9 +36,11 @@ type Store interface {
 	GetBookByID(id string) (*database.Book, error)
 	GetBookFiles(bookID string) ([]database.BookFile, error)
 	GetBooksByTag(tag string) ([]string, error)
-	// The series name the owner-manual-only guard (applygate.IsOwnerManualOnly)
-	// checks before the metadata upgrade searches a book.
+	// The series name and franchise tags the owner-manual-only guard
+	// (applygate.BulkManualOnlyGuard) checks before the metadata upgrade
+	// searches a book.
 	GetSeriesByID(id int) (*database.Series, error)
+	GetBookTagsDetailed(bookID string) ([]database.BookTag, error)
 	// The metadata upgrade's persisted sweep cursor (upgradeCursorKey).
 	GetOperationState(opID string) ([]byte, error)
 	SaveOperationState(opID string, state []byte) error

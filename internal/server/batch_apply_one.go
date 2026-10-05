@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.32.0
+// version: 1.33.0
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 package server
 
@@ -85,8 +85,8 @@ type bookReader interface {
 
 // bulkManualOnlyGuard builds the certainty gate's owner-manual-only input
 // (applygate.ManualOnlyGuard) for a bulk planner: the store-backed half of
-// the check, which the gate cannot do itself -- the book's series name and
-// every book_file path, the same inputs metabatch's upgrade checks
+// the check, which the gate cannot do itself -- the book's series name, its
+// author credits, its franchise tags and every book_file path
 // (applygate.BulkManualOnlyGuard). A read failure goes in ReadErr, which the
 // gate refuses as owner_manual_check_failed (hard, not overridable) -- never
 // read as "not manual-only".

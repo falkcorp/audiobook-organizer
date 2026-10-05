@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/repoint_version_primary.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 5e1c8a07-3d42-4f96-b8d1-c07a9e25f4b3
-// last-edited: 2026-09-26
+// last-edited: 2026-10-05
 
 package jobs
 
@@ -549,7 +549,7 @@ func (j *repointVersionPrimaryJob) classify(store maintenance.JobStore, idx *rep
 	// saw it and neither exclusion hook has looked at it. Both must be run here
 	// or this job would demote a row inside the iTunes library or one of the
 	// owner's manual-only titles.
-	if applygate.IsOwnerManualOnly(twin.FilePath, "") || applygate.IsOwnerManualOnly(b.FilePath, "") {
+	if applygate.BookRowManualOnly(twin, "") || applygate.BookRowManualOnly(b, "") {
 		d.Bucket = bucketOwnerManualOnly
 		d.Reason = "owner-manual-only title (Doctor Who / Big Finish / Torchwood)"
 		return d

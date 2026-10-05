@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_clone_into_library.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 9c4e1b27-6a3f-4d80-b5e2-3f7a0c8d1e64
-// last-edited: 2026-10-03
+// last-edited: 2026-10-05
 
 package maintenance
 
@@ -678,7 +678,7 @@ func (r *icRunner) plan(ctx context.Context, gid string) (icGroupReport, *icPlan
 		}
 	}
 	g.SourceBookID, g.Title = book.ID, book.Title
-	if applygate.IsOwnerManualOnly(book.FilePath, "") || applygate.IsOwnerManualOnly(book.Title, "") {
+	if bookRowManualOnly(book, "") {
 		return skipped(g, "owner_manual_only"), nil
 	}
 	copies, strong, err := r.libraryCopies(book, gid)

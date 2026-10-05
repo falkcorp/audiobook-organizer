@@ -1,7 +1,7 @@
 // file: internal/franchise/franchise.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: ddd241fe-c7e3-4ff5-b3df-7e2908d49f7b
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 // Package franchise is the one matcher for the libraries the owner curates by
 // hand: Doctor Who, Big Finish and Torchwood. Every owner-manual guard
@@ -42,7 +42,8 @@ const (
 )
 
 // Tag vocabulary. A tagged book carries FranchiseTagPrefix+<franchise> and,
-// when a range is known, RangeTagPrefix+<range>, both with source TagSource.
+// when a range is known, RangeTagPrefix+<range>, both with source
+// RunSource(<apply op id>) ("franchise-matcher:<op id>").
 const (
 	TagSource          = "franchise-matcher"
 	FranchiseTagPrefix = "franchise:"
@@ -454,6 +455,21 @@ func HeldByTags(tags []string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// RunSource is the tag source one tagger apply writes: TagSource plus the
+// apply operation's id. A revert of one apply then removes only the tags that
+// apply wrote, never a tag a later apply re-added after a person removed it.
+func RunSource(opID string) string {
+	if opID == "" {
+		return TagSource
+	}
+	return TagSource + ":" + opID
+}
+
+// IsTaggerSource reports whether a tag source is the tagger's (any run).
+func IsTaggerSource(src string) bool {
+	return src == TagSource || strings.HasPrefix(src, TagSource+":")
 }
 
 // Tags returns the tags a franchise and range are recorded as.

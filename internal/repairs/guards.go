@@ -1,7 +1,7 @@
 // file: internal/repairs/guards.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 5a2c9e14-6f3b-4d87-b0e1-9c7d4a8f2e56
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 package repairs
 
@@ -29,7 +29,8 @@ const (
 	// books/itunes/**, the live iTunes library, which is hands-off.
 	SkipITunes = "skipped_itunes"
 	// SkipOwnerManual: a book of the row is Doctor Who / Big Finish /
-	// Torchwood by path, series or title; the owner applies those by hand.
+	// Torchwood by path, series, title, credits, transcribed fields or a
+	// franchise tag (internal/franchise); the owner applies those by hand.
 	SkipOwnerManual = "skipped_owner_manual"
 )
 
