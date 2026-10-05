@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-05-the-chapter-sets-that-became-second-copies-executive-summary.md -->
-<!-- version: 1.1.1 -->
+<!-- version: 1.1.2 -->
 <!-- guid: 947b3d82-2669-4187-8065-4f7e76ee4cf8 -->
 <!-- last-edited: 2026-10-05 -->
 
@@ -14,10 +14,12 @@
   were second copies of books the library already had ("Book 2 - Eldest",
   347 chapters, beside "Eldest", 349 files).
 - **It now checks first.** Before building anything, the repair looks for a
-  book with the same title. A leading series number such as "Book 2 -" is set
-  aside but still has to agree, and a volume number ("Vol 3") is part of the
-  title, so volume 3 is never folded into volume 1. If the same work exists,
-  by the same author, and the running times agree, the chapters are folded
+  book with the same title. Series numbers ("Book 2 - Eldest", "Eldest, Book
+  2", "Vol 3") are set aside but still have to agree, so volume 3 is never
+  folded into volume 1, and a title that has a number on one side only is
+  held for review. If the same work exists,
+  by the same author (taken from the folder when the files carry none), and
+  the running times agree, the chapters are folded
   into it instead. Otherwise nothing happens and the owner decides. A folder
   of chapters with no recognisable title is held rather than built blind.
 - **Copies of a book's chapters are recognised.** Chapters that are re-tagged

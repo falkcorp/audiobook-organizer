@@ -6,15 +6,19 @@ The fragment-consolidation fixer's no-parent path assembled a new book from a
 folder's numbered chapter fragments without checking whether that work was
 already a live book. On 2026-10-05, 13 of the 19 applied no-parent rows made a
 duplicate ("Book 2 - Eldest", 347 fragments, beside "Eldest", 349 files).
-Every no-parent group is now compared with the live books by a title key: a
-leading position ("Book 2 - ", "02 - ", "Inheritance Cycle 02 - ") is taken
-off but kept, so "Book 2 - Eldest" matches "Eldest" and never "Book 3 -
-Eldest"; a volume or book number elsewhere stays in the key, so "Saga, Vol 3"
-is not "Saga, Vol 1" and "Dragon Born, Book 3" is not "Dragon Born". The
-group's title comes from its folder, its chapter key or its members' titles;
-a group with none of these is held (`skipped_no_title_key`) instead of being
-assembled unchecked. A match becomes an `existing-book` row: when the totals
-agree within max(2%, 5 min) and the authors do not differ, the fragments are
+Every no-parent group is now compared with the live books by a title key. A
+leading position ("Book 2 - ", "02 - ", "Inheritance Cycle 02 - ") and a
+trailing one (", Book 2", "(Book 2)", " Vol 3", a ": Series, Book 2"
+subtitle) are taken off and kept: the same name at the same position is one
+work ("Book 2 - Eldest" / "Eldest, Book 2"), at different positions two works
+("Saga, Vol 3" / "Saga, Vol 1"), and with a trailing position on one side
+only ("Eldest, Book 2" / "Eldest", "Dragon Born, Book 3" / "Dragon Born")
+uncertain, which holds the row. The group's title comes from its folder, its
+chapter key or its members' titles; a group with none of these is held
+(`skipped_no_title_key`) instead of being assembled unchecked. Its author is
+the members' tag, or else the author folder above the work folder. A match
+becomes an `existing-book` row: when the totals agree within max(2%, 5 min)
+and the authors are known on both sides and do not differ, the fragments are
 retired into that book, each keeping its own file row; otherwise the row is
 held as `skipped_existing_book`. The row shows the source folder, title and
 author beside the book it joins.
