@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_clone_into_library.go
-// version: 1.9.1
+// version: 1.10.0
 // guid: 9c4e1b27-6a3f-4d80-b5e2-3f7a0c8d1e64
 // last-edited: 2026-10-05
 
@@ -24,6 +24,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
@@ -244,6 +245,48 @@ type icRunner struct {
 	// refuses a nil reader, so with none every group is skipped as
 	// owner_manual_check_failed rather than checked without its tags.
 	tags applygate.ManualOnlyTagReader
+	// userState carries a version clone's listening state back onto its
+	// source before a rollback deletes the clone (undo). The clone is the
+	// organized copy, usually crowned the group's primary, so Audiobookshelf
+	// lists it, users play it, and merges send their state to it as the flag
+	// holder. nil resolves from the store (icUserStateStore); with none the
+	// rollback is refused rather than delete state it cannot move.
+	userState merge.UserProgressMerger
+}
+
+// icUserStateStore is the store undo moves a clone's user state through.
+func (r *icRunner) icUserStateStore() merge.UserProgressMerger {
+	if r.userState != nil {
+		return r.userState
+	}
+	if um, ok := database.AsCapability[merge.UserProgressMerger](r.store); ok {
+		return um
+	}
+	return nil
+}
+
+// carryCloneStateToSource moves every user's state on the clone (progress,
+// read status, positions, bookmarks) and its ABS identity back onto the
+// source with merge.FollowMerge, then re-reads the clone and fails unless
+// nothing carryable is left on it. FollowMerge reports success when a
+// pending-repair record holds a move that failed; that record would name a
+// clone about to be deleted, so here only a completed move counts.
+func (r *icRunner) carryCloneStateToSource(rec *icRecord) error {
+	um := r.icUserStateStore()
+	if um == nil {
+		return fmt.Errorf("store cannot read or move users' listening state")
+	}
+	if err := merge.FollowMergeWithStore(um, rec.SourceBookID, []string{rec.CloneBookID}); err != nil {
+		return err
+	}
+	left, err := merge.BookHasCarryableUserState(um, rec.CloneBookID)
+	if err != nil {
+		return fmt.Errorf("verify the move: %w", err)
+	}
+	if left {
+		return fmt.Errorf("listening state is still on the clone after the move (a pending user-state repair holds it)")
+	}
+	return nil
 }
 
 func (p *Plugin) itunesCloneIntoLibrary(ctx context.Context, params icParams, rootDir string, reporter sdk.Reporter) (*icReport, error) {
@@ -279,6 +322,9 @@ func (p *Plugin) itunesCloneIntoLibrary(ctx context.Context, params icParams, ro
 		reflink = fileops.Reflink
 	}
 	run := &icRunner{store: icStore{OpsStore: ops, ChapterReader: vps}, cloner: p.deps, reflink: reflink, rootDir: rootDir, opID: opID, apply: params.Apply, tags: p.deps.BookTagReader()}
+	if um := p.deps.MergeUserStateStore(); um != nil {
+		run.userState = um
+	}
 	if writes {
 		cp, ok := database.AsCapability[chapterPersister](ops)
 		if !ok {
@@ -1030,8 +1076,9 @@ func (r *icRunner) rollback(ctx context.Context, gid string) icGroupReport {
 	return res
 }
 
-// undo reverses one clone from its record. Order: PIDs back to the source's
-// rows, the clone's rows and files removed, the source's prior state
+// undo reverses one clone from its record. Order: a version clone's users'
+// listening state carried back to the source (refused, with nothing changed,
+// when it cannot fully move), PIDs back to the source's rows, the clone's rows and files removed, the source's prior state
 // restored, the primary handed on, then the record cleared. A step that finds
 // a row no longer as the record left it stops and keeps the record.
 func (r *icRunner) undo(ctx context.Context, rec *icRecord) icGroupReport {
@@ -1042,6 +1089,14 @@ func (r *icRunner) undo(ctx context.Context, rec *icRecord) icGroupReport {
 	}
 	switch rec.Kind {
 	case icKindVersion:
+		// First, before anything changes: the clone book is deleted below,
+		// and with it any listening state on it. Carry that state back to
+		// the source; if it does not fully move, refuse the rollback with
+		// nothing changed and the record kept, so a retry can finish it.
+		if err := r.carryCloneStateToSource(rec); err != nil {
+			return fail("refusing to delete clone %s: its users' listening state could not be moved to source %s: %v",
+				rec.CloneBookID, rec.SourceBookID, err)
+		}
 		for _, pr := range rec.Pairs {
 			if pr.PID == "" || pr.SourceFileID == "" {
 				continue

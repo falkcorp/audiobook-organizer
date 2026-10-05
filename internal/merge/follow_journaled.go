@@ -1,5 +1,5 @@
 // file: internal/merge/follow_journaled.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 6a7e0c1a-cb17-41e5-bf0f-dd8903735f64
 // last-edited: 2026-10-05
 
@@ -218,12 +218,20 @@ type UserStateReader interface {
 // drained row a completed follow leaves on a merge loser, so a loser whose
 // state moved reads false. An error means the answer is unknown.
 //
-// Every path that hard-deletes a book row it did not just create refuses one
-// this reports true for (audiobooks.PurgeSoftDeletedBooks,
-// reconcile.CleanupDuplicateVersionGroups, the iTunes regroup apply):
+// The automatic hard deletes refuse a book this reports true for, because
 // deleting it would drop state that never reached a live book (a follow that
 // failed with no repair record, a follow still pending repair, a duplicate no
-// merge ever followed).
+// merge ever followed): audiobooks.PurgeSoftDeletedBooks,
+// reconcile.CleanupDuplicateVersionGroups and the iTunes regroup apply. The
+// iTunes clone rollback carries the clone's state to its source first and
+// uses this to confirm the move finished.
+//
+// A deliberate hard delete a user asks for is NOT guarded, on purpose: the
+// single-book delete (audiobooks service_mutation.go DeleteAudiobook), the
+// batch hard delete (batch/service.go) and the diagnostics CLI's confirmed
+// delete of invalid records (cmd/diagnostics.go). Those remove the book and
+// its state together because that is what the user asked for. The rollbacks that delete a row a request
+// just created (organizer, the versions handlers) are not guarded either.
 func BookHasCarryableUserState(db UserStateReader, bookID string) (bool, error) {
 	probe, err := NewUserStateProbe(db)
 	if err != nil {
