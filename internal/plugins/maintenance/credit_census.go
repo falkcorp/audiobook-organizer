@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/credit_census.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1df256d6-add9-41de-bf6d-622ed04e2944
 // last-edited: 2026-10-04
 
@@ -87,26 +87,28 @@ const (
 
 // Class keys. Stable strings: the UI and PR 3 select books by them.
 const (
-	ccNoAuthor                 = "no_author"
-	ccAuthorIDJoinEmpty        = "author_id_join_empty"
-	ccAuthorIDNotPrimary       = "author_id_not_primary"
-	ccAuthorIDNotInJoin        = "author_id_not_in_join"
-	ccAuthorPositionsNotNorm   = "author_positions_not_normalized"
-	ccAuthorPositionsAllZero   = "author_positions_all_zero"
-	ccAuthorJoinCombined       = "author_join_combined"
-	ccAuthorSnapshotStale      = "author_snapshot_stale"
-	ccAuthorIDDangling         = "author_id_dangling"
-	ccAuthorIDTombstoned       = "author_id_tombstoned"
-	ccNarratorColumnNoJunction = "narrator_column_no_junction"
-	ccNarratorColumnDiffers    = "narrator_column_differs_junction"
-	ccNarratorJunctionNoColumn = "narrator_junction_no_column"
-	ccNarratorColumnNotPeople  = "narrator_column_not_people"
-	ccNarratorsJSONNoJunction  = "narrators_json_junction_empty"
-	ccNarratorsJSONDisagrees   = "narrators_json_disagrees_both"
-	ccNarratorPositionsNotNorm = "narrator_positions_not_normalized"
-	ccNarratorJunctionCombined = "narrator_junction_combined"
-	ccNarratorIDDangling       = "narrator_id_dangling"
-	ccReadError                = "read_error"
+	ccNoAuthor                               = "no_author"
+	ccAuthorIDJoinEmpty                      = "author_id_join_empty"
+	ccAuthorJoinNoAuthorID                   = "author_join_no_author_id"
+	ccAuthorIDNotPrimary                     = "author_id_not_primary"
+	ccAuthorIDNotInJoin                      = "author_id_not_in_join"
+	ccAuthorPositionsNotNorm                 = "author_positions_not_normalized"
+	ccAuthorPositionsAllZero                 = "author_positions_all_zero"
+	ccAuthorJoinCombined                     = "author_join_combined"
+	ccAuthorSnapshotStale                    = "author_snapshot_stale"
+	ccAuthorIDDangling                       = "author_id_dangling"
+	ccAuthorIDTombstoned                     = "author_id_tombstoned"
+	ccNarratorColumnNoJunction               = "narrator_column_no_junction"
+	ccNarratorColumnDiffers                  = "narrator_column_differs_junction"
+	ccNarratorJunctionNoColumn               = "narrator_junction_no_column"
+	ccNarratorColumnNotPeople                = "narrator_column_not_people"
+	ccNarratorColumnNotPeopleJunctionDiffers = "narrator_column_not_people_junction_differs"
+	ccNarratorsJSONNoJunction                = "narrators_json_junction_empty"
+	ccNarratorsJSONDisagrees                 = "narrators_json_disagrees_both"
+	ccNarratorPositionsNotNorm               = "narrator_positions_not_normalized"
+	ccNarratorJunctionCombined               = "narrator_junction_combined"
+	ccNarratorIDDangling                     = "narrator_id_dangling"
+	ccReadError                              = "read_error"
 )
 
 // creditClassDef is one class as the payload describes it.
@@ -123,6 +125,8 @@ var creditCensusClasses = []creditClassDef{
 		"Book.AuthorID is unset (nil or <= 0) and book_authors is empty: no author credit at all."},
 	{ccAuthorIDJoinEmpty, creditKindDisagreement,
 		"Book.AuthorID is set but book_authors is empty."},
+	{ccAuthorJoinNoAuthorID, creditKindDisagreement,
+		"book_authors is not empty but Book.AuthorID is unset (nil or <= 0)."},
 	{ccAuthorIDNotPrimary, creditKindDisagreement,
 		"Book.AuthorID is in book_authors, but no row at the lowest Position credits it. " +
 			"Disjoint from author_id_not_in_join. A tie at the lowest Position that includes " +
@@ -154,6 +158,11 @@ var creditCensusClasses = []creditClassDef{
 	{ccNarratorColumnNotPeople, creditKindQuality,
 		"The Narrator column is set but util.CleanNarratorCredit does not read it as a list of people (junk such as a " +
 			"URL, or only the book's own authors). The junction sync leaves such books alone by design."},
+	{ccNarratorColumnNotPeopleJunctionDiffers, creditKindDisagreement,
+		"The Narrator column is set but not a list of people (junk, empty after cleaning, or only the book's " +
+			"authors), book_narrators is not empty, and the junction's names are not the column's raw split " +
+			"(util.SplitCreditNames, compared as a set). The junction sync leaves such books alone, so the junction " +
+			"is a stale cast. A self-read whose junction credits the author the column names is not counted."},
 	{ccNarratorsJSONNoJunction, creditKindDisagreement,
 		"NarratorsJSON names at least one narrator and book_narrators is empty (the case ABS serves from its second tier)."},
 	{ccNarratorsJSONDisagrees, creditKindDisagreement,
@@ -389,7 +398,10 @@ func classifyCreditBook(idx *creditCensusIndex, book *database.Book, join []data
 		add(ccNoAuthor)
 	case authorID != 0 && len(join) == 0:
 		add(ccAuthorIDJoinEmpty)
-	case authorID != 0:
+	case authorID == 0:
+		// The join credits someone but the flat field is empty.
+		add(ccAuthorJoinNoAuthorID)
+	default:
 		inJoin, atMin := false, false
 		minPos := sortedJoin[0].Position
 		for _, r := range sortedJoin {
@@ -550,6 +562,14 @@ func classifyCreditBook(idx *creditCensusIndex, book *database.Book, join []data
 		switch {
 		case verdict != util.NarratorCreditPeople:
 			add(ccNarratorColumnNotPeople)
+			// The sync leaves the junction alone for these verdicts, so a
+			// junction that names someone else is the stale cast the plan
+			// (section 2.3) calls a sync failure. A real self-read whose
+			// junction credits the author it names stays clean: the junction
+			// matches the column's raw split.
+			if len(junction) > 0 && !sameNameSet(junctionNames, util.SplitCreditNames(column)) {
+				add(ccNarratorColumnNotPeopleJunctionDiffers)
+			}
 		case len(junction) == 0:
 			add(ccNarratorColumnNoJunction)
 		case !sameOrderedNames(people, junctionNames):

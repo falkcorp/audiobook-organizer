@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/credit_census_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 974607e6-4eb5-4df4-8e22-9eefce977bf4
 // last-edited: 2026-10-04
 
@@ -267,6 +267,40 @@ func seedCreditCensus(t *testing.T) (*censusFakeStore, map[string][]string) {
 	s.books["n-selfread"] = &database.Book{ID: "n-selfread", AuthorID: intp(1), Narrator: strp("Brandon Sanderson")}
 	s.joins["n-selfread"] = authorsJoin("n-selfread", [2]int{1, 0})
 	put(ccNarratorColumnNotPeople, "n-selfread")
+
+	// author_join_no_author_id: the join credits author 1, AuthorID is unset.
+	s.books["b-joinnoid"] = &database.Book{ID: "b-joinnoid"}
+	s.joins["b-joinnoid"] = authorsJoin("b-joinnoid", [2]int{1, 0})
+	put(ccAuthorJoinNoAuthorID, "b-joinnoid")
+
+	// Junk column (a URL) with a stale junction.
+	s.books["n-junk-stale"] = &database.Book{ID: "n-junk-stale", AuthorID: intp(1), Narrator: strp("https://example.com")}
+	s.joins["n-junk-stale"] = authorsJoin("n-junk-stale", [2]int{1, 0})
+	s.junctions["n-junk-stale"] = narratorsJunction("n-junk-stale", [2]int{10, 0})
+	put(ccNarratorColumnNotPeople, "n-junk-stale")
+	put(ccNarratorColumnNotPeopleJunctionDiffers, "n-junk-stale")
+
+	// Column empty after cleaning (only a translator) with a stale junction.
+	s.books["n-empty-stale"] = &database.Book{ID: "n-empty-stale", AuthorID: intp(1), Narrator: strp("Translated by Someone")}
+	s.joins["n-empty-stale"] = authorsJoin("n-empty-stale", [2]int{1, 0})
+	s.junctions["n-empty-stale"] = narratorsJunction("n-empty-stale", [2]int{10, 0})
+	put(ccNarratorColumnNotPeople, "n-empty-stale")
+	put(ccNarratorColumnNotPeopleJunctionDiffers, "n-empty-stale")
+
+	// All-authors column (a self-read) with a stale junction naming someone else.
+	s.books["n-self-stale"] = &database.Book{ID: "n-self-stale", AuthorID: intp(1), Narrator: strp("Brandon Sanderson")}
+	s.joins["n-self-stale"] = authorsJoin("n-self-stale", [2]int{1, 0})
+	s.junctions["n-self-stale"] = narratorsJunction("n-self-stale", [2]int{10, 0})
+	put(ccNarratorColumnNotPeople, "n-self-stale")
+	put(ccNarratorColumnNotPeopleJunctionDiffers, "n-self-stale")
+
+	// All-authors column with a junction crediting that author: a real
+	// self-read, clean apart from the quality class.
+	s.narrators[13] = database.Narrator{ID: 13, Name: "Brandon Sanderson"}
+	s.books["n-self-match"] = &database.Book{ID: "n-self-match", AuthorID: intp(1), Narrator: strp("Brandon Sanderson")}
+	s.joins["n-self-match"] = authorsJoin("n-self-match", [2]int{1, 0})
+	s.junctions["n-self-match"] = narratorsJunction("n-self-match", [2]int{13, 0})
+	put(ccNarratorColumnNotPeople, "n-self-match")
 
 	// narrators_json_junction_empty + narrators_json_disagrees_both: JSON names
 	// Kate, junction empty, column names Michael.
@@ -568,5 +602,99 @@ func TestCreditCensus_RunOnPebblePersistsResultWithoutWrites(t *testing.T) {
 		if id == "book-nojoin" && len(join) != 0 {
 			t.Errorf("census wrote a join for %s: %v", id, join)
 		}
+	}
+}
+
+// TestCreditCensus_SwitchCoverage walks every AuthorID-set/unset x join
+// empty/non-empty combination and every narrator verdict x junction
+// empty/matching/stale combination through classifyCreditBook, so a missing
+// switch case (a combination that lands in no class when it should) fails.
+func TestCreditCensus_SwitchCoverage(t *testing.T) {
+	s := newCensusFakeStore()
+	s.authors[1] = database.Author{ID: 1, Name: "Brandon Sanderson"}
+	s.narrators[10] = database.Narrator{ID: 10, Name: "Michael Kramer"}
+	s.narrators[13] = database.Narrator{ID: 13, Name: "Brandon Sanderson"}
+	idx, err := buildCreditCensusIndex(s)
+	if err != nil {
+		t.Fatalf("index: %v", err)
+	}
+	has := func(classes []string, k string) bool {
+		for _, c := range classes {
+			if c == k {
+				return true
+			}
+		}
+		return false
+	}
+
+	authorCases := []struct {
+		name     string
+		authorID *int
+		join     []database.BookAuthor
+		want     string
+	}{
+		{"no id, no join", nil, nil, ccNoAuthor},
+		{"id, no join", intp(1), nil, ccAuthorIDJoinEmpty},
+		{"no id, join", nil, authorsJoin("x", [2]int{1, 0}), ccAuthorJoinNoAuthorID},
+		{"id, join agrees", intp(1), authorsJoin("x", [2]int{1, 0}), ""},
+	}
+	authorRelation := []string{ccNoAuthor, ccAuthorIDJoinEmpty, ccAuthorJoinNoAuthorID, ccAuthorIDNotPrimary, ccAuthorIDNotInJoin}
+	for _, tc := range authorCases {
+		t.Run("author/"+tc.name, func(t *testing.T) {
+			got, err := classifyCreditBook(idx, &database.Book{ID: "x", AuthorID: tc.authorID}, tc.join, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, k := range authorRelation {
+				if has(got, k) != (k == tc.want) {
+					t.Errorf("class %s present=%t, want present=%t (got %v)", k, has(got, k), k == tc.want, got)
+				}
+			}
+		})
+	}
+
+	kramer := narratorsJunction("x", [2]int{10, 0})
+	selfJ := narratorsJunction("x", [2]int{13, 0})
+	narratorCases := []struct {
+		name     string
+		column   string
+		junction []database.BookNarrator
+		want     []string
+	}{
+		{"no column, no junction", "", nil, nil},
+		{"no column, junction", "", kramer, []string{ccNarratorJunctionNoColumn}},
+		{"people, no junction", "Michael Kramer", nil, []string{ccNarratorColumnNoJunction}},
+		{"people, matching junction", "Michael Kramer", kramer, nil},
+		{"people, stale junction", "Kate Reading", kramer, []string{ccNarratorColumnDiffers}},
+		{"junk, no junction", "https://example.com", nil, []string{ccNarratorColumnNotPeople}},
+		{"junk, stale junction", "https://example.com", kramer, []string{ccNarratorColumnNotPeople, ccNarratorColumnNotPeopleJunctionDiffers}},
+		{"empty after cleaning, no junction", "Translated by Someone", nil, []string{ccNarratorColumnNotPeople}},
+		{"empty after cleaning, stale junction", "Translated by Someone", kramer, []string{ccNarratorColumnNotPeople, ccNarratorColumnNotPeopleJunctionDiffers}},
+		{"all-authors, no junction", "Brandon Sanderson", nil, []string{ccNarratorColumnNotPeople}},
+		{"all-authors, matching junction", "Brandon Sanderson", selfJ, []string{ccNarratorColumnNotPeople}},
+		{"all-authors, stale junction", "Brandon Sanderson", kramer, []string{ccNarratorColumnNotPeople, ccNarratorColumnNotPeopleJunctionDiffers}},
+	}
+	narratorRelation := []string{ccNarratorJunctionNoColumn, ccNarratorColumnNoJunction, ccNarratorColumnDiffers,
+		ccNarratorColumnNotPeople, ccNarratorColumnNotPeopleJunctionDiffers}
+	for _, tc := range narratorCases {
+		t.Run("narrator/"+tc.name, func(t *testing.T) {
+			b := &database.Book{ID: "x", AuthorID: intp(1)}
+			if tc.column != "" {
+				b.Narrator = strp(tc.column)
+			}
+			got, err := classifyCreditBook(idx, b, authorsJoin("x", [2]int{1, 0}), tc.junction)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, k := range narratorRelation {
+				want := false
+				for _, w := range tc.want {
+					want = want || w == k
+				}
+				if has(got, k) != want {
+					t.Errorf("class %s present=%t, want present=%t (got %v)", k, has(got, k), want, got)
+				}
+			}
+		})
 	}
 }
