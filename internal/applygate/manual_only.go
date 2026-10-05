@@ -33,10 +33,10 @@ func matchesManualOnly(s string) bool { return franchise.Matches(s) }
 // belongs to a manual-only library and must be left out of every bulk apply or
 // bulk merge.
 //
-// It reads ONE value per argument; a caller with the whole book should use
-// franchise.Detect (or BulkManualOnlyGuard), which also reads the credits,
-// the transcribed fields, every book_file path and the book's franchise
-// tags.
+// It reads ONE value per argument. A caller deciding whether a whole book is
+// owner-manual uses BookManualOnly, which also reads the credits, the
+// transcribed fields, the series row, every book_file path and the book's
+// franchise tags (owner decision 2026-10-05).
 func IsOwnerManualOnly(path, seriesName string) bool {
 	return matchesManualOnly(path) || matchesManualOnly(seriesName)
 }

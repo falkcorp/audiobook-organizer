@@ -677,9 +677,9 @@ func (idx *authorPathLinkIndex) looksCombined(name string) bool {
 // reads through mo (applygate.BookManualOnly: files, credits, tags, series).
 // Those reads are the only store reads here and they are per-book and
 // read-only, so it is still safe to call from any worker. Only an author-less
-// book outside the iTunes tree reaches them (~2,500 in prod, not the 70,000
-// that already have an author), and they run inside the classify pass's
-// NumCPU worker pool.
+// book outside the iTunes tree reaches them (the books that already have an
+// author, most of the library, return first), and they run inside the
+// classify pass's NumCPU worker pool.
 func authorPathLinkClassify(b *database.BookCore, idx *authorPathLinkIndex, mo applygate.ManualOnlyReaders) authorPathLinkChange {
 	ch := authorPathLinkChange{BookID: b.ID, FilePath: b.FilePath}
 	if b.AuthorID != nil {
