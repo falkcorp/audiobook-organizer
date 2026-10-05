@@ -1,7 +1,7 @@
 // file: internal/operations/registry/run_items.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: a2b3c4d5-e6f7-8901-abcd-ef2345678901
-// last-edited: 2026-09-20
+// last-edited: 2026-10-04
 
 package registry
 
@@ -44,6 +44,13 @@ type RunItemsOptions struct {
 
 	// Label returns the SetCurrentItem / UpdateProgress label for item i of
 	// total. Defaults to "item <i+1>/<total>".
+	//
+	// Concurrency: Label is called from worker goroutines, and the pre-work
+	// (SetCurrentItem) call runs alongside other workers' fn bodies, so any
+	// state it reads needs a mutex or atomic. The post-work (UpdateProgress)
+	// call is serialized with the other workers' post-work calls and runs
+	// after its own item's fn returned, so the LAST UpdateProgress label sees
+	// the side effects of every completed fn.
 	Label func(i, total int) string
 
 	// CheckpointFn, if non-nil, is called after each item completes
@@ -217,6 +224,16 @@ func RunItems[T any](ctx context.Context, r Reporter, items []T, fn func(ctx con
 	// in both sequential and parallel modes. The label still carries the item's
 	// own index for identity.
 	var completed atomic.Int64
+	// progressMu orders post-item progress delivery. Counting the completion,
+	// rendering the label and calling UpdateProgress happen as one step, so
+	// updates reach the reporter in completion order. Without it a worker
+	// could render its label, be descheduled, and deliver it after a later
+	// worker's fresher one; the production reporter keeps whichever update
+	// arrives last, so the op ended on a stale tally with `current` stepped
+	// backwards. Seen as chapters-backfill reporting eligible=11 for a run
+	// that persisted all 12. fn itself stays outside the lock, so only the
+	// (cheap) progress delivery is serialized, not the per-item work.
+	var progressMu sync.Mutex
 	runOne := func(ctx context.Context, i int, item T) error {
 		// OPERATOR PAUSE — drain in-flight items, hold before dispatching new
 		// ones. An item already inside fn below is untouched and runs to
@@ -250,7 +267,6 @@ func RunItems[T any](ctx context.Context, r Reporter, items []T, fn func(ctx con
 		}
 		r.SetCurrentItem(lbl(i, progTotal))
 		err := fn(itemCtx, item)
-		done := int(completed.Add(1))
 		// Re-render the label AFTER fn rather than reusing the pre-work string.
 		// Labels commonly close over running tallies, and with Concurrency = N
 		// all N workers snapshot their label at dispatch — before any of them
@@ -260,7 +276,13 @@ func RunItems[T any](ctx context.Context, r Reporter, items []T, fn func(ctx con
 		// reads as total failure for the hours a whole-library run takes.
 		// SetCurrentItem above still gets the pre-work label: it names the item
 		// being STARTED, which is what it is for.
+		//
+		// Re-rendering alone is not enough: see progressMu. The count, the
+		// render and the delivery must be one step under that lock.
+		progressMu.Lock()
+		done := int(completed.Add(1))
 		_ = r.UpdateProgress(opt.ProgressOffset+done, progTotal, lbl(i, progTotal))
+		progressMu.Unlock()
 		// Only a SUCCESS may advance the watermark. Marking a failed item done
 		// would let a resume skip straight past it, turning one failure into
 		// permanently unprocessed work that nothing ever revisits.
