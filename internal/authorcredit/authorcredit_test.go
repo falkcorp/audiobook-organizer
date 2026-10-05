@@ -1,5 +1,5 @@
 // file: internal/authorcredit/authorcredit_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 4a5f7bee-3d1d-427b-bc5f-baaa4b6fb584
 // last-edited: 2026-10-04
 
@@ -638,4 +638,19 @@ func TestResolve_EvidenceReadErrorDropsOnlyThePart(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, dropped, 1)
 	require.Contains(t, dropped[0].Reason, "listing down")
+}
+
+// Rule (a) is literal: a book with no series counts as outside the series
+// named like the part, so a junk record credited on a book whose series was
+// never set links, never first. Pinned so the behaviour is deliberate
+// (AUTHORCREDIT-SERIESLESS-EVIDENCE asks the owner whether to tighten it).
+func TestResolve_SeriesLessBookCountsAsOutsideSeries(t *testing.T) {
+	st := titleStore(t, []string{"Dante King", "Dragon Born"}, "Dragon Born")
+	db, err := st.GetAuthorByName("Dragon Born")
+	require.NoError(t, err)
+	_, err = st.CreateBook(&database.Book{Title: "Dante King Book", FilePath: "/l/dk.m4b", Format: "m4b", AuthorID: &db.ID})
+	require.NoError(t, err)
+	got, err := Resolve(st, "Dragon Born, Dante King", PrepareGate)
+	require.NoError(t, err)
+	require.Equal(t, []string{"Dante King", "Dragon Born"}, names(got))
 }
