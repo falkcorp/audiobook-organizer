@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_unrestorable_test.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 28cae8c7-2875-491c-bd27-d45740fef9c3
-// last-edited: 2026-10-03
+// last-edited: 2026-10-04
 
 package audiobooks
 
@@ -120,6 +120,14 @@ func (s *ledgerStub) GetMetadataFieldStates(string) ([]database.MetadataFieldSta
 
 func (s *ledgerStub) UpsertMetadataFieldState(*database.MetadataFieldState) error {
 	return errors.New("ledgerStub: UpsertMetadataFieldState not stubbed")
+}
+
+func (s *ledgerStub) GetBookTagsDetailed(string) ([]database.BookTag, error) {
+	return nil, errors.New("ledgerStub: GetBookTagsDetailed not stubbed")
+}
+
+func (s *ledgerStub) RemoveBookTag(string, string) error {
+	return errors.New("ledgerStub: RemoveBookTag not stubbed")
 }
 
 // GetSeriesByID answers from s.series; a missing id is (nil, nil), as the
