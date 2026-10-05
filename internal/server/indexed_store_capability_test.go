@@ -1,15 +1,17 @@
 // file: internal/server/indexed_store_capability_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 2c7f4b18-6e93-4a52-9d81-5f0a3b6c8e27
-// last-edited: 2026-10-03
+// last-edited: 2026-10-05
 
 package server
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 
 // TestIndexedStorePreservesCapabilityLookups pins the production regression at
@@ -377,5 +379,35 @@ func TestIndexedStoreExposesOpChangeIndexBackfill(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].OperationID != "op1" {
 		t.Fatalf("GetBookChanges = %+v, want the one op1 row", got)
+	}
+}
+
+// TestIndexedStoreResolvesStrictUserLister pins the fail-closed user listing
+// the hard deletes rely on (#3769 review NIT c). merge.NewUserStateProbe
+// resolves database.StrictUserLister with AsCapability; through this
+// decorator that only works because of Unwrap. Without it the probe falls
+// back to ListUsers, which skips an undecodable user row, and a delete would
+// go ahead on a "no state" that never looked at that user's rows.
+func TestIndexedStoreResolvesStrictUserLister(t *testing.T) {
+	inner, err := database.NewPebbleStoreInMemory(t.TempDir())
+	if err != nil {
+		t.Fatalf("open pebble: %v", err)
+	}
+	t.Cleanup(func() { _ = inner.Close() })
+	if err := inner.SetRaw("u:broken", []byte("{not json")); err != nil {
+		t.Fatalf("seed undecodable user row: %v", err)
+	}
+
+	var wrapped database.Store = &indexedStore{Store: inner, server: nil}
+
+	strict, ok := database.AsCapability[database.StrictUserLister](wrapped)
+	if !ok {
+		t.Fatal("AsCapability[StrictUserLister] through indexedStore failed")
+	}
+	if _, err := strict.ListUsersStrict(); !errors.Is(err, database.ErrUndecodableUserRows) {
+		t.Fatalf("ListUsersStrict through indexedStore = %v, want ErrUndecodableUserRows", err)
+	}
+	if _, err := merge.NewUserStateProbe(wrapped); !errors.Is(err, database.ErrUndecodableUserRows) {
+		t.Fatalf("NewUserStateProbe through indexedStore = %v, want ErrUndecodableUserRows (fail closed)", err)
 	}
 }
