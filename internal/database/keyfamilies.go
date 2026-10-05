@@ -132,11 +132,11 @@ var keyFamilies = []KeyFamily{
 	{"user_tag:", "user tags", "internal/database/pebble_store.go"},
 
 	// ── Authority lists (internal/authority; rebuilt by maintenance.authority-build) ──
-	{"ref_asin:", "authority lists: contributor ASIN to every name fold it was credited under", "internal/authority/store.go"},
-	{"ref_ovr:", "authority lists: owner overrides for persons and publishers (never rebuilt)", "internal/authority/store.go"},
-	{"ref_person:", "authority lists: known persons by name fold, with roles, tiers and contributor ASINs", "internal/authority/store.go"},
-	{"ref_pub:", "authority lists: known publishers by name fold", "internal/authority/store.go"},
-	{"ref_src:", "authority lists: per-source ingest ledger (item digest)", "internal/authority/store.go"},
+	{"ref_asin:", "authority lists: contributor ASIN to every name fold it was credited under", "internal/authority/authoritybuild/apply.go"},
+	{"ref_ovr:", "authority lists: owner overrides for persons and publishers (never rebuilt)", "internal/authority/lookup.go"},
+	{"ref_person:", "authority lists: known persons by name fold, with roles, tiers and contributor ASINs", "internal/authority/authoritybuild/apply.go"},
+	{"ref_pub:", "authority lists: known publishers by name fold", "internal/authority/authoritybuild/apply.go"},
+	{"ref_src:", "authority lists: per-source ingest ledger (item digest)", "internal/authority/authoritybuild/apply.go"},
 
 	// ── Book files ──
 	{"bf:", "book file segments", "internal/database/pebble_store.go"},

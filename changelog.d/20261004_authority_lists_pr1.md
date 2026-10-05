@@ -1,6 +1,8 @@
 ### Added
 
-- Authority lists, part 1: a new `internal/authority` package keeps a
+- Authority lists, part 1: a new `internal/authority` package (a leaf read
+  side that authorcredit, the importer, metafetch and the fixers can import;
+  building lives in `internal/authority/authoritybuild`) keeps a
   rebuildable index of known authors, narrators, cast members and publishers
   (raw keys `ref_person:`, `ref_pub:`, `ref_asin:`, `ref_src:`, plus owner
   overrides under `ref_ovr:`, which a rebuild never touches). Entries carry

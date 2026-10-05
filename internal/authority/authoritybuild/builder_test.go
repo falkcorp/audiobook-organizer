@@ -1,15 +1,16 @@
-// file: internal/authority/builder_test.go
+// file: internal/authority/authoritybuild/builder_test.go
 // version: 1.0.0
 // guid: 4b1eb286-eaec-4b35-9e85-3ce90684f4d1
 // last-edited: 2026-10-04
 
-package authority
+package authoritybuild
 
 import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/falkcorp/audiobook-organizer/internal/authority"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 
@@ -22,15 +23,15 @@ func prod(asin string, authors, narrators []metadata.CatalogContributor) metadat
 }
 
 func TestFold_IgnoresPunctuationAndCase(t *testing.T) {
-	require.Equal(t, Fold("J.N. Chaney"), Fold("j n chaney"))
-	require.Equal(t, "", Fold(" ... "))
-	require.Equal(t, PersonPrefix+"jnchaney", PersonKey("J. N. Chaney"))
+	require.Equal(t, authority.Fold("J.N. Chaney"), authority.Fold("j n chaney"))
+	require.Equal(t, "", authority.Fold(" ... "))
+	require.Equal(t, authority.PersonPrefix+"jnchaney", authority.PersonKey("J. N. Chaney"))
 }
 
 func TestBuilder_HomonymIsReportedNeverPicked(t *testing.T) {
 	b := NewBuilder()
-	b.AddProduct(SourceCatalog, prod("P1", []metadata.CatalogContributor{c("John Smith", "B000000001")}, nil))
-	b.AddProduct(SourceCatalog, prod("P2", []metadata.CatalogContributor{c("John Smith", "B000000002")}, nil))
+	b.AddProduct(authority.SourceCatalog, prod("P1", []metadata.CatalogContributor{c("John Smith", "B000000001")}, nil))
+	b.AddProduct(authority.SourceCatalog, prod("P2", []metadata.CatalogContributor{c("John Smith", "B000000002")}, nil))
 	res := b.Finish()
 	p := res.Persons["johnsmith"]
 	require.NotNil(t, p)
@@ -43,8 +44,8 @@ func TestBuilder_HomonymIsReportedNeverPicked(t *testing.T) {
 
 func TestBuilder_SpellingVariantsShareAnASIN(t *testing.T) {
 	b := NewBuilder()
-	b.AddProduct(SourceCatalog, prod("P1", []metadata.CatalogContributor{c("Jonathan Brazee", "B00AAAAAAA")}, nil))
-	b.AddProduct(SourceCatalog, prod("P2", []metadata.CatalogContributor{c("Jonathan P. Brazee", "B00AAAAAAA")}, nil))
+	b.AddProduct(authority.SourceCatalog, prod("P1", []metadata.CatalogContributor{c("Jonathan Brazee", "B00AAAAAAA")}, nil))
+	b.AddProduct(authority.SourceCatalog, prod("P2", []metadata.CatalogContributor{c("Jonathan P. Brazee", "B00AAAAAAA")}, nil))
 	res := b.Finish()
 	require.Equal(t, []string{"jonathanbrazee", "jonathanpbrazee"}, res.ASINs["B00AAAAAAA"].Folds)
 	require.Equal(t, 1, res.Report.SpellingASINs)
@@ -53,28 +54,28 @@ func TestBuilder_SpellingVariantsShareAnASIN(t *testing.T) {
 
 func TestBuilder_TierPrecedenceAndAuthorEvidence(t *testing.T) {
 	b := NewBuilder()
-	b.AddProduct(SourceCatalog, prod("P1", []metadata.CatalogContributor{c("Ann Leckie", "B001JP7W9E"), c("No Asin", "")}, []metadata.CatalogContributor{c("Adjoa Andoh", "")}))
+	b.AddProduct(authority.SourceCatalog, prod("P1", []metadata.CatalogContributor{c("Ann Leckie", "B001JP7W9E"), c("No Asin", "")}, []metadata.CatalogContributor{c("Adjoa Andoh", "")}))
 	res := b.Finish()
-	require.Equal(t, TierA, res.Persons["annleckie"].Tier)
-	require.Equal(t, TierB, res.Persons["noasin"].Tier)
-	require.True(t, AuthorEvidenceRule(res.Persons["annleckie"].Roles[RoleAuthor]), "one tier-A credit is evidence")
-	require.False(t, AuthorEvidenceRule(res.Persons["noasin"].Roles[RoleAuthor]), "one tier-B credit is not")
-	require.True(t, narratorEvidenceRule(res.Persons["adjoaandoh"].Roles[RoleNarrator]))
+	require.Equal(t, authority.TierA, res.Persons["annleckie"].Tier)
+	require.Equal(t, authority.TierB, res.Persons["noasin"].Tier)
+	require.True(t, authority.AuthorEvidenceRule(res.Persons["annleckie"].Roles[authority.RoleAuthor]), "one tier-A credit is evidence")
+	require.False(t, authority.AuthorEvidenceRule(res.Persons["noasin"].Roles[authority.RoleAuthor]), "one tier-B credit is not")
+	require.True(t, authority.NarratorEvidenceRule(res.Persons["adjoaandoh"].Roles[authority.RoleNarrator]))
 
 	// A second tier-B credit makes it evidence; an owner-library credit
 	// raises the tier to O.
 	b = NewBuilder()
-	b.AddProduct(SourceCatalog, prod("P1", []metadata.CatalogContributor{c("No Asin", "")}, nil))
-	b.AddProduct(SourceCatalog, prod("P2", []metadata.CatalogContributor{c("No Asin", "")}, nil))
-	b.AddProduct(SourceLibraryExport, prod("P3", []metadata.CatalogContributor{c("No Asin", "")}, nil))
+	b.AddProduct(authority.SourceCatalog, prod("P1", []metadata.CatalogContributor{c("No Asin", "")}, nil))
+	b.AddProduct(authority.SourceCatalog, prod("P2", []metadata.CatalogContributor{c("No Asin", "")}, nil))
+	b.AddProduct(authority.SourceLibraryExport, prod("P3", []metadata.CatalogContributor{c("No Asin", "")}, nil))
 	res = b.Finish()
-	st := res.Persons["noasin"].Roles[RoleAuthor]
-	require.Equal(t, TierO, st.Tier)
+	st := res.Persons["noasin"].Roles[authority.RoleAuthor]
+	require.Equal(t, authority.TierO, st.Tier)
 	require.Equal(t, 3, st.Count)
-	require.Equal(t, map[Tier]int{TierB: 2, TierO: 1}, st.ByTier)
-	require.Equal(t, TierO, res.Persons["noasin"].Tier)
-	require.Equal(t, []string{SourceCatalog, SourceLibraryExport}, res.Persons["noasin"].Sources)
-	require.Equal(t, TierO, res.Publishers["podiumaudio"].Tier)
+	require.Equal(t, map[authority.Tier]int{authority.TierB: 2, authority.TierO: 1}, st.ByTier)
+	require.Equal(t, authority.TierO, res.Persons["noasin"].Tier)
+	require.Equal(t, []string{authority.SourceCatalog, authority.SourceLibraryExport}, res.Persons["noasin"].Sources)
+	require.Equal(t, authority.TierO, res.Publishers["podiumaudio"].Tier)
 	require.Equal(t, 3, res.Publishers["podiumaudio"].Count)
 	require.Equal(t, 1, res.Report.AuthorEvidence)
 }
@@ -102,27 +103,27 @@ func TestBuilder_CastContextIsCastAuthorOnly(t *testing.T) {
 	for name, p := range cases {
 		require.True(t, IsCastContext(p), name)
 		b := NewBuilder()
-		b.AddProduct(SourceCatalog, p)
+		b.AddProduct(authority.SourceCatalog, p)
 		res := b.Finish()
 		pe := res.Persons["aabb"]
 		require.NotNil(t, pe, name)
-		_, author := pe.Roles[RoleAuthor]
+		_, author := pe.Roles[authority.RoleAuthor]
 		require.False(t, author, "%s: a cast member must never be author evidence", name)
-		require.Equal(t, 1, pe.Roles[RoleCastAuthor].Count, name)
+		require.Equal(t, 1, pe.Roles[authority.RoleCastAuthor].Count, name)
 		require.Positive(t, res.Report.CastOnly, name)
-		require.Equal(t, 1, res.Report.Sources[SourceCatalog].CastContext, name)
+		require.Equal(t, 1, res.Report.Sources[authority.SourceCatalog].CastContext, name)
 	}
 	require.False(t, IsCastContext(prod("P5", four[:3], nil)))
 }
 
 func TestBuilder_SkipsCollectiveDuplicatesAndEmpty(t *testing.T) {
 	b := NewBuilder()
-	b.AddProduct(SourceCatalog, prod("P1", []metadata.CatalogContributor{c("Full Cast", "")}, []metadata.CatalogContributor{c("Various Narrators", "")}))
-	b.AddProduct(SourceCatalog, prod("p1", []metadata.CatalogContributor{c("Ann Leckie", "")}, nil)) // same ASIN, other case
-	b.AddProduct(SourceCatalog, prod("", []metadata.CatalogContributor{c("Ann Leckie", "")}, nil))
+	b.AddProduct(authority.SourceCatalog, prod("P1", []metadata.CatalogContributor{c("Full Cast", "")}, []metadata.CatalogContributor{c("Various Narrators", "")}))
+	b.AddProduct(authority.SourceCatalog, prod("p1", []metadata.CatalogContributor{c("Ann Leckie", "")}, nil)) // same ASIN, other case
+	b.AddProduct(authority.SourceCatalog, prod("", []metadata.CatalogContributor{c("Ann Leckie", "")}, nil))
 	res := b.Finish()
 	require.Empty(t, res.Persons, "collective credits are never persons; the duplicate and id-less products add nothing")
-	st := res.Report.Sources[SourceCatalog]
+	st := res.Report.Sources[authority.SourceCatalog]
 	require.Equal(t, 1, st.Items)
 	require.Equal(t, 1, st.Duplicates)
 	require.Equal(t, 1, st.Skipped)
@@ -130,7 +131,7 @@ func TestBuilder_SkipsCollectiveDuplicatesAndEmpty(t *testing.T) {
 
 func TestBuilder_SingleWordReportedAndSeedIngested(t *testing.T) {
 	b := NewBuilder()
-	b.AddSeed(&Seed{Source: SourceSeed, Tier: TierO, Entries: []SeedEntry{
+	b.AddSeed(&Seed{Source: authority.SourceSeed, Tier: authority.TierO, Entries: []SeedEntry{
 		{Kind: SeedKindAuthor, Name: "Actus", ASINs: []string{"B09GS7Y8DF"}, AlsoNarrator: true},
 		{Kind: SeedKindNarrator, Name: "Ray Porter"},
 		{Kind: SeedKindPublisher, Name: "Podium Audio"},
@@ -138,10 +139,10 @@ func TestBuilder_SingleWordReportedAndSeedIngested(t *testing.T) {
 	res := b.Finish()
 	require.Equal(t, 1, res.Report.SingleWord)
 	a := res.Persons["actus"]
-	require.Equal(t, TierO, a.Roles[RoleAuthor].Tier)
-	require.Equal(t, TierO, a.Roles[RoleNarrator].Tier)
+	require.Equal(t, authority.TierO, a.Roles[authority.RoleAuthor].Tier)
+	require.Equal(t, authority.TierO, a.Roles[authority.RoleNarrator].Tier)
 	require.Equal(t, []string{"B09GS7Y8DF"}, a.ASINs)
-	_, author := res.Persons["rayporter"].Roles[RoleAuthor]
+	_, author := res.Persons["rayporter"].Roles[authority.RoleAuthor]
 	require.False(t, author)
 	require.Equal(t, 0, res.Publishers["podiumaudio"].Count, "the seed contributes no products")
 	require.Len(t, res.Ledger, 3)
@@ -154,9 +155,9 @@ func TestReadLibraryExport_ListObjectAndNulls(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, items, 1)
 		b := NewBuilder()
-		require.NoError(t, b.AddRawProduct(SourceLibraryExport, items[0]))
+		require.NoError(t, b.AddRawProduct(authority.SourceLibraryExport, items[0]))
 		res := b.Finish()
-		require.Equal(t, TierO, res.Persons["annleckie"].Tier)
+		require.Equal(t, authority.TierO, res.Persons["annleckie"].Tier)
 		require.Empty(t, res.Persons["annleckie"].ASINs)
 	}
 	_, err := ReadLibraryExport(stringsReader(`{"nope":[]}`), MaxLibraryExportBytes)
@@ -164,6 +165,6 @@ func TestReadLibraryExport_ListObjectAndNulls(t *testing.T) {
 	_, err = ReadLibraryExport(stringsReader("["+item+"]"), 10)
 	require.Error(t, err, "an oversized export is refused, never truncated")
 	b := NewBuilder()
-	require.Error(t, b.AddRawProduct(SourceCatalog, []byte(`{"authors":"not a list"}`)))
-	require.Equal(t, 1, b.Finish().Report.Sources[SourceCatalog].Undecodable)
+	require.Error(t, b.AddRawProduct(authority.SourceCatalog, []byte(`{"authors":"not a list"}`)))
+	require.Equal(t, 1, b.Finish().Report.Sources[authority.SourceCatalog].Undecodable)
 }

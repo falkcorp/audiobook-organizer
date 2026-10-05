@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authority"
+	"github.com/falkcorp/audiobook-organizer/internal/authority/authoritybuild"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -119,11 +120,11 @@ func (p *Plugin) runAuthorityBuild(ctx context.Context, raw json.RawMessage, rep
 
 // authorityBuildOutcome is what one run did; tests read it.
 type authorityBuildOutcome struct {
-	Report authority.Report
-	Counts map[string]*authority.PrefixCounts
+	Report authoritybuild.Report
+	Counts map[string]*authoritybuild.PrefixCounts
 	Stale  int
 	Writes int
-	Apply  authority.ApplyResult
+	Apply  authoritybuild.ApplyResult
 	DryRun bool
 }
 
@@ -143,10 +144,10 @@ func buildAuthorityLists(ctx context.Context, kv database.RawKVStore, params aut
 	mode := map[bool]string{true: "DRY RUN (nothing written)", false: "APPLY"}[dryRun]
 	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("authority-build: %s, %d workers", mode, workers))
 
-	b := authority.NewBuilder()
+	b := authoritybuild.NewBuilder()
 
 	if !params.SkipSeed {
-		seed, err := authority.LoadSeed()
+		seed, err := authoritybuild.LoadSeed()
 		if err != nil {
 			return nil, err
 		}
@@ -167,7 +168,15 @@ func buildAuthorityLists(ctx context.Context, kv database.RawKVStore, params aut
 	}
 
 	res := b.Finish()
-	plan, err := authority.PlanApply(ctx, kv, res, now, workers)
+	opt := authoritybuild.Options{
+		Workers: workers,
+		// Plan and apply are errgroup pools, not RunItems, so they stamp the
+		// watchdog through UpdateProgress themselves (throttled).
+		Progress: func(phase string, done, total int) {
+			_ = reporter.UpdateProgress(done, total, fmt.Sprintf("authority-build %s: %d/%d", phase, done, total))
+		},
+	}
+	plan, err := authoritybuild.PlanApply(ctx, kv, res, now, opt)
 	if err != nil {
 		return nil, fmt.Errorf("plan: %w", err)
 	}
@@ -177,7 +186,7 @@ func buildAuthorityLists(ctx context.Context, kv database.RawKVStore, params aut
 	if dryRun {
 		return out, nil
 	}
-	out.Apply, err = authority.Apply(ctx, kv, plan, workers)
+	out.Apply, err = authoritybuild.Apply(ctx, kv, plan, opt)
 	if err != nil {
 		return out, fmt.Errorf("apply: %w", err)
 	}
@@ -185,7 +194,7 @@ func buildAuthorityLists(ctx context.Context, kv database.RawKVStore, params aut
 	return out, nil
 }
 
-func ingestLibraryExport(ctx context.Context, b *authority.Builder, path string, workers int, reporter sdk.Reporter) error {
+func ingestLibraryExport(ctx context.Context, b *authoritybuild.Builder, path string, workers int, reporter sdk.Reporter) error {
 	clean := filepath.Clean(path)
 	if !filepath.IsAbs(clean) {
 		return fmt.Errorf("library_export_path %q must be absolute", path)
@@ -201,7 +210,7 @@ func ingestLibraryExport(ctx context.Context, b *authority.Builder, path string,
 	if err != nil {
 		return fmt.Errorf("library_export_path: %w", err)
 	}
-	items, err := authority.ReadLibraryExport(f, authority.MaxLibraryExportBytes)
+	items, err := authoritybuild.ReadLibraryExport(f, authoritybuild.MaxLibraryExportBytes)
 	if cerr := f.Close(); err == nil && cerr != nil {
 		err = fmt.Errorf("close library export: %w", cerr)
 	}
@@ -232,8 +241,8 @@ func ingestLibraryExport(ctx context.Context, b *authority.Builder, path string,
 	return nil
 }
 
-func ingestCatalogRaw(ctx context.Context, kv database.RawKVStore, b *authority.Builder, workers int, reporter sdk.Reporter) error {
-	total, err := kv.CountPrefix(authority.CatalogRawPrefix)
+func ingestCatalogRaw(ctx context.Context, kv database.RawKVStore, b *authoritybuild.Builder, workers int, reporter sdk.Reporter) error {
+	total, err := kv.CountPrefix(authoritybuild.CatalogRawPrefix)
 	if err != nil {
 		return fmt.Errorf("count catalog payloads: %w", err)
 	}
@@ -241,7 +250,7 @@ func ingestCatalogRaw(ctx context.Context, kv database.RawKVStore, b *authority.
 	b.NoteSource(authority.SourceCatalog)
 	var done, bad atomic.Int64
 	offset := 0
-	err = authority.ScanCatalogRaw(ctx, kv, authorityCatalogPageSize, func(pairs []database.KVPair) error {
+	err = authoritybuild.ScanCatalogRaw(ctx, kv, authorityCatalogPageSize, func(pairs []database.KVPair) error {
 		err := registry.RunItems(ctx, reporter, pairs, func(_ context.Context, kvp database.KVPair) error {
 			if err := b.AddRawProduct(authority.SourceCatalog, kvp.Value); err != nil {
 				logUndecodable(reporter, &bad, authority.SourceCatalog+" "+kvp.Key, err)
@@ -305,7 +314,7 @@ func logAuthorityReport(reporter sdk.Reporter, mode string, out *authorityBuildO
 		_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("authority-build: %s write=%d unchanged=%d stale=%d", prefix, c.Write, c.Unchanged, c.Stale),
 			slog.String("prefix", prefix), slog.Int("write", c.Write), slog.Int("unchanged", c.Unchanged), slog.Int("stale", c.Stale))
 	}
-	for label, samples := range map[string][]authority.NameSample{
+	for label, samples := range map[string][]authoritybuild.NameSample{
 		"homonym": r.HomonymSample, "asin_spelling": r.SpellingSample, "cast_only": r.CastOnlySample,
 		"single_word": r.SingleWordSample, "person": r.PersonSample, "publisher": r.PublisherSample,
 	} {

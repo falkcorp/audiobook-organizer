@@ -44,14 +44,22 @@
 //	ref_ovr:person:<fold>      PersonOverride JSON   (owner; never rebuilt)
 //	ref_ovr:pub:<fold>         PublisherOverride JSON (owner; never rebuilt)
 //
-// <fold> is authorcredit.LettersKey of the name: "J.N. Chaney" and "J N
+// <fold> is personname.LettersKey (= authorcredit.LettersKey) of the name: "J.N. Chaney" and "J N
 // Chaney" share one entry.
+//
+// Package layout. This package is the LEAF read side (keys, model, the
+// Lookup interface, Snapshot, Index, overrides) and imports nothing heavier
+// than internal/database and internal/personname, so authorcredit, the
+// importer, metafetch, applygate and the maintenance fixers can all depend
+// on it without a cycle (TestLeafImports enforces this). Building the index
+// (seed, provider decode, cast rules, plan/apply) lives in
+// internal/authority/authoritybuild, which imports catalog and metadata.
 package authority
 
 import (
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/authorcredit"
+	"github.com/falkcorp/audiobook-organizer/internal/personname"
 )
 
 // Key prefixes. Every one starts with "ref_" so none can nest under (or
@@ -67,6 +75,9 @@ const (
 	overridePersonKind  = "person"
 	overridePubKind     = "pub"
 	personASINKeyPrefix = ASINPrefix + personASINKind + ":"
+
+	// scanPageSize bounds one paged prefix scan.
+	scanPageSize = 1000
 )
 
 // RebuildablePrefixes are the prefixes an apply rewrites and prunes. ref_ovr:
@@ -117,8 +128,8 @@ func (t Tier) Rank() int {
 	return 0
 }
 
-// better returns the stronger of two tiers.
-func better(a, b Tier) Tier {
+// Better returns the stronger of two tiers.
+func Better(a, b Tier) Tier {
 	if b.Rank() > a.Rank() {
 		return b
 	}
@@ -137,9 +148,10 @@ const (
 	RoleCastAuthor Role = "cast_author"
 )
 
-// Fold is the index key of a name: authorcredit.LettersKey.
+// Fold is the index key of a name: personname.LettersKey, the function
+// authorcredit.LettersKey delegates to.
 func Fold(name string) string {
-	return authorcredit.LettersKey(strings.TrimSpace(name))
+	return personname.LettersKey(strings.TrimSpace(name))
 }
 
 // PersonKey is the ref_person: key for a name ("" when the name folds to
@@ -163,7 +175,7 @@ func PublisherKey(name string) string {
 
 // PersonASINKey is the ref_asin:person: key for a contributor ASIN.
 func PersonASINKey(asin string) string {
-	a := normalizeASIN(asin)
+	a := NormalizeASIN(asin)
 	if a == "" {
 		return ""
 	}
@@ -172,14 +184,28 @@ func PersonASINKey(asin string) string {
 
 func personOverrideKey(fold string) string { return OverridePrefix + overridePersonKind + ":" + fold }
 func pubOverrideKey(fold string) string    { return OverridePrefix + overridePubKind + ":" + fold }
-func sourceKey(source, item string) string { return SourcePrefix + source + ":" + item }
 
-func normalizeASIN(s string) string { return strings.ToUpper(strings.TrimSpace(s)) }
+// SourceKey is the ref_src: ledger key for one item of a source.
+func SourceKey(source, item string) string { return SourcePrefix + source + ":" + item }
 
-// isSingleWord reports whether a display name is one word ("Actus"). Such
+// NormalizeASIN trims and upper-cases an ASIN.
+func NormalizeASIN(s string) string { return strings.ToUpper(strings.TrimSpace(s)) }
+
+// IsRebuildableKey reports whether k is under a rebuildable prefix (never an
+// override key).
+func IsRebuildableKey(k string) bool {
+	for _, p := range RebuildablePrefixes() {
+		if strings.HasPrefix(k, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// IsSingleWord reports whether a display name is one word ("Actus"). Such
 // names are reported, and a later consumer may use a hit as evidence, but a
 // hit never creates an author (owner rule: single-word pen names at import
 // stay review-only).
-func isSingleWord(display string) bool {
+func IsSingleWord(display string) bool {
 	return len(strings.Fields(display)) == 1
 }
