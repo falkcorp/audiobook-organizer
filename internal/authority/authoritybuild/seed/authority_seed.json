@@ -1,5 +1,5 @@
 {
- "file": "internal/authority/seed/authority_seed.json",
+ "file": "internal/authority/authoritybuild/seed/authority_seed.json",
  "version": "1.0.0",
  "guid": "69171c6d-7b2a-4d56-af3b-90cff04f7dba",
  "last_edited": "2026-10-04",

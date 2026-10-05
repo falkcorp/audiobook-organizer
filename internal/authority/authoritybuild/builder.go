@@ -1,9 +1,9 @@
-// file: internal/authority/builder.go
+// file: internal/authority/authoritybuild/builder.go
 // version: 1.0.0
 // guid: 69528b02-de24-4411-8a5e-ac3831986a80
 // last-edited: 2026-10-04
 
-package authority
+package authoritybuild
 
 import (
 	"crypto/sha256"
@@ -13,9 +13,9 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorcredit"
+	"github.com/falkcorp/audiobook-organizer/internal/authority"
 	"github.com/falkcorp/audiobook-organizer/internal/catalog"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
@@ -30,56 +30,6 @@ const (
 	maxProductSample = 3
 	reportSampleSize = 25
 )
-
-// RoleStat is the evidence for one role: observations per tier, their sum,
-// and the best tier seen.
-type RoleStat struct {
-	Count  int          `json:"count"`
-	Tier   Tier         `json:"tier"`
-	ByTier map[Tier]int `json:"by_tier"`
-}
-
-// Person is a ref_person: row.
-type Person struct {
-	Fold     string   `json:"fold"`
-	Display  string   `json:"display"`
-	Variants []string `json:"variants,omitempty"`
-	ASINs    []string `json:"asins,omitempty"`
-	// HomonymASINs is set when the fold carries more than one contributor
-	// ASIN: two people may share the spelling. Reported, never resolved.
-	HomonymASINs  bool              `json:"homonym_asins,omitempty"`
-	Roles         map[Role]RoleStat `json:"roles"`
-	Sources       []string          `json:"sources"`
-	Tier          Tier              `json:"tier"`
-	ProductSample []string          `json:"product_sample,omitempty"`
-	FirstSeen     time.Time         `json:"first_seen"`
-	LastSeen      time.Time         `json:"last_seen"`
-}
-
-// Publisher is a ref_pub: row.
-type Publisher struct {
-	Fold     string   `json:"fold"`
-	Display  string   `json:"display"`
-	Variants []string `json:"variants,omitempty"`
-	// Count is the number of products seen with this publisher;
-	// ManualOnlyCount how many of them were manual-only (Doctor Who / Big
-	// Finish / Torchwood). The seed contributes no products.
-	Count           int       `json:"count"`
-	ManualOnlyCount int       `json:"manual_only_count"`
-	Sources         []string  `json:"sources"`
-	Tier            Tier      `json:"tier"`
-	ProductSample   []string  `json:"product_sample,omitempty"`
-	FirstSeen       time.Time `json:"first_seen"`
-	LastSeen        time.Time `json:"last_seen"`
-}
-
-// ASINRef is a ref_asin:person: row: every fold a contributor ASIN was
-// credited under. More than one fold is a spelling variant ("Jonathan Brazee"
-// / "Jonathan P. Brazee"); all are kept, none is picked.
-type ASINRef struct {
-	ASIN  string   `json:"asin"`
-	Folds []string `json:"folds"`
-}
 
 // SourceStats counts one source's ingest.
 type SourceStats struct {
@@ -100,11 +50,11 @@ type SourceStats struct {
 
 // NameSample is one reported name.
 type NameSample struct {
-	Fold    string   `json:"fold"`
-	Display string   `json:"display"`
-	ASINs   []string `json:"asins,omitempty"`
-	Folds   []string `json:"folds,omitempty"`
-	Tier    Tier     `json:"tier,omitempty"`
+	Fold    string         `json:"fold"`
+	Display string         `json:"display"`
+	ASINs   []string       `json:"asins,omitempty"`
+	Folds   []string       `json:"folds,omitempty"`
+	Tier    authority.Tier `json:"tier,omitempty"`
 }
 
 // Report is what a build found.
@@ -114,11 +64,11 @@ type Report struct {
 	Publishers       int                     `json:"publishers"`
 	ASINs            int                     `json:"asins"`
 	LedgerRows       int                     `json:"ledger_rows"`
-	PersonsByTier    map[Tier]int            `json:"persons_by_tier"`
-	PublishersByTier map[Tier]int            `json:"publishers_by_tier"`
+	PersonsByTier    map[authority.Tier]int  `json:"persons_by_tier"`
+	PublishersByTier map[authority.Tier]int  `json:"publishers_by_tier"`
 	// PersonsByRole counts persons holding each role (a person may hold
 	// several).
-	PersonsByRole map[Role]int `json:"persons_by_role"`
+	PersonsByRole map[authority.Role]int `json:"persons_by_role"`
 	// AuthorEvidence counts persons whose author role qualifies as evidence
 	// (AuthorEvidenceRule).
 	AuthorEvidence int `json:"author_evidence"`
@@ -139,9 +89,9 @@ type Report struct {
 
 // Result is a finished build: the rows an apply writes, plus the report.
 type Result struct {
-	Persons    map[string]*Person
-	Publishers map[string]*Publisher
-	ASINs      map[string]*ASINRef
+	Persons    map[string]*authority.Person
+	Publishers map[string]*authority.Publisher
+	ASINs      map[string]*authority.ASINRef
 	// Ledger maps a ref_src: key to the digest of what that item contributed.
 	Ledger map[string]string
 	Report Report
@@ -150,7 +100,7 @@ type Result struct {
 type personAcc struct {
 	displays map[string]int
 	asins    map[string]bool
-	roles    map[Role]map[Tier]int
+	roles    map[authority.Role]map[authority.Tier]int
 	sources  map[string]bool
 	products []string
 }
@@ -159,7 +109,7 @@ type pubAcc struct {
 	displays   map[string]int
 	count      int
 	manualOnly int
-	tier       Tier
+	tier       authority.Tier
 	sources    map[string]bool
 	products   []string
 }
@@ -213,25 +163,25 @@ func (b *Builder) NoteUndecodable(source string) {
 func (b *Builder) person(fold string) *personAcc {
 	p := b.persons[fold]
 	if p == nil {
-		p = &personAcc{displays: map[string]int{}, asins: map[string]bool{}, roles: map[Role]map[Tier]int{}, sources: map[string]bool{}}
+		p = &personAcc{displays: map[string]int{}, asins: map[string]bool{}, roles: map[authority.Role]map[authority.Tier]int{}, sources: map[string]bool{}}
 		b.persons[fold] = p
 	}
 	return p
 }
 
-func (b *Builder) addPerson(source, name, asin, product string, role Role, tier Tier) {
+func (b *Builder) addPerson(source, name, asin, product string, role authority.Role, tier authority.Tier) {
 	name = strings.Join(strings.Fields(name), " ")
-	f := Fold(name)
+	f := authority.Fold(name)
 	if f == "" || authorcredit.IsCollectiveCredit(name) {
 		return
 	}
 	p := b.person(f)
 	p.displays[name]++
-	if a := normalizeASIN(asin); a != "" {
+	if a := authority.NormalizeASIN(asin); a != "" {
 		p.asins[a] = true
 	}
 	if p.roles[role] == nil {
-		p.roles[role] = map[Tier]int{}
+		p.roles[role] = map[authority.Tier]int{}
 	}
 	p.roles[role][tier]++
 	p.sources[source] = true
@@ -240,9 +190,9 @@ func (b *Builder) addPerson(source, name, asin, product string, role Role, tier 
 	}
 }
 
-func (b *Builder) addPublisher(source, name, product string, tier Tier, manualOnly bool, isProduct bool) {
+func (b *Builder) addPublisher(source, name, product string, tier authority.Tier, manualOnly bool, isProduct bool) {
 	name = strings.Join(strings.Fields(name), " ")
-	f := Fold(name)
+	f := authority.Fold(name)
 	if f == "" {
 		return
 	}
@@ -252,7 +202,7 @@ func (b *Builder) addPublisher(source, name, product string, tier Tier, manualOn
 		b.pubs[f] = p
 	}
 	p.displays[name]++
-	p.tier = better(p.tier, tier)
+	p.tier = authority.Better(p.tier, tier)
 	p.sources[source] = true
 	if isProduct {
 		p.count++
@@ -285,11 +235,11 @@ func addSample(s []string, id string) []string {
 func (b *Builder) AddSeed(s *Seed) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	st := b.stats(SourceSeed)
+	st := b.stats(authority.SourceSeed)
 	for _, e := range s.Entries {
-		f := Fold(e.Name)
+		f := authority.Fold(e.Name)
 		id := e.Kind + ":" + f
-		key := sourceKey(SourceSeed, id)
+		key := authority.SourceKey(authority.SourceSeed, id)
 		if _, dup := b.ledger[key]; dup {
 			st.Duplicates++
 			continue
@@ -298,26 +248,26 @@ func (b *Builder) AddSeed(s *Seed) {
 		st.Items++
 		switch e.Kind {
 		case SeedKindPublisher:
-			b.addPublisher(SourceSeed, e.Name, "", s.Tier, false, false)
+			b.addPublisher(authority.SourceSeed, e.Name, "", s.Tier, false, false)
 			continue
 		case SeedKindAuthor:
-			b.addSeedRoles(e, RoleAuthor, e.AlsoNarrator, RoleNarrator, s.Tier)
+			b.addSeedRoles(e, authority.RoleAuthor, e.AlsoNarrator, authority.RoleNarrator, s.Tier)
 		case SeedKindNarrator:
-			b.addSeedRoles(e, RoleNarrator, e.AlsoAuthor, RoleAuthor, s.Tier)
+			b.addSeedRoles(e, authority.RoleNarrator, e.AlsoAuthor, authority.RoleAuthor, s.Tier)
 		}
 	}
 }
 
-func (b *Builder) addSeedRoles(e SeedEntry, primary Role, alsoOther bool, other Role, tier Tier) {
-	b.addPerson(SourceSeed, e.Name, "", "", primary, tier)
-	acc := b.person(Fold(e.Name))
+func (b *Builder) addSeedRoles(e SeedEntry, primary authority.Role, alsoOther bool, other authority.Role, tier authority.Tier) {
+	b.addPerson(authority.SourceSeed, e.Name, "", "", primary, tier)
+	acc := b.person(authority.Fold(e.Name))
 	for _, a := range e.ASINs {
-		if n := normalizeASIN(a); n != "" {
+		if n := authority.NormalizeASIN(a); n != "" {
 			acc.asins[n] = true
 		}
 	}
 	if alsoOther {
-		b.addPerson(SourceSeed, e.Name, "", "", other, tier)
+		b.addPerson(authority.SourceSeed, e.Name, "", "", other, tier)
 	}
 }
 
@@ -341,14 +291,14 @@ func IsCastContext(p metadata.CatalogProduct) bool {
 // productTier is the tier of one contributor credit from source: the
 // owner's library is O; a structured list entry is A with a contributor ASIN
 // and B without one.
-func productTier(source, asin string) Tier {
-	if source == SourceLibraryExport {
-		return TierO
+func productTier(source, asin string) authority.Tier {
+	if source == authority.SourceLibraryExport {
+		return authority.TierO
 	}
-	if normalizeASIN(asin) != "" {
-		return TierA
+	if authority.NormalizeASIN(asin) != "" {
+		return authority.TierA
 	}
-	return TierB
+	return authority.TierB
 }
 
 // productDigest is what one product contributed, for the ledger.
@@ -365,15 +315,15 @@ type productDigest struct {
 // the cast decision and never stored. A product ASIN already ingested from
 // the same source in this build is counted as a duplicate and skipped.
 func (b *Builder) AddProduct(source string, p metadata.CatalogProduct) {
-	id := normalizeASIN(p.ASIN)
+	id := authority.NormalizeASIN(p.ASIN)
 	cast := IsCastContext(p)
 	manual := catalog.IsManualOnly(p)
 	d := productDigest{Cast: cast, Publisher: strings.TrimSpace(p.Publisher)}
 	for _, a := range p.Authors {
-		d.Authors = append(d.Authors, [2]string{strings.TrimSpace(a.Name), normalizeASIN(a.ASIN)})
+		d.Authors = append(d.Authors, [2]string{strings.TrimSpace(a.Name), authority.NormalizeASIN(a.ASIN)})
 	}
 	for _, n := range p.Narrators {
-		d.Narrators = append(d.Narrators, [2]string{strings.TrimSpace(n.Name), normalizeASIN(n.ASIN)})
+		d.Narrators = append(d.Narrators, [2]string{strings.TrimSpace(n.Name), authority.NormalizeASIN(n.ASIN)})
 	}
 
 	b.mu.Lock()
@@ -383,7 +333,7 @@ func (b *Builder) AddProduct(source string, p metadata.CatalogProduct) {
 		st.Skipped++
 		return
 	}
-	key := sourceKey(source, id)
+	key := authority.SourceKey(source, id)
 	if _, dup := b.ledger[key]; dup {
 		st.Duplicates++
 		return
@@ -396,20 +346,20 @@ func (b *Builder) AddProduct(source string, p metadata.CatalogProduct) {
 	if manual {
 		st.ManualOnly++
 	}
-	authorRole := RoleAuthor
+	authorRole := authority.RoleAuthor
 	if cast {
-		authorRole = RoleCastAuthor
+		authorRole = authority.RoleCastAuthor
 	}
 	for _, a := range d.Authors {
 		b.addPerson(source, a[0], a[1], id, authorRole, productTier(source, a[1]))
 	}
 	for _, n := range d.Narrators {
-		b.addPerson(source, n[0], n[1], id, RoleNarrator, productTier(source, n[1]))
+		b.addPerson(source, n[0], n[1], id, authority.RoleNarrator, productTier(source, n[1]))
 	}
 	if d.Publisher != "" {
-		pubTier := TierB
-		if source == SourceLibraryExport {
-			pubTier = TierO
+		pubTier := authority.TierB
+		if source == authority.SourceLibraryExport {
+			pubTier = authority.TierO
 		}
 		b.addPublisher(source, d.Publisher, id, pubTier, manual, true)
 	}
@@ -455,67 +405,53 @@ func sortedKeys[V any](m map[string]V) []string {
 	return out
 }
 
-// AuthorEvidenceRule reports whether a person's author role is author
-// evidence (design: roles.author >= 1 at tier O or A, or >= 2 counting tier
-// B). Tier C alone never is, and cast_author never counts.
-func AuthorEvidenceRule(st RoleStat) bool {
-	strong := st.ByTier[TierO] + st.ByTier[TierA]
-	return strong >= 1 || strong+st.ByTier[TierB] >= 2
-}
-
-// narratorEvidenceRule: any structured observation (O, A or B), or two of
-// any tier.
-func narratorEvidenceRule(st RoleStat) bool {
-	return st.ByTier[TierO]+st.ByTier[TierA]+st.ByTier[TierB] >= 1 || st.Count >= 2
-}
-
 // Finish builds the Result. The Builder must not be used afterwards.
 func (b *Builder) Finish() *Result {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	res := &Result{
-		Persons:    make(map[string]*Person, len(b.persons)),
-		Publishers: make(map[string]*Publisher, len(b.pubs)),
-		ASINs:      map[string]*ASINRef{},
+		Persons:    make(map[string]*authority.Person, len(b.persons)),
+		Publishers: make(map[string]*authority.Publisher, len(b.pubs)),
+		ASINs:      map[string]*authority.ASINRef{},
 		Ledger:     b.ledger,
 	}
 	rep := Report{
 		Sources:          b.sources,
-		PersonsByTier:    map[Tier]int{},
-		PublishersByTier: map[Tier]int{},
-		PersonsByRole:    map[Role]int{},
+		PersonsByTier:    map[authority.Tier]int{},
+		PublishersByTier: map[authority.Tier]int{},
+		PersonsByRole:    map[authority.Role]int{},
 	}
 	asinFolds := map[string]map[string]bool{}
 
 	for _, f := range sortedKeys(b.persons) {
 		acc := b.persons[f]
 		display, variants := pickDisplay(acc.displays)
-		p := &Person{
+		p := &authority.Person{
 			Fold: f, Display: display, Variants: variants,
 			ASINs:         sortedKeys(acc.asins),
-			Roles:         map[Role]RoleStat{},
+			Roles:         map[authority.Role]authority.RoleStat{},
 			Sources:       sortedKeys(acc.sources),
 			ProductSample: acc.products,
 		}
 		for role, byTier := range acc.roles {
-			st := RoleStat{ByTier: map[Tier]int{}}
+			st := authority.RoleStat{ByTier: map[authority.Tier]int{}}
 			for t, n := range byTier {
 				st.ByTier[t] = n
 				st.Count += n
-				st.Tier = better(st.Tier, t)
+				st.Tier = authority.Better(st.Tier, t)
 			}
 			p.Roles[role] = st
-			p.Tier = better(p.Tier, st.Tier)
+			p.Tier = authority.Better(p.Tier, st.Tier)
 			rep.PersonsByRole[role]++
 		}
 		p.HomonymASINs = len(p.ASINs) > 1
 		res.Persons[f] = p
 		rep.PersonsByTier[p.Tier]++
 		sample := NameSample{Fold: f, Display: display, ASINs: p.ASINs, Tier: p.Tier}
-		if st, ok := p.Roles[RoleAuthor]; ok && AuthorEvidenceRule(st) {
+		if st, ok := p.Roles[authority.RoleAuthor]; ok && authority.AuthorEvidenceRule(st) {
 			rep.AuthorEvidence++
 		}
-		if _, cast := p.Roles[RoleCastAuthor]; cast && len(p.Roles) == 1 {
+		if _, cast := p.Roles[authority.RoleCastAuthor]; cast && len(p.Roles) == 1 {
 			rep.CastOnly++
 			rep.CastOnlySample = appendSample(rep.CastOnlySample, sample)
 		}
@@ -523,7 +459,7 @@ func (b *Builder) Finish() *Result {
 			rep.Homonyms++
 			rep.HomonymSample = appendSample(rep.HomonymSample, sample)
 		}
-		if isSingleWord(display) {
+		if authority.IsSingleWord(display) {
 			rep.SingleWord++
 			rep.SingleWordSample = appendSample(rep.SingleWordSample, sample)
 		}
@@ -536,7 +472,7 @@ func (b *Builder) Finish() *Result {
 		}
 	}
 	for _, a := range sortedKeys(asinFolds) {
-		ref := &ASINRef{ASIN: a, Folds: sortedKeys(asinFolds[a])}
+		ref := &authority.ASINRef{ASIN: a, Folds: sortedKeys(asinFolds[a])}
 		res.ASINs[a] = ref
 		if len(ref.Folds) > 1 {
 			rep.SpellingASINs++
@@ -546,7 +482,7 @@ func (b *Builder) Finish() *Result {
 	for _, f := range sortedKeys(b.pubs) {
 		acc := b.pubs[f]
 		display, variants := pickDisplay(acc.displays)
-		p := &Publisher{
+		p := &authority.Publisher{
 			Fold: f, Display: display, Variants: variants,
 			Count: acc.count, ManualOnlyCount: acc.manualOnly,
 			Sources: sortedKeys(acc.sources), Tier: acc.tier, ProductSample: acc.products,

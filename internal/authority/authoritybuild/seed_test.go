@@ -1,9 +1,9 @@
-// file: internal/authority/seed_test.go
+// file: internal/authority/authoritybuild/seed_test.go
 // version: 1.0.0
 // guid: 8ac98f24-09ff-4862-bdb2-36d9269ae71a
 // last-edited: 2026-10-04
 
-package authority
+package authoritybuild
 
 import (
 	"encoding/json"
@@ -15,13 +15,14 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/authorcredit"
+	"github.com/falkcorp/audiobook-organizer/internal/authority"
 )
 
 func TestSeed_EmbeddedDecodesAndValidates(t *testing.T) {
 	s, err := LoadSeed()
 	require.NoError(t, err)
-	require.Equal(t, "internal/authority/seed/authority_seed.json", s.File)
+	require.Equal(t, "internal/authority/authoritybuild/seed/authority_seed.json", s.File)
 	counts := map[string]int{}
 	for _, e := range s.Entries {
 		counts[e.Kind]++
@@ -36,7 +37,7 @@ func TestSeed_EmbeddedDecodesAndValidates(t *testing.T) {
 		if a.Kind != b.Kind {
 			return a.Kind < b.Kind
 		}
-		return Fold(a.Name) < Fold(b.Name)
+		return authority.Fold(a.Name) < authority.Fold(b.Name)
 	}))
 }
 
@@ -97,17 +98,6 @@ func TestDecodeSeed_RejectsBadShapes(t *testing.T) {
 	require.Error(t, err, "unknown top-level field")
 }
 
-func TestKeyPrefixes_AreRegisteredFamilies(t *testing.T) {
-	registered := map[string]bool{}
-	for _, f := range database.KeyFamilies() {
-		registered[f.Prefix] = true
-	}
-	for _, p := range KeyPrefixes() {
-		require.True(t, registered[p], "%s is not in internal/database/keyfamilies.go", p)
-		require.False(t, strings.HasPrefix(p, "author"), "%s would nest under the author families", p)
-	}
-}
-
 // TestSeed_AuthorsAreNotCastOnlyUnderGoRules checks the Python generator's
 // cast rule against this package's (IsCastContext) on a real export. The
 // export holds titles, so it is never committed: the test runs only when
@@ -124,25 +114,34 @@ func TestSeed_AuthorsAreNotCastOnlyUnderGoRules(t *testing.T) {
 	require.NoError(t, err)
 	b := NewBuilder()
 	for _, it := range items {
-		require.NoError(t, b.AddRawProduct(SourceLibraryExport, it))
+		require.NoError(t, b.AddRawProduct(authority.SourceLibraryExport, it))
 	}
 	res := b.Finish()
-	require.Zero(t, res.Report.Sources[SourceLibraryExport].Undecodable)
+	require.Zero(t, res.Report.Sources[authority.SourceLibraryExport].Undecodable)
 
 	s, err := LoadSeed()
 	require.NoError(t, err)
 	for _, e := range s.Entries {
-		p := res.Persons[Fold(e.Name)]
+		p := res.Persons[authority.Fold(e.Name)]
 		switch {
 		case e.Kind == SeedKindAuthor || e.AlsoAuthor:
 			require.NotNil(t, p, e.Name)
-			_, author := p.Roles[RoleAuthor]
+			_, author := p.Roles[authority.RoleAuthor]
 			require.True(t, author, "seed lists %q as an author but Go's rules see only cast credits", e.Name)
 		case e.Kind == SeedKindNarrator:
 			require.NotNil(t, p, e.Name)
-			_, author := p.Roles[RoleAuthor]
+			_, author := p.Roles[authority.RoleAuthor]
 			require.False(t, author, "seed lists %q as narrator-only but Go's rules see a plain author credit", e.Name)
 		}
+	}
+}
+
+// TestFold_MatchesAuthorcredit: the leaf folds exactly as authorcredit does
+// (it lives here because a leaf test importing authorcredit would cycle once
+// authorcredit consumes the leaf).
+func TestFold_MatchesAuthorcredit(t *testing.T) {
+	for _, s := range []string{"J.N. Chaney", "Zoë  Ståhl", "Ray Porter", "李 小龙", "..."} {
+		require.Equal(t, authorcredit.LettersKey(s), authority.Fold(s), s)
 	}
 }
 

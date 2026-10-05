@@ -1,9 +1,9 @@
-// file: internal/authority/ingest.go
+// file: internal/authority/authoritybuild/ingest.go
 // version: 1.0.0
 // guid: c21642cf-8b47-4c22-a6d1-debe423b7a8e
 // last-edited: 2026-10-04
 
-package authority
+package authoritybuild
 
 import (
 	"bytes"
@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/falkcorp/audiobook-organizer/internal/authority"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
@@ -44,7 +45,7 @@ func (b *Builder) AddRawProduct(source string, raw []byte) error {
 
 // ScanCatalogRaw hands every cat_raw: payload to fn, a page at a time.
 // Memory is bounded by pageSize. An empty catalog calls fn zero times.
-func ScanCatalogRaw(ctx context.Context, kv Scanner, pageSize int, fn func([]database.KVPair) error) error {
+func ScanCatalogRaw(ctx context.Context, kv authority.Scanner, pageSize int, fn func([]database.KVPair) error) error {
 	after := ""
 	for {
 		if err := ctx.Err(); err != nil {

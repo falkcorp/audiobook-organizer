@@ -18,7 +18,7 @@ The seed holds PUBLIC contributor facts only (owner decision 2026-10-04):
 author, narrator and publisher NAMES and contributor ASINs. It never holds a
 book title, a product ASIN, a series, or any per-title data or count. Two
 guards enforce that here, before anything is written, and the Go test
-internal/authority/seed_test.go re-checks the file's shape:
+internal/authority/authoritybuild/seed_test.go re-checks the file's shape:
 
 * a name whose letters key equals the letters key of any title, subtitle or
   series title in the export is dropped (reported on stderr); and
@@ -56,7 +56,7 @@ import uuid
 from datetime import date
 from pathlib import Path
 
-DEFAULT_OUT = Path("internal/authority/seed/authority_seed.json")
+DEFAULT_OUT = Path("internal/authority/authoritybuild/seed/authority_seed.json")
 SEED_SOURCE = "owner_library_seed"
 SEED_TIER = "O"
 

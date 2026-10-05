@@ -1,5 +1,5 @@
 // file: internal/authorcredit/authorcredit.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7000d1fc-e16c-47e1-bb94-6180fe3ec1de
 // last-edited: 2026-10-04
 
@@ -66,8 +66,6 @@ import (
 	"sync"
 	"time"
 	"unicode"
-
-	"golang.org/x/text/unicode/norm"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -212,16 +210,9 @@ func ResetTitleCache() {
 }
 
 // LettersKey is a name's letters and digits, lower-cased and NFC-normalized:
-// "J.N. Chaney" and "J N Chaney" share one key.
-func LettersKey(s string) string {
-	var b strings.Builder
-	for _, r := range norm.NFC.String(strings.ToLower(s)) {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) {
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
-}
+// "J.N. Chaney" and "J N Chaney" share one key. It is personname.LettersKey,
+// kept here so no caller moves.
+func LettersKey(s string) string { return personname.LettersKey(s) }
 
 // looseSepRe separates the pieces of a credit list for the existence test:
 // commas, semicolons, slashes, ampersands and a whole-word "and".
