@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.77.0
+// version: 2.78.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 package server
 
@@ -607,6 +607,11 @@ func NewServer(store database.Store) *Server {
 	}
 	// Bind the decorator to its server before anything can write through it.
 	indexed.server = server
+	// The authority lists as person evidence for authorcredit, behind
+	// authority_evidence_enabled (read per resolve; off answers
+	// authority.Empty()). Snapshots load from the bare store in the
+	// background, cancelled with the server.
+	indexed.authority = newAuthorityEvidence(bgCtx, store, func() bool { return config.AppConfig.AuthorityEvidenceEnabled })
 	// Wire the scanner package's local store so its free helpers
 	// (createBookFilesForBook, saveBookToDatabase, ProcessBooksParallel
 	// inline DB calls) no longer reach for database.GetGlobalStore

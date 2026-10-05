@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.132.0
+// version: 1.133.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 package config
 
@@ -1244,6 +1244,14 @@ type Config struct {
 	// ABS routes are polled every 15-20s, so an always-on line is noise
 	// outside a diagnostic window.
 	ABSAuthProbeEnabled bool `json:"abs_auth_probe_enabled" mapstructure:"abs_auth_probe_enabled"`
+	// AuthorityEvidenceEnabled feeds the authority lists (internal/authority,
+	// built by maintenance.authority-build) into authorcredit as person
+	// evidence for credit parts named like a book or series: an author entry
+	// links such a part, and a tier O (owner library) or contributor-ASIN
+	// entry may make it the primary. Off by default: the store then answers
+	// authority.Empty() and credit resolution is unchanged. Read on every
+	// resolve, so flipping it needs no restart.
+	AuthorityEvidenceEnabled bool `json:"authority_evidence_enabled" mapstructure:"authority_evidence_enabled"`
 	// ABSItunesPositionBackfillUserID pins the one-time iTunes-position
 	// backfill job to a specific user ID instead of the default
 	// single-user/earliest-created-user resolution. An ID matching no user
@@ -2299,6 +2307,7 @@ func InitConfig() {
 	viper.SetDefault("whisper_max_in_flight", 0)
 	viper.SetDefault("openai_base_url", "")
 	viper.SetDefault("abs_auth_probe_enabled", false)
+	viper.SetDefault("authority_evidence_enabled", false)
 	viper.SetDefault("abs_itunes_position_backfill_user_id", "")
 	viper.SetDefault("otel_exporter_otlp_endpoint", "")
 	viper.SetDefault("list_warmer_heap_delta_mb", 4096)
@@ -2856,6 +2865,7 @@ func InitConfig() {
 			WhisperMaxInFlight:                   viper.GetInt("whisper_max_in_flight"),
 			OpenAIBaseURL:                        viper.GetString("openai_base_url"),
 			ABSAuthProbeEnabled:                  viper.GetBool("abs_auth_probe_enabled"),
+			AuthorityEvidenceEnabled:             viper.GetBool("authority_evidence_enabled"),
 			ABSItunesPositionBackfillUserID:      viper.GetString("abs_itunes_position_backfill_user_id"),
 			OTelExporterOTLPEndpoint:             viper.GetString("otel_exporter_otlp_endpoint"),
 			ListWarmerHeapDeltaMB:                viper.GetInt("list_warmer_heap_delta_mb"),
