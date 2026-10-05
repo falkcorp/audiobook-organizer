@@ -1,11 +1,12 @@
 // file: internal/dedup/merge_journaled.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 1d7c3e58-4a09-42b6-8f31-5c0e9b247a63
 // last-edited: 2026-10-05
 
 package dedup
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -36,10 +37,11 @@ import (
 //     the merge does not happen: an irreversible merge with no undo key is a
 //     worse outcome than no merge at all.
 //  3. Merge.
-//  4. Patch the SAME journal key with the authoritative winner/loser and their
-//     pre-merge snapshot timestamps. A failure here is logged, not returned —
-//     the merge is already done, and the provisional entry still names the
-//     candidate and both books, so an operator can recover by hand.
+//  4. Patch the SAME journal key with the authoritative winner/loser, their
+//     pre-merge snapshot timestamps and the sibling-move journal. A failure
+//     here is logged, not returned — the merge is already done. The entry
+//     stays marked Provisional, which UnmergeAuto refuses; the log names the
+//     sibling-move journal so the siblings can still be put back.
 //
 // keepID may be empty to let MergeBooks auto-pick the primary via
 // merge.ElectPrimary.
@@ -58,6 +60,14 @@ func (de *Engine) MergeJournaled(candidateID int64, aID, bID, keepID, tag string
 		journalKey = keys[0]
 	}
 	return result, journalKey, err
+}
+
+// putJournal writes one auto-merge journal entry (see Engine.journalPut).
+func (de *Engine) putJournal(e database.AutoMergeJournalEntry) (string, error) {
+	if de.journalPut != nil {
+		return de.journalPut(e)
+	}
+	return de.embedStore.PutAutoMergeJournalEntry(e)
 }
 
 // journalSiblings is the part of result.MovedSiblings that left with loserID:
@@ -171,12 +181,13 @@ func (de *Engine) MergeBooksJournaled(candidateID int64, bookIDs []string, keepI
 	mergedAt := time.Now().UnixNano()
 	journalKeys := make([]string, 0, len(ids)-1)
 	for _, loserID := range othersThan(ids, predWinner) {
-		key, err := de.embedStore.PutAutoMergeJournalEntry(database.AutoMergeJournalEntry{
+		key, err := de.putJournal(database.AutoMergeJournalEntry{
 			CandidateID: candidateID,
 			WinnerID:    predWinner,
 			LoserID:     loserID,
 			Tag:         tag,
 			MergedAt:    mergedAt + int64(len(journalKeys)),
+			Provisional: true,
 		})
 		if err != nil {
 			// A provisional entry that cannot be written means this merge would
@@ -190,6 +201,15 @@ func (de *Engine) MergeBooksJournaled(candidateID int64, bookIDs []string, keepI
 
 	result, mergeErr := de.mergeService.MergeBooks(ids, keepID)
 	if mergeErr != nil {
+		// A merge that failed after its first write may have moved siblings.
+		// The provisional entries stay provisional (UnmergeAuto refuses
+		// them); the sibling journal is the undo for those moves.
+		var partial *merge.PartialMergeError
+		if errors.As(mergeErr, &partial) && partial.SiblingJournalID != "" {
+			slog.Error("merge-journaled: merge failed part way; undo its sibling moves with the sibling-move journal",
+				"candidate", candidateID, "sibling_journal", partial.SiblingJournalID,
+				"version_group", partial.VersionGroupID, "moved_siblings", len(partial.MovedSiblings))
+		}
 		return nil, journalKeys, fmt.Errorf("merge-journaled: merge books: %w", mergeErr)
 	}
 	if result == nil || result.PrimaryID == "" {
@@ -202,7 +222,8 @@ func (de *Engine) MergeBooksJournaled(candidateID int64, bookIDs []string, keepI
 		if i >= len(journalKeys) {
 			break // unreachable: len(losers) == len(ids)-1 == len(journalKeys)
 		}
-		if _, err := de.embedStore.PutAutoMergeJournalEntry(database.AutoMergeJournalEntry{
+		sibs := journalSiblings(result, loserID)
+		entry := database.AutoMergeJournalEntry{
 			CandidateID:      candidateID,
 			WinnerID:         winnerID,
 			LoserID:          loserID,
@@ -210,12 +231,21 @@ func (de *Engine) MergeBooksJournaled(candidateID int64, bookIDs []string, keepI
 			LoserPreMergeTS:  de.preMergeSnapshotNanos(loserID, baselines[loserID]),
 			Tag:              tag,
 			MergedAt:         mergedAt + int64(i),
-			Siblings:         journalSiblings(result, loserID),
-		}); err != nil {
-			// The merge is complete. The provisional entry already names the
-			// candidate and both books, so log rather than fail a done merge.
-			slog.Error("merge-journaled: patch journal entry failed (provisional entry stands)",
-				"candidate", candidateID, "journal", journalKeys[i], "err", err)
+			Siblings:         sibs,
+			IntoGroupID:      result.VersionGroupID,
+		}
+		if len(sibs) > 0 {
+			entry.SiblingJournalID = result.SiblingJournalID
+		}
+		if _, err := de.putJournal(entry); err != nil {
+			// The merge is complete, so log rather than fail a done merge.
+			// The provisional entry stands and UnmergeAuto refuses it (it
+			// records no snapshot and no siblings); the loser is still
+			// restorable from the trash, and the siblings that left with it
+			// through the sibling-move journal logged here.
+			slog.Error("merge-journaled: patch journal entry failed (provisional entry stands; UnmergeAuto will refuse it)",
+				"candidate", candidateID, "journal", journalKeys[i], "loser", loserID,
+				"sibling_journal", result.SiblingJournalID, "siblings", len(sibs), "err", err)
 		}
 	}
 

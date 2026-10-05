@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.42.0
+// version: 1.43.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-10-05
 
@@ -115,6 +115,11 @@ type Result struct {
 	// SiblingJournalID is the sibling-move journal this merge wrote (set when
 	// MovedSiblings is non-empty); UndoSiblingMove takes it.
 	SiblingJournalID string `json:"sibling_journal_id,omitempty"`
+	// GroupPrimaryID is set when the group's primary flag went to a book
+	// other than PrimaryID: with no explicit primary and a survivor that is
+	// not organized, an organized moved sibling or member of the reused group
+	// holds it, so the title stays listed in Audiobookshelf.
+	GroupPrimaryID string `json:"group_primary_id,omitempty"`
 }
 
 // MovedSibling is one loser sibling a merge carried into the merge's version
@@ -253,8 +258,13 @@ func HasAudioRoute(b *database.Book, files []database.BookFile) bool {
 
 // ElectPrimary picks the index of the book to keep, or -1 if no book is
 // eligible. Soft-deleted rows are never eligible. A book with an audio route
-// (HasAudioRoute) always beats one with none; inside that tier BookIsBetter
-// decides, and an exact tie is broken deterministically (see preferOnTie).
+// (HasAudioRoute) always beats one with none; inside that tier an organized
+// book (library_state "organized") beats one that is not, because
+// Audiobookshelf lists only a group's primary and only when it is organized
+// (database.ABSLibraryFilter), so electing an unorganized copy over an
+// organized one hides the title there (owner decision 2026-10-05). Inside
+// both tiers BookIsBetter decides, and an exact tie is broken
+// deterministically (see preferOnTie).
 // filesByID must hold an entry for every book (nil is "no files").
 //
 // The tier is binary on purpose. Counting files would let a twelve-track mp3
@@ -275,10 +285,14 @@ func ElectPrimary(books []*database.Book, filesByID map[string][]database.BookFi
 		}
 		iHas := HasAudioRoute(b, filesByID[b.ID])
 		bestHas := HasAudioRoute(books[bestIdx], filesByID[books[bestIdx].ID])
+		iOrg, bestOrg := isOrganized(b), isOrganized(books[bestIdx])
 		switch {
 		case iHas && !bestHas:
 			bestIdx = i
-		case iHas == bestHas && preferOnTie(b, books[bestIdx]):
+		case iHas != bestHas:
+		case iOrg && !bestOrg:
+			bestIdx = i
+		case iOrg == bestOrg && preferOnTie(b, books[bestIdx]):
 			bestIdx = i
 		}
 	}
@@ -342,17 +356,27 @@ func preferOnTie(a, b *database.Book) bool {
 //     in, not named in the merge -- move into the merge's
 //     version group as non-primary versions. They stay live
 //     and are NOT soft-deleted; only the named losers are.
-//     The group they left has no live member afterwards, so no
-//     primary is elected for it. Siblings get the same
-//     scan-state and iTunes-library refusals as participants.
-//     Before its first write the merge records them in a
-//     sibling-move journal (Result.SiblingJournalID;
-//     UndoSiblingMove reverses it), on every path; dedup's
-//     journaled merge also records them per loser so
-//     UnmergeAuto puts them back.
+//     The group they left has no live member afterwards.
+//     Siblings, and every member of a reused group the merge
+//     rewrites, get the same scan-state and iTunes-library
+//     refusals as participants. Before its first write the
+//     merge records the siblings in a sibling-move journal
+//     (Result.SiblingJournalID; UndoSiblingMove reverses it), on
+//     every path, and records where each emptied group went
+//     (group_redirect.go) so a book restored from the trash
+//     into it later lands with its family. dedup's journaled
+//     merge also names the journal on each loser's entry so
+//     UnmergeAuto puts that loser's siblings back.
+//  7. The group's primary flag: with an explicit primaryID that
+//     book holds it. Without one, the survivor holds it when it
+//     is organized; when it is not, an organized moved sibling
+//     or reused-group member holds it (Result.GroupPrimaryID),
+//     so the title stays listed in Audiobookshelf (owner
+//     decision 2026-10-05).
 //
 // If primaryID is empty, the best book is auto-selected by ElectPrimary
-// (a book with an audio route beats one without; then BookIsBetter:
+// (a book with an audio route beats one without; then an organized book
+// beats one that is not; then BookIsBetter:
 // organized path, curation, M4B, bitrate, size; then a deterministic
 // tie-break). If primaryID is provided, that book is set as the primary
 // unless it has no audio route while another does (FilelessPrimaryError). A
@@ -377,7 +401,7 @@ type MergeOptions struct {
 
 // MergeBooksWithOptions is MergeBooks with MergeOptions; MergeBooks is this
 // with the zero value.
-func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opts MergeOptions) (*Result, error) {
+func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opts MergeOptions) (_ *Result, retErr error) {
 	// De-duplicate the incoming ID list before anything else. Every current
 	// caller either de-dupes itself or trusts a request body (e.g. the
 	// /audiobooks/merge handler passes req.BookIDs straight through) — if
@@ -730,9 +754,85 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 			})
 		}
 	}
-	if err := GuardITunesProtectedLoaded(siblingBooks, siblingFiles); err != nil {
+	// The reused group's other live members (not participants). The demotion
+	// loop below rewrites every one whose flag is not already an explicit
+	// false, and the flag election next may crown one, so each one written
+	// gets the same pre-write guards as a sibling (scan state, iTunes
+	// library). Re-read with GetBookByID for the same reason as the siblings.
+	// Read and guarded BEFORE the journal write, so a refusal leaves no
+	// journal behind.
+	var memberBooks []*database.Book
+	memberFiles := map[string][]database.BookFile{}
+	for i := range preExistingMembers {
+		m := &preExistingMembers[i]
+		if seen[m.ID] || m.ID == resolvedPrimaryID || m.IsSoftDeleted() {
+			continue
+		}
+		full, err := ms.db.GetBookByID(m.ID)
+		if err != nil {
+			return nil, fmt.Errorf("load version-group member %s: %w", m.ID, err)
+		}
+		if full == nil {
+			return nil, fmt.Errorf("version-group member %s of group %s: now missing: %w", m.ID, versionGroupID, versionprimary.ErrMembershipChanged)
+		}
+		if err := versionprimary.CheckMembership(full, versionGroupID); err != nil {
+			return nil, err
+		}
+		files, err := ms.db.GetBookFiles(full.ID)
+		if err != nil {
+			return nil, fmt.Errorf("cannot verify scan state for version-group member %s, refusing to merge: %w", full.ID, err)
+		}
+		memberBooks = append(memberBooks, full)
+		memberFiles[full.ID] = files
+	}
+
+	// Which book holds the group's primary flag. An explicit primaryID always
+	// does. Otherwise the survivor does when it is organized; when it is not,
+	// an organized live member of the merged group -- a moved sibling or a
+	// member of the reused group -- takes the flag, so the title stays listed
+	// in Audiobookshelf, which shows a group's primary only when it is
+	// organized (database.ABSLibraryFilter; owner decision 2026-10-05). The
+	// survivor stays the survivor (it keeps the losers' external IDs and user
+	// state); it is only not the flag holder. ElectPrimary chooses among the
+	// survivor and those organized members, so an organized copy with no
+	// audio route does not take the flag from a survivor that has one.
+	flagHolderID := resolvedPrimaryID
+	if primaryID == "" && !isOrganized(books[bestIdx]) {
+		cands := []*database.Book{books[bestIdx]}
+		candFiles := map[string][]database.BookFile{books[bestIdx].ID: filesByID[books[bestIdx].ID]}
+		for _, sb := range siblingBooks {
+			if isOrganized(sb) {
+				cands = append(cands, sb)
+				candFiles[sb.ID] = siblingFiles[sb.ID]
+			}
+		}
+		for _, mb := range memberBooks {
+			if isOrganized(mb) {
+				cands = append(cands, mb)
+				candFiles[mb.ID] = memberFiles[mb.ID]
+			}
+		}
+		if idx := ElectPrimary(cands, candFiles); idx >= 0 {
+			flagHolderID = cands[idx].ID
+		}
+	}
+
+	guarded := slices.Clone(siblingBooks)
+	guardFiles := maps.Clone(siblingFiles)
+	for _, mb := range memberBooks {
+		if mb.ID != flagHolderID && mb.IsPrimaryVersion != nil && !*mb.IsPrimaryVersion {
+			continue // not written: already an explicit false, and not crowned
+		}
+		if database.AnyProvisional(memberFiles[mb.ID]) {
+			return nil, &ProvisionalScanError{BookID: mb.ID}
+		}
+		guarded = append(guarded, mb)
+		guardFiles[mb.ID] = memberFiles[mb.ID]
+	}
+	if err := GuardITunesProtectedLoaded(guarded, guardFiles); err != nil {
 		return nil, err
 	}
+
 	// Journal the sibling move before the first write (see sibling_journal.go):
 	// every merge path that moves a sibling leaves an undo record, whether or
 	// not its caller journals the merge itself. A journal that cannot be
@@ -750,26 +850,83 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 			return nil, fmt.Errorf("refusing to move version-group siblings with no undo record: %w", err)
 		}
 	}
-	// A failure part-way through the membership writes leaves a left group
-	// with only some of its live members moved, and possibly no primary (its
-	// primary may be one that already moved). On that path only, hand each
-	// left group's flag on after the locks are released (handOffLeftGroups
-	// takes them itself). On success every left group is empty of live
-	// members and this does not run, and neither does it on a refusal before
-	// the first write (a CheckMembership mismatch on the first book): nothing
-	// moved, so there is nothing to hand on. Registered here, after
-	// releaseGroups' defer, so it runs first; it releases the locks itself
-	// before the hand-off.
+	// Bookkeeping for the deferred handler below.
+	//
+	// Refused before the first membership write (a group redirect that could
+	// not be written, a CheckMembership mismatch on the first book): nothing
+	// moved. The redirects written so far are removed and the journal is
+	// marked aborted, so it can never be undone (an undo of a merge that moved
+	// nothing could only revert some later move).
+	//
+	// Failed part-way through the membership writes: a left group may have
+	// only some of its live members moved and possibly no primary (its
+	// primary may be one that already moved), and the merge's own group may
+	// have none either (the flag holder's write may be the one that failed).
+	// Each of those groups' flag is handed on after the locks are released
+	// (handOffLeftGroups takes them itself), and the journal records the
+	// siblings that did move and the error; it stays pending, and undoable.
+	//
+	// Either way after the first write, the error is returned as a
+	// PartialMergeError naming the group, the siblings that moved and the
+	// journal. Registered here, after releaseGroups' defer, so it runs first.
 	membershipStarted, membershipWritten := false, false
+	var movedSiblings []MovedSibling
+	var redirected []string
 	defer func() {
-		if membershipStarted && !membershipWritten {
+		switch {
+		case !membershipStarted && retErr != nil:
+			for _, g := range redirected {
+				ClearGroupRedirect(ms.db, g, versionGroupID)
+			}
+			if siblingJournal != nil {
+				siblingJournal.Status = SiblingJournalAborted
+				siblingJournal.LastError = retErr.Error()
+				if err := ms.putSiblingJournal(siblingJournal); err != nil {
+					// Left pending. An undo of it finds every sibling still
+					// in its old group (nothing moved), and a later merge
+					// that does move one blocks it (requireNoNewerSiblingMove).
+					mlog.Warn("merge: refused merge's sibling-move journal %s not marked aborted: %s",
+						logger.SanitizeLogValue(siblingJournal.ID), logger.SanitizeLogValue(fmt.Sprint(err)))
+				}
+			}
+		case membershipStarted && !membershipWritten:
 			releaseGroups()
-			handOffLeftGroups(ms.db, leftGroups)
+			groups := maps.Clone(leftGroups)
+			groups[versionGroupID] = true
+			handOffLeftGroups(ms.db, groups)
+			if siblingJournal != nil {
+				siblingJournal.Moved = siblingIDs(movedSiblings)
+				if retErr != nil {
+					siblingJournal.LastError = retErr.Error()
+				}
+				if err := ms.putSiblingJournal(siblingJournal); err != nil {
+					mlog.Warn("merge: part-failed merge's sibling-move journal %s not updated with what moved: %s",
+						logger.SanitizeLogValue(siblingJournal.ID), logger.SanitizeLogValue(fmt.Sprint(err)))
+				}
+			}
+		}
+		if membershipStarted && retErr != nil {
+			pe := &PartialMergeError{VersionGroupID: versionGroupID, MovedSiblings: movedSiblings, Err: retErr}
+			if siblingJournal != nil {
+				pe.SiblingJournalID = siblingJournal.ID
+			}
+			retErr = pe
 		}
 	}()
+	// Record where each group this merge empties went, so a book restored
+	// from the trash into it later lands with its family (group_redirect.go).
+	// Before the first write, like the journal: a merge that cannot record it
+	// is refused.
+	if len(leftLosers) > 0 {
+		var err error
+		redirected, err = ms.putGroupRedirects(leftLosers, versionGroupID, resolvedPrimaryID)
+		if err != nil {
+			return nil, fmt.Errorf("refusing to empty version group(s) with no trash-restore redirect: %w", err)
+		}
+	}
 	for i, book := range books {
-		isPrimary := i == bestIdx
-		if !isPrimary && book.IsSoftDeleted() &&
+		isPrimary := book.ID == flagHolderID
+		if i != bestIdx && book.IsSoftDeleted() &&
 			book.VersionGroupID != nil && *book.VersionGroupID == versionGroupID &&
 			book.IsPrimaryVersion != nil && !*book.IsPrimaryVersion {
 			// Replayed loser already carries exactly these values. Under the
@@ -806,7 +963,7 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 			}
 			fresh.VersionGroupID = &versionGroupID
 			fresh.IsPrimaryVersion = &isPrimary
-			if isPrimary && opts.CarryITunesFields {
+			if i == bestIdx && opts.CarryITunesFields {
 				for j, from := range books {
 					if j != bestIdx {
 						TransferITunesMetadataFirstWin(fresh, from)
@@ -826,18 +983,19 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 	}
 
 	// Carry each loser's siblings into versionGroupID as non-primary versions
-	// (MergeBooks item 6). Only the group and the flag are set, through
+	// (MergeBooks item 6), except the flag holder when the election above
+	// chose a sibling. Only the group and the flag are set, through
 	// ModifyBook on the fresh row; the sibling stays live and keeps
 	// everything else. CheckMembership re-confirms, under the book's write
 	// lock, that it is still in the group it was read from.
 	for _, sib := range siblings {
-		notPrimary := false
+		flag := sib.BookID == flagHolderID
 		stored, err := ms.db.ModifyBook(sib.BookID, func(fresh *database.Book) error {
 			if err := versionprimary.CheckMembership(fresh, sib.FromGroupID); err != nil {
 				return err
 			}
 			fresh.VersionGroupID = &versionGroupID
-			fresh.IsPrimaryVersion = &notPrimary
+			fresh.IsPrimaryVersion = &flag
 			return nil
 		})
 		if err != nil {
@@ -847,6 +1005,7 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 			return nil, &BookNotFoundError{BookID: sib.BookID}
 		}
 		membershipStarted = true
+		movedSiblings = append(movedSiblings, sib)
 		mlog.Info("merge: moved loser's version-group sibling %s from %s to %s (primary %s)",
 			logger.SanitizeLogValue(sib.BookID), logger.SanitizeLogValue(sib.FromGroupID),
 			logger.SanitizeLogValue(versionGroupID), logger.SanitizeLogValue(resolvedPrimaryID))
@@ -886,9 +1045,34 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 	// exactly why it is safe to make while that disagreement is unresolved.
 	// It is spelled out because a future reader who trusts one reading will
 	// mis-predict what this loop does at the other call sites.
+	//
+	// The flag holder, when the election above chose a member of the reused
+	// group, is crowned here instead of demoted.
+	for _, mb := range memberBooks {
+		if mb.ID != flagHolderID {
+			continue
+		}
+		crowned, err := ms.db.ModifyBook(mb.ID, func(b *database.Book) error {
+			if err := versionprimary.CheckMembership(b, versionGroupID); err != nil {
+				return err
+			}
+			if b.IsPrimaryVersion != nil && *b.IsPrimaryVersion {
+				return database.ErrSkipBookWrite
+			}
+			yes := true
+			b.IsPrimaryVersion = &yes
+			return nil
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to make organized version-group member %s primary: %w", mb.ID, err)
+		}
+		if crowned == nil {
+			return nil, &BookNotFoundError{BookID: mb.ID}
+		}
+	}
 	for i := range preExistingMembers {
 		member := &preExistingMembers[i]
-		if seen[member.ID] || member.ID == resolvedPrimaryID {
+		if seen[member.ID] || member.ID == resolvedPrimaryID || member.ID == flagHolderID {
 			continue
 		}
 		if member.IsPrimaryVersion != nil && !*member.IsPrimaryVersion {
@@ -926,10 +1110,20 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 	}
 	membershipWritten = true
 	releaseGroups()
+	// Backstop: each left group now has no live member, so this is one read
+	// per group and writes nothing -- unless a writer that holds no group
+	// lock put a book in it meanwhile. The scanner's new-row path is one:
+	// scanner.go's CreateBook of a row applySmartVersionLink grouped
+	// (version_link.go) runs under the folder+title stripe only, while the
+	// sibling links it writes (linkVersionGroup, joinRacedRow) do take the
+	// group lock. A row created that way into a group this merge just emptied
+	// would otherwise be left with no primary.
+	handOffLeftGroups(ms.db, leftGroups)
 	siblingJournalID := ""
 	if siblingJournal != nil {
 		siblingJournalID = siblingJournal.ID
 		siblingJournal.Status = SiblingJournalApplied
+		siblingJournal.Moved = siblingIDs(movedSiblings)
 		if err := ms.putSiblingJournal(siblingJournal); err != nil {
 			// The pending journal already names every sibling and is undoable
 			// as it stands (UndoSiblingMove accepts pending).
@@ -1090,9 +1284,6 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 	// it fails the merge instead, after the group hand-off still runs.
 	followErr := FollowMerge(ms.db, ms.syncFollower, resolvedPrimaryID, losers)
 
-	// No hand-off for leftGroups: the siblings moved above, so each left group
-	// has no live member left to be its primary (MergeBooks item 6).
-
 	if followErr != nil {
 		return nil, fmt.Errorf("merge into %s applied but users' listening state could not be carried and no repair record was written: %w",
 			resolvedPrimaryID, followErr)
@@ -1106,8 +1297,44 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 		ElectedWithoutUserState: electedWithoutUserState,
 		MovedSiblings:           siblings,
 		SiblingJournalID:        siblingJournalID,
+		GroupPrimaryID:          groupPrimaryID(flagHolderID, resolvedPrimaryID),
 	}, nil
 }
+
+// groupPrimaryID is Result.GroupPrimaryID: the flag holder when it is not the
+// survivor, else empty.
+func groupPrimaryID(flagHolderID, survivorID string) string {
+	if flagHolderID == survivorID {
+		return ""
+	}
+	return flagHolderID
+}
+
+func siblingIDs(sibs []MovedSibling) []string {
+	out := make([]string, 0, len(sibs))
+	for _, s := range sibs {
+		out = append(out, s.BookID)
+	}
+	return out
+}
+
+// PartialMergeError is returned by MergeBooksWithOptions for an error after
+// its first membership write: something changed. It carries what a caller
+// needs to see or undo that change. Error() is the underlying error's text and
+// Unwrap returns it, so errors.As on the underlying type still works.
+type PartialMergeError struct {
+	// VersionGroupID is the merge's group.
+	VersionGroupID string
+	// MovedSiblings are the siblings whose move into VersionGroupID landed.
+	MovedSiblings []MovedSibling
+	// SiblingJournalID is the sibling-move journal (UndoSiblingMove), when
+	// the merge planned to move any sibling.
+	SiblingJournalID string
+	Err              error
+}
+
+func (e *PartialMergeError) Error() string { return e.Err.Error() }
+func (e *PartialMergeError) Unwrap() error { return e.Err }
 
 // resolveVersionGroup picks the version group a merge's books end up in, and
 // whether it is an existing group (reused) rather than a new one.

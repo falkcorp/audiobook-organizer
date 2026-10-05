@@ -1,5 +1,5 @@
 // file: internal/database/dedup_automerge_journal.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8b2f7d14-6c93-4a05-9e21-3f8a5c0d7e46
 // last-edited: 2026-10-05
 
@@ -59,10 +59,29 @@ type AutoMergeJournalEntry struct {
 	MergedAt int64 `json:"merged_at"`
 
 	// Siblings are the loser's live version-group siblings the merge carried
-	// into the winner's group (merge.Result.MovedSiblings). They have no
-	// pre-merge snapshot -- nobody knew them before the merge -- so UnmergeAuto
-	// restores them field by field from these records instead.
+	// into the winner's group (merge.Result.MovedSiblings), kept so an
+	// operator can see what the undo will put back. UnmergeAuto restores them
+	// through SiblingJournalID, never from this list directly, so the
+	// sibling journal's refusals (undone, aborted, superseded by a later
+	// merge) apply to it too.
 	Siblings []AutoMergeJournalSibling `json:"siblings,omitempty"`
+
+	// SiblingJournalID is the merge's sibling-move journal
+	// (merge.Result.SiblingJournalID), set when Siblings is non-empty.
+	SiblingJournalID string `json:"sibling_journal_id,omitempty"`
+
+	// IntoGroupID is the merge's version group (merge.Result.VersionGroupID).
+	// UnmergeAuto clears the trash-restore redirect the merge left on the
+	// loser's old group once the loser is back in it.
+	IntoGroupID string `json:"into_group_id,omitempty"`
+
+	// Provisional marks the entry written before the merge, which names the
+	// books but no snapshot. The post-merge patch clears it. UnmergeAuto
+	// refuses an entry still provisional: its merge failed, or the patch
+	// could not be written, and either way it records nothing to revert to.
+	// Entries written before this field existed read as not provisional,
+	// which is what every patched one of them is.
+	Provisional bool `json:"provisional,omitempty"`
 }
 
 // AutoMergeJournalSibling records one sibling a merge moved: from FromGroupID
