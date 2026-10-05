@@ -19,3 +19,13 @@
 - Duplicate product ASINs within one source (the same product in two
   marketplaces) now resolve the same way on every run, whatever the worker
   count.
+- The dry-run result (`GET /operations/:id/result`) now reads from the top
+  down: a one-line `summary`, `refusals`, the `apply_params` to send, counts,
+  then the full `prune` and `held` lists, with the detailed report last.
+- The author-catalog harvest scope now skips publisher-shaped names that the
+  junk list missed ("Big Finish Production", "... Studio") and role-marked
+  credits ("Jay Rubin - translator"). A credit list that contains a
+  role-marked piece is never harvested whole. Its unmarked person pieces are
+  harvested on their own instead, for example "Haruki Murakami" from
+  "Haruki Murakami, Jay Rubin - translator, Philip Gabriel - translator". The
+  scope census and the harvest log count each kind of skip.

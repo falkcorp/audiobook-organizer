@@ -105,18 +105,28 @@ func (p authorityBuildParams) sources() authoritySources {
 	return authoritySources{SkipSeed: p.SkipSeed, SkipCatalog: p.SkipCatalog, LibraryExportPath: p.LibraryExportPath}
 }
 
-// authorityPlanResult is the op result: the reviewed plan of a dry run, or
-// what an apply did.
+// authorityPlanResult is the op result (GET /operations/:id/result): the
+// reviewed plan of a dry run, or what an apply did. Fields are ordered for a
+// human reading the JSON top-down: the one-line summary and any refusals
+// first, then the apply params to send, counts, the full prune and held
+// lists, and the detailed report last.
 type authorityPlanResult struct {
-	DryRun   bool             `json:"dry_run"`
-	PlanOpID string           `json:"plan_op_id,omitempty"`
-	Digest   string           `json:"digest"`
-	Sources  authoritySources `json:"sources"`
-	Ran      []string         `json:"ran"`
+	// Summary is one line: mode, writes, prunes, held rows, refusals.
+	Summary string `json:"summary"`
 	// Refusals are the reasons an apply of this plan would be refused.
-	Refusals []string                                `json:"refusals,omitempty"`
-	Writes   int                                     `json:"writes"`
-	Counts   map[string]*authoritybuild.PrefixCounts `json:"counts"`
+	Refusals []string `json:"refusals"`
+	// ApplyParams is the body to enqueue to apply this dry run's plan; set
+	// only on a dry run with no refusals.
+	ApplyParams map[string]any                          `json:"apply_params,omitempty"`
+	DryRun      bool                                    `json:"dry_run"`
+	PlanOpID    string                                  `json:"plan_op_id,omitempty"`
+	Digest      string                                  `json:"digest"`
+	Sources     authoritySources                        `json:"sources"`
+	Ran         []string                                `json:"ran"`
+	Writes      int                                     `json:"writes"`
+	PruneCount  int                                     `json:"prune_count"`
+	HeldCount   int                                     `json:"held_count"`
+	Counts      map[string]*authoritybuild.PrefixCounts `json:"counts"`
 	// Prune is every key the plan deletes; Held every stale row it keeps
 	// because a source it came from did not run.
 	Prune  []string                    `json:"prune"`
@@ -319,9 +329,19 @@ func buildAuthorityLists(ctx context.Context, kv database.RawKVStore, params aut
 		Refusals: refusals, Writes: len(plan.Writes), Counts: plan.Counts,
 		Prune: nonNil(plan.Stale), Held: nonNil(plan.Held), Report: res.Report,
 	}
+	out.Result.PruneCount, out.Result.HeldCount = len(plan.Stale), len(plan.Held)
+	if out.Result.Refusals == nil {
+		out.Result.Refusals = []string{}
+	}
 	if !dryRun {
 		out.Result.PlanOpID = params.PlanOpID
+	} else if id := registry.ReporterOpID(reporter); id != "" && len(refusals) == 0 {
+		out.Result.ApplyParams = map[string]any{"dry_run": false, "plan_op_id": id}
 	}
+	out.Result.Summary = fmt.Sprintf("%s: %d writes, %d prunes, %d held, %d persons, %d publishers; %s",
+		map[bool]string{true: "DRY RUN", false: "APPLY"}[dryRun], len(plan.Writes), len(plan.Stale), len(plan.Held),
+		res.Report.Persons, res.Report.Publishers,
+		map[bool]string{true: "apply allowed", false: fmt.Sprintf("apply refused (%d reasons)", len(refusals))}[len(refusals) == 0])
 	logAuthorityReport(reporter, mode, out)
 	for _, r := range refusals {
 		_ = reporter.Log(slog.LevelWarn, "authority-build: an apply would be refused: "+r)
