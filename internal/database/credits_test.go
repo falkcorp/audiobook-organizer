@@ -1,5 +1,5 @@
 // file: internal/database/credits_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a5a7e839-5ad1-49ad-8401-9428121f66e7
 // last-edited: 2026-10-04
 
@@ -90,7 +90,7 @@ func TestNormalizeBookAuthors_ProdShapeKeepsStoredOrder(t *testing.T) {
 	}
 	orig := append([]BookAuthor(nil), in...)
 	for run := 0; run < 50; run++ {
-		got := NormalizeBookAuthors(in)
+		got := NormalizeBookAuthors(in, nil)
 		if ids := creditAuthorIDs(got); !reflect.DeepEqual(ids, []int{a, b, ab}) {
 			t.Fatalf("run %d: order = %v, want [A B A+B]", run, ids)
 		}
@@ -102,8 +102,8 @@ func TestNormalizeBookAuthors_ProdShapeKeepsStoredOrder(t *testing.T) {
 		t.Errorf("input mutated: %+v", in)
 	}
 	// Idempotent: normalising canonical rows changes nothing.
-	once := NormalizeBookAuthors(in)
-	if twice := NormalizeBookAuthors(once); !reflect.DeepEqual(once, twice) {
+	once := NormalizeBookAuthors(in, nil)
+	if twice := NormalizeBookAuthors(once, nil); !reflect.DeepEqual(once, twice) {
 		t.Errorf("not idempotent: %+v vs %+v", once, twice)
 	}
 }
@@ -118,7 +118,7 @@ func TestNormalizeBookAuthors_SortsGapsDuplicatesAndZeroIDs(t *testing.T) {
 		{AuthorID: 2, Role: "narrator", Position: 6}, // same person, another role: kept
 		{AuthorID: -4, Role: "author", Position: 1},  // invalid: dropped
 	}
-	got := NormalizeBookAuthors(in)
+	got := NormalizeBookAuthors(in, nil)
 	if ids := creditAuthorIDs(got); !reflect.DeepEqual(ids, []int{1, 2, 2, 3}) {
 		t.Fatalf("order = %v, want [1 2 2 3]", ids)
 	}
@@ -131,8 +131,53 @@ func TestNormalizeBookAuthors_SortsGapsDuplicatesAndZeroIDs(t *testing.T) {
 	if got[0].Role != "author" {
 		t.Errorf("the lowest-position row of a repeated author must win, got role %q", got[0].Role)
 	}
-	if out := NormalizeBookAuthors(nil); out == nil || len(out) != 0 {
+	if out := NormalizeBookAuthors(nil, nil); out == nil || len(out) != 0 {
 		t.Errorf("nil input must give an empty, non-nil slice (encodes as [] not null), got %#v", out)
+	}
+}
+
+// Renumbering erases a position tie for good, so the book's AuthorID must
+// break it: within a tie group the AuthorID row comes first, the rest keep
+// stored order. Without it, [B@0, A@0] with AuthorID=A would be stored B-first
+// and a later step deriving the primary from position 0 would switch the book
+// to B (and the organizer would refile it).
+func TestNormalizeBookAuthors_PrimaryBreaksPositionTies(t *testing.T) {
+	const a, b, c, ab = 21, 22, 23, 24
+	cases := []struct {
+		name    string
+		in      []BookAuthor
+		primary *int
+		want    []int
+	}{
+		{"tie, AuthorID breaks it", []BookAuthor{{AuthorID: b}, {AuthorID: a}}, intp(a), []int{a, b}},
+		{"tie, no AuthorID: stored order", []BookAuthor{{AuthorID: b}, {AuthorID: a}}, nil, []int{b, a}},
+		{"tie, AuthorID zero: stored order", []BookAuthor{{AuthorID: b}, {AuthorID: a}}, intp(0), []int{b, a}},
+		{"tie, AuthorID not in the join: stored order", []BookAuthor{{AuthorID: b}, {AuthorID: a}}, intp(99), []int{b, a}},
+		{"prod shape A@0 B@0 A+B@1, AuthorID=B", []BookAuthor{
+			{AuthorID: a, Position: 0}, {AuthorID: b, Position: 0}, {AuthorID: ab, Position: 1},
+		}, intp(b), []int{b, a, ab}},
+		{"prod shape A@0 B@0 A+B@1, AuthorID=A+B (not in the tie group)", []BookAuthor{
+			{AuthorID: a, Position: 0}, {AuthorID: b, Position: 0}, {AuthorID: ab, Position: 1},
+		}, intp(ab), []int{a, b, ab}},
+		{"AuthorID only reorders its own tie group", []BookAuthor{
+			{AuthorID: c, Position: 0}, {AuthorID: b, Position: 1}, {AuthorID: a, Position: 1},
+		}, intp(a), []int{c, a, b}},
+		{"distinct positions are never overridden", []BookAuthor{
+			{AuthorID: b, Position: 0}, {AuthorID: a, Position: 1},
+		}, intp(a), []int{b, a}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := NormalizeBookAuthors(tc.in, tc.primary)
+			if ids := creditAuthorIDs(got); !reflect.DeepEqual(ids, tc.want) {
+				t.Fatalf("order = %v, want %v", ids, tc.want)
+			}
+			for i, r := range got {
+				if r.Position != i {
+					t.Errorf("row %d has position %d", i, r.Position)
+				}
+			}
+		})
 	}
 }
 
@@ -283,6 +328,88 @@ func TestModifyBookAuthors_ReturnsNormalisedRows(t *testing.T) {
 	}
 	if ids, pos := creditAuthorIDs(got), positionsOfAuthors(got); !reflect.DeepEqual(ids, []int{bb.ID, a.ID}) || !reflect.DeepEqual(pos, []int{0, 1}) {
 		t.Fatalf("returned ids %v positions %v", ids, pos)
+	}
+}
+
+// Through the real write paths: the book row's AuthorID breaks the tie
+// in what is stored, for SetBookAuthors and ModifyBookAuthors alike.
+func TestCreditWrites_StoreAuthorIDFirstAmongTiedRows(t *testing.T) {
+	s := newCreditsTestStore(t)
+	a, bb := mustCreditAuthor(t, s, "Ann A"), mustCreditAuthor(t, s, "Bob B")
+	newBook := func(path string, primary *int) *Book {
+		created, err := s.CreateBook(&Book{Title: "Tie " + path, FilePath: path, AuthorID: primary})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return created
+	}
+	tied := []BookAuthor{{AuthorID: bb.ID, Position: 0}, {AuthorID: a.ID, Position: 0}}
+
+	withPrimary := newBook("/tmp/credits-tie-set.m4b", &a.ID)
+	if err := s.SetBookAuthors(withPrimary.ID, tied); err != nil {
+		t.Fatal(err)
+	}
+	stored, _ := s.GetBookAuthors(withPrimary.ID)
+	if ids := creditAuthorIDs(stored); !reflect.DeepEqual(ids, []int{a.ID, bb.ID}) || stored[0].Position != 0 || stored[1].Position != 1 {
+		t.Fatalf("SetBookAuthors stored %+v, want [A@0 B@1]", stored)
+	}
+
+	viaModify := newBook("/tmp/credits-tie-modify.m4b", &a.ID)
+	got, err := s.ModifyBookAuthors(viaModify.ID, func([]BookAuthor) ([]BookAuthor, error) { return tied, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, _ = s.GetBookAuthors(viaModify.ID)
+	if !reflect.DeepEqual(creditAuthorIDs(stored), []int{a.ID, bb.ID}) || !reflect.DeepEqual(creditAuthorIDs(got), []int{a.ID, bb.ID}) {
+		t.Fatalf("ModifyBookAuthors stored %+v returned %+v, want [A B]", stored, got)
+	}
+
+	// The scanner/apply shape: an existing tied list gets a co-author
+	// appended. The primary must stay first.
+	c := mustCreditAuthor(t, s, "Cy C")
+	if _, err := s.ModifyBookAuthors(viaModify.ID, func([]BookAuthor) ([]BookAuthor, error) {
+		return append(append([]BookAuthor(nil), tied...), BookAuthor{AuthorID: c.ID, Position: 1}), nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stored, _ = s.GetBookAuthors(viaModify.ID)
+	if ids := creditAuthorIDs(stored); !reflect.DeepEqual(ids, []int{a.ID, bb.ID, c.ID}) {
+		t.Fatalf("after co-author add: %v, want [A B C]", ids)
+	}
+
+	noPrimary := newBook("/tmp/credits-tie-none.m4b", nil)
+	if err := s.SetBookAuthors(noPrimary.ID, tied); err != nil {
+		t.Fatal(err)
+	}
+	stored, _ = s.GetBookAuthors(noPrimary.ID)
+	if ids := creditAuthorIDs(stored); !reflect.DeepEqual(ids, []int{bb.ID, a.ID}) {
+		t.Fatalf("no AuthorID: stored %v, want stored order [B A]", ids)
+	}
+
+	// ModifyBookCredits orders by the AuthorID fn leaves on the row.
+	viaCredits := newBook("/tmp/credits-tie-credits.m4b", &a.ID)
+	_, out, err := s.ModifyBookCredits(viaCredits.ID, func(book *Book, ce *BookCreditsEdit) error {
+		book.AuthorID = &bb.ID
+		ce.Authors = []BookAuthor{{AuthorID: a.ID}, {AuthorID: bb.ID}}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ids := creditAuthorIDs(out.Authors); !reflect.DeepEqual(ids, []int{bb.ID, a.ID}) {
+		t.Fatalf("ModifyBookCredits: %v, want the new AuthorID (B) first", ids)
+	}
+
+	// GetBookCredits reads legacy tied rows in the order a write would
+	// store them.
+	legacy := newBook("/tmp/credits-tie-legacy.m4b", &a.ID)
+	seedRawCredits(t, s, bookAuthorsKey(legacy.ID), tied)
+	creds, err := s.GetBookCredits(context.Background(), []string{legacy.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if names := creds[legacy.ID].AuthorNames(); !reflect.DeepEqual(names, []string{"Ann A", "Bob B"}) {
+		t.Fatalf("GetBookCredits legacy tie: %v, want [Ann A, Bob B]", names)
 	}
 }
 
