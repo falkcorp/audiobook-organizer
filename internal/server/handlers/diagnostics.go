@@ -1,5 +1,5 @@
 // file: internal/server/handlers/diagnostics.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 14e70c44-73ca-456a-bc67-8dc6ba6e5736
 // last-edited: 2026-10-04
 
@@ -124,11 +124,17 @@ type dbHealthPebble struct {
 	// Estimated: KeyCount is the census TotalKeys (sstable entries minus
 	// deletions), not an exact count of live keys.
 	Estimated bool `json:"estimated"`
+	// ErrorBoundKeys bounds |KeyCount - true on-disk keys| (sum over families).
+	ErrorBoundKeys int64 `json:"error_bound_keys"`
 }
 
 type dbHealthEmbeddings struct {
 	VectorCount int64 `json:"vector_count"`
 	SizeBytes   int64 `json:"size_bytes"`
+	// Estimated: VectorCount and SizeBytes are the census emb:v: family
+	// figures (all entity types), not an exact walk.
+	Estimated      bool  `json:"estimated"`
+	ErrorBoundKeys int64 `json:"error_bound_keys"`
 }
 
 type dbHealthAiScans struct {
@@ -141,8 +147,9 @@ type dbHealthAiScans struct {
 type dbHealthMetadataCache struct {
 	TotalEntries int64 `json:"total_entries"`
 	// Estimated: TotalEntries is the census family estimate.
-	Estimated bool `json:"estimated"`
-	TTLDays   int  `json:"ttl_days"`
+	Estimated      bool  `json:"estimated"`
+	ErrorBoundKeys int64 `json:"error_bound_keys"`
+	TTLDays        int   `json:"ttl_days"`
 	// ExpiredEntries is -1 (ExpiredComputed false) unless ?deep=true.
 	ExpiredEntries  int64 `json:"expired_entries"`
 	ExpiredComputed bool  `json:"expired_entries_computed"`
@@ -692,9 +699,12 @@ func (h *DiagnosticsHandler) GetDBHealth(c *gin.Context) {
 
 	resp := dbHealthResponse{}
 
-	// Main store stats: the estimated census, not a key iteration. A census
-	// reads sstable properties only, so this answers in milliseconds where the
-	// old full KeyCount walk took minutes on a production-size store.
+	// Main store stats: the estimated census, not a key iteration. The census
+	// reads sstable properties only (no key iteration, no value reads), so it
+	// is cheap where the old full KeyCount walk took minutes on a
+	// production-size store. It is cached for 5 minutes; a cache miss does
+	// real work (a bounded seek per family range, and a flush when enough
+	// writes are unflushed), so this path is not free, just bounded.
 	//
 	// The capability is resolved through the decorator chain with
 	// database.AsCapability, never a bare assertion: NewServer wraps the store
@@ -707,18 +717,32 @@ func (h *DiagnosticsHandler) GetDBHealth(c *gin.Context) {
 			KeyCount:  census.TotalKeys,
 			SizeBytes: census.DiskSpaceUsage,
 			Estimated: true,
+			// The bound is the sum over families; a table shared by two
+			// families is bounded in each, so the total is conservative.
+			ErrorBoundKeys: censusErrorBound(census),
 		}
 	}
 
-	// Embeddings store (always SQLite, may be nil if DB path not set yet).
+	// Embedding vectors live in the main DB under emb:v:. Their count comes
+	// from the census family (one walk of ~230k keys per request otherwise);
+	// a backend without a census keeps the exact count.
 	if h.embeddingStore != nil {
-		estats, err := h.embeddingStore.HealthStats()
-		if err != nil {
-			diagnosticsLog.Warn("db-health embedding stats: %v", err)
-		}
-		resp.Embeddings = dbHealthEmbeddings{
-			VectorCount: estats.VectorCount,
-			SizeBytes:   estats.SizeBytes,
+		if fam, ok := censusFamily(census, embeddingVectorPrefix); ok {
+			resp.Embeddings = dbHealthEmbeddings{
+				VectorCount:    fam.Keys,
+				SizeBytes:      int64(fam.DiskBytes),
+				Estimated:      true,
+				ErrorBoundKeys: fam.ErrorBoundKeys,
+			}
+		} else if ctx := c.Request.Context(); ctx.Err() == nil {
+			estats, err := h.embeddingStore.HealthStats()
+			if err != nil {
+				diagnosticsLog.Warn("db-health embedding stats: %v", err)
+			}
+			resp.Embeddings = dbHealthEmbeddings{
+				VectorCount: estats.VectorCount,
+				SizeBytes:   estats.SizeBytes,
+			}
 		}
 	}
 
@@ -741,10 +765,12 @@ func (h *DiagnosticsHandler) GetDBHealth(c *gin.Context) {
 	// need every row decoded, so they are counted only on ?deep=true.
 	ttlDays := config.AppConfig.MetadataFetchCacheTTLDays
 	mc := dbHealthMetadataCache{TTLDays: ttlDays, ExpiredEntries: -1}
-	if n, ok := censusFamilyKeys(census, metadataFetchCachePrefix); ok {
-		mc.TotalEntries = n
+	if fam, ok := censusFamily(census, metadataFetchCachePrefix); ok {
+		mc.TotalEntries = fam.Keys
 		mc.Estimated = true
-	} else {
+		mc.ErrorBoundKeys = fam.ErrorBoundKeys
+	} else if c.Request.Context().Err() == nil {
+		// Skipped once the client is gone: this fallback walks every row.
 		total, err := database.CountCachedMetadataFetches(store)
 		if err != nil {
 			diagnosticsLog.Warn("db-health metadata cache count: %v", err)
@@ -765,7 +791,10 @@ func (h *DiagnosticsHandler) GetDBHealth(c *gin.Context) {
 	httputil.RespondWithOK(c, resp)
 }
 
-const metadataFetchCachePrefix = "metadata_fetch_cache:"
+const (
+	metadataFetchCachePrefix = "metadata_fetch_cache:"
+	embeddingVectorPrefix    = "emb:v:"
+)
 
 // healthCensus returns the cached estimated census for db-health and
 // /cache/stats, or nil when the backend keeps none (a non-Pebble store) or the
@@ -788,18 +817,26 @@ func resolveHealthCensus(ctx context.Context, store any) *database.DBCensus {
 	return census
 }
 
-// censusFamilyKeys returns the Keys of the census family with the given
-// prefix.
-func censusFamilyKeys(census *database.DBCensus, prefix string) (int64, bool) {
+// censusFamily returns the census family with the given prefix.
+func censusFamily(census *database.DBCensus, prefix string) (database.FamilyCensus, bool) {
 	if census == nil {
-		return 0, false
+		return database.FamilyCensus{}, false
 	}
 	for _, f := range census.Families {
 		if f.Prefix == prefix {
-			return f.Keys, true
+			return f, true
 		}
 	}
-	return 0, false
+	return database.FamilyCensus{}, false
+}
+
+// censusErrorBound sums the per-family error bounds of an estimated census.
+func censusErrorBound(census *database.DBCensus) int64 {
+	var n int64
+	for _, f := range census.Families {
+		n += f.ErrorBoundKeys
+	}
+	return n
 }
 
 // countExpiredMetadataFetches counts fetch-cache rows cached before cutoff. It
