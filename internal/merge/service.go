@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.41.1
+// version: 1.41.2
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-10-05
 
@@ -788,8 +788,9 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 			return nil, &BookNotFoundError{BookID: sib.BookID}
 		}
 		membershipStarted = true
-		slog.Info("merge moved loser's version-group sibling",
-			"id", sib.BookID, "from", sib.FromGroupID, "to", versionGroupID, "primary", resolvedPrimaryID)
+		mlog.Info("merge: moved loser's version-group sibling %s from %s to %s (primary %s)",
+			logger.SanitizeLogValue(sib.BookID), logger.SanitizeLogValue(sib.FromGroupID),
+			logger.SanitizeLogValue(versionGroupID), logger.SanitizeLogValue(resolvedPrimaryID))
 	}
 
 	// Demote every pre-existing member of a REUSED group that the loop above
