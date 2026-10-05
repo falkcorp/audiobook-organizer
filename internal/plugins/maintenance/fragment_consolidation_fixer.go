@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.28.3
+// version: 1.29.0
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 // Repairs-lane fixer "fragment-consolidation": fold chapter and disc files
 // that an old scan imported as their own books ("fragments") back into the
@@ -67,6 +67,26 @@
 //   - held: a fragment that matches a parent but whose own file is missing
 //     or unreadable, and the proof above is not there (name and size only,
 //     or two candidate parents). Listed, never applied.
+//   - existing-book (2026-10-05): a no-parent group whose work is already a
+//     live book of the same title, any author (existingBookCheck). It is
+//     never assembled into a second book: with the totals agreeing within
+//     max(2%, 5 min) every fragment is retired into that book, each keeping
+//     its own file row (nothing moved, renumbered or retitled); otherwise it
+//     is held (skipped_existing_book). Fragments that are re-tagged copies
+//     of a live book's chapters (same position and duration, a constant size
+//     difference) are held whatever the titles say (skipped_retagged_copies).
+//     A moved or copy row whose fragments are a same-titled co-owner (see
+//     holdCoOwned) becomes such a row too, joining the co-owner.
+//   - unplaced (2026-10-05): a fragment no group took (fewer than three
+//     same-key siblings, a numbered file left over in a folder of works side
+//     by side, no chapter key). Listed with the reason, never applied; these
+//     used to drop out of the plan with no row at all.
+//
+// CO-OWNERS (owner rule 2026-10-05). A file a row folds that is also a row of
+// a live book outside it: a co-owner titled as another work holds the row; a
+// co-owner whose total agrees with the fragments' and whose title is the
+// row's work is joined; totals that disagree let the row proceed beside the
+// co-owner, which keeps its rows; an unknown total holds.
 //
 // SAME PARENT ROW, SEVERAL CLAIMANTS (2026-10-03). A parent row that two
 // fragments claim used to make both ambiguous — 7,627 rows on prod, every one
@@ -176,6 +196,20 @@ const (
 	// nothing of the work stays on a retired book. The survivor keeps its
 	// own original files, as a dedup loser does.
 	fragClassCarry = "carry"
+	// fragClassExistingBook: a no-parent group whose work already exists as
+	// a live book of the same title (any author). The fragments are never
+	// assembled into a second book of it: when the totals agree they are
+	// retired into that book (each keeping its own file row), otherwise the
+	// row is held. Measured on prod 2026-10-05: 13 of 19 applied no-parent
+	// rows had made a duplicate of a book already in the library ("Book 2 -
+	// Eldest", 347 fragments, beside "Eldest", 349 files).
+	fragClassExistingBook = "existing-book"
+	// fragClassUnplaced: a fragment no group took (too few same-key
+	// siblings, a numbered file left over in a folder of several works, no
+	// chapter key at all). Listed so the Repairs lane and the census count
+	// it; never applied. Until 2026-10-05 these fell out of the plan with no
+	// row and no reason (2,249 number-leading books on prod).
+	fragClassUnplaced = "unplaced"
 )
 
 // Row id prefixes of a parent's UNPROVEN matches, so they never share a row
@@ -219,6 +253,22 @@ const (
 	// longer holds, or a run that left no plan record). Never applied with
 	// another survivor: that is how one work became two live books.
 	fragSkipInterrupted = "skipped_interrupted_run"
+	// fragSkipExistingBook: a live book with the group's title exists and
+	// the fragments' total duration does not agree with it (or either total
+	// is unknown), so they are neither assembled into a second book of that
+	// work nor retired into it. The owner decides.
+	fragSkipExistingBook = "skipped_existing_book"
+	// fragSkipRetagged: the fragments are re-tagged copies of an existing
+	// book's chapters: each sits at the chapter position of one of that
+	// book's files with the same duration and a constant size difference
+	// (zero, or one tag-block size), the Horizon Storms shape. Never
+	// assembled.
+	fragSkipRetagged = "skipped_retagged_copies"
+	// Unplaced fragments (fragClassUnplaced), one kind per drop site.
+	fragSkipLoneChapter  = "skipped_lone_chapter"
+	fragSkipScattered    = "skipped_scattered_numbered"
+	fragSkipNoChapterKey = "skipped_no_chapter_key"
+	fragSkipUnplaced     = "skipped_unplaced"
 )
 
 // Evidence kinds of a fragment-to-parent match, strongest first.
@@ -261,7 +311,9 @@ func (f *fragmentFixer) Description() string {
 	return "Chapter and disc files an old scan imported as separate books. Moved: the parent's row points " +
 		"at a path organize emptied — repoint it at the file's new path and retire the fragment into the parent. " +
 		"Copy: the parent still has the file — retire the proven duplicate. No parent: 3+ short same-key chapters " +
-		"from one folder — move every chapter onto one organized primary book in track order. Listening progress " +
+		"from one folder — move every chapter onto one organized primary book in track order. Existing book: the " +
+		"chapters' work is already a live book of the same title — retire them into it when the durations agree, " +
+		"never assemble a second copy. Listening progress " +
 		"and external ids follow each retired fragment. iTunes (including fragments with an iTunes id) and " +
 		"Doctor Who / Big Finish / Torchwood are listed for manual action only. Every step is undoable from the " +
 		"apply operation."
@@ -709,6 +761,11 @@ type fragLibrary struct {
 	// libraryRoot is the organized library's root ("" unset). A folder
 	// directly under it is an author folder, whatever its name.
 	libraryRoot string
+	// lookupBook reads a book the snapshot does not hold (the whole-library
+	// listing leaves retired books out); nil in a re-plan, whose snapshot
+	// loads every book it needs by id. existingBookCheck reads it to credit
+	// fragments an earlier join already retired.
+	lookupBook func(id string) (fragBook, bool)
 }
 
 // folderNamesAnyAuthor returns the author the folder is named for, among the
@@ -790,7 +847,30 @@ func (f *fragmentFixer) loadLibrary(store OpsStore) (*fragLibrary, error) {
 	if err := lib.loadRoots(store); err != nil {
 		return nil, err
 	}
+	looked := map[string]*fragBook{}
+	lib.lookupBook = func(id string) (fragBook, bool) {
+		if b, ok := looked[id]; ok {
+			return derefFragBook(b)
+		}
+		b, err := store.GetBookByID(id)
+		if err != nil || b == nil {
+			// Unread: no credit is given, so the row is compared without it
+			// and held rather than joined on a guess.
+			looked[id] = nil
+			return fragBook{}, false
+		}
+		fb := fragBookOf(b)
+		looked[id] = &fb
+		return fb, true
+	}
 	return lib, nil
+}
+
+func derefFragBook(b *fragBook) (fragBook, bool) {
+	if b == nil {
+		return fragBook{}, false
+	}
+	return *b, true
 }
 
 func (lib *fragLibrary) seriesName(b fragBook) string {
@@ -978,7 +1058,7 @@ func (f *fragmentFixer) Plan(ctx context.Context, raw json.RawMessage, rep regis
 	}
 	rows := f.buildRows(lib, ix, live)
 	holdInterruptedFolders(rows, intr)
-	holdCoOwned(lib, rows)
+	f.holdCoOwned(lib, rows)
 	rows = append(rows, intr.rows...)
 	rows = append(rows, strandedRows(lib, rows)...)
 	if fp.AssumeRetired != nil {
@@ -2856,6 +2936,11 @@ func (f *fragmentFixer) parentRow(lib *fragLibrary, parentID, rowKind string, pa
 // the apply's lock.
 type fragParentState struct {
 	IgnoredITunes []string `json:"ignored_itunes,omitempty"`
+	// CoOwners are the live books outside the row that also hold rows at
+	// its fragments' files and that holdCoOwned let the row proceed beside
+	// (owner rule 2026-10-05: totals disagree, so a different book sharing
+	// files). Replan loads them and decides again; checkOwners allows them.
+	CoOwners []string `json:"co_owners,omitempty"`
 }
 
 func uniqueSorted(in []string) []string {
@@ -2899,6 +2984,16 @@ type fragGroupPlan struct {
 	// book is retired into the survivor like the copy class retires a
 	// fragment, keeping its own file row (nothing is repointed or deleted).
 	Copies []fragGroupCopy
+	// Join is set on an existing-book row: the live book every member and
+	// copy is retired into, each keeping its own file row. Nothing is moved,
+	// renumbered, retitled or repathed, and there is no survivor.
+	Join string
+	// CoOwners are live books outside the row that also hold rows at the
+	// row's files and that the owner rule of 2026-10-05 lets the row
+	// assemble beside: same title, total duration not agreeing (so a
+	// different edition sharing files, not this set's book). checkOwners
+	// allows exactly these; their rows are left alone.
+	CoOwners []string
 }
 
 // fragGroupCopy is a renamed copy of member Of's chapter.
@@ -3041,6 +3136,23 @@ type fragGroupState struct {
 	// Not fingerprinted; Replan carries the planned value forward. A row
 	// stored without it (or without Flags) is planned again.
 	PlannedAt time.Time `json:"planned_at,omitempty"`
+	// Join is an existing-book row's target (fragGroupPlan.Join).
+	Join string `json:"join,omitempty"`
+	// CoOwners are the co-owners the row was planned to assemble beside
+	// (fragGroupPlan.CoOwners): Replan loads them to decide again.
+	CoOwners []string `json:"co_owners,omitempty"`
+	// FromParent, ParentRow and ParentState are set on an existing-book row
+	// made from a moved or copy row (holdCoOwned's join into a same-titled
+	// co-owner): the parent the row was planned against, that row's id and
+	// its stored state. The parent is not written; Replan rebuilds the
+	// parent row from them and decides again.
+	// Credited are fragments an earlier, cut-off join of this folder already
+	// retired into Join, counted with the row's fragments when the totals
+	// were compared: Replan loads them to compare the same set.
+	Credited    []string        `json:"credited,omitempty"`
+	FromParent  string          `json:"from_parent,omitempty"`
+	ParentRow   string          `json:"parent_row,omitempty"`
+	ParentState json.RawMessage `json:"parent_state,omitempty"`
 }
 
 // fragPlannedFlags is one book's survivor-election flags as planned.
@@ -3528,10 +3640,19 @@ func chapterTitleIsStem(title, stem string) bool {
 // Three same-named chapters of a numbered run are never handed to a key
 // group to become a partial book under the folder's name; before this rule
 // they were, wherever a folder's numbered files carried two or more names.
+//
+// Every candidate ends in exactly one row: a fragment no group takes gets an
+// unplaced row of its own whose skip kind names the drop site (fewer than
+// fragMinGroup same-key siblings, a numbered file left over in a folder of
+// works side by side, no chapter key). And every group is checked against
+// the live library before it may assemble anything (existingBookCheck).
 func (f *fragmentFixer) noParentRows(lib *fragLibrary, cands []*fragCandidate) []repairs.Row {
 	var rows []repairs.Row
 	inSet := map[*fragCandidate]bool{}
 	besides := map[string][]*fragCandidate{} // dir -> numbered files of a set left to the key groups
+	type dropped struct{ kind, why string }
+	drops := map[*fragCandidate]dropped{}
+	placed := map[*fragCandidate]bool{}
 	for _, set := range numberedSets(lib, cands) {
 		if set.sideBySide && len(set.keyGroups) > 0 {
 			// The works side by side are the key groups' to take. The other
@@ -3541,6 +3662,9 @@ func (f *fragmentFixer) noParentRows(lib *fragLibrary, cands []*fragCandidate) [
 			for _, c := range set.members {
 				if key, _ := metadata.ChapterGroupKey(c.origStem()); !set.keyGroups[key] {
 					inSet[c] = true
+					drops[c] = dropped{fragSkipScattered, fmt.Sprintf(
+						"is a numbered file of %s, a folder held as several works side by side (%s), and its name %q matches none of the works the key groups take",
+						set.dir, set.problem, key)}
 				}
 			}
 			continue
@@ -3559,6 +3683,7 @@ func (f *fragmentFixer) noParentRows(lib *fragLibrary, cands []*fragCandidate) [
 		}
 		for _, c := range set.members {
 			inSet[c] = true
+			placed[c] = true
 		}
 		rows = append(rows, row)
 	}
@@ -3570,6 +3695,8 @@ func (f *fragmentFixer) noParentRows(lib *fragLibrary, cands []*fragCandidate) [
 		key, kind := metadata.ChapterGroupKey(c.origStem())
 		if kind == metadata.ChapterKeyNone {
 			// A chapter-only TITLE with an unkeyed file name: no group rule.
+			drops[c] = dropped{fragSkipNoChapterKey, fmt.Sprintf(
+				"is titled %q like a chapter, but its file name %q carries no chapter key to group it by", c.Book.Title, c.origStem())}
 			continue
 		}
 		dir, _ := groupDir(c)
@@ -3583,10 +3710,20 @@ func (f *fragmentFixer) noParentRows(lib *fragLibrary, cands []*fragCandidate) [
 	sort.Strings(keys)
 	for _, gk := range keys {
 		cs := groups[gk]
+		dir, key, _ := strings.Cut(gk, "\x00")
 		if len(cs) < fragMinGroup {
+			for _, c := range cs {
+				if _, ok := drops[c]; !ok {
+					drops[c] = dropped{fragSkipLoneChapter, fmt.Sprintf(
+						"is one of only %d fragment(s) imported from %s with the chapter key %q; fewer than %d are no evidence of a chapter sequence",
+						len(cs), dir, key, fragMinGroup)}
+				}
+			}
 			continue
 		}
-		dir, key, _ := strings.Cut(gk, "\x00")
+		for _, c := range cs {
+			placed[c] = true
+		}
 		row := f.noParentRow(lib, dir, key, cs)
 		in := map[*fragCandidate]bool{}
 		for _, c := range cs {
@@ -3604,7 +3741,22 @@ func (f *fragmentFixer) noParentRows(lib *fragLibrary, cands []*fragCandidate) [
 		}
 		rows = append(rows, row)
 	}
+	live := newFragLive(lib)
+	for i := range rows {
+		f.existingBookCheck(lib, live, &rows[i])
+	}
 	holdSameAudioRows(rows)
+	for _, c := range cands {
+		if placed[c] {
+			continue
+		}
+		d, ok := drops[c]
+		if !ok {
+			// No drop site recorded one: still never silent.
+			d = dropped{fragSkipUnplaced, "was taken into no chapter group"}
+		}
+		rows = append(rows, f.holdRow(lib, c, fragClassUnplaced, fragClassUnplaced, d.kind, d.why, nil))
+	}
 	return rows
 }
 
@@ -3673,6 +3825,533 @@ func holdSameAudioRows(rows []repairs.Row) {
 		r.SkipReason = fmt.Sprintf("files of this row are the same chapters (same position, same size) as files of another row from this folder (%s): applying both would make two books of the same audio; decide which files form the book, then plan again",
 			strings.Join(ws, "; "))
 	}
+}
+
+// ---- existing books -------------------------------------------------------
+
+// fragLive indexes the live books of a snapshot for existingBookCheck. It is
+// built per noParentRows call, so it always reads the snapshot as it is then
+// (after assumeRetired; in a re-plan, the row's books and what the stored
+// state names).
+type fragLive struct {
+	byTitle map[string][]string // fragTitleKey -> live book ids
+	owners  map[string][]string // path -> live book ids holding a row there
+	byDir   map[string][]string // folder -> live book ids holding a row there
+	// retiredByDir: folder -> single-row books that are not live (retired,
+	// or left out of the listing for being retired) holding a row there.
+	retiredByDir map[string][]string
+}
+
+func newFragLive(lib *fragLibrary) *fragLive {
+	lv := &fragLive{byTitle: map[string][]string{}, owners: map[string][]string{}, byDir: map[string][]string{},
+		retiredByDir: map[string][]string{}}
+	ids := make([]string, 0, len(lib.files))
+	for id := range lib.files {
+		ids = append(ids, id)
+	}
+	for id := range lib.books {
+		if _, ok := lib.files[id]; !ok {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		b, ok := lib.books[id]
+		if !ok || b.SoftDeleted {
+			if rows := lib.files[id]; len(rows) == 1 {
+				d := filepath.Dir(rows[0].Path)
+				lv.retiredByDir[d] = append(lv.retiredByDir[d], id)
+			}
+			continue
+		}
+		if k := fragTitleKey(b.Title); k != "" {
+			lv.byTitle[k] = append(lv.byTitle[k], id)
+		}
+		seenDir := map[string]bool{}
+		for _, r := range lib.files[id] {
+			lv.owners[r.Path] = append(lv.owners[r.Path], id)
+			if d := filepath.Dir(r.Path); !seenDir[d] {
+				seenDir[d] = true
+				lv.byDir[d] = append(lv.byDir[d], id)
+			}
+		}
+	}
+	return lv
+}
+
+var (
+	// fragTitleEditionRe: a trailing bracketed edition note ("(Unabridged)").
+	fragTitleEditionRe = regexp.MustCompile(`(?i)\s*[(\[{][^)\]}]*\b(?:unabridged|abridged|audiobook|audio book|retail|dramati[sz]ed)\b[^)\]}]*[)\]}]\s*$`)
+	// fragTitleTrailBookRe: a trailing series position ("Eldest, Book 2",
+	// "Eldest (Book 2)"). A bare trailing number is never stripped: "Dragon
+	// Born 3" is not "Dragon Born".
+	fragTitleTrailBookRe = regexp.MustCompile(`(?i)[\s,:;(\[-]+(?:book|bk|vol(?:ume)?|no|number)\.?\s*#?\d+(?:\.\d+)?[)\]]?\s*$`)
+	// fragTitleLeadNumRe: a leading position ("Book 2 - ", "02 - ", "2. ",
+	// "Vol 3: ", "#4 - ", "02_").
+	fragTitleLeadNumRe = regexp.MustCompile(`(?i)^(?:(?:book|bk|vol(?:ume)?|no|number)\.?\s*)?#?\d+(?:\.\d+)?\s*[-–—:._)]+\s*`)
+	// fragTitleSeriesRe: a series name with a position before the title
+	// ("Inheritance Cycle 02 - Eldest", "Saga, Book 3 - Horizon Storms",
+	// "Foundation 6 - Foundation's Edge"). A plain "X - Y" is left alone:
+	// "Doctor Who - Loose" is not "Loose".
+	fragTitleSeriesRe = regexp.MustCompile(`(?i)^.+?[\s,]+(?:(?:book|bk|vol(?:ume)?|no|number)\.?\s*)?#?\d+(?:\.\d+)?\s*[-–—:]\s+`)
+)
+
+// fragTitleKey is the key two titles of one work share: letters and digits
+// of the title with series noise stripped (a leading "Book 2 - " or "02 - ",
+// a series name with a position, a trailing ", Book 2", a bracketed edition
+// note). "" when what is left names no work: fewer than three letters or
+// digits, digits only, a chapter-only title ("Part 3") or a generic folder
+// name. Both sides of a comparison go through it, so stripping is symmetric.
+func fragTitleKey(title string) string {
+	t := strings.TrimSpace(title)
+	t, _ = metadata.StripRipJunk(t)
+	for range 3 {
+		before := t
+		t = strings.TrimSpace(fragTitleEditionRe.ReplaceAllString(t, ""))
+		t = strings.TrimSpace(fragTitleTrailBookRe.ReplaceAllString(t, ""))
+		if rest := strings.TrimSpace(fragTitleLeadNumRe.ReplaceAllString(t, "")); rest != "" {
+			t = rest
+		}
+		if rest := strings.TrimSpace(fragTitleSeriesRe.ReplaceAllString(t, "")); rest != "" {
+			t = rest
+		}
+		if t == before {
+			break
+		}
+	}
+	if t == "" || metadata.IsChapterOnlyTitle(t) || metadata.IsGenericDirName(t) {
+		return ""
+	}
+	k := junkLettersKey(t)
+	if len([]rune(k)) < 3 || strings.Trim(k, "0123456789") == "" {
+		return ""
+	}
+	return k
+}
+
+// fragGroupTitleKeys are the keys a group's work goes by: the title the row
+// would give it, and the name of the work folder it was imported from.
+func fragGroupTitleKeys(plan *fragGroupPlan) []string {
+	var keys []string
+	add := func(t string) {
+		if k := fragTitleKey(t); k != "" && !contains(keys, k) {
+			keys = append(keys, k)
+		}
+	}
+	add(plan.Title)
+	if t, ok := metadata.WorkFolderTitle(plan.Dir); ok {
+		add(t)
+	}
+	return keys
+}
+
+// fragDurationsAgree reports whether two totals (seconds) are one recording:
+// within max(2% of the LARGER total, 5 minutes). Owner rule 2026-10-05.
+func fragDurationsAgree(a, b int) bool {
+	tol := max(a, b) / 50
+	tol = max(tol, 300)
+	d := a - b
+	if d < 0 {
+		d = -d
+	}
+	return d <= tol
+}
+
+// bookTotal sums a book's file durations: the total in seconds, how many of
+// its rows carry no duration, and how many rows it has.
+func (lib *fragLibrary) bookTotal(id string) (sec, unknown, n int) {
+	for _, r := range lib.files[id] {
+		n++
+		if r.Duration <= 0 {
+			unknown++
+			continue
+		}
+		sec += r.Duration
+	}
+	return sec, unknown, n
+}
+
+// fragExisting is one live book a group's title names.
+type fragExisting struct {
+	id             string
+	total, unknown int
+	files          int
+	coOwner        bool
+	// credit is the duration of this group's folders' fragments an earlier
+	// join already retired into the book (a cut-off run): they are part of
+	// the set the book is compared with. creditIDs names them.
+	credit, credited int
+	creditIDs        []string
+}
+
+// existingBookCheck decides, before a no-parent row may assemble anything,
+// whether its work already exists as a live book. In this order:
+//
+//  1. the fragments are re-tagged copies of a live multi-file book's
+//     chapters (retaggedCopiesOf): held, skipped_retagged_copies;
+//  2. a live book of the same title (fragTitleKey, any author; two or more
+//     files, a single file at least 90% of the set's total, or a co-owner of
+//     the row's files) whose total duration agrees (fragDurationsAgree):
+//     the row becomes an existing-book row that retires every fragment into
+//     it. With several, a co-owner first (joining elsewhere would leave the
+//     co-owner holding the files), then organized and primary, then the
+//     most files, then the lowest id;
+//  3. a same-title book that does NOT co-own the files and whose total
+//     disagrees or is unknown: held, skipped_existing_book. A second book of
+//     the work is exactly what this check exists to stop, so a co-owner
+//     beside it does not release the row;
+//  4. only same-title co-owners left: holdCoOwned decides them with every
+//     other co-owner (fragCoOwnerVerdict), the same way it decides a moved
+//     or copy row's.
+//
+// A manual-only row stays manual-only; the finding is added to its evidence.
+// A join keeps every skip the row already had except "no survivor": a join
+// has no survivor, and the retire demotes the fragments, so on resume the
+// election would always find none.
+func (f *fragmentFixer) existingBookCheck(lib *fragLibrary, live *fragLive, r *repairs.Row) {
+	plan, ok := r.Detail.(*fragGroupPlan)
+	if !ok || len(plan.Members) == 0 {
+		return
+	}
+	in := map[string]bool{}
+	for _, id := range r.BookIDs {
+		in[id] = true
+	}
+	setTotal, setUnknown := 0, 0
+	for _, m := range plan.Members {
+		if d := m.Frag.File.Duration; d > 0 {
+			setTotal += d
+		} else {
+			setUnknown++
+		}
+	}
+	coOwn := map[string]bool{}
+	for _, p := range rowPaths(*r) {
+		for _, id := range live.owners[p] {
+			if !in[id] {
+				coOwn[id] = true
+			}
+		}
+	}
+	memberFolders := map[string]bool{}
+	for _, m := range plan.Members {
+		memberFolders[filepath.Dir(m.Frag.File.Path)] = true
+	}
+	for _, cp := range plan.Copies {
+		memberFolders[filepath.Dir(cp.Frag.File.Path)] = true
+	}
+	keys := fragGroupTitleKeys(plan)
+	var named []fragExisting
+	seen := map[string]bool{}
+	for _, k := range keys {
+		for _, id := range live.byTitle[k] {
+			if in[id] || seen[id] {
+				continue
+			}
+			seen[id] = true
+			e := fragExisting{id: id, coOwner: coOwn[id]}
+			e.total, e.unknown, e.files = lib.bookTotal(id)
+			switch {
+			case e.coOwner, e.files >= 2:
+			case e.files == 1 && e.unknown == 0 && setTotal > 0 && 10*e.total >= 9*setTotal:
+			default:
+				continue
+			}
+			for _, d := range sortedKeys(memberFolders) {
+				for _, rid := range live.retiredByDir[d] {
+					if in[rid] {
+						continue
+					}
+					rb, ok := lib.books[rid]
+					if !ok && lib.lookupBook != nil {
+						rb, ok = lib.lookupBook(rid)
+					}
+					rows := lib.files[rid]
+					if !ok || !rb.SoftDeleted || rb.MergedInto != id || len(rows) != 1 || rows[0].Duration <= 0 {
+						continue
+					}
+					e.credit += rows[0].Duration
+					e.credited++
+					e.creditIDs = append(e.creditIDs, rid)
+				}
+			}
+			named = append(named, e)
+		}
+	}
+	sort.Slice(named, func(i, j int) bool { return named[i].id < named[j].id })
+
+	// 1. re-tagged copies
+	var probe []string
+	for _, e := range named {
+		if e.files >= 2 {
+			probe = append(probe, e.id)
+		}
+	}
+	for d := range memberFolders {
+		for _, id := range live.byDir[d] {
+			if !in[id] && len(lib.files[id]) >= 2 && !contains(probe, id) {
+				probe = append(probe, id)
+			}
+		}
+	}
+	sort.Strings(probe)
+	for _, id := range probe {
+		if why := retaggedCopiesOf(lib, plan, id); why != "" {
+			f.holdExisting(lib, r, plan, id, fragSkipRetagged, why+": the fragments are copies of that book's audio, not a book to assemble; retire them into it or delete them by hand")
+			return
+		}
+	}
+	if len(named) == 0 {
+		return
+	}
+	describe := func(e fragExisting) string {
+		s := fmt.Sprintf("book %s (%q, %d file(s), %s", e.id, lib.books[e.id].Title, e.files, fragHours(e.total))
+		if e.unknown > 0 {
+			s += fmt.Sprintf(", %d file(s) with no duration", e.unknown)
+		}
+		if e.coOwner {
+			s += ", also holds rows at this row's files"
+		}
+		return s + ")"
+	}
+	setDesc := fmt.Sprintf("the %d kept fragment(s) total %s", len(plan.Members), fragHours(setTotal))
+	if setUnknown > 0 {
+		setDesc += fmt.Sprintf(" with %d of unknown duration", setUnknown)
+	}
+	// 2. a same-title book whose total agrees
+	var agree []fragExisting
+	for _, e := range named {
+		if setUnknown == 0 && e.unknown == 0 && setTotal > 0 && fragDurationsAgree(setTotal+e.credit, e.total) {
+			agree = append(agree, e)
+		}
+	}
+	if len(agree) > 0 {
+		sort.SliceStable(agree, func(i, j int) bool {
+			a, b := agree[i], agree[j]
+			if a.coOwner != b.coOwner {
+				return a.coOwner
+			}
+			ab, bb := lib.books[a.id], lib.books[b.id]
+			if ae, be := ab.Organized && ab.Primary, bb.Organized && bb.Primary; ae != be {
+				return ae
+			}
+			if a.files != b.files {
+				return a.files > b.files
+			}
+			return a.id < b.id
+		})
+		f.joinExisting(lib, r, plan, agree[0], setDesc, describe, named)
+		return
+	}
+	// 3. a separate same-title book that disagrees. Same-titled co-owners
+	// are holdCoOwned's to decide (fragCoOwnerVerdict), for this row as for
+	// a moved or copy row.
+	var separate []fragExisting
+	for _, e := range named {
+		if !e.coOwner {
+			separate = append(separate, e)
+		}
+	}
+	if len(separate) > 0 {
+		var ds []string
+		for _, e := range named {
+			ds = append(ds, describe(e))
+		}
+		f.holdExisting(lib, r, plan, separate[0].id, fragSkipExistingBook, fmt.Sprintf(
+			"a live book of this title already exists: %s; %s, which does not agree within max(2%%, 5 min) (or a total is unknown), so assembling them would make a second book of the work and retiring them into it is not proven; decide by hand",
+			strings.Join(ds, "; "), setDesc))
+	}
+}
+
+// fragHours renders seconds as hours for evidence ("21.1 h").
+func fragHours(sec int) string {
+	return fmt.Sprintf("%.1f h", float64(sec)/3600)
+}
+
+// setGroupState rewrites a no-parent row's stored state through fn.
+func setGroupState(r *repairs.Row, fn func(*fragGroupState)) {
+	var st fragGroupState
+	if len(r.State) > 0 && json.Unmarshal(r.State, &st) != nil {
+		return
+	}
+	fn(&st)
+	if raw, err := json.Marshal(st); err == nil {
+		r.State = raw
+	}
+}
+
+func existingRowID(dir, key string) string {
+	sum := sha256.Sum256([]byte(dir + "\x00" + key))
+	return fragClassExistingBook + ":" + hex.EncodeToString(sum[:])[:20]
+}
+
+// holdExisting turns r into a held existing-book row naming book id. The row
+// writes nothing: the book is listed as a member, never in BookIDs. A
+// manual-only row keeps its class and skip; the finding goes to its evidence.
+func (f *fragmentFixer) holdExisting(lib *fragLibrary, r *repairs.Row, plan *fragGroupPlan, id, kind, why string) {
+	r.Evidence = append(r.Evidence, why)
+	if r.Class == fragClassManual {
+		return
+	}
+	if r.Skipped != "" {
+		r.Evidence = append(r.Evidence, "also held for: "+r.SkipReason)
+	}
+	r.RowID = existingRowID(plan.Dir, plan.Key)
+	r.Class = fragClassExistingBook
+	r.Risk, r.Skipped, r.SkipReason = repairs.RiskReview, kind, why
+	r.Members = append(r.Members, member(lib, lib.books[id], "existing book"))
+	r.Fingerprint = fragFingerprint(r.Fingerprint, kind, id)
+}
+
+// joinExisting turns r into an existing-book row that retires every member
+// and copy into e (Apply: plan.Join), each keeping its own file row.
+func (f *fragmentFixer) joinExisting(lib *fragLibrary, r *repairs.Row, plan *fragGroupPlan, e fragExisting, setDesc string,
+	describe func(fragExisting) string, named []fragExisting) {
+	ev := fmt.Sprintf("a live book of this title already exists and its total agrees within max(2%%, 5 min): %s; %s", describe(e), setDesc)
+	if e.credited > 0 {
+		ev += fmt.Sprintf(", plus %d fragment(s) of these folders (%s) already retired into it", e.credited, fragHours(e.credit))
+	}
+	r.Evidence = append(r.Evidence, ev)
+	for _, o := range named {
+		if o.id != e.id {
+			r.Evidence = append(r.Evidence, "also titled so: "+describe(o))
+		}
+	}
+	if r.Class == fragClassManual {
+		return
+	}
+	target := lib.books[e.id]
+	if k, why := f.guard(lib, []fragBook{target}, nil); k != "" {
+		r.Class, r.Skipped, r.SkipReason = fragClassManual, k, why
+		return
+	}
+	if target.ITunesPID != "" {
+		r.Class, r.Skipped, r.SkipReason = fragClassManual, repairs.SkipITunes,
+			fmt.Sprintf("the existing book %s carries book iTunes id %s", e.id, target.ITunesPID)
+		return
+	}
+	plan.Join = e.id
+	plan.SurvivorID, plan.Title, plan.Folder = "", "", ""
+	r.RowID = existingRowID(plan.Dir, plan.Key)
+	r.Class = fragClassExistingBook
+	r.Risk = repairs.RiskReview
+	if r.Skipped == fragSkipNoSurvivor {
+		r.Skipped, r.SkipReason = "", ""
+	}
+	r.BookIDs = append(r.BookIDs, e.id)
+	sort.Strings(r.BookIDs)
+	for i := range r.Members {
+		if r.Members[i].Role == "survivor" {
+			r.Members[i].Role = "fragment"
+		}
+	}
+	r.Members = append(r.Members, member(lib, target, "existing book"))
+	r.Title, r.Author = target.Title, lib.authorName(target)
+	n := len(plan.Members) + len(plan.Copies)
+	r.Reason = fmt.Sprintf("%d chapter files imported as separate books duplicate the existing book %s (%q)", n, e.id, target.Title)
+	r.Proposed = map[string]string{
+		"action": fmt.Sprintf("retire %d fragment book(s) into the existing book %s, each keeping its own file row; nothing is moved, renumbered or retitled", n, e.id),
+		"join":   e.id,
+	}
+	setGroupState(r, func(st *fragGroupState) { st.Join, st.Credited = e.id, e.creditIDs })
+	var parts []string
+	for _, id := range e.creditIDs {
+		parts = append(parts, "credited|"+id)
+	}
+	for _, m := range plan.Members {
+		parts = append(parts, m.Frag.Book.ID+"|"+m.Frag.File.ID+"|"+m.Frag.File.Path)
+	}
+	for _, cp := range plan.Copies {
+		parts = append(parts, cp.Frag.Book.ID+"|"+cp.Frag.File.ID+"|"+cp.Frag.File.Path)
+	}
+	// Roles are left out on purpose: retiring demotes the fragments, which
+	// moves the copy election (keptOfCopies) and the survivor election, but
+	// every fragment is retired into the same book either way.
+	sort.Strings(parts)
+	r.Fingerprint = fragFingerprint(append([]string{fragClassExistingBook, plan.Dir, plan.Key, e.id,
+		strconv.Itoa(e.files), strconv.Itoa(e.total)}, parts...)...)
+}
+
+// fragCopySuffixRe is the organizer's collision suffix ("…_copy1").
+var fragCopySuffixRe = regexp.MustCompile(`(?i)_copy\d+$`)
+
+// retaggedCopiesOf reports why a group's kept members are copies of book
+// id's chapters ("" when they are not): at least fragMinGroup members, and at
+// least half of them, sit at the chapter position of exactly one of the
+// book's files (its stem, without a "_copyN" suffix, or its original name)
+// with the same duration within a second, and the size differences are a
+// constant: zero, or one tag-block size (within 64 bytes) either way.
+// Measured on prod 2026-10-05 (Horizon Storms, 283 fragments beside a
+// 299-file book): 275 same size, 18 differing by 30,450–30,452 bytes, every
+// duration equal.
+func retaggedCopiesOf(lib *fragLibrary, plan *fragGroupPlan, id string) string {
+	type at struct {
+		file fragFile
+		n    int
+	}
+	byPos := map[string]*at{}
+	posKey := func(p metadata.ChapterPos) string { return fmt.Sprint(p.Disc, p.Parts) }
+	for _, r := range lib.files[id] {
+		keys := map[string]bool{}
+		for _, name := range []string{filepath.Base(r.Path), r.OriginalFilename} {
+			if name == "" {
+				continue
+			}
+			stem := fragCopySuffixRe.ReplaceAllString(strings.TrimSuffix(name, filepath.Ext(name)), "")
+			if p, ok := metadata.ChapterPosition(stem); ok && len(p.Parts) > 0 {
+				keys[posKey(p)] = true
+			}
+		}
+		for k := range keys {
+			if byPos[k] == nil {
+				byPos[k] = &at{file: r}
+			}
+			byPos[k].n++
+		}
+	}
+	if len(byPos) == 0 {
+		return ""
+	}
+	paired, sameSize := 0, 0
+	lo, hi := int64(-1), int64(-1)
+	for _, m := range plan.Members {
+		p, ok := chapterPos(m.Frag)
+		if !ok || len(p.Parts) == 0 {
+			continue
+		}
+		a := byPos[posKey(p)]
+		if a == nil || a.n != 1 {
+			continue
+		}
+		fd, bd := m.Frag.File.Duration, a.file.Duration
+		if fd <= 0 || bd <= 0 || fd-bd > 1 || bd-fd > 1 || m.Frag.File.Size <= 0 || a.file.Size <= 0 {
+			continue
+		}
+		d := m.Frag.File.Size - a.file.Size
+		if d < 0 {
+			d = -d
+		}
+		paired++
+		if d <= 16 {
+			sameSize++
+			continue
+		}
+		if lo < 0 || d < lo {
+			lo = d
+		}
+		if d > hi {
+			hi = d
+		}
+	}
+	if paired < fragMinGroup || 2*paired < len(plan.Members) || (lo >= 0 && hi-lo > 64) {
+		return ""
+	}
+	why := fmt.Sprintf("%d of the %d kept fragments sit at the chapter position of a file of book %s (%q) with the same duration",
+		paired, len(plan.Members), id, lib.books[id].Title)
+	if lo < 0 {
+		return why + " and the same size"
+	}
+	return why + fmt.Sprintf(" and a constant size difference (%d same size, the rest %d–%d bytes apart: a re-tag)", sameSize, lo, hi)
 }
 
 func noParentRowID(dir, key string) string {
@@ -4067,6 +4746,8 @@ func (f *fragmentFixer) replanWith(ctx context.Context, planned repairs.Row, bea
 		return f.replanParent(store, lib, hist, planned, rest)
 	case fragClassNoParent:
 		return f.replanGroup(ctx, store, lib, hist, planned, beat, pre)
+	case fragClassExistingBook:
+		return f.replanJoin(store, lib, hist, planned)
 	case fragClassCarry:
 		return f.replanCarry(store, lib, planned)
 	default:
@@ -4105,20 +4786,42 @@ func replanLoad(store OpsStore, lib *fragLibrary, id string) error {
 }
 
 func (f *fragmentFixer) replanParent(store OpsStore, lib *fragLibrary, hist FragmentRepairReader, planned repairs.Row, parentID string) (repairs.Row, error) {
-	// The iTunes copies the rule set aside at plan time come back as
-	// candidate parents, so the rule is decided again here: each is
-	// re-classified, its identity gate re-run against the parent, and the
-	// owner's verdicts on those books re-read (a not_dup or dismissal added
-	// since the plan makes the fragment ambiguous, and the row changes).
 	var ps fragParentState
 	if len(planned.State) > 0 {
 		if err := json.Unmarshal(planned.State, &ps); err != nil {
 			return changedRow(planned, "the plan's stored iTunes parents are unreadable; plan again"), nil
 		}
 	}
+	var frags []string
+	for _, id := range planned.BookIDs {
+		if id != parentID {
+			frags = append(frags, id)
+		}
+	}
+	rows, why, err := f.rebuildParentRows(store, lib, hist, ps, parentID, frags)
+	if err != nil || why != "" {
+		return changedRow(planned, why), err
+	}
+	for _, r := range rows {
+		if r.RowID == planned.RowID {
+			return f.checkOwners(store, hist, planned, r)
+		}
+	}
+	return changedRow(planned, "the fragments no longer match the parent in this kind"), nil
+}
+
+// rebuildParentRows rebuilds the rows of parent parentID and fragments frags
+// from the stored state ps, and decides their co-owners again (holdCoOwned)
+// with the co-owners ps recorded loaded. A non-empty why is a change.
+func (f *fragmentFixer) rebuildParentRows(store OpsStore, lib *fragLibrary, hist FragmentRepairReader, ps fragParentState, parentID string, frags []string) ([]repairs.Row, string, error) {
+	// The iTunes copies the rule set aside at plan time come back as
+	// candidate parents, so the rule is decided again here: each is
+	// re-classified, its identity gate re-run against the parent, and the
+	// owner's verdicts on those books re-read (a not_dup or dismissal added
+	// since the plan makes the fragment ambiguous, and the row changes).
 	for _, it := range ps.IgnoredITunes {
 		if err := replanLoad(store, lib, it); err != nil {
-			return repairs.Row{}, err
+			return nil, "", err
 		}
 		if _, ok := lib.books[it]; !ok {
 			continue
@@ -4134,13 +4837,21 @@ func (f *fragmentFixer) replanParent(store OpsStore, lib *fragLibrary, hist Frag
 	if len(ps.IgnoredITunes) > 0 {
 		f.loadVerdicts(store, lib, append([]string{parentID}, ps.IgnoredITunes...))
 	}
+	for _, id := range append(append([]string(nil), ps.CoOwners...), parentID) {
+		if _, loaded := lib.books[id]; loaded {
+			continue
+		}
+		if err := replanLoad(store, lib, id); err != nil {
+			return nil, "", err
+		}
+	}
 	// The parent must still be a live multi-file book: another fixer (the
 	// duplicate-copies apply retires losers) may have retired it since the
 	// plan, and a fragment must never be folded into a dead book.
 	if pb, ok := lib.books[parentID]; !ok || pb.SoftDeleted {
-		return changedRow(planned, fmt.Sprintf("parent %s is gone or retired", parentID)), nil
+		return nil, fmt.Sprintf("parent %s is gone or retired", parentID), nil
 	} else if len(lib.files[parentID]) < 2 {
-		return changedRow(planned, fmt.Sprintf("parent %s no longer owns 2+ rows", parentID)), nil
+		return nil, fmt.Sprintf("parent %s no longer owns 2+ rows", parentID), nil
 	}
 	ix := newFragIndex()
 	for _, r := range lib.files[parentID] {
@@ -4152,18 +4863,92 @@ func (f *fragmentFixer) replanParent(store OpsStore, lib *fragLibrary, hist Frag
 		}
 	}
 	var cands []*fragCandidate
-	for _, id := range planned.BookIDs {
-		if id == parentID {
-			continue
-		}
+	for _, id := range frags {
 		b, ok := lib.books[id]
 		if !ok || len(lib.files[id]) != 1 {
-			return changedRow(planned, fmt.Sprintf("fragment %s is gone or no longer a single-file book", id)), nil
+			return nil, fmt.Sprintf("fragment %s is gone or no longer a single-file book", id), nil
 		}
 		// A fragment a partial run already retired is still evaluated: its
 		// row is still there, and the parent's finished repoint names it.
 		b.SoftDeleted = false
 		c, ok, err := f.candidateFrom(store, b, lib.files[id][0], hist)
+		if err != nil {
+			return nil, "", err
+		}
+		if !ok {
+			return nil, fmt.Sprintf("fragment %s carries no chapter evidence now", id), nil
+		}
+		cands = append(cands, c)
+	}
+	rows := f.buildRows(lib, ix, cands)
+	f.holdCoOwned(lib, rows)
+	return rows, "", nil
+}
+
+// replanJoin re-plans an existing-book row from its own books: the target
+// and the fragments. A fragment a cut-off run already retired INTO the target
+// is evaluated as live (retireInto resumes it); one retired anywhere else, or
+// holding any row but its planned one, is a change. The decision is taken
+// again by noParentRows, whose existing-book check sees the target.
+func (f *fragmentFixer) replanJoin(store OpsStore, lib *fragLibrary, hist FragmentRepairReader, planned repairs.Row) (repairs.Row, error) {
+	var st fragGroupState
+	if len(planned.State) == 0 || json.Unmarshal(planned.State, &st) != nil || st.Join == "" || len(st.Files) == 0 {
+		return changedRow(planned, "the plan carries no stored existing book or member rows; plan again"), nil
+	}
+	if tb, ok := lib.books[st.Join]; !ok || tb.SoftDeleted {
+		return changedRow(planned, fmt.Sprintf("existing book %s is gone or retired", st.Join)), nil
+	}
+	for _, id := range st.Credited {
+		if _, loaded := lib.books[id]; loaded {
+			continue
+		}
+		if err := replanLoad(store, lib, id); err != nil {
+			return repairs.Row{}, err
+		}
+	}
+	var frags []string
+	for _, id := range planned.BookIDs {
+		if id == st.Join {
+			continue
+		}
+		frags = append(frags, id)
+		b, ok := lib.books[id]
+		if !ok {
+			return changedRow(planned, fmt.Sprintf("fragment %s is gone", id)), nil
+		}
+		if b.SoftDeleted && b.MergedInto != st.Join {
+			return changedRow(planned, fmt.Sprintf("fragment %s was retired into another book, not %s", id, st.Join)), nil
+		}
+		rows := lib.files[id]
+		if len(rows) != 1 || rows[0].ID != st.Files[id] {
+			return changedRow(planned, fmt.Sprintf("fragment %s no longer holds exactly its planned row %s", id, st.Files[id])), nil
+		}
+	}
+	if st.FromParent != "" {
+		// A moved or copy row turned into a join (holdCoOwned): rebuild that
+		// row against its parent and decide its co-owners again.
+		var ps fragParentState
+		if len(st.ParentState) > 0 && json.Unmarshal(st.ParentState, &ps) != nil {
+			return changedRow(planned, "the plan's stored parent state is unreadable; plan again"), nil
+		}
+		rows, why, err := f.rebuildParentRows(store, lib, hist, ps, st.FromParent, frags)
+		if err != nil || why != "" {
+			return changedRow(planned, why), err
+		}
+		for _, r := range rows {
+			if r.RowID == planned.RowID {
+				r.State = planned.State
+				return f.checkOwners(store, hist, planned, r)
+			}
+		}
+		return changedRow(planned, fmt.Sprintf("the fragments of parent row %s no longer join %s", st.ParentRow, st.Join)), nil
+	}
+	var cands []*fragCandidate
+	for _, id := range frags {
+		b := lib.books[id]
+		rows := lib.files[id]
+		b.SoftDeleted = false
+		c, ok, err := f.candidateFrom(store, b, rows[0], hist)
 		if err != nil {
 			return repairs.Row{}, err
 		}
@@ -4172,13 +4957,16 @@ func (f *fragmentFixer) replanParent(store OpsStore, lib *fragLibrary, hist Frag
 		}
 		cands = append(cands, c)
 	}
-	rows := f.buildRows(lib, ix, cands)
+	rows := f.noParentRows(lib, cands)
+	f.holdCoOwned(lib, rows)
 	for _, r := range rows {
-		if r.RowID == planned.RowID {
-			return f.checkOwners(store, hist, planned, r)
+		if r.RowID != planned.RowID {
+			continue
 		}
+		r.State = planned.State
+		return f.checkOwners(store, hist, planned, r)
 	}
-	return changedRow(planned, "the fragments no longer match the parent in this kind"), nil
+	return changedRow(planned, "the fragments no longer duplicate this existing book"), nil
 }
 
 func (f *fragmentFixer) replanGroup(ctx context.Context, store OpsStore, lib *fragLibrary, hist FragmentRepairReader, planned repairs.Row, beat func(string) error, pre *fragJournal) (repairs.Row, error) {
@@ -4187,6 +4975,16 @@ func (f *fragmentFixer) replanGroup(ctx context.Context, store OpsStore, lib *fr
 		return changedRow(planned, "the plan carries no stored member rows; plan again"), nil
 	}
 	survivorID := planned.Proposed["survivor"]
+	// The co-owners the plan let the row assemble beside are decided again
+	// (existingBookCheck), so they are read as they are now.
+	for _, id := range st.CoOwners {
+		if _, loaded := lib.books[id]; loaded {
+			continue
+		}
+		if err := replanLoad(store, lib, id); err != nil {
+			return repairs.Row{}, err
+		}
+	}
 	// A row with no survivor (held for it) has no choices to pin: it is
 	// re-evaluated as planned and reports its own skip reason.
 	if pin := plannedPin(st, planned); pin != nil {
@@ -4350,8 +5148,11 @@ func (f *fragmentFixer) replanGroup(ctx context.Context, store OpsStore, lib *fr
 		cands = append(cands, c)
 	}
 	// The survivor's own snapshot lists only its planned row, so the member
-	// counts and the folder check see the group as it was planned.
-	for _, r := range f.noParentRows(lib, cands) {
+	// counts and the folder check see the group as it was planned. The
+	// co-owners are decided again over the books the plan recorded.
+	rebuilt := f.noParentRows(lib, cands)
+	f.holdCoOwned(lib, rebuilt)
+	for _, r := range rebuilt {
 		if r.RowID != planned.RowID {
 			continue
 		}
@@ -4855,6 +5656,11 @@ func (f *fragmentFixer) checkOwners(store OpsStore, look database.BookFilePathLo
 	for _, id := range fresh.BookIDs {
 		allowed[id] = true
 	}
+	// The co-owners the row was decided to proceed beside (holdCoOwned,
+	// owner rule 2026-10-05), decided again by this very re-plan.
+	for _, id := range rowCoOwners(fresh) {
+		allowed[id] = true
+	}
 	for _, path := range paths {
 		owners, err := database.BookFileRowsAtPathStrict(look, path)
 		if err != nil {
@@ -4904,19 +5710,27 @@ func rowPaths(r repairs.Row) []string {
 	return paths
 }
 
-// holdCoOwned turns an applicable row into a held one when a file it folds
-// is also a row of a live book outside the row. checkOwners refuses exactly
-// these at apply ("also owned by book X"), where the reason was visible only
-// in the apply op's result; five rows (about 400 fragment books: Eldest 313,
+// holdCoOwned decides every applicable row one of whose files is also a row
+// of a live book outside it (a co-owner). checkOwners refuses exactly these
+// at apply ("also owned by book X"), where the reason was visible only in the
+// apply op's result; five rows (about 400 fragment books: Eldest 313,
 // Foundation 74) were planned applicable and refused on every apply of
-// 2026-10-03. A co-owner that is a path twin is already in the row; what is
-// left carries a real title ("Prelude to Foundation") or facts that
-// contradict the fragment's, so it may be a second edition, and which book
-// keeps the file is the owner's decision (owner, 2026-10-03). The co-owner is
-// listed as a member with its role, never in BookIDs: the row writes nothing
-// to it. The row keeps its class; the skip kind is what holds it. Plan only: it needs the whole library, and a held row is never
-// re-planned.
-func holdCoOwned(lib *fragLibrary, rows []repairs.Row) {
+// 2026-10-03. A co-owner that is a path twin is already in the row.
+//
+// Owner rule 2026-10-05 (fragCoOwnerVerdict): a co-owner with a title of its
+// own that is not the row's work ("Prelude to Foundation" beside
+// "Foundation") is another work and the row is held; with the totals agreeing
+// within max(2%, 5 min) and one same-titled co-owner the fragments join it
+// (an existing-book row); with the totals disagreeing the fragments make
+// their own book (the row proceeds, the co-owners keep their rows and are
+// recorded so checkOwners lets exactly them through); an unknown total, or
+// totals that agree with nothing proving the co-owner is the same work, hold
+// the row. A held co-owner is listed as a member with its role, never in
+// BookIDs: the row writes nothing to it, keeps its class, and the skip kind
+// holds it. Plan runs it over the whole library; Replan runs it over the
+// row's books and the co-owners the plan recorded, and checkOwners' strict
+// lookup catches any co-owner that appeared since.
+func (f *fragmentFixer) holdCoOwned(lib *fragLibrary, rows []repairs.Row) {
 	owners := map[string][]string{} // path -> live books holding a row at it
 	for id, files := range lib.files {
 		if b, ok := lib.books[id]; !ok || b.SoftDeleted {
@@ -4969,13 +5783,262 @@ func holdCoOwned(lib *fragLibrary, rows []repairs.Row) {
 			}
 			names = append(names, fmt.Sprintf("%s (%q)", id, b.Title))
 		}
+		v := f.coOwnerVerdict(lib, r, ids)
+		r.Evidence = append(r.Evidence, v.why)
+		switch v.kind {
+		case fragCoAccept:
+			acceptCoOwners(lib, r, ids)
+			continue
+		case fragCoJoin:
+			if f.joinCoOwner(lib, r, ids[0]) {
+				continue
+			}
+		}
 		// The class stays what it was (moved, copy, no-parent): the class
 		// chips keep counting the row where the owner looks for it, and the
 		// skip kind says why it is held.
 		r.Risk, r.Skipped = repairs.RiskReview, fragSkipCoOwner
-		r.SkipReason = fmt.Sprintf("%d file(s) of this row are also owned by %d live book(s) outside it: %s; decide which book keeps each file (merge or retire the other by hand), then plan again",
-			len(shared), len(ids), strings.Join(names, ", "))
+		r.SkipReason = fmt.Sprintf("%d file(s) of this row are also owned by %d live book(s) outside it: %s; %s; decide which book keeps each file (merge or retire the other by hand), then plan again",
+			len(shared), len(ids), strings.Join(names, ", "), v.why)
 	}
+}
+
+// Co-owner verdicts (coOwnerVerdict).
+const (
+	fragCoHold = iota
+	fragCoAccept
+	fragCoJoin
+)
+
+type fragCoVerdict struct {
+	kind int
+	why  string
+}
+
+// rowWorkKeys are the title keys of the work a row folds into: a no-parent
+// row's group keys, or a moved or copy row's parent title and work folder.
+func rowWorkKeys(lib *fragLibrary, r *repairs.Row) []string {
+	if plan, ok := r.Detail.(*fragGroupPlan); ok {
+		return fragGroupTitleKeys(plan)
+	}
+	_, parentID, _ := strings.Cut(r.RowID, ":")
+	pb, ok := lib.books[parentID]
+	if !ok {
+		return nil
+	}
+	var keys []string
+	for _, t := range []string{pb.Title, func() string { t, _ := metadata.WorkFolderTitle(pb.FilePath); return t }()} {
+		if k := fragTitleKey(t); k != "" && !contains(keys, k) {
+			keys = append(keys, k)
+		}
+	}
+	return keys
+}
+
+// rowFragTotal sums the durations of the fragments a row folds (each book
+// once): the total and how many carry no duration.
+func rowFragTotal(r *repairs.Row) (sec, unknown int) {
+	seen := map[string]bool{}
+	add := func(c *fragCandidate) {
+		if seen[c.Book.ID] {
+			return
+		}
+		seen[c.Book.ID] = true
+		if c.File.Duration > 0 {
+			sec += c.File.Duration
+		} else {
+			unknown++
+		}
+	}
+	switch d := r.Detail.(type) {
+	case []fragPair:
+		for _, p := range d {
+			add(p.Frag)
+		}
+	case *fragGroupPlan:
+		for _, m := range d.Members {
+			add(m.Frag)
+		}
+	}
+	return sec, unknown
+}
+
+// coOwnerVerdict is the owner rule of 2026-10-05 for a row's co-owners ids,
+// the same for every row kind:
+//
+//   - a co-owner whose title has a key that is not the row's work
+//     (rowWorkKeys) is another work: hold. A junk or empty title ("", "c5")
+//     contradicts nothing;
+//   - the fragments' total or a co-owner's total unknown: hold;
+//   - the fragments' total agrees with a co-owner's (fragDurationsAgree):
+//     join into it when it is the only co-owner and its title is the row's
+//     work, else hold (nothing proves it is the same work);
+//   - no co-owner's total agrees: the fragments make their own book beside
+//     them (accept).
+func (f *fragmentFixer) coOwnerVerdict(lib *fragLibrary, r *repairs.Row, ids []string) fragCoVerdict {
+	keys := rowWorkKeys(lib, r)
+	for _, id := range ids {
+		b := lib.books[id]
+		if k := fragTitleKey(b.Title); k != "" && !contains(keys, k) {
+			return fragCoVerdict{fragCoHold, fmt.Sprintf(
+				"book %s's title %q is not this row's work: a different work, not an edition of it, so the fragments are neither joined into it nor folded beside it", id, b.Title)}
+		}
+	}
+	sec, unknown := rowFragTotal(r)
+	if unknown > 0 || sec == 0 {
+		return fragCoVerdict{fragCoHold, fmt.Sprintf("%d of the row's fragments have no duration, so the co-owner(s) cannot be compared with them", unknown)}
+	}
+	var agree []string
+	for _, id := range ids {
+		total, unk, _ := lib.bookTotal(id)
+		if unk > 0 || total == 0 {
+			return fragCoVerdict{fragCoHold, fmt.Sprintf("co-owner %s has a file with no duration, so it cannot be compared with the fragments (%s)", id, fragHours(sec))}
+		}
+		if fragDurationsAgree(sec, total) {
+			agree = append(agree, id)
+		}
+	}
+	if len(agree) > 0 {
+		if len(ids) == 1 && fragTitleKey(lib.books[ids[0]].Title) != "" {
+			total, _, _ := lib.bookTotal(ids[0])
+			return fragCoVerdict{fragCoJoin, fmt.Sprintf(
+				"the fragments (%s) agree within max(2%%, 5 min) with the same-titled co-owner %s (%s): they are that book, so they join it (owner rule 2026-10-05)",
+				fragHours(sec), ids[0], fragHours(total))}
+		}
+		return fragCoVerdict{fragCoHold, fmt.Sprintf(
+			"the fragments' total (%s) agrees with co-owner(s) %s, but nothing proves the same work (a title of no work, or several co-owners)", fragHours(sec), strings.Join(agree, ", "))}
+	}
+	return fragCoVerdict{fragCoAccept, fmt.Sprintf(
+		"no co-owner's total agrees with the fragments' (%s): a different book sharing files, so the fragments make their own book and the co-owner(s) keep their rows (owner rule 2026-10-05)", fragHours(sec))}
+}
+
+// rowCoOwners are the co-owners a row was decided to proceed beside: from a
+// no-parent row's plan, or a moved or copy row's stored state.
+func rowCoOwners(r repairs.Row) []string {
+	if plan, ok := r.Detail.(*fragGroupPlan); ok {
+		return plan.CoOwners
+	}
+	if _, ok := r.Detail.([]fragPair); ok && len(r.State) > 0 {
+		var ps fragParentState
+		if json.Unmarshal(r.State, &ps) == nil {
+			return ps.CoOwners
+		}
+	}
+	return nil
+}
+
+// acceptCoOwners records ids as co-owners r proceeds beside (rowCoOwners),
+// in its state and fingerprint, at review risk.
+func acceptCoOwners(lib *fragLibrary, r *repairs.Row, ids []string) {
+	parts := []string{r.Fingerprint, "co-owners"}
+	for _, id := range ids {
+		total, _, n := lib.bookTotal(id)
+		parts = append(parts, fmt.Sprintf("%s|%d|%d", id, n, total))
+	}
+	switch plan := r.Detail.(type) {
+	case *fragGroupPlan:
+		plan.CoOwners = append([]string(nil), ids...)
+		setGroupState(r, func(st *fragGroupState) { st.CoOwners = plan.CoOwners })
+	case []fragPair:
+		var ps fragParentState
+		if len(r.State) > 0 && json.Unmarshal(r.State, &ps) != nil {
+			return
+		}
+		ps.CoOwners = append([]string(nil), ids...)
+		if raw, err := json.Marshal(ps); err == nil {
+			r.State = raw
+		}
+	}
+	r.Risk = repairs.RiskReview
+	r.Fingerprint = fragFingerprint(parts...)
+}
+
+// joinCoOwner turns an applicable row into an existing-book row that retires
+// its fragments into the co-owner id (Apply: plan.Join). A no-parent row goes
+// through joinExisting; a moved or copy row keeps its fragments, in chapter
+// order, and drops the parent, which is not written (its rows stay as they
+// are). False when the row cannot be joined: a pair already finished, a
+// ghost pair, or a guard on the co-owner.
+func (f *fragmentFixer) joinCoOwner(lib *fragLibrary, r *repairs.Row, id string) bool {
+	e := fragExisting{id: id, coOwner: true}
+	e.total, e.unknown, e.files = lib.bookTotal(id)
+	if plan, ok := r.Detail.(*fragGroupPlan); ok {
+		sec, _ := rowFragTotal(r)
+		f.joinExisting(lib, r, plan, e, fmt.Sprintf("the %d kept fragment(s) total %s", len(plan.Members), fragHours(sec)),
+			func(e fragExisting) string { return "book " + e.id }, nil)
+		return r.Class == fragClassExistingBook
+	}
+	pairs, ok := r.Detail.([]fragPair)
+	if !ok || (r.Class != fragClassMoved && r.Class != fragClassCopy) {
+		return false
+	}
+	target := lib.books[id]
+	if k, _ := f.guard(lib, []fragBook{target}, nil); k != "" || target.ITunesPID != "" {
+		return false
+	}
+	frags := map[string]*fragCandidate{}
+	for _, p := range pairs {
+		if p.Done {
+			return false
+		}
+		frags[p.Frag.Book.ID] = p.Frag
+	}
+	var cs []*fragCandidate
+	for _, c := range frags {
+		cs = append(cs, c)
+	}
+	sort.SliceStable(cs, func(i, j int) bool {
+		pi, oki := chapterPos(cs[i])
+		pj, okj := chapterPos(cs[j])
+		if oki && okj {
+			if cmp := pi.Compare(pj); cmp != 0 {
+				return cmp < 0
+			}
+		}
+		if a, b := cs[i].origStem(), cs[j].origStem(); a != b {
+			return a < b
+		}
+		return cs[i].Book.ID < cs[j].Book.ID
+	})
+	_, parentID, _ := strings.Cut(r.RowID, ":")
+	plan := &fragGroupPlan{Join: id}
+	st := fragGroupState{Files: map[string]string{}, Join: id, FromParent: parentID, ParentRow: r.RowID,
+		ParentState: r.State, PlannedAt: f.now().UTC()}
+	var off float64
+	ids := []string{id}
+	var parts []string
+	for i, c := range cs {
+		plan.Members = append(plan.Members, fragGroupMember{Frag: c, Track: i + 1, Offset: off})
+		off += float64(c.File.Duration)
+		st.Files[c.Book.ID] = c.File.ID
+		ids = append(ids, c.Book.ID)
+		parts = append(parts, c.Book.ID+"|"+c.File.ID+"|"+c.File.Path)
+	}
+	sort.Strings(ids)
+	sort.Strings(parts)
+	raw, err := json.Marshal(st)
+	if err != nil {
+		return false
+	}
+	sum := sha256.Sum256([]byte(r.RowID + "\x00" + id))
+	members := []repairs.RowMember{member(lib, lib.books[parentID], "parent (not written)")}
+	for _, c := range cs {
+		members = append(members, member(lib, c.Book, "fragment"))
+	}
+	members = append(members, member(lib, target, "existing book"))
+	*r = repairs.Row{
+		RowID: fragClassExistingBook + ":" + hex.EncodeToString(sum[:])[:20], Class: fragClassExistingBook,
+		BookIDs: ids, Title: target.Title, Author: lib.authorName(target), Risk: repairs.RiskReview,
+		Members: members, Evidence: r.Evidence, Detail: plan, State: raw,
+		Reason:  fmt.Sprintf("%d fragment book(s) planned against parent %s are the same-titled book %s (%q) that also holds their files", len(cs), parentID, id, target.Title),
+		Current: map[string]string{"parent": parentID, "fragments": strconv.Itoa(len(cs))},
+		Proposed: map[string]string{
+			"action": fmt.Sprintf("retire %d fragment book(s) into the existing book %s, each keeping its own file row; parent %s is not written", len(cs), id, parentID),
+			"join":   id,
+		},
+		Fingerprint: fragFingerprint(append([]string{fragClassExistingBook, r.RowID, id, strconv.Itoa(e.files), strconv.Itoa(e.total)}, parts...)...),
+	}
+	return true
 }
 
 // changedRow is the planned row with a fingerprint that cannot match, so the
@@ -5094,11 +6157,45 @@ func (f *fragmentFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repa
 		}
 		return nil
 	case *fragGroupPlan:
+		if plan.Join != "" {
+			// An existing-book row: every member and copy is retired into the
+			// existing book, each keeping its own file row. Every refusal is
+			// checked before the first write; no plan record is journaled and
+			// nothing is moved, renumbered, retitled or repathed.
+			type joined struct {
+				frag   *fragCandidate
+				offset float64
+			}
+			var all []joined
+			for _, m := range plan.Members {
+				all = append(all, joined{m.Frag, m.Offset})
+			}
+			for _, cp := range plan.Copies {
+				all = append(all, joined{cp.Frag, cp.Offset})
+			}
+			for _, j := range all {
+				if err := copyRetireRefusal(store, fragGroupCopy{Frag: j.frag}, plan.Join, "fragment"); err != nil {
+					return err
+				}
+			}
+			for _, j := range all {
+				if err := ctx.Err(); err != nil {
+					return partial(err)
+				}
+				did, err := f.retire(ctx, store, w, j.frag.Book.ID, plan.Join,
+					merge.SliceMapping{OffsetSeconds: j.offset, Mappable: true})
+				steps += did
+				if err != nil {
+					return partial(err)
+				}
+			}
+			return nil
+		}
 		// Copies are retired last, so a copy retireInto would refuse is
 		// found here, before the first write: a refusal then writes nothing
 		// instead of leaving the members moved and the copy live.
 		for _, cp := range plan.Copies {
-			if err := copyRetireRefusal(store, cp, plan.SurvivorID); err != nil {
+			if err := copyRetireRefusal(store, cp, plan.SurvivorID, "copy"); err != nil {
 				return err
 			}
 		}
@@ -5226,44 +6323,44 @@ func (f *fragmentFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repa
 // or an un-tombstoned external id carries an iTunes id. A copy an earlier,
 // cut-off run already retired INTO survivor is not refused (retireInto
 // resumes it); one retired into any other book is.
-func copyRetireRefusal(store OpsStore, cp fragGroupCopy, survivor string) error {
+func copyRetireRefusal(store OpsStore, cp fragGroupCopy, survivor, role string) error {
 	id := cp.Frag.Book.ID
 	b, err := store.GetBookByID(id)
 	if err != nil {
-		return fmt.Errorf("read copy %s: %w", id, err)
+		return fmt.Errorf("read %s %s: %w", role, id, err)
 	}
 	if b == nil || b.ID != id {
-		return fmt.Errorf("%w: copy %s vanished", repairs.ErrChangedSincePlan, id)
+		return fmt.Errorf("%w: %s %s vanished", repairs.ErrChangedSincePlan, role, id)
 	}
 	if b.IsSoftDeleted() {
 		// The locked Replan that just ran (same merge lock, nothing written
 		// since) attributed every retired book of the row to this fixer's
 		// journal; only where it went is re-checked here, not re-scanned.
 		if b.MergedIntoBookID == nil || *b.MergedIntoBookID != survivor {
-			return fmt.Errorf("%w: copy %s was retired into another book, not the survivor %s", repairs.ErrChangedSincePlan, id, survivor)
+			return fmt.Errorf("%w: %s %s was retired into another book, not %s", repairs.ErrChangedSincePlan, role, id, survivor)
 		}
 		return nil
 	}
 	if b.ITunesPersistentID != nil && *b.ITunesPersistentID != "" {
-		return fmt.Errorf("%w: copy %s now carries an iTunes id", repairs.ErrChangedSincePlan, id)
+		return fmt.Errorf("%w: %s %s now carries an iTunes id", repairs.ErrChangedSincePlan, role, id)
 	}
 	rows, err := store.GetBookFiles(id)
 	if err != nil {
-		return fmt.Errorf("files of copy %s: %w", id, err)
+		return fmt.Errorf("files of %s %s: %w", role, id, err)
 	}
 	if len(rows) != 1 || rows[0].ID != cp.Frag.File.ID {
-		return fmt.Errorf("%w: copy %s no longer holds exactly its planned row", repairs.ErrChangedSincePlan, id)
+		return fmt.Errorf("%w: %s %s no longer holds exactly its planned row", repairs.ErrChangedSincePlan, role, id)
 	}
 	if rows[0].ITunesPersistentID != "" {
-		return fmt.Errorf("%w: copy %s row %s now carries an iTunes id", repairs.ErrChangedSincePlan, id, rows[0].ID)
+		return fmt.Errorf("%w: %s %s row %s now carries an iTunes id", repairs.ErrChangedSincePlan, role, id, rows[0].ID)
 	}
 	exts, err := store.GetExternalIDsForBook(id)
 	if err != nil {
-		return fmt.Errorf("external ids of copy %s: %w", id, err)
+		return fmt.Errorf("external ids of %s %s: %w", role, id, err)
 	}
 	for _, e := range exts {
 		if e.Source == "itunes" && !e.Tombstoned {
-			return fmt.Errorf("%w: copy %s now carries iTunes id %s", repairs.ErrChangedSincePlan, id, e.ExternalID)
+			return fmt.Errorf("%w: %s %s now carries iTunes id %s", repairs.ErrChangedSincePlan, role, id, e.ExternalID)
 		}
 	}
 	return nil

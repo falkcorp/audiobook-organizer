@@ -1,7 +1,7 @@
 // file: web/src/components/review/RepairsPanel.tsx
-// version: 1.16.0
+// version: 1.17.0
 // guid: 9c4f1a73-2e58-4b06-a9d1-6e3b8c7f0d52
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 /**
  * The repairs lane's surface: a rail of fixers and the selected fixer's trial.
@@ -279,6 +279,8 @@ function classLabel(c: string): string {
     ambiguous: 'Ambiguous',
     held: 'Held',
     carry: 'Finish an interrupted repair (move its files off a merged survivor)',
+    'existing-book': 'Existing book (never a second copy)',
+    unplaced: 'Unplaced fragment (no chapter group)',
     relink: 'Relink (history agrees or none)',
     'held-cleared-by-history': 'Cleared (history)',
     'held-name-mismatch': 'Name mismatch',
@@ -354,6 +356,12 @@ export const SKIP_KIND_LABEL: Record<string, string> = {
   skipped_owner_manual: 'Doctor Who / Big Finish / Torchwood (manual)',
   skipped_guard_unreadable: 'Could not read for the guard',
   skipped_co_owner: 'Another book owns the same file',
+  skipped_existing_book: 'A book of this title exists (durations differ)',
+  skipped_retagged_copies: "Re-tagged copies of an existing book's chapters",
+  skipped_lone_chapter: 'Fewer than three chapters share its name',
+  skipped_scattered_numbered: 'Numbered file left over in a folder of several works',
+  skipped_no_chapter_key: 'Chapter title but no chapter number in the file name',
+  skipped_unplaced: 'Taken into no chapter group',
   skipped_cleared_by_field_lock: 'Series cleared or overridden (field lock)',
   skipped_cleared_by_manual: 'Series cleared by a user edit',
   skipped_cleared_by_batch: 'Series cleared by a batch edit',
