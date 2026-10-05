@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -269,4 +270,20 @@ func TestAuthorityBuild_CatalogPagesConcurrently(t *testing.T) {
 		digests = append(digests, out.Result.Digest)
 	}
 	require.Equal(t, digests[0], digests[1], "the plan must not depend on worker count or order")
+}
+
+// TestAuthorityBuild_ResultReadsTopDown: the stored result leads with the
+// summary and refusals, and carries the full prune list and its count.
+func TestAuthorityBuild_ResultReadsTopDown(t *testing.T) {
+	ps := authorityTestStore(t)
+	p := New(fakeDeps{store: ps})
+	rep := &resultReporterA{}
+	require.NoError(t, p.runAuthorityBuild(context.Background(), json.RawMessage(`{"skip_catalog":true}`), rep))
+	var top map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(rep.result, &top))
+	for _, k := range []string{"summary", "refusals", "prune", "prune_count", "held", "held_count", "digest", "report", "counts"} {
+		require.Contains(t, top, k)
+	}
+	require.True(t, strings.HasPrefix(string(rep.result), `{"summary":"DRY RUN: `), string(rep.result[:60]))
+	require.Contains(t, string(top["summary"]), "apply refused (1 reasons)")
 }

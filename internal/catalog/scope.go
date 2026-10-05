@@ -1,19 +1,23 @@
 // file: internal/catalog/scope.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5b9d3f27-8c1a-4e6b-9f42-1d7c0a8e3b56
-// last-edited: 2026-10-01
+// last-edited: 2026-10-05
 
 package catalog
 
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorjunk"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/personname"
 )
 
 // ScopeReader is the narrow store slice the harvest scope needs.
@@ -80,6 +84,90 @@ type ScopeCensus struct {
 	Authors            int `json:"authors"`
 	AuthorsWithASIN    int `json:"authors_with_asin_tagged_book"`
 	JunkAuthorsSkipped int `json:"junk_authors_skipped"`
+	// PublisherShapedSkipped: names with a studio word authorjunk's whole
+	// list does not cover ("Big Finish Production").
+	PublisherShapedSkipped int `json:"publisher_shaped_skipped"`
+	// RoleMarkedSkipped: names carrying a contributor role ("Jay Rubin -
+	// translator", or a credit list with one). A credit list's unmarked
+	// person parts are harvested on their own (RoleMarkedSplit).
+	RoleMarkedSkipped int `json:"role_marked_skipped"`
+	RoleMarkedSplit   int `json:"role_marked_split"`
+}
+
+// scopePublisherWords mark a studio or company anywhere in a name. They
+// extend authorjunk's publisher rule (which knows "productions" but not the
+// singular, and whole publisher names only) for the harvest scope alone,
+// where skipping a name costs nothing but a request it would have wasted.
+var scopePublisherWords = map[string]bool{
+	"production": true, "productions": true, "studio": true, "studios": true,
+	"publishing": true, "publisher": true, "publishers": true,
+	"entertainment": true, "llc": true, "inc": true, "ltd": true,
+}
+
+// creditPieceRe splits a credit list on its list separators (not "and",
+// which joins names inside one credit as often as it joins two credits).
+var creditPieceRe = regexp.MustCompile(`\s*[,;/&]\s*`)
+
+// Scope skip reasons.
+const (
+	scopeSkipJunk      = "junk"
+	scopeSkipPublisher = "publisher_shaped"
+	scopeSkipRole      = "role_marked"
+)
+
+// scopeNames decides what one author row contributes to the harvest scope:
+// the names to harvest, or why it is skipped. A name with a role marker in
+// any of its credit-list pieces ("Haruki Murakami, Jay Rubin - translator,
+// Philip Gabriel - translator") is never harvested whole; its unmarked
+// pieces are, when each is person-shaped and not junk ("Haruki Murakami"),
+// and split is set. Otherwise the whole name is skipped as role-marked.
+func scopeNames(name string) (names []string, skip string, split bool) {
+	name = strings.TrimSpace(name)
+	if authorjunk.ClassifyName(name).Junk() {
+		return nil, scopeSkipJunk, false
+	}
+	if publisherShaped(name) {
+		return nil, scopeSkipPublisher, false
+	}
+	pieces := creditPieceRe.Split(name, -1)
+	var plain []string
+	marked := false
+	for _, p := range pieces {
+		bare, role := metadata.ClassifyContributor(p)
+		if role != metadata.RoleAuthor {
+			marked = true
+			continue
+		}
+		if bare = strings.TrimSpace(bare); bare != "" {
+			plain = append(plain, bare)
+		}
+	}
+	if !marked {
+		return []string{name}, "", false
+	}
+	if len(pieces) == 1 {
+		return nil, scopeSkipRole, false
+	}
+	for _, p := range plain {
+		if !personname.LooksLikePersonName(p) || authorjunk.ClassifyName(p).Junk() || publisherShaped(p) {
+			return nil, scopeSkipRole, false
+		}
+	}
+	if len(plain) == 0 {
+		return nil, scopeSkipRole, false
+	}
+	return plain, "", true
+}
+
+func publisherShaped(name string) bool {
+	for _, w := range strings.FieldsFunc(strings.ToLower(name), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	}) {
+		if scopePublisherWords[w] {
+			return true
+		}
+	}
+	return false
 }
 
 // authorRoleIncluded: author and co-author credits count, as does an
@@ -180,32 +268,45 @@ func BuildScope(ctx context.Context, store any, rd ScopeReader) ([]ScopeAuthor, 
 
 	byKey := map[string]*ScopeAuthor{}
 	keyASINs := map[string]map[string]bool{}
-	junk := map[string]bool{}
+	skipped := map[string]map[string]bool{}
+	splitNames := map[string]bool{}
 	for id, a := range byID {
 		au := names[id]
 		if au == nil || strings.TrimSpace(au.Name) == "" {
 			continue
 		}
-		if authorjunk.ClassifyName(au.Name).Junk() {
-			junk[au.Name] = true
+		harvest, skip, split := scopeNames(au.Name)
+		if skip != "" {
+			if skipped[skip] == nil {
+				skipped[skip] = map[string]bool{}
+			}
+			skipped[skip][au.Name] = true
 			continue
 		}
-		key := HarvestKey(au.Name)
-		if key == "" {
-			continue
+		if split {
+			splitNames[au.Name] = true
 		}
-		sa := byKey[key]
-		if sa == nil {
-			sa = &ScopeAuthor{Key: key, Name: au.Name}
-			byKey[key] = sa
-			keyASINs[key] = map[string]bool{}
-		}
-		sa.Books += a.books
-		for asin := range a.asins {
-			keyASINs[key][asin] = true
+		for _, name := range harvest {
+			key := HarvestKey(name)
+			if key == "" {
+				continue
+			}
+			sa := byKey[key]
+			if sa == nil {
+				sa = &ScopeAuthor{Key: key, Name: name}
+				byKey[key] = sa
+				keyASINs[key] = map[string]bool{}
+			}
+			sa.Books += a.books
+			for asin := range a.asins {
+				keyASINs[key][asin] = true
+			}
 		}
 	}
-	census.JunkAuthorsSkipped = len(junk)
+	census.JunkAuthorsSkipped = len(skipped[scopeSkipJunk])
+	census.PublisherShapedSkipped = len(skipped[scopeSkipPublisher])
+	census.RoleMarkedSkipped = len(skipped[scopeSkipRole])
+	census.RoleMarkedSplit = len(splitNames)
 
 	out := make([]ScopeAuthor, 0, len(byKey))
 	for key, sa := range byKey {

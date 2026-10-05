@@ -1,7 +1,7 @@
 // file: internal/server/catalog_harvest_op_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2d7e9b41-5c3a-4f86-9e10-4b8a6c2d1f57
-// last-edited: 2026-10-01
+// last-edited: 2026-10-05
 
 package server
 
@@ -155,7 +155,7 @@ func TestCatalogHarvest_DryRunThenLive(t *testing.T) {
 		t.Fatal("dry run wrote author state")
 	}
 	joined := strings.Join(rep.logs, "\n")
-	if !strings.Contains(joined, "scope: 1 authors") || !strings.Contains(joined, "1 without an author") || !strings.Contains(joined, "1 junk names skipped") {
+	if !strings.Contains(joined, "scope: 1 authors") || !strings.Contains(joined, "1 without an author") || !strings.Contains(joined, "skipped: 1 junk,") {
 		t.Errorf("census log:\n%s", joined)
 	}
 	if len(lister.names) != 0 {

@@ -1,7 +1,7 @@
 // file: internal/server/catalog_harvest_op.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3e6b9d24-7a1c-4f85-b2e0-5c8d1a4f7e93
-// last-edited: 2026-10-02
+// last-edited: 2026-10-05
 //
 // Registers catalog.harvest-authors, phase P1 of the author catalog design
 // (.claude/notes/catalog-wanted-requests-design-2026-10-01.md, Draft 3).
@@ -196,8 +196,9 @@ func runCatalogHarvest(ctx context.Context, reporter opsregistry.Reporter, store
 	if err != nil {
 		return err
 	}
-	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("scope: %d authors (%d with an ASIN-tagged book, %d junk names skipped), %d books in scope, %d without an author; %d due (interval %s); dry_run=%v; harvest rate %.2f req/s (fraction %.2f of audible), concurrency %d",
-		census.Authors, census.AuthorsWithASIN, census.JunkAuthorsSkipped, census.BooksInScope, census.BooksNoAuthor,
+	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("scope: %d authors (%d with an ASIN-tagged book; skipped: %d junk, %d publisher-shaped, %d role-marked; %d role-marked credit lists split), %d books in scope, %d without an author; %d due (interval %s); dry_run=%v; harvest rate %.2f req/s (fraction %.2f of audible), concurrency %d",
+		census.Authors, census.AuthorsWithASIN, census.JunkAuthorsSkipped, census.PublisherShapedSkipped,
+		census.RoleMarkedSkipped, census.RoleMarkedSplit, census.BooksInScope, census.BooksNoAuthor,
 		len(due), interval, dryRun, rps, cfg.HarvestRateFraction, h.Cfg.Concurrency))
 
 	if dryRun {
