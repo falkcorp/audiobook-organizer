@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v2_timeline_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: bf8efde3-0111-470c-a4c5-473eea3696e9
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 package database
 
@@ -432,47 +432,51 @@ func TestOpsV2Timeline_EquivalenceRandomHistories(t *testing.T) {
 	if v := os.Getenv("OPSV2_TIMELINE_SEEDS"); v != "" {
 		_, _ = fmt.Sscanf(v, "%d", &seeds)
 	}
+	// Each seed is an independent store and history, so the seeds run as
+	// parallel subtests (bounded by -parallel, GOMAXPROCS by default). Run
+	// serially this one test took 145-317s of internal/database's
+	// 343-600s on CI's -race job and pushed the package into go test's 10m
+	// timeout (main run 37263356760). The store is opened after t.Parallel(),
+	// so only -parallel stores are open at once, and each closes when its
+	// subtest ends.
 	for seed := uint64(1); seed <= seeds; seed++ {
-		// Not newTimelineStore: 200 stores must not all stay open until the
-		// test's cleanup runs.
-		p, err := NewPebbleStoreInMemory(t.TempDir())
-		if err != nil {
-			t.Fatal(err)
-		}
-		sim := newTimelineSim(t, p, seed)
-		for range 150 {
-			sim.history()
-		}
-		for range 10 {
-			sim.legacy()
-		}
-		res, err := p.ReconcileOpsV2TimelineIndex(context.Background())
-		if err != nil {
-			t.Fatalf("seed %d: reconcile: %v", seed, err)
-		}
-		if res.Missing < 10 {
-			t.Fatalf("seed %d: reconcile found %d missing keys; the 10 legacy rows have none", seed, res.Missing)
-		}
-		assertTimelineEquivalent(t, p, seed, sim.base, "after reconcile")
-		assertTimelineBoundaries(t, p, seed, sim, seed%100 == 1, "after reconcile")
+		t.Run(fmt.Sprintf("seed=%d", seed), func(t *testing.T) {
+			t.Parallel()
+			p := newTimelineStore(t)
+			sim := newTimelineSim(t, p, seed)
+			for range 150 {
+				sim.history()
+			}
+			for range 10 {
+				sim.legacy()
+			}
+			res, err := p.ReconcileOpsV2TimelineIndex(context.Background())
+			if err != nil {
+				t.Fatalf("seed %d: reconcile: %v", seed, err)
+			}
+			if res.Missing < 10 {
+				t.Fatalf("seed %d: reconcile found %d missing keys; the 10 legacy rows have none", seed, res.Missing)
+			}
+			assertTimelineEquivalent(t, p, seed, sim.base, "after reconcile")
+			assertTimelineBoundaries(t, p, seed, sim, seed%100 == 1, "after reconcile")
 
-		for range 100 {
-			sim.randomWrite()
-		}
-		assertTimelineEquivalent(t, p, seed, sim.base, "after 100 more writes (no reconcile)")
-		assertTimelineBoundaries(t, p, seed, sim, seed%100 == 1, "after 100 more writes (no reconcile)")
-		// Readers tolerate a stale extra key (they re-check every row), so
-		// equivalence alone cannot see a writer that leaves one behind. A
-		// second reconcile must find the index exact: nothing missing,
-		// nothing orphaned.
-		res, err = p.ReconcileOpsV2TimelineIndex(context.Background())
-		if err != nil {
-			t.Fatalf("seed %d: second reconcile: %v", seed, err)
-		}
-		if res.Missing != 0 || res.Orphans != 0 {
-			t.Fatalf("seed %d: writers let the index drift without a reconcile: %+v", seed, res)
-		}
-		_ = p.Close()
+			for range 100 {
+				sim.randomWrite()
+			}
+			assertTimelineEquivalent(t, p, seed, sim.base, "after 100 more writes (no reconcile)")
+			assertTimelineBoundaries(t, p, seed, sim, seed%100 == 1, "after 100 more writes (no reconcile)")
+			// Readers tolerate a stale extra key (they re-check every row), so
+			// equivalence alone cannot see a writer that leaves one behind. A
+			// second reconcile must find the index exact: nothing missing,
+			// nothing orphaned.
+			res, err = p.ReconcileOpsV2TimelineIndex(context.Background())
+			if err != nil {
+				t.Fatalf("seed %d: second reconcile: %v", seed, err)
+			}
+			if res.Missing != 0 || res.Orphans != 0 {
+				t.Fatalf("seed %d: writers let the index drift without a reconcile: %+v", seed, res)
+			}
+		})
 	}
 }
 
