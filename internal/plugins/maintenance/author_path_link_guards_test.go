@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_path_link_guards_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8f21c5a7-4d63-4b90-a1e8-6c07f2d95b31
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 package maintenance
 
@@ -216,12 +216,12 @@ func TestAuthorPathLinkClassify_CompositeNameIsHeld(t *testing.T) {
 	add(3, "J.N. Chaney, Jonathan P. Brazee")
 
 	// Derived, not a row: the splitter splits it.
-	ch := authorPathLinkClassify(&database.BookCore{ID: "b1", FilePath: "/lib/Ann Leckie, Zed Newperson/Book One/book.m4b"}, idx)
+	ch := authorPathLinkClassify(&database.BookCore{ID: "b1", FilePath: "/lib/Ann Leckie, Zed Newperson/Book One/book.m4b"}, idx, noManualReaders())
 	require.Equal(t, authorPathLinkSuspectComposite, ch.Outcome, "%+v", ch)
 	// Derived, both pieces existing authors.
-	ch = authorPathLinkClassify(&database.BookCore{ID: "b2", FilePath: "/lib/Travis Deverell, Shirtaloon/Book One/book.m4b"}, idx)
+	ch = authorPathLinkClassify(&database.BookCore{ID: "b2", FilePath: "/lib/Travis Deverell, Shirtaloon/Book One/book.m4b"}, idx, noManualReaders())
 	require.Equal(t, authorPathLinkSuspectComposite, ch.Outcome, "%+v", ch)
 	// An exact match to an existing combined row.
-	ch = authorPathLinkClassify(&database.BookCore{ID: "b3", FilePath: "/lib/J.N. Chaney, Jonathan P. Brazee/Mission Creep/book.m4b"}, idx)
+	ch = authorPathLinkClassify(&database.BookCore{ID: "b3", FilePath: "/lib/J.N. Chaney, Jonathan P. Brazee/Mission Creep/book.m4b"}, idx, noManualReaders())
 	require.Equal(t, authorPathLinkSuspectComposite, ch.Outcome, "%+v", ch)
 }

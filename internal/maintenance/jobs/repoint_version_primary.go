@@ -1,5 +1,5 @@
 // file: internal/maintenance/jobs/repoint_version_primary.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 5e1c8a07-3d42-4f96-b8d1-c07a9e25f4b3
 // last-edited: 2026-10-05
 
@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/applygate"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
@@ -236,11 +235,15 @@ const (
 	bucketStateMismatch     = "state_mismatch"
 	bucketNotElectable      = "not_electable"
 	bucketOwnerManualOnly   = "owner_manual_only"
-	bucketITunesProtected   = "itunes_protected"
-	bucketNotSelected       = "not_selected"
-	bucketDrifted           = "drifted"
-	bucketWriteFailed       = "write_failed"
-	bucketLeftDoublePrimary = "left_double_primary"
+	// bucketOwnerManualCheckFailed: the owner-manual check could not read the
+	// pair's files, credits, tags or series. The pair is left alone (fail
+	// closed) but is not counted as a Doctor Who pair.
+	bucketOwnerManualCheckFailed = "owner_manual_check_failed"
+	bucketITunesProtected        = "itunes_protected"
+	bucketNotSelected            = "not_selected"
+	bucketDrifted                = "drifted"
+	bucketWriteFailed            = "write_failed"
+	bucketLeftDoublePrimary      = "left_double_primary"
 )
 
 // repointPairDecision is one (imported member, organized twin) pair's outcome.
@@ -548,10 +551,17 @@ func (j *repointVersionPrimaryJob) classify(store maintenance.JobStore, idx *rep
 	// The twin is a lone single-chapter book BELOW min_files, so detection never
 	// saw it and neither exclusion hook has looked at it. Both must be run here
 	// or this job would demote a row inside the iTunes library or one of the
-	// owner's manual-only titles.
-	if applygate.BookRowManualOnly(twin, "") || applygate.BookRowManualOnly(b, "") {
+	// owner's manual-only titles. The owner-manual check is the whole-book one
+	// (applygate.BookManualOnly: files, credits, tags and series as well as the
+	// row), on both sides; detection's Exclude hook reads the path alone.
+	twinRow, memberRow := twin.ToBook(), b.ToBook()
+	if detail, err := jobsBookManualOnly(store, &twinRow, &memberRow); err != nil {
+		d.Bucket = bucketOwnerManualCheckFailed
+		d.Reason = "owner-manual check could not be done: " + err.Error()
+		return d
+	} else if detail != "" {
 		d.Bucket = bucketOwnerManualOnly
-		d.Reason = "owner-manual-only title (Doctor Who / Big Finish / Torchwood)"
+		d.Reason = "owner-manual-only title (Doctor Who / Big Finish / Torchwood): " + detail
 		return d
 	}
 	if why := protect(twin); why != "" {

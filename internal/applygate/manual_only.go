@@ -1,11 +1,12 @@
 // file: internal/applygate/manual_only.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: a2f62ab5-314e-427a-8ca7-de28de936b75
 // last-edited: 2026-10-05
 
 package applygate
 
 import (
+	"errors"
 	"strconv"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -289,21 +290,73 @@ func strDeref(p *string) string {
 	return *p
 }
 
-// BookRowManualOnly is the owner-manual check on everything a book ROW
+// bookRowManualOnly is the owner-manual check on everything a book ROW
 // carries, with no store read: its path, title, series name, narrator and
 // publisher (where "Missy" alone does not count, as in BulkManualOnlyGuard)
-// and its transcribed title and author. A whole-library op that decides from
-// rows it already loaded uses it; it does NOT see the book's author credits,
-// franchise tags or book_file rows, which only BulkManualOnlyGuard reads.
-func BookRowManualOnly(core *database.BookCore, seriesName string) bool {
+// and its transcribed title and author. It returns what matched ("" = none).
+//
+// It is unexported on purpose (owner decision 2026-10-05). It used to be the
+// exported BookRowManualOnly, and four whole-library ops decided from it
+// alone, so a Big Finish book whose only signal was a book_file path, an
+// author credit or a franchise: tag slipped through them. Its one caller is
+// BookManualOnly, which adds those reads; a caller outside this package that
+// wants "is this book owner-manual" uses BookManualOnly.
+func bookRowManualOnly(core *database.BookCore, seriesName string) string {
 	if core == nil {
-		return false
+		return ""
 	}
-	if IsOwnerManualOnly(core.FilePath, seriesName) || matchesManualOnly(core.Title) {
-		return true
+	for _, ch := range []manualOnlyCheck{
+		{what: "path", value: core.FilePath},
+		{what: "series", value: seriesName},
+		{what: "title", value: core.Title},
+		{what: "narrator", value: strDeref(core.Narrator), credit: true},
+		{what: "publisher", value: strDeref(core.Publisher), credit: true},
+		{what: "transcribed title", value: strDeref(core.TranscribedTitle)},
+		{what: "transcribed author", value: strDeref(core.TranscribedAuthor)},
+	} {
+		match := matchesManualOnly
+		if ch.credit {
+			match = franchise.MatchesCreditStrong
+		}
+		if match(ch.value) {
+			return ch.what + " " + strconv.Quote(ch.value)
+		}
 	}
-	if franchise.MatchesCreditStrong(strDeref(core.Narrator)) || franchise.MatchesCreditStrong(strDeref(core.Publisher)) {
-		return true
+	return ""
+}
+
+// BookManualOnly is the whole-book owner-manual check for a caller that
+// decides OUTSIDE the metadata apply gate which books it may touch (a
+// maintenance op choosing what to merge, move, link or demote). held is true
+// when the book is Doctor Who / Big Finish / Torchwood by anything it
+// carries: the row itself (path, title, narrator, publisher, transcribed
+// fields) or anything BulkManualOnlyGuard reads (series row, franchise tags,
+// author credits, every book_file path and its transcribed fields). detail
+// says what matched.
+//
+// err is set when one of those reads failed: the check could not be done.
+// The caller must fail closed -- leave the book alone -- and must not count
+// it as an owner-manual book (the ReasonOwnerManualCheckFailed split).
+//
+// The row part runs first and needs no read, so a book held by its row
+// costs nothing more than the row-only check did.
+func BookManualOnly(r ManualOnlyReaders, book *database.Book) (held bool, detail string, err error) {
+	if book == nil {
+		return false, "", errors.New("no book to check for the owner-manual rule")
 	}
-	return matchesManualOnly(strDeref(core.TranscribedTitle)) || matchesManualOnly(strDeref(core.TranscribedAuthor))
+	core := book.Core()
+	if d := bookRowManualOnly(&core, ""); d != "" {
+		return true, manualOnlyWhy + d, nil
+	}
+	if r.Files == nil {
+		return false, "", errors.New("no book_file reader for the owner-manual check")
+	}
+	g := BulkManualOnlyGuard(r, book, "")
+	if g.ReadErr != "" {
+		return false, "", errors.New(g.ReadErr)
+	}
+	if g.StoreDetail != "" {
+		return true, g.StoreDetail, nil
+	}
+	return false, "", nil
 }

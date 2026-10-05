@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_clone_into_library.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 9c4e1b27-6a3f-4d80-b5e2-3f7a0c8d1e64
 // last-edited: 2026-10-05
 
@@ -239,6 +239,9 @@ type icRunner struct {
 	// methods are not on database.Store, so a bare assertion fails on the
 	// production indexedStore decorator (see chapters_backfill.go).
 	chapters chapterPersister
+	// tags reads the source's franchise: tags for the owner-manual check
+	// (OpsStore does not carry tags). nil skips only the tag leg.
+	tags applygate.ManualOnlyTagReader
 }
 
 func (p *Plugin) itunesCloneIntoLibrary(ctx context.Context, params icParams, rootDir string, reporter sdk.Reporter) (*icReport, error) {
@@ -273,7 +276,7 @@ func (p *Plugin) itunesCloneIntoLibrary(ctx context.Context, params icParams, ro
 	if reflink == nil {
 		reflink = fileops.Reflink
 	}
-	run := &icRunner{store: icStore{OpsStore: ops, ChapterReader: vps}, cloner: p.deps, reflink: reflink, rootDir: rootDir, opID: opID, apply: params.Apply}
+	run := &icRunner{store: icStore{OpsStore: ops, ChapterReader: vps}, cloner: p.deps, reflink: reflink, rootDir: rootDir, opID: opID, apply: params.Apply, tags: p.deps.BookTagReader()}
 	if writes {
 		cp, ok := database.AsCapability[chapterPersister](ops)
 		if !ok {
@@ -678,8 +681,14 @@ func (r *icRunner) plan(ctx context.Context, gid string) (icGroupReport, *icPlan
 		}
 	}
 	g.SourceBookID, g.Title = book.ID, book.Title
-	if bookRowManualOnly(book, "") {
-		return skipped(g, "owner_manual_only"), nil
+	// The whole-book owner-manual check (row, series, credits, tags, every
+	// book_file path and its transcribed fields), not the row alone. A read
+	// failure skips the group (fail closed) under its own reason.
+	if held, _, err := applygate.BookManualOnly(applygate.ManualOnlyReaders{Files: r.store, Series: r.store, Authors: r.store, Tags: r.tags}, book); err != nil {
+		g.Decision, g.Reason, g.Error = icDecisionSkip, applygate.ReasonOwnerManualCheckFailed, "owner-manual check: "+err.Error()
+		return g, nil
+	} else if held {
+		return skipped(g, applygate.ReasonOwnerManualOnly), nil
 	}
 	copies, strong, err := r.libraryCopies(book, gid)
 	if err != nil {
@@ -703,9 +712,6 @@ func (r *icRunner) plan(ctx context.Context, gid string) (icGroupReport, *icPlan
 	for _, f := range all {
 		if f.Missing {
 			return skipped(g, "has_missing_rows"), nil
-		}
-		if applygate.IsOwnerManualOnly(f.FilePath, "") {
-			return skipped(g, "owner_manual_only"), nil
 		}
 		active = append(active, f)
 		switch {

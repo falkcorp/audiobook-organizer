@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/store_slices.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 8d3b6f14-2a97-4e51-b0c8-5f7e91d24a63
-// last-edited: 2026-10-01
+// last-edited: 2026-10-05
 
 package maintenance
 
@@ -172,9 +172,12 @@ type itunesExternalIDReassigner interface {
 type itunesRegroupStore interface {
 	regroupBookReader
 	// The apply-time recheck (regroupRecheck) re-reads a target's version
-	// group and its series name.
+	// group, and runs the whole-book owner-manual check, which reads the
+	// series row, the author credits and the tags.
 	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
 	GetSeriesByID(id int) (*database.Series, error)
+	database.BookAuthorReader
+	GetBookTagsDetailed(bookID string) ([]database.BookTag, error)
 	regroupBookMutator
 	regroupFileMover
 	itunesBookCreator

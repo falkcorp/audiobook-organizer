@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_path_link.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 4a1b9de2-6c07-4f35-8b1a-9d2e5c7f0a63
 // last-edited: 2026-10-05
 
@@ -672,9 +672,15 @@ func (idx *authorPathLinkIndex) looksCombined(name string) bool {
 	})
 }
 
-// authorPathLinkClassify decides one book's bucket from the frozen index alone.
-// It performs no store read, so it is safe to call from any worker.
-func authorPathLinkClassify(b *database.BookCore, idx *authorPathLinkIndex) authorPathLinkChange {
+// authorPathLinkClassify decides one book's bucket from the frozen index plus,
+// for a book that reaches the owner-manual check, the whole-book check's
+// reads through mo (applygate.BookManualOnly: files, credits, tags, series).
+// Those reads are the only store reads here and they are per-book and
+// read-only, so it is still safe to call from any worker. Only an author-less
+// book outside the iTunes tree reaches them (~2,500 in prod, not the 70,000
+// that already have an author), and they run inside the classify pass's
+// NumCPU worker pool.
+func authorPathLinkClassify(b *database.BookCore, idx *authorPathLinkIndex, mo applygate.ManualOnlyReaders) authorPathLinkChange {
 	ch := authorPathLinkChange{BookID: b.ID, FilePath: b.FilePath}
 	if b.AuthorID != nil {
 		ch.Outcome = authorPathLinkHasAuthor
@@ -685,7 +691,16 @@ func authorPathLinkClassify(b *database.BookCore, idx *authorPathLinkIndex) auth
 		ch.Outcome = authorPathLinkITunesHandsOff
 		return ch
 	}
-	if applygate.BookRowManualOnly(b, "") {
+	// The whole-book check, not the row alone: a Big Finish book filed under a
+	// neutral folder whose only signal is a file's path or transcribed title, an
+	// author credit or a franchise: tag is still the owner's to apply by hand.
+	// A read failure fails the book closed (nothing written), as failed, not
+	// as owner_manual_only.
+	full := b.ToBook()
+	if held, _, err := applygate.BookManualOnly(mo, &full); err != nil {
+		ch.Outcome, ch.Error = authorPathLinkFailed, "owner-manual check: "+err.Error()
+		return ch
+	} else if held {
 		ch.Outcome = authorPathLinkOwnerManual
 		return ch
 	}
@@ -868,9 +883,12 @@ func (p *Plugin) authorPathLink(ctx context.Context, params authorPathLinkParams
 	// is exactly the fuzzy-compare-over-a-whole-library shape CLAUDE.md names.
 	// The frozen index is read-only from here on, so workers share it without a
 	// lock; only record() needs one.
+	// The owner-manual check's readers. Tags come from their own accessor:
+	// OpsStore does not carry them.
+	mo := applygate.ManualOnlyReaders{Files: store, Series: store, Authors: store, Tags: p.deps.BookTagReader()}
 	var actionable []authorPathLinkChange
 	classifyErr := registry.RunItems(ctx, reporter, scoped, func(_ context.Context, b database.BookCore) error {
-		ch := authorPathLinkClassify(&b, idx)
+		ch := authorPathLinkClassify(&b, idx, mo)
 		if ch.Outcome == authorPathLinkWouldLink || (ch.Outcome == authorPathLinkWouldCreate && createMissing) {
 			mu.Lock()
 			actionable = append(actionable, ch)

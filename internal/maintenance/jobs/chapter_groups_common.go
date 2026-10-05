@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/chapter_groups_common.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: c619d4b3-ba60-4e76-b0ea-a5ff309d39f7
-// last-edited: 2026-09-20
+// last-edited: 2026-10-05
 
 package jobs
 
@@ -172,9 +172,34 @@ type chapterGroupsResult struct {
 	Groups                       []chapterGroupOutcome `json:"groups"`
 }
 
+// jobsBookManualOnly runs the whole-book owner-manual check
+// (applygate.BookManualOnly) over books in order and returns what held the
+// first held one ("" = none). A read failure is returned as an error: the
+// caller must leave the books alone without counting them as owner-manual.
+func jobsBookManualOnly(store maintenance.JobStore, books ...*database.Book) (string, error) {
+	r := applygate.ManualOnlyReaders{Files: store, Series: store, Authors: store, Tags: store}
+	for _, b := range books {
+		if b == nil {
+			continue
+		}
+		held, detail, err := applygate.BookManualOnly(r, b)
+		if err != nil {
+			return "", fmt.Errorf("book %s: %w", b.ID, err)
+		}
+		if held {
+			return "book " + b.ID + ": " + detail, nil
+		}
+	}
+	return "", nil
+}
+
 // chapterExcluder returns the detection Exclude hook: the owner's manual-only
 // libraries (Doctor Who / Big Finish / Torchwood), never bulk-applied and so
-// not even reported.
+// not even reported. It reads the path alone because detection walks the
+// whole library with no store; it is a cheap pre-filter, NOT the decision.
+// merge-chapter-groups runs the whole-book check (jobsBookManualOnly) on
+// every member of a group before it previews or merges it, and
+// repoint-version-primary on both sides of a pair.
 func chapterExcluder() func(*database.BookCore) bool {
 	return func(b *database.BookCore) bool { return applygate.IsOwnerManualOnly(b.FilePath, "") }
 }

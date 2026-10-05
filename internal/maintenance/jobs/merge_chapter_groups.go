@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/merge_chapter_groups.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: a1000020-0000-0000-0000-000000000020
-// last-edited: 2026-09-20
+// last-edited: 2026-10-05
 
 package jobs
 
@@ -173,9 +173,16 @@ func (j *mergeChapterGroupsJob) preview(ctx context.Context, store maintenance.J
 			out.Fingerprint = chapterFingerprint(st.members)
 			out.PrimaryTitle = st.books[0].Title
 			_, out.TitleAction = chapterTitleDecision(st.books[0], out.CommonTitle)
+			manual, merr := jobsBookManualOnly(store, st.books...)
 			if gerr := merge.GuardITunesProtected(store, out.BookIDs); gerr != nil {
 				out.Status = "would_skip"
 				out.Errors = append(out.Errors, gerr.Error())
+			} else if merr != nil {
+				out.Status = "would_skip"
+				out.Errors = append(out.Errors, "owner-manual check could not be done: "+merr.Error())
+			} else if manual != "" {
+				out.Status = "blocked"
+				out.Blockers = append(out.Blockers, chapterManualOnlyBlocker(manual))
 			} else if out.Blockers, out.MetadataFills = cc.chapterGroupBlockers(st.books[0], st.books[1:]); len(out.Blockers) > 0 {
 				out.Status = "blocked"
 			} else if out.Blockers = chapterFileCountBlockers(st); len(out.Blockers) > 0 {
@@ -365,6 +372,12 @@ func verifyChapterSelection(store maintenance.JobStore, lister chapterDirLister,
 	return scanner.ChapterGroup{}, fmt.Sprintf("selection_mismatch: the selected books are not exactly one detected group of their folder (the folder now has %d mergeable and %d blocked group(s)); preview again", len(det.Groups), len(det.Blocked)), "selection_mismatch"
 }
 
+// chapterManualOnlyBlocker is the blocker a group with an owner-manual member
+// carries (jobsBookManualOnly's detail).
+func chapterManualOnlyBlocker(detail string) string {
+	return "owner-manual-only (Doctor Who / Big Finish / Torchwood; the owner merges these by hand): " + detail
+}
+
 func (j *mergeChapterGroupsJob) applyOne(store maintenance.JobStore, lister chapterDirLister, ds dedup.Store, cc *chapterCarryContext, opID string, opts scanner.ChapterDetectOptions, claimed map[string]bool, sel chapterGroupSelection, out *chapterGroupOutcome) {
 	if len(sel.BookIDs) < 2 || sel.PrimaryBookID == "" || sel.BookIDs[0] != sel.PrimaryBookID || sel.Fingerprint == "" {
 		out.Status = "failed"
@@ -389,6 +402,19 @@ func (j *mergeChapterGroupsJob) applyOne(store maintenance.JobStore, lister chap
 	}
 	out.Members = st.members
 	out.PrimaryTitle = st.books[0].Title
+	// The whole-book owner-manual check on every member. Detection's Exclude
+	// hook (re-run by verifyChapterSelection) reads the path alone, so a Big
+	// Finish chapter whose only signal is a credit, a tag or a file's
+	// transcribed title would otherwise be merged.
+	if manual, merr := jobsBookManualOnly(store, st.books...); merr != nil {
+		out.Status = "failed"
+		out.Errors = append(out.Errors, "owner-manual check could not be done: "+merr.Error())
+		return
+	} else if manual != "" {
+		out.Status = "blocked"
+		out.Blockers = append(out.Blockers, chapterManualOnlyBlocker(manual))
+		return
+	}
 	g, why, status := verifyChapterSelection(store, lister, sel, st, opts)
 	if why != "" {
 		out.Status = status

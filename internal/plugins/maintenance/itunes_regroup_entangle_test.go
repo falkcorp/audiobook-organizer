@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_regroup_entangle_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 9743f8e7-3f4d-43c2-976c-eb2ff7c3e4cc
-// last-edited: 2026-10-02
+// last-edited: 2026-10-05
 
 package maintenance
 
@@ -19,6 +19,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/franchise"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
@@ -30,6 +31,29 @@ type regroupFakeReader struct {
 	books  []database.Book
 	files  []database.BookFileCore
 	series []database.Series
+	// tags, links and authors back the owner-manual check's tag and
+	// author-credit reads (nil: none).
+	tags    map[string][]string
+	links   map[string][]database.BookAuthor
+	authors map[int]*database.Author
+}
+
+func (r *regroupFakeReader) GetBookTagsByBookIDs(ids []string) (map[string][]string, error) {
+	out := map[string][]string{}
+	for _, id := range ids {
+		if t := r.tags[id]; len(t) > 0 {
+			out[id] = t
+		}
+	}
+	return out, nil
+}
+
+func (r *regroupFakeReader) GetBookAuthors(bookID string) ([]database.BookAuthor, error) {
+	return r.links[bookID], nil
+}
+
+func (r *regroupFakeReader) GetAuthorByID(id int) (*database.Author, error) {
+	return r.authors[id], nil
 }
 
 func (r *regroupFakeReader) GetAllSeries() ([]database.Series, error) {
@@ -655,16 +679,54 @@ func TestITunesRegroupManualOnlySkipped(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			r := &regroupFakeReader{books: tc.books, files: tc.files, series: tc.series}
-			_, plan := rgPlan(t, r, []itunesservice.HealGroup{{Title: tc.title, PIDs: []string{"p1", "p2"}}})
-			a := plan.Groups[0]
-			if !a.ManualOnly || a.Target != "" || len(a.Moves) != 0 || a.FreshBook {
-				t.Fatalf("action = %+v, want manual-only skip with no target or moves", a)
-			}
-			if plan.ManualOnlySkipped != 1 || plan.Consolidated != 0 || plan.AlreadyCorrect != 0 || len(plan.DeleteBooks) != 0 {
-				t.Fatalf("manual-only=%d consolidated=%d already-correct=%d deletes=%v, want 1/0/0/none",
-					plan.ManualOnlySkipped, plan.Consolidated, plan.AlreadyCorrect, plan.DeleteBooks)
-			}
+			rgAssertManualOnlySkip(t, r, tc.title)
 		})
+	}
+}
+
+// The owner-manual signal is on what the book ROW does not carry -- a file's
+// transcribed title, an author credit, a franchise: tag -- and title, path,
+// series, narrator and publisher are all clean. The row-only check
+// (applygate.BookRowManualOnly) let each of these through; the whole-book
+// check holds them (owner decision 2026-10-05).
+func TestITunesRegroupManualOnlySkipped_SignalOffTheRow(t *testing.T) {
+	dw := "Doctor Who: The Chimes of Midnight"
+	transcribed := rgFile("f1", "F1", "p1")
+	transcribed.TranscribedTitle = &dw
+	books := func() []database.Book { return []database.Book{rgBook("F1", "", nil), rgBook("F2", "", nil)} }
+	cases := []struct {
+		name string
+		r    *regroupFakeReader
+	}{
+		{"file transcribed title", &regroupFakeReader{books: books(),
+			files: []database.BookFileCore{transcribed, rgFile("f2", "F2", "p2")}}},
+		{"author credit", &regroupFakeReader{books: books(),
+			files:   []database.BookFileCore{rgFile("f1", "F1", "p1"), rgFile("f2", "F2", "p2")},
+			links:   map[string][]database.BookAuthor{"F1": {{BookID: "F1", AuthorID: 9}}},
+			authors: map[int]*database.Author{9: {ID: 9, Name: "Big Finish Productions"}}}},
+		{"franchise tag", &regroupFakeReader{books: books(),
+			files: []database.BookFileCore{rgFile("f1", "F1", "p1"), rgFile("f2", "F2", "p2")},
+			tags:  map[string][]string{"F2": franchise.Tags(franchise.BigFinish, "")}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rgAssertManualOnlySkip(t, tc.r, "Some Album")
+		})
+	}
+}
+
+// rgAssertManualOnlySkip plans one two-PID heal group over r and asserts it
+// is skipped as owner-manual-only with no target, moves or deletes.
+func rgAssertManualOnlySkip(t *testing.T, r *regroupFakeReader, title string) {
+	t.Helper()
+	_, plan := rgPlan(t, r, []itunesservice.HealGroup{{Title: title, PIDs: []string{"p1", "p2"}}})
+	a := plan.Groups[0]
+	if !a.ManualOnly || a.Target != "" || len(a.Moves) != 0 || a.FreshBook {
+		t.Fatalf("action = %+v, want manual-only skip with no target or moves", a)
+	}
+	if plan.ManualOnlySkipped != 1 || plan.Consolidated != 0 || plan.AlreadyCorrect != 0 || len(plan.DeleteBooks) != 0 {
+		t.Fatalf("manual-only=%d consolidated=%d already-correct=%d deletes=%v, want 1/0/0/none",
+			plan.ManualOnlySkipped, plan.Consolidated, plan.AlreadyCorrect, plan.DeleteBooks)
 	}
 }
 
@@ -705,6 +767,21 @@ func TestITunesRegroupApply_RecheckSkipsChangedGroup(t *testing.T) {
 				return nil
 			}); err != nil {
 				t.Fatalf("ModifyBook: %v", err)
+			}
+		}, itunesservice.ReasonOwnerManualOnly},
+		// Off-the-row signals the row-only check could not see.
+		{"source tagged Big Finish", func(t *testing.T, s *database.PebbleStore, frag, _ string) {
+			if err := s.AddBookTag(frag, franchise.Tags(franchise.BigFinish, "")[0]); err != nil {
+				t.Fatalf("AddBookTag: %v", err)
+			}
+		}, itunesservice.ReasonOwnerManualOnly},
+		{"source credited to Big Finish", func(t *testing.T, s *database.PebbleStore, frag, _ string) {
+			a, err := s.CreateAuthor("Big Finish Productions")
+			if err != nil || a == nil {
+				t.Fatalf("CreateAuthor: %v", err)
+			}
+			if err := s.SetBookAuthors(frag, []database.BookAuthor{{BookID: frag, AuthorID: a.ID}}); err != nil {
+				t.Fatalf("SetBookAuthors: %v", err)
 			}
 		}, itunesservice.ReasonOwnerManualOnly},
 	}

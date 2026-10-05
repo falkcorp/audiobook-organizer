@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.72.0
+// version: 1.73.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-10-05
 
@@ -543,6 +543,10 @@ type DedupVerdictReader interface {
 type BookTagReader interface {
 	GetBookTagsDetailed(bookID string) ([]database.BookTag, error)
 	GetBookUserTags(bookID string) ([]string, error)
+	// GetBookTagsByBookIDs is the bulk read itunes.regroup's snapshot uses
+	// for the owner-manual check over every live book (one call, not one
+	// per book).
+	GetBookTagsByBookIDs(bookIDs []string) (map[string][]string, error)
 }
 
 // VersionPrimaryStore is what version-group-primary-repair needs beyond

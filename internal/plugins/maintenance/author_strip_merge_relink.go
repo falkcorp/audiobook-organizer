@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/author_strip_merge_relink.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 771dc90a-8f91-40e6-93bc-60611ebe58b5
-// last-edited: 2026-09-26
+// last-edited: 2026-10-05
 
 package maintenance
 
@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/falkcorp/audiobook-organizer/internal/applygate"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/metastate"
@@ -331,7 +332,11 @@ type titleRelinkResult struct {
 // relinks (decided, and with write set, written) at the first limit books in
 // junk-row-ID then book-ID order, so a limited preview lists exactly the
 // prefix a limited apply writes; the rest are reported as deferred.
-func relinkTitleAsAuthorBooks(ctx context.Context, store titleRelinkStore, creator *authorPathLinkCreator, junkRows []database.Author, idx *titleRelinkIndex, write bool, limit int, opID string, log *slog.Logger) (titleRelinkResult, error) {
+//
+// mo is the whole-book owner-manual check's readers (series, credits, tags);
+// each book's Files reader is replaced by the rows relinkOneTitleBook already
+// read.
+func relinkTitleAsAuthorBooks(ctx context.Context, store titleRelinkStore, mo applygate.ManualOnlyReaders, creator *authorPathLinkCreator, junkRows []database.Author, idx *titleRelinkIndex, write bool, limit int, opID string, log *slog.Logger) (titleRelinkResult, error) {
 	res := titleRelinkResult{AllRelinked: map[int]bool{}, RelinkedBooks: map[string]bool{}}
 	journal := &titleRelinkJournal{store: store, opID: opID}
 	defer func() { res.JournalRows = journal.rows }()
@@ -359,7 +364,7 @@ func relinkTitleAsAuthorBooks(ctx context.Context, store titleRelinkStore, creat
 			if over {
 				bookWrite = false
 			}
-			r := relinkOneTitleBook(store, creator, journal, books[i], junk, idx, bookWrite, !over, log)
+			r := relinkOneTitleBook(store, mo, creator, journal, books[i], junk, idx, bookWrite, !over, log)
 			if r.Outcome == titleRelinkOutcomeRelink {
 				if over {
 					r.Outcome = titleRelinkOutcomeDeferred
@@ -384,7 +389,7 @@ func relinkTitleAsAuthorBooks(ctx context.Context, store titleRelinkStore, creat
 
 // write performs the relink; allowCreate lets the creator mint (or, in a
 // preview, count) a missing author row. A book past the limit has neither.
-func relinkOneTitleBook(store titleRelinkStore, creator *authorPathLinkCreator, journal *titleRelinkJournal, book database.BookCore, junk database.Author, idx *titleRelinkIndex, write, allowCreate bool, log *slog.Logger) titleAuthorRelink {
+func relinkOneTitleBook(store titleRelinkStore, mo applygate.ManualOnlyReaders, creator *authorPathLinkCreator, journal *titleRelinkJournal, book database.BookCore, junk database.Author, idx *titleRelinkIndex, write, allowCreate bool, log *slog.Logger) titleAuthorRelink {
 	r := titleAuthorRelink{BookID: book.ID, Title: book.Title, Junk: junk}
 	defer func() {
 		log.Info("author-strip-merge relink",
@@ -401,10 +406,6 @@ func relinkOneTitleBook(store titleRelinkStore, creator *authorPathLinkCreator, 
 		log.Warn("author-strip-merge relink: GetBookFiles failed", "book_id", book.ID, "err", err)
 		return r
 	}
-	seriesName := ""
-	if book.SeriesID != nil {
-		seriesName = idx.seriesByID[*book.SeriesID].Name
-	}
 	// book.file_path can be stale, so the file rows are checked too.
 	paths := []string{book.FilePath}
 	for i := range files {
@@ -416,15 +417,19 @@ func relinkOneTitleBook(store titleRelinkStore, creator *authorPathLinkCreator, 
 			return r
 		}
 	}
-	if junkTitleOwnerManual(book.FilePath, book.Title, seriesName) {
+	// The whole-book owner-manual check (owner decision 2026-10-05): the row
+	// and every file path as before, plus the series row, the author
+	// credits, the franchise: tags and the files' transcribed fields. A read
+	// failure fails the book (nothing written), not owner-manual.
+	mo.Files = manualOnlyFilesByBook{book.ID: files}
+	full := book.ToBook()
+	if held, _, err := applygate.BookManualOnly(mo, &full); err != nil {
+		r.Outcome = titleRelinkOutcomeFailed
+		log.Warn("author-strip-merge relink: owner-manual check failed", "book_id", book.ID, "err", err)
+		return r
+	} else if held {
 		r.Outcome = titleRelinkOutcomeOwnerManual
 		return r
-	}
-	for _, p := range paths {
-		if junkTitleOwnerManual(p, "", "") {
-			r.Outcome = titleRelinkOutcomeOwnerManual
-			return r
-		}
 	}
 
 	states, err := store.GetMetadataFieldStates(book.ID)
