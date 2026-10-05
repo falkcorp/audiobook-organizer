@@ -1,5 +1,5 @@
 // file: internal/server/authority_evidence_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 4492804b-1186-4576-8833-2d1d7a405363
 // last-edited: 2026-10-05
 
@@ -224,6 +224,14 @@ func (b *lockedBuffer) lines(substr string) []string {
 
 // captureInfoLogs swaps the default slog handler for one writing INFO+ into
 // a locked buffer, restored at cleanup.
+//
+// It swaps slog.Default because there is no other seam: authorityEvidence
+// logs through logger.New("authority"), which writes to slog.Default, and
+// neither internal/logger nor this package has a shared capture helper. The
+// nearest one, captureWarnLogs (vector_backend_warn_test.go), captures WARN
+// only, which loses the Info lines asserted here, and writes to an unlocked
+// bytes.Buffer, which races with the load goroutine under -race. The swap is
+// process-global, so the tests using it must not call t.Parallel.
 func captureInfoLogs(t *testing.T) *lockedBuffer {
 	t.Helper()
 	buf := &lockedBuffer{}

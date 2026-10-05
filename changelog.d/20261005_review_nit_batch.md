@@ -1,0 +1,2 @@
+- `itunes.regroup`: an apply that fails and also skips groups for a failed owner-manual check now reports both in one line, joined with "; ", instead of a two-line error message. Comments and earlier changelog notes no longer call the op "nightly"; it has no schedule and runs only when started.
+- `authorcredit`: removed an unreachable case from the nil-Lookup check and corrected its doc comment. No behaviour change.

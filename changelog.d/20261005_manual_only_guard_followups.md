@@ -1,7 +1,7 @@
 ### Fixed
 
 - **Owner-manual guard follow-ups (review of #3754).**
-  - `itunes.regroup` no longer aborts the whole nightly run when one book's
+  - `itunes.regroup` no longer aborts the whole run when one book's
     owner-manual read fails. The book is marked "check failed" and only the
     groups holding it are skipped (`manual-check-failed-skipped` in the plan
     summary). An apply then ends with an error naming the count.

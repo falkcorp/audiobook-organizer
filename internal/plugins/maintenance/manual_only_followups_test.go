@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/manual_only_followups_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 414c97a5-21fa-425f-81df-a00e9bf95fd6
 // last-edited: 2026-10-05
 
@@ -304,10 +304,76 @@ func TestITunesRegroup_CheckFailedStatus(t *testing.T) {
 						require.NoError(t, err)
 						require.Len(t, files, 1, "book %s keeps its file", id)
 					}
+				} else {
+					// The check-failed book is in no group, so F is
+					// consolidated exactly like G: both files on one book.
+					onF, filesF := 0, 0
+					for _, id := range []string{f1, f2} {
+						files, err := s.GetBookFiles(id)
+						require.NoError(t, err)
+						if len(files) > 0 {
+							onF++
+						}
+						filesF += len(files)
+					}
+					require.Equal(t, 1, onF, "group F must be consolidated onto one book")
+					require.Equal(t, 2, filesF, "group F keeps both its files")
 				}
 			})
 		}
 	}
+}
+
+// An apply that fails AND skips a check-failed group ends with one
+// single-line error naming both (errors.Join would put a newline in the op's
+// error_message). The apply failure is injected at the aggregates recompute
+// of group G's target, after its files moved.
+func TestITunesRegroup_ApplyErrorWithSkippedGroup(t *testing.T) {
+	prevRoot := config.AppConfig.RootDir
+	config.AppConfig.RootDir = rgRoot
+	t.Cleanup(func() { config.AppConfig.RootDir = prevRoot })
+	xmlPath := filepath.Join(t.TempDir(), "lib.xml")
+	require.NoError(t, os.WriteFile(xmlPath, []byte(rgStatusXML()), 0o600))
+
+	s := regroupStore(t)
+	f1, f2 := seedBook(t, s, "Frag F1"), seedBook(t, s, "Frag F2")
+	g1, g2 := seedBook(t, s, "Frag G1"), seedBook(t, s, "Frag G2")
+	seedFilePID(t, s, f1, rgPIDF1)
+	seedFilePID(t, s, f2, rgPIDF2)
+	seedFilePID(t, s, g1, rgPIDG1)
+	seedFilePID(t, s, g2, rgPIDG2)
+
+	raw, err := json.Marshal(map[string]any{"xmlPath": xmlPath, "dry_run": false})
+	require.NoError(t, err)
+	p := New(fakeDeps{store: rgRecomputeFailStore{rgLinkFailStore{s, f1}}})
+	runErr := p.runITunesRegroup(context.Background(), raw, &fakeReporter{})
+
+	require.Error(t, runErr)
+	msg := runErr.Error()
+	require.NotContains(t, msg, "\n", "the error_message must be one line: %q", msg)
+	require.Contains(t, msg, "1 errors during itunes-regroup", "the apply failure is named")
+	require.Contains(t, msg, "owner-manual check failed for a book in 1 group(s); those groups skipped",
+		"the skipped group is named")
+	require.Contains(t, msg, "(see op log); itunes.regroup:", "the two parts are joined with \"; \"")
+}
+
+// rgRecomputeFailStore fails every RecomputeBookAggregates, on top of
+// rgLinkFailStore's one failed owner-manual read.
+type rgRecomputeFailStore struct {
+	rgLinkFailStore
+}
+
+func (rgRecomputeFailStore) RecomputeBookAggregates(string) error {
+	return errors.New("simulated recompute failure")
+}
+
+func TestJoinRegroupErrs(t *testing.T) {
+	applyErr, checkErr := errors.New("apply"), errors.New("check")
+	require.Same(t, applyErr, joinRegroupErrs(applyErr, nil))
+	joined := joinRegroupErrs(applyErr, checkErr)
+	require.Equal(t, "apply; check", joined.Error())
+	require.ErrorIs(t, joined, applyErr)
+	require.ErrorIs(t, joined, checkErr)
 }
 
 // --- itunes.regroup: snapshot memory ---
