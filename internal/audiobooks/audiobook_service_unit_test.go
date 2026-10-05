@@ -1,7 +1,7 @@
 // file: internal/audiobooks/audiobook_service_unit_test.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-10-02
+// last-edited: 2026-10-05
 
 package audiobooks
 
@@ -471,12 +471,15 @@ func TestAudiobookService_RestoreAudiobook_Success(t *testing.T) {
 	prevRoot := config.AppConfig.RootDir
 	config.AppConfig.RootDir = "/lib"
 	t.Cleanup(func() { config.AppConfig.RootDir = prevRoot })
-	// Four reads, in order: versionprimary.LockBookGroups' first read (to
+	// Five reads, in order: merge.RestoreFromTrash's read before the locks
+	// (to find a group a merge emptied, which it would lock too; this row
+	// has no group, so nothing more is read); versionprimary.LockBookGroups' first read (to
 	// learn the row's version group, here the no-group sentinel) and its
 	// re-read once the locks are held (to prove the row did not move); the
 	// restore's own read under the locks; and the re-read after the primary
 	// hand-off to decide the merge redirect, which returns what was written.
 	var written *database.Book
+	mockStore.EXPECT().GetBookByID("r-1").Return(deleted, nil).Once() // restore: redirect check before the locks
 	mockStore.EXPECT().GetBookByID("r-1").Return(deleted, nil).Once() // lock: first read
 	mockStore.EXPECT().GetBookByID("r-1").Return(deleted, nil).Once() // lock: re-read under the locks
 	mockStore.EXPECT().GetBookByID("r-1").Return(deleted, nil).Once() // restore: read under the locks
