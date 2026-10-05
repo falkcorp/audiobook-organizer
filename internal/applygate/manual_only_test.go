@@ -1,11 +1,16 @@
 // file: internal/applygate/manual_only_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: ed721904-7696-436b-95ae-8ef5a85c91aa
-// last-edited: 2026-09-29
+// last-edited: 2026-10-04
 
 package applygate
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"github.com/falkcorp/audiobook-organizer/internal/database"
+)
 
 func TestIsOwnerManualOnly(t *testing.T) {
 	yes := [][2]string{
@@ -95,5 +100,70 @@ func TestIsOwnerManualOnly_DrWhoAndSpinOffs(t *testing.T) {
 		if IsOwnerManualOnly("", s) || IsOwnerManualOnly(s, "") {
 			t.Errorf("IsOwnerManualOnly(%q) = true, want false", s)
 		}
+	}
+}
+
+// guardFiles and guardSeries are the store reads BulkManualOnlyGuard makes.
+type guardFiles []database.BookFile
+
+func (g guardFiles) GetBookFiles(string) ([]database.BookFile, error) { return g, nil }
+
+type guardSeries string
+
+func (g guardSeries) GetSeriesByID(int) (*database.Series, error) {
+	return &database.Series{Name: string(g)}, nil
+}
+
+// Each of BulkManualOnlyGuard's legs, alone: every other input is neutral, so
+// removing that leg's check fails its case. wantDetail names the leg.
+func TestBulkManualOnlyGuard_EachLegAlone(t *testing.T) {
+	const neutralPath = "/library/Unknown Author/Unknown Title/book.m4b"
+	dw := "Doctor Who: Spare Parts"
+	seriesID := 7
+	cases := []struct {
+		name       string
+		query      string
+		book       database.Book
+		files      guardFiles
+		series     guardSeries
+		wantDetail string // "" = not refused
+	}{
+		{name: "nothing names it", book: database.Book{ID: "b1", FilePath: neutralPath},
+			files: guardFiles{{FilePath: neutralPath}}},
+		{name: "search query", query: dw, book: database.Book{ID: "b1", FilePath: neutralPath},
+			files: guardFiles{{FilePath: neutralPath}}, wantDetail: `search query "Doctor Who: Spare Parts"`},
+		{name: "book transcribed title", book: database.Book{ID: "b1", FilePath: neutralPath, TranscribedTitle: &dw},
+			files: guardFiles{{FilePath: neutralPath}}, wantDetail: `; transcribed title "Doctor Who: Spare Parts"`},
+		{name: "book transcribed author", book: database.Book{ID: "b1", FilePath: neutralPath, TranscribedAuthor: strp("Big Finish Productions")},
+			files: guardFiles{{FilePath: neutralPath}}, wantDetail: `; transcribed author "Big Finish Productions"`},
+		{name: "series", book: database.Book{ID: "b1", FilePath: neutralPath, SeriesID: &seriesID}, series: "Doctor Who: The Monthly Adventures",
+			files: guardFiles{{FilePath: neutralPath}}, wantDetail: `series "Doctor Who: The Monthly Adventures"`},
+		{name: "file path", book: database.Book{ID: "b1", FilePath: neutralPath},
+			files: guardFiles{{FilePath: "/library/Doctor Who/Spare Parts/01.mp3"}}, wantDetail: `file "/library/Doctor Who/Spare Parts/01.mp3"`},
+		{name: "file transcribed title", book: database.Book{ID: "b1", FilePath: neutralPath},
+			files: guardFiles{{FilePath: neutralPath, TranscribedTitle: &dw}}, wantDetail: `file transcribed title "Doctor Who: Spare Parts"`},
+		{name: "file transcribed author", book: database.Book{ID: "b1", FilePath: neutralPath},
+			files: guardFiles{{FilePath: neutralPath, TranscribedAuthor: strp("Big Finish Productions")}}, wantDetail: `file transcribed author "Big Finish Productions"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			series := tc.series
+			if series == "" {
+				series = "Discworld"
+			}
+			g := BulkManualOnlyGuard(tc.files, series, &tc.book, tc.query)
+			if g.ReadErr != "" {
+				t.Fatalf("read error %q", g.ReadErr)
+			}
+			if tc.wantDetail == "" {
+				if g.StoreDetail != "" {
+					t.Fatalf("held a book nothing names: %q", g.StoreDetail)
+				}
+				return
+			}
+			if !strings.Contains(g.StoreDetail, tc.wantDetail) {
+				t.Fatalf("detail %q does not name %q", g.StoreDetail, tc.wantDetail)
+			}
+		})
 	}
 }

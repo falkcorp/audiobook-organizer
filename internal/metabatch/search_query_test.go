@@ -1,5 +1,5 @@
 // file: internal/metabatch/search_query_test.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: f94991be-ebe4-4d6d-8f4e-922b68a3dda0
 // last-edited: 2026-10-04
 
@@ -878,13 +878,49 @@ func TestImportRootsCache_WaiterTimeoutWarns(t *testing.T) {
 	for reads.Load() == 0 {
 		time.Sleep(time.Millisecond)
 	}
-	waitBefore, readBefore := importRootWaitLog.failures.Load(), importRootLog.failures.Load()
-	c.set()
+	waitBefore, lateBefore, readBefore := importRootWaitLog.failures.Load(), importRootLateLog.failures.Load(), importRootLog.failures.Load()
+	if got := c.set(); len(got) != 0 {
+		t.Fatalf("got %v while the read was still in flight", got)
+	}
 	if importRootWaitLog.failures.Load() != waitBefore+1 {
-		t.Error("a waiter timeout was not reported")
+		t.Error("a waiter timeout with no list was not reported as such")
+	}
+	if importRootLateLog.failures.Load() != lateBefore {
+		t.Error("a waiter that found no list was reported as using one that arrived")
 	}
 	if importRootLog.failures.Load() != readBefore {
 		t.Error("a waiter timeout was reported as an unreadable list")
+	}
+}
+
+// A waiter that times out but finds a list that landed between its timeout
+// and its re-check uses that list, and says so with its own Warn. The hook
+// lands the read in exactly that gap, so the branch is taken every run.
+func TestImportRootsCache_WaiterTimeoutUsesAListThatArrived(t *testing.T) {
+	prev := importRootsLoadWait
+	importRootsLoadWait = 20 * time.Millisecond
+	t.Cleanup(func() { importRootsLoadWait = prev; importRootsAfterTimeoutHook = nil })
+	var reads atomic.Int32
+	release := make(chan struct{})
+	c := NewImportRootsCache(blockingRoots{release: release, reads: &reads, roots: []string{"/imports/x"}})
+	readerDone := make(chan struct{})
+	go func() { c.set(); close(readerDone) }()
+	for reads.Load() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	importRootsAfterTimeoutHook = func() {
+		close(release) // the read finishes now, after the waiter gave up
+		<-readerDone
+	}
+	waitBefore, lateBefore := importRootWaitLog.failures.Load(), importRootLateLog.failures.Load()
+	if !c.set()["/imports/x"] {
+		t.Fatal("the waiter ignored the list that arrived after its timeout")
+	}
+	if importRootLateLog.failures.Load() != lateBefore+1 {
+		t.Error("a waiter that used a late list did not report it")
+	}
+	if importRootWaitLog.failures.Load() != waitBefore {
+		t.Error("a waiter that used a late list was reported as judging with no roots")
 	}
 }
 
