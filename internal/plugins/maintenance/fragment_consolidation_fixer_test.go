@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer_test.go
-// version: 1.25.0
+// version: 1.25.1
 // guid: 8e2d5b19-6a4c-4f37-b1d8-2c9e7a3f5d60
 // last-edited: 2026-10-04
 
@@ -2636,7 +2636,7 @@ func TestFragmentFixer_NumberedResumeAfterRetitle(t *testing.T) {
 		require.Equal(t, 1, out.Applied, "outcomes %v %+v", out.ByOutcome, out.Rows)
 	})
 
-	for _, org := range []string{"none", "all", "copies"} {
+	for _, org := range fragOrgs(2) {
 		t.Run("copies, cut off after every retire and the retitle, organized="+org, func(t *testing.T) {
 			resumeAfterEveryRetire(t, org)
 		})
@@ -2779,7 +2779,7 @@ func TestFragmentPersonShapedName(t *testing.T) {
 func TestFragmentFixer_NumberedReviewProbes(t *testing.T) {
 	serial := []string{"001 - Arrival", "002 - The Road", "003 - Gear", "004 - Ash", "005 - Night", "006 - Ember", "007 - Coda", "008 - Home"}
 
-	for _, org := range []string{"none", "all", "copies"} {
+	for _, org := range fragOrgs(1) {
 		t.Run("cut off after members and two copies retired, organized="+org, func(t *testing.T) {
 			partialCopiesResume(t, org)
 		})
@@ -2967,8 +2967,11 @@ func discFolderCopies(t *testing.T, organizedCopies int) {
 // retireInto demotes what it retires; without the planned flags Replan kept
 // a different file per chapter and the row was stranded.
 func TestFragmentFixer_NumberedCopiesResumeMidMembers(t *testing.T) {
-	for _, org := range []string{"none", "all", "copies"} {
-		for _, cut := range []int{1, 4, 7} {
+	for oi, org := range []string{"none", "all", "copies"} {
+		for ci, cut := range []int{1, 4, 7} {
+			if oi != ci && !fragSweepFull() {
+				continue // sampled: the diagonal covers every org and every cut
+			}
 			t.Run(fmt.Sprintf("organized=%s cut=%d", org, cut), func(t *testing.T) {
 				f := newFragFixture(t)
 				const dir = "lib/Clarke/02_light_of_other_days"
