@@ -1,5 +1,5 @@
 # file: internal/server/testdata/write_op_modes.golden
-# version: 1.8.0
+# version: 1.9.0
 # guid: 656b77a9-3e50-456c-9945-dbbebbd7e041
 # last-edited: 2026-10-04
 #
@@ -97,6 +97,7 @@ maintenance.author-id-repair	preview
 maintenance.author-path-link	preview
 maintenance.author-split-scan	preview
 maintenance.author-strip-merge	preview
+maintenance.authority-build	preview
 maintenance.auto-match-transcribed	preview
 maintenance.batch-poller	no-mode
 maintenance.book-atpath-index-backfill	no-mode

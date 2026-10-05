@@ -138,6 +138,9 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		p.itunesCloneIntoLibraryDef(),
 
 		// --- author/series ---
+		// authority-build builds the ref_* authority lists (dry run by default;
+		// an apply writes ref_* keys only, never owner overrides).
+		p.authorityBuildDef(),
 		p.authorDedupScanDef(),
 		p.authorSplitScanDef(),
 		// author-title-fragment-scan is REPORT ONLY (read capability, no
