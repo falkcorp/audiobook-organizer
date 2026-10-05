@@ -13,18 +13,17 @@
       ONE author per book and its half-write resume logic recognises a single
       credit only. Decide whether it should credit every part (resume logic and
       dry-run counts need reworking) or keep holding them.
-- [ ] **COMBINED-AUTHOR-SPLITTER-REFUSALS** The shared splitter refuses real
-      two-person credits with a single-word pen name ("Shirtaloon, Travis
-      Deverell", 92 books; "Chugong, Ki Hong Lee"; "Draith, Andrea Emmes") and
-      credits with a "By:" prefix ("By: J. N. Chaney, Rick Partlow"). The
-      combined-credit fixer holds them as `skipped_split_refused`: about 436 books
-      in the offline estimate from the 2026-10-04 census. Owner decision: a
-      reviewed allow-list of pen names, a "By:" strip, or manual splits.
+- [ ] **COMBINED-AUTHOR-TITLE-HOLD-HIDES-PEN-NAMES** The combined-credit fixer
+      holds a record as `skipped_names_a_title` when a live book's title equals
+      the credit string. Prod has junk book titles of that shape ("Shirtaloon,
+      Travis Deverell" is itself a book title), so in the 2026-10-04 offline
+      census 92 of the 93 "Shirtaloon, Travis Deverell" books, 44 "J. N.
+      Chaney, Terry Maggert" and 11 "Robert Jordan, Brandon Sanderson" books
+      are held as titles, not split. Owner decision: exempt a title that is
+      the whole credit when every part is an existing author, or repair the
+      junk titles first.
 - [ ] **COMBINED-AUTHOR-REVIEW-FOLLOWUPS** Follow-ups from the #3717 review,
       deliberately left out of that PR:
-      - "Surname, First" names whose surname has several words ("Le Guin, Ursula
-        K."): `authorcredit` exempts only a one-word surname, so a new author of
-        that shape is now refused as a multi-person credit.
       - Undo of a partly applied combined-credit row: `revertJunkAuthorCredits`
         when the credits were written but the primary was not.
       - Rescans: primary versus position 0, and duplicate series rows.
