@@ -1,7 +1,7 @@
 // file: internal/server/handlers/duplicates/interfaces.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: a04e0263-a6b1-42b9-9791-1b8b649004b5
-// last-edited: 2026-09-13
+// last-edited: 2026-10-05
 
 // Narrow dependency interfaces for the duplicates-domain HTTP handlers
 // (SQL-backed book/author/series duplicate detection, async merge / dismiss /
@@ -65,6 +65,11 @@ type MergeService interface {
 	// the journals newest-first so a caller can find the id to undo.
 	UndoCombine(journalID string) (*merge.CombineUndoResult, error)
 	ListCombineJournals(limit int) ([]merge.CombineJournal, error)
+	// UndoSiblingMove puts back the version-group siblings one merge carried
+	// into its group; ListSiblingMoveJournals lists those journals
+	// newest-first. Every MergeBooks that moves a sibling writes one.
+	UndoSiblingMove(journalID string) (*merge.SiblingUndoResult, error)
+	ListSiblingMoveJournals(limit int) ([]merge.SiblingMoveJournal, error)
 }
 
 // MetadataFetchService is the narrow *metafetch.Service subset used by

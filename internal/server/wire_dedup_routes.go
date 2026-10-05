@@ -1,7 +1,7 @@
 // file: internal/server/wire_dedup_routes.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: b8c9d0e1-f2a3-4567-bcde-890123456789
-// last-edited: 2026-09-25
+// last-edited: 2026-10-05
 
 package server
 
@@ -99,6 +99,10 @@ func (s *Server) wireDedupRoutes(
 	// is journaled; these list the journals and reverse one.
 	protected.GET("/merge/combine-journal", s.perm(auth.PermLibraryView), duplicatesH.ListCombineJournals)
 	protected.POST("/merge/undo/:journal_id", s.perm(auth.PermLibraryEditMetadata), duplicatesH.UndoCombine)
+	// Sibling-move undo: every merge that carries a loser's version siblings
+	// into its group journals the move; these list the journals and reverse one.
+	protected.GET("/merge/sibling-journal", s.perm(auth.PermLibraryView), duplicatesH.ListSiblingMoveJournals)
+	protected.POST("/merge/sibling-undo/:journal_id", s.perm(auth.PermLibraryEditMetadata), duplicatesH.UndoSiblingMove)
 	protected.GET("/series/duplicates", s.perm(auth.PermLibraryView), duplicatesH.ListSeriesDuplicates)
 	protected.POST("/series/duplicates/refresh", s.perm(auth.PermLibraryEditMetadata), duplicatesH.RefreshSeriesDuplicates)
 	protected.POST("/series/deduplicate", s.perm(auth.PermLibraryEditMetadata), duplicatesH.DeduplicateSeriesHandler)
