@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-05-the-chapter-sets-that-became-second-copies-executive-summary.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 947b3d82-2669-4187-8065-4f7e76ee4cf8 -->
 <!-- last-edited: 2026-10-05 -->
 
@@ -34,6 +34,12 @@
   length is a second copy that must be deduplicated first, a same-titled book
   of a different length holds the repair for review, and only an untitled
   stray lets it go ahead.
+- **It never folds into its own mistakes, and checks again at the last
+  moment.** A book the repair itself built is never chosen as the book to fold
+  chapters into while a real copy exists; if it is the only match, the repair
+  waits until that earlier repair is undone. Just before applying, the repair
+  looks for a same-titled book once more, so one added after the plan stops
+  it. Subtitles such as "A Novel" no longer make unrelated books look alike.
 - **Not yet addressed.** The 13 duplicates already made that night are not
   touched by this change; undoing or merging them is a separate decision.
 

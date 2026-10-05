@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer_test.go
-// version: 1.26.2
+// version: 1.27.0
 // guid: 8e2d5b19-6a4c-4f37-b1d8-2c9e7a3f5d60
 // last-edited: 2026-10-05
 
@@ -3961,6 +3961,22 @@ func (f *fragFixture) existingBook(t *testing.T, role, title, dir string, n, dur
 	return id
 }
 
+// chapterFragsAt is chapterFrags with the files' sizes at base+37*i, so they
+// differ from chapterFrags' (7000+i) by no constant: never re-tagged copies.
+func (f *fragFixture) chapterFragsAt(t *testing.T, dir, name string, n, dur, base int) []string {
+	t.Helper()
+	var ids []string
+	for i := 1; i <= n; i++ {
+		stem := fmt.Sprintf("%s %02d", name, i)
+		p := f.file(t, filepath.Join(dir, stem+".mp3"), base+37*i)
+		id := f.book(t, dir+stem, stem, p, nil)
+		f.row(t, dir+stem, id, p, stem+".mp3", int64(base+37*i), dur, 0)
+		f.organized(t, id)
+		ids = append(ids, id)
+	}
+	return ids
+}
+
 // chapterFrags imports n chapter files "<name> 0i" from dir, each its own
 // organized book of dur seconds.
 func (f *fragFixture) chapterFrags(t *testing.T, dir, name string, n, dur int) []string {
@@ -4449,4 +4465,166 @@ func TestFragmentFixer_NoSilentDrops(t *testing.T) {
 	require.Equal(t, fragSkipNoChapterKey, r.Skipped)
 	require.Equal(t, fragClassUnplaced, r.Class)
 	require.Equal(t, 4, res.ByClass[fragClassUnplaced])
+}
+
+// TestFragTitleKeyGenericSubtitle (S1): a genre or edition subtitle never
+// becomes the key; the work is the part before it.
+func TestFragTitleKeyGenericSubtitle(t *testing.T) {
+	id := fragTitleIdentity
+	for _, tc := range [][2]string{
+		{"Origin: A Novel", "Origin"},
+		{"Awaken Online: A LitRPG Adventure", "Awaken Online"},
+		{"The Martian - A Novel", "The Martian"},
+		{"Gone Girl: A Thriller", "Gone Girl (Unabridged)"},
+	} {
+		require.NotEmpty(t, id(tc[0]).key, tc[0])
+		require.True(t, id(tc[0]).sameWork(id(tc[1])), "%q and %q are one work", tc[0], tc[1])
+	}
+	for _, tc := range [][2]string{
+		{"Fahrenheit 451: A Novel", "1984: A Novel"},
+		{"Ready Player One: A Novel", "Ready Player Two: A Novel"},
+		{"Gone Girl: A Thriller", "Sharp Objects: A Thriller"},
+	} {
+		require.False(t, id(tc[0]).sameWork(id(tc[1])), "%q and %q are different works", tc[0], tc[1])
+	}
+	require.NotEqual(t, "anovel", id("Fahrenheit 451: A Novel").key)
+	require.NotEqual(t, "anovel", id("1984: A Novel").key)
+}
+
+// TestFragmentFixer_JoinTargetRanking (S3): a book this fixer assembled is
+// never the join target while one it did not assemble agrees, and when it is
+// the only one that agrees the row is held ("revert first, then plan").
+func TestFragmentFixer_JoinTargetRanking(t *testing.T) {
+	// assemble runs a no-parent apply of three "Eldest" chapters in a folder
+	// named "Eldest": its survivor is a 3-file book titled "Eldest" that the
+	// journal's plan record marks as this fixer's product.
+	assemble := func(t *testing.T, f *fragFixture) string {
+		dir := "lib/Christopher Paolini/Eldest"
+		frags := f.chapterFrags(t, dir, "Eldest", 3, 600)
+		cp := f.authorID(t, "Christopher Paolini")
+		for _, id := range frags {
+			f.setAuthor(t, id, cp)
+		}
+		r := findRow(t, f.plan(t, "op-plan-a"), noParentRowID(f.path(dir), "eldest"))
+		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+		out := f.apply(t, "op-plan-a", "op-apply-a", []string{r.RowID}, nil)
+		require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+		return r.Proposed["survivor"]
+	}
+	const dir = "lib/Christopher Paolini/Book 2 - Eldest"
+	t.Run("a book it did not assemble wins", func(t *testing.T) {
+		f := newFragFixture(t)
+		assembled := assemble(t, f)
+		real := f.existingBook(t, "real", "Eldest", "lib/Shelf/Eldest", 2, 900)
+		// Other sizes than the assembled book's chapters: not re-tagged copies.
+		f.chapterFragsAt(t, dir, "Eldest", 3, 600, 8000)
+		r := findRow(t, f.plan(t, "op-plan"), existingRowID(f.path(dir), "eldest"))
+		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+		require.Equal(t, real, r.Proposed["join"], "not the assembled %s, though it has more files", assembled)
+	})
+	t.Run("only the assembled book agrees: held", func(t *testing.T) {
+		f := newFragFixture(t)
+		assembled := assemble(t, f)
+		f.chapterFragsAt(t, dir, "Eldest", 3, 600, 8000)
+		res := f.plan(t, "op-plan")
+		r := findRow(t, res, existingRowID(f.path(dir), "eldest"))
+		require.Equal(t, fragSkipExistingBook, r.Skipped)
+		require.Contains(t, r.SkipReason, assembled)
+		require.Contains(t, r.SkipReason, "revert that apply first")
+		require.Zero(t, res.Applicable)
+	})
+}
+
+// TestFragmentFixer_ExistingBookAtApply (S4): a book of the group's title
+// created between the plan and the apply refuses the plain no-parent row.
+func TestFragmentFixer_ExistingBookAtApply(t *testing.T) {
+	f := newFragFixture(t)
+	dir := "lib/Christopher Paolini/Book 2 - Eldest"
+	frags := f.chapterFrags(t, dir, "Eldest", 3, 600)
+	r := findRow(t, f.plan(t, "op-plan"), noParentRowID(f.path(dir), "eldest"))
+	require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+	f.existingBook(t, "late", "Eldest", "lib/Shelf/Eldest", 3, 600)
+	out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
+	require.Equal(t, 1, out.ChangedSincePlan, "%+v", out.Rows)
+	require.Contains(t, fmt.Sprintf("%+v", out.Rows), "exists now")
+	for _, id := range frags {
+		b, err := f.s.GetBookByID(id)
+		require.NoError(t, err)
+		require.False(t, b.IsSoftDeleted(), "nothing written")
+	}
+}
+
+// TestFragmentFixer_JoinOffsets (N1): a joined fragment's listening position
+// maps to the start of the target's file at its chapter position, not to its
+// running sum among the fragments.
+func TestFragmentFixer_JoinOffsets(t *testing.T) {
+	f := newFragFixture(t)
+	target := f.book(t, "t", "Eldest", f.path("lib/Shelf/Eldest"), nil)
+	f.setAuthor(t, target, f.authorID(t, "Christopher Paolini"))
+	// The target's chapters 01..03 run 500, 700, 600 s (1800 s); the
+	// fragments are chapters 02 and 03 and 01, all 600 s.
+	for i, d := range []int{500, 700, 600} {
+		name := fmt.Sprintf("Eldest %02d_copy1.mp3", i+1)
+		p := f.file(t, filepath.Join("lib/Shelf/Eldest", name), 9000+37*i)
+		f.row(t, fmt.Sprintf("t%d", i), target, p, name, int64(9000+37*i), d, i+1)
+	}
+	dir := "lib/Christopher Paolini/Book 2 - Eldest"
+	ff := newFragmentFixer(f.p)
+	store, _, err := ff.stores()
+	require.NoError(t, err)
+	lib, err := ff.loadLibrary(store)
+	require.NoError(t, err)
+	plan := &fragGroupPlan{}
+	for i, n := range []int{1, 2, 3} {
+		stem := fmt.Sprintf("Eldest %02d", n)
+		plan.Members = append(plan.Members, fragGroupMember{Frag: &fragCandidate{Book: fragBook{ID: stem},
+			File: fragFile{Path: filepath.Join(f.path(dir), stem+".mp3"), Duration: 600}, OrigName: stem + ".mp3"}, Offset: float64(600 * i)})
+	}
+	joinOffsets(lib, plan, target)
+	require.Equal(t, []float64{0, 500, 1200}, []float64{plan.Members[0].Offset, plan.Members[1].Offset, plan.Members[2].Offset})
+}
+
+// TestFragmentFixer_JoinTargetITunes (N2): an iTunes id on the target's file
+// row or as an external id makes the join manual-only, like one on the book.
+func TestFragmentFixer_JoinTargetITunes(t *testing.T) {
+	const dir = "lib/Christopher Paolini/Book 2 - Eldest"
+	t.Run("row-level", func(t *testing.T) {
+		f := newFragFixture(t)
+		existing := f.existingBook(t, "eldest", "Eldest", "lib/Shelf/Eldest", 3, 600)
+		rows, err := f.s.GetBookFiles(existing)
+		require.NoError(t, err)
+		rows[0].ITunesPersistentID = "ABCDEF0123456789"
+		require.NoError(t, f.s.UpdateBookFile(rows[0].ID, &rows[0]))
+		f.chapterFrags(t, dir, "Eldest", 3, 600)
+		res := f.plan(t, "op-plan")
+		r := findRow(t, res, noParentRowID(f.path(dir), "eldest"))
+		require.Equal(t, fragClassManual, r.Class)
+		require.Equal(t, repairs.SkipITunes, r.Skipped)
+		require.Contains(t, r.SkipReason, "ABCDEF0123456789")
+		require.Zero(t, res.Applicable)
+	})
+	t.Run("external id", func(t *testing.T) {
+		f := newFragFixture(t)
+		existing := f.existingBook(t, "eldest", "Eldest", "lib/Shelf/Eldest", 3, 600)
+		require.NoError(t, f.s.CreateExternalIDMapping(&database.ExternalIDMapping{Source: "itunes", ExternalID: "FEDCBA9876543210", BookID: existing}))
+		f.chapterFrags(t, dir, "Eldest", 3, 600)
+		r := findRow(t, f.plan(t, "op-plan"), noParentRowID(f.path(dir), "eldest"))
+		require.Equal(t, repairs.SkipITunes, r.Skipped)
+		require.Contains(t, r.SkipReason, "FEDCBA9876543210")
+	})
+}
+
+// TestFragmentFixer_UnplacedITunesCounted (N4): an unplaced fragment that is
+// also hands-off is counted under unplaced, not manual-only.
+func TestFragmentFixer_UnplacedITunesCounted(t *testing.T) {
+	f := newFragFixture(t)
+	p := f.file(t, "books/itunes/Solo/Solo 01.mp3", 990)
+	id := f.book(t, "solo", "Solo 01", p, nil)
+	f.row(t, "s", id, p, "Solo 01.mp3", 990, 300, 0)
+	res := f.plan(t, "op-plan")
+	r := findRow(t, res, fragClassUnplaced+":"+id)
+	require.Equal(t, fragClassUnplaced, r.Class)
+	require.Equal(t, fragSkipLoneChapter, r.Skipped)
+	require.Equal(t, 1, res.ByClass[fragClassUnplaced])
+	require.Zero(t, res.ByClass[fragClassManual])
 }
