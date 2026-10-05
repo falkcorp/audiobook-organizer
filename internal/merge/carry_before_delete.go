@@ -1,5 +1,5 @@
 // file: internal/merge/carry_before_delete.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3f1c9a52-7d4e-4b8a-a6c0-8e2b5d7f1a93
 // last-edited: 2026-10-05
 
@@ -67,7 +67,64 @@ func CarryStateBeforeHardDelete(db UserProgressMerger, keepID, doomedID string) 
 	}
 	mergeSerializeMu.Lock()
 	defer mergeSerializeMu.Unlock()
+	return carryStateLocked(db, keepID, doomedID)
+}
 
+// ErrUserStateOnDoomedBook is returned by HardDeleteWithoutUserState and
+// CarryStateThenHardDelete when, right before the delete, doomedID holds
+// listening state or a pending user-state repair names it. Nothing was
+// deleted.
+var ErrUserStateOnDoomedBook = errors.New("merge: listening state is on the book about to be hard-deleted")
+
+// CarryStateThenHardDelete is CarryStateBeforeHardDelete followed by del (the
+// caller's hard delete of doomedID) in ONE hold of the merge lock, so no
+// merge, sweep or revert can put state back on doomedID between the carry's
+// final check and the delete. del runs only when the carry is complete; its
+// error is returned wrapped. A carry that is not complete returns
+// ErrStateCarryIncomplete (and was put back) with del not run.
+//
+// Client writes (ABS and web progress) do not take the merge lock, so this
+// narrows that window to the carry's own last read, it cannot close it: a
+// position a client writes to a book being deleted is lost with the book,
+// the same as one written after the delete.
+func CarryStateThenHardDelete(db UserProgressMerger, keepID, doomedID string, del func() error) error {
+	if keepID == "" || doomedID == "" || keepID == doomedID {
+		return fmt.Errorf("%w: invalid pair keep=%q doomed=%q", ErrStateCarryIncomplete, keepID, doomedID)
+	}
+	mergeSerializeMu.Lock()
+	defer mergeSerializeMu.Unlock()
+	if err := carryStateLocked(db, keepID, doomedID); err != nil {
+		return err
+	}
+	if err := del(); err != nil {
+		return fmt.Errorf("hard delete %s after its state moved to %s: %w", doomedID, keepID, err)
+	}
+	return nil
+}
+
+// HardDeleteWithoutUserState runs del (the caller's hard delete of bookID)
+// under the merge lock after re-checking, under that same lock, that no user
+// has carryable state on bookID and no pending user-state repair names it
+// (the post-check CarryStateBeforeHardDelete uses: strict user listing, so an
+// undecodable user row refuses). It is for a delete whose earlier probe found
+// no state: anything that landed since refuses with ErrUserStateOnDoomedBook
+// and nothing is deleted. A check that cannot be made refuses the same way.
+// The same limit as CarryStateThenHardDelete applies to client writes.
+func HardDeleteWithoutUserState(db UserProgressMerger, bookID string, del func() error) error {
+	if bookID == "" {
+		return fmt.Errorf("%w: empty book id", ErrUserStateOnDoomedBook)
+	}
+	mergeSerializeMu.Lock()
+	defer mergeSerializeMu.Unlock()
+	if err := carryLeftover(db, bookID); err != nil {
+		return fmt.Errorf("%w: %s: %w", ErrUserStateOnDoomedBook, bookID, err)
+	}
+	return del()
+}
+
+// carryStateLocked is CarryStateBeforeHardDelete's body. The caller holds
+// mergeSerializeMu and has validated the pair.
+func carryStateLocked(db UserProgressMerger, keepID, doomedID string) error {
 	progress, redirected, err := FollowAbsorbedJournaled(db, keepID, doomedID, nil, nil)
 	if errors.Is(err, ErrNoSyncFollower) {
 		// Nothing moved: without a sync layer the redirect and bookmarks
