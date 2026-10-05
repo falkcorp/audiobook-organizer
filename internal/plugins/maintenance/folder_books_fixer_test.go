@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/folder_books_fixer_test.go
-// version: 1.6.1
+// version: 1.7.0
 // guid: 9d4c7a2e-1b6f-4e83-a5d0-8f2b3c6e9a17
-// last-edited: 2026-10-01
+// last-edited: 2026-10-04
 
 package maintenance
 

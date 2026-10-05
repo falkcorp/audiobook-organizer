@@ -74,8 +74,10 @@ var (
 	_ repairs.BookTagsOnly = (*tagFranchiseFixer)(nil)
 )
 
-func (f *tagFranchiseFixer) ID() string    { return tagFranchiseFixerID }
-func (f *tagFranchiseFixer) Title() string { return "Franchise tags (Doctor Who / Big Finish / Torchwood)" }
+func (f *tagFranchiseFixer) ID() string { return tagFranchiseFixerID }
+func (f *tagFranchiseFixer) Title() string {
+	return "Franchise tags (Doctor Who / Big Finish / Torchwood)"
+}
 func (f *tagFranchiseFixer) Description() string {
 	return "Tags every Doctor Who, Big Finish and Torchwood book the shared franchise matcher finds with " +
 		"franchise:<name> and range:<range> (source franchise-matcher), showing the signals that matched. " +
