@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_regroup.go
-// version: 1.25.0
+// version: 1.26.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-10-05
 
@@ -187,10 +187,15 @@ func (p *Plugin) runITunesRegroup(ctx context.Context, raw json.RawMessage, repo
 	}
 
 	_ = reporter.UpdateProgress(3, 4, "Phase 4/4: applying plan…")
-	if err := p.applyRegroupPlan(ctx, rstore, plan, rootDir, reporter); err != nil {
+	applied, err := p.applyRegroupPlan(ctx, rstore, plan, rootDir, reporter)
+	if err != nil {
 		return joinRegroupErrs(err, regroupCheckFailedErr(plan, false))
 	}
-	_ = reporter.UpdateProgress(4, 4, "APPLIED — "+summary)
+	final := "APPLIED — " + summary
+	if n := len(applied.StateCarriedUnlisted); n > 0 {
+		final += fmt.Sprintf(" | state carried to a book ABS does not list: %d (see op log)", n)
+	}
+	_ = reporter.UpdateProgress(4, 4, final)
 	return regroupCheckFailedErr(plan, false)
 }
 
@@ -263,12 +268,16 @@ func (p *Plugin) regroupUserStateStore(store itunesRegroupStore) merge.UserProgr
 }
 
 // regroupStateTarget is the applied target a deleted book's users' state
-// goes to: the target of the applied group that took the most of its files
-// (ties to the earlier group), "" when no applied group took any. targets
-// maps a plan group index to the book its files went to (a fresh book's id
-// exists only once the apply created it).
-func regroupStateTarget(plan itunesservice.RegroupPlan, targets map[int]string, bookID string) string {
-	best, bestN := "", 0
+// goes to, among the targets of the applied groups that took its files
+// (targets maps a plan group index to the book its files went to; a fresh
+// book's id exists only once the apply created it). A target ABS lists
+// (listed: database.ABSLibraryFilter) is preferred over one it does not, so
+// the state lands where the user can see it; within that, the group that
+// took the most of the book's files, ties to the earlier group. isListed
+// says whether the chosen target is listed. "" when no applied group took
+// any of its files.
+func regroupStateTarget(plan itunesservice.RegroupPlan, targets map[int]string, bookID string, listed func(id string) bool) (target string, isListed bool) {
+	bestN := 0
 	for gi, a := range plan.Groups {
 		t, ok := targets[gi]
 		if !ok || t == bookID {
@@ -280,11 +289,35 @@ func regroupStateTarget(plan itunesservice.RegroupPlan, targets map[int]string, 
 				n++
 			}
 		}
-		if n > bestN {
-			best, bestN = t, n
+		if n == 0 {
+			continue
+		}
+		l := listed(t)
+		if target == "" || (l && !isListed) || (l == isListed && n > bestN) {
+			target, isListed, bestN = t, l, n
 		}
 	}
-	return best
+	return target, isListed
+}
+
+// regroupTargetListed reports whether id is a book ABS lists
+// (database.ABSLibraryFilter). A read error reads as not listed.
+func regroupTargetListed(store itunesRegroupStore) func(id string) bool {
+	return func(id string) bool {
+		b, err := store.GetBookByID(id)
+		return err == nil && database.ABSLibraryFilter().Matches(b)
+	}
+}
+
+// regroupApplyReport is what applyRegroupPlan reports beyond its log lines,
+// for the run's final status message.
+type regroupApplyReport struct {
+	// StateCarriedUnlisted names the deleted books whose users' state was
+	// carried to a target ABS does not list (no applied target that took
+	// their files is listed; a fresh target is created with no library
+	// state). The state is kept, not dropped, but it is not visible in ABS
+	// until that book is organized and made its group's primary.
+	StateCarriedUnlisted []string
 }
 
 // regroupRunStore is the run's store: OpsStore plus the tag reads the
@@ -749,16 +782,18 @@ func enrichScore(b *database.Book) int {
 // Before each group is written, its target and sources are re-read and the
 // plan's refusal rules re-run on the fresh rows (regroupRecheck); a group
 // whose books changed since the snapshot is skipped and counted.
-func (p *Plugin) applyRegroupPlan(ctx context.Context, store itunesRegroupStore, plan itunesservice.RegroupPlan, rootDir string, reporter sdk.Reporter) error {
+func (p *Plugin) applyRegroupPlan(ctx context.Context, store itunesRegroupStore, plan itunesservice.RegroupPlan, rootDir string, reporter sdk.Reporter) (regroupApplyReport, error) {
 	touched := make(map[string]bool)
 	var c regroupApplyCounts
-	var deleted, deleteSkipped, stateCarried int
+	var deleted, deleteSkipped, stateCarried, stateReappeared int
 	var stateProbe *merge.UserStateProbe
 	var stateStore merge.UserProgressMerger
+	var report regroupApplyReport
+	listed := regroupTargetListed(store)
 
 	for gi, a := range plan.Groups {
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return report, ctx.Err()
 		}
 		if a.Entangled || a.ManualOnly || a.ManualCheckFailed || (a.Target == "" && !a.FreshBook) {
 			continue // skipped or nothing-in-DB
@@ -771,7 +806,7 @@ func (p *Plugin) applyRegroupPlan(ctx context.Context, store itunesRegroupStore,
 	// Delete projected-empty books, GUARDED: re-assert no files AND no ext-ids.
 	for _, id := range plan.DeleteBooks {
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return report, ctx.Err()
 		}
 		files, ferr := store.GetBookFiles(id)
 		exts, eerr := store.GetExternalIDsForBook(id)
@@ -815,21 +850,44 @@ func (p *Plugin) applyRegroupPlan(ctx context.Context, store itunesRegroupStore,
 			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: could not read its users' listening state: %v", id, herr))
 			continue
 		}
+		// The final check and the delete run under one hold of the merge
+		// lock (merge.CarryStateThenHardDelete / HardDeleteWithoutUserState),
+		// so state that lands after the probe above refuses the delete.
+		del := func() error { return store.DeleteBook(id) }
 		if has {
-			target := regroupStateTarget(plan, c.targets, id)
+			target, targetListed := regroupStateTarget(plan, c.targets, id, listed)
 			if target == "" {
 				deleteSkipped++
 				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: a user has listening state on it and no applied group took its files to carry it to", id))
 				continue
 			}
-			if cerr := merge.CarryStateBeforeHardDelete(stateStore, target, id); cerr != nil {
+			err := merge.CarryStateThenHardDelete(stateStore, target, id, del)
+			if errors.Is(err, merge.ErrStateCarryIncomplete) {
 				deleteSkipped++
-				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: its users' listening state could not be carried to %s: %v", id, target, cerr))
+				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: its users' listening state could not be carried to %s: %v", id, target, err))
 				continue
 			}
+			// The carry landed whether or not the delete then failed.
 			stateCarried++
+			if !targetListed {
+				report.StateCarriedUnlisted = append(report.StateCarriedUnlisted, id)
+				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("book %s: its users' listening state was carried to %s, which ABS does not list (no applied target that took its files is listed); kept, not visible in ABS until %s is organized and its group's primary", id, target, target))
+			}
+			if err != nil {
+				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("delete %s failed: %v", id, err))
+				errCount++
+				continue
+			}
+			deleted++
+			continue
 		}
-		if err := store.DeleteBook(id); err != nil {
+		if err := merge.HardDeleteWithoutUserState(stateStore, id, del); err != nil {
+			if errors.Is(err, merge.ErrUserStateOnDoomedBook) {
+				deleteSkipped++
+				stateReappeared++
+				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: listening state found on it right before the delete: %v", id, err))
+				continue
+			}
 			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("delete %s failed: %v", id, err))
 			errCount++
 			continue
@@ -846,12 +904,17 @@ func (p *Plugin) applyRegroupPlan(ctx context.Context, store itunesRegroupStore,
 	}
 
 	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
-		"APPLIED: moved=%d titled=%d library-title-kept=%d fresh=%d deleted=%d state-carried=%d delete-skipped=%d recheck-skipped=%d errors=%d",
-		moved, titled, titleKept, created, deleted, stateCarried, deleteSkipped, recheckSkipped, errCount))
-	if errCount > 0 {
-		return fmt.Errorf("%d errors during itunes-regroup (see op log)", errCount)
+		"APPLIED: moved=%d titled=%d library-title-kept=%d fresh=%d deleted=%d state-carried=%d state-carried-unlisted=%d state-reappeared=%d delete-skipped=%d recheck-skipped=%d errors=%d",
+		moved, titled, titleKept, created, deleted, stateCarried, len(report.StateCarriedUnlisted), stateReappeared, deleteSkipped, recheckSkipped, errCount))
+	if n := len(report.StateCarriedUnlisted); n > 0 {
+		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
+			"%d book(s)' listening state was carried to a book ABS does not list (first ids: %s)",
+			n, strings.Join(firstN(report.StateCarriedUnlisted, 20), ", ")))
 	}
-	return nil
+	if errCount > 0 {
+		return report, fmt.Errorf("%d errors during itunes-regroup (see op log)", errCount)
+	}
+	return report, nil
 }
 
 // regroupApplyCounts are applyRegroupPlan's per-group tallies.

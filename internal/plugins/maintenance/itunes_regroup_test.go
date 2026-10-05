@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_regroup_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-10-05
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -87,7 +88,7 @@ func TestITunesRegroupApply_MergeAndDelete(t *testing.T) {
 	if plan.Consolidated != 1 || len(plan.DeleteBooks) != 1 {
 		t.Fatalf("plan consolidate=%d deletes=%d, want 1/1", plan.Consolidated, len(plan.DeleteBooks))
 	}
-	if err := p.applyRegroupPlan(context.Background(), s, plan, rgRoot, rep); err != nil {
+	if _, err := p.applyRegroupPlan(context.Background(), s, plan, rgRoot, rep); err != nil {
 		t.Fatalf("applyRegroupPlan: %v", err)
 	}
 
@@ -136,7 +137,7 @@ func TestITunesRegroupApply_DeleteGuardSkipsResidualExtID(t *testing.T) {
 	if survivor != b1 {
 		t.Skipf("survivor was %s not b1 (tiebreak); residual-guard case needs b2 to be the loser", survivor)
 	}
-	if err := p.applyRegroupPlan(context.Background(), s, plan, rgRoot, rep); err != nil {
+	if _, err := p.applyRegroupPlan(context.Background(), s, plan, rgRoot, rep); err != nil {
 		t.Fatalf("applyRegroupPlan: %v", err)
 	}
 	// b2 still has the residual mapping → must NOT have been deleted.
@@ -171,7 +172,7 @@ func TestITunesRegroupApply_DeleteGuardFailsClosedOnReadError(t *testing.T) {
 	// Wrap so the delete-guard's ext-id read for the loser errors. The merge
 	// phase does not call GetExternalIDsForBook, so only the guard is affected.
 	wrapped := &errExtIDStore{Store: s, failID: loser}
-	if err := p.applyRegroupPlan(context.Background(), wrapped, plan, rgRoot, rep); err != nil {
+	if _, err := p.applyRegroupPlan(context.Background(), wrapped, plan, rgRoot, rep); err != nil {
 		t.Fatalf("applyRegroupPlan: %v", err)
 	}
 
@@ -187,7 +188,7 @@ func TestITunesRegroupApply_DeleteGuardFailsClosedOnReadError(t *testing.T) {
 func TestITunesRegroupApply_DeleteCarriesUserStateToTarget(t *testing.T) {
 	s, u, plan, rep := regroupWithState(t)
 	p := &Plugin{}
-	if err := p.applyRegroupPlan(context.Background(), s, plan, rgRoot, rep); err != nil {
+	if _, err := p.applyRegroupPlan(context.Background(), s, plan, rgRoot, rep); err != nil {
 		t.Fatalf("applyRegroupPlan: %v", err)
 	}
 	loser, target := plan.DeleteBooks[0], plan.Groups[0].Target
@@ -213,7 +214,7 @@ func TestITunesRegroupApply_DeleteKeepsBookWhenCarryFails(t *testing.T) {
 	loser, target := plan.DeleteBooks[0], plan.Groups[0].Target
 	fs := &rgFailStateStore{PebbleStore: s, failOn: target}
 	p := &Plugin{}
-	if err := p.applyRegroupPlan(context.Background(), fs, plan, rgRoot, rep); err != nil {
+	if _, err := p.applyRegroupPlan(context.Background(), fs, plan, rgRoot, rep); err != nil {
 		t.Fatalf("applyRegroupPlan: %v", err)
 	}
 	if b, _ := s.GetBookByID(loser); b == nil {
@@ -275,4 +276,126 @@ func regroupWithState(t *testing.T) (*database.PebbleStore, *database.User, itun
 		t.Fatalf("plan deletes=%d fresh=%v, want 1 delete onto an existing target", len(plan.DeleteBooks), plan.Groups[0].FreshBook)
 	}
 	return s, u, plan, rep
+}
+
+// #3769 review SF2: among the applied targets that took a deleted book's
+// files, one ABS lists is preferred over one with more of its files; with
+// none listed, the most files wins and the choice says it is not listed.
+func TestRegroupStateTarget_PrefersListedTarget(t *testing.T) {
+	plan := itunesservice.RegroupPlan{Groups: []itunesservice.GroupAction{
+		{Moves: []itunesservice.FileMove{{From: "doomed"}, {From: "doomed"}, {From: "doomed"}}},
+		{Moves: []itunesservice.FileMove{{From: "doomed"}}},
+		{Moves: []itunesservice.FileMove{{From: "other"}}},
+	}}
+	targets := map[int]string{0: "hidden-big", 1: "listed-small", 2: "listed-unrelated"}
+	isListed := func(id string) bool { return strings.HasPrefix(id, "listed") }
+
+	got, listed := regroupStateTarget(plan, targets, "doomed", isListed)
+	if got != "listed-small" || !listed {
+		t.Fatalf("target = %q listed=%v, want listed-small (the listed one, not the one with more files)", got, listed)
+	}
+	got, listed = regroupStateTarget(plan, targets, "doomed", func(string) bool { return false })
+	if got != "hidden-big" || listed {
+		t.Fatalf("target = %q listed=%v, want hidden-big, not listed", got, listed)
+	}
+	if got, _ := regroupStateTarget(plan, targets, "nobody", isListed); got != "" {
+		t.Fatalf("target for a book no group took files from = %q, want none", got)
+	}
+}
+
+// #3769 review SF2: a carry onto a target ABS does not list still happens --
+// the state is not dropped -- and is reported: counted in the APPLIED line,
+// named in a warning and returned for the run's final status. A listed
+// target is not reported.
+func TestITunesRegroupApply_CarryToUnlistedTargetIsReported(t *testing.T) {
+	for _, makeListed := range []bool{false, true} {
+		s, u, plan, rep := regroupWithState(t)
+		loser, target := plan.DeleteBooks[0], plan.Groups[0].Target
+		if makeListed {
+			if _, err := s.ModifyBook(target, func(b *database.Book) error {
+				st, primary := "organized", true
+				b.LibraryState, b.IsPrimaryVersion = &st, &primary
+				return nil
+			}); err != nil {
+				t.Fatalf("ModifyBook: %v", err)
+			}
+		}
+		got, err := (&Plugin{}).applyRegroupPlan(context.Background(), s, plan, rgRoot, rep)
+		if err != nil {
+			t.Fatalf("applyRegroupPlan: %v", err)
+		}
+		if pos, _ := s.ListUserPositionsForBook(u.ID, target); len(pos) == 0 {
+			t.Fatalf("listed=%v: the state was not carried to %s", makeListed, target)
+		}
+		logs := strings.Join(rep.logs, "\n")
+		if makeListed {
+			if len(got.StateCarriedUnlisted) != 0 || !strings.Contains(logs, "state-carried-unlisted=0") {
+				t.Fatalf("listed target reported as unlisted: %v\n%s", got.StateCarriedUnlisted, logs)
+			}
+			continue
+		}
+		if len(got.StateCarriedUnlisted) != 1 || got.StateCarriedUnlisted[0] != loser {
+			t.Fatalf("StateCarriedUnlisted = %v, want [%s]", got.StateCarriedUnlisted, loser)
+		}
+		if !strings.Contains(logs, "state-carried-unlisted=1") || !strings.Contains(logs, "first ids: "+loser) {
+			t.Fatalf("unlisted carry not reported:\n%s", logs)
+		}
+	}
+}
+
+// rgLateWriteStore writes a reader's position onto book `on` right after the
+// apply's first state probe read it, as a client listening between the probe
+// and the delete would.
+type rgLateWriteStore struct {
+	*database.PebbleStore
+	on, user string
+	once     sync.Once
+}
+
+func (s *rgLateWriteStore) ListUserPositionsForBook(userID, bookID string) ([]database.UserPosition, error) {
+	pos, err := s.PebbleStore.ListUserPositionsForBook(userID, bookID)
+	if bookID == s.on && userID == s.user {
+		s.once.Do(func() { err = s.PebbleStore.SetUserPosition(userID, bookID, "seg", 77) })
+	}
+	return pos, err
+}
+
+// #3769 review NIT a: state that lands on a projected-empty book after the
+// probe said it had none is caught by the re-check made under the merge lock
+// right before the delete; the book and the new position are kept.
+func TestITunesRegroupApply_StateAfterProbeRefusesDelete(t *testing.T) {
+	s := regroupStore(t)
+	b1 := seedBook(t, s, "Frag A")
+	b2 := seedBook(t, s, "Frag B")
+	seedFilePID(t, s, b1, "p1")
+	seedFilePID(t, s, b2, "p2")
+	u, err := s.CreateUser("reader", "reader@example.com", "argon2id", "x", []string{"user"}, "active")
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	p := &Plugin{}
+	rep := &fakeReporter{}
+	snap, err := p.buildRegroupSnapshot(context.Background(), s, rgRoot, rep)
+	if err != nil {
+		t.Fatalf("buildRegroupSnapshot: %v", err)
+	}
+	plan := itunesservice.PlanRegroup([]itunesservice.HealGroup{{Title: "Merged Book", PIDs: []string{"p1", "p2"}}}, snap)
+	if len(plan.DeleteBooks) != 1 {
+		t.Fatalf("plan deletes=%d, want 1", len(plan.DeleteBooks))
+	}
+	loser := plan.DeleteBooks[0]
+	ls := &rgLateWriteStore{PebbleStore: s, on: loser, user: u.ID}
+	if _, err := p.applyRegroupPlan(context.Background(), ls, plan, rgRoot, rep); err != nil {
+		t.Fatalf("applyRegroupPlan: %v", err)
+	}
+	if b, _ := s.GetBookByID(loser); b == nil {
+		t.Fatalf("book %s deleted though a position landed on it before the delete", loser)
+	}
+	pos, _ := s.ListUserPositionsForBook(u.ID, loser)
+	if len(pos) != 1 || pos[0].PositionSeconds != 77 {
+		t.Fatalf("positions on %s = %+v, want the late write kept", loser, pos)
+	}
+	if logs := strings.Join(rep.logs, "\n"); !strings.Contains(logs, "state-reappeared=1") {
+		t.Fatalf("refusal not counted:\n%s", logs)
+	}
 }
