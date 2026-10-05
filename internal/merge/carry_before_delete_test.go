@@ -26,6 +26,22 @@ type carryFaultStore struct {
 	failBookmarks bool
 	// failRedirect fails RecordSyncMerge.
 	failRedirect bool
+	// afterClear runs after each ClearUserPositions, as a client writing
+	// progress to the book while the carry runs would.
+	afterClear func(userID, bookID string)
+}
+
+func (s *carryFaultStore) ClearUserPositions(userID, bookID string) error {
+	if err := s.PebbleStore.ClearUserPositions(userID, bookID); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	hook := s.afterClear
+	s.mu.Unlock()
+	if hook != nil {
+		hook(userID, bookID)
+	}
+	return nil
 }
 
 func (s *carryFaultStore) SetUserBookState(st *database.UserBookState) error {
@@ -160,6 +176,21 @@ func TestCarryStateBeforeHardDelete_BookmarksAndRedirectAreChecked(t *testing.T)
 		require.Equal(t, 70, c.pct(t, c.usB, c.dup))
 		require.Equal(t, c.dup, sfCurrentBook(t, c.s, c.dup))
 	})
+}
+
+// State that lands on dup after the follow drained it (a client still
+// writing to it) is caught by the re-read, and the carry is put back.
+func TestCarryStateBeforeHardDelete_StateWrittenDuringCarryRefuses(t *testing.T) {
+	c := newCarryFixture(t)
+	c.fs.afterClear = func(userID, bookID string) {
+		if userID == c.userA.ID && bookID == c.dup {
+			require.NoError(t, c.s.SetUserPosition(userID, bookID, "seg", 99))
+		}
+	}
+	err := CarryStateBeforeHardDelete(c.fs, c.keep, c.dup)
+	require.ErrorIs(t, err, ErrStateCarryIncomplete)
+	require.ErrorContains(t, err, "still on")
+	require.Equal(t, 70, c.pct(t, c.usB, c.dup), "the carry was put back")
 }
 
 // An open repair naming dup (a move still owed into it) refuses the carry.
