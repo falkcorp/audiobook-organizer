@@ -1,11 +1,11 @@
 <!-- file: docs/executive-summaries/2026-10-05-linking-versions-brings-the-whole-family-executive-summary.md -->
-<!-- version: 1.4.1 -->
+<!-- version: 1.5.0 -->
 <!-- guid: 0b6f6f3e-7a52-4c1b-9d0e-5e2c8a41d7b9 -->
 <!-- last-edited: 2026-10-05 -->
 
 # Linking versions brings the whole family
 
-PRs: [#3758](https://github.com/falkcorp/audiobook-organizer/pull/3758) (follow-up to #3756), a follow-up that makes undo safe, [#3762](https://github.com/falkcorp/audiobook-organizer/pull/3762), and its review follow-up
+PRs: [#3758](https://github.com/falkcorp/audiobook-organizer/pull/3758) (follow-up to #3756), a follow-up that makes undo safe, [#3762](https://github.com/falkcorp/audiobook-organizer/pull/3762), its review follow-up, and a second review follow-up
 
 ## Executive Summary
 
@@ -129,10 +129,15 @@ nightly purge permanently deleted that book, and the progress with it.
 its own safety record. Separately, the purge now refuses any retired book that
 still holds someone's progress and lists it instead. Two clean-ups that
 permanently delete duplicate books (the duplicate-version clean-up and the
-iTunes regroup) now skip such a book the same way. Undoing an iTunes
-library copy now moves its listeners' progress back to the original first,
-and refuses to undo if it cannot. Ordinary merged-away books,
-whose progress has already moved, still purge.
+iTunes regroup) first move that progress to the copy they keep, then delete
+the duplicate. Undoing an iTunes library copy moves its listeners' progress
+back to the original the same way. Each of these moves is all or nothing:
+progress, bookmarks and the Audiobookshelf link must all arrive, or every
+listener's progress is put back where it was and the book is kept. Before,
+one listener's progress could move while another's did not. The undo also
+refuses straight away when the original is in the trash. A user account the
+safety check cannot read now stops the delete instead of being skipped.
+Ordinary merged-away books, whose progress has already moved, still purge.
 
 ## Undo that left progress on the wrong book
 
@@ -148,6 +153,11 @@ listener's Audiobookshelf link still pointed at another version.
 **The fix.** Every such move is now recorded, every undo can find its record,
 and an undo that fails part way finishes when it is run again.
 
+A second case was found in review. If the kept book had since been merged into
+the visible version, undoing the family move wrote over its own record. The
+later automatic-merge undo then brought the book back with no progress. The
+undo now keeps a separate record, and the progress comes back.
+
 ## A repair that finished into the wrong book
 
 **What it was.** The repair that rebuilds books from loose chapter files
@@ -159,4 +169,10 @@ kept one.
 owner did not choose to keep.
 
 **The fix.** The repair now reads the merge's own record to find the kept book.
+If the book was restored from the trash and merged again since, the newer
+merge decides.
+
+The merge report could also say a title was visible in Audiobookshelf when
+it was not, if the visible version was in the trash or had stopped being the
+main version. It now gives a reason in both cases.
 
