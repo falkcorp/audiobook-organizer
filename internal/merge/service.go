@@ -1,7 +1,7 @@
 // file: internal/merge/service.go
-// version: 1.39.0
+// version: 1.40.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 package merge
 
@@ -407,27 +407,6 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 		}
 	}
 
-	// Determine the version group ID from the LIVE participants only (reuse if
-	// any live book already has one). A soft-deleted book's group is not
-	// consulted: it is the group of whatever merge already consumed that book,
-	// and letting it pick the group here is exactly how a stale pair pulled a
-	// live book into some unrelated book's version group.
-	versionGroupID := ""
-	reusedGroup := false
-	for _, b := range books {
-		if b.IsSoftDeleted() {
-			continue
-		}
-		if b.VersionGroupID != nil && *b.VersionGroupID != "" {
-			versionGroupID = *b.VersionGroupID
-			reusedGroup = true
-			break
-		}
-	}
-	if versionGroupID == "" {
-		versionGroupID = ulid.Make().String()
-	}
-
 	// Refuse soft-deleted participants. GetBookByID returns soft-deleted rows,
 	// and every stale index in the system (book:hash:, a review candidate
 	// written before a manual merge, a queued op) can hand one in. Merging INTO
@@ -445,6 +424,20 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 	// stripped and its 30-day purge clock restarted by a merge it is not part
 	// of. It can never be elected or forced primary (ElectPrimary skips
 	// soft-deleted rows; the explicit case is refused here).
+	//
+	// The group this merge resolves to is the SURVIVOR's (resolveVersionGroup,
+	// below), and without an explicit primary the survivor is not known until
+	// the file-aware election. So this check is in two halves: here, before
+	// any file read, a soft-deleted loser is admitted only if its group is one
+	// a live participant holds (a necessary condition — the resolved group is
+	// always one of those, or a new one); after the election, the admitted
+	// ones are checked against the group actually chosen (requireReplayedLosersInGroup).
+	liveGroups := map[string]bool{}
+	for _, b := range books {
+		if !b.IsSoftDeleted() && b.VersionGroupID != nil && *b.VersionGroupID != "" {
+			liveGroups[*b.VersionGroupID] = true
+		}
+	}
 	for _, b := range books {
 		if !b.IsSoftDeleted() {
 			continue
@@ -452,7 +445,7 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 		if b.ID == primaryID {
 			return nil, &SoftDeletedInputError{BookID: b.ID, AsPrimary: true}
 		}
-		if reusedGroup && b.VersionGroupID != nil && *b.VersionGroupID == versionGroupID {
+		if b.VersionGroupID != nil && liveGroups[*b.VersionGroupID] {
 			continue
 		}
 		return nil, &SoftDeletedInputError{BookID: b.ID}
@@ -531,6 +524,23 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 		if len(fileBearing) > 0 {
 			return nil, &FilelessPrimaryError{PrimaryID: books[bestIdx].ID, FileBearing: fileBearing}
 		}
+	}
+
+	// The merge's version group is the SURVIVOR's (explicit or elected), so the
+	// kept book stays with the versions it already has and the losers join it.
+	// It used to be the first live participant with a group in INPUT order, and
+	// dedup.book-merge (applyBookMergeReroute) lists the losers before keep_id:
+	// on prod 2026-10-05 that moved keep books out of their own groups (away
+	// from their organized_source siblings) into a loser's single-member group,
+	// leaving every such title with two version groups. Only when the survivor
+	// has no group is another participant's group reused; see
+	// resolveVersionGroup for that order-independent choice.
+	versionGroupID, reusedGroup, err := ms.resolveVersionGroup(books, bestIdx)
+	if err != nil {
+		return nil, err
+	}
+	if err := requireReplayedLosersInGroup(books, versionGroupID, reusedGroup); err != nil {
+		return nil, err
 	}
 
 	// Ordering: this runs AFTER the cheap argument checks above (a bad
@@ -918,6 +928,76 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 		SoftDeleted:             softDeleted,
 		ElectedWithoutUserState: electedWithoutUserState,
 	}, nil
+}
+
+// resolveVersionGroup picks the version group a merge's books end up in, and
+// whether it is an existing group (reused) rather than a new one.
+//
+//  1. The survivor's group, when it has one. "Link as versions" keeps the
+//     chosen book where it is: its existing versions (an organized_source
+//     copy, a prior merge's members) stay its siblings, and the losers join
+//     them. A loser's OTHER group members do not follow it: a merge moves only
+//     the books it was given (the demotion loop below is scoped the same way),
+//     and the group a loser leaves is handed a new primary (handOffLeftGroups).
+//  2. Otherwise the live participants' group with the most live members, so
+//     the fewest books are split from their versions; a tie goes to the
+//     smallest group ID. Deliberately NOT input order: callers order their
+//     IDs arbitrarily (applyBookMergeReroute puts the losers first), and a
+//     choice that depends on it is how the 2026-10-05 split happened.
+//  3. A new group when no live participant has one.
+//
+// Soft-deleted participants' groups are never candidates: such a group is
+// whatever merge already consumed that book, and letting it choose is how a
+// stale pair pulled a live book into an unrelated version group. The member
+// counts are read before the group locks are taken, so a concurrent writer can
+// change them; they only rank candidates, and the membership the merge
+// actually relies on is re-checked under the locks (LockPlannedGroups). A read
+// error fails the merge before anything is written.
+func (ms *Service) resolveVersionGroup(books []*database.Book, survivorIdx int) (string, bool, error) {
+	if s := books[survivorIdx]; s.VersionGroupID != nil && *s.VersionGroupID != "" {
+		return *s.VersionGroupID, true, nil
+	}
+	best, bestCount := "", -1
+	counted := map[string]bool{}
+	for _, b := range books {
+		if b.IsSoftDeleted() || b.VersionGroupID == nil || *b.VersionGroupID == "" {
+			continue
+		}
+		gid := *b.VersionGroupID
+		if counted[gid] {
+			continue
+		}
+		counted[gid] = true
+		members, err := ms.db.GetBooksByVersionGroup(gid)
+		if err != nil {
+			return "", false, fmt.Errorf("count live members of version group %s: %w", gid, err)
+		}
+		if n := len(members); n > bestCount || (n == bestCount && gid < best) {
+			best, bestCount = gid, n
+		}
+	}
+	if best != "" {
+		return best, true, nil
+	}
+	return ulid.Make().String(), false, nil
+}
+
+// requireReplayedLosersInGroup is the second half of MergeBooksWithOptions'
+// soft-deleted guard: a soft-deleted loser is admitted only when it already
+// belongs to the group the merge resolved to (a replayed merge, or a version
+// the user deleted from that group). The first half admitted any soft-deleted
+// loser in some live participant's group, before the survivor was known.
+func requireReplayedLosersInGroup(books []*database.Book, versionGroupID string, reusedGroup bool) error {
+	for _, b := range books {
+		if !b.IsSoftDeleted() {
+			continue
+		}
+		if reusedGroup && b.VersionGroupID != nil && *b.VersionGroupID == versionGroupID {
+			continue
+		}
+		return &SoftDeletedInputError{BookID: b.ID}
+	}
+	return nil
 }
 
 // preferUserStateSurvivor applies PreferUserStateSurvivor to an automatic
