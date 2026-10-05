@@ -1,7 +1,7 @@
 // file: internal/server/handlers/duplicates/handler.go
-// version: 1.12.1
+// version: 1.13.0
 // guid: 9f41f363-34fc-4ad2-b2f1-46d5ac0ba2f3
-// last-edited: 2026-09-26
+// last-edited: 2026-10-05
 
 // Package duplicates hosts the SQL-backed duplicate-detection HTTP handlers
 // extracted from the server package's duplicates_handlers.go: book / author /
@@ -323,6 +323,60 @@ func (h *Handler) ListCombineJournals(c *gin.Context) {
 	httputil.RespondWithOK(c, gin.H{"journals": journals, "count": len(journals)})
 }
 
+// UndoSiblingMove puts back the version-group siblings one merge carried into
+// its group (merge.MergeBooks item 6). POST /merge/sibling-undo/:journal_id.
+//
+// 404 when no such journal exists; 200 with the restored, already-back and
+// moved-on book ids otherwise. A sibling moved to another group since the
+// merge is left there and listed in moved_on.
+func (h *Handler) UndoSiblingMove(c *gin.Context) {
+	journalID := c.Param("journal_id")
+	ms := h.getMergeService()
+	if ms == nil {
+		httputil.RespondWithInternalError(c, "merge service not initialized")
+		return
+	}
+	res, err := ms.UndoSiblingMove(journalID)
+	switch {
+	case errors.Is(err, merge.ErrSiblingJournalNotFound):
+		httputil.RespondWithNotFound(c, "sibling-move journal", journalID)
+		return
+	case err != nil:
+		httputil.InternalError(c, "failed to undo sibling move", err)
+		return
+	}
+	if h.dedupCache != nil {
+		h.dedupCache.Invalidate("book-dedup-scan")
+		h.dedupCache.Invalidate("book-duplicates")
+	}
+	httputil.RespondWithOK(c, res)
+}
+
+// ListSiblingMoveJournals lists sibling-move journals newest-first.
+// GET /merge/sibling-journal?limit=N (default 50).
+func (h *Handler) ListSiblingMoveJournals(c *gin.Context) {
+	limit := 50
+	if raw := c.Query("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 0 {
+			httputil.RespondWithBadRequest(c, "limit must be a non-negative integer")
+			return
+		}
+		limit = n
+	}
+	ms := h.getMergeService()
+	if ms == nil {
+		httputil.RespondWithInternalError(c, "merge service not initialized")
+		return
+	}
+	journals, err := ms.ListSiblingMoveJournals(limit)
+	if err != nil {
+		httputil.InternalError(c, "failed to list sibling-move journals", err)
+		return
+	}
+	httputil.RespondWithOK(c, gin.H{"journals": journals, "count": len(journals)})
+}
+
 // LinkBookDuplicatesAsVersions links a group of duplicate books into a version
 // group (no files move; losers are soft-deleted book rows only).
 // POST /audiobooks/duplicates/link.
@@ -373,6 +427,9 @@ func (h *Handler) LinkBookDuplicatesAsVersions(c *gin.Context) {
 		// Set only when the automatic election kept the one book a user has
 		// state on instead of this book (merge.PreferUserStateSurvivor).
 		"elected_without_user_state": result.ElectedWithoutUserState,
+		// Set when the merge carried a loser's version siblings along;
+		// POST /merge/sibling-undo/:id puts them back.
+		"sibling_journal_id": result.SiblingJournalID,
 	})
 }
 

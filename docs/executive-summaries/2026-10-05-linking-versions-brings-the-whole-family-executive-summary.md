@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-05-linking-versions-brings-the-whole-family-executive-summary.md -->
-<!-- version: 1.0.1 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 0b6f6f3e-7a52-4c1b-9d0e-5e2c8a41d7b9 -->
 <!-- last-edited: 2026-10-05 -->
 
@@ -16,12 +16,17 @@ PR: [#3758](https://github.com/falkcorp/audiobook-organizer/pull/3758) (follow-u
   family, as extra versions, and nothing about them is deleted.
 - **Only the books you name are retired.** The book folded in is retired as
   before; the versions that come along with it stay in the library.
-- **It can be undone.** For merges that keep an undo record, undoing the merge
-  now also sends those versions back to their old family, with their old
-  "main version" setting, unless someone has moved them somewhere else since.
-- **Some merges still have no undo record.** The link-as-versions button, the
-  duplicate-books link action, the diagnostics fixer and the maintenance
-  repairs move these versions with no undo record, as their merges always had.
+- **It can always be undone.** Every merge that brings versions along first
+  writes down which versions moved and where they came from. If it cannot
+  write that down, it does not merge. Undo sends those versions back to their
+  old family with their old "main version" setting, unless someone has moved
+  them somewhere else since, and makes sure the old family has one main
+  version again.
+- **iTunes books and half-scanned books are protected.** If a version that
+  would come along is an iTunes library book, or one whose files have not
+  been fully scanned yet, the merge is refused and nothing changes. This
+  matters because an iTunes original usually sits in the same family as its
+  organized copy, and that copy is a common book to merge away.
 - **Two safety checks are now tested.** A check that stops a merge from pulling
   an already-deleted book into the wrong family, and the rule that picks a
   family when two are equally large, now have tests that fail if either is
@@ -49,5 +54,6 @@ before-merge records. The copies that came along had no such record.
 **Why it mattered.** Without a record, undo would have left those copies in
 the kept book's family while the folded-in book went back to its old one.
 
-**The fix.** Each merge's undo record now lists the copies it moved and where
-they came from, and undo puts them back.
+**The fix.** Every merge that moves versions now keeps its own record of
+them, whichever button or repair started it, and an undo action reads that
+record to put them back.

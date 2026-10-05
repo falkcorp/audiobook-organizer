@@ -172,6 +172,68 @@ func (_c *MockMergeService_ListCombineJournals_Call) RunAndReturn(run func(limit
 	return _c
 }
 
+// ListSiblingMoveJournals provides a mock function for the type MockMergeService
+func (_mock *MockMergeService) ListSiblingMoveJournals(limit int) ([]merge.SiblingMoveJournal, error) {
+	ret := _mock.Called(limit)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListSiblingMoveJournals")
+	}
+
+	var r0 []merge.SiblingMoveJournal
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(int) ([]merge.SiblingMoveJournal, error)); ok {
+		return returnFunc(limit)
+	}
+	if returnFunc, ok := ret.Get(0).(func(int) []merge.SiblingMoveJournal); ok {
+		r0 = returnFunc(limit)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]merge.SiblingMoveJournal)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(int) error); ok {
+		r1 = returnFunc(limit)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockMergeService_ListSiblingMoveJournals_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListSiblingMoveJournals'
+type MockMergeService_ListSiblingMoveJournals_Call struct {
+	*mock.Call
+}
+
+// ListSiblingMoveJournals is a helper method to define mock.On call
+//   - limit int
+func (_e *MockMergeService_Expecter) ListSiblingMoveJournals(limit any) *MockMergeService_ListSiblingMoveJournals_Call {
+	return &MockMergeService_ListSiblingMoveJournals_Call{Call: _e.mock.On("ListSiblingMoveJournals", limit)}
+}
+
+func (_c *MockMergeService_ListSiblingMoveJournals_Call) Run(run func(limit int)) *MockMergeService_ListSiblingMoveJournals_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 int
+		if args[0] != nil {
+			arg0 = args[0].(int)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockMergeService_ListSiblingMoveJournals_Call) Return(siblingMoveJournals []merge.SiblingMoveJournal, err error) *MockMergeService_ListSiblingMoveJournals_Call {
+	_c.Call.Return(siblingMoveJournals, err)
+	return _c
+}
+
+func (_c *MockMergeService_ListSiblingMoveJournals_Call) RunAndReturn(run func(limit int) ([]merge.SiblingMoveJournal, error)) *MockMergeService_ListSiblingMoveJournals_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // MergeBooks provides a mock function for the type MockMergeService
 func (_mock *MockMergeService) MergeBooks(bookIDs []string, primaryID string) (*merge.Result, error) {
 	ret := _mock.Called(bookIDs, primaryID)
@@ -298,6 +360,68 @@ func (_c *MockMergeService_UndoCombine_Call) Return(combineUndoResult *merge.Com
 }
 
 func (_c *MockMergeService_UndoCombine_Call) RunAndReturn(run func(journalID string) (*merge.CombineUndoResult, error)) *MockMergeService_UndoCombine_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// UndoSiblingMove provides a mock function for the type MockMergeService
+func (_mock *MockMergeService) UndoSiblingMove(journalID string) (*merge.SiblingUndoResult, error) {
+	ret := _mock.Called(journalID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for UndoSiblingMove")
+	}
+
+	var r0 *merge.SiblingUndoResult
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string) (*merge.SiblingUndoResult, error)); ok {
+		return returnFunc(journalID)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string) *merge.SiblingUndoResult); ok {
+		r0 = returnFunc(journalID)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*merge.SiblingUndoResult)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
+		r1 = returnFunc(journalID)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockMergeService_UndoSiblingMove_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'UndoSiblingMove'
+type MockMergeService_UndoSiblingMove_Call struct {
+	*mock.Call
+}
+
+// UndoSiblingMove is a helper method to define mock.On call
+//   - journalID string
+func (_e *MockMergeService_Expecter) UndoSiblingMove(journalID any) *MockMergeService_UndoSiblingMove_Call {
+	return &MockMergeService_UndoSiblingMove_Call{Call: _e.mock.On("UndoSiblingMove", journalID)}
+}
+
+func (_c *MockMergeService_UndoSiblingMove_Call) Run(run func(journalID string)) *MockMergeService_UndoSiblingMove_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockMergeService_UndoSiblingMove_Call) Return(siblingUndoResult *merge.SiblingUndoResult, err error) *MockMergeService_UndoSiblingMove_Call {
+	_c.Call.Return(siblingUndoResult, err)
+	return _c
+}
+
+func (_c *MockMergeService_UndoSiblingMove_Call) RunAndReturn(run func(journalID string) (*merge.SiblingUndoResult, error)) *MockMergeService_UndoSiblingMove_Call {
 	_c.Call.Return(run)
 	return _c
 }
