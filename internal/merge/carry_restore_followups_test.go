@@ -1,11 +1,12 @@
 // file: internal/merge/carry_restore_followups_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: beba4668-6a7b-4db7-b6b6-636dd756c5e7
 // last-edited: 2026-10-05
 
 package merge
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -188,4 +189,128 @@ func TestRestoreFollowedProgress_TouchedSurvivorIsReconciled(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, dpos, 1)
 	require.Equal(t, 1200.0, dpos[0].PositionSeconds)
+}
+
+// #3772 review B1: the touched-survivor reconcile is safe to run twice. A
+// re-run (UndoCombine retried after a later absorbed book failed, or a
+// retried user_state_follow revert) used to find the reconciled survivor
+// matching neither snapshot and take the listened-time delta again: 5100s
+// became 9900s (double count) and 3500s became 1000s (listened time
+// destroyed). Both reviewer probes, each run twice and three times.
+func TestRestoreFollowedProgress_TouchedSurvivorRunTwice(t *testing.T) {
+	cases := []struct {
+		keep, dup, added, want float64
+	}{
+		{keep: 5000, dup: 200, added: 100, want: 5100},
+		{keep: 500, dup: 3000, added: 3000, want: 3500},
+	}
+	for _, tc := range cases {
+		t.Run(fmt.Sprintf("keep=%v_dup=%v_added=%v", tc.keep, tc.dup, tc.added), func(t *testing.T) {
+			s := setupTestStore(t).(*database.PebbleStore)
+			keep, dup := seedSyncBooks(t, s)
+			u := seedSyncUser(t, s)
+			ids := database.AsSyncIdentityStore(s)
+			for _, id := range []string{keep, dup} {
+				_, err := ids.MintOrGetSyncID(id)
+				require.NoError(t, err)
+			}
+			require.NoError(t, s.SetUserBookState(&database.UserBookState{UserID: u.ID, BookID: keep, Status: database.UserBookStatusInProgress, ProgressPct: 10, TotalListenedSeconds: tc.keep, LastActivityAt: rfT0}))
+			require.NoError(t, s.SetUserPositionAt(u.ID, keep, "a", 100, rfT0))
+			require.NoError(t, s.SetUserBookState(&database.UserBookState{UserID: u.ID, BookID: dup, Status: database.UserBookStatusInProgress, ProgressPct: 40, TotalListenedSeconds: tc.dup, LastActivityAt: rfT1}))
+			require.NoError(t, s.SetUserPositionAt(u.ID, dup, "a", 1200, rfT1))
+
+			progress, redirected, err := FollowAbsorbedJournaled(s, keep, dup, nil, nil)
+			require.NoError(t, err)
+			st, err := s.GetUserBookState(u.ID, keep)
+			require.NoError(t, err)
+			require.NoError(t, s.SetUserPosition(u.ID, keep, "b", 50))
+			st.TotalListenedSeconds += tc.added
+			st.LastActivityAt = time.Now()
+			require.NoError(t, s.SetUserBookState(st))
+
+			for run := 1; run <= 3; run++ {
+				_, err := RestoreFollowedProgress(s, keep, dup, redirected, progress)
+				require.NoError(t, err, "run %d", run)
+				kst, err := s.GetUserBookState(u.ID, keep)
+				require.NoError(t, err)
+				dst, err := s.GetUserBookState(u.ID, dup)
+				require.NoError(t, err)
+				require.Equal(t, tc.want, kst.TotalListenedSeconds, "run %d: keep's own time plus what was listened there since", run)
+				require.Equal(t, tc.dup, dst.TotalListenedSeconds, "run %d: dup has its own time back", run)
+				kpos, err := s.ListUserPositionsForBook(u.ID, keep)
+				require.NoError(t, err)
+				require.Len(t, kpos, 2, "run %d", run)
+			}
+		})
+	}
+}
+
+// failUserStateOnce fails SetUserBookState for one (user, book) once.
+type failUserStateOnce struct {
+	database.Store
+	user, book string
+	fired      bool
+}
+
+func (s *failUserStateOnce) Unwrap() database.Store { return s.Store }
+
+func (s *failUserStateOnce) SetUserBookState(st *database.UserBookState) error {
+	if !s.fired && st.UserID == s.user && st.BookID == s.book {
+		s.fired = true
+		return fmt.Errorf("injected SetUserBookState failure for %s/%s", st.UserID, st.BookID)
+	}
+	return s.Store.SetUserBookState(st)
+}
+
+// #3772 review B1: an UndoCombine that fails part way through the progress
+// restore -- after one user's touched survivor was reconciled, on the next
+// user -- and is retried re-runs the first user's reconcile. Their listened
+// time must come out the same as a single clean run: the survivor's own
+// 500s plus the 3000s listened there since, not 1000s.
+func TestCombineUndo_RetryAfterProgressFailureKeepsListenedTime(t *testing.T) {
+	store := setupTestStore(t)
+	f := seedUndoFixture(t, store)
+	at := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+	require.NoError(t, store.SetUserBookState(&database.UserBookState{UserID: f.user.ID, BookID: f.survivor, Status: "in_progress", ProgressPct: 10, TotalListenedSeconds: 500, LastActivityAt: at.Add(-time.Hour)}))
+	require.NoError(t, store.SetUserBookState(&database.UserBookState{UserID: f.user.ID, BookID: f.absA, Status: "in_progress", ProgressPct: 40, TotalListenedSeconds: 3000, LastActivityAt: at}))
+	// absA's listen is the newer one, so the combine carries its time.
+	pw := store.(database.UserPositionTimestampWriter)
+	require.NoError(t, pw.SetUserPositionAt(f.user.ID, f.survivor, "seg-s", 55, at.Add(-time.Hour)))
+	require.NoError(t, pw.SetUserPositionAt(f.user.ID, f.absA, "seg-a", 1234, at))
+	u2, err := store.CreateUser("second", "second@example.com", "argon2id", "x", []string{"user"}, "active")
+	require.NoError(t, err)
+	require.Less(t, f.user.ID, u2.ID, "the progress restore handles f.user first")
+	require.NoError(t, store.SetUserBookState(&database.UserBookState{UserID: u2.ID, BookID: f.absA, Status: "in_progress", ProgressPct: 20, LastActivityAt: at}))
+	require.NoError(t, store.SetUserPosition(u2.ID, f.absA, "seg-a", 77))
+
+	all := []string{f.survivor, f.absA, f.absB}
+	res, err := NewService(store).CombineBooks(all, f.survivor, nil)
+	require.NoError(t, err)
+	st, err := store.GetUserBookState(f.user.ID, f.survivor)
+	require.NoError(t, err)
+	require.Equal(t, 3000.0, st.TotalListenedSeconds, "precondition: absA's time was carried onto the survivor")
+	// f.user listens to the survivor after the combine.
+	require.NoError(t, store.SetUserPosition(f.user.ID, f.survivor, "seg-n", 9))
+	st.TotalListenedSeconds += 3000
+	st.LastActivityAt = time.Now()
+	require.NoError(t, store.SetUserBookState(st))
+
+	ms := NewService(&failUserStateOnce{Store: store, user: u2.ID, book: f.absA})
+	_, err = ms.UndoCombine(res.JournalID)
+	require.ErrorContains(t, err, "injected SetUserBookState failure")
+	mid, err := store.GetUserBookState(f.user.ID, f.survivor)
+	require.NoError(t, err)
+	require.Equal(t, 3500.0, mid.TotalListenedSeconds, "attempt 1 reconciled f.user before failing on the second user")
+
+	_, err = ms.UndoCombine(res.JournalID)
+	require.NoError(t, err, "the retry succeeds")
+	sst, err := store.GetUserBookState(f.user.ID, f.survivor)
+	require.NoError(t, err)
+	require.Equal(t, 3500.0, sst.TotalListenedSeconds, "the re-run reconcile does not take the delta again")
+	ast, err := store.GetUserBookState(f.user.ID, f.absA)
+	require.NoError(t, err)
+	require.Equal(t, 3000.0, ast.TotalListenedSeconds)
+	a2, err := store.GetUserBookState(u2.ID, f.absA)
+	require.NoError(t, err)
+	require.Equal(t, 20, a2.ProgressPct, "the second user's state is back on absA")
 }

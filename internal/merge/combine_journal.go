@@ -1,5 +1,5 @@
 // file: internal/merge/combine_journal.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
 // last-edited: 2026-10-05
 
@@ -774,7 +774,7 @@ func RestoreFollowedProgress(db UserProgressMerger, survivorID, absorbedID strin
 			}
 			// The user has listened to the survivor since. Take back only
 			// what the follow brought, keep what they did there since.
-			if err := reconcileTouchedSurvivor(db, p, survivorID, curSurv, curSurvPos); err != nil {
+			if err := reconcileTouchedSurvivor(db, p, survivorID, absorbedID, curSurv, curSurvPos); err != nil {
 				return warnings, err
 			}
 			warnings = append(warnings, fmt.Sprintf(
@@ -786,6 +786,62 @@ func RestoreFollowedProgress(db UserProgressMerger, survivorID, absorbedID strin
 		}
 	}
 	return warnings, nil
+}
+
+// survivorReconcilePrefix keys the per-user marker reconcileTouchedSurvivor
+// writes before its state write: merge:survivor-reconcile:<survivor>:
+// <absorbed>:<user>:<follow stamp>. The follow stamp (followStamp) is unique
+// to one follow's after-snapshot, so a later follow between the same books
+// gets a fresh key and a stale marker can never apply to it.
+const survivorReconcilePrefix = "merge:survivor-reconcile:"
+
+// survivorReconcileMarker records the survivor state's UpdatedAt as it was
+// right before reconcileTouchedSurvivor's state write. SetUserBookState
+// stamps UpdatedAt on every write, so on a re-run a different UpdatedAt
+// means that write (or a later one) landed.
+type survivorReconcileMarker struct {
+	PreUpdatedAt time.Time `json:"pre_updated_at"`
+}
+
+// followStamp is the newest stamp in a follow's after-snapshot of the
+// survivor: the state row's UpdatedAt (SetUserBookState stamps it on the
+// follow's write) or a carried position's.
+func followStamp(p CombineUserProgress) int64 {
+	var t time.Time
+	if p.SurvivorStateAfter != nil {
+		t = p.SurvivorStateAfter.UpdatedAt
+	}
+	for _, a := range p.SurvivorPosAfter {
+		if a.UpdatedAt.After(t) {
+			t = a.UpdatedAt
+		}
+	}
+	return t.UnixNano()
+}
+
+func survivorReconcileKey(survivorID, absorbedID, userID string, stamp int64) string {
+	return fmt.Sprintf("%s%s:%s:%s:%d", survivorReconcilePrefix, survivorID, absorbedID, userID, stamp)
+}
+
+// readSurvivorReconcileMarker reads the marker at key. ScanPrefix is the
+// store's only raw read on UserProgressMerger, so the exact key is matched
+// among the rows it returns.
+func readSurvivorReconcileMarker(db UserProgressMerger, key string) (*survivorReconcileMarker, error) {
+	rows, err := db.ScanPrefix(key)
+	if err != nil {
+		return nil, fmt.Errorf("read survivor reconcile marker %s: %w", key, err)
+	}
+	for _, r := range rows {
+		if r.Key != key {
+			continue
+		}
+		var m survivorReconcileMarker
+		if err := json.Unmarshal(r.Value, &m); err != nil {
+			return nil, fmt.Errorf("decode survivor reconcile marker %s: %w", key, err)
+		}
+		return &m, nil
+	}
+	return nil, nil
 }
 
 // reconcileTouchedSurvivor puts one user's survivor progress back to its
@@ -807,7 +863,24 @@ func RestoreFollowedProgress(db UserProgressMerger, survivorID, absorbedID strin
 //     carried seconds -- which go back to the absorbed book -- are not on
 //     both books. A counter that went DOWN since (a reset) keeps its value.
 //   - LastSegmentID names the newest remaining position's segment.
-func reconcileTouchedSurvivor(db userPositionStore, p CombineUserProgress, survivorID string, cur *database.UserBookState, curPos []database.UserPosition) error {
+//
+// Safe to run twice (#3772 review B1). Every rule above is idempotent except
+// listened time, whose delta is taken against the after-snapshot: a second
+// run would find the reconciled survivor matching neither snapshot and
+// subtract or add the carried seconds again (double-counting them, or
+// destroying the user's listened time). So before the state write a
+// per-user marker is journaled (survivorReconcileMarker) with the state's
+// UpdatedAt as it was then. A re-run that finds the marker and a different
+// UpdatedAt knows the write landed and keeps the current listened time
+// (every second the user added after it is already in it); one that finds
+// the same UpdatedAt knows it did not land and does the full reconcile. The
+// one case it cannot separate is a crash between the marker and the write
+// with a client write landing in that window; it then keeps the current
+// listened time, which may still hold the carried seconds once -- never
+// fewer seconds than the user listened. UndoCombine (re-run when a later
+// absorbed book fails) and the user_state_follow revert (retried after a
+// failure) both come through here.
+func reconcileTouchedSurvivor(db UserProgressMerger, p CombineUserProgress, survivorID, absorbedID string, cur *database.UserBookState, curPos []database.UserPosition) error {
 	afterBy := map[string]database.UserPosition{}
 	for _, a := range p.SurvivorPosAfter {
 		afterBy[a.SegmentID] = a
@@ -861,7 +934,13 @@ func reconcileTouchedSurvivor(db userPositionStore, p CombineUserProgress, survi
 	if timePtrEqual(cur.ProgressResetAt, after.ProgressResetAt) && slices.Equal(cur.ProgressResetPositions, after.ProgressResetPositions) {
 		st.ProgressResetAt, st.ProgressResetPositions = before.ProgressResetAt, before.ProgressResetPositions
 	}
-	if added := cur.TotalListenedSeconds - after.TotalListenedSeconds; added >= 0 {
+	key := survivorReconcileKey(survivorID, absorbedID, p.UserID, followStamp(p))
+	marker, err := readSurvivorReconcileMarker(db, key)
+	if err != nil {
+		return err
+	}
+	landed := marker != nil && !cur.UpdatedAt.Equal(marker.PreUpdatedAt)
+	if added := cur.TotalListenedSeconds - after.TotalListenedSeconds; !landed && added >= 0 {
 		st.TotalListenedSeconds = before.TotalListenedSeconds + added
 	}
 	st.LastSegmentID = before.LastSegmentID
@@ -873,6 +952,15 @@ func reconcileTouchedSurvivor(db userPositionStore, p CombineUserProgress, survi
 	}
 	if newest != nil {
 		st.LastSegmentID = newest.SegmentID
+	}
+	if marker == nil {
+		data, err := json.Marshal(survivorReconcileMarker{PreUpdatedAt: cur.UpdatedAt})
+		if err != nil {
+			return fmt.Errorf("encode survivor reconcile marker: %w", err)
+		}
+		if err := db.SetRaw(key, data); err != nil {
+			return fmt.Errorf("journal survivor reconcile marker user=%s book=%s: %w", p.UserID, survivorID, err)
+		}
 	}
 	if err := db.SetUserBookState(&st); err != nil {
 		return fmt.Errorf("reconcile state user=%s book=%s: %w", p.UserID, survivorID, err)
