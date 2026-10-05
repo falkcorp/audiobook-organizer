@@ -879,6 +879,14 @@ func AwaitAuthority(ctx context.Context, store any) (authority.Lookup, bool) {
 		}
 		return authority.Empty(), false
 	}
+	return CurrentAuthority(store)
+}
+
+// CurrentAuthority is AwaitAuthority without the wait, for a path that must
+// not block (a repairs apply holding the scan stand-down lease): the lists
+// the store answers right now through AuthoritySource, and whether that is a
+// real snapshot rather than authority.Empty().
+func CurrentAuthority(store any) (authority.Lookup, bool) {
 	l := authorityOf(store)
 	return l, l != authority.Empty()
 }
