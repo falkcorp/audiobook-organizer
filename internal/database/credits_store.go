@@ -1,5 +1,5 @@
 // file: internal/database/credits_store.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3ef0e962-a1f0-4d40-a589-c54d7e618523
 // last-edited: 2026-10-04
 
@@ -153,7 +153,9 @@ func (p *PebbleStore) ModifyBookCredits(bookID string, fn func(book *Book, credi
 		return nil, BookCreditsEdit{}, err
 	}
 
-	newAuthors, authorData, err := encodeBookAuthors(bookID, edit.Authors)
+	// The tie-breaker is the row as fn left it: a callback that changes the
+	// primary author and the credits together orders them by the new one.
+	newAuthors, authorData, err := encodeBookAuthors(bookID, edit.Authors, fresh.AuthorID)
 	if err != nil {
 		return nil, BookCreditsEdit{}, err
 	}
@@ -185,9 +187,10 @@ func (p *PebbleStore) ModifyBookCredits(bookID string, fn func(book *Book, credi
 // BookCredits when the book credits no one).
 //
 // Rows are read in canonical order (NormalizeBookAuthors /
-// NormalizeBookNarrators), so a list stored before positions were normalised
-// on write, such as the all-zero rows an old copy path wrote, comes back in
-// its stored order rather than shuffled. An author id that redirects through a
+// NormalizeBookNarrators), the same order a write would store them in: a list
+// stored before positions were normalised on write, such as the all-zero
+// rows an old copy path wrote, comes back with the book's AuthorID first
+// among tied rows and the rest in stored order. An author id that redirects through a
 // tombstone resolves to its canonical author; two rows that resolve to the
 // same author are listed once, at the first position. A row whose record no
 // longer exists is left out, and the positions returned are renumbered
@@ -228,8 +231,16 @@ func (p *PebbleStore) bookCredits(bookID string, authorCache map[int]*Author, na
 	if err != nil {
 		return BookCredits{}, fmt.Errorf("GetBookCredits: book authors of %s: %w", bookID, err)
 	}
+	// Rows stored before writes were normalised can still tie on position;
+	// order them exactly as the next write would store them.
+	var primary *int
+	if len(authorRows) > 1 {
+		if primary, err = p.bookPrimaryAuthorID(bookID); err != nil {
+			return BookCredits{}, fmt.Errorf("GetBookCredits: %w", err)
+		}
+	}
 	seenAuthor := map[int]bool{}
-	for _, row := range NormalizeBookAuthors(authorRows) {
+	for _, row := range NormalizeBookAuthors(authorRows, primary) {
 		a, cached := authorCache[row.AuthorID]
 		if !cached {
 			a, err = p.GetAuthorByID(row.AuthorID)

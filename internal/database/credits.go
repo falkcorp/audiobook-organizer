@@ -1,5 +1,5 @@
 // file: internal/database/credits.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3cb12a4a-40b2-48b2-ad10-67e6e1ccdf9d
 // last-edited: 2026-10-04
 
@@ -119,17 +119,25 @@ func JoinCreditNamesABS(names []string) string {
 	return strings.Join(cleanNames(names), ", ")
 }
 
-// NormalizeBookAuthors returns rows in canonical form: ordered by Position
-// (ties keep their stored order), one row per (author, role) pair (the
-// first, i.e. the lowest position, wins), and Position renumbered 0..n-1.
-// Rows with a non-positive AuthorID are dropped. The input slice is not
-// modified.
+// NormalizeBookAuthors returns rows in canonical form: ordered by Position,
+// one row per (author, role) pair (the first, i.e. the lowest position,
+// wins), and Position renumbered 0..n-1. Rows with a non-positive AuthorID
+// are dropped. The input slice is not modified.
 //
-// Ties keep stored order because production holds rows that an old copy
-// path wrote all at position 0, followed by rows a later add-only apply
-// appended at max+1 (the "A @0, B @0, A+B @1" shape found on 2026-10-04).
-// Stored order is the order they were credited in, so A, B, A+B becomes
-// positions 0, 1, 2.
+// primary is the book row's AuthorID (nil or <= 0 when unset). Renumbering
+// erases a position tie for good, so the tie must be broken correctly the
+// first time: within a group of rows at the same position, the rows naming
+// primary sort first, then the rest in stored order. This matters because
+// production holds rows that an old copy path wrote all at position 0,
+// followed by rows a later add-only apply appended at max+1 (the
+// "A @0, B @0, A+B @1" shape found on 2026-10-04). In such a list nothing but
+// Book.AuthorID says who the primary is, and LiveBookAuthorNames and the
+// organizer already treat it as the primary. Breaking the tie by stored order
+// alone would let any credit write turn [B@0, A@0] with AuthorID=A into
+// B-first, and a later step that derives the primary from position 0 would
+// then change the author the organizer files the book under. When primary is
+// unset, or is not in the tie group, ties keep stored order: that is the
+// order the rows were credited in.
 //
 // The same author may legitimately appear twice with DIFFERENT roles: an
 // author who also narrates keeps an "author" row and a "narrator" row, and
@@ -137,14 +145,23 @@ func JoinCreditNamesABS(names []string) string {
 // (author, role) repeat is dropped. memdb's book_authors primary index is
 // {BookID, AuthorID}, so memdb holds one of such a pair; that existing gap
 // is not changed here.
-func NormalizeBookAuthors(rows []BookAuthor) []BookAuthor {
+func NormalizeBookAuthors(rows []BookAuthor, primary *int) []BookAuthor {
+	primaryID := 0
+	if primary != nil && *primary > 0 {
+		primaryID = *primary
+	}
 	sorted := make([]BookAuthor, 0, len(rows))
 	for _, r := range rows {
 		if r.AuthorID > 0 {
 			sorted = append(sorted, r)
 		}
 	}
-	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Position < sorted[j].Position })
+	sort.SliceStable(sorted, func(i, j int) bool {
+		if sorted[i].Position != sorted[j].Position {
+			return sorted[i].Position < sorted[j].Position
+		}
+		return primaryID != 0 && sorted[i].AuthorID == primaryID && sorted[j].AuthorID != primaryID
+	})
 	type key struct {
 		id   int
 		role string
@@ -164,7 +181,10 @@ func NormalizeBookAuthors(rows []BookAuthor) []BookAuthor {
 }
 
 // NormalizeBookNarrators is NormalizeBookAuthors for narrator credits: one row
-// per (narrator, role) pair.
+// per (narrator, role) pair. Ties keep stored order: a book has no flat
+// primary-narrator id to break them with (Book.Narrator is a credit string,
+// not a record), and the plan's narrator backfill rebuilds from that string,
+// not from positions.
 func NormalizeBookNarrators(rows []BookNarrator) []BookNarrator {
 	sorted := make([]BookNarrator, 0, len(rows))
 	for _, r := range rows {

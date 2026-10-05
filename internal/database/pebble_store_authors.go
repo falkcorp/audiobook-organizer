@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_authors.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 1f8b9fd2-e424-4a09-9ee4-7b5b64660605
 // last-edited: 2026-10-04
 
@@ -782,10 +782,15 @@ func (p *PebbleStore) ModifyBookAuthors(bookID string, fn func([]BookAuthor) ([]
 
 // setBookAuthorsLocked is SetBookAuthors' body; the caller holds the
 // book_authors stripe for bookID. It returns the rows as written: normalised
-// (NormalizeBookAuthors: position order, one row per author, positions
-// 0..n-1) and stamped with bookID.
+// (NormalizeBookAuthors: position order with Book.AuthorID first among
+// equal positions, one row per (author, role), positions 0..n-1) and stamped
+// with bookID.
 func (p *PebbleStore) setBookAuthorsLocked(bookID string, authors []BookAuthor) ([]BookAuthor, error) {
-	authors, data, err := encodeBookAuthors(bookID, authors)
+	primary, err := p.bookPrimaryAuthorID(bookID)
+	if err != nil {
+		return nil, err
+	}
+	authors, data, err := encodeBookAuthors(bookID, authors, primary)
 	if err != nil {
 		return nil, err
 	}
@@ -796,6 +801,26 @@ func (p *PebbleStore) setBookAuthorsLocked(bookID string, authors []BookAuthor) 
 	return authors, nil
 }
 
+// bookPrimaryAuthorID returns the book row's AuthorID, the tie-breaker
+// NormalizeBookAuthors needs, or nil when the book has none or there is no
+// row yet. It is a plain Pebble read and takes no lock, so calling it under
+// the book_authors stripe adds no lock-order edge (the order is book -> owner
+// -> book_authors; taking the book stripe here would invert it). The value
+// can be overtaken by a concurrent AuthorID write; it only orders rows that
+// share a position, and the next credit write re-reads it. A read error fails
+// the credit write: guessing the primary would make the tie permanent with
+// the wrong author first.
+func (p *PebbleStore) bookPrimaryAuthorID(bookID string) (*int, error) {
+	b, err := p.GetBookByID(bookID)
+	if err != nil {
+		return nil, fmt.Errorf("read book %s for its primary author: %w", bookID, err)
+	}
+	if b == nil {
+		return nil, nil
+	}
+	return b.AuthorID, nil
+}
+
 // bookAuthorsKey is the Pebble key of a book's author credit list.
 func bookAuthorsKey(bookID string) []byte { return []byte("book_authors:" + bookID) }
 
@@ -804,10 +829,11 @@ func bookNarratorsKey(bookID string) []byte { return []byte("book_narrators:" + 
 
 // encodeBookAuthors puts rows in the form every author-credit write stores:
 // normalised (a new slice, so the caller's is never touched) and stamped with
-// bookID. A caller-supplied BookID naming a different book is overridden and
-// logged; see SetBookAuthors.
-func encodeBookAuthors(bookID string, rows []BookAuthor) ([]BookAuthor, []byte, error) {
-	rows = NormalizeBookAuthors(rows)
+// bookID. primary is the book's AuthorID, the position tie-breaker (see
+// NormalizeBookAuthors). A caller-supplied BookID naming a different book is
+// overridden and logged; see SetBookAuthors.
+func encodeBookAuthors(bookID string, rows []BookAuthor, primary *int) ([]BookAuthor, []byte, error) {
+	rows = NormalizeBookAuthors(rows, primary)
 	if n := stampBookAuthorsInPlace(bookID, rows); n > 0 {
 		slog.Warn("SetBookAuthors: overriding caller-supplied book_id that names a different book",
 			"book_id", bookID, "mismatched_rows", n)
