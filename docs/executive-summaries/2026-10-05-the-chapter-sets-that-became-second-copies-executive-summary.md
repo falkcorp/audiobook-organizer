@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-05-the-chapter-sets-that-became-second-copies-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 947b3d82-2669-4187-8065-4f7e76ee4cf8 -->
 <!-- last-edited: 2026-10-05 -->
 
@@ -14,10 +14,12 @@
   were second copies of books the library already had ("Book 2 - Eldest",
   347 chapters, beside "Eldest", 349 files).
 - **It now checks first.** Before building anything, the repair looks for a
-  book with the same title (ignoring series numbers such as "Book 2 -") by any
-  author. If one exists and the running times agree, the chapters are folded
-  into it instead. If the running times disagree, nothing happens and the
-  owner decides.
+  book with the same title. A leading series number such as "Book 2 -" is set
+  aside but still has to agree, and a volume number ("Vol 3") is part of the
+  title, so volume 3 is never folded into volume 1. If the same work exists,
+  by the same author, and the running times agree, the chapters are folded
+  into it instead. Otherwise nothing happens and the owner decides. A folder
+  of chapters with no recognisable title is held rather than built blind.
 - **Copies of a book's chapters are recognised.** Chapters that are re-tagged
   copies of another book's files (same place in the book, same length, a
   fixed size difference) are never built into a book.
@@ -25,9 +27,10 @@
   left out of the repair's list without a word. Each now appears with the
   reason it was not grouped.
 - **Shared files follow the owner's rule.** When another book also holds one
-  of the chapter files, a book with a different title blocks the repair, a
-  same-titled book of the same length takes the chapters, and a book of a
-  different length is left alone while the repair goes ahead.
+  of the chapter files, it is compared with the whole book being repaired: a
+  different title or author blocks the repair, a same-titled book of the same
+  length takes the chapters, a same-titled book of a different length holds
+  the repair for review, and only an untitled stray lets it go ahead.
 - **Not yet addressed.** The 13 duplicates already made that night are not
   touched by this change; undoing or merging them is a separate decision.
 
@@ -72,5 +75,5 @@ whatever that book was.
 **Why it mattered.** Real repairs waited forever, and nothing told a second
 edition from a different work.
 
-**The fix.** The owner's rule decides by title and running time, and every
-such repair is marked for review.
+**The fix.** The owner's rule decides by title, author and the running time
+of the whole book, and every such repair is marked for review.

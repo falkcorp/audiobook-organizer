@@ -269,6 +269,10 @@ const (
 	fragSkipScattered    = "skipped_scattered_numbered"
 	fragSkipNoChapterKey = "skipped_no_chapter_key"
 	fragSkipUnplaced     = "skipped_unplaced"
+	// fragSkipNoTitleKey: no title, folder name or chapter key of a
+	// no-parent group names a work, so the library cannot be checked for an
+	// existing book of it; the group is held rather than assembled blind.
+	fragSkipNoTitleKey = "skipped_no_title_key"
 )
 
 // Evidence kinds of a fragment-to-parent match, strongest first.
@@ -3882,37 +3886,82 @@ func newFragLive(lib *fragLibrary) *fragLive {
 var (
 	// fragTitleEditionRe: a trailing bracketed edition note ("(Unabridged)").
 	fragTitleEditionRe = regexp.MustCompile(`(?i)\s*[(\[{][^)\]}]*\b(?:unabridged|abridged|audiobook|audio book|retail|dramati[sz]ed)\b[^)\]}]*[)\]}]\s*$`)
-	// fragTitleTrailBookRe: a trailing series position ("Eldest, Book 2",
-	// "Eldest (Book 2)"). A bare trailing number is never stripped: "Dragon
-	// Born 3" is not "Dragon Born".
-	fragTitleTrailBookRe = regexp.MustCompile(`(?i)[\s,:;(\[-]+(?:book|bk|vol(?:ume)?|no|number)\.?\s*#?\d+(?:\.\d+)?[)\]]?\s*$`)
+	// fragTitleVolRe: a volume or book number anywhere in what is left
+	// ("Saga, Vol 3", "Harry Potter, Book 1", "No. 4"). It is never
+	// stripped: it is canonicalised ("vol"/"volume" -> "vol", "bk"/"book" ->
+	// "book", "no"/"number"/"#" -> "no", leading zeros dropped) and stays in
+	// the key, so "Saga, Vol 3" is not "Saga, Vol 1" and "Dragon Born, Book
+	// 3" is not "Dragon Born".
+	fragTitleVolRe = regexp.MustCompile(`(?i)\b(book|bk|vol(?:ume)?|no|number)\b\.?\s*#?0*(\d+)|#\s*0*(\d+)`)
 	// fragTitleLeadNumRe: a leading position ("Book 2 - ", "02 - ", "2. ",
-	// "Vol 3: ", "#4 - ", "02_").
-	fragTitleLeadNumRe = regexp.MustCompile(`(?i)^(?:(?:book|bk|vol(?:ume)?|no|number)\.?\s*)?#?\d+(?:\.\d+)?\s*[-–—:._)]+\s*`)
+	// "Vol 3: ", "#4 - ", "02_"). Taken off the title and kept as the
+	// title's position.
+	fragTitleLeadNumRe = regexp.MustCompile(`(?i)^(?:(?:book|bk|vol(?:ume)?|no|number)\.?\s*)?#?(\d+(?:\.\d+)?)\s*[-–—:._)]+\s*`)
 	// fragTitleSeriesRe: a series name with a position before the title
-	// ("Inheritance Cycle 02 - Eldest", "Saga, Book 3 - Horizon Storms",
-	// "Foundation 6 - Foundation's Edge"). A plain "X - Y" is left alone:
-	// "Doctor Who - Loose" is not "Loose".
-	fragTitleSeriesRe = regexp.MustCompile(`(?i)^.+?[\s,]+(?:(?:book|bk|vol(?:ume)?|no|number)\.?\s*)?#?\d+(?:\.\d+)?\s*[-–—:]\s+`)
+	// ("Inheritance Cycle 02 - Eldest", "Foundation 6 - Foundation's
+	// Edge"). Taken off and the number kept as the position. A plain "X - Y"
+	// is left alone: "Doctor Who - Loose" is not "Loose".
+	fragTitleSeriesRe = regexp.MustCompile(`(?i)^.+?[\s,]+(?:(?:book|bk|vol(?:ume)?|no|number)\.?\s*)?#?(\d+(?:\.\d+)?)\s*[-–—:]\s+`)
 )
 
-// fragTitleKey is the key two titles of one work share: letters and digits
-// of the title with series noise stripped (a leading "Book 2 - " or "02 - ",
-// a series name with a position, a trailing ", Book 2", a bracketed edition
-// note). "" when what is left names no work: fewer than three letters or
-// digits, digits only, a chapter-only title ("Part 3") or a generic folder
-// name. Both sides of a comparison go through it, so stripping is symmetric.
-func fragTitleKey(title string) string {
+// fragTitleID is what fragTitleIdentity reads from a title: the key of the
+// work's name and its series position ("" none).
+type fragTitleID struct{ key, pos string }
+
+// sameWork reports whether two titles name one work: the same key, and no
+// two different positions ("Book 2 - Eldest" is "Eldest", but not "Book 3 -
+// Eldest").
+func (a fragTitleID) sameWork(b fragTitleID) bool {
+	return a.key != "" && a.key == b.key && (a.pos == "" || b.pos == "" || a.pos == b.pos)
+}
+
+// fragIDsMatch reports whether a book's title id names the work a group
+// goes by: one of the group's ids has its key, and none with that key
+// carries another position.
+func fragIDsMatch(group []fragTitleID, b fragTitleID) bool {
+	hit := false
+	for _, g := range group {
+		if g.key != b.key || b.key == "" {
+			continue
+		}
+		if !g.sameWork(b) {
+			return false
+		}
+		hit = true
+	}
+	return hit
+}
+
+func fragTitleKey(title string) string { return fragTitleIdentity(title).key }
+
+// fragTitleIdentity reads the work a title names: a leading position ("Book
+// 2 - ", "02 - ", a series name with a position) is taken off and kept as
+// the position; a bracketed edition note is dropped; a volume or book number
+// elsewhere stays in the key, canonicalised (fragTitleVolRe). The key is the
+// letters and digits left; "" when they name no work: fewer than three, digits
+// only, a chapter-only title ("Part 3") or a generic folder name.
+func fragTitleIdentity(title string) fragTitleID {
 	t := strings.TrimSpace(title)
 	t, _ = metadata.StripRipJunk(t)
+	pos := ""
 	for range 3 {
 		before := t
 		t = strings.TrimSpace(fragTitleEditionRe.ReplaceAllString(t, ""))
-		t = strings.TrimSpace(fragTitleTrailBookRe.ReplaceAllString(t, ""))
-		if rest := strings.TrimSpace(fragTitleLeadNumRe.ReplaceAllString(t, "")); rest != "" {
-			t = rest
-		}
-		if rest := strings.TrimSpace(fragTitleSeriesRe.ReplaceAllString(t, "")); rest != "" {
+		for _, re := range []*regexp.Regexp{fragTitleLeadNumRe, fragTitleSeriesRe} {
+			m := re.FindStringSubmatchIndex(t)
+			if m == nil {
+				continue
+			}
+			rest := strings.TrimSpace(t[m[1]:])
+			if rest == "" {
+				continue
+			}
+			if pos == "" {
+				pos = strings.TrimLeft(t[m[2]:m[3]], "0")
+				if pos == "" {
+					pos = "0"
+				}
+			}
 			t = rest
 		}
 		if t == before {
@@ -3920,29 +3969,84 @@ func fragTitleKey(title string) string {
 		}
 	}
 	if t == "" || metadata.IsChapterOnlyTitle(t) || metadata.IsGenericDirName(t) {
-		return ""
+		return fragTitleID{}
 	}
+	t = fragTitleVolRe.ReplaceAllStringFunc(t, func(m string) string {
+		sm := fragTitleVolRe.FindStringSubmatch(m)
+		if sm[3] != "" {
+			return " no " + sm[3]
+		}
+		w := strings.ToLower(sm[1])
+		switch {
+		case strings.HasPrefix(w, "vol"):
+			w = "vol"
+		case w == "bk" || w == "book":
+			w = "book"
+		default:
+			w = "no"
+		}
+		return " " + w + " " + sm[2]
+	})
 	k := junkLettersKey(t)
 	if len([]rune(k)) < 3 || strings.Trim(k, "0123456789") == "" {
-		return ""
+		return fragTitleID{}
 	}
-	return k
+	return fragTitleID{key: k, pos: pos}
 }
 
-// fragGroupTitleKeys are the keys a group's work goes by: the title the row
-// would give it, and the name of the work folder it was imported from.
-func fragGroupTitleKeys(plan *fragGroupPlan) []string {
-	var keys []string
+// fragGroupTitleKeys are the title ids a group's work goes by: the title the
+// row would give it, the work folder it was imported from (by the folder
+// walk, or the folder's own name when that walk refuses it, as for a folder
+// under a library root: "/data/Audiobooks/Eldest"), and for a key group its
+// chapter key and its members' titles without their chapter numbers. A
+// numbered set's members are chapters with names of their own, never the
+// work's name, so they are not read.
+func fragGroupTitleKeys(plan *fragGroupPlan) []fragTitleID {
+	var ids []fragTitleID
 	add := func(t string) {
-		if k := fragTitleKey(t); k != "" && !contains(keys, k) {
-			keys = append(keys, k)
+		if id := fragTitleIdentity(t); id.key != "" && !slices.Contains(ids, id) {
+			ids = append(ids, id)
 		}
 	}
 	add(plan.Title)
 	if t, ok := metadata.WorkFolderTitle(plan.Dir); ok {
 		add(t)
 	}
-	return keys
+	if base := strings.TrimSpace(filepath.Base(filepath.Clean(plan.Dir))); !metadata.IsGenericDirName(base) {
+		add(base)
+	}
+	if plan.Key != fragNumberedKey {
+		add(plan.Key)
+		for _, m := range plan.Members {
+			if k, kind := metadata.ChapterGroupKey(m.Frag.Book.Title); kind != metadata.ChapterKeyNone {
+				add(k)
+			}
+		}
+	}
+	return ids
+}
+
+// fragAuthorsDiffer reports whether two credits are known and name different
+// people: neither is empty or a placeholder ("Unknown"), and neither credit
+// includes the other (authorname.CreditIncludes: case, initials, "Surname,
+// Given" and list order do not count as a difference).
+func fragAuthorsDiffer(a, b string) bool {
+	a, b = strings.TrimSpace(a), strings.TrimSpace(b)
+	if a == "" || b == "" || authorname.IsPlaceholderAuthor(a) || authorname.IsPlaceholderAuthor(b) {
+		return false
+	}
+	return !authorname.CreditIncludes(a, b) && !authorname.CreditIncludes(b, a)
+}
+
+// groupAuthor is a no-parent row's author: the first real author
+// (realAuthorID) any member carries, "" none.
+func groupAuthor(lib *fragLibrary, plan *fragGroupPlan) string {
+	for _, m := range plan.Members {
+		if a := lib.realAuthorID(m.Frag.Book, plan.Dir); a != nil {
+			return lib.authors[*a]
+		}
+	}
+	return ""
 }
 
 // fragDurationsAgree reports whether two totals (seconds) are one recording:
@@ -3977,6 +4081,9 @@ type fragExisting struct {
 	total, unknown int
 	files          int
 	coOwner        bool
+	// authorDiffers: both this row's and the book's authors are known and
+	// name different people ("Origin" by Jessica Khoury is not Dan Brown's).
+	authorDiffers bool
 	// credit is the duration of this group's folders' fragments an earlier
 	// join already retired into the book (a cut-off run): they are part of
 	// the set the book is compared with. creditIDs names them.
@@ -4041,15 +4148,21 @@ func (f *fragmentFixer) existingBookCheck(lib *fragLibrary, live *fragLive, r *r
 		memberFolders[filepath.Dir(cp.Frag.File.Path)] = true
 	}
 	keys := fragGroupTitleKeys(plan)
+	author := groupAuthor(lib, plan)
 	var named []fragExisting
 	seen := map[string]bool{}
 	for _, k := range keys {
-		for _, id := range live.byTitle[k] {
+		for _, id := range live.byTitle[k.key] {
 			if in[id] || seen[id] {
 				continue
 			}
 			seen[id] = true
-			e := fragExisting{id: id, coOwner: coOwn[id]}
+			if !fragIDsMatch(keys, fragTitleIdentity(lib.books[id].Title)) {
+				// Same name, another position: "Book 3 - Eldest" is not
+				// "Book 2 - Eldest", and is neither joined nor a hold.
+				continue
+			}
+			e := fragExisting{id: id, coOwner: coOwn[id], authorDiffers: fragAuthorsDiffer(author, lib.authorName(lib.books[id]))}
 			e.total, e.unknown, e.files = lib.bookTotal(id)
 			switch {
 			case e.coOwner, e.files >= 2:
@@ -4101,27 +4214,39 @@ func (f *fragmentFixer) existingBookCheck(lib *fragLibrary, live *fragLive, r *r
 			return
 		}
 	}
+	source := fmt.Sprintf("this row's work: folder %q, title %q, author %q", filepath.Base(plan.Dir), plan.Title, author)
+	if len(keys) == 0 {
+		why := "no title, folder name or chapter key of this group names a work (" + source + "), so the library cannot be checked for an existing book of it; give the folder or the files a title, then plan again"
+		r.Evidence = append(r.Evidence, why)
+		if r.Class != fragClassManual && r.Skipped == "" {
+			r.Risk, r.Skipped, r.SkipReason = repairs.RiskReview, fragSkipNoTitleKey, why
+		}
+		return
+	}
 	if len(named) == 0 {
 		return
 	}
 	describe := func(e fragExisting) string {
-		s := fmt.Sprintf("book %s (%q, %d file(s), %s", e.id, lib.books[e.id].Title, e.files, fragHours(e.total))
+		s := fmt.Sprintf("book %s (%q by %q, %d file(s), %s", e.id, lib.books[e.id].Title, lib.authorName(lib.books[e.id]), e.files, fragHours(e.total))
 		if e.unknown > 0 {
 			s += fmt.Sprintf(", %d file(s) with no duration", e.unknown)
 		}
 		if e.coOwner {
 			s += ", also holds rows at this row's files"
 		}
+		if e.authorDiffers {
+			s += ", by a different author"
+		}
 		return s + ")"
 	}
-	setDesc := fmt.Sprintf("the %d kept fragment(s) total %s", len(plan.Members), fragHours(setTotal))
+	setDesc := fmt.Sprintf("%s; the %d kept fragment(s) total %s", source, len(plan.Members), fragHours(setTotal))
 	if setUnknown > 0 {
 		setDesc += fmt.Sprintf(" with %d of unknown duration", setUnknown)
 	}
 	// 2. a same-title book whose total agrees
 	var agree []fragExisting
 	for _, e := range named {
-		if setUnknown == 0 && e.unknown == 0 && setTotal > 0 && fragDurationsAgree(setTotal+e.credit, e.total) {
+		if !e.authorDiffers && setUnknown == 0 && e.unknown == 0 && setTotal > 0 && fragDurationsAgree(setTotal+e.credit, e.total) {
 			agree = append(agree, e)
 		}
 	}
@@ -4148,7 +4273,7 @@ func (f *fragmentFixer) existingBookCheck(lib *fragLibrary, live *fragLive, r *r
 	// a moved or copy row.
 	var separate []fragExisting
 	for _, e := range named {
-		if !e.coOwner {
+		if !e.coOwner || e.authorDiffers {
 			separate = append(separate, e)
 		}
 	}
@@ -4158,7 +4283,7 @@ func (f *fragmentFixer) existingBookCheck(lib *fragLibrary, live *fragLive, r *r
 			ds = append(ds, describe(e))
 		}
 		f.holdExisting(lib, r, plan, separate[0].id, fragSkipExistingBook, fmt.Sprintf(
-			"a live book of this title already exists: %s; %s, which does not agree within max(2%%, 5 min) (or a total is unknown), so assembling them would make a second book of the work and retiring them into it is not proven; decide by hand",
+			"a live book of this title already exists: %s; %s: the totals do not agree within max(2%%, 5 min), a total is unknown, or the authors differ, so assembling them could make a second book of the work and retiring them into it is not proven; decide by hand",
 			strings.Join(ds, "; "), setDesc))
 	}
 }
@@ -4246,6 +4371,13 @@ func (f *fragmentFixer) joinExisting(lib *fragLibrary, r *repairs.Row, plan *fra
 		}
 	}
 	r.Members = append(r.Members, member(lib, target, "existing book"))
+	if r.Current == nil {
+		r.Current = map[string]string{}
+	}
+	// The row is titled after the book it joins; what the fragments were
+	// planned as stays visible beside it.
+	r.Current["source_title"], r.Current["source_author"] = r.Title, r.Author
+	r.Current["source_folder"] = filepath.Base(plan.Dir)
 	r.Title, r.Author = target.Title, lib.authorName(target)
 	n := len(plan.Members) + len(plan.Copies)
 	r.Reason = fmt.Sprintf("%d chapter files imported as separate books duplicate the existing book %s (%q)", n, e.id, target.Title)
@@ -4634,7 +4766,7 @@ func (f *fragmentFixer) noParentRow(lib *fragLibrary, dir, key string, cs []*fra
 	r.Evidence = []string{
 		shared,
 		fmt.Sprintf("durations of the %d kept chapter file(s): %d known, %d unknown, %d at or over %d min", len(plan.Members), len(plan.Members)-unknown, unknown, long, limit/60),
-		"no existing book owns any of these files",
+		"none of these files matched a row of a multi-file book (other live books holding them are checked as co-owners, and same-titled books as existing books, below)",
 	}
 	if len(stems) > 0 {
 		more := ""
@@ -5815,24 +5947,68 @@ type fragCoVerdict struct {
 	why  string
 }
 
-// rowWorkKeys are the title keys of the work a row folds into: a no-parent
-// row's group keys, or a moved or copy row's parent title and work folder.
-func rowWorkKeys(lib *fragLibrary, r *repairs.Row) []string {
+// rowWorkKeys are the title ids of the work a row folds into: a no-parent
+// row's group ids, or a moved or copy row's parent title and work folder.
+func rowWorkKeys(lib *fragLibrary, r *repairs.Row) []fragTitleID {
 	if plan, ok := r.Detail.(*fragGroupPlan); ok {
 		return fragGroupTitleKeys(plan)
 	}
-	_, parentID, _ := strings.Cut(r.RowID, ":")
-	pb, ok := lib.books[parentID]
+	pb, ok := lib.books[rowParent(r)]
 	if !ok {
 		return nil
 	}
-	var keys []string
-	for _, t := range []string{pb.Title, func() string { t, _ := metadata.WorkFolderTitle(pb.FilePath); return t }()} {
-		if k := fragTitleKey(t); k != "" && !contains(keys, k) {
-			keys = append(keys, k)
+	var ids []fragTitleID
+	wf, _ := metadata.WorkFolderTitle(pb.FilePath)
+	for _, t := range []string{pb.Title, wf} {
+		if id := fragTitleIdentity(t); id.key != "" && !slices.Contains(ids, id) {
+			ids = append(ids, id)
 		}
 	}
-	return keys
+	return ids
+}
+
+// rowParent is a moved or copy row's parent id ("" for a no-parent row).
+func rowParent(r *repairs.Row) string {
+	if _, ok := r.Detail.([]fragPair); !ok {
+		return ""
+	}
+	_, parentID, _ := strings.Cut(r.RowID, ":")
+	return parentID
+}
+
+// rowWorkTotal is the duration of the work a row folds into, which is what a
+// co-owner is compared with: a moved or copy row's PARENT, whole (the few
+// chapters the row repairs are not the book), or a no-parent row's kept
+// members. It returns the total, how many files carry no duration, and what
+// was summed, for the evidence.
+func rowWorkTotal(lib *fragLibrary, r *repairs.Row) (sec, unknown int, what string) {
+	if parentID := rowParent(r); parentID != "" {
+		sec, unknown, n := lib.bookTotal(parentID)
+		return sec, unknown, fmt.Sprintf("parent %s (%d file(s), %s)", parentID, n, fragHours(sec))
+	}
+	if plan, ok := r.Detail.(*fragGroupPlan); ok {
+		for _, m := range plan.Members {
+			if d := m.Frag.File.Duration; d > 0 {
+				sec += d
+			} else {
+				unknown++
+			}
+		}
+		return sec, unknown, fmt.Sprintf("the %d kept fragment(s) (%s)", len(plan.Members), fragHours(sec))
+	}
+	return 0, 0, ""
+}
+
+// rowWorkAuthor is the author of the work a row folds into: a moved or copy
+// row's parent's, or a no-parent row's members' (groupAuthor).
+func rowWorkAuthor(lib *fragLibrary, r *repairs.Row) string {
+	if parentID := rowParent(r); parentID != "" {
+		return lib.authorName(lib.books[parentID])
+	}
+	if plan, ok := r.Detail.(*fragGroupPlan); ok {
+		return groupAuthor(lib, plan)
+	}
+	return ""
 }
 
 // rowFragTotal sums the durations of the fragments a row folds (each book
@@ -5864,52 +6040,79 @@ func rowFragTotal(r *repairs.Row) (sec, unknown int) {
 }
 
 // coOwnerVerdict is the owner rule of 2026-10-05 for a row's co-owners ids,
-// the same for every row kind:
+// the same for every row kind. The co-owner is compared with the row's WORK
+// (rowWorkTotal: a moved or copy row's whole parent, a no-parent row's kept
+// members), never with the few fragments a moved row repairs:
 //
-//   - a co-owner whose title has a key that is not the row's work
-//     (rowWorkKeys) is another work: hold. A junk or empty title ("", "c5")
-//     contradicts nothing;
-//   - the fragments' total or a co-owner's total unknown: hold;
-//   - the fragments' total agrees with a co-owner's (fragDurationsAgree):
-//     join into it when it is the only co-owner and its title is the row's
-//     work, else hold (nothing proves it is the same work);
-//   - no co-owner's total agrees: the fragments make their own book beside
-//     them (accept).
+//   - a co-owner whose title names another work (another name, or the same
+//     name at another position: fragIDsMatch), or a titled co-owner of a row
+//     whose work has no title to compare: hold. A junk or empty title ("",
+//     "c5") contradicts nothing;
+//   - a co-owner by another author (fragAuthorsDiffer): hold;
+//   - a total unknown on either side: hold;
+//   - a same-titled co-owner: join into it when it is the only co-owner and
+//     its total agrees (fragDurationsAgree); with a total that disagrees, or
+//     beside other co-owners, hold (a second copy or edition the owner sorts
+//     out first, as existingBookCheck holds a separate same-titled book);
+//   - junk-titled co-owners only: when one's total agrees, hold (nothing
+//     proves the same work); otherwise accept (the row proceeds, the
+//     co-owners keep their rows).
 func (f *fragmentFixer) coOwnerVerdict(lib *fragLibrary, r *repairs.Row, ids []string) fragCoVerdict {
 	keys := rowWorkKeys(lib, r)
+	workAuthor := rowWorkAuthor(lib, r)
+	var titled []string
 	for _, id := range ids {
 		b := lib.books[id]
-		if k := fragTitleKey(b.Title); k != "" && !contains(keys, k) {
+		tid := fragTitleIdentity(b.Title)
+		if tid.key == "" {
+			continue
+		}
+		if !fragIDsMatch(keys, tid) {
 			return fragCoVerdict{fragCoHold, fmt.Sprintf(
-				"book %s's title %q is not this row's work: a different work, not an edition of it, so the fragments are neither joined into it nor folded beside it", id, b.Title)}
+				"book %s's title %q is not (or cannot be shown to be) this row's work: a different work, not an edition of it, so the fragments are neither joined into it nor folded beside it", id, b.Title)}
+		}
+		titled = append(titled, id)
+	}
+	for _, id := range ids {
+		if a := lib.authorName(lib.books[id]); fragAuthorsDiffer(workAuthor, a) {
+			return fragCoVerdict{fragCoHold, fmt.Sprintf("co-owner %s is by %q, this row's work by %q: different authors", id, a, workAuthor)}
 		}
 	}
-	sec, unknown := rowFragTotal(r)
+	sec, unknown, what := rowWorkTotal(lib, r)
 	if unknown > 0 || sec == 0 {
-		return fragCoVerdict{fragCoHold, fmt.Sprintf("%d of the row's fragments have no duration, so the co-owner(s) cannot be compared with them", unknown)}
+		return fragCoVerdict{fragCoHold, fmt.Sprintf("%s has %d file(s) with no duration, so the co-owner(s) cannot be compared with it", what, unknown)}
 	}
 	var agree []string
 	for _, id := range ids {
 		total, unk, _ := lib.bookTotal(id)
 		if unk > 0 || total == 0 {
-			return fragCoVerdict{fragCoHold, fmt.Sprintf("co-owner %s has a file with no duration, so it cannot be compared with the fragments (%s)", id, fragHours(sec))}
+			return fragCoVerdict{fragCoHold, fmt.Sprintf("co-owner %s has a file with no duration, so it cannot be compared with %s", id, what)}
 		}
 		if fragDurationsAgree(sec, total) {
 			agree = append(agree, id)
 		}
 	}
-	if len(agree) > 0 {
-		if len(ids) == 1 && fragTitleKey(lib.books[ids[0]].Title) != "" {
+	if len(titled) > 0 {
+		if len(ids) == 1 && len(agree) == 1 {
 			total, _, _ := lib.bookTotal(ids[0])
 			return fragCoVerdict{fragCoJoin, fmt.Sprintf(
-				"the fragments (%s) agree within max(2%%, 5 min) with the same-titled co-owner %s (%s): they are that book, so they join it (owner rule 2026-10-05)",
-				fragHours(sec), ids[0], fragHours(total))}
+				"%s agrees within max(2%%, 5 min) with the same-titled co-owner %s (%s), which already holds the files: the fragments join it (owner rule 2026-10-05)",
+				what, ids[0], fragHours(total))}
 		}
 		return fragCoVerdict{fragCoHold, fmt.Sprintf(
-			"the fragments' total (%s) agrees with co-owner(s) %s, but nothing proves the same work (a title of no work, or several co-owners)", fragHours(sec), strings.Join(agree, ", "))}
+			"same-titled co-owner(s) %s beside %s, and the totals do not agree within max(2%%, 5 min) (or there are several co-owners): a second copy or edition of the work, so neither folding the fragments beside it nor joining them into it is proven",
+			strings.Join(titled, ", "), what)}
+	}
+	if len(agree) > 0 {
+		return fragCoVerdict{fragCoHold, fmt.Sprintf(
+			"%s agrees with co-owner(s) %s, but nothing proves the same work (a title of no work)", what, strings.Join(agree, ", "))}
+	}
+	proceed := "the fragments make their own book beside them"
+	if parentID := rowParent(r); parentID != "" {
+		proceed = "the row proceeds into its parent " + parentID
 	}
 	return fragCoVerdict{fragCoAccept, fmt.Sprintf(
-		"no co-owner's total agrees with the fragments' (%s): a different book sharing files, so the fragments make their own book and the co-owner(s) keep their rows (owner rule 2026-10-05)", fragHours(sec))}
+		"no co-owner's total agrees with %s and none is titled as a work: %s, and the co-owner(s) keep their rows (owner rule 2026-10-05)", what, proceed)}
 }
 
 // rowCoOwners are the co-owners a row was decided to proceed beside: from a

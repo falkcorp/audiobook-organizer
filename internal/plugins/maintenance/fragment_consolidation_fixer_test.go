@@ -3881,30 +3881,37 @@ func TestFragmentFixer_ReplanJournalCost(t *testing.T) {
 	_ = fresh
 }
 
-// TestFragTitleKey: the keys two titles of one work share, and the ones that
-// must stay apart.
+// TestFragTitleKey: the titles that name one work, and the ones that must
+// stay apart (another name, or the same name at another position or volume).
 func TestFragTitleKey(t *testing.T) {
+	id := fragTitleIdentity
 	for _, tc := range [][2]string{
 		{"Book 2 - Eldest", "Eldest"},
 		{"03 - Horizon Storms", "Horizon Storms"},
-		{"Foundation 6 - Foundation's Edge", "01 - Foundation's Edge"},
-		{"Inheritance Cycle 02 - Eldest", "Eldest"},
-		{"Eldest, Book 2", "Eldest"},
+		{"Inheritance Cycle 02 - Eldest", "Book 2 - Eldest"},
 		{"Eldest (Unabridged)", "Eldest"},
-		{"5 - Genius Camp: The Smartest Kid in the Universe, Book 2", "2 - Genius Camp: The Smartest Kid in the Universe, Book 2"},
+		{"Saga, Vol 3", "Saga Volume 3"},
+		{"Harry Potter, Book 1", "Harry Potter Bk. 01"},
 	} {
-		require.NotEmpty(t, fragTitleKey(tc[0]), tc[0])
-		require.Equal(t, fragTitleKey(tc[0]), fragTitleKey(tc[1]), "%q and %q are one work", tc[0], tc[1])
+		require.NotEmpty(t, id(tc[0]).key, tc[0])
+		require.True(t, id(tc[0]).sameWork(id(tc[1])), "%q and %q are one work", tc[0], tc[1])
 	}
 	for _, tc := range [][2]string{
 		{"Dragon Born 3", "Dragon Born"},
+		{"Dragon Born, Book 3", "Dragon Born"},
+		{"Harry Potter, Book 1", "Harry Potter Book 7"},
+		{"Saga, Vol 3", "Saga, Vol 1"},
+		{"The Expanse Volume 1", "The Expanse Volume 2"},
+		{"Book 2 - Eldest", "Book 3 - Eldest"},
+		{"Foundation 6 - Foundation's Edge", "01 - Foundation's Edge"},
+		{"5 - Genius Camp: The Smartest Kid in the Universe, Book 2", "2 - Genius Camp: The Smartest Kid in the Universe, Book 2"},
 		{"Prelude to Foundation", "Foundation"},
 		{"Doctor Who - Loose", "Loose"},
 	} {
-		require.NotEqual(t, fragTitleKey(tc[0]), fragTitleKey(tc[1]), "%q and %q are different works", tc[0], tc[1])
+		require.False(t, id(tc[0]).sameWork(id(tc[1])), "%q and %q are different works", tc[0], tc[1])
 	}
 	for _, title := range []string{"", "c5", "ab", "Part 3", "Chapter 12", "01", "New Folder"} {
-		require.Empty(t, fragTitleKey(title), "%q names no work", title)
+		require.Empty(t, id(title).key, "%q names no work", title)
 	}
 }
 
@@ -4047,6 +4054,79 @@ func TestFragmentFixer_ExistingBook(t *testing.T) {
 	})
 }
 
+// TestFragmentFixer_ExistingBookIdentity: the review probes of #3747. A
+// group joins or is held only by a book of the same work: never another
+// volume or position, never another author's book of the same name; and a
+// group whose work has no derivable title is held, never assembled blind.
+func TestFragmentFixer_ExistingBookIdentity(t *testing.T) {
+	t.Run("another volume is another work", func(t *testing.T) {
+		f := newFragFixture(t)
+		f.existingBook(t, "v1", "Saga, Vol 1", "lib/Writer/Saga, Vol 1", 4, 900)
+		dir := "lib/Writer/Saga, Vol 3"
+		f.chapterFrags(t, dir, "Saga Vol 3 Part", 6, 600)
+		res := f.plan(t, "op-plan")
+		for _, r := range res.Rows {
+			require.NotEqual(t, fragClassExistingBook, r.Class, "%s: %s", r.RowID, r.SkipReason)
+		}
+	})
+	t.Run("another position is another work", func(t *testing.T) {
+		f := newFragFixture(t)
+		f.existingBook(t, "b3", "Book 3 - Eldest", "lib/Other/Book 3 - Eldest", 4, 900)
+		f.chapterFrags(t, "lib/Christopher Paolini/Book 2 - Eldest", "Eldest", 6, 600)
+		r := findRow(t, f.plan(t, "op-plan"), noParentRowID(f.path("lib/Christopher Paolini/Book 2 - Eldest"), "eldest"))
+		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+	})
+	t.Run("same title by another author: held, both authors shown", func(t *testing.T) {
+		f := newFragFixture(t)
+		existing := f.existingBook(t, "dan", "Origin", "lib/Dan Brown/Origin", 4, 900)
+		f.setAuthor(t, existing, f.authorID(t, "Dan Brown"))
+		dir := "lib/Jessica Khoury/Origin"
+		frags := f.chapterFrags(t, dir, "Origin", 6, 600)
+		khoury := f.authorID(t, "Jessica Khoury")
+		for _, id := range frags {
+			f.setAuthor(t, id, khoury)
+		}
+		res := f.plan(t, "op-plan")
+		r := findRow(t, res, existingRowID(f.path(dir), "origin"))
+		require.Equal(t, fragSkipExistingBook, r.Skipped)
+		require.Contains(t, r.SkipReason, "Dan Brown")
+		require.Contains(t, r.SkipReason, "Jessica Khoury")
+		require.Zero(t, res.Applicable)
+	})
+	t.Run("a folder the walk refuses still names the work", func(t *testing.T) {
+		// "import/Eldest": the folder walk offers no title for a folder under
+		// an import root; its own name, the chapter key and the members'
+		// titles still find the live "Eldest".
+		f := newFragFixture(t)
+		existing := f.existingBook(t, "eldest", "Eldest", "lib/Other Author/Eldest", 4, 900)
+		dir := "import/Eldest"
+		f.chapterFrags(t, dir, "Eldest", 6, 600)
+		res := f.plan(t, "op-plan")
+		noRow(t, res, noParentRowID(f.path(dir), "eldest"), "never a plain assemble beside a live Eldest")
+		r := findRow(t, res, existingRowID(f.path(dir), "eldest"))
+		require.Equal(t, existing, r.Proposed["join"], "%s: %s", r.Skipped, r.SkipReason)
+		require.Equal(t, "Eldest", r.Current["source_folder"])
+		require.NotEmpty(t, r.Current["source_title"])
+	})
+	t.Run("no derivable title: held, never assembled", func(t *testing.T) {
+		f := newFragFixture(t)
+		dir := "lib/Downloads"
+		var ids []string
+		for i := 1; i <= 3; i++ {
+			stem := fmt.Sprintf("%02d", i)
+			p := f.file(t, filepath.Join(dir, stem+".mp3"), 7000+i)
+			id := f.book(t, dir+stem, stem, p, nil)
+			f.row(t, dir+stem, id, p, stem+".mp3", int64(7000+i), 600, 0)
+			f.organized(t, id)
+			ids = append(ids, id)
+		}
+		res := f.plan(t, "op-plan")
+		r := rowWithBooks(t, res, ids)
+		require.Equal(t, fragSkipNoTitleKey, r.Skipped, "%s %s: %s", r.RowID, r.Class, r.SkipReason)
+		require.Zero(t, res.Applicable)
+	})
+}
+
 // TestFragmentFixer_RetaggedCopies: fragments that sit at the chapter
 // positions of an existing book's "_copyN" files with the same durations and
 // a constant size difference (Horizon Storms) are never assembled, and not
@@ -4097,10 +4177,12 @@ func TestFragmentFixer_RetaggedCopies(t *testing.T) {
 }
 
 // TestFragmentFixer_CoOwnerRule: owner rule 2026-10-05 for a moved row whose
-// fragment's file is also a row of a live single-file book outside it.
+// fragment's file is also a row of a live single-file book outside it. The
+// co-owner is compared with the PARENT's whole total, never the few chapters
+// the row repairs.
 func TestFragmentFixer_CoOwnerRule(t *testing.T) {
-	// seed: parent (title) with rows 01 present and 02..n+1 gone; n
-	// fragments imported from the gone paths, now organized away; a
+	// seed: parent (title) with rows 01 present and 02..n+1 gone, 600 s each;
+	// n fragments imported from the gone paths, now organized away; a
 	// co-owner (coTitle, coDur seconds) holding a row at fragment 1's file.
 	seed := func(t *testing.T, f *fragFixture, title, coTitle string, n, coDur int) (parent string, frags []string, co string) {
 		p1 := f.file(t, "lib/P/01.mp3", 801)
@@ -4120,12 +4202,12 @@ func TestFragmentFixer_CoOwnerRule(t *testing.T) {
 			}
 		}
 		co = f.book(t, "co", coTitle, first, nil)
-		f.row(t, "co", co, first, "co.mp3", 802, coDur, 0)
+		f.row(t, "co", co, first, "co.mp3", int64(coDur)*1000+1, coDur, 0)
 		return parent, frags, co
 	}
-	t.Run("same title, totals agree: the fragment joins the co-owner", func(t *testing.T) {
+	t.Run("same title, agreeing with the parent: the fragments join the co-owner", func(t *testing.T) {
 		f := newFragFixture(t)
-		parent, frags, co := seed(t, f, "5 - Smartest Camp, Book 2", "2 - Smartest Camp, Book 2", 1, 600)
+		parent, frags, co := seed(t, f, "Smartest Camp", "Smartest Camp", 3, 2400)
 		res := f.plan(t, "op-plan")
 		noRow(t, res, "moved:"+parent, "replaced by the join")
 		var r repairs.Row
@@ -4142,13 +4224,46 @@ func TestFragmentFixer_CoOwnerRule(t *testing.T) {
 		f.requireRetiredInto(t, frags, co)
 		require.Equal(t, f.path("lib/P/02.mp3"), f.fileRow(t, "parent", "p02.mp3").FilePath, "the parent's stale row is untouched")
 	})
-	t.Run("junk-titled co-owner, totals disagree: the row proceeds beside it", func(t *testing.T) {
+	t.Run("same title, a whole book that disagrees with the parent: held", func(t *testing.T) {
+		// The review probe: parent "Eldest" with 3 moved fragments beside a
+		// 10 h co-owner "Eldest". Comparing the 3 chapters with the 10 h
+		// book always "disagreed" and let the row through, leaving two live
+		// books holding the same file.
+		f := newFragFixture(t)
+		parent, _, co := seed(t, f, "Eldest", "Eldest", 3, 36000)
+		res := f.plan(t, "op-plan")
+		r := findRow(t, res, "moved:"+parent)
+		require.Equal(t, fragSkipCoOwner, r.Skipped)
+		require.Contains(t, r.SkipReason, "same-titled co-owner(s) "+co)
+		require.Contains(t, r.SkipReason, "parent "+parent)
+		require.Zero(t, res.Applicable)
+	})
+	t.Run("same name at another position: a different work", func(t *testing.T) {
+		f := newFragFixture(t)
+		parent, _, _ := seed(t, f, "5 - Smartest Camp, Book 2", "2 - Smartest Camp, Book 2", 1, 1200)
+		r := findRow(t, f.plan(t, "op-plan"), "moved:"+parent)
+		require.Equal(t, fragSkipCoOwner, r.Skipped)
+		require.Contains(t, r.SkipReason, "a different work")
+	})
+	t.Run("same title by another author: held", func(t *testing.T) {
+		f := newFragFixture(t)
+		parent, _, co := seed(t, f, "Origin", "Origin", 3, 2400)
+		f.setAuthor(t, parent, f.authorID(t, "Dan Brown"))
+		f.setAuthor(t, co, f.authorID(t, "Jessica Khoury"))
+		r := findRow(t, f.plan(t, "op-plan"), "moved:"+parent)
+		require.Equal(t, fragSkipCoOwner, r.Skipped)
+		require.Contains(t, r.SkipReason, "different authors")
+		require.Contains(t, r.SkipReason, "Jessica Khoury")
+		require.Contains(t, r.SkipReason, "Dan Brown")
+	})
+	t.Run("junk-titled co-owner, totals disagree: the row proceeds into its parent", func(t *testing.T) {
 		f := newFragFixture(t)
 		parent, frags, co := seed(t, f, "Eldest", "", 3, 600)
 		r := findRow(t, f.plan(t, "op-plan"), "moved:"+parent)
 		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
 		require.Equal(t, repairs.RiskReview, r.Risk)
 		require.Equal(t, []string{co}, rowCoOwners(r))
+		require.Contains(t, strings.Join(r.Evidence, "\n"), "the row proceeds into its parent "+parent)
 		out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
 		require.Equal(t, 1, out.Applied, "checkOwners lets the accepted co-owner through: %+v", out.Rows)
 		f.requireRetiredInto(t, frags, parent)
@@ -4157,9 +4272,9 @@ func TestFragmentFixer_CoOwnerRule(t *testing.T) {
 		require.Len(t, rows, 1, "the co-owner keeps its row")
 		require.True(t, f.live(t, "co"))
 	})
-	t.Run("junk-titled co-owner, totals agree: held", func(t *testing.T) {
+	t.Run("junk-titled co-owner agreeing with the parent: held", func(t *testing.T) {
 		f := newFragFixture(t)
-		parent, _, _ := seed(t, f, "Eldest", "c5", 1, 600)
+		parent, _, _ := seed(t, f, "Eldest", "c5", 1, 1200)
 		r := findRow(t, f.plan(t, "op-plan"), "moved:"+parent)
 		require.Equal(t, fragSkipCoOwner, r.Skipped)
 		require.Contains(t, r.SkipReason, "nothing proves the same work")
@@ -4178,6 +4293,14 @@ func TestFragmentFixer_CoOwnerRule(t *testing.T) {
 		require.Equal(t, fragSkipCoOwner, r.Skipped)
 		require.Contains(t, r.SkipReason, "a different work, not an edition")
 	})
+}
+
+// authorID creates (or finds) an author named name.
+func (f *fragFixture) authorID(t *testing.T, name string) int {
+	t.Helper()
+	a, err := f.s.CreateAuthor(name)
+	require.NoError(t, err)
+	return a.ID
 }
 
 // TestFragmentFixer_NoSilentDrops: every fragment candidate the no-parent
