@@ -1,7 +1,7 @@
 // file: internal/reconcile/reconcile_parallel_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 2c7f1a94-3e60-4d18-9b5a-8f0c6d2e1a37
-// last-edited: 2026-09-24
+// last-edited: 2026-10-05
 
 package reconcile
 
@@ -28,7 +28,23 @@ type fakeReconcileStore struct {
 	files   map[string][]database.BookFile
 	byID    map[string]*database.Book
 	updated map[string]*database.Book
-	mu      chan struct{} // 1-slot semaphore used as a mutex
+	// users and states back the user-state reads the duplicate cleanup
+	// makes (merge.UserStateProbe); states is keyed by book id.
+	users  []database.User
+	states map[string]*database.UserBookState
+	mu     chan struct{} // 1-slot semaphore used as a mutex
+}
+
+func (f *fakeReconcileStore) ListUsers() ([]database.User, error) { return f.users, nil }
+
+func (f *fakeReconcileStore) GetUserBookState(_, bookID string) (*database.UserBookState, error) {
+	f.lock()
+	defer f.unlock()
+	return f.states[bookID], nil
+}
+
+func (f *fakeReconcileStore) ListUserPositionsForBook(string, string) ([]database.UserPosition, error) {
+	return nil, nil
 }
 
 func newFakeStore() *fakeReconcileStore {
@@ -36,6 +52,7 @@ func newFakeStore() *fakeReconcileStore {
 		files:   map[string][]database.BookFile{},
 		byID:    map[string]*database.Book{},
 		updated: map[string]*database.Book{},
+		states:  map[string]*database.UserBookState{},
 		mu:      make(chan struct{}, 1),
 	}
 }

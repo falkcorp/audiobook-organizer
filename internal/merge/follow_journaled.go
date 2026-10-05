@@ -218,24 +218,49 @@ type UserStateReader interface {
 // drained row a completed follow leaves on a merge loser, so a loser whose
 // state moved reads false. An error means the answer is unknown.
 //
-// The purge (audiobooks.PurgeSoftDeletedBooks) refuses a book this reports
-// true for: hard-deleting it would drop state that never reached a live
-// book (a follow that failed with no repair record, a follow still pending
-// repair).
+// Every path that hard-deletes a book row it did not just create refuses one
+// this reports true for (audiobooks.PurgeSoftDeletedBooks,
+// reconcile.CleanupDuplicateVersionGroups, the iTunes regroup apply):
+// deleting it would drop state that never reached a live book (a follow that
+// failed with no repair record, a follow still pending repair, a duplicate no
+// merge ever followed).
 func BookHasCarryableUserState(db UserStateReader, bookID string) (bool, error) {
+	probe, err := NewUserStateProbe(db)
+	if err != nil {
+		return false, err
+	}
+	return probe.Has(bookID)
+}
+
+// UserStateProbe is BookHasCarryableUserState for a loop over many books: it
+// lists the users once, when it is made, instead of once per book. A user
+// created after that is not seen, so make one per pass, not per process.
+type UserStateProbe struct {
+	db    UserStateReader
+	users []database.User
+}
+
+// NewUserStateProbe lists db's users once.
+func NewUserStateProbe(db UserStateReader) (*UserStateProbe, error) {
 	users, err := db.ListUsers()
 	if err != nil {
-		return false, fmt.Errorf("list users: %w", err)
+		return nil, fmt.Errorf("list users: %w", err)
 	}
-	for _, u := range users {
+	return &UserStateProbe{db: db, users: users}, nil
+}
+
+// Has reports whether any of the probe's users has carryable state on bookID
+// (see BookHasCarryableUserState). An error means the answer is unknown.
+func (p *UserStateProbe) Has(bookID string) (bool, error) {
+	for _, u := range p.users {
 		if u.ID == "" {
 			continue
 		}
-		st, err := db.GetUserBookState(u.ID, bookID)
+		st, err := p.db.GetUserBookState(u.ID, bookID)
 		if err != nil {
 			return false, fmt.Errorf("read progress state user=%s book=%s: %w", u.ID, bookID, err)
 		}
-		pos, err := db.ListUserPositionsForBook(u.ID, bookID)
+		pos, err := p.db.ListUserPositionsForBook(u.ID, bookID)
 		if err != nil {
 			return false, fmt.Errorf("read positions user=%s book=%s: %w", u.ID, bookID, err)
 		}

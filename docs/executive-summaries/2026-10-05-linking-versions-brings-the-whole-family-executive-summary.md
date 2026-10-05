@@ -51,8 +51,9 @@ PRs: [#3758](https://github.com/falkcorp/audiobook-organizer/pull/3758) (follow-
   reports which version is the main one and which holds the listening
   progress. When Audiobookshelf will not list the title, it also gives the
   reason: an iTunes book kept, no filed copy, a main version picked by hand
-  that is not filed, or a quarantined copy. Every merge button and repair now
-  reports this, not only one of them.
+  that is not filed, or a quarantined copy. Every merge button in the app now
+  reports this, including the bulk ones and the diagnostics suggestions.
+  Background repairs that merge books still record only what they merged.
 - **Listening progress follows the visible version.** Progress, read status
   and the Audiobookshelf link from the merged-away book go to the version
   Audiobookshelf shows. Every undo reverses this, including the undo of an
@@ -126,7 +127,9 @@ nightly purge permanently deleted that book, and the progress with it.
 
 **The fix.** If the note cannot be saved, the progress is now moved anyway, with
 its own safety record. Separately, the purge now refuses any retired book that
-still holds someone's progress and lists it instead. Ordinary merged-away books,
+still holds someone's progress and lists it instead. Two clean-ups that
+permanently delete duplicate books (the duplicate-version clean-up and the
+iTunes regroup) now skip such a book the same way. Ordinary merged-away books,
 whose progress has already moved, still purge.
 
 ## Undo that left progress on the wrong book
