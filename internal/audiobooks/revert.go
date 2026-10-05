@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.58.0
+// version: 1.59.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-05
 
@@ -808,6 +808,10 @@ func (rs *RevertService) revertUserBookStateSet(c *database.OperationChange) err
 	}
 	merge.LockMergeRMW()
 	defer merge.UnlockMergeRMW()
+	// And the per-(user, book) lock the ABS write paths and the Repairs
+	// writer hold, so a device sync cannot land between the check and the
+	// restore. Always taken inside the merge lock, never around it.
+	defer database.LockUserBookState(user, c.BookID)()
 	cur, err := undo.ReadUserStateSnapshot(db, user, c.BookID)
 	if err != nil {
 		return &undo.ReferentError{Reason: undo.ReasonFieldUnreadable, Detail: err.Error()}

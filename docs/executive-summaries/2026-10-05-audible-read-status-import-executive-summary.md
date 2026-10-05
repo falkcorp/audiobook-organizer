@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-05-audible-read-status-import-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 3ed99468-f010-4872-a4be-20545a39dccf -->
 <!-- last-edited: 2026-10-05 -->
 
@@ -23,11 +23,18 @@ PR: https://github.com/falkcorp/audiobook-organizer/pull/3746
   one would have been skipped or was never started. That way a mislabeled
   volume 1 can't be marked finished because volume 2 was. A match whose
   length could not be checked is flagged for a closer look.
-- Newer listening in the library always wins. A book that is already
-  finished, one the listener abandoned, and one played more recently than
-  Audible's date are all left alone. Nothing is ever marked unfinished.
+- Newer listening in the library always wins, on any copy of the book (a
+  second edition or a duplicate counts too). A book that is already
+  finished, one the listener abandoned or marked unstarted by hand, and one
+  played more recently than Audible's date are all left alone. Nothing is
+  ever marked unfinished.
+- Dates Audible gets wrong are not trusted. A date in the future, a date
+  with no time zone, or a title the export calls both finished and
+  unfinished is listed for review instead of applied.
 - Finish dates come from Audible, never from the day the import runs, so a
-  phone that syncs later still wins with its real, later progress.
+  phone that syncs later still wins with its real, later progress. While the
+  import writes one book, it holds the same lock that the audiobook apps'
+  syncing holds, so neither can overwrite the other halfway through.
 - It works like the other repairs. It first lists what it would do, then
   writes only the rows you pick. Every change is recorded, and one undo puts
   it back. The undo leaves alone any book the listener has played since the

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/session_local_all.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: fcff98d1-5709-4c26-a345-d79231c02527
-// last-edited: 2026-09-25
+// last-edited: 2026-10-05
 
 package abs
 
@@ -218,6 +218,9 @@ func (h *Handler) applyLocalSession(userID string, s localSessionReq) localSessi
 		return res
 	}
 
+	// Read, merge and write as one step against the other user-state
+	// writers (database.LockUserBookState).
+	defer database.LockUserBookState(userID, bookID)()
 	pos, err := h.progress.GetUserPosition(userID, bookID)
 	if err != nil {
 		// Unknown stored position: writing blind could rewind the listener,
@@ -414,7 +417,7 @@ func (h *Handler) applyLocalSession(userID string, s localSessionReq) localSessi
 	// Read-modify-write so HideFromContinueListening survives, and
 	// setDerivedStatus so a status the user pinned by hand (StatusManual) is
 	// left alone rather than overwritten by this computed one.
-	if err := h.updateUserBookState(userID, bookID, func(st *database.UserBookState) {
+	if err := h.updateUserBookStateLocked(userID, bookID, func(st *database.UserBookState) {
 		setDerivedStatus(st, status)
 		st.ProgressPct = pct
 		st.LastSegmentID = absProgressSegmentID
