@@ -1,11 +1,12 @@
 // file: internal/franchise/detect.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5b0e6d2a-8c4f-4e71-9a3d-1f7c2b9e4d60
 // last-edited: 2026-10-05
 
 package franchise
 
 import (
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -70,17 +71,28 @@ type Result struct {
 	Signals []Signal `json:"signals"`
 }
 
-// weakCreditTerm: a credit (narrator, author) whose only hit is "Missy" is
-// weak. The guard still holds it -- the original pattern always did -- but
-// "Missy Elliott" or a narrator named Missy is not evidence enough to tag a
-// book (census §1: "Missy as a first name is excluded").
-func weakCreditTerm(hits []Hit) bool {
+// missyAlbumRe matches a credit value shaped like the Big Finish "Missy"
+// range rather than a person's first name: "Missy" opening the value and
+// followed by a separator or a "Series N" marker ("Missy - Series 2", "Missy
+// Series 2", "Missy: The Lumiat"), or a trailing "- Missy" tag ("Michelle
+// Gomez - Missy"). It reads the folded value.
+var missyAlbumRe = regexp.MustCompile(`(?i)^\s*missy\s*(?:[-\x{2013}\x{2014}:]|series[\s.-]*\d)|[-\x{2013}\x{2014}]\s*missy\s*$`)
+
+// weakCredit: a credit (narrator, author, publisher) whose only hit is
+// "Missy" is weak, unless the value has the range's album shape
+// (missyAlbumRe). The owner's reason for weakening it was first names
+// ("Missy Cambridge", "Missy Elliott"); census §1 excludes "Missy as a first
+// name" too. Series shapes still count.
+func weakCredit(value string, hits []Hit) bool {
+	if len(hits) == 0 {
+		return false
+	}
 	for _, h := range hits {
 		if !(h.Term == "core" && strings.EqualFold(h.Text, "missy")) {
 			return false
 		}
 	}
-	return len(hits) > 0
+	return !missyAlbumRe.MatchString(Fold(value))
 }
 
 // MatchesCreditStrong reports whether a credit value (narrator, publisher)
@@ -89,9 +101,12 @@ func weakCreditTerm(hits []Hit) bool {
 // publisher), a credit named only by "Missy" ("Missy Cambridge", "Missy
 // Elliott") does not hold a book. Title, path and series keep the original
 // pattern, "Missy" included: the old guard held on those.
+//
+// "Missy" in the range's album shape ("Missy - Series 2", "Michelle Gomez -
+// Missy") still counts (weakCredit).
 func MatchesCreditStrong(s string) bool {
 	hits := MatchAll(s)
-	return len(hits) > 0 && !weakCreditTerm(hits)
+	return len(hits) > 0 && !weakCredit(s, hits)
 }
 
 // Detect returns every signal in e, strong and weak.
@@ -107,7 +122,7 @@ func Detect(e Evidence) Result {
 	}
 	credit := func(field, value string) {
 		hits := MatchAll(value)
-		add(field, value, weakCreditTerm(hits), hits)
+		add(field, value, weakCredit(value, hits), hits)
 	}
 	one(FieldPath, e.Path)
 	if e.Title != "" {

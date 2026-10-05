@@ -1,5 +1,5 @@
 // file: internal/franchise/franchise.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: ddd241fe-c7e3-4ff5-b3df-7e2908d49f7b
 // last-edited: 2026-10-05
 
@@ -465,11 +465,6 @@ func RunSource(opID string) string {
 		return TagSource
 	}
 	return TagSource + ":" + opID
-}
-
-// IsTaggerSource reports whether a tag source is the tagger's (any run).
-func IsTaggerSource(src string) bool {
-	return src == TagSource || strings.HasPrefix(src, TagSource+":")
 }
 
 // Tags returns the tags a franchise and range are recorded as.
