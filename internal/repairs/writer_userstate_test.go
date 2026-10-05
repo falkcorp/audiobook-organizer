@@ -1,11 +1,12 @@
 // file: internal/repairs/writer_userstate_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 02326bb6-8739-47c5-92ed-341f000b2900
 // last-edited: 2026-10-05
 
 package repairs
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 
@@ -60,7 +62,7 @@ func TestWriterSetUserState_JournalsThenWrites(t *testing.T) {
 	st := newUSStore(t)
 	w := NewWriter(st, st, "fx", "bulk_update", "repairs-").WithJournal(st, st, "op-us").WithUserState(st)
 	next := finishedSnap("u1", "b1", true)
-	require.NoError(t, w.SetUserState("u1", "b1", undo.UserStateSnapshot{}, next))
+	require.NoError(t, w.SetUserState(context.Background(), "u1", "b1", undo.UserStateSnapshot{}, next))
 	require.Equal(t, 1, w.Writes())
 	require.Equal(t, 1, w.Journaled())
 
@@ -92,25 +94,25 @@ func TestWriterSetUserState_Refusals(t *testing.T) {
 	// The state moved since the decision: nothing journaled or written.
 	require.NoError(t, st.SetUserBookState(&database.UserBookState{UserID: "u1", BookID: "moved", Status: database.UserBookStatusInProgress, ProgressPct: 5}))
 	w := NewWriter(st, st, "fx", "bulk_update", "repairs-").WithJournal(st, st, "op-a").WithUserState(st)
-	err := w.SetUserState("u1", "moved", undo.UserStateSnapshot{}, finishedSnap("u1", "moved", false))
+	err := w.SetUserState(context.Background(), "u1", "moved", undo.UserStateSnapshot{}, finishedSnap("u1", "moved", false))
 	require.ErrorIs(t, err, ErrChangedSincePlan)
 	require.Empty(t, journal("op-a"))
 
 	// A position with no timestamp is never stamped now.
 	bad := finishedSnap("u1", "nots", true)
 	bad.Positions[0].UpdatedAt = time.Time{}
-	require.Error(t, w.SetUserState("u1", "nots", undo.UserStateSnapshot{}, bad))
+	require.Error(t, w.SetUserState(context.Background(), "u1", "nots", undo.UserStateSnapshot{}, bad))
 	require.Empty(t, journal("op-a"))
 	s, err := st.GetUserBookState("u1", "nots")
 	require.NoError(t, err)
 	require.Nil(t, s)
 
 	// A state naming another book is refused.
-	require.Error(t, w.SetUserState("u1", "other", undo.UserStateSnapshot{}, finishedSnap("u1", "b1", false)))
+	require.Error(t, w.SetUserState(context.Background(), "u1", "other", undo.UserStateSnapshot{}, finishedSnap("u1", "b1", false)))
 
 	// No journal: ErrNotJournaled, nothing written.
 	nj := NewWriter(st, st, "fx", "bulk_update", "repairs-").WithUserState(st)
-	require.ErrorIs(t, nj.SetUserState("u1", "nj", undo.UserStateSnapshot{}, finishedSnap("u1", "nj", false)), ErrNotJournaled)
+	require.ErrorIs(t, nj.SetUserState(context.Background(), "u1", "nj", undo.UserStateSnapshot{}, finishedSnap("u1", "nj", false)), ErrNotJournaled)
 	s, err = st.GetUserBookState("u1", "nj")
 	require.NoError(t, err)
 	require.Nil(t, s)
@@ -118,11 +120,11 @@ func TestWriterSetUserState_Refusals(t *testing.T) {
 	// A tags-only writer refuses.
 	to := NewWriter(st, st, "fx", "bulk_update", "repairs-").WithJournal(st, st, "op-b").WithUserState(st)
 	to.restrictToTags()
-	require.ErrorIs(t, to.SetUserState("u1", "to", undo.UserStateSnapshot{}, finishedSnap("u1", "to", false)), ErrTagsOnlyWriter)
+	require.ErrorIs(t, to.SetUserState(context.Background(), "u1", "to", undo.UserStateSnapshot{}, finishedSnap("u1", "to", false)), ErrTagsOnlyWriter)
 
 	// No user-state store wired.
 	none := NewWriter(st, st, "fx", "bulk_update", "repairs-").WithJournal(st, st, "op-c")
-	require.Error(t, none.SetUserState("u1", "x", undo.UserStateSnapshot{}, finishedSnap("u1", "x", false)))
+	require.Error(t, none.SetUserState(context.Background(), "u1", "x", undo.UserStateSnapshot{}, finishedSnap("u1", "x", false)))
 }
 
 // A failed first write leaves nothing and voids the journal row; a failed
@@ -131,7 +133,7 @@ func TestWriterSetUserState_FailedWrites(t *testing.T) {
 	st := newUSStore(t)
 	w := NewWriter(st, st, "fx", "bulk_update", "repairs-").WithJournal(st, st, "op-f").
 		WithUserState(failingUS{PebbleStore: st, failPosition: true})
-	require.Error(t, w.SetUserState("u1", "b1", undo.UserStateSnapshot{}, finishedSnap("u1", "b1", true)))
+	require.Error(t, w.SetUserState(context.Background(), "u1", "b1", undo.UserStateSnapshot{}, finishedSnap("u1", "b1", true)))
 	require.Equal(t, 0, w.Journaled())
 	rows, err := st.GetOperationChanges("op-f")
 	require.NoError(t, err)
@@ -141,7 +143,7 @@ func TestWriterSetUserState_FailedWrites(t *testing.T) {
 
 	w2 := NewWriter(st, st, "fx", "bulk_update", "repairs-").WithJournal(st, st, "op-g").
 		WithUserState(failingUS{PebbleStore: st, failState: true})
-	err = w2.SetUserState("u1", "b2", undo.UserStateSnapshot{}, finishedSnap("u1", "b2", true))
+	err = w2.SetUserState(context.Background(), "u1", "b2", undo.UserStateSnapshot{}, finishedSnap("u1", "b2", true))
 	require.ErrorIs(t, err, ErrPartiallyApplied)
 	rows, err = st.GetOperationChanges("op-g")
 	require.NoError(t, err)
@@ -156,7 +158,9 @@ func TestWriterSetUserState_HoldsUserStateLock(t *testing.T) {
 	w := NewWriter(st, st, "fx", "bulk_update", "repairs-").WithJournal(st, st, "op-l").WithUserState(st)
 	unlock := database.LockUserBookState("u1", "b1")
 	done := make(chan error, 1)
-	go func() { done <- w.SetUserState("u1", "b1", undo.UserStateSnapshot{}, finishedSnap("u1", "b1", false)) }()
+	go func() {
+		done <- w.SetUserState(context.Background(), "u1", "b1", undo.UserStateSnapshot{}, finishedSnap("u1", "b1", false))
+	}()
 	select {
 	case err := <-done:
 		t.Fatalf("SetUserState ran while the lock was held: %v", err)
@@ -169,4 +173,41 @@ func TestWriterSetUserState_HoldsUserStateLock(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("SetUserState never ran after the lock was released")
 	}
+}
+
+// SetUserState takes the merge lock before the stripe, the revert's order.
+func TestWriterSetUserState_TakesMergeLockFirst(t *testing.T) {
+	st := newUSStore(t)
+	w := NewWriter(st, st, "fx", "bulk_update", "repairs-").WithJournal(st, st, "op-m").WithUserState(st)
+	merge.LockMergeRMW()
+	done := make(chan error, 1)
+	go func() {
+		done <- w.SetUserState(context.Background(), "u1", "b1", undo.UserStateSnapshot{}, finishedSnap("u1", "b1", false))
+	}()
+	select {
+	case err := <-done:
+		merge.UnlockMergeRMW()
+		t.Fatalf("SetUserState ran while the merge lock was held: %v", err)
+	case <-time.After(150 * time.Millisecond):
+	}
+	// While it waits for the merge lock it holds no stripe.
+	database.LockUserBookState("u1", "b1")()
+	merge.UnlockMergeRMW()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("SetUserState never ran after the merge lock was released")
+	}
+
+	// A cancelled wait writes nothing.
+	merge.LockMergeRMW()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := w.SetUserState(ctx, "u1", "b2", undo.UserStateSnapshot{}, finishedSnap("u1", "b2", false))
+	merge.UnlockMergeRMW()
+	require.ErrorIs(t, err, context.Canceled)
+	s, gerr := st.GetUserBookState("u1", "b2")
+	require.NoError(t, gerr)
+	require.Nil(t, s)
 }

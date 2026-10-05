@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/audible_read_status_fixer.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 36d6036c-05ce-48d1-9997-a65d6a8b67ce
 // last-edited: 2026-10-05
 
@@ -120,10 +120,15 @@ const arsPlanWorkers = 8
 // and positions before and after; the apply op's revert restores them while
 // they still hold what the import wrote and refuses once the user has moved
 // on.
-type audibleReadStatusFixer struct{ p *Plugin }
+type audibleReadStatusFixer struct {
+	p *Plugin
+	// now is the clock the future-timestamp check reads (time.Now in
+	// production; a test fixes it).
+	now func() time.Time
+}
 
 func newAudibleReadStatusFixer(p *Plugin) *audibleReadStatusFixer {
-	return &audibleReadStatusFixer{p: p}
+	return &audibleReadStatusFixer{p: p, now: time.Now}
 }
 
 var _ repairs.Fixer = (*audibleReadStatusFixer)(nil)
@@ -200,10 +205,8 @@ func arsRelatedIDs(target string, members, hits []string) []string {
 // arsFutureSlack is how far past now an Audible timestamp may be (clock
 // skew between Audible and this server) before it is refused as a future
 // time: a future stamp would beat every real listen that comes after the
-// import. arsNow is a variable so tests can fix the clock.
+// import. The clock is the fixer's now field.
 const arsFutureSlack = 10 * time.Minute
-
-var arsNow = time.Now
 
 // key is the target in a stable form for the fingerprint.
 func (t arsTarget) key() []string {
@@ -479,6 +482,19 @@ func (f *audibleReadStatusFixer) planItem(store OpsStore, us UserReadStateStore,
 			return arsSkipRow(base, st, arsUnmatchedNoCandidate, "no book carries the ASIN, the title, or the title as an author", nil)
 		}
 	}
+	if tier == arsTierTitle || tier == arsTierTitleRT {
+		// A title can hit books of other authors or other editions that the
+		// author and runtime filters then dropped: only the hits that
+		// resolve to the chosen target are copies of it. (The ASIN branch
+		// keeps every book carrying the ASIN; see the PR's owner question.)
+		var kept []string
+		for _, h := range rawHits {
+			if slices.Contains(lib.targets([]string{h}), target) {
+				kept = append(kept, h)
+			}
+		}
+		rawHits = kept
+	}
 	sort.Strings(rawHits)
 	st.Target, st.Tier, st.Candidates, st.Hits = target, tier, cands, rawHits
 	b := lib.books[target]
@@ -626,7 +642,7 @@ func (f *audibleReadStatusFixer) decide(us UserReadStateStore, base repairs.Row,
 		return skip(arsReviewTimestampUnreadable, fmt.Sprintf("Audible's time %q is not an RFC 3339 time with a zone; it is not guessed as UTC or local time",
 			it.Listening.FinishedAt), nil)
 	}
-	if tsOK && ts.After(arsNow().Add(arsFutureSlack)) {
+	if tsOK && ts.After(f.now().Add(arsFutureSlack)) {
 		return skip(arsReviewFutureTimestamp, fmt.Sprintf("Audible's time %s is in the future; a clock or export error, and it would beat every real listen",
 			ts.Format(time.RFC3339)), nil)
 	}
@@ -912,7 +928,19 @@ func (f *audibleReadStatusFixer) Replan(_ context.Context, _ json.RawMessage, pl
 	if err != nil {
 		return repairs.Row{}, fmt.Errorf("read book %s: %w", st.Target, err)
 	}
-	t := arsTarget{id: st.Target, related: arsRelatedIDs(st.Target, nil, st.Hits)}
+	// Hits that have since been soft-deleted are dropped, as Plan (which
+	// reads live books only) would drop them now.
+	var hits []string
+	for _, h := range st.Hits {
+		hb, err := store.GetBookByID(h)
+		if err != nil {
+			return repairs.Row{}, fmt.Errorf("read hit %s: %w", h, err)
+		}
+		if hb != nil && !hb.IsSoftDeleted() {
+			hits = append(hits, h)
+		}
+	}
+	t := arsTarget{id: st.Target, related: arsRelatedIDs(st.Target, nil, hits)}
 	if b == nil || b.IsSoftDeleted() {
 		t.gone = true
 		return f.decide(us, base, st, t), nil
@@ -937,18 +965,24 @@ func (f *audibleReadStatusFixer) Replan(_ context.Context, _ json.RawMessage, pl
 			}
 		}
 	}
-	t.related = arsRelatedIDs(st.Target, members, st.Hits)
+	t.related = arsRelatedIDs(st.Target, members, hits)
 	return f.decide(us, base, st, t), nil
 }
 
 // Apply writes the planned state through the Writer, which re-reads it first
 // and refuses (changed_since_plan) when the user's state moved.
-func (f *audibleReadStatusFixer) Apply(_ context.Context, w *repairs.Writer, fresh repairs.Row) error {
+//
+// The Writer re-reads the TARGET's state under the user-state stripe. The
+// other copies' states (arsTarget.related) are read by Replan just before,
+// without a lock: the stripe is per book and a holder never takes a second,
+// so a listen on another copy that lands between that Replan and the write
+// is not caught. The window is one Replan wide.
+func (f *audibleReadStatusFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repairs.Row) error {
 	d, ok := fresh.Detail.(*arsDecision)
 	if !ok || d == nil {
 		return fmt.Errorf("%s: row %s carries no decision", audibleReadStatusFixerID, fresh.RowID)
 	}
-	if err := w.SetUserState(d.user, d.book, d.expect, d.next); err != nil {
+	if err := w.SetUserState(ctx, d.user, d.book, d.expect, d.next); err != nil {
 		if errors.Is(err, repairs.ErrChangedSincePlan) || errors.Is(err, repairs.ErrPartiallyApplied) {
 			return err
 		}

@@ -1,7 +1,7 @@
 // file: internal/itunes/service/position_sync.go
-// version: 2.6.0
+// version: 2.7.0
 // guid: 9f7a8b5c-0d6e-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-09-19
+// last-edited: 2026-10-05
 //
 // Bidirectional sync between the app's per-user position/state
 // tracking (spec 3.6) and the iTunes Bookmark / Play Count fields
@@ -141,49 +141,62 @@ func (p *PositionSync) pullBookmarks() int {
 		if book.ITunesPlayCount == nil || *book.ITunesPlayCount <= 0 {
 			continue
 		}
-		state, err := p.store.GetUserBookState(adminUserID, book.ID)
-		if err != nil {
-			// Unreadable is not "no state": seeding here would write a
-			// fresh Finished over whatever the row holds.
-			stateErrs++
-			p.log.Warn("itunes position sync: read state for %s: %v; not seeding finished", book.ID, err)
-			continue
-		}
-		if state != nil {
-			continue
-		}
-		// This finish came FROM iTunes' play count, so it has already been
-		// counted there. The book is marked as counted first, and the
-		// Finished state is written only once that mark is stored, carrying
-		// the same stamp. A finish can then never exist unmarked: if the
-		// mark fails, nothing is seeded and the next run tries again. If
-		// the state write fails, the mark is left without a finish, which
-		// is harmless because a later real finish is dated after it.
-		finish := time.Now()
-		if _, err := p.store.ModifyBook(book.ID, func(b *database.Book) error {
-			if b.ITunesPlayCountBumpedAt != nil && !finish.After(*b.ITunesPlayCountBumpedAt) {
-				return database.ErrSkipBookWrite
+		// The "no state yet" check and the seed are one step under the
+		// per-(user, book) user-state stripe (database.LockUserBookState), so
+		// an ABS sync or the Repairs writer cannot write a state between
+		// them that the seed would then overwrite. Order: stripe, then the
+		// book's write stripe inside ModifyBook; nothing takes them the
+		// other way round.
+		ok := func() bool {
+			defer database.LockUserBookState(adminUserID, book.ID)()
+			state, err := p.store.GetUserBookState(adminUserID, book.ID)
+			if err != nil {
+				// Unreadable is not "no state": seeding here would write a
+				// fresh Finished over whatever the row holds.
+				stateErrs++
+				p.log.Warn("itunes position sync: read state for %s: %v; not seeding finished", book.ID, err)
+				return false
 			}
-			b.ITunesPlayCountBumpedAt = &finish
-			return nil
-		}); err != nil {
-			markErrs++
-			p.log.Warn("itunes position sync: mark the iTunes finish of %s as counted: %v; not seeding finished", book.ID, err)
-			continue
-		}
-		// With no stored row, SetUserBookState keeps a stamp the caller
-		// supplies, so the seeded finish is dated exactly at the mark. The
-		// fields are the ones readstatus.SetManualStatus writes for a book
-		// with no state.
-		if err := p.store.SetUserBookState(&database.UserBookState{
-			UserID:         adminUserID,
-			BookID:         book.ID,
-			Status:         database.UserBookStatusFinished,
-			StatusManual:   true,
-			LastActivityAt: finish,
-			FinishedAt:     &finish,
-		}); err != nil {
-			p.log.Warn("itunes position sync: seed finished for %s: %v", book.ID, err)
+			if state != nil {
+				return false
+			}
+			// This finish came FROM iTunes' play count, so it has already been
+			// counted there. The book is marked as counted first, and the
+			// Finished state is written only once that mark is stored, carrying
+			// the same stamp. A finish can then never exist unmarked: if the
+			// mark fails, nothing is seeded and the next run tries again. If
+			// the state write fails, the mark is left without a finish, which
+			// is harmless because a later real finish is dated after it.
+			finish := time.Now()
+			if _, err := p.store.ModifyBook(book.ID, func(b *database.Book) error {
+				if b.ITunesPlayCountBumpedAt != nil && !finish.After(*b.ITunesPlayCountBumpedAt) {
+					return database.ErrSkipBookWrite
+				}
+				b.ITunesPlayCountBumpedAt = &finish
+				return nil
+			}); err != nil {
+				markErrs++
+				p.log.Warn("itunes position sync: mark the iTunes finish of %s as counted: %v; not seeding finished", book.ID, err)
+				return false
+			}
+			// With no stored row, SetUserBookState keeps a stamp the caller
+			// supplies, so the seeded finish is dated exactly at the mark. The
+			// fields are the ones readstatus.SetManualStatus writes for a book
+			// with no state.
+			if err := p.store.SetUserBookState(&database.UserBookState{
+				UserID:         adminUserID,
+				BookID:         book.ID,
+				Status:         database.UserBookStatusFinished,
+				StatusManual:   true,
+				LastActivityAt: finish,
+				FinishedAt:     &finish,
+			}); err != nil {
+				p.log.Warn("itunes position sync: seed finished for %s: %v", book.ID, err)
+				return false
+			}
+			return true
+		}()
+		if !ok {
 			continue
 		}
 		seeded++

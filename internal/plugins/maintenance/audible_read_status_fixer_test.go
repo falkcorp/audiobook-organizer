@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/audible_read_status_fixer_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 569aec15-d845-4f39-9a8e-63ba7e93162a
 // last-edited: 2026-10-05
 
@@ -497,7 +497,7 @@ func TestAudibleReadStatus_WriterRefusesChangedState(t *testing.T) {
 		WithJournal(l.store, l.store, arsTestApplyOp).WithUserState(l.p.deps.UserReadStateStore())
 	l.setState("fresh", database.UserBookState{Status: database.UserBookStatusInProgress, ProgressPct: 5})
 	next := &database.UserBookState{UserID: l.user, BookID: id, Status: database.UserBookStatusFinished, StatusManual: true, ProgressPct: 100}
-	err := w.SetUserState(l.user, id, undo.UserStateSnapshot{}, undo.UserStateSnapshot{State: next})
+	err := w.SetUserState(context.Background(), l.user, id, undo.UserStateSnapshot{}, undo.UserStateSnapshot{State: next})
 	require.ErrorIs(t, err, repairs.ErrChangedSincePlan)
 	changes, err := l.store.GetOperationChanges(arsTestApplyOp)
 	require.NoError(t, err)
@@ -666,9 +666,7 @@ func TestAudibleReadStatus_VersionGroupCopiesCount(t *testing.T) {
 func TestAudibleReadStatus_TimestampsAndOwnerIntent(t *testing.T) {
 	l := newARSLib(t)
 	fixed := arsAudibleTS.Add(24 * time.Hour)
-	prev := arsNow
-	arsNow = func() time.Time { return fixed }
-	t.Cleanup(func() { arsNow = prev })
+	l.fixer.now = func() time.Time { return fixed }
 
 	l.book("future", arsBook{title: "Nu", author: "Pat Example", asin: "B0TEST0501", minutes: 600})
 	l.item("B0TEST0501", "Nu", "Pat Example", 600, "finished", 0, ptrTime(fixed.Add(time.Hour)))
@@ -734,4 +732,23 @@ func TestAudibleReadStatus_RealExportShape(t *testing.T) {
 	for id, class := range want {
 		require.Equal(t, class, rows[id].Class, "%s: %s", id, rows[id].Reason)
 	}
+}
+
+// S-2: a title hit that the author filter dropped (another author's book of
+// the same title) is not a copy of the target; its listening does not count.
+func TestAudibleReadStatus_TitleHitsOnlyTheTargetsCopies(t *testing.T) {
+	l := newARSLib(t)
+	l.book("mine", arsBook{title: "Omega Story", author: "Pat Example", minutes: 600})
+	l.book("theirs", arsBook{title: "Omega Story", author: "Quinn Other", minutes: 600})
+	require.NoError(t, l.store.SetUserPositionAt(l.user, l.ids["theirs"], "abs", 100, arsAudibleTS.Add(time.Hour)))
+	l.item("B0TEST0701", "Omega Story", "Pat Example", 600, "finished", 0, ptrTime(arsAudibleTS))
+	plan, rows := l.plan()
+	r := rows["asin:B0TEST0701"]
+	require.Equal(t, arsWouldFinish, r.Class, r.Reason)
+	require.Equal(t, []string{l.ids["mine"]}, r.BookIDs)
+	var st arsRowState
+	require.NoError(t, json.Unmarshal(r.State, &st))
+	require.Equal(t, []string{l.ids["mine"]}, st.Hits)
+	res := l.apply(plan, []string{"asin:B0TEST0701"})
+	require.Equal(t, repairs.OutcomeApplied, res["asin:B0TEST0701"].Outcome, "%+v", res)
 }

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/abs/play.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: b06d4a13-5f28-4c71-9e0a-38f2c7d915e6
 // last-edited: 2026-10-05
 
@@ -481,8 +481,14 @@ func (h *Handler) applySessionUpdate(c *gin.Context) (actedOn string) {
 	// Read the stored position and state BEFORE touching the in-memory
 	// session: a 503 must leave the session exactly as it was, or the client's
 	// retry of the same sync adds timeListened twice.
+	//
+	// The user-state stripe is taken BEFORE that read and held through
+	// persistProgress, so the merge compares against the position as it is
+	// when the write lands (database.LockUserBookState: every holder re-reads
+	// under the lock). Order: stripe, then session.mu, never the reverse.
 	var stored storedProgress
 	if h.progress != nil {
+		defer database.LockUserBookState(session.UserID, session.BookID)()
 		var err error
 		if stored, err = h.readStoredProgress(session.UserID, session.BookID); err != nil {
 			logProgressUnavailable("session sync", session.UserID, session.BookID, err)
@@ -524,13 +530,14 @@ func (h *Handler) applySessionUpdate(c *gin.Context) (actedOn string) {
 // as fatal would stop syncing altogether) but are logged. An unreadable stored
 // position or state never reaches here: the caller reads both first
 // (readStoredProgress) and answers 503 without writing anything.
+//
+// The caller (applySessionUpdate) holds database.LockUserBookState for
+// (s.UserID, s.BookID) from before it read snap until this returns, so snap is
+// still the stored value when the write lands.
 func (h *Handler) persistProgress(s *playSession, position float64, clientDuration *float64, snap storedProgress) {
 	if h.progress == nil || position <= 0 {
 		return
 	}
-	// The position write and the state update are one step against the
-	// other user-state writers (database.LockUserBookState).
-	defer database.LockUserBookState(s.UserID, s.BookID)()
 
 	stored := snap.position
 
