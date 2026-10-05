@@ -1,5 +1,5 @@
 // file: internal/dedup/merge_journaled_siblings_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 92334d16-d043-4457-bdc3-273468cb5afc
 // last-edited: 2026-10-05
 
@@ -67,6 +67,9 @@ func TestUnmergeAuto_RestoresMovedSiblings(t *testing.T) {
 		{BookID: "LS", FromGroupID: "G", IntoGroupID: "H", WasPrimary: &yes},
 		{BookID: "LSNIL", FromGroupID: "G", IntoGroupID: "H", WasPrimary: nil},
 	}, entry.Siblings)
+	require.Equal(t, res.SiblingJournalID, entry.SiblingJournalID)
+	require.Equal(t, "H", entry.IntoGroupID)
+	require.False(t, entry.Provisional)
 
 	require.NoError(t, engine.UnmergeAuto(keys[0]))
 
@@ -84,8 +87,9 @@ func TestUnmergeAuto_RestoresMovedSiblings(t *testing.T) {
 	require.Equal(t, "H", g)
 	require.Equal(t, &yes, flag)
 
-	// A second undo of the same entry leaves the restored siblings alone.
-	require.NoError(t, engine.UnmergeAuto(keys[0]))
+	// A second undo of the same entry is refused and moves nothing.
+	err = engine.UnmergeAuto(keys[0])
+	require.ErrorContains(t, err, "already undone")
 	g, _, _ = groupAndFlag(t, store, "LS")
 	require.Equal(t, "G", g)
 }

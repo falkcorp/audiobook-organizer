@@ -1,7 +1,7 @@
 // file: internal/reconcile/itunes_heal.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 7f3a1b2c-4d5e-6f7a-8b9c-0d1e2f3a4b5c
-// last-edited: 2026-09-19
+// last-edited: 2026-10-05
 
 package reconcile
 
@@ -23,7 +23,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
@@ -336,7 +335,7 @@ func resolveAmbiguousByDB(ctx context.Context, store reconcileStore, candidates 
 		}
 	}
 	if len(dupIDs) > 0 {
-		if _, err := dedup.MergeBooks(ctx, store, "", keepID, dupIDs, nil); err != nil {
+		if err := collapseHealDuplicates(store, keepID, dupIDs); err != nil {
 			// Returning ("", 0) already fails closed — this candidate stays
 			// unresolved and the heal falls through to its next layer rather
 			// than repointing at a collapse that never happened. What was
@@ -355,6 +354,49 @@ func resolveAmbiguousByDB(ctx context.Context, store reconcileStore, candidates 
 		}
 	}
 	return rows[0].path, len(dupIDs)
+}
+
+// collapseHealDuplicates merges dupIDs into keepID through merge.Service, the
+// one merge chokepoint, so the collapse unites version groups (MergeBooks item
+// 6: a duplicate's other versions follow it into the kept book's group, with
+// a sibling-move journal to undo that) and writes rows through ModifyBook
+// rather than a whole-row write of the kept book. It used to call the legacy
+// dedup.MergeBooks, which soft-deleted each duplicate where it stood and left
+// its versions behind in a group of their own.
+//
+// The legacy path's refusals are kept: keepID is the explicit primary, so a
+// file-less keeper with a file-bearing duplicate is refused
+// (FilelessPrimaryError), as is a soft-deleted keeper and any book under the
+// active iTunes library; RefuseSharedAudioPaths keeps its shared-audio-path
+// refusal; CarryITunesFields keeps its iTunes-provenance carry. Two changes,
+// both toward refusing: a refusal now stops the whole collapse rather than
+// leaving one duplicate live and carrying on, and a book with an unscanned
+// file is refused (ProvisionalScanError). A duplicate already soft-deleted
+// (collapsed by an earlier heal, or deleted by the user) is left as it is, as
+// before; merge.Service would refuse it outright.
+//
+// merge.Service queues no ITL removal here (no write-back batcher), which is
+// what the legacy path did too.
+func collapseHealDuplicates(store reconcileStore, keepID string, dupIDs []string) error {
+	ids := []string{keepID}
+	for _, id := range dupIDs {
+		b, err := store.GetBookByID(id)
+		if err != nil {
+			return fmt.Errorf("read duplicate %s: %w", id, err)
+		}
+		if b == nil || b.IsSoftDeleted() {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	if len(ids) < 2 {
+		return nil
+	}
+	_, err := merge.NewService(store).MergeBooksWithOptions(ids, keepID, merge.MergeOptions{
+		CarryITunesFields:      true,
+		RefuseSharedAudioPaths: true,
+	})
+	return err
 }
 
 // resolveAmbiguousByBookMeta looks up each candidate's Book in the DB and
