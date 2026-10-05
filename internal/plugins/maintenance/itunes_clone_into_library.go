@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_clone_into_library.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 9c4e1b27-6a3f-4d80-b5e2-3f7a0c8d1e64
 // last-edited: 2026-10-05
 
@@ -1300,8 +1300,9 @@ func (r *icRunner) removeVersionClone(rec *icRecord) error {
 // state was carried to the source: the clone is still there and may still be
 // the copy ABS lists. The state must not be left on a book ABS does not list
 // while one it does is live, so: a source ABS lists keeps it; otherwise a
-// clone ABS lists gets it back (merge.CarryStateBeforeHardDelete, source ->
-// clone, all or nothing); otherwise it stays on the source. It returns where
+// clone ABS lists gets it back (merge.CarryStateBetweenLiveBooks, source ->
+// clone, all or nothing; both books stay live, so no ABS sync redirect is
+// left between them in either direction); otherwise it stays on the source. It returns where
 // the state is, for the group's error. A retry carries it to the source
 // again.
 func (r *icRunner) keepCloneStateVisible(rec *icRecord) string {
@@ -1320,7 +1321,7 @@ func (r *icRunner) keepCloneStateVisible(rec *icRecord) string {
 	if um == nil {
 		return fmt.Sprintf("users' listening state is on source %s, which ABS does not list, and the store cannot move it back to clone %s", rec.SourceBookID, rec.CloneBookID)
 	}
-	if err := merge.CarryStateBeforeHardDelete(um, rec.CloneBookID, rec.SourceBookID); err != nil {
+	if err := merge.CarryStateBetweenLiveBooks(um, rec.CloneBookID, rec.SourceBookID); err != nil {
 		return fmt.Sprintf("users' listening state is on source %s, which ABS does not list; moving it back to clone %s failed: %v", rec.SourceBookID, rec.CloneBookID, err)
 	}
 	return fmt.Sprintf("users' listening state was moved back to clone %s, which ABS lists", rec.CloneBookID)

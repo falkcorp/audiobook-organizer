@@ -1,5 +1,5 @@
 // file: internal/merge/carry_before_delete_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8b2e4d61-3c7a-4f95-b1d8-6a0c9e2f5b47
 // last-edited: 2026-10-05
 
@@ -358,4 +358,18 @@ func TestHardDeleteWithoutUserState(t *testing.T) {
 	require.ErrorIs(t, err, ErrUserStateCheckFailed)
 	require.NotErrorIs(t, err, ErrUserStateOnDoomedBook)
 	require.False(t, ran)
+}
+
+// #3770 review B1: a carry between two books that both stay live leaves no
+// sync redirect between them in either direction, so each id resolves to its
+// own book -- including after an earlier carry the other way.
+func TestCarryStateBetweenLiveBooks_LeavesNoRedirect(t *testing.T) {
+	c := newCarryFixture(t)
+	require.NoError(t, c.s.RecordSyncMerge(c.keep, c.dup), "an earlier carry the other way")
+	require.NoError(t, CarryStateBetweenLiveBooks(c.fs, c.keep, c.dup))
+	require.Equal(t, 40, c.pct(t, c.userA, c.keep))
+	require.Equal(t, 70, c.pct(t, c.usB, c.keep))
+	require.Equal(t, c.keep, sfCurrentBook(t, c.s, c.keep))
+	require.Equal(t, c.dup, sfCurrentBook(t, c.s, c.dup))
+	require.Empty(t, pendingKeys(t, c.s))
 }

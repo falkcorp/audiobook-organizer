@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_syncid.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 5b9bd4e0-2ee2-436d-ac81-16b93de80eb3
-// last-edited: 2026-10-01
+// last-edited: 2026-10-05
 
 // Package database: sync_item keyspace — durable ABS `libraryItemId` identity.
 //
@@ -410,6 +410,15 @@ func (p *PebbleStore) RepointSyncItem(oldBookID, newBookID string) error {
 // book resolves to loserSyncID, and ResolveSyncItem follows the redirect to
 // the winner. Deleting it would make a stale client request 404 instead of
 // correctly resolving.
+//
+// It never closes a cycle. When the winner's own redirect chain already
+// reaches the loser (the reverse edge a carry back the other way left, e.g.
+// winner -> loser), recording loser -> winner would make ResolveSyncItem fail
+// for both items for good (ErrSyncRedirectChainBroken). The winner is the
+// book this merge keeps live, so its outgoing redirect is the stale link: it
+// is cleared (the winner's own RedirectTo and its entry in that target's
+// MergedFrom) in the same batch that records the new redirect. Two books that
+// share one sync item are a no-op: a redirect to itself would break it.
 func (p *PebbleStore) RecordSyncMerge(loserBookID, winnerBookID string) error {
 	winnerSyncID, err := p.MintOrGetSyncID(winnerBookID)
 	if err != nil {
@@ -424,16 +433,16 @@ func (p *PebbleStore) RecordSyncMerge(loserBookID, winnerBookID string) error {
 		return nil
 	}
 
+	if loserSyncID == winnerSyncID {
+		return nil
+	}
+
 	loserItem, err := p.getSyncItem(loserSyncID)
 	if err != nil {
 		return err
 	}
 	if loserItem == nil {
 		return fmt.Errorf("sync item %s referenced by reverse index but record missing", loserSyncID)
-	}
-	if loserItem.RedirectTo == winnerSyncID {
-		// Already recorded.
-		return nil
 	}
 
 	winnerItem, err := p.getSyncItem(winnerSyncID)
@@ -444,31 +453,84 @@ func (p *PebbleStore) RecordSyncMerge(loserBookID, winnerBookID string) error {
 		return fmt.Errorf("sync item %s just minted/looked-up but record missing", winnerSyncID)
 	}
 
-	loserItem.RedirectTo = winnerSyncID
-	loserData, err := json.Marshal(loserItem)
+	// Items this write changes, by sync id, so an item touched twice (the
+	// loser when it is also the winner's stale redirect target) is written
+	// once with both changes.
+	changed := map[string]*SyncItem{}
+	reaches, err := p.syncChainReaches(winnerSyncID, winnerItem, loserSyncID)
 	if err != nil {
 		return err
 	}
+	if reaches {
+		staleID := winnerItem.RedirectTo
+		stale := loserItem
+		if staleID != loserSyncID {
+			if stale, err = p.getSyncItem(staleID); err != nil {
+				return err
+			}
+			if stale == nil {
+				return fmt.Errorf("sync item %s (redirect target of %s) missing", staleID, winnerSyncID)
+			}
+		}
+		winnerItem.RedirectTo = ""
+		stale.MergedFrom = slices.DeleteFunc(stale.MergedFrom, func(s string) bool { return s == winnerSyncID })
+		changed[winnerSyncID], changed[staleID] = winnerItem, stale
+	}
+	if loserItem.RedirectTo == winnerSyncID && len(changed) == 0 {
+		// Already recorded.
+		return nil
+	}
 
-	alreadyMerged := slices.Contains(winnerItem.MergedFrom, loserSyncID)
-	if !alreadyMerged {
+	loserItem.RedirectTo = winnerSyncID
+	if !slices.Contains(winnerItem.MergedFrom, loserSyncID) {
 		winnerItem.MergedFrom = append(winnerItem.MergedFrom, loserSyncID)
 	}
-	winnerData, err := json.Marshal(winnerItem)
-	if err != nil {
-		return err
-	}
+	changed[loserSyncID], changed[winnerSyncID] = loserItem, winnerItem
 
 	batch := p.db.NewBatch()
-	if err := batch.Set(syncItemKey(loserSyncID), loserData, nil); err != nil {
-		batch.Close()
-		return err
-	}
-	if err := batch.Set(syncItemKey(winnerSyncID), winnerData, nil); err != nil {
-		batch.Close()
-		return err
+	for id, item := range changed {
+		data, err := json.Marshal(item)
+		if err != nil {
+			batch.Close()
+			return err
+		}
+		if err := batch.Set(syncItemKey(id), data, nil); err != nil {
+			batch.Close()
+			return err
+		}
 	}
 	return batch.Commit(pebble.Sync)
+}
+
+// syncChainReaches reports whether following RedirectTo from start (sync id
+// startID) reaches target. The walk is bounded like ResolveSyncItem's. A
+// chain that is already broken (dangling, cyclic, too long) without passing
+// target reads false: RecordSyncMerge then writes as it always did, and
+// only a cycle this write would close is prevented.
+func (p *PebbleStore) syncChainReaches(startID string, start *SyncItem, target string) (bool, error) {
+	const maxHops = 10
+	visited := map[string]bool{startID: true}
+	item := start
+	for range maxHops {
+		next := item.RedirectTo
+		switch {
+		case next == "":
+			return false, nil
+		case next == target:
+			return true, nil
+		case visited[next]:
+			return false, nil
+		}
+		visited[next] = true
+		var err error
+		if item, err = p.getSyncItem(next); err != nil {
+			return false, err
+		}
+		if item == nil {
+			return false, nil
+		}
+	}
+	return false, nil
 }
 
 // ClearSyncMerge is the exact reverse of RecordSyncMerge, for an undone

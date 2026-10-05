@@ -1,5 +1,5 @@
 // file: internal/merge/carry_before_delete.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3f1c9a52-7d4e-4b8a-a6c0-8e2b5d7f1a93
 // last-edited: 2026-10-05
 
@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
@@ -132,6 +133,38 @@ func HardDeleteWithoutUserState(db UserProgressMerger, bookID string, del func()
 		return fmt.Errorf("%w: %s: %w", ErrUserStateOnDoomedBook, bookID, err)
 	}
 	return del()
+}
+
+// CarryStateBetweenLiveBooks moves every user's state, positions and
+// bookmarks from fromID onto toID like CarryStateBeforeHardDelete (all or
+// nothing, put back when incomplete), for two books that BOTH stay live: a
+// rollback that failed part way and has to put its users' state back on the
+// copy Audiobookshelf lists. The hard-delete carry records the ABS sync
+// redirect fromID -> toID because fromID is about to be deleted; here fromID
+// stays, so once the state has moved the redirect is cleared again, in both
+// directions (an earlier carry the other way recorded toID -> fromID), and
+// each book's sync id resolves to itself. A redirect that cannot be cleared
+// is an error: the state has moved, but an ABS client holding one book's id
+// would still land on the other.
+func CarryStateBetweenLiveBooks(db UserProgressMerger, toID, fromID string) error {
+	if toID == "" || fromID == "" || toID == fromID {
+		return fmt.Errorf("%w: invalid pair to=%q from=%q", ErrStateCarryIncomplete, toID, fromID)
+	}
+	mergeSerializeMu.Lock()
+	defer mergeSerializeMu.Unlock()
+	if err := carryStateLocked(db, toID, fromID); err != nil {
+		return err
+	}
+	clearer, ok := database.AsCapability[syncMergeClearer](db)
+	if !ok {
+		return fmt.Errorf("state moved %s -> %s, but the store cannot clear the sync redirect between them", fromID, toID)
+	}
+	for _, pair := range [][2]string{{fromID, toID}, {toID, fromID}} {
+		if err := clearer.ClearSyncMerge(pair[0], pair[1]); err != nil {
+			return fmt.Errorf("state moved %s -> %s, but clearing the sync redirect %s -> %s failed: %w", fromID, toID, pair[0], pair[1], err)
+		}
+	}
+	return nil
 }
 
 // carryStateLocked is CarryStateBeforeHardDelete's body. The caller holds
