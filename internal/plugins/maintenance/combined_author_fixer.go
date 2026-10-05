@@ -290,7 +290,11 @@ func (idx *combinedAuthorIndex) isCombinedName(id int, name string) bool {
 	return all || len(personname.SplitCompositeAuthorName(name)) >= 2
 }
 
-func (f *combinedAuthorFixer) buildIndex(ctx context.Context) (*combinedAuthorIndex, error) {
+// buildIndex builds the author index. await waits for an authority snapshot
+// load in flight (Plan); Replan and Apply run under the scan stand-down
+// lease and read the lists without waiting, which is safe because the
+// authority lines are display only and never in the fingerprint.
+func (f *combinedAuthorFixer) buildIndex(ctx context.Context, await bool) (*combinedAuthorIndex, error) {
 	store := f.p.deps.OpsStore()
 	if store == nil {
 		return nil, fmt.Errorf("database not initialized")
@@ -334,17 +338,21 @@ func (f *combinedAuthorFixer) buildIndex(ctx context.Context) (*combinedAuthorIn
 			idx.titles[k] = true
 		}
 	}
-	idx.authority, idx.authorityReady = authorcredit.AwaitAuthority(ctx, store)
+	if await {
+		idx.authority, idx.authorityReady = authorcredit.AwaitAuthority(ctx, store)
+	} else {
+		idx.authority, idx.authorityReady = authorcredit.CurrentAuthority(store)
+	}
 	return idx, nil
 }
 
-func (f *combinedAuthorFixer) cachedIndex(ctx context.Context) (*combinedAuthorIndex, error) {
+func (f *combinedAuthorFixer) cachedIndex() (*combinedAuthorIndex, error) {
 	f.idxMu.Lock()
 	defer f.idxMu.Unlock()
 	if f.idx != nil && time.Since(f.idxBuiltAt) < combinedIndexTTL {
 		return f.idx, nil
 	}
-	idx, err := f.buildIndex(ctx)
+	idx, err := f.buildIndex(context.Background(), false)
 	if err != nil {
 		return nil, err
 	}
@@ -359,7 +367,7 @@ func (f *combinedAuthorFixer) Plan(ctx context.Context, _ json.RawMessage, rep r
 	if store == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
-	idx, err := f.buildIndex(ctx)
+	idx, err := f.buildIndex(ctx, true)
 	if err != nil {
 		return nil, err
 	}
@@ -440,12 +448,12 @@ func (f *combinedAuthorFixer) Plan(ctx context.Context, _ json.RawMessage, rep r
 // Replan re-reads the book and decides it again; it always returns
 // planned.RowID, so a book that is gone or no longer credits a combined
 // record comes back as a skipped row whose fingerprint differs.
-func (f *combinedAuthorFixer) Replan(ctx context.Context, _ json.RawMessage, planned repairs.Row, _ registry.Reporter) (repairs.Row, error) {
+func (f *combinedAuthorFixer) Replan(_ context.Context, _ json.RawMessage, planned repairs.Row, _ registry.Reporter) (repairs.Row, error) {
 	store := f.p.deps.OpsStore()
 	if store == nil {
 		return repairs.Row{}, fmt.Errorf("database not initialized")
 	}
-	idx, err := f.cachedIndex(ctx)
+	idx, err := f.cachedIndex()
 	if err != nil {
 		return repairs.Row{}, err
 	}
@@ -1287,7 +1295,7 @@ func combinedRewrite(cur []database.BookAuthor, bookID string, recIDs []int, tar
 // none exists, journaled), the credit list rewritten under the book's author
 // lock (compare-and-set, journaled first), then the primary moved. Every
 // check that can refuse the row runs before the first write.
-func (f *combinedAuthorFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repairs.Row) error {
+func (f *combinedAuthorFixer) Apply(_ context.Context, w *repairs.Writer, fresh repairs.Row) error {
 	d, ok := fresh.Detail.(*combinedDecision)
 	if !ok || d == nil {
 		return fmt.Errorf("%s: row %s carries no decision", combinedAuthorFixerID, fresh.RowID)
@@ -1321,7 +1329,7 @@ func (f *combinedAuthorFixer) Apply(ctx context.Context, w *repairs.Writer, fres
 	if !sameCreditList(cur, d.credits) {
 		return fmt.Errorf("%w: book %s credits changed", repairs.ErrChangedSincePlan, id)
 	}
-	idx, err := f.cachedIndex(ctx)
+	idx, err := f.cachedIndex()
 	if err != nil {
 		return err
 	}

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/combined_author_fixer_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: d8097de1-71d8-4949-8195-fec97df8ae52
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 package maintenance
 
@@ -9,11 +9,14 @@ import (
 	"context"
 	"encoding/json"
 	"strconv"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
+	"github.com/falkcorp/audiobook-organizer/internal/authority"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )
@@ -692,5 +695,55 @@ func TestCombinedAuthorFixer_RealPrimaryTiedAtZeroStaysFirst(t *testing.T) {
 	for _, k := range []string{"tie", "tie-rev"} {
 		require.Equal(t, []string{"J. N. Chaney@0/author", "Jia Shen@1/author"}, l.credits(k), k)
 		require.Equal(t, "J. N. Chaney", l.primary(k), k)
+	}
+}
+
+// combinedAuthorityStore is a Pebble store offering the authority lists
+// (authorcredit.AuthoritySource) with a lookup the test swaps.
+type combinedAuthorityStore struct {
+	*database.PebbleStore
+	mu     sync.Mutex
+	lookup authority.Lookup
+}
+
+func (s *combinedAuthorityStore) AuthorityLookup() authority.Lookup {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lookup
+}
+
+// The authority lines are display only: a part apply would create says how
+// the lists grade it (or that they hold no entry), and a re-plan that no
+// longer has the lists (flag turned off, reload failed) omits the lines
+// without changing the fingerprint, so the row still applies.
+func TestCombinedAuthorFixer_AuthorityLinesAreDisplayOnly(t *testing.T) {
+	l := newCombinedLib(t)
+	l.author("Ann Leckie")
+	l.book("one", "Book One", "Ann Leckie, Zed Newperson", combinedLibRoot+"One/a.m4b", credit{"Ann Leckie, Zed Newperson", "author", 0})
+	l.book("two", "Book Two", "Ann Leckie, Yan Nobody", combinedLibRoot+"Two/a.m4b", credit{"Ann Leckie, Yan Nobody", "author", 0})
+	require.NoError(t, authority.PutPersonOverride(l.store, authority.PersonOverride{Name: "Zed Newperson",
+		Roles: map[authority.Role]bool{authority.RoleAuthor: true}, SetAt: time.Now()}))
+	snap, err := authority.LoadSnapshot(context.Background(), l.store)
+	require.NoError(t, err)
+	as := &combinedAuthorityStore{PebbleStore: l.store, lookup: snap}
+	l.fixer = newCombinedAuthorFixer(&Plugin{deps: fakeDeps{store: as}, standDownWait: noWait})
+
+	_, rows := l.plan()
+	require.Equal(t, combinedClassNewAuthors, rows["one"].Class)
+	require.Contains(t, rows["one"].Evidence,
+		`the authority lists hold "Zed Newperson" as an author from the owner's library (tier O) (strong evidence)`)
+	require.Contains(t, rows["two"].Evidence, `the authority lists hold no author entry for "Yan Nobody"`)
+
+	as.mu.Lock()
+	as.lookup = authority.Empty()
+	as.mu.Unlock()
+	l.fixer.idxMu.Lock()
+	l.fixer.idx = nil // force the re-plan to rebuild the index without the lists
+	l.fixer.idxMu.Unlock()
+	fresh, err := l.fixer.Replan(context.Background(), nil, rows["one"], &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, rows["one"].Fingerprint, fresh.Fingerprint, "authority lines never change the fingerprint")
+	for _, e := range fresh.Evidence {
+		require.NotContains(t, e, "authority lists", "no lists in hand: no authority line")
 	}
 }
