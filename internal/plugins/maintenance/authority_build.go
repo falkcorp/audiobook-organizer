@@ -201,17 +201,21 @@ func ingestLibraryExport(ctx context.Context, b *authority.Builder, path string,
 	if err != nil {
 		return fmt.Errorf("library_export_path: %w", err)
 	}
-	defer f.Close()
 	items, err := authority.ReadLibraryExport(f, authority.MaxLibraryExportBytes)
+	if cerr := f.Close(); err == nil && cerr != nil {
+		err = fmt.Errorf("close library export: %w", cerr)
+	}
 	if err != nil {
 		return err
 	}
 	b.NoteSource(authority.SourceLibraryExport)
-	var done atomic.Int64
+	var done, bad atomic.Int64
 	err = registry.RunItems(ctx, reporter, items, func(_ context.Context, item json.RawMessage) error {
 		// An undecodable item is counted by the builder and reported; one
 		// bad item does not fail the export.
-		_ = b.AddRawProduct(authority.SourceLibraryExport, item)
+		if err := b.AddRawProduct(authority.SourceLibraryExport, item); err != nil {
+			logUndecodable(reporter, &bad, authority.SourceLibraryExport, err)
+		}
 		done.Add(1)
 		return nil
 	}, registry.RunItemsOptions{
@@ -235,11 +239,13 @@ func ingestCatalogRaw(ctx context.Context, kv database.RawKVStore, b *authority.
 	}
 	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("authority-build: catalog payloads=%d", total))
 	b.NoteSource(authority.SourceCatalog)
-	var done atomic.Int64
+	var done, bad atomic.Int64
 	offset := 0
 	err = authority.ScanCatalogRaw(ctx, kv, authorityCatalogPageSize, func(pairs []database.KVPair) error {
 		err := registry.RunItems(ctx, reporter, pairs, func(_ context.Context, kvp database.KVPair) error {
-			_ = b.AddRawProduct(authority.SourceCatalog, kvp.Value)
+			if err := b.AddRawProduct(authority.SourceCatalog, kvp.Value); err != nil {
+				logUndecodable(reporter, &bad, authority.SourceCatalog+" "+kvp.Key, err)
+			}
 			done.Add(1)
 			return nil
 		}, registry.RunItemsOptions{
@@ -257,6 +263,16 @@ func ingestCatalogRaw(ctx context.Context, kv database.RawKVStore, b *authority.
 		return fmt.Errorf("catalog payloads: %w", err)
 	}
 	return nil
+}
+
+// authorityUndecodableLogLimit caps the per-payload decode errors logged;
+// the builder counts every one.
+const authorityUndecodableLogLimit = 10
+
+func logUndecodable(reporter sdk.Reporter, n *atomic.Int64, what string, err error) {
+	if n.Add(1) <= authorityUndecodableLogLimit {
+		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("authority-build: undecodable payload (%s): %v", what, err))
+	}
 }
 
 func logAuthorityReport(reporter sdk.Reporter, mode string, out *authorityBuildOutcome) {
