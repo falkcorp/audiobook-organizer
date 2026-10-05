@@ -1,5 +1,5 @@
 // file: internal/reconcile/reconcile.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-10-05
 
@@ -970,7 +970,10 @@ func CleanupDuplicateVersionGroups(store VersionGroupStore, rootDir string, dryR
 		// hand-off: keepIdx is the oldest library copy, which can be
 		// quarantined, not organized or not the primary (the duplicate may
 		// be the primary ABS shows), and carrying onto it would move the
-		// user's state off a copy they can see onto one they cannot.
+		// user's state off a copy they can see onto one they cannot. This
+		// check is the dry run's answer and an apply's early skip; an apply
+		// re-checks it under the merge lock right before the carry
+		// (removeDuplicate), where no merge can change the kept row first.
 		keepID := libraryCopies[keepIdx].ID
 		for _, dup := range stateful {
 			listed, kerr := keepListed(store, groupID, keepID, rootDir, dryRun, removed)
@@ -1025,12 +1028,21 @@ func keepListed(store VersionGroupStore, groupID, keepID, rootDir string, dryRun
 	return database.ABSLibraryFilter().Matches(&row), nil
 }
 
+// errKeepNotListed: the kept copy is not a book ABS lists (keepListed), so a
+// duplicate's users' state is not carried onto it.
+var errKeepNotListed = errors.New("kept copy is not a book ABS lists")
+
 // removeDuplicate removes one duplicate -- its file in the library, then its
 // book row -- under the merge lock, right after a last check made under that
-// same lock: with keepID non-empty, its users' state is carried there first
-// (merge.CarryStateThenHardDelete); without, it must still hold no state
-// (merge.HardDeleteWithoutUserState). Either refusal keeps the duplicate and
-// its file. It reports whether the duplicate was removed.
+// same lock: with keepID non-empty, keepID must still be a book ABS lists
+// (keepListed, re-read under the lock: a merge between the caller's check
+// and the carry could have changed it) and its users' state is carried there
+// first (merge.CarryStateThenHardDelete); without, it must still hold no
+// state (merge.HardDeleteWithoutUserState). Any refusal keeps the duplicate
+// and its file. It reports whether the duplicate was removed.
+//
+// A primary hand-off that does not take the merge lock can still change the
+// kept row after this re-check; the window is the carry itself.
 func removeDuplicate(store VersionGroupStore, um merge.UserProgressMerger, keepID string, dup database.BookCore, groupID, rootDir string, result *VersionGroupCleanupResult) bool {
 	if um == nil {
 		pkgLog.Warn("version-group cleanup keeping duplicate %s of group %s: store cannot re-check or move users' listening state",
@@ -1059,7 +1071,17 @@ func removeDuplicate(store VersionGroupStore, um merge.UserProgressMerger, keepI
 	}
 	var err error
 	if keepID != "" {
-		err = merge.CarryStateThenHardDelete(um, keepID, dup.ID, del)
+		precheck := func() error {
+			listed, kerr := keepListed(store, groupID, keepID, rootDir, false, nil)
+			if kerr != nil {
+				return fmt.Errorf("%w (read error: %w)", errKeepNotListed, kerr)
+			}
+			if !listed {
+				return errKeepNotListed
+			}
+			return nil
+		}
+		err = merge.CarryStateThenHardDelete(um, keepID, dup.ID, precheck, del)
 	} else {
 		err = merge.HardDeleteWithoutUserState(um, dup.ID, del)
 	}
@@ -1067,6 +1089,10 @@ func removeDuplicate(store VersionGroupStore, um merge.UserProgressMerger, keepI
 	case err == nil:
 		result.DuplicatesRemoved++
 		return true
+	case errors.Is(err, errKeepNotListed):
+		pkgLog.Warn("version-group cleanup keeping duplicate %s of group %s: a user has listening state on it and kept copy %s is not a book ABS lists (re-checked under the merge lock): %v",
+			logger.SanitizeLogValue(dup.ID), logger.SanitizeLogValue(groupID), logger.SanitizeLogValue(keepID), err)
+		result.SkippedKeepNotListed++
 	case errors.Is(err, merge.ErrStateCarryIncomplete):
 		pkgLog.Warn("version-group cleanup keeping duplicate %s of group %s: its users' listening state could not be carried to %s: %v",
 			logger.SanitizeLogValue(dup.ID), logger.SanitizeLogValue(groupID), logger.SanitizeLogValue(keepID), err)

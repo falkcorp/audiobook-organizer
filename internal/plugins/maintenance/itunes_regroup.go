@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_regroup.go
-// version: 1.27.0
+// version: 1.28.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-10-05
 
@@ -195,6 +195,9 @@ func (p *Plugin) runITunesRegroup(ctx context.Context, raw json.RawMessage, repo
 	if n := len(applied.StateCarriedUnlisted); n > 0 {
 		final += fmt.Sprintf(" | state carried to a book ABS does not list: %d (see op log)", n)
 	}
+	if n := len(applied.SkippedTargetNotListed); n > 0 {
+		final += fmt.Sprintf(" | kept (listed, with listening state, no listed target): %d (see op log)", n)
+	}
 	_ = reporter.UpdateProgress(4, 4, final)
 	return regroupCheckFailedErr(plan, false)
 }
@@ -318,7 +321,19 @@ type regroupApplyReport struct {
 	// state). The state is kept, not dropped, but it is not visible in ABS
 	// until that book is organized and made its group's primary.
 	StateCarriedUnlisted []string
+	// SkippedTargetNotListed names the books with users' listening state
+	// that were NOT deleted because ABS lists them and no applied target that
+	// took their files is listed (skipped_target_not_listed): carrying the
+	// state would move it off a book the user can see onto one they cannot,
+	// the rule reconcile.CleanupDuplicateVersionGroups applies
+	// (SkippedKeepNotListed). A book ABS does not list either way is still
+	// carried, and reported in StateCarriedUnlisted.
+	SkippedTargetNotListed []string
 }
+
+// errRegroupTargetNotListed: the regroup's delete would move a listed book's
+// users' state onto a target ABS does not list.
+var errRegroupTargetNotListed = errors.New("the book is listed by ABS and its state target is not")
 
 // regroupRunStore is the run's store: OpsStore plus the tag reads the
 // owner-manual check makes (BookTagReader, its own accessor because OpsStore
@@ -861,7 +876,30 @@ func (p *Plugin) applyRegroupPlan(ctx context.Context, store itunesRegroupStore,
 				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: a user has listening state on it and no applied group took its files to carry it to", id))
 				continue
 			}
-			err := merge.CarryStateThenHardDelete(stateStore, target, id, del)
+			// A book ABS lists keeps its users' state unless the target is
+			// listed too. Decided here for the skip and log, and re-checked
+			// under the merge lock right before the carry (precheck), where
+			// no merge can change either row first.
+			skipNotListed := func(why string) {
+				deleteSkipped++
+				report.SkippedTargetNotListed = append(report.SkippedTargetNotListed, id)
+				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: ABS lists it, a user has listening state on it, and the target that took its files (%s) is not a book ABS lists%s; kept with its state", id, target, why))
+			}
+			if !targetListed && listed(id) {
+				skipNotListed("")
+				continue
+			}
+			precheck := func() error {
+				if listed(id) && !listed(target) {
+					return errRegroupTargetNotListed
+				}
+				return nil
+			}
+			err := merge.CarryStateThenHardDelete(stateStore, target, id, precheck, del)
+			if errors.Is(err, errRegroupTargetNotListed) {
+				skipNotListed(" (re-checked under the merge lock)")
+				continue
+			}
 			if errors.Is(err, merge.ErrStateCarryIncomplete) {
 				deleteSkipped++
 				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: its users' listening state could not be carried to %s: %v", id, target, err))
@@ -869,7 +907,7 @@ func (p *Plugin) applyRegroupPlan(ctx context.Context, store itunesRegroupStore,
 			}
 			// The carry landed whether or not the delete then failed.
 			stateCarried++
-			if !targetListed {
+			if !listed(target) {
 				report.StateCarriedUnlisted = append(report.StateCarriedUnlisted, id)
 				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("book %s: its users' listening state was carried to %s, which ABS does not list (no applied target that took its files is listed); kept, not visible in ABS until %s is organized and its group's primary", id, target, target))
 			}
@@ -909,8 +947,8 @@ func (p *Plugin) applyRegroupPlan(ctx context.Context, store itunesRegroupStore,
 	}
 
 	_ = reporter.Log(slog.LevelInfo, fmt.Sprintf(
-		"APPLIED: moved=%d titled=%d library-title-kept=%d fresh=%d deleted=%d state-carried=%d state-carried-unlisted=%d state-reappeared=%d delete-skipped=%d recheck-skipped=%d errors=%d",
-		moved, titled, titleKept, created, deleted, stateCarried, len(report.StateCarriedUnlisted), stateReappeared, deleteSkipped, recheckSkipped, errCount))
+		"APPLIED: moved=%d titled=%d library-title-kept=%d fresh=%d deleted=%d state-carried=%d state-carried-unlisted=%d skipped-target-not-listed=%d state-reappeared=%d delete-skipped=%d recheck-skipped=%d errors=%d",
+		moved, titled, titleKept, created, deleted, stateCarried, len(report.StateCarriedUnlisted), len(report.SkippedTargetNotListed), stateReappeared, deleteSkipped, recheckSkipped, errCount))
 	if n := len(report.StateCarriedUnlisted); n > 0 {
 		_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
 			"%d book(s)' listening state was carried to a book ABS does not list (first ids: %s)",

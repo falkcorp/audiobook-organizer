@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_clone_into_library.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 9c4e1b27-6a3f-4d80-b5e2-3f7a0c8d1e64
 // last-edited: 2026-10-05
 
@@ -1322,6 +1322,11 @@ func (r *icRunner) keepCloneStateVisible(rec *icRecord) string {
 		return fmt.Sprintf("users' listening state is on source %s, which ABS does not list, and the store cannot move it back to clone %s", rec.SourceBookID, rec.CloneBookID)
 	}
 	if err := merge.CarryStateBetweenLiveBooks(um, rec.CloneBookID, rec.SourceBookID); err != nil {
+		if errors.Is(err, merge.ErrSyncRedirectNotCleared) {
+			// The state did move; only the redirect between the two
+			// live books is left.
+			return fmt.Sprintf("users' listening state was moved back to clone %s, which ABS lists, but the ABS sync redirect between it and source %s could not be cleared: %v", rec.CloneBookID, rec.SourceBookID, err)
+		}
 		return fmt.Sprintf("users' listening state is on source %s, which ABS does not list; moving it back to clone %s failed: %v", rec.SourceBookID, rec.CloneBookID, err)
 	}
 	return fmt.Sprintf("users' listening state was moved back to clone %s, which ABS lists", rec.CloneBookID)
