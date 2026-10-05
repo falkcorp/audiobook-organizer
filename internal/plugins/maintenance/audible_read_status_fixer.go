@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/audible_read_status_fixer.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 36d6036c-05ce-48d1-9997-a65d6a8b67ce
 // last-edited: 2026-10-05
 
@@ -54,6 +54,7 @@ const (
 	arsReviewJunkTitle       = "review_junk_title"
 	arsReviewSwappedTitle    = "review_swapped_title"
 	arsReviewDuplicateTarget = "review_duplicate_target"
+	arsReviewSeriesMismatch  = "review_series_mismatch"
 
 	arsUnmatchedNoCandidate    = "unmatched_no_candidate"
 	arsUnmatchedAuthorMismatch = "unmatched_author_mismatch"
@@ -93,8 +94,10 @@ const arsPlanWorkers = 8
 // (a subtitle may be dropped on one side, series numbers must agree) and an
 // overlapping author surname, settled the same way. A target whose duration
 // is known and off by more than 10%, whose title is junk ("read by ..."),
-// or that two items claim, and a title found only in an author field, are
-// review rows: listed, never applied. So is anything ambiguous.
+// whose series number disagrees with an ASIN-matched item's, or that two
+// items claim (whatever the other item's outcome), and a title found only in
+// an author field, are review rows: listed, never applied. So is anything
+// ambiguous. A match with an unknown runtime is planned at review risk.
 //
 // ACTIONS, for the target user only (never the caller; required):
 //   - Audible finished: set Finished (StatusManual, 100%, finished_at and
@@ -274,28 +277,49 @@ func arsRowIDs(items []arsItem) []string {
 	return out
 }
 
-// arsMarkDuplicateTargets turns every applicable row whose target another
-// applicable row also names into a review row: two Audible titles on one
-// book means one of the matches is wrong.
+// arsMarkDuplicateTargets: two Audible titles resolved to one book means at
+// least one match is wrong (typically a book row carrying another volume's
+// ASIN). Every MATCHED row counts -- applicable, skipped (local progress,
+// not started, already finished, no timestamp, guard-held) and review alike
+// -- because the wrong one is as likely to be the applicable one. Each
+// applicable row of such a book becomes review_duplicate_target; the others
+// keep their own non-applicable class and say why in their evidence.
 func arsMarkDuplicateTargets(rows []repairs.Row) {
 	byTarget := map[string][]int{}
 	for i := range rows {
-		if rows[i].Applicable() && len(rows[i].BookIDs) == 1 {
-			byTarget[rows[i].BookIDs[0]] = append(byTarget[rows[i].BookIDs[0]], i)
+		if t := arsMatchedTarget(rows[i]); t != "" {
+			byTarget[t] = append(byTarget[t], i)
 		}
 	}
 	for book, idx := range byTarget {
 		if len(idx) < 2 {
 			continue
 		}
+		others := make([]string, 0, len(idx))
+		for _, i := range idx {
+			others = append(others, rows[i].RowID)
+		}
+		why := fmt.Sprintf("%d Audible titles match book %s (%s); at most one of them is that book", len(idx), book, strings.Join(others, ", "))
 		for _, i := range idx {
 			r := &rows[i]
-			r.Class, r.Skipped = arsReviewDuplicateTarget, arsReviewDuplicateTarget
-			r.SkipReason = fmt.Sprintf("%d Audible titles match book %s; at most one of them is that book", len(idx), book)
-			r.Reason, r.Risk, r.Detail, r.Proposed = r.SkipReason, repairs.RiskReview, nil, nil
+			r.Evidence = append(r.Evidence, why)
+			if !r.Applicable() {
+				continue
+			}
+			r.Class, r.Skipped, r.SkipReason = arsReviewDuplicateTarget, arsReviewDuplicateTarget, why
+			r.Reason, r.Risk, r.Detail, r.Proposed = why, repairs.RiskReview, nil, nil
 			r.Fingerprint = arsFingerprint(r.RowID, r.Class, r.BookIDs, "")
 		}
 	}
+}
+
+// arsMatchedTarget is the book a row was matched to (decide's single
+// "target" member), or "" for a row that matched no single book.
+func arsMatchedTarget(r repairs.Row) string {
+	if len(r.Members) == 1 && r.Members[0].Role == "target" {
+		return r.Members[0].BookID
+	}
+	return ""
 }
 
 // planItem matches one item and decides it.
@@ -308,9 +332,10 @@ func (f *audibleReadStatusFixer) planItem(store OpsStore, us UserReadStateStore,
 	if strings.TrimSpace(it.ASIN) == "" && strings.TrimSpace(it.Title) == "" {
 		return arsSkipRow(base, st, arsUnmatchedInvalidItem, "the item has neither an ASIN nor a title", nil)
 	}
-	if it.status() == arsAudibleNotStarted {
-		return arsSkipRow(base, st, arsSkipNotStarted, "not started on Audible; nothing to import", nil)
-	}
+	// Not-started items are matched too (and never applied): a match claims
+	// its target, so another item that lands on the same book is caught by
+	// arsMarkDuplicateTargets (a wrong ASIN on Book 1 must not let Book 2's
+	// finish mark a book never heard).
 	durations := map[string]float64{}
 	duration := func(id string) (float64, error) {
 		if d, ok := durations[id]; ok {
@@ -525,6 +550,15 @@ func (f *audibleReadStatusFixer) decide(us UserReadStateStore, base repairs.Row,
 			fmt.Sprintf("the matched book runs %.0f min and Audible's edition %.0f min (more than 10%% apart): a different edition, a part, or a wrong ASIN",
 				t.durationSec/60, it.runtimeSeconds()/60), nil)
 	}
+	// An ASIN match whose series number disagrees with the item's is a book
+	// row carrying another volume's ASIN ("Saga 1" holding "Saga 2"'s).
+	if strings.HasPrefix(st.Tier, arsTierASIN) {
+		ik, tk := arsKeyOf(it.Title), arsKeyOf(t.title)
+		if ik.nums != "" && tk.nums != "" && ik.nums != tk.nums {
+			return skip(arsReviewSeriesMismatch,
+				fmt.Sprintf("the ASIN matches book %q, but its series number (%s) is not Audible's (%s): a wrong ASIN on that row", t.title, tk.nums, ik.nums), nil)
+		}
+	}
 	if arsJunkTitle(t.title) {
 		return skip(arsReviewJunkTitle, fmt.Sprintf("the matched book's title %q is not a title; confirm it is this book", t.title), nil)
 	}
@@ -574,7 +608,7 @@ func (f *audibleReadStatusFixer) decide(us UserReadStateStore, base repairs.Row,
 				next.TotalListenedSeconds = end
 			}
 		}
-		r.Class, r.Risk = arsWouldFinish, repairs.RiskLow
+		r.Class, r.Risk = arsWouldFinish, arsRisk(known)
 		r.Reason = "finished on Audible at " + ts.Format(time.RFC3339)
 		r.Proposed = arsDisplay(next)
 		r.Detail = &arsDecision{user: st.User, book: t.id, expect: cur,
@@ -602,7 +636,7 @@ func (f *audibleReadStatusFixer) decide(us UserReadStateStore, base repairs.Row,
 		next.LastSegmentID = arsSegmentID
 		next.LastActivityAt = ts
 		next.FinishedAt = nil
-		r.Class, r.Risk = arsWouldProgress, repairs.RiskLow
+		r.Class, r.Risk = arsWouldProgress, arsRisk(known)
 		r.Reason = fmt.Sprintf("%d%% on Audible at %s", pct, ts.Format(time.RFC3339))
 		r.Proposed = arsDisplay(next)
 		r.Proposed["position_seconds"] = strconv.FormatFloat(pos, 'f', 0, 64)
@@ -613,6 +647,15 @@ func (f *audibleReadStatusFixer) decide(us UserReadStateStore, base repairs.Row,
 	}
 	r.Fingerprint = arsFingerprint(r.RowID, r.Class, t.key(), st.Tier, it, sum)
 	return r
+}
+
+// arsRisk: a match whose runtime could not be compared (either side
+// unknown) had one check fewer, so the owner reads it before applying.
+func arsRisk(runtimeKnown bool) string {
+	if runtimeKnown {
+		return repairs.RiskLow
+	}
+	return repairs.RiskReview
 }
 
 // arsCreditTitleRe is a title that is a narrator credit naming someone

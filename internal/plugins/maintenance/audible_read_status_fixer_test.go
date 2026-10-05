@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/audible_read_status_fixer_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 569aec15-d845-4f39-9a8e-63ba7e93162a
 // last-edited: 2026-10-05
 
@@ -534,4 +534,70 @@ func TestAudibleReadStatus_ExportShapes(t *testing.T) {
 	require.False(t, arsTitlesMatch(arsKeyOf("Synthetic Saga: One"), arsKeyOf("Synthetic Saga: Two")))
 	require.False(t, arsTitlesMatch(arsKeyOf("Synthetic Saga 2"), arsKeyOf("Synthetic Saga 3")))
 	require.False(t, arsTitlesMatch(arsKeyOf("Synthetic Saga: Book 2"), arsKeyOf("Synthetic Saga")))
+}
+
+// A book row carrying another volume's ASIN must not get that volume's
+// finish while the item that really is that book claims it too, whatever
+// that item's own outcome: (a) local progress on it, (b) not started on
+// Audible. Both rows are listed; neither is applicable.
+func TestAudibleReadStatus_WrongASINDuplicateTarget(t *testing.T) {
+	for name, setup := range map[string]func(l *arsLib){
+		"local progress": func(l *arsLib) {
+			require.NoError(t, l.store.SetUserPositionAt(l.user, l.ids["x"], "abs", 900, arsAudibleTS.Add(-time.Hour)))
+			l.item("B0TEST0101", "Alpha Tale", "Pat Example", 600, "progress", 30, ptrTime(arsAudibleTS))
+		},
+		"not started": func(l *arsLib) {
+			l.item("B0TEST0101", "Alpha Tale", "Pat Example", 600, "none", 0, nil)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			l := newARSLib(t)
+			// Row x is "Alpha Tale" but carries "Beta Tale"'s ASIN; no
+			// book carries Alpha's ASIN, so Alpha matches x by title.
+			l.book("x", arsBook{title: "Alpha Tale", author: "Pat Example", asin: "B0TEST0102", minutes: 600})
+			setup(l)
+			l.item("B0TEST0102", "Beta Tale", "Pat Example", 600, "finished", 0, ptrTime(arsAudibleTS))
+			plan, rows := l.plan()
+			beta := rows["asin:B0TEST0102"]
+			require.Equal(t, arsReviewDuplicateTarget, beta.Class, beta.Reason)
+			require.False(t, beta.Applicable())
+			alpha := rows["asin:B0TEST0101"]
+			require.False(t, alpha.Applicable())
+			require.NotEmpty(t, alpha.Evidence)
+			require.Contains(t, alpha.Evidence[len(alpha.Evidence)-1], "asin:B0TEST0102")
+			require.Equal(t, 0, plan.Applicable)
+		})
+	}
+}
+
+// An ASIN match whose series number disagrees with the item's is a review
+// row; an ASIN match with no number on one side is not affected.
+func TestAudibleReadStatus_ASINSeriesNumberConflict(t *testing.T) {
+	l := newARSLib(t)
+	l.book("one", arsBook{title: "Gamma Saga 1", author: "Pat Example", asin: "B0TEST0201", minutes: 600})
+	l.item("B0TEST0201", "Gamma Saga: Book 2", "Pat Example", 600, "finished", 0, ptrTime(arsAudibleTS))
+	l.book("plain", arsBook{title: "Delta Saga", author: "Pat Example", asin: "B0TEST0202", minutes: 600})
+	l.item("B0TEST0202", "Delta Saga: Book 1", "Pat Example", 600, "finished", 0, ptrTime(arsAudibleTS))
+	_, rows := l.plan()
+	require.Equal(t, arsReviewSeriesMismatch, rows["asin:B0TEST0201"].Class, rows["asin:B0TEST0201"].Reason)
+	require.False(t, rows["asin:B0TEST0201"].Applicable())
+	require.Equal(t, arsWouldFinish, rows["asin:B0TEST0202"].Class)
+}
+
+// A match whose runtime could not be compared is still planned, but at
+// review risk, not low.
+func TestAudibleReadStatus_UnknownRuntimeIsReviewRisk(t *testing.T) {
+	l := newARSLib(t)
+	l.book("nodur", arsBook{title: "Epsilon", author: "Pat Example", asin: "B0TEST0301", minutes: 0})
+	l.item("B0TEST0301", "Epsilon", "Pat Example", 600, "finished", 0, ptrTime(arsAudibleTS))
+	l.book("known", arsBook{title: "Zeta", author: "Pat Example", asin: "B0TEST0302", minutes: 600})
+	l.item("B0TEST0302", "Zeta", "Pat Example", 0, "finished", 0, ptrTime(arsAudibleTS))
+	l.book("both", arsBook{title: "Eta", author: "Pat Example", asin: "B0TEST0303", minutes: 600})
+	l.item("B0TEST0303", "Eta", "Pat Example", 600, "finished", 0, ptrTime(arsAudibleTS))
+	_, rows := l.plan()
+	for _, id := range []string{"asin:B0TEST0301", "asin:B0TEST0302"} {
+		require.Equal(t, arsWouldFinish, rows[id].Class, id)
+		require.Equal(t, repairs.RiskReview, rows[id].Risk, id)
+	}
+	require.Equal(t, repairs.RiskLow, rows["asin:B0TEST0303"].Risk)
 }

@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-05-audible-read-status-import-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 3ed99468-f010-4872-a4be-20545a39dccf -->
 <!-- last-edited: 2026-10-05 -->
 
@@ -18,7 +18,11 @@ PR: https://github.com/falkcorp/audiobook-organizer/pull/3746
 - Matching is careful. A book is used only when exactly one copy in the
   library fits, and its length is within 10% of Audible's. Anything doubtful
   is listed for review and never applied: two candidates, a length that
-  differs, a junk title, or two Audible books pointing at one library book.
+  differs, a junk title, or a series number that disagrees. If two Audible
+  books land on one library book, neither is applied, even when the other
+  one would have been skipped or was never started. That way a mislabeled
+  volume 1 can't be marked finished because volume 2 was. A match whose
+  length could not be checked is flagged for a closer look.
 - Newer listening in the library always wins. A book that is already
   finished, one the listener abandoned, and one played more recently than
   Audible's date are all left alone. Nothing is ever marked unfinished.
