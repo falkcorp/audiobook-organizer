@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_review9_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3bc1296c-6b8c-481b-b190-a196671cd4a8
 // last-edited: 2026-10-04
 
@@ -23,6 +23,30 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )
+
+// fragSweepFull reports whether the cut-point sweeps run every point of
+// every shape: AORG_FRAG_CUT_MATRIX=full or AORG_FRAG_ACTION_MATRIX=full.
+// Otherwise they sample: GitHub's Go job runs this package with -race and
+// no -short inside one 10-minute test budget, and the full sweeps alone
+// took longer than that (review 11).
+func fragSweepFull() bool {
+	return os.Getenv("AORG_FRAG_CUT_MATRIX") == "full" || os.Getenv("AORG_FRAG_ACTION_MATRIX") == "full"
+}
+
+// fragSweepStride is a sweep's cut-point stride: fine under fragSweepFull,
+// sampled otherwise.
+func fragSweepStride(fine, sampled int) int {
+	if fragSweepFull() {
+		return fine
+	}
+	return sampled
+}
+
+// fragSweepStart staggers sampled sweeps: shape i starts at a different
+// residue of the stride, so the shapes together cover more cut points.
+func fragSweepStart(i, stride int) int {
+	return 1 + (i*2)%stride
+}
 
 // heldActions are the actions a held row offers ("To clear it: a, or b").
 func heldActions(reason string) []string {
@@ -333,9 +357,9 @@ func (f *fragFixture) settle(t *testing.T, r repairs.Row, keepOwn, tag string, t
 // scenario sc, and carries out every action each held row offers, each on a
 // fresh replay of the same cut: every one must clear the hold with one live
 // book holding the work and no planned file hidden on a retired book.
-func runActionMatrix(t *testing.T, sh [2]string, sc heldScenario, step int) *actionMatrixTally {
+func runActionMatrix(t *testing.T, sh [2]string, sc heldScenario, step, start int) *actionMatrixTally {
 	tl := &actionMatrixTally{}
-	for at := 1; ; at += step {
+	for at := start; ; at += step {
 		f, r, closeF := newCutFixture(t, sh[0], sh[1])
 		cut, more := f.cutAt(t, r, at)
 		if !more {
@@ -397,18 +421,19 @@ func runActionMatrix(t *testing.T, sh [2]string, sc heldScenario, step int) *act
 
 // TestFragmentFixer_HeldRowActionMatrix (review 9): every action a held row
 // offers, in every scenario, clears its hold with no split and no hidden
-// file: all four shapes at every 5th cut point (about two minutes on the
-// in-memory fixtures). Under -short (CI's -race run) the prod shape at every
-// 10th, unless AORG_FRAG_ACTION_MATRIX=full.
+// file. AORG_FRAG_ACTION_MATRIX=full: all four shapes at every 5th cut point
+// (about two minutes on the in-memory fixtures, many more under -race).
+// Otherwise (CI) the prod shape at every 40th, each scenario starting at a
+// different cut point.
 func TestFragmentFixer_HeldRowActionMatrix(t *testing.T) {
-	shapes, step := cutShapes, 5
-	if testing.Short() && os.Getenv("AORG_FRAG_ACTION_MATRIX") != "full" {
-		shapes, step = cutShapes[:1], 10
+	shapes, step := cutShapes[:1], 40
+	if fragSweepFull() {
+		shapes, step = cutShapes, 5
 	}
-	for _, sh := range shapes {
-		for _, sc := range heldScenarios() {
+	for i, sh := range shapes {
+		for j, sc := range heldScenarios() {
 			t.Run(sh[0]+"/"+sh[1]+"/"+sc.name, func(t *testing.T) {
-				tl := runActionMatrix(t, sh, sc, step)
+				tl := runActionMatrix(t, sh, sc, step, fragSweepStart(i+j*3, step))
 				t.Logf("cases=%d held=%d actions=%d failed=%d still-held=%d splits=%d hidden=%d no-action=%d",
 					tl.cases, tl.held, tl.actions, tl.actErr, tl.stillHeld, tl.splits, tl.hidden, tl.noActions)
 				for _, n := range tl.notes {
@@ -447,7 +472,8 @@ func TestFragmentFixer_DeletedSurvivorIsNotAMerge(t *testing.T) {
 		return f, r, survivor, heldOver(f.plan(t, "op-plan2"), r.BookIDs), closeF, true
 	}
 	tested, attacked := 0, 0
-	for at := 1; ; at += 5 {
+	stride := fragSweepStride(5, 20)
+	for at := 1; ; at += stride {
 		f, r, survivor, held, closeF, more := deleted(at)
 		if !more {
 			break
@@ -505,10 +531,11 @@ func TestFragmentFixer_DeletedSurvivorIsNotAMerge(t *testing.T) {
 // again.
 func TestFragmentFixer_DedupLoserSurvivorIsCarried(t *testing.T) {
 	dedup := heldScenarios()[1]
-	for _, sh := range cutShapes {
+	stride := fragSweepStride(5, 25)
+	for i, sh := range cutShapes {
 		t.Run(sh[0]+"/"+sh[1], func(t *testing.T) {
 			carried, reverted, cases := 0, false, 0
-			for at := 1; ; at += 5 {
+			for at := fragSweepStart(i, stride); ; at += stride {
 				f, r, closeF := newCutFixture(t, sh[0], sh[1])
 				cut, more := f.cutAt(t, r, at)
 				if !more {
@@ -573,14 +600,11 @@ func TestFragmentFixer_DedupLoserSurvivorIsCarried(t *testing.T) {
 // record is kept) still continues, its own hand-off's flag changes
 // explained by the replay from the planned flags, and finishes as one book.
 func TestFragmentFixer_PrunedRunContinuesAtEveryCut(t *testing.T) {
-	step := 5
-	if testing.Short() {
-		step = 10
-	}
-	for _, sh := range cutShapes {
+	step := fragSweepStride(5, 25)
+	for i, sh := range cutShapes {
 		t.Run(sh[0]+"/"+sh[1], func(t *testing.T) {
 			cases := 0
-			for at := 1; ; at += step {
+			for at := fragSweepStart(i, step); ; at += step {
 				f, r, closeF := newCutFixture(t, sh[0], sh[1])
 				cut, more := f.cutAt(t, r, at)
 				if !more {

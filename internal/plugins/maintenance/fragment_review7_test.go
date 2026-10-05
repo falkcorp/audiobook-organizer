@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_review7_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 05f9ce23-f920-4f23-9612-af3d87fce747
 // last-edited: 2026-10-04
 
@@ -55,10 +55,11 @@ func (f *fragFixture) cutAt(t *testing.T, r repairs.Row, at int) (cut, more bool
 // around a new survivor: 68 of 120 cut points in the prod shape, 106 of 120
 // with no version group), and the record's row says where the survivor went.
 func TestFragmentFixer_SurvivorRetiredByAnotherFixer(t *testing.T) {
-	for _, sh := range [][2]string{{"all", cutVGOrig}, {"none", cutVGNone}} {
+	stride := fragSweepStride(1, 10) // every cut point under AORG_FRAG_CUT_MATRIX=full
+	for i, sh := range [][2]string{{"all", cutVGOrig}, {"none", cutVGNone}} {
 		t.Run(sh[0]+"/"+sh[1], func(t *testing.T) {
 			held := 0
-			for at := 1; ; at++ {
+			for at := fragSweepStart(i, stride); ; at += stride {
 				f, r, closeF := newCutFixture(t, sh[0], sh[1])
 				cut, more := f.cutAt(t, r, at)
 				if !more {
@@ -115,7 +116,7 @@ func TestFragmentFixer_SurvivorRetiredByAnotherFixer(t *testing.T) {
 				closeF()
 			}
 			t.Logf("%s/%s: %d cut points held after another fixer retired the survivor", sh[0], sh[1], held)
-			require.Greater(t, held, 40)
+			require.Greater(t, held, 40/stride)
 		})
 	}
 }
