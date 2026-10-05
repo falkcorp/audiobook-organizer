@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.148.0
+// version: 2.149.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-04
 
@@ -5854,6 +5854,8 @@ export interface DBHealthStats {
     /** -1 unless the request passed ?deep=true. */
     expired_entries: number;
     expired_entries_computed?: boolean;
+    /** Why a ?deep=true count did not complete. */
+    expired_entries_error?: string;
   };
   book_path_prefixes?: Array<{ prefix: string; book_count: number }>;
 }

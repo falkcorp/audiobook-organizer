@@ -1,5 +1,5 @@
 // file: web/src/pages/Diagnostics.tsx
-// version: 1.9.0
+// version: 1.10.0
 // last-edited: 2026-10-04
 // guid: f2323fc4-b3e7-4298-9ec5-759447cbd643
 
@@ -116,15 +116,23 @@ export function Diagnostics() {
   const [dbHealthError, setDbHealthError] = useState<string | null>(null);
 
   const [countingExpired, setCountingExpired] = useState(false);
+  const [expiredError, setExpiredError] = useState<string | null>(null);
 
   // Count expired metadata-cache rows on demand: ?deep=true decodes every row,
   // so it is never part of the default load. Only the expired fields are
   // merged, so the other figures on the card do not shift under the user.
   const countExpired = useCallback(async () => {
     setCountingExpired(true);
-    setDbHealthError(null);
+    setExpiredError(null);
     try {
       const deep = await api.getDBHealthStats(true);
+      if (deep.metadata_cache.expired_entries_computed !== true) {
+        setExpiredError(
+          `Expired count failed: ${
+            deep.metadata_cache.expired_entries_error ?? 'the server did not compute the count'
+          }`
+        );
+      }
       setDbHealth((prev) =>
         prev
           ? {
@@ -138,7 +146,9 @@ export function Diagnostics() {
           : deep
       );
     } catch (e) {
-      setDbHealthError(e instanceof Error ? e.message : 'Failed to count expired entries');
+      setExpiredError(
+        `Expired count failed: ${e instanceof Error ? e.message : 'the db-health?deep=true request did not complete'}`
+      );
     } finally {
       setCountingExpired(false);
     }
@@ -831,9 +841,18 @@ export function Diagnostics() {
                           >
                             Vectors
                           </Typography>
-                          <Typography>
-                            {dbHealth.embeddings.vector_count.toLocaleString()}
-                          </Typography>
+                          <Tooltip
+                            title={
+                              dbHealth.embeddings.estimated
+                                ? `Estimate; error bound ±${(dbHealth.embeddings.error_bound_keys ?? 0).toLocaleString()} keys`
+                                : ''
+                            }
+                          >
+                            <Typography>
+                              {dbHealth.embeddings.estimated ? '~' : ''}
+                              {dbHealth.embeddings.vector_count.toLocaleString()}
+                            </Typography>
+                          </Tooltip>
                         </Box>
                         <Box>
                           <Typography
@@ -961,7 +980,7 @@ export function Diagnostics() {
                           </Typography>
                           {dbHealth.metadata_cache.expired_entries_computed === false ||
                           dbHealth.metadata_cache.expired_entries < 0 ? (
-                            dbHealth.metadata_cache.ttl_days === 0 ? (
+                            dbHealth.metadata_cache.ttl_days <= 0 ? (
                               <Typography sx={{ color: 'text.secondary' }}>TTL off</Typography>
                             ) : (
                               <Tooltip title="Decodes every cache row; can take a while on a large cache">
@@ -980,6 +999,11 @@ export function Diagnostics() {
                           ) : (
                             <Typography>
                               {dbHealth.metadata_cache.expired_entries.toLocaleString()}
+                            </Typography>
+                          )}
+                          {expiredError && (
+                            <Typography variant="caption" color="error" role="alert">
+                              {expiredError}
                             </Typography>
                           )}
                         </Box>

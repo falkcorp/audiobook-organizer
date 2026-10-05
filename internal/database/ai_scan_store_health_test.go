@@ -1,5 +1,5 @@
 // file: internal/database/ai_scan_store_health_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 32eddfe1-cb1f-4009-9b7c-a3e3c626c050
 // last-edited: 2026-10-04
 
@@ -52,8 +52,6 @@ func TestAIScanHealthStats_ClosedSharedDBReturnsError(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 
-	require.NotPanics(t, func() {
-		_, err = s.estimatePrefixDiskUsage([]byte("aiscan:"), prefixUpperBound([]byte("aiscan:")))
-	})
-	require.Error(t, err)
+	require.NotPanics(t, func() { _, err = s.HealthStats() })
+	require.ErrorIs(t, err, pebble.ErrClosed)
 }
