@@ -440,3 +440,17 @@ func TestFlattenParts_NoPartKeepsASeparator(t *testing.T) {
 		require.False(t, HasSeparator(p), p)
 	}
 }
+
+func TestResolve_BareBylineThatIsATitleIsKeptWhole(t *testing.T) {
+	st := &countingStore{PebbleStore: newStore(t)}
+	_, err := st.CreateBook(&database.Book{Title: "By Schism Rent Asunder", FilePath: "/l/s.m4b", Format: "m4b"})
+	require.NoError(t, err)
+	ResetTitleCache()
+	t.Cleanup(ResetTitleCache)
+	got, err := Resolve(st, "By Schism Rent Asunder", PrepareGate)
+	require.NoError(t, err)
+	require.Equal(t, []string{"By Schism Rent Asunder"}, names(got), "kept whole, never cut to Schism Rent Asunder")
+	a, err := st.GetAuthorByName("Schism Rent Asunder")
+	require.NoError(t, err)
+	require.Nil(t, a)
+}

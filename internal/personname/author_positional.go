@@ -150,15 +150,30 @@ func IsPositionalArtifactName(name string) bool {
 // whitespace.
 var byPrefixRe = regexp.MustCompile(`(?i)^\s*by(?:\s*[:\-\x{2013}\x{2014}]\s*|\s+)`)
 
-// StripByPrefix removes a leading byline ("By: Brandon Sanderson" ->
-// "Brandon Sanderson"). Every creation gate and author lookup applies it
-// first. A name that is only the byline ("By:") becomes empty.
+// byMarkedPrefixRe is the byline with a colon or dash: never the start of a
+// title, so the creation gates strip it. The bare "By " form also opens real
+// titles ("By Schism Rent Asunder", "By Heresies Distressed"), so only
+// authorcredit's resolve strips it, after checking the library's titles.
+var byMarkedPrefixRe = regexp.MustCompile(`(?i)^\s*by\s*[:\-\x{2013}\x{2014}]\s*`)
+
+// StripByPrefix removes a leading byline ("By: Brandon Sanderson" and "by
+// Brandon Sanderson" -> "Brandon Sanderson"). A name that is only the byline
+// ("By:") becomes empty.
 func StripByPrefix(s string) string {
 	return strings.TrimSpace(byPrefixRe.ReplaceAllString(s, ""))
 }
 
+// StripMarkedByPrefix removes only a byline marked by a colon or dash ("By:
+// ", "By - "), the form the creation gates strip.
+func StripMarkedByPrefix(s string) string {
+	return strings.TrimSpace(byMarkedPrefixRe.ReplaceAllString(s, ""))
+}
+
 // HasByPrefix reports whether s opens with a byline StripByPrefix removes.
 func HasByPrefix(s string) bool { return byPrefixRe.MatchString(s) }
+
+// HasMarkedByPrefix reports whether s opens with a colon or dash byline.
+func HasMarkedByPrefix(s string) bool { return byMarkedPrefixRe.MatchString(s) }
 
 // CleanAuthorNameForCreation resolves a raw artist tag to the author name that
 // should be stored, reporting false when the tag carries no usable name.
@@ -176,9 +191,9 @@ func HasByPrefix(s string) bool { return byPrefixRe.MatchString(s) }
 // not a junk fix.
 func CleanAuthorNameForCreation(raw string) (string, bool) {
 	s := NormalizeAuthorName(strings.TrimSpace(raw))
-	// The dirty check reads the name without its "By:" lead-in (StripByPrefix),
+	// The dirty check reads the name without its "By:" lead-in (StripMarkedByPrefix),
 	// so the prefix never decides a refusal on its own.
-	if s == "" || IsDirtyAuthorName(NormalizeAuthorName(StripByPrefix(s))) {
+	if s == "" || IsDirtyAuthorName(NormalizeAuthorName(StripMarkedByPrefix(s))) {
 		return "", false
 	}
 	cleaned, why := PrepareAuthorNameForCreation(s)
@@ -209,8 +224,9 @@ func PrepareAuthorNameForCreation(raw string) (string, AuthorNameRejection) {
 	}
 	// "By: Brandon Sanderson" is a byline, not a name: the lead-in is salvage
 	// like positional numbering, and the one-bare-word rule below applies to
-	// what it leaves ("By: Zork" is refused; owner decision 2026-10-04).
-	unled := NormalizeAuthorName(StripByPrefix(s))
+	// what it leaves ("By: Zork" is refused; owner decision 2026-10-04). The
+	// bare "By " form is left to authorcredit's resolve (StripMarkedByPrefix).
+	unled := NormalizeAuthorName(StripMarkedByPrefix(s))
 	if unled == "" {
 		return "", RejectEmpty
 	}
