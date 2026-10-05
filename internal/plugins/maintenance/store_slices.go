@@ -161,23 +161,31 @@ type itunesExternalIDReassigner interface {
 	ReassignExternalID(source, externalID, newBookID string) error
 }
 
+// regroupManualOnlyReader is what the regroup recheck's whole-book
+// owner-manual check (applygate.BookManualOnly) reads beyond the book's
+// files: its series row, its author credits and its tags. Its own interface
+// so itunesRegroupStore stays under the interfacebloat cap.
+type regroupManualOnlyReader interface {
+	GetSeriesByID(id int) (*database.Series, error)
+	database.BookAuthorReader
+	GetBookTagsDetailed(bookID string) ([]database.BookTag, error)
+}
+
 // itunesRegroupStore is the iTunes-side twin of fsRegroupStore. It creates books
 // rather than book files, and reassigns one external ID at a time.
 //
 // Split into the five interfaces above on 2026-08-18 -- three of them shared
 // with fsRegroupStore. This name is retained as their composition so no
-// consumer moves. Since 2026-10-01 it also reads a version group's members and
-// a series row directly, for the apply-time recheck (regroupRecheck); those two
-// are not part of fsRegroupStore.
+// consumer moves. Since 2026-10-01 it also reads a version group's members,
+// and since 2026-10-05 what the whole-book owner-manual check reads
+// (regroupManualOnlyReader), for the apply-time recheck (regroupRecheck);
+// neither is part of fsRegroupStore.
 type itunesRegroupStore interface {
 	regroupBookReader
 	// The apply-time recheck (regroupRecheck) re-reads a target's version
-	// group, and runs the whole-book owner-manual check, which reads the
-	// series row, the author credits and the tags.
+	// group and runs the whole-book owner-manual check.
 	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
-	GetSeriesByID(id int) (*database.Series, error)
-	database.BookAuthorReader
-	GetBookTagsDetailed(bookID string) ([]database.BookTag, error)
+	regroupManualOnlyReader
 	regroupBookMutator
 	regroupFileMover
 	itunesBookCreator

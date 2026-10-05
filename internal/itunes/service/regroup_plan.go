@@ -1,7 +1,7 @@
 // file: internal/itunes/service/regroup_plan.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-10-01
+// last-edited: 2026-10-05
 
 package itunesservice
 
@@ -60,9 +60,10 @@ type BookMeta struct {
 	// FilesWithoutPID counts the book's book_file rows that carry no iTunes
 	// PID. Such a row cannot be shown to belong to any heal group.
 	FilesWithoutPID int
-	// ManualOnly: the book's title, path, any file path, or series name names
-	// a library the owner curates by hand (applygate.IsOwnerManualOnly:
-	// Doctor Who / Big Finish / Torchwood). The regroup never touches it.
+	// ManualOnly: the book is Doctor Who / Big Finish / Torchwood by the
+	// whole-book check (applygate.BookManualOnly: its row, series, credits,
+	// tags, every file path and the files' transcribed fields). The regroup
+	// never touches it.
 	ManualOnly bool
 }
 
@@ -80,7 +81,8 @@ const (
 )
 
 // ReasonOwnerManualOnly is the GroupAction.SkipReason of a group left alone
-// because it touches an owner-manual-only library (applygate.IsOwnerManualOnly).
+// because its title or a holder names an owner-manual-only library
+// (applygate.IsOwnerManualOnly on the title, BookMeta.ManualOnly on holders).
 const ReasonOwnerManualOnly = applygate.ReasonOwnerManualOnly
 
 // Snapshot is an immutable read of the DB state the planner reasons over. It is
