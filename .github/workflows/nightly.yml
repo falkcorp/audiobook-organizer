@@ -1,5 +1,5 @@
 # file: .github/workflows/nightly.yml
-# version: 1.2.1
+# version: 1.3.0
 # guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 # last-edited: 2026-10-05
 
@@ -28,7 +28,7 @@ permissions:
 jobs:
   full-ci:
     name: Full CI Suite
-    uses: falkcorp/github-common/.github/workflows/reusable-ci.yml@8eb9a5a77473960fc99665718d06367ba9289aa0 # main 2026-10-05 (github-common#365: no dead coverage rerun without .testcoverage.yml; go-ci cap 40m)
+    uses: falkcorp/github-common/.github/workflows/reusable-ci.yml@eae0c5a6bce08e99eb6a1ffac7420f18c0367b9a # main 2026-10-05 (github-common#369: force-all; schedule/dispatch run every present language)
     with:
       go-version: '1.27'
       node-version: '26'
@@ -37,4 +37,9 @@ jobs:
       coverage-threshold: '30'
       skip-protobuf: false
       system-packages: 'libtag1-dev'
+      # Without this the run diffs the commit against itself (a schedule has no
+      # "before"), finds nothing changed and skips every job -- Go CI skipped on
+      # every scheduled run until 2026-10-05. 'true' states the intent even
+      # though reusable-ci's 'auto' default would also force on these events.
+      force-all: 'true'
     secrets: inherit
