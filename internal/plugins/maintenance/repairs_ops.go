@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repairs_ops.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 6f1a8d37-2e59-4b0c-8a74-3d9e5b1c7f82
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 package maintenance
 
@@ -183,6 +183,11 @@ func (p *Plugin) runRepairsApply(ctx context.Context, raw json.RawMessage, repor
 			// The tag-franchise fixer adds book_tag rows; journaled, so the
 			// op revert removes them.
 			WithTags(p.deps.BookTagWriter())
+		// The Audible read-status fixer writes a user's listening state;
+		// journaled, so the op revert puts it back.
+		if us := p.deps.UserReadStateStore(); us != nil {
+			deps.Writer.WithUserState(us)
+		}
 		deps.Checkpoint = func(cp repairs.ApplyCheckpoint) error {
 			return reporter.Checkpoint(map[string]any{"resume": cp})
 		}

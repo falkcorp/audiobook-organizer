@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_playback.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: 7559a9db-cb41-4281-b8d2-2e644796eeb7
-// last-edited: 2026-09-26
+// last-edited: 2026-10-05
 
 package database
 
@@ -277,6 +277,38 @@ func (p *PebbleStore) SetUserBookState(state *UserBookState) error {
 	}
 	if state.Status != "" {
 		if err := b.Set([]byte("idx:ubs:status:"+state.UserID+":"+state.Status+":"+state.BookID), []byte("1"), nil); err != nil {
+			b.Close()
+			return err
+		}
+	}
+	return b.Commit(pebble.Sync)
+}
+
+// UserBookStateDeleter removes a user's user_book_state row for one book
+// outright. A capability, not a Store method, so the mocks and fakes are not
+// forced to grow it: its one caller is the revert of a repair that created
+// the row (undo.ChangeTypeUserBookStateSet), which must leave "no row", not
+// a drained row that still reads as a state.
+type UserBookStateDeleter interface {
+	DeleteUserBookState(userID, bookID string) error
+}
+
+var _ UserBookStateDeleter = (*PebbleStore)(nil)
+
+// DeleteUserBookState deletes the ubs: row of (user, book) and every status
+// index entry for it, by key, in one batch, so an undecodable row can be
+// deleted too. Deleting a row that is not there is not an error.
+func (p *PebbleStore) DeleteUserBookState(userID, bookID string) error {
+	if userID == "" || bookID == "" {
+		return fmt.Errorf("user and book required")
+	}
+	b := p.db.NewBatch()
+	if err := b.Delete([]byte("ubs:"+userID+":"+bookID), nil); err != nil {
+		b.Close()
+		return err
+	}
+	for _, st := range []string{UserBookStatusUnstarted, UserBookStatusInProgress, UserBookStatusFinished, UserBookStatusAbandoned} {
+		if err := b.Delete([]byte("idx:ubs:status:"+userID+":"+st+":"+bookID), nil); err != nil {
 			b.Close()
 			return err
 		}

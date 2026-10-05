@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.36.0
+// version: 1.37.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 package maintenance
 
@@ -128,6 +128,10 @@ func (d fakeDeps) BookTagReader() BookTagReader { return d.store }
 
 // BookTagWriter hands back the store unchanged, as Server's does.
 func (d fakeDeps) BookTagWriter() repairs.TagStore { return d.store }
+
+// UserReadStateStore builds the read-state surface over the store, as
+// Server's does.
+func (d fakeDeps) UserReadStateStore() UserReadStateStore { return NewUserReadStateStore(d.store) }
 
 // VersionPrimaryStore hands back the store unchanged, as Server's does.
 func (d fakeDeps) VersionPrimaryStore() VersionPrimaryStore { return d.store }

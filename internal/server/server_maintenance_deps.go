@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.51.0
+// version: 1.52.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 // This file implements the maintenance.ServerDeps interface on *Server, giving
 // the maintenance plugin access to server internals without creating an import
@@ -146,6 +146,13 @@ func (s *Server) BookTagReader() maintenanceplugin.BookTagReader { return s.stor
 
 // BookTagWriter hands the tag-franchise fixer's apply the store's tag writes.
 func (s *Server) BookTagWriter() repairs.TagStore { return s.store }
+
+// UserReadStateStore serves the Audible read-status fixer: the user and
+// listening-state methods of the store plus its timestamped position write,
+// resolved as a capability (maintenanceplugin.NewUserReadStateStore).
+func (s *Server) UserReadStateStore() maintenanceplugin.UserReadStateStore {
+	return maintenanceplugin.NewUserReadStateStore(s.store)
+}
 
 // ---- delegated run helpers ----
 
