@@ -1,5 +1,5 @@
 // file: internal/server/handlers/diagnostics_dbhealth_census_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 637c4ea3-5b82-4c17-88fb-4256b6233cd3
 // last-edited: 2026-10-04
 
@@ -76,7 +76,8 @@ func TestCountExpiredMetadataFetches_PagesThroughTheFamily(t *testing.T) {
 	for i := 0; i < 2500; i++ {
 		putFetchCacheRow(t, p, i, old)
 	}
-	n, err := countExpiredMetadataFetches(context.Background(), p, time.Now().Add(-30*24*time.Hour))
+	n, pages, err := countExpiredMetadataFetches(context.Background(), p, time.Now().Add(-30*24*time.Hour))
 	require.NoError(t, err)
 	require.EqualValues(t, 2500, n)
+	require.Equal(t, 3, pages, "2500 rows at 1000 per page is three pages")
 }

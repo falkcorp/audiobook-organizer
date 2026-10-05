@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.149.0
+// version: 2.150.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-04
 
@@ -5856,6 +5856,10 @@ export interface DBHealthStats {
     expired_entries_computed?: boolean;
     /** Why a ?deep=true count did not complete. */
     expired_entries_error?: string;
+    /** Wall time of the deep walk behind the count (or its failure). */
+    expired_entries_elapsed_ms?: number;
+    /** 1000-row pages the deep walk read. */
+    expired_entries_pages_walked?: number;
   };
   book_path_prefixes?: Array<{ prefix: string; book_count: number }>;
 }
