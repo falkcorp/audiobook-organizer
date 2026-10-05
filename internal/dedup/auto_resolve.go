@@ -1,5 +1,5 @@
 // file: internal/dedup/auto_resolve.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 6d1e9b52-4f70-4c83-a2b9-1e5c8d0f7a34
 // last-edited: 2026-10-05
 
@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -19,7 +20,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
-	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
 
 // autoResolveSampleCapDefault bounds the per-run sample list in the dry-run
@@ -400,7 +400,7 @@ func (de *Engine) preMergeSnapshotNanos(bookID string, baselineNanos int64) int6
 // snapshots (restoring IsPrimaryVersion / VersionGroupID / MarkedForDeletion),
 // then putting each sibling the merge carried along with the loser
 // (entry.Siblings) back in its original group with its original flag; see
-// restoreMovedSibling.
+// restoreMovedSiblings.
 //
 // SCOPE LIMIT: this restores the BOOK RECORD state only. It does NOT reverse the
 // external-ID reassignment (loser→winner) that MergeBooks performed, nor any
@@ -435,10 +435,8 @@ func (de *Engine) UnmergeAuto(journalKey string) error {
 	} else {
 		errs = append(errs, fmt.Sprintf("winner %s: no pre-merge snapshot recorded", entry.WinnerID))
 	}
-	for _, sib := range entry.Siblings {
-		if err := de.restoreMovedSibling(sib); err != nil {
-			errs = append(errs, fmt.Sprintf("sibling %s: %v", sib.BookID, err))
-		}
+	if err := de.restoreMovedSiblings(entry.Siblings); err != nil {
+		errs = append(errs, err.Error())
 	}
 
 	if len(errs) > 0 {
@@ -449,48 +447,39 @@ func (de *Engine) UnmergeAuto(journalKey string) error {
 	return nil
 }
 
-// restoreMovedSibling puts one sibling a merge carried into the winner's group
-// back where it was: FromGroupID, with its pre-merge flag pointer. Only those
-// two fields are written, through ModifyBook on the fresh row, under both
-// groups' locks. A sibling already back (an earlier undo of another loser that
-// shared its group) is left alone. One that has moved to some third group
-// since the merge is NOT pulled back -- that move was someone's later
-// decision -- and is reported as an error instead.
-func (de *Engine) restoreMovedSibling(sib database.AutoMergeJournalSibling) error {
-	unlock := versionprimary.LockGroups(sib.FromGroupID, sib.IntoGroupID)
-	defer unlock()
-	var movedOn string
-	stored, err := de.bookStore.ModifyBook(sib.BookID, func(b *database.Book) error {
-		cur := ""
-		if b.VersionGroupID != nil {
-			cur = strings.TrimSpace(*b.VersionGroupID)
-		}
-		switch cur {
-		case strings.TrimSpace(sib.FromGroupID):
-			return database.ErrSkipBookWrite
-		case strings.TrimSpace(sib.IntoGroupID):
-		default:
-			movedOn = cur
-			return database.ErrSkipBookWrite
-		}
-		from := sib.FromGroupID
-		b.VersionGroupID = &from
-		if sib.WasPrimary == nil {
-			b.IsPrimaryVersion = nil
-		} else {
-			was := *sib.WasPrimary
-			b.IsPrimaryVersion = &was
-		}
+// restoreMovedSiblings hands one journal entry's sibling records to
+// merge.Service.RestoreMovedSiblings, the one sibling restore shared with
+// merge.Service.UndoSiblingMove. A sibling that has moved to some third group
+// since the merge is left there and reported as an error.
+func (de *Engine) restoreMovedSiblings(recs []database.AutoMergeJournalSibling) error {
+	if len(recs) == 0 {
 		return nil
-	})
-	if err != nil {
-		return err
 	}
-	if stored == nil {
-		return fmt.Errorf("book not found")
+	if de.mergeService == nil {
+		return fmt.Errorf("siblings %d: merge service not initialised, not restored", len(recs))
 	}
-	if movedOn != "" {
-		return fmt.Errorf("moved to version group %s since the merge; left there", movedOn)
+	byInto := map[string][]merge.MovedSibling{}
+	var intos []string
+	for _, r := range recs {
+		if _, ok := byInto[r.IntoGroupID]; !ok {
+			intos = append(intos, r.IntoGroupID)
+		}
+		byInto[r.IntoGroupID] = append(byInto[r.IntoGroupID], merge.MovedSibling{
+			BookID: r.BookID, FromGroupID: r.FromGroupID, WasPrimary: r.WasPrimary,
+		})
+	}
+	var errs []string
+	for _, into := range intos {
+		res, err := de.mergeService.RestoreMovedSiblings(into, byInto[into])
+		if err != nil {
+			errs = append(errs, err.Error())
+		}
+		for _, id := range slices.Sorted(maps.Keys(res.MovedOn)) {
+			errs = append(errs, fmt.Sprintf("sibling %s: moved to version group %s since the merge; left there", id, res.MovedOn[id]))
+		}
+	}
+	if len(errs) > 0 {
+		return errors.New(strings.Join(errs, "; "))
 	}
 	return nil
 }

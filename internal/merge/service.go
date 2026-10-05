@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.41.2
+// version: 1.42.0
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-10-05
 
@@ -112,6 +112,9 @@ type Result struct {
 	// and non-primary; nothing else about them changes. Each one records what
 	// an undo needs to put it back.
 	MovedSiblings []MovedSibling `json:"moved_siblings,omitempty"`
+	// SiblingJournalID is the sibling-move journal this merge wrote (set when
+	// MovedSiblings is non-empty); UndoSiblingMove takes it.
+	SiblingJournalID string `json:"sibling_journal_id,omitempty"`
 }
 
 // MovedSibling is one loser sibling a merge carried into the merge's version
@@ -340,9 +343,13 @@ func preferOnTie(a, b *database.Book) bool {
 //     version group as non-primary versions. They stay live
 //     and are NOT soft-deleted; only the named losers are.
 //     The group they left has no live member afterwards, so no
-//     primary is elected for it. Result.MovedSiblings lists
-//     them with their old group and flag; dedup's journaled
-//     merge records them so UnmergeAuto puts them back.
+//     primary is elected for it. Siblings get the same
+//     scan-state and iTunes-library refusals as participants.
+//     Before its first write the merge records them in a
+//     sibling-move journal (Result.SiblingJournalID;
+//     UndoSiblingMove reverses it), on every path; dedup's
+//     journaled merge also records them per loser so
+//     UnmergeAuto puts them back.
 //
 // If primaryID is empty, the best book is auto-selected by ElectPrimary
 // (a book with an audio route beats one without; then BookIsBetter:
@@ -671,7 +678,20 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 	// Read every left group's siblings under the locks and BEFORE any write,
 	// so a read failure aborts the merge with nothing written. Sorted by group
 	// then book ID so the writes (and Result.MovedSiblings) are deterministic.
+	//
+	// A sibling is a book this merge rewrites, so it gets the same pre-write
+	// guards as a participant: the scan-state refusal (ProvisionalScanError)
+	// and the iTunes-library refusal (GuardITunesProtectedLoaded; its doc
+	// requires it for every book a merge-family entry point mutates). This is
+	// not hypothetical: the organizer puts an iTunes organized_source original
+	// in the same group as its organized copy, so a merge whose loser is that
+	// copy would otherwise rewrite the iTunes row's group and demote it, and a
+	// later ITL rebuild drops non-primary PIDs. Each sibling is re-read with
+	// GetBookByID: GetBooksByVersionGroup may serve a slim projection, and the
+	// guard reads FilePath and the journal records the stored flag.
 	var siblings []MovedSibling
+	var siblingBooks []*database.Book
+	siblingFiles := map[string][]database.BookFile{}
 	for _, gid := range slices.Sorted(maps.Keys(leftGroups)) {
 		members, err := ms.db.GetBooksByVersionGroup(gid)
 		if err != nil {
@@ -683,12 +703,51 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 			if seen[m.ID] || m.IsSoftDeleted() {
 				continue
 			}
+			full, err := ms.db.GetBookByID(m.ID)
+			if err != nil {
+				return nil, fmt.Errorf("load version-group sibling %s: %w", m.ID, err)
+			}
+			if full == nil {
+				return nil, fmt.Errorf("version-group sibling %s of group %s: now missing: %w", m.ID, gid, versionprimary.ErrMembershipChanged)
+			}
+			if err := versionprimary.CheckMembership(full, gid); err != nil {
+				return nil, err
+			}
+			files, err := ms.db.GetBookFiles(full.ID)
+			if err != nil {
+				return nil, fmt.Errorf("cannot verify scan state for version-group sibling %s, refusing to merge: %w", full.ID, err)
+			}
+			if database.AnyProvisional(files) {
+				return nil, &ProvisionalScanError{BookID: full.ID}
+			}
+			siblingBooks = append(siblingBooks, full)
+			siblingFiles[full.ID] = files
 			siblings = append(siblings, MovedSibling{
-				BookID:      m.ID,
+				BookID:      full.ID,
 				FromGroupID: gid,
-				WasPrimary:  m.IsPrimaryVersion,
+				WasPrimary:  full.IsPrimaryVersion,
 				WithLosers:  slices.Clone(leftLosers[gid]),
 			})
+		}
+	}
+	if err := GuardITunesProtectedLoaded(siblingBooks, siblingFiles); err != nil {
+		return nil, err
+	}
+	// Journal the sibling move before the first write (see sibling_journal.go):
+	// every merge path that moves a sibling leaves an undo record, whether or
+	// not its caller journals the merge itself. A journal that cannot be
+	// written refuses the merge with nothing changed.
+	var siblingJournal *SiblingMoveJournal
+	if len(siblings) > 0 {
+		var losersOfMerge []string
+		for _, b := range books {
+			if b.ID != resolvedPrimaryID {
+				losersOfMerge = append(losersOfMerge, b.ID)
+			}
+		}
+		siblingJournal = newSiblingJournal(resolvedPrimaryID, versionGroupID, losersOfMerge, siblings)
+		if err := ms.putSiblingJournal(siblingJournal); err != nil {
+			return nil, fmt.Errorf("refusing to move version-group siblings with no undo record: %w", err)
 		}
 	}
 	// A failure part-way through the membership writes leaves a left group
@@ -867,6 +926,17 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 	}
 	membershipWritten = true
 	releaseGroups()
+	siblingJournalID := ""
+	if siblingJournal != nil {
+		siblingJournalID = siblingJournal.ID
+		siblingJournal.Status = SiblingJournalApplied
+		if err := ms.putSiblingJournal(siblingJournal); err != nil {
+			// The pending journal already names every sibling and is undoable
+			// as it stands (UndoSiblingMove accepts pending).
+			mlog.Warn("merge: sibling-move journal %s not marked applied: %s",
+				logger.SanitizeLogValue(siblingJournal.ID), logger.SanitizeLogValue(fmt.Sprint(err)))
+		}
+	}
 
 	// --- Per-loser cleanup ---
 	//
@@ -1035,6 +1105,7 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 		SoftDeleted:             softDeleted,
 		ElectedWithoutUserState: electedWithoutUserState,
 		MovedSiblings:           siblings,
+		SiblingJournalID:        siblingJournalID,
 	}, nil
 }
 
