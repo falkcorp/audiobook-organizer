@@ -1,5 +1,5 @@
 // file: internal/merge/service.go
-// version: 1.41.0
+// version: 1.41.1
 // guid: 7d736d2d-e0df-40bd-9f4b-0a07bc2eb6ae
 // last-edited: 2026-10-05
 
@@ -696,12 +696,14 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 	// primary may be one that already moved). On that path only, hand each
 	// left group's flag on after the locks are released (handOffLeftGroups
 	// takes them itself). On success every left group is empty of live
-	// members and this does not run. Registered here, after releaseGroups'
-	// defer, so it runs first; it releases the locks itself before the
-	// hand-off.
-	membershipWritten := false
+	// members and this does not run, and neither does it on a refusal before
+	// the first write (a CheckMembership mismatch on the first book): nothing
+	// moved, so there is nothing to hand on. Registered here, after
+	// releaseGroups' defer, so it runs first; it releases the locks itself
+	// before the hand-off.
+	membershipStarted, membershipWritten := false, false
 	defer func() {
-		if !membershipWritten {
+		if membershipStarted && !membershipWritten {
 			releaseGroups()
 			handOffLeftGroups(ms.db, leftGroups)
 		}
@@ -760,6 +762,7 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 		if stored == nil {
 			return nil, &BookNotFoundError{BookID: book.ID}
 		}
+		membershipStarted = true
 		books[i] = stored
 	}
 
@@ -784,6 +787,7 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 		if stored == nil {
 			return nil, &BookNotFoundError{BookID: sib.BookID}
 		}
+		membershipStarted = true
 		slog.Info("merge moved loser's version-group sibling",
 			"id", sib.BookID, "from", sib.FromGroupID, "to", versionGroupID, "primary", resolvedPrimaryID)
 	}
