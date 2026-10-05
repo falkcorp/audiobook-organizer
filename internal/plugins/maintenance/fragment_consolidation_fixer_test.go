@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer_test.go
-// version: 1.25.1
+// version: 1.26.0
 // guid: 8e2d5b19-6a4c-4f37-b1d8-2c9e7a3f5d60
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 package maintenance
 
@@ -1796,11 +1796,17 @@ func TestFragmentFixer_PathTwinLimits(t *testing.T) {
 		f.row(t, "d02", donor, at, "02.mp3", 802, 600, 0)
 		return parent, donor
 	}
+	// inNoRow: the twin is adopted by no row; it is listed only in its own
+	// never-applied unplaced row (no fragment is dropped silently).
 	inNoRow := func(t *testing.T, res *repairs.PlanResult, id string) {
 		t.Helper()
 		for _, r := range res.Rows {
 			for _, b := range r.BookIDs {
-				require.NotEqual(t, id, b, "%s should be in no row, is in %s", id, r.RowID)
+				if b != id {
+					continue
+				}
+				require.Equal(t, fragClassUnplaced+":"+id, r.RowID, "%s should be in no row but its own, is in %s", id, r.RowID)
+				require.False(t, r.Applicable())
 			}
 		}
 	}
@@ -1929,7 +1935,10 @@ func TestFragmentFixer_PathTwinNeedsOneDonor(t *testing.T) {
 	res := f.plan(t, "op-plan")
 	for _, r := range res.Rows {
 		for _, id := range r.BookIDs {
-			require.NotEqual(t, twin, id, "an ambiguous donor lends nothing: %s", r.RowID)
+			if id == twin {
+				require.Equal(t, fragClassUnplaced+":"+twin, r.RowID, "an ambiguous donor lends nothing: %s", r.RowID)
+				require.Equal(t, fragSkipLoneChapter, r.Skipped, "listed as unplaced, never applied")
+			}
 		}
 	}
 }
@@ -2000,8 +2009,15 @@ func TestFragmentFixer_NumberedSet(t *testing.T) {
 	})
 	t.Run("fewer than three numbered files form nothing", func(t *testing.T) {
 		f := newFragFixture(t)
-		f.numberedSeed(t, "lib/Pair", []string{"01 - One", "02 - Two"}, 300, nil)
-		require.Empty(t, f.plan(t, "op-plan").Rows)
+		ids := f.numberedSeed(t, "lib/Pair", []string{"01 - One", "02 - Two"}, 300, nil)
+		res := f.plan(t, "op-plan")
+		require.Zero(t, res.Applicable)
+		require.Len(t, res.Rows, 2, "each file is listed as unplaced, never dropped")
+		for i, id := range ids {
+			r := findRow(t, res, fragClassUnplaced+":"+id)
+			require.Equal(t, fragClassUnplaced, r.Class)
+			require.Equal(t, fragSkipLoneChapter, r.Skipped, "file %d: %s", i, r.SkipReason)
+		}
 	})
 
 	// held: the folder is listed as one row, never applicable, with the
@@ -2557,7 +2573,7 @@ func TestFragmentFixer_NumberedCopiesReview(t *testing.T) {
 		// The Apply pre-check, called directly: the engine's pre-apply
 		// Replan (repairs.RunApply) refuses this row first, so Apply never
 		// reaches the pre-check here.
-		require.ErrorIs(t, copyRetireRefusal(f.s, cp, plan.SurvivorID), repairs.ErrChangedSincePlan)
+		require.ErrorIs(t, copyRetireRefusal(f.s, cp, plan.SurvivorID, "copy"), repairs.ErrChangedSincePlan)
 
 		out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
 		require.Equal(t, 0, out.Applied, "outcomes %v", out.ByOutcome)
@@ -3043,7 +3059,7 @@ func TestFragmentFixer_NumberedRetiredElsewhere(t *testing.T) {
 						cp = c
 					}
 				}
-				require.ErrorIs(t, copyRetireRefusal(f.s, cp, plan.SurvivorID), repairs.ErrChangedSincePlan)
+				require.ErrorIs(t, copyRetireRefusal(f.s, cp, plan.SurvivorID, "copy"), repairs.ErrChangedSincePlan)
 			}
 			out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
 			require.Equal(t, 0, out.Applied, "outcomes %v %+v", out.ByOutcome, out.Rows)
@@ -3863,4 +3879,334 @@ func TestFragmentFixer_ReplanJournalCost(t *testing.T) {
 	t.Logf("346-fragment row, %d retires, %d other journal rows. Unindexed: re-plan %v (one pass), one GetBookChanges %v, one full scan of %d rows %v. Indexed: re-plan %v, one GetBookChanges %v, GetBookChanges x5000 books %v",
 		cut, noise, resumed, one, rows, scan, indexedReplan, oneIndexed, perBook5000)
 	_ = fresh
+}
+
+// TestFragTitleKey: the keys two titles of one work share, and the ones that
+// must stay apart.
+func TestFragTitleKey(t *testing.T) {
+	for _, tc := range [][2]string{
+		{"Book 2 - Eldest", "Eldest"},
+		{"03 - Horizon Storms", "Horizon Storms"},
+		{"Foundation 6 - Foundation's Edge", "01 - Foundation's Edge"},
+		{"Inheritance Cycle 02 - Eldest", "Eldest"},
+		{"Eldest, Book 2", "Eldest"},
+		{"Eldest (Unabridged)", "Eldest"},
+		{"5 - Genius Camp: The Smartest Kid in the Universe, Book 2", "2 - Genius Camp: The Smartest Kid in the Universe, Book 2"},
+	} {
+		require.NotEmpty(t, fragTitleKey(tc[0]), tc[0])
+		require.Equal(t, fragTitleKey(tc[0]), fragTitleKey(tc[1]), "%q and %q are one work", tc[0], tc[1])
+	}
+	for _, tc := range [][2]string{
+		{"Dragon Born 3", "Dragon Born"},
+		{"Prelude to Foundation", "Foundation"},
+		{"Doctor Who - Loose", "Loose"},
+	} {
+		require.NotEqual(t, fragTitleKey(tc[0]), fragTitleKey(tc[1]), "%q and %q are different works", tc[0], tc[1])
+	}
+	for _, title := range []string{"", "c5", "ab", "Part 3", "Chapter 12", "01", "New Folder"} {
+		require.Empty(t, fragTitleKey(title), "%q names no work", title)
+	}
+}
+
+// existingBook creates a live, organized multi-file book of n files of dur
+// seconds each under dir.
+func (f *fragFixture) existingBook(t *testing.T, role, title, dir string, n, dur int) string {
+	t.Helper()
+	id := f.book(t, role, title, f.path(dir), nil)
+	for i := 1; i <= n; i++ {
+		name := fmt.Sprintf("track %03d.mp3", i)
+		p := f.file(t, filepath.Join(dir, name), 5000+i)
+		f.row(t, fmt.Sprintf("%s%d", role, i), id, p, name, int64(5000+i), dur, i)
+	}
+	f.organized(t, id)
+	return id
+}
+
+// chapterFrags imports n chapter files "<name> 0i" from dir, each its own
+// organized book of dur seconds.
+func (f *fragFixture) chapterFrags(t *testing.T, dir, name string, n, dur int) []string {
+	t.Helper()
+	var ids []string
+	for i := 1; i <= n; i++ {
+		stem := fmt.Sprintf("%s %02d", name, i)
+		p := f.file(t, filepath.Join(dir, stem+".mp3"), 7000+i)
+		id := f.book(t, dir+stem, stem, p, nil)
+		f.row(t, dir+stem, id, p, stem+".mp3", int64(7000+i), dur, 0)
+		f.organized(t, id)
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+func (f *fragFixture) requireRetiredInto(t *testing.T, ids []string, target string) {
+	t.Helper()
+	for _, id := range ids {
+		b, err := f.s.GetBookByID(id)
+		require.NoError(t, err)
+		require.True(t, b.IsSoftDeleted(), "fragment %s retired", id)
+		require.NotNil(t, b.MergedIntoBookID)
+		require.Equal(t, target, *b.MergedIntoBookID)
+		rows, err := f.s.GetBookFiles(id)
+		require.NoError(t, err)
+		require.Len(t, rows, 1, "a joined fragment keeps its own file row")
+	}
+}
+
+// TestFragmentFixer_ExistingBook: a no-parent group whose work is already a
+// live book (the "Book 2 - Eldest" beside "Eldest" shape, 13 of 19 rows
+// applied on prod 2026-10-05) is never assembled into a second book.
+func TestFragmentFixer_ExistingBook(t *testing.T) {
+	const fragDir = "lib/Christopher Paolini/Book 2 - Eldest"
+	t.Run("totals agree: the fragments join the existing book", func(t *testing.T) {
+		f := newFragFixture(t)
+		existing := f.existingBook(t, "eldest", "Eldest", "lib/Other Author/Eldest", 4, 900)
+		frags := f.chapterFrags(t, fragDir, "Eldest", 6, 600)
+		res := f.plan(t, "op-plan")
+		noRow(t, res, noParentRowID(f.path(fragDir), "eldest"), "never assembled")
+		r := findRow(t, res, existingRowID(f.path(fragDir), "eldest"))
+		require.Equal(t, fragClassExistingBook, r.Class)
+		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+		require.Equal(t, repairs.RiskReview, r.Risk)
+		require.ElementsMatch(t, append(append([]string(nil), frags...), existing), r.BookIDs)
+		require.Equal(t, existing, r.Proposed["join"])
+		require.Empty(t, r.Proposed["title"], "nothing is retitled")
+		out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
+		require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+		f.requireRetiredInto(t, frags, existing)
+		rows, err := f.s.GetBookFiles(existing)
+		require.NoError(t, err)
+		require.Len(t, rows, 4, "the existing book's files are untouched")
+		b, err := f.s.GetBookByID(existing)
+		require.NoError(t, err)
+		require.Equal(t, "Eldest", b.Title)
+	})
+	t.Run("totals disagree: held", func(t *testing.T) {
+		f := newFragFixture(t)
+		existing := f.existingBook(t, "eldest", "Eldest", "lib/Other Author/Eldest", 4, 1200)
+		frags := f.chapterFrags(t, fragDir, "Eldest", 6, 600)
+		res := f.plan(t, "op-plan")
+		r := findRow(t, res, existingRowID(f.path(fragDir), "eldest"))
+		require.Equal(t, fragClassExistingBook, r.Class)
+		require.Equal(t, fragSkipExistingBook, r.Skipped)
+		require.Contains(t, r.SkipReason, existing)
+		require.ElementsMatch(t, frags, r.BookIDs, "the existing book is listed, never written")
+		require.Zero(t, res.Applicable)
+	})
+	t.Run("a short single-file book of the title is no existing book", func(t *testing.T) {
+		f := newFragFixture(t)
+		p := f.file(t, "lib/Other/Eldest.mp3", 4999)
+		single := f.book(t, "single", "Eldest", p, nil)
+		f.row(t, "s", single, p, "Eldest.mp3", 4999, 600, 0)
+		f.chapterFrags(t, fragDir, "Eldest", 6, 600)
+		r := findRow(t, f.plan(t, "op-plan"), noParentRowID(f.path(fragDir), "eldest"))
+		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+	})
+	t.Run("a whole-book single file of the title is", func(t *testing.T) {
+		f := newFragFixture(t)
+		p := f.file(t, "lib/Other/Eldest.m4b", 4999)
+		single := f.book(t, "single", "Eldest", p, nil)
+		f.row(t, "s", single, p, "Eldest.m4b", 3_500_000, 3500, 0)
+		f.chapterFrags(t, fragDir, "Eldest", 6, 600)
+		r := findRow(t, f.plan(t, "op-plan"), existingRowID(f.path(fragDir), "eldest"))
+		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+		require.Equal(t, single, r.Proposed["join"])
+	})
+	t.Run("a cut-off join resumes, from the plan and from a fresh plan", func(t *testing.T) {
+		f := newFragFixture(t)
+		existing := f.existingBook(t, "eldest", "Eldest", "lib/Other Author/Eldest", 4, 900)
+		frags := f.chapterFrags(t, fragDir, "Eldest", 6, 600)
+		r := findRow(t, f.plan(t, "op-plan"), existingRowID(f.path(fragDir), "eldest"))
+		cut := func(id string) {
+			w := f.fragWriter(t, "op-cut-"+id)
+			_, err := retireInto(context.Background(), f.p, f.s, w, time.Now, fragFixerID, id, existing,
+				&merge.SliceMapping{Mappable: true})
+			require.NoError(t, err)
+		}
+		cut(frags[0])
+		out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
+		require.Equal(t, 1, out.Applied, "the planned row resumes past the retired fragment: %+v", out.Rows)
+		f.requireRetiredInto(t, frags, existing)
+
+		g := newFragFixture(t)
+		existing = g.existingBook(t, "eldest", "Eldest", "lib/Other Author/Eldest", 4, 900)
+		frags = g.chapterFrags(t, fragDir, "Eldest", 6, 600)
+		w := g.fragWriter(t, "op-cut")
+		for _, id := range frags[:2] {
+			_, err := retireInto(context.Background(), g.p, g.s, w, time.Now, fragFixerID, id, existing,
+				&merge.SliceMapping{Mappable: true})
+			require.NoError(t, err)
+		}
+		res := g.plan(t, "op-plan")
+		r = findRow(t, res, existingRowID(g.path(fragDir), "eldest"))
+		require.True(t, r.Applicable(), "the rest still joins, credited with the retired ones: %s: %s", r.Skipped, r.SkipReason)
+		require.Contains(t, strings.Join(r.Evidence, "\n"), "2 fragment(s) of these folders")
+		noRow(t, res, noParentRowID(g.path(fragDir), "eldest"), "never assembled after a cut")
+		out = g.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
+		require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+		g.requireRetiredInto(t, frags, existing)
+	})
+}
+
+// TestFragmentFixer_RetaggedCopies: fragments that sit at the chapter
+// positions of an existing book's "_copyN" files with the same durations and
+// a constant size difference (Horizon Storms) are never assembled, and not
+// joined either, whatever the titles say.
+func TestFragmentFixer_RetaggedCopies(t *testing.T) {
+	const dir = "lib/Kevin J Anderson/Horizon Storms"
+	seed := func(t *testing.T, f *fragFixture, title string, delta func(i int) int64) (string, []string) {
+		frags := f.chapterFrags(t, dir, "Storm", 6, 600)
+		existing := f.book(t, "hs", title, f.path("lib/Unknown Author/Horizon Storms"), nil)
+		for i := 1; i <= 6; i++ {
+			name := fmt.Sprintf("Storm %02d_copy1.mp3", i)
+			size := int64(7000+i) - delta(i)
+			p := f.file(t, filepath.Join(dir, name), int(size))
+			f.row(t, fmt.Sprintf("hs%d", i), existing, p, name, size, 600, i)
+		}
+		f.organized(t, existing)
+		return existing, frags
+	}
+	retag := func(i int) int64 {
+		if i%2 == 0 {
+			return 3045
+		}
+		return 0
+	}
+	t.Run("same title, totals agree: still held as copies", func(t *testing.T) {
+		f := newFragFixture(t)
+		existing, frags := seed(t, f, "Horizon Storms", retag)
+		res := f.plan(t, "op-plan")
+		r := findRow(t, res, existingRowID(f.path(dir), "storm"))
+		require.Equal(t, fragClassExistingBook, r.Class)
+		require.Equal(t, fragSkipRetagged, r.Skipped, r.SkipReason)
+		require.Contains(t, r.SkipReason, existing)
+		require.ElementsMatch(t, frags, r.BookIDs)
+		require.Zero(t, res.Applicable)
+	})
+	t.Run("no title match: found beside them", func(t *testing.T) {
+		f := newFragFixture(t)
+		_, _ = seed(t, f, "Something Else Entirely", retag)
+		r := findRow(t, f.plan(t, "op-plan"), existingRowID(f.path(dir), "storm"))
+		require.Equal(t, fragSkipRetagged, r.Skipped, r.SkipReason)
+	})
+	t.Run("size differences that are not constant are no re-tag", func(t *testing.T) {
+		f := newFragFixture(t)
+		_, _ = seed(t, f, "Something Else Entirely", func(i int) int64 { return int64(i * 997) })
+		r := findRow(t, f.plan(t, "op-plan"), noParentRowID(f.path(dir), "storm"))
+		require.NotEqual(t, fragSkipRetagged, r.Skipped, r.SkipReason)
+	})
+}
+
+// TestFragmentFixer_CoOwnerRule: owner rule 2026-10-05 for a moved row whose
+// fragment's file is also a row of a live single-file book outside it.
+func TestFragmentFixer_CoOwnerRule(t *testing.T) {
+	// seed: parent (title) with rows 01 present and 02..n+1 gone; n
+	// fragments imported from the gone paths, now organized away; a
+	// co-owner (coTitle, coDur seconds) holding a row at fragment 1's file.
+	seed := func(t *testing.T, f *fragFixture, title, coTitle string, n, coDur int) (parent string, frags []string, co string) {
+		p1 := f.file(t, "lib/P/01.mp3", 801)
+		parent = f.book(t, "parent", title, f.path("lib/P"), nil)
+		f.row(t, "p01", parent, p1, "01.mp3", 801, 600, 1)
+		var first string
+		for i := 2; i <= n+1; i++ {
+			name := fmt.Sprintf("%02d.mp3", i)
+			gone := f.path("lib/P/" + name)
+			f.row(t, "p"+name, parent, gone, name, int64(800+i), 600, i)
+			at := f.file(t, fmt.Sprintf("lib/P/%02d/%s", i, name), 800+i)
+			fr := f.book(t, "frag"+name, fmt.Sprintf("%02d", i), gone, nil)
+			f.row(t, "f"+name, fr, at, name, int64(800+i), 600, 0)
+			frags = append(frags, fr)
+			if first == "" {
+				first = at
+			}
+		}
+		co = f.book(t, "co", coTitle, first, nil)
+		f.row(t, "co", co, first, "co.mp3", 802, coDur, 0)
+		return parent, frags, co
+	}
+	t.Run("same title, totals agree: the fragment joins the co-owner", func(t *testing.T) {
+		f := newFragFixture(t)
+		parent, frags, co := seed(t, f, "5 - Smartest Camp, Book 2", "2 - Smartest Camp, Book 2", 1, 600)
+		res := f.plan(t, "op-plan")
+		noRow(t, res, "moved:"+parent, "replaced by the join")
+		var r repairs.Row
+		for _, row := range res.Rows {
+			if row.Class == fragClassExistingBook {
+				r = row
+			}
+		}
+		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+		require.Equal(t, co, r.Proposed["join"])
+		require.ElementsMatch(t, append(append([]string(nil), frags...), co), r.BookIDs, "the parent is not written")
+		out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
+		require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+		f.requireRetiredInto(t, frags, co)
+		require.Equal(t, f.path("lib/P/02.mp3"), f.fileRow(t, "parent", "p02.mp3").FilePath, "the parent's stale row is untouched")
+	})
+	t.Run("junk-titled co-owner, totals disagree: the row proceeds beside it", func(t *testing.T) {
+		f := newFragFixture(t)
+		parent, frags, co := seed(t, f, "Eldest", "", 3, 600)
+		r := findRow(t, f.plan(t, "op-plan"), "moved:"+parent)
+		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+		require.Equal(t, repairs.RiskReview, r.Risk)
+		require.Equal(t, []string{co}, rowCoOwners(r))
+		out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
+		require.Equal(t, 1, out.Applied, "checkOwners lets the accepted co-owner through: %+v", out.Rows)
+		f.requireRetiredInto(t, frags, parent)
+		rows, err := f.s.GetBookFiles(co)
+		require.NoError(t, err)
+		require.Len(t, rows, 1, "the co-owner keeps its row")
+		require.True(t, f.live(t, "co"))
+	})
+	t.Run("junk-titled co-owner, totals agree: held", func(t *testing.T) {
+		f := newFragFixture(t)
+		parent, _, _ := seed(t, f, "Eldest", "c5", 1, 600)
+		r := findRow(t, f.plan(t, "op-plan"), "moved:"+parent)
+		require.Equal(t, fragSkipCoOwner, r.Skipped)
+		require.Contains(t, r.SkipReason, "nothing proves the same work")
+	})
+	t.Run("co-owner of unknown duration: held", func(t *testing.T) {
+		f := newFragFixture(t)
+		parent, _, _ := seed(t, f, "Smartest Camp", "2 - Smartest Camp", 3, 0)
+		r := findRow(t, f.plan(t, "op-plan"), "moved:"+parent)
+		require.Equal(t, fragSkipCoOwner, r.Skipped)
+		require.Contains(t, r.SkipReason, "no duration")
+	})
+	t.Run("a co-owner with another work's title is refused", func(t *testing.T) {
+		f := newFragFixture(t)
+		parent, _, _ := seed(t, f, "Foundation", "Prelude to Foundation", 1, 600)
+		r := findRow(t, f.plan(t, "op-plan"), "moved:"+parent)
+		require.Equal(t, fragSkipCoOwner, r.Skipped)
+		require.Contains(t, r.SkipReason, "a different work, not an edition")
+	})
+}
+
+// TestFragmentFixer_NoSilentDrops: every fragment candidate the no-parent
+// path sees ends in exactly one row; the ones no group takes are unplaced
+// rows whose skip kind names why.
+func TestFragmentFixer_NoSilentDrops(t *testing.T) {
+	f := newFragFixture(t)
+	lone := f.chapterFrags(t, "lib/Solo", "Solo", 2, 300)
+	scattered := f.numberedSeed(t, "lib/Two", []string{"01 - Intro", "02 - Intro", "03 - Intro", "04 - Something Else"}, 300, nil)
+	p := f.file(t, "lib/Odd/zzqx.mp3", 990)
+	nokey := f.book(t, "nokey", "Chapter 3", p, nil)
+	f.row(t, "nk", nokey, p, "zzqx.mp3", 990, 300, 0)
+	res := f.plan(t, "op-plan")
+	seen := map[string]int{}
+	for _, r := range res.Rows {
+		for _, id := range r.BookIDs {
+			seen[id]++
+		}
+	}
+	all := append(append(append([]string(nil), lone...), scattered...), nokey)
+	for _, id := range all {
+		require.Equal(t, 1, seen[id], "book %s is in exactly one row", id)
+	}
+	for _, id := range lone {
+		require.Equal(t, fragSkipLoneChapter, findRow(t, res, fragClassUnplaced+":"+id).Skipped)
+	}
+	require.Equal(t, fragSkipScattered, findRow(t, res, fragClassUnplaced+":"+scattered[3]).Skipped)
+	r := findRow(t, res, fragClassUnplaced+":"+nokey)
+	require.Equal(t, fragSkipNoChapterKey, r.Skipped)
+	require.Equal(t, fragClassUnplaced, r.Class)
+	require.Equal(t, 4, res.ByClass[fragClassUnplaced])
 }
