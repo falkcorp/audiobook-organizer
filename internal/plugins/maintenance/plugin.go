@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.67.0
+// version: 1.68.0
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
 // last-edited: 2026-10-04
 
@@ -144,6 +144,11 @@ func (p *Plugin) Register(r sdk.Registry) error {
 		// schedule): it lists author rows that collide once NormalizeAuthor
 		// collapses internal whitespace, and changes nothing.
 		p.authorWhitespaceCollisionReportDef(),
+		// credit-census is READ ONLY (read capability, no schedule): it counts
+		// every disagreement between the flat author/narrator fields and the
+		// credit lists, with each class's book ids in the result. Gate for the
+		// credits backfill (docs/plans/2026-10-04-author-narrator-credit-lists-audit.md).
+		p.creditCensusDef(),
 		// author-conjunction-repair is NOT reachable from author-split-scan:
 		// SplitCompositeAuthorName("& Conrad Westmaas") returns nil (no
 		// delimiter, three words), so the split scan skips these rows entirely.
