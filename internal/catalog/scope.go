@@ -1,5 +1,5 @@
 // file: internal/catalog/scope.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5b9d3f27-8c1a-4e6b-9f42-1d7c0a8e3b56
 // last-edited: 2026-10-05
 
@@ -115,12 +115,80 @@ const (
 	scopeSkipRole      = "role_marked"
 )
 
+// nameSuffixWords are generational and academic suffixes. A list piece that
+// is only one of these ("Jr.", "PhD") ends the previous name ("John Smith,
+// Jr."); it is not a name of its own.
+var nameSuffixWords = map[string]bool{
+	"jr": true, "sr": true, "ii": true, "iii": true, "iv": true, "v": true,
+	"phd": true, "md": true, "dds": true, "esq": true, "mba": true, "ma": true,
+	"ms": true, "msc": true, "bsc": true, "rn": true, "dphil": true,
+}
+
+// bareRoleWords are role words written as a list piece of their own ("Jane
+// Doe, illustrator", "Jane Doe, ed."). Such a piece marks the preceding name.
+var bareRoleWords = map[string]bool{
+	"editor": true, "editors": true, "ed": true, "eds": true, "compiler": true,
+	"translator": true, "translators": true, "trans": true, "illustrator": true,
+	"illustrators": true, "foreword": true, "introduction": true, "afterword": true,
+	"contributor": true, "contributors": true, "adapter": true, "narrator": true,
+	"reader": true,
+}
+
+func lettersLower(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// creditGroup is one name of a credit list after suffix pieces are folded
+// back into it.
+type creditGroup struct {
+	name   string
+	marked bool
+}
+
+// groupCredits splits a credit on its list separators and rebuilds the
+// names: a piece that is only a name suffix (after its own role marker is
+// stripped) is joined to the previous name and passes its marker to it; a
+// piece that is only a role word marks the previous name. Each other piece
+// is a name, marked when metadata.ClassifyContributor finds a role in it.
+func groupCredits(name string) []creditGroup {
+	var groups []creditGroup
+	for _, piece := range creditPieceRe.Split(name, -1) {
+		piece = strings.TrimSpace(piece)
+		if piece == "" {
+			continue
+		}
+		bare, role := metadata.ClassifyContributor(piece)
+		marked := role != metadata.RoleAuthor
+		key := lettersLower(bare)
+		switch {
+		case len(groups) > 0 && bareRoleWords[lettersLower(piece)]:
+			groups[len(groups)-1].marked = true
+		case len(groups) > 0 && nameSuffixWords[key]:
+			g := &groups[len(groups)-1]
+			g.name += ", " + strings.TrimSpace(bare)
+			g.marked = g.marked || marked
+		default:
+			groups = append(groups, creditGroup{name: strings.TrimSpace(bare), marked: marked})
+		}
+	}
+	return groups
+}
+
 // scopeNames decides what one author row contributes to the harvest scope:
-// the names to harvest, or why it is skipped. A name with a role marker in
-// any of its credit-list pieces ("Haruki Murakami, Jay Rubin - translator,
-// Philip Gabriel - translator") is never harvested whole; its unmarked
-// pieces are, when each is person-shaped and not junk ("Haruki Murakami"),
-// and split is set. Otherwise the whole name is skipped as role-marked.
+// the names to harvest, or why it is skipped. A credit with a role marker
+// anywhere ("Jane Doe - translator", "Jane Doe, PhD - translator", "Jane
+// Doe, illustrator", "Haruki Murakami, Jay Rubin, translator") is never
+// harvested whole. Name suffixes ("Jr.", "PhD") stay with their name, so the
+// marker of "John Smith, Jr. - editor" belongs to John Smith and the whole
+// credit is skipped. A credit list's unmarked names are harvested on their
+// own when each is person-shaped and not junk ("Haruki Murakami"), and split
+// is set; otherwise the whole credit is skipped as role-marked.
 func scopeNames(name string) (names []string, skip string, split bool) {
 	name = strings.TrimSpace(name)
 	if authorjunk.ClassifyName(name).Junk() {
@@ -129,32 +197,28 @@ func scopeNames(name string) (names []string, skip string, split bool) {
 	if publisherShaped(name) {
 		return nil, scopeSkipPublisher, false
 	}
-	pieces := creditPieceRe.Split(name, -1)
+	groups := groupCredits(name)
 	var plain []string
 	marked := false
-	for _, p := range pieces {
-		bare, role := metadata.ClassifyContributor(p)
-		if role != metadata.RoleAuthor {
+	for _, g := range groups {
+		if g.marked {
 			marked = true
 			continue
 		}
-		if bare = strings.TrimSpace(bare); bare != "" {
-			plain = append(plain, bare)
+		if g.name != "" {
+			plain = append(plain, g.name)
 		}
 	}
 	if !marked {
 		return []string{name}, "", false
 	}
-	if len(pieces) == 1 {
+	if len(plain) == 0 {
 		return nil, scopeSkipRole, false
 	}
 	for _, p := range plain {
 		if !personname.LooksLikePersonName(p) || authorjunk.ClassifyName(p).Junk() || publisherShaped(p) {
 			return nil, scopeSkipRole, false
 		}
-	}
-	if len(plain) == 0 {
-		return nil, scopeSkipRole, false
 	}
 	return plain, "", true
 }

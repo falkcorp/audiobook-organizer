@@ -1,5 +1,5 @@
 // file: internal/authority/authoritybuild/apply_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1174eeba-dc3c-4dc8-a8fe-ed7d13c8bb81
 // last-edited: 2026-10-05
 
@@ -316,4 +316,26 @@ func TestPlan_DigestIsStableAndSeesStoreChanges(t *testing.T) {
 	p3, err := PlanApply(ctx, ps, sampleResult(), allRan, t0, Options{Workers: 1})
 	require.NoError(t, err)
 	require.NotEqual(t, p1.Digest, p3.Digest)
+}
+
+// TestPlan_LegacyASINRowsGetSourcesFromTheirPersons: a ref_asin: row written
+// before ASINRef carried Sources takes its persons' sources on read, so it
+// is pruned when those sources ran and held when one did not or its person
+// row is gone.
+func TestPlan_LegacyASINRowsGetSourcesFromTheirPersons(t *testing.T) {
+	ps := newStore(t)
+	ctx := context.Background()
+	require.NoError(t, ps.SetRaw(authority.PersonPrefix+"annleckie", []byte(`{"fold":"annleckie","sources":["catalog"]}`)))
+	require.NoError(t, ps.SetRaw(authority.PersonPrefix+"rayporter", []byte(`{"fold":"rayporter","sources":["catalog","owner_library_seed"]}`)))
+	require.NoError(t, ps.SetRaw(authority.PersonASINKey("B000000001"), []byte(`{"asin":"B000000001","folds":["annleckie"]}`)))
+	require.NoError(t, ps.SetRaw(authority.PersonASINKey("B000000002"), []byte(`{"asin":"B000000002","folds":["rayporter"]}`)))
+	require.NoError(t, ps.SetRaw(authority.PersonASINKey("B000000003"), []byte(`{"asin":"B000000003","folds":["gone"]}`)))
+
+	b := NewBuilder()
+	b.NoteSource(authority.SourceCatalog)
+	plan, err := PlanApply(ctx, ps, b.Finish(), map[string]bool{authority.SourceCatalog: true}, t0, Options{Workers: 2})
+	require.NoError(t, err)
+	require.Contains(t, plan.Stale, authority.PersonASINKey("B000000001"), "its person's only source ran")
+	require.Contains(t, plan.Held, authority.PersonASINKey("B000000002"), "the seed did not run")
+	require.Contains(t, plan.Held, authority.PersonASINKey("B000000003"), "no person row to take sources from")
 }
