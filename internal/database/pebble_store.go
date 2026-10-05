@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.205.0
+// version: 1.206.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-04
 
@@ -182,7 +182,8 @@ type PebbleStore struct {
 	bookLocks                bookLocks            // per-book-ID write stripes: every book read-modify-write holds one across read AND commit (pebble_store_book_lock.go)
 	bookFileLocks            bookLocks            // per-book_file-ID write stripes: every single-row book_file read-modify-write holds one across read AND commit (pebble_store_book_lock.go)
 	bookOwnerLocks           bookLocks            // per-book-ID stripes over "which book_file rows name this book": DeleteBook's owns-files check+commit vs every book_file writer's commit (book_delete_owns_files.go)
-	bookAuthorLocks          bookLocks            // per-book-ID stripes for the book_authors join: SetBookAuthors and ModifyBookAuthors hold one across read AND commit, DeleteBook from its book_authors probe through its commit; order book -> owner -> book_authors (pebble_store_authors.go)
+	bookAuthorLocks          bookLocks            // per-book-ID stripes for the book_authors join: SetBookAuthors and ModifyBookAuthors hold one across read AND commit, DeleteBook from its book_authors probe through its commit; order book -> owner -> book_authors -> book_narrators (pebble_store_authors.go)
+	bookNarratorLocks        bookLocks            // per-book-ID stripes for the book_narrators join: SetBookNarrators, ModifyBookNarrators and ModifyBookCredits hold one across read AND commit, DeleteBook from its probe through its commit; taken last in the order above (credits_store.go)
 	opsLogSeq                atomic.Int64         // monotonic counter for log key uniqueness; accessed via atomic
 	rootDir                  string               // organized library root; set via SetRootDir after config load
 	libraryCountsRecomputeMu sync.Mutex           // gates recompute to prevent stampede when N callers see dirty cache
@@ -3038,6 +3039,11 @@ type bookWriteOpts struct {
 	// series), which the stale-series relink repairs. Only
 	// SeedLegacyBookRowForTest sets it (pebble_store_legacy_seed.go).
 	legacySeries bool
+	// stage, when set, adds writes to the row's batch before it commits, so
+	// they land atomically with the row. ModifyBookCredits stages the
+	// book's credit lists through it (credits_store.go). An error aborts the
+	// write.
+	stage func(*pebble.Batch) error
 }
 
 // updateBookLockedMode is UpdateBook's body with the variations in opts. The
@@ -3370,6 +3376,12 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, opts bookWrite
 		}
 	}
 
+	if opts.stage != nil {
+		if err := opts.stage(batch); err != nil {
+			batch.Close()
+			return nil, err
+		}
+	}
 	if bookWriteBatchPreCommitHook != nil {
 		bookWriteBatchPreCommitHook("update", id, batch)
 	}
@@ -3942,6 +3954,15 @@ func (p *PebbleStore) DeleteBook(id string) error {
 			unlockAuthors()
 		}
 	}()
+	// book_narrators:<id> gets the same treatment under the book_narrators
+	// stripe, taken last (book -> owner -> book_authors -> book_narrators) and
+	// released with the authors stripe.
+	unlockNarrators := p.lockBookNarrators(id)
+	defer func() {
+		if authorsLocked {
+			unlockNarrators()
+		}
+	}()
 	cacheRowDeleted := false
 	for _, sidecar := range [][]byte{
 		[]byte("book_authors:" + id),
@@ -3991,6 +4012,7 @@ func (p *PebbleStore) DeleteBook(id string) error {
 	if cacheRowDeleted {
 		p.bumpMetadataCacheGeneration(id)
 	}
+	unlockNarrators()
 	unlockAuthors()
 	authorsLocked = false
 	if markerMayExist {

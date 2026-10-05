@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_authors.go
-// version: 1.16.1
+// version: 1.17.0
 // guid: 1f8b9fd2-e424-4a09-9ee4-7b5b64660605
-// last-edited: 2026-10-02
+// last-edited: 2026-10-04
 
 package database
 
@@ -724,7 +724,8 @@ func (p *PebbleStore) GetBookAuthors(bookID string) ([]BookAuthor, error) {
 func (p *PebbleStore) SetBookAuthors(bookID string, authors []BookAuthor) error {
 	unlock := p.lockBookAuthors(bookID)
 	defer unlock()
-	return p.setBookAuthorsLocked(bookID, authors)
+	_, err := p.setBookAuthorsLocked(bookID, authors)
+	return err
 }
 
 // ErrSkipBookAuthorsWrite, returned by a ModifyBookAuthors callback, means
@@ -772,31 +773,64 @@ func (p *PebbleStore) ModifyBookAuthors(bookID string, fn func([]BookAuthor) ([]
 		}
 		return nil, err
 	}
-	if err := p.setBookAuthorsLocked(bookID, next); err != nil {
+	written, err := p.setBookAuthorsLocked(bookID, next)
+	if err != nil {
 		return nil, err
 	}
-	return next, nil
+	return written, nil
 }
 
 // setBookAuthorsLocked is SetBookAuthors' body; the caller holds the
-// book_authors stripe for bookID.
-func (p *PebbleStore) setBookAuthorsLocked(bookID string, authors []BookAuthor) error {
-	key := []byte(fmt.Sprintf("book_authors:%s", bookID))
-	// Copy before stamping: the caller may still own and reuse the slice.
-	authors = append([]BookAuthor(nil), authors...)
-	if n := stampBookAuthorsInPlace(bookID, authors); n > 0 {
+// book_authors stripe for bookID. It returns the rows as written: normalised
+// (NormalizeBookAuthors: position order, one row per author, positions
+// 0..n-1) and stamped with bookID.
+func (p *PebbleStore) setBookAuthorsLocked(bookID string, authors []BookAuthor) ([]BookAuthor, error) {
+	authors, data, err := encodeBookAuthors(bookID, authors)
+	if err != nil {
+		return nil, err
+	}
+	if err := p.db.Set(bookAuthorsKey(bookID), data, pebble.Sync); err != nil {
+		return nil, err
+	}
+	p.ReplaceBookAuthorsInMemDB(bookID, authors)
+	return authors, nil
+}
+
+// bookAuthorsKey is the Pebble key of a book's author credit list.
+func bookAuthorsKey(bookID string) []byte { return []byte("book_authors:" + bookID) }
+
+// bookNarratorsKey is the Pebble key of a book's narrator credit list.
+func bookNarratorsKey(bookID string) []byte { return []byte("book_narrators:" + bookID) }
+
+// encodeBookAuthors puts rows in the form every author-credit write stores:
+// normalised (a new slice, so the caller's is never touched) and stamped with
+// bookID. A caller-supplied BookID naming a different book is overridden and
+// logged; see SetBookAuthors.
+func encodeBookAuthors(bookID string, rows []BookAuthor) ([]BookAuthor, []byte, error) {
+	rows = NormalizeBookAuthors(rows)
+	if n := stampBookAuthorsInPlace(bookID, rows); n > 0 {
 		slog.Warn("SetBookAuthors: overriding caller-supplied book_id that names a different book",
 			"book_id", bookID, "mismatched_rows", n)
 	}
-	data, err := json.Marshal(authors)
+	data, err := json.Marshal(rows)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
-	if err := p.db.Set(key, data, pebble.Sync); err != nil {
-		return err
+	return rows, data, nil
+}
+
+// encodeBookNarrators is encodeBookAuthors for narrator credits.
+func encodeBookNarrators(bookID string, rows []BookNarrator) ([]BookNarrator, []byte, error) {
+	rows = NormalizeBookNarrators(rows)
+	if n := stampBookNarratorsInPlace(bookID, rows); n > 0 {
+		slog.Warn("SetBookNarrators: overriding caller-supplied book_id that names a different book",
+			"book_id", bookID, "mismatched_rows", n)
 	}
-	p.ReplaceBookAuthorsInMemDB(bookID, authors)
-	return nil
+	data, err := json.Marshal(rows)
+	if err != nil {
+		return nil, nil, err
+	}
+	return rows, data, nil
 }
 
 func (p *PebbleStore) GetAllAuthorBookCounts() (map[int]int, error) {
@@ -1105,22 +1139,30 @@ func (p *PebbleStore) GetBookNarrators(bookID string) ([]BookNarrator, error) {
 // SetBookAuthors: before this, POST /operations/optimize-database and PUT
 // /audiobooks/:id/narrators could store rows with an empty book_id, which
 // memdb rejects -- and every later memdb upsert of the book then failed on it.
+//
+// The rows are normalised first (NormalizeBookNarrators), and the write holds
+// the book's book_narrators stripe (lockBookNarrators). A caller that reads,
+// merges and writes back must use ModifyBookNarrators instead; this call
+// replaces whatever is stored.
 func (p *PebbleStore) SetBookNarrators(bookID string, narrators []BookNarrator) error {
-	key := []byte(fmt.Sprintf("book_narrators:%s", bookID))
-	narrators = append([]BookNarrator(nil), narrators...)
-	if n := stampBookNarratorsInPlace(bookID, narrators); n > 0 {
-		slog.Warn("SetBookNarrators: overriding caller-supplied book_id that names a different book",
-			"book_id", bookID, "mismatched_rows", n)
-	}
-	data, err := json.Marshal(narrators)
+	unlock := p.lockBookNarrators(bookID)
+	defer unlock()
+	_, err := p.setBookNarratorsLocked(bookID, narrators)
+	return err
+}
+
+// setBookNarratorsLocked is SetBookNarrators' body; the caller holds the
+// book_narrators stripe for bookID. It returns the rows as written.
+func (p *PebbleStore) setBookNarratorsLocked(bookID string, narrators []BookNarrator) ([]BookNarrator, error) {
+	narrators, data, err := encodeBookNarrators(bookID, narrators)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if err := p.db.Set(key, data, pebble.Sync); err != nil {
-		return err
+	if err := p.db.Set(bookNarratorsKey(bookID), data, pebble.Sync); err != nil {
+		return nil, err
 	}
 	p.ReplaceBookNarratorsInMemDB(bookID, narrators)
-	return nil
+	return narrators, nil
 }
 
 // DeleteNarrator removes a narrator and every reference the store holds to it,
