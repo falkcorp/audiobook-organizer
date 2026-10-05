@@ -1,5 +1,5 @@
 // file: internal/reconcile/reconcile.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-10-05
 
@@ -173,8 +173,23 @@ type VersionGroupCleanupResult struct {
 	// it. Their files are not deleted either.
 	SkippedHasUserState int `json:"skipped_has_user_state"`
 	// StateCheckErrors counts duplicates left in place because whether a
-	// user has listening state on them could not be read (fail closed).
+	// user has listening state on them could not be read (fail closed): a
+	// state read that failed, a user list that could not be read in full
+	// (one undecodable user row), or the re-check right before the delete
+	// that could not be made. Counted per duplicate; the rest of the run
+	// goes on.
 	StateCheckErrors int `json:"state_check_errors"`
+	// SkippedKeepNotListed counts duplicates a user has listening state on
+	// that were left in place because the kept copy is not a book ABS lists
+	// (database.ABSLibraryFilter: the group's primary, organized, not
+	// quarantined) after the group's primary hand-off. Carrying the state
+	// there would move it off a copy the user may see onto one they cannot.
+	// A dry run makes no hand-off, so it tests the kept copy as it is now.
+	SkippedKeepNotListed int `json:"skipped_keep_not_listed"`
+	// StateReappeared counts duplicates left in place because the re-check
+	// made under the merge lock right before the delete found listening
+	// state (or an owed state move) on them that the first probe did not.
+	StateReappeared int `json:"state_reappeared"`
 	// PrimaryHeld counts cleaned groups versionprimary held: no member is an
 	// organized library copy with its files present, so nothing was crowned
 	// and the group is left for version-group-primary-repair.
@@ -821,6 +836,10 @@ func CountMatchType(matches []ReconcileMatch, matchType string) int {
 func CleanupDuplicateVersionGroups(store VersionGroupStore, rootDir string, dryRun bool) (*VersionGroupCleanupResult, error) {
 	result := &VersionGroupCleanupResult{}
 	var stateProbe *merge.UserStateProbe
+	var probeErr error
+	// um re-checks and moves users' state under the merge lock at each
+	// delete. nil (a store that cannot) keeps every duplicate.
+	um, _ := database.AsCapability[merge.UserProgressMerger](store)
 
 	// Fetch all books and group by version_group_id. Core-typed: grouping and
 	// dup-selection only need ID/FilePath/VersionGroupID, all Core-safe fields.
@@ -866,6 +885,10 @@ func CleanupDuplicateVersionGroups(store VersionGroupStore, rootDir string, dryR
 		}
 
 		result.GroupsCleaned++
+		var stateful []database.BookCore
+		// removed: duplicates a dry run counts as removed, left out of its
+		// projection of the hand-off (keepListed).
+		removed := map[string]bool{}
 		for i, dup := range libraryCopies {
 			if i == keepIdx {
 				continue
@@ -891,11 +914,16 @@ func CleanupDuplicateVersionGroups(store VersionGroupStore, rootDir string, dryR
 			// kept copy first, all or nothing; a carry that does not fully
 			// land is put back and the duplicate kept. Same point (before
 			// the disk), same fail-closed rule: a state read that fails
-			// keeps the duplicate. Users are listed once per pass.
-			if stateProbe == nil {
-				if stateProbe, err = merge.NewUserStateProbe(store); err != nil {
-					return nil, fmt.Errorf("version-group cleanup: cannot list users to check their listening state: %w", err)
+			// keeps the duplicate. Users are listed once per pass; a list
+			// that cannot be read fails each duplicate closed, not the run.
+			if stateProbe == nil && probeErr == nil {
+				if stateProbe, probeErr = merge.NewUserStateProbe(store); probeErr != nil {
+					pkgLog.Warn("version-group cleanup: cannot list users to check their listening state; every duplicate is kept: %v", probeErr)
 				}
+			}
+			if probeErr != nil {
+				result.StateCheckErrors++
+				continue
 			}
 			hasState, stateErr := stateProbe.Has(dup.ID)
 			if stateErr != nil {
@@ -904,40 +932,19 @@ func CleanupDuplicateVersionGroups(store VersionGroupStore, rootDir string, dryR
 				result.StateCheckErrors++
 				continue
 			}
-			keepID := libraryCopies[keepIdx].ID
-			if hasState && !dryRun {
-				if cerr := carryDuplicateState(store, keepID, dup.ID); cerr != nil {
-					pkgLog.Warn("version-group cleanup keeping duplicate %s of group %s: its users' listening state could not be carried to %s: %v",
-						logger.SanitizeLogValue(dup.ID), logger.SanitizeLogValue(groupID), logger.SanitizeLogValue(keepID), cerr)
-					result.SkippedHasUserState++
-					continue
-				}
-			}
 			if hasState {
-				result.StateCarried++
+				// Carried after the group's primary hand-off below, and only
+				// onto a kept copy ABS lists then.
+				stateful = append(stateful, dup)
+				continue
 			}
 
-			// Logged only past the guard, so the log never says a duplicate
-			// is being removed when it is about to be kept.
-			slog.Info("version-group cleanup removing duplicate from group", "dupID", dup.ID, "dupPath", dup.FilePath, "groupID", groupID)
-
-			if !dryRun {
-				// Delete the file if it exists and is in the library
-				if rootDir != "" && pathutil.IsWithin(dup.FilePath, rootDir) {
-					if _, err := os.Stat(dup.FilePath); err == nil {
-						if err := os.Remove(dup.FilePath); err != nil {
-							slog.Warn("failed to delete duplicate file", "dup", dup.FilePath, "err", err)
-						} else {
-							result.FilesDeleted++
-						}
-					}
-				}
-				// Delete the book record
-				if err := store.DeleteBook(dup.ID); err != nil {
-					slog.Warn("failed to delete duplicate book record", "dup", dup.ID, "err", err)
-				}
+			if dryRun {
+				result.DuplicatesRemoved++
+				removed[dup.ID] = true
+				continue
 			}
-			result.DuplicatesRemoved++
+			removeDuplicate(store, um, "", dup, groupID, rootDir, result)
 		}
 
 		// Hand the group's primary on with the shared rule. Until 2026-09-24
@@ -956,20 +963,122 @@ func CleanupDuplicateVersionGroups(store VersionGroupStore, rootDir string, dryR
 				result.PrimaryHeld++
 			}
 		}
+
+		// Duplicates a user has listening state on. Their state goes to the
+		// kept copy only when that copy is a book ABS lists after the
+		// hand-off: keepIdx is the oldest library copy, which can be
+		// quarantined, not organized or not the primary (the duplicate may
+		// be the primary ABS shows), and carrying onto it would move the
+		// user's state off a copy they can see onto one they cannot.
+		keepID := libraryCopies[keepIdx].ID
+		for _, dup := range stateful {
+			listed, kerr := keepListed(store, groupID, keepID, rootDir, dryRun, removed)
+			if kerr != nil || !listed {
+				pkgLog.Warn("version-group cleanup keeping duplicate %s of group %s: a user has listening state on it and kept copy %s is not a book ABS lists (read error: %v)",
+					logger.SanitizeLogValue(dup.ID), logger.SanitizeLogValue(groupID), logger.SanitizeLogValue(keepID), kerr)
+				result.SkippedKeepNotListed++
+				continue
+			}
+			if dryRun {
+				result.StateCarried++
+				result.DuplicatesRemoved++
+				continue
+			}
+			if removeDuplicate(store, um, keepID, dup, groupID, rootDir, result) {
+				result.StateCarried++
+			}
+		}
 	}
 
 	return result, nil
 }
 
-// carryDuplicateState carries dupID's users' listening state onto keepID
-// (merge.CarryStateBeforeHardDelete). A store that cannot move user state
-// is an error, so the duplicate is kept.
-func carryDuplicateState(store VersionGroupStore, keepID, dupID string) error {
-	um, ok := database.AsCapability[merge.UserProgressMerger](store)
-	if !ok {
-		return errors.New("store cannot move users' listening state")
+// keepListed reports whether keepID is a book ABS lists
+// (database.ABSLibraryFilter) after the group's primary hand-off. On an
+// apply the hand-off has run, so it reads the row. A dry run made no
+// hand-off: it projects one (versionprimary.ChooseSinglePrimary over the
+// group without the duplicates it counted as removed) and tests the kept
+// row with the primary flag that hand-off would leave it.
+func keepListed(store VersionGroupStore, groupID, keepID, rootDir string, dryRun bool, removed map[string]bool) (bool, error) {
+	keep, err := store.GetBookByID(keepID)
+	if err != nil || keep == nil {
+		return false, err
 	}
-	return merge.CarryStateBeforeHardDelete(um, keepID, dupID)
+	if !dryRun {
+		return database.ABSLibraryFilter().Matches(keep), nil
+	}
+	members, err := store.GetBooksByVersionGroup(groupID)
+	if err != nil {
+		return false, err
+	}
+	members = slices.DeleteFunc(members, func(b database.Book) bool { return removed[b.ID] })
+	primary, err := versionprimary.ChooseSinglePrimary(context.Background(), store, members, versionprimary.Env{RootDir: rootDir})
+	if err != nil {
+		return false, err
+	}
+	row := *keep
+	if primary != "" {
+		isPrimary := primary == keepID
+		row.IsPrimaryVersion = &isPrimary
+	}
+	return database.ABSLibraryFilter().Matches(&row), nil
+}
+
+// removeDuplicate removes one duplicate -- its file in the library, then its
+// book row -- under the merge lock, right after a last check made under that
+// same lock: with keepID non-empty, its users' state is carried there first
+// (merge.CarryStateThenHardDelete); without, it must still hold no state
+// (merge.HardDeleteWithoutUserState). Either refusal keeps the duplicate and
+// its file. It reports whether the duplicate was removed.
+func removeDuplicate(store VersionGroupStore, um merge.UserProgressMerger, keepID string, dup database.BookCore, groupID, rootDir string, result *VersionGroupCleanupResult) bool {
+	if um == nil {
+		pkgLog.Warn("version-group cleanup keeping duplicate %s of group %s: store cannot re-check or move users' listening state",
+			logger.SanitizeLogValue(dup.ID), logger.SanitizeLogValue(groupID))
+		if keepID != "" {
+			result.SkippedHasUserState++
+		} else {
+			result.StateCheckErrors++
+		}
+		return false
+	}
+	// Logged only past the guards, so the log never says a duplicate is
+	// being removed when it is about to be kept.
+	del := func() error {
+		slog.Info("version-group cleanup removing duplicate from group", "dupID", dup.ID, "dupPath", dup.FilePath, "groupID", groupID)
+		if rootDir != "" && pathutil.IsWithin(dup.FilePath, rootDir) {
+			if _, err := os.Stat(dup.FilePath); err == nil {
+				if err := os.Remove(dup.FilePath); err != nil {
+					slog.Warn("failed to delete duplicate file", "dup", dup.FilePath, "err", err)
+				} else {
+					result.FilesDeleted++
+				}
+			}
+		}
+		return store.DeleteBook(dup.ID)
+	}
+	var err error
+	if keepID != "" {
+		err = merge.CarryStateThenHardDelete(um, keepID, dup.ID, del)
+	} else {
+		err = merge.HardDeleteWithoutUserState(um, dup.ID, del)
+	}
+	switch {
+	case err == nil:
+		result.DuplicatesRemoved++
+		return true
+	case errors.Is(err, merge.ErrStateCarryIncomplete):
+		pkgLog.Warn("version-group cleanup keeping duplicate %s of group %s: its users' listening state could not be carried to %s: %v",
+			logger.SanitizeLogValue(dup.ID), logger.SanitizeLogValue(groupID), logger.SanitizeLogValue(keepID), err)
+		result.SkippedHasUserState++
+	case errors.Is(err, merge.ErrUserStateOnDoomedBook):
+		pkgLog.Warn("version-group cleanup keeping duplicate %s of group %s: listening state found on it right before the delete: %v",
+			logger.SanitizeLogValue(dup.ID), logger.SanitizeLogValue(groupID), err)
+		result.StateReappeared++
+	default:
+		slog.Warn("failed to delete duplicate book record", "dup", dup.ID, "err", err)
+		result.WriteErrors++
+	}
+	return false
 }
 
 // handOffPrimary runs versionprimary.EnsureSinglePrimary on group gid after

@@ -1,5 +1,5 @@
 // file: internal/reconcile/cleanup_owns_files_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 0e41a60d-a159-4c2a-9e4d-ff27e052715f
 // last-edited: 2026-10-05
 
@@ -64,6 +64,9 @@ func TestCleanupDuplicateVersionGroups_DuplicateHoldingUserStateIsKept(t *testin
 	addCore(s, database.BookCore{ID: "03", Title: "t", FilePath: "/src/a.m4b", VersionGroupID: &vg})
 	s.users = []database.User{{ID: "u1"}}
 	s.states["02"] = &database.UserBookState{UserID: "u1", BookID: "02", Status: database.UserBookStatusInProgress, ProgressPct: 30}
+	// The kept copy is one ABS lists, so the carry is attempted (and refused).
+	organized, primary := "organized", true
+	s.byID["01"].LibraryState, s.byID["01"].IsPrimaryVersion = &organized, &primary
 
 	res, err := CleanupDuplicateVersionGroups(s, root, false)
 	if err != nil {
