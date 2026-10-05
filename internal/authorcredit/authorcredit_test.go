@@ -1,5 +1,5 @@
 // file: internal/authorcredit/authorcredit_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4a5f7bee-3d1d-427b-bc5f-baaa4b6fb584
 // last-edited: 2026-10-04
 
@@ -101,15 +101,15 @@ func TestResolve_PartFoundByAlias(t *testing.T) {
 }
 
 func TestResolve_RefusesAnUnsplittableCombinedOfExistingAuthors(t *testing.T) {
-	// Four names is past MaxSplitParts, so the credit is not split; every
-	// piece exists, so it must not be created either. (Until 2026-10-04 the
-	// example was "Shirtaloon, Travis Deverell"; a single-word piece that is
-	// an author now splits, TestResolve_SingleWordNameThatExists.)
-	st := newStore(t, "Amy Adams", "Ben Brown", "Cat Cole", "Dan Dorn")
-	got, err := Resolve(st, "Amy Adams, Ben Brown, Cat Cole, Dan Dorn", PrepareGate)
+	// A publisher part fails the creation gate, so the credit is not split;
+	// every piece is an existing author, so it must not be created either.
+	// (Until 2026-10-04 the example was "Shirtaloon, Travis Deverell"; a
+	// single-word piece that is an author now splits.)
+	st := newStore(t, "Big Finish Productions", "Nicholas Briggs")
+	got, err := Resolve(st, "Big Finish Productions, Nicholas Briggs", PrepareGate)
 	require.True(t, errors.Is(err, ErrCombinedCredit), "err %v", err)
 	require.Empty(t, got)
-	a, err := st.GetAuthorByName("Amy Adams, Ben Brown, Cat Cole, Dan Dorn")
+	a, err := st.GetAuthorByName("Big Finish Productions, Nicholas Briggs")
 	require.NoError(t, err)
 	require.Nil(t, a)
 }
@@ -221,20 +221,23 @@ func TestResolve_ReviewCases(t *testing.T) {
 		"Full Cast", "Mikhail Yagupov", "Arthur Stone", "Alphabet Squadron"} {
 		require.False(t, exists(n), "%s must not be created from a split", n)
 	}
-	// Four existing narrators: over the cap, so not split, and as a list of
-	// existing authors not created whole either (ErrCombinedCredit).
-	_, err = Resolve(st, "Ray Porter, Kate Reading, Michael Kramer, Tim Gerard Reynolds", PrepareGate)
-	require.True(t, errors.Is(err, ErrCombinedCredit), "err %v", err)
+	// Four existing authors: linked in order, whatever the count (#3729
+	// review B1; the cap guards only new authors).
+	got4, err := Resolve(st, "Ray Porter, Kate Reading, Michael Kramer, Tim Gerard Reynolds", PrepareGate)
+	require.NoError(t, err)
+	require.Equal(t, []string{"Ray Porter", "Kate Reading", "Michael Kramer", "Tim Gerard Reynolds"}, names(got4))
 	// Both people exist: linked, even though a junk book carries the credit
 	// as its title.
 	got, err := Resolve(st, "Amie Kaufman, Jay Kristoff", PrepareGate)
 	require.NoError(t, err)
 	require.Equal(t, []string{"Amie Kaufman", "Jay Kristoff"}, names(got))
-	// A series-name part refuses the split even when it is an author row.
+	// A part that is also a series name is linked when it is an author row
+	// (#3729 review B1): nothing is created.
 	_, err = st.CreateAuthor("Dragon Born")
 	require.NoError(t, err)
 	got, err = Resolve(st, "Dante King, Dragon Born", PrepareGate)
-	require.True(t, errors.Is(err, ErrCombinedCredit), "err %v, got %v", err, names(got))
+	require.NoError(t, err)
+	require.Equal(t, []string{"Dante King", "Dragon Born"}, names(got))
 }
 
 func TestStripBracketsAndCollective(t *testing.T) {
@@ -453,4 +456,23 @@ func TestResolve_BareBylineThatIsATitleIsKeptWhole(t *testing.T) {
 	a, err := st.GetAuthorByName("Schism Rent Asunder")
 	require.NoError(t, err)
 	require.Nil(t, a)
+}
+
+// #3729 review B1: a split into EXISTING authors links them whatever the
+// part count and even when a part is also a series name; nothing is created.
+func TestResolve_ExistingAuthorsLinkedDespiteTitleOrCount(t *testing.T) {
+	st := &countingStore{PebbleStore: newStore(t, "Michael Anderle", "Craig Martelle", "Amy Adams", "Ben Brown", "Cat Cole", "Dan Dorn")}
+	ma, err := st.GetAuthorByName("Michael Anderle")
+	require.NoError(t, err)
+	_, err = st.CreateSeries("Michael Anderle", &ma.ID)
+	require.NoError(t, err)
+	ResetTitleCache()
+	t.Cleanup(ResetTitleCache)
+	got, err := Resolve(st, "Michael Anderle, Craig Martelle", PrepareGate)
+	require.NoError(t, err)
+	require.Equal(t, []string{"Michael Anderle", "Craig Martelle"}, names(got))
+	got, err = Resolve(st, "Amy Adams, Ben Brown, Cat Cole, Dan Dorn", PrepareGate)
+	require.NoError(t, err)
+	require.Equal(t, []string{"Amy Adams", "Ben Brown", "Cat Cole", "Dan Dorn"}, names(got))
+	require.Empty(t, st.creates)
 }

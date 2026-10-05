@@ -1,5 +1,5 @@
 // file: internal/metadata/enhanced_combined_author_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4cccd595-4313-4075-bffd-0e7d842088af
 // last-edited: 2026-10-04
 
@@ -19,7 +19,7 @@ func TestBatchUpdateMetadata_MultiAuthorNameIsSplit(t *testing.T) {
 	t.Cleanup(func() { _ = st.Close() })
 	b, err := st.CreateBook(&database.Book{Title: "Mission Creep", FilePath: "/l/mc.m4b", Format: "m4b"})
 	require.NoError(t, err)
-	for _, n := range []string{"Amy Adams", "Ben Brown", "Cat Cole", "Dan Dorn", "J. N. Chaney", "Jonathan P. Brazee"} {
+	for _, n := range []string{"Big Finish Productions", "Nicholas Briggs", "J. N. Chaney", "Jonathan P. Brazee"} {
 		_, err := st.CreateAuthor(n)
 		require.NoError(t, err)
 	}
@@ -28,7 +28,7 @@ func TestBatchUpdateMetadata_MultiAuthorNameIsSplit(t *testing.T) {
 
 	errs, ok := BatchUpdateMetadata([]MetadataUpdate{
 		{BookID: b.ID, Updates: map[string]any{"author": "J.N. Chaney, Jonathan P. Brazee"}},
-		{BookID: b2.ID, Updates: map[string]any{"author": "Amy Adams, Ben Brown, Cat Cole, Dan Dorn"}},
+		{BookID: b2.ID, Updates: map[string]any{"author": "Big Finish Productions, Nicholas Briggs"}},
 	}, st, false)
 	require.Empty(t, errs)
 	require.Equal(t, 2, ok)
@@ -54,7 +54,7 @@ func TestBatchUpdateMetadata_MultiAuthorNameIsSplit(t *testing.T) {
 	got2, err := st.GetBookByID(b2.ID)
 	require.NoError(t, err)
 	require.Nil(t, got2.AuthorID)
-	c2, err := st.GetAuthorByName("Amy Adams, Ben Brown, Cat Cole, Dan Dorn")
+	c2, err := st.GetAuthorByName("Big Finish Productions, Nicholas Briggs")
 	require.NoError(t, err)
 	require.Nil(t, c2)
 }

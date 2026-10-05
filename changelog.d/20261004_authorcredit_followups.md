@@ -36,3 +36,15 @@
   - A new part one letter away from an author the book already credits
     ("Artur C. Clarke" beside "Arthur C. Clarke") is held as
     `skipped_ambiguous_author` instead of being created.
+- Review of #3729:
+  - A credit whose every part is an existing author links all of them in
+    order, whatever the number of parts and even when a part is also a series
+    or book title ("Michael Anderle, Craig Martelle"). The part cap and the
+    title check guard only new authors. Before this, iTunes imports of such
+    credits got no author.
+  - A real primary author tied at one position with another credited author
+    stays first. A combined-credit row whose rewrite would not keep the
+    primary at position 0 is held as `skipped_primary_not_first`.
+  - The file importer (and every Deluge auto-import) creates a new single
+    person-shaped author as before. Only a credit of several names, none of
+    which exists, leaves the book authorless.

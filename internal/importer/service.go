@@ -1,5 +1,5 @@
 // file: internal/importer/service.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: d0e1f2a3-b4c5-6d7e-8f9a-0b1c2d3e4f5b
 // last-edited: 2026-10-04
 
@@ -252,14 +252,19 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 			// Looked up with the shared helper (authorcredit.Lookup), which
 			// never creates: a credit naming several existing authors links
 			// them (the first is the primary, all are credited once the book
-			// exists); a single existing author links it; anything else
-			// leaves the book authorless, as this importer always did on a
-			// plain lookup miss. It used to create the author only when the
-			// lookup returned an ERROR, minting the whole credit string; a
-			// lookup error is now a failed import instead. A combined credit
-			// whose pieces are all different existing authors is no author
-			// (ErrCombinedCredit).
+			// exists) and a single existing author links it. On a miss, ONE
+			// person-shaped name ("Stephen King") is created, as this
+			// importer (and every Deluge auto-import through it) always did;
+			// only a credit of several names none of which exists stays
+			// authorless (owner decision; #3729 review). A lookup error is a
+			// failed import. A combined credit whose pieces are all different
+			// existing authors is no author (ErrCombinedCredit).
 			authors, err := authorcredit.Lookup(is.db, prepared, authorcredit.CleanGate)
+			if err == nil && len(authors) == 0 && !authorcredit.IsMultiName(prepared) && personname.LooksLikePersonName(prepared) {
+				if _, ok := authorcredit.CleanGate(prepared); ok {
+					authors, err = authorcredit.Resolve(is.db, prepared, authorcredit.CleanGate)
+				}
+			}
 			switch {
 			case errors.Is(err, authorcredit.ErrCombinedCredit):
 				logger.New("importer").Warn("artist tag %q joins existing authors the splitter will not split; not crediting it (path %s)",

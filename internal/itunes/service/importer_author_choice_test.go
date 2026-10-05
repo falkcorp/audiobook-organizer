@@ -1,5 +1,5 @@
 // file: internal/itunes/service/importer_author_choice_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 4a1d8e63-9f2b-4c75-b3e0-7d6c1f9a2b58
 // last-edited: 2026-10-04
 
@@ -89,7 +89,9 @@ func expectTitles(m *dbmocks.MockStore) {
 // not created as one combined author row (authorcredit.ErrCombinedCredit):
 // the book is left without an author, and the mock fails on any CreateAuthor.
 func TestAssignAuthorAndSeries_CombinedOfExistingAuthorsIsNotCreated(t *testing.T) {
-	// Four existing names is past the split cap: refused, never created.
+	// Four existing authors: all linked in credit order, nothing created
+	// (#3729 review B1: authors are an ordered credit list; the part cap
+	// guards only NEW authors).
 	m := dbmocks.NewMockStore(t)
 	expectTitles(m)
 	known := map[string]int{"Amy Adams": 1, "Ben Brown": 2, "Cat Cole": 3, "Dan Dorn": 4}
@@ -103,7 +105,37 @@ func TestAssignAuthorAndSeries_CombinedOfExistingAuthorsIsNotCreated(t *testing.
 	imp := newMockImporter(m)
 	book := &database.Book{}
 	imp.assignAuthorAndSeries(book, &itunes.Track{AlbumArtist: "Amy Adams, Ben Brown, Cat Cole, Dan Dorn"})
-	assert.Nil(t, book.AuthorID)
+	require.NotNil(t, book.AuthorID)
+	assert.Equal(t, 1, *book.AuthorID)
+	require.Len(t, book.Authors, 4)
+	for i, ba := range book.Authors {
+		assert.Equal(t, i+1, ba.AuthorID)
+		assert.Equal(t, i, ba.Position)
+	}
+}
+
+// #3729 review B1 repro: a part that is also a series name ("Michael
+// Anderle") does not stop two existing authors from being linked.
+func TestAssignAuthorAndSeries_ExistingAuthorNamedLikeASeriesIsLinked(t *testing.T) {
+	m := dbmocks.NewMockStore(t)
+	m.EXPECT().GetAllSeries().Return([]database.Series{{ID: 9, Name: "Michael Anderle"}}, nil).Maybe()
+	m.EXPECT().GetAllBooksCore(mock.Anything, mock.Anything).Return(nil, nil).Maybe()
+	m.EXPECT().FindAuthorByAlias(mock.Anything).Return(nil, nil).Maybe()
+	known := map[string]int{"Michael Anderle": 1, "Craig Martelle": 2}
+	m.EXPECT().GetAuthorByName(mock.Anything).RunAndReturn(func(n string) (*database.Author, error) {
+		if id, ok := known[n]; ok {
+			return &database.Author{ID: id, Name: n}, nil
+		}
+		return nil, nil
+	})
+
+	imp := newMockImporter(m)
+	book := &database.Book{}
+	imp.assignAuthorAndSeries(book, &itunes.Track{AlbumArtist: "Michael Anderle, Craig Martelle"})
+	require.NotNil(t, book.AuthorID)
+	assert.Equal(t, 1, *book.AuthorID)
+	require.Len(t, book.Authors, 2)
+	assert.Equal(t, 2, book.Authors[1].AuthorID)
 }
 
 // A single-word pen name that is an author already splits with its co-author

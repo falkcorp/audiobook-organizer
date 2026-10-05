@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/combined_author_fixer.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5c0f4a3e-2b7d-4e61-9a8c-3f1d6b2e7a90
 // last-edited: 2026-10-04
 
@@ -137,6 +137,9 @@ const (
 	// combinedSkipNotCombined: what a re-plan reports for a book that no
 	// longer credits a combined record. A plan never lists one.
 	combinedSkipNotCombined = "skipped_not_combined"
+	// combinedSkipPrimaryOrder: the rewrite would not keep a real primary
+	// author at position 0 (the organizer files by position 0).
+	combinedSkipPrimaryOrder = "skipped_primary_not_first"
 )
 
 // combinedMaxAuthorParts is the most distinct names a combined record may
@@ -942,7 +945,16 @@ func (f *combinedAuthorFixer) evaluate(store OpsStore, idx *combinedAuthorIndex,
 			}
 		}
 	}
-	proposed, dropped := combinedProposal(credits, bookID, recIDsOf(recs), targets, f.creditKeyer(store, idx, newKey))
+	realPrimary := 0
+	if primary != 0 && !inRec[primary] {
+		realPrimary = primary
+	}
+	proposed, dropped := combinedProposal(credits, bookID, recIDsOf(recs), targets, realPrimary, f.creditKeyer(store, idx, newKey))
+	if realPrimary != 0 && combinedFirstAuthor(proposed) != realPrimary {
+		// Postcondition (#3729 review B2): the organizer files a book under
+		// its position-0 author, so a real primary must stay first.
+		return finish(combinedSkipPrimaryOrder, fmt.Sprintf("the rewritten credits would put %q before the primary author %q", nameOf(combinedFirstAuthor(proposed)), nameOf(realPrimary)), true)
+	}
 	var show []string
 	for _, ba := range proposed {
 		n := newNames[ba.AuthorID]
@@ -1058,7 +1070,7 @@ func combinedVariants(idx *combinedAuthorIndex, name string) []database.Author {
 // Non-author-role rows (a narrator credit, even of a combined record) keep
 // their role and relative order; every row is renumbered.
 func combinedNextCredits(cur []database.BookAuthor, bookID string, recIDs []int, targets [][]int) []database.BookAuthor {
-	out, _ := combinedProposal(cur, bookID, recIDs, targets, nil)
+	out, _ := combinedProposal(cur, bookID, recIDs, targets, 0, nil)
 	return out
 }
 
@@ -1067,8 +1079,12 @@ func combinedNextCredits(cur []database.BookAuthor, bookID string, recIDs []int,
 // exists (keyOf returns "") is dropped, and of credits naming one person
 // (keyOf returns one key: same letters, or one an alias of the other) only
 // the first is kept. dropped lists what was removed, for the row's reason.
-func combinedProposal(cur []database.BookAuthor, bookID string, recIDs []int, targets [][]int, keyOf func(id int) string) (out, dropped []database.BookAuthor) {
-	next := combinedRewrite(cur, bookID, recIDs, targets)
+//
+// realPrimary is the book's primary author when it is a real author (not a
+// combined record being replaced), else 0: among credits at one position it
+// sorts first, so a tie never demotes it.
+func combinedProposal(cur []database.BookAuthor, bookID string, recIDs []int, targets [][]int, realPrimary int, keyOf func(id int) string) (out, dropped []database.BookAuthor) {
+	next := combinedRewrite(cur, bookID, recIDs, targets, realPrimary)
 	if keyOf == nil {
 		return next, nil
 	}
@@ -1134,7 +1150,7 @@ func (f *combinedAuthorFixer) creditKeyer(store OpsStore, idx *combinedAuthorInd
 }
 
 // combinedRewrite replaces each combined record's credit by its parts.
-func combinedRewrite(cur []database.BookAuthor, bookID string, recIDs []int, targets [][]int) []database.BookAuthor {
+func combinedRewrite(cur []database.BookAuthor, bookID string, recIDs []int, targets [][]int, realPrimary int) []database.BookAuthor {
 	isRec := map[int]int{}
 	for i, id := range recIDs {
 		isRec[id] = i
@@ -1150,7 +1166,14 @@ func combinedRewrite(cur []database.BookAuthor, bookID string, recIDs []int, tar
 		}
 	}
 	rows := append([]database.BookAuthor(nil), cur...)
-	sort.SliceStable(rows, func(i, j int) bool { return rows[i].Position < rows[j].Position })
+	sort.SliceStable(rows, func(i, j int) bool {
+		if rows[i].Position != rows[j].Position {
+			return rows[i].Position < rows[j].Position
+		}
+		// A tie: the real primary first (#3729 review B2).
+		return realPrimary != 0 && rows[i].AuthorID == realPrimary && rows[j].AuthorID != realPrimary &&
+			combinedIsAuthorRole(rows[i].Role)
+	})
 	for start := 0; start < len(rows); {
 		end := start
 		for end < len(rows) && rows[end].Position == rows[start].Position {
@@ -1165,6 +1188,9 @@ func combinedRewrite(cur []database.BookAuthor, bookID string, recIDs []int, tar
 			}
 		}
 		sort.SliceStable(parts, func(a, b int) bool {
+			if pa, pb := parts[a].AuthorID == realPrimary, parts[b].AuthorID == realPrimary; realPrimary != 0 && pa != pb {
+				return pa
+			}
 			ra, rb := partRank[parts[a].AuthorID], partRank[parts[b].AuthorID]
 			if ra.rec != rb.rec {
 				return ra.rec < rb.rec
@@ -1338,11 +1364,15 @@ func (f *combinedAuthorFixer) Apply(_ context.Context, w *repairs.Writer, fresh 
 	for _, rec := range d.records {
 		primaryChanged = primaryChanged || rec.id == oldPrimary
 	}
+	realPrimary := 0
+	if !primaryChanged {
+		realPrimary = oldPrimary
+	}
 	if primaryChanged {
 		// The primary is the first author credit of the rewritten list: the
 		// organizer files a book under its lowest-position author
 		// (organizer.authorNameFromJoin), so the two must agree.
-		first, _ := combinedProposal(d.credits, id, recIDs, targets, keyOf)
+		first, _ := combinedProposal(d.credits, id, recIDs, targets, 0, keyOf)
 		pid := combinedFirstAuthor(first)
 		if pid == 0 {
 			return fmt.Errorf("%s: row %s: the rewritten credits name no author", combinedAuthorFixerID, fresh.RowID)
@@ -1374,7 +1404,11 @@ func (f *combinedAuthorFixer) Apply(_ context.Context, w *repairs.Writer, fresh 
 		if b == nil || !sameIntPtr(b.AuthorID, d.primary) {
 			return nil, repairs.UndoEntry{}, fmt.Errorf("%w: book %s primary author changed", repairs.ErrChangedSincePlan, id)
 		}
-		next, _ := combinedProposal(cur, id, recIDs, targets, keyOf)
+		next, _ := combinedProposal(cur, id, recIDs, targets, realPrimary, keyOf)
+		if realPrimary != 0 && combinedFirstAuthor(next) != realPrimary {
+			return nil, repairs.UndoEntry{}, fmt.Errorf("%w: book %s: the rewritten credits would not keep the primary author first",
+				repairs.ErrChangedSincePlan, id)
+		}
 		after := make([]database.BookAuthor, len(next))
 		copy(after, next)
 		var afterID *int
