@@ -1,7 +1,7 @@
 // file: internal/server/wire_audiobooks_routes.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: c3d4e5f6-a7b8-9012-cdef-345678901234
-// last-edited: 2026-09-26
+// last-edited: 2026-10-05
 
 package server
 
@@ -30,6 +30,9 @@ func (s *Server) wireAudiobooksRoutes(
 	protected.GET("/audiobooks/soft-deleted", s.perm(auth.PermLibraryView), audiobooksH.ListSoftDeletedAudiobooks)
 	protected.DELETE("/audiobooks/purge-soft-deleted", s.perm(auth.PermLibraryDelete), audiobooksH.PurgeSoftDeletedAudiobooks)
 	protected.POST("/audiobooks/:id/restore", s.perm(auth.PermLibraryOrganize), audiobooksH.RestoreAudiobook)
+	// The owner's explicit "discard progress and purge" for one trashed book
+	// the nightly purge keeps because a user has listening state on it.
+	protected.POST("/audiobooks/:id/discard-progress-and-purge", s.perm(auth.PermLibraryDelete), audiobooksH.DiscardProgressAndPurge)
 	// reconcile-files re-stats the book's files and corrects FileSize. It does
 	// NOT re-read anything. /rescan is kept as a DEPRECATED alias for the same
 	// handler: the old name always meant this, so repointing it at the new

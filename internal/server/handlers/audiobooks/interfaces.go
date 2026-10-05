@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/interfaces.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 110386de-3e07-4ef3-b0e0-2e717a249e91
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 // Narrow dependency interfaces for the audiobooks-domain HTTP handlers (the
 // main library list / CRUD domain: list, count, facets, soft-delete /
@@ -149,7 +149,7 @@ type AudiobookReader interface {
 	CountAudiobooks(ctx context.Context) (int, error)
 }
 
-// AudiobookTrashService AudiobookTrashService is the soft-delete lifecycle: list and count what is in the trash, restore one, delete one, and purge.
+// AudiobookTrashService AudiobookTrashService is the soft-delete lifecycle: list and count what is in the trash, flag the books holding listening state, restore one, delete one, discard one's progress and purge it, and purge.
 type AudiobookTrashService interface {
 	GetSoftDeletedBooks(ctx context.Context, limit, offset int, olderThanDays *int) ([]database.Book, error)
 	// CountSoftDeletedBooks is the exact trash size. It replaced a
@@ -159,6 +159,12 @@ type AudiobookTrashService interface {
 	PurgeSoftDeletedBooks(ctx context.Context, deleteFiles bool, olderThanDays *int) (*audiobookspkg.PurgeResult, error)
 	RestoreAudiobook(ctx context.Context, id string) (*database.Book, error)
 	DeleteAudiobook(ctx context.Context, id string, opts *audiobookspkg.DeleteAudiobookOptions) (map[string]any, error)
+	// TrashProgress flags the trashed books a user still has listening
+	// state on (the state the nightly purge keeps them for).
+	TrashProgress(ctx context.Context, bookIDs []string) (map[string]audiobookspkg.TrashProgressInfo, error)
+	// DiscardProgressAndPurge clears every user's listening state on one
+	// trashed book and purges it. It refuses a book not in the trash.
+	DiscardProgressAndPurge(ctx context.Context, id, actor string) (*audiobookspkg.DiscardProgressResult, error)
 }
 
 // AudiobookUserTagService AudiobookUserTagService is the user-tag surface: enumerate, read per book, and batch add/remove.

@@ -1,5 +1,5 @@
 // file: internal/audiobooks/purge_user_state_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7b9a844a-321a-4f77-9487-2f6311409ef2
 // last-edited: 2026-10-05
 
@@ -28,10 +28,10 @@ func purgeSeedProgress(t *testing.T, store *database.PebbleStore, bookID string)
 	return u
 }
 
-// A soft-deleted book a user still has listening state on is never purged:
-// that state never reached a live book (a merge follow that failed with no
-// repair record, or one a pending repair still holds), and the hard delete
-// would drop it for good. It is reported, not counted as an error.
+// A soft-deleted book a user still has listening state on, with no live
+// version of it to carry the state to, is never purged: the hard delete would
+// drop the state for good. It is kept and reported as kept_has_progress, not
+// counted as an error.
 func TestPurge_RefusesBookHoldingUserState(t *testing.T) {
 	svc, store, _ := setupPurgeBoundary(t)
 	softDeleted(t, store, "held", "")
@@ -40,8 +40,10 @@ func TestPurge_RefusesBookHoldingUserState(t *testing.T) {
 	res, err := svc.PurgeSoftDeletedBooks(context.Background(), false, nil)
 	require.NoError(t, err)
 	require.Equal(t, 0, res.Purged)
-	require.Equal(t, 1, res.SkippedHasUserState)
-	require.Equal(t, []string{"held"}, res.SkippedHasUserStateIDs)
+	require.Equal(t, 1, res.KeptHasProgress)
+	require.Equal(t, []string{"held"}, res.KeptHasProgressIDs)
+	require.Zero(t, res.CarriedToSibling)
+	require.Zero(t, res.CarryFailed)
 	require.Empty(t, res.Errors)
 	b, err := store.GetBookByID("held")
 	require.NoError(t, err)
@@ -66,7 +68,8 @@ func TestPurge_MergedLoserWithMovedStateStillPurges(t *testing.T) {
 	res, err := svc.PurgeSoftDeletedBooks(context.Background(), false, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, res.Purged, "result %+v", res)
-	require.Zero(t, res.SkippedHasUserState)
+	require.Zero(t, res.KeptHasProgress)
+	require.Zero(t, res.CarriedToSibling, "a drained row is not state to carry")
 	moved, err := store.GetUserBookState(u.ID, keep.ID)
 	require.NoError(t, err)
 	require.Equal(t, 40, moved.ProgressPct)

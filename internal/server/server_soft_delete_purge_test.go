@@ -1,7 +1,7 @@
 // file: internal/server/server_soft_delete_purge_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 4a3b2c1d-0e9f-8a7b-6c5d-4e3f2a1b0c9d
-// last-edited: 2026-09-02
+// last-edited: 2026-10-05
 
 package server
 
@@ -76,4 +76,32 @@ func TestRunAutoPurgeSoftDeleted_DeletesOldEntries(t *testing.T) {
 	// File removed.
 	_, err = os.Stat(filePath)
 	assert.Error(t, err)
+}
+
+// POST /audiobooks/:id/discard-progress-and-purge is wired, and refuses a
+// book that is not in the trash: 409, the book and the user's progress stay.
+func TestDiscardProgressAndPurge_RouteRefusesLiveBook(t *testing.T) {
+	server, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	store := database.GetGlobalStore()
+	book, err := store.CreateBook(&database.Book{Title: "Still Listening", Format: "m4b"})
+	require.NoError(t, err)
+	u, err := store.CreateUser("reader", "reader@example.com", "argon2id", "x", []string{"user"}, "active")
+	require.NoError(t, err)
+	require.NoError(t, store.SetUserBookState(&database.UserBookState{
+		UserID: u.ID, BookID: book.ID, Status: database.UserBookStatusInProgress, ProgressPct: 30, LastActivityAt: time.Now(),
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/audiobooks/"+book.ID+"/discard-progress-and-purge", nil)
+	w := httptest.NewRecorder()
+	server.router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+
+	fetched, err := store.GetBookByID(book.ID)
+	require.NoError(t, err)
+	require.NotNil(t, fetched)
+	st, err := store.GetUserBookState(u.ID, book.ID)
+	require.NoError(t, err)
+	require.Equal(t, 30, st.ProgressPct)
 }

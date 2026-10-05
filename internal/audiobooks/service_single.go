@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.11.0
+// version: 1.13.0
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
 // last-edited: 2026-10-05
 
@@ -12,8 +12,12 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -395,7 +399,22 @@ func (svc *AudiobookService) CountSoftDeletedBooks(ctx context.Context, olderTha
 	}
 }
 
-// PurgeSoftDeletedBooks permanently deletes soft-deleted audiobooks
+// PurgeSoftDeletedBooks permanently deletes soft-deleted audiobooks.
+//
+// A book a user still has listening state on is purged only once that state
+// is safe: when a member of its version group that Audiobookshelf lists
+// exists, the state is carried there first, all or nothing
+// (merge.CarryStateThenHardDelete with a precheck that re-checks the listing under
+// the merge lock), and
+// the book is purged in the same hold of the merge lock; a carry that does not
+// complete keeps the book. With no listed sibling the book stays in the trash,
+// flagged "has progress" in the trash listing, until the owner restores it or
+// discards its progress (DiscardProgressAndPurge).
+//
+// The books are processed by a bounded worker pool, one version group per
+// worker at a time (purgePartitions), so two workers never carry state into
+// or delete from the same group concurrently. The carries themselves still
+// run one at a time: each holds the global merge lock.
 func (svc *AudiobookService) PurgeSoftDeletedBooks(ctx context.Context, deleteFiles bool, olderThanDays *int) (*PurgeResult, error) {
 	if svc.store == nil {
 		return nil, fmt.Errorf("database not initialized")
@@ -425,144 +444,236 @@ func (svc *AudiobookService) PurgeSoftDeletedBooks(ctx context.Context, deleteFi
 		}
 	}
 
-	for _, book := range books {
-		// Step 0: refuse a book that still owns book_file rows — BEFORE any
-		// side effect (external-ID tombstones, iTunes removes, the tombstone
-		// snapshot), because a book we will not delete must keep all of those.
-		//
-		// store.DeleteBook never deletes book_file rows, so purging such a
-		// book used to leave every one of them naming a book with no row. The
-		// commonest case is a dedup-merge loser: merge.MergeBooks soft-deletes
-		// it and deliberately leaves its files on it (they are its own version
-		// of the audio, not the survivor's), so every purged loser orphaned
-		// its rows. Repointing them onto the survivor was considered and
-		// rejected: that would hand the survivor a second copy of the book as
-		// extra tracks — the merge contract says the loser's files stay the
-		// loser's. Deleting the rows is data loss. So the book stays
-		// soft-deleted (hidden, restorable) and is reported.
-		//
-		// DeleteBook enforces the same rule (database.ErrBookOwnsFiles); this
-		// pre-check exists so the refusal happens before the side effects
-		// above, not after them. Fail closed: an unreadable file list is not
-		// proof there are no rows.
-		ownedFiles, ownErr := svc.store.GetBookFiles(book.ID)
-		if ownErr != nil {
-			result.Errors = append(result.Errors, fmt.Sprintf("%s: not purged: cannot read its book_file rows: %v", book.ID, ownErr))
-			continue
+	var mu sync.Mutex
+	var g errgroup.Group
+	g.SetLimit(runtime.NumCPU())
+	for _, part := range purgePartitions(books) {
+		if ctx.Err() != nil {
+			break
 		}
-		if len(ownedFiles) > 0 {
-			result.SkippedOwnsFiles++
-			result.SkippedOwnsFilesIDs = append(result.SkippedOwnsFilesIDs, book.ID)
-			continue
-		}
-		// Step 0b: refuse a book a user still has listening state on, for
-		// the same reason and at the same point (before any side effect). A
-		// merge moves a loser's progress to the book holding the group's
-		// flag; progress still here is progress that never reached a live
-		// book (the move failed with no repair record, or a pending repair
-		// still holds it), and the hard delete would drop it. Fail closed: an
-		// unreadable answer is not proof there is none.
-		hasState, stateErr := stateProbe.Has(book.ID)
-		if stateErr != nil {
-			result.Errors = append(result.Errors, fmt.Sprintf("%s: not purged: cannot read users' listening state on it: %v", book.ID, stateErr))
-			continue
-		}
-		if hasState {
-			result.SkippedHasUserState++
-			result.SkippedHasUserStateIDs = append(result.SkippedHasUserStateIDs, book.ID)
-			continue
-		}
-
-		// Tombstone external IDs so reimport is blocked
-		if eidStore := asExternalIDStore(svc.store); eidStore != nil {
-			extIDs, _ := eidStore.GetExternalIDsForBook(book.ID)
-			for _, ext := range extIDs {
-				_ = eidStore.TombstoneExternalID(ext.Source, ext.ExternalID)
-			}
-		}
-
-		// Defense-in-depth: enqueue iTunes removes for any PIDs still
-		// on this book. Soft-delete already enqueues these but if the
-		// book was soft-deleted before that hook existed, this is the
-		// last chance to clean iTunes before the row vanishes.
-		bookCopy := book
-		svc.enqueueITunesRemovesForBook(book.ID, &bookCopy)
-
-		// Step 1: Create tombstone (snapshot of book for rollback)
-		if err := svc.store.CreateBookTombstone(&book); err != nil {
-			result.Errors = append(result.Errors, fmt.Sprintf("%s: failed to create tombstone: %v", book.ID, err))
-			continue
-		}
-
-		// Step 2: Delete from database (book record gone, tombstone preserved)
-		if err := svc.store.DeleteBook(book.ID); err != nil {
-			if errors.Is(err, database.ErrBookOwnsFiles) {
-				// A file row landed between the pre-check and the delete.
-				result.SkippedOwnsFiles++
-				result.SkippedOwnsFilesIDs = append(result.SkippedOwnsFilesIDs, book.ID)
-				continue
-			}
-			result.Errors = append(result.Errors, fmt.Sprintf("%s: failed to delete DB record: %v", book.ID, err))
-			// Tombstone exists but book still exists — sweeper will clean up tombstone
-			continue
-		}
-
-		// Step 3: Delete file if requested (only from organizer root, never
-		// from protected/import paths, and never a path anything live still
-		// references).
-		//
-		// The book owned no book_file rows (step 0, enforced again by
-		// DeleteBook), so the only path it names is its own FilePath. That
-		// path is NOT necessarily its own: duplicate book rows over one file
-		// are the commonest dedup merge, and the survivor keeps the very file
-		// the loser's FilePath names. Removing it deleted the survivor's
-		// audio. So a path any book_file row or any live book still names is
-		// left alone. (A combine's absorbed shell has FilePath cleared for the
-		// same reason — merge/service.go softDeleteAbsorbed.)
-		if deleteFiles && book.FilePath != "" {
-			if isProtectedPath(svc.store, book.FilePath) {
-				slog.Debug("purge skipping file deletion for — protected path", "bookID", book.ID, "filePath", book.FilePath)
-			} else if refErr := svc.purgePathStillReferenced(book.FilePath); refErr != nil {
-				result.Errors = append(result.Errors, fmt.Sprintf("%s: book purged, file kept: %v", book.ID, refErr))
-			} else {
-				info, statErr := os.Stat(book.FilePath)
-				if statErr == nil && info.IsDir() {
-					// Directory-based book. It owns no file rows, so there is
-					// nothing of its own inside to remove: remove the directory
-					// only if it is already empty.
-					if entries, rdErr := os.ReadDir(book.FilePath); rdErr == nil && len(entries) == 0 {
-						if rmErr := os.Remove(book.FilePath); rmErr != nil && !os.IsNotExist(rmErr) {
-							result.Errors = append(result.Errors, fmt.Sprintf("%s: failed to remove empty dir %s: %v", book.ID, book.FilePath, rmErr))
-						} else if rmErr == nil {
-							result.FilesDeleted++
-							removeEmptyParentsUpToRoot(book.FilePath)
-						}
-					}
-				} else if statErr == nil {
-					// Single-file book
-					if err := os.Remove(book.FilePath); err != nil && !os.IsNotExist(err) {
-						result.Errors = append(result.Errors, fmt.Sprintf("%s: failed to delete file (tombstone preserved): %v", book.ID, err))
-						// DB record gone, file still exists, tombstone preserved for sweeper
-					} else if err == nil {
-						result.FilesDeleted++
-						removeEmptyParentsUpToRoot(book.FilePath)
-					}
+		g.Go(func() error {
+			for i := range part {
+				if ctx.Err() != nil {
+					return nil
 				}
-				// If statErr is os.IsNotExist, file is already gone — that's fine
+				out := svc.purgeOne(&part[i], deleteFiles, stateProbe)
+				mu.Lock()
+				result.add(part[i].ID, out)
+				mu.Unlock()
 			}
-		}
-
-		// Step 4: Clean up tombstone (best-effort — sweeper handles failures)
-		_ = svc.store.DeleteBookTombstone(book.ID)
-
-		result.Purged++
+			return nil
+		})
 	}
+	if err := g.Wait(); err != nil {
+		// The workers report per-book outcomes in result and return nil;
+		// an error here is a bug, reported rather than dropped.
+		result.Errors = append(result.Errors, fmt.Sprintf("purge worker failed: %v", err))
+	}
+	if err := ctx.Err(); err != nil {
+		result.Errors = append(result.Errors, fmt.Sprintf("purge stopped early: %v", err))
+	}
+	result.sortIDs()
 
 	if result.Purged > 0 {
 		svc.InvalidateBookCaches()
 	}
 
 	return result, nil
+}
+
+// purgeOne runs the purge of one soft-deleted book and reports what
+// happened. It is safe to run for books of different version groups at once.
+func (svc *AudiobookService) purgeOne(book *database.Book, deleteFiles bool, stateProbe *merge.UserStateProbe) purgeOutcome {
+	// Step 0: refuse a book that still owns book_file rows — BEFORE any
+	// side effect (external-ID tombstones, iTunes removes, the tombstone
+	// snapshot), because a book we will not delete must keep all of those.
+	//
+	// store.DeleteBook never deletes book_file rows, so purging such a
+	// book used to leave every one of them naming a book with no row. The
+	// commonest case is a dedup-merge loser: merge.MergeBooks soft-deletes
+	// it and deliberately leaves its files on it (they are its own version
+	// of the audio, not the survivor's), so every purged loser orphaned
+	// its rows. Repointing them onto the survivor was considered and
+	// rejected: that would hand the survivor a second copy of the book as
+	// extra tracks — the merge contract says the loser's files stay the
+	// loser's. Deleting the rows is data loss. So the book stays
+	// soft-deleted (hidden, restorable) and is reported.
+	//
+	// DeleteBook enforces the same rule (database.ErrBookOwnsFiles); this
+	// pre-check exists so the refusal happens before the side effects
+	// above, not after them. Fail closed: an unreadable file list is not
+	// proof there are no rows.
+	ownedFiles, ownErr := svc.store.GetBookFiles(book.ID)
+	if ownErr != nil {
+		return purgeOutcome{kind: purgeFailed, errs: []string{fmt.Sprintf("%s: not purged: cannot read its book_file rows: %v", book.ID, ownErr)}}
+	}
+	if len(ownedFiles) > 0 {
+		return purgeOutcome{kind: purgeOwnsFiles}
+	}
+	// Step 0b: a book a user still has listening state on, checked at the
+	// same point (before any side effect). A merge moves a loser's progress
+	// to the book holding the group's flag; progress still here is progress
+	// that never reached a live book (the move failed with no repair record,
+	// a pending repair still holds it, or the user trashed a book they were
+	// listening to), and a plain hard delete would drop it. Fail closed: an
+	// unreadable answer is not proof there is none.
+	hasState, stateErr := stateProbe.Has(book.ID)
+	if stateErr != nil {
+		return purgeOutcome{kind: purgeFailed, errs: []string{fmt.Sprintf("%s: not purged: cannot read users' listening state on it: %v", book.ID, stateErr)}}
+	}
+	if hasState {
+		return svc.purgeCarryingState(book, deleteFiles)
+	}
+
+	if err := svc.purgeDeleteRow(book); err != nil {
+		if errors.Is(err, database.ErrBookOwnsFiles) {
+			// A file row landed between the pre-check and the delete.
+			return purgeOutcome{kind: purgeOwnsFiles}
+		}
+		return purgeOutcome{kind: purgeFailed, errs: []string{fmt.Sprintf("%s: %v", book.ID, err)}}
+	}
+	n, errs := svc.purgeFinish(book, deleteFiles)
+	return purgeOutcome{kind: purgePurged, filesDeleted: n, errs: errs}
+}
+
+// purgeCarryingState purges a book that holds users' listening state: the
+// state goes to a version-group sibling Audiobookshelf lists first, then the row is deleted
+// in the same hold of the merge lock. No live sibling keeps the book
+// (purgeKeptHasProgress); a carry that does not complete keeps it too
+// (purgeCarryFailed) with every user's state put back on it.
+func (svc *AudiobookService) purgeCarryingState(book *database.Book, deleteFiles bool) purgeOutcome {
+	sibling, err := svc.liveSiblingFor(book)
+	if err != nil {
+		return purgeOutcome{kind: purgeCarryFailed, errs: []string{fmt.Sprintf("%s: not purged, listening state kept on it: cannot look for a live version to carry it to: %v", book.ID, err)}}
+	}
+	if sibling == "" {
+		return purgeOutcome{kind: purgeKeptHasProgress}
+	}
+	merger, ok := database.AsCapability[merge.UserProgressMerger](svc.store)
+	if !ok {
+		return purgeOutcome{kind: purgeCarryFailed, errs: []string{fmt.Sprintf("%s: not purged, listening state kept on it: the store cannot carry listening state", book.ID)}}
+	}
+	// Re-check under the merge lock, before anything moves, that ABS still
+	// lists the sibling: its primary flag or state can change between the
+	// choice above and the carry.
+	precheck := func() error {
+		cur, gerr := svc.store.GetBookByID(sibling)
+		if gerr != nil {
+			return fmt.Errorf("%w: re-read %s: %w", errSiblingNotListed, sibling, gerr)
+		}
+		if !siblingIsCarryTarget(cur) {
+			return fmt.Errorf("%w: %s", errSiblingNotListed, sibling)
+		}
+		return nil
+	}
+	err = merge.CarryStateThenHardDelete(merger, sibling, book.ID, precheck, func() error {
+		return svc.purgeDeleteRow(book)
+	})
+	switch {
+	case errors.Is(err, errSiblingNotListed):
+		// Nothing moved; with no listed version to carry to, the book stays
+		// in the trash flagged "has progress", as when there was none.
+		return purgeOutcome{kind: purgeKeptHasProgress}
+	case errors.Is(err, merge.ErrStateCarryIncomplete):
+		return purgeOutcome{kind: purgeCarryFailed, errs: []string{fmt.Sprintf("%s: not purged, listening state kept on it: %v", book.ID, err)}}
+	case errors.Is(err, database.ErrBookOwnsFiles):
+		// The state is on the sibling now; the row stays because a file row
+		// landed between the pre-check and the delete.
+		return purgeOutcome{kind: purgeOwnsFiles, errs: []string{fmt.Sprintf("%s: listening state moved to %s, but the book was not purged: %v", book.ID, sibling, err)}}
+	case err != nil:
+		return purgeOutcome{kind: purgeFailed, errs: []string{fmt.Sprintf("%s: listening state moved to %s, but the book was not purged: %v", book.ID, sibling, err)}}
+	}
+	n, errs := svc.purgeFinish(book, deleteFiles)
+	return purgeOutcome{kind: purgeCarried, filesDeleted: n, errs: errs}
+}
+
+// purgeDeleteRow is the purge's row delete: the side effects that must
+// happen only to a book that is really going (external-ID tombstones so a
+// reimport is blocked, iTunes removes), the tombstone snapshot, then the
+// row. On a carry it runs under the merge lock as the carry's delete, so a
+// carry that fails leaves none of these behind.
+func (svc *AudiobookService) purgeDeleteRow(book *database.Book) error {
+	// Tombstone external IDs so reimport is blocked
+	if eidStore := asExternalIDStore(svc.store); eidStore != nil {
+		extIDs, _ := eidStore.GetExternalIDsForBook(book.ID)
+		for _, ext := range extIDs {
+			_ = eidStore.TombstoneExternalID(ext.Source, ext.ExternalID)
+		}
+	}
+
+	// Defense-in-depth: enqueue iTunes removes for any PIDs still
+	// on this book. Soft-delete already enqueues these but if the
+	// book was soft-deleted before that hook existed, this is the
+	// last chance to clean iTunes before the row vanishes.
+	bookCopy := *book
+	svc.enqueueITunesRemovesForBook(book.ID, &bookCopy)
+
+	// Step 1: Create tombstone (snapshot of book for rollback)
+	if err := svc.store.CreateBookTombstone(book); err != nil {
+		return fmt.Errorf("failed to create tombstone: %w", err)
+	}
+
+	// Step 2: Delete from database (book record gone, tombstone preserved).
+	// On failure the tombstone exists but the book still exists — the
+	// sweeper will clean up the tombstone.
+	if err := svc.store.DeleteBook(book.ID); err != nil {
+		return fmt.Errorf("failed to delete DB record: %w", err)
+	}
+	return nil
+}
+
+// purgeFinish runs after the row is gone: the on-disk removal when
+// requested, then the tombstone cleanup. It reports how many files or
+// directories it removed and the errors to report.
+func (svc *AudiobookService) purgeFinish(book *database.Book, deleteFiles bool) (filesDeleted int, errs []string) {
+	// Step 3: Delete file if requested (only from organizer root, never
+	// from protected/import paths, and never a path anything live still
+	// references).
+	//
+	// The book owned no book_file rows (step 0, enforced again by
+	// DeleteBook), so the only path it names is its own FilePath. That
+	// path is NOT necessarily its own: duplicate book rows over one file
+	// are the commonest dedup merge, and the survivor keeps the very file
+	// the loser's FilePath names. Removing it deleted the survivor's
+	// audio. So a path any book_file row or any live book still names is
+	// left alone. (A combine's absorbed shell has FilePath cleared for the
+	// same reason — merge/service.go softDeleteAbsorbed.)
+	if deleteFiles && book.FilePath != "" {
+		if isProtectedPath(svc.store, book.FilePath) {
+			slog.Debug("purge skipping file deletion for — protected path", "bookID", book.ID, "filePath", book.FilePath)
+		} else if refErr := svc.purgePathStillReferenced(book.FilePath); refErr != nil {
+			errs = append(errs, fmt.Sprintf("%s: book purged, file kept: %v", book.ID, refErr))
+		} else {
+			info, statErr := os.Stat(book.FilePath)
+			if statErr == nil && info.IsDir() {
+				// Directory-based book. It owns no file rows, so there is
+				// nothing of its own inside to remove: remove the directory
+				// only if it is already empty.
+				if entries, rdErr := os.ReadDir(book.FilePath); rdErr == nil && len(entries) == 0 {
+					if rmErr := os.Remove(book.FilePath); rmErr != nil && !os.IsNotExist(rmErr) {
+						errs = append(errs, fmt.Sprintf("%s: failed to remove empty dir %s: %v", book.ID, book.FilePath, rmErr))
+					} else if rmErr == nil {
+						filesDeleted++
+						removeEmptyParentsUpToRoot(book.FilePath)
+					}
+				}
+			} else if statErr == nil {
+				// Single-file book
+				if err := os.Remove(book.FilePath); err != nil && !os.IsNotExist(err) {
+					errs = append(errs, fmt.Sprintf("%s: failed to delete file (tombstone preserved): %v", book.ID, err))
+					// DB record gone, file still exists, tombstone preserved for sweeper
+				} else if err == nil {
+					filesDeleted++
+					removeEmptyParentsUpToRoot(book.FilePath)
+				}
+			}
+			// If statErr is os.IsNotExist, file is already gone — that's fine
+		}
+	}
+
+	// Step 4: Clean up tombstone (best-effort — sweeper handles failures)
+	_ = svc.store.DeleteBookTombstone(book.ID)
+	return filesDeleted, errs
 }
 
 // purgePathStillReferenced returns a non-nil error naming the reason when path

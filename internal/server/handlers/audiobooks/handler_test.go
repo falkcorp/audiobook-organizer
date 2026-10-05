@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_test.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 5cd764d5-8036-425c-842e-c49d0d44acec
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 // Tests for the audiobooks-domain handlers (main library list / CRUD). The
 // store / audiobook-service / updater / write-back / metadata-state /
@@ -322,6 +322,8 @@ func TestListSoftDeletedAudiobooks(t *testing.T) {
 	// unequal to len(items): the assertion below fails if total ever again
 	// derives from the fetched page or a capped refetch.
 	d.svc.EXPECT().CountSoftDeletedBooks(mock.Anything, mock.Anything).Return(12345, nil)
+	d.svc.EXPECT().TrashProgress(mock.Anything, []string{"b1"}).
+		Return(map[string]audiobookspkg.TrashProgressInfo{"b1": {}}, nil)
 	c, w := newCtx("GET", "/audiobooks/soft-deleted", nil, nil)
 	h.ListSoftDeletedAudiobooks(c)
 	if w.Code != http.StatusOK {

@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_types.go
-// version: 1.6.0
+// version: 1.8.0
 // guid: a3f9b2c1-d4e5-6f70-8a9b-0c1d2e3f4a5b
 // last-edited: 2026-10-05
 
@@ -55,18 +55,30 @@ type PurgeResult struct {
 	// real errors. The nightly job reports the count once per run.
 	SkippedOwnsFiles    int      `json:"skipped_owns_files"`
 	SkippedOwnsFilesIDs []string `json:"skipped_owns_files_ids,omitempty"`
-	// SkippedHasUserState counts books left soft-deleted because a user
-	// still has listening state on them (merge.BookHasCarryableUserState):
-	// progress, a position, a finished flag. A merge moves a loser's state to
-	// the book that holds the group's flag; state still here means that move
-	// did not happen (it failed with no repair record, or a pending repair
-	// still holds it), and hard-deleting the row would lose it for good.
-	// Named in SkippedHasUserStateIDs, reported once per run like
-	// SkippedOwnsFiles. A book the user deleted while listening to it stays
-	// here too until the state is cleared or moved.
-	SkippedHasUserState    int      `json:"skipped_has_user_state"`
-	SkippedHasUserStateIDs []string `json:"skipped_has_user_state_ids,omitempty"`
-	Errors                 []string `json:"errors"`
+	// The next three count the books a user still has listening state on
+	// (merge.BookHasCarryableUserState: a position, a status, progress,
+	// listened time or the hide flag). Such a book is never purged with its
+	// state on it. Each count is named in its *IDs list and reported once
+	// per run like SkippedOwnsFiles.
+	//
+	// CarriedToSibling: the state was carried, all or nothing, to a member
+	// of the book's version group that Audiobookshelf lists, and the book
+	// was then purged. These are also counted in Purged.
+	CarriedToSibling    int      `json:"carried_to_sibling"`
+	CarriedToSiblingIDs []string `json:"carried_to_sibling_ids,omitempty"`
+	// KeptHasProgress: no version-group sibling Audiobookshelf lists exists
+	// (a hidden copy -- not primary, not organized, quarantined -- never
+	// receives the state, or it would be stranded out of sight), so the book
+	// stays in the trash, shown as "has progress", until the owner restores
+	// it or discards its progress (DiscardProgressAndPurge).
+	KeptHasProgress    int      `json:"kept_has_progress"`
+	KeptHasProgressIDs []string `json:"kept_has_progress_ids,omitempty"`
+	// CarryFailed: a sibling exists but the carry did not complete (or the
+	// sibling could not be looked up). Fail closed: every user's state is
+	// back on the book and it stays in the trash; the reason is in Errors.
+	CarryFailed    int      `json:"carry_failed"`
+	CarryFailedIDs []string `json:"carry_failed_ids,omitempty"`
+	Errors         []string `json:"errors"`
 }
 
 // AudiobookUpdate represents a partial update to an audiobook
