@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-05-linking-versions-brings-the-whole-family-executive-summary.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.4.1 -->
 <!-- guid: 0b6f6f3e-7a52-4c1b-9d0e-5e2c8a41d7b9 -->
 <!-- last-edited: 2026-10-05 -->
 
@@ -129,7 +129,9 @@ nightly purge permanently deleted that book, and the progress with it.
 its own safety record. Separately, the purge now refuses any retired book that
 still holds someone's progress and lists it instead. Two clean-ups that
 permanently delete duplicate books (the duplicate-version clean-up and the
-iTunes regroup) now skip such a book the same way. Ordinary merged-away books,
+iTunes regroup) now skip such a book the same way. Undoing an iTunes
+library copy now moves its listeners' progress back to the original first,
+and refuses to undo if it cannot. Ordinary merged-away books,
 whose progress has already moved, still purge.
 
 ## Undo that left progress on the wrong book

@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service.go
-// version: 1.49.0
+// version: 1.50.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-10-05
 
@@ -25,6 +25,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 	"github.com/falkcorp/audiobook-organizer/internal/searchcache"
 )
@@ -163,11 +164,11 @@ type perUserStateStore interface {
 	// DeleteUserPreference retires a book's pre-migration state blob once its
 	// per-field rows have been written (database.DeleteLegacyMetadataState).
 	DeleteUserPreference(key string) error
-	GetUserBookState(userID, bookID string) (*database.UserBookState, error)
-	// ListUsers and ListUserPositionsForBook let the purge refuse a book a
-	// user still has listening state on (merge.BookHasCarryableUserState).
-	ListUsers() ([]database.User, error)
-	ListUserPositionsForBook(userID, bookID string) ([]database.UserPosition, error)
+	// merge.UserStateReader (ListUsers, GetUserBookState,
+	// ListUserPositionsForBook) lets the purge refuse a book a user still has
+	// listening state on (merge.UserStateProbe). Embedded, not listed, so the
+	// group stays within the interface-width limit.
+	merge.UserStateReader
 	GetMetadataFieldStates(bookID string) ([]database.MetadataFieldState, error)
 	UpsertMetadataFieldState(state *database.MetadataFieldState) error
 	DeleteMetadataFieldState(bookID, field string) error
