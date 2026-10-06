@@ -8,12 +8,15 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
+	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 
 // appliedBooks is fakeBooks with b1 already applied under status.
@@ -194,5 +197,94 @@ func TestClaimIndex_AppliedBookClaimsItsOwnASIN(t *testing.T) {
 				t.Fatalf("partial_book blocked=%v, want %v (reason=%q gate=%+v)", blocked, tc.blocks, p.Reason, p.Gate)
 			}
 		})
+	}
+}
+
+// previewTestReporter records the progress messages a preview run writes.
+type previewTestReporter struct {
+	mu   sync.Mutex
+	msgs []string
+}
+
+func (r *previewTestReporter) UpdateProgress(_, _ int, m string) error {
+	r.mu.Lock()
+	r.msgs = append(r.msgs, m)
+	r.mu.Unlock()
+	return nil
+}
+func (r *previewTestReporter) Log(slog.Level, string, ...slog.Attr) error { return nil }
+func (r *previewTestReporter) Logger() *slog.Logger                       { return slog.Default() }
+func (r *previewTestReporter) Checkpoint(any) error                       { return nil }
+func (r *previewTestReporter) IsCanceled() bool                           { return false }
+func (r *previewTestReporter) Trigger(context.Context, string, any) error { return nil }
+func (r *previewTestReporter) SetCurrentItem(string)                      {}
+func (r *previewTestReporter) RunPhase(ctx context.Context, _ string, fn func(context.Context, opsregistry.Reporter) error) error {
+	return fn(ctx, r)
+}
+
+// previewResults is an in-memory previewResultStore.
+type previewResults struct {
+	mu   sync.Mutex
+	rows []database.OperationResult
+}
+
+func (p *previewResults) CreateOperationResult(r *database.OperationResult) error {
+	p.mu.Lock()
+	p.rows = append(p.rows, *r)
+	p.mu.Unlock()
+	return nil
+}
+func (p *previewResults) GetOperationResults(string) ([]database.OperationResult, error) {
+	return p.rows, nil
+}
+
+// listingPreviewSvc is fakePreviewSvc that lists ids as the cached books.
+type listingPreviewSvc struct {
+	fakePreviewSvc
+	ids []string
+}
+
+func (l listingPreviewSvc) ListCachedSummaries(context.Context) ([]metafetch.MetadataCacheSummary, error) {
+	out := make([]metafetch.MetadataCacheSummary, 0, len(l.ids))
+	for _, id := range l.ids {
+		out = append(out, metafetch.MetadataCacheSummary{BookID: id, CandidateCount: 1})
+	}
+	return out, nil
+}
+
+// The all_cached dry run -- "everything that would be applied" -- now lists
+// every applied book too, since an apply keeps its candidates. Each comes back
+// as a skipped / already_applied row and is counted in the run's message;
+// it is never counted as would-apply.
+func TestRunBulkApplyPreview_AllCachedReportsAlreadyApplied(t *testing.T) {
+	books := appliedBooks("matched")
+	dur := 36000
+	books["b2"] = &database.Book{ID: "b2", Title: "A Title", FilePath: "/lib/An Author/Other/A Title.m4b", Duration: &dur}
+	svc := listingPreviewSvc{fakePreviewSvc: fakePreviewSvc{&fakeApplySvc{candidates: oneCandidate(t)}}, ids: []string{"b1", "b2"}}
+	rep := &previewTestReporter{}
+	res := &previewResults{}
+	if err := runBulkApplyPreview(context.Background(), rep, svc, books, res, "op-preview", bulkApplyPreviewParams{AllCached: true}); err != nil {
+		t.Fatalf("runBulkApplyPreview: %v", err)
+	}
+	verdicts := map[string]bulkApplyPreviewRow{}
+	for _, r := range res.rows {
+		if r.BookID == previewIndexRowID {
+			continue
+		}
+		var row bulkApplyPreviewRow
+		if err := json.Unmarshal([]byte(r.ResultJSON), &row); err != nil {
+			t.Fatal(err)
+		}
+		verdicts[r.BookID] = row
+	}
+	if v := verdicts["b1"]; v.Verdict != previewVerdictSkipped || v.Reason != applySkipAlreadyApplied {
+		t.Fatalf("applied book row = %s/%s, want skipped/%s", v.Verdict, v.Reason, applySkipAlreadyApplied)
+	}
+	if v := verdicts["b2"]; v.Verdict != previewVerdictApply {
+		t.Fatalf("plain book row = %s/%s (%s), want apply", v.Verdict, v.Reason, v.Detail)
+	}
+	last := rep.msgs[len(rep.msgs)-1]
+	if !strings.Contains(last, "1 would apply") || !strings.Contains(last, "skipped as already applied: 1") {
+		t.Fatalf("summary %q must count the applied book as skipped, not would-apply", last)
 	}
 }
