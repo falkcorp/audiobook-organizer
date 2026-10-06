@@ -28,7 +28,14 @@
   Splashdown" never folds into "38 - Splashdown"), and a primary hand-off
   that would not leave the owner its group's sole live primary, predicted
   with versionprimary's own election (ChooseSinglePrimary, eligibility
-  included) over the group as it stands after the retire. The merge fixers now share one iTunes-ownership predicate
+  included) over the group as it stands after the retire (a sibling merged
+  into the leftover counts as live once the leftover is retired, as it does
+  in the real hand-off). The predicted owner is passed to the hand-off as
+  its expected winner (`versionprimary.Env.Expect`): if the group's
+  election, re-taken under its lock after the slower user-state follow,
+  would leave anyone else primary, nothing is crowned and the row stops as
+  partially applied with that reason. No version-primary store holds the
+  row instead of failing the plan. The merge fixers now share one iTunes-ownership predicate
   (`itunesOwnershipWhy`). It also counts a file inside an "iTunes Media"
   folder for the duplicate-copies and fragment fixers, which changes what
   they apply, not only what they hold: duplicate-copies leaves such a copy

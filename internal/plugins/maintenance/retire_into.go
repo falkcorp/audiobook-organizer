@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retire_into.go
-// version: 1.9.5
+// version: 1.10.0
 // guid: dadb4da5-0f2d-4678-abf3-4ac97f3ecb66
 // last-edited: 2026-10-06
 
@@ -61,6 +61,18 @@ import (
 // (merge.ErrPendingLoserLive), so it never drains progress off a book a
 // failed retire left live; the op revert drops the record.
 func retireInto(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Writer, clock func() time.Time, fixerID, id, target string, slice *merge.SliceMapping) (int, error) {
+	return retireIntoExpecting(ctx, p, store, w, clock, fixerID, id, target, slice, "")
+}
+
+// retireIntoExpecting is retireInto whose primary hand-off writes nothing
+// unless versionprimary, deciding under its group lock, leaves expect
+// primary (versionprimary.Env.Expect; "" expects nothing). A different
+// winner stops the row with versionprimary.ErrUnexpectedWinner after the
+// retire's earlier steps: partially applied, nobody else crowned. The
+// consolidation-leftovers same-path class passes the owner it predicted
+// under the merge lock, closing the window between that prediction and the
+// hand-off (which runs after the slower user-state follow).
+func retireIntoExpecting(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Writer, clock func() time.Time, fixerID, id, target string, slice *merge.SliceMapping, expect string) (int, error) {
 	b, err := store.GetBookByID(id)
 	if err != nil {
 		return 0, fmt.Errorf("read %s: %w", id, err)
@@ -71,7 +83,7 @@ func retireInto(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Write
 	if b.IsSoftDeleted() {
 		// Retired by an earlier run, which may have been cut off (a lost
 		// scan stand-down lease) before its primary hand-off.
-		return 0, resumeHandOff(ctx, p, store, w, fixerID, id, target)
+		return 0, resumeHandOff(ctx, p, store, w, fixerID, id, target, expect)
 	}
 	// Refusals first: nothing is written for a refused retire.
 	if b.ITunesPersistentID != nil && *b.ITunesPersistentID != "" {
@@ -190,9 +202,9 @@ func retireInto(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Write
 		// read goes through the evidence check (resumeHandOff), never a
 		// silent skip that would leave the group with no live primary.
 		if wasPrimary {
-			err = retireHandOff(ctx, p, store, w, fixerID, id, *b.VersionGroupID)
+			err = retireHandOff(ctx, p, store, w, fixerID, id, *b.VersionGroupID, expect)
 		} else {
-			err = resumeHandOff(ctx, p, store, w, fixerID, id, target)
+			err = resumeHandOff(ctx, p, store, w, fixerID, id, target, expect)
 		}
 		if err != nil {
 			return steps, err
@@ -283,7 +295,11 @@ func followUserStateInto(p *Plugin, w *repairs.Writer, target, id string, slice 
 // the journal must stop the row. Any other failure to journal the note is
 // logged: the crown is written, and a missing note only keeps a revert from
 // touching the group's flags.
-func retireHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Writer, fixerID, id, groupID string) error {
+//
+// expect, when set, is the member the hand-off must leave primary
+// (versionprimary.Env.Expect): any other decision writes nothing and is
+// returned (versionprimary.ErrUnexpectedWinner), logged with the group.
+func retireHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Writer, fixerID, id, groupID, expect string) error {
 	vps := p.deps.VersionPrimaryStore()
 	if vps == nil {
 		return nil
@@ -293,7 +309,7 @@ func retireHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Wr
 	}
 	es := fragEnsureStore{OpsStore: store, chapters: vps}
 	res, err := versionprimary.EnsureSinglePrimary(ctx, es, groupID,
-		versionprimary.Env{RootDir: p.deps.RootDir()})
+		versionprimary.Env{RootDir: p.deps.RootDir(), Expect: expect})
 	if err != nil {
 		fragLog.Warn("%s: primary hand-off in group %s: %s", fixerID,
 			logger.SanitizeLogValue(groupID), logger.SanitizeLogValue(err.Error()))
@@ -361,7 +377,7 @@ func retireHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Wr
 // boot's startup verify (or a rebuild) has trusted it, and scans every
 // opchange row until then, so the lease is still renewed before it, and the
 // live-primary count above keeps the read off the common path.
-func resumeHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Writer, fixerID, id, target string) error {
+func resumeHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Writer, fixerID, id, target, expect string) error {
 	b, err := store.GetBookByID(id)
 	if err != nil {
 		return fmt.Errorf("read %s: %w", id, err)
@@ -477,7 +493,7 @@ func resumeHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Wr
 	case live > 1:
 		return refuse("group %s has %d live primaries", gid, live)
 	}
-	return retireHandOff(ctx, p, store, w, fixerID, b.ID, gid)
+	return retireHandOff(ctx, p, store, w, fixerID, b.ID, gid, expect)
 }
 
 // retireFixerIDs are the fixers that retire through retireInto: a demote

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/consolidation_leftovers_fixer.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 6df37df9-b008-41ad-bd69-47b00e4cb50c
 // last-edited: 2026-10-06
 
@@ -191,6 +191,10 @@ type leftoverPlan struct {
 	// OwnerGroupID is the same-path owner's version group, re-checked at
 	// apply for an iTunes copy as GroupID is.
 	OwnerGroupID string
+	// ExpectPrimary is the member the same-path class predicted (under the
+	// merge lock) the retire's hand-off leaves primary: the hand-off writes
+	// nothing for any other winner (retireIntoExpecting).
+	ExpectPrimary string
 }
 
 // leftoverStat is one disk answer: gone (fs.ErrNotExist), present (with its
@@ -257,10 +261,17 @@ func (f *consolidationLeftoversFixer) newSource(store OpsStore) (*leftoverSource
 	src.primary = func(ctx context.Context, members []database.Book) (string, error) {
 		vps := f.p.deps.VersionPrimaryStore()
 		if vps == nil {
-			return "", errors.New("no version-primary store: the primary hand-off cannot be predicted")
+			return "", errLeftoverNoVersionPrimaryStore
 		}
-		return versionprimary.ChooseSinglePrimary(ctx, fragEnsureStore{OpsStore: store, chapters: vps}, members,
-			versionprimary.Env{RootDir: f.p.deps.RootDir()})
+		// members are the group as it stands AFTER the retire, and the
+		// election reads liveness by id through the store (a member merged
+		// into the leftover is electable only once the leftover is gone),
+		// so the store answers for every member from members.
+		es := leftoverPostRetireStore{fragEnsureStore: fragEnsureStore{OpsStore: store, chapters: vps}, rows: map[string]*database.Book{}}
+		for i := range members {
+			es.rows[members[i].ID] = &members[i]
+		}
+		return versionprimary.ChooseSinglePrimary(ctx, es, members, versionprimary.Env{RootDir: f.p.deps.RootDir()})
 	}
 	return src, nil
 }
@@ -1214,7 +1225,10 @@ func (f *consolidationLeftoversFixer) Apply(ctx context.Context, w *repairs.Writ
 		sl := plan.Slice
 		slice = &sl
 	}
-	did, err := retireInto(ctx, f.p, store, w, f.now, leftoverFixerID, plan.Leftover, plan.Combined, slice)
+	if hook, ok := leftoverBeforeRetireHooks.Load(plan.Leftover); ok {
+		hook.(func())() // tests only: a change between the locked re-plan and the retire
+	}
+	did, err := retireIntoExpecting(ctx, f.p, store, w, f.now, leftoverFixerID, plan.Leftover, plan.Combined, slice, plan.ExpectPrimary)
 	steps += did
 	if err != nil {
 		return partial(err)

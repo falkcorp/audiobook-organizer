@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/consolidation_leftovers_samepath.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 7285fcc4-a331-4b0a-89c0-e606c9f5f7b3
 // last-edited: 2026-10-06
 
@@ -24,6 +24,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -336,13 +337,16 @@ func (s *leftoverSource) samePath(ctx context.Context, core *database.BookCore, 
 		}
 	}
 	fmt.Fprintf(fp, "groups|%s|%s\n", gid, ogid)
+	// chosen is the member the hand-off is predicted to leave primary: the
+	// apply passes it as the hand-off's expected winner.
+	var chosen string
 	if gid != "" {
 		group, err := s.store.GetBooksByVersionGroup(gid)
 		if err != nil {
 			return repairs.Row{}, false, fmt.Errorf("version group %s: %w", gid, err)
 		}
 		sort.Slice(group, func(i, j int) bool { return group[i].ID < group[j].ID })
-		chosen, why, err := s.samePathHandOff(ctx, group, id, oid, ogid == gid)
+		chosen, why, err = s.samePathHandOff(ctx, group, id, oid, ogid == gid)
 		if err != nil {
 			return repairs.Row{}, false, err
 		}
@@ -365,7 +369,7 @@ func (s *leftoverSource) samePath(ctx context.Context, core *database.BookCore, 
 	// user's state follows with no position and never as finished (merge's
 	// slice rule) rather than holding the row: the owner decided these fold
 	// into the same-path book, and nothing unproven is carried.
-	plan := &leftoverPlan{Leftover: id, Combined: oid, GroupID: gid, OwnerGroupID: ogid}
+	plan := &leftoverPlan{Leftover: id, Combined: oid, GroupID: gid, OwnerGroupID: ogid, ExpectPrimary: chosen}
 	var carry string
 	switch {
 	case evidence == "":
@@ -582,10 +586,12 @@ func orNone(s string) string {
 // every member, explicit non-primaries too). chosen is that answer, for the
 // fingerprint; the apply's re-plan under the merge lock runs it again.
 //
-// The retire elects only when the leftover is primary at its read. For a
-// non-primary leftover nothing is elected, so the owner must also already
-// be the group's one explicit primary; and the election's answer must still
-// be the owner (an ineligible incumbent is held, never kept on a guess).
+// The retire elects only when the leftover is primary at its read; a
+// non-primary leftover goes through resumeHandOff, which owes nothing for a
+// book no retire demoted, so the owner must then already be the group's one
+// explicit primary. Either way the election's answer must be the owner (an
+// ineligible incumbent is held, never kept on a guess), and the apply passes
+// it as the hand-off's expected winner (retireIntoExpecting).
 func (s *leftoverSource) samePathHandOff(ctx context.Context, members []database.Book, leftover, owner string, sameGroup bool) (chosen, why string, err error) {
 	var others, explicit []string
 	leftoverPrimary := true
@@ -618,13 +624,18 @@ func (s *leftoverSource) samePathHandOff(ctx context.Context, members []database
 			"the hand-off would crown one of them, not the owner", strings.Join(others, ", "), owner), nil
 	}
 	chosen, err = s.primary(ctx, after)
+	if errors.Is(err, errLeftoverNoVersionPrimaryStore) {
+		return "", "the version-primary store is not available, so the retire's primary hand-off cannot be predicted", nil
+	}
 	if err != nil {
 		return "", "", fmt.Errorf("predict the primary hand-off of %s: %w", leftover, err)
 	}
 	if !leftoverPrimary && (len(explicit) != 1 || explicit[0] != owner) {
-		// No election runs for a non-primary leftover: the group keeps its
-		// flags, so the owner must already be its one explicit primary.
-		return chosen, fmt.Sprintf("the leftover is not primary, so no hand-off runs, and the owner %s is not the group's one "+
+		// A non-primary leftover goes through resumeHandOff, which owes
+		// nothing for a book no retire demoted: nothing is elected and the
+		// group keeps its flags, so the owner must already be its one
+		// explicit primary.
+		return chosen, fmt.Sprintf("the leftover is not primary, so the retire elects nothing (the group keeps its flags), and the owner %s is not the group's one "+
 			"explicit primary (explicit primaries: %s)", owner, orNone(strings.Join(explicit, ", "))), nil
 	}
 	switch chosen {
@@ -638,3 +649,29 @@ func (s *leftoverSource) samePathHandOff(ctx context.Context, members []database
 			"(live members: %s)", chosen, owner, strings.Join(others, ", ")), nil
 	}
 }
+
+// errLeftoverNoVersionPrimaryStore: no version-primary store is wired, so
+// the hand-off cannot be predicted; the row is held, the plan goes on.
+var errLeftoverNoVersionPrimaryStore = errors.New("no version-primary store")
+
+// leftoverPostRetireStore answers GetBookByID for the members of a version
+// group as they will stand after a retire (rows), so ChooseSinglePrimary's
+// liveness reads (Electable through the store) see the retired leftover
+// soft-deleted. Every other read goes to the store.
+type leftoverPostRetireStore struct {
+	fragEnsureStore
+	rows map[string]*database.Book
+}
+
+func (s leftoverPostRetireStore) GetBookByID(id string) (*database.Book, error) {
+	if b, ok := s.rows[id]; ok {
+		c := *b
+		return &c, nil
+	}
+	return s.fragEnsureStore.GetBookByID(id)
+}
+
+// leftoverBeforeRetireHooks are test hooks keyed by leftover id, run by the
+// apply between its locked re-plan and the retire. Keyed so parallel tests
+// never see another test's hook.
+var leftoverBeforeRetireHooks sync.Map

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_attribution_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 02ce91e2-c227-4b3c-b13d-45a89faf23c9
 // last-edited: 2026-10-06
 
@@ -522,7 +522,7 @@ func TestFragmentFixer_AnotherRetireFixerFinishesOurHandOff(t *testing.T) {
 
 	f.applyOp("op-dc", dcFixerID)
 	wdc := repairs.NewWriter(f.s, f.s, dcFixerID, "bulk_update", "repairs-").WithJournal(f.s, f.s, "op-dc")
-	require.NoError(t, resumeHandOff(context.Background(), f.p, f.s, wdc, dcFixerID, orig[2], plan.SurvivorID))
+	require.NoError(t, resumeHandOff(context.Background(), f.p, f.s, wdc, dcFixerID, orig[2], plan.SurvivorID, ""))
 	require.True(t, handoffJournaled(t, f.s, "op-dc", orig[2]), "the other fixer journaled the hand-off")
 	crowned := f.livePrimaries(t, "vg-ch")
 	require.Len(t, crowned, 1)
