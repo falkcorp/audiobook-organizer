@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_search.go
-// version: 1.32.4
+// version: 1.33.0
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
-// last-edited: 2026-10-01
+// last-edited: 2026-10-05
 
 package metafetch
 
@@ -1092,6 +1092,7 @@ func (mfs *Service) searchMetadataForBook(
 		SourcesAsked:      sourcesAsked,
 		InputFingerprint:  in.fingerprint(book.Title),
 		LegacyFingerprint: in.legacyFingerprint(book.Title),
+		BookASIN:          trimmedASIN(book),
 		carryFilter:       strong.filterCarried,
 	}, nil
 }
@@ -1146,4 +1147,12 @@ func filterCoverlessCandidates(candidates []MetadataCandidate) []MetadataCandida
 		return withCover
 	}
 	return candidates
+}
+
+// trimmedASIN is book's ASIN without surrounding space, "" when it has none.
+func trimmedASIN(book *database.Book) string {
+	if book == nil || book.ASIN == nil {
+		return ""
+	}
+	return strings.TrimSpace(*book.ASIN)
 }

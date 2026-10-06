@@ -406,6 +406,22 @@ func planCachedApply(svc cachedApplyService, books bookReader, id string, claims
 		return cachedApplyPlan{Book: book, Candidate: &cand, Reason: applySkipAuthorsUnreadable, Err: aerr}
 	}
 	idErr := svc.ValidateCachedIdentityForBook(entry, book, authors)
+	ts := cachedTranscribedSearch(svc, books, entry, book, authors, idErr)
+	// The book's ASIN was replaced or cleared after this row was fetched, and
+	// the candidate does not carry the new one (metafetch.CandidateASINStale).
+	// A candidate naming another ASIN is refused as asin_conflict anyway; this
+	// catches the one that names none (Open Library, Google Books), which the
+	// ASIN check passes. It joins the identity leg as identity_stale, and no
+	// transcription lifts it: a transcription can explain a stale query, not a
+	// book now identified by another record.
+	if asinErr := metafetch.CandidateASINStale(entry, book, &cand); asinErr != nil {
+		ts.ExplainsStaleIdentity = false
+		if idErr == nil {
+			idErr = asinErr
+		} else {
+			idErr = fmt.Errorf("%w; %w", asinErr, idErr)
+		}
+	}
 	// The owner-manual-only bypass keys on the PIN, not on the request size.
 	// Each row pin is an explicit owner approval of this one book's candidate:
 	// the owner clicked Apply on that row, which is how the owner rule says
@@ -415,8 +431,7 @@ func planCachedApply(svc cachedApplyService, books bookReader, id string, claims
 	// (web/src/components/review/lanes/useMetadataLane.ts), so several row
 	// approvals arrive together. A bulk button's pin (origin "review_bulk") and the
 	// hashless marker are not row pins and get the guard.
-	v := applygate.EvaluateTranscribed(book, authors, gateRuntime(books, book), &cand, idErr, claims,
-		cachedTranscribedSearch(svc, books, entry, book, authors, idErr),
+	v := applygate.EvaluateTranscribed(book, authors, gateRuntime(books, book), &cand, idErr, claims, ts,
 		bulkManualOnlyGuard(books, book, pin != nil && pin.IsRowReview(), metabatch.ResolveCandidateSearchQuery(books, book).Title))
 	// Any owner-review pin (row, bulk, or the hashless marker) lifts the
 	// certainty gate. A single-row pin is an approval that overwrites

@@ -1,7 +1,7 @@
 // file: internal/database/iface_metadata.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 4c6267a6-b5ae-4e10-bce6-94b362c33a3f
-// last-edited: 2026-09-19
+// last-edited: 2026-10-05
 //
 // METADATA-CACHED-MATCHER: storage surface for the per-book
 // metadata-candidate cache. Cache lives under PebbleDB key prefix
@@ -12,6 +12,7 @@ package database
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 )
 
@@ -63,6 +64,43 @@ type MetadataCandidateCache struct {
 	// providers without a valid answer are re-asked. Reset whenever the
 	// fingerprint changes; nil whenever the entry holds fresh candidates.
 	EmptyAnswers map[string]time.Time `json:"empty_answers,omitempty"`
+	// FetchedForASIN is the ASIN the book carried when these candidates were
+	// fetched: the fetch records it on every row it writes (empty when the
+	// book had none), and a fetch that found nothing and kept the earlier
+	// candidates keeps the earlier value. For a row written before
+	// 2026-10-05, which has none, the store records the book's old ASIN the
+	// first time it sees that ASIN replaced or cleared while the row is kept
+	// (PebbleStore.updateBookLockedMode).
+	//
+	// It exists because an ASIN change keeps the cached candidates (it is not
+	// a search-identity change, candidateSearchIdentityChanged), and the
+	// gate's asin_conflict check cannot see the problem for a candidate that
+	// carries no ASIN at all (Open Library, Google Books): after the book's
+	// ASIN is REPLACED, such a candidate was found for a book identified by
+	// another record. ASINReplaced is the reader.
+	FetchedForASIN string `json:"fetched_for_asin,omitempty"`
+}
+
+// ASINReplaced reports whether the book's ASIN (bookASIN, its current value)
+// differs from the ASIN these candidates were fetched for (FetchedForASIN),
+// and returns that ASIN. An empty FetchedForASIN is "fetched for a book with
+// no ASIN, or not recorded": filling an empty ASIN never makes a candidate
+// wrong, so it never reads as replaced. A cleared ASIN does: the record the
+// candidates were matched against was taken off the book. Case and
+// surrounding space are ignored.
+func (c *MetadataCandidateCache) ASINReplaced(bookASIN *string) (string, bool) {
+	if c == nil {
+		return "", false
+	}
+	was := strings.TrimSpace(c.FetchedForASIN)
+	if was == "" {
+		return "", false
+	}
+	now := ""
+	if bookASIN != nil {
+		now = strings.TrimSpace(*bookASIN)
+	}
+	return was, !strings.EqualFold(was, now)
 }
 
 // MetadataCacheTTL is the freshness window. Entries older than this

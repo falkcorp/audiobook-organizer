@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.53.1
+// version: 1.54.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
 // last-edited: 2026-10-05
 
@@ -735,17 +735,13 @@ var transcriptionApplyLog = logger.New("apply-transcription-candidate")
 var errTranscriptionASINConflict = errors.New("cached candidate ASIN conflicts with the book's ASIN")
 
 // transcriptionASINConflict describes an ASIN disagreement between book and
-// cand, or returns "" when either has none or they agree (the bulk gate's
-// asin_conflict rule, applygate checkASIN).
+// cand, or returns "" when either has none or they agree: the bulk gate's
+// asin_conflict rule itself (applygate.CheckASIN), not a copy of it.
 func transcriptionASINConflict(book *database.Book, cand metafetch.MetadataCandidate) string {
-	cur, c := "", strings.TrimSpace(cand.ASIN)
-	if book.ASIN != nil {
-		cur = strings.TrimSpace(*book.ASIN)
+	if r := applygate.CheckASIN(book, &cand); r.Outcome == applygate.OutcomeBlock {
+		return r.Detail
 	}
-	if cur == "" || c == "" || strings.EqualFold(cur, c) {
-		return ""
-	}
-	return "book ASIN " + cur + ", candidate " + c
+	return ""
 }
 
 // ApplyTranscriptionCandidate implements maintenance.ServerDeps.
@@ -924,6 +920,12 @@ func (s *Server) ApplyTranscriptionCandidate(_ context.Context, bookID, gatedTit
 // in its transcribed query, applygate.TranscribedIdentityLifts that the
 // candidate matches that transcription and nothing contradicts it).
 func transcriptionCacheIdentity(svc cachedApplyService, books bookReader, entry *metafetch.MetadataCandidateCache, book *database.Book, cand metafetch.MetadataCandidate) error {
+	// A row fetched for an ASIN the book no longer carries, for a candidate
+	// without the new one, is refused first: the planner adds it to the
+	// identity leg and no transcription lifts it (planCachedApply).
+	if asinErr := metafetch.CandidateASINStale(entry, book, &cand); asinErr != nil {
+		return asinErr
+	}
 	live, err := database.LiveBookAuthorNames(books, book)
 	if err != nil {
 		return fmt.Errorf("read live authors of %s for the cache-identity check: %w", book.ID, err)
