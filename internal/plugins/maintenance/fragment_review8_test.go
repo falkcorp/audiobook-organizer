@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_review8_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2dc36c12-0ba5-4ca9-90b1-ea5c5c5b27c9
-// last-edited: 2026-10-04
+// last-edited: 2026-10-06
 
 package maintenance
 
@@ -163,9 +163,11 @@ func (f *fragFixture) applyAllOver(t *testing.T, r repairs.Row, planOp string) {
 // revert always succeeded (22 of 24 cut points split with organized=all, 24
 // of 24 with none).
 func TestFragmentFixer_RevertKeepsTheHoldOfARetiredSurvivor(t *testing.T) {
+	t.Parallel()
 	stride := fragSweepStride(5, 20)
 	for i, sh := range [][2]string{{"all", cutVGOrig}, {"none", cutVGNone}} {
 		t.Run(sh[0]+"/"+sh[1], func(t *testing.T) {
+			t.Parallel()
 			tried := 0
 			for at := fragSweepStart(i, stride); ; at += stride {
 				f, r, closeF := newCutFixture(t, sh[0], sh[1])
@@ -199,6 +201,7 @@ func TestFragmentFixer_RevertKeepsTheHoldOfARetiredSurvivor(t *testing.T) {
 // plan record is the op's only row. Reverting the op restores nothing, so it
 // is refused with a clear error and the record (and hold) stays.
 func TestFragmentFixer_PruneThenRevertRefuses(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	planned, survivor, others, otherRows := f.looseCut(t)
 	w := f.fragWriter(t, "op-cut")
@@ -221,6 +224,7 @@ func TestFragmentFixer_PruneThenRevertRefuses(t *testing.T) {
 // the run but its plan record pruned, the run's own retires still count as
 // its own (the record is the evidence) and the continuation finishes it.
 func TestFragmentFixer_PrunedRunStillContinues(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	planned, survivor, others, otherRows := f.looseCut(t)
 	w := f.fragWriter(t, "op-cut")
@@ -263,6 +267,7 @@ func (f *fragFixture) forgeRecord(t *testing.T, r repairs.Row, op, survivor stri
 // reason an interrupted run is held, the row's text offers only actions
 // that clear it, and each offered action, carried out, does.
 func TestFragmentFixer_HeldRowActionsClearTheHold(t *testing.T) {
+	t.Parallel()
 	cut40 := func(t *testing.T) (*fragFixture, repairs.Row, func()) {
 		f, r, closeF := newCutFixture(t, "none", cutVGNone)
 		cut, more := f.cutAt(t, r, 40)

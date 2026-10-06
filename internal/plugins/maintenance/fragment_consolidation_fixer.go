@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.35.0
+// version: 1.35.1
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 // Repairs-lane fixer "fragment-consolidation": fold chapter and disc files
 // that an old scan imported as their own books ("fragments") back into the
@@ -828,9 +828,10 @@ func (lib *fragLibrary) folderNamesAnyAuthor(folder string) string {
 	return name
 }
 
-// loadRoots reads the library root and the import paths into the snapshot.
-func (lib *fragLibrary) loadRoots(store OpsStore) error {
-	if r := strings.TrimSpace(config.AppConfig.RootDir); r != "" {
+// loadRoots reads the library root (Plugin.libraryRoot) and the import
+// paths into the snapshot.
+func (lib *fragLibrary) loadRoots(store OpsStore, root string) error {
+	if r := strings.TrimSpace(root); r != "" {
 		lib.libraryRoot = filepath.Clean(r)
 		lib.roots = append(lib.roots, lib.libraryRoot)
 	}
@@ -894,7 +895,7 @@ func (f *fragmentFixer) loadLibrary(store OpsStore) (*fragLibrary, error) {
 	for _, a := range authors {
 		lib.authors[a.ID] = a.Name
 	}
-	if err := lib.loadRoots(store); err != nil {
+	if err := lib.loadRoots(store, f.p.libraryRoot()); err != nil {
 		return nil, err
 	}
 	lib.extIDs = store.GetExternalIDsForBook
@@ -5336,7 +5337,7 @@ func (f *fragmentFixer) replanWith(ctx context.Context, planned repairs.Row, bea
 	for _, s := range all {
 		lib.series[s.ID] = s.Name
 	}
-	if err := lib.loadRoots(store); err != nil {
+	if err := lib.loadRoots(store, f.p.libraryRoot()); err != nil {
 		return repairs.Row{}, err
 	}
 	for _, id := range planned.BookIDs {
@@ -6315,7 +6316,7 @@ func (f *fragmentFixer) replayHandOff(ctx context.Context, store OpsStore, gid s
 		}
 	}
 	return versionprimary.ChooseSinglePrimary(ctx, fragEnsureStore{OpsStore: store, chapters: vps}, members,
-		versionprimary.Env{RootDir: config.AppConfig.RootDir})
+		versionprimary.Env{RootDir: f.p.libraryRoot()})
 }
 
 // checkOwners re-checks, with the strict lookup, that every file the fresh

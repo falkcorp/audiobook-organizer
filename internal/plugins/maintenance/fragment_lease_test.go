@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_lease_test.go
-// version: 1.8.1
+// version: 1.8.2
 // guid: 6b1e8d42-3c7f-4a95-b2d6-9f0a4e7c1d38
-// last-edited: 2026-10-03
+// last-edited: 2026-10-06
 
 package maintenance
 
@@ -96,6 +96,7 @@ func holdMergeLockPastTheLease(t *testing.T, scan *scriptedScan, wait *repairs.W
 //
 // Not parallel: it holds the process-wide merge lock.
 func TestFragmentFixer_MergeLockWaitKeepsTheLease(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	f.seed(t)
 	f.plan(t, "op-plan")
@@ -166,6 +167,7 @@ func handoffJournaled(t *testing.T, s interface {
 // new run, with no checkpoint): the owed hand-off is found from the
 // fragment's state and this fixer's history, not from the op journal.
 func TestFragmentFixer_LeaseLostAtHandOffAbortsAndResumes(t *testing.T) {
+	t.Parallel()
 	total := handOffProbeRenewals(t)
 	// back=1 refuses the hand-off's journal (EnsureSinglePrimary already
 	// crowned the sibling: nothing is owed after); back=2 refuses the beat
@@ -186,6 +188,7 @@ func TestFragmentFixer_LeaseLostAtHandOffAbortsAndResumes(t *testing.T) {
 // re-crowns the fragment with Crown, which demotes the sibling the retry
 // crowned. Reverting the retry alone leaves the sibling it crowned.
 func TestFragmentFixer_RevertFirstOpAndRetryInEitherOrder(t *testing.T) {
+	t.Parallel()
 	total := handOffProbeRenewals(t)
 	for _, order := range [][]string{{"op-apply", "op-retry"}, {"op-retry", "op-apply"}} {
 		t.Run(order[0]+"_then_"+order[1], func(t *testing.T) {
@@ -206,6 +209,7 @@ func TestFragmentFixer_RevertFirstOpAndRetryInEitherOrder(t *testing.T) {
 // A fragment whose flag someone else changed after this fixer's demote is
 // not guessed at: the retry refuses the row.
 func TestFragmentFixer_OwedHandOffRefusesAFlagChangedByAnotherWriter(t *testing.T) {
+	t.Parallel()
 	total := handOffProbeRenewals(t)
 	f, _, _ := leaseLostAtHandOff(t, total-2)
 	fr := f.ids["fragG"]
@@ -309,6 +313,7 @@ func (f *fragFixture) finishAfterLostHandOff(t *testing.T, opID string, owed boo
 // ran on the lapsed lease, the journal row was refused after it, and the
 // row's error was the take-back's "journal created author".
 func TestJunkAuthorFixer_LeaseLostBeforeMintCreatesNothing(t *testing.T) {
+	t.Parallel()
 	f := newJunkFixture(t)
 	bk := f.book(junkBookSpec{title: "Assassin's Apprentice", path: "/lib/bk-create", author: "GraphicAudio",
 		tags: map[string]string{"artist": "Robin Hobb"}})
@@ -339,6 +344,7 @@ func TestJunkAuthorFixer_LeaseLostBeforeMintCreatesNothing(t *testing.T) {
 // Beats before it: row start, pre-Apply, and LockWaiting's two (before
 // waiting, after acquiring).
 func TestFragmentFixer_LeaseLostBeforeTheUserStateFollow(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	f.seed(t)
 	f.plan(t, "op-plan")
@@ -359,7 +365,7 @@ func TestFragmentFixer_LeaseLostBeforeTheUserStateFollow(t *testing.T) {
 // ModifyBookFile; the lease lapsing just before it refuses the claim there
 // rather than at some later Writer write.
 func TestFolderBooksFixer_LeaseLostAtThePathKeyClaim(t *testing.T) {
-	f := newFragFixture(t)
+	f := newGlobalRootFragFixture(t)
 	f.seedWolfe(t, fbITunes, "citadel")
 	row := f.fbSingleRow(t, "op-plan")
 	scan := f.scan()
@@ -462,7 +468,7 @@ func TestRetireInto_RetiredLoserHandedOffByCrownOwesNothing(t *testing.T) {
 // it. The lease lapsing just after the book is created refuses the row at
 // the credit, before it is written, not at the next book_file journal row.
 func TestFolderBooksFixer_LeaseLostBeforeTheAuthorCredit(t *testing.T) {
-	f := newFragFixture(t)
+	f := newGlobalRootFragFixture(t)
 	f.seedWolfe(t, fbITunes, "citadel")
 	row := f.fbSingleRow(t, "op-plan")
 	scan := f.scan()
@@ -495,10 +501,12 @@ func TestFolderBooksFixer_LeaseLostBeforeTheAuthorCredit(t *testing.T) {
 // G explicit false, the next run skipped the hand-off, soft-deleted G and
 // reported applied with no live primary in the group.
 func TestFragmentFixer_LeaseLostAtEveryBeatLeavesOnePrimary(t *testing.T) {
+	t.Parallel()
 	total := handOffProbeRenewals(t)
 	for k := 0; k < total; k++ {
 		for _, retry := range []string{"op-apply", "op-retry"} {
 			t.Run(fmt.Sprintf("k%d_%s", k, retry), func(t *testing.T) {
+				t.Parallel()
 				f := newFragFixture(t)
 				f.seed(t)
 				f.primaryFragG(t)

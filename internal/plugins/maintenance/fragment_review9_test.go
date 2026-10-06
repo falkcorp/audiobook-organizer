@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_review9_test.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 3bc1296c-6b8c-481b-b190-a196671cd4a8
-// last-edited: 2026-10-04
+// last-edited: 2026-10-06
 
 package maintenance
 
@@ -437,6 +437,7 @@ func runActionMatrix(t *testing.T, sh [2]string, sc heldScenario, step, start in
 // Otherwise (CI) the prod shape at every 40th, each scenario starting at a
 // different cut point.
 func TestFragmentFixer_HeldRowActionMatrix(t *testing.T) {
+	t.Parallel()
 	shapes, step := cutShapes[:1], 40
 	if fragSweepFull() {
 		shapes, step = cutShapes, 5
@@ -444,6 +445,7 @@ func TestFragmentFixer_HeldRowActionMatrix(t *testing.T) {
 	for i, sh := range shapes {
 		for j, sc := range heldScenarios() {
 			t.Run(sh[0]+"/"+sh[1]+"/"+sc.name, func(t *testing.T) {
+				t.Parallel()
 				tl := runActionMatrix(t, sh, sc, step, fragSweepStart(i+j*3, step))
 				t.Logf("cases=%d held=%d actions=%d failed=%d still-held=%d splits=%d hidden=%d no-action=%d",
 					tl.cases, tl.held, tl.actions, tl.actErr, tl.stillHeld, tl.splits, tl.hidden, tl.noActions)
@@ -464,6 +466,7 @@ func TestFragmentFixer_HeldRowActionMatrix(t *testing.T) {
 // hand (the round-9 offer) leaves the run held, because the survivor's
 // planned files would be hidden; restoring it lets the run finish.
 func TestFragmentFixer_DeletedSurvivorIsNotAMerge(t *testing.T) {
+	t.Parallel()
 	// deleted cuts the run at at and deletes its survivor outright; nil when
 	// the run was not cut there.
 	deleted := func(at int) (f *fragFixture, r repairs.Row, survivor string, held []repairs.Row, closeF func(), more bool) {
@@ -541,10 +544,12 @@ func TestFragmentFixer_DeletedSurvivorIsNotAMerge(t *testing.T) {
 // also reverted: its files go back onto S and the carry row is offered
 // again.
 func TestFragmentFixer_DedupLoserSurvivorIsCarried(t *testing.T) {
+	t.Parallel()
 	dedup := heldScenarios()[1]
 	stride := fragSweepStride(5, 25)
 	for i, sh := range cutShapes {
 		t.Run(sh[0]+"/"+sh[1], func(t *testing.T) {
+			t.Parallel()
 			carried, reverted, cases := 0, false, 0
 			for at := fragSweepStart(i, stride); ; at += stride {
 				f, r, closeF := newCutFixture(t, sh[0], sh[1])
@@ -611,9 +616,11 @@ func TestFragmentFixer_DedupLoserSurvivorIsCarried(t *testing.T) {
 // record is kept) still continues, its own hand-off's flag changes
 // explained by the replay from the planned flags, and finishes as one book.
 func TestFragmentFixer_PrunedRunContinuesAtEveryCut(t *testing.T) {
+	t.Parallel()
 	step := fragSweepStride(5, 25)
 	for i, sh := range cutShapes {
 		t.Run(sh[0]+"/"+sh[1], func(t *testing.T) {
+			t.Parallel()
 			cases := 0
 			for at := fragSweepStart(i, step); ; at += step {
 				f, r, closeF := newCutFixture(t, sh[0], sh[1])
@@ -648,6 +655,7 @@ func TestFragmentFixer_PrunedRunContinuesAtEveryCut(t *testing.T) {
 // fixer retired into X and one on another live survivor, give both held rows
 // the same actions, and carrying them out clears both as one live book.
 func TestFragmentFixer_RecordsOfOneFolderOfferOneActionSet(t *testing.T) {
+	t.Parallel()
 	for _, bLater := range []bool{true, false} {
 		t.Run(fmt.Sprintf("second-record-later=%v", bLater), func(t *testing.T) {
 			setup := func() (*fragFixture, repairs.Row, string) {
@@ -686,6 +694,7 @@ func TestFragmentFixer_RecordsOfOneFolderOfferOneActionSet(t *testing.T) {
 // no carry row and no held row, and nothing moves the twin onto x, where it
 // would be duplicate audio.
 func TestFragmentFixer_RetireKeepingRowsIsNotCarried(t *testing.T) {
+	t.Parallel()
 	t.Run("twin on the winner: done", func(t *testing.T) { retireKeepingRows(t, true) })
 	// The invariant the done verdict relies on, broken: the kept row has no
 	// twin on x, so its audio is out of view. The run is held, and the
