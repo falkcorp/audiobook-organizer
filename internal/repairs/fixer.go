@@ -1,7 +1,7 @@
 // file: internal/repairs/fixer.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3e8b1c52-7a4d-4f19-9c06-5d2e8a7f1b34
-// last-edited: 2026-09-28
+// last-edited: 2026-10-06
 
 // Package repairs is the shared framework behind the Repairs lane of /review:
 // one contract every library fixer implements, and one engine that plans,
@@ -138,4 +138,15 @@ type Fixer interface {
 	// Apply writes one fresh row, through w only. Returning
 	// ErrChangedSincePlan (wrapped or not) marks the row changed_since_plan.
 	Apply(ctx context.Context, w *Writer, fresh Row) error
+}
+
+// ApplyScoped is implemented by a fixer that keeps state for the length of
+// one apply run (RunApply), such as one whole-library snapshot shared by
+// every row's re-check instead of one listing per row. BeginApply is called
+// once, before the first row, with whether the run is a dry run; the context
+// it returns is the one every Replan and Apply of the run receives, and end
+// is called when RunApply returns, so nothing the fixer hangs on that context
+// outlives the run.
+type ApplyScoped interface {
+	BeginApply(ctx context.Context, dryRun bool) (scoped context.Context, end func())
 }

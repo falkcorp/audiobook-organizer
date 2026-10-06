@@ -1,18 +1,23 @@
 // file: internal/plugins/maintenance/fragment_folder_sets_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3b7d2c55-1a4e-4f0b-9c61-8e2f5d7a0b14
 // last-edited: 2026-10-06
 
 package maintenance
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/stretchr/testify/require"
@@ -797,8 +802,12 @@ func TestFragmentFixer_ChapterSetApplyRechecksLibrary(t *testing.T) {
 		f := newFragFixture(t)
 		row, frags := newSet(t, f)
 		parent := f.book(t, "parent", "Something Else", f.path(setDir), nil)
+		// Rows only, no files on disk: the folder's listing is unchanged, so
+		// the row itself re-plans the same and only the whole-library
+		// re-check under the merge lock (a live book in the set's folder)
+		// can refuse it.
 		for i := 1; i <= 2; i++ {
-			p := f.file(t, filepath.Join(setDir, fmt.Sprintf("other %d.mp3", i)), 3000+i)
+			p := f.path(filepath.Join(setDir, fmt.Sprintf("other %d.mp3", i)))
 			f.row(t, fmt.Sprintf("o%d", i), parent, p, fmt.Sprintf("other %d.mp3", i), int64(3000+i), 1800, i)
 		}
 		f.requireRefused(t, row, frags, parent)
@@ -918,7 +927,9 @@ func TestFragmentFixer_ChapterSetJoinOffsets(t *testing.T) {
 }
 
 // TestFragmentFixer_ChapterSetJoinTargetVersionGroup: a member in the join
-// target's own version group is no other version of the work; a member
+// target's own version group is no other version of the work, unless that
+// group (or any fragment's group) holds an iTunes copy: the retire hand-off
+// would write it, so the join is held (PR #3787 review, blocker 1); a member
 // versioned with a chapter copy outside the row is held, since retiring it
 // would hand its group's primary to that copy.
 func TestFragmentFixer_ChapterSetJoinTargetVersionGroup(t *testing.T) {
@@ -931,17 +942,106 @@ func TestFragmentFixer_ChapterSetJoinTargetVersionGroup(t *testing.T) {
 	joinID := func(f *fragFixture) string {
 		return existingRowID(f.path(setDir), fragFolderSetKeyPrefix+someWorkKey)
 	}
-	t.Run("the target's own group: still joins", func(t *testing.T) {
-		f := newFragFixture(t)
-		existing := f.existingBook(t, "work", "Some Work", "lib/Other/Some Work", 6, 900)
+	// ownGroup is the target, a sibling edition and the first fragment in
+	// one version group; mark edits the sibling before the plan.
+	ownGroup := func(t *testing.T, f *fragFixture, mark func(sibling string)) (existing, sibling string, frags []string) {
+		existing = f.existingBook(t, "work", "Some Work", "lib/Other/Some Work", 6, 900)
 		p := f.file(t, "lib/Elsewhere/Some Work.m4b", 4321)
-		sibling := f.book(t, "sibling", "Some Work (another edition)", p, nil)
+		sibling = f.book(t, "sibling", "Some Work (another edition)", p, nil)
 		f.row(t, "s", sibling, p, "Some Work.m4b", 4321, 5400, 0)
-		frags := f.folderSet(t, setDir, seq(1, 6), someWorkStem, 900, 9000)
+		frags = f.folderSet(t, setDir, seq(1, 6), someWorkStem, 900, 9000)
 		setVG(t, f, "vg-target", existing, sibling, frags[0])
+		if mark != nil {
+			mark(sibling)
+		}
+		return existing, sibling, frags
+	}
+	bookPID := func(t *testing.T, f *fragFixture) func(string) {
+		return func(id string) {
+			pid := "ITUNESPID01"
+			_, err := f.s.ModifyBook(id, func(b *database.Book) error { b.ITunesPersistentID = &pid; return nil })
+			require.NoError(t, err)
+		}
+	}
+	t.Run("the target's own group with no iTunes copy: still joins", func(t *testing.T) {
+		f := newFragFixture(t)
+		existing, _, _ := ownGroup(t, f, nil)
 		r := findRow(t, f.plan(t, "op-plan"), joinID(f))
 		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
 		require.Equal(t, existing, r.Proposed["join"])
+	})
+	t.Run("the target's own group holds an iTunes copy: held", func(t *testing.T) {
+		// Retiring frags[0] (primary by default) hands vg-target's primary
+		// on, and the ranking favours the iTunes book: a write to it.
+		f := newFragFixture(t)
+		_, sibling, _ := ownGroup(t, f, bookPID(t, f))
+		res := f.plan(t, "op-plan")
+		r := findRow(t, res, joinID(f))
+		require.Equal(t, repairs.SkipITunes, r.Skipped, r.SkipReason)
+		require.Contains(t, r.SkipReason, sibling)
+		require.Contains(t, r.SkipReason, "vg-target")
+		require.Zero(t, res.Applicable)
+	})
+	t.Run("an iTunes file row on the target group's sibling: held", func(t *testing.T) {
+		f := newFragFixture(t)
+		_, sibling, _ := ownGroup(t, f, func(id string) {
+			rows, err := f.s.GetBookFiles(id)
+			require.NoError(t, err)
+			require.Len(t, rows, 1)
+			rows[0].ITunesPersistentID = "ROWPID01"
+			require.NoError(t, f.s.UpdateBookFile(rows[0].ID, &rows[0]))
+		})
+		r := findRow(t, f.plan(t, "op-plan"), joinID(f))
+		require.Equal(t, repairs.SkipITunes, r.Skipped, r.SkipReason)
+		require.Contains(t, r.SkipReason, sibling)
+	})
+	t.Run("a live itunes external id on the sibling: held", func(t *testing.T) {
+		f := newFragFixture(t)
+		_, sibling, _ := ownGroup(t, f, func(id string) {
+			require.NoError(t, f.s.CreateExternalIDMapping(&database.ExternalIDMapping{Source: "itunes", ExternalID: "LIVEPID", BookID: id}))
+		})
+		r := findRow(t, f.plan(t, "op-plan"), joinID(f))
+		require.Equal(t, repairs.SkipITunes, r.Skipped, r.SkipReason)
+		require.Contains(t, r.SkipReason, sibling)
+	})
+	t.Run("a tombstoned itunes external id on the sibling: still joins", func(t *testing.T) {
+		f := newFragFixture(t)
+		existing, _, _ := ownGroup(t, f, func(id string) {
+			require.NoError(t, f.s.CreateExternalIDMapping(&database.ExternalIDMapping{Source: "itunes", ExternalID: "DEADPID", BookID: id, Tombstoned: true}))
+		})
+		r := findRow(t, f.plan(t, "op-plan"), joinID(f))
+		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+		require.Equal(t, existing, r.Proposed["join"])
+	})
+	t.Run("a fragment's own group holds an iTunes copy: held", func(t *testing.T) {
+		f := newFragFixture(t)
+		f.existingBook(t, "work", "Some Work", "lib/Other/Some Work", 6, 900)
+		p := f.file(t, "lib/iTunesish/Other Edition.m4b", 4321)
+		it := f.book(t, "it", "Other Edition", p, nil)
+		f.row(t, "i", it, p, "Other Edition.m4b", 4321, 5400, 0)
+		frags := f.folderSet(t, setDir, seq(1, 6), someWorkStem, 900, 9000)
+		setVG(t, f, "vg-frag", frags[2], it)
+		bookPID(t, f)(it)
+		r := findRow(t, f.plan(t, "op-plan"), joinID(f))
+		require.Equal(t, repairs.SkipITunes, r.Skipped, r.SkipReason)
+		require.Contains(t, r.SkipReason, it)
+		require.Contains(t, r.SkipReason, "vg-frag")
+	})
+	t.Run("an iTunes id on the target group's sibling since the plan: refused at apply, nothing written", func(t *testing.T) {
+		f := newFragFixture(t)
+		_, sibling, frags := ownGroup(t, f, nil)
+		r := findRow(t, f.plan(t, "op-plan"), joinID(f))
+		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+		bookPID(t, f)(sibling)
+		before, err := f.s.GetBookByID(sibling)
+		require.NoError(t, err)
+		out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
+		require.Zero(t, out.Applied, "%+v", out.Rows)
+		require.Contains(t, fmt.Sprintf("%+v", out.Rows), sibling)
+		f.requireUntouched(t, frags)
+		after, err := f.s.GetBookByID(sibling)
+		require.NoError(t, err)
+		require.Equal(t, before.IsPrimaryVersion, after.IsPrimaryVersion, "the iTunes book is never written")
 	})
 	t.Run("versioned with a chapter copy outside the row: held", func(t *testing.T) {
 		f := newFragFixture(t)
@@ -953,4 +1053,207 @@ func TestFragmentFixer_ChapterSetJoinTargetVersionGroup(t *testing.T) {
 		require.Equal(t, fragSkipVersionGroupParent, r.Skipped, r.SkipReason)
 		require.Contains(t, r.SkipReason, cp[0])
 	})
+}
+
+// TestFragJoinGroupITunesFailsClosed: a version group member whose external
+// ids cannot be read holds the join; an unreadable group listing does too.
+func TestFragJoinGroupITunesFailsClosed(t *testing.T) {
+	lib := newFragLibrary()
+	lib.books["t"] = fragBook{ID: "t", VersionGroup: "g"}
+	lib.books["s"] = fragBook{ID: "s", VersionGroup: "g", FilePath: "/lib/s"}
+	lib.extIDs = func(id string) ([]database.ExternalIDMapping, error) {
+		if id == "s" {
+			return nil, errors.New("disk on fire")
+		}
+		return nil, nil
+	}
+	why := lib.joinGroupITunes("t", nil)
+	require.Contains(t, why, "book s of version group g cannot be read")
+	lib.extIDs = func(string) ([]database.ExternalIDMapping, error) { return nil, nil }
+	require.Empty(t, lib.joinGroupITunes("t", nil), "no iTunes member: the join stands")
+	lib.groupReads = failingGroupReads{}
+	require.Contains(t, lib.joinGroupITunes("t", nil), "version group g of the join is unreadable")
+}
+
+type failingGroupReads struct{}
+
+func (failingGroupReads) GetBooksByVersionGroup(string) ([]database.Book, error) {
+	return nil, errors.New("listing failed")
+}
+
+func (failingGroupReads) GetBookFiles(string) ([]database.BookFile, error) { return nil, nil }
+
+// countingFragStore counts the whole-library file listings the re-check
+// makes (the ~742k-row read on prod).
+type countingFragStore struct {
+	*database.PebbleStore
+	fileLists atomic.Int64
+}
+
+func (c *countingFragStore) GetAllBookFilesCoreComplete() ([]database.BookFileCore, error) {
+	c.fileLists.Add(1)
+	return c.PebbleStore.GetAllBookFilesCoreComplete()
+}
+
+// threeSets plans three independent new chapter sets and returns their row
+// ids and fragments.
+func threeSets(t *testing.T, f *fragFixture) (rows []string, frags [][]string, res *repairs.PlanResult) {
+	t.Helper()
+	for i, title := range []string{"Alpha Work", "Beta Work", "Gamma Work"} {
+		dir := "lib/Christopher Paolini/" + title
+		stem := func(n int) string { return fmt.Sprintf("Christopher Paolini - %s - %02d 1", title, n) }
+		frags = append(frags, f.folderSet(t, dir, seq(1, 6), stem, 900, 20000*(i+1)))
+		rows = append(rows, setRowID(f, dir, "christopher paolini "+strings.ToLower(title)+" # #"))
+	}
+	res = f.plan(t, "op-plan")
+	for _, id := range rows {
+		r := findRow(t, res, id)
+		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+	}
+	return rows, frags, res
+}
+
+// TestFragmentFixer_ChapterSetRecheckListsLibraryOncePerApply (PR #3787
+// review, blocker 2): the whole-library re-check lists the library once per
+// apply run, not twice per row (the engine's unlocked Replan and Apply's
+// locked one each listed it, four workers at once).
+func TestFragmentFixer_ChapterSetRecheckListsLibraryOncePerApply(t *testing.T) {
+	f := newFragFixture(t)
+	rows, _, _ := threeSets(t, f)
+	cs := &countingFragStore{PebbleStore: f.s}
+	f.p = &Plugin{deps: scanDeps{fakeDeps: fakeDeps{store: cs}, scan: &scriptedScan{renewsLeft: -1}, ops: f.ops}, standDownWait: noWait}
+	out := f.apply(t, "op-plan", "op-apply", rows, nil)
+	require.Equal(t, 3, out.Applied, "%+v", out.Rows)
+	require.EqualValues(t, 1, cs.fileLists.Load(), "3 rows, one whole-library listing")
+}
+
+// TestFragmentFixer_ChapterSetRecheckSeesWritesBetweenRows: the run's one
+// snapshot still sees what another writer did between two rows, by the book
+// change log (no relisting) or, when another merge-family writer held the
+// merge lock, by listing again.
+func TestFragmentFixer_ChapterSetRecheckSeesWritesBetweenRows(t *testing.T) {
+	// applyRow applies one planned row as the engine does inside a run:
+	// unlocked Replan, then Apply (which re-plans under the merge lock).
+	applyRow := func(t *testing.T, f *fragFixture, ctx context.Context, plan *repairs.PlanResult, id string) error {
+		t.Helper()
+		fx := newFragmentFixer(f.p)
+		planned := findRow(t, plan, id)
+		fresh, err := fx.Replan(ctx, nil, planned, nil)
+		require.NoError(t, err)
+		require.Equal(t, planned.Fingerprint, fresh.Fingerprint, fresh.Reason)
+		return fx.Apply(ctx, f.fragWriter(t, "op-apply"), fresh)
+	}
+	setup := func(t *testing.T) (*fragFixture, []string, [][]string, *repairs.PlanResult, context.Context, *fragApplySession) {
+		f := newFragFixture(t)
+		rows, frags, plan := threeSets(t, f)
+		ctx, end := newFragmentFixer(f.p).BeginApply(context.Background(), false)
+		t.Cleanup(end)
+		return f, rows, frags, plan, ctx, fragSessionOf(ctx)
+	}
+	// holdAudioOf gives a new live book the audio of set frags (same sizes
+	// and durations, no hashes): that set is now another book's audio.
+	holdAudioOf := func(t *testing.T, f *fragFixture, frags []string) string {
+		other := f.book(t, "holder", "Unrelated Holder", f.path("lib/Elsewhere/Holder"), nil)
+		for i, id := range frags {
+			rs, err := f.s.GetBookFiles(id)
+			require.NoError(t, err)
+			name := fmt.Sprintf("h%02d.mp3", i)
+			p := f.file(t, filepath.Join("lib/Elsewhere/Holder", name), int(rs[0].FileSize))
+			f.row(t, name, other, p, name, rs[0].FileSize, rs[0].Duration, i+1)
+		}
+		return other
+	}
+	t.Run("rows in a run share one listing", func(t *testing.T) {
+		f, rows, _, plan, ctx, sess := setup(t)
+		for _, id := range rows {
+			require.NoError(t, applyRow(t, f, ctx, plan, id))
+		}
+		require.Equal(t, 1, sess.loads)
+	})
+	t.Run("a book written between rows is caught up from the change log", func(t *testing.T) {
+		f, rows, frags, plan, ctx, sess := setup(t)
+		require.NoError(t, applyRow(t, f, ctx, plan, rows[0]))
+		holder := holdAudioOf(t, f, frags[1])
+		err := applyRow(t, f, ctx, plan, rows[1])
+		require.ErrorIs(t, err, repairs.ErrChangedSincePlan)
+		require.Contains(t, err.Error(), holder)
+		f.requireUntouched(t, frags[1])
+		require.Equal(t, 1, sess.loads, "caught up point by point, not listed again")
+	})
+	t.Run("another merge-lock holder between rows: listed again", func(t *testing.T) {
+		f, rows, frags, plan, ctx, sess := setup(t)
+		require.NoError(t, applyRow(t, f, ctx, plan, rows[0]))
+		merge.LockMergeRMW()
+		holder := holdAudioOf(t, f, frags[1])
+		merge.UnlockMergeRMW()
+		err := applyRow(t, f, ctx, plan, rows[1])
+		require.ErrorIs(t, err, repairs.ErrChangedSincePlan)
+		require.Contains(t, err.Error(), holder)
+		require.Equal(t, 2, sess.loads)
+	})
+}
+
+// TestFragmentFixer_ChapterSetJoinResumeNeedsOwnRetire (PR #3787 review,
+// should-fix 1): a set join with a fragment already retired into the target
+// skips the whole-library re-check and resumes only when this fixer's apply
+// journaled that retire; a fragment another fixer merged into the target is a
+// change, not a cut-off run.
+func TestFragmentFixer_ChapterSetJoinResumeNeedsOwnRetire(t *testing.T) {
+	plan := func(t *testing.T, f *fragFixture) (string, string, []string) {
+		existing := f.existingBook(t, "work", "Some Work", "lib/Other/Some Work", 6, 900)
+		frags := f.folderSet(t, setDir, seq(1, 6), someWorkStem, 900, 9000)
+		r := findRow(t, f.plan(t, "op-plan"), existingRowID(f.path(setDir), fragFolderSetKeyPrefix+someWorkKey))
+		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+		require.Equal(t, existing, r.Proposed["join"])
+		return r.RowID, existing, frags
+	}
+	retire := func(t *testing.T, f *fragFixture, source, opID, id, into string) {
+		var w *repairs.Writer
+		if source == fragFixerID {
+			w = f.fragWriter(t, opID)
+		} else {
+			w = repairs.NewWriter(f.s, f.s, source, "bulk_update", "repairs-").WithJournal(f.s, f.s, opID)
+		}
+		_, err := retireInto(context.Background(), f.p, f.s, w, time.Now, source, id, into, &merge.SliceMapping{Mappable: true})
+		require.NoError(t, err)
+	}
+	t.Run("this fixer's cut-off run: resumes", func(t *testing.T) {
+		f := newFragFixture(t)
+		row, existing, frags := plan(t, f)
+		retire(t, f, fragFixerID, "op-cut", frags[0], existing)
+		out := f.apply(t, "op-plan", "op-apply", []string{row}, nil)
+		require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+		f.requireRetiredInto(t, frags, existing)
+	})
+	t.Run("retired into the target by another fixer: refused", func(t *testing.T) {
+		f := newFragFixture(t)
+		row, existing, frags := plan(t, f)
+		retire(t, f, "some-other-fixer", "op-other", frags[0], existing)
+		out := f.apply(t, "op-plan", "op-apply", []string{row}, nil)
+		require.Zero(t, out.Applied, "%+v", out.Rows)
+		require.Equal(t, 1, out.ChangedSincePlan, "%+v", out.Rows)
+		require.Contains(t, fmt.Sprintf("%+v", out.Rows), "not by a "+fragFixerID+" apply")
+		f.requireUntouched(t, frags[1:])
+	})
+}
+
+// failingFilesStore fails the complete book-file listing.
+type failingFilesStore struct{ *database.PebbleStore }
+
+func (failingFilesStore) GetAllBookFilesCoreComplete() ([]database.BookFileCore, error) {
+	return nil, database.ErrMemdbIncomplete
+}
+
+// TestFragmentFixer_ChapterSetRecheckFailsClosed (PR #3787 review): when the
+// whole library cannot be listed completely the re-check fails the row, and
+// nothing is written; it never passes the row on a partial listing.
+func TestFragmentFixer_ChapterSetRecheckFailsClosed(t *testing.T) {
+	f := newFragFixture(t)
+	rows, frags, _ := threeSets(t, f)
+	f.p = &Plugin{deps: scanDeps{fakeDeps: fakeDeps{store: failingFilesStore{f.s}}, scan: &scriptedScan{renewsLeft: -1}, ops: f.ops}, standDownWait: noWait}
+	out := f.apply(t, "op-plan", "op-apply", rows[:1], nil)
+	require.Zero(t, out.Applied, "%+v", out.Rows)
+	require.Equal(t, 1, out.Failed, "%+v", out.Rows)
+	require.Contains(t, fmt.Sprintf("%+v", out.Rows), "library re-check")
+	f.requireUntouched(t, frags[0])
 }

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.76.0
+// version: 1.77.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-10-06
 
@@ -96,6 +96,9 @@ type opsBookWriter interface {
 // opsFileAndPathReader reads book files and the configured import paths.
 type opsFileAndPathReader interface {
 	GetAllBookFilesCore() ([]database.BookFileCore, error)
+	// GetAllBookFilesCoreComplete is the same list, refusing a memdb known to
+	// be missing rows: the chapter-fragment apply re-check reads its absences.
+	GetAllBookFilesCoreComplete() ([]database.BookFileCore, error)
 	GetAllImportPaths() ([]database.ImportPath, error)
 	GetBookFileByPath(filePath string) (*database.BookFile, error)
 	GetBookFiles(bookID string) ([]database.BookFile, error)

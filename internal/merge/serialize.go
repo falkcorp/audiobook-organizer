@@ -1,11 +1,14 @@
 // file: internal/merge/serialize.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b1e7d4a9-2c63-4f81-9a05-6d3e2f0c7b48
-// last-edited: 2026-09-10
+// last-edited: 2026-10-06
 
 package merge
 
-import "sync"
+import (
+	"sync"
+	"sync/atomic"
+)
 
 // mergeSerializeMu serializes EVERY merge-family read-modify-write across the
 // whole process. These four read-modify-writes in internal/merge and
@@ -48,7 +51,30 @@ import "sync"
 //
 // Scope: hold it only around the read-modify-write itself; nothing
 // slow/blocking (network, large scan) runs while it is held.
-var mergeSerializeMu sync.Mutex
+var mergeSerializeMu countedMutex
+
+// countedMutex is a sync.Mutex that counts its acquisitions, so a holder can
+// tell whether anyone else held the lock between two of its own holds
+// (MergeLockAcquisitions).
+type countedMutex struct {
+	mu       sync.Mutex
+	acquired atomic.Uint64
+}
+
+func (m *countedMutex) Lock() {
+	m.mu.Lock()
+	m.acquired.Add(1)
+}
+
+func (m *countedMutex) Unlock() { m.mu.Unlock() }
+
+// MergeLockAcquisitions is how many times the merge serialization lock has
+// been acquired since the process started. Read while holding the lock, it
+// includes the caller's own acquisition: a caller that saw n at its previous
+// hold and reads n+1 now knows no other merge-family writer held the lock in
+// between. The chapter-fragment fixer's apply keeps one whole-library
+// snapshot for the run on that evidence.
+func MergeLockAcquisitions() uint64 { return mergeSerializeMu.acquired.Load() }
 
 // LockMergeRMW acquires the shared merge serialization lock for a caller OUTSIDE
 // this package (specifically dedup.MergeBooks and dedup.MergeSplitBookCluster,

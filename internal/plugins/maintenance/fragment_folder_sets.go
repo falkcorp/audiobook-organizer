@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_folder_sets.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9f01b698-b911-4ecc-818e-6d10f415e768
 // last-edited: 2026-10-06
 
@@ -95,6 +95,7 @@
 package maintenance
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -102,10 +103,13 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode"
 	"unicode/utf8"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
@@ -1226,18 +1230,45 @@ func (ix *fragAudioIndex) titleJoinAudio(r *repairs.Row, target string, isCand f
 // existing-book check's titles, the same audio in another live book, a target
 // a no-parent apply assembled, a live book in the set's folders, a member's
 // version group). cands are the row's fragments as the re-plan rebuilt them.
-// The library is listed fresh (GetAllBooksCoreComplete, which refuses a
-// partly loaded cache) and the same code the plan ran decides it
-// (noParentRows, holdCoOwned), so plan and apply cannot disagree on a test.
-// Whether a book outside the row is a fragment candidate, and whether one was
-// assembled, are read for the books those tests ask about. why is "" when
-// the fragments still form the planned row, applicable, joining the same
-// book; any read error fails the apply rather than passing it.
-func (f *fragmentFixer) setLibraryGuard(store OpsStore, hist FragmentRepairReader, planned repairs.Row, cands []*fragCandidate) (string, error) {
-	full, err := f.loadLibraryFrom(store, store.GetAllBooksCoreComplete)
+// The same code the plan ran decides it (noParentRows, holdCoOwned), so plan
+// and apply cannot disagree on a test. Whether a book outside the row is a
+// fragment candidate, and whether one was assembled, are read for the books
+// those tests ask about. why is "" when the fragments still form the planned
+// row, applicable, joining the same book; any read error fails the apply
+// rather than passing it.
+//
+// The library is the apply run's one snapshot (fragApplySession), listed with
+// the Complete pair (loadLibraryFrom) and caught up row by row. Within a run:
+//   - the engine's unlocked Replan skips this (Apply decides it again under
+//     the merge lock, before any write), except in a dry run, which never
+//     reaches Apply;
+//   - Apply's re-check under the lock reads the snapshot (one load per run,
+//     not two per row: each was ~40k books and ~742k file rows).
+//
+// Outside a run (no session: a plan continuing an interrupted row, a direct
+// Replan) the library is listed fresh for the one call.
+func (f *fragmentFixer) setLibraryGuard(ctx context.Context, store OpsStore, hist FragmentRepairReader, planned repairs.Row, cands []*fragCandidate) (string, error) {
+	sess := fragSessionOf(ctx)
+	locked := mergeLockHeld(ctx)
+	var full *fragLibrary
+	var err error
+	switch {
+	case sess == nil:
+		full, err = f.loadLibraryFrom(store, store.GetAllBooksCoreComplete, store.GetAllBookFilesCoreComplete)
+	case !locked && !sess.dryRun:
+		return "", nil
+	default:
+		sess.mu.Lock()
+		defer sess.mu.Unlock()
+		full, err = sess.library(f, store, locked)
+	}
 	if err != nil {
 		return "", fmt.Errorf("%s: library re-check of %s: %w", fragFixerID, planned.RowID, err)
 	}
+	// Per-call memos: a row earlier in the run may have assembled a book or
+	// retired one the lookup had read.
+	full.setLookup(store)
+	full.flagFollows, full.flagFollowsLoaded = nil, false
 	var readErr error
 	full.assembled = map[string]bool{}
 	full.assembledFn = func(id string) bool {
@@ -1314,4 +1345,206 @@ func fragAssembledByJournal(hist FragmentRepairReader, id string) (bool, error) 
 		}
 	}
 	return false, nil
+}
+
+// fragApplySession is one apply run's state (repairs.ApplyScoped): the
+// whole-library snapshot every chapter-set re-check of the run reads, built
+// once and caught up between rows rather than listed per row (each listing
+// was ~40k books and ~742k file rows, ~460 MB transient on prod, and up to
+// four workers listed at once, twice per row).
+//
+// Catch-up, under the merge lock at each re-check:
+//   - the books written since the snapshot's library generation, by anyone
+//     (database.BooksChangedSinceOf: every book create, update and delete is
+//     logged with its id), plus the books this run's rows touched (afterRow),
+//     plus the live members of their version groups, are read again point by
+//     point (book, file rows, author);
+//   - the whole snapshot is listed again when that log cannot vouch for
+//     itself (no log, a gap, an overflow), or when another merge-family
+//     writer held the merge lock since this run's last hold
+//     (merge.MergeLockAcquisitions jumped by more than this run's own hold):
+//     such a writer can move file rows without writing a book.
+//
+// Not seen: a book-file write that writes no book, by a writer that never
+// takes the merge lock, landing between two rows of the run (a write run
+// stands the library scan down; a dry run does not). Author renames, series
+// and the import roots are read once per snapshot. The snapshot is held for
+// the run (one copy, released by end) instead of listed and dropped per row.
+type fragApplySession struct {
+	dryRun bool
+	mu     sync.Mutex
+	lib    *fragLibrary // nil until the first re-check, and after end
+	// gen is the library generation the snapshot is current to; lockSeen
+	// the merge-lock acquisition count at this run's last hold (or at the
+	// snapshot, in a dry run).
+	gen, lockSeen uint64
+	// dirty are the books this run's rows touched since the last catch-up.
+	dirty map[string]bool
+	// loads counts whole-library listings, for the log and the tests.
+	loads int
+}
+
+type fragSessionKey struct{}
+
+type fragLockHeldKey struct{}
+
+// BeginApply implements repairs.ApplyScoped.
+func (f *fragmentFixer) BeginApply(ctx context.Context, dryRun bool) (context.Context, func()) {
+	s := &fragApplySession{dryRun: dryRun, dirty: map[string]bool{}}
+	return context.WithValue(ctx, fragSessionKey{}, s), func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.lib = nil
+	}
+}
+
+var _ repairs.ApplyScoped = (*fragmentFixer)(nil)
+
+// fragSessionOf is ctx's apply session, nil outside an apply run.
+func fragSessionOf(ctx context.Context) *fragApplySession {
+	s, _ := ctx.Value(fragSessionKey{}).(*fragApplySession)
+	return s
+}
+
+// withMergeLockHeld marks ctx as running under merge.LockMergeRMW (Apply's
+// re-plan).
+func withMergeLockHeld(ctx context.Context) context.Context {
+	return context.WithValue(ctx, fragLockHeldKey{}, true)
+}
+
+func mergeLockHeld(ctx context.Context) bool {
+	v, _ := ctx.Value(fragLockHeldKey{}).(bool)
+	return v
+}
+
+// afterRow notes, under the merge lock at the end of an Apply, the books the
+// row touched and this hold of the lock. nil-safe.
+func (s *fragApplySession) afterRow(ids []string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, id := range ids {
+		s.dirty[id] = true
+	}
+	s.lockSeen = merge.MergeLockAcquisitions()
+}
+
+// library is the run's snapshot, caught up (see fragApplySession). The
+// caller holds s.mu; locked says it also holds the merge lock.
+func (s *fragApplySession) library(f *fragmentFixer, store OpsStore, locked bool) (*fragLibrary, error) {
+	cur := merge.MergeLockAcquisitions()
+	if s.lib != nil {
+		ownHolds := uint64(0)
+		if locked {
+			ownHolds = 1
+		}
+		if cur == s.lockSeen+ownHolds {
+			ids, upTo, ok := database.BooksChangedSinceOf(store, s.gen)
+			if ok {
+				if err := s.catchUp(store, ids); err != nil {
+					s.lib = nil
+					return nil, err
+				}
+				s.gen, s.lockSeen = upTo, cur
+				return s.lib, nil
+			}
+		}
+		s.lib = nil
+	}
+	// The generation is read before the listing: a write landing during it
+	// is read again at the next catch-up.
+	g, _ := database.LibraryGenerationOf(store)
+	gen := g.Value()
+	lib, err := f.loadLibraryFrom(store, store.GetAllBooksCoreComplete, store.GetAllBookFilesCoreComplete)
+	if err != nil {
+		return nil, err
+	}
+	s.loads++
+	s.lib, s.gen, s.lockSeen, s.dirty = lib, gen, cur, map[string]bool{}
+	return lib, nil
+}
+
+// catchUp reads ids, the run's dirty books, and the live members of every
+// version group one of them is or was in, again into the snapshot.
+func (s *fragApplySession) catchUp(store OpsStore, ids []string) error {
+	want := map[string]bool{}
+	for _, id := range ids {
+		want[id] = true
+	}
+	for id := range s.dirty {
+		want[id] = true
+	}
+	groups := map[string]bool{}
+	for id := range want {
+		if g := s.lib.books[id].VersionGroup; g != "" {
+			groups[g] = true
+		}
+	}
+	for _, id := range sortedKeys(want) {
+		g, err := s.refreshBook(store, id)
+		if err != nil {
+			return err
+		}
+		if g != "" {
+			groups[g] = true
+		}
+	}
+	for _, g := range sortedKeys(groups) {
+		members, err := store.GetBooksByVersionGroup(g)
+		if err != nil {
+			return fmt.Errorf("version group %s: %w", g, err)
+		}
+		for i := range members {
+			if id := members[i].ID; !want[id] {
+				want[id] = true
+				if _, err := s.refreshBook(store, id); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	s.dirty = map[string]bool{}
+	return nil
+}
+
+// refreshBook reads book id and its file rows into the snapshot as the
+// whole-library listing would hold them (a retired or gone book is left out
+// of the books; its rows stay, as the file listing returns them). It returns
+// the book's version group.
+func (s *fragApplySession) refreshBook(store OpsStore, id string) (string, error) {
+	lib := s.lib
+	b, err := store.GetBookByID(id)
+	if err != nil {
+		return "", fmt.Errorf("read %s: %w", id, err)
+	}
+	rows, err := store.GetBookFiles(id)
+	if err != nil {
+		return "", fmt.Errorf("read files of %s: %w", id, err)
+	}
+	delete(lib.files, id)
+	for i := range rows {
+		lib.files[id] = append(lib.files[id], fragFileOf(id, &rows[i]))
+	}
+	if b == nil || b.IsSoftDeleted() {
+		delete(lib.books, id)
+		if b == nil {
+			return "", nil
+		}
+		return dcStr(b.VersionGroupID), nil
+	}
+	lib.books[id] = fragBookOf(b)
+	if b.AuthorID != nil {
+		if _, known := lib.authors[*b.AuthorID]; !known {
+			a, err := store.GetAuthorByID(*b.AuthorID)
+			if err != nil {
+				return "", fmt.Errorf("read author %d of %s: %w", *b.AuthorID, id, err)
+			}
+			if a != nil {
+				lib.authors[a.ID] = a.Name
+			}
+		}
+	}
+	return dcStr(b.VersionGroupID), nil
 }

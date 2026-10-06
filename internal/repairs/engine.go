@@ -1,5 +1,5 @@
 // file: internal/repairs/engine.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 9b3e7f40-2d15-4a86-9c1f-6e0a4d8b7c25
 // last-edited: 2026-10-06
 
@@ -560,6 +560,11 @@ func RunApply(ctx context.Context, f Fixer, plan *PlanResult, planOpID string, r
 			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("repairs.apply: checkpoint not written (a restart re-checks these rows): %v", err))
 		}
 		mu.Unlock()
+	}
+	if sc, ok := f.(ApplyScoped); ok && len(selected) > 0 {
+		var end func()
+		ctx, end = sc.BeginApply(ctx, dryRun)
+		defer end()
 	}
 	parts := partitionRows(selected)
 	conc := deps.Concurrency
