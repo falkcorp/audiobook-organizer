@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.38.0
+// version: 1.39.0
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
 // last-edited: 2026-10-06
 
@@ -115,12 +115,14 @@
 // it, or a book outside the row holds a file a run moved out of that folder)
 // is held: applying it would make a second live book of the work.
 //
-// ITUNES VERSION GROUPS (joinGroupITunes, 2026-10-06). Retiring a fragment
-// that reads as primary hands its version group's primary on, and the
-// ranking favours an iTunes id, so a retire can write an iTunes book. A join,
-// moved, copy or ghost row is held (skipped_itunes) when the target's or
-// parent's version group, or any fragment's, holds a live iTunes copy; read
-// fresh at plan and again under the merge lock before the first write.
+// ITUNES BOOKS A ROW WOULD WRITE (retireITunes, targetITunes, 2026-10-06).
+// Every applicable row is held (skipped_itunes) when it would write an iTunes
+// book: its target itself (a join's target, a moved/copy/ghost row's parent,
+// a no-parent row's survivor, a carry row's terminal), grouped or not; or,
+// for a row that retires fragments, a live book in the target's version group
+// or a fragment's (retiring a fragment that reads as primary hands its
+// group's primary on, and the ranking favours an iTunes id). Read fresh at
+// plan and again under the merge lock before the first write.
 //
 // RETIRING a fragment into its parent or survivor is what merge.Service does
 // for an absorbed book: every user's listening state and positions follow it
@@ -331,6 +333,10 @@ type fragmentFixer struct {
 	readDir func(string) ([]os.DirEntry, error)
 	// now replaces time.Now in tests.
 	now func() time.Time
+	// afterLockedReplan, when set (tests only), runs in Apply after the
+	// re-plan under the merge lock and before the row's own pre-write
+	// checks: a write landing exactly there is what those checks exist for.
+	afterLockedReplan func()
 }
 
 func newFragmentFixer(p *Plugin) *fragmentFixer {
@@ -805,7 +811,7 @@ type fragLibrary struct {
 	// set by every plan and re-plan, nil only in a snapshot built by hand.
 	extIDs func(id string) ([]database.ExternalIDMapping, error)
 	// groupReads reads a version group's members and their rows fresh (the
-	// join's iTunes-group check, joinGroupITunes); set by every plan and
+	// join's iTunes-group check, retireITunes); set by every plan and
 	// re-plan, nil only in a snapshot built by hand.
 	groupReads fragGroupReads
 	// assembled are the books a no-parent apply of this fixer assembled (the
@@ -2500,6 +2506,10 @@ func carryRow(lib *fragLibrary, rec fragPlanRecord, ops []string, terminal strin
 		State:       state,
 		Detail:      carry,
 		Fingerprint: fragFingerprint(fp...)}
+	// The files move onto terminal: never onto an iTunes book.
+	if why := lib.targetITunes(terminal); why != "" {
+		r.Skipped, r.SkipReason = repairs.SkipITunes, why
+	}
 	for _, id := range ids {
 		b, ok := lib.books[id]
 		if !ok {
@@ -2546,6 +2556,9 @@ func (f *fragmentFixer) replanCarry(store OpsStore, lib *fragLibrary, planned re
 	}
 	got := planned
 	got.Detail = carry
+	if why := lib.targetITunes(carry[0].To); why != "" {
+		got.Skipped, got.SkipReason = repairs.SkipITunes, why
+	}
 	return got, nil
 }
 
@@ -3043,7 +3056,7 @@ func (f *fragmentFixer) parentRow(lib *fragLibrary, parentID, rowKind string, pa
 	} else if withPID != "" {
 		r.Class, r.Skipped, r.SkipReason = fragClassManual, repairs.SkipITunes,
 			withPID+"; retiring it would queue an iTunes remove at the purge"
-	} else if why := lib.joinGroupITunes(parentID, books[1:]); why != "" {
+	} else if why := lib.retireITunes(parentID, books[1:]); why != "" {
 		// Retiring a fragment into the parent hands its version group's
 		// primary on (and the parent's group is re-ranked), exactly as a
 		// join does: held for an iTunes copy in any of those groups.
@@ -3932,6 +3945,7 @@ func (f *fragmentFixer) noParentRows(lib *fragLibrary, cands []*fragCandidate) [
 	}
 	holdSameAudioRows(rows)
 	f.classifyFolderSets(lib, live, rows, sets, cands)
+	holdSurvivorITunes(lib, rows)
 	for _, c := range cands {
 		if placed[c] {
 			continue
@@ -4782,8 +4796,8 @@ func (f *fragmentFixer) joinExisting(lib *fragLibrary, r *repairs.Row, plan *fra
 		return
 	}
 	// The join stands as the decision, held: its version groups hold an
-	// iTunes copy the retire hand-off would write (joinGroupITunes).
-	if why := lib.joinGroupITunes(e.id, planFragBooks(plan)); why != "" {
+	// iTunes copy the retire hand-off would write (retireITunes).
+	if why := lib.retireITunes(e.id, planFragBooks(plan)); why != "" {
 		f.holdExisting(lib, r, plan, e.id, repairs.SkipITunes, why)
 		return
 	}
@@ -4846,15 +4860,45 @@ func (f *fragmentFixer) joinExisting(lib *fragLibrary, r *repairs.Row, plan *fra
 // to it (listening state, external ids) would touch an iTunes-tracked book.
 // An unreadable external id list refuses too: fail closed. frags are the
 // fragments the join retires: a version group of the target's or of any of
-// theirs holding a live iTunes copy refuses the join too (joinGroupITunes).
+// theirs holding a live iTunes copy refuses the join too (retireITunes).
 func (f *fragmentFixer) joinTargetRefusal(lib *fragLibrary, id string, frags []fragBook) (kind, why string) {
 	if k, w := f.joinTargetBookRefusal(lib, id); k != "" {
 		return k, w
 	}
-	if w := lib.joinGroupITunes(id, frags); w != "" {
+	if w := lib.retireITunes(id, frags); w != "" {
 		return repairs.SkipITunes, w
 	}
 	return "", ""
+}
+
+// holdSurvivorITunes holds each applicable no-parent row (assembled into
+// its survivor, not joined) that would write an iTunes book (retireITunes):
+// the survivor itself, or a book in a version group of the survivor or of a
+// member or copy it retires (each retire hands its group's primary on).
+// Plan and the group re-plan both run it (noParentRows).
+func holdSurvivorITunes(lib *fragLibrary, rows []repairs.Row) {
+	for i := range rows {
+		r := &rows[i]
+		plan, ok := r.Detail.(*fragGroupPlan)
+		if !ok || plan.Join != "" || plan.SurvivorID == "" || !r.Applicable() {
+			continue
+		}
+		if why := lib.retireITunes(plan.SurvivorID, survivorRetirees(plan)); why != "" {
+			r.Risk, r.Skipped, r.SkipReason = repairs.RiskReview, repairs.SkipITunes, why
+		}
+	}
+}
+
+// survivorRetirees lists the books a no-parent plan retires into its
+// survivor: its members and copies but the survivor.
+func survivorRetirees(plan *fragGroupPlan) []fragBook {
+	var out []fragBook
+	for _, b := range planFragBooks(plan) {
+		if b.ID != plan.SurvivorID {
+			out = append(out, b)
+		}
+	}
+	return out
 }
 
 // planFragBooks lists the books a group plan's join retires: its members and
@@ -4870,20 +4914,31 @@ func planFragBooks(plan *fragGroupPlan) []fragBook {
 	return out
 }
 
-// joinGroupITunes is why a join into target, or a moved/copy row's retire
-// into its parent target, is held for an iTunes copy in a version group the
-// retire writes to ("" none). Retiring a fragment that reads
-// as primary demotes it and hands its group's primary on
-// (versionprimary.EnsureSinglePrimary), which ranks an iTunes id up and
-// writes is_primary_version on the iTunes book; the target's own group is
-// re-ranked the same way when the target changes. Owner rule: iTunes books
-// stay untouched, so a join whose target's group, or any fragment's group,
-// holds a live book with an iTunes id (book, file row or path, un-tombstoned
-// external id, or an iTunes library path) is held. Groups are read fresh,
-// point by point (lib.groupReads), so a re-plan whose snapshot holds only the
-// row's books sees every member. A read that fails, or a member that cannot
-// be told, holds too: fail closed.
-func (lib *fragLibrary) joinGroupITunes(target string, frags []fragBook) string {
+// retireITunes is why a row that retires fragments into target (a join, a
+// moved/copy/ghost row into its parent, a no-parent row into its survivor)
+// is held for an iTunes book it would write ("" none):
+//   - target itself, grouped or not: its rows are repointed or moved onto,
+//     listening state and external ids are carried to it, its totals are
+//     recomputed;
+//   - any live book in target's version group or a fragment's: retiring a
+//     fragment that reads as primary demotes it and hands its group's
+//     primary on (versionprimary.EnsureSinglePrimary), which ranks an iTunes
+//     id up and writes is_primary_version on the iTunes book, and the
+//     target's own group is re-ranked the same way.
+//
+// Owner rule: iTunes books stay untouched. "iTunes book" is itunesCopyWhy's
+// test: a book or file-row iTunes id, a file-row iTunes path, an
+// un-tombstoned itunes external id, or a path in the iTunes library. Books
+// are read fresh, point by point (lib.groupReads), so a re-plan whose
+// snapshot holds only the row's books sees every member. A read that fails,
+// or a book that cannot be told, holds too: fail closed.
+func (lib *fragLibrary) retireITunes(target string, frags []fragBook) string {
+	// The target itself first, grouped or not: every retire writes it
+	// (rows repointed or moved onto it, listening state and external ids
+	// carried to it, its totals recomputed).
+	if why := lib.targetITunes(target); why != "" {
+		return why
+	}
 	groups := map[string]bool{}
 	if g := lib.books[target].VersionGroup; g != "" {
 		groups[g] = true
@@ -4914,9 +4969,38 @@ func (lib *fragLibrary) joinGroupITunes(target string, frags []fragBook) string 
 	return ""
 }
 
-// groupITunesNow is joinGroupITunes for a retire into target about to be
-// written (a join, or a moved/copy row into its parent), with the target
-// read fresh from store. frags carry the re-plan's fresh version groups.
+// targetITunes is why book target, which a row writes (rows repointed or
+// moved onto it, state carried to it, totals recomputed), is held as an
+// iTunes book ("" none; itunesCopyWhy, read fresh when lib.groupReads is
+// set). A book the snapshot does not hold is not judged here: every caller
+// has refused a gone target already. Fail closed on a read error or doubt.
+func (lib *fragLibrary) targetITunes(target string) string {
+	tb, ok := lib.books[target]
+	if !ok {
+		return ""
+	}
+	why, doubt, err := lib.memberITunesWhy(tb)
+	switch {
+	case err != nil:
+		return fmt.Sprintf("book %s, which this row writes, cannot be read (%v), so whether it is an iTunes copy cannot be told; decide by hand", target, err)
+	case doubt:
+		return fmt.Sprintf("whether book %s, which this row writes, is an iTunes copy cannot be told; decide by hand", target)
+	case why != "":
+		return fmt.Sprintf("book %s (%q), which this row writes, is an iTunes copy (%s); iTunes books are never written, so the row is held; decide by hand",
+			target, tb.Title, why)
+	}
+	return ""
+}
+
+// targetITunesNow is targetITunes for a write about to land on target, read
+// fresh from store.
+func targetITunesNow(store OpsStore, target string) (string, error) {
+	return groupITunesNow(store, target, nil)
+}
+
+// groupITunesNow is retireITunes for a retire into target about to be
+// written (a join, a moved/copy/ghost row into its parent, a no-parent row
+// into its survivor), with the target read fresh from store. frags carry the re-plan's fresh version groups.
 func groupITunesNow(store OpsStore, target string, frags []fragBook) (string, error) {
 	tb, err := store.GetBookByID(target)
 	if err != nil {
@@ -4928,10 +5012,10 @@ func groupITunesNow(store OpsStore, target string, frags []fragBook) (string, er
 	lib := newFragLibrary()
 	lib.extIDs, lib.groupReads = store.GetExternalIDsForBook, store
 	lib.books[target] = fragBookOf(tb)
-	return lib.joinGroupITunes(target, frags), nil
+	return lib.retireITunes(target, frags), nil
 }
 
-// fragGroupReads are the point reads joinGroupITunes makes: a version
+// fragGroupReads are the point reads retireITunes makes: a version
 // group's members and each member's file rows. External ids go through
 // lib.extIDs.
 type fragGroupReads interface {
@@ -7176,6 +7260,9 @@ func (f *fragmentFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repa
 		}
 		return fmt.Errorf("%w: under the merge lock: %s", repairs.ErrChangedSincePlan, why)
 	}
+	if f.afterLockedReplan != nil {
+		f.afterLockedReplan()
+	}
 	var steps int
 	partial := func(err error) error {
 		if steps == 0 {
@@ -7185,6 +7272,13 @@ func (f *fragmentFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repa
 	}
 	switch plan := locked.Detail.(type) {
 	case []fragCarry:
+		// The iTunes hold on the book the files move onto, read fresh
+		// under the lock.
+		if why, err := targetITunesNow(store, plan[0].To); err != nil {
+			return err
+		} else if why != "" {
+			return fmt.Errorf("%w: under the merge lock: %s", repairs.ErrChangedSincePlan, why)
+		}
 		// Grouped by the book the files are on: one journaled move each
 		// (repairs.Writer.MoveBookFiles), which a revert puts back.
 		byFrom := map[string][]string{}
@@ -7309,6 +7403,13 @@ func (f *fragmentFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repa
 			if err := copyRetireRefusal(store, cp, plan.SurvivorID, "copy"); err != nil {
 				return err
 			}
+		}
+		// The iTunes hold, read fresh under the lock: the survivor takes the
+		// members' rows, and each retire hands a version group's primary on.
+		if why, err := groupITunesNow(store, plan.SurvivorID, survivorRetirees(plan)); err != nil {
+			return err
+		} else if why != "" {
+			return fmt.Errorf("%w: under the merge lock: %s", repairs.ErrChangedSincePlan, why)
 		}
 		// The run's plan record goes into the journal before its first
 		// write, so a plan made after a cut CONTINUES this run with this

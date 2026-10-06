@@ -25,6 +25,18 @@
     before the first write. Moved, copy and ghost rows, which retire their
     fragments into the parent the same way, are held for the same reason
     when the parent's or a fragment's version group holds a live iTunes copy.
+  - No row of this fixer writes an iTunes book any more. The book a row
+    writes is checked itself, whether or not it is in a version group: a
+    moved, copy or ghost row's parent, a no-parent row's survivor (and the
+    version groups of its members), and a carry row's terminal. An iTunes id
+    on that book, on one of its file rows, as a live external id, or an
+    iTunes library path holds the row, at plan and again under the merge lock
+    just before the first write.
+  - Between two rows of one apply, the re-check also reads, fresh, every
+    book holding the set's own files (by path and by hash). Writers that take
+    no merge lock and write no book (repoints, file recoveries, hash
+    backfills) are now seen. A row that never re-checks the library no
+    longer hides another writer's merge-lock hold from the next one.
   - The apply's re-check treats as "a chapter fragment, not a book" only
     what the plan would: a fragment matched to a parent, or one a run of
     this fixer has written, is a book there too, so the re-check no longer
