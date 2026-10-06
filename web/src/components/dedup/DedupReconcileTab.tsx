@@ -1,9 +1,10 @@
 // file: web/src/components/dedup/DedupReconcileTab.tsx
-// version: 1.0.2
+// version: 1.1.0
 // guid: d4e5f6a7-b8c9-0123-def0-123456789003
-// last-edited: 2026-08-19
+// last-edited: 2026-10-06
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
+import { useRowSelection } from '../../hooks/useRowSelection';
 import {
   Box,
   Typography,
@@ -33,9 +34,21 @@ export function ReconcileTab() {
   const [preview, setPreview] = useState<ReconcilePreview | null>(null);
   const [lastScanTime, setLastScanTime] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [applying, setApplying] = useState(false);
   const [applyResult, setApplyResult] = useState<string | null>(null);
+
+  // One list, no paging: the header checkbox selects every match, shift-click
+  // a range. A constant resetKey because each new preview REPLACES the
+  // selection (auto-selecting the high-confidence matches); a key derived from
+  // the preview would clear that auto-selection on the render after it.
+  const matchKeys = useMemo(() => (preview?.matches ?? []).map((m) => m.book_id), [preview]);
+  const selection = useRowSelection<string>({
+    pageKeys: matchKeys,
+    totalMatching: matchKeys.length,
+    resetKey: 'reconcile',
+  });
+  const selected = selection.selected;
+  const { replace: setSelected } = selection;
 
   const autoSelectHighConfidence = (data: ReconcilePreview) => {
     const autoSelect = new Set<string>();
@@ -100,22 +113,6 @@ export function ReconcileTab() {
       setScanning(false);
     }
   };
-
-  const toggleMatch = (bookId: string) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(bookId)) next.delete(bookId);
-      else next.add(bookId);
-      return next;
-    });
-  };
-
-  const selectAll = () => {
-    if (!preview) return;
-    setSelected(new Set(preview.matches.map((m) => m.book_id)));
-  };
-
-  const deselectAll = () => setSelected(new Set());
 
   const applyFixes = async () => {
     if (!preview || selected.size === 0) return;
@@ -288,13 +285,17 @@ export function ReconcileTab() {
                 }}
               >
                 <Typography variant="h6">Matches ({preview.matches.length})</Typography>
-                <Stack direction="row" spacing={1}>
-                  <Button size="small" onClick={selectAll}>
-                    Select All
-                  </Button>
-                  <Button size="small" onClick={deselectAll}>
-                    Deselect All
-                  </Button>
+                <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+                  <Checkbox
+                    size="small"
+                    checked={selection.header.checked}
+                    indeterminate={selection.header.indeterminate}
+                    disabled={selection.header.disabled}
+                    onChange={selection.togglePage}
+                    slotProps={{
+                      input: { 'aria-label': `Select all ${preview.matches.length} matches` },
+                    }}
+                  />
                   <Button
                     variant="contained"
                     color="primary"
@@ -335,9 +336,9 @@ export function ReconcileTab() {
                         }}
                       >
                         <Checkbox
-                          checked={selected.has(m.book_id)}
-                          onChange={() => toggleMatch(m.book_id)}
+                          {...selection.checkboxProps(m.book_id)}
                           sx={{ mt: -0.5 }}
+                          slotProps={{ input: { 'aria-label': `Select match ${m.book_id}` } }}
                         />
                         <Box sx={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
                           <Stack
