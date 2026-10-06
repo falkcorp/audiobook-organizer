@@ -1,13 +1,12 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.51.1
+// version: 1.52.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
-// last-edited: 2026-10-04
+// last-edited: 2026-10-06
 
 package metafetch
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -822,9 +821,7 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 
 		// Compute metadata_source_hash = sha256("{source}:{canonical_id}") so the
 		// dedup engine can later detect books sharing the exact same external record.
-		canonicalID := metadataCanonicalID(candidate)
-		if canonicalID != "" {
-			h := fmt.Sprintf("%x", sha256.Sum256([]byte(src+":"+canonicalID)))
+		if h := CandidateSourceHash(candidate); h != "" {
 			book.MetadataSourceHash = &h
 		}
 	} else {
@@ -839,18 +836,21 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 	// that committed during the apply was silently reverted. A book with an
 	// error means the write stands and its history did not land; CommitApply
 	// logged it at Error and undo refuses that apply.
-	var commitGuard func(*database.Book) error
+	var noMatchGuard func(*database.Book) error
 	if opts.automatic() {
 		// The no_match check above read the row this apply loaded; re-check
 		// the row as it stands under the write lock, so a "no match" the
 		// owner set while this apply ran is not overwritten.
-		commitGuard = func(fresh *database.Book) error {
+		noMatchGuard = func(fresh *database.Book) error {
 			if IsMarkedNoMatch(fresh.MetadataReviewStatus) {
 				return fmt.Errorf("book %s: %w", id, ErrMarkedNoMatch)
 			}
 			return nil
 		}
 	}
+	// The caller's own under-lock check (ApplyOptions.Guard) runs after the
+	// no_match one, on the same fresh row, inside the same ModifyBook.
+	commitGuard := composeCommitGuards(noMatchGuard, opts.Guard)
 	updatedBook, updateErr := mfs.commitApply(id, before, book, credits, historySource, opts.BatchID, commitGuard)
 	if updatedBook == nil {
 		return nil, updateErr
@@ -1406,4 +1406,26 @@ func (mfs *Service) autoFetchHasLibraryCopy(book *database.Book) bool {
 		return true
 	}
 	return mfs.isProtectedPath(book.FilePath) && mfs.librarySibling(book) != nil
+}
+
+// composeCommitGuards runs each non-nil guard in order on the fresh row and
+// returns the first refusal; nil when every guard is nil.
+func composeCommitGuards(guards ...func(*database.Book) error) func(*database.Book) error {
+	var live []func(*database.Book) error
+	for _, g := range guards {
+		if g != nil {
+			live = append(live, g)
+		}
+	}
+	if len(live) == 0 {
+		return nil
+	}
+	return func(fresh *database.Book) error {
+		for _, g := range live {
+			if err := g(fresh); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 }

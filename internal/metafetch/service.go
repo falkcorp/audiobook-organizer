@@ -1,5 +1,5 @@
 // file: internal/metafetch/service.go
-// version: 5.45.0
+// version: 5.46.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
 // last-edited: 2026-10-06
 
@@ -721,6 +721,19 @@ func metadataCanonicalID(c MetadataCandidate) string {
 		return c.ISBN
 	}
 	return ""
+}
+
+// CandidateSourceHash is the metadata_source_hash an apply of c records:
+// sha256("{source}:{canonical_id}") in hex, the dedup key MATCH-4 elects on.
+// "" when c carries no canonical id (no ASIN and no ISBN), in which case the
+// apply records none. It lets a caller recover WHICH cached candidate a book
+// was applied from by comparing it with the book's MetadataSourceHash.
+func CandidateSourceHash(c MetadataCandidate) string {
+	id := metadataCanonicalID(c)
+	if id == "" {
+		return ""
+	}
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(c.Source+":"+id)))
 }
 
 // audioFilesInDir returns the audio files found directly inside dir.

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.77.0
+// version: 1.78.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-10-06
 
@@ -16,6 +16,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/compactprogress"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
+	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/childop"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
@@ -934,6 +935,35 @@ type CandidateRefetcher interface {
 	RefetchMetadataCandidates(ctx context.Context, bookID string) (CandidateRefetchResult, error)
 }
 
+// VersionTwinMetadataService is the metadata service surface the version
+// twin fixer (maintenance.version-twin-metadata) writes through: the one
+// metadata apply path every apply shares, the candidate-cache copy, and the
+// cache identity check. *metafetch.Service satisfies it.
+type VersionTwinMetadataService interface {
+	// ApplyMetadataCandidateWithOptions is metafetch's apply: field locks,
+	// fill-only strip, change history after the commit (undo-last-apply
+	// reverts it), the match stamp, MATCH-4.
+	ApplyMetadataCandidateWithOptions(id string, candidate metafetch.MetadataCandidate, fields []string, opts metafetch.ApplyOptions) (*metafetch.FetchMetadataResponse, error)
+	// CopyCandidateCache copies one book's cached candidates onto another,
+	// re-keyed for the target (metafetch.Service.CopyCandidateCache).
+	CopyCandidateCache(fromID, toID string, check func(target *database.Book, cur *database.MetadataCandidateCache) error) (*database.MetadataCandidateCache, error)
+	// ValidateCachedIdentityForBook: nil when entry was fetched for book as
+	// it is now.
+	ValidateCachedIdentityForBook(entry *database.MetadataCandidateCache, book *database.Book, liveAuthors []string) error
+}
+
+// VersionTwinMetadata serves the version twin fixer. Implemented on
+// *server.Server, which owns the metadata fetch service.
+type VersionTwinMetadata interface {
+	// VersionTwinMetadataService is nil when the metadata fetch service is
+	// not wired; the fixer then refuses to plan.
+	VersionTwinMetadataService() VersionTwinMetadataService
+	// BooksWithMetadataSourceHash lists the books carrying a
+	// metadata_source_hash (the MATCH-4 cluster an apply of that record
+	// joins). Its own accessor rather than one more method on OpsStore.
+	BooksWithMetadataSourceHash(hash string) ([]database.Book, error)
+}
+
 // ServerDeps is the narrow interface that *server.Server satisfies implicitly.
 // All operations are expressed as methods so there is no import cycle.
 //
@@ -970,6 +1000,7 @@ type ServerDeps interface { //nolint:interfacebloat // transitional composition 
 	BookMerger
 	LibraryCloner
 	CandidateRefetcher
+	VersionTwinMetadata
 }
 
 // ----- reporter adapter -----
