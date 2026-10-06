@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_series.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 29120d16-9add-4efd-81a5-edc1e8951f4d
-// last-edited: 2026-09-25
+// last-edited: 2026-10-06
 
 package database
 
@@ -177,6 +177,73 @@ func (p *PebbleStore) CreateSeries(name string, authorID *int) (*Series, error) 
 	return series, nil
 }
 
+// ErrSeriesHeld is DeleteSeries' refusal of a held series row (Series.HeldBy).
+var ErrSeriesHeld = errors.New("series is held")
+
+// SeriesHolder marks series rows that must outlive their books. It is a
+// capability, kept out of Store; reach it through AsSeriesHolder.
+type SeriesHolder interface {
+	// HoldSeries sets the row's HeldBy to holder (idempotent). A missing row
+	// is an error: there is nothing to keep.
+	HoldSeries(id int, holder string) error
+}
+
+// AsSeriesHolder returns s as a SeriesHolder, or nil.
+func AsSeriesHolder(s any) SeriesHolder {
+	if h, ok := AsCapability[SeriesHolder](s); ok {
+		return h
+	}
+	return nil
+}
+
+// SeriesHeld reports whether s must not be deleted (Series.HeldBy): the one
+// test every deleting path asks.
+func SeriesHeld(s Series) bool { return strings.TrimSpace(s.HeldBy) != "" }
+
+// HoldSeries marks series id as held by holder, under the series name-index
+// lock every series write takes, so a concurrent rename or delete cannot
+// interleave with the read-modify-write.
+//
+// Why a hold exists: a repair that empties a series row (unlinking every book
+// from it) must keep the row while its undo can link the books back --
+// undo refuses to restore a link to a missing series, so a row the orphan
+// prune deleted would make the repair impossible to undo.
+func (p *PebbleStore) HoldSeries(id int, holder string) error {
+	holder = strings.TrimSpace(holder)
+	if holder == "" {
+		return fmt.Errorf("hold series %d: no holder named", id)
+	}
+	p.nameIdx.series.Lock()
+	defer p.nameIdx.series.Unlock()
+	key := []byte(fmt.Sprintf("series:%d", id))
+	val, closer, err := p.db.Get(key)
+	if errors.Is(err, pebble.ErrNotFound) {
+		return fmt.Errorf("hold series %d: no such series", id)
+	}
+	if err != nil {
+		return fmt.Errorf("hold series %d: %w", id, err)
+	}
+	var series Series
+	uerr := json.Unmarshal(val, &series)
+	closer.Close()
+	if uerr != nil {
+		return fmt.Errorf("hold series %d: decode: %w", id, uerr)
+	}
+	if series.HeldBy == holder {
+		return nil
+	}
+	series.HeldBy = holder
+	data, err := json.Marshal(&series)
+	if err != nil {
+		return err
+	}
+	if err := p.db.Set(key, data, pebble.Sync); err != nil {
+		return fmt.Errorf("hold series %d: %w", id, err)
+	}
+	p.UpsertSeriesToMemDB(&series)
+	return nil
+}
+
 func (p *PebbleStore) DeleteSeries(id int) error {
 	// Held from the row read through the last write; see nameIndexLocks.
 	p.nameIdx.series.Lock()
@@ -188,6 +255,10 @@ func (p *PebbleStore) DeleteSeries(id int) error {
 	val, closer, err := p.db.Get(key)
 	if err == nil {
 		var series Series
+		if json.Unmarshal(val, &series) == nil && SeriesHeld(series) {
+			closer.Close()
+			return fmt.Errorf("%w by %s: series %d (%q) is kept so an undo can link its books back", ErrSeriesHeld, series.HeldBy, id, series.Name)
+		}
 		if json.Unmarshal(val, &series) == nil {
 			authorIDStr := "nil"
 			if series.AuthorID != nil {

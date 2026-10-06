@@ -1,5 +1,5 @@
 // file: internal/undo/restorable.go
-// version: 1.27.0
+// version: 1.28.0
 // guid: 6c1f0e9a-4b27-4d3e-9a58-e2b7c41d0f93
 // last-edited: 2026-10-06
 
@@ -326,7 +326,8 @@ var revertableBookFields = map[string]string{
 	// Written by maintenance.author-named-series with series_id when it
 	// unlinks a book from a series named after its author: the position goes
 	// with the link, and a revert that restored the link alone would leave
-	// the book unnumbered in its series.
+	// the book unnumbered in its series. It is restored only paired with that
+	// link (CheckSequencePaired), never into another series.
 	"series_sequence": "SeriesSequence",
 }
 
@@ -433,6 +434,40 @@ func CheckBookFieldCurrent(book *database.Book, c *database.OperationChange) err
 	default:
 		return refuse(ReasonChangedSince, "book %s %s changed since the operation", c.BookID, c.FieldName)
 	}
+}
+
+// CheckSequencePaired decides a series_sequence row c against the book as it
+// stands, when the same operation journaled the book's series link (link,
+// nil when it did not). A position belongs to the series it was numbered in,
+// so it goes back only into that series (link.OldValue):
+//   - no link row: the operation did not move the link; the plain
+//     compare-and-set decides (withLink false, nil);
+//   - the book is in link.OldValue already (its link row was reverted, or
+//     the book was put back): the position may go back (false, nil);
+//   - the book still holds link.NewValue, what the operation left: the link
+//     goes back in the SAME write as the position (true, nil). The caller
+//     must first pass CheckRestoreReferent on link; the link's own row then
+//     finds it already restored. This makes the pair order-independent: a
+//     revert walks rows newest first, so the position row may come first;
+//   - anything else (the owner linked the book to another series since, or
+//     the link row was refused): refused, so no position is written into a
+//     series it was never numbered in.
+func CheckSequencePaired(book *database.Book, c, link *database.OperationChange) (withLink bool, err error) {
+	if c.FieldName != "series_sequence" || link == nil {
+		return false, nil
+	}
+	cur, err := CurrentBookField(book, "series_id")
+	if err != nil {
+		return false, refuse(ReasonFieldUnreadable, "%v", err)
+	}
+	switch {
+	case cur == link.OldValue:
+		return false, nil
+	case cur == link.NewValue && link.OldValue != link.NewValue:
+		return true, nil
+	}
+	return false, refuse(ReasonChangedSince, "book %s is in series %q, not series %q its position was numbered in; the position is not restored",
+		c.BookID, cur, link.OldValue)
 }
 
 // SeriesLookup is the series reads CheckRestoreReferent needs.

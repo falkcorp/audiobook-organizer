@@ -1,7 +1,7 @@
 // file: internal/undo/engine.go
-// version: 1.29.0
+// version: 1.30.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 //
 // Undo preflight. PreflightUndoConflicts predicts what POST
 // /operations/:id/revert (audiobooks.RevertService) will do with each change
@@ -254,6 +254,20 @@ func preflightRow(store ConflictChecker, c *database.OperationChange, stamps Sof
 					return rowVerdict{refusal: refuse(ReasonFieldUnreadable, "read field states of %s: %v", c.BookID, serr)}
 				}
 				if err := CheckPairedFieldLock(locks, states, c); err != nil {
+					return rowVerdict{refusal: err}
+				}
+			}
+		}
+		// A position goes back only into the series it was numbered in,
+		// with its link when the link is still the operation's
+		// (CheckSequencePaired); the revert runs the same rule.
+		if link := plan.SeriesLinkOf(c); link != nil {
+			withLink, err := CheckSequencePaired(book, c, link)
+			if err != nil {
+				return rowVerdict{refusal: err}
+			}
+			if withLink {
+				if err := CheckRestoreReferent(store, link); err != nil {
 					return rowVerdict{refusal: err}
 				}
 			}

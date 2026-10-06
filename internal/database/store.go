@@ -1,7 +1,7 @@
 // file: internal/database/store.go
-// version: 2.107.2
+// version: 2.108.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-10-04
+// last-edited: 2026-10-06
 
 package database
 
@@ -198,6 +198,10 @@ type Series struct {
 	ID       int    `json:"id"`
 	Name     string `json:"name"`
 	AuthorID *int   `json:"author_id,omitempty"`
+	// HeldBy names what keeps this row alive while it holds no books (a
+	// repair whose undo links books back to it; see HoldSeries). DeleteSeries
+	// refuses a held row, and the orphan prune passes it over.
+	HeldBy string `json:"held_by,omitempty"`
 }
 
 // Book represents an audiobook
