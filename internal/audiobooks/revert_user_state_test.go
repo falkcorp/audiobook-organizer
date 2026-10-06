@@ -1,11 +1,13 @@
 // file: internal/audiobooks/revert_user_state_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4b5ee81e-d142-4889-b411-a97b06ed7baa
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package audiobooks
 
 import (
+	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -164,4 +166,83 @@ func TestRevertUserBookStateSet_HoldsUserStateLock(t *testing.T) {
 	s, err := st.GetUserBookState("u1", "b1")
 	require.NoError(t, err)
 	require.Nil(t, s)
+}
+
+// rusFaultStore injects position-write failures: every per-row
+// SetUserPositionAt after the first fails (so a clear-then-write-each-row
+// restore stops half way), and ReplaceUserPositions fails without writing
+// when failReplace is set.
+type rusFaultStore struct {
+	*database.PebbleStore
+	failReplace bool
+	mu          sync.Mutex
+	rowWrites   int
+}
+
+func (s *rusFaultStore) SetUserPositionAt(userID, bookID, seg string, sec float64, at time.Time) error {
+	s.mu.Lock()
+	s.rowWrites++
+	n := s.rowWrites
+	s.mu.Unlock()
+	if n > 1 {
+		return errors.New("injected position write failure")
+	}
+	return s.PebbleStore.SetUserPositionAt(userID, bookID, seg, sec, at)
+}
+
+func (s *rusFaultStore) ReplaceUserPositions(userID, bookID string, positions []database.UserPosition) error {
+	if s.failReplace {
+		return errors.New("injected replace failure")
+	}
+	return s.PebbleStore.ReplaceUserPositions(userID, bookID, positions)
+}
+
+// rusPositionsRow sets up a revertable row whose positions part changed:
+// before the import two older rows, after it the import's single end row.
+func rusPositionsRow(t *testing.T, st *database.PebbleStore, op string) (oldPos, newPos []database.UserPosition) {
+	t.Helper()
+	older := rusTS.Add(-time.Hour)
+	oldPos = []database.UserPosition{
+		{UserID: "u1", BookID: "b1", SegmentID: "s1", PositionSeconds: 900, UpdatedAt: older},
+		{UserID: "u1", BookID: "b1", SegmentID: "s2", PositionSeconds: 100, UpdatedAt: older},
+	}
+	oldState := &database.UserBookState{UserID: "u1", BookID: "b1", Status: database.UserBookStatusInProgress, ProgressPct: 30,
+		LastActivityAt: older, LastSegmentID: "s1", TotalListenedSeconds: 1000}
+	rusWrite(t, st, "b1", undo.UserStateSnapshot{State: oldState, Positions: oldPos})
+	require.NoError(t, st.ClearUserPositions("u1", "b1"))
+	newSnap := rusFinished("b1", true)
+	rusWrite(t, st, "b1", newSnap)
+	rusRow(t, st, op, "b1", undo.UserStateSnapshot{State: oldState, Positions: oldPos}, newSnap)
+	return oldPos, newSnap.Positions
+}
+
+// Item 3 (#3777 review): the positions go back in one atomic replace. With
+// the old clear-then-write-each-row restore, a failing second row write left
+// the book with its current rows cleared and only one of the old rows.
+func TestRevertUserBookStateSet_PositionsRestoredAtomically(t *testing.T) {
+	st := rusStore(t)
+	oldPos, _ := rusPositionsRow(t, st, "op4")
+	fs := &rusFaultStore{PebbleStore: st}
+
+	res, err := NewRevertService(fs).RevertOperation("op4")
+	require.NoError(t, err, "%+v", res)
+	pos, err := st.ListUserPositionsForBook("u1", "b1")
+	require.NoError(t, err)
+	require.True(t, undo.SameUserPositions(oldPos, pos), "both old rows back with their timestamps: %+v", pos)
+}
+
+// Item 3: a restore whose write fails leaves the positions currently on the
+// book (the import's) exactly as they are -- never cleared, never partial --
+// and the row is reported failed.
+func TestRevertUserBookStateSet_FailedRestoreLeavesCurrentPositions(t *testing.T) {
+	st := rusStore(t)
+	_, newPos := rusPositionsRow(t, st, "op5")
+	fs := &rusFaultStore{PebbleStore: st, failReplace: true}
+
+	res, err := NewRevertService(fs).RevertOperation("op5")
+	require.Error(t, err)
+	require.Equal(t, 1, res.Failed, "%+v", res)
+	pos, gerr := st.ListUserPositionsForBook("u1", "b1")
+	require.NoError(t, gerr)
+	require.True(t, undo.SameUserPositions(newPos, pos), "the current positions are untouched: %+v", pos)
 }
