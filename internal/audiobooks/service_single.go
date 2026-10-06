@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
 // last-edited: 2026-10-06
 
@@ -37,10 +37,11 @@ func (svc *AudiobookService) GetAudiobook(ctx context.Context, id string) (*data
 		return nil, fmt.Errorf("database not initialized")
 	}
 
-	if cached, ok := svc.bookCache.Get(id); ok {
-		return cached, nil
-	}
-
+	// Read the store every time; no per-book cache (InvalidateBookCaches):
+	// most book writes (fixers, the scanner, metadata applies) never reach
+	// this service, so a cached copy went stale for up to 24h. The store
+	// serves the row from memdb; measured on prod 2026-10-06 the uncached
+	// detail read is ~31 ms median / 48 ms p90 against ~7 ms cached.
 	book, err := svc.store.GetBookByID(id)
 	if err != nil {
 		return nil, err
@@ -80,7 +81,6 @@ func (svc *AudiobookService) GetAudiobook(ctx context.Context, id string) (*data
 	nowUTC := time.Now().UTC()
 	book.MetadataProvenanceAt = &nowUTC
 
-	svc.bookCache.Set(id, book)
 	return book, nil
 }
 

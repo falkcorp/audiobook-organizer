@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service.go
-// version: 1.51.0
+// version: 1.52.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 // Package audiobooks provides the core business logic for managing audiobooks,
 // including CRUD operations, metadata management, search, deduplication, and
@@ -204,7 +204,6 @@ type ITunesEnqueuer interface {
 // AudiobookService handles all audiobook business logic
 type AudiobookService struct {
 	store           audiobookStore
-	bookCache       *cache.Cache[*database.Book]
 	listCache       *cache.Cache[[]database.Book]
 	activityService *activity.Service
 	// searchIndex is the Bleve index for full-text search. When nil
@@ -266,9 +265,6 @@ func NewAudiobookService(store audiobookStore) *AudiobookService {
 	}
 	return &AudiobookService{
 		store: store,
-		// MAYDEPLOY-I4: cap entry count via LRU so 24h TTL doesn't allow
-		// unbounded growth of full Book payloads.
-		bookCache: cache.NewWithLimit[*database.Book]("book", 24*time.Hour, 5000),
 		// TTL cut from 24h to listCacheTTL: with generation keying a book
 		// mutation already puts stale pages out of reach, so the TTL only has
 		// to bound mutation paths that bypass the store's three book-level
@@ -293,21 +289,17 @@ func NewAudiobookService(store audiobookStore) *AudiobookService {
 // minutes.
 const listCacheTTL = 10 * time.Minute
 
-// InvalidateBookCaches clears all book-related caches. Called after any
-// mutation (create, update, delete) to keep reads consistent.
+// InvalidateBookCaches clears the list cache after a mutation (create,
+// update, delete) when config.CacheInvalidateOnBookUpdate is set; by default
+// the list/facets caches are left warm so metadata fetches and write-back
+// operations do not reset library page performance.
 //
-// Order matters: invalidate bookCache first, then listCache. If we did it the
-// other way around, a concurrent reader could miss the list cache (just
-// cleared), re-fetch a fresh list from the DB, but still hit stale individual
-// book entries that haven't been invalidated yet. By clearing individual books
-// first, any concurrent reader that re-fetches the list will also get fresh
-// individual books on subsequent lookups.
-//
-// When config.CacheInvalidateOnBookUpdate is false (the default), only the
-// per-book cache is cleared; the list/facets caches are left warm so metadata
-// fetches and write-back operations do not reset library page performance.
+// There is no per-book cache to clear (2026-10-06): GetAudiobook reads the
+// store on every call. It used to keep a 24h per-book cache that only this
+// function cleared, and only the AudiobookService's own edit paths call it --
+// Repairs fixers, the scanner and metadata applies write the store directly,
+// so a book's detail page could show day-old data after any background fix.
 func (svc *AudiobookService) InvalidateBookCaches() {
-	svc.bookCache.InvalidateAll()
 	if config.AppConfig.CacheInvalidateOnBookUpdate {
 		svc.listCache.InvalidateAll()
 	}
