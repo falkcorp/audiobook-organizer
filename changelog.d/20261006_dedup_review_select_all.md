@@ -38,11 +38,16 @@
     applied results are skipped.
 - **Bulk link and bulk reject take `expected_total`.** When set, a filter
   that now matches a different count is refused with 409 `FILTER_CHANGED`
-  before anything is written; the review lane and the Acoustic tab send the
-  count the reviewer confirmed and ask again when it moved.
+  before anything is written. The confirmation's number comes from the new
+  `POST /dedup/candidates/bulk-count`, which counts with the same function the
+  bulk endpoints re-evaluate (pending book pairs whose books both exist; the
+  list endpoint's dead-row rule is shared), so the confirmed count and the
+  server's count cannot disagree. The review lane now lists book pairs only,
+  so pending author pairs no longer inflate its total.
 - **`POST /api/v1/dedup/candidates/bulk-reject/revert`.** Bulk reject returns
-  `rejected_ids`; this puts those rows back to pending (only if nobody changed
-  them since) and removes the bulk "not a duplicate" labels. The review lane
+  `rejected_ids`; this puts back to pending only rows a bulk dismiss
+  dismissed (and nobody changed since), and restores the label each bulk
+  dismiss replaced (kept aside when the dismiss ran) instead of erasing it. The review lane
   and the Acoustic tab offer it as Undo.
 - **`POST /api/v1/dedup/candidates/bulk-reject`.** Rejects every pending book
   candidate matching the same filter body as `bulk-link` (both now bound by

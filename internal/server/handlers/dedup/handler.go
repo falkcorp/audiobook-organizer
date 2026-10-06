@@ -1,5 +1,5 @@
 // file: internal/server/handlers/dedup/handler.go
-// version: 1.27.0
+// version: 1.28.0
 // guid: d1b9e024-d28c-4d62-8f90-96d7064559c4
 // last-edited: 2026-10-06
 
@@ -291,12 +291,12 @@ func (h *Handler) ListDedupCandidates(c *gin.Context) {
 	items := make([]gin.H, 0, len(candidates))
 	for _, cand := range candidates {
 		if cand.EntityType == "book" {
-			ba := lookupBook(cand.EntityAID)
-			bb := lookupBook(cand.EntityBID)
-			if ba == nil || bb == nil {
+			if isDeadBookRow(cand, lookupBook) {
 				dropped++
 				continue
 			}
+			ba := lookupBook(cand.EntityAID)
+			bb := lookupBook(cand.EntityBID)
 			// both_unmatched: keep only pairs where NEITHER side is matched.
 			if bothUnmatched && (isMetadataMatched(ba) || isMetadataMatched(bb)) {
 				continue
@@ -1120,11 +1120,12 @@ func (h *Handler) BulkLinkDedupCandidates(c *gin.Context) {
 		return
 	}
 
-	candidates, total, err := es.ListCandidates(req.filter)
+	candidates, err := h.liveBulkCandidates(req.filter)
 	if err != nil {
 		httputil.InternalError(c, "failed to list candidates for bulk merge", err)
 		return
 	}
+	total := len(candidates)
 	if refuseIfFilterMoved(c, req, total) {
 		return
 	}
@@ -1354,6 +1355,70 @@ type bulkCandidateRequest struct {
 	keepSide      string
 }
 
+// isDeadBookRow reports whether a book candidate names a book that no longer
+// exists. ONE rule for the list endpoint's dead-row filter and for every
+// filter-scoped bulk count (liveBulkCandidates): when they differed, the
+// count a reviewer confirmed could never equal the count the server
+// re-evaluated, and expected_total turned into a permanent 409.
+func isDeadBookRow(cand database.DedupCandidate, lookup func(string) *database.Book) bool {
+	if cand.EntityType != "book" {
+		return false
+	}
+	return lookup(cand.EntityAID) == nil || lookup(cand.EntityBID) == nil
+}
+
+// liveBulkCandidates is the set a filter-scoped bulk action acts on and the
+// number bulk-count reports: every candidate the bound filter matches, minus
+// dead-book rows (isDeadBookRow). bulk-count, bulk-link and bulk-reject all
+// go through it, so expected_total compares like with like.
+func (h *Handler) liveBulkCandidates(f database.CandidateFilter) ([]database.DedupCandidate, error) {
+	cands, _, err := h.embeddingStore.ListCandidates(f)
+	if err != nil {
+		return nil, err
+	}
+	cache := make(map[string]*database.Book, len(cands)*2)
+	lookup := func(id string) *database.Book {
+		if b, ok := cache[id]; ok {
+			return b
+		}
+		b, gerr := h.store.GetBookByID(id)
+		if gerr != nil {
+			b = nil
+		}
+		cache[id] = b
+		return b
+	}
+	live := cands[:0]
+	for _, cand := range cands {
+		if !isDeadBookRow(cand, lookup) {
+			live = append(live, cand)
+		}
+	}
+	return live, nil
+}
+
+// BulkCountDedupCandidates handles POST /api/v1/dedup/candidates/bulk-count.
+//
+// The count a confirmation dialog shows and then sends back as
+// expected_total: same body and binder as bulk-link / bulk-reject, same set
+// (liveBulkCandidates). Writes nothing.
+func (h *Handler) BulkCountDedupCandidates(c *gin.Context) {
+	if h.embeddingStore == nil {
+		httputil.RespondWithServiceUnavailable(c, "embedding store not available")
+		return
+	}
+	req, ok := h.bindBulkCandidateFilter(c, "count")
+	if !ok {
+		return
+	}
+	live, err := h.liveBulkCandidates(req.filter)
+	if err != nil {
+		httputil.InternalError(c, "failed to count candidates", err)
+		return
+	}
+	httputil.RespondWithOK(c, gin.H{"matched": len(live)})
+}
+
 // refuseIfFilterMoved writes 409 FILTER_CHANGED and returns true when the
 // request carried expected_total and the filter now resolves to a different
 // count. Called after the list and before the first write.
@@ -1420,11 +1485,12 @@ func (h *Handler) BulkRejectDedupCandidates(c *gin.Context) {
 		return
 	}
 
-	candidates, total, err := es.ListCandidates(req.filter)
+	candidates, err := h.liveBulkCandidates(req.filter)
 	if err != nil {
 		httputil.InternalError(c, "failed to list candidates for bulk reject", err)
 		return
 	}
+	total := len(candidates)
 	if refuseIfFilterMoved(c, req, total) {
 		return
 	}
@@ -1468,8 +1534,14 @@ func (h *Handler) BulkRejectDedupCandidates(c *gin.Context) {
 			mu.Lock()
 			rejectedIDs = append(rejectedIDs, cand.ID)
 			mu.Unlock()
+			// Keep the label this replaces (an earlier human or rule verdict)
+			// so a revert restores it instead of erasing it. Best-effort, like
+			// the capture itself: a failure here only loses the restore.
+			if perr := es.SaveLabelBeforeBulk(cand.ID); perr != nil {
+				bulkRejectLog.Warn("bulk-reject: candidate %d: earlier label not saved for undo: %v", cand.ID, perr)
+			}
 			// Capture the bulk reject as a gold not_dup label (best-effort),
-			// under its own reason so a revert removes exactly these labels.
+			// under its own reason: the revert acts only on rows carrying it.
 			h.captureHumanLabelByID(cand.ID, labelNotDup, labelReasonUserBulkDismiss)
 		}()
 	}
@@ -1531,16 +1603,25 @@ func (h *Handler) RevertBulkRejectDedupCandidates(c *gin.Context) {
 	// Sequential: each step is one guarded status write under the store's
 	// lock plus at most one label read/delete, and the list is capped above.
 	for _, id := range body.CandidateIDs {
+		// Only a dismissal a bulk dismiss made: its label carries
+		// labelReasonUserBulkDismiss. A row dismissed one at a time, or
+		// re-labelled since, is someone else's verdict and is left alone.
+		ex, lerr := es.GetLabeledExample(id)
+		if lerr != nil {
+			failures = append(failures, failure{CandidateID: id, Reason: "label unreadable: " + lerr.Error()})
+			continue
+		}
+		if ex == nil || ex.LabelReason != labelReasonUserBulkDismiss {
+			failures = append(failures, failure{CandidateID: id, Reason: "not dismissed by a bulk dismiss; left alone"})
+			continue
+		}
 		if err := es.ReclassifyCandidate(id, "dismissed", "pending"); err != nil {
 			failures = append(failures, failure{CandidateID: id, Reason: err.Error()})
 			continue
 		}
 		reverted = append(reverted, id)
-		ex, lerr := es.GetLabeledExample(id)
-		if lerr == nil && ex != nil && ex.LabelReason == labelReasonUserBulkDismiss {
-			if derr := es.DeleteLabeledExample(id); derr != nil {
-				bulkRejectLog.Warn("bulk-reject revert: candidate %d is pending again but its bulk not_dup label was not removed: %v", id, derr)
-			}
+		if _, rerr := es.RestoreLabelAfterBulkRevert(id); rerr != nil {
+			bulkRejectLog.Warn("bulk-reject revert: candidate %d is pending again but its label was not restored: %v", id, rerr)
 		}
 	}
 	if len(reverted) > 0 {

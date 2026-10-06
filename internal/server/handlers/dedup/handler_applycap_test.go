@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/handler_applycap_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7a4f1d92-3c6e-4b58-8e07-d5b2a9c1f684
-// last-edited: 2026-09-25
+// last-edited: 2026-10-06
 
 package deduphandler_test
 
@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 
@@ -39,9 +40,17 @@ func insertNCandidates(t *testing.T, d testDeps, n int) {
 	}
 }
 
+// allowBooksExist answers every book lookup with a live book. The bulk
+// endpoints count only candidates whose books exist (liveBulkCandidates), so
+// a test that is not about dead rows needs its books to be there.
+func allowBooksExist(d testDeps) {
+	d.store.EXPECT().GetBookByID(mock.Anything).Return(&database.Book{ID: "x"}, nil).Maybe()
+}
+
 func TestBulkMergeDedupCandidates_RefusesOverTheBulkApplyCap(t *testing.T) {
 	withBulkApplyCap(t, 3)
 	h, d := newHandler(t)
+	allowBooksExist(d)
 	insertNCandidates(t, d, 4)
 	w := doReq(t, h.BulkLinkDedupCandidates, http.MethodPost, "/api/v1/dedup/candidates/bulk-link", map[string]any{}, nil)
 	if w.Code != http.StatusUnprocessableEntity {

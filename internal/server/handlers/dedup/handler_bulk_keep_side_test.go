@@ -1,5 +1,5 @@
 // file: internal/server/handlers/dedup/handler_bulk_keep_side_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1f6b3a8e-92c4-4d07-b5e1-7a0c9d2e4f63
 // last-edited: 2026-10-06
 
@@ -12,6 +12,7 @@
 package deduphandler_test
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -126,6 +127,7 @@ func TestBulkLink_KeepSideSkipsPairDecidedMidRun(t *testing.T) {
 
 func TestBulkEndpoints_ExpectedTotalMismatchIs409AndWritesNothing(t *testing.T) {
 	h, d := newHandler(t)
+	allowBooksExist(d)
 	id, _, _ := insertCandidate(t, d.es, "et-a", "et-b")
 	insertCandidate(t, d.es, "et-c", "et-d")
 	// No MergeJournaled expectation: any merge fails the mock.
@@ -176,5 +178,63 @@ func TestBulkLink_BadKeepSideRefused(t *testing.T) {
 		map[string]any{"keep_side": "a"}, nil)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("reject with keep_side: got %d want 400; body=%s", w.Code, w.Body.String())
+	}
+}
+
+// The confirm-then-act cycle the UI runs: bulk-count, then the action with
+// expected_total = that count. Pending AUTHOR pairs and dead-book rows in the
+// store must not make the two disagree (they did: the list counted authors and
+// subtracted dead rows page by page, the action counted neither way), and a
+// real change between the two must still be refused.
+func TestBulkCountThenAct_AgreesDespiteAuthorAndDeadRowsButCatchesRealChange(t *testing.T) {
+	h, d := newHandler(t)
+	allowLabelCaptureReadsExcept(d, "dead-b")
+	insertCandidate(t, d.es, "live-a", "live-b")
+	insertCandidate(t, d.es, "live-c", "live-d")
+	insertCandidate(t, d.es, "dead-a", "dead-b") // dead-b no longer exists
+	sim := 0.9
+	if err := d.es.UpsertCandidate(database.DedupCandidate{
+		EntityType: "author", EntityAID: "1", EntityBID: "2", Layer: "embedding", Similarity: &sim, Status: "pending",
+	}); err != nil {
+		t.Fatalf("author candidate: %v", err)
+	}
+
+	count := func() int {
+		w := doReq(t, h.BulkCountDedupCandidates, http.MethodPost, "/api/v1/dedup/candidates/bulk-count",
+			map[string]any{"entity_type": "book", "status": "pending"}, nil)
+		if w.Code != http.StatusOK {
+			t.Fatalf("count: %d %s", w.Code, w.Body.String())
+		}
+		var r struct {
+			Data struct {
+				Matched int `json:"matched"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &r); err != nil {
+			t.Fatal(err)
+		}
+		return r.Data.Matched
+	}
+	n := count()
+	if n != 2 {
+		t.Fatalf("bulk-count=%d want 2 (author pair and dead-book row excluded)", n)
+	}
+	w := doReq(t, h.BulkRejectDedupCandidates, http.MethodPost, "/api/v1/dedup/candidates/bulk-reject",
+		map[string]any{"entity_type": "book", "status": "pending", "expected_total": n}, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("confirmed count must be accepted; got %d %s", w.Code, w.Body.String())
+	}
+	if r := decodeBulkReject(t, w.Body.Bytes()); r.Data.Rejected != 2 {
+		t.Fatalf("rejected=%d want 2; body=%s", r.Data.Rejected, w.Body.String())
+	}
+
+	// A real change between confirm and act: a new pending pair appears.
+	insertCandidate(t, d.es, "live-e", "live-f")
+	n = count() // 3: the count the reviewer confirms
+	insertCandidate(t, d.es, "live-g", "live-h")
+	w = doReq(t, h.BulkRejectDedupCandidates, http.MethodPost, "/api/v1/dedup/candidates/bulk-reject",
+		map[string]any{"expected_total": n}, nil)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("a filter that moved after the count must be refused; got %d %s", w.Code, w.Body.String())
 	}
 }

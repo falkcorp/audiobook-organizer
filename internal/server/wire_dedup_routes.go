@@ -1,5 +1,5 @@
 // file: internal/server/wire_dedup_routes.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: b8c9d0e1-f2a3-4567-bcde-890123456789
 // last-edited: 2026-10-06
 
@@ -47,6 +47,8 @@ func (s *Server) wireDedupRoutes(
 	// Filter-scoped reject for the review UI's cross-page selection; same filter body as bulk-link.
 	protected.POST("/dedup/candidates/bulk-reject", s.perm(auth.PermLibraryEditMetadata), dedupH.BulkRejectDedupCandidates)
 	protected.POST("/dedup/candidates/bulk-reject/revert", s.perm(auth.PermLibraryEditMetadata), dedupH.RevertBulkRejectDedupCandidates)
+	// The count a cross-page confirmation shows and sends back as expected_total (writes nothing).
+	protected.POST("/dedup/candidates/bulk-count", s.perm(auth.PermLibraryView), dedupH.BulkCountDedupCandidates)
 	protected.POST("/dedup/candidates/link-cluster", s.perm(auth.PermLibraryEditMetadata), dedupH.LinkDedupCluster)
 	protected.POST("/dedup/candidates/merge-cluster", s.perm(auth.PermLibraryEditMetadata), dedupH.LinkDedupCluster) // DEPRECATED alias for /link-cluster
 	protected.POST("/dedup/candidates/reject-cluster", s.perm(auth.PermLibraryEditMetadata), dedupH.RejectDedupCluster)

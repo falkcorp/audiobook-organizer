@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Audiobook Organizer API",
-    "version": "0.219.2",
+    "version": "0.220.0",
     "description": "REST API for the audiobook organizer."
   },
   "servers": [
@@ -5946,6 +5946,32 @@
         "description": "Deprecated alias. Naming-audit class \"merge vs link verbs\" / \"dismiss vs reject vs undo\" (docs/audits/2026-09-25-interface-naming-consistency.md classes 2/3): use /dedup/candidates/bulk-link instead. This path remains registered and functional."
       }
     },
+    "/dedup/candidates/bulk-count": {
+      "post": {
+        "operationId": "bulkCountDedupCandidates",
+        "summary": "bulk Count Dedup Candidates",
+        "description": "Count the candidates a filter-scoped bulk action would act on: same body and same counting function as bulk-link and bulk-reject (pending book candidates whose books both exist). Show it in the confirmation and send it back as expected_total. Writes nothing. Returns {matched}.",
+        "tags": [
+          "dedup"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        }
+      }
+    },
     "/dedup/candidates/bulk-reject": {
       "post": {
         "operationId": "bulkRejectDedupCandidates",
@@ -5979,7 +6005,7 @@
       "post": {
         "operationId": "revertBulkRejectDedupCandidates",
         "summary": "revert Bulk Reject Dedup Candidates",
-        "description": "Undo a bulk reject by id: body {candidate_ids} (the rejected_ids bulk-reject returned). Each row goes dismissed -> pending only if nobody changed it since; the bulk not_dup gold label is removed. Returns attempted, reverted, failed, failures, reverted_ids.",
+        "description": "Undo a bulk reject by id: body {candidate_ids} (the rejected_ids bulk-reject returned). Only rows whose dismissal came from a bulk dismiss (their label carries reason user_bulk_dismiss) are reverted, each dismissed -> pending only if nobody changed it since; the label the bulk dismiss replaced is restored (or the bulk label removed). Returns attempted, reverted, failed, failures, reverted_ids.",
         "tags": [
           "dedup"
         ],

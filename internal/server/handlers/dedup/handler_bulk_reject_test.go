@@ -1,5 +1,5 @@
 // file: internal/server/handlers/dedup/handler_bulk_reject_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5d65b248-8432-43e0-9a13-2da6e1228ceb
 // last-edited: 2026-10-06
 
@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/mock"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -88,6 +89,7 @@ func TestBulkRejectDedupCandidates_ScopedByFilter(t *testing.T) {
 func TestBulkRejectDedupCandidates_RefusesOverTheBulkApplyCap(t *testing.T) {
 	withBulkApplyCap(t, 3)
 	h, d := newHandler(t)
+	allowBooksExist(d)
 	id, _, _ := insertCandidate(t, d.es, "cap-a", "cap-b")
 	insertNCandidates(t, d, 3)
 	w := doReq(t, h.BulkRejectDedupCandidates, http.MethodPost,
@@ -231,5 +233,46 @@ func TestRevertBulkRejectDedupCandidates_RestoresPendingAndDropsBulkLabels(t *te
 	}
 	if ex, _ := d.es.GetLabeledExample(idA); ex != nil {
 		t.Fatalf("A's bulk not_dup label survived the revert: %+v", ex)
+	}
+}
+
+// The revert acts only on dismissals a bulk dismiss made, and puts back the
+// label the bulk dismiss replaced instead of erasing it.
+func TestRevertBulkReject_OnlyBulkDismissalsAndRestoresEarlierLabel(t *testing.T) {
+	h, d := newHandler(t)
+	allowLabelCaptureReads(d)
+	bulkID, _, _ := insertCandidate(t, d.es, "pl-a", "pl-b")
+	if err := d.es.UpsertLabeledExample(database.LabeledExample{
+		CandidateID: bulkID, EntityAID: "pl-a", EntityBID: "pl-b",
+		Label: "unsure", LabelSource: "human", LabelReason: "reviewer_note",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	w := doReq(t, h.BulkRejectDedupCandidates, http.MethodPost,
+		"/api/v1/dedup/candidates/bulk-reject", map[string]any{}, nil)
+	if r := decodeBulkReject(t, w.Body.Bytes()); r.Data.Rejected != 1 {
+		t.Fatalf("bulk reject: %s", w.Body.String())
+	}
+	// A pair dismissed one at a time is someone else's verdict.
+	singleID, _, _ := insertCandidate(t, d.es, "sg-a", "sg-b")
+	if w := doReq(t, h.RejectDedupCandidate, http.MethodPost,
+		"/api/v1/dedup/candidates/"+strconv.FormatInt(singleID, 10)+"/reject", nil,
+		gin.Params{{Key: "id", Value: strconv.FormatInt(singleID, 10)}}); w.Code != http.StatusOK {
+		t.Fatalf("single reject: %d %s", w.Code, w.Body.String())
+	}
+
+	w = doReq(t, h.RevertBulkRejectDedupCandidates, http.MethodPost,
+		"/api/v1/dedup/candidates/bulk-reject/revert",
+		map[string]any{"candidate_ids": []int64{bulkID, singleID}}, nil)
+	rv := decodeBulkReject(t, w.Body.Bytes())
+	if rv.Data.Reverted != 1 || rv.Data.Failed != 1 || rv.Data.Failures[0].CandidateID != singleID {
+		t.Fatalf("want only the bulk dismissal reverted; body=%s", w.Body.String())
+	}
+	if got := candidateStatus(t, d.es, singleID); got != "dismissed" {
+		t.Fatalf("single dismissal changed: %q", got)
+	}
+	ex, _ := d.es.GetLabeledExample(bulkID)
+	if ex == nil || ex.Label != "unsure" || ex.LabelReason != "reviewer_note" {
+		t.Fatalf("earlier label not restored: %+v", ex)
 	}
 }

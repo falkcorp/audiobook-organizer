@@ -100,7 +100,7 @@ describe('mergeAllFiltered is refused when the filter cannot be transmitted', ()
       expect(result.current.mergeAllFilteredDisabledReason).toBe(MERGE_ALL_BLOCKED_REASON)
     );
 
-    act(() => result.current.dispatch({ lane: 'dupes', type: 'mergeAllFiltered' }));
+    act(() => result.current.dispatch({ lane: 'dupes', type: 'mergeAllFiltered', expectedTotal: 2 }));
 
     expect(api.bulkLinkDedupCandidates).not.toHaveBeenCalled();
     expect(toast).toHaveBeenCalledWith(MERGE_ALL_BLOCKED_REASON, 'warning');
@@ -115,7 +115,7 @@ describe('mergeAllFiltered is refused when the filter cannot be transmitted', ()
     await waitFor(() => expect(result.current.filters.bothUnmatched).toBe(true));
 
     // Dispatch directly, bypassing any UI disabled state entirely.
-    act(() => result.current.dispatch({ lane: 'dupes', type: 'mergeAllFiltered' }));
+    act(() => result.current.dispatch({ lane: 'dupes', type: 'mergeAllFiltered', expectedTotal: 2 }));
     expect(api.bulkLinkDedupCandidates).not.toHaveBeenCalled();
   });
 
@@ -132,7 +132,7 @@ describe('mergeAllFiltered is refused when the filter cannot be transmitted', ()
     expect(result.current.filters.band).toBe('REVIEW');
 
     await act(async () => {
-      result.current.dispatch({ lane: 'dupes', type: 'mergeAllFiltered' });
+      result.current.dispatch({ lane: 'dupes', type: 'mergeAllFiltered', expectedTotal: 2 });
     });
 
     // EXACT payload, deliberately not objectContaining: a partial matcher
@@ -174,7 +174,7 @@ describe('mergeAllFiltered is refused when the filter cannot be transmitted', ()
     );
 
     await act(async () => {
-      result.current.dispatch({ lane: 'dupes', type: 'mergeAllFiltered' });
+      result.current.dispatch({ lane: 'dupes', type: 'mergeAllFiltered', expectedTotal: 1 });
     });
 
     expect(api.bulkLinkDedupCandidates).toHaveBeenCalledWith({
@@ -209,7 +209,7 @@ describe('mergeAllFiltered is refused when the filter cannot be transmitted', ()
     expect(result.current.mergeAllFilteredDisabledReason).toBe(MERGE_ALL_SEARCH_PENDING_REASON);
 
     await act(async () => {
-      result.current.dispatch({ lane: 'dupes', type: 'mergeAllFiltered' });
+      result.current.dispatch({ lane: 'dupes', type: 'mergeAllFiltered', expectedTotal: 2 });
     });
     expect(api.bulkLinkDedupCandidates).not.toHaveBeenCalled();
 

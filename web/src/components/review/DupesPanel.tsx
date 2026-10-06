@@ -1,5 +1,5 @@
 // file: web/src/components/review/DupesPanel.tsx
-// version: 1.5.0
+// version: 1.6.0
 // guid: 1d6f8a03-7c25-4e91-b840-2a5c9e3b7d14
 // last-edited: 2026-10-06
 //
@@ -10,7 +10,7 @@
 // three lanes own their own layout and the shell owns only lane selection and
 // the cross-lane chrome.
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   Alert,
@@ -85,14 +85,35 @@ export function DupesPanel({ dupes, viewMode, expandedId, onToggleExpand }: Dupe
   const crossPage = sel.allMatching;
   const selectedCount = sel.selectedCount;
   const [pendingBulk, setPendingBulk] = useState<PendingBulk | null>(null);
-  // The list total is the bulk set only under the Pending status: the bulk
-  // endpoints act on pending pairs, so under "All" or "Merged" the total
-  // counts rows they never touch (reviewActions.affectedCount returns null
-  // for these actions for the same reason). Show no number rather than a
-  // wrong one.
-  const countKnown = dupes.filters.status === 'pending';
-  const bulkCountLabel = countKnown ? `${dupes.total.toLocaleString()} ` : '';
-  const overCap = countKnown && dupes.total > DEFAULT_BULK_APPLY_MAX_ITEMS;
+  // The confirmation's count comes from the SERVER (dupes.countMatching: the
+  // same function the bulk endpoints re-evaluate), never from the list's
+  // `total`, which is a paging hint. It is sent back as expected_total, so the
+  // number the reviewer confirms is the number the server checks. Four states:
+  // counting, failed, ready (possibly 0).
+  const [bulkCount, setBulkCount] = useState<
+    { state: 'loading' } | { state: 'error'; message: string } | { state: 'ready'; n: number }
+  >({ state: 'loading' });
+  const { countMatching } = dupes;
+  useEffect(() => {
+    if (pendingBulk === null) return;
+    const ctrl = new AbortController();
+    setBulkCount({ state: 'loading' });
+    countMatching(ctrl.signal)
+      .then((n) => {
+        if (!ctrl.signal.aborted) setBulkCount({ state: 'ready', n });
+      })
+      .catch((err: unknown) => {
+        if (ctrl.signal.aborted) return;
+        setBulkCount({
+          state: 'error',
+          message: err instanceof Error ? err.message : 'Could not count the matching pairs',
+        });
+      });
+    return () => ctrl.abort();
+  }, [pendingBulk, countMatching]);
+  const confirmedN = bulkCount.state === 'ready' ? bulkCount.n : null;
+  const bulkCountLabel = confirmedN !== null ? `${confirmedN.toLocaleString()} ` : '';
+  const overCap = confirmedN !== null && confirmedN > DEFAULT_BULK_APPLY_MAX_ITEMS;
 
   const runMergeSelected = () => {
     if (crossPage) setPendingBulk('mergeAllFiltered');
@@ -390,10 +411,19 @@ export function DupesPanel({ dupes, viewMode, expandedId, onToggleExpand }: Dupe
               ? 'Every pending pair matching the current filter, on every page, is marked "not a duplicate".'
               : 'Every pair matching the current filter, on every page, is linked into a version group. This cannot be undone.'}{' '}
             The server re-evaluates the filter when it runs and reports how many it
-            actually changed; hand-pinned pairs are skipped and listed as failures.
+            actually changed; hand-pinned pairs are skipped and listed as failures. If the
+            number of matching pairs changes before it runs, nothing is changed and you are
+            asked again.
+            {bulkCount.state === 'loading' && ' Counting the matching pairs…'}
+            {confirmedN === 0 && ' Nothing matches the filter now.'}
             {overCap &&
-              ` ${dupes.total.toLocaleString()} is over the server's bulk limit (bulk_apply_max_items, ${DEFAULT_BULK_APPLY_MAX_ITEMS.toLocaleString()} by default), so it will refuse and change nothing. Narrow the filter first.`}
+              ` ${(confirmedN ?? 0).toLocaleString()} is over the server's bulk limit (bulk_apply_max_items, ${DEFAULT_BULK_APPLY_MAX_ITEMS.toLocaleString()} by default), so it will refuse and change nothing. Narrow the filter first.`}
           </DialogContentText>
+          {bulkCount.state === 'error' && (
+            <Alert severity="error" sx={{ mt: 2 }} data-testid="dupes-bulk-count-error">
+              {bulkCount.message}
+            </Alert>
+          )}
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setPendingBulk(null)}>Cancel</Button>
@@ -401,14 +431,17 @@ export function DupesPanel({ dupes, viewMode, expandedId, onToggleExpand }: Dupe
             color="warning"
             variant="contained"
             data-testid="dupes-bulk-confirm-btn"
+            disabled={confirmedN === null || confirmedN === 0}
             onClick={() => {
               const type = pendingBulk;
               setPendingBulk(null);
-              if (type) dupes.dispatch({ lane: 'dupes', type });
+              if (type && confirmedN !== null) {
+                dupes.dispatch({ lane: 'dupes', type, expectedTotal: confirmedN });
+              }
             }}
           >
             {pendingBulk === 'dismissAllFiltered' ? 'Dismiss' : 'Merge'}
-            {countKnown ? ` ${dupes.total.toLocaleString()}` : ''}
+            {confirmedN !== null ? ` ${confirmedN.toLocaleString()}` : ''}
           </Button>
         </DialogActions>
       </Dialog>
