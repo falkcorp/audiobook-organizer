@@ -1,7 +1,7 @@
 // file: internal/metafetch/search_variants.go
-// version: 1.6.2
+// version: 1.7.0
 // guid: 74a7d36b-024c-4887-a6c3-4ebaf2e61490
-// last-edited: 2026-10-01
+// last-edited: 2026-10-05
 
 package metafetch
 
@@ -10,6 +10,9 @@ import (
 	"slices"
 	"strings"
 	"sync/atomic"
+	"unicode"
+
+	"golang.org/x/text/unicode/norm"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorjunk"
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
@@ -112,6 +115,22 @@ type parsedTitle struct {
 	// never the pool and never the queries: it may come from an earlier bad
 	// match.
 	StoredPosition string
+	// Year and Suffix are a leading release year and a track/part suffix
+	// metadata.ParseBookName removed ("2018", "01"); Cleaned is the title
+	// with every shape it read removed but the series slot kept. A removed
+	// number is not the book's: newStrongCriteria reads the book's own
+	// numbers from Cleaned, not from the literal title. "" when the parser
+	// removed nothing.
+	Year    string
+	Suffix  string
+	Cleaned string
+	// AuthorIsTitle: the book's author equalled its title and was dropped
+	// as junk (resolveSearchInputs). No person is left to vouch for an
+	// answer, so every question asked without an author keeps only answers
+	// whose title is exactly the book's and that all name one author
+	// (buildQueryVariants: an Exact filter, keepVariant) -- the bulk fetch
+	// applies the top candidate with no score floor.
+	AuthorIsTitle bool
 }
 
 var (
@@ -172,20 +191,47 @@ func personShaped(s string) bool {
 	return true
 }
 
-// parseSearchTitle reads the book's own name out of raw, reusing the
-// cleaners the scanner and the variant ladder already trust:
-// metadata.StripRipJunk (bitrate/size groups), metadata.NarratorCreditName
-// ("read by X (Title)"), authorname.IsPlaceholderAuthor (the organizer's
-// " - Unknown Author" suffix, the shape metadata.go's file-name parse already
-// clears), splitSeriesDecoration (", Book 5") and stripChapterFromTitle.
-// author and narrator are the book's known people; a trailing " - <name>" or
-// "(<name>)" is dropped as a person only when it is a placeholder, one of
-// them, or person-shaped next to a series slot, so "The Witcher - 4 - The
-// Tower of the Swallow" keeps its title.
+// parseSearchTitle is parseSearchTitleWith with no evidence beyond the
+// book's author and narrator.
 func parseSearchTitle(raw, author, narrator string) parsedTitle {
+	return parseSearchTitleWith(raw, author, narrator, metadata.NameEvidence{})
+}
+
+// parseSearchTitleWith reads the book's own name out of raw.
+//
+// The shapes file and folder names pack around a title -- rip details, a
+// " - Unknown Author" placeholder, a leading release year ("2018 - Blueshift"),
+// a leading or trailing author credit ("M.R. Forbes - Starship for Rent 02",
+// "Title - Author"), a "read by" credit and a track suffix after a series slot
+// ("Discworld 24 - The Fifth Elephant - 01") -- are read by
+// metadata.ParseBookName, the one parser the scanner's folder parse uses too.
+// ev adds the evidence it may check a segment against (the book's path, the
+// authority lists); author and narrator are always added to it. What is left
+// is read here for what only a search needs: the narrator credit
+// ("read by X (Title)", metadata.NarratorCreditName), a trailing
+// "(<narrator>)", the series slot with the gates the strong criteria read
+// (splitSeriesDecoration, usableSlotName, BareSlot) and stripChapterFromTitle.
+func parseSearchTitleWith(raw, author, narrator string, ev metadata.NameEvidence) parsedTitle {
 	var p parsedTitle
-	t, _ := metadata.StripRipJunk(strings.TrimSpace(raw))
-	t = strings.TrimSpace(editionQualifierRe.ReplaceAllString(t, ""))
+	if strings.TrimSpace(author) != "" {
+		ev.Authors = append(slices.Clone(ev.Authors), author)
+	}
+	if strings.TrimSpace(narrator) != "" {
+		ev.Narrators = append(slices.Clone(ev.Narrators), narrator)
+	}
+	shared := metadata.ParseBookName(raw, ev)
+	t := strings.TrimSpace(editionQualifierRe.ReplaceAllString(shared.Title, ""))
+	p.Year, p.Suffix = shared.Year, shared.Suffix
+	if shared.Narrator != "" {
+		p.Narrator = shared.Narrator
+	}
+	// A credit read off a dash segment is recorded only when it is a real
+	// person of the book's (or a known author): a placeholder never is.
+	if a := strings.TrimSpace(shared.Author); a != "" && !authorname.IsPlaceholderAuthor(a) {
+		if !samePerson(a, narrator) {
+			p.Author = a
+		}
+	}
 
 	// "read by Cathfach (Erryn's World)": the credit names the narrator and
 	// the parenthesised part is the book.
@@ -196,22 +242,15 @@ func parseSearchTitle(raw, author, narrator string) parsedTitle {
 		}
 	}
 
-	// A trailing " - <person>": the organizer's "<title> - Unknown Author",
-	// or a real author appended to a series slot ("Saving Supervillains,
-	// Book 5 - Bruce Sentar").
+	// A real author appended to a series slot that is not one of the book's
+	// own people ("Saving Supervillains, Book 5 - Bruce Sentar"): the
+	// person-shaped tail is a credit only next to a slot -- "Dune - Frank
+	// Herbert" and "The Witcher - Blood of Elves" are the same shape without
+	// one.
 	if locs := dashSegment.FindAllStringIndex(t, -1); len(locs) > 0 {
 		last := locs[len(locs)-1]
 		head, tail := strings.TrimSpace(t[:last[0]]), strings.TrimSpace(t[last[1]:])
-		switch {
-		case head == "":
-		case authorname.IsPlaceholderAuthor(tail):
-			t = head
-		case samePerson(tail, author) || samePerson(tail, narrator):
-			t = head
-			if samePerson(tail, author) {
-				p.Author = tail
-			}
-		case seriesDecoration.MatchString(head) && personShaped(tail):
+		if head != "" && seriesDecoration.MatchString(head) && personShaped(tail) {
 			t = head
 			p.Author = tail
 		}
@@ -319,11 +358,46 @@ func parseSearchTitle(raw, author, narrator string) parsedTitle {
 		}
 	}
 
+	// The shared parser's slot, where the reads above split nothing:
+	//   - a one-word series before a SPACED DASH ("Discworld 24 - The Fifth
+	//     Elephant"): bareSeriesNumber keeps a one-word series unsplit
+	//     because "Fahrenheit 451: A Novel" and "Catch 22: A Novel" share the
+	//     colon shape, but a spaced dash between a numbered head and a usable
+	//     name is a filename's slot;
+	//   - a hyphenated series word ("Para-Military Recruiter 06 - Soldier"),
+	//     which bareSeriesNumber's head refuses;
+	//   - book one named for its series ("The Forest Grimm 01 - The Forest
+	//     Grimm"): the name has no word the series lacks, so usableSlotName
+	//     refuses it, but it IS the book's name.
+	// And a sub-series field after the slot ("Legend of Drizzt Book 05 -
+	// Icewind Dale Trilogy - Streams of Silver"): the book is the last field.
+	if shared.Series != "" && shared.Name != "" && !p.TitleIsSeries {
+		name := strings.TrimSpace(shared.Name)
+		switch {
+		case p.NameSplit && shared.Has(metadata.ShapeSubseries) && strings.HasSuffix(strings.ToLower(t), strings.ToLower(name)) &&
+			usableSlotName(name, shared.Series):
+			t, p.Name = name, name
+		case !p.NameSplit && usableSlotName(name, shared.Series):
+			p.Series, p.Position, p.SlotHead = shared.Series, shared.Position, shared.Series
+			p.BareSlot = false
+			t, p.Name, p.NameSplit = name, name, true
+		case !p.NameSplit && strings.EqualFold(name, shared.Series):
+			p.Series, p.Position, p.SlotHead = shared.Series, shared.Position, shared.Series
+			p.BareSlot = false
+			t, p.NameSplit = name, true
+		}
+	}
+
 	p.Title = stripChapterFromTitle(t)
+	if shared.Title != strings.TrimSpace(raw) {
+		p.Cleaned = shared.Title
+	}
 	if m := leadingYearRe.FindStringSubmatch(p.Title); m != nil && len(SignificantWords(m[1])) >= 2 {
 		p.YearFree = strings.TrimSpace(m[1])
 	}
-	if s := stripSubtitle(p.Title); s != p.Title && len(anchorWords(s, "")) > 0 && !p.TitleIsSeries {
+	// The short title holds a letter: a bare number ("2018" from an uncleaned
+	// "2018 - Blueshift") would spend a provider question on nothing.
+	if s := stripSubtitle(p.Title); s != p.Title && len(anchorWords(s, "")) > 0 && !p.TitleIsSeries && hasLetter.MatchString(s) {
 		p.Short = s
 	}
 	// A junk title ("Audiobook 2", "New Recording 4") is no title at all, so
@@ -708,6 +782,15 @@ func buildQueryVariants(p parsedTitle, literal, rawTitle, author, narrator strin
 		}
 		add(v)
 	}
+	if p.AuthorIsTitle {
+		if a := anchorWords(base, ""); len(a) > 0 {
+			for i := range out {
+				if out[i].Author == "" && out[i].slotSeries == "" {
+					out[i].filter = &titleVariant{Query: base, Anchor: a, Exact: true}
+				}
+			}
+		}
+	}
 	if people != "" {
 		// Title alone, for a book with people: asked of a source only when
 		// its person-narrowed questions found nothing, and an answer must
@@ -786,6 +869,13 @@ func newStrongCriteria(p parsedTitle, title, literal, asin, author string, bookD
 		c.seriesWords = SignificantWords(p.SlotHead)
 	}
 	c.allowed, c.allowedNums = map[string]bool{}, map[string]bool{}
+	// The literal title less what metadata.ParseBookName removed: a leading
+	// release year ("2018 - Blueshift"), a track suffix ("- 01"), a credit.
+	// Those numbers are not the book's, and an answer is not another book for
+	// lacking them -- nor this one for carrying them.
+	if strings.TrimSpace(p.Cleaned) != "" {
+		literal = p.Cleaned
+	}
 	for _, s := range []string{literal, p.Title, p.Series, p.SlotHead, p.Name} {
 		if strings.TrimSpace(s) == "" {
 			continue
@@ -1268,12 +1358,14 @@ func personNames(s string) [][]string {
 	return out
 }
 
-// nameWords returns part's words, lower-cased and without punctuation or
-// dots, or nil when every word is a suffix or role (personRoleWords).
+// nameWords returns part's words, lower-cased, without punctuation or dots
+// and with accents folded ("Zoë Brontë" is "zoe bronte": a provider
+// credits the accented spelling the book's tags often lack), or nil when
+// every word is a suffix or role (personRoleWords).
 func nameWords(part string) []string {
 	var words []string
 	roleOnly := true
-	for _, w := range strings.Fields(strings.ToLower(part)) {
+	for _, w := range strings.Fields(foldAccents(strings.ToLower(part))) {
 		w = strings.ReplaceAll(strings.Trim(w, ".,;:'\"()"), ".", "")
 		if w == "" {
 			continue
@@ -1287,6 +1379,18 @@ func nameWords(part string) []string {
 		return nil
 	}
 	return words
+}
+
+// foldAccents removes combining marks after canonical decomposition ("é" ->
+// "e"), so two spellings of one name compare equal.
+func foldAccents(s string) string {
+	var b strings.Builder
+	for _, r := range norm.NFD.String(s) {
+		if !unicode.Is(unicode.Mn, r) {
+			b.WriteRune(r)
+		}
+	}
+	return norm.NFC.String(b.String())
 }
 
 // surname is a name's last word that is not a suffix, role or initial, with

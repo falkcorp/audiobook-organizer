@@ -156,6 +156,9 @@ type fakeBooks map[string]*database.Book
 // GetAllImportPaths: no import roots, so the resolver lists folders as usual.
 func (f fakeBooks) GetAllImportPaths() ([]database.ImportPath, error) { return nil, nil }
 
+// GetRaw: an empty authority keyspace, so no title is a known person's name.
+func (f fakeBooks) GetRaw(string) ([]byte, error) { return nil, nil }
+
 func (f fakeBooks) GetBookByID(id string) (*database.Book, error) {
 	if b, ok := f[id]; ok {
 		return b, nil

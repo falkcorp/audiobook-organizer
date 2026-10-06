@@ -1,7 +1,7 @@
 // file: internal/metabatch/fetch_op.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-09-19
+// last-edited: 2026-10-05
 //
 // FetchOpParams holds the serializable parameters for the
 // metadata.candidate-fetch v2 OperationDef. Kept here so the
@@ -32,4 +32,13 @@ type FetchOpParams struct {
 	// "providers have nothing" verdict). Without it Run serves those books
 	// from the candidate cache and spends no provider calls on them.
 	Force bool `json:"force,omitempty"`
+	// Unfetched, with no BookIDs, has Run select its own books: the ones
+	// never fetched, invalidated, or holding an empty answer to questions a
+	// search no longer asks (server.unfetchedCandidateBookIDs). The scheduled
+	// candidate_fetch task sends it. No omitempty, on purpose: the checkpoint
+	// Run writes right after selecting carries "unfetched": false, so a
+	// resumed run is handed the selected list and never re-selects (the
+	// registry overlays checkpoint keys onto the row's params, and an omitted
+	// key would let the original true show through).
+	Unfetched bool `json:"unfetched"`
 }

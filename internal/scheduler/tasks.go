@@ -1,10 +1,10 @@
 // file: internal/scheduler/tasks.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: 9b4c7e21-a5f3-4d08-b2e6-3c8d1f7a0e54
-// last-edited: 2026-10-02
+// last-edited: 2026-10-05
 
 // Package scheduler — task registrations.
-// All 22 registered tasks are defined here. Each task's TriggerFn and
+// All 23 registered tasks are defined here. Each task's TriggerFn and
 // IsEnabled read from SchedulerDeps (not *Server) so the scheduler package
 // remains independent of the server package.
 package scheduler
@@ -62,6 +62,29 @@ const (
 // the books that changed since.
 func asinBackfillInterval() time.Duration {
 	mins := config.AppConfig.Scheduled.ASINBackfill.Interval
+	if mins <= 0 {
+		return 0
+	}
+	return time.Duration(mins) * time.Minute
+}
+
+// candidate_fetch task: metadata.candidate-fetch over the books nothing has
+// fetched for. candidateFetchTaskParams mirrors the unfetched key of
+// metabatch.FetchOpParams; the op selects its own books from it.
+const (
+	candidateFetchTaskName = "candidate_fetch"
+	candidateFetchOpID     = "metadata.candidate-fetch"
+)
+
+type candidateFetchTaskParams struct {
+	Unfetched bool `json:"unfetched"`
+}
+
+// candidateFetchInterval is scheduled.candidate_fetch.interval (minutes,
+// default 360 = 6h; 0 disables the task). A tick that finds nothing to fetch
+// costs one library read and no provider request.
+func candidateFetchInterval() time.Duration {
+	mins := config.AppConfig.Scheduled.CandidateFetch.Interval
 	if mins <= 0 {
 		return 0
 	}
@@ -659,6 +682,72 @@ func (ts *TaskScheduler) registerAllTasks() {
 		GetInterval: asinBackfillInterval,
 		// Off at startup: memdb warmup runs asynchronously for minutes after
 		// a restart, and the interval picks the walk up soon enough.
+		RunOnStart:             func() bool { return false },
+		RunInMaintenanceWindow: func() bool { return false },
+	})
+
+	// candidate_fetch: metadata.candidate-fetch was started only by hand
+	// (POST .../batch-fetch-candidates), so a book added after the last hand
+	// run was never searched (613 books on 2026-10-05), and neither was a
+	// book whose candidates a retitle or an ASIN backfill invalidated. This
+	// task enqueues the op with unfetched=true; the op selects the live
+	// primary books with no cache row, or an empty one answering questions a
+	// search no longer asks (server.unfetchedCandidateBookIDs).
+	//
+	// FETCH ONLY: the op searches the providers and writes the candidate
+	// cache and its result rows; it never applies a candidate or writes a
+	// book. Its rate limiter and worker pool are sized from the enabled
+	// sources' own budgets (metafetch.EnabledSourcesBudget: Audible 8/s).
+	//
+	// Ships ON at 6h, like asin_backfill, its fetch-only sibling: an empty
+	// selection costs no provider call. Not on startup (memdb warmup) and not
+	// in the maintenance window (a large selection is hours of rate-limited
+	// requests).
+	ts.registerTask(TaskDefinition{
+		Name:        candidateFetchTaskName,
+		Description: "Fetch metadata candidates for books never fetched or whose candidates were invalidated (metadata.candidate-fetch, fetch only)",
+		Category:    "maintenance",
+		TriggerFn: func(source string) (*database.Operation, error) {
+			store := ts.deps.Store()
+			if store == nil {
+				return nil, fmt.Errorf("database not initialized")
+			}
+			// The op's ConcurrencyKey QUEUES a duplicate, so a run that
+			// outlasts the interval would stack another behind it -- and a
+			// hand-started fetch already covers some of the same books.
+			// Any active candidate fetch skips the tick; previousRunID covers
+			// the moment before the enqueued row is visible.
+			if ts.hasActiveV2Op(candidateFetchOpID) {
+				schedLog.Info("%s: a %s run is already queued or running, skipping this tick (source=%s)",
+					candidateFetchTaskName, candidateFetchOpID, source)
+				return nil, nil
+			}
+			if prev := ts.previousRunID(candidateFetchTaskName); prev != "" {
+				if row, err := store.GetOperationV2(prev); err == nil && row != nil {
+					if row.Status == "queued" || row.Status == "running" {
+						schedLog.Info("%s: previous run %s still %s, skipping this tick (source=%s)",
+							candidateFetchTaskName, prev, row.Status, source)
+						return nil, nil
+					}
+				}
+			}
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), candidateFetchOpID, candidateFetchTaskParams{Unfetched: true})
+			if enqErr != nil {
+				return nil, fmt.Errorf("failed to enqueue %s: %w", candidateFetchOpID, enqErr)
+			}
+			ts.setPreviousRunID(candidateFetchTaskName, v2ID)
+			return v2ScheduledOp(v2ID, candidateFetchTaskName), nil
+		},
+		// Enabled when scheduled.candidate_fetch.interval > 0 AND the op is
+		// registered in this binary.
+		IsEnabled: func() bool {
+			if ts.deps.OpRegistry == nil || candidateFetchInterval() <= 0 {
+				return false
+			}
+			_, ok := ts.deps.OpRegistry.Def(candidateFetchOpID)
+			return ok
+		},
+		GetInterval:            candidateFetchInterval,
 		RunOnStart:             func() bool { return false },
 		RunInMaintenanceWindow: func() bool { return false },
 	})

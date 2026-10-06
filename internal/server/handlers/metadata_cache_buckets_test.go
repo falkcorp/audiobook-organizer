@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_buckets_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9e04b3d7-6c81-4a25-b3f0-72d9a1c86e53
-// last-edited: 2026-10-02
+// last-edited: 2026-10-05
 
 // The review rail's chips were reporting a different library than the one the
 // reviewer was looking at. Four separate defects, all visible in one screenshot
@@ -61,6 +61,7 @@ type reviewBucketsBody struct {
 
 func TestGetCacheReviewResults_BucketsAndStaleness(t *testing.T) {
 	store := handlersmocks.NewMockMetadataCacheBookStore(t)
+	store.EXPECT().GetRaw(mock.Anything).Return(nil, nil).Maybe() // authority lists: no known people
 	store.EXPECT().GetBookFilesForIDsCore(mock.Anything).Return(map[string][]database.BookFileCore{}, nil).Maybe()
 	svc := handlersmocks.NewMockMetadataCacheFetchService(t)
 

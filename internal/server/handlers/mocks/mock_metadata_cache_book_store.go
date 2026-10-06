@@ -463,6 +463,68 @@ func (_c *MockMetadataCacheBookStore_GetBooksByIDs_Call) RunAndReturn(run func(i
 	return _c
 }
 
+// GetRaw provides a mock function for the type MockMetadataCacheBookStore
+func (_mock *MockMetadataCacheBookStore) GetRaw(key string) ([]byte, error) {
+	ret := _mock.Called(key)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetRaw")
+	}
+
+	var r0 []byte
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string) ([]byte, error)); ok {
+		return returnFunc(key)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string) []byte); ok {
+		r0 = returnFunc(key)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]byte)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
+		r1 = returnFunc(key)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockMetadataCacheBookStore_GetRaw_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetRaw'
+type MockMetadataCacheBookStore_GetRaw_Call struct {
+	*mock.Call
+}
+
+// GetRaw is a helper method to define mock.On call
+//   - key string
+func (_e *MockMetadataCacheBookStore_Expecter) GetRaw(key any) *MockMetadataCacheBookStore_GetRaw_Call {
+	return &MockMetadataCacheBookStore_GetRaw_Call{Call: _e.mock.On("GetRaw", key)}
+}
+
+func (_c *MockMetadataCacheBookStore_GetRaw_Call) Run(run func(key string)) *MockMetadataCacheBookStore_GetRaw_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockMetadataCacheBookStore_GetRaw_Call) Return(bytes []byte, err error) *MockMetadataCacheBookStore_GetRaw_Call {
+	_c.Call.Return(bytes, err)
+	return _c
+}
+
+func (_c *MockMetadataCacheBookStore_GetRaw_Call) RunAndReturn(run func(key string) ([]byte, error)) *MockMetadataCacheBookStore_GetRaw_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // LiveBookPathsUnderDir provides a mock function for the type MockMetadataCacheBookStore
 func (_mock *MockMetadataCacheBookStore) LiveBookPathsUnderDir(dir string) (map[string]string, error) {
 	ret := _mock.Called(dir)

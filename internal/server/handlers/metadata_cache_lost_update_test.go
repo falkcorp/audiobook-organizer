@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_lost_update_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 6f1c2a84-9d3e-4b7a-a5c1-2e8f0d4b9c71
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 package handlers_test
 
@@ -31,6 +31,9 @@ type lostUpdateCacheStore struct {
 	rows       map[string]*database.Book
 	concurrent func(*database.Book)
 }
+
+// GetRaw: an empty authority keyspace, so no title is a known person's name.
+func (s *lostUpdateCacheStore) GetRaw(string) ([]byte, error) { return nil, nil }
 
 func newLostUpdateCacheStore(books ...*database.Book) *lostUpdateCacheStore {
 	s := &lostUpdateCacheStore{rows: map[string]*database.Book{}}

@@ -1,7 +1,7 @@
 // file: internal/metadata/folder_parser.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: f1e2d3c4-b5a6-7890-abcd-ef1234567890
-// last-edited: 2026-09-28
+// last-edited: 2026-10-05
 
 package metadata
 
@@ -104,13 +104,18 @@ func ExtractMetadataFromFolder(dirPath string) (*FolderMetadata, error) {
 		return fm, nil
 	}
 
+	// The title shapes (ParseBookName) may check a segment against the
+	// author-shaped folders above it, and read any author-shaped trailing
+	// segment as the "<title> - <author>" folder convention.
+	ev := NameEvidence{Path: dirPath, FolderName: true}
+
 	// --- Pass 1: scan innermost segment for narrator and full metadata ---
 	innermost := segments[n-1]
-	parseInnermostSegment(innermost, fm)
+	parseInnermostSegment(innermost, fm, ev)
 
 	// --- Pass 2: scan second-from-innermost for series + title ---
 	if n >= 2 {
-		parseSeriesTitleSegment(segments[n-2], fm)
+		parseSeriesTitleSegment(segments[n-2], fm, ev)
 	}
 
 	// --- Pass 3: scan further-out segments for author ---
@@ -212,7 +217,7 @@ func splitPathSegments(path string) []string {
 //
 //	"Title - Author - read by Narrator"
 //	"(Series NN) Title - Author - read by Narrator"
-func parseInnermostSegment(seg string, fm *FolderMetadata) {
+func parseInnermostSegment(seg string, fm *FolderMetadata, ev NameEvidence) {
 	// Extract narrator first, then work on the remainder.
 	remainder := seg
 	if m := reNarratorSuffix.FindStringSubmatchIndex(seg); m != nil {
@@ -228,7 +233,7 @@ func parseInnermostSegment(seg string, fm *FolderMetadata) {
 
 	// If title not yet set, try to parse series+title from remainder.
 	if fm.TitleConf == ConfidenceNone {
-		parseSeriesTitleSegment(remainder, fm)
+		parseSeriesTitleSegment(remainder, fm, ev)
 	}
 }
 
@@ -239,7 +244,15 @@ func parseInnermostSegment(seg string, fm *FolderMetadata) {
 //	"The Long Cosmos"           ← no series prefix
 //
 // It sets fm.SeriesName, fm.SeriesPosition, fm.Title, and their confidences.
-func parseSeriesTitleSegment(seg string, fm *FolderMetadata) {
+// The title part is read by ParseBookName, the parser the metadata search
+// uses too: rip details, a leading release year ("2018 - Blueshift"), an
+// author segment, a series slot ("Discworld 24 - The Fifth Elephant") and a
+// track suffix ("... - 01") are removed, and a trailing author-shaped segment
+// is the author (ev.FolderName). Until 2026-10-05 the title was
+// the text before the FIRST " - " (stripTrailingDashAuthor), so "2018 -
+// Blueshift" was titled "2018" and "Discworld 24 - The Fifth Elephant - 01"
+// "Discworld 24".
+func parseSeriesTitleSegment(seg string, fm *FolderMetadata, ev NameEvidence) {
 	seg = strings.TrimSpace(seg)
 	if seg == "" {
 		return
@@ -265,9 +278,7 @@ func parseSeriesTitleSegment(seg string, fm *FolderMetadata) {
 			fm.SeriesConf = ConfidenceHigh
 		}
 		if fm.TitleConf < ConfidenceMedium && titlePart != "" {
-			// Strip trailing " - Author" dash portion from title.
-			titleOnly := stripTrailingDashAuthor(titlePart)
-			fm.Title = titleOnly
+			fm.Title = folderBookName(titlePart, fm, ev)
 			fm.TitleConf = ConfidenceMedium
 		}
 		return
@@ -282,32 +293,59 @@ func parseSeriesTitleSegment(seg string, fm *FolderMetadata) {
 			fm.SeriesConf = ConfidenceMedium
 		}
 		if fm.TitleConf < ConfidenceLow && titlePart != "" {
-			fm.Title = stripTrailingDashAuthor(titlePart)
+			fm.Title = folderBookName(titlePart, fm, ev)
 			fm.TitleConf = ConfidenceLow
 		}
 		return
 	}
 
 	// No series prefix — the segment itself may be the title.
-	// Strip any trailing " - Author" pattern.
-	titleCandidate := stripTrailingDashAuthor(seg)
-	if fm.TitleConf < ConfidenceLow && titleCandidate != "" {
-		fm.Title = titleCandidate
-		fm.TitleConf = ConfidenceLow
+	if fm.TitleConf < ConfidenceLow {
+		if titleCandidate := folderBookName(seg, fm, ev); titleCandidate != "" {
+			fm.Title = titleCandidate
+			fm.TitleConf = ConfidenceLow
+		}
 	}
 }
 
-// stripTrailingDashAuthor removes a trailing " - Something" chunk that looks like an author name
-// appended to a title. Returns the title portion only.
-func stripTrailingDashAuthor(s string) string {
-	// Split on " - " and take the first non-empty chunk that doesn't look like a person name.
-	// If everything looks like it could be an author, return the whole thing.
-	parts := strings.Split(s, " - ")
-	if len(parts) <= 1 {
-		return strings.TrimSpace(s)
+// folderBookName reads a folder segment's title part with ParseBookName and
+// returns the book's own name. A series slot it reads ("Discworld 24 - The
+// Fifth Elephant") fills the series when nothing better has, and a credit it
+// reads (a leading author segment named by an ancestor folder, a trailing
+// author-shaped one) fills the author at medium confidence when no author
+// was found yet -- the outer author folder, read later at high confidence,
+// still wins.
+func folderBookName(s string, fm *FolderMetadata, ev NameEvidence) string {
+	b := ParseBookName(s, ev)
+	if b.Series != "" && b.Position != "" && fm.SeriesConf < ConfidenceMedium {
+		if pos, err := strconv.Atoi(strings.Split(b.Position, ".")[0]); err == nil {
+			fm.SeriesName = b.Series
+			fm.SeriesPosition = pos
+			fm.SeriesConf = ConfidenceMedium
+		}
 	}
-	// Return first part (most likely the title).
-	return strings.TrimSpace(parts[0])
+	if b.Author != "" && fm.AuthorConf == ConfidenceNone && looksLikeFolderAuthor(b.Author) {
+		fm.Authors = splitMultipleAuthors(b.Author)
+		fm.AuthorConf = ConfidenceMedium
+	}
+	if b.Narrator != "" && fm.NarratorConf == ConfidenceNone {
+		fm.Narrator = cleanNarratorValue(b.Narrator)
+		fm.NarratorConf = ConfidenceMedium
+	}
+	if b.Name != "" {
+		return strings.TrimSpace(b.Name)
+	}
+	// No book name behind a slot: the folder convention "<title> - <more>"
+	// keeps its first field, as before ParseBookName ("'Salem's Lot - 4" is
+	// part 4 of 'Salem's Lot, "Dungeon World 2 - A Dungeon Core Experience"
+	// ends in a tagline). The parse has already removed what a first field
+	// must never be: a release year, an author, a placeholder.
+	// Split at a spaced HYPHEN only, as that rule always did: an en or em
+	// dash in a folder name ("His – Er ist der Meine") is the title's own.
+	if head, _, ok := strings.Cut(b.Title, " - "); ok && strings.TrimSpace(head) != "" {
+		return strings.TrimSpace(head)
+	}
+	return strings.TrimSpace(b.Title)
 }
 
 // tryParseAuthorSegment attempts to interpret a path segment as an author name.

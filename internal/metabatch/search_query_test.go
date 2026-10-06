@@ -1,7 +1,7 @@
 // file: internal/metabatch/search_query_test.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: f94991be-ebe4-4d6d-8f4e-922b68a3dda0
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 package metabatch
 
@@ -25,6 +25,8 @@ type fakeBookFiles struct {
 	// (LiveBookPathsUnderDir filters by prefix like the store does).
 	dir    map[string]string
 	dirErr error
+	// raw is the authority keyspace GetRaw answers from.
+	raw map[string][]byte
 	// dirCalls counts folder listings, shared across copies.
 	dirCalls *int
 	// callsByDir counts listings per folder, shared across copies.
@@ -195,6 +197,12 @@ func TestResolveCandidateSearchQuery_Fallbacks(t *testing.T) {
 }
 
 // fakeBookFilesAuthors is fakeBookFiles with live author links.
+// GetRaw serves the authority lists (titleJudge.namesAPerson): raw holds
+// ref_person: rows by key; nil answers "no evidence" for every name.
+func (f fakeBookFiles) GetRaw(key string) ([]byte, error) {
+	return f.raw[key], nil
+}
+
 type fakeBookFilesAuthors struct {
 	fakeBookFiles
 	links   []database.BookAuthor
