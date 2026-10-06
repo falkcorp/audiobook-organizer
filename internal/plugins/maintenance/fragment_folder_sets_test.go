@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_folder_sets_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3b7d2c55-1a4e-4f0b-9c61-8e2f5d7a0b14
 // last-edited: 2026-10-05
 
@@ -410,10 +410,55 @@ func TestFragmentFixer_ParentChapterSet(t *testing.T) {
 		require.Equal(t, fragClassParentJoin, r.Class)
 		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
 		require.Equal(t, other, r.Proposed["join"])
-		require.Contains(t, strings.Join(r.Evidence, "\n"), "6 of the set's 6 files are audio")
+		ev := strings.Join(r.Evidence, "\n")
+		require.Contains(t, ev, "6 of the set's 6 files are audio")
+		require.Contains(t, ev, "audio join (not a title match): all 6 of the set's 6 files' audio is held by book "+other)
+		require.Contains(t, ev, `titles: set "Horizon Storms", book "Some Other Name"`)
+		require.NotContains(t, ev, "a live book of this title already exists", "an audio join never claims a title match")
+		require.Contains(t, r.Reason, "copies of the audio")
 		out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
 		require.Equal(t, 1, out.Applied, "%+v", out.Rows)
 		f.requireRetiredInto(t, frags, other)
+	})
+	t.Run("audio held for only part of the set: held, nothing joined", func(t *testing.T) {
+		f := newFragFixture(t)
+		ids := f.parentSet(t, parentDir, seq(1, 6), horizonStem, 900, 9000)
+		other := f.book(t, "copy", "Some Other Name", f.path("lib/Elsewhere/Copy"), nil)
+		for i := 1; i <= 3; i++ {
+			name := fmt.Sprintf("track %02d.mp3", i)
+			p := f.file(t, filepath.Join("lib/Elsewhere/Copy", name), 9000+101*i)
+			f.row(t, name, other, p, name, int64(9000+101*i), 900, i)
+		}
+		f.organized(t, other)
+		res := f.plan(t, "op-plan")
+		noRow(t, res, existingRowID(f.path(parentDir), fragParentSetKeyPrefix+horizonKey), "never a partial join")
+		r := findRow(t, res, parentRowID(f, parentDir, horizonKey))
+		require.Equal(t, fragClassParentSet, r.Class)
+		require.Equal(t, fragSkipDuplicateAudio, r.Skipped)
+		require.Contains(t, r.SkipReason, "3 of the set's 6 files")
+		require.Contains(t, r.SkipReason, "the other 3 file(s)' audio is in no other book")
+		require.ElementsMatch(t, ids, r.BookIDs, "the target is named, never a member")
+		require.Zero(t, res.Applicable)
+	})
+	t.Run("audio join with a different author: held", func(t *testing.T) {
+		f := newFragFixture(t)
+		ids := f.parentSet(t, parentDir, seq(1, 6), horizonStem, 900, 9000)
+		for _, id := range ids {
+			f.setAuthor(t, id, f.authorID(t, "Kevin J Anderson"))
+		}
+		other := f.book(t, "copy", "Some Other Name", f.path("lib/Elsewhere/Copy"), nil)
+		for i := 1; i <= 6; i++ {
+			name := fmt.Sprintf("track %02d.mp3", i)
+			p := f.file(t, filepath.Join("lib/Elsewhere/Copy", name), 9000+101*i)
+			f.row(t, name, other, p, name, int64(9000+101*i), 900, i)
+		}
+		f.organized(t, other)
+		f.setAuthor(t, other, f.authorID(t, "Someone Else Entirely"))
+		res := f.plan(t, "op-plan")
+		noRow(t, res, existingRowID(f.path(parentDir), fragParentSetKeyPrefix+horizonKey), "no join across authors")
+		r := findRow(t, res, parentRowID(f, parentDir, horizonKey))
+		require.Equal(t, fragSkipDuplicateAudio, r.Skipped)
+		require.Contains(t, r.SkipReason, "differ")
 	})
 	t.Run("never two books of one title: two parent folders, different lengths, both held", func(t *testing.T) {
 		f := newFragFixture(t)

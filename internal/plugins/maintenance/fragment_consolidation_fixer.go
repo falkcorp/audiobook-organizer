@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.33.0
+// version: 1.34.0
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
 // last-edited: 2026-10-05
 
@@ -4372,6 +4372,11 @@ type fragExisting struct {
 	// the set the book is compared with. creditIDs names them.
 	credit, credited int
 	creditIDs        []string
+	// audio, set on a chapter set's audio join (fragment_folder_sets.go),
+	// is what matched instead of a title: it replaces joinExisting's
+	// "a live book of this title ... agrees" evidence line, which an audio
+	// join has not shown.
+	audio string
 }
 
 // existingBookCheck decides, before a no-parent row may assemble anything,
@@ -4647,6 +4652,9 @@ func (f *fragmentFixer) holdExisting(lib *fragLibrary, r *repairs.Row, plan *fra
 func (f *fragmentFixer) joinExisting(lib *fragLibrary, r *repairs.Row, plan *fragGroupPlan, e fragExisting, setDesc string,
 	describe func(fragExisting) string, named []fragExisting) {
 	ev := fmt.Sprintf("a live book of this title already exists and its total agrees within max(2%%, 5 min): %s; %s", describe(e), setDesc)
+	if e.audio != "" {
+		ev = e.audio
+	}
 	if e.credited > 0 {
 		ev += fmt.Sprintf(", plus %d fragment(s) of these folders (%s) already retired into it", e.credited, fragHours(e.credit))
 	}
@@ -4691,6 +4699,9 @@ func (f *fragmentFixer) joinExisting(lib *fragLibrary, r *repairs.Row, plan *fra
 	r.Title, r.Author = target.Title, lib.authorName(target)
 	n := len(plan.Members) + len(plan.Copies)
 	r.Reason = fmt.Sprintf("%d chapter files imported as separate books duplicate the existing book %s (%q)", n, e.id, target.Title)
+	if e.audio != "" {
+		r.Reason = fmt.Sprintf("%d chapter files imported as separate books are copies of the audio of the existing book %s (%q)", n, e.id, target.Title)
+	}
 	r.Proposed = map[string]string{
 		"action": fmt.Sprintf("retire %d fragment book(s) into the existing book %s, each keeping its own file row; nothing is moved, renumbered or retitled", n, e.id),
 		"join":   e.id,
