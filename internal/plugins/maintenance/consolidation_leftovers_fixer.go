@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/consolidation_leftovers_fixer.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 6df37df9-b008-41ad-bd69-47b00e4cb50c
 // last-edited: 2026-10-06
 
@@ -91,6 +91,8 @@ const (
 	leftoverSkipSamePathITunesGroup = "held_same_path_itunes_group"
 	leftoverSkipSamePathAudio       = "held_same_path_audio_differs"
 	leftoverSkipSamePathNoRow       = "held_same_path_no_owner_row"
+	leftoverSkipSamePathIdentity    = "held_same_path_identity_differs"
+	leftoverSkipSamePathPrimary     = "held_same_path_primary_handoff"
 )
 
 // consolidationLeftoversFixer retires the one-chapter books the 2026-09-06
@@ -603,12 +605,12 @@ func (s *leftoverSource) decide(ctx context.Context, id string, st *leftoverStat
 		return finish(leftoverClassHeld, leftoverSkipStatError, statErr)
 	}
 	res := repairs.NewPathResolver()
-	itunesOf := func(bc *database.BookCore, rs []database.BookFileCore) (string, bool, error) {
+	itunesOf := func(bc *database.BookCore, rs []database.BookFileCore, survivor bool) (string, bool, error) {
 		exts, err := s.store.GetExternalIDsForBook(bc.ID)
 		if err != nil {
 			return "", false, fmt.Errorf("external ids of %s: %w", bc.ID, err)
 		}
-		why, doubt := leftoverITunesWhy(res, bc, rs, exts)
+		why, doubt := leftoverITunesWhy(res, bc, rs, exts, survivor)
 		return why, doubt, nil
 	}
 	if core.FilePath != "" {
@@ -624,7 +626,7 @@ func (s *leftoverSource) decide(ctx context.Context, id string, st *leftoverStat
 		}
 	}
 	// iTunes on the leftover's side.
-	why, doubt, err := itunesOf(&core, rows)
+	why, doubt, err := itunesOf(&core, rows, false)
 	if err != nil {
 		return repairs.Row{}, false, err
 	}
@@ -711,7 +713,7 @@ func (s *leftoverSource) decide(ctx context.Context, id string, st *leftoverStat
 		row.Risk = repairs.RiskLow
 	}
 	// The combined book's iTunes side: a retire into it writes it.
-	why, doubt, err = itunesOf(cb, crows)
+	why, doubt, err = itunesOf(cb, crows, false)
 	if err != nil {
 		return repairs.Row{}, false, err
 	}
@@ -828,48 +830,26 @@ func leftoverWalkOwners(store OpsStore, scope string, size int64, seen map[strin
 }
 
 // leftoverITunesWhy names why a book is iTunes-owned for this fixer ("" when
-// it is not): a book or row iTunes persistent id, an un-tombstoned itunes
-// external id (the persistent-id mapping), or a file inside the iTunes media
-// folder (books/itunes/** with symlinks resolved, or any "iTunes Media"
-// folder). doubt: a path could not be settled.
+// it is not), through the shared predicate itunesOwnershipWhy: a book or row
+// iTunes persistent id, an un-tombstoned itunes external id, a file inside
+// an "iTunes Media" folder or under books/itunes/** (symlinks resolved).
+// doubt: a path could not be settled.
 //
-// Unlike itunesCopyWhy it does NOT count a row's bare iTunes path reference
-// (owner decision 2026-10-06): the 09-06 leftovers carry the iTunes
-// library's reference to the organizer folder in itunes_path, and that alone
-// does not make the book iTunes-owned. itunesCopyWhy is shared with the
-// duplicate-copies and fragment fixers, so this fixer keeps its own check
-// rather than change theirs. retireInto still refuses a book or row with a
-// persistent id and an un-tombstoned itunes external id.
-func leftoverITunesWhy(res *repairs.PathResolver, b *database.BookCore, rows []database.BookFileCore, exts []database.ExternalIDMapping) (why string, doubt bool) {
-	if pid := dcStr(b.ITunesPersistentID); pid != "" {
-		return "book iTunes id " + pid, false
-	}
-	for _, r := range rows {
-		if r.ITunesPersistentID != "" {
-			return "row iTunes id " + r.ITunesPersistentID, false
-		}
-	}
-	for _, e := range exts {
-		if e.Source == "itunes" && e.ExternalID != "" && !e.Tombstoned {
-			return "itunes external id " + e.ExternalID, false
-		}
-	}
+// countPathRef: a row's bare iTunes path reference counts too. It does NOT
+// for a book this fixer retires (owner decision 2026-10-06): the 09-06
+// leftovers carry the iTunes library's reference to the organizer folder in
+// itunes_path, and that alone does not make the book iTunes-owned. It does
+// for the same-path owner, the survivor the retire writes. retireInto still
+// refuses a retired book or row with a persistent id and an un-tombstoned
+// itunes external id.
+func leftoverITunesWhy(res *repairs.PathResolver, b *database.BookCore, rows []database.BookFileCore, exts []database.ExternalIDMapping, countPathRef bool) (why string, doubt bool) {
 	paths := []string{b.FilePath}
+	ff := make([]fragFile, 0, len(rows))
 	for _, r := range rows {
 		paths = append(paths, r.FilePath)
+		ff = append(ff, fragFile{ID: r.ID, ITunesPID: r.ITunesPersistentID, ITunesPath: r.ITunesPath})
 	}
-	for _, p := range paths {
-		if strings.Contains(p, string(filepath.Separator)+"iTunes Media"+string(filepath.Separator)) {
-			return "file inside an iTunes Media folder: " + p, false
-		}
-	}
-	switch k, w := repairs.GuardBookPathsWith(res, b.ID, paths, ""); k {
-	case repairs.SkipITunes:
-		return w, false
-	case repairs.SkipGuardUnreadable:
-		return "", true
-	}
-	return "", false
+	return itunesOwnershipWhy(res, b.ID, dcStr(b.ITunesPersistentID), paths, ff, exts, countPathRef)
 }
 
 // leftoverTwinsConsecutive reports whether the twins of the leftover's rows,
