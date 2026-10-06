@@ -277,12 +277,12 @@ func leftoverHashVerdict(a, b database.BookFileCore) string {
 
 // leftoverMatch is the decision for one dead row.
 type leftoverMatch struct {
-	row     database.BookFileCore
-	owners  []string                // live owning books of a present same-size file
-	twin    *database.BookFileCore  // the matched row on the one owner
-	basis   string                  // size or size+hash
-	skip    string                  // a held kind for this row
-	why     string                  // its reason
+	row    database.BookFileCore
+	owners []string               // live owning books of a present same-size file
+	twin   *database.BookFileCore // the matched row on the one owner
+	basis  string                 // size or size+hash
+	skip   string                 // a held kind for this row
+	why    string                 // its reason
 }
 
 // matchRow finds the owners of a present same-size file under the dead row's
