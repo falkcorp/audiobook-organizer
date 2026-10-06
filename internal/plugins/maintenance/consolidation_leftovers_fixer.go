@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/consolidation_leftovers_fixer.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6df37df9-b008-41ad-bd69-47b00e4cb50c
 // last-edited: 2026-10-06
 
@@ -15,7 +15,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -69,8 +71,12 @@ const (
 	leftoverSkipITunesDoubt   = "held_itunes_doubt"
 	leftoverSkipITunes        = "itunes"
 	leftoverSkipNoMatch       = "no-match"
-	leftoverBasisSize         = "size"
 	leftoverBasisSizeHash     = "size+hash"
+	leftoverBasisSizeChapter  = "size+chapter"
+	leftoverBasisSizeDuration = "size+duration"
+	leftoverSkipNoEvidence    = "held_no_twin_evidence"
+	leftoverSkipTwinAmbiguous = "held_twin_ambiguous"
+	leftoverSkipNotListed     = "held_combined_not_listed"
 	leftoverRolesLeftover     = "leftover"
 	leftoverRolesCombined     = "combined"
 	leftoverRolesGroupSibling = "version_group"
@@ -158,6 +164,7 @@ type leftoverPlan struct {
 	Combined string
 	GroupID  string
 	Marks    []leftoverMark
+	Slice    merge.SliceMapping
 }
 
 // leftoverStat is one disk answer: gone (fs.ErrNotExist), present (with its
@@ -280,7 +287,7 @@ type leftoverMatch struct {
 	row    database.BookFileCore
 	owners []string               // live owning books of a present same-size file
 	twin   *database.BookFileCore // the matched row on the one owner
-	basis  string                 // size or size+hash
+	basis  string                 // size+hash, size+chapter or size+duration
 	skip   string                 // a held kind for this row
 	why    string                 // its reason
 }
@@ -342,30 +349,148 @@ func (s *leftoverSource) matchRow(ctx context.Context, leftover string, r databa
 			len(m.owners), r.FileSize, scope, strings.Join(m.owners, ", "))
 		return m, nil
 	}
+	// The twin decides where the leftover's listening position lands in the
+	// combined book, so a same-size file alone is not enough: a candidate
+	// needs agreeing evidence (equal hash, the same chapter number in both
+	// file names, or the same duration), and exactly one candidate must have
+	// it. Candidates whose hash disagrees are dropped; when every candidate
+	// disagrees the row is held.
 	rows := byOwner[m.owners[0]]
 	sort.Slice(rows, func(i, j int) bool { return rows[i].FilePath < rows[j].FilePath })
-	var plain, disagree *database.BookFileCore
+	type ev struct {
+		row           *database.BookFileCore
+		hash, ch, dur bool
+	}
+	var evs []ev
+	disagree := 0
 	for i := range rows {
-		switch leftoverHashVerdict(r, rows[i]) {
-		case "agree":
-			m.twin, m.basis = &rows[i], leftoverBasisSizeHash
-			return m, nil
-		case "disagree":
-			if disagree == nil {
-				disagree = &rows[i]
-			}
-		default:
-			if plain == nil {
-				plain = &rows[i]
-			}
+		v := leftoverHashVerdict(r, rows[i])
+		if v == "disagree" {
+			disagree++
+			continue
+		}
+		e := ev{row: &rows[i], hash: v == "agree", ch: leftoverSameChapter(r.FilePath, rows[i].FilePath),
+			dur: leftoverSameDuration(r.Duration, rows[i].Duration)}
+		if e.hash || e.ch || e.dur {
+			evs = append(evs, e)
 		}
 	}
-	if disagree != nil {
-		m.skip, m.why = leftoverSkipHashDisagree, fmt.Sprintf("the same-size file %s carries a different hash", disagree.FilePath)
+	if len(evs) == 0 {
+		if disagree > 0 {
+			m.skip, m.why = leftoverSkipHashDisagree, fmt.Sprintf("the same-size file(s) of %s carry a different hash", m.owners[0])
+		} else {
+			m.skip, m.why = leftoverSkipNoEvidence, fmt.Sprintf("%d same-size file(s) of %s, but neither a hash, the chapter number nor the duration agrees",
+				len(rows), m.owners[0])
+		}
 		return m, nil
 	}
-	m.twin, m.basis = plain, leftoverBasisSize
+	for _, keep := range []func(ev) bool{func(e ev) bool { return e.hash }, func(e ev) bool { return e.ch }, func(e ev) bool { return e.dur }} {
+		if len(evs) == 1 {
+			break
+		}
+		var narrowed []ev
+		for _, e := range evs {
+			if keep(e) {
+				narrowed = append(narrowed, e)
+			}
+		}
+		if len(narrowed) > 0 {
+			evs = narrowed
+		}
+	}
+	if len(evs) > 1 {
+		m.skip, m.why = leftoverSkipTwinAmbiguous, fmt.Sprintf("%d files of %s match %s equally well: %s, %s",
+			len(evs), m.owners[0], r.FilePath, evs[0].row.FilePath, evs[1].row.FilePath)
+		return m, nil
+	}
+	e := evs[0]
+	m.twin = e.row
+	switch {
+	case e.hash:
+		m.basis = leftoverBasisSizeHash
+	case e.ch:
+		m.basis = leftoverBasisSizeChapter
+	default:
+		m.basis = leftoverBasisSizeDuration
+	}
 	return m, nil
+}
+
+var (
+	leftoverCopySuffix = regexp.MustCompile(`(?i)_copy\d+$`)
+	leftoverLeadNum    = regexp.MustCompile(`^0*(\d{1,4})\s*[-–._)\s]`)
+	leftoverTrailNum   = regexp.MustCompile(`[-–._(\s]\s*0*(\d{1,4})$`)
+)
+
+// leftoverChapter is the chapter number in a file name: the leading number
+// ("18 - We Hunt Monsters 8") or, with none, the trailing one ("We Hunt
+// Monsters 8 - 18"), after a "_copyN" suffix is dropped. lead prefers the
+// leading number; otherwise the trailing one is preferred.
+func leftoverChapter(p string, lead bool) (int, bool) {
+	stem := strings.TrimSuffix(filepath.Base(p), filepath.Ext(p))
+	stem = strings.TrimSpace(leftoverCopySuffix.ReplaceAllString(stem, ""))
+	l, t := leftoverLeadNum.FindStringSubmatch(stem), leftoverTrailNum.FindStringSubmatch(stem)
+	pick := func(m []string) (int, bool) {
+		n, err := strconv.Atoi(m[1])
+		return n, err == nil
+	}
+	if lead && l != nil {
+		return pick(l)
+	}
+	if t != nil {
+		return pick(t)
+	}
+	if l != nil {
+		return pick(l)
+	}
+	return 0, false
+}
+
+// leftoverSameChapter reports whether the leftover's file and the twin carry
+// the same chapter number (the leftover's leading one, the twin's trailing
+// one: the 09-06 consolidation renamed "NN - Title" to "Title - NN").
+func leftoverSameChapter(leftover, twin string) bool {
+	a, ok := leftoverChapter(leftover, true)
+	if !ok {
+		return false
+	}
+	b, ok := leftoverChapter(twin, false)
+	return ok && a == b
+}
+
+// leftoverSameDuration reports whether two known durations agree within 2 s.
+func leftoverSameDuration(a, b int) bool {
+	if a <= 0 || b <= 0 {
+		return false
+	}
+	d := a - b
+	return d >= -2 && d <= 2
+}
+
+// leftoverSlice maps the twin into the combined book's timeline: the offset
+// is the summed duration of every row with a lower track number. Mirrors the
+// fragment fixer's sliceIn over this fixer's row type. Any unknown or
+// repeated track, or an unknown earlier duration, makes it not Mappable:
+// then no position is carried (and a slice never carries Finished).
+func leftoverSlice(rows []database.BookFileCore, twin database.BookFileCore) merge.SliceMapping {
+	if twin.TrackNumber <= 0 {
+		return merge.SliceMapping{}
+	}
+	seen := map[int]bool{}
+	var off float64
+	for _, r := range rows {
+		if r.TrackNumber <= 0 || seen[r.TrackNumber] {
+			return merge.SliceMapping{}
+		}
+		seen[r.TrackNumber] = true
+		if r.TrackNumber < twin.TrackNumber {
+			if r.Duration <= 0 {
+				return merge.SliceMapping{}
+			}
+			off += float64(r.Duration)
+		}
+	}
+	return merge.SliceMapping{OffsetSeconds: off, Mappable: true}
 }
 
 // decide makes one row for book id, or returns ok=false when the book is not
@@ -532,6 +657,9 @@ func (s *leftoverSource) decide(ctx context.Context, id string, st *leftoverStat
 	if err != nil {
 		return repairs.Row{}, false, err
 	}
+	if !database.ABSLibraryFilter().MatchesCore(cb) {
+		return finish(leftoverClassHeld, leftoverSkipNotListed, fmt.Sprintf("the combined book %s is not listed by Audiobookshelf (not an organized, unquarantined primary): its listening state would be stranded", combinedID))
+	}
 	row.Members = append(row.Members, repairs.RowMember{BookID: combinedID, Title: cb.Title, Role: leftoverRolesCombined,
 		Files: len(crows), MissingFiles: countMissing(crows)})
 	row.Current["combined_book"] = combinedID + " " + cb.Title
@@ -539,8 +667,8 @@ func (s *leftoverSource) decide(ctx context.Context, id string, st *leftoverStat
 	var matched []string
 	for _, m := range matches {
 		matched = append(matched, m.twin.FilePath)
-		if m.basis == leftoverBasisSize {
-			basis = leftoverBasisSize
+		if leftoverBasisRank(m.basis) > leftoverBasisRank(basis) {
+			basis = m.basis
 		}
 		row.Evidence = append(row.Evidence, fmt.Sprintf("%s is gone from disk; %s (%d bytes, %s) is on disk and owned only by %s",
 			m.row.FilePath, m.twin.FilePath, m.row.FileSize, m.basis, combinedID))
@@ -548,7 +676,7 @@ func (s *leftoverSource) decide(ctx context.Context, id string, st *leftoverStat
 	}
 	row.Current["matched_files"] = strings.Join(matched, "\n")
 	row.Current["match_basis"] = basis
-	if basis == leftoverBasisSizeHash {
+	if basis == leftoverBasisSizeHash || basis == leftoverBasisSizeChapter {
 		row.Risk = repairs.RiskLow
 	}
 	// The combined book's iTunes side: a retire into it writes it.
@@ -578,7 +706,28 @@ func (s *leftoverSource) decide(ctx context.Context, id string, st *leftoverStat
 			}
 		}
 	}
-	plan := &leftoverPlan{Leftover: id, Combined: combinedID, GroupID: gid}
+	// The listening position follows as a slice of the combined book, at the
+	// place of the twin of the leftover's first track.
+	first := matches[0]
+	for _, m := range matches[1:] {
+		if m.row.TrackNumber < first.row.TrackNumber {
+			first = m
+		}
+	}
+	slice := leftoverSlice(crows, *first.twin)
+	if len(matches) > 1 && !leftoverTwinsConsecutive(matches) {
+		// A position inside a later row of the leftover maps past the
+		// first twin only when the twins follow one another in the
+		// combined book in the leftover's own order.
+		slice = merge.SliceMapping{}
+	}
+	fmt.Fprintf(&fp, "slice|%v|%.3f\n", slice.Mappable, slice.OffsetSeconds)
+	if slice.Mappable {
+		row.Current["position_offset_seconds"] = strconv.FormatFloat(slice.OffsetSeconds, 'f', 0, 64)
+	} else {
+		row.Current["position_offset_seconds"] = "unknown: no position is carried"
+	}
+	plan := &leftoverPlan{Leftover: id, Combined: combinedID, GroupID: gid, Slice: slice}
 	state := leftoverState{Combined: combinedID, BookPath: core.FilePath}
 	for _, r := range rows {
 		if r.Missing {
@@ -692,6 +841,52 @@ func leftoverITunesWhy(res *repairs.PathResolver, b *database.BookCore, rows []d
 	return "", false
 }
 
+// leftoverTwinsConsecutive reports whether the twins of the leftover's rows,
+// taken in the leftover's track order, hold consecutive tracks of the
+// combined book.
+func leftoverTwinsConsecutive(ms []leftoverMatch) bool {
+	sorted := append([]leftoverMatch(nil), ms...)
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].row.TrackNumber < sorted[j].row.TrackNumber })
+	for i := 1; i < len(sorted); i++ {
+		if sorted[i].row.TrackNumber == sorted[i-1].row.TrackNumber ||
+			sorted[i].twin.TrackNumber != sorted[i-1].twin.TrackNumber+1 {
+			return false
+		}
+	}
+	return true
+}
+
+// leftoverBasisRank orders match bases from strongest (0) to weakest; a row
+// reports its weakest row's basis.
+func leftoverBasisRank(b string) int {
+	switch b {
+	case leftoverBasisSizeHash:
+		return 0
+	case leftoverBasisSizeChapter:
+		return 1
+	default:
+		return 2
+	}
+}
+
+// leftoverRootMounted refuses a plan or re-plan when the library root is
+// unset, missing or empty: an unmounted share would make every row ENOENT
+// and look like a library of leftovers.
+func leftoverRootMounted() error {
+	root := config.AppConfig.RootDir
+	if root == "" {
+		return errors.New("library root is not configured")
+	}
+	ents, err := os.ReadDir(root)
+	if err != nil {
+		return fmt.Errorf("library root %s unreadable: %w", root, err)
+	}
+	if len(ents) == 0 {
+		return fmt.Errorf("library root %s is empty (share not mounted?)", root)
+	}
+	return nil
+}
+
 func appendUnique(list []string, v string) []string {
 	if contains(list, v) {
 		return list
@@ -759,6 +954,9 @@ func (f *consolidationLeftoversFixer) Plan(ctx context.Context, _ json.RawMessag
 	store := f.p.deps.OpsStore()
 	if store == nil {
 		return nil, fmt.Errorf("database not initialized")
+	}
+	if err := leftoverRootMounted(); err != nil {
+		return nil, fmt.Errorf("%s: %w", leftoverFixerID, err)
 	}
 	books, rowsOf, err := f.buildIndex(store)
 	if err != nil {
@@ -845,6 +1043,9 @@ func (f *consolidationLeftoversFixer) Replan(ctx context.Context, _ json.RawMess
 	store := f.p.deps.OpsStore()
 	if store == nil {
 		return repairs.Row{}, fmt.Errorf("database not initialized")
+	}
+	if err := leftoverRootMounted(); err != nil {
+		return repairs.Row{}, fmt.Errorf("%s: %w", leftoverFixerID, err)
 	}
 	idx, err := f.sizeIndex(store)
 	if err != nil {
@@ -972,7 +1173,10 @@ func (f *consolidationLeftoversFixer) Apply(ctx context.Context, w *repairs.Writ
 		}
 		steps++
 	}
-	did, err := retireInto(ctx, f.p, store, w, f.now, leftoverFixerID, plan.Leftover, plan.Combined, nil)
+	// A slice, never the whole-book rule: a finished chapter must not mark
+	// the combined book finished, and the position lands at the chapter.
+	slice := plan.Slice
+	did, err := retireInto(ctx, f.p, store, w, f.now, leftoverFixerID, plan.Leftover, plan.Combined, &slice)
 	steps += did
 	if err != nil {
 		return partial(err)
