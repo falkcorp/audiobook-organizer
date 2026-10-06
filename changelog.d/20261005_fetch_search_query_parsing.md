@@ -56,3 +56,25 @@
   and fetches only: no candidate is applied and no book is written. Its
   rate limiter and workers are sized from the enabled sources' budgets
   (Audible 8/s).
+
+### Changed
+
+- **The new folder parse never rewrites existing books on a rescan** (owner
+  decision 2026-10-05: search and new imports only). A rescan holds an
+  existing row's title, author and series wherever the scanned value came
+  from the folder parse (`scanner.folderDerivedLocks`); tag values still
+  land as before, and new rows are created from the new parse.
+- **New repairs fixer `maintenance.reparse-folder-names`.** Lists existing
+  books whose title, author or series is what the OLD folder parse wrote
+  (`metadata.LegacyFolderParse`, a frozen copy used only as evidence) and
+  that the new parse reads differently, one row per field with before and
+  after. Locked fields are held; iTunes-owned and Doctor Who / Big Finish /
+  Torchwood rows are skipped by the framework guards; a proposed title that
+  is the book's own author is not a row. Apply writes approved title rows
+  (journaled and locked) and series links to existing series rows; author
+  rows are review-only. Offline over the library's 75,390 census paths:
+  178 title rows and 2 series rows on 180 books, 0 author rows.
+- **A first field that only repeats an ancestor folder is a series, never
+  an author** (`Star Wars/Star Wars - Thrawn` reads series "Star Wars", no
+  author; an earlier draft credited "Star Wars" as the author). An author
+  needs person evidence: the book's own author or the authority lists.

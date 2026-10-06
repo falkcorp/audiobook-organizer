@@ -1,5 +1,5 @@
 // file: internal/metadata/book_name.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8eab30cb-5e6e-4bc7-bfba-dfb603b81ef2
 // last-edited: 2026-10-05
 //

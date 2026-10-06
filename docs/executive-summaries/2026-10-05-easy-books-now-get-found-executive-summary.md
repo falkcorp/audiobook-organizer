@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-05-easy-books-now-get-found-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: b351a976-9287-4897-af9a-3525619265bc -->
 <!-- last-edited: 2026-10-05 -->
 
@@ -16,8 +16,10 @@
 - **The search now reads the name out first.** One shared reader now
   removes the year, the author, the "Unknown Author" placeholder, the track
   number and recording details, and spots the series and book number. The
-  library scanner uses the same reader, so both sides agree on what a
-  book's name is.
+  library scanner uses the same reader for newly added books. Books already
+  in the library are never renamed by a rescan: a new review list shows the
+  180 or so whose folder-made name would change, and only the ones the owner
+  approves are changed.
 - **Checked against the real catalog.** On the 20 sample books the
   October census picked, the old search found 0. The new one finds 10 --
   all 10 the census could find in Audible's catalog. The other 10 are not

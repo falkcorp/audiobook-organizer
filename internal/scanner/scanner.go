@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.124.0
+// version: 1.125.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 package scanner
 
