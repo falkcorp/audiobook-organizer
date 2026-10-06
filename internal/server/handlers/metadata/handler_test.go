@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/handler_test.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 1d31ef73-7c7a-4c3b-a840-01b0865023d7
 // last-edited: 2026-10-05
 
@@ -251,6 +251,7 @@ func TestSearchAudiobookMetadata_AltQuery(t *testing.T) {
 	// Non-plain fetch (query set) → SearchMetadataForBchWithOptions path.
 	d.mfs.EXPECT().SearchMetadataForBookWithOptions("b1", "dune", "", "", "", mock.Anything).
 		Return(&metafetch.SearchMetadataResponse{Query: "dune", Results: []metafetch.MetadataCandidate{{Title: "Dune"}}}, nil)
+	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1"}, nil)
 	w := doReq(h.SearchAudiobookMetadata, http.MethodPost, "/audiobooks/b1/search-metadata",
 		map[string]any{"query": "dune"}, idParam("b1"))
 	if w.Code != http.StatusOK {
@@ -263,6 +264,7 @@ func TestSearchAudiobookMetadata_PlainFetchAndCache(t *testing.T) {
 	d.mfs.EXPECT().GetCachedCandidates("b1").Return(nil, false, nil)
 	d.mfs.EXPECT().FetchAndCache(mock.Anything, "b1", "", "", "", "", mock.Anything).
 		Return(&metafetch.MetadataCandidateCache{FetchedAt: time.Now()}, nil)
+	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1"}, nil)
 	w := doReq(h.SearchAudiobookMetadata, http.MethodPost, "/audiobooks/b1/search-metadata", nil, idParam("b1"))
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
@@ -290,6 +292,7 @@ func noPool(c *cfg) { c.hasPool = false }
 func TestApplyAudiobookMetadata_RenamePreflightRefusesBeforeAnyWrite(t *testing.T) {
 	h, d := newHandler(t)
 	blocked := fmt.Errorf("%w: two files of one book plan the same target path", metafetch.ErrApplyFileWorkWouldFail)
+	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1"}, nil)
 	d.mfs.EXPECT().RenamePreflight("b1", mock.Anything, []string{"title"}).Return(blocked)
 	w := doReq(h.ApplyAudiobookMetadata, http.MethodPost, "/audiobooks/b1/apply-metadata",
 		map[string]any{"candidate": map[string]any{"title": "X"}, "fields": []string{"title"}}, idParam("b1"))
@@ -333,6 +336,7 @@ func TestApplyAudiobookMetadata_NoFileSequelSkipsRenamePreflight(t *testing.T) {
 // background job, so the preflight still runs.
 func TestApplyAudiobookMetadata_WriteBackOffStillRunsRenamePreflight(t *testing.T) {
 	h, d := newHandler(t)
+	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1"}, nil)
 	d.mfs.EXPECT().RenamePreflight("b1", mock.Anything, mock.Anything).
 		Return(fmt.Errorf("%w: planned target held by another file", metafetch.ErrApplyFileWorkWouldFail))
 	w := doReq(h.ApplyAudiobookMetadata, http.MethodPost, "/audiobooks/b1/apply-metadata",

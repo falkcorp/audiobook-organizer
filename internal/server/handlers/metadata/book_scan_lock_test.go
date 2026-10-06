@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/book_scan_lock_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 85df29b0-0d44-40e8-bbab-726ab6928927
 // last-edited: 2026-10-05
 
@@ -238,6 +238,7 @@ func TestRunQueuedApply_CandidateReRunAfterTheApplyIsAlreadyApplied(t *testing.T
 func TestRunQueuedApply_CandidateWithNoLaterEditApplies(t *testing.T) {
 	h, d := newHandler(t)
 	d.mfs.EXPECT().ApplyEditsSince("b1", int64(42), "apply-queued-own").Return(metafetch.QueuedApplyEdits{}, nil)
+	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1"}, nil)
 	d.mfs.EXPECT().RenamePreflight("b1", mock.Anything, mock.Anything).Return(nil)
 	d.mfs.EXPECT().ApplyMetadataCandidateWithOptions("b1", mock.Anything, mock.Anything,
 		metafetch.ApplyOptions{BatchID: "apply-queued-own"}).Return(&metafetch.FetchMetadataResponse{}, nil)

@@ -1,7 +1,7 @@
 // file: web/src/components/audiobooks/BulkMetadataSearchDialog.test.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: ec4cb47b-6f18-4083-ab37-a05af679a097
-// last-edited: 2026-09-30
+// last-edited: 2026-10-05
 
 import { useState } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -11,13 +11,20 @@ import { BulkMetadataSearchDialog } from './BulkMetadataSearchDialog';
 import type { Audiobook } from '../../types';
 import type { MetadataCandidate } from '../../services/api';
 
-vi.mock('../../services/api', () => ({
-  searchMetadataForBook: vi.fn(),
-  applyMetadataCandidate: vi.fn(),
-  getBookFiles: vi.fn(),
-  undoLastApply: vi.fn(),
-  markNoMatch: vi.fn(),
-}));
+vi.mock('../../services/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../services/api')>();
+  return {
+    // The real error type and its reader: the dialog tells an ASIN-conflict
+    // refusal from any other failure with them.
+    ApiError: actual.ApiError,
+    asinConflictOf: actual.asinConflictOf,
+    searchMetadataForBook: vi.fn(),
+    applyMetadataCandidate: vi.fn(),
+    getBookFiles: vi.fn(),
+    undoLastApply: vi.fn(),
+    markNoMatch: vi.fn(),
+  };
+});
 
 import {
   searchMetadataForBook,
@@ -130,7 +137,7 @@ describe('BulkMetadataSearchDialog — applied books', () => {
 
     // The book after B, not the book that slid into B's old index slot.
     await waitForBook('Book C');
-    expect(mockApply).toHaveBeenCalledWith('b', candidate, undefined, true);
+    expect(mockApply).toHaveBeenCalledWith('b', candidate, undefined, true, undefined);
     expect(screen.queryByText('Book B')).not.toBeInTheDocument();
     expect(header()).toBe('Search Metadata — Book 2 of 2 (1 filtered)');
     expect(screen.getByText('1 applied')).toBeInTheDocument();
@@ -198,7 +205,7 @@ describe('BulkMetadataSearchDialog — applied books', () => {
     // No book after C, so the successor is the one before it, not the first
     // book in the list and not the empty state.
     await waitForBook('Book B');
-    expect(mockApply).toHaveBeenCalledWith('c', candidate, undefined, true);
+    expect(mockApply).toHaveBeenCalledWith('c', candidate, undefined, true, undefined);
     expect(screen.queryByText('Book C')).not.toBeInTheDocument();
     expect(header()).toBe('Search Metadata — Book 2 of 2 (1 filtered)');
     expect(Number(determinateProgress())).toBeCloseTo(100 / 3, 5);
@@ -260,7 +267,7 @@ describe('BulkMetadataSearchDialog — closed while an apply is in flight', () =
     const { resolve, view } = await applyThenClose();
     await act(async () => resolve(applyOk));
 
-    expect(mockApply).toHaveBeenCalledWith('a', candidate, undefined, true);
+    expect(mockApply).toHaveBeenCalledWith('a', candidate, undefined, true, undefined);
     expect(toast).not.toHaveBeenCalled();
     // The server did change the book, so the list behind the dialog reloads.
     // Only the list: onComplete also clears the selection, which by now may
@@ -351,7 +358,7 @@ describe('BulkMetadataSearchDialog — reopened on a new selection before a late
 
     await act(async () => pending.resolve(applyOk));
 
-    expect(mockApply).toHaveBeenCalledWith('a', candidate, undefined, true);
+    expect(mockApply).toHaveBeenCalledWith('a', candidate, undefined, true, undefined);
     expectSecondSessionIntact();
   });
 
@@ -383,5 +390,68 @@ describe('BulkMetadataSearchDialog — reopened on a new selection before a late
 
     expect(mockUndo).toHaveBeenCalledWith('a');
     expectSecondSessionIntact();
+  });
+});
+
+describe('BulkMetadataSearchDialog — ASIN conflict', () => {
+  const conflicting: MetadataCandidate = {
+    ...candidate,
+    asin: 'B00OTHERAS',
+    apply_check: {
+      asin_conflict: true,
+      book_asin: 'B00BOOKASI',
+      detail: 'book ASIN B00BOOKASI, candidate B00OTHERAS',
+    },
+  };
+
+  it('asks before applying a flagged candidate and sends the override it was shown', async () => {
+    mockSearch.mockResolvedValue({ results: [conflicting] } as Awaited<
+      ReturnType<typeof searchMetadataForBook>
+    >);
+    renderDialog([book('a')]);
+    expect(await screen.findByText('ASIN conflict')).toBeInTheDocument();
+    fireEvent.click(await waitForBook('Book A'));
+    expect(await screen.findByText('Apply over an ASIN conflict?')).toBeInTheDocument();
+    expect(mockApply).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply anyway' }));
+    await waitFor(() =>
+      expect(mockApply).toHaveBeenCalledWith('a', conflicting, undefined, true, 'B00BOOKASI')
+    );
+  });
+
+  it('turns the server refusal into the confirmation, not an error', async () => {
+    const { ApiError } =
+      await vi.importActual<typeof import('../../services/api')>('../../services/api');
+    mockApply.mockRejectedValueOnce(
+      new ApiError('conflict', 409, {
+        reason: 'asin_conflict',
+        book_asin: 'B00BOOKASI',
+        candidate_asin: 'B00OTHERAS',
+        detail: 'book ASIN B00BOOKASI, candidate B00OTHERAS',
+      })
+    );
+    renderDialog([book('a')]);
+    fireEvent.click(await waitForBook('Book A'));
+    expect(await screen.findByText('Apply over an ASIN conflict?')).toBeInTheDocument();
+    expect(toast).not.toHaveBeenCalledWith('conflict', 'error');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply anyway' }));
+    await waitFor(() =>
+      expect(mockApply).toHaveBeenLastCalledWith('a', candidate, undefined, true, 'B00BOOKASI')
+    );
+  });
+
+  it('applies nothing when the confirmation is cancelled', async () => {
+    mockSearch.mockResolvedValue({ results: [conflicting] } as Awaited<
+      ReturnType<typeof searchMetadataForBook>
+    >);
+    renderDialog([book('a')]);
+    fireEvent.click(await waitForBook('Book A'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
+    await waitFor(() =>
+      expect(screen.queryByText('Apply over an ASIN conflict?')).not.toBeInTheDocument()
+    );
+    expect(mockApply).not.toHaveBeenCalled();
   });
 });
