@@ -1,7 +1,7 @@
 // file: internal/readstatus/readstatus.go
-// version: 2.5.0
+// version: 2.6.0
 // guid: 6e2f8a1d-4c5b-4f70-a9c7-2d8e0f1b9a57
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 //
 // RecomputeUserBookState derives a UserBookState from the current
 // UserPosition rows for a given (user, book), honoring the
@@ -98,6 +98,21 @@ func RecomputeUserBookState(store Store, userID, bookID string) (*database.UserB
 	state, err := deriveState(store, userID, bookID, existing, positions)
 	if err != nil {
 		return nil, err
+	}
+	// An undated record: positions are there but none carries a timestamp
+	// (legacy rows written before positions were stamped read as the zero
+	// time), and the stored row has no LastActivityAt either. Written as is,
+	// the merge rule (merge.restoreOrder / lastUpdate) cannot place it in
+	// time and treats it as older than any dated side, so a state the user
+	// is producing now would lose to a stale copy. The recompute runs in
+	// response to activity (a position heartbeat, an iTunes bookmark seed),
+	// so it is dated now. Only here, not in deriveState: RebuildUserBookState
+	// and SetManualStatus's back-to-auto share deriveState and are not
+	// listening activity. A state with no positions is not dated: it holds
+	// no listening to date (a drained merge residue would otherwise read as
+	// the newest side and win the next merge).
+	if state.LastActivityAt.IsZero() && len(positions) > 0 {
+		state.LastActivityAt = time.Now()
 	}
 	if err := store.SetUserBookState(state); err != nil {
 		return nil, err

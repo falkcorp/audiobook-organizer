@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.25.0
+// version: 1.26.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 // Package audiobookshandler hosts the main library list / CRUD HTTP handlers
 // extracted from the server package's audiobooks_handlers.go: book listing
@@ -895,8 +895,9 @@ func (h *Handler) DiscardProgressAndPurge(c *gin.Context) {
 		httputil.RespondWithOK(c, res.ForViewer(viewerID, seeAll))
 	case errors.Is(err, audiobookspkg.ErrAudiobookNotFound):
 		httputil.RespondWithNotFound(c, "audiobook", id)
-	case errors.Is(err, audiobookspkg.ErrNotInTrash), errors.Is(err, database.ErrBookOwnsFiles),
-		errors.Is(err, audiobookspkg.ErrDiscardRefused):
+	case errors.Is(err, database.ErrBookOwnsFiles):
+		httputil.RespondWithError(c, http.StatusConflict, err.Error(), CodeOwnsFiles)
+	case errors.Is(err, audiobookspkg.ErrNotInTrash), errors.Is(err, audiobookspkg.ErrDiscardRefused):
 		httputil.RespondWithConflict(c, err.Error())
 	case errors.Is(err, audiobookspkg.ErrAuditUnavailable):
 		httputil.RespondWithServiceUnavailable(c, err.Error())
