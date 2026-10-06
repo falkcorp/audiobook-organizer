@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.31.0
+// version: 1.32.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
 // last-edited: 2026-10-06
 //
@@ -2257,7 +2257,14 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
           if (chunks.length > 1) {
             setBulkProgress({ label: 'Queuing search', done: sent, total: ids.length });
           }
-          const resp = await api.batchFetchCandidates({ book_ids: part, force: true });
+          // One book searched is a person waiting on it: interactive, so it
+          // may use the reserved Google Books quota. Decided by the whole
+          // set, never per chunk (a large set's last chunk can hold one).
+          const resp = await api.batchFetchCandidates({
+            book_ids: part,
+            force: true,
+            ...(ids.length === 1 ? { interactive: true } : {}),
+          });
           if (resp.operation_id) opIds.push(resp.operation_id);
           else lastMessage = resp.message;
           sent += part.length;

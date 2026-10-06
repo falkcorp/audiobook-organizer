@@ -166,7 +166,7 @@ func TestCandidateFetchCheckpointState_EmptyRemainingIsExplicit(t *testing.T) {
 	done := newDoneSet(1)
 	done.mark("a")
 	done.mark("b")
-	data, err := json.Marshal(candidateFetchCheckpointState(ids, done, 2))
+	data, err := json.Marshal(candidateFetchCheckpointState(ids, done, 2, nil))
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}

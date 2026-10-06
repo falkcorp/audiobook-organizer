@@ -1,5 +1,5 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 4.23.0
+// version: 4.24.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
 // last-edited: 2026-10-06
 //
@@ -200,6 +200,11 @@ func (s *Server) handleBatchFetchCandidates(c *gin.Context) {
 		BookIDs:    bookIDs,
 		TotalBooks: totalBooks,
 		Force:      force,
+		// "Search again" on ONE book is a person waiting on that book:
+		// interactive for the daily quota budgets (owner decision
+		// 2026-10-06). A selection, a stale refetch or several books stay
+		// background.
+		Interactive: singleBookSearch(req, bookIDs),
 	}
 	opID, enqErr := s.opRegistry.EnqueueOp(c.Request.Context(), "metadata.candidate-fetch", params)
 	if enqErr != nil {
@@ -251,6 +256,7 @@ func (s *Server) fetchCandidateForBook(
 	limiter *rate.Limiter,
 	opID, bookID string,
 	force bool,
+	googleCapped bool,
 	folderMemo *metabatch.FolderMemo,
 ) CandidateResult {
 	book, err := store.GetBookByID(bookID)
@@ -359,7 +365,7 @@ func (s *Server) fetchCandidateForBook(
 	// PROVIDER FALLBACK (owner decisions 2026-10-06, candidate_fallback.go).
 	// Open Library and Google Books are not asked alongside the rest of the
 	// chain: they are asked, in that order, only when the chain left the book
-	// without a usable candidate (noUsableCandidate) -- Google under the
+	// without a usable candidate (metabatch.NoUsableCandidate) -- Google under the
 	// shared daily budget. With neither enabled, plan is empty and this is
 	// the single search it always was.
 	nameByID := mfs.ActiveSourceNamesByID()
@@ -370,6 +376,7 @@ func (s *Server) fetchCandidateForBook(
 		return s.runCandidateFallback(ctx, mfs, candidateFallbackInput{
 			store: store, limiter: limiter, book: book, bookInfo: bookInfo, query: query.Title, author: authorForHash,
 			force: force, pending: fallbackOwed(entry, active), entry: entry, why: why, cached: cached, withQuery: withQuery,
+			googleCapped: googleCapped,
 		})
 	}
 
@@ -389,8 +396,15 @@ func (s *Server) fetchCandidateForBook(
 			// a fallback provider that still owes one is asked. A row like this
 			// was stuck before -- served from the cache forever, never selected.
 			if len(active) > 0 {
-				if v := noUsableCandidate(store, book, cached); !v.Usable && len(fallbackOwed(cached, active)) > 0 {
+				v := metabatch.NoUsableCandidate(store, book, cached)
+				if !v.Usable && len(fallbackOwed(cached, active)) > 0 {
 					return fallback(cached, v.Why, candidateCachedCandidates)
+				}
+				if v.Usable {
+					// A usable candidate landed since a fallback lookup was
+					// deferred (a dialog search, a chain refresh): the book
+					// no longer waits on it.
+					clearDeferral(mfs, bookID, cached)
 				}
 			}
 			result := candidateResultFromEntry(store, bookInfo, bookID, query.Title, cached)
@@ -437,7 +451,10 @@ func (s *Server) fetchCandidateForBook(
 		if len(active) == 0 {
 			return withQuery(candidateResultFromEntry(store, bookInfo, bookID, query.Title, entry))
 		}
-		v := noUsableCandidate(store, book, entry)
+		v := metabatch.NoUsableCandidate(store, book, entry)
+		if v.Usable {
+			clearDeferral(mfs, bookID, entry)
+		}
 		if v.Usable || len(fallbackOwed(entry, active)) == 0 {
 			return withQuery(candidateResultFromEntry(store, bookInfo, bookID, query.Title, entry))
 		}
@@ -458,7 +475,15 @@ func (s *Server) fetchCandidateForBook(
 	if len(active) == 0 {
 		return withQuery(candidateResultFromEntry(store, bookInfo, bookID, query.Title, entry))
 	}
-	return fallback(entry, noUsableCandidate(store, book, entry).Why, "")
+	return fallback(entry, metabatch.NoUsableCandidate(store, book, entry).Why, "")
+}
+
+// singleBookSearch reports the review page's "Search again" on one book: a
+// request marked interactive for exactly one explicit book id (book_ids, no
+// selection filter, not the stale refetch). The mark is required, not
+// inferred from the count: a large selection's last chunk can hold one book.
+func singleBookSearch(req metabatch.BatchFetchRequest, bookIDs []string) bool {
+	return req.Interactive && len(req.BookIDs) == 1 && req.Selection == nil && !req.Stale && len(bookIDs) == 1
 }
 
 // candidateResultFromEntry turns a candidate-cache entry into the op's result

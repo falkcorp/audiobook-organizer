@@ -1,7 +1,7 @@
 // file: internal/metabatch/fetch_op.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 //
 // FetchOpParams holds the serializable parameters for the
 // metadata.candidate-fetch v2 OperationDef. Kept here so the
@@ -41,4 +41,17 @@ type FetchOpParams struct {
 	// registry overlays checkpoint keys onto the row's params, and an omitted
 	// key would let the original true show through).
 	Unfetched bool `json:"unfetched"`
+	// Interactive marks a fetch a person started for ONE book ("Search
+	// again" on a single selected book): its provider lookups are
+	// interactive for the daily quota budgets (dailyquota), so it may use the
+	// Google Books quota background work leaves reserved. Owner decision
+	// 2026-10-06; a multi-book selection stays background.
+	Interactive bool `json:"interactive,omitempty"`
+	// GoogleCappedBookIDs are books an Unfetched run selected for the free
+	// Open Library step only: Google Books also owes them an answer, but
+	// today's background share of its daily budget is allotted to books
+	// attempted longer ago (server.unfetchedCandidateBookIDs). Their Google
+	// step is put off without being asked or recorded, so a later quota day
+	// still selects them first. Carried by every checkpoint.
+	GoogleCappedBookIDs []string `json:"google_capped_book_ids,omitempty"`
 }

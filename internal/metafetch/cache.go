@@ -1,5 +1,5 @@
 // file: internal/metafetch/cache.go
-// version: 1.28.0
+// version: 1.29.0
 // guid: a4f33a2e-3b4d-4306-bdce-476758e39120
 // last-edited: 2026-10-06
 //
@@ -18,10 +18,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"log/slog"
 	"maps"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -604,9 +606,19 @@ func (mfs *Service) cacheSearchResponse(bookID, query, author, narrator, series 
 		FetchedForASIN: resp.BookASIN,
 	}
 
+	// The row's read and write are one step for this book: a merge or a
+	// carried attempt read from a row another search replaces meanwhile
+	// would write the older row's state back over it.
+	defer mfs.lockRow(bookID)()
+
+	// prev is the row for the same inputs -- or, for a merge, the row the
+	// caller read and vouched for under other hashed inputs
+	// (SearchOptions.MergeFromSourceHash): its candidates are merged or
+	// carried exactly as a same-inputs row's are, instead of being replaced.
 	var prev *MetadataCandidateCache
 	if mfs.db != nil {
-		if p, perr := mfs.db.GetMetadataCache(bookID); perr == nil && p != nil && p.SourceHash == sourceHash {
+		if p, perr := mfs.db.GetMetadataCache(bookID); perr == nil && p != nil &&
+			(p.SourceHash == sourceHash || (resp.mergeCached && resp.mergeFromHash != "" && p.SourceHash == resp.mergeFromHash)) {
 			prev = p
 		}
 	}
@@ -614,21 +626,37 @@ func (mfs *Service) cacheSearchResponse(bookID, query, author, narrator, series 
 	// attempts recorded for them still stand, whatever this search found
 	// (FallbackAttempts). With another ASIN they say nothing about the book
 	// as it is identified now, and are dropped (the fallback asks again).
-	sameASIN := prev != nil && strings.EqualFold(strings.TrimSpace(prev.FetchedForASIN), strings.TrimSpace(resp.BookASIN))
+	// A row with no FetchedForASIN (written before 2026-10-05) counts as
+	// fetched for the ASIN the book holds now -- the preserve-on-empty rule
+	// below: any replacement since was stamped on the row by the store.
+	sameASIN := prev != nil && (strings.TrimSpace(prev.FetchedForASIN) == "" ||
+		strings.EqualFold(strings.TrimSpace(prev.FetchedForASIN), strings.TrimSpace(resp.BookASIN)))
 	sameQuestions := prev != nil && prev.SearchFingerprint != "" && prev.SearchFingerprint == entry.SearchFingerprint
 	if sameQuestions && sameASIN {
 		entry.FallbackAttempts = prev.FallbackAttempts
 	}
 
-	// Merge (SearchOptions.MergeWithCached): an answer with results is added
-	// to the candidates the row already holds for the same inputs, re-ranked
-	// by score, instead of replacing them -- only when those candidates were
-	// fetched for the ASIN the book holds now, so a merge never re-dates
-	// candidates found for a record since taken off the book. The empty
-	// answers recorded for the same questions stay, and the row is dated now.
 	switch {
 	case len(raw) > 0 && resp.mergeCached && sameASIN && len(prev.Candidates) > 0:
-		entry.Candidates = mergeCandidateRows(raw, prev.Candidates)
+		// Merge (SearchOptions.MergeWithCached): an answer with results is
+		// added to the candidates the row holds for the same inputs and ASIN
+		// instead of replacing them. The earlier candidates are carried by
+		// the preserve-on-empty rules: a row not stamped by this search
+		// version is filtered by this search's position rules first
+		// (carryFilter), so a sibling filterLegacyCandidates drops never
+		// comes back. Carried candidates that answered OTHER questions (a
+		// legacy, prior-rule or unstamped row) keep the row's FetchedAt --
+		// they are not this search's fresh answer -- and a legacy row keeps
+		// its fingerprint, so the readers go on filtering it. Ranked usable
+		// first (MergeUsable), then by score.
+		carried, legacy := carryCandidates(prev, resp)
+		entry.Candidates = mergeCandidateRows(raw, carried, resp.mergeUsable)
+		if len(carried) > 0 && !sameQuestions {
+			entry.FetchedAt = prev.FetchedAt
+			if legacy {
+				entry.SearchFingerprint = prev.SearchFingerprint
+			}
+		}
 		if sameQuestions {
 			entry.EmptyAnswers = mergeEmptyAnswers(prev.EmptyAnswers, nil, nowUTC())
 		}
@@ -641,7 +669,8 @@ func (mfs *Service) cacheSearchResponse(bookID, query, author, narrator, series 
 		// attempt would leave the book without them until the attempt aged
 		// out. Only providers this search did not ask are kept from the old
 		// row; one it asked answered afresh.
-		entry.Candidates = mergeCandidateRows(raw, candidatesFromSources(prev.Candidates, fallbackAnswered(entry.FallbackAttempts, resp.SourcesTried)))
+		entry.Candidates = mergeCandidateRows(raw, candidatesFromSources(prev.Candidates,
+			fallbackAnswered(entry.FallbackAttempts, resp.SourcesTried)), resp.mergeUsable)
 	}
 
 	// Preserve-on-empty. A search WITH results always replaces, exactly as
@@ -655,18 +684,7 @@ func (mfs *Service) cacheSearchResponse(bookID, query, author, narrator, series 
 		{
 			if prev != nil {
 				if len(prev.Candidates) > 0 {
-					carried := prev.Candidates
-					// Candidates an earlier search version cached answered ITS
-					// questions, unfiltered by this version's position rules: a
-					// sibling it pooled is dropped here (strongCriteria.
-					// filterCarried), with the same criteria this search used.
-					// Any row not stamped by this version is filtered, not only
-					// one whose legacy fingerprint matches (filterLegacyCandidates
-					// says why).
-					legacy := resp.LegacyFingerprint != "" && prev.SearchFingerprint == resp.LegacyFingerprint
-					if !isCurrentFingerprint(prev.SearchFingerprint) && resp.carryFilter != nil {
-						carried = resp.carryFilter(carried)
-					}
+					carried, legacy := carryCandidates(prev, resp)
 					if len(carried) > 0 {
 						entry.Candidates = carried
 						// The carried candidates were fetched for the
@@ -712,14 +730,50 @@ func (mfs *Service) cacheSearchResponse(bookID, query, author, narrator, series 
 	return entry
 }
 
+// carryCandidates returns the candidates of prev (the row for the same
+// inputs) a new write may carry: candidates an earlier search version cached
+// answered ITS questions, unfiltered by this version's position rules, so a
+// sibling it pooled is dropped here (strongCriteria.filterCarried), with the
+// same criteria this search used. Any row not stamped by this version is
+// filtered, not only one whose legacy fingerprint matches
+// (filterLegacyCandidates says why). legacy reports a prev whose fingerprint
+// is this search's legacy one: the write keeps that fingerprint.
+func carryCandidates(prev *MetadataCandidateCache, resp *SearchMetadataResponse) (carried []json.RawMessage, legacy bool) {
+	carried = prev.Candidates
+	legacy = resp.LegacyFingerprint != "" && prev.SearchFingerprint == resp.LegacyFingerprint
+	if !isCurrentFingerprint(prev.SearchFingerprint) && resp.carryFilter != nil {
+		carried = resp.carryFilter(carried)
+	}
+	return carried, legacy
+}
+
+// cacheRowLocks serializes the read-modify-write of one book's candidate
+// cache row (cacheSearchResponse, RecordFallbackAttempt,
+// ClearDeferredFallbackAttempts), striped by book id: a merge or an attempt
+// stamp must not undo a concurrent write for the same book (the search
+// dialog's fetch racing the batch op). Process-wide, not per Service: every
+// Service in the process writes the same store (organize builds its own).
+var cacheRowLocks [64]sync.Mutex
+
+// lockRow locks bookID's candidate-cache row stripe and returns the unlock.
+func (mfs *Service) lockRow(bookID string) func() {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(bookID))
+	m := &cacheRowLocks[h.Sum32()%uint32(len(cacheRowLocks))]
+	m.Lock()
+	return m.Unlock
+}
+
 // mergeCandidateRows is the union of fresh and cached candidate rows,
-// deduplicated (the same source, title and ASIN keep the fresh row), ranked by
-// score and capped at metadataCacheTopN. A row that does not decode is kept
-// after the ranked ones, as cacheSearchResponse's other paths keep it.
-func mergeCandidateRows(fresh, cached []json.RawMessage) []json.RawMessage {
+// deduplicated (the same source, title and ASIN keep the fresh row), ranked
+// usable first (usable; nil = all usable), then by score, and capped at
+// metadataCacheTopN. A row that does not decode is kept after the ranked
+// ones, as cacheSearchResponse's other paths keep it.
+func mergeCandidateRows(fresh, cached []json.RawMessage, usable func(MetadataCandidate) bool) []json.RawMessage {
 	type ranked struct {
-		raw   json.RawMessage
-		score float64
+		raw    json.RawMessage
+		score  float64
+		usable bool
 	}
 	var rows, undecoded []ranked
 	seen := map[string]bool{}
@@ -735,11 +789,16 @@ func mergeCandidateRows(fresh, cached []json.RawMessage) []json.RawMessage {
 				continue
 			}
 			seen[key] = true
-			rows = append(rows, ranked{raw: r, score: c.Score})
+			rows = append(rows, ranked{raw: r, score: c.Score, usable: usable == nil || usable(c)})
 		}
 	}
 	slices.SortStableFunc(rows, func(a, b ranked) int {
 		switch {
+		case a.usable != b.usable:
+			if a.usable {
+				return -1
+			}
+			return 1
 		case a.score > b.score:
 			return -1
 		case a.score < b.score:
@@ -794,6 +853,7 @@ func (mfs *Service) RecordFallbackAttempt(bookID, sourceHash, fingerprint, sourc
 	if mfs == nil || mfs.db == nil {
 		return nil
 	}
+	defer mfs.lockRow(bookID)()
 	entry, err := mfs.db.GetMetadataCache(bookID)
 	if err != nil {
 		return fmt.Errorf("read cache row for %s: %w", bookID, err)
@@ -807,6 +867,38 @@ func (mfs *Service) RecordFallbackAttempt(bookID, sourceHash, fingerprint, sourc
 	entry.FallbackAttempts = next
 	if err := mfs.db.PutMetadataCache(entry); err != nil {
 		return fmt.Errorf("write fallback attempt for %s: %w", bookID, err)
+	}
+	return nil
+}
+
+// ClearDeferredFallbackAttempts drops the unsettled (deferred) fallback
+// attempts from bookID's row for the same inputs and questions: the book has
+// a usable candidate now, so it no longer waits on a fallback lookup and the
+// review page must not list it as deferred. Settled attempts stay.
+func (mfs *Service) ClearDeferredFallbackAttempts(bookID, sourceHash, fingerprint string) error {
+	if mfs == nil || mfs.db == nil {
+		return nil
+	}
+	defer mfs.lockRow(bookID)()
+	entry, err := mfs.db.GetMetadataCache(bookID)
+	if err != nil {
+		return fmt.Errorf("read cache row for %s: %w", bookID, err)
+	}
+	if entry == nil || entry.SourceHash != sourceHash || entry.SearchFingerprint != fingerprint || !entry.FallbackDeferred() {
+		return nil
+	}
+	next := make(map[string]database.FallbackAttempt, len(entry.FallbackAttempts))
+	for name, a := range entry.FallbackAttempts {
+		if a.Settled {
+			next[name] = a
+		}
+	}
+	if len(next) == 0 {
+		next = nil
+	}
+	entry.FallbackAttempts = next
+	if err := mfs.db.PutMetadataCache(entry); err != nil {
+		return fmt.Errorf("clear deferred fallback attempts for %s: %w", bookID, err)
 	}
 	return nil
 }

@@ -1,7 +1,7 @@
 // file: internal/applygate/applygate.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 2f8d4a61-0c3b-4e7a-9d52-b6e1f3a08c47
-// last-edited: 2026-09-28
+// last-edited: 2026-10-06
 
 // Package applygate is the certainty gate every BULK metadata apply consults
 // before it writes a candidate onto a book: the cached batch apply
@@ -71,7 +71,23 @@ const (
 	ReasonSequenceMissingOnCandidate = "sequence_missing_on_candidate"
 	ReasonBookSequenceConflict       = "book_sequence_conflict"
 	ReasonCandidateSequenceConflict  = "candidate_sequence_conflict"
+	// ReasonReviewOnlySource refuses a candidate from a review-only source
+	// (ReviewOnlySource: Open Library, Google Books). An owner review pin
+	// lifts it -- that is the owner applying it by hand.
+	ReasonReviewOnlySource = "review_only_source"
 )
+
+// ReviewOnlySource reports whether c comes from a REVIEW-ONLY source: Open
+// Library or Google Books, the candidate fetch's fallback providers
+// (metafetch.IsReviewOnlyCandidateSource). Owner decision 2026-10-06: such a
+// candidate is never applied unattended. Every bulk evaluation refuses it
+// (EvaluateTranscribed, and so Evaluate / EvaluateInBatch: the cached and
+// op-result batch applies and the metadata upgrade), and the transcription
+// auto-apply, which applies without this gate, checks it too. Only an owner
+// review (OwnerReviewOverridable) applies one.
+func ReviewOnlySource(c *metafetch.MetadataCandidate) bool {
+	return c != nil && metafetch.IsReviewOnlyCandidateSource(c.Source)
+}
 
 // SourceNumber is one number found in one place.
 type SourceNumber struct {
@@ -267,6 +283,12 @@ func EvaluateTranscribed(book *database.Book, authors Authors, rt database.BookR
 			v.Detail += "; the candidate " + strconv.Quote(c.Title) + " by " + strconv.Quote(c.Author) +
 				" does not match the transcription " + heard + " it was found by"
 		}
+	case ReviewOnlySource(c):
+		// After identity_stale on purpose: an owner review lifts this
+		// reason (OwnerReviewOverridable), and must not lift a stale
+		// identity hidden behind it.
+		v.Reason = ReasonReviewOnlySource
+		v.Detail = c.Source + " candidates are review-only: applied by hand from the review page, never unattended"
 	case !scoreOK:
 		v.Reason = scoreReason
 		if scoreReason == ReasonScoreBelowFloor {

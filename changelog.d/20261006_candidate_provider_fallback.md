@@ -7,7 +7,9 @@
   alongside the rest of the chain: it asks the chain first, and only when
   that finds nothing asks Open Library, then Google Books. Results land as
   ordinary cached candidates with their source recorded, for the owner to
-  review; nothing is applied. Each result row lists the fallback turns
+  review. They are review-only: bulk apply, the metadata upgrade and the
+  transcription auto-apply never apply one (see the fallback follow-ups
+  entry). Each result row lists the fallback turns
   (`fallback`: provider, outcome, time).
   - Google Books fallback lookups are capped by a persisted daily budget
     (800 of the key's 1,000/day for background lookups; a negative

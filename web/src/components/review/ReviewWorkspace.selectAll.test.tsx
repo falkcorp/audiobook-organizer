@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.selectAll.test.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7a3f0c52-e1d9-4b86-9f24-58c0d6a1b3e7
 // last-edited: 2026-10-06
 //
@@ -158,6 +158,8 @@ describe('select all matching', () => {
     expect(calls[0].book_ids).toHaveLength(FETCH_CHUNK_SIZE);
     expect(calls[1].book_ids).toHaveLength(N - FETCH_CHUNK_SIZE);
     expect(calls.every((c) => c.force === true)).toBe(true);
+    // A selection is background work, every chunk of it.
+    expect(calls.every((c) => c.interactive === undefined)).toBe(true);
     expect(new Set(calls.flatMap((c) => c.book_ids)).size).toBe(N);
     await waitFor(() => expect(api.pollOperationV2).toHaveBeenCalledTimes(2));
     await waitFor(() =>
@@ -182,7 +184,9 @@ describe('select all matching', () => {
 
 describe('lane: chunked apply and filter-change pruning', () => {
   const toast = vi.fn();
-  const many = Array.from({ length: N }, (_, i) => matched(`b${i}`, i < 10 ? `Keep ${i}` : `Book ${i}`));
+  const many = Array.from({ length: N }, (_, i) =>
+    matched(`b${i}`, i < 10 ? `Keep ${i}` : `Book ${i}`)
+  );
 
   beforeEach(() => {
     window.localStorage.setItem(STORAGE_KEYS.METADATA_REVIEW_LEVEL, 'off');

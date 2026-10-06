@@ -1,5 +1,5 @@
 // file: internal/server/candidate_fallback_followups_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 094d2b26-ad58-4773-969d-15e89565cb5f
 // last-edited: 2026-10-06
 
@@ -93,7 +93,7 @@ func TestCandidateFallback_TriggerBelowFloorMergesCandidates(t *testing.T) {
 	}
 }
 
-// noUsableCandidate, leg by leg: none, rejected, asin_conflict, ASIN replaced
+// metabatch.NoUsableCandidate, leg by leg: none, rejected, asin_conflict, ASIN replaced
 // (identity_stale), below floor -- and a usable candidate.
 func TestNoUsableCandidate_Legs(t *testing.T) {
 	f := newFallbackFixture(t, 800)
@@ -130,7 +130,7 @@ func TestNoUsableCandidate_Legs(t *testing.T) {
 		if tc.setup != nil {
 			tc.setup()
 		}
-		v := noUsableCandidate(f.store, b, tc.entry)
+		v := metabatch.NoUsableCandidate(f.store, b, tc.entry)
 		if v.Usable != tc.usable {
 			t.Errorf("%s: usable = %v (%s), want %v", tc.name, v.Usable, v.Why, tc.usable)
 		}

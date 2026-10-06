@@ -1,7 +1,7 @@
 // file: internal/server/candidate_refetch.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 09c23622-3fae-4104-8edc-2fe8860f40fd
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package server
 
@@ -162,7 +162,7 @@ func (s *Server) RefetchMetadataCandidates(ctx context.Context, bookID string) (
 		}
 	}
 	store := s.storeForWiring()
-	r := s.fetchCandidateForBook(ctx, mfs, store, s.candidateRefetchGate.limiter(), "", bookID, false, s.newFolderMemo(store))
+	r := s.fetchCandidateForBook(ctx, mfs, store, s.candidateRefetchGate.limiter(), "", bookID, false, false, s.newFolderMemo(store))
 	out := maintenanceplugin.CandidateRefetchResult{Status: r.Status, Detail: r.Error}
 	entry, err := store.GetMetadataCache(bookID)
 	if err != nil {

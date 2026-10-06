@@ -1,5 +1,5 @@
 // file: internal/metadata/dailyquota/dailyquota.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 00535d2d-567d-4418-abc2-bf8b732856d9
 // last-edited: 2026-10-06
 
@@ -99,6 +99,19 @@ type state struct {
 // hold (metadata.ProtectedSource, metadata.ClassifyProviderError).
 var ErrDailyBudgetSpent = errors.New("daily lookup budget spent")
 
+// ErrBudgetUnavailable wraps a budget whose count could not be read or
+// persisted: the lookup is refused (a quota spend that cannot be counted is
+// not made). Like ErrDailyBudgetSpent it is a refusal made before any request
+// is sent, never a provider failure (IsRefusal).
+var ErrBudgetUnavailable = errors.New("daily lookup budget unavailable")
+
+// IsRefusal reports whether err is a budget refusal -- spent or unavailable:
+// no request was sent, so it says nothing about the provider and must not
+// count as a provider failure (breaker, throttle hold).
+func IsRefusal(err error) bool {
+	return errors.Is(err, ErrDailyBudgetSpent) || errors.Is(err, ErrBudgetUnavailable)
+}
+
 // SpentError is ErrDailyBudgetSpent with the count that refused it.
 type SpentError struct {
 	Provider string
@@ -194,12 +207,12 @@ func (b *DailyBudget) load(day string) (state, error) {
 	if b.store != nil {
 		raw, err := b.store.GetRaw(b.Key())
 		if err != nil {
-			return state{}, fmt.Errorf("read %s daily budget: %w", b.provider, err)
+			return state{}, fmt.Errorf("%w: read %s daily budget: %w", ErrBudgetUnavailable, b.provider, err)
 		}
 		st = state{}
 		if len(raw) > 0 {
 			if err := json.Unmarshal(raw, &st); err != nil {
-				return state{}, fmt.Errorf("decode %s daily budget: %w", b.provider, err)
+				return state{}, fmt.Errorf("%w: decode %s daily budget: %w", ErrBudgetUnavailable, b.provider, err)
 			}
 		}
 	}
@@ -216,10 +229,10 @@ func (b *DailyBudget) save(st state) error {
 	}
 	raw, err := json.Marshal(st)
 	if err != nil {
-		return fmt.Errorf("encode %s daily budget: %w", b.provider, err)
+		return fmt.Errorf("%w: encode %s daily budget: %w", ErrBudgetUnavailable, b.provider, err)
 	}
 	if err := b.store.SetRaw(b.Key(), raw); err != nil {
-		return fmt.Errorf("save %s daily budget: %w", b.provider, err)
+		return fmt.Errorf("%w: save %s daily budget: %w", ErrBudgetUnavailable, b.provider, err)
 	}
 	return nil
 }

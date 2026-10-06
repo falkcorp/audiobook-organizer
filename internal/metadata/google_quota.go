@@ -1,5 +1,5 @@
 // file: internal/metadata/google_quota.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 78340ad6-8298-474b-84fe-a0dd8510ccef
 // last-edited: 2026-10-06
 
@@ -84,3 +84,9 @@ func WithInteractiveQuota(ctx context.Context) context.Context {
 // IsDailyBudgetSpent reports whether err is a daily-budget refusal: a request
 // never sent, which says nothing about the provider.
 func IsDailyBudgetSpent(err error) bool { return errors.Is(err, dailyquota.ErrDailyBudgetSpent) }
+
+// IsDailyBudgetRefusal reports a daily-budget refusal of either kind -- spent,
+// or a count that could not be read or saved (dailyquota.IsRefusal): no
+// request was sent. The breaker, the throttle classifier and the search
+// ladder treat it as a control-plane refusal, never a provider failure.
+func IsDailyBudgetRefusal(err error) bool { return dailyquota.IsRefusal(err) }

@@ -1,7 +1,7 @@
 // file: internal/applygate/owner_review.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3e7b2c14-8d95-4f06-a1c3-6b9e0d4f7a28
-// last-edited: 2026-09-28
+// last-edited: 2026-10-06
 
 package applygate
 
@@ -72,6 +72,9 @@ func (v Verdict) RefusingReasons() []string {
 	var out []string
 	if v.Reason == ReasonIdentityStale {
 		out = append(out, ReasonIdentityStale)
+	}
+	if v.Reason == ReasonReviewOnlySource {
+		out = append(out, ReasonReviewOnlySource)
 	}
 	if v.ScoreReason != "" {
 		out = append(out, v.ScoreReason)

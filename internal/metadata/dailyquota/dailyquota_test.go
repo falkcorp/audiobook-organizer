@@ -1,5 +1,5 @@
 // file: internal/metadata/dailyquota/dailyquota_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 446c17dc-de7c-45d8-955e-b98f0e40859d
 // last-edited: 2026-10-06
 
@@ -204,5 +204,15 @@ func TestDailyBudget_ProviderAndKeyAgree(t *testing.T) {
 func TestQuotaZone_IsPacific(t *testing.T) {
 	if got := quotaZone().String(); got != "America/Los_Angeles" {
 		t.Fatalf("quota zone = %q, want America/Los_Angeles", got)
+	}
+}
+
+// N2: a count that cannot be persisted refuses as ErrBudgetUnavailable, a
+// refusal (IsRefusal) -- never mistaken for a provider failure.
+func TestDailyBudget_StoreFailureIsARefusal(t *testing.T) {
+	b := New(failingKV{}, "google-books", fixed(10, 10))
+	_, _, err := b.Reserve(Background)
+	if !errors.Is(err, ErrBudgetUnavailable) || !IsRefusal(err) {
+		t.Fatalf("Reserve err = %v, want ErrBudgetUnavailable (a refusal)", err)
 	}
 }

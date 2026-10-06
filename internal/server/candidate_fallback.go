@@ -1,5 +1,5 @@
 // file: internal/server/candidate_fallback.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 487502d2-faea-4677-8c9d-171a796ad643
 // last-edited: 2026-10-06
 //
@@ -44,6 +44,16 @@ func googleBooksFallbackOn() bool { return config.AppConfig.GoogleBooksFallbackD
 // background op) may still spend.
 func googleBackgroundRemaining() int {
 	return metadata.GoogleBooksBudget().Remaining(dailyquota.Background)
+}
+
+// googleRequestsPerBook is the most Google Books requests one fallback lookup
+// sends (metafetch.MaxSearchCallsPerBook: Google is asked the best query
+// variant only). The selection funds Google-owed books by this, since the
+// budget counts requests, not books. Transport retries (a 429/5xx answer)
+// are not estimated: they are rare, and a request past the share is refused
+// by the transport before it is sent, deferring the book whole.
+func googleRequestsPerBook() int {
+	return max(metafetch.MaxSearchCallsPerBook(metadata.SourceIDGoogleBooks), 1)
 }
 
 // fallbackProvider is one enabled fallback provider: its id and the display
@@ -112,80 +122,31 @@ func fallbackOwed(entry *database.MetadataCandidateCache, plan []fallbackProvide
 	return owed
 }
 
-// usableCandidateVerdict is noUsableCandidate's finding.
-type usableCandidateVerdict struct {
-	// Usable: at least one candidate survives every check.
-	Usable bool
-	// Why summarizes, when none is usable, what refused them.
-	Why string
+// clearDeferral drops entry's deferred fallback attempts once the book has a
+// usable candidate: it no longer waits on a fallback lookup, and the review
+// page's "deferred" chip must not keep listing it.
+func clearDeferral(mfs *metafetch.Service, bookID string, entry *database.MetadataCandidateCache) {
+	if entry == nil || !entry.FallbackDeferred() {
+		return
+	}
+	if err := mfs.ClearDeferredFallbackAttempts(bookID, entry.SourceHash, entry.SearchFingerprint); err != nil {
+		candidateFetchLog.Warn("clear deferred fallback attempts: book=%s err=%v",
+			logger.SanitizeLogValue(bookID), logger.SanitizeLogValue(err.Error()))
+	}
 }
 
-// noUsableCandidate decides the fallback trigger (owner decision 2026-10-06,
-// "no usable candidate"): entry's candidates leave book without one when
-// there are none, or every candidate is
-//
-//   - owner-rejected (metabatch.LoadRejectedCandidateKeys), or
-//   - refused by the apply gate's ASIN/identity checks: asin_conflict
-//     (applygate.CheckASIN) or identity_stale because the book's ASIN was
-//     replaced after the candidate was fetched (metafetch.CandidateASINStale),
-//     or
-//   - scored below the apply gate's floor (applygate.ScoreGate's floor:
-//     MinScore, or MinScoreAudioConfirmed when the audio confirms it).
-//
-// Only checks a FALLBACK candidate could pass are counted. The row-level
-// identity check (the row was fetched by a stand-in query, or for an author
-// since changed) is left out on purpose: the fallback searches the same
-// query and its candidates land on the same row, so they would fail it
-// identically, and Google quota would be spent on books it cannot help. A
-// changed author re-opens the row anyway (CachedBatchVerdict re-asks it).
-func noUsableCandidate(kv database.RawKVStore, book *database.Book, entry *database.MetadataCandidateCache) usableCandidateVerdict {
-	if entry == nil || len(entry.Candidates) == 0 {
-		return usableCandidateVerdict{Why: "no candidates"}
+// entryHasSource reports whether entry holds a candidate from source.
+func entryHasSource(entry *database.MetadataCandidateCache, source string) bool {
+	if entry == nil {
+		return false
 	}
-	rejected := metabatch.LoadRejectedCandidateKeys(kv, book.ID)
-	var nRejected, nASIN, nStale, nScore, undecoded int
-	best := -1.0
-	floor := applygate.MinScore
 	for _, raw := range entry.Candidates {
 		var c metafetch.MetadataCandidate
-		if err := json.Unmarshal(raw, &c); err != nil {
-			undecoded++
-			continue
-		}
-		switch {
-		case rejected[c.Source+"|"+c.Title]:
-			nRejected++
-			continue
-		case applygate.CheckASIN(book, &c).Outcome == applygate.OutcomeBlock:
-			nASIN++
-			continue
-		case metafetch.CandidateASINStale(entry, book, &c) != nil:
-			nStale++
-			continue
-		}
-		_, f, _, _ := applygate.ScoreGate(book, &c)
-		if c.Score >= f {
-			return usableCandidateVerdict{Usable: true}
-		}
-		nScore++
-		if c.Score > best {
-			best, floor = c.Score, f
+		if json.Unmarshal(raw, &c) == nil && c.Source == source {
+			return true
 		}
 	}
-	var parts []string
-	add := func(n int, what string) {
-		if n > 0 {
-			parts = append(parts, fmt.Sprintf("%d %s", n, what))
-		}
-	}
-	add(nRejected, "owner-rejected")
-	add(nASIN, applygate.ReasonASINConflict)
-	add(nStale, applygate.ReasonIdentityStale+" (ASIN replaced)")
-	if nScore > 0 {
-		parts = append(parts, fmt.Sprintf("%d below the apply floor (best %.2f < %.2f)", nScore, best, floor))
-	}
-	add(undecoded, "undecodable")
-	return usableCandidateVerdict{Why: "no usable candidate: " + strings.Join(parts, ", ")}
+	return false
 }
 
 // fallbackGateStore is what fallbackGates reads: the owner-manual check's
@@ -267,7 +228,7 @@ func fallbackDeferrable(err error) bool {
 	switch {
 	case err == nil:
 		return false
-	case metadata.IsDailyBudgetSpent(err),
+	case metadata.IsDailyBudgetRefusal(err),
 		errors.Is(err, metadata.ErrProviderThrottled),
 		errors.Is(err, metadata.ErrCircuitOpen),
 		errors.Is(err, context.Canceled),
@@ -300,22 +261,26 @@ func fallbackPermanent(err error) bool {
 // SourceHash and fingerprint (the apply gate would otherwise read it as
 // identity_stale).
 type candidateFallbackInput struct {
-	store     candidateFetchStore
-	limiter   *rate.Limiter
-	book      *database.Book
-	bookInfo  CandidateBookInfo
-	query     string
-	author    string
-	force     bool
-	pending   []fallbackProvider
-	entry     *metafetch.MetadataCandidateCache // the book's current row; nil when there is none
-	why       string                            // why the chain's candidates were not usable
-	cached    string                            // CandidateResult.Cached when the primary answer came from the cache
-	withQuery func(CandidateResult) CandidateResult
+	store    candidateFetchStore
+	limiter  *rate.Limiter
+	book     *database.Book
+	bookInfo CandidateBookInfo
+	query    string
+	author   string
+	force    bool
+	pending  []fallbackProvider
+	entry    *metafetch.MetadataCandidateCache // the book's current row; nil when there is none
+	why      string                            // why the chain's candidates were not usable
+	// googleCapped: the selection put this book's Google step off
+	// (metabatch.FetchOpParams.GoogleCappedBookIDs) -- deferred unasked and
+	// unrecorded, so a later quota day still selects it first.
+	googleCapped bool
+	cached       string // CandidateResult.Cached when the primary answer came from the cache
+	withQuery    func(CandidateResult) CandidateResult
 }
 
 // runCandidateFallback asks the pending fallback providers, in order, until
-// the book has a usable candidate (noUsableCandidate). A provider's
+// the book has a usable candidate (metabatch.NoUsableCandidate). A provider's
 // candidates are MERGED into the book's cached ones (MergeWithCached), never
 // replace them.
 //
@@ -380,18 +345,37 @@ func (s *Server) runCandidateFallback(ctx context.Context, mfs *metafetch.Servic
 				continue
 			case gate.ReadErr != "":
 				return defer1("owner-manual check failed: " + gate.ReadErr)
+			case in.googleCapped:
+				// Not an attempt: nothing was asked, and stamping one would
+				// move the book behind every book attempted before today.
+				step.Outcome = metabatch.FallbackDeferred
+				step.Detail = "today's background Google Books budget is allotted to books waiting longer; left for a later quota day"
+				steps = append(steps, step)
+				return finish(deferredResult(in.bookInfo, step))
 			}
 			if hold, held := metadata.DefaultThrottleRegistry().Get(fb.id); held {
 				return defer1(fmt.Sprintf("held by a %s throttle until %s", hold.Reason, hold.Until.UTC().Format(time.RFC3339)))
 			}
-			if left := googleBackgroundRemaining(); left <= 0 {
-				b := metadata.GoogleBooksBudget()
-				return defer1(fmt.Sprintf("daily budget's background share spent (%d used today, background cap %d); left for the next quota day",
-					b.Used(), b.Limit(dailyquota.Background)))
+			// The run's tier (dailyquota.PriorityOf): a single-book "Search
+			// again" is interactive, everything else background.
+			tier := dailyquota.PriorityOf(ctx)
+			if b := metadata.GoogleBooksBudget(); b.Remaining(tier) <= 0 {
+				return defer1(fmt.Sprintf("daily budget's %s share spent (%d used today, cap %d); left for the next quota day",
+					tier, b.Used(), b.Limit(tier)))
 			}
 		}
+		// The row merged into is the one this book was served or fetched
+		// (in.entry) -- also when the verdict vouched for it under other
+		// hashed inputs (a raw author credit, a pre-2026-09-28 no-author
+		// row), which a merge by the search's own hash would not find and
+		// would replace.
+		mergeFrom := ""
+		if in.entry != nil {
+			mergeFrom = in.entry.SourceHash
+		}
 		entry, resp, err := mfs.FetchAndCacheWithResponse(ctx, in.limiter, in.book.ID, in.query, in.author, "", "",
-			metafetch.SearchOptions{OnlySources: []string{fb.name}, BypassFetchCache: in.force, MergeWithCached: true})
+			metafetch.SearchOptions{OnlySources: []string{fb.name}, BypassFetchCache: in.force, MergeWithCached: true,
+				MergeUsable: metabatch.UsableRanker(in.store, in.book), MergeFromSourceHash: mergeFrom})
 		if err != nil {
 			deferrable := fallbackDeferrable(err)
 			if fb.isGoogle() && deferrable {
@@ -414,13 +398,23 @@ func (s *Server) runCandidateFallback(ctx context.Context, mfs *metafetch.Servic
 		}
 		in.entry = entry
 		step.Outcome = metabatch.FallbackNoMatch
+		attemptOutcome := metabatch.FallbackNoMatch
 		if resp != nil && len(resp.Results) > 0 {
-			step.Outcome = metabatch.FallbackMatched
+			step.Outcome, attemptOutcome = metabatch.FallbackMatched, metabatch.FallbackMatched
+			if !entryHasSource(entry, fb.name) {
+				// Every candidate it found ranked below the row's cap
+				// (metadataCacheTopN): it answered, but nothing it said is
+				// kept. Settled -- asking again gives the same answer -- but
+				// not recorded as a match.
+				attemptOutcome = fallbackOutcomeRankedOut
+				step.Detail = joinDetail(step.Detail, "its candidates ranked below the row's top 10 and were not kept")
+			}
 		}
 		steps = append(steps, step)
-		record(fb, step.Outcome, true)
-		v := noUsableCandidate(in.store, in.book, entry)
+		record(fb, attemptOutcome, true)
+		v := metabatch.NoUsableCandidate(in.store, in.book, entry)
 		if v.Usable {
+			clearDeferral(mfs, in.book.ID, entry)
 			return finish(candidateResultFromEntry(in.store, in.bookInfo, in.book.ID, in.query, entry))
 		}
 		in.why = v.Why
@@ -440,6 +434,10 @@ func deferredResult(info CandidateBookInfo, step metabatch.FallbackStep) Candida
 	return CandidateResult{Book: info, Status: candidateStatusDeferred,
 		Error: fmt.Sprintf("deferred: %s fallback not asked (%s)", step.Provider, step.Detail)}
 }
+
+// fallbackOutcomeRankedOut is a settled fallback attempt whose candidates
+// were all dropped by the row's top-N cap (database.FallbackAttempt.Outcome).
+const fallbackOutcomeRankedOut = "ranked_out"
 
 // candidateStatusDeferred is the result status of a book whose fallback lookup
 // was put off (budget spent, provider held or failed for a passing reason):

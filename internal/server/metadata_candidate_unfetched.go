@@ -1,5 +1,5 @@
 // file: internal/server/metadata_candidate_unfetched.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6bf34beb-7e2f-40a9-b7a7-c5755a52c7fb
 // last-edited: 2026-10-06
 //
@@ -39,7 +39,7 @@ type unfetchedSelectStore interface {
 	metabatch.SearchQueryReader
 	// The fallback gate's owner-manual-only check (fallbackGates).
 	fallbackGateStore
-	// The owner's rejected candidates (noUsableCandidate).
+	// The owner's rejected candidates (metabatch.NoUsableCandidate).
 	database.RawKVStore
 }
 
@@ -58,7 +58,7 @@ type unfetchedSelection struct {
 	// a search would ask now (metafetch.SearchFingerprintCurrent).
 	StaleEmpty int
 	// FallbackPending: books whose current row holds no usable candidate
-	// (noUsableCandidate: none, all owner-rejected, all refused by the ASIN
+	// (metabatch.NoUsableCandidate: none, all owner-rejected, all refused by the ASIN
 	// checks, or below the apply floor) and that a fallback provider (Open
 	// Library, Google Books) still owes an answer: the fallback was deferred
 	// or never ran.
@@ -67,11 +67,15 @@ type unfetchedSelection struct {
 	// none usable -- the rows that were stuck before 2026-10-06 (served from
 	// the cache forever, never selected).
 	FallbackUnusable int
-	// FallbackCapped: pending books Google Books owes (alone or with Open
-	// Library) left out because today's background share of the shared
-	// Google Books budget cannot cover them; a later quota day selects them,
-	// oldest attempt first.
+	// FallbackCapped: pending books Google Books owes whose Google step
+	// today's background share of the shared Google Books budget cannot
+	// cover; a later quota day asks Google about them, oldest attempt first.
+	// One Google alone owes is left out; one Open Library owes too is still
+	// selected for that free step (GoogleCapped).
 	FallbackCapped int
+	// GoogleCapped: the selected books whose Google step is capped (asked
+	// of Open Library only; metabatch.FetchOpParams.GoogleCappedBookIDs).
+	GoogleCapped []string
 	// Unsearchable: candidates the fetch would only skip (no usable query).
 	Unsearchable int
 	// Scanned: live books read.
@@ -99,7 +103,7 @@ type unfetchedSelection struct {
 // counting it here would turn every tick into a library-wide refetch.
 //
 // A third kind qualifies too: a current row (this ladder version, current
-// fingerprint) with NO USABLE candidate (noUsableCandidate: none, all
+// fingerprint) with NO USABLE candidate (metabatch.NoUsableCandidate: none, all
 // owner-rejected, all refused by the ASIN checks, or the best below the
 // apply floor) that an enabled fallback provider still owes an answer
 // (fallbackOwed) -- the fallback was deferred (Google's budget spent, a
@@ -109,12 +113,16 @@ type unfetchedSelection struct {
 // tick. Google Books is not owed by an owner-manual-only book (it is still
 // selected for Open Library).
 //
-// A book Google Books owes -- alone, or with Open Library -- is selected only
-// while googleRemaining (today's background share of the shared Google
-// Books budget) covers it, oldest Google attempt first (never attempted
+// A book Google Books owes has its Google step funded only while
+// googleRemaining (today's background share of the shared Google Books
+// budget, which counts requests) covers the requests one lookup sends
+// (googleRequestsPerBook), oldest Google attempt first (never attempted
 // first, then the least recently attempted; FallbackAttempts), so a book
 // whose lookup keeps being deferred or failing does not hold a capped day's
-// place while others never get one. The rest come back on a later quota day.
+// place while others never get one. An unfunded book is left out when only
+// Google owes it; one Open Library owes too is still selected for that free
+// step, its Google step put off (GoogleCapped). Either way it comes back on a
+// later quota day.
 //
 // A book whose search query is not usable (metabatch.ResolveCandidateSearchQuery:
 // a part row, no usable title) is left out too: the fetch would only skip it,
@@ -192,6 +200,7 @@ func unfetchedCandidateBookIDs(ctx context.Context, store unfetchedSelectStore, 
 	fallback := make([]bool, len(picks))
 	unusable := make([]bool, len(picks))
 	googleOwed := make([]bool, len(picks))
+	otherOwed := make([]bool, len(picks))
 	googleTried := make([]time.Time, len(picks))
 	var mu sync.Mutex
 	g, gctx := errgroup.WithContext(ctx)
@@ -237,7 +246,7 @@ func unfetchedCandidateBookIDs(ctx context.Context, store unfetchedSelectStore, 
 				}
 				return nil
 			}
-			if noUsableCandidate(store, b, entry).Usable {
+			if metabatch.NoUsableCandidate(store, b, entry).Usable {
 				return nil
 			}
 			gate := fallbackGates(store, b, q.Title)
@@ -252,6 +261,7 @@ func unfetchedCandidateBookIDs(ctx context.Context, store unfetchedSelectStore, 
 				return nil
 			}
 			keep[i], fallback[i], unusable[i] = true, true, len(entry.Candidates) > 0
+			otherOwed[i] = slices.ContainsFunc(owed, func(fb fallbackProvider) bool { return !fb.isGoogle() })
 			if slices.ContainsFunc(owed, func(fb fallbackProvider) bool { return fb.isGoogle() }) {
 				googleOwed[i] = true
 				googleTried[i] = entry.FallbackAttempts[googleName].At
@@ -275,6 +285,7 @@ func unfetchedCandidateBookIDs(ctx context.Context, store unfetchedSelectStore, 
 		}
 		return picks[ia].book.ID < picks[ib].book.ID
 	})
+	perBook := googleRequestsPerBook()
 	for _, i := range order {
 		if !keep[i] {
 			continue
@@ -284,11 +295,15 @@ func unfetchedCandidateBookIDs(ctx context.Context, store unfetchedSelectStore, 
 			sel.StaleEmpty++
 		case fallback[i]:
 			if googleOwed[i] {
-				if googleRemaining <= 0 {
+				if googleRemaining < perBook {
 					sel.FallbackCapped++
-					continue
+					if !otherOwed[i] {
+						continue
+					}
+					sel.GoogleCapped = append(sel.GoogleCapped, picks[i].book.ID)
+				} else {
+					googleRemaining -= perBook
 				}
-				googleRemaining--
 			}
 			sel.FallbackPending++
 			if unusable[i] {
@@ -300,6 +315,7 @@ func unfetchedCandidateBookIDs(ctx context.Context, store unfetchedSelectStore, 
 		sel.IDs = append(sel.IDs, picks[i].book.ID)
 	}
 	sort.Strings(sel.IDs)
+	sort.Strings(sel.GoogleCapped)
 	return sel, nil
 }
 
