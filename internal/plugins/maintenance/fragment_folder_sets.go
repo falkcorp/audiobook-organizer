@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_folder_sets.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 9f01b698-b911-4ecc-818e-6d10f415e768
 // last-edited: 2026-10-06
 
@@ -96,6 +96,7 @@ package maintenance
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -1261,6 +1262,14 @@ func (f *fragmentFixer) setLibraryGuard(ctx context.Context, store OpsStore, his
 		sess.mu.Lock()
 		defer sess.mu.Unlock()
 		full, err = sess.library(f, store, locked)
+		if err == nil && locked {
+			// Writers that never take the merge lock (repoints, file
+			// recoveries, backfills) can move or add file rows without a
+			// book write: the change log never names those books. The
+			// fragments' own audio is read point by point, and every book
+			// holding it is read into the snapshot, before deciding.
+			full, err = sess.refreshAudioOf(f, store, hist, cands)
+		}
 	}
 	if err != nil {
 		return "", fmt.Errorf("%s: library re-check of %s: %w", fragFixerID, planned.RowID, err)
@@ -1454,6 +1463,9 @@ type fragApplySession struct {
 	gen, lockSeen uint64
 	// dirty are the books this run's rows touched since the last catch-up.
 	dirty map[string]bool
+	// checked: the current hold of the merge lock caught the snapshot up
+	// (library, locked). afterRow reads and clears it.
+	checked bool
 	// loads counts whole-library listings, for the log and the tests.
 	loads int
 }
@@ -1493,6 +1505,14 @@ func mergeLockHeld(ctx context.Context) bool {
 
 // afterRow notes, under the merge lock at the end of an Apply, the books the
 // row touched and this hold of the lock. nil-safe.
+//
+// lockSeen moves to this hold only when nothing is hidden by it: when this
+// hold caught the snapshot up (so any earlier foreign hold was already
+// judged), or when this hold is the only one since lockSeen. Otherwise
+// another writer held the lock between this run's last look and this hold
+// (a row that never re-checked the library: a parent or carry row, a
+// re-plan that left early, an apply that failed), so the snapshot is
+// dropped and the next re-check lists the library again.
 func (s *fragApplySession) afterRow(ids []string) {
 	if s == nil {
 		return
@@ -1502,7 +1522,11 @@ func (s *fragApplySession) afterRow(ids []string) {
 	for _, id := range ids {
 		s.dirty[id] = true
 	}
-	s.lockSeen = merge.MergeLockAcquisitions()
+	cur := merge.MergeLockAcquisitions()
+	if !s.checked && s.lib != nil && cur != s.lockSeen+1 {
+		s.lib = nil
+	}
+	s.lockSeen, s.checked = cur, false
 }
 
 // library is the run's snapshot, caught up (see fragApplySession). The
@@ -1522,6 +1546,7 @@ func (s *fragApplySession) library(f *fragmentFixer, store OpsStore, locked bool
 					return nil, err
 				}
 				s.gen, s.lockSeen = upTo, cur
+				s.checked = locked
 				return s.lib, nil
 			}
 		}
@@ -1537,7 +1562,60 @@ func (s *fragApplySession) library(f *fragmentFixer, store OpsStore, locked bool
 	}
 	s.loads++
 	s.lib, s.gen, s.lockSeen, s.dirty = lib, gen, cur, map[string]bool{}
+	s.checked = locked
 	return lib, nil
+}
+
+// refreshAudioOf reads, fresh, every book holding one of cands' files: the
+// rows at each fragment's path and import path
+// (database.BookFileRowsAtPathStrict) and the rows carrying its hashes
+// (BookFilesWithHash), and reads those books into the snapshot. A lookup that
+// cannot be complete (memdb warming or short) drops the snapshot and lists
+// the whole library instead; any other read error fails the re-check.
+// Matches on size and duration alone have no point index: they are seen
+// through the change log and the merge-lock check only.
+func (s *fragApplySession) refreshAudioOf(f *fragmentFixer, store OpsStore, hist FragmentRepairReader, cands []*fragCandidate) (*fragLibrary, error) {
+	ids := map[string]bool{}
+	incomplete := false
+	for _, c := range cands {
+		for _, p := range uniqueNonEmpty(c.File.Path, c.ImportPath) {
+			rows, err := database.BookFileRowsAtPathStrict(hist, p)
+			if errors.Is(err, database.ErrOwnershipLookupIncomplete) {
+				incomplete = true
+				continue
+			}
+			if err != nil {
+				return nil, fmt.Errorf("rows at %s: %w", p, err)
+			}
+			for i := range rows {
+				ids[rows[i].BookID] = true
+			}
+		}
+		for _, h := range uniqueNonEmpty(c.File.Hash, c.File.OrigHash) {
+			rows, err := store.BookFilesWithHash(h)
+			if errors.Is(err, database.ErrBookFilesWithHashUnavailable) {
+				incomplete = true
+				continue
+			}
+			if err != nil {
+				return nil, fmt.Errorf("rows with hash %s: %w", h, err)
+			}
+			for i := range rows {
+				ids[rows[i].BookID] = true
+			}
+		}
+	}
+	if incomplete {
+		s.lib = nil
+		return s.library(f, store, true)
+	}
+	for _, id := range sortedKeys(ids) {
+		if _, err := s.refreshBook(store, id); err != nil {
+			s.lib = nil
+			return nil, err
+		}
+	}
+	return s.lib, nil
 }
 
 // catchUp reads ids, the run's dirty books, and the live members of every
