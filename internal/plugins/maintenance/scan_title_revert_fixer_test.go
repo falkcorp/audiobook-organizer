@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/scan_title_revert_fixer_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 63020fe7-ecfe-4a9a-8450-fccba4c32c64
 // last-edited: 2026-10-06
 
@@ -28,9 +28,12 @@ import (
 type strLibrary struct {
 	st    *database.PebbleStore
 	since time.Time
+	// until is the scan's end: after every scan write, before every later one.
+	until time.Time
 
 	reverted, lastWrite, same, empty, changed, noSnap string
 	otherFieldFirst                                   string
+	lateChange                                        string // title changed only after until
 	locked, itunesBook, itunesFile, owner, merged     string
 	seriesID, authorID                                int
 }
@@ -91,6 +94,7 @@ func newSTRLibrary(t *testing.T) *strLibrary {
 	l.owner = book("Doctor Who: The Synthetic Paradox", nil)
 	l.merged = book("Volume 8 of 8", nil)
 	l.otherFieldFirst = book("Volume 3 of 10", nil)
+	l.lateChange = book("Volume 9 of 11", nil)
 
 	// The scan starts. Snapshot keys are wall-clock nanoseconds; the sleeps
 	// keep every write strictly on its side of since.
@@ -111,6 +115,13 @@ func newSTRLibrary(t *testing.T) *strLibrary {
 	// Another field first, the title in a later write.
 	touch(l.otherFieldFirst, "written before the title")
 	setTitle(l.otherFieldFirst, "of 10")
+	// The scan wrote another field only; the title moves after it ended.
+	touch(l.lateChange, "the scan wrote the description only")
+
+	// The scan ends.
+	time.Sleep(5 * time.Millisecond)
+	l.until = time.Now()
+	time.Sleep(5 * time.Millisecond)
 
 	// After the scan: many later writes on one book (the snapshot at the
 	// scan's start must not be cut off by a limit), an owner's edit on
@@ -119,6 +130,7 @@ func newSTRLibrary(t *testing.T) *strLibrary {
 		touch(l.reverted, "later write "+itoa(i))
 	}
 	setTitle(l.changed, "Owner Edited Title")
+	setTitle(l.lateChange, "of 11 (written after the scan)")
 	survivor := l.lastWrite
 	_, err = st.ModifyBook(l.merged, func(b *database.Book) error { b.MergedIntoBookID = &survivor; return nil })
 	require.NoError(t, err)
@@ -132,6 +144,15 @@ func (l *strLibrary) params(t *testing.T, ids ...string) json.RawMessage {
 	t.Helper()
 	raw, err := json.Marshal(map[string]any{"book_ids": ids, "since": l.since.Format(time.RFC3339Nano),
 		"source_op_id": "op-synthetic-scan"})
+	require.NoError(t, err)
+	return raw
+}
+
+// paramsUntil is params with the scan's end set.
+func (l *strLibrary) paramsUntil(t *testing.T, ids ...string) json.RawMessage {
+	t.Helper()
+	raw, err := json.Marshal(map[string]any{"book_ids": ids, "since": l.since.Format(time.RFC3339Nano),
+		"until": l.until.Format(time.RFC3339Nano), "source_op_id": "op-synthetic-scan"})
 	require.NoError(t, err)
 	return raw
 }
@@ -208,9 +229,10 @@ func TestScanTitleRevert_PicksEarliestSnapshotAtOrAfterSince(t *testing.T) {
 	title, err := strSnapshotTitle(found)
 	require.NoError(t, err)
 	assert.Equal(t, "Volume 7 of 12", title)
-	wrote, _, err := strScanWrote(later, title, "live title")
+	wrote, _, changedAt, err := strScanWrote(found, later, title, "live title")
 	require.NoError(t, err)
 	assert.Equal(t, "of 12", wrote, "the next snapshot holds what the scan wrote")
+	assert.Equal(t, found.Timestamp, changedAt, "the found snapshot is stamped with the scan's title write")
 
 	// Order-independent: the same answer from a reversed (oldest-first) list.
 	rev := make([]database.BookSnapshot, len(snaps))
@@ -247,10 +269,15 @@ func TestScanTitleRevert_ScanWrotePassesOverOtherFieldWrites(t *testing.T) {
 	next, err := strSnapshotTitle(&later[0])
 	require.NoError(t, err)
 	assert.Equal(t, "Volume 3 of 10", next, "the scan's first write was not the title")
-	wrote, at, err := strScanWrote(later, restore, "of 10")
+	wrote, at, changedAt, err := strScanWrote(found, later, restore, "of 10")
 	require.NoError(t, err)
 	assert.Equal(t, "of 10", wrote)
 	assert.Equal(t, "the live row", at)
+	// The title write is the second post-since write: the snapshot it made
+	// (later[0], the row before it) carries its stamp, not found (the
+	// description write).
+	assert.Equal(t, later[0].Timestamp, changedAt)
+	assert.NotEqual(t, found.Timestamp, changedAt)
 }
 
 // A write of another field between plan and apply (the ASIN backfill, say)
@@ -274,16 +301,92 @@ func TestScanTitleRevert_UnrelatedWriteAfterPlanStillApplies(t *testing.T) {
 	assert.Equal(t, "Volume 2 of 9", b.Title)
 }
 
+// With until set, a title changed after the scan's end is held as
+// changed_outside_window; one changed inside the window applies, and every
+// row shows when its title changed.
+func TestScanTitleRevert_UntilBoundsTheTitleWrite(t *testing.T) {
+	l := newSTRLibrary(t)
+	f := newScanTitleRevertFixer(&Plugin{deps: &ansEnqueueDeps{fakeDeps: fakeDeps{store: l.st}}})
+	ids := []string{l.reverted, l.lastWrite, l.otherFieldFirst, l.lateChange}
+
+	// Without until the late change looks like the scan's.
+	open := strRowsByID(l.plan(t, f, ids...))
+	assert.Empty(t, open[l.lateChange].Skipped, open[l.lateChange].SkipReason)
+
+	res, err := repairs.RunPlan(context.Background(), f, l.paramsUntil(t, ids...), repairs.PlanDeps{Guard: l.st}, &fakeReporter{})
+	require.NoError(t, err)
+	rows := strRowsByID(res)
+	late := rows[l.lateChange]
+	assert.Equal(t, strSkipOutsideWindow, late.Skipped, late.SkipReason)
+	lateAt, err := time.Parse(time.RFC3339Nano, late.Current["title_changed_at"])
+	require.NoError(t, err)
+	assert.True(t, lateAt.After(l.until), "the late write's stamp is shown: %s", lateAt)
+	assert.Contains(t, late.SkipReason, late.Current["title_changed_at"])
+	for _, id := range []string{l.reverted, l.lastWrite, l.otherFieldFirst} {
+		r := rows[id]
+		require.Empty(t, r.Skipped, "%s: %s", id, r.SkipReason)
+		at, err := time.Parse(time.RFC3339Nano, r.Current["title_changed_at"])
+		require.NoError(t, err, "row %s shows when its title changed", id)
+		assert.False(t, at.Before(l.since) || at.After(l.until), "%s changed at %s, inside the window", id, at)
+		assert.Contains(t, r.Reason, r.Current["title_changed_at"])
+	}
+
+	w := repairs.NewWriter(l.st, l.st, f.ID(), "bulk_update", "repairs-").WithJournal(l.st, l.st, "op-until")
+	out, err := repairs.RunApply(context.Background(), f, res, "plan-1", []string{l.reverted, l.lateChange}, false,
+		repairs.ApplyDeps{Guard: l.st, Writer: w, OpID: "op-until"}, &fakeReporter{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, out.Applied, "%v", out.Rows)
+	assert.Equal(t, 1, out.ByOutcome[repairs.OutcomeNotApplicable])
+	b, err := l.st.GetBookByID(l.lateChange)
+	require.NoError(t, err)
+	assert.Equal(t, "of 11 (written after the scan)", b.Title)
+	b, err = l.st.GetBookByID(l.reverted)
+	require.NoError(t, err)
+	assert.Equal(t, "Volume 7 of 12", b.Title)
+}
+
+// An iTunes id that appears on a file row or as a live external id after the
+// re-plan is refused inside the write.
+func TestScanTitleRevert_ITunesIDAppearingBeforeTheWriteIsRefused(t *testing.T) {
+	for _, kind := range []string{"book_file", "external_id"} {
+		t.Run(kind, func(t *testing.T) {
+			l := newSTRLibrary(t)
+			f := newScanTitleRevertFixer(&Plugin{deps: fakeDeps{store: l.st}})
+			switch kind {
+			case "book_file":
+				require.NoError(t, l.st.CreateBookFile(&database.BookFile{BookID: l.lastWrite,
+					FilePath: "/srv/library/synthetic-late.m4b", Format: "m4b", ITunesPersistentID: "SYNTHPID0000009"}))
+			case "external_id":
+				require.NoError(t, l.st.CreateExternalIDMapping(&database.ExternalIDMapping{Source: "itunes",
+					ExternalID: "SYNTHPID0000010", BookID: l.lastWrite}))
+			}
+			w := repairs.NewWriter(l.st, l.st, f.ID(), "bulk_update", "repairs-").WithJournal(l.st, l.st, "op-itl")
+			err := f.Apply(context.Background(), w, repairs.Row{RowID: l.lastWrite,
+				Detail: &strDecision{bookID: l.lastWrite, current: "of 9", restore: "Volume 2 of 9"}})
+			require.True(t, errors.Is(err, repairs.ErrChangedSincePlan), "err = %v", err)
+			b, err := l.st.GetBookByID(l.lastWrite)
+			require.NoError(t, err)
+			assert.Equal(t, "of 9", b.Title, "not written")
+			changes, err := l.st.GetOperationChanges("op-itl")
+			require.NoError(t, err)
+			assert.Empty(t, changes)
+		})
+	}
+}
+
 // Params are required: book ids and an RFC3339 since.
 func TestScanTitleRevert_ParamsRequired(t *testing.T) {
 	l := newSTRLibrary(t)
 	f := newScanTitleRevertFixer(&Plugin{deps: fakeDeps{store: l.st}})
 	for name, raw := range map[string]string{
-		"none":      "",
-		"no ids":    `{"since":"2026-10-05T21:18:21-04:00"}`,
-		"blank ids": `{"book_ids":[" "],"since":"2026-10-05T21:18:21-04:00"}`,
-		"no since":  `{"book_ids":["a"]}`,
-		"bad since": `{"book_ids":["a"],"since":"yesterday"}`,
+		"none":               "",
+		"no ids":             `{"since":"2026-10-05T21:18:21-04:00"}`,
+		"blank ids":          `{"book_ids":[" "],"since":"2026-10-05T21:18:21-04:00"}`,
+		"no since":           `{"book_ids":["a"]}`,
+		"bad since":          `{"book_ids":["a"],"since":"yesterday"}`,
+		"bad until":          `{"book_ids":["a"],"since":"2026-10-05T21:18:21-04:00","until":"soon"}`,
+		"until before since": `{"book_ids":["a"],"since":"2026-10-05T21:18:21-04:00","until":"2026-10-05T21:00:00-04:00"}`,
+		"until equals since": `{"book_ids":["a"],"since":"2026-10-05T21:18:21-04:00","until":"2026-10-05T21:18:21-04:00"}`,
 	} {
 		_, err := f.Plan(context.Background(), json.RawMessage(raw), &fakeReporter{})
 		assert.Error(t, err, name)
