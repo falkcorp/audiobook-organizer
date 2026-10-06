@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.32.0
+// version: 1.33.0
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
 // last-edited: 2026-10-05
 
@@ -3829,6 +3829,22 @@ func (f *fragmentFixer) noParentRows(lib *fragLibrary, cands []*fragCandidate) [
 		}
 	}
 	rows = append(rows, setRows...)
+	// Parent chapter sets: what is still lone, grouped by the folder above
+	// (one file per folder, owner decision 2026-10-05 20:45).
+	lone = lone[:0:0]
+	for _, c := range cands {
+		if d, ok := drops[c]; ok && !placed[c] && d.kind == fragSkipLoneChapter {
+			lone = append(lone, c)
+		}
+	}
+	parentRows, parentSets := f.parentSetRows(lib, lone)
+	for _, r := range parentRows {
+		for _, c := range parentSets[r.RowID].members {
+			placed[c] = true
+		}
+		sets[r.RowID] = parentSets[r.RowID]
+	}
+	rows = append(rows, parentRows...)
 	live := newFragLive(lib)
 	for i := range rows {
 		f.existingBookCheck(lib, live, &rows[i])
@@ -4249,7 +4265,7 @@ func fragGroupTitleKeys(plan *fragGroupPlan) []fragTitleID {
 	if base := strings.TrimSpace(filepath.Base(filepath.Clean(plan.Dir))); !metadata.IsGenericDirName(base) {
 		add(base)
 	}
-	if plan.Key != fragNumberedKey && !strings.HasPrefix(plan.Key, fragFolderSetKeyPrefix) {
+	if plan.Key != fragNumberedKey && !fragIsSetKey(plan.Key) {
 		add(plan.Key)
 		for _, m := range plan.Members {
 			if k, kind := metadata.ChapterGroupKey(m.Frag.Book.Title); kind != metadata.ChapterKeyNone {
@@ -5169,8 +5185,12 @@ func (f *fragmentFixer) noParentRow(lib *fragLibrary, dir, key string, cs []*fra
 			len(cs), dir, first.origStem(), last.origStem(), len(keyN), bigKey, keyN[bigKey])
 	}
 	if set != nil {
-		shared = fmt.Sprintf("%d fragment books imported from %s are numbered files of one name once the numbers are set aside (%q … %q)",
-			len(cs), dir, plan.Members[0].Frag.origStem(), plan.Members[len(plan.Members)-1].Frag.origStem())
+		where := "imported from " + dir
+		if set.parent {
+			where = "imported one per folder from the folders under " + dir
+		}
+		shared = fmt.Sprintf("%d fragment books %s are numbered files of one name once the numbers are set aside (%q … %q)",
+			len(cs), where, plan.Members[0].Frag.origStem(), plan.Members[len(plan.Members)-1].Frag.origStem())
 	}
 	r.Evidence = []string{
 		shared,
@@ -5725,7 +5745,7 @@ func (f *fragmentFixer) replanGroup(ctx context.Context, store OpsStore, lib *fr
 	f.holdCoOwned(lib, rebuilt)
 	_, groupHash, _ := strings.Cut(planned.RowID, ":")
 	for _, r := range rebuilt {
-		if _, h, _ := strings.Cut(r.RowID, ":"); r.Class == fragClassExistingBook && h == groupHash {
+		if _, h, _ := strings.Cut(r.RowID, ":"); (r.Class == fragClassExistingBook || r.Class == fragClassParentJoin) && h == groupHash {
 			why := r.SkipReason
 			if why == "" && len(r.Evidence) > 0 {
 				why = r.Evidence[len(r.Evidence)-1]
@@ -6664,7 +6684,7 @@ func (f *fragmentFixer) joinCoOwner(lib *fragLibrary, r *repairs.Row, id string)
 		sec, _ := rowFragTotal(r)
 		f.joinExisting(lib, r, plan, e, fmt.Sprintf("the %d kept fragment(s) total %s", len(plan.Members), fragHours(sec)),
 			func(e fragExisting) string { return "book " + e.id }, nil)
-		return r.Class == fragClassExistingBook
+		return r.Class == fragClassExistingBook || r.Class == fragClassParentJoin
 	}
 	pairs, ok := r.Detail.([]fragPair)
 	if !ok || (r.Class != fragClassMoved && r.Class != fragClassCopy) {

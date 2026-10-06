@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_folder_sets_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3b7d2c55-1a4e-4f0b-9c61-8e2f5d7a0b14
 // last-edited: 2026-10-05
 
@@ -40,6 +40,8 @@ var fragFolderSetShapeCases = []struct {
 	{"Christopher Paolini - Some Work - 04 1", []int{0}, []string{"Christopher Paolini"}, "christopher paolini some work # #", "Some Work"},
 	{"Track 12 - read by narrator", []int{0}, nil, "track # read by narrator", ""},
 	{"Café Stories #4 (Part 2)", []int{1}, nil, "café stories ## part #", "Café Stories #4"},
+	{"Before They Are Hanged 151 of 341", []int{0}, []string{"Joe Abercrombie"}, "before they are hanged # of #", "Before They Are Hanged"},
+	{"195-299 Kevin J Anderson", []int{0, 1}, []string{"Kevin J Anderson"}, "# # kevin j anderson", ""},
 }
 
 func TestFragFolderSetShape(t *testing.T) {
@@ -47,7 +49,7 @@ func TestFragFolderSetShape(t *testing.T) {
 		sh, ok := fragFolderSetShape(tc.stem)
 		require.True(t, ok, tc.stem)
 		require.Equal(t, tc.key, sh.key, tc.stem)
-		got, _ := fragSetTitle(tc.stem, sh, tc.varying, tc.authors)
+		got, _ := fragSetTitle(tc.stem, sh, tc.varying, tc.authors, tc.authors)
 		require.Equal(t, tc.title, got, tc.stem)
 	}
 	_, ok := fragFolderSetShape("No Numbers Here")
@@ -281,7 +283,7 @@ func TestFragmentFixer_FolderChapterSetNeverDuplicates(t *testing.T) {
 		require.Equal(t, fragClassExistingBook, r.Class)
 		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
 		require.Equal(t, existing, r.Proposed["join"])
-		require.Contains(t, strings.Join(r.Evidence, "\n"), "formed as a folder chapter set")
+		require.Contains(t, strings.Join(r.Evidence, "\n"), "folder chapter set: 6 files")
 		out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
 		require.Equal(t, 1, out.Applied, "%+v", out.Rows)
 		f.requireRetiredInto(t, frags, existing)
@@ -320,4 +322,138 @@ func (f *fragFixture) liveID(t *testing.T, id string) bool {
 	b, err := f.s.GetBookByID(id)
 	require.NoError(t, err)
 	return !b.IsSoftDeleted()
+}
+
+const parentDir = "lib/Kevin J Anderson/Horizon Storms"
+
+func horizonStem(i int) string { return fmt.Sprintf("Horizon Storms %03d of 006", i) }
+
+// parentSet seeds one-file-per-folder chapters under parent: each file in a
+// folder of its own named like it, as organize left them.
+func (f *fragFixture) parentSet(t *testing.T, parent string, nums []int, stem func(int) string, dur, base int) []string {
+	t.Helper()
+	var ids []string
+	for _, i := range nums {
+		s := stem(i)
+		size := base + 101*i
+		p := f.file(t, filepath.Join(parent, s, s+".mp3"), size)
+		id := f.book(t, parent+s, s, p, nil)
+		f.row(t, parent+s, id, p, s+".mp3", int64(size), dur, 0)
+		f.organized(t, id)
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+func parentRowID(f *fragFixture, dir, name string) string {
+	return noParentRowID(f.path(dir), fragParentSetKeyPrefix+name)
+}
+
+const horizonKey = "horizon storms # of #"
+
+// TestFragmentFixer_ParentChapterSet: one-file-per-folder chapters are
+// grouped by the folder above (owner decision 2026-10-05 20:45).
+func TestFragmentFixer_ParentChapterSet(t *testing.T) {
+	t.Run("a parent set with no existing book becomes one new book", func(t *testing.T) {
+		f := newFragFixture(t)
+		ids := f.parentSet(t, parentDir, []int{3, 1, 6, 2, 5, 4}, horizonStem, 900, 9000)
+		res := f.plan(t, "op-plan")
+		r := findRow(t, res, parentRowID(f, parentDir, horizonKey))
+		require.Equal(t, fragClassParentSet, r.Class)
+		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+		require.ElementsMatch(t, ids, r.BookIDs)
+		require.Equal(t, "Horizon Storms", r.Proposed["title"])
+		require.Contains(t, r.Evidence[0], "one per folder")
+		for _, id := range ids {
+			require.Equal(t, 1, rowsHolding(res, id), "every fragment ends in exactly one row")
+		}
+		out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
+		require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+		rows, err := f.s.GetBookFiles(r.Proposed["survivor"])
+		require.NoError(t, err)
+		require.Len(t, rows, 6)
+		for _, row := range rows {
+			var n int
+			_, err := fmt.Sscanf(filepath.Base(row.FilePath), "Horizon Storms %03d of 006.mp3", &n)
+			require.NoError(t, err)
+			require.Equal(t, n, row.TrackNumber)
+		}
+	})
+	t.Run("same title and agreeing total: joins the existing book", func(t *testing.T) {
+		f := newFragFixture(t)
+		existing := f.existingBook(t, "hs", "Horizon Storms", "lib/Other/Horizon Storms", 6, 900)
+		f.setAuthor(t, existing, f.authorID(t, "Kevin J Anderson"))
+		frags := f.parentSet(t, parentDir, seq(1, 6), horizonStem, 900, 9000)
+		res := f.plan(t, "op-plan")
+		noRow(t, res, parentRowID(f, parentDir, horizonKey), "never a second book")
+		r := findRow(t, res, existingRowID(f.path(parentDir), fragParentSetKeyPrefix+horizonKey))
+		require.Equal(t, fragClassParentJoin, r.Class)
+		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+		require.Equal(t, existing, r.Proposed["join"])
+		out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
+		require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+		f.requireRetiredInto(t, frags, existing)
+	})
+	t.Run("audio held by an existing book under another title: joins it", func(t *testing.T) {
+		f := newFragFixture(t)
+		frags := f.parentSet(t, parentDir, seq(1, 6), horizonStem, 900, 9000)
+		// The same six files (same size and duration) as another book's rows.
+		other := f.book(t, "copy", "Some Other Name", f.path("lib/Elsewhere/Copy"), nil)
+		for i := 1; i <= 6; i++ {
+			name := fmt.Sprintf("track %02d.mp3", i)
+			p := f.file(t, filepath.Join("lib/Elsewhere/Copy", name), 9000+101*i)
+			f.row(t, name, other, p, name, int64(9000+101*i), 900, i)
+		}
+		f.organized(t, other)
+		res := f.plan(t, "op-plan")
+		r := findRow(t, res, existingRowID(f.path(parentDir), fragParentSetKeyPrefix+horizonKey))
+		require.Equal(t, fragClassParentJoin, r.Class)
+		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+		require.Equal(t, other, r.Proposed["join"])
+		require.Contains(t, strings.Join(r.Evidence, "\n"), "6 of the set's 6 files are audio")
+		out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
+		require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+		f.requireRetiredInto(t, frags, other)
+	})
+	t.Run("never two books of one title: two parent folders, different lengths, both held", func(t *testing.T) {
+		f := newFragFixture(t)
+		f.parentSet(t, parentDir, seq(1, 6), horizonStem, 900, 9000)
+		other := "lib/Unknown Author/Horizon Storms"
+		f.parentSet(t, other, seq(1, 6), horizonStem, 960, 50000)
+		res := f.plan(t, "op-plan")
+		for _, d := range []string{parentDir, other} {
+			r := findRow(t, res, parentRowID(f, d, horizonKey))
+			require.Equal(t, fragSkipSameTitleSet, r.Skipped, d)
+		}
+		require.Zero(t, res.Applicable)
+	})
+	t.Run("never one book of two: different audio at one position is held", func(t *testing.T) {
+		f := newFragFixture(t)
+		f.parentSet(t, parentDir, seq(1, 6), horizonStem, 900, 9000)
+		// A second chapter 3 with other audio, in a folder of its own.
+		s := horizonStem(3)
+		p := f.file(t, filepath.Join(parentDir, s+" (2)", s+".mp3"), 77777)
+		id := f.book(t, "dup3", s, p, nil)
+		f.row(t, "dup3", id, p, s+".mp3", 77777, 1300, 0)
+		f.organized(t, id)
+		r := findRow(t, f.plan(t, "op-plan"), parentRowID(f, parentDir, horizonKey))
+		require.False(t, r.Applicable())
+		require.Equal(t, fragSkipTrackOrder, r.Skipped)
+	})
+	t.Run("never one book of two: two authors are held", func(t *testing.T) {
+		f := newFragFixture(t)
+		ids := f.parentSet(t, parentDir, seq(1, 6), horizonStem, 900, 9000)
+		f.setAuthor(t, ids[0], f.authorID(t, "Kevin J Anderson"))
+		f.setAuthor(t, ids[1], f.authorID(t, "Someone Different"))
+		r := findRow(t, f.plan(t, "op-plan"), parentRowID(f, parentDir, horizonKey))
+		require.Equal(t, fragSkipMixedAuthors, r.Skipped)
+	})
+	t.Run("iTunes parent sets are listed, never applicable", func(t *testing.T) {
+		f := newFragFixture(t)
+		d := "books/itunes/iTunes Media/Audiobooks/Horizon Storms"
+		f.parentSet(t, d, seq(1, 6), horizonStem, 900, 9000)
+		r := findRow(t, f.plan(t, "op-plan"), parentRowID(f, d, horizonKey))
+		require.Equal(t, fragClassITunesSet, r.Class)
+		require.False(t, r.Applicable())
+	})
 }
