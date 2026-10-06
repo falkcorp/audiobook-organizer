@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useDupesLane.selection.test.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7b5601fc-d9e3-408e-80f4-8fd4bba7ce60
 // last-edited: 2026-10-06
 //
@@ -210,6 +210,35 @@ function renderPanel() {
 }
 
 describe('DupesPanel select-all integration', () => {
+  it('banner shows "counting" until the server count arrives, never the list total', async () => {
+    let resolve: (n: number) => void = () => {};
+    vi.mocked(api.countBulkDedupCandidates).mockImplementation(
+      () => new Promise<number>((r) => (resolve = r))
+    );
+    const user = userEvent.setup();
+    renderPanel();
+    await screen.findByTestId('dupes-row-5');
+    await user.click(screen.getByRole('checkbox', { name: 'Select all 5 on this page' }));
+    const link = await screen.findByTestId('dupes-select-all-matching');
+    expect(link).toHaveTextContent('Select all matching (counting…)');
+    expect(link).not.toHaveTextContent(String(TOTAL));
+    act(() => resolve(COUNT));
+    await waitFor(() => expect(link).toHaveTextContent(`Select all ${COUNT} matching`));
+  });
+
+  it('a failed count labels the list total as approximate', async () => {
+    vi.mocked(api.countBulkDedupCandidates).mockRejectedValue(new Error('boom'));
+    const user = userEvent.setup();
+    renderPanel();
+    await screen.findByTestId('dupes-row-5');
+    await user.click(screen.getByRole('checkbox', { name: 'Select all 5 on this page' }));
+    await waitFor(() =>
+      expect(screen.getByTestId('dupes-select-all-matching')).toHaveTextContent(
+        `Select all about ${TOTAL} matching`
+      )
+    );
+  });
+
   it('select page -> banner -> select all matching -> confirmed cross-page merge hits bulk-link', async () => {
     const user = userEvent.setup();
     renderPanel();
@@ -218,12 +247,19 @@ describe('DupesPanel select-all integration', () => {
     await user.click(screen.getByRole('checkbox', { name: 'Select all 5 on this page' }));
     const banner = screen.getByTestId('dupes-select-all-banner');
     expect(banner).toHaveTextContent('All 5 pairs on this page are selected.');
+    // The banner offers the SERVER's count -- the number the dialog will
+    // show -- not the list's total.
+    await waitFor(() =>
+      expect(within(banner).getByTestId('dupes-select-all-matching')).toHaveTextContent(
+        `Select all ${COUNT} matching`
+      )
+    );
 
     await user.click(within(banner).getByTestId('dupes-select-all-matching'));
     expect(screen.getByTestId('dupes-select-all-banner')).toHaveTextContent(
-      `All ${TOTAL} pairs matching this filter are selected.`
+      `All ${COUNT} pairs matching this filter are selected.`
     );
-    expect(screen.getByTestId('dupes-selected-count')).toHaveTextContent(`${TOTAL} selected`);
+    expect(screen.getByTestId('dupes-selected-count')).toHaveTextContent(`${COUNT} selected`);
 
     await user.click(screen.getByTestId('merge-selected'));
     // Destructive and wider than the page: confirmation with the count.

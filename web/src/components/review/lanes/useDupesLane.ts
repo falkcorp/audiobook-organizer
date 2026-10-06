@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useDupesLane.ts
-// version: 1.12.0
+// version: 1.13.0
 // guid: 5e9c1a74-0d38-4b62-9f15-6c2a8d4b7e31
 // last-edited: 2026-10-06
 
@@ -14,6 +14,10 @@ import {
 } from 'react';
 import { serverAnsweredTerm, useDebouncedSearch } from '../../../hooks/useDebouncedSearch';
 import { useRowSelection, type RowSelection } from '../../../hooks/useRowSelection';
+import {
+  useServerMatchingCount,
+  type ServerMatchingCount,
+} from '../../../hooks/useServerMatchingCount';
 import * as api from '../../../services/api';
 import type { DedupBand, DedupCandidate, DedupStats } from '../../../services/api';
 import type { DupesAction } from '../reviewActions';
@@ -89,7 +93,8 @@ export const SELECT_ALL_MATCHING_PENDING_ONLY_REASON =
   'Bulk actions over the whole filter work on the Pending status only.';
 
 /** Refusal while the list is loading: `total` is not yet the filter's count. */
-export const BULK_LIST_LOADING_REASON = 'Still loading the list. Wait for it before acting on everything that matches.';
+export const BULK_LIST_LOADING_REASON =
+  'Still loading the list. Wait for it before acting on everything that matches.';
 
 /** The toast for a 409 FILTER_CHANGED: the filter moved since the reviewer confirmed. */
 export function filterChangedMessage(matched: number): string {
@@ -220,6 +225,12 @@ export interface DupesLane {
 
   /** The server's count for the filter-scoped bulk actions; see countMatching in the hook. */
   countMatching: (signal?: AbortSignal) => Promise<number>;
+  /**
+   * The server's count behind "Select all N matching" and the cross-page
+   * selected count: `selection.totalMatching` uses it once it is ready. Lets
+   * the panel say "counting" instead of showing the list's total.
+   */
+  matchingCount: ServerMatchingCount;
 
   /** A destructive bulk action is in flight; a second must not overlap it. */
   busy: boolean;
@@ -646,10 +657,51 @@ export function useDupesLane(
   // render -- never left armed for one committed frame against the old filter.
   // -------------------------------------------------------------------------
 
+  /**
+   * The ONE payload both filter-scoped bulk actions send. Shared so
+   * merge-all-filtered and dismiss-all-filtered cannot drift apart: a field one
+   * sends and the other drops widens that action past the set on screen.
+   */
+  const bulkFilter = useMemo(
+    (): api.BulkDedupCandidateFilter => ({
+      entity_type: 'book',
+      // Pending only: the server refuses anything else, and the guards above
+      // refuse to dispatch under any other status.
+      status: 'pending',
+      // Filter parity with what is on screen. Omitting either of these
+      // is what made this action merge the whole library.
+      band: filters.band ?? undefined,
+      entity_id: filters.entityId ?? undefined,
+      // The SETTLED term -- the one the visible rows were fetched with.
+      // Sending filters.search could transmit a term the reviewer typed
+      // but has not seen results for.
+      q: appliedSearch.trim() || undefined,
+    }),
+    [filters.band, filters.entityId, appliedSearch]
+  );
+
+  /**
+   * The number a "merge/dismiss everything matching" confirmation shows and
+   * then sends back as expected_total. Counted by the SERVER with the same
+   * function the bulk endpoints re-evaluate (dead rows excluded), never taken
+   * from the list's `total`, which is a paging hint: two different counts can
+   * never agree, and every confirm used to come back as "the list changed".
+   */
+  const countMatching = useCallback(
+    (signal?: AbortSignal) => api.countBulkDedupCandidates(bulkFilter, { signal }),
+    [bulkFilter]
+  );
+
+  // The banner's and the bulk bar's "N matching" is the SERVER's count (the
+  // number the confirm dialog shows and the bulk endpoints act on), fetched
+  // only while the page is fully selected or all-matching is on. The list's
+  // total stands in until it arrives (and if counting fails).
+  const matchingCount = useServerMatchingCount(countMatching, candidates);
+
   const visibleIds = useMemo(() => visible.map((c) => c.id), [visible]);
   const selection = useRowSelection<number>({
     pageKeys: visibleIds,
-    totalMatching: total,
+    totalMatching: matchingCount.totalOr(total),
     resetKey: [
       filters.status,
       urlFilterKey,
@@ -659,9 +711,14 @@ export function useDupesLane(
     ].join('\u0000'),
     canSelectAllMatching: selectAllMatchingDisabledReason === null,
   });
+  matchingCount.sync(selection.pageFullySelected || selection.allMatching);
   const selectedIds = selection.selected;
-  const { clear: clearSelectionState, toggle: toggleRow, togglePage, pageFullySelected } =
-    selection;
+  const {
+    clear: clearSelectionState,
+    toggle: toggleRow,
+    togglePage,
+    pageFullySelected,
+  } = selection;
 
   // -------------------------------------------------------------------------
   // Filters and pagination
@@ -816,41 +873,6 @@ export function useDupesLane(
       refresh();
     },
     [toast, clearSelection, refresh, markDecided, unmarkDecided]
-  );
-
-  /**
-   * The ONE payload both filter-scoped bulk actions send. Shared so
-   * merge-all-filtered and dismiss-all-filtered cannot drift apart: a field one
-   * sends and the other drops widens that action past the set on screen.
-   */
-  const bulkFilter = useMemo(
-    (): api.BulkDedupCandidateFilter => ({
-      entity_type: 'book',
-      // Pending only: the server refuses anything else, and the guards above
-      // refuse to dispatch under any other status.
-      status: 'pending',
-      // Filter parity with what is on screen. Omitting either of these
-      // is what made this action merge the whole library.
-      band: filters.band ?? undefined,
-      entity_id: filters.entityId ?? undefined,
-      // The SETTLED term -- the one the visible rows were fetched with.
-      // Sending filters.search could transmit a term the reviewer typed
-      // but has not seen results for.
-      q: appliedSearch.trim() || undefined,
-    }),
-    [filters.band, filters.entityId, appliedSearch]
-  );
-
-  /**
-   * The number a "merge/dismiss everything matching" confirmation shows and
-   * then sends back as expected_total. Counted by the SERVER with the same
-   * function the bulk endpoints re-evaluate (dead rows excluded), never taken
-   * from the list's `total`, which is a paging hint: two different counts can
-   * never agree, and every confirm used to come back as "the list changed".
-   */
-  const countMatching = useCallback(
-    (signal?: AbortSignal) => api.countBulkDedupCandidates(bulkFilter, { signal }),
-    [bulkFilter]
   );
 
   /** A bulk action's error: a moved filter refreshes and asks to re-confirm. */
@@ -1150,6 +1172,7 @@ export function useDupesLane(
     selection,
     selectAllMatchingDisabledReason,
     countMatching,
+    matchingCount: matchingCount.count,
     toggleSelect,
     selectAllVisible,
     clearSelection,

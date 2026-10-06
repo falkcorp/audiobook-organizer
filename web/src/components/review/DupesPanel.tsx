@@ -1,5 +1,5 @@
 // file: web/src/components/review/DupesPanel.tsx
-// version: 1.6.0
+// version: 1.7.0
 // guid: 1d6f8a03-7c25-4e91-b840-2a5c9e3b7d14
 // last-edited: 2026-10-06
 //
@@ -84,6 +84,21 @@ export function DupesPanel({ dupes, viewMode, expandedId, onToggleExpand }: Dupe
   // the filter server-side and report what they did. Anything else acts on ids.
   const crossPage = sel.allMatching;
   const selectedCount = sel.selectedCount;
+  // How far the cross-page number can be trusted: the lane swaps in the
+  // server's bulk count once it arrives (the same number the confirm dialog
+  // shows); until then nothing is shown, and on a failed count the list's
+  // total is labelled as approximate.
+  const matchingCountState =
+    dupes.matchingCount.state === 'ready'
+      ? undefined
+      : dupes.matchingCount.state === 'error'
+        ? ('approximate' as const)
+        : ('counting' as const);
+  const selectedLabel = !crossPage
+    ? selectedCount.toLocaleString()
+    : matchingCountState === 'counting'
+      ? '…'
+      : `${matchingCountState === 'approximate' ? '~' : ''}${selectedCount.toLocaleString()}`;
   const [pendingBulk, setPendingBulk] = useState<PendingBulk | null>(null);
   // The confirmation's count comes from the SERVER (dupes.countMatching: the
   // same function the bulk endpoints re-evaluate), never from the list's
@@ -307,7 +322,10 @@ export function DupesPanel({ dupes, viewMode, expandedId, onToggleExpand }: Dupe
               <SelectAllMatchingBanner
                 selection={sel}
                 pageCount={dupes.candidates.length}
-                totalMatching={dupes.total}
+                totalMatching={
+                  dupes.matchingCount.state === 'ready' ? dupes.matchingCount.n : dupes.total
+                }
+                countState={matchingCountState}
                 noun="pairs"
                 unavailableReason={dupes.selectAllMatchingDisabledReason}
                 testIdPrefix="dupes-select-all"
@@ -347,7 +365,7 @@ export function DupesPanel({ dupes, viewMode, expandedId, onToggleExpand }: Dupe
         }}
       >
         <Typography variant="body2" color="text.secondary" data-testid="dupes-selected-count">
-          {selectedCount.toLocaleString()} selected{crossPage ? ' (every page)' : ''}
+          {selectedLabel} selected{crossPage ? ' (every page)' : ''}
         </Typography>
         <Button
           size="small"
@@ -356,7 +374,7 @@ export function DupesPanel({ dupes, viewMode, expandedId, onToggleExpand }: Dupe
           disabled={selectedCount === 0 || dupes.busy}
           onClick={runMergeSelected}
         >
-          {dupes.verbs.mergeSelected} ({selectedCount.toLocaleString()})
+          {dupes.verbs.mergeSelected} ({selectedLabel})
         </Button>
         <Button
           size="small"
@@ -364,7 +382,7 @@ export function DupesPanel({ dupes, viewMode, expandedId, onToggleExpand }: Dupe
           disabled={selectedCount === 0 || dupes.busy}
           onClick={runDismissSelected}
         >
-          {dupes.verbs.dismissSelected} ({selectedCount.toLocaleString()})
+          {dupes.verbs.dismissSelected} ({selectedLabel})
         </Button>
         {selectedCount > 0 && (
           <Button size="small" onClick={sel.clear} data-testid="dupes-clear-selection">
@@ -410,10 +428,9 @@ export function DupesPanel({ dupes, viewMode, expandedId, onToggleExpand }: Dupe
             {pendingBulk === 'dismissAllFiltered'
               ? 'Every pending pair matching the current filter, on every page, is marked "not a duplicate".'
               : 'Every pair matching the current filter, on every page, is linked into a version group. This cannot be undone.'}{' '}
-            The server re-evaluates the filter when it runs and reports how many it
-            actually changed; hand-pinned pairs are skipped and listed as failures. If the
-            number of matching pairs changes before it runs, nothing is changed and you are
-            asked again.
+            The server re-evaluates the filter when it runs and reports how many it actually
+            changed; hand-pinned pairs are skipped and listed as failures. If the number of matching
+            pairs changes before it runs, nothing is changed and you are asked again.
             {bulkCount.state === 'loading' && ' Counting the matching pairs…'}
             {confirmedN === 0 && ' Nothing matches the filter now.'}
             {overCap &&
