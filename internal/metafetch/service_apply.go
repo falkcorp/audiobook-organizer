@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.52.0
+// version: 1.53.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
 // last-edited: 2026-10-06
 
@@ -890,7 +890,7 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 	// The apply itself has already succeeded, so a failed duplicate check is
 	// logged at Error level and does not fail the apply: the next apply of any
 	// book in the cluster re-runs the election, and nothing was demoted here.
-	if book.MetadataSourceHash != nil {
+	if book.MetadataSourceHash != nil && !opts.SkipHashElection {
 		if err := mfs.checkMetadataSourceHashDuplicates(id, *book.MetadataSourceHash); err != nil {
 			slog.Error("MATCH-4 auto-merge skipped: primary election aborted on a read error; no book was demoted",
 				"id", logger.SanitizeLogValue(id), "hash", *book.MetadataSourceHash, "error", logger.SanitizeLogValue(err.Error()))
@@ -901,6 +901,18 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 	// including locked fields that were NOT applied: the state row's fetched_value
 	// is "what the provider said", the override is what the user said, and the
 	// UI shows both side by side.
+	//
+	// BookRowOnly: every write below this point is outside the change
+	// history, so an apply that must be undone whole by its history batch
+	// skips them all (see ApplyOptions.BookRowOnly).
+	if opts.BookRowOnly {
+		return &FetchMetadataResponse{
+			Message:             "metadata candidate applied",
+			Book:                updatedBook,
+			Source:              candidate.Source,
+			SkippedLockedFields: skippedLocked,
+		}, historyErr
+	}
 	mfs.persistFetchedMetadata(id, fetched)
 
 	// Generate segment titles (fast, DB-only)

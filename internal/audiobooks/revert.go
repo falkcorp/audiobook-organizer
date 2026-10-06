@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.61.0
+// version: 1.62.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-06
 
@@ -160,6 +160,10 @@ type RevertService struct {
 	LockPath func(path string) func()
 	// ComputeITunesPath recomputes a repointed book_file's iTunes path.
 	ComputeITunesPath func(localPath string) string
+	// UndoApplyBatch undoes one metadata apply's history batch
+	// (metafetch.Service.UndoApplyBatch): the revert of a
+	// undo.ChangeTypeMetadataApply row. nil refuses such rows.
+	UndoApplyBatch func(bookID, batchID string) (*metafetch.UndoApplyResult, error)
 }
 
 // NewRevertService creates a new RevertService.
@@ -169,6 +173,7 @@ func NewRevertService(db revertServiceStore) *RevertService {
 		ReadTags:          metadata.ReadTagProperties,
 		WriteTags:         defaultRevertWriteTags,
 		ComputeITunesPath: metafetch.ComputeITunesPath,
+		UndoApplyBatch:    defaultApplyBatchUndoer(db),
 	}
 	if lock := revertPathLocker.Load(); lock != nil {
 		rs.LockPath = *lock
@@ -670,6 +675,10 @@ func (rs *RevertService) revertChangeIn(c *database.OperationChange, plan *undo.
 		return rs.revertBookTagAdd(c)
 	case undo.ChangeTypeUserBookStateSet:
 		return rs.revertUserBookStateSet(c)
+	case undo.ChangeTypeMetadataApply:
+		return rs.revertMetadataApply(c)
+	case undo.ChangeTypeMetadataCacheCopy:
+		return rs.revertMetadataCacheCopy(c)
 	case "organize_failed", "organize_skipped", "organize_summary",
 		undo.ChangeTypeRepairPlanRecord:
 		// No filesystem or DB mutation recorded; nothing to reverse.

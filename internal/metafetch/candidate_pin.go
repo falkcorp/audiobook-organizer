@@ -1,5 +1,5 @@
 // file: internal/metafetch/candidate_pin.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 9f4a1d63-2c7e-4b85-a0d9-5e3b8c1f6a42
 // last-edited: 2026-10-06
 
@@ -253,6 +253,35 @@ type ApplyOptions struct {
 	// that stopped being its group's primary, left the group or was applied
 	// while the apply ran.
 	Guard func(fresh *database.Book) error
+	// SkipHashElection skips the MATCH-4 duplicate election
+	// (checkMetadataSourceHashDuplicates) after the commit. That election
+	// sets merged_into_book_id and clears is_primary_version on every book
+	// outside the survivor's version group that carries the same record, and
+	// it runs with no guard and no iTunes check of its own. A caller sets it
+	// when it has proved, under its own Guard, that no book outside the
+	// target's version group carries the record (so the election has nothing
+	// to decide) and must not demote or merge any book it was not asked to
+	// write: the version twin fixer (maintenance.version-twin-metadata),
+	// whose group's twin already carries the record.
+	SkipHashElection bool
+	// BookRowOnly limits the apply's writes to the book row, its author
+	// credits and their change history: no metadata:source / metadata:language
+	// system tags, no provider category tags, no fetched-value provenance
+	// (field states), no segment titles, no identifier backfill queued and no
+	// cover download handed back (PendingCoverURL stays ""). Everything it
+	// writes is then in the history batch, so undoing that batch (UndoLastApply,
+	// UndoApplyBatch, the op revert of a journaled apply) undoes all of it.
+	// The version twin fixer sets it.
+	BookRowOnly bool
+	// HistorySource, when set, is the source every change-history row of
+	// this apply records, instead of the candidate's provider (with the
+	// owner-review / replace / upgrade notes). A Repairs fixer sets its own id
+	// here so the history says which repair wrote the fields.
+	HistorySource string
+	// RequireHistory makes a failed change-history write an error returned
+	// with the response, as OwnerReviewed, OwnerReplace and RankUpgrade do:
+	// the caller's revert reads that history. The write itself stands.
+	RequireHistory bool
 }
 
 // automatic reports whether nobody picked this candidate: a fill-only apply,
@@ -296,6 +325,9 @@ const ownerReplaceLabel = "owner replace: review bulk apply replaced existing va
 
 // historySource is the source label change history records for an apply.
 func (o ApplyOptions) historySource(candidateSource string) string {
+	if o.HistorySource != "" {
+		return o.HistorySource
+	}
 	if !o.OwnerReviewed && !o.OwnerReplace && o.RankUpgrade == "" {
 		return candidateSource
 	}
@@ -320,7 +352,7 @@ func (o ApplyOptions) historySource(candidateSource string) string {
 // returned to the caller: the apply lifted a gate refusal or overwrote filled
 // fields, and its history is the only record to audit or revert it from.
 func (o ApplyOptions) requiresHistory() bool {
-	return o.OwnerReviewed || o.OwnerReplace || o.RankUpgrade != ""
+	return o.OwnerReviewed || o.OwnerReplace || o.RankUpgrade != "" || o.RequireHistory
 }
 
 // historyKind names the apply in a failed-history error.
@@ -331,5 +363,8 @@ func (o ApplyOptions) historyKind() string {
 	if o.OwnerReplace {
 		return "owner-replace"
 	}
-	return "rank-upgrade"
+	if o.RankUpgrade != "" {
+		return "rank-upgrade"
+	}
+	return "history-required"
 }

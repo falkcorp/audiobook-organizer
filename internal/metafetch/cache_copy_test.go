@@ -1,5 +1,5 @@
 // file: internal/metafetch/cache_copy_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3c9d4b7e-1a62-4f08-b5e3-8d2f6a0c9e41
 // last-edited: 2026-10-06
 
@@ -21,18 +21,18 @@ func copyFixture(t *testing.T) (*database.PebbleStore, *Service, string, string)
 	st, err := database.NewPebbleStore(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = st.Close() })
-	a, err := st.CreateAuthor("Frank Herbert")
+	a, err := st.CreateAuthor("Synthetic Author A")
 	require.NoError(t, err)
 	mk := func() string {
-		b, err := st.CreateBook(&database.Book{Title: "Dune", Format: "m4b", FilePath: "/lib/Dune", AuthorID: &a.ID})
+		b, err := st.CreateBook(&database.Book{Title: "Synthetic Saga", Format: "m4b", FilePath: "/lib/Synthetic Saga", AuthorID: &a.ID})
 		require.NoError(t, err)
 		return b.ID
 	}
 	from, to := mk(), mk()
-	raw, err := json.Marshal(MetadataCandidate{Title: "Dune", Author: "Frank Herbert", ASIN: "B002V1OF70", Source: "audible"})
+	raw, err := json.Marshal(MetadataCandidate{Title: "Synthetic Saga", Author: "Synthetic Author A", ASIN: "B0SYNTH001", Source: "audible"})
 	require.NoError(t, err)
 	require.NoError(t, st.PutMetadataCache(&MetadataCandidateCache{BookID: from, FetchedAt: time.Now().UTC(),
-		Candidates: []json.RawMessage{raw}, SourceHash: BatchSourceHash(from, "Dune", "Frank Herbert"), FetchedForASIN: "B002V1OF70"}))
+		Candidates: []json.RawMessage{raw}, SourceHash: BatchSourceHash(from, "Synthetic Saga", "Synthetic Author A"), FetchedForASIN: "B0SYNTH001"}))
 	return st, NewService(st), from, to
 }
 
@@ -46,17 +46,17 @@ func TestCopyCandidateCache_RekeysForTarget(t *testing.T) {
 	target, err := st.GetBookByID(to)
 	require.NoError(t, err)
 	require.Error(t, svc.ValidateCachedIdentityForBook(&MetadataCandidateCache{BookID: to, SourceHash: src.SourceHash},
-		target, []string{"Frank Herbert"}), "a verbatim copy is stale for the target")
+		target, []string{"Synthetic Author A"}), "a verbatim copy is stale for the target")
 
 	cp, err := svc.CopyCandidateCache(from, to, nil)
 	require.NoError(t, err)
 	stored, err := st.GetMetadataCache(to)
 	require.NoError(t, err)
 	require.Equal(t, cp.SourceHash, stored.SourceHash)
-	require.NoError(t, svc.ValidateCachedIdentityForBook(stored, target, []string{"Frank Herbert"}))
+	require.NoError(t, svc.ValidateCachedIdentityForBook(stored, target, []string{"Synthetic Author A"}))
 	require.Equal(t, src.Candidates, stored.Candidates)
 	require.True(t, src.FetchedAt.Equal(stored.FetchedAt))
-	require.Equal(t, "B002V1OF70", stored.FetchedForASIN)
+	require.Equal(t, "B0SYNTH001", stored.FetchedForASIN)
 }
 
 // check refuses the write; a source with no candidates is refused too.
@@ -77,7 +77,7 @@ func TestCopyCandidateCache_RefusesOnCheckAndEmptySource(t *testing.T) {
 // is returned wrapped; CandidateSourceHash is the hash the apply stamps.
 func TestApplyOptionsGuard_RefusesCommit(t *testing.T) {
 	st, svc, _, to := copyFixture(t)
-	cand := MetadataCandidate{Title: "Dune", Author: "Frank Herbert", Narrator: "Scott Brick", ASIN: "B002V1OF70", Source: "audible"}
+	cand := MetadataCandidate{Title: "Synthetic Saga", Author: "Synthetic Author A", Narrator: "Synthetic Narrator A", ASIN: "B0SYNTH001", Source: "audible"}
 	refuse := errors.New("guard refused")
 	_, err := svc.ApplyMetadataCandidateWithOptions(to, cand, []string{"narrator"},
 		ApplyOptions{FillOnly: true, Guard: func(*database.Book) error { return refuse }})
@@ -94,6 +94,6 @@ func TestApplyOptionsGuard_RefusesCommit(t *testing.T) {
 	require.Positive(t, calls)
 	b, err = st.GetBookByID(to)
 	require.NoError(t, err)
-	require.Equal(t, "Scott Brick", *b.Narrator)
+	require.Equal(t, "Synthetic Narrator A", *b.Narrator)
 	require.Equal(t, CandidateSourceHash(cand), *b.MetadataSourceHash)
 }

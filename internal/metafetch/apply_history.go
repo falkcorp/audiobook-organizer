@@ -1,5 +1,5 @@
 // file: internal/metafetch/apply_history.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 4b9d7e21-0c3a-4f58-b6e2-8a1f5d3c9e07
 // last-edited: 2026-10-06
 
@@ -458,6 +458,56 @@ func (mfs *Service) UndoLastApply(bookID string) (*UndoApplyResult, error) {
 	case undone[latest.BatchID]:
 		return nil, ErrApplyAlreadyUndone
 	}
+	return mfs.undoBatch(bookID, latest.BatchID, latest.Source, history, true)
+}
+
+// UndoApplyBatch reverts the one metadata apply whose change-history rows
+// carry batchID on bookID, whether or not it is the book's newest, by the same
+// per-field compare-and-set UndoLastApply uses: a field still holding what the
+// apply wrote is put back, one edited since is left (ChangedSince). It is the
+// op revert of a Repairs apply that journaled its history batch
+// (undo.ChangeTypeMetadataApply): a later apply on the book does not stop it,
+// because each field is checked on its own.
+//
+// ErrApplyAlreadyUndone when the batch's undo rows are already recorded
+// (UndoLastApply or an earlier revert undid it); ErrNoApplyToUndo when no
+// history row carries batchID; ErrApplyHistoryIncomplete when the apply's
+// history was not fully written. An op-journaled marker does not refuse it:
+// this IS the operation's revert.
+func (mfs *Service) UndoApplyBatch(bookID, batchID string) (*UndoApplyResult, error) {
+	if batchID == "" {
+		return nil, ErrNoApplyToUndo
+	}
+	history, err := mfs.db.GetBookChangeHistory(bookID, 1<<30)
+	if err != nil {
+		return nil, fmt.Errorf("read change history: %w", err)
+	}
+	source := ""
+	found := false
+	for i := range history {
+		r := &history[i]
+		if r.BatchID != batchID {
+			continue
+		}
+		if r.ChangeType == ChangeTypeApplyUndo {
+			return nil, ErrApplyAlreadyUndone
+		}
+		found = true
+		if source == "" {
+			source = r.Source
+		}
+	}
+	if !found {
+		return nil, ErrNoApplyToUndo
+	}
+	return mfs.undoBatch(bookID, batchID, source, history, false)
+}
+
+// undoBatch reverts the rows of batchID in history (the book's whole change
+// history). refuseOpJournaled refuses a batch carrying the op-journaled
+// marker, which only the operation's own revert may undo.
+func (mfs *Service) undoBatch(bookID, batchID, source string, history []database.MetadataChangeRecord, refuseOpJournaled bool) (*UndoApplyResult, error) {
+	latest := &database.MetadataChangeRecord{BatchID: batchID, Source: source}
 	var rows []database.MetadataChangeRecord
 	for _, r := range history {
 		if r.BatchID != latest.BatchID || r.ChangeType == ChangeTypeApplyUndo {
@@ -469,7 +519,10 @@ func (mfs *Service) UndoLastApply(bookID string) (*UndoApplyResult, error) {
 			return nil, ErrApplyHistoryIncomplete
 		}
 		if r.ChangeType == ChangeTypeApplyOpJournaled {
-			return nil, ErrApplyUndoneFromOperation
+			if refuseOpJournaled {
+				return nil, ErrApplyUndoneFromOperation
+			}
+			continue
 		}
 		rows = append(rows, r)
 	}
