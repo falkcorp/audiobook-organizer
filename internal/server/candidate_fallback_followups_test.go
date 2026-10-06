@@ -398,3 +398,33 @@ func TestOperationResults_CountDeferredAndSkipped(t *testing.T) {
 		t.Fatalf("counters = %+v, want 1 deferred and 1 skipped", body)
 	}
 }
+
+// A forced (or stale) refetch asks the chain again and REPLACES the row.
+// The candidates a fallback provider found for the same questions and ASIN
+// survive it: the settled attempt says the provider answered, so it would
+// not be asked again, and dropping its candidates would leave the book
+// without a usable one until the attempt aged out.
+func TestCandidateFallback_ForcedRefetchKeepsFallbackCandidates(t *testing.T) {
+	f := newFallbackFixture(t, 800)
+	f.audible.answer = answersRecord(metadata.BookMetadata{Title: "Lantern Street Omnibus Edition", Author: "J. Author",
+		CoverURL: "https://example.invalid/a.jpg"})
+	f.openlib.answer = answersTitle("Lantern Street", "J. Author")
+	b := f.book(t, "Lantern Street")
+	if r := f.run(t, b.ID)[b.ID]; r.Candidate == nil || r.Candidate.Source != "Open Library" {
+		t.Fatalf("setup: result %+v, want an Open Library match", r.Candidate)
+	}
+	f.resetCalls()
+	f.opCounter++
+	r := runCandidateFetch(t, f.s, "op-forced-keep", []string{b.ID}, true)[b.ID]
+	entry, err := f.store.GetMetadataCache(b.ID)
+	if err != nil || entry == nil {
+		t.Fatalf("row: %v %v", entry, err)
+	}
+	if srcs := candidateSources(t, entry); !slices.Contains(srcs, "Open Library") {
+		t.Fatalf("after a forced refetch the row holds candidates from %v; Open Library's was dropped (Open Library asked %d times)",
+			srcs, f.openlib.calls.Load())
+	}
+	if r.Candidate == nil || r.Candidate.Source != "Open Library" {
+		t.Fatalf("forced refetch result = %+v, want the kept Open Library candidate", r.Candidate)
+	}
+}

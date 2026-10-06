@@ -7,7 +7,8 @@
     best below the apply floor. Rows that held only such candidates (served
     from the cache forever, never selected) are now selected by the
     scheduled fetch. Fallback candidates are merged into the row
-    (`SearchOptions.MergeWithCached`), never replace the chain's.
+    (`SearchOptions.MergeWithCached`), never replace the chain's, and a
+    forced or stale refetch of the chain keeps them.
   - **One shared Google Books daily budget** for every caller
     (`internal/metadata/dailyquota`), enforced in Google's HTTP transport
     per request sent: `google_books_daily_limit` (default 1,000) total,
