@@ -144,7 +144,7 @@ func TestUndoMetadataChange_RoutedFieldWithColons(t *testing.T) {
 			d.store.EXPECT().PatchBookFileFields("b1", "f1", mock.Anything).Return(
 				&database.BookFile{ID: "f1", TrackNumber: 0}, &database.BookFile{ID: "f1", TrackNumber: 3}, nil)
 			d.store.EXPECT().RecordMetadataChange(mock.Anything).Return(nil)
-		
+
 			r := gin.New()
 			r.POST(undoRoute, h.UndoMetadataChange)
 			w := httptest.NewRecorder()
