@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.79.0
+// version: 2.80.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-10-05
 
@@ -199,6 +199,10 @@ type Server struct {
 	// libGenWarnOnce keeps the "store has no generation counter" warning to a
 	// single line instead of one per list request.
 	libGenWarnOnce  sync.Once
+	// candidateRefetchGate is the provider gate every lost-candidates refetch
+	// shares (candidate_refetch.go), built once from the enabled sources'
+	// budgets like the candidate-fetch op's own.
+	candidateRefetchGate candidateRefetchGate
 	facetsCache     *cache.Cache[gin.H]
 	authorsCache    *cache.Cache[*audiobookspkg.AuthorWithCountListResponse]
 	seriesCache     *cache.Cache[*audiobookspkg.SeriesWithCountsResponse]

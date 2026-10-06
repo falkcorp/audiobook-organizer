@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.37.0
+// version: 1.37.1
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
 // last-edited: 2026-10-05
 
@@ -70,6 +70,18 @@ func (d fakeDeps) CloneBookIntoLibrary(*database.Book, []database.BookFile, stri
 	return "", errors.New("fakeDeps: no library cloner")
 }
 func (d fakeDeps) LibraryITunesPath(string) string { return "" }
+
+// CandidateRefetcher (unused by these fakes; the lost-candidates fixer tests
+// use their own): no fetch has ever run, and a refetch is refused.
+func (d fakeDeps) LatestCandidateFetchOutcomes() (map[string]CandidateFetchOutcome, error) {
+	return nil, nil
+}
+func (d fakeDeps) LatestCandidateFetchOutcome(string) (CandidateFetchOutcome, bool, error) {
+	return CandidateFetchOutcome{}, false, nil
+}
+func (d fakeDeps) RefetchMetadataCandidates(context.Context, string) (CandidateRefetchResult, error) {
+	return CandidateRefetchResult{}, errors.New("fakeDeps: no candidate refetcher")
+}
 
 // ScanController (no-op): these fakes drive plan functions directly and pass a nil
 // controller, so the stand-down is never held in these tests. The methods exist
