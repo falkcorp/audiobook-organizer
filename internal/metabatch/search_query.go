@@ -1,13 +1,14 @@
 // file: internal/metabatch/search_query.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: e0ed5705-b771-4cc2-9c8c-bca9f78ead8b
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 //
 // Resolves the title a metadata search asks providers for a book.
 
 package metabatch
 
 import (
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -184,6 +185,39 @@ func ResolveCandidateSearchQueryMemo(files SearchQueryReader, book *database.Boo
 		return CandidateSearchQuery{SkipKind: SkipKindSiblingPart}
 	}
 	return CandidateSearchQuery{}
+}
+
+// lastFirstRe is a "Last, First" person folder ("Example, Jane").
+var lastFirstRe = regexp.MustCompile(`^\p{Lu}[\pL'’-]+,\s+\p{Lu}[\pL.'’ -]*$`)
+
+// climbPoisonedFolder returns the folder above path's work folder when that
+// work folder carries one of the system's placeholder titles ("read by
+// narrator", "Unknown Title"): the organizer once named a book's folder from
+// its bad title, so the folder is as junk as the title, and the one above it
+// names the book (".../Glass Orchard/read by narrator/read by
+// narrator.mp3"). One level only, as maintenance.DeriveJunkTitleReplacement
+// climbs: further up is the author or a library root. A folder's leading
+// dash ("- The Quiet Field", an empty field the template dropped) is
+// trimmed. A person's folder above ("Example, Jane", or a name the
+// authority lists know) is no title, and the caller then has none.
+func (j *titleJudge) climbPoisonedFolder(path string) (string, bool) {
+	p := filepath.ToSlash(strings.TrimSpace(path))
+	dir := p
+	if metadata.IsFileExt(filepath.Ext(p)) {
+		dir = filepath.Dir(p)
+	}
+	if !authorname.IsPlaceholderTitle(filepath.Base(dir)) {
+		return "", false
+	}
+	t, ok := metadata.WorkFolderTitle(filepath.Dir(dir))
+	t = strings.TrimSpace(strings.TrimLeft(t, "-–— "))
+	if !ok || t == "" || authorname.IsPlaceholderTitle(t) || authorname.IsPlaceholderAuthor(t) {
+		return "", false
+	}
+	if lastFirstRe.MatchString(t) || (j.files != nil && j.knownPerson(t)) {
+		return "", false
+	}
+	return t, true
 }
 
 // ownTitle returns the book's own title to search by and true, or false when
@@ -559,6 +593,9 @@ func (j *titleJudge) folderTitle(bookPath string) (title string, refused bool) {
 	paths = append(paths, bookPath)
 	for _, p := range paths {
 		t, ok := metadata.WorkFolderTitle(p)
+		if ok && authorname.IsPlaceholderTitle(t) {
+			t, ok = j.climbPoisonedFolder(p)
+		}
 		if !ok {
 			continue
 		}

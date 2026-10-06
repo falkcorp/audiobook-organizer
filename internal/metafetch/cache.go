@@ -1,7 +1,7 @@
 // file: internal/metafetch/cache.go
-// version: 1.25.0
+// version: 1.26.0
 // guid: a4f33a2e-3b4d-4306-bdce-476758e39120
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 //
 // Cache-layer on top of metafetch.Service. The persisted record type
 // lives in internal/database (MetadataCandidateCache) — re-exported
@@ -348,7 +348,15 @@ func (mfs *Service) CachedQueryMatchesIdentity(entry *MetadataCandidateCache, bo
 func (mfs *Service) cachedQueryMatches(entry *MetadataCandidateCache, book *database.Book, liveAuthors, forms []string, query string) bool {
 	noAuthor := hashSearchInputs(book.ID, query, "", "", "")
 	for _, author := range forms {
+		// The batch fetch sends and hashes SearchAuthorHint(author), which
+		// cleans a credit ("zzJane Example" -> "Jane Example"); a row written
+		// before that cleaning hashed the raw form. Both are the book's
+		// current author, so both match.
 		if entry.SourceHash == hashSearchInputs(book.ID, query, author, "", "") {
+			return true
+		}
+		if hint := SearchAuthorHint(author); hint != "" && hint != author &&
+			entry.SourceHash == hashSearchInputs(book.ID, query, hint, "", "") {
 			return true
 		}
 		if author != "" && SearchAuthorHint(author) == "" && entry.SourceHash == noAuthor {

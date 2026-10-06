@@ -1,7 +1,7 @@
 // file: internal/authorjunk/authorjunk.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 66089e88-ec3d-459f-8aa3-dd39a204a1e1
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 // Package authorjunk answers "is this AUTHOR ROW a person, or something the
 // importer filed in the author field that is not a person?" -- a series name
@@ -483,6 +483,8 @@ func IsGenreTagline(s string) bool {
 var taglineGenreEnds = map[string]bool{
 	"litrpg": true, "gamelit": true, "fantasy": true, "xianxia": true, "wuxia": true, "cultivation": true,
 	"thriller": true, "mystery": true, "romance": true, "horror": true, "adventure": true, "novel": true,
+	// "A LitRPG Apocalypse": the subgenre named by its setting.
+	"apocalypse": true,
 }
 
 // oneCoinedWordTagline is IsGenreTagline's one-coined-word reading: f is

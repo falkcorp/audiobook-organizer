@@ -1,7 +1,7 @@
 // file: internal/metadata/chapter_title.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: c962e504-746a-454a-996f-1020803a8cab
-// last-edited: 2026-10-03
+// last-edited: 2026-10-06
 
 package metadata
 
@@ -65,7 +65,8 @@ func IsChapterOnlyTitle(title string) bool {
 // placeholders ("Unknown Title", "read by narrator";
 // authorname.IsPlaceholderTitle), a bare chapter position ("Chapter 3", "03";
 // IsChapterOnlyTitle), a chapter fragment of a shattered book ("06 Chapter
-// 6", "Elantris_copy179"; IsLikelyChapterFragment), or a labelled position
+// 6", "Elantris_copy179"; IsLikelyChapterFragment), a bare file-copy name
+// ("copy1"; bareCopyTitleRe), or a labelled position
 // in digits ("Book 1",
 // "Vol. 2", "Episode 3"). A catalog answers any of these with whatever it
 // ranks first.
@@ -88,7 +89,7 @@ func IsChapterOnlyTitle(title string) bool {
 // search ladder's rule that such a title plays no part in the search), so a
 // title one path refuses to search cannot be searched verbatim by another.
 func IsUnsearchableTitle(title string) bool {
-	return authorname.IsPlaceholderTitle(title) || IsChapterOnlyTitle(title) ||
+	return authorname.IsPlaceholderTitle(title) || IsChapterOnlyTitle(title) || bareCopyTitleRe.MatchString(strings.TrimSpace(title)) ||
 		IsLikelyChapterFragment(title) || sectionDigitTitleRe.MatchString(normHeading(title))
 }
 
@@ -119,6 +120,11 @@ func NeedsFolderEvidence(title string) bool {
 	_, had := StripRipJunk(title)
 	return had
 }
+
+// bareCopyTitleRe is a file-copy tool's name with no title left in front of
+// it ("copy1", "copy2"; the 2026-10-05 no-match census): a catalog answers it
+// with whatever it ranks first.
+var bareCopyTitleRe = regexp.MustCompile(`(?i)^_?copy\s*\d+$`)
 
 // sectionLabels are the labels a section position is written after.
 const sectionLabels = `(?:chapter|chap|ch|part|pt|book|bk|volume|vol|episode|ep|section|sect|act|disc|disk|cd|track)`
