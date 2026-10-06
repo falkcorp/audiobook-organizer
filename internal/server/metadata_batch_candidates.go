@@ -1,7 +1,7 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 4.21.1
+// version: 4.22.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
-// last-edited: 2026-10-01
+// last-edited: 2026-10-06
 //
 // HTTP handlers for the metadata candidate batch fetch / apply pipeline.
 // Pure service types and logic live in internal/metabatch.
@@ -384,15 +384,46 @@ func (s *Server) fetchCandidateForBook(
 		}
 	}
 
-	entry, err := mfs.FetchAndCacheLimited(ctx, limiter, bookID, query.Title, authorForHash, "", "", metafetch.SearchOptions{OnlySources: askOnly, BypassFetchCache: force})
-	if err != nil {
-		return withQuery(CandidateResult{
-			Book:   bookInfo,
-			Status: "error",
-			Error:  fmt.Sprintf("search failed: %v", err),
-		})
+	// PROVIDER FALLBACK (owner decision 2026-10-06, candidate_fallback.go).
+	// Open Library and Google Books are not asked alongside the rest of the
+	// chain: they are asked, in that order, only when the chain (Audible and
+	// the other enabled sources) found nothing -- Google under a persisted
+	// daily budget. With neither enabled, plan is empty and this is the
+	// single search it always was.
+	plan := candidateFallbackPlan(mfs.ActiveSourceNamesByID())
+	ask := askOnly
+	if len(ask) == 0 {
+		ask = mfs.ActiveSourceNames()
 	}
-	return withQuery(candidateResultFromEntry(store, bookInfo, bookID, query.Title, entry))
+	primary, pending := splitFallback(ask, plan)
+
+	var entry *metafetch.MetadataCandidateCache
+	if len(plan) == 0 || len(primary) > 0 {
+		onlySources := askOnly
+		if len(plan) > 0 {
+			onlySources = primary
+		}
+		entry, err = mfs.FetchAndCacheLimited(ctx, limiter, bookID, query.Title, authorForHash, "", "", metafetch.SearchOptions{OnlySources: onlySources, BypassFetchCache: force})
+		if err != nil {
+			// A primary chain that failed is not a "no match": the fallback
+			// is not asked, and the next run asks the chain again.
+			return withQuery(CandidateResult{
+				Book:   bookInfo,
+				Status: "error",
+				Error:  fmt.Sprintf("search failed: %v", err),
+			})
+		}
+		// Any candidate -- including ones an empty search carried forward for
+		// the same inputs -- means the chain has an answer for the owner to
+		// review, so no fallback quota is spent.
+		if len(entry.Candidates) > 0 || len(pending) == 0 {
+			return withQuery(candidateResultFromEntry(store, bookInfo, bookID, query.Title, entry))
+		}
+	}
+	return s.runCandidateFallback(ctx, mfs, candidateFallbackInput{
+		store: store, limiter: limiter, book: book, bookInfo: bookInfo, query: query.Title, author: authorForHash,
+		force: force, pending: pending, entry: entry, withQuery: withQuery,
+	})
 }
 
 // candidateResultFromEntry turns a candidate-cache entry into the op's result

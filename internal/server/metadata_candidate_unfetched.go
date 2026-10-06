@@ -1,11 +1,12 @@
 // file: internal/server/metadata_candidate_unfetched.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6bf34beb-7e2f-40a9-b7a7-c5755a52c7fb
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 //
 // Selects the books the scheduled candidate fetch asks the providers about:
 // books never fetched, books whose candidates were invalidated, and books
-// whose empty answer was recorded for questions a search no longer asks.
+// whose empty answer was recorded for questions a search no longer asks, and
+// books a fallback provider still owes an answer (candidate_fallback.go).
 
 package server
 
@@ -13,15 +14,19 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/falkcorp/audiobook-organizer/internal/applygate"
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
+	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 
@@ -33,6 +38,9 @@ type unfetchedSelectStore interface {
 	ListMetadataCacheKeys() ([]database.MetadataCacheSummary, error)
 	GetMetadataCache(bookID string) (*database.MetadataCandidateCache, error)
 	metabatch.SearchQueryReader
+	// The fallback gate's owner-manual-only check (fallbackGateReason).
+	applygate.ManualOnlySeriesReader
+	applygate.ManualOnlyTagReader
 }
 
 // unfetchedPageSize is how many books one page of the selection's book walk
@@ -49,6 +57,14 @@ type unfetchedSelection struct {
 	// StaleEmpty: books whose 0-candidate row answered other questions than
 	// a search would ask now (metafetch.SearchFingerprintCurrent).
 	StaleEmpty int
+	// FallbackPending: books whose 0-candidate row is current but a
+	// fallback provider (Open Library, Google Books) has not answered it:
+	// the chain found nothing and the fallback was deferred or never ran.
+	FallbackPending int
+	// FallbackCapped: Google-only pending books left out because today's
+	// Google Books fallback budget cannot cover them; a later quota day
+	// selects them.
+	FallbackCapped int
 	// Unsearchable: candidates the fetch would only skip (no usable query).
 	Unsearchable int
 	// Scanned: live books read.
@@ -75,6 +91,16 @@ type unfetchedSelection struct {
 // questions ages out on its own (database.MetadataKnownEmptyTTL), and
 // counting it here would turn every tick into a library-wide refetch.
 //
+// A third kind qualifies too: a current 0-candidate row that an enabled
+// fallback provider (metafetch.CandidateFallbackProviderIDs) has not answered
+// within MetadataKnownEmptyTTL -- the chain found nothing and the fallback was
+// deferred (Google's daily budget spent, a throttle hold) or never ran (the
+// row predates the fallback). A book only Google Books still owes is selected
+// only while googleRemaining (today's Google fallback budget) covers it, in id
+// order, so a spent day does not select thousands of books just to defer
+// them; the rest come back on a later quota day. A book the fallback gates
+// refuse (fallbackGateReason: owner-manual-only) is not selected for it.
+//
 // A book whose search query is not usable (metabatch.ResolveCandidateSearchQuery:
 // a part row, no usable title) is left out too: the fetch would only skip it,
 // and it would come back every tick.
@@ -83,8 +109,12 @@ type unfetchedSelection struct {
 // bounded pool (runtime.NumCPU workers, errgroup.SetLimit). Each worker
 // writes only its own slot, so the result needs no lock beyond the counts.
 func unfetchedCandidateBookIDs(ctx context.Context, store unfetchedSelectStore, mfs *metafetch.Service,
-	memo *metabatch.FolderMemo, busy map[string]bool) (unfetchedSelection, error) {
+	memo *metabatch.FolderMemo, busy map[string]bool, googleRemaining int) (unfetchedSelection, error) {
 	var sel unfetchedSelection
+	plan := candidateFallbackPlan(mfs.ActiveSourceNamesByID())
+	if !googleBooksFallbackOn() {
+		plan = slices.DeleteFunc(plan, func(fb fallbackProvider) bool { return fb.id == metadata.SourceIDGoogleBooks })
+	}
 	summaries, err := store.ListMetadataCacheKeys()
 	if err != nil {
 		return sel, fmt.Errorf("list metadata cache rows: %w", err)
@@ -135,6 +165,10 @@ func unfetchedCandidateBookIDs(ctx context.Context, store unfetchedSelectStore, 
 
 	keep := make([]bool, len(picks))
 	stale := make([]bool, len(picks))
+	// fallback marks a book selected because a fallback provider owes it an
+	// answer; googleOnly, one only Google Books owes (capped below).
+	fallback := make([]bool, len(picks))
+	googleOnly := make([]bool, len(picks))
 	var mu sync.Mutex
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(runtime.NumCPU())
@@ -172,26 +206,64 @@ func unfetchedCandidateBookIDs(ctx context.Context, store unfetchedSelectStore, 
 			}
 			if !mfs.SearchFingerprintCurrent(entry.SearchFingerprint, b, q.Title, liveAuthorHint(store, b)) {
 				keep[i], stale[i] = true, true
+				return nil
 			}
+			owed := fallbackOwed(entry, plan)
+			if len(owed) == 0 || fallbackGateReason(store, b, q.Title) != "" {
+				return nil
+			}
+			keep[i], fallback[i] = true, true
+			googleOnly[i] = len(owed) == 1 && owed[0].id == metadata.SourceIDGoogleBooks
 			return nil
 		})
 	}
 	if err := g.Wait(); err != nil {
 		return sel, err
 	}
-	for i, p := range picks {
+	// Google-only books in id order, so the budget cap is deterministic.
+	order := make([]int, len(picks))
+	for i := range order {
+		order[i] = i
+	}
+	sort.Slice(order, func(a, b int) bool { return picks[order[a]].book.ID < picks[order[b]].book.ID })
+	for _, i := range order {
 		if !keep[i] {
 			continue
 		}
-		sel.IDs = append(sel.IDs, p.book.ID)
-		if stale[i] {
+		switch {
+		case stale[i]:
 			sel.StaleEmpty++
-		} else {
+		case fallback[i]:
+			if googleOnly[i] {
+				if googleRemaining <= 0 {
+					sel.FallbackCapped++
+					continue
+				}
+				googleRemaining--
+			}
+			sel.FallbackPending++
+		default:
 			sel.NoRow++
 		}
+		sel.IDs = append(sel.IDs, picks[i].book.ID)
 	}
 	sort.Strings(sel.IDs)
 	return sel, nil
+}
+
+// fallbackOwed returns the providers of plan that have not answered entry's
+// search identity within MetadataKnownEmptyTTL (its EmptyAnswers), in
+// fallback order.
+func fallbackOwed(entry *database.MetadataCandidateCache, plan []fallbackProvider) []fallbackProvider {
+	var owed []fallbackProvider
+	now := time.Now()
+	for _, fb := range plan {
+		at, ok := entry.EmptyAnswers[fb.name]
+		if !ok || now.Sub(at) >= database.MetadataKnownEmptyTTL {
+			owed = append(owed, fb)
+		}
+	}
+	return owed
 }
 
 // liveAuthorHint is the author hint fetchCandidateForBook searches and hashes

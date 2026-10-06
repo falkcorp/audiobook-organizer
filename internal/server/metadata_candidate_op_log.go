@@ -1,7 +1,7 @@
 // file: internal/server/metadata_candidate_op_log.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 17ed77c1-1759-4abb-947e-4de2acc4000c
-// last-edited: 2026-09-28
+// last-edited: 2026-10-06
 //
 // Per-book outcome lines and running outcome counts for the
 // metadata.candidate-fetch op log.
@@ -40,6 +40,10 @@ const candidateFetchProgressEvery = 25
 // attempt. Every method is safe for concurrent use by the worker pool.
 type candidateFetchTally struct {
 	matched, noMatch, skipped, errored atomic.Int64
+	// deferred: books whose fallback lookup was put off (the Google Books
+	// daily budget spent, or the provider held or failing): left for a
+	// later run, not a no-match (candidate_fallback.go).
+	deferred atomic.Int64
 	// fromCache and knownEmpty count books answered from the candidate cache
 	// without a provider call (see fetchCandidateForBook); they overlap the
 	// outcome counts above rather than adding to them.
@@ -58,6 +62,8 @@ func (t *candidateFetchTally) record(r CandidateResult) {
 		t.noMatch.Add(1)
 	case "skipped":
 		t.skipped.Add(1)
+	case candidateStatusDeferred:
+		t.deferred.Add(1)
 	default:
 		t.errored.Add(1)
 	}
@@ -72,8 +78,8 @@ func (t *candidateFetchTally) record(r CandidateResult) {
 // counts renders the outcome counts, e.g. "matched 820, no match 55, skipped
 // 2, errors 0, from cache 0, known empty 3".
 func (t *candidateFetchTally) counts() string {
-	return fmt.Sprintf("matched %d, no match %d, skipped %d, errors %d, from cache %d, known empty %d",
-		t.matched.Load(), t.noMatch.Load(), t.skipped.Load(), t.errored.Load(),
+	return fmt.Sprintf("matched %d, no match %d, skipped %d, deferred %d, errors %d, from cache %d, known empty %d",
+		t.matched.Load(), t.noMatch.Load(), t.skipped.Load(), t.deferred.Load(), t.errored.Load(),
 		t.fromCache.Load(), t.knownEmpty.Load())
 }
 
@@ -140,6 +146,10 @@ func candidateOutcomeLine(r CandidateResult) (slog.Level, string, []slog.Attr) {
 	if r.SearchQuery != "" && r.SearchQuerySource != metabatch.SearchQuerySourceTitle {
 		query = fmt.Sprintf(" [searched %s by %s]", r.SearchQuerySource, opLogQuoted(r.SearchQuery))
 	}
+	if fb := fallbackSummary(r.Fallback); fb != "" {
+		attrs = append(attrs, slog.String("fallback", fb))
+		query += " [fallback " + fb + "]"
+	}
 	cache := ""
 	switch r.Cached {
 	case candidateCachedCandidates:
@@ -176,9 +186,21 @@ func candidateOutcomeLine(r CandidateResult) (slog.Level, string, []slog.Attr) {
 			book, src, opLogQuoted(searched), searchedAuthorPhrase(r), logger.SanitizeLogValue(reason), cache), attrs
 	case "skipped":
 		return slog.LevelInfo, fmt.Sprintf("skipped: %s — %s", book, logger.SanitizeLogValue(reason)), attrs
+	case candidateStatusDeferred:
+		return slog.LevelInfo, fmt.Sprintf("deferred: %s — %s", book, logger.SanitizeLogValue(strings.TrimPrefix(r.Error, "deferred: "))), attrs
 	default:
 		return slog.LevelWarn, fmt.Sprintf("error: %s — %s%s", book, logger.SanitizeLogValue(r.Error), query), attrs
 	}
+}
+
+// fallbackSummary renders a book's fallback turns for a log line, e.g.
+// "openlibrary=no_match google-books=deferred" ("" when there were none).
+func fallbackSummary(steps []metabatch.FallbackStep) string {
+	parts := make([]string, 0, len(steps))
+	for _, st := range steps {
+		parts = append(parts, st.Provider+"="+st.Outcome)
+	}
+	return strings.Join(parts, " ")
 }
 
 // searchedAuthorPhrase names the author a no-match search actually asked

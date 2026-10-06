@@ -1,5 +1,5 @@
 // file: internal/server/metadata_candidate_op.go
-// version: 3.12.0
+// version: 3.13.0
 // guid: 3f7e2c91-b4a0-4d8e-9c5f-1a6b7d8e0f23
 // last-edited: 2026-10-06
 //
@@ -382,12 +382,14 @@ func (s *Server) selectUnfetchedBooks(ctx context.Context, reporter opsregistry.
 	if err != nil {
 		return nil, fmt.Errorf("metadata-candidate-fetch: check running fetches: %w", err)
 	}
-	sel, err := unfetchedCandidateBookIDs(ctx, store, s.metadataFetchService, s.newFolderMemo(store), busy)
+	sel, err := unfetchedCandidateBookIDs(ctx, store, s.metadataFetchService, s.newFolderMemo(store), busy, s.googleFallbackBudget().Remaining())
 	if err != nil {
 		return nil, fmt.Errorf("metadata-candidate-fetch: select unfetched books: %w", err)
 	}
-	msg := fmt.Sprintf("selected %d books to fetch: %d never fetched or invalidated, %d with an empty answer to questions no longer asked "+
-		"(%d live books read, %d left out with no usable search title)", len(sel.IDs), sel.NoRow, sel.StaleEmpty, sel.Scanned, sel.Unsearchable)
+	msg := fmt.Sprintf("selected %d books to fetch: %d never fetched or invalidated, %d with an empty answer to questions no longer asked, "+
+		"%d owed a fallback provider's answer (%d more left for a later Google Books quota day) "+
+		"(%d live books read, %d left out with no usable search title)",
+		len(sel.IDs), sel.NoRow, sel.StaleEmpty, sel.FallbackPending, sel.FallbackCapped, sel.Scanned, sel.Unsearchable)
 	_ = reporter.Log(slog.LevelInfo, msg)
 	candidateFetchLog.Info("%s", msg)
 	return sel.IDs, nil

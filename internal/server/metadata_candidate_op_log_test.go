@@ -1,7 +1,7 @@
 // file: internal/server/metadata_candidate_op_log_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 42f7956b-7f83-42cb-adf4-96b00b38786d
-// last-edited: 2026-09-28
+// last-edited: 2026-10-06
 
 package server
 
@@ -235,7 +235,7 @@ func TestCandidateFetch_LogsEveryOutcomeAndCounts(t *testing.T) {
 		t.Errorf("no-match line lacks the query: %s", got[0].msg)
 	}
 
-	wantFinal := "completed 6/6 books — matched 3, no match 1, skipped 1, errors 1, from cache 0, known empty 0"
+	wantFinal := "completed 6/6 books — matched 3, no match 1, skipped 1, deferred 0, errors 1, from cache 0, known empty 0"
 	if got := rec.lastMessage(); got != wantFinal {
 		t.Errorf("final progress = %q, want %q", got, wantFinal)
 	}
@@ -380,7 +380,7 @@ func TestCandidateFetchTally_ProgressLineCadence(t *testing.T) {
 	if len(distinct) != 4 {
 		t.Errorf("progress message changed %d times over %d books, want 4: %v", len(distinct), total, distinct)
 	}
-	want := "fetched 53/53 — matched 37, no match 7, skipped 4, errors 5, from cache 37, known empty 7"
+	want := "fetched 53/53 — matched 37, no match 7, skipped 4, deferred 0, errors 5, from cache 37, known empty 7"
 	if last != want {
 		t.Errorf("last progress line = %q, want %q", last, want)
 	}
