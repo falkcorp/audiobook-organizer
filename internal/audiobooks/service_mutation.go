@@ -1436,7 +1436,8 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 		// block_hash is honoured as before, once the book is really gone.
 		if opts.BlockHash && book.FileHash != nil && *book.FileHash != "" {
 			if berr := svc.store.AddBlockedHash(*book.FileHash, "User deleted - prevent reimport"); berr != nil {
-				slog.Warn("failed to block hash after purge", "err", berr)
+				singleLog.Warn("purge %s: hash not blocked after the purge: %s",
+					logger.SanitizeLogValue(book.ID), logger.SanitizeLogValue(berr.Error()))
 			} else {
 				res["blocked"] = true
 			}
