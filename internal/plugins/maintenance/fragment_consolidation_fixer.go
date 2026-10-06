@@ -217,6 +217,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unicode"
@@ -233,6 +234,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
+	"golang.org/x/sync/errgroup"
 )
 
 const fragFixerID = "fragment-consolidation"
@@ -3051,11 +3053,16 @@ func (f *fragmentFixer) splitManualCopies(lib *fragLibrary, parentID string, ps 
 }
 
 // fragProbe is a lazily made merge.UserStateProbe (one ListUsers per plan).
+// init is once-only, so has is safe from several goroutines.
 type fragProbe struct {
 	make  func() (*merge.UserStateProbe, error)
+	once  sync.Once
 	probe *merge.UserStateProbe
 	err   error
-	done  bool
+}
+
+func (fp *fragProbe) init() {
+	fp.once.Do(func() { fp.probe, fp.err = fp.make() })
 }
 
 func (f *fragmentFixer) lazyUserStateProbe() *fragProbe {
@@ -3072,10 +3079,7 @@ func (f *fragmentFixer) lazyUserStateProbe() *fragProbe {
 // (merge.BookHasCarryableUserState: positions, a book state, owed
 // bookmarks).
 func (fp *fragProbe) has(id string) (bool, error) {
-	if !fp.done {
-		fp.done = true
-		fp.probe, fp.err = fp.make()
-	}
+	fp.init()
 	if fp.err != nil {
 		return false, fp.err
 	}
@@ -3115,34 +3119,51 @@ func (lib *fragLibrary) fragmentOnlyParent(rowKind, parentID string) (string, bo
 // bookmarks (owner rule 2026-10-06: the parent is never written). Each is
 // held on a row of its own, so its siblings still retire.
 func (f *fragmentFixer) splitFollowingCopies(lib *fragLibrary, parentID, itWhy string, ps []fragPair, probe *fragProbe) ([]fragPair, []repairs.Row) {
+	// One user-state read per fragment, on a bounded pool: a parent of a
+	// few hundred chapter files has as many copies (CLAUDE.md, concurrency).
+	// Each worker writes only its own index; the probe is made first.
+	whats := make([]string, len(ps))
+	probe.init()
+	var g errgroup.Group
+	g.SetLimit(runtime.NumCPU())
+	for i := range ps {
+		g.Go(func() error {
+			whats[i] = carriesOnto(ps[i].Frag, probe)
+			return nil
+		})
+	}
+	_ = g.Wait() // every worker returns nil; a read error is its "what"
 	var keep []fragPair
 	var held []repairs.Row
-	for _, p := range ps {
-		what := ""
-		for _, e := range p.Frag.ExtIDs {
-			if !e.Tombstoned {
-				what = "its external id " + e.Source + "/" + e.ExternalID
-				break
-			}
-		}
-		if what == "" {
-			switch has, err := probe.has(p.Frag.Book.ID); {
-			case err != nil:
-				what = "listening state that cannot be ruled out (" + err.Error() + ")"
-			case has:
-				what = "its listening state, positions or bookmarks"
-			}
-		}
-		if what == "" {
+	for i, p := range ps {
+		if whats[i] == "" {
 			keep = append(keep, p)
 			continue
 		}
 		held = append(held, f.holdRow(lib, p.Frag, fragClassHeld, fragClassHeld, repairs.SkipITunes,
 			fmt.Sprintf("copies parent %s row %s; parent is iTunes-linked (%s), so only the fragment may be written, but %s would have to move onto it",
-				parentID, p.Parent.ID, itWhy, what),
+				parentID, p.Parent.ID, itWhy, whats[i]),
 			[]fragMatch{{Row: p.Parent, Evidence: p.Evidence}}))
 	}
 	return keep, held
+}
+
+// carriesOnto is what retiring fragment c would carry onto its survivor
+// ("" nothing): a live external id, or listening state, positions or
+// bookmarks (state that cannot be read counts: fail closed).
+func carriesOnto(c *fragCandidate, probe *fragProbe) string {
+	for _, e := range c.ExtIDs {
+		if !e.Tombstoned {
+			return "its external id " + e.Source + "/" + e.ExternalID
+		}
+	}
+	switch has, err := probe.has(c.Book.ID); {
+	case err != nil:
+		return "listening state that cannot be ruled out (" + err.Error() + ")"
+	case has:
+		return "its listening state, positions or bookmarks"
+	}
+	return ""
 }
 
 // pairFor decides the kind of one fragment's claim on one parent row: ghost
