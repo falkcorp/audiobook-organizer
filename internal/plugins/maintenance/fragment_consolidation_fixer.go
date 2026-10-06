@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.35.1
+// version: 1.36.0
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
 // last-edited: 2026-10-06
 
@@ -792,6 +792,15 @@ type fragLibrary struct {
 	// book that is not one agrees (S3, 2026-10-05: 13 such books were second
 	// copies of an existing book).
 	assembled map[string]bool
+	// assembledFn, when set, answers isAssembled for a book assembled does
+	// not name (an apply's library re-check reads the one book's journal
+	// rather than scanning it all); each answer is cached in assembled.
+	assembledFn func(id string) bool
+	// candFn, when set, answers whether a live book outside the
+	// classification's candidates is itself a fragment candidate (an apply's
+	// library re-check holds only the row's fragments as candidates; the
+	// plan held every one of the library's).
+	candFn func(id string) bool
 	// flagFollows maps each dedup loser whose state a merge sent to its
 	// group's flag holder (not the survivor) to that merge's survivor
 	// (merge.FlagHolderFollows), read once per plan on first use by
@@ -855,8 +864,16 @@ func newFragLibrary() *fragLibrary {
 }
 
 func (f *fragmentFixer) loadLibrary(store OpsStore) (*fragLibrary, error) {
+	return f.loadLibraryFrom(store, store.GetAllBooksCore)
+}
+
+// loadLibraryFrom is loadLibrary with the book listing list (an apply's
+// library re-check passes the listing that refuses a partly loaded cache,
+// GetAllBooksCoreComplete: a book missing from it would pass the re-check
+// unseen).
+func (f *fragmentFixer) loadLibraryFrom(store OpsStore, list func(limit, offset int) ([]database.BookCore, error)) (*fragLibrary, error) {
 	lib := newFragLibrary()
-	books, err := store.GetAllBooksCore(0, 0)
+	books, err := list(0, 0)
 	if err != nil {
 		return nil, fmt.Errorf("list books: %w", err)
 	}
@@ -916,6 +933,20 @@ func (f *fragmentFixer) loadLibrary(store OpsStore) (*fragLibrary, error) {
 		return fb, true
 	}
 	return lib, nil
+}
+
+// isAssembled reports whether book id was assembled by a no-parent apply of
+// this fixer (assembled, then assembledFn).
+func (lib *fragLibrary) isAssembled(id string) bool {
+	if v, ok := lib.assembled[id]; ok || lib.assembledFn == nil {
+		return v
+	}
+	v := lib.assembledFn(id)
+	if lib.assembled == nil {
+		lib.assembled = map[string]bool{}
+	}
+	lib.assembled[id] = v
+	return v
 }
 
 func derefFragBook(b *fragBook) (fragBook, bool) {
@@ -3068,6 +3099,23 @@ type fragGroupPlan struct {
 	// different edition sharing files, not this set's book). checkOwners
 	// allows exactly these; their rows are left alone.
 	CoOwners []string
+	// Pos is each member's and copy's chapter position by book id when the
+	// row is a folder or parent chapter set (fragFolderSet.pos: the set's
+	// own numbering, "27 1" at 27); nil for a key group, whose positions
+	// are chapterPos's. Read through memberPos.
+	Pos map[string]metadata.ChapterPos
+}
+
+// memberPos is c's chapter position in plan: the set's numbering when the
+// row is a chapter set, else chapterPos. metadata.ChapterPosition reads the
+// last number of "Some Work - 04 1" (1, for every file of that set), so a
+// set's files must never be placed by it.
+func memberPos(plan *fragGroupPlan, c *fragCandidate) (metadata.ChapterPos, bool) {
+	if plan != nil && plan.Pos != nil {
+		p, ok := plan.Pos[c.Book.ID]
+		return p, ok
+	}
+	return chapterPos(c)
 }
 
 // fragGroupCopy is a renamed copy of member Of's chapter.
@@ -3897,7 +3945,7 @@ func holdSameAudioRows(rows []repairs.Row) {
 			continue
 		}
 		add := func(c *fragCandidate) {
-			if pos, ok := chapterPos(c); ok && len(pos.Parts) > 0 {
+			if pos, ok := memberPos(plan, c); ok && len(pos.Parts) > 0 {
 				files[i] = append(files[i], placedFile{pos, c.File, c.origStem()})
 			}
 		}
@@ -4563,7 +4611,7 @@ func (f *fragmentFixer) existingBookCheck(lib *fragLibrary, live *fragLive, r *r
 		if e.uncertain {
 			s += ", the titles differ by a series position on one side only"
 		}
-		if lib.assembled[e.id] {
+		if lib.isAssembled(e.id) {
 			s += ", itself assembled by this fixer"
 		}
 		return s + ")"
@@ -4586,7 +4634,7 @@ func (f *fragmentFixer) existingBookCheck(lib *fragLibrary, live *fragLive, r *r
 		// file rows, the longest total, organized and primary, the lowest id.
 		sort.SliceStable(agree, func(i, j int) bool {
 			a, b := agree[i], agree[j]
-			if aa, ba := lib.assembled[a.id], lib.assembled[b.id]; aa != ba {
+			if aa, ba := lib.isAssembled(a.id), lib.isAssembled(b.id); aa != ba {
 				return ba
 			}
 			if a.coOwner != b.coOwner {
@@ -4604,7 +4652,7 @@ func (f *fragmentFixer) existingBookCheck(lib *fragLibrary, live *fragLive, r *r
 			}
 			return a.id < b.id
 		})
-		if lib.assembled[agree[0].id] {
+		if lib.isAssembled(agree[0].id) {
 			// Every agreeing book is itself the product of a no-parent apply
 			// of this fixer: joining into it would bury these fragments in a
 			// second copy. Revert that apply first, then plan again.
@@ -4840,7 +4888,7 @@ func joinOffsets(lib *fragLibrary, plan *fragGroupPlan, targetID string) {
 	for i := range plan.Members {
 		m := &plan.Members[i]
 		off := m.Offset * scale
-		if p, ok := chapterPos(m.Frag); ok && len(p.Parts) > 0 {
+		if p, ok := memberPos(plan, m.Frag); ok && len(p.Parts) > 0 {
 			if a := byPos[posKey(p)]; a != nil && a.n == 1 {
 				off = a.start
 			}
@@ -4898,7 +4946,7 @@ func retaggedCopiesOf(lib *fragLibrary, plan *fragGroupPlan, id string) string {
 	paired, sameSize := 0, 0
 	lo, hi := int64(-1), int64(-1)
 	for _, m := range plan.Members {
-		p, ok := chapterPos(m.Frag)
+		p, ok := memberPos(plan, m.Frag)
 		if !ok || len(p.Parts) == 0 {
 			continue
 		}
@@ -5057,6 +5105,9 @@ func (f *fragmentFixer) noParentRow(lib *fragLibrary, dir, key string, cs []*fra
 	}
 
 	plan := &fragGroupPlan{Dir: dir, Key: key}
+	if set != nil {
+		plan.Pos = set.pos
+	}
 	ids := make([]string, 0, len(cs))
 	books := make([]fragBook, 0, len(cs))
 	extra := map[string][]string{}
@@ -5571,10 +5622,34 @@ func (f *fragmentFixer) replanJoin(store OpsStore, lib *fragLibrary, hist Fragme
 		if r.RowID != planned.RowID {
 			continue
 		}
+		// A chapter set's join is decided against the whole library at plan
+		// time (its audio, an assembled target, version groups): decided
+		// again here against the library as it is now. A run already cut off
+		// (a fragment retired into the target) passed it under the merge
+		// lock at its first apply, and resumes.
+		if plan, ok := r.Detail.(*fragGroupPlan); ok && r.Applicable() && fragIsSetKey(plan.Key) && !anyRetired(lib, frags) {
+			why, err := f.setLibraryGuard(store, hist, planned, cands)
+			if err != nil {
+				return repairs.Row{}, err
+			}
+			if why != "" {
+				return changedRow(planned, why), nil
+			}
+		}
 		r.State = planned.State
 		return f.checkOwners(store, hist, planned, r)
 	}
 	return changedRow(planned, "the fragments no longer duplicate this existing book"), nil
+}
+
+// anyRetired reports whether any of ids is retired in lib.
+func anyRetired(lib *fragLibrary, ids []string) bool {
+	for _, id := range ids {
+		if b, ok := lib.books[id]; ok && b.SoftDeleted {
+			return true
+		}
+	}
+	return false
 }
 
 func (f *fragmentFixer) replanGroup(ctx context.Context, store OpsStore, lib *fragLibrary, hist FragmentRepairReader, planned repairs.Row, beat func(string) error, pre *fragJournal) (repairs.Row, error) {
@@ -5814,6 +5889,22 @@ func (f *fragmentFixer) replanGroup(ctx context.Context, store OpsStore, lib *fr
 			}
 			if sb.FilePath != st.SurvivorPath && (plan.Folder == "" || sb.FilePath != plan.Folder) {
 				return changedRow(planned, fmt.Sprintf("survivor %s path is %q, not %q as planned", survivorID, sb.FilePath, st.SurvivorPath)), nil
+			}
+			// A chapter set's plan-time holds read the whole library (a
+			// book in its folders, a version group, the same audio
+			// elsewhere): decided again here against the library as it is
+			// now, before the first write. A run already started (a member
+			// retired or moved, a flag changed) passed it under the merge
+			// lock at its first apply, and resumes.
+			fresh := len(need) == 0 && len(lib.files[survivorID]) == 1
+			if fresh && r.Applicable() && fragIsSetKey(plan.Key) {
+				why, err := f.setLibraryGuard(store, hist, planned, cands)
+				if err != nil {
+					return repairs.Row{}, err
+				}
+				if why != "" {
+					return changedRow(planned, why), nil
+				}
 			}
 		}
 		r.State = planned.State
