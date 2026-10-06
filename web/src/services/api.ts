@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.151.0
+// version: 2.152.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-05
 
@@ -80,6 +80,13 @@ export interface DeleteBookResponse {
   message: string;
   blocked?: boolean;
   soft_delete?: boolean;
+  // Purge of a trashed book: its listening progress was moved to the copy
+  // Audiobookshelf lists before it was purged.
+  progress_moved?: boolean;
+  // Hard delete of a live book: the copy its listening progress moved to.
+  progress_moved_to?: string;
+  // Purge of a trashed book: problems after the book was purged.
+  warnings?: string[];
 }
 
 const buildApiError = async (response: Response, fallbackMessage: string) => {

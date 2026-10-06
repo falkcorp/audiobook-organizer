@@ -1,11 +1,11 @@
 // file: web/src/utils/deleteBookError.test.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2d5f9315-d0df-4666-81b5-9b5423eb3f77
-// last-edited: 2026-09-19
+// last-edited: 2026-10-05
 
 import { describe, expect, it } from 'vitest';
 import { ApiError } from '../services/api';
-import { describeDeleteBookError } from './deleteBookError';
+import { describeDeleteBookError, isHasProgressRefusal } from './deleteBookError';
 
 describe('describeDeleteBookError', () => {
   it('turns the 409 owns-files refusal into a next step with the row count', () => {
@@ -30,5 +30,21 @@ describe('describeDeleteBookError', () => {
 
   it('falls back for non-API errors', () => {
     expect(describeDeleteBookError(new Error('network'), 'fallback')).toBe('fallback');
+  });
+});
+
+describe('isHasProgressRefusal', () => {
+  it('recognises the 409 HAS_PROGRESS refusal by its code', () => {
+    const err = new ApiError('purge b1: the book has listening progress ...', 409, {
+      code: 'HAS_PROGRESS',
+    });
+    expect(isHasProgressRefusal(err)).toBe(true);
+    expect(describeDeleteBookError(err, 'f')).toContain('listening progress');
+  });
+
+  it('is false for other refusals and errors', () => {
+    expect(isHasProgressRefusal(new ApiError('x', 409, { code: 'CONFLICT' }))).toBe(false);
+    expect(isHasProgressRefusal(new ApiError('x', 500, { code: 'HAS_PROGRESS' }))).toBe(false);
+    expect(isHasProgressRefusal(new Error('x'))).toBe(false);
   });
 });

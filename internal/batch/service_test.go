@@ -1,6 +1,6 @@
 // file: internal/batch/service_test.go
-// version: 1.9.0
-// last-edited: 2026-10-03
+// version: 1.10.0
+// last-edited: 2026-10-05
 // guid: b2c3d4e5-f6a7-b8c9-0d1e-2f3a4b5c6d7e
 
 package batch
@@ -438,6 +438,10 @@ func TestExecuteOperations_MixedActions(t *testing.T) {
 
 // Test 5: ExecuteOperations with hard delete
 func TestExecuteOperations_HardDelete(t *testing.T) {
+	// A store that cannot check or carry users' listening state refuses the
+	// hard delete (fail closed): the in-memory mock has no user-state
+	// keyspace. The real-store cases are in
+	// TestExecuteOperations_HardDeleteCarriesOrRefuses.
 	store := NewMockBookStore()
 	store.books["book1"] = testBook("book1", "Book 1")
 	bs := NewBatchService(store)
@@ -454,17 +458,11 @@ func TestExecuteOperations_HardDelete(t *testing.T) {
 
 	resp := bs.ExecuteOperations(req)
 
-	if resp.Success != 1 {
-		t.Errorf("expected Success=1, got %d", resp.Success)
+	if resp.Success != 0 || resp.Failed != 1 {
+		t.Errorf("expected the hard delete refused (Success=0 Failed=1), got Success=%d Failed=%d", resp.Success, resp.Failed)
 	}
-
-	// Verify hard delete removed the book
-	book1, _ := store.GetBookByID("book1")
-	if book1 != nil {
-		t.Errorf("expected book1 to be deleted, but it still exists")
-	}
-	if store.delCnt != 1 {
-		t.Errorf("expected DeleteBook to be called once, was called %d times", store.delCnt)
+	if store.delCnt != 0 {
+		t.Errorf("expected DeleteBook not to be called, was called %d times", store.delCnt)
 	}
 }
 

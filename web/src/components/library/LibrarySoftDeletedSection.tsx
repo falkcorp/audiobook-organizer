@@ -1,5 +1,5 @@
 // file: web/src/components/library/LibrarySoftDeletedSection.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 26804E8D-51BA-462C-9BBE-45ED69E17B9F
 // last-edited: 2026-10-05
 
@@ -42,6 +42,44 @@ export interface LibrarySoftDeletedSectionProps {
   discardingBookId?: string | null;
   // Called once the user confirmed the dialog for a book with progress.
   onDiscardProgressOne?: (book: Audiobook) => void;
+  // A book whose "Purge now" was just refused because of its listening
+  // progress: the discard confirmation opens for it, so the owner can choose
+  // to drop the progress on purpose.
+  discardPrompt?: Audiobook | null;
+  onDiscardPromptClose?: () => void;
+}
+
+// The progress description a row and the confirm dialog show: the viewer's
+// own progress, plus how many other users have some (their names are shown
+// only to a user who may manage users).
+export function progressText(book: Audiobook): string {
+  const others = book.progress_other_users ?? 0;
+  const othersText = others > 0 ? `${others} other user${others === 1 ? '' : 's'}` : '';
+  if (book.progress_summary && othersText) return `${book.progress_summary}; and ${othersText}`;
+  return book.progress_summary || othersText;
+}
+
+// The caption under a trashed book with (or with unreadable) progress. It
+// says what the purge will actually do with this book: move the progress to
+// the copy Audiobookshelf lists, or keep the book because there is none.
+export function progressCaption(book: Audiobook): string | null {
+  if (book.progress_unknown) {
+    return 'Listening progress on this book could not be read, so the purge keeps it until it can be checked.';
+  }
+  if (!book.has_progress) return null;
+  const what = progressText(book);
+  const lead = `Has listening progress${what ? `: ${what}` : ''}.`;
+  if (book.listed_copy_id) {
+    return book.purge_eligible
+      ? `${lead} A copy is in the Audiobookshelf library: the nightly purge moves the progress there and then purges this book. If it is still here after a nightly purge, moving the progress failed (see the purge log).`
+      : `${lead} A copy is in the Audiobookshelf library: when the nightly purge takes this book, it moves the progress there first.`;
+  }
+  if (book.listed_copy_unknown) {
+    return `${lead} Whether another copy is in the Audiobookshelf library could not be checked, so the purge keeps this book for now.`;
+  }
+  return book.purge_eligible
+    ? `Kept in the trash because of listening progress${what ? `: ${what}` : ''}. There is no other copy of this book in the Audiobookshelf library to move it to.`
+    : `${lead} There is no other copy of this book in the Audiobookshelf library to move it to, so the nightly purge will keep it.`;
 }
 
 export function LibrarySoftDeletedSection({
@@ -58,10 +96,17 @@ export function LibrarySoftDeletedSection({
   onPurgeOne,
   discardingBookId = null,
   onDiscardProgressOne,
+  discardPrompt = null,
+  onDiscardPromptClose,
 }: LibrarySoftDeletedSectionProps) {
   // The book the confirm dialog is open for. The discard is irreversible, so
   // the button only opens this; the handler runs on Confirm.
-  const [confirmDiscard, setConfirmDiscard] = useState<Audiobook | null>(null);
+  const [confirmDiscardState, setConfirmDiscard] = useState<Audiobook | null>(null);
+  const confirmDiscard = confirmDiscardState ?? (onDiscardProgressOne ? discardPrompt : null);
+  const closeDiscard = () => {
+    setConfirmDiscard(null);
+    onDiscardPromptClose?.();
+  };
 
   return (
     <Paper sx={{ p: 2, mt: 3 }}>
@@ -179,8 +224,7 @@ export function LibrarySoftDeletedSection({
                           {book.has_progress && (
                             <Tooltip
                               title={
-                                book.progress_summary ||
-                                'A user has listening progress on this book'
+                                progressText(book) || 'A user has listening progress on this book'
                               }
                             >
                               <Chip
@@ -188,6 +232,16 @@ export function LibrarySoftDeletedSection({
                                 color="info"
                                 label="has progress"
                                 data-testid="soft-deleted-has-progress"
+                              />
+                            </Tooltip>
+                          )}
+                          {book.progress_unknown && (
+                            <Tooltip title="Listening progress on this book could not be read">
+                              <Chip
+                                size="small"
+                                color="warning"
+                                label="progress unknown"
+                                data-testid="soft-deleted-progress-unknown"
                               />
                             </Tooltip>
                           )}
@@ -213,16 +267,15 @@ export function LibrarySoftDeletedSection({
                               Soft deleted at {deletedAt.toLocaleString()}
                             </Typography>
                           )}
-                          {book.has_progress && (
+                          {progressCaption(book) && (
                             <Typography
                               variant="caption"
                               sx={{
                                 color: 'text.secondary',
                               }}
+                              data-testid="soft-deleted-progress-caption"
                             >
-                              Kept in the trash because of listening progress
-                              {book.progress_summary ? `: ${book.progress_summary}` : ''}. There is
-                              no other copy of this book to move it to.
+                              {progressCaption(book)}
                             </Typography>
                           )}
                           {book.file_path && (
@@ -252,7 +305,7 @@ export function LibrarySoftDeletedSection({
                       >
                         {restoringBookId === book.id ? 'Restoring...' : 'Restore'}
                       </Button>
-                      {book.has_progress && onDiscardProgressOne && (
+                      {book.has_progress && !book.listed_copy_id && onDiscardProgressOne && (
                         <Button
                           size="small"
                           color="error"
@@ -278,7 +331,11 @@ export function LibrarySoftDeletedSection({
                         onClick={() => onPurgeOne(book)}
                         disabled={purgingBookId === book.id || purgeInProgress}
                       >
-                        {purgingBookId === book.id ? 'Purging...' : 'Purge now'}
+                        {purgingBookId === book.id
+                          ? 'Purging...'
+                          : book.has_progress && book.listed_copy_id
+                            ? 'Move progress and purge'
+                            : 'Purge now'}
                       </Button>
                     </ListItemSecondaryAction>
                   </ListItem>
@@ -290,7 +347,7 @@ export function LibrarySoftDeletedSection({
       </Collapse>
       <Dialog
         open={confirmDiscard !== null}
-        onClose={() => setConfirmDiscard(null)}
+        onClose={closeDiscard}
         aria-labelledby="discard-progress-title"
       >
         <DialogTitle id="discard-progress-title">Discard progress and purge?</DialogTitle>
@@ -301,7 +358,7 @@ export function LibrarySoftDeletedSection({
               the library, and every user&apos;s listening progress on it will be lost:
             </Typography>
             <Typography variant="body2" sx={{ mb: 1 }} data-testid="discard-progress-summary">
-              {confirmDiscard?.progress_summary || 'listening progress'}
+              {(confirmDiscard && progressText(confirmDiscard)) || 'listening progress'}
             </Typography>
             <Typography variant="body2">
               That includes positions, finished status, percent listened and bookmarks. This cannot
@@ -310,13 +367,13 @@ export function LibrarySoftDeletedSection({
           </DialogContentText>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setConfirmDiscard(null)}>Cancel</Button>
+          <Button onClick={closeDiscard}>Cancel</Button>
           <Button
             color="error"
             variant="contained"
             onClick={() => {
               const book = confirmDiscard;
-              setConfirmDiscard(null);
+              closeDiscard();
               if (book && onDiscardProgressOne) onDiscardProgressOne(book);
             }}
           >

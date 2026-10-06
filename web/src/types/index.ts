@@ -1,5 +1,5 @@
 // file: web/src/types/index.ts
-// version: 1.23.0
+// version: 1.24.0
 // guid: 0d1e2f3a-4b5c-6d7e-8f9a-0b1c2d3e4f5a
 // last-edited: 2026-10-05
 
@@ -59,9 +59,20 @@ export interface Audiobook {
   // it for when no live version exists to carry the progress to.
   has_progress?: boolean;
   // Short per-user description, e.g. "reader: finished; bob: 42%, at 1:02:03".
+  // Only the viewer's own progress unless they may manage users; the others
+  // are counted in progress_other_users.
   progress_summary?: string;
+  // How many other users' progress progress_summary leaves out.
+  progress_other_users?: number;
   // The progress could not be read: has_progress is then not an answer.
   progress_unknown?: boolean;
+  // A copy of this book that Audiobookshelf lists exists: the purge moves
+  // the progress there and then purges this book.
+  listed_copy_id?: string;
+  // Whether such a copy exists could not be checked.
+  listed_copy_unknown?: boolean;
+  // The nightly purge would take this book now (past the retention period).
+  purge_eligible?: boolean;
   // The library_state a trash path overwrote with "deleted", put back by a
   // restore. Absent on a live book.
   pre_trash_library_state?: string;

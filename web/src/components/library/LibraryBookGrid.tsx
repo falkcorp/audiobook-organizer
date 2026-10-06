@@ -1,5 +1,5 @@
 // file: web/src/components/library/LibraryBookGrid.tsx
-// version: 1.12.0
+// version: 1.13.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
 // last-edited: 2026-10-05
 
@@ -129,6 +129,8 @@ interface LibraryBookGridProps {
   handlePurgeOne: LibrarySoftDeletedSectionProps['onPurgeOne'];
   discardingBookId?: string | null;
   handleDiscardProgressOne?: LibrarySoftDeletedSectionProps['onDiscardProgressOne'];
+  discardPrompt?: LibrarySoftDeletedSectionProps['discardPrompt'];
+  onDiscardPromptClose?: LibrarySoftDeletedSectionProps['onDiscardPromptClose'];
   filterOpen: boolean;
   setFilterOpen: (open: boolean) => void;
   filters: FilterOptions;
@@ -203,6 +205,8 @@ export const LibraryBookGrid = ({
   handlePurgeOne,
   discardingBookId,
   handleDiscardProgressOne,
+  discardPrompt,
+  onDiscardPromptClose,
   filterOpen,
   setFilterOpen,
   filters,
@@ -517,6 +521,8 @@ export const LibraryBookGrid = ({
       onPurgeOne={handlePurgeOne}
       discardingBookId={discardingBookId}
       onDiscardProgressOne={handleDiscardProgressOne}
+      discardPrompt={discardPrompt}
+      onDiscardPromptClose={onDiscardPromptClose}
     />
 
     <FilterSidebar

@@ -1,7 +1,7 @@
 // file: web/src/utils/deleteBookError.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0050bdd1-b903-4562-8a05-997c48a46fbf
-// last-edited: 2026-09-19
+// last-edited: 2026-10-05
 
 import { ApiError } from '../services/api';
 
@@ -10,6 +10,19 @@ import { ApiError } from '../services/api';
 // pointing at nothing. Its message reads "... book still owns book_file rows
 // (N row(s)); ...".
 const OWNS_FILES_MARKER = 'still owns book_file rows';
+
+/**
+ * Reports whether a delete or purge was refused because users have listening
+ * progress on the book and there is no copy in the Audiobookshelf library to
+ * move it to (409, code HAS_PROGRESS). The book and its progress were left
+ * as they were; for a book in the trash the owner can choose "Discard
+ * progress and purge".
+ */
+export function isHasProgressRefusal(error: unknown): boolean {
+  if (!(error instanceof ApiError) || error.status !== 409) return false;
+  const data = error.data as { code?: unknown } | undefined;
+  return data?.code === 'HAS_PROGRESS';
+}
 
 /**
  * Returns the message to show when deleting (or purging) a book failed.
