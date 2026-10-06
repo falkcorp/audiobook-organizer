@@ -1,11 +1,15 @@
 // file: web/src/utils/deleteBookError.test.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2d5f9315-d0df-4666-81b5-9b5423eb3f77
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 import { describe, expect, it } from 'vitest';
 import { ApiError } from '../services/api';
-import { describeDeleteBookError, isHasProgressRefusal } from './deleteBookError';
+import {
+  describeDeleteBookError,
+  isHasProgressRefusal,
+  isOwnsFilesRefusal,
+} from './deleteBookError';
 
 describe('describeDeleteBookError', () => {
   it('turns the 409 owns-files refusal into a next step with the row count', () => {
@@ -46,5 +50,30 @@ describe('isHasProgressRefusal', () => {
     expect(isHasProgressRefusal(new ApiError('x', 409, { code: 'CONFLICT' }))).toBe(false);
     expect(isHasProgressRefusal(new ApiError('x', 500, { code: 'HAS_PROGRESS' }))).toBe(false);
     expect(isHasProgressRefusal(new Error('x'))).toBe(false);
+  });
+});
+
+describe('isOwnsFilesRefusal', () => {
+  it('recognises the 409 OWNS_FILES refusal by its code, whatever the message', () => {
+    const err = new ApiError(
+      'purge b1: book still owns rows: the purge never deletes a book that owns file rows',
+      409,
+      { code: 'OWNS_FILES' }
+    );
+    expect(isOwnsFilesRefusal(err)).toBe(true);
+    expect(describeDeleteBookError(err, 'f')).toContain('still owns file rows');
+  });
+
+  it('still recognises the message from a server without the code', () => {
+    const err = new ApiError('x: book still owns book_file rows (2 row(s)); y', 409, {
+      code: 'CONFLICT',
+    });
+    expect(isOwnsFilesRefusal(err)).toBe(true);
+  });
+
+  it('is false for other refusals and errors', () => {
+    expect(isOwnsFilesRefusal(new ApiError('x', 409, { code: 'HAS_PROGRESS' }))).toBe(false);
+    expect(isOwnsFilesRefusal(new ApiError('x', 500, { code: 'OWNS_FILES' }))).toBe(false);
+    expect(isOwnsFilesRefusal(new Error('book still owns book_file rows'))).toBe(false);
   });
 });

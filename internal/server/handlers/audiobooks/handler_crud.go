@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_crud.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 7f0f10bf-7554-4af5-b2d2-ce0a6af6b46e
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 // Write-side CRUD + batch endpoints for the audiobooks domain: update
 // (full-column replacement with change-history recording + file write-back),
@@ -24,6 +24,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/batch"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -181,6 +182,18 @@ func (r bookWithWarnings) MarshalJSON() ([]byte, error) {
 	return json.Marshal(obj)
 }
 
+// Stable error codes the delete and purge endpoints answer with, for the web
+// to branch on instead of the message text.
+const (
+	// CodeOwnsFiles: 409, the book still owns book_file rows
+	// (database.ErrBookOwnsFiles); nothing was deleted.
+	CodeOwnsFiles = "OWNS_FILES"
+	// CodeCarryFailed: 500, moving the listening state to the version
+	// Audiobookshelf lists did not complete; the book was kept with its
+	// state.
+	CodeCarryFailed = "CARRY_FAILED"
+)
+
 // DeleteAudiobook handles DELETE /audiobooks/:id.
 func (h *Handler) DeleteAudiobook(c *gin.Context) {
 	id := c.Param("id")
@@ -199,9 +212,11 @@ func (h *Handler) DeleteAudiobook(c *gin.Context) {
 			return
 		}
 		// A hard delete refused because the book still owns file rows is a
-		// conflict with the book's state, not a missing book.
+		// conflict with the book's state, not a missing book. The stable
+		// OWNS_FILES code lets the web tell it apart without matching the
+		// message text.
 		if errors.Is(err, database.ErrBookOwnsFiles) {
-			httputil.RespondWithConflict(c, err.Error())
+			httputil.RespondWithError(c, http.StatusConflict, err.Error(), CodeOwnsFiles)
 			return
 		}
 		// Refused because users have listening progress on it and there is
@@ -211,8 +226,15 @@ func (h *Handler) DeleteAudiobook(c *gin.Context) {
 			httputil.RespondWithError(c, http.StatusConflict, err.Error(), "HAS_PROGRESS")
 			return
 		}
-		if errors.Is(err, audiobookspkg.ErrPurgeCarryFailed) {
-			httputil.RespondWithError(c, http.StatusInternalServerError, err.Error(), "CARRY_FAILED")
+		// A carry of the listening state that did not complete (the state is
+		// back on the book, which was kept). "Purge now" reports it as
+		// ErrPurgeCarryFailed; the hard delete of a live book returns the
+		// merge errors themselves (merge.HardDeleteKeepingUserState): an
+		// incomplete carry, or a target whose listing could not be re-read.
+		// Until 2026-10-06 those two answered DELETE_FAILED.
+		if errors.Is(err, audiobookspkg.ErrPurgeCarryFailed) || errors.Is(err, merge.ErrStateCarryIncomplete) ||
+			errors.Is(err, merge.ErrCarryTargetUnreadable) {
+			httputil.RespondWithError(c, http.StatusInternalServerError, err.Error(), CodeCarryFailed)
 			return
 		}
 		if err.Error() == "audiobook not found" {

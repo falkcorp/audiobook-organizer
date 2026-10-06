@@ -1,15 +1,25 @@
 // file: web/src/utils/deleteBookError.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0050bdd1-b903-4562-8a05-997c48a46fbf
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 import { ApiError } from '../services/api';
 
 // The server refuses a permanent delete of a book that still owns file rows
-// (409, database.ErrBookOwnsFiles): deleting the book would leave those rows
-// pointing at nothing. Its message reads "... book still owns book_file rows
-// (N row(s)); ...".
+// (409, code OWNS_FILES, database.ErrBookOwnsFiles): deleting the book would
+// leave those rows pointing at nothing. Its message reads "... book still owns
+// book_file rows (N row(s)); ..." -- the row count is read from it when there.
+// The message marker is only the fallback for a server from before the code
+// (2026-10-06), which answered the generic CONFLICT.
+const OWNS_FILES_CODE = 'OWNS_FILES';
 const OWNS_FILES_MARKER = 'still owns book_file rows';
+
+/** Reports whether a delete or purge was refused because the book still owns file rows. */
+export function isOwnsFilesRefusal(error: unknown): boolean {
+  if (!(error instanceof ApiError) || error.status !== 409) return false;
+  const data = error.data as { code?: unknown } | undefined;
+  return data?.code === OWNS_FILES_CODE || error.message.includes(OWNS_FILES_MARKER);
+}
 
 /**
  * Reports whether a delete or purge was refused because users have listening
@@ -33,7 +43,7 @@ export function isHasProgressRefusal(error: unknown): boolean {
  */
 export function describeDeleteBookError(error: unknown, fallback: string): string {
   if (error instanceof ApiError) {
-    if (error.status === 409 && error.message.includes(OWNS_FILES_MARKER)) {
+    if (isOwnsFilesRefusal(error)) {
       const m = /\((\d+) row\(s\)\)/.exec(error.message);
       const count = m ? Number(m[1]) : undefined;
       const rows =
