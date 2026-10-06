@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/dupes.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7b1d4e93-2c05-48a6-b39f-0e6a2c85f174
-// last-edited: 2026-09-01
+// last-edited: 2026-10-06
 
 import type { LaneDescriptor } from './types';
 
@@ -32,6 +32,7 @@ export const dupesLane = {
     // everything"; this acts on the current filter, and a reviewer who has
     // narrowed to one author must not think it is about to touch the library.
     mergeAllFiltered: 'Merge everything matching this filter',
+    dismissAllFiltered: 'Dismiss everything matching this filter',
   },
   emptyMessage: 'No duplicate candidates. Run a scan from the Dedup menu to look for more.',
 } satisfies LaneDescriptor<'dupes'>;

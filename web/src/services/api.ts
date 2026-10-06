@@ -6444,20 +6444,14 @@ export interface BulkMergeDedupResult {
 // docs/audits/2026-09-25-interface-naming-consistency.md class 2): every
 // matching candidate's books are linked into a version group, not merged
 // into one file.
-export async function bulkLinkDedupCandidates(filter: {
-  entity_type?: string;
-  status?: string;
-  layer?: string;
-  min_similarity?: number;
-  max_similarity?: number;
-  band?: string;
-  entity_id?: string;
-  // The list endpoint's free-text search. Omitting it here would merge every
-  // candidate matching the OTHER filters -- the whole pending queue, where the
-  // reviewer was looking at a handful of search hits. Exactly the failure
-  // `band` caused before it was added on both sides.
-  q?: string;
-}): Promise<BulkMergeDedupResult> {
+// `q` (in BulkDedupCandidateFilter) is the list endpoint's free-text search.
+// Omitting it here would merge every candidate matching the OTHER filters --
+// the whole pending queue, where the reviewer was looking at a handful of
+// search hits. Exactly the failure `band` caused before it was added on both
+// sides.
+export async function bulkLinkDedupCandidates(
+  filter: BulkDedupCandidateFilter
+): Promise<BulkMergeDedupResult> {
   const response = await apiFetch(`${API_BASE}/dedup/candidates/bulk-link`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -6465,6 +6459,51 @@ export async function bulkLinkDedupCandidates(filter: {
   });
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to bulk-link dedup candidates');
+  }
+  const responseData = await response.json();
+  return responseData.data;
+}
+
+/**
+ * The filter both bulk endpoints accept. Kept as ONE type so bulk-link and
+ * bulk-reject cannot drift: the server binds both bodies with the same code
+ * (bindBulkCandidateFilter), and a field one side sends and the other drops
+ * widens that action past what the reviewer selected.
+ */
+export interface BulkDedupCandidateFilter {
+  entity_type?: string;
+  status?: string;
+  layer?: string;
+  min_similarity?: number;
+  max_similarity?: number;
+  band?: string;
+  entity_id?: string;
+  q?: string;
+}
+
+export interface BulkRejectDedupResult {
+  attempted: number;
+  rejected: number;
+  failed: number;
+  failures?: Array<{ candidate_id: number; reason: string }>;
+}
+
+/**
+ * Reject every PENDING candidate matching a filter -- the backend for
+ * "Select all N matching" + Dismiss in the review UI. The server re-evaluates
+ * the filter, refuses manual (hand-pinned) rows and rows whose status changed
+ * since, and is capped at bulk_apply_max_items like bulk-link.
+ */
+export async function bulkRejectDedupCandidates(
+  filter: BulkDedupCandidateFilter
+): Promise<BulkRejectDedupResult> {
+  const response = await apiFetch(`${API_BASE}/dedup/candidates/bulk-reject`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(filter),
+  });
+  if (!response.ok) {
+    throw await buildApiError(response, 'Failed to bulk-reject dedup candidates');
   }
   const responseData = await response.json();
   return responseData.data;

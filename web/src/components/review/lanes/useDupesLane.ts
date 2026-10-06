@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useDupesLane.ts
-// version: 1.9.0
+// version: 1.10.0
 // guid: 5e9c1a74-0d38-4b62-9f15-6c2a8d4b7e31
-// last-edited: 2026-09-25
+// last-edited: 2026-10-06
 
 import {
   startTransition,
@@ -13,6 +13,7 @@ import {
   useState,
 } from 'react';
 import { serverAnsweredTerm, useDebouncedSearch } from '../../../hooks/useDebouncedSearch';
+import { useRowSelection, type RowSelection } from '../../../hooks/useRowSelection';
 import * as api from '../../../services/api';
 import type { DedupBand, DedupCandidate, DedupStats } from '../../../services/api';
 import type { DupesAction } from '../reviewActions';
@@ -75,6 +76,15 @@ export const MERGE_ALL_BLOCKED_REASON =
  */
 export const MERGE_ALL_SEARCH_PENDING_REASON =
   'Still searching. Wait for the results to load before merging everything that matches.';
+
+/**
+ * Refusal for "Select all N matching" when the status filter is not Pending.
+ * The bulk endpoints act on pending pairs only (bulk-reject refuses anything
+ * else; bulk-link defaults to pending), so under "All" or "Merged" the N in
+ * the banner would count rows the action never touches.
+ */
+export const SELECT_ALL_MATCHING_PENDING_ONLY_REASON =
+  'Selecting every matching pair works on the Pending status only.';
 
 export type DedupStatusFilter = 'pending' | 'merged' | 'dismissed' | '';
 
@@ -165,11 +175,24 @@ export interface DupesLane {
    */
   pendingTotal: number;
 
-  selectedIds: Set<number>;
   /**
-   * `index` and `shiftKey` come from the row so a shift-click can extend from
-   * the last row clicked, the way a file list does. Passing them is optional
-   * only because the `s` shortcut has no click to extend from.
+   * The explicit selection. EMPTY in all-matching mode -- read
+   * `selection.allMatching` / `selection.selectedCount` before acting on it.
+   */
+  selectedIds: ReadonlySet<number>;
+  /** The full selection model: header checkbox, cross-page mode, shift range. */
+  selection: RowSelection<number>;
+  /**
+   * Non-null when "Select all N matching" must not be offered, and why: the
+   * bulk endpoints cannot express the filter, a search is still settling, or
+   * the status filter is not Pending.
+   */
+  selectAllMatchingDisabledReason: string | null;
+  /**
+   * `shiftKey` comes from the row so a shift-click sets every row between the
+   * last one clicked and this one to the anchor's state, the way a file list
+   * does. `index` is accepted for the spine's call shape; the anchor is a
+   * candidate id (see useRowSelection), so it is not needed.
    */
   toggleSelect: (id: number, index?: number, shiftKey?: boolean) => void;
   /** Selects every row currently on screen -- which the search may have narrowed. */
@@ -227,7 +250,6 @@ export function useDupesLane(
   const [localFilters, setFiltersState] = useState<LocalDupesFilters>(INITIAL_FILTERS);
   const [page, setPageState] = useState(1);
   const [pageSize, setPageSizeState] = useState(DEFAULT_PAGE_SIZE);
-  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [focusedIndexState, setFocusedIndex] = useState(0);
   const [drawerCandidateId, setDrawerCandidateId] = useState<number | null>(null);
   const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
@@ -267,7 +289,7 @@ export function useDupesLane(
   if (prevUrlFilterKey !== urlFilterKey) {
     setPrevUrlFilterKey(urlFilterKey);
     setPageState(1);
-    setSelectedIds(new Set());
+    // The selection resets itself: urlFilterKey is part of its resetKey.
     setFocusedIndex(0);
   }
 
@@ -290,7 +312,7 @@ export function useDupesLane(
   if (prevSearchKey !== debouncedSearch) {
     setPrevSearchKey(debouncedSearch);
     setPageState(1);
-    setSelectedIds(new Set());
+    // The selection resets itself: debouncedSearch is part of its resetKey.
     setFocusedIndex(0);
   }
 
@@ -587,6 +609,39 @@ export function useDupesLane(
       ? null
       : MERGE_ALL_SEARCH_PENDING_REASON;
 
+  const selectAllMatchingDisabledReason =
+    mergeAllFilteredDisabledReason ??
+    (filters.status === 'pending' ? null : SELECT_ALL_MATCHING_PENDING_ONLY_REASON);
+
+  // -------------------------------------------------------------------------
+  // Selection
+  //
+  // pageKeys is `visible`, not the whole fetched page, for the reason the
+  // selectAllVisible note below gives: a reviewer must never select rows they
+  // cannot see. During the progressive-mount window that is the first slice.
+  //
+  // The resetKey is every server-side filter plus the page size: any of them
+  // changes what "all matching" means, so the selection is dropped during
+  // render -- never left armed for one committed frame against the old filter.
+  // -------------------------------------------------------------------------
+
+  const visibleIds = useMemo(() => visible.map((c) => c.id), [visible]);
+  const selection = useRowSelection<number>({
+    pageKeys: visibleIds,
+    totalMatching: total,
+    resetKey: [
+      filters.status,
+      urlFilterKey,
+      filters.bothUnmatched ? '1' : '0',
+      debouncedSearch,
+      String(pageSize),
+    ].join('\u0000'),
+    canSelectAllMatching: selectAllMatchingDisabledReason === null,
+  });
+  const selectedIds = selection.selected;
+  const { clear: clearSelectionState, toggle: toggleRow, togglePage, pageFullySelected } =
+    selection;
+
   // -------------------------------------------------------------------------
   // Filters and pagination
   //
@@ -595,17 +650,6 @@ export function useDupesLane(
   // page while the new one is in flight; leaving focus where it was would point
   // `m` and `d` at a row from the page the reviewer just left.
   // -------------------------------------------------------------------------
-
-  /**
-   * The shift-click anchor: an INDEX INTO `visible`, not a candidate id.
-   *
-   * Declared here rather than beside `toggleSelect` because the pagination
-   * setters below have to clear it. An index only means anything against the
-   * rows that produced it -- carry it across a page turn and the first
-   * shift-click on the new page extends a span from whatever row happens to sit
-   * at that index now, silently selecting pairs the reviewer never pointed at.
-   */
-  const lastClickedIndexRef = useRef<number | null>(null);
 
   /**
    * Drops a selection that is about to stop being visible, and says so.
@@ -618,13 +662,22 @@ export function useDupesLane(
    * The toast is raised OUTSIDE the state updater on purpose: React invokes
    * updaters twice under StrictMode, which would double every message.
    */
-  const clearSelectionForNewRows = useCallback(() => {
-    if (selectedIds.size > 0) {
-      toast(`Selection cleared — ${selectedIds.size} pair(s) are no longer on screen.`, 'info');
-    }
-    setSelectedIds(new Set());
-    lastClickedIndexRef.current = null;
-  }, [selectedIds, toast]);
+  const clearSelectionForNewRows = useCallback(
+    (cause: 'page' | 'filter') => {
+      // "All N matching" is defined by the filter, not by the rows on screen,
+      // so a page turn leaves it intact: every row on the next page is part of
+      // the same selection. A filter change redefines it and clears it.
+      if (cause === 'page' && selection.allMatching) return;
+      if (selection.selectedCount > 0) {
+        toast(
+          `Selection cleared — ${selection.selectedCount} pair(s) are no longer on screen.`,
+          'info'
+        );
+      }
+      clearSelectionState();
+    },
+    [selection.allMatching, selection.selectedCount, clearSelectionState, toast]
+  );
 
   const setFilters = useCallback(
     (patch: Partial<LocalDupesFilters>) => {
@@ -636,7 +689,7 @@ export function useDupesLane(
       const serverSide = Object.keys(patch).some((k) => k !== 'search');
       if (serverSide) {
         setPageState(1);
-        clearSelectionForNewRows();
+        clearSelectionForNewRows('filter');
       }
       setFocusedIndex(0);
     },
@@ -646,7 +699,7 @@ export function useDupesLane(
   const setPage = useCallback(
     (p: number) => {
       setPageState(p);
-      clearSelectionForNewRows();
+      clearSelectionForNewRows('page');
       setFocusedIndex(0);
     },
     [clearSelectionForNewRows]
@@ -656,69 +709,30 @@ export function useDupesLane(
     (n: number) => {
       setPageSizeState(n);
       setPageState(1);
-      clearSelectionForNewRows();
+      clearSelectionForNewRows('filter');
       setFocusedIndex(0);
     },
     [clearSelectionForNewRows]
   );
 
-  // -------------------------------------------------------------------------
-  // Selection
-  // -------------------------------------------------------------------------
-
+  // A shift-click sets the range between the last-clicked row and this one to
+  // the anchor's state (checks or unchecks a run) -- useRowSelection owns the
+  // anchor, keyed by candidate id so a page turn cannot retarget it. `index`
+  // is the spine's call shape and is not needed for that.
   const toggleSelect = useCallback(
-    (id: number, index?: number, shiftKey = false) => {
-      const anchor = lastClickedIndexRef.current;
-      // A shift-click extends the range rather than toggling one row. It ADDS
-      // the span rather than replacing the selection, matching the source and
-      // making a selection assembled from several ranges possible.
-      if (shiftKey && index != null && anchor != null && anchor !== index) {
-        const [lo, hi] = anchor < index ? [anchor, index] : [index, anchor];
-        setSelectedIds((prev) => {
-          const next = new Set(prev);
-          for (const c of visible.slice(lo, hi + 1)) next.add(c.id);
-          return next;
-        });
-        lastClickedIndexRef.current = index;
-        return;
-      }
-      if (index != null) lastClickedIndexRef.current = index;
-      setSelectedIds((prev) => {
-        const next = new Set(prev);
-        if (next.has(id)) next.delete(id);
-        else next.add(id);
-        return next;
-      });
-    },
-    // Depends on `visible` rather than reading it from a ref. Writing a ref
-    // during render is unsafe under concurrent rendering -- React can discard a
-    // render pass, leaving the ref holding values from work that never
-    // committed. The identity churn this costs is free in practice: a change to
-    // `visible` is a new array, so every row re-renders regardless.
-    //
-    // ONE EXCEPTION, since the progressive mount above introduced it: lifting
-    // `mountCap` to the full page produces a `visible` whose first
-    // FIRST_PAINT_ROWS entries are the same objects as before, so those rows
-    // re-render for no reason other than this dependency. That is ~20 wasted
-    // row renders, once per page load, INSIDE the transition and therefore off
-    // the critical path -- it does not show up in the benchmark (N=100 load
-    // measures no task over the 50 ms longtask threshold). Recorded so the next
-    // reader does not mistake it for a bug that was missed. Fixing it properly
-    // means giving the row handlers an identity that does not depend on
-    // `visible` at all, which the ref shortcut above is explicitly not safe
-    // enough to do.
-    [visible]
+    (id: number, _index?: number, shiftKey = false) => toggleRow(id, shiftKey),
+    [toggleRow]
   );
 
   // `visible`, not the whole page: the client-side search narrows what is on
   // screen, and a select-all that reached past it would stage rows the reviewer
   // cannot see for a merge they cannot undo. The name says `visible` so the
-  // shortcut's label has to as well.
+  // shortcut's label has to as well. Selects only -- Shift+A never clears.
   const selectAllVisible = useCallback(() => {
-    setSelectedIds(new Set(visible.map((c) => c.id)));
-  }, [visible]);
+    if (!pageFullySelected) togglePage();
+  }, [pageFullySelected, togglePage]);
 
-  const clearSelection = useCallback(() => setSelectedIds(new Set()), []);
+  const clearSelection = clearSelectionState;
 
   // -------------------------------------------------------------------------
   // Actions
@@ -783,6 +797,27 @@ export function useDupesLane(
     [toast, clearSelection, refresh, markDecided, unmarkDecided]
   );
 
+  /**
+   * The ONE payload both filter-scoped bulk actions send. Shared so
+   * merge-all-filtered and dismiss-all-filtered cannot drift apart: a field one
+   * sends and the other drops widens that action past the set on screen.
+   */
+  const bulkFilter = useMemo(
+    (): api.BulkDedupCandidateFilter => ({
+      entity_type: 'book',
+      status: filters.status || 'pending',
+      // Filter parity with what is on screen. Omitting either of these
+      // is what made this action merge the whole library.
+      band: filters.band ?? undefined,
+      entity_id: filters.entityId ?? undefined,
+      // The SETTLED term -- the one the visible rows were fetched with.
+      // Sending filters.search could transmit a term the reviewer typed
+      // but has not seen results for.
+      q: appliedSearch.trim() || undefined,
+    }),
+    [filters.status, filters.band, filters.entityId, appliedSearch]
+  );
+
   const dispatch = useCallback(
     (action: DupesAction) => {
       switch (action.type) {
@@ -845,18 +880,7 @@ export function useDupesLane(
           void (async () => {
             setBusy(true);
             try {
-              const result = await api.bulkLinkDedupCandidates({
-                entity_type: 'book',
-                status: filters.status || 'pending',
-                // Filter parity with what is on screen. Omitting either of these
-                // is what made this action merge the whole library.
-                band: filters.band ?? undefined,
-                entity_id: filters.entityId ?? undefined,
-                // The SETTLED term -- the one the visible rows were
-                // fetched with. Sending filters.search could transmit a
-                // term the reviewer typed but has not seen results for.
-                q: appliedSearch.trim() || undefined,
-              });
+              const result = await api.bulkLinkDedupCandidates(bulkFilter);
               toast(
                 `Bulk merge: ${result.merged} merged, ${result.failed} failed of ${result.attempted}`,
                 result.failed === 0 ? 'success' : 'warning'
@@ -865,6 +889,32 @@ export function useDupesLane(
               refresh();
             } catch (err) {
               toast(err instanceof Error ? err.message : 'Bulk merge failed', 'error');
+            } finally {
+              setBusy(false);
+            }
+          })();
+          return;
+
+        case 'dismissAllFiltered':
+          // Same rule as mergeAllFiltered: the guard is the invariant, the
+          // button state is only an affordance. Stricter, because bulk-reject
+          // acts on pending pairs only.
+          if (selectAllMatchingDisabledReason) {
+            toast(selectAllMatchingDisabledReason, 'warning');
+            return;
+          }
+          void (async () => {
+            setBusy(true);
+            try {
+              const result = await api.bulkRejectDedupCandidates(bulkFilter);
+              toast(
+                `Bulk dismiss: ${result.rejected} dismissed, ${result.failed} failed of ${result.attempted}`,
+                result.failed === 0 ? 'success' : 'warning'
+              );
+              clearSelection();
+              refresh();
+            } catch (err) {
+              toast(err instanceof Error ? err.message : 'Bulk dismiss failed', 'error');
             } finally {
               setBusy(false);
             }
@@ -880,16 +930,11 @@ export function useDupesLane(
       runSequential,
       clearSelection,
       mergeAllFilteredDisabledReason,
-      filters.status,
-      filters.band,
-      filters.entityId,
-      // Read directly by mergeAllFiltered to build the bulk payload. It is
-      // currently reachable anyway through mergeAllFilteredDisabledReason,
-      // which now depends on it -- but relying on that is a trap: change how
-      // the refusal is computed and this closure silently goes stale, and a
-      // stale value here means the bulk merge omits `q` and merges the whole
-      // queue. Named explicitly so the dependency cannot be lost by accident.
-      appliedSearch,
+      selectAllMatchingDisabledReason,
+      // The bulk payload (status, band, entity, SETTLED search). Named
+      // explicitly rather than reached through the disabled reasons: a stale
+      // value here means the bulk action omits `q` and covers the whole queue.
+      bulkFilter,
     ]
   );
 
@@ -1023,6 +1068,8 @@ export function useDupesLane(
     setFilters,
     pendingTotal,
     selectedIds,
+    selection,
+    selectAllMatchingDisabledReason,
     toggleSelect,
     selectAllVisible,
     clearSelection,
