@@ -38,7 +38,11 @@ describe('applyRowClick', () => {
 describe('useRowSelection', () => {
   it('header checkbox selects the page, is indeterminate when partial, and unchecks to clear', () => {
     const { result } = setup();
-    expect(result.current.header).toEqual({ checked: false, indeterminate: false, disabled: false });
+    expect(result.current.header).toEqual({
+      checked: false,
+      indeterminate: false,
+      disabled: false,
+    });
 
     act(() => result.current.toggle('b'));
     expect(result.current.header.indeterminate).toBe(true);
@@ -180,7 +184,9 @@ describe('useRowSelection', () => {
     act(() => result.current.toggle('e'));
     const props = result.current.checkboxProps('c');
     act(() =>
-      props.onChange({ nativeEvent: { shiftKey: true } } as unknown as React.ChangeEvent<HTMLInputElement>)
+      props.onChange({
+        nativeEvent: { shiftKey: true },
+      } as unknown as React.ChangeEvent<HTMLInputElement>)
     );
     expect(sorted(result.current.selected)).toEqual(['c', 'd', 'e']);
   });

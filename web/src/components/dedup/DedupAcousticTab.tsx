@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/DedupAcousticTab.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678902
-// last-edited: 2026-09-25
+// last-edited: 2026-10-06
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, Link as RouterLink } from 'react-router-dom';
 import {
@@ -27,6 +27,11 @@ import {
   TableRow,
   TableCell,
   TableBody,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogContentText,
+  DialogActions,
 } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import FingerprintIcon from '@mui/icons-material/Fingerprint';
@@ -35,6 +40,17 @@ import * as api from '../../services/api';
 import type { Book, DedupCandidate } from '../../services/api';
 import { CoverLightbox } from '../CoverLightbox';
 import { fetchBookCached } from './DedupEmbeddingTab';
+import { useRowSelection } from '../../hooks/useRowSelection';
+import { SelectAllMatchingBanner } from '../common/SelectAllMatchingBanner';
+import { CROSS_PAGE_MAX_ITEMS, crossPageCapMessage, fetchAllMatchingCandidates } from './crossPageCandidates';
+
+type AcousticBulkAction = 'dismiss' | 'keep-a' | 'keep-b';
+const ACOUSTIC_LIST_PARAMS = { layer: 'acoustid' } as const;
+const BULK_LABEL: Record<AcousticBulkAction, string> = {
+  'keep-a': 'Keep A',
+  'keep-b': 'Keep B',
+  dismiss: 'Dismiss',
+};
 
 // ULID pattern: 26-character alphanumeric (0-9, A-Z only)
 const ULID_PATTERN = /^[0-9A-Z]{26}$/;
@@ -557,11 +573,14 @@ export function AcousticDedupTab() {
   const [page, setPage] = useState(0);
   // Bigger default than 25 and exposes 50/100/250 because 12K candidates at
   // 25/page is 512 clicks — the user understandably refuses to triage that
-  // way. Multiselect bulk Keep-A / Keep-B / Dismiss is a follow-up.
+  // way. Bulk Keep-A / Keep-B / Dismiss act on the selection, which can be
+  // the page or (via "Select all N matching") every acoustic candidate.
   const [rowsPerPage, setRowsPerPage] = useState(100);
   const [bookCache, setBookCache] = useState<Map<string, Book>>(new Map());
-  const [selectedCandIds, setSelectedCandIds] = useState<Set<number>>(new Set());
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState<string | null>(null);
+  const [confirmBulk, setConfirmBulk] = useState<AcousticBulkAction | null>(null);
   const [purging, setPurging] = useState(false);
   const [resolving, setResolving] = useState<Set<number>>(new Set());
   const [compareA, setCompareA] = useState('');
@@ -575,9 +594,10 @@ export function AcousticDedupTab() {
 
   const loadCandidates = useCallback(async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       const resp = await api.getDedupCandidates({
-        layer: 'acoustid',
+        ...ACOUSTIC_LIST_PARAMS,
         limit: rowsPerPage,
         offset: page * rowsPerPage,
       });
@@ -602,8 +622,12 @@ export function AcousticDedupTab() {
         })
       );
       setBookCache(cache);
-    } catch {
-      // handled by empty state
+    } catch (err) {
+      // A failed load must not read as "no candidates": say it failed and
+      // drop the stale page so nothing below it can be acted on.
+      setLoadError(err instanceof Error ? err.message : 'Failed to load acoustic candidates');
+      setCandidates([]);
+      setTotal(0);
     } finally {
       setLoading(false);
     }
@@ -612,6 +636,15 @@ export function AcousticDedupTab() {
   useEffect(() => {
     loadCandidates();
   }, [loadCandidates]);
+
+  // Selection: header checkbox = this page, banner = every acoustic candidate,
+  // shift-click = a range. Page size is the reset key; a page turn clears an
+  // explicit selection (its rows leave the screen) but keeps "all matching".
+  const selection = useRowSelection<number>({
+    pageKeys: candidates.map((c) => c.id),
+    totalMatching: total,
+    resetKey: String(rowsPerPage),
+  });
 
   // Cleanup timeout on unmount
   useEffect(() => {
@@ -809,43 +842,78 @@ export function AcousticDedupTab() {
     }
   };
 
-  // Bulk dismiss N candidates in parallel (capped concurrency to be polite to
-  // the backend). Refreshes the list once at the end instead of per-call so
-  // the UI doesn't thrash. Selecting nothing is a no-op.
-  const bulkApply = async (action: 'dismiss' | 'keep-a' | 'keep-b') => {
-    if (selectedCandIds.size === 0) return;
+  // Bulk Keep A / Keep B / Dismiss over the selection. A cross-page selection
+  // is resolved by paging the same list query (capped at CROSS_PAGE_MAX_ITEMS)
+  // because Keep A/B pick a side per pair, which the filter-scoped endpoints
+  // cannot express. Links run one at a time -- each rewrites book rows and two
+  // in flight can touch the same book; dismisses run 5 at a time.
+  const bulkApply = async (action: AcousticBulkAction) => {
+    if (selection.selectedCount === 0) return;
     setBulkBusy(true);
-    const ids = Array.from(selectedCandIds);
-    const failed: number[] = [];
-    const CONCURRENCY = 5;
-    for (let i = 0; i < ids.length; i += CONCURRENCY) {
-      const batch = ids.slice(i, i + CONCURRENCY);
+    setStatusMsg(null);
+    let rows: DedupCandidate[];
+    try {
+      if (selection.allMatching) {
+        setBulkProgress(`Reading 0 / ${total.toLocaleString()} matching candidates…`);
+        rows = await fetchAllMatchingCandidates(ACOUSTIC_LIST_PARAMS, total, (n, t) =>
+          setBulkProgress(`Reading ${n.toLocaleString()} / ${t.toLocaleString()} matching candidates…`)
+        );
+      } else {
+        rows = candidates.filter((c) => selection.selected.has(c.id));
+      }
+    } catch (err) {
+      setBulkBusy(false);
+      setBulkProgress(null);
+      setStatusSeverity('error');
+      setStatusMsg(err instanceof Error ? err.message : 'Could not read the matching candidates');
+      return;
+    }
+    // Selected ids with no row behind them (decided and gone since) are
+    // failures, not silently "processed".
+    const failed: number[] = selection.allMatching
+      ? []
+      : [...selection.selected].filter((id) => !rows.some((c) => c.id === id));
+    const missing = failed.length;
+    const concurrency = action === 'dismiss' ? 5 : 1;
+    let done = 0;
+    for (let i = 0; i < rows.length; i += concurrency) {
+      const batch = rows.slice(i, i + concurrency);
       await Promise.all(
-        batch.map(async (id) => {
-          const c = candidates.find((x) => x.id === id);
-          if (!c) return;
+        batch.map(async (c) => {
           try {
-            if (action === 'dismiss') {
-              await api.rejectDedupCandidate(id);
-            } else if (action === 'keep-a') {
-              await api.linkDedupCandidate(id, c.entity_a_id);
-            } else {
-              await api.linkDedupCandidate(id, c.entity_b_id);
-            }
+            if (action === 'dismiss') await api.rejectDedupCandidate(c.id);
+            else if (action === 'keep-a') await api.linkDedupCandidate(c.id, c.entity_a_id);
+            else await api.linkDedupCandidate(c.id, c.entity_b_id);
           } catch {
-            failed.push(id);
+            failed.push(c.id);
           }
         })
       );
+      done += batch.length;
+      setBulkProgress(
+        `${BULK_LABEL[action]}: ${done.toLocaleString()} / ${rows.length.toLocaleString()}…`
+      );
     }
-    setSelectedCandIds(new Set(failed));
+    // attempted = rows acted on + selected ids that had no row.
+    const attempted = rows.length + missing;
+    const ok = attempted - failed.length;
+    // Keep only the failures on this page selected, so a retry is one click.
+    selection.replace(failed.filter((id) => candidates.some((c) => c.id === id)));
     setBulkBusy(false);
+    setBulkProgress(null);
+    setStatusSeverity(failed.length === 0 ? 'info' : 'error');
     setStatusMsg(
       failed.length === 0
-        ? `Bulk ${action}: ${ids.length} candidate(s) processed`
-        : `Bulk ${action}: ${ids.length - failed.length} ok, ${failed.length} failed`
+        ? `${BULK_LABEL[action]}: ${ok.toLocaleString()} candidate(s) processed`
+        : `${BULK_LABEL[action]}: ${ok.toLocaleString()} ok, ${failed.length.toLocaleString()} failed of ${attempted.toLocaleString()}`
     );
     await loadCandidates();
+  };
+
+  /** Cross-page actions always confirm; the count is beyond what is on screen. */
+  const requestBulk = (action: AcousticBulkAction) => {
+    if (selection.allMatching) setConfirmBulk(action);
+    else void bulkApply(action);
   };
 
   const simPct = (c: DedupCandidate) =>
@@ -1074,6 +1142,18 @@ export function AcousticDedupTab() {
 
       {loading ? (
         <LinearProgress />
+      ) : loadError ? (
+        <Alert
+          severity="error"
+          data-testid="acoustic-load-error"
+          action={
+            <Button size="small" onClick={() => void loadCandidates()}>
+              Retry
+            </Button>
+          }
+        >
+          {loadError}
+        </Alert>
       ) : candidates.length === 0 ? (
         <Alert severity="info">
           No acoustic duplicate candidates found. Run "Fingerprint Books" then "Find Acoustic
@@ -1082,7 +1162,16 @@ export function AcousticDedupTab() {
       ) : (
         <Paper>
           {/* Bulk action toolbar — visible whenever any row is selected. */}
-          {selectedCandIds.size > 0 && (
+          <Box sx={{ px: 2 }}>
+            <SelectAllMatchingBanner
+              selection={selection}
+              pageCount={candidates.length}
+              totalMatching={total}
+              noun="candidates"
+              testIdPrefix="acoustic-select-all"
+            />
+          </Box>
+          {selection.selectedCount > 0 && (
             <Stack
               direction="row"
               spacing={1}
@@ -1096,39 +1185,45 @@ export function AcousticDedupTab() {
               }}
             >
               <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                {selectedCandIds.size} selected
+                {selection.selectedCount.toLocaleString()} selected
+                {selection.allMatching ? ' (every page)' : ''}
               </Typography>
+              {bulkProgress && (
+                <Typography variant="caption" color="text.secondary" data-testid="acoustic-bulk-progress">
+                  {bulkProgress}
+                </Typography>
+              )}
               <Box sx={{ flexGrow: 1 }} />
               <Button
                 size="small"
                 variant="outlined"
                 disabled={bulkBusy}
-                onClick={() => bulkApply('keep-a')}
+                onClick={() => requestBulk('keep-a')}
               >
-                Keep A on {selectedCandIds.size}
+                Keep A on {selection.selectedCount.toLocaleString()}
               </Button>
               <Button
                 size="small"
                 variant="outlined"
                 disabled={bulkBusy}
-                onClick={() => bulkApply('keep-b')}
+                onClick={() => requestBulk('keep-b')}
               >
-                Keep B on {selectedCandIds.size}
+                Keep B on {selection.selectedCount.toLocaleString()}
               </Button>
               <Button
                 size="small"
                 variant="outlined"
                 color="warning"
                 disabled={bulkBusy}
-                onClick={() => bulkApply('dismiss')}
+                onClick={() => requestBulk('dismiss')}
               >
-                Dismiss {selectedCandIds.size}
+                Dismiss {selection.selectedCount.toLocaleString()}
               </Button>
               <Button
                 size="small"
                 variant="text"
                 disabled={bulkBusy}
-                onClick={() => setSelectedCandIds(new Set())}
+                onClick={selection.clear}
               >
                 Clear
               </Button>
@@ -1141,16 +1236,12 @@ export function AcousticDedupTab() {
                   <TableCell padding="checkbox">
                     <Checkbox
                       size="small"
-                      indeterminate={
-                        selectedCandIds.size > 0 && selectedCandIds.size < candidates.length
-                      }
-                      checked={candidates.length > 0 && selectedCandIds.size === candidates.length}
-                      onChange={(e) => {
-                        if (e.target.checked) {
-                          setSelectedCandIds(new Set(candidates.map((c) => c.id)));
-                        } else {
-                          setSelectedCandIds(new Set());
-                        }
+                      indeterminate={selection.header.indeterminate}
+                      checked={selection.header.checked}
+                      disabled={selection.header.disabled}
+                      onChange={selection.togglePage}
+                      slotProps={{
+                        input: { 'aria-label': `Select all ${candidates.length} on this page` },
                       }}
                     />
                   </TableCell>
@@ -1169,7 +1260,7 @@ export function AcousticDedupTab() {
                   const recommendA = qA > qB;
                   const recommendB = qB > qA;
                   const busy = resolving.has(c.id);
-                  const selected = selectedCandIds.has(c.id);
+                  const selected = selection.isSelected(c.id);
                   return (
                     <TableRow
                       key={c.id}
@@ -1188,15 +1279,8 @@ export function AcousticDedupTab() {
                       <TableCell padding="checkbox">
                         <Checkbox
                           size="small"
-                          checked={selected}
-                          onChange={(e) => {
-                            setSelectedCandIds((prev) => {
-                              const next = new Set(prev);
-                              if (e.target.checked) next.add(c.id);
-                              else next.delete(c.id);
-                              return next;
-                            });
-                          }}
+                          {...selection.checkboxProps(c.id)}
+                          slotProps={{ input: { 'aria-label': `Select candidate ${c.id}` } }}
                         />
                       </TableCell>
                       <TableCell sx={{ verticalAlign: 'top', minWidth: 280 }}>
@@ -1312,18 +1396,50 @@ export function AcousticDedupTab() {
             page={page}
             onPageChange={(_, p) => {
               setPage(p);
-              setSelectedCandIds(new Set());
+              // An explicit selection's rows leave the screen; "all matching" does not.
+              if (!selection.allMatching) selection.clear();
             }}
             rowsPerPage={rowsPerPage}
             onRowsPerPageChange={(e) => {
               setRowsPerPage(parseInt(e.target.value, 10));
               setPage(0);
-              setSelectedCandIds(new Set());
+              // rowsPerPage is the selection's resetKey, so it clears itself.
             }}
             rowsPerPageOptions={[25, 50, 100, 250]}
           />
         </Paper>
       )}
+
+      <Dialog open={confirmBulk !== null} onClose={() => setConfirmBulk(null)} data-testid="acoustic-bulk-confirm">
+        <DialogTitle>
+          {confirmBulk ? BULK_LABEL[confirmBulk] : ''} on all {total.toLocaleString()} matching candidates?
+        </DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            {total > CROSS_PAGE_MAX_ITEMS
+              ? crossPageCapMessage(total)
+              : `Every acoustic candidate on every page is ${
+                  confirmBulk === 'dismiss' ? 'dismissed as not a duplicate' : 'linked into a version group (cannot be undone)'
+                }. The rows are read page by page first; the result reports how many succeeded and failed.`}
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmBulk(null)}>Cancel</Button>
+          <Button
+            color="warning"
+            variant="contained"
+            disabled={total > CROSS_PAGE_MAX_ITEMS}
+            data-testid="acoustic-bulk-confirm-btn"
+            onClick={() => {
+              const a = confirmBulk;
+              setConfirmBulk(null);
+              if (a) void bulkApply(a);
+            }}
+          >
+            {confirmBulk ? BULK_LABEL[confirmBulk] : ''} {total.toLocaleString()}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <Box sx={{ mt: 3 }} ref={showComparePanel ? comparePanelRef : undefined}>
         <AcousticComparePanel initialA={compareA} initialB={compareB} />
