@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_folder_sets_test.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 3b7d2c55-1a4e-4f0b-9c61-8e2f5d7a0b14
 // last-edited: 2026-10-06
 
@@ -14,6 +14,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
+	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/stretchr/testify/require"
 )
 
@@ -612,5 +613,344 @@ func TestFragmentFixer_ChapterSetNeverJoinsMissingFiles(t *testing.T) {
 		for _, id := range frags {
 			require.True(t, f.liveID(t, id), "no fragment retired")
 		}
+	})
+}
+
+// requireUntouched asserts every fragment is live and holds its one row.
+func (f *fragFixture) requireUntouched(t *testing.T, ids []string) {
+	t.Helper()
+	for _, id := range ids {
+		require.True(t, f.liveID(t, id), "fragment %s not retired", id)
+		rows, err := f.s.GetBookFiles(id)
+		require.NoError(t, err)
+		require.Len(t, rows, 1, "fragment %s keeps its one row", id)
+	}
+}
+
+// requireRefused applies row id of plan op-plan and asserts the apply
+// refused it as changed since the plan and wrote nothing to frags.
+func (f *fragFixture) requireRefused(t *testing.T, rowID string, frags []string, why string) {
+	t.Helper()
+	out := f.apply(t, "op-plan", "op-apply", []string{rowID}, nil)
+	require.Zero(t, out.Applied, "%+v", out.Rows)
+	require.Equal(t, 1, out.ChangedSincePlan, "%+v", out.Rows)
+	if why != "" {
+		require.Contains(t, fmt.Sprintf("%+v", out.Rows), why)
+	}
+	f.requireUntouched(t, frags)
+}
+
+// audioCopyAt is audioCopy under another folder and role: a further live
+// book holding the same six files' audio.
+func (f *fragFixture) audioCopyAt(t *testing.T, role, dir string) string {
+	t.Helper()
+	other := f.book(t, role, "Yet Another Name", f.path(dir), nil)
+	for i := 1; i <= 6; i++ {
+		name := fmt.Sprintf("part %02d.mp3", i)
+		p := f.file(t, filepath.Join(dir, name), 9000+101*i)
+		f.row(t, role+name, other, p, name, int64(9000+101*i), 900, i)
+	}
+	f.organized(t, other)
+	return other
+}
+
+// journalAssembled writes a plan record of this fixer on book id, as a
+// no-parent apply that assembled it does before its first write.
+func (f *fragFixture) journalAssembled(t *testing.T, id string) {
+	t.Helper()
+	require.NoError(t, f.s.CreateOperationChange(&database.OperationChange{
+		OperationID: "op-earlier", BookID: id, ChangeType: undo.ChangeTypeRepairPlanRecord,
+		FieldName: fragRecordField("no-parent:earlier"), NewValue: "{}", Source: fragFixerID,
+	}))
+}
+
+// setHashes gives each book's rows, in track order, the hashes of mk(i).
+func (f *fragFixture) setHashes(t *testing.T, ids []string, mk func(i int) string) {
+	t.Helper()
+	i := 0
+	for _, id := range ids {
+		rows, err := f.s.GetBookFiles(id)
+		require.NoError(t, err)
+		sort.Slice(rows, func(a, b int) bool { return rows[a].TrackNumber < rows[b].TrackNumber })
+		for _, r := range rows {
+			i++
+			require.NoError(t, f.s.SetBookFileHash(r.ID, mk(i)))
+		}
+	}
+}
+
+// TestFragmentFixer_ChapterSetApplyRechecksLibrary (#3774 review, item 1): a
+// chapter set's plan-time tests read the whole library, so the apply decides
+// the row again against the library as it is then. Each case plans an
+// applicable row, changes the library, and the apply must refuse it as
+// changed since the plan with every fragment untouched.
+func TestFragmentFixer_ChapterSetApplyRechecksLibrary(t *testing.T) {
+	audioJoin := func(t *testing.T, f *fragFixture) (string, string, []string) {
+		other := f.audioCopy(t)
+		frags := f.parentSet(t, parentDir, seq(1, 6), horizonStem, 900, 9000)
+		r := findRow(t, f.plan(t, "op-plan"), existingRowID(f.path(parentDir), fragParentSetKeyPrefix+horizonKey))
+		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+		require.Equal(t, other, r.Proposed["join"])
+		return r.RowID, other, frags
+	}
+	titleJoin := func(t *testing.T, f *fragFixture) (string, string, []string) {
+		existing := f.existingBook(t, "work", "Some Work", "lib/Other/Some Work", 6, 900)
+		frags := f.folderSet(t, setDir, seq(1, 6), someWorkStem, 900, 9000)
+		r := findRow(t, f.plan(t, "op-plan"), existingRowID(f.path(setDir), fragFolderSetKeyPrefix+someWorkKey))
+		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+		require.Equal(t, existing, r.Proposed["join"])
+		return r.RowID, existing, frags
+	}
+	newSet := func(t *testing.T, f *fragFixture) (string, []string) {
+		frags := f.folderSet(t, setDir, seq(1, 6), someWorkStem, 900, 9000)
+		r := findRow(t, f.plan(t, "op-plan"), setRowID(f, setDir, someWorkKey))
+		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+		return r.RowID, frags
+	}
+	t.Run("audio join: a second book of the same audio since the plan refuses", func(t *testing.T) {
+		f := newFragFixture(t)
+		row, _, frags := audioJoin(t, f)
+		late := f.audioCopyAt(t, "late", "lib/Elsewhere/Late")
+		f.requireRefused(t, row, frags, late)
+	})
+	t.Run("audio join: a target assembled since the plan refuses", func(t *testing.T) {
+		f := newFragFixture(t)
+		row, other, frags := audioJoin(t, f)
+		f.journalAssembled(t, other)
+		f.requireRefused(t, row, frags, "assembled by an earlier no-parent apply")
+	})
+	t.Run("audio join: a version group added since the plan refuses", func(t *testing.T) {
+		f := newFragFixture(t)
+		row, _, frags := audioJoin(t, f)
+		p := f.file(t, "lib/Elsewhere/Horizon Storms.m4b", 4321)
+		whole := f.book(t, "whole", "Horizon Storms Whole", p, nil)
+		f.row(t, "w", whole, p, "Horizon Storms.m4b", 4321, 5400, 0)
+		g := "vg-late"
+		for _, id := range []string{frags[0], whole} {
+			_, err := f.s.ModifyBook(id, func(b *database.Book) error { b.VersionGroupID = &g; return nil })
+			require.NoError(t, err)
+		}
+		f.requireRefused(t, row, frags, whole)
+	})
+	t.Run("title join: a book holding the same audio since the plan refuses", func(t *testing.T) {
+		f := newFragFixture(t)
+		row, _, frags := titleJoin(t, f)
+		other := f.book(t, "copy", "Unrelated Name", f.path("lib/Elsewhere/Unrelated"), nil)
+		for i := 1; i <= 6; i++ {
+			name := fmt.Sprintf("x%02d.mp3", i)
+			p := f.file(t, filepath.Join("lib/Elsewhere/Unrelated", name), 9000+101*i)
+			f.row(t, name, other, p, name, int64(9000+101*i), 900, i)
+		}
+		f.requireRefused(t, row, frags, other)
+	})
+	t.Run("title join: a version group added since the plan refuses", func(t *testing.T) {
+		f := newFragFixture(t)
+		row, _, frags := titleJoin(t, f)
+		p := f.file(t, "lib/Elsewhere/Some Work.m4b", 4321)
+		whole := f.book(t, "whole", "Some Work Whole", p, nil)
+		f.row(t, "w", whole, p, "Some Work.m4b", 4321, 5400, 0)
+		g := "vg-late"
+		for _, id := range []string{frags[0], whole} {
+			_, err := f.s.ModifyBook(id, func(b *database.Book) error { b.VersionGroupID = &g; return nil })
+			require.NoError(t, err)
+		}
+		f.requireRefused(t, row, frags, whole)
+	})
+	t.Run("title join: a better-ranked book of the title since the plan refuses", func(t *testing.T) {
+		f := newFragFixture(t)
+		row, _, frags := titleJoin(t, f)
+		// Nine files of the same total: the plan's ranking (most files
+		// first) would join it now, not the planned target.
+		late := f.existingBook(t, "work2", "Some Work", "lib/Shelf/Some Work", 9, 600)
+		f.requireRefused(t, row, frags, late)
+	})
+	t.Run("title join: mixed authors since the plan refuses", func(t *testing.T) {
+		f := newFragFixture(t)
+		row, _, frags := titleJoin(t, f)
+		f.setAuthor(t, frags[0], f.authorID(t, "Christopher Paolini"))
+		f.setAuthor(t, frags[1], f.authorID(t, "Someone Different"))
+		// The re-plan reads the members' authors itself: the row comes back
+		// held for them (not applicable), and nothing is written.
+		out := f.apply(t, "op-plan", "op-apply", []string{row}, nil)
+		require.Zero(t, out.Applied, "%+v", out.Rows)
+		require.Contains(t, fmt.Sprintf("%+v", out.Rows), fragSkipMixedAuthors)
+		f.requireUntouched(t, frags)
+	})
+	t.Run("title join: a target file missing since the plan refuses", func(t *testing.T) {
+		f := newFragFixture(t)
+		row, existing, frags := titleJoin(t, f)
+		f.markMissing(t, existing, 1)
+		f.requireRefused(t, row, frags, "")
+	})
+	t.Run("new set: the same audio in a book since the plan refuses", func(t *testing.T) {
+		f := newFragFixture(t)
+		row, frags := newSet(t, f)
+		other := f.book(t, "copy", "Unrelated Name", f.path("lib/Elsewhere/Unrelated"), nil)
+		for i := 1; i <= 6; i++ {
+			name := fmt.Sprintf("x%02d.mp3", i)
+			p := f.file(t, filepath.Join("lib/Elsewhere/Unrelated", name), 9000+101*i)
+			f.row(t, name, other, p, name, int64(9000+101*i), 900, i)
+		}
+		f.requireRefused(t, row, frags, "against the whole library")
+	})
+	t.Run("new set: a book in its folder since the plan refuses", func(t *testing.T) {
+		f := newFragFixture(t)
+		row, frags := newSet(t, f)
+		parent := f.book(t, "parent", "Something Else", f.path(setDir), nil)
+		for i := 1; i <= 2; i++ {
+			p := f.file(t, filepath.Join(setDir, fmt.Sprintf("other %d.mp3", i)), 3000+i)
+			f.row(t, fmt.Sprintf("o%d", i), parent, p, fmt.Sprintf("other %d.mp3", i), int64(3000+i), 1800, i)
+		}
+		f.requireRefused(t, row, frags, parent)
+	})
+	t.Run("new set: a version group added since the plan refuses", func(t *testing.T) {
+		f := newFragFixture(t)
+		row, frags := newSet(t, f)
+		p := f.file(t, "lib/Elsewhere/Some Work.m4b", 4321)
+		whole := f.book(t, "whole", "Some Work Whole", p, nil)
+		f.row(t, "w", whole, p, "Some Work.m4b", 4321, 5400, 0)
+		g := "vg-late"
+		for _, id := range []string{frags[0], whole} {
+			_, err := f.s.ModifyBook(id, func(b *database.Book) error { b.VersionGroupID = &g; return nil })
+			require.NoError(t, err)
+		}
+		f.requireRefused(t, row, frags, whole)
+	})
+	t.Run("nothing changed: the re-check passes and the join applies", func(t *testing.T) {
+		f := newFragFixture(t)
+		row, other, frags := audioJoin(t, f)
+		out := f.apply(t, "op-plan", "op-apply", []string{row}, nil)
+		require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+		f.requireRetiredInto(t, frags, other)
+	})
+}
+
+// TestFragmentFixer_ChapterSetTitleJoinMixedAuthors (#3774 review, item 2):
+// a set joined by its title is held for two known authors, as an assembled
+// set and an audio join are.
+func TestFragmentFixer_ChapterSetTitleJoinMixedAuthors(t *testing.T) {
+	f := newFragFixture(t)
+	f.existingBook(t, "work", "Some Work", "lib/Other/Some Work", 6, 900)
+	frags := f.folderSet(t, setDir, seq(1, 6), someWorkStem, 900, 9000)
+	f.setAuthor(t, frags[0], f.authorID(t, "Christopher Paolini"))
+	f.setAuthor(t, frags[1], f.authorID(t, "Someone Different"))
+	res := f.plan(t, "op-plan")
+	r := findRow(t, res, existingRowID(f.path(setDir), fragFolderSetKeyPrefix+someWorkKey))
+	require.Equal(t, fragSkipMixedAuthors, r.Skipped, r.SkipReason)
+	require.Zero(t, res.Applicable)
+}
+
+// TestFragmentFixer_ChapterSetAudioNeedsMatchingHashes (#3774 review, item 3):
+// size and duration are the same audio only where a hash cannot speak.
+func TestFragmentFixer_ChapterSetAudioNeedsMatchingHashes(t *testing.T) {
+	joinID := func(f *fragFixture) string {
+		return existingRowID(f.path(parentDir), fragParentSetKeyPrefix+horizonKey)
+	}
+	t.Run("both sides hashed, hashes differ: not the same audio, never joined", func(t *testing.T) {
+		f := newFragFixture(t)
+		other := f.audioCopy(t)
+		frags := f.parentSet(t, parentDir, seq(1, 6), horizonStem, 900, 9000)
+		f.setHashes(t, frags, func(i int) string { return fmt.Sprintf("frag-%d", i) })
+		f.setHashes(t, []string{other}, func(i int) string { return fmt.Sprintf("book-%d", i) })
+		res := f.plan(t, "op-plan")
+		noRow(t, res, joinID(f), "six differing hashes are not the book's audio")
+		r := findRow(t, res, parentRowID(f, parentDir, horizonKey))
+		require.Equal(t, fragClassParentSet, r.Class)
+		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+		require.NotContains(t, strings.Join(r.Evidence, "\n"), other)
+	})
+	t.Run("one side hashed: size and duration still match", func(t *testing.T) {
+		f := newFragFixture(t)
+		other := f.audioCopy(t)
+		frags := f.parentSet(t, parentDir, seq(1, 6), horizonStem, 900, 9000)
+		f.setHashes(t, frags, func(i int) string { return fmt.Sprintf("frag-%d", i) })
+		r := findRow(t, f.plan(t, "op-plan"), joinID(f))
+		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+		require.Equal(t, other, r.Proposed["join"])
+	})
+	t.Run("same hashes: the book's copies, never a new book", func(t *testing.T) {
+		f := newFragFixture(t)
+		other := f.audioCopy(t)
+		frags := f.parentSet(t, parentDir, seq(1, 6), horizonStem, 900, 9000)
+		f.setHashes(t, frags, func(i int) string { return fmt.Sprintf("h-%d", i) })
+		f.setHashes(t, []string{other}, func(i int) string { return fmt.Sprintf("h-%d", i) })
+		res := f.plan(t, "op-plan")
+		// Same hashes match the fragments to the book's own rows before any
+		// chapter grouping (the parent rule): no set forms at all.
+		noRow(t, res, parentRowID(f, parentDir, horizonKey), "never assembled beside its own audio")
+		for _, id := range frags {
+			require.Equal(t, 1, rowsHolding(res, id))
+		}
+	})
+	t.Run("a missing row with a differing hash holds nothing", func(t *testing.T) {
+		f := newFragFixture(t)
+		other := f.audioCopy(t)
+		f.markMissing(t, other, 0)
+		frags := f.parentSet(t, parentDir, seq(1, 6), horizonStem, 900, 9000)
+		f.setHashes(t, frags, func(i int) string { return fmt.Sprintf("frag-%d", i) })
+		f.setHashes(t, []string{other}, func(i int) string { return fmt.Sprintf("book-%d", i) })
+		r := findRow(t, f.plan(t, "op-plan"), parentRowID(f, parentDir, horizonKey))
+		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+	})
+}
+
+// TestFragmentFixer_ChapterSetJoinOffsets (#3774 review, item 4): a set's
+// fragments are placed on the target's timeline by the set's own numbering.
+// metadata.ChapterPosition reads "Some Work - 04 1" as chapter 1, so every
+// fragment landed at the target's first track and carried listening state
+// to its start.
+func TestFragmentFixer_ChapterSetJoinOffsets(t *testing.T) {
+	f := newFragFixture(t)
+	existing := f.existingBook(t, "work", "Some Work", "lib/Other/Some Work", 6, 900)
+	f.folderSet(t, setDir, seq(1, 6), someWorkStem, 900, 9000)
+	r := findRow(t, f.plan(t, "op-plan"), existingRowID(f.path(setDir), fragFolderSetKeyPrefix+someWorkKey))
+	require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+	require.Equal(t, existing, r.Proposed["join"])
+	plan, ok := r.Detail.(*fragGroupPlan)
+	require.True(t, ok)
+	require.Len(t, plan.Members, 6)
+	for _, m := range plan.Members {
+		var n, dup int
+		_, err := fmt.Sscanf(m.Frag.origStem(), "Christopher Paolini - Some Work - %02d %d", &n, &dup)
+		require.NoError(t, err)
+		require.InDelta(t, float64((n-1)*900), m.Offset, 0.001, "chapter %d starts at track %d of the target", n, n)
+	}
+}
+
+// TestFragmentFixer_ChapterSetJoinTargetVersionGroup: a member in the join
+// target's own version group is no other version of the work; a member
+// versioned with a chapter copy outside the row is held, since retiring it
+// would hand its group's primary to that copy.
+func TestFragmentFixer_ChapterSetJoinTargetVersionGroup(t *testing.T) {
+	setVG := func(t *testing.T, f *fragFixture, g string, ids ...string) {
+		for _, id := range ids {
+			_, err := f.s.ModifyBook(id, func(b *database.Book) error { b.VersionGroupID = &g; return nil })
+			require.NoError(t, err)
+		}
+	}
+	joinID := func(f *fragFixture) string {
+		return existingRowID(f.path(setDir), fragFolderSetKeyPrefix+someWorkKey)
+	}
+	t.Run("the target's own group: still joins", func(t *testing.T) {
+		f := newFragFixture(t)
+		existing := f.existingBook(t, "work", "Some Work", "lib/Other/Some Work", 6, 900)
+		p := f.file(t, "lib/Elsewhere/Some Work.m4b", 4321)
+		sibling := f.book(t, "sibling", "Some Work (another edition)", p, nil)
+		f.row(t, "s", sibling, p, "Some Work.m4b", 4321, 5400, 0)
+		frags := f.folderSet(t, setDir, seq(1, 6), someWorkStem, 900, 9000)
+		setVG(t, f, "vg-target", existing, sibling, frags[0])
+		r := findRow(t, f.plan(t, "op-plan"), joinID(f))
+		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+		require.Equal(t, existing, r.Proposed["join"])
+	})
+	t.Run("versioned with a chapter copy outside the row: held", func(t *testing.T) {
+		f := newFragFixture(t)
+		f.existingBook(t, "work", "Some Work", "lib/Other/Some Work", 6, 900)
+		frags := f.folderSet(t, setDir, seq(1, 6), someWorkStem, 900, 9000)
+		cp := f.folderSet(t, "lib/Copies", []int{1}, func(i int) string { return fmt.Sprintf("Some Work copy %02d", i) }, 900, 70000)
+		setVG(t, f, "vg-copy", frags[0], cp[0])
+		r := findRow(t, f.plan(t, "op-plan"), joinID(f))
+		require.Equal(t, fragSkipVersionGroupParent, r.Skipped, r.SkipReason)
+		require.Contains(t, r.SkipReason, cp[0])
 	})
 }

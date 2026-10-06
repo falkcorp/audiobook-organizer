@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_folder_sets.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9f01b698-b911-4ecc-818e-6d10f415e768
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 // Folder chapter sets: the fragment-consolidation fixer's rule for a folder
 // of numbered chapter files that share one name, that no parent book owns,
@@ -78,14 +78,20 @@
 //   - a library or import root is no work's parent and forms no set.
 //
 // APPLY is the no-parent row's: the row id is a no-parent id, Replan rebuilds
-// it through replanGroup (which runs noParentRows on the row's own books, so
-// every decision above that changes the plan reads only the members), and
-// Apply moves the members' rows onto the survivor in this numbering's order,
-// retitles it, retires the emptied fragments into it with their listening
-// state (merge.FollowAbsorbedJournaled) and soft-deletes them; every step is
-// journaled and revertable from the apply operation. The plan-time holds
-// above read the whole library; a re-plan sees only the row's books, so they
-// can only hold a row at plan time, never change one an apply re-checks.
+// it through replanGroup (a join: replanJoin), which runs noParentRows on the
+// row's own books, and Apply moves the members' rows onto the survivor in
+// this numbering's order, retitles it, retires the emptied fragments into it
+// with their listening state (merge.FollowAbsorbedJournaled) and soft-deletes
+// them; every step is journaled and revertable from the apply operation. The
+// plan-time holds above read the whole library, so before a set's first
+// write the re-plan also decides the row again against the whole library as
+// it is then (setLibraryGuard: the same noParentRows over a fresh listing).
+// Anything held now that was not at plan time (the same audio in a book
+// created since, a target assembled since, a version group or a book in the
+// folder added since, a member's author changed) refuses the apply as
+// changed_since_plan, and nothing is written. Only the cross-row hold
+// (skipped_same_title_other_set) is not re-run: it needs the other sets'
+// fragments, which a re-check of one row does not form.
 package maintenance
 
 import (
@@ -102,6 +108,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
+	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 
 // Classes of a folder chapter set's row.
@@ -678,18 +685,45 @@ func (f *fragmentFixer) setRows(lib *fragLibrary, lone []*fragCandidate, parent 
 //
 // and finally, across the rows, two sets that would each make a new book of
 // one title are both held.
+//
+// A set the existing-book check already joined by title is held, as a set
+// joined by its audio is, when its files carry two known authors, when a
+// member's version group holds a live book other than the join target, or
+// when a live book other than the target (and not a chapter fragment) holds
+// its audio. These tests read the whole library; an apply re-runs them
+// against the library as it is then (setLibraryGuard).
 func (f *fragmentFixer) classifyFolderSets(lib *fragLibrary, live *fragLive, rows []repairs.Row, sets map[string]*fragFolderSet, cands []*fragCandidate) {
 	if len(sets) == 0 {
 		return
 	}
-	isCand := map[string]bool{}
+	inCands := map[string]bool{}
 	for _, c := range cands {
-		isCand[c.Book.ID] = true
+		inCands[c.Book.ID] = true
+	}
+	isCand := func(id string) bool {
+		return inCands[id] || (lib.candFn != nil && lib.candFn(id))
 	}
 	var dup *fragAudioIndex
+	audio := func() *fragAudioIndex {
+		if dup == nil {
+			dup = newFragAudioIndex(lib)
+		}
+		return dup
+	}
+	var vgIndex map[string][]string
+	groups := func() map[string][]string {
+		if vgIndex == nil {
+			vgIndex = liveByVersionGroup(lib)
+		}
+		return vgIndex
+	}
 	byTitle := map[string][]int{}
 	for i := range rows {
 		r := &rows[i]
+		hold := func(kind, why string) {
+			r.Risk, r.Skipped, r.SkipReason = repairs.RiskReview, kind, why
+		}
+		plan, _ := r.Detail.(*fragGroupPlan)
 		set, ok := sets[r.RowID]
 		if !ok {
 			// An existing-book row keeps its group's hash after the prefix.
@@ -702,6 +736,20 @@ func (f *fragmentFixer) classifyFolderSets(lib *fragLibrary, live *fragLive, row
 			r.Evidence = append(r.Evidence, "its work is already a live book (same title, total agreeing), so it joins that book and is never assembled")
 			if set.parent {
 				r.Class = fragClassParentJoin
+			}
+			if r.Skipped != "" || plan == nil {
+				continue
+			}
+			if why := fragMixedAuthors(lib, plan); why != "" {
+				hold(fragSkipMixedAuthors, why)
+				continue
+			}
+			if why := folderSetVersionGroup(lib, r, groups(), plan.Join); why != "" {
+				hold(fragSkipVersionGroupParent, why)
+				continue
+			}
+			if why := audio().titleJoinAudio(r, plan.Join, isCand); why != "" {
+				hold(fragSkipDuplicateAudio, why)
 			}
 			continue
 		}
@@ -723,26 +771,23 @@ func (f *fragmentFixer) classifyFolderSets(lib *fragLibrary, live *fragLive, row
 		if r.Skipped != "" {
 			continue
 		}
-		hold := func(kind, why string) {
-			r.Risk, r.Skipped, r.SkipReason = repairs.RiskReview, kind, why
-		}
-		plan, _ := r.Detail.(*fragGroupPlan)
 		if why := fragMixedAuthors(lib, plan); why != "" {
 			hold(fragSkipMixedAuthors, why)
 			continue
 		}
-		if dup == nil {
-			dup = newFragAudioIndex(lib)
-		}
-		target, why := dup.joinTarget(r)
+		target, why := audio().joinTarget(r)
 		switch {
-		case target != "" && isCand[target]:
+		case target != "" && isCand(target):
 			hold(fragSkipDuplicateAudio, why+"; that book is itself a chapter fragment, not a book to join")
 			continue
-		case target != "" && lib.assembled[target]:
+		case target != "" && lib.isAssembled(target):
 			hold(fragSkipDuplicateAudio, why+"; that book was itself assembled by an earlier no-parent apply of this fixer (a possible second copy); revert that apply first")
 			continue
 		case target != "":
+			if vg := folderSetVersionGroup(lib, r, groups(), target); vg != "" {
+				hold(fragSkipVersionGroupParent, vg)
+				continue
+			}
 			parent := set.parent
 			tb := lib.books[target]
 			setAuthor, bookAuthor := groupAuthor(lib, plan), lib.authorName(tb)
@@ -804,7 +849,7 @@ func (f *fragmentFixer) classifyFolderSets(lib *fragLibrary, live *fragLive, row
 			hold(fragSkipParentInFolder, why)
 			continue
 		}
-		if why := folderSetVersionGroup(lib, r); why != "" {
+		if why := folderSetVersionGroup(lib, r, groups(), ""); why != "" {
 			hold(fragSkipVersionGroupParent, why)
 		}
 	}
@@ -879,7 +924,7 @@ func (f *fragmentFixer) folderSetEvidence(r *repairs.Row, set *fragFolderSet) {
 // folderSetParent names a live book that is not a fragment candidate and
 // holds a file in one of the set's folders (the import folder, each member's
 // import and current folder): a book that may be the set's parent. "" none.
-func folderSetParent(lib *fragLibrary, live *fragLive, r *repairs.Row, set *fragFolderSet, isCand map[string]bool) string {
+func folderSetParent(lib *fragLibrary, live *fragLive, r *repairs.Row, set *fragFolderSet, isCand func(string) bool) string {
 	in := map[string]bool{}
 	for _, id := range r.BookIDs {
 		in[id] = true
@@ -894,7 +939,7 @@ func folderSetParent(lib *fragLibrary, live *fragLive, r *repairs.Row, set *frag
 	var found []string
 	for _, d := range sortedKeys(folders) {
 		for _, id := range live.byDir[d] {
-			if in[id] || isCand[id] || slices.Contains(found, id) {
+			if in[id] || isCand(id) || slices.Contains(found, id) {
 				continue
 			}
 			found = append(found, id)
@@ -917,101 +962,186 @@ func folderSetParent(lib *fragLibrary, live *fragLive, r *repairs.Row, set *frag
 		"; it may be the set's parent, so the set is not assembled beside it; decide by hand"
 }
 
+// liveByVersionGroup maps each version group to its live books, in id
+// order: built once per classification, so the version-group test reads one
+// map per row instead of the whole library.
+func liveByVersionGroup(lib *fragLibrary) map[string][]string {
+	out := map[string][]string{}
+	for id, b := range lib.books {
+		if b.VersionGroup != "" && !b.SoftDeleted {
+			out[b.VersionGroup] = append(out[b.VersionGroup], id)
+		}
+	}
+	for _, ids := range out {
+		sort.Strings(ids)
+	}
+	return out
+}
+
 // folderSetVersionGroup names a live book outside the row in a member's
-// version group: another version of the work already exists. "" none.
-func folderSetVersionGroup(lib *fragLibrary, r *repairs.Row) string {
+// version group: another version of the work already exists. except is a
+// join's target: it and its own version group (the versions the fragments
+// join) are left out. A member versioned with any other live book is held,
+// a chapter fragment's copy included: retiring a primary member hands its
+// group's primary to that book (retireInto), a write to a book outside the
+// row. byGroup is liveByVersionGroup's map. "" none.
+func folderSetVersionGroup(lib *fragLibrary, r *repairs.Row, byGroup map[string][]string, except string) string {
+	exceptGroup := ""
+	if except != "" {
+		exceptGroup = lib.books[except].VersionGroup
+	}
 	in := map[string]bool{}
 	groups := map[string]bool{}
 	for _, id := range r.BookIDs {
 		in[id] = true
-		if g := lib.books[id].VersionGroup; g != "" {
+		if g := lib.books[id].VersionGroup; g != "" && id != except && g != exceptGroup {
 			groups[g] = true
 		}
 	}
-	if len(groups) == 0 {
-		return ""
-	}
 	var found []string
-	for id, b := range lib.books {
-		if !in[id] && !b.SoftDeleted && groups[b.VersionGroup] {
-			found = append(found, id)
+	for g := range groups {
+		for _, id := range byGroup[g] {
+			if !in[id] && id != except {
+				found = append(found, id)
+			}
 		}
 	}
 	if len(found) == 0 {
 		return ""
 	}
-	sort.Strings(found)
+	found = uniqueSorted(found)
 	b := lib.books[found[0]]
 	return fmt.Sprintf("a member's version group holds %d live book(s) outside this set (first %s, %q, group %s): another version of the work exists; decide by hand",
 		len(found), found[0], b.Title, b.VersionGroup)
 }
 
 // fragAudioIndex finds live books holding a file of the same hash, or of the
-// same size and duration, as another.
+// same size and duration, as another. Size and duration are evidence only
+// where a hash cannot speak: when both files carry a hash and the hashes
+// differ, they are different audio whatever their size and duration
+// (fragSameAudio).
 type fragAudioIndex struct {
-	bySizeDur map[[2]int64][]string
+	bySizeDur map[[2]int64][]fragAudioEntry
 	byHash    map[string][]string
 	// goneBySizeDur / goneByHash index the rows whose file is missing: never
 	// a join's evidence, but a set matching them is held (its fragments may
 	// be the only copies of that book's audio on disk; a repoint, not a
 	// join, is the repair).
-	goneBySizeDur map[[2]int64][]string
+	goneBySizeDur map[[2]int64][]fragAudioEntry
 	goneByHash    map[string][]string
 	lib           *fragLibrary
 }
 
+// fragAudioEntry is one indexed row: its book and its hash ("" none).
+type fragAudioEntry struct{ id, hash string }
+
 func newFragAudioIndex(lib *fragLibrary) *fragAudioIndex {
-	ix := &fragAudioIndex{bySizeDur: map[[2]int64][]string{}, byHash: map[string][]string{},
-		goneBySizeDur: map[[2]int64][]string{}, goneByHash: map[string][]string{}, lib: lib}
+	ix := &fragAudioIndex{bySizeDur: map[[2]int64][]fragAudioEntry{}, byHash: map[string][]string{},
+		goneBySizeDur: map[[2]int64][]fragAudioEntry{}, goneByHash: map[string][]string{}, lib: lib}
 	for id, rows := range lib.files {
 		if b, ok := lib.books[id]; !ok || b.SoftDeleted {
 			continue
 		}
 		for _, r := range rows {
+			bySD, byH := ix.bySizeDur, ix.byHash
 			if r.Missing {
 				// A missing file is no audio the book holds: a set is never
 				// joined into a book on the strength of files that are gone
 				// (the set's fragments may be the only copies on disk).
-				if r.Size > 0 && r.Duration > 0 {
-					k := [2]int64{r.Size, int64(r.Duration)}
-					ix.goneBySizeDur[k] = append(ix.goneBySizeDur[k], id)
-				}
-				if r.Hash != "" {
-					ix.goneByHash[r.Hash] = append(ix.goneByHash[r.Hash], id)
-				}
-				continue
+				bySD, byH = ix.goneBySizeDur, ix.goneByHash
 			}
 			if r.Size > 0 && r.Duration > 0 {
 				k := [2]int64{r.Size, int64(r.Duration)}
-				ix.bySizeDur[k] = append(ix.bySizeDur[k], id)
+				bySD[k] = append(bySD[k], fragAudioEntry{id: id, hash: r.Hash})
 			}
 			if r.Hash != "" {
-				ix.byHash[r.Hash] = append(ix.byHash[r.Hash], id)
+				byH[r.Hash] = append(byH[r.Hash], id)
 			}
 		}
 	}
 	return ix
 }
 
-// goneOwners names the live books outside in with a MISSING row matching
-// c's file by hash, or by size and duration.
-func (ix *fragAudioIndex) goneOwners(c *fragCandidate, in map[string]bool) []string {
-	var out []string
+// owners names the live books outside in holding c's audio (fragSameAudio):
+// by hash when c has one and a book holds it, then by size and duration
+// against rows where either side has no hash. gone reads the missing rows.
+// how says which matched.
+func (ix *fragAudioIndex) owners(c *fragCandidate, in map[string]bool, gone bool) (out []string, how string) {
+	bySD, byH := ix.bySizeDur, ix.byHash
+	if gone {
+		bySD, byH = ix.goneBySizeDur, ix.goneByHash
+	}
 	if c.File.Hash != "" {
-		for _, id := range ix.goneByHash[c.File.Hash] {
+		for _, id := range byH[c.File.Hash] {
 			if !in[id] {
-				out = append(out, id)
+				out, how = append(out, id), "same hash"
 			}
 		}
 	}
 	if len(out) == 0 && c.File.Size > 0 && c.File.Duration > 0 {
-		for _, id := range ix.goneBySizeDur[[2]int64{c.File.Size, int64(c.File.Duration)}] {
-			if !in[id] {
-				out = append(out, id)
+		for _, e := range bySD[[2]int64{c.File.Size, int64(c.File.Duration)}] {
+			if !in[e.id] && (c.File.Hash == "" || e.hash == "") {
+				out, how = append(out, e.id), "same size and duration (one side has no hash)"
 			}
 		}
 	}
-	return uniqueSorted(out)
+	return uniqueSorted(out), how
+}
+
+// fragAudioMatch is how a row's files read against the live books outside
+// it (fragAudioIndex.match).
+type fragAudioMatch struct {
+	files int // the row's files: members and copies
+	held  int // files whose audio a live book outside the row holds
+	// others are those books; goneOthers the books whose MISSING rows match
+	// a file of the row.
+	others, goneOthers map[string]bool
+	hits, gone         []string // up to five of each, for the evidence
+}
+
+// match reads every file of the row, members and copies.
+func (ix *fragAudioIndex) match(r *repairs.Row) (fragAudioMatch, bool) {
+	m := fragAudioMatch{others: map[string]bool{}, goneOthers: map[string]bool{}}
+	plan, ok := r.Detail.(*fragGroupPlan)
+	if !ok {
+		return m, false
+	}
+	in := map[string]bool{}
+	for _, id := range r.BookIDs {
+		in[id] = true
+	}
+	var files []*fragCandidate
+	for _, mb := range plan.Members {
+		files = append(files, mb.Frag)
+	}
+	for _, cp := range plan.Copies {
+		files = append(files, cp.Frag)
+	}
+	m.files = len(files)
+	for _, c := range files {
+		if gb, _ := ix.owners(c, in, true); len(gb) > 0 {
+			for _, id := range gb {
+				m.goneOthers[id] = true
+			}
+			if len(m.gone) < 5 {
+				m.gone = append(m.gone, fmt.Sprintf("%q (book %s)", c.origStem(), strings.Join(gb, ", ")))
+			}
+		}
+		owners, how := ix.owners(c, in, false)
+		if len(owners) == 0 {
+			continue
+		}
+		m.held++
+		for _, id := range owners {
+			m.others[id] = true
+		}
+		if len(m.hits) < 5 {
+			m.hits = append(m.hits, fmt.Sprintf("%q (%s as book %s)", c.origStem(), how, strings.Join(owners, ", ")))
+		} else if len(m.hits) == 5 {
+			m.hits = append(m.hits, "…")
+		}
+	}
+	return m, true
 }
 
 // joinTarget reads the row's files against the live books outside it: the
@@ -1021,83 +1151,167 @@ func (ix *fragAudioIndex) goneOwners(c *fragCandidate, in map[string]bool) []str
 // held elsewhere. A join retires every fragment into the target, so a
 // fragment whose audio the target does not hold must never be in one.
 func (ix *fragAudioIndex) joinTarget(r *repairs.Row) (target, why string) {
-	plan, ok := r.Detail.(*fragGroupPlan)
+	m, ok := ix.match(r)
 	if !ok {
 		return "", ""
 	}
-	in := map[string]bool{}
-	for _, id := range r.BookIDs {
-		in[id] = true
-	}
-	var files []*fragCandidate
-	for _, m := range plan.Members {
-		files = append(files, m.Frag)
-	}
-	for _, cp := range plan.Copies {
-		files = append(files, cp.Frag)
-	}
-	var hits, gone []string
-	held := 0
-	others := map[string]bool{}
-	for _, c := range files {
-		if gb := ix.goneOwners(c, in); len(gb) > 0 && len(gone) < 5 {
-			gone = append(gone, fmt.Sprintf("%q (book %s)", c.origStem(), strings.Join(gb, ", ")))
-		}
-		var owners []string
-		how := ""
-		if c.File.Hash != "" {
-			for _, id := range ix.byHash[c.File.Hash] {
-				if !in[id] {
-					owners, how = append(owners, id), "same hash"
-				}
-			}
-		}
-		if len(owners) == 0 && c.File.Size > 0 && c.File.Duration > 0 {
-			for _, id := range ix.bySizeDur[[2]int64{c.File.Size, int64(c.File.Duration)}] {
-				if !in[id] {
-					owners, how = append(owners, id), "same size and duration"
-				}
-			}
-		}
-		if len(owners) == 0 {
-			continue
-		}
-		held++
-		owners = uniqueSorted(owners)
-		for _, id := range owners {
-			others[id] = true
-		}
-		if len(hits) < 5 {
-			hits = append(hits, fmt.Sprintf("%q (%s as book %s)", c.origStem(), how, strings.Join(owners, ", ")))
-		} else if len(hits) == 5 {
-			hits = append(hits, "…")
-		}
-	}
-	if len(gone) > 0 {
+	if len(m.gone) > 0 {
 		// Held whatever else matched: the matching book rows' files are gone,
 		// so these fragments may be the only copies of that audio.
-		why = "files of the set match rows of a live book whose files are missing on disk: " + strings.Join(gone, "; ") +
+		why = "files of the set match rows of a live book whose files are missing on disk: " + strings.Join(m.gone, "; ") +
 			"; these fragments may be that book's only copies, so the set is neither joined nor assembled (a repoint is the repair); decide by hand"
-		if held > 0 {
-			why += fmt.Sprintf("; %d file(s) also match present rows: %s", held, strings.Join(hits, "; "))
+		if m.held > 0 {
+			why += fmt.Sprintf("; %d file(s) also match present rows: %s", m.held, strings.Join(m.hits, "; "))
 		}
 		return "", why
 	}
-	if held == 0 {
+	if m.held == 0 {
 		return "", ""
 	}
 	why = fmt.Sprintf("%d of the set's %d files are audio %d other live book(s) already hold: %s",
-		held, len(files), len(others), strings.Join(hits, "; "))
-	if len(others) == 1 && held == len(files) {
-		for id := range others {
+		m.held, m.files, len(m.others), strings.Join(m.hits, "; "))
+	if len(m.others) == 1 && m.held == m.files {
+		for id := range m.others {
 			return id, why
 		}
 	}
-	if len(others) == 1 {
+	if len(m.others) == 1 {
 		// One book holds only part of the set: joining would retire the
 		// other fragments into a book that does not hold their audio, so
 		// that audio would sit in no live book. The whole set is held.
-		why += fmt.Sprintf("; the other %d file(s)' audio is in no other book, so the set is not that book's copy", len(files)-held)
+		why += fmt.Sprintf("; the other %d file(s)' audio is in no other book, so the set is not that book's copy", m.files-m.held)
 	}
 	return "", why
+}
+
+// titleJoinAudio is why a title join into target is held for its audio
+// ("" none): a file of the set whose audio a live book other than target holds (a
+// third copy of the work, or not this work), or that matches a missing row
+// of a book other than target (target's own missing rows are its joinTotal's
+// to judge).
+// Books isCand names (chapter fragments, not books) are left out: a
+// fragment's copy elsewhere is a fragment, not a second book of the work.
+func (ix *fragAudioIndex) titleJoinAudio(r *repairs.Row, target string, isCand func(string) bool) string {
+	m, ok := ix.match(r)
+	if !ok {
+		return ""
+	}
+	var others, gone []string
+	for id := range m.others {
+		if id != target && !isCand(id) {
+			others = append(others, id)
+		}
+	}
+	for id := range m.goneOthers {
+		if id != target && !isCand(id) {
+			gone = append(gone, id)
+		}
+	}
+	sort.Strings(others)
+	sort.Strings(gone)
+	switch {
+	case len(others) > 0:
+		return fmt.Sprintf("%d of the set's %d files are audio that live book(s) other than the join target %s hold (%s): %s; which book is this work's is not proven; decide by hand",
+			m.held, m.files, target, strings.Join(others, ", "), strings.Join(m.hits, "; "))
+	case len(gone) > 0:
+		return fmt.Sprintf("files of the set match missing rows of live book(s) other than the join target %s (%s): %s; these fragments may be those books' only copies; decide by hand",
+			target, strings.Join(gone, ", "), strings.Join(m.gone, "; "))
+	}
+	return ""
+}
+
+// setLibraryGuard decides a chapter-set row again against the whole library
+// as it is now, for the apply's re-check: the re-plan before it read only the
+// row's books, and a set's plan-time decision reads the whole library (the
+// existing-book check's titles, the same audio in another live book, a target
+// a no-parent apply assembled, a live book in the set's folders, a member's
+// version group). cands are the row's fragments as the re-plan rebuilt them.
+// The library is listed fresh (GetAllBooksCoreComplete, which refuses a
+// partly loaded cache) and the same code the plan ran decides it
+// (noParentRows, holdCoOwned), so plan and apply cannot disagree on a test.
+// Whether a book outside the row is a fragment candidate, and whether one was
+// assembled, are read for the books those tests ask about. why is "" when
+// the fragments still form the planned row, applicable, joining the same
+// book; any read error fails the apply rather than passing it.
+func (f *fragmentFixer) setLibraryGuard(store OpsStore, hist FragmentRepairReader, planned repairs.Row, cands []*fragCandidate) (string, error) {
+	full, err := f.loadLibraryFrom(store, store.GetAllBooksCoreComplete)
+	if err != nil {
+		return "", fmt.Errorf("%s: library re-check of %s: %w", fragFixerID, planned.RowID, err)
+	}
+	var readErr error
+	full.assembled = map[string]bool{}
+	full.assembledFn = func(id string) bool {
+		ok, err := fragAssembledByJournal(hist, id)
+		if err != nil && readErr == nil {
+			readErr = err
+		}
+		return ok
+	}
+	inRow := map[string]bool{}
+	for _, id := range planned.BookIDs {
+		inRow[id] = true
+	}
+	candOf := map[string]bool{}
+	full.candFn = func(id string) bool {
+		if v, ok := candOf[id]; ok {
+			return v
+		}
+		b, ok := full.books[id]
+		rows := full.files[id]
+		v := false
+		if ok && !b.SoftDeleted && !inRow[id] && len(rows) == 1 {
+			_, isCand, err := f.candidateFrom(store, b, rows[0], hist)
+			if err != nil && readErr == nil {
+				readErr = fmt.Errorf("candidate test of %s: %w", id, err)
+			}
+			v = isCand
+		}
+		candOf[id] = v
+		return v
+	}
+	rows := f.noParentRows(full, cands)
+	f.holdCoOwned(full, rows)
+	if readErr != nil {
+		return "", fmt.Errorf("%s: library re-check of %s: %w", fragFixerID, planned.RowID, readErr)
+	}
+	for _, r := range rows {
+		if r.RowID != planned.RowID {
+			continue
+		}
+		switch {
+		case !r.Applicable():
+			return fmt.Sprintf("against the whole library as it is now the row is held (%s): %s; plan again", r.Skipped, r.SkipReason), nil
+		case r.Class != planned.Class:
+			return fmt.Sprintf("against the whole library as it is now the row is %s, not %s as planned; plan again", r.Class, planned.Class), nil
+		case r.Proposed["join"] != planned.Proposed["join"]:
+			return fmt.Sprintf("against the whole library as it is now the set joins %q, not %q as planned; plan again", r.Proposed["join"], planned.Proposed["join"]), nil
+		}
+		return "", nil
+	}
+	for _, r := range rows {
+		if len(cands) > 0 && slices.Contains(r.BookIDs, cands[0].Book.ID) {
+			why := r.SkipReason
+			if why == "" {
+				why = r.Reason
+			}
+			return fmt.Sprintf("against the whole library as it is now the fragments form row %s (%s), not this one: %s; plan again", r.RowID, r.Class, why), nil
+		}
+	}
+	return "against the whole library as it is now the fragments no longer form this row; plan again", nil
+}
+
+// fragAssembledByJournal reports whether book id carries a plan record of
+// this fixer that is not reverted: a no-parent apply assembled it (the plan's
+// lib.assembled reads the same records from its whole-journal scan).
+func fragAssembledByJournal(hist FragmentRepairReader, id string) (bool, error) {
+	cs, err := hist.GetBookChanges(id)
+	if err != nil {
+		return false, fmt.Errorf("changes of %s: %w", id, err)
+	}
+	for _, c := range cs {
+		if c != nil && c.ChangeType == undo.ChangeTypeRepairPlanRecord && c.RevertedAt == nil && c.Source == fragFixerID && c.BookID == id {
+			return true, nil
+		}
+	}
+	return false, nil
 }
