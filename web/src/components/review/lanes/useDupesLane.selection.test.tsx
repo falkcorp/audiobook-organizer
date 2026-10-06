@@ -90,7 +90,9 @@ describe('useDupesLane selection', () => {
 
     act(() => result.current.selection.selectAllMatching());
     expect(result.current.selection.allMatching).toBe(true);
-    expect(result.current.selection.selectedCount).toBe(TOTAL);
+    // The server's bulk count, not the list's total, once it arrives.
+    await waitFor(() => expect(result.current.selection.selectedCount).toBe(COUNT));
+    expect(result.current.matchingCount).toEqual({ state: 'ready', n: COUNT });
   });
 
   it('a page turn keeps an all-matching selection but clears an explicit one', async () => {

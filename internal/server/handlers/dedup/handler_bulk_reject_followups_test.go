@@ -132,7 +132,7 @@ func TestRevertBulkReject_FailedRestoreIsReportedAndRetryable(t *testing.T) {
 		t.Fatalf("status=%q want pending", got)
 	}
 
-	deduphandler.SetRestoreBulkLabelForTest(h, d.es.RestoreLabelAfterBulkRevert)
+	deduphandler.SetRestoreBulkLabelForTest(h, nil) // back to the store's own restore
 	w = doReq(t, h.RevertBulkRejectDedupCandidates, http.MethodPost,
 		"/api/v1/dedup/candidates/bulk-reject/revert", body, nil)
 	rv = decodeBulkReject(t, w.Body.Bytes())
