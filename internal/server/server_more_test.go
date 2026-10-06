@@ -1,7 +1,7 @@
 // file: internal/server/server_more_test.go
-// version: 1.13.0
+// version: 1.13.1
 // guid: 18a6b0a3-7e78-4e0f-8b8e-0e4c1dbde6de
-// last-edited: 2026-09-11
+// last-edited: 2026-10-06
 
 //go:build !windows
 
@@ -789,8 +789,9 @@ func TestRunAutoPurgeSoftDeleted(t *testing.T) {
 	config.AppConfig.PurgeSoftDeletedAfterDays = 1
 	config.AppConfig.PurgeSoftDeletedDeleteFiles = true
 
-	tempDir := t.TempDir()
-	filePath := filepath.Join(tempDir, "old.m4b")
+	// The purge deletes only inside the library root (purgePathInsideRoot,
+	// 2026-10-06), so the file lives under RootDir.
+	filePath := filepath.Join(config.AppConfig.RootDir, "old.m4b")
 	require.NoError(t, os.WriteFile(filePath, []byte("audio"), 0o644))
 	marked := true
 	deletedAt := time.Now().AddDate(0, 0, -2)

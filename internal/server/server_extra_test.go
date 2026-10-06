@@ -1,7 +1,7 @@
 // file: internal/server/server_extra_test.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 61a2d3c4-80ab-4f6f-8c39-15a2ac5b7f0c
-// last-edited: 2026-09-25
+// last-edited: 2026-10-06
 
 package server
 
@@ -99,7 +99,9 @@ func TestDuplicateAndSoftDeleteEndpoints(t *testing.T) {
 	server.router.ServeHTTP(w, req)
 	require.Equal(t, http.StatusOK, w.Code)
 
-	softFile := filepath.Join(tempDir, "soft.m4b")
+	// The purge deletes only inside the library root (purgePathInsideRoot,
+	// 2026-10-06), so the file lives under RootDir.
+	softFile := filepath.Join(config.AppConfig.RootDir, "soft.m4b")
 	require.NoError(t, os.WriteFile(softFile, []byte("audio"), 0o644))
 	marked := true
 	deletedAt := time.Now().Add(-24 * time.Hour)

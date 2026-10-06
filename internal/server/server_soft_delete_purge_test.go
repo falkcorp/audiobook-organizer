@@ -1,7 +1,7 @@
 // file: internal/server/server_soft_delete_purge_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 4a3b2c1d-0e9f-8a7b-6c5d-4e3f2a1b0c9d
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package server
 
@@ -23,7 +23,9 @@ func TestSoftDeleteAndPurge_WithFileDeletion(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
 
-	filePath := filepath.Join(t.TempDir(), "purge.m4b")
+	// The purge deletes only inside the library root (purgePathInsideRoot,
+	// 2026-10-06), so the file lives under RootDir.
+	filePath := filepath.Join(config.AppConfig.RootDir, "purge.m4b")
 	require.NoError(t, os.WriteFile(filePath, []byte("audio"), 0o644))
 	book, err := database.GetGlobalStore().CreateBook(&database.Book{Title: "Purge Me", FilePath: filePath, Format: "m4b"})
 	require.NoError(t, err)
@@ -52,7 +54,9 @@ func TestRunAutoPurgeSoftDeleted_DeletesOldEntries(t *testing.T) {
 	config.AppConfig.PurgeSoftDeletedAfterDays = 1
 	config.AppConfig.PurgeSoftDeletedDeleteFiles = true
 
-	filePath := filepath.Join(t.TempDir(), "auto-purge.m4b")
+	// The purge deletes only inside the library root (purgePathInsideRoot,
+	// 2026-10-06), so the file lives under RootDir.
+	filePath := filepath.Join(config.AppConfig.RootDir, "auto-purge.m4b")
 	require.NoError(t, os.WriteFile(filePath, []byte("audio"), 0o644))
 	book, err := database.GetGlobalStore().CreateBook(&database.Book{Title: "Auto Purge", FilePath: filePath, Format: "m4b"})
 	require.NoError(t, err)
