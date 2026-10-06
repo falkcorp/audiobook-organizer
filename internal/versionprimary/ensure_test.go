@@ -1,5 +1,5 @@
 // file: internal/versionprimary/ensure_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3e8a1b64-2f9c-4d07-b5a3-91c6e0d4f728
 // last-edited: 2026-10-06
 
@@ -231,6 +231,25 @@ func TestCrown_WritesChoiceAndDemotesRest(t *testing.T) {
 	require.Equal(t, versionprimary.OutcomeCrowned, res.Outcome)
 	f.RequireSinglePrimary(t, "g", b)
 	require.Equal(t, "false", f.Flag(t, a))
+}
+
+// CrownEnv's MayWrite: a refused demotee refuses the whole crown, the
+// chosen member's true included.
+func TestCrownEnv_MayWriteRefusesBeforeAnyWrite(t *testing.T) {
+	f := vptest.New(t)
+	a := f.Book(t, vptest.Spec{ID: "a", Group: "g", Primary: "nil"})
+	b := f.Book(t, vptest.Spec{ID: "b", Group: "g", Primary: "false"})
+	res, err := versionprimary.CrownEnv(f.S, "g", b, versionprimary.Env{MayWrite: func(m *database.Book) error {
+		if m.ID == a {
+			return errors.New("an iTunes copy")
+		}
+		return nil
+	}})
+	require.True(t, errors.Is(err, versionprimary.ErrWriteRefused), "%v", err)
+	require.Equal(t, versionprimary.OutcomeWriteRefused, res.Outcome)
+	require.Empty(t, res.Writes)
+	require.Equal(t, "nil", f.Flag(t, a))
+	require.Equal(t, "false", f.Flag(t, b))
 }
 
 func TestCrown_RefusesSoftDeletedOrForeignBook(t *testing.T) {

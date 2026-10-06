@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/consolidation_leftovers_fixer.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 6df37df9-b008-41ad-bd69-47b00e4cb50c
 // last-edited: 2026-10-06
 
@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/itunesguard"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
@@ -1235,18 +1236,7 @@ func (f *consolidationLeftoversFixer) Apply(ctx context.Context, w *repairs.Writ
 	// iTunes question again under its group lock about exactly the members
 	// it is about to write, and refuses the whole hand-off rather than
 	// write one: an iTunes book's primary flag is never written.
-	gid := plan.GroupID
-	res := repairs.NewPathResolver()
-	rules := handOffRules{expect: plan.ExpectPrimary, mayWrite: func(m *database.Book) error {
-		why, err := itunesMemberWhy(store, res, gid, m)
-		if err != nil {
-			return err
-		}
-		if why != "" {
-			return errors.New(why)
-		}
-		return nil
-	}}
+	rules := handOffRules{expect: plan.ExpectPrimary, mayWrite: itunesguard.MayWrite(store, plan.GroupID)}
 	did, err := retireIntoExpecting(ctx, f.p, store, w, f.now, leftoverFixerID, plan.Leftover, plan.Combined, slice, rules)
 	steps += did
 	if err != nil {

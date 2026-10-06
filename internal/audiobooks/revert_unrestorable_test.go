@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_unrestorable_test.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 28cae8c7-2875-491c-bd27-d45740fef9c3
-// last-edited: 2026-10-04
+// last-edited: 2026-10-06
 
 package audiobooks
 
@@ -381,6 +381,12 @@ func TestRevertOperation_AllRestorableRowsReverted_SaysAlreadyReverted(t *testin
 // The fs-regroup-xml reversals are exercised against a real store in
 // internal/plugins/maintenance; these only satisfy revertServiceStore.
 func (s *ledgerStub) MoveBookFilesToBook([]string, string, string) error { return nil }
+
+// GetExternalIDsForBook satisfies the settle pass's iTunes guard: no book
+// here carries an external id.
+func (s *ledgerStub) GetExternalIDsForBook(string) ([]database.ExternalIDMapping, error) {
+	return nil, nil
+}
 func (s *ledgerStub) GetBookFileByID(string, string) (*database.BookFile, error) {
 	return nil, nil
 }

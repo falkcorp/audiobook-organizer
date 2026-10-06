@@ -1,5 +1,5 @@
 // file: internal/versionprimary/ensure.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 0b7e4c52-9a1d-4f38-8c6e-2d51f0a7b9e3
 // last-edited: 2026-10-06
 
@@ -528,6 +528,16 @@ func ChooseSinglePrimary(ctx context.Context, store EnsureStore, members []datab
 // member explicit false, with no election: for a caller whose choice is
 // deliberate (an undo, a user edit). keepID must be a live member.
 func Crown(store EnsureStore, gid, keepID string) (HandoffResult, error) {
+	return CrownEnv(store, gid, keepID, Env{})
+}
+
+// CrownEnv is Crown honouring env.MayWrite (the other Env fields are not
+// read): every member Crown would write -- keepID unless already explicit
+// true, and every member it would demote -- is asked under the group lock
+// before any write, and one refusal writes nothing and returns
+// ErrWriteRefused (outcome OutcomeWriteRefused). The op revert passes its
+// never-write-an-iTunes-book rule here.
+func CrownEnv(store EnsureStore, gid, keepID string, env Env) (HandoffResult, error) {
 	res := HandoffResult{GroupID: gid, Outcome: OutcomeEmpty}
 	if strings.TrimSpace(gid) == "" {
 		return res, nil
@@ -547,6 +557,12 @@ func Crown(store EnsureStore, gid, keepID string) (HandoffResult, error) {
 	if !found {
 		res.Outcome = OutcomeCrownNotMember
 		return res, nil
+	}
+	if env.MayWrite != nil {
+		if err := guardWrites(members, keepID, true, alive, env.MayWrite); err != nil {
+			res.Outcome = OutcomeWriteRefused
+			return res, fmt.Errorf("%w: group %s: %w", ErrWriteRefused, gid, err)
+		}
 	}
 	return writeWinner(store, gid, members, keepID, alive, OutcomeCrowned, res)
 }

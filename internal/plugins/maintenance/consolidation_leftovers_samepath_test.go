@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/consolidation_leftovers_samepath_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: f05ffd91-1eeb-4d83-be86-1d16d9d8e1e8
 // last-edited: 2026-10-06
 
@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )
@@ -577,7 +578,8 @@ func TestLeftoversSamePath_HandOffRefusesAnUnexpectedWinner(t *testing.T) {
 // user-state follow opens). The hand-off would demote it -- a write to an
 // iTunes book's primary flag -- so it refuses under the group lock with
 // nothing written: the copy stays nil, the owner keeps its flag, the row
-// stops as partially applied. The op revert then leaves the owner primary.
+// stops as partially applied. The op revert then leaves the owner primary
+// and the copy untouched, reporting the group it could not settle.
 func TestLeftoversSamePath_HandOffNeverWritesAnITunesMember(t *testing.T) {
 	f := newLFFixture(t)
 	l, o, _ := f.splashdown(t)
@@ -605,18 +607,37 @@ func TestLeftoversSamePath_HandOffNeverWritesAnITunesMember(t *testing.T) {
 	require.NotNil(t, ob.IsPrimaryVersion)
 	require.True(t, *ob.IsPrimaryVersion)
 
-	// The copy is set back to explicit false before the revert because the
-	// revert path is NOT guarded against iTunes writes: left nil, the
-	// settle's fallback (EnsureSinglePrimary, with no MayWrite) would
-	// demote it -- a known gap, outside this hand-off's guard. With it
-	// false, the revert must still leave the owner primary (the refusal
-	// note says the op wrote no member's flag).
-	_, err = f.s.ModifyBook(it, func(b *database.Book) error { b.IsPrimaryVersion = &no; return nil })
-	require.NoError(t, err)
+	// The op revert, with the copy still nil: the restored leftover yields
+	// to the owner (the refusal note says the op wrote no member's flag).
+	// The group then reads two primaries (the owner and the nil copy), and
+	// settling it would demote the copy -- a write to an iTunes book's
+	// flag -- so the revert leaves the group as it stands and reports it
+	// rather than write it.
+	// The revert's hand-off reads the library root from config (as in
+	// prod), so the owner is an eligible incumbent and the settle reaches
+	// the demote it must refuse.
+	prevRoot := config.AppConfig.RootDir
+	config.AppConfig.RootDir = f.p.deps.RootDir()
+	t.Cleanup(func() { config.AppConfig.RootDir = prevRoot })
 	rr, err := audiobooks.NewRevertService(f.s).RevertOperation("op-apply")
 	require.NoError(t, err)
 	require.Zero(t, rr.Failed, "%+v", rr)
-	f.requireOwnerKeepsPrimary(t, l, o)
+	require.Empty(t, rr.HandOffFailed, "%+v", rr)
+	require.Len(t, rr.SettleSkipped, 1, "%+v", rr)
+	require.Contains(t, rr.SettleSkipped[0], "iTunes copy "+it)
+	require.True(t, rr.Partial())
+	ib, err = f.s.GetBookByID(it)
+	require.NoError(t, err)
+	require.Nil(t, ib.IsPrimaryVersion, "the revert never writes the iTunes copy's flag")
+	ob, err = f.s.GetBookByID(o)
+	require.NoError(t, err)
+	require.NotNil(t, ob.IsPrimaryVersion)
+	require.True(t, *ob.IsPrimaryVersion, "the owner keeps its flag")
+	lb, err := f.s.GetBookByID(l)
+	require.NoError(t, err)
+	require.False(t, lb.IsSoftDeleted())
+	require.NotNil(t, lb.IsPrimaryVersion)
+	require.False(t, *lb.IsPrimaryVersion, "the restored leftover yields to the owner")
 }
 
 // TestLeftoversSamePath_ChosenWinnerIsFingerprinted: the hand-off's chosen

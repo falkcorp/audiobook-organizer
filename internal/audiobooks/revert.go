@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.63.0
+// version: 1.64.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-06
 
@@ -53,6 +53,10 @@ type revertServiceStore interface {
 	// The settle pass re-crowns a restored primary and demotes the rest of
 	// its group (versionprimary.Crown), or hands the group off.
 	versionprimary.EnsureStore
+	// The settle pass's iTunes guard (itunesguard.MayWrite) reads a
+	// member's external ids (its book_file rows come from
+	// revertBookFileStore).
+	GetExternalIDsForBook(bookID string) ([]database.ExternalIDMapping, error)
 }
 
 // revertTagStore reads and removes book tags: the revert of a repair's
@@ -282,11 +286,18 @@ type RevertResult struct {
 	// Partial, and the next revert of the operation retries the recorded
 	// groups even when every row is already reverted.
 	HandOffFailed []string `json:"hand_off_failed,omitempty"`
+	// SettleSkipped lists the version groups the settle pass left as they
+	// stand because settling them would write an iTunes book's primary flag
+	// (itunesguard; versionprimary.ErrWriteRefused), which is never done:
+	// group, originals and the member refused. Not recorded for retry. The
+	// rows are restored and marked; the result is Partial.
+	SettleSkipped []string `json:"settle_skipped,omitempty"`
 }
 
-// Partial reports whether any row of the operation was left un-reverted.
+// Partial reports whether any row of the operation was left un-reverted, or
+// a group it changed was left unsettled.
 func (r *RevertResult) Partial() bool {
-	return r.Failed > 0 || r.NotRestorable > 0 || len(r.HandOffFailed) > 0
+	return r.Failed > 0 || r.NotRestorable > 0 || len(r.HandOffFailed) > 0 || len(r.SettleSkipped) > 0
 }
 
 // Summary is a one-line human-readable account of the result, used both in the
@@ -309,6 +320,9 @@ func (r *RevertResult) Summary() string {
 	}
 	if len(r.HandOffFailed) > 0 {
 		fmt.Fprintf(&b, "; %d version group(s) not settled to one primary (%s)", len(r.HandOffFailed), strings.Join(r.HandOffFailed, " | "))
+	}
+	if len(r.SettleSkipped) > 0 {
+		fmt.Fprintf(&b, "; %d version group(s) left unsettled to protect an iTunes book (%s)", len(r.SettleSkipped), strings.Join(r.SettleSkipped, " | "))
 	}
 	if r.Failed > 0 {
 		fmt.Fprintf(&b, "; %d failed to restore", r.Failed)
