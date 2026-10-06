@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_history_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 829118c5-b507-4c65-8bb6-eaf346c88634
 // last-edited: 2026-10-06
 
@@ -273,4 +273,36 @@ func TestRevertHistory_HistoryFailureDoesNotFailTheRevert(t *testing.T) {
 func itoaT(n int) string {
 	raw, _ := json.Marshal(n)
 	return string(raw)
+}
+
+// TestRevertSettle_NeverWritesAnITunesMember: the settle pass's crown of an
+// original would demote a nil-flag iTunes copy (a write to an iTunes book's
+// primary flag). It refuses the whole crown, so the group is left as it
+// stands and reported in SettleSkipped: not a failure, not owed for retry.
+func TestRevertSettle_NeverWritesAnITunesMember(t *testing.T) {
+	s := newRevertPebble(t)
+	rs := NewRevertService(s)
+	gid, no, pid := "vg-itunes", false, "0123456789ABCDEF"
+	o, err := s.CreateBook(&database.Book{Title: "O", FilePath: "/x/o", VersionGroupID: &gid, IsPrimaryVersion: &no})
+	require.NoError(t, err)
+	x, err := s.CreateBook(&database.Book{Title: "X", FilePath: "/x/x", VersionGroupID: &gid, ITunesPersistentID: &pid})
+	require.NoError(t, err)
+	result := &RevertResult{}
+	msgs := rs.settleGroups("op-itunes", settleInput{touched: []settleTouch{
+		{bookID: o.ID, changeType: undo.ChangeTypeBookPrimaryDemote, oldValue: "true"},
+	}}, result)
+	require.Empty(t, msgs)
+	require.Empty(t, result.HandOffFailed)
+	require.Len(t, result.SettleSkipped, 1)
+	require.Contains(t, result.SettleSkipped[0], "iTunes copy "+x.ID)
+	require.True(t, result.Partial())
+	require.Contains(t, result.Summary(), "left unsettled to protect an iTunes book")
+	xb, err := s.GetBookByID(x.ID)
+	require.NoError(t, err)
+	require.Nil(t, xb.IsPrimaryVersion, "the iTunes copy's flag is never written")
+	ob, err := s.GetBookByID(o.ID)
+	require.NoError(t, err)
+	require.NotNil(t, ob.IsPrimaryVersion)
+	require.False(t, *ob.IsPrimaryVersion, "the crown wrote nothing")
+	require.False(t, rs.hasSettleOwed("op-itunes"), "not recorded for retry")
 }

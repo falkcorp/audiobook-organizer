@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retire_into_test.go
-// version: 1.8.4
+// version: 1.9.0
 // guid: 90cd2c0f-e6c5-4176-8d2c-bc587eea86cd
 // last-edited: 2026-10-06
 
@@ -799,5 +799,48 @@ func TestRevert_EveryOriginalYieldsToALaterPick(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, b.IsPrimaryVersion)
 		require.False(t, *b.IsPrimaryVersion, "%s yields explicit false", id)
+	}
+}
+
+// Every retire's hand-off carries the iTunes guard (itunesguard.MayWrite),
+// not only the consolidation-leftovers one: a duplicate-copies or
+// fragment-consolidation retire whose group holds a nil-flag iTunes copy
+// refuses the hand-off rather than demote it. Nothing in the group is
+// written by the hand-off, the refusal is journaled, and the row's error
+// names the copy.
+func TestRetireInto_HandOffNeverWritesAnITunesMember(t *testing.T) {
+	for _, fixerID := range []string{dcFixerID, fragFixerID} {
+		t.Run(fixerID, func(t *testing.T) {
+			d := newDCFixture(t)
+			s, l := d.dune(t)
+			gid := "vg-dune"
+			yes := true
+			pid := "0123456789ABCDEF"
+			_, err := d.s.ModifyBook(s, func(b *database.Book) error { b.VersionGroupID, b.IsPrimaryVersion = &gid, &yes; return nil })
+			require.NoError(t, err)
+			_, err = d.s.ModifyBook(l, func(b *database.Book) error { b.VersionGroupID, b.IsPrimaryVersion = &gid, &yes; return nil })
+			require.NoError(t, err)
+			it, err := d.s.CreateBook(&database.Book{Title: "Dune (iTunes)", FilePath: "/x/it.m4b", VersionGroupID: &gid, ITunesPersistentID: &pid})
+			require.NoError(t, err)
+
+			w := repairs.NewWriter(d.s, d.s, fixerID, "bulk_update", "repairs-").WithJournal(d.s, d.s, "op-apply")
+			_, err = retireInto(context.Background(), d.p, d.s, w, time.Now, fixerID, l, s, nil)
+			require.ErrorIs(t, err, versionprimary.ErrWriteRefused)
+			require.Contains(t, err.Error(), "iTunes copy "+it.ID)
+			ib, err := d.s.GetBookByID(it.ID)
+			require.NoError(t, err)
+			require.Nil(t, ib.IsPrimaryVersion, "the iTunes copy's flag was never written")
+			sb, err := d.s.GetBookByID(s)
+			require.NoError(t, err)
+			require.True(t, *sb.IsPrimaryVersion)
+			require.False(t, handoffJournaled(t, d.s, "op-apply", l), "no hand-off made")
+			changes, err := d.s.GetOperationChanges("op-apply")
+			require.NoError(t, err)
+			refused := false
+			for _, c := range changes {
+				refused = refused || (c.BookID == l && c.ChangeType == undo.ChangeTypeBookPrimaryHandoffRefused)
+			}
+			require.True(t, refused, "the refusal is journaled for the revert")
+		})
 	}
 }

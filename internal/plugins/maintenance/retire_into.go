@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retire_into.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: dadb4da5-0f2d-4678-abf3-4ac97f3ecb66
 // last-edited: 2026-10-06
 
@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/itunesguard"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
@@ -106,13 +107,17 @@ type handOffRules struct {
 	mayWrite func(*database.Book) error
 }
 
-// retireOpts adjust the shared retire. The zero value is the safe one.
+// retireOpts adjust the shared retire. The zero value is the safe one: its
+// hand-off carries the iTunes guard (itunesguard.MayWrite) unless MayWrite
+// overrides it.
 type retireOpts struct {
 	// Expect is the member the primary hand-off must leave primary ("" none;
 	// retireIntoExpecting).
 	Expect string
 	// MayWrite is asked, under the group lock, about every member whose
-	// primary flag the hand-off would write (handOffRules.mayWrite).
+	// primary flag the hand-off would write (handOffRules.mayWrite). nil
+	// means itunesguard.MayWrite over the retired book's group; a caller
+	// passes its own only to add to that rule (or a test, to fail it).
 	MayWrite func(*database.Book) error
 	// Only, when set, is why target must not be written (retireIntoOnly).
 	Only string
@@ -153,6 +158,15 @@ func retireIntoWith(ctx context.Context, p *Plugin, store OpsStore, w *repairs.W
 	}
 	if b == nil {
 		return 0, fmt.Errorf("%w: book %s vanished", repairs.ErrChangedSincePlan, id)
+	}
+	if rules.mayWrite == nil && b.VersionGroupID != nil {
+		// Every retire's hand-off refuses to write an iTunes book's
+		// primary flag (itunesguard.MayWrite), asked under the group lock
+		// about exactly the members it would write. This is about the
+		// members the hand-off WRITES, not the retired book's own rows, so
+		// it holds with AllowITunesPath (which only lets a book whose row
+		// carries an iTunes path reference be retired) and with Only.
+		rules.mayWrite = itunesguard.MayWrite(store, *b.VersionGroupID)
 	}
 	if b.IsSoftDeleted() {
 		// Retired by an earlier run, which may have been cut off (a lost

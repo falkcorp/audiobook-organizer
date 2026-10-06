@@ -113,6 +113,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/boilerplate"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/itunesguard"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -210,43 +211,17 @@ func itunesCopyWhy(res *repairs.PathResolver, id, pid string, paths []string, ro
 
 // itunesOwnershipWhy is the one iTunes-ownership predicate of the merge
 // fixers (duplicate-copies, fragment-consolidation, consolidation-leftovers),
-// so their checks cannot drift. In order: a book iTunes persistent id; a row
-// iTunes persistent id, or (countPathRef) a row iTunes path reference; an
-// un-tombstoned itunes external id; a path inside an "iTunes Media" folder;
-// a path under books/itunes/** (symlinks resolved). doubt: a path could not
-// be settled, so it cannot be told.
+// so their checks cannot drift: itunesguard.OwnershipWhy, which the hand-off
+// guard (itunesguard.MayWrite) and the op revert use too.
 //
 // countPathRef is false only for a book the consolidation-leftovers fixer
 // retires (owner decision 2026-10-06, see leftoverITunesWhy).
 func itunesOwnershipWhy(res *repairs.PathResolver, id, pid string, paths []string, rows []fragFile, exts []database.ExternalIDMapping, countPathRef bool) (why string, doubt bool) {
-	if pid != "" {
-		return "book iTunes id " + pid, false
-	}
+	rs := make([]itunesguard.Row, 0, len(rows))
 	for _, r := range rows {
-		switch {
-		case r.ITunesPID != "":
-			return "row iTunes id " + r.ITunesPID, false
-		case countPathRef && r.ITunesPath != "":
-			return "row iTunes path " + r.ITunesPath, false
-		}
+		rs = append(rs, itunesguard.Row{ID: r.ID, ITunesPID: r.ITunesPID, ITunesPath: r.ITunesPath})
 	}
-	for _, e := range exts {
-		if e.Source == "itunes" && e.ExternalID != "" && !e.Tombstoned {
-			return "itunes external id " + e.ExternalID, false
-		}
-	}
-	for _, p := range paths {
-		if strings.Contains(p, string(filepath.Separator)+"iTunes Media"+string(filepath.Separator)) {
-			return "file inside an iTunes Media folder: " + p, false
-		}
-	}
-	switch k, w := repairs.GuardBookPathsWith(res, id, paths, ""); k {
-	case repairs.SkipITunes:
-		return w, false
-	case repairs.SkipGuardUnreadable:
-		return "", true
-	}
-	return "", false
+	return itunesguard.OwnershipWhy(res, id, pid, paths, rs, exts, countPathRef)
 }
 
 // dcBook is one book as the fixer judges it.
@@ -1920,41 +1895,9 @@ func (f *duplicateCopiesFixer) itunesWouldBeWritten(store OpsStore, gid string, 
 		if contains(losers, b.ID) || b.IsSoftDeleted() || (b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion) {
 			continue
 		}
-		if why, err := itunesMemberWhy(store, res, gid, b); err != nil || why != "" {
+		if why, err := itunesguard.MemberWhy(store, res, gid, b); err != nil || why != "" {
 			return why, err
 		}
-	}
-	return "", nil
-}
-
-// itunesMemberWhy says why version-group member b must not have its primary
-// flag written ("" when it may): it is an iTunes copy (its own iTunes id, a
-// row's, an un-tombstoned external id, or a path in the iTunes library), or
-// that cannot be told. itunesWouldBeWritten asks it of every member a
-// hand-off could write; the consolidation-leftovers apply hands it to the
-// hand-off itself (versionprimary.Env.MayWrite), which asks again under the
-// group lock about exactly the members it is about to write.
-func itunesMemberWhy(store OpsStore, res *repairs.PathResolver, gid string, b *database.Book) (string, error) {
-	rows, err := store.GetBookFiles(b.ID)
-	if err != nil {
-		return "", fmt.Errorf("files of %s: %w", b.ID, err)
-	}
-	exts, err := store.GetExternalIDsForBook(b.ID)
-	if err != nil {
-		return "", fmt.Errorf("external ids of %s: %w", b.ID, err)
-	}
-	paths := []string{b.FilePath}
-	var ff []fragFile
-	for _, r := range rows {
-		paths = append(paths, r.FilePath)
-		ff = append(ff, fragFile{ID: r.ID, ITunesPID: r.ITunesPersistentID, ITunesPath: r.ITunesPath})
-	}
-	why, doubt := itunesCopyWhy(res, b.ID, dcStr(b.ITunesPersistentID), paths, ff, exts)
-	if doubt {
-		return fmt.Sprintf("could not tell whether version-group member %s is an iTunes copy", b.ID), nil
-	}
-	if why != "" {
-		return fmt.Sprintf("iTunes copy %s in version group %s is not explicitly non-primary: the hand-off would write it", b.ID, gid), nil
 	}
 	return "", nil
 }

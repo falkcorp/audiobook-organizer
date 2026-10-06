@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_settle.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3f8c2a71-5d94-4e6b-b0a3-9c1e7d2f4a58
 // last-edited: 2026-10-06
 
@@ -16,6 +16,7 @@ import (
 	"sync"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/itunesguard"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
@@ -324,6 +325,17 @@ func (rs *RevertService) settleGroups(operationID string, in settleInput, result
 		if err == nil {
 			continue
 		}
+		if errors.Is(err, versionprimary.ErrWriteRefused) {
+			// Settling would write an iTunes book's primary flag, which is
+			// never done: the group is left as it stands, reported, and
+			// not recorded for retry (a retry would refuse the same way
+			// until the member changes; version-group-primary-repair or
+			// the owner settles it).
+			result.SettleSkipped = append(result.SettleSkipped, fmt.Sprintf(
+				"version group %s (originals %s): left unsettled, settling it would write an iTunes book's primary flag: %v",
+				gid, strings.Join(g.originals, ","), err))
+			continue
+		}
 		left.Groups[gid] = settleOwedGroup{Originals: g.originals, ExplicitTrue: explicit}
 		msg := fmt.Sprintf("version group %s (originals %s): %v", gid, strings.Join(g.originals, ","), err)
 		result.HandOffFailed = append(result.HandOffFailed, msg)
@@ -371,6 +383,10 @@ func (rs *RevertService) settleGroup(opID, gid string, originals []string, owed 
 	// Every is_primary_version write below records history, Source
 	// operation_revert, BatchID the operation id (revertHistoryStore).
 	hist := revertHistoryStore{revertServiceStore: rs.db, opID: opID}
+	// Neither the crown nor the hand-off below writes an iTunes book's
+	// primary flag: each asks this under the group lock about every member
+	// it would write, and refuses the whole write (ErrWriteRefused) instead.
+	mayWrite := itunesguard.MayWrite(rs.db, gid)
 	merge.LockMergeRMW()
 	defer merge.UnlockMergeRMW()
 	members, err := rs.db.GetBooksByVersionGroup(gid)
@@ -436,7 +452,7 @@ func (rs *RevertService) settleGroup(opID, gid string, originals []string, owed 
 			}
 			break
 		}
-		if _, err := versionprimary.Crown(hist, gid, o); err != nil {
+		if _, err := versionprimary.CrownEnv(hist, gid, o, versionprimary.Env{MayWrite: mayWrite}); err != nil {
 			return explicit, fmt.Errorf("crown %s and demote the rest of group %s: %w", o, gid, err)
 		}
 		return nil, nil
@@ -445,7 +461,7 @@ func (rs *RevertService) settleGroup(opID, gid string, originals []string, owed 
 		return nil, nil
 	}
 	if _, err := versionprimary.EnsureSinglePrimary(context.Background(), hist, gid,
-		versionprimary.Env{RootDir: merge.TrashRestoreEnv().RootDir}); err != nil {
+		versionprimary.Env{RootDir: merge.TrashRestoreEnv().RootDir, MayWrite: mayWrite}); err != nil {
 		return explicit, fmt.Errorf("hand off version group %s: %w", gid, err)
 	}
 	return nil, nil
