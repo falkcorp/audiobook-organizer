@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useDupesLane.selection.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7b5601fc-d9e3-408e-80f4-8fd4bba7ce60
 // last-edited: 2026-10-06
 //
@@ -27,6 +27,9 @@ vi.mock('../../../services/api');
 
 const toast = vi.fn();
 const TOTAL = 137;
+// The server's bulk count differs from the list total (dead-book rows and the
+// like are paging noise in the list): the dialog must show and send THIS.
+const COUNT = 133;
 
 function cand(id: number): api.DedupCandidate {
   return {
@@ -63,6 +66,7 @@ beforeEach(() => {
     merged: TOTAL,
     failed: 0,
   });
+  vi.mocked(api.countBulkDedupCandidates).mockResolvedValue(COUNT);
   vi.mocked(api.bulkRejectDedupCandidates).mockResolvedValue({
     attempted: TOTAL,
     rejected: TOTAL - 1,
@@ -162,7 +166,7 @@ describe('useDupesLane selection', () => {
   it('dismissAllFiltered sends the exact on-screen filter to bulk-reject and reports its counts', async () => {
     const { result } = await renderLane({ band: 'REVIEW', entityId: 'book-7' });
     await act(async () => {
-      result.current.dispatch({ lane: 'dupes', type: 'dismissAllFiltered' });
+      result.current.dispatch({ lane: 'dupes', type: 'dismissAllFiltered', expectedTotal: TOTAL });
     });
     expect(api.bulkRejectDedupCandidates).toHaveBeenCalledWith({
       entity_type: 'book',
@@ -182,7 +186,9 @@ describe('useDupesLane selection', () => {
     const { result } = await renderLane();
     act(() => result.current.setFilters({ status: 'merged' }));
     await waitFor(() => expect(result.current.loading).toBe(false));
-    act(() => result.current.dispatch({ lane: 'dupes', type: 'dismissAllFiltered' }));
+    act(() =>
+      result.current.dispatch({ lane: 'dupes', type: 'dismissAllFiltered', expectedTotal: TOTAL })
+    );
     expect(api.bulkRejectDedupCandidates).not.toHaveBeenCalled();
     expect(toast).toHaveBeenCalledWith(SELECT_ALL_MATCHING_PENDING_ONLY_REASON, 'warning');
   });
@@ -222,11 +228,20 @@ describe('DupesPanel select-all integration', () => {
     await user.click(screen.getByTestId('merge-selected'));
     // Destructive and wider than the page: confirmation with the count.
     const dialog = await screen.findByTestId('dupes-bulk-confirm');
-    expect(dialog).toHaveTextContent(`Merge all ${TOTAL} matching pairs?`);
+    // The server's count, not the list total.
+    await waitFor(() => expect(dialog).toHaveTextContent(`Merge all ${COUNT} matching pairs?`));
     expect(api.bulkLinkDedupCandidates).not.toHaveBeenCalled();
     await user.click(within(dialog).getByTestId('dupes-bulk-confirm-btn'));
 
     await waitFor(() => expect(api.bulkLinkDedupCandidates).toHaveBeenCalledTimes(1));
+    expect(api.bulkLinkDedupCandidates).toHaveBeenCalledWith(
+      expect.objectContaining({ entity_type: 'book', status: 'pending', expected_total: COUNT })
+    );
+    // The count was asked for the same book-only pending filter.
+    expect(api.countBulkDedupCandidates).toHaveBeenCalledWith(
+      expect.objectContaining({ entity_type: 'book', status: 'pending' }),
+      expect.anything()
+    );
     expect(api.linkDedupCandidate).not.toHaveBeenCalled();
   });
 
@@ -238,7 +253,7 @@ describe('DupesPanel select-all integration', () => {
     await user.click(screen.getByTestId('dupes-select-all-matching'));
     await user.click(screen.getByTestId('dismiss-selected'));
     const dialog = await screen.findByTestId('dupes-bulk-confirm');
-    expect(dialog).toHaveTextContent(`Dismiss all ${TOTAL} matching pairs?`);
+    await waitFor(() => expect(dialog).toHaveTextContent(`Dismiss all ${COUNT} matching pairs?`));
     await user.click(within(dialog).getByTestId('dupes-bulk-confirm-btn'));
     await waitFor(() => expect(api.bulkRejectDedupCandidates).toHaveBeenCalledTimes(1));
     expect(api.rejectDedupCandidate).not.toHaveBeenCalled();
@@ -249,9 +264,8 @@ describe('DupesPanel select-all integration', () => {
     renderPanel();
     await screen.findByTestId('dupes-row-5');
     await user.click(screen.getByTestId('merge-all-filtered'));
-    expect(await screen.findByTestId('dupes-bulk-confirm')).toHaveTextContent(
-      `Merge all ${TOTAL} matching pairs?`
-    );
+    const d1 = await screen.findByTestId('dupes-bulk-confirm');
+    await waitFor(() => expect(d1).toHaveTextContent(`Merge all ${COUNT} matching pairs?`));
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
 
     // Under "All" (or Dismissed) a filtered merge would overturn verdicts.
@@ -261,9 +275,21 @@ describe('DupesPanel select-all integration', () => {
     await waitFor(() => expect(screen.getByTestId('merge-all-filtered')).toBeDisabled());
   });
 
+  it('lists book pairs only, so pending author pairs never inflate the total', async () => {
+    await renderLane();
+    expect(api.getDedupCandidates).toHaveBeenCalledWith(
+      expect.objectContaining({ entity_type: 'book' }),
+      expect.anything()
+    );
+  });
+
   it('a 409 FILTER_CHANGED refreshes and asks to re-confirm instead of reporting failure', async () => {
     vi.mocked(api.bulkRejectDedupCandidates).mockRejectedValue(
-      new api.ApiError('moved', 409, { code: 'FILTER_CHANGED', expected_total: TOTAL, matched: TOTAL + 3 })
+      new api.ApiError('moved', 409, {
+        code: 'FILTER_CHANGED',
+        expected_total: TOTAL,
+        matched: TOTAL + 3,
+      })
     );
     // services/api is auto-mocked, so the real filterChangedOf (unit-tested
     // separately) is stubbed to recognise this rejection.
@@ -271,7 +297,7 @@ describe('DupesPanel select-all integration', () => {
     const { result } = await renderLane();
     const fetchesBefore = vi.mocked(api.getDedupCandidates).mock.calls.length;
     await act(async () => {
-      result.current.dispatch({ lane: 'dupes', type: 'dismissAllFiltered' });
+      result.current.dispatch({ lane: 'dupes', type: 'dismissAllFiltered', expectedTotal: TOTAL });
     });
     expect(toast).toHaveBeenCalledWith(filterChangedMessage(TOTAL + 3), 'warning');
     await waitFor(() =>
@@ -293,7 +319,7 @@ describe('DupesPanel select-all integration', () => {
     });
     const { result } = await renderLane();
     await act(async () => {
-      result.current.dispatch({ lane: 'dupes', type: 'dismissAllFiltered' });
+      result.current.dispatch({ lane: 'dupes', type: 'dismissAllFiltered', expectedTotal: TOTAL });
     });
     const call = toast.mock.calls.find((c) => String(c[0]).startsWith('Bulk dismiss'));
     const action = call?.[2] as { label: string; onClick: () => void } | undefined;
@@ -301,6 +327,17 @@ describe('DupesPanel select-all integration', () => {
     await act(async () => action!.onClick());
     expect(api.revertBulkRejectDedupCandidates).toHaveBeenCalledWith([11, 12]);
     await waitFor(() => expect(toast).toHaveBeenCalledWith('Undo: 2 back to pending', 'success'));
+  });
+
+  it('a failed count shows an error and cannot be confirmed', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.countBulkDedupCandidates).mockRejectedValue(new Error('count broke'));
+    renderPanel();
+    await screen.findByTestId('dupes-row-5');
+    await user.click(screen.getByTestId('merge-all-filtered'));
+    expect(await screen.findByTestId('dupes-bulk-count-error')).toHaveTextContent('count broke');
+    expect(screen.getByTestId('dupes-bulk-confirm-btn')).toBeDisabled();
+    expect(api.bulkLinkDedupCandidates).not.toHaveBeenCalled();
   });
 
   it('shift-click on a row checkbox selects the range; Shift+Space does too', async () => {

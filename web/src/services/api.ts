@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.154.0
+// version: 2.155.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-06
 
@@ -6515,6 +6515,29 @@ export function filterChangedOf(err: unknown): { expected: number; matched: numb
   const d = err.data as { code?: string; expected_total?: number; matched?: number } | undefined;
   if (d?.code !== 'FILTER_CHANGED' || typeof d.matched !== 'number') return null;
   return { expected: d.expected_total ?? 0, matched: d.matched };
+}
+
+/**
+ * How many candidates a filter-scoped bulk action would act on, counted by
+ * the server with the same function bulk-link / bulk-reject re-evaluate (dead
+ * rows and non-book pairs excluded). Show this in the confirmation and send it
+ * back as expected_total; the list's `total` is a paging hint, not this count.
+ */
+export async function countBulkDedupCandidates(
+  filter: BulkDedupCandidateFilter,
+  opts?: { signal?: AbortSignal }
+): Promise<number> {
+  const response = await apiFetch(`${API_BASE}/dedup/candidates/bulk-count`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(filter),
+    signal: opts?.signal,
+  });
+  if (!response.ok) {
+    throw await buildApiError(response, 'Failed to count matching candidates');
+  }
+  const responseData = await response.json();
+  return responseData.data.matched;
 }
 
 /** Undo a bulk dismiss by id: dismissed -> pending, guarded per row. */

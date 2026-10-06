@@ -1,5 +1,5 @@
 // file: web/src/components/review/reviewActions.ts
-// version: 1.4.0
+// version: 1.5.0
 // guid: 5c9e0a37-1b84-4d26-9f03-7a1e6c8b2d54
 // last-edited: 2026-10-06
 //
@@ -47,14 +47,18 @@ export type DupesAction =
   | { lane: 'dupes'; type: 'dismiss'; id: number }
   | { lane: 'dupes'; type: 'mergeSelected'; ids: number[] }
   | { lane: 'dupes'; type: 'dismissSelected'; ids: number[] }
-  /** Acts on the whole current filter, not on the selection. Named so that is unmissable. */
-  | { lane: 'dupes'; type: 'mergeAllFiltered' }
+  /**
+   * Acts on the whole current filter, not on the selection. Named so that is
+   * unmissable. `expectedTotal` is the count the reviewer confirmed (from
+   * countBulkDedupCandidates); the server refuses with 409 if it moved.
+   */
+  | { lane: 'dupes'; type: 'mergeAllFiltered'; expectedTotal: number }
   /**
    * Dismisses every pending pair the current filter matches -- the "Select all
    * N matching" + Dismiss path. Resolved on the server (bulk-reject), like
    * mergeAllFiltered, so its count is not knowable from the action.
    */
-  | { lane: 'dupes'; type: 'dismissAllFiltered' };
+  | { lane: 'dupes'; type: 'dismissAllFiltered'; expectedTotal: number };
 
 /**
  * Metadata lane. Ids are book ids.

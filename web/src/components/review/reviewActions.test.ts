@@ -1,7 +1,7 @@
 // file: web/src/components/review/reviewActions.test.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9d4a7e21-05c8-4b63-a19f-3e8b2c60d475
-// last-edited: 2026-09-27
+// last-edited: 2026-10-06
 
 import { describe, expect, it } from 'vitest';
 import {
@@ -32,7 +32,7 @@ describe('reversibility', () => {
     const irreversible: ReviewAction[] = [
       { lane: 'dupes', type: 'merge', id: 1 },
       { lane: 'dupes', type: 'dismiss', id: 1 },
-      { lane: 'dupes', type: 'mergeAllFiltered' },
+      { lane: 'dupes', type: 'mergeAllFiltered', expectedTotal: 3 },
       { lane: 'metadata', type: 'apply', id: 'b1' },
       { lane: 'metadata', type: 'skipAllUnmatched' },
       { lane: 'regroup', type: 'bulk', kind: 'series', decision: 'approve' },
@@ -56,7 +56,7 @@ describe('confirmation', () => {
   it('confirms merges and fan-out decisions', () => {
     expect(needsConfirmation({ lane: 'dupes', type: 'merge', id: 1 })).toBe(true);
     expect(needsConfirmation({ lane: 'dupes', type: 'mergeSelected', ids: [1, 2] })).toBe(true);
-    expect(needsConfirmation({ lane: 'dupes', type: 'mergeAllFiltered' })).toBe(true);
+    expect(needsConfirmation({ lane: 'dupes', type: 'mergeAllFiltered', expectedTotal: 3 })).toBe(true);
     expect(
       needsConfirmation({ lane: 'regroup', type: 'bulk', kind: 'k', decision: 'reject' })
     ).toBe(true);
@@ -88,7 +88,7 @@ describe('affectedCount', () => {
     // A wrong number in a confirmation dialog is worse than no number, because
     // it is the number the reviewer uses to decide. These three resolve their
     // targets on the server against the live filter.
-    expect(affectedCount({ lane: 'dupes', type: 'mergeAllFiltered' })).toBeNull();
+    expect(affectedCount({ lane: 'dupes', type: 'mergeAllFiltered', expectedTotal: 3 })).toBeNull();
     expect(affectedCount({ lane: 'metadata', type: 'skipAllUnmatched' })).toBeNull();
     expect(
       affectedCount({ lane: 'regroup', type: 'bulk', kind: 'k', decision: 'approve' })

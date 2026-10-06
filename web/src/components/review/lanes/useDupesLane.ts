@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useDupesLane.ts
-// version: 1.11.0
+// version: 1.12.0
 // guid: 5e9c1a74-0d38-4b62-9f15-6c2a8d4b7e31
 // last-edited: 2026-10-06
 
@@ -218,6 +218,9 @@ export interface DupesLane {
   shortcutHelpOpen: boolean;
   setShortcutHelpOpen: (open: boolean) => void;
 
+  /** The server's count for the filter-scoped bulk actions; see countMatching in the hook. */
+  countMatching: (signal?: AbortSignal) => Promise<number>;
+
   /** A destructive bulk action is in flight; a second must not overlap it. */
   busy: boolean;
 
@@ -342,6 +345,10 @@ export function useDupesLane(
     setError(null);
 
     const params: Parameters<typeof api.getDedupCandidates>[0] = {
+      // Book pairs only: this lane merges and dismisses BOOK duplicates, and
+      // the bulk endpoints are book-only. Listing every entity type made the
+      // total count pending AUTHOR pairs the bulk count never sees.
+      entity_type: 'book',
       status: filters.status || undefined,
       limit: pageSize,
       offset: (page - 1) * pageSize,
@@ -619,8 +626,7 @@ export function useDupesLane(
         // local filter stands down on, reused so the two cannot disagree.
         !serverAnsweredTerm(appliedSearch, filters.search)
         ? MERGE_ALL_SEARCH_PENDING_REASON
-        : // `total` is sent as expected_total; mid-fetch it is the previous
-          // filter's count.
+        : // Mid-fetch the rows and total on screen answer the previous filter.
           loading
           ? BULK_LIST_LOADING_REASON
           : null;
@@ -831,12 +837,20 @@ export function useDupesLane(
       // Sending filters.search could transmit a term the reviewer typed
       // but has not seen results for.
       q: appliedSearch.trim() || undefined,
-      // The count the reviewer confirmed. The server answers 409
-      // FILTER_CHANGED and writes nothing when the filter now matches a
-      // different number, so the action never covers rows nobody confirmed.
-      expected_total: total,
     }),
-    [filters.band, filters.entityId, appliedSearch, total]
+    [filters.band, filters.entityId, appliedSearch]
+  );
+
+  /**
+   * The number a "merge/dismiss everything matching" confirmation shows and
+   * then sends back as expected_total. Counted by the SERVER with the same
+   * function the bulk endpoints re-evaluate (dead rows excluded), never taken
+   * from the list's `total`, which is a paging hint: two different counts can
+   * never agree, and every confirm used to come back as "the list changed".
+   */
+  const countMatching = useCallback(
+    (signal?: AbortSignal) => api.countBulkDedupCandidates(bulkFilter, { signal }),
+    [bulkFilter]
   );
 
   /** A bulk action's error: a moved filter refreshes and asks to re-confirm. */
@@ -915,7 +929,11 @@ export function useDupesLane(
           void (async () => {
             setBusy(true);
             try {
-              const result = await api.bulkLinkDedupCandidates(bulkFilter);
+              const result = await api.bulkLinkDedupCandidates({
+                ...bulkFilter,
+                // The count the reviewer confirmed: 409 if the filter moved.
+                expected_total: action.expectedTotal,
+              });
               toast(
                 `Bulk merge: ${result.merged} merged, ${result.failed} failed of ${result.attempted}`,
                 result.failed === 0 ? 'success' : 'warning'
@@ -941,7 +959,10 @@ export function useDupesLane(
           void (async () => {
             setBusy(true);
             try {
-              const result = await api.bulkRejectDedupCandidates(bulkFilter);
+              const result = await api.bulkRejectDedupCandidates({
+                ...bulkFilter,
+                expected_total: action.expectedTotal,
+              });
               const ids = result.rejected_ids ?? [];
               const message = `Bulk dismiss: ${result.rejected} dismissed, ${result.failed} failed of ${result.attempted}`;
               const severity = result.failed === 0 ? 'success' : 'warning';
@@ -1128,6 +1149,7 @@ export function useDupesLane(
     selectedIds,
     selection,
     selectAllMatchingDisabledReason,
+    countMatching,
     toggleSelect,
     selectAllVisible,
     clearSelection,

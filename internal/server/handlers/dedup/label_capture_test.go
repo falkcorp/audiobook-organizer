@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/label_capture_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9b3d1f57-4c20-4e8a-bf16-2a7e9c5d013a
-// last-edited: 2026-09-25
+// last-edited: 2026-10-06
 
 package deduphandler_test
 
@@ -31,6 +31,13 @@ func allowLabelCaptureReads(d testDeps) {
 	// persisted onto the example unless a test wires a richer return.
 	d.engine.EXPECT().ScorePairsForBook(mock.Anything, mock.Anything, mock.Anything).
 		Return(nil, nil).Maybe()
+}
+
+// allowLabelCaptureReadsExcept is allowLabelCaptureReads with one book id
+// that no longer exists (GetBookByID returns nil for it).
+func allowLabelCaptureReadsExcept(d testDeps, missing string) {
+	d.store.EXPECT().GetBookByID(missing).Return(nil, nil).Maybe()
+	allowLabelCaptureReads(d)
 }
 
 func TestDismissDedupCandidate_RecordsHumanNotDupLabel(t *testing.T) {

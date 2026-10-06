@@ -1,5 +1,5 @@
 // file: web/src/components/dedup/__tests__/DedupAcousticTab.selectAll.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3f0b6c1e-8a24-4d5e-9b71-2c6e4a8d0f35
 // last-edited: 2026-10-06
 //
@@ -37,11 +37,11 @@ const ALL = Array.from({ length: TOTAL }, (_, i) => cand(i + 1));
 const PENDING = 5;
 
 function mockLists(rows: api.DedupCandidate[] = ALL) {
-  vi.mocked(api.getDedupCandidates).mockImplementation(async (params) =>
-    params?.status === 'pending' && params?.limit === 1
-      ? { candidates: [], total: PENDING }
-      : { candidates: rows.slice(0, 3), total: TOTAL }
-  );
+  vi.mocked(api.getDedupCandidates).mockResolvedValue({
+    candidates: rows.slice(0, 3),
+    total: TOTAL,
+  });
+  vi.mocked(api.countBulkDedupCandidates).mockResolvedValue(PENDING);
 }
 
 beforeEach(() => {
@@ -92,6 +92,11 @@ describe('AcousticDedupTab selection', () => {
     expect(dialog).toHaveTextContent(`Keep A on all ${PENDING} pending candidates?`);
     await user.click(within(dialog).getByTestId('acoustic-bulk-confirm-btn'));
 
+    expect(api.countBulkDedupCandidates).toHaveBeenCalledWith({
+      entity_type: 'book',
+      status: 'pending',
+      layer: 'acoustid',
+    });
     await waitFor(() =>
       expect(api.bulkLinkDedupCandidates).toHaveBeenCalledWith({
         entity_type: 'book',

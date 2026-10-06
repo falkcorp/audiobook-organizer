@@ -1,5 +1,5 @@
 // file: web/src/components/dedup/DedupAcousticTab.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678902
 // last-edited: 2026-10-06
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
@@ -994,8 +994,11 @@ export function AcousticDedupTab() {
       return;
     }
     try {
-      const resp = await api.getDedupCandidates({ ...ACOUSTIC_BULK_FILTER, limit: 1, offset: 0 });
-      setConfirmBulk({ action, pending: resp.total ?? 0 });
+      // The server's bulk count (same function bulk-link / bulk-reject
+      // re-evaluate, dead rows excluded), sent back as expected_total. The
+      // list's total is a paging hint and would 409 on every dead row.
+      const pending = await api.countBulkDedupCandidates({ ...ACOUSTIC_BULK_FILTER });
+      setConfirmBulk({ action, pending });
     } catch (err) {
       setStatusSeverity('error');
       setStatusMsg(err instanceof Error ? err.message : 'Could not count the pending candidates');
