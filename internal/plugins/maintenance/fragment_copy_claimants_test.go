@@ -198,6 +198,29 @@ func TestFragmentFixer_CopyClaimants(t *testing.T) {
 		}
 	})
 
+	t.Run("iTunes-linked parent: a path twin of a held fragment is held with it", func(t *testing.T) {
+		t.Parallel()
+		f := copyClaimantsFixture(t, true)
+		linkParentToITunes(t, f)
+		// A second single-row book registered for libA's file, carrying none
+		// of its facts (no size or hash), so it can only join libA as a twin.
+		aPath := f.path("lib/Many Parts copy A/02.mp3")
+		twin := f.book(t, "twin", "Many Parts - 02", aPath, nil)
+		f.row(t, "twin", twin, aPath, "", 0, 0, 0)
+		r0 := findRow(t, f.plan(t, "op-plan0"), "copy:"+f.ids["parent"])
+		require.Contains(t, r0.BookIDs, twin, "the twin joins its donor's row")
+		u, err := f.s.CreateUser("reader", "reader@example.com", "bcrypt", "x", []string{"user"}, "active")
+		require.NoError(t, err)
+		require.NoError(t, f.s.SetUserPosition(u.ID, f.ids["libA"], f.rowIDs["libA"], 100))
+		res := f.plan(t, "op-plan")
+		require.Equal(t, repairs.SkipITunes, findRow(t, res, "held:"+f.ids["libA"]).Skipped)
+		tw := findRow(t, res, "held:"+twin)
+		require.Contains(t, tw.SkipReason, "shares its file with fragment "+f.ids["libA"])
+		r := findRow(t, res, "copy:"+f.ids["parent"])
+		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+		require.ElementsMatch(t, []string{f.ids["parent"], f.ids["libB"]}, r.BookIDs)
+	})
+
 	t.Run("iTunes-linked parent: the fragment's group holds an iTunes book", func(t *testing.T) {
 		t.Parallel()
 		f := copyClaimantsFixture(t, true)
