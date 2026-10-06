@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useDupesLane.selection.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7b5601fc-d9e3-408e-80f4-8fd4bba7ce60
 // last-edited: 2026-10-06
 //
@@ -16,6 +16,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../../services/api';
 import { DupesPanel } from '../DupesPanel';
 import {
+  filterChangedMessage,
   MERGE_ALL_BLOCKED_REASON,
   SELECT_ALL_MATCHING_PENDING_ONLY_REASON,
   useDupesLane,
@@ -169,6 +170,7 @@ describe('useDupesLane selection', () => {
       band: 'REVIEW',
       entity_id: 'book-7',
       q: undefined,
+      expected_total: TOTAL,
     });
     expect(toast).toHaveBeenCalledWith(
       `Bulk dismiss: ${TOTAL - 1} dismissed, 1 failed of ${TOTAL}`,
@@ -242,7 +244,7 @@ describe('DupesPanel select-all integration', () => {
     expect(api.rejectDedupCandidate).not.toHaveBeenCalled();
   });
 
-  it('the merge-everything dialog prints no count outside the Pending status', async () => {
+  it('merge-everything is offered only under Pending, and its dialog states the count', async () => {
     const user = userEvent.setup();
     renderPanel();
     await screen.findByTestId('dupes-row-5');
@@ -252,14 +254,53 @@ describe('DupesPanel select-all integration', () => {
     );
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
 
+    // Under "All" (or Dismissed) a filtered merge would overturn verdicts.
     // The dialog's close transition hides the page until it ends.
     await user.click(await screen.findByRole('combobox', { name: 'Status' }));
-    await user.click(await screen.findByRole('option', { name: 'All' }));
-    await waitFor(() => expect(screen.getByTestId('merge-all-filtered')).toBeEnabled());
-    await user.click(screen.getByTestId('merge-all-filtered'));
-    const dialog = await screen.findByTestId('dupes-bulk-confirm');
-    await waitFor(() => expect(dialog).toHaveTextContent('Merge all matching pairs?'));
-    expect(dialog).not.toHaveTextContent(String(TOTAL));
+    await user.click(await screen.findByRole('option', { name: 'Dismissed' }));
+    await waitFor(() => expect(screen.getByTestId('merge-all-filtered')).toBeDisabled());
+  });
+
+  it('a 409 FILTER_CHANGED refreshes and asks to re-confirm instead of reporting failure', async () => {
+    vi.mocked(api.bulkRejectDedupCandidates).mockRejectedValue(
+      new api.ApiError('moved', 409, { code: 'FILTER_CHANGED', expected_total: TOTAL, matched: TOTAL + 3 })
+    );
+    // services/api is auto-mocked, so the real filterChangedOf (unit-tested
+    // separately) is stubbed to recognise this rejection.
+    vi.mocked(api.filterChangedOf).mockReturnValue({ expected: TOTAL, matched: TOTAL + 3 });
+    const { result } = await renderLane();
+    const fetchesBefore = vi.mocked(api.getDedupCandidates).mock.calls.length;
+    await act(async () => {
+      result.current.dispatch({ lane: 'dupes', type: 'dismissAllFiltered' });
+    });
+    expect(toast).toHaveBeenCalledWith(filterChangedMessage(TOTAL + 3), 'warning');
+    await waitFor(() =>
+      expect(vi.mocked(api.getDedupCandidates).mock.calls.length).toBeGreaterThan(fetchesBefore)
+    );
+  });
+
+  it('bulk dismiss offers Undo, which reverts exactly the dismissed ids', async () => {
+    vi.mocked(api.bulkRejectDedupCandidates).mockResolvedValue({
+      attempted: 3,
+      rejected: 2,
+      failed: 1,
+      rejected_ids: [11, 12],
+    });
+    vi.mocked(api.revertBulkRejectDedupCandidates).mockResolvedValue({
+      attempted: 2,
+      reverted: 2,
+      failed: 0,
+    });
+    const { result } = await renderLane();
+    await act(async () => {
+      result.current.dispatch({ lane: 'dupes', type: 'dismissAllFiltered' });
+    });
+    const call = toast.mock.calls.find((c) => String(c[0]).startsWith('Bulk dismiss'));
+    const action = call?.[2] as { label: string; onClick: () => void } | undefined;
+    expect(action?.label).toBe('Undo');
+    await act(async () => action!.onClick());
+    expect(api.revertBulkRejectDedupCandidates).toHaveBeenCalledWith([11, 12]);
+    await waitFor(() => expect(toast).toHaveBeenCalledWith('Undo: 2 back to pending', 'success'));
   });
 
   it('shift-click on a row checkbox selects the range; Shift+Space does too', async () => {

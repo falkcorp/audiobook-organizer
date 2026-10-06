@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/link_guard.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 6a7c81b3-f45d-4156-a464-2cae0ff48561
-// last-edited: 2026-09-26
+// last-edited: 2026-10-06
 
 package deduphandler
 
@@ -100,9 +100,9 @@ func (g *linkGuard) pairRefusal(c database.DedupCandidate) (string, bool) {
 
 // recheck re-reads candidate c right before its merge (see
 // dedup.RecheckAutomatedMerge). The row must still carry the status it was
-// listed under, which is the request's status filter: bulk-link accepts a
-// status other than pending (the Embedding tab sends its status filter), so
-// pinning the check to "pending" would refuse every such row.
+// listed under. bulk-link is pending-only since 2026-10-06 (a filtered bulk
+// merge must not overturn a merged/dismissed verdict), so that is "pending";
+// reading it from the row keeps link-series, which lists its own set, working.
 func (g *linkGuard) recheck(c database.DedupCandidate) (string, bool) {
 	return dedup.RecheckAutomatedMerge(g.es, c.ID, c.Status, g.book(c.EntityAID), g.book(c.EntityBID))
 }

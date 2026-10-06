@@ -19,14 +19,15 @@
     so the memoised rows do not all re-render on each tick. "Select all matching" is withheld
     (with the reason shown) under Both-unmatched, an unsettled search, or a
     status other than Pending.
-  - `/dedup` Acoustic tab: cross-page Keep A / Keep B / Dismiss page through
-    the list query (500 per request, refused above 5,000 -- the default
-    `bulk_apply_max_items`) with a progress line, then apply. Links run one
-    at a time. Only pending pairs are selectable and acted on (the list shows
-    every status); decided pairs in a cross-page set are skipped and counted.
-    A failed load now shows an error instead of the empty state,
-    and selected rows with no row behind them count as failures instead of
-    "processed".
+  - `/dedup` Acoustic tab: cross-page Keep A / Keep B go to `bulk-link`
+    with a new `keep_side` (`a`/`b`), and cross-page Dismiss to
+    `bulk-reject`, filtered to pending acoustic candidates. So they get
+    bulk-link's review-queue-only guard (hand-pinned, same-path and
+    chain-linking pairs refused) and its per-pair recheck, instead of a
+    client loop over the unguarded single-pair endpoints. Only pending pairs
+    are selectable. A failed load now shows an error instead of the empty
+    state, and selected rows with no row behind them count as failures
+    instead of "processed".
   - `/dedup` Version Groups, Authors, Series: the old "Select All" button
     (which silently selected every page) is replaced by the header checkbox
     plus banner; merging a selection wider than the page asks first. Authors
@@ -35,6 +36,14 @@
     checked, and the refetch erased the error).
   - `/dedup` AI Review and Reconcile: header checkbox and shift ranges;
     applied results are skipped.
+- **Bulk link and bulk reject take `expected_total`.** When set, a filter
+  that now matches a different count is refused with 409 `FILTER_CHANGED`
+  before anything is written; the review lane and the Acoustic tab send the
+  count the reviewer confirmed and ask again when it moved.
+- **`POST /api/v1/dedup/candidates/bulk-reject/revert`.** Bulk reject returns
+  `rejected_ids`; this puts those rows back to pending (only if nobody changed
+  them since) and removes the bulk "not a duplicate" labels. The review lane
+  and the Acoustic tab offer it as Undo.
 - **`POST /api/v1/dedup/candidates/bulk-reject`.** Rejects every pending book
   candidate matching the same filter body as `bulk-link` (both now bound by
   one `bindBulkCandidateFilter`), re-evaluated server-side. Writes go
@@ -44,6 +53,11 @@
   attempted / rejected / failed / failures.
 
 ### Fixed
+
+- **Bulk link is pending-only.** It accepted any status, so Status=Dismissed
+  plus "Merge everything matching this filter" linked every pair a person had
+  marked not-a-duplicate. The server now refuses any status but pending, and
+  the review lane disables the action outside Pending.
 
 - **Version Groups and Series tabs: a single-group merge no longer moves the
   selection and the "keep" choice onto the next group.** Groups were keyed by

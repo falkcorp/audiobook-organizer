@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useDupesLane.test.ts
-// version: 1.8.0
+// version: 1.9.0
 // guid: 4a71c8e2-53d9-4f06-b18a-9e2c7d4a0f53
-// last-edited: 2026-09-25
+// last-edited: 2026-10-06
 //
 // The behaviour under test is mostly the behaviour that a port loses silently:
 // eight keyboard shortcuts, a suppression guard, a keep-side decision shared
@@ -145,6 +145,8 @@ describe('mergeAllFiltered is refused when the filter cannot be transmitted', ()
       band: 'REVIEW',
       entity_id: 'book-7',
       q: undefined,
+      // The count confirmed: a moved filter is refused server-side.
+      expected_total: 2,
     });
   });
 
@@ -181,6 +183,7 @@ describe('mergeAllFiltered is refused when the filter cannot be transmitted', ()
       band: undefined,
       entity_id: undefined,
       q: 'A1',
+      expected_total: 1,
     });
   });
 

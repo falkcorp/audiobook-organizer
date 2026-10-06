@@ -5908,8 +5908,12 @@
           },
           "404": {
             "description": "Not found"
+          },
+          "409": {
+            "description": "FILTER_CHANGED: expected_total no longer matches; nothing written"
           }
-        }
+        },
+        "description": "Link every pending book candidate matching the filter (pending only). Optional keep_side (a|b) picks every pair's survivor; optional expected_total refuses a moved filter with 409. The review-queue-only guard refuses pinned, same-path and chain-linking pairs."
       }
     },
     "/dedup/candidates/bulk-merge": {
@@ -5946,7 +5950,36 @@
       "post": {
         "operationId": "bulkRejectDedupCandidates",
         "summary": "bulk Reject Dedup Candidates",
-        "description": "Reject every pending book candidate matching the same filter body as bulk-link, re-evaluated server-side. Manual (hand-pinned) candidates and candidates whose status changed since the list are reported as failures and left alone. Refused with 422 above bulk_apply_max_items. Returns attempted, rejected, failed and failures.",
+        "description": "Reject every pending book candidate matching the same filter body as bulk-link, re-evaluated server-side. Manual (hand-pinned) candidates and candidates whose status changed since the list are reported as failures and left alone. With expected_total, a filter that now matches a different count is refused with 409 FILTER_CHANGED and nothing is written. Refused with 422 above bulk_apply_max_items. Returns attempted, rejected, failed, failures and rejected_ids (undo with /bulk-reject/revert).",
+        "tags": [
+          "dedup"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Bulk apply cap exceeded"
+          }
+        }
+      }
+    },
+    "/dedup/candidates/bulk-reject/revert": {
+      "post": {
+        "operationId": "revertBulkRejectDedupCandidates",
+        "summary": "revert Bulk Reject Dedup Candidates",
+        "description": "Undo a bulk reject by id: body {candidate_ids} (the rejected_ids bulk-reject returned). Each row goes dismissed -> pending only if nobody changed it since; the bulk not_dup gold label is removed. Returns attempted, reverted, failed, failures, reverted_ids.",
         "tags": [
           "dedup"
         ],
