@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_search.go
-// version: 1.35.0
+// version: 1.36.0
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
 // last-edited: 2026-10-06
 
@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -20,6 +22,8 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authority"
+	"github.com/falkcorp/audiobook-organizer/internal/authorjunk"
+	"github.com/falkcorp/audiobook-organizer/internal/authorname"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/foldernames"
@@ -449,9 +453,17 @@ func (mfs *Service) resolveSearchInputs(book *database.Book, query, author, narr
 	// Always resolve the book's own author and narrator for scoring tiebreaks,
 	// even when no explicit hints were provided in the search request
 	bookAuthor := searchAuthor
+	// authorDropped: the book carried an author credit that was junk ("[XYZ]",
+	// a credit restating the title). Only then may an author folder stand in
+	// for it (knownAuthorFolder): a book with no credit at all keeps the
+	// questions it was always asked.
+	authorDropped := strings.TrimSpace(author) != "" && searchAuthor == ""
 	if bookAuthor == "" && book.AuthorID != nil {
 		if a, aerr := mfs.db.GetAuthorByID(*book.AuthorID); aerr == nil && a != nil {
 			bookAuthor = SearchAuthorHint(a.Name)
+			if bookAuthor == "" && !authorname.IsPlaceholderAuthor(a.Name) {
+				authorDropped = true
+			}
 		}
 	}
 	// The search asks by the book's own author when no hint was passed.
@@ -481,20 +493,59 @@ func (mfs *Service) resolveSearchInputs(book *database.Book, query, author, narr
 	// Read the book's own name, series slot and any packed-in people out of
 	// the title ("Magma Heart - Unknown Author", "read by Cathfach (Erryn's
 	// World)", "Jack Reacher 17: A Wanted Man (Jeff Harding)").
-	parsed := parseSearchTitleWith(rawQuery, searchAuthor, bookNarrator, mfs.nameEvidence(book))
-	// An author that is the title itself ("Hammer Fall Rising" by "Hammer Fall
-	// Rising"; the organizer filed an untagged book under its own title) is no
-	// author: narrowing by it asks the catalog for a book by that "person"
-	// and finds nothing. A title that is really a person's name is refused
-	// before any search (metabatch titleJudge.namesAPerson), so the side that
-	// is junk here is the author.
-	if searchAuthor != "" && sameNormalizedText(searchAuthor, parsed.Title) {
-		searchAuthor = ""
-		if sameNormalizedText(bookAuthor, parsed.Title) {
-			bookAuthor = ""
+	ev := mfs.nameEvidence(book)
+	// rawAuthor is the credit as stored, before SearchAuthorHint cleaned it:
+	// the batch fetch passes the cleaned hint, so the stored name is read
+	// from AuthorID. A cleaned-away suffix ("Some Book_10-02") is evidence
+	// that the credit was a file name, not a person.
+	rawAuthor := strings.TrimSpace(author)
+	if rawAuthor == "" && book.AuthorID != nil {
+		if a, aerr := mfs.db.GetAuthorByID(*book.AuthorID); aerr == nil && a != nil {
+			rawAuthor = strings.TrimSpace(a.Name)
 		}
-		parsed = parseSearchTitleWith(rawQuery, "", bookNarrator, mfs.nameEvidence(book))
-		parsed.AuthorIsTitle = true
+	}
+	// Title and author swapped (a person's name as the title, a book name
+	// as the author): the title is a person the authority lists know as an
+	// author, the author is not, AND the author side carries positive junk
+	// evidence -- a file-name suffix the hint cleaned away, or a shape no
+	// person has. Without that evidence a person-titled book by another
+	// person is a biography ("Steve Jobs" by Walter Isaacson) and is asked
+	// as stored. Shape alone never swaps.
+	if title := strings.TrimSpace(metadata.ParseBookName(rawQuery, metadata.NameEvidence{}).Title); searchAuthor != "" &&
+		ev.IsKnownAuthor != nil && personShaped(title) && ev.IsKnownAuthor(title) && !mfs.knownAuthorOrFault(searchAuthor) &&
+		!sameNormalizedText(title, searchAuthor) && (SearchAuthorHint(rawAuthor) != rawAuthor || !personShaped(searchAuthor)) {
+		rawQuery, searchAuthor = searchAuthor, title
+		searchTitle, literal = stripChapterFromTitle(rawQuery), stripChapterFromTitle(rawQuery)
+		if bookAuthor == "" || sameNormalizedText(bookAuthor, rawQuery) {
+			bookAuthor = title
+		}
+	}
+	parsed := parseSearchTitleWith(rawQuery, searchAuthor, bookNarrator, ev)
+	// An author that is the title itself ("Hammer Fall Rising" by "Hammer Fall
+	// Rising"; the organizer filed an untagged book under its own title), or
+	// that restates the title's words in another order (an organizer folder
+	// name split as a composite credit, the title's series, its genre
+	// tagline), narrows by nothing real. authorVsTitle decides on evidence:
+	// dropped only when the credit is proven junk, kept with an extra
+	// title-only question when it is merely suspect, kept as is otherwise.
+	if searchAuthor != "" {
+		exact := sameNormalizedText(searchAuthor, parsed.Title)
+		switch mfs.authorVsTitle(book.ID, searchAuthor, parsed, exact, rawQuery, literal, parsed.Title) {
+		case authorJunk:
+			if sameNormalizedText(bookAuthor, searchAuthor) || sameNormalizedText(bookAuthor, parsed.Title) {
+				bookAuthor = ""
+			}
+			searchAuthor = ""
+			parsed = parseSearchTitleWith(rawQuery, "", bookNarrator, ev)
+			// The exact-title filter holds a question asked with no person
+			// to only answers titled exactly the book. Set for an exact
+			// author==title only: a restated credit leaves the series in
+			// the query, and the filter would refuse the catalog's bare name.
+			parsed.AuthorIsTitle = exact
+			authorDropped = true
+		case authorSuspect:
+			parsed.SuspectAuthor = true
+		}
 	}
 	// A title that names no position takes the book's stored series sequence
 	// for the strong gates only ("Overlord", sequence 8, is not strong on
@@ -509,6 +560,18 @@ func (mfs *Service) resolveSearchInputs(book *database.Book, query, author, narr
 		searchAuthor = SearchAuthorHint(parsed.Author)
 		if bookAuthor == "" {
 			bookAuthor = searchAuthor
+		}
+	}
+	// A junk credit dropped above is replaced only by evidence: an ancestor
+	// folder the authority lists know as an author ("John Sample/Example
+	// Worlds/..."). Otherwise the title is asked alone; an author is never
+	// guessed ("Pat Reader/Some Summoner/..." is a narrator's folder).
+	if searchAuthor == "" && authorDropped {
+		if a := knownAuthorFolder(book.FilePath, ev, mfs.isKnownNarrator); a != "" {
+			searchAuthor = a
+			if bookAuthor == "" {
+				bookAuthor = a
+			}
 		}
 	}
 	if bookNarrator == "" {
@@ -560,6 +623,205 @@ func (mfs *Service) nameEvidence(book *database.Book) metadata.NameEvidence {
 	return ev
 }
 
+// titleTokenRe finds the words restatesTitleWords compares.
+var titleTokenRe = regexp.MustCompile(`[\pL\pN]+`)
+
+// restatesTitleWords reports whether every word of author is already in one
+// of titles, in any order ("and" aside), and author has a letter.
+func restatesTitleWords(author string, titles ...string) bool {
+	have := map[string]bool{}
+	for _, t := range titles {
+		for _, w := range titleTokenRe.FindAllString(strings.ToLower(metadata.NormalizeNameText(t)), -1) {
+			have[w] = true
+		}
+	}
+	letters := false
+	for _, w := range titleTokenRe.FindAllString(strings.ToLower(author), -1) {
+		if w == "and" {
+			continue
+		}
+		if !have[w] {
+			return false
+		}
+		if hasLetter.MatchString(w) {
+			letters = true
+		}
+	}
+	return letters
+}
+
+// authorTitleVerdict is authorVsTitle's answer.
+type authorTitleVerdict int
+
+const (
+	// authorKept: nothing says the credit is not the book's author.
+	authorKept authorTitleVerdict = iota
+	// authorSuspect: the credit restates the title but nothing proves it
+	// junk; it is kept, and the title is also asked alone
+	// (parsedTitle.SuspectAuthor).
+	authorSuspect
+	// authorJunk: proven junk; the title is asked without it.
+	authorJunk
+)
+
+// authorVsTitle judges an author credit whose words may all be the title's.
+// exact: it equals the parsed title. It is JUNK only on positive evidence:
+// an author row whose every other book's title restates the credit (a series
+// or a title filed as an author), or a shape no person has (digits, a genre
+// tagline) -- one word is no evidence ("Moby", "Homer"). It is KEPT when the title names it as its owner ("Tom Clancy's
+// ...") or the parse read it as a credit segment ("Brandon Sanderson -
+// Mistborn"). An author the authority lists know (a lookup fault counts as
+// known: a read error never drops an author), or a person-shaped credit with
+// books of its own ("Stephen King": "The Stephen King Collection") or none
+// to judge, is SUSPECT: kept, with a title-only question added. An exact
+// author==title with no evidence either way keeps the rule it always had:
+// junk.
+func (mfs *Service) authorVsTitle(bookID, author string, parsed parsedTitle, exact bool, titles ...string) authorTitleVerdict {
+	if !exact && !restatesTitleWords(author, titles...) {
+		return authorKept
+	}
+	a := strings.ToLower(strings.TrimSpace(author))
+	for _, t := range titles {
+		lt := strings.ToLower(t)
+		if strings.Contains(lt, a+"'s") || strings.Contains(lt, a+"’s") {
+			return authorKept
+		}
+	}
+	known := mfs.knownAuthorOrFault(author)
+	row := mfs.authorRowOnlyRestates(author, bookID)
+	if row == rowOnlyRestates && !known {
+		return authorJunk
+	}
+	// A credit segment ("Brandon Sanderson - Mistborn") names the author --
+	// unless, read with no author evidence, that segment is the series of a
+	// slot ("Some Series - 4 - Some Book").
+	if samePerson(parsed.Author, author) && len(titles) > 0 &&
+		!samePerson(metadata.ParseBookName(titles[0], metadata.NameEvidence{}).Series, author) {
+		return authorKept
+	}
+	if known {
+		return authorSuspect
+	}
+	// A shape no person's name has: a book or volume number, a genre
+	// tagline. (A one-word credit is a person often enough: "Moby",
+	// "Homer".)
+	if strings.ContainsAny(author, "0123456789") || authorjunk.IsGenreTagline(author) {
+		return authorJunk
+	}
+	if row == rowHasOtherBooks || row == rowUnknown || !exact {
+		return authorSuspect
+	}
+	// An exact author==title with no other evidence keeps the rule it
+	// always had.
+	return authorJunk
+}
+
+// knownAuthorOrFault reports whether the authority lists know name as an
+// author; a lookup fault answers true, so a read error never drops a credit.
+func (mfs *Service) knownAuthorOrFault(name string) bool {
+	if mfs == nil || mfs.db == nil {
+		return false
+	}
+	ok, err := authority.NewIndex(mfs.db).IsKnownPerson(name, authority.RoleAuthor)
+	return err != nil || ok
+}
+
+// authorRowEvidence is what an author row says about a credit.
+type authorRowEvidence int
+
+const (
+	rowNone authorRowEvidence = iota // no row of that name, or no other book on it
+	rowOnlyRestates
+	rowHasOtherBooks
+	rowUnknown // a read fault: no evidence
+)
+
+// maxAuthorRowBooks bounds how many of an author row's books are read.
+// A row with more books than this is a real author's.
+const maxAuthorRowBooks = 200
+
+// authorRowOnlyRestates reads the library's author row named name, apart
+// from the book being searched (selfID) and books whose stored title is no
+// title (metadata.IsUnsearchableTitle: "read by narrator", "copy2"): a row
+// whose every other book's title carries all of the credit's words is a
+// series or a title filed as an author ("Some Series" credited on "Some
+// Series 4" and "Some Series 5"); a row with any other book is a person's;
+// a row with no other book says nothing (rowNone).
+func (mfs *Service) authorRowOnlyRestates(name, selfID string) authorRowEvidence {
+	if mfs == nil || mfs.db == nil {
+		return rowUnknown
+	}
+	a, err := mfs.db.GetAuthorByName(name)
+	if err != nil {
+		return rowUnknown
+	}
+	if a == nil {
+		return rowNone
+	}
+	books, err := mfs.db.GetBooksByAuthorIDCore(a.ID)
+	if err != nil {
+		return rowUnknown
+	}
+	if len(books) > maxAuthorRowBooks {
+		return rowHasOtherBooks
+	}
+	others := 0
+	for _, b := range books {
+		if b.ID == selfID || metadata.IsUnsearchableTitle(b.Title) {
+			continue
+		}
+		others++
+		if !restatesTitleWords(name, b.Title) {
+			return rowHasOtherBooks
+		}
+	}
+	if others == 0 {
+		return rowNone
+	}
+	return rowOnlyRestates
+}
+
+// maxAuthorFolderHops bounds how far up from the book knownAuthorFolder
+// looks: "<author>/<series>/<book>/<file>" is three folders up.
+const maxAuthorFolderHops = 3
+
+// knownAuthorFolder returns the nearest ancestor folder of path, within
+// maxAuthorFolderHops, that is person-shaped and that the authority lists
+// know as an author, or "". A folder they also know as a narrator is no
+// evidence: a narrator with a few author credits qualifies as an author too,
+// and the "[XYZ]" rows sit under narrators' folders ("Pat Reader/Some
+// Summoner/..."). That book is asked by title alone.
+func knownAuthorFolder(path string, ev metadata.NameEvidence, isNarrator func(string) bool) string {
+	if strings.TrimSpace(path) == "" || ev.IsKnownAuthor == nil {
+		return ""
+	}
+	dir := filepath.Dir(filepath.ToSlash(path))
+	for range maxAuthorFolderHops {
+		name := strings.TrimSpace(filepath.Base(dir))
+		if name == "" || name == "/" || name == "." {
+			return ""
+		}
+		if personShaped(name) && ev.IsKnownAuthor(name) {
+			if isNarrator != nil && isNarrator(name) {
+				return ""
+			}
+			return name
+		}
+		dir = filepath.Dir(dir)
+	}
+	return ""
+}
+
+// isKnownNarrator reports whether the authority lists know name as a
+// narrator. A lookup fault answers true: the folder is then no evidence.
+func (mfs *Service) isKnownNarrator(name string) bool {
+	if mfs == nil || mfs.db == nil {
+		return false
+	}
+	ok, err := authority.NewIndex(mfs.db).IsKnownPerson(name, authority.RoleNarrator)
+	return err != nil || ok
+}
+
 // sameNormalizedText reports whether a and b are the same text ignoring case,
 // punctuation and spacing ("Hammer Fall Rising" / "hammer fall rising").
 func sameNormalizedText(a, b string) bool {
@@ -594,6 +856,12 @@ func (in searchInputs) fingerprint(bookTitle string) string {
 	// keeps the fingerprint it had before the ASIN rung existed.
 	if in.asin != "" {
 		parts = append(parts, "asin:"+in.asin)
+	}
+	// Appended only when set, like the ASIN: a suspect author adds a
+	// title-only question (parsedTitle.SuspectAuthor), so a "nothing found"
+	// asked without it is re-asked.
+	if in.parsed.SuspectAuthor {
+		parts = append(parts, "suspect-author")
 	}
 	for _, part := range parts {
 		h.Write([]byte(part))
@@ -666,6 +934,29 @@ func (mfs *Service) SearchAuthorFor(book *database.Book, query, author string) s
 		return SearchAuthorHint(author)
 	}
 	return mfs.resolveSearchInputs(book, query, author, "").author
+}
+
+// SearchQuestion returns the title and author a search for book with this
+// query and author hint actually asks providers: resolveSearchInputs, the one
+// resolver every search and fingerprint goes through. An author of "" means
+// the book is searched by title alone.
+func (mfs *Service) SearchQuestion(book *database.Book, query, author string) (title, queryAuthor string) {
+	if mfs == nil || mfs.db == nil || book == nil {
+		return strings.TrimSpace(query), SearchAuthorHint(author)
+	}
+	in := mfs.resolveSearchInputs(book, query, author, "")
+	return in.title, in.author
+}
+
+// SearchAsksTitleAlone reports whether that search also asks its title with
+// no author: the author resolved to "", or it is a suspect credit
+// (parsedTitle.SuspectAuthor) kept beside a title-only question.
+func (mfs *Service) SearchAsksTitleAlone(book *database.Book, query, author string) bool {
+	if mfs == nil || mfs.db == nil || book == nil {
+		return SearchAuthorHint(author) == ""
+	}
+	in := mfs.resolveSearchInputs(book, query, author, "")
+	return in.author == "" || in.parsed.SuspectAuthor
 }
 
 func (mfs *Service) searchMetadataForBook(

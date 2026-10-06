@@ -1,5 +1,5 @@
 // file: internal/metadata/book_name.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8eab30cb-5e6e-4bc7-bfba-dfb603b81ef2
 // last-edited: 2026-10-06
 //
@@ -12,9 +12,11 @@
 package metadata
 
 import (
+	"html"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorjunk"
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
@@ -74,6 +76,8 @@ const (
 	ShapeTrackSuffix       = "track_suffix"       // " - 01" after a series slot, "(1 of 3)"
 	ShapeSeriesSlot        = "series_slot"        // "Series NN - Title", "Series - NN - Title", "Series Book NN"
 	ShapeSubseries         = "subseries"          // "Series Book 05 - Some Trilogy - Title"
+	ShapeTrackLead         = "track_lead"         // "001 - Title - read by narrator": the organizer's own file template
+	ShapeYearParen         = "year_paren"         // "Some Title (2017)"
 )
 
 // BookName is what ParseBookName read out of a title.
@@ -148,8 +152,26 @@ var (
 	// slotWordOnlyRe is a series head that is only a slot word ("Book 3").
 	slotWordOnlyRe = regexp.MustCompile(`(?i)^(?:book|bk|part|pt|vol(?:ume)?|episode|ep|chapter|disc|disk|track|cd)\.?$`)
 	// narratorSegRe is a "read by X" / "narrated by X" field.
-	narratorSegRe    = regexp.MustCompile(`(?i)^(?:read|narrated)\s+by\s+(.+)$`)
-	bookNameLetterRe = regexp.MustCompile(`\pL`)
+	narratorSegRe = regexp.MustCompile(`(?i)^(?:read|narrated)\s+by\s+(.+)$`)
+	// trackLeadRe is the zero-padded track field the organizer's own file
+	// template put in front of a title ("001 - <Title> - read by narrator").
+	// Only a zero-padded number is the template's own; an unpadded one
+	// ("101 - Dalmatians") is read only when the file's folder is named for
+	// it ("101/101 - ..."), the organizer's per-track folder.
+	trackLeadRe   = regexp.MustCompile(`^0\d{1,2}$`)
+	trackNumberRe = regexp.MustCompile(`^\d{1,3}$`)
+	// yearParenRe is a trailing release year in parentheses ("Some Title
+	// (2017)"). One inside the title ("Blade (1998) Revisited") is kept.
+	yearParenRe = regexp.MustCompile(`\s*\(((?:19|20)\d{2})\)\s*$`)
+	// strictEntityRe is one strictly-terminated HTML entity ("&amp;", "&#39;",
+	// "&#x27;"). html.UnescapeString alone also decodes the legacy forms with
+	// no semicolon ("&not" in "Fish &notes"), which a title is not.
+	strictEntityRe = regexp.MustCompile(`&(?:[A-Za-z][A-Za-z0-9]{1,31}|#[0-9]{1,7}|#[xX][0-9A-Fa-f]{1,6});`)
+	// underscoreColonRe is the "_ " a filesystem-safe name writes for ": "
+	// ("Wasteland Tales 2_ More Stories"); a trailing "_" is a colon whose
+	// subtitle was cut ("Example Magic_").
+	underscoreColonRe = regexp.MustCompile(`(\S)_(\s+|$)`)
+	bookNameLetterRe  = regexp.MustCompile(`\pL`)
 )
 
 // setWords mark a field naming a set of books ("Icewind Dale Trilogy"): in
@@ -187,7 +209,7 @@ var setWords = map[string]bool{
 // deliberately not read: it is indistinguishable from a real title by shape.
 func ParseBookName(raw string, ev NameEvidence) BookName {
 	var b BookName
-	t, had := StripRipJunk(strings.TrimSpace(raw))
+	t, had := StripRipJunk(NormalizeNameText(raw))
 	if had {
 		b.Shapes = append(b.Shapes, ShapeRipTail)
 	}
@@ -212,6 +234,12 @@ func ParseBookName(raw string, ev NameEvidence) BookName {
 		b.Shapes = append(b.Shapes, ShapeTrackSuffix)
 	}
 
+	if m := yearParenRe.FindStringSubmatchIndex(t); m != nil && hasLetterBefore(t, m[0]) {
+		b.Year = t[m[2]:m[3]]
+		t = strings.TrimSpace(t[:m[0]] + t[m[1]:])
+		b.Shapes = append(b.Shapes, ShapeYearParen)
+	}
+
 	f := splitDashFields(t)
 	ancestors := ancestorFolders(ev.Path)
 	// leadFolder is a first field removed because it repeats an ancestor
@@ -222,11 +250,19 @@ func ParseBookName(raw string, ev NameEvidence) BookName {
 	// field is the title ("Jack Reacher - Killing Floor"), not an author.
 	leadRepeatsFolder := f.n() >= 2 && bookNameLetterRe.MatchString(f.segs[0]) && ancestorFolder(ancestors, f.segs[0])
 
+	// readByTrailer: a " - read by X" field was peeled (the placeholder
+	// "read by narrator" included), the signature of the organizer's own file
+	// template ("{title} - {author} - read by {narrator}", once numbered
+	// "NNN - ..." per track).
+	readByTrailer := false
 	// Trailing fields, innermost first: "Title - Author - read by X - Unknown
 	// Author" peels all three.
 trailing:
 	for f.n() > 1 && f.sub(0, f.n()-1).hasLetter() {
 		last := f.segs[f.n()-1]
+		if narratorSegRe.MatchString(last) {
+			readByTrailer = true
+		}
 		switch {
 		case authorname.IsPlaceholderAuthor(last):
 			b.Shapes = append(b.Shapes, ShapePlaceholderAuthor)
@@ -246,6 +282,17 @@ trailing:
 			break trailing
 		}
 		f = f.sub(0, f.n()-1)
+	}
+	// "001 - <Title> - read by narrator": behind the template's own trailer a
+	// zero-padded (or three-digit) leading field is the track the organizer
+	// numbered the file with. Without the trailer a leading number is not
+	// read ("15 - Harry and the Fox", "96 Hours"): by shape alone it may be
+	// the title's.
+	if readByTrailer && f.n() >= 2 && ev.isTrackLead(f.segs[0]) && f.sub(1, f.n()).hasLetter() &&
+		!IsUnsearchableTitle(f.sub(1, f.n()).text()) {
+		b.Suffix = f.segs[0]
+		b.Shapes = append(b.Shapes, ShapeTrackLead)
+		f = f.sub(1, f.n())
 	}
 	// Leading fields: a year, then an author, in either order ("2002 - Neil
 	// Gaiman - American Gods", "Gene Wolfe - 1987 - ...").
@@ -317,9 +364,56 @@ leading:
 	}
 	b.Title = f.text()
 	if b.Title == "" {
-		b.Title = strings.TrimSpace(raw)
+		b.Title = NormalizeNameText(raw)
 	}
 	return b
+}
+
+// decodeWholeEntity decodes one strictEntityRe match when the WHOLE match
+// is an entity. html.UnescapeString falls back to a legacy prefix ("&notes;"
+// -> "¬es;"), which leaves text behind: such a match is kept as written.
+func decodeWholeEntity(m string) string {
+	d := html.UnescapeString(m)
+	if d == m || strings.Contains(d, ";") || utf8.RuneCountInString(d) > 2 {
+		return m
+	}
+	return d
+}
+
+// isTrackLead reports whether a leading field is the organizer's track
+// number: zero-padded ("001", "07"), or any number the file's own folder is
+// named for ("101/101 - ...").
+func (ev NameEvidence) isTrackLead(field string) bool {
+	if trackLeadRe.MatchString(field) {
+		return true
+	}
+	if !trackNumberRe.MatchString(field) || strings.TrimSpace(ev.Path) == "" {
+		return false
+	}
+	return filepath.Base(filepath.Dir(filepath.ToSlash(ev.Path))) == field
+}
+
+// NormalizeNameText undoes what file systems and tag scrapers do to a name
+// before any shape is read: HTML entities ("Fish &amp; Chips"), the
+// modifier-letter colon "꞉" (U+A789) and the "_ " that file names write for a
+// colon ("Wasteland Tales 2_ More Stories", "Example Magic_"). An underscore
+// inside a word ("snake_case") is kept.
+func NormalizeNameText(s string) string {
+	t := strings.TrimSpace(s)
+	if strings.Contains(t, "&") && strings.Contains(t, ";") {
+		t = strictEntityRe.ReplaceAllStringFunc(t, decodeWholeEntity)
+	}
+	t = strings.ReplaceAll(t, "\uA789", ":")
+	if strings.Contains(t, "_") {
+		t = underscoreColonRe.ReplaceAllStringFunc(t, func(m string) string {
+			sm := underscoreColonRe.FindStringSubmatch(m)
+			if sm[2] == "" {
+				return sm[1]
+			}
+			return sm[1] + ":" + sm[2]
+		})
+	}
+	return strings.TrimSpace(t)
 }
 
 // readSeriesSlot reads a series slot out of f (ParseBookName). A name behind

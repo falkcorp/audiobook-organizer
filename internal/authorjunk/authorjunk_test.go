@@ -1,7 +1,7 @@
 // file: internal/authorjunk/authorjunk_test.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 3f2cc8c2-6a49-42d5-b173-cce4c692b577
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package authorjunk
 
@@ -592,13 +592,17 @@ func TestIsGenreTagline(t *testing.T) {
 	for _, s := range []string{"A Novel", "A Progression LitRPG", "An Isekai LitRPG Fantasy", "A LitRPG Adventure",
 		"An Epic Fantasy Adventure", "A Thriller", "Novel",
 		// One coined word among genre words (folder-name taglines).
-		"A Daopocalypse Progression Fantasy", "A Deck-Building LitRPG"} {
+		"A Daopocalypse Progression Fantasy", "A Deck-Building LitRPG",
+		// A subgenre named by its setting (2026-10-05 no-match census:
+		// "Rise of the Example Paladin, Book One_ A LitRPG Apocalypse").
+		"A LitRPG Apocalypse"} {
 		if !IsGenreTagline(s) {
 			t.Errorf("IsGenreTagline(%q) = false, want true", s)
 		}
 	}
 	for _, s := range []string{"", "A", "The", "A Wanted Man", "An Uncensored History", "The Tower of the Swallow",
-		"A Jack Reacher Novel", "Erryn's World", "A Song of Ice and Fire", "A Darker Shade of Magic"} {
+		"A Jack Reacher Novel", "Erryn's World", "A Song of Ice and Fire", "A Darker Shade of Magic",
+		"The Apocalypse", "An Ordinary Apocalypse", "Apocalypse"} {
 		if IsGenreTagline(s) {
 			t.Errorf("IsGenreTagline(%q) = true, want false", s)
 		}
