@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.36.1
+// version: 1.36.2
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
 // last-edited: 2026-10-06
 
@@ -438,7 +438,7 @@ func planCachedApply(svc cachedApplyService, books bookReader, id string, claims
 	v := applygate.EvaluateTranscribed(book, authors, gateRuntime(books, book), &cand, idErr, claims, ts,
 		bulkManualOnlyGuard(books, book, pin != nil && pin.IsRowReview(), metabatch.ResolveCandidateSearchQuery(books, book).Title))
 	// Any owner-review pin (row, bulk, or the hashless marker) lifts the
-	// certainty gate. A single-row pin is an approval that overwrites
+	// certainty gate -- the marker short of review_only_source (below). A single-row pin is an approval that overwrites
 	// (ReviewApproved); a bulk button stays fill-only unless the request asks
 	// for replace (withBulkMode, applied by the caller). A stale pin never gets
 	// here (stale_candidate above, nothing written).

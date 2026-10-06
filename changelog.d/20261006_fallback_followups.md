@@ -7,8 +7,9 @@
     best below the apply floor. Rows that held only such candidates (served
     from the cache forever, never selected) are now selected by the
     scheduled fetch. Fallback candidates are merged into the row
-    (`SearchOptions.MergeWithCached`), never replace the chain's, and a
-    forced or stale refetch of the chain keeps them.
+    (`SearchOptions.MergeWithCached`) instead of replacing the chain's, and
+    a forced or stale refetch of the chain keeps them. The merged row is
+    still capped at 10: see the eviction order below.
   - **One shared Google Books daily budget** for every caller
     (`internal/metadata/dailyquota`), enforced in Google's HTTP transport
     per request sent: `google_books_daily_limit` (default 1,000) total,
@@ -59,3 +60,34 @@
     saved refuses without a throttle hold. A fallback whose candidates are
     all ranked out of the row's top 10 is recorded as `ranked_out`, not a
     match; the trigger uses the apply gate's full score rule.
+  - The hashless `review_bulk` owner marker (a bulk-applied book whose
+    candidate the review lane never loaded) no longer lifts
+    `review_only_source`: an Open Library / Google Books candidate is
+    applied only on a pin of the candidate the owner was shown
+    (`applygate.Verdict.UnseenOwnerReviewOverridable`).
+  - **An empty chain refetch no longer wipes stored candidates** of a row
+    hashed under other inputs (a raw author credit, a pre-2026-09-28
+    no-author row). The scheduled fetch selects such rows when no candidate
+    is usable, and an empty answer used to write `Candidates: []` over them
+    every tick; a forced refetch did the same. `MergeFromSourceHash` is now
+    `SearchOptions.CarryFromSourceHash`, honored by the merge, the
+    preserve-on-empty and the fallback-carry paths, and the batch fetch
+    passes the hash of the row `metafetch.Service.VouchedCachedRow` vouches
+    for (forced or not). A row of another identity is neither carried nor
+    merged into.
+  - Merge ranking is tiered (`SearchOptions.MergeRank`,
+    `metabatch.MergeRanker`; was `MergeUsable`): usable candidates the gate
+    may apply unattended, then usable review-only ones, then
+    refused-but-reviewable ones (below the floor, `asin_conflict`), then
+    owner-rejected ones; score orders each tier. When the union exceeds 10
+    the bottom is evicted: undecodable rows, then owner-rejected, then
+    refused-but-reviewable by lowest score; a usable candidate only when
+    more than 10 better-or-equal ones exist. A chain candidate can still be
+    evicted (10 below-floor Audible + 2 usable Google keeps 8 Audible).
+  - A merge into a row fetched for **another ASIN** replaces that row
+    instead of merging: its candidates answered a record the book no
+    longer carries.
+  - Books the chain has not answered (never fetched, a stale empty row)
+    are funded against the day's background Google share after every book
+    already owed a Google lookup; an unfunded one is still selected, with
+    its Google step put off (`ChainCapped`).
