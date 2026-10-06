@@ -8,8 +8,21 @@
   changed since the plan, writing nothing, when any of these appeared after
   the plan: a second live book holding the same audio, a join target that an
   earlier no-parent apply assembled, a version group, a book in the set's
-  folder, or a better-ranked book of the title. A run that was already cut
-  off resumes as before.
+  folder, or a better-ranked book of the title. A run of this fixer that was
+  already cut off resumes; a fragment some other writer merged into the
+  target is a change, not a cut-off run, and the row is refused.
+  - The whole library is listed once per apply run, not twice per row (up to
+    four workers did this at once: about 40k books and 742k file rows each).
+    Between rows the snapshot reads again only the books written since, by
+    anyone, from the book change log, and is listed again when another
+    merge-family writer held the merge lock in between. The listing refuses a
+    memdb known to be missing book or file rows and falls through to the
+    authoritative scan; a listing that cannot be read fails the row.
+  - A join (title, audio, or a moved/copy row turned into one) is held when
+    the target's version group, or any fragment's, holds a live iTunes copy:
+    retiring a fragment hands its group's primary on, and the ranking would
+    write the iTunes book. Checked at plan time and again under the merge lock
+    before the first write.
   - A set joined by its title is now held, as an audio join already was, for
     two known authors among its files, for a member's version group holding
     a live book other than the target, and for its audio held by a live book

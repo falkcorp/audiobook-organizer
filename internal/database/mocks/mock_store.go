@@ -11636,6 +11636,61 @@ func (_c *MockStore_GetAllBookFilesCore_Call) RunAndReturn(run func() ([]databas
 	return _c
 }
 
+// GetAllBookFilesCoreComplete provides a mock function for the type MockStore
+func (_mock *MockStore) GetAllBookFilesCoreComplete() ([]database.BookFileCore, error) {
+	ret := _mock.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetAllBookFilesCoreComplete")
+	}
+
+	var r0 []database.BookFileCore
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func() ([]database.BookFileCore, error)); ok {
+		return returnFunc()
+	}
+	if returnFunc, ok := ret.Get(0).(func() []database.BookFileCore); ok {
+		r0 = returnFunc()
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]database.BookFileCore)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func() error); ok {
+		r1 = returnFunc()
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_GetAllBookFilesCoreComplete_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetAllBookFilesCoreComplete'
+type MockStore_GetAllBookFilesCoreComplete_Call struct {
+	*mock.Call
+}
+
+// GetAllBookFilesCoreComplete is a helper method to define mock.On call
+func (_e *MockStore_Expecter) GetAllBookFilesCoreComplete() *MockStore_GetAllBookFilesCoreComplete_Call {
+	return &MockStore_GetAllBookFilesCoreComplete_Call{Call: _e.mock.On("GetAllBookFilesCoreComplete")}
+}
+
+func (_c *MockStore_GetAllBookFilesCoreComplete_Call) Run(run func()) *MockStore_GetAllBookFilesCoreComplete_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *MockStore_GetAllBookFilesCoreComplete_Call) Return(bookFileCores []database.BookFileCore, err error) *MockStore_GetAllBookFilesCoreComplete_Call {
+	_c.Call.Return(bookFileCores, err)
+	return _c
+}
+
+func (_c *MockStore_GetAllBookFilesCoreComplete_Call) RunAndReturn(run func() ([]database.BookFileCore, error)) *MockStore_GetAllBookFilesCoreComplete_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetAllBookSummaries provides a mock function for the type MockStore
 func (_mock *MockStore) GetAllBookSummaries(limit int, offset int) ([]database.BookSummary, error) {
 	ret := _mock.Called(limit, offset)

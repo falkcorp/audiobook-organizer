@@ -1,7 +1,7 @@
 // file: internal/database/memdb_reads.go
-// version: 1.31.0
+// version: 1.32.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000006
-// last-edited: 2026-09-27
+// last-edited: 2026-10-06
 
 package database
 
@@ -1186,6 +1186,19 @@ func (m *MemStore) GetAllBookFilesCore() ([]BookFileCore, error) {
 		files = append(files, bf.Core())
 	}
 	return files, nil
+}
+
+// GetAllBookFilesCoreComplete is GetAllBookFilesCore for callers whose
+// answer is read by its ABSENCES: it refuses to answer from a memdb known to
+// be missing book_file rows (ErrMemdbIncomplete). The chapter-fragment
+// fixer's apply re-check is one: a book_file row missing here is audio no
+// book seems to hold, so a join or an assembly would pass a hold it should
+// meet. PebbleStore falls through to the authoritative scan on that error.
+func (m *MemStore) GetAllBookFilesCoreComplete() ([]BookFileCore, error) {
+	if err := m.requireTablesComplete("all book files (whole-library re-check)", memTableBookFiles); err != nil {
+		return nil, err
+	}
+	return m.GetAllBookFilesCore()
 }
 
 // VisitBookFiles calls fn for every memdb book_file row, in id order, without

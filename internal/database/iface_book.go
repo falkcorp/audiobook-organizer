@@ -1,7 +1,7 @@
 // file: internal/database/iface_book.go
-// version: 2.25.0
+// version: 2.26.0
 // guid: 668ec5a2-f8d9-4fdb-b0d5-09937b5d83ea
-// last-edited: 2026-09-19
+// last-edited: 2026-10-06
 
 package database
 
@@ -386,6 +386,11 @@ type BookCompletenessReader interface {
 	// without a restart, so routing every caller through this one would pin
 	// the whole process to full Pebble scans for the rest of its life.
 	GetAllBooksCoreComplete(limit, offset int) ([]BookCore, error)
+	// GetAllBookFilesCoreComplete is GetAllBookFilesCore under the same
+	// rule: never served from a memdb known to be missing book_file rows.
+	// For a caller that reads "no row holds this audio" as permission to
+	// write (the chapter-fragment fixer's whole-library apply re-check).
+	GetAllBookFilesCoreComplete() ([]BookFileCore, error)
 }
 
 // BookStore combines BookReader and BookWriter for callers that need both.

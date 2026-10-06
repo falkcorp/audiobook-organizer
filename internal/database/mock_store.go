@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.136.0
+// version: 1.137.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-10-02
+// last-edited: 2026-10-06
 
 package database
 
@@ -53,11 +53,16 @@ type MockStore struct {
 	// ordinary listing sees. Left nil, it falls back to GetAllBooksCoreFunc so
 	// existing tests that only stub the plain getter keep working.
 	GetAllBooksCoreCompleteFunc func(limit, offset int) ([]BookCore, error)
-	GetAllBooksFullFromFunc     func(afterID string, limit int) ([]Book, error)
-	ListBookIDsFunc             func() ([]string, error)
-	GetAllBookSummariesFunc     func(limit, offset int) ([]BookSummary, error)
-	GetBooksByWorkIDFunc        func(workID string) ([]Book, error)
-	GetBooksBySeriesIDCoreFunc  func(seriesID int) ([]BookCore, error)
+
+	// GetAllBookFilesCoreCompleteFunc backs the completeness-guarded file
+	// listing; nil falls back to GetAllBookFilesCore.
+	GetAllBookFilesCoreCompleteFunc func() ([]BookFileCore, error)
+
+	GetAllBooksFullFromFunc    func(afterID string, limit int) ([]Book, error)
+	ListBookIDsFunc            func() ([]string, error)
+	GetAllBookSummariesFunc    func(limit, offset int) ([]BookSummary, error)
+	GetBooksByWorkIDFunc       func(workID string) ([]Book, error)
+	GetBooksBySeriesIDCoreFunc func(seriesID int) ([]BookCore, error)
 	// GetBooksBySeriesIDAllVersionsFunc stubs the complete-set series getter.
 	// When it is nil the mock method falls back to GetBooksBySeriesIDCoreFunc
 	// rather than returning an empty slice — see the method for why.
@@ -3367,6 +3372,13 @@ func (m *MockStore) GetAllBookFilesCore() ([]BookFileCore, error) {
 		return m.GetAllBookFilesCoreFunc()
 	}
 	return nil, nil
+}
+
+func (m *MockStore) GetAllBookFilesCoreComplete() ([]BookFileCore, error) {
+	if m.GetAllBookFilesCoreCompleteFunc != nil {
+		return m.GetAllBookFilesCoreCompleteFunc()
+	}
+	return m.GetAllBookFilesCore()
 }
 
 // GetBookFilesForIDsCore defaults to GetBookFiles per id, so a test that

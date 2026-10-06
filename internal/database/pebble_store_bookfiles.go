@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.42.0
+// version: 1.43.0
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
-// last-edited: 2026-10-02
+// last-edited: 2026-10-06
 
 package database
 
@@ -19,6 +19,7 @@ import (
 
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
 // getBookFileByID fetches a BookFile by its primary key (book_file:<bookID>:<fileID>).
@@ -991,6 +992,36 @@ func (s *PebbleStore) getBookFilesForIDsPebbleScan(bookIDs []string) (map[string
 func (s *PebbleStore) GetAllBookFilesCore() ([]BookFileCore, error) {
 	if s.UseMemDB && s.mem() != nil {
 		return s.mem().GetAllBookFilesCore()
+	}
+	full, err := s.getAllBookFilesPebbleScan()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]BookFileCore, len(full))
+	for i := range full {
+		out[i] = full[i].Core()
+	}
+	return out, nil
+}
+
+// bookFilesCompleteLog reports GetAllBookFilesCoreComplete's fall-through.
+var bookFilesCompleteLog = logger.New("database.bookfiles-complete")
+
+// GetAllBookFilesCoreComplete is GetAllBookFilesCore that never answers from
+// a memdb known to be missing book_file rows: it falls through to the
+// authoritative Pebble scan instead (as GetAllBooksCoreComplete does for
+// books). Any other memdb error is returned unchanged.
+func (s *PebbleStore) GetAllBookFilesCoreComplete() ([]BookFileCore, error) {
+	if m := s.mem(); s.UseMemDB && m != nil {
+		cores, err := m.GetAllBookFilesCoreComplete()
+		if err == nil {
+			return cores, nil
+		}
+		if !errors.Is(err, ErrMemdbIncomplete) {
+			return nil, err
+		}
+		bookFilesCompleteLog.Error("all book files (whole-library re-check): memdb is missing rows and will stay short until restart; falling through to the authoritative Pebble scan: %v (lost rows %v)",
+			err, m.LostRows())
 	}
 	full, err := s.getAllBookFilesPebbleScan()
 	if err != nil {
