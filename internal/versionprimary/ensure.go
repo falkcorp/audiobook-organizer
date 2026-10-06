@@ -1,7 +1,7 @@
 // file: internal/versionprimary/ensure.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 0b7e4c52-9a1d-4f38-8c6e-2d51f0a7b9e3
-// last-edited: 2026-10-03
+// last-edited: 2026-10-06
 
 package versionprimary
 
@@ -65,7 +65,17 @@ type Env struct {
 	Probe ChapterProber
 	// Stat defaults to os.Stat.
 	Stat func(string) (os.FileInfo, error)
+	// Expect, when set, is the member the caller predicted the hand-off
+	// leaves primary (a Repairs fixer that checked it under its own lock,
+	// before slower steps). EnsureSinglePrimary then writes nothing unless
+	// its decision, taken under the group lock, is that member: it returns
+	// ErrUnexpectedWinner instead of crowning anyone else.
+	Expect string
 }
+
+// ErrUnexpectedWinner: EnsureSinglePrimary's decision was not Env.Expect, so
+// nothing was written.
+var ErrUnexpectedWinner = errors.New("the hand-off's winner is not the expected member")
 
 // Hand-off outcomes.
 const (
@@ -364,6 +374,22 @@ func EnsureSinglePrimary(ctx context.Context, store EnsureStore, gid string, env
 	inc, d, err := decideSingle(ctx, store, members, env, alive)
 	if err != nil {
 		return res, err
+	}
+	if env.Expect != "" {
+		got := ""
+		switch {
+		case inc != nil:
+			got = inc.ID
+		case d.Kind != DecisionHeld:
+			got = d.WinnerID
+		}
+		if got != env.Expect {
+			res.Outcome, res.Decision = OutcomeWinnerChanged, &d
+			if got == "" {
+				return res, fmt.Errorf("%w: group %s would be held (%s), not the expected %s", ErrUnexpectedWinner, gid, d.HoldReason, env.Expect)
+			}
+			return res, fmt.Errorf("%w: group %s would make %s primary, not the expected %s", ErrUnexpectedWinner, gid, got, env.Expect)
+		}
 	}
 	if inc != nil {
 		res.Outcome, res.PrimaryID = OutcomeHealthy, inc.ID
