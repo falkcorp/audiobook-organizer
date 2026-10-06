@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retire_into.go
-// version: 1.9.3
+// version: 1.9.4
 // guid: dadb4da5-0f2d-4678-abf3-4ac97f3ecb66
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 // The shared retire of the Repairs-lane merge fixers: fold one book into
 // another as merge.Service retires an absorbed book, every step journaled
@@ -29,8 +29,8 @@ import (
 
 // retireInto folds book id (a fragment, a duplicate copy) into target the way
 // merge.Service retires an absorbed book, each step journaled first so the op
-// revert restores it. The fragment-consolidation and duplicate-copies fixers
-// share it (fixerID names the caller in logs):
+// revert restores it. The fragment-consolidation, duplicate-copies and
+// consolidation-leftovers fixers share it (fixerID names the caller in logs):
 //
 //  1. every user's listening state and positions follow onto target
 //     (user_state_follow): as a slice of its timeline when slice is set, by
@@ -484,7 +484,7 @@ func resumeHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Wr
 // retireFixerIDs are the fixers that retire through retireInto: a demote
 // recorded under any of them is a retire's demote, whose owed hand-off any
 // of them may finish (resumeHandOff).
-var retireFixerIDs = map[string]bool{fragFixerID: true, dcFixerID: true}
+var retireFixerIDs = map[string]bool{fragFixerID: true, dcFixerID: true, leftoverFixerID: true}
 
 // livePrimaries counts the live primaries of a version group, excluding
 // book except, by the rule versionprimary.Incumbent reads: the Electable
