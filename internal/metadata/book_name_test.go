@@ -260,6 +260,8 @@ func TestExtractMetadataFromFolder_FolderLeadAuthorOrSeries(t *testing.T) {
 		{"/srv/library/Jack Reacher/Jack Reacher - Killing Floor", "Killing Floor", "Jack Reacher", nil},
 		{"/srv/library/Warhammer 40k/Warhammer 40k - Horus Rising", "Horus Rising", "Warhammer 40k", nil},
 		{"/srv/library/Timothy Zahn/Star Wars/Star Wars - Thrawn", "Thrawn", "Star Wars", []string{"Timothy Zahn"}},
+		// A number-only folder repeat is no series ("04/04 - The Crossing").
+		{"/srv/library/Mara Quill/04/04 - The Crossing", "04", "", []string{"Mara Quill"}},
 		// The author of a year folder's book comes from the author folder.
 		{"/srv/library/Joshua Dalzelle/2018/2018 - Blueshift", "Blueshift", "", []string{"Joshua Dalzelle"}},
 	} {

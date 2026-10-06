@@ -219,7 +219,7 @@ func ParseBookName(raw string, ev NameEvidence) BookName {
 	// leadRepeatsFolder: the first field repeats an ancestor folder, so the
 	// folder convention is "<that folder> - <title>", and a person-SHAPED last
 	// field is the title ("Jack Reacher - Killing Floor"), not an author.
-	leadRepeatsFolder := f.n() >= 2 && ancestorFolder(ancestors, f.segs[0])
+	leadRepeatsFolder := f.n() >= 2 && bookNameLetterRe.MatchString(f.segs[0]) && ancestorFolder(ancestors, f.segs[0])
 
 	// Trailing fields, innermost first: "Title - Author - read by X - Unknown
 	// Author" peels all three.
@@ -269,7 +269,7 @@ leading:
 			// author.
 			b.Author = first
 			b.Shapes = append(b.Shapes, ShapeLeadingAuthor)
-		case b.Author == "" && leadFolder == "" && ancestorFolder(ancestors, first) && !bareNumberSegRe.MatchString(f.segs[1]):
+		case b.Author == "" && leadFolder == "" && bookNameLetterRe.MatchString(first) && ancestorFolder(ancestors, first) && !bareNumberSegRe.MatchString(f.segs[1]):
 			// A first field that repeats an ancestor folder's name is that
 			// folder's author or its series: "Brandon Sanderson/Brandon
 			// Sanderson - Elantris" and "Star Wars/Star Wars - Thrawn" have
