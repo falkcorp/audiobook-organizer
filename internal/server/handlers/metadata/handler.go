@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.38.0
+// version: 1.39.0
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
 // last-edited: 2026-10-06
 
@@ -54,6 +54,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -1076,8 +1077,22 @@ func (h *Handler) bulkFetchMetadataImpl(c *gin.Context) {
 			return nil
 		}
 
-		// Pick best match from service's scored candidates (first is already best)
-		candidate := searchResp.Results[0]
+		// Pick the best match from the service's scored candidates (they are
+		// ranked best first) -- skipping review-only ones (Open Library,
+		// Google Books; owner decision 2026-10-06, "fetch but don't
+		// apply"): nobody picks the candidate here, so the best one a
+		// review-only source found is left for review and the best other
+		// one is applied, if there is one.
+		pick := slices.IndexFunc(searchResp.Results, func(c metafetch.MetadataCandidate) bool {
+			return !metafetch.IsReviewOnlyCandidateSource(c.Source)
+		})
+		if pick < 0 {
+			result.Status = "review_only"
+			result.Message = "only review-only sources (Open Library, Google Books) matched; not applied, left for review"
+			setResult(i, result)
+			return nil
+		}
+		candidate := searchResp.Results[pick]
 		// Convert MetadataCandidate to BookMetadata through the SAME conversion
 		// the single-book apply uses (metafetch.CandidateMetadata), so the two
 		// paths cannot disagree about which candidate fields exist. This used to

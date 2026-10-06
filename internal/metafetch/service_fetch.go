@@ -1,13 +1,14 @@
 // file: internal/metafetch/service_fetch.go
-// version: 1.20.0
+// version: 1.20.1
 // guid: b24c7a25-2efa-4b85-adb0-2d591218eff2
-// last-edited: 2026-10-03
+// last-edited: 2026-10-06
 
 package metafetch
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -20,8 +21,28 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 )
 
+// ErrReviewOnlyCandidatesNotApplied is returned by FetchMetadataForBook and
+// FetchMetadataForBookByTitle when the only sources that found a match are
+// review-only (IsReviewOnlyCandidateSource: Open Library, Google Books).
+// Owner decision 2026-10-06, "fetch but don't apply": both functions apply
+// with nobody picking the candidate (organize, the iTunes import enrichment,
+// the production-company resolvers), so such a source is still searched --
+// FetchMetadataForBook caches its answer in the per-provider fetch cache,
+// which the batch candidate fetch replays into the review list -- but its
+// candidate is never applied. Nothing was written to the book.
+var ErrReviewOnlyCandidatesNotApplied = errors.New("metadata: only review-only sources (Open Library, Google Books) matched; not applied, left for review")
+
+// reviewOnlyNotApplied is the error for a fetch whose only matches came from
+// the review-only sources in found.
+func reviewOnlyNotApplied(title string, found []string) error {
+	return fmt.Errorf("%w: '%s' matched only on %s", ErrReviewOnlyCandidatesNotApplied, title, strings.Join(found, ", "))
+}
+
 // FetchMetadataForBook fetches and applies metadata for a single audiobook,
-// trying each configured source in priority order until one succeeds.
+// trying each configured source in priority order until one succeeds. A
+// review-only source (Open Library, Google Books) is searched and cached but
+// never applied: the chain moves on to the next source, and when nothing
+// else matches it returns ErrReviewOnlyCandidatesNotApplied.
 //
 // ctx is threaded end-to-end into every source Search* call and the Audnexus
 // ASIN lookup, so a batch/import cancel (or timeout) aborts an in-flight
@@ -90,6 +111,7 @@ func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*Fetch
 	}
 
 	var lastErr error
+	var reviewOnlyFound []string
 	for _, src := range sources {
 		// Stop promptly if the caller cancelled — don't start another source.
 		if err := ctx.Err(); err != nil {
@@ -256,6 +278,17 @@ func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*Fetch
 				continue
 			}
 
+			// Review-only source (owner decision 2026-10-06, "fetch but
+			// don't apply"): its answer is cached above for review, never
+			// applied. The next source in the chain may still apply its own
+			// best candidate.
+			if IsReviewOnlyCandidateSource(src.Name()) {
+				slog.Debug("auto-fetch: review-only source matched; cached for review, not applied",
+					"name", src.Name(), "candidate_title", meta.Title)
+				reviewOnlyFound = append(reviewOnlyFound, src.Name())
+				continue
+			}
+
 			// Safety: never apply empty/untitled metadata
 			if meta.Title == "" || strings.ToLower(meta.Title) == "untitled" {
 				meta.Title = book.Title // keep original
@@ -347,6 +380,9 @@ func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*Fetch
 		}
 	}
 
+	if len(reviewOnlyFound) > 0 {
+		return nil, reviewOnlyNotApplied(book.Title, reviewOnlyFound)
+	}
 	if lastErr != nil {
 		return nil, fmt.Errorf("no metadata found from any source (last error: %v)", lastErr)
 	}
@@ -387,6 +423,7 @@ func (mfs *Service) FetchMetadataForBookByTitle(id string) (*FetchMetadataRespon
 	}
 
 	var lastErr error
+	var reviewOnlyFound []string
 	for _, src := range sources {
 		results, searchErr := src.SearchByTitle(context.Background(), searchTitle)
 		if searchErr != nil {
@@ -420,6 +457,16 @@ func (mfs *Service) FetchMetadataForBookByTitle(id string) (*FetchMetadataRespon
 		}
 		meta := scored[0]
 		NormalizeMetaSeries(&meta)
+
+		// Review-only source (owner decision 2026-10-06, "fetch but don't
+		// apply"): never applied here. Not written to the fetch cache
+		// either: these are title-only results, and the cache row is keyed
+		// by the book's identity, so the batch fetch would replay them as
+		// the answer to its own title-and-author question.
+		if IsReviewOnlyCandidateSource(src.Name()) {
+			reviewOnlyFound = append(reviewOnlyFound, src.Name())
+			continue
+		}
 
 		fetched := meta
 		// Snapshot before the apply: history is recorded from the
@@ -463,6 +510,9 @@ func (mfs *Service) FetchMetadataForBookByTitle(id string) (*FetchMetadataRespon
 		}, nil
 	}
 
+	if len(reviewOnlyFound) > 0 {
+		return nil, reviewOnlyNotApplied(book.Title, reviewOnlyFound)
+	}
 	if lastErr != nil {
 		return nil, fmt.Errorf("no metadata found from any source (last error: %v)", lastErr)
 	}

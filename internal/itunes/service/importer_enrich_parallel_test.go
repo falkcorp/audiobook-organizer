@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_enrich_parallel_test.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: 8d3a5b1e-6f2c-4a97-9e1d-3c7b8f4a2d6e
-// last-edited: 2026-09-02
+// last-edited: 2026-10-06
 
 package itunesservice
 
@@ -28,6 +28,8 @@ import (
 // + database.Store chain.
 type fakeMetadataFetcher struct {
 	fails func(id string) bool
+	// failErr, when set, is the error a failing call returns.
+	failErr error
 
 	mu          sync.Mutex
 	calls       int
@@ -57,6 +59,9 @@ func (f *fakeMetadataFetcher) FetchMetadataForBook(_ context.Context, id string)
 	}()
 
 	if f.fails != nil && f.fails(id) {
+		if f.failErr != nil {
+			return nil, f.failErr
+		}
 		return nil, fmt.Errorf("no metadata found for %q from any source", id)
 	}
 
@@ -257,4 +262,19 @@ func TestEnrichImportedBooks_BreakerResetsOnSuccess(t *testing.T) {
 
 	require.Equal(t, totalBooks, fetcher.callCount(),
 		"alternating fail/succeed must never trip the breaker (aggregate counter resets on success), all books attempted")
+}
+
+// Owner decision 2026-10-06, "fetch but don't apply": a book whose only
+// matches are review-only (Open Library, Google Books) comes back as
+// metafetch.ErrReviewOnlyCandidatesNotApplied. The providers answered, so
+// it is not a failure: a library of such books must not trip the breaker
+// and abort the rest of the enrichment.
+func TestEnrichImportedBooks_ReviewOnlyMatchesDoNotTripBreaker(t *testing.T) {
+	const totalBooks = 20
+	_, store := buildEnrichFixture(t, totalBooks)
+	fetcher := newFakeMetadataFetcher(func(string) bool { return true })
+	fetcher.failErr = fmt.Errorf("%w: synthetic", metafetch.ErrReviewOnlyCandidatesNotApplied)
+	imp := &Importer{store: store, mfs: fetcher, enrichConcurrencyOverride: 1}
+	imp.enrichImportedBooks(context.Background(), &itunesImportStatus{}, logger.New("test-enrich-review-only"))
+	require.Equal(t, totalBooks, fetcher.callCount(), "review-only answers must not trip the breaker")
 }

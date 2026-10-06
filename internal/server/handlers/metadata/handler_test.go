@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler_test.go
-// version: 1.15.0
+// version: 1.15.1
 // guid: 1d31ef73-7c7a-4c3b-a840-01b0865023d7
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 // Tests for the metadata-domain handlers. The store / metadata-fetch-service /
 // write-back-enqueuer / operations-registry / file-io-pool deps are generated
@@ -511,11 +511,12 @@ func TestBulkFetchMetadata_Updates(t *testing.T) {
 	}
 }
 
-// A Google Books candidate through bulk fetch: its print year lands in
-// PrintYear (it used to overwrite AudiobookReleaseYear), both ISBN columns are
-// filled, and genre / subtitle / page count are written -- the fields the
-// hand-written BookMetadata literal used to drop.
-func TestBulkFetchMetadata_GoogleCandidateFieldsAndPrintYear(t *testing.T) {
+// A print-year source's candidate through bulk fetch (Hardcover; it was a
+// Google Books one until Google Books became review-only, 2026-10-06): its
+// print year lands in PrintYear (it used to overwrite AudiobookReleaseYear),
+// both ISBN columns are filled, and genre / subtitle / page count are
+// written -- the fields the hand-written BookMetadata literal used to drop.
+func TestBulkFetchMetadata_PrintYearCandidateFields(t *testing.T) {
 	h, d := newHandler(t)
 	expectNoLocks(d.store)
 	release := 2019
@@ -523,15 +524,15 @@ func TestBulkFetchMetadata_GoogleCandidateFieldsAndPrintYear(t *testing.T) {
 	d.store.EXPECT().GetBookAuthors("b1").Return(nil, nil).Maybe()
 	d.mfs.EXPECT().SearchMetadataForBookWithOptions("b1", "", "", "", "", mock.Anything).
 		Return(&metafetch.SearchMetadataResponse{Results: []metafetch.MetadataCandidate{{
-			Title: "New", Source: "Google Books", Year: 1937,
+			Title: "New", Source: "Hardcover", Year: 1937,
 			ISBN10: "0261103342", ISBN13: "9780261103344",
 			Narrator: "Rob Inglis", Genre: "Fiction", Subtitle: "There and Back Again", PageCount: 310,
 		}}}, nil)
 	var saved *database.Book
-	d.mfs.EXPECT().CommitApply("b1", mock.Anything, mock.Anything, mock.Anything, "Google Books").
+	d.mfs.EXPECT().CommitApply("b1", mock.Anything, mock.Anything, mock.Anything, "Hardcover").
 		Run(func(_ string, _ *database.Book, b *database.Book, _ *metafetch.AuthorCredits, _ string) { saved = b }).
 		Return(&database.Book{ID: "b1"}, nil)
-	d.mfs.EXPECT().ApplyMetadataSystemTags("b1", "Google Books", "").Return()
+	d.mfs.EXPECT().ApplyMetadataSystemTags("b1", "Hardcover", "").Return()
 
 	w := doReq(h.BulkFetchMetadata, http.MethodPost, "/metadata/bulk-fetch",
 		map[string]any{"book_ids": []string{"b1"}}, nil)
@@ -929,3 +930,56 @@ type stringError string
 func (e stringError) Error() string { return string(e) }
 
 func assertErr(s string) error { return stringError(s) }
+
+// Owner decision 2026-10-06, "fetch but don't apply": bulk fetch picks the
+// candidate with nobody looking, so a review-only (Open Library / Google
+// Books) candidate is never applied -- the best other candidate is, even when
+// the review-only one ranks first.
+func TestBulkFetchMetadata_SkipsReviewOnlyTopCandidate(t *testing.T) {
+	h, d := newHandler(t)
+	expectNoLocks(d.store)
+	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "Old"}, nil)
+	d.store.EXPECT().GetBookAuthors("b1").Return(nil, nil).Maybe()
+	d.mfs.EXPECT().SearchMetadataForBookWithOptions("b1", "", "", "", "", mock.Anything).
+		Return(&metafetch.SearchMetadataResponse{Results: []metafetch.MetadataCandidate{
+			{Title: "Review Only Title", Source: "Google Books", Publisher: "Google Pub", Score: 0.99},
+			{Title: "Chain Title", Source: "Audible", Publisher: "Audible Pub", Score: 0.9},
+		}}, nil)
+	var saved *database.Book
+	d.mfs.EXPECT().CommitApply("b1", mock.Anything, mock.Anything, mock.Anything, "Audible").
+		Run(func(_ string, _ *database.Book, b *database.Book, _ *metafetch.AuthorCredits, _ string) { saved = b }).
+		Return(&database.Book{ID: "b1"}, nil)
+	d.mfs.EXPECT().ApplyMetadataSystemTags("b1", "Audible", "").Return()
+	w := doReq(h.BulkFetchMetadata, http.MethodPost, "/metadata/bulk-fetch",
+		map[string]any{"book_ids": []string{"b1"}}, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if saved == nil || saved.Publisher == nil || *saved.Publisher != "Audible Pub" {
+		t.Fatalf("saved %+v, want the Audible candidate's publisher", saved)
+	}
+}
+
+func TestBulkFetchMetadata_OnlyReviewOnlyAppliesNothing(t *testing.T) {
+	for _, source := range []string{"Open Library", "Google Books"} {
+		t.Run(source, func(t *testing.T) {
+			h, d := newHandler(t)
+			expectNoLocks(d.store)
+			d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "Old"}, nil)
+			d.store.EXPECT().GetBookAuthors("b1").Return(nil, nil).Maybe()
+			d.mfs.EXPECT().SearchMetadataForBookWithOptions("b1", "", "", "", "", mock.Anything).
+				Return(&metafetch.SearchMetadataResponse{Results: []metafetch.MetadataCandidate{
+					{Title: "Review Only Title", Source: source, Publisher: "Pub", Score: 0.99},
+				}}, nil)
+			// No CommitApply expectation: the mock fails the test on any write.
+			w := doReq(h.BulkFetchMetadata, http.MethodPost, "/metadata/bulk-fetch",
+				map[string]any{"book_ids": []string{"b1"}}, nil)
+			if w.Code != http.StatusOK {
+				t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+			}
+			if !strings.Contains(w.Body.String(), `"status":"review_only"`) || !strings.Contains(w.Body.String(), `"updated_count":0`) {
+				t.Fatalf("body %s, want status review_only and nothing updated", w.Body.String())
+			}
+		})
+	}
+}
