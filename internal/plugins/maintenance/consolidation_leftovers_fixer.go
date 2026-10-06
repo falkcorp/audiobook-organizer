@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/consolidation_leftovers_fixer.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 6df37df9-b008-41ad-bd69-47b00e4cb50c
 // last-edited: 2026-10-06
 
@@ -28,6 +28,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
+	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
 
 // leftoverFixerID is the Repairs-lane id of the consolidation-leftovers fixer.
@@ -212,10 +213,13 @@ type leftoverSource struct {
 	// their own file_path), the leftover itself and dead books possibly
 	// included: samePath re-reads and filters every one.
 	owners func(path string) ([]string, error)
-	shelf  []string
-	statMu sync.Mutex
-	stats  map[string]leftoverStat
-	statFn func(string) (os.FileInfo, error)
+	// primary is the member versionprimary.EnsureSinglePrimary would leave
+	// primary of a group whose rows are members ("" when it would hold).
+	primary func(ctx context.Context, members []database.Book) (string, error)
+	shelf   []string
+	statMu  sync.Mutex
+	stats   map[string]leftoverStat
+	statFn  func(string) (os.FileInfo, error)
 }
 
 func (s *leftoverSource) stat(p string) leftoverStat {
@@ -246,7 +250,19 @@ func (f *consolidationLeftoversFixer) newSource(store OpsStore) (*leftoverSource
 	if err != nil {
 		return nil, err
 	}
-	return &leftoverSource{store: store, shelf: shelves, stats: map[string]leftoverStat{}, statFn: f.statFn}, nil
+	src := &leftoverSource{store: store, shelf: shelves, stats: map[string]leftoverStat{}, statFn: f.statFn}
+	// The same-path class predicts the retire's primary hand-off with the
+	// rule the hand-off itself runs (versionprimary, through the same store
+	// and root retireHandOff uses).
+	src.primary = func(ctx context.Context, members []database.Book) (string, error) {
+		vps := f.p.deps.VersionPrimaryStore()
+		if vps == nil {
+			return "", errors.New("no version-primary store: the primary hand-off cannot be predicted")
+		}
+		return versionprimary.ChooseSinglePrimary(ctx, fragEnsureStore{OpsStore: store, chapters: vps}, members,
+			versionprimary.Env{RootDir: f.p.deps.RootDir()})
+	}
+	return src, nil
 }
 
 // leftoverShelves are the library root (the plugin's deps.RootDir) and every

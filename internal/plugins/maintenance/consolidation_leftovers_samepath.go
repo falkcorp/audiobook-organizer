@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/consolidation_leftovers_samepath.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7285fcc4-a331-4b0a-89c0-e606c9f5f7b3
 // last-edited: 2026-10-06
 
@@ -106,7 +106,7 @@ type leftoverITunesOf func(bc *database.BookCore, rs []database.BookFileCore, su
 //     do not disagree (samePathIdentity);
 //   - has a file whose recorded length does not contradict the leftover's;
 //   - ends up its version group's sole live primary after the retire's
-//     hand-off in the leftover's group (leftoverHandOffHold), with no iTunes
+//     hand-off in the leftover's group (samePathHandOff), with no iTunes
 //     copy in either group that is not explicitly non-primary.
 //
 // Owner-manual (Doctor Who / Big Finish / Torchwood) books are held by the
@@ -259,7 +259,7 @@ func (s *leftoverSource) samePath(ctx context.Context, core *database.BookCore, 
 	// its only live one), within 2 s: a contradiction holds the row. A zero
 	// or unknown length is no evidence either way (the 2026-10-06 leftovers
 	// are 0 min).
-	leftDur, leftSize := 0, int64(0)
+	leftDur, leftSize := 0, int64(0) // the rows' totals; -1 while a row has none
 	for _, r := range rows {
 		if r.Duration <= 0 {
 			leftDur = -1
@@ -272,6 +272,10 @@ func (s *leftoverSource) samePath(ctx context.Context, core *database.BookCore, 
 			leftSize += r.FileSize
 		}
 	}
+	// rowDur is the files' length: the only one that counts as same-audio
+	// evidence. leftDur may fall back to the book's (metadata) length, but
+	// only to hold a contradiction.
+	rowDur := max(leftDur, 0)
 	if leftDur <= 0 {
 		leftDur = 0
 		if core.Duration != nil && *core.Duration > 0 {
@@ -304,8 +308,8 @@ func (s *leftoverSource) samePath(ctx context.Context, core *database.BookCore, 
 		evidence = fmt.Sprintf("size: the dead row(s) total %d bytes, the owner's file %d", leftSize, at.FileSize)
 	case leftoverSharesHash(rows, *at):
 		evidence = "hash: a dead row's hash is the owner file's"
-	case leftDur > 0 && cmpDur > 0:
-		evidence = fmt.Sprintf("duration: %s on both sides", leftoverDurText(cmpDur))
+	case rowDur > 0 && at.Duration > 0 && leftoverSameDuration(rowDur, at.Duration):
+		evidence = fmt.Sprintf("duration: the dead row(s) and the owner's file are both %s", leftoverDurText(at.Duration))
 	}
 	if evidence == "" {
 		row.Current["same_audio_evidence"] = "none: no size, hash or length agrees, so no position and no finished state is carried"
@@ -338,7 +342,12 @@ func (s *leftoverSource) samePath(ctx context.Context, core *database.BookCore, 
 			return repairs.Row{}, false, fmt.Errorf("version group %s: %w", gid, err)
 		}
 		sort.Slice(group, func(i, j int) bool { return group[i].ID < group[j].ID })
-		if why := leftoverHandOffHold(s.store, group, id, oid, ob, ogid == gid); why != "" {
+		chosen, why, err := s.samePathHandOff(ctx, group, id, oid, ogid == gid)
+		if err != nil {
+			return repairs.Row{}, false, err
+		}
+		fmt.Fprintf(fp, "handoff|%s\n", chosen)
+		if why != "" {
 			return finish(leftoverClassHeld, leftoverSkipSamePathPrimary, why)
 		}
 		for i := range group {
@@ -502,7 +511,13 @@ func (s *leftoverSource) samePathIdentity(core, ob *database.BookCore, row *repa
 	row.Current["leftover_identity"] = l.text
 	row.Current["owner_identity"] = o.text
 	fmt.Fprintf(fp, "identity|%s|%s\n", l.text, o.text)
+	ln, lok := leftoverLeadNumber(core.Title)
+	on, ook := leftoverLeadNumber(ob.Title)
 	switch {
+	case lok && ook && ln != on:
+		// Both lead with a number: "35 - Splashdown" is not "38 - Splashdown".
+		// The number is dropped only when one side lacks it.
+		return true, fmt.Sprintf("the titles' leading numbers differ: %q against the owner's %q", core.Title, ob.Title), nil
 	case l.title != "" && o.title != "" && l.title != o.title:
 		return true, fmt.Sprintf("the titles differ: %q against the owner's %q", core.Title, ob.Title), nil
 	case len(l.authors) > 0 && len(o.authors) > 0 && strings.Join(l.authors, "|") != strings.Join(o.authors, "|"):
@@ -535,6 +550,20 @@ func (s *leftoverSource) samePathIdentity(core, ob *database.BookCore, row *repa
 	return false, "", nil
 }
 
+// leftoverLeadNumber is a title's leading number as dcTitleKey strips it
+// ("35 - Splashdown" is 35), without its zero padding.
+func leftoverLeadNumber(title string) (int, bool) {
+	m := dcLeadTrackRe.FindString(title)
+	if m == "" {
+		return 0, false
+	}
+	n, err := strconv.Atoi(strings.TrimLeft(strings.TrimRight(strings.TrimSpace(m), "-_. "), "0"))
+	if err != nil {
+		return 0, true // all zeros
+	}
+	return n, true
+}
+
 func orNone(s string) string {
 	if s == "" {
 		return "none"
@@ -542,42 +571,70 @@ func orNone(s string) string {
 	return s
 }
 
-// leftoverHandOffHold says why the retire's primary hand-off in the
-// leftover's version group (members) would not leave the owner its sole
-// live primary ("" when it would, or when nobody else is left in it).
-// sameGroup: the owner is a member. Re-run under the merge lock by the
-// apply's re-plan.
-func leftoverHandOffHold(store OpsStore, members []database.Book, leftover, owner string, ob *database.BookCore, sameGroup bool) string {
-	var others []string
-	for i := range members {
-		if members[i].ID != leftover && !members[i].IsSoftDeleted() {
-			others = append(others, members[i].ID)
+// samePathHandOff predicts the retire's primary hand-off in the leftover's
+// version group (members, read now) and says why it would not leave the
+// owner the group's sole live primary ("" when it would, or when nobody else
+// is left in the group). The prediction is versionprimary.ChooseSinglePrimary
+// over the members as they stand after the retire (the leftover demoted and
+// soft-deleted, merged into the owner): the rule EnsureSinglePrimary applies,
+// eligibility included (an owner with an active row whose file is missing on
+// disk or outside the library root is not kept, and the election runs over
+// every member, explicit non-primaries too). chosen is that answer, for the
+// fingerprint; the apply's re-plan under the merge lock runs it again.
+//
+// The retire elects only when the leftover is primary at its read. For a
+// non-primary leftover nothing is elected, so the owner must also already
+// be the group's one explicit primary; and the election's answer must still
+// be the owner (an ineligible incumbent is held, never kept on a guess).
+func (s *leftoverSource) samePathHandOff(ctx context.Context, members []database.Book, leftover, owner string, sameGroup bool) (chosen, why string, err error) {
+	var others, explicit []string
+	leftoverPrimary := true
+	after := make([]database.Book, len(members))
+	copy(after, members)
+	for i := range after {
+		m := &after[i]
+		if m.ID == leftover {
+			// retireInto hands off (elects) only for a leftover that is
+			// primary at its read, an unset flag included.
+			leftoverPrimary = m.IsPrimaryVersion == nil || *m.IsPrimaryVersion
+			t, no, into := true, false, owner
+			m.IsPrimaryVersion, m.MarkedForDeletion, m.MergedIntoBookID, m.FilePath = &no, &t, &into, ""
+			continue
+		}
+		if !m.IsSoftDeleted() {
+			others = append(others, m.ID)
+			if m.IsPrimaryVersion != nil && *m.IsPrimaryVersion {
+				explicit = append(explicit, m.ID)
+			}
 		}
 	}
 	sort.Strings(others)
+	sort.Strings(explicit)
 	if len(others) == 0 {
-		return "" // a lone leftover: nothing is handed off
+		return "", "", nil // a lone leftover: nothing is handed off
 	}
-	gid := dcStr(ob.VersionGroupID)
 	if !sameGroup {
-		return fmt.Sprintf("the leftover's version group keeps live member(s) %s and the owner %s is not in it (its group: %q): "+
-			"the hand-off would crown one of them, not the owner", strings.Join(others, ", "), owner, gid)
+		return "", fmt.Sprintf("the leftover's version group keeps live member(s) %s and the owner %s is not in it: "+
+			"the hand-off would crown one of them, not the owner", strings.Join(others, ", "), owner), nil
 	}
-	if len(others) == 1 && others[0] == owner {
-		return "" // the owner is all that is left: the hand-off crowns it
+	chosen, err = s.primary(ctx, after)
+	if err != nil {
+		return "", "", fmt.Errorf("predict the primary hand-off of %s: %w", leftover, err)
 	}
-	live, explicit := livePrimaries(store, members, leftover)
-	if live == 1 && explicit == 1 && ob.IsPrimaryVersion != nil && *ob.IsPrimaryVersion {
-		return "" // the owner is already the group's one explicit primary
+	if !leftoverPrimary && (len(explicit) != 1 || explicit[0] != owner) {
+		// No election runs for a non-primary leftover: the group keeps its
+		// flags, so the owner must already be its one explicit primary.
+		return chosen, fmt.Sprintf("the leftover is not primary, so no hand-off runs, and the owner %s is not the group's one "+
+			"explicit primary (explicit primaries: %s)", owner, orNone(strings.Join(explicit, ", "))), nil
 	}
-	var prim []string
-	for i := range members {
-		m := &members[i]
-		if m.ID != leftover && !m.IsSoftDeleted() && m.IsPrimaryVersion != nil && *m.IsPrimaryVersion {
-			prim = append(prim, m.ID)
-		}
+	switch chosen {
+	case owner:
+		return chosen, "", nil
+	case "":
+		return chosen, fmt.Sprintf("after the retire the version group's election would hold (no eligible primary), "+
+			"so the owner %s would not be its sole live primary (live members: %s)", owner, strings.Join(others, ", ")), nil
+	default:
+		return chosen, fmt.Sprintf("after the retire the version group's hand-off would crown %s, not the owner %s "+
+			"(live members: %s)", chosen, owner, strings.Join(others, ", ")), nil
 	}
-	sort.Strings(prim)
-	return fmt.Sprintf("after the retire the owner %s would not be its version group's sole live primary "+
-		"(explicit primaries besides the leftover: %s; live members: %s)", owner, orNone(strings.Join(prim, ", ")), strings.Join(others, ", "))
 }

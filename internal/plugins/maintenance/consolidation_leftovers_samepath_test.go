@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/consolidation_leftovers_samepath_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: f05ffd91-1eeb-4d83-be86-1d16d9d8e1e8
 // last-edited: 2026-10-06
 
@@ -278,6 +278,65 @@ func TestLeftoversSamePath_MultiFileOwnerSlice(t *testing.T) {
 	require.Contains(t, r.Current["carries"], "slice at 600 s")
 }
 
+// ownerRowMissingOnDisk gives the owner a second active row (not flagged
+// Missing) at part0.m4b; with no file there, versionprimary's eligibility
+// rule refuses the owner as a primary.
+func (f *lfFixture) ownerRowMissingOnDisk(t *testing.T, o string) {
+	t.Helper()
+	require.NoError(t, f.s.CreateBookFile(&database.BookFile{BookID: o, FilePath: f.path(spSeries + "/35 - Splashdown/part0.m4b"),
+		FileSize: 100, Duration: 60, TrackNumber: 2}))
+}
+
+// TestLeftoversSamePath_DurationEvidenceCarriesWholeBook: agreeing file
+// lengths (sizes and hashes differing) are same-audio evidence.
+func TestLeftoversSamePath_DurationEvidenceCarriesWholeBook(t *testing.T) {
+	f := newLFFixture(t)
+	l, o, _ := f.splashdown(t)
+	_, err := f.s.ModifyBookFile(l, f.rowIDs["L"], func(bf *database.BookFile) error { bf.Duration = spOwnerDur; return nil })
+	require.NoError(t, err)
+	uid := f.finishedReader(t, l)
+	r, ok := lfRow(f.planLF(t, "op-plan"), l)
+	require.True(t, ok)
+	require.True(t, r.Applicable(), r.SkipReason)
+	require.Contains(t, r.Current["same_audio_evidence"], "duration")
+	out := f.applyLF(t, "op-plan", "op-apply", []string{"leftover:" + l})
+	require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+	st, err := f.s.GetUserBookState(uid, o)
+	require.NoError(t, err)
+	require.NotNil(t, st)
+	require.Equal(t, database.UserBookStatusFinished, st.Status)
+}
+
+// TestLeftoversSamePath_BookLengthIsNoEvidence: a book-level length that
+// agrees is metadata, not the files: no evidence.
+func TestLeftoversSamePath_BookLengthIsNoEvidence(t *testing.T) {
+	f := newLFFixture(t)
+	l, _, _ := f.splashdown(t)
+	d := spOwnerDur
+	_, err := f.s.ModifyBook(l, func(b *database.Book) error { b.Duration = &d; return nil })
+	require.NoError(t, err)
+	r, ok := lfRow(f.planLF(t, "op-plan"), l)
+	require.True(t, ok)
+	require.True(t, r.Applicable(), r.SkipReason)
+	require.Contains(t, r.Current["same_audio_evidence"], "none")
+}
+
+// TestLeftoversSamePath_NoEvidenceMultiFileOwner: without evidence a
+// multi-file owner gets no slice offset either.
+func TestLeftoversSamePath_NoEvidenceMultiFileOwner(t *testing.T) {
+	f := newLFFixture(t)
+	l, o, _ := f.splashdown(t)
+	_, err := f.s.ModifyBookFile(o, f.rowIDs["O"], func(bf *database.BookFile) error { bf.TrackNumber = 2; return nil })
+	require.NoError(t, err)
+	p1 := f.file(t, spSeries+"/35 - Splashdown/part 1.m4b", 100)
+	require.NoError(t, f.s.CreateBookFile(&database.BookFile{BookID: o, FilePath: p1, FileSize: 100, Duration: 600, TrackNumber: 1}))
+	r, ok := lfRow(f.planLF(t, "op-plan"), l)
+	require.True(t, ok)
+	require.True(t, r.Applicable(), r.SkipReason)
+	require.Contains(t, r.Current["carries"], "never as finished")
+	require.NotContains(t, r.Current["carries"], "slice at")
+}
+
 // TestLeftoversSamePath_Holds: every hold the owner named, each its own kind.
 func TestLeftoversSamePath_Holds(t *testing.T) {
 	cases := map[string]struct {
@@ -344,10 +403,22 @@ func TestLeftoversSamePath_Holds(t *testing.T) {
 			require.NoError(t, err)
 			f.groupMember(t, "Splashdown (abridged)", nil)
 		}, leftoverSkipSamePathPrimary},
-		"a third primary in the group": {func(t *testing.T, f *lfFixture, _, _ string) {
-			yes := true
+		"a third primary in the group, the leftover not primary": {func(t *testing.T, f *lfFixture, l, _ string) {
+			yes, no := true, false
 			f.groupMember(t, "Splashdown (dramatized)", &yes)
+			_, err := f.s.ModifyBook(l, func(b *database.Book) error { b.IsPrimaryVersion = &no; return nil })
+			require.NoError(t, err)
 		}, leftoverSkipSamePathPrimary},
+		"ineligible owner next to an eligible explicit non-primary sibling": {func(t *testing.T, f *lfFixture, l, o string) {
+			f.sameAudioBySize(t, l)
+			no := false
+			f.groupMember(t, "Splashdown (abridged)", &no)
+			f.ownerRowMissingOnDisk(t, o)
+		}, leftoverSkipSamePathPrimary},
+		"leading numbers differ": {func(t *testing.T, f *lfFixture, _, o string) {
+			_, err := f.s.ModifyBook(o, func(b *database.Book) error { b.Title = "38 - Splashdown"; return nil })
+			require.NoError(t, err)
+		}, leftoverSkipSamePathIdentity},
 		"owner-manual owner": {func(t *testing.T, f *lfFixture, _, o string) {
 			pub := "Big Finish Productions"
 			_, err := f.s.ModifyBook(o, func(b *database.Book) error { b.Publisher = &pub; return nil })
@@ -467,11 +538,25 @@ func TestLeftoversSamePath_ChangedSincePlan(t *testing.T) {
 		"owner file gone": func(t *testing.T, f *lfFixture, _ string) {
 			require.NoError(t, os.Remove(f.path(spShared)))
 		},
+		"a third primary joins the group": func(t *testing.T, f *lfFixture, _ string) {
+			yes := true
+			f.groupMember(t, "Splashdown (dramatized)", &yes)
+		},
+		"owner turns ineligible next to an explicit non-primary sibling": func(t *testing.T, f *lfFixture, _ string) {
+			require.NoError(t, os.Remove(f.path(spSeries+"/35 - Splashdown/part0.m4b")))
+		},
 	}
 	for name, change := range cases {
 		t.Run(name, func(t *testing.T) {
 			f := newLFFixture(t)
 			l, o, _ := f.splashdown(t)
+			if name == "owner turns ineligible next to an explicit non-primary sibling" {
+				f.sameAudioBySize(t, l)
+				no := false
+				f.groupMember(t, "Splashdown (abridged)", &no)
+				f.file(t, spSeries+"/35 - Splashdown/part0.m4b", 100)
+				f.ownerRowMissingOnDisk(t, o)
+			}
 			planned, ok := lfRow(f.planLF(t, "op-plan"), l)
 			require.True(t, ok)
 			require.Equal(t, leftoverClassSamePath, planned.Class, planned.Reason)
