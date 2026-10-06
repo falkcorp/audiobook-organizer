@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_files_position_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3b0e6f5a-2c41-4d8e-9a7b-6f1c2d9e8a53
-// last-edited: 2026-09-13
+// last-edited: 2026-10-05
 
 package audiobookshandler_test
 
@@ -113,7 +113,6 @@ func TestUndoMetadataChange_RevertsBookFilePosition(t *testing.T) {
 	d.store.EXPECT().RecordMetadataChange(mock.MatchedBy(func(r *database.MetadataChangeRecord) bool {
 		return r.ChangeType == "undo" && r.Field == field
 	})).Return(nil)
-	d.metaFetch.EXPECT().InvalidateCachedCandidates("b1").Return(nil).Maybe()
 
 	c, w := newCtx("POST", "/audiobooks/b1/metadata-history/"+field+"/undo", nil,
 		gin.Params{{Key: "id", Value: "b1"}, {Key: "field", Value: field}})
@@ -145,8 +144,7 @@ func TestUndoMetadataChange_RoutedFieldWithColons(t *testing.T) {
 			d.store.EXPECT().PatchBookFileFields("b1", "f1", mock.Anything).Return(
 				&database.BookFile{ID: "f1", TrackNumber: 0}, &database.BookFile{ID: "f1", TrackNumber: 3}, nil)
 			d.store.EXPECT().RecordMetadataChange(mock.Anything).Return(nil)
-			d.metaFetch.EXPECT().InvalidateCachedCandidates("b1").Return(nil).Maybe()
-
+		
 			r := gin.New()
 			r.POST(undoRoute, h.UndoMetadataChange)
 			w := httptest.NewRecorder()

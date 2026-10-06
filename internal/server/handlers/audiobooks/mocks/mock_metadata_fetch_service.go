@@ -36,57 +36,6 @@ func (_m *MockMetadataFetchService) EXPECT() *MockMetadataFetchService_Expecter 
 	return &MockMetadataFetchService_Expecter{mock: &_m.Mock}
 }
 
-// InvalidateCachedCandidates provides a mock function for the type MockMetadataFetchService
-func (_mock *MockMetadataFetchService) InvalidateCachedCandidates(bookID string) error {
-	ret := _mock.Called(bookID)
-
-	if len(ret) == 0 {
-		panic("no return value specified for InvalidateCachedCandidates")
-	}
-
-	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(string) error); ok {
-		r0 = returnFunc(bookID)
-	} else {
-		r0 = ret.Error(0)
-	}
-	return r0
-}
-
-// MockMetadataFetchService_InvalidateCachedCandidates_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'InvalidateCachedCandidates'
-type MockMetadataFetchService_InvalidateCachedCandidates_Call struct {
-	*mock.Call
-}
-
-// InvalidateCachedCandidates is a helper method to define mock.On call
-//   - bookID string
-func (_e *MockMetadataFetchService_Expecter) InvalidateCachedCandidates(bookID any) *MockMetadataFetchService_InvalidateCachedCandidates_Call {
-	return &MockMetadataFetchService_InvalidateCachedCandidates_Call{Call: _e.mock.On("InvalidateCachedCandidates", bookID)}
-}
-
-func (_c *MockMetadataFetchService_InvalidateCachedCandidates_Call) Run(run func(bookID string)) *MockMetadataFetchService_InvalidateCachedCandidates_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 string
-		if args[0] != nil {
-			arg0 = args[0].(string)
-		}
-		run(
-			arg0,
-		)
-	})
-	return _c
-}
-
-func (_c *MockMetadataFetchService_InvalidateCachedCandidates_Call) Return(err error) *MockMetadataFetchService_InvalidateCachedCandidates_Call {
-	_c.Call.Return(err)
-	return _c
-}
-
-func (_c *MockMetadataFetchService_InvalidateCachedCandidates_Call) RunAndReturn(run func(bookID string) error) *MockMetadataFetchService_InvalidateCachedCandidates_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // UndoFieldChange provides a mock function for the type MockMetadataFetchService
 func (_mock *MockMetadataFetchService) UndoFieldChange(bookID string, field string) (*metafetch.UndoApplyResult, error) {
 	ret := _mock.Called(bookID, field)

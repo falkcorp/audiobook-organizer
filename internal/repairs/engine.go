@@ -1,5 +1,5 @@
 // file: internal/repairs/engine.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 9b3e7f40-2d15-4a86-9c1f-6e0a4d8b7c25
 // last-edited: 2026-10-05
 
@@ -496,7 +496,14 @@ func RunApply(ctx context.Context, f Fixer, plan *PlanResult, planOpID string, r
 	}
 
 	holder, held := "", false
-	if !dryRun && len(selected) > 0 {
+	// A NoScanStandDown fixer writes no library row, so it runs without the
+	// stand-down and its Writer refuses every write. Its rows still go
+	// through the framework guards and the fingerprint check below.
+	noStandDown := SkipsScanStandDown(f)
+	if noStandDown && deps.Writer != nil {
+		deps.Writer.restrictToNothing()
+	}
+	if !dryRun && len(selected) > 0 && !noStandDown {
 		if deps.StandDown != nil && deps.OpID == "" {
 			return res, ErrNoHolderID
 		}

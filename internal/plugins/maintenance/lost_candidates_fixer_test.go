@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/lost_candidates_fixer_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: cde35f5b-18f6-420d-bbdf-ba221050c4b8
 // last-edited: 2026-10-05
 
@@ -269,4 +269,7 @@ func TestLostCandidatesFixer_Registered(t *testing.T) {
 	f, ok := p.Repairs().Get(lostCandidatesFixerID)
 	require.True(t, ok)
 	require.True(t, repairs.AllowsITunesDatabaseOnly(f))
+	// It writes only the candidate cache, so its long refetch run does not
+	// park the library scan (the engine takes no stand-down for it).
+	require.True(t, repairs.SkipsScanStandDown(f))
 }

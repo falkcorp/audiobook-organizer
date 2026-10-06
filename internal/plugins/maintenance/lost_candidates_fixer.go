@@ -65,7 +65,8 @@ const (
 // 8/s included, still paces it) and writes the candidate cache only. It never
 // applies metadata and never writes the book, so the iTunes path guard does
 // not apply (ITunesDatabaseOnly); Doctor Who / Big Finish / Torchwood stay
-// guarded. The engine runs rows on its bounded pool. A row whose refetch
+// guarded. It takes no scan stand-down (NoScanStandDown). The engine runs
+// rows on its bounded pool. A row whose refetch
 // finds nothing reports failed with the fetch's message.
 type lostCandidatesFixer struct{ p *Plugin }
 
@@ -86,6 +87,16 @@ func (f *lostCandidatesFixer) Description() string {
 // ITunesDatabaseOnly: the fixer writes no book row and no file, only the
 // candidate cache (see the type comment).
 func (f *lostCandidatesFixer) ITunesDatabaseOnly() bool { return true }
+
+// NoScanStandDown: the fixer writes no library row the scan writes (only the
+// candidate cache, which the store guards with its own per-book lock), and a
+// run is one provider round trip per row -- ten to twenty minutes for a full
+// selection. Holding the library-scan stand-down for that whole time parked
+// every scan for nothing, so the engine takes none for this fixer, and the
+// Writer it is handed refuses every write (repairs.NoScanStandDown).
+func (f *lostCandidatesFixer) NoScanStandDown() bool { return true }
+
+var _ repairs.NoScanStandDown = (*lostCandidatesFixer)(nil)
 
 // lostCandidateInput is everything one row's decision reads.
 type lostCandidateInput struct {

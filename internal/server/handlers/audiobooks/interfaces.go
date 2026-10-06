@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/interfaces.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 110386de-3e07-4ef3-b0e0-2e717a249e91
 // last-edited: 2026-10-05
 
@@ -224,9 +224,11 @@ type MetadataStateService interface {
 }
 
 // MetadataFetchService is the narrow *metafetch.Service subset used by
-// undoMetadataChange / undoLastApply for cache invalidation after a revert.
+// undoMetadataChange / undoLastApply. It has no cache-invalidation method: the
+// undos write through ModifyBook, and the store drops a book's cached
+// candidates in that write when the title or author changes
+// (database candidateSearchIdentityChanged).
 type MetadataFetchService interface {
-	InvalidateCachedCandidates(bookID string) error
 	// UndoLastApply reverts the book's most recent metadata apply, field by
 	// field, with a compare-and-set on the value the apply wrote.
 	UndoLastApply(bookID string) (*metafetch.UndoApplyResult, error)

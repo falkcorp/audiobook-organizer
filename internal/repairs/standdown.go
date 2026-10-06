@@ -1,7 +1,7 @@
 // file: internal/repairs/standdown.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0f6d3b82-9e14-4c7a-b25d-7a1e8c4f9d03
-// last-edited: 2026-10-01
+// last-edited: 2026-10-05
 
 package repairs
 
@@ -24,6 +24,25 @@ type StandDown interface {
 	AcquireScanStandDown(ctx context.Context, holderOpID, reason string) (release func(), err error)
 	RenewScanStandDown(holderOpID string) bool
 	ScanStandDownValid(holderOpID string) bool
+}
+
+// NoScanStandDown is implemented by a fixer whose Apply writes nothing through
+// the Writer and no row the library scan writes: no book, book_file, author
+// credit, field state, tag or user state (maintenance.refetch-lost-candidates,
+// which only refetches a book's candidate cache). RunApply then takes no scan
+// stand-down for it, so a run of many slow rows -- each a provider round trip
+// -- does not hold a library scan parked for its whole length, and the Writer
+// it hands the fixer refuses every write (ErrNoWritesWriter), so the promise
+// is enforced rather than trusted. Every other fixer keeps the stand-down.
+type NoScanStandDown interface {
+	NoScanStandDown() bool
+}
+
+// SkipsScanStandDown reports whether f opted out of the apply's scan
+// stand-down (NoScanStandDown).
+func SkipsScanStandDown(f Fixer) bool {
+	x, ok := f.(NoScanStandDown)
+	return ok && x.NoScanStandDown()
 }
 
 // WaitOptions tunes AcquireStandDownWaiting. Zero values take the defaults.
