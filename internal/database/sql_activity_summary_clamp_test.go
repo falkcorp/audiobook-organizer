@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_summary_clamp_test.go
-// version: 1.2.3
+// version: 1.2.4
 // guid: 8b47e0c9-2f13-45da-9e60-c4a1d5382bf7
-// last-edited: 2026-10-04
+// last-edited: 2026-10-06
 
 package database
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -585,7 +586,9 @@ func TestVacuumActivity_IdleTickReclaimsWhatAGivenUpTruncateLeft(t *testing.T) {
 //
 // It asserts three things while Records run continuously through the truncate:
 //   - no Record fails;
-//   - the first checkpoint the truncate runs is PASSIVE, and it does the copy;
+//   - every TRUNCATE follows a PASSIVE that reported complete, and the one
+//     before the first TRUNCATE had copied every frame the VACUUM left (a
+//     PASSIVE before it may report busy and copy nothing; that is retried);
 //   - the slowest Record is well under the time the frame copy took, which is
 //     only true if writers were not blocked for the copy.
 func TestVacuumActivity_TruncateDoesNotStallForegroundWrites(t *testing.T) {
@@ -627,19 +630,7 @@ func TestVacuumActivity_TruncateDoesNotStallForegroundWrites(t *testing.T) {
 		t.Fatalf("fixture: VACUUM left only %d WAL frames", vacuumFrames)
 	}
 
-	var mu sync.Mutex
-	var modes []string
-	var results []walCheckpointResult
-	var copyTime time.Duration
-	hook := ckptHookFn(func(mode string, res walCheckpointResult, _ error) {
-		mu.Lock()
-		defer mu.Unlock()
-		modes = append(modes, mode)
-		results = append(results, res)
-		copyTime = max(copyTime, res.Elapsed)
-	})
-	s.ckptr.hook.Store(&hook)
-	t.Cleanup(func() { s.ckptr.hook.Store(nil) })
+	calls := recordCheckpoints(t, s, nil)
 
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
@@ -679,20 +670,34 @@ func TestVacuumActivity_TruncateDoesNotStallForegroundWrites(t *testing.T) {
 	if n := recErrs.Load(); n != 0 {
 		t.Fatalf("%d Records failed during the post-vacuum truncate; writers must never error", n)
 	}
-	mu.Lock()
-	defer mu.Unlock()
-	lat := time.Duration(maxLatency.Load())
-	t.Logf("frame copy took %v; slowest Record %v; checkpoints %v %+v; vacuum frames %d",
-		copyTime, lat, modes, results, vacuumFrames)
-	// The deterministic check: the first checkpoint is PASSIVE and it copied
-	// every frame the VACUUM wrote, so the TRUNCATE that holds the write lock
-	// had none of them left to copy.
-	if len(modes) == 0 || modes[0] != "PASSIVE" {
-		t.Fatalf("checkpoint order = %v; the copy must be done by a PASSIVE checkpoint before any TRUNCATE", modes)
+	got := calls()
+	var copyTime time.Duration
+	for _, c := range got {
+		copyTime = max(copyTime, c.res.Elapsed)
 	}
-	if results[0].Checkpointed < vacuumFrames {
-		t.Errorf("the PASSIVE checkpoint copied %d frames, fewer than the %d the VACUUM left: the TRUNCATE "+
-			"would copy the rest while holding the write lock", results[0].Checkpointed, vacuumFrames)
+	lat := time.Duration(maxLatency.Load())
+	t.Logf("frame copy took %v; slowest Record %v; checkpoints %+v; vacuum frames %d",
+		copyTime, lat, got, vacuumFrames)
+	// The deterministic check: the PASSIVE right before the first TRUNCATE
+	// reported complete and had copied every frame the VACUUM wrote, so the
+	// TRUNCATE that holds the write lock had none of them left to copy.
+	//
+	// Not "the FIRST checkpoint is PASSIVE and did the copy": a PASSIVE can
+	// legitimately report busy=1 with log/checkpointed of -1 and copy nothing.
+	// The checkpoint connection has busy_timeout 0, so a PASSIVE that cannot
+	// take a WAL lock at once (here the only other activity is the concurrent
+	// Records' commits) gives up immediately, and truncateWALAfterVacuum
+	// retries it after its backoff. CI hit
+	// exactly that on 2026-10-06: [PASSIVE busy, PASSIVE 3289/3289, TRUNCATE],
+	// which is correct behaviour that the old index-0 assertion failed.
+	requireTruncateOnlyAfterCompletePassive(t, got)
+	first := slices.IndexFunc(got, func(c ckptCall) bool { return c.mode == "TRUNCATE" })
+	if first < 1 {
+		t.Fatalf("no TRUNCATE preceded by a PASSIVE was issued: %+v", got)
+	}
+	if copied := got[first-1].res.Checkpointed; copied < vacuumFrames {
+		t.Errorf("the PASSIVE before the TRUNCATE had copied %d frames, fewer than the %d the VACUUM left: "+
+			"the TRUNCATE would copy the rest while holding the write lock", copied, vacuumFrames)
 	}
 	// The timing check, only where it can discriminate. With the write lock
 	// held for the copy, the slowest Record matches the copy time (measured on
