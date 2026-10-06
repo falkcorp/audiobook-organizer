@@ -258,3 +258,22 @@ func TestExtractMetadataFromFolder_TopLevelSeriesFolderIsNoAuthor(t *testing.T) 
 	assert.Equal(t, "Mara Quill", b.Author)
 	assert.Empty(t, b.Series)
 }
+
+// LegacyFolderParse is main's folder parse frozen (evidence for the
+// reparse fixer): it still titles a folder by the text before the first
+// " - ", exactly as rows imported before 2026-10-05 were titled.
+func TestLegacyFolderParse_IsTheOldParse(t *testing.T) {
+	assert.Equal(t, "2018", LegacyFolderParse("/srv/library/Mara Quill/2018/2018 - Glasswake").Title)
+	assert.Equal(t, "Driftworld 24", LegacyFolderParse("/srv/library/Dorian Vex/Driftworld/Driftworld 24 - The Seventh Lantern - 01").Title)
+	assert.Equal(t, "Glasswake", ExtractMetadataFromFolderTitle("/srv/library/Mara Quill/2018/2018 - Glasswake"))
+}
+
+// ExtractMetadataFromFolderTitle is the current parse's title, for the
+// comparison above.
+func ExtractMetadataFromFolderTitle(p string) string {
+	fm, err := ExtractMetadataFromFolder(p)
+	if err != nil {
+		return ""
+	}
+	return fm.Title
+}
