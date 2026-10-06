@@ -1,8 +1,8 @@
 // file: web/src/components/dedup/DedupAIReviewTab.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-09-19
-import { useState, useEffect } from 'react';
+// last-edited: 2026-10-06
+import { useState, useEffect, useCallback, useMemo } from 'react';
 
 // A scan in one of these states will not change again, so it is not polled
 // and does not block starting a new scan. "superseded" is an unreviewed
@@ -11,6 +11,7 @@ const TERMINAL_SCAN_STATUSES = new Set(['complete', 'failed', 'canceled', 'super
 const isTerminalScan = (status: string) => TERMINAL_SCAN_STATUSES.has(status);
 import { useSearchParams } from 'react-router-dom';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
+import { useRowSelection } from '../../hooks/useRowSelection';
 import {
   Box,
   Typography,
@@ -44,9 +45,32 @@ function AIAuthorPipelinePage() {
   const [scans, setScans] = useState<api.AIScan[]>([]);
   const [batchMode, setBatchMode] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [selected, setSelected] = useState<Set<number>>(new Set());
   const [agreementFilter, setAgreementFilter] = useState<string>('all');
   const [error, setError] = useState<string | null>(null);
+
+  const filteredResults = useMemo(
+    () =>
+      agreementFilter === 'all' ? results : results.filter((r) => r.agreement === agreementFilter),
+    [results, agreementFilter]
+  );
+  // One list, no paging: the header checkbox selects every selectable result
+  // shown, shift-click selects a range. Applied results and a superseded scan
+  // are not selectable. Switching scan or agreement tab clears the selection,
+  // so an apply never reaches results the reviewer can no longer see.
+  const superseded = scan?.status === 'superseded';
+  const resultIsDisabled = useCallback(
+    (id: number) => superseded || Boolean(results.find((r) => r.id === id)?.applied),
+    [superseded, results]
+  );
+  const resultKeys = useMemo(() => filteredResults.map((r) => r.id), [filteredResults]);
+  const selection = useRowSelection<number>({
+    pageKeys: resultKeys,
+    totalMatching: resultKeys.length,
+    resetKey: `${scan?.id ?? ''}|${agreementFilter}`,
+    isDisabled: resultIsDisabled,
+  });
+  const selected = selection.selected;
+  const clearSelected = selection.clear;
 
   const { loading, run: startScanAction } = useAsyncAction(async () => {
     setError(null);
@@ -122,29 +146,17 @@ function AIAuthorPipelinePage() {
       await api.applyAIScanResults(scan.id, Array.from(selected));
       const res = await api.getAIScanResults(scan.id);
       setResults(res);
-      setSelected(new Set());
+      clearSelected();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Failed to apply results');
       // 409: the scan was superseded after it was loaded. Reload it so it
       // shows as superseded and read-only, instead of leaving an apply button
       // that can only fail again.
       if (e instanceof api.ApiError && e.status === 409) {
-        setSelected(new Set());
+        clearSelected();
         await loadScan(scan.id);
       }
     }
-  };
-
-  const filteredResults =
-    agreementFilter === 'all' ? results : results.filter((r) => r.agreement === agreementFilter);
-
-  const toggleSelect = (id: number) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
   };
 
   return (
@@ -320,7 +332,7 @@ function AIAuthorPipelinePage() {
               <Button variant="contained" color="primary" onClick={applySelected}>
                 Apply Selected ({selected.size})
               </Button>
-              <Button variant="outlined" size="small" onClick={() => setSelected(new Set())}>
+              <Button variant="outlined" size="small" onClick={clearSelected}>
                 Clear Selection
               </Button>
               <Typography
@@ -335,6 +347,24 @@ function AIAuthorPipelinePage() {
             </Paper>
           )}
 
+          {filteredResults.length > 0 && (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+              <Checkbox
+                size="small"
+                checked={selection.header.checked}
+                indeterminate={selection.header.indeterminate}
+                disabled={selection.header.disabled}
+                onChange={selection.togglePage}
+                slotProps={{
+                  input: { 'aria-label': `Select all ${filteredResults.length} results shown` },
+                }}
+              />
+              <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                Select all shown · Shift-click a checkbox to select a range
+              </Typography>
+            </Box>
+          )}
+
           {/* Result Cards */}
           {filteredResults.map((result) => (
             <Card
@@ -345,9 +375,8 @@ function AIAuthorPipelinePage() {
               <CardContent sx={{ py: 1, '&:last-child': { pb: 1 } }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                   <Checkbox
-                    checked={selected.has(result.id)}
-                    onChange={() => toggleSelect(result.id)}
-                    disabled={result.applied || scan?.status === 'superseded'}
+                    {...selection.checkboxProps(result.id)}
+                    slotProps={{ input: { 'aria-label': `Select result ${result.id}` } }}
                     size="small"
                   />
                   <Chip

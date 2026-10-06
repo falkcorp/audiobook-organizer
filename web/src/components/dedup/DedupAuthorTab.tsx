@@ -1,8 +1,8 @@
 // file: web/src/components/dedup/DedupAuthorTab.tsx
-// version: 1.2.1
+// version: 1.3.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-09-10
-import { useState, useEffect, useCallback } from 'react';
+// last-edited: 2026-10-06
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Box,
@@ -41,6 +41,9 @@ import BusinessIcon from '@mui/icons-material/Business';
 import SearchIcon from '@mui/icons-material/Search';
 import * as api from '../../services/api';
 import type { Book, AuthorDedupGroup, Operation, SuggestionRoles } from '../../services/api';
+import { useRowSelection } from '../../hooks/useRowSelection';
+import { SelectAllMatchingBanner } from '../common/SelectAllMatchingBanner';
+import { BulkConfirmDialog } from '../common/BulkConfirmDialog';
 import {
   cleanDisplayTitle,
   OperationProgress,
@@ -325,8 +328,8 @@ export function AuthorDedupTab() {
   const [error, setError] = useState<string | null>(null);
   const [activeOp, setActiveOp] = useState<Operation | null>(null);
   const [mergeSuccess, setMergeSuccess] = useState<string | null>(null);
-  const [selectedGroups, setSelectedGroups] = useState<Set<string>>(new Set());
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmSelectedOpen, setConfirmSelectedOpen] = useState(false);
   const [editingCanonicalId, setEditingCanonicalId] = useState<number | null>(null);
   const [editingCanonicalName, setEditingCanonicalName] = useState('');
   const [narratorFlags, setNarratorFlags] = useState<Set<string>>(new Set()); // "authorId" or "authorId:splitName" keys
@@ -339,6 +342,19 @@ export function AuthorDedupTab() {
   const [popoverAuthorIds, setPopoverAuthorIds] = useState<number[]>([]);
   const [resolvingAuthor, setResolvingAuthor] = useState<number | null>(null);
   const pagination = usePagination(groups.length);
+  // Groups are keyed by canonical author id (stable across removals).
+  const allGroupKeys = useMemo(() => groups.map((g) => String(g.canonical.id)), [groups]);
+  const pageKeys = useMemo(
+    () => allGroupKeys.slice(pagination.startIdx, pagination.endIdx),
+    [allGroupKeys, pagination.startIdx, pagination.endIdx]
+  );
+  const selection = useRowSelection<string>({
+    pageKeys,
+    totalMatching: groups.length,
+    resetKey: String(pagination.rowsPerPage),
+    allKeys: allGroupKeys,
+  });
+  const { clear: clearSelection } = selection;
 
   const fetchDuplicates = useCallback(async () => {
     setLoading(true);
@@ -353,7 +369,7 @@ export function AuthorDedupTab() {
           async () => {
             const fresh = await api.getAuthorDuplicates();
             setGroups(normalizeGroups(fresh.groups));
-            setSelectedGroups(new Set());
+            clearSelection();
             setLoading(false);
           },
           (msg) => {
@@ -364,7 +380,7 @@ export function AuthorDedupTab() {
         return;
       }
       setGroups(normalizeGroups(result.groups));
-      setSelectedGroups(new Set());
+      clearSelection();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch duplicates');
     } finally {
@@ -470,11 +486,9 @@ export function AuthorDedupTab() {
         } else {
           setMergeSuccess(`Merged author(s) into "${group.canonical.name}"`);
           setGroups((prev) => prev.filter((g) => g.canonical.id !== group.canonical.id));
-          setSelectedGroups((prev) => {
-            const next = new Set(prev);
-            next.delete(String(group.canonical.id));
-            return next;
-          });
+          selection.replace(
+            [...selection.selected].filter((k) => k !== String(group.canonical.id))
+          );
         }
       },
       setError
@@ -482,10 +496,12 @@ export function AuthorDedupTab() {
   };
 
   const handleMergeSelected = async () => {
+    setConfirmSelectedOpen(false);
     setMergeSuccess(null);
+    const count = selection.selectedCount;
     for (const group of groups) {
       const key = String(group.canonical.id);
-      if (!selectedGroups.has(key)) continue;
+      if (!selection.selected.has(key)) continue;
       try {
         const initial = await api.mergeAuthors(
           group.canonical.id,
@@ -498,7 +514,7 @@ export function AuthorDedupTab() {
       }
     }
     setActiveOp(null);
-    setMergeSuccess(`Merged ${selectedGroups.size} selected group(s)`);
+    setMergeSuccess(`Merged ${count} selected group(s)`);
     fetchDuplicates();
   };
 
@@ -522,21 +538,10 @@ export function AuthorDedupTab() {
     fetchDuplicates();
   };
 
-  const toggleGroup = (key: string) => {
-    setSelectedGroups((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  };
-
-  const toggleAll = () => {
-    if (selectedGroups.size === groups.length) {
-      setSelectedGroups(new Set());
-    } else {
-      setSelectedGroups(new Set(groups.map((g) => String(g.canonical.id))));
-    }
+  // A selection wider than the page needs a confirmation with its count.
+  const requestMergeSelected = () => {
+    if (selection.selectedCount > pageKeys.length) setConfirmSelectedOpen(true);
+    else void handleMergeSelected();
   };
 
   const busy = activeOp !== null;
@@ -574,18 +579,15 @@ export function AuthorDedupTab() {
         <Stack direction="row" spacing={1}>
           {groups.length > 0 && (
             <>
-              <Button size="small" onClick={toggleAll} disabled={busy}>
-                {selectedGroups.size === groups.length ? 'Deselect All' : 'Select All'}
-              </Button>
-              {selectedGroups.size > 0 && (
+              {selection.selectedCount > 0 && (
                 <Button
                   variant="contained"
                   color="primary"
                   startIcon={<MergeIcon />}
-                  onClick={handleMergeSelected}
+                  onClick={requestMergeSelected}
                   disabled={busy}
                 >
-                  Merge Selected ({selectedGroups.size})
+                  Merge Selected ({selection.selectedCount})
                 </Button>
               )}
               <Button
@@ -612,10 +614,13 @@ export function AuthorDedupTab() {
           <CircularProgress />
         </Box>
       ) : groups.length === 0 ? (
-        <Paper sx={{ p: 4, textAlign: 'center' }}>
-          <CheckCircleIcon sx={{ fontSize: 48, color: 'success.main', mb: 1 }} />
-          <Typography variant="h6">No duplicate authors found</Typography>
-        </Paper>
+        // A failed fetch already shows its error; "no duplicates" would contradict it.
+        error ? null : (
+          <Paper sx={{ p: 4, textAlign: 'center' }}>
+            <CheckCircleIcon sx={{ fontSize: 48, color: 'success.main', mb: 1 }} />
+            <Typography variant="h6">No duplicate authors found</Typography>
+          </Paper>
+        )
       ) : (
         <>
           <PaginationControls
@@ -625,6 +630,28 @@ export function AuthorDedupTab() {
             onPageChange={pagination.setPage}
             onRowsPerPageChange={pagination.setRowsPerPage}
           />
+          <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1 }}>
+            <Checkbox
+              size="small"
+              checked={selection.header.checked}
+              indeterminate={selection.header.indeterminate}
+              disabled={busy || selection.header.disabled}
+              onChange={selection.togglePage}
+              slotProps={{
+                input: { 'aria-label': `Select all ${pageKeys.length} groups on this page` },
+              }}
+            />
+            <Typography variant="caption" color="text.secondary">
+              Select page · Shift-click a checkbox to select a range
+            </Typography>
+          </Stack>
+          <SelectAllMatchingBanner
+            selection={selection}
+            pageCount={pageKeys.length}
+            totalMatching={groups.length}
+            noun="groups"
+            testIdPrefix="author-groups-select-all"
+          />
           <Stack spacing={2}>
             {groups.slice(pagination.startIdx, pagination.endIdx).map((group) => {
               const key = String(group.canonical.id);
@@ -633,10 +660,12 @@ export function AuthorDedupTab() {
                   <CardContent>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
                       <Checkbox
-                        checked={selectedGroups.has(key)}
-                        onChange={() => toggleGroup(key)}
+                        {...selection.checkboxProps(key)}
                         disabled={busy}
                         size="small"
+                        slotProps={{
+                          input: { 'aria-label': `Select group ${group.canonical.name}` },
+                        }}
                       />
                       {editingCanonicalId === group.canonical.id ? (
                         <>
@@ -1047,6 +1076,17 @@ export function AuthorDedupTab() {
           </Button>
         </DialogActions>
       </Dialog>
+      <BulkConfirmDialog
+        open={confirmSelectedOpen}
+        title={`Merge ${selection.selectedCount} selected author groups?`}
+        confirmLabel={`Merge ${selection.selectedCount}`}
+        onCancel={() => setConfirmSelectedOpen(false)}
+        onConfirm={() => void handleMergeSelected()}
+        testId="author-merge-selected-confirm"
+      >
+        The selection covers {selection.selectedCount} groups, more than the {pageKeys.length} on
+        this page. Each group&apos;s variants are merged into its canonical author.
+      </BulkConfirmDialog>
     </Box>
   );
 }

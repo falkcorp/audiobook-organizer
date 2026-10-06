@@ -1,8 +1,8 @@
 // file: web/src/components/dedup/DedupSeriesTab.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678902
-// last-edited: 2026-08-23
-import { useState, useEffect, useCallback } from 'react';
+// last-edited: 2026-10-06
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Box,
   Typography,
@@ -38,6 +38,9 @@ import CleaningServicesIcon from '@mui/icons-material/CleaningServices';
 import SearchIcon from '@mui/icons-material/Search';
 import * as api from '../../services/api';
 import type { SeriesDupGroup, Operation, ValidationResult } from '../../services/api';
+import { useRowSelection } from '../../hooks/useRowSelection';
+import { SelectAllMatchingBanner } from '../common/SelectAllMatchingBanner';
+import { BulkConfirmDialog } from '../common/BulkConfirmDialog';
 import {
   cleanDisplayTitle,
   OperationProgress,
@@ -45,6 +48,19 @@ import {
   usePagination,
   PaginationControls,
 } from './dedupHelpers';
+
+/**
+ * A group's identity: its sorted series ids. NOT its array index -- a group is
+ * removed after a single merge, which shifted every later index so the
+ * selection, the keep choice and the narrator flags slid onto the NEXT group
+ * (and a later merge could keep a series from a different group).
+ */
+export function seriesGroupKey(group: SeriesDupGroup): string {
+  return `group-${group.series
+    .map((s) => s.id)
+    .sort((a, b) => a - b)
+    .join('|')}`;
+}
 
 export function SeriesDedupTab() {
   const [groups, setGroups] = useState<SeriesDupGroup[]>([]);
@@ -54,8 +70,8 @@ export function SeriesDedupTab() {
   const [activeOp, setActiveOp] = useState<Operation | null>(null);
   const [mergeSuccess, setMergeSuccess] = useState<string | null>(null);
   const [keepSelections, setKeepSelections] = useState<Record<string, number[]>>({});
-  const [selectedGroups, setSelectedGroups] = useState<Set<string>>(new Set());
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmSelectedOpen, setConfirmSelectedOpen] = useState(false);
   const [editingSeriesId, setEditingSeriesId] = useState<number | null>(null);
   const [editingName, setEditingName] = useState('');
   const [validationResults, setValidationResults] = useState<Record<string, ValidationResult[]>>(
@@ -72,6 +88,18 @@ export function SeriesDedupTab() {
   const [pruneLoading, setPruneLoading] = useState(false);
   const [pruneConfirmOpen, setPruneConfirmOpen] = useState(false);
   const pagination = usePagination(groups.length);
+  const allGroupKeys = useMemo(() => groups.map(seriesGroupKey), [groups]);
+  const pageKeys = useMemo(
+    () => allGroupKeys.slice(pagination.startIdx, pagination.endIdx),
+    [allGroupKeys, pagination.startIdx, pagination.endIdx]
+  );
+  const selection = useRowSelection<string>({
+    pageKeys,
+    totalMatching: groups.length,
+    resetKey: String(pagination.rowsPerPage),
+    allKeys: allGroupKeys,
+  });
+  const { clear: clearSelection } = selection;
 
   const handleValidate = async (groupKey: string, query: string) => {
     setValidatingKey(groupKey);
@@ -103,16 +131,16 @@ export function SeriesDedupTab() {
       setGroups(data.groups || []);
       setTotalSeries(data.total_series || 0);
       const defaults: Record<string, number[]> = {};
-      (data.groups || []).forEach((g, i) => {
+      (data.groups || []).forEach((g) => {
         const sorted = [...g.series].sort(
           (a, b) => (a.author_id != null ? -1 : 0) - (b.author_id != null ? -1 : 0)
         );
-        defaults[`group-${i}`] = sorted.map((s) => s.id);
+        defaults[seriesGroupKey(g)] = sorted.map((s) => s.id);
       });
       setKeepSelections(defaults);
-      setSelectedGroups(new Set());
+      clearSelection();
     },
-    []
+    [clearSelection]
   );
 
   const fetchDuplicates = useCallback(async () => {
@@ -189,12 +217,8 @@ export function SeriesDedupTab() {
           setError(final.error_message || 'Series merge failed');
         } else {
           setMergeSuccess(`Merged series "${group.name}"`);
-          setGroups((prev) => prev.filter((_, i) => `group-${i}` !== groupKey));
-          setSelectedGroups((prev) => {
-            const next = new Set(prev);
-            next.delete(groupKey);
-            return next;
-          });
+          setGroups((prev) => prev.filter((g) => seriesGroupKey(g) !== groupKey));
+          selection.replace([...selection.selected].filter((k) => k !== groupKey));
         }
       },
       setError
@@ -202,10 +226,12 @@ export function SeriesDedupTab() {
   };
 
   const handleMergeSelected = async () => {
+    setConfirmSelectedOpen(false);
     setMergeSuccess(null);
+    const count = selection.selectedCount;
     for (let i = 0; i < groups.length; i++) {
-      const groupKey = `group-${i}`;
-      if (!selectedGroups.has(groupKey)) continue;
+      const groupKey = allGroupKeys[i];
+      if (!selection.selected.has(groupKey)) continue;
       const group = groups[i];
       const selected = keepSelections[groupKey] || [];
       if (selected.length < 2) continue;
@@ -220,7 +246,7 @@ export function SeriesDedupTab() {
       }
     }
     setActiveOp(null);
-    setMergeSuccess(`Merged ${selectedGroups.size} selected group(s)`);
+    setMergeSuccess(`Merged ${count} selected group(s)`);
     fetchDuplicates();
   };
 
@@ -247,21 +273,10 @@ export function SeriesDedupTab() {
     );
   };
 
-  const toggleGroup = (key: string) => {
-    setSelectedGroups((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  };
-
-  const toggleAll = () => {
-    if (selectedGroups.size === groups.length) {
-      setSelectedGroups(new Set());
-    } else {
-      setSelectedGroups(new Set(groups.map((_, i) => `group-${i}`)));
-    }
+  // A selection wider than the page needs a confirmation with its count.
+  const requestMergeSelected = () => {
+    if (selection.selectedCount > pageKeys.length) setConfirmSelectedOpen(true);
+    else void handleMergeSelected();
   };
 
   const handlePrunePreview = async () => {
@@ -329,18 +344,15 @@ export function SeriesDedupTab() {
           </Button>
           {groups.length > 0 && (
             <>
-              <Button size="small" onClick={toggleAll} disabled={busy}>
-                {selectedGroups.size === groups.length ? 'Deselect All' : 'Select All'}
-              </Button>
-              {selectedGroups.size > 0 && (
+              {selection.selectedCount > 0 && (
                 <Button
                   variant="contained"
                   color="primary"
                   startIcon={<MergeIcon />}
-                  onClick={handleMergeSelected}
+                  onClick={requestMergeSelected}
                   disabled={busy}
                 >
-                  Merge Selected ({selectedGroups.size})
+                  Merge Selected ({selection.selectedCount})
                 </Button>
               )}
               <Button
@@ -383,7 +395,7 @@ export function SeriesDedupTab() {
         <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
           <CircularProgress />
         </Box>
-      ) : groups.length === 0 ? (
+      ) : groups.length === 0 && error ? null : groups.length === 0 ? (
         <Paper sx={{ p: 4, textAlign: 'center' }}>
           <CheckCircleIcon sx={{ fontSize: 48, color: 'success.main', mb: 1 }} />
           <Typography variant="h6">No duplicate series found</Typography>
@@ -405,10 +417,31 @@ export function SeriesDedupTab() {
             onPageChange={pagination.setPage}
             onRowsPerPageChange={pagination.setRowsPerPage}
           />
+          <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1 }}>
+            <Checkbox
+              size="small"
+              checked={selection.header.checked}
+              indeterminate={selection.header.indeterminate}
+              disabled={busy || selection.header.disabled}
+              onChange={selection.togglePage}
+              slotProps={{
+                input: { 'aria-label': `Select all ${pageKeys.length} groups on this page` },
+              }}
+            />
+            <Typography variant="caption" color="text.secondary">
+              Select page · Shift-click a checkbox to select a range
+            </Typography>
+          </Stack>
+          <SelectAllMatchingBanner
+            selection={selection}
+            pageCount={pageKeys.length}
+            totalMatching={groups.length}
+            noun="groups"
+            testIdPrefix="series-groups-select-all"
+          />
           <Stack spacing={2}>
             {groups.slice(pagination.startIdx, pagination.endIdx).map((group, sliceIdx) => {
-              const idx = pagination.startIdx + sliceIdx;
-              const groupKey = `group-${idx}`;
+              const groupKey = pageKeys[sliceIdx];
               return (
                 <Card key={groupKey} variant="outlined">
                   <Box sx={{ display: 'flex' }}>
@@ -423,10 +456,10 @@ export function SeriesDedupTab() {
                         }}
                       >
                         <Checkbox
-                          checked={selectedGroups.has(groupKey)}
-                          onChange={() => toggleGroup(groupKey)}
+                          {...selection.checkboxProps(groupKey)}
                           disabled={busy}
                           size="small"
+                          slotProps={{ input: { 'aria-label': `Select group ${group.name}` } }}
                         />
                         <Typography
                           variant="subtitle1"
@@ -1021,6 +1054,17 @@ export function SeriesDedupTab() {
           </Box>
         </Paper>
       )}
+      <BulkConfirmDialog
+        open={confirmSelectedOpen}
+        title={`Merge ${selection.selectedCount} selected series groups?`}
+        confirmLabel={`Merge ${selection.selectedCount}`}
+        onCancel={() => setConfirmSelectedOpen(false)}
+        onConfirm={() => void handleMergeSelected()}
+        testId="series-merge-selected-confirm"
+      >
+        The selection covers {selection.selectedCount} groups, more than the {pageKeys.length} on
+        this page. Each group&apos;s ticked series are merged into the first one ticked.
+      </BulkConfirmDialog>
     </Box>
   );
 }
