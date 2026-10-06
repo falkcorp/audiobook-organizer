@@ -1,5 +1,5 @@
 // file: internal/repairs/writer.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: c71e0d93-4b28-4a5f-8e6c-2f9a1d7b3e48
 // last-edited: 2026-10-05
 
@@ -86,6 +86,9 @@ type Writer struct {
 	// tagsOnly: the apply's fixer is BookTagsOnly; every non-tag method
 	// refuses (restrictToTags).
 	tagsOnly atomic.Bool
+	// noWrites: the apply's fixer is NoScanStandDown and runs without the
+	// scan stand-down; every write method refuses (restrictToNothing).
+	noWrites atomic.Bool
 
 	// userState is the user listening-state surface (writer_userstate.go);
 	// nil until WithUserState. Its writes are journaled through journal

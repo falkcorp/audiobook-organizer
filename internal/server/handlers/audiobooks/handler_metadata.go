@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_metadata.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 591661c3-5e87-4559-9a08-3203eec4fb68
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 // Metadata-history / undo / field-state / path-history / external-id /
 // changelog / changes endpoints for the audiobooks domain. Split out of
@@ -153,11 +153,9 @@ func (h *Handler) UndoMetadataChange(c *gin.Context) {
 		slog.Warn("failed to record undo change for /", "id", logger.SanitizeLogValue(id), "field", logger.SanitizeLogValue(field), "err", err)
 	}
 
-	// METADATA-CACHED-MATCHER: undo of a metadata field rewrites book
-	// identity; invalidate cache.
-	if h.metadataFetchService != nil {
-		_ = h.metadataFetchService.InvalidateCachedCandidates(id)
-	}
+	// The cached candidates are not touched: a file position is not part of
+	// what the metadata search asks. (This deleted them on every undo until
+	// 2026-10-05.)
 
 	httputil.RespondWithOK(c, gin.H{"message": "undo applied", "field": field, "reverted_to": latest.PreviousValue})
 }
@@ -188,8 +186,13 @@ func (h *Handler) undoBookFieldChange(c *gin.Context, id, field string) {
 		if wb := h.resolveWriteBack(); wb != nil {
 			wb.Enqueue(id)
 		}
-		// METADATA-CACHED-MATCHER: undo rewrites book identity.
-		_ = h.metadataFetchService.InvalidateCachedCandidates(id)
+		// The cached candidates are NOT deleted here. UndoFieldChange writes
+		// through ModifyBook, and the store drops them in that same write when
+		// the undo changes the title or the author's name
+		// (database candidateSearchIdentityChanged) and stamps them when it
+		// replaces or clears the ASIN. Deleting them here on every undo --
+		// an ASIN, ISBN or series undo included -- destroyed candidates that
+		// still answered for the book.
 	}
 	httputil.RespondWithOK(c, gin.H{
 		"message":          "undo applied",
@@ -233,11 +236,10 @@ func (h *Handler) UndoLastApply(c *gin.Context) {
 	if wb := h.resolveWriteBack(); len(res.Reverted) > 0 && wb != nil {
 		wb.Enqueue(id)
 	}
-	// METADATA-CACHED-MATCHER: undo restores the prior identity. Drop the
-	// cache so the next read fetches against the reverted title/author.
-	if len(res.Reverted) > 0 {
-		_ = h.metadataFetchService.InvalidateCachedCandidates(id)
-	}
+	// The cached candidates are left to the store, as for a single-field
+	// undo (undoBookFieldChange): UndoLastApply writes through ModifyBook,
+	// which drops them when the reverted title or author changes what the
+	// search asks, and keeps them otherwise.
 
 	undone := res.Reverted
 	if undone == nil {

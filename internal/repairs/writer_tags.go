@@ -1,5 +1,5 @@
 // file: internal/repairs/writer_tags.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 637b4ad2-17cd-41f7-9b6f-361a057071bf
 // last-edited: 2026-10-05
 
@@ -54,6 +54,9 @@ func (w *Writer) WithTags(store TagStore) *Writer {
 // whether it wrote: false, nil when the book already carries the tag from
 // any source.
 func (w *Writer) AddBookTag(bookID, tag, source string) (bool, error) {
+	if w.noWrites.Load() {
+		return false, fmt.Errorf("%w (AddBookTag)", ErrNoWritesWriter)
+	}
 	if w.tags == nil {
 		return false, errors.New("repairs: writer has no tag store")
 	}
@@ -91,7 +94,21 @@ var ErrTagsOnlyWriter = errors.New("repairs: this fixer is book-tags-only; the w
 // RunApply sets it for a BookTagsOnly fixer before the first Apply.
 func (w *Writer) restrictToTags() { w.tagsOnly.Store(true) }
 
+// ErrNoWritesWriter is returned by every Writer write method when the apply's
+// fixer declared NoScanStandDown: it runs without the scan stand-down on the
+// promise that it writes no library row, so the Writer enforces it.
+var ErrNoWritesWriter = errors.New("repairs: this fixer runs without the scan stand-down and may not write library rows; the writer refuses every write")
+
+// restrictToNothing makes every write method of w refuse (ErrNoWritesWriter).
+// RunApply sets it for a NoScanStandDown fixer before the first Apply.
+func (w *Writer) restrictToNothing() { w.noWrites.Store(true) }
+
+// denyTagsOnly refuses a non-tag write for a BookTagsOnly fixer, and any write
+// for a NoScanStandDown one (the tag primitive checks the latter itself).
 func (w *Writer) denyTagsOnly(method string) error {
+	if w.noWrites.Load() {
+		return fmt.Errorf("%w (%s)", ErrNoWritesWriter, method)
+	}
 	if w.tagsOnly.Load() {
 		return fmt.Errorf("%w (%s)", ErrTagsOnlyWriter, method)
 	}
