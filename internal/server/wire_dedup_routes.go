@@ -1,7 +1,7 @@
 // file: internal/server/wire_dedup_routes.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: b8c9d0e1-f2a3-4567-bcde-890123456789
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package server
 
@@ -44,6 +44,8 @@ func (s *Server) wireDedupRoutes(
 	protected.POST("/dedup/candidates/:id/dismiss", s.perm(auth.PermLibraryEditMetadata), dedupH.RejectDedupCandidate) // DEPRECATED alias for /reject
 	protected.POST("/dedup/candidates/bulk-link", s.perm(auth.PermLibraryEditMetadata), dedupH.BulkLinkDedupCandidates)
 	protected.POST("/dedup/candidates/bulk-merge", s.perm(auth.PermLibraryEditMetadata), dedupH.BulkLinkDedupCandidates) // DEPRECATED alias for /bulk-link
+	// Filter-scoped reject for the review UI's cross-page selection; same filter body as bulk-link.
+	protected.POST("/dedup/candidates/bulk-reject", s.perm(auth.PermLibraryEditMetadata), dedupH.BulkRejectDedupCandidates)
 	protected.POST("/dedup/candidates/link-cluster", s.perm(auth.PermLibraryEditMetadata), dedupH.LinkDedupCluster)
 	protected.POST("/dedup/candidates/merge-cluster", s.perm(auth.PermLibraryEditMetadata), dedupH.LinkDedupCluster) // DEPRECATED alias for /link-cluster
 	protected.POST("/dedup/candidates/reject-cluster", s.perm(auth.PermLibraryEditMetadata), dedupH.RejectDedupCluster)
