@@ -1,5 +1,5 @@
 // file: internal/scanner/unit_test.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: a2b3c4d5-e6f7-8901-abcd-ef2345678901
 // last-edited: 2026-10-06
 
@@ -1482,9 +1482,38 @@ func TestSaveBookToDatabaseExistingBook(t *testing.T) {
 			return existingBook, nil
 		})
 
+	// The scan records history for what it wrote (scan_history.go) and a
+	// proposal for what it held back (scan_identity_hold.go).
+	var history []*database.MetadataChangeRecord
+	store.EXPECT().RecordMetadataChange(mock.Anything).RunAndReturn(func(r *database.MetadataChangeRecord) error {
+		history = append(history, r)
+		return nil
+	})
+	store.EXPECT().GetAuthorByID(1).Return(&database.Author{ID: 1, Name: "Jane Author"}, nil).Maybe()
+	store.EXPECT().GetRaw(database.ScanIdentityProposalKey("existing-id")).Return(nil, nil)
+	var proposal []byte
+	store.EXPECT().SetRaw(database.ScanIdentityProposalKey("existing-id"), mock.Anything).
+		RunAndReturn(func(_ string, v []byte) error { proposal = v; return nil })
+
 	book := &Book{Title: "Test Book", Author: "Jane Author", FilePath: fpath, Format: ".m4b", FileHash: "abc123"}
 	err := saveBookToDatabase(context.Background(), book)
 	assert.NoError(t, err)
+
+	// An existing row keeps its title; the empty author is a gap and is filled.
+	assert.Equal(t, "Old Title", existingBook.Title)
+	require.NotNil(t, existingBook.AuthorID)
+	assert.Equal(t, 1, *existingBook.AuthorID)
+	// History shows the author fill and nothing for the held title.
+	fields := map[string]bool{}
+	for _, r := range history {
+		assert.Equal(t, database.ChangeTypeScan, r.ChangeType)
+		assert.Equal(t, "existing-id", r.BookID)
+		fields[r.Field] = true
+	}
+	assert.True(t, fields[database.HistoryFieldAuthor], "author fill recorded in history: %v", fields)
+	assert.False(t, fields[database.FieldKeyTitle], "held title must not appear in history: %v", fields)
+	// The title the file reads is kept as a proposal, not written.
+	assert.Contains(t, string(proposal), "Test Book")
 }
 
 func TestSaveBookToDatabaseAuthorResolveError(t *testing.T) {
@@ -1609,7 +1638,22 @@ func TestCreateBookFilesForBookWithStore(t *testing.T) {
 	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
 	config.AppConfig.SupportedExtensions = []string{".m4b"}
 
+	// The normalization is the scanner's own write, so it is recorded.
+	var history []*database.MetadataChangeRecord
+	store.EXPECT().RecordMetadataChange(mock.Anything).RunAndReturn(func(r *database.MetadataChangeRecord) error {
+		history = append(history, r)
+		return nil
+	})
+
 	createBookFilesForBook(bookPath, nil, defaultLog, normalizeToDirectory)
+
+	require.Len(t, history, 1)
+	assert.Equal(t, "file_path", history[0].Field)
+	assert.Equal(t, database.ChangeTypeScan, history[0].ChangeType)
+	require.NotNil(t, history[0].PreviousValue)
+	require.NotNil(t, history[0].NewValue)
+	assert.Contains(t, *history[0].PreviousValue, bookPath)
+	assert.Contains(t, *history[0].NewValue, tmp)
 }
 
 func TestCreateBookFilesForBookExistingFiles(t *testing.T) {
@@ -1708,8 +1752,20 @@ func TestSaveBookToDatabaseRelinkByOrgID(t *testing.T) {
 		Format:          ".m4b",
 		BookOrganizerID: "org-123",
 	}
+	// The relink is the scanner's own write, so it is recorded.
+	var history []*database.MetadataChangeRecord
+	store.EXPECT().RecordMetadataChange(mock.Anything).RunAndReturn(func(r *database.MetadataChangeRecord) error {
+		history = append(history, r)
+		return nil
+	})
 	err := saveBookToDatabase(context.Background(), book)
 	assert.NoError(t, err)
+
+	require.Len(t, history, 1)
+	assert.Equal(t, "file_path", history[0].Field)
+	assert.Equal(t, "org-123", history[0].BookID)
+	require.NotNil(t, history[0].NewValue)
+	assert.Contains(t, *history[0].NewValue, fpath)
 }
 
 // ---------------------------------------------------------------------------
