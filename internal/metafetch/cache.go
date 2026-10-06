@@ -1,7 +1,7 @@
 // file: internal/metafetch/cache.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: a4f33a2e-3b4d-4306-bdce-476758e39120
-// last-edited: 2026-10-02
+// last-edited: 2026-10-05
 //
 // Cache-layer on top of metafetch.Service. The persisted record type
 // lives in internal/database (MetadataCandidateCache) — re-exported
@@ -486,9 +486,9 @@ func (mfs *Service) FetchAndCacheLimited(ctx context.Context, limiter *rate.Limi
 // refetch marks itself current on the way past.
 //
 // Dropping candidates because the book changed underneath us is a real need, but
-// it is not this function's job: InvalidateCachedCandidates already does exactly
-// that, from the paths that know it happened (manual edit, metadata apply,
-// organize rename).
+// it is not this function's job: the store drops the row when a write changes
+// the book's title or author (database candidateSearchIdentityChanged), and
+// InvalidateCachedCandidates does it for the undo and revert paths.
 //
 // SourceHash is the discriminator, and this is its first non-diagnostic use.
 // Same inputs + zero results means the providers had nothing to say this time
@@ -769,9 +769,12 @@ func (mfs *Service) ListCachedSummaries(_ context.Context) ([]MetadataCacheSumma
 	return mfs.db.ListMetadataCacheKeys()
 }
 
-// InvalidateCachedCandidates removes the cached candidates for bookID. Used
-// when book metadata changes underneath us (manual edit, metadata
-// apply, undo, revert, organize rename) so the next read fetches fresh.
+// InvalidateCachedCandidates removes the cached candidates for bookID. Its
+// callers are the undo and revert handlers, which restore an earlier state of
+// the book. An apply no longer calls it: deleting after every apply destroyed
+// the candidate just applied. The store itself drops the row when a write
+// changes the book's title or author (database candidateSearchIdentityChanged),
+// and keeps it for an ASIN/ISBN fill, which never makes a candidate wrong.
 //
 // It deliberately does NOT touch the per-provider fetch cache. Every caller
 // is an apply/edit/undo/revert path. Each fetch row carries the

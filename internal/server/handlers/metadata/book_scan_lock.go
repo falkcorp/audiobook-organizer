@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/book_scan_lock.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 070620af-532e-4357-a2a3-3f746b5e9e30
-// last-edited: 2026-09-30
+// last-edited: 2026-10-05
 
 package metadatahandler
 
@@ -15,7 +15,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/errhandling"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
@@ -247,8 +246,11 @@ func (h *Handler) applyCandidateCore(ctx context.Context, id string, cand metafe
 	if err != nil {
 		return nil, err
 	}
-	// Applying invalidates the candidate cache (METADATA-CACHED-MATCHER).
-	errhandling.MustLog(h.metadataFetchService.InvalidateCachedCandidates(id), "candidate cache not invalidated; the dialog may show stale candidates", "book_id", id)
+	// The cached candidates are NOT dropped here. They were, after every
+	// apply, which deleted the very candidate just applied; the store now
+	// drops the row itself when the apply changes the title or author
+	// (database candidateSearchIdentityChanged), and otherwise it still
+	// answers for the book.
 
 	shouldWriteBack := writeBack == nil || *writeBack
 	// Enqueue before the pool submission so the iTunes batcher picks up the
@@ -348,7 +350,8 @@ func (h *Handler) fetchCore(ctx context.Context, id string) (*metafetch.FetchMet
 	if err != nil {
 		return nil, err
 	}
-	errhandling.MustLog(h.metadataFetchService.InvalidateCachedCandidates(id), "candidate cache not invalidated; the dialog may show stale candidates", "book_id", id)
+	// No candidate-cache drop: the store drops the row when the fetched
+	// metadata changed the title or author (see applyCandidateCore).
 	if wb := h.resolveWriteBack(); wb != nil {
 		wb.Enqueue(id)
 	}

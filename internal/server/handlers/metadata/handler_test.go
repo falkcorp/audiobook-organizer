@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler_test.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 1d31ef73-7c7a-4c3b-a840-01b0865023d7
-// last-edited: 2026-09-30
+// last-edited: 2026-10-05
 
 // Tests for the metadata-domain handlers. The store / metadata-fetch-service /
 // write-back-enqueuer / operations-registry / file-io-pool deps are generated
@@ -226,7 +226,6 @@ func TestFetchAudiobookMetadata(t *testing.T) {
 	d.mfs.EXPECT().FetchMetadataForBook(mock.Anything, "b1").Return(&metafetch.FetchMetadataResponse{
 		Message: "ok", Source: "audible", Book: &database.Book{ID: "b1", Title: "T"},
 	}, nil)
-	d.mfs.EXPECT().InvalidateCachedCandidates("b1").Return(nil)
 	d.wb.EXPECT().Enqueue("b1").Return()
 	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "T2"}, nil)
 	w := doReq(h.FetchAudiobookMetadata, http.MethodPost, "/audiobooks/b1/fetch-metadata", nil, idParam("b1"))
@@ -286,7 +285,7 @@ func noPool(c *cfg) { c.hasPool = false }
 
 // A rename known to fail refuses the apply before any write: 409 with the
 // shared reason and the preflight's detail. ApplyMetadataCandidate,
-// InvalidateCachedCandidates, the write-back enqueue, the pool submit and the
+// the write-back enqueue, the pool submit and the
 // event are never set up, so the strict mocks fail the test if any runs.
 func TestApplyAudiobookMetadata_RenamePreflightRefusesBeforeAnyWrite(t *testing.T) {
 	h, d := newHandler(t)
@@ -321,7 +320,6 @@ func TestApplyAudiobookMetadata_NoFileSequelSkipsRenamePreflight(t *testing.T) {
 	h, d := newHandler(t, noPool)
 	d.mfs.EXPECT().ApplyMetadataCandidate("b1", mock.Anything, mock.Anything).
 		Return(&metafetch.FetchMetadataResponse{Message: "applied", Source: "audible", Book: &database.Book{ID: "b1"}}, nil)
-	d.mfs.EXPECT().InvalidateCachedCandidates("b1").Return(nil)
 	d.wb.EXPECT().Enqueue("b1").Return()
 	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "T"}, nil)
 	w := doReq(h.ApplyAudiobookMetadata, http.MethodPost, "/audiobooks/b1/apply-metadata",
@@ -349,7 +347,6 @@ func TestApplyAudiobookMetadata(t *testing.T) {
 	d.mfs.EXPECT().RenamePreflight("b1", mock.Anything, []string{"title"}).Return(nil)
 	d.mfs.EXPECT().ApplyMetadataCandidate("b1", mock.Anything, mock.Anything).
 		Return(&metafetch.FetchMetadataResponse{Message: "applied", Source: "audible", Book: &database.Book{ID: "b1"}}, nil)
-	d.mfs.EXPECT().InvalidateCachedCandidates("b1").Return(nil)
 	d.wb.EXPECT().Enqueue("b1").Return()
 	// Background pool submit fires synchronously in test (we don't run fn).
 	d.pool.EXPECT().Submit("b1", mock.Anything).Return(true)

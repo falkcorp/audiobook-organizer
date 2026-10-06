@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_gate_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 8b4f2d70-1e9a-4c63-a7d5-f0c3e6b91a24
-// last-edited: 2026-10-01
+// last-edited: 2026-10-05
 //
 // The certainty gate on both bulk-apply paths, and the dry run's read-only
 // contract.
@@ -57,9 +57,9 @@ func TestApplyCachedCandidate_GateRefuses(t *testing.T) {
 			if out.Gate == nil || out.Gate.Reason != tc.want {
 				t.Fatalf("gate = %+v, want reason %q", out.Gate, tc.want)
 			}
-			if len(svc.appliedIDs)+len(svc.invalidatedID)+len(svc.finishCalls) != 0 {
-				t.Fatalf("refused book was touched: applied=%v invalidated=%v finish=%v",
-					svc.appliedIDs, svc.invalidatedID, svc.finishCalls)
+			if len(svc.appliedIDs)+len(svc.finishCalls) != 0 {
+				t.Fatalf("refused book was touched: applied=%v finish=%v",
+					svc.appliedIDs, svc.finishCalls)
 			}
 		})
 	}
