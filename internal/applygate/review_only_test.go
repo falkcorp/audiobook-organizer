@@ -1,5 +1,5 @@
 // file: internal/applygate/review_only_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c09f46a0-0fa5-4191-b572-ea43cc5ace8b
 // last-edited: 2026-10-06
 
@@ -39,6 +39,15 @@ func TestEvaluate_ReviewOnlySources(t *testing.T) {
 		if !v.OwnerReviewOverridable() || !slices.Contains(v.RefusingReasons(), ReasonReviewOnlySource) {
 			t.Fatalf("%s: an owner review must apply it by hand (overridable=%v reasons=%v)",
 				source, v.OwnerReviewOverridable(), v.RefusingReasons())
+		}
+
+		if v.UnseenOwnerReviewOverridable() {
+			t.Fatalf("%s: the hashless owner marker must not apply a review-only candidate nobody saw", source)
+		}
+		low := audible
+		low.Score = 0.1
+		if lv := Evaluate(book, snap(book), rt, &low, nil); lv.Allowed || !lv.UnseenOwnerReviewOverridable() {
+			t.Fatalf("%s: the marker must still lift a certainty leg on a chain candidate (allowed=%v reason=%q)", source, lv.Allowed, lv.Reason)
 		}
 
 		stale := Evaluate(book, snap(book), rt, &c, errors.New("hash drift"))

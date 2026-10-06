@@ -1,5 +1,5 @@
 // file: internal/applygate/owner_review.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 3e7b2c14-8d95-4f06-a1c3-6b9e0d4f7a28
 // last-edited: 2026-10-06
 
@@ -34,6 +34,9 @@ import "strings"
 //     title/author the row shows would silently re-point the book at another
 //     Audible record.
 //
+//   - review_only_source, for the hashless marker only
+//     (UnseenOwnerReviewOverridable): nobody saw the candidate it would apply.
+//
 // Everything outside the gate (book not found, a stale pin, a rename that
 // cannot land, policy:no-metadata, field locks, the scan stand-down) is
 // enforced by the caller exactly as for an unreviewed apply.
@@ -56,6 +59,21 @@ func (v Verdict) OwnerReviewOverridable() bool {
 		}
 	}
 	return true
+}
+
+// UnseenOwnerReviewOverridable is OwnerReviewOverridable for the hashless
+// owner marker (metafetch.CandidatePin.IsUnseenOwnerReview): a review-page
+// bulk button applied a book whose candidate the lane never showed (select-all
+// past the loaded rows, or a selection that outlived a refresh). It lifts the
+// same certainty legs, except review_only_source. A review-only candidate
+// (Open Library, Google Books) is applied only by an owner who SAW it, and the
+// marker proves nobody did: the merged row ranks a fallback candidate first
+// once it arrives, so the candidate the server would apply can be one that
+// reached the cache after the lane loaded. planCachedApply already refuses to
+// let the marker lift a no_match mark for the same reason. A hash-bearing pin
+// that matches the shown candidate still lifts review_only_source.
+func (v Verdict) UnseenOwnerReviewOverridable() bool {
+	return v.Reason != ReasonReviewOnlySource && v.OwnerReviewOverridable()
 }
 
 // ownerReviewHardReasons are the evidence refusals an owner review does NOT

@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.36.0
+// version: 1.36.1
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
 // last-edited: 2026-10-06
 
@@ -447,7 +447,15 @@ func planCachedApply(svc cachedApplyService, books bookReader, id string, claims
 	if !v.Allowed {
 		// Only an owner-review pin earns the override. A pin of any other
 		// origin was still checked for staleness above, and gets the hard gate.
-		if ownerReview && v.OwnerReviewOverridable() {
+		// The hashless marker lifts everything a pin does except
+		// review_only_source: nobody was shown this candidate, and a
+		// review-only one is applied only by an owner who saw it
+		// (applygate.Verdict.UnseenOwnerReviewOverridable).
+		overridable := v.OwnerReviewOverridable()
+		if unseen {
+			overridable = v.UnseenOwnerReviewOverridable()
+		}
+		if ownerReview && overridable {
 			plan.OwnerReviewed = true
 			return plan
 		}
