@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_folder_sets_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 3b7d2c55-1a4e-4f0b-9c61-8e2f5d7a0b14
 // last-edited: 2026-10-06
 
@@ -1072,7 +1072,7 @@ func TestFragJoinGroupITunesFailsClosed(t *testing.T) {
 	lib.extIDs = func(string) ([]database.ExternalIDMapping, error) { return nil, nil }
 	require.Empty(t, lib.joinGroupITunes("t", nil), "no iTunes member: the join stands")
 	lib.groupReads = failingGroupReads{}
-	require.Contains(t, lib.joinGroupITunes("t", nil), "version group g of the join is unreadable")
+	require.Contains(t, lib.joinGroupITunes("t", nil), "version group g of the retire is unreadable")
 }
 
 type failingGroupReads struct{}
@@ -1256,4 +1256,115 @@ func TestFragmentFixer_ChapterSetRecheckFailsClosed(t *testing.T) {
 	require.Equal(t, 1, out.Failed, "%+v", out.Rows)
 	require.Contains(t, fmt.Sprintf("%+v", out.Rows), "library re-check")
 	f.requireUntouched(t, frags[0])
+}
+
+// TestFragmentFixer_ParentRowITunesVersionGroup (PR #3787 review, round 3):
+// a moved or copy row retires its fragments into the parent, which hands
+// each fragment's version-group primary on and re-ranks the parent's group,
+// as a join does: an iTunes copy in any of those groups holds the row, at
+// plan and again under the merge lock.
+func TestFragmentFixer_ParentRowITunesVersionGroup(t *testing.T) {
+	sibling := func(t *testing.T, f *fragFixture, role string, group string, pid string) string {
+		p := f.file(t, "lib/Elsewhere/"+role+".m4b", 4321)
+		id := f.book(t, role, "Another Edition "+role, p, nil)
+		f.row(t, role, id, p, role+".m4b", 4321, 5400, 0)
+		_, err := f.s.ModifyBook(id, func(b *database.Book) error {
+			b.VersionGroupID = &group
+			if pid != "" {
+				b.ITunesPersistentID = &pid
+			}
+			return nil
+		})
+		require.NoError(t, err)
+		return id
+	}
+	inGroup := func(t *testing.T, f *fragFixture, id, group string) {
+		_, err := f.s.ModifyBook(id, func(b *database.Book) error { b.VersionGroupID = &group; return nil })
+		require.NoError(t, err)
+	}
+	t.Run("a fragment's group without an iTunes copy: still applicable", func(t *testing.T) {
+		f := newFragFixture(t)
+		f.seed(t)
+		inGroup(t, f, f.ids["fragF"], "vg-frag")
+		sibling(t, f, "plain", "vg-frag", "")
+		r := findRow(t, f.plan(t, "op-plan"), "moved:"+f.ids["parent"])
+		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+	})
+	t.Run("an iTunes copy in a fragment's group: held", func(t *testing.T) {
+		f := newFragFixture(t)
+		f.seed(t)
+		inGroup(t, f, f.ids["fragF"], "vg-frag")
+		it := sibling(t, f, "it", "vg-frag", "ITPID01")
+		r := findRow(t, f.plan(t, "op-plan"), "moved:"+f.ids["parent"])
+		require.Equal(t, repairs.SkipITunes, r.Skipped, r.SkipReason)
+		require.Contains(t, r.SkipReason, it)
+		require.Contains(t, r.SkipReason, "vg-frag")
+	})
+	t.Run("an iTunes copy in the parent's group: held", func(t *testing.T) {
+		f := newFragFixture(t)
+		f.seed(t)
+		inGroup(t, f, f.ids["suns"], "vg-parent")
+		it := sibling(t, f, "it", "vg-parent", "ITPID02")
+		r := findRow(t, f.plan(t, "op-plan"), "copy:"+f.ids["suns"])
+		require.Equal(t, repairs.SkipITunes, r.Skipped, r.SkipReason)
+		require.Contains(t, r.SkipReason, it)
+		require.Contains(t, r.SkipReason, "vg-parent")
+	})
+	t.Run("an iTunes id added after the plan: refused at apply, nothing written", func(t *testing.T) {
+		f := newFragFixture(t)
+		f.seed(t)
+		inGroup(t, f, f.ids["fragF"], "vg-frag")
+		it := sibling(t, f, "it", "vg-frag", "")
+		r := findRow(t, f.plan(t, "op-plan"), "moved:"+f.ids["parent"])
+		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+		pid := "ITPID03"
+		_, err := f.s.ModifyBook(it, func(b *database.Book) error { b.ITunesPersistentID = &pid; return nil })
+		require.NoError(t, err)
+		before, err := f.s.GetBookByID(it)
+		require.NoError(t, err)
+		parentRows, err := f.s.GetBookFiles(f.ids["parent"])
+		require.NoError(t, err)
+		out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
+		require.Zero(t, out.Applied, "%+v", out.Rows)
+		// The re-plan holds the row for the iTunes copy: not applicable.
+		require.Len(t, out.Rows, 1)
+		require.Equal(t, repairs.OutcomeNotApplicable, out.Rows[0].Outcome, "%+v", out.Rows)
+		require.Equal(t, repairs.SkipITunes, out.Rows[0].Skipped, "%+v", out.Rows)
+		require.True(t, f.live(t, "fragF"), "the fragment is not retired")
+		after, err := f.s.GetBookByID(it)
+		require.NoError(t, err)
+		require.Equal(t, before.IsPrimaryVersion, after.IsPrimaryVersion, "the iTunes book is never written")
+		nowRows, err := f.s.GetBookFiles(f.ids["parent"])
+		require.NoError(t, err)
+		require.Equal(t, parentRows, nowRows, "the parent's rows are not repointed")
+	})
+}
+
+// TestFragmentFixer_ChapterSetRecheckCandidatesAreThePlansUnmatched (PR #3787
+// review): the re-check treats as "a chapter fragment, not a book" only what
+// the plan would, its unmatched set. A fragment matched to a parent is a
+// book to the plan (it holds files in the set's folder), so the re-check
+// holds for it too instead of ignoring it.
+func TestFragmentFixer_ChapterSetRecheckCandidatesAreThePlansUnmatched(t *testing.T) {
+	f := newFragFixture(t)
+	frags := f.folderSet(t, setDir, seq(1, 6), someWorkStem, 900, 9000)
+	r := findRow(t, f.plan(t, "op-plan"), setRowID(f, setDir, someWorkKey))
+	require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+	// A parent book elsewhere and, in the set's folder, a chapter fragment
+	// of it (same hash as one of its rows). Rows only: the folder's listing
+	// on disk is unchanged.
+	parent := f.book(t, "otherparent", "Other Book", f.path("lib/Other Book"), nil)
+	for i := 1; i <= 2; i++ {
+		name := fmt.Sprintf("Other Book Part %02d.mp3", i)
+		f.row(t, "op"+name, parent, f.path(filepath.Join("lib/Other Book", name)), name, int64(5000+i), 600, i)
+	}
+	stem := "Other Book Part 01"
+	frag := f.book(t, "matched", stem, f.path(filepath.Join(setDir, stem+".mp3")), nil)
+	f.row(t, "m", frag, f.path(filepath.Join(setDir, stem+".mp3")), stem+".mp3", 5001, 600, 0)
+	f.setHashes(t, []string{parent}, func(i int) string { return fmt.Sprintf("ob-%d", i) })
+	f.setHashes(t, []string{frag}, func(int) string { return "ob-1" })
+	out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
+	require.Zero(t, out.Applied, "%+v", out.Rows)
+	require.Contains(t, fmt.Sprintf("%+v", out.Rows), frag)
+	f.requireUntouched(t, frags)
 }
