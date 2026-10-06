@@ -1,9 +1,12 @@
 <!-- file: docs/executive-summaries/2026-10-06-trash-cleanup-stays-inside-the-library-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: ee2cdb77-40bc-45eb-8b5e-c36d037f7292 -->
 <!-- last-edited: 2026-10-06 -->
 
 # Trash cleanup only deletes files inside the library
+
+PRs: https://github.com/falkcorp/audiobook-organizer/pull/3792,
+https://github.com/falkcorp/audiobook-organizer/pull/3777
 
 This follows up the 2026-10-05 change "The trash keeps your listening
 progress" (PR #3777) and closes the gaps a review of it found.
