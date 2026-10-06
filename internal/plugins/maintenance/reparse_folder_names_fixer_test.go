@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/reparse_folder_names_fixer_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: f823acd0-485e-4ec1-87a1-49cfedc17554
 // last-edited: 2026-10-06
 
@@ -102,6 +102,8 @@ func TestReparseEvidence_FiltersAuthorJunkSeries(t *testing.T) {
 	junk, err := st.CreateSeries("Brandon Sanderson", &sanderson.ID)
 	require.NoError(t, err)
 	_, err = st.CreateBook(&database.Book{Title: "Elantris", AuthorID: &sanderson.ID, SeriesID: &junk.ID, FilePath: "/srv/a.m4b"})
+	require.NoError(t, err)
+	_, err = st.CreateBook(&database.Book{Title: "Warbreaker", AuthorID: &sanderson.ID, FilePath: "/srv/c.m4b"})
 	require.NoError(t, err)
 	_, err = st.CreateAuthor("Star Wars")
 	require.NoError(t, err)

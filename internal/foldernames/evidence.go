@@ -1,5 +1,5 @@
 // file: internal/foldernames/evidence.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b940fbc0-ee6b-4be2-a4a8-26683848e423
 // last-edited: 2026-10-06
 
@@ -27,7 +27,7 @@ type Store interface {
 	GetAuthorByName(name string) (*database.Author, error)
 	GetAllAuthors() ([]database.Author, error)
 	GetAllSeries() ([]database.Series, error)
-	GetBooksBySeriesIDCore(seriesID int) ([]database.BookCore, error)
+	SeriesBooks
 }
 
 // Snapshot is the library's author and series names at one moment, plus the
@@ -117,26 +117,34 @@ func (s *Snapshot) IsAuthorRow(name string) bool {
 
 // IsKnownSeries reports whether the library has a real series of that name.
 //
-// A series row is not evidence when it is author junk: prod had 11,713
-// series rows whose name letters-equals an author row's (2026-10-06), and
-// 3,188 of them name their own author ("Brandon Sanderson" filed as a series
-// of Brandon Sanderson), minted by splitting "Author - Title" into a series
-// and a title. Treating those as series made "Brandon Sanderson/Brandon
-// Sanderson - Elantris" a series folder. Name equality alone does not
-// decide which side is junk -- "Honor Harrington" is a real series with a
-// junk author row of the same name -- so for a name an author row shares,
-// each series row is judged on what tells them apart:
+// A series row is not evidence when it is author junk. On prod (2026-10-06)
+// 11,713 series rows letters-equal an author row's name, 3,188 of them
+// filed under that same author ("Brandon Sanderson" as a series of Brandon
+// Sanderson's), and treating those as series made "Brandon
+// Sanderson/Brandon Sanderson - Elantris" a series folder. Neither name
+// equality nor the row's own AuthorID decides which side is the junk one:
+// of the 671 own-author rows holding books, many are real series whose
+// AUTHOR row is the junk ("Rogue Merchant", "Ell Donsaii": a series name
+// filed as its own author). So for a name an author row shares, each series
+// row is judged on its books, the evidence that tells them apart:
 //
-//   - its own AuthorID points at an author row of that name -> junk;
-//   - it has no books -> no evidence either way, skipped;
-//   - every one of its books is credited to an author row of that name ->
-//     junk ("Robert Jordan" as a series of Robert Jordan's books);
-//   - any book credited to someone else (or to no one) -> a real series
-//     ("Honor Harrington", books by David Weber; "Star Wars", books by many).
+//   - no books -> no evidence either way, skipped;
+//   - any book credited to someone other than the same-named author rows
+//     (or to no one) -> a real series ("Honor Harrington", books by David
+//     Weber; "Star Wars", books by many);
+//   - every book credited to a same-named author that also has books
+//     OUTSIDE this series -> junk: a real author whose name was split off a
+//     title (Brandon Sanderson, 1,063 books, three of them in a "Brandon
+//     Sanderson" series);
+//   - every book credited to a same-named author with no books elsewhere ->
+//     the author row is the junk side, and the series stands.
 //
-// A name no author row shares is a series whenever a row exists. The verdict
-// is memoised per name for the snapshot's life. A book read error answers
-// true without memoising: the row exists and nothing proved it junk.
+// Person evidence from the authority lists is checked before this
+// (metadata's folderLeadKind), so a known author is an author whatever
+// series rows carry the name. A name no author row shares is a series
+// whenever a row exists. The verdict is memoised per name for the
+// snapshot's life. A read error answers true without memoising: the row
+// exists and nothing proved it junk.
 func (s *Snapshot) IsKnownSeries(name string) bool {
 	k := key(name)
 	if s == nil || k == "" {
@@ -173,13 +181,15 @@ func (s *Snapshot) IsKnownSeries(name string) bool {
 	return verdict
 }
 
-// SeriesBooks is the read seriesRowIsEvidence needs.
+// SeriesBooks is the read seriesRowIsEvidence needs: a series' books and an
+// author's books.
 type SeriesBooks interface {
 	GetBooksBySeriesIDCore(seriesID int) ([]database.BookCore, error)
+	GetBooksByAuthorIDCore(authorID int) ([]database.BookCore, error)
 }
 
 // PointStore is what IsRealSeries reads: one name's author and authorless
-// series rows, and the series' books.
+// series rows, and their books.
 type PointStore interface {
 	SeriesBooks
 	GetAuthorByName(name string) (*database.Author, error)
@@ -212,17 +222,30 @@ func IsRealSeries(store PointStore, name string) bool {
 
 // seriesRowIsEvidence reports whether series row r is real-series evidence
 // when authorIDs are the author rows sharing its name (IsKnownSeries lists
-// the rules): not when its own author is one of them, not when it has no
-// books, not when every book is credited to one of them.
+// the rules).
 func seriesRowIsEvidence(store SeriesBooks, r database.Series, authorIDs map[int]bool) (bool, error) {
-	if r.AuthorID != nil && authorIDs[*r.AuthorID] {
-		return false, nil
-	}
 	books, err := store.GetBooksBySeriesIDCore(r.ID)
 	if err != nil {
 		return false, fmt.Errorf("foldernames: books of series %d: %w", r.ID, err)
 	}
-	return creditsSomeoneElse(books, authorIDs), nil
+	if len(books) == 0 {
+		return false, nil
+	}
+	if creditsSomeoneElse(books, authorIDs) {
+		return true, nil
+	}
+	for id := range authorIDs {
+		authored, err := store.GetBooksByAuthorIDCore(id)
+		if err != nil {
+			return false, fmt.Errorf("foldernames: books of author %d: %w", id, err)
+		}
+		for _, b := range authored {
+			if b.SeriesID == nil || *b.SeriesID != r.ID {
+				return false, nil
+			}
+		}
+	}
+	return true, nil
 }
 
 // creditsSomeoneElse reports whether any of books is credited to an author

@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-05-easy-books-now-get-found-executive-summary.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: b351a976-9287-4897-af9a-3525619265bc -->
 <!-- last-edited: 2026-10-06 -->
 
@@ -65,16 +65,18 @@ suggestions for the review page.
 
 ## Moved books and author-named "series"
 
-**What it was.** When a book was moved or renamed, or a chapter file's
-name changed, the scanner did not recognise the stored book in time and
-could create new author, series and work entries, or even a second copy of
-the book. Separately, about 3,200 "series" in the library are really an
-author's name filed as a series.
+**What it was.** When a book was moved or renamed, or its chapter files
+were sorted differently, the scanner did not recognise the stored book in
+time. It could create new author, series and work entries, or even a
+second copy of the book. Separately, the library has many "series" that
+share a name with an author, and the scanner treated every one as a real
+series.
 
-**Why it mattered.** These made the reading of folder names unreliable:
-"Brandon Sanderson" could be treated as a series instead of an author, and
-moved books gained stray entries.
+**Why it mattered.** "Brandon Sanderson" could be read as a series instead
+of an author, and moved books gained stray entries.
 
 **The fix.** The scanner now finds the stored book first and keeps its
-details. Series named after an author no longer count as series, and no new
-ones are created. Removing the existing ~3,200 is a separate, reviewed job.
+details. A series that shares an author's name counts as a series only
+when its books show it is one, and the scanner and importer no longer
+create series named after the book's author. Cleaning up the existing
+author-named series is a separate, reviewed job.

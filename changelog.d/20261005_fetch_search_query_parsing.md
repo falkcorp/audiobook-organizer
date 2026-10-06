@@ -96,17 +96,22 @@
   of Brandon Sanderson's). The folder parse's series evidence, shared by the
   scanner, the importer and `maintenance.reparse-folder-names` through the
   new `internal/foldernames` package (and the search's point lookup,
-  `foldernames.IsRealSeries`), skips a row whose own author has its name,
-  that has no books, or whose books are all by the same-named author; a
-  series whose books are by someone else ("Star Wars", "Honor Harrington")
-  stays a series. The snapshot (author and series lists, authority index)
+  `foldernames.IsRealSeries`), judges each such row by its books: no books
+  is no evidence; a book by someone else ("Star Wars", "Honor Harrington")
+  makes it a series; all books by a same-named author who also has books
+  elsewhere (Brandon Sanderson) makes it junk; all books by a same-named
+  author with nothing elsewhere ("Rogue Merchant", a series filed as its own
+  author) leaves it a series. The row's own author id is not used: of the
+  671 own-author rows holding books, many are real series under a junk
+  author row. The snapshot (author and series lists, authority index)
   is read once per plan or per 10 minutes of scanning, outside the cache
   lock.
-- **No new series named after the book's author.** `matcher.IdentifySeries`
+- **No new series named after the book's author** from the scanner and
+  the importer. `matcher.IdentifySeries`
   (now given the author), the scanner's `resolveSeriesID` and the importer
   refuse a series that names the author or one person of a composite credit
   (`personname.NamesCredit`).
-- **A moved, renamed or re-sorted book is held against its stored row.**
+- **A moved, renamed or chapter-re-sorted book is held against its stored row.**
   The scanner resolves the stored row once (path, organizer-ID tag, the
   owner of all its files, content hash, segment vote) before any author,
   series or work row is resolved or created; a tagged move no longer mints
@@ -114,4 +119,5 @@
   takes the stored identity. A multi-file book whose first file changed is
   merged into the book that owns every one of its files instead of being
   version-linked to itself as a second row. A held title or author also
-  holds the work, and a held title the series position.
+  holds the work, and a held or user-locked title holds a series position
+  read off the title (a tag's series index still lands).

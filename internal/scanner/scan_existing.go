@@ -1,5 +1,5 @@
 // file: internal/scanner/scan_existing.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b05dd330-3c2a-4793-b0ef-88229676313b
 // last-edited: 2026-10-06
 //
@@ -34,7 +34,9 @@ type scanExisting struct {
 	orgErr  error
 	// byOwner is the live book that owns every scanned file
 	// (fileOwnershipVerdict.sameBook) when no row is at the path: a segment
-	// list whose first file was renamed or re-sorted.
+	// list whose chapter order was re-sorted (or whose first file's row is
+	// marked Missing). A renamed chapter has no row, so the ownership check
+	// reads it as an arrival or a fragment, never as this.
 	byOwner *database.Book
 
 	// byHash is the first row a file/original/organized hash lookup found

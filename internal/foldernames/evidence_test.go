@@ -1,5 +1,5 @@
 // file: internal/foldernames/evidence_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6cbae67b-604d-4b23-be02-29ef9669f74f
 // last-edited: 2026-10-06
 
@@ -71,12 +71,14 @@ func (l *library) snapshot() *Snapshot {
 
 // A series row named after its own author ("Brandon Sanderson", a series of
 // Brandon Sanderson's -- the "Author - Title" split read as "Series - Title")
-// is author junk, not series evidence: the folder lead is the author.
+// whose author has books elsewhere is author junk, not series evidence: the
+// folder lead is the author.
 func TestSnapshot_JunkSeriesNamedForItsOwnAuthorIsNoSeries(t *testing.T) {
 	l := newLibrary(t)
 	sanderson := l.author("Brandon Sanderson")
 	junk := l.series("Brandon Sanderson", sanderson)
 	l.book("Elantris", sanderson, junk)
+	l.book("The Final Empire", sanderson, l.series("Mistborn", sanderson))
 	snap := l.snapshot()
 	if snap.IsKnownSeries("Brandon Sanderson") {
 		t.Fatal("a series row naming its own author must not count as a series")
@@ -123,10 +125,18 @@ func TestSnapshot_IsKnownSeriesRules(t *testing.T) {
 	l := newLibrary(t)
 	// No author row of the name: any series row counts.
 	l.series("Stormlight Archive", nil)
-	// Authorless series holding only the same-named author's books: junk.
+	// Authorless series holding only the same-named author's books, and
+	// that author has books outside it: junk.
 	jordan := l.author("Robert Jordan")
 	rj := l.series("Robert Jordan", nil)
 	l.book("The Eye of the World", jordan, rj)
+	l.book("Warrior of the Altaii", jordan, nil)
+	// A series filed as its own author, whose author row has no book
+	// outside it: the AUTHOR row is the junk side, and the series stands.
+	rogue := l.author("Rogue Merchant")
+	rm := l.series("Rogue Merchant", rogue)
+	l.book("Battle for the North", rogue, rm)
+	l.book("The Devil Archetype", rogue, rm)
 	// A junk author row of a real character series: the books are by
 	// someone else, so the series stands.
 	l.author("Honor Harrington")
@@ -141,6 +151,7 @@ func TestSnapshot_IsKnownSeriesRules(t *testing.T) {
 	for name, want := range map[string]bool{
 		"Stormlight Archive": true,
 		"Robert Jordan":      false,
+		"Rogue Merchant":     true,
 		"Honor Harrington":   true,
 		"Mara Quill":         false,
 		"No Such Series":     false,
@@ -148,9 +159,9 @@ func TestSnapshot_IsKnownSeriesRules(t *testing.T) {
 		if got := snap.IsKnownSeries(name); got != want {
 			t.Errorf("IsKnownSeries(%q) = %v, want %v", name, got, want)
 		}
-		if got := IsRealSeries(l.store, name); name != "Honor Harrington" && got != want {
-			// Honor Harrington's row is Weber's, not authorless, so the
-			// point lookup (authorless rows only) does not see it.
+		if got := IsRealSeries(l.store, name); name != "Honor Harrington" && name != "Rogue Merchant" && got != want {
+			// These rows carry an author, not authorless, so the point
+			// lookup (authorless rows only) does not see them.
 			t.Errorf("IsRealSeries(%q) = %v, want %v", name, got, want)
 		}
 	}
@@ -161,6 +172,7 @@ func TestSnapshot_ConcurrentCallers(t *testing.T) {
 	l := newLibrary(t)
 	sanderson := l.author("Brandon Sanderson")
 	l.book("Elantris", sanderson, l.series("Brandon Sanderson", sanderson))
+	l.book("Warbreaker", sanderson, nil)
 	l.author("Star Wars")
 	l.book("Thrawn", l.author("Timothy Zahn"), l.series("Star Wars", nil))
 	snap := l.snapshot()

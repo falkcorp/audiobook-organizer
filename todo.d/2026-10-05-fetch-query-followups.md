@@ -26,7 +26,13 @@
       life. Decide on invalidation (bump on CreateSeries/CreateAuthor) versus
       the TTL (#3775 round-3 review, SHOULD-FIX).
 - [ ] **FETCH-QUERY-6** Repair the existing author-junk series rows on prod:
-      3,188 series rows carry their own author's name and more letters-equal
-      an author row with only that author's books (count 2026-10-06). They
-      no longer act as series evidence, but books are still linked to them.
-      A reviewed fixer should unlink and delete them.
+      11,713 series rows letters-equal an author row's name (3,188 filed
+      under that same author, 671 of those holding books; 2026-10-06). The
+      ones whose author has books elsewhere no longer act as series
+      evidence, but books are still linked to them, and many of the rest are
+      real series under a junk AUTHOR row ("Rogue Merchant"). A reviewed
+      fixer should sort the two and repair each side. Also trace which
+      creator minted them: the scanner and importer now refuse a series
+      naming the book's author, but the iTunes importer, the metadata apply
+      path and `audiobooks/service_mutation.go` still create series without
+      that check.
