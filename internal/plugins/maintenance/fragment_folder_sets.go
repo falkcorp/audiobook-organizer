@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_folder_sets.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9f01b698-b911-4ecc-818e-6d10f415e768
 // last-edited: 2026-10-05
 
@@ -53,6 +53,30 @@
 //     is its own class, itunes-chapter-set, never applicable. Doctor Who /
 //     Big Finish / Torchwood stays manual-only.
 //
+// PARENT SETS (owner decision 2026-10-05 20:45, "group by parent"). What is
+// still lone after the folder sets is grouped by the folder ABOVE each
+// file's import folder and the same name: the one-file-per-folder layout
+// ("Joe Abercrombie/Before They Are Hanged 151 of 341/x.mp3"). The same tests
+// apply, with three differences:
+//
+//   - a set whose work is already a live book is never held for it: when
+//     the title matches and the totals agree (existingBookCheck), or when
+//     one live book holds the audio of every held file and of at least half
+//     the set (fragAudioIndex.joinTarget), it is parent-set-join-existing
+//     and joins that book exactly as the existing-book class does (each
+//     fragment retired into it with its listening state, keeping its own
+//     file row). Audio held by several books, or by a chapter fragment, is
+//     still held. The audio join applies to folder sets too (their class
+//     stays existing-book);
+//   - never one book of two: files of two known authors are held
+//     (skipped_mixed_authors); two files at one position with different
+//     audio are held (the no-parent track-order rule; same-size renamed
+//     copies are retired as copies, as for every no-parent row); and two
+//     sets that would each make a new book of one title (two parent folders
+//     of one name and different lengths) are both held
+//     (skipped_same_title_other_set);
+//   - a library or import root is no work's parent and forms no set.
+//
 // APPLY is the no-parent row's: the row id is a no-parent id, Replan rebuilds
 // it through replanGroup (which runs noParentRows on the row's own books, so
 // every decision above that changes the plan reads only the members), and
@@ -88,6 +112,17 @@ const (
 	// fragClassITunesSet: a folder chapter set under the iTunes library or
 	// carrying an iTunes persistent id. Listed apart, never applicable.
 	fragClassITunesSet = "itunes-chapter-set"
+	// fragClassParentSet: a parent chapter set (owner decision 2026-10-05
+	// 20:45, "group by parent"): one-file-per-folder chapters grouped by
+	// the folder above their folders (".../Horizon Storms/Chapter 001/x.mp3"
+	// is a chapter of "Horizon Storms"). Same tests as a folder set.
+	fragClassParentSet = "parent-chapter-set"
+	// fragClassParentJoin: a parent chapter set whose work is already a
+	// live book (same title and total, or its audio held by that book): it
+	// joins that book as the existing-book class does (each fragment
+	// retired into it with its listening state, keeping its own file row),
+	// never assembled into a second copy.
+	fragClassParentJoin = "parent-set-join-existing"
 )
 
 // Skip kinds of a folder chapter set.
@@ -98,6 +133,13 @@ const (
 	fragSkipParentInFolder     = "skipped_parent_in_folder"
 	fragSkipVersionGroupParent = "skipped_version_group_parent"
 	fragSkipDuplicateAudio     = "skipped_duplicate_audio"
+	// fragSkipSameTitleSet: two chapter sets would each become a new book of
+	// the same title (two parent folders of one name, of different
+	// lengths): both are held, so no apply makes two books of one work.
+	fragSkipSameTitleSet = "skipped_same_title_other_set"
+	// fragSkipMixedAuthors: the set's files carry two different known
+	// authors, so they may be two books.
+	fragSkipMixedAuthors = "skipped_mixed_authors"
 )
 
 // fragFolderSetMinSec is the shortest total a folder chapter set is
@@ -110,6 +152,14 @@ const fragFolderSetMinSec = 3600
 // fragFolderSetKeyPrefix opens a folder chapter set's group key. Like
 // fragNumberedKey it cannot collide with a chapter key (lower-case text).
 const fragFolderSetKeyPrefix = "\x02set:"
+
+// fragParentSetKeyPrefix opens a parent chapter set's group key.
+const fragParentSetKeyPrefix = "\x03parent:"
+
+// fragIsSetKey reports whether key is a folder or parent chapter set's.
+func fragIsSetKey(key string) bool {
+	return strings.HasPrefix(key, fragFolderSetKeyPrefix) || strings.HasPrefix(key, fragParentSetKeyPrefix)
+}
 
 // fragNameShape is a stem read as a name with number slots.
 type fragNameShape struct {
@@ -167,6 +217,8 @@ func fragFolderSetShape(stem string) (fragNameShape, bool) {
 // fragFolderSet is one folder chapter set's decision, computed from its
 // members alone (so a re-plan computes the same one).
 type fragFolderSet struct {
+	// parent: grouped by the folder above the files' folders.
+	parent  bool
 	dir     string
 	key     string
 	members []*fragCandidate
@@ -196,6 +248,10 @@ var fragChapterWordTailRe = regexp.MustCompile(`(?i)(?:^|[^a-z])((?:part|pt|chap
 // with it: a short constant number ("27 1": a copy tool's suffix).
 var fragDupSuffixRe = regexp.MustCompile(`^[\s_.\-]*\d{1,3}$`)
 
+// fragOfTotalRe is an "of N" right after a varying number ("151 of 341"),
+// removed with it.
+var fragOfTotalRe = regexp.MustCompile(`(?i)^\s*(?:of|/)\s*\d+`)
+
 // fragDashRunRe collapses the dashes a removed number leaves ("A -  - B").
 var fragDashRunRe = regexp.MustCompile(`\s*-\s*(?:-\s*)+`)
 
@@ -216,9 +272,10 @@ var fragGenericSetTitles = map[string]bool{
 
 // fragSetTitle is a set's title from one member's stem: varying holds the
 // slot indexes whose numbers differ across the set, authors the names a
-// leading or trailing " - " segment is dropped for. full is the title before
-// that drop.
-func fragSetTitle(stem string, sh fragNameShape, varying []int, authors []string) (title, full string) {
+// leading or trailing " - " segment is dropped for, people the names a
+// whole title must not be (it then names no work). full is the title before
+// the segment drop.
+func fragSetTitle(stem string, sh fragNameShape, varying []int, authors, people []string) (title, full string) {
 	if len(varying) == 0 {
 		return "", ""
 	}
@@ -233,7 +290,11 @@ func fragSetTitle(stem string, sh fragNameShape, varying []int, authors []string
 		if m := fragChapterWordTailRe.FindStringSubmatchIndex(s[:start]); m != nil {
 			start = m[2]
 		}
-		s = s[:start] + " " + s[run[1]:]
+		end := run[1]
+		if m := fragOfTotalRe.FindStringIndex(s[end:]); m != nil {
+			end += m[1]
+		}
+		s = s[:start] + " " + s[end:]
 	}
 	clean := func(t string) string {
 		t = strings.ReplaceAll(t, "_", " ")
@@ -267,7 +328,13 @@ func fragSetTitle(stem string, sh fragNameShape, varying []int, authors []string
 		segs = segs[:len(segs)-1]
 	}
 	title = clean(strings.Join(segs, " - "))
-	if fragSetTitleGeneric(title) {
+	isPerson := false
+	for _, a := range people {
+		isPerson = isPerson || folderNamesAuthor(title, a)
+	}
+	if fragSetTitleGeneric(title) || isPerson {
+		// Nothing but a chapter word, or nothing but the author's name
+		// ("195-299 Kevin J Anderson"): the folder names the work.
 		return "", ""
 	}
 	if fragSetTitleGeneric(full) {
@@ -311,23 +378,27 @@ func fragVaryingSlots(shapes []fragNameShape) []int {
 	return v
 }
 
-// fragSetAuthors are the names a title's author segment is read against:
-// the members' person-shaped author names and the set's folder and the
-// folder above it when person-shaped.
-func fragSetAuthors(lib *fragLibrary, dir string, cs []*fragCandidate) []string {
-	var out []string
-	add := func(a string) {
+// fragSetAuthors are the names a title's " - " author segment is read
+// against (authors) and the names a whole title or the set's folder must not
+// be (people). people: the members' person-shaped author names and the
+// folder above the set's folder when person-shaped. authors adds the set's
+// own folder when person-shaped ("iTunes Media/Audiobooks/Jim Butcher"):
+// it may name the author, but it may as well name the work ("Christopher
+// Paolini/Some Work"), so it never empties a title on its own.
+func fragSetAuthors(lib *fragLibrary, dir string, cs []*fragCandidate) (authors, people []string) {
+	add := func(list []string, a string) []string {
 		a = strings.TrimSpace(a)
-		if a != "" && personShapedName(a) && !slices.Contains(out, a) {
-			out = append(out, a)
+		if a != "" && personShapedName(a) && !slices.Contains(list, a) {
+			list = append(list, a)
 		}
+		return list
 	}
 	for _, c := range cs {
-		add(lib.authorName(c.Book))
+		people = add(people, lib.authorName(c.Book))
 	}
-	add(filepath.Base(dir))
-	add(filepath.Base(filepath.Dir(dir)))
-	return out
+	people = add(people, filepath.Base(filepath.Dir(dir)))
+	authors = add(append([]string(nil), people...), filepath.Base(dir))
+	return authors, people
 }
 
 // fragFolderSetOf decides one candidate set: dir and key its group, cs its
@@ -348,11 +419,11 @@ func fragFolderSetOf(lib *fragLibrary, dir, key string, cs []*fragCandidate) *fr
 		_, discs[i] = groupDir(c)
 	}
 	varying := fragVaryingSlots(shapes)
-	authors := fragSetAuthors(lib, dir, sorted)
-	set.title, set.altTitles = fragSetTitleOf(sorted[0].origStem(), shapes[0], varying, authors)
+	authors, people := fragSetAuthors(lib, dir, sorted)
+	set.title, set.altTitles = fragSetTitleOf(sorted[0].origStem(), shapes[0], varying, authors, people)
 	if set.title == "" {
 		base := filepath.Base(filepath.Clean(dir))
-		for _, a := range append(authors, fragMemberAuthors(lib, sorted)...) {
+		for _, a := range append(people, fragMemberAuthors(lib, sorted)...) {
 			if folderNamesAuthor(base, a) {
 				set.noFolderTitle = true
 			}
@@ -445,8 +516,8 @@ func fragFolderSetOf(lib *fragLibrary, dir, key string, cs []*fragCandidate) *fr
 
 // fragSetTitleOf is fragSetTitle with the full title as an alternative name
 // when it differs.
-func fragSetTitleOf(stem string, sh fragNameShape, varying []int, authors []string) (string, []string) {
-	t, full := fragSetTitle(stem, sh, varying, authors)
+func fragSetTitleOf(stem string, sh fragNameShape, varying []int, authors, people []string) (string, []string) {
+	t, full := fragSetTitle(stem, sh, varying, authors, people)
 	var alt []string
 	if full != "" && full != t {
 		alt = append(alt, full)
@@ -538,6 +609,23 @@ func fragFormatGaps(gaps []string) string {
 // (noParentRow with the set's positions and title). It returns the rows and
 // each row's set by row id; the members of every row are placed.
 func (f *fragmentFixer) folderSetRows(lib *fragLibrary, lone []*fragCandidate) ([]repairs.Row, map[string]*fragFolderSet) {
+	return f.setRows(lib, lone, false)
+}
+
+// parentSetRows forms the parent chapter sets from the lone chapters no
+// folder set took: per folder ABOVE the import folder and name, fragMinGroup
+// files or more (".../Horizon Storms/Chapter 001/x.mp3" and ".../Horizon
+// Storms/Chapter 002/y.mp3" are one set under "Horizon Storms"). A folder
+// that is a library or import root is no work's parent and forms none.
+func (f *fragmentFixer) parentSetRows(lib *fragLibrary, lone []*fragCandidate) ([]repairs.Row, map[string]*fragFolderSet) {
+	return f.setRows(lib, lone, true)
+}
+
+func (f *fragmentFixer) setRows(lib *fragLibrary, lone []*fragCandidate, parent bool) ([]repairs.Row, map[string]*fragFolderSet) {
+	prefix := fragFolderSetKeyPrefix
+	if parent {
+		prefix = fragParentSetKeyPrefix
+	}
 	groups := map[string][]*fragCandidate{}
 	for _, c := range lone {
 		sh, ok := fragFolderSetShape(c.origStem())
@@ -545,6 +633,12 @@ func (f *fragmentFixer) folderSetRows(lib *fragLibrary, lone []*fragCandidate) (
 			continue
 		}
 		dir, _ := groupDir(c)
+		if parent {
+			dir = filepath.Dir(filepath.Clean(dir))
+			if slices.Contains(lib.roots, dir) || dir == lib.libraryRoot || dir == filepath.Dir(dir) {
+				continue
+			}
+		}
 		gk := dir + "\x00" + sh.key
 		groups[gk] = append(groups[gk], c)
 	}
@@ -559,8 +653,9 @@ func (f *fragmentFixer) folderSetRows(lib *fragLibrary, lone []*fragCandidate) (
 	sets := map[string]*fragFolderSet{}
 	for _, gk := range keys {
 		dir, name, _ := strings.Cut(gk, "\x00")
-		key := fragFolderSetKeyPrefix + name
+		key := prefix + name
 		set := fragFolderSetOf(lib, dir, key, groups[gk])
+		set.parent = parent
 		r := f.noParentRow(lib, dir, key, groups[gk], set)
 		sets[r.RowID] = set
 		rows = append(rows, r)
@@ -568,9 +663,19 @@ func (f *fragmentFixer) folderSetRows(lib *fragLibrary, lone []*fragCandidate) (
 	return rows, sets
 }
 
-// classifyFolderSets gives each folder chapter set row its class and the
-// set's own holds, after the existing-book and same-audio checks have run.
-// cands are every fragment candidate of this plan (siblings, not parents).
+// classifyFolderSets gives each folder or parent chapter set row its class
+// and the set's own holds, after the existing-book and same-audio checks
+// have run. cands are every fragment candidate of this plan (siblings, not
+// parents). In order, for a set no earlier test held:
+//
+//  1. two known authors among the files: held (never one book of two);
+//  2. its audio is an existing book's (fragAudioIndex.joinTarget): joined
+//     into that book (joinExisting, the existing-book class's join);
+//  3. numbering, gaps, length, title;
+//  4. a live book in the set's folders or a member's version group;
+//
+// and finally, across the rows, two sets that would each make a new book of
+// one title are both held.
 func (f *fragmentFixer) classifyFolderSets(lib *fragLibrary, live *fragLive, rows []repairs.Row, sets map[string]*fragFolderSet, cands []*fragCandidate) {
 	if len(sets) == 0 {
 		return
@@ -580,6 +685,7 @@ func (f *fragmentFixer) classifyFolderSets(lib *fragLibrary, live *fragLive, row
 		isCand[c.Book.ID] = true
 	}
 	var dup *fragAudioIndex
+	byTitle := map[string][]int{}
 	for i := range rows {
 		r := &rows[i]
 		set, ok := sets[r.RowID]
@@ -590,7 +696,11 @@ func (f *fragmentFixer) classifyFolderSets(lib *fragLibrary, live *fragLive, row
 			if !ok || r.Class != fragClassExistingBook {
 				continue
 			}
-			r.Evidence = append(r.Evidence, "formed as a folder chapter set (numbered files of one name in one folder); its work is already a live book, so it is never assembled")
+			f.folderSetEvidence(r, set)
+			r.Evidence = append(r.Evidence, "its work is already a live book (same title, total agreeing), so it joins that book and is never assembled")
+			if set.parent {
+				r.Class = fragClassParentJoin
+			}
 			continue
 		}
 		f.folderSetEvidence(r, set)
@@ -602,6 +712,9 @@ func (f *fragmentFixer) classifyFolderSets(lib *fragLibrary, live *fragLive, row
 			continue
 		case fragClassNoParent:
 			r.Class = fragClassFolderSet
+			if set.parent {
+				r.Class = fragClassParentSet
+			}
 		default:
 			continue
 		}
@@ -612,6 +725,38 @@ func (f *fragmentFixer) classifyFolderSets(lib *fragLibrary, live *fragLive, row
 			r.Risk, r.Skipped, r.SkipReason = repairs.RiskReview, kind, why
 		}
 		plan, _ := r.Detail.(*fragGroupPlan)
+		if why := fragMixedAuthors(lib, plan); why != "" {
+			hold(fragSkipMixedAuthors, why)
+			continue
+		}
+		if dup == nil {
+			dup = newFragAudioIndex(lib)
+		}
+		target, why := dup.joinTarget(r)
+		switch {
+		case target != "" && isCand[target]:
+			hold(fragSkipDuplicateAudio, why+"; that book is itself a chapter fragment, not a book to join")
+			continue
+		case target != "" && lib.assembled[target]:
+			hold(fragSkipDuplicateAudio, why+"; that book was itself assembled by an earlier no-parent apply of this fixer (a possible second copy); revert that apply first")
+			continue
+		case target != "":
+			parent := set.parent
+			e := fragExisting{id: target}
+			e.total, e.unknown, e.files = lib.bookTotal(target)
+			total, _ := rowFragTotal(r)
+			f.joinExisting(lib, r, plan, e, fmt.Sprintf("%s; the %d kept fragment(s) total %s", why, len(plan.Members), fragHours(total)),
+				func(e fragExisting) string {
+					return fmt.Sprintf("book %s (%q, %d file(s), %s)", e.id, lib.books[e.id].Title, e.files, fragHours(e.total))
+				}, nil)
+			if r.Class == fragClassExistingBook && parent {
+				r.Class = fragClassParentJoin
+			}
+			continue
+		case why != "":
+			hold(fragSkipDuplicateAudio, why+"; it is not one existing book's audio, so neither assembling nor joining is proven; decide by hand")
+			continue
+		}
 		total := 0
 		for _, m := range plan.Members {
 			total += m.Frag.File.Duration
@@ -627,6 +772,11 @@ func (f *fragmentFixer) classifyFolderSets(lib *fragLibrary, live *fragLive, row
 		case plan.Title == "":
 			hold(fragSkipNoTitleKey, "neither the file names nor the folder give the work's title (the folder is named for the author or is generic)")
 		}
+		if plan.Title != "" {
+			if k := fragTitleKey(plan.Title); k != "" {
+				byTitle[k] = append(byTitle[k], i)
+			}
+		}
 		if r.Skipped != "" {
 			continue
 		}
@@ -636,15 +786,49 @@ func (f *fragmentFixer) classifyFolderSets(lib *fragLibrary, live *fragLive, row
 		}
 		if why := folderSetVersionGroup(lib, r); why != "" {
 			hold(fragSkipVersionGroupParent, why)
-			continue
-		}
-		if dup == nil {
-			dup = newFragAudioIndex(lib)
-		}
-		if why := dup.duplicates(r); why != "" {
-			hold(fragSkipDuplicateAudio, why)
 		}
 	}
+	// Never two new books of one work: sets that would each assemble a book
+	// of the same title are all held (plan time; a re-plan sees one row).
+	for _, idx := range byTitle {
+		if len(idx) < 2 {
+			continue
+		}
+		var ids []string
+		for _, i := range idx {
+			ids = append(ids, rows[i].RowID)
+		}
+		for _, i := range idx {
+			r := &rows[i]
+			why := fmt.Sprintf("%d chapter sets would each become a new book titled %q (rows %s): they may be one work in two places or two editions; decide which, if any, to assemble",
+				len(idx), r.Proposed["title"], strings.Join(ids, ", "))
+			r.Evidence = append(r.Evidence, why)
+			if r.Skipped == "" {
+				r.Risk, r.Skipped, r.SkipReason = repairs.RiskReview, fragSkipSameTitleSet, why
+			}
+		}
+	}
+}
+
+// fragMixedAuthors names two different known authors among the plan's
+// files. "" none.
+func fragMixedAuthors(lib *fragLibrary, plan *fragGroupPlan) string {
+	var seen []string
+	for _, m := range plan.Members {
+		a := lib.authorName(m.Frag.Book)
+		if a == "" {
+			continue
+		}
+		for _, b := range seen {
+			if fragAuthorsDiffer(a, b) {
+				return fmt.Sprintf("the files carry two different authors (%q and %q): they may be two books, so they are not assembled into one", b, a)
+			}
+		}
+		if !slices.Contains(seen, a) {
+			seen = append(seen, a)
+		}
+	}
+	return ""
 }
 
 // folderSetEvidence adds the set's numbering and title lines.
@@ -769,12 +953,15 @@ func newFragAudioIndex(lib *fragLibrary) *fragAudioIndex {
 	return ix
 }
 
-// duplicates names the row's files whose audio a live book outside the row
-// also holds. "" none.
-func (ix *fragAudioIndex) duplicates(r *repairs.Row) string {
+// joinTarget reads the row's files against the live books outside it: the
+// one book that holds the audio of at least half the row's files and of
+// every row file held anywhere (target, with why), or no target and why
+// when some files are held but by more than one book or by too few. Both ""
+// when no file's audio is held elsewhere.
+func (ix *fragAudioIndex) joinTarget(r *repairs.Row) (target, why string) {
 	plan, ok := r.Detail.(*fragGroupPlan)
 	if !ok {
-		return ""
+		return "", ""
 	}
 	in := map[string]bool{}
 	for _, id := range r.BookIDs {
@@ -788,6 +975,7 @@ func (ix *fragAudioIndex) duplicates(r *repairs.Row) string {
 		files = append(files, cp.Frag)
 	}
 	var hits []string
+	held := 0
 	others := map[string]bool{}
 	for _, c := range files {
 		var owners []string
@@ -809,6 +997,7 @@ func (ix *fragAudioIndex) duplicates(r *repairs.Row) string {
 		if len(owners) == 0 {
 			continue
 		}
+		held++
 		owners = uniqueSorted(owners)
 		for _, id := range owners {
 			others[id] = true
@@ -819,9 +1008,15 @@ func (ix *fragAudioIndex) duplicates(r *repairs.Row) string {
 			hits = append(hits, "…")
 		}
 	}
-	if len(hits) == 0 {
-		return ""
+	if held == 0 {
+		return "", ""
 	}
-	return fmt.Sprintf("files of this set are audio %d other live book(s) already hold: %s; assembling would make a second copy of that audio; decide by hand",
-		len(others), strings.Join(hits, "; "))
+	why = fmt.Sprintf("%d of the set's %d files are audio %d other live book(s) already hold: %s",
+		held, len(files), len(others), strings.Join(hits, "; "))
+	if len(others) == 1 && 2*held >= len(files) {
+		for id := range others {
+			return id, why
+		}
+	}
+	return "", why
 }
