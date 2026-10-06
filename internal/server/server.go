@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.80.0
+// version: 2.81.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-10-05
 
@@ -270,6 +270,10 @@ type Server struct {
 	// shares (candidate_refetch.go), built once from the enabled sources'
 	// budgets like the candidate-fetch op's own.
 	candidateRefetchGate candidateRefetchGate
+	// candidateFetchClaims serialises per-book candidate fetches: the
+	// metadata.candidate-fetch op's workers and the lost-candidates refetch
+	// claim a book before fetching it (candidate_refetch.go).
+	candidateFetchClaims bookFetchClaims
 
 	hub              *realtime.EventHub
 	writeBackBatcher *itunesservice.WriteBackBatcher

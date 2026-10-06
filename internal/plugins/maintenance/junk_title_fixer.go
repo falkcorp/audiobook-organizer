@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_title_fixer.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 7c3e9a15-2b6d-4f48-a9e1-5d0b8c4f7a26
-// last-edited: 2026-10-03
+// last-edited: 2026-10-05
 
 package maintenance
 
@@ -796,7 +796,7 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 
 	spoken, _ := accept(transcribed, junkSrcTranscribed)
 	candidate, refusedCandidate := "", ""
-	if t, score, ok := f.candidateTitle(b.ID, author); ok {
+	if t, score, ok := f.candidateTitle(b.ID, author, b.ASIN); ok {
 		switch {
 		case embedded && !titleAgreesWithAny(t, agreeWith):
 			refusedCandidate = t
@@ -1427,11 +1427,17 @@ func (f *junkTitleFixer) fragmentReason(idx *junkIndex, b database.BookCore, kin
 // junk title, so a candidate that disagrees on the author is noise). Ties
 // keep the cache's order.
 //
+// The book's ASIN (bookASIN) decides first. A candidate naming another ASIN
+// is skipped: it is another record (the bulk gate's asin_conflict). Among the
+// trustworthy rest, one carrying the book's own ASIN wins over any higher
+// score: the book's candidates survive an ASIN fill, so the record the ASIN
+// names is often one of them, and it is the book by definition.
+//
 // The row is read through CachedMetadataCandidates, the apply paths' read:
 // candidates an earlier search version cached are filtered by the current
 // position rules there, and a raw MetadataCacheStore read would offer a
 // sibling the old ladder pooled as this book's title.
-func (f *junkTitleFixer) candidateTitle(bookID, author string) (string, float64, bool) {
+func (f *junkTitleFixer) candidateTitle(bookID, author string, bookASIN *string) (string, float64, bool) {
 	entry, err := f.p.deps.CachedMetadataCandidates(bookID)
 	if err != nil || entry == nil {
 		return "", 0, false
@@ -1440,11 +1446,16 @@ func (f *junkTitleFixer) candidateTitle(bookID, author string) (string, float64,
 	if a == "" || authorname.IsPlaceholderAuthor(a) {
 		return "", 0, false
 	}
-	best, bestScore, found := "", 0.0, false
+	own := ""
+	if bookASIN != nil {
+		own = strings.TrimSpace(*bookASIN)
+	}
+	best, bestScore, found, bestOwn := "", 0.0, false, false
 	for _, raw := range entry.Candidates {
 		var c struct {
 			Title            string  `json:"title"`
 			Author           string  `json:"author"`
+			ASIN             string  `json:"asin"`
 			Score            float64 `json:"score"`
 			DurationMismatch bool    `json:"duration_mismatch"`
 		}
@@ -1454,8 +1465,14 @@ func (f *junkTitleFixer) candidateTitle(bookID, author string) (string, float64,
 		if !strings.EqualFold(util.NormalizeAuthor(c.Author), util.NormalizeAuthor(a)) {
 			continue
 		}
-		if !found || c.Score > bestScore {
-			best, bestScore, found = c.Title, c.Score, true
+		ca := strings.TrimSpace(c.ASIN)
+		if own != "" && ca != "" && !strings.EqualFold(ca, own) {
+			continue
+		}
+		isOwn := own != "" && strings.EqualFold(ca, own)
+		switch {
+		case !found, isOwn && !bestOwn, isOwn == bestOwn && c.Score > bestScore:
+			best, bestScore, found, bestOwn = c.Title, c.Score, true, isOwn
 		}
 	}
 	return best, bestScore, found
