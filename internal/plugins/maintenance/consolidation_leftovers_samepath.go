@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/consolidation_leftovers_samepath.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7285fcc4-a331-4b0a-89c0-e606c9f5f7b3
 // last-edited: 2026-10-06
 
@@ -109,8 +109,9 @@ func (s *leftoverSource) samePath(ctx context.Context, core *database.BookCore, 
 		return repairs.Row{}, false, err
 	}
 	sort.Strings(cands)
-	var owners []string
+	var owners, stale []string
 	books := map[string]*database.BookCore{}
+	ownerRows := map[string][]database.BookFileCore{}
 	for _, c := range cands {
 		if err := ctx.Err(); err != nil {
 			return repairs.Row{}, false, err
@@ -125,8 +126,29 @@ func (s *leftoverSource) samePath(ctx context.Context, core *database.BookCore, 
 		if b == nil || b.IsSoftDeleted() {
 			continue
 		}
+		rs, err := s.rows(c)
+		if err != nil {
+			return repairs.Row{}, false, err
+		}
+		// A book whose only reference to the path is a row already marked
+		// Missing does not own the file: it is named, not counted.
+		live := b.FilePath == shared
+		for _, r := range rs {
+			if r.FilePath == shared && !r.Missing {
+				live = true
+				break
+			}
+		}
+		if !live {
+			stale = append(stale, c)
+			continue
+		}
 		owners = append(owners, c)
-		books[c] = b
+		books[c], ownerRows[c] = b, rs
+	}
+	if len(stale) > 0 {
+		row.Evidence = append(row.Evidence, fmt.Sprintf("%s reference(s) %s only through a row marked missing; not counted as owner(s)",
+			strings.Join(stale, ", "), shared))
 	}
 	if len(owners) == 0 {
 		return finish(leftoverClassHeld, leftoverSkipBookPath,
@@ -154,10 +176,7 @@ func (s *leftoverSource) samePath(ctx context.Context, core *database.BookCore, 
 	}
 	oid := owners[0]
 	ob := books[oid]
-	orows, err := s.rows(oid)
-	if err != nil {
-		return repairs.Row{}, false, err
-	}
+	orows := ownerRows[oid]
 	sort.Slice(orows, func(i, j int) bool { return orows[i].ID < orows[j].ID })
 	var at *database.BookFileCore
 	for i := range orows {
@@ -166,11 +185,13 @@ func (s *leftoverSource) samePath(ctx context.Context, core *database.BookCore, 
 			break
 		}
 	}
+	// The owner's length for the row: its file at the path when known, else
+	// the book's (seconds, as every book_file duration).
 	ownerDur := 0
-	if ob.Duration != nil && *ob.Duration > 0 {
-		ownerDur = *ob.Duration
-	} else if at != nil && len(orows) == 1 {
+	if at != nil && at.Duration > 0 {
 		ownerDur = at.Duration
+	} else if ob.Duration != nil && *ob.Duration > 0 {
+		ownerDur = *ob.Duration
 	}
 	row.Members = append(row.Members, repairs.RowMember{BookID: oid, Title: ob.Title, Role: leftoverRolesSamePath,
 		Files: len(orows), MissingFiles: countMissing(orows)})
@@ -196,27 +217,28 @@ func (s *leftoverSource) samePath(ctx context.Context, core *database.BookCore, 
 	}
 	fmt.Fprintf(fp, "owner|%s|%s|%d|%s|%s|%d|%d\n", at.ID, at.FilePath, at.FileSize, at.FileHash, at.OriginalFileHash, at.Duration, ownerDur)
 	// The leftover's own audio, as far as it is recorded: a known duration
-	// (the book's, else the sum of its rows' when every row has one) must
-	// agree with the owner's file within 2 s. A zero or unknown duration is
+	// (the sum of its rows' when every row has one, else the book's) must
+	// agree with the owner's file at the path (else the owner book's, when
+	// that file is its only one) within 2 s. File against file wherever both
+	// are known. A zero or unknown duration is
 	// no evidence either way (the 2026-10-06 leftovers are 0 min). The dead
 	// rows' hashes are NOT compared: they describe files gone from disk, and
 	// a hash equal to a third book's _copyN file is exactly the match the
 	// owner rejected.
 	leftDur := 0
-	if core.Duration != nil && *core.Duration > 0 {
-		leftDur = *core.Duration
-	} else {
-		for _, r := range rows {
-			if r.Duration <= 0 {
-				leftDur = 0
-				break
-			}
-			leftDur += r.Duration
+	for _, r := range rows {
+		if r.Duration <= 0 {
+			leftDur = 0
+			break
 		}
+		leftDur += r.Duration
+	}
+	if leftDur == 0 && core.Duration != nil && *core.Duration > 0 {
+		leftDur = *core.Duration
 	}
 	cmpDur := at.Duration
-	if cmpDur <= 0 {
-		cmpDur = ownerDur
+	if cmpDur <= 0 && len(orows) == 1 && ob.Duration != nil {
+		cmpDur = *ob.Duration
 	}
 	fmt.Fprintf(fp, "dur|%d|%d\n", leftDur, cmpDur)
 	if leftDur > 0 && cmpDur > 0 && !leftoverSameDuration(leftDur, cmpDur) {
