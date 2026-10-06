@@ -4259,6 +4259,12 @@ func fragGroupTitleKeys(plan *fragGroupPlan) []fragTitleID {
 	for _, t := range plan.AltTitles {
 		add(t)
 	}
+	if strings.HasPrefix(plan.Key, fragParentSetKeyPrefix) {
+		// A parent set's folder is as often the author's ("Joe Abercrombie")
+		// as the work's: its name is a title only when the set took it as
+		// one (plan.Title), never matched against the library on its own.
+		return ids
+	}
 	if t, ok := metadata.WorkFolderTitle(plan.Dir); ok {
 		add(t)
 	}
