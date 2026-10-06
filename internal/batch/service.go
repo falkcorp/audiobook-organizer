@@ -1,7 +1,7 @@
 // file: internal/batch/service.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-10-02
+// last-edited: 2026-10-05
 
 package batch
 
@@ -243,7 +243,7 @@ func (bs *BatchService) ExecuteOperations(req *BatchOperationsRequest) *BatchRes
 				continue
 			}
 			if op.HardDelete {
-				if err := bs.db.DeleteBook(op.ID); err != nil {
+				if err := bs.hardDelete(book); err != nil {
 					resp.addError(op.ID, err.Error())
 				} else {
 					resp.addSuccess(op.ID)
@@ -582,4 +582,29 @@ func groupOf(b *database.Book) string {
 		return ""
 	}
 	return *b.VersionGroupID
+}
+
+// hardDelete is the batch's hard delete of one book. Like the single-book
+// delete and the trash page's "Purge now" (owner decision 2026-10-05), a
+// book users have listening state on (positions, status, progress, listened
+// time, hide, bookmarks) is deleted only after that state is carried to a
+// version Audiobookshelf lists, and is refused otherwise
+// (merge.HardDeleteKeepingUserState: merge.ErrBookHasListeningState). A
+// store that cannot check or carry the state refuses every hard delete.
+//
+// The batch runs its operations one after another, and so this: each carry
+// holds the global merge lock for its whole check-carry-delete, so a worker
+// pool would only queue on that lock.
+func (bs *BatchService) hardDelete(book *database.Book) error {
+	merger, ok := database.AsCapability[merge.UserProgressMerger](bs.db)
+	if !ok {
+		return errors.New("hard delete refused: the store cannot check or carry users' listening state")
+	}
+	if _, err := merge.HardDeleteKeepingUserState(merger, bs.db, book, func() error { return bs.db.DeleteBook(book.ID) }); err != nil {
+		if errors.Is(err, merge.ErrBookHasListeningState) {
+			return fmt.Errorf("%w; soft-delete it and purge it from the trash instead, where the progress can be moved or discarded on purpose", err)
+		}
+		return err
+	}
+	return nil
 }

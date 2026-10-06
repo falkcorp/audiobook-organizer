@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_crud.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 7f0f10bf-7554-4af5-b2d2-ce0a6af6b46e
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 // Write-side CRUD + batch endpoints for the audiobooks domain: update
 // (full-column replacement with change-history recording + file write-back),
@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strings"
 	"time"
 
@@ -203,7 +204,24 @@ func (h *Handler) DeleteAudiobook(c *gin.Context) {
 			httputil.RespondWithConflict(c, err.Error())
 			return
 		}
-		httputil.RespondWithNotFound(c, "audiobook", id)
+		// Refused because users have listening progress on it and there is
+		// no copy in the Audiobookshelf library to move it to. The stable
+		// code lets the trash page offer "Discard progress and purge".
+		if errors.Is(err, audiobookspkg.ErrBookHasProgress) {
+			httputil.RespondWithError(c, http.StatusConflict, err.Error(), "HAS_PROGRESS")
+			return
+		}
+		if errors.Is(err, audiobookspkg.ErrPurgeCarryFailed) {
+			httputil.RespondWithError(c, http.StatusInternalServerError, err.Error(), "CARRY_FAILED")
+			return
+		}
+		if err.Error() == "audiobook not found" {
+			httputil.RespondWithNotFound(c, "audiobook", id)
+			return
+		}
+		// Anything else is a failure, not a missing book: until 2026-10-05
+		// every other error answered 404, hiding why a delete did not run.
+		httputil.RespondWithError(c, http.StatusInternalServerError, err.Error(), "DELETE_FAILED")
 		return
 	}
 

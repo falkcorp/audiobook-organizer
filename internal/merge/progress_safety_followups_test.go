@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/syncapi/progress"
 )
 
 // Review follow-ups to #3771 / #3772 (progress safety).
@@ -279,4 +280,76 @@ func TestDropSurvivorReconcileMarkers(t *testing.T) {
 	require.True(t, strings.HasPrefix(keys[0], survivorReconcilePrefix+keep+":"+dup+":"))
 	dropSurvivorReconcileMarkers(s, keep, dup, progress)
 	require.Empty(t, reconcileMarkers(t, s))
+}
+
+// bookmarkOnly seeds two books and one user whose only state is a bookmark
+// on doomed (no state row, no position).
+func bookmarkOnly(t *testing.T) (s *database.PebbleStore, u *database.User, keep, doomed, doomedSync string) {
+	t.Helper()
+	s = setupTestStore(t).(*database.PebbleStore)
+	keep, doomed = seedSyncBooks(t, s)
+	u = seedSyncUser(t, s)
+	var err error
+	doomedSync, err = database.AsSyncIdentityStore(s).MintOrGetSyncID(doomed)
+	require.NoError(t, err)
+	require.NoError(t, s.CreateBookmark(progress.Bookmark{UserID: u.ID, ItemID: doomedSync, TimeSec: 42, Title: "the good part"}))
+	return s, u, keep, doomed, doomedSync
+}
+
+// B: a bookmark is listening state. A book whose only state is a bookmark
+// counts as carryable, so no automatic hard delete drops it.
+func TestUserStateProbe_BookmarkOnlyIsCarryable(t *testing.T) {
+	s, _, _, doomed, _ := bookmarkOnly(t)
+	has, err := BookHasCarryableUserState(s, doomed)
+	require.NoError(t, err)
+	require.True(t, has)
+	st, err := s.GetUserBookState("nobody", doomed)
+	require.NoError(t, err)
+	require.Nil(t, st)
+}
+
+// B: the carry moves a bookmark-only book's bookmark to the kept book (a
+// copy under its sync id, plus the redirect), after which the doomed book
+// no longer reads as holding state, so the carry completes instead of
+// putting itself back.
+func TestCarryStateBeforeHardDelete_MovesBookmarkOnlyState(t *testing.T) {
+	s, u, keep, doomed, _ := bookmarkOnly(t)
+	require.NoError(t, CarryStateBeforeHardDelete(s, keep, doomed))
+	keepSync, ok, err := database.AsSyncIdentityStore(s).GetSyncIDForBook(keep)
+	require.NoError(t, err)
+	require.True(t, ok)
+	marks, err := s.ListBookmarks(u.ID, keepSync)
+	require.NoError(t, err)
+	require.Len(t, marks, 1)
+	require.Equal(t, 42.0, marks[0].TimeSec)
+	has, err := BookHasCarryableUserState(s, doomed)
+	require.NoError(t, err)
+	require.False(t, has, "the copied bookmark is no longer owed")
+}
+
+// B: a redirected book whose bookmark the survivor lacks (the copy never
+// happened) still holds that bookmark as state.
+func TestUserStateProbe_RedirectedButUncopiedBookmarkIsOwed(t *testing.T) {
+	s, _, keep, doomed, _ := bookmarkOnly(t)
+	ids := database.AsSyncIdentityStore(s)
+	_, err := ids.MintOrGetSyncID(keep)
+	require.NoError(t, err)
+	require.NoError(t, ids.RecordSyncMerge(doomed, keep))
+	has, err := BookHasCarryableUserState(s, doomed)
+	require.NoError(t, err)
+	require.True(t, has)
+}
+
+// B: discard clears a bookmark-only book's bookmark and counts its user.
+func TestDiscardUserState_BookmarkOnly(t *testing.T) {
+	s, u, _, doomed, doomedSync := bookmarkOnly(t)
+	deleted := false
+	res, err := DiscardUserStateThenHardDelete(s, doomed, nil, func() error { deleted = true; return nil })
+	require.NoError(t, err)
+	require.True(t, deleted)
+	require.Equal(t, 1, res.Users, "the bookmark-only user is counted")
+	require.Equal(t, 1, res.Bookmarks)
+	marks, err := s.ListBookmarks(u.ID, doomedSync)
+	require.NoError(t, err)
+	require.Empty(t, marks)
 }
