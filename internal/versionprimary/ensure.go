@@ -1,5 +1,5 @@
 // file: internal/versionprimary/ensure.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 0b7e4c52-9a1d-4f38-8c6e-2d51f0a7b9e3
 // last-edited: 2026-10-06
 
@@ -69,13 +69,32 @@ type Env struct {
 	// leaves primary (a Repairs fixer that checked it under its own lock,
 	// before slower steps). EnsureSinglePrimary then writes nothing unless
 	// its decision, taken under the group lock, is that member: it returns
-	// ErrUnexpectedWinner instead of crowning anyone else.
+	// ErrUnexpectedWinner instead of crowning anyone else. A group with no
+	// rows (or no group at all) is refused the same way: nobody is left to
+	// be the expected primary.
 	Expect string
+	// MayWrite, when set, is asked about every member whose
+	// is_primary_version EnsureSinglePrimary is about to write -- the
+	// winner when its flag is not already explicit true, and every member
+	// it would demote -- with the rows it read under the group lock, BEFORE
+	// any of them is written. A non-nil answer refuses the whole hand-off:
+	// nothing is written and the error is returned wrapped in
+	// ErrWriteRefused. A Repairs fixer passes its never-write-an-iTunes-book
+	// rule here, so a member whose flag changed after the fixer's own
+	// check (an explicit false turned nil or true, which makes it a member
+	// the hand-off demotes) is refused under the lock rather than written.
+	// demoteOthers never writes a member read as explicit false, so the
+	// members asked are every member the hand-off can write.
+	MayWrite func(m *database.Book) error
 }
 
 // ErrUnexpectedWinner: EnsureSinglePrimary's decision was not Env.Expect, so
 // nothing was written.
 var ErrUnexpectedWinner = errors.New("the hand-off's winner is not the expected member")
+
+// ErrWriteRefused: Env.MayWrite refused a member the hand-off would write,
+// so nothing was written.
+var ErrWriteRefused = errors.New("the hand-off would write a member the caller refuses")
 
 // Hand-off outcomes.
 const (
@@ -86,6 +105,7 @@ const (
 	OutcomeCrowned        = "crowned"          // Crown wrote its explicit choice
 	OutcomeWinnerChanged  = "winner_changed"   // the winner changed under us; nothing written
 	OutcomeCrownNotMember = "crown_not_member" // Crown's book is not a live member of the group
+	OutcomeWriteRefused   = "write_refused"    // Env.MayWrite refused a member; nothing written
 )
 
 // FlagWrite is one is_primary_version write the hand-off committed.
@@ -105,6 +125,24 @@ type HandoffResult struct {
 	// Decision is set when Elect ran.
 	Decision *Decision   `json:"decision,omitempty"`
 	Writes   []FlagWrite `json:"writes,omitempty"`
+}
+
+// WrotePrimary reports whether the hand-off itself wrote PrimaryID's
+// explicit true. False when PrimaryID already carried it (a healthy
+// incumbent kept, or a Crown of a member already explicit primary): the
+// hand-off then made nobody primary, and a ledger note says so
+// (undo.HandOffNoteValue) so an operation's revert never re-crowns over a
+// primary the operation did not write.
+func (r HandoffResult) WrotePrimary() bool {
+	if r.PrimaryID == "" {
+		return false
+	}
+	for _, w := range r.Writes {
+		if w.BookID == r.PrimaryID && w.Primary {
+			return true
+		}
+	}
+	return false
 }
 
 // errHandoffAbort aborts a winner write whose row changed since the read.
@@ -359,6 +397,9 @@ func IneligibleReason(b *database.Book, s Signals) string { return ineligibleRea
 func EnsureSinglePrimary(ctx context.Context, store EnsureStore, gid string, env Env) (HandoffResult, error) {
 	res := HandoffResult{GroupID: gid, Outcome: OutcomeEmpty}
 	if strings.TrimSpace(gid) == "" {
+		if env.Expect != "" {
+			return res, fmt.Errorf("%w: no version group, not the expected %s", ErrUnexpectedWinner, env.Expect)
+		}
 		return res, nil
 	}
 	defer lockGroup(gid)()
@@ -368,6 +409,11 @@ func EnsureSinglePrimary(ctx context.Context, store EnsureStore, gid string, env
 		return res, fmt.Errorf("read version group %s: %w", gid, err)
 	}
 	if len(members) == 0 {
+		if env.Expect != "" {
+			// The caller predicted a primary; an empty group has none to
+			// leave, so the prediction is wrong and the caller hears it.
+			return res, fmt.Errorf("%w: group %s has no members, not the expected %s", ErrUnexpectedWinner, gid, env.Expect)
+		}
 		return res, nil
 	}
 	alive := storeAlive(store)
@@ -389,6 +435,24 @@ func EnsureSinglePrimary(ctx context.Context, store EnsureStore, gid string, env
 				return res, fmt.Errorf("%w: group %s would be held (%s), not the expected %s", ErrUnexpectedWinner, gid, d.HoldReason, env.Expect)
 			}
 			return res, fmt.Errorf("%w: group %s would make %s primary, not the expected %s", ErrUnexpectedWinner, gid, got, env.Expect)
+		}
+	}
+	if env.MayWrite != nil {
+		keep, winnerWrite := "", false
+		switch {
+		case inc != nil:
+			keep = inc.ID
+		case d.Kind != DecisionHeld:
+			keep, winnerWrite = d.WinnerID, true
+		}
+		if keep != "" {
+			if err := guardWrites(members, keep, winnerWrite, alive, env.MayWrite); err != nil {
+				res.Outcome = OutcomeWriteRefused
+				if inc == nil {
+					res.Decision = &d
+				}
+				return res, fmt.Errorf("%w: group %s: %w", ErrWriteRefused, gid, err)
+			}
 		}
 	}
 	if inc != nil {
@@ -531,18 +595,48 @@ func writeWinner(store EnsureStore, gid string, members []database.Book, winnerI
 	return res, err
 }
 
+// guardWrites asks mayWrite about every member the hand-off keeping keepID
+// would write, as members were read under the group lock: keepID itself
+// when winnerWrite and it is not already explicit true (writeWinner skips
+// that write), and every member demoteOthers would demote (wouldDemote). It
+// returns the first refusal, naming the member; nothing has been written.
+func guardWrites(members []database.Book, keepID string, winnerWrite bool, alive func(string) bool,
+	mayWrite func(*database.Book) error) error {
+	for i := range members {
+		m := &members[i]
+		write := wouldDemote(m, keepID, alive)
+		if m.ID == keepID {
+			write = winnerWrite && !explicitTrue(m)
+		}
+		if !write {
+			continue
+		}
+		if err := mayWrite(m); err != nil {
+			return fmt.Errorf("member %s: %w", m.ID, err)
+		}
+	}
+	return nil
+}
+
+// wouldDemote reports whether demoteOthers, keeping keepID, writes member m
+// (as read): a live member other than keepID that is not already explicit
+// false. guardWrites asks the same question, so the two cannot drift.
+func wouldDemote(m *database.Book, keepID string, alive func(string) bool) bool {
+	if m.ID == keepID || !Electable(m, alive) {
+		return false
+	}
+	return m.IsPrimaryVersion == nil || *m.IsPrimaryVersion
+}
+
 // demoteOthers writes explicit false on every live member other than keepID
-// that is not already explicit false. A member that left the group since the
-// read is skipped.
+// that is not already explicit false (wouldDemote). A member that left the
+// group since the read is skipped.
 func demoteOthers(store EnsureStore, gid string, members []database.Book, keepID string,
 	alive func(string) bool) ([]FlagWrite, error) {
 	var writes []FlagWrite
 	for i := range members {
 		m := &members[i]
-		if m.ID == keepID || !Electable(m, alive) {
-			continue
-		}
-		if m.IsPrimaryVersion != nil && !*m.IsPrimaryVersion {
+		if !wouldDemote(m, keepID, alive) {
 			continue
 		}
 		prev, wrote := "", false

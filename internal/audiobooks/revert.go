@@ -364,7 +364,7 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 	result := &RevertResult{OperationID: operationID, Total: len(changes)}
 	retryOwed := func() (*RevertResult, error) {
 		if msgs := rs.settleGroups(operationID, settleInput{
-			crowned: crownedByHandOff(changes), priorPending: rs.settlePendingGroups(operationID),
+			crowned: handOffEvidenceOf(changes), priorPending: rs.settlePendingGroups(operationID),
 		}, result); len(msgs) > 0 {
 			return result, fmt.Errorf("partially reverted with %d errors: %s", len(msgs), joinRevertErrors(msgs))
 		}
@@ -550,7 +550,7 @@ func (rs *RevertService) RevertOperation(operationID string) (*RevertResult, err
 	// rows are marked: a mark that fails leaves the rows to be found
 	// already restored by the next run, with the groups already settled.
 	errMsgs = append(errMsgs, rs.settleGroups(operationID, settleInput{
-		plan: plan, touched: touched, refusedDemote: refusedDemote, crowned: crownedByHandOff(changes),
+		plan: plan, touched: touched, refusedDemote: refusedDemote, crowned: handOffEvidenceOf(changes),
 		priorPending: priorPending,
 	}, result)...)
 
@@ -650,8 +650,9 @@ func (rs *RevertService) revertChangeIn(c *database.OperationChange, plan *undo.
 		return rs.revertBookSoftDelete(c, stamps)
 	case undo.ChangeTypeBookPrimaryDemote:
 		return rs.revertBookPrimaryDemote(c)
-	case undo.ChangeTypeBookPrimaryHandoff:
-		// A note: the primary demote row's revert undoes the hand-off.
+	case undo.ChangeTypeBookPrimaryHandoff, undo.ChangeTypeBookPrimaryHandoffRefused:
+		// A note: the primary demote row's revert undoes the hand-off (a
+		// refused one wrote nothing).
 		return nil
 	case undo.ChangeTypeExternalIDReassign:
 		return rs.revertExternalIDReassign(c)

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/consolidation_leftovers_samepath.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 7285fcc4-a331-4b0a-89c0-e606c9f5f7b3
 // last-edited: 2026-10-06
 
@@ -603,8 +603,12 @@ func (s *leftoverSource) samePathHandOff(ctx context.Context, members []database
 			// retireInto hands off (elects) only for a leftover that is
 			// primary at its read, an unset flag included.
 			leftoverPrimary = m.IsPrimaryVersion == nil || *m.IsPrimaryVersion
-			t, no, into := true, false, owner
-			m.IsPrimaryVersion, m.MarkedForDeletion, m.MergedIntoBookID, m.FilePath = &no, &t, &into, ""
+			// As retireInto's soft-delete writes it: flagged, stamped,
+			// merged into the owner, path cleared. The stamp's value is
+			// never read by the prediction; it is set so the simulated row
+			// is the shape every soft-deleted row has.
+			t, no, into, at := true, false, owner, time.Unix(0, 0).UTC()
+			m.IsPrimaryVersion, m.MarkedForDeletion, m.MarkedForDeletionAt, m.MergedIntoBookID, m.FilePath = &no, &t, &at, &into, ""
 			continue
 		}
 		if !m.IsSoftDeleted() {

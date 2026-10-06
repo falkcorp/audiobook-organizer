@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duplicate_copies_fixer.go
-// version: 1.7.1
+// version: 1.9.0
 // guid: 937b9ff1-48ce-4136-8ca0-74793e6ed3de
 // last-edited: 2026-10-06
 
@@ -1920,27 +1920,41 @@ func (f *duplicateCopiesFixer) itunesWouldBeWritten(store OpsStore, gid string, 
 		if contains(losers, b.ID) || b.IsSoftDeleted() || (b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion) {
 			continue
 		}
-		rows, err := store.GetBookFiles(b.ID)
-		if err != nil {
-			return "", fmt.Errorf("files of %s: %w", b.ID, err)
+		if why, err := itunesMemberWhy(store, res, gid, b); err != nil || why != "" {
+			return why, err
 		}
-		exts, err := store.GetExternalIDsForBook(b.ID)
-		if err != nil {
-			return "", fmt.Errorf("external ids of %s: %w", b.ID, err)
-		}
-		paths := []string{b.FilePath}
-		var ff []fragFile
-		for _, r := range rows {
-			paths = append(paths, r.FilePath)
-			ff = append(ff, fragFile{ID: r.ID, ITunesPID: r.ITunesPersistentID, ITunesPath: r.ITunesPath})
-		}
-		why, doubt := itunesCopyWhy(res, b.ID, dcStr(b.ITunesPersistentID), paths, ff, exts)
-		if doubt {
-			return fmt.Sprintf("could not tell whether version-group member %s is an iTunes copy", b.ID), nil
-		}
-		if why != "" {
-			return fmt.Sprintf("iTunes copy %s in version group %s is not explicitly non-primary: the hand-off would write it", b.ID, gid), nil
-		}
+	}
+	return "", nil
+}
+
+// itunesMemberWhy says why version-group member b must not have its primary
+// flag written ("" when it may): it is an iTunes copy (its own iTunes id, a
+// row's, an un-tombstoned external id, or a path in the iTunes library), or
+// that cannot be told. itunesWouldBeWritten asks it of every member a
+// hand-off could write; the consolidation-leftovers apply hands it to the
+// hand-off itself (versionprimary.Env.MayWrite), which asks again under the
+// group lock about exactly the members it is about to write.
+func itunesMemberWhy(store OpsStore, res *repairs.PathResolver, gid string, b *database.Book) (string, error) {
+	rows, err := store.GetBookFiles(b.ID)
+	if err != nil {
+		return "", fmt.Errorf("files of %s: %w", b.ID, err)
+	}
+	exts, err := store.GetExternalIDsForBook(b.ID)
+	if err != nil {
+		return "", fmt.Errorf("external ids of %s: %w", b.ID, err)
+	}
+	paths := []string{b.FilePath}
+	var ff []fragFile
+	for _, r := range rows {
+		paths = append(paths, r.FilePath)
+		ff = append(ff, fragFile{ID: r.ID, ITunesPID: r.ITunesPersistentID, ITunesPath: r.ITunesPath})
+	}
+	why, doubt := itunesCopyWhy(res, b.ID, dcStr(b.ITunesPersistentID), paths, ff, exts)
+	if doubt {
+		return fmt.Sprintf("could not tell whether version-group member %s is an iTunes copy", b.ID), nil
+	}
+	if why != "" {
+		return fmt.Sprintf("iTunes copy %s in version group %s is not explicitly non-primary: the hand-off would write it", b.ID, gid), nil
 	}
 	return "", nil
 }
