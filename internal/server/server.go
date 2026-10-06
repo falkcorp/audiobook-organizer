@@ -199,10 +199,6 @@ type Server struct {
 	// libGenWarnOnce keeps the "store has no generation counter" warning to a
 	// single line instead of one per list request.
 	libGenWarnOnce  sync.Once
-	// candidateRefetchGate is the provider gate every lost-candidates refetch
-	// shares (candidate_refetch.go), built once from the enabled sources'
-	// budgets like the candidate-fetch op's own.
-	candidateRefetchGate candidateRefetchGate
 	facetsCache     *cache.Cache[gin.H]
 	authorsCache    *cache.Cache[*audiobookspkg.AuthorWithCountListResponse]
 	seriesCache     *cache.Cache[*audiobookspkg.SeriesWithCountsResponse]
@@ -269,6 +265,11 @@ type Server struct {
 	// every remaining key; see reconcileStuckPassLimit.
 	reconcileStuckPasses atomic.Int32
 	http3Server          *http3.Server
+
+	// candidateRefetchGate is the provider gate every lost-candidates refetch
+	// shares (candidate_refetch.go), built once from the enabled sources'
+	// budgets like the candidate-fetch op's own.
+	candidateRefetchGate candidateRefetchGate
 
 	hub              *realtime.EventHub
 	writeBackBatcher *itunesservice.WriteBackBatcher
