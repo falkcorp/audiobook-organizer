@@ -1,7 +1,7 @@
 // file: internal/scanner/scan_book_lock_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 161af27f-a511-4b3d-a32f-02348506c28a
-// last-edited: 2026-09-30
+// last-edited: 2026-10-06
 
 package scanner
 
@@ -204,9 +204,11 @@ func TestScanBookLock_ScannerWaitsForHeldBookThenProcessesIt(t *testing.T) {
 	}
 	got, err := f.store.GetBookByID(x.ID)
 	require.NoError(t, err)
-	// The fake file's "tags" come from ProcessFile's filename fallback; what
-	// matters is that the scanner merged the book after the release.
-	require.NotEqual(t, "Before", got.Title, "the scanner never merged the book once the apply released it")
+	// The scanner merged the book after the release: the file-derived hash
+	// landed. (The title is identity and is held on an existing row since
+	// 2026-10-06, so it is not the witness.)
+	require.NotNil(t, got.FileHash, "the scanner never merged the book once the apply released it")
+	require.Equal(t, "Before", got.Title)
 	mu.Lock()
 	require.True(t, saved)
 	mu.Unlock()
@@ -314,7 +316,7 @@ func TestScanBookLock_AIPhaseSaveOverlaysMainPassButKeepsUserEdit(t *testing.T) 
 	x, err := f.store.CreateBook(&database.Book{Title: "Old", FilePath: p, Format: "m4b"})
 	require.NoError(t, err)
 
-	b := &Book{FilePath: p, Title: "Main Pass Title", Author: "A. Author", Format: ".m4b"}
+	b := &Book{FilePath: p, Title: "Main Pass Title", Author: "A. Author", Publisher: "Main Pub", Format: ".m4b"}
 	hold, outcome, _ := acquireScanBookLock(context.Background(), context.Background(), b, 1, true)
 	require.Equal(t, scanLockHeld, outcome)
 	require.NoError(t, saveBookToDatabase(scanlock.WithHold(context.Background(), hold), b))
@@ -326,13 +328,17 @@ func TestScanBookLock_AIPhaseSaveOverlaysMainPassButKeepsUserEdit(t *testing.T) 
 
 	b.Title = "AI Title"
 	b.Narrator = "AI Narrator"
+	b.Publisher = "AI Pub"
 	saved, err := saveBookUnderScanLock(context.Background(), b, saveBookToDatabase)
 	require.NoError(t, err)
 	require.True(t, saved)
 
 	got, err := f.store.GetBookByID(x.ID)
 	require.NoError(t, err)
-	require.Equal(t, "AI Title", got.Title, "the AI result was discarded as a foreign edit of the main pass's own write")
+	require.Equal(t, "AI Pub", *got.Publisher, "the AI result was discarded as a foreign edit of the main pass's own write")
+	// X existed before the scan: its title is identity and is held, from the
+	// main pass and the AI phase alike (scan_identity_hold.go).
+	require.Equal(t, "Old", got.Title)
 	require.Equal(t, "User Narrator", *got.Narrator, "the user's edit between the two saves was reverted")
 }
 
@@ -499,12 +505,14 @@ func TestMergeScanned_MovedRowKeepsItsFileIdentity(t *testing.T) {
 	require.Equal(t, "/import/walked.m4b", still.FilePath)
 }
 
-// The queued single-book apply (metadata.apply-when-scanned) tells a later
-// user edit from the scanner's merge by change history: edits record it, the
-// scanner must not. A rescan whose tags differ from the row rewrites the title
-// here and must leave the book's change history empty -- if the scanner ever
-// starts recording history, every queued apply behind a scan would refuse.
-func TestScanBookLock_RescanMergeRecordsNoChangeHistory(t *testing.T) {
+// Every scanner write records change history (2026-10-06: the nightly scan
+// re-titled 1,176 books and nothing showed it), under
+// database.ChangeTypeScan -- which the queued single-book apply
+// (metadata.apply-when-scanned) does not read as a later edit (metafetch
+// isFieldEdit), so a scan behind a queued apply still does not refuse it. A
+// rescan whose file reads a different title keeps the row's title and
+// records the file's as a proposal.
+func TestScanBookLock_RescanMergeRecordsScanHistory(t *testing.T) {
 	f := newScanLockFixture(t, "")
 	p := f.file(t, "a/book.m4b", "x-data")
 	x, err := f.store.CreateBook(&database.Book{Title: "DB Title", FilePath: p, Format: "m4b"})
@@ -514,12 +522,19 @@ func TestScanBookLock_RescanMergeRecordsNoChangeHistory(t *testing.T) {
 
 	got, err := f.store.GetBookByID(x.ID)
 	require.NoError(t, err)
-	// The fake file's "tags" come from ProcessFile's filename fallback; what
-	// matters is that the merge rewrote the title.
-	require.NotEqual(t, "DB Title", got.Title, "the rescan did not merge a title; the test proves nothing")
+	require.Equal(t, "DB Title", got.Title, "the rescan rewrote an existing row's title")
+	require.NotNil(t, got.FileHash, "the rescan did not merge the book; the test proves nothing")
 	history, err := f.store.GetBookChangeHistory(x.ID, 1<<30)
 	require.NoError(t, err)
-	require.Empty(t, history, "the scanner's merge recorded change history; queued applies would read it as a user edit")
+	require.NotEmpty(t, history, "the scanner's merge changed the row and recorded no history")
+	fields := map[string]bool{}
+	for _, h := range history {
+		require.Equal(t, database.ChangeTypeScan, h.ChangeType, "field %s", h.Field)
+		require.Equal(t, scanHistorySource, h.Source, "field %s", h.Field)
+		fields[h.Field] = true
+	}
+	require.True(t, fields["file_hash"], "the hash the scan wrote has no history row: %v", fields)
+	require.False(t, fields["title"], "a held title must not be recorded as changed")
 }
 
 // A version group over the lock cap is not locked whole, but the scanner

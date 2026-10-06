@@ -1,7 +1,7 @@
 // file: internal/scanner/rescan_lost_update_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4d8a1c72-6e05-4b93-8f21-0a7c3e9b5d14
-// last-edited: 2026-09-19
+// last-edited: 2026-10-06
 
 package scanner
 
@@ -117,8 +117,11 @@ func TestSaveBookToDatabase_RescanDoesNotRevertConcurrentWrite(t *testing.T) {
 	// ...and the scanner's own write still landed. A merge that protected the
 	// concurrent column by skipping its own write would also pass the check
 	// above, so both halves are asserted.
-	if got.Title != "Rescanned Title" {
-		t.Errorf("Title: want %q, got %q", "Rescanned Title", got.Title)
+	// The title is identity: an existing row keeps it on a rescan
+	// (scan_identity_hold.go, 2026-10-06); the narrator is the scanner's
+	// own write that must land.
+	if got.Title != "Original Title" {
+		t.Errorf("Title: want %q (held), got %q", "Original Title", got.Title)
 	}
 	if got.Narrator == nil || *got.Narrator != "Rescanned Narrator" {
 		t.Errorf("Narrator: want %q, got %v", "Rescanned Narrator", got.Narrator)

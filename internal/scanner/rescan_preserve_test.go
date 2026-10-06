@@ -1,7 +1,7 @@
 // file: internal/scanner/rescan_preserve_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: b2f4c6a8-1d3e-4f50-9a7b-2c6e8d0f1a34
-// last-edited: 2026-09-02
+// last-edited: 2026-10-06
 
 package scanner
 
@@ -120,8 +120,11 @@ func TestSaveBookToDatabase_RescanPreservesEnrichedFields(t *testing.T) {
 	}
 
 	// Scanner-owned fields DID update.
-	if got.Title != "Rescanned Title" {
-		t.Errorf("Title: want %q, got %q", "Rescanned Title", got.Title)
+	// The title is identity: an existing row keeps it on a rescan
+	// (scan_identity_hold.go, 2026-10-06); the narrator is the scanner's
+	// own write that must land.
+	if got.Title != "Original Title" {
+		t.Errorf("Title: want %q (held), got %q", "Original Title", got.Title)
 	}
 	if got.Narrator == nil || *got.Narrator != "Rescanned Narrator" {
 		t.Errorf("Narrator: want %q, got %v", "Rescanned Narrator", got.Narrator)

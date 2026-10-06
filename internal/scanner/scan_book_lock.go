@@ -1,7 +1,7 @@
 // file: internal/scanner/scan_book_lock.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: fe71f301-a85e-4dad-98df-b135676ab1a7
-// last-edited: 2026-09-30
+// last-edited: 2026-10-06
 
 package scanner
 
@@ -119,7 +119,10 @@ var (
 	scanLockRequeuedCount atomic.Int64 // books sent to the back of the chunk (busy, or widened)
 	scanLockGaveUpCount   atomic.Int64 // books left for the next scan after the bounded waits
 	scanLockKeptFields    atomic.Int64 // columns kept because another writer changed them mid-scan
-	scanLockGroupErrs     atomic.Int64 // version-group lookups that failed; the book was treated as busy
+	// existing books whose file reads a different identity than the row
+	// holds: recorded as a proposal, not written (scan_identity_hold.go)
+	scanIdentityProposalsRecorded atomic.Int64
+	scanLockGroupErrs             atomic.Int64 // version-group lookups that failed; the book was treated as busy
 	// books left for the next scan because their version group could not be
 	// read (a store error, not an apply holding them)
 	scanLockUnreadableCount atomic.Int64

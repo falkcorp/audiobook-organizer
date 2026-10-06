@@ -1,7 +1,7 @@
 // file: internal/metafetch/queued_apply_history.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: de7ac5f2-cd18-4dc9-8b95-a2f28a9fb8b5
-// last-edited: 2026-10-04
+// last-edited: 2026-10-06
 
 package metafetch
 
@@ -17,9 +17,9 @@ import (
 // has moved on. Between the two, the scanner's merge almost always rewrites
 // the row from the file's tags -- that must NOT stop the apply. What must stop
 // it is a LATER EDIT: another apply, a manual edit, an undo, a bulk update, a
-// repair. Those are exactly the writers that record metadata change history;
-// the scanner records none. So the queued apply compares change history, not
-// the row:
+// repair. Those writers record metadata change history, and since 2026-10-06
+// so does the scanner -- under database.ChangeTypeScan, which is listed below
+// as not an edit. So the queued apply compares change history, not the row:
 //
 //   - at enqueue, ApplyEditMark records the newest field-edit history row;
 //   - at run (under the book's scan lock), ApplyEditsSince lists the rows
@@ -31,8 +31,12 @@ import (
 // write-back, cover archive) or the store's own bookkeeping (a dropped stale
 // series object, database.ChangeTypeSeriesObjectDrop, which any write of the
 // row records, the scanner's included), not a change to a field the apply
-// writes.
-var fileSideChangeTypes = []string{"rename", "write-back", "cover-archive", database.ChangeTypeSeriesObjectDrop}
+// writes. The scanner's own merge (database.ChangeTypeScan) is listed for the
+// reason the header gives: the scan reading the book is why the apply was
+// queued. Its identity columns (title, author, series) are held on existing
+// rows, so what it records is file-side or a fill of an empty field.
+var fileSideChangeTypes = []string{"rename", "write-back", "cover-archive", database.ChangeTypeSeriesObjectDrop,
+	database.ChangeTypeScan}
 
 func isFieldEdit(changeType string) bool {
 	return !slices.Contains(fileSideChangeTypes, changeType)

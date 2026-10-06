@@ -1,5 +1,5 @@
 // file: internal/scanner/folder_parse_existing_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: dc6ba60e-80dc-4e3a-97c9-2b0fcadcf86c
 // last-edited: 2026-10-06
 
@@ -125,13 +125,18 @@ func TestSaveBookToDatabase_FolderParseNeverRewritesExistingRows(t *testing.T) {
 		t.Fatalf("title-derived position rewritten: title=%q seq=%v", b.Title, b.SeriesSequence)
 	}
 
-	// The same values from a TAG (no folder source) still land, as before.
+	// The same values from a TAG (no folder source) are held too since
+	// 2026-10-06 (scan_identity_hold.go): an existing row's identity changes
+	// only through a reviewed fixer. The tag's title is a proposal.
 	tagged := &Book{FilePath: path, Title: "Tagged Title", Author: "Mara Quill", Format: ".m4b", Duration: 100}
 	if err := saveBookToDatabase(context.Background(), tagged); err != nil {
 		t.Fatal(err)
 	}
-	if b, _, _ = read(path); b.Title != "Tagged Title" {
-		t.Fatalf("a tag title must still update an existing row, got %q", b.Title)
+	if b, _, _ = read(path); b.Title != "Stored Title" {
+		t.Fatalf("a tag title must not rewrite an existing row, got %q", b.Title)
+	}
+	if p := readScanProposal(t, store, b.ID); p == nil || p.Fields[database.ScanProposalTitle].To != "Tagged Title" {
+		t.Fatalf("the tag title must be recorded as a proposal, got %+v", p)
 	}
 
 	// A new import takes the folder parse.

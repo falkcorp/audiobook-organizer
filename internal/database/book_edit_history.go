@@ -1,7 +1,7 @@
 // file: internal/database/book_edit_history.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5b8e2f71-0c4d-4a96-b3e7-9d1a6c2f8e40
-// last-edited: 2026-10-04
+// last-edited: 2026-10-06
 
 package database
 
@@ -74,6 +74,18 @@ type BookEditHistoryStore interface {
 // ChangeTypeManual is the change_type of a user's hand edit (single-book PUT
 // and the web bulk edit).
 const ChangeTypeManual = "manual"
+
+// ChangeTypeScan is the change_type (and source) of a library scan's own
+// write to a book row: the rescan merge of what the file now says, a path
+// relink, a version link. Until 2026-10-06 the scanner recorded no history at
+// all, so its rewrites were invisible -- the nightly scan of 2026-10-06
+// re-titled 1,176 existing books (and dropped their cached candidates) with
+// nothing in any book's history to show it.
+//
+// It is not a field EDIT for the queued apply (metafetch isFieldEdit): that
+// apply is enqueued because the scan is reading the book, and the scan's own
+// merge must not refuse it.
+const ChangeTypeScan = "scan"
 
 // RecordBookEditHistory records one change-history row for EVERY tracked Book
 // field whose stored value differs between before and after -- including a
