@@ -1,11 +1,12 @@
 <!-- file: docs/executive-summaries/2026-10-05-trash-keeps-your-progress-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 9e710e72-dafe-4d60-921b-b004e34b8f48 -->
 <!-- last-edited: 2026-10-05 -->
 
 # The trash keeps your listening progress, without keeping books forever
 
-PR: https://github.com/falkcorp/audiobook-organizer/pull/3771
+PRs: https://github.com/falkcorp/audiobook-organizer/pull/3771,
+https://github.com/falkcorp/audiobook-organizer/pull/3777
 
 ## Executive Summary
 
@@ -43,3 +44,37 @@ never leave, with no explanation, was not.
 when there is one, using the same careful all-or-nothing move the merge
 tools use. When there is none, the book is kept and labelled, and the owner
 decides: restore it, or discard its progress on purpose.
+
+## Follow-up: every delete button now protects progress the same way
+
+A review of the first change found a few gaps, now closed (PR #3777).
+
+- **"Purge now" behaves like the nightly cleanup.** Pressing it on a trashed
+  book used to delete the book and its progress straight away. Now it moves
+  the progress to the copy the audiobook apps can see and then deletes, or,
+  when there is no such copy, it stops and says why, and offers "Discard
+  progress and purge" so dropping the progress is always a deliberate
+  choice. Deleting a book from the library, alone or in bulk, follows the
+  same rule.
+- **Bookmarks count.** A book whose only progress was a bookmark was treated
+  as having none, so it could be deleted with the bookmark. It is now kept
+  or moved like any other progress.
+- **Listened time is never lowered when copies combine.** When two copies of
+  a book were combined, the total listening time could drop to the smaller
+  copy's number (for example from 5,000 seconds to 200). It now keeps the
+  larger one, and never adds the two together.
+- **Undo steps cannot lose your place half way.** Putting progress back after
+  an undo used to clear your saved positions and then write them again one
+  by one; a failure in between could leave a book with no position at all.
+  It is now one step that either happens completely or not at all. A few
+  related edge cases in the undo (an old position without a date winning
+  over a newer choice to mark a book unfinished, and listening done while
+  the undo was running) were fixed too.
+- **The trash list tells the truth.** It now says whether there is a copy to
+  move the progress to, and offers "Move progress and purge" instead of
+  "Discard" when there is. It shows "progress unknown" when progress could
+  not be read, and each person sees only their own progress plus a count of
+  other people with progress, unless they manage users.
+- **iTunes stays intact.** Purging a trashed copy no longer removes a track
+  from the iTunes library that another copy of the book still uses, and
+  nothing is changed in iTunes unless the book was really deleted.
