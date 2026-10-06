@@ -1,5 +1,5 @@
 // file: internal/foldernames/evidence_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6cbae67b-604d-4b23-be02-29ef9669f74f
 // last-edited: 2026-10-06
 
@@ -193,4 +193,58 @@ func TestSnapshot_ConcurrentCallers(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// JudgeSeriesRow is the rule IsKnownSeries reads, with each side named:
+// AuthorNamedSeries lists the rows an author shares a name with, and the
+// verdict tells junk series from real ones and from junk author rows.
+func TestJudgeSeriesRow_Verdicts(t *testing.T) {
+	l := newLibrary(t)
+	sanderson := l.author("Brandon Sanderson")
+	junk := l.series("Brandon Sanderson", sanderson)
+	l.book("Elantris", sanderson, junk)
+	l.book("Warbreaker", sanderson, nil)
+	l.author("Star Wars")
+	zahn := l.author("Timothy Zahn")
+	sw := l.series("Star Wars", nil)
+	l.book("Thrawn", zahn, sw)
+	rogue := l.author("Rogue Merchant")
+	rm := l.series("Rogue Merchant", rogue)
+	l.book("Rogue Merchant 1", rogue, rm)
+	l.author("Empty Name")
+	l.series("Empty Name", nil)
+	l.series("Discworld", nil)
+
+	snap, err := Load(l.store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]SeriesRowVerdict{
+		"Brandon Sanderson": SeriesRowAuthorJunk,
+		"Star Wars":         SeriesRowReal,
+		"Rogue Merchant":    SeriesRowAuthorRowJunk,
+		"Empty Name":        SeriesRowEmpty,
+	}
+	got := map[string]SeriesRowVerdict{}
+	for _, c := range snap.AuthorNamedSeries() {
+		v, err := JudgeSeriesRow(l.store, c.Series, c.AuthorIDs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got[c.Series.Name] = v
+	}
+	if len(got) != len(want) {
+		t.Fatalf("author-named series = %v, want the %d of %v (Discworld shares no author's name)", got, len(want), want)
+	}
+	for name, v := range want {
+		if got[name] != v {
+			t.Errorf("%s: verdict %s, want %s", name, got[name], v)
+		}
+	}
+	// The folder parse reads the same verdicts.
+	for name, real := range map[string]bool{"Brandon Sanderson": false, "Star Wars": true, "Rogue Merchant": true, "Empty Name": false} {
+		if snap.IsKnownSeries(name) != real {
+			t.Errorf("IsKnownSeries(%q) = %v, want %v", name, !real, real)
+		}
+	}
 }

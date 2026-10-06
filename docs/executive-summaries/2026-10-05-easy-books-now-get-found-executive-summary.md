@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-05-easy-books-now-get-found-executive-summary.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: b351a976-9287-4897-af9a-3525619265bc -->
 <!-- last-edited: 2026-10-06 -->
 
@@ -80,3 +80,21 @@ details. A series that shares an author's name counts as a series only
 when its books show it is one, and the scanner and importer no longer
 create series named after the book's author. Cleaning up the existing
 author-named series is a separate, reviewed job.
+
+## Cleaning up author-named series
+
+**What it is.** A new review list in Repairs, "Series named after the
+author", shows each book linked to a "series" that is really its author's
+name -- every book in it is by that author, who also has books outside it.
+It uses the same test as the scanner, so the two never disagree.
+
+**What it leaves alone.** Real series that happen to share a name with an
+author, series whose "author" is the mistake instead, books with more than
+one author, locked series, books whose details were already confirmed, and
+Doctor Who / Big Finish books are listed with the reason and never changed.
+
+**What applying does.** Only the books the owner approves lose the series
+link and their number in it. Each change can be undone. Those books are then
+searched again for suggestions; nothing is applied automatically. The empty
+series entries are kept so the undo still works. It has not been run on the
+live library yet.
