@@ -22,9 +22,11 @@ import (
 
 // Review follow-ups to #3771 / #3772 (trash progress carry).
 
-// fileRowAfterFirstReadStore adds a book_file row to bookID right after the
-// first read of it: a file row landing between DiscardProgressAndPurge's
-// up-front checks and the merge lock.
+// fileRowAfterFirstReadStore adds a book_file row to bookID on the second
+// read of it: DiscardProgressAndPurge reads the book (1), checks its file
+// rows up front, then summarizes its progress (TrashProgress reads it again,
+// 2) before taking the merge lock. So the row lands after the up-front
+// check and before the precheck under the lock.
 type fileRowAfterFirstReadStore struct {
 	*database.PebbleStore
 	t      *testing.T
@@ -40,9 +42,9 @@ func (s *fileRowAfterFirstReadStore) GetBookByID(id string) (*database.Book, err
 	}
 	s.mu.Lock()
 	s.reads++
-	first := s.reads == 1
+	add := s.reads == 2
 	s.mu.Unlock()
-	if first {
+	if add {
 		require.NoError(s.t, s.PebbleStore.CreateBookFile(&database.BookFile{BookID: id, FilePath: "/x/" + id + ".m4b", Format: "m4b"}))
 	}
 	return b, err
