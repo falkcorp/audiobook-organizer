@@ -13,7 +13,7 @@
     sides have one. The disk stats run on a bounded pool of 8.
   - Ambiguous owners, hash disagreements, split owners, a present book
     path, an unsafe scope folder or a stat error are held. Leftovers with
-    no match (`no_match`) and iTunes books (`itunes`) are their own
+    no match (`no-match`) and iTunes books (`itunes`) are their own
     never-applicable classes. Doctor Who / Big Finish / Torchwood are held
     by the framework guard.
   - Apply re-plans under the merge lock (with a fresh walk of the scope
