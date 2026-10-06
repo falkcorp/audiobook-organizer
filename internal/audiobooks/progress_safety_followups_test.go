@@ -318,3 +318,43 @@ func TestPurgeDeleteRow_ITunesRemovesSpareSharedPIDAndFollowTheDelete(t *testing
 	require.Empty(t, enq.pids, "a delete that failed queued no iTunes remove")
 	require.False(t, bookGone(t, store, "solo"))
 }
+
+// G7: a soft delete does not queue the iTunes remove of a legacy PID a live
+// copy of the book still carries; the book's own unshared PID is queued.
+func TestSoftDelete_ITunesRemoveSparesSharedPID(t *testing.T) {
+	svc, store, _ := setupPurgeBoundary(t)
+	enq := &fakeITunesEnqueuer{}
+	svc.SetITunesEnqueuer(enq)
+	gid := "g1"
+	shared, own := "SHAREDPID0000003", "OWNPID0000000004"
+	_, err := store.CreateBook(&database.Book{ID: "keep", Title: "k", Format: "m4b", VersionGroupID: &gid,
+		IsPrimaryVersion: new(true), LibraryState: new("organized"), ITunesPersistentID: &shared})
+	require.NoError(t, err)
+	_, err = store.CreateBook(&database.Book{ID: "copy", Title: "c", Format: "m4b", VersionGroupID: &gid,
+		IsPrimaryVersion: new(false), LibraryState: new("imported"), ITunesPersistentID: &shared})
+	require.NoError(t, err)
+	_, err = store.CreateBook(&database.Book{ID: "solo", Title: "s", Format: "m4b", ITunesPersistentID: &own})
+	require.NoError(t, err)
+
+	_, err = svc.DeleteAudiobook(context.Background(), "copy", &DeleteAudiobookOptions{SoftDelete: true})
+	require.NoError(t, err)
+	require.Empty(t, enq.pids, "the live copy's iTunes track stays")
+	_, err = svc.DeleteAudiobook(context.Background(), "solo", &DeleteAudiobookOptions{SoftDelete: true})
+	require.NoError(t, err)
+	require.Equal(t, []string{own}, enq.pids)
+}
+
+// A: "Purge now" with block_hash still blocks the hash once the book is gone.
+func TestPurgeNow_BlockHashHonoured(t *testing.T) {
+	svc, store, _ := setupPurgeBoundary(t)
+	softDeleted(t, store, "gone", "")
+	hash := "h-gone"
+	_, err := store.ModifyBook("gone", func(b *database.Book) error { b.FileHash = &hash; return nil })
+	require.NoError(t, err)
+	res, err := svc.DeleteAudiobook(context.Background(), "gone", &DeleteAudiobookOptions{BlockHash: true})
+	require.NoError(t, err)
+	require.Equal(t, true, res["blocked"])
+	blocked, err := store.IsHashBlocked(hash)
+	require.NoError(t, err)
+	require.True(t, blocked)
+}

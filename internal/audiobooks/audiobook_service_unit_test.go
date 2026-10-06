@@ -102,6 +102,10 @@ func TestAudiobookService_DeleteAudiobook_SoftDelete_EnqueuesITunesRemoves(t *te
 	mockStore.EXPECT().GetBookFiles("sd-itl").Return([]database.BookFile{
 		{ID: "f1", ITunesPersistentID: pid},
 	}, nil)
+	// The PID is the book's own file's and mapped to no other book, so its
+	// iTunes remove is queued (itunesPIDsToRemove).
+	mockStore.EXPECT().GetBookFileByPID(pid).Return(&database.BookFile{ID: "f1", BookID: "sd-itl", ITunesPersistentID: pid}, nil).Maybe()
+	mockStore.EXPECT().GetBookByExternalID("itunes", pid).Return("sd-itl", nil).Maybe()
 
 	_, err := svc.DeleteAudiobook(context.Background(), "sd-itl", &DeleteAudiobookOptions{SoftDelete: true})
 	assert.NoError(t, err)

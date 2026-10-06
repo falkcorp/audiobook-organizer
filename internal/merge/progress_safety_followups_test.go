@@ -353,3 +353,34 @@ func TestDiscardUserState_BookmarkOnly(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, marks)
 }
+
+// B: a bookmark under an alias of the book's id (an earlier merge loser
+// whose bookmarks were never copied) is reachable only through this book,
+// so the book holds it as state; a carry copies it and the book is free.
+func TestUserStateProbe_AliasBookmarkIsOwedThenCarried(t *testing.T) {
+	s := setupTestStore(t).(*database.PebbleStore)
+	keep, survivor := seedSyncBooks(t, s)
+	oldLoser, _ := seedSyncBooks(t, s)
+	u := seedSyncUser(t, s)
+	ids := database.AsSyncIdentityStore(s)
+	loserSync, err := ids.MintOrGetSyncID(oldLoser)
+	require.NoError(t, err)
+	_, err = ids.MintOrGetSyncID(survivor)
+	require.NoError(t, err)
+	require.NoError(t, s.CreateBookmark(progress.Bookmark{UserID: u.ID, ItemID: loserSync, TimeSec: 77, Title: "old"}))
+	require.NoError(t, ids.RecordSyncMerge(oldLoser, survivor)) // pre-copy merge: no bookmark copy
+
+	has, err := BookHasCarryableUserState(s, survivor)
+	require.NoError(t, err)
+	require.True(t, has, "the alias's uncopied bookmark is state of the survivor")
+
+	require.NoError(t, CarryStateBeforeHardDelete(s, keep, survivor))
+	keepSync, _, err := ids.GetSyncIDForBook(keep)
+	require.NoError(t, err)
+	marks, err := s.ListBookmarks(u.ID, keepSync)
+	require.NoError(t, err)
+	require.Len(t, marks, 1)
+	has, err = BookHasCarryableUserState(s, survivor)
+	require.NoError(t, err)
+	require.False(t, has)
+}
