@@ -1,5 +1,5 @@
 // file: internal/metadata/folder_parser_legacy.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 533e69bc-e80c-4ec1-9f90-065dca107c40
 // last-edited: 2026-10-05
 //
@@ -22,7 +22,10 @@ import (
 // LegacyFolderParse returns what ExtractMetadataFromFolder returned for
 // dirPath before 2026-10-05.
 func LegacyFolderParse(dirPath string) *FolderMetadata {
-	fm, _ := legacyExtractMetadataFromFolder(dirPath)
+	fm, err := legacyExtractMetadataFromFolder(dirPath)
+	if err != nil || fm == nil {
+		return &FolderMetadata{}
+	}
 	return fm
 }
 
@@ -147,8 +150,11 @@ func legacyParseSeriesTitleSegment(seg string, fm *FolderMetadata) {
 	if m := reSeriesPrefix.FindStringSubmatchIndex(seg); m != nil {
 		rawSeries := strings.TrimSpace(seg[m[2]:m[3]])
 		rawPos := strings.TrimSpace(seg[m[4]:m[5]])
-		pos, _ := strconv.Atoi(strings.Split(rawPos, ".")[0]) // handle "05.1" -> 5
-		titlePart := strings.TrimSpace(seg[m[1]:])            // everything after the "(…)" prefix
+		pos, err := strconv.Atoi(strings.Split(rawPos, ".")[0]) // handle "05.1" -> 5
+		if err != nil {
+			pos = 0 // what the discarded error left before the freeze
+		}
+		titlePart := strings.TrimSpace(seg[m[1]:]) // everything after the "(…)" prefix
 
 		// Title may repeat the series prefix; strip it.
 		if strings.HasPrefix(strings.ToLower(titlePart), strings.ToLower(rawSeries)) {
