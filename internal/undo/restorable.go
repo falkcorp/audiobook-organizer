@@ -1,7 +1,7 @@
 // file: internal/undo/restorable.go
-// version: 1.26.0
+// version: 1.27.0
 // guid: 6c1f0e9a-4b27-4d3e-9a58-e2b7c41d0f93
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package undo
 
@@ -323,6 +323,11 @@ var revertableBookFields = map[string]string{
 	// dangling id it cleared or repointed). The restored id must still name a
 	// series row: see CheckRestoreReferent.
 	"series_id": "SeriesID",
+	// Written by maintenance.author-named-series with series_id when it
+	// unlinks a book from a series named after its author: the position goes
+	// with the link, and a revert that restored the link alone would leave
+	// the book unnumbered in its series.
+	"series_sequence": "SeriesSequence",
 }
 
 // IsRevertableBookField reports whether a metadata_update row for field names

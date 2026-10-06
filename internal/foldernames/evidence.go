@@ -1,5 +1,5 @@
 // file: internal/foldernames/evidence.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b940fbc0-ee6b-4be2-a4a8-26683848e423
 // last-edited: 2026-10-06
 
@@ -12,6 +12,7 @@ package foldernames
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 
@@ -220,32 +221,122 @@ func IsRealSeries(store PointStore, name string) bool {
 	return err == nil && real
 }
 
-// seriesRowIsEvidence reports whether series row r is real-series evidence
-// when authorIDs are the author rows sharing its name (IsKnownSeries lists
-// the rules).
-func seriesRowIsEvidence(store SeriesBooks, r database.Series, authorIDs map[int]bool) (bool, error) {
+// SeriesRowVerdict is what a series row sharing an author row's name is,
+// judged on its books (Snapshot.IsKnownSeries lists the rules). It is the one
+// rule for "this series is really just the author's name": the folder parse
+// reads it as evidence, and maintenance.author-named-series repairs the books
+// of the junk rows.
+type SeriesRowVerdict int
+
+const (
+	// SeriesRowEmpty: the row holds no books; no evidence either way.
+	SeriesRowEmpty SeriesRowVerdict = iota
+	// SeriesRowReal: a book is credited to someone other than the same-named
+	// author rows (or to no one); a real series ("Star Wars").
+	SeriesRowReal
+	// SeriesRowAuthorJunk: every book is credited to a same-named author, and
+	// such an author has books outside the row; the series is the author's
+	// name split off a title ("Brandon Sanderson").
+	SeriesRowAuthorJunk
+	// SeriesRowAuthorRowJunk: every book is credited to a same-named author
+	// with no books elsewhere; the AUTHOR row is the junk side ("Rogue
+	// Merchant") and the series stands.
+	SeriesRowAuthorRowJunk
+)
+
+// String names the verdict for row classes and logs.
+func (v SeriesRowVerdict) String() string {
+	switch v {
+	case SeriesRowReal:
+		return "real_series"
+	case SeriesRowAuthorJunk:
+		return "author_named_series"
+	case SeriesRowAuthorRowJunk:
+		return "author_row_junk"
+	}
+	return "empty_series"
+}
+
+// JudgeSeriesRow reads series row r's books and judges r against authorIDs,
+// the author rows sharing its name.
+func JudgeSeriesRow(store SeriesBooks, r database.Series, authorIDs map[int]bool) (SeriesRowVerdict, error) {
 	books, err := store.GetBooksBySeriesIDCore(r.ID)
 	if err != nil {
-		return false, fmt.Errorf("foldernames: books of series %d: %w", r.ID, err)
+		return SeriesRowEmpty, fmt.Errorf("foldernames: books of series %d: %w", r.ID, err)
 	}
+	return JudgeSeriesBooks(store, r.ID, books, authorIDs)
+}
+
+// JudgeSeriesBooks is JudgeSeriesRow for a caller that already holds the
+// row's books.
+func JudgeSeriesBooks(store SeriesBooks, seriesID int, books []database.BookCore, authorIDs map[int]bool) (SeriesRowVerdict, error) {
 	if len(books) == 0 {
-		return false, nil
+		return SeriesRowEmpty, nil
 	}
 	if creditsSomeoneElse(books, authorIDs) {
-		return true, nil
+		return SeriesRowReal, nil
 	}
 	for id := range authorIDs {
 		authored, err := store.GetBooksByAuthorIDCore(id)
 		if err != nil {
-			return false, fmt.Errorf("foldernames: books of author %d: %w", id, err)
+			return SeriesRowEmpty, fmt.Errorf("foldernames: books of author %d: %w", id, err)
 		}
 		for _, b := range authored {
-			if b.SeriesID == nil || *b.SeriesID != r.ID {
-				return false, nil
+			if b.SeriesID == nil || *b.SeriesID != seriesID {
+				return SeriesRowAuthorJunk, nil
 			}
 		}
 	}
-	return true, nil
+	return SeriesRowAuthorRowJunk, nil
+}
+
+// seriesRowIsEvidence reports whether series row r is real-series evidence
+// when authorIDs are the author rows sharing its name: a real series, or a
+// series whose same-named author row is the junk side.
+func seriesRowIsEvidence(store SeriesBooks, r database.Series, authorIDs map[int]bool) (bool, error) {
+	v, err := JudgeSeriesRow(store, r, authorIDs)
+	if err != nil {
+		return false, err
+	}
+	return v == SeriesRowReal || v == SeriesRowAuthorRowJunk, nil
+}
+
+// AuthorNamedSeries returns every series row whose name letters-equals an
+// author row's, each with the ids of the author rows carrying that name.
+func (s *Snapshot) AuthorNamedSeries() []AuthorNamedSeries {
+	if s == nil {
+		return nil
+	}
+	var out []AuthorNamedSeries
+	for k, rows := range s.series {
+		ids := s.authorIDs[k]
+		if len(ids) == 0 {
+			continue
+		}
+		for _, r := range rows {
+			cp := make(map[int]bool, len(ids))
+			for id := range ids {
+				cp[id] = true
+			}
+			out = append(out, AuthorNamedSeries{Series: r, AuthorIDs: cp})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Series.ID < out[j].Series.ID })
+	return out
+}
+
+// AuthorNamedSeries is one series row sharing an author row's name, with the
+// ids of every author row carrying that name.
+type AuthorNamedSeries struct {
+	Series    database.Series
+	AuthorIDs map[int]bool
+}
+
+// SameName reports whether a and b letters-equal (the key the snapshot
+// matches series and author names by).
+func SameName(a, b string) bool {
+	ka := key(a)
+	return ka != "" && ka == key(b)
 }
 
 // creditsSomeoneElse reports whether any of books is credited to an author

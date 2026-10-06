@@ -1,7 +1,7 @@
 // file: internal/repairs/engine.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 9b3e7f40-2d15-4a86-9c1f-6e0a4d8b7c25
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package repairs
 
@@ -367,7 +367,12 @@ type ApplyResult struct {
 	// (book_file steps and credit writes alike); the op revert replays them.
 	JournalRows int `json:"journal_rows,omitempty"`
 	// StandDownHeld: the library-scan stand-down was held for the writes.
-	StandDownHeld bool        `json:"standdown_held"`
+	StandDownHeld bool `json:"standdown_held"`
+	// FollowUp is what an AfterApplier fixer started for the applied books
+	// (an operation id); FollowUpError is why it could not. Neither changes
+	// any row's outcome: the writes were already made.
+	FollowUp      string      `json:"follow_up,omitempty"`
+	FollowUpError string      `json:"follow_up_error,omitempty"`
 	Aborted       string      `json:"aborted,omitempty"`
 	Rows          []RowResult `json:"rows"`
 }
@@ -591,6 +596,9 @@ func RunApply(ctx context.Context, f Fixer, plan *PlanResult, planOpID string, r
 			res.Failed++
 		}
 	}
+	if !dryRun && res.Applied > 0 {
+		runAfterApply(ctx, f, byID, results, res, reporter)
+	}
 	if deps.Writer != nil {
 		res.BookWrites = deps.Writer.Writes()
 		res.HistoryRows = deps.Writer.HistoryRows()
@@ -693,6 +701,52 @@ func applyOne(ctx context.Context, f Fixer, params json.RawMessage, planned Row,
 	}
 	out.Outcome = OutcomeApplied
 	return out
+}
+
+// AfterApplier is implemented by a fixer with follow-up work for the books
+// its applied rows wrote (maintenance.author-named-series enqueues one
+// metadata candidate fetch for them). RunApply calls it once per write run,
+// after every row has settled and outside the per-row writes, so the work it
+// starts never runs under the scan stand-down. bookIDs are the books of the
+// rows whose outcome is applied, sorted and unique. It returns what it
+// started (an operation id) for the apply result.
+type AfterApplier interface {
+	AfterApply(ctx context.Context, bookIDs []string) (string, error)
+}
+
+// runAfterApply hands an AfterApplier fixer the books of the applied rows. A
+// failure is recorded on the result and logged; it fails no row.
+func runAfterApply(ctx context.Context, f Fixer, byID map[string]*Row, results []RowResult, res *ApplyResult, reporter registry.Reporter) {
+	aa, ok := f.(AfterApplier)
+	if !ok {
+		return
+	}
+	seen := map[string]bool{}
+	var ids []string
+	for _, r := range results {
+		row := byID[r.RowID]
+		if r.Outcome != OutcomeApplied || row == nil {
+			continue
+		}
+		for _, id := range row.BookIDs {
+			if !seen[id] {
+				seen[id] = true
+				ids = append(ids, id)
+			}
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	sort.Strings(ids)
+	followUp, err := aa.AfterApply(ctx, ids)
+	res.FollowUp = followUp
+	if err != nil {
+		res.FollowUpError = err.Error()
+		if reporter != nil {
+			_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("repairs.apply %s: follow-up for %d applied books not started: %v", f.ID(), len(ids), err))
+		}
+	}
 }
 
 // changedWhy is why a re-planned row no longer matches its plan: its skip
