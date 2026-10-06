@@ -1,5 +1,5 @@
 // file: internal/audiobooks/trash_progress.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 98f1136e-e723-43fd-9d77-fab344a4aa45
 // last-edited: 2026-10-05
 
@@ -9,13 +9,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 
@@ -25,6 +25,8 @@ import (
 // sibling and then purges it (PurgeSoftDeletedBooks). With no live sibling it
 // keeps the book; the trash listing flags it (TrashProgress) and the owner
 // can restore it or drop its progress with it (DiscardProgressAndPurge).
+
+var trashLog = logger.New("audiobooks.trash")
 
 // purgeKind is what happened to one book in a purge pass.
 type purgeKind int
@@ -190,7 +192,7 @@ func (svc *AudiobookService) TrashProgress(ctx context.Context, bookIDs []string
 		}
 		has, err := probe.Has(id)
 		if err != nil {
-			slog.Warn("trash listing: cannot read listening state", "book_id", id, "err", err)
+			trashLog.Warn("trash listing: cannot read listening state on %s: %s", logger.SanitizeLogValue(id), logger.SanitizeLogValue(err.Error()))
 			out[id] = TrashProgressInfo{Unknown: true}
 			continue
 		}
@@ -200,7 +202,7 @@ func (svc *AudiobookService) TrashProgress(ctx context.Context, bookIDs []string
 		}
 		summary, err := svc.progressSummary(users, id)
 		if err != nil {
-			slog.Warn("trash listing: cannot summarize listening state", "book_id", id, "err", err)
+			trashLog.Warn("trash listing: cannot summarize listening state on %s: %s", logger.SanitizeLogValue(id), logger.SanitizeLogValue(err.Error()))
 		}
 		out[id] = TrashProgressInfo{HasProgress: true, Summary: summary}
 	}
@@ -419,7 +421,7 @@ func (svc *AudiobookService) DiscardProgressAndPurge(ctx context.Context, id, ac
 			"files_deleted":     res.FilesDeleted,
 		},
 	}); aerr != nil {
-		slog.Error("discard progress and purge: audit row not written", "book_id", id, "err", aerr)
+		trashLog.Error("discard progress and purge: audit row not written for %s: %s", logger.SanitizeLogValue(id), logger.SanitizeLogValue(aerr.Error()))
 		res.Warnings = append(res.Warnings, fmt.Sprintf("the book was purged, but the activity log row was not written: %v", aerr))
 	}
 	return res, nil
