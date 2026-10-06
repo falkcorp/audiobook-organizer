@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/consolidation_leftovers_fixer.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 6df37df9-b008-41ad-bd69-47b00e4cb50c
 // last-edited: 2026-10-06
 
@@ -1012,7 +1012,7 @@ func (f *consolidationLeftoversFixer) Plan(ctx context.Context, _ json.RawMessag
 	}
 	src.same = func(size int64, _ string) ([]database.BookFileCore, error) { return idx[size], nil }
 	atPath := leftoverPathOwners(books, rowsOf)
-	src.owners = func(p string) ([]string, error) { return atPath[p], nil }
+	src.owners = func(p string) ([]string, error) { return append([]string(nil), atPath[p]...), nil }
 	// The cheap filters first: live, 1..leftoverMaxFiles rows, one unmarked.
 	var cands []string
 	for id, b := range books {
