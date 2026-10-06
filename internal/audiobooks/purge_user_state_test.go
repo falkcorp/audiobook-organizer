@@ -1,12 +1,15 @@
 // file: internal/audiobooks/purge_user_state_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7b9a844a-321a-4f77-9487-2f6311409ef2
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package audiobooks
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -73,4 +76,98 @@ func TestPurge_MergedLoserWithMovedStateStillPurges(t *testing.T) {
 	moved, err := store.GetUserBookState(u.ID, keep.ID)
 	require.NoError(t, err)
 	require.Equal(t, 40, moved.ProgressPct)
+}
+
+// purgeSyncGraphFault returns a chosen error from ListSyncAliases or
+// ResolveSyncItem (the alias cap is unexported in package database).
+type purgeSyncGraphFault struct {
+	*database.PebbleStore
+	resolveErr error
+	aliasErr   error
+}
+
+func (s *purgeSyncGraphFault) ResolveSyncItem(syncID string) (*database.SyncItem, error) {
+	if s.resolveErr != nil {
+		return nil, s.resolveErr
+	}
+	return s.PebbleStore.ResolveSyncItem(syncID)
+}
+
+func (s *purgeSyncGraphFault) ListSyncAliases(syncID string) ([]string, error) {
+	if s.aliasErr != nil {
+		return nil, s.aliasErr
+	}
+	return s.PebbleStore.ListSyncAliases(syncID)
+}
+
+// Item 4 (#3777 review): a book whose bookmark check fails for a PERMANENT
+// sync-graph reason (a broken redirect chain, an alias graph over the cap)
+// is refused on every run; the purge says which, instead of the generic
+// "cannot read users' listening state", which reads like a transient error.
+func TestPurge_PermanentBookmarkCheckFailuresHaveDistinctReasons(t *testing.T) {
+	const (
+		brokenReason  = "redirect chain is broken"
+		aliasReason   = "more merged aliases than the alias cap"
+		genericReason = "cannot read users' listening state on it"
+	)
+	purgeErrFor := func(t *testing.T, res *PurgeResult, id string) string {
+		t.Helper()
+		require.Zero(t, res.Purged, "%+v", res)
+		for _, e := range res.Errors {
+			if strings.HasPrefix(e, id+": not purged: ") {
+				return e
+			}
+		}
+		t.Fatalf("no refusal reported for %s: %q", id, res.Errors)
+		return ""
+	}
+
+	t.Run("broken redirect chain (real dangling redirect)", func(t *testing.T) {
+		svc, store, _ := setupPurgeBoundary(t)
+		softDeleted(t, store, "loser", "")
+		ids := database.AsSyncIdentityStore(store)
+		_, err := ids.MintOrGetSyncID("loser")
+		require.NoError(t, err)
+		require.NoError(t, store.RecordSyncMerge("loser", "winner"))
+		winnerSync, _, err := store.GetSyncIDForBook("winner")
+		require.NoError(t, err)
+		require.NoError(t, store.DeleteRaw("sync_item:"+winnerSync))
+
+		res, err := svc.PurgeSoftDeletedBooks(context.Background(), false, nil)
+		require.NoError(t, err)
+		msg := purgeErrFor(t, res, "loser")
+		require.Contains(t, msg, brokenReason)
+		require.NotContains(t, msg, genericReason)
+		b, err := store.GetBookByID("loser")
+		require.NoError(t, err)
+		require.NotNil(t, b, "fail closed: the book is kept")
+	})
+	t.Run("alias graph over the cap", func(t *testing.T) {
+		_, store, _ := setupPurgeBoundary(t)
+		softDeleted(t, store, "aliased", "")
+		_, err := database.AsSyncIdentityStore(store).MintOrGetSyncID("aliased")
+		require.NoError(t, err)
+		fs := &purgeSyncGraphFault{PebbleStore: store, aliasErr: fmt.Errorf("%w: starting at x", database.ErrSyncAliasLimit)}
+
+		res, err := NewAudiobookService(fs).PurgeSoftDeletedBooks(context.Background(), false, nil)
+		require.NoError(t, err)
+		msg := purgeErrFor(t, res, "aliased")
+		require.Contains(t, msg, aliasReason)
+		require.NotContains(t, msg, genericReason)
+		require.NotContains(t, msg, brokenReason)
+	})
+	t.Run("ordinary read error keeps the generic reason", func(t *testing.T) {
+		_, store, _ := setupPurgeBoundary(t)
+		softDeleted(t, store, "io", "")
+		_, err := database.AsSyncIdentityStore(store).MintOrGetSyncID("io")
+		require.NoError(t, err)
+		fs := &purgeSyncGraphFault{PebbleStore: store, resolveErr: errors.New("injected read error")}
+
+		res, err := NewAudiobookService(fs).PurgeSoftDeletedBooks(context.Background(), false, nil)
+		require.NoError(t, err)
+		msg := purgeErrFor(t, res, "io")
+		require.Contains(t, msg, genericReason)
+		require.NotContains(t, msg, brokenReason)
+		require.NotContains(t, msg, aliasReason)
+	})
 }
