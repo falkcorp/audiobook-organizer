@@ -605,8 +605,12 @@ func TestLeftoversSamePath_HandOffNeverWritesAnITunesMember(t *testing.T) {
 	require.NotNil(t, ob.IsPrimaryVersion)
 	require.True(t, *ob.IsPrimaryVersion)
 
-	// Restore the copy's explicit false (a user's fix) so the group the
-	// revert judges has one real primary candidate besides the leftover.
+	// The copy is set back to explicit false before the revert because the
+	// revert path is NOT guarded against iTunes writes: left nil, the
+	// settle's fallback (EnsureSinglePrimary, with no MayWrite) would
+	// demote it -- a known gap, outside this hand-off's guard. With it
+	// false, the revert must still leave the owner primary (the refusal
+	// note says the op wrote no member's flag).
 	_, err = f.s.ModifyBook(it, func(b *database.Book) error { b.IsPrimaryVersion = &no; return nil })
 	require.NoError(t, err)
 	rr, err := audiobooks.NewRevertService(f.s).RevertOperation("op-apply")

@@ -38,7 +38,9 @@ import (
 //     un-tombstoned iTunes id refuses the row instead;
 //  3. a primary retired book is demoted (book_primary_demote, OldValue "true"
 //     for an unset flag too, so the revert crowns it back and the group's
-//     hand-off is undone with it);
+//     hand-off is undone with it -- unless the hand-off's note shows another
+//     member's true predates the op, which the book then yields to; see
+//     retireHandOff);
 //  4. one write sets merged_into_book_id (book_merged_into), CLEARS
 //     file_path (book_path_update: the path is now a file target owns, and
 //     the purge deletes a purged book's file_path) and soft-deletes it
@@ -391,10 +393,13 @@ func followUserStateInto(p *Plugin, w *repairs.Writer, target, id string, slice 
 // retireHandOff gives a retired book's version group a primary again, as
 // fs-regroup-xml's retire does. The demote was journaled with OldValue
 // "true", so its revert crowns the retired book (versionprimary.Crown) and
-// demotes whichever sibling this hand-off promoted. Once the hand-off
-// succeeded it is journaled (undo.ChangeTypeBookPrimaryHandoff): that row is
-// the revert's evidence the group's flags were changed, the only case in
-// which it re-crowns over an already-restored demote.
+// demotes whichever sibling this hand-off promoted -- but never a member
+// whose true the hand-off did not write (a kept incumbent, or any member of
+// a refused hand-off): the retired book yields to it instead
+// (audiobooks.settleGroup's laterPick). Once the hand-off succeeded it is
+// journaled (undo.ChangeTypeBookPrimaryHandoff): that row is the revert's
+// evidence the group's flags were changed, the only case in which it
+// re-crowns over an already-restored demote.
 //
 // A failed hand-off (EnsureSinglePrimary's error) is RETURNED, and the row
 // stops: the book is demoted and retired with its group owed a primary.
