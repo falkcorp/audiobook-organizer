@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/FolderFilesChip.tsx
-// version: 1.1.1
+// version: 1.2.0
 // guid: 4a1c8e92-6d35-4b70-9f28-1e7a5c3d2b69
-// last-edited: 2026-09-01
+// last-edited: 2026-10-06
 
 // FolderFilesChip shows a small "Files" chip on a dedup candidate card. Clicking
 // it opens a popover that lazily fetches the book's file list (getBookFiles) and
@@ -78,7 +78,11 @@ export function FolderFilesChip({ bookId, label = 'Files' }: FolderFilesChipProp
       setError(null);
       try {
         const ctrl = new AbortController();
-        const res = await getBookFiles(bookId, { signal: ctrl.signal });
+        const res = await getBookFiles(bookId, {
+          signal: ctrl.signal,
+          // Colours rows by the stored `missing` flag only; skip the per-file stat.
+          skipDiskCheck: true,
+        });
         setFiles(res.files || []);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load files');

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_backfill.go
-// version: 2.9.0
+// version: 2.10.0
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 // Package maintenance — op maintenance.duration-reextract.
 //
@@ -79,6 +79,7 @@ import (
 	"math"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -199,12 +200,35 @@ func extractWithTimeout(ctx context.Context, filePath string) (*mediainfo.MediaI
 // goes here rather than into the operation log, which carries the counts.
 var durLog = logger.New("maintenance")
 
+// readWarnLimit is how many per-file read-error warnings one run logs. A
+// failing disk can make every remaining file unreadable; past this the
+// counts in the summary line carry the rest, and one line says how many
+// warnings were suppressed.
+const readWarnLimit = 20
+
+// readWarnLimiter caps per-file read-error warnings for one run. It is
+// shared by every worker goroutine, hence atomic.
+type readWarnLimiter struct{ n atomic.Int64 }
+
+// allow reports whether this warning should be logged, and counts it.
+func (l *readWarnLimiter) allow() bool {
+	return l == nil || l.n.Add(1) <= readWarnLimit
+}
+
+// suppressed is how many warnings allow() refused.
+func (l *readWarnLimiter) suppressed() int64 {
+	if l == nil {
+		return 0
+	}
+	return max(0, l.n.Load()-readWarnLimit)
+}
+
 // recordReadFailure classifies one unreadable file into res — missing on
 // disk (fs.ErrNotExist) or any other read error — keeps the first path of
 // each kind as the example, and logs it: missing files at debug (on a
 // library with many stale rows they are the common case and would drown the
-// log), every other failure at warn.
-func recordReadFailure(res *bookProcessResult, path string, mErr error) {
+// log), every other failure at warn, capped per run by warns.
+func recordReadFailure(res *bookProcessResult, path string, mErr error, warns *readWarnLimiter) {
 	if mErr != nil && errors.Is(mErr, fs.ErrNotExist) {
 		res.missingOnDisk++
 		if res.missingExample == "" {
@@ -221,6 +245,9 @@ func recordReadFailure(res *bookProcessResult, path string, mErr error) {
 	res.readErrs++
 	if res.readErrExample == "" {
 		res.readErrExample = path
+	}
+	if !warns.allow() {
+		return
 	}
 	durLog.Warn("duration-backfill: book %s: cannot read %s: %s",
 		logger.SanitizeLogValue(res.book.ID), logger.SanitizeLogValue(path), logger.SanitizeLogValue(reason))
@@ -328,14 +355,17 @@ type bookProcessResult struct {
 // be written. It never writes to the store. skipBefore is the age threshold:
 // books verified after skipBefore are returned with recentlyVerified=true.
 func processBookForReextract(ctx context.Context, store bookFileLister, book database.Book, skipBefore time.Time) bookProcessResult {
-	return processBookForReextractMode(ctx, store, book, skipBefore, false)
+	return processBookForReextractMode(ctx, store, book, skipBefore, false, &readWarnLimiter{})
 }
 
 // processBookForReextractMode is processBookForReextract with the ZeroRowsOnly
 // scope: only rows stored as <= 0 become writes, the total alone never does,
 // and a book is filled in its counted rows only: copies are left alone (see
 // durationReextractParams.ZeroRowsOnly).
-func processBookForReextractMode(ctx context.Context, store bookFileLister, book database.Book, skipBefore time.Time, zeroRows bool) bookProcessResult {
+//
+// warns caps per-file read-error warnings across the run; one limiter is
+// shared by every worker.
+func processBookForReextractMode(ctx context.Context, store bookFileLister, book database.Book, skipBefore time.Time, zeroRows bool, warns *readWarnLimiter) bookProcessResult {
 	res := bookProcessResult{book: book}
 	if !skipBefore.IsZero() && book.DurationVerifiedAt != nil && book.DurationVerifiedAt.After(skipBefore) {
 		res.recentlyVerified = true
@@ -422,7 +452,7 @@ func processBookForReextractMode(ctx context.Context, store bookFileLister, book
 					// why books with one good file and one phantom row read "0m".
 					// Record it and keep going: the readable segments still get their
 					// own correct durations, and the incomplete total is withheld.
-					recordReadFailure(&res, f.FilePath, mErr)
+					recordReadFailure(&res, f.FilePath, mErr, warns)
 					res.unresolved++
 					continue
 				case info.DurationEstimated:
@@ -462,7 +492,7 @@ func processBookForReextractMode(ctx context.Context, store bookFileLister, book
 		}
 		info, mErr := extractWithTimeout(ctx, book.FilePath)
 		if mErr != nil || info == nil || info.Duration <= 0 {
-			recordReadFailure(&res, book.FilePath, mErr)
+			recordReadFailure(&res, book.FilePath, mErr, warns)
 			return res
 		}
 		if info.DurationEstimated {
@@ -646,12 +676,13 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 	jobCh := make(chan database.Book, params.Workers*2)
 	resultCh := make(chan bookProcessResult, params.Workers*2)
 
-	// Start worker pool.
+	// Start worker pool. warns is shared by every worker (atomic).
+	warns := &readWarnLimiter{}
 	var wg sync.WaitGroup
 	for i := 0; i < params.Workers; i++ {
 		wg.Go(func() {
 			for book := range jobCh {
-				res := processBookForReextractMode(ctx, store, book, skipBefore, zeroRows)
+				res := processBookForReextractMode(ctx, store, book, skipBefore, zeroRows, warns)
 				select {
 				case resultCh <- res:
 				case <-ctx.Done():
@@ -908,6 +939,11 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 	// Wait for producer and surface any non-limit error.
 	if err := <-producerErr; err != nil && err != errLimitReached {
 		return fmt.Errorf("book scan: %w", err)
+	}
+
+	if n := warns.suppressed(); n > 0 {
+		durLog.Warn("duration-backfill: %d further per-file read-error warnings suppressed after the first %d; see read-errors in the summary",
+			n, readWarnLimit)
 	}
 
 	verb := "would correct"

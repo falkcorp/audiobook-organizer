@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_files.go
-// version: 1.8.1
+// version: 1.9.0
 // guid: 82f8d1f7-46d5-4ead-b5c1-ba796fd785f9
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 // File / segment endpoints for the audiobooks domain: segment listing,
 // book-file listing + patch, track-info extraction, relocate, and segment
@@ -20,6 +20,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -56,37 +58,127 @@ func relocateTargetAllowed(store AudiobooksStore, absPath string) bool {
 // files are reported as unknown (file_exists: null) instead of waiting.
 const fileStatTimeout = 3 * time.Second
 
-// fileStatWorkers bounds the stat fan-out per request. Stats are I/O-bound
-// against one filesystem, so a small fixed pool is enough; it is never
-// unbounded over a book with hundreds of segments.
+// fileStatWorkers bounds the stat fan-out per request.
 const fileStatWorkers = 8
+
+// fileStatMaxInFlight bounds stats in flight across the WHOLE process. A
+// goroutine blocked in os.Stat on a hung mount holds an OS thread until the
+// kernel gives up, and the per-request deadline cannot free it; without a
+// process-wide cap, repeated page loads against a hung mount accumulate stuck
+// threads toward Go's 10,000-thread fatal limit. A stat slot is released only
+// when os.Stat actually returns, so this is a hard ceiling on stuck threads.
+// When every slot is taken the stat is not attempted: the path reads unknown.
+const fileStatMaxInFlight = 32
+
+// fileStatBreakerCooldown is how long a root stays tripped after a stat under
+// it outlived the request deadline. While tripped, paths under that root read
+// unknown without being stat'ed, so a hung mount costs one timeout per
+// cooldown instead of one per request.
+const fileStatBreakerCooldown = 60 * time.Second
 
 // fileDiskState is what a live os.Stat said about one book_file path.
 // Exists is nil when the answer is unknown: an empty path, a stat error other
-// than not-exist (permission, I/O), or the deadline passing first. CheckError
-// then says which.
+// than not-exist (permission, I/O), the deadline passing first, the process-
+// wide stat cap being full, or the path's root being tripped. CheckError then
+// says which.
 type fileDiskState struct {
 	Exists     *bool
 	CheckError string
 }
 
-// statFilePaths stats every path with a bounded worker pool under one overall
+// statChecker holds the process-wide stat state: the in-flight semaphore and
+// the per-root circuit breaker. One instance (defaultStatChecker) serves every
+// request; tests build their own.
+type statChecker struct {
+	slots    chan struct{}
+	cooldown time.Duration
+	now      func() time.Time
+
+	mu      sync.Mutex
+	tripped map[string]time.Time // root -> tripped until
+}
+
+func newStatChecker(maxInFlight int, cooldown time.Duration) *statChecker {
+	return &statChecker{
+		slots:    make(chan struct{}, maxInFlight),
+		cooldown: cooldown,
+		now:      time.Now,
+		tripped:  make(map[string]time.Time),
+	}
+}
+
+var defaultStatChecker = newStatChecker(fileStatMaxInFlight, fileStatBreakerCooldown)
+
+// statRoot is the breaker key for a path: its first two components
+// ("/mnt/nas/books/a.m4b" -> "/mnt/nas"). That is the mount-point depth of
+// every library root this app is deployed with (/mnt/<share>, /Volumes/<vol>,
+// /srv/<x>); it is a heuristic, since resolving the real mount would need a
+// stat — the very call that hangs.
+func statRoot(path string) string {
+	clean := filepath.ToSlash(filepath.Clean(path))
+	parts := strings.SplitN(strings.TrimPrefix(clean, "/"), "/", 3)
+	if len(parts) >= 2 {
+		return "/" + parts[0] + "/" + parts[1]
+	}
+	return "/" + parts[0]
+}
+
+func (sc *statChecker) isTripped(root string) bool {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	until, ok := sc.tripped[root]
+	if !ok {
+		return false
+	}
+	if sc.now().After(until) {
+		delete(sc.tripped, root)
+		return false
+	}
+	return true
+}
+
+func (sc *statChecker) trip(root string) {
+	sc.mu.Lock()
+	sc.tripped[root] = sc.now().Add(sc.cooldown)
+	sc.mu.Unlock()
+}
+
+// statOne stats one path unless its root is tripped or the process-wide cap
+// is full. It never blocks waiting for a slot.
+func (sc *statChecker) statOne(path string, stat func(string) (os.FileInfo, error)) fileDiskState {
+	if sc.isTripped(statRoot(path)) {
+		return fileDiskState{CheckError: "disk check suspended: an earlier stat under " + statRoot(path) + " timed out"}
+	}
+	select {
+	case sc.slots <- struct{}{}:
+	default:
+		return fileDiskState{CheckError: "disk check busy: too many stats in flight"}
+	}
+	defer func() { <-sc.slots }()
+	return classifyStat(stat(path))
+}
+
+// statFilePaths stats every path through defaultStatChecker under one overall
 // deadline (fileStatTimeout, or the request context if it ends first). The
 // result is index-aligned with paths and always fully populated.
-//
-// Workers that are blocked inside a hung os.Stat when the deadline passes are
-// left to finish on their own: they send into a buffered channel, so they never
-// block on the send, and they pick up no further work once ctx is done — the
-// leak is bounded by fileStatWorkers per request.
 func statFilePaths(ctx context.Context, paths []string) []fileDiskState {
 	ctx, cancel := context.WithTimeout(ctx, fileStatTimeout)
 	defer cancel()
-	return statFilePathsWith(ctx, paths, os.Stat)
+	return defaultStatChecker.statPaths(ctx, paths, os.Stat)
 }
 
-// statFilePathsWith is statFilePaths with the deadline already on ctx and the
-// stat call injected, so tests can drive a hung or failing filesystem.
-func statFilePathsWith(ctx context.Context, paths []string, stat func(string) (os.FileInfo, error)) []fileDiskState {
+// statPaths is statFilePaths with the deadline already on ctx and the stat
+// call injected, so tests can drive a hung or failing filesystem.
+//
+// Bounds: at most fileStatWorkers goroutines per request, and at most
+// cap(sc.slots) stats in flight process-wide. A worker blocked in a hung stat
+// when the deadline passes is left behind (it cannot be interrupted) but
+// keeps its process-wide slot until the stat returns, so stuck threads never
+// exceed that cap; it sends into a buffered channel, so it never blocks on
+// the send. A path whose stat had STARTED but not returned by the deadline
+// trips its root; a path still queued behind it reads "timed out" without
+// tripping anything, so a merely slow, large book does not suspend a root.
+func (sc *statChecker) statPaths(ctx context.Context, paths []string, stat func(string) (os.FileInfo, error)) []fileDiskState {
 	out := make([]fileDiskState, len(paths))
 	if len(paths) == 0 {
 		return out
@@ -109,6 +201,7 @@ func statFilePathsWith(ctx context.Context, paths []string, stat func(string) (o
 	}
 	close(jobs)
 
+	started := make([]atomic.Bool, len(paths))
 	// Not joined: a worker stuck in a hung stat must not hold the response.
 	for range min(fileStatWorkers, pending) {
 		go func() {
@@ -116,7 +209,8 @@ func statFilePathsWith(ctx context.Context, paths []string, stat func(string) (o
 				if ctx.Err() != nil {
 					return
 				}
-				results <- statResult{idx: i, state: classifyStat(stat(paths[i]))}
+				started[i].Store(true)
+				results <- statResult{idx: i, state: sc.statOne(paths[i], stat)}
 			}
 		}()
 	}
@@ -142,6 +236,9 @@ func statFilePathsWith(ctx context.Context, paths []string, stat func(string) (o
 			for i, p := range paths {
 				if p != "" && !done[i] {
 					out[i] = fileDiskState{CheckError: "disk check timed out"}
+					if started[i].Load() {
+						sc.trip(statRoot(p))
+					}
 				}
 			}
 			return out
@@ -241,8 +338,11 @@ func (h *Handler) ListAudiobookSegments(c *gin.Context) {
 // file_exists is an os.Stat made for this response (null when unknown, with
 // file_check_error saying why); missing is the stored BookFile.Missing flag,
 // which only changes when a scan or repair notices. The stat is affordable here
-// because the endpoint is per book — a bounded worker pool over one book's
-// rows under a short overall deadline — not a library-wide listing.
+// because the endpoint is per book, not a library-wide listing. It is bounded
+// three ways (see statPaths): 8 workers per request under a 3s deadline, a
+// process-wide cap on stats in flight (a full cap reads unknown rather than
+// waiting), and a per-root breaker that stops stat'ing a root for 60s after a
+// stat under it hung past the deadline.
 //
 // ?disk_check=false skips the stat for callers that only need the paths and
 // fetch many books at once (the dedup embedding tab loads files for every

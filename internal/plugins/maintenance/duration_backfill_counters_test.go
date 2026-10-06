@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_backfill_counters_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 01caa381-c1de-491b-b20f-5e348267cd4e
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package maintenance
 
@@ -98,14 +98,38 @@ func TestDurationBackfill_WriteFailureIsWriteError(t *testing.T) {
 // recordReadFailure keeps the FIRST example path of each kind and counts all.
 func TestRecordReadFailure_ClassifiesAndKeepsFirstExample(t *testing.T) {
 	res := bookProcessResult{book: database.Book{ID: "b1"}}
-	recordReadFailure(&res, "/a", &os.PathError{Op: "open", Path: "/a", Err: os.ErrNotExist})
-	recordReadFailure(&res, "/b", &os.PathError{Op: "open", Path: "/b", Err: os.ErrNotExist})
-	recordReadFailure(&res, "/c", os.ErrPermission)
-	recordReadFailure(&res, "/d", nil) // probe returned no duration
+	lim := &readWarnLimiter{}
+	recordReadFailure(&res, "/a", &os.PathError{Op: "open", Path: "/a", Err: os.ErrNotExist}, lim)
+	recordReadFailure(&res, "/b", &os.PathError{Op: "open", Path: "/b", Err: os.ErrNotExist}, lim)
+	recordReadFailure(&res, "/c", os.ErrPermission, lim)
+	recordReadFailure(&res, "/d", nil, lim) // probe returned no duration
 	if res.missingOnDisk != 2 || res.missingExample != "/a" {
 		t.Errorf("missing: got %d/%q, want 2/\"/a\"", res.missingOnDisk, res.missingExample)
 	}
 	if res.readErrs != 2 || res.readErrExample != "/c" {
 		t.Errorf("read errors: got %d/%q, want 2/\"/c\"", res.readErrs, res.readErrExample)
+	}
+}
+
+// Warnings are capped per run but counting is not: every failure past the cap
+// is still counted (and kept out of the log), and the limiter reports how many
+// it refused. Missing-on-disk files log at debug and do not use the cap.
+func TestReadWarnLimiter_CapsWarningsNotCounts(t *testing.T) {
+	res := bookProcessResult{book: database.Book{ID: "b1"}}
+	lim := &readWarnLimiter{}
+	for range readWarnLimit + 5 {
+		recordReadFailure(&res, "/c", os.ErrPermission, lim)
+	}
+	for range 3 {
+		recordReadFailure(&res, "/m", os.ErrNotExist, lim)
+	}
+	if res.readErrs != readWarnLimit+5 {
+		t.Errorf("readErrs = %d, want %d", res.readErrs, readWarnLimit+5)
+	}
+	if res.missingOnDisk != 3 {
+		t.Errorf("missingOnDisk = %d, want 3", res.missingOnDisk)
+	}
+	if got := lim.suppressed(); got != 5 {
+		t.Errorf("suppressed = %d, want 5", got)
 	}
 }
