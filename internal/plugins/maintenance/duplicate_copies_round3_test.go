@@ -54,7 +54,7 @@ func TestDuplicateCopies_IndexIncompleteSaysSo(t *testing.T) {
 	d, a, _ := ubik(t)
 	r := rowOf(t, d.planFor(t, dcFixerID, "op-plan", nil), a)
 	require.True(t, r.Applicable(), r.SkipReason)
-	d.p.deps = scanDeps{fakeDeps: fakeDeps{store: dcNoHashLookup{d.s}, labels: d.labels}, scan: &scriptedScan{renewsLeft: -1}, ops: d.ops}
+	d.p.deps = scanDeps{fakeDeps: fakeDeps{root: d.root, store: dcNoHashLookup{d.s}, labels: d.labels}, scan: &scriptedScan{renewsLeft: -1}, ops: d.ops}
 	re, err := newDuplicateCopiesFixer(d.p).Replan(context.Background(), nil, r, nil)
 	require.NoError(t, err)
 	require.False(t, re.Applicable())
@@ -72,7 +72,7 @@ func TestDuplicateCopies_IndexIncompleteSaysSo(t *testing.T) {
 func (d *dcFixture) dcRealVerdicts(t *testing.T) *database.EmbeddingStore {
 	t.Helper()
 	es := database.NewEmbeddingStore(d.s.DB())
-	d.p.deps = scanDeps{fakeDeps: fakeDeps{store: d.s, labels: es}, scan: &scriptedScan{renewsLeft: -1}, ops: d.ops}
+	d.p.deps = scanDeps{fakeDeps: fakeDeps{root: d.root, store: d.s, labels: es}, scan: &scriptedScan{renewsLeft: -1}, ops: d.ops}
 	return es
 }
 
@@ -251,7 +251,7 @@ func TestDuplicateCopies_BulkApplyReadsTheLibraryOnce(t *testing.T) {
 	l2 := d.copyBook(t, "L2", "Ubik", "lib/Ubik copy",
 		dcRow{track: 1, dur: 600, hash: "u1"}, dcRow{track: 2, dur: 600, hash: "u2"}, dcRow{track: 3, dur: 600, hash: "u3"})
 	var full atomic.Int32
-	d.p.deps = scanDeps{fakeDeps: fakeDeps{store: dcCountingStore{Store: d.s, full: &full}, labels: d.labels}, scan: &scriptedScan{renewsLeft: -1}, ops: d.ops}
+	d.p.deps = scanDeps{fakeDeps: fakeDeps{root: d.root, store: dcCountingStore{Store: d.s, full: &full}, labels: d.labels}, scan: &scriptedScan{renewsLeft: -1}, ops: d.ops}
 	res := d.planFor(t, dcFixerID, "op-plan", nil)
 	a, b := findRow(t, res, dupRowID(s, l)), findRow(t, res, dupRowID(s2, l2))
 	require.True(t, a.Applicable(), a.SkipReason)

@@ -7,13 +7,14 @@
   maintenance package hit it at 600.6s (the last green run took 555s). Its
   ~470s of fragment-fixer cut-point sweeps ran one after another because
   every fixture swapped the global `config.AppConfig.RootDir`.
-  - The fragment fixer and `retireInto` now read the library root through
-    `Plugin.libraryRoot()`. It returns the new `Plugin.rootDir` field when a
-    test sets it, and `config.AppConfig.RootDir` otherwise, so production
-    behaves as before.
-  - The fragment-fixer fixtures set `rootDir` and no longer touch the
-    global. 119 fragment-fixer and retire tests, plus the subtests of the
-    seven biggest sweeps, now call `t.Parallel()`. Tests that still need
+  - The fragment fixer, the retire hand-off (`retireInto`) and the
+    consolidation-leftovers fixer now read the library root through the
+    plugin's existing `deps.RootDir()`. In production that returns
+    `config.AppConfig.RootDir`, so behaviour is unchanged.
+  - The fragment-fixer fixtures give their fake deps a per-test root
+    (`fakeDeps.root`) and no longer touch the global. 118 fragment-fixer
+    and retire tests, plus the subtests of the seven biggest sweeps, now
+    call `t.Parallel()`. Tests that still need
     the global (folder-books, duplicate-copies, and anything that sets
     `config.AppConfig` or env) stay serial through
     `newGlobalRootFragFixture`.

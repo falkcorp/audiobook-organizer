@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.37.1
+// version: 1.37.2
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package maintenance
 
@@ -56,6 +56,10 @@ var _ sdk.Reporter = (*fakeReporter)(nil)
 // type, not in what is handed over.
 type fakeDeps struct {
 	store database.Store
+	// root is RootDir's answer; "" means "/lib". The fragment fixtures set
+	// their own temp root here, so their fixers read it without the global
+	// config.AppConfig.RootDir and the tests can run in parallel.
+	root string
 	// labels backs DedupVerdictReader; nil means the server has no verdict store.
 	labels DedupVerdictReader
 }
@@ -229,11 +233,16 @@ func (d fakeDeps) ReclaimMigratedActivity(_ context.Context, _ time.Duration, dr
 		DryRun:        dryRun,
 	}, nil
 }
-func (d fakeDeps) HasDedupEngine() bool                      { return false }
-func (d fakeDeps) HasMetadataFetchService() bool             { return false }
-func (d fakeDeps) HasAIParsing() bool                        { return false }
-func (d fakeDeps) HasBatchPoller() bool                      { return false }
-func (d fakeDeps) RootDir() string                           { return "/lib" }
+func (d fakeDeps) HasDedupEngine() bool          { return false }
+func (d fakeDeps) HasMetadataFetchService() bool { return false }
+func (d fakeDeps) HasAIParsing() bool            { return false }
+func (d fakeDeps) HasBatchPoller() bool          { return false }
+func (d fakeDeps) RootDir() string {
+	if d.root != "" {
+		return d.root
+	}
+	return "/lib"
+}
 func (d fakeDeps) LogRetentionDays() int                     { return 30 }
 func (d fakeDeps) AIJournalRetentionDays() int               { return 30 }
 func (d fakeDeps) PurgeSoftDeletedAfterDays() int            { return 30 }

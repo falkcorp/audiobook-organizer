@@ -96,7 +96,7 @@ func newDCFixture(t *testing.T) *dcFixture {
 	t.Helper()
 	f := newGlobalRootFragFixture(t)
 	l := &fakeLabels{}
-	f.p = &Plugin{deps: scanDeps{fakeDeps: fakeDeps{store: f.s, labels: l}, scan: &scriptedScan{renewsLeft: -1}, ops: f.ops}, standDownWait: noWait}
+	f.p = &Plugin{deps: scanDeps{fakeDeps: fakeDeps{root: f.root, store: f.s, labels: l}, scan: &scriptedScan{renewsLeft: -1}, ops: f.ops}, standDownWait: noWait}
 	return &dcFixture{fragFixture: f, labels: l}
 }
 
@@ -650,7 +650,7 @@ func TestDuplicateCopies_OnlyUserTagsBlock(t *testing.T) {
 // TestDuplicateCopies_FailsClosedWithoutLabels: no label store, no plan.
 func TestDuplicateCopies_FailsClosedWithoutLabels(t *testing.T) {
 	d := newDCFixture(t)
-	d.p = &Plugin{deps: scanDeps{fakeDeps: fakeDeps{store: d.s}, scan: &scriptedScan{renewsLeft: -1}, ops: d.ops}, standDownWait: noWait}
+	d.p = &Plugin{deps: scanDeps{fakeDeps: fakeDeps{root: d.root, store: d.s}, scan: &scriptedScan{renewsLeft: -1}, ops: d.ops}, standDownWait: noWait}
 	_, err := newDuplicateCopiesFixer(d.p).Plan(context.Background(), nil, nil)
 	require.ErrorContains(t, err, "not_dup")
 }

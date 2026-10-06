@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer_test.go
-// version: 1.28.0
+// version: 1.28.1
 // guid: 8e2d5b19-6a4c-4f37-b1d8-2c9e7a3f5d60
 // last-edited: 2026-10-06
 
@@ -68,20 +68,30 @@ func newFragFixture(t *testing.T) *fragFixture {
 	require.NoError(t, err)
 	f := &fragFixture{s: newFragStore(t), root: root, ids: map[string]string{}, rowIDs: map[string]string{}}
 	f.ops = &planOps{rows: map[string]*database.OperationV2Row{}}
-	f.p = &Plugin{deps: scanDeps{fakeDeps: fakeDeps{store: f.s}, scan: &scriptedScan{renewsLeft: -1}, ops: f.ops}, standDownWait: noWait}
-	f.p.rootDir = f.root
+	f.p = &Plugin{deps: scanDeps{fakeDeps: fakeDeps{store: f.s, root: f.root}, scan: &scriptedScan{renewsLeft: -1}, ops: f.ops}, standDownWait: noWait}
 	return f
 }
 
 // newGlobalRootFragFixture is newFragFixture for a test whose code under
 // test still reads config.AppConfig.RootDir directly (folder-books and
-// duplicate-copies do; the fragment fixer reads Plugin.libraryRoot). It also
+// duplicate-copies do; the fragment, retire and leftovers code reads
+// deps.RootDir, which the fixture sets per test). It also
 // swaps the global, so a test using it must not call t.Parallel.
 func newGlobalRootFragFixture(t *testing.T) *fragFixture {
 	t.Helper()
 	f := newFragFixture(t)
 	withRoot(t, f.root)
 	return f
+}
+
+// setDepsRoot points the fixture's deps.RootDir at root (the library root
+// the fragment, retire and leftovers code reads).
+func (f *fragFixture) setDepsRoot(t *testing.T, root string) {
+	t.Helper()
+	sd, ok := f.p.deps.(scanDeps)
+	require.True(t, ok, "fixture deps are %T, not scanDeps", f.p.deps)
+	sd.fakeDeps.root = root
+	f.p.deps = sd
 }
 
 func (f *fragFixture) path(rel string) string { return filepath.Join(f.root, rel) }
@@ -3515,8 +3525,7 @@ func newCutFixture(t *testing.T, org, vg string) (*fragFixture, repairs.Row, fun
 	s.WaitForWarmup()
 	f := &fragFixture{s: s, root: root, ids: map[string]string{}, rowIDs: map[string]string{}}
 	f.ops = &planOps{rows: map[string]*database.OperationV2Row{}}
-	f.p = &Plugin{deps: scanDeps{fakeDeps: fakeDeps{store: s}, scan: &scriptedScan{renewsLeft: -1}, ops: f.ops}, standDownWait: noWait}
-	f.p.rootDir = root
+	f.p = &Plugin{deps: scanDeps{fakeDeps: fakeDeps{store: s, root: root}, scan: &scriptedScan{renewsLeft: -1}, ops: f.ops}, standDownWait: noWait}
 	orig, copies := f.seedChapterCopies(t, folder, nil)
 	f.organizeCopiesFixture(t, org, orig, copies)
 	group := "vg-ch"
@@ -3883,8 +3892,7 @@ func TestFragmentFixer_ReplanJournalCost(t *testing.T) {
 	s.WaitForWarmup()
 	f := &fragFixture{s: s, root: root, ids: map[string]string{}, rowIDs: map[string]string{}}
 	f.ops = &planOps{rows: map[string]*database.OperationV2Row{}}
-	f.p = &Plugin{deps: scanDeps{fakeDeps: fakeDeps{store: s}, scan: &scriptedScan{renewsLeft: -1}, ops: f.ops}, standDownWait: noWait}
-	f.p.rootDir = root
+	f.p = &Plugin{deps: scanDeps{fakeDeps: fakeDeps{store: s, root: root}, scan: &scriptedScan{renewsLeft: -1}, ops: f.ops}, standDownWait: noWait}
 	const n, cut, noise = 346, 300, 300000
 	var ids []string
 	for i := 1; i <= n; i++ {

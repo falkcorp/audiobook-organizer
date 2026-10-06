@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/consolidation_leftovers_fixer.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 6df37df9-b008-41ad-bd69-47b00e4cb50c
 // last-edited: 2026-10-06
 
@@ -23,7 +23,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -213,18 +212,19 @@ func (s *leftoverSource) stat(p string) leftoverStat {
 }
 
 func (f *consolidationLeftoversFixer) newSource(store OpsStore) (*leftoverSource, error) {
-	shelves, err := leftoverShelves(store)
+	shelves, err := leftoverShelves(store, f.p.deps.RootDir())
 	if err != nil {
 		return nil, err
 	}
 	return &leftoverSource{store: store, shelf: shelves, stats: map[string]leftoverStat{}, statFn: f.statFn}, nil
 }
 
-// leftoverShelves are the library root and every import path, cleaned. A
-// copy of folderBooksFixer.common's shelf list, without its author cache.
-func leftoverShelves(store OpsStore) ([]string, error) {
+// leftoverShelves are the library root (the plugin's deps.RootDir) and every
+// import path, cleaned. A copy of folderBooksFixer.common's shelf list,
+// without its author cache.
+func leftoverShelves(store OpsStore, root string) ([]string, error) {
 	var out []string
-	if root := config.AppConfig.RootDir; root != "" {
+	if root != "" {
 		out = append(out, filepath.Clean(root))
 	}
 	ips, err := store.GetAllImportPaths()
@@ -872,8 +872,7 @@ func leftoverBasisRank(b string) int {
 // leftoverRootMounted refuses a plan or re-plan when the library root is
 // unset, missing or empty: an unmounted share would make every row ENOENT
 // and look like a library of leftovers.
-func leftoverRootMounted() error {
-	root := config.AppConfig.RootDir
+func leftoverRootMounted(root string) error {
 	if root == "" {
 		return errors.New("library root is not configured")
 	}
@@ -955,7 +954,7 @@ func (f *consolidationLeftoversFixer) Plan(ctx context.Context, _ json.RawMessag
 	if store == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
-	if err := leftoverRootMounted(); err != nil {
+	if err := leftoverRootMounted(f.p.deps.RootDir()); err != nil {
 		return nil, fmt.Errorf("%s: %w", leftoverFixerID, err)
 	}
 	books, rowsOf, err := f.buildIndex(store)
@@ -1044,7 +1043,7 @@ func (f *consolidationLeftoversFixer) Replan(ctx context.Context, _ json.RawMess
 	if store == nil {
 		return repairs.Row{}, fmt.Errorf("database not initialized")
 	}
-	if err := leftoverRootMounted(); err != nil {
+	if err := leftoverRootMounted(f.p.deps.RootDir()); err != nil {
 		return repairs.Row{}, fmt.Errorf("%s: %w", leftoverFixerID, err)
 	}
 	idx, err := f.sizeIndex(store)

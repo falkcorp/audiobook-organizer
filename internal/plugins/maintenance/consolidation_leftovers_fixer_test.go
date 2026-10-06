@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/consolidation_leftovers_fixer_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 240c6560-a115-459f-a156-ce41853ac125
 // last-edited: 2026-10-06
 
@@ -459,10 +459,10 @@ func TestLeftovers_CombinedMustBeListed(t *testing.T) {
 func TestLeftovers_RefusesAnUnmountedRoot(t *testing.T) {
 	f := newLFFixture(t)
 	f.whm(t)
-	withRoot(t, t.TempDir())
+	f.setDepsRoot(t, t.TempDir())
 	params, err := json.Marshal(repairs.PlanParams{FixerID: leftoverFixerID})
 	require.NoError(t, err)
 	require.Error(t, f.p.runRepairsPlan(context.Background(), params, &repairsOpReporter{id: "op-plan"}))
-	withRoot(t, filepath.Join(f.root, "no-such-dir"))
+	f.setDepsRoot(t, filepath.Join(f.root, "no-such-dir"))
 	require.Error(t, f.p.runRepairsPlan(context.Background(), params, &repairsOpReporter{id: "op-plan2"}))
 }

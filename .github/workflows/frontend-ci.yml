@@ -80,7 +80,8 @@ jobs:
     # So the fix for a package that outgrows it is to make it faster, not a
     # flag: internal/plugins/maintenance hit it on 2026-10-06 (600.6s, run
     # 37411545286; the last green run was 555s), and its fragment-fixer tests
-    # now run in parallel (Plugin.rootDir replaces the global root swap). The
+    # now run in parallel (their fixers read the root from deps.RootDir()
+    # instead of a swapped global). The
     # durable fix is a go-test-timeout input upstream in github-common and
     # gha-ci-workflow-helpers; nightly.yml calls the same workflow and has the
     # same budget.
