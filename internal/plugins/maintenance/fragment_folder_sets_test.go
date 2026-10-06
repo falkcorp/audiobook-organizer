@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_folder_sets_test.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 3b7d2c55-1a4e-4f0b-9c61-8e2f5d7a0b14
 // last-edited: 2026-10-06
 
@@ -1412,13 +1412,16 @@ func TestFragmentFixer_RetireTargetITunes(t *testing.T) {
 		require.Equal(t, repairs.SkipITunes, r.Skipped, r.SkipReason)
 		require.Contains(t, r.SkipReason, f.ids["parent"])
 	})
-	t.Run("a live itunes external id on the copy parent: held", func(t *testing.T) {
+	t.Run("a live itunes external id on the copy parent: the copy retires writing the fragment only", func(t *testing.T) {
+		// Owner decision 2026-10-06: a copy row into an iTunes-linked parent
+		// is no longer held; it retires its fragments without writing the
+		// parent (TestFragmentFixer_CopyClaimants covers the writes).
 		f := newFragFixture(t)
 		f.seed(t)
 		require.NoError(t, f.s.CreateExternalIDMapping(&database.ExternalIDMapping{Source: "itunes", ExternalID: "SUNSPID", BookID: f.ids["suns"]}))
 		r := findRow(t, f.plan(t, "op-plan"), "copy:"+f.ids["suns"])
-		require.Equal(t, repairs.SkipITunes, r.Skipped, r.SkipReason)
-		require.Contains(t, r.SkipReason, f.ids["suns"])
+		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+		require.Contains(t, r.Current["itunes_parent"], "itunes external id SUNSPID")
 	})
 	t.Run("added after the plan: refused at apply, nothing written", func(t *testing.T) {
 		f := newFragFixture(t)
