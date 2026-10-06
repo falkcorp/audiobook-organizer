@@ -1,7 +1,7 @@
 // file: internal/audiobooks/filter_duration.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7c1e5a92-3f04-4d8b-b6e1-0a9d2c47f815
-// last-edited: 2026-09-27
+// last-edited: 2026-10-05
 
 package audiobooks
 
@@ -170,15 +170,11 @@ func metadataFilterWantsApplied(v string) (bool, bool) {
 // Note the old help entry "-review:matched = still needing metadata" was
 // wrong: review: substring-matches, and "audio_confirmed" does not contain
 // "matched", so every audio-confirmed book was listed as needing metadata.
+//
+// The status test itself is database.MetadataApplied, shared with the cached
+// bulk apply's already-applied skip and the lost-candidates fixer.
 func BookMetadataApplied(b *database.Book) bool {
-	if b == nil || b.MetadataReviewStatus == nil {
-		return false
-	}
-	switch *b.MetadataReviewStatus {
-	case "matched", "audio_confirmed":
-		return true
-	}
-	return false
+	return b != nil && database.MetadataApplied(b.MetadataReviewStatus)
 }
 
 // runtimeFunc returns a book's runtime in seconds and whether it is known.

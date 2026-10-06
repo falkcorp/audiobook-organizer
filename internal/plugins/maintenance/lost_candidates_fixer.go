@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/lost_candidates_fixer.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0583655e-5bf4-4704-8046-c880bf7522b6
 // last-edited: 2026-10-05
 
@@ -236,7 +236,7 @@ func lostCandidatesRow(in lostCandidateInput) repairs.Row {
 		return r
 	}
 	switch {
-	case status == "matched" || status == "audio_confirmed":
+	case database.MetadataApplied(b.MetadataReviewStatus):
 		return skip(lostSkipApplied, "the book's metadata has been applied")
 	case status == "no_match":
 		return skip(lostSkipNoMatch, "the book is marked \"no match\"")

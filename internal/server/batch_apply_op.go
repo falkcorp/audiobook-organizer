@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_op.go
-// version: 1.24.0
+// version: 1.25.0
 // guid: 8a3f21d7-6c04-4b91-a2e5-7d0f3b8c5194
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 //
 // batch_apply_op registers the "metadata.batch-apply-cached" v2 OperationDef.
 // The HTTP handler BatchApplyFromCache enqueues this and returns the op id
@@ -389,6 +389,10 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 			// markedNoMatch counts books left alone because their owner
 			// marked them "no match" and did not approve this row.
 			var markedNoMatch atomic.Int64
+			// alreadyApplied counts books skipped because their metadata was
+			// already applied and no single-row approval asked to re-apply
+			// (applySkipAlreadyApplied).
+			var alreadyApplied atomic.Int64
 			// authorsUnreadable counts books refused because their live
 			// author credits could not be read (the gate would otherwise have
 			// judged them authorless, which loosens it).
@@ -464,9 +468,12 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 			// before the first apply. The index covers EVERY book with cached
 			// candidates, not bookIDs, so a subset batch or a resumed run (whose
 			// bookIDs is the unfinished tail) sees the same siblings the preview
-			// saw. A book applied by an earlier attempt has its cache entry
-			// invalidated and drops out; its rename already happened, and the
-			// rename preflight still refuses a collision with it.
+			// saw. An applied book stays in the index (an apply keeps its cached
+			// candidates since 2026-10-05) but claims the ASIN it already holds,
+			// not its top candidate (cachedClaimLoader): it owns that ASIN, and
+			// the apply skips it (already_applied), so its top candidate is
+			// never taken. Its rename already happened, and the rename preflight
+			// still refuses a collision with it.
 			claims, claimErr := cachedClaimIndex(ctx, svc, s.store)
 			if claimErr != nil {
 				return fmt.Errorf("batch-apply-cached: %w", claimErr)
@@ -563,6 +570,9 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 					case applySkipAuthorsUnreadable:
 						// The live author read failed; nothing was written.
 						authorsUnreadable.Add(1)
+					case applySkipAlreadyApplied:
+						// Applied before; nobody asked to re-apply it.
+						alreadyApplied.Add(1)
 					}
 					notApplied.Add(1)
 					attrs := []slog.Attr{
@@ -760,8 +770,8 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 			// not books that merely waited once.
 			stillDeferred := len(snapshotGateDeferred())
 			summary := fmt.Sprintf(
-				"applied %d of %d (owner-reviewed over the certainty gate %d, refused by certainty gate %d, reviewed candidate changed since it was shown %d, marked no match %d, authors unreadable %d, refused because the rename could not land %d, no candidates %d, book not found %d, decode failed %d, apply failed %d, write-back failed %d, owner-reviewed change history not recorded %d, gate unavailable %d, kept user-locked fields on %d, sibling-part index could not read %d books)",
-				applied.Load(), total, ownerReviewed.Load(), gateBlocked.Load(), staleCandidate.Load(), markedNoMatch.Load(), authorsUnreadable.Load(), fileWorkBlocked.Load(), noCandidates.Load(), bookMissing.Load(), decodeFailed.Load(),
+				"applied %d of %d (owner-reviewed over the certainty gate %d, refused by certainty gate %d, reviewed candidate changed since it was shown %d, marked no match %d, already applied %d, authors unreadable %d, refused because the rename could not land %d, no candidates %d, book not found %d, decode failed %d, apply failed %d, write-back failed %d, owner-reviewed change history not recorded %d, gate unavailable %d, kept user-locked fields on %d, sibling-part index could not read %d books)",
+				applied.Load(), total, ownerReviewed.Load(), gateBlocked.Load(), staleCandidate.Load(), markedNoMatch.Load(), alreadyApplied.Load(), authorsUnreadable.Load(), fileWorkBlocked.Load(), noCandidates.Load(), bookMissing.Load(), decodeFailed.Load(),
 				applyFailed.Load(), writeFailed.Load(), historyFailed.Load(), stillDeferred,
 				skippedLocked.Load(), claims.Unreadable())
 			if p.Mode == metafetch.BulkApplyModeReplace {
@@ -771,13 +781,13 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 				// State the known ambiguity rather than implying a clean count.
 				// The watermark is the contiguous completed PREFIX, so a resumed
 				// attempt re-examines any book a faster worker finished past a
-				// gap. Applying invalidates that book's cached candidates, so on
-				// the second look it is indistinguishable from a book that never
-				// had any and it lands in "no candidates". The number cannot be
+				// gap. An apply that recorded the match leaves the book "matched",
+				// so on the second look it lands in "already applied", next to
+				// books applied long before this batch. The number cannot be
 				// recovered here; saying so beats a count that reads as failures.
 				summary = fmt.Sprintf(
 					"%s; %d more were completed by earlier attempts before a restart, %d in the batch overall"+
-						" (some of this attempt's \"no candidates\" may be books an earlier attempt already applied)",
+						" (some of this attempt's \"already applied\" may be books an earlier attempt applied)",
 					summary, priorDone, originalTotal)
 			}
 			_ = progress.UpdateProgress(originalTotal, originalTotal, "complete: "+summary)

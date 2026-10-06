@@ -1,7 +1,7 @@
 // file: internal/server/bulk_apply_preview.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 6a2e9c15-4f70-4b3d-8e21-d5c7a0f9b384
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 //
 // The bulk-apply DRY RUN: "metadata.bulk-apply-preview".
 //
@@ -64,8 +64,10 @@ const (
 // bulkApplyPreviewParams is the op's params.
 type bulkApplyPreviewParams struct {
 	BookIDs []string `json:"book_ids,omitempty"`
-	// AllCached previews every book that has cached candidates — "everything
-	// that would be applied" — instead of a list. Cache source only.
+	// AllCached previews every book that has cached candidates instead of a
+	// list. Cache source only. Applied books keep their candidates, so they
+	// are in that set; their rows say skipped / already_applied, which is
+	// what the apply does with them.
 	AllCached bool `json:"all_cached,omitempty"`
 	// Source is previewSourceCache (default) or previewSourceOpResults.
 	Source string `json:"source,omitempty"`
@@ -358,7 +360,7 @@ func runBulkApplyPreview(
 			slog.String("error", err.Error()))
 	}
 
-	var nApply, nBlocked, nSkipped, nWriteErr, nNoMatch atomic.Int64
+	var nApply, nBlocked, nSkipped, nWriteErr, nNoMatch, nAlreadyApplied atomic.Int64
 	// One import-path read shared by every row of this dry run.
 	planBooks := withCachedImportPaths(books)
 	previewOne := func(_ context.Context, id string) error {
@@ -383,6 +385,14 @@ func runBulkApplyPreview(
 		if excludedFromPreview(plan) {
 			nNoMatch.Add(1)
 			return nil
+		}
+		// An applied book keeps its cached candidates, so "all cached" now
+		// lists every applied book too. The apply skips them
+		// (applySkipAlreadyApplied); the preview says so in a row (verdict
+		// skipped, reason already_applied) and in its own count, rather than
+		// reporting them as books that would apply.
+		if plan.Reason == applySkipAlreadyApplied {
+			nAlreadyApplied.Add(1)
 		}
 		row := previewBulkApplyRow(svc, id, plan, writeBack)
 		switch row.Verdict {
@@ -418,8 +428,8 @@ func runBulkApplyPreview(
 	if runErr != nil {
 		return runErr
 	}
-	msg := fmt.Sprintf("dry run complete: %d would apply, %d blocked, %d skipped of %d (left out, marked no match: %d; report rows not saved: %d; sibling-part index could not read %d books); read /api/v1/metadata/bulk-apply-preview/%s",
-		nApply.Load(), nBlocked.Load(), nSkipped.Load(), len(ids)-int(nNoMatch.Load()), nNoMatch.Load(), nWriteErr.Load(), claims.Unreadable(), opID)
+	msg := fmt.Sprintf("dry run complete: %d would apply, %d blocked, %d skipped of %d (skipped as already applied: %d; left out, marked no match: %d; report rows not saved: %d; sibling-part index could not read %d books); read /api/v1/metadata/bulk-apply-preview/%s",
+		nApply.Load(), nBlocked.Load(), nSkipped.Load(), len(ids)-int(nNoMatch.Load()), nAlreadyApplied.Load(), nNoMatch.Load(), nWriteErr.Load(), claims.Unreadable(), opID)
 	_ = registryProgressAdapter{r: reporter}.UpdateProgress(len(ids), len(ids), msg)
 	return nil
 }

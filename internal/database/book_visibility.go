@@ -1,7 +1,7 @@
 // file: internal/database/book_visibility.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 4eee927b-72ce-4b07-aa41-a91afb2368ba
-// last-edited: 2026-09-02
+// last-edited: 2026-10-05
 
 package database
 
@@ -127,4 +127,28 @@ func deletionStateFromFilters(filters map[string]any) *bool {
 		return nil
 	}
 	return &v
+}
+
+// MetadataApplied reports whether a MetadataReviewStatus records an applied
+// match: "matched" or "audio_confirmed". Both are written by
+// metafetch.ApplyMetadataCandidateWithOptions when an apply records the match
+// (always for a hand-picked candidate; for an automatic one only when the book
+// ends up holding the candidate's title). "no_match" is a ruling, not an
+// apply, and nil means nobody has ruled.
+//
+// It is the one definition of "already applied". It was open-coded in
+// audiobooks.BookMetadataApplied (the metadata:applied filter) and in the
+// lost-candidates fixer, and the cached bulk apply had none at all: it relied
+// on the apply deleting the book's cached candidates, so an applied book
+// simply had nothing left to apply. Since 2026-10-05 an apply keeps its
+// candidates, and planCachedApply skips an applied book with this predicate.
+func MetadataApplied(status *string) bool {
+	if status == nil {
+		return false
+	}
+	switch *status {
+	case "matched", "audio_confirmed":
+		return true
+	}
+	return false
 }
