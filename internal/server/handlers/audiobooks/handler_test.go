@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler_test.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 5cd764d5-8036-425c-842e-c49d0d44acec
 // last-edited: 2026-10-05
 
@@ -20,6 +20,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -469,6 +471,81 @@ func TestListBookFiles(t *testing.T) {
 	h.ListBookFiles(c)
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d", w.Code)
+	}
+}
+
+// TestListBookFiles_FileExistsIsLiveDiskCheck: file_exists must come from the
+// disk, not from !Missing. A row whose stored flag says present but whose path
+// is gone used to read file_exists=true; the stored flag is still reported, as
+// "missing", so a caller can see the two disagree.
+func TestListBookFiles_FileExistsIsLiveDiskCheck(t *testing.T) {
+	dir := t.TempDir()
+	present := filepath.Join(dir, "a.m4b")
+	if err := os.WriteFile(present, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gone := filepath.Join(dir, "gone.m4b")
+	h, d := newHandler(t)
+	d.store.EXPECT().GetBookFiles("b1").Return([]database.BookFile{
+		{ID: "f1", BookID: "b1", FilePath: present, Missing: true},
+		{ID: "f2", BookID: "b1", FilePath: gone, Missing: false},
+	}, nil)
+	c, w := newCtx("GET", "/audiobooks/b1/files", nil, p("id", "b1"))
+	h.ListBookFiles(c)
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", w.Code)
+	}
+	var env struct {
+		Data struct {
+			Files []struct {
+				ID         string `json:"id"`
+				Missing    bool   `json:"missing"`
+				FileExists *bool  `json:"file_exists"`
+			} `json:"files"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode: %v (%s)", err, w.Body.String())
+	}
+	files := env.Data.Files
+	if len(files) != 2 {
+		t.Fatalf("want 2 files, got %d (%s)", len(files), w.Body.String())
+	}
+	f1, f2 := files[0], files[1]
+	if f1.FileExists == nil || !*f1.FileExists || !f1.Missing {
+		t.Fatalf("f1: want file_exists=true missing=true, got %+v", f1)
+	}
+	if f2.FileExists == nil || *f2.FileExists || f2.Missing {
+		t.Fatalf("f2: want file_exists=false missing=false, got %+v", f2)
+	}
+}
+
+// TestListAudiobookSegments_FileExistsIsLiveDiskCheck: same contract on the
+// legacy segments endpoint.
+func TestListAudiobookSegments_FileExistsIsLiveDiskCheck(t *testing.T) {
+	gone := filepath.Join(t.TempDir(), "gone.mp3")
+	h, d := newHandler(t)
+	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1"}, nil)
+	d.store.EXPECT().GetBookFiles("b1").Return([]database.BookFile{
+		{ID: "f1", BookID: "b1", FilePath: gone, Missing: false},
+	}, nil)
+	c, w := newCtx("GET", "/audiobooks/b1/segments", nil, p("id", "b1"))
+	h.ListAudiobookSegments(c)
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", w.Code)
+	}
+	var env struct {
+		Data []struct {
+			Missing    bool  `json:"missing"`
+			FileExists *bool `json:"file_exists"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode: %v (%s)", err, w.Body.String())
+	}
+	segs := env.Data
+	if len(segs) != 1 || segs[0].FileExists == nil || *segs[0].FileExists || segs[0].Missing {
+		t.Fatalf("want one segment file_exists=false missing=false, got %s", w.Body.String())
 	}
 }
 

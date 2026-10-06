@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_files.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 82f8d1f7-46d5-4ead-b5c1-ba796fd785f9
-// last-edited: 2026-09-14
+// last-edited: 2026-10-05
 
 // File / segment endpoints for the audiobooks domain: segment listing,
 // book-file listing + patch, track-info extraction, relocate, and segment
@@ -10,9 +10,11 @@
 package audiobookshandler
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"hash/crc32"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -48,6 +50,120 @@ func relocateTargetAllowed(store AudiobooksStore, absPath string) bool {
 	return fileops.IsAllowedPath(absPath, importPaths)
 }
 
+// fileStatTimeout caps the WHOLE disk check for one files/segments response.
+// os.Stat does not honour context cancellation, so a hung NAS mount would
+// otherwise stall the request indefinitely; past this deadline the remaining
+// files are reported as unknown (file_exists: null) instead of waiting.
+const fileStatTimeout = 3 * time.Second
+
+// fileStatWorkers bounds the stat fan-out per request. Stats are I/O-bound
+// against one filesystem, so a small fixed pool is enough; it is never
+// unbounded over a book with hundreds of segments.
+const fileStatWorkers = 8
+
+// fileDiskState is what a live os.Stat said about one book_file path.
+// Exists is nil when the answer is unknown: an empty path, a stat error other
+// than not-exist (permission, I/O), or the deadline passing first. CheckError
+// then says which.
+type fileDiskState struct {
+	Exists     *bool
+	CheckError string
+}
+
+// statFilePaths stats every path with a bounded worker pool under one overall
+// deadline (fileStatTimeout, or the request context if it ends first). The
+// result is index-aligned with paths and always fully populated.
+//
+// Workers that are blocked inside a hung os.Stat when the deadline passes are
+// left to finish on their own: they send into a buffered channel, so they never
+// block on the send, and they pick up no further work once ctx is done — the
+// leak is bounded by fileStatWorkers per request.
+func statFilePaths(ctx context.Context, paths []string) []fileDiskState {
+	ctx, cancel := context.WithTimeout(ctx, fileStatTimeout)
+	defer cancel()
+	return statFilePathsWith(ctx, paths, os.Stat)
+}
+
+// statFilePathsWith is statFilePaths with the deadline already on ctx and the
+// stat call injected, so tests can drive a hung or failing filesystem.
+func statFilePathsWith(ctx context.Context, paths []string, stat func(string) (os.FileInfo, error)) []fileDiskState {
+	out := make([]fileDiskState, len(paths))
+	if len(paths) == 0 {
+		return out
+	}
+
+	type statResult struct {
+		idx   int
+		state fileDiskState
+	}
+	jobs := make(chan int, len(paths))
+	results := make(chan statResult, len(paths))
+	pending := 0
+	for i, p := range paths {
+		if p == "" {
+			out[i] = fileDiskState{CheckError: "no file path"}
+			continue
+		}
+		jobs <- i
+		pending++
+	}
+	close(jobs)
+
+	// Not joined: a worker stuck in a hung stat must not hold the response.
+	for range min(fileStatWorkers, pending) {
+		go func() {
+			for i := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
+				results <- statResult{idx: i, state: classifyStat(stat(paths[i]))}
+			}
+		}()
+	}
+
+	done := make([]bool, len(paths))
+	for received := 0; received < pending; received++ {
+		select {
+		case r := <-results:
+			out[r.idx] = r.state
+			done[r.idx] = true
+		case <-ctx.Done():
+			for i, p := range paths {
+				if p != "" && !done[i] {
+					out[i] = fileDiskState{CheckError: "disk check timed out"}
+				}
+			}
+			return out
+		}
+	}
+	return out
+}
+
+// classifyStat turns one stat outcome into present, definitely absent, or
+// unknown. Only fs.ErrNotExist is "absent": a permission or I/O error says
+// nothing about whether the file is there.
+func classifyStat(_ os.FileInfo, err error) fileDiskState {
+	switch {
+	case err == nil:
+		yes := true
+		return fileDiskState{Exists: &yes}
+	case errors.Is(err, fs.ErrNotExist):
+		no := false
+		return fileDiskState{Exists: &no}
+	default:
+		return fileDiskState{CheckError: err.Error()}
+	}
+}
+
+// bookFilePaths returns each row's FilePath, index-aligned with files.
+func bookFilePaths(files []database.BookFile) []string {
+	paths := make([]string, len(files))
+	for i := range files {
+		paths[i] = files[i].FilePath
+	}
+	return paths
+}
+
 // ListAudiobookSegments handles GET /audiobooks/:id/segments. Returns file
 // segments for a multi-file audiobook in the legacy BookSegment JSON shape.
 func (h *Handler) ListAudiobookSegments(c *gin.Context) {
@@ -73,10 +189,15 @@ func (h *Handler) ListAudiobookSegments(c *gin.Context) {
 		files = []database.BookFile{}
 	}
 
-	// Convert BookFile to legacy segment JSON shape with file_exists.
-	// Fix #7: use f.Missing from the database instead of synchronous os.Stat().
+	// Convert BookFile to legacy segment JSON shape. file_exists is a LIVE
+	// disk check, and missing is the stored flag. They used to be one field:
+	// file_exists was !f.Missing, so a row whose file had vanished without the
+	// scanner noticing read as present (393 of 409 sampled prod rows pointed
+	// at absent paths while claiming file_exists=true). See statFilePaths for
+	// the timeout and pool bounds.
+	disk := statFilePaths(c.Request.Context(), bookFilePaths(files))
 	result := make([]gin.H, 0, len(files))
-	for _, f := range files {
+	for i, f := range files {
 		result = append(result, gin.H{
 			"id":         f.ID,
 			"book_id":    int(crc32.ChecksumIEEE([]byte(f.BookID))),
@@ -94,15 +215,23 @@ func (h *Handler) ListAudiobookSegments(c *gin.Context) {
 			"superseded_by":    nil,
 			"created_at":       f.CreatedAt,
 			"updated_at":       f.UpdatedAt,
-			"file_exists":      !f.Missing,
+			"missing":          f.Missing,
+			"file_exists":      disk[i].Exists,
+			"file_check_error": disk[i].CheckError,
 		})
 	}
 
 	httputil.RespondWithOK(c, result)
 }
 
-// ListBookFiles returns all book_files rows for a book with live disk-existence
-// check. GET /audiobooks/:id/files.
+// ListBookFiles returns all book_files rows for a book with a live
+// disk-existence check. GET /audiobooks/:id/files.
+//
+// file_exists is an os.Stat made for this response (null when unknown, with
+// file_check_error saying why); missing is the stored BookFile.Missing flag,
+// which only changes when a scan or repair notices. The stat is affordable here
+// because the endpoint is per book — a bounded worker pool over one book's
+// rows under a short overall deadline — not a library-wide listing.
 func (h *Handler) ListBookFiles(c *gin.Context) {
 	bookID := c.Param("id")
 	store := h.store
@@ -118,9 +247,9 @@ func (h *Handler) ListBookFiles(c *gin.Context) {
 	if files == nil {
 		files = []database.BookFile{}
 	}
-	// Fix #7: use f.Missing from the database instead of synchronous os.Stat().
+	disk := statFilePaths(c.Request.Context(), bookFilePaths(files))
 	results := make([]gin.H, 0, len(files))
-	for _, f := range files {
+	for i, f := range files {
 		results = append(results, gin.H{
 			"id":                   f.ID,
 			"book_id":              f.BookID,
@@ -159,7 +288,8 @@ func (h *Handler) ListBookFiles(c *gin.Context) {
 			"fingerprint_diagnostic_json": f.FingerprintDiagnosticJSON,
 			"organize_method":             f.OrganizeMethod,
 			"missing":                     f.Missing,
-			"file_exists":                 !f.Missing,
+			"file_exists":                 disk[i].Exists,
+			"file_check_error":            disk[i].CheckError,
 			"created_at":                  f.CreatedAt,
 			"updated_at":                  f.UpdatedAt,
 			// Per-file intro transcription. This response is built from an
