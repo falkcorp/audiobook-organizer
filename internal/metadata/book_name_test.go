@@ -1,11 +1,12 @@
 // file: internal/metadata/book_name_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: fd994992-1a70-4204-b1cc-72148bda319a
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package metadata
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -108,15 +109,15 @@ func TestParseBookName_CensusShapes(t *testing.T) {
 		{
 			name: "authority-known author segment", raw: "Dorian Vex - Ironclad - The Long Watch",
 			ev:    NameEvidence{IsKnownAuthor: known("Dorian Vex")},
-			title: "Ironclad - The Long Watch", search: "Ironclad - The Long Watch", author: "Dorian Vex",
-			shapes: []string{ShapeLeadingAuthor},
+			title: "Ironclad - The Long Watch", search: "The Long Watch", author: "Dorian Vex", series: "Ironclad",
+			shapes: []string{ShapeLeadingAuthor, ShapeSeriesSlot},
 		},
 		{
-			// A folder repeat is no person evidence: removed, never an author.
+			// A person-shaped name repeating its folder is that folder's author.
 			name: "leading segment that repeats an ancestor folder", raw: "Dorian Vex - Ironclad 02 - The Long Watch",
 			ev:    NameEvidence{Path: "/srv/library/Dorian Vex/Ironclad/Dorian Vex - Ironclad 02 - The Long Watch/book.m4b"},
-			title: "Ironclad 02 - The Long Watch", search: "The Long Watch",
-			series: "Ironclad", position: "02", shapes: []string{ShapeLeadingFolder, ShapeSeriesSlot},
+			title: "Ironclad 02 - The Long Watch", search: "The Long Watch", author: "Dorian Vex",
+			series: "Ironclad", position: "02", shapes: []string{ShapeLeadingAuthor, ShapeSeriesSlot},
 		},
 		{
 			name: "explicit count suffix", raw: "The Glass Tower (1 of 3)",
@@ -224,39 +225,56 @@ func TestExtractMetadataFromFolder_FolderRegressions(t *testing.T) {
 	}
 }
 
-// A top-level SERIES folder has the shape of an author folder: the folder
-// parse must read "<Series>/<Series> - <Title>" as a series, never credit the
-// series as the author (main gave no author; an earlier draft of the shared
-// parser gave "Doctor Who"). With an author folder above, the author comes
-// from it.
-func TestExtractMetadataFromFolder_TopLevelSeriesFolderIsNoAuthor(t *testing.T) {
+// A segment repeating its folder's name is that folder's AUTHOR when it is a
+// person -- the authority lists, the library's author rows or a person-name
+// shape say so -- and the SERIES only when it is not: a curated franchise
+// (Doctor Who), a series the library already has (Star Wars, Harry Potter,
+// Sherlock Holmes, Jack Reacher), or no person shape (Warhammer 40k). The
+// series rows and the authority stand in for prod's: 20,366 authority
+// persons, every series row.
+func TestExtractMetadataFromFolder_FolderLeadAuthorOrSeries(t *testing.T) {
+	set := func(names ...string) func(string) bool {
+		m := map[string]bool{}
+		for _, n := range names {
+			m[strings.ToLower(n)] = true
+		}
+		return func(s string) bool { return m[strings.ToLower(s)] }
+	}
+	ev := NameEvidence{
+		IsKnownAuthor: set("Stephen King", "Agatha Christie"),
+		IsAuthorRow:   set("Cormac McCarthy", "Star Wars"), // a junk "Star Wars" author row exists in many libraries
+		IsKnownSeries: set("Star Wars", "Harry Potter", "Sherlock Holmes", "Jack Reacher"),
+	}
 	for _, tc := range []struct {
 		path, title, series string
 		authors             []string
 	}{
+		{"/srv/library/Brandon Sanderson/Brandon Sanderson - Elantris", "Elantris", "", []string{"Brandon Sanderson"}},
+		{"/srv/library/Stephen King/Stephen King - The Stand", "The Stand", "", []string{"Stephen King"}},
+		{"/srv/library/Cormac McCarthy/Cormac McCarthy - The Road", "The Road", "", []string{"Cormac McCarthy"}},
+		{"/srv/library/Agatha Christie/Agatha Christie - Poirot - The ABC Murders", "The ABC Murders", "Poirot", []string{"Agatha Christie"}},
 		{"/srv/library/Doctor Who/Doctor Who - The Pescatons", "The Pescatons", "Doctor Who", nil},
 		{"/srv/library/Star Wars/Star Wars - Thrawn", "Thrawn", "Star Wars", nil},
 		{"/srv/library/Harry Potter/Harry Potter - The Philosopher's Stone", "The Philosopher's Stone", "Harry Potter", nil},
 		{"/srv/library/Sherlock Holmes/Sherlock Holmes - The Sign of Four", "The Sign of Four", "Sherlock Holmes", nil},
+		{"/srv/library/Jack Reacher/Jack Reacher - Killing Floor", "Killing Floor", "Jack Reacher", nil},
+		{"/srv/library/Warhammer 40k/Warhammer 40k - Horus Rising", "Horus Rising", "Warhammer 40k", nil},
 		{"/srv/library/Timothy Zahn/Star Wars/Star Wars - Thrawn", "Thrawn", "Star Wars", []string{"Timothy Zahn"}},
+		// The author of a year folder's book comes from the author folder.
+		{"/srv/library/Joshua Dalzelle/2018/2018 - Blueshift", "Blueshift", "", []string{"Joshua Dalzelle"}},
 	} {
-		fm, err := ExtractMetadataFromFolder(tc.path)
+		fm, err := ExtractMetadataFromFolderWith(tc.path, ev)
 		assert.NoError(t, err)
 		assert.Equal(t, tc.authors, fm.Authors, tc.path)
 		assert.Equal(t, tc.title, fm.Title, tc.path)
 		assert.Equal(t, tc.series, fm.SeriesName, tc.path)
 	}
-	// The search side: the series lead is removed from the query, and is no
-	// author either.
-	b := ParseBookName("Star Wars - Thrawn", NameEvidence{Path: "/srv/library/Star Wars/Star Wars - Thrawn/book.m4b"})
+	// The search side reads the same: a series lead is no author.
+	b := ParseBookName("Star Wars - Thrawn", NameEvidence{Path: "/srv/library/Star Wars/Star Wars - Thrawn/book.m4b",
+		IsKnownSeries: ev.IsKnownSeries})
 	assert.Equal(t, "Thrawn", b.Title)
 	assert.Empty(t, b.Author)
 	assert.Equal(t, "Star Wars", b.Series)
-	// Person evidence (the book's own author) still makes it an author.
-	b = ParseBookName("Mara Quill - The Paper Garden", NameEvidence{Authors: []string{"Mara Quill"},
-		Path: "/srv/library/Mara Quill/Mara Quill - The Paper Garden/book.m4b"})
-	assert.Equal(t, "Mara Quill", b.Author)
-	assert.Empty(t, b.Series)
 }
 
 // LegacyFolderParse is main's folder parse frozen (evidence for the

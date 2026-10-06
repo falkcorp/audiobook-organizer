@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_search.go
-// version: 1.33.0
+// version: 1.34.0
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package metafetch
 
@@ -530,8 +530,9 @@ func (mfs *Service) resolveSearchInputs(book *database.Book, query, author, narr
 }
 
 // nameEvidence is what metadata.ParseBookName may check a title's segments
-// against for book: its path (an author-shaped ancestor folder) and the
-// authority lists' known authors (internal/authority). A lookup fault is no
+// against for book: its path (a segment repeating an ancestor folder), the
+// authority lists' known people (internal/authority), the library's author
+// rows and its authorless series rows. A lookup fault is no
 // evidence, so a segment is kept in the title: a search never loses words to
 // a read error.
 func (mfs *Service) nameEvidence(book *database.Book) metadata.NameEvidence {
@@ -541,6 +542,18 @@ func (mfs *Service) nameEvidence(book *database.Book) metadata.NameEvidence {
 		ev.IsKnownAuthor = func(name string) bool {
 			ok, err := idx.IsKnownPerson(name, authority.RoleAuthor)
 			return err == nil && ok
+		}
+		db := mfs.db
+		ev.IsAuthorRow = func(name string) bool {
+			a, err := db.GetAuthorByName(name)
+			return err == nil && a != nil
+		}
+		// An authorless series row only: the store indexes series by author,
+		// and a search has no series list to hand (the scanner reads one,
+		// scanner.FolderNameEvidence). A curated franchise is a series anyway.
+		ev.IsKnownSeries = func(name string) bool {
+			s, err := db.GetSeriesByName(name, nil)
+			return err == nil && s != nil
 		}
 	}
 	return ev

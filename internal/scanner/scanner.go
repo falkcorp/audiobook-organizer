@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.125.0
+// version: 1.126.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package scanner
 
@@ -1695,7 +1695,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 				return // No audio files found in directory
 			}
 			fileCount := countAudioFilesInDir(dirPath, config.AppConfig.SupportedExtensions)
-			bm, bmErr := metadata.AssembleBookMetadata(dirPath, firstFile, fileCount, 0)
+			bm, bmErr := metadata.AssembleBookMetadataWith(dirPath, firstFile, fileCount, 0, FolderNameEvidence())
 			if bmErr == nil {
 				books[idx].folderParse = folderParsedFrom(bm)
 				if bm.Title != "" {
@@ -1785,7 +1785,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 				firstFile = filePath
 			}
 			fileCount := countAudioFilesInDir(dirPath, config.AppConfig.SupportedExtensions)
-			bm, bmErr := metadata.AssembleBookMetadata(dirPath, firstFile, fileCount, 0)
+			bm, bmErr := metadata.AssembleBookMetadataWith(dirPath, firstFile, fileCount, 0, FolderNameEvidence())
 			if bmErr != nil {
 				scanLog.Warn("AssembleBookMetadata failed for %s: %v", dirPath, bmErr)
 				fallbackUsed = true
@@ -3460,18 +3460,38 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 			return verdict.asError(book.FilePath)
 		}
 
+		// An EXISTING row keeps the title, author, series, position and
+		// narrator the folder parse would change (owner, 2026-10-05: the new
+		// parse is for searches and new imports only). Decided here, before
+		// any author, series or work row is created from those values, so a
+		// rescan neither rewrites the row nor leaves orphan rows behind.
+		hold := holdFolderFieldsForExisting(book)
+
 		// Resolve author/series with conflict-aware get-or-create semantics.
-		authorIDs, err := resolveAuthorIDs(book.Author)
-		if err != nil {
-			return err
-		}
+		var authorIDs []int
 		var authorID *int
-		if len(authorIDs) > 0 {
-			authorID = &authorIDs[0]
+		if hold.author {
+			authorID = hold.authorID
+		} else {
+			ids, err := resolveAuthorIDs(book.Author)
+			if err != nil {
+				return err
+			}
+			authorIDs = ids
+			if len(authorIDs) > 0 {
+				authorID = &authorIDs[0]
+			}
 		}
-		seriesID, seriesPos, err := resolveSeriesID(book.Series, authorID)
-		if err != nil {
-			return err
+		var seriesID *int
+		var seriesPos int
+		if hold.series {
+			seriesID = hold.seriesID
+		} else {
+			sid, pos, err := resolveSeriesID(book.Series, authorID)
+			if err != nil {
+				return err
+			}
+			seriesID, seriesPos = sid, pos
 		}
 		// The position stripped out of the series name is only information while
 		// something records it. book.Position (from the file tags) wins when it
@@ -3484,7 +3504,10 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 		// Uses the per-scan worksLookupCache (MAYDEPLOY-H6) to avoid an
 		// O(N) GetAllWorks scan per book.
 		var workID *string
-		if book.Title != "" {
+		if hold.work {
+			// The title is held: the work stays the row's own.
+			workID = hold.workID
+		} else if book.Title != "" {
 			canonical := util.NormalizeString(book.Title)
 			if id := lookupWorkID(canonical, authorID); id != "" {
 				wid := id

@@ -1,7 +1,7 @@
 // file: internal/metadata/book_name.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8eab30cb-5e6e-4bc7-bfba-dfb603b81ef2
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 //
 // ParseBookName: the one reader of the title/author/series/number shapes that
 // file and folder names pack into a book's title. Scan-time folder parsing
@@ -18,6 +18,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/authorjunk"
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
+	"github.com/falkcorp/audiobook-organizer/internal/franchise"
 )
 
 // NameEvidence is what ParseBookName may check a segment against. Every field
@@ -32,9 +33,23 @@ type NameEvidence struct {
 	// lists, internal/authority). A person-shaped segment it vouches for is a
 	// credit. nil means no such evidence.
 	IsKnownAuthor func(name string) bool
+	// IsAuthorRow reports whether the library already has an author row of
+	// that name. Weaker than IsKnownAuthor -- junk rows exist ("Star Wars"
+	// filed as an author) -- so it decides only a segment no series evidence
+	// claims (folderLeadKind). nil means no such evidence.
+	IsAuthorRow func(name string) bool
+	// IsKnownSeries reports whether the library already has a series of that
+	// name ("Star Wars", "Harry Potter", "Jack Reacher"). nil means no such
+	// evidence. A franchise the owner curates (internal/franchise: Doctor
+	// Who, Big Finish, Torchwood) is a series without it.
+	IsKnownSeries func(name string) bool
 	// Path is the book's file or folder path. A leading segment equal to an
-	// author-shaped ancestor folder ("Joshua Dalzelle/2018/...") is that
-	// author's credit.
+	// ancestor folder's name is that folder's author or series: an author
+	// when person evidence or a person-name shape says so ("Brandon
+	// Sanderson/Brandon Sanderson - Elantris"), the series otherwise ("Doctor
+	// Who/Doctor Who - The Pescatons"; folderLeadKind). The author of
+	// "Joshua Dalzelle/2018/2018 - Blueshift" comes from the folder parse's
+	// author folder, not from this.
 	Path string
 	// FolderName applies the folder conventions (set by the folder parser
 	// only): ANY author-shaped trailing segment (looksLikeFolderAuthor) is a
@@ -201,6 +216,10 @@ func ParseBookName(raw string, ev NameEvidence) BookName {
 	// leadFolder is a first field removed because it repeats an ancestor
 	// folder's name (no person evidence): the series, unless a slot names one.
 	leadFolder := ""
+	// leadRepeatsFolder: the first field repeats an ancestor folder, so the
+	// folder convention is "<that folder> - <title>", and a person-SHAPED last
+	// field is the title ("Jack Reacher - Killing Floor"), not an author.
+	leadRepeatsFolder := f.n() >= 2 && ancestorFolder(ancestors, f.segs[0])
 
 	// Trailing fields, innermost first: "Title - Author - read by X - Unknown
 	// Author" peels all three.
@@ -215,7 +234,7 @@ trailing:
 				b.Narrator = strings.TrimSpace(name)
 			}
 			b.Shapes = append(b.Shapes, ShapeNarratorCredit)
-		case ev.isKnownPerson(last) || (ev.FolderName && looksLikeFolderAuthor(last)):
+		case ev.isKnownPerson(last) || (ev.FolderName && !leadRepeatsFolder && looksLikeFolderAuthor(last)):
 			if b.Author == "" && !anyPerson(ev.Narrators, last) {
 				b.Author = last
 			} else if b.Narrator == "" && anyPerson(ev.Narrators, last) {
@@ -251,16 +270,20 @@ leading:
 			b.Author = first
 			b.Shapes = append(b.Shapes, ShapeLeadingAuthor)
 		case b.Author == "" && leadFolder == "" && ancestorFolder(ancestors, first) && !bareNumberSegRe.MatchString(f.segs[1]):
-			// A first field that only repeats an ancestor folder's name is
-			// NOT person evidence: a top-level series folder has the same
-			// shape as an author folder ("Star Wars/Star Wars - Thrawn",
-			// "Doctor Who/Doctor Who - The Pescatons"). It is removed from
-			// the title and kept as the series when no slot names another
-			// (below) -- never an author. A first field followed by a bare
-			// number is that series' slot ("Reclaiming Honor/Reclaiming
-			// Honor - 02 - Claimed by Honor"), read by readSeriesSlot.
-			leadFolder = first
-			b.Shapes = append(b.Shapes, ShapeLeadingFolder)
+			// A first field that repeats an ancestor folder's name is that
+			// folder's author or its series: "Brandon Sanderson/Brandon
+			// Sanderson - Elantris" and "Star Wars/Star Wars - Thrawn" have
+			// one shape. folderLeadKind decides on the evidence. A first
+			// field followed by a bare number is the series' slot
+			// ("Reclaiming Honor/Reclaiming Honor - 02 - Claimed by Honor"),
+			// read by readSeriesSlot.
+			if ev.folderLeadKind(first) == leadIsAuthor {
+				b.Author = first
+				b.Shapes = append(b.Shapes, ShapeLeadingAuthor)
+			} else {
+				leadFolder = first
+				b.Shapes = append(b.Shapes, ShapeLeadingFolder)
+			}
 		default:
 			break leading
 		}
@@ -268,6 +291,14 @@ leading:
 	}
 
 	b.readSeriesSlot(f)
+	// "Agatha Christie - Poirot - The ABC Murders": with the author read off
+	// the front, two fields and no slot are the rip convention "<series> -
+	// <title>". Only after an author lead: alone, "A - B" may be a title and
+	// its subtitle.
+	if b.Has(ShapeLeadingAuthor) && b.Series == "" && f.n() == 2 && !authorjunk.IsGenreTagline(f.segs[1]) {
+		b.Series, b.Name = f.segs[0], f.segs[1]
+		b.Shapes = append(b.Shapes, ShapeSeriesSlot)
+	}
 	if b.Position != "" && f.n() > 2 {
 		// A trailing bare number after a slot that already gave the
 		// position is a track or part suffix.
@@ -430,6 +461,42 @@ func anyPerson(people []string, name string) bool {
 
 // knownAuthor reports whether name is a person-shaped name the authority
 // lists know as an author.
+// Leading-folder verdicts (folderLeadKind).
+const (
+	leadIsSeries = iota
+	leadIsAuthor
+)
+
+// folderLeadKind decides whether a first field that repeats an ancestor
+// folder's name is an author or a series, strongest evidence first:
+//
+//  1. the authority lists know it as a person (an author or narrator) ->
+//     author ("Stephen King");
+//  2. a franchise the owner curates (franchise.Matches: "Doctor Who") or a
+//     series the library already has (IsKnownSeries: "Star Wars", "Harry
+//     Potter") -> series;
+//  3. a library author row of that name, or a person-name shape (two to five
+//     capitalised words or initials, no digits, not work-shaped:
+//     looksLikeFolderAuthor) -> author ("Cormac McCarthy");
+//  4. anything else -> series ("Warhammer 40k").
+//
+// A character-named series with no series row and no franchise match
+// ("Sherlock Holmes" in an empty library) reads as a person by shape alone;
+// the library's own series rows are what tell them apart.
+func (ev NameEvidence) folderLeadKind(name string) int {
+	if ev.knownAuthor(name) {
+		return leadIsAuthor
+	}
+	if franchise.Matches(name) || (ev.IsKnownSeries != nil && ev.IsKnownSeries(name)) {
+		return leadIsSeries
+	}
+	personShape := looksLikeFolderAuthor(name) && !strings.ContainsAny(name, "0123456789")
+	if personShape || (ev.IsAuthorRow != nil && ev.IsAuthorRow(name) && looksLikeAuthorSegment(name)) {
+		return leadIsAuthor
+	}
+	return leadIsSeries
+}
+
 func (ev NameEvidence) knownAuthor(name string) bool {
 	return ev.IsKnownAuthor != nil && looksLikeAuthorSegment(name) && !strings.ContainsAny(name, "0123456789") && ev.IsKnownAuthor(name)
 }
