@@ -186,6 +186,11 @@ func TestVersionTwinFixer_AppliedTwinCopyAndUndo(t *testing.T) {
 	require.Equal(t, "B002V1OF70", row.Current["twin_asin"])
 	require.Equal(t, "75600", row.Current["primary_duration"])
 	require.Contains(t, row.Reason, "B002V1OF70")
+	require.Equal(t, "matched", row.Proposed["primary_review_status"])
+	require.Equal(t, row.Current["primary_title"], row.Proposed["primary_title"],
+		"display keys are proposed unchanged, so the lane does not read them as cleared")
+	require.Equal(t, row.Current["twin_id"], row.Proposed["twin_id"])
+	require.Equal(t, "Scott Brick", row.Proposed["primary_narrator"])
 
 	dry := l.apply(plan, true, "g-applied")
 	require.Equal(t, 1, dry.ByOutcome[repairs.OutcomeWouldApply])
@@ -196,6 +201,7 @@ func TestVersionTwinFixer_AppliedTwinCopyAndUndo(t *testing.T) {
 	p := l.get("p")
 	require.True(t, database.MetadataApplied(p.MetadataReviewStatus), "status %v", dcStr(p.MetadataReviewStatus))
 	require.Equal(t, "Scott Brick", dcStr(p.Narrator), "the record's empty fields are filled")
+	require.Equal(t, "B002V1OF70", dcStr(p.ASIN), "the proposed ASIN fill lands")
 	require.Equal(t, "Dune", p.Title)
 	require.Equal(t, metafetch.CandidateSourceHash(vtDune()), dcStr(p.MetadataSourceHash))
 	require.Equal(t, flags, l.primaryFlags(), "no book's primary flag, merge target or group changed")
@@ -322,6 +328,40 @@ func TestVersionTwinFixer_Holds(t *testing.T) {
 	})
 	hold("g-hash", vtHoldHashShared)
 
+	// A primary whose files sit under books/itunes/** (no iTunes id): the
+	// framework path guard is off for this fixer (ITunesDatabaseOnly), so
+	// the fixer's own check is what holds it.
+	l.book("itp-p", "g-itunes-path", true, func(b *database.Book) { b.FilePath = "/media/books/itunes/Frank Herbert/Dune" })
+	l.appliedTwin("itp-t", "g-itunes-path", vtDuneASIN("B0TWIN0015"), nil)
+	hold("g-itunes-path", vtHoldITunes)
+
+	// Applied class, identity_stale: the twin's cache was fetched for an ASIN
+	// the twin no longer carries, and the record does not carry the new one.
+	l.book("stale-p", "g-stale-applied", true, nil)
+	stale := vtDuneASIN("B0TWIN0016")
+	st := l.appliedTwin("stale-t", "g-stale-applied", stale, func(b *database.Book) { b.ASIN = vtPtr("B0TWINNEW1") })
+	entry, err := l.st.GetMetadataCache(st)
+	require.NoError(t, err)
+	entry.FetchedForASIN = "B0TWIN0016"
+	require.NoError(t, l.st.PutMetadataCache(entry))
+	hold("g-stale-applied", vtHoldIdentityStale)
+
+	// Candidates class, identity_stale: the twin's candidates were fetched
+	// for a title it no longer has.
+	l.book("cstale-p", "g-stale-cands", true, nil)
+	cst := l.book("cstale-t", "g-stale-cands", false, nil)
+	l.putCache(cst, []metafetch.MetadataCandidate{vtDuneASIN("B0TWIN0017")}, metafetch.BatchSourceHash(cst, "Dune Messiah", "Frank Herbert"))
+	hold("g-stale-cands", vtHoldIdentityStale)
+
+	// Candidates class, twins_disagree: two unapplied twins with candidates
+	// for different titles.
+	l.book("cdis-p", "g-cand-disagree", true, nil)
+	cd1 := l.book("cdis-t1", "g-cand-disagree", false, nil)
+	l.putCache(cd1, []metafetch.MetadataCandidate{vtDuneASIN("B0TWIN0018")}, metafetch.BatchSourceHash(cd1, "Dune", "Frank Herbert"))
+	cd2 := l.book("cdis-t2", "g-cand-disagree", false, func(b *database.Book) { b.Title = "Dune Messiah" })
+	l.putCache(cd2, []metafetch.MetadataCandidate{vtDuneASIN("B0TWIN0019")}, metafetch.BatchSourceHash(cd2, "Dune Messiah", "Frank Herbert"))
+	hold("g-cand-disagree", vtHoldTwinsDisagree)
+
 	// Two primaries in one group.
 	l.book("amb-p1", "g-ambiguous", true, nil)
 	l.book("amb-p2", "g-ambiguous", true, nil)
@@ -329,7 +369,8 @@ func TestVersionTwinFixer_Holds(t *testing.T) {
 	hold("g-ambiguous", vtHoldPrimaryAmbiguous)
 
 	// Candidates twin with a different author is held too.
-	other2, err := l.st.CreateAuthor("Brian Herbert")
+	other2, err2 := l.st.CreateAuthor("Brian Herbert")
+	err = err2
 	require.NoError(t, err)
 	l.book("ca-p", "g-cand-author", true, func(b *database.Book) { b.AuthorID = &other2.ID })
 	cat := l.book("ca-t", "g-cand-author", false, nil)
