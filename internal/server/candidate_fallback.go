@@ -1,5 +1,5 @@
 // file: internal/server/candidate_fallback.go
-// version: 2.1.0
+// version: 2.1.1
 // guid: 487502d2-faea-4677-8c9d-171a796ad643
 // last-edited: 2026-10-06
 //
@@ -276,6 +276,11 @@ type candidateFallbackInput struct {
 	// unrecorded, so a later quota day still selects it first.
 	googleCapped bool
 	cached       string // CandidateResult.Cached when the primary answer came from the cache
+	// carryFrom is the SourceHash of the book's row as the fetch found it,
+	// when it was vouched for the book as it is now ("" when it was not, or
+	// there was none): each fallback answer merges into that row, and an
+	// empty one keeps it (metafetch.SearchOptions.CarryFromSourceHash).
+	carryFrom string
 	withQuery    func(CandidateResult) CandidateResult
 }
 
@@ -364,18 +369,14 @@ func (s *Server) runCandidateFallback(ctx context.Context, mfs *metafetch.Servic
 					tier, b.Used(), b.Limit(tier)))
 			}
 		}
-		// The row merged into is the one this book was served or fetched
-		// (in.entry) -- also when the verdict vouched for it under other
-		// hashed inputs (a raw author credit, a pre-2026-09-28 no-author
-		// row), which a merge by the search's own hash would not find and
-		// would replace.
-		mergeFrom := ""
-		if in.entry != nil {
-			mergeFrom = in.entry.SourceHash
-		}
+		// The row merged into is the one this book was served or fetched --
+		// also when it was vouched for under other hashed inputs (a raw
+		// author credit, a pre-2026-09-28 no-author row), which a merge by
+		// the search's own hash would not find and would replace. Only a
+		// vouched row: in.entry may be one the verdict refused.
 		entry, resp, err := mfs.FetchAndCacheWithResponse(ctx, in.limiter, in.book.ID, in.query, in.author, "", "",
 			metafetch.SearchOptions{OnlySources: []string{fb.name}, BypassFetchCache: in.force, MergeWithCached: true,
-				MergeUsable: metabatch.UsableRanker(in.store, in.book), MergeFromSourceHash: mergeFrom})
+				MergeUsable: metabatch.UsableRanker(in.store, in.book), CarryFromSourceHash: in.carryFrom})
 		if err != nil {
 			deferrable := fallbackDeferrable(err)
 			if fb.isGoogle() && deferrable {

@@ -1,5 +1,5 @@
 // file: internal/metafetch/cache.go
-// version: 1.29.0
+// version: 1.29.1
 // guid: a4f33a2e-3b4d-4306-bdce-476758e39120
 // last-edited: 2026-10-06
 //
@@ -611,14 +611,14 @@ func (mfs *Service) cacheSearchResponse(bookID, query, author, narrator, series 
 	// would write the older row's state back over it.
 	defer mfs.lockRow(bookID)()
 
-	// prev is the row for the same inputs -- or, for a merge, the row the
-	// caller read and vouched for under other hashed inputs
-	// (SearchOptions.MergeFromSourceHash): its candidates are merged or
-	// carried exactly as a same-inputs row's are, instead of being replaced.
+	// prev is the row for the same inputs -- or the row the caller read and
+	// vouched for under other hashed inputs (SearchOptions.CarryFromSourceHash):
+	// its candidates are merged, preserved on an empty answer, or carried
+	// exactly as a same-inputs row's are, instead of being replaced.
 	var prev *MetadataCandidateCache
 	if mfs.db != nil {
 		if p, perr := mfs.db.GetMetadataCache(bookID); perr == nil && p != nil &&
-			(p.SourceHash == sourceHash || (resp.mergeCached && resp.mergeFromHash != "" && p.SourceHash == resp.mergeFromHash)) {
+			(p.SourceHash == sourceHash || (resp.carryFromHash != "" && p.SourceHash == resp.carryFromHash)) {
 			prev = p
 		}
 	}
@@ -990,6 +990,56 @@ const (
 	BatchVerdictKnownEmpty
 )
 
+// VouchedCachedRow returns book's candidate-cache row when it belongs to the
+// book as it is now -- the identity half of CachedBatchVerdict, without the
+// freshness half: the row's SourceHash passes the same check the apply
+// planner uses (ValidateCachedIdentityForBook against the live authors, or
+// CachedQueryMatchesIdentity for a stand-in query). It may be hashed from
+// other inputs than a search would hash today (the raw author credit before
+// 2026-10-06's cleaning, a pre-2026-09-28 no-author row); its SourceHash is
+// what the caller passes as SearchOptions.CarryFromSourceHash, so a refetch
+// that answers nothing keeps its candidates instead of writing an empty row
+// over them. nil when there is no row, it has no SourceHash, or it answers
+// another identity (or the authors cannot be read: unchecked is not vouched).
+func (mfs *Service) VouchedCachedRow(book *database.Book, query string) *MetadataCandidateCache {
+	if mfs == nil || mfs.db == nil || book == nil {
+		return nil
+	}
+	entry, err := mfs.db.GetMetadataCache(book.ID)
+	if err != nil || entry == nil || entry.SourceHash == "" {
+		return nil
+	}
+	if !mfs.cachedRowVouched(entry, book, query) {
+		return nil
+	}
+	return entry
+}
+
+// cachedRowVouched is the identity check CachedBatchVerdict and
+// VouchedCachedRow share. The batch fetch hashes the live primary author
+// (fetchCandidateForBook's author hint), so the identity is checked against
+// the live authors, the same input the apply planner passes. A read failure
+// answers false: the book is re-asked rather than served on an identity
+// nobody checked.
+//
+// A row hashed with the query itself is accepted too
+// (CachedQueryMatchesIdentity). For a book with a real title the query IS
+// the title, so this changes nothing; for a book whose title is blank or a
+// placeholder the batch fetch searches a stand-in (its transcribed title)
+// and hashes the row with that, which the book-title check can never match
+// -- every run would re-ask every provider for it. The apply planner accepts
+// that row the same way, and bulk-applies its candidate only on the
+// separate transcribed-title evidence (owner decision 2026-09-28:
+// applygate.EvaluateTranscribed).
+func (mfs *Service) cachedRowVouched(entry *MetadataCandidateCache, book *database.Book, query string) bool {
+	live, lerr := database.LiveBookAuthorNames(mfs.db, book)
+	if lerr != nil {
+		return false
+	}
+	return mfs.ValidateCachedIdentityForBook(entry, book, live) == nil ||
+		mfs.CachedQueryMatchesIdentity(entry, book, live, query)
+}
+
 // CachedBatchVerdict decides whether the batch candidate fetch may answer
 // book (searched as query/author, the hints the fetch passes) from the
 // candidate cache without a provider call. It returns the entry it decided
@@ -1015,26 +1065,9 @@ func (mfs *Service) CachedBatchVerdict(book *database.Book, query, author string
 	if err != nil || entry == nil || entry.SourceHash == "" || entry.SearchFingerprint == "" {
 		return entry, BatchVerdictNone, nil
 	}
-	// The batch fetch hashes the live primary author (fetchCandidateForBook's
-	// author hint), so the identity is checked against the live authors, the
-	// same input the apply planner passes. A read failure answers None: the
-	// book is re-asked rather than served on an identity nobody checked.
-	//
-	// A row hashed with the query itself is accepted too
-	// (CachedQueryMatchesIdentity). For a book with a real title the query IS
-	// the title, so this changes nothing; for a book whose title is blank or
-	// a placeholder the batch fetch searches a stand-in (its transcribed
-	// title) and hashes the row with that, which the book-title check can
-	// never match -- every run would re-ask every provider for it. The apply
-	// planner accepts that row the same way, and bulk-applies its candidate
-	// only on the separate transcribed-title evidence (owner decision
-	// 2026-09-28: applygate.EvaluateTranscribed).
-	live, lerr := database.LiveBookAuthorNames(mfs.db, book)
-	if lerr != nil {
-		return entry, BatchVerdictNone, nil
-	}
-	if mfs.ValidateCachedIdentityForBook(entry, book, live) != nil &&
-		!mfs.CachedQueryMatchesIdentity(entry, book, live, query) {
+	// The row must answer the book as it is now (cachedRowVouched says how;
+	// VouchedCachedRow shares the check).
+	if !mfs.cachedRowVouched(entry, book, query) {
 		return entry, BatchVerdictNone, nil
 	}
 	// A row from the version "1" ladder for the same inputs keeps its fresh

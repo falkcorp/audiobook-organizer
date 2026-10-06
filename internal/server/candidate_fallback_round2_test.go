@@ -1,5 +1,5 @@
 // file: internal/server/candidate_fallback_round2_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 34fd4490-2dd6-4158-b2d2-a0064a8cabb6
 // last-edited: 2026-10-06
 
@@ -190,7 +190,7 @@ func TestTranscriptionApply_ReviewOnlySourceWritesNothing(t *testing.T) {
 // B1 through the batch path: the batch verdict serves a row written under the
 // raw author credit (before 2026-10-06's cleaning) as fresh, and the fallback
 // that runs for it hashes the cleaned credit. Its answer must merge into that
-// row (SearchOptions.MergeFromSourceHash), never replace the chain's
+// row (SearchOptions.CarryFromSourceHash), never replace the chain's
 // candidates.
 func TestCandidateFallback_MergesIntoRowVouchedUnderRawCredit(t *testing.T) {
 	f := newFallbackFixture(t, 800)

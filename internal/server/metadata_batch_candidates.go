@@ -1,5 +1,5 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 4.24.0
+// version: 4.24.1
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
 // last-edited: 2026-10-06
 //
@@ -372,11 +372,21 @@ func (s *Server) fetchCandidateForBook(
 	plan := candidateFallbackPlan(nameByID)
 	active := activeFallbackPlan(plan)
 	idByName := sourceIDsByName(nameByID)
+	// carryFrom is the SourceHash of the book's row when it was vouched for
+	// the book as it is now (metafetch.Service.VouchedCachedRow, or the
+	// batch verdict's fresh row): every write of this fetch, the chain's and
+	// the fallback's, carries that row's candidates as a same-inputs row's
+	// are carried (SearchOptions.CarryFromSourceHash). Without it a row
+	// hashed under other inputs (a raw author credit, a pre-2026-09-28
+	// no-author row) was replaced by an empty chain answer -- every
+	// scheduled tick, library-wide, for each book whose candidates were all
+	// unusable.
+	carryFrom := ""
 	fallback := func(entry *metafetch.MetadataCandidateCache, why, cached string) CandidateResult {
 		return s.runCandidateFallback(ctx, mfs, candidateFallbackInput{
 			store: store, limiter: limiter, book: book, bookInfo: bookInfo, query: query.Title, author: authorForHash,
 			force: force, pending: fallbackOwed(entry, active), entry: entry, why: why, cached: cached, withQuery: withQuery,
-			googleCapped: googleCapped,
+			googleCapped: googleCapped, carryFrom: carryFrom,
 		})
 	}
 
@@ -385,10 +395,9 @@ func (s *Server) fetchCandidateForBook(
 	// the rest are asked (a quota-starved provider no longer drags the others
 	// into every run); nil asks every provider.
 	var askOnly []string
-	var cachedRow *metafetch.MetadataCandidateCache
 	if !force {
 		cached, verdict, ask := mfs.CachedBatchVerdict(book, query.Title, authorForHash)
-		askOnly, cachedRow = ask, cached
+		askOnly = ask
 		switch verdict {
 		case metafetch.BatchVerdictFreshCandidates:
 			// Fresh candidates the owner cannot use (all rejected, all refused
@@ -398,6 +407,7 @@ func (s *Server) fetchCandidateForBook(
 			if len(active) > 0 {
 				v := metabatch.NoUsableCandidate(store, book, cached)
 				if !v.Usable && len(fallbackOwed(cached, active)) > 0 {
+					carryFrom = cached.SourceHash // the verdict vouched for it
 					return fallback(cached, v.Why, candidateCachedCandidates)
 				}
 				if v.Usable {
@@ -431,13 +441,22 @@ func (s *Server) fetchCandidateForBook(
 	}
 	primary := splitFallback(ask, plan)
 
-	entry := cachedRow
+	// The row this fetch writes over, when it still belongs to the book --
+	// read here, not from the verdict: a forced refetch never asked the
+	// verdict, and a None verdict also returns a row it did NOT vouch for
+	// (another identity), whose candidates must be neither carried nor
+	// merged into.
+	entry := mfs.VouchedCachedRow(book, query.Title)
+	if entry != nil {
+		carryFrom = entry.SourceHash
+	}
 	if len(plan) == 0 || len(primary) > 0 {
 		onlySources := askOnly
 		if len(plan) > 0 {
 			onlySources = primary
 		}
-		fetched, resp, ferr := mfs.FetchAndCacheWithResponse(ctx, limiter, bookID, query.Title, authorForHash, "", "", metafetch.SearchOptions{OnlySources: onlySources, BypassFetchCache: force})
+		fetched, resp, ferr := mfs.FetchAndCacheWithResponse(ctx, limiter, bookID, query.Title, authorForHash, "", "",
+			metafetch.SearchOptions{OnlySources: onlySources, BypassFetchCache: force, CarryFromSourceHash: carryFrom})
 		if ferr != nil {
 			// A primary chain that failed is not a "no match": the fallback
 			// is not asked, and the next run asks the chain again.
