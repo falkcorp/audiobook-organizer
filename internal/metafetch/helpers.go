@@ -1,7 +1,7 @@
 // file: internal/metafetch/helpers.go
-// version: 1.21.1
+// version: 1.22.0
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
-// last-edited: 2026-10-04
+// last-edited: 2026-10-06
 
 package metafetch
 
@@ -581,11 +581,13 @@ func LedgerResultJSON(status, source, variant string) string {
 	return string(b)
 }
 
-// providerSentinel reports a control-plane refusal — a throttle hold or an
-// open circuit breaker — that every later attempt against the same source in
-// this ladder would repeat verbatim. Callers stop the ladder on one.
+// providerSentinel reports a control-plane refusal — a throttle hold, an
+// open circuit breaker or a spent daily budget (dailyquota) — that every
+// later attempt against the same source in this ladder would repeat
+// verbatim. Callers stop the ladder on one.
 func providerSentinel(err error) bool {
-	return errors.Is(err, metadata.ErrProviderThrottled) || errors.Is(err, metadata.ErrCircuitOpen)
+	return errors.Is(err, metadata.ErrProviderThrottled) || errors.Is(err, metadata.ErrCircuitOpen) ||
+		metadata.IsDailyBudgetSpent(err)
 }
 
 // keepDiagnosis is the error to carry forward after next: a sentinel never

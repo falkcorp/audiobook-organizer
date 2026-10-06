@@ -1,7 +1,7 @@
 // file: cmd/root.go
-// version: 1.22.1
+// version: 1.23.0
 // guid: 6a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
-// last-edited: 2026-10-03
+// last-edited: 2026-10-06
 
 package cmd
 
@@ -343,6 +343,9 @@ var serveCmd = &cobra.Command{
 		// Process-scoped, so the throttle registry's store lifetime matches the
 		// process. Deliberately NOT inside NewServer -- see the doc comment.
 		server.AttachProviderThrottleStore(store)
+		// Same rule: the shared Google Books daily budget persists its count
+		// in this store for the life of the process.
+		server.AttachGoogleBooksBudgetStore(store)
 
 		fmt.Println("Server initialized (hub, batcher, file I/O pool)")
 		cfg := getDefaultServerConfig()

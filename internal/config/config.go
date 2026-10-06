@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.136.0
+// version: 1.137.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-10-06
 
@@ -1385,13 +1385,26 @@ type Config struct {
 	// budget (server.candidateFetchWorkers); any other value is used as is,
 	// clamped to 1-64.
 	MetadataCandidateFetchWorkers int `json:"metadata_candidate_fetch_workers"`
-	// GoogleBooksFallbackDailyLimit caps the Google Books lookups the batch
-	// candidate fetch makes per quota day (midnight Pacific) for books the
-	// rest of the chain and Open Library found nothing for
-	// (metafetch.CandidateFallbackProviderIDs). Owner decision 2026-10-06:
-	// at most 800 of the key's 1,000 queries/day, leaving headroom for the
-	// paths that still ask Google directly. 0 (unset) means the default,
-	// 800; a negative value turns the Google Books fallback off.
+	// GoogleBooksDailyLimit is the ONE Google Books daily lookup counter's
+	// total (quota day: midnight Pacific; internal/metadata/dailyquota),
+	// shared by every Google Books caller: the candidate fetch's fallback, the
+	// interactive search dialog, the bulk fetch and any other. An interactive
+	// lookup (a person waiting) may use the count up to this. Owner decision
+	// 2026-10-06: the key's 1,000 queries/day. 0 (unset) means 1,000; a
+	// negative value refuses every Google Books lookup.
+	GoogleBooksDailyLimit int `json:"google_books_daily_limit"`
+	// GoogleBooksBackgroundDailyLimit is where BACKGROUND Google Books lookups
+	// (every one no person is waiting on) stop on the same counter, so the
+	// rest of GoogleBooksDailyLimit stays reserved for interactive ones.
+	// Owner decision 2026-10-06: 800. 0 (unset) means 800; a negative value
+	// refuses every background lookup. Never above GoogleBooksDailyLimit.
+	GoogleBooksBackgroundDailyLimit int `json:"google_books_background_daily_limit"`
+	// GoogleBooksFallbackDailyLimit turns the batch candidate fetch's Google
+	// Books fallback step off when negative. Its count is the shared counter
+	// above (it capped a fallback-only count until 2026-10-06); a positive
+	// value set from that time can only LOWER the background cap
+	// (GoogleBooksBackgroundDailyLimit unset: min of the two), never raise
+	// it past 800.
 	GoogleBooksFallbackDailyLimit int `json:"google_books_fallback_daily_limit"`
 	// CoalesceShatteredSiblings enables a scan-time post-pass that merges
 	// single-file books shattered across "<prefix> - N" sibling chapter subdirs
@@ -2911,6 +2924,8 @@ func InitConfig() {
 			RepairChapterMaxMin:                 viper.GetInt("repair_chapter_max_min"),
 			MetadataCandidateFetchWorkers:       viper.GetInt("metadata_candidate_fetch_workers"),
 			GoogleBooksFallbackDailyLimit:       viper.GetInt("google_books_fallback_daily_limit"),
+			GoogleBooksDailyLimit:               viper.GetInt("google_books_daily_limit"),
+			GoogleBooksBackgroundDailyLimit:     viper.GetInt("google_books_background_daily_limit"),
 			CoalesceShatteredSiblings:           viper.GetBool("coalesce_shattered_siblings"),
 			OperationTimeoutMinutes:             viper.GetInt("operation_timeout_minutes"),
 			DBCensusExactReadMBPerSec:           viper.GetInt("db_census_exact_read_mb_per_sec"),

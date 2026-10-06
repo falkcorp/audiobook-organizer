@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_stale.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: ba7b75e1-2940-4864-ac78-6a8982bcd9a3
-// last-edited: 2026-10-04
+// last-edited: 2026-10-06
 
 package handlers
 
@@ -83,6 +83,9 @@ type loadedCacheRow struct {
 	// files is what the review row's book info takes from the book's file
 	// rows, read in the same pass so the page never reads them again.
 	files metabatch.BookFileFacts
+	// fallbackDeferred is entry.FallbackDeferred(): a fallback provider's last
+	// attempt for the row was deferred.
+	fallbackDeferred bool
 }
 
 // cacheRowSet is what loadCacheRows read.
@@ -212,6 +215,7 @@ func (l *cacheRowLoader) readEntry(r *loadedCacheRow, files chunkFiles) (*metafe
 // the row is then dated off its summary and holds no candidate.
 func (l *cacheRowLoader) fill(r *loadedCacheRow, entry *metafetch.MetadataCandidateCache, files chunkFiles) {
 	r.lastChecked = cacheRowLastChecked(entry, r.sum.FetchedAt)
+	r.fallbackDeferred = entry.FallbackDeferred()
 	if entry != nil && len(entry.Candidates) > 0 {
 		r.candidateCount = len(entry.Candidates)
 		// json.RawMessage decoding copies each element, so holding the first

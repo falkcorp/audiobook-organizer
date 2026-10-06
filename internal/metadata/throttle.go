@@ -1,7 +1,7 @@
 // file: internal/metadata/throttle.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 589d6eef-182c-4245-9722-d24bbd3dcf06
-// last-edited: 2026-09-03
+// last-edited: 2026-10-06
 
 package metadata
 
@@ -156,6 +156,15 @@ func ClassifyProviderError(err error) (reason ThrottleReason, hold time.Duration
 	// DNS failures and connection resets do not wrap these sentinels and still
 	// classify as transport below.
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return "", 0, false
+	}
+	// Our own daily-budget refusal (dailyquota): no request was sent, so it
+	// says nothing about the provider. The transport returns it, so
+	// net/http wraps it in a *url.Error -- a net.Error -- and without this it
+	// would classify as transport trouble below and hold the provider for
+	// EVERY caller, the interactive ones the budget reserves quota for
+	// included.
+	if IsDailyBudgetSpent(err) {
 		return "", 0, false
 	}
 

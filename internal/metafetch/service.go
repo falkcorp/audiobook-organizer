@@ -417,6 +417,22 @@ type SearchMetadataResponse struct {
 	// over an empty refetch, the ones this search's position rules refuse
 	// (strongCriteria.filterCarried).
 	carryFilter func([]json.RawMessage) []json.RawMessage
+	// sourceErrs is SourcesFailed with the error VALUES, so a caller can tell
+	// a spent daily budget, a throttle hold or a 5xx from a permanent 4xx
+	// (errors.Is / errors.As) instead of parsing strings. noSourceAnswered
+	// joins them into the error it returns; SourceErrors reads them.
+	sourceErrs map[string]error
+	// mergeCached is SearchOptions.MergeWithCached, for cacheSearchResponse.
+	mergeCached bool
+}
+
+// SourceErrors returns the error each failed source returned (keyed like
+// SourcesFailed), nil when none failed.
+func (r *SearchMetadataResponse) SourceErrors() map[string]error {
+	if r == nil {
+		return nil
+	}
+	return r.sourceErrs
 }
 
 // SearchOptions carries optional per-request flags for SearchMetadataForBook.
@@ -447,7 +463,19 @@ type SearchOptions struct {
 	//
 	// Set it only where a human asked for exactly one book. Setting it on a
 	// batch path silently deletes the whole feature.
+	//
+	// The same "a person is waiting" marks the search's provider lookups
+	// INTERACTIVE for the daily quota budgets (dailyquota): such a search may
+	// use the Google Books quota a background lookup leaves reserved.
 	BypassProviderThrottle bool
+
+	// MergeWithCached makes an answer WITH results merge into the book's
+	// cached candidates for the same inputs instead of replacing them (every
+	// other search replaces). The batch candidate fetch's provider fallback
+	// sets it: it asks Open Library or Google Books only because the chain's
+	// candidates were not usable, and replacing would silently drop those
+	// candidates from the review list. The union is re-ranked by score.
+	MergeWithCached bool
 
 	// BypassFetchCache skips the per-source fetch-cache READ, so every
 	// selected provider is asked again. Fresh non-empty results are still

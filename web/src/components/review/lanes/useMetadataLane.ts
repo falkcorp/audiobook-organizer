@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.30.0
+// version: 1.31.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
 // last-edited: 2026-10-06
 //
@@ -343,7 +343,9 @@ export function saveBulkApplyMode(mode: BulkApplyMode): void {
 export function loadSkipReplaceConfirm(): boolean {
   if (typeof window === 'undefined') return false;
   try {
-    return window.localStorage.getItem(STORAGE_KEYS.METADATA_REVIEW_SKIP_REPLACE_CONFIRM) === 'true';
+    return (
+      window.localStorage.getItem(STORAGE_KEYS.METADATA_REVIEW_SKIP_REPLACE_CONFIRM) === 'true'
+    );
   } catch {
     return false;
   }
@@ -547,6 +549,8 @@ export interface MetadataLaneSummary {
    * it, and these books used to be counted inside `unreviewable`.
    */
   resolved_no_candidates?: number;
+  /** Rows whose last fallback lookup was deferred (server `deferred`). */
+  deferred?: number;
 }
 
 /**
@@ -570,13 +574,15 @@ export type ChipFilter =
   | 'errors'
   | 'no_candidates'
   | 'resolved_no_candidates'
-  | 'stale';
+  | 'stale'
+  | 'deferred';
 
 const CHIPS_NEEDING_UNREVIEWABLE: ReadonlySet<ChipFilter> = new Set<ChipFilter>([
   'errors',
   'no_candidates',
   'resolved_no_candidates',
   'stale',
+  'deferred',
 ]);
 
 /** Whether a row came from the unreviewable bucket (it has no candidate). */
@@ -1082,6 +1088,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
           // claims, and the rail renders them differently.
           unreviewable_by_cause: data.unreviewable_by_cause,
           resolved_no_candidates: data.resolved_no_candidates,
+          deferred: data.deferred,
         });
         if (typeof data.bulk_apply_max_items === 'number' && data.bulk_apply_max_items > 0) {
           setApplyCap(data.bulk_apply_max_items);
@@ -1290,6 +1297,11 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         // second copy of the rule that could drift from the first. Explicitly
         // true: an absent flag is not a stale claim.
         return [...results, ...unreviewableResults].filter((r) => r.stale === true);
+      case 'deferred':
+        // The server's per-row flag, like stale: a book whose fallback
+        // lookup (Google Books' daily budget spent, a hold) waits on a later
+        // run. Most have no candidate, so both buckets are read.
+        return [...results, ...unreviewableResults].filter((r) => r.fallback_deferred === true);
     }
   }, [chipFilter, results, unreviewableResults]);
 
@@ -2207,10 +2219,12 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         const failed: string[] = [];
         let cleared = 0;
         for (const batch of chunk(marked, PER_BOOK_CONCURRENCY)) {
-          setBulkProgress({ label: 'Clearing no-match marks', done: cleared, total: marked.length });
-          const settled = await Promise.allSettled(
-            batch.map((id) => api.clearMetadataNoMatch(id))
-          );
+          setBulkProgress({
+            label: 'Clearing no-match marks',
+            done: cleared,
+            total: marked.length,
+          });
+          const settled = await Promise.allSettled(batch.map((id) => api.clearMetadataNoMatch(id)));
           settled.forEach((s, j) => {
             if (s.status === 'rejected') failed.push(batch[j]);
           });

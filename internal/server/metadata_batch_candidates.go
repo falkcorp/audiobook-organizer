@@ -1,5 +1,5 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 4.22.0
+// version: 4.23.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
 // last-edited: 2026-10-06
 //
@@ -356,16 +356,43 @@ func (s *Server) fetchCandidateForBook(
 		authorForHash = authorHint[0]
 	}
 	searchAuthor = mfs.SearchAuthorFor(book, query.Title, authorForHash)
+	// PROVIDER FALLBACK (owner decisions 2026-10-06, candidate_fallback.go).
+	// Open Library and Google Books are not asked alongside the rest of the
+	// chain: they are asked, in that order, only when the chain left the book
+	// without a usable candidate (noUsableCandidate) -- Google under the
+	// shared daily budget. With neither enabled, plan is empty and this is
+	// the single search it always was.
+	nameByID := mfs.ActiveSourceNamesByID()
+	plan := candidateFallbackPlan(nameByID)
+	active := activeFallbackPlan(plan)
+	idByName := sourceIDsByName(nameByID)
+	fallback := func(entry *metafetch.MetadataCandidateCache, why, cached string) CandidateResult {
+		return s.runCandidateFallback(ctx, mfs, candidateFallbackInput{
+			store: store, limiter: limiter, book: book, bookInfo: bookInfo, query: query.Title, author: authorForHash,
+			force: force, pending: fallbackOwed(entry, active), entry: entry, why: why, cached: cached, withQuery: withQuery,
+		})
+	}
+
 	// askOnly: providers without a valid answer for these inputs. When the
 	// cache holds an empty result that some providers already answered, only
 	// the rest are asked (a quota-starved provider no longer drags the others
 	// into every run); nil asks every provider.
 	var askOnly []string
+	var cachedRow *metafetch.MetadataCandidateCache
 	if !force {
 		cached, verdict, ask := mfs.CachedBatchVerdict(book, query.Title, authorForHash)
-		askOnly = ask
+		askOnly, cachedRow = ask, cached
 		switch verdict {
 		case metafetch.BatchVerdictFreshCandidates:
+			// Fresh candidates the owner cannot use (all rejected, all refused
+			// by the ASIN checks, or below the apply floor) are not an answer:
+			// a fallback provider that still owes one is asked. A row like this
+			// was stuck before -- served from the cache forever, never selected.
+			if len(active) > 0 {
+				if v := noUsableCandidate(store, book, cached); !v.Usable && len(fallbackOwed(cached, active)) > 0 {
+					return fallback(cached, v.Why, candidateCachedCandidates)
+				}
+			}
 			result := candidateResultFromEntry(store, bookInfo, bookID, query.Title, cached)
 			result.Cached = candidateCachedCandidates
 			return withQuery(result)
@@ -384,46 +411,54 @@ func (s *Server) fetchCandidateForBook(
 		}
 	}
 
-	// PROVIDER FALLBACK (owner decision 2026-10-06, candidate_fallback.go).
-	// Open Library and Google Books are not asked alongside the rest of the
-	// chain: they are asked, in that order, only when the chain (Audible and
-	// the other enabled sources) found nothing -- Google under a persisted
-	// daily budget. With neither enabled, plan is empty and this is the
-	// single search it always was.
-	plan := candidateFallbackPlan(mfs.ActiveSourceNamesByID())
 	ask := askOnly
 	if len(ask) == 0 {
 		ask = mfs.ActiveSourceNames()
 	}
-	primary, pending := splitFallback(ask, plan)
+	primary := splitFallback(ask, plan)
 
-	var entry *metafetch.MetadataCandidateCache
+	entry := cachedRow
 	if len(plan) == 0 || len(primary) > 0 {
 		onlySources := askOnly
 		if len(plan) > 0 {
 			onlySources = primary
 		}
-		entry, err = mfs.FetchAndCacheLimited(ctx, limiter, bookID, query.Title, authorForHash, "", "", metafetch.SearchOptions{OnlySources: onlySources, BypassFetchCache: force})
-		if err != nil {
+		fetched, resp, ferr := mfs.FetchAndCacheWithResponse(ctx, limiter, bookID, query.Title, authorForHash, "", "", metafetch.SearchOptions{OnlySources: onlySources, BypassFetchCache: force})
+		if ferr != nil {
 			// A primary chain that failed is not a "no match": the fallback
 			// is not asked, and the next run asks the chain again.
 			return withQuery(CandidateResult{
 				Book:   bookInfo,
 				Status: "error",
-				Error:  fmt.Sprintf("search failed: %v", err),
+				Error:  fmt.Sprintf("search failed: %v", ferr),
 			})
 		}
-		// Any candidate -- including ones an empty search carried forward for
-		// the same inputs -- means the chain has an answer for the owner to
-		// review, so no fallback quota is spent.
-		if len(entry.Candidates) > 0 || len(pending) == 0 {
+		entry = fetched
+		if len(active) == 0 {
 			return withQuery(candidateResultFromEntry(store, bookInfo, bookID, query.Title, entry))
 		}
+		v := noUsableCandidate(store, book, entry)
+		if v.Usable || len(fallbackOwed(entry, active)) == 0 {
+			return withQuery(candidateResultFromEntry(store, bookInfo, bookID, query.Title, entry))
+		}
+		// A title-searching source of the chain FAILED (Audible down while
+		// the ASIN-only Audnexus answered "no such ASIN"): the chain's
+		// question went unanswered, so the fallback is not asked -- the next
+		// run asks the chain again.
+		if failed := failedTitleSource(resp, idByName); failed != "" {
+			r := candidateResultFromEntry(store, bookInfo, bookID, query.Title, entry)
+			if r.Status != "matched" {
+				r.Status = "error"
+				r.Error = "fallback not asked: the chain's " + failed
+			}
+			return withQuery(r)
+		}
+		return fallback(entry, v.Why, "")
 	}
-	return s.runCandidateFallback(ctx, mfs, candidateFallbackInput{
-		store: store, limiter: limiter, book: book, bookInfo: bookInfo, query: query.Title, author: authorForHash,
-		force: force, pending: pending, entry: entry, withQuery: withQuery,
-	})
+	if len(active) == 0 {
+		return withQuery(candidateResultFromEntry(store, bookInfo, bookID, query.Title, entry))
+	}
+	return fallback(entry, noUsableCandidate(store, book, entry).Why, "")
 }
 
 // candidateResultFromEntry turns a candidate-cache entry into the op's result
@@ -513,7 +548,7 @@ func (s *Server) handleGetOperationResults(c *gin.Context) {
 	totalCount := len(allRaw)
 
 	// Global counts by Status field — no JSON unmarshal needed.
-	var totalMatched, totalNoMatch, totalErrors int
+	var totalMatched, totalNoMatch, totalErrors, totalDeferred, totalSkipped int
 	for _, r := range allRaw {
 		switch r.Status {
 		case "matched":
@@ -522,6 +557,10 @@ func (s *Server) handleGetOperationResults(c *gin.Context) {
 			totalNoMatch++
 		case "error":
 			totalErrors++
+		case candidateStatusDeferred:
+			totalDeferred++
+		case "skipped":
+			totalSkipped++
 		}
 	}
 
@@ -553,24 +592,36 @@ func (s *Server) handleGetOperationResults(c *gin.Context) {
 		Matched      int                 `json:"matched"`
 		NoMatch      int                 `json:"no_match"`
 		Errors       int                 `json:"errors"`
+		Deferred     int                 `json:"deferred"`
+		Skipped      int                 `json:"skipped"`
 		TotalMatched int                 `json:"total_matched"`
 		TotalNoMatch int                 `json:"total_no_match"`
 		TotalErrors  int                 `json:"total_errors"`
-		Limit        int                 `json:"limit"`
-		Offset       int                 `json:"offset"`
+		// TotalDeferred: books whose fallback lookup was put off (budget
+		// spent, a throttle hold, a passing failure), waiting on a later run;
+		// TotalSkipped: books the fetch did not search (marked no match, no
+		// usable title). Neither is a no_match or an error.
+		TotalDeferred int `json:"total_deferred"`
+		TotalSkipped  int `json:"total_skipped"`
+		Limit         int `json:"limit"`
+		Offset        int `json:"offset"`
 	}{
-		Operation:    op,
-		Results:      candidateResults,
-		Total:        totalCount,
-		TotalCount:   totalCount,
-		Matched:      metabatch.CountByStatus(candidateResults, "matched"),
-		NoMatch:      metabatch.CountByStatus(candidateResults, "no_match"),
-		Errors:       metabatch.CountByStatus(candidateResults, "error"),
-		TotalMatched: totalMatched,
-		TotalNoMatch: totalNoMatch,
-		TotalErrors:  totalErrors,
-		Limit:        limit,
-		Offset:       offset,
+		Operation:     op,
+		Results:       candidateResults,
+		Total:         totalCount,
+		TotalCount:    totalCount,
+		Matched:       metabatch.CountByStatus(candidateResults, "matched"),
+		NoMatch:       metabatch.CountByStatus(candidateResults, "no_match"),
+		Errors:        metabatch.CountByStatus(candidateResults, "error"),
+		Deferred:      metabatch.CountByStatus(candidateResults, candidateStatusDeferred),
+		Skipped:       metabatch.CountByStatus(candidateResults, "skipped"),
+		TotalMatched:  totalMatched,
+		TotalNoMatch:  totalNoMatch,
+		TotalErrors:   totalErrors,
+		TotalDeferred: totalDeferred,
+		TotalSkipped:  totalSkipped,
+		Limit:         limit,
+		Offset:        offset,
 	})
 }
 
@@ -619,6 +670,9 @@ func (s *Server) handleGetLatestMetadataFetch(c *gin.Context) {
 		MatchedCount int       `json:"matched_count"`
 		NoMatchCount int       `json:"no_match_count"`
 		ErrorCount   int       `json:"error_count"`
+		// DeferredCount / SkippedCount: see handleGetOperationResults.
+		DeferredCount int `json:"deferred_count"`
+		SkippedCount  int `json:"skipped_count"`
 	}
 	var out []fetchOpSummary
 	for _, op := range ops {
@@ -642,7 +696,7 @@ func (s *Server) handleGetLatestMetadataFetch(c *gin.Context) {
 		if len(results) == 0 {
 			continue
 		}
-		var matched, noMatch, errCount int
+		var matched, noMatch, errCount, deferred, skipped int
 		for _, r := range results {
 			switch r.Status {
 			case "matched":
@@ -651,19 +705,25 @@ func (s *Server) handleGetLatestMetadataFetch(c *gin.Context) {
 				noMatch++
 			case "error":
 				errCount++
+			case candidateStatusDeferred:
+				deferred++
+			case "skipped":
+				skipped++
 			}
 		}
 		// Type is still reported as the v1 string. The frontend keys the Resume
 		// Review dialog off it, and a run's kind did not change when its id did.
 		summary := fetchOpSummary{
-			ID:           op.ID,
-			Type:         "metadata_candidate_fetch",
-			Status:       op.Status,
-			CreatedAt:    op.CreatedAt,
-			ResultCount:  len(results),
-			MatchedCount: matched,
-			NoMatchCount: noMatch,
-			ErrorCount:   errCount,
+			ID:            op.ID,
+			Type:          "metadata_candidate_fetch",
+			Status:        op.Status,
+			CreatedAt:     op.CreatedAt,
+			ResultCount:   len(results),
+			MatchedCount:  matched,
+			NoMatchCount:  noMatch,
+			ErrorCount:    errCount,
+			DeferredCount: deferred,
+			SkippedCount:  skipped,
 		}
 		if op.CompletedAt != nil {
 			summary.CompletedAt = *op.CompletedAt
@@ -958,7 +1018,8 @@ func latestMetadataResultsByBook(store metadataResultsReader) (map[string]databa
 // Query params:
 //
 //	status= (repeatable) — filter to specific status values
-//	                       (matched / no_match / applied / rejected / error / unfetched).
+//	                       (matched / no_match / applied / rejected / error /
+//	                       deferred / skipped / unfetched).
 //	                       If omitted, all books with any result are returned.
 //	limit / offset       — pagination (defaults: limit=100, offset=0; limit=0 → all).
 //	include_unfetched=true — include books that have NEVER been fetched

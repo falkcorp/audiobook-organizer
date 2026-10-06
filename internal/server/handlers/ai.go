@@ -1,7 +1,7 @@
 // file: internal/server/handlers/ai.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 6ccf0c64-9654-46c5-aed0-584943acb1c5
-// last-edited: 2026-10-03
+// last-edited: 2026-10-06
 
 // AIHandler hosts the AI HTTP endpoints extracted from the server package:
 // filename parsing, OpenAI / metadata-source connection tests, per-book AI
@@ -358,7 +358,9 @@ func (h *AIHandler) TestMetadataSource(c *gin.Context) {
 	}
 
 	testQuery := "The Hobbit" // well-known book for test queries
-	ctx := c.Request.Context()
+	// A person clicked Test and is waiting: the lookup is interactive for the
+	// daily quota budgets (Google Books' shared 1,000/day).
+	ctx := metadata.WithInteractiveQuota(c.Request.Context())
 
 	switch req.SourceID {
 	case "google-books":

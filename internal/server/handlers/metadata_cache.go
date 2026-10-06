@@ -679,6 +679,8 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		lastChecked time.Time
 		// stale is cacheRowStale for this row, served as the row's `stale`.
 		stale bool
+		// deferred is the row's fallback_deferred.
+		deferred bool
 	}
 	// ONE clock read for every freshness decision below -- the summary counts and
 	// the per-row is_fresh flag. Reading time.Now() twice for one predicate lets
@@ -699,6 +701,8 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		lastChecked time.Time
 		// stale is cacheRowStale for this row, served as the row's `stale`.
 		stale bool
+		// deferred is the row's fallback_deferred.
+		deferred bool
 	}
 	wantUnreviewable := bucket == reviewBucketUnreviewable
 	var unreviewableRows []unreviewableRow
@@ -716,8 +720,11 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 	// candidates, and those are exactly the rows a refetch would help. On
 	// production the chip read "11 stale" while 2,658 stale zero-candidate rows
 	// sat in the unreviewable bucket, understating the backlog 242x.
-	var stale int
+	var stale, deferred int
 	for _, p := range prepared {
+		if p.row.fallbackDeferred {
+			deferred++
+		}
 		// cacheRowStale is the predicate StaleCachedBookIDs applies too, so
 		// this count is the size of the set the refetch-all-stale button sends.
 		rowStale := cacheRowStale(p.row.loadedCacheRow, freshCutoff)
@@ -735,7 +742,7 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 			}
 			if wantUnreviewable {
 				unreviewableRows = append(unreviewableRows, unreviewableRow{
-					sum: p.sum, status: st, lastChecked: p.row.lastChecked, stale: rowStale,
+					sum: p.sum, status: st, lastChecked: p.row.lastChecked, stale: rowStale, deferred: p.row.fallbackDeferred,
 				})
 			}
 			continue
@@ -751,6 +758,7 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 					errMsg:      "stored candidate will not decode: " + err.Error(),
 					lastChecked: p.row.lastChecked,
 					stale:       rowStale,
+					deferred:    p.row.fallbackDeferred,
 				})
 			}
 			continue
@@ -767,6 +775,7 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 			files:       p.row.files,
 			lastChecked: p.row.lastChecked,
 			stale:       rowStale,
+			deferred:    p.row.fallbackDeferred,
 		})
 	}
 
@@ -816,6 +825,11 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		// told. This is exactly the set POST batch-fetch-candidates
 		// {stale:true} refetches (cacheRowStale / StaleCachedBookIDs).
 		"stale": stale,
+		// Rows whose last fallback lookup (Open Library / Google Books) was
+		// deferred -- Google's daily budget spent, a throttle hold, a passing
+		// failure -- and that wait for a later run. Counted over every
+		// non-orphaned row, like stale; each row carries fallback_deferred.
+		"deferred": deferred,
 		"unreviewable_by_cause": gin.H{
 			// The book the row points at no longer resolves. Only a cleanup
 			// pass fixes these; refetching cannot.
@@ -880,13 +894,14 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 				reviewStatus = *book.MetadataReviewStatus
 			}
 			rows = append(rows, metabatch.CandidateResult{
-				Book:         metabatch.BuildCandidateBookInfoNoFiles(book),
-				Status:       u.status,
-				Error:        u.errMsg,
-				FetchedAt:    &fetchedAt,
-				IsFresh:      &isFresh,
-				Stale:        &u.stale,
-				ReviewStatus: reviewStatus,
+				Book:             metabatch.BuildCandidateBookInfoNoFiles(book),
+				Status:           u.status,
+				Error:            u.errMsg,
+				FetchedAt:        &fetchedAt,
+				IsFresh:          &isFresh,
+				Stale:            &u.stale,
+				FallbackDeferred: u.deferred,
+				ReviewStatus:     reviewStatus,
 			})
 		}
 		summary["results"] = rows
@@ -952,12 +967,13 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		// the candidates it still shows are older than the TTL.
 		isFresh := page[i].lastChecked.After(freshCutoff)
 		results = append(results, metabatch.CandidateResult{
-			Book:      metabatch.BuildCandidateBookInfoWithFacts(book, page[i].files),
-			Candidate: &cand,
-			Status:    page[i].status,
-			FetchedAt: &fetchedAt,
-			IsFresh:   &isFresh,
-			Stale:     &page[i].stale,
+			Book:             metabatch.BuildCandidateBookInfoWithFacts(book, page[i].files),
+			Candidate:        &cand,
+			Status:           page[i].status,
+			FetchedAt:        &fetchedAt,
+			IsFresh:          &isFresh,
+			Stale:            &page[i].stale,
+			FallbackDeferred: page[i].deferred,
 			// The same hash the apply recomputes from the same cache row:
 			// every review-page apply button echoes it back in its pin.
 			// Hashed over the full stored candidate (with its description),

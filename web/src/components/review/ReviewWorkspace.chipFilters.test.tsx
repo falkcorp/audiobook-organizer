@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.chipFilters.test.tsx
-// version: 1.6.0
+// version: 1.7.0
 // guid: 0d6c2e8a-94b1-4f37-8a5e-2c71b9e04f36
 // last-edited: 2026-10-06
 //
@@ -55,7 +55,7 @@ function emptyRow(
 }
 
 const reviewable = [
-  row('m1', { is_fresh: false, stale: true }),
+  row('m1', { is_fresh: false, stale: true, fallback_deferred: true }),
   row('m2', {}, 0.5), // below every preset's confidence floor
   // Old, but the server does not flag it stale (owner-marked no match: the
   // fetch never searches it). The chip reads the server's flag, never is_fresh.
@@ -63,7 +63,7 @@ const reviewable = [
 ];
 const unreviewable = [
   emptyRow('e1', 'no_candidates', { is_fresh: false, stale: true }),
-  emptyRow('e2', 'no_candidates'),
+  emptyRow('e2', 'no_candidates', { fallback_deferred: true }),
   emptyRow('r1', 'resolved_no_candidates', {
     review_status: 'no_match',
     is_fresh: false,
@@ -79,6 +79,7 @@ const summary = {
   unreviewable: 6,
   unreviewable_by_cause: { orphaned: 3, no_candidates: 2, decode_errors: 1 },
   resolved_no_candidates: 1,
+  deferred: 2, // m1 + e2, the rows whose fallback lookup was deferred
 };
 
 function seed() {
@@ -194,6 +195,7 @@ describe('summary chips filter the list to exactly the books they count', () => 
     ['resolved_no_candidates', ['r1']],
     ['errors', ['d1']],
     ['stale', ['m1', 'e1']],
+    ['deferred', ['m1', 'e2']],
   ] as const)(
     '%s chip loads the unreviewable bucket and shows exactly its books',
     async (chip, ids) => {
@@ -218,6 +220,11 @@ describe('summary chips filter the list to exactly the books they count', () => 
     await waitFor(() => expect(listedIds()).toHaveLength(2));
     const list = screen.getByTestId('queue-list');
     expect(within(list).getAllByText(/no candidate/)).toHaveLength(2);
+  });
+
+  it('the deferred chip counts the rows the server flags fallback_deferred', async () => {
+    await openWorkspace();
+    expect(screen.getByTestId('chip-deferred')).toHaveTextContent('2 deferred');
   });
 
   it('orphaned rows stay a count: there is no book to show', async () => {
