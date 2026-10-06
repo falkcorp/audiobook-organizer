@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/ci/fixture_test_packages.py
-# version: 1.2.0
+# version: 1.2.1
 # guid: 92f31101-2399-4ce9-9b83-0af332666123
-# last-edited: 2026-10-05
+# last-edited: 2026-10-06
 """List the Go packages whose tests skip under -short, for `make test-fixtures`.
 
 Every PR-gating Go test run in this repo passes -short (`make test-short` in
@@ -52,8 +52,11 @@ MODULE = "github.com/falkcorp/audiobook-organizer"
 # Seconds per package under `go test -race` without -short, from the Nightly
 # Full CI run 37300110319 (2026-10-05, GitHub ubuntu-latest). Only used to
 # balance shards; a stale value costs balance, never coverage.
+# internal/plugins/maintenance: 215 s from this job's own run on PR #3781
+# (CI run 37420935221, shard 1/3), after its fragment-fixer tests went
+# parallel; it was 383 s in the same job on main before that change.
 _WEIGHTS = {
-    "internal/plugins/maintenance": 400,
+    "internal/plugins/maintenance": 215,
     "internal/database": 269,
     "internal/scanner": 192,
     "internal/server": 160,
