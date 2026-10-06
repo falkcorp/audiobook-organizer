@@ -15,10 +15,19 @@ func NewMockMetadataCacheBookStore(t interface {
 	mock.TestingT
 	Cleanup(func())
 }) *MockMetadataCacheBookStore {
+	if helper, ok := t.(interface{ Helper() }); ok {
+		helper.Helper()
+	}
+
 	mock := &MockMetadataCacheBookStore{}
 	mock.Mock.Test(t)
 
-	t.Cleanup(func() { mock.AssertExpectations(t) })
+	t.Cleanup(func() {
+		if helper, ok := t.(interface{ Helper() }); ok {
+			helper.Helper()
+		}
+		mock.AssertExpectations(t)
+	})
 
 	return mock
 }
