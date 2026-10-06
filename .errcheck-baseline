@@ -1,7 +1,7 @@
 # file: .errcheck-baseline
-# version: 1.5.1
+# version: 1.5.2
 # guid: 7a4d1e92-3f6b-4c85-9a02-1e6b8d4f2c73
-# last-edited: 2026-10-05
+# last-edited: 2026-10-06
 
 # The number of `errcheck` findings tolerated in the tree. This is a RATCHET,
 # exactly like .interface-width-baseline: CI fails if the count goes UP, and
@@ -69,7 +69,7 @@
 # this script. The trash purge's row delete (purgeDeleteRow) no longer
 # discards the external-ID read error (it refuses the purge) or the
 # tombstone write error (logged after the row is gone).
-# 2026-10-06 (fix/candidate-keep-followups, #3776): 818 -> MEASURED, measured
+# 2026-10-06 (fix/candidate-keep-followups, #3776): 818 -> 815, measured
 # with this script after rebasing onto #3777. Field undo and undo-last-apply
 # paths no longer discard a cache-invalidation error: they no longer invalidate.
-MEASURED
+815
