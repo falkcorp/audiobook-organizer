@@ -1,5 +1,5 @@
 // file: internal/metafetch/service.go
-// version: 5.47.0
+// version: 5.47.1
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
 // last-edited: 2026-10-06
 
@@ -426,9 +426,9 @@ type SearchMetadataResponse struct {
 	mergeCached bool
 	// mergeUsable is SearchOptions.MergeUsable, for cacheSearchResponse.
 	mergeUsable func(MetadataCandidate) bool
-	// mergeFromHash is SearchOptions.MergeFromSourceHash, for
+	// carryFromHash is SearchOptions.CarryFromSourceHash, for
 	// cacheSearchResponse.
-	mergeFromHash string
+	carryFromHash string
 }
 
 // SourceErrors returns the error each failed source returned (keyed like
@@ -482,15 +482,23 @@ type SearchOptions struct {
 	// candidates from the review list. The union is re-ranked by score.
 	MergeWithCached bool
 
-	// MergeFromSourceHash, with MergeWithCached, names the SourceHash of the
-	// row the caller read and is merging into, when that row was hashed from
-	// other inputs than this search's yet still vouched for the book (the
-	// batch fetch's CachedBatchVerdict accepts a row hashed under the raw
-	// author credit before 2026-10-06's cleaning, or a pre-2026-09-28
-	// no-author row its fingerprint proves). Without it such a row is not
-	// the same inputs, and the fallback's answer would replace its
-	// candidates instead of merging into them. "" = the search's own hash.
-	MergeFromSourceHash string
+	// CarryFromSourceHash names the SourceHash of the book's row the caller
+	// read and vouched for (Service.VouchedCachedRow) when that row was hashed
+	// from other inputs than this search's: a row hashed under the raw author
+	// credit before 2026-10-06's cleaning, or a pre-2026-09-28 no-author row.
+	// cacheSearchResponse treats it exactly as a row for this search's own
+	// inputs, on EVERY write path, not only a merge:
+	//   - a merge (MergeWithCached) merges into its candidates;
+	//   - an answer with no results keeps its candidates (preserve-on-empty);
+	//   - a replacing answer keeps the fallback providers' candidates it did
+	//     not re-ask.
+	// Without it such a row is not the same inputs, and any write replaces
+	// it: an empty scheduled or forced chain refetch wrote Candidates: [] over
+	// a row the batch fetch had just vouched for, and every below-floor or
+	// asin_conflict candidate the owner could still review was lost.
+	// "" = the search's own hash only. Pass it only for a row the caller
+	// checked belongs to the book as it is now.
+	CarryFromSourceHash string
 
 	// MergeUsable, with MergeWithCached, ranks the merged candidates usable
 	// first: a candidate it rejects (owner-rejected, refused by the ASIN

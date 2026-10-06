@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_search.go
-// version: 1.40.0
+// version: 1.40.1
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
 // last-edited: 2026-10-06
 
@@ -1620,7 +1620,7 @@ func (mfs *Service) searchMetadataForBook(
 		sourceErrs:        sourceErrs,
 		mergeCached:       opts.MergeWithCached,
 		mergeUsable:       opts.MergeUsable,
-		mergeFromHash:     opts.MergeFromSourceHash,
+		carryFromHash:     opts.CarryFromSourceHash,
 	}, nil
 }
 

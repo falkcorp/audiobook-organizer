@@ -1,12 +1,12 @@
 // file: internal/metafetch/cache_merge_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6f2d8a41-93c7-4e0b-b5a2-1d7c4e9f3a58
 // last-edited: 2026-10-06
 
 // The candidate fetch's provider fallback MERGES its answer into the book's
 // cached candidates (SearchOptions.MergeWithCached). These pin the rows a
 // merge must treat as the book's own: an unstamped row (B1), a row hashed from
-// other inputs the caller vouched for (MergeFromSourceHash), and a legacy or
+// other inputs the caller vouched for (CarryFromSourceHash), and a legacy or
 // prior-rule row, whose filtered candidates and dates a merge must not revive
 // or re-date (B2). All fixtures are synthetic.
 package metafetch
@@ -79,7 +79,7 @@ func TestCacheSearchResponse_MergeIntoOtherASINRowReplaces(t *testing.T) {
 
 // The batch fetch's verdict vouches for a row hashed from other inputs (the
 // raw author credit before 2026-10-06's cleaning, or a pre-2026-09-28
-// no-author row). A merge told that row's hash (MergeFromSourceHash) merges
+// no-author row). A merge told that row's hash (CarryFromSourceHash) merges
 // into it -- and an empty fallback answer keeps it -- instead of replacing
 // the chain's candidates.
 func TestCacheSearchResponse_MergeIntoVouchedRowUnderOtherHash(t *testing.T) {
@@ -96,7 +96,7 @@ func TestCacheSearchResponse_MergeIntoVouchedRowUnderOtherHash(t *testing.T) {
 	mfs := preserveFixture(t)
 	hash := put(mfs)
 	got := mfs.cacheSearchResponse(mergeBookID, mergeQuery, mergeAuthor, "", "", &SearchMetadataResponse{
-		Results: []MetadataCandidate{{Source: "Google Books", Title: mergeQuery, Score: 0.4}}, mergeCached: true, mergeFromHash: hash,
+		Results: []MetadataCandidate{{Source: "Google Books", Title: mergeQuery, Score: 0.4}}, mergeCached: true, carryFromHash: hash,
 	})
 	require.ElementsMatch(t, []string{"Audible:" + mergeQuery, "Google Books:" + mergeQuery}, candSources(t, got.Candidates))
 	require.Equal(t, hashSearchInputs(mergeBookID, mergeQuery, mergeAuthor, "", ""), got.SourceHash,
@@ -105,7 +105,7 @@ func TestCacheSearchResponse_MergeIntoVouchedRowUnderOtherHash(t *testing.T) {
 	mfs = preserveFixture(t)
 	hash = put(mfs)
 	got = mfs.cacheSearchResponse(mergeBookID, mergeQuery, mergeAuthor, "", "", &SearchMetadataResponse{
-		SourcesAnswered: []string{"Google Books"}, mergeCached: true, mergeFromHash: hash,
+		SourcesAnswered: []string{"Google Books"}, mergeCached: true, carryFromHash: hash,
 	})
 	require.Equal(t, []string{"Audible:" + mergeQuery}, candSources(t, got.Candidates),
 		"an empty fallback answer keeps the vouched row's candidates")
@@ -203,4 +203,37 @@ func TestMergeCandidateRows_UsableFirst(t *testing.T) {
 
 	got = mergeCandidateRows([]json.RawMessage{usableLow}, []json.RawMessage{blocked, usableHigh}, nil)
 	assert.Equal(t, "Audible:Rejected Example", candSources(t, got)[0], "nil ranks by score alone")
+}
+
+// CarryFromSourceHash is honored by every write, not only a merge: a chain
+// refetch (no MergeWithCached) that answers nothing keeps the vouched row's
+// candidates and their date. Without the hash the row is not the same
+// inputs and the empty answer replaces it.
+func TestCacheSearchResponse_EmptyChainAnswerKeepsCarriedRow(t *testing.T) {
+	const rawCredit = "zz" + mergeAuthor
+	fetched := time.Now().UTC().Add(-200 * 24 * time.Hour).Truncate(time.Second)
+	put := func(mfs *Service) string {
+		hash := hashSearchInputs(mergeBookID, mergeQuery, rawCredit, "", "")
+		require.NoError(t, mfs.db.PutMetadataCache(&database.MetadataCandidateCache{
+			BookID: mergeBookID, FetchedAt: fetched, SourceHash: hash,
+			Candidates: []json.RawMessage{mergeCand(t, "Audible", mergeQuery, 0.6)},
+		}))
+		return hash
+	}
+
+	mfs := preserveFixture(t)
+	hash := put(mfs)
+	got := mfs.cacheSearchResponse(mergeBookID, mergeQuery, mergeAuthor, "", "", &SearchMetadataResponse{
+		SourcesAnswered: []string{"Audible"}, carryFromHash: hash,
+	})
+	require.Equal(t, []string{"Audible:" + mergeQuery}, candSources(t, got.Candidates))
+	require.True(t, got.FetchedAt.Equal(fetched), "carried candidates keep their FetchedAt")
+	require.NotNil(t, got.LastEmptyFetchAt)
+
+	mfs = preserveFixture(t)
+	put(mfs)
+	got = mfs.cacheSearchResponse(mergeBookID, mergeQuery, mergeAuthor, "", "", &SearchMetadataResponse{
+		SourcesAnswered: []string{"Audible"},
+	})
+	require.Empty(t, got.Candidates, "control: without the carry hash the row is other inputs and is replaced")
 }
