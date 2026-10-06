@@ -54,7 +54,7 @@ const (
 	leftoverClassRetire  = "retire"
 	leftoverClassHeld    = "held"
 	leftoverClassITunes  = "itunes"
-	leftoverClassNoMatch = "no_match"
+	leftoverClassNoMatch = "no-match"
 )
 
 // Skip kinds of a leftovers row (the held reasons, iTunes, no match).
@@ -68,7 +68,7 @@ const (
 	leftoverSkipPartial       = "held_partial_match"
 	leftoverSkipITunesDoubt   = "held_itunes_doubt"
 	leftoverSkipITunes        = "itunes"
-	leftoverSkipNoMatch       = "no_match"
+	leftoverSkipNoMatch       = "no-match"
 	leftoverBasisSize         = "size"
 	leftoverBasisSizeHash     = "size+hash"
 	leftoverRolesLeftover     = "leftover"
