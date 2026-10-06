@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_checkpointer.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5e0b7c2a-91d4-4f3e-8a6b-2c7d9e1f4a08
-// last-edited: 2026-10-04
+// last-edited: 2026-10-06
 
 // WAL checkpointing for SQLActivityStore.
 //
@@ -73,6 +73,11 @@ const (
 	// stalled for 2.5 s in review; at 0 the slowest Record was 4-10 ms. A busy
 	// TRUNCATE costs nothing to repeat: truncateWALAfterVacuum retries with
 	// backoff and the background loop retries on its next idle tick.
+	//
+	// This is the RESTING value. The post-vacuum TRUNCATE alone raises it to
+	// vacuumTruncateResetWaitMS for that one statement on a pinned connection
+	// and sets it back to this value before releasing the connection
+	// (truncateWithResetWait), so the background loop never inherits a wait.
 	sqlActCkptBusyTimeoutMS = 0
 )
 
@@ -178,9 +183,21 @@ func (s *SQLActivityStore) noteWrite() { s.ckptr.writes.Add(1) }
 // ctx cancellation interrupts it (modernc wires ctx to sqlite3_interrupt, and
 // the checkpoint's copy loop honours the interrupt).
 func (s *SQLActivityStore) walCheckpoint(ctx context.Context, mode string) (walCheckpointResult, error) {
+	return s.walCheckpointOn(ctx, s.ckpt, mode)
+}
+
+// rowQuerier is the part of *sql.DB and *sql.Conn walCheckpointOn needs.
+type rowQuerier interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// walCheckpointOn runs PRAGMA wal_checkpoint(mode) on q, which must be the
+// checkpoint handle or a connection pinned from it, and reports the result to
+// the test hook like every other checkpoint the store issues.
+func (s *SQLActivityStore) walCheckpointOn(ctx context.Context, q rowQuerier, mode string) (walCheckpointResult, error) {
 	var res walCheckpointResult
 	start := time.Now()
-	err := s.ckpt.QueryRowContext(ctx, "PRAGMA wal_checkpoint("+mode+")").
+	err := q.QueryRowContext(ctx, "PRAGMA wal_checkpoint("+mode+")").
 		Scan(&res.Busy, &res.Log, &res.Checkpointed)
 	res.Elapsed = time.Since(start)
 	if hook := s.ckptr.hook.Load(); hook != nil {
