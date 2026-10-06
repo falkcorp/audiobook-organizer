@@ -1,11 +1,12 @@
 // file: internal/plugins/maintenance/version_twin_metadata_fixer.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2f6c8e14-7b3a-4d59-9e02-c4a1b7d36e85
 // last-edited: 2026-10-06
 
 package maintenance
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -13,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -60,7 +62,8 @@ const (
 	vtHoldHashShared       = "hash_shared_outside_group"
 	vtHoldGone             = "gone"
 	vtHoldReadError        = "error"
-	vtHoldASINElsewhere    = "asin_on_book_outside_group"
+	vtHoldIDElsewhere      = "identifier_on_book_outside_group"
+	vtHoldEvidenceConflict = "edition_evidence_conflict"
 	vtHoldPrimaryVerdict   = "primary_has_fetch_verdict"
 	vtHoldOwnerManual      = "record_owner_manual_only"
 )
@@ -179,6 +182,19 @@ type vtDetail struct {
 	// hash is the record's metadata_source_hash (applied_twin): the write
 	// re-checks that no book outside the group has gained it.
 	hash string
+	// resume: this op already wrote the row before a restart and only its
+	// journal row is missing (vtResumed); Apply records that row and writes
+	// nothing else. jOld / jNew are the journal row's values.
+	resume     bool
+	jOld, jNew string
+}
+
+// vtPlanState is the row's Row.State: what a resumed apply needs from plan
+// time. prior is the primary's candidate cache as planned
+// (undo.EncodeMetadataCacheOld), the journal row's old value of a candidate
+// copy whose journal row a restart cut off.
+type vtPlanState struct {
+	Prior string `json:"prior,omitempty"`
 }
 
 // vtMember is one live member of a group with what the row reads of it.
@@ -199,15 +215,18 @@ type vtReaders struct {
 	store OpsStore
 	cache database.MetadataCacheStore
 	svc   VersionTwinMetadataService
-	hash  func(string) ([]database.Book, error)
-	asin  func(string) ([]string, bool, error)
-	res   *repairs.PathResolver
+	// hash may scan every book row; memHash answers from memdb only and is
+	// the one used under a book's write stripe (vtWriteGuard).
+	hash    func(string) ([]database.Book, error)
+	memHash func(string) ([]database.Book, error)
+	ids     func(isbn10, isbn13, asin string) ([]string, bool, error)
+	res     *repairs.PathResolver
 }
 
 func (f *versionTwinFixer) readers(res *repairs.PathResolver) (vtReaders, error) {
 	r := vtReaders{store: f.p.deps.OpsStore(), cache: f.p.deps.MetadataCacheStore(),
 		svc: f.p.deps.VersionTwinMetadataService(), hash: f.p.deps.BooksWithMetadataSourceHash,
-		asin: f.p.deps.BookIDsWithASIN, res: res}
+		memHash: f.p.deps.BooksWithMetadataSourceHashInMemory, ids: f.p.deps.BookIDsWithIdentifiers, res: res}
 	if r.store == nil || r.cache == nil {
 		return r, fmt.Errorf("database not initialized")
 	}
@@ -315,8 +334,10 @@ func (f *versionTwinFixer) Plan(ctx context.Context, _ json.RawMessage, rep regi
 
 // Replan re-reads the group. A group whose primary was applied, re-elected
 // or retitled since, or whose twin changed, comes back with a different
-// fingerprint (changed_since_plan).
-func (f *versionTwinFixer) Replan(_ context.Context, _ json.RawMessage, planned repairs.Row, _ registry.Reporter) (repairs.Row, error) {
+// fingerprint (changed_since_plan), except a row THIS op already wrote before
+// a restart cut off its journal row (vtResumed): that comes back as planned,
+// and Apply records only the journal row.
+func (f *versionTwinFixer) Replan(_ context.Context, _ json.RawMessage, planned repairs.Row, rep registry.Reporter) (repairs.Row, error) {
 	rd, err := f.readers(repairs.NewPathResolver())
 	if err != nil {
 		return repairs.Row{}, err
@@ -340,7 +361,115 @@ func (f *versionTwinFixer) Replan(_ context.Context, _ json.RawMessage, planned 
 		return r, nil
 	}
 	r, _, err := f.row(rd, planned.RowID, ms)
-	return r, err
+	if err != nil || r.Skipped == "" {
+		return r, err
+	}
+	resumed, ok, err := vtResumed(rd, planned, r, registry.ReporterOpID(rep))
+	if err != nil {
+		return repairs.Row{}, err
+	}
+	if ok {
+		return resumed, nil
+	}
+	return r, nil
+}
+
+// vtResumed recognises a row this op (opID) already wrote before a restart
+// that cut it off between the write and its journal row (ledger after write:
+// Apply journals after the commit). Without this the re-plan sees the
+// primary as resolved (or holding candidates), the row is never applied
+// again, and the write escapes the op revert. ok is false for anything else.
+//
+//   - applied_twin: the primary is applied and its change history holds the
+//     batch vtBatchID(opID, primary), not undone. The journal row names that
+//     batch.
+//   - candidates_twin: the primary's cache row is the twin's copied (same
+//     fetch time, ASIN fetched for and candidates; only this fixer copies a
+//     cache row). The journal row's old value is the primary's cache as
+//     planned (vtPlanState), which the plan's fingerprint pinned until the
+//     write: the copy's own guard refuses a primary whose cache changed.
+//
+// The row returned is the planned row (same fingerprint), applicable, whose
+// Detail tells Apply to record the journal row only. Writer.Journal skips a
+// row already in the op's journal, so this is idempotent.
+func vtResumed(rd vtReaders, planned, fresh repairs.Row, opID string) (repairs.Row, bool, error) {
+	pid, tid := planned.Current["primary_id"], planned.Current["twin_id"]
+	if opID == "" || pid == "" {
+		return repairs.Row{}, false, nil
+	}
+	d := &vtDetail{class: planned.Class, groupID: planned.RowID, primaryID: pid, twinID: tid, resume: true}
+	switch {
+	case planned.Class == vtClassApplied && fresh.Skipped == vtHoldResolved:
+		hr, ok := database.AsCapability[vtHistoryReader](rd.store)
+		if !ok {
+			return repairs.Row{}, false, fmt.Errorf("this store cannot read book %s's change history", pid)
+		}
+		hist, err := hr.GetBookChangeHistory(pid, 1<<30)
+		if err != nil {
+			return repairs.Row{}, false, fmt.Errorf("read the change history of %s: %w", pid, err)
+		}
+		batch := vtBatchID(opID, pid)
+		found := false
+		for i := range hist {
+			if hist[i].BatchID != batch {
+				continue
+			}
+			if hist[i].ChangeType == metafetch.ChangeTypeApplyUndo {
+				return repairs.Row{}, false, nil // undone since: nothing to revert
+			}
+			found = true
+		}
+		if !found {
+			return repairs.Row{}, false, nil
+		}
+		d.jNew = batch
+	case planned.Class == vtClassCandidates && fresh.Skipped == vtHoldPrimaryCands && tid != "":
+		var st vtPlanState
+		if len(planned.State) == 0 || json.Unmarshal(planned.State, &st) != nil || st.Prior == "" {
+			return repairs.Row{}, false, nil
+		}
+		cur, err := rd.cache.GetMetadataCache(pid)
+		if err != nil {
+			return repairs.Row{}, false, fmt.Errorf("read the candidate cache of %s: %w", pid, err)
+		}
+		src, err := rd.cache.GetMetadataCache(tid)
+		if err != nil {
+			return repairs.Row{}, false, fmt.Errorf("read the candidate cache of %s: %w", tid, err)
+		}
+		if !vtIsCopyOf(cur, src) {
+			return repairs.Row{}, false, nil
+		}
+		d.jOld, d.jNew = st.Prior, undo.MetadataCacheStamp(cur)
+	default:
+		return repairs.Row{}, false, nil
+	}
+	out := planned
+	out.Skipped, out.SkipReason = "", ""
+	out.Reason = "this operation wrote the row before a restart and did not record it; only its journal row is recorded now"
+	out.Detail = d
+	return out, true, nil
+}
+
+// vtHistoryReader is the store's change-history read (database.Store has
+// it; OpsStore does not list it, so it is asserted for).
+type vtHistoryReader interface {
+	GetBookChangeHistory(bookID string, limit int) ([]database.MetadataChangeRecord, error)
+}
+
+// vtIsCopyOf reports whether cur is a copy of src's candidates
+// (metafetch.Service.CopyCandidateCache keeps the fetch time, the ASIN
+// fetched for and the candidates as they are).
+func vtIsCopyOf(cur, src *database.MetadataCandidateCache) bool {
+	if cur == nil || src == nil || len(cur.Candidates) == 0 || len(cur.Candidates) != len(src.Candidates) ||
+		!cur.FetchedAt.Equal(src.FetchedAt) || cur.FetchedForASIN != src.FetchedForASIN {
+		return false
+	}
+	for i := range cur.Candidates {
+		if !bytes.Equal(cur.Candidates[i], src.Candidates[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 func vtErrorRow(gid string, ms []database.BookCore, err error) repairs.Row {
@@ -509,7 +638,7 @@ func (f *versionTwinFixer) row(rd vtReaders, gid string, members []database.Book
 	if !database.ABSLibraryFilter().MatchesCore(&p.core) {
 		return b.hold(vtHoldNotABSListed, "the primary is not listed by ABS (it must be primary, organized and not quarantined)"), true, nil
 	}
-	why, doubt, err := vtITunesWhy(rd, &p.core)
+	why, doubt, _, err := vtITunesWhy(rd, &p.core)
 	if err != nil {
 		return repairs.Row{}, false, err
 	}
@@ -593,21 +722,32 @@ func (f *versionTwinFixer) row(rd vtReaders, gid string, members []database.Book
 			return b.hold(vtHoldHashShared, "the twin's record is also carried by "+strings.Join(outside, ", ")+
 				" outside this version group; applying it would run a cross-group duplicate election"), true, nil
 		}
-		elsewhere, indexed, err := vtASINOutsideGroup(rd, gid, cand.ASIN)
+		evidence, conflict := vtEditionEvidence(&p.core, cand, pSec, tSec)
+		b.note("evidence", evidence, conflict)
+		if conflict != "" {
+			return b.hold(vtHoldEvidenceConflict, conflict), true, nil
+		}
+		// Only the identifiers the apply will write are checked against
+		// books outside the group: with edition evidence, each the primary
+		// lacks and the record has (fill-only).
+		var wIDs vtIdentifiers
+		if evidence != "" {
+			wIDs = vtWrittenIdentifiers(&p.core, cand)
+		}
+		elsewhere, indexed, err := vtIdentifiersOutsideGroup(rd, gid, wIDs)
 		if err != nil {
 			return repairs.Row{}, false, err
 		}
-		b.note("asin-elsewhere", strings.Join(elsewhere, ","), strconv.FormatBool(indexed))
+		b.note("ids-elsewhere", wIDs.String(), strings.Join(elsewhere, ","), strconv.FormatBool(indexed))
 		switch {
 		case !indexed:
-			return b.hold(vtHoldASINElsewhere, "the ASIN index is not built yet, so it cannot be told whether a book "+
-				"outside this group carries the record's ASIN "+cand.ASIN), true, nil
+			return b.hold(vtHoldIDElsewhere, "the ISBN/ASIN index is not built yet (the isbn-index-build operation sets "+
+				"it), so it cannot be told whether a book outside this group carries the record's "+wIDs.String()+
+				", which the apply would copy"), true, nil
 		case len(elsewhere) > 0:
-			return b.hold(vtHoldASINElsewhere, "the record's ASIN "+cand.ASIN+" is carried by "+strings.Join(elsewhere, ", ")+
+			return b.hold(vtHoldIDElsewhere, "the record's "+wIDs.String()+" is carried by "+strings.Join(elsewhere, ", ")+
 				" outside this version group; the record may be that book's"), true, nil
 		}
-		evidence := vtEditionEvidence(&p.core, cand, pSec, tSec)
-		b.note("evidence", evidence)
 		fields := vtApplyFields(evidence != "")
 		b.r.Proposed["primary_review_status"] = "matched"
 		// Fill-only: the record fills the primary's empty fields; the
@@ -622,7 +762,8 @@ func (f *versionTwinFixer) row(rd vtReaders, gid string, members []database.Book
 			b.r.Evidence = append(b.r.Evidence, "same edition: "+evidence)
 		} else {
 			b.r.Evidence = append(b.r.Evidence, "no evidence the primary is the twin's edition (runtimes not "+
-				"known within 1%, narrator not the record's): narrator, ASIN, ISBN, abridgement and runtime are not copied")
+				"known within 1%; with fewer than two runtimes known, narrator not the record's): narrator, ASIN, ISBN, "+
+				"abridgement and runtime are not copied")
 		}
 		b.r.Reason = fmt.Sprintf("twin %s had %s metadata applied (record %s); the primary is the same book (same "+
 			"title and author) and has none", t.core.ID, cand.Source, vtRecord(cand))
@@ -648,6 +789,15 @@ func (f *versionTwinFixer) row(rd vtReaders, gid string, members []database.Book
 			return b.hold(vtHoldOwnerManual, "a candidate of the twin "+why+"; Doctor Who / Big Finish / Torchwood are "+
 				"applied by hand"), true, nil
 		}
+		prior, err := undo.EncodeMetadataCacheOld(p.entry)
+		if err != nil {
+			return repairs.Row{}, false, fmt.Errorf("encode the candidate cache of %s: %w", p.core.ID, err)
+		}
+		st, err := json.Marshal(vtPlanState{Prior: prior})
+		if err != nil {
+			return repairs.Row{}, false, fmt.Errorf("encode the plan state of %s: %w", gid, err)
+		}
+		b.r.State = st
 		b.r.Proposed["primary_candidates"] = strconv.Itoa(t.candidates())
 		b.r.Reason = fmt.Sprintf("twin %s holds %d fetched candidates for the same title and author; the primary has "+
 			"none. Copying them puts the primary in the review lane (nothing is applied)", t.core.ID, t.candidates())
@@ -726,15 +876,17 @@ func vtAppliedCandidate(m *vtMember) *metafetch.MetadataCandidate {
 	return nil
 }
 
-// vtITunesWhy runs the shared iTunes predicate on the primary.
-func vtITunesWhy(rd vtReaders, c *database.BookCore) (string, bool, error) {
+// vtITunesInputs reads what the iTunes predicate judges the primary by: its
+// paths (the book's and every book_file row's), its file rows' iTunes ids and
+// paths, and its external ids. Point and prefix reads only.
+func vtITunesInputs(rd vtReaders, c *database.BookCore) ([]string, []fragFile, []database.ExternalIDMapping, error) {
 	files, err := rd.store.GetBookFiles(c.ID)
 	if err != nil {
-		return "", false, fmt.Errorf("read files of %s: %w", c.ID, err)
+		return nil, nil, nil, fmt.Errorf("read files of %s: %w", c.ID, err)
 	}
 	exts, err := rd.store.GetExternalIDsForBook(c.ID)
 	if err != nil {
-		return "", false, fmt.Errorf("read external ids of %s: %w", c.ID, err)
+		return nil, nil, nil, fmt.Errorf("read external ids of %s: %w", c.ID, err)
 	}
 	paths := []string{c.FilePath}
 	ff := make([]fragFile, 0, len(files))
@@ -742,8 +894,19 @@ func vtITunesWhy(rd vtReaders, c *database.BookCore) (string, bool, error) {
 		paths = append(paths, files[i].FilePath)
 		ff = append(ff, fragFile{ID: files[i].ID, ITunesPID: files[i].ITunesPersistentID, ITunesPath: files[i].ITunesPath})
 	}
+	return paths, ff, exts, nil
+}
+
+// vtITunesWhy runs the shared iTunes predicate on the primary, paths
+// resolved on disk (symlinks followed). It returns the paths it cleared.
+// Never under a book's write stripe: the resolver touches the disk.
+func vtITunesWhy(rd vtReaders, c *database.BookCore) (string, bool, []string, error) {
+	paths, ff, exts, err := vtITunesInputs(rd, c)
+	if err != nil {
+		return "", false, nil, err
+	}
 	why, doubt := itunesCopyWhy(rd.res, c.ID, dcStr(c.ITunesPersistentID), paths, ff, exts)
-	return why, doubt, nil
+	return why, doubt, paths, nil
 }
 
 // vtTwinsDisagree names why the given twins are not one record: two
@@ -891,55 +1054,173 @@ func vtRuntimesAgree(a, b int) bool {
 }
 
 // vtEditionEvidence names the positive evidence that the primary is the
-// edition the twin's record describes, "" when there is none:
-//   - runtimes: the primary's and the twin's known runtimes agree within 1%,
-//     and so does the record's own runtime when it has one;
-//   - narrator: the primary already carries the record's narrator.
+// edition the twin's record describes ("" when there is none), or, in
+// conflict, why the evidence contradicts itself (the row is then held).
+//
+// The runtimes are the primary's and the twin's known runtimes (pSec, tSec)
+// and the record's own (cand.DurationSec), each 0 when not known.
+//   - runtimes: the primary's and the twin's agree within 1%, and so does the
+//     record's when it has one. That is evidence.
+//   - two known runtimes more than 1% apart (the 5% hold, vtEditionDiffers,
+//     already caught the wider gaps): no runtime evidence, and narrator
+//     equality cannot stand in for it; when the primary carries the record's
+//     narrator anyway the two signals contradict each other (one narrator
+//     recorded two editions), so that is a conflict, not evidence. Without
+//     a narrator match the row stays applicable without the edition fields.
+//   - narrator: the primary already carries the record's narrator. Evidence
+//     only when fewer than two runtimes are known, so a runtime comparison
+//     was not possible at all.
 //
 // An empty narrator or an unknown runtime is never evidence.
-func vtEditionEvidence(p *database.BookCore, cand *metafetch.MetadataCandidate, pSec, tSec int) string {
-	if vtRuntimesAgree(pSec, tSec) && (cand.DurationSec <= 0 || vtRuntimesAgree(pSec, cand.DurationSec)) {
+func vtEditionEvidence(p *database.BookCore, cand *metafetch.MetadataCandidate, pSec, tSec int) (evidence, conflict string) {
+	rec := max(cand.DurationSec, 0)
+	if vtRuntimesAgree(pSec, tSec) && (rec == 0 || vtRuntimesAgree(pSec, rec)) {
 		ev := fmt.Sprintf("runtimes agree within 1%% (primary %ds, twin %ds", pSec, tSec)
-		if cand.DurationSec > 0 {
-			ev += fmt.Sprintf(", record %ds", cand.DurationSec)
+		if rec > 0 {
+			ev += fmt.Sprintf(", record %ds", rec)
 		}
-		return ev + ")"
+		return ev + ")", ""
 	}
-	if pn := fbNorm(dcStr(p.Narrator)); pn != "" && pn == fbNorm(cand.Narrator) {
-		return fmt.Sprintf("the primary already carries the record's narrator %q", cand.Narrator)
+	var known []int
+	for _, v := range []int{pSec, tSec, rec} {
+		if v > 0 {
+			known = append(known, v)
+		}
 	}
-	return ""
+	disagree := false
+	for i := range known {
+		for j := i + 1; j < len(known); j++ {
+			disagree = disagree || !vtRuntimesAgree(known[i], known[j])
+		}
+	}
+	pn := fbNorm(dcStr(p.Narrator))
+	narrator := pn != "" && pn == fbNorm(cand.Narrator)
+	switch {
+	case disagree && narrator:
+		return "", fmt.Sprintf("the primary carries the record's narrator %q, but the known runtimes are more than 1%% "+
+			"apart (primary %s, twin %s, record %s): one narrator may have recorded two editions, so the narrator is not "+
+			"evidence of this one and the record's ASIN could be another edition's", cand.Narrator,
+			vtSecStr(pSec), vtSecStr(tSec), vtSecStr(rec))
+	case narrator && len(known) < 2:
+		return fmt.Sprintf("the primary already carries the record's narrator %q (runtimes not comparable)", cand.Narrator), ""
+	}
+	return "", ""
 }
 
-// vtASINOutsideGroup lists the live books outside group gid whose ASIN is
-// asin. indexed is false when the ASIN index is not built (the answer then
-// proves nothing). No ASIN: nothing to check.
-func vtASINOutsideGroup(rd vtReaders, gid, asin string) ([]string, bool, error) {
-	asin = strings.TrimSpace(asin)
-	if asin == "" {
+func vtSecStr(sec int) string {
+	if sec <= 0 {
+		return "unknown"
+	}
+	return strconv.Itoa(sec) + "s"
+}
+
+// vtIdentifiers are the ISBN-10, ISBN-13 and ASIN an apply writes.
+type vtIdentifiers struct{ isbn10, isbn13, asin string }
+
+func (v vtIdentifiers) empty() bool { return v.isbn10 == "" && v.isbn13 == "" && v.asin == "" }
+
+func (v vtIdentifiers) String() string {
+	var parts []string
+	for _, x := range []struct{ k, v string }{{"ASIN", v.asin}, {"ISBN-10", v.isbn10}, {"ISBN-13", v.isbn13}} {
+		if x.v != "" {
+			parts = append(parts, x.k+" "+x.v)
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+// vtWrittenIdentifiers is what a fill-only apply of cand writes to the
+// primary: each identifier the primary lacks and the record has, as the
+// apply body maps them (metafetch.CandidateISBNs).
+func vtWrittenIdentifiers(p *database.BookCore, cand *metafetch.MetadataCandidate) vtIdentifiers {
+	var out vtIdentifiers
+	i10, i13 := metafetch.CandidateISBNs(*cand)
+	if strings.TrimSpace(dcStr(p.ISBN10)) == "" {
+		out.isbn10 = strings.TrimSpace(i10)
+	}
+	if strings.TrimSpace(dcStr(p.ISBN13)) == "" {
+		out.isbn13 = strings.TrimSpace(i13)
+	}
+	if strings.TrimSpace(dcStr(p.ASIN)) == "" {
+		out.asin = strings.TrimSpace(cand.ASIN)
+	}
+	return out
+}
+
+// vtCaseVariants is v as given, upper-cased and lower-cased, without
+// repeats. The ISBN/ASIN index stores values exactly as written (nothing
+// on the write path upper-cases an ASIN), while every comparison of two
+// ASINs is case-insensitive (strings.EqualFold, authority.NormalizeASIN), so
+// a lookup asks for each spelling. A mixed-case stored value other than
+// these three is still missed by the index; the per-book re-check below is
+// case-insensitive.
+func vtCaseVariants(v string) []string {
+	if v == "" {
+		return nil
+	}
+	out := []string{v}
+	for _, x := range []string{strings.ToUpper(v), strings.ToLower(v)} {
+		if !slices.Contains(out, x) {
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
+// vtIdentifiersOutsideGroup lists the live books outside group gid carrying
+// one of ids. indexed is false when the ISBN/ASIN index is not built (the
+// answer then proves nothing). Nothing to check: indexed, no books.
+func vtIdentifiersOutsideGroup(rd vtReaders, gid string, ids vtIdentifiers) ([]string, bool, error) {
+	if ids.empty() {
 		return nil, true, nil
 	}
-	ids, indexed, err := rd.asin(asin)
-	if err != nil {
-		return nil, false, fmt.Errorf("read books carrying ASIN %s: %w", asin, err)
+	found := map[string]bool{}
+	ask := func(isbn10, isbn13, asin string) (bool, error) {
+		got, indexed, err := rd.ids(isbn10, isbn13, asin)
+		if err != nil {
+			return false, fmt.Errorf("read books carrying %s: %w", ids.String(), err)
+		}
+		for _, id := range got {
+			found[id] = true
+		}
+		return indexed, nil
+	}
+	for _, v := range vtCaseVariants(ids.asin) {
+		if indexed, err := ask("", "", v); err != nil || !indexed {
+			return nil, false, err
+		}
+	}
+	for _, v := range vtCaseVariants(ids.isbn10) {
+		if indexed, err := ask(v, "", ""); err != nil || !indexed {
+			return nil, false, err
+		}
+	}
+	for _, v := range vtCaseVariants(ids.isbn13) {
+		if indexed, err := ask("", v, ""); err != nil || !indexed {
+			return nil, false, err
+		}
+	}
+	match := func(stored *string, want string) bool {
+		return want != "" && strings.EqualFold(strings.TrimSpace(dcStr(stored)), want)
 	}
 	var out []string
-	for _, id := range ids {
+	for id := range found {
 		b, err := rd.store.GetBookByID(id)
 		if err != nil {
-			return nil, false, fmt.Errorf("read book %s (ASIN %s): %w", id, asin, err)
+			return nil, false, fmt.Errorf("read book %s (%s): %w", id, ids.String(), err)
 		}
 		if b == nil {
 			continue
 		}
 		c := b.Core()
-		// The index can lag a cleared or changed ASIN; the row decides.
-		if vtLive(&c) && dcStr(c.VersionGroupID) != gid && strings.EqualFold(dcStr(c.ASIN), asin) {
+		// The index can lag a cleared or changed value; the row decides.
+		if vtLive(&c) && dcStr(c.VersionGroupID) != gid &&
+			(match(c.ASIN, ids.asin) || match(c.ISBN10, ids.isbn10) || match(c.ISBN13, ids.isbn13)) {
 			out = append(out, id)
 		}
 	}
 	sort.Strings(out)
-	return out, indexed, nil
+	return out, true, nil
 }
 
 // vtCacheVerdict reports whether a cache row with no candidates records a
@@ -1010,40 +1291,109 @@ func vtStillNeeds(b *database.Book, d *vtDetail) error {
 	return nil
 }
 
-// vtWriteGuard is the check both classes run on the primary's row as it
-// stands immediately before the write (inside the apply's ModifyBook, under
-// the book's write stripe; just before the cache Put for a copy): vtStillNeeds,
-// then every iTunes signal the plan checks (vtITunesWhy: the book's iTunes id,
-// its book_file rows' iTunes ids and paths, a live iTunes external id, a path
-// in the iTunes library), then, for an apply, that no book outside the group
-// has gained the record (vtOutsideGroup). The framework's own path guard is
-// off for this fixer (ITunesDatabaseOnly), so this is the only iTunes check
-// between the re-plan and the write.
+// vtPreWrite is the full check of the primary immediately before the write,
+// outside any lock: the row re-read (vtStillNeeds), every iTunes signal the
+// plan checks with the paths resolved on disk (vtITunesWhy: the book's iTunes
+// id, its book_file rows' iTunes ids and paths, a live iTunes external id, a
+// path in the iTunes library behind a symlink), and, for an apply, that no
+// book outside the group has gained the record (vtOutsideGroup, which may
+// scan every book row while memdb is not ready). It returns the paths it
+// cleared; the under-lock guard (vtWriteGuard) refuses any other.
 //
-// The reads take no lock of their own (Pebble prefix iterations and point
-// reads; the hash lookup reads memdb or scans rows), so none can wait on the
-// stripe held here, as in the scan-title-revert fixer's write callback. An id
-// landing after them still races only for the width of one batch.
-func vtWriteGuard(rd vtReaders, d *vtDetail, b *database.Book) error {
+// The framework's own path guard is off for this fixer (ITunesDatabaseOnly),
+// so this and vtWriteGuard are the only iTunes checks between the re-plan
+// and the write.
+func vtPreWrite(rd vtReaders, d *vtDetail) (map[string]bool, error) {
+	b, err := rd.store.GetBookByID(d.primaryID)
+	if err != nil {
+		return nil, fmt.Errorf("re-read book %s: %w", d.primaryID, err)
+	}
+	if err := vtStillNeeds(b, d); err != nil {
+		return nil, err
+	}
+	core := b.Core()
+	why, doubt, paths, err := vtITunesWhy(rd, &core)
+	switch {
+	case err != nil:
+		return nil, err
+	case why != "":
+		return nil, errVTChanged("book %s is now iTunes-linked (%s)", d.primaryID, why)
+	case doubt:
+		return nil, errVTChanged("could not tell whether book %s is iTunes-linked", d.primaryID)
+	}
+	if d.hash != "" {
+		outside, err := vtOutsideGroup(rd, d.groupID, d.hash)
+		if err != nil {
+			return nil, err
+		}
+		if len(outside) > 0 {
+			return nil, errVTChanged("the record is now carried by %s outside version group %s", strings.Join(outside, ", "), d.groupID)
+		}
+	}
+	cleared := make(map[string]bool, len(paths))
+	for _, p := range paths {
+		cleared[p] = true
+	}
+	return cleared, nil
+}
+
+// vtWriteGuard is the check both classes run on the primary's row as it
+// stands at the write: inside the apply's ModifyBook, under the book's write
+// stripe (and on the row as first read, before the apply body; see
+// metafetch.ApplyOptions.Guard), or just before the cache Put of a copy.
+// Nothing slow runs under a stripe (pebble_store_book_lock.go), so it does
+// only cheap work, and fails closed whatever it cannot tell cheaply:
+//   - vtStillNeeds on the row (primary, group, applied, title, ASIN);
+//   - the iTunes signals stored in rows: the book's iTunes id, its book_file
+//     rows' iTunes ids and paths, a live iTunes external id (point and prefix
+//     reads; itunesCopyWhy with no paths, so no path is resolved on disk);
+//   - every path of the book and its files must be one vtPreWrite resolved
+//     and cleared moments before; a path that appeared since is refused
+//     rather than resolved here;
+//   - for an apply, no book outside the group carries the record, read from
+//     memdb only (memHash). memdb disabled, still warming up or missing rows
+//     cannot answer without the full scan, so the row is refused
+//     (changed_since_plan) instead: re-run the apply once memdb is serving.
+//
+// The reads take no lock of their own, so none can wait on the stripe held
+// here.
+func vtWriteGuard(rd vtReaders, d *vtDetail, cleared map[string]bool, b *database.Book) error {
 	if err := vtStillNeeds(b, d); err != nil {
 		return err
 	}
 	core := b.Core()
-	why, doubt, err := vtITunesWhy(rd, &core)
-	switch {
-	case err != nil:
+	paths, ff, exts, err := vtITunesInputs(rd, &core)
+	if err != nil {
 		return err
+	}
+	for _, p := range paths {
+		if !cleared[p] {
+			return errVTChanged("book %s has a path the pre-write check did not clear (%q)", d.primaryID, p)
+		}
+	}
+	why, doubt := itunesCopyWhy(nil, core.ID, dcStr(core.ITunesPersistentID), nil, ff, exts)
+	switch {
 	case why != "":
 		return errVTChanged("book %s is now iTunes-linked (%s)", d.primaryID, why)
 	case doubt:
 		return errVTChanged("could not tell whether book %s is iTunes-linked", d.primaryID)
 	}
 	if d.hash != "" {
-		outside, err := vtOutsideGroup(rd, d.groupID, d.hash)
+		books, err := rd.memHash(d.hash)
 		if err != nil {
-			return err
+			return errVTChanged("cannot tell without a full book scan, which never runs under the write lock, whether a "+
+				"book outside version group %s carries the record (%v); re-run the apply once memdb is serving reads",
+				d.groupID, err)
+		}
+		var outside []string
+		for i := range books {
+			c := books[i].Core()
+			if vtLive(&c) && dcStr(c.VersionGroupID) != d.groupID {
+				outside = append(outside, c.ID)
+			}
 		}
 		if len(outside) > 0 {
+			sort.Strings(outside)
 			return errVTChanged("the record is now carried by %s outside version group %s", strings.Join(outside, ", "), d.groupID)
 		}
 	}
@@ -1069,9 +1419,10 @@ func vtHistorySource(d *vtDetail) string {
 // candidate cache is not a book row), so each is preceded by w.Beat to renew
 // the scan stand-down lease, and each is journaled under the op AFTER it
 // lands (ledger after write: a journal row never describes a write that did
-// not happen). A crash between the write and its journal row leaves the write
-// with its change history (undo last apply still reverts an apply) and no op
-// row; a journal failure is reported as repairs.ErrPartiallyApplied.
+// not happen). A crash between the write and its journal row is finished on
+// the resumed run of the same op: Replan recognises the op's own write
+// (vtResumed) and Apply records only the missing journal row. A journal
+// failure is reported as repairs.ErrPartiallyApplied.
 func (f *versionTwinFixer) Apply(_ context.Context, w *repairs.Writer, fresh repairs.Row) error {
 	d, ok := fresh.Detail.(*vtDetail)
 	if !ok || d == nil {
@@ -1080,18 +1431,49 @@ func (f *versionTwinFixer) Apply(_ context.Context, w *repairs.Writer, fresh rep
 	if w.OpID() == "" {
 		return fmt.Errorf("row %s: %w", fresh.RowID, repairs.ErrNotJournaled)
 	}
+	if d.resume {
+		return vtJournalResumed(w, d)
+	}
 	rd, err := f.readers(repairs.NewPathResolver())
 	if err != nil {
 		return err
 	}
-	guard := func(b *database.Book) error { return vtWriteGuard(rd, d, b) }
+	// pre runs the slow checks right before the write, outside any lock;
+	// guard runs the cheap ones at the write, against the paths pre cleared.
+	var cleared map[string]bool
+	pre := func() error {
+		c, err := vtPreWrite(rd, d)
+		cleared = c
+		return err
+	}
+	guard := func(b *database.Book) error { return vtWriteGuard(rd, d, cleared, b) }
 	switch d.class {
 	case vtClassApplied:
-		return f.applyRecord(w, rd.svc, d, guard)
+		return f.applyRecord(w, rd.svc, d, pre, guard)
 	case vtClassCandidates:
-		return f.copyCandidates(w, rd.svc, d, guard)
+		return f.copyCandidates(w, rd.svc, d, pre, guard)
 	}
 	return fmt.Errorf("row %s: unknown class %q", fresh.RowID, d.class)
+}
+
+// vtJournalResumed records the journal row of a write this op made before a
+// restart cut it off (vtResumed), and writes nothing else. Writer.Journal
+// skips a row already in the op's journal.
+func vtJournalResumed(w *repairs.Writer, d *vtDetail) error {
+	var err error
+	switch d.class {
+	case vtClassApplied:
+		err = w.Journal(d.primaryID, undo.ChangeTypeMetadataApply, undo.MetadataApplyField, "", d.jNew)
+	case vtClassCandidates:
+		err = w.Journal(d.primaryID, undo.ChangeTypeMetadataCacheCopy, undo.MetadataCacheField, d.jOld, d.jNew)
+	default:
+		return fmt.Errorf("row %s: unknown class %q", d.groupID, d.class)
+	}
+	if err != nil {
+		return fmt.Errorf("%w: book %s was written by this operation before a restart, but its journal row was not "+
+			"recorded: %v", repairs.ErrPartiallyApplied, d.primaryID, err)
+	}
+	return nil
 }
 
 // applyRecord applies the twin's record to the primary. FillOnly: an
@@ -1102,8 +1484,11 @@ func (f *versionTwinFixer) Apply(_ context.Context, w *repairs.Writer, fresh rep
 // BookRowOnly: no tags, provenance, segment titles, backfill or cover, so the
 // history batch is the whole write. RequireHistory: a failed history row is
 // an error, since the revert reads that history.
-func (f *versionTwinFixer) applyRecord(w *repairs.Writer, svc VersionTwinMetadataService, d *vtDetail, guard func(*database.Book) error) error {
+func (f *versionTwinFixer) applyRecord(w *repairs.Writer, svc VersionTwinMetadataService, d *vtDetail, pre func() error, guard func(*database.Book) error) error {
 	if err := w.Beat("metadata apply on book " + d.primaryID); err != nil {
+		return err
+	}
+	if err := pre(); err != nil {
 		return err
 	}
 	batch := vtBatchID(w.OpID(), d.primaryID)
@@ -1142,8 +1527,11 @@ func (f *versionTwinFixer) applyRecord(w *repairs.Writer, svc VersionTwinMetadat
 // vtWriteGuard, and no candidates or fetch verdict of its own. The prior
 // row (or its absence) is journaled after the copy, so the op revert
 // removes it again.
-func (f *versionTwinFixer) copyCandidates(w *repairs.Writer, svc VersionTwinMetadataService, d *vtDetail, guard func(*database.Book) error) error {
+func (f *versionTwinFixer) copyCandidates(w *repairs.Writer, svc VersionTwinMetadataService, d *vtDetail, pre func() error, guard func(*database.Book) error) error {
 	if err := w.Beat("candidate copy onto book " + d.primaryID); err != nil {
+		return err
+	}
+	if err := pre(); err != nil {
 		return err
 	}
 	var prior *database.MetadataCandidateCache

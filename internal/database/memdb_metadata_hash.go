@@ -1,7 +1,7 @@
 // file: internal/database/memdb_metadata_hash.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5b8e0f3a-2c71-4d96-b0e4-7a19c3d52e84
-// last-edited: 2026-09-13
+// last-edited: 2026-10-06
 
 package database
 
@@ -49,4 +49,26 @@ func (m *MemStore) GetBooksByMetadataSourceHash(hash string) ([]Book, error) {
 		books = append(books, *b)
 	}
 	return books, nil
+}
+
+// GetBooksByMetadataSourceHashInMemory is GetBooksByMetadataSourceHash
+// answered from memdb only: it never falls back to the Pebble scan. It
+// returns an error wrapping ErrMemDBNotReady when memdb is disabled
+// (UseMemDB=false) or not published yet (warmup running or failed), and
+// memdb's ErrMemdbIncomplete error when memdb has lost book rows.
+//
+// WHY. A caller holding a book's write stripe (a ModifyBook callback, such
+// as the version twin fixer's under-lock guard) must not run the ~35s scan
+// the fallback is (pebble_store_book_lock.go: nothing slow runs under a
+// stripe). Such a caller runs the full lookup before taking the stripe and
+// this one under it, and treats an error as "cannot tell": fail closed.
+func (p *PebbleStore) GetBooksByMetadataSourceHashInMemory(hash string) ([]Book, error) {
+	if !p.UseMemDB {
+		return nil, fmt.Errorf("%w: memdb is disabled on this store (UseMemDB=false)", ErrMemDBNotReady)
+	}
+	m := p.mem()
+	if m == nil {
+		return nil, fmt.Errorf("%w: memdb is not published yet (warmup still running, or it failed)", ErrMemDBNotReady)
+	}
+	return m.GetBooksByMetadataSourceHash(hash)
 }

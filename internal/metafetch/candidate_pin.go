@@ -1,5 +1,5 @@
 // file: internal/metafetch/candidate_pin.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 9f4a1d63-2c7e-4b85-a0d9-5e3b8c1f6a42
 // last-edited: 2026-10-06
 
@@ -251,7 +251,10 @@ type ApplyOptions struct {
 	// wrapped, so errors.Is still finds the caller's sentinel. The version
 	// twin fixer (maintenance.version-twin-metadata) uses it to refuse a book
 	// that stopped being its group's primary, left the group or was applied
-	// while the apply ran.
+	// while the apply ran. It is also run once on the row as first read,
+	// before the apply body (which may create a Series row), so a row it
+	// already refuses writes nothing at all. It runs under a book write
+	// stripe, so it must be cheap: no full-table scan, no disk I/O.
 	Guard func(fresh *database.Book) error
 	// SkipHashElection skips the MATCH-4 duplicate election
 	// (checkMetadataSourceHashDuplicates) after the commit. That election

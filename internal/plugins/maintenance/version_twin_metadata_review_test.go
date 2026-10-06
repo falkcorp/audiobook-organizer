@@ -245,7 +245,7 @@ func TestVersionTwinFixer_Review_P4_ASINOnBookOutsideGroupHolds(t *testing.T) {
 	l.appliedTwin("t", "g4c", vtSagaASIN("B0SYNTH006"), nil)
 	_, rows := l.plan()
 	row := rows["g4c"]
-	require.Equal(t, vtHoldASINElsewhere, row.Skipped, row.SkipReason)
+	require.Equal(t, vtHoldIDElsewhere, row.Skipped, row.SkipReason)
 	require.Contains(t, row.SkipReason, l.ids["out"])
 }
 
