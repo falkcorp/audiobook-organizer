@@ -1,5 +1,5 @@
 // file: internal/metafetch/cache.go
-// version: 1.24.0
+// version: 1.25.0
 // guid: a4f33a2e-3b4d-4306-bdce-476758e39120
 // last-edited: 2026-10-05
 //
@@ -33,6 +33,43 @@ import (
 // CURRENT search inputs — i.e. the book's identity drifted since the cache was
 // written. Callers treat a non-nil error as "skip + log" (fail-closed).
 var ErrStaleMetadataCache = errors.New("metadata cache stale: source hash mismatch")
+
+// ErrCandidateASINReplaced is CandidateASINStale's refusal: the book's ASIN
+// was replaced or cleared after its cached candidates were fetched, and the
+// candidate does not carry the book's current ASIN. It deliberately does NOT
+// wrap ErrStaleMetadataCache: the gate's transcription lift explains a stale
+// QUERY (cachedTranscribedSearch keys on that sentinel), and nothing about a
+// transcription explains a book now identified by another record.
+var ErrCandidateASINReplaced = errors.New("metadata cache stale: the book's ASIN changed after these candidates were fetched")
+
+// CandidateASINStale reports whether candidate c, cached in entry, was
+// fetched for an ASIN book no longer carries (MetadataCandidateCache.
+// ASINReplaced) and does not carry the book's current one. A candidate whose
+// ASIN equals the book's current ASIN is current whatever the row says: it
+// is the record the book now holds, typically the one just applied. A
+// candidate naming a different ASIN is stale here too; the gate's
+// asin_conflict check refuses it as well.
+//
+// nil when the row records no replacement. Callers: the bulk-apply planner
+// (identity leg, never lifted by a transcription), the transcription
+// auto-apply, the single-book dialog's candidate flags.
+func CandidateASINStale(entry *MetadataCandidateCache, book *database.Book, c *MetadataCandidate) error {
+	if entry == nil || book == nil || c == nil {
+		return nil
+	}
+	was, replaced := entry.ASINReplaced(book.ASIN)
+	if !replaced {
+		return nil
+	}
+	cur := trimmedASIN(book)
+	if cur != "" && strings.EqualFold(strings.TrimSpace(c.ASIN), cur) {
+		return nil
+	}
+	if cur == "" {
+		return fmt.Errorf("%w: book %s: fetched for ASIN %s, which the book no longer carries", ErrCandidateASINReplaced, book.ID, was)
+	}
+	return fmt.Errorf("%w: book %s: fetched for ASIN %s, the book now carries %s", ErrCandidateASINReplaced, book.ID, was, cur)
+}
 
 // MetadataCandidateCache is a re-export of the persistence type so
 // metafetch callers don't need to know about internal/database.
@@ -520,6 +557,8 @@ func (mfs *Service) cacheSearchResponse(bookID, query, author, narrator, series 
 		FetchedAt:         nowUTC(),
 		SourceHash:        sourceHash,
 		SearchFingerprint: resp.InputFingerprint,
+		// The ASIN these candidates were fetched for (ASINReplaced reads it).
+		FetchedForASIN: resp.BookASIN,
 	}
 
 	// Preserve-on-empty. A search WITH results always replaces, exactly as
@@ -547,6 +586,15 @@ func (mfs *Service) cacheSearchResponse(bookID, query, author, narrator, series 
 					}
 					if len(carried) > 0 {
 						entry.Candidates = carried
+						// The carried candidates were fetched for the
+						// earlier row's ASIN, not this search's. A row with
+						// none recorded (written before 2026-10-05) takes
+						// this search's: any replacement since was stamped
+						// on the row by the store, so an unstamped row was
+						// last vouched for the ASIN the book holds now.
+						if prev.FetchedForASIN != "" {
+							entry.FetchedForASIN = prev.FetchedForASIN
+						}
 						// NOT bumped: FetchedAt dates the CANDIDATES, and these are
 						// the ones the previous search returned. Moving it would
 						// relabel month-old candidates as freshly fetched.
@@ -721,6 +769,20 @@ func (mfs *Service) CachedBatchVerdict(book *database.Book, query, author string
 	fp := mfs.matchSearchFingerprint(entry.SearchFingerprint, book, query, author, "")
 	if fp == fingerprintStale || (fp == fingerprintLegacy && len(entry.Candidates) == 0) {
 		return entry, BatchVerdictNone, nil
+	}
+	// The book's ASIN was replaced or cleared after these candidates were
+	// fetched: the apply gate refuses each of them that does not carry the
+	// new ASIN (CandidateASINStale), so the row is re-asked rather than
+	// served as fresh -- unless the current questions were already asked and
+	// came back empty (the row then carries the old candidates under the
+	// current fingerprint with a recent LastEmptyFetchAt), which would only
+	// repeat that empty search on every run.
+	if _, replaced := entry.ASINReplaced(book.ASIN); replaced {
+		askedNow := fp == fingerprintCurrent && entry.LastEmptyFetchAt != nil &&
+			nowUTC().Sub(*entry.LastEmptyFetchAt) < database.MetadataCacheTTL
+		if !askedNow {
+			return entry, BatchVerdictNone, nil
+		}
 	}
 	if fp == fingerprintLegacy {
 		// Its candidates, filtered by this version's position rules: a row

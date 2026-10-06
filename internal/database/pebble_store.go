@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.207.0
+// version: 1.208.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-05
 
@@ -103,6 +103,15 @@ func serializeBookForIndex(book *Book) ([]byte, error) {
 
 type PebbleStore struct {
 	db *pebble.DB
+	// metadataCacheLocks serialise writes of one book's metadata_cache row
+	// (striped by book id, metadataCacheLock): PutMetadataCache and
+	// DeleteMetadataCache, and the book write that re-stamps a kept row's
+	// FetchedForASIN, which reads the row and writes it back in the book's
+	// batch. Without them a fetch landing between that read and the commit
+	// would be overwritten by the older candidates. Order: a book write takes
+	// the book lock first, then its stripe; Put and Delete take only the
+	// stripe.
+	metadataCacheLocks [64]sync.Mutex
 	// sampleMu serialises the metrics sampler against Close: the sampler holds
 	// the read lock (TryRLock) from its dbClosed check through db.Metrics();
 	// Close takes the write lock around dbClosed.Store(true) + db.Close(). The
@@ -3353,17 +3362,56 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, opts bookWrite
 	// ASIN, ISBN and series changes keep the row. Until 2026-10-05 they
 	// dropped it too, and metafetch.asin-backfill -- which fills an EMPTY ASIN
 	// every six hours, often the very ASIN the cached candidate carries --
-	// wiped the candidate it was confirming on 1,078 production books. None
-	// of those fields is a search input (metafetch.hashSearchInputs hashes
-	// title, author, narrator and series; the batch fetch passes series as
-	// ""), and the apply gate already judges a kept row against the book as
-	// it is now: a candidate whose ASIN differs from the book's is refused as
-	// asin_conflict (applygate CheckEvidenceInBatch), so a REPLACED ASIN
-	// flags the old candidates rather than deleting them, and a filled or
-	// matching one leaves them applicable.
+	// wiped the candidate it was confirming on 1,078 production books.
+	//
+	// All three ARE search inputs: the search looks the book's own ASIN up
+	// directly (metafetch resolveSearchInputs) and its search fingerprint
+	// includes it, and ISBN-10/13 and the series name go to the providers in
+	// metadata.SearchContext (buildSearchContext). They are not part of the
+	// row's SourceHash (title, author, narrator, series hint), and they do
+	// not change WHICH book the candidates answer for, so they do not drop
+	// the row. A filled ASIN or ISBN adds a question; the candidates found
+	// without it still describe the book. The batch fetch sees the changed
+	// fingerprint and refetches with the new question in its own time.
+	//
+	// A REPLACED or cleared ASIN does more: the book is now identified by
+	// another record, or by none. The row is kept, but it records the ASIN
+	// its candidates were fetched for (stageCacheASINStamp below), and the
+	// apply gate refuses a kept candidate that does not carry the book's
+	// current ASIN: asin_conflict when it names another ASIN (applygate
+	// CheckEvidenceInBatch), identity_stale when it names none
+	// (metafetch.CandidateASINStale). A candidate equal to the new ASIN --
+	// the one just applied -- stays applicable.
+	// cacheRowDeleted: the batch deletes or rewrites the cache row, so the
+	// cache generation moves after the commit.
 	cacheRowDeleted := false
+	var unlockCache func()
 	if p.candidateSearchIdentityChanged(oldBook, book) {
 		staged, err := p.stageDeleteIfPresent(batch, metadataCacheKey(id))
+		if err != nil {
+			batch.Close()
+			return nil, err
+		}
+		cacheRowDeleted = staged
+	} else if oldASIN, replaced := asinReplacedOnWrite(oldBook, book); replaced {
+		// A kept row records the ASIN its candidates were fetched for, so a
+		// candidate that carries no ASIN of its own (Open Library, Google
+		// Books) is read as stale once that ASIN is replaced or cleared
+		// (MetadataCandidateCache.ASINReplaced): the apply gate refuses it as
+		// identity_stale and the batch fetch refetches the row. The stripe
+		// lock is held until the batch commits, so a fetch cannot land between
+		// the read and the write and be overwritten by the older candidates.
+		// It is released right after the commit, before the memdb
+		// write-through and the change notification.
+		mu := p.metadataCacheLock(id)
+		mu.Lock()
+		unlockCache = mu.Unlock
+		defer func() {
+			if unlockCache != nil {
+				unlockCache()
+			}
+		}()
+		staged, err := p.stageCacheASINStamp(batch, id, oldASIN)
 		if err != nil {
 			batch.Close()
 			return nil, err
@@ -3398,6 +3446,10 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, opts bookWrite
 	if err := batch.Commit(pebble.Sync); err != nil {
 		return nil, err
 	}
+	if unlockCache != nil {
+		unlockCache()
+		unlockCache = nil
+	}
 	if cacheRowDeleted {
 		p.bumpMetadataCacheGeneration(id)
 	}
@@ -3430,11 +3482,14 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, opts bookWrite
 // changes (or cannot be read): a relink to another row of the same name -- a
 // dedup merge onto the master author -- searches exactly as before.
 //
-// Identifiers are deliberately absent. Filling an empty ASIN or ISBN never
-// makes a candidate wrong, an ASIN equal to the candidate's confirms it, and a
-// candidate whose ASIN differs from a replaced one is refused by the apply
-// gate (asin_conflict) while staying visible. Series is absent for the same
-// reason: the batch fetch never searches by it. See the caller.
+// Identifiers and series are deliberately absent, although the search does
+// use them (the book's own ASIN is looked up directly and is part of the
+// search fingerprint; ISBN and series go to the providers in the search
+// context). Filling an empty ASIN or ISBN adds a question without making any
+// candidate answer for another book, and an ASIN equal to a candidate's
+// confirms it. A REPLACED or cleared ASIN keeps the row too, stamped with the
+// ASIN its candidates were fetched for, and the apply gate refuses each kept
+// candidate that does not carry the new ASIN. See the caller.
 func (p *PebbleStore) candidateSearchIdentityChanged(oldBook, newBook *Book) bool {
 	if oldBook == nil || newBook == nil {
 		return true

@@ -1,7 +1,7 @@
 // file: internal/metafetch/service.go
-// version: 5.43.0
+// version: 5.44.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
-// last-edited: 2026-10-02
+// last-edited: 2026-10-05
 
 package metafetch
 
@@ -400,6 +400,10 @@ type SearchMetadataResponse struct {
 	// InputFingerprint identifies the questions this search asked (see
 	// searchInputs.fingerprint). Internal, stored on the cache entry.
 	InputFingerprint string `json:"-"`
+	// BookASIN is the book's ASIN (trimmed) when the search read it, "" when
+	// it had none. Internal: cacheSearchResponse records it on the cache row
+	// as FetchedForASIN.
+	BookASIN string `json:"-"`
 	// LegacyFingerprint is the fingerprint the searchInputVersion "1" ladder
 	// recorded for the same inputs (searchInputs.legacyFingerprint). Internal:
 	// cacheSearchResponse keeps it on candidates carried over from such a row,

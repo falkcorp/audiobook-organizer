@@ -1,7 +1,7 @@
 // file: internal/applygate/evidence.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 4e2b7c19-8a3d-4f60-b5e1-9d7c0a2f6b38
-// last-edited: 2026-09-28
+// last-edited: 2026-10-05
 
 package applygate
 
@@ -120,7 +120,7 @@ func CheckEvidenceInBatch(book *database.Book, authors Authors, rt database.Book
 		checkAuthorPath(book, authors, c),
 		checkTitle(book, c),
 		checkNarrator(book, c, narratorArmed),
-		checkASIN(book, c),
+		CheckASIN(book, c),
 		checkCastInAuthor(&nameSource{author: authors.credit(), narrator: bookNarrator(book)}, c.Author, c.Narrator),
 		checkSeriesNumberLost(book, c, v.Overwrites),
 		checkPartialBook(book, c, runtime.Outcome, claims),
@@ -420,7 +420,12 @@ func checkNarrator(book *database.Book, c *metafetch.MetadataCandidate, vetoArme
 	return r
 }
 
-func checkASIN(book *database.Book, c *metafetch.MetadataCandidate) CheckResult {
+// CheckASIN is the evidence leg's ASIN check: agree when the book and the
+// candidate carry the same ASIN (case and surrounding space ignored), block as
+// asin_conflict when both carry one and they differ, unknown when either has
+// none. Exported for the paths outside the bulk gate that must refuse the same
+// pair: the transcription auto-apply and the single-book dialog.
+func CheckASIN(book *database.Book, c *metafetch.MetadataCandidate) CheckResult {
 	r := CheckResult{Name: "asin", Outcome: OutcomeUnknown}
 	cur := ""
 	if book.ASIN != nil {

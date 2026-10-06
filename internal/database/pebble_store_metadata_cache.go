@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_metadata_cache.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3f8b41d7-9e26-4c05-b1a8-7d0e5c26f934
-// last-edited: 2026-10-03
+// last-edited: 2026-10-05
 
 package database
 
@@ -9,9 +9,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"sort"
+	"strings"
+	"sync"
 
 	"github.com/cockroachdb/pebble/v2"
+
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
 // metadataCacheKeyPrefix is the prefix every per-book cache key shares.
@@ -19,6 +24,16 @@ const metadataCacheKeyPrefix = "metadata_cache:"
 
 func metadataCacheKey(bookID string) []byte {
 	return []byte(metadataCacheKeyPrefix + bookID)
+}
+
+// metadataCacheLog is the process log of the metadata_cache keyspace.
+var metadataCacheLog = logger.New("database.metadata-cache")
+
+// metadataCacheLock is bookID's stripe of PebbleStore.metadataCacheLocks.
+func (p *PebbleStore) metadataCacheLock(bookID string) *sync.Mutex {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(bookID))
+	return &p.metadataCacheLocks[h.Sum32()%uint32(len(p.metadataCacheLocks))]
 }
 
 // GetMetadataCache reads the cache entry for bookID, or returns
@@ -49,6 +64,9 @@ func (p *PebbleStore) PutMetadataCache(entry *MetadataCandidateCache) error {
 	if err != nil {
 		return fmt.Errorf("encode metadata_cache:%s: %w", entry.BookID, err)
 	}
+	mu := p.metadataCacheLock(entry.BookID)
+	mu.Lock()
+	defer mu.Unlock()
 	if err := p.db.Set(metadataCacheKey(entry.BookID), data, pebble.Sync); err != nil {
 		return fmt.Errorf("pebble set metadata_cache:%s: %w", entry.BookID, err)
 	}
@@ -59,6 +77,9 @@ func (p *PebbleStore) PutMetadataCache(entry *MetadataCandidateCache) error {
 // DeleteMetadataCache removes the cache entry for bookID. Missing
 // keys are not an error.
 func (p *PebbleStore) DeleteMetadataCache(bookID string) error {
+	mu := p.metadataCacheLock(bookID)
+	mu.Lock()
+	defer mu.Unlock()
 	if err := p.db.Delete(metadataCacheKey(bookID), pebble.Sync); err != nil {
 		return fmt.Errorf("pebble delete metadata_cache:%s: %w", bookID, err)
 	}
@@ -134,4 +155,55 @@ func (p *PebbleStore) ListMetadataCacheKeys() ([]MetadataCacheSummary, error) {
 // the same store.
 func (p *PebbleStore) MetadataCacheGeneration() uint64 {
 	return p.cacheGen.Value()
+}
+
+// asinReplacedOnWrite reports whether a book write takes oldBook's non-empty
+// ASIN away: replaced by another value or cleared. Filling an empty ASIN, or
+// rewriting it with a different case or spacing, is not.
+func asinReplacedOnWrite(oldBook, newBook *Book) (old string, replaced bool) {
+	if oldBook == nil || oldBook.ASIN == nil {
+		return "", false
+	}
+	old = strings.TrimSpace(*oldBook.ASIN)
+	if old == "" {
+		return "", false
+	}
+	cur := ""
+	if newBook != nil && newBook.ASIN != nil {
+		cur = strings.TrimSpace(*newBook.ASIN)
+	}
+	return old, !strings.EqualFold(old, cur)
+}
+
+// stageCacheASINStamp records, in the book write's batch, that the book's
+// cached candidates were fetched for oldASIN (FetchedForASIN), when the row
+// exists and has no value yet. A row that already records one keeps it:
+// that is still the ASIN its candidates were fetched for, so an ASIN
+// replaced and later restored reads as current again.
+//
+// The caller must hold the book's metadataCacheLock until the batch commits;
+// staged reports whether the row was rewritten (the caller then bumps the
+// cache generation after the commit).
+func (p *PebbleStore) stageCacheASINStamp(batch *pebble.Batch, bookID, oldASIN string) (staged bool, err error) {
+	entry, err := p.GetMetadataCache(bookID)
+	if err != nil {
+		// A row that cannot be read cannot be stamped. Keeping it unstamped
+		// would let candidates fetched for the old ASIN read as current, so
+		// it is dropped instead: the next fetch rewrites it.
+		metadataCacheLog.Warn("metadata_cache:%s unreadable while its book's ASIN was replaced; dropping it: %v",
+			logger.SanitizeLogValue(bookID), err)
+		return p.stageDeleteIfPresent(batch, metadataCacheKey(bookID))
+	}
+	if entry == nil || strings.TrimSpace(entry.FetchedForASIN) != "" {
+		return false, nil
+	}
+	entry.FetchedForASIN = oldASIN
+	data, err := json.Marshal(entry)
+	if err != nil {
+		return false, fmt.Errorf("encode metadata_cache:%s: %w", bookID, err)
+	}
+	if err := batch.Set(metadataCacheKey(bookID), data, nil); err != nil {
+		return false, err
+	}
+	return true, nil
 }

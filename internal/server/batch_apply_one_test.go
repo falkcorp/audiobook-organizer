@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_one_test.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: 9d2b71fa-30c8-4e57-a614-8b5e0c7f2d93
 // last-edited: 2026-10-05
 //
@@ -34,15 +34,17 @@ type finishCall struct {
 
 // fakeApplySvc records which of the file-side calls were made.
 type fakeApplySvc struct {
-	candidates    []json.RawMessage
-	queryMatches  map[string]bool
-	getErr        error
-	applyErr      error
-	finishErr     error
-	pendingCover  string
-	skippedLocked []string
-	appliedIDs    []string
-	finishCalls   []finishCall
+	candidates []json.RawMessage
+	// fetchedForASIN is the cache row's FetchedForASIN.
+	fetchedForASIN string
+	queryMatches   map[string]bool
+	getErr         error
+	applyErr       error
+	finishErr      error
+	pendingCover   string
+	skippedLocked  []string
+	appliedIDs     []string
+	finishCalls    []finishCall
 	// checkpoints is the stand-down checkpoint each FinishApplyFileWork got.
 	checkpoints []func() error
 	// identityErr is what ValidateCachedIdentityForBook reports.
@@ -169,7 +171,7 @@ func (f *fakeApplySvc) GetCachedCandidates(bookID string) (*metafetch.MetadataCa
 	if len(f.candidates) == 0 {
 		return nil, false, nil
 	}
-	return &metafetch.MetadataCandidateCache{Candidates: f.candidates}, true, nil
+	return &metafetch.MetadataCandidateCache{Candidates: f.candidates, FetchedForASIN: f.fetchedForASIN}, true, nil
 }
 
 func (f *fakeApplySvc) ApplyMetadataCandidateWithOptions(id string, _ metafetch.MetadataCandidate, _ []string, opts metafetch.ApplyOptions) (*metafetch.FetchMetadataResponse, error) {
