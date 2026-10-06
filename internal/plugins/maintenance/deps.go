@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.74.0
+// version: 1.75.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-10-05
 
@@ -891,6 +891,42 @@ type LibraryCloner interface {
 	LibraryITunesPath(path string) string
 }
 
+// CandidateFetchOutcome is a book's latest metadata.candidate-fetch result:
+// its status ("matched", "no_match", "skipped", "error") and when it was
+// recorded.
+type CandidateFetchOutcome struct {
+	Status string
+	At     time.Time
+}
+
+// CandidateRefetchResult is what one candidate refetch did: the batch fetch's
+// status for the book, how many candidates its cache row holds afterwards,
+// and the fetch's own message for a book it did not match.
+type CandidateRefetchResult struct {
+	Status     string
+	Candidates int
+	Detail     string
+}
+
+// CandidateRefetcher serves the lost-candidates fixer
+// (maintenance.refetch-lost-candidates). Implemented on *server.Server, which
+// owns the candidate-fetch op's per-book path and its provider rate gate.
+type CandidateRefetcher interface {
+	// LatestCandidateFetchOutcomes returns every book's latest
+	// candidate-fetch outcome (the set GET /library/metadata-results serves),
+	// keyed by book id.
+	LatestCandidateFetchOutcomes() (map[string]CandidateFetchOutcome, error)
+	// LatestCandidateFetchOutcome is one book's entry of that set, for a
+	// per-row re-check; ok is false when the book was never fetched.
+	LatestCandidateFetchOutcome(bookID string) (outcome CandidateFetchOutcome, ok bool, err error)
+	// RefetchMetadataCandidates runs the batch candidate fetch for one book
+	// (the metadata.candidate-fetch op's per-book path, unforced): providers
+	// are asked only when the cache cannot answer for the book's current
+	// inputs, and the result lands in the book's candidate cache. It never
+	// applies metadata or writes the book.
+	RefetchMetadataCandidates(ctx context.Context, bookID string) (CandidateRefetchResult, error)
+}
+
 // ServerDeps is the narrow interface that *server.Server satisfies implicitly.
 // All operations are expressed as methods so there is no import cycle.
 //
@@ -926,6 +962,7 @@ type ServerDeps interface { //nolint:interfacebloat // transitional composition 
 	ScanController
 	BookMerger
 	LibraryCloner
+	CandidateRefetcher
 }
 
 // ----- reporter adapter -----
