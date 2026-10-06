@@ -116,6 +116,9 @@
 // is itself hands-off (under the iTunes library, an iTunes id, Doctor Who /
 // Big Finish) is listed manual-only on a "manual:" row of its own
 // (splitManualCopies), so it no longer turns its siblings' copy row manual.
+// A path twin whose donor was split off onto its own row is held with it
+// (splitOrphanTwins): retiring the twin would leave the live donor a second
+// owner of the same file.
 //
 // ONE CHAPTER IN TWO ROWS (holdSameAudioRows). Two rows of one folder that
 // hold the same chapter between them (same position and size, no conflicting
@@ -2967,6 +2970,8 @@ func (f *fragmentFixer) buildRows(lib *fragLibrary, ix *fragIndex, cands []*frag
 			ps, held = f.splitFollowingCopies(lib, k.parent, itWhy, ps, probe)
 			rows = append(rows, held...)
 		}
+		ps, held = f.splitOrphanTwins(lib, k.parent, ps, pairs[k])
+		rows = append(rows, held...)
 		if len(ps) == 0 {
 			delete(pairs, k)
 		} else {
@@ -3048,6 +3053,35 @@ func (f *fragmentFixer) splitManualCopies(lib *fragLibrary, parentID string, ps 
 	}
 	if len(keep) == 0 {
 		return ps, nil
+	}
+	return keep, held
+}
+
+// splitOrphanTwins holds each path twin in kept whose donor (the fragment
+// whose evidence it adopted) is no longer among the kept pairs: the donor was
+// split off onto a row of its own, and retiring the twin would leave that
+// live donor as a second owner of the same file. all is the pairs before the
+// splits.
+func (f *fragmentFixer) splitOrphanTwins(lib *fragLibrary, parentID string, kept, all []fragPair) ([]fragPair, []repairs.Row) {
+	if len(kept) == len(all) {
+		return kept, nil
+	}
+	in := map[string]bool{}
+	for _, p := range kept {
+		in[p.Frag.Book.ID] = true
+	}
+	var keep []fragPair
+	var held []repairs.Row
+	for _, p := range kept {
+		rest, twin := strings.CutPrefix(p.Evidence, fragEvTwinPrefix)
+		donor, _, _ := strings.Cut(rest, ", whose ")
+		if !twin || in[donor] {
+			keep = append(keep, p)
+			continue
+		}
+		held = append(held, f.holdRow(lib, p.Frag, fragClassHeld, fragClassHeld, fragSkipAmbiguous,
+			fmt.Sprintf("shares its file with fragment %s, which is held on its own row; it copies parent %s row %s and is decided with it", donor, parentID, p.Parent.ID),
+			[]fragMatch{{Row: p.Parent, Evidence: p.Evidence}}))
 	}
 	return keep, held
 }

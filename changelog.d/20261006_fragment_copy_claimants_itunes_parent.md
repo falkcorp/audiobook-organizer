@@ -11,7 +11,8 @@
 - A fragment that is hands-off on its own (under the iTunes library, an
   iTunes id, Doctor Who / Big Finish) is listed manual-only on a
   `manual:<fragment>` row of its own instead of making every sibling in its
-  parent's copy row manual-only.
+  parent's copy row manual-only. A path twin whose donor fragment was split
+  off onto its own row is held with it.
 - A copy row whose parent is iTunes-linked (book or row iTunes id, row
   `itunes_path`, live itunes external id) is no longer held for its parent.
   It retires the fragments **writing the fragments only**
