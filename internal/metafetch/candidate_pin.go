@@ -1,7 +1,7 @@
 // file: internal/metafetch/candidate_pin.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 9f4a1d63-2c7e-4b85-a0d9-5e3b8c1f6a42
-// last-edited: 2026-09-30
+// last-edited: 2026-10-06
 
 package metafetch
 
@@ -11,6 +11,8 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
 
 // Pin origins that earn an owner-review override. Owner ruling 2026-09-27:
@@ -242,6 +244,15 @@ type ApplyOptions struct {
 	// so a re-run after a restart can recognise its own rows (ApplyEditsSince)
 	// and complete as "already applied" instead of applying twice.
 	BatchID string
+	// Guard, when set, is the caller's own check of the book row as it stands
+	// under the book's write lock, inside the ModifyBook that commits the
+	// apply (after the automatic apply's "no match" re-check). A non-nil
+	// error refuses the commit: nothing is written and the error is returned
+	// wrapped, so errors.Is still finds the caller's sentinel. The version
+	// twin fixer (maintenance.version-twin-metadata) uses it to refuse a book
+	// that stopped being its group's primary, left the group or was applied
+	// while the apply ran.
+	Guard func(fresh *database.Book) error
 }
 
 // automatic reports whether nobody picked this candidate: a fill-only apply,

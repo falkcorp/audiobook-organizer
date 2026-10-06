@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.37.2
+// version: 1.38.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
 // last-edited: 2026-10-06
 
@@ -17,6 +17,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/compactprogress"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
+	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/childop"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -74,6 +75,21 @@ func (d fakeDeps) CloneBookIntoLibrary(*database.Book, []database.BookFile, stri
 	return "", errors.New("fakeDeps: no library cloner")
 }
 func (d fakeDeps) LibraryITunesPath(string) string { return "" }
+
+// VersionTwinMetadata: the real metadata service over the fixture store, so
+// the version twin fixer's tests exercise the real apply and cache copy.
+func (d fakeDeps) VersionTwinMetadataService() VersionTwinMetadataService {
+	if d.store == nil {
+		return nil
+	}
+	return metafetch.NewService(d.store)
+}
+func (d fakeDeps) BooksWithMetadataSourceHash(hash string) ([]database.Book, error) {
+	if d.store == nil {
+		return nil, errors.New("fakeDeps: no store")
+	}
+	return d.store.GetBooksByMetadataSourceHash(hash)
+}
 
 // CandidateRefetcher (unused by these fakes; the lost-candidates fixer tests
 // use their own): no fetch has ever run, and a refetch is refused.

@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_owner_review_test.go
-// version: 1.6.3
+// version: 1.6.4
 // guid: 1a8c5e37-6f02-4d94-b7e3-9c4d2a0f5b81
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 //
 // An owner-reviewed apply: the review lane pins the candidate it showed, and
 // a matching pin lifts the certainty legs of the gate. A stale pin, no pin,
@@ -11,6 +11,7 @@ package server
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -196,7 +197,9 @@ func TestOwnerReview_ApprovedRowOverwritesUnreviewedFills(t *testing.T) {
 	if svc.applyOpts[0].FillOnly || svc.preflightOpts[0].FillOnly {
 		t.Fatalf("owner-approved row must overwrite: apply %+v preflight %+v", svc.applyOpts[0], svc.preflightOpts[0])
 	}
-	if svc.applyOpts[0] != svc.preflightOpts[0] {
+	// DeepEqual, not ==: ApplyOptions carries a func field (Guard), so it is
+	// not comparable; both sides leave it nil here.
+	if !reflect.DeepEqual(svc.applyOpts[0], svc.preflightOpts[0]) {
 		t.Fatalf("apply and preflight options differ: %+v vs %+v", svc.applyOpts[0], svc.preflightOpts[0])
 	}
 
@@ -242,7 +245,7 @@ func TestOwnerReview_PreviewUsesTheApplyOptions(t *testing.T) {
 	// The preview of the pinned row and the apply of it use one value.
 	apply := &fakeApplySvc{candidates: candidateJSON(t, cand)}
 	applyCachedCandidateForBookTimed(apply, books, nil, "b1", true, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand), "")
-	if len(apply.applyOpts) != 1 || apply.applyOpts[0] != rec.previewOpts[1] {
+	if len(apply.applyOpts) != 1 || !reflect.DeepEqual(apply.applyOpts[0], rec.previewOpts[1]) {
 		t.Fatalf("preview %+v and apply %+v of the same reviewed row disagree", rec.previewOpts[1], apply.applyOpts)
 	}
 }
@@ -416,7 +419,7 @@ func TestReviewApproved_PreviewOptionsEqualApplyOptions(t *testing.T) {
 	previewBulkApplyRow(prev, "b1", planCachedApply(prev, fakeBooks{}, "b1", nil, nil), true)
 	bulk := &fakeApplySvc{candidates: oneCandidate(t)}
 	applyCachedCandidateForBookTimed(bulk, fakeBooks{}, nil, "b1", true, nil, metafetch.NewApplyPhaseTimings(), nil, nil, "")
-	if len(prev.previewOpts) != 1 || len(bulk.applyOpts) != 1 || prev.previewOpts[0] != bulk.applyOpts[0] {
+	if len(prev.previewOpts) != 1 || len(bulk.applyOpts) != 1 || !reflect.DeepEqual(prev.previewOpts[0], bulk.applyOpts[0]) {
 		t.Fatalf("gate-passed row: preview %+v, pinless apply %+v", prev.previewOpts, bulk.applyOpts)
 	}
 
@@ -425,7 +428,7 @@ func TestReviewApproved_PreviewOptionsEqualApplyOptions(t *testing.T) {
 	previewBulkApplyRow(rprev, "b1", planCachedApply(rprev, books, "b1", nil, nil), true)
 	reviewed := &fakeApplySvc{candidates: candidateJSON(t, cand)}
 	applyCachedCandidateForBookTimed(reviewed, books, nil, "b1", true, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand), "")
-	if len(rprev.previewOpts) != 1 || len(reviewed.applyOpts) != 1 || rprev.previewOpts[0] != reviewed.applyOpts[0] {
+	if len(rprev.previewOpts) != 1 || len(reviewed.applyOpts) != 1 || !reflect.DeepEqual(rprev.previewOpts[0], reviewed.applyOpts[0]) {
 		t.Fatalf("review-only row: preview %+v, review-lane apply %+v", rprev.previewOpts, reviewed.applyOpts)
 	}
 }
