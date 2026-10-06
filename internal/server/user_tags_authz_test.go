@@ -1,7 +1,7 @@
 // file: internal/server/user_tags_authz_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7a4e9b3c-2f1d-4a6e-9c8b-5d3f0e1a2b4c
-// last-edited: 2026-08-15
+// last-edited: 2026-10-06
 
 // Regression coverage for the book user-tags write routes' authorization
 // guard (fixed in this change). setupUserTagRoutes previously registered
@@ -76,7 +76,7 @@ func setupUserTagsAuthzTestServer(t *testing.T) (srv *Server, adminToken, viewer
 	})
 	require.NoError(t, err)
 
-	server := NewServer(store)
+	server := newTestServer(t, store)
 	if server.opRegistry != nil {
 		server.opRegistry.Start(context.Background())
 	}

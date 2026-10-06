@@ -1,12 +1,11 @@
 // file: internal/server/authority_evidence_test.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 4492804b-1186-4576-8833-2d1d7a405363
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package server
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -21,6 +20,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/authority"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger/logtest"
 )
 
 // waitAuthorityLoad waits for the in-flight snapshot load, if any.
@@ -196,49 +196,16 @@ func TestAuthorityEvidence_Await(t *testing.T) {
 	require.False(t, ready)
 }
 
-// lockedBuffer is a bytes.Buffer safe for the load goroutine and the test to
-// share.
-type lockedBuffer struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-}
-
-func (b *lockedBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.Write(p)
-}
-
-// lines returns the captured lines holding substr.
-func (b *lockedBuffer) lines(substr string) []string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	var out []string
-	for _, l := range strings.Split(b.buf.String(), "\n") {
-		if strings.Contains(l, substr) {
-			out = append(out, l)
-		}
-	}
-	return out
-}
-
-// captureInfoLogs swaps the default slog handler for one writing INFO+ into
-// a locked buffer, restored at cleanup.
+// captureInfoLogs captures INFO+ from slog.Default into a mutex-guarded
+// buffer for the rest of the test.
 //
 // It swaps slog.Default because there is no other seam: authorityEvidence
-// logs through logger.New("authority"), which writes to slog.Default, and
-// neither internal/logger nor this package has a shared capture helper. The
-// nearest one, captureWarnLogs (vector_backend_warn_test.go), captures WARN
-// only, which loses the Info lines asserted here, and writes to an unlocked
-// bytes.Buffer, which races with the load goroutine under -race. The swap is
-// process-global, so the tests using it must not call t.Parallel.
-func captureInfoLogs(t *testing.T) *lockedBuffer {
+// logs through logger.New("authority"), which writes to slog.Default. The
+// buffer is shared with the load goroutine, hence logtest's locked Buffer,
+// and the swap is process-global, so logtest refuses to run under t.Parallel.
+func captureInfoLogs(t *testing.T) *logtest.Buffer {
 	t.Helper()
-	buf := &lockedBuffer{}
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
-	t.Cleanup(func() { slog.SetDefault(prev) })
-	return buf
+	return logtest.Capture(t, slog.LevelInfo)
 }
 
 // Await logs one line per call: a wait past awaitLogAfter that ends with a
@@ -258,7 +225,7 @@ func TestAuthorityEvidence_AwaitLogsWhyTheWaitEnded(t *testing.T) {
 		noSnap   = "enabled but no snapshot"
 	)
 	count := func() (info, warn []string) {
-		for _, l := range logs.lines("authority evidence: ") {
+		for _, l := range logs.Lines("authority evidence: ") {
 			switch {
 			case strings.Contains(l, waitInfo):
 				require.Contains(t, l, "level=INFO", l)
@@ -270,11 +237,7 @@ func TestAuthorityEvidence_AwaitLogsWhyTheWaitEnded(t *testing.T) {
 		}
 		return info, warn
 	}
-	reset := func() {
-		logs.mu.Lock()
-		logs.buf.Reset()
-		logs.mu.Unlock()
-	}
+	reset := logs.Reset
 	// delayed runs each load after d, tracked by loads.
 	delayed := func(d time.Duration) func(string, func()) {
 		return func(_ string, fn func()) {
@@ -294,7 +257,7 @@ func TestAuthorityEvidence_AwaitLogsWhyTheWaitEnded(t *testing.T) {
 	_, ready := a.Await(context.Background())
 	require.True(t, ready)
 	info, warn := count()
-	require.Len(t, info, 1, "logs: %v", logs.lines(""))
+	require.Len(t, info, 1, "logs: %v", logs.Lines(""))
 	require.Contains(t, info[0], "the snapshot load finished")
 	require.Empty(t, warn)
 
@@ -317,7 +280,7 @@ func TestAuthorityEvidence_AwaitLogsWhyTheWaitEnded(t *testing.T) {
 	require.False(t, ready)
 	info, warn = count()
 	require.Empty(t, info, "a wait that ends without a snapshot is not also logged at Info")
-	require.Len(t, warn, 1, "logs: %v", logs.lines(""))
+	require.Len(t, warn, 1, "logs: %v", logs.Lines(""))
 	require.Contains(t, warn[0], "wait limit")
 
 	// The same, bounded by the caller's context: one Warn naming it.
@@ -330,6 +293,6 @@ func TestAuthorityEvidence_AwaitLogsWhyTheWaitEnded(t *testing.T) {
 	require.False(t, ready)
 	info, warn = count()
 	require.Empty(t, info)
-	require.Len(t, warn, 1, "logs: %v", logs.lines(""))
+	require.Len(t, warn, 1, "logs: %v", logs.Lines(""))
 	require.Contains(t, warn[0], "the caller's context ended first")
 }

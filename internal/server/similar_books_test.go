@@ -1,7 +1,7 @@
 // file: internal/server/similar_books_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1e2f3a4b-5c6d-7e8f-9a0b-1c2d3e4f5a6b
-// last-edited: 2026-08-15
+// last-edited: 2026-10-06
 
 package server
 
@@ -39,7 +39,7 @@ func setupSimilarBooksServer(t *testing.T) *Server {
 	}
 	t.Cleanup(func() { _ = idx.Close() })
 
-	srv := NewServer(store)
+	srv := newTestServer(t, store)
 	srv.setSearchIndex(idx)
 
 	// Create an author and books.
@@ -133,7 +133,7 @@ func TestHandleSimilarBooks_NoAuthorNoSeries(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = idx.Close() })
 
-	srv := NewServer(store)
+	srv := newTestServer(t, store)
 	srv.setSearchIndex(idx)
 
 	// Book with no author/series.

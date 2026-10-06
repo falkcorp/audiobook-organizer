@@ -1,7 +1,7 @@
 // file: internal/server/ai_jobs_handlers_test.go
-// version: 2.1.1
+// version: 2.2.0
 // guid: 136d5ad0-d226-471a-8c2c-64992ba3882d
-// last-edited: 2026-09-02
+// last-edited: 2026-10-06
 
 // NOTE(fable5 T022): Ported from SQLiteStore to PebbleStore.
 
@@ -37,7 +37,7 @@ func setupAIJobsTestServer(t *testing.T) (*Server, *database.PebbleStore) {
 		store.Close()
 	})
 
-	srv := NewServer(store)
+	srv := newTestServer(t, store)
 	return srv, store
 }
 

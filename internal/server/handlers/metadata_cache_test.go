@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_test.go
-// version: 2.9.0
+// version: 2.10.0
 // guid: 6b1c0a94-2f7d-4c8e-9a15-3d0e7b28c4f1
-// last-edited: 2026-10-02
+// last-edited: 2026-10-06
 
 // Tests for BatchApplyFromCache's DISPATCH behaviour.
 //
@@ -23,7 +23,6 @@
 package handlers_test
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -38,6 +37,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/applycap"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger/logtest"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
@@ -818,14 +818,11 @@ func TestGetCacheReviewResults_PageSizeAndTruncation(t *testing.T) {
 	}
 }
 
-// captureSlog redirects the default logger into a buffer for the test.
-func captureSlog(t *testing.T) *bytes.Buffer {
+// captureSlog redirects the default logger into a mutex-guarded buffer for the
+// test; logtest refuses to run under t.Parallel (the swap is process-global).
+func captureSlog(t *testing.T) *logtest.Buffer {
 	t.Helper()
-	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	t.Cleanup(func() { slog.SetDefault(prev) })
-	return &buf
+	return logtest.Capture(t, slog.LevelDebug)
 }
 
 const defaultCapLogLine = "GetCacheReviewResults capped an unpaged request to the default page size"

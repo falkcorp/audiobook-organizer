@@ -1,12 +1,11 @@
 // file: internal/server/middleware/absauth_servicetoken_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 9f2b60d4-38a1-4c75-b9e0-71a5c34e8206
-// last-edited: 2026-08-30
+// last-edited: 2026-10-06
 
 package middleware
 
 import (
-	"bytes"
 	"errors"
 	"log/slog"
 	"net/http/httptest"
@@ -17,6 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger/logtest"
 	"github.com/falkcorp/audiobook-organizer/internal/oauth"
 )
 
@@ -31,10 +31,7 @@ import (
 // captureLogs swaps the default slog handler for the duration of fn.
 func captureLogs(t *testing.T, fn func()) string {
 	t.Helper()
-	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	buf := logtest.Capture(t, slog.LevelDebug) // mutex-guarded; refuses t.Parallel
 	fn()
 	return buf.String()
 }

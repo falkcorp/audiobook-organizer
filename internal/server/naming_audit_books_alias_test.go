@@ -1,7 +1,7 @@
 // file: internal/server/naming_audit_books_alias_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c1d2e3f-4a5b-4c6d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-09-25
+// last-edited: 2026-10-06
 
 package server
 
@@ -38,7 +38,7 @@ func TestDeprecatedBooksAliases_AllNineRoutesAnswer(t *testing.T) {
 		store.Close()
 	})
 
-	srv := NewServer(store)
+	srv := newTestServer(t, store)
 
 	if _, err := store.CreateBook(&database.Book{
 		ID: "b1", Title: "Test Book", FilePath: "/tmp/b1", Format: "m4b",

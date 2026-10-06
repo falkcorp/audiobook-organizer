@@ -1,12 +1,11 @@
 // file: internal/server/handlers/openai_validate_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8d4b1e77-30a5-4f62-9c0d-51b6a2e7f8c3
-// last-edited: 2026-09-10
+// last-edited: 2026-10-06
 
 package handlers
 
 import (
-	"bytes"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -15,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/logger/logtest"
 	"github.com/gin-gonic/gin"
 )
 
@@ -159,10 +159,7 @@ func TestValidateOpenAIKey_EmptyKey(t *testing.T) {
 }
 
 func TestValidateOpenAIKey_DoesNotLogKey(t *testing.T) {
-	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	buf := logtest.Capture(t, slog.LevelDebug)
 
 	// Exercise every branch: success, rejection, and upstream failure.
 	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

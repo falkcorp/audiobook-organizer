@@ -1,7 +1,7 @@
 // file: internal/server/organize_integration_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b8c9d0e1-f2a3-4567-bcde-890123456f01
-// last-edited: 2026-07-07
+// last-edited: 2026-10-06
 
 package server
 
@@ -50,7 +50,7 @@ func TestOrganizeService_ViaHTTP(t *testing.T) {
 	// doesn't Start its worker pool (Container.Start does that during
 	// Server.Start, which we don't call here). Start it explicitly so
 	// the enqueued op actually runs.
-	server := NewServer(env.Store)
+	server := newTestServer(t, env.Store)
 	if server.opRegistry != nil {
 		server.opRegistry.Start(context.Background())
 		// registered after defer cleanup() → runs first (LIFO) to avoid pebble: closed panics.

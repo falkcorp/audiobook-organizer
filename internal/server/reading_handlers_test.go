@@ -1,6 +1,6 @@
 // file: internal/server/reading_handlers_test.go
-// version: 1.3.0
-// last-edited: 2026-09-25
+// version: 1.4.0
+// last-edited: 2026-10-06
 // guid: 4f9a2c1d-5b8e-4f70-a7d6-2e8c0f1b9a57
 
 package server
@@ -32,7 +32,7 @@ func setupReadingTestServer(t *testing.T) *Server {
 		store.Close()
 	})
 
-	srv := NewServer(store)
+	srv := newTestServer(t, store)
 
 	_, err = store.CreateBook(&database.Book{
 		ID: "b1", Title: "Test Book", FilePath: "/tmp/b1", Format: "m4b",

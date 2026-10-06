@@ -1,7 +1,7 @@
 // file: internal/server/op_dedupe_decision_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: bdbf6e2b-8b2f-472e-a712-ac607e5b2f16
-// last-edited: 2026-09-08
+// last-edited: 2026-10-06
 
 // ENQ-DEDUP-1 per-def table test.
 //
@@ -111,7 +111,7 @@ func TestOperationDefs_DedupeDecisionIsExplicit(t *testing.T) {
 	database.SetGlobalStore(store)
 	t.Cleanup(func() { database.SetGlobalStore(origStore) })
 
-	srv := NewServer(store)
+	srv := newTestServer(t, store)
 	t.Cleanup(func() {
 		if srv.fileIOPool != nil {
 			srv.fileIOPool.Stop()

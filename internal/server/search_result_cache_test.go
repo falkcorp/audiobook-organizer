@@ -1,7 +1,7 @@
 // file: internal/server/search_result_cache_test.go
-// version: 1.3.2
+// version: 1.4.0
 // guid: 220a3f36-7c10-426f-a8ee-c3fefa2ee20e
-// last-edited: 2026-09-28
+// last-edited: 2026-10-06
 
 package server
 
@@ -59,7 +59,7 @@ func newSearchCacheServer(t testing.TB, n, ringSize int, cfg searchcache.Config)
 		t.Fatalf("MarkRebuilt: %v", err)
 	}
 
-	srv := NewServer(store)
+	srv := newTestServer(t, store)
 	srv.setSearchIndex(idx)
 	srv.audiobookService.SetSearchIndex(idx)
 	srv.indexQueue = make(chan indexRequest, 4096)

@@ -1,7 +1,7 @@
 // file: internal/server/server_middleware_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 6f3f3e2a-8f1a-4b3e-9c2d-7a1e5f8b9c10
-// last-edited: 2026-09-02
+// last-edited: 2026-10-06
 
 package server
 
@@ -35,7 +35,7 @@ func TestIsProtectedPathCachesImportPaths(t *testing.T) {
 		},
 	}
 
-	srv := NewServer(mock)
+	srv := newTestServer(t, mock)
 
 	if !srv.isProtectedPath("/library/imports/book.m4b") {
 		t.Fatalf("expected /library/imports/book.m4b to be protected")

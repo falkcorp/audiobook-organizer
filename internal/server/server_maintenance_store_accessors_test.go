@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_store_accessors_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c3e9a15-2d48-4b6f-9e01-5a8c7d3b2f64
-// last-edited: 2026-09-02
+// last-edited: 2026-10-06
 
 package server
 
@@ -29,7 +29,7 @@ func TestMaintenanceStoreAccessorsResolveThroughIndexedStore(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
-	srv := NewServer(store)
+	srv := newTestServer(t, store)
 
 	// Sanity: on the bare store both resolve, so a failure below is the wrap.
 	if srv.FileProvenanceStore() == nil {
@@ -53,7 +53,7 @@ func TestMaintenanceStoreAccessorsResolveThroughIndexedStore(t *testing.T) {
 // A store with no layer implementing the capability still yields nil rather
 // than a panic or a stub, so the ops' "not supported" path stays reachable.
 func TestMaintenanceStoreAccessorsNilWhenNoLayerImplements(t *testing.T) {
-	srv := NewServer(&database.MockStore{})
+	srv := newTestServer(t, &database.MockStore{})
 	if got := srv.FileProvenanceStore(); got != nil {
 		t.Errorf("FileProvenanceStore() on MockStore = %T, want nil", got)
 	}

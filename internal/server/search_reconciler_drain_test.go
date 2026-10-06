@@ -1,7 +1,7 @@
 // file: internal/server/search_reconciler_drain_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5b1e8d3c-7a2f-4e90-b6c4-9d0a2f7e1b38
-// last-edited: 2026-09-25
+// last-edited: 2026-10-06
 //
 // Drain, restart and live-write tests for the batched search reconciler
 // (the 2026-09-25 wedge: a 100k dirty set that never drained and a live
@@ -68,7 +68,7 @@ func TestReconciler_DrainsLargeBacklogInBatchesAcrossRestart(t *testing.T) {
 		}
 	}
 
-	srv := NewServer(store)
+	srv := newTestServer(t, store)
 	srv.setSearchIndex(idx)
 	drained, remaining := srv.reconcileOnce()
 	// 1,200/10 = 120 < floor, so one pass is exactly the floor.
@@ -97,7 +97,7 @@ func TestReconciler_DrainsLargeBacklogInBatchesAcrossRestart(t *testing.T) {
 		t.Fatalf("after restart the dirty set has %d keys, want %d", got, total-reconcileMinBatch)
 	}
 
-	srv2 := NewServer(store2)
+	srv2 := newTestServer(t, store2)
 	srv2.setSearchIndex(idx2)
 	for pass := 0; pass < 10; pass++ {
 		if _, rem := srv2.reconcileOnce(); rem == 0 {
@@ -162,7 +162,7 @@ func TestIndexedStore_ModifyBookReachesIndex(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = idx.Close() })
 
-	srv := NewServer(store)
+	srv := newTestServer(t, store)
 	srv.setSearchIndex(idx)
 	srv.indexQueue = make(chan indexRequest, 32)
 	done := make(chan struct{})
@@ -242,7 +242,7 @@ func TestReconciler_UnreadableRowDoesNotPinRebuildGate(t *testing.T) {
 			t.Fatalf("create: %v", err)
 		}
 	}
-	srv := NewServer(store)
+	srv := newTestServer(t, store)
 	srv.setSearchIndex(idx)
 	srv.reconcileSearchIndexCoverage() // seeds all three as missing
 

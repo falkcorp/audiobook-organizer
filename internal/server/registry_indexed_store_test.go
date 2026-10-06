@@ -1,7 +1,7 @@
 // file: internal/server/registry_indexed_store_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c4e1f0a2-7d3b-4f58-9a61-2b8e5d7c3f90
-// last-edited: 2026-09-13
+// last-edited: 2026-10-06
 
 package server
 
@@ -60,7 +60,7 @@ func newRegistryIndexTestServer(t *testing.T) (*Server, *search.BleveIndex) {
 	prevGlobal := database.GetGlobalStore()
 	t.Cleanup(func() { database.SetGlobalStore(prevGlobal) })
 
-	srv := NewServer(store)
+	srv := newTestServer(t, store)
 	return srv, idx
 }
 

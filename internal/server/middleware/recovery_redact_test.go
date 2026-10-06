@@ -1,12 +1,11 @@
 // file: internal/server/middleware/recovery_redact_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: fac23317-790b-49a1-b9f3-81b598014604
-// last-edited: 2026-09-19
+// last-edited: 2026-10-06
 
 package middleware
 
 import (
-	"bytes"
 	"fmt"
 	"log/slog"
 	"net"
@@ -17,16 +16,15 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/logger/logtest"
 	"github.com/gin-gonic/gin"
 )
 
-func captureSlog(t *testing.T) *bytes.Buffer {
+// captureSlog captures slog.Default into a mutex-guarded buffer; logtest
+// refuses to run under t.Parallel because the swap is process-global.
+func captureSlog(t *testing.T) *logtest.Buffer {
 	t.Helper()
-	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	t.Cleanup(func() { slog.SetDefault(prev) })
-	return &buf
+	return logtest.Capture(t, slog.LevelDebug)
 }
 
 // Review MEDIUM #2: gin.Recovery's request dump kept ?token=; the replacement

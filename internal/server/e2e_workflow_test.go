@@ -1,7 +1,7 @@
 // file: internal/server/e2e_workflow_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: c9d0e1f2-a3b4-5678-cdef-901234567012
-// last-edited: 2026-08-20
+// last-edited: 2026-10-06
 
 package server
 
@@ -46,7 +46,7 @@ func TestE2E_ITunesImportOrganizeWriteBack(t *testing.T) {
 			FilePath: dunePath, TotalTime: 72000000},
 	}, xmlPath)
 
-	server := NewServer(env.Store)
+	server := newTestServer(t, env.Store)
 	if server.opRegistry != nil {
 		server.opRegistry.Start(context.Background())
 		// registered after defer cleanup() → runs first (LIFO) to avoid pebble: closed panics.

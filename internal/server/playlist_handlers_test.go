@@ -1,6 +1,6 @@
 // file: internal/server/playlist_handlers_test.go
-// version: 1.1.1
-// last-edited: 2026-09-25
+// version: 1.2.0
+// last-edited: 2026-10-06
 // guid: 8b4d6f3e-9c4a-4a70-b8c5-3d7e0f1b9a89
 
 package server
@@ -46,7 +46,7 @@ func setupPlaylistTestServer(t *testing.T) *Server {
 		t.Fatalf("MarkRebuilt: %v", err)
 	}
 
-	srv := NewServer(store)
+	srv := newTestServer(t, store)
 	srv.setSearchIndex(idx) // test-only setter
 
 	seedRows := []struct {

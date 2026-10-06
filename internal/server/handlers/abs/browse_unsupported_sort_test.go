@@ -1,12 +1,11 @@
 // file: internal/server/handlers/abs/browse_unsupported_sort_test.go
-// version: 2.2.1
+// version: 2.3.0
 // guid: 2a9f4d13-8b07-4e56-91c2-5d3e08a7f6b4
-// last-edited: 2026-09-02
+// last-edited: 2026-10-06
 
 package abs
 
 import (
-	"bytes"
 	"fmt"
 	"log/slog"
 	"net/http/httptest"
@@ -15,6 +14,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/falkcorp/audiobook-organizer/internal/logger/logtest"
 	"github.com/gin-gonic/gin"
 )
 
@@ -28,33 +28,13 @@ import (
 //
 // bus* names are task-unique per repo convention for package-shared helpers.
 
-// busWriter serialises writes so the concurrency test below can share one
-// buffer. slog's own handlers lock around each write, but the buffer is read
-// from the test goroutine while workers are still finishing, so it needs its
-// own mutex regardless.
-type busWriter struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-}
-
-func (w *busWriter) Write(p []byte) (int, error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.buf.Write(p)
-}
-
-func (w *busWriter) String() string {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.buf.String()
-}
-
-func busCapture(t *testing.T) (*busWriter, func()) {
+// busCapture captures WARN+ from slog.Default for the rest of the test. The
+// concurrency test below reads the buffer while workers are still finishing,
+// so it must be mutex-guarded (logtest.Buffer is); logtest also refuses to run
+// under t.Parallel, since the swap is process-global.
+func busCapture(t *testing.T) *logtest.Buffer {
 	t.Helper()
-	w := &busWriter{}
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: slog.LevelWarn})))
-	return w, func() { slog.SetDefault(prev) }
+	return logtest.Capture(t, slog.LevelWarn)
 }
 
 func busCtx(q string) *gin.Context {
@@ -77,8 +57,7 @@ func busReset() {
 func TestUnsupportedSortIsReported(t *testing.T) {
 	t.Run("unsupported sort warns and names the alternatives", func(t *testing.T) {
 		busReset()
-		buf, restore := busCapture(t)
-		defer restore()
+		buf := busCapture(t)
 
 		f := absItemFilter(busCtx("sort=media.metadata.fileModified"))
 		if f.SortBy != "" {
@@ -98,8 +77,7 @@ func TestUnsupportedSortIsReported(t *testing.T) {
 
 	t.Run("supported sort does not warn", func(t *testing.T) {
 		busReset()
-		buf, restore := busCapture(t)
-		defer restore()
+		buf := busCapture(t)
 
 		f := absItemFilter(busCtx("sort=media.metadata.publishedYear"))
 		if f.SortBy != "year" {
@@ -112,8 +90,7 @@ func TestUnsupportedSortIsReported(t *testing.T) {
 
 	t.Run("no sort at all does not warn", func(t *testing.T) {
 		busReset()
-		buf, restore := busCapture(t)
-		defer restore()
+		buf := busCapture(t)
 
 		absItemFilter(busCtx(""))
 		if strings.Contains(buf.String(), "no field for") {
@@ -123,8 +100,7 @@ func TestUnsupportedSortIsReported(t *testing.T) {
 
 	t.Run("at most one warning per window, even for distinct values", func(t *testing.T) {
 		busReset()
-		buf, restore := busCapture(t)
-		defer restore()
+		buf := busCapture(t)
 
 		for range 5 {
 			absItemFilter(busCtx("sort=media.metadata.fileBirthtime"))
@@ -143,8 +119,7 @@ func TestUnsupportedSortIsReported(t *testing.T) {
 
 	t.Run("the next window reopens", func(t *testing.T) {
 		busReset()
-		buf, restore := busCapture(t)
-		defer restore()
+		buf := busCapture(t)
 
 		absItemFilter(busCtx("sort=media.metadata.fileBirthtime"))
 		// Age the limiter past the window rather than sleeping a minute.
@@ -196,8 +171,7 @@ func TestUnsupportedSortIsReported(t *testing.T) {
 // lagging counter was the only gate.
 func TestUnsupportedSortLimiterIsConcurrencySafe(t *testing.T) {
 	busReset()
-	buf, restore := busCapture(t)
-	defer restore()
+	buf := busCapture(t)
 
 	const workers = 500
 
@@ -240,8 +214,7 @@ func TestUnsupportedSortLimiterIsConcurrencySafe(t *testing.T) {
 // line it triggers: the raw value is echoed back into it.
 func TestUnsupportedSortLogValueIsTruncated(t *testing.T) {
 	busReset()
-	buf, restore := busCapture(t)
-	defer restore()
+	buf := busCapture(t)
 
 	long := strings.Repeat("z", absSortRawLogMax*4)
 	absItemFilter(busCtx("sort=" + long))
@@ -265,8 +238,7 @@ func TestUnsupportedSortLogValueIsTruncated(t *testing.T) {
 // just named.
 func TestUnindexedSortLogValueIsTruncated(t *testing.T) {
 	busReset()
-	buf, restore := busCapture(t)
-	defer restore()
+	buf := busCapture(t)
 
 	// absSortField takes the LAST dotted segment, so a long prefix maps to a
 	// real field while leaving raw enormous.

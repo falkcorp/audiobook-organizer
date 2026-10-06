@@ -1,7 +1,7 @@
 // file: internal/server/server_test.go
-// version: 2.10.0
+// version: 2.11.0
 // guid: b2c3d4e5-f6a7-8901-bcde-234567890abc
-// last-edited: 2026-10-04
+// last-edited: 2026-10-06
 
 // NOTE(fable5 T022): setupTestServer ported from NewSQLiteStore to NewPebbleStore.
 
@@ -34,6 +34,54 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
+
+// newTestServer is NewServer for tests. It registers a t.Cleanup that releases
+// what NewServer opened on its own and nothing else will close: see
+// releaseForTest. Every test in this package builds its server through here
+// (or through setupTestServer*, which call it) rather than calling NewServer
+// directly.
+func newTestServer(t testing.TB, store database.Store) *Server {
+	t.Helper()
+	s := NewServer(store)
+	t.Cleanup(s.releaseForTest)
+	return s
+}
+
+// releaseForTestBGWait bounds how long releaseForTest waits for bgWG.
+const releaseForTestBGWait = 10 * time.Second
+
+// releaseForTest tears down a server that was built but never Started.
+//
+// Production teardown lives at the end of Start, so a test server never runs
+// it. Whenever config.AppConfig.DatabasePath is set, NewServer's container
+// opens the SQLite activity store, and OpenSQLiteActivityStore starts a WAL
+// checkpointer goroutine that only SQLActivityStore.Close stops. Nothing
+// closed it, so every such test leaked a goroutine that ticked every 30s for
+// the rest of the package run, failed its PASSIVE checkpoint once the test's
+// temp dir was removed, and logged that WARN into whatever slog.Default the
+// test running at that moment had installed. That is how
+// TestResolveVectorBackend_HNSWIsSilent raced on its capture buffer.
+//
+// Order follows Start's shutdown: cancel bgCtx and wait (bounded) for the
+// bgWG goroutines, which may still write activity, then close the activity
+// store. Both steps are idempotent, so the explicit call in
+// setupTestServerFS's cleanup and the t.Cleanup from newTestServer can both
+// run.
+func (s *Server) releaseForTest() {
+	if s.bgCancel != nil {
+		s.bgCancel()
+	}
+	done := make(chan struct{})
+	go func() {
+		s.bgWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(releaseForTestBGWait):
+	}
+	s.closeActivityStore()
+}
 
 // setupTestServer creates a test server with in-memory database
 // setupTestServer builds a test server on an IN-MEMORY database.
@@ -94,7 +142,7 @@ func setupTestServerFS(t *testing.T, inMemory bool) (*Server, func()) {
 	require.NoError(t, err)
 
 	// Create server (NewServer creates hub, queue, batcher, fileIOPool internally)
-	server := NewServer(store)
+	server := newTestServer(t, store)
 
 	// Start the operations registry's dispatcher + worker pool. Without
 	// this, ops enqueued by the test never execute (enqueued in the v2
@@ -125,6 +173,10 @@ func setupTestServerFS(t *testing.T, inMemory bool) (*Server, func()) {
 		if server.writeBackBatcher != nil {
 			_ = server.writeBackBatcher.Stop(context.Background())
 		}
+		// Close the SQLite activity store (stopping its checkpointer) while
+		// tempDir still exists: removing the directory under a live
+		// checkpointer is what made it log a WARN into later tests' captures.
+		server.releaseForTest()
 		if store != nil {
 			database.SetGlobalStore(nil)
 			// NewServer also installs the store as the SCANNER package's
@@ -187,7 +239,7 @@ func setupTestServerWithStore(t *testing.T, store database.Store) (*Server, func
 	database.SetGlobalStore(store)
 
 	// Create server with the provided store (services will use it)
-	server := NewServer(store)
+	server := newTestServer(t, store)
 
 	// Cleanup function
 	cleanup := func() {
