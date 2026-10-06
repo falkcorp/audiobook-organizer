@@ -55,7 +55,7 @@ func TestBulkLink_KeepSideStillRefusesPinnedSamePathAndChain(t *testing.T) {
 	wireGuardBooks(d, map[string]*database.Book{
 		"sp-a": {ID: "sp-a", FilePath: same}, "sp-b": {ID: "sp-b", FilePath: same},
 		"ch-a": {ID: "ch-a", FilePath: chain}, "ch-b": {ID: "ch-b", FilePath: chain},
-		"ch-c": {ID: "ch-c", FilePath: "/lib/c.m4b"},
+		"ch-c":  {ID: "ch-c", FilePath: "/lib/c.m4b"},
 		"man-a": {ID: "man-a", FilePath: "/lib/ma.m4b"}, "man-b": {ID: "man-b", FilePath: "/lib/mb.m4b"},
 		"ok-a": {ID: "ok-a", FilePath: "/lib/oa.m4b"}, "ok-b": {ID: "ok-b", FilePath: "/lib/ob.m4b"},
 	})
