@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert.go
-// version: 1.59.0
+// version: 1.60.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package audiobooks
 
@@ -771,15 +771,22 @@ func (rs *RevertService) revertBookTagAdd(c *database.OperationChange) error {
 }
 
 // userStateRevertStore is what the revert of a user_book_state_set row
-// writes. SetUserPositionAt and DeleteUserBookState are not on
+// writes. ReplaceUserPositions and DeleteUserBookState are not on
 // database.Store, so the surface is resolved with database.AsCapability
 // (user state is not search-indexed, so reaching past the production
 // decorator skips nothing it does).
+//
+// The positions go back through database.UserPositionReplacer: one atomic
+// batch that drops the current rows and writes the old ones with their own
+// timestamps. Until 2026-10-06 this was ClearUserPositions followed by one
+// SetUserPositionAt per row, so a write failing (or the process dying)
+// between the two left the user with no position on the book at all. A
+// store without the replacer is refused outright; there is deliberately no
+// clear-then-write fallback.
 type userStateRevertStore interface {
 	undo.UserStateReader
 	SetUserBookState(state *database.UserBookState) error
-	ClearUserPositions(userID, bookID string) error
-	database.UserPositionTimestampWriter
+	database.UserPositionReplacer
 	database.UserBookStateDeleter
 }
 
@@ -821,13 +828,9 @@ func (rs *RevertService) revertUserBookStateSet(c *database.OperationChange) err
 		return err
 	}
 	if parts.Positions {
-		if err := db.ClearUserPositions(user, c.BookID); err != nil {
-			return fmt.Errorf("clear positions of %s on %s: %w", user, c.BookID, err)
-		}
-		for _, p := range old.Positions {
-			if err := db.SetUserPositionAt(user, c.BookID, p.SegmentID, p.PositionSeconds, p.UpdatedAt); err != nil {
-				return fmt.Errorf("restore position %s of %s on %s: %w", p.SegmentID, user, c.BookID, err)
-			}
+		// All or nothing: a failure leaves the current rows as they are.
+		if err := db.ReplaceUserPositions(user, c.BookID, old.Positions); err != nil {
+			return fmt.Errorf("restore positions of %s on %s (current positions left as they are): %w", user, c.BookID, err)
 		}
 	}
 	if parts.State {
