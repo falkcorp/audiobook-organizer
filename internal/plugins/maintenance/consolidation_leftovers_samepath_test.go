@@ -1,11 +1,12 @@
 // file: internal/plugins/maintenance/consolidation_leftovers_samepath_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: f05ffd91-1eeb-4d83-be86-1d16d9d8e1e8
 // last-edited: 2026-10-06
 
 package maintenance
 
 import (
+	"context"
 	"os"
 	"strings"
 	"testing"
@@ -437,6 +438,175 @@ func TestLeftoversSamePath_Holds(t *testing.T) {
 			require.False(t, r.Applicable())
 		})
 	}
+}
+
+// TestLeftoversSamePath_SiblingMergedIntoLeftoverWinsAfterRetire: a live
+// sibling whose merged_into_book_id names the leftover is not electable
+// while the leftover lives, and is once the retire soft-deletes it. The
+// prediction must see the group as the hand-off will (the leftover gone), so
+// the row is held naming the sibling the hand-off would crown, never planned
+// as the owner's.
+func TestLeftoversSamePath_SiblingMergedIntoLeftoverWinsAfterRetire(t *testing.T) {
+	cases := map[string]func(t *testing.T, f *lfFixture, l, o string) string{
+		"an explicit-true organized sibling": func(t *testing.T, f *lfFixture, l, _ string) string {
+			yes := true
+			return f.mergedSibling(t, l, "Splashdown (chaptered)", &yes, false)
+		},
+		"an iTunes explicit-false sibling, owner flag unset": func(t *testing.T, f *lfFixture, l, o string) string {
+			_, err := f.s.ModifyBook(o, func(b *database.Book) error { b.IsPrimaryVersion = nil; return nil })
+			require.NoError(t, err)
+			no := false
+			return f.mergedSibling(t, l, "Splashdown (iTunes)", &no, true)
+		},
+	}
+	for name, setup := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := newLFFixture(t)
+			l, o, _ := f.splashdown(t)
+			x := setup(t, f, l, o)
+			r, ok := lfRow(f.planLF(t, "op-plan"), l)
+			require.True(t, ok)
+			require.False(t, r.Applicable(), "planned although the hand-off would crown %s", x)
+			require.Equal(t, leftoverSkipSamePathPrimary, r.Skipped, r.SkipReason)
+			require.Contains(t, r.SkipReason, "would crown "+x+", not the owner "+o)
+		})
+	}
+}
+
+// mergedSibling adds a live, organized member of the Splashdown group whose
+// merged_into_book_id names the leftover (so it is not electable while the
+// leftover lives, and is once the retire soft-deletes it), with one m4b file
+// under the library root and a chapter table, so it outranks the owner.
+func (f *lfFixture) mergedSibling(t *testing.T, leftover, title string, primary *bool, itunes bool) string {
+	t.Helper()
+	gid := spGroupID
+	p := f.file(t, spSeries+"/"+title+"/"+title+".m4b", 3000)
+	b, err := f.s.CreateBook(&database.Book{Title: title, FilePath: p})
+	require.NoError(t, err)
+	f.organized(t, b.ID)
+	into := leftover
+	pid := "FEDCBA9876543210"
+	_, err = f.s.ModifyBook(b.ID, func(bk *database.Book) error {
+		bk.VersionGroupID, bk.IsPrimaryVersion, bk.MergedIntoBookID = &gid, primary, &into
+		if itunes {
+			bk.ITunesPersistentID = &pid
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	require.NoError(t, f.s.CreateBookFile(&database.BookFile{BookID: b.ID, FilePath: p, FileSize: 3000, TrackNumber: 1}))
+	require.NoError(t, f.s.SaveChaptersForBook(b.ID, []database.Chapter{{ID: 1, StartSec: 0, EndSec: 60, Title: "1"},
+		{ID: 2, StartSec: 60, EndSec: 120, Title: "2"}}))
+	return b.ID
+}
+
+// TestLeftoversSamePath_HandOffRefusesAnUnexpectedWinner: the owner turns
+// ineligible after the locked re-plan, before the retire's hand-off. The
+// hand-off expects the owner, so it crowns nobody: the row stops as
+// partially applied, and the eligible explicit non-primary sibling is not
+// crowned.
+func TestLeftoversSamePath_HandOffRefusesAnUnexpectedWinner(t *testing.T) {
+	f := newLFFixture(t)
+	l, o, _ := f.splashdown(t)
+	f.sameAudioBySize(t, l)
+	no := false
+	sib := f.groupMember(t, "Splashdown (abridged)", &no)
+	f.file(t, spSeries+"/35 - Splashdown/part0.m4b", 100)
+	f.ownerRowMissingOnDisk(t, o)
+	planned, ok := lfRow(f.planLF(t, "op-plan"), l)
+	require.True(t, ok)
+	require.True(t, planned.Applicable(), planned.SkipReason)
+	leftoverBeforeRetireHooks.Store(l, func() {
+		_ = os.Remove(f.path(spSeries + "/35 - Splashdown/part0.m4b"))
+	})
+	t.Cleanup(func() { leftoverBeforeRetireHooks.Delete(l) })
+	out := f.applyLF(t, "op-plan", "op-apply", []string{"leftover:" + l})
+	require.Zero(t, out.Applied, "%+v", out.Rows)
+	require.Len(t, out.Rows, 1)
+	require.Equal(t, repairs.OutcomePartial, out.Rows[0].Outcome, "%+v", out.Rows[0])
+	require.Contains(t, out.Rows[0].Error, "not the expected")
+	sb, err := f.s.GetBookByID(sib)
+	require.NoError(t, err)
+	require.NotNil(t, sb.IsPrimaryVersion)
+	require.False(t, *sb.IsPrimaryVersion, "the sibling was never crowned")
+}
+
+// TestLeftoversSamePath_ChosenWinnerIsFingerprinted: the hand-off's chosen
+// winner alone changes the row's fingerprint.
+func TestLeftoversSamePath_ChosenWinnerIsFingerprinted(t *testing.T) {
+	f := newLFFixture(t)
+	l, o, _ := f.splashdown(t)
+	no := false
+	f.groupMember(t, "Splashdown (abridged)", &no)
+	plan := func(winner string) repairs.Row {
+		return f.decideLFWithPrimary(t, l, func(context.Context, []database.Book) (string, error) { return winner, nil })
+	}
+	a, b, c := plan(o), plan("X1"), plan("X2")
+	require.True(t, a.Applicable(), a.SkipReason)
+	require.NotEqual(t, a.Fingerprint, b.Fingerprint)
+	require.NotEqual(t, b.Fingerprint, c.Fingerprint, "only the chosen winner differs")
+
+	// A non-primary leftover whose owner is not the group's one explicit
+	// primary (here: its flag unset, so it is listed but not explicit) is
+	// held with a reason that does not name the predicted winner,
+	// so only the hand-off line itself can tell X1 from X2.
+	_, err := f.s.ModifyBook(l, func(b *database.Book) error { b.IsPrimaryVersion = &no; return nil })
+	require.NoError(t, err)
+	_, err = f.s.ModifyBook(o, func(b *database.Book) error { b.IsPrimaryVersion = nil; return nil })
+	require.NoError(t, err)
+	d, e := plan("X1"), plan("X2")
+	require.False(t, d.Applicable())
+	require.Equal(t, leftoverSkipSamePathPrimary, d.Skipped, d.SkipReason)
+	require.Equal(t, d.SkipReason, e.SkipReason, "the reason does not name the winner")
+	require.NotEqual(t, d.Fingerprint, e.Fingerprint, "the chosen winner alone changes the fingerprint")
+}
+
+// TestLeftoversSamePath_NoVersionPrimaryStoreHoldsTheRow: with no
+// version-primary store the hand-off cannot be predicted, so the row is held
+// with that reason and the plan goes on (no error).
+func TestLeftoversSamePath_NoVersionPrimaryStoreHoldsTheRow(t *testing.T) {
+	f := newLFFixture(t)
+	l, _, _ := f.splashdown(t)
+	no := false
+	f.groupMember(t, "Splashdown (abridged)", &no)
+	r := f.decideLFWithPrimary(t, l, func(context.Context, []database.Book) (string, error) {
+		return "", errLeftoverNoVersionPrimaryStore
+	})
+	require.False(t, r.Applicable())
+	require.Equal(t, leftoverSkipSamePathPrimary, r.Skipped, r.SkipReason)
+	require.Contains(t, r.SkipReason, "version-primary store is not available")
+}
+
+// decideLFWithPrimary decides leftover l's row with the fixer's source
+// reading f's store directly and its hand-off prediction replaced by
+// primary.
+func (f *lfFixture) decideLFWithPrimary(t *testing.T, l string, primary func(context.Context, []database.Book) (string, error)) repairs.Row {
+	t.Helper()
+	src, err := newConsolidationLeftoversFixer(f.p).newSource(f.s)
+	require.NoError(t, err)
+	src.primary = primary
+	src.book = func(id string) (*database.BookCore, error) {
+		b, err := f.s.GetBookByID(id)
+		if err != nil || b == nil {
+			return nil, err
+		}
+		c := b.Core()
+		return &c, nil
+	}
+	src.rows = func(id string) ([]database.BookFileCore, error) {
+		fs, err := f.s.GetBookFiles(id)
+		out := make([]database.BookFileCore, len(fs))
+		for i := range fs {
+			out[i] = fs[i].Core()
+		}
+		return out, err
+	}
+	src.same = func(int64, string) ([]database.BookFileCore, error) { return nil, nil }
+	src.owners = func(p string) ([]string, error) { return leftoverFreshPathOwners(f.s, p) }
+	r, ok, err := src.decide(context.Background(), l, nil)
+	require.NoError(t, err)
+	require.True(t, ok)
+	return r
 }
 
 // groupMember adds a live, organized, non-iTunes member to the Splashdown
