@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.39.0
+// version: 1.40.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
 // last-edited: 2026-10-06
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"testing"
@@ -90,7 +91,19 @@ func (d fakeDeps) BooksWithMetadataSourceHash(hash string) ([]database.Book, err
 	}
 	return d.store.GetBooksByMetadataSourceHash(hash)
 }
-func (d fakeDeps) BookIDsWithASIN(asin string) ([]string, bool, error) {
+func (d fakeDeps) BooksWithMetadataSourceHashInMemory(hash string) ([]database.Book, error) {
+	if d.store == nil {
+		return nil, errors.New("fakeDeps: no store")
+	}
+	m, ok := database.AsCapability[interface {
+		GetBooksByMetadataSourceHashInMemory(string) ([]database.Book, error)
+	}](d.store)
+	if !ok {
+		return nil, fmt.Errorf("%w: fakeDeps: no in-memory index", database.ErrMemDBNotReady)
+	}
+	return m.GetBooksByMetadataSourceHashInMemory(hash)
+}
+func (d fakeDeps) BookIDsWithIdentifiers(isbn10, isbn13, asin string) ([]string, bool, error) {
 	if d.store == nil {
 		return nil, false, errors.New("fakeDeps: no store")
 	}
@@ -98,7 +111,7 @@ func (d fakeDeps) BookIDsWithASIN(asin string) ([]string, bool, error) {
 	if !ok || !flag.IsISBNIndexBuilt() {
 		return nil, false, nil
 	}
-	ids, err := d.store.GetBookIDsByISBNASIN("", "", asin)
+	ids, err := d.store.GetBookIDsByISBNASIN(isbn10, isbn13, asin)
 	return ids, true, err
 }
 

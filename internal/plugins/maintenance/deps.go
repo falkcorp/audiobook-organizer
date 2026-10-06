@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.78.0
+// version: 1.79.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
 // last-edited: 2026-10-06
 
@@ -961,12 +961,21 @@ type VersionTwinMetadata interface {
 	// BooksWithMetadataSourceHash lists the books carrying a
 	// metadata_source_hash (the MATCH-4 cluster an apply of that record
 	// joins). Its own accessor rather than one more method on OpsStore.
+	// It may scan every book row (memdb not ready), so it is never called
+	// under a book's write stripe.
 	BooksWithMetadataSourceHash(hash string) ([]database.Book, error)
-	// BookIDsWithASIN lists the books whose ASIN is asin (the ISBN/ASIN
-	// index, database.BookNaturalKeyReader.GetBookIDsByISBNASIN). indexed is
-	// false when that index is not built yet, so an empty answer proves
-	// nothing; the fixer then holds rather than read it as "no other book".
-	BookIDsWithASIN(asin string) (ids []string, indexed bool, err error)
+	// BooksWithMetadataSourceHashInMemory is the same lookup answered from
+	// memdb only; it never scans. An error (memdb disabled, not warmed up,
+	// or missing rows) means "cannot tell", and the caller fails closed.
+	// It is the one the under-lock guard uses.
+	BooksWithMetadataSourceHashInMemory(hash string) ([]database.Book, error)
+	// BookIDsWithIdentifiers lists the books whose ISBN-10, ISBN-13 or ASIN
+	// is one of the given, exactly as stored (the ISBN/ASIN index,
+	// database.BookNaturalKeyReader.GetBookIDsByISBNASIN; empty values are
+	// not looked up). indexed is false when that index is not built yet, so
+	// an empty answer proves nothing; the fixer then holds rather than read
+	// it as "no other book".
+	BookIDsWithIdentifiers(isbn10, isbn13, asin string) (ids []string, indexed bool, err error)
 }
 
 // ServerDeps is the narrow interface that *server.Server satisfies implicitly.

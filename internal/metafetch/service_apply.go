@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.53.0
+// version: 1.54.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
 // last-edited: 2026-10-06
 
@@ -325,6 +325,13 @@ func isbnOfLen(s string, n int) string {
 		return s
 	}
 	return ""
+}
+
+// CandidateISBNs is the ISBN-10 and ISBN-13 an apply of c writes, as the
+// apply body maps them: ISBN10 / ISBN13 when the provider set them, else the
+// single ISBN classified by length.
+func CandidateISBNs(c MetadataCandidate) (isbn10, isbn13 string) {
+	return firstNonEmpty(c.ISBN10, isbnOfLen(c.ISBN, 10)), firstNonEmpty(c.ISBN13, isbnOfLen(c.ISBN, 13))
 }
 
 // firstNonEmpty returns the first non-empty argument, or "".
@@ -684,6 +691,21 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 	// automatic here: opts.automatic(), not FillOnly.
 	if opts.automatic() && IsMarkedNoMatch(book.MetadataReviewStatus) {
 		return nil, fmt.Errorf("book %s: %w", id, ErrMarkedNoMatch)
+	}
+
+	// The caller's Guard runs once here, on the row as read, before the apply
+	// body: the body resolves or creates a Series row (applyMetadataUnguarded)
+	// before the commit, so a guard that refuses only under the write lock
+	// would leave a Series row created for nothing. A guard that already
+	// refuses the row as read refuses here, before anything is written. It
+	// runs again under the write lock (commitGuard below) on the fresh row,
+	// which is the check that counts; only a change landing between this
+	// read and that commit can still leave such a Series row behind (the
+	// maintenance series cleanup deletes orphan series).
+	if opts.Guard != nil {
+		if gErr := opts.Guard(book); gErr != nil {
+			return nil, gErr
+		}
 	}
 
 	// Warn when the candidate runtime diverges significantly from the local

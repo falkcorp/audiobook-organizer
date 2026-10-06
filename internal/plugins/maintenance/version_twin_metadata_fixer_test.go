@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/version_twin_metadata_fixer_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7a1e3c95-4d28-4b6f-a0c7-93e2d5b8f146
 // last-edited: 2026-10-06
 
@@ -37,6 +37,9 @@ func newVTLib(t *testing.T) *vtLib {
 	st, err := database.NewPebbleStore(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = st.Close() })
+	// memdb serving reads, as in production after warmup: the apply's
+	// under-lock guard reads the record hash from memdb only.
+	st.WaitForWarmup()
 	p := &Plugin{deps: fakeDeps{store: st}, standDownWait: noWait}
 	// The fixer reads the ASIN index only once it is built (production
 	// state); an unbuilt index holds every row that would fill an ASIN.
