@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/handler.go
-// version: 1.25.0
+// version: 1.26.0
 // guid: d1b9e024-d28c-4d62-8f90-96d7064559c4
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 // Package deduphandler hosts the dedup-domain HTTP handlers extracted from the
 // server package: dedup candidate / cluster / series listing, merge / dismiss /
@@ -38,8 +38,10 @@ import (
 	"net/http"
 	"slices"
 	"sort"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applycap"
@@ -50,6 +52,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 	"github.com/gin-gonic/gin"
+	"golang.org/x/sync/errgroup"
 )
 
 // bothUnmatchedScanLimit is the ceiling ≥ the max candidate population;
@@ -1113,94 +1116,9 @@ func (h *Handler) BulkLinkDedupCandidates(c *gin.Context) {
 		return
 	}
 
-	// Every field here NARROWS what gets merged. Dropping the bind error meant a
-	// malformed body zeroed all of them, the defaults below filled in
-	// status=pending / entity_type=book, and the filter went out with
-	// Limit: 100000 — so a request to merge one narrow layer became "bulk-merge
-	// every pending book candidate in the library". Merges are the hardest
-	// operation in this system to undo.
-	//
-	// An absent body still means "all pending book candidates", which is this
-	// endpoint's documented bulk behaviour and is unchanged. A body we cannot
-	// read is now refused rather than silently widened to that maximum.
-	var body struct {
-		EntityType    string   `json:"entity_type"`
-		Status        string   `json:"status"`
-		Layer         string   `json:"layer"`
-		MinSimilarity *float64 `json:"min_similarity"`
-		MaxSimilarity *float64 `json:"max_similarity"`
-		Band          string   `json:"band"`
-		EntityID      string   `json:"entity_id"`
-		// Q is the list endpoint's free-text search. It MUST be accepted here:
-		// the reviewer searches, sees a narrow list, and presses "merge
-		// everything matching this filter". Without this field the search is
-		// dropped on the floor and the merge covers every pending candidate in
-		// the library instead of the handful on screen -- the same failure band
-		// caused, and merges are the hardest operation here to undo.
-		Q string `json:"q"`
-		// Source is the list endpoint's source filter (source=manual). It was
-		// added to the list without being added here, so a posted
-		// {"source":"manual"} was dropped by the JSON binding and the link
-		// covered every pending book candidate instead. With the manual guard
-		// below a source=manual link now links nothing; the filter is still
-		// honoured so the set it resolves is the set the list showed.
-		Source string `json:"source"`
-		// BothUnmatched is the list's both_unmatched view. It is a property of
-		// the two BOOKS behind a candidate, not of the candidate row, so this
-		// endpoint cannot express it. The UI refuses the bulk action while it
-		// is on (useDupesLane's MERGE_ALL_BLOCKED_REASON); the server refuses
-		// too, rather than silently linking the wider set.
-		BothUnmatched bool `json:"both_unmatched"`
-	}
-	if err := c.ShouldBindJSON(&body); err != nil && !errors.Is(err, io.EOF) {
-		httputil.RespondWithBadRequest(c, "invalid request body: "+err.Error())
+	filter, ok := h.bindBulkCandidateFilter(c, "link")
+	if !ok {
 		return
-	}
-	if body.BothUnmatched {
-		httputil.RespondWithBadRequest(c, "bulk link cannot apply the both_unmatched filter; link those pairs individually")
-		return
-	}
-
-	// Default to pending status if caller did not set one. Merging already-
-	// merged or already-dismissed rows makes no sense.
-	if body.Status == "" {
-		body.Status = "pending"
-	}
-	// Only book candidates are mergeable through this endpoint.
-	if body.EntityType == "" {
-		body.EntityType = "book"
-	}
-	if body.EntityType != "book" {
-		httputil.RespondWithBadRequest(c, "bulk merge only supports entity_type=book")
-		return
-	}
-
-	filter := database.CandidateFilter{
-		EntityType:    body.EntityType,
-		Status:        body.Status,
-		Layer:         body.Layer,
-		MinSimilarity: body.MinSimilarity,
-		MaxSimilarity: body.MaxSimilarity,
-		Band:          body.Band,
-		EntityID:      body.EntityID,
-		Source:        body.Source,
-		Limit:         100000,
-	}
-
-	// Same two-part resolution the list endpoint does, and it must stay
-	// identical: a bulk merge that resolved the needle differently would merge
-	// a set the reviewer never saw. Sharing resolveBookIDsMatching is what
-	// keeps the two in step.
-	if v := strings.TrimSpace(body.Q); v != "" {
-		filter.Search = v
-		ids, rerr := resolveBookIDsMatching(h.store, v)
-		if rerr != nil {
-			// Refuse. Proceeding with a row-only match would merge a WIDER set
-			// than the search showed, and this action cannot be undone.
-			httputil.InternalError(c, "failed to resolve bulk-merge search", rerr)
-			return
-		}
-		filter.SearchEntityIDs = ids
 	}
 
 	candidates, total, err := es.ListCandidates(filter)
@@ -1293,6 +1211,207 @@ func (h *Handler) BulkLinkDedupCandidates(c *gin.Context) {
 		"failed":    len(failures),
 		"failures":  failures,
 		"merges":    merges,
+	})
+}
+
+// bindBulkCandidateFilter reads the body shared by the filter-scoped bulk
+// endpoints (bulk-link and bulk-reject) and resolves it into the
+// CandidateFilter that BOTH must apply. It exists so the two cannot drift:
+// any filter one accepted and the other dropped would widen that action to
+// a larger set than the reviewer selected with "Select all N matching".
+// verb ("merge", "reject") only shapes the error messages. On false the
+// response has already been written.
+func (h *Handler) bindBulkCandidateFilter(c *gin.Context, verb string) (database.CandidateFilter, bool) {
+	// Every field here NARROWS what gets merged. Dropping the bind error meant a
+	// malformed body zeroed all of them, the defaults below filled in
+	// status=pending / entity_type=book, and the filter went out with
+	// Limit: 100000 — so a request to merge one narrow layer became "bulk-merge
+	// every pending book candidate in the library". Merges are the hardest
+	// operation in this system to undo.
+	//
+	// An absent body still means "all pending book candidates", which is this
+	// endpoint's documented bulk behaviour and is unchanged. A body we cannot
+	// read is now refused rather than silently widened to that maximum.
+	var body struct {
+		EntityType    string   `json:"entity_type"`
+		Status        string   `json:"status"`
+		Layer         string   `json:"layer"`
+		MinSimilarity *float64 `json:"min_similarity"`
+		MaxSimilarity *float64 `json:"max_similarity"`
+		Band          string   `json:"band"`
+		EntityID      string   `json:"entity_id"`
+		// Q is the list endpoint's free-text search. It MUST be accepted here:
+		// the reviewer searches, sees a narrow list, and presses "merge
+		// everything matching this filter". Without this field the search is
+		// dropped on the floor and the merge covers every pending candidate in
+		// the library instead of the handful on screen -- the same failure band
+		// caused, and merges are the hardest operation here to undo.
+		Q string `json:"q"`
+		// Source is the list endpoint's source filter (source=manual). It was
+		// added to the list without being added here, so a posted
+		// {"source":"manual"} was dropped by the JSON binding and the link
+		// covered every pending book candidate instead. With the manual guard
+		// below a source=manual link now links nothing; the filter is still
+		// honoured so the set it resolves is the set the list showed.
+		Source string `json:"source"`
+		// BothUnmatched is the list's both_unmatched view. It is a property of
+		// the two BOOKS behind a candidate, not of the candidate row, so this
+		// endpoint cannot express it. The UI refuses the bulk action while it
+		// is on (useDupesLane's MERGE_ALL_BLOCKED_REASON); the server refuses
+		// too, rather than silently linking the wider set.
+		BothUnmatched bool `json:"both_unmatched"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil && !errors.Is(err, io.EOF) {
+		httputil.RespondWithBadRequest(c, "invalid request body: "+err.Error())
+		return database.CandidateFilter{}, false
+	}
+	if body.BothUnmatched {
+		httputil.RespondWithBadRequest(c, "bulk "+verb+" cannot apply the both_unmatched filter; "+verb+" those pairs individually")
+		return database.CandidateFilter{}, false
+	}
+
+	// Default to pending status if caller did not set one. Merging already-
+	// merged or already-dismissed rows makes no sense.
+	if body.Status == "" {
+		body.Status = "pending"
+	}
+	// Only book candidates are mergeable through this endpoint.
+	if body.EntityType == "" {
+		body.EntityType = "book"
+	}
+	if body.EntityType != "book" {
+		httputil.RespondWithBadRequest(c, "bulk "+verb+" only supports entity_type=book")
+		return database.CandidateFilter{}, false
+	}
+
+	filter := database.CandidateFilter{
+		EntityType:    body.EntityType,
+		Status:        body.Status,
+		Layer:         body.Layer,
+		MinSimilarity: body.MinSimilarity,
+		MaxSimilarity: body.MaxSimilarity,
+		Band:          body.Band,
+		EntityID:      body.EntityID,
+		Source:        body.Source,
+		Limit:         100000,
+	}
+
+	// Same two-part resolution the list endpoint does, and it must stay
+	// identical: a bulk merge that resolved the needle differently would merge
+	// a set the reviewer never saw. Sharing resolveBookIDsMatching is what
+	// keeps the two in step.
+	if v := strings.TrimSpace(body.Q); v != "" {
+		filter.Search = v
+		ids, rerr := resolveBookIDsMatching(h.store, v)
+		if rerr != nil {
+			// Refuse. Proceeding with a row-only match would merge a WIDER set
+			// than the search showed, and this action cannot be undone.
+			httputil.InternalError(c, "failed to resolve bulk-"+verb+" search", rerr)
+			return filter, false
+		}
+		filter.SearchEntityIDs = ids
+	}
+
+	return filter, true
+}
+
+// bulkRejectMaxWorkers bounds BulkRejectDedupCandidates' worker pool. The
+// status write itself serialises on the embedding store's lock; what runs in
+// parallel is the per-candidate gold-label capture, which re-scores the pair
+// (refreshExampleBreakdown) and is the expensive part at a few thousand rows.
+const bulkRejectMaxWorkers = 8
+
+// BulkRejectDedupCandidates handles POST /api/v1/dedup/candidates/bulk-reject.
+//
+// The reject counterpart of BulkLinkDedupCandidates, for the review UI's
+// cross-page selection ("Select all N matching", owner request 2026-10-06):
+// it rejects every pending book candidate matching the same filter body,
+// re-evaluated HERE rather than trusted from the client, and reports what it
+// actually did. The filter is bound by bindBulkCandidateFilter, the same code
+// bulk-link uses, so the two endpoints resolve one filter to one set.
+//
+// Only status=pending is accepted (the default): rejecting a merged or
+// already-rejected row is not a review decision. Each write goes through
+// ReclassifyCandidate(id, "pending", "dismissed"), which re-reads the row
+// under the store's lock, so a pair a human decided or pinned (a manual
+// candidate is review-queue-only, as on bulk-link) after the list was taken
+// is reported as a failure and left alone instead of being overwritten.
+//
+// Capped by internal/applycap like bulk-link: a filter that resolved more than
+// bulk_apply_max_items rows is refused with nothing written.
+func (h *Handler) BulkRejectDedupCandidates(c *gin.Context) {
+	es := h.embeddingStore
+	if es == nil {
+		httputil.RespondWithServiceUnavailable(c, "embedding store not available")
+		return
+	}
+	filter, ok := h.bindBulkCandidateFilter(c, "reject")
+	if !ok {
+		return
+	}
+	if filter.Status != "pending" {
+		httputil.RespondWithBadRequest(c, "bulk reject only applies to status=pending candidates")
+		return
+	}
+
+	candidates, total, err := es.ListCandidates(filter)
+	if err != nil {
+		httputil.InternalError(c, "failed to list candidates for bulk reject", err)
+		return
+	}
+	if ex := applycap.Refuse("dedup/bulk-reject", len(candidates), config.AppConfig.BulkApplyMaxItems); ex != nil {
+		httputil.RespondWithApplyCapExceeded(c, ex)
+		return
+	}
+
+	type failure struct {
+		CandidateID int64  `json:"candidate_id"`
+		Reason      string `json:"reason"`
+	}
+	var (
+		mu       sync.Mutex
+		failures []failure
+		rejected int
+	)
+	// Every candidate id is distinct, so the workers write disjoint rows; the
+	// mutex guards only the two counters above.
+	var g errgroup.Group
+	g.SetLimit(min(runtime.NumCPU(), bulkRejectMaxWorkers))
+	for _, cand := range candidates {
+		g.Go(func() error {
+			if rerr := es.ReclassifyCandidate(cand.ID, "pending", "dismissed"); rerr != nil {
+				reason := rerr.Error()
+				switch {
+				case errors.Is(rerr, database.ErrManualCandidateProtected):
+					reason = "manual candidate: review-queue-only, reject it individually"
+				case errors.Is(rerr, database.ErrCandidateStatusChanged):
+					reason = "status changed since the filter was evaluated: " + rerr.Error()
+				}
+				mu.Lock()
+				failures = append(failures, failure{CandidateID: cand.ID, Reason: reason})
+				mu.Unlock()
+				return nil
+			}
+			mu.Lock()
+			rejected++
+			mu.Unlock()
+			// Capture the user's bulk reject as a gold not_dup label (best-effort).
+			h.captureHumanLabelByID(cand.ID, labelNotDup, labelReasonUserDismiss)
+			return nil
+		})
+	}
+	_ = g.Wait() // workers never return an error; failures are collected above
+	if rejected > 0 {
+		h.markDuplicatesFlaggedDirty("bulk_reject_candidates")
+	}
+	sort.Slice(failures, func(i, j int) bool { return failures[i].CandidateID < failures[j].CandidateID })
+
+	slog.Info("dedup bulk reject complete", "rejected", rejected, "failures_count", len(failures), "total", total)
+	httputil.RespondWithOK(c, gin.H{
+		"attempted": len(candidates),
+		"rejected":  rejected,
+		"failed":    len(failures),
+		"failures":  failures,
 	})
 }
 
