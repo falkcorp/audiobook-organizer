@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_tags.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f8c2a7b6-c9d0-1e23-df4a-5b6c7d8e9f0a
-// last-edited: 2026-06-23
+// last-edited: 2026-10-06
 
 package audiobooks
 
@@ -36,7 +36,7 @@ func (svc *AudiobookService) SetBookUserTags(bookID string, tags []string) ([]st
 	if err := svc.store.SetBookTags(bookID, tags); err != nil {
 		return nil, err
 	}
-	svc.InvalidateBookCaches()
+	svc.InvalidateListCache()
 	return svc.store.GetBookTags(bookID)
 }
 
@@ -48,7 +48,7 @@ func (svc *AudiobookService) AddBookUserTag(bookID, tag string) ([]string, error
 	if err := svc.store.AddBookTag(bookID, tag); err != nil {
 		return nil, err
 	}
-	svc.InvalidateBookCaches()
+	svc.InvalidateListCache()
 	return svc.store.GetBookTags(bookID)
 }
 
@@ -60,7 +60,7 @@ func (svc *AudiobookService) RemoveBookUserTag(bookID, tag string) ([]string, er
 	if err := svc.store.RemoveBookTag(bookID, tag); err != nil {
 		return nil, err
 	}
-	svc.InvalidateBookCaches()
+	svc.InvalidateListCache()
 	return svc.store.GetBookTags(bookID)
 }
 
@@ -87,7 +87,7 @@ func (svc *AudiobookService) BatchUpdateUserTags(bookIDs []string, addTags []str
 		updated++
 	}
 	if updated > 0 {
-		svc.InvalidateBookCaches()
+		svc.InvalidateListCache()
 	}
 	return updated, nil
 }

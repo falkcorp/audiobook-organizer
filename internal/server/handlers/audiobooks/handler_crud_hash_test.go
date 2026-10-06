@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_crud_hash_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 9c4e1a73-8d25-4f6b-b3e0-7a2d6f9c1e58
-// last-edited: 2026-10-04
+// last-edited: 2026-10-06
 
 package audiobookshandler_test
 
@@ -61,7 +61,7 @@ func TestUpdateAudiobook_WriteBackRecordsNewFileHash(t *testing.T) {
 	d.store.EXPECT().GetBookAuthors("b1").Return([]database.BookAuthor{}, nil).Maybe()
 	d.store.EXPECT().GetBookNarrators("b1").Return([]database.BookNarrator{}, nil).Maybe()
 	d.store.EXPECT().SetLastWrittenAt("b1", mock.Anything).Return(nil)
-	d.svc.EXPECT().InvalidateBookCaches().Return()
+	d.svc.EXPECT().InvalidateListCache().Return()
 	d.writeBack.EXPECT().Enqueue("b1").Return()
 	c, w := newCtx("PUT", "/audiobooks/b1", map[string]any{"title": "A New Title"}, p("id", "b1"))
 	h.UpdateAudiobook(c)

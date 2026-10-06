@@ -1,7 +1,7 @@
 // file: internal/audiobooks/audiobook_service_unit_test.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package audiobooks
 
@@ -725,9 +725,9 @@ func TestAudiobookService_EnrichAudiobooksWithNames_WithAuthorAndSeries(t *testi
 	assert.Nil(t, result[1].SeriesName)
 }
 
-// --- InvalidateBookCaches ---
+// --- InvalidateListCache ---
 
-func TestAudiobookService_InvalidateBookCaches_ClearsCache(t *testing.T) {
+func TestAudiobookService_InvalidateListCache_ClearsCache(t *testing.T) {
 	// Default behavior (commit 95b0f70d) keeps the list cache warm on
 	// book mutation. Opt the test back into full invalidation so it
 	// exercises the cleared-list path.
@@ -751,7 +751,7 @@ func TestAudiobookService_InvalidateBookCaches_ClearsCache(t *testing.T) {
 	assert.Len(t, books2, 1)
 
 	// Invalidate and call again — should hit store
-	svc.InvalidateBookCaches()
+	svc.InvalidateListCache()
 	mockStore.EXPECT().GetAllBookSummaries(50, 0).Return([]database.BookSummary{{ID: "fresh"}}, nil).Once()
 
 	books3, err := svc.GetAudiobooks(context.Background(), 0, 0, "", nil, nil)

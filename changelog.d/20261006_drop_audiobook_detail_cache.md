@@ -9,3 +9,9 @@
   metadata history had the restored one. The cache is removed: every detail
   read goes to the store. Measured on prod, an uncached read is ~31 ms median
   and 48 ms p90, against ~7 ms from the cache. The list cache is unchanged.
+
+### Changed
+
+- `AudiobookService.InvalidateBookCaches` is renamed `InvalidateListCache`:
+  with the per-book cache gone, the list cache is all it clears, and only
+  when `cache_invalidate_on_book_update` is on.

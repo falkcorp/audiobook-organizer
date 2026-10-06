@@ -737,35 +737,35 @@ func (_c *MockAudiobookService_GetSoftDeletedBooks_Call) RunAndReturn(run func(c
 	return _c
 }
 
-// InvalidateBookCaches provides a mock function for the type MockAudiobookService
-func (_mock *MockAudiobookService) InvalidateBookCaches() {
+// InvalidateListCache provides a mock function for the type MockAudiobookService
+func (_mock *MockAudiobookService) InvalidateListCache() {
 	_mock.Called()
 	return
 }
 
-// MockAudiobookService_InvalidateBookCaches_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'InvalidateBookCaches'
-type MockAudiobookService_InvalidateBookCaches_Call struct {
+// MockAudiobookService_InvalidateListCache_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'InvalidateListCache'
+type MockAudiobookService_InvalidateListCache_Call struct {
 	*mock.Call
 }
 
-// InvalidateBookCaches is a helper method to define mock.On call
-func (_e *MockAudiobookService_Expecter) InvalidateBookCaches() *MockAudiobookService_InvalidateBookCaches_Call {
-	return &MockAudiobookService_InvalidateBookCaches_Call{Call: _e.mock.On("InvalidateBookCaches")}
+// InvalidateListCache is a helper method to define mock.On call
+func (_e *MockAudiobookService_Expecter) InvalidateListCache() *MockAudiobookService_InvalidateListCache_Call {
+	return &MockAudiobookService_InvalidateListCache_Call{Call: _e.mock.On("InvalidateListCache")}
 }
 
-func (_c *MockAudiobookService_InvalidateBookCaches_Call) Run(run func()) *MockAudiobookService_InvalidateBookCaches_Call {
+func (_c *MockAudiobookService_InvalidateListCache_Call) Run(run func()) *MockAudiobookService_InvalidateListCache_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		run()
 	})
 	return _c
 }
 
-func (_c *MockAudiobookService_InvalidateBookCaches_Call) Return() *MockAudiobookService_InvalidateBookCaches_Call {
+func (_c *MockAudiobookService_InvalidateListCache_Call) Return() *MockAudiobookService_InvalidateListCache_Call {
 	_c.Call.Return()
 	return _c
 }
 
-func (_c *MockAudiobookService_InvalidateBookCaches_Call) RunAndReturn(run func()) *MockAudiobookService_InvalidateBookCaches_Call {
+func (_c *MockAudiobookService_InvalidateListCache_Call) RunAndReturn(run func()) *MockAudiobookService_InvalidateListCache_Call {
 	_c.Run(run)
 	return _c
 }

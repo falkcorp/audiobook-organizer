@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
 // last-edited: 2026-10-06
 
@@ -37,11 +37,13 @@ func (svc *AudiobookService) GetAudiobook(ctx context.Context, id string) (*data
 		return nil, fmt.Errorf("database not initialized")
 	}
 
-	// Read the store every time; no per-book cache (InvalidateBookCaches):
-	// most book writes (fixers, the scanner, metadata applies) never reach
-	// this service, so a cached copy went stale for up to 24h. The store
-	// serves the row from memdb; measured on prod 2026-10-06 the uncached
-	// detail read is ~31 ms median / 48 ms p90 against ~7 ms cached.
+	// Read the store every time; there is no per-book cache. Most book writes
+	// (fixers, the scanner, metadata applies) never reach this service, so the
+	// 24h cache removed on 2026-10-06 served stale rows. Measured on prod that
+	// day, the whole uncached detail read is ~31 ms median / 48 ms p90 against
+	// ~7 ms cached. The store read is a memdb lookup; most of that time is the
+	// per-request work below (the file tag read, metadata state, author and
+	// series names, provenance), so don't re-add a cache to speed the store.
 	book, err := svc.store.GetBookByID(id)
 	if err != nil {
 		return nil, err
@@ -476,7 +478,7 @@ func (svc *AudiobookService) PurgeSoftDeletedBooks(ctx context.Context, deleteFi
 	result.sortIDs()
 
 	if result.Purged > 0 {
-		svc.InvalidateBookCaches()
+		svc.InvalidateListCache()
 	}
 
 	return result, nil
@@ -907,7 +909,7 @@ func (svc *AudiobookService) RestoreAudiobook(ctx context.Context, id string) (*
 	if !res.Restored {
 		return res.Book, nil
 	}
-	svc.InvalidateBookCaches()
+	svc.InvalidateListCache()
 	return res.Book, nil
 }
 

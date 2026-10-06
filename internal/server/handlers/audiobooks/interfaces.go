@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/interfaces.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 110386de-3e07-4ef3-b0e0-2e717a249e91
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 // Narrow dependency interfaces for the audiobooks-domain HTTP handlers (the
 // main library list / CRUD domain: list, count, facets, soft-delete /
@@ -177,7 +177,7 @@ type AudiobookUserTagService interface {
 // AudiobookViewDecorator AudiobookViewDecorator turns raw book rows into the detail shape the list endpoints return, and drops the caches that shape is built from.
 type AudiobookViewDecorator interface {
 	EnrichAudiobooksWithNames(books []database.Book) []audiobookspkg.AudiobookDetail
-	InvalidateBookCaches()
+	InvalidateListCache()
 }
 
 // AudiobookService is the narrow *audiobookspkg.AudiobookService subset the
