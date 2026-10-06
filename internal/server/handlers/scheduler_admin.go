@@ -1,7 +1,7 @@
 // file: internal/server/handlers/scheduler_admin.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: c8cffbf7-1356-4211-ad0e-28307563161b
-// last-edited: 2026-10-02
+// last-edited: 2026-10-05
 
 // TODO.md scheduler-config item (was line 4563 as of commit 46628240): the
 // task-scheduler endpoints (list/run/configure tasks) and the
@@ -345,6 +345,21 @@ func bindingForTask(name string) (taskConfigBinding, bool) {
 				"run_on_startup": "asin_backfill never runs on startup: memdb warmup runs for " +
 					"minutes after a restart and the interval picks it up",
 				"run_in_maintenance_window": "asin_backfill runs on its own interval, " +
+					"not in the maintenance window",
+			},
+		}, true
+	case "candidate_fetch":
+		// Same gate as asin_backfill: scheduled whenever the interval is > 0
+		// (default 360 = 6h), 0 turns it off; never on startup or in the
+		// window (see config.ScheduledTasksConfig.CandidateFetch).
+		return taskConfigBinding{
+			interval: &sched.CandidateFetch.Interval,
+			hints: map[string]string{
+				"enabled": "candidate_fetch is scheduled whenever interval_minutes > 0; " +
+					"set interval_minutes to 0 to stop it",
+				"run_on_startup": "candidate_fetch never runs on startup: memdb warmup runs for " +
+					"minutes after a restart and the interval picks it up",
+				"run_in_maintenance_window": "candidate_fetch runs on its own interval, " +
 					"not in the maintenance window",
 			},
 		}, true

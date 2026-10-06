@@ -1,7 +1,7 @@
 // file: internal/metafetch/search_variants_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: f16af23a-770c-4bcf-8317-0c7f7724ee42
-// last-edited: 2026-10-01
+// last-edited: 2026-10-05
 
 package metafetch
 
@@ -21,7 +21,7 @@ func TestParseSearchTitle_ProdFailures(t *testing.T) {
 		want                  parsedTitle
 	}{
 		{raw: "Magma Heart - Unknown Author", author: "Plum Parrot",
-			want: parsedTitle{Title: "Magma Heart"}},
+			want: parsedTitle{Title: "Magma Heart", Cleaned: "Magma Heart"}},
 		{raw: "read by Cathfach (Erryn's World)",
 			want: parsedTitle{Title: "Erryn's World", Narrator: "Cathfach"}},
 		{raw: "read by Solomon Ignis (Reborn a Hero)",
@@ -35,9 +35,9 @@ func TestParseSearchTitle_ProdFailures(t *testing.T) {
 		{raw: "Saving Supervillains, Book 5 - Bruce Sentar",
 			want: parsedTitle{Title: "Saving Supervillains", Series: "Saving Supervillains", Position: "5", Author: "Bruce Sentar", TitleIsSeries: true, SlotHead: "Saving Supervillains"}},
 		{raw: "Drudge Match - Unknown Author",
-			want: parsedTitle{Title: "Drudge Match"}},
+			want: parsedTitle{Title: "Drudge Match", Cleaned: "Drudge Match"}},
 		{raw: "2010 The Stainless Steel Rat Returns - Unknown Author", author: "Harry Harrison",
-			want: parsedTitle{Title: "2010 The Stainless Steel Rat Returns", YearFree: "The Stainless Steel Rat Returns"}},
+			want: parsedTitle{Title: "2010 The Stainless Steel Rat Returns", YearFree: "The Stainless Steel Rat Returns", Cleaned: "2010 The Stainless Steel Rat Returns"}},
 		{raw: "Mayor of Mythos: An Isekai LitRPG Fantasy (Unabridged)",
 			want: parsedTitle{Title: "Mayor of Mythos: An Isekai LitRPG Fantasy", Short: "Mayor of Mythos"}},
 		// The review's blockers (2026-10-01): a genre tagline after a series

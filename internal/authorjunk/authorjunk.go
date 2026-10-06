@@ -1,7 +1,7 @@
 // file: internal/authorjunk/authorjunk.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 66089e88-ec3d-459f-8aa3-dd39a204a1e1
-// last-edited: 2026-10-01
+// last-edited: 2026-10-05
 
 // Package authorjunk answers "is this AUTHOR ROW a person, or something the
 // importer filed in the author field that is not a person?" -- a series name
@@ -450,10 +450,20 @@ var genreTaglineWords = func() map[string]bool {
 // the same genre vocabulary the author classifier uses. The metadata search
 // refuses to read such a subtitle as the book's own name: "Rogue Ascension 8:
 // A Progression LitRPG" is not a book called "A Progression LitRPG".
+//
+// A tagline may also carry ONE coined word among its genre words ("A
+// Daopocalypse Progression Fantasy", "A Deck-Building LitRPG"): an article
+// first, a genre word last, and every other word a genre word but one. Folder
+// names put such a tagline where the book's name goes ("Path of the Berserker
+// 2 - A Daopocalypse Progression Fantasy"). Two words of its own are a name
+// ("A Jack Reacher Novel" names the series).
 func IsGenreTagline(s string) bool {
 	f := strings.Fields(Normalize(s))
 	if len(f) == 0 {
 		return false
+	}
+	if oneCoinedWordTagline(s, f) {
+		return true
 	}
 	content := 0
 	for _, w := range f {
@@ -465,6 +475,38 @@ func IsGenreTagline(s string) bool {
 		}
 	}
 	return content > 0
+}
+
+// taglineGenreEnds are the genre words a self-published subtitle ends in. A
+// subtitle ending in a subject ("An Uncensored History", "A Short
+// Biography") is a description of the book, not a tagline.
+var taglineGenreEnds = map[string]bool{
+	"litrpg": true, "gamelit": true, "fantasy": true, "xianxia": true, "wuxia": true, "cultivation": true,
+	"thriller": true, "mystery": true, "romance": true, "horror": true, "adventure": true, "novel": true,
+}
+
+// oneCoinedWordTagline is IsGenreTagline's one-coined-word reading: f is
+// Normalize(s)'s words. A word of s that Normalize splits ("Deck-Building")
+// counts once.
+func oneCoinedWordTagline(s string, f []string) bool {
+	last := f[len(f)-1]
+	if f[0] != "a" && f[0] != "an" || len(f) < 3 || !taglineGenreEnds[last] {
+		return false
+	}
+	raw := strings.Fields(s)
+	if len(raw) < 3 || len(raw) > 5 {
+		return false
+	}
+	coined := 0
+	for _, w := range raw[1:] {
+		for _, part := range strings.Fields(Normalize(w)) {
+			if !genreTaglineWords[part] {
+				coined++
+				break
+			}
+		}
+	}
+	return coined == 1
 }
 
 // IsCompositeCredit reports whether name is a LIST of person names

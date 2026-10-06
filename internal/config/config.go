@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.134.0
+// version: 1.135.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-10-05
 
@@ -1044,6 +1044,11 @@ type ScheduledTasksConfig struct {
 	// 360 (6h). It never runs on startup (memdb warmup) or in the
 	// maintenance window, so OnStartup and Enabled are not read.
 	ASINBackfill ScheduledTaskConfig `json:"asin_backfill" mapstructure:"asin_backfill"`
+	// CandidateFetch schedules the candidate_fetch task
+	// (metadata.candidate-fetch with unfetched=true: fetch only, never
+	// apply) on its own interval, in minutes. Gated like ASINBackfill: only
+	// Interval is read, 0 turns it off. Ships at 360 (6h).
+	CandidateFetch ScheduledTaskConfig `json:"candidate_fetch" mapstructure:"candidate_fetch"`
 }
 
 // Config holds application configuration
@@ -2470,6 +2475,9 @@ func InitConfig() {
 	// asin_backfill: scheduled whenever interval > 0 (minutes; see
 	// ScheduledTasksConfig.ASINBackfill). Ships ON at 6h.
 	viper.SetDefault("scheduled.asin_backfill.interval", 360)
+	// candidate_fetch: scheduled whenever interval > 0 (minutes; see
+	// ScheduledTasksConfig.CandidateFetch). Ships ON at 6h.
+	viper.SetDefault("scheduled.candidate_fetch.interval", 360)
 	// label_refinement ships DISABLED (INIT-1 T6): the scheduled dry-run chain
 	// (dedup.rebuild-gold-labels → dedup.calibrate-composite) only runs when an
 	// owner flips enabled=true. Interval is weekly (10080 min).
@@ -3188,6 +3196,9 @@ func InitConfig() {
 				ASINBackfill: ScheduledTaskConfig{
 					Interval: viper.GetInt("scheduled.asin_backfill.interval"),
 				},
+				CandidateFetch: ScheduledTaskConfig{
+					Interval: viper.GetInt("scheduled.candidate_fetch.interval"),
+				},
 				LabelRefinement: ScheduledTaskConfig{
 					Enabled:   viper.GetBool("scheduled.label_refinement.enabled"),
 					Interval:  viper.GetInt("scheduled.label_refinement.interval"),
@@ -3880,6 +3891,10 @@ func ResetToDefaults() {
 				// asin_backfill defaults ON (interval alone gates it), so a
 				// missing Interval here would turn it off on a factory reset.
 				ASINBackfill: ScheduledTaskConfig{
+					Interval: 360,
+				},
+				// candidate_fetch defaults ON the same way.
+				CandidateFetch: ScheduledTaskConfig{
 					Interval: 360,
 				},
 			},

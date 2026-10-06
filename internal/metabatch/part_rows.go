@@ -1,7 +1,7 @@
 // file: internal/metabatch/part_rows.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 0e87a518-a04c-44d3-8d4d-3539bfc91b85
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 //
 // Tells a book row that is one file of a set the scanner filed as separate
 // book rows ("06 Chapter 6", "Cobra 100 of 151", "The Sunrise Lands 1" beside
@@ -871,8 +871,13 @@ func isPlaceholderTitle(t string) bool {
 
 // siblingPartTailRe is what may follow the stem in a sibling's file name: a
 // separator and a part token -- digits, optionally sub-numbered ("2",
-// "1-02") -- or one letter ("a").
-var siblingPartTailRe = regexp.MustCompile(`^[\s_]+(?:\d{1,4}(?:[-_.]\d{1,4})*|\pL)$`)
+// "1-02") -- or one letter ("a"). The separator may be a spaced dash ("The
+// Seventh Lantern - 01"): SiblingPartStem trims it off the row's own stem,
+// so without it a "<title> - 02" row beside "- 01" and "- 03" counted no
+// siblings, was searched as a whole book, and -- once the search learned to
+// drop a " - NN" track suffix -- would have been handed the whole book's
+// candidate.
+var siblingPartTailRe = regexp.MustCompile(`^\s*[-–—]?[\s_]+(?:\d{1,4}(?:[-_.]\d{1,4})*|\pL)$`)
 
 // leadingTrackRe is a track-number prefix on a file name ("01 - ", "003. ").
 var leadingTrackRe = regexp.MustCompile(`^\d{1,4}\s*[-.]?\s+`)

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
+	"github.com/falkcorp/audiobook-organizer/internal/authority"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
@@ -87,6 +88,9 @@ type bookReader interface {
 	// ImportPathReader: the resolver reads the import roots from this same
 	// store, so an import root is never listed for sibling rows.
 	metabatch.ImportPathReader
+	// authority.Reader: the resolver refuses a title that is a known
+	// person's name (the authority lists).
+	authority.Reader
 }
 
 // bulkManualOnlyGuard builds the certainty gate's owner-manual-only input

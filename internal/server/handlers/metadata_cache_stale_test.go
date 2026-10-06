@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_stale_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: bd448962-829a-45be-aa5f-86e10c847ff3
-// last-edited: 2026-10-02
+// last-edited: 2026-10-05
 
 // The review rail's `stale` count and the refetch-all-stale set
 // (StaleCachedBookIDs, behind POST batch-fetch-candidates {stale:true}) must be
@@ -28,6 +28,7 @@ import (
 
 func TestStaleCachedBookIDs_MatchesTheSummaryStaleCount(t *testing.T) {
 	store := handlersmocks.NewMockMetadataCacheBookStore(t)
+	store.EXPECT().GetRaw(mock.Anything).Return(nil, nil).Maybe() // authority lists: no known people
 	store.EXPECT().GetBookFilesForIDsCore(mock.Anything).Return(map[string][]database.BookFileCore{}, nil).Maybe()
 	store.EXPECT().GetBookFiles(mock.Anything).Return(nil, nil).Maybe()
 	svc := handlersmocks.NewMockMetadataCacheFetchService(t)

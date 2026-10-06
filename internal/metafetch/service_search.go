@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/authority"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -479,7 +480,21 @@ func (mfs *Service) resolveSearchInputs(book *database.Book, query, author, narr
 	// Read the book's own name, series slot and any packed-in people out of
 	// the title ("Magma Heart - Unknown Author", "read by Cathfach (Erryn's
 	// World)", "Jack Reacher 17: A Wanted Man (Jeff Harding)").
-	parsed := parseSearchTitle(rawQuery, searchAuthor, bookNarrator)
+	parsed := parseSearchTitleWith(rawQuery, searchAuthor, bookNarrator, mfs.nameEvidence(book))
+	// An author that is the title itself ("Hammer Fall Rising" by "Hammer Fall
+	// Rising"; the organizer filed an untagged book under its own title) is no
+	// author: narrowing by it asks the catalog for a book by that "person"
+	// and finds nothing. A title that is really a person's name is refused
+	// before any search (metabatch titleJudge.namesAPerson), so the side that
+	// is junk here is the author.
+	if searchAuthor != "" && sameNormalizedText(searchAuthor, parsed.Title) {
+		searchAuthor = ""
+		if sameNormalizedText(bookAuthor, parsed.Title) {
+			bookAuthor = ""
+		}
+		parsed = parseSearchTitleWith(rawQuery, "", bookNarrator, mfs.nameEvidence(book))
+		parsed.AuthorIsTitle = true
+	}
 	// A title that names no position takes the book's stored series sequence
 	// for the strong gates only ("Overlord", sequence 8, is not strong on
 	// "Overlord" at series_position 1). See parsedTitle.StoredPosition.
@@ -512,6 +527,30 @@ func (mfs *Service) resolveSearchInputs(book *database.Book, query, author, narr
 	}
 	return searchInputs{title: searchTitle, author: searchAuthor, bookAuthor: bookAuthor, narrator: bookNarrator, asin: asin,
 		rawQuery: rawQuery, literal: literal, parsed: parsed, legacy: legacy}
+}
+
+// nameEvidence is what metadata.ParseBookName may check a title's segments
+// against for book: its path (an author-shaped ancestor folder) and the
+// authority lists' known authors (internal/authority). A lookup fault is no
+// evidence, so a segment is kept in the title: a search never loses words to
+// a read error.
+func (mfs *Service) nameEvidence(book *database.Book) metadata.NameEvidence {
+	ev := metadata.NameEvidence{Path: book.FilePath}
+	if mfs != nil && mfs.db != nil {
+		idx := authority.NewIndex(mfs.db)
+		ev.IsKnownAuthor = func(name string) bool {
+			ok, err := idx.IsKnownPerson(name, authority.RoleAuthor)
+			return err == nil && ok
+		}
+	}
+	return ev
+}
+
+// sameNormalizedText reports whether a and b are the same text ignoring case,
+// punctuation and spacing ("Hammer Fall Rising" / "hammer fall rising").
+func sameNormalizedText(a, b string) bool {
+	na, nb := authority.Fold(a), authority.Fold(b)
+	return na != "" && na == nb
 }
 
 // FingerprintPrefix starts every fingerprint this searchInputVersion writes.
@@ -591,6 +630,17 @@ func (mfs *Service) matchSearchFingerprint(stored string, book *database.Book, q
 		return fingerprintLegacy
 	}
 	return fingerprintStale
+}
+
+// SearchFingerprintCurrent reports whether stored, a cache row's
+// SearchFingerprint, names exactly the questions a search for book with this
+// query and author hint would ask now. A row written before the book's title,
+// author or the query parser changed what is asked is not current, and
+// neither is a version "1" (legacy) row: its "nothing found" answered other
+// questions. The scheduled candidate fetch re-asks a book whose empty row is
+// not current (server.unfetchedCandidateBookIDs).
+func (mfs *Service) SearchFingerprintCurrent(stored string, book *database.Book, query, author string) bool {
+	return mfs.matchSearchFingerprint(stored, book, query, author, "") == fingerprintCurrent
 }
 
 // SearchAuthorFor returns the author a search for book with this author hint
@@ -1017,9 +1067,13 @@ func (mfs *Service) searchMetadataForBook(
 	// Series-number tiebreaker: if the original title contains a number that
 	// was stripped for search (e.g. "We Hunt Monsters 8" → "We Hunt Monsters"),
 	// boost candidates whose SeriesPosition or title number matches.
-	originalTitle := query
-	if originalTitle == "" {
-		originalTitle = book.Title
+	// The title's own trailing number, read from the title less what
+	// metadata.ParseBookName removed: the " - 01" of "Discworld 24 - The Fifth
+	// Elephant - 01" is a track, and expecting 1 boosted book 1 of the series
+	// over book 24 and penalised the book itself.
+	originalTitle := in.parsed.Cleaned
+	if strings.TrimSpace(originalTitle) == "" {
+		originalTitle = in.rawQuery
 	}
 	expectedNum := extractTrailingNumber(originalTitle)
 	if expectedNum == "" && in.parsed.Position != "" {

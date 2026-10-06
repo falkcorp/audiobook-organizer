@@ -1,7 +1,7 @@
 // file: internal/metabatch/search_query.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: e0ed5705-b771-4cc2-9c8c-bca9f78ead8b
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 //
 // Resolves the title a metadata search asks providers for a book.
 
@@ -12,7 +12,9 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/falkcorp/audiobook-organizer/internal/authority"
 	"github.com/falkcorp/audiobook-organizer/internal/authorjunk"
+	"github.com/falkcorp/audiobook-organizer/internal/authorname"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
@@ -238,6 +240,8 @@ type titleJudge struct {
 	// memo shares folder listings and the import-root set across rows; nil
 	// lists through files directly.
 	memo *FolderMemo
+	// personMemo caches namesAPerson's authority answers for this book.
+	personMemo map[string]bool
 	// rootsLoaded/roots: the import-root set read from files, once, when
 	// there is no memo (titleJudge.importRoots).
 	rootsLoaded bool
@@ -249,12 +253,14 @@ type titleJudge struct {
 // named for the author is not a work folder) and the other book rows in its
 // folder (a file of a set filed as separate rows; titleJudge.siblingPaths),
 // and the import paths (a folder that is an import root is never listed;
-// titleJudge.isRootDir).
+// titleJudge.isRootDir), and the authority lists (authority.Reader: a title
+// that is a known person's name is no title; titleJudge.namesAPerson).
 type SearchQueryReader interface {
 	BookFilesGetter
 	database.BookAuthorReader
 	database.BookDirLister
 	ImportPathReader
+	authority.Reader
 }
 
 // presentFiles returns the book's present files in play order
@@ -313,10 +319,107 @@ func FirstPresentFilePath(files BookFilesGetter, bookID string) (string, error) 
 
 // unsearchable reports whether t is no title to search this book by.
 func (j *titleJudge) unsearchable(t string) bool {
-	if metadata.IsUnsearchableTitle(t) {
+	if metadata.IsUnsearchableTitle(t) || j.namesAPerson(t) {
 		return true
 	}
 	return metadata.IsSectionHeadingTitle(t) && headingCorroborated(j.presentFiles(), j.bookPath, t, j.bookAuthors)
+}
+
+// slugSepRe joins the words of a slug ("brandon_sanderson", "Brandon-Sanderson").
+var slugSepRe = regexp.MustCompile(`[_\-.]+`)
+
+// namesAPerson reports whether t is a person's name rather than a title: the
+// organizer or a tagger put the author (or narrator) in the title field
+// ("Brandon Sanderson", "brandon_sanderson"). Searching a catalog by a name
+// answers with that person's books in catalog order, never this one, so the
+// title is refused and the transcribed title or the folder stands in.
+//
+// Three things must hold:
+//   - the name, or its de-slugged form, is person-shaped
+//     (metadata.LooksLikeAuthorSegment, two or more words, no digits);
+//   - the authority lists (internal/authority) know it as an author or a
+//     narrator;
+//   - it names one of the book's own people (its live authors, its snapshot
+//     author or its narrator; authorjunk.SamePersonName), or the book has no
+//     real author at all.
+//
+// The last leg keeps a biography titled by its subject searchable: "Ada
+// Penn" by Gene Holt is a book about a known writer, not a misfiled credit.
+// Shape alone is never enough either -- "Hammer Fall Rising" reads like a
+// name -- and a title equal to a junk AUTHOR ("Hammer Fall Rising" by
+// "Hammer Fall Rising", with no authority entry) is the author's problem,
+// which the search drops (metafetch resolveSearchInputs). A read fault is no
+// evidence: the title is searched as written.
+func (j *titleJudge) namesAPerson(t string) bool {
+	if j.files == nil {
+		return false
+	}
+	name := strings.TrimSpace(t)
+	if !strings.Contains(name, " ") && slugSepRe.MatchString(name) {
+		name = strings.Join(strings.Fields(slugSepRe.ReplaceAllString(name, " ")), " ")
+	}
+	if strings.ContainsAny(name, "0123456789") || len(strings.Fields(name)) < 2 ||
+		!metadata.LooksLikeAuthorSegment(titleCaseIfLower(name)) {
+		return false
+	}
+	if j.personMemo == nil {
+		j.personMemo = map[string]bool{}
+	}
+	if v, ok := j.personMemo[name]; ok {
+		return v
+	}
+	verdict := j.knownPerson(name) && j.namesOwnPersonOrNoAuthor(name)
+	j.personMemo[name] = verdict
+	return verdict
+}
+
+// knownPerson reports whether the authority lists know name as an author or
+// a narrator.
+func (j *titleJudge) knownPerson(name string) bool {
+	idx := authority.NewIndex(j.files)
+	if ok, err := idx.IsKnownPerson(name, authority.RoleAuthor); err == nil && ok {
+		return true
+	}
+	ok, err := idx.IsKnownPerson(name, authority.RoleNarrator)
+	return err == nil && ok
+}
+
+// namesOwnPersonOrNoAuthor reports whether name is one of the book's own
+// people, or the book has no real author (none, or only a placeholder). An
+// author read fault answers false: the title is searched.
+func (j *titleJudge) namesOwnPersonOrNoAuthor(name string) bool {
+	authors, err := j.bookAuthors()
+	if err != nil {
+		return false
+	}
+	real := 0
+	for _, a := range authors {
+		if strings.TrimSpace(a) == "" || authorname.IsPlaceholderAuthor(a) {
+			continue
+		}
+		real++
+		if authorjunk.SamePersonName(a, name) {
+			return true
+		}
+	}
+	if j.book != nil && j.book.Narrator != nil && authorjunk.SamePersonName(*j.book.Narrator, name) {
+		return true
+	}
+	return real == 0
+}
+
+// titleCaseIfLower capitalises each word of an all-lower-case slug, so the
+// person-shape test (capitalised words) reads "brandon sanderson" as it reads
+// "Brandon Sanderson".
+func titleCaseIfLower(s string) string {
+	if strings.ToLower(s) != s {
+		return s
+	}
+	words := strings.Fields(s)
+	for i, w := range words {
+		words[i] = strings.ToUpper(w[:1]) + w[1:]
+	}
+	return strings.Join(words, " ")
 }
 
 // bookAuthors returns the book's live author names (database.LiveBookAuthorNames)

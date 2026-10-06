@@ -150,13 +150,29 @@ func (s *Server) runMetadataCandidateFetchOp(ctx context.Context, rawParams json
 			return fmt.Errorf("metadata-candidate-fetch: decode params: %w", err)
 		}
 	}
-	if len(p.BookIDs) == 0 {
-		return nil
-	}
-
 	store := s.storeForWiring()
 	mfs := s.metadataFetchService
 	progress := registryProgressAdapter{r: reporter}
+
+	if len(p.BookIDs) == 0 && p.Unfetched {
+		ids, err := s.selectUnfetchedBooks(ctx, reporter)
+		if err != nil {
+			return err
+		}
+		if len(ids) == 0 {
+			_ = progress.UpdateProgress(0, 0, "completed: no unfetched books")
+			return nil
+		}
+		p.BookIDs, p.TotalBooks, p.Unfetched = ids, len(ids), false
+		// Persist the selection before the first fetch, so a resume is handed
+		// this list (with "unfetched": false) and never re-selects.
+		if err := reporter.Checkpoint(p); err != nil {
+			candidateFetchLog.Warn("selection checkpoint failed: err=%s", logger.SanitizeLogValue(err.Error()))
+		}
+	}
+	if len(p.BookIDs) == 0 {
+		return nil
+	}
 	totalBooks := p.TotalBooks
 	if totalBooks == 0 {
 		totalBooks = len(p.BookIDs)
@@ -352,6 +368,29 @@ func (s *Server) runMetadataCandidateFetchOp(ctx context.Context, rawParams json
 	_ = progress.UpdateProgress(int(finalCount), totalBooks, summary)
 	candidateFetchLog.Info("done: opID=%s force=%v %s", logger.SanitizeLogValue(opID), p.Force, summary)
 	return nil
+}
+
+// selectUnfetchedBooks resolves an Unfetched run's books
+// (unfetchedCandidateBookIDs), leaving out books another candidate fetch is
+// already fetching, and logs what it found.
+func (s *Server) selectUnfetchedBooks(ctx context.Context, reporter opsregistry.Reporter) ([]string, error) {
+	if s.metadataFetchService == nil {
+		return nil, fmt.Errorf("metadata-candidate-fetch: metadata service not initialized")
+	}
+	store := s.storeForWiring()
+	busy, err := metabatch.ActiveCandidateFetchBookIDs(s.Ops(), s.opRegistry.IsRunning)
+	if err != nil {
+		return nil, fmt.Errorf("metadata-candidate-fetch: check running fetches: %w", err)
+	}
+	sel, err := unfetchedCandidateBookIDs(ctx, store, s.metadataFetchService, s.newFolderMemo(store), busy)
+	if err != nil {
+		return nil, fmt.Errorf("metadata-candidate-fetch: select unfetched books: %w", err)
+	}
+	msg := fmt.Sprintf("selected %d books to fetch: %d never fetched or invalidated, %d with an empty answer to questions no longer asked "+
+		"(%d live books read, %d left out with no usable search title)", len(sel.IDs), sel.NoRow, sel.StaleEmpty, sel.Scanned, sel.Unsearchable)
+	_ = reporter.Log(slog.LevelInfo, msg)
+	candidateFetchLog.Info("%s", msg)
+	return sel.IDs, nil
 }
 
 // candidateFetchLog is the process-log side of metadata.candidate-fetch
