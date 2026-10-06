@@ -55,7 +55,7 @@ import {
  * selection, the keep choice and the narrator flags slid onto the NEXT group
  * (and a later merge could keep a series from a different group).
  */
-export function seriesGroupKey(group: SeriesDupGroup): string {
+function seriesGroupKey(group: SeriesDupGroup): string {
   return `group-${group.series
     .map((s) => s.id)
     .sort((a, b) => a - b)

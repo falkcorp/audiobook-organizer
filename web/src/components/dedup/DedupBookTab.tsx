@@ -78,7 +78,7 @@ function describeMergeFailure(final: Operation): string {
  * so the selection and the per-group "keep" choice silently moved to the NEXT
  * group (and a later merge could keep a book from a different group).
  */
-export function bookGroupKey(group: Book[]): string {
+function bookGroupKey(group: Book[]): string {
   return `group-${group
     .map((b) => b.id)
     .sort()
