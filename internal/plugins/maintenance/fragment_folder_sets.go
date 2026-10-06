@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_folder_sets.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9f01b698-b911-4ecc-818e-6d10f415e768
 // last-edited: 2026-10-05
 
@@ -744,13 +744,28 @@ func (f *fragmentFixer) classifyFolderSets(lib *fragLibrary, live *fragLive, row
 			continue
 		case target != "":
 			parent := set.parent
+			tb := lib.books[target]
+			setAuthor, bookAuthor := groupAuthor(lib, plan), lib.authorName(tb)
 			e := fragExisting{id: target}
 			e.total, e.unknown, e.files = lib.bookTotal(target)
 			total, _ := rowFragTotal(r)
-			f.joinExisting(lib, r, plan, e, fmt.Sprintf("%s; the %d kept fragment(s) total %s", why, len(plan.Members), fragHours(total)),
-				func(e fragExisting) string {
-					return fmt.Sprintf("book %s (%q, %d file(s), %s)", e.id, lib.books[e.id].Title, e.files, fragHours(e.total))
-				}, nil)
+			authorWord := "they agree"
+			switch {
+			case fragAuthorsDiffer(setAuthor, bookAuthor):
+				hold(fragSkipDuplicateAudio, fmt.Sprintf("%s; but the set's author %q and book %s's author %q differ, so the match is not trusted; decide by hand",
+					why, setAuthor, target, bookAuthor))
+				continue
+			case strings.TrimSpace(setAuthor) == "" || strings.TrimSpace(bookAuthor) == "" ||
+				authorname.IsPlaceholderAuthor(setAuthor) || authorname.IsPlaceholderAuthor(bookAuthor):
+				authorWord = "one side has no known author"
+			}
+			files := len(plan.Members) + len(plan.Copies)
+			e.audio = fmt.Sprintf("audio join (not a title match): all %d of the set's %d files' audio is held by book %s (%q, %d file(s)); totals: set %s, book %s; titles: set %q, book %q; authors: set %q, book %q (%s); %s",
+				files, files, target, tb.Title, e.files, fragHours(total), fragHours(e.total), plan.Title, tb.Title,
+				setAuthor, bookAuthor, authorWord, why)
+			f.joinExisting(lib, r, plan, e, "", func(e fragExisting) string {
+				return fmt.Sprintf("book %s (%q, %d file(s), %s)", e.id, lib.books[e.id].Title, e.files, fragHours(e.total))
+			}, nil)
 			if r.Class == fragClassExistingBook && parent {
 				r.Class = fragClassParentJoin
 			}
@@ -956,10 +971,11 @@ func newFragAudioIndex(lib *fragLibrary) *fragAudioIndex {
 }
 
 // joinTarget reads the row's files against the live books outside it: the
-// one book that holds the audio of at least half the row's files and of
-// every row file held anywhere (target, with why), or no target and why
-// when some files are held but by more than one book or by too few. Both ""
-// when no file's audio is held elsewhere.
+// one book that holds the audio of EVERY file of the row, members and
+// copies (target, with why), or no target and why when some files are held
+// but not all, or by more than one book. Both "" when no file's audio is
+// held elsewhere. A join retires every fragment into the target, so a
+// fragment whose audio the target does not hold must never be in one.
 func (ix *fragAudioIndex) joinTarget(r *repairs.Row) (target, why string) {
 	plan, ok := r.Detail.(*fragGroupPlan)
 	if !ok {
@@ -1015,10 +1031,16 @@ func (ix *fragAudioIndex) joinTarget(r *repairs.Row) (target, why string) {
 	}
 	why = fmt.Sprintf("%d of the set's %d files are audio %d other live book(s) already hold: %s",
 		held, len(files), len(others), strings.Join(hits, "; "))
-	if len(others) == 1 && 2*held >= len(files) {
+	if len(others) == 1 && held == len(files) {
 		for id := range others {
 			return id, why
 		}
+	}
+	if len(others) == 1 {
+		// One book holds only part of the set: joining would retire the
+		// other fragments into a book that does not hold their audio, so
+		// that audio would sit in no live book. The whole set is held.
+		why += fmt.Sprintf("; the other %d file(s)' audio is in no other book, so the set is not that book's copy", len(files)-held)
 	}
 	return "", why
 }

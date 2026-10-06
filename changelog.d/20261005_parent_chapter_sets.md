@@ -8,3 +8,7 @@
   - two files at the same chapter position with different audio are held, as no-parent rows already were.
   - two sets that would each become a new book with the same title are both held (`skipped_same_title_other_set`).
   - a library or import root never forms a parent set.
+- `fragment-consolidation`: the audio join for chapter sets has three new conditions.
+  - One book must hold the audio of every file in the set. Before, half was enough, so a partial match would have retired fragments whose audio that book lacks, leaving that audio in no live book.
+  - The two authors must agree, or one side must have no known author.
+  - The evidence now says it is an audio join: how many files matched, both titles, both totals and both authors. It no longer claims the title matches.
