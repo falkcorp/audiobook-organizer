@@ -1,5 +1,5 @@
 // file: internal/metafetch/search_author.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b2296132-2b4b-426c-9f36-b3031543cec6
 // last-edited: 2026-10-06
 
@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/falkcorp/audiobook-organizer/internal/authorjunk"
 	"github.com/falkcorp/audiobook-organizer/internal/authorname"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
@@ -59,30 +60,50 @@ var (
 )
 
 // cleanAuthorText strips what a credit carries that no catalog does (see
-// SearchAuthorHint). Bracketed groups are release tags ("[XYZ]") unless one
-// holds the only person-shaped name ("AudioHouse [Jane Example]"):
-// the first person-shaped text, outside the brackets then inside them, is
-// the author, and none is no author.
+// SearchAuthorHint). A bracketed group is a note on the credit -- a release
+// tag ("[XYZ]"), a translator ("Homer [Fagles]") -- and the text outside it
+// is the author. Two exceptions: when nothing with a letter is left outside
+// ("[XYZ]" alone) or what is left is a studio (authorjunk: "GraphicAudio
+// [Jane Example]"), the first person-shaped bracket is the author, and none
+// is no author.
 func cleanAuthorText(name string) string {
 	n := metadata.NormalizeNameText(name)
 	n = strings.TrimSpace(editionQualifierRe.ReplaceAllString(n, ""))
 	n = zzSortPrefixRe.ReplaceAllString(n, "$1")
 	n = strings.TrimSpace(copySuffixRe.ReplaceAllString(n, ""))
-	if groups := bracketGroupRe.FindAllStringSubmatch(n, -1); groups != nil {
-		rest := strings.Join(strings.Fields(bracketGroupRe.ReplaceAllString(n, " ")), " ")
-		cands := []string{rest}
-		for _, g := range groups {
-			cands = append(cands, strings.TrimSpace(g[1]))
-		}
-		n = ""
-		for _, c := range cands {
-			if personShaped(c) {
-				n = c
-				break
-			}
+	groups := bracketGroupRe.FindAllStringSubmatch(n, -1)
+	if groups == nil {
+		return n
+	}
+	rest := strings.Join(strings.Fields(bracketGroupRe.ReplaceAllString(n, " ")), " ")
+	if hasLetter.MatchString(rest) && authorjunk.Classify(rest, authorjunk.Evidence{}).Class != authorjunk.ClassPublisher {
+		return rest
+	}
+	for _, g := range groups {
+		if c := strings.TrimSpace(g[1]); personShaped(c) {
+			return c
 		}
 	}
-	return strings.TrimSpace(n)
+	return ""
+}
+
+// isPlaceholderCredit reports whether name is one of the system's own "no
+// author" markers ("Unknown Author", "read by narrator") or a garbage value
+// ("various", "n/a"): the credits SearchAuthorHint has always sent as "".
+// A real credit that only cleans to "" ("[XYZ]") is not one.
+func isPlaceholderCredit(name string) bool {
+	n := strings.TrimSpace(name)
+	return authorname.IsPlaceholderAuthor(n) || IsGarbageValue(n)
+}
+
+// legacyAuthorHint is SearchAuthorHint as it was before 2026-10-06, with no
+// cleaning: the identity checks resolve a row fetched then with it
+// (resolveOpts.prePR).
+func legacyAuthorHint(name string) string {
+	if isPlaceholderCredit(name) {
+		return ""
+	}
+	return strings.TrimSpace(name)
 }
 
 // FetchCacheIdentity is database.MetadataSearchIdentity -- the stamp on a

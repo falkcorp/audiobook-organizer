@@ -1,5 +1,5 @@
 // file: internal/metafetch/search_query_shapes_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f79f3c26-3085-46f4-9b30-058a6200bd75
 // last-edited: 2026-10-06
 
@@ -80,7 +80,7 @@ func (f *shapeFixture) book(title, author, path string, otherTitles ...string) *
 func TestSearchAuthorHint_CensusShapes(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
 		{"[XYZ]", ""}, // a release group's tag
-		{"AudioHouse [Jane Example]", "Jane Example"},
+		{"GraphicAudio [Jane Example]", "Jane Example"},
 		{"zzJane Example", "Jane Example"}, // a sort prefix
 		{"Some Long Book_10-02", "Some Long Book"},
 		{"Some Title_copy1", "Some Title"},
@@ -108,9 +108,8 @@ func TestResolveSearchInputs_JunkCreditRestatingTheTitleIsDropped(t *testing.T) 
 	}{
 		{name: "composite of the folder title", title: "read by narrator",
 			query: "Some Example Saga, Book 2 (Unabridged)", author: "Book 2 (Unabridged) & Some & Example Saga"},
-		{name: "series filed as author", title: "Void Example 4", author: "Void Example", others: []string{"Void Example 5"}},
-		{name: "series slot as author", title: "Example Worlds - 4 - The First Empire", author: "Example Worlds",
-			wantTitle: "The First Empire", others: []string{"Example Worlds - 5 - The Second Empire"}},
+		{name: "series filed as author", title: "Void Example Series 4", author: "Void Example Series",
+			others: []string{"Void Example Series 5"}},
 		{name: "genre tagline as author", title: "Rise of the Example Paladin, Book One_ A LitRPG Apocalypse",
 			author: "A LitRPG Apocalypse", wantTitle: "Rise of the Example Paladin"},
 	} {
@@ -170,6 +169,35 @@ func TestResolveSearchInputs_RealAuthorInTheTitleIsKept(t *testing.T) {
 	}
 }
 
+// A person-shaped credit whose author row's books all restate it is an
+// author who names their books, or a series filed as an author: nothing
+// tells them apart, so the credit is SUSPECT -- still sent, with the title
+// also asked alone.
+func TestResolveSearchInputs_PersonShapedRowThatRestatesIsSuspect(t *testing.T) {
+	f := newShapeFixture(t)
+	for _, tc := range []struct {
+		title, author string
+		others        []string
+	}{
+		{"Dave Barry Turns 50", "Dave Barry", []string{"Dave Barry Slept Here", "Dave Barry Does Japan"}},
+		{"Rick Steves Italy 2024", "Rick Steves", []string{"Rick Steves France 2024"}},
+		{"Void Example 4", "Void Example", []string{"Void Example 5"}},
+		{"Example Worlds - 4 - The First Empire", "Example Worlds", []string{"Example Worlds - 5 - The Second Empire"}},
+	} {
+		t.Run(tc.title, func(t *testing.T) {
+			b := f.book(tc.title, tc.author, "", tc.others...)
+			in := f.svc.resolveSearchInputs(b, tc.title, tc.author, "")
+			assert.Equal(t, tc.author, in.author, "the author is still sent")
+			assert.True(t, in.parsed.SuspectAuthor, "the title is also asked alone")
+		})
+	}
+	// A possessive "s'" names the owner too.
+	b := f.book("Rick Steves' Italy", "Rick Steves", "")
+	in := f.svc.resolveSearchInputs(b, b.Title, "Rick Steves", "")
+	assert.Equal(t, "Rick Steves", in.author)
+	assert.False(t, in.parsed.SuspectAuthor)
+}
+
 // An authority read error never drops an author: it counts as known.
 func TestResolveSearchInputs_AuthorityFaultKeepsTheAuthor(t *testing.T) {
 	book := &database.Book{ID: "b1", Title: "The Essential Rumi"}
@@ -187,8 +215,8 @@ func TestResolveSearchInputs_DroppedAuthorFallsBackToAKnownAuthorFolder(t *testi
 	f := newShapeFixture(t)
 	knowPeople(t, f.store, asAuthor, "John Sample")
 	path := "/srv/example-organizer/John Sample/Example Worlds/Example Worlds - 4 - The First Empire/Example Worlds - 4 - The First Empire.m4b"
-	b := f.book("Example Worlds - 4 - The First Empire", "Example Worlds", path, "Example Worlds - 5 - The Second Empire")
-	title, author := f.svc.SearchQuestion(b, b.Title, "Example Worlds")
+	b := f.book("Example Worlds - 4 - The First Empire", "", path)
+	title, author := f.svc.SearchQuestion(b, b.Title, "[XYZ]")
 	assert.Equal(t, "The First Empire", title)
 	assert.Equal(t, "John Sample", author)
 
@@ -225,6 +253,19 @@ func TestResolveSearchInputs_SwapNeedsJunkEvidence(t *testing.T) {
 		assert.Equal(t, tc.title, title, "a biography is asked as stored")
 		assert.Equal(t, tc.author, author)
 	}
+
+	// A credit the hint cleans is no swap evidence by itself, whichever way
+	// the caller passes it: raw (the per-book dialog, the bulk fetch) or
+	// cleaned (the batch fetch). A copy suffix on a person-shaped name is
+	// none either.
+	for _, stored := range []string{"zzWalter Isaacson", "Walter Isaacson [XYZ]", "Walter Isaacson_copy1"} {
+		b := f.book("Steve Jobs", stored, "")
+		for _, passed := range []string{stored, SearchAuthorHint(stored)} {
+			title, author := f.svc.SearchQuestion(b, b.Title, passed)
+			assert.Equal(t, "Steve Jobs", title, "%q passed as %q", stored, passed)
+			assert.Equal(t, "Walter Isaacson", author, "%q passed as %q", stored, passed)
+		}
+	}
 }
 
 // End to end against a catalog shaped like Audible's: books of each census
@@ -249,6 +290,9 @@ func TestSearchFanout_CensusShapesAreFound(t *testing.T) {
 	for _, tc := range []struct {
 		title, query, author, wantASIN string
 		known                          []string
+		// raw: the caller sends the stored credit as is (the per-book
+		// dialog), not the batch's cleaned hint.
+		raw bool
 	}{
 		{title: "Example Worlds - 4 - The First Empire", author: "Example Worlds", wantASIN: "B0TEST0501"},
 		{title: "Onward", author: "zzJane Example", wantASIN: "B0TEST0502"},
@@ -256,7 +300,7 @@ func TestSearchFanout_CensusShapesAreFound(t *testing.T) {
 		{title: "read by narrator", query: "Some Example Saga, Book 2 (Unabridged)",
 			author: "Book 2 (Unabridged) & Some & Example Saga", wantASIN: "B0TEST0504"},
 		{title: "Meeting Point (2017) [Example World 3]", author: "Jane Example", wantASIN: "B0TEST0505"},
-		{title: "Jane Example", author: "Some Long Book_10-02", wantASIN: "B0TEST0506", known: []string{"Jane Example"}},
+		{title: "Jane Example", author: "Some Long Book_10-02", wantASIN: "B0TEST0506", known: []string{"Jane Example"}, raw: true},
 	} {
 		t.Run(tc.title, func(t *testing.T) {
 			query := tc.query
@@ -267,7 +311,11 @@ func TestSearchFanout_CensusShapesAreFound(t *testing.T) {
 			book := &database.Book{ID: "b1", Title: tc.title}
 			svc := fanoutHarness(t, book, audible)
 			knowPeople(t, svc.db, asAuthor, tc.known...)
-			resp, err := svc.SearchMetadataForBookWithOptions("b1", query, SearchAuthorHint(tc.author), "", "", SearchOptions{})
+			hint := SearchAuthorHint(tc.author)
+			if tc.raw {
+				hint = tc.author
+			}
+			resp, err := svc.SearchMetadataForBookWithOptions("b1", query, hint, "", "", SearchOptions{})
 			require.NoError(t, err)
 			require.NotEmpty(t, resp.Results, "the book must be found")
 			assert.Equal(t, tc.wantASIN, resp.Results[0].ASIN)

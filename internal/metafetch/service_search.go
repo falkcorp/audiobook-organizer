@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_search.go
-// version: 1.36.0
+// version: 1.37.0
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
 // last-edited: 2026-10-06
 
@@ -434,6 +434,39 @@ type legacyInputs struct {
 // (matchSearchFingerprint, CachedBatchVerdict) both use it, so a fingerprint
 // computed before a search names the same questions the search asks.
 func (mfs *Service) resolveSearchInputs(book *database.Book, query, author, narrator string) searchInputs {
+	return mfs.resolveSearchInputsWith(book, query, author, narrator, &resolveOpts{})
+}
+
+// resolveOpts are the identity checks' variations on resolveSearchInputs
+// (matchSearchFingerprint). A search always resolves with the zero value.
+type resolveOpts struct {
+	// prePR resolves as the ladder did before 2026-10-06: no author
+	// cleaning (legacyAuthorHint), no title normalisation
+	// (NameEvidence.Verbatim), no swap, no author-vs-title judgement beyond
+	// the exact author==title rule, no author folder. A row fetched then
+	// asked these questions for the same book.
+	prePR bool
+	// faultAsUnknown answers an authority or author-row read fault as "not
+	// known" instead of "known": a fault must not change which questions a
+	// row is judged against, so the checks accept either reading.
+	faultAsUnknown bool
+	// fault is set when such a read faulted.
+	fault bool
+}
+
+func (mfs *Service) resolveSearchInputsWith(book *database.Book, query, author, narrator string, opts *resolveOpts) searchInputs {
+	hint := SearchAuthorHint
+	if opts.prePR {
+		hint = legacyAuthorHint
+		// Before 2026-10-06 every caller passed the stored name (or "",
+		// resolved from AuthorID below); a caller now passes the cleaned
+		// hint, so the stored name is what that search was asked with.
+		if book.AuthorID != nil && strings.TrimSpace(author) != "" {
+			if a, aerr := mfs.db.GetAuthorByID(*book.AuthorID); aerr == nil && a != nil && SearchAuthorHint(a.Name) == SearchAuthorHint(author) {
+				author = a.Name
+			}
+		}
+	}
 	rawQuery := query
 	if rawQuery == "" {
 		rawQuery = book.Title
@@ -447,7 +480,7 @@ func (mfs *Service) resolveSearchInputs(book *database.Book, query, author, narr
 	// here, in the one resolver every search and fingerprint goes through,
 	// because the hint is refilled from AuthorID further down: stripping it
 	// only at a caller would put it straight back. See SearchAuthorHint.
-	searchAuthor := SearchAuthorHint(author)
+	searchAuthor := hint(author)
 	searchNarrator := strings.TrimSpace(narrator)
 
 	// Always resolve the book's own author and narrator for scoring tiebreaks,
@@ -460,7 +493,7 @@ func (mfs *Service) resolveSearchInputs(book *database.Book, query, author, narr
 	authorDropped := strings.TrimSpace(author) != "" && searchAuthor == ""
 	if bookAuthor == "" && book.AuthorID != nil {
 		if a, aerr := mfs.db.GetAuthorByID(*book.AuthorID); aerr == nil && a != nil {
-			bookAuthor = SearchAuthorHint(a.Name)
+			bookAuthor = hint(a.Name)
 			if bookAuthor == "" && !authorname.IsPlaceholderAuthor(a.Name) {
 				authorDropped = true
 			}
@@ -480,7 +513,7 @@ func (mfs *Service) resolveSearchInputs(book *database.Book, query, author, narr
 	}
 	// The narrator is sent as an author too (the swapped variant), so it gets
 	// the author's placeholder rule: "read by narrator" is never a hint.
-	bookNarrator = SearchAuthorHint(bookNarrator)
+	bookNarrator = hint(bookNarrator)
 
 	legacy := legacyInputs{title: searchTitle, author: searchAuthor, narrator: bookNarrator}
 	if strings.TrimSpace(legacy.title) == "" || legacy.title == "-" {
@@ -494,26 +527,28 @@ func (mfs *Service) resolveSearchInputs(book *database.Book, query, author, narr
 	// the title ("Magma Heart - Unknown Author", "read by Cathfach (Erryn's
 	// World)", "Jack Reacher 17: A Wanted Man (Jeff Harding)").
 	ev := mfs.nameEvidence(book)
-	// rawAuthor is the credit as stored, before SearchAuthorHint cleaned it:
-	// the batch fetch passes the cleaned hint, so the stored name is read
-	// from AuthorID. A cleaned-away suffix ("Some Book_10-02") is evidence
-	// that the credit was a file name, not a person.
-	rawAuthor := strings.TrimSpace(author)
-	if rawAuthor == "" && book.AuthorID != nil {
-		if a, aerr := mfs.db.GetAuthorByID(*book.AuthorID); aerr == nil && a != nil {
-			rawAuthor = strings.TrimSpace(a.Name)
+	ev.Verbatim = opts.prePR
+	// storedAuthor is the credit as stored -- the book's author row, else
+	// the caller's hint -- so the batch fetch (which passes the cleaned
+	// hint), the per-book dialog and the bulk fetch (which pass raw names)
+	// judge one book the same way.
+	storedAuthor := strings.TrimSpace(author)
+	if book.AuthorID != nil {
+		if a, aerr := mfs.db.GetAuthorByID(*book.AuthorID); aerr == nil && a != nil && strings.TrimSpace(a.Name) != "" {
+			storedAuthor = strings.TrimSpace(a.Name)
 		}
 	}
 	// Title and author swapped (a person's name as the title, a book name
 	// as the author): the title is a person the authority lists know as an
-	// author, the author is not, AND the author side carries positive junk
-	// evidence -- a file-name suffix the hint cleaned away, or a shape no
-	// person has. Without that evidence a person-titled book by another
-	// person is a biography ("Steve Jobs" by Walter Isaacson) and is asked
-	// as stored. Shape alone never swaps.
-	if title := strings.TrimSpace(metadata.ParseBookName(rawQuery, metadata.NameEvidence{}).Title); searchAuthor != "" &&
-		ev.IsKnownAuthor != nil && personShaped(title) && ev.IsKnownAuthor(title) && !mfs.knownAuthorOrFault(searchAuthor) &&
-		!sameNormalizedText(title, searchAuthor) && (SearchAuthorHint(rawAuthor) != rawAuthor || !personShaped(searchAuthor)) {
+	// author, the author is not, AND the stored credit carries positive junk
+	// evidence -- a file-copy or disc-track suffix ("Some Long Book_10-02")
+	// whose remainder is not person-shaped. A sort prefix, a release tag or
+	// "(Unabridged)" is no such evidence: "Steve Jobs" by "zzWalter
+	// Isaacson" is a biography and is asked as stored. Shape alone never
+	// swaps.
+	if title := strings.TrimSpace(metadata.ParseBookName(rawQuery, metadata.NameEvidence{}).Title); !opts.prePR && searchAuthor != "" &&
+		copySuffixJunk(storedAuthor) && ev.IsKnownAuthor != nil && personShaped(title) && ev.IsKnownAuthor(title) &&
+		!mfs.knownAuthor(searchAuthor, opts) && !sameNormalizedText(title, searchAuthor) {
 		rawQuery, searchAuthor = searchAuthor, title
 		searchTitle, literal = stripChapterFromTitle(rawQuery), stripChapterFromTitle(rawQuery)
 		if bookAuthor == "" || sameNormalizedText(bookAuthor, rawQuery) {
@@ -530,7 +565,14 @@ func (mfs *Service) resolveSearchInputs(book *database.Book, query, author, narr
 	// title-only question when it is merely suspect, kept as is otherwise.
 	if searchAuthor != "" {
 		exact := sameNormalizedText(searchAuthor, parsed.Title)
-		switch mfs.authorVsTitle(book.ID, searchAuthor, parsed, exact, rawQuery, literal, parsed.Title) {
+		verdict := authorKept
+		switch {
+		case opts.prePR && exact:
+			verdict = authorJunk
+		case !opts.prePR:
+			verdict = mfs.authorVsTitle(book.ID, searchAuthor, parsed, exact, opts, rawQuery, literal, parsed.Title)
+		}
+		switch verdict {
 		case authorJunk:
 			if sameNormalizedText(bookAuthor, searchAuthor) || sameNormalizedText(bookAuthor, parsed.Title) {
 				bookAuthor = ""
@@ -557,7 +599,7 @@ func (mfs *Service) resolveSearchInputs(book *database.Book, query, author, narr
 		searchTitle = t
 	}
 	if searchAuthor == "" {
-		searchAuthor = SearchAuthorHint(parsed.Author)
+		searchAuthor = hint(parsed.Author)
 		if bookAuthor == "" {
 			bookAuthor = searchAuthor
 		}
@@ -566,8 +608,9 @@ func (mfs *Service) resolveSearchInputs(book *database.Book, query, author, narr
 	// folder the authority lists know as an author ("John Sample/Example
 	// Worlds/..."). Otherwise the title is asked alone; an author is never
 	// guessed ("Pat Reader/Some Summoner/..." is a narrator's folder).
-	if searchAuthor == "" && authorDropped {
-		if a := knownAuthorFolder(book.FilePath, ev, mfs.isKnownNarrator); a != "" {
+	if searchAuthor == "" && authorDropped && !opts.prePR {
+		isNarrator := func(name string) bool { return mfs.knownNarrator(name, opts) }
+		if a := knownAuthorFolder(book.FilePath, ev, isNarrator); a != "" {
 			searchAuthor = a
 			if bookAuthor == "" {
 				bookAuthor = a
@@ -575,7 +618,7 @@ func (mfs *Service) resolveSearchInputs(book *database.Book, query, author, narr
 		}
 	}
 	if bookNarrator == "" {
-		bookNarrator = SearchAuthorHint(parsed.Narrator)
+		bookNarrator = hint(parsed.Narrator)
 	}
 
 	// If title is effectively empty but we have an author, use the author
@@ -665,31 +708,42 @@ const (
 )
 
 // authorVsTitle judges an author credit whose words may all be the title's.
-// exact: it equals the parsed title. It is JUNK only on positive evidence:
-// an author row whose every other book's title restates the credit (a series
-// or a title filed as an author), or a shape no person has (digits, a genre
-// tagline) -- one word is no evidence ("Moby", "Homer"). It is KEPT when the title names it as its owner ("Tom Clancy's
-// ...") or the parse read it as a credit segment ("Brandon Sanderson -
-// Mistborn"). An author the authority lists know (a lookup fault counts as
-// known: a read error never drops an author), or a person-shaped credit with
-// books of its own ("Stephen King": "The Stephen King Collection") or none
-// to judge, is SUSPECT: kept, with a title-only question added. An exact
-// author==title with no evidence either way keeps the rule it always had:
-// junk.
-func (mfs *Service) authorVsTitle(bookID, author string, parsed parsedTitle, exact bool, titles ...string) authorTitleVerdict {
+// exact: it equals the parsed title.
+//
+//   - JUNK only on positive evidence: a credit that is not person-shaped
+//     whose author row's every other book restates it (a series or a title
+//     filed as an author), or a shape no person's name has (digits, a genre
+//     tagline) -- one word is no evidence ("Moby", "Homer").
+//   - KEPT when the title names it as its owner ("Tom Clancy's ...", "Rick
+//     Steves' ...") or the parse read it as a credit segment ("Brandon
+//     Sanderson - Mistborn").
+//   - SUSPECT otherwise -- an author the authority lists know (a read fault
+//     counts as known, resolveOpts.faultAsUnknown aside), a person-shaped
+//     credit whose books all restate it ("Dave Barry Turns 50" beside "Dave
+//     Barry Slept Here"), one with other books or none to judge: kept, with
+//     a title-only question added.
+//
+// An exact author==title with no evidence either way keeps the rule it
+// always had: junk.
+func (mfs *Service) authorVsTitle(bookID, author string, parsed parsedTitle, exact bool, opts *resolveOpts, titles ...string) authorTitleVerdict {
 	if !exact && !restatesTitleWords(author, titles...) {
 		return authorKept
 	}
-	a := strings.ToLower(strings.TrimSpace(author))
 	for _, t := range titles {
-		lt := strings.ToLower(t)
-		if strings.Contains(lt, a+"'s") || strings.Contains(lt, a+"’s") {
+		if titleNamesItsOwner(t, author) {
 			return authorKept
 		}
 	}
-	known := mfs.knownAuthorOrFault(author)
-	row := mfs.authorRowOnlyRestates(author, bookID)
+	known := mfs.knownAuthor(author, opts)
+	row := mfs.authorRowOnlyRestates(author, bookID, opts)
+	// Every other book of the author row restates the credit: a series or a
+	// title filed as an author -- unless the credit is person-shaped, when
+	// it may be an author who names their books ("Dave Barry Turns 50"
+	// beside "Dave Barry Slept Here"): suspect, not junk.
 	if row == rowOnlyRestates && !known {
+		if personShaped(author) {
+			return authorSuspect
+		}
 		return authorJunk
 	}
 	// A credit segment ("Brandon Sanderson - Mistborn") names the author --
@@ -716,14 +770,63 @@ func (mfs *Service) authorVsTitle(bookID, author string, parsed parsedTitle, exa
 	return authorJunk
 }
 
-// knownAuthorOrFault reports whether the authority lists know name as an
-// author; a lookup fault answers true, so a read error never drops a credit.
-func (mfs *Service) knownAuthorOrFault(name string) bool {
+// knownAuthor reports whether the authority lists know name as an author. A
+// lookup fault is recorded on opts and answers true -- a read error never
+// drops a credit -- unless opts.faultAsUnknown.
+func (mfs *Service) knownAuthor(name string, opts *resolveOpts) bool {
+	return mfs.knownPersonAs(name, authority.RoleAuthor, opts)
+}
+
+// knownNarrator is knownAuthor for the narrator role: a fault answers true,
+// so a folder is no author evidence on a read error.
+func (mfs *Service) knownNarrator(name string, opts *resolveOpts) bool {
+	return mfs.knownPersonAs(name, authority.RoleNarrator, opts)
+}
+
+func (mfs *Service) knownPersonAs(name string, role authority.Role, opts *resolveOpts) bool {
 	if mfs == nil || mfs.db == nil {
 		return false
 	}
-	ok, err := authority.NewIndex(mfs.db).IsKnownPerson(name, authority.RoleAuthor)
-	return err != nil || ok
+	ok, err := authority.NewIndex(mfs.db).IsKnownPerson(name, role)
+	if err != nil {
+		opts.fault = true
+		return !opts.faultAsUnknown
+	}
+	return ok
+}
+
+// titleNamesItsOwner reports whether title names author as its owner: "Tom
+// Clancy's Op-Center", "Rick Steves' Italy".
+func titleNamesItsOwner(title, author string) bool {
+	lt, a := strings.ToLower(title), strings.ToLower(strings.TrimSpace(author))
+	if a == "" {
+		return false
+	}
+	for _, apos := range []string{"'", "’"} {
+		if strings.Contains(lt, a+apos+"s") {
+			return true
+		}
+		if strings.HasSuffix(a, "s") {
+			if i := strings.Index(lt, a+apos); i >= 0 {
+				rest := lt[i+len(a+apos):]
+				if rest == "" || rest[0] == ' ' {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// copySuffixJunk reports whether a stored credit ends in a file-copy or
+// disc-track suffix ("Some Long Book_10-02", "Some Title_copy1") and what is
+// left is not person-shaped: the credit is a file name, not a person.
+func copySuffixJunk(stored string) bool {
+	n := metadata.NormalizeNameText(stored)
+	if !copySuffixRe.MatchString(n) {
+		return false
+	}
+	return !personShaped(strings.TrimSpace(copySuffixRe.ReplaceAllString(n, "")))
 }
 
 // authorRowEvidence is what an author row says about a credit.
@@ -747,20 +850,27 @@ const maxAuthorRowBooks = 200
 // series or a title filed as an author ("Some Series" credited on "Some
 // Series 4" and "Some Series 5"); a row with any other book is a person's;
 // a row with no other book says nothing (rowNone).
-func (mfs *Service) authorRowOnlyRestates(name, selfID string) authorRowEvidence {
+func (mfs *Service) authorRowOnlyRestates(name, selfID string, opts *resolveOpts) authorRowEvidence {
 	if mfs == nil || mfs.db == nil {
+		return rowUnknown
+	}
+	fault := func() authorRowEvidence {
+		opts.fault = true
+		if opts.faultAsUnknown {
+			return rowNone
+		}
 		return rowUnknown
 	}
 	a, err := mfs.db.GetAuthorByName(name)
 	if err != nil {
-		return rowUnknown
+		return fault()
 	}
 	if a == nil {
 		return rowNone
 	}
 	books, err := mfs.db.GetBooksByAuthorIDCore(a.ID)
 	if err != nil {
-		return rowUnknown
+		return fault()
 	}
 	if len(books) > maxAuthorRowBooks {
 		return rowHasOtherBooks
@@ -812,16 +922,6 @@ func knownAuthorFolder(path string, ev metadata.NameEvidence, isNarrator func(st
 	return ""
 }
 
-// isKnownNarrator reports whether the authority lists know name as a
-// narrator. A lookup fault answers true: the folder is then no evidence.
-func (mfs *Service) isKnownNarrator(name string) bool {
-	if mfs == nil || mfs.db == nil {
-		return false
-	}
-	ok, err := authority.NewIndex(mfs.db).IsKnownPerson(name, authority.RoleNarrator)
-	return err != nil || ok
-}
-
 // sameNormalizedText reports whether a and b are the same text ignoring case,
 // punctuation and spacing ("Hammer Fall Rising" / "hammer fall rising").
 func sameNormalizedText(a, b string) bool {
@@ -850,6 +950,12 @@ func isCurrentFingerprint(fp string) bool {
 // from AuthorID, so renaming the author changes it. It carries
 // FingerprintPrefix.
 func (in searchInputs) fingerprint(bookTitle string) string {
+	return in.fingerprintWith(bookTitle, in.parsed.SuspectAuthor)
+}
+
+// fingerprintWith is fingerprint with the suspect-author question set as
+// given.
+func (in searchInputs) fingerprintWith(bookTitle string, suspect bool) string {
 	h := sha256.New()
 	parts := []string{searchInputVersion, bookTitle, in.title, in.author, in.narrator}
 	// Appended only when set, so a book whose ladder asks no ASIN question
@@ -860,7 +966,7 @@ func (in searchInputs) fingerprint(bookTitle string) string {
 	// Appended only when set, like the ASIN: a suspect author adds a
 	// title-only question (parsedTitle.SuspectAuthor), so a "nothing found"
 	// asked without it is re-asked.
-	if in.parsed.SuspectAuthor {
+	if suspect {
 		parts = append(parts, "suspect-author")
 	}
 	for _, part := range parts {
@@ -897,19 +1003,44 @@ const (
 	// fingerprintLegacy: the row was fetched by the version "1" ladder for
 	// the same book inputs. Valid for candidates, not for empty verdicts.
 	fingerprintLegacy
+	// fingerprintPrior: the row asked this book's questions as they read
+	// before a change that alters no identity -- the 2026-10-06 query rules
+	// (author cleaning, title normalisation; resolveOpts.prePR) or only the
+	// suspect-author title-only question. Valid for candidates and for the
+	// identity proof, not for empty verdicts: a "nothing found" is re-asked.
+	fingerprintPrior
 	fingerprintCurrent
 )
 
+// matchSearchFingerprint says how stored relates to the questions a search
+// for book would ask now. An authority or author-row read fault while
+// resolving is no change: the row is judged against both readings of it.
 func (mfs *Service) matchSearchFingerprint(stored string, book *database.Book, query, author, narrator string) fingerprintMatch {
 	if mfs == nil || mfs.db == nil || book == nil || stored == "" {
 		return fingerprintStale
 	}
-	in := mfs.resolveSearchInputs(book, query, author, narrator)
-	switch stored {
-	case in.fingerprint(book.Title):
-		return fingerprintCurrent
-	case in.legacyFingerprint(book.Title):
-		return fingerprintLegacy
+	opts := &resolveOpts{}
+	ins := []searchInputs{mfs.resolveSearchInputsWith(book, query, author, narrator, opts)}
+	if opts.fault {
+		ins = append(ins, mfs.resolveSearchInputsWith(book, query, author, narrator, &resolveOpts{faultAsUnknown: true}))
+	}
+	for _, in := range ins {
+		if stored == in.fingerprint(book.Title) {
+			return fingerprintCurrent
+		}
+	}
+	for _, in := range ins {
+		if stored == in.legacyFingerprint(book.Title) {
+			return fingerprintLegacy
+		}
+	}
+	for _, in := range ins {
+		if stored == in.fingerprintWith(book.Title, !in.parsed.SuspectAuthor) {
+			return fingerprintPrior
+		}
+	}
+	if stored == mfs.resolveSearchInputsWith(book, query, author, narrator, &resolveOpts{prePR: true}).fingerprintWith(book.Title, false) {
+		return fingerprintPrior
 	}
 	return fingerprintStale
 }
@@ -940,6 +1071,9 @@ func (mfs *Service) SearchAuthorFor(book *database.Book, query, author string) s
 // query and author hint actually asks providers: resolveSearchInputs, the one
 // resolver every search and fingerprint goes through. An author of "" means
 // the book is searched by title alone.
+//
+// Exported for the cross-package census test (internal/metabatch), which
+// runs the stand-in title resolver and this resolver together.
 func (mfs *Service) SearchQuestion(book *database.Book, query, author string) (title, queryAuthor string) {
 	if mfs == nil || mfs.db == nil || book == nil {
 		return strings.TrimSpace(query), SearchAuthorHint(author)
@@ -951,6 +1085,9 @@ func (mfs *Service) SearchQuestion(book *database.Book, query, author string) (t
 // SearchAsksTitleAlone reports whether that search also asks its title with
 // no author: the author resolved to "", or it is a suspect credit
 // (parsedTitle.SuspectAuthor) kept beside a title-only question.
+//
+// Exported for the cross-package census test (internal/metabatch), which
+// runs the stand-in title resolver and this resolver together.
 func (mfs *Service) SearchAsksTitleAlone(book *database.Book, query, author string) bool {
 	if mfs == nil || mfs.db == nil || book == nil {
 		return SearchAuthorHint(author) == ""
