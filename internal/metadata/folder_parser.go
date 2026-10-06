@@ -324,6 +324,12 @@ func folderBookName(s string, fm *FolderMetadata, ev NameEvidence) string {
 			fm.SeriesConf = ConfidenceMedium
 		}
 	}
+	// A first field that only repeated an ancestor folder ("Star Wars/Star
+	// Wars - Thrawn") is the series, with no position.
+	if b.Series != "" && b.Position == "" && b.Has(ShapeLeadingFolder) && fm.SeriesConf == ConfidenceNone {
+		fm.SeriesName = b.Series
+		fm.SeriesConf = ConfidenceLow
+	}
 	if b.Author != "" && fm.AuthorConf == ConfidenceNone && looksLikeFolderAuthor(b.Author) {
 		fm.Authors = splitMultipleAuthors(b.Author)
 		fm.AuthorConf = ConfidenceMedium

@@ -52,7 +52,8 @@ const (
 	ShapePlaceholderAuthor = "placeholder_author" // " - Unknown Author"
 	ShapeNarratorCredit    = "narrator_credit"    // " - read by X"
 	ShapeTrailingAuthor    = "trailing_author"    // "Title - Author" (transposed credit)
-	ShapeLeadingAuthor     = "leading_author"     // "Author - Series - Title"
+	ShapeLeadingAuthor     = "leading_author"     // "Author - Series - Title" (a known person)
+	ShapeLeadingFolder     = "leading_folder"     // "Star Wars/Star Wars - Thrawn": repeats an ancestor folder
 	ShapeLeadingYear       = "leading_year"       // "2018 - Blueshift"
 	ShapeTrackSuffix       = "track_suffix"       // " - 01" after a series slot, "(1 of 3)"
 	ShapeSeriesSlot        = "series_slot"        // "Series NN - Title", "Series - NN - Title", "Series Book NN"
@@ -197,6 +198,9 @@ func ParseBookName(raw string, ev NameEvidence) BookName {
 
 	f := splitDashFields(t)
 	ancestors := ancestorFolders(ev.Path)
+	// leadFolder is a first field removed because it repeats an ancestor
+	// folder's name (no person evidence): the series, unless a slot names one.
+	leadFolder := ""
 
 	// Trailing fields, innermost first: "Title - Author - read by X - Unknown
 	// Author" peels all three.
@@ -241,14 +245,22 @@ leading:
 		case b.Year == "" && leadingYearSegRe.MatchString(first):
 			b.Year = first
 			b.Shapes = append(b.Shapes, ShapeLeadingYear)
-		case b.Author == "" && (anyPerson(ev.Authors, first) || ev.knownAuthor(first) ||
-			// A folder match is weaker evidence than a known person: a
-			// series folder looks the same ("Reclaiming Honor/Reclaiming
-			// Honor - 02 - Claimed by Honor"), so a first field followed by
-			// a bare number is that series' slot, not an author.
-			(ancestorAuthor(ancestors, first) && !bareNumberSegRe.MatchString(f.segs[1]))):
+		case b.Author == "" && (anyPerson(ev.Authors, first) || ev.knownAuthor(first)):
+			// Person evidence: the book's own author or an authority-known
+			// author.
 			b.Author = first
 			b.Shapes = append(b.Shapes, ShapeLeadingAuthor)
+		case b.Author == "" && leadFolder == "" && ancestorFolder(ancestors, first) && !bareNumberSegRe.MatchString(f.segs[1]):
+			// A first field that only repeats an ancestor folder's name is
+			// NOT person evidence: a top-level series folder has the same
+			// shape as an author folder ("Star Wars/Star Wars - Thrawn",
+			// "Doctor Who/Doctor Who - The Pescatons"). It is removed from
+			// the title and kept as the series when no slot names another
+			// (below) -- never an author. A first field followed by a bare
+			// number is that series' slot ("Reclaiming Honor/Reclaiming
+			// Honor - 02 - Claimed by Honor"), read by readSeriesSlot.
+			leadFolder = first
+			b.Shapes = append(b.Shapes, ShapeLeadingFolder)
 		default:
 			break leading
 		}
@@ -267,6 +279,9 @@ leading:
 			b.Shapes = dropShape(dropShape(b.Shapes, ShapeSeriesSlot), ShapeSubseries)
 			b.readSeriesSlot(f)
 		}
+	}
+	if leadFolder != "" && b.Series == "" {
+		b.Series = leadFolder
 	}
 	b.Title = f.text()
 	if b.Title == "" {
@@ -441,13 +456,11 @@ func ancestorFolders(path string) []string {
 	return out
 }
 
-// ancestorAuthor reports whether name equals an ancestor folder that is
-// author-shaped (looksLikeFolderAuthor): the layout "<author>/.../<author> -
-// <title>" names the author twice.
-func ancestorAuthor(ancestors []string, name string) bool {
-	if !looksLikeFolderAuthor(name) {
-		return false
-	}
+// ancestorFolder reports whether name equals one of the ancestor folders
+// (authorjunk.SamePersonName folding: case, punctuation, "Last, First").
+// Equality alone says only that the folder names the same thing -- an author
+// or a series; ParseBookName never reads it as a person.
+func ancestorFolder(ancestors []string, name string) bool {
 	for _, a := range ancestors {
 		if authorjunk.SamePersonName(a, name) {
 			return true

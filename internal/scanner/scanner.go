@@ -902,6 +902,11 @@ type Book struct {
 	// several books is one the organizer would move wholesale.
 	sharesDirectory bool
 
+	// folderParse holds the identity values this scan took from the folder
+	// parse (metadata.ExtractMetadataFromFolder via AssembleBookMetadata), so
+	// a rescan of an EXISTING row never takes them (folderDerivedLocks).
+	folderParse folderParsed
+
 	// chapterSequence marks a book consolidateChapterGroups built from one
 	// chapter key, three or more files, every file short. That is proof it is
 	// one work rather than an author shelf, so createBookFilesForBook's
@@ -1692,6 +1697,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 			fileCount := countAudioFilesInDir(dirPath, config.AppConfig.SupportedExtensions)
 			bm, bmErr := metadata.AssembleBookMetadata(dirPath, firstFile, fileCount, 0)
 			if bmErr == nil {
+				books[idx].folderParse = folderParsedFrom(bm)
 				if bm.Title != "" {
 					books[idx].Title = bm.Title
 				}
@@ -1784,6 +1790,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 				scanLog.Warn("AssembleBookMetadata failed for %s: %v", dirPath, bmErr)
 				fallbackUsed = true
 			} else {
+				books[idx].folderParse = folderParsedFrom(bm)
 				if bm.Title != "" {
 					books[idx].Title = bm.Title
 				}
@@ -4027,9 +4034,14 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 		if s, ok := book.rowSnaps[existing.ID]; ok {
 			snap = &s
 		}
+		// The folder parse never rewrites an existing row's title, author or
+		// series (owner, 2026-10-05: "search + new imports only"): those
+		// columns are held as if locked, and maintenance.reparse-folder-names
+		// lists the rows the parse would change for approval.
+		mergeLocks := folderDerivedLocks(locked, book)
 		kept := 0
 		written, uerr := getStore().ModifyBook(existing.ID, func(cur *database.Book) error {
-			kept = mergeScannedKeepingForeignEdits(cur, dbBook, locked, snap)
+			kept = mergeScannedKeepingForeignEdits(cur, dbBook, mergeLocks, snap)
 			return nil
 		})
 		if uerr != nil {

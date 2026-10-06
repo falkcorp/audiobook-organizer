@@ -112,10 +112,11 @@ func TestParseBookName_CensusShapes(t *testing.T) {
 			shapes: []string{ShapeLeadingAuthor},
 		},
 		{
-			name: "author segment named by an ancestor folder", raw: "Dorian Vex - Ironclad 02 - The Long Watch",
+			// A folder repeat is no person evidence: removed, never an author.
+			name: "leading segment that repeats an ancestor folder", raw: "Dorian Vex - Ironclad 02 - The Long Watch",
 			ev:    NameEvidence{Path: "/srv/library/Dorian Vex/Ironclad/Dorian Vex - Ironclad 02 - The Long Watch/book.m4b"},
-			title: "Ironclad 02 - The Long Watch", search: "The Long Watch", author: "Dorian Vex",
-			series: "Ironclad", position: "02", shapes: []string{ShapeLeadingAuthor, ShapeSeriesSlot},
+			title: "Ironclad 02 - The Long Watch", search: "The Long Watch",
+			series: "Ironclad", position: "02", shapes: []string{ShapeLeadingFolder, ShapeSeriesSlot},
 		},
 		{
 			name: "explicit count suffix", raw: "The Glass Tower (1 of 3)",
@@ -221,4 +222,39 @@ func TestExtractMetadataFromFolder_FolderRegressions(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, tc.title, fm.Title, tc.path)
 	}
+}
+
+// A top-level SERIES folder has the shape of an author folder: the folder
+// parse must read "<Series>/<Series> - <Title>" as a series, never credit the
+// series as the author (main gave no author; an earlier draft of the shared
+// parser gave "Doctor Who"). With an author folder above, the author comes
+// from it.
+func TestExtractMetadataFromFolder_TopLevelSeriesFolderIsNoAuthor(t *testing.T) {
+	for _, tc := range []struct {
+		path, title, series string
+		authors             []string
+	}{
+		{"/srv/library/Doctor Who/Doctor Who - The Pescatons", "The Pescatons", "Doctor Who", nil},
+		{"/srv/library/Star Wars/Star Wars - Thrawn", "Thrawn", "Star Wars", nil},
+		{"/srv/library/Harry Potter/Harry Potter - The Philosopher's Stone", "The Philosopher's Stone", "Harry Potter", nil},
+		{"/srv/library/Sherlock Holmes/Sherlock Holmes - The Sign of Four", "The Sign of Four", "Sherlock Holmes", nil},
+		{"/srv/library/Timothy Zahn/Star Wars/Star Wars - Thrawn", "Thrawn", "Star Wars", []string{"Timothy Zahn"}},
+	} {
+		fm, err := ExtractMetadataFromFolder(tc.path)
+		assert.NoError(t, err)
+		assert.Equal(t, tc.authors, fm.Authors, tc.path)
+		assert.Equal(t, tc.title, fm.Title, tc.path)
+		assert.Equal(t, tc.series, fm.SeriesName, tc.path)
+	}
+	// The search side: the series lead is removed from the query, and is no
+	// author either.
+	b := ParseBookName("Star Wars - Thrawn", NameEvidence{Path: "/srv/library/Star Wars/Star Wars - Thrawn/book.m4b"})
+	assert.Equal(t, "Thrawn", b.Title)
+	assert.Empty(t, b.Author)
+	assert.Equal(t, "Star Wars", b.Series)
+	// Person evidence (the book's own author) still makes it an author.
+	b = ParseBookName("Mara Quill - The Paper Garden", NameEvidence{Authors: []string{"Mara Quill"},
+		Path: "/srv/library/Mara Quill/Mara Quill - The Paper Garden/book.m4b"})
+	assert.Equal(t, "Mara Quill", b.Author)
+	assert.Empty(t, b.Series)
 }
