@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/consolidation_leftovers_fixer_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 240c6560-a115-459f-a156-ce41853ac125
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package maintenance
 
@@ -335,4 +335,49 @@ func TestLeftovers_ScopeRefusesLibraryRoot(t *testing.T) {
 	_, ok = leftoverScope("/x/file.mp3", nil)
 	require.False(t, ok)
 	require.True(t, errors.Is(&os.PathError{Err: syscall.ENOENT}, os.ErrNotExist))
+}
+
+// TestLeftovers_ITunesOwnership (owner decision 2026-10-06): a row's bare
+// iTunes path reference does not make a leftover iTunes-owned (it plans and
+// applies); a persistent id or a file inside an iTunes Media folder does.
+func TestLeftovers_ITunesOwnership(t *testing.T) {
+	f := newLFFixture(t)
+	po := f.leftover(t, "PO", "lib/B1/S1/01 - One/01 - One.m4b", 3100, "")
+	f.combined(t, "CPO", "lib/B1/S1/One", map[string]int{"One - 01.m4b": 3100}, nil)
+	_, err := f.s.ModifyBookFile(po, f.rowIDs["PO"], func(bf *database.BookFile) error {
+		bf.ITunesPath = "file://localhost/W:/audiobook-organizer/B1/S1/01%20-%20One/01%20-%20One.m4b"
+		return nil
+	})
+	require.NoError(t, err)
+	pid := f.leftover(t, "PID", "lib/B2/S2/02 - Two/02 - Two.m4b", 3200, "")
+	f.combined(t, "CPID", "lib/B2/S2/Two", map[string]int{"Two - 02.m4b": 3200}, nil)
+	_, err = f.s.ModifyBookFile(pid, f.rowIDs["PID"], func(bf *database.BookFile) error {
+		bf.ITunesPersistentID = "0123456789ABCDEF"
+		return nil
+	})
+	require.NoError(t, err)
+	med := f.leftover(t, "MED", "lib/B3/iTunes Media/Audiobooks/03 - Three/03.m4b", 3300, "")
+	f.combined(t, "CMED", "lib/B3/iTunes Media/Audiobooks/Three", map[string]int{"Three - 03.m4b": 3300}, nil)
+
+	res := f.planLF(t, "op-plan")
+	r, ok := lfRow(res, po)
+	require.True(t, ok)
+	require.Equal(t, leftoverClassRetire, r.Class, r.Reason)
+	require.True(t, r.Applicable(), r.SkipReason)
+	for _, id := range []string{pid, med} {
+		r, ok := lfRow(res, id)
+		require.True(t, ok)
+		require.Equal(t, leftoverClassITunes, r.Class, r.Reason)
+		require.Equal(t, leftoverSkipITunes, r.Skipped, r.SkipReason)
+	}
+	out := f.applyLF(t, "op-plan", "op-apply", []string{"leftover:" + po})
+	require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+	b, err := f.s.GetBookByID(po)
+	require.NoError(t, err)
+	require.True(t, b.IsSoftDeleted())
+	rows, err := f.s.GetBookFiles(po)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.True(t, rows[0].Missing)
+	require.NotEmpty(t, rows[0].ITunesPath, "the iTunes reference on the row is left as it was")
 }

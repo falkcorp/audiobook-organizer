@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/consolidation_leftovers_fixer.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6df37df9-b008-41ad-bd69-47b00e4cb50c
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package maintenance
 
@@ -465,13 +465,7 @@ func (s *leftoverSource) decide(ctx context.Context, id string, st *leftoverStat
 		if err != nil {
 			return "", false, fmt.Errorf("external ids of %s: %w", bc.ID, err)
 		}
-		ps := []string{bc.FilePath}
-		ff := make([]fragFile, 0, len(rs))
-		for _, r := range rs {
-			ps = append(ps, r.FilePath)
-			ff = append(ff, fragFile{ID: r.ID, ITunesPID: r.ITunesPersistentID, ITunesPath: r.ITunesPath})
-		}
-		why, doubt := itunesCopyWhy(res, bc.ID, dcStr(bc.ITunesPersistentID), ps, ff, exts)
+		why, doubt := leftoverITunesWhy(res, bc, rs, exts)
 		return why, doubt, nil
 	}
 	why, doubt, err := itunesOf(&core, rows)
@@ -651,6 +645,51 @@ func leftoverWalkOwners(store OpsStore, scope string, size int64, seen map[strin
 		return nil, fmt.Errorf("walk %s: %w", scope, err)
 	}
 	return out, nil
+}
+
+// leftoverITunesWhy names why a book is iTunes-owned for this fixer ("" when
+// it is not): a book or row iTunes persistent id, an un-tombstoned itunes
+// external id (the persistent-id mapping), or a file inside the iTunes media
+// folder (books/itunes/** with symlinks resolved, or any "iTunes Media"
+// folder). doubt: a path could not be settled.
+//
+// Unlike itunesCopyWhy it does NOT count a row's bare iTunes path reference
+// (owner decision 2026-10-06): the 09-06 leftovers carry the iTunes
+// library's reference to the organizer folder in itunes_path, and that alone
+// does not make the book iTunes-owned. itunesCopyWhy is shared with the
+// duplicate-copies and fragment fixers, so this fixer keeps its own check
+// rather than change theirs. retireInto still refuses a book or row with a
+// persistent id and an un-tombstoned itunes external id.
+func leftoverITunesWhy(res *repairs.PathResolver, b *database.BookCore, rows []database.BookFileCore, exts []database.ExternalIDMapping) (why string, doubt bool) {
+	if pid := dcStr(b.ITunesPersistentID); pid != "" {
+		return "book iTunes id " + pid, false
+	}
+	for _, r := range rows {
+		if r.ITunesPersistentID != "" {
+			return "row iTunes id " + r.ITunesPersistentID, false
+		}
+	}
+	for _, e := range exts {
+		if e.Source == "itunes" && e.ExternalID != "" && !e.Tombstoned {
+			return "itunes external id " + e.ExternalID, false
+		}
+	}
+	paths := []string{b.FilePath}
+	for _, r := range rows {
+		paths = append(paths, r.FilePath)
+	}
+	for _, p := range paths {
+		if strings.Contains(p, string(filepath.Separator)+"iTunes Media"+string(filepath.Separator)) {
+			return "file inside an iTunes Media folder: " + p, false
+		}
+	}
+	switch k, w := repairs.GuardBookPathsWith(res, b.ID, paths, ""); k {
+	case repairs.SkipITunes:
+		return w, false
+	case repairs.SkipGuardUnreadable:
+		return "", true
+	}
+	return "", false
 }
 
 func appendUnique(list []string, v string) []string {

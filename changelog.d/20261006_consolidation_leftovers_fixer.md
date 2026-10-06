@@ -13,8 +13,12 @@
     sides have one. The disk stats run on a bounded pool of 8.
   - Ambiguous owners, hash disagreements, split owners, a present book
     path, an unsafe scope folder or a stat error are held. Leftovers with
-    no match (`no-match`) and iTunes books (`itunes`) are their own
-    never-applicable classes. Doctor Who / Big Finish / Torchwood are held
+    no match (`no-match`) and iTunes-owned books (`itunes`) are their own
+    never-applicable classes. iTunes-owned means a book or row iTunes
+    persistent id, an itunes external id, or a file inside the iTunes media
+    folder; a row's bare iTunes path reference does not count (owner
+    decision 2026-10-06; a fixer-local check, so the other fixers' shared
+    `itunesCopyWhy` is unchanged). Doctor Who / Big Finish / Torchwood are held
     by the framework guard.
   - Apply re-plans under the merge lock (with a fresh walk of the scope
     folder), marks each dead row Missing in place (journaled, never
