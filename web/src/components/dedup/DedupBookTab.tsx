@@ -1,9 +1,9 @@
 // file: web/src/components/dedup/DedupBookTab.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: 71F51230-1BB6-4864-A1EB-120EE776D673
-// last-edited: 2026-09-25
+// last-edited: 2026-10-06
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Box,
   Typography,
@@ -35,6 +35,9 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import FolderIcon from '@mui/icons-material/Folder';
 import * as api from '../../services/api';
 import type { Book, Operation } from '../../services/api';
+import { useRowSelection } from '../../hooks/useRowSelection';
+import { SelectAllMatchingBanner } from '../common/SelectAllMatchingBanner';
+import { BulkConfirmDialog } from '../common/BulkConfirmDialog';
 import {
   cleanDisplayTitle,
   OperationProgress,
@@ -69,6 +72,19 @@ function describeMergeFailure(final: Operation): string {
   return final.error_message || `Merge ended with status "${final.status}"`;
 }
 
+/**
+ * A group's identity: its sorted book ids. NOT its array index -- groups are
+ * removed from the list after a single merge, which shifted every later index
+ * so the selection and the per-group "keep" choice silently moved to the NEXT
+ * group (and a later merge could keep a book from a different group).
+ */
+export function bookGroupKey(group: Book[]): string {
+  return `group-${group
+    .map((b) => b.id)
+    .sort()
+    .join('|')}`;
+}
+
 export function DedupBookTab() {
   const [groups, setGroups] = useState<Book[][]>([]);
   const [totalDuplicates, setTotalDuplicates] = useState(0);
@@ -78,9 +94,24 @@ export function DedupBookTab() {
   const [mergeSuccess, setMergeSuccess] = useState<string | null>(null);
   const [mergeReport, setMergeReport] = useState<MergeReport | null>(null);
   const [keepSelections, setKeepSelections] = useState<Record<string, string>>({});
-  const [selectedGroups, setSelectedGroups] = useState<Set<string>>(new Set());
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmSelectedOpen, setConfirmSelectedOpen] = useState(false);
   const pagination = usePagination(groups.length);
+  const allGroupKeys = useMemo(() => groups.map(bookGroupKey), [groups]);
+  const pageGroups = groups.slice(pagination.startIdx, pagination.endIdx);
+  const pageKeys = useMemo(
+    () => allGroupKeys.slice(pagination.startIdx, pagination.endIdx),
+    [allGroupKeys, pagination.startIdx, pagination.endIdx]
+  );
+  // Client-side list: allKeys is the whole set, so "select all matching"
+  // materialises every group key and merges keep working on keys.
+  const selection = useRowSelection<string>({
+    pageKeys,
+    totalMatching: groups.length,
+    resetKey: String(pagination.rowsPerPage),
+    allKeys: allGroupKeys,
+  });
+  const { clear: clearSelection } = selection;
 
   const fetchDuplicates = useCallback(async () => {
     setLoading(true);
@@ -90,17 +121,17 @@ export function DedupBookTab() {
       setGroups(data.groups || []);
       setTotalDuplicates(data.duplicate_count || 0);
       const defaults: Record<string, string> = {};
-      (data.groups || []).forEach((g, i) => {
-        if (g.length > 0) defaults[`group-${i}`] = g[0].id;
+      (data.groups || []).forEach((g) => {
+        if (g.length > 0) defaults[bookGroupKey(g)] = g[0].id;
       });
       setKeepSelections(defaults);
-      setSelectedGroups(new Set());
+      clearSelection();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch duplicates');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [clearSelection]);
 
   useEffect(() => {
     fetchDuplicates();
@@ -126,12 +157,8 @@ export function DedupBookTab() {
           reportFailure(describeMergeFailure(final));
         } else {
           setMergeSuccess(`Merged duplicates of "${group[0]?.title}"`);
-          setGroups((prev) => prev.filter((_, i) => `group-${i}` !== groupKey));
-          setSelectedGroups((prev) => {
-            const next = new Set(prev);
-            next.delete(groupKey);
-            return next;
-          });
+          setGroups((prev) => prev.filter((g) => bookGroupKey(g) !== groupKey));
+          selection.replace([...selection.selected].filter((k) => k !== groupKey));
         }
       },
       reportFailure
@@ -159,7 +186,7 @@ export function DedupBookTab() {
     const failures: MergeFailure[] = [];
     for (const i of indices) {
       const group = groups[i];
-      const keepId = keepSelections[`group-${i}`];
+      const keepId = group ? keepSelections[bookGroupKey(group)] : undefined;
       if (!group || !keepId) continue;
       const mergeIds = group.filter((b) => b.id !== keepId).map((b) => b.id);
       const title = cleanDisplayTitle(group[0]?.title || 'Unknown');
@@ -192,30 +219,20 @@ export function DedupBookTab() {
   };
 
   const handleMergeSelected = async () => {
-    const indices = groups.map((_, i) => i).filter((i) => selectedGroups.has(`group-${i}`));
+    setConfirmSelectedOpen(false);
+    const indices = groups.map((_, i) => i).filter((i) => selection.selected.has(allGroupKeys[i]));
     await runBulkMerge(indices);
+  };
+
+  // A selection wider than the page needs a confirmation with its count.
+  const requestMergeSelected = () => {
+    if (selection.selectedCount > pageKeys.length) setConfirmSelectedOpen(true);
+    else void handleMergeSelected();
   };
 
   const handleMergeAll = async () => {
     setConfirmOpen(false);
     await runBulkMerge(groups.map((_, i) => i));
-  };
-
-  const toggleGroup = (key: string) => {
-    setSelectedGroups((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  };
-
-  const toggleAll = () => {
-    if (selectedGroups.size === groups.length) {
-      setSelectedGroups(new Set());
-    } else {
-      setSelectedGroups(new Set(groups.map((_, i) => `group-${i}`)));
-    }
   };
 
   const busy = activeOp !== null;
@@ -235,18 +252,15 @@ export function DedupBookTab() {
         <Stack direction="row" spacing={1}>
           {groups.length > 0 && (
             <>
-              <Button size="small" onClick={toggleAll} disabled={busy}>
-                {selectedGroups.size === groups.length ? 'Deselect All' : 'Select All'}
-              </Button>
-              {selectedGroups.size > 0 && (
+              {selection.selectedCount > 0 && (
                 <Button
                   variant="contained"
                   color="primary"
                   startIcon={<MergeIcon />}
-                  onClick={handleMergeSelected}
+                  onClick={requestMergeSelected}
                   disabled={busy}
                 >
-                  Merge Selected ({selectedGroups.size})
+                  Merge Selected ({selection.selectedCount})
                 </Button>
               )}
               <Button
@@ -312,10 +326,14 @@ export function DedupBookTab() {
           <CircularProgress />
         </Box>
       ) : groups.length === 0 ? (
-        <Paper sx={{ p: 4, textAlign: 'center' }}>
-          <CheckCircleIcon sx={{ fontSize: 48, color: 'success.main', mb: 1 }} />
-          <Typography variant="h6">No duplicate books found</Typography>
-        </Paper>
+        // A failed fetch already shows its error above; "no duplicates" under
+        // it would contradict it.
+        error ? null : (
+          <Paper sx={{ p: 4, textAlign: 'center' }}>
+            <CheckCircleIcon sx={{ fontSize: 48, color: 'success.main', mb: 1 }} />
+            <Typography variant="h6">No duplicate books found</Typography>
+          </Paper>
+        )
       ) : (
         <>
           <PaginationControls
@@ -325,19 +343,42 @@ export function DedupBookTab() {
             onPageChange={pagination.setPage}
             onRowsPerPageChange={pagination.setRowsPerPage}
           />
+          <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1 }}>
+            <Checkbox
+              size="small"
+              checked={selection.header.checked}
+              indeterminate={selection.header.indeterminate}
+              disabled={busy || selection.header.disabled}
+              onChange={selection.togglePage}
+              slotProps={{
+                input: { 'aria-label': `Select all ${pageKeys.length} groups on this page` },
+              }}
+            />
+            <Typography variant="caption" color="text.secondary">
+              Select page · Shift-click a checkbox to select a range
+            </Typography>
+          </Stack>
+          <SelectAllMatchingBanner
+            selection={selection}
+            pageCount={pageKeys.length}
+            totalMatching={groups.length}
+            noun="groups"
+            testIdPrefix="book-groups-select-all"
+          />
           <Stack spacing={2}>
-            {groups.slice(pagination.startIdx, pagination.endIdx).map((group, sliceIdx) => {
-              const idx = pagination.startIdx + sliceIdx;
-              const groupKey = `group-${idx}`;
+            {pageGroups.map((group, sliceIdx) => {
+              const groupKey = pageKeys[sliceIdx];
               return (
                 <Card key={groupKey} variant="outlined">
                   <CardContent>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
                       <Checkbox
-                        checked={selectedGroups.has(groupKey)}
-                        onChange={() => toggleGroup(groupKey)}
+                        {...selection.checkboxProps(groupKey)}
                         disabled={busy}
                         size="small"
+                        slotProps={{
+                          input: { 'aria-label': `Select group ${cleanDisplayTitle(group[0]?.title || '')}` },
+                        }}
                       />
                       <Typography
                         variant="subtitle1"
@@ -426,6 +467,18 @@ export function DedupBookTab() {
           </Button>
         </DialogActions>
       </Dialog>
+      <BulkConfirmDialog
+        open={confirmSelectedOpen}
+        title={`Merge ${selection.selectedCount} selected groups?`}
+        confirmLabel={`Merge ${selection.selectedCount}`}
+        onCancel={() => setConfirmSelectedOpen(false)}
+        onConfirm={() => void handleMergeSelected()}
+        testId="book-merge-selected-confirm"
+      >
+        The selection covers {selection.selectedCount} groups, more than the {pageKeys.length} on
+        this page. Each group is merged into the book chosen as Keep; the result lists every
+        failure.
+      </BulkConfirmDialog>
     </Box>
   );
 }
