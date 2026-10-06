@@ -29,9 +29,9 @@
 //     numbers are all different is ("Part 102-Chapter 2": 102), else two
 //     slots read as a pair ("Blood Music 2-1"); anything else is held
 //     (skipped_set_numbering). Numbers must run from 0 or 1 with no gap: a
-//     run of 1xx, 2xx numbers whose last two digits each restart is a disc
-//     and its tracks (an explained gap); any other gap is held and listed
-//     (skipped_chapter_gaps);
+//     run of 1xx, 2xx numbers is read as a disc and its tracks when that
+//     explains the jumps (the jump is no gap; a missing track still is); any
+//     gap is held and listed (skipped_chapter_gaps);
 //   - the length: the kept chapters total at least fragFolderSetMinSec
 //     (skipped_set_too_short), each still under the repairs' chapter limit
 //     (the no-parent duration gate);
@@ -422,8 +422,11 @@ func fragFolderSetOf(lib *fragLibrary, dir, key string, cs []*fragCandidate) *fr
 			hundreds[i] = [2]int{p[1] / 100, p[1] % 100}
 		}
 		if ok {
-			if g2, d2 := fragNumberGaps(hundreds); len(g2) == 0 {
-				pairs, gaps, desc = hundreds, nil, d2
+			// Read as discs when that explains the jumps: no gap left, or
+			// fewer than the flat reading leaves (then the rest are listed
+			// as disc-track gaps, "1-01").
+			if g2, d2 := fragNumberGaps(hundreds); len(g2) < len(gaps) {
+				pairs, gaps, desc = hundreds, g2, d2
 				set.explained = "numbered by disc in the hundreds (1xx, 2xx …): the jump between discs is no gap"
 			}
 		}
@@ -652,6 +655,9 @@ func (f *fragmentFixer) folderSetEvidence(r *repairs.Row, set *fragFolderSet) {
 	}
 	switch {
 	case len(set.gaps) > 0:
+		if set.explained != "" {
+			ev += "; " + set.explained
+		}
 		ev += fmt.Sprintf("; gaps: %s missing", fragFormatGaps(set.gaps))
 	case set.explained != "":
 		ev += "; " + set.explained

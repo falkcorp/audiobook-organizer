@@ -196,6 +196,14 @@ func TestFragmentFixer_FolderChapterSet(t *testing.T) {
 		require.Contains(t, strings.Join(r.Evidence, "\n"), "disc in the hundreds")
 		require.Equal(t, "Some Work (Unabridged)", r.Proposed["title"])
 	})
+	t.Run("disc numbering with a missing track names the track", func(t *testing.T) {
+		f := newFragFixture(t)
+		stem := func(i int) string { return fmt.Sprintf("Some Work (Unabridged) Part %d-Chapter %d", i, i%100) }
+		f.folderSet(t, setDir, []int{102, 103, 201, 202, 203}, stem, 1200, 90000)
+		r := findRow(t, f.plan(t, "op-plan"), setRowID(f, setDir, "some work unabridged part # chapter #"))
+		require.Equal(t, fragSkipChapterGaps, r.Skipped)
+		require.Contains(t, r.SkipReason, "gaps: 1-01 missing")
+	})
 	t.Run("under an hour is held", func(t *testing.T) {
 		f := newFragFixture(t)
 		f.folderSet(t, setDir, seq(1, 6), someWorkStem, 300, 9000)
