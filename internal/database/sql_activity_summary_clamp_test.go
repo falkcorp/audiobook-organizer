@@ -1,5 +1,5 @@
 // file: internal/database/sql_activity_summary_clamp_test.go
-// version: 1.2.7
+// version: 1.3.0
 // guid: 8b47e0c9-2f13-45da-9e60-c4a1d5382bf7
 // last-edited: 2026-10-06
 
@@ -7,6 +7,7 @@ package database
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"slices"
@@ -362,8 +363,15 @@ func requireTruncateOnlyAfterCompletePassive(t *testing.T, calls []ckptCall) {
 // inherits everything written during that whole copy (the 2026-10-06 CI
 // failure: a 6.13 s PASSIVE, then a 3.79 s TRUNCATE).
 //
-// It is an independent oracle for passiveNewFrames, not a call to it, so a bug
-// in the production arithmetic does not also blind the test.
+// It is NOT an independent oracle. It recomputes the rule from the recorded
+// results instead of calling passiveNewFrames, so an edit to one does not
+// silently edit the other, but it encodes the same rule, with only the
+// Log-below-previous restart signal (it cannot see the WAL header generation
+// production also reads, so after an unseen restart it can undercount exactly
+// where production's fallback would). What it checks is that the trace obeys
+// the rule, not that the rule bounds the TRUNCATE's copy. The quantity that
+// rule exists to bound, how many frames the TRUNCATE itself copied, is
+// truncateCopiedFrames, which is measured, not derived; the tests log it.
 func requireTruncateLeftoverBounded(t *testing.T, calls []ckptCall) {
 	t.Helper()
 	for k, c := range calls {
@@ -394,6 +402,41 @@ func requireTruncateLeftoverBounded(t *testing.T, calls []ckptCall) {
 	}
 }
 
+// truncateCopiedFrames is, for each TRUNCATE in calls, how many frames it
+// copied that the PASSIVE right before it had not (its Checkpointed minus that
+// PASSIVE's): the frames it copied while holding the WAL write lock. -1 when
+// the TRUNCATE reported no counts. Logged for diagnosis; the bound on it is
+// statistical (frames written during one short PASSIVE plus the reset wait),
+// so asserting it would bring back the wall-clock flake shape.
+func truncateCopiedFrames(calls []ckptCall) []int {
+	var out []int
+	for k, c := range calls {
+		if c.mode != "TRUNCATE" || k == 0 {
+			continue
+		}
+		if c.res.Checkpointed < 0 || calls[k-1].res.Checkpointed < 0 {
+			out = append(out, -1)
+			continue
+		}
+		out = append(out, c.res.Checkpointed-calls[k-1].res.Checkpointed)
+	}
+	return out
+}
+
+// requireFixtureOutgrowsLeftoverBound fails a test whose VACUUM left no more
+// than vacuumTruncateMaxLeftoverFrames frames. requireTruncateLeftoverBounded
+// only tells a single-PASSIVE-then-TRUNCATE implementation apart from the
+// converging one when that first PASSIVE had MORE than the bound to copy; with
+// a smaller fixture the old code passes it too, and the test proves nothing.
+func requireFixtureOutgrowsLeftoverBound(t *testing.T, vacuumFrames int) {
+	t.Helper()
+	if vacuumFrames <= vacuumTruncateMaxLeftoverFrames {
+		t.Fatalf("fixture too small: VACUUM left %d WAL frames, not more than vacuumTruncateMaxLeftoverFrames "+
+			"(%d), so the leftover check cannot distinguish a TRUNCATE straight after the first PASSIVE",
+			vacuumFrames, vacuumTruncateMaxLeftoverFrames)
+	}
+}
+
 // walFrames returns how many frames the -wal holds: a 32-byte header, then
 // frames of a 24-byte header plus one page each. It is exact only while
 // nothing has reset or restarted the WAL, which holds on a fresh store whose
@@ -411,19 +454,35 @@ func walFrames(t *testing.T, s *SQLActivityStore) int {
 	return int((fi.Size() - 32) / (pageSize + 24))
 }
 
-// requirePassiveCopiedVacuumFramesBeforeTruncate fails unless the PASSIVE right
+// requirePassiveCopiedVacuumFramesBeforeTruncate fails unless some PASSIVE
 // before the first TRUNCATE had copied at least vacuumFrames frames: only then
 // did the TRUNCATE, which holds the WAL write lock, have none of the VACUUM's
 // frames left to copy.
+//
+// Not "the PASSIVE right before the TRUNCATE": after a PASSIVE copies every
+// frame, the next Record's commit can restart the WAL from frame 1, and when
+// passiveUntilShort runs another round (it overcounts on any sign of a restart)
+// the PASSIVE right before the TRUNCATE reports the restarted WAL, Log 0 and
+// Checkpointed 0. That is the best case, not a violation: SQLite restarts the
+// WAL only once every frame in it is in the database file. Seen in 3 of 450
+// loaded runs on 2026-10-06. Checkpointed counts from frame 1 of whichever WAL
+// generation it reports, so a PASSIVE with Checkpointed >= vacuumFrames either
+// copied the VACUUM's frames itself or came after a restart that required it.
 func requirePassiveCopiedVacuumFramesBeforeTruncate(t *testing.T, calls []ckptCall, vacuumFrames int) {
 	t.Helper()
 	first := slices.IndexFunc(calls, func(c ckptCall) bool { return c.mode == "TRUNCATE" })
 	if first < 1 {
 		t.Fatalf("no TRUNCATE preceded by a PASSIVE was issued: %+v", calls)
 	}
-	if copied := calls[first-1].res.Checkpointed; copied < vacuumFrames {
-		t.Errorf("the PASSIVE before the TRUNCATE had copied %d frames, fewer than the %d the VACUUM left: "+
-			"the TRUNCATE would copy the rest while holding the write lock", copied, vacuumFrames)
+	most := 0
+	for _, c := range calls[:first] {
+		if c.mode == "PASSIVE" {
+			most = max(most, c.res.Checkpointed)
+		}
+	}
+	if most < vacuumFrames {
+		t.Errorf("no PASSIVE before the first TRUNCATE had copied the %d frames the VACUUM left (most: %d): "+
+			"the TRUNCATE would copy the rest while holding the write lock: %+v", vacuumFrames, most, calls)
 	}
 }
 
@@ -463,6 +522,9 @@ func TestVacuumActivity_ReportsSpaceStillHeldWhileAReaderPinsTheWAL(t *testing.T
 	}
 	if passives != vacuumTruncateAttempts {
 		t.Errorf("PASSIVE attempts = %d, want %d (every attempt retried): %+v", passives, vacuumTruncateAttempts, got)
+	}
+	if !strings.Contains(err.Error(), string(walReasonReaderHeld)) {
+		t.Errorf("error %q does not name the reason %q", err, walReasonReaderHeld)
 	}
 }
 
@@ -552,7 +614,7 @@ func TestVacuumActivity_BusyTruncateSucceedsOnALaterAttempt(t *testing.T) {
 //     before the reader lets go, so a TRUNCATE seen while it is false can only
 //     have run with the reader pinning the copy short);
 //   - every TRUNCATE follows a PASSIVE that reported complete;
-//   - the PASSIVE before the first TRUNCATE had copied every frame the VACUUM
+//   - a PASSIVE before the first TRUNCATE had copied every frame the VACUUM
 //     left, so none of them were copied under the write lock;
 //   - the PASSIVE before every TRUNCATE had at most
 //     vacuumTruncateMaxLeftoverFrames frames of its own to copy, so the frames
@@ -579,9 +641,7 @@ func TestVacuumActivity_ReaderReleasedMidTruncateNeverTruncatesUnderTheCopy(t *t
 		t.Fatalf("vacuum: %v", err)
 	}
 	vacuumFrames := walFrames(t, s)
-	if vacuumFrames < 100 {
-		t.Fatalf("fixture: VACUUM left only %d WAL frames", vacuumFrames)
-	}
+	requireFixtureOutgrowsLeftoverBound(t, vacuumFrames)
 
 	var incomplete, truncatesWhileHeld atomic.Int32
 	var released atomic.Bool
@@ -631,11 +691,13 @@ func TestVacuumActivity_ReaderReleasedMidTruncateNeverTruncatesUnderTheCopy(t *t
 	err := s.truncateWALAfterVacuum(context.Background())
 	close(stop)
 	waitGroupOrFatal(t, &wg, "the Record loop")
+	got := calls()
+	// Logged before any assertion so a failure carries the trace.
+	t.Logf("checkpoints %+v; frames each TRUNCATE copied %v; slowest Record %v",
+		got, truncateCopiedFrames(got), time.Duration(maxLatency.Load()))
 	if err != nil {
 		t.Fatalf("truncateWALAfterVacuum: %v (the reader let go, so a later attempt must succeed)", err)
 	}
-	got := calls()
-	t.Logf("checkpoints %+v; slowest Record %v", got, time.Duration(maxLatency.Load()))
 	if incomplete.Load() == 0 {
 		t.Fatalf("fixture: no PASSIVE was held short by the reader: %+v", got)
 	}
@@ -698,9 +760,9 @@ func TestVacuumActivity_IdleTickReclaimsWhatAGivenUpTruncateLeft(t *testing.T) {
 //
 // It asserts three things while Records run continuously through the truncate:
 //   - no Record fails;
-//   - every TRUNCATE follows a PASSIVE that reported complete, and the one
+//   - every TRUNCATE follows a PASSIVE that reported complete, and a PASSIVE
 //     before the first TRUNCATE had copied every frame the VACUUM left (a
-//     PASSIVE before it may report busy and copy nothing; that is retried),
+//     PASSIVE may report busy and copy nothing; that is retried),
 //     so the TRUNCATE that holds the write lock copied none of them;
 //   - the PASSIVE before every TRUNCATE had at most
 //     vacuumTruncateMaxLeftoverFrames frames of its own to copy, so the frames
@@ -737,9 +799,7 @@ func TestVacuumActivity_TruncateDoesNotStallForegroundWrites(t *testing.T) {
 		t.Fatalf("vacuum: %v", err)
 	}
 	vacuumFrames := walFrames(t, s)
-	if vacuumFrames < 100 {
-		t.Fatalf("fixture: VACUUM left only %d WAL frames", vacuumFrames)
-	}
+	requireFixtureOutgrowsLeftoverBound(t, vacuumFrames)
 
 	calls := recordCheckpoints(t, s, nil)
 
@@ -787,18 +847,19 @@ func TestVacuumActivity_TruncateDoesNotStallForegroundWrites(t *testing.T) {
 		copyTime = max(copyTime, c.res.Elapsed)
 	}
 	lat := time.Duration(maxLatency.Load())
-	t.Logf("frame copy took %v; slowest Record %v; checkpoints %+v; vacuum frames %d",
-		copyTime, lat, got, vacuumFrames)
-	// The deterministic check: the PASSIVE right before the first TRUNCATE
-	// reported complete and had copied every frame the VACUUM wrote, so the
-	// TRUNCATE that holds the write lock had none of them left to copy.
+	t.Logf("frame copy took %v; slowest Record %v; checkpoints %+v; frames each TRUNCATE copied %v; vacuum frames %d",
+		copyTime, lat, got, truncateCopiedFrames(got), vacuumFrames)
+	// The deterministic check: the PASSIVE right before every TRUNCATE
+	// reported complete, and a PASSIVE before the first TRUNCATE had copied
+	// every frame the VACUUM wrote, so the TRUNCATE that holds the write lock
+	// had none of them left to copy.
 	//
 	// Not "the FIRST checkpoint is PASSIVE and did the copy": a PASSIVE can
 	// legitimately report busy=1 with log/checkpointed of -1 and copy nothing.
-	// The checkpoint connection has busy_timeout 0, so a PASSIVE that cannot
-	// take a WAL lock at once (here the only other activity is the concurrent
-	// Records' commits) gives up immediately, and truncateWALAfterVacuum
-	// retries it after its backoff. CI hit
+	// PASSIVE never waits in the busy handler, so one that cannot take the
+	// checkpoint lock or read the WAL index header at once (here the only
+	// other activity is the concurrent Records' commits) gives up immediately,
+	// and truncateWALAfterVacuum retries it after its backoff. CI hit
 	// exactly that on 2026-10-06: [PASSIVE busy, PASSIVE 3289/3289, TRUNCATE],
 	// which is correct behaviour that the old index-0 assertion failed.
 	requireTruncateOnlyAfterCompletePassive(t, got)
@@ -812,19 +873,23 @@ func TestVacuumActivity_TruncateDoesNotStallForegroundWrites(t *testing.T) {
 // the TRUNCATE is issued; it takes the WAL write lock and then has to wait for
 // that reader. With busy_timeout(1000) on the checkpoint connection each
 // attempt held the lock for a full second while it waited, and Records stalled
-// for 2.5 s in review. With busy_timeout 0 the TRUNCATE reports busy at once
-// and releases the lock, so writers barely notice.
+// for 2.5 s in review.
 //
-// How long the TRUNCATE holds the lock is exactly the checkpoint connection's
-// busy_timeout: SQLite's busy handler is the only thing that makes a TRUNCATE
-// wait for a reader. So the test asserts that value on the live connection,
-// which is deterministic, instead of bounding Record latency with a wall-clock
-// number. The earlier 500 ms latency bound was the same flaky shape as the
-// sibling above: it discriminated a 1 s regression only by a 2x margin over
-// -race and loaded-runner noise. The run below still proves the behaviour the
-// setting buys: a TRUNCATE is issued while the reader is held, every one
-// reports busy (returns rather than waits for the reader to leave), and no
-// Record fails. The slowest Record is logged for diagnosis, not asserted.
+// How long a TRUNCATE can wait for a reader while holding the lock is the
+// busy_timeout it runs with: SQLite's busy handler is the only thing that makes
+// it wait. The checkpoint connection rests at 0 and the post-vacuum TRUNCATE
+// alone runs with vacuumTruncateResetWaitMS (see that var for why the wait
+// exists and why it does not stall writers). So the test asserts, on the live
+// connection and deterministically, that the resting value is 0, that the
+// per-statement value is far below the 1000 ms that stalled Records, and that
+// the resting value is back to 0 after the truncate phase (the restore in
+// truncateWithResetWait, which a missed restore would leak into the background
+// loop's TRUNCATE). It does not bound Record latency with a wall-clock number:
+// the earlier 500 ms bound discriminated a 1 s regression only by a 2x margin
+// over -race and loaded-runner noise. The run below still proves the behaviour:
+// a TRUNCATE is issued while the reader is held, every one reports busy
+// (returns after its bounded wait rather than waiting for the reader to leave),
+// and no Record fails. The slowest Record is logged for diagnosis.
 func TestVacuumActivity_LateReaderDoesNotStallWritersThroughTheTruncate(t *testing.T) {
 	s, _ := openCkptTestStore(t, time.Hour)
 	var ckptBusyMS int
@@ -835,9 +900,18 @@ func TestVacuumActivity_LateReaderDoesNotStallWritersThroughTheTruncate(t *testi
 		t.Fatalf("checkpoint connection busy_timeout = %d ms; it must be 0: a TRUNCATE waits that long for a "+
 			"reader while holding the WAL write lock, and every Record waits with it", ckptBusyMS)
 	}
+	// 100 ms: a tenth of the 1000 ms busy_timeout that stalled Records 2.5 s.
+	if vacuumTruncateResetWaitMS > 100 {
+		t.Fatalf("vacuumTruncateResetWaitMS = %d; the post-vacuum TRUNCATE waits up to that long for readers "+
+			"while holding the WAL write lock, so it must stay far below the 1000 ms that stalled Records",
+			vacuumTruncateResetWaitMS)
+	}
 	oldAttempts, oldBackoff := vacuumTruncateAttempts, vacuumTruncateMaxBackoff
-	vacuumTruncateAttempts, vacuumTruncateMaxBackoff = 4, 20*time.Millisecond
-	t.Cleanup(func() { vacuumTruncateAttempts, vacuumTruncateMaxBackoff = oldAttempts, oldBackoff })
+	oldBusy := vacuumTruncateBusyAttempts
+	vacuumTruncateAttempts, vacuumTruncateMaxBackoff, vacuumTruncateBusyAttempts = 4, 20*time.Millisecond, 4
+	t.Cleanup(func() {
+		vacuumTruncateAttempts, vacuumTruncateMaxBackoff, vacuumTruncateBusyAttempts = oldAttempts, oldBackoff, oldBusy
+	})
 
 	for range 20 {
 		insertLegacyOversizedSummary(t, s, strings.Repeat("v", activitySummaryMax*8))
@@ -855,8 +929,8 @@ func TestVacuumActivity_LateReaderDoesNotStallWritersThroughTheTruncate(t *testi
 	holdReaderSnapshot(t, s)
 
 	// Slow writers: one Record every 10 ms. They start from the hook, right
-	// after the first PASSIVE that copied everything and before the TRUNCATE
-	// it unlocks, so that TRUNCATE is issued (a write before it would leave
+	// after the PASSIVE that converged and before the TRUNCATE it unlocks, so
+	// that TRUNCATE is issued (a write before it would leave
 	// frames past the reader's snapshot and keep PASSIVE short) and the
 	// writers are queued on the write lock while it runs.
 	stop := make(chan struct{})
@@ -885,8 +959,25 @@ func TestVacuumActivity_LateReaderDoesNotStallWritersThroughTheTruncate(t *testi
 			time.Sleep(10 * time.Millisecond)
 		}
 	}
+	// Start them on the CONVERGED PASSIVE (complete, and at most
+	// vacuumTruncateMaxLeftoverFrames frames past the previous PASSIVE's
+	// Checkpointed), not the first complete one. The first complete PASSIVE
+	// after the VACUUM has every VACUUM frame as new, so passiveUntilShort
+	// runs another round; writers started then could commit past the late
+	// reader's snapshot before that round, hold every later PASSIVE short,
+	// and no TRUNCATE would ever be issued (CI on 2026-10-06, PR #3781:
+	// [PASSIVE 856/856, PASSIVE 862/856, ...] and "no TRUNCATE was issued").
+	// After a converged PASSIVE the TRUNCATE decision is already made: the
+	// hook runs before passiveUntilShort classifies the result, and nothing
+	// the writers do changes it.
+	prevCkpt := -1 // the previous PASSIVE's Checkpointed; only this goroutine touches it
 	calls := recordCheckpoints(t, s, func(c ckptCall) {
-		if c.mode == "PASSIVE" && c.res.complete() {
+		if c.mode != "PASSIVE" || c.res.Log < 0 {
+			return
+		}
+		converged := prevCkpt >= 0 && c.res.complete() && c.res.Log-prevCkpt <= vacuumTruncateMaxLeftoverFrames
+		prevCkpt = c.res.Checkpointed
+		if converged {
 			started.Do(func() {
 				wg.Add(1)
 				go writers()
@@ -922,5 +1013,260 @@ func TestVacuumActivity_LateReaderDoesNotStallWritersThroughTheTruncate(t *testi
 	requireTruncateOnlyAfterCompletePassive(t, got)
 	if n := recErrs.Load(); n != 0 {
 		t.Fatalf("%d Records failed during the truncate phase", n)
+	}
+	if err := s.ckpt.QueryRow(`PRAGMA busy_timeout`).Scan(&ckptBusyMS); err != nil {
+		t.Fatal(err)
+	}
+	if ckptBusyMS != sqlActCkptBusyTimeoutMS {
+		t.Fatalf("checkpoint connection busy_timeout = %d ms after the truncate phase; the TRUNCATE's raised wait "+
+			"must be restored to %d before the connection goes back to the background loop",
+			ckptBusyMS, sqlActCkptBusyTimeoutMS)
+	}
+}
+
+// TestVacuumActivity_BusyTruncateRetriesHaveTheirOwnBudget is the deterministic
+// form of the SF1 flake (TestVacuumActivity_ReaderReleasedMidTruncate failing
+// "WAL not reset after 8 attempts (last checkpoint busy=1 wal_frames=2153
+// checkpointed=2153)" in 15 of 135 loaded runs). A reader that predates the
+// VACUUM holds PASSIVE short for some attempts; after it lets go, a writer
+// holds the write lock for some busy TRUNCATEs. Each phase alone fits in its
+// budget, together they exceed the old shared one: attempts that waited out a
+// reader used to leave too few for the busy TRUNCATEs a steady stream of
+// Records causes. The write lock is held well past vacuumTruncateResetWaitMS,
+// so each of those TRUNCATEs is busy whatever the wait is.
+func TestVacuumActivity_BusyTruncateRetriesHaveTheirOwnBudget(t *testing.T) {
+	s, _ := openCkptTestStore(t, time.Hour)
+	oldAttempts, oldBackoff := vacuumTruncateAttempts, vacuumTruncateMaxBackoff
+	oldBusy, oldPause := vacuumTruncateBusyAttempts, vacuumTruncateBusyRetryPause
+	vacuumTruncateAttempts, vacuumTruncateMaxBackoff = 4, 10*time.Millisecond
+	vacuumTruncateBusyAttempts, vacuumTruncateBusyRetryPause = 4, time.Millisecond
+	t.Cleanup(func() {
+		vacuumTruncateAttempts, vacuumTruncateMaxBackoff = oldAttempts, oldBackoff
+		vacuumTruncateBusyAttempts, vacuumTruncateBusyRetryPause = oldBusy, oldPause
+	})
+	// Each phase uses one fewer than its own budget; together they use more
+	// than either budget, which is what the old single counter allowed.
+	readerHeld := vacuumTruncateAttempts - 1
+	busyTruncates := vacuumTruncateBusyAttempts - 1
+	if readerHeld+busyTruncates < vacuumTruncateAttempts {
+		t.Fatalf("fixture: %d+%d attempts would fit in one shared budget of %d",
+			readerHeld, busyTruncates, vacuumTruncateAttempts)
+	}
+
+	for range 10 {
+		insertLegacyOversizedSummary(t, s, strings.Repeat("v", activitySummaryMax*8))
+	}
+	releaseReader := holdReaderSnapshot(t, s)
+	if _, err := s.writer.Exec(`VACUUM`); err != nil {
+		t.Fatalf("vacuum: %v", err)
+	}
+
+	ctx := context.Background()
+	var lock *sql.Conn
+	t.Cleanup(func() {
+		if lock != nil {
+			_, _ = lock.ExecContext(ctx, "ROLLBACK")
+			_ = lock.Close()
+		}
+	})
+	// The hook runs on truncateWALAfterVacuum's goroutine, between checkpoints,
+	// so these plain counters are not shared with another goroutine.
+	incomplete, busy := 0, 0
+	calls := recordCheckpoints(t, s, func(c ckptCall) {
+		switch {
+		case c.mode == "PASSIVE" && c.res.Log >= 0 && !c.res.complete():
+			incomplete++
+			if incomplete == readerHeld {
+				releaseReader()
+				conn, err := s.reader.Conn(ctx)
+				if err != nil {
+					t.Errorf("lock conn: %v", err)
+					return
+				}
+				if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+					t.Errorf("take the write lock: %v", err)
+					_ = conn.Close()
+					return
+				}
+				lock = conn
+			}
+		case c.mode == "TRUNCATE" && c.res.Busy != 0:
+			busy++
+			if busy == busyTruncates && lock != nil {
+				if _, err := lock.ExecContext(ctx, "ROLLBACK"); err != nil {
+					t.Errorf("release the write lock: %v", err)
+				}
+				_ = lock.Close()
+				lock = nil
+			}
+		}
+	})
+
+	err := s.truncateWALAfterVacuum(ctx)
+	got := calls()
+	t.Logf("checkpoints %+v", got)
+	if err != nil {
+		t.Fatalf("truncateWALAfterVacuum: %v (%d reader-held attempts and %d busy TRUNCATEs each fit their own "+
+			"budget, so it must succeed)", err, readerHeld, busyTruncates)
+	}
+	if incomplete != readerHeld || busy != busyTruncates {
+		t.Fatalf("fixture: %d reader-held PASSIVEs and %d busy TRUNCATEs, want %d and %d: %+v",
+			incomplete, busy, readerHeld, busyTruncates, got)
+	}
+	requireTruncateOnlyAfterCompletePassive(t, got)
+	if fi, err := os.Stat(s.path + "-wal"); err == nil && fi.Size() != 0 {
+		t.Fatalf("truncate reported success but the -wal still holds %d bytes", fi.Size())
+	}
+}
+
+// TestVacuumActivity_GiveUpNamesTheReason: when the busy-TRUNCATE budget runs
+// out, the error must say so rather than blame a reader with counts that look
+// complete (busy=1, wal_frames == checkpointed).
+func TestVacuumActivity_GiveUpNamesTheReason(t *testing.T) {
+	s, _ := openCkptTestStore(t, time.Hour)
+	oldBusy, oldPause := vacuumTruncateBusyAttempts, vacuumTruncateBusyRetryPause
+	vacuumTruncateBusyAttempts, vacuumTruncateBusyRetryPause = 2, time.Millisecond
+	t.Cleanup(func() { vacuumTruncateBusyAttempts, vacuumTruncateBusyRetryPause = oldBusy, oldPause })
+
+	for range 5 {
+		insertLegacyOversizedSummary(t, s, strings.Repeat("v", activitySummaryMax*8))
+	}
+	ctx := context.Background()
+	lock, err := s.reader.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = lock.ExecContext(ctx, "ROLLBACK"); _ = lock.Close() })
+	if _, err := lock.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		t.Fatal(err)
+	}
+
+	err = s.truncateWALAfterVacuum(ctx)
+	if err == nil {
+		t.Fatal("truncateWALAfterVacuum succeeded while another connection held the write lock")
+	}
+	if !strings.Contains(err.Error(), string(walReasonBusyTruncate)) ||
+		strings.Contains(err.Error(), string(walReasonReaderHeld)) {
+		t.Fatalf("error %q should name %q and not %q", err, walReasonBusyTruncate, walReasonReaderHeld)
+	}
+}
+
+// TestPassiveNewFrames pins the frame arithmetic, including both restart
+// signals: an explicit restart (the WAL header generation changed) and a Log
+// below the previous Checkpointed.
+func TestPassiveNewFrames(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		prev, log, ckpt int
+		restarted       bool
+		want            int
+	}{
+		{"first PASSIVE counts the whole WAL", 0, 900, 900, false, 900},
+		{"same generation counts only the growth", 900, 1000, 1000, false, 100},
+		{"no growth", 1000, 1000, 1000, false, 0},
+		{"Log below previous is a restart", 1000, 40, 40, false, 40},
+		{"a seen restart counts every frame even when Log >= previous", 1000, 1200, 1200, true, 1200},
+		{"a seen restart with a small Log", 1000, 40, 40, true, 40},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := passiveNewFrames(tc.prev, walCheckpointResult{Log: tc.log, Checkpointed: tc.ckpt}, tc.restarted)
+			if got != tc.want {
+				t.Fatalf("passiveNewFrames(%d, log=%d, restarted=%v) = %d, want %d",
+					tc.prev, tc.log, tc.restarted, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestClassifyPassive pins how each PASSIVE row is read, in particular that
+// (0,-1,-1), the row for a database not in WAL mode, ends the truncate as
+// done instead of being retried for the whole budget and reported as a failure,
+// and that (1,-1,-1) is a busy checkpoint lock, not a reader.
+func TestClassifyPassive(t *testing.T) {
+	small, big := vacuumTruncateMaxLeftoverFrames, vacuumTruncateMaxLeftoverFrames+1
+	for _, tc := range []struct {
+		name       string
+		res        walCheckpointResult
+		newFrames  int
+		wantDone   bool
+		wantConv   bool
+		wantNotWAL bool
+		wantReason walNotResetReason
+	}{
+		{"not in WAL mode", walCheckpointResult{Busy: 0, Log: -1, Checkpointed: -1}, -1, true, false, true, ""},
+		{"checkpoint lock busy", walCheckpointResult{Busy: 1, Log: -1, Checkpointed: -1}, -1, true, false, false,
+			walReasonCheckpointBusy},
+		{"reader held", walCheckpointResult{Log: 900, Checkpointed: 300}, 900, true, false, false, walReasonReaderHeld},
+		{"complete and short", walCheckpointResult{Log: 900, Checkpointed: 900}, small, true, true, false, ""},
+		{"complete but long: another round", walCheckpointResult{Log: 900, Checkpointed: 900}, big, false, false,
+			false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, done := classifyPassive(tc.res, tc.newFrames)
+			if done != tc.wantDone || out.converged != tc.wantConv || out.notWAL != tc.wantNotWAL ||
+				out.reason != tc.wantReason {
+				t.Fatalf("classifyPassive(%+v, %d) = %+v done=%v; want done=%v converged=%v notWAL=%v reason=%q",
+					tc.res, tc.newFrames, out, done, tc.wantDone, tc.wantConv, tc.wantNotWAL, tc.wantReason)
+			}
+		})
+	}
+}
+
+// TestPassiveUntilShort_SeesARestartLogCannotShow is the N1 regression test.
+// After a complete PASSIVE of P frames the next commit restarts the WAL from
+// frame 1. If the restarted WAL then grows to Log' >= P frames, Log' - P is
+// all the old arithmetic could see, and it undercounts: every one of the Log'
+// frames is new. The WAL header's generation exposes the restart, so the
+// PASSIVE over Log' frames must not count as short.
+func TestPassiveUntilShort_SeesARestartLogCannotShow(t *testing.T) {
+	s, _ := openCkptTestStore(t, time.Hour)
+	oldMax := vacuumTruncateMaxLeftoverFrames
+	t.Cleanup(func() { vacuumTruncateMaxLeftoverFrames = oldMax })
+	ctx := context.Background()
+	walPath := s.path + "-wal"
+
+	// Phase 1: a small WAL, fully copied. Converges at once (bound lifted).
+	insertLegacyOversizedSummary(t, s, strings.Repeat("a", activitySummaryMax*2))
+	vacuumTruncateMaxLeftoverFrames = 1 << 30
+	tr := passiveTracker{walPath: walPath}
+	first, err := s.passiveUntilShort(ctx, &tr)
+	if err != nil || !first.converged {
+		t.Fatalf("phase 1: %+v, %v; want converged", first, err)
+	}
+	p := first.res.Checkpointed
+	genBefore, ok := readWALGeneration(walPath)
+	if !ok {
+		t.Fatal("fixture: could not read the WAL header")
+	}
+
+	// Phase 2: the first commit restarts the WAL (every frame is copied and
+	// no reader is on it); write enough that the restarted WAL outgrows P.
+	for range 20 {
+		insertLegacyOversizedSummary(t, s, strings.Repeat("b", activitySummaryMax*8))
+	}
+	if genAfter, ok := readWALGeneration(walPath); !ok || genAfter == genBefore {
+		t.Fatalf("fixture: the WAL did not restart (generation %+v -> %+v)", genBefore, genAfter)
+	}
+	logNow := walFrames(t, s)
+	if logNow <= p {
+		t.Fatalf("fixture: restarted WAL has %d frames, not more than the %d before the restart", logNow, p)
+	}
+	// Place the bound where the two arithmetics disagree: Log'-P is within it,
+	// Log' is not.
+	vacuumTruncateMaxLeftoverFrames = logNow - 1
+	if logNow-p > vacuumTruncateMaxLeftoverFrames {
+		t.Fatalf("fixture: Log'-P = %d is already over the bound", logNow-p)
+	}
+	calls := recordCheckpoints(t, s, nil)
+	second, err := s.passiveUntilShort(ctx, &tr)
+	if err != nil || !second.converged {
+		t.Fatalf("phase 2: %+v, %v; want converged", second, err)
+	}
+	got := calls()
+	// The PASSIVE over the restarted WAL had Log' new frames, over the bound,
+	// so it must be followed by another round (which then has nothing new).
+	if len(got) != 2 {
+		t.Fatalf("PASSIVE rounds after the restart = %d, want 2 (the first copied %d new frames, over the bound %d, "+
+			"and must not count as short): %+v", len(got), logNow, vacuumTruncateMaxLeftoverFrames, got)
 	}
 }
