@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duplicate_copies_fixer_test.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: c1cb262a-d405-4d1a-9eb7-a3c341190585
 // last-edited: 2026-10-06
 
@@ -464,6 +464,27 @@ func TestDuplicateCopies_ITunesCopyIsIgnoredNeverWritten(t *testing.T) {
 	require.False(t, afterI.IsSoftDeleted())
 }
 
+// TestDuplicateCopies_ITunesMediaCopyIsLeftOut: a copy inside an "iTunes
+// Media" folder (outside books/itunes/**) is an iTunes copy through the
+// shared predicate (itunesOwnershipWhy): left out of the row, never
+// written, and the other two copies still merge.
+func TestDuplicateCopies_ITunesMediaCopyIsLeftOut(t *testing.T) {
+	d := newDCFixture(t)
+	s, l := d.dune(t)
+	it := d.copyBook(t, "M", "Dune", "lib/Media/iTunes Media/Audiobooks/Dune",
+		dcRow{track: 1, dur: 600, hash: "h1"}, dcRow{track: 2, dur: 600, hash: "h2"})
+	before, err := d.s.GetBookByID(it)
+	require.NoError(t, err)
+	r := rowOf(t, d.planFor(t, dcFixerID, "op-plan", nil), s)
+	require.True(t, r.Applicable(), r.SkipReason)
+	require.ElementsMatch(t, []string{s, l}, r.BookIDs, "the iTunes Media copy is not in the row's books")
+	out := d.applyFor(t, dcFixerID, "op-plan", "op-apply", []string{r.RowID})
+	require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+	after, err := d.s.GetBookByID(it)
+	require.NoError(t, err)
+	require.Equal(t, before.UpdatedAt, after.UpdatedAt, "the iTunes Media copy was never written")
+}
+
 // TestDuplicateCopies_HandOffWouldWriteAnITunesCopy: a primary loser whose
 // version group holds an iTunes copy not explicitly non-primary is skipped.
 func TestDuplicateCopies_HandOffWouldWriteAnITunesCopy(t *testing.T) {
@@ -560,6 +581,30 @@ func TestFragmentFixer_DisregardsITunesParents(t *testing.T) {
 	for _, c := range changes {
 		require.NotEqual(t, it, c.BookID, "nothing journaled against the iTunes parent")
 	}
+}
+
+// TestFragmentFixer_DisregardsITunesMediaParent: a parent copy inside an
+// "iTunes Media" folder is set aside like one under books/itunes/** (the
+// shared predicate), so the fragment folds into the other parent and the
+// iTunes Media copy is never written.
+func TestFragmentFixer_DisregardsITunesMediaParent(t *testing.T) {
+	d := newDCFixture(t)
+	parent := d.copyBook(t, "P", "Dune", "lib/Dune", dcRow{track: 1, dur: 600, hash: "h1"}, dcRow{track: 2, dur: 600, hash: "h2"})
+	it := d.copyBook(t, "I", "Dune", "lib/Media/iTunes Media/Audiobooks/Dune", dcRow{track: 1, dur: 600, hash: "h1"}, dcRow{track: 2, dur: 600, hash: "h2"})
+	fp := d.file(t, "lib/Dune frag/02.mp3", 777)
+	frag := d.book(t, "frag", "02", fp, nil)
+	require.NoError(t, d.s.CreateBookFile(&database.BookFile{BookID: frag, FilePath: fp, OriginalFilename: "02.mp3", FileSize: 777, Duration: 600, FileHash: "h2"}))
+	before, err := d.s.GetBookByID(it)
+	require.NoError(t, err)
+	r := findRow(t, d.planFor(t, fragFixerID, "op-plan", nil), "copy:"+parent)
+	require.True(t, r.Applicable(), r.SkipReason)
+	require.ElementsMatch(t, []string{parent, frag}, r.BookIDs)
+	out := d.applyFor(t, fragFixerID, "op-plan", "op-apply", []string{r.RowID})
+	require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+	require.False(t, d.live(t, "frag"))
+	after, err := d.s.GetBookByID(it)
+	require.NoError(t, err)
+	require.Equal(t, before.UpdatedAt, after.UpdatedAt, "the iTunes Media parent was never written")
 }
 
 // TestDuplicateCopies_IdentityGate is the per-clause table of dcJudge. Each
