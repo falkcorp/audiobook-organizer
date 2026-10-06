@@ -1,7 +1,7 @@
 // file: web/src/components/dedup/DedupEmbeddingTab.tsx
-// version: 1.5.0
+// version: 1.6.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567891
-// last-edited: 2026-09-25
+// last-edited: 2026-10-05
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -73,7 +73,8 @@ export async function fetchBookFilesCached(id: string): Promise<string[]> {
   const cached = bookFilesCache.get(id);
   if (cached) return cached;
   try {
-    const { files } = await api.getBookFiles(id);
+    // Paths only, fetched for every candidate on the page: skip the per-file stat.
+    const { files } = await api.getBookFiles(id, { skipDiskCheck: true });
     const paths = (files || []).map((f) => f.file_path).filter(Boolean);
     bookFilesCache.set(id, paths);
     return paths;

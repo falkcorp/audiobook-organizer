@@ -549,6 +549,31 @@ func TestListAudiobookSegments_FileExistsIsLiveDiskCheck(t *testing.T) {
 	}
 }
 
+// TestListBookFiles_DiskCheckFalseSkipsStat: the opt-out reports unknown, never
+// a guessed true/false.
+func TestListBookFiles_DiskCheckFalseSkipsStat(t *testing.T) {
+	h, d := newHandler(t)
+	d.store.EXPECT().GetBookFiles("b1").Return([]database.BookFile{
+		{ID: "f1", BookID: "b1", FilePath: filepath.Join(t.TempDir(), "gone.m4b")},
+	}, nil)
+	c, w := newCtx("GET", "/audiobooks/b1/files?disk_check=false", nil, p("id", "b1"))
+	h.ListBookFiles(c)
+	var env struct {
+		Data struct {
+			Files []struct {
+				FileExists     *bool  `json:"file_exists"`
+				FileCheckError string `json:"file_check_error"`
+			} `json:"files"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(env.Data.Files) != 1 || env.Data.Files[0].FileExists != nil || env.Data.Files[0].FileCheckError != "not checked" {
+		t.Fatalf("want file_exists=null file_check_error=not checked, got %s", w.Body.String())
+	}
+}
+
 func TestPatchBookFile_NotFound(t *testing.T) {
 	h, d := newHandler(t)
 	d.store.EXPECT().PatchBookFileFields("b1", "f1", mock.Anything).Return(nil, nil, nil)

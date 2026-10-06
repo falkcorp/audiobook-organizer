@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler_files.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 82f8d1f7-46d5-4ead-b5c1-ba796fd785f9
 // last-edited: 2026-10-05
 
@@ -128,6 +128,17 @@ func statFilePathsWith(ctx context.Context, paths []string, stat func(string) (o
 			out[r.idx] = r.state
 			done[r.idx] = true
 		case <-ctx.Done():
+			// A stat that finished as the deadline fired is a real answer;
+			// select picks randomly between ready cases, so drain first.
+			for drained := false; !drained; {
+				select {
+				case r := <-results:
+					out[r.idx] = r.state
+					done[r.idx] = true
+				default:
+					drained = true
+				}
+			}
 			for i, p := range paths {
 				if p != "" && !done[i] {
 					out[i] = fileDiskState{CheckError: "disk check timed out"}
@@ -232,6 +243,11 @@ func (h *Handler) ListAudiobookSegments(c *gin.Context) {
 // which only changes when a scan or repair notices. The stat is affordable here
 // because the endpoint is per book — a bounded worker pool over one book's
 // rows under a short overall deadline — not a library-wide listing.
+//
+// ?disk_check=false skips the stat for callers that only need the paths and
+// fetch many books at once (the dedup embedding tab loads files for every
+// candidate on a page). file_exists is then null with file_check_error
+// "not checked", so the response still never claims disk truth it lacks.
 func (h *Handler) ListBookFiles(c *gin.Context) {
 	bookID := c.Param("id")
 	store := h.store
@@ -247,7 +263,15 @@ func (h *Handler) ListBookFiles(c *gin.Context) {
 	if files == nil {
 		files = []database.BookFile{}
 	}
-	disk := statFilePaths(c.Request.Context(), bookFilePaths(files))
+	var disk []fileDiskState
+	if c.Query("disk_check") == "false" {
+		disk = make([]fileDiskState, len(files))
+		for i := range disk {
+			disk[i] = fileDiskState{CheckError: "not checked"}
+		}
+	} else {
+		disk = statFilePaths(c.Request.Context(), bookFilePaths(files))
+	}
 	results := make([]gin.H, 0, len(files))
 	for i, f := range files {
 		results = append(results, gin.H{
