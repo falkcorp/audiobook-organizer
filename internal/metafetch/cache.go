@@ -1,5 +1,5 @@
 // file: internal/metafetch/cache.go
-// version: 1.29.1
+// version: 1.29.2
 // guid: a4f33a2e-3b4d-4306-bdce-476758e39120
 // last-edited: 2026-10-06
 //
@@ -12,6 +12,7 @@
 package metafetch
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -648,9 +649,9 @@ func (mfs *Service) cacheSearchResponse(bookID, query, author, narrator, series 
 		// legacy, prior-rule or unstamped row) keep the row's FetchedAt --
 		// they are not this search's fresh answer -- and a legacy row keeps
 		// its fingerprint, so the readers go on filtering it. Ranked usable
-		// first (MergeUsable), then by score.
+		// first (MergeRank), then by score.
 		carried, legacy := carryCandidates(prev, resp)
-		entry.Candidates = mergeCandidateRows(raw, carried, resp.mergeUsable)
+		entry.Candidates = mergeCandidateRows(raw, carried, resp.mergeRank)
 		if len(carried) > 0 && !sameQuestions {
 			entry.FetchedAt = prev.FetchedAt
 			if legacy {
@@ -670,7 +671,7 @@ func (mfs *Service) cacheSearchResponse(bookID, query, author, narrator, series 
 		// out. Only providers this search did not ask are kept from the old
 		// row; one it asked answered afresh.
 		entry.Candidates = mergeCandidateRows(raw, candidatesFromSources(prev.Candidates,
-			fallbackAnswered(entry.FallbackAttempts, resp.SourcesTried)), resp.mergeUsable)
+			fallbackAnswered(entry.FallbackAttempts, resp.SourcesTried)), resp.mergeRank)
 	}
 
 	// Preserve-on-empty. A search WITH results always replaces, exactly as
@@ -766,14 +767,21 @@ func (mfs *Service) lockRow(bookID string) func() {
 
 // mergeCandidateRows is the union of fresh and cached candidate rows,
 // deduplicated (the same source, title and ASIN keep the fresh row), ranked
-// usable first (usable; nil = all usable), then by score, and capped at
-// metadataCacheTopN. A row that does not decode is kept after the ranked
-// ones, as cacheSearchResponse's other paths keep it.
-func mergeCandidateRows(fresh, cached []json.RawMessage, usable func(MetadataCandidate) bool) []json.RawMessage {
+// by rank (lower first; nil = all equal, SearchOptions.MergeRank), then by
+// score, and capped at metadataCacheTopN. A row that does not decode is kept
+// after the ranked ones, as cacheSearchResponse's other paths keep it.
+//
+// The cap evicts from the bottom: undecodable rows first, then the
+// worst-ranked, lowest-scoring candidates. With metabatch.MergeRanker that is
+// owner-rejected candidates first, then refused-but-reviewable ones (below
+// the floor, asin_conflict) by lowest score; a usable candidate is evicted
+// only when the union holds more than metadataCacheTopN better-or-equal ones.
+// Nothing here guarantees the chain's candidates all survive a merge.
+func mergeCandidateRows(fresh, cached []json.RawMessage, rank func(MetadataCandidate) int) []json.RawMessage {
 	type ranked struct {
-		raw    json.RawMessage
-		score  float64
-		usable bool
+		raw   json.RawMessage
+		score float64
+		rank  int
 	}
 	var rows, undecoded []ranked
 	seen := map[string]bool{}
@@ -789,16 +797,17 @@ func mergeCandidateRows(fresh, cached []json.RawMessage, usable func(MetadataCan
 				continue
 			}
 			seen[key] = true
-			rows = append(rows, ranked{raw: r, score: c.Score, usable: usable == nil || usable(c)})
+			rk := 0
+			if rank != nil {
+				rk = rank(c)
+			}
+			rows = append(rows, ranked{raw: r, score: c.Score, rank: rk})
 		}
 	}
 	slices.SortStableFunc(rows, func(a, b ranked) int {
 		switch {
-		case a.usable != b.usable:
-			if a.usable {
-				return -1
-			}
-			return 1
+		case a.rank != b.rank:
+			return cmp.Compare(a.rank, b.rank)
 		case a.score > b.score:
 			return -1
 		case a.score < b.score:

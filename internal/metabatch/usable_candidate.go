@@ -1,5 +1,5 @@
 // file: internal/metabatch/usable_candidate.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6a925443-e10e-4dc5-af83-0dcf909b6256
 // last-edited: 2026-10-06
 
@@ -23,6 +23,9 @@ type UsableCandidateVerdict struct {
 	Why string
 }
 
+// candidateRefusalOwnerRejected is CandidateRefusal's owner-rejected reason.
+const candidateRefusalOwnerRejected = "owner-rejected"
+
 // CandidateRefusal is why one candidate is not usable for book ("" =
 // usable): owner-rejected (rejected: LoadRejectedCandidateKeys),
 // asin_conflict (applygate.CheckASIN), identity_stale because the book's ASIN
@@ -33,7 +36,7 @@ type UsableCandidateVerdict struct {
 func CandidateRefusal(rejected map[string]bool, book *database.Book, entry *database.MetadataCandidateCache, c *metafetch.MetadataCandidate) string {
 	switch {
 	case rejected[c.Source+"|"+c.Title]:
-		return "owner-rejected"
+		return candidateRefusalOwnerRejected
 	case applygate.CheckASIN(book, c).Outcome == applygate.OutcomeBlock:
 		return applygate.ReasonASINConflict
 	case metafetch.CandidateASINStale(entry, book, c) != nil:
@@ -94,13 +97,45 @@ func NoUsableCandidate(kv RejectedCandidateReader, book *database.Book, entry *d
 	return UsableCandidateVerdict{Why: "no usable candidate: " + strings.Join(parts, ", ")}
 }
 
-// UsableRanker is the merge ranking for book (metafetch
-// SearchOptions.MergeUsable): CandidateRefusal accepts the candidate. The
-// ASIN-replaced leg is not needed: a merge only carries candidates fetched
-// for the ASIN the book holds now.
-func UsableRanker(kv RejectedCandidateReader, book *database.Book) func(metafetch.MetadataCandidate) bool {
+// Merge ranks (metafetch SearchOptions.MergeRank; lower first). Usable means
+// CandidateRefusal accepts the candidate -- the same rule the fallback
+// trigger (NoUsableCandidate) uses, which counts a review-only candidate as
+// usable: the fallback found the owner something to review, and asking again
+// would only spend quota.
+const (
+	// MergeRankUsable: usable, and the gate may apply it unattended.
+	MergeRankUsable = iota
+	// MergeRankUsableReviewOnly: usable, but from a review-only source (Open
+	// Library, Google Books; applygate.ReviewOnlySource). Ranked after an
+	// equally usable chain candidate so the row's first candidate is one
+	// the unattended paths (bulk apply, the transcription auto-apply) can
+	// use when there is one.
+	MergeRankUsableReviewOnly
+	// MergeRankRefused: refused by asin_conflict or the score leg, but
+	// still something the owner can review and apply by hand.
+	MergeRankRefused
+	// MergeRankOwnerRejected: the owner already said no. Ranked last, so
+	// the row's top-10 cap evicts these first.
+	MergeRankOwnerRejected
+)
+
+// MergeRanker is the merge ranking for book (metafetch
+// SearchOptions.MergeRank): the MergeRank* tiers above. The ASIN-replaced
+// leg is not needed: a merge only carries candidates fetched for the ASIN
+// the book holds now.
+func MergeRanker(kv RejectedCandidateReader, book *database.Book) func(metafetch.MetadataCandidate) int {
 	rejected := rejectedKeys(kv, book.ID)
-	return func(c metafetch.MetadataCandidate) bool { return CandidateRefusal(rejected, book, nil, &c) == "" }
+	return func(c metafetch.MetadataCandidate) int {
+		switch why := CandidateRefusal(rejected, book, nil, &c); {
+		case why == candidateRefusalOwnerRejected:
+			return MergeRankOwnerRejected
+		case why != "":
+			return MergeRankRefused
+		case applygate.ReviewOnlySource(&c):
+			return MergeRankUsableReviewOnly
+		}
+		return MergeRankUsable
+	}
 }
 
 func rejectedKeys(kv RejectedCandidateReader, bookID string) map[string]bool {

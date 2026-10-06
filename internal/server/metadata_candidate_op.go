@@ -1,5 +1,5 @@
 // file: internal/server/metadata_candidate_op.go
-// version: 3.15.0
+// version: 3.15.1
 // guid: 3f7e2c91-b4a0-4d8e-9c5f-1a6b7d8e0f23
 // last-edited: 2026-10-06
 //
@@ -404,8 +404,10 @@ func (s *Server) selectUnfetchedBooks(ctx context.Context, reporter opsregistry.
 	}
 	msg := fmt.Sprintf("selected %d books to fetch: %d never fetched or invalidated, %d with an empty answer to questions no longer asked, "+
 		"%d owed a fallback provider's answer, %d of them holding only unusable candidates (%d Google Books lookups left for a later quota day, %d of those books still asked of Open Library) "+
+		"(%d books the chain has not answered keep their chain and Open Library steps with any Google step put off) "+
 		"(%d live books read, %d left out with no usable search title)",
-		len(sel.IDs), sel.NoRow, sel.StaleEmpty, sel.FallbackPending, sel.FallbackUnusable, sel.FallbackCapped, len(sel.GoogleCapped), sel.Scanned, sel.Unsearchable)
+		len(sel.IDs), sel.NoRow, sel.StaleEmpty, sel.FallbackPending, sel.FallbackUnusable, sel.FallbackCapped, len(sel.GoogleCapped)-sel.ChainCapped,
+		sel.ChainCapped, sel.Scanned, sel.Unsearchable)
 	_ = reporter.Log(slog.LevelInfo, msg)
 	candidateFetchLog.Info("%s", msg)
 	return sel, nil

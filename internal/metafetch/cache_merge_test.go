@@ -1,5 +1,5 @@
 // file: internal/metafetch/cache_merge_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 6f2d8a41-93c7-4e0b-b5a2-1d7c4e9f3a58
 // last-edited: 2026-10-06
 
@@ -13,6 +13,8 @@ package metafetch
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -196,7 +198,12 @@ func TestMergeCandidateRows_UsableFirst(t *testing.T) {
 	blocked := mergeCand(t, "Audible", "Rejected Example", 0.95)
 	usableLow := mergeCand(t, "Open Library", "Usable Example", 0.5)
 	usableHigh := mergeCand(t, "Audible", "Usable Example Two", 0.7)
-	usable := func(c MetadataCandidate) bool { return c.Title != "Rejected Example" }
+	usable := func(c MetadataCandidate) int {
+		if c.Title == "Rejected Example" {
+			return 1
+		}
+		return 0
+	}
 
 	got := mergeCandidateRows([]json.RawMessage{usableLow}, []json.RawMessage{blocked, usableHigh}, usable)
 	assert.Equal(t, []string{"Audible:Usable Example Two", "Open Library:Usable Example", "Audible:Rejected Example"}, candSources(t, got))
@@ -236,4 +243,63 @@ func TestCacheSearchResponse_EmptyChainAnswerKeepsCarriedRow(t *testing.T) {
 		SourcesAnswered: []string{"Audible"},
 	})
 	require.Empty(t, got.Candidates, "control: without the carry hash the row is other inputs and is replaced")
+}
+
+// The top-10 cap evicts from the bottom of the ranking: an owner-rejected
+// candidate (worst rank) goes before a refused-but-reviewable one, whatever
+// the scores; the reviewable chain candidates are evicted last.
+func TestMergeCandidateRows_CapEvictsWorstRankFirst(t *testing.T) {
+	const reviewable, rejected = 2, 3
+	var chain []json.RawMessage
+	for i := 0; i < 8; i++ {
+		chain = append(chain, mergeCand(t, "Audible", fmt.Sprintf("Below Floor %d", i), 0.5))
+	}
+	chain = append(chain, mergeCand(t, "Audible", "Rejected A", 0.95), mergeCand(t, "Audible", "Rejected B", 0.9))
+	fresh := []json.RawMessage{mergeCand(t, "Google Books", "Usable G1", 0.92), mergeCand(t, "Google Books", "Usable G2", 0.91)}
+	rank := func(c MetadataCandidate) int {
+		switch {
+		case strings.HasPrefix(c.Title, "Rejected"):
+			return rejected
+		case strings.HasPrefix(c.Title, "Below Floor"):
+			return reviewable
+		}
+		return 0
+	}
+	got := candSources(t, mergeCandidateRows(fresh, chain, rank))
+	require.Len(t, got, metadataCacheTopN)
+	assert.Equal(t, []string{"Google Books:Usable G1", "Google Books:Usable G2"}, got[:2])
+	for i := 0; i < 8; i++ {
+		assert.Contains(t, got, fmt.Sprintf("Audible:Below Floor %d", i), "a reviewable chain candidate was evicted before a rejected one")
+	}
+	assert.NotContains(t, got, "Audible:Rejected A")
+	assert.NotContains(t, got, "Audible:Rejected B")
+}
+
+// A chain refetch that keeps the fallback providers' candidates ranks the
+// union with MergeRank: a usable chain candidate is ranked above a usable
+// review-only one that scores higher, so the row's first candidate is one
+// the unattended paths can apply.
+func TestCacheSearchResponse_RefetchRanksChainAboveReviewOnly(t *testing.T) {
+	mfs := preserveFixture(t)
+	const fp = FingerprintPrefix + "same-questions"
+	require.NoError(t, mfs.db.PutMetadataCache(&database.MetadataCandidateCache{
+		BookID: mergeBookID, FetchedAt: time.Now().UTC().Add(-48 * time.Hour), SearchFingerprint: fp,
+		SourceHash: hashSearchInputs(mergeBookID, mergeQuery, mergeAuthor, "", ""),
+		Candidates: []json.RawMessage{mergeCand(t, "Google Books", mergeQuery, 0.99)},
+		FallbackAttempts: map[string]database.FallbackAttempt{
+			"Google Books": {At: time.Now().UTC(), Settled: true, Outcome: "matched"},
+		},
+	}))
+	reviewOnlyLast := func(c MetadataCandidate) int {
+		if IsReviewOnlyCandidateSource(c.Source) {
+			return 1
+		}
+		return 0
+	}
+	got := mfs.cacheSearchResponse(mergeBookID, mergeQuery, mergeAuthor, "", "", &SearchMetadataResponse{
+		Results:      []MetadataCandidate{{Source: "Audible", Title: mergeQuery, Score: 0.92}},
+		SourcesTried: []string{"Audible"}, SourcesAnswered: []string{"Audible"},
+		InputFingerprint: fp, mergeRank: reviewOnlyLast,
+	})
+	require.Equal(t, []string{"Audible:" + mergeQuery, "Google Books:" + mergeQuery}, candSources(t, got.Candidates))
 }
