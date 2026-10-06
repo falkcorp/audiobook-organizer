@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.36.0
+// version: 1.37.0
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
-// last-edited: 2026-09-30
+// last-edited: 2026-10-05
 
 // Package metadatahandler hosts the metadata-domain HTTP handlers extracted
 // from the server package's metadata_handlers.go: batch-update / validate /
@@ -528,7 +528,7 @@ func (h *Handler) searchAudiobookMetadataImpl(c *gin.Context) {
 				"fetched_at": entry.FetchedAt,
 			}
 			h.listCache.Set(cacheKey, respH)
-			httputil.RespondWithOK(c, respH)
+			h.respondCandidates(c, id, respH, entry)
 			return
 		}
 	}
@@ -537,7 +537,9 @@ func (h *Handler) searchAudiobookMetadataImpl(c *gin.Context) {
 	// even after the persistent cache lands. Keyed identically.
 	if !refresh {
 		if cached, ok := h.listCache.Get(cacheKey); ok {
-			httputil.RespondWithOK(c, cached)
+			// Results of a fresh search (an alternative query, or a plain
+			// fetch whose cache row has since gone): no cache row to judge.
+			h.respondCandidates(c, id, cached, nil)
 			return
 		}
 	}
@@ -566,7 +568,7 @@ func (h *Handler) searchAudiobookMetadataImpl(c *gin.Context) {
 		results := decodeCachedCandidates(entry)
 		respH := gin.H{"results": results, "query": body.Query, "from_cache": false, "is_fresh": true, "fetched_at": entry.FetchedAt}
 		h.listCache.Set(cacheKey, respH)
-		httputil.RespondWithOK(c, respH)
+		h.respondCandidates(c, id, respH, entry)
 		return
 	}
 
@@ -580,8 +582,37 @@ func (h *Handler) searchAudiobookMetadataImpl(c *gin.Context) {
 	}
 	respH := gin.H{"results": resp.Results, "query": resp.Query, "sources_tried": resp.SourcesTried, "sources_failed": resp.SourcesFailed}
 	h.listCache.Set(cacheKey, respH)
-	httputil.RespondWithOK(c, resp)
+	h.respondCandidates(c, id, respH, nil)
 }
+
+// respondCandidates answers a search with respH, its results turned into
+// dialog candidates carrying their apply checks against the book as it is NOW
+// (withApplyChecks). The checks are computed per response, never stored in the
+// 60-second listCache: the book's ASIN can change inside that window. entry is
+// the cache row the results came from, nil for a fresh search.
+func (h *Handler) respondCandidates(c *gin.Context, id string, respH gin.H, entry *metafetch.MetadataCandidateCache) {
+	results, _ := respH["results"].([]metafetch.MetadataCandidate)
+	var book *database.Book
+	if h.store != nil {
+		b, err := h.store.GetBookByID(id)
+		if err != nil {
+			// The search itself succeeded; answer it unchecked rather than
+			// fail it, and say so in the log.
+			searchCheckLog.Warn("search-metadata: book %s unreadable for the candidate checks: %s",
+				logger.SanitizeLogValue(id), logger.SanitizeLogValue(err.Error()))
+		}
+		book = b
+	}
+	out := make(gin.H, len(respH))
+	for k, v := range respH {
+		out[k] = v
+	}
+	out["results"] = withApplyChecks(book, entry, results)
+	httputil.RespondWithOK(c, out)
+}
+
+// searchCheckLog is the process log of the search's candidate checks.
+var searchCheckLog = logger.New("metadata.search-checks")
 
 // decodeCachedCandidates unwraps the persisted []json.RawMessage into
 // []metafetch.MetadataCandidate. Drops candidates that don't parse so
@@ -612,24 +643,44 @@ func (h *Handler) applyAudiobookMetadataImpl(c *gin.Context) {
 		Candidate metafetch.MetadataCandidate `json:"candidate"`
 		Fields    []string                    `json:"fields"`
 		WriteBack *bool                       `json:"write_back"`
+		// OverrideASINConflict is the book ASIN the person confirmed applying
+		// a conflicting candidate over (the search's apply_check.book_asin).
+		// Without it, or once the book carries another ASIN, a candidate whose
+		// ASIN conflicts with the book's is refused with 409 asin_conflict.
+		OverrideASINConflict string `json:"override_asin_conflict"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		httputil.RespondWithBadRequest(c, "invalid request body")
 		return
+	}
+	// The ASIN check runs here first, so a refused conflict is answered now
+	// rather than queued behind a scan to fail later; applyCandidateCore runs
+	// it again under the lock against the book as it is then.
+	if book, berr := store.GetBookByID(id); berr == nil {
+		if conflict := asinConflictRefusal(book, &body.Candidate, body.OverrideASINConflict); conflict != nil {
+			respondASINConflict(c, conflict)
+			return
+		}
 	}
 	// Per-book scan lock (book_scan_lock.go): waits only if the library scan
 	// is reading THIS book, at most requestBookLockWait, then hands off to the
 	// queued op (202). The file job is submitted under the lock; the pool marks
 	// the book pending until it has run.
 	hold, ok := h.lockBookForRequest(c, QueuedApply{Kind: QueuedApplyCandidate, BookID: id,
-		Candidate: &body.Candidate, Fields: body.Fields, WriteBack: body.WriteBack})
+		Candidate: &body.Candidate, Fields: body.Fields, WriteBack: body.WriteBack,
+		OverrideASINConflict: body.OverrideASINConflict})
 	if !ok {
 		return
 	}
 	defer hold.Release()
 
-	resp, err := h.applyCandidateCore(c.Request.Context(), id, body.Candidate, body.Fields, body.WriteBack, "")
+	resp, err := h.applyCandidateCore(c.Request.Context(), id, body.Candidate, body.Fields, body.WriteBack, "", body.OverrideASINConflict)
 	if err != nil {
+		var conflict *errASINConflict
+		if errors.As(err, &conflict) {
+			respondASINConflict(c, conflict)
+			return
+		}
 		var refused *errRenameWouldFail
 		if errors.As(err, &refused) {
 			httputil.RespondWithErrorFields(c, http.StatusConflict, refused.Error(), "CONFLICT",
@@ -650,6 +701,16 @@ func (h *Handler) applyAudiobookMetadataImpl(c *gin.Context) {
 		"book":    h.enrichBook(enrichedBook),
 		"source":  resp.Source,
 	})
+}
+
+// respondASINConflict answers 409 for a refused conflicting apply, with the
+// fields the dialog needs to offer the override: reason asin_conflict, the
+// book's ASIN (the value to send back as override_asin_conflict) and the
+// candidate's.
+func respondASINConflict(c *gin.Context, conflict *errASINConflict) {
+	httputil.RespondWithErrorFields(c, http.StatusConflict, conflict.Error(), "CONFLICT",
+		map[string]any{"reason": applyReasonASINConflict, "book_asin": conflict.BookASIN,
+			"candidate_asin": conflict.CandidateASIN, "detail": conflict.Detail})
 }
 
 var noMatchLog = logger.New("metadata.nomatch")

@@ -3756,6 +3756,51 @@ export interface MetadataCandidate {
   /** Audible category ladder node names, e.g. "Science Fiction". Audible-sourced
    *  candidates only; applied as book_tags on apply. */
   category_tags?: string[];
+  /** Set by the per-book search (search-metadata) when the candidate disagrees
+   *  with the book as it is now. Absent when nothing disagrees. */
+  apply_check?: CandidateApplyCheck;
+}
+
+/** What the single-book search found wrong with a candidate before it is
+ *  applied. A book's cached candidates survive an ASIN change, so a kept
+ *  candidate can name another ASIN than the book carries, or carry none and
+ *  have been fetched for an ASIN the book no longer has. */
+export interface CandidateApplyCheck {
+  /** The candidate names an ASIN and the book carries another. The apply is
+   *  refused (409, reason asin_conflict) unless the user overrides it. */
+  asin_conflict?: boolean;
+  /** The candidate was fetched for an ASIN the book no longer carries. A
+   *  warning only: the apply is not refused. */
+  identity_stale?: boolean;
+  /** The book's ASIN the check ran against: the value an override sends back. */
+  book_asin?: string;
+  detail?: string;
+}
+
+/** The 409 an apply-metadata answers for a conflicting candidate without an
+ *  override for the book's current ASIN. */
+export interface AsinConflictRefusal {
+  bookAsin: string;
+  candidateAsin: string;
+  detail: string;
+}
+
+/** asinConflictOf returns the refusal behind err when it is apply-metadata's
+ *  asin_conflict 409, else null. */
+export function asinConflictOf(err: unknown): AsinConflictRefusal | null {
+  if (!(err instanceof ApiError) || err.status !== 409) return null;
+  const data = (err.data ?? {}) as {
+    reason?: string;
+    book_asin?: string;
+    candidate_asin?: string;
+    detail?: string;
+  };
+  if (data.reason !== 'asin_conflict' || !data.book_asin) return null;
+  return {
+    bookAsin: data.book_asin,
+    candidateAsin: data.candidate_asin ?? '',
+    detail: data.detail ?? '',
+  };
 }
 
 export interface SearchMetadataResponse {
@@ -3850,18 +3895,37 @@ export async function searchMetadataForBook(
   return responseBody.data;
 }
 
+/**
+ * Applies candidate to the book. A candidate whose ASIN conflicts with the
+ * book's is refused with an ApiError (409, reason asin_conflict; read it with
+ * asinConflictOf) unless overrideAsinConflict is the book's current ASIN: the
+ * value the user was shown the conflict against (apply_check.book_asin, or the
+ * refusal's bookAsin) and confirmed applying over.
+ */
 export async function applyMetadataCandidate(
   bookId: string,
   candidate: MetadataCandidate,
   fields?: string[],
-  writeBack?: boolean
+  writeBack?: boolean,
+  overrideAsinConflict?: string
 ): Promise<{ message: string; book: Book; source: string } & QueuedBehindScan> {
-  const payload: { candidate: MetadataCandidate; fields: string[]; write_back?: boolean } = {
-    candidate,
+  // apply_check is the search's verdict on the candidate, not part of it.
+  const plain: MetadataCandidate = { ...candidate };
+  delete plain.apply_check;
+  const payload: {
+    candidate: MetadataCandidate;
+    fields: string[];
+    write_back?: boolean;
+    override_asin_conflict?: string;
+  } = {
+    candidate: plain,
     fields: fields || [],
   };
   if (writeBack !== undefined) {
     payload.write_back = writeBack;
+  }
+  if (overrideAsinConflict) {
+    payload.override_asin_conflict = overrideAsinConflict;
   }
   const response = await apiFetch(`${API_BASE}/audiobooks/${bookId}/apply-metadata`, {
     method: 'POST',

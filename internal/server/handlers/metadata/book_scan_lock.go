@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/book_scan_lock.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 070620af-532e-4357-a2a3-3f746b5e9e30
 // last-edited: 2026-10-05
 
@@ -80,6 +80,11 @@ type QueuedApply struct {
 	// own history rows will carry. See checkQueuedCandidate.
 	EditMark     int64  `json:"edit_mark,omitempty"`
 	ApplyBatchID string `json:"apply_batch_id,omitempty"`
+	// OverrideASINConflict (QueuedApplyCandidate) is the book ASIN the person
+	// confirmed applying a conflicting candidate over. The queued run re-checks
+	// the conflict against the book as it is then, and the override lifts it
+	// only while the book still carries that ASIN (asinConflictRefusal).
+	OverrideASINConflict string `json:"override_asin_conflict,omitempty"`
 }
 
 // ErrQueuedAlreadyApplied is returned by RunQueuedApply when the queued
@@ -225,7 +230,26 @@ func (e *errRenameWouldFail) Unwrap() error { return e.err }
 //
 // batchID fixes the apply's history batch id (the queued apply's
 // ApplyBatchID); "" is the request path, which draws a fresh one.
-func (h *Handler) applyCandidateCore(ctx context.Context, id string, cand metafetch.MetadataCandidate, fields []string, writeBack *bool, batchID string) (*metafetch.FetchMetadataResponse, error) {
+//
+// A candidate naming another ASIN than the book carries is refused
+// (*errASINConflict, nothing written) unless overrideASIN is the book's
+// current ASIN: the person was shown that conflict and confirmed it
+// (asinConflictRefusal). The book is read here, under the caller's scan lock,
+// so the request path and the queued path judge the book as it is when the
+// apply runs. An overridden apply is recorded as owner-reviewed over
+// asin_conflict in the change history.
+func (h *Handler) applyCandidateCore(ctx context.Context, id string, cand metafetch.MetadataCandidate, fields []string, writeBack *bool, batchID, overrideASIN string) (*metafetch.FetchMetadataResponse, error) {
+	overridden := false
+	if h.store != nil {
+		book, berr := h.store.GetBookByID(id)
+		if berr != nil {
+			return nil, fmt.Errorf("read book %s for the ASIN check: %w", id, berr)
+		}
+		if refusal := asinConflictRefusal(book, &cand, overrideASIN); refusal != nil {
+			return nil, refusal
+		}
+		overridden = asinConflictRefusal(book, &cand, "") != nil
+	}
 	// The apply writes the database first; the rename runs afterwards in the
 	// background file-IO job. When that rename is known to fail, refuse here,
 	// before any write, so the book cannot end up with new metadata and its
@@ -238,9 +262,23 @@ func (h *Handler) applyCandidateCore(ctx context.Context, id string, cand metafe
 	}
 	var resp *metafetch.FetchMetadataResponse
 	var err error
-	if batchID == "" {
+	switch {
+	case overridden:
+		// OwnerReviewed only labels the override in the change history and
+		// makes its history write required; the apply is the same hand-picked
+		// overwrite as ever (FillOnly false).
+		resp, err = h.metadataFetchService.ApplyMetadataCandidateWithOptions(id, cand, fields, metafetch.ApplyOptions{
+			BatchID: batchID, OwnerReviewed: true, GateOverride: applyReasonASINConflict})
+		if errors.Is(err, metafetch.ErrApplyHistoryIncomplete) && resp != nil {
+			// The write stood; only its history did not. Finish the apply
+			// (the files must match the database) and say so.
+			bookLockLog.Error("ASIN-conflict override applied to book %s but its change history was not recorded: %s",
+				logger.SanitizeLogValue(id), logger.SanitizeLogValue(err.Error()))
+			err = nil
+		}
+	case batchID == "":
 		resp, err = h.metadataFetchService.ApplyMetadataCandidate(id, cand, fields)
-	} else {
+	default:
 		resp, err = h.metadataFetchService.ApplyMetadataCandidateWithOptions(id, cand, fields, metafetch.ApplyOptions{BatchID: batchID})
 	}
 	if err != nil {
@@ -401,7 +439,7 @@ func (h *Handler) RunQueuedApply(ctx context.Context, q QueuedApply, beat func(m
 			bookLockLog.Info("queued apply for book %s not run: %s", logger.SanitizeLogValue(q.BookID), logger.SanitizeLogValue(err.Error()))
 			return err
 		}
-		_, err := h.applyCandidateCore(ctx, q.BookID, *q.Candidate, q.Fields, q.WriteBack, q.ApplyBatchID)
+		_, err := h.applyCandidateCore(ctx, q.BookID, *q.Candidate, q.Fields, q.WriteBack, q.ApplyBatchID, q.OverrideASINConflict)
 		return err
 	case QueuedWriteBack:
 		_, err := h.writeBackCore(ctx, q.BookID, q.SegmentIDs, q.Rename != nil && *q.Rename)

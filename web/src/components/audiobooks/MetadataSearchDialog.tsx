@@ -1,7 +1,7 @@
 // file: web/src/components/audiobooks/MetadataSearchDialog.tsx
-// version: 1.12.0
+// version: 1.13.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-09-30
+// last-edited: 2026-10-05
 
 import { useCallback, useEffect, useState, useRef } from 'react';
 import { applyFieldClick } from './fieldRangeSelect';
@@ -95,6 +95,18 @@ export function MetadataSearchDialog({
   const [sortResults, setSortResults] = useState<'score' | 'source'>('score');
   const [writeToFiles, setWriteToFiles] = useState(true);
   const [useRerank, setUseRerank] = useState(false);
+  // An apply waiting for the user to confirm it over an ASIN conflict: the
+  // candidate names another ASIN than the book carries. Opened from the
+  // search's apply_check before any request, or from the server's 409 when the
+  // check was not shown (or the book changed since).
+  const [asinOverride, setAsinOverride] = useState<{
+    candidate: MetadataCandidate;
+    fields?: string[];
+    successLabel: string;
+    bookAsin: string;
+    candidateAsin: string;
+    detail: string;
+  } | null>(null);
 
   // Auto-populate query and search on open
   useEffect(() => {
@@ -178,11 +190,20 @@ export function MetadataSearchDialog({
     }
   };
 
-  const handleApplyAll = async (candidate: MetadataCandidate) => {
+  // runApply applies candidate (fields undefined = every field). override is
+  // the book ASIN the user confirmed applying a conflicting candidate over;
+  // without it the server refuses the conflict with a 409, which reopens the
+  // confirmation instead of reading as a failure.
+  const runApply = async (
+    candidate: MetadataCandidate,
+    fields: string[] | undefined,
+    successLabel: string,
+    override?: string
+  ) => {
     setApplying(true);
     const bookId = book.id;
     try {
-      const resp = await api.applyMetadataCandidate(bookId, candidate, undefined, writeToFiles);
+      const resp = await api.applyMetadataCandidate(bookId, candidate, fields, writeToFiles, override);
       onApplied(resp.book);
       onClose();
       if (resp.queued) {
@@ -190,7 +211,7 @@ export function MetadataSearchDialog({
         toast(resp.message, 'info');
         return;
       }
-      toast(`Metadata applied from ${resp.source}`, 'success', {
+      toast(`${successLabel} ${resp.source}`, 'success', {
         label: 'Undo',
         onClick: async () => {
           try {
@@ -202,48 +223,56 @@ export function MetadataSearchDialog({
         },
       });
     } catch (err) {
+      const conflict = api.asinConflictOf(err);
+      if (conflict) {
+        setAsinOverride({ candidate, fields, successLabel, ...conflict });
+        return;
+      }
       toast(err instanceof Error ? err.message : 'Failed to apply metadata', 'error');
     } finally {
       setApplying(false);
     }
   };
 
-  const handleApplySelected = async (candidate: MetadataCandidate) => {
+  // requestApply asks for confirmation first when the search already flagged
+  // the candidate's ASIN as conflicting with the book's.
+  const requestApply = (
+    candidate: MetadataCandidate,
+    fields: string[] | undefined,
+    successLabel: string
+  ) => {
+    const check = candidate.apply_check;
+    if (check?.asin_conflict && check.book_asin) {
+      setAsinOverride({
+        candidate,
+        fields,
+        successLabel,
+        bookAsin: check.book_asin,
+        candidateAsin: candidate.asin ?? '',
+        detail: check.detail ?? '',
+      });
+      return;
+    }
+    void runApply(candidate, fields, successLabel);
+  };
+
+  const confirmAsinOverride = () => {
+    if (!asinOverride) return;
+    const { candidate, fields, successLabel, bookAsin } = asinOverride;
+    setAsinOverride(null);
+    void runApply(candidate, fields, successLabel, bookAsin);
+  };
+
+  const handleApplyAll = (candidate: MetadataCandidate) => {
+    requestApply(candidate, undefined, 'Metadata applied from');
+  };
+
+  const handleApplySelected = (candidate: MetadataCandidate) => {
     if (selectedFields.size === 0) {
       toast('Select at least one field to apply', 'warning');
       return;
     }
-    setApplying(true);
-    const bookId = book.id;
-    try {
-      const resp = await api.applyMetadataCandidate(
-        bookId,
-        candidate,
-        Array.from(selectedFields),
-        writeToFiles
-      );
-      onApplied(resp.book);
-      onClose();
-      if (resp.queued) {
-        toast(resp.message, 'info');
-        return;
-      }
-      toast(`Selected fields applied from ${resp.source}`, 'success', {
-        label: 'Undo',
-        onClick: async () => {
-          try {
-            await api.undoLastApply(bookId);
-            toast('Metadata apply undone', 'info');
-          } catch {
-            /* ignore */
-          }
-        },
-      });
-    } catch (err) {
-      toast(err instanceof Error ? err.message : 'Failed to apply metadata', 'error');
-    } finally {
-      setApplying(false);
-    }
+    requestApply(candidate, Array.from(selectedFields), 'Selected fields applied from');
   };
 
   const handleMarkNoMatch = async () => {
@@ -697,6 +726,27 @@ export function MetadataSearchDialog({
                           variant="outlined"
                         />
                       )}
+                      {candidate.apply_check?.asin_conflict && (
+                        <Tooltip title={candidate.apply_check.detail ?? ''}>
+                          <Chip
+                            icon={<WarningAmberIcon />}
+                            label="ASIN conflict"
+                            size="small"
+                            color="error"
+                          />
+                        </Tooltip>
+                      )}
+                      {candidate.apply_check?.identity_stale && !candidate.apply_check?.asin_conflict && (
+                        <Tooltip title={candidate.apply_check.detail ?? ''}>
+                          <Chip
+                            icon={<WarningAmberIcon />}
+                            label="Fetched for another ASIN"
+                            size="small"
+                            color="warning"
+                            variant="outlined"
+                          />
+                        </Tooltip>
+                      )}
                     </Stack>
                   </Box>
                   <Button
@@ -768,6 +818,30 @@ export function MetadataSearchDialog({
         </Button>
         <Button onClick={onClose}>Cancel</Button>
       </DialogActions>
+
+      {/* ASIN conflict: applying replaces the book's record with another. */}
+      <Dialog open={!!asinOverride} onClose={() => setAsinOverride(null)} maxWidth="xs">
+        <DialogTitle>Apply over an ASIN conflict?</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" sx={{ mb: 1 }}>
+            This candidate&apos;s ASIN
+            {asinOverride?.candidateAsin ? ` (${asinOverride.candidateAsin})` : ''} is not the
+            book&apos;s ({asinOverride?.bookAsin}). Applying it puts another record&apos;s metadata
+            on this book.
+          </Typography>
+          {asinOverride?.detail && (
+            <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+              {asinOverride.detail}
+            </Typography>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setAsinOverride(null)}>Cancel</Button>
+          <Button color="error" variant="contained" onClick={confirmAsinOverride}>
+            Apply anyway
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* Cover Preview */}
       <Dialog open={!!previewCover} onClose={() => setPreviewCover(null)} maxWidth="sm">

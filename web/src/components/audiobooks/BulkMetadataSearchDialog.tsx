@@ -1,7 +1,7 @@
 // file: web/src/components/audiobooks/BulkMetadataSearchDialog.tsx
-// version: 1.10.0
+// version: 1.11.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-09-30
+// last-edited: 2026-10-05
 
 import { useCallback, useEffect, useState, useRef } from 'react';
 import { applyFieldClick } from './fieldRangeSelect';
@@ -34,6 +34,7 @@ import FolderOpenIcon from '@mui/icons-material/FolderOpen';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import HeadphonesIcon from '@mui/icons-material/Headphones';
+import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import NavigateBeforeIcon from '@mui/icons-material/NavigateBefore';
 import NavigateNextIcon from '@mui/icons-material/NavigateNext';
 import SkipNextIcon from '@mui/icons-material/SkipNext';
@@ -119,6 +120,17 @@ export function BulkMetadataSearchDialog({
   const [applying, setApplying] = useState(false);
   const [expandedCard, setExpandedCard] = useState<number | null>(null);
   const [selectedFields, setSelectedFields] = useState<Set<string>>(new Set());
+  // An apply waiting for the user to confirm it over an ASIN conflict (the
+  // candidate names another ASIN than the book carries): opened from the
+  // search's apply_check, or from the server's 409 asin_conflict.
+  const [asinOverride, setAsinOverride] = useState<{
+    candidate: MetadataCandidate;
+    fields?: string[];
+    successMessage: string;
+    bookAsin: string;
+    candidateAsin: string;
+    detail: string;
+  } | null>(null);
   // Anchor for shift-click range selection over the visible field rows.
   const fieldAnchorRef = useRef<string | null>(null);
   const [bookStatuses, setBookStatuses] = useState<Map<string, BookStatus>>(new Map());
@@ -286,17 +298,27 @@ export function BulkMetadataSearchDialog({
   // Shared by "Apply all" and "Apply selected". `fields` undefined applies the
   // whole candidate. Every UI write after the await is dropped when the dialog
   // was closed (or unmounted) in the meantime; see sessionRef.
+  // override is the book ASIN the user confirmed applying a conflicting
+  // candidate over; without it the server refuses the conflict with a 409,
+  // which reopens the confirmation instead of reading as a failure.
   const applyCandidate = async (
     candidate: MetadataCandidate,
     fields: string[] | undefined,
-    successMessage: string
+    successMessage: string,
+    override?: string
   ) => {
     const session = sessionRef.current;
     setApplying(true);
     const bookId = currentBook.id;
     const bookTitle = currentBook.title;
     try {
-      const resp = await api.applyMetadataCandidate(bookId, candidate, fields, writeToFiles);
+      const resp = await api.applyMetadataCandidate(
+        bookId,
+        candidate,
+        fields,
+        writeToFiles,
+        override
+      );
       if (isStale(session)) {
         refreshAfterStaleWrite();
         return;
@@ -333,6 +355,11 @@ export function BulkMetadataSearchDialog({
       advanceFrom(bookId, skipApplied);
     } catch (err) {
       if (isStale(session)) return;
+      const conflict = api.asinConflictOf(err);
+      if (conflict) {
+        setAsinOverride({ candidate, fields, successMessage, ...conflict });
+        return;
+      }
       toast(err instanceof Error ? err.message : 'Failed to apply metadata', 'error');
     } finally {
       // handleClose resets `applying` itself, so a stale request must not
@@ -341,8 +368,37 @@ export function BulkMetadataSearchDialog({
     }
   };
 
+  // requestApply asks for confirmation first when the search already flagged
+  // the candidate's ASIN as conflicting with the book's.
+  const requestApply = async (
+    candidate: MetadataCandidate,
+    fields: string[] | undefined,
+    successMessage: string
+  ) => {
+    const check = candidate.apply_check;
+    if (check?.asin_conflict && check.book_asin) {
+      setAsinOverride({
+        candidate,
+        fields,
+        successMessage,
+        bookAsin: check.book_asin,
+        candidateAsin: candidate.asin ?? '',
+        detail: check.detail ?? '',
+      });
+      return;
+    }
+    await applyCandidate(candidate, fields, successMessage);
+  };
+
+  const confirmAsinOverride = () => {
+    if (!asinOverride) return;
+    const { candidate, fields, successMessage, bookAsin } = asinOverride;
+    setAsinOverride(null);
+    void applyCandidate(candidate, fields, successMessage, bookAsin);
+  };
+
   const handleApplyAll = (candidate: MetadataCandidate) =>
-    applyCandidate(
+    requestApply(
       candidate,
       undefined,
       `Applied metadata to "${currentBook.title}" from ${candidate.source}`
@@ -353,7 +409,7 @@ export function BulkMetadataSearchDialog({
       toast('Select at least one field to apply', 'warning');
       return;
     }
-    await applyCandidate(
+    await requestApply(
       candidate,
       Array.from(selectedFields),
       `Applied selected fields to "${currentBook.title}"`
@@ -464,6 +520,7 @@ export function BulkMetadataSearchDialog({
     setCurrentBookId(null);
     setBookStatuses(new Map());
     setAppliedStack([]);
+    setAsinOverride(null);
     onClose();
   };
 
@@ -1041,6 +1098,28 @@ export function BulkMetadataSearchDialog({
                           variant="outlined"
                         />
                       )}
+                      {candidate.apply_check?.asin_conflict && (
+                        <Tooltip title={candidate.apply_check.detail ?? ''}>
+                          <Chip
+                            icon={<WarningAmberIcon />}
+                            label="ASIN conflict"
+                            size="small"
+                            color="error"
+                          />
+                        </Tooltip>
+                      )}
+                      {candidate.apply_check?.identity_stale &&
+                        !candidate.apply_check?.asin_conflict && (
+                          <Tooltip title={candidate.apply_check.detail ?? ''}>
+                            <Chip
+                              icon={<WarningAmberIcon />}
+                              label="Fetched for another ASIN"
+                              size="small"
+                              color="warning"
+                              variant="outlined"
+                            />
+                          </Tooltip>
+                        )}
                     </Stack>
                   </Box>
                   <Button
@@ -1185,6 +1264,30 @@ export function BulkMetadataSearchDialog({
           </Button>
         </Stack>
       </DialogActions>
+
+      {/* ASIN conflict: applying replaces the book's record with another. */}
+      <Dialog open={!!asinOverride} onClose={() => setAsinOverride(null)} maxWidth="xs">
+        <DialogTitle>Apply over an ASIN conflict?</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" sx={{ mb: 1 }}>
+            This candidate&apos;s ASIN
+            {asinOverride?.candidateAsin ? ` (${asinOverride.candidateAsin})` : ''} is not the
+            book&apos;s ({asinOverride?.bookAsin}). Applying it puts another record&apos;s metadata
+            on this book.
+          </Typography>
+          {asinOverride?.detail && (
+            <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+              {asinOverride.detail}
+            </Typography>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setAsinOverride(null)}>Cancel</Button>
+          <Button color="error" variant="contained" onClick={confirmAsinOverride}>
+            Apply anyway
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* Cover Preview */}
       <Dialog open={!!previewCover} onClose={() => setPreviewCover(null)} maxWidth="sm">
