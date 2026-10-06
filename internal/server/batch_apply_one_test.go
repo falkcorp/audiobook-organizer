@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_one_test.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: 9d2b71fa-30c8-4e57-a614-8b5e0c7f2d93
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 //
 // Regression tests for applying ONE book's cached metadata candidate.
 //
