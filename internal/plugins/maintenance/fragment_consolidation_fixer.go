@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.34.0
+// version: 1.35.0
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
 // last-edited: 2026-10-05
 
@@ -4338,6 +4338,28 @@ func fragDurationsAgree(a, b int) bool {
 	return d <= tol
 }
 
+// joinTotal is bookTotal for a book fragments may be joined into: a row
+// whose file is missing is no audio the book holds, so its duration is not
+// counted and the row counts as unknown (and in missing). Every join check
+// requires no unknown rows, so a target with missing files never "agrees"
+// with a set and is never joined: its fragments may be the only copies on
+// disk.
+func (lib *fragLibrary) joinTotal(id string) (sec, unknown, n, missing int) {
+	for _, r := range lib.files[id] {
+		n++
+		switch {
+		case r.Missing:
+			missing++
+			unknown++
+		case r.Duration <= 0:
+			unknown++
+		default:
+			sec += r.Duration
+		}
+	}
+	return sec, unknown, n, missing
+}
+
 // bookTotal sums a book's file durations: the total in seconds, how many of
 // its rows carry no duration, and how many rows it has.
 func (lib *fragLibrary) bookTotal(id string) (sec, unknown, n int) {
@@ -4372,6 +4394,9 @@ type fragExisting struct {
 	// the set the book is compared with. creditIDs names them.
 	credit, credited int
 	creditIDs        []string
+	// missing counts the book's rows whose file is missing (joinTotal):
+	// also counted in unknown, so the book never agrees and is never joined.
+	missing int
 	// audio, set on a chapter set's audio join (fragment_folder_sets.go),
 	// is what matched instead of a title: it replaces joinExisting's
 	// "a live book of this title ... agrees" evidence line, which an audio
@@ -4454,7 +4479,7 @@ func (f *fragmentFixer) existingBookCheck(lib *fragLibrary, live *fragLive, r *r
 			e := fragExisting{id: id, coOwner: coOwn[id], uncertain: rel == fragTitleUncertain,
 				authorDiffers: fragAuthorsDiffer(author, lib.authorName(lib.books[id])),
 				authorMissing: fragAuthorMissing(author, lib.authorName(lib.books[id]))}
-			e.total, e.unknown, e.files = lib.bookTotal(id)
+			e.total, e.unknown, e.files, e.missing = lib.joinTotal(id)
 			switch {
 			case e.coOwner, e.files >= 2:
 			case e.files == 1 && e.unknown == 0 && setTotal > 0 && 10*e.total >= 9*setTotal:
@@ -4519,8 +4544,11 @@ func (f *fragmentFixer) existingBookCheck(lib *fragLibrary, live *fragLive, r *r
 	}
 	describe := func(e fragExisting) string {
 		s := fmt.Sprintf("book %s (%q by %q, %d file(s), %s", e.id, lib.books[e.id].Title, lib.authorName(lib.books[e.id]), e.files, fragHours(e.total))
-		if e.unknown > 0 {
-			s += fmt.Sprintf(", %d file(s) with no duration", e.unknown)
+		if e.missing > 0 {
+			s += fmt.Sprintf(", %d file(s) missing on disk (not counted; a book with missing files is never joined)", e.missing)
+		}
+		if e.unknown > e.missing {
+			s += fmt.Sprintf(", %d file(s) with no duration", e.unknown-e.missing)
 		}
 		if e.coOwner {
 			s += ", also holds rows at this row's files"

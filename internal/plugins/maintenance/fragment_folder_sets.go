@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_folder_sets.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9f01b698-b911-4ecc-818e-6d10f415e768
 // last-edited: 2026-10-05
 
@@ -747,7 +747,7 @@ func (f *fragmentFixer) classifyFolderSets(lib *fragLibrary, live *fragLive, row
 			tb := lib.books[target]
 			setAuthor, bookAuthor := groupAuthor(lib, plan), lib.authorName(tb)
 			e := fragExisting{id: target}
-			e.total, e.unknown, e.files = lib.bookTotal(target)
+			e.total, e.unknown, e.files, e.missing = lib.joinTotal(target)
 			total, _ := rowFragTotal(r)
 			authorWord := "they agree"
 			switch {
@@ -763,6 +763,9 @@ func (f *fragmentFixer) classifyFolderSets(lib *fragLibrary, live *fragLive, row
 			e.audio = fmt.Sprintf("audio join (not a title match): all %d of the set's %d files' audio is held by book %s (%q, %d file(s)); totals: set %s, book %s; titles: set %q, book %q; authors: set %q, book %q (%s); %s",
 				files, files, target, tb.Title, e.files, fragHours(total), fragHours(e.total), plan.Title, tb.Title,
 				setAuthor, bookAuthor, authorWord, why)
+			if e.missing > 0 {
+				e.audio += fmt.Sprintf("; book %s also has %d row(s) whose file is missing (not among the matched files, not counted in its total)", target, e.missing)
+			}
 			f.joinExisting(lib, r, plan, e, "", func(e fragExisting) string {
 				return fmt.Sprintf("book %s (%q, %d file(s), %s)", e.id, lib.books[e.id].Title, e.files, fragHours(e.total))
 			}, nil)
@@ -948,16 +951,36 @@ func folderSetVersionGroup(lib *fragLibrary, r *repairs.Row) string {
 type fragAudioIndex struct {
 	bySizeDur map[[2]int64][]string
 	byHash    map[string][]string
-	lib       *fragLibrary
+	// goneBySizeDur / goneByHash index the rows whose file is missing: never
+	// a join's evidence, but a set matching them is held (its fragments may
+	// be the only copies of that book's audio on disk; a repoint, not a
+	// join, is the repair).
+	goneBySizeDur map[[2]int64][]string
+	goneByHash    map[string][]string
+	lib           *fragLibrary
 }
 
 func newFragAudioIndex(lib *fragLibrary) *fragAudioIndex {
-	ix := &fragAudioIndex{bySizeDur: map[[2]int64][]string{}, byHash: map[string][]string{}, lib: lib}
+	ix := &fragAudioIndex{bySizeDur: map[[2]int64][]string{}, byHash: map[string][]string{},
+		goneBySizeDur: map[[2]int64][]string{}, goneByHash: map[string][]string{}, lib: lib}
 	for id, rows := range lib.files {
 		if b, ok := lib.books[id]; !ok || b.SoftDeleted {
 			continue
 		}
 		for _, r := range rows {
+			if r.Missing {
+				// A missing file is no audio the book holds: a set is never
+				// joined into a book on the strength of files that are gone
+				// (the set's fragments may be the only copies on disk).
+				if r.Size > 0 && r.Duration > 0 {
+					k := [2]int64{r.Size, int64(r.Duration)}
+					ix.goneBySizeDur[k] = append(ix.goneBySizeDur[k], id)
+				}
+				if r.Hash != "" {
+					ix.goneByHash[r.Hash] = append(ix.goneByHash[r.Hash], id)
+				}
+				continue
+			}
 			if r.Size > 0 && r.Duration > 0 {
 				k := [2]int64{r.Size, int64(r.Duration)}
 				ix.bySizeDur[k] = append(ix.bySizeDur[k], id)
@@ -968,6 +991,27 @@ func newFragAudioIndex(lib *fragLibrary) *fragAudioIndex {
 		}
 	}
 	return ix
+}
+
+// goneOwners names the live books outside in with a MISSING row matching
+// c's file by hash, or by size and duration.
+func (ix *fragAudioIndex) goneOwners(c *fragCandidate, in map[string]bool) []string {
+	var out []string
+	if c.File.Hash != "" {
+		for _, id := range ix.goneByHash[c.File.Hash] {
+			if !in[id] {
+				out = append(out, id)
+			}
+		}
+	}
+	if len(out) == 0 && c.File.Size > 0 && c.File.Duration > 0 {
+		for _, id := range ix.goneBySizeDur[[2]int64{c.File.Size, int64(c.File.Duration)}] {
+			if !in[id] {
+				out = append(out, id)
+			}
+		}
+	}
+	return uniqueSorted(out)
 }
 
 // joinTarget reads the row's files against the live books outside it: the
@@ -992,10 +1036,13 @@ func (ix *fragAudioIndex) joinTarget(r *repairs.Row) (target, why string) {
 	for _, cp := range plan.Copies {
 		files = append(files, cp.Frag)
 	}
-	var hits []string
+	var hits, gone []string
 	held := 0
 	others := map[string]bool{}
 	for _, c := range files {
+		if gb := ix.goneOwners(c, in); len(gb) > 0 && len(gone) < 5 {
+			gone = append(gone, fmt.Sprintf("%q (book %s)", c.origStem(), strings.Join(gb, ", ")))
+		}
 		var owners []string
 		how := ""
 		if c.File.Hash != "" {
@@ -1025,6 +1072,16 @@ func (ix *fragAudioIndex) joinTarget(r *repairs.Row) (target, why string) {
 		} else if len(hits) == 5 {
 			hits = append(hits, "…")
 		}
+	}
+	if len(gone) > 0 {
+		// Held whatever else matched: the matching book rows' files are gone,
+		// so these fragments may be the only copies of that audio.
+		why = "files of the set match rows of a live book whose files are missing on disk: " + strings.Join(gone, "; ") +
+			"; these fragments may be that book's only copies, so the set is neither joined nor assembled (a repoint is the repair); decide by hand"
+		if held > 0 {
+			why += fmt.Sprintf("; %d file(s) also match present rows: %s", held, strings.Join(hits, "; "))
+		}
+		return "", why
 	}
 	if held == 0 {
 		return "", ""
