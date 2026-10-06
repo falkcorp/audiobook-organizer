@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/consolidation_leftovers_samepath_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: f05ffd91-1eeb-4d83-be86-1d16d9d8e1e8
 // last-edited: 2026-10-06
 
@@ -119,7 +119,10 @@ func TestLeftoversSamePath_PicksSamePathOwnerOverHashMatch(t *testing.T) {
 // TestLeftoversSamePath_ApplyAndUndo: the apply marks the dead row Missing
 // (kept), retires the leftover into the owner with its listening state and
 // external ids, leaves the owner the group's one primary; the op revert puts
-// every piece back.
+// every piece back, except that the owner keeps its primary flag: the op
+// never wrote it (its hand-off kept the owner, already explicit true), so
+// the restored leftover yields to it rather than re-crown over it and hide
+// the owner from Audiobookshelf.
 func TestLeftoversSamePath_ApplyAndUndo(t *testing.T) {
 	f := newLFFixture(t)
 	l, o, other := f.splashdown(t)
@@ -168,7 +171,7 @@ func TestLeftoversSamePath_ApplyAndUndo(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, lb.IsSoftDeleted())
 	require.Equal(t, f.path(spShared), lb.FilePath)
-	require.True(t, database.EffectiveIsPrimaryVersion(lb.IsPrimaryVersion))
+	f.requireOwnerKeepsPrimary(t, l, o)
 	rows, err = f.s.GetBookFiles(l)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
@@ -179,6 +182,31 @@ func TestLeftoversSamePath_ApplyAndUndo(t *testing.T) {
 	owner, err = f.s.GetBookByExternalID("audible", "B0SPLASH")
 	require.NoError(t, err)
 	require.Equal(t, l, owner)
+}
+
+// requireOwnerKeepsPrimary: after the op revert, the owner is still
+// explicit primary and the restored leftover is explicit false, so the
+// group's live primaries are exactly [owner].
+func (f *lfFixture) requireOwnerKeepsPrimary(t *testing.T, l, o string) {
+	t.Helper()
+	ob, err := f.s.GetBookByID(o)
+	require.NoError(t, err)
+	require.NotNil(t, ob.IsPrimaryVersion)
+	require.True(t, *ob.IsPrimaryVersion, "the owner keeps the primary flag the op never wrote")
+	lb, err := f.s.GetBookByID(l)
+	require.NoError(t, err)
+	require.False(t, lb.IsSoftDeleted())
+	require.NotNil(t, lb.IsPrimaryVersion)
+	require.False(t, *lb.IsPrimaryVersion, "the restored leftover yields to the owner")
+	members, err := f.s.GetBooksByVersionGroup(spGroupID)
+	require.NoError(t, err)
+	var live []string
+	for i := range members {
+		if !members[i].IsSoftDeleted() && database.EffectiveIsPrimaryVersion(members[i].IsPrimaryVersion) {
+			live = append(live, members[i].ID)
+		}
+	}
+	require.Equal(t, []string{o}, live, "the group's live primaries")
 }
 
 // sameAudioBySize gives the leftover's dead row the owner file's exact size:
@@ -529,6 +557,62 @@ func TestLeftoversSamePath_HandOffRefusesAnUnexpectedWinner(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, sb.IsPrimaryVersion)
 	require.False(t, *sb.IsPrimaryVersion, "the sibling was never crowned")
+
+	// The op revert: the refused hand-off wrote no member's flag (its
+	// refusal note says so), so the owner keeps its flag and the restored
+	// leftover yields to it.
+	rr, err := audiobooks.NewRevertService(f.s).RevertOperation("op-apply")
+	require.NoError(t, err)
+	require.Zero(t, rr.Failed, "%+v", rr)
+	f.requireOwnerKeepsPrimary(t, l, o)
+	sb, err = f.s.GetBookByID(sib)
+	require.NoError(t, err)
+	require.NotNil(t, sb.IsPrimaryVersion)
+	require.False(t, *sb.IsPrimaryVersion)
+}
+
+// TestLeftoversSamePath_HandOffNeverWritesAnITunesMember: an explicit-false
+// iTunes copy in the group passes the apply's locked iTunes check, then its
+// flag turns nil before the retire's hand-off (the window the slower
+// user-state follow opens). The hand-off would demote it -- a write to an
+// iTunes book's primary flag -- so it refuses under the group lock with
+// nothing written: the copy stays nil, the owner keeps its flag, the row
+// stops as partially applied. The op revert then leaves the owner primary.
+func TestLeftoversSamePath_HandOffNeverWritesAnITunesMember(t *testing.T) {
+	f := newLFFixture(t)
+	l, o, _ := f.splashdown(t)
+	f.sameAudioBySize(t, l)
+	no := false
+	it := f.itunesSibling(t, &no)
+	planned, ok := lfRow(f.planLF(t, "op-plan"), l)
+	require.True(t, ok)
+	require.True(t, planned.Applicable(), planned.SkipReason)
+	leftoverBeforeRetireHooks.Store(l, func() {
+		_, err := f.s.ModifyBook(it, func(b *database.Book) error { b.IsPrimaryVersion = nil; return nil })
+		require.NoError(t, err)
+	})
+	t.Cleanup(func() { leftoverBeforeRetireHooks.Delete(l) })
+	out := f.applyLF(t, "op-plan", "op-apply", []string{"leftover:" + l})
+	require.Zero(t, out.Applied, "%+v", out.Rows)
+	require.Len(t, out.Rows, 1)
+	require.Equal(t, repairs.OutcomePartial, out.Rows[0].Outcome, "%+v", out.Rows[0])
+	require.Contains(t, out.Rows[0].Error, "iTunes copy "+it)
+	ib, err := f.s.GetBookByID(it)
+	require.NoError(t, err)
+	require.Nil(t, ib.IsPrimaryVersion, "the iTunes copy's flag was never written")
+	ob, err := f.s.GetBookByID(o)
+	require.NoError(t, err)
+	require.NotNil(t, ob.IsPrimaryVersion)
+	require.True(t, *ob.IsPrimaryVersion)
+
+	// Restore the copy's explicit false (a user's fix) so the group the
+	// revert judges has one real primary candidate besides the leftover.
+	_, err = f.s.ModifyBook(it, func(b *database.Book) error { b.IsPrimaryVersion = &no; return nil })
+	require.NoError(t, err)
+	rr, err := audiobooks.NewRevertService(f.s).RevertOperation("op-apply")
+	require.NoError(t, err)
+	require.Zero(t, rr.Failed, "%+v", rr)
+	f.requireOwnerKeepsPrimary(t, l, o)
 }
 
 // TestLeftoversSamePath_ChosenWinnerIsFingerprinted: the hand-off's chosen

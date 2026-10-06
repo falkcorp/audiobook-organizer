@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/folder_books_fixer.go
-// version: 2.11.0
+// version: 2.11.1
 // guid: 3b8e5d17-9c2a-4f60-8e41-6a7d2c9f0b35
-// last-edited: 2026-10-03
+// last-edited: 2026-10-06
 
 // Repairs-lane fixer "folder-books": retire book rows that are really whole
 // author, series or library folders, and give each file only such a row held a
@@ -1949,9 +1949,13 @@ func (f *folderBooksFixer) handOff(store OpsStore, w *repairs.Writer, members []
 		return 1, fmt.Errorf("crown in group %s left %q primary, not %s", gid, res.PrimaryID, heir)
 	}
 	// The hand-off note is evidence the group's flags changed, so it is
-	// written only once Crown has (undo.ChangeTypeBookPrimaryHandoff).
+	// written only once Crown has (undo.ChangeTypeBookPrimaryHandoff). It
+	// says whether Crown wrote the heir's true or found it already there
+	// (undo.HandOffNoteValue): the revert never demotes a heir whose true
+	// predates the operation.
+	note := undo.HandOffNoteValue(heir, res.WrotePrimary())
 	for _, m := range demoted {
-		if err := w.Journal(m, undo.ChangeTypeBookPrimaryHandoff, "version_group_id", undo.HandOffCrownedValue(heir), gid); err != nil {
+		if err := w.Journal(m, undo.ChangeTypeBookPrimaryHandoff, "version_group_id", note, gid); err != nil {
 			return 1, err
 		}
 	}

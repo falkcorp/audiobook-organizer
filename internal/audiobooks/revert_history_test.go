@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_history_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 829118c5-b507-4c65-8bb6-eaf346c88634
-// last-edited: 2026-10-03
+// last-edited: 2026-10-06
 
 package audiobooks
 
@@ -193,7 +193,7 @@ func TestRevertHistory_EverySiteRecords(t *testing.T) {
 			require.NoError(t, err)
 			_, err = s.CreateBook(&database.Book{Title: "X", FilePath: "/x/x", VersionGroupID: &gid, IsPrimaryVersion: &yes})
 			require.NoError(t, err)
-			_, err = rs.settleGroup(opID, gid, []string{o.ID}, nil, map[string][]string{o.ID: {"someone-else"}})
+			_, err = rs.settleGroup(opID, gid, []string{o.ID}, nil, map[string]handOffEvidence{o.ID: {crowned: []string{"someone-else"}, recorded: true}})
 			require.NoError(t, err)
 			b, err := s.GetBookByID(o.ID)
 			require.NoError(t, err)

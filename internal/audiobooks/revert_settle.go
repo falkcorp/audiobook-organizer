@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_settle.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3f8c2a71-5d94-4e6b-b0a3-9c1e7d2f4a58
-// last-edited: 2026-10-03
+// last-edited: 2026-10-06
 
 package audiobooks
 
@@ -71,9 +71,9 @@ type settleInput struct {
 	// (changed since, say): a soft-delete restore of such a book does not
 	// make it an original.
 	refusedDemote map[string]bool
-	// crowned: per retired book, the members the operation's hand-off notes
-	// recorded crowning (undo.HandOffCrowned).
-	crowned map[string][]string
+	// crowned: per retired book, what the operation's hand-off notes
+	// recorded (handOffEvidenceOf).
+	crowned map[string]handOffEvidence
 	// priorPending: the groups an EARLIER run's intent left pending when
 	// this run started. Only those Pending groups are settled from the
 	// record; this run's own intent is not evidence (a retire cut off
@@ -95,14 +95,49 @@ func lockOperation(operationID string) func() {
 	return mu.Unlock
 }
 
-// crownedByHandOff collects every hand-off note's recorded winner, per
-// retired book.
-func crownedByHandOff(changes []*database.OperationChange) map[string][]string {
-	out := map[string][]string{}
+// handOffEvidence is what an operation's notes say about the primary
+// hand-off of one retired book's version group.
+type handOffEvidence struct {
+	// crowned: the members a hand-off of the operation WROTE explicit true
+	// on ("crowned:<id>" notes; a note journaled before 2026-10-06 may
+	// name a member it only kept, and cannot be told apart).
+	crowned []string
+	// recorded: the operation recorded how its hand-off ended -- a member
+	// crowned, a member kept without a write ("kept:<id>",
+	// undo.HandOffKept), or a refusal that wrote nothing
+	// (undo.ChangeTypeBookPrimaryHandoffRefused). Every explicit-true
+	// member not in crowned then carries a true the operation never wrote.
+	// A hand-off note naming nobody (journaled before 2026-10-02), or no
+	// note at all (a retire cut off before its hand-off, or after it wrote
+	// and before its note), records nothing: the crown-back rule stands.
+	recorded bool
+}
+
+// handOffEvidenceOf collects every hand-off note's evidence, per retired
+// book.
+func handOffEvidenceOf(changes []*database.OperationChange) map[string]handOffEvidence {
+	out := map[string]handOffEvidence{}
 	for _, c := range changes {
-		if id, ok := undo.HandOffCrowned(c); ok && !slices.Contains(out[c.BookID], id) {
-			out[c.BookID] = append(out[c.BookID], id)
+		if c == nil {
+			continue
 		}
+		ev := out[c.BookID]
+		switch {
+		case c.ChangeType == undo.ChangeTypeBookPrimaryHandoffRefused:
+			ev.recorded = true
+		default:
+			if _, ok := undo.HandOffKept(c); ok {
+				ev.recorded = true
+			} else if id, ok := undo.HandOffCrowned(c); ok {
+				ev.recorded = true
+				if !slices.Contains(ev.crowned, id) {
+					ev.crowned = append(ev.crowned, id)
+				}
+			} else {
+				continue
+			}
+		}
+		out[c.BookID] = ev
 	}
 	return out
 }
@@ -317,6 +352,14 @@ func (rs *RevertService) settleGroups(operationID string, in settleInput, result
 //	    (versionprimary.EnsureSinglePrimary);
 //	(c) otherwise it is left alone.
 //
+// Before (a), an original yields instead when another Electable member is
+// explicit true that the operation did not write (laterPick): a user's pick
+// made since, or an incumbent the operation's hand-off kept (or never
+// reached, its hand-off refused) whose true predates the operation. The
+// revert writes only what the operation changed, so that member keeps its
+// flag and the original comes back explicit false -- the rule
+// versionprimary.YieldToIncumbent applies to a restored row.
+//
 // owed is set for a group retried only from the operation's owed record:
 // if any Electable member is explicit true now that was not when the settle
 // failed, that is a later pick (a user's) and nothing is written; the owed
@@ -324,7 +367,7 @@ func (rs *RevertService) settleGroups(operationID string, in settleInput, result
 //
 // On an error it returns the members explicit true now, for the owed
 // record.
-func (rs *RevertService) settleGroup(opID, gid string, originals []string, owed *settleOwedGroup, crowned map[string][]string) ([]string, error) {
+func (rs *RevertService) settleGroup(opID, gid string, originals []string, owed *settleOwedGroup, crowned map[string]handOffEvidence) ([]string, error) {
 	// Every is_primary_version write below records history, Source
 	// operation_revert, BatchID the operation id (revertHistoryStore).
 	hist := revertHistoryStore{revertServiceStore: rs.db, opID: opID}
@@ -365,11 +408,13 @@ func (rs *RevertService) settleGroup(opID, gid string, originals []string, owed 
 			continue
 		}
 		if later := laterPick(explicit, originals, crowned[o]); later != "" {
-			// The operation recorded whom its hand-off crowned, and someone
-			// else has been made primary since (a user's pick): the original
-			// yields, explicit false so its nil is not read as a second
-			// primary, and the group is judged as it stands below.
-			revertLog.Info("revert: version group %s keeps %s, made primary after the operation; %s returns non-primary",
+			// The operation recorded how its hand-off ended, and another
+			// member is explicit primary that the operation did not write (a
+			// user's pick since, or an incumbent the hand-off kept or never
+			// reached): the original yields, explicit false so its nil is
+			// not read as a second primary, and the group is judged as it
+			// stands below.
+			revertLog.Info("revert: version group %s keeps %s, which the operation did not make primary; %s returns non-primary",
 				logger.SanitizeLogValue(gid), logger.SanitizeLogValue(later), logger.SanitizeLogValue(o))
 			// EVERY electable original yields (a folder-books row demotes
 			// each primary folder-book, so there can be several): one left
@@ -407,15 +452,17 @@ func (rs *RevertService) settleGroup(opID, gid string, originals []string, owed 
 }
 
 // laterPick returns an explicit-true member that is neither an original nor
-// one the operation's hand-off recorded crowning, or "". With no recorded
-// winner (a hand-off note journaled before the field existed, or no note at
-// all) it returns "": the original is crowned as before.
-func laterPick(explicit, originals, crowned []string) string {
-	if len(crowned) == 0 {
+// one the operation's hand-off recorded crowning (writing), or "". A member
+// a hand-off note records KEEPING, or any member when the hand-off recorded
+// a refusal, is returned: the operation never wrote its true. With nothing
+// recorded (a hand-off note journaled before the field existed, or no note
+// at all) it returns "": the original is crowned as before.
+func laterPick(explicit, originals []string, ev handOffEvidence) string {
+	if !ev.recorded {
 		return ""
 	}
 	for _, id := range explicit {
-		if !slices.Contains(originals, id) && !slices.Contains(crowned, id) {
+		if !slices.Contains(originals, id) && !slices.Contains(ev.crowned, id) {
 			return id
 		}
 	}

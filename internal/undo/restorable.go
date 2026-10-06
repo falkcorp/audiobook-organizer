@@ -110,11 +110,25 @@ const (
 	// re-crowns BookID over an already-restored flag only when this row
 	// exists (undo.RevertPlan.HandedOff). Restorable with nothing to write:
 	// the demote row's revert (versionprimary.Crown) undoes the hand-off.
-	// OldValue names the member the hand-off made primary, as
-	// HandOffCrownedValue writes it ("" on rows journaled before
-	// 2026-10-02): the revert re-crowns BookID only while no OTHER member
-	// is explicit primary (HandOffCrowned).
+	// OldValue names the member the hand-off left primary, as
+	// HandOffNoteValue writes it ("" on rows journaled before 2026-10-02):
+	// "crowned:<id>" when the hand-off wrote that member's explicit true,
+	// "kept:<id>" (since 2026-10-06) when the member already carried it and
+	// the hand-off made nobody primary. The revert re-crowns BookID only
+	// while no OTHER member is explicit primary that the operation did not
+	// write (HandOffCrowned, HandOffKept). A "crowned:" row journaled before
+	// 2026-10-06 may name a kept member: those rows cannot be told apart.
 	ChangeTypeBookPrimaryHandoff = "book_primary_handoff"
+	// ChangeTypeBookPrimaryHandoffRefused: after retiring BookID (a primary
+	// it demoted), the operation's hand-off of the book's version group
+	// (NewValue) REFUSED and wrote no member's flag (an unexpected winner,
+	// or a member the caller may not write: versionprimary.ErrUnexpectedWinner,
+	// ErrWriteRefused). A ledger note (IsLedgerOnly), written after the
+	// refusal: it is the revert's evidence that every other member's
+	// explicit true predates the operation, so BookID's restored true
+	// yields to it rather than re-crown over it. Not evidence of a
+	// hand-off: RevertPlan.HandedOff ignores it.
+	ChangeTypeBookPrimaryHandoffRefused = "book_primary_handoff_refused"
 	// ChangeTypeRepairPlanRecord: the decision a Repairs apply run worked
 	// from, journaled on the row's main book (BookID) before the run's first
 	// write. FieldName is "row:<row id>"; NewValue is the fixer's own JSON
@@ -652,7 +666,7 @@ func NotRestorableLabel(c *database.OperationChange) string {
 	switch c.ChangeType {
 	case "file_move", "organize_rename",
 		"organize_failed", "organize_skipped", "organize_summary",
-		ChangeTypeRepairPlanRecord:
+		ChangeTypeRepairPlanRecord, ChangeTypeBookPrimaryHandoffRefused:
 		return ""
 	case ChangeTypeTagWrite:
 		// A tag_write row restores exactly OldValue into one book_file. Rows
@@ -789,11 +803,11 @@ func NotRestorableLabel(c *database.OperationChange) string {
 }
 
 // IsLedgerOnly reports whether c records no change to its book at all, only
-// evidence an operation keeps for itself (a Repairs plan record). User-facing
-// per-book change lists leave such rows out; the operation's own change list
-// keeps them.
+// evidence an operation keeps for itself (a Repairs plan record, a refused
+// primary hand-off). User-facing per-book change lists leave such rows out;
+// the operation's own change list keeps them.
 func IsLedgerOnly(c *database.OperationChange) bool {
-	return c != nil && c.ChangeType == ChangeTypeRepairPlanRecord
+	return c != nil && (c.ChangeType == ChangeTypeRepairPlanRecord || c.ChangeType == ChangeTypeBookPrimaryHandoffRefused)
 }
 
 // IsRestorable reports whether the revert engine can reverse c.
@@ -823,25 +837,56 @@ func OperationRevertible(changes []*database.OperationChange) bool {
 }
 
 // handOffCrownedPrefix starts a ChangeTypeBookPrimaryHandoff row's OldValue
-// that names the member the hand-off crowned.
-const handOffCrownedPrefix = "crowned:"
+// that names the member the hand-off crowned (wrote explicit true on);
+// handOffKeptPrefix one that names the member it left primary without
+// writing it (already explicit true).
+const (
+	handOffCrownedPrefix = "crowned:"
+	handOffKeptPrefix    = "kept:"
+)
 
 // HandOffCrownedValue is the OldValue a hand-off note journals for the
 // member it made primary (id), or "" when it is not known.
-func HandOffCrownedValue(id string) string {
-	if id == "" {
+func HandOffCrownedValue(id string) string { return HandOffNoteValue(id, true) }
+
+// HandOffNoteValue is the OldValue a hand-off note journals for the member
+// it left primary (id): "crowned:<id>" when the hand-off wrote id's explicit
+// true (wrote; versionprimary.HandoffResult.WrotePrimary), "kept:<id>" when
+// id already carried it. "" when id is not known.
+func HandOffNoteValue(id string, wrote bool) string {
+	switch {
+	case id == "":
 		return ""
+	case wrote:
+		return handOffCrownedPrefix + id
+	default:
+		return handOffKeptPrefix + id
 	}
-	return handOffCrownedPrefix + id
 }
 
-// HandOffCrowned returns the member a hand-off note (c) recorded crowning,
-// and false for a row that names none (journaled before the field existed,
-// or by a hand-off that did not know its winner).
+// HandOffCrowned returns the member a hand-off note (c) recorded leaving
+// primary, crowned or kept, and false for a row that names none (journaled
+// before the field existed, or by a hand-off that did not know its winner).
+// HandOffKept tells the two apart.
 func HandOffCrowned(c *database.OperationChange) (string, bool) {
 	if c == nil || c.ChangeType != ChangeTypeBookPrimaryHandoff {
 		return "", false
 	}
-	id, ok := strings.CutPrefix(c.OldValue, handOffCrownedPrefix)
+	if id, ok := strings.CutPrefix(c.OldValue, handOffCrownedPrefix); ok {
+		return id, id != ""
+	}
+	id, ok := strings.CutPrefix(c.OldValue, handOffKeptPrefix)
+	return id, ok && id != ""
+}
+
+// HandOffKept reports whether hand-off note c names a member the hand-off
+// left primary WITHOUT writing it ("kept:<id>"): its explicit true predates
+// the operation, so the operation's revert never demotes it to re-crown the
+// retired book.
+func HandOffKept(c *database.OperationChange) (string, bool) {
+	if c == nil || c.ChangeType != ChangeTypeBookPrimaryHandoff {
+		return "", false
+	}
+	id, ok := strings.CutPrefix(c.OldValue, handOffKeptPrefix)
 	return id, ok && id != ""
 }

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retire_into.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: dadb4da5-0f2d-4678-abf3-4ac97f3ecb66
 // last-edited: 2026-10-06
 
@@ -72,11 +72,12 @@ func retireInto(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Write
 // retire's earlier steps: partially applied, nobody else crowned. The
 // consolidation-leftovers same-path class passes the owner it predicted
 // under the merge lock, closing the window between that prediction and the
-// hand-off (which runs after the slower user-state follow). Its one caller
-// is consolidation-leftovers, so it allows a row iTunes path
+// hand-off (which runs after the slower user-state follow). rules also
+// carries the caller's never-write-an-iTunes-book check (handOffRules). Its
+// one caller is consolidation-leftovers, so it allows a row iTunes path
 // (retireOpts.AllowITunesPath).
-func retireIntoExpecting(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Writer, clock func() time.Time, fixerID, id, target string, slice *merge.SliceMapping, expect string) (int, error) {
-	return retireIntoWith(ctx, p, store, w, clock, fixerID, id, target, slice, retireOpts{Expect: expect, AllowITunesPath: true})
+func retireIntoExpecting(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Writer, clock func() time.Time, fixerID, id, target string, slice *merge.SliceMapping, rules handOffRules) (int, error) {
+	return retireIntoWith(ctx, p, store, w, clock, fixerID, id, target, slice, retireOpts{Expect: rules.expect, MayWrite: rules.mayWrite, AllowITunesPath: true})
 }
 
 // retireIntoAllowingITunesPath is retireInto for duplicate-copies, whose own
@@ -85,11 +86,32 @@ func retireIntoAllowingITunesPath(ctx context.Context, p *Plugin, store OpsStore
 	return retireIntoWith(ctx, p, store, w, clock, fixerID, id, target, slice, retireOpts{AllowITunesPath: true})
 }
 
+// handOffRules are what a retire's primary hand-off must respect, checked
+// by versionprimary under the group lock before it writes anything:
+//
+//   - expect: the member it must leave primary (versionprimary.Env.Expect;
+//     "" expects nothing). Any other decision writes nothing and returns
+//     versionprimary.ErrUnexpectedWinner.
+//   - mayWrite: asked about every member whose flag it would write
+//     (versionprimary.Env.MayWrite; nil allows all). A refusal writes
+//     nothing and returns versionprimary.ErrWriteRefused.
+//
+// Either refusal stops the row after the retire's earlier steps (partially
+// applied), with a ledger note (undo.ChangeTypeBookPrimaryHandoffRefused)
+// so the op revert knows the hand-off wrote no member's flag.
+type handOffRules struct {
+	expect   string
+	mayWrite func(*database.Book) error
+}
+
 // retireOpts adjust the shared retire. The zero value is the safe one.
 type retireOpts struct {
 	// Expect is the member the primary hand-off must leave primary ("" none;
 	// retireIntoExpecting).
 	Expect string
+	// MayWrite is asked, under the group lock, about every member whose
+	// primary flag the hand-off would write (handOffRules.mayWrite).
+	MayWrite func(*database.Book) error
 	// Only, when set, is why target must not be written (retireIntoOnly).
 	Only string
 	// AllowITunesPath lets a book with an iTunes path on one of its rows be
@@ -121,7 +143,8 @@ func retireIntoOnly(ctx context.Context, p *Plugin, store OpsStore, w *repairs.W
 // (retireIntoOnly), refusing a row iTunes path unless opts.AllowITunesPath
 // is set.
 func retireIntoWith(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Writer, clock func() time.Time, fixerID, id, target string, slice *merge.SliceMapping, opts retireOpts) (int, error) {
-	only, expect := opts.Only, opts.Expect
+	only := opts.Only
+	rules := handOffRules{expect: opts.Expect, mayWrite: opts.MayWrite}
 	b, err := store.GetBookByID(id)
 	if err != nil {
 		return 0, fmt.Errorf("read %s: %w", id, err)
@@ -132,7 +155,7 @@ func retireIntoWith(ctx context.Context, p *Plugin, store OpsStore, w *repairs.W
 	if b.IsSoftDeleted() {
 		// Retired by an earlier run, which may have been cut off (a lost
 		// scan stand-down lease) before its primary hand-off.
-		return 0, resumeHandOff(ctx, p, store, w, fixerID, id, target, expect)
+		return 0, resumeHandOff(ctx, p, store, w, fixerID, id, target, rules)
 	}
 	// Refusals first: nothing is written for a refused retire.
 	if b.ITunesPersistentID != nil && *b.ITunesPersistentID != "" {
@@ -263,9 +286,9 @@ func retireIntoWith(ctx context.Context, p *Plugin, store OpsStore, w *repairs.W
 		// read goes through the evidence check (resumeHandOff), never a
 		// silent skip that would leave the group with no live primary.
 		if wasPrimary {
-			err = retireHandOff(ctx, p, store, w, fixerID, id, *b.VersionGroupID, expect)
+			err = retireHandOff(ctx, p, store, w, fixerID, id, *b.VersionGroupID, rules)
 		} else {
-			err = resumeHandOff(ctx, p, store, w, fixerID, id, target, expect)
+			err = resumeHandOff(ctx, p, store, w, fixerID, id, target, rules)
 		}
 		if err != nil {
 			return steps, err
@@ -388,10 +411,16 @@ func followUserStateInto(p *Plugin, w *repairs.Writer, target, id string, slice 
 // logged: the crown is written, and a missing note only keeps a revert from
 // touching the group's flags.
 //
-// expect, when set, is the member the hand-off must leave primary
-// (versionprimary.Env.Expect): any other decision writes nothing and is
-// returned (versionprimary.ErrUnexpectedWinner), logged with the group.
-func retireHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Writer, fixerID, id, groupID, expect string) error {
+// The note says whether the hand-off wrote its primary's true or kept a
+// member that already carried it (undo.HandOffNoteValue): the revert never
+// demotes a kept incumbent to re-crown the retired book, since the
+// operation never wrote that incumbent's flag.
+//
+// rules (handOffRules) may refuse the hand-off: nothing is written, a
+// refusal note (undo.ChangeTypeBookPrimaryHandoffRefused) is journaled so
+// the revert likewise leaves every other member's flag alone, and the
+// refusal is returned, logged with the group.
+func retireHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Writer, fixerID, id, groupID string, rules handOffRules) error {
 	vps := p.deps.VersionPrimaryStore()
 	if vps == nil {
 		return nil
@@ -401,13 +430,25 @@ func retireHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Wr
 	}
 	es := fragEnsureStore{OpsStore: store, chapters: vps}
 	res, err := versionprimary.EnsureSinglePrimary(ctx, es, groupID,
-		versionprimary.Env{RootDir: p.deps.RootDir(), Expect: expect})
+		versionprimary.Env{RootDir: p.deps.RootDir(), Expect: rules.expect, MayWrite: rules.mayWrite})
 	if err != nil {
 		fragLog.Warn("%s: primary hand-off in group %s: %s", fixerID,
 			logger.SanitizeLogValue(groupID), logger.SanitizeLogValue(err.Error()))
-		return fmt.Errorf("primary hand-off of %s in group %s: %w", id, groupID, err)
+		err = fmt.Errorf("primary hand-off of %s in group %s: %w", id, groupID, err)
+		if errors.Is(err, versionprimary.ErrUnexpectedWinner) || errors.Is(err, versionprimary.ErrWriteRefused) {
+			// Refused before any write: say so, so the revert of this
+			// op does not demote a member whose true it never wrote.
+			if jerr := w.Journal(id, undo.ChangeTypeBookPrimaryHandoffRefused, "version_group_id", "", groupID); jerr != nil {
+				if errors.Is(jerr, repairs.ErrStandDownLost) {
+					return errors.Join(err, fmt.Errorf("journal the refused primary hand-off of %s: %w", id, jerr))
+				}
+				fragLog.Warn("%s: journal the refused primary hand-off of %s in group %s: %s", fixerID,
+					logger.SanitizeLogValue(id), logger.SanitizeLogValue(groupID), logger.SanitizeLogValue(jerr.Error()))
+			}
+		}
+		return err
 	}
-	if err := w.Journal(id, undo.ChangeTypeBookPrimaryHandoff, "version_group_id", undo.HandOffCrownedValue(res.PrimaryID), groupID); err != nil {
+	if err := w.Journal(id, undo.ChangeTypeBookPrimaryHandoff, "version_group_id", undo.HandOffNoteValue(res.PrimaryID, res.WrotePrimary()), groupID); err != nil {
 		if errors.Is(err, repairs.ErrStandDownLost) {
 			return fmt.Errorf("journal the primary hand-off of %s: %w", id, err)
 		}
@@ -469,7 +510,7 @@ func retireHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Wr
 // boot's startup verify (or a rebuild) has trusted it, and scans every
 // opchange row until then, so the lease is still renewed before it, and the
 // live-primary count above keeps the read off the common path.
-func resumeHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Writer, fixerID, id, target, expect string) error {
+func resumeHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Writer, fixerID, id, target string, rules handOffRules) error {
 	b, err := store.GetBookByID(id)
 	if err != nil {
 		return fmt.Errorf("read %s: %w", id, err)
@@ -585,7 +626,7 @@ func resumeHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Wr
 	case live > 1:
 		return refuse("group %s has %d live primaries", gid, live)
 	}
-	return retireHandOff(ctx, p, store, w, fixerID, b.ID, gid, expect)
+	return retireHandOff(ctx, p, store, w, fixerID, b.ID, gid, rules)
 }
 
 // retireFixerIDs are the fixers that retire through retireInto: a demote

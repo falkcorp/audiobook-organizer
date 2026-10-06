@@ -1,5 +1,5 @@
 // file: internal/versionprimary/ensure_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3e8a1b64-2f9c-4d07-b5a3-91c6e0d4f728
 // last-edited: 2026-10-06
 
@@ -13,6 +13,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary/vptest"
 )
@@ -133,6 +134,86 @@ func TestEnsureSinglePrimary_ExpectRefusesAnyOtherWinner(t *testing.T) {
 		require.Equal(t, versionprimary.OutcomeElected, res.Outcome)
 		f.RequireSinglePrimary(t, "g", lib)
 	})
+}
+
+// Env.Expect on a group with no rows (or no group at all): nobody is left
+// to be the expected primary, so the hand-off refuses instead of reporting
+// an empty group as success.
+func TestEnsureSinglePrimary_ExpectRefusesAnEmptyGroup(t *testing.T) {
+	f := vptest.New(t)
+	for _, gid := range []string{"no-such-group", ""} {
+		res, err := versionprimary.EnsureSinglePrimary(context.Background(), f.S, gid,
+			versionprimary.Env{RootDir: f.Root, Expect: "a"})
+		require.True(t, errors.Is(err, versionprimary.ErrUnexpectedWinner), "group %q: %v", gid, err)
+		require.Empty(t, res.Writes)
+	}
+}
+
+// Env.MayWrite: asked about every member the hand-off would write, before
+// any write. One refusal refuses the whole hand-off: the winner's true is
+// not written either, and the error wraps ErrWriteRefused.
+func TestEnsureSinglePrimary_MayWriteRefusesBeforeAnyWrite(t *testing.T) {
+	refuse := func(id string, asked *[]string) func(*database.Book) error {
+		return func(m *database.Book) error {
+			*asked = append(*asked, m.ID)
+			if m.ID == id {
+				return errors.New("an iTunes copy")
+			}
+			return nil
+		}
+	}
+	t.Run("election: a refused demotee keeps the winner unwritten", func(t *testing.T) {
+		f := vptest.New(t)
+		inc := f.Book(t, vptest.Spec{ID: "a", Group: "g", Primary: "true", State: "imported"})
+		lib := f.Book(t, vptest.Spec{ID: "b", Group: "g", Primary: "false"})
+		var asked []string
+		res, err := versionprimary.EnsureSinglePrimary(context.Background(), f.S, "g",
+			versionprimary.Env{RootDir: f.Root, MayWrite: refuse(inc, &asked)})
+		require.True(t, errors.Is(err, versionprimary.ErrWriteRefused), "%v", err)
+		require.Equal(t, versionprimary.OutcomeWriteRefused, res.Outcome)
+		require.Empty(t, res.Writes)
+		require.Contains(t, asked, inc, "the demotee is asked")
+		require.Equal(t, "true", f.Flag(t, inc))
+		require.Equal(t, "false", f.Flag(t, lib), "the winner was not crowned")
+	})
+	t.Run("healthy incumbent: a refused nil sibling is not demoted", func(t *testing.T) {
+		f := vptest.New(t)
+		a := f.Book(t, vptest.Spec{ID: "a", Group: "g", Primary: "true"})
+		b := f.Book(t, vptest.Spec{ID: "b", Group: "g", Primary: "nil"})
+		var asked []string
+		_, err := versionprimary.EnsureSinglePrimary(context.Background(), f.S, "g",
+			versionprimary.Env{RootDir: f.Root, MayWrite: refuse(b, &asked)})
+		require.True(t, errors.Is(err, versionprimary.ErrWriteRefused), "%v", err)
+		require.Equal(t, "nil", f.Flag(t, b))
+		require.Equal(t, "true", f.Flag(t, a))
+	})
+	t.Run("explicit false members are never asked", func(t *testing.T) {
+		f := vptest.New(t)
+		a := f.Book(t, vptest.Spec{ID: "a", Group: "g", Primary: "true"})
+		b := f.Book(t, vptest.Spec{ID: "b", Group: "g", Primary: "false"})
+		var asked []string
+		res, err := versionprimary.EnsureSinglePrimary(context.Background(), f.S, "g",
+			versionprimary.Env{RootDir: f.Root, MayWrite: refuse(b, &asked)})
+		require.NoError(t, err)
+		require.Equal(t, versionprimary.OutcomeHealthy, res.Outcome)
+		require.Empty(t, asked, "a kept incumbent and an explicit false are not written")
+		require.False(t, res.WrotePrimary(), "the incumbent was kept, not crowned")
+		f.RequireSinglePrimary(t, "g", a)
+	})
+}
+
+// WrotePrimary tells a crown (the winner's true written) from a kept
+// incumbent: the hand-off note records it (undo.HandOffNoteValue).
+func TestHandoffResult_WrotePrimary(t *testing.T) {
+	f := vptest.New(t)
+	f.Book(t, vptest.Spec{ID: "a", Group: "g", Primary: "false"})
+	f.Book(t, vptest.Spec{ID: "b", Group: "g", Primary: "nil"})
+	res := ensure(t, f, "g")
+	require.Equal(t, versionprimary.OutcomeElected, res.Outcome)
+	require.True(t, res.WrotePrimary())
+	res = ensure(t, f, "g")
+	require.Equal(t, versionprimary.OutcomeHealthy, res.Outcome)
+	require.False(t, res.WrotePrimary())
 }
 
 func TestEnsureSinglePrimary_EmptyGroupID(t *testing.T) {
