@@ -1,7 +1,7 @@
 // file: internal/metadata/folder_parser.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: f1e2d3c4-b5a6-7890-abcd-ef1234567890
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package metadata
 
@@ -84,6 +84,16 @@ var (
 //
 // Returns FolderMetadata with best-effort values and per-field confidence scores.
 func ExtractMetadataFromFolder(dirPath string) (*FolderMetadata, error) {
+	return ExtractMetadataFromFolderWith(dirPath, NameEvidence{})
+}
+
+// ExtractMetadataFromFolderWith is ExtractMetadataFromFolder with person and
+// series evidence for the title shapes (ParseBookName): the authority lists
+// (IsKnownAuthor), the library's author rows (IsAuthorRow) and series rows
+// (IsKnownSeries). They decide whether a segment repeating its folder's name
+// ("Brandon Sanderson - Elantris" in "Brandon Sanderson/") is the author or
+// the series (NameEvidence.folderLeadKind). Path and FolderName are set here.
+func ExtractMetadataFromFolderWith(dirPath string, evidence NameEvidence) (*FolderMetadata, error) {
 	// Normalise: if dirPath points to a file, use its parent directory.
 	// We operate on path components, not the filesystem.
 	segments := splitPathSegments(dirPath)
@@ -107,7 +117,8 @@ func ExtractMetadataFromFolder(dirPath string) (*FolderMetadata, error) {
 	// The title shapes (ParseBookName) may check a segment against the
 	// author-shaped folders above it, and read any author-shaped trailing
 	// segment as the "<title> - <author>" folder convention.
-	ev := NameEvidence{Path: dirPath, FolderName: true}
+	ev := evidence
+	ev.Path, ev.FolderName = dirPath, true
 
 	// --- Pass 1: scan innermost segment for narrator and full metadata ---
 	innermost := segments[n-1]
@@ -151,7 +162,10 @@ func ExtractMetadataFromFolder(dirPath string) (*FolderMetadata, error) {
 	}
 
 	// --- Pass 4: if author still not found, try the innermost segment's dash-split ---
-	if fm.AuthorConf == ConfidenceNone && fm.Title != "" {
+	// Not when the segment leads with its series folder's name ("Jack
+	// Reacher/Jack Reacher - Killing Floor"): its last field is the title,
+	// however person-shaped.
+	if fm.AuthorConf == ConfidenceNone && fm.Title != "" && !ParseBookName(innermost, ev).Has(ShapeLeadingFolder) {
 		tryExtractAuthorFromDashSplit(innermost, fm)
 	}
 
@@ -323,6 +337,11 @@ func folderBookName(s string, fm *FolderMetadata, ev NameEvidence) string {
 			fm.SeriesPosition = pos
 			fm.SeriesConf = ConfidenceMedium
 		}
+	} else if b.Series != "" && b.Position == "" && b.Has(ShapeLeadingAuthor) && fm.SeriesConf < ConfidenceLow {
+		// "Agatha Christie - Poirot - The ABC Murders": the field between the
+		// author and the title is the series, with no position.
+		fm.SeriesName = b.Series
+		fm.SeriesConf = ConfidenceLow
 	}
 	// A first field that only repeated an ancestor folder ("Star Wars/Star
 	// Wars - Thrawn") is the series, with no position.

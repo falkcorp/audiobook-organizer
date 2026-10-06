@@ -78,3 +78,15 @@
   an author** (`Star Wars/Star Wars - Thrawn` reads series "Star Wars", no
   author; an earlier draft credited "Star Wars" as the author). An author
   needs person evidence: the book's own author or the authority lists.
+- **A folder segment repeating its folder's name is the author when it is a
+  person** ("Brandon Sanderson/Brandon Sanderson - Elantris" credits
+  Brandon Sanderson; "Agatha Christie - Poirot - The ABC Murders" reads
+  series Poirot, title The ABC Murders) and the series only when it is not:
+  a curated franchise (Doctor Who), a series the library already has (Star
+  Wars, Harry Potter, Sherlock Holmes, Jack Reacher) or no person shape
+  (Warhammer 40k). The scanner and importer pass that evidence
+  (`scanner.FolderNameEvidence`: authority person lists, author rows, series
+  names) through `metadata.AssembleBookMetadataWith`.
+- **A rescan of an existing book creates no rows from the new parse.** The
+  hold now runs before any author, series or work is resolved or created,
+  and also keeps the stored narrator and series position.

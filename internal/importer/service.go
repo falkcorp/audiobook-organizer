@@ -1,7 +1,7 @@
 // file: internal/importer/service.go
-// version: 1.11.2
+// version: 1.12.0
 // guid: d0e1f2a3-b4c5-6d7e-8f9a-0b1c2d3e4f5b
-// last-edited: 2026-10-04
+// last-edited: 2026-10-06
 
 package importer
 
@@ -27,6 +27,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/personname"
+	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -201,7 +202,7 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 		if firstFile == "" {
 			firstFile = req.FilePath
 		}
-		bm, bmErr := metadata.AssembleBookMetadata(dirPath, firstFile, 0, 0)
+		bm, bmErr := metadata.AssembleBookMetadataWith(dirPath, firstFile, 0, 0, scanner.FolderNameEvidence())
 		if bmErr != nil {
 			return nil, fmt.Errorf("failed to assemble metadata: %w", bmErr)
 		}
