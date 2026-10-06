@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.39.0
+// version: 1.40.0
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
 // last-edited: 2026-10-06
 
@@ -118,7 +118,9 @@
 // ITUNES BOOKS A ROW WOULD WRITE (retireITunes, targetITunes, 2026-10-06).
 // Every applicable row is held (skipped_itunes) when it would write an iTunes
 // book: its target itself (a join's target, a moved/copy/ghost row's parent,
-// a no-parent row's survivor, a carry row's terminal), grouped or not; or,
+// a no-parent row's survivor, a carry row's terminal), grouped or not; a
+// retired book a carry row takes file rows off (carryITunes: its own rows,
+// the moved ones among them, by their iTunes ids and paths); or,
 // for a row that retires fragments, a live book in the target's version group
 // or a fragment's (retiring a fragment that reads as primary hands its
 // group's primary on, and the ranking favours an iTunes id). Read fresh at
@@ -2294,7 +2296,7 @@ func (f *fragmentFixer) continueInterrupted(ctx context.Context, lib *fragLibrar
 		case runOutside:
 			rowsOf[i] = interruptedRow(lib, rec, u.ops, u.why, actFinishOutside(u.terminal))
 		case runCarry:
-			row, err := carryRow(lib, rec, u.ops, u.terminal, u.carry)
+			row, err := carryRow(store, lib, rec, u.ops, u.terminal, u.carry)
 			if err != nil {
 				return nil, err
 			}
@@ -2471,7 +2473,7 @@ func revertAct(pj *fragPlanJournal, ops []string) string {
 
 // carryRow is the applicable row that finishes run rec by moving carry (its
 // planned files on retired books of the run) onto terminal.
-func carryRow(lib *fragLibrary, rec fragPlanRecord, ops []string, terminal string, carry []fragCarry) (repairs.Row, error) {
+func carryRow(store OpsStore, lib *fragLibrary, rec fragPlanRecord, ops []string, terminal string, carry []fragCarry) (repairs.Row, error) {
 	ids := append([]string(nil), rec.BookIDs...)
 	for _, id := range []string{rec.Survivor, terminal} {
 		if !slices.Contains(ids, id) {
@@ -2485,17 +2487,11 @@ func carryRow(lib *fragLibrary, rec fragPlanRecord, ops []string, terminal strin
 		return repairs.Row{}, fmt.Errorf("carry row %s: %w", rec.RowID, err)
 	}
 	tb := lib.books[terminal]
-	from := map[string]bool{}
 	fp := []string{"carry", rec.RowID, terminal}
 	for _, c := range carry {
-		from[c.From] = true
 		fp = append(fp, c.File, c.From)
 	}
-	var froms []string
-	for id := range from {
-		froms = append(froms, id)
-	}
-	sort.Strings(froms)
+	froms := carryFroms(carry)
 	r := repairs.Row{RowID: fragClassCarry + ":" + rec.RowID, Class: fragClassCarry, BookIDs: ids,
 		Title: tb.Title, Author: lib.authorName(tb), Risk: repairs.RiskReview,
 		Proposed: map[string]string{"survivor": terminal, "from": strings.Join(froms, ",")},
@@ -2506,8 +2502,9 @@ func carryRow(lib *fragLibrary, rec fragPlanRecord, ops []string, terminal strin
 		State:       state,
 		Detail:      carry,
 		Fingerprint: fragFingerprint(fp...)}
-	// The files move onto terminal: never onto an iTunes book.
-	if why := lib.targetITunes(terminal); why != "" {
+	// The files move off the retired books onto terminal: never off or
+	// onto an iTunes book, nor an iTunes file row.
+	if why := lib.carryITunes(store, terminal, carry); why != "" {
 		r.Skipped, r.SkipReason = repairs.SkipITunes, why
 	}
 	for _, id := range ids {
@@ -2556,10 +2553,51 @@ func (f *fragmentFixer) replanCarry(store OpsStore, lib *fragLibrary, planned re
 	}
 	got := planned
 	got.Detail = carry
-	if why := lib.targetITunes(carry[0].To); why != "" {
+	if why := lib.carryITunes(store, carry[0].To, carry); why != "" {
 		got.Skipped, got.SkipReason = repairs.SkipITunes, why
 	}
 	return got, nil
+}
+
+// carryFroms is the retired books carry takes file rows off, sorted.
+func carryFroms(carry []fragCarry) []string {
+	var froms []string
+	for _, c := range carry {
+		if !slices.Contains(froms, c.From) {
+			froms = append(froms, c.From)
+		}
+	}
+	sort.Strings(froms)
+	return froms
+}
+
+// carryITunes is why a carry row is held as writing an iTunes book ("" none):
+// the book its files move onto (targetITunes), or a retired book they leave.
+// Taking rows off a book writes it too, and targetITunes judges a book by
+// its rows (itunesCopyWhy: each row's iTunes id and iTunes path), so the
+// moved rows themselves are judged with the rest of the book they leave;
+// all read fresh when lib.groupReads is set. A full plan's snapshot holds
+// live books only, so a retired book it lacks is read fresh from store
+// (book, rows, external ids); a read that fails holds: fail closed.
+func (lib *fragLibrary) carryITunes(store OpsStore, to string, carry []fragCarry) string {
+	if why := lib.targetITunes(to); why != "" {
+		return why
+	}
+	for _, from := range carryFroms(carry) {
+		why := ""
+		if _, ok := lib.books[from]; ok {
+			why = lib.targetITunes(from)
+		} else {
+			var err error
+			if why, err = bookITunesFresh(store, lib.paths, from); err != nil {
+				why = fmt.Sprintf("book %s, which the files leave, cannot be read (%v), so whether it is an iTunes copy cannot be told; decide by hand", from, err)
+			}
+		}
+		if why != "" {
+			return why
+		}
+	}
+	return ""
 }
 
 // survivorGoneWhy says how a record's survivor left the live library: the
@@ -4998,6 +5036,32 @@ func targetITunesNow(store OpsStore, target string) (string, error) {
 	return groupITunesNow(store, target, nil)
 }
 
+// leaveITunesNow is targetITunes for a retired book a carry is about to take
+// file rows off, read fresh from store: the book, its rows (the moved ones
+// among them) and its external ids. Not its version group: taking rows off a
+// retired book hands no primary on.
+func leaveITunesNow(store OpsStore, from string) (string, error) {
+	return bookITunesFresh(store, nil, from)
+}
+
+// bookITunesFresh is targetITunes for book id read fresh from store (its
+// book, rows and external ids; not its version group), with paths the
+// guard's resolver (nil: a fresh one).
+func bookITunesFresh(store OpsStore, paths *repairs.PathResolver, id string) (string, error) {
+	b, err := store.GetBookByID(id)
+	if err != nil {
+		return "", fmt.Errorf("%s: read carry source %s: %w", fragFixerID, id, err)
+	}
+	if b == nil {
+		return fmt.Sprintf("book %s, which the files leave, is gone", id), nil
+	}
+	lib := newFragLibrary()
+	lib.paths = paths
+	lib.extIDs, lib.groupReads = store.GetExternalIDsForBook, store
+	lib.books[id] = fragBookOf(b)
+	return lib.targetITunes(id), nil
+}
+
 // groupITunesNow is retireITunes for a retire into target about to be
 // written (a join, a moved/copy/ghost row into its parent, a no-parent row
 // into its survivor), with the target read fresh from store. frags carry the re-plan's fresh version groups.
@@ -7290,6 +7354,17 @@ func (f *fragmentFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repa
 			byFrom[c.From] = append(byFrom[c.From], c.File)
 		}
 		sort.Strings(froms)
+		// The iTunes hold on each book the files leave (its own iTunes id,
+		// external ids, and its rows' iTunes ids and paths, the moved rows
+		// among them), read fresh under the lock: MoveBookFiles has no
+		// iTunes check of its own.
+		for _, from := range froms {
+			if why, err := leaveITunesNow(store, from); err != nil {
+				return err
+			} else if why != "" {
+				return fmt.Errorf("%w: under the merge lock: %s", repairs.ErrChangedSincePlan, why)
+			}
+		}
 		for _, from := range froms {
 			if err := ctx.Err(); err != nil {
 				return partial(err)

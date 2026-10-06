@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_folder_sets_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 3b7d2c55-1a4e-4f0b-9c61-8e2f5d7a0b14
 // last-edited: 2026-10-06
 
@@ -1521,7 +1521,9 @@ func TestFragmentFixer_SurvivorRowITunes(t *testing.T) {
 
 // TestFragmentFixer_CarryRowNeverOntoITunes (PR #3787 re-review S4): a carry
 // row moves file rows onto its terminal book; an iTunes terminal holds it at
-// plan, in the re-plan, and under the merge lock.
+// plan, in the re-plan, and under the merge lock. Round 5: the rows leave a
+// retired book too, so an iTunes source book, or an iTunes id or path on a
+// moved row itself, holds it the same way.
 func TestFragmentFixer_CarryRowNeverOntoITunes(t *testing.T) {
 	setup := func(t *testing.T) (*fragFixture, string, string, string) {
 		f := newFragFixture(t)
@@ -1548,7 +1550,7 @@ func TestFragmentFixer_CarryRowNeverOntoITunes(t *testing.T) {
 			require.NoError(t, replanLoad(store, lib, id))
 		}
 		rec := fragPlanRecord{RowID: "no-parent:carrytest", Survivor: sb, BookIDs: []string{sb}, PlannedAt: time.Now()}
-		r, err := carryRow(lib, rec, []string{"op-old"}, x, []fragCarry{{File: file, From: sb, To: x}})
+		r, err := carryRow(store, lib, rec, []string{"op-old"}, x, []fragCarry{{File: file, From: sb, To: x}})
 		require.NoError(t, err)
 		return r
 	}
@@ -1596,6 +1598,90 @@ func TestFragmentFixer_CarryRowNeverOntoITunes(t *testing.T) {
 		err = fx.Apply(context.Background(), f.fragWriter(t, "op-apply"), fresh)
 		require.ErrorIs(t, err, repairs.ErrChangedSincePlan)
 		require.Contains(t, err.Error(), x)
+		onS(t, f, sb)
+	})
+
+	// The moved row itself, on the retired book: an iTunes id or path.
+	setRowITunes := func(t *testing.T, f *fragFixture, sb, pid, path string) {
+		t.Helper()
+		rows, err := f.s.GetBookFiles(sb)
+		require.NoError(t, err)
+		require.Len(t, rows, 1)
+		rows[0].ITunesPersistentID, rows[0].ITunesPath = pid, path
+		require.NoError(t, f.s.UpdateBookFile(rows[0].ID, &rows[0]))
+	}
+	const itunesPath = "file:///Users/synthetic/Music/iTunes/iTunes%20Media/Audiobooks/s.mp3"
+	t.Run("an iTunes source book: held at plan", func(t *testing.T) {
+		f, x, sb, file := setup(t)
+		setBookPID(t, f, sb, "SRCPID")
+		r := build(t, f, x, sb, file)
+		require.Equal(t, repairs.SkipITunes, r.Skipped, r.SkipReason)
+		require.Contains(t, r.SkipReason, sb)
+	})
+	t.Run("an iTunes id on the moved row: held at plan", func(t *testing.T) {
+		f, x, sb, file := setup(t)
+		setRowITunes(t, f, sb, "ROWPID0123456789", "")
+		r := build(t, f, x, sb, file)
+		require.Equal(t, repairs.SkipITunes, r.Skipped, r.SkipReason)
+		require.Contains(t, r.SkipReason, "ROWPID0123456789")
+	})
+	t.Run("an iTunes path on the moved row: held at plan", func(t *testing.T) {
+		f, x, sb, file := setup(t)
+		setRowITunes(t, f, sb, "", itunesPath)
+		r := build(t, f, x, sb, file)
+		require.Equal(t, repairs.SkipITunes, r.Skipped, r.SkipReason)
+		require.Contains(t, r.SkipReason, "iTunes path")
+	})
+	t.Run("a source book the snapshot lacks (a full plan's): read fresh, an iTunes row on it holds", func(t *testing.T) {
+		f, x, sb, file := setup(t)
+		setRowITunes(t, f, sb, "FRESHROWPID0123", "")
+		store, _, err := newFragmentFixer(f.p).stores()
+		require.NoError(t, err)
+		lib := newFragLibrary()
+		lib.extIDs, lib.groupReads = store.GetExternalIDsForBook, store
+		require.NoError(t, replanLoad(store, lib, x))
+		_, held := lib.books[sb]
+		require.False(t, held, "the retired source is not in this snapshot")
+		rec := fragPlanRecord{RowID: "no-parent:carrytest", Survivor: sb, BookIDs: []string{sb}, PlannedAt: time.Now()}
+		r, err := carryRow(store, lib, rec, []string{"op-old"}, x, []fragCarry{{File: file, From: sb, To: x}})
+		require.NoError(t, err)
+		require.Equal(t, repairs.SkipITunes, r.Skipped, r.SkipReason)
+		require.Contains(t, r.SkipReason, "FRESHROWPID0123")
+	})
+	t.Run("an iTunes id on the source book since the plan: the re-plan holds it", func(t *testing.T) {
+		f, x, sb, file := setup(t)
+		r := build(t, f, x, sb, file)
+		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+		setBookPID(t, f, sb, "LATESRCPID")
+		fresh, err := newFragmentFixer(f.p).Replan(context.Background(), nil, r, nil)
+		require.NoError(t, err)
+		require.Equal(t, repairs.SkipITunes, fresh.Skipped, fresh.SkipReason)
+		onS(t, f, sb)
+	})
+	t.Run("the source book turns iTunes after the locked re-plan: refused", func(t *testing.T) {
+		f, x, sb, file := setup(t)
+		r := build(t, f, x, sb, file)
+		fx := newFragmentFixer(f.p)
+		fx.afterLockedReplan = func() { setBookPID(t, f, sb, "RACESRCPID") }
+		fresh, err := fx.Replan(context.Background(), nil, r, nil)
+		require.NoError(t, err)
+		require.True(t, fresh.Applicable(), "%s: %s", fresh.Skipped, fresh.SkipReason)
+		err = fx.Apply(context.Background(), f.fragWriter(t, "op-apply"), fresh)
+		require.ErrorIs(t, err, repairs.ErrChangedSincePlan)
+		require.Contains(t, err.Error(), sb)
+		onS(t, f, sb)
+	})
+	t.Run("the moved row turns iTunes after the locked re-plan: refused", func(t *testing.T) {
+		f, x, sb, file := setup(t)
+		r := build(t, f, x, sb, file)
+		fx := newFragmentFixer(f.p)
+		fx.afterLockedReplan = func() { setRowITunes(t, f, sb, "RACEROWPID01234", "") }
+		fresh, err := fx.Replan(context.Background(), nil, r, nil)
+		require.NoError(t, err)
+		require.True(t, fresh.Applicable(), "%s: %s", fresh.Skipped, fresh.SkipReason)
+		err = fx.Apply(context.Background(), f.fragWriter(t, "op-apply"), fresh)
+		require.ErrorIs(t, err, repairs.ErrChangedSincePlan)
+		require.Contains(t, err.Error(), "RACEROWPID01234")
 		onS(t, f, sb)
 	})
 }
