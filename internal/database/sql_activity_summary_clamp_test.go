@@ -1,5 +1,5 @@
 // file: internal/database/sql_activity_summary_clamp_test.go
-// version: 1.2.4
+// version: 1.2.5
 // guid: 8b47e0c9-2f13-45da-9e60-c4a1d5382bf7
 // last-edited: 2026-10-06
 
@@ -717,8 +717,27 @@ func TestVacuumActivity_TruncateDoesNotStallForegroundWrites(t *testing.T) {
 // attempt held the lock for a full second while it waited, and Records stalled
 // for 2.5 s in review. With busy_timeout 0 the TRUNCATE reports busy at once
 // and releases the lock, so writers barely notice.
+//
+// How long the TRUNCATE holds the lock is exactly the checkpoint connection's
+// busy_timeout: SQLite's busy handler is the only thing that makes a TRUNCATE
+// wait for a reader. So the test asserts that value on the live connection,
+// which is deterministic, instead of bounding Record latency with a wall-clock
+// number. The earlier 500 ms latency bound was the same flaky shape as the
+// sibling above: it discriminated a 1 s regression only by a 2x margin over
+// -race and loaded-runner noise. The run below still proves the behaviour the
+// setting buys: a TRUNCATE is issued while the reader is held, every one
+// reports busy (returns rather than waits for the reader to leave), and no
+// Record fails. The slowest Record is logged for diagnosis, not asserted.
 func TestVacuumActivity_LateReaderDoesNotStallWritersThroughTheTruncate(t *testing.T) {
 	s, _ := openCkptTestStore(t, time.Hour)
+	var ckptBusyMS int
+	if err := s.ckpt.QueryRow(`PRAGMA busy_timeout`).Scan(&ckptBusyMS); err != nil {
+		t.Fatal(err)
+	}
+	if ckptBusyMS != 0 {
+		t.Fatalf("checkpoint connection busy_timeout = %d ms; it must be 0: a TRUNCATE waits that long for a "+
+			"reader while holding the WAL write lock, and every Record waits with it", ckptBusyMS)
+	}
 	oldAttempts, oldBackoff := vacuumTruncateAttempts, vacuumTruncateMaxBackoff
 	vacuumTruncateAttempts, vacuumTruncateMaxBackoff = 4, 20*time.Millisecond
 	t.Cleanup(func() { vacuumTruncateAttempts, vacuumTruncateMaxBackoff = oldAttempts, oldBackoff })
@@ -790,8 +809,14 @@ func TestVacuumActivity_LateReaderDoesNotStallWritersThroughTheTruncate(t *testi
 	}
 	truncates := 0
 	for _, c := range got {
-		if c.mode == "TRUNCATE" {
-			truncates++
+		if c.mode != "TRUNCATE" {
+			continue
+		}
+		truncates++
+		// The reader is held for the whole test, so no TRUNCATE can reset the
+		// WAL; each must come back busy rather than as a completed reset.
+		if c.res.Busy != 1 {
+			t.Errorf("a TRUNCATE reported busy=%d while the late reader was still held: %+v", c.res.Busy, got)
 		}
 	}
 	if truncates == 0 {
@@ -800,10 +825,5 @@ func TestVacuumActivity_LateReaderDoesNotStallWritersThroughTheTruncate(t *testi
 	requireTruncateOnlyAfterCompletePassive(t, got)
 	if n := recErrs.Load(); n != 0 {
 		t.Fatalf("%d Records failed during the truncate phase", n)
-	}
-	// Each TRUNCATE used to hold the write lock for the 1 s busy timeout; the
-	// bound leaves room for -race on a loaded disk without allowing that.
-	if lat > 500*time.Millisecond {
-		t.Fatalf("slowest Record took %v across %d busy TRUNCATEs: the TRUNCATE waited on the reader while holding the write lock", lat, truncates)
 	}
 }
