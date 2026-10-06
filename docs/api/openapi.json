@@ -5942,6 +5942,35 @@
         "description": "Deprecated alias. Naming-audit class \"merge vs link verbs\" / \"dismiss vs reject vs undo\" (docs/audits/2026-09-25-interface-naming-consistency.md classes 2/3): use /dedup/candidates/bulk-link instead. This path remains registered and functional."
       }
     },
+    "/dedup/candidates/bulk-reject": {
+      "post": {
+        "operationId": "bulkRejectDedupCandidates",
+        "summary": "bulk Reject Dedup Candidates",
+        "description": "Reject every pending book candidate matching the same filter body as bulk-link, re-evaluated server-side. Manual (hand-pinned) candidates and candidates whose status changed since the list are reported as failures and left alone. Refused with 422 above bulk_apply_max_items. Returns attempted, rejected, failed and failures.",
+        "tags": [
+          "dedup"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "422": {
+            "description": "Bulk apply cap exceeded"
+          }
+        }
+      }
+    },
     "/dedup/candidates/reject-cluster": {
       "post": {
         "operationId": "rejectDedupCluster",

@@ -99,6 +99,36 @@ describe('AcousticDedupTab selection', () => {
     );
   });
 
+  it('only pending pairs are acted on: decided rows are not selectable and cross-page skips them', async () => {
+    const user = userEvent.setup();
+    const rows = ALL.map((c) => (c.id === 2 || c.id === 6 ? { ...c, status: 'merged' as const } : c));
+    vi.mocked(api.getDedupCandidates).mockImplementation(async (params) => ({
+      candidates: params?.limit === CROSS_PAGE_FETCH_PAGE ? rows : rows.slice(0, 3),
+      total: TOTAL,
+    }));
+    renderTab();
+    await screen.findByRole('checkbox', { name: 'Select candidate 3' });
+    expect(box(2)).toBeDisabled();
+
+    await user.click(screen.getByRole('checkbox', { name: 'Select all 3 on this page' }));
+    await user.click(screen.getByTestId('acoustic-select-all-matching'));
+    await user.click(screen.getByRole('button', { name: `Dismiss ${TOTAL}` }));
+    await user.click(
+      within(await screen.findByTestId('acoustic-bulk-confirm')).getByTestId(
+        'acoustic-bulk-confirm-btn'
+      )
+    );
+
+    await waitFor(() => expect(api.rejectDedupCandidate).toHaveBeenCalledTimes(TOTAL - 2));
+    expect(api.rejectDedupCandidate).not.toHaveBeenCalledWith(2);
+    expect(api.rejectDedupCandidate).not.toHaveBeenCalledWith(6);
+    expect(
+      await screen.findByText(
+        `Dismiss: ${TOTAL - 2} candidate(s) processed; 2 already merged or dismissed, skipped`
+      )
+    ).toBeInTheDocument();
+  });
+
   it('a failed load shows an error, not the empty state', async () => {
     vi.mocked(api.getDedupCandidates).mockRejectedValue(new Error('server said no'));
     renderTab();

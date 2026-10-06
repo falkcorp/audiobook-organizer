@@ -1319,6 +1319,8 @@ func (h *Handler) bindBulkCandidateFilter(c *gin.Context, verb string) (database
 // status write itself serialises on the embedding store's lock; what runs in
 // parallel is the per-candidate gold-label capture, which re-scores the pair
 // (refreshExampleBreakdown) and is the expensive part at a few thousand rows.
+// That scorer already runs at runtime.NumCPU() concurrency in production
+// (plugins/dedup/breakdown_backfill.go's RunItems), so parallel calls are not new.
 const bulkRejectMaxWorkers = 8
 
 // bulkRejectLog routes through internal/logger (the log-injection barrier);

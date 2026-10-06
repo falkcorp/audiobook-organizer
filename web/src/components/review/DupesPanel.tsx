@@ -45,6 +45,7 @@ import {
   type DedupStatusFilter,
   type DupesLane,
 } from './lanes/useDupesLane';
+import { DEFAULT_BULK_APPLY_MAX_ITEMS } from './lanes/useMetadataLane';
 
 const BANDS: DedupBand[] = ['CERTAIN', 'HIGH', 'MEDIUM', 'REVIEW'];
 const STATUSES: { value: DedupStatusFilter; label: string }[] = [
@@ -84,6 +85,14 @@ export function DupesPanel({ dupes, viewMode, expandedId, onToggleExpand }: Dupe
   const crossPage = sel.allMatching;
   const selectedCount = sel.selectedCount;
   const [pendingBulk, setPendingBulk] = useState<PendingBulk | null>(null);
+  // The list total is the bulk set only under the Pending status: the bulk
+  // endpoints act on pending pairs, so under "All" or "Merged" the total
+  // counts rows they never touch (reviewActions.affectedCount returns null
+  // for these actions for the same reason). Show no number rather than a
+  // wrong one.
+  const countKnown = dupes.filters.status === 'pending';
+  const bulkCountLabel = countKnown ? `${dupes.total.toLocaleString()} ` : '';
+  const overCap = countKnown && dupes.total > DEFAULT_BULK_APPLY_MAX_ITEMS;
 
   const runMergeSelected = () => {
     if (crossPage) setPendingBulk('mergeAllFiltered');
@@ -372,8 +381,8 @@ export function DupesPanel({ dupes, viewMode, expandedId, onToggleExpand }: Dupe
       >
         <DialogTitle>
           {pendingBulk === 'dismissAllFiltered'
-            ? `Dismiss all ${dupes.total.toLocaleString()} matching pairs?`
-            : `Merge all ${dupes.total.toLocaleString()} matching pairs?`}
+            ? `Dismiss all ${bulkCountLabel}matching pairs?`
+            : `Merge all ${bulkCountLabel}matching pairs?`}
         </DialogTitle>
         <DialogContent>
           <DialogContentText>
@@ -382,6 +391,8 @@ export function DupesPanel({ dupes, viewMode, expandedId, onToggleExpand }: Dupe
               : 'Every pair matching the current filter, on every page, is linked into a version group. This cannot be undone.'}{' '}
             The server re-evaluates the filter when it runs and reports how many it
             actually changed; hand-pinned pairs are skipped and listed as failures.
+            {overCap &&
+              ` ${dupes.total.toLocaleString()} is over the server's bulk limit (bulk_apply_max_items, ${DEFAULT_BULK_APPLY_MAX_ITEMS.toLocaleString()} by default), so it will refuse and change nothing. Narrow the filter first.`}
           </DialogContentText>
         </DialogContent>
         <DialogActions>
@@ -396,8 +407,8 @@ export function DupesPanel({ dupes, viewMode, expandedId, onToggleExpand }: Dupe
               if (type) dupes.dispatch({ lane: 'dupes', type });
             }}
           >
-            {pendingBulk === 'dismissAllFiltered' ? 'Dismiss' : 'Merge'}{' '}
-            {dupes.total.toLocaleString()}
+            {pendingBulk === 'dismissAllFiltered' ? 'Dismiss' : 'Merge'}
+            {countKnown ? ` ${dupes.total.toLocaleString()}` : ''}
           </Button>
         </DialogActions>
       </Dialog>

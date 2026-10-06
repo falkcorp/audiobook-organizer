@@ -167,6 +167,19 @@ describe('useRowSelection', () => {
     expect(sorted(result.current.selected)).toEqual(['b', 'h']);
   });
 
+  it('toggle, togglePage, clear, selectAllMatching and replace are stable across clicks', () => {
+    const { result } = setup();
+    const first = result.current;
+    act(() => result.current.toggle('a'));
+    act(() => result.current.toggle('c', true));
+    act(() => result.current.togglePage());
+    expect(result.current.toggle).toBe(first.toggle);
+    expect(result.current.togglePage).toBe(first.togglePage);
+    expect(result.current.clear).toBe(first.clear);
+    expect(result.current.selectAllMatching).toBe(first.selectAllMatching);
+    expect(result.current.replace).toBe(first.replace);
+  });
+
   it('checkboxProps: Shift+Space on a focused checkbox extends the range', () => {
     const { result } = setup();
     act(() => result.current.toggle('a'));

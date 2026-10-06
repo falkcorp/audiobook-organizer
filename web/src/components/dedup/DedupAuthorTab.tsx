@@ -498,7 +498,8 @@ export function AuthorDedupTab() {
   const handleMergeSelected = async () => {
     setConfirmSelectedOpen(false);
     setMergeSuccess(null);
-    const count = selection.selectedCount;
+    let succeeded = 0;
+    const failures: string[] = [];
     for (const group of groups) {
       const key = String(group.canonical.id);
       if (!selection.selected.has(key)) continue;
@@ -508,14 +509,29 @@ export function AuthorDedupTab() {
           group.variants.map((v) => v.id)
         );
         setActiveOp(initial);
-        await api.pollOperation(initial.id, (update) => setActiveOp(update));
+        const final = await api.pollOperation(initial.id, (update) => setActiveOp(update));
+        // pollOperation RESOLVES on failed/canceled; only 'completed' merged.
+        if (final.status === 'completed') succeeded++;
+        else failures.push(`"${group.canonical.name}": ${final.error_message || final.status}`);
       } catch (err) {
-        setError(err instanceof Error ? err.message : `Failed to merge "${group.canonical.name}"`);
+        failures.push(
+          `"${group.canonical.name}": ${err instanceof Error ? err.message : 'merge request failed'}`
+        );
       }
     }
     setActiveOp(null);
-    setMergeSuccess(`Merged ${count} selected group(s)`);
-    fetchDuplicates();
+    // Refetch FIRST: fetchDuplicates clears `error` as its first act, so a
+    // failure set before it would be erased. The old message said "Merged N"
+    // whatever happened.
+    await fetchDuplicates();
+    const attempted = succeeded + failures.length;
+    if (failures.length === 0) {
+      setMergeSuccess(`Merged ${succeeded} of ${attempted} selected group(s)`);
+    } else {
+      setError(
+        `Merged ${succeeded} of ${attempted} selected group(s); ${failures.length} failed: ${failures.join('; ')}`
+      );
+    }
   };
 
   const handleMergeAll = async () => {

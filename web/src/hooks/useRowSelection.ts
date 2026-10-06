@@ -1,5 +1,5 @@
 // file: web/src/hooks/useRowSelection.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: d82ff76a-e17f-48bf-9c08-4779955f6877
 // last-edited: 2026-10-06
 
@@ -139,6 +139,13 @@ export function applyRowClick<K>(
 
 const NEVER_DISABLED = () => false;
 
+interface SelectionState<K> {
+  selected: ReadonlySet<K>;
+  allMatching: boolean;
+  anchor: K | null;
+}
+const EMPTY_STATE: SelectionState<never> = { selected: new Set(), allMatching: false, anchor: null };
+
 export function useRowSelection<K>({
   pageKeys,
   totalMatching,
@@ -147,11 +154,12 @@ export function useRowSelection<K>({
   allKeys,
   canSelectAllMatching = true,
 }: UseRowSelectionOptions<K>): RowSelection<K> {
-  const [selected, setSelected] = useState<Set<K>>(() => new Set());
-  const [allMatchingState, setAllMatching] = useState(false);
-  // State, not a ref: it is reset during render on a filter change, and a ref
-  // write during render is unsafe under concurrent rendering.
-  const [anchor, setAnchor] = useState<K | null>(null);
+  // ONE state object, updated functionally. That keeps `toggle`, `togglePage`,
+  // `clear`, `replace` and `selectAllMatching` stable across clicks: none of
+  // them closes over the selection. Callers memoise rows on these callbacks
+  // (the dupes lane's CandidateRow does), so a toggle whose identity changed
+  // on every click would re-render every row on the page per click.
+  const [state, setState] = useState<SelectionState<K>>(EMPTY_STATE as SelectionState<K>);
   // Set by Shift+Space on a focused checkbox, read by the change event that
   // the keyboard activation fires next. Whether a keyboard-activated click
   // carries shiftKey differs by browser, so it is not trusted.
@@ -161,15 +169,14 @@ export function useRowSelection<K>({
   const [prevResetKey, setPrevResetKey] = useState(resetKey);
   if (prevResetKey !== resetKey) {
     setPrevResetKey(resetKey);
-    setSelected(new Set());
-    setAllMatching(false);
-    setAnchor(null);
+    setState(EMPTY_STATE as SelectionState<K>);
   }
 
+  const { selected } = state;
   // An all-matching selection the caller can no longer act on is dropped on
   // READ rather than kept armed: the banner would otherwise promise a set the
   // bulk action refuses.
-  const allMatching = allMatchingState && canSelectAllMatching;
+  const allMatching = state.allMatching && canSelectAllMatching;
 
   const selectable = useMemo(() => pageKeys.filter((k) => !isDisabled(k)), [pageKeys, isDisabled]);
 
@@ -200,54 +207,52 @@ export function useRowSelection<K>({
     !everythingSelected &&
     totalMatching > selectable.length;
 
-  /** The explicit set a row click starts from: the page itself when in virtual all-matching mode. */
-  const baseSet = useCallback(
-    (): Set<K> => (virtualAll ? new Set(selectable) : new Set(selected)),
-    [virtualAll, selectable, selected]
-  );
-
   const toggle = useCallback(
     (key: K, shiftKey = false) => {
-      const base = baseSet();
-      const next = applyRowClick(base, key, shiftKey, anchor, pageKeys, isDisabled);
-      setAnchor(key);
-      // Any manual change leaves all-matching mode: the selection is now an
-      // explicit list again, and saying "all M selected" would be false.
-      setAllMatching(false);
-      setSelected(next);
+      setState((prev) => {
+        // The explicit set a click starts from: the page itself in virtual
+        // all-matching mode, since every row on it reads as selected.
+        const virtual = prev.allMatching && canSelectAllMatching && !allKeys;
+        const base = virtual
+          ? new Set(pageKeys.filter((k) => !isDisabled(k)))
+          : prev.selected;
+        return {
+          selected: applyRowClick(base, key, shiftKey, prev.anchor, pageKeys, isDisabled),
+          // Any manual change leaves all-matching mode: the selection is an
+          // explicit list again, and "all M selected" would be false.
+          allMatching: false,
+          anchor: key,
+        };
+      });
     },
-    [baseSet, anchor, pageKeys, isDisabled]
+    [pageKeys, isDisabled, allKeys, canSelectAllMatching]
   );
 
-  const clear = useCallback(() => {
-    setSelected(new Set());
-    setAllMatching(false);
-    setAnchor(null);
-  }, []);
+  const clear = useCallback(() => setState(EMPTY_STATE as SelectionState<K>), []);
 
   const togglePage = useCallback(() => {
-    if (pageFullySelected) {
-      clear();
-      return;
-    }
-    setAllMatching(false);
-    setSelected((prev) => {
-      const next = new Set(prev);
-      for (const k of selectable) next.add(k);
-      return next;
+    setState((prev) => {
+      const page = pageKeys.filter((k) => !isDisabled(k));
+      const virtual = prev.allMatching && canSelectAllMatching && !allKeys;
+      const full = page.length > 0 && (virtual || page.every((k) => prev.selected.has(k)));
+      if (full) return EMPTY_STATE as SelectionState<K>;
+      const next = new Set(prev.selected);
+      for (const k of page) next.add(k);
+      return { selected: next, allMatching: false, anchor: prev.anchor };
     });
-  }, [pageFullySelected, clear, selectable]);
+  }, [pageKeys, isDisabled, allKeys, canSelectAllMatching]);
 
   const selectAllMatching = useCallback(() => {
     if (!canSelectAllMatching) return;
-    setAllMatching(true);
-    if (allKeys) setSelected(new Set(allKeys.filter((k) => !isDisabled(k))));
-    else setSelected(new Set());
+    setState((prev) => ({
+      selected: allKeys ? new Set(allKeys.filter((k) => !isDisabled(k))) : new Set<K>(),
+      allMatching: true,
+      anchor: prev.anchor,
+    }));
   }, [canSelectAllMatching, allKeys, isDisabled]);
 
   const replace = useCallback((keys: Iterable<K>) => {
-    setAllMatching(false);
-    setSelected(new Set(keys));
+    setState((prev) => ({ selected: new Set(keys), allMatching: false, anchor: prev.anchor }));
   }, []);
 
   const checkboxProps = useCallback(
