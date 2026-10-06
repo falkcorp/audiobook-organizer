@@ -19,3 +19,14 @@
       `ParseBookName` only, so `ripFolderPartRow`/`folderTitle` do not treat
       such folders as rip-detail folders. Decide whether part-row detection
       should learn it (changes skip decisions).
+- [ ] **FETCH-QUERY-5** `scanner.FolderNameEvidence` reuses one
+      `foldernames.Snapshot` for 10 minutes, so a series or author row
+      created mid-scan is not evidence for other books until the next
+      reload, and the junk-series verdict is memoised for the snapshot's
+      life. Decide on invalidation (bump on CreateSeries/CreateAuthor) versus
+      the TTL (#3775 round-3 review, SHOULD-FIX).
+- [ ] **FETCH-QUERY-6** Repair the existing author-junk series rows on prod:
+      3,188 series rows carry their own author's name and more letters-equal
+      an author row with only that author's books (count 2026-10-06). They
+      no longer act as series evidence, but books are still linked to them.
+      A reviewed fixer should unlink and delete them.

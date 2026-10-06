@@ -1,7 +1,7 @@
 // file: internal/scanner/file_ownership.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: f938af2f-e090-48ab-b6b0-c89267a7adbf
-// last-edited: 2026-09-28
+// last-edited: 2026-10-06
 
 package scanner
 
@@ -72,6 +72,13 @@ type fileOwnershipVerdict struct {
 	// appendTo / unowned: a staged arrival. See checkFileOwnership step 3.
 	appendTo string
 	unowned  []string
+	// sameBook is the live book that owns every scanned file, all of its
+	// present rows among them (step 3's rescan of the same book), on a
+	// proceed verdict; "" otherwise. A segment list whose first file changed
+	// (a renamed or re-sorted chapter) is not at that book's path, and
+	// saveBookToDatabase holds the folder parse against this row
+	// (lookupScanExisting).
+	sameBook string
 }
 
 func (v fileOwnershipVerdict) asError(path string) error {
@@ -298,6 +305,9 @@ func checkFileOwnership(book *Book) (fileOwnershipVerdict, error) {
 		if overlays(ownerID) {
 			return fileOwnershipVerdict{skip: true, owners: []string{ownerID, atPath.ID},
 				reason: "a different book sits at this group's first file than the one owning its files"}, nil
+		}
+		if state[ownerID] == ownerLive {
+			return fileOwnershipVerdict{sameBook: ownerID}, nil
 		}
 		return fileOwnershipVerdict{}, nil
 	}

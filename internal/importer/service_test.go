@@ -1,7 +1,7 @@
 // file: internal/importer/service_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: e1f2a3b4-c5d6-7e8f-9a0b-1c2d3e4f5b6c
-// last-edited: 2026-06-14
+// last-edited: 2026-10-06
 
 package importer
 
@@ -90,4 +90,12 @@ func TestImportService_SetRegistry_NilSafe(t *testing.T) {
 	is.SetRegistry(nil) // clear
 
 	assert.Nil(t, is.opRegistry, "SetRegistry(nil) must clear the stored registry")
+}
+
+// A series named after the book's author, or one person of its credit, is the
+// "Author - Title" split read as "Series - Title" and is never created.
+func TestSeriesNamesAuthor(t *testing.T) {
+	assert.True(t, seriesNamesAuthor("Brandon Sanderson", "Brandon Sanderson", nil))
+	assert.True(t, seriesNamesAuthor("Terry Pratchett", "", []database.Author{{Name: "Neil Gaiman"}, {Name: "Terry Pratchett"}}))
+	assert.False(t, seriesNamesAuthor("Mistborn", "Brandon Sanderson", []database.Author{{Name: "Brandon Sanderson"}}))
 }

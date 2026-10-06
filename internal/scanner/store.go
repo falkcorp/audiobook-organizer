@@ -1,5 +1,5 @@
 // file: internal/scanner/store.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 0a5f8c34-9b26-4e71-83d0-6f2a41e75b98
 // last-edited: 2026-10-06
 
@@ -9,6 +9,7 @@ import (
 	"context"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/foldernames"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
 
@@ -76,10 +77,10 @@ type scanEntityStore interface {
 	ModifyBookAuthors(bookID string, fn func([]database.BookAuthor) ([]database.BookAuthor, error)) ([]database.BookAuthor, error)
 	GetSeriesByName(name string, authorID *int) (*database.Series, error)
 	CreateSeries(name string, authorID *int) (*database.Series, error)
-	// GetAllSeries feeds the folder parse's series evidence
-	// (folderNameEvidence): a segment repeating its folder's name is the
-	// series when the library already has a series of that name.
-	GetAllSeries() ([]database.Series, error)
+	// foldernames.Store feeds the folder parse's evidence
+	// (FolderNameEvidence): the author and series lists, a series' books
+	// (to tell a real series from author junk) and the authority lists.
+	foldernames.Store
 	scanWorksStore
 }
 

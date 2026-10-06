@@ -1,6 +1,7 @@
 // file: internal/matcher/matcher.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1f2a3b4c-5d6e-7f8a-9b0c-1d2e3f4a5b6c
+// last-edited: 2026-10-06
 
 package matcher
 
@@ -10,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/falkcorp/audiobook-organizer/internal/personname"
 	"github.com/lithammer/fuzzysearch/fuzzy"
 )
 
@@ -26,8 +28,22 @@ var seriesPatterns = []*regexp.Regexp{
 // seriesWords are common words indicating a series
 var seriesWords = []string{"trilogy", "series", "saga", "chronicles", "sequence"}
 
-// IdentifySeries attempts to identify the series and position from title and filepath
-func IdentifySeries(title, filePath string) (string, int) {
+// IdentifySeries attempts to identify the series and position from title and
+// filepath. author is the book's author credit ("" when unknown): a series it
+// would return that names the author, or one person of a composite credit
+// (personname.NamesCredit), is refused and ("", 0) comes back. "Brandon
+// Sanderson - Elantris" matches the "Series - Title" shape, and the series it
+// named became a junk series row of Brandon Sanderson's (prod 2026-10-06:
+// 3,188 series rows carry their own author's name).
+func IdentifySeries(title, filePath, author string) (string, int) {
+	series, position := identifySeries(title, filePath)
+	if series != "" && personname.NamesCredit(series, author) {
+		return "", 0
+	}
+	return series, position
+}
+
+func identifySeries(title, filePath string) (string, int) {
 	if title == "" {
 		// Try to extract from filename if title is empty
 		title = filepath.Base(filePath)

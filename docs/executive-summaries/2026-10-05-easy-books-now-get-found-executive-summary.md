@@ -1,7 +1,7 @@
 <!-- file: docs/executive-summaries/2026-10-05-easy-books-now-get-found-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: b351a976-9287-4897-af9a-3525619265bc -->
-<!-- last-edited: 2026-10-05 -->
+<!-- last-edited: 2026-10-06 -->
 
 # Easy books now get found
 
@@ -62,3 +62,19 @@ manual run.
 **The fix.** A scheduled job finds books with no search results on record
 and searches them at the providers' normal speed limits. It writes only
 suggestions for the review page.
+
+## Moved books and author-named "series"
+
+**What it was.** When a book was moved or renamed, or a chapter file's
+name changed, the scanner did not recognise the stored book in time and
+could create new author, series and work entries, or even a second copy of
+the book. Separately, about 3,200 "series" in the library are really an
+author's name filed as a series.
+
+**Why it mattered.** These made the reading of folder names unreliable:
+"Brandon Sanderson" could be treated as a series instead of an author, and
+moved books gained stray entries.
+
+**The fix.** The scanner now finds the stored book first and keeps its
+details. Series named after an author no longer count as series, and no new
+ones are created. Removing the existing ~3,200 is a separate, reviewed job.

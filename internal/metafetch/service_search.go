@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_search.go
-// version: 1.34.0
+// version: 1.35.0
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
 // last-edited: 2026-10-06
 
@@ -22,6 +22,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/authority"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/foldernames"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata/providerhttp"
@@ -532,7 +533,7 @@ func (mfs *Service) resolveSearchInputs(book *database.Book, query, author, narr
 // nameEvidence is what metadata.ParseBookName may check a title's segments
 // against for book: its path (a segment repeating an ancestor folder), the
 // authority lists' known people (internal/authority), the library's author
-// rows and its authorless series rows. A lookup fault is no
+// rows and its authorless series rows (author junk filtered). A lookup fault is no
 // evidence, so a segment is kept in the title: a search never loses words to
 // a read error.
 func (mfs *Service) nameEvidence(book *database.Book) metadata.NameEvidence {
@@ -550,11 +551,11 @@ func (mfs *Service) nameEvidence(book *database.Book) metadata.NameEvidence {
 		}
 		// An authorless series row only: the store indexes series by author,
 		// and a search has no series list to hand (the scanner reads one,
-		// scanner.FolderNameEvidence). A curated franchise is a series anyway.
-		ev.IsKnownSeries = func(name string) bool {
-			s, err := db.GetSeriesByName(name, nil)
-			return err == nil && s != nil
-		}
+		// scanner.FolderNameEvidence). The row is judged the way the scanner
+		// judges it (foldernames.IsRealSeries): a series named after an
+		// author row and holding only that author's books is author junk,
+		// not series evidence. A curated franchise is a series anyway.
+		ev.IsKnownSeries = func(name string) bool { return foldernames.IsRealSeries(db, name) }
 	}
 	return ev
 }

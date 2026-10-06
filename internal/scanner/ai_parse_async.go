@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_parse_async.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 5c5dc851-ad6d-4624-b836-a85e38ae5d02
-// last-edited: 2026-10-04
+// last-edited: 2026-10-06
 
 package scanner
 
@@ -391,7 +391,7 @@ func saveAIFieldsToPrimary(_ context.Context, id string, book *Book) (string, er
 		}
 	}
 	if row.SeriesID == nil && book.Series != "" && !locks.Locked(database.FieldKeySeriesName) {
-		seriesID, seriesPos, serr := resolveSeriesID(book.Series, row.AuthorID)
+		seriesID, seriesPos, serr := resolveSeriesID(book.Series, book.Author, row.AuthorID)
 		if serr != nil {
 			return "", fmt.Errorf("resolve series %q: %w", book.Series, serr)
 		}
