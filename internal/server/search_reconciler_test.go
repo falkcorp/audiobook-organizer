@@ -1,7 +1,7 @@
 // file: internal/server/search_reconciler_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9a1e7c40-2b83-4f16-90ad-6c4b1f2e8d55
-// last-edited: 2026-09-25
+// last-edited: 2026-10-06
 //
 // Tests for search-index reconciliation after a dropped index event.
 //
@@ -43,7 +43,7 @@ func newDropOnlyServer(t *testing.T) (*Server, *database.PebbleStore, *search.Bl
 	}
 	t.Cleanup(func() { _ = idx.Close() })
 
-	srv := NewServer(store)
+	srv := newTestServer(t, store)
 	srv.setSearchIndex(idx)
 	// Zero capacity + no worker => the select always hits default.
 	srv.indexQueue = make(chan indexRequest)
@@ -241,7 +241,7 @@ func TestReconciler_NoIndexIsANoOp(t *testing.T) {
 
 	// No search index wired up: runSearchReconciler must return rather than
 	// spin a ticker forever, and reconcileOnce must not panic.
-	srv := NewServer(store)
+	srv := newTestServer(t, store)
 	srv.runSearchReconciler() // returns immediately when searchIndex == nil
 	srv.reconcileOnce()
 }

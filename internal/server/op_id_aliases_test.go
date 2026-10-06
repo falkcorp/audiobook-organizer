@@ -1,7 +1,7 @@
 // file: internal/server/op_id_aliases_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2a7c5e93-1d4b-4f60-8e2a-b9c3d7f15e48
-// last-edited: 2026-09-28
+// last-edited: 2026-10-06
 
 // Guard tests for operation-ID renames.
 //
@@ -78,7 +78,7 @@ func bootRegisteredOpIDs(t *testing.T) (*Server, map[string]bool, map[string]str
 	database.SetGlobalStore(store)
 	t.Cleanup(func() { database.SetGlobalStore(origStore) })
 
-	srv := NewServer(store)
+	srv := newTestServer(t, store)
 	t.Cleanup(func() {
 		if srv.fileIOPool != nil {
 			srv.fileIOPool.Stop()

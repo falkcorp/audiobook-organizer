@@ -1,7 +1,7 @@
 // file: internal/server/handlers_integration_test.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
-// last-edited: 2026-09-12
+// last-edited: 2026-10-06
 
 package server
 
@@ -218,7 +218,7 @@ func setupHandlerTestServer(t *testing.T) *Server {
 		database.SetGlobalStore(oldStore)
 	})
 
-	srv := NewServer(mockDB)
+	srv := newTestServer(t, mockDB)
 	// INTERNAL-SERVER-PKG-STALL: NewServer starts a 4-worker FileIOPool. Without
 	// this cleanup every test that builds a server leaks those workers for the
 	// rest of the binary's life — a timed-out run's dump showed 352 parked
@@ -409,7 +409,7 @@ func TestListAuthors_BookCountOverride(t *testing.T) {
 		database.SetGlobalStore(oldStore)
 	})
 
-	srv := NewServer(mockDB)
+	srv := newTestServer(t, mockDB)
 	t.Cleanup(srv.fileIOPool.Stop)
 
 	w := httptest.NewRecorder()

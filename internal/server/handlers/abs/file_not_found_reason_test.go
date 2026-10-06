@@ -1,12 +1,11 @@
 // file: internal/server/handlers/abs/file_not_found_reason_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 8b3f0d92-47a1-4e6c-95d8-2c710fa6e534
-// last-edited: 2026-09-02
+// last-edited: 2026-10-06
 
 package abs_test
 
 import (
-	"bytes"
 	"log/slog"
 	"net/http"
 	"path/filepath"
@@ -14,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger/logtest"
 )
 
 // captureLogs redirects the default slog logger into a buffer for the duration of
@@ -24,13 +24,12 @@ import (
 // the protocol contract and it is deliberately unchanged. So a test that asserted
 // on the response could not tell the five cases apart either, which is precisely
 // the defect under repair. The log is the surface being tested.
-func captureLogs(t *testing.T) *bytes.Buffer {
+//
+// The buffer is mutex-guarded and logtest refuses to run under t.Parallel,
+// because the swap is process-global.
+func captureLogs(t *testing.T) *logtest.Buffer {
 	t.Helper()
-	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	t.Cleanup(func() { slog.SetDefault(prev) })
-	return &buf
+	return logtest.Capture(t, slog.LevelDebug)
 }
 
 // seedFileServing builds one book with one book_file whose path DOES NOT EXIST,

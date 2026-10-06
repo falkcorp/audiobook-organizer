@@ -1,27 +1,26 @@
 // file: internal/server/vector_backend_warn_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8d1c4b6e-2a37-4f95-b0e8-6c3f9a25d7b1
-// last-edited: 2026-08-30
+// last-edited: 2026-10-06
 
 package server
 
 import (
-	"bytes"
 	"log/slog"
 	"strings"
 	"testing"
+
+	"github.com/falkcorp/audiobook-organizer/internal/logger/logtest"
 )
 
-// captureWarnLogs swaps the default slog handler for one writing into a buffer
-// at WARN level and restores it afterwards. Matches the pattern already used by
-// internal/server/handlers/abs/browse_unsupported_sort_test.go.
-func captureWarnLogs(t *testing.T) *bytes.Buffer {
+// captureWarnLogs captures WARN+ from slog.Default for the rest of the test.
+// The buffer is mutex-guarded: any goroutine still running in the binary (a
+// leaked background loop from another test, say) writes into it too, and an
+// unguarded bytes.Buffer made that a data race under -race. The swap is
+// process-global, so logtest.Capture refuses to run under t.Parallel.
+func captureWarnLogs(t *testing.T) *logtest.Buffer {
 	t.Helper()
-	buf := &bytes.Buffer{}
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
-	t.Cleanup(func() { slog.SetDefault(prev) })
-	return buf
+	return logtest.Capture(t, slog.LevelWarn)
 }
 
 // TestResolveVectorBackend_ChromemIsAudible is the point of the whole change.

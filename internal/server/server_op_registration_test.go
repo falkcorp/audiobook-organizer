@@ -1,7 +1,7 @@
 // file: internal/server/server_op_registration_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7f2a4c81-9d63-4e05-b8a7-1c30e95d6f24
-// last-edited: 2026-08-20
+// last-edited: 2026-10-06
 
 // Regression test for the RootDir op-registration gate.
 //
@@ -43,7 +43,7 @@ func TestNewServer_RegistersOpsWithEmptyRootDir(t *testing.T) {
 	database.SetGlobalStore(store)
 	t.Cleanup(func() { database.SetGlobalStore(origStore) })
 
-	srv := NewServer(store)
+	srv := newTestServer(t, store)
 	t.Cleanup(func() {
 		if srv.fileIOPool != nil {
 			srv.fileIOPool.Stop()

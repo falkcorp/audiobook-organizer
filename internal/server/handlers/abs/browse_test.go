@@ -1,12 +1,11 @@
 // file: internal/server/handlers/abs/browse_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8b3e10c4-6d97-4a52-bf08-2e4c95d7130a
-// last-edited: 2026-09-15
+// last-edited: 2026-10-06
 
 package abs_test
 
 import (
-	"context"
 	"encoding/base64"
 	"errors"
 	"log/slog"
@@ -16,6 +15,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/falkcorp/audiobook-organizer/internal/logger/logtest"
 )
 
 // newBrowseHarness wires the browse surface over the oracle seed and returns a
@@ -820,12 +821,8 @@ func TestLibrarySeries_CountsErrorLogsWarning(t *testing.T) {
 	// Test error case: GetAllSeriesBookCounts fails
 	t.Run("error_logs_warning", func(t *testing.T) {
 		h, seed, tok := newBrowseHarness(t)
-		// Capture slog records
-		var records []*slog.Record
-		handler := &recordingHandler{records: &records}
-		oldDefault := slog.Default()
-		slog.SetDefault(slog.New(handler))
-		defer slog.SetDefault(oldDefault)
+		// Capture slog records (mutex-guarded; refuses t.Parallel).
+		recorder := logtest.CaptureRecords(t)
 
 		// Inject failure into GetAllSeriesBookCounts
 		seed.lib.mu.Lock()
@@ -850,7 +847,7 @@ func TestLibrarySeries_CountsErrorLogsWarning(t *testing.T) {
 
 		// Verify the warning was logged
 		found := false
-		for _, rec := range records {
+		for _, rec := range recorder.Records() {
 			if rec.Level == slog.LevelWarn && strings.Contains(rec.Message, "series book counts unavailable") {
 				found = true
 				break
@@ -864,12 +861,8 @@ func TestLibrarySeries_CountsErrorLogsWarning(t *testing.T) {
 	// Test happy path: no error, no warning
 	t.Run("no_error_no_warning", func(t *testing.T) {
 		h, _, tok := newBrowseHarness(t)
-		// Capture slog records
-		var records []*slog.Record
-		handler := &recordingHandler{records: &records}
-		oldDefault := slog.Default()
-		slog.SetDefault(slog.New(handler))
-		defer slog.SetDefault(oldDefault)
+		// Capture slog records (mutex-guarded; refuses t.Parallel).
+		recorder := logtest.CaptureRecords(t)
 
 		// GetAllSeriesBookCounts works normally (default fakeLibrary behavior)
 		code, body := h.doAny(t, request{
@@ -888,35 +881,13 @@ func TestLibrarySeries_CountsErrorLogsWarning(t *testing.T) {
 		}
 
 		// Verify the warning was NOT logged (happy path)
-		for _, rec := range records {
+		for _, rec := range recorder.Records() {
 			if rec.Level == slog.LevelWarn && strings.Contains(rec.Message, "series book counts unavailable") {
 				t.Error("warning should not appear when GetAllSeriesBookCounts succeeds")
 				break
 			}
 		}
 	})
-}
-
-// recordingHandler captures slog records for testing
-type recordingHandler struct {
-	records *[]*slog.Record
-}
-
-func (h *recordingHandler) Enabled(ctx context.Context, level slog.Level) bool {
-	return true
-}
-
-func (h *recordingHandler) Handle(ctx context.Context, record slog.Record) error {
-	*h.records = append(*h.records, &record)
-	return nil
-}
-
-func (h *recordingHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	return h
-}
-
-func (h *recordingHandler) WithGroup(name string) slog.Handler {
-	return h
 }
 
 // AudioBooth decodes each /search genre hit as {name: String, numItems: Int},

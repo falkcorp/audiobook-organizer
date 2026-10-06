@@ -1,7 +1,7 @@
 // file: internal/server/itunes_integration_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: e5f6a7b8-c9d0-1234-efab-567890123cde
-// last-edited: 2026-07-07
+// last-edited: 2026-10-06
 
 package server
 
@@ -53,7 +53,7 @@ func TestITunesImport_FullWorkflow(t *testing.T) {
 	}, xmlPath)
 
 	// Import via HTTP handler
-	server := NewServer(env.Store)
+	server := newTestServer(t, env.Store)
 	if server.opRegistry != nil {
 		server.opRegistry.Start(context.Background())
 		// registered after defer cleanup() → runs first (LIFO) to avoid pebble: closed panics.
@@ -121,7 +121,7 @@ func TestITunesImport_OrganizeMode(t *testing.T) {
 			FilePath: bookPath, TotalTime: 100000},
 	}, xmlPath)
 
-	server := NewServer(env.Store)
+	server := newTestServer(t, env.Store)
 	if server.opRegistry != nil {
 		server.opRegistry.Start(context.Background())
 		// registered after defer cleanup() → runs first (LIFO) to avoid pebble: closed panics.
@@ -169,7 +169,7 @@ func TestITunesImport_SkipDuplicates(t *testing.T) {
 			FilePath: bookPath, TotalTime: 50000},
 	}, xmlPath)
 
-	server := NewServer(env.Store)
+	server := newTestServer(t, env.Store)
 	if server.opRegistry != nil {
 		server.opRegistry.Start(context.Background())
 		// registered after defer cleanup() → runs first (LIFO) to avoid pebble: closed panics.
@@ -219,7 +219,7 @@ func TestITunesWriteBack(t *testing.T) {
 	require.NoError(t, err)
 
 	// Execute write-back via HTTP — ITL is not configured in test, so should return 400
-	server := NewServer(env.Store)
+	server := newTestServer(t, env.Store)
 	if server.opRegistry != nil {
 		server.opRegistry.Start(context.Background())
 		// registered after defer cleanup() → runs first (LIFO) to avoid pebble: closed panics.
@@ -253,7 +253,7 @@ func TestITunesValidate_Endpoint(t *testing.T) {
 			FilePath: "/nonexistent/missing.m4b", TotalTime: 20000},
 	}, xmlPath)
 
-	server := NewServer(env.Store)
+	server := newTestServer(t, env.Store)
 	if server.opRegistry != nil {
 		server.opRegistry.Start(context.Background())
 		// registered after defer cleanup() → runs first (LIFO) to avoid pebble: closed panics.

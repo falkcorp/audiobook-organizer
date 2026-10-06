@@ -1,7 +1,7 @@
 // file: internal/server/author_ref_audit_route_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4e1d8c37-52b6-4a09-8d74-1f9b0a63c5e2
-// last-edited: 2026-08-29
+// last-edited: 2026-10-06
 
 package server
 
@@ -55,7 +55,7 @@ func TestAuthorRefAuditRouteIsWired(t *testing.T) {
 		t.Fatalf("delete author: %v", err)
 	}
 
-	srv := NewServer(store)
+	srv := newTestServer(t, store)
 
 	url := "/api/v1/authors/ref-audit?ids=" +
 		strconv.Itoa(live.ID) + "," + strconv.Itoa(gone.ID)

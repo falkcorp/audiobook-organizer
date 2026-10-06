@@ -1,6 +1,6 @@
 // file: internal/server/user_handlers_test.go
-// version: 1.1.1
-// last-edited: 2026-09-02
+// version: 1.2.0
+// last-edited: 2026-10-06
 
 package server
 
@@ -32,7 +32,7 @@ func setupUserHandlerServer(t *testing.T) (*Server, database.Store) {
 		store.Close()
 	})
 
-	srv := NewServer(store)
+	srv := newTestServer(t, store)
 	return srv, store
 }
 

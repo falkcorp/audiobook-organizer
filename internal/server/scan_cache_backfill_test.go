@@ -1,7 +1,7 @@
 // file: internal/server/scan_cache_backfill_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5c2a9f81-73de-4b06-a1c8-6e9d0b34f2a7
-// last-edited: 2026-08-25
+// last-edited: 2026-10-06
 
 package server
 
@@ -45,7 +45,7 @@ func newScanCacheBackfillServer(t *testing.T) (*Server, *database.PebbleStore, s
 	})
 	require.NoError(t, err)
 
-	return NewServer(store), store, audio, book.ID
+	return newTestServer(t, store), store, audio, book.ID
 }
 
 func postBackfill(t *testing.T, srv *Server, query string) map[string]any {

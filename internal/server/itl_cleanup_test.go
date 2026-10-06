@@ -1,7 +1,7 @@
 // file: internal/server/itl_cleanup_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2f6a8c14-9b3d-4e71-8a05-6c1d3f9b7e42
-// last-edited: 2026-09-10
+// last-edited: 2026-10-06
 
 package server
 
@@ -41,7 +41,7 @@ func setupCleanupMergedTestServer(t *testing.T) (*Server, string) {
 	}
 	t.Cleanup(func() { store.Close() })
 
-	srv := NewServer(store)
+	srv := newTestServer(t, store)
 
 	fixtureBytes, err := os.ReadFile(fixtureITLSource)
 	if err != nil {

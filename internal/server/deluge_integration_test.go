@@ -1,7 +1,7 @@
 // file: internal/server/deluge_integration_test.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-09-12
+// last-edited: 2026-10-06
 //
 // Integration tests for Deluge notification helpers and HTTP handlers.
 // Service logic moved to internal/deluge/integration.go; tests updated to
@@ -110,7 +110,7 @@ func TestHandleDelugeStatus_NotConfigured(t *testing.T) {
 		config.AppConfig.DownloadClient.Torrent.Deluge.Host = origHost
 	}()
 
-	srv := NewServer(store)
+	srv := newTestServer(t, store)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/deluge/status", nil)
 	w := httptest.NewRecorder()
@@ -158,7 +158,7 @@ func TestHandleDelugeStatus_Configured(t *testing.T) {
 		deluge.ResetGlobalClientForTest()
 	}()
 
-	srv := NewServer(store)
+	srv := newTestServer(t, store)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/deluge/status", nil)
 	w := httptest.NewRecorder()

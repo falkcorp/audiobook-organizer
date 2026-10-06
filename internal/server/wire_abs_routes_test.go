@@ -1,12 +1,11 @@
 // file: internal/server/wire_abs_routes_test.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 3ea1d764-95c8-4b02-8f31-6d70a5be2c49
-// last-edited: 2026-09-19
+// last-edited: 2026-10-06
 
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"io/fs"
 	"log/slog"
@@ -20,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/logger/logtest"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -691,28 +691,6 @@ func TestCollectionsNativeTwinRoutesStillRedirect(t *testing.T) {
 	}
 }
 
-// testLogHandler captures slog records for testing.
-type testLogHandler struct {
-	records []slog.Record
-}
-
-func (h *testLogHandler) Handle(_ context.Context, record slog.Record) error {
-	h.records = append(h.records, record)
-	return nil
-}
-
-func (h *testLogHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	return h
-}
-
-func (h *testLogHandler) WithGroup(name string) slog.Handler {
-	return h
-}
-
-func (h *testLogHandler) Enabled(_ context.Context, level slog.Level) bool {
-	return true
-}
-
 // TestWireABSRoutes_LogsStateEvenWhenDisabled verifies that wireABSRoutes logs the
 // ABS enabled/disabled state unconditionally at boot, not just when enabled. This
 // ensures that journalctl/log-grepping for 'abs:' on a running instance always
@@ -721,11 +699,8 @@ func TestWireABSRoutes_LogsStateEvenWhenDisabled(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	s := &Server{router: gin.New()}
 
-	// Capture slog output using a test handler
-	handler := &testLogHandler{}
-	oldLogger := slog.Default()
-	slog.SetDefault(slog.New(handler))
-	defer slog.SetDefault(oldLogger)
+	// Capture slog records (mutex-guarded; refuses t.Parallel).
+	handler := logtest.CaptureRecords(t)
 
 	// Force ABS off through Mutate, not a bare field write: Snapshot() reads
 	// AppConfig under an RLock and config.go requires every write site to take
@@ -737,7 +712,7 @@ func TestWireABSRoutes_LogsStateEvenWhenDisabled(t *testing.T) {
 	s.wireABSRoutes()
 
 	var found bool
-	for _, record := range handler.records {
+	for _, record := range handler.Records() {
 		if record.Message != "abs: Audiobookshelf-compatible surface" {
 			continue
 		}

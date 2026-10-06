@@ -1,6 +1,6 @@
 // file: internal/server/indexed_store_test.go
-// version: 1.5.0
-// last-edited: 2026-10-05
+// version: 1.6.0
+// last-edited: 2026-10-06
 // guid: 6e3f5a2b-8c5a-4a70-b8c5-3d7e0f1b9a89
 
 package server
@@ -49,7 +49,7 @@ func TestIndexedStore_CreateReindexes(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = idx.Close() })
 
-	srv := NewServer(store)
+	srv := newTestServer(t, store)
 	srv.setSearchIndex(idx)
 	srv.indexQueue = make(chan indexRequest, 32)
 	done := make(chan struct{})
@@ -97,7 +97,7 @@ func TestIndexedStore_DeleteRemovesFromIndex(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = idx.Close() })
 
-	srv := NewServer(store)
+	srv := newTestServer(t, store)
 	srv.setSearchIndex(idx)
 	srv.indexQueue = make(chan indexRequest, 32)
 	done := make(chan struct{})
@@ -151,7 +151,7 @@ func TestIndexedStore_SoftDeleteIsUnsearchableWithoutReconcile(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = idx.Close() })
 
-	srv := NewServer(store)
+	srv := newTestServer(t, store)
 	srv.setSearchIndex(idx)
 	srv.indexQueue = make(chan indexRequest, 32)
 	done := make(chan struct{})
@@ -232,7 +232,7 @@ func TestIndexedStoreUpdateBook_RestoreStillReindexes(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = idx.Close() })
 
-	srv := NewServer(store)
+	srv := newTestServer(t, store)
 	srv.setSearchIndex(idx)
 	srv.indexQueue = make(chan indexRequest, 32)
 	done := make(chan struct{})
@@ -295,7 +295,7 @@ func TestIndexedStore_EnqueueSafeAfterClose(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = idx.Close() })
 
-	srv := NewServer(store)
+	srv := newTestServer(t, store)
 	srv.setSearchIndex(idx)
 	srv.indexQueue = make(chan indexRequest, 32)
 	done := make(chan struct{})
@@ -332,7 +332,7 @@ func TestIndexedStore_UpdateReindexes(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = idx.Close() })
 
-	srv := NewServer(store)
+	srv := newTestServer(t, store)
 	srv.setSearchIndex(idx)
 	srv.indexQueue = make(chan indexRequest, 32)
 	done := make(chan struct{})
@@ -381,7 +381,7 @@ func TestIndexedStore_CreateRejectsColonBookID(t *testing.T) {
 	}
 	t.Cleanup(func() { store.Close() })
 
-	srv := NewServer(store)
+	srv := newTestServer(t, store)
 	srv.indexQueue = make(chan indexRequest, 4)
 	wrapped := &indexedStore{Store: store, server: srv}
 
