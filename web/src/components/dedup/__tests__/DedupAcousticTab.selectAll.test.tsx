@@ -29,7 +29,7 @@ function cand(id: number): api.DedupCandidate {
     status: 'pending',
     created_at: '',
     updated_at: '',
-  } as api.DedupCandidate;
+  } as unknown as api.DedupCandidate;
 }
 const ALL = Array.from({ length: TOTAL }, (_, i) => cand(i + 1));
 
