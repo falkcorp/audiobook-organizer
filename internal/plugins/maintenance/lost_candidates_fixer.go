@@ -76,10 +76,11 @@ var _ repairs.Fixer = (*lostCandidatesFixer)(nil)
 func (f *lostCandidatesFixer) ID() string    { return lostCandidatesFixerID }
 func (f *lostCandidatesFixer) Title() string { return "Refetch lost metadata candidates" }
 func (f *lostCandidatesFixer) Description() string {
-	return "Books a metadata search matched whose candidates were later deleted (before 2026-10-05 an ASIN/ISBN " +
-		"fill, such as the six-hourly ASIN backfill, or a title/author change dropped them), and which are not " +
-		"applied. Apply searches the providers again for each selected book and stores the candidates for review. " +
-		"It never applies metadata and never changes the book."
+	return "Books a metadata search matched whose candidates were later deleted, and which are not applied. " +
+		"Before 2026-10-05 an ASIN/ISBN fill (such as the six-hourly ASIN backfill) deleted them; a title or " +
+		"author-name change still does, so books retitled or relinked by a repair land here too. Apply searches the " +
+		"providers again for each selected book and stores the candidates for review. It never applies metadata " +
+		"and never changes the book."
 }
 
 // ITunesDatabaseOnly: the fixer writes no book row and no file, only the

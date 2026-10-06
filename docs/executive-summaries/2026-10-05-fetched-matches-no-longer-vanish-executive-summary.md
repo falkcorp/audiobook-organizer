@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-05-fetched-matches-no-longer-vanish-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 66826c76-f279-4c56-85d5-cf3dab35eb52 -->
 <!-- last-edited: 2026-10-05 -->
 
@@ -27,6 +27,18 @@
   that had a match and lost it. For the books the owner selects, it asks the
   providers again and stores what they find for review. It never changes a
   book and never applies anything. It can be tried as a dry run first.
+- **Still happens on purpose.** A title or author-name change still clears a
+  book's matches, because they were searched for under the old name. When a
+  repair tidies a junk title or relinks an author, the book loses its matches
+  and nothing looks it up again automatically. The new repair finds those
+  books too, but someone has to run it. Keeping such matches instead would
+  need the database to re-check them against the new name. That is a bigger
+  change and is left for later.
+- **One automatic path now checks Audible numbers.** The overnight job that
+  fills an empty title or author from a match heard in the book's opening
+  narration now refuses a match whose Audible number disagrees with the
+  book's. Matches can now outlive a number change, so without this check it
+  could have written another book's title onto this one.
 - **Not yet done.** The repair has not been run on production. Running it, and
   then reviewing what comes back, is the owner's call.
 

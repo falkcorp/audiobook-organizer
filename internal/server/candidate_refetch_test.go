@@ -8,6 +8,7 @@ package server
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
@@ -57,5 +58,39 @@ func TestRefetchMetadataCandidates_FetchesIntoCacheOnly(t *testing.T) {
 	hist, err := store.GetBookChangeHistory(book.ID, 10)
 	if err != nil || len(hist) != 0 {
 		t.Fatalf("metadata history = %+v (err %v), want none", hist, err)
+	}
+}
+
+// A refetch the providers answer with nothing still records the search: the
+// cache row exists afterwards and is dated, so the lost-candidates fixer's
+// next plan skips the book as searched_since instead of refetching it on
+// every run.
+func TestRefetchMetadataCandidates_EmptyAnswerIsRecorded(t *testing.T) {
+	s, cleanup := setupTestServer(t)
+	defer cleanup()
+	store := s.storeForWiring()
+	book, err := store.CreateBook(&database.Book{Title: "A Book Nobody Catalogued", FilePath: "/lib/nobody/book.m4b"})
+	if err != nil {
+		t.Fatalf("CreateBook: %v", err)
+	}
+	mfs := metafetch.NewService(store)
+	mfs.SetOverrideSources([]metadata.MetadataSource{&countingSource{name: "Empty"}})
+	s.metadataFetchService = mfs
+
+	before := time.Now().Add(-time.Second)
+	res, err := s.RefetchMetadataCandidates(context.Background(), book.ID)
+	if err != nil {
+		t.Fatalf("RefetchMetadataCandidates: %v", err)
+	}
+	if res.Candidates != 0 || res.Status != "no_match" {
+		t.Fatalf("result = %+v, want no_match with no candidates", res)
+	}
+	entry, err := store.GetMetadataCache(book.ID)
+	if err != nil || entry == nil {
+		t.Fatalf("cache row = %+v (err %v), want a row recording the empty search", entry, err)
+	}
+	dated := entry.FetchedAt.After(before) || (entry.LastEmptyFetchAt != nil && entry.LastEmptyFetchAt.After(before))
+	if !dated {
+		t.Fatalf("cache row not dated by the refetch: fetched %v, last empty %v", entry.FetchedAt, entry.LastEmptyFetchAt)
 	}
 }
