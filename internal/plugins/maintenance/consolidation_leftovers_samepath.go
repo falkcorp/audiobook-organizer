@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/consolidation_leftovers_samepath.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7285fcc4-a331-4b0a-89c0-e606c9f5f7b3
 // last-edited: 2026-10-06
 
@@ -104,10 +104,13 @@ type leftoverITunesOf func(bc *database.BookCore, rs []database.BookFileCore) (s
 func (s *leftoverSource) samePath(ctx context.Context, core *database.BookCore, rows []database.BookFileCore,
 	row *repairs.Row, fp *strings.Builder, finish leftoverFinish, itunesOf leftoverITunesOf) (repairs.Row, bool, error) {
 	id, shared := core.ID, core.FilePath
-	cands, err := s.owners(shared)
+	got, err := s.owners(shared)
 	if err != nil {
 		return repairs.Row{}, false, err
 	}
+	// A copy: the plan's path index hands every worker the same slice, and
+	// two leftovers on one path are decided concurrently.
+	cands := append([]string(nil), got...)
 	sort.Strings(cands)
 	var owners, stale []string
 	books := map[string]*database.BookCore{}
