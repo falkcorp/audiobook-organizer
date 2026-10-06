@@ -1,7 +1,7 @@
 // file: internal/merge/combine_journal.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 4e8b1c27-93d5-4f0a-a6e2-7c51d9b03f18
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package merge
 
@@ -901,10 +901,14 @@ func readSurvivorReconcileMarker(db UserProgressMerger, key string) (*survivorRe
 // (every second the user added after it is already in it); one that finds
 // the same UpdatedAt knows it did not land and does the full reconcile.
 //
-// The marker's UpdatedAt comes from a re-read taken right before the write,
-// under the per-(user, book) stripe (database.LockUserBookState); if that
-// re-read differs from the row the reconcile was computed from, the whole
-// reconcile is redone from fresh reads (up to survivorReconcileAttempts). A
+// Every write -- positions, marker, state -- happens under the per-(user,
+// book) stripe (database.LockUserBookState), after a re-read of the state AND
+// the positions taken under it; if either differs from what the reconcile was
+// computed from, nothing is written and the whole reconcile is redone from
+// fresh reads (up to survivorReconcileAttempts). The marker's UpdatedAt comes
+// from that re-read. Until 2026-10-06 the positions were written BEFORE the
+// stripe and the check, so a client position that landed after the read
+// was rewound to the before-snapshot's row (the review of #3777). A
 // state write that fails drops the marker again (best effort). What remains
 // is crash-only: the process dies after the marker is written and before
 // the state write lands, AND a client then writes the survivor before the
@@ -964,6 +968,29 @@ func reconcileTouchedSurvivorOnce(db UserProgressMerger, p CombineUserProgress, 
 			want = append(want, b)
 		}
 	}
+	// Take the stripe the ABS and readstatus writers hold (lock order: merge
+	// lock, then this stripe) BEFORE any write, and re-read both the state
+	// and the positions under it. want and st below were built from cur and
+	// curPos; a write that landed since (a device sync, a heartbeat's
+	// position) means they are stale and would rewind it, so
+	// errSurvivorMovedOn sends the caller round again with fresh reads.
+	// Positions are compared as well as the state's UpdatedAt: the web
+	// heartbeat writes a position first and recomputes the state after, so
+	// a new position can be there while the state row is still the old one.
+	unlock := database.LockUserBookState(p.UserID, survivorID)
+	defer unlock()
+	fresh, err := db.GetUserBookState(p.UserID, survivorID)
+	if err != nil {
+		return fmt.Errorf("re-read state user=%s book=%s: %w", p.UserID, survivorID, err)
+	}
+	freshPos, err := db.ListUserPositionsForBook(p.UserID, survivorID)
+	if err != nil {
+		return fmt.Errorf("re-read positions user=%s book=%s: %w", p.UserID, survivorID, err)
+	}
+	if (fresh == nil) != (cur == nil) || (cur != nil && !fresh.UpdatedAt.Equal(cur.UpdatedAt)) ||
+		!sameProgress(nil, nil, curPos, freshPos) {
+		return errSurvivorMovedOn
+	}
 	if err := writePositionsDiff(db, p.UserID, survivorID, curPos, want); err != nil {
 		return err
 	}
@@ -1010,21 +1037,8 @@ func reconcileTouchedSurvivorOnce(db UserProgressMerger, p CombineUserProgress, 
 	if newest != nil {
 		st.LastSegmentID = newest.SegmentID
 	}
-	// Re-read the state right before the write, under the per-(user, book)
-	// stripe the ABS and readstatus writers hold (lock order: merge lock,
-	// then this stripe), so the marker's PreUpdatedAt is the UpdatedAt the
-	// write replaces and st was built from that same row. A write that
-	// landed since cur was read means st is stale: errSurvivorMovedOn sends
-	// the caller round again with fresh reads.
-	unlock := database.LockUserBookState(p.UserID, survivorID)
-	defer unlock()
-	fresh, err := db.GetUserBookState(p.UserID, survivorID)
-	if err != nil {
-		return fmt.Errorf("re-read state user=%s book=%s: %w", p.UserID, survivorID, err)
-	}
-	if fresh == nil || !fresh.UpdatedAt.Equal(cur.UpdatedAt) {
-		return errSurvivorMovedOn
-	}
+	// Still under the stripe taken above: fresh is the row the state write
+	// replaces, so the marker's PreUpdatedAt is its UpdatedAt.
 	wroteMarker := false
 	if marker == nil {
 		data, err := json.Marshal(survivorReconcileMarker{PreUpdatedAt: fresh.UpdatedAt})
@@ -1075,7 +1089,14 @@ func timePtrEqual(a, b *time.Time) bool {
 //     combined set drops one (a reset kept over older positions), so the
 //     rows on the book always match the state's LastSegmentID. A newer write
 //     is reported as a warning.
+//
+// The reads and the writes are one step under the per-(user, book) stripe
+// (database.LockUserBookState; lock order: merge lock, then this stripe), so
+// a device sync cannot land between the read the combine is built from and
+// the write that would rewind it. The caller must not hold a user-state
+// stripe (none does: RestoreFollowedProgress takes none).
 func restoreAbsorbedSide(db userPositionStore, userID, absorbedID string, snapSt *database.UserBookState, snapPos []database.UserPosition) (string, error) {
+	defer database.LockUserBookState(userID, absorbedID)()
 	cur, err := db.GetUserBookState(userID, absorbedID)
 	if err != nil {
 		return "", fmt.Errorf("read progress user=%s book=%s: %w", userID, absorbedID, err)
