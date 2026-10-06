@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer.go
-// version: 1.36.0
+// version: 1.36.1
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
-// last-edited: 2026-10-04
+// last-edited: 2026-10-06
 
 package itunesservice
 
@@ -1628,6 +1628,15 @@ func (imp *Importer) enrichImportedBooks(ctx context.Context, status *itunesImpo
 
 	runErr := registry.RunItems(enrichCtx, reporter, toEnrich, func(itemCtx context.Context, book *database.BookCore) error {
 		resp, err := imp.mfs.FetchMetadataForBook(itemCtx, book.ID)
+		if errors.Is(err, metafetch.ErrReviewOnlyCandidatesNotApplied) {
+			// Every provider answered; only a review-only source (Open
+			// Library, Google Books) matched, and the auto-fetch never
+			// applies one (owner decision 2026-10-06). The providers
+			// answered, so this resets the breaker like any success.
+			log.Debug("Only review-only matches for '%s', left for review: %v", book.Title, err)
+			breakerFails.Store(0)
+			return nil
+		}
 		if err != nil {
 			log.Debug("No metadata found for '%s': %v", book.Title, err)
 			if breakerFails.Add(1) >= enrichBreakerThreshold {
