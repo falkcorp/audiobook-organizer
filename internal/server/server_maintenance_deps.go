@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.53.0
+// version: 1.53.1
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
 // last-edited: 2026-10-05
 
@@ -726,6 +726,10 @@ func (s *Server) SearchTranscriptionCandidate(_ context.Context, bookID, _, _ st
 	return maintenanceplugin.TranscriptionCandidate{Title: best.Title, Author: best.Author, Series: best.Series, Score: best.Score}, true, nil
 }
 
+// transcriptionApplyLog is the process log of ApplyTranscriptionCandidate's
+// refusals (internal/logger, printf-style).
+var transcriptionApplyLog = logger.New("apply-transcription-candidate")
+
 // errTranscriptionASINConflict refuses a transcription apply whose top cached
 // candidate names a different ASIN than the book already carries.
 var errTranscriptionASINConflict = errors.New("cached candidate ASIN conflicts with the book's ASIN")
@@ -816,8 +820,8 @@ func (s *Server) ApplyTranscriptionCandidate(_ context.Context, bookID, gatedTit
 	// that pair as asin_conflict; this unattended fill-only path must too, or
 	// it would write another record's title and author onto the book.
 	if conflict := transcriptionASINConflict(book, cand); conflict != "" {
-		slog.Warn("apply-transcription-candidate: candidate ASIN conflicts with the book's",
-			"book_id", bookID, "detail", conflict)
+		transcriptionApplyLog.Warn("apply-transcription-candidate: candidate ASIN conflicts with the book's: book_id=%s detail=%s",
+			logger.SanitizeLogValue(bookID), logger.SanitizeLogValue(conflict))
 		return fmt.Errorf("%w: book %s: %s", errTranscriptionASINConflict, bookID, conflict)
 	}
 

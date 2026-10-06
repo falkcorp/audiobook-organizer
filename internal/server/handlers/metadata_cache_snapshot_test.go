@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_snapshot_test.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 5a0e9c37-1d4b-4f62-8b17-c2e6d9a40f13
-// last-edited: 2026-10-03
+// last-edited: 2026-10-05
 
 package handlers
 
@@ -625,6 +625,7 @@ func TestReviewSnapshot_IncrementalEqualsFull(t *testing.T) {
 	// -> orphan), an orphan whose book comes back (orphan -> row), and a book
 	// whose identity change deletes its cache row.
 	changedID, deletedRowID, retitledID, deletedBookID, identityID := rows[3].sum.BookID, rows[5].sum.BookID, rows[7].sum.BookID, fileless.ID, rows[11].sum.BookID
+	asinFilledID := rows[13].sum.BookID
 	require.Contains(t, first.books, deletedBookID)
 	entry, err := store.GetMetadataCache(changedID)
 	require.NoError(t, err)
@@ -644,8 +645,13 @@ func TestReviewSnapshot_IncrementalEqualsFull(t *testing.T) {
 	require.Contains(t, first.orphanIDs, orphanID)
 	_, err = store.CreateBook(&database.Book{ID: orphanID, Title: "Back", FilePath: "/lib/Back/" + orphanID, Format: "mp3"})
 	require.NoError(t, err)
+	// A title change is the identity change that deletes the cache row; an
+	// ASIN fill keeps it (since 2026-10-05), and the book write must still
+	// reach the incremental build.
+	_, err = store.ModifyBook(identityID, func(bk *database.Book) error { bk.Title += " (retitled)"; return nil })
+	require.NoError(t, err)
 	asin := "B00INCR0001"
-	_, err = store.ModifyBook(identityID, func(bk *database.Book) error { bk.ASIN = &asin; return nil })
+	_, err = store.ModifyBook(asinFilledID, func(bk *database.Book) error { bk.ASIN = &asin; return nil })
 	require.NoError(t, err)
 
 	*clock = clock.Add(time.Minute)
@@ -663,6 +669,8 @@ func TestReviewSnapshot_IncrementalEqualsFull(t *testing.T) {
 	require.Equal(t, changedID, ids[0], "the refetched row sorts first by FetchedAt")
 	require.NotContains(t, ids, deletedRowID)
 	require.NotContains(t, ids, identityID, "the identity change deleted its cache row")
+	require.Contains(t, ids, asinFilledID, "an ASIN fill keeps the cache row")
+	require.NotNil(t, incr.books[asinFilledID].ASIN, "the ASIN fill reached the incremental build")
 	require.NotContains(t, ids, deletedBookID)
 	require.Contains(t, incr.orphanIDs, deletedBookID)
 	require.NotContains(t, incr.orphanIDs, orphanID)
