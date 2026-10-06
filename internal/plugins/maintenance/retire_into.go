@@ -61,7 +61,7 @@ import (
 // (merge.ErrPendingLoserLive), so it never drains progress off a book a
 // failed retire left live; the op revert drops the record.
 func retireInto(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Writer, clock func() time.Time, fixerID, id, target string, slice *merge.SliceMapping) (int, error) {
-	return retireIntoExpecting(ctx, p, store, w, clock, fixerID, id, target, slice, "")
+	return retireIntoWith(ctx, p, store, w, clock, fixerID, id, target, slice, "", "")
 }
 
 // retireIntoExpecting is retireInto whose primary hand-off writes nothing
@@ -73,6 +73,25 @@ func retireInto(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Write
 // under the merge lock, closing the window between that prediction and the
 // hand-off (which runs after the slower user-state follow).
 func retireIntoExpecting(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Writer, clock func() time.Time, fixerID, id, target string, slice *merge.SliceMapping, expect string) (int, error) {
+	return retireIntoWith(ctx, p, store, w, clock, fixerID, id, target, slice, expect, "")
+}
+
+// retireIntoOnly is retireInto for a target that must not be written
+// (owner decision 2026-10-06: a copy retired into an iTunes-linked parent;
+// targetWhy says why it is iTunes-linked). Only the retired book is
+// written: steps 3 and 4 and its own group's hand-off. Steps 1 and 2 are
+// not run, so no listening state, positions, bookmarks or sync redirect
+// follow onto target and no external id moves to it; a book that has any
+// of those to carry is refused BEFORE the first write (ErrChangedSincePlan),
+// as is one whose user state cannot be read. The caller has checked that
+// the retired book's version group holds no iTunes book.
+func retireIntoOnly(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Writer, clock func() time.Time, fixerID, id, target, targetWhy string) (int, error) {
+	return retireIntoWith(ctx, p, store, w, clock, fixerID, id, target, nil, "", targetWhy)
+}
+
+// retireIntoWith is retireIntoExpecting, writing book id alone when only is
+// set (retireIntoOnly).
+func retireIntoWith(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Writer, clock func() time.Time, fixerID, id, target string, slice *merge.SliceMapping, expect, only string) (int, error) {
 	b, err := store.GetBookByID(id)
 	if err != nil {
 		return 0, fmt.Errorf("read %s: %w", id, err)
@@ -107,16 +126,23 @@ func retireIntoExpecting(ctx context.Context, p *Plugin, store OpsStore, w *repa
 			return 0, fmt.Errorf("%w: book %s now carries iTunes id %s", repairs.ErrChangedSincePlan, id, e.ExternalID)
 		}
 	}
+	if only != "" {
+		if err := onlyRetireRefusal(p, id, target, only, exts); err != nil {
+			return 0, err
+		}
+	}
 	steps := 0
 	// 1. listening state
-	did, err := followUserStateInto(p, w, target, id, slice)
-	steps += did
-	if err != nil {
-		return steps, fmt.Errorf("carry listening state of %s: %w", id, err)
+	if only == "" {
+		did, err := followUserStateInto(p, w, target, id, slice)
+		steps += did
+		if err != nil {
+			return steps, fmt.Errorf("carry listening state of %s: %w", id, err)
+		}
 	}
 	// 2. external ids
 	for _, e := range exts {
-		if e.Tombstoned {
+		if e.Tombstoned || only != "" {
 			// A tombstoned mapping records an id taken off this book (an
 			// iTunes track removed, a mismatch undone): it stays on the
 			// retired book rather than land on the survivor.
@@ -211,6 +237,32 @@ func retireIntoExpecting(ctx context.Context, p *Plugin, store OpsStore, w *repa
 		}
 	}
 	return steps, nil
+}
+
+// onlyRetireRefusal refuses a retireIntoOnly of book id whose retire would
+// have to carry something onto target: a live external id, or listening
+// state, positions or bookmarks (merge.BookHasCarryableUserState). State
+// that cannot be read refuses too: fail closed.
+func onlyRetireRefusal(p *Plugin, id, target, targetWhy string, exts []database.ExternalIDMapping) error {
+	for _, e := range exts {
+		if !e.Tombstoned {
+			return fmt.Errorf("%w: parent %s is iTunes-linked (%s); external id %s/%s of %s would have to move onto it",
+				repairs.ErrChangedSincePlan, target, targetWhy, e.Source, e.ExternalID, id)
+		}
+	}
+	um := p.deps.MergeUserStateStore()
+	if um == nil {
+		return fmt.Errorf("user-state store unavailable: listening state of %s cannot be ruled out, and parent %s is iTunes-linked", id, target)
+	}
+	has, err := merge.BookHasCarryableUserState(um, id)
+	if err != nil {
+		return fmt.Errorf("read listening state of %s: %w", id, err)
+	}
+	if has {
+		return fmt.Errorf("%w: parent %s is iTunes-linked (%s); listening state, positions or bookmarks of %s would have to move onto it",
+			repairs.ErrChangedSincePlan, target, targetWhy, id)
+	}
+	return nil
 }
 
 // followUserStateInto carries every user's state and positions on the retired book

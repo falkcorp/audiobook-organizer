@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer_test.go
-// version: 1.28.1
+// version: 1.29.0
 // guid: 8e2d5b19-6a4c-4f37-b1d8-2c9e7a3f5d60
 // last-edited: 2026-10-06
 
@@ -792,7 +792,7 @@ func TestFragmentFixer_SameParentRowClaims(t *testing.T) {
 		require.Zero(t, out.Applied, "%+v", out.Rows)
 		require.True(t, f.live(t, "fragJ"), "never folded into a dead book")
 	})
-	t.Run("two unproven claimants stay ambiguous", func(t *testing.T) {
+	t.Run("two unproven copies of a present row are each a copy (owner, 2026-10-06)", func(t *testing.T) {
 		f := newFragFixture(t)
 		parent := seed(t, f)
 		var ks []string
@@ -803,9 +803,11 @@ func TestFragmentFixer_SameParentRowClaims(t *testing.T) {
 			ks = append(ks, k)
 		}
 		res := f.plan(t, "op-plan")
-		for _, k := range ks {
-			r := findRow(t, res, "ambiguous:"+k)
-			require.Equal(t, fragSkipAmbiguous, r.Skipped)
+		unproven := findRow(t, res, fragRowCopyUnproven+":"+parent)
+		require.Equal(t, fragSkipCopyUnproven, unproven.Skipped, unproven.SkipReason)
+		require.ElementsMatch(t, append([]string{parent}, ks...), unproven.BookIDs)
+		for _, r := range res.Rows {
+			require.NotEqual(t, fragClassAmbiguous, r.Class, "%s: %s", r.RowID, r.SkipReason)
 		}
 		proven := findRow(t, res, "copy:"+parent)
 		require.ElementsMatch(t, []string{parent, f.ids["fragJ"]}, proven.BookIDs, "the proven claimant still pairs")
