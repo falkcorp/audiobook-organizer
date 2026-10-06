@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/consolidation_leftovers_fixer_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 240c6560-a115-459f-a156-ce41853ac125
 // last-edited: 2026-10-06
 
@@ -11,6 +11,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 	"syscall"
 	"testing"
 
@@ -48,9 +49,14 @@ func (f *lfFixture) combined(t *testing.T, role, dir string, files map[string]in
 	b, err := f.s.CreateBook(&database.Book{Title: role, FilePath: f.path(dir)})
 	require.NoError(t, err)
 	f.ids[role] = b.ID
-	track := 0
-	for name, size := range files {
-		track++
+	f.organized(t, b.ID)
+	names := make([]string, 0, len(files))
+	for name := range files {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for i, name := range names {
+		size, track := files[name], i+1
 		p := f.file(t, filepath.Join(dir, name), size)
 		bf := &database.BookFile{BookID: b.ID, FilePath: p, FileSize: int64(size), FileHash: hashes[name], Duration: 600, TrackNumber: track}
 		require.NoError(t, f.s.CreateBookFile(bf))
@@ -177,7 +183,7 @@ func TestLeftovers_PlanClassifiesEveryShape(t *testing.T) {
 	}
 	r, _ := lfRow(res, l)
 	require.ElementsMatch(t, []string{l, c}, r.BookIDs)
-	require.Equal(t, leftoverBasisSize, r.Current["match_basis"])
+	require.Equal(t, leftoverBasisSizeChapter, r.Current["match_basis"])
 	r, _ = lfRow(res, lh)
 	require.Equal(t, leftoverBasisSizeHash, r.Current["match_basis"])
 	for _, id := range []string{pr, mm} {
@@ -223,6 +229,8 @@ func TestLeftovers_ApplyRetiresMarksMissingAndCarriesState(t *testing.T) {
 	u, err := f.s.CreateUser("reader", "reader@example.com", "bcrypt", "x", []string{"user"}, "active")
 	require.NoError(t, err)
 	require.NoError(t, f.s.SetUserPosition(u.ID, l, f.rowIDs["L"], 100))
+	require.NoError(t, f.s.SetUserBookState(&database.UserBookState{UserID: u.ID, BookID: l,
+		Status: database.UserBookStatusFinished, ProgressPct: 100}))
 	before, err := f.s.GetBookFiles(l)
 	require.NoError(t, err)
 	require.Len(t, before, 1)
@@ -251,6 +259,12 @@ func TestLeftovers_ApplyRetiresMarksMissingAndCarriesState(t *testing.T) {
 	pos, err = f.s.ListUserPositionsForBook(u.ID, c)
 	require.NoError(t, err)
 	require.Len(t, pos, 1, "the combined book holds the position")
+	require.InDelta(t, 700, pos[0].PositionSeconds, 0.01,
+		"chapter 18 starts after the combined book's 600 s chapter 17: 600 + 100")
+	cst, err := f.s.GetUserBookState(u.ID, c)
+	require.NoError(t, err)
+	require.NotNil(t, cst)
+	require.NotEqual(t, database.UserBookStatusFinished, cst.Status, "a finished chapter never finishes the combined book")
 	cfiles, err := f.s.GetBookFiles(c)
 	require.NoError(t, err)
 	require.Len(t, cfiles, 2, "the combined book's rows are untouched")
@@ -380,4 +394,75 @@ func TestLeftovers_ITunesOwnership(t *testing.T) {
 	require.Len(t, rows, 1)
 	require.True(t, rows[0].Missing)
 	require.NotEmpty(t, rows[0].ITunesPath, "the iTunes reference on the row is left as it was")
+}
+
+// TestLeftovers_TwinNeedsEvidence: a same-size file alone does not pick the
+// twin. No agreeing chapter number, hash or duration holds the row; two
+// candidates with equal evidence (a chapter and its _copyN) hold it too.
+func TestLeftovers_TwinNeedsEvidence(t *testing.T) {
+	f := newLFFixture(t)
+	// size only: the owner's file has another chapter number and duration.
+	ne := f.leftover(t, "NE", "lib/D1/S1/04 - Four/04 - Four.mp3", 4100, "")
+	cne := f.combined(t, "CNE", "lib/D1/S1/Four", map[string]int{"Four - 09.mp3": 4100}, nil)
+	_, err := f.s.ModifyBookFile(cne, f.rowIDs["CNE/Four - 09.mp3"], func(bf *database.BookFile) error { bf.Duration = 1234; return nil })
+	require.NoError(t, err)
+	// two candidates on one owner, both chapter 5 with the same duration.
+	ta := f.leftover(t, "TA", "lib/D2/S2/05 - Five/05 - Five.mp3", 4200, "")
+	f.combined(t, "CTA", "lib/D2/S2/Five", map[string]int{"Five - 05.mp3": 4200, "Five - 05_copy1.mp3": 4200}, nil)
+	res := f.planLF(t, "op-plan")
+	r, ok := lfRow(res, ne)
+	require.True(t, ok)
+	require.Equal(t, leftoverSkipNoEvidence, r.Skipped, r.SkipReason)
+	r, ok = lfRow(res, ta)
+	require.True(t, ok)
+	require.Equal(t, leftoverSkipTwinAmbiguous, r.Skipped, r.SkipReason)
+	require.Equal(t, 5, mustChapter(t, "Five - 05_copy1.mp3", false))
+	require.Equal(t, 18, mustChapter(t, "18 - We Hunt Monsters 8.m4b", true))
+	require.Equal(t, 18, mustChapter(t, "We Hunt Monsters 8 - 18.m4b", false))
+}
+
+func mustChapter(t *testing.T, name string, lead bool) int {
+	t.Helper()
+	n, ok := leftoverChapter(name, lead)
+	require.True(t, ok, name)
+	return n
+}
+
+// TestLeftovers_CombinedMustBeListed: a combined book Audiobookshelf does not
+// list (not organized, or quarantined after the plan) never receives the
+// retire; the re-plan under the lock re-checks it.
+func TestLeftovers_CombinedMustBeListed(t *testing.T) {
+	f := newLFFixture(t)
+	l, c := f.whm(t)
+	imported := "imported"
+	_, err := f.s.ModifyBook(c, func(b *database.Book) error { b.LibraryState = &imported; return nil })
+	require.NoError(t, err)
+	res := f.planLF(t, "op-plan")
+	r, ok := lfRow(res, l)
+	require.True(t, ok)
+	require.Equal(t, leftoverSkipNotListed, r.Skipped, r.SkipReason)
+
+	f.organized(t, c)
+	f.planLF(t, "op-plan2")
+	notPrimary := false
+	_, err = f.s.ModifyBook(c, func(b *database.Book) error { b.IsPrimaryVersion = &notPrimary; return nil })
+	require.NoError(t, err)
+	out := f.applyLF(t, "op-plan2", "op-apply", []string{"leftover:" + l})
+	require.Zero(t, out.Applied, "%+v", out.Rows)
+	b, err := f.s.GetBookByID(l)
+	require.NoError(t, err)
+	require.False(t, b.IsSoftDeleted())
+}
+
+// TestLeftovers_RefusesAnUnmountedRoot: an empty or missing library root
+// fails the plan instead of reading every row as gone.
+func TestLeftovers_RefusesAnUnmountedRoot(t *testing.T) {
+	f := newLFFixture(t)
+	f.whm(t)
+	withRoot(t, t.TempDir())
+	params, err := json.Marshal(repairs.PlanParams{FixerID: leftoverFixerID})
+	require.NoError(t, err)
+	require.Error(t, f.p.runRepairsPlan(context.Background(), params, &repairsOpReporter{id: "op-plan"}))
+	withRoot(t, filepath.Join(f.root, "no-such-dir"))
+	require.Error(t, f.p.runRepairsPlan(context.Background(), params, &repairsOpReporter{id: "op-plan2"}))
 }
