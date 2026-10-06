@@ -175,7 +175,7 @@ type leftoverSource struct {
 	store  OpsStore
 	book   func(id string) (*database.BookCore, error)
 	rows   func(id string) ([]database.BookFileCore, error)
-	same   func(size int64) ([]database.BookFileCore, error)
+	same   func(size int64, scope string) ([]database.BookFileCore, error)
 	shelf  []string
 	statMu sync.Mutex
 	stats  map[string]leftoverStat
@@ -298,7 +298,7 @@ func (s *leftoverSource) matchRow(ctx context.Context, leftover string, r databa
 		m.skip, m.why = leftoverSkipScope, fmt.Sprintf("the row's series folder %q is a library root or contains one", scope)
 		return m, nil
 	}
-	cands, err := s.same(r.FileSize)
+	cands, err := s.same(r.FileSize, scope)
 	if err != nil {
 		return m, err
 	}
@@ -606,6 +606,53 @@ func (s *leftoverSource) decide(ctx context.Context, id string, st *leftoverStat
 		basis, combinedID))
 }
 
+// leftoverWalkMax bounds the files one scope walk visits; a bigger folder
+// fails the re-plan rather than walk a whole author's shelf.
+const leftoverWalkMax = 20000
+
+var errLeftoverWalkTooBig = errors.New("scope folder has too many files to walk")
+
+// leftoverWalkOwners walks scope on disk and returns the rows (looked up by
+// path) of every regular file of exactly size bytes not already in seen.
+func leftoverWalkOwners(store OpsStore, scope string, size int64, seen map[string]bool) ([]database.BookFileCore, error) {
+	var out []database.BookFileCore
+	n := 0
+	err := filepath.WalkDir(scope, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
+			return err
+		}
+		if d.IsDir() || !d.Type().IsRegular() {
+			return nil
+		}
+		if n++; n > leftoverWalkMax {
+			return errLeftoverWalkTooBig
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if info.Size() != size {
+			return nil
+		}
+		bf, err := store.GetBookFileByPath(p)
+		if err != nil {
+			return fmt.Errorf("read the row at %s: %w", p, err)
+		}
+		if bf != nil && !seen[bf.ID] {
+			seen[bf.ID] = true
+			out = append(out, bf.Core())
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("walk %s: %w", scope, err)
+	}
+	return out, nil
+}
+
 func appendUnique(list []string, v string) []string {
 	if contains(list, v) {
 		return list
@@ -696,7 +743,7 @@ func (f *consolidationLeftoversFixer) Plan(ctx context.Context, _ json.RawMessag
 	src.rows = func(id string) ([]database.BookFileCore, error) {
 		return append([]database.BookFileCore(nil), rowsOf[id]...), nil
 	}
-	src.same = func(size int64) ([]database.BookFileCore, error) { return idx[size], nil }
+	src.same = func(size int64, _ string) ([]database.BookFileCore, error) { return idx[size], nil }
 	// The cheap filters first: live, 1..leftoverMaxFiles rows, one unmarked.
 	var cands []string
 	for id, b := range books {
@@ -791,9 +838,13 @@ func (f *consolidationLeftoversFixer) Replan(ctx context.Context, _ json.RawMess
 		return out, nil
 	}
 	// Every candidate the index names is re-read: a row moved, re-pathed or
-	// gone since the index was built counts as it is now.
-	src.same = func(size int64) ([]database.BookFileCore, error) {
+	// gone since the index was built counts as it is now. The scope folder is
+	// then walked on disk and every same-size file's row is looked up by
+	// path, so an owner created after the index was built is seen too (a
+	// second owner makes the row ambiguous, never applied).
+	src.same = func(size int64, scope string) ([]database.BookFileCore, error) {
 		var out []database.BookFileCore
+		seen := map[string]bool{}
 		for _, c := range idx[size] {
 			cur, err := store.GetBookFileByID(c.BookID, c.ID)
 			if err != nil {
@@ -802,9 +853,14 @@ func (f *consolidationLeftoversFixer) Replan(ctx context.Context, _ json.RawMess
 			if cur == nil || cur.FileSize != size {
 				continue
 			}
+			seen[cur.ID] = true
 			out = append(out, cur.Core())
 		}
-		return out, nil
+		walked, err := leftoverWalkOwners(store, scope, size, seen)
+		if err != nil {
+			return nil, err
+		}
+		return append(out, walked...), nil
 	}
 	r, ok, err := src.decide(ctx, id, st)
 	if err != nil {
