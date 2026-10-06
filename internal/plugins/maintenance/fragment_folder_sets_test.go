@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_folder_sets_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3b7d2c55-1a4e-4f0b-9c61-8e2f5d7a0b14
 // last-edited: 2026-10-05
 
@@ -8,6 +8,7 @@ package maintenance
 import (
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -514,5 +515,96 @@ func TestFragmentFixer_ParentChapterSet(t *testing.T) {
 		r := findRow(t, f.plan(t, "op-plan"), parentRowID(f, d, horizonKey))
 		require.Equal(t, fragClassITunesSet, r.Class)
 		require.False(t, r.Applicable())
+	})
+}
+
+// markMissing marks rows of book id missing: all of them, or the first n
+// (n > 0) in track order.
+func (f *fragFixture) markMissing(t *testing.T, id string, n int) {
+	t.Helper()
+	rows, err := f.s.GetBookFiles(id)
+	require.NoError(t, err)
+	sort.Slice(rows, func(i, j int) bool { return rows[i].TrackNumber < rows[j].TrackNumber })
+	for i := range rows {
+		if n > 0 && i >= n {
+			break
+		}
+		rows[i].Missing = true
+		require.NoError(t, f.s.UpdateBookFile(rows[i].ID, &rows[i]))
+	}
+}
+
+// audioCopy creates a live organized book holding the same six files'
+// audio (size and duration) as parentSet(…, seq(1, 6), …, 900, 9000).
+func (f *fragFixture) audioCopy(t *testing.T) string {
+	t.Helper()
+	other := f.book(t, "copy", "Some Other Name", f.path("lib/Elsewhere/Copy"), nil)
+	for i := 1; i <= 6; i++ {
+		name := fmt.Sprintf("track %02d.mp3", i)
+		p := f.file(t, filepath.Join("lib/Elsewhere/Copy", name), 9000+101*i)
+		f.row(t, name, other, p, name, int64(9000+101*i), 900, i)
+	}
+	f.organized(t, other)
+	return other
+}
+
+// TestFragmentFixer_ChapterSetNeverJoinsMissingFiles: a join target must
+// hold its audio on disk. The set's fragments may be the only copies, so
+// retiring them into a book whose files are gone would lose the audio.
+func TestFragmentFixer_ChapterSetNeverJoinsMissingFiles(t *testing.T) {
+	joinID := func(f *fragFixture) string {
+		return existingRowID(f.path(parentDir), fragParentSetKeyPrefix+horizonKey)
+	}
+	t.Run("title match, target's files all missing: held", func(t *testing.T) {
+		f := newFragFixture(t)
+		existing := f.existingBook(t, "hs", "Horizon Storms", "lib/Other/Horizon Storms", 6, 900)
+		f.setAuthor(t, existing, f.authorID(t, "Kevin J Anderson"))
+		f.markMissing(t, existing, 0)
+		f.parentSet(t, parentDir, seq(1, 6), horizonStem, 900, 9000)
+		res := f.plan(t, "op-plan")
+		r := findRow(t, res, joinID(f))
+		require.Equal(t, fragSkipExistingBook, r.Skipped)
+		require.Contains(t, r.SkipReason, "6 file(s) missing on disk")
+		require.Zero(t, res.Applicable)
+	})
+	t.Run("title match, target partly missing so the present total disagrees: held", func(t *testing.T) {
+		f := newFragFixture(t)
+		existing := f.existingBook(t, "hs", "Horizon Storms", "lib/Other/Horizon Storms", 6, 900)
+		f.setAuthor(t, existing, f.authorID(t, "Kevin J Anderson"))
+		f.markMissing(t, existing, 2)
+		f.parentSet(t, parentDir, seq(1, 6), horizonStem, 900, 9000)
+		res := f.plan(t, "op-plan")
+		r := findRow(t, res, joinID(f))
+		require.Equal(t, fragSkipExistingBook, r.Skipped)
+		require.Contains(t, r.SkipReason, "2 file(s) missing on disk")
+		require.Zero(t, res.Applicable)
+	})
+	t.Run("audio match, target's files all missing: held, never joined or assembled", func(t *testing.T) {
+		f := newFragFixture(t)
+		other := f.audioCopy(t)
+		f.markMissing(t, other, 0)
+		f.parentSet(t, parentDir, seq(1, 6), horizonStem, 900, 9000)
+		res := f.plan(t, "op-plan")
+		noRow(t, res, joinID(f), "no join into a book whose files are gone")
+		r := findRow(t, res, parentRowID(f, parentDir, horizonKey))
+		require.Equal(t, fragSkipDuplicateAudio, r.Skipped)
+		require.Contains(t, r.SkipReason, "whose files are missing on disk")
+		require.Zero(t, res.Applicable)
+	})
+	t.Run("audio join re-checked at apply: a target file gone since the plan refuses", func(t *testing.T) {
+		f := newFragFixture(t)
+		other := f.audioCopy(t)
+		frags := f.parentSet(t, parentDir, seq(1, 6), horizonStem, 900, 9000)
+		res := f.plan(t, "op-plan")
+		r := findRow(t, res, joinID(f))
+		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+		require.Equal(t, other, r.Proposed["join"])
+		f.markMissing(t, other, 1)
+		out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
+		require.Zero(t, out.Applied, "%+v", out.Rows)
+		require.Equal(t, 1, out.ChangedSincePlan, "%+v", out.Rows)
+		for _, id := range frags {
+			require.True(t, f.liveID(t, id), "no fragment retired")
+		}
 	})
 }
