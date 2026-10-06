@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/consolidation_leftovers_fixer.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 6df37df9-b008-41ad-bd69-47b00e4cb50c
 // last-edited: 2026-10-06
 
@@ -56,6 +56,9 @@ const (
 	leftoverClassHeld    = "held"
 	leftoverClassITunes  = "itunes"
 	leftoverClassNoMatch = "no-match"
+	// leftoverClassSamePath: the leftover's own book path is on disk and
+	// exactly one live, listed book owns it (consolidation_leftovers_samepath.go).
+	leftoverClassSamePath = "same-path-twin"
 )
 
 // Skip kinds of a leftovers row (the held reasons, iTunes, no match).
@@ -79,6 +82,15 @@ const (
 	leftoverRolesLeftover     = "leftover"
 	leftoverRolesCombined     = "combined"
 	leftoverRolesGroupSibling = "version_group"
+	leftoverRolesSamePath     = "same_path_owner"
+
+	// Holds of the same-path-twin class.
+	leftoverSkipSamePathOwners      = "held_same_path_owners"
+	leftoverSkipSamePathNotListed   = "held_same_path_not_listed"
+	leftoverSkipSamePathOwnerITunes = "held_same_path_owner_itunes"
+	leftoverSkipSamePathITunesGroup = "held_same_path_itunes_group"
+	leftoverSkipSamePathAudio       = "held_same_path_audio_differs"
+	leftoverSkipSamePathNoRow       = "held_same_path_no_owner_row"
 )
 
 // consolidationLeftoversFixer retires the one-chapter books the 2026-09-06
@@ -100,6 +112,11 @@ const (
 //     folder is, or contains, the library root or an import path);
 //   - all rows name the same owner (the combined book);
 //   - where both rows carry hashes, they agree (disagreement holds the row).
+//
+// A leftover whose own file_path is on disk is the same-path-twin class
+// instead (consolidation_leftovers_samepath.go): when exactly one other live,
+// Audiobookshelf-listed book owns that path, the leftover is retired into it,
+// ahead of any size or hash match into a third book.
 //
 // Several owners hold it (ambiguous); no owner is the never-applicable
 // no_match class; an iTunes book on either side is the never-applicable
@@ -138,8 +155,9 @@ func (f *consolidationLeftoversFixer) Description() string {
 		"that are gone from disk (but were never marked missing), and a file of exactly that size now belongs to one " +
 		"combined book in the same series folder. Apply marks each dead row missing (it is kept, never deleted) and " +
 		"retires the leftover into the combined book with its listening progress and external ids. Ambiguous matches " +
-		"and hash disagreements are held; iTunes books and leftovers with no match are listed only. Every step is " +
-		"undoable from the apply operation."
+		"and hash disagreements are held; iTunes books and leftovers with no match are listed only. A leftover whose own " +
+		"book path is on disk and owned by exactly one other live, listed book is retired into that book (same-path " +
+		"twin), ahead of any size or hash match. Every step is undoable from the apply operation."
 }
 
 // leftoverState is what Replan needs from plan time: the combined book, the
@@ -164,6 +182,12 @@ type leftoverPlan struct {
 	GroupID  string
 	Marks    []leftoverMark
 	Slice    merge.SliceMapping
+	// WholeBook carries the listening state by the whole-book rule (no
+	// slice): the same-path-twin class, whose owner is the same audio.
+	WholeBook bool
+	// OwnerGroupID is the same-path owner's version group, re-checked at
+	// apply for an iTunes copy as GroupID is.
+	OwnerGroupID string
 }
 
 // leftoverStat is one disk answer: gone (fs.ErrNotExist), present (with its
@@ -178,10 +202,14 @@ type leftoverStat struct {
 // leftoverSource is the read side one decision runs over: the plan's
 // snapshot, or Replan's fresh reads.
 type leftoverSource struct {
-	store  OpsStore
-	book   func(id string) (*database.BookCore, error)
-	rows   func(id string) ([]database.BookFileCore, error)
-	same   func(size int64, scope string) ([]database.BookFileCore, error)
+	store OpsStore
+	book  func(id string) (*database.BookCore, error)
+	rows  func(id string) ([]database.BookFileCore, error)
+	same  func(size int64, scope string) ([]database.BookFileCore, error)
+	// owners names the books that reference path (a book_file row at it, or
+	// their own file_path), the leftover itself and dead books possibly
+	// included: samePath re-reads and filters every one.
+	owners func(path string) ([]string, error)
 	shelf  []string
 	statMu sync.Mutex
 	stats  map[string]leftoverStat
@@ -574,16 +602,6 @@ func (s *leftoverSource) decide(ctx context.Context, id string, st *leftoverStat
 	if statErr != "" {
 		return finish(leftoverClassHeld, leftoverSkipStatError, statErr)
 	}
-	if core.FilePath != "" {
-		ds := s.stat(core.FilePath)
-		switch {
-		case ds.err != nil:
-			return finish(leftoverClassHeld, leftoverSkipStatError, fmt.Sprintf("could not stat the book path %s: %v", core.FilePath, ds.err))
-		case !ds.gone:
-			return finish(leftoverClassHeld, leftoverSkipBookPath, fmt.Sprintf("the book's own path %s is on disk: a repoint candidate, not a leftover", core.FilePath))
-		}
-	}
-	// iTunes on the leftover's side.
 	res := repairs.NewPathResolver()
 	itunesOf := func(bc *database.BookCore, rs []database.BookFileCore) (string, bool, error) {
 		exts, err := s.store.GetExternalIDsForBook(bc.ID)
@@ -593,6 +611,19 @@ func (s *leftoverSource) decide(ctx context.Context, id string, st *leftoverStat
 		why, doubt := leftoverITunesWhy(res, bc, rs, exts)
 		return why, doubt, nil
 	}
+	if core.FilePath != "" {
+		ds := s.stat(core.FilePath)
+		switch {
+		case ds.err != nil:
+			return finish(leftoverClassHeld, leftoverSkipStatError, fmt.Sprintf("could not stat the book path %s: %v", core.FilePath, ds.err))
+		case !ds.gone:
+			// The book's own path is on disk. Another live book owning it
+			// decides the row (the same-path-twin class), ahead of any
+			// size or hash match into a third book; none leaves the hold.
+			return s.samePath(ctx, &core, rows, &row, &fp, finish, itunesOf)
+		}
+	}
+	// iTunes on the leftover's side.
 	why, doubt, err := itunesOf(&core, rows)
 	if err != nil {
 		return repairs.Row{}, false, err
@@ -980,6 +1011,8 @@ func (f *consolidationLeftoversFixer) Plan(ctx context.Context, _ json.RawMessag
 		return append([]database.BookFileCore(nil), rowsOf[id]...), nil
 	}
 	src.same = func(size int64, _ string) ([]database.BookFileCore, error) { return idx[size], nil }
+	atPath := leftoverPathOwners(books, rowsOf)
+	src.owners = func(p string) ([]string, error) { return atPath[p], nil }
 	// The cheap filters first: live, 1..leftoverMaxFiles rows, one unmarked.
 	var cands []string
 	for id, b := range books {
@@ -1101,6 +1134,7 @@ func (f *consolidationLeftoversFixer) Replan(ctx context.Context, _ json.RawMess
 		}
 		return append(out, walked...), nil
 	}
+	src.owners = func(p string) ([]string, error) { return leftoverFreshPathOwners(store, p) }
 	r, ok, err := src.decide(ctx, id, st)
 	if err != nil {
 		return repairs.Row{}, err
@@ -1139,9 +1173,12 @@ func (f *consolidationLeftoversFixer) Apply(ctx context.Context, w *repairs.Writ
 	if !ok {
 		return fmt.Errorf("%s: row %s carries no plan", leftoverFixerID, locked.RowID)
 	}
-	if plan.GroupID != "" {
-		dc := &duplicateCopiesFixer{p: f.p}
-		if why, err := dc.itunesWouldBeWritten(store, plan.GroupID, []string{plan.Leftover}); err != nil {
+	dc := &duplicateCopiesFixer{p: f.p}
+	for _, gid := range []string{plan.GroupID, plan.OwnerGroupID} {
+		if gid == "" {
+			continue
+		}
+		if why, err := dc.itunesWouldBeWritten(store, gid, []string{plan.Leftover}); err != nil {
 			return err
 		} else if why != "" {
 			return fmt.Errorf("%w: under the merge lock: %s", repairs.ErrChangedSincePlan, why)
@@ -1174,8 +1211,14 @@ func (f *consolidationLeftoversFixer) Apply(ctx context.Context, w *repairs.Writ
 	}
 	// A slice, never the whole-book rule: a finished chapter must not mark
 	// the combined book finished, and the position lands at the chapter.
-	slice := plan.Slice
-	did, err := retireInto(ctx, f.p, store, w, f.now, leftoverFixerID, plan.Leftover, plan.Combined, &slice)
+	// The same-path-twin class is the exception: its owner is the same
+	// audio, so the whole-book rule (the farther-ahead state wins) applies.
+	var slice *merge.SliceMapping
+	if !plan.WholeBook {
+		sl := plan.Slice
+		slice = &sl
+	}
+	did, err := retireInto(ctx, f.p, store, w, f.now, leftoverFixerID, plan.Leftover, plan.Combined, slice)
 	steps += did
 	if err != nil {
 		return partial(err)
