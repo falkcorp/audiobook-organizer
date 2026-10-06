@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.62.0
+// version: 1.63.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-06
 
@@ -50,8 +50,8 @@ type revertServiceStore interface {
 	revertAuthorStore
 	revertFieldStateStore
 	revertTagStore
-	// revertBookPrimaryDemote re-crowns a restored primary and demotes the
-	// rest of its group (versionprimary.Crown).
+	// The settle pass re-crowns a restored primary and demotes the rest of
+	// its group (versionprimary.Crown), or hands the group off.
 	versionprimary.EnsureStore
 }
 
@@ -1589,7 +1589,9 @@ func (rs *RevertService) revertBookSoftDelete(c *database.OperationChange, stamp
 		// retire's hand-off): it comes back non-primary, as a trash restore
 		// does (versionprimary.YieldToIncumbent), so a stale true, or a nil
 		// read as primary, never doubles the group. A demote revert later
-		// in the ledger (same operation) re-crowns it deliberately.
+		// in the ledger (same operation) re-crowns it deliberately, in the
+		// settle pass, unless the incumbent's true is one the operation
+		// never wrote (settleGroup's laterPick).
 		if incumbent != "" && book.VersionGroupID != nil && strings.TrimSpace(*book.VersionGroupID) == gid {
 			versionprimary.YieldToIncumbent(book, incumbent)
 			if book.IsPrimaryVersion == nil {
@@ -1633,8 +1635,10 @@ func primaryFlagString(v *bool) string {
 // false the operation wrote. It writes only the flag: re-crowning the book
 // over the sibling the operation handed the group to is the settle pass's,
 // once every row has run (settleGroups crowns the book whose demote this
-// run reverted), so a nil written here never stays beside that sibling's
-// true, and no later row of the same book finds a flag it did not expect.
+// run reverted, or returns it explicit false when another member's true is
+// one the operation never wrote), so a nil written here never stays beside
+// that sibling's true, and no later row of the same book finds a flag it
+// did not expect.
 //
 // A LIVE book merged into a live survivor is left as it is: such a loser is
 // not Electable, and an explicit true on it would put it in the ABS library
