@@ -1,7 +1,7 @@
 // file: web/src/components/bookdetail/BookDetailVersionGroup.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 72b1d821-56f4-46e5-8f78-10e8381cd3cb
-// last-edited: 2026-09-11
+// last-edited: 2026-10-06
 
 /**
  * TASK-169: the "other versions of this book" link.
@@ -14,11 +14,12 @@
  * override would show at most one book: the opposite of its own purpose.
  */
 
-import { describe, it, expect } from 'vitest';
-import { screen } from '@testing-library/react';
+import { describe, it, expect, vi } from 'vitest';
+import { screen, fireEvent } from '@testing-library/react';
 import { renderWithProviders } from '../../test/renderWithProviders';
 import { BookDetailVersionGroup, type BookDetailVersionGroupProps } from './BookDetailVersionGroup';
-import type { Book } from '../../services/api';
+import type { Book, BookFile } from '../../services/api';
+import { fileDiskStatus } from './bookDetailUtils';
 
 function makeBook(over: Partial<Book> = {}): Book {
   return { id: 'bk-1', title: 'A Book', format: 'mp3', ...over } as Book;
@@ -95,7 +96,92 @@ describe('BookDetailVersionGroup "other versions" link', () => {
     // a multi-format group would render it once per tray.
     const book = makeBook({ id: 'bk-1', version_group_id: 'vg-123' });
     const otherFormatSibling = makeBook({ id: 'bk-2', version_group_id: 'vg-123', format: 'm4b' });
-    renderGroup({ book, groupVersions: [otherFormatSibling], versions: [book, otherFormatSibling] });
+    renderGroup({
+      book,
+      groupVersions: [otherFormatSibling],
+      versions: [book, otherFormatSibling],
+    });
     expect(screen.queryByRole('link', { name: /Other versions/ })).toBeNull();
+  });
+});
+
+// file_exists is a live stat; null means it could not answer. Null must not
+// render as present: the stored `missing` flag is the fallback for the red
+// row, the missing badge and the relocate prompt.
+describe('BookDetailVersionGroup file disk state', () => {
+  function file(id: string, over: Partial<BookFile>): BookFile {
+    return {
+      id,
+      book_id: 'bk-1',
+      file_path: `/lib/${id}.mp3`,
+      missing: false,
+      ...over,
+    } as BookFile;
+  }
+  function renderFiles(bookFiles: BookFile[], onSetRelocateSegment = vi.fn()) {
+    const book = makeBook();
+    renderGroup({
+      book,
+      bookFiles,
+      expandedVersionIds: new Set([book.id]),
+      onSetRelocateSegment,
+    });
+    return onSetRelocateSegment;
+  }
+  function row(path: string) {
+    const inRow = screen
+      .getAllByText(path)
+      .map((el) => el.closest('tbody tr'))
+      .filter((el): el is HTMLElement => el !== null);
+    expect(inRow.length).toBe(1);
+    return inRow[0];
+  }
+
+  it('null + stored missing: shows missing and offers relocate', () => {
+    const relocate = renderFiles([file('a', { file_exists: null, missing: true })]);
+    expect(screen.getByText(/1 of 1 file\s+missing on disk/)).toBeTruthy();
+    expect(screen.getByLabelText('file missing')).toBeTruthy();
+    fireEvent.click(row('/lib/a.mp3'));
+    expect(relocate).toHaveBeenCalledTimes(1);
+  });
+
+  it('null + not stored missing: shows unknown, not missing, no relocate', () => {
+    const relocate = renderFiles([file('b', { file_exists: null, missing: false })]);
+    expect(screen.queryByText(/missing on disk/)).toBeNull();
+    expect(screen.getByText(/could not be checked on disk/)).toBeTruthy();
+    expect(screen.getByLabelText('disk status unknown')).toBeTruthy();
+    expect(screen.queryByLabelText('file missing')).toBeNull();
+    fireEvent.click(row('/lib/b.mp3'));
+    expect(relocate).not.toHaveBeenCalled();
+  });
+
+  it('false: missing even when the stored flag says present', () => {
+    const relocate = renderFiles([file('c', { file_exists: false, missing: false })]);
+    expect(screen.getByText(/1 of 1 file\s+missing on disk/)).toBeTruthy();
+    expect(screen.queryByText(/could not be checked/)).toBeNull();
+    fireEvent.click(row('/lib/c.mp3'));
+    expect(relocate).toHaveBeenCalledTimes(1);
+  });
+
+  it('true: present even when the stored flag says missing', () => {
+    const relocate = renderFiles([file('d', { file_exists: true, missing: true })]);
+    expect(screen.queryByText(/missing on disk/)).toBeNull();
+    expect(screen.queryByLabelText('file missing')).toBeNull();
+    expect(screen.queryByLabelText('disk status unknown')).toBeNull();
+    fireEvent.click(row('/lib/d.mp3'));
+    expect(relocate).not.toHaveBeenCalled();
+  });
+});
+
+describe('fileDiskStatus', () => {
+  it.each([
+    [{ file_exists: null, missing: true }, 'unknown-missing'],
+    [{ file_exists: null, missing: false }, 'unknown'],
+    [{ file_exists: false, missing: false }, 'missing'],
+    [{ file_exists: true, missing: true }, 'present'],
+    [{ active: false }, 'unknown-missing'],
+    [{}, 'unknown'],
+  ] as const)('%o -> %s', (input, want) => {
+    expect(fileDiskStatus(input)).toBe(want);
   });
 });

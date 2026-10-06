@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_files_stat_internal_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: ab314bb6-1fc3-4f07-bb17-222427e6d5f5
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package audiobookshandler
 
@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -41,7 +42,7 @@ func TestStatFilePaths_RealDisk(t *testing.T) {
 // be reported as "missing" — it says nothing about presence.
 func TestStatFilePaths_NonNotExistErrorIsUnknown(t *testing.T) {
 	stat := func(string) (os.FileInfo, error) { return nil, fs.ErrPermission }
-	got := statFilePathsWith(context.Background(), []string{"/a"}, stat)
+	got := newStatChecker(fileStatMaxInFlight, time.Minute).statPaths(context.Background(), []string{"/a"}, stat)
 	if got[0].Exists != nil {
 		t.Fatalf("want unknown, got exists=%v", *got[0].Exists)
 	}
@@ -64,7 +65,7 @@ func TestStatFilePaths_HungStatTimesOut(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	got := statFilePathsWith(ctx, []string{"/fast", "/hung"}, stat)
+	got := newStatChecker(fileStatMaxInFlight, time.Minute).statPaths(ctx, []string{"/fast", "/hung"}, stat)
 	if time.Since(start) > 2*time.Second {
 		t.Fatalf("stat did not honour the deadline (took %v)", time.Since(start))
 	}
@@ -95,13 +96,134 @@ func TestStatFilePaths_BoundedPool(t *testing.T) {
 	for i := range paths {
 		paths[i] = "/p"
 	}
-	got := statFilePathsWith(context.Background(), paths, stat)
+	got := newStatChecker(fileStatMaxInFlight, time.Minute).statPaths(context.Background(), paths, stat)
 	if p := peak.Load(); p > fileStatWorkers {
 		t.Fatalf("peak concurrency %d exceeds pool size %d", p, fileStatWorkers)
 	}
 	for i, g := range got {
 		if g.Exists != nil || g.CheckError != "boom" {
 			t.Fatalf("path %d: want unknown/boom, got %+v", i, g)
+		}
+	}
+}
+
+// TestStatChecker_GlobalCapReturnsUnknownWhenFull: with every process-wide
+// slot held by a hung stat, a new request does not stat at all — it reads
+// "busy" immediately — so stuck threads can never exceed the cap.
+func TestStatChecker_GlobalCapReturnsUnknownWhenFull(t *testing.T) {
+	sc := newStatChecker(2, time.Minute)
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	var calls atomic.Int32
+	hung := func(string) (os.FileInfo, error) {
+		calls.Add(1)
+		<-release
+		return nil, fs.ErrNotExist
+	}
+	// Two hung stats on different roots, each holding one slot past its deadline.
+	for _, p := range []string{"/r1/a/x", "/r2/b/y"} {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		sc.statPaths(ctx, []string{p}, hung)
+		cancel()
+	}
+	if n := len(sc.slots); n != 2 {
+		t.Fatalf("want both slots held by hung stats, got %d", n)
+	}
+	before := calls.Load()
+	start := time.Now()
+	got := sc.statPaths(context.Background(), []string{"/r3/c/z"}, hung)
+	if time.Since(start) > time.Second {
+		t.Fatalf("a full cap must answer immediately, took %v", time.Since(start))
+	}
+	if calls.Load() != before {
+		t.Fatal("stat was attempted although every slot was taken")
+	}
+	if got[0].Exists != nil || !strings.Contains(got[0].CheckError, "busy") {
+		t.Fatalf("want unknown/busy, got %+v", got[0])
+	}
+}
+
+// TestStatChecker_BreakerSkipsTrippedRootThenRecovers: a stat that hangs past
+// the deadline trips its root; later paths under that root are not stat'ed
+// until the cooldown passes, and other roots are unaffected.
+func TestStatChecker_BreakerSkipsTrippedRootThenRecovers(t *testing.T) {
+	sc := newStatChecker(8, time.Minute)
+	now := time.Now()
+	sc.now = func() time.Time { return now }
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	var nasCalls atomic.Int32
+	stat := func(p string) (os.FileInfo, error) {
+		if strings.HasPrefix(p, "/mnt/nas/") {
+			if nasCalls.Add(1) == 1 {
+				<-release // first stat under the NAS hangs
+			}
+		}
+		return nil, fs.ErrNotExist
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	got := sc.statPaths(ctx, []string{"/mnt/nas/a.m4b"}, stat)
+	cancel()
+	if got[0].CheckError != "disk check timed out" {
+		t.Fatalf("want timed out, got %+v", got[0])
+	}
+
+	got = sc.statPaths(context.Background(), []string{"/mnt/nas/b.m4b", "/mnt/local/c.m4b"}, stat)
+	if got[0].Exists != nil || !strings.Contains(got[0].CheckError, "suspended") {
+		t.Fatalf("tripped root: want unknown/suspended, got %+v", got[0])
+	}
+	if nasCalls.Load() != 1 {
+		t.Fatalf("tripped root was stat'ed again (%d calls)", nasCalls.Load())
+	}
+	if got[1].Exists == nil || *got[1].Exists {
+		t.Fatalf("other root: want exists=false, got %+v", got[1])
+	}
+
+	now = now.Add(61 * time.Second)
+	got = sc.statPaths(context.Background(), []string{"/mnt/nas/b.m4b"}, stat)
+	if got[0].Exists == nil || *got[0].Exists {
+		t.Fatalf("after cooldown: want a real stat (exists=false), got %+v", got[0])
+	}
+}
+
+// TestStatChecker_QueuedPathsDoNotTripRoot: paths that never started before
+// the deadline (queued behind slow stats) must not suspend their root.
+func TestStatChecker_QueuedPathsDoNotTripRoot(t *testing.T) {
+	sc := newStatChecker(fileStatMaxInFlight, time.Minute)
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	stat := func(p string) (os.FileInfo, error) {
+		if strings.HasPrefix(p, "/slow/") {
+			<-release
+		}
+		return nil, fs.ErrNotExist
+	}
+	// fileStatWorkers slow paths occupy every worker; the /other path queues.
+	paths := make([]string, 0, fileStatWorkers+1)
+	for range fileStatWorkers {
+		paths = append(paths, "/slow/x/f")
+	}
+	paths = append(paths, "/other/y/f")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	sc.statPaths(ctx, paths, stat)
+	cancel()
+	if sc.isTripped("/other/y") {
+		t.Fatal("a queued, never-started path tripped its root")
+	}
+	if !sc.isTripped("/slow/x") {
+		t.Fatal("the hung root should be tripped")
+	}
+}
+
+func TestStatRoot(t *testing.T) {
+	for in, want := range map[string]string{
+		"/mnt/nas/books/a.m4b": "/mnt/nas",
+		"/Volumes/Media/x":     "/Volumes/Media",
+		"/a":                   "/a",
+		"/mnt/nas/../other/f":  "/mnt/other",
+	} {
+		if got := statRoot(in); got != want {
+			t.Errorf("statRoot(%q) = %q, want %q", in, got, want)
 		}
 	}
 }

@@ -1,7 +1,7 @@
 // file: web/src/components/bookdetail/BookDetailVersionGroup.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: f6a7b8c9-d0e1-2345-fabc-456789012345
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 import {
   Alert,
   Box,
@@ -31,10 +31,17 @@ import LinkOffIcon from '@mui/icons-material/LinkOff';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import TransformIcon from '@mui/icons-material/Transform';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutlineOutlined';
+import HelpOutlineIcon from '@mui/icons-material/HelpOutlineOutlined';
 import type { Book, BookFile, BookSegment, BookTags } from '../../services/api';
 import * as api from '../../services/api';
 import { TagComparison } from '../TagComparison';
-import { formatDuration, formatBytes, formatTagValue } from './bookDetailUtils';
+import {
+  formatDuration,
+  formatBytes,
+  formatTagValue,
+  isFileMissing,
+  isFileDiskUnknown,
+} from './bookDetailUtils';
 import { useNavigate, Link as RouterLink } from 'react-router-dom';
 
 // buildVersionGroupLibraryUrl targets the same generic field-filter mechanism
@@ -596,7 +603,8 @@ export const BookDetailVersionGroup = ({
               )}
               {vSegs.length > 0 &&
                 (() => {
-                  const missingCount = vSegs.filter((s) => s.file_exists === false).length;
+                  const missingCount = vSegs.filter((s) => isFileMissing(s)).length;
+                  const unknownCount = vSegs.filter((s) => isFileDiskUnknown(s)).length;
                   const isCurrentBook = isCurrent;
                   const allSelected =
                     isCurrentBook && vSegs.length > 0 && selectedSegmentIds.size === vSegs.length;
@@ -629,6 +637,13 @@ export const BookDetailVersionGroup = ({
                         <Alert severity="warning" sx={{ mb: 1 }}>
                           {missingCount} of {vSegs.length} file{vSegs.length !== 1 ? 's' : ''}{' '}
                           missing on disk.
+                        </Alert>
+                      )}
+                      {unknownCount > 0 && (
+                        <Alert severity="info" sx={{ mb: 1 }}>
+                          {unknownCount} of {vSegs.length} file{vSegs.length !== 1 ? 's' : ''} could
+                          not be checked on disk; showing the stored missing flag for{' '}
+                          {unknownCount !== 1 ? 'them' : 'it'}.
                         </Alert>
                       )}
                       {/* Segment action bar for current version */}
@@ -711,7 +726,11 @@ export const BookDetailVersionGroup = ({
                           </TableHead>
                           <TableBody>
                             {visibleSegments.map((seg) => {
-                              const isMissing = seg.file_exists === false;
+                              const isMissing = isFileMissing(seg);
+                              const isUnknown = isFileDiskUnknown(seg);
+                              const checkNote = seg.file_check_error
+                                ? ` (disk check: ${seg.file_check_error})`
+                                : ' (disk check unavailable)';
                               const isSelected = isCurrentBook && selectedSegmentIds.has(seg.id);
                               return (
                                 <TableRow
@@ -767,8 +786,27 @@ export const BookDetailVersionGroup = ({
                                       }}
                                     >
                                       {isMissing && (
-                                        <Tooltip title={`Missing: ${seg.file_path}`}>
-                                          <ErrorOutlineIcon color="error" fontSize="small" />
+                                        <Tooltip
+                                          title={
+                                            isUnknown
+                                              ? `Marked missing${checkNote}: ${seg.file_path}`
+                                              : `Missing: ${seg.file_path}`
+                                          }
+                                        >
+                                          <ErrorOutlineIcon
+                                            color="error"
+                                            fontSize="small"
+                                            aria-label="file missing"
+                                          />
+                                        </Tooltip>
+                                      )}
+                                      {isUnknown && !isMissing && (
+                                        <Tooltip title={`Not verified on disk${checkNote}`}>
+                                          <HelpOutlineIcon
+                                            color="disabled"
+                                            fontSize="small"
+                                            aria-label="disk status unknown"
+                                          />
                                         </Tooltip>
                                       )}
                                       <span>{seg.track_number ?? '\u2014'}</span>

@@ -1,7 +1,7 @@
 // file: web/src/components/bookdetail/BookDetailHeader.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-08-23
+// last-edited: 2026-10-06
 
 import { useEffect, useState } from 'react';
 import {
@@ -21,7 +21,7 @@ import InfoIcon from '@mui/icons-material/Info';
 import CompareIcon from '@mui/icons-material/Compare';
 import type { Book, BookFile, BookSegment } from '../../services/api';
 import ReadStatusChip from '../audiobooks/ReadStatusChip';
-import { formatDateTime } from './bookDetailUtils';
+import { formatDateTime, isFileMissing } from './bookDetailUtils';
 
 export interface BookDetailHeaderProps {
   book: Book;
@@ -207,7 +207,7 @@ export const BookDetailHeader = ({
               {book.version_group_id &&
                 (() => {
                   const anyMissing =
-                    book.file_exists === false || segments.some((s) => s.file_exists === false);
+                    book.file_exists === false || segments.some((s) => isFileMissing(s));
                   return (
                     <Chip
                       icon={<CompareIcon />}
