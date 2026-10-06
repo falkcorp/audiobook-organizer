@@ -1,7 +1,7 @@
 # file: .github/workflows/ci.yml
-# version: 3.17.0
+# version: 3.17.1
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
-# last-edited: 2026-10-05
+# last-edited: 2026-10-06
 
 # Fast parallel CI for PRs and pushes.
 # Runs go vet/build, short tests, frontend lint/build, and frontend unit tests
@@ -499,8 +499,9 @@ jobs:
   # `make test-fixtures` discovers the packages at run time
   # (scripts/ci/fixture_test_packages.py), so a new short-skipped test is
   # covered without editing this job. Three shards, balanced by measured
-  # per-package time; internal/plugins/maintenance (~400 s on the nightly) sets
-  # the floor for its shard.
+  # per-package time; internal/plugins/maintenance (215 s here since #3781
+  # parallelized its fragment-fixer tests; 383 s before) sets the floor for
+  # its shard.
   #
   # Gate: this job's result feeds the "Continuous Integration" workflow
   # conclusion, which is what auto-revert.yml watches on main (see the note on
