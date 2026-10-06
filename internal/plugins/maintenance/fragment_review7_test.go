@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_review7_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 05f9ce23-f920-4f23-9612-af3d87fce747
-// last-edited: 2026-10-04
+// last-edited: 2026-10-06
 
 package maintenance
 
@@ -55,9 +55,11 @@ func (f *fragFixture) cutAt(t *testing.T, r repairs.Row, at int) (cut, more bool
 // around a new survivor: 68 of 120 cut points in the prod shape, 106 of 120
 // with no version group), and the record's row says where the survivor went.
 func TestFragmentFixer_SurvivorRetiredByAnotherFixer(t *testing.T) {
+	t.Parallel()
 	stride := fragSweepStride(1, 10) // every cut point under AORG_FRAG_CUT_MATRIX=full
 	for i, sh := range [][2]string{{"all", cutVGOrig}, {"none", cutVGNone}} {
 		t.Run(sh[0]+"/"+sh[1], func(t *testing.T) {
+			t.Parallel()
 			held := 0
 			for at := fragSweepStart(i, stride); ; at += stride {
 				f, r, closeF := newCutFixture(t, sh[0], sh[1])
@@ -192,6 +194,7 @@ func (f *fragFixture) plannedRowsOnRetiredBooks(t *testing.T, r repairs.Row) []s
 // book the owner retired (it would sit there out of view), and the plan
 // after that revert forms no applicable row over the set.
 func TestFragmentFixer_FinishedByHandClearsTheHold(t *testing.T) {
+	t.Parallel()
 	f, r, closeF := newCutFixture(t, "none", cutVGNone)
 	defer closeF()
 	cut, more := f.cutAt(t, r, 40)
@@ -219,6 +222,7 @@ func TestFragmentFixer_FinishedByHandClearsTheHold(t *testing.T) {
 // plan that names none of an interrupted run's books still holds a new row
 // of that run's folder.
 func TestFragmentFixer_ScopedPlanHoldsTheFolder(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	ids := f.looseGroup(t, "lib/Walk", "Chap", 6, func(int) bool { return true })
 	r := rowWithBooks(t, f.plan(t, "op-plan"), ids)
@@ -245,6 +249,7 @@ func TestFragmentFixer_ScopedPlanHoldsTheFolder(t *testing.T) {
 // prune never deletes a plan record, so an interrupted run's folder stays
 // held (or continued) after its other rows age out.
 func TestFragmentFixer_PlanRecordSurvivesThePrune(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	planned, survivor, others, otherRows := f.looseCut(t)
 	w := f.fragWriter(t, "op-cut")

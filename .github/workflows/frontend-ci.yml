@@ -1,7 +1,7 @@
 # file: .github/workflows/frontend-ci.yml
-# version: 2.12.2
+# version: 2.12.3
 # guid: 1c2d3e4f-5a6b-7c8d-9e0f-1a2b3c4d5e6f
-# last-edited: 2026-10-05
+# last-edited: 2026-10-06
 
 name: Frontend CI
 
@@ -67,6 +67,23 @@ jobs:
       node-version: ${{ needs.frontend-config.outputs.node-version }}
       system-packages: 'libtag1-dev'
       coverage-threshold: '30'  # repo gate is 30% (coverage-check-short); reusable default of 80 is aspirational
+    # Go test budget: 10 minutes PER PACKAGE, and it cannot be raised from
+    # here. The reusable workflow's "Go CI" job runs the go-test command of
+    # falkcorp/gha-ci-workflow-helpers (the Python embedded in its action.yml,
+    # pinned 4b5f4d4 inside reusable-ci.yml), which is
+    # `go test -v -race -coverprofile=coverage.out ./...` with no -timeout, so
+    # Go's default 10m applies. A caller cannot pass env or GOFLAGS into a
+    # reusable workflow, and the workflow has no timeout input. Every other Go
+    # test run in this repo sets -timeout explicitly (Makefile and Woodpecker:
+    # 25m; Woodpecker's internal/database shards: 50m).
+    #
+    # So the fix for a package that outgrows it is to make it faster, not a
+    # flag: internal/plugins/maintenance hit it on 2026-10-06 (600.6s, run
+    # 37411545286; the last green run was 555s), and its fragment-fixer tests
+    # now run in parallel (Plugin.rootDir replaces the global root swap). The
+    # durable fix is a go-test-timeout input upstream in github-common and
+    # gha-ci-workflow-helpers; nightly.yml calls the same workflow and has the
+    # same budget.
     secrets: inherit
 
   # Fail-closed gate (CI-06). The `frontend` job's `if:` above depends on an

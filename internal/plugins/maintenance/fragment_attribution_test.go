@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_attribution_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 02ce91e2-c227-4b3c-b13d-45a89faf23c9
-// last-edited: 2026-10-03
+// last-edited: 2026-10-06
 
 package maintenance
 
@@ -114,6 +114,7 @@ func (f *fragFixture) requireOneLiveBookHoldsAll(t *testing.T, planned repairs.R
 // the stamp, attribution read the op row: the resume refused, and a fresh
 // plan split the work into two live books.
 func TestFragmentFixer_DiscardedApplyStillAttributes(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	planned, survivor, others, otherRows := f.looseCut(t)
 	f.moveAndRetire(t, f.fragWriter(t, "op-cut"), fragFixerID, survivor, others, otherRows, 2)
@@ -132,6 +133,7 @@ func TestFragmentFixer_DiscardedApplyStillAttributes(t *testing.T) {
 // another fixer is never this fixer's, even when its op row claims to be a
 // fragment-consolidation apply: the row's own Source decides.
 func TestFragmentFixer_AnotherFixersSourceIsNotOurs(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	planned, survivor, others, otherRows := f.looseCut(t)
 	f.applyOp("op-x", fragFixerID) // the op row says ours
@@ -158,6 +160,7 @@ func (l legacyJournal) CreateOperationChange(c *database.OperationChange) error 
 // ours (a missing op row never is), and the row is planned again rather
 // than guessed at.
 func TestFragmentFixer_LegacyJournalRowsFallBackToTheOpRow(t *testing.T) {
+	t.Parallel()
 	for _, discarded := range []bool{false, true} {
 		name := "op row present: ours"
 		if discarded {
@@ -227,6 +230,7 @@ func (d noScanDeps) FragmentRepairReader() FragmentRepairReader { return d.hist 
 // the re-plan reaches the same verdicts (a resumable cut-off row keeps its
 // fingerprint; another fixer's retire still refuses).
 func TestFragmentFixer_JournalFallbackWithoutScanner(t *testing.T) {
+	t.Parallel()
 	// Plan needs the one-pass scan (an interrupted run would go unseen
 	// without it, so it fails closed); the swap to the per-book store is
 	// made after the plan, for the re-plan this test is about.
@@ -285,6 +289,7 @@ func (d dropHandOffNote) CreateOperationChange(c *database.OperationChange) erro
 // owes its hand-off (the crown written, its note cut off). An outside actor
 // crowning another member of the group is a change.
 func TestFragmentFixer_ForeignCrownIsAChange(t *testing.T) {
+	t.Parallel()
 	const dir = "lib/Clarke/02_light_of_other_days"
 	// orig[0] and orig[4] non-primary, orig[2] primary, all in one group;
 	// retiring orig[2] hands the group to orig[0] (the lower id).
@@ -391,6 +396,7 @@ func TestFragmentFixer_ForeignCrownIsAChange(t *testing.T) {
 
 // TestFragmentFixer_PlanStateGates (review 5 nits 3 and 4).
 func TestFragmentFixer_PlanStateGates(t *testing.T) {
+	t.Parallel()
 	const dir = "lib/Clarke/02_light_of_other_days"
 
 	for _, tc := range []struct {
@@ -481,6 +487,7 @@ func crownSet(t *testing.T) (*fragFixture, repairs.Row, *fragGroupPlan, []string
 // leaving the group owed a primary with no note while the row reports
 // applied; the next run finishes the hand-off.
 func TestRetireInto_FailedHandOffIsReturned(t *testing.T) {
+	t.Parallel()
 	f, _, plan, orig, m := crownSet(t)
 	w := f.fragWriter(t, "op-cut")
 	require.NoError(t, w.MoveBookFiles([]string{m.Frag.File.ID}, m.Frag.Book.ID, plan.SurvivorID))
@@ -504,6 +511,7 @@ func TestRetireInto_FailedHandOffIsReturned(t *testing.T) {
 // carries its own Source). The member it crowned is credited to our demote,
 // so our row resumes instead of stalling.
 func TestFragmentFixer_AnotherRetireFixerFinishesOurHandOff(t *testing.T) {
+	t.Parallel()
 	f, r, plan, orig, m := crownSet(t)
 	w := f.fragWriter(t, "op-cut")
 	f.journalPlanRecord(t, w, r)
@@ -528,6 +536,7 @@ func TestFragmentFixer_AnotherRetireFixerFinishesOurHandOff(t *testing.T) {
 // this row's plan time) is not this row's: only the runs whose plan record
 // names this row id AND plan time explain a flag.
 func TestFragmentFixer_AnotherPlansRunExplainsNothing(t *testing.T) {
+	t.Parallel()
 	f, r, _, orig, _ := crownSet(t)
 	time.Sleep(2 * time.Millisecond)
 	r2, plan2 := f.p7Plan(t, "lib/Clarke/02_light_of_other_days")
@@ -562,6 +571,7 @@ func TestFragmentFixer_AnotherPlansRunExplainsNothing(t *testing.T) {
 // one-pass journal scan still finds a cut run's plan record (each live
 // book's rows, then the record's retired books) and continues the run.
 func TestFragmentFixer_PlanContinuesWithoutTheScanner(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	planned, survivor, others, otherRows := f.looseCut(t)
 	w := f.fragWriter(t, "op-cut")
@@ -590,6 +600,7 @@ func TestFragmentFixer_PlanContinuesWithoutTheScanner(t *testing.T) {
 // state cannot be read gives no decision to continue; the set is held and
 // kept out of every other row rather than re-formed.
 func TestFragmentFixer_UnreadablePlanRecordIsHeld(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	planned, survivor, others, otherRows := f.looseCut(t)
 	bad := planned
@@ -614,6 +625,7 @@ func TestFragmentFixer_UnreadablePlanRecordIsHeld(t *testing.T) {
 // this fixer's or of unknown origin (written before rows named their fixer,
 // with the op gone), never when its op names another fixer.
 func TestFragmentFixer_LegacyMoveHoldsOnlyOurOrUnknownRuns(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, source, opFixer string
 		discard, held         bool

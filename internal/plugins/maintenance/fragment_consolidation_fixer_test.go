@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer_test.go
-// version: 1.27.0
+// version: 1.28.0
 // guid: 8e2d5b19-6a4c-4f37-b1d8-2c9e7a3f5d60
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package maintenance
 
@@ -45,9 +45,15 @@ type fragFixture struct {
 // newFragStore seeds a real PebbleStore. Unlike newSeriesPhantomStore it
 // does NOT skip under -short: CI runs the short suite, and these are the only
 // tests of the fixer's writes.
+//
+// It is in memory (database.NewPebbleStoreInMemory), as newCutFixture's has
+// been: every Pebble write passes pebble.Sync, and on a real disk ~170 tests
+// each paid that fsync on every seed and apply write (on macOS, F_FULLFSYNC,
+// the package's wall time was mostly fsync waits). The fixer's reads and
+// writes are the same PebbleStore code either way.
 func newFragStore(t *testing.T) *database.PebbleStore {
 	t.Helper()
-	s, err := database.NewPebbleStore(t.TempDir())
+	s, err := database.NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = s.Close() })
 	s.WaitForWarmup()
@@ -63,6 +69,17 @@ func newFragFixture(t *testing.T) *fragFixture {
 	f := &fragFixture{s: newFragStore(t), root: root, ids: map[string]string{}, rowIDs: map[string]string{}}
 	f.ops = &planOps{rows: map[string]*database.OperationV2Row{}}
 	f.p = &Plugin{deps: scanDeps{fakeDeps: fakeDeps{store: f.s}, scan: &scriptedScan{renewsLeft: -1}, ops: f.ops}, standDownWait: noWait}
+	f.p.rootDir = f.root
+	return f
+}
+
+// newGlobalRootFragFixture is newFragFixture for a test whose code under
+// test still reads config.AppConfig.RootDir directly (folder-books and
+// duplicate-copies do; the fragment fixer reads Plugin.libraryRoot). It also
+// swaps the global, so a test using it must not call t.Parallel.
+func newGlobalRootFragFixture(t *testing.T) *fragFixture {
+	t.Helper()
+	f := newFragFixture(t)
 	withRoot(t, f.root)
 	return f
 }
@@ -281,6 +298,7 @@ func (f *fragFixture) fileRow(t *testing.T, bookRole, rowRole string) *database.
 
 // TestFragmentFixer_PlanClassifiesEveryShape is the per-class table.
 func TestFragmentFixer_PlanClassifiesEveryShape(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	f.seed(t)
 	res := f.plan(t, "op-plan")
@@ -323,6 +341,7 @@ func TestFragmentFixer_PlanClassifiesEveryShape(t *testing.T) {
 // TestFragmentFixer_ApplyThenUndoRoundTrip applies every applicable row and
 // reverts the apply operation, checking every step comes back.
 func TestFragmentFixer_ApplyThenUndoRoundTrip(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	f.seed(t)
 	res := f.plan(t, "op-plan")
@@ -431,6 +450,7 @@ func TestFragmentFixer_ApplyThenUndoRoundTrip(t *testing.T) {
 // repoint (fragment not yet retired) re-plans to the same fingerprint, and
 // the next apply finishes the row instead of reporting it changed.
 func TestFragmentFixer_ResumesAPartiallyAppliedRow(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	f.seed(t)
 	f.plan(t, "op-plan")
@@ -459,6 +479,7 @@ func TestFragmentFixer_ResumesAPartiallyAppliedRow(t *testing.T) {
 // after one row moved and the survivor was retitled finishes on the next
 // apply.
 func TestFragmentFixer_ResumesAPartiallyAppliedGroup(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	f.seed(t)
 	res := f.plan(t, "op-plan")
@@ -491,6 +512,7 @@ func TestFragmentFixer_ResumesAPartiallyAppliedGroup(t *testing.T) {
 // TestFragmentFixer_RefusesAFileAnotherBookNowOwns: the strict ownership
 // re-check at apply time refuses a row whose file some other book claims.
 func TestFragmentFixer_RefusesAFileAnotherBookNowOwns(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	f.seed(t)
 	f.plan(t, "op-plan")
@@ -507,6 +529,7 @@ func TestFragmentFixer_RefusesAFileAnotherBookNowOwns(t *testing.T) {
 // names the fragment's path (retired books keep their rows) is history, not
 // a live owner; the row applies.
 func TestFragmentFixer_RetiredOwnerDoesNotBlock(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	f.seed(t)
 	f.plan(t, "op-plan")
@@ -522,6 +545,7 @@ func TestFragmentFixer_RetiredOwnerDoesNotBlock(t *testing.T) {
 }
 
 func TestFragmentFixer_ResumesFromCheckpoint(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	f.seed(t)
 	f.plan(t, "op-plan")
@@ -578,6 +602,7 @@ func rowWithBooks(t *testing.T, res *repairs.PlanResult, ids []string) repairs.R
 // same match with the fragment imported from the parent row's folder is a
 // proven moved row.
 func TestFragmentFixer_MovedNameSizeOnlyIsUnproven(t *testing.T) {
+	t.Parallel()
 	seed := func(t *testing.T, f *fragFixture, importRel string) {
 		x1 := f.file(t, "lib/X/01.mp3", 101)
 		parent := f.book(t, "parent", "X", f.path("lib/X"), nil)
@@ -617,6 +642,7 @@ func TestFragmentFixer_MovedNameSizeOnlyIsUnproven(t *testing.T) {
 // gone is a ghost only when exactly one parent row claims it by proof. Name
 // and size alone, or two candidate parents, keep it held for a person.
 func TestFragmentFixer_GhostNeedsOneProvenParent(t *testing.T) {
+	t.Parallel()
 	t.Run("name and size only", func(t *testing.T) {
 		f := newFragFixture(t)
 		p1 := f.file(t, "lib/P/01.mp3", 801)
@@ -651,6 +677,7 @@ func TestFragmentFixer_GhostNeedsOneProvenParent(t *testing.T) {
 // TestFragmentFixer_SameParentRowClaims: one parent row claimed by several
 // fragments is not ambiguous for the claimants that prove their claim.
 func TestFragmentFixer_SameParentRowClaims(t *testing.T) {
+	t.Parallel()
 	seed := func(t *testing.T, f *fragFixture) (parent string) {
 		t1 := f.file(t, "lib/T/01.mp3", 1001)
 		t2 := f.file(t, "lib/T/02.mp3", 1002)
@@ -777,6 +804,7 @@ func TestFragmentFixer_SameParentRowClaims(t *testing.T) {
 
 // TestFragmentFixer_SurvivorMustBeOrganizedAndPrimary (H3).
 func TestFragmentFixer_SurvivorMustBeOrganizedAndPrimary(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	none := f.looseGroup(t, "lib/NoneOrg", "Chap", 3, func(int) bool { return false })
 	last := f.looseGroup(t, "lib/LastOrg", "Chap", 3, func(i int) bool { return i == 3 })
@@ -808,6 +836,7 @@ func TestFragmentFixer_SurvivorMustBeOrganizedAndPrimary(t *testing.T) {
 // TestFragmentFixer_ChapterOrderMustBeKnown (H1): two files at one position
 // skip the group rather than guess an order.
 func TestFragmentFixer_ChapterOrderMustBeKnown(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	var ids []string
 	for i, stem := range []string{"Part 1", "Part 01", "Part 2"} {
@@ -824,6 +853,7 @@ func TestFragmentFixer_ChapterOrderMustBeKnown(t *testing.T) {
 // TestFragmentFixer_DiscFoldersFormOneGroup (M5): CD1/CD2 siblings are one
 // group, ordered disc first.
 func TestFragmentFixer_DiscFoldersFormOneGroup(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	var ids []string
 	for _, rel := range []string{"CD2/01", "CD1/02", "CD2/02", "CD1/01"} {
@@ -852,6 +882,7 @@ func TestFragmentFixer_DiscFoldersFormOneGroup(t *testing.T) {
 // TestFragmentFixer_FolderPathOnlyWhenExact (M4): a folder holding audio
 // that is not the group's is never made the survivor's path.
 func TestFragmentFixer_FolderPathOnlyWhenExact(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	f.seed(t)
 	f.file(t, "lib/Loose/Bonus interview.mp3", 10)
@@ -862,6 +893,7 @@ func TestFragmentFixer_FolderPathOnlyWhenExact(t *testing.T) {
 
 // TestFragmentFixer_PathProvenCopyComparesSizeOnDisk (L1).
 func TestFragmentFixer_PathProvenCopyComparesSizeOnDisk(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	f.seed(t)
 	require.NoError(t, os.WriteFile(f.path("lib/Suns2/02.mp3"), make([]byte, 999), 0o644))
@@ -876,6 +908,7 @@ func TestFragmentFixer_PathProvenCopyComparesSizeOnDisk(t *testing.T) {
 
 // TestFragmentFixer_SymlinkIntoITunesIsManual (L2).
 func TestFragmentFixer_SymlinkIntoITunesIsManual(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	require.NoError(t, os.MkdirAll(f.path("books/itunes/Real"), 0o755))
 	require.NoError(t, os.MkdirAll(f.path("lib"), 0o755))
@@ -890,6 +923,7 @@ func TestFragmentFixer_SymlinkIntoITunesIsManual(t *testing.T) {
 // iTunes persistent id is never retired (the purge would queue an iTunes
 // remove for it).
 func TestFragmentFixer_ITunesIDMakesFragmentManual(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	f.seed(t)
 	pid := "ABCDEF0123456789"
@@ -912,6 +946,7 @@ func TestFragmentFixer_ITunesIDMakesFragmentManual(t *testing.T) {
 // its parent, loses its path, hands over its external ids and every user's
 // position; the revert puts every one of them back and crowns it again.
 func TestFragmentFixer_RetireIsAMerge(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	f.seed(t)
 	frag, parent := f.ids["fragF"], f.ids["parent"]
@@ -964,6 +999,7 @@ func TestFragmentFixer_RetireIsAMerge(t *testing.T) {
 
 // TestFragmentFixer_RetiredStaysRetiredWhenRepointRevertIsRefused (M2).
 func TestFragmentFixer_RetiredStaysRetiredWhenRepointRevertIsRefused(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	f.seed(t)
 	f.plan(t, "op-plan")
@@ -994,6 +1030,7 @@ func TestFragmentFixer_RetiredStaysRetiredWhenRepointRevertIsRefused(t *testing.
 
 // TestFragmentFixer_UndoLastApplyRefusesARepairsBatch (M2).
 func TestFragmentFixer_UndoLastApplyRefusesARepairsBatch(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	f.seed(t)
 	res := f.plan(t, "op-plan")
@@ -1006,6 +1043,7 @@ func TestFragmentFixer_UndoLastApplyRefusesARepairsBatch(t *testing.T) {
 
 // TestFragmentFixer_SurvivorTitleChangedAfterPlan (M3).
 func TestFragmentFixer_SurvivorTitleChangedAfterPlan(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	f.seed(t)
 	res := f.plan(t, "op-plan")
@@ -1024,6 +1062,7 @@ func TestFragmentFixer_SurvivorTitleChangedAfterPlan(t *testing.T) {
 // record: the same row, survivor and members, the emptied member included,
 // instead of stranding it.
 func TestFragmentFixer_ReplanReformsAnAbandonedGroup(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	f.seed(t)
 	res := f.plan(t, "op-plan")
@@ -1057,6 +1096,7 @@ func TestFragmentFixer_ReplanReformsAnAbandonedGroup(t *testing.T) {
 // TestFragmentFixer_JournalDedupesOnResume (M1): a resumed run journals a
 // step it already journaled once, not twice.
 func TestFragmentFixer_JournalDedupesOnResume(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	f.seed(t)
 	for i := 0; i < 2; i++ {
@@ -1072,6 +1112,7 @@ func TestFragmentFixer_JournalDedupesOnResume(t *testing.T) {
 // after every row moved and one member was retired is continued whole by a
 // new plan (the retired member included), and the apply finishes it.
 func TestFragmentFixer_ReplanReformsAGroupCutMidRetire(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	f.seed(t)
 	res := f.plan(t, "op-plan")
@@ -1118,6 +1159,7 @@ func TestFragmentFixer_ReplanReformsAGroupCutMidRetire(t *testing.T) {
 // folder's remaining fragments with another survivor: the row is held, and
 // the emptied member is listed as stranded.
 func TestFragmentFixer_UnrecordedCutIsHeld(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	ids := f.looseGroup(t, "lib/Walk", "Chap", 8, func(int) bool { return true })
 	r := rowWithBooks(t, f.plan(t, "op-plan"), ids)
@@ -1158,6 +1200,7 @@ func TestFragmentFixer_UnrecordedCutIsHeld(t *testing.T) {
 // TestFragmentFixer_StrandedMemberIsListed (M6): an emptied member whose
 // group no longer re-forms is listed as a held row, not dropped.
 func TestFragmentFixer_StrandedMemberIsListed(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	f.seed(t)
 	res := f.plan(t, "op-plan")
@@ -1183,6 +1226,7 @@ func TestFragmentFixer_StrandedMemberIsListed(t *testing.T) {
 // TestFragmentFixer_CopyNeedsPathOrHash: a copy whose parent file is still on
 // disk is not retired on name, size and duration alone.
 func TestFragmentFixer_CopyNeedsPathOrHash(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	f.seed(t)
 	h, err := f.s.GetBookFileByID(f.ids["fragH"], f.rowIDs["h01"])
@@ -1198,6 +1242,7 @@ func TestFragmentFixer_CopyNeedsPathOrHash(t *testing.T) {
 // sibling when the primary fragment retired; the revert crowns the fragment
 // again and demotes the sibling.
 func TestFragmentFixer_RevertCrownsARetiredPrimary(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	f.seed(t)
 	frag := f.ids["fragF"]
@@ -1243,6 +1288,7 @@ func TestFragmentFixer_RevertCrownsARetiredPrimary(t *testing.T) {
 // writer, a book with a journaled step gets the marker (undo refused), a book
 // that was only Modify'd does not (undo works).
 func TestWriter_OpJournaledMarkerOnlyOnJournaledBooks(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	f.seed(t)
 	a, b := f.ids["fragF"], f.ids["fragH"]
@@ -1268,6 +1314,7 @@ func TestWriter_OpJournaledMarkerOnlyOnJournaledBooks(t *testing.T) {
 // retire journaled its soft-delete and never wrote it; the user deleted the
 // book later. The revert must not un-delete it.
 func TestFragmentFixer_LeftoverSoftDeleteRowCannotUndeleteALaterDelete(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	f.seed(t)
 	frag := f.ids["fragF"]
@@ -1291,6 +1338,7 @@ func TestFragmentFixer_LeftoverSoftDeleteRowCannotUndeleteALaterDelete(t *testin
 // retire cut off after journaling (nothing written) reverts as already
 // restored, not failed.
 func TestFragmentFixer_JournaledStepNeverWrittenIsAlreadyRestored(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	f.seed(t)
 	frag, parent := f.ids["fragF"], f.ids["parent"]
@@ -1319,6 +1367,7 @@ func TestFragmentFixer_JournaledStepNeverWrittenIsAlreadyRestored(t *testing.T) 
 // found at retire time refuses the retire before any user state moves or is
 // journaled.
 func TestFragmentFixer_RetireRefusesBeforeFollowingProgress(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	f.seed(t)
 	frag, parent := f.ids["fragF"], f.ids["parent"]
@@ -1343,6 +1392,7 @@ func TestFragmentFixer_RetireRefusesBeforeFollowingProgress(t *testing.T) {
 // user-state record left by a follow whose retire failed is deferred while
 // the fragment is live; its progress stays.
 func TestFragmentFixer_PendingFollowNeverDrainsALiveFragment(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	f.seed(t)
 	frag, parent := f.ids["fragF"], f.ids["parent"]
@@ -1365,6 +1415,7 @@ func TestFragmentFixer_PendingFollowNeverDrainsALiveFragment(t *testing.T) {
 // off after journaling its soft-delete journals no second stamp on resume; it
 // writes the stamp it journaled.
 func TestFragmentFixer_ResumedRetireReusesTheJournaledStamp(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	f.seed(t)
 	frag, parent := f.ids["fragF"], f.ids["parent"]
@@ -1398,6 +1449,7 @@ func TestFragmentFixer_ResumedRetireReusesTheJournaledStamp(t *testing.T) {
 // already holds two soft-delete stamps for one book (journaled by a resume
 // before stamps were reused) reverts cleanly whichever of them was written.
 func TestFragmentFixer_TwoStampsOfOneRetireAreNotAConflict(t *testing.T) {
+	t.Parallel()
 	s1 := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
 	s2 := s1.Add(time.Minute)
 	for _, written := range []time.Time{s1, s2} {
@@ -1433,6 +1485,7 @@ func TestFragmentFixer_TwoStampsOfOneRetireAreNotAConflict(t *testing.T) {
 // reports every row of the fragment as refused, as the revert does, and its
 // restorable count matches what the revert restores.
 func TestFragmentFixer_PreflightPredictsDependentRefusals(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	f.seed(t)
 	f.plan(t, "op-plan")
@@ -1472,6 +1525,7 @@ func TestFragmentFixer_PreflightPredictsDependentRefusals(t *testing.T) {
 // already restored and writes nothing: the flags in its group are not the
 // operation's (here two primaries a user left) and stay as they are.
 func TestFragmentFixer_AlreadyRestoredDemoteLeavesAnUntouchedGroup(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	f.seed(t)
 	frag := f.ids["fragF"]
@@ -1512,6 +1566,7 @@ func TestFragmentFixer_AlreadyRestoredDemoteLeavesAnUntouchedGroup(t *testing.T)
 // version group. Its revert writes no primary flag: the organized sibling's
 // unset flag (read as primary, what ABS shows) stays unset.
 func TestFragmentFixer_CutOffRetireRevertLeavesTheGroupAlone(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	f.seed(t)
 	frag, parent := f.ids["fragF"], f.ids["parent"]
@@ -1563,6 +1618,7 @@ func TestFragmentFixer_CutOffRetireRevertLeavesTheGroupAlone(t *testing.T) {
 // member too. The demote row is already restored; the revert does not demote
 // the user's pick.
 func TestFragmentFixer_AlreadyRestoredDemoteKeepsALaterUserPick(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	f.seed(t)
 	frag := f.ids["fragF"]
@@ -1617,6 +1673,7 @@ func (s *crownFailsOnce) GetBooksByVersionGroup(groupID string) ([]database.Book
 // two primaries. The retry finds the demote already restored and, because the
 // apply journaled its hand-off of the group (book_primary_handoff), crowns.
 func TestFragmentFixer_RetryCrownsAfterACrownFailure(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	f.seed(t)
 	frag := f.ids["fragF"]
@@ -1682,6 +1739,7 @@ func TestFragmentFixer_RetryCrownsAfterACrownFailure(t *testing.T) {
 // retry finds the demote already restored, and with no hand-off row the
 // operation never changed the group's flags, so it crowns nothing.
 func TestFragmentFixer_RetryAfterCutOffRetireStillLeavesGroupAlone(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	f.seed(t)
 	frag, parent := f.ids["fragF"], f.ids["parent"]
@@ -1740,6 +1798,7 @@ func TestFragmentFixer_RetryAfterCutOffRetireStillLeavesGroupAlone(t *testing.T)
 // so both retire in one row and neither is left as a live co-owner that
 // refuses the other's row.
 func TestFragmentFixer_PathTwinAdoptsMatch(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	p1 := f.file(t, "lib/P/01.mp3", 801)
 	p2 := f.file(t, "lib/P/02.mp3", 802)
@@ -1784,6 +1843,7 @@ func TestFragmentFixer_PathTwinAdoptsMatch(t *testing.T) {
 
 // TestFragmentFixer_PathTwinLimits: what a path twin does NOT do.
 func TestFragmentFixer_PathTwinLimits(t *testing.T) {
+	t.Parallel()
 	// seed: parent P with rows 01, 02 (02 present unless gone), ghost/copy
 	// donor D imported from P's 02 at path `at`, then the caller adds a twin.
 	seed := func(t *testing.T, f *fragFixture, at string) (parent, donor string) {
@@ -1919,6 +1979,7 @@ func TestFragmentFixer_PathTwinLimits(t *testing.T) {
 // TestFragmentFixer_PathTwinNeedsOneDonor: a path shared by two matched
 // fragments, or a donor whose own match is ambiguous, lends nothing.
 func TestFragmentFixer_PathTwinNeedsOneDonor(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	gone := f.path("lib/R/02.mp3")
 	for _, n := range []string{"A", "B"} {
@@ -2242,6 +2303,7 @@ func TestFragmentFixer_NumberedSet(t *testing.T) {
 }
 
 func TestFolderNamesAuthor(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		folder, author string
 		want           bool
@@ -2265,6 +2327,7 @@ func TestFolderNamesAuthor(t *testing.T) {
 // the row also owns is listed held, naming that book, instead of being
 // planned applicable and refused at apply.
 func TestFragmentFixer_CoOwnerIsHeldAtPlan(t *testing.T) {
+	t.Parallel()
 	seed := func(t *testing.T, f *fragFixture) (parent, frag, other string) {
 		p1 := f.file(t, "lib/P/01.mp3", 801)
 		parent = f.book(t, "parent", "P", f.path("lib/P"), nil)
@@ -2328,6 +2391,7 @@ func TestFragmentFixer_CoOwnerIsHeldAtPlan(t *testing.T) {
 // decision 2026-10-03: one chapter). The copies are not members: their
 // books are retired into the survivor, each keeping its own file row.
 func TestFragmentFixer_RenamedChapterCopies(t *testing.T) {
+	t.Parallel()
 	seed := func(t *testing.T, f *fragFixture, dir string, sizeOf func(n int, copy bool) int) (orig, copies []string) {
 		for n := 1; n <= 8; n++ {
 			for _, cp := range []bool{false, true} {
@@ -2457,6 +2521,7 @@ func applicableRowsWith(res *repairs.PlanResult, ids []string) []repairs.Row {
 // chapter copies whatever their book ids, iTunes ids on copies, resuming a
 // run cut off after the retitle, and the copy-aware set checks.
 func TestFragmentFixer_NumberedCopiesReview(t *testing.T) {
+	t.Parallel()
 	const dir = "lib/Clarke/02_light_of_other_days"
 	copyStem := " - 02_light_of_other_days - read by narrator"
 
@@ -2634,6 +2699,7 @@ func (f *fragFixture) setAuthor(t *testing.T, bookID string, authorID int) {
 // its own retitle re-plans to the same fingerprint, stays applicable, and
 // finishes; with and without renamed copies.
 func TestFragmentFixer_NumberedResumeAfterRetitle(t *testing.T) {
+	t.Parallel()
 	t.Run("no copies, retitled before anything else", func(t *testing.T) {
 		f := newFragFixture(t)
 		f.numberedSeed(t, "lib/Serial Work", []string{"001 - Arrival", "002 - The Road", "003 - Gear", "004 - Ash",
@@ -2758,6 +2824,7 @@ func (f *fragFixture) requireAllRetiredBut(t *testing.T, ids []string, survivor 
 // TestFragmentFixer_BracketedAuthorFolder: an author with a bracketed role,
 // in a folder named exactly for it, is a real author folder.
 func TestFragmentFixer_BracketedAuthorFolder(t *testing.T) {
+	t.Parallel()
 	stems := []string{"001 - Arrival", "002 - The Road", "003 - Gear", "004 - Ash", "005 - Night", "006 - Ember", "007 - Coda", "008 - Home"}
 	f := newFragFixture(t)
 	a, err := f.s.CreateAuthor("Jane Author (Narrator)")
@@ -2769,6 +2836,7 @@ func TestFragmentFixer_BracketedAuthorFolder(t *testing.T) {
 }
 
 func TestFragmentPersonShapedName(t *testing.T) {
+	t.Parallel()
 	for name, want := range map[string]bool{
 		"Jane Author":                            true,
 		"Jane Author (Narrator)":                 true,
@@ -2793,6 +2861,7 @@ func TestFragmentPersonShapedName(t *testing.T) {
 // TestFragmentFixer_NumberedReviewProbes pins the review probes of PR #3700
 // that need no code change, so their behaviour cannot drift silently.
 func TestFragmentFixer_NumberedReviewProbes(t *testing.T) {
+	t.Parallel()
 	serial := []string{"001 - Arrival", "002 - The Road", "003 - Gear", "004 - Ash", "005 - Night", "006 - Ember", "007 - Coda", "008 - Home"}
 
 	for _, org := range fragOrgs(1) {
@@ -2890,6 +2959,7 @@ func reviewProbesRest(t *testing.T, serial []string) {
 // TestFragmentFixer_NumberedResumeAfterFolder: a plain numbered set gets a
 // book_path; a run cut off after the folder write (and the retitle) resumes.
 func TestFragmentFixer_NumberedResumeAfterFolder(t *testing.T) {
+	t.Parallel()
 	serial := []string{"001 - Arrival", "002 - The Road", "003 - Gear", "004 - Ash", "005 - Night", "006 - Ember", "007 - Coda", "008 - Home"}
 	for _, retitled := range []bool{false, true} {
 		t.Run(fmt.Sprintf("retitled=%t", retitled), func(t *testing.T) {
@@ -2936,6 +3006,7 @@ func TestFragmentFixer_NumberedResumeAfterFolder(t *testing.T) {
 // (once renamed, same size) never becomes two books of the same audio, even
 // when organized copies make the kept files carry two keys.
 func TestFragmentFixer_DiscFolderCopies(t *testing.T) {
+	t.Parallel()
 	for _, organizedCopies := range []int{0, 4} {
 		t.Run(fmt.Sprintf("organized copies=%d", organizedCopies), func(t *testing.T) {
 			discFolderCopies(t, organizedCopies)
@@ -2983,6 +3054,7 @@ func discFolderCopies(t *testing.T, organizedCopies int) {
 // retireInto demotes what it retires; without the planned flags Replan kept
 // a different file per chapter and the row was stranded.
 func TestFragmentFixer_NumberedCopiesResumeMidMembers(t *testing.T) {
+	t.Parallel()
 	for oi, org := range []string{"none", "all", "copies"} {
 		for ci, cut := range []int{1, 4, 7} {
 			if oi != ci && !fragSweepFull() {
@@ -3028,6 +3100,7 @@ func TestFragmentFixer_NumberedCopiesResumeMidMembers(t *testing.T) {
 // fixer retired into an unrelated book after the plan makes the row changed;
 // nothing is written and the book stays merged where it went.
 func TestFragmentFixer_NumberedRetiredElsewhere(t *testing.T) {
+	t.Parallel()
 	for _, which := range []string{"copy", "member"} {
 		t.Run(which, func(t *testing.T) {
 			f := newFragFixture(t)
@@ -3086,6 +3159,7 @@ func TestFragmentFixer_NumberedRetiredElsewhere(t *testing.T) {
 // first with no hash and the other two with different hashes, are not one
 // chapter: each pair must agree, not each file with the first.
 func TestFragmentFixer_CopyHashesPairwise(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	const dir = "lib/Clarke/02_light_of_other_days"
 	_, copies := f.seedChapterCopies(t, dir, nil)
@@ -3107,6 +3181,7 @@ func TestFragmentFixer_CopyHashesPairwise(t *testing.T) {
 // them in a different group than their originals (a key group beside a
 // numbered set, or beside a "Chapter NNN" key group) hold both rows.
 func TestFragmentFixer_CopiesInAnotherGroup(t *testing.T) {
+	t.Parallel()
 	for _, variant := range []string{"numbered originals", "no leading numbers"} {
 		for _, organized := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s organized=%t", variant, organized), func(t *testing.T) {
@@ -3168,6 +3243,7 @@ func (f *fragFixture) requireResumes(t *testing.T, r repairs.Row, opID string) {
 // TestFragmentFixer_NumberedPinnedResume: a re-plan keeps the plan's own
 // survivor and kept files, whatever the apply did to the election flags.
 func TestFragmentFixer_NumberedPinnedResume(t *testing.T) {
+	t.Parallel()
 	const dir = "lib/Clarke/02_light_of_other_days"
 
 	t.Run("cut between a member's demote and its soft-delete", func(t *testing.T) {
@@ -3440,7 +3516,7 @@ func newCutFixture(t *testing.T, org, vg string) (*fragFixture, repairs.Row, fun
 	f := &fragFixture{s: s, root: root, ids: map[string]string{}, rowIDs: map[string]string{}}
 	f.ops = &planOps{rows: map[string]*database.OperationV2Row{}}
 	f.p = &Plugin{deps: scanDeps{fakeDeps: fakeDeps{store: s}, scan: &scriptedScan{renewsLeft: -1}, ops: f.ops}, standDownWait: noWait}
-	withRoot(t, root)
+	f.p.rootDir = root
 	orig, copies := f.seedChapterCopies(t, folder, nil)
 	f.organizeCopiesFixture(t, org, orig, copies)
 	group := "vg-ch"
@@ -3558,6 +3634,7 @@ const (
 // about 390 s here. AORG_FRAG_CUT_MATRIX=full runs every shape in both modes
 // and also cuts at every history row (the crash-before-history window).
 func TestFragmentFixer_NumberedCopiesCutAtEveryStep(t *testing.T) {
+	t.Parallel()
 	full := os.Getenv("AORG_FRAG_CUT_MATRIX") == "full"
 	type shape struct{ org, vg, mode string }
 	var shapes []shape
@@ -3588,6 +3665,7 @@ func TestFragmentFixer_NumberedCopiesCutAtEveryStep(t *testing.T) {
 	}
 	for si, sh := range shapes {
 		t.Run(fmt.Sprintf("organized=%s vg=%s %s", sh.org, sh.vg, sh.mode), func(t *testing.T) {
+			t.Parallel()
 			ref, rr, closeRef := newCutFixture(t, sh.org, sh.vg)
 			out := ref.apply(t, "op-plan", "op-apply", []string{rr.RowID}, nil)
 			require.Equal(t, 1, out.Applied, "outcomes %v %+v", out.ByOutcome, out.Rows)
@@ -3638,6 +3716,7 @@ func TestFragmentFixer_NumberedCopiesCutAtEveryStep(t *testing.T) {
 // survivor, whose flag a later hand-off raises again. Either way the
 // survivor's own stored flag changes during the run.
 func TestFragmentFixer_HandOffShapesReachTheSurvivor(t *testing.T) {
+	t.Parallel()
 	for _, vg := range []string{cutVGHandOffToSurvivor, cutVGHandOffPast} {
 		t.Run(vg, func(t *testing.T) {
 			f, r, closeF := newCutFixture(t, "all", vg)
@@ -3699,6 +3778,7 @@ func (f *fragFixture) finishByFreshPlan(t *testing.T, r repairs.Row, at int, wan
 // ignore a live book's election flags. One changed since the plan by
 // anything but this row's own apply is a change.
 func TestFragmentFixer_NumberedLiveFlagChecks(t *testing.T) {
+	t.Parallel()
 	const dir = "lib/Clarke/02_light_of_other_days"
 
 	t.Run("a member organized in place after the plan (fallback survivor)", func(t *testing.T) {
@@ -3752,6 +3832,7 @@ func TestFragmentFixer_NumberedLiveFlagChecks(t *testing.T) {
 // apply_incomplete marker either). The journal row, written first, still
 // attributes the retire to this fixer and the row resumes.
 func TestFragmentFixer_CrashBeforeHistoryResumes(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	f.seed(t)
 	res := f.plan(t, "op-plan")
@@ -3790,6 +3871,7 @@ func (dropHistory) RecordMetadataChange(*database.MetadataChangeRecord) error { 
 // 300,000 other journal rows. Skipped unless AORG_FRAG_REPLAN_BENCH=1 (it
 // seeds for about a minute); the numbers go in the log.
 func TestFragmentFixer_ReplanJournalCost(t *testing.T) {
+	t.Parallel()
 	if os.Getenv("AORG_FRAG_REPLAN_BENCH") != "1" {
 		t.Skip("set AORG_FRAG_REPLAN_BENCH=1 to measure")
 	}
@@ -3802,7 +3884,7 @@ func TestFragmentFixer_ReplanJournalCost(t *testing.T) {
 	f := &fragFixture{s: s, root: root, ids: map[string]string{}, rowIDs: map[string]string{}}
 	f.ops = &planOps{rows: map[string]*database.OperationV2Row{}}
 	f.p = &Plugin{deps: scanDeps{fakeDeps: fakeDeps{store: s}, scan: &scriptedScan{renewsLeft: -1}, ops: f.ops}, standDownWait: noWait}
-	withRoot(t, root)
+	f.p.rootDir = root
 	const n, cut, noise = 346, 300, 300000
 	var ids []string
 	for i := 1; i <= n; i++ {
@@ -3884,6 +3966,7 @@ func TestFragmentFixer_ReplanJournalCost(t *testing.T) {
 // TestFragTitleKey: the titles that name one work, and the ones that must
 // stay apart (another name, or the same name at another position or volume).
 func TestFragTitleKey(t *testing.T) {
+	t.Parallel()
 	id := fragTitleIdentity
 	for _, tc := range [][2]string{
 		{"Book 2 - Eldest", "Eldest"},
@@ -4011,6 +4094,7 @@ func (f *fragFixture) requireRetiredInto(t *testing.T, ids []string, target stri
 // live book (the "Book 2 - Eldest" beside "Eldest" shape, 13 of 19 rows
 // applied on prod 2026-10-05) is never assembled into a second book.
 func TestFragmentFixer_ExistingBook(t *testing.T) {
+	t.Parallel()
 	const fragDir = "lib/Christopher Paolini/Book 2 - Eldest"
 	t.Run("totals agree: the fragments join the existing book", func(t *testing.T) {
 		f := newFragFixture(t)
@@ -4108,6 +4192,7 @@ func TestFragmentFixer_ExistingBook(t *testing.T) {
 // volume or position, never another author's book of the same name; and a
 // group whose work has no derivable title is held, never assembled blind.
 func TestFragmentFixer_ExistingBookIdentity(t *testing.T) {
+	t.Parallel()
 	t.Run("another volume is another work", func(t *testing.T) {
 		f := newFragFixture(t)
 		f.existingBook(t, "v1", "Saga, Vol 1", "lib/Writer/Saga, Vol 1", 4, 900)
@@ -4181,6 +4266,7 @@ func TestFragmentFixer_ExistingBookIdentity(t *testing.T) {
 // is found and held (never a plain assemble, never a join), even with
 // agreeing totals and the same author.
 func TestFragmentFixer_TrailingPositionProbes(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ name, live, dir string }{
 		{"live (Book 2), bare folder", "Eldest (Book 2)", "lib/Christopher Paolini/Eldest"},
 		{"live bare, folder (Book 2)", "Eldest", "lib/Christopher Paolini/Eldest (Book 2)"},
@@ -4222,6 +4308,7 @@ func TestFragmentFixer_TrailingPositionProbes(t *testing.T) {
 // the author folder above the work folder, so they never join another
 // author's book of the same name, nor a book with no author.
 func TestFragmentFixer_FolderAuthor(t *testing.T) {
+	t.Parallel()
 	const dir = "lib/Jessica Khoury/Origin"
 	t.Run("another author's book of the name: held", func(t *testing.T) {
 		f := newFragFixture(t)
@@ -4265,6 +4352,7 @@ func TestFragmentFixer_FolderAuthor(t *testing.T) {
 // a constant size difference (Horizon Storms) are never assembled, and not
 // joined either, whatever the titles say.
 func TestFragmentFixer_RetaggedCopies(t *testing.T) {
+	t.Parallel()
 	const dir = "lib/Kevin J Anderson/Horizon Storms"
 	seed := func(t *testing.T, f *fragFixture, title string, delta func(i int) int64) (string, []string) {
 		frags := f.chapterFrags(t, dir, "Storm", 6, 600)
@@ -4314,6 +4402,7 @@ func TestFragmentFixer_RetaggedCopies(t *testing.T) {
 // co-owner is compared with the PARENT's whole total, never the few chapters
 // the row repairs.
 func TestFragmentFixer_CoOwnerRule(t *testing.T) {
+	t.Parallel()
 	// seed: parent (title) with rows 01 present and 02..n+1 gone, 600 s each;
 	// n fragments imported from the gone paths, now organized away; a
 	// co-owner (coTitle, coDur seconds) holding a row at fragment 1's file.
@@ -4440,6 +4529,7 @@ func (f *fragFixture) authorID(t *testing.T, name string) int {
 // path sees ends in exactly one row; the ones no group takes are unplaced
 // rows whose skip kind names why.
 func TestFragmentFixer_NoSilentDrops(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	lone := f.chapterFrags(t, "lib/Solo", "Solo", 2, 300)
 	scattered := f.numberedSeed(t, "lib/Two", []string{"01 - Intro", "02 - Intro", "03 - Intro", "04 - Something Else"}, 300, nil)
@@ -4470,6 +4560,7 @@ func TestFragmentFixer_NoSilentDrops(t *testing.T) {
 // TestFragTitleKeyGenericSubtitle (S1): a genre or edition subtitle never
 // becomes the key; the work is the part before it.
 func TestFragTitleKeyGenericSubtitle(t *testing.T) {
+	t.Parallel()
 	id := fragTitleIdentity
 	for _, tc := range [][2]string{
 		{"Origin: A Novel", "Origin"},
@@ -4495,6 +4586,7 @@ func TestFragTitleKeyGenericSubtitle(t *testing.T) {
 // never the join target while one it did not assemble agrees, and when it is
 // the only one that agrees the row is held ("revert first, then plan").
 func TestFragmentFixer_JoinTargetRanking(t *testing.T) {
+	t.Parallel()
 	// assemble runs a no-parent apply of three "Eldest" chapters in a folder
 	// named "Eldest": its survivor is a 3-file book titled "Eldest" that the
 	// journal's plan record marks as this fixer's product.
@@ -4538,6 +4630,7 @@ func TestFragmentFixer_JoinTargetRanking(t *testing.T) {
 // TestFragmentFixer_ExistingBookAtApply (S4): a book of the group's title
 // created between the plan and the apply refuses the plain no-parent row.
 func TestFragmentFixer_ExistingBookAtApply(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	dir := "lib/Christopher Paolini/Book 2 - Eldest"
 	frags := f.chapterFrags(t, dir, "Eldest", 3, 600)
@@ -4558,6 +4651,7 @@ func TestFragmentFixer_ExistingBookAtApply(t *testing.T) {
 // maps to the start of the target's file at its chapter position, not to its
 // running sum among the fragments.
 func TestFragmentFixer_JoinOffsets(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	target := f.book(t, "t", "Eldest", f.path("lib/Shelf/Eldest"), nil)
 	f.setAuthor(t, target, f.authorID(t, "Christopher Paolini"))
@@ -4587,6 +4681,7 @@ func TestFragmentFixer_JoinOffsets(t *testing.T) {
 // TestFragmentFixer_JoinTargetITunes (N2): an iTunes id on the target's file
 // row or as an external id makes the join manual-only, like one on the book.
 func TestFragmentFixer_JoinTargetITunes(t *testing.T) {
+	t.Parallel()
 	const dir = "lib/Christopher Paolini/Book 2 - Eldest"
 	t.Run("row-level", func(t *testing.T) {
 		f := newFragFixture(t)
@@ -4617,6 +4712,7 @@ func TestFragmentFixer_JoinTargetITunes(t *testing.T) {
 // TestFragmentFixer_UnplacedITunesCounted (N4): an unplaced fragment that is
 // also hands-off is counted under unplaced, not manual-only.
 func TestFragmentFixer_UnplacedITunesCounted(t *testing.T) {
+	t.Parallel()
 	f := newFragFixture(t)
 	p := f.file(t, "books/itunes/Solo/Solo 01.mp3", 990)
 	id := f.book(t, "solo", "Solo 01", p, nil)

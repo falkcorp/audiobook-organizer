@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duplicate_copies_fixer_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: c1cb262a-d405-4d1a-9eb7-a3c341190585
-// last-edited: 2026-10-01
+// last-edited: 2026-10-06
 
 package maintenance
 
@@ -94,7 +94,7 @@ type dcFixture struct {
 
 func newDCFixture(t *testing.T) *dcFixture {
 	t.Helper()
-	f := newFragFixture(t)
+	f := newGlobalRootFragFixture(t)
 	l := &fakeLabels{}
 	f.p = &Plugin{deps: scanDeps{fakeDeps: fakeDeps{store: f.s, labels: l}, scan: &scriptedScan{renewsLeft: -1}, ops: f.ops}, standDownWait: noWait}
 	return &dcFixture{fragFixture: f, labels: l}

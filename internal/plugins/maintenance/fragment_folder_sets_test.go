@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_folder_sets_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 3b7d2c55-1a4e-4f0b-9c61-8e2f5d7a0b14
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package maintenance
 
@@ -46,6 +46,7 @@ var fragFolderSetShapeCases = []struct {
 }
 
 func TestFragFolderSetShape(t *testing.T) {
+	t.Parallel()
 	for _, tc := range fragFolderSetShapeCases {
 		sh, ok := fragFolderSetShape(tc.stem)
 		require.True(t, ok, tc.stem)
@@ -58,6 +59,7 @@ func TestFragFolderSetShape(t *testing.T) {
 }
 
 func TestFragNumberGaps(t *testing.T) {
+	t.Parallel()
 	single := func(ns ...int) [][2]int {
 		var out [][2]int
 		for _, n := range ns {
@@ -136,6 +138,7 @@ func rowsHolding(res *repairs.PlanResult, id string) int {
 // folder, which the chapter-key groups leave as lone chapters, become one
 // book, in number order, titled from the file names.
 func TestFragmentFixer_FolderChapterSet(t *testing.T) {
+	t.Parallel()
 	t.Run("a set applies as one book in number order", func(t *testing.T) {
 		f := newFragFixture(t)
 		// Created out of order: the number, not the id, orders the tracks.
@@ -274,6 +277,7 @@ func TestFragmentFixer_FolderChapterSet(t *testing.T) {
 // chapter set whose work is already a live book is never assembled into a
 // second one, at plan time or under the apply's re-check.
 func TestFragmentFixer_FolderChapterSetNeverDuplicates(t *testing.T) {
+	t.Parallel()
 	t.Run("totals agree: joined into the existing book", func(t *testing.T) {
 		f := newFragFixture(t)
 		existing := f.existingBook(t, "work", "Some Work", "lib/Other/Some Work", 6, 900)
@@ -355,6 +359,7 @@ const horizonKey = "horizon storms # of #"
 // TestFragmentFixer_ParentChapterSet: one-file-per-folder chapters are
 // grouped by the folder above (owner decision 2026-10-05 20:45).
 func TestFragmentFixer_ParentChapterSet(t *testing.T) {
+	t.Parallel()
 	t.Run("a parent set with no existing book becomes one new book", func(t *testing.T) {
 		f := newFragFixture(t)
 		ids := f.parentSet(t, parentDir, []int{3, 1, 6, 2, 5, 4}, horizonStem, 900, 9000)
@@ -552,6 +557,7 @@ func (f *fragFixture) audioCopy(t *testing.T) string {
 // hold its audio on disk. The set's fragments may be the only copies, so
 // retiring them into a book whose files are gone would lose the audio.
 func TestFragmentFixer_ChapterSetNeverJoinsMissingFiles(t *testing.T) {
+	t.Parallel()
 	joinID := func(f *fragFixture) string {
 		return existingRowID(f.path(parentDir), fragParentSetKeyPrefix+horizonKey)
 	}

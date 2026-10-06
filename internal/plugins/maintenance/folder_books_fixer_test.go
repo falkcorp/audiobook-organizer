@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/folder_books_fixer_test.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 9d4c7a2e-1b6f-4e83-a5d0-8f2b3c6e9a17
-// last-edited: 2026-10-04
+// last-edited: 2026-10-06
 
 package maintenance
 
@@ -156,7 +156,7 @@ func (f *fragFixture) fbSingleRow(t *testing.T, opID string) repairs.Row {
 }
 
 func TestFolderBooksFixer_ApplyAndRevert(t *testing.T) {
-	f := newFragFixture(t)
+	f := newGlobalRootFragFixture(t)
 	f.seedWolfe(t, fbITunes, "citadel")
 	fb, fb2 := f.ids["fb"], f.ids["fb2"]
 	swordDir := f.path(filepath.Join(fbITunes, "Gene Wolfe", "Sword"))
@@ -273,7 +273,7 @@ func TestFolderBooksFixer_ApplyAndRevert(t *testing.T) {
 func TestFolderBooksFixer_RevertRefusesAMovedCreatedBook(t *testing.T) {
 	for _, how := range []string{"moved", "linked", "retitled"} {
 		t.Run(how, func(t *testing.T) {
-			f := newFragFixture(t)
+			f := newGlobalRootFragFixture(t)
 			f.seedWolfe(t, fbITunes, "citadel")
 			row := f.fbSingleRow(t, "op-plan")
 			out := f.fbApply(t, "op-plan", "op-apply", []string{row.RowID})
@@ -316,13 +316,13 @@ func TestFolderBooksFixer_SkipKinds(t *testing.T) {
 	t.Run("split work", func(t *testing.T) {
 		// G holds Sword/02, Sword/01 is orphaned: a new book would be a
 		// second, partial Sword.
-		f := newFragFixture(t)
+		f := newGlobalRootFragFixture(t)
 		f.seedWolfe(t, fbITunes, "sword")
 		row := f.fbSingleRow(t, "op-plan")
 		require.Equal(t, fbSkipSplitWork, row.Skipped, row.SkipReason)
 	})
 	t.Run("duplicate title", func(t *testing.T) {
-		f := newFragFixture(t)
+		f := newGlobalRootFragFixture(t)
 		f.seedWolfe(t, fbITunes, "citadel")
 		a, err := f.s.GetAuthorByName("Gene Wolfe")
 		require.NoError(t, err)
@@ -333,7 +333,7 @@ func TestFolderBooksFixer_SkipKinds(t *testing.T) {
 		require.Equal(t, fbSkipDupTitle, row.Skipped, row.SkipReason)
 	})
 	t.Run("new book outside iTunes", func(t *testing.T) {
-		f := newFragFixture(t)
+		f := newGlobalRootFragFixture(t)
 		f.seedWolfe(t, "", "citadel")
 		row := f.fbSingleRow(t, "op-plan")
 		require.Equal(t, fbSkipNeedsNewBook, row.Skipped, row.SkipReason)
@@ -341,7 +341,7 @@ func TestFolderBooksFixer_SkipKinds(t *testing.T) {
 	t.Run("no heir", func(t *testing.T) {
 		// Shadow cannot be crowned (not organized): FB is held, not retired
 		// into a headless group.
-		f := newFragFixture(t)
+		f := newGlobalRootFragFixture(t)
 		f.seedWolfe(t, fbITunes, "citadel")
 		imported := "imported"
 		_, err := f.s.ModifyBook(f.ids["shadow"], func(b *database.Book) error { b.LibraryState = &imported; return nil })
@@ -355,7 +355,7 @@ func TestFolderBooksFixer_SkipKinds(t *testing.T) {
 // whose only members are the row's own folder-books has nobody to hand to,
 // and nobody who needs it: the row applies.
 func TestFolderBooksFixer_GroupOfOnlyFolderBooksNeedsNoHeir(t *testing.T) {
-	f := newFragFixture(t)
+	f := newGlobalRootFragFixture(t)
 	f.seedWolfe(t, fbITunes, "citadel")
 	f.setVG(t, f.ids["shadow"], "vg-shadow", true)
 	row := f.fbSingleRow(t, "op-plan")
@@ -369,7 +369,7 @@ func TestFolderBooksFixer_GroupOfOnlyFolderBooksNeedsNoHeir(t *testing.T) {
 // folder-books hold, and only as Missing rows, gets no book; the row still
 // retires them.
 func TestFolderBooksFixer_MissingOrphansBuildNothing(t *testing.T) {
-	f := newFragFixture(t)
+	f := newGlobalRootFragFixture(t)
 	f.seedWolfe(t, fbITunes, "citadel")
 	for _, role := range []string{"fb", "fb2"} {
 		for _, i := range []int{7, 8} {
@@ -390,7 +390,7 @@ func TestFolderBooksFixer_MissingOrphansBuildNothing(t *testing.T) {
 // TestFolderBooksFixer_Negatives: books that must not be flagged, and the
 // tiers that are listed but never applied.
 func TestFolderBooksFixer_Negatives(t *testing.T) {
-	f := newFragFixture(t)
+	f := newGlobalRootFragFixture(t)
 	// One work titled with its author's name, directly in the author folder.
 	var one []string
 	for i := 1; i <= 6; i++ {
@@ -557,7 +557,7 @@ func TestFBStemAndGroupKey(t *testing.T) {
 // these iTunes books for any other fixer, and still skips Doctor Who / Big
 // Finish / Torchwood for this one.
 func TestFolderBooksFixer_ITunesOptOutIsThisFixerOnly(t *testing.T) {
-	f := newFragFixture(t)
+	f := newGlobalRootFragFixture(t)
 	f.seedWolfe(t, fbITunes, "citadel")
 	ids := []string{f.ids["fb"], f.ids["fb2"]}
 	kind, _, err := repairs.GuardBooks(f.s, nil, nil, repairs.NewPathResolver(), ids)
@@ -638,7 +638,7 @@ func TestFolderBooksFixer_ResumeAfterCrash(t *testing.T) {
 		n     int
 	}{{"book", 0}, {"row", 1}} {
 		t.Run(fmt.Sprintf("%s-%d", stop.stage, stop.n), func(t *testing.T) {
-			f := newFragFixture(t)
+			f := newGlobalRootFragFixture(t)
 			f.seedWolfe(t, fbITunes, "citadel")
 			sw1 := f.path(filepath.Join(fbITunes, "Gene Wolfe", "Sword", "01.mp3"))
 			row := f.fbSingleRow(t, "op-plan")
@@ -687,7 +687,7 @@ func TestFolderBooksFixer_ResumeAfterCrash(t *testing.T) {
 // soft-deleted book holds (a merge loser, a deleted book) was resolved once;
 // the row skips rather than bring it back.
 func TestFolderBooksFixer_PreviouslyResolvedFileIsNotRecreated(t *testing.T) {
-	f := newFragFixture(t)
+	f := newGlobalRootFragFixture(t)
 	f.seedWolfe(t, fbITunes, "citadel")
 	sw1 := f.path(filepath.Join(fbITunes, "Gene Wolfe", "Sword", "01.mp3"))
 	id := f.fbBook(t, "loser", "Sword (old)", sw1, 1200, sw1)
@@ -705,7 +705,7 @@ func TestFolderBooksFixer_PreviouslyResolvedFileIsNotRecreated(t *testing.T) {
 // TestFolderBooksFixer_RootFolderOnlyRetires: a folder-book over the iTunes
 // media root itself never creates books; it is skipped while it has orphans.
 func TestFolderBooksFixer_RootFolderOnlyRetires(t *testing.T) {
-	f := newFragFixture(t)
+	f := newGlobalRootFragFixture(t)
 	var paths []string
 	for _, w := range []string{"Ann/Work One", "Bob/Work Two"} {
 		for i := 1; i <= 3; i++ {
@@ -722,7 +722,7 @@ func TestFolderBooksFixer_RootFolderOnlyRetires(t *testing.T) {
 // title and author that appears between plan and apply stops the row under
 // the merge lock.
 func TestFolderBooksFixer_DuplicateCreatedAfterPlan(t *testing.T) {
-	f := newFragFixture(t)
+	f := newGlobalRootFragFixture(t)
 	f.seedWolfe(t, fbITunes, "citadel")
 	row := f.fbSingleRow(t, "op-plan")
 	require.True(t, row.Applicable(), "%s %s", row.Skipped, row.SkipReason)
@@ -745,7 +745,7 @@ func TestFolderBooksFixer_DuplicateCreatedAfterPlan(t *testing.T) {
 // present copy, waits instead of retiring first and stranding the file on
 // soft-deleted books.
 func TestFolderBooksFixer_SubsetRowNeverStrandsAPresentFile(t *testing.T) {
-	f := newFragFixture(t)
+	f := newGlobalRootFragFixture(t)
 	all := f.seedWolfe(t, fbITunes, "citadel")
 	sw1 := f.path(filepath.Join(fbITunes, "Gene Wolfe", "Sword", "01.mp3"))
 	for _, role := range []string{"fb", "fb2"} {
@@ -849,7 +849,7 @@ func TestFolderBooksFixer_DuplicateIsSymmetric(t *testing.T) {
 	for _, kind := range []string{"authorless", "at-folder"} {
 		for _, when := range []string{"before-plan", "after-plan"} {
 			t.Run(kind+"/"+when, func(t *testing.T) {
-				f := newFragFixture(t)
+				f := newGlobalRootFragFixture(t)
 				f.seedWolfe(t, fbITunes, "citadel")
 				swordDir := f.path(filepath.Join(fbITunes, "Gene Wolfe", "Sword"))
 				add := func() {
@@ -882,7 +882,7 @@ func TestFolderBooksFixer_DuplicateIsSymmetric(t *testing.T) {
 // off before its un-hide) still has the path index handed back to a live
 // row.
 func TestFolderBooksFixer_RevertReindexesAnAlreadyHiddenBook(t *testing.T) {
-	f := newFragFixture(t)
+	f := newGlobalRootFragFixture(t)
 	f.seedWolfe(t, fbITunes, "citadel")
 	swordDir := f.path(filepath.Join(fbITunes, "Gene Wolfe", "Sword"))
 	sw1 := filepath.Join(swordDir, "01.mp3")
@@ -915,7 +915,7 @@ func TestFolderBooksFixer_RevertReindexesAnAlreadyHiddenBook(t *testing.T) {
 // before the apply, and B's apply refuses under the merge lock instead of
 // retiring the only present copy.
 func TestFolderBooksFixer_StrandCheckRunsUnderTheLock(t *testing.T) {
-	f := newFragFixture(t)
+	f := newGlobalRootFragFixture(t)
 	all := f.seedWolfe(t, fbITunes, "citadel")
 	var ann []string
 	for i := 1; i <= 3; i++ {
@@ -941,7 +941,7 @@ func TestFolderBooksFixer_StrandCheckRunsUnderTheLock(t *testing.T) {
 // same-title candidate is checked, however many there are (250 by another
 // author come first), and titles match by fbNorm equality ("It!" is "It").
 func TestFolderBooksFixer_DupNowFindsTheDuplicateAmongManySameTitleBooks(t *testing.T) {
-	f := newFragFixture(t)
+	f := newGlobalRootFragFixture(t)
 	other, err := f.s.CreateAuthor("Someone Else")
 	require.NoError(t, err)
 	mine, err := f.s.CreateAuthor("Stephen King")
@@ -1010,7 +1010,7 @@ func (f *fragFixture) liveTitled(t *testing.T, title string) int {
 // first's book (its create and un-hide moved the library generation, so the
 // shared title index is rebuilt) and refuses.
 func TestFolderBooksFixer_TwoRowsOfOneApplyCreateOneTitle(t *testing.T) {
-	f := newFragFixture(t)
+	f := newGlobalRootFragFixture(t)
 	f.seedWolfe(t, fbITunes, "citadel")
 	f.fbSeedAnn(t)
 	res := f.fbPlan(t, fbFixerID, "op-plan")
@@ -1030,7 +1030,7 @@ func TestFolderBooksFixer_TwoRowsOfOneApplyCreateOneTitle(t *testing.T) {
 // book to the group's title; the generation moved, so the apply rebuilds the
 // index under the lock and refuses.
 func TestFolderBooksFixer_RetitleAfterTheIndexIsCaught(t *testing.T) {
-	f := newFragFixture(t)
+	f := newGlobalRootFragFixture(t)
 	f.seedWolfe(t, fbITunes, "citadel")
 	id := f.fbBook(t, "renamed", "Something Else", f.path("Elsewhere/x.m4b"), 3600)
 	row := f.fbSingleRow(t, "op-plan")
@@ -1053,7 +1053,7 @@ func TestFolderBooksFixer_RetitleAfterTheIndexIsCaught(t *testing.T) {
 func TestFolderBooksFixer_CreatedRowChangedBeforeClaim(t *testing.T) {
 	for _, how := range []string{"moved", "vanished"} {
 		t.Run(how, func(t *testing.T) {
-			f := newFragFixture(t)
+			f := newGlobalRootFragFixture(t)
 			f.seedWolfe(t, fbITunes, "citadel")
 			swordDir := f.path(filepath.Join(fbITunes, "Gene Wolfe", "Sword"))
 			row := f.fbSingleRow(t, "op-plan")
@@ -1095,7 +1095,7 @@ func TestFolderBooksFixer_CreatedRowChangedBeforeClaim(t *testing.T) {
 func TestFolderBooksFixer_SourceRowChangedBeforeReindex(t *testing.T) {
 	for _, how := range []string{"vanished", "moved"} {
 		t.Run(how, func(t *testing.T) {
-			f := newFragFixture(t)
+			f := newGlobalRootFragFixture(t)
 			f.seedWolfe(t, fbITunes, "citadel")
 			row := f.fbSingleRow(t, "op-plan")
 			hit := false

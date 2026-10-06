@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duplicate_copies_round3_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: e4ed5d00-b92e-4387-91d0-1b1b72542bb2
-// last-edited: 2026-10-01
+// last-edited: 2026-10-06
 
 package maintenance
 
@@ -140,7 +140,7 @@ func (c dcCountingStore) Unwrap() database.Store { return c.Store }
 // re-reading only the books written, never the whole library again; a
 // generation bump the store did not log forces the (correct, slower) rebuild.
 func TestTitleIndex_CatchesUpWithoutARebuild(t *testing.T) {
-	f := newFragFixture(t)
+	f := newGlobalRootFragFixture(t)
 	for i := 0; i < 200; i++ {
 		_, err := f.s.CreateBook(&database.Book{Title: fmt.Sprintf("Filler %d", i), FilePath: f.path(fmt.Sprintf("Fill/%d", i))})
 		require.NoError(t, err)
@@ -212,7 +212,7 @@ func (c dcFailReadStore) GetBookByID(id string) (*database.Book, error) {
 // and fail the same way). It drops the cache and rebuilds from the full
 // listing, which answers correctly.
 func TestTitleIndex_ReReadErrorRebuildsInsteadOfWedging(t *testing.T) {
-	f := newFragFixture(t)
+	f := newGlobalRootFragFixture(t)
 	_, err := f.s.CreateBook(&database.Book{Title: "Filler", FilePath: f.path("Fill/0")})
 	require.NoError(t, err)
 	var full atomic.Int32
@@ -275,7 +275,7 @@ func (dcFailModify) ModifyBook(string, func(*database.Book) error) (*database.Bo
 // makes the same promise as the duplicate-copies one: after its repoint, a
 // failing book write is ErrPartiallyApplied and still the write's own error.
 func TestFragmentFixer_PartialKeepsTheCause(t *testing.T) {
-	f := newFragFixture(t)
+	f := newGlobalRootFragFixture(t)
 	f.seed(t)
 	res := f.plan(t, "op-plan")
 	row := findRow(t, res, "moved:"+f.ids["parent"])
@@ -306,7 +306,7 @@ func (s dcFailRetire) ModifyBook(id string, fn func(*database.Book) error) (*dat
 // partial() keeps the failing step's error too (its retire, after the
 // groups were written).
 func TestFolderBooksFixer_PartialKeepsTheCause(t *testing.T) {
-	f := newFragFixture(t)
+	f := newGlobalRootFragFixture(t)
 	f.seedWolfe(t, fbITunes, "citadel")
 	row := f.fbSingleRow(t, "op-plan")
 	require.True(t, row.Applicable(), "skipped: %s %s", row.Skipped, row.SkipReason)
