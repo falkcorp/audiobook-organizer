@@ -962,6 +962,11 @@ type VersionTwinMetadata interface {
 	// metadata_source_hash (the MATCH-4 cluster an apply of that record
 	// joins). Its own accessor rather than one more method on OpsStore.
 	BooksWithMetadataSourceHash(hash string) ([]database.Book, error)
+	// BookIDsWithASIN lists the books whose ASIN is asin (the ISBN/ASIN
+	// index, database.BookNaturalKeyReader.GetBookIDsByISBNASIN). indexed is
+	// false when that index is not built yet, so an empty answer proves
+	// nothing; the fixer then holds rather than read it as "no other book".
+	BookIDsWithASIN(asin string) (ids []string, indexed bool, err error)
 }
 
 // ServerDeps is the narrow interface that *server.Server satisfies implicitly.

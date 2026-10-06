@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.38.0
+// version: 1.39.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
 // last-edited: 2026-10-06
 
@@ -89,6 +89,17 @@ func (d fakeDeps) BooksWithMetadataSourceHash(hash string) ([]database.Book, err
 		return nil, errors.New("fakeDeps: no store")
 	}
 	return d.store.GetBooksByMetadataSourceHash(hash)
+}
+func (d fakeDeps) BookIDsWithASIN(asin string) ([]string, bool, error) {
+	if d.store == nil {
+		return nil, false, errors.New("fakeDeps: no store")
+	}
+	flag, ok := database.AsCapability[interface{ IsISBNIndexBuilt() bool }](d.store)
+	if !ok || !flag.IsISBNIndexBuilt() {
+		return nil, false, nil
+	}
+	ids, err := d.store.GetBookIDsByISBNASIN("", "", asin)
+	return ids, true, err
 }
 
 // CandidateRefetcher (unused by these fakes; the lost-candidates fixer tests

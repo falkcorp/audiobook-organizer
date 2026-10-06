@@ -1,5 +1,5 @@
 // file: internal/undo/engine.go
-// version: 1.30.0
+// version: 1.31.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
 // last-edited: 2026-10-06
 //
@@ -342,6 +342,29 @@ func preflightRow(store ConflictChecker, c *database.OperationChange, stamps Sof
 		}
 		_, cerr := CheckUserBookStateSet(cur, c)
 		return verdictOf(cerr)
+	case ChangeTypeMetadataApply:
+		// The revert undoes the apply's history batch field by field
+		// (metafetch.Service.UndoApplyBatch). The preflight store does not
+		// read change history, so it proves only that the book is there; a
+		// field edited since is still left by the revert, never overwritten.
+		_, refusal := CheckRestoreBook(store, c.BookID)
+		return rowVerdict{refusal: refusal}
+	case ChangeTypeMetadataCacheCopy:
+		// The revert deletes or restores the cache row only while it still
+		// carries the copy's stamp (CheckMetadataCacheCopy). It fails closed
+		// on a store that cannot read cache rows, and so does this.
+		if _, refusal := CheckRestoreBook(store, c.BookID); refusal != nil {
+			return rowVerdict{refusal: refusal}
+		}
+		r, ok := store.(MetadataCacheReader)
+		if !ok {
+			return rowVerdict{refusal: refuse(ReasonFieldUnreadable, "this store cannot read book %s's candidate cache", c.BookID)}
+		}
+		cur, err := r.GetMetadataCache(c.BookID)
+		if err != nil {
+			return rowVerdict{refusal: refuse(ReasonFieldUnreadable, "read the candidate cache of %s: %v", c.BookID, err)}
+		}
+		return verdictOf(CheckMetadataCacheCopy(cur, c))
 	case ChangeTypeRepairBookCreate:
 		// The revert soft-deletes the created book; one that is absent or
 		// already soft-deleted counts restored, one whose rows moved or that

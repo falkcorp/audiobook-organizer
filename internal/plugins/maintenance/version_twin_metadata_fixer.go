@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/version_twin_metadata_fixer.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2f6c8e14-7b3a-4d59-9e02-c4a1b7d36e85
 // last-edited: 2026-10-06
 
@@ -24,6 +24,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
+	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
@@ -59,17 +60,29 @@ const (
 	vtHoldHashShared       = "hash_shared_outside_group"
 	vtHoldGone             = "gone"
 	vtHoldReadError        = "error"
+	vtHoldASINElsewhere    = "asin_on_book_outside_group"
+	vtHoldPrimaryVerdict   = "primary_has_fetch_verdict"
+	vtHoldOwnerManual      = "record_owner_manual_only"
 )
 
-// vtChangeTypeCacheCopy is the operation-journal row a candidate copy writes
-// after the copy (ledger after write). The op revert does not reverse it (it
-// is reported not restorable): it is fetch state, and a later candidate fetch
-// for the book replaces it.
-const vtChangeTypeCacheCopy = "metadata_cache_copy"
-
 // vtDurationTolerance: twins whose known runtimes differ by more than this
-// fraction are different editions.
+// fraction are different editions (held).
 const vtDurationTolerance = 0.05
+
+// vtEvidenceTolerance / vtEvidenceSlackSec: runtimes this close (1%, or 60 s
+// for a short book; a provider's runtime is whole minutes) are evidence of
+// one edition, which the edition-bound fields (vtEditionFields) require.
+const (
+	vtEvidenceTolerance = 0.01
+	vtEvidenceSlackSec  = 60
+)
+
+// vtEditionFields are the apply fields that name one edition, not the work:
+// they are copied from a twin's record only with positive evidence that the
+// primary is that edition (vtEditionEvidence). The rest of the record
+// (description, series, genre, ...) is the work's and is copied on the
+// title-and-author identity alone.
+var vtEditionFields = map[string]bool{"narrator": true, "asin": true, "isbn": true, "abridged": true, "duration_sec": true}
 
 // versionTwinFixer copies metadata to a version group's primary book from a
 // twin in the same group. The 2026-10-05 census found ~859 primaries counted
@@ -96,17 +109,35 @@ const vtDurationTolerance = 0.05
 //     when the primary's title and author match the twin's after
 //     normalisation. Nothing is applied; the primary joins the review lane.
 //
-// The fixer NEVER changes which book is primary: it writes only the existing
-// primary, and the apply's under-lock guard refuses a book that stopped being
-// the primary. A record another version group's book also carries is held
-// (hash_shared_outside_group): MATCH-4 would run a cross-group election on
-// apply and could flag this group merged.
+// The fixer NEVER changes which book is primary, and writes no book but the
+// primary: the apply's under-lock guard refuses a book that stopped being the
+// primary, and the apply runs with SkipHashElection, so the post-commit
+// MATCH-4 election (which demotes and merges books outside the survivor's
+// group, with no iTunes check of its own) never runs for it. A record a book
+// outside the group also carries is held (hash_shared_outside_group) at plan
+// time and refused again inside the write.
+//
+// Edition-bound fields (vtEditionFields: narrator, ASIN, ISBN, abridged,
+// runtime) are copied only with positive evidence that the primary is the
+// twin's edition (vtEditionEvidence); without it they are dropped from the
+// apply and the rest of the record is still applied. A record whose ASIN a
+// live book outside the group carries is held (asin_on_book_outside_group).
 //
 // ITunesDatabaseOnly: twins are often iTunes copies, which this fixer only
 // reads; the framework's iTunes path guard would otherwise hold every such
 // group. The primary itself is held when it is iTunes-linked
-// (itunesCopyWhy), so no iTunes-linked book is written. Doctor Who / Big
-// Finish / Torchwood stay guarded on every member.
+// (itunesCopyWhy), at plan time and again inside the write (vtWriteGuard),
+// so no iTunes-linked book is written. Doctor Who / Big Finish / Torchwood
+// stay guarded on every member by the framework, and the twin's record (or
+// every copied candidate) is checked here too (record_owner_manual_only).
+//
+// Undo: an applied_twin apply records its change history under the batch id
+// <op id>:<primary id>, sourced to this fixer, writes nothing outside that
+// batch (BookRowOnly: no tags, no provenance), and journals one
+// undo.ChangeTypeMetadataApply row after the commit, so both "undo last
+// apply" and the op revert undo it. A candidate copy journals the primary's
+// prior cache state (undo.ChangeTypeMetadataCacheCopy), and the op revert
+// removes the copy.
 type versionTwinFixer struct{ p *Plugin }
 
 func newVersionTwinFixer(p *Plugin) *versionTwinFixer { return &versionTwinFixer{p: p} }
@@ -118,10 +149,13 @@ func (f *versionTwinFixer) Title() string { return "Copy metadata from a version
 func (f *versionTwinFixer) Description() string {
 	return "Version groups whose primary book has no metadata applied while another version of the same book does, or " +
 		"holds fetched candidates. Apply carries an applied twin's record onto the primary through the normal metadata " +
-		"apply (fill-only, journaled, undoable with \"undo last apply\"), or copies a twin's candidates onto the primary " +
-		"for review. The primary is never changed or re-elected. Held: twins that disagree, a different edition " +
-		"(runtime, abridgement or narrator), locked fields, iTunes-linked or not-ABS-listed primaries, a different " +
-		"title/author, an ASIN conflict, and Doctor Who / Big Finish / Torchwood."
+		"apply (fill-only; no tags; undoable from the operation or with \"undo last apply\"), or copies a twin's " +
+		"candidates onto the primary for review (undoable from the operation). The primary is never changed or " +
+		"re-elected, and no other book is written. Narrator, ASIN, ISBN, abridgement and runtime are copied only when " +
+		"the runtimes or the narrator show the primary is the twin's edition. Held: twins that disagree, a different " +
+		"edition (runtime, abridgement or narrator), locked fields, iTunes-linked or not-ABS-listed primaries, a " +
+		"different title/author, an ASIN conflict or an ASIN a book outside the group carries, a primary whose fetch " +
+		"found nothing, and Doctor Who / Big Finish / Torchwood (the books or the record)."
 }
 
 // ITunesDatabaseOnly: see the type comment. The fixer writes no file and no
@@ -139,6 +173,12 @@ type vtDetail struct {
 	// guard refuses a primary retitled since.
 	title string
 	asin  string
+	// fields is the apply allowlist (applied_twin): vtApplyFields less the
+	// edition-bound fields when there is no edition evidence.
+	fields []string
+	// hash is the record's metadata_source_hash (applied_twin): the write
+	// re-checks that no book outside the group has gained it.
+	hash string
 }
 
 // vtMember is one live member of a group with what the row reads of it.
@@ -160,12 +200,14 @@ type vtReaders struct {
 	cache database.MetadataCacheStore
 	svc   VersionTwinMetadataService
 	hash  func(string) ([]database.Book, error)
+	asin  func(string) ([]string, bool, error)
 	res   *repairs.PathResolver
 }
 
 func (f *versionTwinFixer) readers(res *repairs.PathResolver) (vtReaders, error) {
 	r := vtReaders{store: f.p.deps.OpsStore(), cache: f.p.deps.MetadataCacheStore(),
-		svc: f.p.deps.VersionTwinMetadataService(), hash: f.p.deps.BooksWithMetadataSourceHash, res: res}
+		svc: f.p.deps.VersionTwinMetadataService(), hash: f.p.deps.BooksWithMetadataSourceHash,
+		asin: f.p.deps.BookIDsWithASIN, res: res}
 	if r.store == nil || r.cache == nil {
 		return r, fmt.Errorf("database not initialized")
 	}
@@ -177,8 +219,15 @@ func (f *versionTwinFixer) readers(res *repairs.PathResolver) (vtReaders, error)
 
 // vtLive reports whether b is a live member: not trashed, not merged away.
 func vtLive(b *database.BookCore) bool {
-	return !b.IsSoftDeleted() && dcStr(b.MergedIntoBookID) == ""
+	return !b.IsSoftDeleted() && !vtMerged(b.MergedIntoBookID)
 }
+
+// vtMerged reports whether a merged_into_book_id names a book: nil and a
+// blank string are both "not merged", as in metafetch's ASIN backfill and the
+// book-shape report. (The store's hash lookup, GetBooksByMetadataSourceHash,
+// drops any non-nil pointer; a blank one is therefore missing from its answer
+// here and from MATCH-4's alike, so the two never disagree about a cluster.)
+func vtMerged(p *string) bool { return p != nil && strings.TrimSpace(*p) != "" }
 
 func vtIsPrimary(b *database.BookCore) bool {
 	return b.IsPrimaryVersion != nil && *b.IsPrimaryVersion
@@ -401,6 +450,10 @@ func (f *versionTwinFixer) row(rd vtReaders, gid string, members []database.Book
 		if p.candidates() > 0 {
 			return b.hold(vtHoldPrimaryCands, "the primary already holds fetched candidates of its own"), false, nil
 		}
+		if vtCacheVerdict(p.entry) {
+			return b.hold(vtHoldPrimaryVerdict, "the primary's own candidate fetch ran and found nothing (its cache row "+
+				"holds that verdict); copying the twin's candidates over it would erase it"), true, nil
+		}
 	default:
 		return b.hold(vtHoldNoSource, "no twin is applied or holds candidates"), false, nil
 	}
@@ -501,12 +554,16 @@ func (f *versionTwinFixer) row(rd vtReaders, gid string, members []database.Book
 	}
 
 	// Same edition.
-	if why := vtEditionDiffers(&p.core, &t.core); why != "" {
-		return b.hold(vtHoldEdition, why), true, nil
-	}
-
 	pBook := p.core.ToBook()
 	tBook := t.core.ToBook()
+	pSec, tSec, err := vtRuntimes(rd, &pBook, &tBook)
+	if err != nil {
+		return repairs.Row{}, false, err
+	}
+	b.note("runtime", strconv.Itoa(pSec), strconv.Itoa(tSec))
+	if why := vtEditionDiffers(&p.core, &t.core, pSec, tSec); why != "" {
+		return b.hold(vtHoldEdition, why), true, nil
+	}
 	if b.r.Class == vtClassApplied {
 		if cand == nil {
 			return b.hold(vtHoldUnrecoverable, "no cached candidate of twin "+t.core.ID+" carries its applied record "+
@@ -514,6 +571,10 @@ func (f *versionTwinFixer) row(rd vtReaders, gid string, members []database.Book
 		}
 		hash := metafetch.CandidateSourceHash(*cand)
 		b.note("cand", hash)
+		if why := vtRecordManualOnly(cand); why != "" {
+			return b.hold(vtHoldOwnerManual, "the twin's record "+why+"; Doctor Who / Big Finish / Torchwood are "+
+				"applied by hand"), true, nil
+		}
 		if why := vtIdentity(pBook.Title, pAuthors, cand.Title, tAuthors); why != "" {
 			return b.hold(vtHoldIdentity, why), true, nil
 		}
@@ -532,16 +593,43 @@ func (f *versionTwinFixer) row(rd vtReaders, gid string, members []database.Book
 			return b.hold(vtHoldHashShared, "the twin's record is also carried by "+strings.Join(outside, ", ")+
 				" outside this version group; applying it would run a cross-group duplicate election"), true, nil
 		}
-		b.r.Proposed["primary_review_status"] = "matched"
-		// Fill-only: the record fills the primary's empty fields.
-		if dcStr(p.core.Narrator) == "" && cand.Narrator != "" {
-			b.r.Proposed["primary_narrator"] = cand.Narrator
+		elsewhere, indexed, err := vtASINOutsideGroup(rd, gid, cand.ASIN)
+		if err != nil {
+			return repairs.Row{}, false, err
 		}
-		if dcStr(p.core.ASIN) == "" && cand.ASIN != "" {
-			b.r.Proposed["primary_asin"] = cand.ASIN
+		b.note("asin-elsewhere", strings.Join(elsewhere, ","), strconv.FormatBool(indexed))
+		switch {
+		case !indexed:
+			return b.hold(vtHoldASINElsewhere, "the ASIN index is not built yet, so it cannot be told whether a book "+
+				"outside this group carries the record's ASIN "+cand.ASIN), true, nil
+		case len(elsewhere) > 0:
+			return b.hold(vtHoldASINElsewhere, "the record's ASIN "+cand.ASIN+" is carried by "+strings.Join(elsewhere, ", ")+
+				" outside this version group; the record may be that book's"), true, nil
+		}
+		evidence := vtEditionEvidence(&p.core, cand, pSec, tSec)
+		b.note("evidence", evidence)
+		fields := vtApplyFields(evidence != "")
+		b.r.Proposed["primary_review_status"] = "matched"
+		// Fill-only: the record fills the primary's empty fields; the
+		// edition-bound ones only with evidence.
+		if evidence != "" {
+			if dcStr(p.core.Narrator) == "" && cand.Narrator != "" {
+				b.r.Proposed["primary_narrator"] = cand.Narrator
+			}
+			if dcStr(p.core.ASIN) == "" && cand.ASIN != "" {
+				b.r.Proposed["primary_asin"] = cand.ASIN
+			}
+			b.r.Evidence = append(b.r.Evidence, "same edition: "+evidence)
+		} else {
+			b.r.Evidence = append(b.r.Evidence, "no evidence the primary is the twin's edition (runtimes not "+
+				"known within 1%, narrator not the record's): narrator, ASIN, ISBN, abridgement and runtime are not copied")
 		}
 		b.r.Reason = fmt.Sprintf("twin %s had %s metadata applied (record %s); the primary is the same book (same "+
 			"title and author) and has none", t.core.ID, cand.Source, vtRecord(cand))
+		b.r.Fingerprint = vtFingerprint(b.r, strings.Join(b.fp, "\x00"))
+		b.r.Detail = &vtDetail{class: b.r.Class, groupID: gid, primaryID: p.core.ID, twinID: t.core.ID, cand: cand,
+			title: util.NormalizeTitle(p.core.Title), asin: dcStr(p.core.ASIN), fields: fields, hash: hash}
+		return b.r, true, nil
 	} else {
 		if why := vtIdentity(pBook.Title, pAuthors, tBook.Title, tAuthors); why != "" {
 			return b.hold(vtHoldIdentity, why), true, nil
@@ -555,6 +643,10 @@ func (f *versionTwinFixer) row(rd vtReaders, gid string, members []database.Book
 		}
 		if verr := rd.svc.ValidateCachedIdentityForBook(t.entry, &tBook, tAuthors); verr != nil {
 			return b.hold(vtHoldIdentityStale, "the twin's candidates were fetched for a title or author it no longer has: "+verr.Error()), true, nil
+		}
+		if why := vtCandidatesManualOnly(t.entry); why != "" {
+			return b.hold(vtHoldOwnerManual, "a candidate of the twin "+why+"; Doctor Who / Big Finish / Torchwood are "+
+				"applied by hand"), true, nil
 		}
 		b.r.Proposed["primary_candidates"] = strconv.Itoa(t.candidates())
 		b.r.Reason = fmt.Sprintf("twin %s holds %d fetched candidates for the same title and author; the primary has "+
@@ -682,13 +774,14 @@ func vtTwinsDisagree(ms []vtMember, idx []int, authors func(int) ([]string, erro
 }
 
 // vtEditionDiffers names why the twin is a different edition of the
-// primary: runtimes more than 5% apart (both known), abridged against
-// unabridged, or different narrators (both known).
-func vtEditionDiffers(p, t *database.BookCore) string {
-	if p.Duration != nil && t.Duration != nil && *p.Duration > 0 && *t.Duration > 0 {
-		a, b := float64(*p.Duration), float64(*t.Duration)
+// primary: runtimes more than 5% apart (both known, pSec/tSec from
+// vtRuntimes), abridged against unabridged, or different narrators (both
+// known).
+func vtEditionDiffers(p, t *database.BookCore, pSec, tSec int) string {
+	if pSec > 0 && tSec > 0 {
+		a, b := float64(pSec), float64(tSec)
 		if math.Abs(a-b)/math.Max(a, b) > vtDurationTolerance {
-			return fmt.Sprintf("runtimes differ by more than 5%% (primary %d, twin %d)", *p.Duration, *t.Duration)
+			return fmt.Sprintf("runtimes differ by more than 5%% (primary %ds, twin %ds)", pSec, tSec)
 		}
 	}
 	if p.Abridged != nil && t.Abridged != nil && *p.Abridged != *t.Abridged {
@@ -754,17 +847,139 @@ func vtBoolStr(p *bool) string {
 	return strconv.FormatBool(*p)
 }
 
-// vtApplyFields is every apply field except title and author: the row
+// vtApplyFields is every apply field except title and author (the row
 // requires the primary to hold the record's title and author already, so the
-// apply never rewrites them.
-func vtApplyFields() []string {
+// apply never rewrites them), and, without edition evidence, except the
+// edition-bound fields (vtEditionFields).
+func vtApplyFields(sameEdition bool) []string {
 	var out []string
 	for _, k := range metafetch.ApplyFieldKeys() {
-		if k != "title" && k != "author" {
-			out = append(out, k)
+		if k == "title" || k == "author" || (!sameEdition && vtEditionFields[k]) {
+			continue
 		}
+		out = append(out, k)
 	}
 	return out
+}
+
+// vtRuntimes is the known runtime, in seconds, of the primary and the twin
+// (0 when not known): database.LoadBookRuntime's KnownSeconds, the reading
+// every runtime comparison must use (Book.Duration is a display aggregate).
+func vtRuntimes(rd vtReaders, p, t *database.Book) (int, int, error) {
+	var out [2]int
+	for i, b := range []*database.Book{p, t} {
+		rt, err := database.LoadBookRuntime(rd.store, b)
+		if err != nil {
+			return 0, 0, fmt.Errorf("read the runtime of %s: %w", b.ID, err)
+		}
+		out[i], _ = rt.KnownSeconds()
+	}
+	return out[0], out[1], nil
+}
+
+// vtRuntimesAgree: both known and within vtEvidenceTolerance (or
+// vtEvidenceSlackSec).
+func vtRuntimesAgree(a, b int) bool {
+	if a <= 0 || b <= 0 {
+		return false
+	}
+	d := a - b
+	if d < 0 {
+		d = -d
+	}
+	return d <= max(int(float64(max(a, b))*vtEvidenceTolerance), vtEvidenceSlackSec)
+}
+
+// vtEditionEvidence names the positive evidence that the primary is the
+// edition the twin's record describes, "" when there is none:
+//   - runtimes: the primary's and the twin's known runtimes agree within 1%,
+//     and so does the record's own runtime when it has one;
+//   - narrator: the primary already carries the record's narrator.
+//
+// An empty narrator or an unknown runtime is never evidence.
+func vtEditionEvidence(p *database.BookCore, cand *metafetch.MetadataCandidate, pSec, tSec int) string {
+	if vtRuntimesAgree(pSec, tSec) && (cand.DurationSec <= 0 || vtRuntimesAgree(pSec, cand.DurationSec)) {
+		ev := fmt.Sprintf("runtimes agree within 1%% (primary %ds, twin %ds", pSec, tSec)
+		if cand.DurationSec > 0 {
+			ev += fmt.Sprintf(", record %ds", cand.DurationSec)
+		}
+		return ev + ")"
+	}
+	if pn := fbNorm(dcStr(p.Narrator)); pn != "" && pn == fbNorm(cand.Narrator) {
+		return fmt.Sprintf("the primary already carries the record's narrator %q", cand.Narrator)
+	}
+	return ""
+}
+
+// vtASINOutsideGroup lists the live books outside group gid whose ASIN is
+// asin. indexed is false when the ASIN index is not built (the answer then
+// proves nothing). No ASIN: nothing to check.
+func vtASINOutsideGroup(rd vtReaders, gid, asin string) ([]string, bool, error) {
+	asin = strings.TrimSpace(asin)
+	if asin == "" {
+		return nil, true, nil
+	}
+	ids, indexed, err := rd.asin(asin)
+	if err != nil {
+		return nil, false, fmt.Errorf("read books carrying ASIN %s: %w", asin, err)
+	}
+	var out []string
+	for _, id := range ids {
+		b, err := rd.store.GetBookByID(id)
+		if err != nil {
+			return nil, false, fmt.Errorf("read book %s (ASIN %s): %w", id, asin, err)
+		}
+		if b == nil {
+			continue
+		}
+		c := b.Core()
+		// The index can lag a cleared or changed ASIN; the row decides.
+		if vtLive(&c) && dcStr(c.VersionGroupID) != gid && strings.EqualFold(dcStr(c.ASIN), asin) {
+			out = append(out, id)
+		}
+	}
+	sort.Strings(out)
+	return out, indexed, nil
+}
+
+// vtCacheVerdict reports whether a cache row with no candidates records a
+// fetch outcome (a search that ran and found nothing): a search fingerprint,
+// an empty-fetch time or a provider's empty answer.
+func vtCacheVerdict(e *database.MetadataCandidateCache) bool {
+	return e != nil && len(e.Candidates) == 0 &&
+		(e.SearchFingerprint != "" || e.LastEmptyFetchAt != nil || len(e.EmptyAnswers) > 0)
+}
+
+// vtRecordManualOnly names how a record marks Doctor Who / Big Finish /
+// Torchwood (applygate.IsOwnerManualOnly on its title, subtitle, series and
+// publisher), "" when it does not.
+func vtRecordManualOnly(c *metafetch.MetadataCandidate) string {
+	for _, v := range []struct{ field, value string }{{"title", c.Title}, {"subtitle", c.Subtitle},
+		{"series", c.Series}, {"secondary series", c.SeriesSecondary}, {"publisher", c.Publisher}} {
+		if v.value != "" && applygate.IsOwnerManualOnly(v.value, "") {
+			return fmt.Sprintf("has %s %q", v.field, v.value)
+		}
+	}
+	return ""
+}
+
+// vtCandidatesManualOnly runs vtRecordManualOnly over every candidate a copy
+// would carry. A candidate that does not decode cannot be cleared, so it
+// holds too.
+func vtCandidatesManualOnly(e *database.MetadataCandidateCache) string {
+	if e == nil {
+		return ""
+	}
+	for i, raw := range e.Candidates {
+		var c metafetch.MetadataCandidate
+		if err := json.Unmarshal(raw, &c); err != nil {
+			return fmt.Sprintf("(#%d) could not be read to check it: %v", i+1, err)
+		}
+		if why := vtRecordManualOnly(&c); why != "" {
+			return fmt.Sprintf("(#%d) %s", i+1, why)
+		}
+	}
+	return ""
 }
 
 // errVTChanged wraps repairs.ErrChangedSincePlan for the under-lock guard.
@@ -773,12 +988,14 @@ func errVTChanged(format string, args ...any) error {
 }
 
 // vtStillNeeds is the under-lock check on the primary's row: still this
-// group's primary, still unapplied and not "no match", same title and ASIN as
-// planned.
+// group's live primary, still unapplied and not "no match", same title and
+// ASIN as planned.
 func vtStillNeeds(b *database.Book, d *vtDetail) error {
 	switch {
 	case b == nil || b.IsSoftDeleted():
 		return errVTChanged("primary %s is gone", d.primaryID)
+	case vtMerged(b.MergedIntoBookID):
+		return errVTChanged("book %s was merged into %s", d.primaryID, dcStr(b.MergedIntoBookID))
 	case b.IsPrimaryVersion == nil || !*b.IsPrimaryVersion:
 		return errVTChanged("book %s is no longer its group's primary", d.primaryID)
 	case dcStr(b.VersionGroupID) != d.groupID:
@@ -793,63 +1010,166 @@ func vtStillNeeds(b *database.Book, d *vtDetail) error {
 	return nil
 }
 
+// vtWriteGuard is the check both classes run on the primary's row as it
+// stands immediately before the write (inside the apply's ModifyBook, under
+// the book's write stripe; just before the cache Put for a copy): vtStillNeeds,
+// then every iTunes signal the plan checks (vtITunesWhy: the book's iTunes id,
+// its book_file rows' iTunes ids and paths, a live iTunes external id, a path
+// in the iTunes library), then, for an apply, that no book outside the group
+// has gained the record (vtOutsideGroup). The framework's own path guard is
+// off for this fixer (ITunesDatabaseOnly), so this is the only iTunes check
+// between the re-plan and the write.
+//
+// The reads take no lock of their own (Pebble prefix iterations and point
+// reads; the hash lookup reads memdb or scans rows), so none can wait on the
+// stripe held here, as in the scan-title-revert fixer's write callback. An id
+// landing after them still races only for the width of one batch.
+func vtWriteGuard(rd vtReaders, d *vtDetail, b *database.Book) error {
+	if err := vtStillNeeds(b, d); err != nil {
+		return err
+	}
+	core := b.Core()
+	why, doubt, err := vtITunesWhy(rd, &core)
+	switch {
+	case err != nil:
+		return err
+	case why != "":
+		return errVTChanged("book %s is now iTunes-linked (%s)", d.primaryID, why)
+	case doubt:
+		return errVTChanged("could not tell whether book %s is iTunes-linked", d.primaryID)
+	}
+	if d.hash != "" {
+		outside, err := vtOutsideGroup(rd, d.groupID, d.hash)
+		if err != nil {
+			return err
+		}
+		if len(outside) > 0 {
+			return errVTChanged("the record is now carried by %s outside version group %s", strings.Join(outside, ", "), d.groupID)
+		}
+	}
+	return nil
+}
+
 // errVTMatchNotRecorded: the apply wrote but did not stamp the match.
 var errVTMatchNotRecorded = errors.New("the apply did not record the match")
 
+// vtBatchID is the change-history batch id of the apply of one row: the op's
+// id and the primary's, so every history row of the apply names the op that
+// wrote it, and the journal row names the batch.
+func vtBatchID(opID, primaryID string) string { return opID + ":" + primaryID }
+
+// vtHistorySource is what the apply's change history records as its source.
+func vtHistorySource(d *vtDetail) string {
+	return fmt.Sprintf("%s (from twin %s, %s record)", versionTwinFixerID, d.twinID, d.cand.Source)
+}
+
 // Apply writes one fresh row: the twin's record applied to the primary, or
 // the twin's candidates copied onto it. Neither goes through w's book
-// primitives (the apply records its own change history after the commit;
-// the candidate cache is not a book row), so each is preceded by w.Beat to
-// renew the scan stand-down lease, and the copy is journaled after it lands.
+// primitives (the apply records its own change history after the commit; the
+// candidate cache is not a book row), so each is preceded by w.Beat to renew
+// the scan stand-down lease, and each is journaled under the op AFTER it
+// lands (ledger after write: a journal row never describes a write that did
+// not happen). A crash between the write and its journal row leaves the write
+// with its change history (undo last apply still reverts an apply) and no op
+// row; a journal failure is reported as repairs.ErrPartiallyApplied.
 func (f *versionTwinFixer) Apply(_ context.Context, w *repairs.Writer, fresh repairs.Row) error {
 	d, ok := fresh.Detail.(*vtDetail)
 	if !ok || d == nil {
 		return fmt.Errorf("row %s: no apply detail from the re-plan", fresh.RowID)
 	}
-	svc := f.p.deps.VersionTwinMetadataService()
-	if svc == nil {
-		return fmt.Errorf("metadata fetch service not initialized")
+	if w.OpID() == "" {
+		return fmt.Errorf("row %s: %w", fresh.RowID, repairs.ErrNotJournaled)
 	}
-	guard := func(b *database.Book) error { return vtStillNeeds(b, d) }
+	rd, err := f.readers(repairs.NewPathResolver())
+	if err != nil {
+		return err
+	}
+	guard := func(b *database.Book) error { return vtWriteGuard(rd, d, b) }
 	switch d.class {
 	case vtClassApplied:
-		if err := w.Beat("metadata apply on book " + d.primaryID); err != nil {
-			return err
-		}
-		// FillOnly: an automatic apply (nobody picked this candidate for this
-		// book): filled descriptive fields are kept, a "no match" is
-		// refused, and the match is stamped because the primary holds the
-		// record's title. No file work is queued after it.
-		resp, err := svc.ApplyMetadataCandidateWithOptions(d.primaryID, *d.cand, vtApplyFields(),
-			metafetch.ApplyOptions{FillOnly: true, Guard: guard})
-		if err != nil {
-			return fmt.Errorf("apply twin %s's record to %s: %w", d.twinID, d.primaryID, err)
-		}
-		if resp == nil || resp.Book == nil || !database.MetadataApplied(resp.Book.MetadataReviewStatus) {
-			return fmt.Errorf("%w on %s", errVTMatchNotRecorded, d.primaryID)
-		}
-		return nil
+		return f.applyRecord(w, rd.svc, d, guard)
 	case vtClassCandidates:
-		if err := w.Beat("candidate copy onto book " + d.primaryID); err != nil {
-			return err
-		}
-		cp, err := svc.CopyCandidateCache(d.twinID, d.primaryID, func(b *database.Book, cur *database.MetadataCandidateCache) error {
-			if err := guard(b); err != nil {
-				return err
-			}
-			if cur != nil && len(cur.Candidates) > 0 {
-				return errVTChanged("book %s gained candidates of its own", d.primaryID)
-			}
-			return nil
-		})
-		if err != nil {
-			return fmt.Errorf("copy twin %s's candidates to %s: %w", d.twinID, d.primaryID, err)
-		}
-		if jerr := w.Journal(d.primaryID, vtChangeTypeCacheCopy, "candidates", "0",
-			fmt.Sprintf("%d candidates copied from %s", len(cp.Candidates), d.twinID)); jerr != nil {
-			return fmt.Errorf("candidates copied to %s, but the journal row was not recorded: %w", d.primaryID, jerr)
-		}
-		return nil
+		return f.copyCandidates(w, rd.svc, d, guard)
 	}
 	return fmt.Errorf("row %s: unknown class %q", fresh.RowID, d.class)
+}
+
+// applyRecord applies the twin's record to the primary. FillOnly: an
+// automatic apply (nobody picked this candidate for this book): filled
+// descriptive fields are kept, a "no match" is refused, and the match is
+// stamped because the primary holds the record's title. SkipHashElection: no
+// MATCH-4 election (the guard proved no outside book carries the record).
+// BookRowOnly: no tags, provenance, segment titles, backfill or cover, so the
+// history batch is the whole write. RequireHistory: a failed history row is
+// an error, since the revert reads that history.
+func (f *versionTwinFixer) applyRecord(w *repairs.Writer, svc VersionTwinMetadataService, d *vtDetail, guard func(*database.Book) error) error {
+	if err := w.Beat("metadata apply on book " + d.primaryID); err != nil {
+		return err
+	}
+	batch := vtBatchID(w.OpID(), d.primaryID)
+	resp, err := svc.ApplyMetadataCandidateWithOptions(d.primaryID, *d.cand, d.fields, metafetch.ApplyOptions{
+		FillOnly: true, Guard: guard, BatchID: batch, SkipHashElection: true, BookRowOnly: true,
+		HistorySource: vtHistorySource(d), RequireHistory: true,
+	})
+	if resp == nil || resp.Book == nil {
+		if err == nil {
+			err = errors.New("the apply returned no book")
+		}
+		return fmt.Errorf("apply twin %s's record to %s: %w", d.twinID, d.primaryID, err)
+	}
+	// The write committed. Journal it whatever else went wrong, so the op
+	// revert can reach it.
+	jerr := w.Journal(d.primaryID, undo.ChangeTypeMetadataApply, undo.MetadataApplyField, "", batch)
+	switch {
+	case err != nil && jerr != nil:
+		return fmt.Errorf("%w: book %s was written but its history (%v) and its journal row (%v) were not recorded",
+			repairs.ErrPartiallyApplied, d.primaryID, err, jerr)
+	case err != nil:
+		return fmt.Errorf("%w: book %s was written but its change history was not fully recorded: %v",
+			repairs.ErrPartiallyApplied, d.primaryID, err)
+	case jerr != nil:
+		return fmt.Errorf("%w: book %s was written but its journal row was not recorded: %v",
+			repairs.ErrPartiallyApplied, d.primaryID, jerr)
+	}
+	if !database.MetadataApplied(resp.Book.MetadataReviewStatus) {
+		return fmt.Errorf("%w on %s", errVTMatchNotRecorded, d.primaryID)
+	}
+	return nil
+}
+
+// copyCandidates copies the twin's candidates onto the primary. The check
+// runs on the primary and its cache row as re-read just before the write:
+// vtWriteGuard, and no candidates or fetch verdict of its own. The prior
+// row (or its absence) is journaled after the copy, so the op revert
+// removes it again.
+func (f *versionTwinFixer) copyCandidates(w *repairs.Writer, svc VersionTwinMetadataService, d *vtDetail, guard func(*database.Book) error) error {
+	if err := w.Beat("candidate copy onto book " + d.primaryID); err != nil {
+		return err
+	}
+	var prior *database.MetadataCandidateCache
+	cp, err := svc.CopyCandidateCache(d.twinID, d.primaryID, func(b *database.Book, cur *database.MetadataCandidateCache) error {
+		if err := guard(b); err != nil {
+			return err
+		}
+		switch {
+		case cur != nil && len(cur.Candidates) > 0:
+			return errVTChanged("book %s gained candidates of its own", d.primaryID)
+		case vtCacheVerdict(cur):
+			return errVTChanged("book %s's own fetch recorded that it found nothing", d.primaryID)
+		}
+		prior = cur
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("copy twin %s's candidates to %s: %w", d.twinID, d.primaryID, err)
+	}
+	oldV, err := undo.EncodeMetadataCacheOld(prior)
+	if err == nil {
+		err = w.Journal(d.primaryID, undo.ChangeTypeMetadataCacheCopy, undo.MetadataCacheField, oldV, undo.MetadataCacheStamp(cp))
+	}
+	if err != nil {
+		return fmt.Errorf("%w: %d candidates copied to %s, but the journal row was not recorded: %v",
+			repairs.ErrPartiallyApplied, len(cp.Candidates), d.primaryID, err)
+	}
+	return nil
 }
