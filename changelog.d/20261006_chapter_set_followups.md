@@ -32,6 +32,9 @@
     on that book, on one of its file rows, as a live external id, or an
     iTunes library path holds the row, at plan and again under the merge lock
     just before the first write.
+  - A carry row is also held when a retired book its files leave, or one of
+    the moved file rows itself, is an iTunes copy (an iTunes id or path), at
+    plan and again under the merge lock before the first move.
   - Between two rows of one apply, the re-check also reads, fresh, every
     book holding the set's own files (by path and by hash). Writers that take
     no merge lock and write no book (repoints, file recoveries, hash
