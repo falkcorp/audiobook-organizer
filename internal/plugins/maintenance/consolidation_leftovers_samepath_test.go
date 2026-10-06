@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/consolidation_leftovers_samepath_test.go
-// version: 1.1.0
+// version: 1.3.0
 // guid: f05ffd91-1eeb-4d83-be86-1d16d9d8e1e8
 // last-edited: 2026-10-06
 
@@ -122,6 +122,7 @@ func TestLeftoversSamePath_PicksSamePathOwnerOverHashMatch(t *testing.T) {
 func TestLeftoversSamePath_ApplyAndUndo(t *testing.T) {
 	f := newLFFixture(t)
 	l, o, other := f.splashdown(t)
+	f.sameAudioBySize(t, l)
 	require.NoError(t, f.s.CreateExternalIDMapping(&database.ExternalIDMapping{Source: "audible", ExternalID: "B0SPLASH", BookID: l}))
 	u, err := f.s.CreateUser("reader", "reader@example.com", "bcrypt", "x", []string{"user"}, "active")
 	require.NoError(t, err)
@@ -179,6 +180,104 @@ func TestLeftoversSamePath_ApplyAndUndo(t *testing.T) {
 	require.Equal(t, l, owner)
 }
 
+// sameAudioBySize gives the leftover's dead row the owner file's exact size:
+// positive same-audio evidence.
+func (f *lfFixture) sameAudioBySize(t *testing.T, l string) {
+	t.Helper()
+	_, err := f.s.ModifyBookFile(l, f.rowIDs["L"], func(bf *database.BookFile) error { bf.FileSize = 5000; return nil })
+	require.NoError(t, err)
+}
+
+// finishedReader seeds a user who finished the leftover at 100 s in.
+func (f *lfFixture) finishedReader(t *testing.T, l string) string {
+	t.Helper()
+	u, err := f.s.CreateUser("reader", "reader@example.com", "bcrypt", "x", []string{"user"}, "active")
+	require.NoError(t, err)
+	require.NoError(t, f.s.SetUserPosition(u.ID, l, f.rowIDs["L"], 100))
+	require.NoError(t, f.s.SetUserBookState(&database.UserBookState{UserID: u.ID, BookID: l,
+		Status: database.UserBookStatusFinished, ProgressPct: 100}))
+	return u.ID
+}
+
+// TestLeftoversSamePath_NoAudioEvidenceCarriesNoFinish: the shared book path
+// alone proves nothing about the audio (the dead row is 4000 bytes, the
+// owner's file 5000, no hash or length agrees), so a finished leftover never
+// finishes the owner and no position lands on it.
+func TestLeftoversSamePath_NoAudioEvidenceCarriesNoFinish(t *testing.T) {
+	f := newLFFixture(t)
+	l, o, _ := f.splashdown(t)
+	uid := f.finishedReader(t, l)
+	r, ok := lfRow(f.planLF(t, "op-plan"), l)
+	require.True(t, ok)
+	require.True(t, r.Applicable(), r.SkipReason)
+	require.Contains(t, r.Current["same_audio_evidence"], "none")
+	require.Contains(t, r.Current["leftover_audio"], "4000 bytes")
+	require.Contains(t, r.Current["owner_audio"], "5000 bytes")
+	out := f.applyLF(t, "op-plan", "op-apply", []string{"leftover:" + l})
+	require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+	st, err := f.s.GetUserBookState(uid, o)
+	require.NoError(t, err)
+	if st != nil {
+		require.NotEqual(t, database.UserBookStatusFinished, st.Status, "no audio evidence: finished never carries")
+	}
+	pos, err := f.s.ListUserPositionsForBook(uid, o)
+	require.NoError(t, err)
+	require.Empty(t, pos, "no audio evidence: no position carries")
+}
+
+// TestLeftoversSamePath_AudioEvidenceCarriesWholeBook: an equal size or an
+// equal hash is the same audio: the whole-book rule carries finished and the
+// position.
+func TestLeftoversSamePath_AudioEvidenceCarriesWholeBook(t *testing.T) {
+	cases := map[string]func(t *testing.T, f *lfFixture, l string){
+		"size": func(t *testing.T, f *lfFixture, l string) { f.sameAudioBySize(t, l) },
+		"hash": func(t *testing.T, f *lfFixture, l string) {
+			require.NoError(t, f.s.SetBookFileHash(f.rowIDs["L"], "hh-owner"))
+		},
+	}
+	for name, setup := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := newLFFixture(t)
+			l, o, _ := f.splashdown(t)
+			setup(t, f, l)
+			uid := f.finishedReader(t, l)
+			r, ok := lfRow(f.planLF(t, "op-plan"), l)
+			require.True(t, ok)
+			require.True(t, r.Applicable(), r.SkipReason)
+			require.Contains(t, r.Current["same_audio_evidence"], name)
+			out := f.applyLF(t, "op-plan", "op-apply", []string{"leftover:" + l})
+			require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+			st, err := f.s.GetUserBookState(uid, o)
+			require.NoError(t, err)
+			require.NotNil(t, st)
+			require.Equal(t, database.UserBookStatusFinished, st.Status)
+			pos, err := f.s.ListUserPositionsForBook(uid, o)
+			require.NoError(t, err)
+			require.Len(t, pos, 1)
+			require.InDelta(t, 100, pos[0].PositionSeconds, 0.01)
+		})
+	}
+}
+
+// TestLeftoversSamePath_MultiFileOwnerSlice: a multi-file owner gets a slice
+// at the shared file's place, counted over its LIVE rows only (a Missing row
+// with no length does not make it unmappable).
+func TestLeftoversSamePath_MultiFileOwnerSlice(t *testing.T) {
+	f := newLFFixture(t)
+	l, o, _ := f.splashdown(t)
+	f.sameAudioBySize(t, l)
+	_, err := f.s.ModifyBookFile(o, f.rowIDs["O"], func(bf *database.BookFile) error { bf.TrackNumber = 3; return nil })
+	require.NoError(t, err)
+	p1 := f.file(t, spSeries+"/35 - Splashdown/part 2.m4b", 100)
+	require.NoError(t, f.s.CreateBookFile(&database.BookFile{BookID: o, FilePath: p1, FileSize: 100, Duration: 600, TrackNumber: 2}))
+	require.NoError(t, f.s.CreateBookFile(&database.BookFile{BookID: o, FilePath: f.path(spSeries + "/35 - Splashdown/gone.m4b"),
+		FileSize: 100, TrackNumber: 1, Missing: true}))
+	r, ok := lfRow(f.planLF(t, "op-plan"), l)
+	require.True(t, ok)
+	require.True(t, r.Applicable(), r.SkipReason)
+	require.Contains(t, r.Current["carries"], "slice at 600 s")
+}
+
 // TestLeftoversSamePath_Holds: every hold the owner named, each its own kind.
 func TestLeftoversSamePath_Holds(t *testing.T) {
 	cases := map[string]struct {
@@ -214,8 +313,44 @@ func TestLeftoversSamePath_Holds(t *testing.T) {
 			})
 			require.NoError(t, err)
 		}, leftoverSkipSamePathNoRow},
+		"owner row carries an iTunes path": {func(t *testing.T, f *lfFixture, _, o string) {
+			_, err := f.s.ModifyBookFile(o, f.rowIDs["O"], func(bf *database.BookFile) error {
+				bf.ITunesPath = "file://localhost/W:/audiobook-organizer/35%20-%20Splashdown.m4b"
+				return nil
+			})
+			require.NoError(t, err)
+		}, leftoverSkipSamePathOwnerITunes},
+		"titles differ": {func(t *testing.T, f *lfFixture, _, o string) {
+			_, err := f.s.ModifyBook(o, func(b *database.Book) error { b.Title = "36 - Breakwater"; return nil })
+			require.NoError(t, err)
+		}, leftoverSkipSamePathIdentity},
+		"authors differ": {func(t *testing.T, f *lfFixture, l, o string) {
+			a1, err := f.s.CreateAuthor("Blaine L. Pardoe")
+			require.NoError(t, err)
+			a2, err := f.s.CreateAuthor("Someone Else")
+			require.NoError(t, err)
+			_, err = f.s.ModifyBook(l, func(b *database.Book) error { b.AuthorID = &a1.ID; return nil })
+			require.NoError(t, err)
+			_, err = f.s.ModifyBook(o, func(b *database.Book) error { b.AuthorID = &a2.ID; return nil })
+			require.NoError(t, err)
+		}, leftoverSkipSamePathIdentity},
+		"same-source ids differ": {func(t *testing.T, f *lfFixture, l, o string) {
+			require.NoError(t, f.s.CreateExternalIDMapping(&database.ExternalIDMapping{Source: "audible", ExternalID: "B0LEFT", BookID: l}))
+			require.NoError(t, f.s.CreateExternalIDMapping(&database.ExternalIDMapping{Source: "audible", ExternalID: "B0OWNER", BookID: o}))
+		}, leftoverSkipSamePathIdentity},
+		"owner in another group, the leftover's group has a live member": {func(t *testing.T, f *lfFixture, _, o string) {
+			other := "vg-other"
+			_, err := f.s.ModifyBook(o, func(b *database.Book) error { b.VersionGroupID = &other; return nil })
+			require.NoError(t, err)
+			f.groupMember(t, "Splashdown (abridged)", nil)
+		}, leftoverSkipSamePathPrimary},
+		"a third primary in the group": {func(t *testing.T, f *lfFixture, _, _ string) {
+			yes := true
+			f.groupMember(t, "Splashdown (dramatized)", &yes)
+		}, leftoverSkipSamePathPrimary},
 		"owner-manual owner": {func(t *testing.T, f *lfFixture, _, o string) {
-			_, err := f.s.ModifyBook(o, func(b *database.Book) error { b.Title = "Doctor Who: Splashdown"; return nil })
+			pub := "Big Finish Productions"
+			_, err := f.s.ModifyBook(o, func(b *database.Book) error { b.Publisher = &pub; return nil })
 			require.NoError(t, err)
 		}, repairs.SkipOwnerManual},
 	}
@@ -231,6 +366,36 @@ func TestLeftoversSamePath_Holds(t *testing.T) {
 			require.False(t, r.Applicable())
 		})
 	}
+}
+
+// groupMember adds a live, organized, non-iTunes member to the Splashdown
+// version group with the given primary flag.
+func (f *lfFixture) groupMember(t *testing.T, title string, primary *bool) string {
+	t.Helper()
+	gid := spGroupID
+	p := f.file(t, spSeries+"/"+title+"/"+title+".m4b", 3000)
+	b, err := f.s.CreateBook(&database.Book{Title: title, FilePath: p})
+	require.NoError(t, err)
+	f.organized(t, b.ID)
+	_, err = f.s.ModifyBook(b.ID, func(bk *database.Book) error {
+		bk.VersionGroupID, bk.IsPrimaryVersion = &gid, primary
+		return nil
+	})
+	require.NoError(t, err)
+	require.NoError(t, f.s.CreateBookFile(&database.BookFile{BookID: b.ID, FilePath: p, FileSize: 3000, TrackNumber: 1}))
+	return b.ID
+}
+
+// TestLeftoversSamePath_ExplicitNonPrimaryGroupMemberDoesNotHold: a third
+// member explicitly non-primary leaves the owner the group's sole primary.
+func TestLeftoversSamePath_ExplicitNonPrimaryGroupMemberDoesNotHold(t *testing.T) {
+	f := newLFFixture(t)
+	l, _, _ := f.splashdown(t)
+	no := false
+	f.groupMember(t, "Splashdown (abridged)", &no)
+	r, ok := lfRow(f.planLF(t, "op-plan"), l)
+	require.True(t, ok)
+	require.True(t, r.Applicable(), r.SkipReason)
 }
 
 // itunesSibling adds an iTunes copy to the Splashdown version group with the

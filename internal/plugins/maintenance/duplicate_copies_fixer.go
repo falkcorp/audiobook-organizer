@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duplicate_copies_fixer.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 937b9ff1-48ce-4136-8ca0-74793e6ed3de
-// last-edited: 2026-10-01
+// last-edited: 2026-10-06
 
 // Repairs-lane fixer "duplicate-copies": merge whole copies of one book that
 // live as separate books, so a chapter fragment that matches every copy has a
@@ -201,12 +201,24 @@ func dcTitleKey(title string) string {
 	return fbNorm(title)
 }
 
-// itunesCopyWhy names why a book is an iTunes copy ("" when it is not): a
-// book PID, a row PID or iTunes path, a path under books/itunes/** (symlinks
-// resolved), an un-tombstoned itunes external id. doubt: a path could not be
-// settled, so it cannot be told. The fragment fixer's iTunes-parent rule
-// shares it.
+// itunesCopyWhy names why a book is an iTunes copy ("" when it is not):
+// itunesOwnershipWhy counting a row's iTunes path reference. The
+// duplicate-copies and fragment fixers share it.
 func itunesCopyWhy(res *repairs.PathResolver, id, pid string, paths []string, rows []fragFile, exts []database.ExternalIDMapping) (why string, doubt bool) {
+	return itunesOwnershipWhy(res, id, pid, paths, rows, exts, true)
+}
+
+// itunesOwnershipWhy is the one iTunes-ownership predicate of the merge
+// fixers (duplicate-copies, fragment-consolidation, consolidation-leftovers),
+// so their checks cannot drift. In order: a book iTunes persistent id; a row
+// iTunes persistent id, or (countPathRef) a row iTunes path reference; an
+// un-tombstoned itunes external id; a path inside an "iTunes Media" folder;
+// a path under books/itunes/** (symlinks resolved). doubt: a path could not
+// be settled, so it cannot be told.
+//
+// countPathRef is false only for a book the consolidation-leftovers fixer
+// retires (owner decision 2026-10-06, see leftoverITunesWhy).
+func itunesOwnershipWhy(res *repairs.PathResolver, id, pid string, paths []string, rows []fragFile, exts []database.ExternalIDMapping, countPathRef bool) (why string, doubt bool) {
 	if pid != "" {
 		return "book iTunes id " + pid, false
 	}
@@ -214,13 +226,18 @@ func itunesCopyWhy(res *repairs.PathResolver, id, pid string, paths []string, ro
 		switch {
 		case r.ITunesPID != "":
 			return "row iTunes id " + r.ITunesPID, false
-		case r.ITunesPath != "":
+		case countPathRef && r.ITunesPath != "":
 			return "row iTunes path " + r.ITunesPath, false
 		}
 	}
 	for _, e := range exts {
 		if e.Source == "itunes" && e.ExternalID != "" && !e.Tombstoned {
 			return "itunes external id " + e.ExternalID, false
+		}
+	}
+	for _, p := range paths {
+		if strings.Contains(p, string(filepath.Separator)+"iTunes Media"+string(filepath.Separator)) {
+			return "file inside an iTunes Media folder: " + p, false
 		}
 	}
 	switch k, w := repairs.GuardBookPathsWith(res, id, paths, ""); k {
