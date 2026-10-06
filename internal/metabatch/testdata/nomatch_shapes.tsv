@@ -1,5 +1,5 @@
 # file: internal/metabatch/testdata/nomatch_shapes.tsv
-# version: 1.0.0
+# version: 1.1.0
 # guid: bc7cbda1-2230-4234-aad9-2c7dd4883dc8
 # last-edited: 2026-10-06
 # Made-up rows, one or a few per shape class of the 2026-10-05 no-match census (732 books). Titles, people and paths are invented.
@@ -15,7 +15,7 @@ r008	read by narrator	The Quiet Field	42		/srv/example-organizer/Book 1 (Unabrid
 r009	read by narrator	Example Book	9		/srv/example-organizer/Example Book/Example, Jane/read by narrator/read by narrator.mp3
 r010	Some Summoner, Vol. 03: The Army of Things	[XYZ]	480		/srv/example-organizer/Pat Reader/Some Summoner/Some Summoner, Vol. 03 - The Army of Things/Some Summoner, Vol. 03 - The Army of Things.m4b
 r011	Some Summoner, Vol. 04 [XYZ]	[XYZ]	470		/srv/example-organizer/Pat Reader/Some Summoner/Some Summoner, Vol. 04 [XYZ]/Some Summoner, Vol. 04 [XYZ].m4b
-r012	The Lighthouse Keeper	AudioHouse [Jane Example]	350		/srv/example-organizer/AudioHouse [Jane Example]/The Lighthouse Keeper
+r012	The Lighthouse Keeper	GraphicAudio [Jane Example]	350		/srv/example-organizer/GraphicAudio [Jane Example]/The Lighthouse Keeper
 r013	Some Title 5_copy1	Jane Example	1200		/srv/example-organizer/Jane Example/Some Title/Some Title 5/Some Title 5_copy1.m4b
 r014	copy1	Example Author	7		/srv/example-organizer/Example Author/copy1/copy1.mp3
 r015	copy2	Opening Words	1		/srv/example-organizer/Opening Words/Opening Words/Opening Words_copy2.mp3

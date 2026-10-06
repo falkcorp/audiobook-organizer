@@ -1,5 +1,5 @@
 // file: internal/metadata/book_name.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 8eab30cb-5e6e-4bc7-bfba-dfb603b81ef2
 // last-edited: 2026-10-06
 //
@@ -61,6 +61,12 @@ type NameEvidence struct {
 	// an unknown trailing name, because "Dune - Frank Herbert" and "The
 	// Witcher - Blood of Elves" are the same shape.
 	FolderName bool
+	// Verbatim reads the name as ParseBookName did before 2026-10-06: no
+	// NormalizeNameText, no trailing "(YYYY)", no organizer track lead. For
+	// the search's identity checks only (metafetch: a cache row fetched
+	// before those rules is still the book's); every parse a search or an
+	// import acts on leaves it false.
+	Verbatim bool
 }
 
 // Shapes ParseBookName recognises, recorded in BookName.Shapes.
@@ -209,7 +215,11 @@ var setWords = map[string]bool{
 // deliberately not read: it is indistinguishable from a real title by shape.
 func ParseBookName(raw string, ev NameEvidence) BookName {
 	var b BookName
-	t, had := StripRipJunk(NormalizeNameText(raw))
+	norm := NormalizeNameText
+	if ev.Verbatim {
+		norm = strings.TrimSpace
+	}
+	t, had := StripRipJunk(norm(raw))
 	if had {
 		b.Shapes = append(b.Shapes, ShapeRipTail)
 	}
@@ -234,7 +244,7 @@ func ParseBookName(raw string, ev NameEvidence) BookName {
 		b.Shapes = append(b.Shapes, ShapeTrackSuffix)
 	}
 
-	if m := yearParenRe.FindStringSubmatchIndex(t); m != nil && hasLetterBefore(t, m[0]) {
+	if m := yearParenRe.FindStringSubmatchIndex(t); m != nil && !ev.Verbatim && hasLetterBefore(t, m[0]) {
 		b.Year = t[m[2]:m[3]]
 		t = strings.TrimSpace(t[:m[0]] + t[m[1]:])
 		b.Shapes = append(b.Shapes, ShapeYearParen)
@@ -288,7 +298,7 @@ trailing:
 	// numbered the file with. Without the trailer a leading number is not
 	// read ("15 - Harry and the Fox", "96 Hours"): by shape alone it may be
 	// the title's.
-	if readByTrailer && f.n() >= 2 && ev.isTrackLead(f.segs[0]) && f.sub(1, f.n()).hasLetter() &&
+	if readByTrailer && !ev.Verbatim && f.n() >= 2 && ev.isTrackLead(f.segs[0]) && f.sub(1, f.n()).hasLetter() &&
 		!IsUnsearchableTitle(f.sub(1, f.n()).text()) {
 		b.Suffix = f.segs[0]
 		b.Shapes = append(b.Shapes, ShapeTrackLead)
@@ -364,7 +374,7 @@ leading:
 	}
 	b.Title = f.text()
 	if b.Title == "" {
-		b.Title = NormalizeNameText(raw)
+		b.Title = norm(raw)
 	}
 	return b
 }

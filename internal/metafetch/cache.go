@@ -1,5 +1,5 @@
 // file: internal/metafetch/cache.go
-// version: 1.26.0
+// version: 1.27.0
 // guid: a4f33a2e-3b4d-4306-bdce-476758e39120
 // last-edited: 2026-10-06
 //
@@ -359,7 +359,11 @@ func (mfs *Service) cachedQueryMatches(entry *MetadataCandidateCache, book *data
 			entry.SourceHash == hashSearchInputs(book.ID, query, hint, "", "") {
 			return true
 		}
-		if author != "" && SearchAuthorHint(author) == "" && entry.SourceHash == noAuthor {
+		// A placeholder credit has always been sent and hashed as no
+		// author. A real credit that only cleans to "" ("[XYZ]") is not
+		// proof of the author: it proves itself through the fingerprint
+		// leg below, which binds the author the search resolved.
+		if author != "" && isPlaceholderCredit(author) && entry.SourceHash == noAuthor {
 			return true
 		}
 	}
@@ -775,7 +779,7 @@ func (mfs *Service) CachedBatchVerdict(book *database.Book, query, author string
 	// CANDIDATES; a "nothing found" under it answered the old questions, not
 	// the fan-out's, so it is re-asked (searchInputVersion).
 	fp := mfs.matchSearchFingerprint(entry.SearchFingerprint, book, query, author, "")
-	if fp == fingerprintStale || (fp == fingerprintLegacy && len(entry.Candidates) == 0) {
+	if fp == fingerprintStale || ((fp == fingerprintLegacy || fp == fingerprintPrior) && len(entry.Candidates) == 0) {
 		return entry, BatchVerdictNone, nil
 	}
 	// The book's ASIN was replaced or cleared after these candidates were

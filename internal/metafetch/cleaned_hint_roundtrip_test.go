@@ -1,5 +1,5 @@
 // file: internal/metafetch/cleaned_hint_roundtrip_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a90831ba-362e-4ef9-b611-020e8c9d8009
 // last-edited: 2026-10-06
 
@@ -24,7 +24,7 @@ import (
 func TestCleanedAuthorHint_RoundTripsThroughTheIdentityChecks(t *testing.T) {
 	for i, author := range []string{
 		"zzJane Example",
-		"AudioHouse [Jane Example]",
+		"GraphicAudio [Jane Example]",
 		"Some Title_copy1",
 		"Some Long Book_10-02",
 		"Jane Example", // unchanged by cleaning
