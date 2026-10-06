@@ -1,7 +1,7 @@
 # file: .errcheck-baseline
-# version: 1.4.2
+# version: 1.4.3
 # guid: 7a4d1e92-3f6b-4c85-9a02-1e6b8d4f2c73
-# last-edited: 2026-10-03
+# last-edited: 2026-10-05
 
 # The number of `errcheck` findings tolerated in the tree. This is a RATCHET,
 # exactly like .interface-width-baseline: CI fails if the count goes UP, and
@@ -62,4 +62,7 @@
 # Same branch, review round: 825 -> 821. PebbleStore.GetScanFailCount and
 # IncrScanFailCount return read and parse errors instead of reading them as 0,
 # and AutoQuarantineFailedScans checks its counter reads and QuarantineBook.
-821
+# 2026-10-05 (fix/keep-candidates-on-identifier-fill): 821 -> 820, measured
+# with this script. The bulk apply no longer discards a candidate-cache
+# invalidation: it no longer deletes the candidate it applied at all.
+820
