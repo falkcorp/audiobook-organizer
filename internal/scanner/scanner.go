@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.128.0
+// version: 1.129.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-10-06
 
@@ -922,6 +922,11 @@ type Book struct {
 	// before the tag read and refreshed after every write the scanner makes,
 	// so the rescan merge can tell another writer's change from its own.
 	rowSnaps map[string]rowSnap
+	// createdRowID is the row THIS scan created for the book (CreateBook in
+	// saveBookToDatabase). The inline AI phase re-saves a new import through
+	// saveBookToDatabase, which then finds that row; it is a new import, so
+	// the identity hold (holdIdentityForExisting) does not apply to it.
+	createdRowID string
 	// scanLockExtra lists rows a previous attempt at this book discovered
 	// mid-save without holding their lock; the restart locks them up front.
 	scanLockExtra []string
@@ -1483,6 +1488,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 	lockGaveUpStart := scanLockGaveUpCount.Load()
 	lockUnreadableStart := scanLockUnreadableCount.Load()
 	lockKeptStart := scanLockKeptFields.Load()
+	identityProposalStart := scanIdentityProposalsRecorded.Load()
 	lockGroupCappedStart := scanLockGroupCapped.Load()
 	lockGroupErrStart := scanLockGroupErrs.Load()
 
@@ -2091,6 +2097,10 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 	if d := scanLockKeptFields.Load() - lockKeptStart; d > 0 {
 		scanLog.Info("scan summary: %d field(s) kept because another writer changed them while the scan read the file", d)
 	}
+	if d := scanIdentityProposalsRecorded.Load() - identityProposalStart; d > 0 {
+		scanLog.Info("scan summary: %d existing book(s) kept their title/author/series although the file reads "+
+			"differently; recorded as proposals for maintenance.scan-proposed-identity", d)
+	}
 	if d := scanLockGroupCapped.Load() - lockGroupCappedStart; d > 0 {
 		scanLog.Warn("scan summary: %d version group(s) had more than %d members and were not locked whole", d, scanLockMaxGroup)
 	}
@@ -2320,8 +2330,10 @@ func extractInfoFromPath(book *Book) {
 	// A name that is nothing BUT a number stays whole, so a title like "1984"
 	// survives to metadata.IsChapterOnlyTitle, which knows a year-like number
 	// is a title; a bare "98" is still recognised there as chapter-only.
+	// "183 of 301" is a position out of a count, not "183" + a title: kept
+	// whole (metadata.LeadingNumberIsCount), it was re-titled "of 301".
 	parts := strings.Split(baseName, " ")
-	if len(parts) > 1 {
+	if len(parts) > 1 && !metadata.LeadingNumberIsCount(parts) {
 		if _, err := strconv.Atoi(parts[0]); err == nil {
 			baseName = strings.Join(parts[1:], " ")
 		}
@@ -2943,7 +2955,7 @@ func createBookFilesForBookWithAudio(bookFilePath string, segmentFiles []string,
 	// a failure now writes nothing at all rather than writing something wrong.
 	if normalizeBookPath && statErr == nil && !info.IsDir() {
 		dirPath := filepath.Dir(bookFilePath)
-		written, updateErr := getStore().ModifyBook(dbBook.ID, func(cur *database.Book) error {
+		written, updateErr := modifyBookRecorded(dbBook.ID, scanHistorySource, func(cur *database.Book) error {
 			cur.FilePath = dirPath
 			return nil
 		})
@@ -3491,13 +3503,18 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 			return err
 		}
 
-		// An EXISTING row keeps the title, author, series, position and
+		// An EXISTING row keeps its title, author, series and position
+		// whatever source the scanned value came from (a tag, the file name,
+		// the folder or the AI parse; scan_identity_hold.go), and the
 		// narrator the folder parse would change (owner, 2026-10-05: the new
 		// parse is for searches and new imports only). Decided here, before
 		// any author, series or work row is created from those values, so a
 		// rescan, a move or a rename neither rewrites the row nor leaves
-		// orphan rows behind.
-		hold := holdFolderFieldsForExisting(book, found.row())
+		// orphan rows behind. What the scan read is captured first: where it
+		// differs from what the row keeps, it is recorded as a proposal after
+		// the merge.
+		scanned := scannedIdentityOf(book)
+		hold := mergeHolds(holdIdentityForExisting(book, found.row()), holdFolderFieldsForExisting(book, found.row()))
 
 		// Resolve author/series with conflict-aware get-or-create semantics.
 		var authorIDs []int
@@ -3548,7 +3565,7 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 			if workID == nil {
 				newWork := &database.Work{Title: book.Title, AuthorID: authorID}
 				created, err := getStore().CreateWork(newWork)
-				if err == nil {
+				if err == nil && created != nil {
 					wid := created.ID
 					workID = &wid
 					// Make the new work visible to subsequent books in this scan.
@@ -3634,7 +3651,7 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 				// the row read above, which would revert every field another
 				// writer committed since that read. A row already at the new path
 				// (another scan relinked it first) is left alone.
-				res, merr := getStore().ModifyBook(existingByOrgID.ID, func(fresh *database.Book) error {
+				res, merr := modifyBookRecorded(existingByOrgID.ID, scanHistorySource, func(fresh *database.Book) error {
 					if fresh.FilePath == book.FilePath {
 						return database.ErrSkipBookWrite
 					}
@@ -3943,8 +3960,15 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 				unlockPath()
 				if err == nil {
 					// The scanner's own write: an AI-phase re-save must see it as
-					// the baseline, not as another writer's change.
+					// the baseline, not as another writer's change -- and, being
+					// this scan's new import, takes values the identity hold
+					// would keep off an existing row.
 					book.rememberRow(dbBook)
+					if createdBook != nil {
+						book.createdRowID = createdBook.ID
+					} else {
+						book.createdRowID = dbBook.ID
+					}
 					// A multi-author credit's co-authors go into the junction.
 					if createdBook != nil {
 						creditScannedAuthors(getStore(), createdBook.ID, createdBook.AuthorID, authorIDs)
@@ -4016,9 +4040,22 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 		// columns are held as if locked, and maintenance.reparse-folder-names
 		// lists the rows the parse would change for approval.
 		mergeLocks := folderDerivedLocks(locked, book)
+		// Nor does any other source (2026-10-06): every identity column the
+		// row holds at write time is locked for the overlay
+		// (identityMergeLocks), so a gap is filled and a value is never
+		// replaced. Not for a row this scan created (a new import's AI-phase
+		// re-save). The scanned values that differ become a proposal below.
+		createdHere := book.createdRowID != "" && existing.ID == book.createdRowID
+		guard := newIdentityGuard(existing, scanned)
+		var heldKeys map[string]bool
 		kept := 0
-		written, uerr := getStore().ModifyBook(existing.ID, func(cur *database.Book) error {
-			kept = mergeScannedKeepingForeignEdits(cur, dbBook, mergeLocks, snap)
+		written, uerr := modifyBookRecorded(existing.ID, scanHistorySource, func(cur *database.Book) error {
+			locks := mergeLocks
+			heldKeys = nil
+			if !createdHere {
+				locks, heldKeys = identityMergeLocks(mergeLocks, cur, guard)
+			}
+			kept = mergeScannedKeepingForeignEdits(cur, dbBook, locks, snap)
 			return nil
 		})
 		if uerr != nil {
@@ -4037,6 +4074,16 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 				existing.ID, kept)
 		}
 		book.rememberRow(written)
+		if !createdHere {
+			userLocked := locked
+			if !ok {
+				// Unreadable locks were treated as all-locked for the overlay;
+				// a proposal is only a listing, so it is still recorded.
+				userLocked = nil
+			}
+			persistScanIdentityProposal(written.ID, written.FilePath,
+				scanIdentityChanges(written, scanned, heldKeys, userLocked))
+		}
 		// A multi-author credit's co-authors, only when the scanner's primary
 		// author is what the row now holds (creditScannedAuthors), and never
 		// on a book whose author the user locked (or whose locks could not be
@@ -4581,7 +4628,7 @@ func preserveExistingFields(scanned *database.Book, existing *database.Book) {
 // hand-off runs after.
 func joinRacedRow(racedID, groupID string, primary *bool) (joined bool, heldGroup string, err error) {
 	defer versionprimary.LockGroups("", groupID)()
-	_, err = getStore().ModifyBook(racedID, func(fresh *database.Book) error {
+	_, err = modifyBookRecorded(racedID, scanHistorySource, func(fresh *database.Book) error {
 		// A row another writer already grouped keeps that
 		// group; two groups for one row is worse than one.
 		if fresh.VersionGroupID != nil && *fresh.VersionGroupID != "" {
@@ -4637,7 +4684,7 @@ func joinRacedRow(racedID, groupID string, primary *bool) (joined bool, heldGrou
 // ungrouped. Nothing here hands off a primary while holding them.
 func linkVersionGroup(bookID, groupID string, primary bool) (string, bool) {
 	unlock := versionprimary.LockGroups("", groupID)
-	written, err := getStore().ModifyBook(bookID, func(cur *database.Book) error {
+	written, err := modifyBookRecorded(bookID, scanHistorySource, func(cur *database.Book) error {
 		if cur.VersionGroupID != nil && *cur.VersionGroupID != "" {
 			return database.ErrSkipBookWrite
 		}

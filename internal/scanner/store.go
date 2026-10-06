@@ -1,5 +1,5 @@
 // file: internal/scanner/store.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 0a5f8c34-9b26-4e71-83d0-6f2a41e75b98
 // last-edited: 2026-10-06
 
@@ -18,6 +18,9 @@ import (
 // constraints, exhaustive. It was database.Store -- 398 methods -- until
 // 2026-08-19, and could not be narrowed sooner: merge.FollowBookIDChange took
 // the union until #2581 and its interface was unexported until #2587.
+// Since measured, 2026-10-06 added DeleteRaw and the scan history pair
+// (scanHistoryStore) for the scan identity hold; re-measure before trusting
+// the count above.
 //
 // Grouped so no group exceeds interfacebloat's limit of 8, and so the hash
 // lookups -- the reason a scan is fast -- read as one thing.
@@ -115,6 +118,22 @@ type scanProgressStore interface {
 	// indexedStore satisfies this without a type assertion.
 	GetRaw(key string) ([]byte, error)
 	SetRaw(key string, value []byte) error
+	// DeleteRaw clears a book's scan identity proposal once the file agrees
+	// with the row again (scan_identity_hold.go).
+	DeleteRaw(key string) error
+	// The scan's own history rows (scanHistoryStore): embedded here, not in
+	// scannerStore, to keep both under interfacebloat's limit.
+	scanHistoryStore
+}
+
+// scanHistoryStore records the scanner's own book writes in the metadata
+// change history (recordScanHistory): the history write, plus the series
+// lookup that renders a series id as its name (the author lookup is on
+// scanEntityStore). Together with GetAuthorByID it is
+// database.BookEditHistoryStore.
+type scanHistoryStore interface {
+	RecordMetadataChange(record *database.MetadataChangeRecord) error
+	GetSeriesByID(id int) (*database.Series, error)
 }
 
 // scannerStore is the whole surface the package globals carry.

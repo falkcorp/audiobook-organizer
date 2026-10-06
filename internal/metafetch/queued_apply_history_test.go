@@ -1,7 +1,7 @@
 // file: internal/metafetch/queued_apply_history_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f0c8a61-9b27-4e5d-a813-c64e0b2d7f95
-// last-edited: 2026-09-30
+// last-edited: 2026-10-06
 
 package metafetch
 
@@ -38,6 +38,27 @@ func TestApplyEditsSince_ScannerStyleRowWriteIsNotAnEdit(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, edits.OwnApplied)
 	require.Empty(t, edits.Others, "a row write without history (the scanner's merge) must not refuse the queued apply")
+}
+
+// (a2) Since 2026-10-06 the scanner records history for its own writes,
+// under database.ChangeTypeScan. Those rows are still not a later edit.
+func TestApplyEditsSince_ScanHistoryRowIsNotAnEdit(t *testing.T) {
+	store, svc, book := queuedApplyFixture(t)
+	mark, err := svc.ApplyEditMark(book.ID)
+	require.NoError(t, err)
+
+	before := *book
+	after := *book
+	after.Narrator = new("Tag Narrator")
+	_, err = database.RecordBookEditHistory(store, &before, &after, database.ChangeTypeScan, "scan", book.UpdatedAt.Add(1e9), nil)
+	require.NoError(t, err)
+	hist, err := store.GetBookChangeHistory(book.ID, 10)
+	require.NoError(t, err)
+	require.NotEmpty(t, hist, "the fixture recorded no scan row; the test proves nothing")
+
+	edits, err := svc.ApplyEditsSince(book.ID, mark, "apply-queued-own")
+	require.NoError(t, err)
+	require.Empty(t, edits.Others, "a scan history row must not refuse the queued apply")
 }
 
 // (b) The user applies candidate B after the 202. The queued apply of A sees
