@@ -1,7 +1,7 @@
 // file: web/src/components/review/DupesPanel.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: 1d6f8a03-7c25-4e91-b840-2a5c9e3b7d14
-// last-edited: 2026-09-01
+// last-edited: 2026-10-06
 //
 // The dupes lane's full surface: filter rail, spine, bulk bar, compare drawer.
 //
@@ -10,6 +10,7 @@
 // three lanes own their own layout and the shell owns only lane selection and
 // the cross-lane chrome.
 
+import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   Alert,
@@ -18,7 +19,9 @@ import {
   Checkbox,
   Chip,
   Dialog,
+  DialogActions,
   DialogContent,
+  DialogContentText,
   DialogTitle,
   Divider,
   FormControlLabel,
@@ -32,6 +35,7 @@ import {
 } from '@mui/material';
 import type { DedupBand } from '../../services/api';
 import { CandidateCompareDrawer } from '../dedup/CandidateCompareDrawer';
+import { SelectAllMatchingBanner } from '../common/SelectAllMatchingBanner';
 import { DupesSpine } from './spine/DupesSpine';
 import type { SpineViewMode } from './spine/CompareSpine';
 import { dupesLane } from './lanes/dupes';
@@ -49,6 +53,9 @@ const STATUSES: { value: DedupStatusFilter; label: string }[] = [
   { value: 'dismissed', label: 'Dismissed' },
   { value: '', label: 'All' },
 ];
+
+/** A filter-scoped bulk action awaiting confirmation. */
+type PendingBulk = 'mergeAllFiltered' | 'dismissAllFiltered';
 
 export interface DupesPanelProps {
   dupes: DupesLane;
@@ -70,6 +77,22 @@ export function DupesPanel({ dupes, viewMode, expandedId, onToggleExpand }: Dupe
   // correcting itself.
 
   const selectedIds = [...dupes.selectedIds];
+  const sel = dupes.selection;
+  // "Select all N matching" is a selection of the FILTER: its bulk actions go
+  // to the filter-scoped endpoints (bulk-link / bulk-reject), which re-resolve
+  // the filter server-side and report what they did. Anything else acts on ids.
+  const crossPage = sel.allMatching;
+  const selectedCount = sel.selectedCount;
+  const [pendingBulk, setPendingBulk] = useState<PendingBulk | null>(null);
+
+  const runMergeSelected = () => {
+    if (crossPage) setPendingBulk('mergeAllFiltered');
+    else dupes.dispatch({ lane: 'dupes', type: 'mergeSelected', ids: selectedIds });
+  };
+  const runDismissSelected = () => {
+    if (crossPage) setPendingBulk('dismissAllFiltered');
+    else dupes.dispatch({ lane: 'dupes', type: 'dismissSelected', ids: selectedIds });
+  };
 
   return (
     <>
@@ -234,13 +257,41 @@ export function DupesPanel({ dupes, viewMode, expandedId, onToggleExpand }: Dupe
             `isSelected` is exempt -- it is CALLED during DupesSpine's render
             and never held.
           */}
+          {dupes.candidates.length > 0 && (
+            <Box sx={{ px: 2, pt: 1 }}>
+              <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+                <Checkbox
+                  size="small"
+                  checked={sel.header.checked}
+                  indeterminate={sel.header.indeterminate}
+                  disabled={sel.header.disabled}
+                  onChange={sel.togglePage}
+                  slotProps={{
+                    input: { 'aria-label': `Select all ${dupes.candidates.length} on this page` },
+                  }}
+                />
+                <Typography variant="caption" color="text.secondary">
+                  Select page · Shift-click a checkbox to select a range
+                </Typography>
+              </Stack>
+              <SelectAllMatchingBanner
+                selection={sel}
+                pageCount={dupes.candidates.length}
+                totalMatching={dupes.total}
+                noun="pairs"
+                unavailableReason={dupes.selectAllMatchingDisabledReason}
+                testIdPrefix="dupes-select-all"
+              />
+            </Box>
+          )}
+
           <DupesSpine
             candidates={dupes.candidates}
             viewMode={viewMode}
             emptyMessage={dupesLane.emptyMessage}
             deepLinkedBookId={bookParam}
             ctx={{
-              isSelected: (id) => dupes.selectedIds.has(id),
+              isSelected: sel.isSelected,
               onToggleSelect: dupes.toggleSelect,
               onAction: dupes.dispatch,
               focusedId: dupes.candidates[dupes.focusedIndex]?.id ?? null,
@@ -265,28 +316,31 @@ export function DupesPanel({ dupes, viewMode, expandedId, onToggleExpand }: Dupe
           flexWrap: 'wrap',
         }}
       >
-        <Typography variant="body2" color="text.secondary">
-          {selectedIds.length} selected
+        <Typography variant="body2" color="text.secondary" data-testid="dupes-selected-count">
+          {selectedCount.toLocaleString()} selected{crossPage ? ' (every page)' : ''}
         </Typography>
         <Button
           size="small"
           variant="contained"
           data-testid="merge-selected"
-          disabled={selectedIds.length === 0 || dupes.busy}
-          onClick={() => dupes.dispatch({ lane: 'dupes', type: 'mergeSelected', ids: selectedIds })}
+          disabled={selectedCount === 0 || dupes.busy}
+          onClick={runMergeSelected}
         >
-          {dupes.verbs.mergeSelected} ({selectedIds.length})
+          {dupes.verbs.mergeSelected} ({selectedCount.toLocaleString()})
         </Button>
         <Button
           size="small"
           data-testid="dismiss-selected"
-          disabled={selectedIds.length === 0 || dupes.busy}
-          onClick={() =>
-            dupes.dispatch({ lane: 'dupes', type: 'dismissSelected', ids: selectedIds })
-          }
+          disabled={selectedCount === 0 || dupes.busy}
+          onClick={runDismissSelected}
         >
-          {dupes.verbs.dismissSelected} ({selectedIds.length})
+          {dupes.verbs.dismissSelected} ({selectedCount.toLocaleString()})
         </Button>
+        {selectedCount > 0 && (
+          <Button size="small" onClick={sel.clear} data-testid="dupes-clear-selection">
+            Clear
+          </Button>
+        )}
 
         <Box sx={{ ml: 'auto' }}>
           {/* Disabled controls do not fire pointer events, so the tooltip needs
@@ -299,11 +353,7 @@ export function DupesPanel({ dupes, viewMode, expandedId, onToggleExpand }: Dupe
                 color="warning"
                 data-testid="merge-all-filtered"
                 disabled={Boolean(dupes.mergeAllFilteredDisabledReason) || dupes.busy}
-                onClick={() => {
-                  if (window.confirm(`${dupes.verbs.mergeAllFiltered}? This cannot be undone.`)) {
-                    dupes.dispatch({ lane: 'dupes', type: 'mergeAllFiltered' });
-                  }
-                }}
+                onClick={() => setPendingBulk('mergeAllFiltered')}
               >
                 {dupes.verbs.mergeAllFiltered}
               </Button>
@@ -311,6 +361,46 @@ export function DupesPanel({ dupes, viewMode, expandedId, onToggleExpand }: Dupe
           </Tooltip>
         </Box>
       </Box>
+
+      {/* Confirmation for every filter-scoped bulk action. It shows the count
+          the reviewer is looking at and says the server re-checks the filter,
+          because the server's own count is what the result toast reports. */}
+      <Dialog
+        open={pendingBulk !== null}
+        onClose={() => setPendingBulk(null)}
+        data-testid="dupes-bulk-confirm"
+      >
+        <DialogTitle>
+          {pendingBulk === 'dismissAllFiltered'
+            ? `Dismiss all ${dupes.total.toLocaleString()} matching pairs?`
+            : `Merge all ${dupes.total.toLocaleString()} matching pairs?`}
+        </DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            {pendingBulk === 'dismissAllFiltered'
+              ? 'Every pending pair matching the current filter, on every page, is marked "not a duplicate".'
+              : 'Every pair matching the current filter, on every page, is linked into a version group. This cannot be undone.'}{' '}
+            The server re-evaluates the filter when it runs and reports how many it
+            actually changed; hand-pinned pairs are skipped and listed as failures.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setPendingBulk(null)}>Cancel</Button>
+          <Button
+            color="warning"
+            variant="contained"
+            data-testid="dupes-bulk-confirm-btn"
+            onClick={() => {
+              const type = pendingBulk;
+              setPendingBulk(null);
+              if (type) dupes.dispatch({ lane: 'dupes', type });
+            }}
+          >
+            {pendingBulk === 'dismissAllFiltered' ? 'Dismiss' : 'Merge'}{' '}
+            {dupes.total.toLocaleString()}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <CandidateCompareDrawer
         candidateId={dupes.drawerCandidateId}

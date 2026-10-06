@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/DupesSpine.tsx
-// version: 1.4.1
+// version: 1.5.0
 // guid: 9c4e7b21-6a58-4d03-8b7f-1e5d2a9c6403
-// last-edited: 2026-09-27
+// last-edited: 2026-10-06
 //
 // The duplicate-candidate renderer: book against book.
 //
@@ -25,7 +25,7 @@
 // shape as CompareSpine -- a stable `handlers` object, per-row VALUES resolved
 // by the spine, and memo()-wrapped row renderers.
 
-import { memo, useMemo, type MouseEvent } from 'react';
+import { memo, useMemo, useRef, type MouseEvent } from 'react';
 import { Link as RouterLink } from 'react-router-dom';
 import {
   Box,
@@ -285,6 +285,10 @@ const CandidateRow = memo(function CandidateRow({
 }: CandidateRowProps) {
   const rec = recommendedKeepSide(candidate);
   const decided = candidate.status !== 'pending';
+  // Shift+Space on the focused checkbox extends the range like a shift-click.
+  // Whether the keyboard activation's click carries shiftKey varies by
+  // browser, so the keydown is recorded here and read by the change event.
+  const shiftSpaceRef = useRef(false);
 
   return (
     <Box
@@ -307,16 +311,19 @@ const CandidateRow = memo(function CandidateRow({
         <Checkbox
           size="small"
           checked={selected}
-          onChange={(e) =>
-            handlers.onToggleSelect(
-              candidate.id,
-              index,
-              // The React MouseEvent type is imported above and shadows the DOM
-              // one, and a checkbox change can originate from the keyboard, so
-              // this narrows structurally rather than by cast.
-              (e.nativeEvent as Partial<{ shiftKey: boolean }>).shiftKey ?? false
-            )
-          }
+          onKeyDown={(e) => {
+            shiftSpaceRef.current = e.key === ' ' && e.shiftKey;
+          }}
+          onChange={(e) => {
+            // The React MouseEvent type is imported above and shadows the DOM
+            // one, and a checkbox change can originate from the keyboard, so
+            // this narrows structurally rather than by cast.
+            const shift =
+              ((e.nativeEvent as Partial<{ shiftKey: boolean }>).shiftKey ?? false) ||
+              shiftSpaceRef.current;
+            shiftSpaceRef.current = false;
+            handlers.onToggleSelect(candidate.id, index, shift);
+          }}
           slotProps={{ input: { 'aria-label': `Select candidate ${candidate.id}` } }}
         />
         {candidate.band && (

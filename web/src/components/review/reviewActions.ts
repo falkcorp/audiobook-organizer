@@ -1,7 +1,7 @@
 // file: web/src/components/review/reviewActions.ts
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5c9e0a37-1b84-4d26-9f03-7a1e6c8b2d54
-// last-edited: 2026-09-29
+// last-edited: 2026-10-06
 //
 // Every action a reviewer can take, across all three lanes, as one discriminated
 // union.
@@ -48,7 +48,13 @@ export type DupesAction =
   | { lane: 'dupes'; type: 'mergeSelected'; ids: number[] }
   | { lane: 'dupes'; type: 'dismissSelected'; ids: number[] }
   /** Acts on the whole current filter, not on the selection. Named so that is unmissable. */
-  | { lane: 'dupes'; type: 'mergeAllFiltered' };
+  | { lane: 'dupes'; type: 'mergeAllFiltered' }
+  /**
+   * Dismisses every pending pair the current filter matches -- the "Select all
+   * N matching" + Dismiss path. Resolved on the server (bulk-reject), like
+   * mergeAllFiltered, so its count is not knowable from the action.
+   */
+  | { lane: 'dupes'; type: 'dismissAllFiltered' };
 
 /**
  * Metadata lane. Ids are book ids.
@@ -160,6 +166,7 @@ export function needsConfirmation(action: ReviewAction): boolean {
     case 'merge':
     case 'mergeSelected':
     case 'mergeAllFiltered':
+    case 'dismissAllFiltered':
       return true;
     case 'dismissSelected':
       return action.ids.length > 1;
@@ -196,6 +203,7 @@ export function affectedCount(action: ReviewAction): number | null {
     case 'applyRows':
       return action.rowIds.length;
     case 'mergeAllFiltered':
+    case 'dismissAllFiltered':
     case 'skipAllUnmatched':
     case 'bulk':
     case 'applyAllApplicable':
