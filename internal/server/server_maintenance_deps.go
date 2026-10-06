@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.52.0
+// version: 1.53.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
 // last-edited: 2026-10-05
 
@@ -726,6 +726,24 @@ func (s *Server) SearchTranscriptionCandidate(_ context.Context, bookID, _, _ st
 	return maintenanceplugin.TranscriptionCandidate{Title: best.Title, Author: best.Author, Series: best.Series, Score: best.Score}, true, nil
 }
 
+// errTranscriptionASINConflict refuses a transcription apply whose top cached
+// candidate names a different ASIN than the book already carries.
+var errTranscriptionASINConflict = errors.New("cached candidate ASIN conflicts with the book's ASIN")
+
+// transcriptionASINConflict describes an ASIN disagreement between book and
+// cand, or returns "" when either has none or they agree (the bulk gate's
+// asin_conflict rule, applygate checkASIN).
+func transcriptionASINConflict(book *database.Book, cand metafetch.MetadataCandidate) string {
+	cur, c := "", strings.TrimSpace(cand.ASIN)
+	if book.ASIN != nil {
+		cur = strings.TrimSpace(*book.ASIN)
+	}
+	if cur == "" || c == "" || strings.EqualFold(cur, c) {
+		return ""
+	}
+	return "book ASIN " + cur + ", candidate " + c
+}
+
 // ApplyTranscriptionCandidate implements maintenance.ServerDeps.
 // Uses the local metadata cache to avoid a redundant external search, then
 // applies the top cached candidate. TASK-02 audio-confirm logic sets
@@ -791,6 +809,16 @@ func (s *Server) ApplyTranscriptionCandidate(_ context.Context, bookID, gatedTit
 		slog.Warn("apply-transcription-candidate: cache identity does not match the book",
 			"book_id", bookID, "error", verr)
 		return verr
+	}
+	// ASIN guard: the book's cached candidates now survive an ASIN fill or
+	// replacement (database candidateSearchIdentityChanged), so a book may
+	// carry an ASIN its top candidate contradicts. The bulk-apply gate refuses
+	// that pair as asin_conflict; this unattended fill-only path must too, or
+	// it would write another record's title and author onto the book.
+	if conflict := transcriptionASINConflict(book, cand); conflict != "" {
+		slog.Warn("apply-transcription-candidate: candidate ASIN conflicts with the book's",
+			"book_id", bookID, "detail", conflict)
+		return fmt.Errorf("%w: book %s: %s", errTranscriptionASINConflict, bookID, conflict)
 	}
 
 	titleMismatch := util.NormalizeTitle(cand.Title) != util.NormalizeTitle(gatedTitle)

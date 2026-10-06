@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 9c1e4f6a-2b7d-4a3e-8f5c-6d1a9b2e4c7f
-// last-edited: 2026-09-28
+// last-edited: 2026-10-05
 
 // Package server tests for TASK-23 (MATCH-6/BUG-3/QUAL-3): ApplyTranscriptionCandidate
 // must verify the identity of the re-read cached candidate against the
@@ -234,6 +234,41 @@ func TestApplyTranscriptionCandidate_FillsOnlyEmptyTitleAndAuthor(t *testing.T) 
 	}
 	if got := (*updateCalls)[0].Title; got != "Old Title" {
 		t.Fatalf("title = %q, want the filled title kept (\"Old Title\")", got)
+	}
+}
+
+// A book that carries an ASIN its top cached candidate contradicts is refused
+// before any write: candidates now survive an ASIN fill or replacement, and
+// this unattended op must not write another record's title or author. A
+// matching ASIN (any case) still applies.
+func TestApplyTranscriptionCandidate_ASINConflictWritesNothing(t *testing.T) {
+	bookID := "book-asin"
+	asin := "B00BOOKASN"
+	book := &database.Book{ID: bookID, Title: "", ASIN: &asin}
+	cand := metafetch.MetadataCandidate{Title: "The Stable Book", Author: "Stable Author", ASIN: "B00OTHERAS", Score: 0.9, Source: "test"}
+	entry := mustCandidateCache(t, bookID, cand)
+	store, updateCalls := newTOCTOUCacheStore(t, book, entry, entry)
+	withCreatableAuthors(store)
+	s := &Server{store: store, metadataFetchService: metafetch.NewService(store)}
+
+	err := s.ApplyTranscriptionCandidate(context.Background(), bookID, cand.Title, cand.Author)
+	if !errors.Is(err, errTranscriptionASINConflict) {
+		t.Fatalf("ApplyTranscriptionCandidate() = %v, want errTranscriptionASINConflict", err)
+	}
+	if len(*updateCalls) != 0 {
+		t.Fatalf("UpdateBook calls = %d, want 0", len(*updateCalls))
+	}
+
+	cand.ASIN = "b00bookasn"
+	entry = mustCandidateCache(t, bookID, cand)
+	store, updateCalls = newTOCTOUCacheStore(t, book, entry, entry)
+	withCreatableAuthors(store)
+	s = &Server{store: store, metadataFetchService: metafetch.NewService(store)}
+	if err := s.ApplyTranscriptionCandidate(context.Background(), bookID, cand.Title, cand.Author); err != nil {
+		t.Fatalf("matching ASIN: ApplyTranscriptionCandidate() = %v", err)
+	}
+	if len(*updateCalls) == 0 {
+		t.Fatal("matching ASIN: nothing was written")
 	}
 }
 
