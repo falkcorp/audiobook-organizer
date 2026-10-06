@@ -472,14 +472,21 @@ func (f *versionTwinFixer) row(rd vtReaders, gid string, members []database.Book
 		return repairs.Row{}, false, fmt.Errorf("read field locks of %s: %w", p.core.ID, err)
 	}
 	if locks.Any() {
+		// Named by who locked each field: a person's lock, or a repair's bare
+		// lock (repairs.Writer.LockFields), so the owner can tell the two
+		// apart when deciding whether repair locks should hold this fixer.
 		keys := make([]string, 0)
 		for k := range locks.Set() {
-			keys = append(keys, k)
+			who := "person"
+			if locks.RepairLocked(k) {
+				who = "repair"
+			}
+			keys = append(keys, k+" ("+who+")")
 		}
 		sort.Strings(keys)
 		b.note("locks", strings.Join(keys, ","))
-		return b.hold(vtHoldLocked, "the primary has locked fields ("+strings.Join(keys, ", ")+
-			"); a person or a repair chose those values"), true, nil
+		return b.hold(vtHoldLocked, "the primary has locked fields: "+strings.Join(keys, ", ")+
+			"; a person or a repair chose those values"), true, nil
 	}
 
 	// The twins must agree with each other.
@@ -525,8 +532,14 @@ func (f *versionTwinFixer) row(rd vtReaders, gid string, members []database.Book
 			return b.hold(vtHoldHashShared, "the twin's record is also carried by "+strings.Join(outside, ", ")+
 				" outside this version group; applying it would run a cross-group duplicate election"), true, nil
 		}
-		b.r.Proposed["review_status"] = "matched"
-		b.r.Proposed["source"] = cand.Source
+		b.r.Proposed["primary_review_status"] = "matched"
+		// Fill-only: the record fills the primary's empty fields.
+		if dcStr(p.core.Narrator) == "" && cand.Narrator != "" {
+			b.r.Proposed["primary_narrator"] = cand.Narrator
+		}
+		if dcStr(p.core.ASIN) == "" && cand.ASIN != "" {
+			b.r.Proposed["primary_asin"] = cand.ASIN
+		}
 		b.r.Reason = fmt.Sprintf("twin %s had %s metadata applied (record %s); the primary is the same book (same "+
 			"title and author) and has none", t.core.ID, cand.Source, vtRecord(cand))
 	} else {
@@ -543,7 +556,7 @@ func (f *versionTwinFixer) row(rd vtReaders, gid string, members []database.Book
 		if verr := rd.svc.ValidateCachedIdentityForBook(t.entry, &tBook, tAuthors); verr != nil {
 			return b.hold(vtHoldIdentityStale, "the twin's candidates were fetched for a title or author it no longer has: "+verr.Error()), true, nil
 		}
-		b.r.Proposed["candidates"] = strconv.Itoa(t.candidates())
+		b.r.Proposed["primary_candidates"] = strconv.Itoa(t.candidates())
 		b.r.Reason = fmt.Sprintf("twin %s holds %d fetched candidates for the same title and author; the primary has "+
 			"none. Copying them puts the primary in the review lane (nothing is applied)", t.core.ID, t.candidates())
 	}
@@ -581,6 +594,12 @@ func (f *versionTwinFixer) display(b *vtBuild, ms []vtMember, pi, ti int, pAutho
 	}
 	put("primary", &ms[pi].core, pAuthors, ms[pi].candidates())
 	put("twin", &ms[ti].core, tAuthors, ms[ti].candidates())
+	// The lane renders every key as current -> proposed and reads a key
+	// missing from Proposed as cleared, so every display key is proposed
+	// unchanged; the class's own changes overwrite theirs below (row).
+	for k, v := range b.r.Current {
+		b.r.Proposed[k] = v
+	}
 	b.r.Evidence = []string{"same version group", "twin review status: " + dcStr(ms[ti].core.MetadataReviewStatus)}
 	if cand != nil {
 		b.r.Evidence = append(b.r.Evidence, "twin's applied record recovered from its candidate cache: "+vtRecord(cand))
