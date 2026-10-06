@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useDupesLane.ts
-// version: 1.10.0
+// version: 1.11.0
 // guid: 5e9c1a74-0d38-4b62-9f15-6c2a8d4b7e31
 // last-edited: 2026-10-06
 
@@ -78,13 +78,23 @@ export const MERGE_ALL_SEARCH_PENDING_REASON =
   'Still searching. Wait for the results to load before merging everything that matches.';
 
 /**
- * Refusal for "Select all N matching" when the status filter is not Pending.
- * The bulk endpoints act on pending pairs only (bulk-reject refuses anything
- * else; bulk-link defaults to pending), so under "All" or "Merged" the N in
- * the banner would count rows the action never touches.
+ * Refusal for the filter-scoped bulk actions (and "Select all N matching")
+ * when the status filter is not Pending. Both bulk endpoints are pending-only:
+ * a filtered bulk action must not overturn a merged or dismissed verdict
+ * (status=Dismissed + "merge everything" used to link every pair a human had
+ * marked not-a-duplicate), and under "All" the N on screen would count rows
+ * the action never touches.
  */
 export const SELECT_ALL_MATCHING_PENDING_ONLY_REASON =
-  'Selecting every matching pair works on the Pending status only.';
+  'Bulk actions over the whole filter work on the Pending status only.';
+
+/** Refusal while the list is loading: `total` is not yet the filter's count. */
+export const BULK_LIST_LOADING_REASON = 'Still loading the list. Wait for it before acting on everything that matches.';
+
+/** The toast for a 409 FILTER_CHANGED: the filter moved since the reviewer confirmed. */
+export function filterChangedMessage(matched: number): string {
+  return `The list changed — ${matched.toLocaleString()} pair${matched === 1 ? '' : 's'} now match. Nothing was changed; check the list and confirm again.`;
+}
 
 export type DedupStatusFilter = 'pending' | 'merged' | 'dismissed' | '';
 
@@ -602,16 +612,21 @@ export function useDupesLane(
 
   const mergeAllFilteredDisabledReason = filters.bothUnmatched
     ? MERGE_ALL_BLOCKED_REASON
-    : // The rows on screen must be the rows the SERVER selected before a bulk
-      // merge can claim to match them. serverAnsweredTerm is the same guard the
-      // local filter stands down on, reused so the two cannot disagree.
-      serverAnsweredTerm(appliedSearch, filters.search)
-      ? null
-      : MERGE_ALL_SEARCH_PENDING_REASON;
+    : filters.status !== 'pending'
+      ? SELECT_ALL_MATCHING_PENDING_ONLY_REASON
+      : // The rows on screen must be the rows the SERVER selected before a bulk
+        // merge can claim to match them. serverAnsweredTerm is the same guard the
+        // local filter stands down on, reused so the two cannot disagree.
+        !serverAnsweredTerm(appliedSearch, filters.search)
+        ? MERGE_ALL_SEARCH_PENDING_REASON
+        : // `total` is sent as expected_total; mid-fetch it is the previous
+          // filter's count.
+          loading
+          ? BULK_LIST_LOADING_REASON
+          : null;
 
-  const selectAllMatchingDisabledReason =
-    mergeAllFilteredDisabledReason ??
-    (filters.status === 'pending' ? null : SELECT_ALL_MATCHING_PENDING_ONLY_REASON);
+  // One rule for both filter-scoped actions and for "Select all N matching".
+  const selectAllMatchingDisabledReason = mergeAllFilteredDisabledReason;
 
   // -------------------------------------------------------------------------
   // Selection
@@ -805,7 +820,9 @@ export function useDupesLane(
   const bulkFilter = useMemo(
     (): api.BulkDedupCandidateFilter => ({
       entity_type: 'book',
-      status: filters.status || 'pending',
+      // Pending only: the server refuses anything else, and the guards above
+      // refuse to dispatch under any other status.
+      status: 'pending',
       // Filter parity with what is on screen. Omitting either of these
       // is what made this action merge the whole library.
       band: filters.band ?? undefined,
@@ -814,8 +831,26 @@ export function useDupesLane(
       // Sending filters.search could transmit a term the reviewer typed
       // but has not seen results for.
       q: appliedSearch.trim() || undefined,
+      // The count the reviewer confirmed. The server answers 409
+      // FILTER_CHANGED and writes nothing when the filter now matches a
+      // different number, so the action never covers rows nobody confirmed.
+      expected_total: total,
     }),
-    [filters.status, filters.band, filters.entityId, appliedSearch]
+    [filters.band, filters.entityId, appliedSearch, total]
+  );
+
+  /** A bulk action's error: a moved filter refreshes and asks to re-confirm. */
+  const bulkFailure = useCallback(
+    (err: unknown, fallback: string) => {
+      const moved = api.filterChangedOf(err);
+      if (moved) {
+        toast(filterChangedMessage(moved.matched), 'warning');
+        refresh();
+        return;
+      }
+      toast(err instanceof Error ? err.message : fallback, 'error');
+    },
+    [toast, refresh]
   );
 
   const dispatch = useCallback(
@@ -888,7 +923,7 @@ export function useDupesLane(
               clearSelection();
               refresh();
             } catch (err) {
-              toast(err instanceof Error ? err.message : 'Bulk merge failed', 'error');
+              bulkFailure(err, 'Bulk merge failed');
             } finally {
               setBusy(false);
             }
@@ -907,14 +942,36 @@ export function useDupesLane(
             setBusy(true);
             try {
               const result = await api.bulkRejectDedupCandidates(bulkFilter);
-              toast(
-                `Bulk dismiss: ${result.rejected} dismissed, ${result.failed} failed of ${result.attempted}`,
-                result.failed === 0 ? 'success' : 'warning'
-              );
+              const ids = result.rejected_ids ?? [];
+              const message = `Bulk dismiss: ${result.rejected} dismissed, ${result.failed} failed of ${result.attempted}`;
+              const severity = result.failed === 0 ? 'success' : 'warning';
+              if (ids.length === 0) {
+                toast(message, severity);
+              } else {
+                // Undo by id: the server puts exactly these rows back to
+                // pending, refusing any someone has re-decided since.
+                toast(message, severity, {
+                  label: 'Undo',
+                  onClick: () => {
+                    void api
+                      .revertBulkRejectDedupCandidates(ids)
+                      .then((r) => {
+                        toast(
+                          `Undo: ${r.reverted} back to pending${r.failed > 0 ? `, ${r.failed} changed since and left alone` : ''}`,
+                          r.failed === 0 ? 'success' : 'warning'
+                        );
+                        refresh();
+                      })
+                      .catch((e: unknown) =>
+                        toast(e instanceof Error ? e.message : 'Undo failed', 'error')
+                      );
+                  },
+                });
+              }
               clearSelection();
               refresh();
             } catch (err) {
-              toast(err instanceof Error ? err.message : 'Bulk dismiss failed', 'error');
+              bulkFailure(err, 'Bulk dismiss failed');
             } finally {
               setBusy(false);
             }
@@ -931,6 +988,7 @@ export function useDupesLane(
       clearSelection,
       mergeAllFilteredDisabledReason,
       selectAllMatchingDisabledReason,
+      bulkFailure,
       // The bulk payload (status, band, entity, SETTLED search). Named
       // explicitly rather than reached through the disabled reasons: a stale
       // value here means the bulk action omits `q` and covers the whole queue.

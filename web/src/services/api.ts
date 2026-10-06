@@ -6479,6 +6479,14 @@ export interface BulkDedupCandidateFilter {
   band?: string;
   entity_id?: string;
   q?: string;
+  /**
+   * How many candidates the reviewer confirmed. The server answers 409
+   * FILTER_CHANGED (see filterChangedOf) and writes nothing when the filter
+   * now matches a different count.
+   */
+  expected_total?: number;
+  /** bulk-link only: keep every pair's A or B side. Empty lets the merge elect. */
+  keep_side?: 'a' | 'b';
 }
 
 export interface BulkRejectDedupResult {
@@ -6486,6 +6494,43 @@ export interface BulkRejectDedupResult {
   rejected: number;
   failed: number;
   failures?: Array<{ candidate_id: number; reason: string }>;
+  /** The ids actually dismissed; pass them to revertBulkRejectDedupCandidates to undo. */
+  rejected_ids?: number[];
+}
+
+export interface RevertBulkRejectResult {
+  attempted: number;
+  reverted: number;
+  failed: number;
+  failures?: Array<{ candidate_id: number; reason: string }>;
+  reverted_ids?: number[];
+}
+
+/**
+ * When `err` is a bulk endpoint's 409 FILTER_CHANGED, how many candidates the
+ * filter matches now; otherwise null.
+ */
+export function filterChangedOf(err: unknown): { expected: number; matched: number } | null {
+  if (!(err instanceof ApiError) || err.status !== 409) return null;
+  const d = err.data as { code?: string; expected_total?: number; matched?: number } | undefined;
+  if (d?.code !== 'FILTER_CHANGED' || typeof d.matched !== 'number') return null;
+  return { expected: d.expected_total ?? 0, matched: d.matched };
+}
+
+/** Undo a bulk dismiss by id: dismissed -> pending, guarded per row. */
+export async function revertBulkRejectDedupCandidates(
+  candidateIds: number[]
+): Promise<RevertBulkRejectResult> {
+  const response = await apiFetch(`${API_BASE}/dedup/candidates/bulk-reject/revert`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ candidate_ids: candidateIds }),
+  });
+  if (!response.ok) {
+    throw await buildApiError(response, 'Failed to revert the bulk dismiss');
+  }
+  const responseData = await response.json();
+  return responseData.data;
 }
 
 /**

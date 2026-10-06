@@ -1,5 +1,5 @@
 // file: web/src/components/dedup/DedupAcousticTab.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678902
 // last-edited: 2026-10-06
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
@@ -42,10 +42,20 @@ import { CoverLightbox } from '../CoverLightbox';
 import { fetchBookCached } from './DedupEmbeddingTab';
 import { useRowSelection } from '../../hooks/useRowSelection';
 import { SelectAllMatchingBanner } from '../common/SelectAllMatchingBanner';
-import { CROSS_PAGE_MAX_ITEMS, crossPageCapMessage, fetchAllMatchingCandidates } from './crossPageCandidates';
+
 
 type AcousticBulkAction = 'dismiss' | 'keep-a' | 'keep-b';
 const ACOUSTIC_LIST_PARAMS = { layer: 'acoustid' } as const;
+/**
+ * The filter a cross-page Acoustic action sends to the filter-scoped bulk
+ * endpoints: every PENDING acoustic book candidate. The server re-evaluates
+ * it, applies bulk-link's review-queue-only guard (pinned, same-path and
+ * chain-linking pairs are refused) and re-checks each pair's status right
+ * before acting, so nothing a person decided or pinned is overturned.
+ */
+const ACOUSTIC_BULK_FILTER = { entity_type: 'book', status: 'pending', layer: 'acoustid' } as const;
+/** Ceiling the server applies (bulk_apply_max_items default); stated in the dialog. */
+const BULK_APPLY_DEFAULT_CAP = 5000;
 const BULK_LABEL: Record<AcousticBulkAction, string> = {
   'keep-a': 'Keep A',
   'keep-b': 'Keep B',
@@ -580,7 +590,11 @@ export function AcousticDedupTab() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkProgress, setBulkProgress] = useState<string | null>(null);
-  const [confirmBulk, setConfirmBulk] = useState<AcousticBulkAction | null>(null);
+  // A cross-page action awaiting confirmation, with the PENDING count it will
+  // be confirmed against (sent as expected_total).
+  const [confirmBulk, setConfirmBulk] = useState<{ action: AcousticBulkAction; pending: number } | null>(null);
+  // Ids the last cross-page dismiss rejected, for Undo.
+  const [undoIds, setUndoIds] = useState<number[] | null>(null);
   const [purging, setPurging] = useState(false);
   const [resolving, setResolving] = useState<Set<number>>(new Set());
   const [compareA, setCompareA] = useState('');
@@ -853,40 +867,19 @@ export function AcousticDedupTab() {
     }
   };
 
-  // Bulk Keep A / Keep B / Dismiss over the selection. A cross-page selection
-  // is resolved by paging the same list query (capped at CROSS_PAGE_MAX_ITEMS)
-  // because Keep A/B pick a side per pair, which the filter-scoped endpoints
-  // cannot express. Links run one at a time -- each rewrites book rows and two
+  // Bulk Keep A / Keep B / Dismiss over THIS PAGE's ticked rows. Each row was
+  // ticked by hand, so each goes through the single-pair endpoints like a
+  // per-row button. Links run one at a time -- each rewrites book rows and two
   // in flight can touch the same book; dismisses run 5 at a time.
   const bulkApply = async (action: AcousticBulkAction) => {
     if (selection.selectedCount === 0) return;
     setBulkBusy(true);
     setStatusMsg(null);
-    let rows: DedupCandidate[];
-    let skipped = 0;
-    try {
-      if (selection.allMatching) {
-        setBulkProgress(`Reading 0 / ${total.toLocaleString()} matching candidates…`);
-        const all = await fetchAllMatchingCandidates(ACOUSTIC_LIST_PARAMS, total, (n, t) =>
-          setBulkProgress(`Reading ${n.toLocaleString()} / ${t.toLocaleString()} matching candidates…`)
-        );
-        rows = all.filter((c) => c.status === 'pending');
-        skipped = all.length - rows.length;
-      } else {
-        rows = candidates.filter((c) => selection.selected.has(c.id));
-      }
-    } catch (err) {
-      setBulkBusy(false);
-      setBulkProgress(null);
-      setStatusSeverity('error');
-      setStatusMsg(err instanceof Error ? err.message : 'Could not read the matching candidates');
-      return;
-    }
+    setUndoIds(null);
+    const rows = candidates.filter((c) => selection.selected.has(c.id));
     // Selected ids with no row behind them (decided and gone since) are
     // failures, not silently "processed".
-    const failed: number[] = selection.allMatching
-      ? []
-      : [...selection.selected].filter((id) => !rows.some((c) => c.id === id));
+    const failed: number[] = [...selection.selected].filter((id) => !rows.some((c) => c.id === id));
     const missing = failed.length;
     const concurrency = action === 'dismiss' ? 5 : 1;
     let done = 0;
@@ -908,11 +901,8 @@ export function AcousticDedupTab() {
         `${BULK_LABEL[action]}: ${done.toLocaleString()} / ${rows.length.toLocaleString()}…`
       );
     }
-    // attempted = rows acted on + selected ids that had no row.
     const attempted = rows.length + missing;
     const ok = attempted - failed.length;
-    const skippedNote =
-      skipped > 0 ? `; ${skipped.toLocaleString()} already merged or dismissed, skipped` : '';
     // Keep only the failures on this page selected, so a retry is one click.
     selection.replace(failed.filter((id) => candidates.some((c) => c.id === id)));
     setBulkBusy(false);
@@ -920,16 +910,96 @@ export function AcousticDedupTab() {
     setStatusSeverity(failed.length === 0 ? 'info' : 'error');
     setStatusMsg(
       failed.length === 0
-        ? `${BULK_LABEL[action]}: ${ok.toLocaleString()} candidate(s) processed${skippedNote}`
-        : `${BULK_LABEL[action]}: ${ok.toLocaleString()} ok, ${failed.length.toLocaleString()} failed of ${attempted.toLocaleString()}${skippedNote}`
+        ? `${BULK_LABEL[action]}: ${ok.toLocaleString()} candidate(s) processed`
+        : `${BULK_LABEL[action]}: ${ok.toLocaleString()} ok, ${failed.length.toLocaleString()} failed of ${attempted.toLocaleString()}`
     );
     await loadCandidates();
   };
 
-  /** Cross-page actions always confirm; the count is beyond what is on screen. */
-  const requestBulk = (action: AcousticBulkAction) => {
-    if (selection.allMatching) setConfirmBulk(action);
-    else void bulkApply(action);
+  // Every pending acoustic candidate ("Select all N matching"): one request to
+  // the filter-scoped endpoint, which re-evaluates the filter, refuses a count
+  // that moved since the confirmation (409), applies the review-queue-only
+  // guard and re-checks each pair before acting. Nothing is resolved here.
+  const bulkApplyAll = async (action: AcousticBulkAction, pending: number) => {
+    setBulkBusy(true);
+    setStatusMsg(null);
+    setUndoIds(null);
+    setBulkProgress(`${BULK_LABEL[action]}: working on ${pending.toLocaleString()} pending candidates…`);
+    const filter = { ...ACOUSTIC_BULK_FILTER, expected_total: pending };
+    try {
+      if (action === 'dismiss') {
+        const r = await api.bulkRejectDedupCandidates(filter);
+        setStatusSeverity(r.failed === 0 ? 'info' : 'error');
+        setStatusMsg(
+          `Dismiss: ${r.rejected.toLocaleString()} dismissed, ${r.failed.toLocaleString()} refused or failed of ${r.attempted.toLocaleString()}`
+        );
+        setUndoIds(r.rejected_ids && r.rejected_ids.length > 0 ? r.rejected_ids : null);
+      } else {
+        const r = await api.bulkLinkDedupCandidates({
+          ...filter,
+          keep_side: action === 'keep-a' ? 'a' : 'b',
+        });
+        setStatusSeverity(r.failed === 0 ? 'info' : 'error');
+        setStatusMsg(
+          `${BULK_LABEL[action]}: ${r.merged.toLocaleString()} linked, ${r.failed.toLocaleString()} refused or failed of ${r.attempted.toLocaleString()}` +
+            (r.failures && r.failures.length > 0
+              ? ` (e.g. #${r.failures[0].candidate_id}: ${r.failures[0].reason})`
+              : '')
+        );
+      }
+      selection.clear();
+    } catch (err) {
+      const moved = api.filterChangedOf(err);
+      setStatusSeverity(moved ? 'info' : 'error');
+      setStatusMsg(
+        moved
+          ? `The list changed — ${moved.matched.toLocaleString()} pending candidates now match, not ${moved.expected.toLocaleString()}. Nothing was changed; confirm again.`
+          : err instanceof Error
+            ? err.message
+            : 'Bulk action failed'
+      );
+    } finally {
+      setBulkBusy(false);
+      setBulkProgress(null);
+    }
+    await loadCandidates();
+  };
+
+  const undoBulkDismiss = async () => {
+    if (!undoIds) return;
+    const ids = undoIds;
+    setUndoIds(null);
+    try {
+      const r = await api.revertBulkRejectDedupCandidates(ids);
+      setStatusSeverity(r.failed === 0 ? 'info' : 'error');
+      setStatusMsg(
+        `Undo: ${r.reverted.toLocaleString()} back to pending` +
+          (r.failed > 0 ? `, ${r.failed.toLocaleString()} changed since and left alone` : '')
+      );
+    } catch (err) {
+      setStatusSeverity('error');
+      setStatusMsg(err instanceof Error ? err.message : 'Undo failed');
+    }
+    await loadCandidates();
+  };
+
+  /**
+   * Cross-page actions always confirm, against the PENDING count (the list
+   * shows every status; only pending pairs are acted on). Page selections act
+   * on the ticked rows directly.
+   */
+  const requestBulk = async (action: AcousticBulkAction) => {
+    if (!selection.allMatching) {
+      void bulkApply(action);
+      return;
+    }
+    try {
+      const resp = await api.getDedupCandidates({ ...ACOUSTIC_BULK_FILTER, limit: 1, offset: 0 });
+      setConfirmBulk({ action, pending: resp.total ?? 0 });
+    } catch (err) {
+      setStatusSeverity('error');
+      setStatusMsg(err instanceof Error ? err.message : 'Could not count the pending candidates');
+    }
   };
 
   const simPct = (c: DedupCandidate) =>
@@ -1151,6 +1221,13 @@ export function AcousticDedupTab() {
             setStatusMsg(null);
             setStatusSeverity('info');
           }}
+          action={
+            undoIds ? (
+              <Button size="small" color="inherit" onClick={() => void undoBulkDismiss()} data-testid="acoustic-undo-dismiss">
+                Undo
+              </Button>
+            ) : undefined
+          }
         >
           {statusMsg}
         </Alert>
@@ -1214,7 +1291,7 @@ export function AcousticDedupTab() {
                 size="small"
                 variant="outlined"
                 disabled={bulkBusy}
-                onClick={() => requestBulk('keep-a')}
+                onClick={() => void requestBulk('keep-a')}
               >
                 Keep A on {selection.selectedCount.toLocaleString()}
               </Button>
@@ -1222,7 +1299,7 @@ export function AcousticDedupTab() {
                 size="small"
                 variant="outlined"
                 disabled={bulkBusy}
-                onClick={() => requestBulk('keep-b')}
+                onClick={() => void requestBulk('keep-b')}
               >
                 Keep B on {selection.selectedCount.toLocaleString()}
               </Button>
@@ -1231,7 +1308,7 @@ export function AcousticDedupTab() {
                 variant="outlined"
                 color="warning"
                 disabled={bulkBusy}
-                onClick={() => requestBulk('dismiss')}
+                onClick={() => void requestBulk('dismiss')}
               >
                 Dismiss {selection.selectedCount.toLocaleString()}
               </Button>
@@ -1428,15 +1505,20 @@ export function AcousticDedupTab() {
 
       <Dialog open={confirmBulk !== null} onClose={() => setConfirmBulk(null)} data-testid="acoustic-bulk-confirm">
         <DialogTitle>
-          {confirmBulk ? BULK_LABEL[confirmBulk] : ''} on all {total.toLocaleString()} matching candidates?
+          {confirmBulk ? BULK_LABEL[confirmBulk.action] : ''} on all{' '}
+          {(confirmBulk?.pending ?? 0).toLocaleString()} pending candidates?
         </DialogTitle>
         <DialogContent>
           <DialogContentText>
-            {total > CROSS_PAGE_MAX_ITEMS
-              ? crossPageCapMessage(total)
-              : `Every PENDING acoustic candidate on every page is ${
-                  confirmBulk === 'dismiss' ? 'dismissed as not a duplicate' : 'linked into a version group (cannot be undone)'
-                }; the ${total.toLocaleString()} counted here include pairs already merged or dismissed, which are skipped. The rows are read page by page first; the result reports how many succeeded, failed and were skipped.`}
+            {confirmBulk?.action === 'dismiss'
+              ? 'Every pending acoustic candidate, on every page, is dismissed as not a duplicate. The result offers Undo.'
+              : 'Every pending acoustic candidate, on every page, is linked into a version group keeping the chosen side. This cannot be undone.'}{' '}
+            Pairs already merged or dismissed are not touched. The server skips hand-pinned pairs,
+            pairs at the same path and links that would chain them together, and reports each one.
+            If the number of pending candidates changes before this runs, nothing is changed and you
+            are asked again.
+            {(confirmBulk?.pending ?? 0) > BULK_APPLY_DEFAULT_CAP &&
+              ` ${(confirmBulk?.pending ?? 0).toLocaleString()} is over the server's bulk limit (bulk_apply_max_items, ${BULK_APPLY_DEFAULT_CAP.toLocaleString()} by default), so it will be refused.`}
           </DialogContentText>
         </DialogContent>
         <DialogActions>
@@ -1444,15 +1526,16 @@ export function AcousticDedupTab() {
           <Button
             color="warning"
             variant="contained"
-            disabled={total > CROSS_PAGE_MAX_ITEMS}
+            disabled={!confirmBulk || confirmBulk.pending === 0}
             data-testid="acoustic-bulk-confirm-btn"
             onClick={() => {
-              const a = confirmBulk;
+              const c = confirmBulk;
               setConfirmBulk(null);
-              if (a) void bulkApply(a);
+              if (c) void bulkApplyAll(c.action, c.pending);
             }}
           >
-            {confirmBulk ? BULK_LABEL[confirmBulk] : ''} {total.toLocaleString()}
+            {confirmBulk ? BULK_LABEL[confirmBulk.action] : ''}{' '}
+            {(confirmBulk?.pending ?? 0).toLocaleString()}
           </Button>
         </DialogActions>
       </Dialog>

@@ -1,17 +1,23 @@
 // file: internal/server/handlers/dedup/handler_bulk_reject_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5d65b248-8432-43e0-9a13-2da6e1228ceb
 // last-edited: 2026-10-06
 
 package deduphandler_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
+	"github.com/stretchr/testify/mock"
+
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 )
 
 // POST /dedup/candidates/bulk-reject backs the review UI's "Select all N
@@ -28,6 +34,9 @@ type bulkRejectResp struct {
 			CandidateID int64  `json:"candidate_id"`
 			Reason      string `json:"reason"`
 		} `json:"failures"`
+		RejectedIDs []int64 `json:"rejected_ids"`
+		Reverted    int     `json:"reverted"`
+		RevertedIDs []int64 `json:"reverted_ids"`
 	} `json:"data"`
 }
 
@@ -142,5 +151,85 @@ func TestBulkRejectDedupCandidates_RefusesWhatItCannotScope(t *testing.T) {
 	}
 	if got := candidateStatus(t, d.es, id); got != "pending" {
 		t.Fatalf("a refused request wrote anyway: status=%q", got)
+	}
+}
+
+// 40 candidates through the 8-worker pool with the engine wired, so the label
+// capture (GetCandidateByID, the scorer, UpsertLabeledExample) really runs
+// concurrently. Meaningful under -race.
+func TestBulkRejectDedupCandidates_ConcurrentWorkersCaptureEveryLabel(t *testing.T) {
+	h, d := newHandler(t)
+	d.store.EXPECT().GetBookByID(mock.Anything).
+		Return(&database.Book{ID: "x", Title: "T"}, nil).Maybe()
+	d.store.EXPECT().GetBookFiles(mock.Anything).
+		Return([]database.BookFile{{FilePath: "/lib/a.m4b", FileSize: 5 << 20, Duration: 3600}}, nil).Maybe()
+	var scored atomic.Int32
+	d.engine.EXPECT().ScorePairsForBook(mock.Anything, mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, _ string, _ []dedupengine.RescorePairInput) ([]dedupengine.RescorePairResult, error) {
+			scored.Add(1)
+			return nil, nil
+		}).Maybe()
+	const n = 40
+	for i := range n {
+		insertCandidate(t, d.es, "cc-a"+strconv.Itoa(i), "cc-b"+strconv.Itoa(i))
+	}
+
+	w := doReq(t, h.BulkRejectDedupCandidates, http.MethodPost,
+		"/api/v1/dedup/candidates/bulk-reject", map[string]any{"expected_total": n}, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d want 200; body=%s", w.Code, w.Body.String())
+	}
+	r := decodeBulkReject(t, w.Body.Bytes())
+	if r.Data.Rejected != n || len(r.Data.RejectedIDs) != n {
+		t.Fatalf("rejected=%d ids=%d want %d", r.Data.Rejected, len(r.Data.RejectedIDs), n)
+	}
+	for _, id := range r.Data.RejectedIDs {
+		ex, err := d.es.GetLabeledExample(id)
+		if err != nil || ex == nil || ex.Label != "not_dup" {
+			t.Fatalf("candidate %d: bulk not_dup label missing (%v, %+v)", id, err, ex)
+		}
+	}
+	if scored.Load() == 0 {
+		t.Fatalf("label capture never reached the scorer")
+	}
+}
+
+// A mistaken bulk dismiss is undone by id: the rows go back to pending and
+// the bulk not_dup labels are removed. A row someone re-decided since is
+// reported and left alone.
+func TestRevertBulkRejectDedupCandidates_RestoresPendingAndDropsBulkLabels(t *testing.T) {
+	h, d := newHandler(t)
+	allowLabelCaptureReads(d)
+	idA, _, _ := insertCandidate(t, d.es, "rv-a", "rv-b")
+	idB, _, _ := insertCandidate(t, d.es, "rv-c", "rv-d")
+
+	w := doReq(t, h.BulkRejectDedupCandidates, http.MethodPost,
+		"/api/v1/dedup/candidates/bulk-reject", map[string]any{}, nil)
+	r := decodeBulkReject(t, w.Body.Bytes())
+	if len(r.Data.RejectedIDs) != 2 {
+		t.Fatalf("rejected_ids=%v want 2; body=%s", r.Data.RejectedIDs, w.Body.String())
+	}
+	// Someone merges B before the revert.
+	if err := d.es.UpdateCandidateStatus(idB, "merged"); err != nil {
+		t.Fatalf("merge B: %v", err)
+	}
+
+	w = doReq(t, h.RevertBulkRejectDedupCandidates, http.MethodPost,
+		"/api/v1/dedup/candidates/bulk-reject/revert", map[string]any{"candidate_ids": r.Data.RejectedIDs}, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d want 200; body=%s", w.Code, w.Body.String())
+	}
+	rv := decodeBulkReject(t, w.Body.Bytes())
+	if rv.Data.Reverted != 1 || rv.Data.Failed != 1 || rv.Data.Failures[0].CandidateID != idB {
+		t.Fatalf("want A reverted and B refused; body=%s", w.Body.String())
+	}
+	if got := candidateStatus(t, d.es, idA); got != "pending" {
+		t.Fatalf("A status=%q want pending", got)
+	}
+	if got := candidateStatus(t, d.es, idB); got != "merged" {
+		t.Fatalf("B status=%q want merged (left alone)", got)
+	}
+	if ex, _ := d.es.GetLabeledExample(idA); ex != nil {
+		t.Fatalf("A's bulk not_dup label survived the revert: %+v", ex)
 	}
 }

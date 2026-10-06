@@ -1,5 +1,5 @@
 <!-- file: docs/system/api.md -->
-<!-- version: 1.5.1 -->
+<!-- version: 1.5.2 -->
 <!-- guid: d4e5f6a7-b8c9-0123-def0-123456789012 -->
 <!-- last-edited: 2026-10-06 -->
 
@@ -90,7 +90,7 @@ To obtain an API key:
 |---|---|---|
 | `GET` | `/api/v1/dedup/candidates` | List dedup candidate pairs (`/export`, `/:id/breakdown`) |
 | `POST` | `/api/v1/dedup/candidates/:id/link` | Link (merge) a candidate pair; `/:id/reject` dismisses it. `/merge` and `/dismiss` are deprecated aliases |
-| `POST` | `/api/v1/dedup/candidates/bulk-link` · `/bulk-reject` · `/link-cluster` · `/reject-cluster` | Bulk and cluster forms of link/reject |
+| `POST` | `/api/v1/dedup/candidates/bulk-link` · `/bulk-reject` · `/bulk-reject/revert` · `/link-cluster` · `/reject-cluster` | Bulk and cluster forms of link/reject |
 | `POST` | `/api/v1/dedup/scan` · `/scan-llm` · `/scan-acoustid` · `/scan-book-signature` · `/split-book-scan` | Trigger the dedup scans (each enqueues a v2 op) |
 | `GET` | `/api/v1/dedup/stats` | Dedup statistics |
 

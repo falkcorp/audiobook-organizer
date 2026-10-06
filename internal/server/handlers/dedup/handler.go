@@ -1,5 +1,5 @@
 // file: internal/server/handlers/dedup/handler.go
-// version: 1.26.0
+// version: 1.27.0
 // guid: d1b9e024-d28c-4d62-8f90-96d7064559c4
 // last-edited: 2026-10-06
 
@@ -52,7 +52,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 	"github.com/gin-gonic/gin"
-	"golang.org/x/sync/errgroup"
 )
 
 // bothUnmatchedScanLimit is the ceiling ≥ the max candidate population;
@@ -1116,14 +1115,17 @@ func (h *Handler) BulkLinkDedupCandidates(c *gin.Context) {
 		return
 	}
 
-	filter, ok := h.bindBulkCandidateFilter(c, "link")
+	req, ok := h.bindBulkCandidateFilter(c, "link")
 	if !ok {
 		return
 	}
 
-	candidates, total, err := es.ListCandidates(filter)
+	candidates, total, err := es.ListCandidates(req.filter)
 	if err != nil {
 		httputil.InternalError(c, "failed to list candidates for bulk merge", err)
+		return
+	}
+	if refuseIfFilterMoved(c, req, total) {
 		return
 	}
 	// Fail-safe cap (internal/applycap). An absent body resolves to EVERY
@@ -1184,7 +1186,9 @@ func (h *Handler) BulkLinkDedupCandidates(c *gin.Context) {
 		// it uses the pairwise wrapper and the undo entry carries the candidate
 		// id. The tag is journal provenance only; this endpoint applies no
 		// survivor tag.
-		mergeRes, _, mergeErr := h.dedupEngine.MergeJournaled(cand.ID, cand.EntityAID, cand.EntityBID, "", "dedup:merge-source:bulk-filter")
+		// keep_side picks the survivor by side (the Acoustic tab's Keep A /
+		// Keep B over a cross-page selection); empty lets the merge elect it.
+		mergeRes, _, mergeErr := h.dedupEngine.MergeJournaled(cand.ID, cand.EntityAID, cand.EntityBID, keepIDFor(cand, req.keepSide), "dedup:merge-source:bulk-filter")
 		if mergeErr != nil {
 			failures = append(failures, failure{CandidateID: cand.ID, Reason: mergeErr.Error()})
 			slog.Info("dedup bulk merge candidate failed", "cand", cand.ID, "mergeErr", mergeErr)
@@ -1221,7 +1225,7 @@ func (h *Handler) BulkLinkDedupCandidates(c *gin.Context) {
 // a larger set than the reviewer selected with "Select all N matching".
 // verb ("merge", "reject") only shapes the error messages. On false the
 // response has already been written.
-func (h *Handler) bindBulkCandidateFilter(c *gin.Context, verb string) (database.CandidateFilter, bool) {
+func (h *Handler) bindBulkCandidateFilter(c *gin.Context, verb string) (bulkCandidateRequest, bool) {
 	// Every field here NARROWS what gets merged. Dropping the bind error meant a
 	// malformed body zeroed all of them, the defaults below filled in
 	// status=pending / entity_type=book, and the filter went out with
@@ -1260,20 +1264,48 @@ func (h *Handler) bindBulkCandidateFilter(c *gin.Context, verb string) (database
 		// is on (useDupesLane's MERGE_ALL_BLOCKED_REASON); the server refuses
 		// too, rather than silently linking the wider set.
 		BothUnmatched bool `json:"both_unmatched"`
+		// ExpectedTotal is how many candidates the reviewer was shown as
+		// matching when they confirmed ("Select all N matching"). When set, a
+		// filter that now resolves to a different count is refused with 409
+		// FILTER_CHANGED before anything is written, so the action never
+		// covers rows the reviewer did not confirm.
+		ExpectedTotal *int `json:"expected_total"`
+		// KeepSide ("a" or "b") picks every pair's survivor by side. Only
+		// bulk-link accepts it; empty lets the merge elect the primary.
+		KeepSide string `json:"keep_side"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil && !errors.Is(err, io.EOF) {
 		httputil.RespondWithBadRequest(c, "invalid request body: "+err.Error())
-		return database.CandidateFilter{}, false
+		return bulkCandidateRequest{}, false
 	}
 	if body.BothUnmatched {
 		httputil.RespondWithBadRequest(c, "bulk "+verb+" cannot apply the both_unmatched filter; "+verb+" those pairs individually")
-		return database.CandidateFilter{}, false
+		return bulkCandidateRequest{}, false
+	}
+	switch {
+	case body.KeepSide != "" && verb != "link":
+		httputil.RespondWithBadRequest(c, "keep_side applies to bulk link only")
+		return bulkCandidateRequest{}, false
+	case body.KeepSide != "" && body.KeepSide != "a" && body.KeepSide != "b":
+		httputil.RespondWithBadRequest(c, `keep_side must be "a" or "b"`)
+		return bulkCandidateRequest{}, false
+	}
+	if body.ExpectedTotal != nil && *body.ExpectedTotal < 0 {
+		httputil.RespondWithBadRequest(c, "expected_total must not be negative")
+		return bulkCandidateRequest{}, false
 	}
 
-	// Default to pending status if caller did not set one. Merging already-
-	// merged or already-dismissed rows makes no sense.
+	// Pending only. A candidate that is merged or dismissed already carries a
+	// human (or automated) verdict, and a bulk action over a filter must not
+	// overturn it: status=dismissed + "merge everything matching" used to link
+	// every pair someone had marked not-a-duplicate. An absent status means
+	// pending, as it always has.
 	if body.Status == "" {
 		body.Status = "pending"
+	}
+	if body.Status != "pending" {
+		httputil.RespondWithBadRequest(c, "bulk "+verb+" only applies to status=pending candidates")
+		return bulkCandidateRequest{}, false
 	}
 	// Only book candidates are mergeable through this endpoint.
 	if body.EntityType == "" {
@@ -1281,7 +1313,7 @@ func (h *Handler) bindBulkCandidateFilter(c *gin.Context, verb string) (database
 	}
 	if body.EntityType != "book" {
 		httputil.RespondWithBadRequest(c, "bulk "+verb+" only supports entity_type=book")
-		return database.CandidateFilter{}, false
+		return bulkCandidateRequest{}, false
 	}
 
 	filter := database.CandidateFilter{
@@ -1307,12 +1339,44 @@ func (h *Handler) bindBulkCandidateFilter(c *gin.Context, verb string) (database
 			// Refuse. Proceeding with a row-only match would merge a WIDER set
 			// than the search showed, and this action cannot be undone.
 			httputil.InternalError(c, "failed to resolve bulk-"+verb+" search", rerr)
-			return filter, false
+			return bulkCandidateRequest{}, false
 		}
 		filter.SearchEntityIDs = ids
 	}
 
-	return filter, true
+	return bulkCandidateRequest{filter: filter, expectedTotal: body.ExpectedTotal, keepSide: body.KeepSide}, true
+}
+
+// bulkCandidateRequest is a bound filter-scoped bulk request.
+type bulkCandidateRequest struct {
+	filter        database.CandidateFilter
+	expectedTotal *int
+	keepSide      string
+}
+
+// refuseIfFilterMoved writes 409 FILTER_CHANGED and returns true when the
+// request carried expected_total and the filter now resolves to a different
+// count. Called after the list and before the first write.
+func refuseIfFilterMoved(c *gin.Context, req bulkCandidateRequest, matched int) bool {
+	if req.expectedTotal == nil || *req.expectedTotal == matched {
+		return false
+	}
+	httputil.RespondWithErrorFields(c, http.StatusConflict,
+		fmt.Sprintf("the filter now matches %d candidates, not the %d confirmed; nothing was changed", matched, *req.expectedTotal),
+		"FILTER_CHANGED",
+		map[string]any{"expected_total": *req.expectedTotal, "matched": matched})
+	return true
+}
+
+// keepIDFor returns the survivor a keep_side picks for cand ("" = elect).
+func keepIDFor(cand database.DedupCandidate, side string) string {
+	switch side {
+	case "a":
+		return cand.EntityAID
+	case "b":
+		return cand.EntityBID
+	}
+	return ""
 }
 
 // bulkRejectMaxWorkers bounds BulkRejectDedupCandidates' worker pool. The
@@ -1351,18 +1415,17 @@ func (h *Handler) BulkRejectDedupCandidates(c *gin.Context) {
 		httputil.RespondWithServiceUnavailable(c, "embedding store not available")
 		return
 	}
-	filter, ok := h.bindBulkCandidateFilter(c, "reject")
+	req, ok := h.bindBulkCandidateFilter(c, "reject")
 	if !ok {
 		return
 	}
-	if filter.Status != "pending" {
-		httputil.RespondWithBadRequest(c, "bulk reject only applies to status=pending candidates")
-		return
-	}
 
-	candidates, total, err := es.ListCandidates(filter)
+	candidates, total, err := es.ListCandidates(req.filter)
 	if err != nil {
 		httputil.InternalError(c, "failed to list candidates for bulk reject", err)
+		return
+	}
+	if refuseIfFilterMoved(c, req, total) {
 		return
 	}
 	if ex := applycap.Refuse("dedup/bulk-reject", len(candidates), config.AppConfig.BulkApplyMaxItems); ex != nil {
@@ -1375,16 +1438,20 @@ func (h *Handler) BulkRejectDedupCandidates(c *gin.Context) {
 		Reason      string `json:"reason"`
 	}
 	var (
-		mu       sync.Mutex
-		failures []failure
-		rejected int
+		mu          sync.Mutex
+		failures    []failure
+		rejectedIDs []int64
 	)
 	// Every candidate id is distinct, so the workers write disjoint rows; the
-	// mutex guards only the two counters above.
-	var g errgroup.Group
-	g.SetLimit(min(runtime.NumCPU(), bulkRejectMaxWorkers))
+	// mutex guards only the two collections above. A plain WaitGroup plus a
+	// semaphore: the workers have no error to return (failures are collected).
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, min(runtime.NumCPU(), bulkRejectMaxWorkers))
 	for _, cand := range candidates {
-		g.Go(func() error {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer func() { <-sem; wg.Done() }()
 			if rerr := es.ReclassifyCandidate(cand.ID, "pending", "dismissed"); rerr != nil {
 				reason := rerr.Error()
 				switch {
@@ -1396,17 +1463,19 @@ func (h *Handler) BulkRejectDedupCandidates(c *gin.Context) {
 				mu.Lock()
 				failures = append(failures, failure{CandidateID: cand.ID, Reason: reason})
 				mu.Unlock()
-				return nil
+				return
 			}
 			mu.Lock()
-			rejected++
+			rejectedIDs = append(rejectedIDs, cand.ID)
 			mu.Unlock()
-			// Capture the user's bulk reject as a gold not_dup label (best-effort).
-			h.captureHumanLabelByID(cand.ID, labelNotDup, labelReasonUserDismiss)
-			return nil
-		})
+			// Capture the bulk reject as a gold not_dup label (best-effort),
+			// under its own reason so a revert removes exactly these labels.
+			h.captureHumanLabelByID(cand.ID, labelNotDup, labelReasonUserBulkDismiss)
+		}()
 	}
-	_ = g.Wait() // workers never return an error; failures are collected above
+	wg.Wait()
+	rejected := len(rejectedIDs)
+	slices.Sort(rejectedIDs)
 	if rejected > 0 {
 		h.markDuplicatesFlaggedDirty("bulk_reject_candidates")
 	}
@@ -1418,6 +1487,72 @@ func (h *Handler) BulkRejectDedupCandidates(c *gin.Context) {
 		"rejected":  rejected,
 		"failed":    len(failures),
 		"failures":  failures,
+		// The ids actually dismissed, so a mistaken bulk dismiss can be undone
+		// with POST /dedup/candidates/bulk-reject/revert.
+		"rejected_ids": rejectedIDs,
+	})
+}
+
+// RevertBulkRejectDedupCandidates handles
+// POST /api/v1/dedup/candidates/bulk-reject/revert.
+//
+// Body: {"candidate_ids": [..]} -- the rejected_ids a bulk-reject returned.
+// Puts each back to pending through ReclassifyCandidate(dismissed -> pending),
+// so a row someone changed since (re-decided, pinned, deleted) is reported
+// and left alone, and removes the not_dup gold label only when it is still
+// the one the bulk reject recorded (labelReasonUserBulkDismiss).
+func (h *Handler) RevertBulkRejectDedupCandidates(c *gin.Context) {
+	es := h.embeddingStore
+	if es == nil {
+		httputil.RespondWithServiceUnavailable(c, "embedding store not available")
+		return
+	}
+	var body struct {
+		CandidateIDs []int64 `json:"candidate_ids"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		httputil.RespondWithBadRequest(c, "invalid request body: "+err.Error())
+		return
+	}
+	if len(body.CandidateIDs) == 0 {
+		httputil.RespondWithBadRequest(c, "candidate_ids is required")
+		return
+	}
+	if ex := applycap.Refuse("dedup/bulk-reject-revert", len(body.CandidateIDs), config.AppConfig.BulkApplyMaxItems); ex != nil {
+		httputil.RespondWithApplyCapExceeded(c, ex)
+		return
+	}
+	type failure struct {
+		CandidateID int64  `json:"candidate_id"`
+		Reason      string `json:"reason"`
+	}
+	var failures []failure
+	reverted := []int64{}
+	// Sequential: each step is one guarded status write under the store's
+	// lock plus at most one label read/delete, and the list is capped above.
+	for _, id := range body.CandidateIDs {
+		if err := es.ReclassifyCandidate(id, "dismissed", "pending"); err != nil {
+			failures = append(failures, failure{CandidateID: id, Reason: err.Error()})
+			continue
+		}
+		reverted = append(reverted, id)
+		ex, lerr := es.GetLabeledExample(id)
+		if lerr == nil && ex != nil && ex.LabelReason == labelReasonUserBulkDismiss {
+			if derr := es.DeleteLabeledExample(id); derr != nil {
+				bulkRejectLog.Warn("bulk-reject revert: candidate %d is pending again but its bulk not_dup label was not removed: %v", id, derr)
+			}
+		}
+	}
+	if len(reverted) > 0 {
+		h.markDuplicatesFlaggedDirty("bulk_reject_revert")
+	}
+	bulkRejectLog.Info("dedup bulk reject revert: reverted=%d failed=%d", len(reverted), len(failures))
+	httputil.RespondWithOK(c, gin.H{
+		"attempted":    len(body.CandidateIDs),
+		"reverted":     len(reverted),
+		"failed":       len(failures),
+		"failures":     failures,
+		"reverted_ids": reverted,
 	})
 }
 

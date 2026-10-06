@@ -1,7 +1,7 @@
 // file: internal/server/handlers/dedup/label_capture.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7c1d9e42-3a8b-4f60-9c21-5e0a7b2d6f48
-// last-edited: 2026-07-13
+// last-edited: 2026-10-06
 
 package deduphandler
 
@@ -29,6 +29,9 @@ const (
 
 	labelReasonUserMerge   = "user_merge"
 	labelReasonUserDismiss = "user_dismiss"
+	// labelReasonUserBulkDismiss marks a not_dup label recorded by a
+	// filter-scoped bulk reject, so its revert removes exactly those labels.
+	labelReasonUserBulkDismiss = "user_bulk_dismiss"
 )
 
 // builderStoreAdapter bridges the handler's DedupStore (GetBookByID) onto
