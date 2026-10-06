@@ -448,6 +448,20 @@ func TestFragmentFixer_ParentChapterSet(t *testing.T) {
 		r := findRow(t, f.plan(t, "op-plan"), parentRowID(f, parentDir, horizonKey))
 		require.Equal(t, fragSkipMixedAuthors, r.Skipped)
 	})
+	t.Run("an author parent folder's name is never matched as the work's title", func(t *testing.T) {
+		f := newFragFixture(t)
+		const dir = "lib/Joe Writer"
+		stem := func(i int) string { return fmt.Sprintf("Some Saga %03d of 006", i) }
+		f.parentSet(t, dir, seq(1, 6), stem, 900, 9000)
+		// A junk book titled after the author, of the same total.
+		junk := f.existingBook(t, "junk", "Joe Writer", "lib/Elsewhere/Joe Writer", 6, 900)
+		f.setAuthor(t, junk, f.authorID(t, "Joe Writer"))
+		r := findRow(t, f.plan(t, "op-plan"), parentRowID(f, dir, "some saga # of #"))
+		require.Equal(t, fragClassParentSet, r.Class)
+		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+		require.Equal(t, "Some Saga", r.Proposed["title"])
+		require.NotContains(t, r.BookIDs, junk)
+	})
 	t.Run("iTunes parent sets are listed, never applicable", func(t *testing.T) {
 		f := newFragFixture(t)
 		d := "books/itunes/iTunes Media/Audiobooks/Horizon Storms"

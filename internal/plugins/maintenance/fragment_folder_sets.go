@@ -99,6 +99,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/falkcorp/audiobook-organizer/internal/authorname"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )
@@ -343,8 +344,8 @@ func fragSetTitle(stem string, sh fragNameShape, varying []int, authors, people 
 	return title, full
 }
 
-// fragSetTitleGeneric reports whether t names no work: no letters, or only a
-// chapter word or edition note.
+// fragSetTitleGeneric reports whether t names no work: no letters, only a
+// chapter word or edition note, or a placeholder ("Unknown Author").
 func fragSetTitleGeneric(t string) bool {
 	var sb strings.Builder
 	space := false
@@ -360,7 +361,8 @@ func fragSetTitleGeneric(t string) bool {
 		}
 	}
 	k := sb.String()
-	return k == "" || fragGenericSetTitles[k]
+	return k == "" || fragGenericSetTitles[k] || authorname.IsPlaceholderAuthor(strings.TrimSpace(t)) ||
+		metadata.IsGenericDirName(t)
 }
 
 // fragVaryingSlots lists the slots whose numbers differ across shapes (all
