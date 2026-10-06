@@ -5346,11 +5346,23 @@ func groupITunesNow(store OpsStore, target string, frags []fragBook) (string, er
 
 // fragGroupsITunesNow is groupITunesNow for a retire that writes the
 // fragments alone (retireIntoOnly): only the fragments' own version groups,
-// whose primary each retire hands on, read fresh from store.
-func fragGroupsITunesNow(store OpsStore, frags []fragBook) string {
+// whose primary each retire hands on. Each fragment is read fresh from
+// store for its group (not the re-plan's copy of it), and so is each group.
+func fragGroupsITunesNow(store OpsStore, frags []fragBook) (string, error) {
+	var fresh []fragBook
+	for _, fb := range frags {
+		b, err := store.GetBookByID(fb.ID)
+		if err != nil {
+			return "", fmt.Errorf("%s: read fragment %s: %w", fragFixerID, fb.ID, err)
+		}
+		if b == nil {
+			return fmt.Sprintf("fragment %s is gone", fb.ID), nil
+		}
+		fresh = append(fresh, fragBookOf(b))
+	}
 	lib := newFragLibrary()
 	lib.extIDs, lib.groupReads = store.GetExternalIDsForBook, store
-	return lib.groupsITunes(fragGroups(frags))
+	return lib.groupsITunes(fragGroups(fresh)), nil
 }
 
 // fragGroupReads are the point reads retireITunes makes: a version
@@ -7669,7 +7681,9 @@ func (f *fragmentFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repa
 		}
 		onlyFrags := ps.ITunesParent != "" && (locked.Class == fragClassCopy)
 		if onlyFrags {
-			if why := fragGroupsITunesNow(store, fragBooks); why != "" {
+			if why, err := fragGroupsITunesNow(store, fragBooks); err != nil {
+				return err
+			} else if why != "" {
 				return fmt.Errorf("%w: under the merge lock: %s", repairs.ErrChangedSincePlan, why)
 			}
 		} else if why, err := groupITunesNow(store, parentID, fragBooks); err != nil {

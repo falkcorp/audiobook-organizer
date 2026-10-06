@@ -241,6 +241,21 @@ func TestFragmentFixer_CopyClaimants(t *testing.T) {
 		}
 	})
 
+	t.Run("claimants whose hashes disagree stay ambiguous", func(t *testing.T) {
+		t.Parallel()
+		f := copyClaimantsFixture(t, false)
+		// The parent row has no hash, so each still matches it by name and
+		// size; the claimants' own hashes say they are different audio.
+		f.updateRow(t, f.ids["libA"], f.rowIDs["libA"], func(r *database.BookFile) { r.FileHash = "hash-a" })
+		f.updateRow(t, f.ids["libB"], f.rowIDs["libB"], func(r *database.BookFile) { r.FileHash = "hash-b" })
+		res := f.plan(t, "op-plan")
+		for _, role := range []string{"libA", "libB"} {
+			r := findRow(t, res, "ambiguous:"+f.ids[role])
+			require.Equal(t, fragSkipAmbiguous, r.Skipped)
+			require.Contains(t, r.SkipReason, "is claimed by 3 fragments")
+		}
+	})
+
 	t.Run("parent turns iTunes-linked after the plan: refused, nothing written", func(t *testing.T) {
 		t.Parallel()
 		f := copyClaimantsFixture(t, true)
@@ -262,6 +277,26 @@ func TestFragmentFixer_CopyClaimants(t *testing.T) {
 		fx.afterLockedReplan = func() { linkParentToITunes(t, f) }
 		err := applyRowInRun(t, f, fx, context.Background(), plan, "copy:"+f.ids["parent"])
 		require.ErrorIs(t, err, repairs.ErrChangedSincePlan)
+		require.True(t, f.live(t, "libA"))
+		require.True(t, f.live(t, "libB"))
+	})
+
+	t.Run("iTunes-linked parent: a fragment grouped with the parent after the locked re-plan is refused", func(t *testing.T) {
+		t.Parallel()
+		f := copyClaimantsFixture(t, true)
+		linkParentToITunes(t, f)
+		plan := f.plan(t, "op-plan")
+		fx := newFragmentFixer(f.p)
+		fx.afterLockedReplan = func() {
+			vg := "vg-late"
+			for _, id := range []string{f.ids["parent"], f.ids["libA"]} {
+				_, err := f.s.ModifyBook(id, func(b *database.Book) error { b.VersionGroupID = &vg; return nil })
+				require.NoError(t, err)
+			}
+		}
+		err := applyRowInRun(t, f, fx, context.Background(), plan, "copy:"+f.ids["parent"])
+		require.ErrorIs(t, err, repairs.ErrChangedSincePlan)
+		require.Contains(t, err.Error(), "vg-late")
 		require.True(t, f.live(t, "libA"))
 		require.True(t, f.live(t, "libB"))
 	})
