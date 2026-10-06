@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package audiobooks
 
@@ -27,6 +27,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
+	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
 
@@ -727,9 +728,9 @@ func (svc *AudiobookService) itunesPIDsToRemove(book *database.Book) []string {
 // requested, then the tombstone cleanup. It reports how many files or
 // directories it removed and the errors to report.
 func (svc *AudiobookService) purgeFinish(book *database.Book, deleteFiles bool) (filesDeleted int, errs []string) {
-	// Step 3: Delete file if requested (only from organizer root, never
-	// from protected/import paths, and never a path anything live still
-	// references).
+	// Step 3: Delete file if requested -- only from inside the library root
+	// (RootDir), never from protected/import paths, and never a path
+	// anything live still references.
 	//
 	// The book owned no book_file rows (step 0, enforced again by
 	// DeleteBook), so the only path it names is its own FilePath. That
@@ -739,9 +740,18 @@ func (svc *AudiobookService) purgeFinish(book *database.Book, deleteFiles bool) 
 	// audio. So a path any book_file row or any live book still names is
 	// left alone. (A combine's absorbed shell has FilePath cleared for the
 	// same reason — merge/service.go softDeleteAbsorbed.)
+	//
+	// The library-root check (purgePathInsideRoot) comes first. Until
+	// 2026-10-06 the comment above promised "only from organizer root" but
+	// nothing checked it: a soft-deleted book whose FilePath named a file
+	// anywhere on disk the process could write (a sibling directory of the
+	// root, a download folder no import path covers) had that file removed.
 	if deleteFiles && book.FilePath != "" {
+		root := config.Snapshot().RootDir
 		if isProtectedPath(svc.store, book.FilePath) {
 			slog.Debug("purge skipping file deletion for — protected path", "bookID", book.ID, "filePath", book.FilePath)
+		} else if rootErr := purgePathInsideRoot(book.FilePath, root); rootErr != nil {
+			errs = append(errs, fmt.Sprintf("%s: book purged, file kept: %v", book.ID, rootErr))
 		} else if refErr := svc.purgePathStillReferenced(book.FilePath); refErr != nil {
 			errs = append(errs, fmt.Sprintf("%s: book purged, file kept: %v", book.ID, refErr))
 		} else {
@@ -755,7 +765,7 @@ func (svc *AudiobookService) purgeFinish(book *database.Book, deleteFiles bool) 
 						errs = append(errs, fmt.Sprintf("%s: failed to remove empty dir %s: %v", book.ID, book.FilePath, rmErr))
 					} else if rmErr == nil {
 						filesDeleted++
-						removeEmptyParentsUpToRoot(book.FilePath)
+						removeEmptyParentsUpToRoot(book.FilePath, root)
 					}
 				}
 			} else if statErr == nil {
@@ -765,7 +775,7 @@ func (svc *AudiobookService) purgeFinish(book *database.Book, deleteFiles bool) 
 					// DB record gone, file still exists, tombstone preserved for sweeper
 				} else if err == nil {
 					filesDeleted++
-					removeEmptyParentsUpToRoot(book.FilePath)
+					removeEmptyParentsUpToRoot(book.FilePath, root)
 				}
 			}
 			// If statErr is os.IsNotExist, file is already gone — that's fine
@@ -775,6 +785,43 @@ func (svc *AudiobookService) purgeFinish(book *database.Book, deleteFiles bool) 
 	// Step 4: Clean up tombstone (best-effort — sweeper handles failures)
 	_ = svc.store.DeleteBookTombstone(book.ID)
 	return filesDeleted, errs
+}
+
+// purgePathInsideRoot returns nil only when path is strictly inside the
+// library root, so the purge may remove it from disk; otherwise an error
+// naming why it may not. Fail closed:
+//   - no root configured: nothing is removed (there is no "inside");
+//   - a relative path: nothing to anchor it to, refused;
+//   - the root itself: refused (the empty-directory branch would remove the
+//     library root);
+//   - lexically outside the root (a sibling such as "<root>2", or a ".."
+//     escape): refused;
+//   - inside lexically but resolving outside through a symlink
+//     (pathvalidation.SecureJoinResolved, which also resolves the root, so a
+//     root reached through a symlink such as macOS /var -> /private/var still
+//     matches): refused, as is a root or path that cannot be resolved.
+func purgePathInsideRoot(path, root string) error {
+	if root == "" {
+		return fmt.Errorf("no library root (root_dir) is configured, so nothing is deleted from disk; %s left in place", path)
+	}
+	if !filepath.IsAbs(path) {
+		return fmt.Errorf("%s is not an absolute path, so it cannot be checked against the library root %s", path, root)
+	}
+	cleanRoot := filepath.Clean(root)
+	rel, err := filepath.Rel(cleanRoot, filepath.Clean(path))
+	if err != nil {
+		return fmt.Errorf("%s cannot be placed under the library root %s: %w", path, root, err)
+	}
+	if rel == "." {
+		return fmt.Errorf("%s is the library root itself", path)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("%s is outside the library root %s", path, root)
+	}
+	if _, err := pathvalidation.SecureJoinResolved(cleanRoot, rel); err != nil {
+		return fmt.Errorf("%s does not resolve inside the library root %s: %w", path, root, err)
+	}
+	return nil
 }
 
 // purgePathStillReferenced returns a non-nil error naming the reason when path
@@ -800,14 +847,15 @@ func (svc *AudiobookService) purgePathStillReferenced(path string) error {
 }
 
 // removeEmptyParentsUpToRoot removes the now-empty parent directories of path,
-// walking up while they stay strictly inside config.AppConfig.RootDir.
-func removeEmptyParentsUpToRoot(path string) {
-	if config.AppConfig.RootDir == "" {
+// walking up while they stay strictly inside root (the RootDir purgeFinish
+// checked path against, read once so the check and the walk agree).
+func removeEmptyParentsUpToRoot(path, root string) {
+	if root == "" {
 		return
 	}
 	parentDir := filepath.Dir(path)
-	for parentDir != config.AppConfig.RootDir &&
-		pathutil.IsWithin(parentDir, config.AppConfig.RootDir) &&
+	for parentDir != root &&
+		pathutil.IsWithin(parentDir, root) &&
 		parentDir != "/" {
 		pe, peErr := os.ReadDir(parentDir)
 		if peErr != nil || len(pe) > 0 {

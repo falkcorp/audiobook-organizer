@@ -1,7 +1,7 @@
 // file: internal/audiobooks/purge_parent_cleanup_boundary_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 0a9c4e7b-8f13-4d26-b5a0-d17e3c6f98b2
-// last-edited: 2026-09-29
+// last-edited: 2026-10-06
 
 package audiobooks
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,9 +18,11 @@ import (
 )
 
 // After purging a book's files, PurgeSoftDeletedBooks removes the parent
-// directories it emptied, up to RootDir. A directory in a SIBLING of the root
-// ("<base>/lib2" next to "<base>/lib") is not under RootDir, so its parents
-// must be left alone. A bare prefix check walked up and deleted them.
+// directories it emptied, up to RootDir. A path in a SIBLING of the root
+// ("<base>/lib2" next to "<base>/lib") is not under RootDir. Until 2026-10-06
+// such a file was deleted (only its parents were spared); now nothing outside
+// the root is removed from disk at all (purgePathInsideRoot), and the purge
+// reports the file it kept.
 
 func setupPurgeBoundary(t *testing.T) (*AudiobookService, *database.PebbleStore, string) {
 	t.Helper()
@@ -51,7 +54,31 @@ func softDeleted(t *testing.T, store *database.PebbleStore, id, path string) {
 	}
 }
 
-func TestPurge_SingleFileInSiblingKeepsParents(t *testing.T) {
+// requireKeptOutsideRoot asserts the purge removed the row but nothing on
+// disk, and reported why.
+func requireKeptOutsideRoot(t *testing.T, res *PurgeResult, store *database.PebbleStore, id, path, reason string) {
+	t.Helper()
+	if res.Purged != 1 || res.FilesDeleted != 0 {
+		t.Fatalf("result = %+v, want Purged=1 FilesDeleted=0", res)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("%s removed from disk: %v", path, err)
+	}
+	if b, _ := store.GetBookByID(id); b != nil {
+		t.Errorf("book %s row still present; the row purge is not what is refused", id)
+	}
+	found := false
+	for _, e := range res.Errors {
+		if strings.Contains(e, id+": book purged, file kept:") && strings.Contains(e, reason) {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("errors %q do not report %s kept (%q)", res.Errors, path, reason)
+	}
+}
+
+func TestPurge_SingleFileInSiblingIsKeptAndReported(t *testing.T) {
 	svc, store, base := setupPurgeBoundary(t)
 	parent := filepath.Join(base, "lib2", "Author")
 	if err := os.MkdirAll(parent, 0o755); err != nil {
@@ -67,38 +94,148 @@ func TestPurge_SingleFileInSiblingKeepsParents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.FilesDeleted != 1 {
-		t.Fatalf("FilesDeleted = %d, want 1 (errors: %v)", res.FilesDeleted, res.Errors)
-	}
-	if _, err := os.Stat(parent); err != nil {
-		t.Errorf("parent %s outside RootDir was removed: %v", parent, err)
-	}
+	requireKeptOutsideRoot(t, res, store, "single", file, "outside the library root")
 }
 
-func TestPurge_DirectoryBookInSiblingKeepsParents(t *testing.T) {
+func TestPurge_DirectoryBookInSiblingIsKeptAndReported(t *testing.T) {
 	svc, store, base := setupPurgeBoundary(t)
-	parent := filepath.Join(base, "lib2", "Author")
-	bookDir := filepath.Join(parent, "Book")
+	bookDir := filepath.Join(base, "lib2", "Author", "Book")
 	if err := os.MkdirAll(bookDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// The book owns no book_file rows and its directory is empty: a book that
-	// owns rows is refused outright (purge_orphans_test.go), so the empty
-	// directory is the only directory shape the purge still removes.
 	softDeleted(t, store, "dirbook", bookDir)
 
 	res, err := svc.PurgeSoftDeletedBooks(context.Background(), true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.FilesDeleted != 1 {
-		t.Fatalf("FilesDeleted = %d, want 1 (errors: %v)", res.FilesDeleted, res.Errors)
+	requireKeptOutsideRoot(t, res, store, "dirbook", bookDir, "outside the library root")
+}
+
+// A file far from the root (not a sibling: an unrelated directory) is kept.
+func TestPurge_FileOutsideRootIsKeptAndReported(t *testing.T) {
+	svc, store, _ := setupPurgeBoundary(t)
+	elsewhere := t.TempDir()
+	file := filepath.Join(elsewhere, "downloads", "a.m4b")
+	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(bookDir); !os.IsNotExist(err) {
-		t.Fatalf("empty book dir %s not removed: %v", bookDir, err)
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(parent); err != nil {
-		t.Errorf("parent %s outside RootDir was removed: %v", parent, err)
+	softDeleted(t, store, "outside", file)
+
+	res, err := svc.PurgeSoftDeletedBooks(context.Background(), true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireKeptOutsideRoot(t, res, store, "outside", file, "outside the library root")
+}
+
+// A ".." escape that names a file outside the root through the root's own
+// prefix is outside, however it is spelled.
+func TestPurge_DotDotEscapeIsKeptAndReported(t *testing.T) {
+	svc, store, base := setupPurgeBoundary(t)
+	file := filepath.Join(base, "secret.m4b")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	escaped := config.AppConfig.RootDir + "/Author/../../secret.m4b"
+	softDeleted(t, store, "escape", escaped)
+
+	res, err := svc.PurgeSoftDeletedBooks(context.Background(), true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireKeptOutsideRoot(t, res, store, "escape", file, "outside the library root")
+}
+
+// A path inside the root lexically that resolves outside it through a
+// symlinked directory is kept.
+func TestPurge_SymlinkEscapeIsKeptAndReported(t *testing.T) {
+	svc, store, base := setupPurgeBoundary(t)
+	outside := filepath.Join(base, "outside")
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(outside, "a.m4b")
+	if err := os.WriteFile(target, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(config.AppConfig.RootDir, "Linked")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	softDeleted(t, store, "symlinked", filepath.Join(link, "a.m4b"))
+
+	res, err := svc.PurgeSoftDeletedBooks(context.Background(), true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireKeptOutsideRoot(t, res, store, "symlinked", target, "does not resolve inside the library root")
+}
+
+// The library root itself, as a book's directory, is never removed even when
+// it is empty.
+func TestPurge_RootItselfIsKeptAndReported(t *testing.T) {
+	svc, store, _ := setupPurgeBoundary(t)
+	root := config.AppConfig.RootDir
+	softDeleted(t, store, "rootbook", root)
+
+	res, err := svc.PurgeSoftDeletedBooks(context.Background(), true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireKeptOutsideRoot(t, res, store, "rootbook", root, "is the library root itself")
+}
+
+// No RootDir configured: nothing is inside it, so nothing is deleted.
+func TestPurge_NoRootConfiguredDeletesNothing(t *testing.T) {
+	svc, store, base := setupPurgeBoundary(t)
+	file := filepath.Join(base, "lib", "a.m4b")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	config.AppConfig.RootDir = ""
+	softDeleted(t, store, "noroot", file)
+
+	res, err := svc.PurgeSoftDeletedBooks(context.Background(), true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireKeptOutsideRoot(t, res, store, "noroot", file, "no library root")
+}
+
+// Inside the root the file is removed, and the parents it emptied are
+// removed up to -- not including -- the root.
+func TestPurge_InsideRootRemovesFileAndParentsUpToRoot(t *testing.T) {
+	svc, store, _ := setupPurgeBoundary(t)
+	root := config.AppConfig.RootDir
+	parent := filepath.Join(root, "Author", "Series")
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(parent, "a.m4b")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	softDeleted(t, store, "inside", file)
+
+	res, err := svc.PurgeSoftDeletedBooks(context.Background(), true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.FilesDeleted != 1 || len(res.Errors) != 0 {
+		t.Fatalf("result = %+v, want FilesDeleted=1 and no errors", res)
+	}
+	if _, err := os.Stat(file); !os.IsNotExist(err) {
+		t.Fatalf("%s not removed: %v", file, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "Author")); !os.IsNotExist(err) {
+		t.Errorf("emptied parent %s not removed: %v", filepath.Join(root, "Author"), err)
+	}
+	if _, err := os.Stat(root); err != nil {
+		t.Errorf("library root removed: %v", err)
 	}
 }
 
