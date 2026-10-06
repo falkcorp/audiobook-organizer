@@ -1,7 +1,7 @@
 // file: internal/metafetch/search_variants.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 74a7d36b-024c-4887-a6c3-4ebaf2e61490
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package metafetch
 
@@ -131,6 +131,12 @@ type parsedTitle struct {
 	// (buildQueryVariants: an Exact filter, keepVariant) -- the bulk fetch
 	// applies the top candidate with no score floor.
 	AuthorIsTitle bool
+	// SuspectAuthor: the author restates the title's words but nothing
+	// proves it junk (resolveSearchInputs, authorVsTitle). It is still sent,
+	// and the title is also asked alone, held to answers titled exactly the
+	// book (buildQueryVariants), right after the title+author question so
+	// the variant cap never drops it.
+	SuspectAuthor bool
 }
 
 var (
@@ -558,6 +564,11 @@ type queryVariant struct {
 	// personRequired: an answer must name a person of the book's (a
 	// title-only question answers with every author's book of that title).
 	personRequired bool
+	// noPeople: the answers are judged as for a book with no people -- the
+	// suspect-author question (parsedTitle.SuspectAuthor), whose credit may
+	// be junk and so cannot vouch for or veto an answer. Its filter is the
+	// exact title, every answer naming one author.
+	noPeople bool
 }
 
 // Variant kinds, for logs and the cache key.
@@ -581,6 +592,9 @@ func (v queryVariant) key() string {
 // accept returns the answers this variant keeps. people is the book's author
 // and narrator, the persons a result may be vouched by.
 func (v queryVariant) accept(results []metadata.BookMetadata, people string) []metadata.BookMetadata {
+	if v.noPeople {
+		people = ""
+	}
 	if v.slotSeries != "" {
 		if v.Kind == variantSeriesAuthor {
 			results = keepSeriesSlot(results, v.slotSeries, v.slotPosition)
@@ -706,6 +720,13 @@ func buildQueryVariants(p parsedTitle, literal, rawTitle, author, narrator strin
 	switch {
 	case author != "":
 		add(mk(variantTitleAuthor, base, author, baseFilter))
+		if p.SuspectAuthor {
+			if a := anchorWords(base, ""); len(a) > 0 {
+				v := mk(variantTitleOnly, base, "", &titleVariant{Query: base, Anchor: a, Exact: true})
+				v.onlyIfEmpty, v.noPeople = true, true
+				add(v)
+			}
+		}
 	case narrator == "":
 		add(mk(variantTitleOnly, base, "", baseFilter))
 	}

@@ -1,0 +1,44 @@
+# file: internal/metabatch/testdata/nomatch_shapes.tsv
+# version: 1.0.0
+# guid: bc7cbda1-2230-4234-aad9-2c7dd4883dc8
+# last-edited: 2026-10-06
+# Made-up rows, one or a few per shape class of the 2026-10-05 no-match census (732 books). Titles, people and paths are invented.
+id	title	author	dur_min	asin	path
+r001	read by narrator	Book 2 (Unabridged) & Some & Example Saga	12		/srv/example-organizer/Some Example Saga, Book 2 (Unabridged)/001/001 - Some Example Saga, Book 2 (Unabridged) - read by narrator.mp3
+r002	read by narrator	Book 2 (Unabridged) & Some & Example Saga	12		/srv/example-organizer/Some Example Saga, Book 2 (Unabridged)/002/002 - Some Example Saga, Book 2 (Unabridged) - read by narrator.mp3
+r003	read by narrator	Book 2 (Unabridged) & Some & Example Saga	12		/srv/example-organizer/Some Example Saga, Book 2 (Unabridged)/003/003 - Some Example Saga, Book 2 (Unabridged) - read by narrator.mp3
+r004	read by narrator	Book 2 (Unabridged) & Some & Example Saga	12		/srv/example-organizer/Some Example Saga, Book 2 (Unabridged)/004/004 - Some Example Saga, Book 2 (Unabridged) - read by narrator.mp3
+r005	read by narrator	Harbor Lights	6		/srv/example-organizer/Harbor Lights/007/007 - Harbor Lights - read by narrator.mp3
+r006	read by narrator	Harbor Lights	6		/srv/example-organizer/Harbor Lights/008/008 - Harbor Lights - read by narrator.mp3
+r007	read by narrator	Glass Orchard	1300		/srv/example-organizer/Glass Orchard Book 3/Glass Orchard/read by narrator/read by narrator.mp3
+r008	read by narrator	The Quiet Field	42		/srv/example-organizer/Book 1 (Unabridged)/- The Quiet Field/read by narrator/read by narrator.mp3
+r009	read by narrator	Example Book	9		/srv/example-organizer/Example Book/Example, Jane/read by narrator/read by narrator.mp3
+r010	Some Summoner, Vol. 03: The Army of Things	[XYZ]	480		/srv/example-organizer/Pat Reader/Some Summoner/Some Summoner, Vol. 03 - The Army of Things/Some Summoner, Vol. 03 - The Army of Things.m4b
+r011	Some Summoner, Vol. 04 [XYZ]	[XYZ]	470		/srv/example-organizer/Pat Reader/Some Summoner/Some Summoner, Vol. 04 [XYZ]/Some Summoner, Vol. 04 [XYZ].m4b
+r012	The Lighthouse Keeper	AudioHouse [Jane Example]	350		/srv/example-organizer/AudioHouse [Jane Example]/The Lighthouse Keeper
+r013	Some Title 5_copy1	Jane Example	1200		/srv/example-organizer/Jane Example/Some Title/Some Title 5/Some Title 5_copy1.m4b
+r014	copy1	Example Author	7		/srv/example-organizer/Example Author/copy1/copy1.mp3
+r015	copy2	Opening Words	1		/srv/example-organizer/Opening Words/Opening Words/Opening Words_copy2.mp3
+r016	Jane Example	Some Long Book_02-04	4		/srv/example-organizer/Some Long Book_02-04/Jane Example/Jane Example.mp3
+r017	Jane Example	Some Long Book_03-08	4		/srv/example-organizer/Some Long Book_03-08/Jane Example/Jane Example.mp3
+r018	Jane Example	Some Long Book_10-02	4		/srv/example-organizer/Some Long Book_10-02/Jane Example/Jane Example.mp3
+r019	Onward	zzJane Example	600		/srv/example-organizer/Unknown Author/227 - Onward
+r020	Return	zzJohn Q. Sample	680		/srv/example-organizer/Unknown Author/244 - Return
+r021	Ring Harbor	Ring Harbor	330		/srv/example-organizer/Ring Harbor/Ring Harbor/Ring Harbor.mp3
+r022	Prince of Examples	Prince of Examples	9		/srv/example-organizer/Prince of Examples/01/01.m4b
+r023	Prince of Examples	Prince of Examples	9		/srv/example-organizer/Prince of Examples/02/02.m4b
+r024	Example Chronicles Book 1	Example Chronicles Book 1	500		/srv/example-organizer/Example Chronicles Book 1/Example Chronicles Book 1.m4b
+r025	Example Title (Unabridged)	Example Title (Unabridged)	400		/srv/example-organizer/Example Title (Unabridged)/Example Title (Unabridged).m4b
+r026	Those Who Waited (Unabridged)	Jane Example	500		/srv/example-organizer/Jane Example/Those Who Waited (Unabridged)/Those Who Waited (Unabridged).m4b
+r027	Fish &amp; Chips, Volume II	Fish & Chips	2		/srv/example-organizer/Fish & Chips/Fish &amp; Chips, Volume II/24/24.mp3
+r028	Salt &amp; Pepper	Salt & Pepper	1		/srv/example-organizer/Salt & Pepper/Salt &amp; Pepper/02/02.mp3
+r029	Example Story - Part 03	Jane Example	20		/srv/example-organizer/Jane Example/Example Story/Example Story - Part 03/Example Story - Part 03.mp3
+r030	Meeting Point (2017) [Example World 3]	Jane Example	530		/srv/example-organizer/Jane Example/Example World/Meeting Point (2017) [Example World 3]/Meeting Point (2017) [Example World 3].m4b
+r031	Example Worlds - 5 - The Second Empire	Example Worlds	560		/srv/example-organizer/John Sample/Example Worlds/Example Worlds - 5 - The Second Empire/Example Worlds - 5 - The Second Empire.m4b
+r032	Example Worlds - 4 - The First Empire	Example Worlds	570		/srv/example-organizer/John Sample/Example Worlds/Example Worlds - 4 - The First Empire/Example Worlds - 4 - The First Empire.m4b
+r033	Void Example 4	Void Example	590		/srv/example-organizer/John Sample/Void Example/Void Example 4/Void Example 4.m4b
+r034	Void Example 5	Void Example	700		/srv/example-organizer/John Sample/Void Example/Void Example 5/Void Example 5.m4b
+r035	Rise of the Example Paladin, Book One_ A LitRPG Apocalypse	A LitRPG Apocalypse	760		/srv/example-organizer/A LitRPG Apocalypse/Rise of the Example Paladin/Rise of the Example Paladin, Book One_ A LitRPG Apocalypse/Rise of the Example Paladin, Book One_ A LitRPG Apocalypse.m4b
+r036	The Example of Doubt꞉ Some Detective, Book 3	Jane Example	540		/srv/example-organizer/Jane Example/The Example of Doubt꞉ Some Detective, Book 3/The Example of Doubt꞉ Some Detective, Book 3.mp3
+r037	Wasteland Tales 2_ More Example Stories	John Sample	600		/srv/example-organizer/Unknown Author/Wasteland Tales 2_ More Example Stories/Wasteland Tales 2_ More Example Stories - Unknown Author.mp3
+r038	Unknown Title	Example Magic_	300		/srv/example-organizer/Example Magic_/Unknown Title/Unknown Title.mp3
