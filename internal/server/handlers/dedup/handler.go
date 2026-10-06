@@ -1,5 +1,5 @@
 // file: internal/server/handlers/dedup/handler.go
-// version: 1.28.0
+// version: 1.29.0
 // guid: d1b9e024-d28c-4d62-8f90-96d7064559c4
 // last-edited: 2026-10-06
 
@@ -97,6 +97,11 @@ type Handler struct {
 	// stays in package server (shared elsewhere). The controller passes
 	// s.markDuplicatesFlaggedDirty.
 	markDuplicatesFlaggedDirty func(reason string)
+
+	// restoreBulkLabel is embeddingStore.RestoreLabelAfterBulkRevert, held as
+	// a field only so a test can make the restore fail after the status step
+	// (export_test.go). Set by New.
+	restoreBulkLabel func(candidateID int64) (bool, error)
 }
 
 // New constructs a dedup Handler from its dependencies.
@@ -109,7 +114,7 @@ func New(
 	publishEvent func(ctx context.Context, event plugin.Event),
 	markDuplicatesFlaggedDirty func(reason string),
 ) *Handler {
-	return &Handler{
+	h := &Handler{
 		store:                      store,
 		embeddingStore:             embeddingStore,
 		opRegistry:                 opRegistry,
@@ -118,6 +123,10 @@ func New(
 		publishEvent:               publishEvent,
 		markDuplicatesFlaggedDirty: markDuplicatesFlaggedDirty,
 	}
+	if embeddingStore != nil {
+		h.restoreBulkLabel = embeddingStore.RestoreLabelAfterBulkRevert
+	}
+	return h
 }
 
 // ListDedupCandidates handles GET /api/v1/dedup/candidates.
@@ -251,26 +260,11 @@ func (h *Handler) ListDedupCandidates(c *gin.Context) {
 	// slips through (race, missed delete, crash between cleanup runs),
 	// the UI never shows a candidate that would 404 when clicked.
 	// Non-book entities (e.g. author) skip the existence check.
-	store := h.store
-	// bookCache memoises GetBookByID across both referenced IDs of every
-	// candidate. A miss is recorded as a nil entry so we never re-query a
-	// known-dead ID. The cached *database.Book doubles as the include_books
-	// enrichment payload below — no second fetch.
-	bookCache := make(map[string]*database.Book, len(candidates)*2)
-	lookupBook := func(id string) *database.Book {
-		if id == "" {
-			return nil
-		}
-		if v, ok := bookCache[id]; ok {
-			return v
-		}
-		book, gerr := store.GetBookByID(id)
-		if gerr != nil {
-			book = nil
-		}
-		bookCache[id] = book
-		return book
-	}
+	//
+	// The memoised lookup's *database.Book doubles as the include_books
+	// enrichment payload below — no second fetch. A read ERROR is not a
+	// missing book: it refuses the request instead of silently hiding the row.
+	lookupBook := newBookLookup(h.store, len(candidates)*2)
 	// isMetadataMatched reports whether a book has authoritative metadata, so it
 	// does NOT need manual matching. A book counts as matched when EITHER a human
 	// confirmed the match (MetadataReviewStatus == "matched") OR it carries an
@@ -291,12 +285,23 @@ func (h *Handler) ListDedupCandidates(c *gin.Context) {
 	items := make([]gin.H, 0, len(candidates))
 	for _, cand := range candidates {
 		if cand.EntityType == "book" {
-			if isDeadBookRow(cand, lookupBook) {
+			dead, derr := isDeadBookRow(cand, lookupBook.get)
+			if derr != nil {
+				httputil.InternalError(c, "failed to read a candidate's book", derr)
+				return
+			}
+			if dead {
 				dropped++
 				continue
 			}
-			ba := lookupBook(cand.EntityAID)
-			bb := lookupBook(cand.EntityBID)
+			// Both reads are cached by the dead-row check above, so these
+			// cannot fail; the check stays so a future change cannot drop one.
+			ba, aerr := lookupBook.get(cand.EntityAID)
+			bb, berr := lookupBook.get(cand.EntityBID)
+			if err := errors.Join(aerr, berr); err != nil {
+				httputil.InternalError(c, "failed to read a candidate's book", err)
+				return
+			}
 			// both_unmatched: keep only pairs where NEITHER side is matched.
 			if bothUnmatched && (isMetadataMatched(ba) || isMetadataMatched(bb)) {
 				continue
@@ -343,8 +348,14 @@ func (h *Handler) ListDedupCandidates(c *gin.Context) {
 		// cards (title/author/path/metadata-quality) inline. nil when the
 		// entity is a non-book type or the lookup missed.
 		if includeBooks {
-			row["book_a"] = lookupBook(cand.EntityAID)
-			row["book_b"] = lookupBook(cand.EntityBID)
+			ba, aerr := lookupBook.get(cand.EntityAID)
+			bb, berr := lookupBook.get(cand.EntityBID)
+			if err := errors.Join(aerr, berr); err != nil {
+				httputil.InternalError(c, "failed to read a candidate's book", err)
+				return
+			}
+			row["book_a"] = ba
+			row["book_b"] = bb
 		}
 		items = append(items, row)
 	}
@@ -1355,42 +1366,82 @@ type bulkCandidateRequest struct {
 	keepSide      string
 }
 
+// bookLookup memoises GetBookByID for one request. A book that does not
+// exist (GetBookByID's (nil, nil)) is cached as nil so a known-dead id is
+// never re-queried. A read error is NOT a missing book -- PebbleStore returns
+// one on an unmarshal or signature-hydration failure of a book that does
+// exist -- so it is returned (uncached) instead of being read as "dead".
+type bookLookup struct {
+	store DedupStore
+	cache map[string]*database.Book
+}
+
+func newBookLookup(store DedupStore, sizeHint int) *bookLookup {
+	return &bookLookup{store: store, cache: make(map[string]*database.Book, sizeHint)}
+}
+
+func (l *bookLookup) get(id string) (*database.Book, error) {
+	if id == "" {
+		return nil, nil
+	}
+	if b, ok := l.cache[id]; ok {
+		return b, nil
+	}
+	b, err := l.store.GetBookByID(id)
+	if err != nil {
+		return nil, fmt.Errorf("read book %q: %w", id, err)
+	}
+	l.cache[id] = b
+	return b, nil
+}
+
 // isDeadBookRow reports whether a book candidate names a book that no longer
 // exists. ONE rule for the list endpoint's dead-row filter and for every
 // filter-scoped bulk count (liveBulkCandidates): when they differed, the
 // count a reviewer confirmed could never equal the count the server
 // re-evaluated, and expected_total turned into a permanent 409.
-func isDeadBookRow(cand database.DedupCandidate, lookup func(string) *database.Book) bool {
+//
+// A lookup error is returned, never read as "dead": a book that exists but
+// could not be read would otherwise vanish from the list and from a bulk
+// action's count and set without anyone being told.
+func isDeadBookRow(cand database.DedupCandidate, lookup func(string) (*database.Book, error)) (bool, error) {
 	if cand.EntityType != "book" {
-		return false
+		return false, nil
 	}
-	return lookup(cand.EntityAID) == nil || lookup(cand.EntityBID) == nil
+	a, err := lookup(cand.EntityAID)
+	if err != nil {
+		return false, err
+	}
+	if a == nil {
+		return true, nil
+	}
+	b, err := lookup(cand.EntityBID)
+	if err != nil {
+		return false, err
+	}
+	return b == nil, nil
 }
 
 // liveBulkCandidates is the set a filter-scoped bulk action acts on and the
 // number bulk-count reports: every candidate the bound filter matches, minus
 // dead-book rows (isDeadBookRow). bulk-count, bulk-link and bulk-reject all
-// go through it, so expected_total compares like with like.
+// go through it, so expected_total compares like with like. A book that
+// cannot be read fails the call: the caller refuses the request.
 func (h *Handler) liveBulkCandidates(f database.CandidateFilter) ([]database.DedupCandidate, error) {
 	cands, _, err := h.embeddingStore.ListCandidates(f)
 	if err != nil {
 		return nil, err
 	}
-	cache := make(map[string]*database.Book, len(cands)*2)
-	lookup := func(id string) *database.Book {
-		if b, ok := cache[id]; ok {
-			return b
-		}
-		b, gerr := h.store.GetBookByID(id)
-		if gerr != nil {
-			b = nil
-		}
-		cache[id] = b
-		return b
-	}
+	lookup := newBookLookup(h.store, len(cands)*2)
 	live := cands[:0]
 	for _, cand := range cands {
-		if !isDeadBookRow(cand, lookup) {
+		dead, derr := isDeadBookRow(cand, lookup.get)
+		if derr != nil {
+			// Refuse the whole request: skipping the row would shrink the set
+			// a bulk action acts on (and the count it confirms) silently.
+			return nil, derr
+		}
+		if !dead {
 			live = append(live, cand)
 		}
 	}
@@ -1531,17 +1582,29 @@ func (h *Handler) BulkRejectDedupCandidates(c *gin.Context) {
 				mu.Unlock()
 				return
 			}
+			// The undo record (the label this replaces, or a "none" marker) is
+			// what the revert is keyed off, so a row only counts as dismissed
+			// once its record has landed. Written AFTER the guarded status
+			// write on purpose: that write is what serialises two overlapping
+			// bulk requests, so only the winner ever writes a record. On a
+			// failed save the capture is skipped (the earlier label stays) and
+			// the dismiss is rolled back, so nothing is left un-undoable.
+			if perr := es.SaveLabelBeforeBulk(cand.ID); perr != nil {
+				reason := "undo record not saved, dismiss rolled back: " + perr.Error()
+				if berr := es.ReclassifyCandidate(cand.ID, "dismissed", "pending"); berr != nil {
+					reason = "dismissed but NOT undoable (undo record not saved: " + perr.Error() +
+						"; rollback failed: " + berr.Error() + ")"
+				}
+				mu.Lock()
+				failures = append(failures, failure{CandidateID: cand.ID, Reason: reason})
+				mu.Unlock()
+				return
+			}
 			mu.Lock()
 			rejectedIDs = append(rejectedIDs, cand.ID)
 			mu.Unlock()
-			// Keep the label this replaces (an earlier human or rule verdict)
-			// so a revert restores it instead of erasing it. Best-effort, like
-			// the capture itself: a failure here only loses the restore.
-			if perr := es.SaveLabelBeforeBulk(cand.ID); perr != nil {
-				bulkRejectLog.Warn("bulk-reject: candidate %d: earlier label not saved for undo: %v", cand.ID, perr)
-			}
 			// Capture the bulk reject as a gold not_dup label (best-effort),
-			// under its own reason: the revert acts only on rows carrying it.
+			// under its own reason. The revert does not depend on it.
 			h.captureHumanLabelByID(cand.ID, labelNotDup, labelReasonUserBulkDismiss)
 		}()
 	}
@@ -1569,10 +1632,18 @@ func (h *Handler) BulkRejectDedupCandidates(c *gin.Context) {
 // POST /api/v1/dedup/candidates/bulk-reject/revert.
 //
 // Body: {"candidate_ids": [..]} -- the rejected_ids a bulk-reject returned.
-// Puts each back to pending through ReclassifyCandidate(dismissed -> pending),
-// so a row someone changed since (re-decided, pinned, deleted) is reported
-// and left alone, and removes the not_dup gold label only when it is still
-// the one the bulk reject recorded (labelReasonUserBulkDismiss).
+//
+// Acts only on rows carrying the bulk dismiss's undo record
+// (database.GetBulkDismissPrior), written for every row it dismissed whether
+// or not the best-effort not_dup capture landed. Each goes back to pending
+// through ReclassifyCandidate(dismissed -> pending), so a row someone changed
+// since (re-decided, pinned, deleted) is reported and left alone, and then
+// gets its earlier label back (or none). A row whose label was re-decided
+// since is left alone too.
+//
+// A row whose status write succeeded but whose label restore failed is
+// reported as failed with its record kept; sending it again finishes the
+// restore (the status is already pending, so the status step is skipped).
 func (h *Handler) RevertBulkRejectDedupCandidates(c *gin.Context) {
 	es := h.embeddingStore
 	if es == nil {
@@ -1600,31 +1671,19 @@ func (h *Handler) RevertBulkRejectDedupCandidates(c *gin.Context) {
 	}
 	var failures []failure
 	reverted := []int64{}
+	statusChanged := false
 	// Sequential: each step is one guarded status write under the store's
-	// lock plus at most one label read/delete, and the list is capped above.
+	// lock plus a few label reads/writes, and the list is capped above.
 	for _, id := range body.CandidateIDs {
-		// Only a dismissal a bulk dismiss made: its label carries
-		// labelReasonUserBulkDismiss. A row dismissed one at a time, or
-		// re-labelled since, is someone else's verdict and is left alone.
-		ex, lerr := es.GetLabeledExample(id)
-		if lerr != nil {
-			failures = append(failures, failure{CandidateID: id, Reason: "label unreadable: " + lerr.Error()})
-			continue
-		}
-		if ex == nil || ex.LabelReason != labelReasonUserBulkDismiss {
-			failures = append(failures, failure{CandidateID: id, Reason: "not dismissed by a bulk dismiss; left alone"})
-			continue
-		}
-		if err := es.ReclassifyCandidate(id, "dismissed", "pending"); err != nil {
-			failures = append(failures, failure{CandidateID: id, Reason: err.Error()})
+		reason, moved := h.revertOneBulkDismiss(id)
+		statusChanged = statusChanged || moved
+		if reason != "" {
+			failures = append(failures, failure{CandidateID: id, Reason: reason})
 			continue
 		}
 		reverted = append(reverted, id)
-		if _, rerr := es.RestoreLabelAfterBulkRevert(id); rerr != nil {
-			bulkRejectLog.Warn("bulk-reject revert: candidate %d is pending again but its label was not restored: %v", id, rerr)
-		}
 	}
-	if len(reverted) > 0 {
+	if statusChanged {
 		h.markDuplicatesFlaggedDirty("bulk_reject_revert")
 	}
 	bulkRejectLog.Info("dedup bulk reject revert: reverted=%d failed=%d", len(reverted), len(failures))
@@ -1635,6 +1694,49 @@ func (h *Handler) RevertBulkRejectDedupCandidates(c *gin.Context) {
 		"failures":     failures,
 		"reverted_ids": reverted,
 	})
+}
+
+// revertOneBulkDismiss undoes one bulk dismissal. It returns "" on success or
+// the failure reason, and whether the candidate's status was changed (a row
+// whose label restore then failed is pending again, so the dirty flag must
+// still be raised).
+func (h *Handler) revertOneBulkDismiss(id int64) (failReason string, statusChanged bool) {
+	es := h.embeddingStore
+	// Only a dismissal a bulk dismiss made: it has an undo record. A row
+	// dismissed one at a time is someone else's verdict and is left alone.
+	rec, err := es.GetBulkDismissPrior(id)
+	if errors.Is(err, database.ErrNoBulkDismissRecord) {
+		return "not dismissed by a bulk dismiss; left alone", false
+	}
+	if err != nil {
+		return "undo record unreadable: " + err.Error(), false
+	}
+	cur, err := es.GetLabeledExample(id)
+	if err != nil {
+		return "label unreadable: " + err.Error(), false
+	}
+	if !rec.Owns(cur) {
+		return "label re-decided since the bulk dismiss; left alone", false
+	}
+	cand, err := es.GetCandidateByID(id)
+	if err != nil {
+		return "candidate unreadable: " + err.Error(), false
+	}
+	// Retry of a revert whose status step already ran (its label restore
+	// failed): the row is pending and its record is still there, so only the
+	// restore is left to do.
+	if cand == nil || cand.Status != "pending" {
+		if err := es.ReclassifyCandidate(id, "dismissed", "pending"); err != nil {
+			return err.Error(), false
+		}
+		statusChanged = true
+	}
+	if _, err := h.restoreBulkLabel(id); err != nil {
+		bulkRejectLog.Warn("bulk-reject revert: candidate %d is pending but its label was not restored: %v", id, err)
+		return "pending again, but the earlier label was not restored (" + err.Error() +
+			"); revert this id again to finish", statusChanged
+	}
+	return "", statusChanged
 }
 
 // LinkDedupCluster handles POST /api/v1/dedup/candidates/link-cluster.

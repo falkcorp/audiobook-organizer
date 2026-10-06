@@ -1,5 +1,5 @@
 // file: web/src/components/dedup/__tests__/DedupAcousticTab.selectAll.test.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3f0b6c1e-8a24-4d5e-9b71-2c6e4a8d0f35
 // last-edited: 2026-10-06
 //
@@ -69,9 +69,16 @@ async function selectAllMatching(user: ReturnType<typeof userEvent.setup>) {
   expect(screen.getByTestId('acoustic-select-all-banner')).toHaveTextContent(
     'All 3 candidates on this page are selected.'
   );
+  // The server's PENDING count -- what the dialog confirms and the bulk
+  // endpoints act on -- not the list's every-status total.
+  await waitFor(() =>
+    expect(screen.getByTestId('acoustic-select-all-matching')).toHaveTextContent(
+      `Select all ${PENDING} matching`
+    )
+  );
   await user.click(screen.getByTestId('acoustic-select-all-matching'));
   expect(screen.getByTestId('acoustic-select-all-banner')).toHaveTextContent(
-    `All ${TOTAL} candidates matching this filter are selected.`
+    `All ${PENDING} candidates matching this filter are selected.`
   );
 }
 
@@ -87,7 +94,7 @@ describe('AcousticDedupTab selection', () => {
     renderTab();
     await selectAllMatching(user);
 
-    await user.click(screen.getByRole('button', { name: `Keep A on ${TOTAL}` }));
+    await user.click(screen.getByRole('button', { name: `Keep A on ${PENDING}` }));
     const dialog = await screen.findByTestId('acoustic-bulk-confirm');
     expect(dialog).toHaveTextContent(`Keep A on all ${PENDING} pending candidates?`);
     await user.click(within(dialog).getByTestId('acoustic-bulk-confirm-btn'));
@@ -128,7 +135,7 @@ describe('AcousticDedupTab selection', () => {
     });
     renderTab();
     await selectAllMatching(user);
-    await user.click(screen.getByRole('button', { name: `Dismiss ${TOTAL}` }));
+    await user.click(screen.getByRole('button', { name: `Dismiss ${PENDING}` }));
     await user.click(
       within(await screen.findByTestId('acoustic-bulk-confirm')).getByTestId(
         'acoustic-bulk-confirm-btn'
@@ -154,7 +161,7 @@ describe('AcousticDedupTab selection', () => {
     vi.mocked(api.filterChangedOf).mockReturnValue({ expected: PENDING, matched: PENDING + 1 });
     renderTab();
     await selectAllMatching(user);
-    await user.click(screen.getByRole('button', { name: `Dismiss ${TOTAL}` }));
+    await user.click(screen.getByRole('button', { name: `Dismiss ${PENDING}` }));
     await user.click(
       within(await screen.findByTestId('acoustic-bulk-confirm')).getByTestId(
         'acoustic-bulk-confirm-btn'

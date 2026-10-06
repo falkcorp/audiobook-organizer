@@ -1,5 +1,5 @@
 // file: web/src/components/dedup/DedupAcousticTab.tsx
-// version: 1.5.0
+// version: 1.6.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678902
 // last-edited: 2026-10-06
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
@@ -41,8 +41,8 @@ import type { Book, DedupCandidate } from '../../services/api';
 import { CoverLightbox } from '../CoverLightbox';
 import { fetchBookCached } from './DedupEmbeddingTab';
 import { useRowSelection } from '../../hooks/useRowSelection';
+import { useServerMatchingCount } from '../../hooks/useServerMatchingCount';
 import { SelectAllMatchingBanner } from '../common/SelectAllMatchingBanner';
-
 
 type AcousticBulkAction = 'dismiss' | 'keep-a' | 'keep-b';
 const ACOUSTIC_LIST_PARAMS = { layer: 'acoustid' } as const;
@@ -592,7 +592,10 @@ export function AcousticDedupTab() {
   const [bulkProgress, setBulkProgress] = useState<string | null>(null);
   // A cross-page action awaiting confirmation, with the PENDING count it will
   // be confirmed against (sent as expected_total).
-  const [confirmBulk, setConfirmBulk] = useState<{ action: AcousticBulkAction; pending: number } | null>(null);
+  const [confirmBulk, setConfirmBulk] = useState<{
+    action: AcousticBulkAction;
+    pending: number;
+  } | null>(null);
   // Ids the last cross-page dismiss rejected, for Undo.
   const [undoIds, setUndoIds] = useState<number[] | null>(null);
   const [purging, setPurging] = useState(false);
@@ -664,12 +667,33 @@ export function AcousticDedupTab() {
     [candidates]
   );
   const isDecided = useCallback((id: number) => decidedIds.has(id), [decidedIds]);
+  // "N matching" on the banner and the bulk bar is the SERVER's pending count
+  // (what the confirm dialog shows and the bulk endpoints act on), not the
+  // list's total, which counts every status. Fetched only while the page is
+  // fully selected or all-matching is on; the list total stands in until then.
+  const fetchPendingCount = useCallback(
+    (signal: AbortSignal) => api.countBulkDedupCandidates({ ...ACOUSTIC_BULK_FILTER }, { signal }),
+    []
+  );
+  const matchingCount = useServerMatchingCount(fetchPendingCount, candidates);
   const selection = useRowSelection<number>({
     pageKeys,
-    totalMatching: total,
+    totalMatching: matchingCount.totalOr(total),
     resetKey: String(rowsPerPage),
     isDisabled: isDecided,
   });
+  matchingCount.sync(selection.pageFullySelected || selection.allMatching);
+  const matchingCountState =
+    matchingCount.count.state === 'ready'
+      ? undefined
+      : matchingCount.count.state === 'error'
+        ? ('approximate' as const)
+        : ('counting' as const);
+  const selectedLabel = !selection.allMatching
+    ? selection.selectedCount.toLocaleString()
+    : matchingCountState === 'counting'
+      ? '…'
+      : `${matchingCountState === 'approximate' ? '~' : ''}${selection.selectedCount.toLocaleString()}`;
 
   // Cleanup timeout on unmount
   useEffect(() => {
@@ -924,7 +948,9 @@ export function AcousticDedupTab() {
     setBulkBusy(true);
     setStatusMsg(null);
     setUndoIds(null);
-    setBulkProgress(`${BULK_LABEL[action]}: working on ${pending.toLocaleString()} pending candidates…`);
+    setBulkProgress(
+      `${BULK_LABEL[action]}: working on ${pending.toLocaleString()} pending candidates…`
+    );
     const filter = { ...ACOUSTIC_BULK_FILTER, expected_total: pending };
     try {
       if (action === 'dismiss') {
@@ -1226,7 +1252,12 @@ export function AcousticDedupTab() {
           }}
           action={
             undoIds ? (
-              <Button size="small" color="inherit" onClick={() => void undoBulkDismiss()} data-testid="acoustic-undo-dismiss">
+              <Button
+                size="small"
+                color="inherit"
+                onClick={() => void undoBulkDismiss()}
+                data-testid="acoustic-undo-dismiss"
+              >
                 Undo
               </Button>
             ) : undefined
@@ -1262,7 +1293,8 @@ export function AcousticDedupTab() {
             <SelectAllMatchingBanner
               selection={selection}
               pageCount={candidates.length}
-              totalMatching={total}
+              totalMatching={matchingCount.totalOr(total)}
+              countState={matchingCountState}
               noun="candidates"
               testIdPrefix="acoustic-select-all"
             />
@@ -1281,11 +1313,15 @@ export function AcousticDedupTab() {
               }}
             >
               <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                {selection.selectedCount.toLocaleString()} selected
+                {selectedLabel} selected
                 {selection.allMatching ? ' (every page)' : ''}
               </Typography>
               {bulkProgress && (
-                <Typography variant="caption" color="text.secondary" data-testid="acoustic-bulk-progress">
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  data-testid="acoustic-bulk-progress"
+                >
                   {bulkProgress}
                 </Typography>
               )}
@@ -1296,7 +1332,7 @@ export function AcousticDedupTab() {
                 disabled={bulkBusy}
                 onClick={() => void requestBulk('keep-a')}
               >
-                Keep A on {selection.selectedCount.toLocaleString()}
+                Keep A on {selectedLabel}
               </Button>
               <Button
                 size="small"
@@ -1304,7 +1340,7 @@ export function AcousticDedupTab() {
                 disabled={bulkBusy}
                 onClick={() => void requestBulk('keep-b')}
               >
-                Keep B on {selection.selectedCount.toLocaleString()}
+                Keep B on {selectedLabel}
               </Button>
               <Button
                 size="small"
@@ -1313,14 +1349,9 @@ export function AcousticDedupTab() {
                 disabled={bulkBusy}
                 onClick={() => void requestBulk('dismiss')}
               >
-                Dismiss {selection.selectedCount.toLocaleString()}
+                Dismiss {selectedLabel}
               </Button>
-              <Button
-                size="small"
-                variant="text"
-                disabled={bulkBusy}
-                onClick={selection.clear}
-              >
+              <Button size="small" variant="text" disabled={bulkBusy} onClick={selection.clear}>
                 Clear
               </Button>
             </Stack>
@@ -1506,7 +1537,11 @@ export function AcousticDedupTab() {
         </Paper>
       )}
 
-      <Dialog open={confirmBulk !== null} onClose={() => setConfirmBulk(null)} data-testid="acoustic-bulk-confirm">
+      <Dialog
+        open={confirmBulk !== null}
+        onClose={() => setConfirmBulk(null)}
+        data-testid="acoustic-bulk-confirm"
+      >
         <DialogTitle>
           {confirmBulk ? BULK_LABEL[confirmBulk.action] : ''} on all{' '}
           {(confirmBulk?.pending ?? 0).toLocaleString()} pending candidates?

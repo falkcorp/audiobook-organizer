@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-06-dedup-select-all-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: c0e0f341-7105-4f5e-837e-306dec50ed86 -->
 <!-- last-edited: 2026-10-06 -->
 
@@ -33,5 +33,19 @@
   every later group onto the group after it. A following merge could keep a
   book or series that belonged to a different group. Groups are now tracked
   by what they contain, not by their position in the list.
+- **Undo now gives back exactly what was there.** Undoing a bulk dismiss
+  could quietly erase an earlier verdict on a pair (a reviewer's "these
+  match" or "not sure") if one save step failed. It could also leave out a
+  dismissed pair whose label had not been recorded. The bulk dismiss now
+  writes an undo note for every pair it dismisses before counting it as done.
+  If that note cannot be saved, the pair is left untouched and reported. Undo
+  works from those notes and never overwrites a verdict someone gave after
+  the bulk dismiss. If undo stops halfway on a pair, running it again
+  finishes the job.
+- **One number from start to finish.** The "Select all N matching" bar now
+  shows the same count as the confirmation box, taken from the server. Before,
+  it showed the list's own total, which can include pairs that will be
+  skipped. A book that exists but cannot be read now stops the action with an
+  error. Before, the pair was quietly treated as deleted and left out.
 - **Errors are visible.** The Acoustic tab used to show "no duplicates
   found" when loading failed; it now says loading failed.

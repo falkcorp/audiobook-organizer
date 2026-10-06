@@ -1,5 +1,5 @@
 // file: web/src/components/common/SelectAllMatchingBanner.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: d1de8a62-0999-4e49-b0cd-906d5ce65e22
 // last-edited: 2026-10-06
 
@@ -12,6 +12,11 @@
  * Renders nothing in any other state. `unavailableReason`, when set, replaces
  * the "Select all M" link with the reason, so a reviewer who selected the page
  * learns WHY the wider selection is not offered instead of seeing nothing.
+ *
+ * `countState` says how far `totalMatching` can be trusted when the caller
+ * counts the matching rows separately from the list (the dedup lanes ask the
+ * server's bulk count): "counting" shows no number yet, "approximate" marks
+ * the list's own total, shown because the count failed.
  */
 
 import { Alert, Button } from '@mui/material';
@@ -27,6 +32,8 @@ export interface SelectAllMatchingBannerProps<K> {
   /** Why "select all matching" is not offered, when it is not. */
   unavailableReason?: string | null;
   testIdPrefix?: string;
+  /** Omitted = `totalMatching` is exact. */
+  countState?: 'counting' | 'approximate';
 }
 
 export function SelectAllMatchingBanner<K>({
@@ -36,7 +43,10 @@ export function SelectAllMatchingBanner<K>({
   noun = 'rows',
   unavailableReason = null,
   testIdPrefix = 'select-all',
+  countState,
 }: SelectAllMatchingBannerProps<K>) {
+  const counting = countState === 'counting';
+  const n = `${countState === 'approximate' ? 'about ' : ''}${totalMatching.toLocaleString()}`;
   if (selection.allMatching) {
     return (
       <Alert
@@ -49,7 +59,9 @@ export function SelectAllMatchingBanner<K>({
           </Button>
         }
       >
-        All {totalMatching.toLocaleString()} {noun} matching this filter are selected.
+        {counting
+          ? `All ${noun} matching this filter are selected (counting…).`
+          : `All ${n} ${noun} matching this filter are selected.`}
       </Alert>
     );
   }
@@ -67,7 +79,7 @@ export function SelectAllMatchingBanner<K>({
             onClick={selection.selectAllMatching}
             data-testid={`${testIdPrefix}-matching`}
           >
-            Select all {totalMatching.toLocaleString()} matching
+            {counting ? 'Select all matching (counting…)' : `Select all ${n} matching`}
           </Button>
         ) : undefined
       }
