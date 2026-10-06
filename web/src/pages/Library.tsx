@@ -1,5 +1,5 @@
 // file: web/src/pages/Library.tsx
-// version: 1.99.0
+// version: 1.100.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
 // last-edited: 2026-10-05
 
@@ -60,7 +60,7 @@ import type {
   OrganizeErrorState,
 } from './libraryTypes';
 import { evictOldestOpLogKey, MAX_OPERATION_LOG_KEYS } from './libraryOperationLogs';
-import { describeDeleteBookError } from '../utils/deleteBookError';
+import { describeDeleteBookError, isHasProgressRefusal } from '../utils/deleteBookError';
 
 // Types ImportPath, BulkActionResult, BulkActionProgress, DuplicateAction,
 // DuplicateDialogState, OrganizeErrorState imported from './libraryTypes'
@@ -378,6 +378,9 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
   const [purgeDeleteFiles, setPurgeDeleteFiles] = useState(false);
   const [purgeInProgress, setPurgeInProgress] = useState(false);
   const [purgingBookId, setPurgingBookId] = useState<string | null>(null);
+  // A trashed book whose "Purge now" was refused for its listening progress:
+  // the trash section opens the discard confirmation for it.
+  const [discardPrompt, setDiscardPrompt] = useState<Audiobook | null>(null);
   const [discardingBookId, setDiscardingBookId] = useState<string | null>(null);
   const [restoringBookId, setRestoringBookId] = useState<string | null>(null);
   const [batchDeleteDialogOpen, setBatchDeleteDialogOpen] = useState(false);
@@ -1440,17 +1443,33 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     }
   };
 
+  // "Purge now" runs the nightly purge's path for this book: listening
+  // progress moves to the copy Audiobookshelf lists first; with no such copy
+  // the server refuses (HAS_PROGRESS) and the discard confirmation opens.
   const handlePurgeOne = async (book: Audiobook) => {
     setPurgingBookId(book.id);
     try {
-      await api.deleteBook(book.id, { softDelete: false, blockHash: false });
-      toast(`"${book.title}" was purged from the library.`, 'success');
+      const result = await api.deleteBook(book.id, { softDelete: false, blockHash: false });
+      const moved = result.progress_moved
+        ? ' Its listening progress was moved to the copy in the library.'
+        : '';
+      const warn = result.warnings?.length ? ` (${result.warnings.join('; ')})` : '';
+      toast(
+        `"${book.title}" was purged from the library.${moved}${warn}`,
+        result.warnings?.length ? 'warning' : 'success'
+      );
       clearLibraryCache();
       await loadAudiobooks();
       await refreshSoftDeleted();
     } catch (error) {
       console.error('Failed to purge audiobook', error);
-      toast(describeDeleteBookError(error, 'Failed to purge audiobook.'), 'error');
+      if (isHasProgressRefusal(error)) {
+        toast(describeDeleteBookError(error, 'This book has listening progress.'), 'warning');
+        setDiscardPrompt(book);
+        await refreshSoftDeleted();
+      } else {
+        toast(describeDeleteBookError(error, 'Failed to purge audiobook.'), 'error');
+      }
     } finally {
       setPurgingBookId(null);
     }
@@ -2375,6 +2394,8 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
           handlePurgeOne={handlePurgeOne}
           discardingBookId={discardingBookId}
           handleDiscardProgressOne={handleDiscardProgressOne}
+          discardPrompt={discardPrompt}
+          onDiscardPromptClose={() => setDiscardPrompt(null)}
           filterOpen={filterOpen}
           setFilterOpen={setFilterOpen}
           filters={filters}

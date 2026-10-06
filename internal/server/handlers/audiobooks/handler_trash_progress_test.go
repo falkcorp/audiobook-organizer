@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler_trash_progress_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 410c4eb2-df80-4e6c-9f17-d88025337957
 // last-edited: 2026-10-05
 
@@ -87,6 +87,54 @@ func TestDiscardProgressAndPurge_StatusMapping(t *testing.T) {
 			h.DiscardProgressAndPurge(c)
 			if w.Code != tc.want {
 				t.Fatalf("want %d, got %d (%s)", tc.want, w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+// A: DELETE /audiobooks/:id answers a refusal for listening progress with
+// 409 and the stable HAS_PROGRESS code (the trash page then offers Discard
+// progress and purge), a failed carry and any other failure with 500 and
+// the reason, and only a missing book with 404 -- every other error used to
+// read as "not found".
+func TestDeleteAudiobook_StatusMapping(t *testing.T) {
+	cases := []struct {
+		name     string
+		err      error
+		want     int
+		wantCode string
+	}{
+		{"ok", nil, http.StatusOK, ""},
+		{"has progress", fmt.Errorf("purge b1: %w. Restore it", audiobookspkg.ErrBookHasProgress), http.StatusConflict, "HAS_PROGRESS"},
+		{"carry failed", fmt.Errorf("purge b1: %w: boom", audiobookspkg.ErrPurgeCarryFailed), http.StatusInternalServerError, "CARRY_FAILED"},
+		{"owns files", fmt.Errorf("%w: b1", database.ErrBookOwnsFiles), http.StatusConflict, ""},
+		{"not found", errString("audiobook not found"), http.StatusNotFound, ""},
+		{"other", errString("pebble closed"), http.StatusInternalServerError, "DELETE_FAILED"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h, d := newHandler(t)
+			var res map[string]any
+			if tc.err == nil {
+				res = map[string]any{"message": "audiobook purged"}
+			}
+			d.svc.EXPECT().DeleteAudiobook(mock.Anything, "b1", mock.Anything).Return(res, tc.err)
+			c, w := newCtx("DELETE", "/audiobooks/b1", nil, p("id", "b1"))
+			h.DeleteAudiobook(c)
+			if w.Code != tc.want {
+				t.Fatalf("want %d, got %d (%s)", tc.want, w.Code, w.Body.String())
+			}
+			if tc.wantCode != "" {
+				var body struct {
+					Code  string `json:"code"`
+					Error string `json:"error"`
+				}
+				if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+					t.Fatal(err)
+				}
+				if body.Code != tc.wantCode || body.Error == "" {
+					t.Fatalf("body = %+v, want code %s and the reason", body, tc.wantCode)
+				}
 			}
 		})
 	}

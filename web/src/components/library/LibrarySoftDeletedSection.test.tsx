@@ -1,5 +1,5 @@
 // file: web/src/components/library/LibrarySoftDeletedSection.test.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 48522977-5b92-481c-896b-a80b826f7b2e
 // last-edited: 2026-10-05
 
@@ -103,5 +103,81 @@ describe('LibrarySoftDeletedSection progress', () => {
     renderSection({ discardingBookId: 'held' });
     const btn = within(rowFor('The Long Listen')).getByRole('button', { name: 'Discarding...' });
     expect(btn).toBeDisabled();
+  });
+});
+
+describe('LibrarySoftDeletedSection carry outlook', () => {
+  const withCopy = {
+    id: 'copy',
+    title: 'Has A Listed Copy',
+    has_progress: true,
+    progress_summary: 'reader: 10%',
+    listed_copy_id: 'keep',
+    purge_eligible: true,
+  } as Audiobook;
+  const noCopy = {
+    id: 'nocopy',
+    title: 'Only Copy',
+    has_progress: true,
+    progress_summary: 'reader: finished',
+    progress_other_users: 2,
+    purge_eligible: false,
+  } as Audiobook;
+  const unknown = { id: 'unk', title: 'Unreadable', progress_unknown: true } as Audiobook;
+
+  it('offers "Move progress and purge" and no discard when a listed copy exists', () => {
+    renderSection({ softDeletedBooks: [withCopy], softDeletedCount: 1 });
+    const row = rowFor('Has A Listed Copy');
+    expect(
+      within(row).getByRole('button', { name: 'Move progress and purge' })
+    ).toBeInTheDocument();
+    expect(
+      within(row).queryByRole('button', { name: 'Discard progress and purge' })
+    ).not.toBeInTheDocument();
+    expect(within(row).getByTestId('soft-deleted-progress-caption')).toHaveTextContent(
+      'the nightly purge moves the progress there'
+    );
+    expect(within(row).getByTestId('soft-deleted-progress-caption')).not.toHaveTextContent(
+      'no other copy'
+    );
+  });
+
+  it('says there is no other copy only when there is none, and counts other users', () => {
+    renderSection({ softDeletedBooks: [noCopy], softDeletedCount: 1 });
+    const row = rowFor('Only Copy');
+    const caption = within(row).getByTestId('soft-deleted-progress-caption');
+    expect(caption).toHaveTextContent('no other copy of this book in the Audiobookshelf library');
+    expect(caption).toHaveTextContent('the nightly purge will keep it');
+    expect(caption).toHaveTextContent('reader: finished; and 2 other users');
+    expect(within(row).getByRole('button', { name: 'Purge now' })).toBeInTheDocument();
+    expect(
+      within(row).getByRole('button', { name: 'Discard progress and purge' })
+    ).toBeInTheDocument();
+  });
+
+  it('renders progress_unknown', () => {
+    renderSection({ softDeletedBooks: [unknown], softDeletedCount: 1 });
+    const row = rowFor('Unreadable');
+    expect(within(row).getByTestId('soft-deleted-progress-unknown')).toBeInTheDocument();
+    expect(within(row).getByTestId('soft-deleted-progress-caption')).toHaveTextContent(
+      'could not be read'
+    );
+  });
+
+  it('opens the discard confirmation for a refused purge', () => {
+    const onDiscardPromptClose = vi.fn();
+    const props = renderSection({
+      softDeletedBooks: [noCopy],
+      softDeletedCount: 1,
+      discardPrompt: noCopy,
+      onDiscardPromptClose,
+    });
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByTestId('discard-progress-summary')).toHaveTextContent(
+      'reader: finished; and 2 other users'
+    );
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Discard progress and purge' }));
+    expect(props.onDiscardProgressOne).toHaveBeenCalledWith(noCopy);
+    expect(onDiscardPromptClose).toHaveBeenCalled();
   });
 });
