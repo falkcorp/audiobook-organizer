@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retire_into.go
-// version: 1.9.4
+// version: 1.9.5
 // guid: dadb4da5-0f2d-4678-abf3-4ac97f3ecb66
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 // The shared retire of the Repairs-lane merge fixers: fold one book into
 // another as merge.Service retires an absorbed book, every step journaled
@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
@@ -294,7 +293,7 @@ func retireHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Wr
 	}
 	es := fragEnsureStore{OpsStore: store, chapters: vps}
 	res, err := versionprimary.EnsureSinglePrimary(ctx, es, groupID,
-		versionprimary.Env{RootDir: config.AppConfig.RootDir})
+		versionprimary.Env{RootDir: p.deps.RootDir()})
 	if err != nil {
 		fragLog.Warn("%s: primary hand-off in group %s: %s", fixerID,
 			logger.SanitizeLogValue(groupID), logger.SanitizeLogValue(err.Error()))

@@ -828,8 +828,8 @@ func (lib *fragLibrary) folderNamesAnyAuthor(folder string) string {
 	return name
 }
 
-// loadRoots reads the library root (Plugin.libraryRoot) and the import
-// paths into the snapshot.
+// loadRoots reads the library root (the plugin's deps.RootDir) and the
+// import paths into the snapshot.
 func (lib *fragLibrary) loadRoots(store OpsStore, root string) error {
 	if r := strings.TrimSpace(root); r != "" {
 		lib.libraryRoot = filepath.Clean(r)
@@ -895,7 +895,7 @@ func (f *fragmentFixer) loadLibrary(store OpsStore) (*fragLibrary, error) {
 	for _, a := range authors {
 		lib.authors[a.ID] = a.Name
 	}
-	if err := lib.loadRoots(store, f.p.libraryRoot()); err != nil {
+	if err := lib.loadRoots(store, f.p.deps.RootDir()); err != nil {
 		return nil, err
 	}
 	lib.extIDs = store.GetExternalIDsForBook
@@ -5337,7 +5337,7 @@ func (f *fragmentFixer) replanWith(ctx context.Context, planned repairs.Row, bea
 	for _, s := range all {
 		lib.series[s.ID] = s.Name
 	}
-	if err := lib.loadRoots(store, f.p.libraryRoot()); err != nil {
+	if err := lib.loadRoots(store, f.p.deps.RootDir()); err != nil {
 		return repairs.Row{}, err
 	}
 	for _, id := range planned.BookIDs {
@@ -6316,7 +6316,7 @@ func (f *fragmentFixer) replayHandOff(ctx context.Context, store OpsStore, gid s
 		}
 	}
 	return versionprimary.ChooseSinglePrimary(ctx, fragEnsureStore{OpsStore: store, chapters: vps}, members,
-		versionprimary.Env{RootDir: f.p.libraryRoot()})
+		versionprimary.Env{RootDir: f.p.deps.RootDir()})
 }
 
 // checkOwners re-checks, with the strict lookup, that every file the fresh

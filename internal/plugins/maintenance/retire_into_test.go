@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retire_into_test.go
-// version: 1.8.3
+// version: 1.8.4
 // guid: 90cd2c0f-e6c5-4176-8d2c-bc587eea86cd
 // last-edited: 2026-10-06
 
@@ -232,7 +232,8 @@ func crossFixerDemoteOnly(t *testing.T) (d *dcFixture, s, l, gid string) {
 // superseded on the retired L (its flag left false) and L came back false
 // next to a trashed S: no live primary at all.
 func TestRetireInto_RevertWithTheIncumbentGoneLeavesOnePrimary(t *testing.T) {
-	t.Parallel()
+	// Not parallel: crossFixerDemoteOnly builds a dcFixture, which swaps the
+	// global library root.
 	d, s, l, gid := crossFixerDemoteOnly(t)
 	_, err := audiobooks.NewRevertService(d.s).RevertOperation("op-a")
 	require.NoError(t, err)

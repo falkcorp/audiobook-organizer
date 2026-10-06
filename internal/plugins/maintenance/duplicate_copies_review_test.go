@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duplicate_copies_review_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 6e2d9c41-3b7a-4f05-8c1e-a94d2f7b3e58
-// last-edited: 2026-10-01
+// last-edited: 2026-10-06
 
 package maintenance
 
@@ -411,7 +411,7 @@ func TestDuplicateCopies_BoxSetLookupUnavailableAtApplyRefuses(t *testing.T) {
 	d, a, _ := ubik(t)
 	r := rowOf(t, d.planFor(t, dcFixerID, "op-plan", nil), a)
 	require.True(t, r.Applicable(), r.SkipReason)
-	d.p.deps = scanDeps{fakeDeps: fakeDeps{store: dcNoHashLookup{d.s}, labels: d.labels}, scan: &scriptedScan{renewsLeft: -1}, ops: d.ops}
+	d.p.deps = scanDeps{fakeDeps: fakeDeps{root: d.root, store: dcNoHashLookup{d.s}, labels: d.labels}, scan: &scriptedScan{renewsLeft: -1}, ops: d.ops}
 	out := d.applyFor(t, dcFixerID, "op-plan", "op-apply", []string{r.RowID})
 	require.Zero(t, out.Applied)
 	ab, err := d.s.GetBookByID(a)
