@@ -610,9 +610,13 @@ func (mfs *Service) cacheSearchResponse(bookID, query, author, narrator, series 
 			prev = p
 		}
 	}
-	// Same inputs and the same questions: the fallback attempts recorded for
-	// them still stand, whatever this search found (FallbackAttempts).
-	if prev != nil && prev.SearchFingerprint != "" && prev.SearchFingerprint == entry.SearchFingerprint {
+	// Same inputs, the same questions and the same ASIN: the fallback
+	// attempts recorded for them still stand, whatever this search found
+	// (FallbackAttempts). With another ASIN they say nothing about the book
+	// as it is identified now, and are dropped (the fallback asks again).
+	sameASIN := prev != nil && strings.EqualFold(strings.TrimSpace(prev.FetchedForASIN), strings.TrimSpace(resp.BookASIN))
+	sameQuestions := prev != nil && prev.SearchFingerprint != "" && prev.SearchFingerprint == entry.SearchFingerprint
+	if sameQuestions && sameASIN {
 		entry.FallbackAttempts = prev.FallbackAttempts
 	}
 
@@ -622,12 +626,22 @@ func (mfs *Service) cacheSearchResponse(bookID, query, author, narrator, series 
 	// fetched for the ASIN the book holds now, so a merge never re-dates
 	// candidates found for a record since taken off the book. The empty
 	// answers recorded for the same questions stay, and the row is dated now.
-	if len(raw) > 0 && resp.mergeCached && prev != nil && len(prev.Candidates) > 0 &&
-		strings.EqualFold(strings.TrimSpace(prev.FetchedForASIN), strings.TrimSpace(resp.BookASIN)) {
+	switch {
+	case len(raw) > 0 && resp.mergeCached && sameASIN && len(prev.Candidates) > 0:
 		entry.Candidates = mergeCandidateRows(raw, prev.Candidates)
-		if prev.SearchFingerprint != "" && prev.SearchFingerprint == entry.SearchFingerprint {
+		if sameQuestions {
 			entry.EmptyAnswers = mergeEmptyAnswers(prev.EmptyAnswers, nil, nowUTC())
 		}
+	case len(raw) > 0 && len(entry.FallbackAttempts) > 0 && len(prev.Candidates) > 0:
+		// A search of the chain that REPLACES the row (a forced or stale
+		// refetch) keeps the candidates a fallback provider found for the
+		// same questions and ASIN: the fallback asked that provider only
+		// because the chain had nothing usable, and the carried attempt says
+		// it answered -- dropping its candidates here while keeping that
+		// attempt would leave the book without them until the attempt aged
+		// out. Only providers this search did not ask are kept from the old
+		// row; one it asked answered afresh.
+		entry.Candidates = mergeCandidateRows(raw, candidatesFromSources(prev.Candidates, fallbackAnswered(entry.FallbackAttempts, resp.SourcesTried)))
 	}
 
 	// Preserve-on-empty. A search WITH results always replaces, exactly as
@@ -739,6 +753,33 @@ func mergeCandidateRows(fresh, cached []json.RawMessage) []json.RawMessage {
 			break
 		}
 		out = append(out, r.raw)
+	}
+	return out
+}
+
+// fallbackAnswered is the sources with a settled fallback attempt that a
+// search which tried tried did not ask.
+func fallbackAnswered(attempts map[string]database.FallbackAttempt, tried []string) map[string]bool {
+	out := map[string]bool{}
+	for name, a := range attempts {
+		if a.Settled && !slices.Contains(tried, name) {
+			out[name] = true
+		}
+	}
+	return out
+}
+
+// candidatesFromSources returns the rows of cands whose Source is in sources.
+func candidatesFromSources(cands []json.RawMessage, sources map[string]bool) []json.RawMessage {
+	if len(sources) == 0 {
+		return nil
+	}
+	var out []json.RawMessage
+	for _, r := range cands {
+		var c MetadataCandidate
+		if json.Unmarshal(r, &c) == nil && sources[c.Source] {
+			out = append(out, r)
+		}
 	}
 	return out
 }
