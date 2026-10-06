@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/deps.go
-// version: 1.75.0
+// version: 1.76.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567891
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 // Package maintenance is the UOS plugin for all maintenance/janitor operations.
 // It holds 26 OperationDefs migrated from the legacy scheduler_tasks.go.
@@ -189,6 +189,10 @@ type opsSeriesStore interface {
 	GetAllSeries() ([]database.Series, error)
 	GetAllSeriesBookCounts() (map[int]int, error)
 	GetBooksBySeriesIDCore(seriesID int) ([]database.BookCore, error)
+	// GetBooksByAuthorIDCore: the reparse fixer's series evidence
+	// (foldernames) tells a junk author-named series row from a real one by
+	// whether the same-named author has books outside it.
+	GetBooksByAuthorIDCore(authorID int) ([]database.BookCore, error)
 	// No per-series AllVersions getter, on purpose: series-denumber reads
 	// membership once per run via database.SeriesMembershipAllVersions
 	// (SERIES-MEMBERSHIP-RESIDUAL-LOOPS), so a per-series read inside its loops

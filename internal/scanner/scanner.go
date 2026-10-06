@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.127.0
+// version: 1.128.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-10-06
 
@@ -906,6 +906,10 @@ type Book struct {
 	// parse (metadata.ExtractMetadataFromFolder via AssembleBookMetadata), so
 	// a rescan of an EXISTING row never takes them (folderDerivedLocks).
 	folderParse folderParsed
+	// positionFromTitle is true when Position was read off the title
+	// (seriesFromTitle), not from a tag or the folder parse: a row whose
+	// title is held holds that position too (folderDerivedLocks).
+	positionFromTitle bool
 
 	// chapterSequence marks a book consolidateChapterGroups built from one
 	// chapter key, three or more files, every file short. That is proof it is
@@ -1728,16 +1732,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 			if books[idx].Title == "" || books[idx].Author == "" {
 				extractInfoFromPath(&books[idx])
 			}
-			if books[idx].Position <= 0 {
-				books[idx].Position = metadata.DetectVolumeNumber(books[idx].Title)
-			}
-			series, position := matcher.IdentifySeries(books[idx].Title, books[idx].FilePath, books[idx].Author)
-			if books[idx].Series == "" && series != "" {
-				books[idx].Series = series
-			}
-			if books[idx].Position == 0 && position > 0 {
-				books[idx].Position = position
-			}
+			seriesFromTitle(&books[idx])
 			// Save the book and create segments
 			if err := saveBook(ctx, &books[idx]); err != nil {
 				if widened(err) {
@@ -1914,18 +1909,8 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 			extractInfoFromPath(&books[idx])
 		}
 
-		if books[idx].Position <= 0 {
-			books[idx].Position = metadata.DetectVolumeNumber(books[idx].Title)
-		}
-
-		// Identify series based on title and filepath
-		series, position := matcher.IdentifySeries(books[idx].Title, books[idx].FilePath, books[idx].Author)
-		if books[idx].Series == "" && series != "" {
-			books[idx].Series = series
-		}
-		if books[idx].Position == 0 && position > 0 {
-			books[idx].Position = position
-		}
+		// Identify series and position based on title and filepath
+		seriesFromTitle(&books[idx])
 
 		// Check cancellation before saving
 		if ctx.Err() != nil {
@@ -2467,7 +2452,9 @@ func extractInfoFromPath(book *Book) {
 	}
 
 	if book.Position <= 0 {
-		book.Position = metadata.DetectVolumeNumber(book.Title)
+		if p := metadata.DetectVolumeNumber(book.Title); p > 0 {
+			book.Position, book.positionFromTitle = p, true
+		}
 	}
 }
 
@@ -3689,7 +3676,8 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 		// else the one live book that owns every scanned file with all of
 		// its present files among them -- checkFileOwnership's "rescan of
 		// the same book". A segment list's path is only its first file, so a
-		// renamed or re-sorted chapter moves it; without this the per-segment
+		// re-sorted chapter order (or a first file whose row is marked Missing)
+		// moves it; without this the per-segment
 		// vote below matched the book to itself and minted a second row
 		// version-linked to it, over the very same files.
 		existing := found.byPath
@@ -4370,6 +4358,27 @@ func creditScannedAuthors(store bookAuthorsModifier, bookID string, primary *int
 	}
 }
 
+// seriesFromTitle fills a book's missing position and series from its title
+// and path: the volume number in the title (metadata.DetectVolumeNumber),
+// then matcher.IdentifySeries, which refuses a series naming the book's
+// author. A position it supplies is marked positionFromTitle.
+func seriesFromTitle(b *Book) {
+	if b.Position <= 0 {
+		if p := metadata.DetectVolumeNumber(b.Title); p > 0 {
+			b.Position, b.positionFromTitle = p, true
+		} else {
+			b.Position = p
+		}
+	}
+	series, position := matcher.IdentifySeries(b.Title, b.FilePath, b.Author)
+	if b.Series == "" && series != "" {
+		b.Series = series
+	}
+	if b.Position == 0 && position > 0 {
+		b.Position, b.positionFromTitle = position, true
+	}
+}
+
 // resolveSeriesID resolves (get-or-create) the series row for seriesName and
 // returns its ID plus the book POSITION that was lifted out of the name, 0 when
 // none was found.
@@ -4386,8 +4395,9 @@ func creditScannedAuthors(store bookAuthorsModifier, bookID string, primary *int
 // authorName is the book's author credit. A series that names the author, or
 // one person of a composite credit (personname.NamesCredit), is refused --
 // neither looked up nor created -- and (nil, 0, nil) comes back: it is the
-// "Author - Title" split read as "Series - Title", and prod carried 3,188
-// series rows named after their own author (2026-10-06).
+// shape the "Series - Title" split gives "Author - Title". Which creator made
+// prod's existing author-named series rows (3,188 filed under their own
+// author, 2026-10-06) was not traced; this closes the scanner's own paths.
 func resolveSeriesID(seriesName, authorName string, authorID *int) (*int, int, error) {
 	trimmed := strings.TrimSpace(seriesName)
 	if trimmed == "" {

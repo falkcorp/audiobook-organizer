@@ -1,5 +1,5 @@
 // file: internal/personname/names_credit.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a05f7b3e-c778-4b91-9b39-cb9e58f8361b
 // last-edited: 2026-10-06
 
@@ -12,8 +12,7 @@ import "strings"
 // LettersKey. The series paths use it to refuse a series named after the
 // book's own author: "Brandon Sanderson - Elantris" splits into a "series"
 // of "Brandon Sanderson", and a row of that name is author junk, not a
-// series (prod, 2026-10-06: 3,188 series rows carry the name of their own
-// author row).
+// series.
 func NamesCredit(name, credit string) bool {
 	k := LettersKey(strings.TrimSpace(name))
 	if k == "" || strings.TrimSpace(credit) == "" {

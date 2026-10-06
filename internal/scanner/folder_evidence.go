@@ -1,5 +1,5 @@
 // file: internal/scanner/folder_evidence.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b4e4e76d-6d71-4a99-91b9-7b9725a1268a
 // last-edited: 2026-10-06
 //
@@ -22,11 +22,13 @@ import (
 const folderEvidenceTTL = 10 * time.Minute
 
 var folderEvidenceCache struct {
-	mu      sync.Mutex
-	store   scannerStore
-	at      time.Time
-	snap    *foldernames.Snapshot
-	loading bool
+	mu    sync.Mutex
+	store scannerStore
+	at    time.Time
+	snap  *foldernames.Snapshot
+	// loading is non-nil while one caller reads the lists, and closed when
+	// it is done.
+	loading chan struct{}
 }
 
 // FolderNameEvidence returns the evidence the folder parse
@@ -45,32 +47,48 @@ func FolderNameEvidence() metadata.NameEvidence {
 }
 
 // folderSnapshot returns the cached snapshot for store, reloading it when it
-// is older than folderEvidenceTTL. The lists are read with the mutex
-// released, so a reload never stalls the parse of every other book: while
-// one caller reloads, the others keep the previous snapshot. A failed load
-// keeps the previous snapshot (nil when there is none).
+// is older than folderEvidenceTTL. One caller reads the lists, with the mutex
+// released so the parse of every other book never stalls behind it: while it
+// reloads, the others keep the previous snapshot, and when there is none yet
+// (the first books of a scan, all arriving at once) they wait for that one
+// load rather than each reading the ~50k series and ~15k authors itself. A
+// failed load is logged and keeps the previous snapshot; with none, the
+// parse has no library evidence and falls back to the person-name shape.
 func folderSnapshot(store scannerStore) *foldernames.Snapshot {
 	c := &folderEvidenceCache
 	c.mu.Lock()
-	sameStore := c.store == store
-	if sameStore && c.snap != nil && (time.Since(c.at) < folderEvidenceTTL || c.loading) {
-		snap := c.snap
+	for {
+		sameStore := c.store == store && c.snap != nil
+		if sameStore && (time.Since(c.at) < folderEvidenceTTL || c.loading != nil) {
+			snap := c.snap
+			c.mu.Unlock()
+			return snap
+		}
+		if c.loading == nil {
+			break
+		}
+		wait := c.loading
 		c.mu.Unlock()
-		return snap
+		<-wait
+		c.mu.Lock()
 	}
 	var prev *foldernames.Snapshot
-	if sameStore {
+	if c.store == store {
 		prev = c.snap
 	}
-	c.loading = true
+	done := make(chan struct{})
+	c.loading = done
 	c.mu.Unlock()
 
 	snap, err := foldernames.Load(store)
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.loading = false
+	c.loading = nil
+	close(done)
 	if err != nil {
+		defaultLog.Warn("folder-name evidence: reading the author and series lists failed (%v); "+
+			"the folder parse keeps the previous lists (none: person-name shape only)", err)
 		return prev
 	}
 	c.store, c.at, c.snap = store, time.Now(), snap

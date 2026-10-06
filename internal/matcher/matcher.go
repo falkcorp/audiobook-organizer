@@ -1,5 +1,5 @@
 // file: internal/matcher/matcher.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 1f2a3b4c-5d6e-7f8a-9b0c-1d2e3f4a5b6c
 // last-edited: 2026-10-06
 
@@ -33,8 +33,7 @@ var seriesWords = []string{"trilogy", "series", "saga", "chronicles", "sequence"
 // would return that names the author, or one person of a composite credit
 // (personname.NamesCredit), is refused and ("", 0) comes back. "Brandon
 // Sanderson - Elantris" matches the "Series - Title" shape, and the series it
-// named became a junk series row of Brandon Sanderson's (prod 2026-10-06:
-// 3,188 series rows carry their own author's name).
+// names would be a junk series row of Brandon Sanderson's.
 func IdentifySeries(title, filePath, author string) (string, int) {
 	series, position := identifySeries(title, filePath)
 	if series != "" && personname.NamesCredit(series, author) {

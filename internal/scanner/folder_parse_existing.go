@@ -1,5 +1,5 @@
 // file: internal/scanner/folder_parse_existing.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: cc77dad2-5d35-4407-8724-35eb66226c45
 // last-edited: 2026-10-06
 //
@@ -107,7 +107,8 @@ func holdFolderFieldsForExisting(book *Book, existing *database.Book) folderHold
 // folderDerivedLocks returns locked plus the lock keys of every identity
 // field the book's scanned value came from the folder parse for -- still
 // holding that value, so a field a later step re-derived (a tag, the AI
-// parse) is not held. The rescan overlay (applyScannerFields) skips locked
+// parse) is not held -- and the series position when it was read off a
+// title the row does not take. The rescan overlay (applyScannerFields) skips locked
 // keys, so an existing row keeps its stored title, author and series.
 //
 // Owner decision 2026-10-05 ("search + new imports only"): the folder parse
@@ -142,6 +143,13 @@ func folderDerivedLocks(locked map[string]bool, book *Book) map[string]bool {
 	}
 	if f.Narrator != "" && book.Narrator == f.Narrator {
 		hold[database.FieldKeyNarrator] = true
+	}
+	// A position read off the title follows the title: when the row's title
+	// is locked (by the user, or held above), a number from the title it
+	// does not take is not the row's position either. A tag's series index
+	// is not title-derived and still lands.
+	if book.positionFromTitle && (locked[database.FieldKeyTitle] || hold[database.FieldKeyTitle]) {
+		hold[database.FieldKeySeriesPosition] = true
 	}
 	if len(hold) == 0 {
 		return locked

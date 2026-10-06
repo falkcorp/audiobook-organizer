@@ -1,5 +1,5 @@
 // file: internal/scanner/scan_existing_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f5390ae9-0910-4c20-811f-36ab977aec8e
 // last-edited: 2026-10-06
 
@@ -217,8 +217,8 @@ func TestSaveBookToDatabase_RenamedBookHoldsAgainstHashMatch(t *testing.T) {
 	}
 }
 
-// A multi-file book whose first file changed (a re-sorted or renamed chapter
-// order: the group's path is only its first file). The ownership check sees
+// A multi-file book whose first file changed (a re-sorted chapter order:
+// the group's path is only its first file). The ownership check sees
 // one live book owning every scanned file, all of its files among them --
 // the same book. The rescan merges into it: no new book (the segment vote
 // used to match the book to itself and mint a second row over the same
@@ -260,9 +260,11 @@ func TestSaveBookToDatabase_MultiFileOrderChangeIsTheSameBook(t *testing.T) {
 	}
 }
 
-// The title lock holds the work and the series position the scan derived
-// from the title it was not allowed to write.
-func TestApplyScannerFields_TitleLockHoldsWorkAndPosition(t *testing.T) {
+// A held title (folder-derived) holds the work and the series position the
+// scan derived from it; a USER title lock holds the work, and holds the
+// position only when it was read off the title -- a tag's series index still
+// lands.
+func TestApplyScannerFields_TitleLockHoldsWorkAndTitlePosition(t *testing.T) {
 	work, other := "work-stored", "work-scanned"
 	seq, scannedSeq := 2, 7
 	dst := &database.Book{Title: "Stored", WorkID: &work, SeriesSequence: &seq}
@@ -276,8 +278,34 @@ func TestApplyScannerFields_TitleLockHoldsWorkAndPosition(t *testing.T) {
 	if *dst.WorkID != work {
 		t.Fatalf("an author lock must hold the work too, got %q", *dst.WorkID)
 	}
+	userTitleLock := map[string]bool{database.FieldKeyTitle: true}
+	fromTitle := &Book{Title: "Scanned 7", positionFromTitle: true}
+	dst = &database.Book{Title: "Stored", WorkID: &work, SeriesSequence: &seq}
+	applyScannerFields(dst, scanned, folderDerivedLocks(userTitleLock, fromTitle))
+	if *dst.WorkID != work || *dst.SeriesSequence != seq {
+		t.Fatalf("user title lock: work=%q seq=%d, want both held", *dst.WorkID, *dst.SeriesSequence)
+	}
+	fromTag := &Book{Title: "Scanned"}
+	applyScannerFields(dst, scanned, folderDerivedLocks(userTitleLock, fromTag))
+	if *dst.WorkID != work || *dst.SeriesSequence != scannedSeq {
+		t.Fatalf("user title lock, tag position: work=%q seq=%d, want work held and the tag position", *dst.WorkID, *dst.SeriesSequence)
+	}
 	applyScannerFields(dst, scanned, nil)
 	if *dst.WorkID != other || *dst.SeriesSequence != scannedSeq {
 		t.Fatalf("unlocked: work=%q seq=%d, want the scanned values", *dst.WorkID, *dst.SeriesSequence)
+	}
+}
+
+// seriesFromTitle marks the positions it reads off the title.
+func TestSeriesFromTitle_MarksTitlePositions(t *testing.T) {
+	b := &Book{Title: "The Way of Kings Book 3", FilePath: "/srv/x/01.m4b"}
+	seriesFromTitle(b)
+	if b.Position != 3 || !b.positionFromTitle {
+		t.Fatalf("title position: %d fromTitle=%v", b.Position, b.positionFromTitle)
+	}
+	tagged := &Book{Title: "The Way of Kings Book 3", Position: 1, FilePath: "/srv/x/01.m4b"}
+	seriesFromTitle(tagged)
+	if tagged.Position != 1 || tagged.positionFromTitle {
+		t.Fatalf("tag position must stand: %d fromTitle=%v", tagged.Position, tagged.positionFromTitle)
 	}
 }

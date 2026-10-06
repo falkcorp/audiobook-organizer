@@ -1,5 +1,5 @@
 // file: internal/scanner/file_ownership.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: f938af2f-e090-48ab-b6b0-c89267a7adbf
 // last-edited: 2026-10-06
 
@@ -75,7 +75,8 @@ type fileOwnershipVerdict struct {
 	// sameBook is the live book that owns every scanned file, all of its
 	// present rows among them (step 3's rescan of the same book), on a
 	// proceed verdict; "" otherwise. A segment list whose first file changed
-	// (a renamed or re-sorted chapter) is not at that book's path, and
+	// (a re-sorted chapter order, or a first file whose row is marked
+	// Missing) is not at that book's path, and
 	// saveBookToDatabase holds the folder parse against this row
 	// (lookupScanExisting).
 	sameBook string
