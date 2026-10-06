@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/ci/fixture_test_packages.py
-# version: 1.2.1
+# version: 1.2.2
 # guid: 92f31101-2399-4ce9-9b83-0af332666123
 # last-edited: 2026-10-06
 """List the Go packages whose tests skip under -short, for `make test-fixtures`.
@@ -121,7 +121,9 @@ def _load_packages(root: Path) -> list[dict]:
     return pkgs
 
 
-def find_helpers(pkgs: list[dict], calls_short: Callable[[str, list[str]], bool] = _calls_short) -> set[str]:
+def find_helpers(
+    pkgs: list[dict], calls_short: Callable[[str, list[str]], bool] = _calls_short
+) -> set[str]:
     """Fixture helpers: non-test code that calls testing.Short(), closed over
     non-test Imports. A package importing a helper is itself a helper, at any
     depth, so a wrapper around vptest (or a wrapper around that) is found."""
@@ -139,7 +141,11 @@ def find_helpers(pkgs: list[dict], calls_short: Callable[[str, list[str]], bool]
     return helpers
 
 
-def select(pkgs: list[dict], helpers: set[str], calls_short: Callable[[str, list[str]], bool] = _calls_short) -> list[str]:
+def select(
+    pkgs: list[dict],
+    helpers: set[str],
+    calls_short: Callable[[str, list[str]], bool] = _calls_short,
+) -> list[str]:
     selected = []
     for p in pkgs:
         test_files = p.get("TestGoFiles", []) + p.get("XTestGoFiles", [])
@@ -177,6 +183,7 @@ def discover(root: Path = _REPO_ROOT) -> Discovery:
 
 def shard(pkgs: list[str], index: int, count: int) -> list[str]:
     """Longest-first greedy split; deterministic for a given package list."""
+
     def weight(p: str) -> int:
         return _WEIGHTS.get(p.removeprefix(MODULE + "/"), _DEFAULT_WEIGHT)
 
@@ -193,7 +200,9 @@ def shard(pkgs: list[str], index: int, count: int) -> list[str]:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("--shard", help="i/n, 1-based: print only shard i of n")
     args = ap.parse_args()
 
@@ -201,10 +210,14 @@ def main() -> None:
     if args.shard:
         m = re.fullmatch(r"(\d+)/(\d+)", args.shard)
         if not m or not 1 <= int(m.group(1)) <= int(m.group(2)):
-            raise SystemExit(f"fixture_test_packages: bad --shard {args.shard!r}; want i/n with 1 <= i <= n")
+            raise SystemExit(
+                f"fixture_test_packages: bad --shard {args.shard!r}; want i/n with 1 <= i <= n"
+            )
         pkgs = shard(pkgs, int(m.group(1)), int(m.group(2)))
         if not pkgs:
-            raise SystemExit(f"fixture_test_packages: shard {args.shard} is empty; use fewer shards")
+            raise SystemExit(
+                f"fixture_test_packages: shard {args.shard} is empty; use fewer shards"
+            )
     print("\n".join(pkgs))
 
 
