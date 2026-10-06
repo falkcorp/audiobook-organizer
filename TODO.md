@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.75.9 -->
+<!-- version: 10.75.10 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-06 -->
 
@@ -47,7 +47,13 @@ into one of the curated sections below, is a normal direct edit.
       ones whose author has books elsewhere no longer act as series
       evidence, but books are still linked to them, and many of the rest are
       real series under a junk AUTHOR row ("Rogue Merchant"). A reviewed
-      fixer should sort the two and repair each side. Also trace which
+      fixer should sort the two and repair each side. 2026-10-06: the series
+      side has a reviewed fixer, `maintenance.author-named-series` (#3789):
+      plan it on prod, approve rows by id, read the plan log's per-skip counts
+      (check whether `skipped_numbered_series` dominates). Still open: the
+      junk AUTHOR rows (its `skipped_author_row_junk` rows list them), and a
+      release path for the series rows the fixer holds (`Series.HeldBy`;
+      release once no undo can link a book back). Also trace which
       creator minted them: the scanner and importer now refuse a series
       naming the book's author, but the iTunes importer, the metadata apply
       path and `audiobooks/service_mutation.go` still create series without
