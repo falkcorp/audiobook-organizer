@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
 // last-edited: 2026-10-05
 
@@ -51,7 +51,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log/slog"
 	"net/http"
 	"os"
 	"sort"
@@ -63,6 +62,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
@@ -830,6 +830,8 @@ func (h *Handler) ListSoftDeletedAudiobooks(c *gin.Context) {
 	})
 }
 
+var trashListLog = logger.New("audiobooks.trash")
+
 // trashListItem is one trash row: the book plus whether a user still has
 // listening state on it (the state the nightly purge keeps it for when no
 // live version of the book exists to carry it to).
@@ -848,7 +850,7 @@ func (h *Handler) withTrashProgress(c *gin.Context, books []database.Book) []tra
 	}
 	info, err := h.audiobookService.TrashProgress(c.Request.Context(), ids)
 	if err != nil {
-		slog.Warn("trash listing: cannot read listening state", "err", err)
+		trashListLog.Warn("trash listing: cannot read listening state: %s", logger.SanitizeLogValue(err.Error()))
 	}
 	items := make([]trashListItem, len(books))
 	for i := range books {
