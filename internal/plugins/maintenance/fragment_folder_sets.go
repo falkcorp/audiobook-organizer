@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_folder_sets.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 9f01b698-b911-4ecc-818e-6d10f415e768
 // last-edited: 2026-10-06
 
@@ -1282,6 +1282,14 @@ func (f *fragmentFixer) setLibraryGuard(ctx context.Context, store OpsStore, his
 	for _, id := range planned.BookIDs {
 		inRow[id] = true
 	}
+	// candFn is the plan's unmatched set (buildRows hands noParentRows only
+	// the candidates no parent row matched, path twins and books of an
+	// interrupted run left out), not every single-file book with chapter
+	// evidence: each test that asks treats a candidate as "a chapter
+	// fragment, not a book" and IGNORES it, so a looser set would pass a row
+	// the plan holds. A book is a candidate here when candidateFrom says so
+	// AND fragUnmatchedHere does (see there for the one fail-closed
+	// approximation).
 	candOf := map[string]bool{}
 	full.candFn = func(id string) bool {
 		if v, ok := candOf[id]; ok {
@@ -1291,11 +1299,17 @@ func (f *fragmentFixer) setLibraryGuard(ctx context.Context, store OpsStore, his
 		rows := full.files[id]
 		v := false
 		if ok && !b.SoftDeleted && !inRow[id] && len(rows) == 1 {
-			_, isCand, err := f.candidateFrom(store, b, rows[0], hist)
+			c, isCand, err := f.candidateFrom(store, b, rows[0], hist)
 			if err != nil && readErr == nil {
 				readErr = fmt.Errorf("candidate test of %s: %w", id, err)
 			}
-			v = isCand
+			if isCand {
+				un, err := fragUnmatchedHere(full, hist, c)
+				if err != nil && readErr == nil {
+					readErr = fmt.Errorf("candidate test of %s: %w", id, err)
+				}
+				v = un
+			}
 		}
 		candOf[id] = v
 		return v
@@ -1329,6 +1343,66 @@ func (f *fragmentFixer) setLibraryGuard(ctx context.Context, store OpsStore, his
 		}
 	}
 	return "against the whole library as it is now the fragments no longer form this row; plan again", nil
+}
+
+// fragUnmatchedHere reports whether candidate c would be in the plan's
+// unmatched set, read against the snapshot:
+//   - no parent row matches it (fragIndex.match over the live books with two
+//     or more rows, the plan's index, built here from only the rows that can
+//     match c: its path, its import path, its hashes, its original name);
+//   - it is no path twin: no other live single-file book has a row at c's
+//     path. The plan makes c a twin only when that other book is a paired
+//     fragment and nothing of c's contradicts it; here any sharer makes c a
+//     book, which can only hold more than the plan, never pass more;
+//   - no apply run of this fixer has journaled a change on it (the plan
+//     leaves out the books an interrupted run holds; one a run has not yet
+//     touched is not seen here).
+func fragUnmatchedHere(lib *fragLibrary, hist FragmentRepairReader, c *fragCandidate) (bool, error) {
+	if len(lib.parentMatches(c)) > 0 {
+		return false, nil
+	}
+	for id, rows := range lib.files {
+		b, ok := lib.books[id]
+		if id != c.Book.ID && ok && !b.SoftDeleted && len(rows) == 1 && rows[0].Path == c.File.Path {
+			return false, nil
+		}
+	}
+	cs, err := hist.GetBookChanges(c.Book.ID)
+	if err != nil {
+		return false, fmt.Errorf("changes of %s: %w", c.Book.ID, err)
+	}
+	for _, ch := range cs {
+		if ch != nil && ch.RevertedAt == nil && ch.Source == fragFixerID {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// parentMatches is fragIndex.match for c over the snapshot's live books with
+// two or more rows (Plan's index), indexing only the rows match can reach.
+func (lib *fragLibrary) parentMatches(c *fragCandidate) []fragMatch {
+	ix := newFragIndex()
+	hashes := uniqueNonEmpty(c.File.Hash, c.File.OrigHash)
+	for id, rows := range lib.files {
+		if len(rows) < 2 {
+			continue
+		}
+		if b, ok := lib.books[id]; !ok || b.SoftDeleted {
+			continue
+		}
+		for _, r := range rows {
+			hit := r.Path == c.File.Path || (c.ImportPath != "" && r.Path == c.ImportPath) ||
+				(c.OrigName != "" && strings.EqualFold(filepath.Base(r.Path), c.OrigName))
+			for _, h := range hashes {
+				hit = hit || r.Hash == h || r.OrigHash == h
+			}
+			if hit {
+				ix.add(r)
+			}
+		}
+	}
+	return ix.match(c)
 }
 
 // fragAssembledByJournal reports whether book id carries a plan record of

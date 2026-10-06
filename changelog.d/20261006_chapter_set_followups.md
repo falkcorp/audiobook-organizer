@@ -22,7 +22,13 @@
     the target's version group, or any fragment's, holds a live iTunes copy:
     retiring a fragment hands its group's primary on, and the ranking would
     write the iTunes book. Checked at plan time and again under the merge lock
-    before the first write.
+    before the first write. Moved, copy and ghost rows, which retire their
+    fragments into the parent the same way, are held for the same reason
+    when the parent's or a fragment's version group holds a live iTunes copy.
+  - The apply's re-check treats as "a chapter fragment, not a book" only
+    what the plan would: a fragment matched to a parent, or one a run of
+    this fixer has written, is a book there too, so the re-check no longer
+    passes a set the plan would hold.
   - A set joined by its title is now held, as an audio join already was, for
     two known authors among its files, for a member's version group holding
     a live book other than the target, and for its audio held by a live book
