@@ -17,6 +17,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
+	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 
 // The regression tests for the first review of #3797. Each is one of the
@@ -34,6 +35,19 @@ func (l *vtLib) vtFresh(group string) repairs.Row {
 	require.NoError(l.t, err)
 	require.True(l.t, fresh.Applicable(), "%s: %s %s", group, fresh.Skipped, fresh.SkipReason)
 	return fresh
+}
+
+// vtPreflightSafe: the op revert's preflight (the "Undo N changes?"
+// confirmation) predicts the one journaled row restorable, as the revert
+// then finds it.
+func vtPreflightSafe(t *testing.T, l *vtLib) {
+	t.Helper()
+	rep, err := undo.PreflightUndoConflicts(l.st, vtTestOpID)
+	require.NoError(t, err)
+	require.Equal(t, 1, rep.Safe, "preflight %+v", rep)
+	require.Zero(t, rep.NotRestorable, "preflight %+v", rep)
+	require.Empty(t, rep.CheckFailed, "preflight %+v", rep)
+	require.Empty(t, rep.ContentChanged, "preflight %+v", rep)
 }
 
 func (l *vtLib) writer() *repairs.Writer {
@@ -54,6 +68,17 @@ func TestVersionTwinFixer_Review_P1_ITunesAfterReplanRefusesApply(t *testing.T) 
 		"external id": func(l *vtLib, id string) {
 			require.NoError(l.t, l.st.CreateExternalIDMapping(&database.ExternalIDMapping{Source: "itunes",
 				ExternalID: "SYNTHPID00000002", BookID: id}))
+		},
+		"book_file under the iTunes library": func(l *vtLib, id string) {
+			// No iTunes id and no iTunes path field: only the path guard
+			// (itunesCopyWhy's GuardBookPathsWith) can tell.
+			files, err := l.st.GetBookFiles(id)
+			require.NoError(l.t, err)
+			_, err = l.st.ModifyBookFile(id, files[0].ID, func(f *database.BookFile) error {
+				f.FilePath = "/media/books/itunes/Synthetic Author A/Synthetic Saga/01.m4b"
+				return nil
+			})
+			require.NoError(l.t, err)
 		},
 		"book_file itunes path": func(l *vtLib, id string) {
 			files, err := l.st.GetBookFiles(id)
@@ -138,6 +163,7 @@ func TestVersionTwinFixer_Review_P3_AppliedTwinJournaledAndOpRevertible(t *testi
 	require.Equal(t, l.ids["p"], changes[0].BookID)
 	require.Equal(t, hist[0].BatchID, changes[0].NewValue, "the journal row names the history batch")
 
+	vtPreflightSafe(t, l)
 	res, err := audiobooks.NewRevertService(l.st).RevertOperation(vtTestOpID)
 	require.NoError(t, err)
 	require.Equal(t, 1, res.Restored, "result %+v", res)
@@ -269,6 +295,7 @@ func TestVersionTwinFixer_Review_S2_CandidateCopyOpRevertible(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, entry)
 
+	vtPreflightSafe(t, l)
 	res, err := audiobooks.NewRevertService(l.st).RevertOperation(vtTestOpID)
 	require.NoError(t, err)
 	require.Equal(t, 1, res.Restored, "result %+v", res)
@@ -332,4 +359,16 @@ func TestVersionTwinFixer_Review_S4_NoTagsOrProvenance(t *testing.T) {
 	states, err := l.st.GetMetadataFieldStates(l.ids["p"])
 	require.NoError(t, err)
 	require.Empty(t, states, "no fetched-value provenance is recorded")
+}
+
+// The framework's owner-manual guard still holds a group whose record is
+// clean when a member is Doctor Who / Big Finish / Torchwood by its path.
+func TestVersionTwinFixer_Review_S3_FrameworkGuardStillHoldsMember(t *testing.T) {
+	l := newVTLib(t)
+	l.book("p", "gs3f", true, nil)
+	l.appliedTwin("t", "gs3f", vtSagaASIN("B0SYNTH011"), func(b *database.Book) {
+		b.FilePath = "/lib/Big Finish/Synthetic Saga"
+	})
+	_, rows := l.plan()
+	require.Equal(t, repairs.SkipOwnerManual, rows["gs3f"].Skipped, rows["gs3f"].SkipReason)
 }
