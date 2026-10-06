@@ -1,7 +1,7 @@
 // file: internal/database/coverage_test.go
-// version: 2.4.0
+// version: 2.4.1
 // guid: 3b82b22e-cd28-49b8-8b9c-e0a34b18e631
-// last-edited: 2026-09-11
+// last-edited: 2026-10-06
 
 // NOTE(fable5 T022): TestInitializeStoreAndClose, TestDBInterfaceWrapper,
 // and TestWebHelpers removed — they tested SQLite initialisation and global
@@ -45,10 +45,10 @@ func TestInitializeStoreAndClose(t *testing.T) {
 }
 
 func TestEncryptionHelpersAndSettings(t *testing.T) {
-	origKey := encryptionKey
-	defer func() {
-		encryptionKey = origKey
-	}()
+	// The "missing key" assertion below depends on the package-global key being
+	// unset. Clear it explicitly rather than assuming no earlier test (or an
+	// earlier -count iteration) installed one, and restore it afterwards.
+	withCleanKey(t)
 
 	if _, err := EncryptValue("secret"); err == nil {
 		t.Fatal("expected error when encryption key is missing")

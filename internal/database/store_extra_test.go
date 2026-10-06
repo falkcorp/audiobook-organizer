@@ -1,7 +1,7 @@
 // file: internal/database/store_extra_test.go
-// version: 2.2.0
+// version: 2.2.1
 // guid: 68b2b2f9-2b8f-4f7f-9d8f-26e6306a3c8e
-// last-edited: 2026-07-06
+// last-edited: 2026-10-06
 
 // NOTE(fable5 T022): SQLiteStore type assertions replaced with PebbleStore;
 // TestSQLiteExtendedFeatures renamed to TestPebbleExtendedFeatures.
@@ -664,6 +664,7 @@ func TestMaskSecretEdgeCases(t *testing.T) {
 
 // TestDecryptValueErrors tests error handling in DecryptValue
 func TestDecryptValueErrors(t *testing.T) {
+	withCleanKey(t)
 	tempDir := t.TempDir()
 	if err := InitEncryption(tempDir); err != nil {
 		t.Fatalf("InitEncryption failed: %v", err)
