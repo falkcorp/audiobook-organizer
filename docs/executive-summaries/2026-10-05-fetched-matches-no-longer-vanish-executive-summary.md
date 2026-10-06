@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-05-fetched-matches-no-longer-vanish-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 66826c76-f279-4c56-85d5-cf3dab35eb52 -->
 <!-- last-edited: 2026-10-05 -->
 
@@ -39,6 +39,29 @@
   narration now refuses a match whose Audible number disagrees with the
   book's. Matches can now outlive a number change, so without this check it
   could have written another book's title onto this one.
+- **Applied books are not applied again (follow-up, same day).** Applied
+  books now keep their matches, so the bulk "apply cached matches" action
+  counted every already-applied book as something it would apply. It would
+  have redone each book's file work, tag writing and iTunes update, and in
+  "replace" mode could have overwritten the owner's later edits. It now skips
+  them and reports them as "already applied". It still re-applies when the
+  owner clicks Apply on that one book in the review lane.
+- **A replaced Audible number now flags every kept match.** Some providers
+  (Open Library, Google Books) give no Audible number, so the
+  number-disagreement check could not catch their matches. Each kept match
+  now records the Audible number it was found under. When the book's number
+  is replaced or removed, a match without the new number cannot be applied
+  automatically, and the background lookup searches that book again.
+- **The single-book search window shows the disagreement.** A match whose
+  Audible number disagrees with the book's is marked "ASIN conflict", and
+  applying it asks for confirmation first. A match found under an older number
+  is marked "Fetched for another ASIN".
+- **The recovery repair no longer pauses library scans.** It only re-asks the
+  providers and writes no book data, so library scans keep running while it
+  works.
+- **Undo keeps matches.** Undoing a change deleted the book's matches every
+  time. Now the same rule applies as for any other edit: only a title or
+  author-name change clears them.
 - **Not yet done.** The repair has not been run on production. Running it, and
   then reviewing what comes back, is the owner's call.
 
@@ -51,8 +74,10 @@ or ISBN as "this is a different book now" and deleted its stored matches.
 change, and it says nothing against the match. Often it confirms it.
 
 **The fix.** Only a title or author-name change deletes matches. The apply
-safety check already refuses a match whose Audible number disagrees with the
-book's, so keeping the match is safe.
+safety check refuses a match whose Audible number disagrees with the book's.
+Since the follow-up it also refuses a match with no number that was found
+under an Audible number the book no longer carries. Keeping the match is
+therefore safe.
 
 ## Matches deleted by applying them
 

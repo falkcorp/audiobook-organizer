@@ -69,4 +69,7 @@
 # this script. The trash purge's row delete (purgeDeleteRow) no longer
 # discards the external-ID read error (it refuses the purge) or the
 # tombstone write error (logged after the row is gone).
-818
+# 2026-10-06 (fix/candidate-keep-followups, #3776): 818 -> MEASURED, measured
+# with this script after rebasing onto #3777. Field undo and undo-last-apply
+# paths no longer discard a cache-invalidation error: they no longer invalidate.
+MEASURED
