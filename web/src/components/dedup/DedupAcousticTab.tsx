@@ -2,7 +2,7 @@
 // version: 1.3.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678902
 // last-edited: 2026-10-06
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate, Link as RouterLink } from 'react-router-dom';
 import {
   Box,
@@ -640,10 +640,21 @@ export function AcousticDedupTab() {
   // Selection: header checkbox = this page, banner = every acoustic candidate,
   // shift-click = a range. Page size is the reset key; a page turn clears an
   // explicit selection (its rows leave the screen) but keeps "all matching".
+  // The acoustic list shows every status (it sends none), but only PENDING
+  // pairs are actionable: dismissing a merged pair would flip it and record a
+  // "not a duplicate" label for a real duplicate. Decided rows are therefore
+  // not selectable, and a cross-page selection skips them (and says so).
+  const pageKeys = useMemo(() => candidates.map((c) => c.id), [candidates]);
+  const decidedIds = useMemo(
+    () => new Set(candidates.filter((c) => c.status !== 'pending').map((c) => c.id)),
+    [candidates]
+  );
+  const isDecided = useCallback((id: number) => decidedIds.has(id), [decidedIds]);
   const selection = useRowSelection<number>({
-    pageKeys: candidates.map((c) => c.id),
+    pageKeys,
     totalMatching: total,
     resetKey: String(rowsPerPage),
+    isDisabled: isDecided,
   });
 
   // Cleanup timeout on unmount
@@ -852,12 +863,15 @@ export function AcousticDedupTab() {
     setBulkBusy(true);
     setStatusMsg(null);
     let rows: DedupCandidate[];
+    let skipped = 0;
     try {
       if (selection.allMatching) {
         setBulkProgress(`Reading 0 / ${total.toLocaleString()} matching candidates…`);
-        rows = await fetchAllMatchingCandidates(ACOUSTIC_LIST_PARAMS, total, (n, t) =>
+        const all = await fetchAllMatchingCandidates(ACOUSTIC_LIST_PARAMS, total, (n, t) =>
           setBulkProgress(`Reading ${n.toLocaleString()} / ${t.toLocaleString()} matching candidates…`)
         );
+        rows = all.filter((c) => c.status === 'pending');
+        skipped = all.length - rows.length;
       } else {
         rows = candidates.filter((c) => selection.selected.has(c.id));
       }
@@ -897,6 +911,8 @@ export function AcousticDedupTab() {
     // attempted = rows acted on + selected ids that had no row.
     const attempted = rows.length + missing;
     const ok = attempted - failed.length;
+    const skippedNote =
+      skipped > 0 ? `; ${skipped.toLocaleString()} already merged or dismissed, skipped` : '';
     // Keep only the failures on this page selected, so a retry is one click.
     selection.replace(failed.filter((id) => candidates.some((c) => c.id === id)));
     setBulkBusy(false);
@@ -904,8 +920,8 @@ export function AcousticDedupTab() {
     setStatusSeverity(failed.length === 0 ? 'info' : 'error');
     setStatusMsg(
       failed.length === 0
-        ? `${BULK_LABEL[action]}: ${ok.toLocaleString()} candidate(s) processed`
-        : `${BULK_LABEL[action]}: ${ok.toLocaleString()} ok, ${failed.length.toLocaleString()} failed of ${attempted.toLocaleString()}`
+        ? `${BULK_LABEL[action]}: ${ok.toLocaleString()} candidate(s) processed${skippedNote}`
+        : `${BULK_LABEL[action]}: ${ok.toLocaleString()} ok, ${failed.length.toLocaleString()} failed of ${attempted.toLocaleString()}${skippedNote}`
     );
     await loadCandidates();
   };
@@ -1418,9 +1434,9 @@ export function AcousticDedupTab() {
           <DialogContentText>
             {total > CROSS_PAGE_MAX_ITEMS
               ? crossPageCapMessage(total)
-              : `Every acoustic candidate on every page is ${
+              : `Every PENDING acoustic candidate on every page is ${
                   confirmBulk === 'dismiss' ? 'dismissed as not a duplicate' : 'linked into a version group (cannot be undone)'
-                }. The rows are read page by page first; the result reports how many succeeded and failed.`}
+                }; the ${total.toLocaleString()} counted here include pairs already merged or dismissed, which are skipped. The rows are read page by page first; the result reports how many succeeded, failed and were skipped.`}
           </DialogContentText>
         </DialogContent>
         <DialogActions>

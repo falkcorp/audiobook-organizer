@@ -62,6 +62,32 @@ describe('AuthorDedupTab', () => {
   });
 });
 
+describe('AuthorDedupTab merge-selected outcome', () => {
+  it('reports failed merges instead of "Merged N"', async () => {
+    const user = userEvent.setup();
+    const groups = [1, 2].map((i) => ({
+      canonical: { id: i, name: `Author ${i}` },
+      variants: [{ id: 100 + i, name: `Author ${i}.` }],
+      book_count: 1,
+    })) as unknown as api.AuthorDedupGroup[];
+    vi.mocked(api.getAuthorDuplicates).mockResolvedValue({ groups, needs_refresh: false } as never);
+    vi.mocked(api.mergeAuthors).mockImplementation(async (id: number) => op(`m${id}`));
+    vi.mocked(api.pollOperation).mockImplementation(async (id: string) =>
+      id === 'm2' ? { ...op(id, 'failed'), error_message: 'store write failed' } : op(id)
+    );
+    renderIn(<AuthorDedupTab />);
+    await user.click(
+      await screen.findByRole('checkbox', { name: 'Select all 2 groups on this page' })
+    );
+    await user.click(screen.getByRole('button', { name: 'Merge Selected (2)' }));
+    expect(
+      await screen.findByText(
+        'Merged 1 of 2 selected group(s); 1 failed: "Author 2": store write failed'
+      )
+    ).toBeInTheDocument();
+  });
+});
+
 describe('SeriesDedupTab', () => {
   function seriesGroup(n: number): api.SeriesDupGroup {
     return {

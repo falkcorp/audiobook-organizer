@@ -147,6 +147,17 @@ describe('useDupesLane selection', () => {
     expect(result.current.selection.showSelectAllMatching).toBe(false);
   });
 
+  it('toggleSelect keeps its identity across clicks, so memoised rows do not all re-render', async () => {
+    // DupesSpine builds every row's handlers from onToggleSelect. A new
+    // reference per click re-renders the whole page (up to 100 rows) per click.
+    const { result } = await renderLane();
+    const before = result.current.toggleSelect;
+    act(() => result.current.toggleSelect(1, 0));
+    act(() => result.current.toggleSelect(3, 2, true));
+    expect(result.current.selectedIds.size).toBe(3);
+    expect(result.current.toggleSelect).toBe(before);
+  });
+
   it('dismissAllFiltered sends the exact on-screen filter to bulk-reject and reports its counts', async () => {
     const { result } = await renderLane({ band: 'REVIEW', entityId: 'book-7' });
     await act(async () => {
@@ -229,6 +240,26 @@ describe('DupesPanel select-all integration', () => {
     await user.click(within(dialog).getByTestId('dupes-bulk-confirm-btn'));
     await waitFor(() => expect(api.bulkRejectDedupCandidates).toHaveBeenCalledTimes(1));
     expect(api.rejectDedupCandidate).not.toHaveBeenCalled();
+  });
+
+  it('the merge-everything dialog prints no count outside the Pending status', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    await screen.findByTestId('dupes-row-5');
+    await user.click(screen.getByTestId('merge-all-filtered'));
+    expect(await screen.findByTestId('dupes-bulk-confirm')).toHaveTextContent(
+      `Merge all ${TOTAL} matching pairs?`
+    );
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    // The dialog's close transition hides the page until it ends.
+    await user.click(await screen.findByRole('combobox', { name: 'Status' }));
+    await user.click(await screen.findByRole('option', { name: 'All' }));
+    await waitFor(() => expect(screen.getByTestId('merge-all-filtered')).toBeEnabled());
+    await user.click(screen.getByTestId('merge-all-filtered'));
+    const dialog = await screen.findByTestId('dupes-bulk-confirm');
+    await waitFor(() => expect(dialog).toHaveTextContent('Merge all matching pairs?'));
+    expect(dialog).not.toHaveTextContent(String(TOTAL));
   });
 
   it('shift-click on a row checkbox selects the range; Shift+Space does too', async () => {

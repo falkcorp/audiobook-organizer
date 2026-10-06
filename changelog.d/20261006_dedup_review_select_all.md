@@ -13,18 +13,26 @@
   - `/review` Dupes lane: cross-page Merge goes to the filter-scoped
     `bulk-link` endpoint and cross-page Dismiss to the new `bulk-reject`
     endpoint, both with one shared payload builder, after an MUI
-    confirmation that states the count. "Select all matching" is withheld
+    confirmation that states the count (only under the Pending status, where
+    the list total is the set acted on) and warns when it is over
+    `bulk_apply_max_items`. Row callbacks keep their identity across clicks,
+    so the memoised rows do not all re-render on each tick. "Select all matching" is withheld
     (with the reason shown) under Both-unmatched, an unsettled search, or a
     status other than Pending.
   - `/dedup` Acoustic tab: cross-page Keep A / Keep B / Dismiss page through
     the list query (500 per request, refused above 5,000 -- the default
     `bulk_apply_max_items`) with a progress line, then apply. Links run one
-    at a time. A failed load now shows an error instead of the empty state,
+    at a time. Only pending pairs are selectable and acted on (the list shows
+    every status); decided pairs in a cross-page set are skipped and counted.
+    A failed load now shows an error instead of the empty state,
     and selected rows with no row behind them count as failures instead of
     "processed".
   - `/dedup` Version Groups, Authors, Series: the old "Select All" button
     (which silently selected every page) is replaced by the header checkbox
-    plus banner; merging a selection wider than the page asks first.
+    plus banner; merging a selection wider than the page asks first. Authors
+    and Series "Merge Selected" now report "Merged X of Y; N failed: ..."
+    instead of "Merged N" whatever happened (failed operations were not
+    checked, and the refetch erased the error).
   - `/dedup` AI Review and Reconcile: header checkbox and shift ranges;
     applied results are skipped.
 - **`POST /api/v1/dedup/candidates/bulk-reject`.** Rejects every pending book
