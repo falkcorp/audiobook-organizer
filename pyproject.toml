@@ -1,7 +1,7 @@
 # file: pyproject.toml
-# version: 1.0.0
+# version: 1.1.0
 # guid: 4d8f1a63-2c95-4e07-b3a8-6f52d90c7e14
-# last-edited: 2026-08-18
+# last-edited: 2026-10-06
 
 # Black's configuration lives here and ONLY here. It used to live in
 # .python-black, a name black does not look for: `black .` at the repo root
@@ -11,6 +11,44 @@
 #
 # Ruff keeps its own ruff.toml: ruff's precedence is .ruff.toml > ruff.toml >
 # pyproject.toml, so ruff.toml still wins and nothing moves.
+
+# --- Python CI install target -------------------------------------------------
+# This repo is Go + React. Its Python is helper scripts under scripts/ (plus
+# their tests), not a distributable package. The shared reusable-ci.yml
+# Python CI job runs `pip install -e .` whenever a pyproject.toml exists, then
+# `pytest` at the repo root. With only tool config here, setuptools fell back
+# to automatic discovery, found web/, pkg/, cmd/, internal/ ... at the root,
+# and refused with "Multiple top-level packages discovered in a flat-layout".
+#
+# So this declares a deliberately EMPTY project: packages and py-modules are
+# both [] so the editable install builds nothing and imports nothing. It
+# exists only to install the scripts' shared runtime dependencies.
+#
+# dependencies: only what the root pytest run needs to COLLECT the tests.
+# scripts/issue_manager.py (imported by
+# scripts/tests/test_codeql_alert_pagination.py) needs `requests` at import
+# time and calls sys.exit(1) when it cannot get it, which kills pytest
+# collection. Heavy per-script deps (fastapi, openai, faster-whisper,
+# mlx-whisper, torch ...) are deliberately NOT listed: their tests skip
+# without them, and ci.yml installs fastapi/httpx itself to run the whisper
+# worker contract tests for real.
+#
+# Not published: release-prod.yml and prerelease.yml both pass
+# `disabled-languages: python` to the reusable release workflow.
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "audiobook-organizer-scripts"
+version = "0.0.0"
+description = "Helper scripts for audiobook-organizer (not a distributable package)"
+requires-python = ">=3.11"
+dependencies = ["requests"]
+
+[tool.setuptools]
+packages = []
+py-modules = []
 
 [tool.black]
 line-length = 100
