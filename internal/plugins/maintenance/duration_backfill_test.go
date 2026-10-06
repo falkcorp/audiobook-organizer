@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_backfill_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 4a7d1e92-8c63-4f50-a1b8-3e6c9d2f5a04
-// last-edited: 2026-09-20
+// last-edited: 2026-10-05
 
 package maintenance
 
@@ -400,7 +400,7 @@ func TestProcessBookForReextract_StoredDuration_NonITunes(t *testing.T) {
 	res := processBookForReextract(context.Background(), store, book, time.Time{})
 
 	if !res.eligible {
-		t.Fatalf("expected eligible=true (stored duration used), got eligible=false readErr=%v", res.readErr)
+		t.Fatalf("expected eligible=true (stored duration used), got eligible=false missingOnDisk=%d readErrs=%d", res.missingOnDisk, res.readErrs)
 	}
 	if res.usedFfprobe {
 		t.Error("non-iTunes segment with stored Duration must not use ffprobe")
@@ -416,7 +416,7 @@ func TestProcessBookForReextract_StoredDuration_NonITunes(t *testing.T) {
 // TestProcessBookForReextract_StoredDuration_ITunes still routes to ffprobe:
 // a segment that is iTunes-linked (ITunesPersistentID!="") may have the ms-bug
 // duration and must be verified via ffprobe rather than trusting the stored value.
-// Missing file → ffprobe fails → readErr, not eligible.
+// Missing file → ffprobe fails → missingOnDisk, not eligible.
 func TestProcessBookForReextract_StoredDuration_ITunes(t *testing.T) {
 	pid := "itunes-pid-001"
 	store := &database.MockStore{
@@ -433,8 +433,8 @@ func TestProcessBookForReextract_StoredDuration_ITunes(t *testing.T) {
 	if res.eligible {
 		t.Error("iTunes segment must go through ffprobe; file missing → not eligible")
 	}
-	if !res.readErr {
-		t.Error("expected readErr=true (iTunes segment, missing file, ffprobe failed)")
+	if res.missingOnDisk != 1 || res.readErrs != 0 {
+		t.Errorf("expected missingOnDisk=1 readErrs=0 (iTunes segment, missing file), got %d/%d", res.missingOnDisk, res.readErrs)
 	}
 }
 
@@ -460,8 +460,8 @@ func TestProcessBookForReextract_StoredDuration_BookITunesLinked(t *testing.T) {
 	if res.eligible {
 		t.Error("book-level iTunes link must prevent stored-duration shortcut; file missing → not eligible")
 	}
-	if !res.readErr {
-		t.Error("expected readErr=true (book iTunes-linked, missing file, ffprobe failed)")
+	if res.missingOnDisk != 1 || res.readErrs != 0 {
+		t.Errorf("expected missingOnDisk=1 readErrs=0 (book iTunes-linked, missing file), got %d/%d", res.missingOnDisk, res.readErrs)
 	}
 }
 

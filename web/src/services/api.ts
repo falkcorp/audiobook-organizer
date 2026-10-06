@@ -300,7 +300,12 @@ export interface BookSegment {
   track_number?: number;
   total_tracks?: number;
   active: boolean;
-  file_exists?: boolean;
+  // Stored BookFile.Missing flag (only changes when a scan or repair notices).
+  missing?: boolean;
+  // Live os.Stat made for this response: true/false when known, null when the
+  // check could not answer (see file_check_error). NOT derived from `missing`.
+  file_exists?: boolean | null;
+  file_check_error?: string;
 }
 
 export interface BookFile {
@@ -328,8 +333,13 @@ export interface BookFile {
   download_hash?: string;
   original_file_hash?: string;
   post_metadata_hash?: string;
+  // Stored flag; only changes when a scan or repair notices. Compare with
+  // file_exists, which is a live disk check made for this response.
   missing: boolean;
-  file_exists?: boolean;
+  // true/false when the stat answered, null when it could not (permission,
+  // I/O error, or the per-request deadline on a hung mount): see file_check_error.
+  file_exists?: boolean | null;
+  file_check_error?: string;
   // Deluge import fields (DELUGE-1, PR #540)
   deluge_hash?: string | null;
   deluge_original_path?: string | null;

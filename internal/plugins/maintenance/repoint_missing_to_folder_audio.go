@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repoint_missing_to_folder_audio.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 5169412c-6469-4f70-9073-b544025dd08e
-// last-edited: 2026-10-01
+// last-edited: 2026-10-05
 
 // Package maintenance — maintenance.repoint-missing-to-folder-audio.
 //
@@ -13,8 +13,9 @@
 //	row says   …/Eldest/Eldest/Eldest - 330.mp3   (gone; 330 such rows)
 //	folder has …/Eldest/Eldest/Eldest.m4b         (one file)
 //
-// The rows still say Missing=false (the files API's file_exists is only
-// !Missing, it never stats), and ABS sums the per-file durations, so the book
+// The rows still say Missing=false (the stored flag only changes when a scan
+// or repair notices; the files API's file_exists was !Missing until
+// 2026-10-05 and now stats), and ABS sums the per-file durations, so the book
 // reads 0. maintenance.missing-file-repoint cannot reach these: it derives a
 // target from the row's own name (track-slash shape) or from a single-file
 // book's path with an exact size match, and a consolidated file matches

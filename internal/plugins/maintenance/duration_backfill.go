@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duration_backfill.go
-// version: 2.8.1
+// version: 2.9.0
 // guid: 9c2f7a14-6d83-4e51-b0a9-2f5c8e1d4b67
-// last-edited: 2026-10-01
+// last-edited: 2026-10-05
 
 // Package maintenance — op maintenance.duration-reextract.
 //
@@ -74,6 +74,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"math"
 	"strings"
@@ -81,6 +82,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
@@ -193,6 +195,37 @@ func extractWithTimeout(ctx context.Context, filePath string) (*mediainfo.MediaI
 	return info, err
 }
 
+// durLog is the project logger for per-file read failures. Per-file detail
+// goes here rather than into the operation log, which carries the counts.
+var durLog = logger.New("maintenance")
+
+// recordReadFailure classifies one unreadable file into res — missing on
+// disk (fs.ErrNotExist) or any other read error — keeps the first path of
+// each kind as the example, and logs it: missing files at debug (on a
+// library with many stale rows they are the common case and would drown the
+// log), every other failure at warn.
+func recordReadFailure(res *bookProcessResult, path string, mErr error) {
+	if mErr != nil && errors.Is(mErr, fs.ErrNotExist) {
+		res.missingOnDisk++
+		if res.missingExample == "" {
+			res.missingExample = path
+		}
+		durLog.Debug("duration-backfill: book %s: file missing on disk: %s",
+			logger.SanitizeLogValue(res.book.ID), logger.SanitizeLogValue(path))
+		return
+	}
+	reason := "no duration in probe result"
+	if mErr != nil {
+		reason = mErr.Error()
+	}
+	res.readErrs++
+	if res.readErrExample == "" {
+		res.readErrExample = path
+	}
+	durLog.Warn("duration-backfill: book %s: cannot read %s: %s",
+		logger.SanitizeLogValue(res.book.ID), logger.SanitizeLogValue(path), logger.SanitizeLogValue(reason))
+}
+
 func (p *Plugin) durationBackfillDef() sdk.OperationDef {
 	return sdk.OperationDef{
 		// The one duration op. It absorbed maintenance.duration-backfill and
@@ -260,9 +293,22 @@ type bookProcessResult struct {
 	usedStoredDur bool // used stored segment Duration instead of ffprobe (non-iTunes fast path)
 	wouldChange   bool
 	roughDouble   bool
-	readErr       bool
-	estimated     bool
-	noPath        bool
+	// missingOnDisk counts segments whose file is not there at all (the read
+	// failed with fs.ErrNotExist): a stale row, fixed by a repoint, not by a
+	// retry. readErrs counts every OTHER unreadable segment (permission, I/O,
+	// timeout, a probe that returned no duration) — the ones worth a look.
+	// They were one "read-errors" number, which made a library full of stale
+	// rows indistinguishable from a failing disk. Each carries the first path
+	// seen so the summary line can name one.
+	missingOnDisk  int
+	missingExample string
+	readErrs       int
+	readErrExample string
+	// estimated counts segments whose probe returned only an estimated
+	// duration. It was a per-book bool summed into "estimated-segments",
+	// so the number counted books, not segments.
+	estimated int
+	noPath    bool
 	// unresolved counts segments whose duration could not be established
 	// (absent path, unreadable file, estimate-only probe). A book with any
 	// unresolved segment has an INCOMPLETE total, so its Book.Duration is not
@@ -376,11 +422,11 @@ func processBookForReextractMode(ctx context.Context, store bookFileLister, book
 					// why books with one good file and one phantom row read "0m".
 					// Record it and keep going: the readable segments still get their
 					// own correct durations, and the incomplete total is withheld.
-					res.readErr = true
+					recordReadFailure(&res, f.FilePath, mErr)
 					res.unresolved++
 					continue
 				case info.DurationEstimated:
-					res.estimated = true
+					res.estimated++
 					res.unresolved++
 					continue
 				}
@@ -416,11 +462,11 @@ func processBookForReextractMode(ctx context.Context, store bookFileLister, book
 		}
 		info, mErr := extractWithTimeout(ctx, book.FilePath)
 		if mErr != nil || info == nil || info.Duration <= 0 {
-			res.readErr = true
+			recordReadFailure(&res, book.FilePath, mErr)
 			return res
 		}
 		if info.DurationEstimated {
-			res.estimated = true
+			res.estimated++
 			return res
 		}
 		newDur = info.Duration
@@ -433,7 +479,7 @@ func processBookForReextractMode(ctx context.Context, store bookFileLister, book
 	// resolve, and a positive total, is complete.
 	if skip || newDur <= 0 {
 		// Nothing usable at all: if some segments were unresolved that is the
-		// reason, and readErr/estimated already say which.
+		// reason, and the missing/read-error/estimated counts say which.
 		return res
 	}
 
@@ -541,12 +587,22 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 	// All counters and the examples slice are owned exclusively by the collector
 	// goroutine (the main goroutine after the workers start). No locking needed.
 	var (
-		examined       int
-		eligible       int
-		wouldChange    int
-		roughlyDouble  int
-		estimated      int
-		readErr        int
+		examined      int
+		eligible      int
+		wouldChange   int
+		roughlyDouble int
+		// recentlyVerified counts books skipped because DurationVerifiedAt
+		// is within SkipAgeDays. It used to be added to estimated, so the
+		// summary's "estimated-segments" was mostly books nobody probed.
+		recentlyVerified int
+		estimated        int
+		missingOnDisk    int
+		missingExample   string
+		readErrs         int
+		readErrExample   string
+		// writeErrs counts books whose segment write, aggregate recompute or
+		// duration write failed. Those were added to the read-error count.
+		writeErrs      int
 		noPath         int
 		noOwnFolder    int
 		itunesSkipped  int
@@ -577,8 +633,9 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 			total = examined
 		}
 		_ = reporter.UpdateProgress(examined, total, fmt.Sprintf(
-			"examined=%d eligible=%d (fp=%d stored=%d ffprobe=%d) would-change=%d (~2x=%d) est-skip=%d read-err=%d",
-			examined, eligible, fpBooks, storedDurBooks, ffprobeBooks, wouldChange, roughlyDouble, estimated, readErr))
+			"examined=%d eligible=%d (fp=%d stored=%d ffprobe=%d) would-change=%d (~2x=%d) recently-verified-skipped=%d est-seg=%d %s write-err=%d",
+			examined, eligible, fpBooks, storedDurBooks, ffprobeBooks, wouldChange, roughlyDouble, recentlyVerified, estimated,
+			readFailureCounts(missingOnDisk, missingExample, readErrs, readErrExample), writeErrs))
 		lastLog = time.Now()
 	}
 
@@ -668,7 +725,7 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 		heartbeat(false)
 
 		if res.recentlyVerified {
-			estimated++ // counted as "skipped" — already verified recently
+			recentlyVerified++
 			continue
 		}
 		if res.noPath {
@@ -687,16 +744,19 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 			copyBooks++
 			copyRows += res.copies
 		}
-		// readErr / estimated are now PER-SEGMENT facts, not verdicts on the
+		// Read failures / estimates are PER-SEGMENT facts, not verdicts on the
 		// book. Count them, but keep going when the book still produced usable
 		// per-file durations — abandoning the whole book on one bad segment is
 		// what left every book holding a stale row with no duration at all.
-		if res.readErr {
-			readErr++
+		missingOnDisk += res.missingOnDisk
+		if missingExample == "" {
+			missingExample = res.missingExample
 		}
-		if res.estimated {
-			estimated++
+		readErrs += res.readErrs
+		if readErrExample == "" {
+			readErrExample = res.readErrExample
 		}
+		estimated += res.estimated
 		msFixedRows += res.msFixed
 		if !res.eligible {
 			continue
@@ -781,14 +841,14 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 				// Not stamped verified, so the next run retries this book.
 				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
 					"book %s: segment write or aggregate recompute failed: %v", bookID, uErr))
-				readErr++
+				writeErrs++
 				continue
 			}
 		} else if len(res.segs) > 0 {
 			if rErr := store.RecomputeBookAggregates(res.book.ID); rErr != nil {
 				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
 					"book %s: RecomputeBookAggregates failed: %v", res.book.ID, rErr))
-				readErr++
+				writeErrs++
 				continue
 			}
 		} else if res.unresolved > 0 {
@@ -820,13 +880,13 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 			if uErr != nil {
 				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
 					"book %s: ModifyBook failed: %v", res.book.ID, uErr))
-				readErr++
+				writeErrs++
 				continue
 			}
 			if row == nil {
 				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf(
 					"book %s: gone before the duration write", res.book.ID))
-				readErr++
+				writeErrs++
 				continue
 			}
 			if !applied {
@@ -855,8 +915,10 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 		verb = fmt.Sprintf("corrected %d;", written)
 	}
 	summary := fmt.Sprintf(
-		"examined=%d eligible=%d (from-fingerprint=%d from-stored=%d from-ffprobe=%d) %s would-change=%d (~2x=%d) ms-corrected-rows=%d incomplete-books=%d estimated-segments=%d read-errors=%d no-filepath=%d no-own-folder-skipped=%d itunes-skipped=%d copy-books=%d copy-rows-untouched=%d | e.g. %s",
-		examined, eligible, fpBooks, storedDurBooks, ffprobeBooks, verb, wouldChange, roughlyDouble, msFixedRows, incomplete, estimated, readErr, noPath, noOwnFolder, itunesSkipped, copyBooks, copyRows,
+		"examined=%d eligible=%d (from-fingerprint=%d from-stored=%d from-ffprobe=%d) %s would-change=%d (~2x=%d) ms-corrected-rows=%d incomplete-books=%d recently-verified-skipped=%d estimated-segments=%d %s write-errors=%d no-filepath=%d no-own-folder-skipped=%d itunes-skipped=%d copy-books=%d copy-rows-untouched=%d | e.g. %s",
+		examined, eligible, fpBooks, storedDurBooks, ffprobeBooks, verb, wouldChange, roughlyDouble, msFixedRows, incomplete,
+		recentlyVerified, estimated, readFailureCounts(missingOnDisk, missingExample, readErrs, readErrExample), writeErrs,
+		noPath, noOwnFolder, itunesSkipped, copyBooks, copyRows,
 		strings.Join(examples, ", "))
 	_ = reporter.Log(slog.LevelInfo, summary)
 	total := totalBooks
@@ -865,6 +927,19 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 	}
 	_ = reporter.UpdateProgress(total, total, summary)
 	return nil
+}
+
+// readFailureCounts renders the two read-failure counters for the progress and
+// summary lines, each followed by one example path when there is one:
+// "missing-on-disk=3 (e.g. /a/b.mp3) read-errors=1 (e.g. /c/d.m4b)".
+func readFailureCounts(missing int, missingEx string, readErrs int, readErrEx string) string {
+	part := func(label string, n int, ex string) string {
+		if n == 0 || ex == "" {
+			return fmt.Sprintf("%s=%d", label, n)
+		}
+		return fmt.Sprintf("%s=%d (e.g. %s)", label, n, logger.SanitizeLogValue(ex))
+	}
+	return part("missing-on-disk", missing, missingEx) + " " + part("read-errors", readErrs, readErrEx)
 }
 
 // stampVerifiedAt writes DurationVerifiedAt=now to the book record. Called

@@ -1,7 +1,7 @@
 // file: web/src/components/bookdetail/BookDetailVersionGroup.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: f6a7b8c9-d0e1-2345-fabc-456789012345
-// last-edited: 2026-09-11
+// last-edited: 2026-10-05
 import {
   Alert,
   Box,
@@ -359,7 +359,9 @@ export const BookDetailVersionGroup = ({
                   track_number: f.track_number,
                   total_tracks: f.track_count,
                   active: !f.missing,
+                  missing: f.missing,
                   file_exists: f.file_exists,
+                  file_check_error: f.file_check_error,
                 }))
               : isCurrent
                 ? segments

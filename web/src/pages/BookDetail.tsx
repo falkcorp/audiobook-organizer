@@ -1,7 +1,7 @@
 // file: web/src/pages/BookDetail.tsx
-// version: 1.62.0
+// version: 1.63.0
 // guid: 4d2f7c6a-1b3e-4c5d-8f7a-9b0c1d2e3f4a
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -764,7 +764,9 @@ export const BookDetail = () => {
               track_number: f.track_number,
               total_tracks: f.track_count,
               active: !f.missing,
+              missing: f.missing,
               file_exists: f.file_exists,
+              file_check_error: f.file_check_error,
             }));
             setVersionSegments((prev) => ({ ...prev, [versionId]: segs }));
           } else {
