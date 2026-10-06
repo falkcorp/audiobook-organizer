@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/version_twin_metadata_review_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3c9e5b71-2a84-4f06-b1d3-8e7a6c40f259
 // last-edited: 2026-10-06
 

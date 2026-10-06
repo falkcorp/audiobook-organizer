@@ -385,7 +385,8 @@ func (f *versionTwinFixer) Replan(_ context.Context, _ json.RawMessage, planned 
 //     batch.
 //   - candidates_twin: the primary's cache row is the twin's copied (same
 //     fetch time, ASIN fetched for and candidates; only this fixer copies a
-//     cache row). The journal row's old value is the primary's cache as
+//     cache row), and no other op's un-reverted journal row records that
+//     copy (the cache row names no op). The journal row's old value is the primary's cache as
 //     planned (vtPlanState), which the plan's fingerprint pinned until the
 //     write: the copy's own guard refuses a primary whose cache changed.
 //
@@ -439,7 +440,25 @@ func vtResumed(rd vtReaders, planned, fresh repairs.Row, opID string) (repairs.R
 		if !vtIsCopyOf(cur, src) {
 			return repairs.Row{}, false, nil
 		}
-		d.jOld, d.jNew = st.Prior, undo.MetadataCacheStamp(cur)
+		stamp := undo.MetadataCacheStamp(cur)
+		// The cache row carries no op id, so an identical copy could be
+		// another op's (two apply ops of one plan). An un-reverted journal row
+		// of any op recording this copy means it is that op's, not this one's.
+		jr, ok := database.AsCapability[vtBookChangesReader](rd.store)
+		if !ok {
+			return repairs.Row{}, false, fmt.Errorf("this store cannot read book %s's operation changes", pid)
+		}
+		changes, err := jr.GetBookChanges(pid)
+		if err != nil {
+			return repairs.Row{}, false, fmt.Errorf("read the operation changes of %s: %w", pid, err)
+		}
+		for _, c := range changes {
+			if c != nil && c.RevertedAt == nil && c.OperationID != opID &&
+				c.ChangeType == undo.ChangeTypeMetadataCacheCopy && c.NewValue == stamp {
+				return repairs.Row{}, false, nil
+			}
+		}
+		d.jOld, d.jNew = st.Prior, stamp
 	default:
 		return repairs.Row{}, false, nil
 	}
@@ -448,6 +467,12 @@ func vtResumed(rd vtReaders, planned, fresh repairs.Row, opID string) (repairs.R
 	out.Reason = "this operation wrote the row before a restart and did not record it; only its journal row is recorded now"
 	out.Detail = d
 	return out, true, nil
+}
+
+// vtBookChangesReader is the store's per-book operation-journal read
+// (database.OperationChangeStore).
+type vtBookChangesReader interface {
+	GetBookChanges(bookID string) ([]*database.OperationChange, error)
 }
 
 // vtHistoryReader is the store's change-history read (database.Store has
@@ -1060,7 +1085,8 @@ func vtRuntimesAgree(a, b int) bool {
 // The runtimes are the primary's and the twin's known runtimes (pSec, tSec)
 // and the record's own (cand.DurationSec), each 0 when not known.
 //   - runtimes: the primary's and the twin's agree within 1%, and so does the
-//     record's when it has one. That is evidence.
+//     record's when it has one; or, the twin's not known, the primary's and
+//     the record's agree within 1%. That is evidence.
 //   - two known runtimes more than 1% apart (the 5% hold, vtEditionDiffers,
 //     already caught the wider gaps): no runtime evidence, and narrator
 //     equality cannot stand in for it; when the primary carries the record's
@@ -1080,6 +1106,10 @@ func vtEditionEvidence(p *database.BookCore, cand *metafetch.MetadataCandidate, 
 			ev += fmt.Sprintf(", record %ds", rec)
 		}
 		return ev + ")", ""
+	}
+	if tSec <= 0 && vtRuntimesAgree(pSec, rec) {
+		return fmt.Sprintf("the primary's and the record's runtimes agree within 1%% (primary %ds, record %ds; twin "+
+			"unknown)", pSec, rec), ""
 	}
 	var known []int
 	for _, v := range []int{pSec, tSec, rec} {

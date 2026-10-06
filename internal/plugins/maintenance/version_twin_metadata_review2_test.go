@@ -6,6 +6,7 @@
 package maintenance
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync/atomic"
@@ -306,4 +307,48 @@ func TestVersionTwinFixer_Review2_N2_ISBNAndASINCaseHold(t *testing.T) {
 	require.Contains(t, rows["gn2a"].SkipReason, "ISBN-13 9790000000251")
 	require.Equal(t, vtHoldIDElsewhere, rows["gn2b"].Skipped, rows["gn2b"].SkipReason)
 	require.Contains(t, rows["gn2b"].SkipReason, l.ids["out-asin"])
+}
+
+// S3, two apply ops of one plan: op A copies the candidates and journals
+// them; op B, run on the same plan row afterwards, finds an identical copy
+// but must not take it for its own: no journal row under B, and the row is
+// not reported applied.
+func TestVersionTwinFixer_Review2_S3_OtherOpsCopyIsNotResumed(t *testing.T) {
+	l := newVTLib(t)
+	l.book("p", "gs3d", true, nil)
+	tid := l.book("t", "gs3d", false, nil)
+	l.putCache(tid, []metafetch.MetadataCandidate{vtSaga()}, metafetch.BatchSourceHash(tid, "Synthetic Saga", "Synthetic Author A"))
+	plan, _ := l.plan()
+	res := l.apply(plan, false, "gs3d")
+	require.Equal(t, 1, res.Applied, "op A: outcomes %v rows %+v", res.ByOutcome, res.Rows)
+
+	const opB = "op-version-twin-apply-b"
+	series, err := l.st.GetAllSeries()
+	require.NoError(t, err)
+	deps := repairs.ApplyDeps{Guard: l.st, Tags: l.p.repairsGuardTags(), Series: repairs.SeriesNamesFrom(series), OpID: opB,
+		Writer: repairs.NewWriter(l.st, l.st, l.fixer.ID(), "bulk_update", "repairs-").WithJournal(l.st, l.st, opB)}
+	resB, err := repairs.RunApply(context.Background(), l.fixer, plan, "op-version-twin-plan", []string{"gs3d"}, false, deps,
+		&repairsOpReporter{id: opB})
+	require.NoError(t, err)
+	require.Zero(t, resB.Applied, "op B: outcomes %v rows %+v", resB.ByOutcome, resB.Rows)
+	changes, err := l.st.GetOperationChanges(opB)
+	require.NoError(t, err)
+	require.Empty(t, changes, "op B journaled op A's copy")
+}
+
+// S2: the twin's runtime unknown, the primary's and the record's within 1%:
+// that is runtime evidence (the narrator is not needed), and the ASIN is
+// copied.
+func TestVersionTwinFixer_Review2_S2_PrimaryAndRecordRuntimeEvidence(t *testing.T) {
+	l := newVTLib(t)
+	cand := vtSagaASIN("B0SYNTH027")
+	cand.DurationSec = 75600
+	l.book("p", "gs2c", true, func(b *database.Book) { b.Narrator = vtPtr(cand.Narrator) })
+	l.appliedTwin("t", "gs2c", cand, func(b *database.Book) { b.Duration = nil })
+	_, rows := l.plan()
+	row := rows["gs2c"]
+	require.True(t, row.Applicable(), "%s: %s", row.Skipped, row.SkipReason)
+	require.Equal(t, "B0SYNTH027", row.Proposed["primary_asin"])
+	require.Contains(t, row.Evidence, "same edition: the primary's and the record's runtimes agree within 1% "+
+		"(primary 75600s, record 75600s; twin unknown)")
 }
