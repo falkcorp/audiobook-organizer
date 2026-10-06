@@ -1,5 +1,5 @@
 // file: internal/scanner/folder_parse_existing.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: cc77dad2-5d35-4407-8724-35eb66226c45
 // last-edited: 2026-10-06
 //
@@ -52,24 +52,21 @@ type folderHold struct {
 }
 
 // holdFolderFieldsForExisting replaces, on book, every identity value that
-// came from the folder parse with the stored row's value when the book's path
-// already has a row: title (and with it the work and the series position,
-// which DetectVolumeNumber/IdentifySeries read off the title), author,
-// series (and position) and narrator. saveBookToDatabase calls it before it
-// resolves or creates any author, series or work row, so a rescan of an
-// existing book creates none from the new parse and writes nothing it would
-// change. A field that came from a tag is left alone, as is a book with no
-// row yet (a new import takes the folder parse). A lookup error holds
-// nothing: the merge-time hold (folderDerivedLocks) still applies.
-func holdFolderFieldsForExisting(book *Book) folderHold {
+// came from the folder parse with the stored value of existing -- the row
+// the book already is (scanExisting.row: at its path, named by its
+// organizer-ID tag, owning its files, or matching its content) -- for title
+// (and with it the work and the series position, which
+// DetectVolumeNumber/IdentifySeries read off the title), author, series (and
+// position) and narrator. saveBookToDatabase calls it before it resolves or
+// creates any author, series or work row, so a rescan, a move or a rename of
+// an existing book creates none from the new parse and writes nothing it
+// would change. A field that came from a tag is left alone, as is a new book
+// (existing nil): a new import takes the folder parse.
+func holdFolderFieldsForExisting(book *Book, existing *database.Book) folderHold {
 	var h folderHold
 	f := book.folderParse
 	store := getStore()
-	if f == (folderParsed{}) || store == nil {
-		return h
-	}
-	existing, err := store.GetBookByFilePath(book.FilePath)
-	if err != nil || existing == nil {
+	if f == (folderParsed{}) || store == nil || existing == nil {
 		return h
 	}
 	holdPosition := false
@@ -130,7 +127,11 @@ func folderDerivedLocks(locked map[string]bool, book *Book) map[string]bool {
 	f := book.folderParse
 	hold := map[string]bool{}
 	if f.Title != "" && book.Title == f.Title {
+		// The position is read off the title (DetectVolumeNumber,
+		// IdentifySeries), so a held title holds it; the work is held by
+		// applyScannerFields on the title lock.
 		hold[database.FieldKeyTitle] = true
+		hold[database.FieldKeySeriesPosition] = true
 	}
 	if f.Author != "" && book.Author == f.Author {
 		hold[database.FieldKeyAuthorName] = true

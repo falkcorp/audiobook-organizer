@@ -1,5 +1,5 @@
 // file: internal/importer/service.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: d0e1f2a3-b4c5-6d7e-8f9a-0b1c2d3e4f5b
 // last-edited: 2026-10-06
 
@@ -283,8 +283,10 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 		}
 	}
 
-	// Set series if available
-	if meta.Series != "" && book.AuthorID != nil {
+	// Set series if available. A series named after the book's author is the
+	// "Author - Title" split read as "Series - Title" (author junk), so it is
+	// neither looked up nor created (seriesNamesAuthor).
+	if meta.Series != "" && book.AuthorID != nil && !seriesNamesAuthor(meta.Series, meta.Artist, importAuthors) {
 		series, err := is.db.GetSeriesByName(meta.Series, book.AuthorID)
 		if err != nil {
 			series, err = is.db.CreateSeries(meta.Series, book.AuthorID)
@@ -441,4 +443,18 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 		FilePath:       created.FilePath,
 		AuthorResolved: created.AuthorID != nil || created.Author != nil,
 	}, nil
+}
+
+// seriesNamesAuthor reports whether series names the artist credit or one of
+// the authors it resolved to (personname.NamesCredit).
+func seriesNamesAuthor(series, artist string, authors []database.Author) bool {
+	if personname.NamesCredit(series, artist) {
+		return true
+	}
+	for _, a := range authors {
+		if personname.NamesCredit(series, a.Name) {
+			return true
+		}
+	}
+	return false
 }

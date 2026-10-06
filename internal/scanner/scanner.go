@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.126.0
+// version: 1.127.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-10-06
 
@@ -1731,7 +1731,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 			if books[idx].Position <= 0 {
 				books[idx].Position = metadata.DetectVolumeNumber(books[idx].Title)
 			}
-			series, position := matcher.IdentifySeries(books[idx].Title, books[idx].FilePath)
+			series, position := matcher.IdentifySeries(books[idx].Title, books[idx].FilePath, books[idx].Author)
 			if books[idx].Series == "" && series != "" {
 				books[idx].Series = series
 			}
@@ -1919,7 +1919,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 		}
 
 		// Identify series based on title and filepath
-		series, position := matcher.IdentifySeries(books[idx].Title, books[idx].FilePath)
+		series, position := matcher.IdentifySeries(books[idx].Title, books[idx].FilePath, books[idx].Author)
 		if books[idx].Series == "" && series != "" {
 			books[idx].Series = series
 		}
@@ -3460,12 +3460,57 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 			return verdict.asError(book.FilePath)
 		}
 
+		// Compute file hash variants for deduplication/state mapping.
+		// If ProcessFile pre-computed the hash, reuse it to avoid a second read.
+		var fileHash *string
+		var fileSize *int64
+		var originalFileHash *string
+		var organizedFileHash *string
+		precomputedHash := book.FileHash
+		var hash string
+		var hashErr error
+		if precomputedHash != "" {
+			hash = precomputedHash
+		} else {
+			hash, hashErr = ComputeFileHash(book.FilePath)
+		}
+		if hashErr == nil && hash != "" {
+			// Check if this hash is blocked
+			blocked, err := getStore().IsHashBlocked(hash)
+			if err != nil {
+				defaultLog.Warn("failed to check hash blocklist: %v", err)
+			} else if blocked {
+				defaultLog.Info("Skipping file %s: hash %s is blocked", book.FilePath, hash)
+				return nil // Skip this file
+			}
+
+			fileHash = stringPtrValue(hash)
+			originalFileHash = stringPtrValue(hash)
+			if size, err := getFileSize(book.FilePath); err == nil {
+				fileSize = &size
+			}
+			if rootDir != "" && pathutil.IsWithin(book.FilePath, rootDir) {
+				organizedFileHash = stringPtrValue(hash)
+			}
+		}
+
+		// The stored row this book already is -- at its path, named by its
+		// organizer-ID tag, owning its files, or matching its content hash --
+		// resolved ONCE, before any author, series or work row is resolved or
+		// created. The relink and dedup branches below read it instead of
+		// querying again. See scanExisting.
+		found, err := lookupScanExisting(book, verdict, fileHash)
+		if err != nil {
+			return err
+		}
+
 		// An EXISTING row keeps the title, author, series, position and
 		// narrator the folder parse would change (owner, 2026-10-05: the new
 		// parse is for searches and new imports only). Decided here, before
 		// any author, series or work row is created from those values, so a
-		// rescan neither rewrites the row nor leaves orphan rows behind.
-		hold := holdFolderFieldsForExisting(book)
+		// rescan, a move or a rename neither rewrites the row nor leaves
+		// orphan rows behind.
+		hold := holdFolderFieldsForExisting(book, found.row())
 
 		// Resolve author/series with conflict-aware get-or-create semantics.
 		var authorIDs []int
@@ -3487,7 +3532,7 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 		if hold.series {
 			seriesID = hold.seriesID
 		} else {
-			sid, pos, err := resolveSeriesID(book.Series, authorID)
+			sid, pos, err := resolveSeriesID(book.Series, book.Author, authorID)
 			if err != nil {
 				return err
 			}
@@ -3543,40 +3588,6 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 			}
 		}
 
-		// Compute file hash variants for deduplication/state mapping.
-		// If ProcessFile pre-computed the hash, reuse it to avoid a second read.
-		var fileHash *string
-		var fileSize *int64
-		var originalFileHash *string
-		var organizedFileHash *string
-		precomputedHash := book.FileHash
-		var hash string
-		var hashErr error
-		if precomputedHash != "" {
-			hash = precomputedHash
-		} else {
-			hash, hashErr = ComputeFileHash(book.FilePath)
-		}
-		if hashErr == nil && hash != "" {
-			// Check if this hash is blocked
-			blocked, err := getStore().IsHashBlocked(hash)
-			if err != nil {
-				defaultLog.Warn("failed to check hash blocklist: %v", err)
-			} else if blocked {
-				defaultLog.Info("Skipping file %s: hash %s is blocked", book.FilePath, hash)
-				return nil // Skip this file
-			}
-
-			fileHash = stringPtrValue(hash)
-			originalFileHash = stringPtrValue(hash)
-			if size, err := getFileSize(book.FilePath); err == nil {
-				fileSize = &size
-			}
-			if rootDir != "" && pathutil.IsWithin(book.FilePath, rootDir) {
-				organizedFileHash = stringPtrValue(hash)
-			}
-		}
-
 		var seriesSequence *int
 		if book.Position > 0 {
 			seriesSequence = &book.Position
@@ -3621,11 +3632,11 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 		// Re-link by embedded AUDIOBOOK_ORGANIZER_ID: if the file contains our ID tag,
 		// find the existing record and update its path (handles file moves/renames).
 		if book.BookOrganizerID != "" {
-			existingByOrgID, orgErr := getStore().GetBookByID(book.BookOrganizerID)
+			existingByOrgID, orgErr := found.byOrgID, found.orgErr
 			if orgErr != nil {
 				defaultLog.Warn("organizer-ID relink: looking up book %s failed (%v); saving %s by path instead",
 					book.BookOrganizerID, orgErr, book.FilePath)
-			} else if existingByOrgID != nil && existingByOrgID.FilePath != book.FilePath {
+			} else if existingByOrgID != nil {
 				if err := requireHeld(ctx, existingByOrgID.ID); err != nil {
 					return err
 				}
@@ -3674,49 +3685,28 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 		var linkedVersionGroup string
 
 		// Upsert semantics with duplicate detection:
-		// 1. Try lookup by file path first (exact match)
-		existing, err := getStore().GetBookByFilePath(book.FilePath)
-		if err != nil {
-			return fmt.Errorf("book lookup failed: %w", err)
+		// 1. The row at the file path (exact match; lookupScanExisting), or
+		// else the one live book that owns every scanned file with all of
+		// its present files among them -- checkFileOwnership's "rescan of
+		// the same book". A segment list's path is only its first file, so a
+		// renamed or re-sorted chapter moves it; without this the per-segment
+		// vote below matched the book to itself and minted a second row
+		// version-linked to it, over the very same files.
+		existing := found.byPath
+		if existing == nil {
+			existing = found.byOwner
 		}
 
-		// 2. If not found by path but we have a file hash, check for duplicates via indexes
+		// 2. If not found by path but we have a file hash, check for
+		// duplicates via the hash indexes. lookupScanExisting ran them unless
+		// the organizer-ID relink was expected to take over and did not (its
+		// row was deleted first); lookupHashes runs them once either way, and
+		// a failing store with no match skips the import (H5).
 		if existing == nil && fileHash != nil && *fileHash != "" {
-			hashLookups := []func(string) (*database.Book, error){
-				getStore().GetBookByFileHash,
-				getStore().GetBookByOriginalHash,
-				getStore().GetBookByOrganizedHash,
+			if err := found.lookupHashes(book, fileHash); err != nil {
+				return err
 			}
-			lookupErrs := 0
-			var firstLookupErr error
-			for _, lookup := range hashLookups {
-				candidate, lerr := lookup(*fileHash)
-				if lerr != nil {
-					// Not-found is (nil, nil) on every store; a non-nil error
-					// is a real store failure (audit 2026-07-17 H5).
-					lookupErrs++
-					if firstLookupErr == nil {
-						firstLookupErr = lerr
-					}
-					warnSampled(&dupLookupErrCount, defaultLog, "duplicate-detection hash lookup failed for %s: %v", book.FilePath, lerr)
-					continue
-				}
-				if candidate != nil {
-					existing = candidate
-					break
-				}
-			}
-
-			// A failing store must not silently re-import an existing book: if
-			// any lookup errored and none found a match, this file cannot be
-			// proven NOT to be a duplicate — skip importing it (conservative;
-			// H5). The file is untouched on disk and will import on the next
-			// scan once the store recovers.
-			if existing == nil && lookupErrs > 0 {
-				dupLookupSkipCount.Add(1)
-				return fmt.Errorf("skipping import of %s: duplicate status undeterminable (%d/%d hash lookups failed, first error: %w)",
-					book.FilePath, lookupErrs, len(hashLookups), firstLookupErr)
-			}
+			existing = found.byHash
 
 			if existing != nil {
 				defaultLog.Debug("Found duplicate book by hash: %s (existing: %s, new: %s)",
@@ -3789,39 +3779,15 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 		// was damaged/replaced (single-hash check above would miss it) and also
 		// detects partial damage (bit rot) when only some files changed.
 		if existing == nil && len(book.SegmentFiles) > 1 {
-			bookVotes := make(map[string]int)
-			bookCandidates := make(map[string]*database.Book)
+			// The vote (hashing every segment, keeping the hashes on
+			// book.SegmentHashes for createBookFilesForBook) runs once:
+			// lookupScanExisting already ran it when nothing else matched.
+			found.lookupSegments(book)
 
-			for _, segFile := range book.SegmentFiles {
-				h, herr := ComputeFileHash(segFile)
-				if herr != nil || h == "" {
-					continue
-				}
-				// Write back so createBookFilesForBook can reuse without re-hashing.
-				if book.SegmentHashes == nil {
-					book.SegmentHashes = make(map[string]string)
-				}
-				book.SegmentHashes[segFile] = h
-				candidate, lerr := getStore().GetBookBySegmentFileHash(h)
-				if lerr != nil || candidate == nil {
-					continue
-				}
-				bookVotes[candidate.ID]++
-				bookCandidates[candidate.ID] = candidate
-			}
-
-			// Find the parent book with the most matching segment files.
-			bestID, bestCount := "", 0
-			for id, count := range bookVotes {
-				if count > bestCount {
-					bestCount, bestID = count, id
-				}
-			}
-
-			if bestID != "" {
-				threshold := int(math.Ceil(float64(len(book.SegmentFiles)) * 0.8))
+			if found.bySegments != nil {
+				bestCount, threshold := found.segCount, found.segThreshold
 				if bestCount >= threshold {
-					matchedBook := bookCandidates[bestID]
+					matchedBook := found.bySegments
 					if bestCount < len(book.SegmentFiles) {
 						defaultLog.Warn(
 							"Multi-file dedup: %d/%d files matched existing book %q — possible corruption or bit rot in %s",
@@ -4416,7 +4382,13 @@ func creditScannedAuthors(store bookAuthorsModifier, bookID string, primary *int
 // where the book sat in its series was deleted from the name and recorded
 // nowhere. Callers MUST write it into the book's sequence when the book has none
 // yet, and must not overwrite one it already has.
-func resolveSeriesID(seriesName string, authorID *int) (*int, int, error) {
+//
+// authorName is the book's author credit. A series that names the author, or
+// one person of a composite credit (personname.NamesCredit), is refused --
+// neither looked up nor created -- and (nil, 0, nil) comes back: it is the
+// "Author - Title" split read as "Series - Title", and prod carried 3,188
+// series rows named after their own author (2026-10-06).
+func resolveSeriesID(seriesName, authorName string, authorID *int) (*int, int, error) {
 	trimmed := strings.TrimSpace(seriesName)
 	if trimmed == "" {
 		return nil, 0, nil
@@ -4441,6 +4413,13 @@ func resolveSeriesID(seriesName string, authorID *int) (*int, int, error) {
 				position = p
 			}
 		}
+	}
+
+	if personname.NamesCredit(trimmed, authorName) {
+		logging.Info(context.Background(),
+			"scanner: refused a series named after the book's author",
+			"series", trimmed, "author", authorName)
+		return nil, 0, nil
 	}
 
 	series, err := getStore().GetSeriesByName(trimmed, authorID)
@@ -4770,7 +4749,11 @@ func applyScannerFields(dst *database.Book, scanned *database.Book, locked map[s
 	if scanned.SeriesSequence != nil && *scanned.SeriesSequence != 0 && !locked[database.FieldKeySeriesPosition] {
 		dst.SeriesSequence = scanned.SeriesSequence
 	}
-	if scanned.WorkID != nil {
+	// The work is derived from the title and author (lookupWorkID /
+	// CreateWork on the scanned values), so a held title or author holds it
+	// too: a work found or minted for a title the row does not take would
+	// file the row under some other book's work.
+	if scanned.WorkID != nil && !locked[database.FieldKeyTitle] && !locked[database.FieldKeyAuthorName] {
 		dst.WorkID = scanned.WorkID
 	}
 

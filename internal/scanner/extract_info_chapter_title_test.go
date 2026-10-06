@@ -1,7 +1,7 @@
 // file: internal/scanner/extract_info_chapter_title_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 1887ad95-0bf8-4bb7-87f5-cf52026d1289
-// last-edited: 2026-09-29
+// last-edited: 2026-10-06
 
 package scanner
 
@@ -170,7 +170,7 @@ func TestExtractInfoFromPath_SeriesTitleIsNotAnAuthor(t *testing.T) {
 			store.EXPECT().GetSeriesByName(tc.wantSeriesName, (*int)(nil)).
 				Return(&database.Series{ID: 7, Name: tc.wantSeriesName}, nil)
 
-			id, pos, err := resolveSeriesID(b.Series, nil)
+			id, pos, err := resolveSeriesID(b.Series, "", nil)
 			if err != nil || id == nil || *id != 7 {
 				t.Fatalf("resolveSeriesID(%q) = (%v, %d, %v)", b.Series, id, pos, err)
 			}

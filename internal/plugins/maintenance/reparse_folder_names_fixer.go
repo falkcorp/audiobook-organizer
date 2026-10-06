@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/reparse_folder_names_fixer.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: ac1c25d1-3594-43f6-9254-90bf2ab0b284
 // last-edited: 2026-10-06
 
@@ -17,12 +17,11 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/falkcorp/audiobook-organizer/internal/authority"
 	"github.com/falkcorp/audiobook-organizer/internal/authorjunk"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/foldernames"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
-	"github.com/falkcorp/audiobook-organizer/internal/personname"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 )
 
@@ -163,7 +162,9 @@ func (f *reparseFolderNamesFixer) Plan(ctx context.Context, _ json.RawMessage, r
 	}
 	perBook := make([][]repairs.Row, len(books))
 	names := newReparseNames(store)
-	names.ev = reparseEvidence(store)
+	if names.ev, err = reparseEvidence(store); err != nil {
+		return nil, err
+	}
 	var done atomic.Int64
 	// Each worker writes only perBook[i] for its own i; names is locked.
 	runErr := registry.RunItems(ctx, rep, indexesOf(len(books)), func(_ context.Context, i int) error {
@@ -211,7 +212,9 @@ func (f *reparseFolderNamesFixer) Replan(_ context.Context, _ json.RawMessage, p
 		return r, nil
 	}
 	names := newReparseNames(store)
-	names.ev = reparseEvidence(store)
+	if names.ev, err = reparseEvidence(store); err != nil {
+		return repairs.Row{}, err
+	}
 	rows, err := f.evaluate(b.Core(), names)
 	if err != nil {
 		return repairs.Row{}, err
@@ -345,33 +348,16 @@ func reparseFingerprint(r repairs.Row) string {
 }
 
 // reparseEvidence is the folder parse's person and series evidence, read
-// from the ops store the same way the scanner reads it
+// from the ops store through foldernames exactly as the scanner reads it
 // (scanner.FolderNameEvidence): the authority person lists, the library's
-// author rows and its series names (read once).
-func reparseEvidence(store OpsStore) metadata.NameEvidence {
-	idx := authority.NewIndex(store)
-	series := map[string]bool{}
-	if all, err := store.GetAllSeries(); err == nil {
-		for _, s := range all {
-			if k := personname.LettersKey(strings.TrimSpace(s.Name)); k != "" {
-				series[k] = true
-			}
-		}
+// author rows and its series names with author-junk series rows filtered
+// out. The lists are read once per plan.
+func reparseEvidence(store OpsStore) (metadata.NameEvidence, error) {
+	snap, err := foldernames.Load(store)
+	if err != nil {
+		return metadata.NameEvidence{}, err
 	}
-	return metadata.NameEvidence{
-		IsKnownAuthor: func(name string) bool {
-			if ok, err := idx.IsKnownPerson(name, authority.RoleAuthor); err == nil && ok {
-				return true
-			}
-			ok, err := idx.IsKnownPerson(name, authority.RoleNarrator)
-			return err == nil && ok
-		},
-		IsAuthorRow: func(name string) bool {
-			a, err := store.GetAuthorByName(name)
-			return err == nil && a != nil
-		},
-		IsKnownSeries: func(name string) bool { return series[personname.LettersKey(strings.TrimSpace(name))] },
-	}
+	return snap.Evidence(), nil
 }
 
 // reparseNames caches author and series names by id for one plan, and holds

@@ -1,7 +1,7 @@
 // file: internal/metafetch/service.go
-// version: 5.44.0
+// version: 5.45.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package metafetch
 
@@ -24,6 +24,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
+	"github.com/falkcorp/audiobook-organizer/internal/foldernames"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/openlibrary"
@@ -61,6 +62,9 @@ type forwardedStores interface {
 	// SaveOperationParams, DeleteOperationState); every store handed to
 	// NewService already had them.
 	organizer.Store
+	// foldernames.IsRealSeries, the search parse's series evidence
+	// (nameEvidence): tells a real series row from author junk.
+	foldernames.PointStore
 }
 
 // metadataCacheStore is the per-book candidate cache in cache.go.

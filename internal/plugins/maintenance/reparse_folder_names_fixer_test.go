@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/reparse_folder_names_fixer_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f823acd0-485e-4ec1-87a1-49cfedc17554
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package maintenance
 
@@ -87,4 +87,39 @@ func TestReparseFolderNamesFixer_PlansAndAppliesByIDsOnly(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, want, b.Title)
 	}
+}
+
+// The fixer reads folders with the scanner's evidence (foldernames): a
+// series row named after its own author is author junk and no series
+// evidence, while a real series beside a junk author row of its name stays a
+// series.
+func TestReparseEvidence_FiltersAuthorJunkSeries(t *testing.T) {
+	st, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+	sanderson, err := st.CreateAuthor("Brandon Sanderson")
+	require.NoError(t, err)
+	junk, err := st.CreateSeries("Brandon Sanderson", &sanderson.ID)
+	require.NoError(t, err)
+	_, err = st.CreateBook(&database.Book{Title: "Elantris", AuthorID: &sanderson.ID, SeriesID: &junk.ID, FilePath: "/srv/a.m4b"})
+	require.NoError(t, err)
+	_, err = st.CreateAuthor("Star Wars")
+	require.NoError(t, err)
+	zahn, err := st.CreateAuthor("Timothy Zahn")
+	require.NoError(t, err)
+	sw, err := st.CreateSeries("Star Wars", nil)
+	require.NoError(t, err)
+	_, err = st.CreateBook(&database.Book{Title: "Thrawn", AuthorID: &zahn.ID, SeriesID: &sw.ID, FilePath: "/srv/b.m4b"})
+	require.NoError(t, err)
+
+	ev, err := reparseEvidence(st)
+	require.NoError(t, err)
+	fm, err := metadata.ExtractMetadataFromFolderWith("/srv/library/Brandon Sanderson/Brandon Sanderson - Elantris", ev)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"Brandon Sanderson"}, fm.Authors)
+	assert.Equal(t, "", fm.SeriesName)
+	fm, err = metadata.ExtractMetadataFromFolderWith("/srv/library/Star Wars/Star Wars - Thrawn", ev)
+	require.NoError(t, err)
+	assert.Empty(t, fm.Authors)
+	assert.Equal(t, "Star Wars", fm.SeriesName)
 }

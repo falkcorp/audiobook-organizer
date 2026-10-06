@@ -1,5 +1,5 @@
 // file: internal/metadata/book_name.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8eab30cb-5e6e-4bc7-bfba-dfb603b81ef2
 // last-edited: 2026-10-06
 //
@@ -38,9 +38,10 @@ type NameEvidence struct {
 	// filed as an author) -- so it decides only a segment no series evidence
 	// claims (folderLeadKind). nil means no such evidence.
 	IsAuthorRow func(name string) bool
-	// IsKnownSeries reports whether the library already has a series of that
-	// name ("Star Wars", "Harry Potter", "Jack Reacher"). nil means no such
-	// evidence. A franchise the owner curates (internal/franchise: Doctor
+	// IsKnownSeries reports whether the library already has a real series of
+	// that name ("Star Wars", "Harry Potter", "Jack Reacher") -- not a junk
+	// series row named after an author (internal/foldernames filters those).
+	// nil means no such evidence. A franchise the owner curates (internal/franchise: Doctor
 	// Who, Big Finish, Torchwood) is a series without it.
 	IsKnownSeries func(name string) bool
 	// Path is the book's file or folder path. A leading segment equal to an
@@ -459,8 +460,6 @@ func anyPerson(people []string, name string) bool {
 	return false
 }
 
-// knownAuthor reports whether name is a person-shaped name the authority
-// lists know as an author.
 // Leading-folder verdicts (folderLeadKind).
 const (
 	leadIsSeries = iota
@@ -497,6 +496,8 @@ func (ev NameEvidence) folderLeadKind(name string) int {
 	return leadIsSeries
 }
 
+// knownAuthor reports whether name is a person-shaped name the authority
+// lists know as an author.
 func (ev NameEvidence) knownAuthor(name string) bool {
 	return ev.IsKnownAuthor != nil && looksLikeAuthorSegment(name) && !strings.ContainsAny(name, "0123456789") && ev.IsKnownAuthor(name)
 }

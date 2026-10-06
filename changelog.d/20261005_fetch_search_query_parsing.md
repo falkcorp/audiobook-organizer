@@ -90,3 +90,28 @@
 - **A rescan of an existing book creates no rows from the new parse.** The
   hold now runs before any author, series or work is resolved or created,
   and also keeps the stored narrator and series position.
+- **A series row named after an author is no series evidence.** On prod
+  (2026-10-06) 11,713 series rows letters-equal an author row's name, and
+  3,188 of them name their own author ("Brandon Sanderson" filed as a series
+  of Brandon Sanderson's). The folder parse's series evidence, shared by the
+  scanner, the importer and `maintenance.reparse-folder-names` through the
+  new `internal/foldernames` package (and the search's point lookup,
+  `foldernames.IsRealSeries`), skips a row whose own author has its name,
+  that has no books, or whose books are all by the same-named author; a
+  series whose books are by someone else ("Star Wars", "Honor Harrington")
+  stays a series. The snapshot (author and series lists, authority index)
+  is read once per plan or per 10 minutes of scanning, outside the cache
+  lock.
+- **No new series named after the book's author.** `matcher.IdentifySeries`
+  (now given the author), the scanner's `resolveSeriesID` and the importer
+  refuse a series that names the author or one person of a composite credit
+  (`personname.NamesCredit`).
+- **A moved, renamed or re-sorted book is held against its stored row.**
+  The scanner resolves the stored row once (path, organizer-ID tag, the
+  owner of all its files, content hash, segment vote) before any author,
+  series or work row is resolved or created; a tagged move no longer mints
+  rows the relink then ignores, and an untagged rename's version-linked copy
+  takes the stored identity. A multi-file book whose first file changed is
+  merged into the book that owns every one of its files instead of being
+  version-linked to itself as a second row. A held title or author also
+  holds the work, and a held title the series position.

@@ -1,7 +1,7 @@
 // file: internal/matcher/matcher_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-01-19
+// last-edited: 2026-10-06
 
 package matcher
 
@@ -71,7 +71,7 @@ func TestIdentifySeries_PatternMatching(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			series, position := IdentifySeries(tt.title, tt.filePath)
+			series, position := IdentifySeries(tt.title, tt.filePath, "")
 
 			if series != tt.expectedSeries {
 				t.Errorf("Expected series %q, got %q", tt.expectedSeries, series)
@@ -113,7 +113,7 @@ func TestIdentifySeries_DirectoryStructure(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			series, _ := IdentifySeries(tt.title, tt.filePath)
+			series, _ := IdentifySeries(tt.title, tt.filePath, "")
 
 			if tt.expectSeries && series == "" {
 				t.Error("Expected to find series from directory structure")
@@ -149,7 +149,7 @@ func TestIdentifySeries_ColonAndDashFormats(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			series, position := IdentifySeries(tt.title, "/books/file.m4b")
+			series, position := IdentifySeries(tt.title, "/books/file.m4b", "")
 
 			if series != tt.expectedSeries {
 				t.Errorf("Expected series %q, got %q", tt.expectedSeries, series)
@@ -187,7 +187,7 @@ func TestIsSingleWord(t *testing.T) {
 func TestIdentifySeries_EmptyTitle(t *testing.T) {
 	// When title is empty, should try to extract from filename
 	filePath := filepath.Join("/books", "Series 1 - Book Title.m4b")
-	series, _ := IdentifySeries("", filePath)
+	series, _ := IdentifySeries("", filePath, "")
 
 	if series == "" {
 		t.Error("Expected series to be extracted from filename when title is empty")
@@ -215,7 +215,7 @@ func TestIdentifySeries_ComplexPaths(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Should not panic or error
-			series, position := IdentifySeries(tt.title, tt.filePath)
+			series, position := IdentifySeries(tt.title, tt.filePath, "")
 
 			// Basic validation
 			if position < 0 {
@@ -225,5 +225,24 @@ func TestIdentifySeries_ComplexPaths(t *testing.T) {
 			// Series can be empty or non-empty, both are valid
 			_ = series
 		})
+	}
+}
+
+// TestIdentifySeries_RefusesTheAuthorsName: a "Series - Title" match whose
+// series is the book's author is author junk, not a series.
+func TestIdentifySeries_RefusesTheAuthorsName(t *testing.T) {
+	cases := []struct {
+		title, path, author, want string
+	}{
+		{"Brandon Sanderson - Elantris", "/books/Brandon Sanderson/Elantris/01.m4b", "Brandon Sanderson", ""},
+		{"Terry Pratchett - Good Omens", "/books/x/01.m4b", "Neil Gaiman, Terry Pratchett", ""},
+		{"Mistborn - The Final Empire", "/books/x/01.m4b", "Brandon Sanderson", "Mistborn"},
+		{"Brandon Sanderson - Elantris", "/books/x/01.m4b", "", "Brandon Sanderson"},
+	}
+	for _, c := range cases {
+		got, _ := IdentifySeries(c.title, c.path, c.author)
+		if got != c.want {
+			t.Errorf("IdentifySeries(%q, author %q) = %q, want %q", c.title, c.author, got, c.want)
+		}
 	}
 }
