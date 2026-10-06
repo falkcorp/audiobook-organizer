@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_summary_clamp.go
-// version: 1.2.2
+// version: 1.3.0
 // guid: 3f1d8a24-6c05-4b9e-8d72-51ac07e4b6f3
-// last-edited: 2026-10-04
+// last-edited: 2026-10-06
 
 // Package database — retroactive clamp of oversized activity `summary` values.
 //
@@ -303,7 +303,31 @@ func (s *SQLActivityStore) VacuumActivity(ctx context.Context) (time.Duration, e
 var (
 	vacuumTruncateAttempts   = 8
 	vacuumTruncateMaxBackoff = 500 * time.Millisecond
+
+	// vacuumTruncateMaxLeftoverFrames bounds the frames the TRUNCATE may have
+	// to copy under the WAL write lock: it is issued only after a complete
+	// PASSIVE that itself had at most this many frames left to copy (see
+	// passiveNewFrames). 256 frames is about 1 MiB at the 4 KiB page size.
+	vacuumTruncateMaxLeftoverFrames = 256
+	// vacuumPassiveConvergeRounds caps the back-to-back PASSIVEs one attempt
+	// runs waiting for one to come in under vacuumTruncateMaxLeftoverFrames.
+	// Hitting it means writes outpace the copy; the attempt is then treated as
+	// not ready (no TRUNCATE) and retried after the backoff.
+	vacuumPassiveConvergeRounds = 32
 )
+
+// passiveNewFrames is how many frames a checkpoint had to copy that the
+// previous one in the same sequence had not: the frames written between the
+// start of the previous checkpoint and the start of this one. prevCheckpointed
+// is the previous result's Checkpointed (0 for the first in a sequence, so the
+// first PASSIVE always counts the whole WAL). A Log below it means the WAL was
+// restarted from frame 1 in between, so every frame in it is new.
+func passiveNewFrames(prevCheckpointed int, res walCheckpointResult) int {
+	if res.Log < prevCheckpointed {
+		return res.Log
+	}
+	return res.Log - prevCheckpointed
+}
 
 // truncateWALAfterVacuum empties the -wal VACUUM just filled: a PASSIVE
 // checkpoint copies the frames, and wal_checkpoint(TRUNCATE) resets the file
@@ -318,10 +342,23 @@ var (
 // frames without the write lock, so writers keep committing. It stops short
 // while a reader still holds an older snapshot; issuing TRUNCATE then would copy
 // the rest UNDER the lock (measured: ~16k frames when the reader let go 300 ms
-// in, and a 2.78 s Record when it never did). So each attempt issues TRUNCATE
-// only when its PASSIVE reports complete(), and that TRUNCATE has only the few
-// frames written since to copy before it resets the file. This is the same gate
-// the background loop's checkpointAndMaybeTruncate applies.
+// in, and a 2.78 s Record when it never did). So TRUNCATE is issued only when
+// the PASSIVE before it reports complete().
+//
+// AND ONLY AFTER A SHORT ONE. complete() means every frame that was in the WAL
+// when that PASSIVE STARTED is copied; the frames Records commit while it runs
+// are not, and the TRUNCATE copies them under the lock. After a long copy that
+// is a lot: on a loaded CI runner (run 37453234558) a complete 6.13 s PASSIVE
+// was followed by a 3.79 s TRUNCATE and a 3.84 s Record behind it, and on prod
+// an 11 GB PASSIVE would leave minutes of writes. So each attempt repeats
+// PASSIVE back to back until one is complete and had at most
+// vacuumTruncateMaxLeftoverFrames frames of its own to copy (passiveNewFrames).
+// Such a PASSIVE was short, so the frames written during it, which are all the
+// TRUNCATE copies, are few. If vacuumPassiveConvergeRounds pass without that,
+// writes are outpacing the copy: the attempt logs the counts, issues no
+// TRUNCATE, and is retried after the backoff like any other not-ready attempt.
+// The background loop's checkpointAndMaybeTruncate needs no such loop: it
+// truncates only on an idle tick, when no Record committed since the last one.
 //
 // A busy TRUNCATE is not an SQL error. It returns an ordinary row with busy=1
 // (and log/checkpointed of -1) and leaves the -wal exactly as it was. This used
@@ -339,13 +376,14 @@ var (
 func (s *SQLActivityStore) truncateWALAfterVacuum(ctx context.Context) error {
 	backoff := 10 * time.Millisecond
 	var res walCheckpointResult
+	prevCheckpointed := 0
 	for attempt := 1; ; attempt++ {
-		passive, err := s.walCheckpoint(ctx, "PASSIVE")
+		passive, converged, err := s.passiveUntilShort(ctx, &prevCheckpointed)
 		if err != nil {
 			return fmt.Errorf("passive checkpoint before truncate: %w", err)
 		}
 		res = passive
-		if passive.complete() {
+		if converged {
 			res, err = s.walCheckpoint(ctx, "TRUNCATE")
 			if err != nil {
 				return err
@@ -370,4 +408,42 @@ func (s *SQLActivityStore) truncateWALAfterVacuum(ctx context.Context) error {
 	return fmt.Errorf("WAL not reset after %d attempts (last checkpoint busy=%d wal_frames=%d checkpointed=%d): "+
 		"a reader or another connection kept it from being fully copied or reset",
 		vacuumTruncateAttempts, res.Busy, res.Log, res.Checkpointed)
+}
+
+// passiveUntilShort runs PASSIVE checkpoints back to back until one is complete
+// and had at most vacuumTruncateMaxLeftoverFrames new frames to copy, which is
+// when a TRUNCATE may follow it (converged). It stops early, not converged, at
+// the first PASSIVE that is not complete: a reader is holding it short or the
+// checkpoint was busy, and only the caller's backoff helps with that. It also
+// stops, not converged, after vacuumPassiveConvergeRounds. *prevCheckpointed
+// carries the previous result's Checkpointed across calls so the first PASSIVE
+// of a retry is measured against the last one of the attempt before.
+func (s *SQLActivityStore) passiveUntilShort(ctx context.Context, prevCheckpointed *int) (walCheckpointResult, bool, error) {
+	var res walCheckpointResult
+	for round := 1; round <= vacuumPassiveConvergeRounds; round++ {
+		if err := ctx.Err(); err != nil {
+			return res, false, err
+		}
+		var err error
+		res, err = s.walCheckpoint(ctx, "PASSIVE")
+		if err != nil {
+			return res, false, err
+		}
+		if res.Log < 0 {
+			// Busy before reading the WAL: no counts, nothing learned.
+			return res, false, nil
+		}
+		newFrames := passiveNewFrames(*prevCheckpointed, res)
+		*prevCheckpointed = res.Checkpointed
+		if !res.complete() {
+			return res, false, nil
+		}
+		if newFrames <= vacuumTruncateMaxLeftoverFrames {
+			return res, true, nil
+		}
+	}
+	ckptLog.Warn("post-vacuum PASSIVE of %s did not converge in %d rounds (last: wal_frames=%d checkpointed=%d); "+
+		"writes are outpacing the copy, so no TRUNCATE this attempt", s.path, vacuumPassiveConvergeRounds,
+		res.Log, res.Checkpointed)
+	return res, false, nil
 }
