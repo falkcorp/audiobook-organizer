@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/consolidation_leftovers_samepath_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f05ffd91-1eeb-4d83-be86-1d16d9d8e1e8
 // last-edited: 2026-10-06
 
@@ -7,6 +7,7 @@ package maintenance
 
 import (
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -42,9 +43,10 @@ func (f *lfFixture) splashdown(t *testing.T) (leftover, owner, other string) {
 	require.NoError(t, err)
 	f.ids["O"] = o.ID
 	f.organized(t, o.ID)
-	dur := spOwnerDur
+	// No book-level duration, as in prod: the plan row's length comes from
+	// the owner's file row.
 	_, err = f.s.ModifyBook(o.ID, func(b *database.Book) error {
-		b.VersionGroupID, b.IsPrimaryVersion, b.Duration = &gid, &yes, &dur
+		b.VersionGroupID, b.IsPrimaryVersion = &gid, &yes
 		return nil
 	})
 	require.NoError(t, err)
@@ -246,6 +248,23 @@ func (f *lfFixture) itunesSibling(t *testing.T, primary *bool) string {
 	})
 	require.NoError(t, err)
 	return b.ID
+}
+
+// TestLeftoversSamePath_MissingRowIsNoOwner: a book whose only reference to
+// the path is a row already marked Missing does not own the file; it is
+// named in the evidence and the row stays applicable.
+func TestLeftoversSamePath_MissingRowIsNoOwner(t *testing.T) {
+	f := newLFFixture(t)
+	l, o, _ := f.splashdown(t)
+	b, err := f.s.CreateBook(&database.Book{Title: "38 - Splashdown stale"})
+	require.NoError(t, err)
+	require.NoError(t, f.s.CreateBookFile(&database.BookFile{BookID: b.ID, FilePath: f.path(spShared), FileSize: 5000, Missing: true}))
+	r, ok := lfRow(f.planLF(t, "op-plan"), l)
+	require.True(t, ok)
+	require.Equal(t, leftoverClassSamePath, r.Class, r.Reason)
+	require.Empty(t, r.Skipped, r.SkipReason)
+	require.Contains(t, r.Current["owner_book"], o)
+	require.Contains(t, strings.Join(r.Evidence, "\n"), b.ID)
 }
 
 // TestLeftoversSamePath_ExplicitNonPrimaryITunesSiblingDoesNotHold: only an
