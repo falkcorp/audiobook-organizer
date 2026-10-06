@@ -1,5 +1,5 @@
 // file: internal/server/candidate_fallback_round3_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 7f057c74-2af0-44a5-bf9a-214d739ab5f0
 // last-edited: 2026-10-06
 
@@ -104,6 +104,15 @@ func seedNoAuthorRow(t *testing.T, f *fallbackFixture, title string) *database.B
 	}
 	if _, verdict, _ := f.mfs.CachedBatchVerdict(book, title, metafetch.SearchAuthorHint("Synthetic Writer")); verdict != metafetch.BatchVerdictNone {
 		t.Fatalf("fixture: verdict %v, want None (stale row, no usable candidate)", verdict)
+	}
+	// The scheduled tick selects it: a current fingerprint, no usable
+	// candidate, and a fallback provider still owed.
+	sel, err := unfetchedCandidateBookIDs(context.Background(), f.store, f.mfs, f.s.newFolderMemo(f.store), nil, 800)
+	if err != nil {
+		t.Fatalf("select: %v", err)
+	}
+	if !slices.Contains(sel.IDs, b.ID) || sel.FallbackUnusable != 1 {
+		t.Fatalf("fixture: selection %v (unusable %d), want the book selected as holding only unusable candidates", sel.IDs, sel.FallbackUnusable)
 	}
 	// Every provider has nothing to say this time.
 	f.audible.answer, f.openlib.answer, f.google.answer = nil, nil, nil

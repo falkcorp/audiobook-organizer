@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.32.0
+// version: 1.33.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
 // last-edited: 2026-10-06
 //
@@ -1541,7 +1541,9 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   // cache refetched since the page loaded is still refused as stale. A book
   // the lane holds no hash for (the selection outlived a refresh that dropped
   // its row, or the row came without a hash) gets the hashless owner marker:
-  // still owner-reviewed, on whatever the server's top candidate is.
+  // still owner-reviewed, on whatever the server's top candidate is -- except
+  // that the server never applies a review-only (Open Library / Google Books)
+  // candidate or lifts a no_match mark on it: nobody saw that candidate.
   const bulkPinsFor = useCallback(
     (ids: string[]): Record<string, ApplyPin> => {
       const byId = new Map(results.map((r) => [r.book.id, r]));

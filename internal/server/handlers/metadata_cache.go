@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.30.0
+// version: 1.30.1
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-10-06
 
@@ -1052,9 +1052,12 @@ func (h *MetadataCacheHandler) BatchApplyFromCache(c *gin.Context) {
 		// any pin that no longer matches is refused as stale_candidate. A bulk
 		// button's book the lane had no hash for carries the hashless
 		// "review_bulk" marker (metafetch.CandidatePin.IsUnseenOwnerReview),
-		// owner-reviewed without a staleness check. A book with no pin, or a
-		// pin of another origin, gets the ordinary hard gate. The dry run
-		// ignores pins: it never forwards them to the preview op.
+		// owner-reviewed without a staleness check -- except that it never
+		// applies a review-only (Open Library / Google Books) candidate or
+		// lifts a no_match mark: nobody saw that book's candidate. A book
+		// with no pin, or a pin of another origin, gets the ordinary hard
+		// gate. The dry run ignores pins: it never forwards them to the
+		// preview op.
 		Pins map[string]metafetch.CandidatePin `json:"pins"`
 		// Mode is the review page's bulk toggle (owner ruling 2026-09-27):
 		// "fill" (the default, also "") or "replace". Replace makes a book
