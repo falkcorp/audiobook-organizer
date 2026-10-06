@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler_crud.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 7f0f10bf-7554-4af5-b2d2-ce0a6af6b46e
 // last-edited: 2026-10-06
 
@@ -140,12 +140,13 @@ func (h *Handler) UpdateAudiobook(c *gin.Context) {
 	}
 
 	// Invalidate caches since book-author and book-series relationships may have changed.
-	// Also clear the shared audiobookService's list cache — the update service owns a
-	// separate instance, so its InvalidateBookCaches() above didn't flush it.
+	// Also clear the shared audiobookService's list cache (a no-op unless
+	// config.CacheInvalidateOnBookUpdate is on) — the update service owns a
+	// separate instance, so its InvalidateListCache() above didn't flush it.
 	h.authorsCache.InvalidateAll()
 	h.seriesCache.InvalidateAll()
 	if h.audiobookService != nil {
-		h.audiobookService.InvalidateBookCaches()
+		h.audiobookService.InvalidateListCache()
 	}
 
 	if len(warnings) == 0 {

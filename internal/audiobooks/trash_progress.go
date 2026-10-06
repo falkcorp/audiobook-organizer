@@ -1,7 +1,7 @@
 // file: internal/audiobooks/trash_progress.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 98f1136e-e723-43fd-9d77-fab344a4aa45
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package audiobooks
 
@@ -391,7 +391,7 @@ func (svc *AudiobookService) purgeNow(book *database.Book) (map[string]any, erro
 	detail := strings.Join(out.errs, "; ")
 	switch out.kind {
 	case purgePurged, purgeCarried:
-		svc.InvalidateBookCaches()
+		svc.InvalidateListCache()
 		res := map[string]any{
 			"message":        "audiobook purged",
 			"blocked":        false,
@@ -563,7 +563,7 @@ func (svc *AudiobookService) DiscardProgressAndPurge(ctx context.Context, id, ac
 		return nil, err
 	}
 	res.FilesDeleted, res.Warnings = svc.purgeFinish(book, config.AppConfig.PurgeSoftDeletedDeleteFiles)
-	svc.InvalidateBookCaches()
+	svc.InvalidateListCache()
 
 	if aerr := rec.Record(database.ActivityEntry{
 		Timestamp: time.Now().UTC(),

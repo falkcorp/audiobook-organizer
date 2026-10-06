@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_series_clear_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7f040721-48bc-4639-919d-3da56ceab6e3
-// last-edited: 2026-10-03
+// last-edited: 2026-10-06
 
 package audiobookshandler_test
 
@@ -43,7 +43,7 @@ func TestUpdateAudiobook_EmptySeriesNameResponseHasNoSeries(t *testing.T) {
 	}
 
 	svc := audiobooksmocks.NewMockAudiobookService(t)
-	svc.EXPECT().InvalidateBookCaches().Return()
+	svc.EXPECT().InvalidateListCache().Return()
 	h := realUpdateHandler(store, svc)
 
 	c, w := newCtx("PUT", "/audiobooks/"+book.ID, map[string]any{"series_name": ""}, p("id", book.ID))

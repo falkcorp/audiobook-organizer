@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service.go
-// version: 1.52.0
+// version: 1.53.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-10-06
 
@@ -225,7 +225,7 @@ type AudiobookService struct {
 	// This cache sits UNDER the server's HTTP list cache: the handler's cached
 	// gin.H response is built from GetAudiobooks, which reads this. Keying only
 	// the HTTP cache would have left deleted books to be served straight back
-	// out of here, because InvalidateBookCaches skips listCache unless
+	// out of here, because InvalidateListCache skips listCache unless
 	// config.CacheInvalidateOnBookUpdate is on — and it is off by default.
 	libGen *cache.Generation
 	// runtimeIdx caches canonical book runtimes for the duration: list
@@ -289,17 +289,18 @@ func NewAudiobookService(store audiobookStore) *AudiobookService {
 // minutes.
 const listCacheTTL = 10 * time.Minute
 
-// InvalidateBookCaches clears the list cache after a mutation (create,
+// InvalidateListCache clears the list cache after a mutation (create,
 // update, delete) when config.CacheInvalidateOnBookUpdate is set; by default
 // the list/facets caches are left warm so metadata fetches and write-back
-// operations do not reset library page performance.
+// operations do not reset library page performance, and the call does
+// nothing.
 //
-// There is no per-book cache to clear (2026-10-06): GetAudiobook reads the
-// store on every call. It used to keep a 24h per-book cache that only this
-// function cleared, and only the AudiobookService's own edit paths call it --
-// Repairs fixers, the scanner and metadata applies write the store directly,
-// so a book's detail page could show day-old data after any background fix.
-func (svc *AudiobookService) InvalidateBookCaches() {
+// Named InvalidateBookCaches until 2026-10-06, when the per-book detail cache
+// it also cleared was removed: only the AudiobookService's own edit paths call
+// this, while Repairs fixers, the scanner and metadata applies write the store
+// directly, so a book's detail page could show day-old data after any
+// background fix. GetAudiobook now reads the store on every call.
+func (svc *AudiobookService) InvalidateListCache() {
 	if config.AppConfig.CacheInvalidateOnBookUpdate {
 		svc.listCache.InvalidateAll()
 	}

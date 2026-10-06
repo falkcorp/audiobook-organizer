@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_mutation.go
-// version: 1.28.0
+// version: 1.29.0
 // guid: e7b1f6a5-b8c9-0d12-ce3f-4a5b6c7d8e9f
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package audiobooks
 
@@ -1000,7 +1000,7 @@ func (svc *AudiobookService) updateAudiobook(ctx context.Context, id string, req
 		}
 	}
 
-	svc.InvalidateBookCaches()
+	svc.InvalidateListCache()
 
 	// Enrich response with resolved names (not for an unchanged name: the
 	// stored objects stand, and the shown name may be a join "A & B" that is
@@ -1415,7 +1415,7 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 		// iTunes side should reflect that immediately.
 		svc.enqueueITunesRemovesForBook(id, book)
 
-		svc.InvalidateBookCaches()
+		svc.InvalidateListCache()
 		return map[string]any{
 			"message":     "audiobook soft deleted",
 			"blocked":     blocked,
@@ -1501,7 +1501,7 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 		}
 	}
 
-	svc.InvalidateBookCaches()
+	svc.InvalidateListCache()
 	res := map[string]any{
 		"message": "audiobook deleted",
 		"blocked": blocked,

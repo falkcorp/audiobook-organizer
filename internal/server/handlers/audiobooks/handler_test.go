@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_test.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 5cd764d5-8036-425c-842e-c49d0d44acec
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 // Tests for the audiobooks-domain handlers (main library list / CRUD). The
 // store / audiobook-service / updater / write-back / metadata-state /
@@ -940,7 +940,7 @@ func TestUpdateAudiobook_Success(t *testing.T) {
 	h, d := newHandler(t)
 	d.updater.EXPECT().UpdateAudiobookWithWarnings(mock.Anything, "b1", mock.Anything).
 		Return(&database.Book{ID: "b1", Title: "New"}, nil, nil)
-	d.svc.EXPECT().InvalidateBookCaches().Return()
+	d.svc.EXPECT().InvalidateListCache().Return()
 	d.writeBack.EXPECT().Enqueue("b1").Return()
 	c, w := newCtx("PUT", "/audiobooks/b1", map[string]any{"title": "New"}, p("id", "b1"))
 	h.UpdateAudiobook(c)
@@ -957,7 +957,7 @@ func TestUpdateAudiobook_PartialSaveReturnsWarnings(t *testing.T) {
 	warn := "the edit was saved but its field locks and overrides were not (a later metadata fetch may overwrite the edited fields): disk full"
 	d.updater.EXPECT().UpdateAudiobookWithWarnings(mock.Anything, "b1", mock.Anything).
 		Return(&database.Book{ID: "b1", Title: "New"}, []string{warn}, nil)
-	d.svc.EXPECT().InvalidateBookCaches().Return()
+	d.svc.EXPECT().InvalidateListCache().Return()
 	d.writeBack.EXPECT().Enqueue("b1").Return()
 	c, w := newCtx("PUT", "/audiobooks/b1", map[string]any{"title": "New"}, p("id", "b1"))
 	h.UpdateAudiobook(c)
@@ -983,7 +983,7 @@ func TestUpdateAudiobook_CleanSaveHasNoWarningsKey(t *testing.T) {
 	h, d := newHandler(t)
 	d.updater.EXPECT().UpdateAudiobookWithWarnings(mock.Anything, "b1", mock.Anything).
 		Return(&database.Book{ID: "b1", Title: "New"}, nil, nil)
-	d.svc.EXPECT().InvalidateBookCaches().Return()
+	d.svc.EXPECT().InvalidateListCache().Return()
 	d.writeBack.EXPECT().Enqueue("b1").Return()
 	c, w := newCtx("PUT", "/audiobooks/b1", map[string]any{"title": "New"}, p("id", "b1"))
 	h.UpdateAudiobook(c)
@@ -1003,7 +1003,7 @@ func TestUpdateAudiobook_ProtectedPathSkipsWriteBack(t *testing.T) {
 	// any metadata.WriteMetadataToFile / SetLastWrittenAt.)
 	d.store.EXPECT().GetBookAuthors("b1").Return([]database.BookAuthor{{AuthorID: 1}}, nil).Maybe()
 	d.store.EXPECT().GetBookNarrators("b1").Return([]database.BookNarrator{}, nil).Maybe()
-	d.svc.EXPECT().InvalidateBookCaches().Return()
+	d.svc.EXPECT().InvalidateListCache().Return()
 	d.writeBack.EXPECT().Enqueue("b1").Return()
 	c, w := newCtx("PUT", "/audiobooks/b1", map[string]any{"title": "New"}, p("id", "b1"))
 	h.UpdateAudiobook(c)
