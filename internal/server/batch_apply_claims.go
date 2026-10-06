@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_claims.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 0c6a9e42-7d1b-4f83-a5e2-9b3f1d7c4e60
-// last-edited: 2026-09-13
+// last-edited: 2026-10-05
 
 package server
 
@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"runtime"
+	"strings"
 
 	"golang.org/x/sync/errgroup"
 
@@ -169,6 +170,21 @@ func bestEffortBook(books claimBookReader, id string) *database.Book {
 
 // cachedClaimLoader loads the claim planCachedApply would act on: the top
 // cached candidate.
+//
+// An applied book (database.MetadataApplied) with an ASIN claims that ASIN
+// instead (ownedASINClaim). An apply keeps the book's cached candidates since
+// 2026-10-05, so applied books are in the universe, but the apply skips them
+// as already_applied: their top candidate is never taken, and claiming it
+// would block a sibling over a record nobody is applying, or miss the one
+// the book actually holds. What an applied book does hold is its ASIN, and
+// it keeps blocking another part in a related folder that would take the
+// same record. An applied book with no ASIN keeps its top-candidate claim:
+// GetBookByID leaves Book.Author unhydrated, so a title+author key built
+// from the book would carry no surnames and match nothing.
+//
+// The one applied book the apply does act on is a single-row approval that
+// re-applies its top candidate; the index is built before any pin is known,
+// so that book is indexed by its ASIN like the rest.
 func cachedClaimLoader(svc cachedCandidateGetter, books claimBookReader) claimLoader {
 	return func(id string) (*database.Book, *metafetch.MetadataCandidate, error) {
 		entry, _, err := svc.GetCachedCandidates(id)
@@ -189,8 +205,24 @@ func cachedClaimLoader(svc cachedCandidateGetter, books claimBookReader) claimLo
 		if book == nil {
 			return nil, nil, nil
 		}
+		if owned := ownedASINClaim(book); owned != nil {
+			return book, owned, nil
+		}
 		return book, &cand, nil
 	}
+}
+
+// ownedASINClaim is the claim an applied book with an ASIN makes: that ASIN
+// (see cachedClaimLoader). nil for any other book.
+func ownedASINClaim(book *database.Book) *metafetch.MetadataCandidate {
+	if book == nil || book.ASIN == nil || !database.MetadataApplied(book.MetadataReviewStatus) {
+		return nil
+	}
+	asin := strings.TrimSpace(*book.ASIN)
+	if asin == "" {
+		return nil
+	}
+	return &metafetch.MetadataCandidate{ASIN: asin, Title: book.Title}
 }
 
 // opResultClaimLoader loads the claim planOpResultApply would act on: a

@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.34.0
+// version: 1.35.0
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
 // last-edited: 2026-10-05
 
@@ -218,6 +218,17 @@ const (
 	// authorless would LOOSEN the gate (no author to overwrite, so an unknown
 	// runtime no longer blocks), so the book is refused and nothing written.
 	applySkipAuthorsUnreadable = "authors_unreadable"
+	// applySkipAlreadyApplied: the book's metadata has already been applied
+	// (database.MetadataApplied: review status "matched" or
+	// "audio_confirmed") and nobody approved this candidate for it as a single
+	// review row. Nothing is written. Until 2026-10-05 an apply deleted the
+	// book's cached candidates, so an applied book had nothing to apply and
+	// fell out as no_cached_candidates; now the candidates stay, and without
+	// this skip a bulk apply would apply every applied book again -- file
+	// work, a tag write, an iTunes write-back and a history entry each time,
+	// and in replace mode an overwrite of the owner's later edits. The preview
+	// reports these rows as verdict "skipped", reason "already_applied".
+	applySkipAlreadyApplied = "already_applied"
 )
 
 // cachedApplyPlan is the decision for one book, made BEFORE anything is
@@ -366,6 +377,16 @@ func planCachedApply(svc cachedApplyService, books bookReader, id string, claims
 			berr = fmt.Errorf("book %s not found", id)
 		}
 		return cachedApplyPlan{Candidate: &cand, Reason: applySkipBookNotFound, Err: berr}
+	}
+	// An applied book is left alone unless the owner approved this candidate
+	// on its single review row (a row pin, still checked for staleness
+	// below): that click is the owner choosing to re-apply. A review-page bulk
+	// button, its hashless marker, a script's pin and no pin all skip it.
+	// Checked before the stale-pin test, so a bulk pin on an applied book
+	// reports already_applied, not stale_candidate.
+	if database.MetadataApplied(book.MetadataReviewStatus) && (pin == nil || !pin.IsRowReview()) {
+		return cachedApplyPlan{Book: book, Candidate: &cand, Reason: applySkipAlreadyApplied,
+			Err: fmt.Errorf("book %s: metadata already applied (review status %q)", id, *book.MetadataReviewStatus)}
 	}
 	unseen := pin != nil && pin.IsUnseenOwnerReview()
 	if pin != nil && !unseen && !pin.Matches(cand) {
