@@ -386,7 +386,7 @@ export function AuthorDedupTab() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [clearSelection]);
 
   useEffect(() => {
     fetchDuplicates();

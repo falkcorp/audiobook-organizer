@@ -36,9 +36,9 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"runtime"
 	"slices"
 	"sort"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -1321,6 +1321,10 @@ func (h *Handler) bindBulkCandidateFilter(c *gin.Context, verb string) (database
 // (refreshExampleBreakdown) and is the expensive part at a few thousand rows.
 const bulkRejectMaxWorkers = 8
 
+// bulkRejectLog routes through internal/logger (the log-injection barrier);
+// every value it formats is an int.
+var bulkRejectLog = logger.New("dedup.bulk-reject")
+
 // BulkRejectDedupCandidates handles POST /api/v1/dedup/candidates/bulk-reject.
 //
 // The reject counterpart of BulkLinkDedupCandidates, for the review UI's
@@ -1406,7 +1410,7 @@ func (h *Handler) BulkRejectDedupCandidates(c *gin.Context) {
 	}
 	sort.Slice(failures, func(i, j int) bool { return failures[i].CandidateID < failures[j].CandidateID })
 
-	slog.Info("dedup bulk reject complete", "rejected", rejected, "failures_count", len(failures), "total", total)
+	bulkRejectLog.Info("dedup bulk reject complete: rejected=%d failed=%d matched=%d", rejected, len(failures), total)
 	httputil.RespondWithOK(c, gin.H{
 		"attempted": len(candidates),
 		"rejected":  rejected,
