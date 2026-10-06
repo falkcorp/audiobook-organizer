@@ -299,15 +299,22 @@ func (p *UserStateProbe) Has(bookID string) (bool, error) {
 }
 
 // owedBookmarks reports whether any of the probe's users has a bookmark
-// under bookID's own ABS sync id that no live book holds yet. Bookmarks are
-// copied, never moved, by a merge or a carry (bookmark_copy.go): the book
-// keeps its own rows and its sync id redirects to the survivor's. So:
+// that only bookID still makes reachable. Bookmarks are copied, never moved,
+// by a merge or a carry (bookmark_copy.go): each book keeps its own rows and
+// its sync id redirects to the survivor's. So, with own = bookID's sync id
+// and canonical = what own resolves to:
 //
-//   - own sync id not redirected (resolves to itself): every bookmark on it
-//     is the only copy, and counts;
-//   - redirected: a bookmark counts only when the id it resolves to lacks a
+//   - own not redirected (canonical == own): every bookmark on own is the
+//     only copy, and counts;
+//   - redirected: a bookmark on own counts only when canonical lacks a
 //     bookmark at that time (progress.CanonicalTimeKey) -- the copy did not
-//     happen or did not finish.
+//     happen or did not finish;
+//   - either way, a bookmark under an ALIAS of own (a book merged into this
+//     one earlier, whose id redirects here) counts when canonical lacks it:
+//     a merge from before bookmarks were copied (2026-09-26) left it
+//     reachable only through this book's id, and deleting this book would
+//     strand it. A carry copies aliases' bookmarks too (CopyAliasBookmarks
+//     walks the aliases of the survivor, which then include these).
 //
 // A store with no bookmark or sync-identity keyspace, or a book never given
 // a sync id, has none. Any read error is returned (fail closed: the caller
@@ -333,31 +340,37 @@ func (p *UserStateProbe) owedBookmarks(bookID string) (bool, error) {
 	if item != nil && item.SyncID != "" {
 		canonical = item.SyncID
 	}
+	aliases, err := ids.ListSyncAliases(own)
+	if err != nil {
+		return false, fmt.Errorf("list aliases of sync id %s of %s: %w", own, bookID, err)
+	}
 	for _, u := range p.users {
 		if u.ID == "" {
 			continue
-		}
-		marks, err := bs.ListBookmarks(u.ID, own)
-		if err != nil {
-			return false, fmt.Errorf("read bookmarks user=%s book=%s: %w", u.ID, bookID, err)
-		}
-		if len(marks) == 0 {
-			continue
-		}
-		if canonical == own {
-			return true, nil
 		}
 		have, err := bs.ListBookmarks(u.ID, canonical)
 		if err != nil {
 			return false, fmt.Errorf("read bookmarks user=%s on %s: %w", u.ID, canonical, err)
 		}
+		if canonical == own && len(have) > 0 {
+			return true, nil
+		}
 		present := make(map[string]bool, len(have))
 		for i := range have {
 			present[progress.CanonicalTimeKey(have[i].TimeSec)] = true
 		}
-		for i := range marks {
-			if !present[progress.CanonicalTimeKey(marks[i].TimeSec)] {
-				return true, nil
+		for _, src := range append([]string{own}, aliases...) {
+			if src == "" || src == canonical {
+				continue
+			}
+			marks, err := bs.ListBookmarks(u.ID, src)
+			if err != nil {
+				return false, fmt.Errorf("read bookmarks user=%s on %s (book %s): %w", u.ID, src, bookID, err)
+			}
+			for i := range marks {
+				if !present[progress.CanonicalTimeKey(marks[i].TimeSec)] {
+					return true, nil
+				}
 			}
 		}
 	}

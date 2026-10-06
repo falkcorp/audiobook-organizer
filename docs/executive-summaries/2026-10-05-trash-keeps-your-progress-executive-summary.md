@@ -75,6 +75,7 @@ A review of the first change found a few gaps, now closed (PR #3777).
   "Discard" when there is. It shows "progress unknown" when progress could
   not be read, and each person sees only their own progress plus a count of
   other people with progress, unless they manage users.
-- **iTunes stays intact.** Purging a trashed copy no longer removes a track
-  from the iTunes library that another copy of the book still uses, and
-  nothing is changed in iTunes unless the book was really deleted.
+- **iTunes stays intact.** Moving a copy to the trash, or purging it, no
+  longer removes a track from the iTunes library that another copy of the
+  book still uses, and a purge changes nothing in iTunes unless the book was
+  really deleted.

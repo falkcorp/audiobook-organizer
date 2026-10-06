@@ -29,4 +29,9 @@
     `listed_copy_unknown`, `purge_eligible` and `progress_other_users`, and
     shows other users' names only to a user who may manage users; the
     purge's external-ID tombstones and iTunes removes run after the row is
-    deleted, and an iTunes track another copy still holds is not removed.
+    deleted, and neither the purge nor a soft delete removes an iTunes track
+    another copy still holds.
+  - Bookmarks under an alias of a book's sync id that were never copied (a
+    merge from before 2026-09-26) count as that book's state, so the first
+    purge after deploy carries them or keeps the book.
+  - "Purge now" with `block_hash=true` blocks the hash after the purge.

@@ -1429,7 +1429,19 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 	// (purgeNow): the trash page's "Purge now" must behave like the nightly
 	// purge (owner decision 2026-10-05).
 	if database.IsInTrash(book) {
-		return svc.purgeNow(book)
+		res, err := svc.purgeNow(book)
+		if err != nil {
+			return nil, err
+		}
+		// block_hash is honoured as before, once the book is really gone.
+		if opts.BlockHash && book.FileHash != nil && *book.FileHash != "" {
+			if berr := svc.store.AddBlockedHash(*book.FileHash, "User deleted - prevent reimport"); berr != nil {
+				slog.Warn("failed to block hash after purge", "err", berr)
+			} else {
+				res["blocked"] = true
+			}
+		}
+		return res, nil
 	}
 
 	// Refuse a book that still owns book_file rows BEFORE any side effect
@@ -1517,14 +1529,18 @@ func (svc *AudiobookService) collectITunesPIDsForBook(bookID string, book *datab
 	return pids
 }
 
-// enqueueITunesRemovesForBook is a soft-delete helper: it pulls the
-// PIDs and enqueues each via the wired batcher. No-op if the batcher
-// isn't wired.
+// enqueueITunesRemovesForBook is a soft-delete helper: it enqueues an
+// iTunes remove, via the wired batcher, for each of the book's PIDs that no
+// other book still holds (itunesPIDsToRemove: a live copy of the same
+// iTunes track keeps it in the iTunes library). No-op if the batcher isn't
+// wired.
 func (svc *AudiobookService) enqueueITunesRemovesForBook(bookID string, book *database.Book) {
-	if svc.itunesEnqueuer == nil {
+	if svc.itunesEnqueuer == nil || book == nil {
 		return
 	}
-	for _, pid := range svc.collectITunesPIDsForBook(bookID, book) {
+	b := *book
+	b.ID = bookID
+	for _, pid := range svc.itunesPIDsToRemove(&b) {
 		svc.itunesEnqueuer.EnqueueRemove(pid)
 	}
 }
