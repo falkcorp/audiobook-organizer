@@ -1,5 +1,5 @@
 // file: internal/server/candidate_refetch_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 74a3c673-3586-4bc4-861e-c56db3fd0ab5
 // last-edited: 2026-10-05
 
@@ -7,6 +7,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -92,5 +93,86 @@ func TestRefetchMetadataCandidates_EmptyAnswerIsRecorded(t *testing.T) {
 	dated := entry.FetchedAt.After(before) || (entry.LastEmptyFetchAt != nil && entry.LastEmptyFetchAt.After(before))
 	if !dated {
 		t.Fatalf("cache row not dated by the refetch: fetched %v, last empty %v", entry.FetchedAt, entry.LastEmptyFetchAt)
+	}
+}
+
+// A refetch of a book another refetch (or a candidate-fetch worker) holds is
+// refused before any provider call: the claim is taken atomically, so two
+// Repairs applies cannot fetch one book at once.
+func TestRefetchMetadataCandidates_RefusesABookAlreadyClaimed(t *testing.T) {
+	s, cleanup := setupTestServer(t)
+	defer cleanup()
+	store := s.storeForWiring()
+	book, err := store.CreateBook(&database.Book{Title: "The Hobbit", FilePath: "/lib/hobbit2/book.m4b"})
+	if err != nil {
+		t.Fatalf("CreateBook: %v", err)
+	}
+	src := &countingSource{name: "Finds", results: []metadata.BookMetadata{{Title: "The Hobbit"}}}
+	mfs := metafetch.NewService(store)
+	mfs.SetOverrideSources([]metadata.MetadataSource{src})
+	s.metadataFetchService = mfs
+
+	release, ok := s.candidateFetchClaims.tryClaim(book.ID)
+	if !ok {
+		t.Fatal("fixture: claim")
+	}
+	if _, err := s.RefetchMetadataCandidates(context.Background(), book.ID); !errors.Is(err, errCandidateFetchInFlight) {
+		t.Fatalf("err = %v, want errCandidateFetchInFlight", err)
+	}
+	if src.calls.Load() != 0 {
+		t.Fatal("a claimed book was fetched")
+	}
+	release()
+	if _, err := s.RefetchMetadataCandidates(context.Background(), book.ID); err != nil {
+		t.Fatalf("after release: %v", err)
+	}
+	if _, ok := s.candidateFetchClaims.tryClaim(book.ID); !ok {
+		t.Fatal("the refetch left its claim held")
+	}
+}
+
+// claim waits for the holder and fails only when its context ends; release
+// is idempotent and wakes every waiter.
+func TestBookFetchClaims_WaitAndRelease(t *testing.T) {
+	var c bookFetchClaims
+	release, ok := c.tryClaim("b1")
+	if !ok {
+		t.Fatal("first claim")
+	}
+	if _, ok := c.tryClaim("b1"); ok {
+		t.Fatal("a held book was claimed twice")
+	}
+	if r2, ok := c.tryClaim("b2"); !ok {
+		t.Fatal("another book is independent")
+	} else {
+		r2()
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := c.claim(ctx, "b1"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("claim on a held book = %v, want the context's deadline", err)
+	}
+
+	got := make(chan func(), 1)
+	go func() {
+		r, err := c.claim(context.Background(), "b1")
+		if err != nil {
+			t.Error(err)
+		}
+		got <- r
+	}()
+	select {
+	case <-got:
+		t.Fatal("claim returned while the book was held")
+	case <-time.After(20 * time.Millisecond):
+	}
+	release()
+	release()
+	select {
+	case r := <-got:
+		r()
+	case <-time.After(2 * time.Second):
+		t.Fatal("the waiter was not woken by the release")
 	}
 }

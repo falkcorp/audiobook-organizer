@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_title_fixer_test.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 3a8d6f52-1e9c-4b07-92d4-6c5b0e8a7f13
-// last-edited: 2026-10-03
+// last-edited: 2026-10-05
 
 package maintenance
 
@@ -917,13 +917,13 @@ func TestJunkTitleFixer_CandidateReadIsTheFilteredRow(t *testing.T) {
 	lib := newJunkLib(t)
 	id := lib.ids["candidate"]
 	raw := newJunkTitleFixer(&Plugin{deps: fakeDeps{store: lib.store}, standDownWait: noWait})
-	title, _, ok := raw.candidateTitle(id, "Author A")
+	title, _, ok := raw.candidateTitle(id, "Author A", nil)
 	require.True(t, ok)
 	require.Equal(t, "Candidate Title", title)
 
 	filtered := newJunkTitleFixer(&Plugin{deps: filteredCacheDeps{fakeDeps: fakeDeps{store: lib.store},
 		filtered: map[string]*database.MetadataCandidateCache{id: {BookID: id}}}, standDownWait: noWait})
-	_, _, ok = filtered.candidateTitle(id, "Author A")
+	_, _, ok = filtered.candidateTitle(id, "Author A", nil)
 	require.False(t, ok, "the filtered row has no candidate; the raw row must not be read")
 }
 
@@ -983,4 +983,34 @@ func titleFetched(t *testing.T, st database.Store, bookID string) *string {
 		}
 	}
 	return nil
+}
+
+// The book's ASIN decides among trustworthy candidates: one carrying it wins
+// over a higher score, and one naming another ASIN is never proposed.
+func TestJunkTitleFixer_CandidateTitlePrefersTheBooksASIN(t *testing.T) {
+	cand := func(title, asin string, score float64) json.RawMessage {
+		b, err := json.Marshal(map[string]any{"title": title, "author": "Author A", "asin": asin, "score": score})
+		require.NoError(t, err)
+		return b
+	}
+	row := &database.MetadataCandidateCache{BookID: "b1", Candidates: []json.RawMessage{
+		cand("Other Record", "B00OTHERAS", 0.99),
+		cand("No ASIN", "", 0.97),
+		cand("The Book Itself", "b00bookasi", 0.92),
+	}}
+	f := newJunkTitleFixer(&Plugin{deps: filteredCacheDeps{filtered: map[string]*database.MetadataCandidateCache{"b1": row}}, standDownWait: noWait})
+	asin := "B00BOOKASI"
+	title, score, ok := f.candidateTitle("b1", "Author A", &asin)
+	require.True(t, ok)
+	require.Equal(t, "The Book Itself", title)
+	require.InDelta(t, 0.92, score, 1e-9)
+
+	other := "B00NOMATCH"
+	title, _, ok = f.candidateTitle("b1", "Author A", &other)
+	require.True(t, ok)
+	require.Equal(t, "No ASIN", title, "candidates naming another ASIN are skipped")
+
+	title, _, ok = f.candidateTitle("b1", "Author A", nil)
+	require.True(t, ok)
+	require.Equal(t, "Other Record", title, "a book with no ASIN keeps the highest score")
 }

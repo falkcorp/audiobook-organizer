@@ -1,5 +1,5 @@
 // file: internal/server/candidate_refetch.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 09c23622-3fae-4104-8edc-2fe8860f40fd
 // last-edited: 2026-10-05
 
@@ -70,9 +70,68 @@ func (s *Server) LatestCandidateFetchOutcome(bookID string) (maintenanceplugin.C
 }
 
 // errCandidateFetchInFlight refuses a refetch of a book another
-// metadata.candidate-fetch run is fetching: two fetches of one book race on
-// its cache entry and pay the providers twice.
+// metadata.candidate-fetch run is fetching, or another refetch is: two fetches
+// of one book race on its cache entry and pay the providers twice.
 var errCandidateFetchInFlight = errors.New("the book is being fetched by a running metadata candidate fetch")
+
+// bookFetchClaims is the per-book in-flight set of candidate fetches. The
+// refetch used to check the running candidate-fetch ops' book lists and then
+// fetch: an op started between the two, or a second refetch of the same book
+// (two Repairs applies), fetched it at the same time. A claim is taken
+// atomically under mu; the refetch refuses a held book (tryClaim) and the
+// op's workers wait for it (claim). The zero value is ready to use.
+type bookFetchClaims struct {
+	mu   sync.Mutex
+	held map[string]chan struct{}
+}
+
+// tryClaim claims bookID, or reports false when it is held.
+func (c *bookFetchClaims) tryClaim(bookID string) (release func(), ok bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, busy := c.held[bookID]; busy {
+		return nil, false
+	}
+	return c.takeLocked(bookID), true
+}
+
+// claim claims bookID, waiting while it is held; it fails only when ctx ends.
+func (c *bookFetchClaims) claim(ctx context.Context, bookID string) (release func(), err error) {
+	for {
+		c.mu.Lock()
+		done, busy := c.held[bookID]
+		if !busy {
+			release := c.takeLocked(bookID)
+			c.mu.Unlock()
+			return release, nil
+		}
+		c.mu.Unlock()
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+}
+
+// takeLocked records the claim; c.mu is held. The release closes the claim's
+// channel, waking every waiter, and is safe to call more than once.
+func (c *bookFetchClaims) takeLocked(bookID string) func() {
+	if c.held == nil {
+		c.held = make(map[string]chan struct{})
+	}
+	done := make(chan struct{})
+	c.held[bookID] = done
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			c.mu.Lock()
+			delete(c.held, bookID)
+			c.mu.Unlock()
+			close(done)
+		})
+	}
+}
 
 // RefetchMetadataCandidates implements maintenanceplugin.CandidateRefetcher:
 // fetchCandidateForBook, unforced, with the server's shared gate. It writes
@@ -82,6 +141,17 @@ func (s *Server) RefetchMetadataCandidates(ctx context.Context, bookID string) (
 	if mfs == nil {
 		return maintenanceplugin.CandidateRefetchResult{}, fmt.Errorf("metadata fetch service not initialized")
 	}
+	// The claim comes first and is atomic: a candidate-fetch op that starts
+	// after the book-list check below waits on it in its worker, and a second
+	// refetch of the book is refused here.
+	release, ok := s.candidateFetchClaims.tryClaim(bookID)
+	if !ok {
+		return maintenanceplugin.CandidateRefetchResult{}, errCandidateFetchInFlight
+	}
+	defer release()
+	// A queued or running op that lists the book will fetch it anyway (its
+	// worker may not have reached it yet, so it holds no claim): leave it to
+	// that op rather than fetch it twice.
 	if s.opRegistry != nil {
 		active, err := metabatch.ActiveCandidateFetchBookIDs(s.Ops(), s.opRegistry.IsRunning)
 		if err != nil {

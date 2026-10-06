@@ -1,7 +1,7 @@
 // file: internal/server/metadata_candidate_op.go
-// version: 3.10.0
+// version: 3.11.0
 // guid: 3f7e2c91-b4a0-4d8e-9c5f-1a6b7d8e0f23
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 //
 // Registers the metadata.candidate-fetch v2 OperationDef. Pure params
 // type moved to internal/metabatch.FetchOpParams.
@@ -281,7 +281,14 @@ func (s *Server) runMetadataCandidateFetchOp(ctx context.Context, rawParams json
 				if ctx.Err() != nil {
 					return
 				}
+				// A lost-candidates refetch of this book may be running; wait
+				// for it rather than fetch the book twice at once.
+				release, cerr := s.candidateFetchClaims.claim(ctx, bookID)
+				if cerr != nil {
+					return
+				}
 				result := s.fetchCandidateForBook(ctx, mfs, store, limiter, opID, bookID, p.Force, folderMemo)
+				release()
 				resultJSON, err := json.Marshal(result)
 				if err != nil {
 					// No result row, so the book stays owed (not marked done)
