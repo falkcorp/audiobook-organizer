@@ -1,5 +1,5 @@
 // file: internal/metadata/folder_parser.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: f1e2d3c4-b5a6-7890-abcd-ef1234567890
 // last-edited: 2026-10-05
 
