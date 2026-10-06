@@ -1,5 +1,5 @@
 // file: internal/scanner/scan_identity_hold_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 98f7a755-16bc-4938-92bb-a032c55d1b10
 // last-edited: 2026-10-06
 
@@ -237,4 +237,90 @@ func TestExtractInfoFromPath_CountedPartKeepsItsNumber(t *testing.T) {
 	b := Book{FilePath: "/lib/William Gibson/Zero History/10 Zero History.mp3", Author: "William Gibson"}
 	extractInfoFromPath(&b)
 	require.Equal(t, "Zero History", b.Title)
+}
+
+// A second save of the same Book in one scan (the inline AI phase re-saves
+// it, by then holding the row's own values) must not erase the proposal the
+// first save recorded.
+func TestScanIdentityHold_ResaveKeepsFirstSaveProposal(t *testing.T) {
+	st, write := identityHoldFixture(t)
+	path := write("Tasha Suri/74/74.mp3")
+	require.NoError(t, saveBookToDatabase(context.Background(),
+		&Book{FilePath: path, Title: "74", Author: "Tasha Suri", Format: ".mp3", Duration: 100}))
+	row, err := st.GetBookByFilePath(path)
+	require.NoError(t, err)
+	require.NotNil(t, row)
+
+	rescan := &Book{FilePath: path, Title: "The Jasmine Throne", Author: "Tasha Suri", Format: ".mp3", Duration: 100}
+	require.NoError(t, saveBookToDatabase(context.Background(), rescan))
+	require.NotNil(t, readScanProposal(t, st, row.ID), "the first save recorded no proposal")
+	require.Equal(t, "74", rescan.Title, "the hold put the row's title on the Book")
+
+	// The AI-phase re-save of the same Book.
+	require.NoError(t, saveBookToDatabase(context.Background(), rescan))
+
+	p := readScanProposal(t, st, row.ID)
+	require.NotNil(t, p, "the re-save deleted the first save's proposal")
+	require.Equal(t, database.ScanIdentityChange{From: "74", To: "The Jasmine Throne"}, p.Fields[database.ScanProposalTitle])
+	after, err := st.GetBookByID(row.ID)
+	require.NoError(t, err)
+	require.Equal(t, "74", after.Title)
+}
+
+// A row that keeps series X with no position must not take the position the
+// file gives for series Y ("Y #3" is not "X #3"); the file's series and
+// position are proposed together. The same series' position is still a gap
+// fill.
+func TestScanIdentityHold_PositionFromOtherSeriesIsNotAGapFill(t *testing.T) {
+	st, write := identityHoldFixture(t)
+	path := write("Author A/Book/book.mp3")
+	require.NoError(t, saveBookToDatabase(context.Background(),
+		&Book{FilePath: path, Title: "Book", Author: "Author A", Series: "Series X", Format: ".mp3", Duration: 100}))
+	row, err := st.GetBookByFilePath(path)
+	require.NoError(t, err)
+	require.NotNil(t, row)
+	require.NotNil(t, row.SeriesID)
+	require.True(t, row.SeriesSequence == nil || *row.SeriesSequence == 0, "fixture row must have no position")
+
+	require.NoError(t, saveBookToDatabase(context.Background(),
+		&Book{FilePath: path, Title: "Book", Author: "Author A", Series: "Series Y", Position: 3, Format: ".mp3", Duration: 100}))
+	after, err := st.GetBookByID(row.ID)
+	require.NoError(t, err)
+	require.Equal(t, *row.SeriesID, *after.SeriesID, "the rescan moved the book to another series")
+	require.True(t, after.SeriesSequence == nil || *after.SeriesSequence == 0,
+		"series Y's position 3 filled series X's empty position: %v", after.SeriesSequence)
+	p := readScanProposal(t, st, row.ID)
+	require.NotNil(t, p)
+	require.Equal(t, database.ScanIdentityChange{From: "Series X", To: "Series Y"}, p.Fields[database.ScanProposalSeries])
+	require.Equal(t, "3", p.Fields[database.ScanProposalSeriesPosition].To)
+
+	// The row's own series with a position: a gap, filled.
+	require.NoError(t, saveBookToDatabase(context.Background(),
+		&Book{FilePath: path, Title: "Book", Author: "Author A", Series: "Series X", Position: 3, Format: ".mp3", Duration: 100}))
+	after, err = st.GetBookByID(row.ID)
+	require.NoError(t, err)
+	require.NotNil(t, after.SeriesSequence)
+	require.Equal(t, 3, *after.SeriesSequence, "the row's own series position was not filled")
+}
+
+// The write-time half (identityMergeLocks) holds a position from another
+// series too: the raced-row and late hash-duplicate paths reach the merge
+// without holdIdentityForExisting.
+func TestIdentityMergeLocks_HoldsPositionFromOtherSeries(t *testing.T) {
+	x := 7
+	cur := &database.Book{Title: "Book", SeriesID: &x}
+	same := identityGuard{seriesID: &x, seriesName: "Series X", scanned: scannedIdentity{Series: "series x", Position: 3}}
+	_, held := identityMergeLocks(nil, cur, same)
+	require.False(t, held[database.FieldKeySeriesPosition], "the row's own series position must stay a gap")
+
+	other := same
+	other.scanned.Series = "Series Y"
+	_, held = identityMergeLocks(nil, cur, other)
+	require.True(t, held[database.FieldKeySeriesPosition])
+
+	y := 8
+	moved := same
+	moved.seriesID = &y // the row's series changed after the guard read it
+	_, held = identityMergeLocks(nil, cur, moved)
+	require.True(t, held[database.FieldKeySeriesPosition])
 }
