@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.152.0
+// version: 2.152.1
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-05
 
@@ -1826,11 +1826,15 @@ export async function getBookSegments(bookId: string): Promise<BookSegment[]> {
 
 export async function getBookFiles(
   bookId: string,
-  options?: { limit?: number; offset?: number; signal?: AbortSignal }
+  // skipDiskCheck: the server stats every file by default (file_exists).
+  // Set it when only paths are needed across many books at once; file_exists
+  // then comes back null with file_check_error "not checked".
+  options?: { limit?: number; offset?: number; signal?: AbortSignal; skipDiskCheck?: boolean }
 ): Promise<{ files: BookFile[]; count: number }> {
   const params = new URLSearchParams();
   if (options?.limit !== undefined) params.append('limit', String(options.limit));
   if (options?.offset !== undefined) params.append('offset', String(options.offset));
+  if (options?.skipDiskCheck) params.append('disk_check', 'false');
   const qs = params.toString();
   const url = `${API_BASE}/audiobooks/${bookId}/files${qs ? '?' + qs : ''}`;
   const response = await apiFetch(url, { signal: options?.signal });

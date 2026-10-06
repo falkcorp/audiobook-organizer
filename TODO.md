@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.75.7 -->
+<!-- version: 10.75.8 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-05 -->
 
@@ -12622,6 +12622,11 @@ Measured 2026-08-17 against prod: all **2,077** `book_file` rows belonging to th
 one of those paths fails `os.Stat`.
 
 They are stored columns, not live checks, and no writer keeps them current.
+
+- [x] **2026-10-05 (PR #3778): `file_exists` on `GET /audiobooks/:id/files` and
+  `/segments` is now a live `os.Stat`** (null + `file_check_error` when unknown);
+  the stored flag is reported as `missing`. `book_file.missing` itself is still
+  stale — the persist-the-audit-verdict fix below remains open.
 
 - **Do not filter on them.** Any query that treats `missing = false` as "the file
   is there" is silently wrong, and would report a fully-broken library as healthy.
