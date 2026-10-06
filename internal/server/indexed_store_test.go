@@ -1,6 +1,6 @@
 // file: internal/server/indexed_store_test.go
-// version: 1.4.0
-// last-edited: 2026-09-13
+// version: 1.5.0
+// last-edited: 2026-10-05
 // guid: 6e3f5a2b-8c5a-4a70-b8c5-3d7e0f1b9a89
 
 package server
@@ -396,5 +396,25 @@ func TestIndexedStore_CreateRejectsColonBookID(t *testing.T) {
 	}
 	if n := len(srv.indexQueue); n != 0 {
 		t.Errorf("index queue holds %d requests after a rejected create, want 0", n)
+	}
+}
+
+// The atomic position replace (database.UserPositionReplacer) and the
+// timestamped position write resolve through this decorator via Unwrap, so
+// the merge undo's atomic replace is used in production, where the store is
+// always wrapped. User positions are not search-indexed, so no forwarding
+// method is needed.
+func TestIndexedStore_ResolvesPositionCapabilities(t *testing.T) {
+	store, err := database.NewPebbleStore(filepath.Join(t.TempDir(), "db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	wrapped := &indexedStore{Store: store}
+	if _, ok := database.AsCapability[database.UserPositionReplacer](wrapped); !ok {
+		t.Fatal("UserPositionReplacer does not resolve through indexedStore")
+	}
+	if _, ok := database.AsCapability[database.UserPositionTimestampWriter](wrapped); !ok {
+		t.Fatal("UserPositionTimestampWriter does not resolve through indexedStore")
 	}
 }

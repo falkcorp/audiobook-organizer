@@ -1,5 +1,5 @@
 // file: internal/merge/carry_before_delete.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 3f1c9a52-7d4e-4b8a-a6c0-8e2b5d7f1a93
 // last-edited: 2026-10-05
 
@@ -210,6 +210,9 @@ func carryStateLocked(db UserProgressMerger, keepID, doomedID string) error {
 		mlog.Warn("carry before delete: %s", logger.SanitizeLogValue(w))
 	}
 	if rerr == nil {
+		// A one-shot put-back: no journal re-runs it, so its reconcile
+		// markers go.
+		dropSurvivorReconcileMarkers(db, keepID, doomedID, progress)
 		return fmt.Errorf("%w: %s -> %s: %w; every user's state was put back on %s", ErrStateCarryIncomplete, doomedID, keepID, cause, doomedID)
 	}
 	if perr := putPendingRepair(db, PendingUserStateRepair{LoserBookID: doomedID, WinnerBookID: keepID, RecordedAt: time.Now().UTC()}); perr != nil {
@@ -221,25 +224,12 @@ func carryStateLocked(db UserProgressMerger, keepID, doomedID string) error {
 }
 
 // carryLeftover is nil when nothing of doomedID's is still owed or left: no
-// pending user-state repair names it, and no user has carryable state on
-// it. A read that fails is wrapped with errCarryCheckFailed.
+// pending user-state repair names it (pendingRepairNaming), and no user has
+// carryable state on it. A read that fails is wrapped with
+// errCarryCheckFailed.
 func carryLeftover(db UserProgressMerger, doomedID string) error {
-	recs, undecodable, err := ListPendingUserStateRepairs(db)
-	if err != nil {
-		return fmt.Errorf("%w: %w", errCarryCheckFailed, err)
-	}
-	// An undecodable record still has its key, which names its pair
-	// (pendingRepairKey): only one naming doomedID blocks this carry.
-	for _, k := range undecodable {
-		pair := strings.Split(strings.TrimPrefix(k, PendingUserStateRepairPrefix), ":")
-		if slices.Contains(pair, doomedID) {
-			return fmt.Errorf("undecodable pending user-state repair %s names %s", k, doomedID)
-		}
-	}
-	for _, r := range recs {
-		if r.LoserBookID == doomedID || r.WinnerBookID == doomedID {
-			return fmt.Errorf("pending user-state repair %s -> %s is still open (state, bookmarks or the sync redirect did not all move)", r.LoserBookID, r.WinnerBookID)
-		}
+	if err := pendingRepairNaming(db, doomedID); err != nil {
+		return err
 	}
 	left, err := BookHasCarryableUserState(db, doomedID)
 	if err != nil {
@@ -247,6 +237,33 @@ func carryLeftover(db UserProgressMerger, doomedID string) error {
 	}
 	if left {
 		return fmt.Errorf("listening state is still on %s after the move", doomedID)
+	}
+	return nil
+}
+
+// pendingRepairNaming is nil when no pending user-state repair, decodable or
+// not, names bookID: no move of state, bookmarks or the sync redirect is
+// still owed into or out of it. It is the one check both the carry
+// (carryLeftover, after the move) and the discard (before it clears
+// anything) make. A failed listing is wrapped with errCarryCheckFailed, so
+// a caller can tell "could not check" from "a repair is open".
+func pendingRepairNaming(db UserProgressMerger, bookID string) error {
+	recs, undecodable, err := ListPendingUserStateRepairs(db)
+	if err != nil {
+		return fmt.Errorf("list pending user-state repairs: %w: %w", errCarryCheckFailed, err)
+	}
+	// An undecodable record still has its key, which names its pair
+	// (pendingRepairKey): only one naming bookID counts.
+	for _, k := range undecodable {
+		pair := strings.Split(strings.TrimPrefix(k, PendingUserStateRepairPrefix), ":")
+		if slices.Contains(pair, bookID) {
+			return fmt.Errorf("undecodable pending user-state repair %s names %s", k, bookID)
+		}
+	}
+	for _, r := range recs {
+		if r.LoserBookID == bookID || r.WinnerBookID == bookID {
+			return fmt.Errorf("pending user-state repair %s -> %s is still open (state, bookmarks or the sync redirect did not all move); let the repair sweep finish it first", r.LoserBookID, r.WinnerBookID)
+		}
 	}
 	return nil
 }

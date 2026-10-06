@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store_playback.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 7559a9db-cb41-4281-b8d2-2e644796eeb7
 // last-edited: 2026-10-05
 
@@ -46,13 +46,19 @@ type UserPositionTimestampWriter interface {
 
 var _ UserPositionTimestampWriter = (*PebbleStore)(nil)
 
-// SetUserPositionAt is SetUserPosition with the caller's UpdatedAt kept.
+// SetUserPositionAt is SetUserPosition with the caller's UpdatedAt kept --
+// including a ZERO UpdatedAt, which is written as zero. A zero stamp is a
+// legacy row written before positions were dated; the merge and restore
+// rules treat it as undated (farther-ahead wins, internal/merge
+// combineOnRestore / positionWins). Until 2026-10-05 a zero stamp was
+// replaced with time.Now(), so a legacy row rewritten by a merge or an undo
+// became the "freshest" listen and won every later newest-wins comparison
+// against a real, dated listen. A caller that means "now" passes time.Now()
+// (or calls SetUserPosition); the Repairs writer refuses an undated row
+// before it gets here.
 func (p *PebbleStore) SetUserPositionAt(userID, bookID, segmentID string, positionSeconds float64, updatedAt time.Time) error {
 	if userID == "" || bookID == "" || segmentID == "" {
 		return fmt.Errorf("user/book/segment required")
-	}
-	if updatedAt.IsZero() {
-		updatedAt = time.Now()
 	}
 	data, err := json.Marshal(UserPosition{
 		UserID: userID, BookID: bookID, SegmentID: segmentID,
@@ -180,6 +186,55 @@ func (p *PebbleStore) ClearUserPositions(userID, bookID string) error {
 	prefix := []byte("upos:" + userID + ":" + bookID + ":")
 	upper := []byte("upos:" + userID + ":" + bookID + ":~")
 	return p.db.DeleteRange(prefix, upper, pebble.Sync)
+}
+
+// UserPositionReplacer replaces every position row of one (user, book) with
+// a given set in ONE atomic batch. A merge undo or restore that cleared the
+// rows (ClearUserPositions: a synced DeleteRange) and then wrote the wanted
+// rows one by one left, on a crash or a failed write between the two, a book
+// with no position at all, or only some of the wanted ones -- a listener
+// rewound to zero. A capability, not a Store method, so the mocks and fakes
+// are not forced to grow it; a store without it falls back to clear-then-set
+// (internal/merge replacePositions).
+type UserPositionReplacer interface {
+	ReplaceUserPositions(userID, bookID string, positions []UserPosition) error
+}
+
+var _ UserPositionReplacer = (*PebbleStore)(nil)
+
+// ReplaceUserPositions makes (userID, bookID)'s position rows exactly
+// positions, all or nothing: the range delete of the old rows and every new
+// row go in one pebble batch committed with Sync. Each row keeps its
+// UpdatedAt, a zero one included (SetUserPositionAt). A row with an empty
+// SegmentID is an error and nothing is written. An empty positions clears
+// the rows.
+func (p *PebbleStore) ReplaceUserPositions(userID, bookID string, positions []UserPosition) error {
+	if userID == "" || bookID == "" {
+		return fmt.Errorf("user/book required")
+	}
+	b := p.db.NewBatch()
+	defer func() { _ = b.Close() }()
+	prefix := []byte("upos:" + userID + ":" + bookID + ":")
+	upper := []byte("upos:" + userID + ":" + bookID + ":~")
+	if err := b.DeleteRange(prefix, upper, nil); err != nil {
+		return fmt.Errorf("replace positions %s/%s: delete range: %w", userID, bookID, err)
+	}
+	for _, pos := range positions {
+		if pos.SegmentID == "" {
+			return fmt.Errorf("replace positions %s/%s: segment required", userID, bookID)
+		}
+		data, err := json.Marshal(UserPosition{
+			UserID: userID, BookID: bookID, SegmentID: pos.SegmentID,
+			PositionSeconds: pos.PositionSeconds, UpdatedAt: pos.UpdatedAt,
+		})
+		if err != nil {
+			return err
+		}
+		if err := b.Set([]byte("upos:"+userID+":"+bookID+":"+pos.SegmentID), data, nil); err != nil {
+			return fmt.Errorf("replace positions %s/%s: set %s: %w", userID, bookID, pos.SegmentID, err)
+		}
+	}
+	return b.Commit(pebble.Sync)
 }
 
 // stampFinishedAt maintains state.FinishedAt (see UserBookState) against the

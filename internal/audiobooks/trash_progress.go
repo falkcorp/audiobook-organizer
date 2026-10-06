@@ -1,5 +1,5 @@
 // file: internal/audiobooks/trash_progress.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 98f1136e-e723-43fd-9d77-fab344a4aa45
 // last-edited: 2026-10-05
 
@@ -142,6 +142,11 @@ func siblingIsCarryTarget(b *database.Book) bool {
 // errSiblingNotListed is the carry precheck's refusal: the chosen sibling is
 // no longer one Audiobookshelf lists. Nothing was carried.
 var errSiblingNotListed = errors.New("the version chosen to receive the listening state is no longer listed in Audiobookshelf")
+
+// errSiblingReadFailed is the carry precheck's refusal when the chosen
+// sibling could not be re-read. Nothing was carried; the purge reports it as
+// a failed carry (with the error), not as a book kept for its progress.
+var errSiblingReadFailed = errors.New("the version chosen to receive the listening state could not be re-read")
 
 // isLiveBook reports whether b is out of the trash: the soft-delete flag is
 // unset and library_state is not the "deleted" label the soft delete writes.
@@ -341,9 +346,14 @@ func (svc *AudiobookService) recorder() activityRecorder {
 //
 // It refuses, changing nothing, a book that is not in the trash
 // (ErrNotInTrash), one that still owns book_file rows
-// (database.ErrBookOwnsFiles: the purge never deletes those, and the check
-// runs before any state is cleared), and any call when no activity log is
-// wired (ErrAuditUnavailable).
+// (database.ErrBookOwnsFiles: the purge never deletes those), and any call
+// when no activity log is wired (ErrAuditUnavailable). The trash and
+// file-row checks run once up front and again under the merge lock in the
+// precheck, before any state is cleared, so a restore or a file row that
+// lands in between refuses with nothing discarded. (A file row written
+// after the precheck, while the state is being cleared, still makes the
+// final DeleteBook refuse; that window is the merge lock's, which file
+// writers do not take.)
 func (svc *AudiobookService) DiscardProgressAndPurge(ctx context.Context, id, actor string) (*DiscardProgressResult, error) {
 	if svc.store == nil {
 		return nil, fmt.Errorf("database not initialized")
@@ -389,6 +399,17 @@ func (svc *AudiobookService) DiscardProgressAndPurge(ctx context.Context, id, ac
 		}
 		if cur == nil || !cur.IsSoftDeleted() {
 			return fmt.Errorf("%w: %s was restored meanwhile", ErrNotInTrash, id)
+		}
+		// And the ownership check again, here where nothing has been
+		// cleared yet: a file row that landed since the check above would
+		// make the delete refuse (DeleteBook: database.ErrBookOwnsFiles)
+		// only AFTER every user's state was discarded.
+		owned, ferr := svc.store.GetBookFiles(id)
+		if ferr != nil {
+			return fmt.Errorf("cannot re-read the book_file rows of %s: %w", id, ferr)
+		}
+		if len(owned) > 0 {
+			return fmt.Errorf("discard progress and purge %s: %w (%d row(s)); the purge never deletes those, so the book stays in the trash", id, database.ErrBookOwnsFiles, len(owned))
 		}
 		book = cur
 		return nil
