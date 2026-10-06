@@ -1,5 +1,5 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 4.24.1
+// version: 4.24.2
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
 // last-edited: 2026-10-06
 //
@@ -456,7 +456,10 @@ func (s *Server) fetchCandidateForBook(
 			onlySources = primary
 		}
 		fetched, resp, ferr := mfs.FetchAndCacheWithResponse(ctx, limiter, bookID, query.Title, authorForHash, "", "",
-			metafetch.SearchOptions{OnlySources: onlySources, BypassFetchCache: force, CarryFromSourceHash: carryFrom})
+			metafetch.SearchOptions{OnlySources: onlySources, BypassFetchCache: force, CarryFromSourceHash: carryFrom,
+				// A refetch that keeps the fallback providers' candidates
+				// ranks the union like the fallback's merge does.
+				MergeRank: metabatch.MergeRanker(store, book)})
 		if ferr != nil {
 			// A primary chain that failed is not a "no match": the fallback
 			// is not asked, and the next run asks the chain again.

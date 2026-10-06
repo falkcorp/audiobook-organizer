@@ -1,5 +1,5 @@
 // file: internal/server/candidate_fallback_round3_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 7f057c74-2af0-44a5-bf9a-214d739ab5f0
 // last-edited: 2026-10-06
 
@@ -8,6 +8,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -168,5 +169,43 @@ func TestEmptyRefetch_DoesNotCarryRowOfAnotherIdentity(t *testing.T) {
 	}
 	if len(row.Candidates) != 0 {
 		t.Fatalf("row candidates %v; another identity's candidates must not be carried", candidateSources(t, row))
+	}
+}
+
+// A never-fetched book can end in a Google step (its chain finds nothing),
+// so the selection funds it too -- after every book already known to owe
+// Google. With one lookup left today, the owed book gets it; the
+// never-fetched books are still selected for the chain and Open Library,
+// their Google step put off.
+func TestUnfetchedSelection_NeverFetchedBooksCountAgainstGoogleBudget(t *testing.T) {
+	f := newFallbackFixture(t, 0)
+	owed := f.book(t, "Owed Google Example")
+	f.run(t, owed.ID) // chain and Open Library empty, Google deferred (no budget)
+	fresh1 := f.book(t, "Never Fetched One")
+	fresh2 := f.book(t, "Never Fetched Two")
+
+	perBook := googleRequestsPerBook()
+	sel, err := unfetchedCandidateBookIDs(context.Background(), f.store, f.mfs, f.s.newFolderMemo(f.store), nil, perBook)
+	if err != nil {
+		t.Fatalf("select: %v", err)
+	}
+	want := []string{owed.ID, fresh1.ID, fresh2.ID}
+	slices.Sort(want)
+	wantCapped := []string{fresh1.ID, fresh2.ID}
+	slices.Sort(wantCapped)
+	if !slices.Equal(sel.IDs, want) || !slices.Equal(sel.GoogleCapped, wantCapped) || sel.ChainCapped != 2 || sel.FallbackCapped != 0 {
+		t.Fatalf("selected %v, google-capped %v, chain-capped %d, fallback-capped %d; want all three selected, the never-fetched two Google-capped",
+			sel.IDs, sel.GoogleCapped, sel.ChainCapped, sel.FallbackCapped)
+	}
+
+	// The run spends exactly the one funded lookup.
+	f.limit = 800
+	f.resetCalls()
+	runFetchOp(t, f.s, "op-chain-capped", metadataCandidateFetchOpParams{BookIDs: sel.IDs, GoogleCappedBookIDs: sel.GoogleCapped})
+	if got := f.google.calls.Load(); got != 1 {
+		t.Fatalf("Google Books calls = %d, want 1 (only the funded, owed book)", got)
+	}
+	if f.openlib.calls.Load() < 2 {
+		t.Fatalf("Open Library calls = %d, want the never-fetched books still asked of it", f.openlib.calls.Load())
 	}
 }

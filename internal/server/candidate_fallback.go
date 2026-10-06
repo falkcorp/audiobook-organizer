@@ -1,5 +1,5 @@
 // file: internal/server/candidate_fallback.go
-// version: 2.1.1
+// version: 2.1.2
 // guid: 487502d2-faea-4677-8c9d-171a796ad643
 // last-edited: 2026-10-06
 //
@@ -281,7 +281,7 @@ type candidateFallbackInput struct {
 	// there was none): each fallback answer merges into that row, and an
 	// empty one keeps it (metafetch.SearchOptions.CarryFromSourceHash).
 	carryFrom string
-	withQuery    func(CandidateResult) CandidateResult
+	withQuery func(CandidateResult) CandidateResult
 }
 
 // runCandidateFallback asks the pending fallback providers, in order, until
@@ -376,7 +376,7 @@ func (s *Server) runCandidateFallback(ctx context.Context, mfs *metafetch.Servic
 		// vouched row: in.entry may be one the verdict refused.
 		entry, resp, err := mfs.FetchAndCacheWithResponse(ctx, in.limiter, in.book.ID, in.query, in.author, "", "",
 			metafetch.SearchOptions{OnlySources: []string{fb.name}, BypassFetchCache: in.force, MergeWithCached: true,
-				MergeUsable: metabatch.UsableRanker(in.store, in.book), CarryFromSourceHash: in.carryFrom})
+				MergeRank: metabatch.MergeRanker(in.store, in.book), CarryFromSourceHash: in.carryFrom})
 		if err != nil {
 			deferrable := fallbackDeferrable(err)
 			if fb.isGoogle() && deferrable {

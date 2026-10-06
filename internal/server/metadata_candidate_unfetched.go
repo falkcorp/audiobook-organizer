@@ -1,5 +1,5 @@
 // file: internal/server/metadata_candidate_unfetched.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 6bf34beb-7e2f-40a9-b7a7-c5755a52c7fb
 // last-edited: 2026-10-06
 //
@@ -73,8 +73,15 @@ type unfetchedSelection struct {
 	// One Google alone owes is left out; one Open Library owes too is still
 	// selected for that free step (GoogleCapped).
 	FallbackCapped int
+	// ChainCapped: selected books the chain has not answered yet (NoRow,
+	// StaleEmpty) whose possible Google step today's background share
+	// cannot cover after the FallbackPending books are funded. They are
+	// still selected -- the chain and Open Library cost no Google budget --
+	// with their Google step put off (GoogleCapped).
+	ChainCapped int
 	// GoogleCapped: the selected books whose Google step is capped (asked
-	// of Open Library only; metabatch.FetchOpParams.GoogleCappedBookIDs).
+	// of the chain and Open Library only;
+	// metabatch.FetchOpParams.GoogleCappedBookIDs).
 	GoogleCapped []string
 	// Unsearchable: candidates the fetch would only skip (no usable query).
 	Unsearchable int
@@ -123,6 +130,17 @@ type unfetchedSelection struct {
 // Google owes it; one Open Library owes too is still selected for that free
 // step, its Google step put off (GoogleCapped). Either way it comes back on a
 // later quota day.
+//
+// A book the chain has not answered yet (no row, a stale empty row) may end
+// in a Google step too: the fetch asks the fallback when the chain finds
+// nothing usable. Its Google step is funded the same way, AFTER every
+// FallbackPending book (those are known to need Google; these only may), so
+// a never-fetched library cannot spend the background share the selection
+// gave the rotation. An unfunded one is still selected -- the chain and Open
+// Library cost no Google budget -- with its Google step put off
+// (GoogleCapped, ChainCapped). Funding is reserved pessimistically: a book
+// whose chain then answers spends nothing, and the share it held is left for
+// a later tick.
 //
 // A book whose search query is not usable (metabatch.ResolveCandidateSearchQuery:
 // a part row, no usable title) is left out too: the fetch would only skip it,
@@ -200,6 +218,15 @@ func unfetchedCandidateBookIDs(ctx context.Context, store unfetchedSelectStore, 
 	fallback := make([]bool, len(picks))
 	unusable := make([]bool, len(picks))
 	googleOwed := make([]bool, len(picks))
+	// chainGoogle: googleOwed for a book the chain has not answered yet
+	// (no row, a vanished row, a stale empty row): Google is enabled and the
+	// book is not owner-manual-only, so the fallback could reach Google.
+	chainGoogle := func(i int, b *database.Book, query string) {
+		if googleName == "" {
+			return
+		}
+		googleOwed[i] = fallbackGates(store, b, query).ManualOnly == ""
+	}
 	otherOwed := make([]bool, len(picks))
 	googleTried := make([]time.Time, len(picks))
 	var mu sync.Mutex
@@ -220,6 +247,7 @@ func unfetchedCandidateBookIDs(ctx context.Context, store unfetchedSelectStore, 
 			}
 			if !picks[i].hasRow {
 				keep[i] = true
+				chainGoogle(i, b, q.Title)
 				return nil
 			}
 			entry, err := store.GetMetadataCache(b.ID)
@@ -227,6 +255,7 @@ func unfetchedCandidateBookIDs(ctx context.Context, store unfetchedSelectStore, 
 				// The row vanished or cannot be read: ask again, the safe
 				// direction for a fetch that never writes the book.
 				keep[i] = true
+				chainGoogle(i, b, q.Title)
 				return nil
 			}
 			// A version "1" (legacy) row answered the old ladder's questions
@@ -243,6 +272,7 @@ func unfetchedCandidateBookIDs(ctx context.Context, store unfetchedSelectStore, 
 				// candidates is the stale-refetch's.
 				if len(entry.Candidates) == 0 {
 					keep[i], stale[i] = true, true
+					chainGoogle(i, b, q.Title)
 				}
 				return nil
 			}
@@ -272,14 +302,19 @@ func unfetchedCandidateBookIDs(ctx context.Context, store unfetchedSelectStore, 
 	if err := g.Wait(); err != nil {
 		return sel, err
 	}
-	// Google-owed books oldest attempt first (never attempted first), then by
-	// id, so the budget cap rotates through them deterministically.
+	// FallbackPending books first (they are known to need their fallback
+	// step; a book the chain has not answered only may), then Google-owed
+	// books oldest attempt first (never attempted first), then by id, so the
+	// budget cap rotates through them deterministically.
 	order := make([]int, len(picks))
 	for i := range order {
 		order[i] = i
 	}
 	sort.SliceStable(order, func(a, b int) bool {
 		ia, ib := order[a], order[b]
+		if fallback[ia] != fallback[ib] {
+			return fallback[ia]
+		}
 		if !googleTried[ia].Equal(googleTried[ib]) {
 			return googleTried[ia].Before(googleTried[ib])
 		}
@@ -291,8 +326,22 @@ func unfetchedCandidateBookIDs(ctx context.Context, store unfetchedSelectStore, 
 			continue
 		}
 		switch {
-		case stale[i]:
-			sel.StaleEmpty++
+		case !fallback[i]:
+			// The chain has not answered (stale empty, no row): selected
+			// whatever the budget; only its Google step may be put off.
+			if googleOwed[i] {
+				if googleRemaining < perBook {
+					sel.ChainCapped++
+					sel.GoogleCapped = append(sel.GoogleCapped, picks[i].book.ID)
+				} else {
+					googleRemaining -= perBook
+				}
+			}
+			if stale[i] {
+				sel.StaleEmpty++
+			} else {
+				sel.NoRow++
+			}
 		case fallback[i]:
 			if googleOwed[i] {
 				if googleRemaining < perBook {
@@ -309,8 +358,6 @@ func unfetchedCandidateBookIDs(ctx context.Context, store unfetchedSelectStore, 
 			if unusable[i] {
 				sel.FallbackUnusable++
 			}
-		default:
-			sel.NoRow++
 		}
 		sel.IDs = append(sel.IDs, picks[i].book.ID)
 	}
