@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.33.0
+// version: 1.34.0
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
 // last-edited: 2026-10-05
 
@@ -46,7 +46,13 @@ type cachedApplyService interface {
 	// ApplyMetadataCandidateWithOptions is ApplyMetadataCandidate; opts records
 	// an owner-reviewed override of the certainty gate in the change history.
 	ApplyMetadataCandidateWithOptions(id string, candidate metafetch.MetadataCandidate, fields []string, opts metafetch.ApplyOptions) (*metafetch.FetchMetadataResponse, error)
-	InvalidateCachedCandidates(bookID string) error
+	// There is deliberately no cache-invalidation method here. The apply
+	// used to delete the book's cached candidates after every write, the
+	// candidate it had just applied included, so an auto-apply that did not
+	// mark the book applied left it with neither a status nor a candidate.
+	// The store drops the row itself when the apply changes the book's title
+	// or author (database candidateSearchIdentityChanged); otherwise the row
+	// still answers for the book and stays.
 	// FinishApplyFileWork is the shared file-side sequel to an apply: cover
 	// download, file I/O, and a tag write that happens exactly once.
 	// checkpoint, when non-nil, is the caller's scan stand-down check, re-run
@@ -673,7 +679,6 @@ func applyCachedCandidateForBookTimed(
 	if aerr != nil {
 		return applyOutcome{Reason: applySkipApplyFailed, Err: aerr, Gate: plan.Gate, OwnerReviewed: plan.OwnerReviewed}.withPlan(plan)
 	}
-	_ = svc.InvalidateCachedCandidates(id)
 	pt.Since(metafetch.PhaseApplyDB, applyStart)
 
 	// Every later return is an applied outcome; carry the skipped locks on all

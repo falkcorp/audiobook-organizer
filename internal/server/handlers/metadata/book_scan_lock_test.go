@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/book_scan_lock_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 85df29b0-0d44-40e8-bbab-726ab6928927
-// last-edited: 2026-09-30
+// last-edited: 2026-10-05
 
 package metadatahandler_test
 
@@ -241,7 +241,6 @@ func TestRunQueuedApply_CandidateWithNoLaterEditApplies(t *testing.T) {
 	d.mfs.EXPECT().RenamePreflight("b1", mock.Anything, mock.Anything).Return(nil)
 	d.mfs.EXPECT().ApplyMetadataCandidateWithOptions("b1", mock.Anything, mock.Anything,
 		metafetch.ApplyOptions{BatchID: "apply-queued-own"}).Return(&metafetch.FetchMetadataResponse{}, nil)
-	d.mfs.EXPECT().InvalidateCachedCandidates("b1").Return(nil)
 	d.wb.EXPECT().Enqueue("b1").Maybe()
 	d.pool.EXPECT().Submit("b1", mock.Anything).Return(false)
 	if err := h.RunQueuedApply(context.Background(), queuedCandidate(), nil); err != nil {

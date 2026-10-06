@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_one_test.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 9d2b71fa-30c8-4e57-a614-8b5e0c7f2d93
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 //
 // Regression tests for applying ONE book's cached metadata candidate.
 //
@@ -42,7 +42,6 @@ type fakeApplySvc struct {
 	pendingCover  string
 	skippedLocked []string
 	appliedIDs    []string
-	invalidatedID []string
 	finishCalls   []finishCall
 	// checkpoints is the stand-down checkpoint each FinishApplyFileWork got.
 	checkpoints []func() error
@@ -81,9 +80,6 @@ func TestApplyCachedCandidate_RenamePreflightRefusesBeforeAnyWrite(t *testing.T)
 	}
 	if len(svc.appliedIDs) != 0 {
 		t.Errorf("ApplyMetadataCandidate ran for %v; the database must not be written", svc.appliedIDs)
-	}
-	if len(svc.invalidatedID) != 0 {
-		t.Errorf("cache invalidated for %v; the candidate must stay for a retry", svc.invalidatedID)
 	}
 	if len(svc.finishCalls) != 0 {
 		t.Errorf("file work ran %d times after a refused preflight", len(svc.finishCalls))
@@ -198,8 +194,8 @@ func TestApplyCachedCandidate_HistoryIncompleteIsAppliedAndFlagged(t *testing.T)
 	if !out.Applied || !out.OwnerReviewed || !out.HistoryFailed || !errors.Is(out.Err, metafetch.ErrApplyHistoryIncomplete) {
 		t.Fatalf("outcome %+v, want applied, owner-reviewed, history failed", out)
 	}
-	if len(svc.invalidatedID) != 1 || len(svc.finishCalls) != 1 {
-		t.Fatalf("the rest of the apply must still run: invalidated=%v finish=%v", svc.invalidatedID, svc.finishCalls)
+	if len(svc.finishCalls) != 1 {
+		t.Fatalf("the rest of the apply must still run: finish=%v", svc.finishCalls)
 	}
 
 	// Any other apply error is still a failed apply.
@@ -239,11 +235,6 @@ func TestApplyCachedCandidate_HistoryAndWriteBackFailuresBothSurface(t *testing.
 			t.Errorf("writeBack=%v: WriteBackErr = %v, want only the write-back error", writeBack, out.WriteBackErr)
 		}
 	}
-}
-
-func (f *fakeApplySvc) InvalidateCachedCandidates(bookID string) error {
-	f.invalidatedID = append(f.invalidatedID, bookID)
-	return nil
 }
 
 func (f *fakeApplySvc) FinishApplyFileWork(id, pendingCoverURL string, fileIO, writeTags bool, checkpoint func() error) error {
@@ -311,9 +302,6 @@ func TestApplyCachedCandidate_WritesFilesForAppliedBook(t *testing.T) {
 	}
 	if len(itunes.ids) != 1 {
 		t.Errorf("iTunes batcher not enqueued: %v", itunes.ids)
-	}
-	if len(svc.invalidatedID) != 1 {
-		t.Errorf("cache not invalidated: %v", svc.invalidatedID)
 	}
 }
 
