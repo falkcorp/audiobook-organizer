@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_regroup.go
-// version: 1.28.0
+// version: 1.29.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-10-05
 
@@ -278,8 +278,10 @@ func (p *Plugin) regroupUserStateStore(store itunesRegroupStore) merge.UserProgr
 // the state lands where the user can see it; within that, the group that
 // took the most of the book's files, ties to the earlier group. isListed
 // says whether the chosen target is listed. "" when no applied group took
-// any of its files.
-func regroupStateTarget(plan itunesservice.RegroupPlan, targets map[int]string, bookID string, listed func(id string) bool) (target string, isListed bool) {
+// any of its files. A listed() read error is returned: whether the state
+// would land where the user can see it is then unknown, and the caller
+// keeps the book.
+func regroupStateTarget(plan itunesservice.RegroupPlan, targets map[int]string, bookID string, listed func(id string) (bool, error)) (target string, isListed bool, err error) {
 	bestN := 0
 	for gi, a := range plan.Groups {
 		t, ok := targets[gi]
@@ -295,20 +297,30 @@ func regroupStateTarget(plan itunesservice.RegroupPlan, targets map[int]string, 
 		if n == 0 {
 			continue
 		}
-		l := listed(t)
+		l, lerr := listed(t)
+		if lerr != nil {
+			return "", false, lerr
+		}
 		if target == "" || (l && !isListed) || (l == isListed && n > bestN) {
 			target, isListed, bestN = t, l, n
 		}
 	}
-	return target, isListed
+	return target, isListed, nil
 }
 
 // regroupTargetListed reports whether id is a book ABS lists
-// (database.ABSLibraryFilter). A read error reads as not listed.
-func regroupTargetListed(store itunesRegroupStore) func(id string) bool {
-	return func(id string) bool {
+// (database.ABSLibraryFilter). A read error is returned, not read as "not
+// listed": the delete loop decides on this whether a listed book's users'
+// state may move, and until 2026-10-05 a failed read of the DOOMED book
+// made it look unlisted, so its state could be carried onto a book ABS does
+// not list. Every caller now refuses the delete on an error (fail closed).
+func regroupTargetListed(store itunesRegroupStore) func(id string) (bool, error) {
+	return func(id string) (bool, error) {
 		b, err := store.GetBookByID(id)
-		return err == nil && database.ABSLibraryFilter().Matches(b)
+		if err != nil {
+			return false, fmt.Errorf("read %s to check whether ABS lists it: %w", id, err)
+		}
+		return database.ABSLibraryFilter().Matches(b), nil
 	}
 }
 
@@ -870,7 +882,18 @@ func (p *Plugin) applyRegroupPlan(ctx context.Context, store itunesRegroupStore,
 		// so state that lands after the probe above refuses the delete.
 		del := func() error { return store.DeleteBook(id) }
 		if has {
-			target, targetListed := regroupStateTarget(plan, c.targets, id, listed)
+			// Fail closed on every listed() read below: a book whose
+			// listing cannot be read is kept with its state, and counted.
+			listedErr := func(err error) {
+				deleteSkipped++
+				errCount++
+				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: a user has listening state on it and whether ABS lists it or its target could not be read: %v; kept with its state", id, err))
+			}
+			target, targetListed, terr := regroupStateTarget(plan, c.targets, id, listed)
+			if terr != nil {
+				listedErr(terr)
+				continue
+			}
 			if target == "" {
 				deleteSkipped++
 				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: a user has listening state on it and no applied group took its files to carry it to", id))
@@ -885,12 +908,28 @@ func (p *Plugin) applyRegroupPlan(ctx context.Context, store itunesRegroupStore,
 				report.SkippedTargetNotListed = append(report.SkippedTargetNotListed, id)
 				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: ABS lists it, a user has listening state on it, and the target that took its files (%s) is not a book ABS lists%s; kept with its state", id, target, why))
 			}
-			if !targetListed && listed(id) {
+			doomedListed, derr := listed(id)
+			if derr != nil {
+				listedErr(derr)
+				continue
+			}
+			if !targetListed && doomedListed {
 				skipNotListed("")
 				continue
 			}
 			precheck := func() error {
-				if listed(id) && !listed(target) {
+				dl, err := listed(id)
+				if err != nil {
+					return err
+				}
+				if !dl {
+					return nil
+				}
+				tl, err := listed(target)
+				if err != nil {
+					return err
+				}
+				if !tl {
 					return errRegroupTargetNotListed
 				}
 				return nil
@@ -900,6 +939,10 @@ func (p *Plugin) applyRegroupPlan(ctx context.Context, store itunesRegroupStore,
 				skipNotListed(" (re-checked under the merge lock)")
 				continue
 			}
+			if errors.Is(err, merge.ErrCarryPrecheckRefused) {
+				listedErr(err)
+				continue
+			}
 			if errors.Is(err, merge.ErrStateCarryIncomplete) {
 				deleteSkipped++
 				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("skip delete %s: its users' listening state could not be carried to %s: %v", id, target, err))
@@ -907,7 +950,11 @@ func (p *Plugin) applyRegroupPlan(ctx context.Context, store itunesRegroupStore,
 			}
 			// The carry landed whether or not the delete then failed.
 			stateCarried++
-			if !listed(target) {
+			switch tl, lerr := listed(target); {
+			case lerr != nil:
+				errCount++
+				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("book %s: its users' listening state was carried to %s, but whether ABS lists %s could not be read: %v", id, target, target, lerr))
+			case !tl:
 				report.StateCarriedUnlisted = append(report.StateCarriedUnlisted, id)
 				_ = reporter.Log(slog.LevelWarn, fmt.Sprintf("book %s: its users' listening state was carried to %s, which ABS does not list (no applied target that took its files is listed); kept, not visible in ABS until %s is organized and its group's primary", id, target, target))
 			}

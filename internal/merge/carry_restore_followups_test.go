@@ -1,5 +1,5 @@
 // file: internal/merge/carry_restore_followups_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: beba4668-6a7b-4db7-b6b6-636dd756c5e7
 // last-edited: 2026-10-05
 
@@ -102,8 +102,9 @@ func TestRestoreAbsorbedSide_ResetInSnapshotClearsOlderRows(t *testing.T) {
 }
 
 // #3770 review S1c (owner decision 2026-10-05): when either side of a
-// position has no timestamp, the farther-ahead position wins, per segment
-// and for which side's state stands.
+// position has no timestamp, the farther-ahead position wins, per segment.
+// Which side's STATE stands is decided by time alone (#3771/#3772 review
+// D2): an undated position no longer hands its side the status.
 func TestCombineOnRestore_UndatedPositionFartherAheadWins(t *testing.T) {
 	t.Run("legacy current row ahead of a dated snapshot", func(t *testing.T) {
 		snap := userStateSide{state: &database.UserBookState{Status: database.UserBookStatusInProgress, ProgressPct: 70, LastActivityAt: rfT0},
@@ -112,7 +113,7 @@ func TestCombineOnRestore_UndatedPositionFartherAheadWins(t *testing.T) {
 			positions: []database.UserPosition{rfPos("a", 4000, time.Time{})}}
 		st, got := combineOnRestore("u", "bk", snap, now)
 		require.Equal(t, []database.UserPosition{rfPos("a", 4000, time.Time{})}, got, "4000 is not rewound to 3500")
-		require.Equal(t, 80, st.ProgressPct, "the farther-ahead side's state stands")
+		require.Equal(t, 70, st.ProgressPct, "the dated (newer) side's state stands; the undated row decides only its position")
 	})
 	t.Run("legacy snapshot row ahead of a dated current row", func(t *testing.T) {
 		snap := userStateSide{state: &database.UserBookState{Status: database.UserBookStatusInProgress, ProgressPct: 80},
@@ -121,7 +122,7 @@ func TestCombineOnRestore_UndatedPositionFartherAheadWins(t *testing.T) {
 			positions: []database.UserPosition{rfPos("a", 3500, rfT1)}}
 		st, got := combineOnRestore("u", "bk", snap, now)
 		require.Equal(t, []database.UserPosition{rfPos("a", 4000, time.Time{})}, got)
-		require.Equal(t, 80, st.ProgressPct)
+		require.Equal(t, 70, st.ProgressPct, "the dated (newer) current state stands")
 	})
 	t.Run("both dated: newer still wins even when behind", func(t *testing.T) {
 		snap := userStateSide{positions: []database.UserPosition{rfPos("a", 4000, rfT0)}}

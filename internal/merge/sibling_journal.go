@@ -1,5 +1,5 @@
 // file: internal/merge/sibling_journal.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 225d6301-f6b7-4f2d-8c27-1d6865ecf11c
 // last-edited: 2026-10-05
 
@@ -592,6 +592,10 @@ func (ms *Service) undoSiblingJournal(journalID, loserID string) (*SiblingUndoRe
 	if err := ms.requireNoNewerSiblingMove(j, todo); err != nil {
 		return nil, err
 	}
+	undoneBefore := make([]bool, len(j.StateFollows))
+	for i, f := range j.StateFollows {
+		undoneBefore[i] = f.Undone
+	}
 	followWarnings, followErr := ms.undoStateFollows(j, pickFollow, loserID == "")
 	j.Warnings = append(j.Warnings, followWarnings...)
 	if followErr != nil {
@@ -627,6 +631,13 @@ func (ms *Service) undoSiblingJournal(journalID, loserID string) (*SiblingUndoRe
 	}
 	if err := ms.putSiblingJournal(j); err != nil {
 		return nil, fmt.Errorf("siblings restored but sibling-move journal %s not updated: %w", j.ID, err)
+	}
+	// The follows put back here are persisted as Undone, so no re-run can
+	// reach their put-backs again: drop their reconcile markers.
+	for i, f := range j.StateFollows {
+		if f.Undone && !undoneBefore[i] {
+			dropSurvivorReconcileMarkers(ms.db, f.HolderID, f.LoserID, f.Progress)
+		}
 	}
 	return &SiblingUndoResult{JournalID: j.ID, Status: j.Status, SiblingRestoreResult: res}, nil
 }

@@ -1,5 +1,5 @@
 // file: internal/merge/discard_before_delete.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: fa2636c6-2ce1-42f5-a5bf-9952e4f6d7b4
 // last-edited: 2026-10-05
 
@@ -8,8 +8,6 @@ package merge
 import (
 	"errors"
 	"fmt"
-	"slices"
-	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
@@ -125,28 +123,6 @@ func DiscardUserStateThenHardDelete(db UserProgressMerger, bookID string, preche
 		return res, fmt.Errorf("hard delete %s after its listening state was discarded: %w", bookID, err)
 	}
 	return res, nil
-}
-
-// pendingRepairNaming is nil when no pending user-state repair (decodable or
-// not) names bookID. It is the repair half of carryLeftover, checked BEFORE a
-// discard clears anything.
-func pendingRepairNaming(db UserProgressMerger, bookID string) error {
-	recs, undecodable, err := ListPendingUserStateRepairs(db)
-	if err != nil {
-		return fmt.Errorf("list pending user-state repairs: %w", err)
-	}
-	for _, k := range undecodable {
-		pair := strings.Split(strings.TrimPrefix(k, PendingUserStateRepairPrefix), ":")
-		if slices.Contains(pair, bookID) {
-			return fmt.Errorf("undecodable pending user-state repair %s names %s", k, bookID)
-		}
-	}
-	for _, r := range recs {
-		if r.LoserBookID == bookID || r.WinnerBookID == bookID {
-			return fmt.Errorf("pending user-state repair %s -> %s is still open; let the repair sweep finish it first", r.LoserBookID, r.WinnerBookID)
-		}
-	}
-	return nil
 }
 
 // discardOwnBookmarks deletes each user's bookmarks under bookID's own sync

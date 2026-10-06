@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_regroup_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 6f7a8b9c-0d1e-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-10-05
 
@@ -288,17 +288,17 @@ func TestRegroupStateTarget_PrefersListedTarget(t *testing.T) {
 		{Moves: []itunesservice.FileMove{{From: "other"}}},
 	}}
 	targets := map[int]string{0: "hidden-big", 1: "listed-small", 2: "listed-unrelated"}
-	isListed := func(id string) bool { return strings.HasPrefix(id, "listed") }
+	isListed := func(id string) (bool, error) { return strings.HasPrefix(id, "listed"), nil }
 
-	got, listed := regroupStateTarget(plan, targets, "doomed", isListed)
+	got, listed, _ := regroupStateTarget(plan, targets, "doomed", isListed)
 	if got != "listed-small" || !listed {
 		t.Fatalf("target = %q listed=%v, want listed-small (the listed one, not the one with more files)", got, listed)
 	}
-	got, listed = regroupStateTarget(plan, targets, "doomed", func(string) bool { return false })
+	got, listed, _ = regroupStateTarget(plan, targets, "doomed", func(string) (bool, error) { return false, nil })
 	if got != "hidden-big" || listed {
 		t.Fatalf("target = %q listed=%v, want hidden-big, not listed", got, listed)
 	}
-	if got, _ := regroupStateTarget(plan, targets, "nobody", isListed); got != "" {
+	if got, _, _ := regroupStateTarget(plan, targets, "nobody", isListed); got != "" {
 		t.Fatalf("target for a book no group took files from = %q, want none", got)
 	}
 }
@@ -480,5 +480,55 @@ func TestITunesRegroupApply_ListedDoomedBookKeepsStateOffUnlistedTarget(t *testi
 		if pos, _ := s.ListUserPositionsForBook(u.ID, target); len(pos) != 1 || pos[0].PositionSeconds != 30 {
 			t.Fatalf("late=%v: target positions = %v, want only its own", late, pos)
 		}
+	}
+}
+
+// rgReadFailLater fails GetBookByID for one book once the delete loop has
+// reached it (armed by its ext-id re-check), so the apply's own rechecks
+// read it fine and only the delete loop's "does ABS list it" read fails.
+type rgReadFailLater struct {
+	*database.PebbleStore
+	on    string
+	armed bool
+}
+
+func (s *rgReadFailLater) GetExternalIDsForBook(id string) ([]database.ExternalIDMapping, error) {
+	if id == s.on {
+		s.armed = true
+	}
+	return s.PebbleStore.GetExternalIDsForBook(id)
+}
+
+func (s *rgReadFailLater) GetBookByID(id string) (*database.Book, error) {
+	if id == s.on && s.armed {
+		return nil, fmt.Errorf("injected read failure for %s", id)
+	}
+	return s.PebbleStore.GetBookByID(id)
+}
+
+// #3771/#3772 review F: a failed read of whether ABS lists a book is not
+// "not listed". The doomed book whose listing cannot be read keeps its
+// users' state and is not deleted, and the run counts an error.
+func TestITunesRegroupApply_ListedReadErrorFailsClosed(t *testing.T) {
+	s, u, plan, rep := regroupWithState(t)
+	loser, target := plan.DeleteBooks[0], plan.Groups[0].Target
+	store := &rgReadFailLater{PebbleStore: s, on: loser}
+	_, err := (&Plugin{}).applyRegroupPlan(context.Background(), store, plan, rgRoot, rep)
+	if err == nil {
+		t.Fatalf("applyRegroupPlan: no error, want the failed listing read counted\n%s", strings.Join(rep.logs, "\n"))
+	}
+	if b, gerr := s.GetBookByID(loser); gerr != nil || b == nil {
+		t.Fatalf("book %s deleted though whether ABS lists it could not be read (err=%v)", loser, gerr)
+	}
+	st, gerr := s.GetUserBookState(u.ID, loser)
+	if gerr != nil || st == nil || st.ProgressPct != 30 {
+		t.Fatalf("state left the book: %+v err=%v", st, gerr)
+	}
+	if pos, _ := s.ListUserPositionsForBook(u.ID, target); len(pos) != 1 || pos[0].PositionSeconds != 30 {
+		t.Fatalf("target positions = %v, want only its own", pos)
+	}
+	logs := strings.Join(rep.logs, "\n")
+	if !strings.Contains(logs, "could not be read") || !strings.Contains(logs, "deleted=0") {
+		t.Fatalf("refusal not logged/counted:\n%s", logs)
 	}
 }

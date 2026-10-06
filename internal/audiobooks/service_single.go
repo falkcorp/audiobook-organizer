@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
 // last-edited: 2026-10-05
 
@@ -559,7 +559,9 @@ func (svc *AudiobookService) purgeCarryingState(book *database.Book, deleteFiles
 	precheck := func() error {
 		cur, gerr := svc.store.GetBookByID(sibling)
 		if gerr != nil {
-			return fmt.Errorf("%w: re-read %s: %w", errSiblingNotListed, sibling, gerr)
+			// A failed read is not "not listed": it is a failure to carry,
+			// reported with its error, never a quiet kept-has-progress.
+			return fmt.Errorf("%w: re-read %s: %w", errSiblingReadFailed, sibling, gerr)
 		}
 		if !siblingIsCarryTarget(cur) {
 			return fmt.Errorf("%w: %s", errSiblingNotListed, sibling)
@@ -570,6 +572,8 @@ func (svc *AudiobookService) purgeCarryingState(book *database.Book, deleteFiles
 		return svc.purgeDeleteRow(book)
 	})
 	switch {
+	case errors.Is(err, errSiblingReadFailed):
+		return purgeOutcome{kind: purgeCarryFailed, errs: []string{fmt.Sprintf("%s: not purged, listening state kept on it: %v", book.ID, err)}}
 	case errors.Is(err, errSiblingNotListed):
 		// Nothing moved; with no listed version to carry to, the book stays
 		// in the trash flagged "has progress", as when there was none.

@@ -1,5 +1,5 @@
 // file: internal/merge/user_state_merge.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9b1f6c2e-4d7a-4e83-a5c9-2f8e0d3b7a61
 // last-edited: 2026-10-05
 
@@ -22,11 +22,16 @@ import (
 //     (status, FinishedAt and ProgressPct come from the finished side; from
 //     the more recent side when both are finished, the survivor on a tie);
 //   - otherwise the side with the newest lastUpdate wins the position: its
-//     upos rows, LastSegmentID, TotalListenedSeconds, ProgressPct and status.
+//     upos rows, LastSegmentID, ProgressPct and status.
 //     lastUpdate is what the ABS surface reports (item.go: the latest upos
 //     UpdatedAt), falling back to the state's LastActivityAt for a side with
 //     no position rows. A tie goes to the survivor, and a side with no
 //     position rows never takes the position from one that has them;
+//   - listened time (TotalListenedSeconds) is the LARGER of the two, never
+//     the sum and never just the newer side's (owner decision 2026-10-05:
+//     combining copies, the farther-ahead counter wins). Taking the newer
+//     side's let a short fresh listen on one copy (200s) wipe out hours
+//     listened on the other (5000s);
 //   - last played (LastActivityAt) is the later of the two;
 //   - HideFromContinueListening is kept if either side has it;
 //   - the reset tombstone (ProgressResetAt) is the later of the two and the
@@ -39,7 +44,11 @@ import (
 // other.
 //
 // Bookmarks are not part of this rule: they are keyed by time, so the two
-// sides' sets are unioned (bookmark_copy.go).
+// sides' sets are unioned (bookmark_copy.go). For the same reason
+// hasCarryableState does not look at them: it is a per-row test of the
+// state and positions a follow merges. Whether a BOOK still holds bookmarks
+// no live book has (the test a hard delete needs) is answered at book level
+// by UserStateProbe.Has (owedBookmarks).
 //
 // Chapter / split-part merges (followSlice) deliberately do NOT apply the
 // sticky-finished half: finishing chapter 2 is not finishing the book.
@@ -115,7 +124,7 @@ func planUserStateMerge(userID, winnerBookID string, loser, winner userStateSide
 	}
 
 	// The position and every position-linked field (status, progress %,
-	// segment, listened seconds) come from ONE side, so the result never pairs
+	// segment) come from ONE side, so the result never pairs
 	// one copy's progress with the other copy's currentTime. That side is the
 	// newer one, except that a side with no upos rows cannot take the position
 	// from a side that has them (a state-only row, e.g. after a reset on that
@@ -154,8 +163,14 @@ func planUserStateMerge(userID, winnerBookID string, loser, winner userStateSide
 	merged.StatusManual = posSrc.StatusManual
 	merged.ProgressPct = posSrc.ProgressPct
 	merged.LastSegmentID = posSrc.LastSegmentID
-	merged.TotalListenedSeconds = posSrc.TotalListenedSeconds
 	merged.FinishedAt = posSrc.FinishedAt
+	// Listened time is the larger counter, whichever side won the position.
+	merged.TotalListenedSeconds = 0
+	for _, s := range []*database.UserBookState{loser.state, winner.state} {
+		if s != nil && s.TotalListenedSeconds > merged.TotalListenedSeconds {
+			merged.TotalListenedSeconds = s.TotalListenedSeconds
+		}
+	}
 
 	// Finished is sticky.
 	var fin *database.UserBookState
