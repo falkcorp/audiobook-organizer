@@ -46,8 +46,7 @@ export function describeDeleteBookError(error: unknown, fallback: string): strin
     if (isOwnsFilesRefusal(error)) {
       const m = /\((\d+) row\(s\)\)/.exec(error.message);
       const count = m ? Number(m[1]) : undefined;
-      const rows =
-        count === undefined ? 'file rows' : `${count} file row${count === 1 ? '' : 's'}`;
+      const rows = count === undefined ? 'file rows' : `${count} file row${count === 1 ? '' : 's'}`;
       return (
         `This book still owns ${rows}, so it can't be permanently deleted: that would leave ` +
         'those rows pointing at nothing. Soft-delete it instead (it stays hidden and ' +
