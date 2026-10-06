@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/scan_title_revert_fixer.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: beeafd36-1bf8-48f8-b62c-bd5e1be4135c
 // last-edited: 2026-10-06
 
@@ -36,6 +36,7 @@ const (
 	strSkipChangedSince  = "changed_since_scan"
 	strSkipLocked        = "locked"
 	strSkipITunes        = "itunes"
+	strSkipOutsideWindow = "changed_outside_window"
 )
 
 // scanTitleRevertFixer puts back the titles one library scan rewrote.
@@ -50,8 +51,10 @@ const (
 // EARLIEST snapshot stamped at or after the scan's start.
 //
 // The fixer is input-driven, not a library sweep: its params name the books
-// (book_ids, the owner's approved list) and the scan's start (since,
-// RFC3339); source_op_id is recorded on each row for provenance only. One row
+// (book_ids, the owner's approved list), the scan's start (since, RFC3339)
+// and optionally its end (until, RFC3339), which bounds when the title change
+// being reverted may have been written; source_op_id is recorded on each row
+// for provenance only. One row
 // per listed book proposes the snapshot's title over the current one. It is
 // held when:
 //   - gone: the book is deleted or merged away;
@@ -66,6 +69,9 @@ const (
 //     i.e. someone edited it since. The scan's value is the first title after
 //     the found snapshot that differs from it (strScanWrote), or the live
 //     title when none does;
+//   - changed_outside_window: until is set and the write that changed the
+//     title (strScanWrote's changedAt) is stamped after it: the scan did not
+//     make the change being reverted;
 //   - skipped_owner_manual: the title to restore marks Doctor Who / Big
 //     Finish / Torchwood (the framework guard reads only the current title).
 //
@@ -73,8 +79,8 @@ const (
 // Torchwood) run over every row as for every fixer.
 //
 // Apply writes the title only, through the Writer's ModifyBook (a
-// compare-and-set against the planned current title and a fresh lock check,
-// inside the write). Writer.Modify records the metadata-history row after the
+// compare-and-set against the planned current title and fresh lock and iTunes
+// checks, inside the write). Writer.Modify records the metadata-history row after the
 // write, and the title is then journaled under the apply op, so both "undo
 // last apply" and the op revert restore the scan's title. The title is NOT
 // locked: #3799 keeps a rescan off an existing book's title, and a lock would
@@ -100,7 +106,8 @@ func (f *scanTitleRevertFixer) ID() string    { return scanTitleRevertFixerID }
 func (f *scanTitleRevertFixer) Title() string { return "Revert titles a scan rewrote" }
 func (f *scanTitleRevertFixer) Description() string {
 	return "Puts back the titles a library scan rewrote, for an explicit list of books. Params: book_ids (the books), " +
-		"since (RFC3339, when the scan started) and optionally source_op_id (the scan op, recorded on each row). " +
+		"since (RFC3339, when the scan started), optionally until (RFC3339, when it ended: a title changed after it is " +
+		"held) and source_op_id (the scan op, recorded on each row). " +
 		"The title restored is the one in the book's earliest version snapshot taken at or after since: the row as " +
 		"it stood when the scan started. Held: deleted or merged books, iTunes books, locked titles, books with no " +
 		"snapshot since then, blank or unchanged titles, and titles edited after the scan. Writes the title only " +
@@ -112,14 +119,16 @@ func (f *scanTitleRevertFixer) Description() string {
 type strParams struct {
 	BookIDs    []string `json:"book_ids"`
 	Since      string   `json:"since"`
+	Until      string   `json:"until,omitempty"`
 	SourceOpID string   `json:"source_op_id,omitempty"`
 
 	ids   []string
 	since time.Time
+	until time.Time // zero: no upper bound
 }
 
-// parseSTRParams reads and checks the params: at least one book id and a
-// since that parses as RFC3339.
+// parseSTRParams reads and checks the params: at least one book id, a since
+// that parses as RFC3339 and, when given, an RFC3339 until after since.
 func parseSTRParams(raw json.RawMessage) (strParams, error) {
 	var p strParams
 	if len(raw) == 0 || string(raw) == "null" {
@@ -144,6 +153,16 @@ func parseSTRParams(raw json.RawMessage) (strParams, error) {
 		return p, fmt.Errorf("%s: since must be an RFC3339 time (the scan's start): %w", scanTitleRevertFixerID, err)
 	}
 	p.since = since
+	if u := strings.TrimSpace(p.Until); u != "" {
+		until, uerr := time.Parse(time.RFC3339, u)
+		if uerr != nil {
+			return p, fmt.Errorf("%s: until must be an RFC3339 time (the scan's end): %w", scanTitleRevertFixerID, uerr)
+		}
+		if !until.After(since) {
+			return p, fmt.Errorf("%s: until (%s) must be after since (%s)", scanTitleRevertFixerID, u, p.Since)
+		}
+		p.until = until
+	}
 	p.SourceOpID = strings.TrimSpace(p.SourceOpID)
 	return p, nil
 }
@@ -232,17 +251,31 @@ func strSnapshotsSince(snaps []database.BookSnapshot, since time.Time) (found *d
 // differs (that write was the book's last title change). A write of another
 // field first -- the scan's own, an AI re-save, any op -- leaves restore in
 // the next snapshot and is passed over. at names where it was read.
-func strScanWrote(later []database.BookSnapshot, restore, live string) (title, at string, err error) {
+//
+// changedAt is when that title-changing write was made. A snapshot is stamped
+// with the time of the write that REPLACED the row it holds, so the first
+// snapshot holding the new title (later[i]) is stamped with the write AFTER
+// the change, not the change itself. The change is the write that replaced
+// the last row still holding restore: the snapshot just before later[i]
+// (later[i-1], or found when i is 0) carries its stamp. When no later
+// snapshot differs, the change is the write that produced the live row, the
+// book's last write: the newest snapshot (the last of later, or found)
+// carries its stamp. Either way it is the stamp of the last snapshot in the
+// run, from found on, that still holds restore. It is meaningful only when
+// title differs from restore.
+func strScanWrote(found *database.BookSnapshot, later []database.BookSnapshot, restore, live string) (title, at string, changedAt time.Time, err error) {
+	lastRestore := found.Timestamp
 	for i := range later {
 		t, terr := strSnapshotTitle(&later[i])
 		if terr != nil {
-			return "", "", terr
+			return "", "", time.Time{}, terr
 		}
 		if t != restore {
-			return t, "snapshot " + later[i].Timestamp.UTC().Format(time.RFC3339Nano), nil
+			return t, "snapshot " + later[i].Timestamp.UTC().Format(time.RFC3339Nano), lastRestore, nil
 		}
+		lastRestore = later[i].Timestamp
 	}
-	return live, "the live row", nil
+	return live, "the live row", lastRestore, nil
 }
 
 // strSnapshotTitle decodes a snapshot's book row and returns its title.
@@ -360,12 +393,18 @@ func (f *scanTitleRevertFixer) evaluate(id string, params strParams) (repairs.Ro
 	if err != nil {
 		return repairs.Row{}, err
 	}
-	scanWrote, afterAt, err := strScanWrote(later, restore, b.Title)
+	scanWrote, afterAt, changedAt, err := strScanWrote(found, later, restore, b.Title)
 	if err != nil {
 		return repairs.Row{}, err
 	}
 	foundAt := found.Timestamp.UTC().Format(time.RFC3339Nano)
 	r.Current["snapshot_at"] = foundAt
+	changedAtS := ""
+	if scanWrote != restore {
+		changedAtS = changedAt.UTC().Format(time.RFC3339Nano)
+		r.Current["title_changed_at"] = changedAtS
+		r.Evidence = append(r.Evidence, "the title was changed by the write at "+changedAtS)
+	}
 	r.Evidence = append(r.Evidence,
 		fmt.Sprintf("snapshot %s (the row before the first write at or after %s) has title %q",
 			foundAt, params.since.UTC().Format(time.RFC3339), restore),
@@ -373,13 +412,18 @@ func (f *scanTitleRevertFixer) evaluate(id string, params strParams) (repairs.Ro
 	// Title values and the found snapshot only: a later write of another
 	// field (the six-hourly ASIN backfill) adds snapshots but moves none of
 	// these, so it does not refuse the row as changed_since_plan.
-	extra := strings.Join([]string{b.Title, foundAt, restore, scanWrote}, "\n")
+	// changedAt is stable under such writes too: it is the stamp of the last
+	// snapshot holding restore, which a later write never adds.
+	extra := strings.Join([]string{b.Title, foundAt, restore, scanWrote, changedAtS, params.until.UTC().Format(time.RFC3339Nano)}, "\n")
 
 	switch {
 	case strings.TrimSpace(restore) == "":
 		return held(strSkipOldTitleEmpty, "the snapshot's title is blank; there is nothing to restore", extra)
 	case restore == b.Title:
 		return held(strSkipSame, "the title is already the snapshot's", extra)
+	case !params.until.IsZero() && changedAt.After(params.until):
+		return held(strSkipOutsideWindow, fmt.Sprintf("the title was changed to %q at %s, after until (%s): the scan did not write it",
+			scanWrote, changedAtS, params.until.UTC().Format(time.RFC3339)), extra)
 	case scanWrote != b.Title:
 		return held(strSkipChangedSince, fmt.Sprintf("the title was changed after the scan wrote %q; that later edit stands", scanWrote), extra)
 	}
@@ -389,7 +433,7 @@ func (f *scanTitleRevertFixer) evaluate(id string, params strParams) (repairs.Ro
 		return held(kind, why, extra)
 	}
 	r.Proposed = map[string]string{"title": restore}
-	r.Reason = fmt.Sprintf("the scan rewrote the title %q as %q; it is put back", restore, b.Title)
+	r.Reason = fmt.Sprintf("the scan rewrote the title %q as %q at %s; it is put back", restore, b.Title, changedAtS)
 	r.Detail = &strDecision{bookID: id, current: b.Title, restore: restore}
 	r.Fingerprint = strFingerprint(r, extra)
 	return r, nil
@@ -403,6 +447,13 @@ func strFingerprint(r repairs.Row, extra string) string {
 
 // Apply writes the title, and only the title, while it is still the planned
 // current one and no lock or iTunes id has appeared.
+//
+// The lock and iTunes re-checks (field states, the book's file rows and its
+// external ids) are read inside the ModifyBook callback, under the book's
+// write stripe, as the author-named-series fixer and writeTitleOnly read the
+// field locks there. Those reads take no lock of their own (Pebble prefix
+// iterations; none takes the book stripe), so they cannot deadlock, and an
+// id or lock landing after them still races only for the width of one batch.
 //
 // As in the author-named-series fixer, the undo rows follow the write they
 // describe: the metadata-history row by Writer.Modify itself, the op-journal
@@ -420,8 +471,12 @@ func (f *scanTitleRevertFixer) Apply(_ context.Context, w *repairs.Writer, fresh
 		if cur.Title != d.current {
 			return fmt.Errorf("%w: title is now %q", repairs.ErrChangedSincePlan, cur.Title)
 		}
-		if cur.ITunesPersistentID != nil && strings.TrimSpace(*cur.ITunesPersistentID) != "" {
-			return fmt.Errorf("%w: the book now carries an iTunes id", repairs.ErrChangedSincePlan)
+		why, ierr := strITunesWhy(store, cur)
+		if ierr != nil {
+			return ierr
+		}
+		if why != "" {
+			return fmt.Errorf("%w: %s", repairs.ErrChangedSincePlan, why)
 		}
 		locked, lerr := database.LockedUserFields(store, d.bookID)
 		if lerr != nil {
