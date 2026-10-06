@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_search.go
-// version: 1.37.0
+// version: 1.38.0
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
 // last-edited: 2026-10-06
 
@@ -1039,7 +1039,15 @@ func (mfs *Service) matchSearchFingerprint(stored string, book *database.Book, q
 			return fingerprintPrior
 		}
 	}
-	if stored == mfs.resolveSearchInputsWith(book, query, author, narrator, &resolveOpts{prePR: true}).fingerprintWith(book.Title, false) {
+	// The questions as they read before 2026-10-06, in both fingerprint
+	// versions: a version "1" row fetched for a book whose author the new
+	// rules clean ("zzX", "X [TAG]", "X_copy1") was built from the stored
+	// name, so it matches only the old reading's legacy fingerprint.
+	pre := mfs.resolveSearchInputsWith(book, query, author, narrator, &resolveOpts{prePR: true})
+	if stored == pre.legacyFingerprint(book.Title) {
+		return fingerprintLegacy
+	}
+	if stored == pre.fingerprintWith(book.Title, false) {
 		return fingerprintPrior
 	}
 	return fingerprintStale

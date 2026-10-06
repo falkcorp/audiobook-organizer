@@ -1,5 +1,5 @@
 // file: internal/metafetch/identity_prior_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9ae53579-716a-44b6-adb8-2944ae90ce16
 // last-edited: 2026-10-06
 
@@ -112,6 +112,37 @@ func TestFingerprint_PrePRRowStillProvesItsIdentity(t *testing.T) {
 			require.NoError(t, err)
 			old := f.mfs.resolveSearchInputsWith(book, book.Title, legacyAuthorHint(live[0]), "", &resolveOpts{prePR: true}).fingerprintWith(book.Title, false)
 			require.NotEqual(t, old, f.mfs.resolveSearchInputs(book, book.Title, SearchAuthorHint(live[0]), "").fingerprint(book.Title), "fixture: the rules changed this book's questions")
+
+			putRow(t, f, book, BatchSourceHash(b.ID, book.Title, ""), old, true)
+			entry, verdict, _ := f.mfs.CachedBatchVerdict(f.book(b.ID), book.Title, SearchAuthorHint(live[0]))
+			require.Equal(t, BatchVerdictFreshCandidates, verdict)
+			require.NoError(t, f.mfs.ValidateCachedIdentityForBook(entry, f.book(b.ID), live))
+		})
+	}
+}
+
+// A version "1" row fetched before 2026-10-01 for a book whose author the
+// 2026-10-06 rules clean was built from the stored name: it still matches as
+// legacy, so its candidates stay valid and it proves its author.
+func TestFingerprint_PrePRLegacyRowKeepsItsCandidates(t *testing.T) {
+	f := newVerdictFixture(t)
+	for _, tc := range []struct{ title, author string }{
+		{"Onward Again", "zzJane Example"},
+		{"Harbor Lights", "John Sample [EXAMPLE]"},
+		{"Second Harbor", "Jane Example_copy1"},
+	} {
+		t.Run(tc.title, func(t *testing.T) {
+			a, err := f.store.CreateAuthor(tc.author)
+			require.NoError(t, err)
+			b, err := f.store.CreateBook(&database.Book{Title: tc.title, FilePath: "/lib/legacy/" + tc.title + ".m4b", AuthorID: &a.ID})
+			require.NoError(t, err)
+			book := f.book(b.ID)
+			live, err := database.LiveBookAuthorNames(f.store, book)
+			require.NoError(t, err)
+			old := f.mfs.resolveSearchInputsWith(book, book.Title, legacyAuthorHint(live[0]), "", &resolveOpts{prePR: true}).legacyFingerprint(book.Title)
+			require.NotEqual(t, old, f.mfs.resolveSearchInputs(book, book.Title, SearchAuthorHint(live[0]), "").legacyFingerprint(book.Title),
+				"fixture: the cleaning changed this book's version 1 questions")
+			require.Equal(t, fingerprintLegacy, f.mfs.matchSearchFingerprint(old, book, book.Title, SearchAuthorHint(live[0]), ""))
 
 			putRow(t, f, book, BatchSourceHash(b.ID, book.Title, ""), old, true)
 			entry, verdict, _ := f.mfs.CachedBatchVerdict(f.book(b.ID), book.Title, SearchAuthorHint(live[0]))
