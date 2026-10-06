@@ -19,8 +19,8 @@ var ErrDiscardIncomplete = errors.New("merge: listening state was not fully disc
 
 // DiscardedUserState counts what DiscardUserStateThenHardDelete cleared.
 type DiscardedUserState struct {
-	// Users is how many users had carryable state (hasCarryableState) on the
-	// book before it was cleared.
+	// Users is how many users had carryable state (hasCarryableState) or a
+	// bookmark under the book's own sync id before it was cleared.
 	Users int `json:"users"`
 	// Bookmarks is how many bookmarks under the book's own sync id were
 	// deleted.
@@ -77,6 +77,7 @@ func DiscardUserStateThenHardDelete(db UserProgressMerger, bookID string, preche
 		return res, fmt.Errorf("%w: %s: %w", ErrDiscardIncomplete, bookID, err)
 	}
 	deleter, canDelete := database.AsCapability[database.UserBookStateDeleter](db)
+	counted := map[string]bool{}
 	for _, u := range probe.users {
 		if u.ID == "" {
 			continue
@@ -90,7 +91,7 @@ func DiscardUserStateThenHardDelete(db UserProgressMerger, bookID string, preche
 			return res, fmt.Errorf("%w: read positions user=%s book=%s: %w", ErrDiscardIncomplete, u.ID, bookID, err)
 		}
 		if hasCarryableState(st, pos) {
-			res.Users++
+			counted[u.ID] = true
 		}
 		if len(pos) > 0 {
 			if err := db.ClearUserPositions(u.ID, bookID); err != nil {
@@ -110,8 +111,9 @@ func DiscardUserStateThenHardDelete(db UserProgressMerger, bookID string, preche
 		}
 	}
 
-	n, err := discardOwnBookmarks(db, probe.users, bookID)
+	n, err := discardOwnBookmarks(db, probe.users, bookID, counted)
 	res.Bookmarks = n
+	res.Users = len(counted)
 	if err != nil {
 		return res, fmt.Errorf("%w: %s: %w", ErrDiscardIncomplete, bookID, err)
 	}
@@ -126,9 +128,10 @@ func DiscardUserStateThenHardDelete(db UserProgressMerger, bookID string, preche
 }
 
 // discardOwnBookmarks deletes each user's bookmarks under bookID's own sync
-// id. A store with no bookmark or sync-identity keyspace, or a book that was
-// never given a sync id, has none.
-func discardOwnBookmarks(db UserProgressMerger, users []database.User, bookID string) (int, error) {
+// id, marking in users each user who had one. A store with no bookmark or
+// sync-identity keyspace, or a book that was never given a sync id, has
+// none.
+func discardOwnBookmarks(db UserProgressMerger, users []database.User, bookID string, had map[string]bool) (int, error) {
 	bs := database.AsBookmarkStore(db)
 	ids := database.AsSyncIdentityStore(db)
 	if bs == nil || ids == nil {
@@ -149,6 +152,9 @@ func discardOwnBookmarks(db UserProgressMerger, users []database.User, bookID st
 		marks, err := bs.ListBookmarks(u.ID, syncID)
 		if err != nil {
 			return n, fmt.Errorf("list bookmarks user=%s: %w", u.ID, err)
+		}
+		if len(marks) > 0 {
+			had[u.ID] = true
 		}
 		for _, m := range marks {
 			if err := bs.DeleteBookmark(u.ID, syncID, m.TimeSec); err != nil {

@@ -1,5 +1,5 @@
 // file: internal/audiobooks/trash_progress_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 98427cba-9b8a-4313-ace0-44b5115e8d6c
 // last-edited: 2026-10-05
 
@@ -236,10 +236,12 @@ func TestTrashProgress_FlagsAndSummarizes(t *testing.T) {
 }
 
 func TestDescribeUserState(t *testing.T) {
-	require.Equal(t, "finished", describeUserState(&database.UserBookState{Status: database.UserBookStatusFinished, ProgressPct: 100}, nil))
-	require.Equal(t, "at 1:02:03", describeUserState(nil, []database.UserPosition{{PositionSeconds: 3723}}))
-	require.Equal(t, "hidden from continue listening", describeUserState(&database.UserBookState{HideFromContinueListening: true}, nil))
-	require.Empty(t, describeUserState(&database.UserBookState{}, nil))
+	require.Equal(t, "finished", describeUserState(&database.UserBookState{Status: database.UserBookStatusFinished, ProgressPct: 100}, nil, 0))
+	require.Equal(t, "at 1:02:03", describeUserState(nil, []database.UserPosition{{PositionSeconds: 3723}}, 0))
+	require.Equal(t, "hidden from continue listening", describeUserState(&database.UserBookState{HideFromContinueListening: true}, nil, 0))
+	require.Empty(t, describeUserState(&database.UserBookState{}, nil, 0))
+	require.Equal(t, "1 bookmark", describeUserState(nil, nil, 1))
+	require.Equal(t, "finished, 3 bookmarks", describeUserState(&database.UserBookState{Status: database.UserBookStatusFinished}, nil, 3))
 }
 
 // The owner's discard clears every user's state, positions and bookmarks on
@@ -258,7 +260,7 @@ func TestDiscardProgressAndPurge_ClearsStateAndPurges(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, res.UsersCleared)
 	require.Equal(t, 1, res.BookmarksCleared)
-	require.Equal(t, "reader: 40%, at 0:40", res.ProgressSummary)
+	require.Equal(t, "reader: 40%, at 0:40, 1 bookmark", res.ProgressSummary)
 	require.Empty(t, res.Warnings)
 	require.True(t, bookGone(t, store, "held"))
 	st, err := store.GetUserBookState(u.ID, "held")

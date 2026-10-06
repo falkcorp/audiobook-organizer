@@ -1,5 +1,5 @@
 // file: internal/audiobooks/audiobook_service_unit_test.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 // last-edited: 2026-10-05
 
@@ -19,6 +19,14 @@ import (
 )
 
 // --- iTunes enqueuer wiring on delete paths ---
+
+// expectNoUserState lets a mock store answer the hard delete's listening
+// state checks (merge.HardDeleteKeepingUserState) with "no users, no
+// pending repairs": nothing to carry, so the delete goes ahead.
+func expectNoUserState(m *mocks.MockStore) {
+	m.EXPECT().ListUsers().Return(nil, nil).Maybe()
+	m.EXPECT().ScanPrefix(mock.Anything).Return(nil, nil).Maybe()
+}
 
 // fakeITunesEnqueuer captures EnqueueRemove calls for assertion.
 type fakeITunesEnqueuer struct {
@@ -43,6 +51,10 @@ func TestAudiobookService_DeleteAudiobook_HardDelete_EnqueuesITunesRemoves(t *te
 	mockStore.EXPECT().GetBookByID("del-itl").Return(book, nil)
 	mockStore.EXPECT().GetBookFiles("del-itl").Return(nil, nil)
 	mockStore.EXPECT().DeleteBook("del-itl").Return(nil)
+	expectNoUserState(mockStore)
+	// No other book holds the PID, so its iTunes remove is queued.
+	mockStore.EXPECT().GetBookFileByPID(pid).Return(nil, nil).Maybe()
+	mockStore.EXPECT().GetBookByExternalID("itunes", pid).Return("", nil).Maybe()
 
 	_, err := svc.DeleteAudiobook(context.Background(), "del-itl", &DeleteAudiobookOptions{})
 	assert.NoError(t, err)
@@ -367,6 +379,7 @@ func TestAudiobookService_DeleteAudiobook_HardDelete(t *testing.T) {
 	mockStore.EXPECT().GetBookByID("del-1").Return(book, nil)
 	mockStore.EXPECT().GetBookFiles("del-1").Return(nil, nil)
 	mockStore.EXPECT().DeleteBook("del-1").Return(nil)
+	expectNoUserState(mockStore)
 
 	result, err := svc.DeleteAudiobook(context.Background(), "del-1", &DeleteAudiobookOptions{})
 	assert.NoError(t, err)

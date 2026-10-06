@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.24.0
+// version: 1.25.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
 // last-edited: 2026-10-05
 
@@ -58,6 +58,7 @@ import (
 	"strings"
 
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
+	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -840,10 +841,23 @@ type trashListItem struct {
 	audiobookspkg.TrashProgressInfo
 }
 
+// trashProgressViewer is who is asking for a trash listing's progress, and
+// whether they may see every user's: only a user who may manage users
+// (auth.PermUsersManage) sees other users' names and progress; everyone
+// else sees their own line and a count of the others.
+func trashProgressViewer(c *gin.Context) (viewerID string, seeAll bool) {
+	if u, ok := servermiddleware.CurrentUser(c); ok && u != nil {
+		viewerID = u.ID
+	}
+	return viewerID, auth.Can(c.Request.Context(), auth.PermUsersManage)
+}
+
 // withTrashProgress attaches has_progress / progress_summary to each trash
-// row. A failure to read the state marks every row progress_unknown rather
-// than failing the listing (or, worse, reading as "no progress").
+// row, narrowed to what the viewer may see (TrashProgressInfo.ForViewer).
+// A failure to read the state marks every row progress_unknown rather than
+// failing the listing (or, worse, reading as "no progress").
 func (h *Handler) withTrashProgress(c *gin.Context, books []database.Book) []trashListItem {
+	viewerID, seeAll := trashProgressViewer(c)
 	ids := make([]string, len(books))
 	for i := range books {
 		ids[i] = books[i].ID
@@ -858,7 +872,7 @@ func (h *Handler) withTrashProgress(c *gin.Context, books []database.Book) []tra
 		if !ok {
 			p = audiobookspkg.TrashProgressInfo{Unknown: true}
 		}
-		items[i] = trashListItem{Book: books[i], TrashProgressInfo: p}
+		items[i] = trashListItem{Book: books[i], TrashProgressInfo: p.ForViewer(viewerID, seeAll)}
 	}
 	return items
 }
@@ -877,7 +891,8 @@ func (h *Handler) DiscardProgressAndPurge(c *gin.Context) {
 	res, err := h.audiobookService.DiscardProgressAndPurge(c.Request.Context(), id, actor)
 	switch {
 	case err == nil:
-		httputil.RespondWithOK(c, res)
+		viewerID, seeAll := trashProgressViewer(c)
+		httputil.RespondWithOK(c, res.ForViewer(viewerID, seeAll))
 	case errors.Is(err, audiobookspkg.ErrAudiobookNotFound):
 		httputil.RespondWithNotFound(c, "audiobook", id)
 	case errors.Is(err, audiobookspkg.ErrNotInTrash), errors.Is(err, database.ErrBookOwnsFiles),

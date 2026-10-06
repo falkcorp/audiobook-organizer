@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_mutation.go
-// version: 1.27.1
+// version: 1.28.0
 // guid: e7b1f6a5-b8c9-0d12-ce3f-4a5b6c7d8e9f
-// last-edited: 2026-10-04
+// last-edited: 2026-10-05
 
 package audiobooks
 
@@ -23,6 +23,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
 
@@ -1422,8 +1423,15 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 		}, nil
 	}
 
-	// Hard delete path
+	// Hard delete path.
 	//
+	// A book in the trash goes through the nightly purge's own path
+	// (purgeNow): the trash page's "Purge now" must behave like the nightly
+	// purge (owner decision 2026-10-05).
+	if database.IsInTrash(book) {
+		return svc.purgeNow(book)
+	}
+
 	// Refuse a book that still owns book_file rows BEFORE any side effect
 	// (hash block, iTunes removes). DeleteBook never deletes those rows, so a
 	// hard delete would orphan every one of them; it refuses too
@@ -1436,29 +1444,39 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 			id, database.ErrBookOwnsFiles, len(owned))
 	}
 
-	// Optionally block the hash before deleting
+	// A live book users have listening state on is deleted only after that
+	// state is carried to another version Audiobookshelf lists, or refused
+	// (merge.HardDeleteKeepingUserState). The hash block and the iTunes
+	// removes run inside the delete, so a refusal leaves neither behind.
+	merger, ok := database.AsCapability[merge.UserProgressMerger](svc.store)
+	if !ok {
+		return nil, fmt.Errorf("hard delete %s: the store cannot check or carry users' listening state, so the delete is refused", id)
+	}
 	blocked := false
-	if opts.BlockHash && book.FileHash != nil && *book.FileHash != "" {
-		if err := svc.store.AddBlockedHash(*book.FileHash, "User deleted - prevent reimport"); err != nil {
-			slog.Warn("failed to block hash before delete", "err", err)
-			// Continue with delete even if blocking fails
-		} else {
-			blocked = true
-		}
-	}
-
-	// Capture iTunes PIDs BEFORE the DB row vanishes so we can
-	// enqueue iTunes removes after the hard delete succeeds.
 	var itunesPIDs []string
-	if svc.itunesEnqueuer != nil {
-		itunesPIDs = svc.collectITunesPIDsForBook(id, book)
+	del := func() error {
+		// Optionally block the hash right before deleting.
+		if opts.BlockHash && book.FileHash != nil && *book.FileHash != "" {
+			if err := svc.store.AddBlockedHash(*book.FileHash, "User deleted - prevent reimport"); err != nil {
+				slog.Warn("failed to block hash before delete", "err", err)
+				// Continue with delete even if blocking fails
+			} else {
+				blocked = true
+			}
+		}
+		// The PIDs no other book holds, captured while the row exists.
+		itunesPIDs = svc.itunesPIDsToRemove(book)
+		return svc.store.DeleteBook(id)
 	}
-
-	if err := svc.store.DeleteBook(id); err != nil {
+	carriedTo, err := merge.HardDeleteKeepingUserState(merger, svc.store, book, del)
+	if err != nil {
 		if err.Error() == "book not found" {
 			return nil, fmt.Errorf("audiobook not found")
 		}
-		return nil, err
+		if errors.Is(err, merge.ErrBookHasListeningState) {
+			return nil, fmt.Errorf("hard delete %s: %w. Soft-delete it first (its version group's primary flag then passes on), then purge it from the trash: the purge moves the progress to the copy Audiobookshelf lists, or offers Discard progress and purge", id, ErrBookHasProgress)
+		}
+		return nil, fmt.Errorf("hard delete %s: %w", id, err)
 	}
 	// A hard-deleted primary hands its group's flag on too; book is the row
 	// read before the delete, so it still names the group.
@@ -1471,10 +1489,14 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 	}
 
 	svc.InvalidateBookCaches()
-	return map[string]any{
+	res := map[string]any{
 		"message": "audiobook deleted",
 		"blocked": blocked,
-	}, nil
+	}
+	if carriedTo != "" {
+		res["progress_moved_to"] = carriedTo
+	}
+	return res, nil
 }
 
 // collectITunesPIDsForBook returns every PID stored on the book's

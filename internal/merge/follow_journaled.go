@@ -1,5 +1,5 @@
 // file: internal/merge/follow_journaled.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 6a7e0c1a-cb17-41e5-bf0f-dd8903735f64
 // last-edited: 2026-10-05
 
@@ -11,6 +11,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/syncapi/progress"
 )
 
 // ErrNoSyncFollower is returned by FollowAbsorbedJournaled when the store
@@ -212,11 +213,14 @@ type UserStateReader interface {
 }
 
 // BookHasCarryableUserState reports whether any user still has listening
-// state on bookID that a merge follow would carry: a stored position, or a
+// state on bookID that a merge follow would carry: a stored position, a
 // book state with a status, progress, listened time, segment or hide flag
-// (hasCarryableState). Unlike BookHasUserProgress it does not count the
-// drained row a completed follow leaves on a merge loser, so a loser whose
-// state moved reads false. An error means the answer is unknown.
+// (hasCarryableState), or a bookmark no live book has yet (owedBookmarks:
+// a bookmark under bookID's own sync id that the book its id redirects to
+// does not hold at that time). Unlike BookHasUserProgress it does not count
+// the drained row a completed follow leaves on a merge loser, nor the
+// bookmarks a follow already copied to the survivor, so a loser whose state
+// moved reads false. An error means the answer is unknown.
 //
 // The automatic hard deletes refuse a book this reports true for, because
 // deleting it would drop state that never reached a live book (a follow that
@@ -226,13 +230,17 @@ type UserStateReader interface {
 // iTunes clone rollback carries the clone's state to its source first and
 // uses this to confirm the move finished.
 //
-// A deliberate hard delete a user asks for is NOT guarded, on purpose: the
-// single-book delete (audiobooks service_mutation.go DeleteAudiobook), the
-// batch hard delete (batch/service.go) and the diagnostics CLI's confirmed
-// delete of invalid records (cmd/diagnostics.go). Those remove the book and
-// its state together because that is what the user asked for. The rollbacks
-// that delete a row a request just created (organizer, the versions
-// handlers) are not guarded either.
+// The hard deletes a user asks for through the UI or API are guarded the
+// same way (owner decision 2026-10-05): the single-book delete / "Purge
+// now" (audiobooks DeleteAudiobook) and the batch hard delete
+// (batch/service.go) carry the state to a version Audiobookshelf lists and
+// then delete, or refuse (HardDeleteKeepingUserState); the owner drops
+// state on purpose only through "Discard progress and purge"
+// (DiscardUserStateThenHardDelete). NOT guarded: the diagnostics CLI's
+// confirmed delete of invalid records (cmd/diagnostics.go, an operator's
+// repair of rows too broken to list), and the rollbacks that delete a row a
+// request just created (organizer, the versions handlers), which no user
+// can have listened to.
 func BookHasCarryableUserState(db UserStateReader, bookID string) (bool, error) {
 	probe, err := NewUserStateProbe(db)
 	if err != nil {
@@ -285,6 +293,72 @@ func (p *UserStateProbe) Has(bookID string) (bool, error) {
 		}
 		if hasCarryableState(st, pos) {
 			return true, nil
+		}
+	}
+	return p.owedBookmarks(bookID)
+}
+
+// owedBookmarks reports whether any of the probe's users has a bookmark
+// under bookID's own ABS sync id that no live book holds yet. Bookmarks are
+// copied, never moved, by a merge or a carry (bookmark_copy.go): the book
+// keeps its own rows and its sync id redirects to the survivor's. So:
+//
+//   - own sync id not redirected (resolves to itself): every bookmark on it
+//     is the only copy, and counts;
+//   - redirected: a bookmark counts only when the id it resolves to lacks a
+//     bookmark at that time (progress.CanonicalTimeKey) -- the copy did not
+//     happen or did not finish.
+//
+// A store with no bookmark or sync-identity keyspace, or a book never given
+// a sync id, has none. Any read error is returned (fail closed: the caller
+// is deciding whether a hard delete is safe).
+func (p *UserStateProbe) owedBookmarks(bookID string) (bool, error) {
+	bs := database.AsBookmarkStore(p.db)
+	ids := database.AsSyncIdentityStore(p.db)
+	if bs == nil || ids == nil {
+		return false, nil
+	}
+	own, found, err := ids.GetSyncIDForBook(bookID)
+	if err != nil {
+		return false, fmt.Errorf("read sync id of %s: %w", bookID, err)
+	}
+	if !found || own == "" {
+		return false, nil
+	}
+	canonical := own
+	item, err := ids.ResolveSyncItem(own)
+	if err != nil {
+		return false, fmt.Errorf("resolve sync id %s of %s: %w", own, bookID, err)
+	}
+	if item != nil && item.SyncID != "" {
+		canonical = item.SyncID
+	}
+	for _, u := range p.users {
+		if u.ID == "" {
+			continue
+		}
+		marks, err := bs.ListBookmarks(u.ID, own)
+		if err != nil {
+			return false, fmt.Errorf("read bookmarks user=%s book=%s: %w", u.ID, bookID, err)
+		}
+		if len(marks) == 0 {
+			continue
+		}
+		if canonical == own {
+			return true, nil
+		}
+		have, err := bs.ListBookmarks(u.ID, canonical)
+		if err != nil {
+			return false, fmt.Errorf("read bookmarks user=%s on %s: %w", u.ID, canonical, err)
+		}
+		present := make(map[string]bool, len(have))
+		for i := range have {
+			present[progress.CanonicalTimeKey(have[i].TimeSec)] = true
+		}
+		for i := range marks {
+			if !present[progress.CanonicalTimeKey(marks[i].TimeSec)] {
+				return true, nil
+			}
 		}
 	}
 	return false, nil
