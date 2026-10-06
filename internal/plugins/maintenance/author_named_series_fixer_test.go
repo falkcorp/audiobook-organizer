@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_named_series_fixer_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: aa736089-b4ed-43cf-b00e-426629a38cb7
 // last-edited: 2026-10-06
 
@@ -320,4 +320,25 @@ func TestAuthorNamedSeriesFixer_EnqueueFailureIsRecorded(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, out.Applied)
 	assert.Contains(t, out.FollowUpError, "queue down")
+}
+
+// Applying two books of one series in one run applies both: unlinking one
+// book does not move its sibling's fingerprint. One worker, so the second
+// row is always re-planned after the first is written (with more workers
+// both may re-plan first and hide a sibling-dependent fingerprint).
+func TestAuthorNamedSeriesFixer_SiblingsApplyTogether(t *testing.T) {
+	l := newANSLibrary(t)
+	deps := &ansEnqueueDeps{fakeDeps: fakeDeps{store: l.st}}
+	f := newAuthorNamedSeriesFixer(&Plugin{deps: deps})
+	res, err := repairs.RunPlan(context.Background(), f, nil, repairs.PlanDeps{Guard: l.st}, &fakeReporter{})
+	require.NoError(t, err)
+	w := repairs.NewWriter(l.st, l.st, f.ID(), "bulk_update", "repairs-").WithJournal(l.st, l.st, "op-sib")
+	out, err := repairs.RunApply(context.Background(), f, res, "plan-1", []string{l.elantris, l.warbreaker}, false,
+		repairs.ApplyDeps{Guard: l.st, Writer: w, OpID: "op-sib", Concurrency: 1}, &fakeReporter{})
+	require.NoError(t, err)
+	assert.Equal(t, 2, out.Applied, "%v", out.ByOutcome)
+	require.Len(t, deps.params, 1, "one fetch for the whole run")
+	p, ok := deps.params[0].(metabatch.FetchOpParams)
+	require.True(t, ok)
+	assert.ElementsMatch(t, []string{l.elantris, l.warbreaker}, p.BookIDs)
 }
