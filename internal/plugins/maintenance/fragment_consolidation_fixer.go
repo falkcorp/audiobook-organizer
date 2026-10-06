@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.31.0
+// version: 1.32.0
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
 // last-edited: 2026-10-05
 
@@ -77,6 +77,14 @@
 //     difference) are held whatever the titles say (skipped_retagged_copies).
 //     A moved or copy row whose fragments are a same-titled co-owner (see
 //     holdCoOwned) becomes such a row too, joining the co-owner.
+//   - folder-chapter-set (2026-10-05, owner decision 19:30): lone chapters
+//     of one folder that share a name once their numbers are set aside
+//     ("Turn Coat - 27 1", "Metro 2034 - 03 Chapter 3"), numbered with no
+//     gap, an hour or more in total, with no parent book, version or copy of
+//     their audio in the library. Applied as a no-parent row (one book, the
+//     members' rows moved onto it in number order). itunes-chapter-set is
+//     the same set under the iTunes library: listed, never applicable. See
+//     fragment_folder_sets.go.
 //   - unplaced (2026-10-05): a fragment no group took (fewer than three
 //     same-key siblings, a numbered file left over in a folder of works side
 //     by side, no chapter key). Listed with the reason, never applied; these
@@ -322,7 +330,8 @@ func (f *fragmentFixer) Description() string {
 		"Copy: the parent still has the file — retire the proven duplicate. No parent: 3+ short same-key chapters " +
 		"from one folder — move every chapter onto one organized primary book in track order. Existing book: the " +
 		"chapters' work is already a live book of the same title — retire them into it when the durations agree, " +
-		"never assemble a second copy. Listening progress " +
+		"never assemble a second copy. Folder chapter set: numbered files of one name in one folder, no gaps, an " +
+		"hour or more, no parent or copy in the library — one book, in number order. Listening progress " +
 		"and external ids follow each retired fragment. iTunes (including fragments with an iTunes id) and " +
 		"Doctor Who / Big Finish / Torchwood are listed for manual action only. Every step is undoable from the " +
 		"apply operation."
@@ -855,6 +864,9 @@ func (f *fragmentFixer) loadLibrary(store OpsStore) (*fragLibrary, error) {
 		fb := fragBookFrom(b.ID, b.Title, b.FilePath, b.AuthorID, b.SeriesID, b.IsSoftDeleted(),
 			b.LibraryState, b.IsPrimaryVersion, b.ITunesPersistentID, b.MergedIntoBookID)
 		fb.ASIN = dcStr(b.ASIN)
+		// The folder chapter sets' version-group test reads it at plan time
+		// (a re-plan reads it through fragBookOf).
+		fb.VersionGroup = dcStr(b.VersionGroupID)
 		lib.books[b.ID] = fb
 	}
 	cores, err := store.GetAllBookFilesCore()
@@ -3026,6 +3038,10 @@ type fragGroupPlan struct {
 	Dir, Key   string
 	SurvivorID string
 	Title      string // "" keeps the survivor's title
+	// AltTitles are further names of the work the existing-book check
+	// reads (a folder chapter set's title before its author segment was
+	// dropped). Not written anywhere.
+	AltTitles []string
 	// Folder is the one folder every member's file sits in now, whose audio
 	// files are exactly the group's, which becomes the survivor's book path
 	// (a multi-file book's path is its folder). "" leaves the path alone.
@@ -3726,7 +3742,7 @@ func (f *fragmentFixer) noParentRows(lib *fragLibrary, cands []*fragCandidate) [
 			}
 			continue
 		}
-		row := f.noParentRow(lib, set.dir, fragNumberedKey, set.members)
+		row := f.noParentRow(lib, set.dir, fragNumberedKey, set.members, nil)
 		if row.Class != fragClassManual {
 			switch {
 			case set.problem != "":
@@ -3781,7 +3797,7 @@ func (f *fragmentFixer) noParentRows(lib *fragLibrary, cands []*fragCandidate) [
 		for _, c := range cs {
 			placed[c] = true
 		}
-		row := f.noParentRow(lib, dir, key, cs)
+		row := f.noParentRow(lib, dir, key, cs, nil)
 		in := map[*fragCandidate]bool{}
 		for _, c := range cs {
 			in[c] = true
@@ -3798,11 +3814,27 @@ func (f *fragmentFixer) noParentRows(lib *fragLibrary, cands []*fragCandidate) [
 		}
 		rows = append(rows, row)
 	}
+	// Folder chapter sets: the lone chapters of one folder that share a
+	// name once their numbers are set aside (fragment_folder_sets.go).
+	var lone []*fragCandidate
+	for _, c := range cands {
+		if d, ok := drops[c]; ok && !placed[c] && d.kind == fragSkipLoneChapter {
+			lone = append(lone, c)
+		}
+	}
+	setRows, sets := f.folderSetRows(lib, lone)
+	for _, r := range setRows {
+		for _, c := range sets[r.RowID].members {
+			placed[c] = true
+		}
+	}
+	rows = append(rows, setRows...)
 	live := newFragLive(lib)
 	for i := range rows {
 		f.existingBookCheck(lib, live, &rows[i])
 	}
 	holdSameAudioRows(rows)
+	f.classifyFolderSets(lib, live, rows, sets, cands)
 	for _, c := range cands {
 		if placed[c] {
 			continue
@@ -4208,13 +4240,16 @@ func fragGroupTitleKeys(plan *fragGroupPlan) []fragTitleID {
 		}
 	}
 	add(plan.Title)
+	for _, t := range plan.AltTitles {
+		add(t)
+	}
 	if t, ok := metadata.WorkFolderTitle(plan.Dir); ok {
 		add(t)
 	}
 	if base := strings.TrimSpace(filepath.Base(filepath.Clean(plan.Dir))); !metadata.IsGenericDirName(base) {
 		add(base)
 	}
-	if plan.Key != fragNumberedKey {
+	if plan.Key != fragNumberedKey && !strings.HasPrefix(plan.Key, fragFolderSetKeyPrefix) {
 		add(plan.Key)
 		for _, m := range plan.Members {
 			if k, kind := metadata.ChapterGroupKey(m.Frag.Book.Title); kind != metadata.ChapterKeyNone {
@@ -4879,7 +4914,10 @@ func (f *fragmentFixer) exactFolder(dir string, paths []string) bool {
 	return n == len(want)
 }
 
-func (f *fragmentFixer) noParentRow(lib *fragLibrary, dir, key string, cs []*fragCandidate) repairs.Row {
+// noParentRow builds one no-parent row. set is non-nil for a folder chapter
+// set (fragment_folder_sets.go): its positions order the members and its
+// title, when it has one, is the work's title.
+func (f *fragmentFixer) noParentRow(lib *fragLibrary, dir, key string, cs []*fragCandidate, set *fragFolderSet) repairs.Row {
 	type placed struct {
 		c   *fragCandidate
 		pos metadata.ChapterPos
@@ -4888,6 +4926,9 @@ func (f *fragmentFixer) noParentRow(lib *fragLibrary, dir, key string, cs []*fra
 	ps := make([]placed, len(cs))
 	for i, c := range cs {
 		pos, ok := chapterPos(c)
+		if set != nil {
+			pos, ok = set.pos[c.Book.ID]
+		}
 		ps[i] = placed{c, pos, ok}
 	}
 	sort.SliceStable(ps, func(i, j int) bool {
@@ -5018,8 +5059,18 @@ func (f *fragmentFixer) noParentRow(lib *fragLibrary, dir, key string, cs []*fra
 	// Title and Folder are decided from the group alone, never from whether
 	// the survivor already has them: a run cut off after the retitle must
 	// re-plan to the same fingerprint (the write is then a no-op).
-	if t, _, ok := metadata.ChapterTitleFromDirectory(filepath.Join(dir, "x"), ""); ok {
-		plan.Title = t
+	switch {
+	case set != nil && set.title != "":
+		plan.Title = set.title
+	case set != nil && set.noFolderTitle:
+		// The folder is named for the author: no title, and the row is held.
+	default:
+		if t, _, ok := metadata.ChapterTitleFromDirectory(filepath.Join(dir, "x"), ""); ok {
+			plan.Title = t
+		}
+	}
+	if set != nil {
+		plan.AltTitles = append([]string(nil), set.altTitles...)
 	}
 	var paths []string
 	for _, m := range plan.Members {
@@ -5116,6 +5167,10 @@ func (f *fragmentFixer) noParentRow(lib *fragLibrary, dir, key string, cs []*fra
 		first, last := plan.Members[0].Frag, plan.Members[len(plan.Members)-1].Frag
 		shared = fmt.Sprintf("%d fragment books imported from %s are numbered chapters with titles of their own (%q … %q): %d different chapter keys, the commonest %q on %d file(s)",
 			len(cs), dir, first.origStem(), last.origStem(), len(keyN), bigKey, keyN[bigKey])
+	}
+	if set != nil {
+		shared = fmt.Sprintf("%d fragment books imported from %s are numbered files of one name once the numbers are set aside (%q … %q)",
+			len(cs), dir, plan.Members[0].Frag.origStem(), plan.Members[len(plan.Members)-1].Frag.origStem())
 	}
 	r.Evidence = []string{
 		shared,
