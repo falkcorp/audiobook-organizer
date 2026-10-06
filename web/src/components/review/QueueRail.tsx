@@ -1,5 +1,5 @@
 // file: web/src/components/review/QueueRail.tsx
-// version: 1.14.0
+// version: 1.15.0
 // guid: 4f8c2b96-7a15-4e30-9d82-6b0e5a3c1f74
 // last-edited: 2026-10-06
 //
@@ -147,6 +147,8 @@ export interface QueueRailProps {
      * number nobody can act on.
      */
     resolved_no_candidates?: number;
+    /** Rows whose last fallback lookup was deferred. */
+    deferred?: number;
   };
   sourceCounts: Record<string, number>;
   filters: MetadataFilters;
@@ -302,6 +304,7 @@ const CHIP_LABELS: Record<ChipFilter, string> = {
   no_candidates: 'no-candidate',
   resolved_no_candidates: 'resolved, no-candidate',
   stale: 'stale',
+  deferred: 'deferred',
 };
 
 export function QueueRail({
@@ -426,6 +429,22 @@ export function QueueRail({
                   <RefreshIcon fontSize="small" />
                 </IconButton>
               </Box>
+            </Tooltip>
+          )}
+          {Boolean(summary.deferred) && (
+            <Tooltip
+              title={
+                `${(summary.deferred ?? 0).toLocaleString()} books the providers had no usable match for, ` +
+                'whose next fallback lookup (Google Books) was put off: the daily lookup budget was spent ' +
+                'or the provider was held. The scheduled fetch asks again on a later day. Click to see them.'
+              }
+            >
+              <Chip
+                size="small"
+                color="info"
+                label={`${(summary.deferred ?? 0).toLocaleString()} deferred`}
+                {...chipProps('deferred', summary.deferred ?? 0)}
+              />
             </Tooltip>
           )}
           {summary.errors > 0 && (
@@ -745,7 +764,12 @@ export function QueueRail({
                       {r.candidate.title}
                     </Typography>
                   ) : isUnreviewableRow(r) ? (
-                    <Typography variant="caption" color="text.secondary" noWrap sx={{ display: 'block' }}>
+                    <Typography
+                      variant="caption"
+                      color="text.secondary"
+                      noWrap
+                      sx={{ display: 'block' }}
+                    >
                       {r.status === 'decode_error' ? 'candidate will not decode' : 'no candidate'}
                       {r.book.author ? ` \u00b7 ${r.book.author}` : ''}
                     </Typography>

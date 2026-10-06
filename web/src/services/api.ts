@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.158.0
+// version: 2.159.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-06
 
@@ -4545,7 +4545,17 @@ export interface CandidateResult {
    * tell the reviewed record from any other. Absent on non-cache paths.
    */
   candidate_hash?: string;
-  status: 'matched' | 'no_match' | 'error' | 'rejected' | 'applied' | UnreviewableStatus;
+  status:
+    | 'matched'
+    | 'no_match'
+    | 'error'
+    | 'rejected'
+    | 'applied'
+    /** A candidate fetch did not search the book (marked no match, no usable title). */
+    | 'skipped'
+    /** The book's fallback lookup was put off (budget spent, provider held); a later run asks again. */
+    | 'deferred'
+    | UnreviewableStatus;
   /**
    * The book's raw metadata_review_status ('' or absent when nobody has ruled
    * on it). Served on the unreviewable bucket, where `status` names the bucket.
@@ -4568,6 +4578,13 @@ export interface CandidateResult {
    * Not the negation of is_fresh. Absent when the row has no age.
    */
   stale?: boolean;
+  /**
+   * Set (cache review list) when a fallback provider's last lookup for the
+   * book -- Open Library or Google Books, asked when the chain had no usable
+   * candidate -- was deferred: Google's daily budget spent, a throttle hold,
+   * or a passing failure. The book waits for a later run.
+   */
+  fallback_deferred?: boolean;
 }
 
 export interface BatchFetchResponse {
@@ -4582,6 +4599,12 @@ export interface BatchFetchResponse {
   total_matched?: number;
   total_no_match?: number;
   total_errors?: number;
+  /** Results on this page whose fallback lookup was deferred. */
+  deferred?: number;
+  /** Results on this page the fetch did not search. */
+  skipped?: number;
+  total_deferred?: number;
+  total_skipped?: number;
 }
 
 export interface BatchFetchRequest {
@@ -4680,6 +4703,8 @@ export interface MetadataFetchSummary {
   matched_count: number;
   no_match_count: number;
   error_count: number;
+  deferred_count?: number;
+  skipped_count?: number;
 }
 
 // getRecentMetadataFetches returns up to the last 10 completed
@@ -4822,6 +4847,11 @@ export async function getCachedReviewResults(
    * month-old metadata should be told how much of it is old.
    */
   stale?: number;
+  /**
+   * Rows whose last fallback lookup was deferred (each row carries
+   * `fallback_deferred`), counted over every non-orphaned row like `stale`.
+   */
+  deferred?: number;
   /**
    * The same total, split by what actually caused each row to drop out. The
    * causes need opposite remedies -- an orphaned row can only be reaped, a
@@ -5044,10 +5074,14 @@ export async function clearMetadataNoMatch(bookId: string): Promise<void> {
 // MetadataResultItem is one row in the unified metadata-results listing.
 // `result_json` is a JSON-encoded CandidateResult and is only populated
 // for statuses that have a stored fetch result (matched / no_match /
-// applied / rejected / error). `unfetched` rows have status only.
+// applied / rejected / error / deferred / skipped). `unfetched` rows have
+// status only.
+export type MetadataResultStatus =
+  'matched' | 'no_match' | 'applied' | 'rejected' | 'error' | 'deferred' | 'skipped' | 'unfetched';
+
 export interface MetadataResultItem {
   book_id: string;
-  status: 'matched' | 'no_match' | 'applied' | 'rejected' | 'error' | 'unfetched';
+  status: MetadataResultStatus;
   result_json?: string;
   operation_id?: string;
   fetched_at?: string;
@@ -5072,7 +5106,7 @@ export interface MetadataResultsResponse {
 // books that have never been queried.
 export async function getMetadataResults(
   opts: {
-    status?: ('matched' | 'no_match' | 'applied' | 'rejected' | 'error' | 'unfetched')[];
+    status?: MetadataResultStatus[];
     limit?: number;
     offset?: number;
     includeUnfetched?: boolean;

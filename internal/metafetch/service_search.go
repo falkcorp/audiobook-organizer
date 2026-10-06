@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_search.go
-// version: 1.38.0
+// version: 1.39.0
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
 // last-edited: 2026-10-06
 
@@ -1116,6 +1116,9 @@ func (mfs *Service) searchMetadataForBook(
 	// another.
 	if opts.BypassProviderThrottle {
 		ctx = metadata.WithThrottleBypass(ctx)
+		// A person is waiting: the daily quota budgets count this search's
+		// lookups as interactive (SearchOptions.BypassProviderThrottle).
+		ctx = metadata.WithInteractiveQuota(ctx)
 	}
 
 	book, err := mfs.db.GetBookByID(id)
@@ -1228,7 +1231,15 @@ func (mfs *Service) searchMetadataForBook(
 	}, sources, variants)
 	// One Audnexus lookup per book: the own-ASIN fallback below, when it may
 	// run, is reserved first; otherwise one runtime fill.
-	needOwnASIN := asinToLookup != "" && !poolHasASINWithRuntime(states, asinToLookup)
+	//
+	// A search restricted to named sources (OnlySources: the batch fetch's
+	// partial re-ask, the provider fallback asking only Open Library or
+	// Google Books) looks the ASIN up only when Audible or Audnexus is among
+	// them: the lookup asks THOSE providers, so a fallback search must not
+	// spend their requests -- nor report an Audnexus answer as the fallback
+	// provider's.
+	needOwnASIN := asinToLookup != "" && !poolHasASINWithRuntime(states, asinToLookup) &&
+		asinLookupAllowed(opts, sources)
 	if !needOwnASIN {
 		mfs.enrichRuntimeByASIN(ctx, limiter, states, bookDurationSec)
 	}
@@ -1239,6 +1250,7 @@ func (mfs *Service) searchMetadataForBook(
 		baseScores []float64
 		baseTier   string
 		failedErr  string
+		err        error
 		answered   bool
 	}
 	fetched := make([]sourceFetch, len(states))
@@ -1266,7 +1278,11 @@ func (mfs *Service) searchMetadataForBook(
 				}
 			}
 		}
-		fetched[i] = sourceFetch{name: st.name, results: st.results, failedErr: failedErr, answered: st.answered(ctx)}
+		var srcErr error
+		if failedErr != "" {
+			srcErr = lastErr
+		}
+		fetched[i] = sourceFetch{name: st.name, results: st.results, failedErr: failedErr, err: srcErr, answered: st.answered(ctx)}
 		sg.Go(func() error {
 			fetched[i].baseScores, fetched[i].baseTier = mfs.ScoreBaseCandidates(ctx, book, fetched[i].results, searchWords)
 			return nil
@@ -1282,6 +1298,7 @@ func (mfs *Service) searchMetadataForBook(
 	var candidates []MetadataCandidate
 	var sourcesTried, sourcesAnswered, sourcesAsked []string
 	sourcesFailed := map[string]string{}
+	sourceErrs := map[string]error{}
 
 	// Merge in SOURCE ORDER: `sources` is priority-ordered and the dedupe is
 	// first-wins, so a parallel merge would make the winner of a duplicate
@@ -1292,6 +1309,7 @@ func (mfs *Service) searchMetadataForBook(
 		sourcesTried = append(sourcesTried, sf.name)
 		if sf.failedErr != "" {
 			sourcesFailed[sf.name] = sf.failedErr
+			sourceErrs[sf.name] = sf.err
 		}
 		if sf.answered {
 			sourcesAnswered = append(sourcesAnswered, sf.name)
@@ -1430,7 +1448,7 @@ func (mfs *Service) searchMetadataForBook(
 	// unanswered, so a search whose identity question failed is never
 	// recorded as that provider's fresh "nothing" (noSourceAnswered,
 	// cacheSearchResponse).
-	lookupFailed := map[string]string{}
+	lookupFailed := map[string]error{}
 	providerName := func(id, fallback string) string {
 		for _, st := range states {
 			if metadata.ProviderIDOf(st.src) == id {
@@ -1442,14 +1460,14 @@ func (mfs *Service) searchMetadataForBook(
 	if needOwnASIN {
 		result, err := mfs.lookupASIN(ctx, limiter, metadata.SourceIDAudible, asinToLookup)
 		if err != nil {
-			lookupFailed[providerName(metadata.SourceIDAudible, "Audible")] = err.Error()
+			lookupFailed[providerName(metadata.SourceIDAudible, "Audible")] = err
 		}
 		if err != nil || result == nil {
 			searchFanoutLog.Debug("search ASIN lookup on Audible failed, trying Audnexus: asin=%s err=%v",
 				logger.SanitizeLogValue(asinToLookup), err)
 			result, err = mfs.lookupASIN(ctx, limiter, metadata.SourceIDAudnexus, asinToLookup)
 			if err != nil {
-				lookupFailed[providerName(metadata.SourceIDAudnexus, "Audnexus (Audible)")] = err.Error()
+				lookupFailed[providerName(metadata.SourceIDAudnexus, "Audnexus (Audible)")] = err
 			} else {
 				delete(lookupFailed, providerName(metadata.SourceIDAudible, "Audible"))
 			}
@@ -1501,7 +1519,8 @@ func (mfs *Service) searchMetadataForBook(
 		sourcesAnswered = kept
 		for n, e := range lookupFailed {
 			if _, had := sourcesFailed[n]; !had {
-				sourcesFailed[n] = "ASIN lookup: " + e
+				sourcesFailed[n] = "ASIN lookup: " + e.Error()
+				sourceErrs[n] = fmt.Errorf("ASIN lookup: %w", e)
 			}
 			if !slices.Contains(sourcesAsked, n) {
 				sourcesAsked = append(sourcesAsked, n)
@@ -1598,7 +1617,26 @@ func (mfs *Service) searchMetadataForBook(
 		LegacyFingerprint: in.legacyFingerprint(book.Title),
 		BookASIN:          trimmedASIN(book),
 		carryFilter:       strong.filterCarried,
+		sourceErrs:        sourceErrs,
+		mergeCached:       opts.MergeWithCached,
 	}, nil
+}
+
+// asinLookupAllowed reports whether a search may look the book's ASIN up on
+// Audible/Audnexus: always for an unrestricted search, and for one
+// restricted to named sources (SearchOptions.OnlySources) only when Audible
+// or Audnexus is among sources (the restricted set).
+func asinLookupAllowed(opts SearchOptions, sources []metadata.MetadataSource) bool {
+	if len(opts.OnlySources) == 0 {
+		return true
+	}
+	for _, src := range sources {
+		switch metadata.ProviderIDOf(src) {
+		case metadata.SourceIDAudible, metadata.SourceIDAudnexus:
+			return true
+		}
+	}
+	return false
 }
 
 // filterCoverlessCandidates drops candidates with no CoverURL, except:

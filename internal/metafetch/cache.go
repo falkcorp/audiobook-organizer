@@ -1,5 +1,5 @@
 // file: internal/metafetch/cache.go
-// version: 1.27.0
+// version: 1.28.0
 // guid: a4f33a2e-3b4d-4306-bdce-476758e39120
 // last-edited: 2026-10-06
 //
@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -474,11 +475,30 @@ func noSourceAnswered(resp *SearchMetadataResponse) error {
 	}
 	slices.Sort(names)
 	parts := make([]string, 0, len(names))
+	errs := make([]error, 0, len(names)+1)
 	for _, name := range names {
 		parts = append(parts, name+": "+resp.SourcesFailed[name])
+		if e := resp.sourceErrs[name]; e != nil {
+			errs = append(errs, e)
+		}
 	}
-	return fmt.Errorf("%w: %s", ErrNoSourceAnswered, strings.Join(parts, "; "))
+	// The sources' own errors ride along (errors.Join), so a caller can ask
+	// errors.Is / errors.As what refused -- a spent daily budget, a throttle
+	// hold, a 429 -- instead of parsing this message.
+	errs = append([]error{fmt.Errorf("%w: %s", ErrNoSourceAnswered, strings.Join(parts, "; "))}, errs...)
+	return &noAnswerError{msg: errs[0].Error(), errs: errs}
 }
+
+// noAnswerError is ErrNoSourceAnswered carrying the failed sources' errors.
+// Its message is the summary alone (errors.Join would repeat every source's
+// error under it).
+type noAnswerError struct {
+	msg  string
+	errs []error
+}
+
+func (e *noAnswerError) Error() string   { return e.msg }
+func (e *noAnswerError) Unwrap() []error { return e.errs }
 
 // FetchAndCache runs the existing search pipeline, writes top-N to
 // the cache (always replaces), and returns the resulting entry.
@@ -506,17 +526,28 @@ func (mfs *Service) FetchAndCache(ctx context.Context, bookID, query, author, na
 // batch cancel aborts in-flight requests. Cache hits consume no tokens. A nil
 // limiter behaves exactly like FetchAndCache.
 func (mfs *Service) FetchAndCacheLimited(ctx context.Context, limiter *rate.Limiter, bookID, query, author, narrator, series string, opts SearchOptions) (*MetadataCandidateCache, error) {
+	entry, _, err := mfs.FetchAndCacheWithResponse(ctx, limiter, bookID, query, author, narrator, series, opts)
+	return entry, err
+}
+
+// FetchAndCacheWithResponse is FetchAndCacheLimited that also returns the
+// search's response, for a caller that must know which sources failed
+// (SourcesFailed, SourceErrors) even when the search wrote a row: the batch
+// candidate fetch refuses its provider fallback when a title-searching
+// source of the chain failed. When no source answered, the error is
+// returned WITH the response (and no row is written).
+func (mfs *Service) FetchAndCacheWithResponse(ctx context.Context, limiter *rate.Limiter, bookID, query, author, narrator, series string, opts SearchOptions) (*MetadataCandidateCache, *SearchMetadataResponse, error) {
 	if mfs == nil {
-		return nil, fmt.Errorf("FetchAndCacheLimited: nil Service")
+		return nil, nil, fmt.Errorf("FetchAndCacheLimited: nil Service")
 	}
 	resp, err := mfs.searchMetadataForBook(ctx, limiter, bookID, query, author, narrator, series, opts)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := noSourceAnswered(resp); err != nil {
-		return nil, err
+		return nil, resp, err
 	}
-	return mfs.cacheSearchResponse(bookID, query, author, narrator, series, resp), nil
+	return mfs.cacheSearchResponse(bookID, query, author, narrator, series, resp), resp, nil
 }
 
 // cacheSearchResponse writes the top-N candidates from a search response to the
@@ -573,6 +604,32 @@ func (mfs *Service) cacheSearchResponse(bookID, query, author, narrator, series 
 		FetchedForASIN: resp.BookASIN,
 	}
 
+	var prev *MetadataCandidateCache
+	if mfs.db != nil {
+		if p, perr := mfs.db.GetMetadataCache(bookID); perr == nil && p != nil && p.SourceHash == sourceHash {
+			prev = p
+		}
+	}
+	// Same inputs and the same questions: the fallback attempts recorded for
+	// them still stand, whatever this search found (FallbackAttempts).
+	if prev != nil && prev.SearchFingerprint != "" && prev.SearchFingerprint == entry.SearchFingerprint {
+		entry.FallbackAttempts = prev.FallbackAttempts
+	}
+
+	// Merge (SearchOptions.MergeWithCached): an answer with results is added
+	// to the candidates the row already holds for the same inputs, re-ranked
+	// by score, instead of replacing them -- only when those candidates were
+	// fetched for the ASIN the book holds now, so a merge never re-dates
+	// candidates found for a record since taken off the book. The empty
+	// answers recorded for the same questions stay, and the row is dated now.
+	if len(raw) > 0 && resp.mergeCached && prev != nil && len(prev.Candidates) > 0 &&
+		strings.EqualFold(strings.TrimSpace(prev.FetchedForASIN), strings.TrimSpace(resp.BookASIN)) {
+		entry.Candidates = mergeCandidateRows(raw, prev.Candidates)
+		if prev.SearchFingerprint != "" && prev.SearchFingerprint == entry.SearchFingerprint {
+			entry.EmptyAnswers = mergeEmptyAnswers(prev.EmptyAnswers, nil, nowUTC())
+		}
+	}
+
 	// Preserve-on-empty. A search WITH results always replaces, exactly as
 	// before, and leaves LastEmptyFetchAt nil -- the invariant is "the last time
 	// a search for these inputs came back with nothing", so a search that found
@@ -581,8 +638,8 @@ func (mfs *Service) cacheSearchResponse(bookID, query, author, narrator, series 
 		now := nowUTC()
 		entry.LastEmptyFetchAt = &now
 		entry.EmptyAnswers = emptyAnswers(resp, now)
-		if mfs.db != nil {
-			if prev, perr := mfs.db.GetMetadataCache(bookID); perr == nil && prev != nil && prev.SourceHash == sourceHash {
+		{
+			if prev != nil {
 				if len(prev.Candidates) > 0 {
 					carried := prev.Candidates
 					// Candidates an earlier search version cached answered ITS
@@ -639,6 +696,78 @@ func (mfs *Service) cacheSearchResponse(bookID, query, author, narrator, series 
 		}
 	}
 	return entry
+}
+
+// mergeCandidateRows is the union of fresh and cached candidate rows,
+// deduplicated (the same source, title and ASIN keep the fresh row), ranked by
+// score and capped at metadataCacheTopN. A row that does not decode is kept
+// after the ranked ones, as cacheSearchResponse's other paths keep it.
+func mergeCandidateRows(fresh, cached []json.RawMessage) []json.RawMessage {
+	type ranked struct {
+		raw   json.RawMessage
+		score float64
+	}
+	var rows, undecoded []ranked
+	seen := map[string]bool{}
+	for _, list := range [][]json.RawMessage{fresh, cached} {
+		for _, r := range list {
+			var c MetadataCandidate
+			if err := json.Unmarshal(r, &c); err != nil {
+				undecoded = append(undecoded, ranked{raw: r})
+				continue
+			}
+			key := strings.ToLower(c.Source + "|" + c.Title + "|" + strings.TrimSpace(c.ASIN))
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			rows = append(rows, ranked{raw: r, score: c.Score})
+		}
+	}
+	slices.SortStableFunc(rows, func(a, b ranked) int {
+		switch {
+		case a.score > b.score:
+			return -1
+		case a.score < b.score:
+			return 1
+		}
+		return 0
+	})
+	out := make([]json.RawMessage, 0, len(rows)+len(undecoded))
+	for _, r := range append(rows, undecoded...) {
+		if len(out) == metadataCacheTopN {
+			break
+		}
+		out = append(out, r.raw)
+	}
+	return out
+}
+
+// RecordFallbackAttempt records, on bookID's cache row, an attempt of the
+// batch candidate fetch's provider fallback to ask source (a display name)
+// -- see MetadataCandidateCache.FallbackAttempts. Only a row for the same
+// inputs (sourceHash) and questions (fingerprint) is touched; with no such
+// row there is nothing to attach the attempt to (a book with no row is
+// selected as never fetched anyway).
+func (mfs *Service) RecordFallbackAttempt(bookID, sourceHash, fingerprint, source string, at database.FallbackAttempt) error {
+	if mfs == nil || mfs.db == nil {
+		return nil
+	}
+	entry, err := mfs.db.GetMetadataCache(bookID)
+	if err != nil {
+		return fmt.Errorf("read cache row for %s: %w", bookID, err)
+	}
+	if entry == nil || entry.SourceHash != sourceHash || entry.SearchFingerprint != fingerprint {
+		return nil
+	}
+	next := make(map[string]database.FallbackAttempt, len(entry.FallbackAttempts)+1)
+	maps.Copy(next, entry.FallbackAttempts)
+	next[source] = at
+	entry.FallbackAttempts = next
+	if err := mfs.db.PutMetadataCache(entry); err != nil {
+		return fmt.Errorf("write fallback attempt for %s: %w", bookID, err)
+	}
+	return nil
 }
 
 // emptyAnswers records, at now, every source in resp that answered: its

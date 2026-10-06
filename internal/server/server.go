@@ -278,10 +278,6 @@ type Server struct {
 	// metadata.candidate-fetch op's workers and the lost-candidates refetch
 	// claim a book before fetching it (candidate_refetch.go).
 	candidateFetchClaims bookFetchClaims
-	// candidateFallback holds the Google Books fallback's persisted daily
-	// budget, shared by every candidate fetch in the process
-	// (candidate_fallback.go).
-	candidateFallback candidateFallbackState
 
 	hub              *realtime.EventHub
 	writeBackBatcher *itunesservice.WriteBackBatcher

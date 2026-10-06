@@ -10,8 +10,8 @@
   review; nothing is applied. Each result row lists the fallback turns
   (`fallback`: provider, outcome, time).
   - Google Books fallback lookups are capped by a persisted daily budget
-    (`google_books_fallback_daily_limit`, default 800 of the key's
-    1,000/day; negative turns the Google fallback off). The count rolls over
+    (800 of the key's 1,000/day for background lookups; a negative
+    `google_books_fallback_daily_limit` turns the Google fallback off). The count rolls over
     at midnight Pacific and survives restarts (Pebble key
     `provider_daily_budget:google-books`).
   - A spent budget, a provider throttle hold or a failed Google lookup
@@ -22,6 +22,6 @@
     identity is not asked again.
   - Books whose metadata is applied, and owner-manual-only books (Doctor
     Who / Big Finish), spend no fallback quota.
-  - Other search paths (the interactive search dialog, the bulk fetch,
-    `maintenance.isbn-enrichment`) are unchanged, still ask every enabled
-    source, and are not counted against the 800/day budget.
+  - Other search paths (the interactive search dialog, the bulk fetch)
+    still ask every enabled source at once. Their Google Books lookups now
+    share the same daily counter (see the fallback follow-ups entry).

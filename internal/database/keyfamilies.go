@@ -1,7 +1,7 @@
 // file: internal/database/keyfamilies.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 12fbfb04-5d87-4708-8975-48081212acb1
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package database
 
@@ -206,6 +206,7 @@ var keyFamilies = []KeyFamily{
 	{"pref:_system:pipeline_checkpoint:", "organizer per-book phase checkpoints", "internal/organizer/checkpoint.go"},
 	{"pref:_system:rename_path_write_failure:", "rename path-write failure records", "internal/organizer/rename_path_failure.go"},
 	{"preference:", "global preferences", "internal/database/pebble_store_preferences.go"},
+	{"provider_daily_budget:", "metadata provider daily lookup counts (shared Google Books budget)", "internal/metadata/dailyquota/dailyquota.go"},
 	{"provider_throttle:", "metadata provider throttles", "internal/database/provider_throttle.go"},
 	{"quick_query_cache:", "quick query result cache", "internal/database/pebble_quick_queries.go"},
 	{"setting:", "settings", "internal/database/settings.go"},

@@ -1,7 +1,7 @@
 // file: internal/database/iface_metadata.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 4c6267a6-b5ae-4e10-bce6-94b362c33a3f
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 //
 // METADATA-CACHED-MATCHER: storage surface for the per-book
 // metadata-candidate cache. Cache lives under PebbleDB key prefix
@@ -79,6 +79,53 @@ type MetadataCandidateCache struct {
 	// ASIN is REPLACED, such a candidate was found for a book identified by
 	// another record. ASINReplaced is the reader.
 	FetchedForASIN string `json:"fetched_for_asin,omitempty"`
+	// FallbackAttempts records, per fallback provider (by display name, as
+	// EmptyAnswers is keyed), the batch candidate fetch's last attempt to ask
+	// it about these inputs (SearchFingerprint): Open Library and Google
+	// Books are asked only when the rest of the chain found no usable
+	// candidate (server candidate_fallback.go). Kept across writes for the
+	// same fingerprint, dropped when it changes, like EmptyAnswers.
+	//
+	// It exists for two readers. The scheduled selection orders the books
+	// Google Books still owes by the oldest attempt, so a book whose lookup
+	// keeps being deferred does not hold its place at the head of a capped
+	// day while others never get one. And a SETTLED attempt -- the provider
+	// gave an answer that stands (candidates, which are merged into the row,
+	// or a permanent refusal such as a 400) -- stops the fallback asking again
+	// within MetadataKnownEmptyTTL, the way an EmptyAnswers entry does for an
+	// empty answer. A deferral (budget spent, throttle hold, 429/5xx/timeout)
+	// is an attempt but never settles.
+	FallbackAttempts map[string]FallbackAttempt `json:"fallback_attempts,omitempty"`
+}
+
+// FallbackDeferred reports whether a fallback provider's last attempt for
+// this row was DEFERRED (budget spent, throttle hold, a passing failure):
+// the book is waiting on a later run. The review page's "deferred" chip.
+func (c *MetadataCandidateCache) FallbackDeferred() bool {
+	if c == nil {
+		return false
+	}
+	for _, a := range c.FallbackAttempts {
+		if !a.Settled && a.Outcome == FallbackOutcomeDeferred {
+			return true
+		}
+	}
+	return false
+}
+
+// FallbackOutcomeDeferred is FallbackAttempt.Outcome for a deferred attempt
+// (the same string as metabatch.FallbackDeferred).
+const FallbackOutcomeDeferred = "deferred"
+
+// FallbackAttempt is one fallback provider's last attempt for a cache row
+// (MetadataCandidateCache.FallbackAttempts).
+type FallbackAttempt struct {
+	At time.Time `json:"at"`
+	// Settled marks an answer that stands for MetadataKnownEmptyTTL.
+	Settled bool `json:"settled,omitempty"`
+	// Outcome is the fallback step's outcome (matched, no_match, error,
+	// deferred), for an operator reading the row.
+	Outcome string `json:"outcome,omitempty"`
 }
 
 // ASINReplaced reports whether the book's ASIN (bookASIN, its current value)

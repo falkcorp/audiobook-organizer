@@ -1,7 +1,7 @@
 // file: internal/metadata/circuitbreaker.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: e2f3a4b5-c6d7-8901-ef23-456789abcdef
-// last-edited: 2026-10-03
+// last-edited: 2026-10-06
 
 package metadata
 
@@ -206,6 +206,13 @@ func (ps *ProtectedSource) allowThrottle(ctx context.Context) error {
 // throttled) never reaches here and is not a fetch.
 func (ps *ProtectedSource) recordOutcome(startedAt time.Time, err error) {
 	id := ps.ProviderID()
+	if IsDailyBudgetSpent(err) {
+		// A daily-budget refusal sent nothing (dailyquota): it is neither a
+		// failure nor a success of the provider. Counting it as a failure
+		// would open the breaker after five background refusals and lock
+		// out the interactive lookups the budget keeps quota for.
+		return
+	}
 	if err != nil {
 		ps.breaker.RecordFailure()
 		DefaultThrottleRegistry().RecordFailure(id, err)

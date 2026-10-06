@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/lost_candidates_fixer.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0583655e-5bf4-4704-8046-c880bf7522b6
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package maintenance
 
@@ -255,6 +255,12 @@ func lostCandidatesRow(in lostCandidateInput) repairs.Row {
 		return skip(lostSkipHasCandidates, "the book has cached candidates")
 	case !in.known || in.outcome.Status != "matched":
 		return skip(lostSkipNotMatched, "the book's latest metadata search did not match")
+	case in.entry != nil && searchedAfter(in.entry, in.outcome.At) && in.entry.FallbackDeferred():
+		// Not "returned nothing": the chain found nothing, and a fallback
+		// provider (Google Books) was not asked yet -- its daily budget was
+		// spent or it was held -- so the scheduled fetch asks it later.
+		return skip(lostSkipSearchedSince, "the book was searched again after the match; the chain found nothing and a fallback "+
+			"lookup was deferred to a later run (budget spent or provider held)")
 	case in.entry != nil && searchedAfter(in.entry, in.outcome.At):
 		return skip(lostSkipSearchedSince, "the book was searched again after the match and the providers returned nothing")
 	}
@@ -291,6 +297,10 @@ func lostFingerprint(r repairs.Row, extra string) string {
 // candidates.
 var errRefetchFoundNothing = errors.New("refetch found no candidates")
 
+// errRefetchDeferred marks a refetch whose fallback lookup was put off to a
+// later run: the chain found nothing and Google Books was not asked yet.
+var errRefetchDeferred = errors.New("refetch deferred: the chain found nothing and a fallback lookup was put off to a later run")
+
 // Apply refetches the book's candidates. It writes nothing through w: the
 // candidate cache is not book data, and nothing is applied.
 func (f *lostCandidatesFixer) Apply(ctx context.Context, _ *repairs.Writer, fresh repairs.Row) error {
@@ -299,6 +309,11 @@ func (f *lostCandidatesFixer) Apply(ctx context.Context, _ *repairs.Writer, fres
 		return fmt.Errorf("refetch candidates of %s: %w", fresh.RowID, err)
 	}
 	if res.Candidates == 0 {
+		if res.Status == "deferred" {
+			// A deferral is not "found nothing": a fallback provider was not
+			// asked yet (budget spent, a throttle hold, a passing failure).
+			return fmt.Errorf("%w: %s", errRefetchDeferred, res.Detail)
+		}
 		return fmt.Errorf("%w (fetch status %s): %s", errRefetchFoundNothing, res.Status, res.Detail)
 	}
 	return nil

@@ -1,5 +1,5 @@
 // file: internal/server/candidate_fallback_test.go
-// version: 1.0.0
+// version: 2.0.0
 // guid: e354c0f7-eb13-49b7-94fa-e4fe6d9b985a
 // last-edited: 2026-10-06
 
@@ -7,7 +7,6 @@ package server
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"slices"
 	"sync"
@@ -18,6 +17,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/metadata/dailyquota"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
 
@@ -42,7 +42,10 @@ func (l *callLog) order() []string {
 }
 
 // idSource is a fake provider that declares a provider id, so the fallback
-// plan recognises it. No network: every answer is canned.
+// plan recognises it. No network: every answer is canned. A Google Books
+// fake reserves from the process's Google Books budget per request, exactly
+// as the real client's transport does (providerhttp + dailyquota), and
+// counts only the requests the budget let through.
 type idSource struct {
 	id, name string
 	log      *callLog
@@ -55,7 +58,10 @@ type idSource struct {
 
 func (f *idSource) ProviderID() string { return f.id }
 func (f *idSource) Name() string       { return f.name }
-func (f *idSource) search(title string) ([]metadata.BookMetadata, error) {
+func (f *idSource) search(ctx context.Context, title string) ([]metadata.BookMetadata, error) {
+	if err := dailyquota.ReserveFor(ctx, f.id); err != nil {
+		return nil, err
+	}
 	f.calls.Add(1)
 	if f.log != nil {
 		f.log.add(f.name)
@@ -70,18 +76,25 @@ func (f *idSource) search(title string) ([]metadata.BookMetadata, error) {
 	}
 	return f.answer(title), nil
 }
-func (f *idSource) SearchByTitle(_ context.Context, title string) ([]metadata.BookMetadata, error) {
-	return f.search(title)
+func (f *idSource) SearchByTitle(ctx context.Context, title string) ([]metadata.BookMetadata, error) {
+	return f.search(ctx, title)
 }
-func (f *idSource) SearchByTitleAndAuthor(_ context.Context, title, _ string) ([]metadata.BookMetadata, error) {
-	return f.search(title)
+func (f *idSource) SearchByTitleAndAuthor(ctx context.Context, title, _ string) ([]metadata.BookMetadata, error) {
+	return f.search(ctx, title)
 }
 
-// answersTitle answers any query with one record for the given title.
+// answersTitle answers any query with one audiobook record for the given
+// title: an exact title with a narrator, which scores above the apply floor
+// (applygate.MinScore) for a book of that title.
 func answersTitle(title, author string) func(string) []metadata.BookMetadata {
 	return func(string) []metadata.BookMetadata {
-		return []metadata.BookMetadata{{Title: title, Author: author, CoverURL: "https://example.invalid/c.jpg"}}
+		return []metadata.BookMetadata{{Title: title, Author: author, Narrator: "N. Reader", CoverURL: "https://example.invalid/c.jpg"}}
 	}
+}
+
+// answersRecord answers any query with rec.
+func answersRecord(rec metadata.BookMetadata) func(string) []metadata.BookMetadata {
+	return func(string) []metadata.BookMetadata { return []metadata.BookMetadata{rec} }
 }
 
 type fallbackFixture struct {
@@ -92,15 +105,17 @@ type fallbackFixture struct {
 	audible   *idSource
 	openlib   *idSource
 	google    *idSource
-	budget    *metafetch.DailyBudget
+	budget    *dailyquota.DailyBudget
 	clock     time.Time
 	limit     int
 	opCounter int
 }
 
 // newFallbackFixture builds a server with Audible, Open Library and Google
-// Books fakes (in that chain order) and a Google budget of limit lookups per
-// day, persisted in the server's own store.
+// Books fakes (in that chain order) and installs a process Google Books
+// budget whose BACKGROUND share is limit lookups per day (total limit+200),
+// persisted in the server's own store. Not parallel: the budget is
+// process-wide.
 func newFallbackFixture(t *testing.T, limit int) *fallbackFixture {
 	t.Helper()
 	s, cleanup := setupTestServer(t)
@@ -113,9 +128,11 @@ func newFallbackFixture(t *testing.T, limit int) *fallbackFixture {
 	f.mfs = metafetch.NewService(f.store)
 	f.mfs.SetOverrideSources([]metadata.MetadataSource{f.audible, f.openlib, f.google})
 	s.metadataFetchService = f.mfs
-	f.budget = metafetch.NewDailyBudget(f.store, metadata.SourceIDGoogleBooks, func() int { return f.limit })
+	f.budget = dailyquota.New(f.store, metadata.SourceIDGoogleBooks, func() dailyquota.Limits {
+		return dailyquota.Limits{Total: f.limit + 200, Background: f.limit}
+	})
 	f.budget.SetClock(func() time.Time { return f.clock })
-	s.candidateFallback.budget = f.budget
+	t.Cleanup(dailyquota.Install(f.budget))
 	return f
 }
 
@@ -175,7 +192,7 @@ func TestCandidateFallback_AsksOpenLibraryThenGoogleAfterAudibleMiss(t *testing.
 	if got := f.google.calls.Load(); got != 1 {
 		t.Fatalf("Google Books calls = %d, want 1", got)
 	}
-	if got := f.budget.Remaining(); got != 799 {
+	if got := f.budget.Remaining(dailyquota.Background); got != 799 {
 		t.Fatalf("budget remaining = %d, want 799", got)
 	}
 	entry, err := f.store.GetMetadataCache(b.ID)
@@ -202,7 +219,7 @@ func TestCandidateFallback_NoFallbackWhenAudibleMatched(t *testing.T) {
 	if len(r.Fallback) != 0 {
 		t.Fatalf("fallback steps = %v, want none", stepOutcomes(r.Fallback))
 	}
-	if got := f.budget.Remaining(); got != 800 {
+	if got := f.budget.Remaining(dailyquota.Background); got != 800 {
 		t.Fatalf("budget remaining = %d, want 800 (untouched)", got)
 	}
 }
@@ -315,33 +332,34 @@ func TestCandidateFallback_GoogleThrottleHoldDefers(t *testing.T) {
 	if got := f.google.calls.Load(); got != 0 {
 		t.Fatalf("Google Books calls = %d, want 0 while held", got)
 	}
-	if got := f.budget.Remaining(); got != 800 {
+	if got := f.budget.Remaining(dailyquota.Background); got != 800 {
 		t.Fatalf("budget remaining = %d, want 800 (no reservation while held)", got)
 	}
 }
 
-// A Google Books failure defers too (it is not an answer), and the
-// reservation is not refunded.
+// A passing Google Books failure (a 5xx) defers too (it is not an answer),
+// and the reservation is not refunded.
 func TestCandidateFallback_GoogleFailureDefers(t *testing.T) {
 	f := newFallbackFixture(t, 800)
-	f.google.err = errors.New("upstream 503")
+	f.google.err = &metadata.ProviderStatusError{Provider: metadata.SourceIDGoogleBooks, Status: 503, Body: "backend error"}
 	b := f.book(t, "Flaky Title")
 
 	r := f.run(t, b.ID)[b.ID]
 	if r.Status != candidateStatusDeferred {
 		t.Fatalf("status = %q (%s), want deferred", r.Status, r.Error)
 	}
-	if got := f.budget.Remaining(); got != 799 {
+	if got := f.budget.Remaining(dailyquota.Background); got != 799 {
 		t.Fatalf("budget remaining = %d, want 799 (a failed lookup still counts)", got)
 	}
 }
 
-// The fetch-side gates: a book whose metadata is applied, and an
-// owner-manual-only (Doctor Who / Big Finish) book, never spend fallback
-// quota. A book the owner marked "no match" is skipped before any search.
+// The fetch-side gates (S6): a book whose metadata is applied asks no
+// fallback provider; an owner-manual-only (Doctor Who / Big Finish) book
+// still asks Open Library (free; its candidates go to the review list for a
+// manual apply) but never spends Google quota; a book the owner marked "no
+// match" is skipped before any search.
 func TestCandidateFallback_Exclusions(t *testing.T) {
 	f := newFallbackFixture(t, 800)
-	f.openlib.answer = answersTitle("anything", "x")
 	f.google.answer = answersTitle("anything", "x")
 	applied, noMatch := "matched", "no_match"
 	appliedBook := f.book(t, "Already Applied Book", func(b *database.Book) { b.MetadataReviewStatus = &applied })
@@ -349,27 +367,19 @@ func TestCandidateFallback_Exclusions(t *testing.T) {
 	rejected := f.book(t, "Owner Rejected Book", func(b *database.Book) { b.MetadataReviewStatus = &noMatch })
 
 	res := f.run(t, appliedBook.ID, dw.ID, rejected.ID)
-	if ol, gb := f.openlib.calls.Load(), f.google.calls.Load(); ol != 0 || gb != 0 {
-		t.Fatalf("fallback calls: Open Library %d, Google Books %d; want 0 for gated books", ol, gb)
+	if ol, gb := f.openlib.calls.Load(), f.google.calls.Load(); ol != 1 || gb != 0 {
+		t.Fatalf("fallback calls: Open Library %d, Google Books %d; want 1 (the Doctor Who book) and 0", ol, gb)
 	}
-	for _, id := range []string{appliedBook.ID, dw.ID} {
-		r := res[id]
-		if r.Status != "no_match" {
-			t.Fatalf("book %s status = %q, want no_match (primary found nothing; fallback gated)", id, r.Status)
-		}
-		for _, st := range r.Fallback {
-			if st.Outcome != metabatch.FallbackSkipped {
-				t.Fatalf("book %s fallback steps = %v, want every step skipped", id, stepOutcomes(r.Fallback))
-			}
-		}
-		if len(r.Fallback) != 2 {
-			t.Fatalf("book %s fallback steps = %v, want both providers recorded as skipped", id, stepOutcomes(r.Fallback))
-		}
+	if got, want := stepOutcomes(res[appliedBook.ID].Fallback), []string{"openlibrary=skipped", "google-books=skipped"}; !slices.Equal(got, want) {
+		t.Fatalf("applied book steps = %v, want %v", got, want)
+	}
+	if got, want := stepOutcomes(res[dw.ID].Fallback), []string{"openlibrary=no_match", "google-books=skipped"}; !slices.Equal(got, want) {
+		t.Fatalf("owner-manual-only book steps = %v, want %v", got, want)
 	}
 	if r := res[rejected.ID]; r.Status != "skipped" {
 		t.Fatalf("owner-rejected book status = %q, want skipped", r.Status)
 	}
-	if got := f.budget.Remaining(); got != 800 {
+	if got := f.budget.Remaining(dailyquota.Background); got != 800 {
 		t.Fatalf("budget remaining = %d, want 800", got)
 	}
 }
@@ -396,10 +406,10 @@ func TestCandidateFallback_ConcurrentWorkersSpendExactlyTheBudget(t *testing.T) 
 	}
 }
 
-// A process restart keeps the day's count: the Server's budget, rebuilt from
-// the same store as a new process would build it (config default 800/day),
+// A process restart keeps the day's count: a budget rebuilt from the same
+// store, as the serve path rebuilds it (metadata.AttachGoogleBooksBudgetStore),
 // sees the lookup the previous one spent. (The on-disk close/reopen case is
-// metafetch.TestDailyBudget_SurvivesRestart.)
+// dailyquota.TestDailyBudget_SurvivesRestart.)
 func TestCandidateFallback_RestartKeepsBudgetCount(t *testing.T) {
 	f := newFallbackFixture(t, 800)
 	b := f.book(t, "Restart Survivor")
@@ -407,16 +417,10 @@ func TestCandidateFallback_RestartKeepsBudgetCount(t *testing.T) {
 	if got := f.google.calls.Load(); got != 1 {
 		t.Fatalf("Google Books calls = %d, want 1", got)
 	}
-
-	f.s.candidateFallback = candidateFallbackState{}
-	rebuilt := f.s.googleFallbackBudget()
-	if rebuilt == f.budget {
-		t.Fatal("budget was not rebuilt")
-	}
+	rebuilt := dailyquota.New(f.store, metadata.SourceIDGoogleBooks, metadata.GoogleBooksBudgetLimits)
 	rebuilt.SetClock(func() time.Time { return f.clock })
-	if got := rebuilt.Remaining(); got != metafetch.DefaultGoogleBooksFallbackDailyLimit-1 {
-		t.Fatalf("rebuilt budget remaining = %d, want %d (one lookup spent before the restart)",
-			got, metafetch.DefaultGoogleBooksFallbackDailyLimit-1)
+	if got := rebuilt.Used(); got != 1 {
+		t.Fatalf("rebuilt budget used = %d, want 1 (one lookup spent before the restart)", got)
 	}
 }
 

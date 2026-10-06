@@ -1,7 +1,7 @@
 // file: internal/server/provider_throttle_wire.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c730dc9f-e858-44d0-b00e-4a9f1aa4d722
-// last-edited: 2026-09-03
+// last-edited: 2026-10-06
 
 package server
 
@@ -53,4 +53,13 @@ func AttachProviderThrottleStore(store database.Store) {
 	if restored > 0 {
 		slog.Info("restored provider throttles from a previous run", "count", restored)
 	}
+}
+
+// AttachGoogleBooksBudgetStore persists the shared Google Books daily lookup
+// budget (metadata.GoogleBooksBudget) in store, so a restart resumes the
+// day's count instead of granting a fresh 1,000. The same process-scope rule
+// as AttachProviderThrottleStore applies: call it from the serve path only,
+// never from NewServer, whose tests close their stores.
+func AttachGoogleBooksBudgetStore(store database.Store) {
+	metadata.AttachGoogleBooksBudgetStore(store)
 }

@@ -1,7 +1,7 @@
 // file: internal/metadata/providerhttp/providerhttp.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5c9e2a71-4b83-4f16-9d40-8e73a1b5c206
-// last-edited: 2026-08-15
+// last-edited: 2026-10-06
 
 // Package providerhttp hands out rate-limited HTTP clients for outbound
 // metadata-provider calls.
@@ -32,6 +32,8 @@ import (
 	"time"
 
 	"golang.org/x/time/rate"
+
+	"github.com/falkcorp/audiobook-organizer/internal/metadata/dailyquota"
 )
 
 // Limits describes the outbound budget for one provider.
@@ -291,6 +293,15 @@ func (t *throttled) RoundTrip(req *http.Request) (*http.Response, error) {
 		// tokens instead of blocking a worker until its turn arrives.
 		if err := t.limiter.Wait(ctx); err != nil {
 			return nil, fmt.Errorf("providerhttp %s: rate limit wait: %w", t.provider, err)
+		}
+
+		// The provider's daily key quota (dailyquota), counted per request
+		// SENT -- a retry spends quota like the first try -- at the tier the
+		// request's context carries (unmarked = background). Checked here, in
+		// the transport every client of this provider is built on, so no
+		// caller can reach the provider around it. A refusal sends nothing.
+		if err := dailyquota.ReserveFor(ctx, t.provider); err != nil {
+			return nil, fmt.Errorf("providerhttp %s: %w", t.provider, err)
 		}
 
 		resp, err := t.base.RoundTrip(req)

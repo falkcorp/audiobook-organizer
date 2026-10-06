@@ -1,5 +1,5 @@
 // file: internal/metabatch/candidates.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-10-06
 //
@@ -94,6 +94,12 @@ type CandidateResult struct {
 	// number and its rows come from one server predicate. Pointer for the
 	// same reason as IsFresh: absent means "not served from the cache".
 	Stale *bool `json:"stale,omitempty"`
+	// FallbackDeferred is set (cache review list only) when a fallback
+	// provider's last attempt for the book's row was deferred
+	// (MetadataCandidateCache.FallbackDeferred): Google Books' budget was
+	// spent, a throttle held it, or it failed for a passing reason, and the
+	// book waits for a later run.
+	FallbackDeferred bool `json:"fallback_deferred,omitempty"`
 	// CandidateHash is metafetch.CandidateHash(*Candidate), served by the
 	// cache review list so every review-page apply button can pin exactly the
 	// record the owner looked at (metafetch.CandidatePin.ContentHash). Empty
@@ -120,28 +126,35 @@ type CandidateResult struct {
 	SearchAuthor string `json:"search_author,omitempty"`
 	// Fallback is each fallback provider's turn for this book
 	// (metafetch.CandidateFallbackProviderIDs: Open Library, then Google
-	// Books), in order, when the rest of the chain found nothing. Empty when
-	// the chain matched or no fallback provider was due.
+	// Books), in order, when the rest of the chain left the book without a
+	// usable candidate (none, all owner-rejected, all refused by the ASIN /
+	// identity checks, or the best below the apply score floor). Empty when
+	// the chain had a usable candidate or no fallback provider was due.
 	Fallback []FallbackStep `json:"fallback,omitempty"`
 }
 
 // FallbackStep outcomes.
 const (
-	// FallbackMatched: the provider returned candidates; the chain stops.
+	// FallbackMatched: the provider returned candidates (merged into the
+	// book's cached ones); the chain stops once the book has a usable one.
 	FallbackMatched = "matched"
 	// FallbackNoMatch: the provider answered with nothing for this search
 	// identity; it is remembered (the cache's EmptyAnswers) and not asked
 	// again for the same identity until the answer ages out.
 	FallbackNoMatch = "no_match"
-	// FallbackDeferred: not asked today -- the Google Books daily budget is
-	// spent, the provider is held by a throttle, or it failed. The book is
-	// left for the next run, never recorded as no_match.
+	// FallbackDeferred: not answered for a passing reason -- the Google Books
+	// daily budget is spent, the provider is held by a throttle, it answered
+	// 429/5xx or timed out, or the owner-manual check could not be read. The
+	// book is left for the next run, never recorded as no_match.
 	FallbackDeferred = "deferred"
-	// FallbackError: the provider failed; the book's result is an error and
-	// the next run asks it again.
+	// FallbackError: the provider refused for good (a 4xx other than a quota
+	// or rate refusal), or failed in a way no retry is known to fix. For Open
+	// Library the fallback moves on to Google Books; for Google Books the
+	// book's result is an error, and a permanent refusal is remembered on the
+	// cache row (FallbackAttempts) so it is not re-asked every run.
 	FallbackError = "error"
 	// FallbackSkipped: the fetch-side gates refused the fallback for this
-	// book (metadata applied, owner-manual-only, fallback turned off).
+	// book (metadata applied; owner-manual-only skips Google Books only).
 	FallbackSkipped = "skipped"
 )
 
