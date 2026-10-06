@@ -1,0 +1,4 @@
+### Fixed
+
+- `TestVacuumActivity_ReaderReleasedMidTruncateNeverTruncatesUnderTheCopy` no longer fails a correct checkpoint sequence on a loaded `-race` runner. It bounded the slowest Record at 2 s, and CI run 37453234558 saw a 3.84 s Record behind a 3.79 s TRUNCATE that followed a complete 6.13 s PASSIVE. It now asserts the property in its name with ordering and frame-count evidence: no TRUNCATE is issued while the reader is still held, every TRUNCATE follows a complete PASSIVE, and the PASSIVE before the first TRUNCATE had copied every frame the VACUUM left. No Record may fail.
+- `TestVacuumActivity_TruncateDoesNotStallForegroundWrites` drops the same kind of wall-clock check (slowest Record against half the longest checkpoint), which the same CI numbers would also have tripped. Its deterministic frame-count check stays. Both tests now share `walFrames` and `requirePassiveCopiedVacuumFramesBeforeTruncate`, and log their timings without asserting them.
