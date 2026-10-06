@@ -520,7 +520,7 @@ func (svc *AudiobookService) purgeOne(book *database.Book, deleteFiles bool, sta
 	// unreadable answer is not proof there is none.
 	hasState, stateErr := stateProbe.Has(book.ID)
 	if stateErr != nil {
-		return purgeOutcome{kind: purgeFailed, errs: []string{fmt.Sprintf("%s: not purged: cannot read users' listening state on it: %v", book.ID, stateErr)}}
+		return purgeOutcome{kind: purgeFailed, errs: []string{fmt.Sprintf("%s: not purged: %s: %v", book.ID, stateCheckFailureReason(stateErr), stateErr)}}
 	}
 	if hasState {
 		return svc.purgeCarryingState(book, deleteFiles)
@@ -535,6 +535,21 @@ func (svc *AudiobookService) purgeOne(book *database.Book, deleteFiles bool, sta
 	}
 	n, errs := svc.purgeFinish(book, deleteFiles)
 	return purgeOutcome{kind: purgePurged, filesDeleted: n, errs: errs}
+}
+
+// stateCheckFailureReason names why the listening-state check of a book
+// failed, for the purge's report. The two permanent sync-graph failures get
+// their own reasons: they refuse the book on every run until repaired, and
+// the generic "cannot read" reads like a transient error that a retry clears.
+func stateCheckFailureReason(err error) string {
+	switch {
+	case errors.Is(err, merge.ErrBookmarkCheckRedirectBroken):
+		return "its sync id's redirect chain is broken, so its bookmarks cannot be checked (refused on every run until the redirect is repaired)"
+	case errors.Is(err, merge.ErrBookmarkCheckAliasLimit):
+		return "its sync id has more merged aliases than the alias cap, so its bookmarks cannot be checked (refused on every run until the alias graph is repaired)"
+	default:
+		return "cannot read users' listening state on it"
+	}
 }
 
 // purgeCarryingState purges a book that holds users' listening state: the

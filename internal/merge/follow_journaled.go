@@ -1,7 +1,7 @@
 // file: internal/merge/follow_journaled.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 6a7e0c1a-cb17-41e5-bf0f-dd8903735f64
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package merge
 
@@ -298,6 +298,36 @@ func (p *UserStateProbe) Has(bookID string) (bool, error) {
 	return p.owedBookmarks(bookID)
 }
 
+// ErrBookmarkCheckRedirectBroken is returned (wrapping
+// database.ErrSyncRedirectChainBroken) by UserStateProbe.Has and so by
+// BookHasCarryableUserState when the book's sync id's merge redirect chain
+// is dangling, cyclic or too long, so whether it holds bookmarks no live book
+// has cannot be told. Fail closed: the hard deletes refuse the book. Unlike
+// an I/O error this is PERMANENT -- every nightly purge refuses the book
+// again until the redirect is repaired -- so it carries its own reason for
+// the owner instead of the generic "cannot read listening state".
+var ErrBookmarkCheckRedirectBroken = errors.New("bookmarks cannot be checked: the book's sync id redirect chain is broken (dangling, cyclic or too long); permanent until the redirect is repaired, retrying will not help")
+
+// ErrBookmarkCheckAliasLimit is returned (wrapping database.ErrSyncAliasLimit)
+// like ErrBookmarkCheckRedirectBroken when the book's sync id has more merged
+// aliases than the alias cap, so the aliases' bookmarks cannot all be
+// checked. Also permanent until the alias graph shrinks or the cap is raised.
+var ErrBookmarkCheckAliasLimit = errors.New("bookmarks cannot be checked: the book's sync id has more merged aliases than the alias cap; permanent until the alias graph is repaired, retrying will not help")
+
+// classifySyncGraphErr wraps a permanent sync-graph error from
+// ResolveSyncItem or ListSyncAliases in its owner-facing sentinel, keeping
+// the database error in the chain; any other error is wrapped as given.
+func classifySyncGraphErr(err error, what string) error {
+	switch {
+	case errors.Is(err, database.ErrSyncRedirectChainBroken):
+		return fmt.Errorf("%w: %s: %w", ErrBookmarkCheckRedirectBroken, what, err)
+	case errors.Is(err, database.ErrSyncAliasLimit):
+		return fmt.Errorf("%w: %s: %w", ErrBookmarkCheckAliasLimit, what, err)
+	default:
+		return fmt.Errorf("%s: %w", what, err)
+	}
+}
+
 // owedBookmarks reports whether any of the probe's users has a bookmark
 // that only bookID still makes reachable. Bookmarks are copied, never moved,
 // by a merge or a carry (bookmark_copy.go): each book keeps its own rows and
@@ -318,7 +348,9 @@ func (p *UserStateProbe) Has(bookID string) (bool, error) {
 //
 // A store with no bookmark or sync-identity keyspace, or a book never given
 // a sync id, has none. Any read error is returned (fail closed: the caller
-// is deciding whether a hard delete is safe).
+// is deciding whether a hard delete is safe); a broken redirect chain or an
+// alias graph over the cap is returned as ErrBookmarkCheckRedirectBroken /
+// ErrBookmarkCheckAliasLimit so the refusal says why it will not clear.
 func (p *UserStateProbe) owedBookmarks(bookID string) (bool, error) {
 	bs := database.AsBookmarkStore(p.db)
 	ids := database.AsSyncIdentityStore(p.db)
@@ -335,14 +367,14 @@ func (p *UserStateProbe) owedBookmarks(bookID string) (bool, error) {
 	canonical := own
 	item, err := ids.ResolveSyncItem(own)
 	if err != nil {
-		return false, fmt.Errorf("resolve sync id %s of %s: %w", own, bookID, err)
+		return false, classifySyncGraphErr(err, fmt.Sprintf("resolve sync id %s of %s", own, bookID))
 	}
 	if item != nil && item.SyncID != "" {
 		canonical = item.SyncID
 	}
 	aliases, err := ids.ListSyncAliases(own)
 	if err != nil {
-		return false, fmt.Errorf("list aliases of sync id %s of %s: %w", own, bookID, err)
+		return false, classifySyncGraphErr(err, fmt.Sprintf("list aliases of sync id %s of %s", own, bookID))
 	}
 	for _, u := range p.users {
 		if u.ID == "" {

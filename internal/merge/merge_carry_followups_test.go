@@ -6,6 +6,8 @@
 package merge
 
 import (
+	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -95,4 +97,71 @@ func TestRestoreAbsorbedSide_HoldsTheUserBookStripe(t *testing.T) {
 	unlock()
 	<-done
 	require.NoError(t, restoreErr)
+}
+
+// syncGraphFaultStore returns a chosen error from ResolveSyncItem or
+// ListSyncAliases (the alias cap is unexported in package database, so a
+// real over-the-cap graph cannot be built from here).
+type syncGraphFaultStore struct {
+	*database.PebbleStore
+	resolveErr error
+	aliasErr   error
+}
+
+func (s *syncGraphFaultStore) ResolveSyncItem(syncID string) (*database.SyncItem, error) {
+	if s.resolveErr != nil {
+		return nil, s.resolveErr
+	}
+	return s.PebbleStore.ResolveSyncItem(syncID)
+}
+
+func (s *syncGraphFaultStore) ListSyncAliases(syncID string) ([]string, error) {
+	if s.aliasErr != nil {
+		return nil, s.aliasErr
+	}
+	return s.PebbleStore.ListSyncAliases(syncID)
+}
+
+// Item 4: a broken redirect chain and an alias graph over the cap are
+// permanent; the probe reports each with its own sentinel (keeping the
+// database error in the chain), and an ordinary read error with neither.
+func TestUserStateProbe_PermanentSyncGraphErrorsAreDistinct(t *testing.T) {
+	s := setupTestStore(t).(*database.PebbleStore)
+	keep, dup := seedSyncBooks(t, s)
+	ids := database.AsSyncIdentityStore(s)
+	for _, id := range []string{keep, dup} {
+		_, err := ids.MintOrGetSyncID(id)
+		require.NoError(t, err)
+	}
+
+	t.Run("real dangling redirect", func(t *testing.T) {
+		require.NoError(t, s.RecordSyncMerge(dup, keep))
+		keepSync, _, err := s.GetSyncIDForBook(keep)
+		require.NoError(t, err)
+		raw, err := s.GetRaw("sync_item:" + keepSync)
+		require.NoError(t, err)
+		require.NotNil(t, raw, "precondition: the winner's sync item exists")
+		require.NoError(t, s.DeleteRaw("sync_item:"+keepSync))
+		t.Cleanup(func() { _ = s.SetRaw("sync_item:"+keepSync, raw) })
+
+		_, err = BookHasCarryableUserState(s, dup)
+		require.ErrorIs(t, err, ErrBookmarkCheckRedirectBroken)
+		require.ErrorIs(t, err, database.ErrSyncRedirectChainBroken)
+		require.NotErrorIs(t, err, ErrBookmarkCheckAliasLimit)
+	})
+	t.Run("alias cap", func(t *testing.T) {
+		fs := &syncGraphFaultStore{PebbleStore: s, aliasErr: fmt.Errorf("%w: starting at x", database.ErrSyncAliasLimit)}
+		_, err := BookHasCarryableUserState(fs, keep)
+		require.ErrorIs(t, err, ErrBookmarkCheckAliasLimit)
+		require.ErrorIs(t, err, database.ErrSyncAliasLimit)
+		require.NotErrorIs(t, err, ErrBookmarkCheckRedirectBroken)
+	})
+	t.Run("plain read error", func(t *testing.T) {
+		io := errors.New("injected pebble read error")
+		fs := &syncGraphFaultStore{PebbleStore: s, resolveErr: io}
+		_, err := BookHasCarryableUserState(fs, keep)
+		require.ErrorIs(t, err, io)
+		require.NotErrorIs(t, err, ErrBookmarkCheckRedirectBroken)
+		require.NotErrorIs(t, err, ErrBookmarkCheckAliasLimit)
+	})
 }
