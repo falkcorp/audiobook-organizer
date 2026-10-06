@@ -151,7 +151,10 @@ func (l *vtLib) apply(plan *repairs.PlanResult, dry bool, groups ...string) *rep
 	if !dry {
 		deps.Writer = repairs.NewWriter(l.st, l.st, l.fixer.ID(), "bulk_update", "repairs-").WithJournal(l.st, l.st, vtTestOpID)
 	}
-	res, err := repairs.RunApply(context.Background(), l.fixer, plan, "op-version-twin-plan", groups, dry, deps, &fakeReporter{})
+	// The apply op's reporter names the op, as in production
+	// (runRepairsApply), so Replan can recognise this op's own writes.
+	res, err := repairs.RunApply(context.Background(), l.fixer, plan, "op-version-twin-plan", groups, dry, deps,
+		&repairsOpReporter{id: vtTestOpID})
 	require.NoError(l.t, err)
 	return res
 }

@@ -1492,10 +1492,7 @@ func (f *versionTwinFixer) applyRecord(w *repairs.Writer, svc VersionTwinMetadat
 		return err
 	}
 	batch := vtBatchID(w.OpID(), d.primaryID)
-	resp, err := svc.ApplyMetadataCandidateWithOptions(d.primaryID, *d.cand, d.fields, metafetch.ApplyOptions{
-		FillOnly: true, Guard: guard, BatchID: batch, SkipHashElection: true, BookRowOnly: true,
-		HistorySource: vtHistorySource(d), RequireHistory: true,
-	})
+	resp, err := svc.ApplyMetadataCandidateWithOptions(d.primaryID, *d.cand, d.fields, vtApplyOptions(d, batch, guard))
 	if resp == nil || resp.Book == nil {
 		if err == nil {
 			err = errors.New("the apply returned no book")
@@ -1520,6 +1517,14 @@ func (f *versionTwinFixer) applyRecord(w *repairs.Writer, svc VersionTwinMetadat
 		return fmt.Errorf("%w on %s", errVTMatchNotRecorded, d.primaryID)
 	}
 	return nil
+}
+
+// vtApplyOptions are the options of an applied_twin apply (applyRecord).
+func vtApplyOptions(d *vtDetail, batch string, guard func(*database.Book) error) metafetch.ApplyOptions {
+	return metafetch.ApplyOptions{
+		FillOnly: true, Guard: guard, BatchID: batch, SkipHashElection: true, BookRowOnly: true,
+		HistorySource: vtHistorySource(d), RequireHistory: true,
+	}
 }
 
 // copyCandidates copies the twin's candidates onto the primary. The check
