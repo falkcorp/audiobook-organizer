@@ -98,9 +98,9 @@ type Handler struct {
 	// s.markDuplicatesFlaggedDirty.
 	markDuplicatesFlaggedDirty func(reason string)
 
-	// restoreBulkLabel is embeddingStore.RestoreLabelAfterBulkRevert, held as
-	// a field only so a test can make the restore fail after the status step
-	// (export_test.go). Set by New.
+	// restoreBulkLabel overrides embeddingStore.RestoreLabelAfterBulkRevert,
+	// held as a field only so a test can make the restore fail after the
+	// status step (export_test.go). nil = the store's own method.
 	restoreBulkLabel func(candidateID int64) (bool, error)
 }
 
@@ -114,7 +114,7 @@ func New(
 	publishEvent func(ctx context.Context, event plugin.Event),
 	markDuplicatesFlaggedDirty func(reason string),
 ) *Handler {
-	h := &Handler{
+	return &Handler{
 		store:                      store,
 		embeddingStore:             embeddingStore,
 		opRegistry:                 opRegistry,
@@ -123,10 +123,6 @@ func New(
 		publishEvent:               publishEvent,
 		markDuplicatesFlaggedDirty: markDuplicatesFlaggedDirty,
 	}
-	if embeddingStore != nil {
-		h.restoreBulkLabel = embeddingStore.RestoreLabelAfterBulkRevert
-	}
-	return h
 }
 
 // ListDedupCandidates handles GET /api/v1/dedup/candidates.
@@ -1731,7 +1727,11 @@ func (h *Handler) revertOneBulkDismiss(id int64) (failReason string, statusChang
 		}
 		statusChanged = true
 	}
-	if _, err := h.restoreBulkLabel(id); err != nil {
+	restore := es.RestoreLabelAfterBulkRevert
+	if h.restoreBulkLabel != nil {
+		restore = h.restoreBulkLabel
+	}
+	if _, err := restore(id); err != nil {
 		bulkRejectLog.Warn("bulk-reject revert: candidate %d is pending but its label was not restored: %v", id, err)
 		return "pending again, but the earlier label was not restored (" + err.Error() +
 			"); revert this id again to finish", statusChanged
