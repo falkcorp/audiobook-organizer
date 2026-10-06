@@ -1,7 +1,7 @@
 // file: internal/metadata/metadata.go
-// version: 1.34.0
+// version: 1.35.0
 // guid: 9d0e1f2a-3b4c-5d6e-7f8a-9b0c1d2e3f4a
-// last-edited: 2026-09-28
+// last-edited: 2026-10-06
 
 package metadata
 
@@ -520,6 +520,29 @@ func BuildMetadataFromTag(m tag.Metadata, filePath string, metaLog logger.Logger
 	return metadata
 }
 
+// LeadingNumberIsCount reports whether a name split on spaces starts with a
+// position out of a count ("183 of 301"), not a track number followed by a
+// title ("01 Title"). The leading-number strips in extractFromFilename and
+// the scanner's extractInfoFromPath dropped the number from "183 of 301" and
+// left the title "of 301" -- 299 Shadow's Edge fragments were re-titled so
+// by the 2026-10-06 nightly scan. Kept whole, the name reaches the
+// chapter-only checks (ChapterTitleFromDirectory), which know a counted part.
+func LeadingNumberIsCount(fields []string) bool {
+	return len(fields) > 2 && strings.EqualFold(fields[1], "of") && isAllDigits(fields[0]) && isAllDigits(fields[2])
+}
+
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func cleanTagValue(value string) string {
 	// Strip null bytes and other control characters that appear in some M4B tags
 	cleaned := strings.Map(func(r rune) rune {
@@ -816,9 +839,10 @@ func extractFromFilename(filePath string) (metadata Metadata) {
 	// "01 - Title", "01. Title", "001-Title"
 	numDashRe := regexp.MustCompile(`^\d{1,3}\s*[-–._]\s*`)
 	filename = numDashRe.ReplaceAllString(filename, "")
-	// "01 Title" (bare number prefix)
+	// "01 Title" (bare number prefix) -- but not "183 of 301", whose number
+	// is a position out of a count (LeadingNumberIsCount).
 	parts := strings.Split(filename, " ")
-	if len(parts) > 1 {
+	if len(parts) > 1 && !LeadingNumberIsCount(parts) {
 		if _, err := strconv.Atoi(parts[0]); err == nil {
 			filename = strings.Join(parts[1:], " ")
 		}
