@@ -1,7 +1,7 @@
 // file: internal/metabatch/candidates.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-10-02
+// last-edited: 2026-10-06
 //
 // Package metabatch contains pure service types and logic for the
 // metadata candidate batch fetch / apply pipeline. HTTP handlers live
@@ -75,7 +75,7 @@ type CandidateBookInfo struct {
 type CandidateResult struct {
 	Book      CandidateBookInfo            `json:"book"`
 	Candidate *metafetch.MetadataCandidate `json:"candidate,omitempty"`
-	Status    string                       `json:"status"` // "matched", "no_match", "error"
+	Status    string                       `json:"status"` // "matched", "no_match", "skipped", "deferred", "error"
 	Error     string                       `json:"error_message,omitempty"`
 	// FetchedAt is when the cached candidate was written, and IsFresh whether
 	// that is still inside database.MetadataCacheTTL.
@@ -118,6 +118,40 @@ type CandidateResult struct {
 	// (metafetch.Service.SearchAuthorFor). Empty when it searched with no
 	// author: the book has none, or only a placeholder, which is never sent.
 	SearchAuthor string `json:"search_author,omitempty"`
+	// Fallback is each fallback provider's turn for this book
+	// (metafetch.CandidateFallbackProviderIDs: Open Library, then Google
+	// Books), in order, when the rest of the chain found nothing. Empty when
+	// the chain matched or no fallback provider was due.
+	Fallback []FallbackStep `json:"fallback,omitempty"`
+}
+
+// FallbackStep outcomes.
+const (
+	// FallbackMatched: the provider returned candidates; the chain stops.
+	FallbackMatched = "matched"
+	// FallbackNoMatch: the provider answered with nothing for this search
+	// identity; it is remembered (the cache's EmptyAnswers) and not asked
+	// again for the same identity until the answer ages out.
+	FallbackNoMatch = "no_match"
+	// FallbackDeferred: not asked today -- the Google Books daily budget is
+	// spent, the provider is held by a throttle, or it failed. The book is
+	// left for the next run, never recorded as no_match.
+	FallbackDeferred = "deferred"
+	// FallbackError: the provider failed; the book's result is an error and
+	// the next run asks it again.
+	FallbackError = "error"
+	// FallbackSkipped: the fetch-side gates refused the fallback for this
+	// book (metadata applied, owner-manual-only, fallback turned off).
+	FallbackSkipped = "skipped"
+)
+
+// FallbackStep is one fallback provider's turn for one book.
+type FallbackStep struct {
+	// Provider is the provider id ("openlibrary", "google-books").
+	Provider string    `json:"provider"`
+	Outcome  string    `json:"outcome"`
+	At       time.Time `json:"at"`
+	Detail   string    `json:"detail,omitempty"`
 }
 
 // BatchFetchRequest is the JSON body for the batch candidate fetch handler.

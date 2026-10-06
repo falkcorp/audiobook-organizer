@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.81.0
+// version: 2.82.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package server
 
@@ -274,6 +274,10 @@ type Server struct {
 	// metadata.candidate-fetch op's workers and the lost-candidates refetch
 	// claim a book before fetching it (candidate_refetch.go).
 	candidateFetchClaims bookFetchClaims
+	// candidateFallback holds the Google Books fallback's persisted daily
+	// budget, shared by every candidate fetch in the process
+	// (candidate_fallback.go).
+	candidateFallback candidateFallbackState
 
 	hub              *realtime.EventHub
 	writeBackBatcher *itunesservice.WriteBackBatcher

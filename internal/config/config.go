@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.135.0
+// version: 1.136.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package config
 
@@ -1385,6 +1385,14 @@ type Config struct {
 	// budget (server.candidateFetchWorkers); any other value is used as is,
 	// clamped to 1-64.
 	MetadataCandidateFetchWorkers int `json:"metadata_candidate_fetch_workers"`
+	// GoogleBooksFallbackDailyLimit caps the Google Books lookups the batch
+	// candidate fetch makes per quota day (midnight Pacific) for books the
+	// rest of the chain and Open Library found nothing for
+	// (metafetch.CandidateFallbackProviderIDs). Owner decision 2026-10-06:
+	// at most 800 of the key's 1,000 queries/day, leaving headroom for the
+	// paths that still ask Google directly. 0 (unset) means the default,
+	// 800; a negative value turns the Google Books fallback off.
+	GoogleBooksFallbackDailyLimit int `json:"google_books_fallback_daily_limit"`
 	// CoalesceShatteredSiblings enables a scan-time post-pass that merges
 	// single-file books shattered across "<prefix> - N" sibling chapter subdirs
 	// (the layout that produced the 380K dedup-candidate explosion) into ONE
@@ -2902,6 +2910,7 @@ func InitConfig() {
 			ChapterConsolidationThresholdMin:    viper.GetInt("chapter_consolidation_threshold_min"),
 			RepairChapterMaxMin:                 viper.GetInt("repair_chapter_max_min"),
 			MetadataCandidateFetchWorkers:       viper.GetInt("metadata_candidate_fetch_workers"),
+			GoogleBooksFallbackDailyLimit:       viper.GetInt("google_books_fallback_daily_limit"),
 			CoalesceShatteredSiblings:           viper.GetBool("coalesce_shattered_siblings"),
 			OperationTimeoutMinutes:             viper.GetInt("operation_timeout_minutes"),
 			DBCensusExactReadMBPerSec:           viper.GetInt("db_census_exact_read_mb_per_sec"),

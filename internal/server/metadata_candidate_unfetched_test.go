@@ -1,7 +1,7 @@
 // file: internal/server/metadata_candidate_unfetched_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6add5bfa-b425-4289-9274-72a2ee56ed84
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package server
 
@@ -63,7 +63,7 @@ func TestCandidateFetch_UnfetchedSelectsNeverFetchedAndNeverApplies(t *testing.T
 	require.NoError(t, store.PutMetadataCache(&database.MetadataCandidateCache{BookID: withCands.ID, FetchedAt: time.Now(),
 		SourceHash: "h", SearchFingerprint: metafetch.FingerprintPrefix + "0000", Candidates: []json.RawMessage{json.RawMessage(`{"title":"Fetched Already"}`)}}))
 
-	sel, err := unfetchedCandidateBookIDs(context.Background(), store, mfs, s.newFolderMemo(store), nil)
+	sel, err := unfetchedCandidateBookIDs(context.Background(), store, mfs, s.newFolderMemo(store), nil, 0)
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{never.ID, staleEmpty.ID}, sel.IDs)
 	assert.Equal(t, 1, sel.NoRow)
@@ -73,7 +73,7 @@ func TestCandidateFetch_UnfetchedSelectsNeverFetchedAndNeverApplies(t *testing.T
 		assert.NotContains(t, sel.IDs, b.ID, b.Title)
 	}
 	// A book another fetch holds is left to it.
-	sel, err = unfetchedCandidateBookIDs(context.Background(), store, mfs, s.newFolderMemo(store), map[string]bool{never.ID: true})
+	sel, err = unfetchedCandidateBookIDs(context.Background(), store, mfs, s.newFolderMemo(store), map[string]bool{never.ID: true}, 0)
 	require.NoError(t, err)
 	assert.Equal(t, []string{staleEmpty.ID}, sel.IDs)
 

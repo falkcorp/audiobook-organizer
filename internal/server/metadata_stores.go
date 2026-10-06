@@ -1,13 +1,14 @@
 // file: internal/server/metadata_stores.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: b8e04c27-5a91-4f36-9d18-2c73e5a081f4
-// last-edited: 2026-10-04
+// last-edited: 2026-10-06
 
 package server
 
 import (
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/applygate"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/deluge"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
@@ -72,6 +73,11 @@ type candidateFetchStore interface {
 	// ImportPathReader: the resolver reads the import roots from this same
 	// store, so an import root is never listed for sibling rows.
 	metabatch.ImportPathReader
+	// The owner-manual-only check (applygate.BulkManualOnlyGuard) reads a
+	// book's series row and tags before the fetch spends a fallback
+	// provider's quota on it (candidate_fallback.go).
+	applygate.ManualOnlySeriesReader
+	applygate.ManualOnlyTagReader
 
 	GetBookByID(id string) (*database.Book, error)
 }
