@@ -1,5 +1,5 @@
 // file: internal/database/sql_activity_summary_clamp_test.go
-// version: 1.2.6
+// version: 1.2.7
 // guid: 8b47e0c9-2f13-45da-9e60-c4a1d5382bf7
 // last-edited: 2026-10-06
 
@@ -350,6 +350,50 @@ func requireTruncateOnlyAfterCompletePassive(t *testing.T, calls []ckptCall) {
 	}
 }
 
+// requireTruncateLeftoverBounded fails if the PASSIVE right before any TRUNCATE
+// had more than vacuumTruncateMaxLeftoverFrames frames of its own to copy,
+// computed from the checkpoint results alone: that PASSIVE's Log minus the
+// Checkpointed of the PASSIVE before it in calls (0 if none; a Log below that
+// means the WAL restarted, and all Log frames count). The frames the TRUNCATE
+// copies under the write lock are the ones Records wrote while that PASSIVE
+// ran, so a PASSIVE with few frames to copy is what keeps them few however long
+// the earlier copies took. A single PASSIVE straight after the VACUUM fails
+// this: it had every frame the VACUUM left to copy, and a TRUNCATE after it
+// inherits everything written during that whole copy (the 2026-10-06 CI
+// failure: a 6.13 s PASSIVE, then a 3.79 s TRUNCATE).
+//
+// It is an independent oracle for passiveNewFrames, not a call to it, so a bug
+// in the production arithmetic does not also blind the test.
+func requireTruncateLeftoverBounded(t *testing.T, calls []ckptCall) {
+	t.Helper()
+	for k, c := range calls {
+		if c.mode != "TRUNCATE" {
+			continue
+		}
+		if k == 0 || calls[k-1].mode != "PASSIVE" {
+			t.Fatalf("checkpoint %d is a TRUNCATE not directly after a PASSIVE: %+v", k, calls)
+		}
+		last := calls[k-1].res
+		prev := 0
+		for j := k - 2; j >= 0; j-- {
+			if calls[j].mode == "PASSIVE" && calls[j].res.Log >= 0 {
+				prev = calls[j].res.Checkpointed
+				break
+			}
+		}
+		left := last.Log - prev
+		if last.Log < prev {
+			left = last.Log
+		}
+		if left > vacuumTruncateMaxLeftoverFrames {
+			t.Fatalf("checkpoint %d is a TRUNCATE after a PASSIVE that had %d frames to copy (Log %d, previous "+
+				"PASSIVE Checkpointed %d), over the %d bound: the TRUNCATE inherits every frame written during that "+
+				"copy and copies them under the write lock: %+v",
+				k, left, last.Log, prev, vacuumTruncateMaxLeftoverFrames, calls)
+		}
+	}
+}
+
 // walFrames returns how many frames the -wal holds: a 32-byte header, then
 // frames of a 24-byte header plus one page each. It is exact only while
 // nothing has reset or restarted the WAL, which holds on a fresh store whose
@@ -510,22 +554,21 @@ func TestVacuumActivity_BusyTruncateSucceedsOnALaterAttempt(t *testing.T) {
 //   - every TRUNCATE follows a PASSIVE that reported complete;
 //   - the PASSIVE before the first TRUNCATE had copied every frame the VACUUM
 //     left, so none of them were copied under the write lock;
+//   - the PASSIVE before every TRUNCATE had at most
+//     vacuumTruncateMaxLeftoverFrames frames of its own to copy, so the frames
+//     Records wrote while it ran, which the TRUNCATE copies under the lock, are
+//     few (requireTruncateLeftoverBounded);
 //   - no Record fails.
 //
-// It used to also bound the slowest Record at 2 s. That failed on a loaded
-// -race CI runner (run 37453234558) with a sequence that passes every check
-// above: the completing PASSIVE took 6.13 s, the TRUNCATE after it 3.79 s, and
-// a Record waited 3.84 s behind that TRUNCATE. A wall-clock bound scales with
-// the runner's disk and CPU, so it cannot tell this protocol from a broken
-// one. These checks say nothing about Record latency: the slowest Record is
+// It used to bound the slowest Record at 2 s instead. That failed on a loaded
+// -race CI runner (run 37453234558): the completing PASSIVE took 6.13 s, the
+// TRUNCATE after it 3.79 s, and a Record waited 3.84 s behind that TRUNCATE.
+// The TRUNCATE was copying the frames Records had committed during the 6.13 s
+// PASSIVE (PASSIVE only copies what was in the WAL when it started). That was
+// a real defect in truncateWALAfterVacuum, fixed by repeating PASSIVE until one
+// is short; the frame-count bound now catches it on any runner, where the
+// wall-clock bound depended on the runner's disk and CPU. The slowest Record is
 // logged for diagnosis, not asserted.
-//
-// What that TRUNCATE was doing is not the VACUUM's frames (the PASSIVE before
-// it copied them all). PASSIVE reports the WAL size when it started, so the
-// frames Records committed during a long PASSIVE are left for the TRUNCATE to
-// copy under the write lock; at the copy rate that PASSIVE showed, the frames
-// written in 6 s take about 3 s. That is a property of truncateWALAfterVacuum
-// itself, outside what this test claims.
 func TestVacuumActivity_ReaderReleasedMidTruncateNeverTruncatesUnderTheCopy(t *testing.T) {
 	s, _ := openCkptTestStore(t, time.Hour)
 	for range 40 {
@@ -601,6 +644,7 @@ func TestVacuumActivity_ReaderReleasedMidTruncateNeverTruncatesUnderTheCopy(t *t
 	}
 	requireTruncateOnlyAfterCompletePassive(t, got)
 	requirePassiveCopiedVacuumFramesBeforeTruncate(t, got, vacuumFrames)
+	requireTruncateLeftoverBounded(t, got)
 	if n := recErrs.Load(); n != 0 {
 		t.Fatalf("%d Records failed during the truncate phase", n)
 	}
@@ -652,21 +696,22 @@ func TestVacuumActivity_IdleTickReclaimsWhatAGivenUpTruncateLeft(t *testing.T) {
 // truncateWALAfterVacuum now copies with PASSIVE first, which does not block
 // writers, so the TRUNCATE only resets an already-copied WAL.
 //
-// It asserts two things while Records run continuously through the truncate:
+// It asserts three things while Records run continuously through the truncate:
 //   - no Record fails;
 //   - every TRUNCATE follows a PASSIVE that reported complete, and the one
 //     before the first TRUNCATE had copied every frame the VACUUM left (a
 //     PASSIVE before it may report busy and copy nothing; that is retried),
-//     so the TRUNCATE that holds the write lock copied none of them.
+//     so the TRUNCATE that holds the write lock copied none of them;
+//   - the PASSIVE before every TRUNCATE had at most
+//     vacuumTruncateMaxLeftoverFrames frames of its own to copy, so the frames
+//     written while it ran, which the TRUNCATE copies, are few.
 //
 // It used to also fail when the slowest Record reached half the longest
-// checkpoint's Elapsed (when that was at least 1 s). That is a wall-clock
-// ratio, and a loaded -race runner breaks it with a sequence that passes the
-// frame checks: CI run 37453234558 saw a 6.13 s PASSIVE, a 3.79 s TRUNCATE
-// after it and a 3.84 s Record behind the TRUNCATE, past the 3.06 s line (see
-// TestVacuumActivity_ReaderReleasedMidTruncateNeverTruncatesUnderTheCopy for
-// what that TRUNCATE copied). The frame check is the deterministic form of
-// "the TRUNCATE did not copy the VACUUM's frames"; the timings are logged only.
+// checkpoint's Elapsed (when that was at least 1 s). That wall-clock ratio
+// depended on the runner: CI run 37453234558 saw a 6.13 s PASSIVE, a 3.79 s
+// TRUNCATE after it and a 3.84 s Record behind the TRUNCATE. The frame-count
+// checks above cover the same failure deterministically; the timings are
+// logged only.
 func TestVacuumActivity_TruncateDoesNotStallForegroundWrites(t *testing.T) {
 	// The background checkpointer is held off (1 h interval): its own ticks would
 	// show up in the hook and copy frames this test attributes to the vacuum.
@@ -758,6 +803,7 @@ func TestVacuumActivity_TruncateDoesNotStallForegroundWrites(t *testing.T) {
 	// which is correct behaviour that the old index-0 assertion failed.
 	requireTruncateOnlyAfterCompletePassive(t, got)
 	requirePassiveCopiedVacuumFramesBeforeTruncate(t, got, vacuumFrames)
+	requireTruncateLeftoverBounded(t, got)
 }
 
 // TestVacuumActivity_LateReaderDoesNotStallWritersThroughTheTruncate is the
