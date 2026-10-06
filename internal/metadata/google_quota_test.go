@@ -1,5 +1,5 @@
 // file: internal/metadata/google_quota_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d79d70eb-b6e8-442b-8889-7f4d6132ff49
 // last-edited: 2026-10-06
 
@@ -131,5 +131,14 @@ func TestClassifyProviderError_BudgetRefusalIsNotAFailure(t *testing.T) {
 		&dailyquota.SpentError{Provider: SourceIDGoogleBooks, Used: 800, Limit: 800})}
 	if reason, hold, ok := ClassifyProviderError(err); ok {
 		t.Fatalf("budget refusal classified as %s (hold %s), want no hold", reason, hold)
+	}
+}
+
+// N2: a budget whose store fails refuses without a throttle hold.
+func TestClassifyProviderError_BudgetStoreFailureIsNotAFailure(t *testing.T) {
+	err := &url.Error{Op: "Get", URL: "https://example.invalid", Err: fmt.Errorf("providerhttp google-books: %w",
+		fmt.Errorf("%w: save google-books daily budget: disk full", dailyquota.ErrBudgetUnavailable))}
+	if reason, hold, ok := ClassifyProviderError(err); ok {
+		t.Fatalf("budget store failure classified as %s (hold %s), want no hold", reason, hold)
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_stale.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: ba7b75e1-2940-4864-ac78-6a8982bcd9a3
 // last-edited: 2026-10-06
 
@@ -52,6 +52,10 @@ type cacheRowBookReader interface {
 	GetBookByID(id string) (*database.Book, error)
 	GetBooksByIDs(ids []string) ([]database.Book, error)
 	metabatch.SearchQueryReader
+	// RejectedCandidateReader reads the owner's candidate rejections for the
+	// "deferred" chip (metabatch.NoUsableCandidate). Required, not asserted:
+	// a store without it would silently count rejected candidates as usable.
+	metabatch.RejectedCandidateReader
 }
 
 // cacheRowCandidateReader is the metadata-cache slice loadCacheRows needs.
@@ -83,8 +87,11 @@ type loadedCacheRow struct {
 	// files is what the review row's book info takes from the book's file
 	// rows, read in the same pass so the page never reads them again.
 	files metabatch.BookFileFacts
-	// fallbackDeferred is entry.FallbackDeferred(): a fallback provider's last
-	// attempt for the row was deferred.
+	// fallbackDeferred: a fallback provider's last attempt for the row was
+	// deferred (entry.FallbackDeferred()) AND the book still has no usable
+	// candidate (metabatch.NoUsableCandidate) -- one that has gained one
+	// since (a dialog search, a chain refresh) waits on no lookup, and the
+	// selection never picks it again, so counting it would stick forever.
 	fallbackDeferred bool
 }
 
@@ -215,7 +222,8 @@ func (l *cacheRowLoader) readEntry(r *loadedCacheRow, files chunkFiles) (*metafe
 // the row is then dated off its summary and holds no candidate.
 func (l *cacheRowLoader) fill(r *loadedCacheRow, entry *metafetch.MetadataCandidateCache, files chunkFiles) {
 	r.lastChecked = cacheRowLastChecked(entry, r.sum.FetchedAt)
-	r.fallbackDeferred = entry.FallbackDeferred()
+	r.fallbackDeferred = entry.FallbackDeferred() && r.book != nil &&
+		!metabatch.NoUsableCandidate(l.store, r.book, entry).Usable
 	if entry != nil && len(entry.Candidates) > 0 {
 		r.candidateCount = len(entry.Candidates)
 		// json.RawMessage decoding copies each element, so holding the first

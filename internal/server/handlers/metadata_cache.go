@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.29.0
+// version: 1.30.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-10-06
 
@@ -100,6 +100,11 @@ type MetadataCacheBookStore interface {
 	// folder (metabatch.SkipKindSiblingPart), and the import paths, read from
 	// THIS store so a folder that is an import root is never listed.
 	metabatch.SearchQueryReader
+	// RejectedCandidateReader reads the owner's candidate rejections, which
+	// decide whether a book with a deferred fallback lookup still has no
+	// usable candidate (the review page's "deferred" chip;
+	// metabatch.NoUsableCandidate).
+	metabatch.RejectedCandidateReader
 }
 
 // ActiveOpsLister is the shape of database.Store's ListActiveOperationsV2. It

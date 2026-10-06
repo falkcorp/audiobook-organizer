@@ -1,5 +1,5 @@
 // file: internal/server/metadata_candidate_op.go
-// version: 3.14.0
+// version: 3.15.0
 // guid: 3f7e2c91-b4a0-4d8e-9c5f-1a6b7d8e0f23
 // last-edited: 2026-10-06
 //
@@ -23,6 +23,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
+	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"golang.org/x/time/rate"
@@ -93,8 +94,11 @@ func (d *doneSet) remaining(all []string) []string {
 // remaining set must REPLACE the original list in the overlay, not let it show
 // through. TotalBooks is carried so the resumed run's progress bar keeps the
 // batch's original size rather than shrinking to the remainder.
-func candidateFetchCheckpointState(all []string, done *doneSet, total int) metadataCandidateFetchOpParams {
-	return metadataCandidateFetchOpParams{BookIDs: done.remaining(all), TotalBooks: total}
+// GoogleCappedBookIDs is carried too: the first checkpoint after an
+// Unfetched selection wrote it, and a later one that left it out would let
+// the resumed run ask Google about books the selection put off.
+func candidateFetchCheckpointState(all []string, done *doneSet, total int, googleCapped []string) metadataCandidateFetchOpParams {
+	return metadataCandidateFetchOpParams{BookIDs: done.remaining(all), TotalBooks: total, GoogleCappedBookIDs: googleCapped}
 }
 
 // RegisterMetadataCandidateFetchOp registers the "metadata.candidate-fetch"
@@ -153,17 +157,23 @@ func (s *Server) runMetadataCandidateFetchOp(ctx context.Context, rawParams json
 	store := s.storeForWiring()
 	mfs := s.metadataFetchService
 	progress := registryProgressAdapter{r: reporter}
+	if p.Interactive {
+		// One book a person asked for (singleBookSearch): its lookups may
+		// use the reserved interactive share of the daily quotas.
+		ctx = metadata.WithInteractiveQuota(ctx)
+	}
 
 	if len(p.BookIDs) == 0 && p.Unfetched {
-		ids, err := s.selectUnfetchedBooks(ctx, reporter)
+		sel, err := s.selectUnfetchedBooks(ctx, reporter)
 		if err != nil {
 			return err
 		}
-		if len(ids) == 0 {
+		if len(sel.IDs) == 0 {
 			_ = progress.UpdateProgress(0, 0, "completed: no unfetched books")
 			return nil
 		}
-		p.BookIDs, p.TotalBooks, p.Unfetched = ids, len(ids), false
+		p.BookIDs, p.TotalBooks, p.Unfetched = sel.IDs, len(sel.IDs), false
+		p.GoogleCappedBookIDs = sel.GoogleCapped
 		// Persist the selection before the first fetch, so a resume is handed
 		// this list (with "unfetched": false) and never re-selects.
 		if err := reporter.Checkpoint(p); err != nil {
@@ -285,12 +295,18 @@ func (s *Server) runMetadataCandidateFetchOp(ctx context.Context, rawParams json
 	writeCheckpoint := func() {
 		ckptMu.Lock()
 		defer ckptMu.Unlock()
-		if err := reporter.Checkpoint(candidateFetchCheckpointState(p.BookIDs, done, totalBooks)); err != nil {
+		if err := reporter.Checkpoint(candidateFetchCheckpointState(p.BookIDs, done, totalBooks, p.GoogleCappedBookIDs)); err != nil {
 			candidateFetchLog.Warn("checkpoint failed: opID=%s err=%s",
 				logger.SanitizeLogValue(opID), logger.SanitizeLogValue(err.Error()))
 		}
 	}
 
+	// Books whose Google step the selection put off (GoogleCappedBookIDs):
+	// asked of Open Library only. Read-only once the workers start.
+	googleCapped := make(map[string]bool, len(p.GoogleCappedBookIDs))
+	for _, id := range p.GoogleCappedBookIDs {
+		googleCapped[id] = true
+	}
 	for range numWorkers {
 		wg.Go(func() {
 			for bookID := range workCh {
@@ -303,7 +319,7 @@ func (s *Server) runMetadataCandidateFetchOp(ctx context.Context, rawParams json
 				if cerr != nil {
 					return
 				}
-				result := s.fetchCandidateForBook(ctx, mfs, store, limiter, opID, bookID, p.Force, folderMemo)
+				result := s.fetchCandidateForBook(ctx, mfs, store, limiter, opID, bookID, p.Force, googleCapped[bookID], folderMemo)
 				release()
 				resultJSON, err := json.Marshal(result)
 				if err != nil {
@@ -373,26 +389,26 @@ func (s *Server) runMetadataCandidateFetchOp(ctx context.Context, rawParams json
 // selectUnfetchedBooks resolves an Unfetched run's books
 // (unfetchedCandidateBookIDs), leaving out books another candidate fetch is
 // already fetching, and logs what it found.
-func (s *Server) selectUnfetchedBooks(ctx context.Context, reporter opsregistry.Reporter) ([]string, error) {
+func (s *Server) selectUnfetchedBooks(ctx context.Context, reporter opsregistry.Reporter) (unfetchedSelection, error) {
 	if s.metadataFetchService == nil {
-		return nil, fmt.Errorf("metadata-candidate-fetch: metadata service not initialized")
+		return unfetchedSelection{}, fmt.Errorf("metadata-candidate-fetch: metadata service not initialized")
 	}
 	store := s.storeForWiring()
 	busy, err := metabatch.ActiveCandidateFetchBookIDs(s.Ops(), s.opRegistry.IsRunning)
 	if err != nil {
-		return nil, fmt.Errorf("metadata-candidate-fetch: check running fetches: %w", err)
+		return unfetchedSelection{}, fmt.Errorf("metadata-candidate-fetch: check running fetches: %w", err)
 	}
 	sel, err := unfetchedCandidateBookIDs(ctx, store, s.metadataFetchService, s.newFolderMemo(store), busy, googleBackgroundRemaining())
 	if err != nil {
-		return nil, fmt.Errorf("metadata-candidate-fetch: select unfetched books: %w", err)
+		return unfetchedSelection{}, fmt.Errorf("metadata-candidate-fetch: select unfetched books: %w", err)
 	}
 	msg := fmt.Sprintf("selected %d books to fetch: %d never fetched or invalidated, %d with an empty answer to questions no longer asked, "+
-		"%d owed a fallback provider's answer, %d of them holding only unusable candidates (%d more left for a later Google Books quota day) "+
+		"%d owed a fallback provider's answer, %d of them holding only unusable candidates (%d Google Books lookups left for a later quota day, %d of those books still asked of Open Library) "+
 		"(%d live books read, %d left out with no usable search title)",
-		len(sel.IDs), sel.NoRow, sel.StaleEmpty, sel.FallbackPending, sel.FallbackUnusable, sel.FallbackCapped, sel.Scanned, sel.Unsearchable)
+		len(sel.IDs), sel.NoRow, sel.StaleEmpty, sel.FallbackPending, sel.FallbackUnusable, sel.FallbackCapped, len(sel.GoogleCapped), sel.Scanned, sel.Unsearchable)
 	_ = reporter.Log(slog.LevelInfo, msg)
 	candidateFetchLog.Info("%s", msg)
-	return sel.IDs, nil
+	return sel, nil
 }
 
 // candidateFetchLog is the process-log side of metadata.candidate-fetch

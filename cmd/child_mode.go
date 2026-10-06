@@ -1,7 +1,7 @@
 // file: cmd/child_mode.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-09-11
+// last-edited: 2026-10-06
 
 package cmd
 
@@ -12,6 +12,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/server"
 )
 
 // newServer is already defined in root.go as a package-level var pointing
@@ -85,6 +86,11 @@ func RunOperationRunner() {
 			config.Mutate(func(c *config.Config) { c.RootDir = v })
 		}
 	}
+
+	// An op run in this child process counts its Google Books lookups on the
+	// same persisted daily budget as the parent: without the attach it would
+	// count against an in-memory zero and bypass the shared quota.
+	server.AttachGoogleBooksBudgetStore(store)
 
 	srv := newServer(store)
 	reg := srv.OpRegistry()

@@ -1,5 +1,5 @@
 // file: internal/metafetch/service.go
-// version: 5.46.0
+// version: 5.47.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
 // last-edited: 2026-10-06
 
@@ -424,6 +424,11 @@ type SearchMetadataResponse struct {
 	sourceErrs map[string]error
 	// mergeCached is SearchOptions.MergeWithCached, for cacheSearchResponse.
 	mergeCached bool
+	// mergeUsable is SearchOptions.MergeUsable, for cacheSearchResponse.
+	mergeUsable func(MetadataCandidate) bool
+	// mergeFromHash is SearchOptions.MergeFromSourceHash, for
+	// cacheSearchResponse.
+	mergeFromHash string
 }
 
 // SourceErrors returns the error each failed source returned (keyed like
@@ -476,6 +481,24 @@ type SearchOptions struct {
 	// candidates were not usable, and replacing would silently drop those
 	// candidates from the review list. The union is re-ranked by score.
 	MergeWithCached bool
+
+	// MergeFromSourceHash, with MergeWithCached, names the SourceHash of the
+	// row the caller read and is merging into, when that row was hashed from
+	// other inputs than this search's yet still vouched for the book (the
+	// batch fetch's CachedBatchVerdict accepts a row hashed under the raw
+	// author credit before 2026-10-06's cleaning, or a pre-2026-09-28
+	// no-author row its fingerprint proves). Without it such a row is not
+	// the same inputs, and the fallback's answer would replace its
+	// candidates instead of merging into them. "" = the search's own hash.
+	MergeFromSourceHash string
+
+	// MergeUsable, with MergeWithCached, ranks the merged candidates usable
+	// first: a candidate it rejects (owner-rejected, refused by the ASIN
+	// checks, below the apply floor) is ranked after every one it accepts,
+	// whatever its score, so the row's first candidate -- the one the review
+	// list and bulk apply read -- is a usable one when there is any. nil
+	// ranks by score alone.
+	MergeUsable func(MetadataCandidate) bool
 
 	// BypassFetchCache skips the per-source fetch-cache READ, so every
 	// selected provider is asked again. Fresh non-empty results are still

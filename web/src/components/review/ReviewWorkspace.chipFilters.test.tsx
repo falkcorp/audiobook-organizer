@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.chipFilters.test.tsx
-// version: 1.7.0
+// version: 1.8.0
 // guid: 0d6c2e8a-94b1-4f37-8a5e-2c71b9e04f36
 // last-edited: 2026-10-06
 //
@@ -289,7 +289,11 @@ describe('Search again on the no-candidate books', () => {
     await user.click(screen.getByTestId('search-selected'));
     await waitFor(() => expect(api.clearMetadataNoMatch).toHaveBeenCalledWith('r1'));
     await waitFor(() =>
-      expect(api.batchFetchCandidates).toHaveBeenCalledWith({ book_ids: ['r1'], force: true })
+      expect(api.batchFetchCandidates).toHaveBeenCalledWith({
+        book_ids: ['r1'],
+        force: true,
+        interactive: true,
+      })
     );
   });
 
@@ -305,7 +309,11 @@ describe('Search again on the no-candidate books', () => {
     await user.click(screen.getByTestId('search-selected'));
 
     await waitFor(() =>
-      expect(api.batchFetchCandidates).toHaveBeenCalledWith({ book_ids: ['m1'], force: true })
+      expect(api.batchFetchCandidates).toHaveBeenCalledWith({
+        book_ids: ['m1'],
+        force: true,
+        interactive: true,
+      })
     );
     expect(api.clearMetadataNoMatch).not.toHaveBeenCalled();
   });

@@ -1,5 +1,5 @@
 // file: internal/metadata/throttle.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 589d6eef-182c-4245-9722-d24bbd3dcf06
 // last-edited: 2026-10-06
 
@@ -164,7 +164,7 @@ func ClassifyProviderError(err error) (reason ThrottleReason, hold time.Duration
 	// would classify as transport trouble below and hold the provider for
 	// EVERY caller, the interactive ones the budget reserves quota for
 	// included.
-	if IsDailyBudgetSpent(err) {
+	if IsDailyBudgetRefusal(err) {
 		return "", 0, false
 	}
 

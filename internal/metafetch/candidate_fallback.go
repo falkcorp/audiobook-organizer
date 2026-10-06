@@ -1,11 +1,13 @@
 // file: internal/metafetch/candidate_fallback.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2b452994-605f-4efc-9523-eccefaafce31
 // last-edited: 2026-10-06
 
 package metafetch
 
 import (
+	"strings"
+
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata/dailyquota"
 )
@@ -75,3 +77,17 @@ var ErrDailyBudgetSpent = dailyquota.ErrDailyBudgetSpent
 // A failure of such a source means the chain's question went unanswered; an
 // ASIN-only source's "no such ASIN" says nothing about the title.
 func IsTitleSearchingProvider(id string) bool { return sourcePolicyFor(id) != policyASINOnly }
+
+// IsReviewOnlyCandidateSource reports whether a candidate with this Source
+// (a provider display name) is REVIEW-ONLY: Open Library and Google Books,
+// the candidate fetch's fallback providers. Owner decision 2026-10-06: such
+// a candidate is never applied unattended (bulk apply, the metadata
+// upgrade, the transcription auto-apply); the owner applies it by hand from
+// the review page. applygate.ReviewOnlySource is the gate's reader.
+func IsReviewOnlyCandidateSource(source string) bool {
+	switch strings.TrimSpace(source) {
+	case (&metadata.OpenLibraryClient{}).Name(), (&metadata.GoogleBooksClient{}).Name():
+		return true
+	}
+	return false
+}

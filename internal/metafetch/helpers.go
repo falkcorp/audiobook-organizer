@@ -1,5 +1,5 @@
 // file: internal/metafetch/helpers.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
 // last-edited: 2026-10-06
 
@@ -587,7 +587,7 @@ func LedgerResultJSON(status, source, variant string) string {
 // verbatim. Callers stop the ladder on one.
 func providerSentinel(err error) bool {
 	return errors.Is(err, metadata.ErrProviderThrottled) || errors.Is(err, metadata.ErrCircuitOpen) ||
-		metadata.IsDailyBudgetSpent(err)
+		metadata.IsDailyBudgetRefusal(err)
 }
 
 // keepDiagnosis is the error to carry forward after next: a sentinel never

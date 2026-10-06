@@ -1,5 +1,5 @@
 // file: internal/metabatch/candidates.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-10-06
 //
@@ -185,6 +185,13 @@ type BatchFetchRequest struct {
 	// whose providers all answered empty 30-90 days ago would otherwise be
 	// served as known-empty (MetadataKnownEmptyTTL is 90 days) and stay stale.
 	Stale bool `json:"stale"`
+	// Interactive is the review page's "Search again" on ONE book: a person
+	// waiting on that book, so its lookups may use the Google Books quota
+	// background work leaves reserved (owner decision 2026-10-06). Honored
+	// only for exactly one explicit book id (server.singleBookSearch): the
+	// last 1-book chunk of a large selection does not send it, and no
+	// selection or stale refetch is ever interactive.
+	Interactive bool `json:"interactive,omitempty"`
 }
 
 // BatchApplyRequest is the JSON body for the batch candidate apply handler.
@@ -325,10 +332,16 @@ func CountByStatus(results []CandidateResult, status string) int {
 	return n
 }
 
+// RejectedCandidateReader is what LoadRejectedCandidateKeys reads: the
+// owner's rejections under their key prefix.
+type RejectedCandidateReader interface {
+	ScanPrefix(prefix string) ([]database.KVPair, error)
+}
+
 // LoadRejectedCandidateKeys finds previously rejected candidates for a book.
 // Uses a dedicated rejection key prefix for fast lookup instead of scanning
 // all operation results.
-func LoadRejectedCandidateKeys(store database.RawKVStore, bookID string) map[string]bool {
+func LoadRejectedCandidateKeys(store RejectedCandidateReader, bookID string) map[string]bool {
 	keys := make(map[string]bool)
 	// Scan only rejection keys for this specific book.
 	pairs, err := store.ScanPrefix(fmt.Sprintf("rejected_candidate:%s:", bookID))

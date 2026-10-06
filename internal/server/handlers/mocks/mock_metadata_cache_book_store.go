@@ -664,6 +664,68 @@ func (_c *MockMetadataCacheBookStore_ModifyBook_Call) RunAndReturn(run func(id s
 	return _c
 }
 
+// ScanPrefix provides a mock function for the type MockMetadataCacheBookStore
+func (_mock *MockMetadataCacheBookStore) ScanPrefix(prefix string) ([]database.KVPair, error) {
+	ret := _mock.Called(prefix)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ScanPrefix")
+	}
+
+	var r0 []database.KVPair
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string) ([]database.KVPair, error)); ok {
+		return returnFunc(prefix)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string) []database.KVPair); ok {
+		r0 = returnFunc(prefix)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]database.KVPair)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
+		r1 = returnFunc(prefix)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockMetadataCacheBookStore_ScanPrefix_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ScanPrefix'
+type MockMetadataCacheBookStore_ScanPrefix_Call struct {
+	*mock.Call
+}
+
+// ScanPrefix is a helper method to define mock.On call
+//   - prefix string
+func (_e *MockMetadataCacheBookStore_Expecter) ScanPrefix(prefix any) *MockMetadataCacheBookStore_ScanPrefix_Call {
+	return &MockMetadataCacheBookStore_ScanPrefix_Call{Call: _e.mock.On("ScanPrefix", prefix)}
+}
+
+func (_c *MockMetadataCacheBookStore_ScanPrefix_Call) Run(run func(prefix string)) *MockMetadataCacheBookStore_ScanPrefix_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockMetadataCacheBookStore_ScanPrefix_Call) Return(kVPairs []database.KVPair, err error) *MockMetadataCacheBookStore_ScanPrefix_Call {
+	_c.Call.Return(kVPairs, err)
+	return _c
+}
+
+func (_c *MockMetadataCacheBookStore_ScanPrefix_Call) RunAndReturn(run func(prefix string) ([]database.KVPair, error)) *MockMetadataCacheBookStore_ScanPrefix_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // UpdateBook provides a mock function for the type MockMetadataCacheBookStore
 func (_mock *MockMetadataCacheBookStore) UpdateBook(id string, book *database.Book) (*database.Book, error) {
 	ret := _mock.Called(id, book)

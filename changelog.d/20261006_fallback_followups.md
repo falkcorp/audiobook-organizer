@@ -29,3 +29,33 @@
     recent-fetches endpoints; a "deferred" chip on the review page.
   - Lost-candidates fixer no longer says "providers returned nothing" for a
     deferred refetch.
+  - **Open Library and Google Books candidates are review-only** (owner
+    decision): the apply gate refuses them with `review_only_source` in
+    every unattended apply (bulk apply, metadata upgrade), the transcription
+    auto-apply neither offers nor writes one, and an owner review applies
+    one by hand (never past `identity_stale`).
+  - **"Search again" on one book is interactive** (owner decision): the
+    review page marks it (`interactive` on `batch-fetch-candidates`, honored
+    for exactly one book id), so its Google lookup may use the 200 reserved
+    for interactive use. Any multi-book selection stays background (800).
+  - A fallback merge no longer replaces the chain's candidates on a row
+    written before `fetched_for_asin` existed, or on a row the batch verdict
+    vouched for under other hashed inputs (a raw author credit, a
+    pre-2026-09-28 no-author row). Merging into a legacy or prior-rule row
+    keeps its position filter, its fingerprint (legacy) and its
+    `FetchedAt`, so a filtered sibling never comes back as a fresh,
+    current candidate.
+  - A merge ranks usable candidates above refused ones (owner-rejected,
+    `asin_conflict`, below the floor), so the row's first candidate is one
+    the owner can use. The row's read and write are locked per book, so a
+    concurrent search-dialog fetch is not undone.
+  - The scheduled selection funds Google per request, and a book Open
+    Library still owes is asked of Open Library even when the day's Google
+    share is spent (its Google step waits, unrecorded).
+  - The "deferred" chip counts a book only while it still has no usable
+    candidate, and a usable answer clears the deferral.
+  - The Google budget is attached before the server is built and in the
+    operation-runner child process; a budget whose count cannot be read or
+    saved refuses without a throttle hold. A fallback whose candidates are
+    all ranked out of the row's top 10 is recorded as `ranked_out`, not a
+    match; the trigger uses the apply gate's full score rule.

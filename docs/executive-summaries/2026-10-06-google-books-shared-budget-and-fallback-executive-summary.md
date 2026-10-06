@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-06-google-books-shared-budget-and-fallback-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: eecc3fe7-e8de-499f-8114-d48d6f8a6ec1 -->
 <!-- last-edited: 2026-10-06 -->
 
@@ -38,3 +38,14 @@
     never use Google lookups.
   - The review page has a "deferred" chip that lists books waiting for a
     later Google lookup. Result counts now include deferred and skipped books.
+    A book drops off that chip as soon as it has a usable match.
+- **Your two decisions.**
+  - Open Library and Google Books matches are only ever applied by you, from
+    the review page. No automatic job applies one.
+  - "Search again" on a single book counts as you asking, so it may use the
+    200 reserved Google lookups. Searching many books at once is automatic
+    work and stops at 800.
+- **Second review round.** Adding Open Library or Google matches could, for
+  most books, wipe the Audible matches already stored, or bring back a wrong
+  volume an older search had filtered out. Both are fixed: new matches are
+  always added beside the old ones, and filtered matches stay filtered.

@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.159.0
+// version: 2.160.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-06
 
@@ -4633,6 +4633,12 @@ export interface BatchFetchRequest {
    * count (handlers.StaleCachedBookIDs). Implies force.
    */
   stale?: boolean;
+  /**
+   * "Search again" on ONE book: a person is waiting on it, so its lookups may
+   * use the Google Books quota background work leaves reserved. The server
+   * honors it only with exactly one book_ids entry.
+   */
+  interactive?: boolean;
 }
 
 /**

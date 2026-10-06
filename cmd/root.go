@@ -1,5 +1,5 @@
 // file: cmd/root.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: 6a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
 // last-edited: 2026-10-06
 
@@ -338,14 +338,18 @@ var serveCmd = &cobra.Command{
 		// Create and start server. Store is passed explicitly per the 4.4 DI
 		// migration; database.GlobalStore remains assigned for call sites that
 		// haven't yet been migrated to use s.Store().
+		// The shared Google Books daily budget persists its count in this
+		// store for the life of the process -- attached BEFORE the server is
+		// built, so no Google call made while it starts counts against an
+		// in-memory zero the attach would then discard. Process-scoped, so
+		// not inside NewServer (see AttachProviderThrottleStore).
+		server.AttachGoogleBooksBudgetStore(store)
+
 		srv := newServer(store)
 
 		// Process-scoped, so the throttle registry's store lifetime matches the
 		// process. Deliberately NOT inside NewServer -- see the doc comment.
 		server.AttachProviderThrottleStore(store)
-		// Same rule: the shared Google Books daily budget persists its count
-		// in this store for the life of the process.
-		server.AttachGoogleBooksBudgetStore(store)
 
 		fmt.Println("Server initialized (hub, batcher, file I/O pool)")
 		cfg := getDefaultServerConfig()
