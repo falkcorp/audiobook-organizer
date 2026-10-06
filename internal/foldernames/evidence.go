@@ -1,5 +1,5 @@
 // file: internal/foldernames/evidence.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: b940fbc0-ee6b-4be2-a4a8-26683848e423
 // last-edited: 2026-10-06
 
@@ -330,13 +330,6 @@ func (s *Snapshot) AuthorNamedSeries() []AuthorNamedSeries {
 type AuthorNamedSeries struct {
 	Series    database.Series
 	AuthorIDs map[int]bool
-}
-
-// SameName reports whether a and b letters-equal (the key the snapshot
-// matches series and author names by).
-func SameName(a, b string) bool {
-	ka := key(a)
-	return ka != "" && ka == key(b)
 }
 
 // creditsSomeoneElse reports whether any of books is credited to an author

@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_helpers.go
-// version: 1.19.1
+// version: 1.20.0
 // guid: 550a807d-8c00-4e34-9a8c-52a80710a0b9
-// last-edited: 2026-09-14
+// last-edited: 2026-10-06
 //
 // Shared, non-HTTP helpers that were extracted from duplicates_handlers.go when
 // the 17 duplicates HTTP handlers moved to internal/server/handlers/duplicates.
@@ -221,7 +221,15 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore,
 		authorID int
 	}
 	groups := make(map[groupKey][]database.Series)
+	held := 0
 	for _, s := range allSeries {
+		// A held row (database.SeriesHeld) is kept for an undo that links its
+		// books back; merging it away would delete it. Its twins still merge
+		// among themselves.
+		if database.SeriesHeld(s) {
+			held++
+			continue
+		}
 		aid := 0
 		if s.AuthorID != nil {
 			aid = *s.AuthorID
@@ -535,6 +543,10 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore,
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
+			if refCounts[ser.ID] == 0 && database.SeriesHeld(ser) {
+				// Kept for an undo; counted with the merge pass's held rows.
+				continue
+			}
 			if refCounts[ser.ID] == 0 {
 				if err := store.DeleteSeries(ser.ID); err != nil {
 					mergeErrors = append(mergeErrors, fmt.Sprintf("failed to delete orphan series %d: %v", ser.ID, err))
@@ -556,6 +568,9 @@ func (s *Server) executeSeriesPrune(ctx context.Context, store seriesPruneStore,
 	}
 
 	totalCleaned := totalMerged + orphansDeleted
+	if held > 0 {
+		_ = progress.Log("info", fmt.Sprintf("%d held series rows were kept (an undo links books back to them)", held), nil)
+	}
 	resultMsg := fmt.Sprintf("Series prune complete: %d duplicates merged, %d orphans deleted (%d total cleaned, %d errors)",
 		totalMerged, orphansDeleted, totalCleaned, len(mergeErrors))
 	_ = progress.Log("info", resultMsg, nil)

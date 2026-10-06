@@ -1,7 +1,7 @@
 // file: internal/undo/revert_plan.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 7c3e9a51-2f84-4b6d-a0e7-5d1c8b4f2e96
-// last-edited: 2026-10-03
+// last-edited: 2026-10-06
 
 package undo
 
@@ -51,6 +51,10 @@ type RevertPlan struct {
 	// fieldLocks: this operation's ChangeTypeFieldLock rows by book and
 	// field, every one of them (reverted or not), for CheckPairedFieldLock.
 	fieldLocks map[string][]*database.OperationChange
+	// seriesLinks: this operation's series_id metadata_update row per book
+	// (the newest, voided ones left out), for the series_sequence pairing
+	// (SeriesLinkOf).
+	seriesLinks map[string]*database.OperationChange
 }
 
 // PlanRevert orders rows (an operation's not-yet-reverted restorable rows, in
@@ -64,7 +68,7 @@ func PlanRevert(rows []*database.OperationChange, files func(bookID string) ([]d
 	}
 	p := &RevertPlan{Stamps: OpSoftDeleteStamps(rows), deps: deps, depIDs: map[string]bool{},
 		restored: map[string]bool{}, refusedBook: map[string]bool{}, handedOff: map[string]bool{}, demoted: map[string]bool{},
-		fieldLocks: map[string][]*database.OperationChange{}}
+		fieldLocks: map[string][]*database.OperationChange{}, seriesLinks: map[string]*database.OperationChange{}}
 	for _, ids := range deps {
 		for _, id := range ids {
 			p.depIDs[id] = true
@@ -172,7 +176,8 @@ func (p *RevertPlan) Record(c *database.OperationChange, err error) {
 }
 
 // NoteHandOffs takes every row of the operation, reverted or not, and notes
-// the books it has a ChangeTypeBookPrimaryHandoff row for.
+// the books it has a ChangeTypeBookPrimaryHandoff row for (and the field-lock
+// and series_id rows the paired checks read).
 func (p *RevertPlan) NoteHandOffs(all []*database.OperationChange) {
 	for _, c := range all {
 		switch c.ChangeType {
@@ -185,8 +190,21 @@ func (p *RevertPlan) NoteHandOffs(all []*database.OperationChange) {
 				k := c.BookID + "\x00" + c.FieldName
 				p.fieldLocks[k] = append(p.fieldLocks[k], c)
 			}
+		case "metadata_update":
+			if c.FieldName == "series_id" && !c.Voided {
+				p.seriesLinks[c.BookID] = c
+			}
 		}
 	}
+}
+
+// SeriesLinkOf returns this operation's series_id row for c's book, or nil
+// (NoteHandOffs collects them from every row of the operation).
+func (p *RevertPlan) SeriesLinkOf(c *database.OperationChange) *database.OperationChange {
+	if p == nil {
+		return nil
+	}
+	return p.seriesLinks[c.BookID]
 }
 
 // FieldLocksOf returns this operation's field-lock rows for c's book and

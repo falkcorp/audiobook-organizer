@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/author_named_series_fixer_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: aa736089-b4ed-43cf-b00e-426629a38cb7
 // last-edited: 2026-10-06
 
@@ -19,6 +19,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
+	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 
 // ansEnqueueDeps records the operations the fixer enqueues.
@@ -49,6 +50,7 @@ type ansLibrary struct {
 	realSeriesJunkAuthorBook, thrawn             string
 	rogueBook                                    string
 	discworldBook                                string
+	houseSeriesBook, nearDupBook                 string
 	sandersonID, starWarsAuthorID, rogueAuthorID int
 }
 
@@ -118,6 +120,21 @@ func newANSLibrary(t *testing.T) *ansLibrary {
 	pratchett := author("Terry Pratchett")
 	dw := series("Discworld", nil)
 	l.discworldBook = book("Mort", pratchett, &dw, pos(4))
+
+	// A pen-name house series: named after its author, books numbered,
+	// other books by the same name elsewhere. Held: the numbers are what
+	// tell it from a junk series.
+	carter := author("Nick Carter")
+	nc := series("Nick Carter", &carter)
+	l.houseSeriesBook = book("Run Spy Run", carter, &nc, pos(1))
+	book("Danger Key", carter, &nc, pos(2))
+	book("Saigon", carter, nil, nil)
+
+	// The only "outside" book is a fragment of the series' own book.
+	roe := author("Jane Roe")
+	jr := series("Jane Roe", &roe)
+	l.nearDupBook = book("The Vanishing", roe, &jr, nil)
+	book("The Vanishing Part 2", roe, nil, nil)
 	return l
 }
 
@@ -146,6 +163,7 @@ func TestAuthorNamedSeriesFixer_Classification(t *testing.T) {
 		assert.Empty(t, r.Skipped, "%s: %s", id, r.SkipReason)
 		assert.Equal(t, "author_named_series", r.Class)
 		assert.Equal(t, "Brandon Sanderson", r.Current["series"])
+		assert.Equal(t, "Brandon Sanderson", r.Author, "the row names the book's author")
 		assert.Equal(t, "", r.Proposed["series"])
 	}
 	assert.Equal(t, "1", rows[l.elantris].Current["series_sequence"])
@@ -158,6 +176,8 @@ func TestAuthorNamedSeriesFixer_Classification(t *testing.T) {
 		l.doctorWho:                repairs.SkipOwnerManual,
 		l.realSeriesJunkAuthorBook: ansSkipRealSeries,
 		l.rogueBook:                ansSkipAuthorRowJunk,
+		l.houseSeriesBook:          ansSkipNumberedSeries,
+		l.nearDupBook:              ansSkipNoOutsideBooks,
 	}
 	for id, want := range held {
 		r, ok := rows[id]
@@ -218,7 +238,7 @@ func TestAuthorNamedSeriesFixer_ApplyUnlinksJournalsAndIsUndoable(t *testing.T) 
 	p, ok := deps.params[0].(metabatch.FetchOpParams)
 	require.True(t, ok)
 	assert.Equal(t, []string{l.elantris}, p.BookIDs)
-	assert.True(t, p.Force)
+	assert.False(t, p.Force, "series is no search input: a forced fetch would re-ask the same question")
 	assert.Equal(t, "op-fetch-1", out.FollowUp)
 
 	// The op revert restores both the link and the position.
@@ -341,4 +361,126 @@ func TestAuthorNamedSeriesFixer_SiblingsApplyTogether(t *testing.T) {
 	p, ok := deps.params[0].(metabatch.FetchOpParams)
 	require.True(t, ok)
 	assert.ElementsMatch(t, []string{l.elantris, l.warbreaker}, p.BookIDs)
+}
+
+// The fixer holds the series row before it unlinks a book, so no delete
+// (the orphan prune included) can remove it while an undo may link the book
+// back; the undo then restores the link and the position.
+func TestAuthorNamedSeriesFixer_HoldsTheSeriesForTheUndo(t *testing.T) {
+	l := newANSLibrary(t)
+	f := newAuthorNamedSeriesFixer(&Plugin{deps: &ansEnqueueDeps{fakeDeps: fakeDeps{store: l.st}}})
+	res, err := repairs.RunPlan(context.Background(), f, nil, repairs.PlanDeps{Guard: l.st}, &fakeReporter{})
+	require.NoError(t, err)
+	w := repairs.NewWriter(l.st, l.st, f.ID(), "bulk_update", "repairs-").WithJournal(l.st, l.st, "op-hold")
+	out, err := repairs.RunApply(context.Background(), f, res, "plan-1", []string{l.elantris}, false,
+		repairs.ApplyDeps{Guard: l.st, Writer: w, OpID: "op-hold"}, &fakeReporter{})
+	require.NoError(t, err)
+	require.Equal(t, 1, out.Applied, "%v", out.ByOutcome)
+
+	s, err := l.st.GetSeriesByID(l.junkSeries)
+	require.NoError(t, err)
+	assert.Equal(t, authorNamedSeriesFixerID, s.HeldBy)
+	all, err := l.st.GetAllSeries()
+	require.NoError(t, err)
+	for _, a := range all {
+		if a.ID == l.junkSeries {
+			assert.True(t, database.SeriesHeld(a), "the list read (memdb) sees the hold too")
+		}
+	}
+	require.ErrorIs(t, l.st.DeleteSeries(l.junkSeries), database.ErrSeriesHeld)
+
+	undo, err := metafetch.NewService(l.st).UndoLastApply(l.elantris)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"series_id", "series_sequence"}, undo.Reverted)
+}
+
+// ansUnheldUnlink unlinks book from its series the way the fixer writes
+// (Modify, then the journal) but WITHOUT the hold, then deletes the series
+// row: the state any other delete path (a hand delete, a merge) can leave.
+func ansUnheldUnlink(t *testing.T, st *database.PebbleStore, opID, bookID string) {
+	t.Helper()
+	w := repairs.NewWriter(st, st, authorNamedSeriesFixerID, "bulk_update", "repairs-").WithJournal(st, st, opID)
+	var sid, seq *int
+	_, err := w.Modify(bookID, func(b *database.Book) error {
+		sid, seq = copyIntPtr(b.SeriesID), copyIntPtr(b.SeriesSequence)
+		b.SeriesID, b.SeriesSequence = nil, nil
+		return nil
+	})
+	require.NoError(t, err)
+	require.NoError(t, w.Journal(bookID, "metadata_update", "series_id", intPtrString(sid), ""))
+	require.NoError(t, w.Journal(bookID, "metadata_update", "series_sequence", intPtrString(seq), ""))
+	require.NoError(t, st.DeleteSeries(*sid))
+}
+
+// A series row deleted since the unlink is never linked again: both undo
+// paths refuse with the reason, the position is not put back on its own,
+// and the book is left with no series id rather than a dangling one.
+func TestSeriesUndo_RefusesALinkToADeletedSeries(t *testing.T) {
+	for _, path := range []string{"undo-last-apply", "op-revert"} {
+		t.Run(path, func(t *testing.T) {
+			l := newANSLibrary(t)
+			const opID = "op-gone"
+			ansUnheldUnlink(t, l.st, opID, l.elantris)
+			switch path {
+			case "undo-last-apply":
+				res, err := metafetch.NewService(l.st).UndoLastApply(l.elantris)
+				require.NoError(t, err)
+				assert.Contains(t, res.Failed, "series_id")
+				assert.Contains(t, res.FailedReasons["series_id"], "no longer exists")
+				assert.Contains(t, res.ChangedSince, "series_sequence")
+				assert.NotEmpty(t, res.FailedReasons["series_sequence"])
+			case "op-revert":
+				_, err := audiobooks.NewRevertService(l.st).RevertOperation(opID)
+				require.Error(t, err, "both rows are refused")
+			}
+			b, err := l.st.GetBookByID(l.elantris)
+			require.NoError(t, err)
+			assert.Nil(t, b.SeriesID, "no dangling series id")
+			assert.Nil(t, b.SeriesSequence, "no position without its series")
+		})
+	}
+}
+
+// The owner links the book to a real series with no position after the
+// apply. Reverting the apply restores neither field: the link changed since,
+// and the old position belongs to the old series, not the real one.
+func TestSeriesUndo_PositionIsNotWrittenIntoAnotherSeries(t *testing.T) {
+	for _, path := range []string{"undo-last-apply", "op-revert"} {
+		t.Run(path, func(t *testing.T) {
+			l := newANSLibrary(t)
+			f := newAuthorNamedSeriesFixer(&Plugin{deps: &ansEnqueueDeps{fakeDeps: fakeDeps{store: l.st}}})
+			res, err := repairs.RunPlan(context.Background(), f, nil, repairs.PlanDeps{Guard: l.st}, &fakeReporter{})
+			require.NoError(t, err)
+			const opID = "op-real"
+			w := repairs.NewWriter(l.st, l.st, f.ID(), "bulk_update", "repairs-").WithJournal(l.st, l.st, opID)
+			out, err := repairs.RunApply(context.Background(), f, res, "plan-1", []string{l.elantris}, false,
+				repairs.ApplyDeps{Guard: l.st, Writer: w, OpID: opID}, &fakeReporter{})
+			require.NoError(t, err)
+			require.Equal(t, 1, out.Applied)
+
+			mort, err := l.st.GetBookByID(l.discworldBook)
+			require.NoError(t, err)
+			realID := *mort.SeriesID
+			_, err = l.st.ModifyBook(l.elantris, func(b *database.Book) error { b.SeriesID = &realID; return nil })
+			require.NoError(t, err)
+
+			switch path {
+			case "undo-last-apply":
+				u, err := metafetch.NewService(l.st).UndoLastApply(l.elantris)
+				require.NoError(t, err)
+				assert.ElementsMatch(t, []string{"series_id", "series_sequence"}, u.ChangedSince)
+			case "op-revert":
+				rep, err := undo.PreflightUndoConflicts(l.st, opID)
+				require.NoError(t, err)
+				assert.Len(t, rep.CheckFailed, 2, "the preflight refuses the position with its link: %+v", rep)
+				_, err = audiobooks.NewRevertService(l.st).RevertOperation(opID)
+				require.Error(t, err)
+			}
+			b, err := l.st.GetBookByID(l.elantris)
+			require.NoError(t, err)
+			require.NotNil(t, b.SeriesID)
+			assert.Equal(t, realID, *b.SeriesID, "the owner's series stands")
+			assert.Nil(t, b.SeriesSequence, "no junk number in the real series")
+		})
+	}
 }

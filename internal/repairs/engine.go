@@ -1,5 +1,5 @@
 // file: internal/repairs/engine.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 9b3e7f40-2d15-4a86-9c1f-6e0a4d8b7c25
 // last-edited: 2026-10-06
 
@@ -596,8 +596,10 @@ func RunApply(ctx context.Context, f Fixer, plan *PlanResult, planOpID string, r
 			res.Failed++
 		}
 	}
-	if !dryRun && res.Applied > 0 {
-		runAfterApply(ctx, f, byID, results, res, reporter)
+	if !dryRun && res.Applied+res.Partial > 0 {
+		// Not ctx: a cancelled apply still leaves the books its finished
+		// rows wrote, and their follow-up is owed all the same.
+		runAfterApply(context.WithoutCancel(ctx), f, byID, results, res, reporter)
 	}
 	if deps.Writer != nil {
 		res.BookWrites = deps.Writer.Writes()
@@ -704,12 +706,15 @@ func applyOne(ctx context.Context, f Fixer, params json.RawMessage, planned Row,
 }
 
 // AfterApplier is implemented by a fixer with follow-up work for the books
-// its applied rows wrote (maintenance.author-named-series enqueues one
-// metadata candidate fetch for them). RunApply calls it once per write run,
-// after every row has settled and outside the per-row writes, so the work it
-// starts never runs under the scan stand-down. bookIDs are the books of the
-// rows whose outcome is applied, sorted and unique. It returns what it
-// started (an operation id) for the apply result.
+// its rows wrote (maintenance.author-named-series enqueues one metadata
+// candidate fetch for them). RunApply calls it once per write run, after
+// every row has settled -- also when the run was cancelled or lost its
+// stand-down lease part-way, for the rows that wrote before that. The call
+// itself runs while the apply still holds the scan stand-down (it is
+// released when RunApply returns), so it must only START work, such as
+// enqueueing an operation, never do slow work inline. bookIDs are the books
+// of the rows whose outcome is applied or partially_applied, sorted and
+// unique. It returns what it started (an operation id) for the apply result.
 type AfterApplier interface {
 	AfterApply(ctx context.Context, bookIDs []string) (string, error)
 }
@@ -725,7 +730,7 @@ func runAfterApply(ctx context.Context, f Fixer, byID map[string]*Row, results [
 	var ids []string
 	for _, r := range results {
 		row := byID[r.RowID]
-		if r.Outcome != OutcomeApplied || row == nil {
+		if (r.Outcome != OutcomeApplied && r.Outcome != OutcomePartial) || row == nil {
 			continue
 		}
 		for _, id := range row.BookIDs {

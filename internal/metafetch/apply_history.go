@@ -1,7 +1,7 @@
 // file: internal/metafetch/apply_history.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 4b9d7e21-0c3a-4f58-b6e2-8a1f5d3c9e07
-// last-edited: 2026-09-30
+// last-edited: 2026-10-06
 
 package metafetch
 
@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -403,6 +404,10 @@ type UndoApplyResult struct {
 	Locked []string `json:"locked,omitempty"`
 	// Failed fields could not be restored (unparsable or unknown field).
 	Failed []string `json:"failed,omitempty"`
+	// FailedReasons says why a field in Failed or ChangedSince was refused
+	// when the bare outcome does not (a series row that no longer exists, a
+	// position whose series was not put back).
+	FailedReasons map[string]string `json:"failed_reasons,omitempty"`
 	// AuthorCreditsLeft is set when author_name was reverted but the
 	// book_authors join changed since the apply (or was not recorded), so the
 	// join was left as it is.
@@ -477,8 +482,13 @@ func (mfs *Service) UndoLastApply(bookID string) (*UndoApplyResult, error) {
 		res.Failed = slices.Clone(res.authorRefused)
 		var lockErr error
 		restoredLocked, lockErr = database.ApplyRespectingLocks(mfs.db, row, func(b *database.Book) {
-			for i := range rows {
-				switch undoOneField(b, &rows[i]) {
+			res.FailedReasons = nil
+			env := undoEnv{seriesExists: mfs.seriesExists, pair: batchSeriesRow(rows)}
+			// The series link before its position: a position is put back
+			// only into the series it was numbered in (undoOneField).
+			for _, i := range seriesFirst(rows) {
+				o, why := undoOneField(b, &rows[i], env)
+				switch o {
 				case undoReverted:
 					res.Reverted = append(res.Reverted, rows[i].Field)
 				case undoChangedSince:
@@ -488,6 +498,7 @@ func (mfs *Service) UndoLastApply(bookID string) (*UndoApplyResult, error) {
 				default:
 					res.Failed = append(res.Failed, rows[i].Field)
 				}
+				res.refusedBecause(rows[i].Field, why)
 			}
 		})
 		if lockErr != nil {
@@ -574,16 +585,36 @@ func decodeHistoryValue(v *string) string {
 	return s
 }
 
+// undoEnv is what undoOneField reads besides the book row: whether a series
+// row exists, and the series row of the batch being undone (nil when the
+// batch changed no series link).
+type undoEnv struct {
+	seriesExists func(id int) (bool, error)
+	pair         *database.MetadataChangeRecord
+}
+
 // undoOneField is the compare-and-set for one history row, run on the row as
-// read under the book's write stripe. It only touches the struct.
-func undoOneField(b *database.Book, r *database.MetadataChangeRecord) undoOutcome {
+// read under the book's write stripe. It only touches the struct. why says
+// why a row was refused when the outcome alone does not.
+//
+// Two rules beyond the compare-and-set keep a series undo from doing damage:
+//   - a series link goes back only while its series row exists. The orphan
+//     prune, a merge or a hand delete may have removed it since, and
+//     restoring the id then leaves the book naming a series that does not
+//     exist (the phantom-series damage, database/series_bookref.go);
+//   - a series position goes back only into the series it was numbered in:
+//     when the batch also changed the link (env.pair), the book must be in
+//     that link's previous series by now (put back by the pair just before,
+//     or already). A position restored into whatever series the book holds
+//     now would number it in a series it was never numbered in.
+func undoOneField(b *database.Book, r *database.MetadataChangeRecord, env undoEnv) (undoOutcome, string) {
 	jsonName := r.Field
 	if j, ok := historyToJSON[r.Field]; ok {
 		jsonName = j
 	}
 	if jsonName == "author_id" || jsonName == "series_id" {
 		if r.PreviousRef == nil || r.NewRef == nil {
-			return undoFailed
+			return undoFailed, ""
 		}
 		cur, prev, next := &b.AuthorID, r.PreviousRef.AuthorID, r.NewRef.AuthorID
 		if jsonName == "series_id" {
@@ -591,30 +622,128 @@ func undoOneField(b *database.Book, r *database.MetadataChangeRecord) undoOutcom
 		}
 		switch {
 		case eqIntPtr(*cur, next):
+			if jsonName == "series_id" && prev != nil {
+				if why := seriesGone(env, *prev); why != "" {
+					return undoFailed, why
+				}
+			}
 			*cur = copyIntPtr(prev)
-			return undoReverted
+			return undoReverted, ""
 		case eqIntPtr(*cur, prev):
-			return undoAlready
+			return undoAlready, ""
 		default:
-			return undoChangedSince
+			return undoChangedSince, ""
 		}
+	}
+	if jsonName == "series_sequence" && env.pair != nil && env.pair.PreviousRef != nil &&
+		!eqIntPtr(b.SeriesID, env.pair.PreviousRef.SeriesID) {
+		return undoChangedSince, fmt.Sprintf("the book is not back in series %s, the series this position was numbered in; the position is not restored",
+			intPtrText(env.pair.PreviousRef.SeriesID))
 	}
 	current, err := database.RenderBookField(b, jsonName)
 	if err != nil {
-		return undoFailed
+		return undoFailed, ""
 	}
 	prev, next := decodeHistoryValue(r.PreviousValue), decodeHistoryValue(r.NewValue)
 	switch {
 	case current == next && prev != next:
 		if database.RestoreRenderedBookField(b, jsonName, prev) != nil {
-			return undoFailed
+			return undoFailed, ""
 		}
-		return undoReverted
+		return undoReverted, ""
 	case current == prev:
-		return undoAlready
+		return undoAlready, ""
 	default:
-		return undoChangedSince
+		return undoChangedSince, ""
 	}
+}
+
+// seriesGone returns why series id cannot be linked again ("" when its row
+// exists).
+func seriesGone(env undoEnv, id int) string {
+	if env.seriesExists == nil {
+		return fmt.Sprintf("series %d cannot be checked (no series reader); the link is not restored", id)
+	}
+	ok, err := env.seriesExists(id)
+	switch {
+	case err != nil:
+		return fmt.Sprintf("series %d could not be read (%v); the link is not restored", id, err)
+	case !ok:
+		return fmt.Sprintf("series %d no longer exists; restoring the link would leave the book naming a missing series", id)
+	}
+	return ""
+}
+
+// seriesExists reports whether series row id exists.
+func (mfs *Service) seriesExists(id int) (bool, error) {
+	s, err := mfs.db.GetSeriesByID(id)
+	return s != nil, err
+}
+
+// batchSeriesRow returns the batch's series-link row, or nil.
+func batchSeriesRow(rows []database.MetadataChangeRecord) *database.MetadataChangeRecord {
+	for i := range rows {
+		if historyJSONName(rows[i].Field) == "series_id" && rows[i].ChangeType != ChangeTypeApplyUndo {
+			return &rows[i]
+		}
+	}
+	return nil
+}
+
+// sameBatch returns the history rows of r's batch (r alone when it has none).
+func sameBatch(history []database.MetadataChangeRecord, r *database.MetadataChangeRecord) []database.MetadataChangeRecord {
+	if r.BatchID == "" {
+		return []database.MetadataChangeRecord{*r}
+	}
+	var out []database.MetadataChangeRecord
+	for _, h := range history {
+		if h.BatchID == r.BatchID && h.ChangeType != ChangeTypeApplyUndo {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
+// seriesFirst returns rows' indexes with the series-link rows first, so the
+// position rows after them see the link already put back.
+func seriesFirst(rows []database.MetadataChangeRecord) []int {
+	idx := make([]int, 0, len(rows))
+	for i := range rows {
+		if historyJSONName(rows[i].Field) == "series_id" {
+			idx = append(idx, i)
+		}
+	}
+	for i := range rows {
+		if historyJSONName(rows[i].Field) != "series_id" {
+			idx = append(idx, i)
+		}
+	}
+	return idx
+}
+
+func historyJSONName(field string) string {
+	if j, ok := historyToJSON[field]; ok {
+		return j
+	}
+	return field
+}
+
+func intPtrText(p *int) string {
+	if p == nil {
+		return "(none)"
+	}
+	return strconv.Itoa(*p)
+}
+
+// refusedBecause records why field was refused, when there is a reason.
+func (r *UndoApplyResult) refusedBecause(field, why string) {
+	if why == "" {
+		return
+	}
+	if r.FailedReasons == nil {
+		r.FailedReasons = map[string]string{}
+	}
+	r.FailedReasons[field] = why
 }
 
 func eqIntPtr(a, b *int) bool {
@@ -709,9 +838,13 @@ func (mfs *Service) UndoFieldChange(bookID, field string) (*UndoApplyResult, err
 		return res, ErrFieldNotUndoable
 	}
 	var outcome undoOutcome
+	var why string
+	// A position is put back only into the series it was numbered in: the
+	// series row of the same batch names it.
+	env := undoEnv{seriesExists: mfs.seriesExists, pair: batchSeriesRow(sameBatch(history, latest))}
 	updated, err := mfs.db.ModifyBook(bookID, func(row *database.Book) error {
 		restored, lockErr := database.ApplyRespectingLocks(mfs.db, row, func(b *database.Book) {
-			outcome = undoOneField(b, &rows[0])
+			outcome, why = undoOneField(b, &rows[0], env)
 		})
 		if lockErr != nil {
 			return lockErr
@@ -736,6 +869,7 @@ func (mfs *Service) UndoFieldChange(bookID, field string) (*UndoApplyResult, err
 		return res, ErrFieldChangedSince
 	case outcome == undoChangedSince:
 		res.ChangedSince = []string{field}
+		res.refusedBecause(field, why)
 		return res, ErrFieldChangedSince
 	case outcome == undoAlready:
 		res.AlreadyRestored = []string{field}
@@ -747,6 +881,7 @@ func (mfs *Service) UndoFieldChange(bookID, field string) (*UndoApplyResult, err
 		return res, nil
 	case outcome != undoReverted:
 		res.Failed = []string{field}
+		res.refusedBecause(field, why)
 		return res, ErrFieldNotUndoable
 	}
 	res.Reverted = []string{field}

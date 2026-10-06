@@ -680,6 +680,29 @@ func (rs *RevertService) revertChangeIn(c *database.OperationChange, plan *undo.
 	}
 }
 
+// seriesLinkOf returns the operation's series_id row for c's book when c is
+// a series_sequence row (nil otherwise): from the plan, or, for a lone row
+// reverted without one, from the operation's journal.
+func (rs *RevertService) seriesLinkOf(c *database.OperationChange, plan *undo.RevertPlan) (*database.OperationChange, error) {
+	if c.FieldName != "series_sequence" {
+		return nil, nil
+	}
+	if plan != nil {
+		return plan.SeriesLinkOf(c), nil
+	}
+	all, err := rs.db.GetOperationChanges(c.OperationID)
+	if err != nil {
+		return nil, fmt.Errorf("read the journal of %s: %w", c.OperationID, err)
+	}
+	var link *database.OperationChange
+	for _, o := range all {
+		if o.BookID == c.BookID && o.ChangeType == "metadata_update" && o.FieldName == "series_id" && !o.Voided {
+			link = o
+		}
+	}
+	return link, nil
+}
+
 // pairedFieldLocks returns the lock rows undo.CheckPairedFieldLock reads for
 // a metadata_update row: from the plan (every row of the operation), or, for
 // a lone row reverted without a plan, from the operation's journal. It reads
@@ -1681,6 +1704,20 @@ func (rs *RevertService) revertMetadataUpdate(c *database.OperationChange, plan 
 	if err := undo.CheckRestoreReferent(rs.db, c); err != nil {
 		return fmt.Errorf("book %s: not restored, %w", c.BookID, err)
 	}
+	// A series position is paired with the operation's series link
+	// (undo.CheckSequencePaired): it goes back only into the series it was
+	// numbered in, together with the link when the link is still the
+	// operation's. The link's referent is checked here, before the stripe,
+	// like the row's own; its error matters only when the link goes back in
+	// this write.
+	link, err := rs.seriesLinkOf(c, plan)
+	if err != nil {
+		return fmt.Errorf("book %s: not restored, %w", c.BookID, err)
+	}
+	var linkReferent error
+	if link != nil {
+		linkReferent = undo.CheckRestoreReferent(rs.db, link)
+	}
 	// A repair that wrote a field also locked it (undo.ChangeTypeFieldLock).
 	// The value goes back only while that lock is still the repair's or
 	// gone: one a person took over makes the value theirs
@@ -1714,11 +1751,25 @@ func (rs *RevertService) revertMetadataUpdate(c *database.OperationChange, plan 
 	// since and is refused. The preflight runs the same check. Only this field
 	// is written; the rest of the row is whatever the store holds now.
 	return rs.modifyBook(c.OperationID, c.BookID, func(book *database.Book) error {
+		withLink, perr := undo.CheckSequencePaired(book, c, link)
+		if perr != nil {
+			return fmt.Errorf("book %s: not restored, %w", c.BookID, perr)
+		}
+		if withLink && linkReferent != nil {
+			return fmt.Errorf("book %s: position not restored, its series link cannot go back: %w", c.BookID, linkReferent)
+		}
 		if err := undo.CheckBookFieldCurrent(book, c); err != nil {
 			if errors.Is(err, undo.ErrAlreadyRestored) {
 				return database.ErrSkipBookWrite
 			}
 			return fmt.Errorf("book %s: not restored, %w", c.BookID, err)
+		}
+		if withLink {
+			// The link goes back in this same write; its own row then finds
+			// it already restored.
+			if err := undo.RestoreBookField(book, link.FieldName, link.OldValue); err != nil {
+				return err
+			}
 		}
 		// Exactly OldValue goes back, typed by the Book field it names; ""
 		// clears a pointer field to nil. An unparsable value is an error, not
