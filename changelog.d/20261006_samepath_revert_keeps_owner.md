@@ -18,8 +18,18 @@
   copies under the merge lock, before the slower user-state follow. The
   hand-off's demotes ran after that follow, so a copy whose explicit false
   turned nil or true in between was then written. The hand-off now takes a
-  per-member guard (`versionprimary.Env.MayWrite`). It asks the guard, under
-  the group lock and before any write, about every member it would write.
-  One refusal refuses the whole hand-off and nothing is written.
+  per-member guard (`versionprimary.Env.MayWrite`, and
+  `versionprimary.CrownEnv` for a crown). It asks the guard, under the group
+  lock and before any write, about every member it would write. One refusal
+  refuses the whole hand-off and nothing is written.
+- **The guard is everywhere a retire or an undo hands off.** The
+  iTunes-ownership predicate moved to the new `internal/itunesguard`
+  package, so both the merge fixers and the op revert use it. Every
+  `retireInto` hand-off passes it, which covers duplicate-copies and
+  fragment-consolidation retires as well as consolidation-leftovers. The
+  op revert's settle passes it to its crown and to its
+  `EnsureSinglePrimary` fallback. A group it would have to write is left as
+  it stands and listed in the new `RevertResult.SettleSkipped`. That makes
+  the result partial, and the group is not recorded for retry.
 - `versionprimary.EnsureSinglePrimary` with `Env.Expect` set now refuses an
   empty group (or no group) instead of reporting success.
