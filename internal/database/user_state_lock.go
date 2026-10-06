@@ -1,7 +1,7 @@
 // file: internal/database/user_state_lock.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d3079a7f-dd6e-4d4f-8f7d-f9f740ba41e0
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package database
 
@@ -33,7 +33,11 @@ var userStateLocks [userStateStripes]sync.Mutex
 //   - repairs.Writer.SetUserState (the Audible read-status import), taken
 //     inside merge.LockMergeRMW;
 //   - the revert of an undo.ChangeTypeUserBookStateSet row, taken inside
-//     merge.LockMergeRMW.
+//     merge.LockMergeRMW;
+//   - the merge undo restore (merge.RestoreFollowedProgress, inside
+//     merge.LockMergeRMW): restoreAbsorbedSide across its read and write of
+//     the absorbed book, and reconcileTouchedSurvivor across its re-read
+//     and every write (positions, marker, state) on the survivor.
 //
 // LOCK ORDER: merge.LockMergeRMW, then this stripe, then anything else
 // (session.mu, a book's write stripe). Nothing takes this stripe and then the
@@ -44,7 +48,7 @@ var userStateLocks [userStateStripes]sync.Mutex
 // RebuildUserBookState and the position writes that precede them (the web
 // reading heartbeat in handlers/reading.go, the iTunes position sync's
 // position write), the iTunes position backfill job, and the merge follow /
-// combine paths (which hold merge.LockMergeRMW only). Every holder above
+// combine carry itself (which holds merge.LockMergeRMW only). Every holder above
 // re-reads under the lock and compares, so such a write is caught when it
 // lands first; one that lands inside the window is not.
 //
