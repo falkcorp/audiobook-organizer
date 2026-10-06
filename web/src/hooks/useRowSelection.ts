@@ -149,7 +149,9 @@ export function useRowSelection<K>({
 }: UseRowSelectionOptions<K>): RowSelection<K> {
   const [selected, setSelected] = useState<Set<K>>(() => new Set());
   const [allMatchingState, setAllMatching] = useState(false);
-  const anchorRef = useRef<K | null>(null);
+  // State, not a ref: it is reset during render on a filter change, and a ref
+  // write during render is unsafe under concurrent rendering.
+  const [anchor, setAnchor] = useState<K | null>(null);
   // Set by Shift+Space on a focused checkbox, read by the change event that
   // the keyboard activation fires next. Whether a keyboard-activated click
   // carries shiftKey differs by browser, so it is not trusted.
@@ -161,7 +163,7 @@ export function useRowSelection<K>({
     setPrevResetKey(resetKey);
     setSelected(new Set());
     setAllMatching(false);
-    anchorRef.current = null;
+    setAnchor(null);
   }
 
   // An all-matching selection the caller can no longer act on is dropped on
@@ -189,7 +191,8 @@ export function useRowSelection<K>({
   const selectedCount = virtualAll ? totalMatching : selected.size;
 
   const everythingSelected =
-    allMatching || (allKeys !== undefined && allKeys.length > 0 && allKeys.every((k) => selected.has(k)));
+    allMatching ||
+    (allKeys !== undefined && allKeys.length > 0 && allKeys.every((k) => selected.has(k)));
 
   const showSelectAllMatching =
     canSelectAllMatching &&
@@ -206,20 +209,20 @@ export function useRowSelection<K>({
   const toggle = useCallback(
     (key: K, shiftKey = false) => {
       const base = baseSet();
-      const next = applyRowClick(base, key, shiftKey, anchorRef.current, pageKeys, isDisabled);
-      anchorRef.current = key;
+      const next = applyRowClick(base, key, shiftKey, anchor, pageKeys, isDisabled);
+      setAnchor(key);
       // Any manual change leaves all-matching mode: the selection is now an
       // explicit list again, and saying "all M selected" would be false.
       setAllMatching(false);
       setSelected(next);
     },
-    [baseSet, pageKeys, isDisabled]
+    [baseSet, anchor, pageKeys, isDisabled]
   );
 
   const clear = useCallback(() => {
     setSelected(new Set());
     setAllMatching(false);
-    anchorRef.current = null;
+    setAnchor(null);
   }, []);
 
   const togglePage = useCallback(() => {
