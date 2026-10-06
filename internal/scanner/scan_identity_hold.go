@@ -1,5 +1,5 @@
 // file: internal/scanner/scan_identity_hold.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: acb6d67e-dc3f-4d2f-adcb-ee17eacb8ca4
 // last-edited: 2026-10-06
 //
@@ -54,13 +54,52 @@ func scannedIdentityOf(b *Book) scannedIdentity {
 		positionFromTitle: b.positionFromTitle}
 }
 
+// scannedIdentityFor is what the scan read for book's identity across every
+// save of it in this scan. The first save of an existing row replaces
+// book's title, author and series with the row's values (holdIdentityForExisting),
+// so the inline AI phase's re-save would otherwise see the row's own values
+// as "scanned", find nothing to propose, and delete the proposal the first
+// save just wrote. The first save's reading is kept on the Book; a later
+// save supplies only what the first had empty (an AI fill of a gap).
+func scannedIdentityFor(b *Book) scannedIdentity {
+	cur := scannedIdentityOf(b)
+	if b.firstScanned == nil {
+		first := cur
+		b.firstScanned = &first
+		return cur
+	}
+	out := *b.firstScanned
+	if strings.TrimSpace(out.Title) == "" {
+		out.Title = cur.Title
+		out.positionFromTitle = cur.positionFromTitle
+		if out.Position == 0 {
+			out.Position = cur.Position
+		}
+	}
+	if strings.TrimSpace(out.Author) == "" {
+		out.Author = cur.Author
+	}
+	if strings.TrimSpace(out.Series) == "" {
+		out.Series = cur.Series
+		if out.Position == 0 {
+			out.Position = cur.Position
+		}
+	}
+	return out
+}
+
 // identityGuard is what the merge-time hold (identityMergeLocks) needs about
 // the row, read before ModifyBook so its callback does no IO.
 type identityGuard struct {
 	// placeholderAuthorID is the row's author id when that author is the
 	// "Unknown Author" placeholder: a placeholder is a gap, and is filled.
 	placeholderAuthorID *int
-	scanned             scannedIdentity
+	// seriesID and seriesName are the row's series as read before the
+	// write: a scanned position from a DIFFERENT series is not a gap fill
+	// for this one.
+	seriesID   *int
+	seriesName string
+	scanned    scannedIdentity
 }
 
 // isPlaceholderAuthorName reports whether name is an "Unknown Author"
@@ -72,10 +111,21 @@ func isPlaceholderAuthorName(name string) bool {
 // newIdentityGuard reads the row's author name once, outside the write.
 func newIdentityGuard(row *database.Book, scanned scannedIdentity) identityGuard {
 	g := identityGuard{scanned: scanned}
-	if row == nil || row.AuthorID == nil || *row.AuthorID == 0 {
+	if row == nil {
 		return g
 	}
-	if st := getStore(); st != nil {
+	st := getStore()
+	if st != nil && row.SeriesID != nil && *row.SeriesID != 0 {
+		id := *row.SeriesID
+		g.seriesID = &id
+		if s, err := st.GetSeriesByID(id); err == nil && s != nil {
+			g.seriesName = s.Name
+		}
+	}
+	if row.AuthorID == nil || *row.AuthorID == 0 {
+		return g
+	}
+	if st != nil {
 		if a, err := st.GetAuthorByID(*row.AuthorID); err == nil && a != nil && isPlaceholderAuthorName(a.Name) {
 			id := *row.AuthorID
 			g.placeholderAuthorID = &id
@@ -118,9 +168,18 @@ func holdIdentityForExisting(book *Book, existing *database.Book) folderHold {
 	}
 	if existing.SeriesID != nil && *existing.SeriesID != 0 {
 		h.series, h.seriesID = true, existing.SeriesID
+		scannedSeries := book.Series
 		book.Series = ""
 		if s, err := store.GetSeriesByID(*existing.SeriesID); err == nil && s != nil {
 			book.Series = s.Name
+		}
+		// A position the file gives for ANOTHER series is not this
+		// series' position: "Y #3" must not fill the row's empty slot in
+		// X as "X #3". An unreadable series name counts as different.
+		if strings.TrimSpace(scannedSeries) != "" &&
+			(book.Series == "" || !database.SameIdentityText(scannedSeries, book.Series)) {
+			book.Position = 0
+			book.positionFromTitle = false
 		}
 	}
 	if existing.SeriesSequence != nil && *existing.SeriesSequence != 0 {
@@ -167,6 +226,15 @@ func identityMergeLocks(locked map[string]bool, cur *database.Book, g identityGu
 		held[database.FieldKeySeriesName] = true
 	}
 	if cur.SeriesSequence != nil && *cur.SeriesSequence != 0 {
+		held[database.FieldKeySeriesPosition] = true
+	}
+	// A position the file gives for a series other than the row's is not
+	// the row's: held, and proposed with that series. cur's series is
+	// compared through the guard (no IO here); a series that changed since
+	// the guard read it, or whose name was unreadable, counts as different.
+	if held[database.FieldKeySeriesName] && strings.TrimSpace(g.scanned.Series) != "" &&
+		(g.seriesID == nil || *g.seriesID != *cur.SeriesID || g.seriesName == "" ||
+			!database.SameIdentityText(g.scanned.Series, g.seriesName)) {
 		held[database.FieldKeySeriesPosition] = true
 	}
 	// A position read off a title the row does not take is not the row's.

@@ -1,5 +1,5 @@
 // file: internal/scanner/scanner.go
-// version: 1.129.0
+// version: 1.130.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-10-06
 
@@ -927,6 +927,11 @@ type Book struct {
 	// saveBookToDatabase, which then finds that row; it is a new import, so
 	// the identity hold (holdIdentityForExisting) does not apply to it.
 	createdRowID string
+	// firstScanned is what this scan first read for the book's identity,
+	// before a hold replaced it with the row's values; a later save of the
+	// same book (the inline AI phase) proposes against it
+	// (scannedIdentityFor).
+	firstScanned *scannedIdentity
 	// scanLockExtra lists rows a previous attempt at this book discovered
 	// mid-save without holding their lock; the restart locks them up front.
 	scanLockExtra []string
@@ -3513,7 +3518,7 @@ func saveBookToDatabase(ctx context.Context, book *Book) error {
 		// orphan rows behind. What the scan read is captured first: where it
 		// differs from what the row keeps, it is recorded as a proposal after
 		// the merge.
-		scanned := scannedIdentityOf(book)
+		scanned := scannedIdentityFor(book)
 		hold := mergeHolds(holdIdentityForExisting(book, found.row()), holdFolderFieldsForExisting(book, found.row()))
 
 		// Resolve author/series with conflict-aware get-or-create semantics.
