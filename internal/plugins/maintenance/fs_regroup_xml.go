@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fs_regroup_xml.go
-// version: 2.15.1
+// version: 2.16.0
 // guid: 7d2a9c14-3e86-4b50-9f71-2c8e0a6d4b95
 // last-edited: 2026-10-06
 
@@ -62,6 +62,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
+	"github.com/falkcorp/audiobook-organizer/internal/itunesguard"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
@@ -101,7 +102,9 @@ const (
 	fsChangeSoftDelete    = undo.ChangeTypeBookSoftDelete
 	fsChangePrimaryDemote = undo.ChangeTypeBookPrimaryDemote
 	fsChangeHandOff       = undo.ChangeTypeBookPrimaryHandoff // ledger note
-	fsChangeExtIDs        = undo.ChangeTypeExternalIDReassign
+	// ledger note: the hand-off was refused before any write
+	fsChangeHandOffRefused = undo.ChangeTypeBookPrimaryHandoffRefused
+	fsChangeExtIDs         = undo.ChangeTypeExternalIDReassign
 )
 
 // fsLayoutApplyRefusal is returned when an apply asks for the layout category.
@@ -856,14 +859,18 @@ func reportFSRepairPlan(plan *fsRepairPlan, dryRun bool, reporter sdk.Reporter) 
 
 type fsRepairResult struct {
 	Groups, RowsMoved, RowsCreated, ShellsSoftDeleted, ShellsKept, TitleKept, LedgerRows, Skipped, Errors int
-	StandDownLost                                                                                         bool
+	// HandOffsRefused counts retired shells whose group hand-off the iTunes
+	// guard refused (it would have written an iTunes book's primary flag):
+	// nothing was written and the group is left for the owner.
+	HandOffsRefused int
+	StandDownLost   bool
 }
 
 func (r fsRepairResult) String() string {
 	return fmt.Sprintf("APPLIED — groups=%d rows-moved=%d rows-created=%d shells-soft-deleted=%d shells-kept=%d "+
-		"title-kept=%d ledger-rows=%d skipped=%d errors=%d stand-down-lost=%v",
+		"title-kept=%d ledger-rows=%d skipped=%d errors=%d handoffs-refused=%d stand-down-lost=%v",
 		r.Groups, r.RowsMoved, r.RowsCreated, r.ShellsSoftDeleted, r.ShellsKept, r.TitleKept, r.LedgerRows,
-		r.Skipped, r.Errors, r.StandDownLost)
+		r.Skipped, r.Errors, r.HandOffsRefused, r.StandDownLost)
 }
 
 // refuseWhileLibraryScanActive fails closed unless the queue shows no
@@ -894,7 +901,7 @@ type fsApplier struct {
 	reporter sdk.Reporter
 	logMu    sync.Mutex // reporters are not required to be goroutine-safe
 
-	groups, moved, created, softDeleted, kept, titleKept, ledger, skipped, errs atomic.Int64
+	groups, moved, created, softDeleted, kept, titleKept, ledger, skipped, errs, handOffsRefused atomic.Int64
 }
 
 func (a *fsApplier) log(level slog.Level, format string, args ...any) {
@@ -992,7 +999,7 @@ func applyFSRepairPlan(ctx context.Context, store fsRepairStore, scan ScanContro
 		Groups: int(a.groups.Load()), RowsMoved: int(a.moved.Load()), RowsCreated: int(a.created.Load()),
 		ShellsSoftDeleted: int(a.softDeleted.Load()), ShellsKept: int(a.kept.Load()), TitleKept: int(a.titleKept.Load()),
 		LedgerRows: int(a.ledger.Load()), Skipped: int(a.skipped.Load()), Errors: int(a.errs.Load()),
-		StandDownLost: lost.Load(),
+		HandOffsRefused: int(a.handOffsRefused.Load()), StandDownLost: lost.Load(),
 	}
 	_ = reporter.Log(slog.LevelInfo, res.String())
 	switch {
@@ -1451,10 +1458,21 @@ func (a *fsApplier) retire(kind, folder, shellID, targetID, note string) {
 	// (versionprimary.Crown), so the group still ends with one primary. A
 	// successful hand-off is noted (book_primary_handoff): the revert
 	// re-crowns over an already-restored demote only with that evidence.
+	// The hand-off never writes an iTunes book's primary flag
+	// (itunesguard.MayWrite, asked under the group lock about exactly the
+	// members it would write): a refusal writes nothing, is noted
+	// (book_primary_handoff_refused) so the revert leaves the group's other
+	// flags alone, and is counted, not an error.
 	if wasPrimary && b.VersionGroupID != nil && *b.VersionGroupID != "" {
-		res, herr := versionprimary.EnsureSinglePrimary(context.Background(), a.store, *b.VersionGroupID,
-			versionprimary.Env{RootDir: config.AppConfig.RootDir})
-		if herr != nil {
+		gid := *b.VersionGroupID
+		res, herr := versionprimary.EnsureSinglePrimary(context.Background(), a.store, gid,
+			versionprimary.Env{RootDir: config.AppConfig.RootDir, MayWrite: itunesguard.MayWrite(a.store, gid)})
+		if errors.Is(herr, versionprimary.ErrWriteRefused) {
+			a.handOffsRefused.Add(1)
+			a.log(slog.LevelWarn, "%s %q: primary hand-off in group %s after retiring %s refused, nothing written: %v",
+				kind, folder, logger.SanitizeLogValue(gid), shellID, herr)
+			a.journal(shellID, fsChangeHandOffRefused, "version_group_id", "", gid)
+		} else if herr != nil {
 			a.errs.Add(1)
 			a.log(slog.LevelWarn, "%s %q: primary hand-off in group %s after retiring %s: %v", kind, folder,
 				logger.SanitizeLogValue(*b.VersionGroupID), shellID, herr)

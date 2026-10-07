@@ -297,20 +297,25 @@ type BookStep struct {
 
 // JournalSteps is JournalStep for one write that makes several journaled
 // changes at once (a crown that demotes several books): every step is
-// journaled, then write runs once. write must return an error only when it
-// wrote NOTHING (a refusal before any write); every row this call journaled
-// is then voided, so the op revert never "restores" a change that never
-// happened. A journal failure part-way voids the rows already journaled.
+// journaled, then write runs once and reports, per step (done[i] for
+// steps[i]), whether it performed that change. Every row whose step was not
+// performed -- all of them when write refused before writing, or returned
+// fewer entries than steps -- is voided, so the op revert never "restores" a
+// change that never happened; write's error is returned either way. A journal
+// failure part-way voids the rows already journaled and never calls write.
 // The crash window of JournalStep stands: a crash between the rows and the
 // write leaves them live.
-func (w *Writer) JournalSteps(steps []BookStep, write func() error) error {
+func (w *Writer) JournalSteps(steps []BookStep, write func() (done []bool, err error)) error {
 	if err := w.denyTagsOnly("JournalSteps"); err != nil {
 		return err
 	}
 	rows := make([]journaledRow, 0, len(steps))
-	voidAll := func(cause error) error {
+	voidUndone := func(done []bool, cause error) error {
 		errs := []error{cause}
 		for i := len(rows) - 1; i >= 0; i-- {
+			if i < len(done) && done[i] {
+				continue
+			}
 			if verr := w.voidRow(rows[i]); verr != nil {
 				errs = append(errs, verr)
 			}
@@ -320,15 +325,13 @@ func (w *Writer) JournalSteps(steps []BookStep, write func() error) error {
 	for _, st := range steps {
 		row, err := w.journalRow(st.BookID, st.Entry.ChangeType, st.Entry.Field, st.Entry.Old, st.Entry.New)
 		if err != nil {
-			return voidAll(err)
+			return voidUndone(nil, err)
 		}
 		rows = append(rows, row)
 	}
 	w.Touch()
-	if werr := write(); werr != nil {
-		return voidAll(werr)
-	}
-	return nil
+	done, werr := write()
+	return voidUndone(done, werr)
 }
 
 // journalStep is JournalStep without the tags-only refusal: the tag
