@@ -201,6 +201,17 @@ func TestFragmentFixer_OwnerApply(t *testing.T) {
 		require.Equal(t, repairs.OutcomeOwnerRefused, out.Rows[0].Outcome)
 		require.True(t, f.live(t, "libA"))
 
+		// The owner's own op, retried in place by anyone (the row keeps its
+		// actor through RetryInterrupted), never carries the grant.
+		tok = mint()
+		f.applyOp("op-retried", fragFixerID)
+		f.ops.mu.Lock()
+		f.ops.rows["op-retried"].ManualRetryCount = 1
+		f.ops.mu.Unlock()
+		out = f.ownerApply(t, "op-plan", "op-retried", []string{m.RowID}, tok, nil)
+		require.Equal(t, repairs.OutcomeOwnerRefused, out.Rows[0].Outcome, "%+v", out.Rows)
+		require.True(t, f.live(t, "libA"))
+
 		f.p.ownerEmail = func() string { return "new-owner@example.test" }
 		out = f.ownerApply(t, "op-plan", "op-owner-changed", []string{m.RowID}, mint(), nil)
 		require.Equal(t, repairs.OutcomeOwnerRefused, out.Rows[0].Outcome, "%+v", out.Rows)

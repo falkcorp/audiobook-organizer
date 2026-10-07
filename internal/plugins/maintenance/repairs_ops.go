@@ -239,7 +239,10 @@ func (p *Plugin) runRepairsApply(ctx context.Context, raw json.RawMessage, repor
 // ownerRedeemer is the running apply as repairs.ResolveOwnerApproval checks
 // it: the actor recorded on this op's row and the owner_email configured now.
 // Every failure leaves ActorUserID empty, which refuses the owner rows (the
-// rest of the apply is unaffected).
+// rest of the apply is unaffected). So does a row that was ever resumed or
+// retried in place: Retry on an interrupted row (registry.RetryInterrupted)
+// keeps the row's actor whoever clicks it, so only the run the owner's own
+// click enqueued may carry the owner's identity to a grant.
 func (p *Plugin) ownerRedeemer(reporter sdk.Reporter) repairs.OwnerRedeemer {
 	ownerEmail := p.ownerEmail
 	if ownerEmail == nil {
@@ -256,7 +259,8 @@ func (p *Plugin) ownerRedeemer(reporter sdk.Reporter) repairs.OwnerRedeemer {
 	if !ok {
 		return who
 	}
-	if row, err := reader.GetOperationV2(opID); err == nil && row != nil && row.ActorUserID != nil {
+	if row, err := reader.GetOperationV2(opID); err == nil && row != nil && row.ActorUserID != nil &&
+		row.ManualRetryCount == 0 && row.ResumeCount == 0 {
 		who.ActorUserID = *row.ActorUserID
 	}
 	return who
