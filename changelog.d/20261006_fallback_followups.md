@@ -120,3 +120,9 @@
     `owner_reviewed_would_apply` under the hashless marker's rule, the one
     its apply runs under, so it no longer says a review-only candidate would
     apply. A listed-book preview keeps the single-row Apply's rule.
+  - A refetch with no merge ranker (search dialog, stale refetch,
+    lost-candidates fixer, single-book fetch) that keeps a fallback
+    provider's candidates now ranks Open Library / Google Books candidates
+    after the chain's (`reviewOnlyLastRank`). Ranking by score alone let a
+    higher-scoring Google Books candidate take the row's first slot over a
+    usable Audible one, and bulk apply then refused the book as review-only.
