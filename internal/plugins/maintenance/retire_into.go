@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retire_into.go
-// version: 1.11.0
+// version: 1.13.0
 // guid: dadb4da5-0f2d-4678-abf3-4ac97f3ecb66
 // last-edited: 2026-10-06
 
@@ -50,9 +50,9 @@ import (
 // fragment's book_file row,
 // if it still has one, is kept.
 //
-// Every refusal (an iTunes id on the book, an iTunes id on one of its rows
-// (or, with retireOpts.RefuseITunesPath, an iTunes path), or an iTunes id
-// among its external ids) is checked BEFORE step 1, so a refused retire has written
+// Every refusal (an iTunes id on the book, an iTunes id or (unless
+// retireOpts.AllowITunesPath) an iTunes path on one of its rows, or an
+// iTunes id among its external ids) is checked BEFORE step 1, so a refused retire has written
 // nothing. The count is the steps written, a persisted follow snapshot
 // included, so a failure after it reports partially_applied; a book already
 // soft-deleted counts none (the last step of an earlier run).
@@ -72,25 +72,35 @@ func retireInto(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Write
 // retire's earlier steps: partially applied, nobody else crowned. The
 // consolidation-leftovers same-path class passes the owner it predicted
 // under the merge lock, closing the window between that prediction and the
-// hand-off (which runs after the slower user-state follow).
+// hand-off (which runs after the slower user-state follow). Its one caller
+// is consolidation-leftovers, so it allows a row iTunes path
+// (retireOpts.AllowITunesPath).
 func retireIntoExpecting(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Writer, clock func() time.Time, fixerID, id, target string, slice *merge.SliceMapping, expect string) (int, error) {
-	return retireIntoWith(ctx, p, store, w, clock, fixerID, id, target, slice, retireOpts{Expect: expect})
+	return retireIntoWith(ctx, p, store, w, clock, fixerID, id, target, slice, retireOpts{Expect: expect, AllowITunesPath: true})
 }
 
-// retireOpts are the fragment fixer's stricter retire (the shared callers
-// pass none) and the expected hand-off winner (retireIntoExpecting).
+// retireIntoAllowingITunesPath is retireInto for duplicate-copies, whose own
+// rules decide a row iTunes path (retireOpts.AllowITunesPath).
+func retireIntoAllowingITunesPath(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Writer, clock func() time.Time, fixerID, id, target string, slice *merge.SliceMapping) (int, error) {
+	return retireIntoWith(ctx, p, store, w, clock, fixerID, id, target, slice, retireOpts{AllowITunesPath: true})
+}
+
+// retireOpts adjust the shared retire. The zero value is the safe one.
 type retireOpts struct {
 	// Expect is the member the primary hand-off must leave primary ("" none;
 	// retireIntoExpecting).
 	Expect string
 	// Only, when set, is why target must not be written (retireIntoOnly).
 	Only string
-	// RefuseITunesPath refuses a book with an iTunes path on one of its rows
-	// as an iTunes book (itunesCopyWhy's "row iTunes path"; review
-	// 2026-10-06, fragment-consolidation). Off for the leftovers fixer, whose
-	// owner decision of the same day is that a bare iTunes path reference
-	// does not make a leftover iTunes-owned.
-	RefuseITunesPath bool
+	// AllowITunesPath lets a book with an iTunes path on one of its rows be
+	// retired. By default such a book is refused as an iTunes book
+	// (itunesCopyWhy's "row iTunes path"; review 2026-10-06). Set only for
+	// two callers: consolidation-leftovers, through retireIntoExpecting
+	// (owner decision 2026-10-06: a bare iTunes path reference does not make
+	// a leftover iTunes-owned), and duplicate-copies, through
+	// retireIntoAllowingITunesPath (its losers are judged by its own iTunes
+	// rules before the apply).
+	AllowITunesPath bool
 }
 
 // retireIntoOnly is retireInto for a target that must not be written
@@ -103,12 +113,13 @@ type retireOpts struct {
 // as is one whose user state cannot be read. The caller has checked that
 // the retired book's version group holds no iTunes book.
 func retireIntoOnly(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Writer, clock func() time.Time, fixerID, id, target, targetWhy string) (int, error) {
-	return retireIntoWith(ctx, p, store, w, clock, fixerID, id, target, nil, retireOpts{Only: targetWhy, RefuseITunesPath: true})
+	return retireIntoWith(ctx, p, store, w, clock, fixerID, id, target, nil, retireOpts{Only: targetWhy})
 }
 
 // retireIntoWith is retireInto with opts: the hand-off's expected winner
 // (opts.Expect), writing book id alone when opts.Only is set
-// (retireIntoOnly), refusing a row iTunes path when opts.RefuseITunesPath is.
+// (retireIntoOnly), refusing a row iTunes path unless opts.AllowITunesPath
+// is set.
 func retireIntoWith(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Writer, clock func() time.Time, fixerID, id, target string, slice *merge.SliceMapping, opts retireOpts) (int, error) {
 	only, expect := opts.Only, opts.Expect
 	b, err := store.GetBookByID(id)
@@ -137,7 +148,7 @@ func retireIntoWith(ctx context.Context, p *Plugin, store OpsStore, w *repairs.W
 		}
 		// A row iTunes path makes the book an iTunes book too
 		// (itunesCopyWhy), and iTunes books are never written.
-		if opts.RefuseITunesPath && r.ITunesPath != "" {
+		if !opts.AllowITunesPath && r.ITunesPath != "" {
 			return 0, fmt.Errorf("%w: book %s row %s now carries an iTunes path", repairs.ErrChangedSincePlan, id, r.ID)
 		}
 	}

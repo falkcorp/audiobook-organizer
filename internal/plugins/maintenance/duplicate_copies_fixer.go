@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duplicate_copies_fixer.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 937b9ff1-48ce-4136-8ca0-74793e6ed3de
 // last-edited: 2026-10-06
 
@@ -1897,7 +1897,7 @@ func (f *duplicateCopiesFixer) Apply(ctx context.Context, w *repairs.Writer, fre
 		if err := ctx.Err(); err != nil {
 			return partial(err)
 		}
-		did, err := retireInto(ctx, f.p, store, w, f.now, dcFixerID, l, plan.Survivor, nil)
+		did, err := retireIntoAllowingITunesPath(ctx, f.p, store, w, f.now, dcFixerID, l, plan.Survivor, nil)
 		steps += did
 		if err != nil {
 			return partial(err)
