@@ -1,7 +1,7 @@
 // file: internal/server/audiobooks_helpers.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 439aa827-edea-481d-8918-ddacd2c140b7
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 // Server-package helpers relocated out of audiobooks_handlers.go when the
 // audiobooks HTTP handlers were extracted into the handlers/audiobooks
@@ -36,9 +36,11 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/gin-gonic/gin"
 )
@@ -155,8 +157,20 @@ const facetsCacheKey = "all"
 // response is returned unchanged. Only a DB-distinct fetch failure (store
 // nil, GetDistinctGenres/Languages erroring) returns a non-nil error here —
 // that is the pre-existing 500 path, unaffected by this task.
+//
+// Concurrent misses (the startup warmer and any handler request that lands
+// before it finishes, or after the 24 h TTL) share ONE build through
+// s.facetsFlight, cancelled when its last waiter leaves; before this each
+// miss ran its own full walk.
 func (s *Server) buildFacetsResponse(ctx context.Context) (gin.H, error) {
-	_ = ctx // reserved for parity with buildAudiobookListResponse; no context-aware call in this path yet.
+	return s.facetsFlight.Do(ctx, facetsCacheKey, facetsBuildTimeout, s.buildFacetsResponseUncached)
+}
+
+// facetsBuildTimeout caps one shared library-wide facets build.
+const facetsBuildTimeout = 2 * time.Minute
+
+func (s *Server) buildFacetsResponseUncached(ctx context.Context) (gin.H, error) {
+	_ = ctx // no context-aware call in this path yet; the flight owns cancellation of waiters.
 	if s.Ops() == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
@@ -199,8 +213,25 @@ func (s *Server) warmFacetsCache() {
 	if s.Ops() == nil {
 		return
 	}
+	// Wait for memdb (bounded), as the list warmer does: before it publishes,
+	// the genre/language counts are full Pebble JSON walks; after, they are
+	// in-memory walks. A store without the capability warms at once.
+	ctx := s.bgCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if checker, ok := database.AsCapability[memReadyChecker](s.Ops()); ok {
+		deadline := time.Now().Add(5 * time.Minute)
+		for !checker.IsMemReady() && time.Now().Before(deadline) {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(2 * time.Second):
+			}
+		}
+	}
 	slog.Info("facets pre-warming genres/languages cache")
-	result, err := s.buildFacetsResponse(context.Background())
+	result, err := s.buildFacetsResponse(ctx)
 	if err != nil {
 		slog.Info("facets warm-up failed", "err", err)
 		return

@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.82.0
+// version: 2.83.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-10-06
 
@@ -34,6 +34,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/deluge"
 	"github.com/falkcorp/audiobook-organizer/internal/diagnostics"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
+	"github.com/falkcorp/audiobook-organizer/internal/flight"
 	"github.com/falkcorp/audiobook-organizer/internal/importer"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -198,8 +199,11 @@ type Server struct {
 	listCache                   *cache.Cache[gin.H]
 	// libGenWarnOnce keeps the "store has no generation counter" warning to a
 	// single line instead of one per list request.
-	libGenWarnOnce  sync.Once
-	facetsCache     *cache.Cache[gin.H]
+	libGenWarnOnce sync.Once
+	facetsCache    *cache.Cache[gin.H]
+	// facetsFlight shares one library-wide facets build between the startup
+	// warmer and concurrent handler misses (buildFacetsResponse).
+	facetsFlight    flight.Group[gin.H]
 	authorsCache    *cache.Cache[*audiobookspkg.AuthorWithCountListResponse]
 	seriesCache     *cache.Cache[*audiobookspkg.SeriesWithCountsResponse]
 	itunesSvc       *itunesservice.Service

@@ -316,18 +316,7 @@ export function useLibraryQuery({
       // the cache-hit return never reaches, so selecting Deleted on a warm
       // cache showed the entire unfiltered library while the Filters chip
       // said 1. It only appeared to work from a cold cache.
-      const filterStr = JSON.stringify({
-        fieldFilters,
-        tagsParam,
-        libraryState: filters.libraryState,
-        showFailed: filters.showFailed,
-        hasFileErrors: filters.hasFileErrors,
-        fingerprintStatus: filters.fingerprintStatus,
-        coveragePercentMin: filters.coveragePercentMin,
-        coveragePercentMax: filters.coveragePercentMax,
-        isPrimaryVersion: filters.isPrimaryVersion,
-        seriesId: filters.seriesId,
-      });
+      const filterStr = JSON.stringify({ fieldFilters, tagsParam, libraryState: filters.libraryState, showFailed: filters.showFailed, hasFileErrors: filters.hasFileErrors, fingerprintStatus: filters.fingerprintStatus, coveragePercentMin: filters.coveragePercentMin, coveragePercentMax: filters.coveragePercentMax, isPrimaryVersion: filters.isPrimaryVersion, seriesId: filters.seriesId });
       const cacheKey = buildCacheKey(page, itemsPerPage, searchText, filterStr, sortBy, sortOrder);
       const isRefresh = displayedKeyRef.current === cacheKey && audiobooksRef.current.length > 0;
       if (!isRefresh) setLoading(true);

@@ -35,3 +35,16 @@ JSON decode each — the cold cost behind a 5.8 s mean on the facets endpoint.
 They now walk memdb's in-memory rows when memdb is serving (same rows, same
 answer; Pebble remains the pre-warmup fallback). ABS `/filterdata` uses the
 same two functions and benefits too.
+
+#### Facets builds stop when nobody is waiting; genre/language counts skip the trash
+
+The cancellable shared-build mechanism from the library list (#3817) moved to
+`internal/flight` (generic `Group[T]`) and now also backs the scoped tag
+facets and the library-wide `/facets` build: concurrent identical misses share
+one build, the build is cancelled when its last waiter leaves, it has a hard
+timeout, and errors are never cached. The startup facets warmer waits
+(bounded) for memdb before building. `GetGenreCounts` and
+`GetDistinctLanguages` no longer count soft-deleted books (both the memdb
+and Pebble paths), which also corrects ABS per-genre `numItems`. The tag
+cloud never shows another query's chips: a failed scoped request shows
+"Couldn't load tags for these results." and there is no library-wide fallback.

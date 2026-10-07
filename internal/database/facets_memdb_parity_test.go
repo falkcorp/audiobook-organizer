@@ -14,8 +14,8 @@ import (
 
 // GetGenreCounts / GetDistinctLanguages take the memdb walk when memdb is
 // serving. Switching paths must never change an answer, only its cost: the
-// Pebble walk was the cold cost of GET /audiobooks/facets. A soft-deleted row
-// is included because the Pebble walk counts it, so the memdb walk must too.
+// Pebble walk was the cold cost of GET /audiobooks/facets. Soft-deleted
+// (trashed) books are excluded on both paths.
 func TestGenreLanguageFacets_MemdbMatchesPebble(t *testing.T) {
 	p, err := NewPebbleStore(t.TempDir())
 	require.NoError(t, err)
@@ -48,8 +48,8 @@ func TestGenreLanguageFacets_MemdbMatchesPebble(t *testing.T) {
 
 	require.Equal(t, pebGenres, memGenres)
 	require.Equal(t, pebLangs, memLangs)
-	require.Equal(t, map[string]int{"fantasy": 2, "scifi": 1, "history": 1}, memGenres)
-	require.Equal(t, []string{"de", "en", "fr"}, memLangs)
+	require.Equal(t, map[string]int{"fantasy": 2, "scifi": 1}, memGenres, "trashed history book excluded")
+	require.Equal(t, []string{"de", "en"}, memLangs, "trashed fr book excluded")
 }
 
 // CountTagsForBookIDs (one tag_idx scan) must agree with counting

@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.209.0
+// version: 1.210.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-06
 
@@ -4378,7 +4378,9 @@ func (p *PebbleStore) GetDistinctGenres() ([]string, error) {
 }
 
 // GetGenreCounts returns every distinct non-empty genre with the number of
-// books carrying it. One walk of the book:* keyspace without loading all books.
+// live (not soft-deleted) books carrying it. Until 2026-10-06 trashed books
+// were counted too (~48k of them in prod), inflating every facet and the ABS
+// per-genre numItems. One walk of the book:* keyspace without loading all books.
 //
 // When memdb is serving, the walk is over its in-memory rows instead (same
 // rows, same predicate — see MemStore.GetGenreCounts). The Pebble walk
@@ -4392,6 +4394,9 @@ func (p *PebbleStore) GetGenreCounts() (map[string]int, error) {
 	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
 		var b Book
 		if err := json.Unmarshal(rowValue, &b); err != nil {
+			return nil
+		}
+		if bookIsSoftDeleted(&b) {
 			return nil
 		}
 		if b.Genre != nil && *b.Genre != "" {
@@ -4419,6 +4424,9 @@ func (p *PebbleStore) GetDistinctLanguages() ([]string, error) {
 
 		var b Book
 		if err := json.Unmarshal(rowValue, &b); err != nil {
+			return nil
+		}
+		if bookIsSoftDeleted(&b) {
 			return nil
 		}
 		if b.Language != nil && *b.Language != "" {

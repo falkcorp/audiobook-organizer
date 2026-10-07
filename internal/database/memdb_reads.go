@@ -1,5 +1,5 @@
 // file: internal/database/memdb_reads.go
-// version: 1.33.0
+// version: 1.34.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000006
 // last-edited: 2026-10-06
 
@@ -904,10 +904,9 @@ func (m *MemStore) GetDistinctPublishedYears() ([]int, error) {
 }
 
 // GetGenreCounts is the memdb twin of PebbleStore.GetGenreCounts: every
-// distinct non-empty genre with its row count. Deliberately the SAME row set
-// as the Pebble walk (forEachBookRow does not skip soft-deleted rows, and
-// neither does this), so switching paths can never change an answer — only
-// its cost: one pointer walk instead of a JSON decode per book.
+// distinct non-empty genre with its count of live (not soft-deleted) books.
+// The SAME row set as the Pebble walk, so switching paths can never change an
+// answer — only its cost: one pointer walk instead of a JSON decode per book.
 func (m *MemStore) GetGenreCounts() (map[string]int, error) {
 	txn := m.db.Txn(false)
 	defer txn.Abort()
@@ -919,6 +918,9 @@ func (m *MemStore) GetGenreCounts() (map[string]int, error) {
 	counts := map[string]int{}
 	for obj := iter.Next(); obj != nil; obj = iter.Next() {
 		b := obj.(*Book)
+		if bookIsSoftDeleted(b) {
+			continue
+		}
 		if b.Genre != nil && *b.Genre != "" {
 			counts[*b.Genre]++
 		}
@@ -939,6 +941,9 @@ func (m *MemStore) GetDistinctLanguages() ([]string, error) {
 	seen := map[string]struct{}{}
 	for obj := iter.Next(); obj != nil; obj = iter.Next() {
 		b := obj.(*Book)
+		if bookIsSoftDeleted(b) {
+			continue
+		}
 		if b.Language != nil && *b.Language != "" {
 			seen[*b.Language] = struct{}{}
 		}
