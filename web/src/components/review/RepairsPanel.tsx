@@ -1,7 +1,7 @@
 // file: web/src/components/review/RepairsPanel.tsx
-// version: 1.20.0
+// version: 1.21.0
 // guid: 9c4f1a73-2e58-4b06-a9d1-6e3b8c7f0d52
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 /**
  * The repairs lane's surface: a rail of fixers and the selected fixer's trial.
@@ -574,7 +574,7 @@ function OwnerApplyCell({ row, repairs }: { row: RepairRow } & RepairsPanelProps
       data-testid={`repairs-owner-${row.row_id}`}
     >
       <Typography variant="caption" component="div" sx={{ fontWeight: 600 }}>
-        Owner apply: iTunes tracks this file; only database rows change
+        Owner apply: iTunes tracks these files; only database rows change
       </Typography>
       {row.owner_apply_reason && (
         <Typography variant="caption" component="div" sx={{ color: 'text.secondary' }}>
@@ -597,6 +597,7 @@ function OwnerApplyCell({ row, repairs }: { row: RepairRow } & RepairsPanelProps
                 planOpId,
                 rowId: row.row_id,
                 title: row.title || row.book_ids[0] || row.row_id,
+                fragments: row.owner_writes?.length ?? 1,
               })
             }
           >
