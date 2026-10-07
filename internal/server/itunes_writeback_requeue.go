@@ -1,5 +1,5 @@
 // file: internal/server/itunes_writeback_requeue.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1a7f4c2e-8d36-4b9a-b5e0-3c9d2f6a8e14
 // last-edited: 2026-10-07
 //
@@ -48,6 +48,10 @@ type writebackRequeueRequest struct {
 	BookIDs []string `json:"book_ids"`
 	// Kinds defaults to both "metadata" and "location".
 	Kinds []string `json:"kinds"`
+	// Limit, when > 0, queues at most this many of the selected books (the
+	// first by book id), so a large delta can be fed to the batcher in
+	// chunks. Run again after a chunk is written to queue the next.
+	Limit int `json:"limit"`
 }
 
 // writebackRequeueRemoveRequest is the body of POST
@@ -135,7 +139,8 @@ func respondEnqueueError(c *gin.Context, err error) {
 // It plans every book (or the book_ids subset) with the flush's own planner
 // and selects the books where at least one track in the library differs.
 // dry_run (the default) returns counts and a sample of up to 50 books.
-// dry_run:false also puts the selected book ids on the queue. Library tracks
+// dry_run:false also puts the selected book ids (at most limit of them, when
+// limit > 0) on the queue. Library tracks
 // that no book claims ("removes") and DB PIDs missing from the library
 // ("adds") are only counted.
 func (s *Server) itunesWritebackRequeueHandler(c *gin.Context) {
@@ -163,6 +168,11 @@ func (s *Server) itunesWritebackRequeueHandler(c *gin.Context) {
 		}
 	}
 
+	if req.Limit < 0 {
+		httputil.RespondWithBadRequest(c, "limit must be >= 0")
+		return
+	}
+
 	lib, target, ok := s.requeueLibrary(c)
 	if !ok {
 		return
@@ -173,26 +183,32 @@ func (s *Server) itunesWritebackRequeueHandler(c *gin.Context) {
 		return
 	}
 
+	toQueue := plan.SelectedBookIDs
+	if req.Limit > 0 && len(toQueue) > req.Limit {
+		toQueue = toQueue[:req.Limit]
+	}
 	resp := gin.H{
-		"dry_run":    dryRun,
-		"kinds":      kinds,
-		"kinds_note": requeueKindsNote,
-		"target":     target,
-		"plan":       plan,
+		"dry_run":           dryRun,
+		"kinds":             kinds,
+		"kinds_note":        requeueKindsNote,
+		"target":            target,
+		"plan":              plan,
+		"limit":             req.Limit,
+		"selected_not_sent": len(plan.SelectedBookIDs) - len(toQueue),
 	}
 	if dryRun {
-		resp["would_enqueue"] = len(plan.SelectedBookIDs)
+		resp["would_enqueue"] = len(toQueue)
 		httputil.RespondWithOK(c, resp)
 		return
 	}
 
-	queued, err := s.writeBackBatcher.EnqueueBooks(plan.SelectedBookIDs)
+	queued, err := s.writeBackBatcher.EnqueueBooks(toQueue)
 	if err != nil {
 		respondEnqueueError(c, err)
 		return
 	}
 	resp["enqueued"] = queued
-	resp["already_pending"] = len(plan.SelectedBookIDs) - queued
+	resp["already_pending"] = len(toQueue) - queued
 	resp["status"] = s.writeBackBatcher.Status()
 	httputil.RespondWithOK(c, resp)
 }

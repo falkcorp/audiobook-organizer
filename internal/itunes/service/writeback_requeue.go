@@ -1,5 +1,5 @@
 // file: internal/itunes/service/writeback_requeue.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6c3e8a1f-2b94-4d7e-9f05-a8b1c4d2e7f3
 // last-edited: 2026-10-07
 //
@@ -376,7 +376,11 @@ type RemoveRequeueStore interface {
 	GetBookByID(id string) (*database.Book, error)
 	GetBookFiles(bookID string) ([]database.BookFile, error)
 	IsExternalIDTombstoned(source, externalID string) (bool, error)
-	GetBookFileByPID(itunesPID string) (*database.BookFile, error)
+	// GetAllBookFilesCore finds EVERY book_file row holding a PID. The
+	// book_file_pid index (GetBookFileByPID) keeps one row per PID, and
+	// duplicate PIDs across rows are a known condition (/itunes/pid-integrity),
+	// so the index could return the loser's row and hide a live duplicate.
+	GetAllBookFilesCore() ([]database.BookFileCore, error)
 	ListBooksByITunesPID(limit, offset int) ([]database.Book, error)
 }
 
@@ -417,8 +421,8 @@ type RemoveRequeuePlan struct {
 // book_file rows, not its external-id rows. A PID is eligible only when:
 //   - the loser is soft-deleted or explicitly non-primary;
 //   - its external-id row exists and is tombstoned;
-//   - no other live book holds it (book_file or book-level PID), so the remove
-//     cannot take a survivor's track;
+//   - no other live book holds it (any book_file row, or a book-level PID),
+//     so the remove cannot take a survivor's track;
 //   - the track is still in the library;
 //   - it is not on the held list.
 func (b *WriteBackBatcher) PlanRemoveRequeue(store RemoveRequeueStore, lib *itunes.ITLLibrary, bookIDs []string) (*RemoveRequeuePlan, error) {
@@ -434,50 +438,38 @@ func (b *WriteBackBatcher) PlanRemoveRequeue(store RemoveRequeueStore, lib *itun
 	}
 	tracks := TracksByPID(lib)
 
-	// Book-level PIDs of live books. One listing per request; this endpoint
-	// takes a handful of explicit ids and runs rarely.
-	liveBooks, err := store.ListBooksByITunesPID(0, 0)
-	if err != nil {
-		return nil, fmt.Errorf("list books by iTunes PID: %w", err)
+	// Pass 1: the requested books and the PIDs on them.
+	type loserPIDs struct {
+		rb   RemoveRequeueBook
+		pids []string // as stored, first-seen order, deduplicated by case
 	}
-	liveBookPID := make(map[string][]string, len(liveBooks))
-	for i := range liveBooks {
-		lb := &liveBooks[i]
-		if lb.ITunesPersistentID == nil || *lb.ITunesPersistentID == "" || lb.IsSoftDeleted() {
-			continue
-		}
-		k := strings.ToLower(*lb.ITunesPersistentID)
-		liveBookPID[k] = append(liveBookPID[k], lb.ID)
-	}
-
-	plan := &RemoveRequeuePlan{Books: []RemoveRequeueBook{}, EligiblePIDs: []string{}}
-	queued := make(map[string]bool)
+	losers := make([]loserPIDs, 0, len(ids))
+	wanted := make(map[string]bool)
 	for _, id := range ids {
-		rb := RemoveRequeueBook{BookID: id, PIDs: []RemoveRequeuePID{}}
+		lp := loserPIDs{rb: RemoveRequeueBook{BookID: id, PIDs: []RemoveRequeuePID{}}}
 		book, err := store.GetBookByID(id)
 		switch {
 		case err != nil:
-			rb.Refused = fmt.Sprintf("book lookup failed: %v", err)
+			lp.rb.Refused = fmt.Sprintf("book lookup failed: %v", err)
 		case book == nil:
-			rb.Refused = "book not found"
+			lp.rb.Refused = "book not found"
 		case !book.IsSoftDeleted() && (book.IsPrimaryVersion == nil || *book.IsPrimaryVersion):
-			rb.Title = book.Title
-			rb.Refused = "book is live and not marked non-primary; only a merged-away or deleted book's remove can be re-queued here"
+			lp.rb.Title = book.Title
+			lp.rb.Refused = "book is live and not marked non-primary; only a merged-away or deleted book's remove can be re-queued here"
 		}
-		if rb.Refused != "" {
-			plan.Books = append(plan.Books, rb)
+		if lp.rb.Refused != "" {
+			losers = append(losers, lp)
 			continue
 		}
-		rb.Title = book.Title
-
+		lp.rb.Title = book.Title
 		var raw []string
 		if book.ITunesPersistentID != nil && *book.ITunesPersistentID != "" {
 			raw = append(raw, *book.ITunesPersistentID)
 		}
 		files, ferr := store.GetBookFiles(id)
 		if ferr != nil {
-			rb.Refused = fmt.Sprintf("book file lookup failed: %v", ferr)
-			plan.Books = append(plan.Books, rb)
+			lp.rb.Refused = fmt.Sprintf("book file lookup failed: %v", ferr)
+			losers = append(losers, lp)
 			continue
 		}
 		for _, f := range files {
@@ -485,35 +477,82 @@ func (b *WriteBackBatcher) PlanRemoveRequeue(store RemoveRequeueStore, lib *itun
 				raw = append(raw, f.ITunesPersistentID)
 			}
 		}
-		if len(raw) == 0 {
-			rb.Refused = "no iTunes PID on the book or its files"
-			plan.Books = append(plan.Books, rb)
-			continue
-		}
-
-		seenPID := make(map[string]bool)
+		seen := make(map[string]bool)
 		for _, pid := range raw {
 			key := strings.ToLower(pid)
-			if seenPID[key] {
+			if seen[key] {
 				continue
 			}
-			seenPID[key] = true
-			c := RemoveRequeuePID{PID: key}
-			if t, ok := tracks[key]; ok {
-				c.InLibrary = true
-				c.TrackName = t.Name
+			seen[key] = true
+			lp.pids = append(lp.pids, pid)
+			wanted[key] = true
+		}
+		if len(lp.pids) == 0 {
+			lp.rb.Refused = "no iTunes PID on the book or its files"
+		}
+		losers = append(losers, lp)
+	}
+
+	// Pass 2: every holder of those PIDs, at book level and on any book_file
+	// row. One listing each per request; this endpoint takes a handful of
+	// explicit ids and runs rarely.
+	holders := make(map[string]map[string]bool) // lowercase PID -> book ids
+	addHolder := func(pid, bookID string) {
+		k := strings.ToLower(pid)
+		if !wanted[k] {
+			return
+		}
+		if holders[k] == nil {
+			holders[k] = make(map[string]bool)
+		}
+		holders[k][bookID] = true
+	}
+	if len(wanted) > 0 {
+		liveBooks, err := store.ListBooksByITunesPID(0, 0)
+		if err != nil {
+			return nil, fmt.Errorf("list books by iTunes PID: %w", err)
+		}
+		for i := range liveBooks {
+			if lb := &liveBooks[i]; lb.ITunesPersistentID != nil && !lb.IsSoftDeleted() {
+				addHolder(*lb.ITunesPersistentID, lb.ID)
 			}
-			c.Reason = b.removeIneligibleReason(store, id, pid, c.InLibrary, liveBookPID[key])
-			if c.Reason == "" {
-				c.Eligible = true
-				if b.IsRemovePending(key) {
-					c.Reason = "already queued"
-				} else if !queued[key] {
-					queued[key] = true
-					plan.EligiblePIDs = append(plan.EligiblePIDs, key)
+		}
+		allFiles, err := store.GetAllBookFilesCore()
+		if err != nil {
+			return nil, fmt.Errorf("list book files: %w", err)
+		}
+		for i := range allFiles {
+			if f := &allFiles[i]; f.ITunesPersistentID != "" {
+				addHolder(f.ITunesPersistentID, f.BookID)
+			}
+		}
+	}
+
+	// Pass 3: eligibility.
+	plan := &RemoveRequeuePlan{Books: []RemoveRequeueBook{}, EligiblePIDs: []string{}}
+	queued := make(map[string]bool)
+	for _, lp := range losers {
+		rb := lp.rb
+		if rb.Refused == "" {
+			for _, pid := range lp.pids {
+				key := strings.ToLower(pid)
+				c := RemoveRequeuePID{PID: key}
+				if t, ok := tracks[key]; ok {
+					c.InLibrary = true
+					c.TrackName = t.Name
 				}
+				c.Reason = b.removeIneligibleReason(store, rb.BookID, pid, c.InLibrary, holders[key])
+				if c.Reason == "" {
+					c.Eligible = true
+					if b.IsRemovePending(key) {
+						c.Reason = "already queued"
+					} else if !queued[key] {
+						queued[key] = true
+						plan.EligiblePIDs = append(plan.EligiblePIDs, key)
+					}
+				}
+				rb.PIDs = append(rb.PIDs, c)
 			}
-			rb.PIDs = append(rb.PIDs, c)
 		}
 		plan.Books = append(plan.Books, rb)
 	}
@@ -524,11 +563,23 @@ func (b *WriteBackBatcher) PlanRemoveRequeue(store RemoveRequeueStore, lib *itun
 }
 
 // removeIneligibleReason returns why pid (found on loser book loserID) must
-// not be queued for removal, or "" when it may be.
-func (b *WriteBackBatcher) removeIneligibleReason(store RemoveRequeueStore, loserID, pid string, inLibrary bool, liveBookIDs []string) string {
-	for _, other := range liveBookIDs {
-		if other != loserID {
-			return fmt.Sprintf("PID is the iTunes PID of live book %s", other)
+// not be queued for removal, or "" when it may be. holders is every book that
+// holds pid at book level (live books only) or on a book_file row.
+func (b *WriteBackBatcher) removeIneligibleReason(store RemoveRequeueStore, loserID, pid string, inLibrary bool, holders map[string]bool) string {
+	others := make([]string, 0, len(holders))
+	for id := range holders {
+		if id != loserID {
+			others = append(others, id)
+		}
+	}
+	sort.Strings(others)
+	for _, other := range others {
+		owner, err := store.GetBookByID(other)
+		if err != nil {
+			return fmt.Sprintf("lookup of PID holder %s failed: %v", other, err)
+		}
+		if owner != nil && !owner.IsSoftDeleted() {
+			return fmt.Sprintf("PID is also held by live book %s", other)
 		}
 	}
 	tombstoned := false
@@ -544,22 +595,6 @@ func (b *WriteBackBatcher) removeIneligibleReason(store RemoveRequeueStore, lose
 	}
 	if !tombstoned {
 		return "external-id row is not tombstoned (or does not exist)"
-	}
-	for _, v := range pidCaseVariants(pid) {
-		f, err := store.GetBookFileByPID(v)
-		if err != nil {
-			return fmt.Sprintf("book file lookup by PID failed: %v", err)
-		}
-		if f == nil || f.BookID == loserID {
-			continue
-		}
-		owner, err := store.GetBookByID(f.BookID)
-		if err != nil {
-			return fmt.Sprintf("owner lookup for book file failed: %v", err)
-		}
-		if owner != nil && !owner.IsSoftDeleted() {
-			return fmt.Sprintf("PID is on a book file of live book %s", f.BookID)
-		}
 	}
 	if !inLibrary {
 		return "track is not in the library; nothing to remove"

@@ -1,5 +1,5 @@
 <!-- file: docs/plans/2026-10-07-itunes-writeback-requeue.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 4187f421-1b4d-445f-a098-917d3feef234 -->
 <!-- last-edited: 2026-10-07 -->
 
@@ -46,16 +46,21 @@ Both default to `dry_run: true`. They write only when the request sends
    (rebuild "adds") are counted as `ignored_add_tracks`. On a full scan, library
    tracks that no scanned book claims (rebuild "removes", 94,471 on prod) are
    counted as `ignored_remove_tracks`. Neither is ever queued.
-3. **`kinds` only picks which books are selected.** The batcher queues book ids,
+3. **`limit` chunks a large requeue.** It queues the first N selected books
+   by id. A full requeue goes to the batcher as one pending set. If the
+   contract's 20% mhoh cap refuses that set, the batch is kept and retried
+   until it is split. By estimate the cap is far off (~6k tracks × ~6 mhoh vs
+   98k tracks), but chunking is the way out if it is hit.
+4. **`kinds` only picks which books are selected.** The batcher queues book ids,
    not single changes. Once a book is queued, the flush writes every difference
    it finds for that book. The response says so.
-4. **Enqueue reports what it did.** `Enqueue` and `EnqueueRemove` return nothing
+5. **Enqueue reports what it did.** `Enqueue` and `EnqueueRemove` return nothing
    when write-back is off or the batcher is stopped, and `EnqueueRemove` skips a
    held PID with only a log line. New `EnqueueBooks` and `EnqueueRemoveChecked`
    return counts and errors. The old methods wrap them, so the
    `Enqueuer`/`EnqueueRemove` interfaces stay the same. `dry_run:false` with
    auto write-back off returns 409, never "enqueued N".
-5. **The remove's PID is not on the loser's external-id rows.** The drops plan
+6. **The remove's PID is not on the loser's external-id rows.** The drops plan
    says it is, but merge step (b) `ReassignExternalIDs` moves the loser's
    mappings to the winner before step (c) queues the remove. The PID is found
    on the loser's own book row and `book_file` rows. It is queued only when all
@@ -63,16 +68,17 @@ Both default to `dry_run: true`. They write only when the request sends
    - the loser is soft-deleted or non-primary;
    - the PID's external-id row is tombstoned;
    - no other live book holds the PID, at book level (`ListBooksByITunesPID`)
-     or file level (`GetBookFileByPID`);
+     or on ANY `book_file` row (`GetAllBookFilesCore`, because the
+     `book_file_pid` index keeps one row per PID and duplicates exist);
    - the track is still in the library;
    - the PID is not on the held list.
 
    Requests are capped at 5 book ids and at `MaxRemovesPerFlush` PIDs.
-6. **Concurrency.** The full-library scan reads book files and authors for each
+7. **Concurrency.** The full-library scan reads book files and authors for each
    book. It runs on an `errgroup` limited to `runtime.NumCPU()`. Results are
    merged under a mutex and sorted by book id, so the 50-book sample is
    deterministic.
-7. **Permission:** `PermLibraryEditMetadata`, the same as
+8. **Permission:** `PermLibraryEditMetadata`, the same as
    `/writeback/held/release`. The route lines sit next to it, so the owner gate
    being added on `fix/apikey-expiry-and-privilege` can cover all three.
 

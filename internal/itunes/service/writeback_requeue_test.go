@@ -1,5 +1,5 @@
 // file: internal/itunes/service/writeback_requeue_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3e9b5d71-6a2c-4f08-8b4e-d1c7a5f2e9b3
 // last-edited: 2026-10-07
 //
@@ -249,7 +249,8 @@ func TestEnqueueRemoveChecked_Held(t *testing.T) {
 
 // removeFixture: loser bk-l (soft-deleted) holds pids b1 (eligible), b2 (not
 // tombstoned), b3 (on a live book's file), b4 (not in library); live bk-w holds
-// b5 at book level and the loser's file also lists it.
+// b5 at book level and the loser's file also lists it. b3 is duplicated: the
+// loser's book_file row and live bk-o's row both carry it.
 func removeFixture(t *testing.T) (*database.MockStore, *itunes.ITLLibrary) {
 	t.Helper()
 	lib := &itunes.ITLLibrary{Tracks: []itunes.ITLTrack{
@@ -279,11 +280,14 @@ func removeFixture(t *testing.T) (*database.MockStore, *itunes.ITLLibrary) {
 			return out, nil
 		},
 		IsExternalIDTombstonedFunc: func(source, id string) (bool, error) { return source == "itunes" && tomb[id], nil },
-		GetBookFileByPIDFunc: func(pid string) (*database.BookFile, error) {
-			if strings.EqualFold(pid, "00000000000000B3") {
-				return &database.BookFile{BookID: "bk-o", ITunesPersistentID: pid}, nil
+		// The loser's own row comes first, as the book_file_pid index could
+		// return it; bk-o's duplicate row must still be found.
+		GetAllBookFilesCoreFunc: func() ([]database.BookFileCore, error) {
+			var out []database.BookFileCore
+			for _, p := range []string{"00000000000000B1", "00000000000000B2", "00000000000000B3", "00000000000000B4", pid5} {
+				out = append(out, database.BookFileCore{BookID: "bk-l", ITunesPersistentID: p})
 			}
-			return nil, nil
+			return append(out, database.BookFileCore{BookID: "bk-o", ITunesPersistentID: "00000000000000b3"}), nil
 		},
 		ListBooksByITunesPIDFunc: func(limit, offset int) ([]database.Book, error) {
 			return []database.Book{*books["bk-w"]}, nil

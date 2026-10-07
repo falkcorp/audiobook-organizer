@@ -1,5 +1,5 @@
 // file: internal/server/itunes_writeback_requeue_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8d4f2b6a-1c73-4e95-a0b8-5f9e3d7c2a61
 // last-edited: 2026-10-07
 //
@@ -177,6 +177,13 @@ func TestWritebackRequeue_SubsetAndKinds(t *testing.T) {
 	}
 	if resp["enqueued"] != float64(1) || !b.HasPendingBook("bk-c") || b.HasPendingBook("bk-b") {
 		t.Errorf("location-only subset: enqueued=%v bk-c=%v bk-b=%v", resp["enqueued"], b.HasPendingBook("bk-c"), b.HasPendingBook("bk-b"))
+	}
+
+	// limit chunks the selected set: first by book id.
+	s2, b2 := requeueTestServer(t, true)
+	code, resp = callRequeue(t, s2.itunesWritebackRequeueHandler, `{"dry_run":false,"limit":1}`)
+	if code != http.StatusOK || resp["enqueued"] != float64(1) || resp["selected_not_sent"] != float64(1) || !b2.HasPendingBook("bk-b") || b2.HasPendingBook("bk-c") {
+		t.Errorf("limit 1: %d %v", code, resp)
 	}
 
 	code, _ = callRequeue(t, s.itunesWritebackRequeueHandler, `{"kinds":["adds"]}`)

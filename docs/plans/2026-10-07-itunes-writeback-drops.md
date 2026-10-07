@@ -1,5 +1,5 @@
 <!-- file: docs/plans/2026-10-07-itunes-writeback-drops.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 0e2814b6-f75b-4376-803f-8aa1903a0f21 -->
 <!-- last-edited: 2026-10-07 -->
 
@@ -180,12 +180,16 @@ afterwards.
   1. Deploy this fix.
   2. `POST /api/v1/itunes/rebuild?dry_run=true` previews the full DB-vs-ITL diff
      (metadata, location, adds, removes).
-  3. Re-enqueue the changed books through the fixed batcher. The batcher diffs
+  3. Re-enqueue the changed books through the fixed batcher with
+     `POST /api/v1/itunes/writeback/requeue`. It is a dry run unless the body
+     sends `"dry_run": false`, it queues updates only, and `limit` chunks it
+     (see `2026-10-07-itunes-writeback-requeue.md`). The batcher diffs
      before it writes, so unchanged tracks cost nothing. The owner closes iTunes
      on Windows first.
   4. The contract's 20% mhoh-rewrite cap may reject a very large delta. The
-     queue now keeps it and shows it in `/itunes/writeback/status`, so the owner
-     can split it.
+     queue now keeps it and shows it in `/itunes/writeback/status`. To split
+     it, requeue in chunks with `limit`. By estimate, ~6k changed tracks at
+     about 6 mhoh each is well under 20% of a 98k-track library.
   5. Never run the rebuild's remove set without reviewing it. That is the bulk
      remove-from-DB shape v5 removed.
 - The one dropped remove (2026-10-06 22:19:27) came from op
@@ -194,9 +198,14 @@ afterwards.
   "merge queued ITL removals for loser count=1". The flush at 22:18:35
   (`removes=1`) was dropped on its first failure. The loser's PID was tombstoned
   at enqueue (root cause 3), so the DB says removed while the track is most
-  likely still in iTunes. Its PID is on the loser's external-id rows (GET
-  `/audiobooks/01KXXVAF46CM0NWZMSA44X1XTB/external-ids`); re-enqueueing that one
-  remove is the owner's call.
+  likely still in iTunes. Its PID is NOT on the loser's external-id rows: merge
+  step (b) `ReassignExternalIDs` moved them to the winner before step (c) queued
+  the remove, so the tombstoned row now belongs to `01KNDBXRC0N6WPTVZ6RHPSF2HH`.
+  The PID should still be on the loser's own book or `book_file` rows; that is
+  not checked against prod yet.
+  `POST /api/v1/itunes/writeback/requeue-remove` with
+  `{"book_ids":["01KXXVAF46CM0NWZMSA44X1XTB"]}` shows whether it is eligible
+  (dry run by default). Re-enqueueing that one remove is the owner's call.
 
 ## Test strategy
 
