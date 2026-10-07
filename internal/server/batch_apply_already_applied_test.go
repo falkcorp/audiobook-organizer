@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_already_applied_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5b2e8c71-4d9a-4f06-a3e1-7c8d2f9b0e46
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package server
 
@@ -127,7 +127,7 @@ func TestBulkApplyPreview_ReportsAlreadyApplied(t *testing.T) {
 	if excludedFromPreview(plan) {
 		t.Fatalf("an applied book must get a row, not be left out: %+v", plan)
 	}
-	row := previewBulkApplyRow(svc, "b1", plan, true)
+	row := previewBulkApplyRow(svc, "b1", plan, true, false)
 	if row.Verdict != previewVerdictSkipped || row.Reason != applySkipAlreadyApplied {
 		t.Fatalf("row verdict=%q reason=%q, want skipped/%s", row.Verdict, row.Reason, applySkipAlreadyApplied)
 	}

@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_owner_review_test.go
-// version: 1.6.4
+// version: 1.6.5
 // guid: 1a8c5e37-6f02-4d94-b7e3-9c4d2a0f5b81
 // last-edited: 2026-10-06
 //
@@ -154,13 +154,13 @@ func TestOwnerReview_PreviewReportsWouldApply(t *testing.T) {
 	books, cand := ownerReviewFixture()
 	svc := fakePreviewSvc{&fakeApplySvc{candidates: candidateJSON(t, cand)}}
 	plan := planCachedApply(svc, books, "b1", nil, nil)
-	row := previewBulkApplyRow(svc, "b1", plan, false)
+	row := previewBulkApplyRow(svc, "b1", plan, false, false)
 	if row.Verdict != previewVerdictBlocked || !row.OwnerReviewedWouldApply {
 		t.Fatalf("preview row: verdict %q reason %q owner_reviewed_would_apply %v", row.Verdict, row.Reason, row.OwnerReviewedWouldApply)
 	}
 
 	stale := fakePreviewSvc{&fakeApplySvc{candidates: candidateJSON(t, cand), identityErr: metafetch.ErrStaleMetadataCache}}
-	row = previewBulkApplyRow(stale, "b1", planCachedApply(stale, books, "b1", nil, nil), false)
+	row = previewBulkApplyRow(stale, "b1", planCachedApply(stale, books, "b1", nil, nil), false, false)
 	if row.OwnerReviewedWouldApply {
 		t.Fatalf("identity_stale must not read as reviewable: %+v", row)
 	}
@@ -172,7 +172,7 @@ func TestOwnerReview_PreviewReportsWouldApply(t *testing.T) {
 	if opPlan.Reason != applySkipGateBlocked {
 		t.Fatalf("op-results plan: reason %q, want gate_blocked", opPlan.Reason)
 	}
-	if row = previewBulkApplyRow(svc, "b1", opPlan, false); row.OwnerReviewedWouldApply {
+	if row = previewBulkApplyRow(svc, "b1", opPlan, false, false); row.OwnerReviewedWouldApply {
 		t.Fatalf("op-results preview claimed an owner review would apply: %+v", row)
 	}
 }
@@ -219,22 +219,22 @@ func TestOwnerReview_PreviewUsesTheApplyOptions(t *testing.T) {
 	rec := &fakeApplySvc{candidates: candidateJSON(t, cand)}
 	svc := fakePreviewSvc{rec}
 	reviewable := planCachedApply(svc, books, "b1", nil, nil)
-	if row := previewBulkApplyRow(svc, "b1", reviewable, true); !row.OwnerReviewedWouldApply {
+	if row := previewBulkApplyRow(svc, "b1", reviewable, true, false); !row.OwnerReviewedWouldApply {
 		t.Fatalf("fixture row is not owner-reviewable: %+v", row)
 	}
 	pinned := planCachedApply(svc, books, "b1", nil, rowPin(cand))
-	previewBulkApplyRow(svc, "b1", pinned, true)
+	previewBulkApplyRow(svc, "b1", pinned, true, false)
 
 	plain := fakePreviewSvc{&fakeApplySvc{candidates: oneCandidate(t)}}
 	ordinary := planCachedApply(plain, fakeBooks{}, "b1", nil, nil)
 	if ordinary.Reason != "" {
 		t.Fatalf("ordinary plan refused: %q", ordinary.Reason)
 	}
-	previewBulkApplyRow(plain, "b1", ordinary, true)
+	previewBulkApplyRow(plain, "b1", ordinary, true, false)
 
 	cr := CandidateResult{Status: "matched", Candidate: &cand}
 	cr.Book.Title = "Big Cats 1"
-	previewBulkApplyRow(plain, "b1", planOpResultApply(books, "b1", cr, nil), true)
+	previewBulkApplyRow(plain, "b1", planOpResultApply(books, "b1", cr, nil), true, false)
 
 	if len(rec.previewOpts) != 2 || rec.previewOpts[0].FillOnly || rec.previewOpts[1].FillOnly {
 		t.Fatalf("owner-approved previews must overwrite: %+v", rec.previewOpts)
@@ -416,7 +416,7 @@ func TestReviewApproved_StalePinOnGatePassedRowWritesNothing(t *testing.T) {
 // (fill-only), a row only a review can land with the review-lane apply's.
 func TestReviewApproved_PreviewOptionsEqualApplyOptions(t *testing.T) {
 	prev := fakePreviewSvc{&fakeApplySvc{candidates: oneCandidate(t)}}
-	previewBulkApplyRow(prev, "b1", planCachedApply(prev, fakeBooks{}, "b1", nil, nil), true)
+	previewBulkApplyRow(prev, "b1", planCachedApply(prev, fakeBooks{}, "b1", nil, nil), true, false)
 	bulk := &fakeApplySvc{candidates: oneCandidate(t)}
 	applyCachedCandidateForBookTimed(bulk, fakeBooks{}, nil, "b1", true, nil, metafetch.NewApplyPhaseTimings(), nil, nil, "")
 	if len(prev.previewOpts) != 1 || len(bulk.applyOpts) != 1 || !reflect.DeepEqual(prev.previewOpts[0], bulk.applyOpts[0]) {
@@ -425,7 +425,7 @@ func TestReviewApproved_PreviewOptionsEqualApplyOptions(t *testing.T) {
 
 	books, cand := ownerReviewFixture()
 	rprev := fakePreviewSvc{&fakeApplySvc{candidates: candidateJSON(t, cand)}}
-	previewBulkApplyRow(rprev, "b1", planCachedApply(rprev, books, "b1", nil, nil), true)
+	previewBulkApplyRow(rprev, "b1", planCachedApply(rprev, books, "b1", nil, nil), true, false)
 	reviewed := &fakeApplySvc{candidates: candidateJSON(t, cand)}
 	applyCachedCandidateForBookTimed(reviewed, books, nil, "b1", true, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand), "")
 	if len(rprev.previewOpts) != 1 || len(reviewed.applyOpts) != 1 || !reflect.DeepEqual(rprev.previewOpts[0], reviewed.applyOpts[0]) {

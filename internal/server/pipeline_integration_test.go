@@ -1,5 +1,5 @@
 // file: internal/server/pipeline_integration_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: b1c2d3e4-f5a6-7890-abcd-ef1234567890
 // last-edited: 2026-10-06
 
@@ -7,9 +7,11 @@ package server
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -105,16 +107,19 @@ func TestPipeline_FetchMetadata_MultiSourceFallback(t *testing.T) {
 	olServer := mockHTTPServer(t, nil, http.StatusInternalServerError)
 	defer olServer.Close()
 
-	// 3. Mock Google Books returns valid Dune response
+	// 3. Mock Google Books returns a valid Dune response whose publisher,
+	// description and ISBN differ from Audible's, so a Google match that was
+	// applied would show in the book row. Counted, so the test proves Google
+	// was asked (fetched) and not merely never reached.
 	duneGoogleResponse := `{
 		"totalItems": 1,
 		"items": [{
 			"volumeInfo": {
 				"title": "Dune",
 				"authors": ["Frank Herbert"],
-				"publisher": "Chilton Books",
+				"publisher": "Synthetic Review Press",
 				"publishedDate": "1965",
-				"description": "A science fiction masterpiece",
+				"description": "Synthetic review-only description",
 				"language": "en",
 				"industryIdentifiers": [
 					{"type": "ISBN_13", "identifier": "9780441172719"}
@@ -122,9 +127,24 @@ func TestPipeline_FetchMetadata_MultiSourceFallback(t *testing.T) {
 			}
 		}]
 	}`
-	gbServer := mockHTTPServer(t, map[string]string{
+	gbInner := mockHTTPServer(t, map[string]string{
 		"volumes": duneGoogleResponse,
 	}, 0)
+	defer gbInner.Close()
+	var gbHits atomic.Int64
+	gbServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gbHits.Add(1)
+		r2, _ := http.NewRequestWithContext(r.Context(), r.Method, gbInner.URL+r.URL.RequestURI(), nil)
+		res, err := gbInner.Client().Do(r2)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		defer res.Body.Close()
+		w.Header().Set("Content-Type", res.Header.Get("Content-Type"))
+		w.WriteHeader(res.StatusCode)
+		_, _ = io.Copy(w, res.Body)
+	}))
 	defer gbServer.Close()
 
 	// 3b. Mock Audible returns a Dune record too
@@ -151,6 +171,7 @@ func TestPipeline_FetchMetadata_MultiSourceFallback(t *testing.T) {
 	// Books' match is review-only (fetched, never applied by the
 	// auto-fetch, owner decision 2026-10-06), so the chain moved on.
 	assert.Equal(t, "Audible", resp.Source)
+	assert.Positive(t, gbHits.Load(), "Google Books was never asked: the test would pass without the review-only skip")
 
 	// 7. Assert: book metadata updated in DB
 	updated, err := env.Store.GetBookByID(book.ID)
@@ -160,6 +181,13 @@ func TestPipeline_FetchMetadata_MultiSourceFallback(t *testing.T) {
 	assert.Equal(t, "Chilton Books", *updated.Publisher)
 	require.NotNil(t, updated.Language)
 	assert.Equal(t, "en", *updated.Language)
+	// Nothing of Google's matched record was written.
+	if updated.Description != nil {
+		assert.NotEqual(t, "Synthetic review-only description", *updated.Description)
+	}
+	if updated.ISBN13 != nil {
+		assert.NotEqual(t, "9780441172719", *updated.ISBN13)
+	}
 }
 
 func TestPipeline_ChapterTitle_StillFindsBook(t *testing.T) {

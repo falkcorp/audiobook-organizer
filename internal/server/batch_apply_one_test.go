@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_one_test.go
-// version: 1.20.0
+// version: 1.20.1
 // guid: 9d2b71fa-30c8-4e57-a614-8b5e0c7f2d93
 // last-edited: 2026-10-06
 //
@@ -106,11 +106,11 @@ func TestPreviewBulkApplyRow_BlockingRenameIsNotApply(t *testing.T) {
 	cand := metafetch.MetadataCandidate{Title: "A Title", Score: 0.95}
 	plan := cachedApplyPlan{Book: &database.Book{ID: "b", Title: "A Title"}, Candidate: &cand}
 	svc := blockingPreview{&fakeApplySvc{}}
-	row := previewBulkApplyRow(svc, "b", plan, true)
+	row := previewBulkApplyRow(svc, "b", plan, true, false)
 	if row.Verdict != previewVerdictBlocked || row.Reason != applySkipFileWorkWouldFail {
 		t.Fatalf("verdict %q reason %q, want blocked/%s", row.Verdict, row.Reason, applySkipFileWorkWouldFail)
 	}
-	if row = previewBulkApplyRow(svc, "b", plan, false); row.Verdict != previewVerdictApply {
+	if row = previewBulkApplyRow(svc, "b", plan, false, false); row.Verdict != previewVerdictApply {
 		t.Fatalf("without write-back there is no rename to block: verdict %q", row.Verdict)
 	}
 }

@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-06-google-books-shared-budget-and-fallback-executive-summary.md -->
-<!-- version: 1.2.1 -->
+<!-- version: 1.2.2 -->
 <!-- guid: eecc3fe7-e8de-499f-8114-d48d6f8a6ec1 -->
 <!-- last-edited: 2026-10-06 -->
 
@@ -72,5 +72,17 @@
   - **Automatic lookups never apply Open Library or Google matches.** This
     follows your "fetch but don't apply" decision. Organizing, the iTunes
     import, the "Fetch metadata" button and the production-company cleanup
-    still look these sources up, and their matches are kept for review. A
-    book is only updated automatically from another source's match.
+    still look these sources up, but a book is only updated automatically
+    from another source's match. The "Fetch metadata" button now says
+    "Match found, left for review" instead of "not found". The match does
+    not reach the review page at that moment: it shows there the next time
+    the candidate fetch reaches that book. The production-company cleanup
+    keeps nothing.
+- **Fourth review round.**
+  - **Two more kinds of stored matches could be wiped.** Matches saved by
+    the oldest version of the search, and matches saved by a search that
+    knew no author, could still be replaced by an empty list when a
+    re-search found nothing. They are now kept too.
+  - **The "select all" preview now agrees with the apply.** It no longer
+    says an Open Library or Google match would be applied to a book whose
+    match never loaded on screen.

@@ -1,7 +1,7 @@
 // file: internal/server/bulk_apply_preview.go
-// version: 1.14.0
+// version: 1.14.1
 // guid: 6a2e9c15-4f70-4b3d-8e21-d5c7a0f9b384
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 //
 // The bulk-apply DRY RUN: "metadata.bulk-apply-preview".
 //
@@ -132,14 +132,23 @@ type bulkApplyPreviewRow struct {
 	Rename        *metafetch.RenamePreview `json:"rename,omitempty"`
 	// OwnerReviewedWouldApply: the row is blocked by the certainty gate only,
 	// every refusing leg is one an owner review overrides, and nothing after
-	// the gate (policy, the rename) blocks it. Clicking Apply on this book in
-	// the review lane would apply it.
+	// the gate (policy, the rename) blocks it. For a preview of listed books
+	// that is the single-row Apply's rule (applygate.Verdict.
+	// OwnerReviewOverridable): clicking Apply on this book in the review lane
+	// would apply it. For an all_cached preview it is the hashless owner
+	// marker's rule (UnseenOwnerReviewOverridable), because a select-all
+	// apply reaches books the lane never loaded and sends them the marker:
+	// a review-only (Open Library / Google Books) candidate is not lifted,
+	// so the preview does not claim it would be.
 	OwnerReviewedWouldApply bool `json:"owner_reviewed_would_apply,omitempty"`
 }
 
 // previewBulkApplyRow builds one book's row. plan is the same plan the real
-// apply acts on. It reads only.
-func previewBulkApplyRow(svc previewService, id string, plan cachedApplyPlan, writeBack bool) bulkApplyPreviewRow {
+// apply acts on. It reads only. unseen selects the owner-review rule
+// OwnerReviewedWouldApply reports: false for the single-row Apply (a pin of
+// a candidate the owner saw), true for the hashless owner marker a
+// select-all apply sends (cachedApplyPlan.reviewOnlyUnseen).
+func previewBulkApplyRow(svc previewService, id string, plan cachedApplyPlan, writeBack, unseen bool) bulkApplyPreviewRow {
 	row := bulkApplyPreviewRow{BookID: id}
 	if b := plan.Book; b != nil {
 		pb := &previewBook{ID: b.ID, Title: b.Title, FilePath: b.FilePath}
@@ -219,7 +228,11 @@ func previewBulkApplyRow(svc previewService, id string, plan cachedApplyPlan, wr
 	// an owner review does not lift.
 	// Only on the cache path: /metadata/batch-apply-candidates takes no pin,
 	// so nothing could apply the book that way.
-	row.OwnerReviewedWouldApply = plan.reviewOnly() && row.Reason == plan.Gate.Reason
+	reviewable := plan.reviewOnly()
+	if unseen {
+		reviewable = plan.reviewOnlyUnseen()
+	}
+	row.OwnerReviewedWouldApply = reviewable && row.Reason == plan.Gate.Reason
 	return row
 }
 
@@ -394,7 +407,9 @@ func runBulkApplyPreview(
 		if plan.Reason == applySkipAlreadyApplied {
 			nAlreadyApplied.Add(1)
 		}
-		row := previewBulkApplyRow(svc, id, plan, writeBack)
+		// all_cached is the select-all preview: its apply sends the hashless
+		// marker, so it reports the marker's owner-review rule.
+		row := previewBulkApplyRow(svc, id, plan, writeBack, p.AllCached)
 		switch row.Verdict {
 		case previewVerdictApply:
 			nApply.Add(1)
