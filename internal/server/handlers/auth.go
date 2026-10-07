@@ -1,7 +1,7 @@
 // file: internal/server/handlers/auth.go
-// version: 2.5.1
+// version: 2.6.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
-// last-edited: 2026-09-02
+// last-edited: 2026-10-06
 
 package handlers
 
@@ -44,6 +44,7 @@ type AuthUserWriter interface {
 // AuthSessionStore issues, reads, lists and revokes sessions.
 type AuthSessionStore interface {
 	CreateSession(userID, ip, userAgent string, ttl time.Duration) (*database.Session, error)
+	CreateSessionWithOrigin(userID, ip, userAgent string, ttl time.Duration, origin string) (*database.Session, error)
 	GetSession(id string) (*database.Session, error)
 	ListUserSessions(userID string) ([]database.Session, error)
 	RevokeSession(id string) error
@@ -380,11 +381,14 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	if req.RememberMe {
 		ttl = rememberMeSessionTTL
 	}
-	session, err := h.store.CreateSession(
+	// The user's own password sign-in: the one session origin (with OAuth)
+	// that counts as an interactive login (auth.MethodSession).
+	session, err := h.store.CreateSessionWithOrigin(
 		user.ID,
 		strings.TrimSpace(c.ClientIP()),
 		strings.TrimSpace(c.Request.UserAgent()),
 		ttl,
+		database.SessionOriginPassword,
 	)
 	if err != nil {
 		httputil.RespondWithInternalError(c, "failed to create session")

@@ -198,7 +198,14 @@ func RequireAuth(store authSessionStore) gin.HandlerFunc {
 		perms := effectivePermissionsFor(store, user)
 		ctx := auth.WithUser(c.Request.Context(), user)
 		ctx = auth.WithPermissions(ctx, perms)
-		ctx = auth.WithMethod(ctx, auth.MethodSession)
+		// Only a session from the user's own sign-in is an interactive
+		// login; a temp-login or invite session (or one older than the
+		// origin field) is recorded as delegated.
+		method := auth.MethodSessionDelegated
+		if session.InteractiveLogin() {
+			method = auth.MethodSession
+		}
+		ctx = auth.WithMethod(ctx, method)
 		c.Request = c.Request.WithContext(ctx)
 
 		if abortWorkerOnlyOutsideWorkerAPI(c) {

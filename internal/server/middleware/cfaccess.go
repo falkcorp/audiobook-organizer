@@ -18,7 +18,11 @@ import (
 // OAuth login, and (idempotently) links/creates the user. Constructed only when
 // Cloudflare Access is configured; otherwise the middleware is a pass-through.
 type CFAccessAuthenticator struct {
-	verifier *oauth.CFAccessVerifier
+	// verifier is the CFAssertionVerifier the ABS surface also takes, so a
+	// test can drive the middleware without Cloudflare's keys. nil (never a
+	// typed nil: NewCFAccessAuthenticator maps a nil pointer to nil) makes
+	// the middleware a pass-through.
+	verifier CFAssertionVerifier
 	cfg      *oauth.Config
 	store    cfAccessStore
 }
@@ -26,7 +30,11 @@ type CFAccessAuthenticator struct {
 // NewCFAccessAuthenticator wires the verifier, config, and store. Any nil → the
 // middleware becomes a no-op pass-through.
 func NewCFAccessAuthenticator(verifier *oauth.CFAccessVerifier, cfg *oauth.Config, store cfAccessStore) *CFAccessAuthenticator {
-	return &CFAccessAuthenticator{verifier: verifier, cfg: cfg, store: store}
+	a := &CFAccessAuthenticator{cfg: cfg, store: store}
+	if verifier != nil {
+		a.verifier = verifier
+	}
+	return a
 }
 
 // CloudflareAccessAuth returns a middleware that, when a valid Cf-Access-Jwt-Assertion

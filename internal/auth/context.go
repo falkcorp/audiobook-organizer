@@ -36,9 +36,14 @@ const (
 	// MethodNone: no verifier bound a user (unauthenticated, or the
 	// first-run bootstrap with no users).
 	MethodNone Method = ""
-	// MethodSession: a login session token (cookie or Bearer) issued by an
-	// interactive login (password or OAuth).
+	// MethodSession: a login session token (cookie or Bearer) issued by the
+	// user's own sign-in (password or OAuth; database.Session.InteractiveLogin).
 	MethodSession Method = "session"
+	// MethodSessionDelegated: a session NOT proven to come from the user's
+	// own sign-in: one minted through a temp-login link (which an admin, or
+	// an admin API key, can mint for any user), an invite, or issued before
+	// sessions recorded their origin. Not interactive.
+	MethodSessionDelegated Method = "session_delegated"
 	// MethodAPIKey: an "abk_" API key. Automation and agents use these.
 	MethodAPIKey Method = "api_key"
 	// MethodCFAccess: a verified Cloudflare Access SSO assertion resolved to
@@ -57,8 +62,17 @@ const (
 func (m Method) Interactive() bool { return m == MethodSession || m == MethodCFAccess }
 
 // WithMethod records how the request in ctx was authenticated.
+//
+// Downgrade only: once a method is recorded, a later call may replace it
+// only with a non-interactive one. No stage running after the verifier
+// (a fallback, a second binder on the same request) can turn an API-key or
+// delegated request into an interactive one, while a later stage that
+// verified a weaker credential still marks the request with it.
 func WithMethod(ctx context.Context, m Method) context.Context {
 	if m == MethodNone {
+		return ctx
+	}
+	if cur := MethodFromContext(ctx); cur != MethodNone && m.Interactive() {
 		return ctx
 	}
 	return context.WithValue(ctx, methodKey, m)

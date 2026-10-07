@@ -1,7 +1,7 @@
 // file: internal/server/handlers/auth_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: d5e6f7a8-b9c0-1234-5678-90abcdef0123
-// last-edited: 2026-09-02
+// last-edited: 2026-10-06
 
 package handlers_test
 
@@ -119,7 +119,8 @@ func TestAuthHandler_Login_Success(t *testing.T) {
 
 	store := handlersmocks.NewMockAuthStore(t)
 	store.EXPECT().GetUserByUsername("alice").Return(user, nil)
-	store.EXPECT().CreateSession("user-1", mock.Anything, mock.Anything, mock.Anything).Return(session, nil)
+	// A password sign-in records its origin: the session is an interactive login.
+	store.EXPECT().CreateSessionWithOrigin("user-1", mock.Anything, mock.Anything, mock.Anything, database.SessionOriginPassword).Return(session, nil)
 
 	h := handlers.NewAuthHandler(store, true)
 	c, w := newAuthCtx("POST", "/auth/login", map[string]any{
@@ -204,7 +205,8 @@ func TestAuthHandler_Login_SoftCounterDoesNotLock(t *testing.T) {
 
 	store := handlersmocks.NewMockAuthStore(t)
 	store.EXPECT().GetUserByUsername("alice").Return(user, nil).Times(8) // 7 wrong + 1 right
-	store.EXPECT().CreateSession("user-1", mock.Anything, mock.Anything, mock.Anything).
+	// A password sign-in records its origin: the session is an interactive login.
+	store.EXPECT().CreateSessionWithOrigin("user-1", mock.Anything, mock.Anything, mock.Anything, database.SessionOriginPassword).
 		Return(&database.Session{ID: "sess-1", ExpiresAt: time.Now().Add(time.Hour)}, nil)
 
 	h := handlers.NewAuthHandler(store, true)
@@ -235,7 +237,8 @@ func TestAuthHandler_Login_DifferentIPNotThrottled(t *testing.T) {
 	store := handlersmocks.NewMockAuthStore(t)
 	store.EXPECT().GetUserByUsername("ghost").Return(nil, nil).Times(15) // attacker probes
 	store.EXPECT().GetUserByUsername("alice").Return(user, nil).Times(1) // victim
-	store.EXPECT().CreateSession("user-1", mock.Anything, mock.Anything, mock.Anything).
+	// A password sign-in records its origin: the session is an interactive login.
+	store.EXPECT().CreateSessionWithOrigin("user-1", mock.Anything, mock.Anything, mock.Anything, database.SessionOriginPassword).
 		Return(&database.Session{ID: "sess-1", ExpiresAt: time.Now().Add(time.Hour)}, nil)
 
 	h := handlers.NewAuthHandler(store, true)

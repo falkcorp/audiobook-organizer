@@ -1,5 +1,5 @@
 // file: internal/database/store.go
-// version: 2.108.0
+// version: 2.109.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
 // last-edited: 2026-10-06
 
@@ -841,6 +841,26 @@ type Session struct {
 	UserAgent string    `json:"user_agent"`
 	Revoked   bool      `json:"revoked"`
 	Version   int       `json:"version"`
+	// Origin is how the session was issued (SessionOrigin*). "" on a
+	// session issued without one (every session before 2026-10-06, a
+	// temp-login link, an invite): such a session is NOT proof of the
+	// user's own interactive login (auth.MethodSessionDelegated).
+	Origin string `json:"origin,omitempty"`
+}
+
+// Session origins (Session.Origin).
+const (
+	// SessionOriginPassword: the user signed in with username and password.
+	SessionOriginPassword = "password"
+	// SessionOriginOAuth: the user signed in through an OAuth/OIDC provider.
+	SessionOriginOAuth = "oauth"
+)
+
+// InteractiveLogin reports whether the session came from the user's own
+// sign-in (password or OAuth), rather than a link someone else minted
+// (temp-login, invite) or an unknown origin.
+func (s *Session) InteractiveLogin() bool {
+	return s != nil && (s.Origin == SessionOriginPassword || s.Origin == SessionOriginOAuth)
 }
 
 // UserPreferenceKV represents per-user preference (key/value)

@@ -1,5 +1,5 @@
 // file: internal/database/mock_store.go
-// version: 1.137.0
+// version: 1.138.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-10-06
 
@@ -402,6 +402,9 @@ type MockStore struct {
 
 	// Sessions
 	CreateSessionFunc    func(userID, ip, userAgent string, ttl time.Duration) (*Session, error)
+	// CreateSessionWithOriginFunc; when nil, CreateSessionWithOrigin falls
+	// back to CreateSessionFunc and stamps the origin on its result.
+	CreateSessionWithOriginFunc func(userID, ip, userAgent string, ttl time.Duration, origin string) (*Session, error)
 	GetSessionFunc       func(id string) (*Session, error)
 	RevokeSessionFunc    func(id string) error
 	ListUserSessionsFunc func(userID string) ([]Session, error)
@@ -1969,6 +1972,17 @@ func (m *MockStore) CreateSession(userID, ip, userAgent string, ttl time.Duratio
 		return m.CreateSessionFunc(userID, ip, userAgent, ttl)
 	}
 	return nil, nil
+}
+
+func (m *MockStore) CreateSessionWithOrigin(userID, ip, userAgent string, ttl time.Duration, origin string) (*Session, error) {
+	if m.CreateSessionWithOriginFunc != nil {
+		return m.CreateSessionWithOriginFunc(userID, ip, userAgent, ttl, origin)
+	}
+	s, err := m.CreateSession(userID, ip, userAgent, ttl)
+	if s != nil {
+		s.Origin = origin
+	}
+	return s, err
 }
 
 func (m *MockStore) GetSession(id string) (*Session, error) {

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_auth.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: d9815a3d-0997-4c62-89a2-73f3c57e7fa9
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package database
 
@@ -724,13 +724,18 @@ func (p *PebbleStore) ConsumeInvite(token, passwordHashAlgo, passwordHash string
 
 // Sessions
 func (p *PebbleStore) CreateSession(userID, ip, userAgent string, ttl time.Duration) (*Session, error) {
+	return p.CreateSessionWithOrigin(userID, ip, userAgent, ttl, "")
+}
+
+// CreateSessionWithOrigin is CreateSession recording the session's origin.
+func (p *PebbleStore) CreateSessionWithOrigin(userID, ip, userAgent string, ttl time.Duration, origin string) (*Session, error) {
 	// The id is the session cookie's value: a credential, so not newULID.
 	id, err := newUnlinkedULID()
 	if err != nil {
 		return nil, err
 	}
 	now := time.Now()
-	sess := &Session{ID: id, UserID: userID, CreatedAt: now, ExpiresAt: now.Add(ttl), IP: ip, UserAgent: userAgent, Revoked: false, Version: 1}
+	sess := &Session{ID: id, UserID: userID, CreatedAt: now, ExpiresAt: now.Add(ttl), IP: ip, UserAgent: userAgent, Revoked: false, Version: 1, Origin: origin}
 	data, _ := json.Marshal(sess)
 	b := p.db.NewBatch()
 	if err := b.Set([]byte("sess:"+id), data, nil); err != nil {
