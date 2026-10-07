@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/regroup_apply_itunes_guard_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0c4f7a92-6d1b-4e38-8a25-9b3e1f6c7d40
 // last-edited: 2026-10-06
 
@@ -26,7 +26,8 @@ func markITunes(t *testing.T, f *vptest.Fixture, id string) {
 }
 
 // The hand-off of a fresh group would demote an iTunes member (nil flag, a
-// second incumbent): the iTunes guard refuses it, so no flag is written.
+// second incumbent): the iTunes guard refuses it before the link, so no
+// book is linked and no flag is written.
 func TestApplyVersionGroup_HandOffNeverWritesAnITunesMember(t *testing.T) {
 	f := vptest.New(t)
 	withLibraryRoot(t, f.Root)
@@ -39,6 +40,11 @@ func TestApplyVersionGroup_HandOffNeverWritesAnITunesMember(t *testing.T) {
 	require.ErrorIs(t, err, itunesguard.ErrITunesMember)
 	require.Equal(t, "nil", f.Flag(t, it), "the iTunes member's flag is never written")
 	require.Equal(t, "true", f.Flag(t, b))
+	for _, id := range []string{it, b} {
+		got, gerr := f.S.GetBookByID(id)
+		require.NoError(t, gerr)
+		require.Nil(t, got.VersionGroupID, "refused before the link: %s is not linked", id)
+	}
 }
 
 // An iTunes book joining a reused group with a primary would be written

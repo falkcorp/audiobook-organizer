@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/regroup_apply.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: e2a7c9d4-1f68-4b03-9c5e-7a0d3f814b62
 // last-edited: 2026-10-06
 
@@ -401,8 +401,9 @@ func ApplyVersionGroup(store versionGroupWriter) func(context.Context, database.
 		}
 		defer releaseGroups()
 		reusedHasPrimary := false
+		var current []database.Book
 		if len(groups) > 0 {
-			current, err := store.GetBooksByVersionGroup(target)
+			current, err = store.GetBooksByVersionGroup(target)
 			if err != nil {
 				return fmt.Errorf("regroup version-group apply: list group %s members: %w", target, err)
 			}
@@ -413,19 +414,50 @@ func ApplyVersionGroup(store versionGroupWriter) func(context.Context, database.
 				}
 			}
 		}
-		// A joiner of a reused group with a primary is written explicit
-		// false below. That is a primary-flag write, and an iTunes book's
-		// primary flag is never written (itunesguard): asked here, before
-		// any write, so a refusal fails the item with nothing changed.
+		// No iTunes book's primary flag is ever written (itunesguard). Two
+		// writes follow: the link (a joiner of a reused group with a primary
+		// arrives explicit false) and the hand-off over the linked group. Both
+		// are checked HERE, before any write, over the membership the group
+		// will have (versionprimary.GuardPlanned, and GuardPlannedCrown for a
+		// held group's fallback crown), so a refusal fails the item with
+		// nothing linked and no flag written.
+		rootDir := config.AppConfig.RootDir
 		mayWrite := itunesguard.MayWrite(store, target)
-		if reusedHasPrimary {
-			for _, b := range books {
-				if b.VersionGroupID != nil && *b.VersionGroupID == target {
-					continue
-				}
+		afterLink := make([]database.Book, 0, len(current)+len(books))
+		inHold := make(map[string]bool, len(books))
+		for _, b := range books {
+			inHold[b.ID] = true
+		}
+		for i := range current {
+			if !inHold[current[i].ID] {
+				afterLink = append(afterLink, current[i])
+			}
+		}
+		for _, b := range books {
+			m := *b
+			joiner := m.VersionGroupID == nil || *m.VersionGroupID != target
+			if joiner && reusedHasPrimary {
 				if err := mayWrite(b); err != nil {
 					return fmt.Errorf("regroup version-group apply: join %s to version group %s: %w", b.ID, target, err)
 				}
+				f := false
+				m.IsPrimaryVersion = &f
+			}
+			vg := target
+			m.VersionGroupID = &vg
+			afterLink = append(afterLink, m)
+		}
+		held, err := versionprimary.GuardPlanned(ctx, store, target, afterLink, versionprimary.Env{RootDir: rootDir, MayWrite: mayWrite})
+		if err != nil {
+			return fmt.Errorf("regroup version-group apply: primary hand-off of version group %s: %w", target, err)
+		}
+		if held {
+			keep, kerr := heldGroupFallback(ctx, store, books, rootDir)
+			if kerr != nil {
+				return fmt.Errorf("regroup version-group apply: choose the primary of held group %s: %w", target, kerr)
+			}
+			if err := versionprimary.GuardPlannedCrown(store, target, afterLink, keep, versionprimary.Env{MayWrite: mayWrite}); err != nil {
+				return fmt.Errorf("regroup version-group apply: crown the primary of held group %s: %w", target, err)
 			}
 		}
 		// Link: set VersionGroupID (and a joiner's flag, above), under the
@@ -478,12 +510,12 @@ func ApplyVersionGroup(store versionGroupWriter) func(context.Context, database.
 		// library -- and only when none is, the smallest ULID (pickPrimary),
 		// as before. version-group-primary-repair re-ranks the group later.
 		//
-		// Both hand-offs ask the iTunes guard (Env.MayWrite) under the group
-		// lock about exactly the members they would write. A refusal writes
-		// no flag but the link above stands: the item fails with the
-		// refusal (versionprimary.ErrWriteRefused) for a human, and a retry
-		// re-links nothing and is refused again until the group changes.
-		rootDir := config.AppConfig.RootDir
+		// Both hand-offs ask the iTunes guard (Env.MayWrite) again, under the
+		// group lock, about exactly the members they would write: the
+		// pre-link check above ran without that lock. A refusal here (the
+		// group changed in between) writes no flag, but the link stands and
+		// the item fails with the refusal (versionprimary.ErrWriteRefused)
+		// for a human.
 		res, err := versionprimary.EnsureSinglePrimary(ctx, store, target, versionprimary.Env{RootDir: rootDir, MayWrite: mayWrite})
 		if err != nil {
 			return fmt.Errorf("regroup version-group apply: decide the primary of %s: %w", target, err)

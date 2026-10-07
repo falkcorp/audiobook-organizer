@@ -1,5 +1,5 @@
 // file: internal/versionprimary/ensure.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 0b7e4c52-9a1d-4f38-8c6e-2d51f0a7b9e3
 // last-edited: 2026-10-06
 
@@ -481,6 +481,42 @@ func EnsureSinglePrimary(ctx context.Context, store EnsureStore, gid string, env
 		return res, nil
 	}
 	return plan.write(store, gid, OutcomeElected, res)
+}
+
+// GuardPlanned is EnsureSinglePrimary's decision and guard over a
+// HYPOTHETICAL membership of group gid, with no lock and no writes: a caller
+// about to link books into gid passes the members the group will have, and
+// learns before writing anything whether the hand-off that follows would be
+// refused (env.MayWrite about exactly the members it would write). held
+// reports a group the rule would hold, which writes nothing. The real
+// hand-off still guards under the group lock: the group can change between
+// this check and that one.
+func GuardPlanned(ctx context.Context, store EnsureStore, gid string, members []database.Book, env Env) (held bool, err error) {
+	if len(members) == 0 {
+		return false, nil
+	}
+	alive := storeAlive(store)
+	inc, d, err := decideSingle(ctx, store, members, env, alive)
+	if err != nil {
+		return false, err
+	}
+	keep, crown := "", false
+	switch {
+	case inc != nil:
+		keep = inc.ID
+	case d.Kind != DecisionHeld:
+		keep, crown = d.WinnerID, true
+	default:
+		return true, nil
+	}
+	return false, planWrites(members, keep, crown, alive).guard(gid, env.MayWrite)
+}
+
+// GuardPlannedCrown is GuardPlanned for CrownEnv(gid, keepID): env.MayWrite
+// is asked about exactly the members that crown would write over the
+// hypothetical membership members. No lock, no writes.
+func GuardPlannedCrown(store EnsureStore, gid string, members []database.Book, keepID string, env Env) error {
+	return planWrites(members, keepID, true, storeAlive(store)).guard(gid, env.MayWrite)
 }
 
 // decideSingle is EnsureSinglePrimary's decision, with no writes: the
