@@ -1,5 +1,5 @@
 // file: internal/metafetch/service.go
-// version: 5.47.2
+// version: 5.47.3
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
 // last-edited: 2026-10-06
 
@@ -426,9 +426,10 @@ type SearchMetadataResponse struct {
 	mergeCached bool
 	// mergeRank is SearchOptions.MergeRank, for cacheSearchResponse.
 	mergeRank func(MetadataCandidate) int
-	// carryFromHash is SearchOptions.CarryFromSourceHash, for
-	// cacheSearchResponse.
+	// carryFromHash and carryFromRow are SearchOptions.CarryFromSourceHash
+	// and CarryFromRow, for cacheSearchResponse.
 	carryFromHash string
+	carryFromRow  bool
 }
 
 // SourceErrors returns the error each failed source returned (keyed like
@@ -438,6 +439,17 @@ func (r *SearchMetadataResponse) SourceErrors() map[string]error {
 		return nil
 	}
 	return r.sourceErrs
+}
+
+// CarryFrom makes the search's cache write carry row's candidates as a row
+// for its own inputs' would be (CarryFromSourceHash, CarryFromRow). row is
+// one Service.VouchedCachedRow returned; nil clears the carry.
+func (o *SearchOptions) CarryFrom(row *MetadataCandidateCache) {
+	if row == nil {
+		o.CarryFromSourceHash, o.CarryFromRow = "", false
+		return
+	}
+	o.CarryFromSourceHash, o.CarryFromRow = row.SourceHash, true
 }
 
 // SearchOptions carries optional per-request flags for SearchMetadataForBook.
@@ -496,9 +508,16 @@ type SearchOptions struct {
 	// it: an empty scheduled or forced chain refetch wrote Candidates: [] over
 	// a row the batch fetch had just vouched for, and every below-floor or
 	// asin_conflict candidate the owner could still review was lost.
-	// "" = the search's own hash only. Pass it only for a row the caller
-	// checked belongs to the book as it is now.
+	// It counts only with CarryFromRow set, and may then be "": a legacy row
+	// written before SourceHash existed, which the apply gate also accepts
+	// (ValidateCachedIdentity fails open on it). Set both with CarryFrom.
+	// Pass them only for a row the caller checked belongs to the book as it
+	// is now.
 	CarryFromSourceHash string
+	// CarryFromRow turns CarryFromSourceHash on. A flag rather than a
+	// non-empty hash, because "" is a real row's hash (the legacy hashless
+	// row) and must not also mean "no row".
+	CarryFromRow bool
 
 	// MergeRank ranks the candidates of a write that unions fresh and
 	// carried rows (a MergeWithCached answer, or a chain refetch keeping the

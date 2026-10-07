@@ -1,5 +1,5 @@
 // file: internal/metafetch/cache_merge_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 6f2d8a41-93c7-4e0b-b5a2-1d7c4e9f3a58
 // last-edited: 2026-10-06
 
@@ -98,7 +98,7 @@ func TestCacheSearchResponse_MergeIntoVouchedRowUnderOtherHash(t *testing.T) {
 	mfs := preserveFixture(t)
 	hash := put(mfs)
 	got := mfs.cacheSearchResponse(mergeBookID, mergeQuery, mergeAuthor, "", "", &SearchMetadataResponse{
-		Results: []MetadataCandidate{{Source: "Google Books", Title: mergeQuery, Score: 0.4}}, mergeCached: true, carryFromHash: hash,
+		Results: []MetadataCandidate{{Source: "Google Books", Title: mergeQuery, Score: 0.4}}, mergeCached: true, carryFromHash: hash, carryFromRow: true,
 	})
 	require.ElementsMatch(t, []string{"Audible:" + mergeQuery, "Google Books:" + mergeQuery}, candSources(t, got.Candidates))
 	require.Equal(t, hashSearchInputs(mergeBookID, mergeQuery, mergeAuthor, "", ""), got.SourceHash,
@@ -107,7 +107,7 @@ func TestCacheSearchResponse_MergeIntoVouchedRowUnderOtherHash(t *testing.T) {
 	mfs = preserveFixture(t)
 	hash = put(mfs)
 	got = mfs.cacheSearchResponse(mergeBookID, mergeQuery, mergeAuthor, "", "", &SearchMetadataResponse{
-		SourcesAnswered: []string{"Google Books"}, mergeCached: true, carryFromHash: hash,
+		SourcesAnswered: []string{"Google Books"}, mergeCached: true, carryFromHash: hash, carryFromRow: true,
 	})
 	require.Equal(t, []string{"Audible:" + mergeQuery}, candSources(t, got.Candidates),
 		"an empty fallback answer keeps the vouched row's candidates")
@@ -231,7 +231,7 @@ func TestCacheSearchResponse_EmptyChainAnswerKeepsCarriedRow(t *testing.T) {
 	mfs := preserveFixture(t)
 	hash := put(mfs)
 	got := mfs.cacheSearchResponse(mergeBookID, mergeQuery, mergeAuthor, "", "", &SearchMetadataResponse{
-		SourcesAnswered: []string{"Audible"}, carryFromHash: hash,
+		SourcesAnswered: []string{"Audible"}, carryFromHash: hash, carryFromRow: true,
 	})
 	require.Equal(t, []string{"Audible:" + mergeQuery}, candSources(t, got.Candidates))
 	require.True(t, got.FetchedAt.Equal(fetched), "carried candidates keep their FetchedAt")
