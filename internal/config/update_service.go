@@ -1,5 +1,5 @@
 // file: internal/config/update_service.go
-// version: 3.27.0
+// version: 3.28.0
 // guid: f6g7h8i9-j0k1-l2m3-n4o5-p6q7r8s9t0u1
 // last-edited: 2026-10-07
 
@@ -13,7 +13,6 @@ import (
 	"maps"
 	"net/http"
 	"reflect"
-	"slices"
 	"strings"
 	"sync"
 
@@ -664,7 +663,7 @@ func (us *UpdateService) UpdateConfig(ctx context.Context, payload map[string]an
 			// for an interactive session: once an owner exists only the
 			// owner may change who the owner is (plan D15).
 			if changed := intersectSorted(ChangedOwnerTrustRoot(prior, candidate), ChangedOwnerTrustRoot(priorCheck, candidate)); len(changed) > 0 {
-				if why := ownerTrustRootWhyNot(ctx, prior, candidate, changed); why != "" {
+				if why := ownerTrustRootWhyNot(ctx, prior); why != "" {
 					ownerRefused, ownerWhy = changed, why
 					return false
 				}
@@ -844,31 +843,29 @@ func (us *UpdateService) ApplyUpdates(ctx context.Context, payload map[string]an
 }
 
 // ownerTrustRootWhyNot is why the caller in ctx may not change the owner
-// trust-root fields in changed ("" when it may). prior is the config before
-// the request, candidate after.
+// trust-root fields ("" when it may). prior is the config before
+// the request.
 //
 //   - An owner is set (prior.OwnerEmail): only the owner may change any of
 //     them, proven exactly as for every owner action (auth.OwnerProofWhyNot:
 //     a verified Cloudflare Access JWT for that email). A second admin, a
 //     password or SSO session, an API key and an auth-off request are all
-//     refused.
-//   - No owner yet: the FIRST owner_email may be set only by that person,
-//     signed in through Cloudflare Access as that very email, so nobody can
-//     name someone else (or a look-alike) as owner. The other trust-root
-//     fields follow the ordinary sign-in rule until then: Access has to be
-//     configurable before anyone can prove to be the owner through it.
-func ownerTrustRootWhyNot(ctx context.Context, prior, candidate *Config, changed []string) string {
-	if strings.TrimSpace(prior.OwnerEmail) != "" {
-		if why := auth.OwnerProofWhyNot(ctx, prior.OwnerEmail, ""); why != "" {
-			return "Only the owner may change who the owner is or how the owner signs in. " + why
-		}
-		return ""
+//     refused. The owner may hand ownership on.
+//   - No owner yet: refused for EVERY caller (owner decision 2026-10-07: the
+//     owner is set on the server, OWNER_EMAIL or the config file, never
+//     through the API). A first-set-through-Access path let any admitted
+//     Access user, or a session that first repointed cf_access_* at a team it
+//     controls, make itself the owner.
+func ownerTrustRootWhyNot(ctx context.Context, prior *Config) string {
+	if strings.TrimSpace(prior.OwnerEmail) == "" {
+		return OwnerTrustRootUnsetMessage
 	}
-	if !slices.Contains(changed, "owner_email") || strings.TrimSpace(candidate.OwnerEmail) == "" {
-		return ""
-	}
-	if auth.MethodFromContext(ctx) != auth.MethodCFAccess || !auth.IsOwnerEmail(auth.AccessEmailFromContext(ctx), candidate.OwnerEmail) {
-		return "The first owner_email can be set only by that person, signed in through Cloudflare Access as that email"
+	if why := auth.OwnerProofWhyNot(ctx, prior.OwnerEmail, ""); why != "" {
+		return "Only the owner may change who the owner is or how the owner signs in. " + why
 	}
 	return ""
 }
+
+// OwnerTrustRootUnsetMessage is the refusal for an owner trust-root change
+// while no owner is configured.
+const OwnerTrustRootUnsetMessage = "No owner is configured, so who the owner is and how the owner signs in (owner_email, cf_access_team_domain, cf_access_aud, enable_auth, oauth_allowed_emails) can be set only on the server: set OWNER_EMAIL (and CF_ACCESS_TEAM_DOMAIN / CF_ACCESS_AUD) in the host environment or config file and restart"

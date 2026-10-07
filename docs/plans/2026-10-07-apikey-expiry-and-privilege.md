@@ -1,5 +1,5 @@
 <!-- file: docs/plans/2026-10-07-apikey-expiry-and-privilege.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: 67c7aa4f-72e2-4a9c-805a-92fff01c3308 -->
 <!-- last-edited: 2026-10-07 -->
 
@@ -281,8 +281,9 @@ invite sessions keep working for everything else but are not the owner. The
 unsigned `Cf-Access-Authenticated-User-Email` header never counts: the Access
 middleware records the email from the verified claims
 (`auth.WithAccessEmail`) and nothing else writes it. `owner_email` is a
-sign-in setting (D13), so only an interactive session or the environment
-(`OWNER_EMAIL`) sets it; unset refuses every owner action.
+sign-in setting (D13), and part of the owner trust root (D15): the first
+value is set only on the host (`OWNER_EMAIL` or the config file), never
+through the API; unset refuses every owner action.
 `repairs.OwnerGrants.Issue` refuses any grant that is not `cf_access` with an
 Access email, and `ResolveOwnerApproval` re-checks it, so the exception cannot
 be reached by another caller of `Issue`. `GET /repairs/owner-status` lets the
@@ -377,17 +378,27 @@ a restart.
 - **Owner set:** `UpdateService` refuses a change to any of them unless
   `auth.OwnerProofWhyNot` passes for the CURRENT `owner_email`, for every
   auth method and with local auth on or off (403, `refused_keys`).
-- **No owner yet:** the first `owner_email` may be set only by a verified
-  Access sign-in whose email is that value (`auth.IsOwnerEmail`), so nobody
-  can name someone else or a look-alike. The other four keep the D13 rule
-  until then, because Access has to be configurable before anyone can prove
-  to be the owner through it.
-- **Paths that could UNSET the owner** and so reopen the first-set rule:
-  `POST /system/reset` and `/system/factory-reset` (`config.ResetToDefaults`
-  clears `owner_email`) and `POST /backup/restore` (the restored database can
-  predate it). While an owner is set they now also need the owner
-  (`s.ownerGateWhenOwnerSet`); before any owner exists they keep their
-  existing guards.
+- **No owner yet: host only (owner decision, 2026-10-07).** While
+  `owner_email` is unset, a change to any of the five is refused through the
+  API for every caller, including the would-be owner's own Access sign-in
+  and with local auth off (403, `refused_keys`, message
+  `config.OwnerTrustRootUnsetMessage`: set `OWNER_EMAIL` and `CF_ACCESS_*` on
+  the host and restart). An earlier version let the first `owner_email` be
+  set by an Access sign-in as that email; a security review showed any
+  Access-admitted user (any allowlisted email, or a password session that
+  first pointed `cf_access_*` at a team it controls) could then make itself
+  the owner, so that path is removed.
+- **Paths that could UNSET the owner:** `POST /system/reset` and
+  `/system/factory-reset` (`config.ResetToDefaults`) and `POST /backup/restore`
+  (the restored database can predate it). While an owner is set they also
+  need the owner (`s.ownerGateWhenOwnerSet`); before any owner exists they
+  keep their existing guards. A host-set owner cannot be cleared by any of
+  them: `ResetToDefaults` now re-applies the environment-authoritative values
+  (`applyEnvAuthoritativeConfig`) after resetting, where it used to blank
+  them in memory until the next restart, and a restored database's settings
+  are overridden by the host values at the next load. Clearing an owner set
+  only in the database (before this change) falls back to the host-only rule
+  above, which is fail-closed.
 - **Host-level paths stay open on purpose:** the `OWNER_EMAIL` and `CF_ACCESS_*`
   environment variables and the config file are applied
   environment-authoritatively at load (`config.go`, `viper.IsSet`) and win
@@ -399,10 +410,12 @@ a restart.
   `GET /operations` and enqueues `repairs.apply` is refused (owner decision:
   a key is never the owner). `POST /operations/v2` records no actor today,
   so such an op was already refused, but only by that accident.
-Tests: `TestUpdateConfig_OwnerTrustRoot` (50 cases; 34 fail with the check
-removed), `TestOwnerTrustRoot_ConfigThroughTheRouter` (auth on and off:
+Tests: `TestUpdateConfig_OwnerTrustRoot` (36 no-owner cases fail on the
+first-set version), `TestOwnerTrustRoot_ConfigThroughTheRouter` (auth on and off:
 another admin's Access JWT, a look-alike, a password session, an API key and
-no sign-in refused; the owner may hand ownership on; first-set rule),
+no sign-in refused; the owner may hand ownership on; with no owner set,
+every caller including the owner's own Access sign-in refused),
+`TestResetToDefaults_KeepsHostOwner` (fails without the re-apply),
 `TestOwnerTrustRoot_RestoreNeedsTheOwnerWhileOneIsSet`,
 `TestOwnerRoutes_AuthOffStillNeedsTheOwner`, and the API-key subtest of
 `TestFragmentFixer_OwnerApply` (it applied the row with the method check

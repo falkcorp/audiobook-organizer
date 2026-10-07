@@ -1,5 +1,5 @@
 // file: internal/config/protected_fields_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4f2a8c61-d93e-4b07-a5c8-1e6b3d9f7a20
 // last-edited: 2026-10-07
 
@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/viper"
 	"github.com/stretchr/testify/mock"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
@@ -280,8 +281,7 @@ func accessCtx(email string) context.Context {
 // any interactive session (a second admin through Access, a stolen password
 // session) and any auth-off request could change owner_email or cf_access_*,
 // making itself the owner. Once an owner is set only the owner may change the
-// trust root; the first owner_email may be set only by that person through
-// Access.
+// trust root; while none is set nobody may through the API (host only).
 func TestUpdateConfig_OwnerTrustRoot(t *testing.T) {
 	const owner = "owner@example.test"
 	session := auth.WithMethod(context.Background(), auth.MethodSession)
@@ -336,34 +336,50 @@ func TestUpdateConfig_OwnerTrustRoot(t *testing.T) {
 		}
 	})
 
-	// No owner yet: the first owner_email only from that person's Access sign-in.
-	firstSet := map[string]any{"owner_email": owner}
-	for _, c := range []struct {
+	// No owner yet: every trust-root field is refused through the API for
+	// every caller, the would-be owner's own Access sign-in included (owner
+	// decision 2026-10-07: the owner is set on the host, OWNER_EMAIL). The
+	// first-set-through-Access path let any admitted Access user, or a
+	// session that first repointed cf_access_*, make itself the owner.
+	noOwnerCallers := []struct {
 		name   string
 		ctx    context.Context
 		authOn bool
 	}{
+		{"that person through Access", accessCtx(owner), true},
 		{"password session", session, true},
 		{"API key", apiKey, true},
 		{"another person through Access", accessCtx("other@example.test"), true},
-		{"a look-alike through Access", accessCtx("\u212Aowner@example.test"), true},
 		{"auth off, no sign-in", context.Background(), false},
-	} {
-		t.Run("first set/refused/"+c.name, func(t *testing.T) {
-			status, resp, cfg := updateWith(t, c.ctx, c.authOn, "", firstSet)
-			if status != http.StatusForbidden || cfg.OwnerEmail != "" {
-				t.Errorf("status = %d (%v), owner_email = %q; want 403 and unset", status, resp["error"], cfg.OwnerEmail)
-			}
-		})
+		{"auth off, that person through Access", accessCtx(owner), false},
 	}
-	t.Run("first set/that person through Access", func(t *testing.T) {
-		status, resp, cfg := updateWith(t, accessCtx(owner), true, "", firstSet)
-		if status != http.StatusOK || cfg.OwnerEmail != owner {
-			t.Errorf("status = %d (%v), owner_email = %q", status, resp["error"], cfg.OwnerEmail)
+	for _, payload := range append(trustRoot[:1:1], map[string]any{"owner_email": owner},
+		map[string]any{"cf_access_team_domain": "new.example.test"}, map[string]any{"cf_access_aud": "aud-2"},
+		map[string]any{"oauth_allowed_emails": owner}, map[string]any{"enable_auth": true}) {
+		for _, c := range noOwnerCallers {
+			t.Run("no owner/refused/"+c.name+"/"+firstKey(payload), func(t *testing.T) {
+				p := payload
+				if _, ok := p["enable_auth"]; ok {
+					p = map[string]any{"enable_auth": !c.authOn}
+				}
+				status, resp, cfg := updateWith(t, c.ctx, c.authOn, "", p)
+				if status != http.StatusForbidden {
+					t.Fatalf("status = %d (%v), want 403", status, resp["error"])
+				}
+				if msg, _ := resp["error"].(string); !strings.Contains(msg, "OWNER_EMAIL") {
+					t.Errorf("message does not point at the host setting: %q", msg)
+				}
+				if keys, _ := resp["refused_keys"].([]string); len(keys) == 0 {
+					t.Errorf("refused_keys missing: %v", resp)
+				}
+				if cfg.OwnerEmail != "" || cfg.CFAccessTeamDomain != "team.example.test" || cfg.CFAccessAUD != "aud-1" || cfg.EnableAuth != c.authOn {
+					t.Errorf("trust root changed: %+v", cfg)
+				}
+			})
 		}
-	})
-	t.Run("no owner yet/a session may still configure Access", func(t *testing.T) {
-		status, resp, _ := updateWith(t, session, true, "", map[string]any{"cf_access_team_domain": "new.example.test"})
+	}
+	t.Run("no owner/unrelated settings stay open to a session", func(t *testing.T) {
+		status, resp, _ := updateWith(t, session, true, "", map[string]any{"concurrent_scans": 7})
 		if status != http.StatusOK {
 			t.Errorf("status = %d (%v), want 200", status, resp["error"])
 		}
@@ -383,5 +399,27 @@ func TestOwnerTrustRootFields_AreSignInRules(t *testing.T) {
 		if _, err := projectField(reflect.ValueOf(Config{}), strings.Split(path, ".")); err != nil {
 			t.Errorf("trust-root field %q does not resolve: %v", path, err)
 		}
+	}
+}
+
+// A system or factory reset (config.ResetToDefaults) keeps the host-set
+// owner and Access settings: they are environment-authoritative, as at load.
+// It used to clear them in memory until the next restart.
+func TestResetToDefaults_KeepsHostOwner(t *testing.T) {
+	orig := AppConfig
+	t.Cleanup(func() { AppConfig = orig })
+	t.Setenv("OWNER_EMAIL", "host-owner@example.test")
+	t.Setenv("CF_ACCESS_TEAM_DOMAIN", "host-team.example.test")
+	t.Setenv("CF_ACCESS_AUD", "host-aud")
+	for key, env := range map[string]string{"owner_email": "OWNER_EMAIL", "cf_access_team_domain": "CF_ACCESS_TEAM_DOMAIN", "cf_access_aud": "CF_ACCESS_AUD"} {
+		if err := viper.BindEnv(key, env); err != nil {
+			t.Fatal(err)
+		}
+	}
+	AppConfig = Config{OwnerEmail: "host-owner@example.test", CFAccessTeamDomain: "host-team.example.test", CFAccessAUD: "host-aud"}
+	ResetToDefaults()
+	got := Snapshot()
+	if got.OwnerEmail != "host-owner@example.test" || got.CFAccessTeamDomain != "host-team.example.test" || got.CFAccessAUD != "host-aud" {
+		t.Errorf("reset dropped host values: owner=%q team=%q aud=%q", got.OwnerEmail, got.CFAccessTeamDomain, got.CFAccessAUD)
 	}
 }
