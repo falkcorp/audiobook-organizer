@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.44.0
+// version: 1.45.0
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
 // last-edited: 2026-10-06
 
@@ -43,10 +43,12 @@
 // the claimant on a row of its own ("content differs"); a file that cannot be
 // read, or one over filehash.Threshold (sampled there, so not byte identity),
 // leaves it copy-unproven with the reason. Nothing is written for the proof:
-// it is kept in the row's evidence, state (each file's size and mtime as read)
-// and fingerprint. Re-plans, Apply's under the merge lock among them, re-stat
-// both files and never re-read them; a size or mtime that moved is a change
-// since the plan. No file under the iTunes library is ever read. A hands-off
+// it is kept in the row's evidence, state (each file's size, mtime, ctime,
+// device and inode as read) and fingerprint. Re-plans, Apply's under the
+// merge lock among them, re-stat both files and never re-read them; any of
+// the five that moved is a change since the plan (a chmod, chown or xattr
+// change moves the ctime too: fail closed). A file whose stat gives no inode
+// is never proven. No file under the iTunes library is ever read. A hands-off
 // claimant elsewhere (an iTunes id, Doctor Who / Big Finish) is compared too
 // (owner, 2026-10-06: "list; I apply them"): it stays on a manual-only row,
 // never applicable, with the proof in its evidence.
@@ -3463,8 +3465,9 @@ func (f *fragmentFixer) parentRow(lib *fragLibrary, parentID, rowKind string, pa
 		// for the same decision.
 		fpParts = append(fpParts, strings.Join([]string{p.Frag.Book.ID, p.Frag.File.ID, p.Frag.File.Path, p.Parent.ID,
 			strconv.FormatBool(provenMatch(rowKind, p.Evidence))}, "|"))
-		// A pair proven by its content carries the proof: both files' size
-		// and mtime as read and the digest. Replan restores it only while
+		// A pair proven by its content carries the proof: both files'
+		// signatures as read (size, mtime, ctime, device, inode) and the
+		// digest. Replan restores it only while
 		// both files are unchanged (restoreContentProofs).
 		if pr, ok := lib.contentProofOf(p); ok {
 			st.ContentProofs = append(st.ContentProofs, pr)
@@ -3572,8 +3575,8 @@ type fragParentState struct {
 	// iTunes-linked (or stopped being) since the plan changes the row.
 	ITunesParent string `json:"itunes_parent,omitempty"`
 	// ContentProofs are the plan's content proofs of the row's copies
-	// (proveCopiesByContent): which files, their size and mtime as read,
-	// and the digest. A re-plan re-stats both files of each and restores
+	// (proveCopiesByContent): which files, their signatures as read (size,
+	// mtime, ctime, device, inode), and the digest. A re-plan re-stats both files of each and restores
 	// the proof only while both are unchanged; nothing is re-read under
 	// the lock, and nothing is ever stored on a book or row.
 	ContentProofs []fragContentProof `json:"content_proofs,omitempty"`

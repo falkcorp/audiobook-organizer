@@ -16,9 +16,12 @@
   too and stays on its manual-only row, never applicable, with the proof in
   its evidence for the owner ("list; I apply them").
 - Read-only: no hash is stored on any book or row. The proof is kept in the
-  plan row's evidence, state (each file's size and mtime as read) and
-  fingerprint; re-plans, including Apply's under the merge lock, only
-  re-stat the two files and report `changed_since_plan` when either moved.
+  plan row's evidence, state (each file's size, mtime, ctime, device and
+  inode as read) and fingerprint; re-plans, including Apply's under the
+  merge lock, only re-stat the two files and report `changed_since_plan`
+  when any of those moved (a chmod, chown or xattr change moves the ctime
+  too, so it fails closed). A file whose stat reports inode 0 (some FUSE or
+  SMB mounts) is never proven.
 - The proof is bound to each file's size, mtime, ctime, device and inode:
   a same-size rewrite with the mtime set back, or another file renamed over
   the path, is `changed_since_plan`. A claimant whose path is a hardlink or

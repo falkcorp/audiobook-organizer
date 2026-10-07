@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_copy_content.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4d7b2e95-1c6a-4f38-8e0d-b5a9c3f1e762
 // last-edited: 2026-10-06
 
@@ -13,10 +13,10 @@
 //
 // READ-ONLY. Nothing is stored on either book or row: the proof lives in the
 // plan row (its evidence, its fingerprint, and fragParentState.ContentProofs,
-// which carries each file's size and mtime as read). A re-plan, including the
-// one Apply runs under the merge lock, never re-hashes: it re-stats both
-// files and refuses the row (changed since plan) when either size or mtime
-// moved (restoreContentProofs).
+// which carries each file's signature as read: size, mtime, ctime, device
+// and inode). A re-plan, including the one Apply runs under the merge lock,
+// never re-hashes: it re-stats both files and refuses the row (changed since
+// plan) when any of the five moved (restoreContentProofs).
 //
 // Never read: a file under the iTunes library (either side), and a file above
 // filehash.Threshold, which BookFileHash samples (head, tail and
@@ -64,7 +64,10 @@ const fragHashLimit = 4
 // five are unchanged: size and mtime alone miss a same-size rewrite whose
 // mtime was set back (touch -r) or a different file renamed over the path,
 // both of which move the ctime (and a rename the inode). Dev and inode also
-// tell two paths that name one file (fragEvContentAlias).
+// tell two paths that name one file (fragEvContentAlias). The ctime also
+// moves on a chmod, chown or extended-attribute change (Spotlight indexing,
+// a quarantine flag): such a file fails closed, changed_since_plan, and is
+// compared again by the next plan.
 type fragFileSig struct {
 	Size    int64  `json:"size"`
 	MtimeNS int64  `json:"mtime_ns"`
@@ -80,8 +83,17 @@ func sigOf(fi os.FileInfo) (fragFileSig, error) {
 	if !ok {
 		return fragFileSig{}, fmt.Errorf("%s: no device, inode or ctime from stat on this platform", fi.Name())
 	}
+	if ino == 0 {
+		// Some FUSE and SMB mounts report inode 0 for every file: no
+		// identity, so no alias check and no proof (fail closed).
+		return fragFileSig{}, fmt.Errorf("%s: stat reports inode 0 (a filesystem with no stable inodes), so the file cannot be identified", fi.Name())
+	}
 	return fragFileSig{Size: fi.Size(), MtimeNS: fi.ModTime().UnixNano(), CtimeNS: ctime, Dev: dev, Ino: ino}, nil
 }
+
+// identified reports whether s carries a file identity (an inode): a
+// signature without one never backs a proof.
+func (s fragFileSig) identified() bool { return s.Ino != 0 }
 
 // sameFile reports whether two signatures name one file (device and inode).
 func (s fragFileSig) sameFile(o fragFileSig) bool {
@@ -303,6 +315,11 @@ func (f *fragmentFixer) proveCopiesByContent(ctx context.Context, rep registry.R
 			p.NotCompared = "the parent row's file is unreadable: " + pr.err.Error()
 			return nil
 		}
+		if !fr.sig.identified() || !pr.sig.identified() {
+			// Without an inode the alias check cannot run: fail closed.
+			p.NotCompared = "a file's identity (device and inode) is unknown, so a path alias cannot be ruled out"
+			return nil
+		}
 		p.FragSig, p.FragDigest, p.ParentSig, p.ParentDigest = fr.sig, fr.digest, pr.sig, pr.digest
 		// Two paths of one file (a hardlink or symlink to the parent's
 		// file) are not a copy, whatever the bytes say.
@@ -340,8 +357,9 @@ func (lib *fragLibrary) readableForProof(id, path string) bool {
 
 // restoreContentProofs puts the plan's content proofs back into a re-plan's
 // snapshot after re-stating both files of each: no file is re-read (a re-plan
-// runs under the merge lock). A file whose size or mtime moved, or that is
-// gone, is a change ("" when every proof still holds).
+// runs under the merge lock). A file whose signature moved (size, mtime,
+// ctime, device or inode), that cannot be identified, or that is gone, is a
+// change ("" when every proof still holds).
 func (f *fragmentFixer) restoreContentProofs(lib *fragLibrary, proofs []fragContentProof) string {
 	sort.Slice(proofs, func(i, j int) bool { return proofs[i].FragFile < proofs[j].FragFile })
 	for _, p := range proofs {
@@ -349,6 +367,9 @@ func (f *fragmentFixer) restoreContentProofs(lib *fragLibrary, proofs []fragCont
 			path string
 			sig  fragFileSig
 		}{{p.FragPath, p.FragSig}, {p.ParentPath, p.ParentSig}} {
+			if !side.sig.identified() {
+				return fmt.Sprintf("the plan's content proof for fragment %s has no file identity for %s; plan again", p.FragBook, side.path)
+			}
 			fi, err := f.statFn(side.path)
 			if err != nil {
 				return fmt.Sprintf("file %s, whose content proved fragment %s a copy, cannot be read now: %v", side.path, p.FragBook, err)
