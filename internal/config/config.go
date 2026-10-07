@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.139.0
+// version: 1.140.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-10-07
 
@@ -4062,6 +4062,13 @@ func ResetToDefaults() {
 				OllamaDebounceMin:   10,
 			},
 		}
+		// Host-set values win over a reset exactly as they win over the
+		// database at load: without this a system/factory reset cleared a
+		// host-set OWNER_EMAIL / CF_ACCESS_* (and every other
+		// environment-authoritative setting) until the next restart. The
+		// owner is set only on the host (plan D15), so a reset must not
+		// unset it.
+		applyEnvAuthoritativeConfig(c)
 	}) // end Mutate
 }
 

@@ -1,5 +1,5 @@
 <!-- file: docs/reference/config-api-shape.md -->
-<!-- version: 1.8.0 -->
+<!-- version: 1.9.0 -->
 <!-- guid: 2b7f9c31-a4e8-4f1d-b8a2-6c5d9e3f2a17 -->
 <!-- last-edited: 2026-10-07 -->
 
@@ -85,10 +85,12 @@ Once `owner_email` is set, a change to `owner_email`, `cf_access_team_domain`,
 `cf_access_aud`, `enable_auth` or `oauth_allowed_emails` is refused with `403`
 (`refused_keys`) unless the request carries the owner's verified Cloudflare
 Access sign-in. That applies to every caller, including other signed-in admins,
-and also when `enable_auth` is off. While no owner is set, the first
-`owner_email` can be set only by a request signed in through Cloudflare Access
-as that same email. The `OWNER_EMAIL` / `CF_ACCESS_*` environment variables and
-the config file still override the stored values at startup. (Plan D15.)
+and also when `enable_auth` is off. While no owner is set, all five are
+refused through the API for every caller (`403`, `refused_keys`, a message
+naming `OWNER_EMAIL`): the owner is set only on the server, through the
+`OWNER_EMAIL` / `CF_ACCESS_TEAM_DOMAIN` / `CF_ACCESS_AUD` environment variables
+or the config file, which override the stored values at startup and survive
+`POST /system/reset` and `/system/factory-reset`. (Plan D15.)
 
 `bootstrap_key_ttl` / `bootstrap_key_ttl_days` are not API fields at all:
 they are read from the environment or config file only.

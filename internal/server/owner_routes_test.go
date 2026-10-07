@@ -1,5 +1,5 @@
 // file: internal/server/owner_routes_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7b2d9e41-6c85-4f30-a1e7-4c9f2b8d6a15
 // last-edited: 2026-10-07
 
@@ -290,9 +290,9 @@ func (f *ownerRouteFixture) putOwnerEmail(email string, hdr map[string]string) *
 
 // TestOwnerTrustRoot_ConfigThroughTheRouter is the second review's BLOCKER
 // end to end: once an owner is set, only the owner may change owner_email (or
-// cf_access_*, enable_auth, oauth_allowed_emails); the first owner_email may
-// be set only by that person signed in through Access as that email. Auth on
-// and off.
+// cf_access_*, enable_auth, oauth_allowed_emails); while none is set nobody
+// may through the API, the would-be owner included (set OWNER_EMAIL on the
+// host). Auth on and off.
 func TestOwnerTrustRoot_ConfigThroughTheRouter(t *testing.T) {
 	for _, authOn := range []bool{true, false} {
 		name := "auth on"
@@ -324,21 +324,27 @@ func TestOwnerTrustRoot_ConfigThroughTheRouter(t *testing.T) {
 			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 			assert.Equal(t, otherAdminEmail, config.Snapshot().OwnerEmail)
 
-			// First set: only that person, through Access as that email.
+			// No owner: nobody sets the trust root through the API, the
+			// would-be owner's own Access sign-in included (host only).
 			config.AppConfig.OwnerEmail = ""
-			for caller, hdr := range map[string]map[string]string{
+			noOwner := map[string]map[string]string{
+				"that person's Access sign-in":    {oauth.CFAccessHeader: "jwt-owner"},
 				"another person's Access sign-in": {oauth.CFAccessHeader: "jwt-other"},
 				"password session":                {"Authorization": "Bearer " + f.sessionToken},
 				"API key":                         {"Authorization": "Bearer " + f.apiKey},
-			} {
-				w := f.putOwnerEmail(ownerRouteEmail, hdr)
-				assert.Equal(t, http.StatusForbidden, w.Code, "first set by %s: %s", caller, w.Body.String())
-				assert.Contains(t, w.Body.String(), "first owner_email", caller)
-				assert.Empty(t, config.Snapshot().OwnerEmail)
 			}
-			w = f.putOwnerEmail(ownerRouteEmail, map[string]string{oauth.CFAccessHeader: "jwt-owner"})
-			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-			assert.Equal(t, ownerRouteEmail, config.Snapshot().OwnerEmail)
+			if !authOn {
+				noOwner["no sign-in"] = nil
+			}
+			for caller, hdr := range noOwner {
+				w := f.putOwnerEmail(ownerRouteEmail, hdr)
+				assert.Equal(t, http.StatusForbidden, w.Code, "set owner_email by %s: %s", caller, w.Body.String())
+				assert.Contains(t, w.Body.String(), "OWNER_EMAIL", caller)
+				assert.Empty(t, config.Snapshot().OwnerEmail)
+				w = f.requestBody(http.MethodPut, "/api/v1/config", `{"cf_access_team_domain":"attacker.example.test"}`, hdr)
+				assert.Equal(t, http.StatusForbidden, w.Code, "repoint cf_access by %s: %s", caller, w.Body.String())
+				assert.Contains(t, w.Body.String(), "OWNER_EMAIL", caller)
+			}
 		})
 	}
 }
