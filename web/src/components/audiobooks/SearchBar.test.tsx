@@ -270,6 +270,8 @@ describe('SearchBar: query errors are visible (2026-10-06)', () => {
     fireEvent.click(screen.getByLabelText('Search help'));
     expect(screen.getByText('title:a*')).toBeInTheDocument();
     expect(screen.getByText('-title:/^\\s*\\d/')).toBeInTheDocument();
+    expect(screen.getByText('file_size:>20mb')).toBeInTheDocument();
+    expect(screen.getByText('file_size:[100mb TO 1gb]')).toBeInTheDocument();
     expect(screen.queryByText(/\|\|/)).not.toBeInTheDocument();
     expect(screen.queryByText('author:smith~')).not.toBeInTheDocument();
     expect(screen.queryByText('format:(m4b|mp3)')).not.toBeInTheDocument();

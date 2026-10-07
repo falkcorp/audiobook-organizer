@@ -1,5 +1,5 @@
 // file: internal/audiobooks/filter_compiled.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6a1f3c8e-9d24-4b7a-b0e5-2f8c4d1a7e36
 // last-edited: 2026-10-06
 
@@ -36,6 +36,32 @@ var numericFilterFields = map[string]bool{
 	"channels": true, "bit_depth": true,
 	"user_rating_overall": true, "user_rating_story": true, "user_rating_performance": true,
 	"progress_pct": true,
+}
+
+// numericUnitParser returns the operand parser for a numeric field: units
+// for file_size (1024-based k/kb/m/mb/g/gb/t/tb), bitrate (k/kbps) and
+// sample_rate (hz/khz); plain numbers for everything else.
+func numericUnitParser(field string) querygrammar.NumberParser {
+	switch field {
+	case "file_size", "file_size_bytes":
+		return querygrammar.ParseBytes
+	case "bitrate", "bitrate_kbps":
+		return querygrammar.ParseKbps
+	case "sample_rate", "sample_rate_hz":
+		return querygrammar.ParseHz
+	}
+	return nil
+}
+
+// isBareNumericValue reports whether v is a bare operand the field's unit
+// parser accepts (2019, 20mb, 64k), i.e. a numeric equality.
+func isBareNumericValue(field, v string) bool {
+	p := numericUnitParser(field)
+	if p == nil {
+		return querygrammar.IsNumber(v)
+	}
+	_, err := p(v)
+	return err == nil
 }
 
 // ratingFields accept ONLY numeric values; they have no text rendering.
@@ -77,8 +103,10 @@ func compileFieldFilter(f FieldFilter) (compiledFilter, error) {
 		return cf, nil // presence semantics, see matchesPerUserFilter
 	case ratingFields[f.Field] ||
 		(numericFilterFields[f.Field] && !f.Quoted &&
-			(querygrammar.LooksLikeComparison(f.Value) || querygrammar.IsNumber(f.Value))):
-		c, err := querygrammar.ParseNumericExpr(f.Value)
+			(querygrammar.LooksLikeComparison(f.Value) || isBareNumericValue(f.Field, f.Value))):
+		// Comparison grammar (never regex/substring): file_size:>20mb,
+		// bitrate:<64k, year:[2015 TO 2020]. A malformed operand is a 400.
+		c, err := querygrammar.ParseNumericExprUnits(f.Value, numericUnitParser(f.Field))
 		if err != nil {
 			return cf, wrap(err)
 		}

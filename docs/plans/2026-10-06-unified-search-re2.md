@@ -1,5 +1,5 @@
 <!-- file: docs/plans/2026-10-06-unified-search-re2.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 3f6c2a9e-7d41-4b8a-9e05-c1d8f2b7a64e -->
 <!-- last-edited: 2026-10-06 -->
 
@@ -232,3 +232,22 @@ behaviour for plain words (substring) is unchanged.
     client-side errors, and `-tag:read` is gone from the help. `read_status:`
     rejects patterns on both client and server. Implementing tag exclusion is
     a follow-up if wanted.
+13. **Numeric fields use a comparison grammar, never regex or substring
+    (coordinator scope, 2026-10-06).** `file_size:>20mb` returned nothing
+    because `>20mb` was substring-matched against "52428800". There is now
+    one comparison parser (`querygrammar.ParseNumericExprUnits`) that takes
+    a per-field unit parser:
+    - `file_size` is in bytes. The suffixes k/kb/m/mb/g/gb/t/tb are
+      1024-based, so 20mb = 20×1024×1024.
+    - `bitrate` is in kbps. The `k`/`kbps` suffix is optional.
+    - `sample_rate` is in Hz and also accepts `khz`.
+    - Every other numeric field takes plain numbers.
+
+    The operators are `> >= < <= == != =` plus `[a TO b]`, where `*` leaves
+    a side open. A bare operand such as `10mb` means equality. An unset or
+    zero value matches no comparison, the same rule `durationMatches` uses.
+    Duration keeps its own path because it uses the runtime index. A
+    malformed operand such as `file_size:>abc` or `bitrate:<64mb` returns a
+    400 that names the token, and the search bar shows it the same way as
+    an invalid regex. Text forms (`*`, glob, `/re/`) on a numeric field are
+    still matched against the decimal text of each known value.
