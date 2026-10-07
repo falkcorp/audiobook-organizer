@@ -1,5 +1,5 @@
 // file: internal/server/owner_routes.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3e9a6c25-1f74-4b8d-a0c2-5d7e8b4f1a63
 // last-edited: 2026-10-07
 
@@ -61,9 +61,15 @@ func (s *Server) ownerRoute(g *gin.RouterGroup, method, rel string, kind ownerRo
 		base = auth.PermLibraryEditMetadata
 		applies = func(c *gin.Context) bool { return !itunesPreviewOnly(c) }
 	}
+	// With local auth off s.perm is a no-op and nobody holds a role, so the
+	// gate's permission leg is skipped the same way; the owner proof is not.
+	gatePerm := ownerPerm
+	if !config.AppConfig.EnableAuth {
+		gatePerm = ""
+	}
 	chain := []gin.HandlerFunc{
 		s.perm(base),
-		servermiddleware.RequireOwner(func() string { return config.Snapshot().OwnerEmail }, ownerPerm, applies),
+		servermiddleware.RequireOwner(func() string { return config.Snapshot().OwnerEmail }, gatePerm, applies),
 	}
 	g.Handle(method, rel, append(chain, h...)...)
 }

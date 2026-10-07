@@ -1,7 +1,7 @@
 // file: internal/server/itunes_integration_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: e5f6a7b8-c9d0-1234-efab-567890123cde
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 package server
 
@@ -219,6 +219,8 @@ func TestITunesWriteBack(t *testing.T) {
 	require.NoError(t, err)
 
 	// Execute write-back via HTTP — ITL is not configured in test, so should return 400
+	// write-back is owner-only (plan D14): the request is the owner's.
+	owner := asTestOwner(t)
 	server := newTestServer(t, env.Store)
 	if server.opRegistry != nil {
 		server.opRegistry.Start(context.Background())
@@ -228,6 +230,9 @@ func TestITunesWriteBack(t *testing.T) {
 	body := fmt.Sprintf(`{"audiobook_ids":["%s"]}`, created.ID)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/itunes/write-back", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	for k, v := range owner {
+		req.Header.Set(k, v)
+	}
 	w := httptest.NewRecorder()
 	server.router.ServeHTTP(w, req)
 	// Without ITL configured, endpoint returns 400

@@ -1,5 +1,5 @@
 // file: internal/server/owner_routes_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7b2d9e41-6c85-4f30-a1e7-4c9f2b8d6a15
 // last-edited: 2026-10-07
 
@@ -61,6 +61,32 @@ func (f fakeAccessVerifier) Verify(_ context.Context, raw string) (*oauth.Identi
 		return &cp, nil
 	}
 	return nil, errors.New("fake access verifier: unknown token")
+}
+
+// asTestOwner makes the next server built in this test (newTestServer /
+// NewServer read it in setupRoutes) accept the returned header as the owner's
+// verified Access sign-in: owner_email is set, the email is allowlisted, and
+// an Access identity resolves to an admin. Call it BEFORE building the server.
+// For tests of an owner route's handler behaviour, which must reach the
+// handler through the owner gate rather than around it.
+func asTestOwner(t *testing.T) map[string]string {
+	t.Helper()
+	const email = "test-owner@example.test"
+	prevVerifier := cfAccessVerifierOverride
+	cfAccessVerifierOverride = fakeAccessVerifier{
+		"jwt-test-owner": {Provider: oauth.ProviderCFAccess, Subject: "sub-test-owner", Email: email, EmailVerified: true},
+	}
+	prev := config.AppConfig
+	config.AppConfig.OwnerEmail = email
+	config.AppConfig.OAuthAllowedEmails = email
+	config.AppConfig.OAuthDefaultRole = auth.SeedRoleAdmin
+	t.Cleanup(func() {
+		cfAccessVerifierOverride = prevVerifier
+		config.AppConfig.OwnerEmail = prev.OwnerEmail
+		config.AppConfig.OAuthAllowedEmails = prev.OAuthAllowedEmails
+		config.AppConfig.OAuthDefaultRole = prev.OAuthDefaultRole
+	})
+	return map[string]string{oauth.CFAccessHeader: "jwt-test-owner"}
 }
 
 type ownerRouteFixture struct {
@@ -188,6 +214,20 @@ func TestOwnerRoutes_PreviewStaysOpen(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The owner proven by Access still needs integrations.manage: the owner's
+// account demoted to editor (library.edit_metadata only) is refused.
+func TestOwnerRoutes_OwnerNeedsIntegrationsManage(t *testing.T) {
+	f := setupOwnerRouteServer(t)
+	u, err := f.store.GetUserByEmail(ownerRouteEmail)
+	require.NoError(t, err)
+	require.NotNil(t, u)
+	u.Roles = []string{auth.SeedRoleEditor}
+	require.NoError(t, f.store.UpdateUser(u))
+	w := f.request(http.MethodPost, "/api/v1/itunes/writeback/held/release", map[string]string{oauth.CFAccessHeader: "jwt-owner"})
+	assert.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), "permission denied: "+string(auth.PermIntegrationsManage))
 }
 
 // cleanup-merged's apply is retired in the handler: even the owner gets the
