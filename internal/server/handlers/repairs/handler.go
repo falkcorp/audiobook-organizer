@@ -1,7 +1,7 @@
 // file: internal/server/handlers/repairs/handler.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 1d8e4c73-5a26-4b9f-8e03-7c2b9f6a1d58
-// last-edited: 2026-09-29
+// last-edited: 2026-10-06
 
 // Package repairs serves the Repairs lane of /review (/api/v1/repairs/*):
 // list the fixers, start a plan, page a stored plan's rows, and start an
@@ -14,6 +14,17 @@
 // fixer or plan op; 409 for a plan op that has not completed; 400 for a plan
 // op that is not a plan of this fixer, a bad page request or an empty row
 // selection; 503 without an operations registry.
+//
+// POST /repairs/:fixer/owner-apply is the owner's own apply of one row the
+// plan lists for him alone (Row.OwnerApplicable; repairs/owner.go). It is
+// honoured only for a person's interactive sign-in (auth.Method.Interactive:
+// a password/OAuth session or a Cloudflare Access SSO identity; never an API
+// key, an ABS token or a temp-login session) holding the admin role, and
+// only for a same-origin request carrying the X-Repairs-Owner-Apply header
+// (CSRF: a custom header cannot be sent cross-site without a CORS preflight
+// the server never grants, and the session cookie is SameSite=Strict). It
+// mints a one-shot grant and enqueues repairs.apply naming it; 403 for any
+// other caller, nothing enqueued.
 package repairs
 
 import (
@@ -21,11 +32,15 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -57,6 +72,9 @@ type Handler struct {
 	fixers   *repairs.Registry
 	enqueuer Enqueuer // nil when the registry is not initialised
 	ops      OpStore
+	// grants is where owner grants are minted; nil is the process's
+	// repairs.DefaultOwnerGrants (the store repairs.apply takes from).
+	grants *repairs.OwnerGrants
 }
 
 // New builds the handler. enqueuer may be nil: plan/apply then answer 503.
@@ -108,7 +126,20 @@ type ApplyRequest struct {
 	// omitted mode is a preview). The lane's Apply button sends false; true
 	// or omitted re-checks the rows and reports would_apply per row.
 	DryRun *bool `json:"dry_run,omitempty"`
+	// OwnerApplyRowIDs is refused here: owner rows are applied one at a
+	// time through POST /repairs/:fixer/owner-apply (OwnerApply).
+	OwnerApplyRowIDs []string `json:"owner_apply_row_ids,omitempty"`
 }
+
+// OwnerApplyRequest is the body of POST /repairs/:fixer/owner-apply.
+type OwnerApplyRequest struct {
+	PlanOpID string `json:"plan_op_id"`
+	RowID    string `json:"row_id"`
+}
+
+// OwnerApplyHeader must be sent (value "1") with an owner apply: a custom
+// header no cross-site form or simple request can carry.
+const OwnerApplyHeader = "X-Repairs-Owner-Apply"
 
 // ListFixers implements GET /repairs.
 func (h *Handler) ListFixers(c *gin.Context) {
@@ -255,6 +286,16 @@ func (h *Handler) StartApply(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "invalid body: "+err.Error())
 		return
 	}
+	if len(req.OwnerApplyRowIDs) > 0 {
+		// Never honoured on the bulk endpoint, whoever asks: an API key is
+		// refused outright, a person is pointed at the per-row endpoint.
+		if !auth.MethodFromContext(c.Request.Context()).Interactive() {
+			httputil.RespondWithForbidden(c, "owner rows are applied only by the owner, signed in interactively (not with an API key)")
+			return
+		}
+		httputil.RespondWithBadRequest(c, "owner rows are applied one at a time: POST /repairs/:fixer/owner-apply {plan_op_id, row_id}")
+		return
+	}
 	if req.PlanOpID == "" {
 		httputil.RespondWithValidationError(c, "plan_op_id", "required")
 		return
@@ -274,6 +315,97 @@ func (h *Handler) StartApply(c *gin.Context) {
 	h.enqueue(c, repairs.ApplyOpID, f.ID(), lastApplyKey(f.ID()), repairs.ApplyParams{
 		FixerID: f.ID(), PlanOpID: req.PlanOpID, RowIDs: req.RowIDs, DryRun: &dry,
 	})
+}
+
+// OwnerApply implements POST /repairs/:fixer/owner-apply {plan_op_id,
+// row_id}: the owner's own apply of one owner-applicable row (see the
+// package comment for who may call it). The write is implied: the confirm
+// dialog in Repairs is the preview.
+func (h *Handler) OwnerApply(c *gin.Context) {
+	f, ok := h.fixer(c)
+	if !ok {
+		return
+	}
+	ctx := c.Request.Context()
+	method := auth.MethodFromContext(ctx)
+	user, hasUser := auth.UserFromContext(ctx)
+	switch {
+	case !method.Interactive() || !hasUser:
+		httputil.RespondWithForbidden(c, "owner rows are applied only by the owner, signed in interactively (not with an API key or a temp-login link)")
+		return
+	case !slices.Contains(user.Roles, "admin"):
+		httputil.RespondWithForbidden(c, "owner apply needs the admin role")
+		return
+	}
+	if why := sameOriginWhyNot(c.Request); why != "" {
+		httputil.RespondWithForbidden(c, why)
+		return
+	}
+	if h.enqueuer == nil {
+		httputil.RespondWithServiceUnavailable(c, "operations registry not initialized")
+		return
+	}
+	var req OwnerApplyRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		httputil.RespondWithBadRequest(c, "invalid body: "+err.Error())
+		return
+	}
+	if req.PlanOpID == "" {
+		httputil.RespondWithValidationError(c, "plan_op_id", "required")
+		return
+	}
+	if req.RowID == "" {
+		httputil.RespondWithValidationError(c, "row_id", "required")
+		return
+	}
+	plan, ok := h.loadPlan(c, req.PlanOpID, f.ID())
+	if !ok {
+		return
+	}
+	idx := slices.IndexFunc(plan.Rows, func(r repairs.Row) bool { return r.RowID == req.RowID })
+	if idx < 0 {
+		httputil.RespondWithNotFound(c, "repair plan row", req.RowID)
+		return
+	}
+	if row := plan.Rows[idx]; row.Applicable() || !row.OwnerApplicable {
+		httputil.RespondWithBadRequest(c, "the plan does not list row "+req.RowID+" as one the owner may apply")
+		return
+	}
+	grants := h.grants
+	if grants == nil {
+		grants = repairs.DefaultOwnerGrants
+	}
+	tok, err := grants.Issue(repairs.OwnerGrant{UserID: user.ID, AuthMethod: string(method),
+		FixerID: f.ID(), PlanOpID: req.PlanOpID, RowIDs: []string{req.RowID}})
+	if err != nil {
+		httputil.InternalError(c, "owner grant", err)
+		return
+	}
+	no := false
+	h.enqueue(c, repairs.ApplyOpID, f.ID(), lastApplyKey(f.ID()), repairs.ApplyParams{
+		FixerID: f.ID(), PlanOpID: req.PlanOpID, DryRun: &no,
+		OwnerApplyRowIDs: []string{req.RowID}, OwnerGrant: tok,
+	}, opsregistry.WithActor(user.ID))
+}
+
+// sameOriginWhyNot is why r is not a same-origin request carrying the owner
+// apply header ("" when it is). Browsers send Origin on every POST and
+// Sec-Fetch-Site on every request; either, when present, must say same
+// origin.
+func sameOriginWhyNot(r *http.Request) string {
+	if r.Header.Get(OwnerApplyHeader) != "1" {
+		return "owner apply needs the " + OwnerApplyHeader + " header (sent by the Repairs page)"
+	}
+	if site := r.Header.Get("Sec-Fetch-Site"); site != "" && site != "same-origin" && site != "none" {
+		return "owner apply refused: cross-site request (" + site + ")"
+	}
+	if origin := r.Header.Get("Origin"); origin != "" {
+		u, err := url.Parse(origin)
+		if err != nil || !strings.EqualFold(u.Host, r.Host) {
+			return "owner apply refused: origin " + origin + " is not this server"
+		}
+	}
+	return ""
 }
 
 func (h *Handler) loadPlan(c *gin.Context, opID, fixerID string) (*repairs.PlanResult, bool) {
@@ -302,9 +434,9 @@ func (h *Handler) loadPlan(c *gin.Context, opID, fixerID string) (*repairs.PlanR
 // and rows); that is reported as deduped with the run's status rather than
 // as a new queued run. Otherwise the new id is recorded as the fixer's last
 // plan/apply.
-func (h *Handler) enqueue(c *gin.Context, defID, fixerID, lastKey string, params any) {
+func (h *Handler) enqueue(c *gin.Context, defID, fixerID, lastKey string, params any, opts ...opsregistry.EnqueueOption) {
 	before := h.activeOps(defID)
-	opID, err := h.enqueuer.EnqueueOp(c.Request.Context(), defID, params)
+	opID, err := h.enqueuer.EnqueueOp(c.Request.Context(), defID, params, opts...)
 	if err != nil {
 		httputil.InternalError(c, "enqueue "+defID+" failed", err)
 		return
