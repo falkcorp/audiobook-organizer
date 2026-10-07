@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repairs_ops.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 6f1a8d37-2e59-4b0c-8a74-3d9e5b1c7f82
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 package maintenance
 
@@ -133,6 +133,14 @@ func (p *Plugin) runRepairsApply(ctx context.Context, raw json.RawMessage, repor
 			return fmt.Errorf("%s: parse params: %w", repairs.ApplyOpID, err)
 		}
 	}
+	// Owner rows run only under a grant the Repairs handler minted for the
+	// owner's interactive click. It is taken (consumed) FIRST, before any
+	// step that can fail: a run that failed after the grant was minted (an
+	// unknown fixer, an unreadable plan) must not leave it live, or
+	// POST /operations/v2/:id/retry, which copies these params byte for
+	// byte for any caller, would apply the owner's row on someone else's
+	// request. Params written any other way, a retry or a resume find none.
+	owner := repairs.ResolveOwnerApproval(repairs.DefaultOwnerGrants, params)
 	dryRun, derr := opmode.ResolveDryRun(repairs.ApplyOpID, params.DryRun, params.DryRunC)
 	if derr != nil {
 		return derr
@@ -168,10 +176,7 @@ func (p *Plugin) runRepairsApply(ctx context.Context, raw json.RawMessage, repor
 		Guard: store, Tags: p.repairsGuardTags(), Series: repairs.SeriesNamesFrom(all),
 		StandDown: p.deps, OpID: opID, Wait: p.standDownWait,
 		Resumed: params.Resume,
-		// Owner rows run only under a grant the Repairs handler minted for
-		// the owner's interactive click, taken (consumed) here; params
-		// written any other way, a retry or a resume find none.
-		Owner: repairs.ResolveOwnerApproval(repairs.DefaultOwnerGrants, params),
+		Owner:   owner,
 	}
 	if !dryRun {
 		// Every book_file step is journaled under this op's id, so POST
