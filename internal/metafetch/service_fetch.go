@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_fetch.go
-// version: 1.20.3
+// version: 1.20.4
 // guid: b24c7a25-2efa-4b85-adb0-2d591218eff2
 // last-edited: 2026-10-06
 
@@ -36,10 +36,26 @@ var autoFetchLog = logger.New("metafetch.auto-fetch")
 // candidate is never applied. Nothing was written to the book.
 var ErrReviewOnlyCandidatesNotApplied = errors.New("metadata: only review-only sources (Open Library, Google Books) matched; not applied, left for review")
 
+// ReviewOnlyNotAppliedError is the ErrReviewOnlyCandidatesNotApplied a fetch
+// returns, naming the review-only sources that matched (errors.As).
+type ReviewOnlyNotAppliedError struct {
+	Title   string
+	Sources []string
+}
+
+func (e *ReviewOnlyNotAppliedError) Error() string {
+	return fmt.Sprintf("%s: '%s' matched only on %s", ErrReviewOnlyCandidatesNotApplied, e.Title, strings.Join(e.Sources, ", "))
+}
+
+// Is makes errors.Is(err, ErrReviewOnlyCandidatesNotApplied) hold.
+func (e *ReviewOnlyNotAppliedError) Is(target error) bool {
+	return target == ErrReviewOnlyCandidatesNotApplied
+}
+
 // reviewOnlyNotApplied is the error for a fetch whose only matches came from
 // the review-only sources in found.
 func reviewOnlyNotApplied(title string, found []string) error {
-	return fmt.Errorf("%w: '%s' matched only on %s", ErrReviewOnlyCandidatesNotApplied, title, strings.Join(found, ", "))
+	return &ReviewOnlyNotAppliedError{Title: title, Sources: found}
 }
 
 // FetchMetadataForBook fetches and applies metadata for a single audiobook,

@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.160.0
+// version: 2.161.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-06
 
@@ -3904,9 +3904,16 @@ export interface QueuedBehindScan {
   operation_id?: string;
 }
 
+/**
+ * `review_only` is set when the only match came from a review-only source
+ * (Open Library, Google Books): a match was found and left for review, the
+ * book is unchanged, and `message` says so in words fit for an info toast.
+ */
 export async function fetchBookMetadata(
   bookId: string
-): Promise<{ message: string; book: Book; source: string } & QueuedBehindScan> {
+): Promise<
+  { message: string; book: Book; source: string; review_only?: boolean } & QueuedBehindScan
+> {
   const response = await apiFetch(`${API_BASE}/audiobooks/${bookId}/fetch-metadata`, {
     method: 'POST',
   });
