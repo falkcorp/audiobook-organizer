@@ -1,5 +1,5 @@
 // file: internal/database/memdb_reads.go
-// version: 1.32.0
+// version: 1.33.0
 // guid: a1b2c3d4-mema-aaaa-aaaa-000000000006
 // last-edited: 2026-10-06
 
@@ -933,18 +933,27 @@ func (m *MemStore) ListSoftDeletedBooks(limit, offset int, olderThan *time.Time)
 		return nil, fmt.Errorf("memdb soft-deleted books: %w", err)
 	}
 
-	matched := make([]Book, 0, 32)
+	// Collect and sort POINTERS, then copy only the requested page. This used
+	// to copy every trashed Book (48k on production) and stable-sort the
+	// structs by value to return one page -- the Library header asks for one
+	// row to read the total.
+	matched := make([]*Book, 0, 32)
 	for obj := iter.Next(); obj != nil; obj = iter.Next() {
 		b := obj.(*Book)
 		if olderThan != nil && b.MarkedForDeletionAt != nil && b.MarkedForDeletionAt.After(*olderThan) {
 			continue
 		}
-		matched = append(matched, *b)
+		matched = append(matched, b)
 	}
-	// Shared with the Pebble scan so the two cannot order the trash
-	// differently. See listing_ordering.go.
-	sortBooksByDeletedAtDesc(matched)
-	return paginate(matched, limit, offset), nil
+	// Same order as the Pebble scan's sortBooksByDeletedAtDesc, so the two
+	// cannot order the trash differently. See listing_ordering.go.
+	sortBookPtrsByDeletedAtDesc(matched)
+	page := paginate(matched, limit, offset)
+	out := make([]Book, len(page))
+	for i, b := range page {
+		out[i] = *b
+	}
+	return out, nil
 }
 
 // CountBooksByPathPrefix returns the number of (non-deleted) books whose

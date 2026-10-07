@@ -1,13 +1,15 @@
 // file: internal/database/soft_deleted_count.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7e50b3c8-1a92-4d67-8f24-c65e09a1d3b7
-// last-edited: 2026-09-12
+// last-edited: 2026-10-06
 
 package database
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 )
 
@@ -28,9 +30,20 @@ type SoftDeletedCountStore interface {
 }
 
 // AsSoftDeletedCountStore returns the counting capability, or nil when the
-// store does not have it.
+// store does not have it. It resolves through any opted-in decorator chain
+// (AsCapability), like every other As*Store helper.
+//
+// It was a bare type assertion until 2026-10-06, and that assertion ALWAYS
+// missed in production: the audiobook service holds the server's indexedStore,
+// which embeds database.Store and so promotes only Store's methods, and
+// CountSoftDeletedBooks is not one of them. Every trash count therefore took
+// AudiobookService's paging fallback -- 49 calls of ListSoftDeletedBooks(1000,
+// offset) for a 48k-book trash, each copying and sorting the whole set -- and
+// GET /audiobooks/soft-deleted measured 30-58 s warm, 733 s cold. Going past
+// the decorator is safe here: this is a read, and indexedStore only overrides
+// writes (to reindex them).
 func AsSoftDeletedCountStore(s any) SoftDeletedCountStore {
-	if cs, ok := s.(SoftDeletedCountStore); ok {
+	if cs, ok := AsCapability[SoftDeletedCountStore](s); ok {
 		return cs
 	}
 	return nil
@@ -38,7 +51,14 @@ func AsSoftDeletedCountStore(s any) SoftDeletedCountStore {
 
 // CountSoftDeletedBooks counts via the marked_for_deletion index, so cost is
 // O(deleted_count) with no Book copies at all.
+//
+// It refuses (ErrMemdbIncomplete) when the books table is known to be missing
+// rows, exactly like MemStore.ListSoftDeletedBooks: the count is the total the
+// listing paginates, and the two must never disagree.
 func (m *MemStore) CountSoftDeletedBooks(olderThan *time.Time) (int, error) {
+	if err := m.requireTablesComplete("soft-deleted count (the total the trash listing paginates)", memTableBooks); err != nil {
+		return 0, err
+	}
 	txn := m.db.Txn(false)
 	defer txn.Abort()
 
@@ -60,9 +80,20 @@ func (m *MemStore) CountSoftDeletedBooks(olderThan *time.Time) (int, error) {
 // CountSoftDeletedBooks mirrors ListSoftDeletedBooks' dual dispatch: the memdb
 // index path when available, else a Pebble scan that unmarshals each row only
 // to read its deletion flag — no slice, no sort, no pagination.
+//
+// A memdb that knows it is missing book rows falls through to the Pebble scan,
+// as ListSoftDeletedBooks does; any other memdb error is returned unchanged.
 func (p *PebbleStore) CountSoftDeletedBooks(olderThan *time.Time) (int, error) {
-	if p.UseMemDB && p.mem() != nil {
-		return p.mem().CountSoftDeletedBooks(olderThan)
+	if m := p.mem(); p.UseMemDB && m != nil {
+		n, err := m.CountSoftDeletedBooks(olderThan)
+		if err == nil {
+			return n, nil
+		}
+		if !errors.Is(err, ErrMemdbIncomplete) {
+			return 0, err
+		}
+		slog.Error("soft-deleted count: memdb is missing rows; falling through to the authoritative Pebble scan",
+			"error", err, "lost_rows", m.LostRows())
 	}
 
 	n := 0
