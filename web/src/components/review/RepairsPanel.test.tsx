@@ -596,6 +596,142 @@ describe('RepairsPanel — apply all under a selected class', () => {
   });
 });
 
+describe('RepairsPanel — owner rows', () => {
+  const OWNER = row('own', {
+    title: 'Many Parts',
+    skipped: 'skipped_itunes',
+    skip_reason: 'iTunes tracks this library copy',
+    owner_applicable: true,
+    owner_apply_reason: 'byte-identical to the parent file (content hash); only database rows change',
+    owner_writes: ['book-own'],
+    evidence: ['content sha256 abc123 = parent'],
+  });
+  const PLAIN = row('man', { skipped: 'skipped_itunes', skip_reason: 'iTunes book' });
+
+  beforeEach(() => {
+    vi.mocked(api.getRepairPlanRows).mockImplementation(
+      async (fixerId: string, planOpId: string, q: { filter: RepairRowsFilter; offset: number; limit: number }) => {
+        const all =
+          q.filter === 'applicable'
+            ? APPLICABLE
+            : q.filter === 'owner_applicable'
+              ? [OWNER]
+              : [OWNER, PLAIN];
+        return {
+          plan_op_id: planOpId,
+          fixer_id: fixerId,
+          planned_at: '2026-09-27T10:01:00Z',
+          filter: q.filter,
+          offset: q.offset,
+          limit: q.limit,
+          total: all.length,
+          applicable: APPLICABLE.length,
+          owner_applicable: 1,
+          skipped_by_kind: { skipped_itunes: 2 },
+          rows: all.slice(q.offset, q.offset + q.limit),
+        };
+      }
+    );
+    vi.mocked(api.startRepairOwnerApply).mockResolvedValue({
+      operation_id: 'apply-own',
+      def_id: 'repairs.apply',
+      fixer_id: 'vg-primary',
+      status: 'queued',
+    });
+    vi.mocked(api.getRepairApplyResult).mockResolvedValue({
+      fixer_id: 'vg-primary',
+      plan_op_id: 'plan-1',
+      dry_run: false,
+      requested: 1,
+      by_outcome: { applied: 1 },
+      applied: 1,
+      changed_since_plan: 0,
+      partially_applied: 0,
+      failed: 0,
+      standdown_held: true,
+      owner_rows: 1,
+      owner_user_id: 'u-owner',
+      rows: [{ row_id: 'own', outcome: 'applied' }],
+    });
+  });
+
+  it('shows the proof and an Apply (owner) button on owner rows only, with no checkbox', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    await screen.findByTestId('repairs-row-g1');
+    await user.click(screen.getByTestId('repairs-tab-skipped'));
+    const own = await screen.findByTestId('repairs-row-own');
+    expect(within(own).getByText(/byte-identical to the parent file/)).toBeInTheDocument();
+    expect(within(own).getByText(/iTunes tracks this file; only database rows change/)).toBeInTheDocument();
+    expect(within(own).getByRole('button', { name: 'Apply (owner)' })).toBeInTheDocument();
+    expect(within(own).queryByRole('checkbox')).not.toBeInTheDocument();
+    const plain = screen.getByTestId('repairs-row-man');
+    expect(within(plain).queryByRole('button', { name: 'Apply (owner)' })).not.toBeInTheDocument();
+    // No select-all on this tab.
+    expect(screen.queryByText('Select page')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('repairs-apply-all')).not.toBeInTheDocument();
+  });
+
+  it('offers an Owner apply chip whose count opens exactly the owner rows', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    await screen.findByTestId('repairs-row-g1');
+    await user.click(screen.getByTestId('repairs-tab-skipped'));
+    const chip = await screen.findByTestId('repairs-skip-kind-owner');
+    expect(chip).toHaveTextContent('Owner apply (1)');
+    await user.click(chip);
+    await vi.waitFor(() => expect(screen.queryByTestId('repairs-row-man')).not.toBeInTheDocument());
+    expect(screen.getByTestId('repairs-row-own')).toBeInTheDocument();
+    expect(api.getRepairPlanRows).toHaveBeenLastCalledWith(
+      'vg-primary',
+      'plan-1',
+      expect.objectContaining({ filter: 'owner_applicable' }),
+      expect.anything()
+    );
+  });
+
+  it('confirms naming the book, then applies that one row through the owner endpoint', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    await screen.findByTestId('repairs-row-g1');
+    await user.click(screen.getByTestId('repairs-tab-skipped'));
+    await user.click(await screen.findByTestId('repairs-owner-apply-own'));
+
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    const msg = confirmSpy.mock.calls[0][0] as string;
+    expect(msg).toContain('"Many Parts"');
+    expect(msg).toContain('iTunes tracks this file; only database rows change');
+    await vi.waitFor(() =>
+      expect(api.startRepairOwnerApply).toHaveBeenCalledWith('vg-primary', 'plan-1', 'own')
+    );
+    expect(api.startRepairApply).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(screen.getByTestId('repairs-outcome-own')).toHaveTextContent('Applied'));
+    expect(screen.queryByTestId('repairs-owner-apply-own')).not.toBeInTheDocument();
+  });
+
+  it('sends nothing when the owner confirm is cancelled', async () => {
+    const user = userEvent.setup();
+    confirmSpy.mockReturnValue(false);
+    renderPanel();
+    await screen.findByTestId('repairs-row-g1');
+    await user.click(screen.getByTestId('repairs-tab-skipped'));
+    await user.click(await screen.findByTestId('repairs-owner-apply-own'));
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    expect(api.startRepairOwnerApply).not.toHaveBeenCalled();
+    expect(api.startRepairApply).not.toHaveBeenCalled();
+  });
+
+  it('never sends an owner row with Apply all applicable', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    await screen.findByTestId('repairs-row-g1');
+    await user.click(screen.getByTestId('repairs-apply-all'));
+    await vi.waitFor(() => expect(api.startRepairApply).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(api.startRepairApply).mock.calls[0][2]).toEqual(['g1', 'g2']);
+    expect(api.startRepairOwnerApply).not.toHaveBeenCalled();
+  });
+});
+
 describe('SKIP_KIND_LABEL', () => {
   it('words every hold of the combined author credits fixer', () => {
     for (const kind of [

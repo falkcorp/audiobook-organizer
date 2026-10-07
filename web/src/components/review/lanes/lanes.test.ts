@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/lanes.test.ts
-// version: 1.3.0
+// version: 1.4.0
 // guid: b6d29a04-8f35-4c71-90e2-3a5f7c1b8046
 // last-edited: 2026-10-06
 
@@ -50,7 +50,7 @@ describe('action vocabulary is total', () => {
       ],
     },
     { lane: 'regroup', types: ['approve', 'reject', 'bulk'] },
-    { lane: 'repairs', types: ['runTrial', 'applyRows', 'applyAllApplicable'] },
+    { lane: 'repairs', types: ['runTrial', 'applyRows', 'applyAllApplicable', 'ownerApplyRow'] },
   ];
 
   for (const { lane, types } of cases) {

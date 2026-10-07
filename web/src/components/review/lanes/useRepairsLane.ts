@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRepairsLane.ts
-// version: 1.4.0
+// version: 1.5.0
 // guid: 7b1e5c28-3a94-4d6f-8e02-c5f9a1d7b340
 // last-edited: 2026-10-06
 
@@ -118,6 +118,8 @@ export function summarizeApply(r: RepairApplyResult): string {
   if (retry > 0) parts.push(`retry later ${retry}`);
   const guarded = r.by_outcome.skipped_guard ?? 0;
   if (guarded > 0) parts.push(`skipped by guard ${guarded}`);
+  const ownerRefused = r.by_outcome.owner_apply_refused ?? 0;
+  if (ownerRefused > 0) parts.push(`owner apply refused ${ownerRefused}`);
   if (r.not_in_plan && r.not_in_plan.length > 0) parts.push(`not in trial ${r.not_in_plan.length}`);
   let line = parts.join(' · ');
   if (r.dry_run) line = `Preview only, nothing was written: ${line}`;
@@ -128,12 +130,30 @@ export function summarizeApply(r: RepairApplyResult): string {
 /**
  * The severity of an apply result, for the toast and the result banner alike:
  * warning when anything was not written (failed, partly applied, retry later,
- * stopped early) or when it was only a preview.
+ * owner apply refused, stopped early) or when it was only a preview.
  */
 export function applySeverity(r: RepairApplyResult): 'success' | 'warning' {
-  return r.failed > 0 || r.partially_applied > 0 || (r.retry_later ?? 0) > 0 || r.aborted || r.dry_run
+  return r.failed > 0 ||
+    r.partially_applied > 0 ||
+    (r.retry_later ?? 0) > 0 ||
+    (r.by_outcome.owner_apply_refused ?? 0) > 0 ||
+    r.aborted ||
+    r.dry_run
     ? 'warning'
     : 'success';
+}
+
+/**
+ * The owner-apply confirm: names the book, and says plainly that iTunes
+ * tracks the file and only database rows change.
+ */
+export function repairOwnerApplyConfirmMessage(title: string, fixerTitle: string): string {
+  return (
+    `Apply "${title}" from "${fixerTitle}" as the owner? ` +
+    'iTunes tracks this file; only database rows change. ' +
+    'No file is moved or written and iTunes is not touched. The change is recorded in the book ' +
+    'history under your name and can be reverted from the operation.'
+  );
 }
 
 /** The newest completed plan the lane has seen for a fixer. */
@@ -599,7 +619,12 @@ export function useRepairsLane(toast: Toast, active = true): RepairsLane {
   );
 
   const runApply = useCallback(
-    async (fixerId: string, plan: string, resolveIds: () => Promise<string[]>) => {
+    async (
+      fixerId: string,
+      plan: string,
+      resolveIds: () => Promise<string[]>,
+      start: (fixerId: string, plan: string, rowIds: string[]) => Promise<RepairOpStarted> = api.startRepairApply
+    ) => {
       const ctrl = new AbortController();
       applyPolls.current.add(ctrl);
       setApplyingFor(fixerId);
@@ -621,7 +646,7 @@ export function useRepairsLane(toast: Toast, active = true): RepairsLane {
             toast('No rows left to apply from this trial.', 'info');
             return;
           }
-          started = await api.startRepairApply(fixerId, plan, rowIds);
+          started = await start(fixerId, plan, rowIds);
         } catch (err) {
           report({
             severity: 'error',
@@ -739,6 +764,21 @@ export function useRepairsLane(toast: Toast, active = true): RepairsLane {
           const settled = new Set(settledRowIds);
           void runApply(action.fixerId, action.planOpId, () =>
             collectApplicableIds(action.fixerId, action.planOpId, settled, action.rowClass)
+          );
+          return;
+        }
+        case 'ownerApplyRow': {
+          // One row, its own endpoint: the server mints a one-shot grant only
+          // for an interactive owner sign-in and refuses anything else.
+          if (settledRowIds.has(action.rowId)) return;
+          if (!window.confirm(repairOwnerApplyConfirmMessage(action.title, fixerTitle(action.fixerId)))) {
+            return;
+          }
+          void runApply(
+            action.fixerId,
+            action.planOpId,
+            async () => [action.rowId],
+            (fixerId, plan, rowIds) => api.startRepairOwnerApply(fixerId, plan, rowIds[0])
           );
           return;
         }
