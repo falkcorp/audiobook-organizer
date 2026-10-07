@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_tags.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: c2ad6d2b-75c3-446d-9f67-08cc517050e2
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package database
 
@@ -326,6 +326,43 @@ func (p *PebbleStore) ListAllTags() ([]TagWithCount, error) {
 		return result[i].Tag < result[j].Tag
 	})
 	return result, nil
+}
+
+// CountTagsForBookIDs returns tag -> number of books in ids carrying it, from
+// ONE sequential scan of the tag_idx: keyspace (keys only, no JSON decode).
+// It is the large-set path for scoped tag facets: its cost is the number of
+// tag rows in the library, independent of len(ids), where
+// GetBookTagsByBookIDs pays one seek plus a JSON decode per tag row per book.
+// A nil or empty ids yields an empty map.
+func (p *PebbleStore) CountTagsForBookIDs(ids map[string]struct{}) (map[string]int, error) {
+	counts := make(map[string]int)
+	if len(ids) == 0 {
+		return counts, nil
+	}
+	prefix := []byte("tag_idx:")
+	iter, err := p.db.NewIter(&pebble.IterOptions{
+		LowerBound: prefix,
+		UpperBound: prefixEnd(prefix),
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+
+	for iter.First(); iter.Valid(); iter.Next() {
+		// tag_idx:<tag>:<bookID>; the boundary is the LAST colon (tags may
+		// contain colons, book IDs never do) — same parse as ListAllTags.
+		rest := iter.Key()[len(prefix):]
+		idx := bytes.LastIndexByte(rest, ':')
+		if idx <= 0 {
+			continue
+		}
+		if _, ok := ids[string(rest[idx+1:])]; !ok {
+			continue
+		}
+		counts[string(rest[:idx])]++
+	}
+	return counts, iter.Error()
 }
 
 // GetBooksByTag returns all book IDs that have the given tag.

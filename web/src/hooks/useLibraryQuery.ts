@@ -1,5 +1,5 @@
 // file: web/src/hooks/useLibraryQuery.ts
-// version: 1.12.0
+// version: 1.13.0
 // guid: d4e5f6a7-b8c9-0123-def0-123456789003
 // last-edited: 2026-10-06
 
@@ -44,7 +44,7 @@ const RETRY_MAX_DELAY_MS = 5000;
  */
 export const SOFT_DELETED_PAGE_SIZE = 500;
 
-interface UseLibraryQueryFilters {
+export interface UseLibraryQueryFilters {
   author?: string;
   series?: string;
   genre?: string;
@@ -57,6 +57,68 @@ interface UseLibraryQueryFilters {
   coveragePercentMax?: number;
   isPrimaryVersion?: boolean;
   seriesId?: number;
+}
+
+/**
+ * The tags[] a Library request narrows by: every selected tag AND every
+ * non-negated `tag:` term in the search box, deduplicated (the server ANDs
+ * them). Until 2026-10-06 only the FIRST parsed `tag:` term was sent, and
+ * none at all once a tag was selected, so a second tag chip (or a second
+ * typed `tag:`) silently did not narrow.
+ */
+export function libraryTagsParam(
+  selectedTags: string[] | undefined,
+  parsedSearch: ParsedSearch | null
+): string[] | undefined {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const add = (t: string) => {
+    if (t && !seen.has(t)) {
+      seen.add(t);
+      out.push(t);
+    }
+  };
+  for (const t of selectedTags ?? []) add(t);
+  for (const ff of parsedSearch?.fieldFilters ?? []) {
+    if (ff.field === 'tag' && !ff.negated) add(ff.value);
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+/**
+ * The full list predicate for the Library: what getBooks sends and what the
+ * scoped tag facets are computed over. One builder, so the tag chips can
+ * never be counted over a different request than the list shows.
+ */
+export function buildLibraryListOptions(args: {
+  debouncedSearch: string;
+  parsedSearch: ParsedSearch | null;
+  filters: UseLibraryQueryFilters;
+  selectedTags: string[];
+  sortBy: SortField;
+  sortOrder: SortOrder;
+  fieldFilters: Array<{ field: string; value: string; negated: boolean; quoted?: boolean }>;
+}): api.BookListOptions {
+  const { debouncedSearch, parsedSearch, filters, selectedTags, sortBy, sortOrder, fieldFilters } =
+    args;
+  const searchText = parsedSearch ? parsedSearch.freeText : debouncedSearch;
+  // 'deleted' is a client-side concept (marked_for_deletion flag); send no library_state to server
+  const libraryState = filters.libraryState === 'deleted' ? undefined : filters.libraryState;
+  return {
+    search: searchText || undefined,
+    sortBy,
+    sortOrder,
+    tags: libraryTagsParam(selectedTags, parsedSearch),
+    libraryState,
+    filters: fieldFilters.length > 0 ? JSON.stringify(fieldFilters) : undefined,
+    showFailed: filters.showFailed,
+    hasFileErrors: filters.hasFileErrors,
+    fingerprintStatus: filters.fingerprintStatus,
+    coveragePercentMin: filters.coveragePercentMin,
+    coveragePercentMax: filters.coveragePercentMax,
+    isPrimaryVersion: filters.isPrimaryVersion,
+    seriesId: filters.seriesId,
+  };
 }
 
 interface UseLibraryQueryParams {
@@ -232,21 +294,21 @@ export function useLibraryQuery({
     try {
       const offset = (page - 1) * itemsPerPage;
       const fieldFilters = buildFieldFilters();
-      const searchText = parsedSearch ? parsedSearch.freeText : debouncedSearch;
-      let tagsParam: string[] | undefined;
-      if (selectedTags && selectedTags.length > 0) {
-        tagsParam = selectedTags;
-      } else {
-        const parsedTag = parsedSearch?.fieldFilters.find((f) => f.field === 'tag' && !f.negated)?.value;
-        if (parsedTag) tagsParam = [parsedTag];
-      }
-
-      // 'deleted' is a client-side concept (marked_for_deletion flag); send no library_state to server
-      const libraryState = filters.libraryState === 'deleted' ? undefined : filters.libraryState;
+      const listOptions = buildLibraryListOptions({
+        debouncedSearch,
+        parsedSearch,
+        filters,
+        selectedTags,
+        sortBy,
+        sortOrder,
+        fieldFilters,
+      });
+      const searchText = listOptions.search ?? '';
+      const tagsParam = listOptions.tags;
 
       // Check cache before fetching.
       //
-      // Use filters.libraryState, NOT the `libraryState` above. That one is
+      // Use filters.libraryState, NOT listOptions.libraryState. That one is
       // deliberately undefined for 'deleted' so no library_state reaches the
       // server — but feeding the same undefined into the cache key made
       // "deleted" and "no state filter" produce an IDENTICAL key. The
@@ -254,7 +316,18 @@ export function useLibraryQuery({
       // the cache-hit return never reaches, so selecting Deleted on a warm
       // cache showed the entire unfiltered library while the Filters chip
       // said 1. It only appeared to work from a cold cache.
-      const filterStr = JSON.stringify({ fieldFilters, tagsParam, libraryState: filters.libraryState, showFailed: filters.showFailed, hasFileErrors: filters.hasFileErrors, fingerprintStatus: filters.fingerprintStatus, coveragePercentMin: filters.coveragePercentMin, coveragePercentMax: filters.coveragePercentMax, isPrimaryVersion: filters.isPrimaryVersion, seriesId: filters.seriesId });
+      const filterStr = JSON.stringify({
+        fieldFilters,
+        tagsParam,
+        libraryState: filters.libraryState,
+        showFailed: filters.showFailed,
+        hasFileErrors: filters.hasFileErrors,
+        fingerprintStatus: filters.fingerprintStatus,
+        coveragePercentMin: filters.coveragePercentMin,
+        coveragePercentMax: filters.coveragePercentMax,
+        isPrimaryVersion: filters.isPrimaryVersion,
+        seriesId: filters.seriesId,
+      });
       const cacheKey = buildCacheKey(page, itemsPerPage, searchText, filterStr, sortBy, sortOrder);
       const isRefresh = displayedKeyRef.current === cacheKey && audiobooksRef.current.length > 0;
       if (!isRefresh) setLoading(true);
@@ -285,22 +358,7 @@ export function useLibraryQuery({
       // not being told about them. getBooks hits the same endpoint, so passing
       // `search` here is enough.
       const [page_, folders] = await Promise.all([
-        api.getBooks(itemsPerPage, offset, {
-          search: searchText || undefined,
-          sortBy,
-          sortOrder,
-          tags: tagsParam,
-          libraryState,
-          filters: fieldFilters.length > 0 ? JSON.stringify(fieldFilters) : undefined,
-          showFailed: filters.showFailed,
-          hasFileErrors: filters.hasFileErrors,
-          fingerprintStatus: filters.fingerprintStatus,
-          coveragePercentMin: filters.coveragePercentMin,
-          coveragePercentMax: filters.coveragePercentMax,
-          isPrimaryVersion: filters.isPrimaryVersion,
-          seriesId: filters.seriesId,
-          signal: controller.signal,
-        }),
+        api.getBooks(itemsPerPage, offset, { ...listOptions, signal: controller.signal }),
         api.getImportPaths(controller.signal),
       ]);
 
@@ -398,7 +456,23 @@ export function useLibraryQuery({
         setLoading(false);
       }
     }
-  }, [buildFieldFilters, debouncedSearch, filters, itemsPerPage, page, parsedSearch, selectedTags, sortBy, sortOrder, navigate, toast, setImportPaths, convertBook, clearLoadFailure, scheduleRetry]);
+  }, [
+    buildFieldFilters,
+    debouncedSearch,
+    filters,
+    itemsPerPage,
+    page,
+    parsedSearch,
+    selectedTags,
+    sortBy,
+    sortOrder,
+    navigate,
+    toast,
+    setImportPaths,
+    convertBook,
+    clearLoadFailure,
+    scheduleRetry,
+  ]);
 
   // Keep the retry timer pointed at the current closure, so a retry that fires
   // after filters/page changed re-runs the CURRENT query rather than the stale

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.28.0
+// version: 1.29.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
 // last-edited: 2026-10-06
 
@@ -427,11 +427,20 @@ func searchNamesUnindexedFilterField(q string) (string, bool) {
 	return "", false
 }
 
-// ListAudiobooks handles GET /audiobooks. Mirrors the original listAudiobooks:
-// has_file_errors fast-path, quick-query (missing_covers / in_import_path /
-// no_isbn / duplicates_flagged) fast-path, then the filtered list pipeline with
-// the list cache (skipped when per-user filters are active).
-func (h *Handler) ListAudiobooks(c *gin.Context) {
+// listRequest is one GET /audiobooks request parsed into the arguments of the
+// list pipeline. Built ONLY by parseListRequest, which both ListAudiobooks and
+// AudiobookFacets (scoped=1) call, so the tag facets of a request are
+// evaluated over exactly the books the list returns for it.
+type listRequest struct {
+	params   httputil.PaginationParams
+	authorID *int
+	seriesID *int
+	filters  audiobookspkg.ListFilters
+}
+
+// parseListRequest validates and parses the list query parameters. On a bad
+// request it has already written the 4xx/5xx response and returns false.
+func (h *Handler) parseListRequest(c *gin.Context) (listRequest, bool) {
 	store := h.store
 
 	// A field name passed as a bare query parameter (?title=Skills) is not a
@@ -457,7 +466,7 @@ func (h *Handler) ListAudiobooks(c *gin.Context) {
 				"\""+field+"\" is ignored, which would list the entire library rather than "+
 				"narrowing it. Pass it inside the filters parameter instead, e.g. "+
 				"filters=[{\"field\":\""+field+"\",\"value\":\"...\"}].")
-		return
+		return listRequest{}, false
 	}
 
 	// Parse pagination parameters
@@ -476,7 +485,7 @@ func (h *Handler) ListAudiobooks(c *gin.Context) {
 				"inside the search parameter it would match nothing (and, negated, everything). "+
 				"Pass it in the filters parameter instead, e.g. "+
 				"filters=[{\"field\":\""+field+"\",\"value\":\"...\"}].")
-		return
+		return listRequest{}, false
 	}
 	authorID := httputil.ParseQueryIntPtr(c, "author_id")
 	seriesID := httputil.ParseQueryIntPtr(c, "series_id")
@@ -503,7 +512,7 @@ func (h *Handler) ListAudiobooks(c *gin.Context) {
 	if c.Query("has_file_errors") == "true" {
 		if store == nil {
 			httputil.RespondWithInternalError(c, "database not initialized")
-			return
+			return listRequest{}, false
 		}
 		var bookIDs []string
 		// Resolved through any decorator chain -- the search-index wrapper hides
@@ -514,7 +523,7 @@ func (h *Handler) ListAudiobooks(c *gin.Context) {
 			ids, err := lf.ListBooksWithFileErrors()
 			if err != nil {
 				httputil.InternalError(c, "failed to list books with file errors", err)
-				return
+				return listRequest{}, false
 			}
 			bookIDs = ids
 		}
@@ -549,7 +558,7 @@ func (h *Handler) ListAudiobooks(c *gin.Context) {
 			ids, err := qqStore.GetAllBookIDsForQuickQuery(quickQueryID)
 			if err != nil {
 				httputil.InternalError(c, "failed to list books for quick query", err)
-				return
+				return listRequest{}, false
 			}
 			bookIDs = ids
 		}
@@ -574,14 +583,13 @@ func (h *Handler) ListAudiobooks(c *gin.Context) {
 		}
 		if len(ids) > maxListIDs {
 			httputil.RespondWithBadRequest(c, "ids: at most "+strconv.Itoa(maxListIDs)+" book ids per request")
-			return
+			return listRequest{}, false
 		}
 		restrictIDs = intersectIDSets(restrictIDs, idSetFrom(ids))
 	}
 
 	// Parse optional filters
 	sortBy := httputil.ParseQueryString(c, "sort_by")
-	metrics.IncSortByRequested(sortByMetricLabel(sortBy))
 	sortOrder := httputil.ParseQueryString(c, "sort_order")
 	if sortOrder != "" && sortOrder != "asc" && sortOrder != "desc" {
 		sortOrder = "asc"
@@ -625,7 +633,7 @@ func (h *Handler) ListAudiobooks(c *gin.Context) {
 		var fieldFilters []audiobookspkg.FieldFilter
 		if err := json.Unmarshal([]byte(filtersJSON), &fieldFilters); err != nil {
 			httputil.RespondWithBadRequest(c, "invalid filters parameter: "+err.Error())
-			return
+			return listRequest{}, false
 		}
 		// Reject empty filter values at the boundary. strings.Contains(x, "")
 		// is always true, so an empty value silently matches EVERY book instead
@@ -639,7 +647,7 @@ func (h *Handler) ListAudiobooks(c *gin.Context) {
 				"filter on \""+field+"\" has an empty value; an empty value matches every "+
 					"book rather than narrowing the results. Omit the filter to list everything, "+
 					"or supply a value to filter by.")
-			return
+			return listRequest{}, false
 		}
 		// Reject unknown field names for the mirror-image reason. An unknown
 		// field is not ignored — it matches NOTHING, so the endpoint answers
@@ -656,14 +664,14 @@ func (h *Handler) ListAudiobooks(c *gin.Context) {
 					"filtering on it would match no books and report a count of 0, which reads "+
 					"as \"none exist\". Valid fields: "+
 					strings.Join(audiobookspkg.KnownFilterFields(), ", ")+".")
-			return
+			return listRequest{}, false
 		}
 		// Reject values the matcher cannot evaluate (duration:>abc,
 		// has_duration:maybe, metadata:whatever) for the same reason: a
 		// value that parses to nothing matches nothing and reads as "0 books".
 		if err := audiobookspkg.FirstInvalidFilterValue(fieldFilters); err != nil {
 			httputil.RespondWithBadRequest(c, "invalid filter value: "+err.Error())
-			return
+			return listRequest{}, false
 		}
 		for _, ff := range fieldFilters {
 			if audiobookspkg.IsPerUserField(ff.Field) {
@@ -687,7 +695,6 @@ func (h *Handler) ListAudiobooks(c *gin.Context) {
 	// request as series_position on purpose, because it records what clients
 	// ask for.
 	filters.SortBy, filters.SortOrder = audiobookspkg.ScopedSort(filters.SortBy, filters.SortOrder, authorID, seriesID)
-	appliedFilters := buildAppliedFilters(filters)
 
 	// Resolve caller for per-user filters; anon callers just don't
 	// get per-user filtering applied (filters.UserID stays "" and
@@ -695,6 +702,24 @@ func (h *Handler) ListAudiobooks(c *gin.Context) {
 	if caller, ok := servermiddleware.CurrentUser(c); ok && caller != nil {
 		filters.UserID = caller.ID
 	}
+
+	return listRequest{params: params, authorID: authorID, seriesID: seriesID, filters: filters}, true
+}
+
+// ListAudiobooks handles GET /audiobooks. Mirrors the original listAudiobooks:
+// has_file_errors fast-path, quick-query (missing_covers / in_import_path /
+// no_isbn / duplicates_flagged) fast-path, then the filtered list pipeline with
+// the list cache (skipped when per-user filters are active).
+func (h *Handler) ListAudiobooks(c *gin.Context) {
+	metrics.IncSortByRequested(sortByMetricLabel(httputil.ParseQueryString(c, "sort_by")))
+	req, ok := h.parseListRequest(c)
+	if !ok {
+		return
+	}
+	params, authorID, seriesID, filters := req.params, req.authorID, req.seriesID, req.filters
+	// applied_filters echoes, from the fully-populated filters value, exactly
+	// what the server is about to apply (see parseListRequest).
+	appliedFilters := buildAppliedFilters(filters)
 
 	// Cache key from the full query string. Skip the cache when
 	// per-user filters are active because the cache key doesn't
@@ -1165,23 +1190,60 @@ func (h *Handler) CountAudiobooks(c *gin.Context) {
 // and the warmer build the response through the shared buildFacetsResponse
 // closure (see its doc comment on the Handler struct) so they can never
 // drift into different shapes.
+//
+// scoped=1 additionally returns scoped_tags ([{tag,count}], count desc) and
+// scoped_total: the tags of EVERY book the same request would list on
+// GET /audiobooks, counted over those books only. The request takes the
+// list's own parameters (search, filters, tags[], library_state,
+// is_primary_version, show_quarantined, author_id, series_id, ...) and is
+// parsed by the list's own parseListRequest, so the two can never evaluate
+// different predicates. The library-wide keys are unchanged.
 func (h *Handler) AudiobookFacets(c *gin.Context) {
 	if h.store == nil {
 		httputil.RespondWithInternalError(c, "database not initialized")
 		return
 	}
-	if cached, ok := h.facetsCache.Get(facetsCacheKey); ok {
-		httputil.RespondWithOK(c, cached)
+	scoped := c.Query("scoped") == "1" || c.Query("scoped") == "true"
+	var req listRequest
+	if scoped {
+		var ok bool
+		if req, ok = h.parseListRequest(c); !ok {
+			return
+		}
+		// Mirrors buildAudiobookListResponse: the list excludes quarantined
+		// books unless show_quarantined=true, so the facets must too.
+		if c.Query("show_quarantined") != "true" {
+			req.filters.ExcludeQuarantined = true
+		}
+	}
+	base, ok := h.facetsCache.Get(facetsCacheKey)
+	if !ok {
+		// Cache miss (e.g. first request before warm-up goroutine completes, or after TTL expiry).
+		result, err := h.buildFacetsResponse(c.Request.Context())
+		if err != nil {
+			httputil.InternalError(c, "failed to fetch facets", err)
+			return
+		}
+		h.facetsCache.Set(facetsCacheKey, result)
+		base = result
+	}
+	if !scoped {
+		httputil.RespondWithOK(c, base)
 		return
 	}
-	// Cache miss (e.g. first request before warm-up goroutine completes, or after TTL expiry).
-	result, err := h.buildFacetsResponse(c.Request.Context())
+	facets, err := h.audiobookService.ScopedTagFacets(c.Request.Context(), req.params.Search, req.authorID, req.seriesID, req.filters)
 	if err != nil {
-		httputil.InternalError(c, "failed to fetch facets", err)
+		httputil.InternalError(c, "failed to compute scoped tag facets", err)
 		return
 	}
-	h.facetsCache.Set(facetsCacheKey, result)
-	httputil.RespondWithOK(c, result)
+	// Copy: base is the shared cached map and must not grow per-request keys.
+	resp := make(gin.H, len(base)+2)
+	for k, v := range base {
+		resp[k] = v
+	}
+	resp["scoped_tags"] = facets.Tags
+	resp["scoped_total"] = facets.Total
+	httputil.RespondWithOK(c, resp)
 }
 
 // ServeAudiobookCover handles GET /audiobooks/:id/cover.

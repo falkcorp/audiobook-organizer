@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.157.1
+// version: 2.158.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-06
 
@@ -1226,59 +1226,64 @@ async function fetchListWithSearchPoll(
   }
 }
 
-export async function getBooks(
-  limit = 100,
-  offset = 0,
-  options?: {
-    /**
-     * Free-text search. Sent as `search`, alongside every other option here.
-     *
-     * This exists so searching does not mean losing your filters. The old
-     * `searchBooksPage` sent ONLY search/limit/offset, so typing in the box
-     * silently dropped library_state, tags, field filters and the sort order.
-     */
-    search?: string;
-    sortBy?: string;
-    sortOrder?: string;
-    tag?: string;
-    tags?: string[];
-    libraryState?: string;
-    filters?: string;
-    showFailed?: boolean;
-    hasFileErrors?: boolean;
-    fingerprintStatus?: 'complete' | 'partial' | 'none';
-    coveragePercentMin?: number;
-    coveragePercentMax?: number;
-    /**
-     * Overrides the primary-only default below. Every existing caller wants
-     * `is_primary_version=true` (the whole point of the flag), so this stays
-     * optional and only an explicit `false` changes behavior — omitting the
-     * param entirely so the server (service_query.go: `ParseQueryBoolPtr`
-     * returns nil when absent) applies no primary/non-primary filter at all.
-     * Needed so the "other versions of this book" link
-     * (BookDetailVersionGroup.tsx, TASK-169) can surface non-primary
-     * siblings of a version group; a link that kept the primary-only
-     * default would show at most one book, defeating its own purpose.
-     */
-    isPrimaryVersion?: boolean;
-    /**
-     * Sent as the server's dedicated `series_id` integer param
-     * (handlers/audiobooks/handler.go `ParseQueryIntPtr(c, "series_id")`),
-     * which lists exactly the books of that series. Not a field filter.
-     *
-     * Caveat owned by the server: service_query.go tests `search` before
-     * `series_id` in one else-if chain, so a request carrying BOTH answers the
-     * search and ignores the series.
-     */
-    seriesId?: number;
-    signal?: AbortSignal;
-    /** Called while a long search (HTTP 202) is polled, with the matches found so far. */
-    onSearchPending?: (matchesSoFar: number) => void;
-  }
-): Promise<BooksPage> {
+/**
+ * The book-list request options shared by `getBooks` and
+ * `getScopedTagFacets`. One type, one serializer (`buildBookListParams`), so
+ * the tag facets are always computed for exactly the request the list ran.
+ */
+export interface BookListOptions {
+  /**
+   * Free-text search. Sent as `search`, alongside every other option here.
+   *
+   * This exists so searching does not mean losing your filters. The old
+   * `searchBooksPage` sent ONLY search/limit/offset, so typing in the box
+   * silently dropped library_state, tags, field filters and the sort order.
+   */
+  search?: string;
+  sortBy?: string;
+  sortOrder?: string;
+  tag?: string;
+  tags?: string[];
+  libraryState?: string;
+  filters?: string;
+  showFailed?: boolean;
+  hasFileErrors?: boolean;
+  fingerprintStatus?: 'complete' | 'partial' | 'none';
+  coveragePercentMin?: number;
+  coveragePercentMax?: number;
+  /**
+   * Overrides the primary-only default below. Every existing caller wants
+   * `is_primary_version=true` (the whole point of the flag), so this stays
+   * optional and only an explicit `false` changes behavior — omitting the
+   * param entirely so the server (service_query.go: `ParseQueryBoolPtr`
+   * returns nil when absent) applies no primary/non-primary filter at all.
+   * Needed so the "other versions of this book" link
+   * (BookDetailVersionGroup.tsx, TASK-169) can surface non-primary
+   * siblings of a version group; a link that kept the primary-only
+   * default would show at most one book, defeating its own purpose.
+   */
+  isPrimaryVersion?: boolean;
+  /**
+   * Sent as the server's dedicated `series_id` integer param
+   * (handlers/audiobooks/handler.go `ParseQueryIntPtr(c, "series_id")`),
+   * which lists exactly the books of that series. Not a field filter.
+   *
+   * Caveat owned by the server: service_query.go tests `search` before
+   * `series_id` in one else-if chain, so a request carrying BOTH answers the
+   * search and ignores the series.
+   */
+  seriesId?: number;
+  signal?: AbortSignal;
+  /** Called while a long search (HTTP 202) is polled, with the matches found so far. */
+  onSearchPending?: (matchesSoFar: number) => void;
+}
+
+/**
+ * Serializes the list predicate (everything but limit/offset) exactly as
+ * GET /audiobooks reads it. Used by getBooks and getScopedTagFacets.
+ */
+export function buildBookListParams(options?: BookListOptions): URLSearchParams {
   const params = new URLSearchParams();
-  params.set('limit', String(limit));
-  params.set('offset', String(offset));
   if (options?.search) params.set('search', options.search);
   if (options?.sortBy) params.set('sort_by', options.sortBy);
   if (options?.sortOrder) params.set('sort_order', options.sortOrder);
@@ -1300,6 +1305,18 @@ export async function getBooks(
     params.set('coverage_percent_max', String(options.coveragePercentMax));
   if (options?.isPrimaryVersion !== false) params.set('is_primary_version', 'true');
   if (options?.seriesId !== undefined) params.set('series_id', String(options.seriesId));
+  return params;
+}
+
+export async function getBooks(
+  limit = 100,
+  offset = 0,
+  options?: BookListOptions
+): Promise<BooksPage> {
+  const params = new URLSearchParams();
+  params.set('limit', String(limit));
+  params.set('offset', String(offset));
+  buildBookListParams(options).forEach((v, k) => params.append(k, v));
 
   const response = await fetchListWithSearchPoll(
     `${API_BASE}/audiobooks?${params}`,
@@ -1360,6 +1377,34 @@ export async function getBookFacets(): Promise<BookFacets> {
     genres: data.genres ?? [],
     languages: data.languages ?? [],
   };
+}
+
+export interface ScopedTagFacets {
+  /** Tags carried by at least one matching book; count = matching books carrying it. */
+  tags: Array<{ tag: string; count: number }>;
+  /** Number of books the request matches. */
+  total: number;
+}
+
+/**
+ * Tag counts over EVERY book the given list request matches (not a page):
+ * GET /audiobooks/facets?scoped=1 with the same predicate params as getBooks.
+ */
+export async function getScopedTagFacets(
+  options?: Omit<BookListOptions, 'onSearchPending'>
+): Promise<ScopedTagFacets> {
+  const params = buildBookListParams(options);
+  params.set('scoped', '1');
+  const response = await apiFetch(`${API_BASE}/audiobooks/facets?${params}`, {
+    credentials: 'include',
+    signal: options?.signal,
+  });
+  if (!response.ok) {
+    throw await buildApiError(response, 'Failed to fetch tag facets');
+  }
+  const body = await response.json();
+  const data = body.data ?? body;
+  return { tags: data.scoped_tags ?? [], total: data.scoped_total ?? 0 };
 }
 
 export async function getBook(id: string): Promise<Book> {
@@ -7476,7 +7521,11 @@ export async function runMaintenanceJob(
 
 export async function startOptimize(): Promise<{ operation_id: string }> {
   return wrapTrigger('maintenance.library-optimize', async () => {
-    const { id } = await triggerOp('maintenance.library-optimize', {}, 'Failed to start optimize operation');
+    const { id } = await triggerOp(
+      'maintenance.library-optimize',
+      {},
+      'Failed to start optimize operation'
+    );
     return { operation_id: id };
   });
 }

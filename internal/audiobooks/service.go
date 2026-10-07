@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service.go
-// version: 1.53.0
+// version: 1.54.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-10-06
 
@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
@@ -236,6 +238,11 @@ type AudiobookService struct {
 	// audit rows DiscardProgressAndPurge writes. Tests only; nil in
 	// production, where activityService records them.
 	auditOverride activityRecorder
+	// tagFacets caches ScopedTagFacets answers and tagFacetsFlight collapses
+	// concurrent identical misses (service_tag_facets.go). Per service, not
+	// package-global, so two services over different stores never share one.
+	tagFacets       *cache.Cache[ScopedTagFacets]
+	tagFacetsFlight singleflight.Group
 }
 
 // SetActivityService wires the activity service for snapshot fallback in GetAudiobookTags.
@@ -272,6 +279,7 @@ func NewAudiobookService(store audiobookStore) *AudiobookService {
 		listCache:  cache.NewWithLimit[[]database.Book]("audiobook_list", listCacheTTL, 500),
 		libGen:     libGen,
 		runtimeIdx: newRuntimeIndex(),
+		tagFacets:  cache.NewWithLimit[ScopedTagFacets]("scoped_tag_facets", scopedTagFacetsTTL, 256),
 	}
 }
 

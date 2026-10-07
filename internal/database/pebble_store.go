@@ -4379,7 +4379,15 @@ func (p *PebbleStore) GetDistinctGenres() ([]string, error) {
 
 // GetGenreCounts returns every distinct non-empty genre with the number of
 // books carrying it. One walk of the book:* keyspace without loading all books.
+//
+// When memdb is serving, the walk is over its in-memory rows instead (same
+// rows, same predicate — see MemStore.GetGenreCounts). The Pebble walk
+// JSON-decodes every book row and was the cold cost behind a 5.8 s mean on
+// GET /audiobooks/facets (2026-10-06); it stays as the pre-warmup fallback.
 func (p *PebbleStore) GetGenreCounts() (map[string]int, error) {
+	if p.UseMemDB && p.mem() != nil {
+		return p.mem().GetGenreCounts()
+	}
 	counts := map[string]int{}
 	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {
 		var b Book
@@ -4397,7 +4405,12 @@ func (p *PebbleStore) GetGenreCounts() (map[string]int, error) {
 }
 
 // GetDistinctLanguages returns sorted distinct non-empty language values across all primary books.
+//
+// Delegates to memdb when it is serving, for the same reason as GetGenreCounts.
 func (p *PebbleStore) GetDistinctLanguages() ([]string, error) {
+	if p.UseMemDB && p.mem() != nil {
+		return p.mem().GetDistinctLanguages()
+	}
 	// Scan book:* index directly without loading all books
 	seen := map[string]bool{}
 	var out []string

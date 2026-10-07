@@ -7,6 +7,7 @@ package database
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -900,6 +901,54 @@ func (m *MemStore) GetDistinctPublishedYears() ([]int, error) {
 		}
 	}
 	return sortedYears(seen), nil
+}
+
+// GetGenreCounts is the memdb twin of PebbleStore.GetGenreCounts: every
+// distinct non-empty genre with its row count. Deliberately the SAME row set
+// as the Pebble walk (forEachBookRow does not skip soft-deleted rows, and
+// neither does this), so switching paths can never change an answer — only
+// its cost: one pointer walk instead of a JSON decode per book.
+func (m *MemStore) GetGenreCounts() (map[string]int, error) {
+	txn := m.db.Txn(false)
+	defer txn.Abort()
+
+	iter, err := txn.Get(memTableBooks, memIdxID)
+	if err != nil {
+		return nil, fmt.Errorf("memdb genre counts: %w", err)
+	}
+	counts := map[string]int{}
+	for obj := iter.Next(); obj != nil; obj = iter.Next() {
+		b := obj.(*Book)
+		if b.Genre != nil && *b.Genre != "" {
+			counts[*b.Genre]++
+		}
+	}
+	return counts, nil
+}
+
+// GetDistinctLanguages is the memdb twin of PebbleStore.GetDistinctLanguages,
+// over the same row set (see GetGenreCounts above), sorted.
+func (m *MemStore) GetDistinctLanguages() ([]string, error) {
+	txn := m.db.Txn(false)
+	defer txn.Abort()
+
+	iter, err := txn.Get(memTableBooks, memIdxID)
+	if err != nil {
+		return nil, fmt.Errorf("memdb distinct languages: %w", err)
+	}
+	seen := map[string]struct{}{}
+	for obj := iter.Next(); obj != nil; obj = iter.Next() {
+		b := obj.(*Book)
+		if b.Language != nil && *b.Language != "" {
+			seen[*b.Language] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for l := range seen {
+		out = append(out, l)
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 // ListSoftDeletedBooks returns books with MarkedForDeletion=true, with optional

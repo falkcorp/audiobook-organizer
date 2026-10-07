@@ -967,6 +967,90 @@ func (_c *MockAudiobookService_RestoreAudiobook_Call) RunAndReturn(run func(ctx 
 	return _c
 }
 
+// ScopedTagFacets provides a mock function for the type MockAudiobookService
+func (_mock *MockAudiobookService) ScopedTagFacets(ctx context.Context, search string, authorID *int, seriesID *int, f audiobooks.ListFilters) (audiobooks.ScopedTagFacets, error) {
+	ret := _mock.Called(ctx, search, authorID, seriesID, f)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ScopedTagFacets")
+	}
+
+	var r0 audiobooks.ScopedTagFacets
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, *int, *int, audiobooks.ListFilters) (audiobooks.ScopedTagFacets, error)); ok {
+		return returnFunc(ctx, search, authorID, seriesID, f)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, *int, *int, audiobooks.ListFilters) audiobooks.ScopedTagFacets); ok {
+		r0 = returnFunc(ctx, search, authorID, seriesID, f)
+	} else {
+		r0 = ret.Get(0).(audiobooks.ScopedTagFacets)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, *int, *int, audiobooks.ListFilters) error); ok {
+		r1 = returnFunc(ctx, search, authorID, seriesID, f)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockAudiobookService_ScopedTagFacets_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ScopedTagFacets'
+type MockAudiobookService_ScopedTagFacets_Call struct {
+	*mock.Call
+}
+
+// ScopedTagFacets is a helper method to define mock.On call
+//   - ctx context.Context
+//   - search string
+//   - authorID *int
+//   - seriesID *int
+//   - f audiobooks.ListFilters
+func (_e *MockAudiobookService_Expecter) ScopedTagFacets(ctx any, search any, authorID any, seriesID any, f any) *MockAudiobookService_ScopedTagFacets_Call {
+	return &MockAudiobookService_ScopedTagFacets_Call{Call: _e.mock.On("ScopedTagFacets", ctx, search, authorID, seriesID, f)}
+}
+
+func (_c *MockAudiobookService_ScopedTagFacets_Call) Run(run func(ctx context.Context, search string, authorID *int, seriesID *int, f audiobooks.ListFilters)) *MockAudiobookService_ScopedTagFacets_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 *int
+		if args[2] != nil {
+			arg2 = args[2].(*int)
+		}
+		var arg3 *int
+		if args[3] != nil {
+			arg3 = args[3].(*int)
+		}
+		var arg4 audiobooks.ListFilters
+		if args[4] != nil {
+			arg4 = args[4].(audiobooks.ListFilters)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+			arg3,
+			arg4,
+		)
+	})
+	return _c
+}
+
+func (_c *MockAudiobookService_ScopedTagFacets_Call) Return(scopedTagFacets audiobooks.ScopedTagFacets, err error) *MockAudiobookService_ScopedTagFacets_Call {
+	_c.Call.Return(scopedTagFacets, err)
+	return _c
+}
+
+func (_c *MockAudiobookService_ScopedTagFacets_Call) RunAndReturn(run func(ctx context.Context, search string, authorID *int, seriesID *int, f audiobooks.ListFilters) (audiobooks.ScopedTagFacets, error)) *MockAudiobookService_ScopedTagFacets_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // TrashProgress provides a mock function for the type MockAudiobookService
 func (_mock *MockAudiobookService) TrashProgress(ctx context.Context, bookIDs []string) (map[string]audiobooks.TrashProgressInfo, error) {
 	ret := _mock.Called(ctx, bookIDs)

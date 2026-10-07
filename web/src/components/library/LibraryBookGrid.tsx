@@ -142,6 +142,16 @@ interface LibraryBookGridProps {
   availableTags: Array<{ tag: string; count: number }>;
   selectedTags: string[];
   handleTagFilterChange: (tags: string[]) => void;
+  /**
+   * Browse-by-Tag chips. Scoped to the current result set by Library.tsx;
+   * when omitted the cloud falls back to the library-wide availableTags /
+   * selectedTags / handleTagFilterChange (FilterSidebar keeps those).
+   */
+  tagCloudTags?: Array<{ tag: string; count: number }>;
+  tagCloudSelected?: string[];
+  onTagCloudChange?: (tags: string[]) => void;
+  /** Shown in place of the chips when the current results carry no tags. */
+  tagCloudEmptyMessage?: string;
 }
 
 export const LibraryBookGrid = ({
@@ -218,6 +228,10 @@ export const LibraryBookGrid = ({
   availableTags,
   selectedTags,
   handleTagFilterChange,
+  tagCloudTags,
+  tagCloudSelected,
+  onTagCloudChange,
+  tagCloudEmptyMessage,
 }: LibraryBookGridProps) => (
   <>
     {libraryContentState({ bookCount: audiobooks.length, loading, loadError, searchQuery }) ===
@@ -306,11 +320,12 @@ export const LibraryBookGrid = ({
           searchErrorText={queryErrorMessage(loadError)}
         />
 
-        {availableTags.length > 0 && (
+        {((tagCloudTags ?? availableTags).length > 0 || tagCloudEmptyMessage) && (
           <TagCloud
-            availableTags={availableTags}
-            selectedTags={selectedTags}
-            onTagsChange={handleTagFilterChange}
+            availableTags={tagCloudTags ?? availableTags}
+            selectedTags={tagCloudSelected ?? selectedTags}
+            onTagsChange={onTagCloudChange ?? handleTagFilterChange}
+            emptyMessage={tagCloudEmptyMessage}
           />
         )}
 

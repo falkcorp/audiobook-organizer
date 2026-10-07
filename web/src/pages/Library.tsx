@@ -1,5 +1,5 @@
 // file: web/src/pages/Library.tsx
-// version: 1.101.1
+// version: 1.102.0
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
 // last-edited: 2026-10-06
 
@@ -29,7 +29,14 @@ import {
 } from '../hooks/useLibraryFilters';
 import { scopeColumnSorts } from '../config/columnDefinitions';
 import { FilterTagBar } from '../components/common/FilterTagBar';
-import { useLibraryQuery, type BooksChangedEvent } from '../hooks/useLibraryQuery';
+import {
+  useLibraryQuery,
+  buildLibraryListOptions,
+  libraryTagsParam,
+  type BooksChangedEvent,
+} from '../hooks/useLibraryQuery';
+import { useScopedTagFacets } from '../hooks/useScopedTagFacets';
+import { appendTagTerm, removeTagTerm } from '../utils/tagQuery';
 import { useLibraryScrollKeeper } from '../hooks/useLibraryScrollKeeper';
 import { useLibrarySelection } from '../hooks/useLibrarySelection';
 import { useToast } from '../components/toast/ToastProvider';
@@ -921,6 +928,70 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     convertBook: convertApiBook,
   });
 
+  // Browse-by-Tag chips, scoped to the CURRENT results (owner 2026-10-06:
+  // "The tag chips should be scoped to current results, otherwise they're
+  // useless"). Counted over exactly the request the list ran: the same
+  // buildLibraryListOptions the list hook sends to getBooks.
+  const tagFacetListOptions = useMemo(
+    () =>
+      buildLibraryListOptions({
+        debouncedSearch,
+        parsedSearch: debouncedParsedSearch,
+        filters,
+        selectedTags,
+        sortBy,
+        sortOrder,
+        fieldFilters: buildFieldFilters(),
+      }),
+    [
+      debouncedSearch,
+      debouncedParsedSearch,
+      filters,
+      selectedTags,
+      sortBy,
+      sortOrder,
+      buildFieldFilters,
+    ]
+  );
+  const scopedTagFacets = useScopedTagFacets(tagFacetListOptions);
+  // Until the first scoped answer lands (or if the endpoint fails before
+  // ever answering) the library-wide list is shown rather than nothing.
+  const tagCloudTags = scopedTagFacets.tags ?? availableTags;
+  // A chip is "on" when its tag narrows the current request — selected via
+  // the sidebar, or a `tag:` term in the search box.
+  const tagCloudSelected = useMemo(
+    () => libraryTagsParam(selectedTags, parsedSearch) ?? [],
+    [selectedTags, parsedSearch]
+  );
+  // Chip click: an added tag is appended to the search text as `tag:"x"`
+  // (narrowing the current query); a removed one is taken out of wherever it
+  // came from — the sidebar selection or the search text.
+  const handleTagCloudChange = useCallback(
+    (next: string[]) => {
+      const nextSet = new Set(next);
+      const added = next.filter((t) => !tagCloudSelected.includes(t));
+      const removed = tagCloudSelected.filter((t) => !nextSet.has(t));
+      const removedSelected = removed.filter((t) => selectedTags.includes(t));
+      if (removedSelected.length > 0) {
+        handleTagFilterChange(selectedTags.filter((t) => !removedSelected.includes(t)));
+      }
+      const removedFromQuery = removed.filter((t) => !selectedTags.includes(t));
+      if (added.length > 0 || removedFromQuery.length > 0) {
+        setSearchQuery((q) => {
+          let out = q;
+          for (const t of removedFromQuery) out = removeTagTerm(out, t);
+          for (const t of added) out = appendTagTerm(out, t);
+          return out;
+        });
+      }
+    },
+    [tagCloudSelected, selectedTags, handleTagFilterChange]
+  );
+  const tagCloudEmptyMessage =
+    scopedTagFacets.tags !== null && scopedTagFacets.tags.length === 0
+      ? 'No tags in these results.'
+      : undefined;
+
   // Cancelling a slow load also clears the active tag filter — a slow tag
   // filter is exactly the case a user is likely cancelling out of, and
   // leaving it selected would just re-trigger the same slow query on the
@@ -1328,7 +1399,10 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
       await refreshSoftDeleted();
     } catch (error) {
       console.error('Failed to delete audiobook:', error);
-      toast(describeDeleteBookError(error, 'Failed to delete audiobook. Please try again.'), 'error');
+      toast(
+        describeDeleteBookError(error, 'Failed to delete audiobook. Please try again.'),
+        'error'
+      );
     } finally {
       setDeleteInProgress(false);
     }
@@ -2425,6 +2499,10 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
           availableTags={availableTags}
           selectedTags={selectedTags}
           handleTagFilterChange={handleTagFilterChange}
+          tagCloudTags={tagCloudTags}
+          tagCloudSelected={tagCloudSelected}
+          onTagCloudChange={handleTagCloudChange}
+          tagCloudEmptyMessage={tagCloudEmptyMessage}
         />
 
         <LibraryDialogs
