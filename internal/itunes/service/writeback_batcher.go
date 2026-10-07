@@ -1,5 +1,5 @@
 // file: internal/itunes/service/writeback_batcher.go
-// version: 6.0.0
+// version: 6.0.1
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e90
 // last-edited: 2026-10-07
 //
@@ -332,10 +332,17 @@ type persistedStatus struct {
 	NextRetryAt         time.Time `json:"next_retry_at,omitzero"`
 }
 
-// persistLocked writes one queue key. A failed write is logged at ERROR: the
-// item is still queued in memory and will be written if the flush succeeds,
-// but it would not survive a restart. Callers hold b.mu.
-func (b *WriteBackBatcher) persistLocked(key string, value []byte) {
+// Store I/O never runs under b.mu. PebbleStore.SetRaw/DeleteRaw write with
+// pebble.Sync, so each is an fsync; holding b.mu across them would serialize
+// every enqueuer of a library-wide op (batch-save, metafetch, apply) behind one
+// disk sync per book. The orderings below are chosen so a race costs at most a
+// stale key (re-applied on the next start, diffed, so harmless) and never a
+// lost or duplicated write.
+
+// persist writes one queue key. A failed write is logged at ERROR: the item
+// is still queued in memory and will be written if the flush succeeds, but it
+// would not survive a restart. Must NOT be called with b.mu held.
+func (b *WriteBackBatcher) persist(key string, value []byte) {
 	store := b.storeOrNil()
 	if store == nil || key == "" {
 		return
@@ -345,8 +352,8 @@ func (b *WriteBackBatcher) persistLocked(key string, value []byte) {
 	}
 }
 
-// unpersistLocked deletes one queue key. Callers hold b.mu.
-func (b *WriteBackBatcher) unpersistLocked(key string) {
+// unpersist deletes one queue key. Must NOT be called with b.mu held.
+func (b *WriteBackBatcher) unpersist(key string) {
 	store := b.storeOrNil()
 	if store == nil || key == "" {
 		return
@@ -356,19 +363,25 @@ func (b *WriteBackBatcher) unpersistLocked(key string) {
 	}
 }
 
-// persistStatusLocked stores the current failure/success status. Callers hold b.mu.
-func (b *WriteBackBatcher) persistStatusLocked() {
-	store := b.storeOrNil()
-	if store == nil {
-		return
-	}
-	data, err := json.Marshal(persistedStatus{
+// statusSnapshotLocked captures the failure/success status for persisting
+// after the lock is released. Callers hold b.mu.
+func (b *WriteBackBatcher) statusSnapshotLocked() persistedStatus {
+	return persistedStatus{
 		ConsecutiveFailures: b.flushFailures,
 		LastError:           b.lastError,
 		LastFailureAt:       b.lastFailureAt,
 		LastSuccessAt:       b.lastSuccessAt,
 		NextRetryAt:         b.retryAt,
-	})
+	}
+}
+
+// persistStatus stores a status snapshot. Must NOT be called with b.mu held.
+func (b *WriteBackBatcher) persistStatus(st persistedStatus) {
+	store := b.storeOrNil()
+	if store == nil {
+		return
+	}
+	data, err := json.Marshal(st)
 	if err != nil {
 		return
 	}
@@ -430,39 +443,61 @@ func (b *WriteBackBatcher) dryRunEnabled() bool {
 }
 
 // Enqueue adds a book ID to the pending location-update batch.
+//
+// Ordering: mark pending under b.mu, then persist outside it. completeBatch
+// keeps the key of any item pending at the time it looks, so the key is never
+// deleted under a live entry; the only race leaves a stale key, which reloads
+// as a no-op update.
 func (b *WriteBackBatcher) Enqueue(bookID string) {
 	if !b.autoWriteBackEnabled() {
 		return
 	}
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	if b.stopped {
+		b.mu.Unlock()
 		return
 	}
-	if !b.pendingBooks[bookID] {
-		b.persistLocked(wbKeyBook+bookID, []byte("1"))
-	}
+	isNew := !b.pendingBooks[bookID]
 	b.pendingBooks[bookID] = true
 	b.resetTimer()
+	b.mu.Unlock()
+	if isNew {
+		b.persist(wbKeyBook+bookID, []byte("1"))
+	}
 }
 
 // EnqueueAdd queues a new track for insertion into the ITL.
+//
+// Ordering: persist FIRST, then queue. An add key left behind after its
+// track was written would insert the track a second time on the next start,
+// so a flush must never be able to take (and complete) an add whose key is
+// written after the completion.
 func (b *WriteBackBatcher) EnqueueAdd(track itunes.ITLNewTrack) {
 	if !b.autoWriteBackEnabled() {
 		return
 	}
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	if b.stopped {
+		b.mu.Unlock()
 		return
 	}
 	b.addSeq++
+	seq := b.addSeq
+	b.mu.Unlock()
+
 	key := ""
 	if b.storeOrNil() != nil {
 		if data, err := json.Marshal(track); err == nil {
-			key = wbKeyAdd + strconv.FormatInt(time.Now().UnixNano(), 10) + "-" + strconv.FormatUint(b.addSeq, 10)
-			b.persistLocked(key, data)
+			key = wbKeyAdd + strconv.FormatInt(time.Now().UnixNano(), 10) + "-" + strconv.FormatUint(seq, 10)
+			b.persist(key, data)
 		}
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.stopped {
+		// Stop raced the persist: the key stays and the next start loads it.
+		return
 	}
 	b.pendingAdds = append(b.pendingAdds, track)
 	b.pendingAddKeys = append(b.pendingAddKeys, key)
@@ -478,25 +513,29 @@ func (b *WriteBackBatcher) EnqueueAdd(track itunes.ITLNewTrack) {
 // removes the track succeeds (see markRemovesApplied).
 //
 // A PID on the held list stays held: the owner releases held removes.
+// Ordering as in Enqueue (a stale remove key re-removes an absent PID: no-op).
 func (b *WriteBackBatcher) EnqueueRemove(pid string) {
 	if !b.autoWriteBackEnabled() {
 		return
 	}
 	key := strings.ToLower(pid)
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	if b.stopped {
+		b.mu.Unlock()
 		return
 	}
 	if _, isHeld := b.held[key]; isHeld {
+		b.mu.Unlock()
 		slog.Warn("iTunes write-back remove is on the held list; release it to apply", "pid", key)
 		return
 	}
-	if !b.pendingRemoves[key] {
-		b.persistLocked(wbKeyRemove+key, []byte("1"))
-	}
+	isNew := !b.pendingRemoves[key]
 	b.pendingRemoves[key] = true
 	b.resetTimer()
+	b.mu.Unlock()
+	if isNew {
+		b.persist(wbKeyRemove+key, []byte("1"))
+	}
 }
 
 // stopTimerLocked cancels the pending debounce timer, if any, and releases the
@@ -696,9 +735,10 @@ func (b *WriteBackBatcher) failBatch(fb flushBatch, err error) {
 	b.lastFailureAt = now
 	b.requeueLocked(fb)
 	pendingBooks, pendingAdds, pendingRemoves := len(b.pendingBooks), len(b.pendingAdds), len(b.pendingRemoves)
-	b.persistStatusLocked()
+	st := b.statusSnapshotLocked()
 	b.resetTimer()
 	b.mu.Unlock()
+	b.persistStatus(st)
 
 	slog.Error("iTunes write-back FAILED; batch kept and will be retried (nothing dropped)",
 		"err", err, "consecutive_failures", n, "retry_in", delay.String(), "next_retry_at", b.retryAtString(),
@@ -719,28 +759,57 @@ func (b *WriteBackBatcher) retryAtString() string {
 // landed (or after the diff showed nothing to write). An item re-enqueued in
 // memory while the flush ran keeps its key. wrote=true also clears the
 // failure status: only a real write proves the write path works.
+//
+// The deletes run outside b.mu (each is an fsync). An item re-enqueued between
+// choosing the keys and deleting them would lose its key, so the pending set is
+// re-checked afterwards and any such key is written back.
 func (b *WriteBackBatcher) completeBatch(fb flushBatch, wrote bool) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
+	var del []string
 	for _, id := range fb.bookIDs {
 		if !b.pendingBooks[id] {
-			b.unpersistLocked(wbKeyBook + id)
+			del = append(del, wbKeyBook+id)
 		}
 	}
 	for pid := range fb.removes {
 		if !b.pendingRemoves[pid] {
-			b.unpersistLocked(wbKeyRemove + pid)
+			del = append(del, wbKeyRemove+pid)
 		}
 	}
-	for _, k := range fb.addKeys {
-		b.unpersistLocked(k)
-	}
+	del = append(del, fb.addKeys...)
+	var st persistedStatus
 	if wrote {
 		b.flushFailures = 0
 		b.retryAt = time.Time{}
 		b.lastError = ""
 		b.lastSuccessAt = time.Now()
-		b.persistStatusLocked()
+		st = b.statusSnapshotLocked()
+	}
+	b.mu.Unlock()
+
+	for _, k := range del {
+		b.unpersist(k)
+	}
+	if wrote {
+		b.persistStatus(st)
+	}
+
+	// Re-check: anything re-enqueued while the deletes ran gets its key back.
+	b.mu.Lock()
+	var restore []string
+	for _, id := range fb.bookIDs {
+		if b.pendingBooks[id] {
+			restore = append(restore, wbKeyBook+id)
+		}
+	}
+	for pid := range fb.removes {
+		if b.pendingRemoves[pid] {
+			restore = append(restore, wbKeyRemove+pid)
+		}
+	}
+	b.mu.Unlock()
+	for _, k := range restore {
+		b.persist(k, []byte("1"))
 	}
 }
 
@@ -750,16 +819,24 @@ func (b *WriteBackBatcher) holdRemoves(removes map[string]bool) {
 	now := time.Now()
 	rec, _ := json.Marshal(heldRecord{HeldAt: now, Reason: fmt.Sprintf("flush held %d removes, over MaxRemovesPerFlush=%d", len(removes), MaxRemovesPerFlush)})
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	if b.held == nil {
 		b.held = make(map[string]time.Time) // struct-literal batchers (tests)
 	}
+	var unqueue []string
 	for pid := range removes {
 		b.held[pid] = now
-		b.persistLocked(wbHeldRemovePrefix+pid, rec)
 		if !b.pendingRemoves[pid] {
-			b.unpersistLocked(wbKeyRemove + pid)
+			unqueue = append(unqueue, wbKeyRemove+pid)
 		}
+	}
+	b.mu.Unlock()
+	// Held key first, then drop the queue key: a crash between leaves the PID
+	// in both lists, never in neither.
+	for pid := range removes {
+		b.persist(wbHeldRemovePrefix+pid, rec)
+	}
+	for _, k := range unqueue {
+		b.unpersist(k)
 	}
 }
 
@@ -772,7 +849,6 @@ func (b *WriteBackBatcher) ReleaseHeldRemoves(limit int) (released, stillHeld in
 		limit = MaxRemovesPerFlush
 	}
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	pids := make([]string, 0, len(b.held))
 	for pid := range b.held {
 		pids = append(pids, pid)
@@ -784,21 +860,30 @@ func (b *WriteBackBatcher) ReleaseHeldRemoves(limit int) (released, stillHeld in
 		return pids[i] < pids[j]
 	})
 	room := limit - len(b.pendingRemoves)
+	var moved []string
 	for _, pid := range pids {
-		if released >= room {
+		if len(moved) >= room {
 			break
 		}
 		delete(b.held, pid)
-		b.unpersistLocked(wbHeldRemovePrefix + pid)
-		b.persistLocked(wbKeyRemove+pid, []byte("1"))
 		b.pendingRemoves[pid] = true
-		released++
+		moved = append(moved, pid)
 	}
+	released, stillHeld = len(moved), len(b.held)
 	if released > 0 {
-		slog.Warn("iTunes write-back released held removes into the queue", "released", released, "still_held", len(b.held))
 		b.resetTimer()
 	}
-	return released, len(b.held)
+	b.mu.Unlock()
+
+	// Queue key first, then drop the held key (a crash between leaves both).
+	for _, pid := range moved {
+		b.persist(wbKeyRemove+pid, []byte("1"))
+		b.unpersist(wbHeldRemovePrefix + pid)
+	}
+	if released > 0 {
+		slog.Warn("iTunes write-back released held removes into the queue", "released", released, "still_held", stillHeld)
+	}
+	return released, stillHeld
 }
 
 // WriteBackQueueStatus is the owner-visible state of the write-back queue.

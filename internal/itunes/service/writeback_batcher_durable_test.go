@@ -1,5 +1,5 @@
 // file: internal/itunes/service/writeback_batcher_durable_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6d2a8f43-1b7e-4c95-a3d0-9e5f2b7c4a18
 // last-edited: 2026-10-07
 //
@@ -509,4 +509,73 @@ func TestNewWriteBackBatcher_NoStoreIOUntilStart(t *testing.T) {
 		t.Fatalf("Start scanned %d prefixes, want 2 (one load)", n)
 	}
 	_ = b.Stop(context.Background())
+}
+
+// TestFlush_DryRunKeepsBatchUnscheduled: dry-run writes nothing, so it must
+// keep the batch (v6.0.0; it used to consume it) and must not arm a timer
+// (re-running the dry-run every tick would only spin).
+func TestFlush_DryRunKeepsBatchUnscheduled(t *testing.T) {
+	var w controllableWriter
+	w.install(t)
+
+	itlPath := makeITL(t, t.TempDir(), "library.itl", "untouched")
+	b := newDurableBatcher(t, itlPath, durableStore(newKV(), nil))
+	cfg := enabledFlushCfg(itlPath)
+	cfg.WriteBackDryRun = true
+	b.UpdateConfig(cfg)
+
+	b.Enqueue("book-1")
+	b.EnqueueRemove("1122334455667788")
+	b.mu.Lock()
+	b.stopTimerLocked()
+	b.mu.Unlock()
+
+	b.drainFlush()
+
+	if w.calls.Load() != 0 {
+		t.Fatalf("dry-run wrote: %d apply calls", w.calls.Load())
+	}
+	st := b.Status()
+	if st.PendingUpdates != 1 || st.PendingRemoves != 1 {
+		t.Fatalf("dry-run consumed the batch: %+v", st)
+	}
+	b.mu.Lock()
+	armed := b.timer != nil
+	b.mu.Unlock()
+	if armed {
+		t.Fatal("dry-run armed a retry timer")
+	}
+}
+
+// TestEnqueue_PersistsOutsideTheMutex: the store's raw writes are fsyncs
+// (pebble.Sync). While one enqueue is inside SetRaw, another enqueuer must
+// not be blocked behind b.mu.
+func TestEnqueue_PersistsOutsideTheMutex(t *testing.T) {
+	kv := newKV()
+	st := durableStore(kv, nil)
+	inSet := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	inner := st.SetRawFunc
+	st.SetRawFunc = func(k string, v []byte) error {
+		if k == wbKeyBook+"slow" {
+			once.Do(func() { close(inSet) })
+			<-release
+		}
+		return inner(k, v)
+	}
+	b := NewWriteBackBatcher(time.Hour, disabledFlushCfg(), st)
+	t.Cleanup(func() { _ = b.Stop(context.Background()) })
+
+	go b.Enqueue("slow")
+	<-inSet
+	done := make(chan struct{})
+	go func() { b.Enqueue("fast"); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		close(release)
+		t.Fatal("an enqueue blocked behind another enqueue's store write: SetRaw runs under b.mu")
+	}
+	close(release)
 }
