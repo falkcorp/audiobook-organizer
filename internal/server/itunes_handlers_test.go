@@ -1,5 +1,5 @@
 // file: internal/server/itunes_handlers_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3a4b5c6d-7e8f-9a0b-1c2d-3e4f5a6b7c8d
 
 package server
@@ -30,16 +30,28 @@ func TestITunesDisabled_ReturnsServiceUnavailable(t *testing.T) {
 	}{
 		// Handlers that call itunesEnabledOrError at the top
 		{http.MethodPost, "/api/v1/itunes/import"},
-		{http.MethodPost, "/api/v1/itunes/write-back-all"},
 		{http.MethodGet, "/api/v1/itunes/import-status/fake-op"},
 		{http.MethodPost, "/api/v1/itunes/import-status/bulk"},
 		{http.MethodPost, "/api/v1/itunes/sync"},
 		// Routes registered via itunesSvcGuard (sub-component method pointers)
 		{http.MethodGet, "/api/v1/itunes/library/download"},
-		{http.MethodPost, "/api/v1/itunes/library/upload"},
 		{http.MethodGet, "/api/v1/itunes/library/backups"},
-		{http.MethodPost, "/api/v1/itunes/library/restore"},
 		{http.MethodPost, "/api/v1/operations/itunes-path-reconcile"},
+	}
+
+	// Owner-only routes (plan D14) refuse this anonymous request at the
+	// owner gate, before the disabled-service check: it fails closed whether
+	// or not iTunes is on. Their 503/400 handler paths are reached as the
+	// owner in owner_routes_test.go.
+	for _, path := range []string{"/api/v1/itunes/write-back-all", "/api/v1/itunes/library/upload", "/api/v1/itunes/library/restore"} {
+		t.Run("owner-only "+path, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`))
+			req.Header.Set("Content-Type", "application/json")
+			srv.router.ServeHTTP(w, req)
+			assert.Equal(t, http.StatusForbidden, w.Code)
+			assert.Contains(t, w.Body.String(), "Owner actions")
+		})
 	}
 
 	for _, tc := range cases {

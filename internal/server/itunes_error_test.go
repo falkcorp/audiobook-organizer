@@ -1,7 +1,7 @@
 // file: internal/server/itunes_error_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: b2c3d4e5-f6a7-8901-2345-678901abcdef
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 package server
 
@@ -259,10 +259,15 @@ func TestITunesWriteBack_NoITunesPersistentID(t *testing.T) {
 	xmlPath := filepath.Join(env.TempDir, "Library.xml")
 	testutil.GenerateITunesXML(t, []testutil.ITunesTestTrack{}, xmlPath)
 
+	// write-back is owner-only (plan D14): the request is the owner's.
+	owner := asTestOwner(t)
 	server := newTestServer(t, env.Store)
 	body := fmt.Sprintf(`{"library_path":"%s","audiobook_ids":["%s"],"create_backup":false}`, xmlPath, created.ID)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/itunes/write-back", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	for k, v := range owner {
+		req.Header.Set(k, v)
+	}
 	w := httptest.NewRecorder()
 	server.router.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusBadRequest, w.Code) // no audiobooks with iTunes persistent IDs

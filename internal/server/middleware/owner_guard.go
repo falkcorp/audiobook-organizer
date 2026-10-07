@@ -1,5 +1,5 @@
 // file: internal/server/middleware/owner_guard.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8c4f2e17-9a63-4d05-b1e8-6f3a7d2c5b90
 // last-edited: 2026-10-07
 
@@ -40,8 +40,10 @@ func OwnerPublicHost(r *http.Request) string {
 // request exactly as the handler does (the same helper, not a copy), and
 // anything it cannot read as a preview must report true.
 //
-// It is NOT skipped when auth is disabled, unlike s.perm: the owner proof is
-// a Cloudflare Access identity, which exists whether or not local sign-in is
+// perm "" skips the permission leg only (the server passes "" when local
+// auth is off, exactly as s.perm turns into a no-op: there are no roles to
+// hold it). The owner proof is NEVER skipped, auth on or off: it is a
+// Cloudflare Access identity, which exists whether or not local sign-in is
 // on, and an install with auth off has no owner to fall back to.
 func RequireOwner(ownerEmail func() string, perm auth.Permission, applies func(*gin.Context) bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -65,7 +67,7 @@ func RequireOwner(ownerEmail func() string, perm auth.Permission, applies func(*
 			c.Abort()
 			return
 		}
-		if !auth.Can(ctx, perm) {
+		if perm != "" && !auth.Can(ctx, perm) {
 			slog.Warn("owner action refused", "route", c.FullPath(), "http_method", c.Request.Method,
 				"user", userID, "why", "missing permission "+string(perm))
 			httputil.RespondWithForbidden(c, "permission denied: "+string(perm))

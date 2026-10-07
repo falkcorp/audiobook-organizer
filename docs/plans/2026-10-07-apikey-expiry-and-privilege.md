@@ -1,5 +1,5 @@
 <!-- file: docs/plans/2026-10-07-apikey-expiry-and-privilege.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 67c7aa4f-72e2-4a9c-805a-92fff01c3308 -->
 <!-- last-edited: 2026-10-07 -->
 
@@ -312,9 +312,10 @@ after #3822 added `POST /itunes/writeback/held/release`).**
 They are registered only through `s.ownerRoute` (`internal/server/owner_routes.go`),
 which attaches one shared gate, `servermiddleware.RequireOwner`: the D11 owner
 proof (so an API key, password, SSO, temp-login or invite session is always
-refused) plus `integrations.manage`. `owner_email` is read per request, and
-the gate is not skipped when local auth is off (fail closed, as owner apply;
-an install with auth off has no owner). Each allowed request is logged with
+refused) plus `integrations.manage`. `owner_email` is read per request. With
+local auth off the owner proof is still required (fail closed, as owner
+apply; an install with auth off has no owner), and only the permission leg
+is skipped, exactly as `s.perm` is, since nobody holds a role then. Each allowed request is logged with
 the route, user, Access email and method; the held-release handler also logs
 `limit`, `released` and `still_held`.
 **Permission:** `integrations.manage` is the one the other whole-library
