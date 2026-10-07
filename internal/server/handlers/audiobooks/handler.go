@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.27.0
+// version: 1.28.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
 // last-edited: 2026-10-06
 
@@ -72,7 +72,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"
-	"golang.org/x/sync/singleflight"
 )
 
 // facetsCacheKey is the single cache key under which audiobookFacets stores /
@@ -113,8 +112,9 @@ type Handler struct {
 	// them exactly where the originals did.
 	listCache *cache.Cache[gin.H]
 	// listFlight collapses concurrent identical list-cache misses into one
-	// build (ListAudiobooks). The zero value is ready to use.
-	listFlight singleflight.Group
+	// build (ListAudiobooks), cancelled when its last waiter leaves
+	// (list_flight.go). The zero value is ready to use.
+	listFlight listFlight
 	// searchCached reports whether a search request is served by the shared
 	// search result cache (AudiobookService.SearchIsCached).
 	searchCached func(search string, authorID, seriesID *int, f audiobookspkg.ListFilters) bool
@@ -728,37 +728,56 @@ func (h *Handler) ListAudiobooks(c *gin.Context) {
 	if wantsStaleSearch(c) {
 		reqCtx = audiobookspkg.WithStaleSearchResponse(reqCtx)
 	}
-	// Identical cache misses share ONE build. After every prod restart the
-	// list cache and memdb are cold, and the Library's retry loop re-issues
-	// the same query: 14 identical requests landed in one second at
-	// 2026-10-06T16:47Z, each building the same response (44-160 s apiece)
-	// and competing for the same CPU. Only a cacheable request without the
+	// Identical cache misses share ONE build (listFlight). After every prod
+	// restart the list cache and memdb are cold, and the Library's retry loop
+	// re-issues the same query: 14 identical requests landed in one second on
+	// 2026-10-06, each building the same response (44-160 s apiece) and
+	// competing for the same CPU. Only a cacheable request without the
 	// async/stale preferences joins -- those change the response shape. The
-	// shared build runs detached from any one caller's cancellation, so the
-	// first client leaving does not fail the others; it is bounded by the
-	// build itself, exactly as the cache fill it replaces was.
+	// shared build is cancelled when the last caller waiting on it leaves, as
+	// an unshared build was by its one caller's disconnect.
+	//
+	// applied_filters is set and the cache filled inside the shared build:
+	// every joined caller receives the same map, and nothing writes it after
+	// it leaves there (cache hits share it the same way). An error reaches
+	// only the callers that were waiting and is never cached.
+	var resp gin.H
+	var err error
 	if useListCache && !wantsAsyncSearch(c) && !wantsStaleSearch(c) {
-		v, err, _ := h.listFlight.Do(cacheKey, func() (any, error) {
-			resp, err := h.buildListResponse(context.WithoutCancel(reqCtx), params.Limit, params.Offset, params.Search, authorID, seriesID, filters, showQuarantined)
-			if err != nil {
-				return nil, err
+		resp, err = h.listFlight.do(reqCtx, cacheKey, func(ctx context.Context) (gin.H, error) {
+			r, berr := h.buildListResponse(ctx, params.Limit, params.Offset, params.Search, authorID, seriesID, filters, showQuarantined)
+			if berr != nil {
+				return nil, berr
 			}
-			// Set inside the shared build: every joined caller receives the
-			// same map, and it is never written after it leaves here (cache
-			// hits share it the same way).
-			resp["applied_filters"] = appliedFilters
-			h.listCache.Set(cacheKey, resp)
-			return resp, nil
+			r["applied_filters"] = appliedFilters
+			h.listCache.Set(cacheKey, r)
+			return r, nil
 		})
-		if err != nil {
-			httputil.InternalError(c, "failed to list audiobooks", err)
+		if err != nil && reqCtx.Err() != nil {
+			// This caller left before the build finished. Not a server fault,
+			// and never a 200 with an empty body (see statusClientClosedRequest).
+			c.AbortWithStatus(statusClientClosedRequest)
 			return
 		}
-		httputil.RespondWithOK(c, v.(gin.H))
-		return
+	} else {
+		resp, err = h.buildListResponse(reqCtx, params.Limit, params.Offset, params.Search, authorID, seriesID, filters, showQuarantined)
+		if err == nil {
+			// Additive: applied_filters never replaces or renames an existing
+			// key (items/count/limit/offset are untouched) and never changes
+			// which books are returned — it only reports, from ground truth,
+			// what was applied. Always present, even when empty, so the
+			// frontend can tell "no filters were applied" apart from "the
+			// server didn't say."
+			resp["applied_filters"] = appliedFilters
+			if useListCache {
+				h.listCache.Set(cacheKey, resp)
+			}
+		}
 	}
-
-	resp, err := h.buildListResponse(reqCtx, params.Limit, params.Offset, params.Search, authorID, seriesID, filters, showQuarantined)
+	// Both paths answer errors the same way. A *searchcache.PendingError
+	// needs the request to have opted in (Prefer: respond-async), which keeps
+	// it off the shared path today; it is still handled here for both, so the
+	// shared path can never turn a pending search into a 500.
 	var pending *searchcache.PendingError
 	if errors.As(err, &pending) {
 		// The search is still running (detached from this request) and will
@@ -775,17 +794,12 @@ func (h *Handler) ListAudiobooks(c *gin.Context) {
 		httputil.InternalError(c, "failed to list audiobooks", err)
 		return
 	}
-	// Additive: applied_filters never replaces or renames an existing key
-	// (items/count/limit/offset are untouched) and never changes which books
-	// are returned — it only reports, from ground truth, what was applied.
-	// Always present, even when empty, so the frontend can tell "no filters
-	// were applied" apart from "the server didn't say."
-	resp["applied_filters"] = appliedFilters
-	if useListCache {
-		h.listCache.Set(cacheKey, resp)
-	}
 	httputil.RespondWithOK(c, resp)
 }
+
+// statusClientClosedRequest is nginx's 499: the client went away before the
+// response was written. Not in net/http, so it is spelled out here.
+const statusClientClosedRequest = 499
 
 // buildAppliedFilters reports, from the fully-populated ListFilters the
 // request is about to be run against, every filter the server actually
