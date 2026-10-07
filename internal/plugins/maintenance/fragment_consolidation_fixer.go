@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.46.1
+// version: 1.47.0
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
 // last-edited: 2026-10-07
 
@@ -314,6 +314,9 @@ const (
 const (
 	fragRowCopyUnproven  = "copy-unproven"
 	fragRowMovedUnproven = "moved-unproven"
+	// fragRowOwner: a parent's content-proven, iTunes-tracked copies that
+	// only the owner applies (fragment_owner_apply.go).
+	fragRowOwner = "owner"
 )
 
 // Skip kinds this fixer sets itself (the framework adds the guard kinds).
@@ -3121,24 +3124,25 @@ func (f *fragmentFixer) copiesOfPresentRow(lib *fragLibrary, cs []*fragCandidate
 // that is itself hands-off keeps every pair (its row is manual whole), and
 // so does a row whose every fragment is hands-off.
 //
-// A fragment the owner may apply himself (ownerEligible: iTunes-tracked by
-// its own row's iTunes path alone, proven by content) is ALWAYS on a
-// "manual:" row of its own, marked owner-applicable (ownerRow), so the
-// owner's Apply names one book.
+// The fragments the owner may apply himself (ownerEligible: each
+// iTunes-tracked by its own row's iTunes path alone, proven by content) are
+// ALWAYS taken off the parent's copy row onto ONE owner row of their own,
+// "owner:<parent>" (ownerRow), marked owner-applicable: one Apply (owner)
+// retires them all or, on any refusal, none.
 func (f *fragmentFixer) splitManualCopies(lib *fragLibrary, parentID string, ps []fragPair, probe *fragProbe) ([]fragPair, []repairs.Row) {
 	if k, _ := f.guard(lib, []fragBook{lib.books[parentID]}, nil); k != "" {
 		return ps, nil
 	}
-	var keep, handsOff []fragPair
-	var owner []repairs.Row
+	var keep, handsOff, ownerPairs []fragPair
+	var held []repairs.Row
 	whys := map[string][2]string{}
 	for _, p := range ps {
 		kind, why := f.guard(lib, []fragBook{p.Frag.Book}, map[string][]string{p.Frag.Book.ID: {p.Frag.ImportPath}})
 		if kind == "" {
 			if it := p.Frag.itunesWhy(); it != "" {
 				kind, why = repairs.SkipITunes, "it is an iTunes book ("+it+"); iTunes books are never written"
-				if reason, whyNot := f.ownerEligible(lib, parentID, p, ps, probe); whyNot == "" {
-					owner = append(owner, f.ownerRow(lib, parentID, p, reason))
+				if whyNot := f.ownerEligible(lib, parentID, p, ps, probe); whyNot == "" {
+					ownerPairs = append(ownerPairs, p)
 					continue
 				} else {
 					why += "; not owner-applicable: " + whyNot
@@ -3152,10 +3156,12 @@ func (f *fragmentFixer) splitManualCopies(lib *fragLibrary, parentID string, ps 
 		handsOff = append(handsOff, p)
 		whys[p.Frag.Book.ID] = [2]string{kind, why}
 	}
-	if len(keep) == 0 {
-		return handsOff, owner
+	if len(ownerPairs) > 0 {
+		held = append(held, f.ownerRow(lib, parentID, ownerPairs))
 	}
-	held := owner
+	if len(keep) == 0 {
+		return handsOff, held
+	}
 	for _, p := range handsOff {
 		w := whys[p.Frag.Book.ID]
 		r := f.holdRow(lib, p.Frag, "manual", fragClassManual, w[0],
@@ -3598,9 +3604,8 @@ type fragParentState struct {
 	// the proof only while both are unchanged; nothing is re-read under
 	// the lock, and nothing is ever stored on a book or row.
 	ContentProofs []fragContentProof `json:"content_proofs,omitempty"`
-	// OwnerParent is set on an owner-applicable manual row
-	// (fragment_owner_apply.go): the parent the fragment copies. Replan
-	// rebuilds the row against it; the row id names only the fragment.
+	// OwnerParent is set on an owner row (fragment_owner_apply.go): the
+	// parent its fragments copy, which Apply checks against the row id.
 	OwnerParent string `json:"owner_parent,omitempty"`
 }
 
@@ -6274,15 +6279,11 @@ func (f *fragmentFixer) replanWith(ctx context.Context, planned repairs.Row, bea
 		return f.replanJoin(ctx, store, lib, hist, planned, beat)
 	case fragClassCarry:
 		return f.replanCarry(store, lib, planned)
-	case "manual":
-		// An owner-applicable row (fragment_owner_apply.go) is rebuilt
-		// against the parent its state names, every rule decided again;
-		// any other manual row is never applied and returns as planned.
-		var ps fragParentState
-		if len(planned.State) > 0 && json.Unmarshal(planned.State, &ps) == nil && ps.OwnerParent != "" {
-			return f.replanParent(store, lib, hist, planned, ps.OwnerParent)
-		}
-		return planned, nil
+	case fragRowOwner:
+		// The owner row (fragment_owner_apply.go) is rebuilt against its
+		// parent like a copy row: every content proof re-stat'ed, every
+		// owner rule decided again.
+		return f.replanParent(store, lib, hist, planned, rest)
 	default:
 		return planned, nil // held and ambiguous rows are never applicable; return as planned
 	}

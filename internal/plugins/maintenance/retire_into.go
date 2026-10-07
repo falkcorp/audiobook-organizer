@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retire_into.go
-// version: 1.16.1
+// version: 1.17.0
 // guid: dadb4da5-0f2d-4678-abf3-4ac97f3ecb66
 // last-edited: 2026-10-07
 
@@ -128,11 +128,21 @@ type retireOpts struct {
 	// (owner decision 2026-10-06: a bare iTunes path reference does not make
 	// a leftover iTunes-owned); duplicate-copies, through
 	// retireIntoAllowingITunesPath (its losers are judged by its own iTunes
-	// rules before the apply); and fragment-consolidation's owner apply
-	// (fragment_owner_apply.go applyOwner), only for a row the owner's own
-	// grant names, after ownerRetireRefusal re-read the row's iTunes path
-	// under the merge lock.
+	// rules before the apply); and fragment-consolidation's owner apply,
+	// through retireIntoOnlyAllowingITunesPath, only for a row the owner's
+	// own grant names, after ownerRetireRefusal re-read the row's iTunes
+	// path under the merge lock.
 	AllowITunesPath bool
+}
+
+// retireIntoOnlyAllowingITunesPath is retireIntoOnly for a book whose own
+// row carries an iTunes path: the fragment-consolidation owner apply
+// (fragment_owner_apply.go), only for a row the owner's grant names, after
+// ownerRetireRefusal. MayWrite stays nil, so the hand-off keeps the default
+// iTunes guard: the owner authorises retiring the fragment, never writing a
+// primary flag onto an iTunes-tracked member.
+func retireIntoOnlyAllowingITunesPath(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Writer, clock func() time.Time, fixerID, id, target, targetWhy string) (int, error) {
+	return retireIntoWith(ctx, p, store, w, clock, fixerID, id, target, nil, retireOpts{Only: targetWhy, AllowITunesPath: true})
 }
 
 // retireIntoOnly is retireInto for a target that must not be written
