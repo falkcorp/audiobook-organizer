@@ -1,5 +1,5 @@
 // file: internal/server/itunes_writeback_requeue.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1a7f4c2e-8d36-4b9a-b5e0-3c9d2f6a8e14
 // last-edited: 2026-10-07
 //
@@ -48,10 +48,15 @@ type writebackRequeueRequest struct {
 	BookIDs []string `json:"book_ids"`
 	// Kinds defaults to both "metadata" and "location".
 	Kinds []string `json:"kinds"`
-	// Limit, when > 0, queues at most this many of the selected books (the
-	// first by book id), so a large delta can be fed to the batcher in
-	// chunks. Run again after a chunk is written to queue the next.
+	// Limit, when > 0, queues at most this many of the selected books, so a
+	// large delta can be fed to the batcher in chunks. Books already pending
+	// are skipped before the limit applies, so a chunk the batcher keeps
+	// queued (dry-run mode, or a diff that does not converge) is not picked
+	// again.
 	Limit int `json:"limit"`
+	// AfterID is a cursor: only selected books with an id greater than it are
+	// considered. Pass the previous response's next_after_id to continue.
+	AfterID string `json:"after_id"`
 }
 
 // writebackRequeueRemoveRequest is the body of POST
@@ -139,8 +144,8 @@ func respondEnqueueError(c *gin.Context, err error) {
 // It plans every book (or the book_ids subset) with the flush's own planner
 // and selects the books where at least one track in the library differs.
 // dry_run (the default) returns counts and a sample of up to 50 books.
-// dry_run:false also puts the selected book ids (at most limit of them, when
-// limit > 0) on the queue. Library tracks
+// dry_run:false also puts the selected book ids on the queue: those after
+// after_id that are not already pending, at most limit of them when limit > 0. Library tracks
 // that no book claims ("removes") and DB PIDs missing from the library
 // ("adds") are only counted.
 func (s *Server) itunesWritebackRequeueHandler(c *gin.Context) {
@@ -183,10 +188,7 @@ func (s *Server) itunesWritebackRequeueHandler(c *gin.Context) {
 		return
 	}
 
-	toQueue := plan.SelectedBookIDs
-	if req.Limit > 0 && len(toQueue) > req.Limit {
-		toQueue = toQueue[:req.Limit]
-	}
+	toQueue, skippedPending, nextAfterID := s.requeueChunk(plan.SelectedBookIDs, req.AfterID, req.Limit)
 	resp := gin.H{
 		"dry_run":           dryRun,
 		"kinds":             kinds,
@@ -194,6 +196,9 @@ func (s *Server) itunesWritebackRequeueHandler(c *gin.Context) {
 		"target":            target,
 		"plan":              plan,
 		"limit":             req.Limit,
+		"after_id":          req.AfterID,
+		"skipped_pending":   skippedPending,
+		"next_after_id":     nextAfterID,
 		"selected_not_sent": len(plan.SelectedBookIDs) - len(toQueue),
 	}
 	if dryRun {
@@ -211,6 +216,33 @@ func (s *Server) itunesWritebackRequeueHandler(c *gin.Context) {
 	resp["already_pending"] = len(toQueue) - queued
 	resp["status"] = s.writeBackBatcher.Status()
 	httputil.RespondWithOK(c, resp)
+}
+
+// requeueChunk picks the books one requeue call sends. selected is sorted by
+// id. Books at or before afterID are skipped, then books already pending in
+// the batcher (counted in skippedPending), then at most limit (when > 0) are
+// taken. nextAfterID is the id of the last book taken when selected books
+// remain after it, else "". The pending check and the enqueue are not atomic;
+// EnqueueBooks still counts a book that turned pending in between as
+// already_pending, never twice.
+func (s *Server) requeueChunk(selected []string, afterID string, limit int) (toQueue []string, skippedPending int, nextAfterID string) {
+	toQueue = []string{}
+	for _, id := range selected {
+		if afterID != "" && id <= afterID {
+			continue
+		}
+		if s.writeBackBatcher.HasPendingBook(id) {
+			skippedPending++
+			continue
+		}
+		if limit > 0 && len(toQueue) == limit {
+			// More remain from here on (limit > 0, so toQueue is not
+			// empty): resume after the last one taken.
+			return toQueue, skippedPending, toQueue[len(toQueue)-1]
+		}
+		toQueue = append(toQueue, id)
+	}
+	return toQueue, skippedPending, ""
 }
 
 // itunesWritebackRequeueRemoveHandler handles

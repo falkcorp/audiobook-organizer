@@ -1,5 +1,5 @@
 // file: internal/server/itunes_writeback_requeue_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8d4f2b6a-1c73-4e95-a0b8-5f9e3d7c2a61
 // last-edited: 2026-10-07
 //
@@ -126,7 +126,7 @@ func callRequeue(t *testing.T, h gin.HandlerFunc, body string) (int, map[string]
 }
 
 func TestWritebackRequeue_DryRunIsTheDefault(t *testing.T) {
-	for _, body := range []string{"", "{}", `{"book_ids":[]}`, `{"dry_run":true}`} {
+	for _, body := range []string{"", "{}", `{"book_ids":[]}`, `{"dry_run":true}`, `{"dry_run":null}`} {
 		s, b := requeueTestServer(t, true)
 		code, resp := callRequeue(t, s.itunesWritebackRequeueHandler, body)
 		if code != http.StatusOK {
@@ -179,20 +179,61 @@ func TestWritebackRequeue_SubsetAndKinds(t *testing.T) {
 		t.Errorf("location-only subset: enqueued=%v bk-c=%v bk-b=%v", resp["enqueued"], b.HasPendingBook("bk-c"), b.HasPendingBook("bk-b"))
 	}
 
-	// limit chunks the selected set: first by book id.
-	s2, b2 := requeueTestServer(t, true)
-	code, resp = callRequeue(t, s2.itunesWritebackRequeueHandler, `{"dry_run":false,"limit":1}`)
-	if code != http.StatusOK || resp["enqueued"] != float64(1) || resp["selected_not_sent"] != float64(1) || !b2.HasPendingBook("bk-b") || b2.HasPendingBook("bk-c") {
-		t.Errorf("limit 1: %d %v", code, resp)
-	}
-
 	code, _ = callRequeue(t, s.itunesWritebackRequeueHandler, `{"kinds":["adds"]}`)
 	if code != http.StatusBadRequest {
 		t.Errorf("unknown kind: status %d, want 400", code)
 	}
-	code, _ = callRequeue(t, s.itunesWritebackRequeueHandler, `{"dryrun":false}`)
-	if code != http.StatusBadRequest {
-		t.Errorf("misspelled field: status %d, want 400", code)
+}
+
+// limit must not stall: a chunk the batcher keeps queued (dry-run mode keeps
+// every batch) is skipped on the next call, and after_id resumes a cursor.
+func TestWritebackRequeue_LimitSkipsPendingAndCursor(t *testing.T) {
+	s, b := requeueTestServer(t, true)
+	code, resp := callRequeue(t, s.itunesWritebackRequeueHandler, `{"dry_run":false,"limit":1}`)
+	if code != http.StatusOK || resp["enqueued"] != float64(1) || resp["next_after_id"] != "bk-b" || !b.HasPendingBook("bk-b") || b.HasPendingBook("bk-c") {
+		t.Fatalf("first chunk: %d %v", code, resp)
+	}
+	// Same request again, no cursor: bk-b is still pending, so bk-c is taken.
+	code, resp = callRequeue(t, s.itunesWritebackRequeueHandler, `{"dry_run":false,"limit":1}`)
+	if code != http.StatusOK || resp["enqueued"] != float64(1) || resp["skipped_pending"] != float64(1) || resp["next_after_id"] != "" || !b.HasPendingBook("bk-c") {
+		t.Fatalf("second chunk: %d %v", code, resp)
+	}
+	// Everything pending: nothing to send.
+	_, resp = callRequeue(t, s.itunesWritebackRequeueHandler, `{"limit":1}`)
+	if resp["would_enqueue"] != float64(0) || resp["skipped_pending"] != float64(2) {
+		t.Errorf("all pending: %v", resp)
+	}
+
+	// after_id cursor on a fresh batcher.
+	s2, b2 := requeueTestServer(t, true)
+	code, resp = callRequeue(t, s2.itunesWritebackRequeueHandler, `{"dry_run":false,"after_id":"bk-b"}`)
+	if code != http.StatusOK || resp["enqueued"] != float64(1) || b2.HasPendingBook("bk-b") || !b2.HasPendingBook("bk-c") {
+		t.Errorf("after_id: %d %v", code, resp)
+	}
+	if code, _ := callRequeue(t, s2.itunesWritebackRequeueHandler, `{"limit":-1}`); code != http.StatusBadRequest {
+		t.Errorf("negative limit: status %d, want 400", code)
+	}
+}
+
+// Malformed dry_run values are rejected, never read as "write".
+func TestWritebackRequeue_BadDryRunBodies(t *testing.T) {
+	s, b := requeueTestServer(t, true)
+	for name, h := range map[string]gin.HandlerFunc{
+		"requeue":        s.itunesWritebackRequeueHandler,
+		"requeue-remove": s.itunesWritebackRequeueRemoveHandler,
+	} {
+		for _, body := range []string{`{"dry_run":"false","book_ids":["bk-l"]}`, `{"dryrun":false,"book_ids":["bk-l"]}`} {
+			if code, resp := callRequeue(t, h, body); code != http.StatusBadRequest {
+				t.Errorf("%s %s: status %d %v, want 400", name, body, code, resp)
+			}
+		}
+		code, resp := callRequeue(t, h, `{"dry_run":null,"book_ids":["bk-l"]}`)
+		if code != http.StatusOK || resp["dry_run"] != true {
+			t.Errorf("%s null dry_run: %d %v, want a dry run", name, code, resp)
+		}
+	}
+	if st := b.Status(); st.PendingUpdates != 0 || st.PendingRemoves != 0 {
+		t.Errorf("bad bodies queued something: %+v", st)
 	}
 }
 
