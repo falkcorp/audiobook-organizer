@@ -1,5 +1,5 @@
 // file: internal/repairs/fixer.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 3e8b1c52-7a4d-4f19-9c06-5d2e8a7f1b34
 // last-edited: 2026-10-06
 
@@ -104,8 +104,18 @@ type Row struct {
 	// not anything about the row itself. A re-plan returning such a row is
 	// reported retry_later (OutcomeRetryLater, not settled), not
 	// changed_since_plan, so the same plan can be applied again once the
-	// condition clears. The re-plan-time counterpart of ErrRetryLater.
+	// condition clears -- but only when its RetryFingerprint equals the
+	// plan's. The re-plan-time counterpart of ErrRetryLater.
 	RetryLater bool `json:"retry_later,omitempty"`
+	// RetryFingerprint, on a RetryLater row, is the fingerprint the row would
+	// have once the transient condition clears with nothing else changed:
+	// the fixer computes it from the same inputs as Fingerprint, leaving out
+	// only the transient hold. The engine reports retry_later only when it
+	// equals the planned row's Fingerprint; otherwise some other input
+	// changed too and the row is changed_since_plan. Empty (a fixer that sets
+	// RetryLater without it) never matches, so such a row is
+	// changed_since_plan: fail closed.
+	RetryFingerprint string `json:"retry_fingerprint,omitempty"`
 	// State is fixer-private state stored WITH the plan: what Replan needs
 	// from plan time that the row as it is now cannot tell it (the ids of the
 	// rows a group was planned over, the values a compare-and-set must find).

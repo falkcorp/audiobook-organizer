@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/version_twin_metadata_review2_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: d63428b5-a8b1-4678-86f0-28e71e7b90a9
 // last-edited: 2026-10-06
 
@@ -523,4 +523,38 @@ func TestVersionTwinFixer_Review4_TwinRecordRuntimeDisagreementIsNotEvidence(t *
 	require.True(t, row.Applicable(), "%s: %s", row.Skipped, row.SkipReason)
 	require.Empty(t, row.Proposed["primary_asin"], "no evidence, no ASIN: %v", row.Evidence)
 	require.Equal(t, vtHoldEvidenceConflict, rows["gr4d"].Skipped, rows["gr4d"].SkipReason)
+}
+
+// Round 5: a re-plan held on the unbuilt index whose twin record was ALSO
+// refreshed since the plan (new record, so new candidate hash and identifiers)
+// is changed_since_plan, not retry_later: the transient hold does not mask the
+// change, and nothing is written.
+func TestVersionTwinFixer_Review5_UnbuiltIndexDoesNotMaskRefreshedRecord(t *testing.T) {
+	l := newVTLib(t)
+	l.book("p", "gr5a", true, nil)
+	tid := l.appliedTwin("t", "gr5a", vtSagaASIN("B0SYNTH051"), nil)
+	plan, rows := l.plan()
+	require.True(t, rows["gr5a"].Applicable(), rows["gr5a"].SkipReason)
+
+	fresh := vtSagaASIN("B0SYNTH052")
+	_, err := l.st.ModifyBook(tid, func(b *database.Book) error {
+		b.MetadataSourceHash = vtPtr(metafetch.CandidateSourceHash(fresh))
+		b.ASIN = vtPtr(fresh.ASIN)
+		return nil
+	})
+	require.NoError(t, err)
+	l.putCache(tid, []metafetch.MetadataCandidate{fresh}, "")
+	require.NoError(t, l.st.SetSetting("book_isbn_index_v1_done", "false", "bool", false))
+
+	held, err := l.fixer.Replan(context.Background(), nil, rows["gr5a"], &fakeReporter{})
+	require.NoError(t, err)
+	require.True(t, held.RetryLater, "the re-plan holds on the index: %s", held.SkipReason)
+	require.NotEqual(t, rows["gr5a"].Fingerprint, held.RetryFingerprint)
+
+	res := l.apply(plan, false, "gr5a")
+	require.Equal(t, 1, res.ChangedSincePlan, "outcomes %v rows %+v", res.ByOutcome, res.Rows)
+	require.Zero(t, res.RetryLater)
+	require.Equal(t, repairs.OutcomeChangedSincePlan, res.Rows[0].Outcome)
+	require.Nil(t, l.get("p").MetadataReviewStatus)
+	require.Empty(t, dcStr(l.get("p").ASIN))
 }

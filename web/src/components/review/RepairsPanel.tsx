@@ -1,5 +1,5 @@
 // file: web/src/components/review/RepairsPanel.tsx
-// version: 1.19.0
+// version: 1.19.1
 // guid: 9c4f1a73-2e58-4b06-a9d1-6e3b8c7f0d52
 // last-edited: 2026-10-06
 
@@ -830,7 +830,7 @@ function PlanView({ repairs }: RepairsPanelProps) {
               {repairs.applyResult.changed_since_plan > 0 &&
                 '. Rows that changed since the trial were left alone; re-run the trial to pick them up.'}
               {(repairs.applyResult.retry_later ?? 0) > 0 &&
-                '. Rows marked "Retry later" could not be checked right now and were not written; apply them again in a few minutes.'}
+                '. Rows marked "Retry later" could not be checked right now; apply them again in a few minutes.'}
             </Alert>
           )}
 
