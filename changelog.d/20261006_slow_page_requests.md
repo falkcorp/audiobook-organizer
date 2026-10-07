@@ -32,3 +32,7 @@
 - **Identical library-list cache misses share one build.** After a restart,
   14 identical `GET /audiobooks` requests used to build the same page in
   parallel, taking 44–160 s each.
+  - The shared build is cancelled when the last caller waiting on it
+    disconnects, and it has a hard 5-minute ceiling.
+  - A caller who leaves gets 499.
+  - Errors reach only the callers who waited and are never cached.
