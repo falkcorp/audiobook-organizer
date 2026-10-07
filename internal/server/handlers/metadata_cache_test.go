@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_test.go
-// version: 2.11.0
+// version: 2.12.0
 // guid: 6b1c0a94-2f7d-4c8e-9a15-3d0e7b28c4f1
 // last-edited: 2026-10-06
 
@@ -971,4 +971,54 @@ func TestBatchApplyFromCache_BulkMode(t *testing.T) {
 	newDispatchHandler(t, ops).BatchApplyFromCache(c)
 	require.Equal(t, http.StatusBadRequest, w.Code)
 	require.Zero(t, ops.calls, "an invalid mode enqueues nothing")
+}
+
+// listingFieldsStore is the mock store plus database.BookListingFieldsReader,
+// the capability the production store (memdb-backed) has.
+type listingFieldsStore struct {
+	*handlersmocks.MockMetadataCacheBookStore
+	fields map[string]database.BookListingFields
+	asked  int
+}
+
+func (s *listingFieldsStore) GetBookListingFields(ids []string) (map[string]database.BookListingFields, error) {
+	s.asked = len(ids)
+	out := map[string]database.BookListingFields{}
+	for _, id := range ids {
+		if f, ok := s.fields[id]; ok {
+			out[id] = f
+		}
+	}
+	return out, nil
+}
+
+// With the listing-fields capability, the handler reads title and review
+// status from it and makes NO full book read: GetBooksByIDs and GetBookByID
+// have no expectation on the mock, so a call to either fails the test. That
+// full read (two Pebble point reads and a JSON decode per cached book) was
+// seconds of every request on production.
+func TestListCachedCandidates_UsesListingFieldsNotFullBookReads(t *testing.T) {
+	mockStore := handlersmocks.NewMockMetadataCacheBookStore(t)
+	mockStore.EXPECT().GetRaw(mock.Anything).Return(nil, nil).Maybe()
+	mockStore.EXPECT().GetBookFilesForIDsCore(mock.Anything).Return(map[string][]database.BookFileCore{}, nil).Maybe()
+	store := &listingFieldsStore{MockMetadataCacheBookStore: mockStore, fields: map[string]database.BookListingFields{
+		"b0": {Title: "Zero", MetadataReviewStatus: "matched"},
+		"b1": {Title: "One"},
+		"b3": {Title: "Three", MetadataReviewStatus: "pending"},
+	}}
+	svc := handlersmocks.NewMockMetadataCacheFetchService(t)
+	svc.EXPECT().ListCachedSummaries(mock.Anything).Return([]metafetch.MetadataCacheSummary{
+		{BookID: "b0"}, {BookID: "b1"}, {BookID: "gone"}, {BookID: "b3"},
+	}, nil)
+
+	h := handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil, nil)
+	c, w := cachedCtx("status=pending&limit=1")
+	h.ListCachedCandidates(c)
+
+	body := decodeCachedBody(t, w)
+	require.Len(t, body.Data.Entries, 1)
+	assert.Equal(t, "b1", body.Data.Entries[0].BookID)
+	assert.Equal(t, "One", body.Data.Entries[0].Title)
+	assert.Equal(t, 2, body.Data.Total, "b1 and b3 are pending; b0 is matched; gone is an orphan")
+	assert.Equal(t, 4, store.asked)
 }

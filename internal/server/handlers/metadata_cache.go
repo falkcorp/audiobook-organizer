@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.28.0
+// version: 1.29.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-10-04
+// last-edited: 2026-10-06
 
 // Package handlers contains extracted HTTP handler types for the audiobook
 // organizer server. MetadataCacheHandler covers the persistent metadata-cache
@@ -333,79 +333,49 @@ func (h *MetadataCacheHandler) ListCachedCandidates(c *gin.Context) {
 	statusFilter := c.Query("status")
 	freshCutoff := time.Now().Add(-database.MetadataCacheTTL)
 
-	// Fetch every book in ONE batch read instead of a GetBookByID per summary,
-	// the same way GetCacheReviewResults does.
+	// Resolve every summary's book before filtering. This is required for
+	// CORRECTNESS, not just speed: review_status lives on the BOOK, not on the
+	// cache summary, so `status=pending&limit=5` must return five PENDING rows,
+	// which cannot be assembled without resolving every candidate row's book.
 	//
-	// This is required for CORRECTNESS, not just speed, and stays required even
-	// though a measurement on 2026-09-09 showed the point reads were a small part
-	// of this endpoint's cost. review_status lives on the BOOK, not on the cache
-	// summary, so a filtered page cannot be assembled without resolving every
-	// candidate row's book first: `status=pending&limit=5` must return five
-	// PENDING rows, not five rows of which some happen to be pending. Filtering
-	// before paginating means the per-book read now runs over the whole set on
-	// every call, which is exactly the shape that must not be an N+1.
+	// Only the title and review status are read, through the memdb-backed
+	// BookListingFieldsReader (one pointer read per row). This used to be
+	// GetBooksByIDs -- two Pebble point reads and a full JSON decode per book,
+	// 40-56k books per request -- and before that a GetBookByID per summary.
 	bookIDs := make([]string, 0, len(summaries))
 	for _, sum := range summaries {
 		bookIDs = append(bookIDs, sum.BookID)
 	}
-	booksByID := make(map[string]*database.Book, len(summaries))
-	if fetched, berr := h.store.GetBooksByIDs(bookIDs); berr == nil {
-		for i := range fetched {
-			booksByID[fetched[i].ID] = &fetched[i]
-		}
-	} else {
-		slog.Warn("ListCachedCandidates batch book fetch failed; falling back to per-book reads", "err", berr)
-	}
+	fields := h.cachedListingFields(bookIDs)
 
-	// lookupBook serves from the batch result and falls back to a point read only
-	// when the batch missed the row (or the batch call itself failed), so a
-	// partial batch degrades in behavior-preserving fashion rather than dropping
-	// entries.
-	lookupBook := func(id string) *database.Book {
-		if b, ok := booksByID[id]; ok {
-			return b
-		}
-		b, err := h.store.GetBookByID(id)
-		if err != nil || b == nil {
-			return nil
-		}
-		booksByID[id] = b
-		return b
+	// Filter first, then paginate. `total` below is the size of the FILTERED
+	// set, not of the returned page -- a UI rendering "showing 5 of N" needs N
+	// to be what it could page through. Only the returned page is turned into
+	// response rows: the Library chip asks for limit=1 and reads `total`, and
+	// building a map per row for 56k rows to send one was most of what was left.
+	type cachedRow struct {
+		sum          metafetch.MetadataCacheSummary
+		title        string
+		reviewStatus string
 	}
-
-	// Filter first, then paginate. `total` below is the size of the FILTERED set,
-	// not of the returned page -- a UI rendering "showing 5 of N" needs N to be
-	// what it could page through. It was len(out) before, which was correct only
-	// because there was no paging to tell the two apart.
-	filtered := make([]gin.H, 0, len(summaries))
+	filtered := make([]cachedRow, 0, len(summaries))
 	for _, sum := range summaries {
-		book := lookupBook(sum.BookID)
-		if book == nil {
+		f, ok := fields[sum.BookID]
+		if !ok {
 			// A cache row that outlived its book. Dropped, as before.
 			continue
 		}
-		var reviewStatus string
-		if book.MetadataReviewStatus != nil {
-			reviewStatus = *book.MetadataReviewStatus
-		}
 		switch statusFilter {
 		case "pending":
-			if reviewStatus != "" && reviewStatus != "pending" {
+			if f.MetadataReviewStatus != "" && f.MetadataReviewStatus != "pending" {
 				continue
 			}
 		case "matched":
-			if reviewStatus != "matched" {
+			if f.MetadataReviewStatus != "matched" {
 				continue
 			}
 		}
-		filtered = append(filtered, gin.H{
-			"book_id":         sum.BookID,
-			"fetched_at":      sum.FetchedAt,
-			"candidate_count": sum.CandidateCount,
-			"is_fresh":        sum.FetchedAt.After(freshCutoff),
-			"title":           book.Title,
-			"review_status":   reviewStatus,
-		})
+		filtered = append(filtered, cachedRow{sum: sum, title: f.Title, reviewStatus: f.MetadataReviewStatus})
 	}
 
 	total := len(filtered)
@@ -414,20 +384,68 @@ func (h *MetadataCacheHandler) ListCachedCandidates(c *gin.Context) {
 	// establishes (FetchedAt descending, book id breaking ties), which is total
 	// and stable -- without that tiebreak two rows sharing a timestamp could swap
 	// between calls and a paging client would see one twice and miss the other.
-	page := filtered
-	if offset >= len(page) {
-		page = nil
+	pageRows := filtered
+	if offset >= len(pageRows) {
+		pageRows = nil
 	} else {
-		page = page[offset:]
+		pageRows = pageRows[offset:]
 	}
-	if limit > 0 && limit < len(page) {
-		page = page[:limit]
+	if limit > 0 && limit < len(pageRows) {
+		pageRows = pageRows[:limit]
 	}
-	if page == nil {
-		page = []gin.H{}
+	page := make([]gin.H, 0, len(pageRows))
+	for _, r := range pageRows {
+		page = append(page, gin.H{
+			"book_id":         r.sum.BookID,
+			"fetched_at":      r.sum.FetchedAt,
+			"candidate_count": r.sum.CandidateCount,
+			"is_fresh":        r.sum.FetchedAt.After(freshCutoff),
+			"title":           r.title,
+			"review_status":   r.reviewStatus,
+		})
 	}
 
 	httputil.RespondWithOK(c, gin.H{"entries": page, "total": total})
+}
+
+// cachedListingFields resolves the title and review status of every id. It
+// reads through database.BookListingFieldsReader when the store has it
+// (memdb-backed); otherwise, or when that read fails, it falls back to one
+// GetBooksByIDs batch plus a point read for any id the batch missed -- the
+// path this handler always took before, kept so a partial failure degrades
+// rather than dropping rows.
+func (h *MetadataCacheHandler) cachedListingFields(ids []string) map[string]database.BookListingFields {
+	if r, ok := database.AsCapability[database.BookListingFieldsReader](h.store); ok {
+		out, err := r.GetBookListingFields(ids)
+		if err == nil {
+			return out
+		}
+		slog.Warn("ListCachedCandidates listing-fields read failed; falling back to book reads", "err", err)
+	}
+	out := make(map[string]database.BookListingFields, len(ids))
+	add := func(b *database.Book) {
+		f := database.BookListingFields{Title: b.Title}
+		if b.MetadataReviewStatus != nil {
+			f.MetadataReviewStatus = *b.MetadataReviewStatus
+		}
+		out[b.ID] = f
+	}
+	if fetched, berr := h.store.GetBooksByIDs(ids); berr == nil {
+		for i := range fetched {
+			add(&fetched[i])
+		}
+	} else {
+		slog.Warn("ListCachedCandidates batch book fetch failed; falling back to per-book reads", "err", berr)
+	}
+	for _, id := range ids {
+		if _, ok := out[id]; ok {
+			continue
+		}
+		if b, err := h.store.GetBookByID(id); err == nil && b != nil {
+			add(b)
+		}
+	}
+	return out
 }
 
 // GetCacheReviewResults handles GET /api/v1/audiobooks/metadata/cache/review.
