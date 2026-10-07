@@ -1,5 +1,5 @@
 <!-- file: docs/plans/2026-10-06-repairs-owner-apply.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 0b6f2d4e-8a31-4c57-9e12-7d5a3c9b1f60 -->
 <!-- last-edited: 2026-10-06 -->
 
@@ -61,8 +61,11 @@ always split onto its own row, so each button names one book.
 - `POST /api/v1/repairs/:fixer/owner-apply {plan_op_id, row_id}` takes one row at a time, and the write is implied (`dry_run:false`).
 - The handler refuses with 403 unless the request was authenticated interactively. That means a login session (cookie or session token) or a Cloudflare Access SSO identity. The owner's browser reaches prod through CF Access, where `RequireAuth` early-outs with no session, so CF Access SSO has to count. A CF service token never resolves a user (`internal/oauth/cfaccess.go`). API keys (`abk_`) are always refused.
 - The caller must also hold the `admin` role.
-- **Auth method recorded explicitly.** New `auth.AuthMethod` enum on the request context (`auth.WithAuthMethod` / `auth.AuthMethodFromContext`): `session`, `api_key`, `cf_access`, `abs_*`. It is set by the branch that authenticated the request: the RequireAuth session branch, `handleAPIKeyAuth`, `CloudflareAccessAuth`, and ABS `Bind`. It is not set by token transport, because an `abk_` token in the cookie still goes down the API-key path.
-- **Op params are never trusted.** The handler mints a one-shot in-memory grant (`repairs.OwnerGrants`): a 128-bit random nonce bound to user id, auth method, fixer id, plan op id and the row id, with a 15-minute TTL. It then enqueues `repairs.apply` with `owner_apply_row_ids` and `owner_grant`. The op **consumes** the grant (`Take`) before any write. Only rows named in a consumed grant can run owner mode. This means:
+- **CSRF.** The session cookie is `SameSite=Strict` and CORS grants no cross-origin preflight. On top of that the endpoint requires the custom header `X-Repairs-Owner-Apply: 1` (no form or simple cross-site request can send it), and refuses an `Origin` whose host is not the request host, and a `Sec-Fetch-Site` other than `same-origin`/`none`.
+- The bulk `POST /repairs/:fixer/apply` refuses `owner_apply_row_ids` outright.
+- **Auth method recorded explicitly.** New `auth.Method` enum on the request context (`auth.WithMethod` / `auth.MethodFromContext`): `session`, `session_delegated`, `api_key`, `cf_access`, `abs`. Only `session` and `cf_access` are `Interactive()`. `WithMethod` is downgrade-only: once set, a later stage can replace it only with a non-interactive method.
+- **Session origin (security review of 397a52f11).** A session is not proof of a person's sign-in: temp-login links (mintable with `users.manage`, including by an admin API key) and invite acceptance also create sessions. `Session.Origin` records how it was minted; only `password` and `oauth` sessions are `session`; every other session (temp login, invite, sessions created before this change) is `session_delegated`. It is set by the branch that authenticated the request: the RequireAuth session branch, `handleAPIKeyAuth`, `CloudflareAccessAuth`, and ABS `Bind`. It is not set by token transport, because an `abk_` token in the cookie still goes down the API-key path.
+- **Op params are never trusted.** The handler mints a one-shot in-memory grant (`repairs.OwnerGrants`): a 128-bit random nonce bound to user id, auth method, fixer id, plan op id and the row id, with a 2-hour TTL (`repairs.OwnerGrantTTL`; an apply can queue behind the one running apply and its scan stand-down wait). It then enqueues `repairs.apply` with `owner_apply_row_ids` and `owner_grant`. The op **consumes** the grant (`Take`) before any write. Only rows named in a consumed grant can run owner mode. This means:
   - `POST /operations/v2` with hand-written params finds no grant, so the row is `owner_apply_refused`;
   - retry and resume find the grant consumed (and resume is refused explicitly in any case), with the same result;
   - a server restart drops all grants.
