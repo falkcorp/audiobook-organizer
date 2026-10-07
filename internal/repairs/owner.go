@@ -57,11 +57,11 @@ type OwnerGrant struct {
 	// itself, and its OwnerITunesDatabaseOnly books) is reachable only from
 	// an Access-proven request, whichever caller mints it.
 	AccessEmail string
-	FixerID    string
-	PlanOpID   string
-	RowIDs     []string
-	IssuedAt   time.Time
-	ExpiresAt  time.Time
+	FixerID     string
+	PlanOpID    string
+	RowIDs      []string
+	IssuedAt    time.Time
+	ExpiresAt   time.Time
 }
 
 // OwnerGrants holds the grants minted by this process. In memory on
