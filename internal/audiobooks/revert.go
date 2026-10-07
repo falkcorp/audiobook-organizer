@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.64.0
+// version: 1.64.1
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-06
 
@@ -50,12 +50,16 @@ type revertServiceStore interface {
 	revertAuthorStore
 	revertFieldStateStore
 	revertTagStore
-	// The settle pass re-crowns a restored primary and demotes the rest of
-	// its group (versionprimary.Crown), or hands the group off.
+	revertSettleStore
+}
+
+// revertSettleStore is what the settle pass needs beyond the ledger: it
+// re-crowns a restored primary and demotes the rest of its group
+// (versionprimary.Crown), or hands the group off, and its iTunes guard
+// (itunesguard.MayWrite) reads a member's external ids (the member's
+// book_file rows come from revertBookFileStore).
+type revertSettleStore interface {
 	versionprimary.EnsureStore
-	// The settle pass's iTunes guard (itunesguard.MayWrite) reads a
-	// member's external ids (its book_file rows come from
-	// revertBookFileStore).
 	GetExternalIDsForBook(bookID string) ([]database.ExternalIDMapping, error)
 }
 
