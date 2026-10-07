@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/version_twin_metadata_fixer.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2f6c8e14-7b3a-4d59-9e02-c4a1b7d36e85
 // last-edited: 2026-10-06
 
@@ -123,8 +123,10 @@ var vtEditionFields = map[string]bool{"narrator": true, "asin": true, "isbn": tr
 // Edition-bound fields (vtEditionFields: narrator, ASIN, ISBN, abridged,
 // runtime) are copied only with positive evidence that the primary is the
 // twin's edition (vtEditionEvidence); without it they are dropped from the
-// apply and the rest of the record is still applied. A record whose ASIN a
-// live book outside the group carries is held (asin_on_book_outside_group).
+// apply and the rest of the record is still applied. A record when a live
+// book outside the group carries an identifier the apply would copy (ASIN,
+// ISBN-10, ISBN-13) is held (identifier_on_book_outside_group), at plan time
+// and again just before the write (vtPreWrite).
 //
 // ITunesDatabaseOnly: twins are often iTunes copies, which this fixer only
 // reads; the framework's iTunes path guard would otherwise hold every such
@@ -157,7 +159,7 @@ func (f *versionTwinFixer) Description() string {
 		"re-elected, and no other book is written. Narrator, ASIN, ISBN, abridgement and runtime are copied only when " +
 		"the runtimes or the narrator show the primary is the twin's edition. Held: twins that disagree, a different " +
 		"edition (runtime, abridgement or narrator), locked fields, iTunes-linked or not-ABS-listed primaries, a " +
-		"different title/author, an ASIN conflict or an ASIN a book outside the group carries, a primary whose fetch " +
+		"different title/author, an ASIN conflict or an ASIN or ISBN a book outside the group carries, a primary whose fetch " +
 		"found nothing, and Doctor Who / Big Finish / Torchwood (the books or the record)."
 }
 
@@ -182,6 +184,10 @@ type vtDetail struct {
 	// hash is the record's metadata_source_hash (applied_twin): the write
 	// re-checks that no book outside the group has gained it.
 	hash string
+	// ids are the identifiers the apply writes (applied_twin, with edition
+	// evidence): the write re-checks that no book outside the group has
+	// gained one since the plan.
+	ids vtIdentifiers
 	// resume: this op already wrote the row before a restart and only its
 	// journal row is missing (vtResumed); Apply records that row and writes
 	// nothing else. jOld / jNew are the journal row's values.
@@ -452,13 +458,19 @@ func vtResumed(rd vtReaders, planned, fresh repairs.Row, opID string) (repairs.R
 		if err != nil {
 			return repairs.Row{}, false, fmt.Errorf("read the operation changes of %s: %w", pid, err)
 		}
+		d.jOld, d.jNew = st.Prior, stamp
 		for _, c := range changes {
-			if c != nil && c.RevertedAt == nil && c.OperationID != opID &&
-				c.ChangeType == undo.ChangeTypeMetadataCacheCopy && c.NewValue == stamp {
+			if c == nil || c.RevertedAt != nil || c.ChangeType != undo.ChangeTypeMetadataCacheCopy || c.NewValue != stamp {
+				continue
+			}
+			if c.OperationID != opID {
 				return repairs.Row{}, false, nil
 			}
+			// This op journaled it already (only the checkpoint was lost):
+			// reuse that row's values, so Writer.Journal finds it and adds
+			// nothing, whatever old value it recorded.
+			d.jOld, d.jNew = c.OldValue, c.NewValue
 		}
-		d.jOld, d.jNew = st.Prior, stamp
 	default:
 		return repairs.Row{}, false, nil
 	}
@@ -794,7 +806,7 @@ func (f *versionTwinFixer) row(rd vtReaders, gid string, members []database.Book
 			"title and author) and has none", t.core.ID, cand.Source, vtRecord(cand))
 		b.r.Fingerprint = vtFingerprint(b.r, strings.Join(b.fp, "\x00"))
 		b.r.Detail = &vtDetail{class: b.r.Class, groupID: gid, primaryID: p.core.ID, twinID: t.core.ID, cand: cand,
-			title: util.NormalizeTitle(p.core.Title), asin: dcStr(p.core.ASIN), fields: fields, hash: hash}
+			title: util.NormalizeTitle(p.core.Title), asin: dcStr(p.core.ASIN), fields: fields, hash: hash, ids: wIDs}
 		return b.r, true, nil
 	} else {
 		if why := vtIdentity(pBook.Title, pAuthors, tBook.Title, tAuthors); why != "" {
@@ -1094,8 +1106,9 @@ func vtRuntimesAgree(a, b int) bool {
 //     recorded two editions), so that is a conflict, not evidence. Without
 //     a narrator match the row stays applicable without the edition fields.
 //   - narrator: the primary already carries the record's narrator. Evidence
-//     only when fewer than two runtimes are known, so a runtime comparison
-//     was not possible at all.
+//     unless two known runtimes are more than 1% apart (the conflict above);
+//     an unknown runtime never takes it away (primary unknown, twin and
+//     record agreeing is still narrator evidence).
 //
 // An empty narrator or an unknown runtime is never evidence.
 func vtEditionEvidence(p *database.BookCore, cand *metafetch.MetadataCandidate, pSec, tSec int) (evidence, conflict string) {
@@ -1131,8 +1144,9 @@ func vtEditionEvidence(p *database.BookCore, cand *metafetch.MetadataCandidate, 
 			"apart (primary %s, twin %s, record %s): one narrator may have recorded two editions, so the narrator is not "+
 			"evidence of this one and the record's ASIN could be another edition's", cand.Narrator,
 			vtSecStr(pSec), vtSecStr(tSec), vtSecStr(rec))
-	case narrator && len(known) < 2:
-		return fmt.Sprintf("the primary already carries the record's narrator %q (runtimes not comparable)", cand.Narrator), ""
+	case narrator:
+		return fmt.Sprintf("the primary already carries the record's narrator %q (no two known runtimes more than 1%% "+
+			"apart)", cand.Narrator), ""
 	}
 	return "", ""
 }
@@ -1360,6 +1374,19 @@ func vtPreWrite(rd vtReaders, d *vtDetail) (map[string]bool, error) {
 			return nil, errVTChanged("the record is now carried by %s outside version group %s", strings.Join(outside, ", "), d.groupID)
 		}
 	}
+	// An identifier the apply copies, gained by a book outside the group
+	// since the plan.
+	elsewhere, indexed, err := vtIdentifiersOutsideGroup(rd, d.groupID, d.ids)
+	switch {
+	case err != nil:
+		return nil, err
+	case !indexed:
+		return nil, fmt.Errorf("%w: the ISBN/ASIN index is not built, so it cannot be told whether a book outside "+
+			"version group %s carries the record's %s", repairs.ErrRetryLater, d.groupID, d.ids.String())
+	case len(elsewhere) > 0:
+		return nil, errVTChanged("the record's %s is now carried by %s outside version group %s", d.ids.String(),
+			strings.Join(elsewhere, ", "), d.groupID)
+	}
 	cleared := make(map[string]bool, len(paths))
 	for _, p := range paths {
 		cleared[p] = true
@@ -1383,7 +1410,8 @@ func vtPreWrite(rd vtReaders, d *vtDetail) (map[string]bool, error) {
 //   - for an apply, no book outside the group carries the record, read from
 //     memdb only (memHash). memdb disabled, still warming up or missing rows
 //     cannot answer without the full scan, so the row is refused
-//     (changed_since_plan) instead: re-run the apply once memdb is serving.
+//     (retry_later, repairs.ErrRetryLater) instead: re-run the apply once
+//     memdb is serving.
 //
 // The reads take no lock of their own, so none can wait on the stripe held
 // here.
@@ -1411,9 +1439,11 @@ func vtWriteGuard(rd vtReaders, d *vtDetail, cleared map[string]bool, b *databas
 	if d.hash != "" {
 		books, err := rd.memHash(d.hash)
 		if err != nil {
-			return errVTChanged("cannot tell without a full book scan, which never runs under the write lock, whether a "+
-				"book outside version group %s carries the record (%v); re-run the apply once memdb is serving reads",
-				d.groupID, err)
+			// Nothing about the row changed: retry_later, so the same plan
+			// can be applied again once memdb serves reads.
+			return fmt.Errorf("%w: cannot tell without a full book scan, which never runs under the write lock, "+
+				"whether a book outside version group %s carries the record (%v); re-run the apply once memdb is "+
+				"serving reads", repairs.ErrRetryLater, d.groupID, err)
 		}
 		var outside []string
 		for i := range books {

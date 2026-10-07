@@ -1,11 +1,12 @@
 // file: internal/database/memdb_metadata_hash_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c3e1b95-0d4a-4f28-8e61-b2a94f6d0c18
-// last-edited: 2026-09-13
+// last-edited: 2026-10-06
 
 package database
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"testing"
@@ -126,4 +127,41 @@ func BenchmarkGetBooksByMetadataSourceHash(b *testing.B) {
 		})
 	}
 	p.UseMemDB = true
+}
+
+// TestGetBooksByMetadataSourceHashInMemory pins the memdb-only lookup the
+// version twin fixer's under-lock guard uses: after warmup it answers like the
+// fast path; a memdb that lost book rows answers ErrMemdbIncomplete; memdb off
+// or not published answers ErrMemDBNotReady. It never falls back to the scan
+// (the error cases return no books at all).
+func TestGetBooksByMetadataSourceHashInMemory(t *testing.T) {
+	store, cleanup := setupPebbleTestDB(t)
+	defer cleanup()
+	live := seedMetadataHashFixture(t, store)
+	p, ok := store.(*PebbleStore)
+	require.True(t, ok)
+	p.WaitForWarmup()
+	require.True(t, p.IsMemReady())
+
+	books, err := p.GetBooksByMetadataSourceHashInMemory("h-dup")
+	require.NoError(t, err)
+	require.Equal(t, live, sortedIDs(books))
+
+	p.UseMemDB = false
+	books, err = p.GetBooksByMetadataSourceHashInMemory("h-dup")
+	require.True(t, errors.Is(err, ErrMemDBNotReady), "UseMemDB=false: %v", err)
+	require.Nil(t, books)
+	p.UseMemDB = true
+
+	m := p.mem()
+	p.memPtr.Store(nil)
+	books, err = p.GetBooksByMetadataSourceHashInMemory("h-dup")
+	require.True(t, errors.Is(err, ErrMemDBNotReady), "unpublished: %v", err)
+	require.Nil(t, books)
+	p.memPtr.Store(m)
+
+	m.recordLostRows(memTableBooks, 1)
+	books, err = p.GetBooksByMetadataSourceHashInMemory("h-dup")
+	require.True(t, errors.Is(err, ErrMemdbIncomplete), "lost rows: %v", err)
+	require.Nil(t, books)
 }

@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.155.0
+// version: 2.156.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-06
 
@@ -7988,7 +7988,8 @@ export type RepairOutcome =
   | 'skipped_guard'
   | 'not_applicable'
   | 'failed'
-  | 'aborted_standdown_lost';
+  | 'aborted_standdown_lost'
+  | 'retry_later';
 
 export interface RepairRowResult {
   row_id: string;
@@ -8009,6 +8010,8 @@ export interface RepairApplyResult {
   changed_since_plan: number;
   partially_applied: number;
   failed: number;
+  /** Rows the fixer could not check right now (nothing written); re-apply later. */
+  retry_later?: number;
   book_writes?: number;
   history_rows?: number;
   history_rows_failed?: number;

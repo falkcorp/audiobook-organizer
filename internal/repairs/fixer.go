@@ -1,5 +1,5 @@
 // file: internal/repairs/fixer.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3e8b1c52-7a4d-4f19-9c06-5d2e8a7f1b34
 // last-edited: 2026-10-06
 
@@ -46,6 +46,15 @@ const (
 // The engine also produces this outcome itself when a re-plan's fingerprint
 // differs from the stored plan's.
 var ErrChangedSincePlan = errors.New("repairs: row changed since it was planned")
+
+// ErrRetryLater is returned (wrapped) by a fixer's Apply that wrote nothing
+// because a check it must make cannot be answered right now without slow
+// work it may not do there (for the version twin fixer: memdb still warming
+// up, so the record-hash check under the write lock would need a full scan).
+// The row is reported retry_later, not changed_since_plan: nothing about the
+// row changed, and the same plan can be applied again once the condition
+// clears. It is checked before ErrChangedSincePlan.
+var ErrRetryLater = errors.New("repairs: row cannot be checked right now; retry later")
 
 // ErrPartiallyApplied is returned (wrapped) by a fixer's Apply that wrote
 // part of a row before finding a change. It is checked before

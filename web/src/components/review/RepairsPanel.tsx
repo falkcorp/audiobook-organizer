@@ -1,7 +1,7 @@
 // file: web/src/components/review/RepairsPanel.tsx
-// version: 1.17.1
+// version: 1.18.0
 // guid: 9c4f1a73-2e58-4b06-a9d1-6e3b8c7f0d52
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 /**
  * The repairs lane's surface: a rail of fixers and the selected fixer's trial.
@@ -97,6 +97,7 @@ function applySummary(la: RepairOpRef | undefined): string | null {
   ];
   if (o.changed_since_plan) parts.push(`changed ${o.changed_since_plan}`);
   if (o.failed) parts.push(`failed ${o.failed}`);
+  if (o.retry_later) parts.push(`retry later ${o.retry_later}`);
   return `Last apply ${ageOf(la.completed_at ?? la.queued_at)}${la.dry_run ? ' (preview)' : ''}: ${parts.join(', ')}`;
 }
 
@@ -109,6 +110,7 @@ const OUTCOME_LABEL: Record<string, string> = {
   not_applicable: 'Not applicable',
   failed: 'Failed',
   aborted_standdown_lost: 'Stopped: scan resumed',
+  retry_later: 'Retry later (nothing written)',
 };
 
 const OUTCOME_COLOR: Record<
@@ -123,6 +125,7 @@ const OUTCOME_COLOR: Record<
   not_applicable: 'default',
   failed: 'error',
   aborted_standdown_lost: 'error',
+  retry_later: 'warning',
 };
 
 function OutcomeChip({ result }: { result: RepairRowResult }) {

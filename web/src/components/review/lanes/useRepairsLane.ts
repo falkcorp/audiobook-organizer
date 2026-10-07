@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useRepairsLane.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7b1e5c28-3a94-4d6f-8e02-c5f9a1d7b340
-// last-edited: 2026-09-29
+// last-edited: 2026-10-06
 
 /**
  * The repairs lane's data layer: fixers, their trials (plans), plan rows, and
@@ -114,6 +114,8 @@ export function summarizeApply(r: RepairApplyResult): string {
     `failed ${r.failed}`,
   ];
   if (r.partially_applied > 0) parts.push(`partly applied ${r.partially_applied}`);
+  const retry = r.retry_later ?? r.by_outcome.retry_later ?? 0;
+  if (retry > 0) parts.push(`retry later ${retry}`);
   const guarded = r.by_outcome.skipped_guard ?? 0;
   if (guarded > 0) parts.push(`skipped by guard ${guarded}`);
   if (r.not_in_plan && r.not_in_plan.length > 0) parts.push(`not in trial ${r.not_in_plan.length}`);
@@ -124,7 +126,9 @@ export function summarizeApply(r: RepairApplyResult): string {
 }
 
 function applySeverity(r: RepairApplyResult): 'success' | 'warning' {
-  return r.failed > 0 || r.partially_applied > 0 || r.aborted || r.dry_run ? 'warning' : 'success';
+  return r.failed > 0 || r.partially_applied > 0 || (r.retry_later ?? 0) > 0 || r.aborted || r.dry_run
+    ? 'warning'
+    : 'success';
 }
 
 /** The newest completed plan the lane has seen for a fixer. */
@@ -153,8 +157,8 @@ function withNewerPlan(
 /**
  * Outcomes after which a row is not re-sent from the same plan: it was written
  * (in full or in part), or the server refused it as changed or not applicable
- * and will again until a new trial. Failed, aborted and guard-skipped rows
- * stay selectable: a retry can succeed.
+ * and will again until a new trial. Failed, aborted, retry-later and
+ * guard-skipped rows stay selectable: a retry can succeed.
  */
 export const SETTLED_OUTCOMES: ReadonlySet<string> = new Set([
   'applied',
