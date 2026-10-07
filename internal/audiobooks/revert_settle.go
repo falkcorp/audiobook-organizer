@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_settle.go
-// version: 1.5.2
+// version: 1.6.0
 // guid: 3f8c2a71-5d94-4e6b-b0a3-9c1e7d2f4a58
 // last-edited: 2026-10-06
 
@@ -99,19 +99,57 @@ func lockOperation(operationID string) func() {
 // handOffEvidence is what an operation's notes say about the primary
 // hand-off of one retired book's version group.
 type handOffEvidence struct {
-	// crowned: the members a hand-off of the operation WROTE explicit true
-	// on ("crowned:<id>" notes; a note journaled before 2026-10-06 may
-	// name a member it only kept, and cannot be told apart).
+	// crowned: the members a hand-off note of the operation names as made
+	// primary in a form that may mean a write: "wrote:<id>" and the
+	// ambiguous "crowned:<id>" of 2026-10-02..06 (never "kept:<id>").
+	// laterPick does not yield to them: the operation may have written
+	// their true, so the original is crowned back over them, as before.
 	crowned []string
+	// wrote: the members a note names as WRITTEN, only in the unambiguous
+	// "wrote:<id>" form (undo.HandOffWrote). Only these may have their
+	// flag put back past the iTunes guard (settleGroup's own set): an
+	// ambiguous "crowned:" note may name a member the hand-off only kept,
+	// whose flag the operation never wrote.
+	wrote []string
 	// recorded: the operation recorded how its hand-off ended -- a member
-	// crowned, a member kept without a write ("kept:<id>",
+	// made primary (any form), a member kept without a write ("kept:<id>",
 	// undo.HandOffKept), or a refusal that wrote nothing
 	// (undo.ChangeTypeBookPrimaryHandoffRefused). Every explicit-true
 	// member not in crowned then carries a true the operation never wrote.
 	// A hand-off note naming nobody (journaled before 2026-10-02), or no
-	// note at all (a retire cut off before its hand-off, or after it wrote
-	// and before its note), records nothing: the crown-back rule stands.
+	// note at all, records nothing: the crown-back rule stands.
+	//
+	// The crash windows, where no note says how a hand-off ended:
+	//   1. the hand-off wrote and the process died before its note: the
+	//      revert crowns the original back over the member it crowned,
+	//      undoing the write (correct);
+	//   2. the hand-off refused (nothing written) and the process died
+	//      before the refusal note: the revert crowns the original back and
+	//      demotes an incumbent the operation never wrote (the pre-fix
+	//      behaviour, for that window only);
+	//   3. a folder-books or duplicate-copies crown journaled its demote
+	//      rows and died before the crown: the rows are live for writes
+	//      that never happened; each demote revert finds its flag still
+	//      true (already restored), so it is not counted as touched and the
+	//      group is left alone.
 	recorded bool
+}
+
+// merge folds o into ev (a group's evidence is the union over its
+// originals, so the outcome never depends on which original is read first).
+func (ev handOffEvidence) merge(o handOffEvidence) handOffEvidence {
+	ev.recorded = ev.recorded || o.recorded
+	for _, id := range o.crowned {
+		if !slices.Contains(ev.crowned, id) {
+			ev.crowned = append(ev.crowned, id)
+		}
+	}
+	for _, id := range o.wrote {
+		if !slices.Contains(ev.wrote, id) {
+			ev.wrote = append(ev.wrote, id)
+		}
+	}
+	return ev
 }
 
 // handOffEvidenceOf collects every hand-off note's evidence, per retired
@@ -131,8 +169,9 @@ func handOffEvidenceOf(changes []*database.OperationChange) map[string]handOffEv
 				ev.recorded = true
 			} else if id, ok := undo.HandOffCrowned(c); ok {
 				ev.recorded = true
-				if !slices.Contains(ev.crowned, id) {
-					ev.crowned = append(ev.crowned, id)
+				ev = ev.merge(handOffEvidence{crowned: []string{id}})
+				if w, ok := undo.HandOffWrote(c); ok {
+					ev = ev.merge(handOffEvidence{wrote: []string{w}})
 				}
 			} else {
 				continue
@@ -392,20 +431,27 @@ func (rs *RevertService) settleGroup(opID, gid string, originals []string, owed 
 	// own journal records it, never inferred from the group's current
 	// state: an original (a book_primary_demote or hand-off row of this
 	// operation, or the owed record a failed settle of it left), or a member
-	// a book_primary_handoff note of this operation names as crowned, which
-	// means the hand-off wrote that member's true ("crowned:<id>", never
-	// "kept:<id>"). Putting such a flag back restores the state before the
-	// operation, which the approval of the operation's write already
-	// covered. The folder-books fixer depends on it: the owner cleared it
+	// a book_primary_handoff note of this operation names in the
+	// unambiguous "wrote:<id>" form (handOffEvidence.wrote). Never a
+	// "kept:<id>" member, and never one named only by the ambiguous
+	// "crowned:<id>" form, which was journaled for kept members too.
+	// Putting such a flag back restores the state before the operation,
+	// which the approval of the operation's write already covered. The folder-books fixer depends on it: the owner cleared it
 	// (2026-10-01, repairs.ITunesDatabaseOnly) to write the rows of books
 	// under books/itunes/**, and refusing the undo of its own write would
 	// leave the original's restored true beside the crowned member's.
+	// The group's evidence is the union over its originals, so neither the
+	// own set nor laterPick depends on which original is read first.
+	var ev handOffEvidence
+	for _, o := range originals {
+		ev = ev.merge(crowned[o])
+	}
 	own := map[string]bool{}
 	for _, o := range originals {
 		own[o] = true
-		for _, c := range crowned[o].crowned {
-			own[c] = true
-		}
+	}
+	for _, w := range ev.wrote {
+		own[w] = true
 	}
 	guard := itunesguard.MayWrite(rs.db, gid)
 	mayWrite := func(m *database.Book) error {
@@ -450,7 +496,7 @@ func (rs *RevertService) settleGroup(opID, gid string, originals []string, owed 
 		if !electable[o] {
 			continue
 		}
-		if later := laterPick(explicit, originals, crowned[o]); later != "" {
+		if later := laterPick(explicit, originals, ev); later != "" {
 			// The operation recorded how its hand-off ended, and another
 			// member is explicit primary that the operation did not write (a
 			// user's pick since, or an incumbent the hand-off kept or never

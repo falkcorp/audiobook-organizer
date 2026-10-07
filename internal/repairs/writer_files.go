@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_files.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 4d8a2f61-3c7e-4b19-8e05-9a1f6c3d7b28
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package repairs
 
@@ -286,6 +286,49 @@ func (w *Writer) JournalStep(bookID string, e UndoEntry, write func() error) err
 		return err
 	}
 	return w.journalStep(bookID, e, write)
+}
+
+// BookStep is one row of JournalSteps: the book it is journaled on and the
+// change it describes.
+type BookStep struct {
+	BookID string
+	Entry  UndoEntry
+}
+
+// JournalSteps is JournalStep for one write that makes several journaled
+// changes at once (a crown that demotes several books): every step is
+// journaled, then write runs once. write must return an error only when it
+// wrote NOTHING (a refusal before any write); every row this call journaled
+// is then voided, so the op revert never "restores" a change that never
+// happened. A journal failure part-way voids the rows already journaled.
+// The crash window of JournalStep stands: a crash between the rows and the
+// write leaves them live.
+func (w *Writer) JournalSteps(steps []BookStep, write func() error) error {
+	if err := w.denyTagsOnly("JournalSteps"); err != nil {
+		return err
+	}
+	rows := make([]journaledRow, 0, len(steps))
+	voidAll := func(cause error) error {
+		errs := []error{cause}
+		for i := len(rows) - 1; i >= 0; i-- {
+			if verr := w.voidRow(rows[i]); verr != nil {
+				errs = append(errs, verr)
+			}
+		}
+		return errors.Join(errs...)
+	}
+	for _, st := range steps {
+		row, err := w.journalRow(st.BookID, st.Entry.ChangeType, st.Entry.Field, st.Entry.Old, st.Entry.New)
+		if err != nil {
+			return voidAll(err)
+		}
+		rows = append(rows, row)
+	}
+	w.Touch()
+	if werr := write(); werr != nil {
+		return voidAll(werr)
+	}
+	return nil
 }
 
 // journalStep is JournalStep without the tags-only refusal: the tag

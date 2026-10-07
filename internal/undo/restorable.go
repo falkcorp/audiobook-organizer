@@ -1,5 +1,5 @@
 // file: internal/undo/restorable.go
-// version: 1.30.0
+// version: 1.31.0
 // guid: 6c1f0e9a-4b27-4d3e-9a58-e2b7c41d0f93
 // last-edited: 2026-10-06
 
@@ -112,12 +112,13 @@ const (
 	// the demote row's revert (versionprimary.Crown) undoes the hand-off.
 	// OldValue names the member the hand-off left primary, as
 	// HandOffNoteValue writes it ("" on rows journaled before 2026-10-02):
-	// "crowned:<id>" when the hand-off wrote that member's explicit true,
-	// "kept:<id>" (since 2026-10-06) when the member already carried it and
-	// the hand-off made nobody primary. The revert re-crowns BookID only
-	// while no OTHER member is explicit primary that the operation did not
-	// write (HandOffCrowned, HandOffKept). A "crowned:" row journaled before
-	// 2026-10-06 may name a kept member: those rows cannot be told apart.
+	// since 2026-10-06 "wrote:<id>" when the hand-off wrote that member's
+	// explicit true and "kept:<id>" when the member already carried it and
+	// the hand-off made nobody primary. "crowned:<id>" (2026-10-02 to
+	// 2026-10-06) is AMBIGUOUS: it was written for both, so it never proves
+	// the operation wrote the member's flag. The revert re-crowns BookID
+	// only while no OTHER member is explicit primary that the operation did
+	// not write (HandOffCrowned, HandOffWrote, HandOffKept).
 	ChangeTypeBookPrimaryHandoff = "book_primary_handoff"
 	// ChangeTypeBookPrimaryHandoffRefused: after retiring BookID (a primary
 	// it demoted), the operation's hand-off of the book's version group
@@ -836,21 +837,31 @@ func OperationRevertible(changes []*database.OperationChange) bool {
 	return false
 }
 
-// handOffCrownedPrefix starts a ChangeTypeBookPrimaryHandoff row's OldValue
-// that names the member the hand-off crowned (wrote explicit true on);
-// handOffKeptPrefix one that names the member it left primary without
-// writing it (already explicit true).
+// Prefixes of a ChangeTypeBookPrimaryHandoff row's OldValue, naming the
+// member the hand-off left primary:
+//   - handOffWrotePrefix: the hand-off WROTE that member's explicit true;
+//   - handOffKeptPrefix: the member already carried it (nothing written);
+//   - handOffCrownedPrefix: the ambiguous 2026-10-02..06 form, written for
+//     both; read, never written by a hand-off any more.
 const (
-	handOffCrownedPrefix = "crowned:"
+	handOffWrotePrefix   = "wrote:"
 	handOffKeptPrefix    = "kept:"
+	handOffCrownedPrefix = "crowned:"
 )
 
-// HandOffCrownedValue is the OldValue a hand-off note journals for the
-// member it made primary (id), or "" when it is not known.
-func HandOffCrownedValue(id string) string { return HandOffNoteValue(id, true) }
+// HandOffCrownedValue is the ambiguous "crowned:<id>" OldValue a hand-off
+// note carried from 2026-10-02 to 2026-10-06 (it does not say whether the
+// member's flag was written), or "" when id is not known. Hand-offs journal
+// HandOffNoteValue; this stays for reading and for tests of old rows.
+func HandOffCrownedValue(id string) string {
+	if id == "" {
+		return ""
+	}
+	return handOffCrownedPrefix + id
+}
 
 // HandOffNoteValue is the OldValue a hand-off note journals for the member
-// it left primary (id): "crowned:<id>" when the hand-off wrote id's explicit
+// it left primary (id): "wrote:<id>" when the hand-off wrote id's explicit
 // true (wrote; versionprimary.HandoffResult.WrotePrimary), "kept:<id>" when
 // id already carried it. "" when id is not known.
 func HandOffNoteValue(id string, wrote bool) string {
@@ -858,24 +869,38 @@ func HandOffNoteValue(id string, wrote bool) string {
 	case id == "":
 		return ""
 	case wrote:
-		return handOffCrownedPrefix + id
+		return handOffWrotePrefix + id
 	default:
 		return handOffKeptPrefix + id
 	}
 }
 
 // HandOffCrowned returns the member a hand-off note (c) recorded leaving
-// primary, crowned or kept, and false for a row that names none (journaled
-// before the field existed, or by a hand-off that did not know its winner).
-// HandOffKept tells the two apart.
+// primary, in any of its forms (wrote, kept, or the ambiguous crowned), and
+// false for a row that names none (journaled before the field existed, or by
+// a hand-off that did not know its winner). HandOffWrote and HandOffKept
+// tell the unambiguous forms apart.
 func HandOffCrowned(c *database.OperationChange) (string, bool) {
 	if c == nil || c.ChangeType != ChangeTypeBookPrimaryHandoff {
 		return "", false
 	}
-	if id, ok := strings.CutPrefix(c.OldValue, handOffCrownedPrefix); ok {
-		return id, id != ""
+	for _, p := range []string{handOffWrotePrefix, handOffKeptPrefix, handOffCrownedPrefix} {
+		if id, ok := strings.CutPrefix(c.OldValue, p); ok {
+			return id, id != ""
+		}
 	}
-	id, ok := strings.CutPrefix(c.OldValue, handOffKeptPrefix)
+	return "", false
+}
+
+// HandOffWrote reports whether hand-off note c records that the hand-off
+// WROTE the named member's explicit true ("wrote:<id>"). Only this form
+// proves the operation wrote that flag; the ambiguous "crowned:<id>" does
+// not.
+func HandOffWrote(c *database.OperationChange) (string, bool) {
+	if c == nil || c.ChangeType != ChangeTypeBookPrimaryHandoff {
+		return "", false
+	}
+	id, ok := strings.CutPrefix(c.OldValue, handOffWrotePrefix)
 	return id, ok && id != ""
 }
 
