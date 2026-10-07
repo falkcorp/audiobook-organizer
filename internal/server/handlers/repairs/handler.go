@@ -1,7 +1,7 @@
 // file: internal/server/handlers/repairs/handler.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 1d8e4c73-5a26-4b9f-8e03-7c2b9f6a1d58
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 // Package repairs serves the Repairs lane of /review (/api/v1/repairs/*):
 // list the fixers, start a plan, page a stored plan's rows, and start an
@@ -21,7 +21,8 @@
 // a password/OAuth session or a Cloudflare Access SSO identity; never an API
 // key, an ABS token or a temp-login session) holding the admin role, and
 // only for a same-origin request carrying the X-Repairs-Owner-Apply header
-// (CSRF: a custom header cannot be sent cross-site without a CORS preflight
+// (Sec-Fetch-Site same-origin, or without it an Origin naming this host; a
+// request showing neither is refused) (CSRF: a custom header cannot be sent cross-site without a CORS preflight
 // the server never grants, and the session cookie is SameSite=Strict). It
 // mints a one-shot grant and enqueues repairs.apply naming it; 403 for any
 // other caller, nothing enqueued.
@@ -389,26 +390,35 @@ func (h *Handler) OwnerApply(c *gin.Context) {
 }
 
 // sameOriginWhyNot is why r is not a same-origin request carrying the owner
-// apply header ("" when it is). Sec-Fetch-Site, when sent, decides alone: the
-// browser computes it from the page and request URLs, and no proxy rewrites
-// it, whereas r.Host can be an internal name behind cloudflared or the Vite
-// dev proxy while Origin is the public one. Only a client that sends no
-// Sec-Fetch-Site has its Origin (if any) compared with r.Host.
+// apply header ("" when it is). It fails closed: a request must positively
+// show it came from this server's own page.
+//
+// Sec-Fetch-Site, when sent, decides alone, and only "same-origin" passes:
+// the browser computes it from the page and request URLs, and no proxy
+// rewrites it, whereas r.Host can be an internal name behind cloudflared or
+// the Vite dev proxy while Origin is the public one. "same-site" (a sibling
+// subdomain), "cross-site" and "none" (a user-typed navigation, never a
+// fetch carrying a custom header) are refused. A client that sends no
+// Sec-Fetch-Site (an older browser, or a non-browser client) must send an
+// Origin naming r.Host; with neither header nothing shows where the request
+// came from, and it is refused.
 func sameOriginWhyNot(r *http.Request) string {
 	if r.Header.Get(OwnerApplyHeader) != "1" {
 		return "owner apply needs the " + OwnerApplyHeader + " header (sent by the Repairs page)"
 	}
 	if site := r.Header.Get("Sec-Fetch-Site"); site != "" {
-		if site != "same-origin" && site != "none" {
-			return "owner apply refused: cross-site request (" + site + ")"
+		if site != "same-origin" {
+			return "owner apply refused: not a same-origin request (Sec-Fetch-Site " + site + ")"
 		}
 		return ""
 	}
-	if origin := r.Header.Get("Origin"); origin != "" {
-		u, err := url.Parse(origin)
-		if err != nil || !strings.EqualFold(u.Host, r.Host) {
-			return "owner apply refused: origin " + origin + " is not this server"
-		}
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return "owner apply refused: the request shows neither Sec-Fetch-Site nor Origin, so it cannot be told to come from the Repairs page"
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" || !strings.EqualFold(u.Host, r.Host) {
+		return "owner apply refused: origin " + origin + " is not this server"
 	}
 	return ""
 }

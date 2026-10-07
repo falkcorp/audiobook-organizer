@@ -1,7 +1,7 @@
 // file: internal/server/handlers/repairs/owner_apply_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 4c8a1e57-3b29-4d6f-a0e4-6f2d9b7c1a83
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 package repairs
 
@@ -142,6 +142,11 @@ func TestOwnerApply_RefusesCrossSite(t *testing.T) {
 		"foreign origin, cross-site fetch": {OwnerApplyHeader: "1", "Origin": "https://evil.example", "Sec-Fetch-Site": "cross-site"},
 		"cross-site fetch":                 {OwnerApplyHeader: "1", "Sec-Fetch-Site": "cross-site"},
 		"same-site sibling":                {OwnerApplyHeader: "1", "Sec-Fetch-Site": "same-site"},
+		"navigation (none)":                {OwnerApplyHeader: "1", "Sec-Fetch-Site": "none"},
+		// Fail closed: nothing shows where the request came from (curl, a
+		// script replaying the session cookie, a browser stripping both).
+		"neither sec-fetch-site nor origin": {OwnerApplyHeader: "1"},
+		"empty origin host":                 {OwnerApplyHeader: "1", "Origin": "https://"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r, enq, _ := ownerSetup(t, ownerCaller{auth.MethodSession, ownerUser})
@@ -155,11 +160,12 @@ func TestOwnerApply_RefusesCrossSite(t *testing.T) {
 	rp, _, _ := ownerSetup(t, ownerCaller{auth.MethodSession, ownerUser})
 	require.Equal(t, http.StatusAccepted, ownerPost(rp, ownerPath, `{"plan_op_id":"op-owner-plan","row_id":"own"}`,
 		map[string]string{OwnerApplyHeader: "1", "Origin": "https://public.example.org", "Sec-Fetch-Site": "same-origin"}).Code)
-	// A non-browser client with the header and no Origin/Sec-Fetch-Site is
-	// still bound by the interactive-session requirement above.
+	// An older browser that sends no Sec-Fetch-Site still sends Origin on
+	// a POST: an Origin naming this host passes.
 	r, _, _ := ownerSetup(t, ownerCaller{auth.MethodSession, ownerUser})
 	require.Equal(t, http.StatusAccepted,
-		ownerPost(r, ownerPath, `{"plan_op_id":"op-owner-plan","row_id":"own"}`, map[string]string{OwnerApplyHeader: "1"}).Code)
+		ownerPost(r, ownerPath, `{"plan_op_id":"op-owner-plan","row_id":"own"}`,
+			map[string]string{OwnerApplyHeader: "1", "Origin": "https://books.example.com"}).Code)
 }
 
 // Only a row the plan marked owner-applicable can be granted.
