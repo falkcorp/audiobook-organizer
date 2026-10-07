@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_settle.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 3f8c2a71-5d94-4e6b-b0a3-9c1e7d2f4a58
 // last-edited: 2026-10-06
 
@@ -386,14 +386,20 @@ func (rs *RevertService) settleGroup(opID, gid string, originals []string, owed 
 	// Neither the crown nor the hand-off below writes an iTunes book's
 	// primary flag that the operation did not write: each asks this under
 	// the group lock about every member it would write, and refuses the
-	// whole write (ErrWriteRefused) instead. The exception is a member
-	// whose flag THIS operation wrote -- an original it demoted, or a
-	// member its hand-off crowned -- the folder-books fixer being cleared
-	// by the owner (2026-10-01, repairs.ITunesDatabaseOnly) to write the
-	// rows of books under books/itunes/**. Putting that flag back is the
-	// undo of the operation's own write, as the row reverts before this
-	// pass already do for the originals; refusing it would leave the group
-	// with the original's restored true beside the crowned member's.
+	// whole write (ErrWriteRefused) instead.
+	//
+	// The one exception is a member whose flag THIS operation wrote, as its
+	// own journal records it, never inferred from the group's current
+	// state: an original (a book_primary_demote or hand-off row of this
+	// operation, or the owed record a failed settle of it left), or a member
+	// a book_primary_handoff note of this operation names as crowned, which
+	// means the hand-off wrote that member's true ("crowned:<id>", never
+	// "kept:<id>"). Putting such a flag back restores the state before the
+	// operation, which the approval of the operation's write already
+	// covered. The folder-books fixer depends on it: the owner cleared it
+	// (2026-10-01, repairs.ITunesDatabaseOnly) to write the rows of books
+	// under books/itunes/**, and refusing the undo of its own write would
+	// leave the original's restored true beside the crowned member's.
 	own := map[string]bool{}
 	for _, o := range originals {
 		own[o] = true
