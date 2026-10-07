@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.75.10 -->
+<!-- version: 10.75.11 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-10-06 -->
+<!-- last-edited: 2026-10-07 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,55 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **CHAPTER-SETS-R5a** Chapter-set apply re-check (#3787 round 5): `refreshAudioOf`
+      (`internal/plugins/maintenance/fragment_folder_sets.go`) does not see a
+      lock-free repoint that moves ANOTHER book's row into the set's folder with
+      no book write (no change-log entry, no merge-lock hold, no matching path or
+      hash). Either document it next to the size+duration gap in its doc comment,
+      or read the folder's rows strictly (a strict by-folder lookup) in the
+      re-check.
+- [ ] **CHAPTER-SETS-R5b** Chapter-set apply (#3787 round 5): the fragments are not
+      re-checked for iTunes after the `afterLockedReplan` seam, only in the locked
+      re-plan just before it — a microsecond window in which an iTunes sync could
+      tag a fragment before the first write. Re-read the fragments' iTunes state in
+      the pre-write check, as the target and version-group checks already do.
+
+- [ ] **Merge bookmark copy should honour SliceMapping offset.**
+      `copyBookmarksForMerge` (`internal/merge/bookmark_copy.go`) copies a
+      retired book's bookmarks onto the survivor at their raw times, even
+      when the follow carries a `merge.SliceMapping` (the retired book is a
+      slice of the survivor at `OffsetSeconds`). Progress already maps
+      through the slice (`follow_journaled.go`), bookmarks do not, so a
+      bookmark on a slice lands at the wrong place in the survivor. Found in
+      PR #3791 review (consolidation-leftovers same-path twin). Map each
+      bookmark by the offset when the slice is mappable, keep raw (or skip)
+      when it is not, and keep the user-state "never lost" probe
+      (`owedBookmarks`) agreeing with whatever the copy does.
+
+- [ ] **PERF-REVIEW-WARM** Review page `GET /metadata/cache/review?view=index&all=true` still runs 2.6–4.2 s warm on prod (target < 3 s). The incremental snapshot is already built (metadata_cache_snapshot.go v2.1.0). The slow-listing phase log (snapshot / overlay / prepare / encode) only fires at ≥ 5 s, so the warm phase split on prod is unknown. After perf/slow-page-requests deploys:
+  - lower that threshold (or sample the phase timings at 2 s);
+  - read which phase dominates;
+  - fix that phase.
+
+  Cold builds (64–125 s) happen only in the first ~90 s after a restart. The summary index from that branch removes one of the build's two whole-cache decodes.
+- [ ] **PERF-RESTART-CADENCE** Prod restarted 7 times in 7 hours on 2026-10-06. Every restart drops memdb (about 130 s warmup), the review snapshot, the list cache and the metadata-cache summary index, and nearly every request over 60 s in Tempo was in the first minutes after one. Decide whether to batch deploys, and confirm none of the restarts were crashes.
+
+- [ ] **SCAN-ID-FOLLOWUPS** Scan identity hold (#3799) review follow-ups, non-blocking:
+      (1) a new import matched by content hash or an 80% segment vote copies its
+      partner's title/author/series with no proposal (`row()` returns
+      `byHash`/`bySegments`, `createdHere` suppresses it) — record a proposal at
+      least, and reconsider the segment-vote case; (2) when the org-id relink falls
+      through to the by-path save, gaps on the path row are filled from the
+      org-id row's held identity; (3) `scan_identity_proposal:<id>` keys are not
+      cleared on book delete/merge — `maintenance.scan-proposed-identity` must
+      tolerate a missing book, or clear them; (4) AI-parse history rows use
+      change type `scan` (source `scan.ai-parse`), so grouping by change type
+      counts AI fills as scan writes; (5) re-measure `scannerStore`'s method count
+      and fix the caveat comment in `internal/scanner/store.go`.
+
+- [ ] **SEARCH-V2-R4** #3801 round-4 follow-ups: (SF3) the swap's `ev.IsKnownAuthor(title)` and `knownAuthorFolder` read `nameEvidence`, which answers an authority read fault as "not known" without setting `resolveOpts.fault`, so during a fault a row fetched with the swap or the folder author reads stale and is re-asked — route both through the fault-aware path so `matchSearchFingerprint` judges both readings. (SF2) the bare `copyN` rule in `IsUnsearchableTitle` and `apocalypse` in `authorjunk.taglineGenreEnds` are not behind `NameEvidence.Verbatim`, so rows whose questions change only through them read stale (re-asked once) instead of matching as prior.
+- [ ] **TEST-SCANNER-WALLTIME** `go test -short ./internal/scanner/` takes ~6.5–10 min of wall time at ~26% CPU (587s alone, 2026-10-06), so it brushes go test's 10-minute default whenever the machine is busy (a full `go test ./...` timed out there). Find the sleep/timeout-bound tests and make them event-driven, or split the package's slow tests behind a tag.
 
 - [ ] **FETCH-QUERY-1** Series-and-number matching for titles that name only a
       series slot ("Some Series 03", "Series Book NN" with no name): the
