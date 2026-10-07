@@ -954,9 +954,11 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     ]
   );
   const scopedTagFacets = useScopedTagFacets(tagFacetListOptions);
-  // Until the first scoped answer lands (or if the endpoint fails before
-  // ever answering) the library-wide list is shown rather than nothing.
-  const tagCloudTags = scopedTagFacets.tags ?? availableTags;
+  // No library-wide fallback: those counts describe a different set of books
+  // (every tag row, trashed and non-primary copies included), which is the
+  // exact complaint this panel fixes. Nothing renders until the first scoped
+  // answer, and a failed query says so instead of showing another query's chips.
+  const tagCloudTags = scopedTagFacets.tags ?? [];
   // A chip is "on" when its tag narrows the current request — selected via
   // the sidebar, or a `tag:` term in the search box.
   const tagCloudSelected = useMemo(
@@ -987,18 +989,25 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     },
     [tagCloudSelected, selectedTags, handleTagFilterChange]
   );
-  const tagCloudEmptyMessage =
-    scopedTagFacets.tags !== null && scopedTagFacets.tags.length === 0
+  const tagCloudEmptyMessage = scopedTagFacets.error
+    ? "Couldn't load tags for these results."
+    : scopedTagFacets.tags !== null && scopedTagFacets.tags.length === 0
       ? 'No tags in these results.'
       : undefined;
 
   // Cancelling a slow load also clears the active tag filter — a slow tag
   // filter is exactly the case a user is likely cancelling out of, and
   // leaving it selected would just re-trigger the same slow query on the
-  // next render.
+  // next render. Tag chips put their tags in the search text (`tag:"x"`), so
+  // those terms are cleared too — otherwise a chip-added tag would survive the
+  // cancel that a sidebar-selected one does not.
   const handleCancelLoad = useCallback(() => {
     cancelLoad();
     handleTagFilterChange([]);
+    setSearchQuery((q) => {
+      const parsedTags = libraryTagsParam([], parseSearch(q)) ?? [];
+      return parsedTags.reduce((acc, t) => removeTagTerm(acc, t), q);
+    });
   }, [cancelLoad, handleTagFilterChange]);
 
   const {

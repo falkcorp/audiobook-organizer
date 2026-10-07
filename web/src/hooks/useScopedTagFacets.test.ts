@@ -1,5 +1,5 @@
 // file: web/src/hooks/useScopedTagFacets.test.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5e2a8c4d-7f1b-4d93-b6a0-3c9e1f7d2b46
 // last-edited: 2026-10-06
 
@@ -110,5 +110,26 @@ describe('useScopedTagFacets', () => {
       await Promise.resolve();
     });
     expect(result.current.tags).toEqual([{ tag: 'new', count: 1 }]);
+  });
+
+  it('a failed query never shows the previous query\'s chips', async () => {
+    vi.mocked(api.getScopedTagFacets)
+      .mockResolvedValueOnce({ tags: [{ tag: 'fantasy', count: 20 }], total: 20 })
+      .mockRejectedValueOnce(new Error('boom'));
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { result, rerender } = renderHook(
+      ({ opts }: { opts: api.BookListOptions }) => useScopedTagFacets(opts),
+      { initialProps: { opts: { search: 'a' } as api.BookListOptions } }
+    );
+    await flush();
+    expect(result.current.tags).toEqual([{ tag: 'fantasy', count: 20 }]);
+
+    rerender({ opts: { search: 'b' } });
+    // Loading the new query: the previous answer may stay on screen meanwhile.
+    expect(result.current.loading).toBe(true);
+    await flush();
+    expect(result.current.error?.message).toBe('boom');
+    expect(result.current.tags).toBeNull();
+    errSpy.mockRestore();
   });
 });

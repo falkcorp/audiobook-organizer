@@ -44,6 +44,12 @@ var tagCountSeekThreshold = 2000
 // reach; the TTL only backstops writes that bypass the change log.
 const scopedTagFacetsTTL = 10 * time.Minute
 
+// scopedTagFacetsBuildTimeout is the hard ceiling on one shared facets build.
+// A warm build is milliseconds and a cold full-library one well under a
+// second; one still running after this is not producing an answer anyone
+// will wait for.
+const scopedTagFacetsBuildTimeout = 2 * time.Minute
+
 // tagCountsForIDsStore is the large-set capability (PebbleStore).
 type tagCountsForIDsStore interface {
 	CountTagsForBookIDs(ids map[string]struct{}) (map[string]int, error)
@@ -98,7 +104,7 @@ func (svc *AudiobookService) MatchingBookIDs(ctx context.Context, search string,
 //
 // Cached per (normalized request, store change-log generation) when the
 // request's result depends only on book rows; concurrent identical misses
-// share one computation.
+// share one computation, cancelled when its last waiter leaves.
 func (svc *AudiobookService) ScopedTagFacets(ctx context.Context, search string, authorID, seriesID *int, f ListFilters) (ScopedTagFacets, error) {
 	key, cacheable := svc.scopedTagFacetsKey(search, authorID, seriesID, f)
 	if !cacheable || svc.tagFacets == nil {
@@ -107,24 +113,28 @@ func (svc *AudiobookService) ScopedTagFacets(ctx context.Context, search string,
 	if v, ok := svc.tagFacets.Get(key); ok {
 		return v, nil
 	}
-	v, err, _ := svc.tagFacetsFlight.Do(key, func() (any, error) {
-		// Detached from any single caller: a shared computation must not be
-		// cancelled because the first requester navigated away.
-		res, err := svc.computeScopedTagFacets(context.WithoutCancel(ctx), search, authorID, seriesID, f)
-		if err == nil {
+	// Shared among concurrent identical misses, and cancelled when the last
+	// caller waiting on it leaves (internal/flight): a client that sends many
+	// distinct scoped queries and disconnects cannot leave detached
+	// full-library counts running. Errors reach only the callers that waited
+	// and are never cached.
+	return svc.tagFacetsFlight.Do(ctx, key, scopedTagFacetsBuildTimeout, func(buildCtx context.Context) (ScopedTagFacets, error) {
+		res, err := svc.computeScopedTagFacets(buildCtx, search, authorID, seriesID, f)
+		if err == nil && buildCtx.Err() == nil {
 			svc.tagFacets.Set(key, res)
 		}
 		return res, err
 	})
-	if err != nil {
-		return ScopedTagFacets{}, err
-	}
-	return v.(ScopedTagFacets), nil
 }
 
 func (svc *AudiobookService) computeScopedTagFacets(ctx context.Context, search string, authorID, seriesID *int, f ListFilters) (ScopedTagFacets, error) {
 	ids, err := svc.MatchingBookIDs(ctx, search, authorID, seriesID, f)
 	if err != nil {
+		return ScopedTagFacets{}, err
+	}
+	// The last waiter may have left while the match set was built; do not
+	// start the tag scan for nobody.
+	if err := ctx.Err(); err != nil {
 		return ScopedTagFacets{}, err
 	}
 	counts, err := svc.countTagsForIDs(ids)

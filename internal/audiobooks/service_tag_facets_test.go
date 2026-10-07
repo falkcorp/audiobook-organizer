@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -173,4 +174,26 @@ func TestScopedTagFacetsKey_FailsClosed(t *testing.T) {
 	b, ok2 := svc.scopedTagFacetsKey("x", nil, nil, ListFilters{SortBy: "year", SortOrder: "desc"})
 	require.True(t, ok1 && ok2)
 	require.Equal(t, a, b)
+}
+
+// A caller whose request is already gone gets its own context error, and
+// nothing is cached for the key (a cancelled build must never be served).
+func TestScopedTagFacets_CancelledCallerGetsErrorNothingCached(t *testing.T) {
+	svc, _, _ := newScopedFacetsFixture(t)
+	svc.SetSearchResultCache(searchcache.New(searchcache.NewChangeLog(8), searchcache.Config{}))
+	f := ListFilters{LibraryState: "organized"}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := svc.ScopedTagFacets(ctx, "", nil, nil, f)
+	require.ErrorIs(t, err, context.Canceled)
+	key, ok := svc.scopedTagFacetsKey("", nil, nil, f)
+	require.True(t, ok)
+	require.Eventually(t, func() bool { return !svc.tagFacetsFlight.InFlight(key) }, 5*time.Second, time.Millisecond)
+	_, cached := svc.tagFacets.Get(key)
+	require.False(t, cached, "a cancelled build must not be cached")
+
+	// A live caller afterwards gets a fresh, complete answer.
+	got, err := svc.ScopedTagFacets(context.Background(), "", nil, nil, f)
+	require.NoError(t, err)
+	require.Positive(t, got.Total)
 }

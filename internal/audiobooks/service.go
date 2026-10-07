@@ -21,12 +21,11 @@ import (
 	"log/slog"
 	"time"
 
-	"golang.org/x/sync/singleflight"
-
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/flight"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 	"github.com/falkcorp/audiobook-organizer/internal/searchcache"
@@ -239,10 +238,11 @@ type AudiobookService struct {
 	// production, where activityService records them.
 	auditOverride activityRecorder
 	// tagFacets caches ScopedTagFacets answers and tagFacetsFlight collapses
-	// concurrent identical misses (service_tag_facets.go). Per service, not
-	// package-global, so two services over different stores never share one.
+	// concurrent identical misses, cancelling a build its last waiter left
+	// (service_tag_facets.go). Per service, not package-global, so two
+	// services over different stores never share one.
 	tagFacets       *cache.Cache[ScopedTagFacets]
-	tagFacetsFlight singleflight.Group
+	tagFacetsFlight flight.Group[ScopedTagFacets]
 }
 
 // SetActivityService wires the activity service for snapshot fallback in GetAudiobookTags.

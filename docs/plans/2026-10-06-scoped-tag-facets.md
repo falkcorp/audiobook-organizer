@@ -1,5 +1,5 @@
 <!-- file: docs/plans/2026-10-06-scoped-tag-facets.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 5b1e7c2a-9d3f-4e8a-b6c1-2f0a7d9e4c31 -->
 <!-- last-edited: 2026-10-06 -->
 
@@ -155,3 +155,21 @@ PR restores prior behaviour exactly.
 4. **genres/languages dropdown lists stay library-wide** (same reasoning);
    only the tag cloud is scoped.
 5. Hidden namespaces (`dedup:*`, `metadata:source:*`) stay hidden in the cloud.
+
+## Changes after review (implemented)
+
+- Concurrent identical misses share one build through `internal/flight`
+  (generic `Group[T]`, extracted from #3817's `list_flight.go`): cancelled
+  when its last waiter leaves, hard timeout, errors never cached. Used by the
+  list, the scoped tag facets, and the library-wide `/facets` build (warmer
+  and handler share it). No `context.WithoutCancel` detached builds.
+- The facets warmer waits (bounded, 5 min) for memdb before building.
+- Genre/language counts exclude soft-deleted books (memdb and Pebble paths).
+- Frontend: no library-wide fallback list; answers are stored with the
+  predicate they describe; a failed scoped request shows an error line.
+- Cancel-load also strips `tag:` terms from the search text.
+- Latency: measured cold on 5k synthetic books / 30k tag rows: 5.5 ms
+  (primary only), 21.8 ms (+ library_state), 0.9 ms (tag-narrowed). Prod
+  scale (~64k books) is extrapolated, not measured; the default-view build
+  materialises every matching book (tens of MB) and runs cold whenever the
+  store change-log generation has moved.
