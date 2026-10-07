@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.chipFilters.test.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: 0d6c2e8a-94b1-4f37-8a5e-2c71b9e04f36
-// last-edited: 2026-10-02
+// last-edited: 2026-10-06
 //
 // Owner, 2026-09-27: "the 11324 with no candidates let me click on the chips
 // at the left bar in the review page". Every summary chip filters the list to
@@ -303,15 +303,17 @@ describe('Search again on the no-candidate books', () => {
     expect(api.clearMetadataNoMatch).not.toHaveBeenCalled();
   });
 
-  it('selects every row on the page with one box', async () => {
+  it('selects every row on the page with one button, and the same button deselects', async () => {
     const user = userEvent.setup();
     await openWorkspace();
     await user.click(screen.getByTestId('chip-no_candidates'));
     await waitFor(() => expect(listedIds()).toHaveLength(2));
 
+    expect(screen.getByTestId('select-page')).toHaveTextContent('Select page (2)');
     await user.click(screen.getByTestId('select-page'));
     expect(screen.getByTestId('search-selected')).toHaveTextContent('Search again (2)');
-    expect(screen.getByTestId('select-page')).toBeChecked();
+    expect(screen.getByTestId('select-page')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('select-page')).toHaveTextContent('Deselect page (2)');
 
     await user.click(screen.getByTestId('select-page'));
     expect(screen.getByTestId('search-selected')).toHaveTextContent('Search again (0)');
@@ -371,5 +373,139 @@ describe('runtime differences', () => {
     expect(screen.getByTestId('runtime-hidden-count')).toHaveTextContent(
       '1 hidden by runtime differences'
     );
+  });
+});
+
+describe('selection bar: always on screen', () => {
+  const VIEW_MODES = [
+    ['Compact rows', 'compact'],
+    ['Two columns', 'two-column'],
+    ['Auto layout', 'auto'],
+  ] as const;
+
+  it.each(VIEW_MODES)('is above the spine in the %s view', async (label, mode) => {
+    const user = userEvent.setup();
+    await openWorkspace();
+    await user.click(screen.getByRole('button', { name: label }));
+    await waitFor(() =>
+      expect(screen.getByTestId('compare-spine')).toHaveAttribute('data-view-mode', mode)
+    );
+    const bar = screen.getByTestId('main-selection-bar');
+    expect(within(bar).getByTestId('main-select-page')).toBeInTheDocument();
+    expect(within(bar).getByTestId('main-select-all-matching')).toBeInTheDocument();
+    expect(within(bar).getByTestId('main-selection-clear')).toBeInTheDocument();
+    expect(within(bar).getByTestId('main-selection-count')).toHaveTextContent('0 selected');
+    // The rail's copy is there too.
+    expect(screen.getByTestId('selection-bar')).toBeInTheDocument();
+  });
+
+  it('stays, disabled, in a chip view with zero rows', async () => {
+    const user = userEvent.setup();
+    await openWorkspace();
+    await user.click(screen.getByTestId('chip-matched'));
+    await user.type(screen.getByLabelText('Title filter'), 'zzz-nothing');
+    await waitFor(() => expect(listedIds()).toHaveLength(0));
+
+    expect(screen.getByTestId('main-selection-bar')).toBeInTheDocument();
+    expect(screen.getByTestId('main-select-page')).toBeDisabled();
+    expect(screen.getByTestId('main-select-page')).toHaveTextContent('Select page (0)');
+    expect(screen.getByTestId('main-select-all-matching')).toBeDisabled();
+    expect(screen.getByTestId('main-select-all-matching')).toHaveTextContent(
+      'Select all 0 matching'
+    );
+    expect(screen.getByTestId('main-selection-clear')).toBeDisabled();
+    expect(screen.getByTestId('select-page')).toBeDisabled();
+  });
+
+  it('select page, select all matching and clear drive one selection', async () => {
+    const user = userEvent.setup();
+    await openWorkspace();
+    await user.click(screen.getByTestId('chip-no_candidates'));
+    await waitFor(() => expect(listedIds()).toHaveLength(2));
+
+    await user.click(screen.getByTestId('main-select-page'));
+    expect(screen.getByTestId('main-selection-count')).toHaveTextContent('2 selected');
+    expect(screen.getByLabelText('Select Book e1')).toBeChecked();
+
+    await user.click(screen.getByTestId('main-selection-clear'));
+    expect(screen.getByTestId('main-selection-count')).toHaveTextContent('0 selected');
+    expect(screen.getByLabelText('Select Book e1')).not.toBeChecked();
+
+    await user.click(screen.getByTestId('main-select-all-matching'));
+    expect(screen.getByTestId('main-selection-count')).toHaveTextContent(
+      '2 selected (all 2 matching)'
+    );
+    expect(screen.getByTestId('main-select-all-matching')).toBeDisabled();
+    // The rail copy reads the same selection.
+    expect(screen.getByTestId('selection-count')).toHaveTextContent('2 selected');
+  });
+});
+
+describe('chips combine with the title regex', () => {
+  it('narrows the chip rows by the regex and says so; other filters stay paused', async () => {
+    const user = userEvent.setup();
+    await openWorkspace();
+    await user.click(screen.getByTestId('chip-matched'));
+    // m2 is below every preset's score floor: a paused filter, so it shows.
+    await waitFor(() => expect(listedIds().sort()).toEqual(['m1', 'm2']));
+
+    await user.type(screen.getByLabelText('Title filter'), 'm2$');
+    await waitFor(() => expect(listedIds()).toEqual(['m2']));
+    expect(screen.getByTestId('chip-filter-banner')).toHaveTextContent(
+      'Showing the 1 matched books matching title /m2$/. Other filters are paused.'
+    );
+  });
+
+  it('keeps the plain banner text when no title filter is set', async () => {
+    const user = userEvent.setup();
+    await openWorkspace();
+    await user.click(screen.getByTestId('chip-matched'));
+    await waitFor(() => expect(listedIds()).toHaveLength(2));
+    expect(screen.getByTestId('chip-filter-banner')).toHaveTextContent(
+      'Showing the 2 matched books. Other filters are paused.'
+    );
+  });
+
+  it('drops a selected book whose title the new regex excludes', async () => {
+    const user = userEvent.setup();
+    await openWorkspace();
+    await user.click(screen.getByTestId('chip-matched'));
+    await waitFor(() => expect(listedIds()).toHaveLength(2));
+    await user.click(screen.getByTestId('main-select-page'));
+    expect(screen.getByTestId('main-selection-count')).toHaveTextContent('2 selected');
+
+    await user.type(screen.getByLabelText('Title filter'), 'm1$');
+    await waitFor(() =>
+      expect(screen.getByTestId('main-selection-count')).toHaveTextContent('1 selected')
+    );
+    expect(screen.getByLabelText('Select Book m1')).toBeChecked();
+  });
+
+  it('shows an invalid regex under the field instead of ignoring it', async () => {
+    const user = userEvent.setup();
+    await openWorkspace();
+    await user.click(screen.getByTestId('chip-matched'));
+    await waitFor(() => expect(listedIds()).toHaveLength(2));
+    await user.type(screen.getByLabelText('Title filter'), 'Book (');
+    expect(await screen.findByText(/^Invalid regex:/)).toBeInTheDocument();
+    expect(screen.getByLabelText('Title filter')).toHaveAttribute('aria-invalid', 'true');
+    // Nothing is filtered by a pattern that does not compile.
+    expect(listedIds()).toHaveLength(2);
+    expect(screen.getByTestId('chip-filter-banner')).toHaveTextContent(
+      'Showing the 2 matched books. Other filters are paused.'
+    );
+  });
+});
+
+describe('match score threshold', () => {
+  it('is a unitless match score, not a confidence percentage', async () => {
+    await openWorkspace();
+    const label = screen.getByTestId('match-score-label');
+    expect(label).toHaveTextContent(/^Min match score: \d+$/);
+    expect(label.textContent).not.toContain('%');
+    expect(screen.queryByText(/Min confidence/)).not.toBeInTheDocument();
+    expect(screen.getByRole('slider', { name: 'Minimum match score' })).toBeInTheDocument();
+    // The row chips use the same unitless number (score 2.0 -> 200).
+    expect(within(screen.getByTestId('queue-list')).getAllByText('200').length).toBeGreaterThan(0);
   });
 });

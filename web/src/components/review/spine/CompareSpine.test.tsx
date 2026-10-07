@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/CompareSpine.test.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: f30a6c85-2b47-4e19-93d0-8a5c1e7b402f
-// last-edited: 2026-09-01
+// last-edited: 2026-10-06
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
@@ -223,7 +223,9 @@ describe('what the reviewer must be able to see', () => {
     const { ctx } = makeCtx();
     renderSpine({ rows: [row('b1')], viewMode: 'compact', ctx });
     expect(screen.getByText('Mistborn: The Final Empire')).toBeInTheDocument();
-    expect(screen.getByText('92%')).toBeInTheDocument();
+    // A unitless match score: scores are additive and routinely exceed 100.
+    expect(screen.getByText('92')).toBeInTheDocument();
+    expect(screen.queryByText('92%')).not.toBeInTheDocument();
     expect(screen.getByText('audible')).toBeInTheDocument();
   });
 

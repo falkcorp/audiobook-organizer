@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.selectAll.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7a3f0c52-e1d9-4b86-9f24-58c0d6a1b3e7
-// last-edited: 2026-09-27
+// last-edited: 2026-10-06
 //
 // "Select all N matching" across pages (Gmail pattern), and bulk actions that
 // work on that whole set: chunked to what the server accepts, one progress
@@ -113,17 +113,22 @@ beforeEach(() => {
 });
 
 describe('select all matching', () => {
-  it('offers every matching book once the page is ticked, keeps it across pages, and clears', async () => {
+  it('offers every matching book without ticking the page first, keeps it across pages, and clears', async () => {
     const user = await openNoCandidates();
 
+    // Visible before anything is ticked: the owner could not find it when it
+    // only appeared after the page checkbox.
+    const bar = screen.getByTestId('main-selection-bar');
+    expect(within(bar).getByTestId('main-select-all-matching')).toHaveTextContent(
+      'Select all 1,203 matching'
+    );
     await user.click(screen.getByTestId('select-page'));
-    const banner = screen.getByTestId('select-all-matching-banner');
-    expect(banner).toHaveTextContent('All 25 on this page selected');
-    await user.click(within(banner).getByTestId('select-all-matching'));
+    expect(screen.getByTestId('main-selection-count')).toHaveTextContent('25 selected');
+    await user.click(within(bar).getByTestId('main-select-all-matching'));
 
     expect(screen.getByTestId('selected-count')).toHaveTextContent('1,203 selected');
-    expect(screen.getByTestId('select-all-matching-banner')).toHaveTextContent(
-      'All 1,203 matching selected'
+    expect(screen.getByTestId('main-selection-count')).toHaveTextContent(
+      '1,203 selected (all 1,203 matching)'
     );
     expect(screen.getByTestId('search-selected')).toHaveTextContent('Search again (1203)');
 
@@ -266,5 +271,44 @@ describe('lane: chunked apply and filter-change pruning', () => {
     act(() => result.current.setFilters({ titleFilter: '^Keep' }));
     await waitFor(() => expect(result.current.selectedIds.size).toBe(10));
     expect(result.current.allMatchingSelected).toBe(true);
+  });
+});
+
+describe('lane: title regex inside a chip view', () => {
+  const toast = vi.fn();
+
+  beforeEach(() => {
+    window.localStorage.setItem(STORAGE_KEYS.METADATA_REVIEW_LEVEL, 'off');
+    seed([matched('m1', 'Alpha one'), matched('m2', 'Beta two')]);
+  });
+
+  it('prunes only selections whose title fails the new regex, across chips', async () => {
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.results).toHaveLength(2));
+
+    // Picked in the matched chip...
+    act(() => result.current.toggleChipFilter('matched'));
+    act(() => result.current.setSelection(['m1', 'm2'], true));
+    // ...and in the no-candidates chip, plus an id with no loaded row.
+    act(() => result.current.toggleChipFilter('no_candidates'));
+    await waitFor(() => expect(result.current.unreviewableResults).toHaveLength(N));
+    act(() => result.current.setSelection(['e0', 'not-loaded'], true));
+    expect(result.current.selectedIds.size).toBe(4);
+
+    // The chip honours the regex...
+    act(() => result.current.setFilters({ titleFilter: '^(Alpha|Book e0$)' }));
+    await waitFor(() =>
+      expect(result.current.filteredResults.map((r) => r.book.id)).toEqual(['e0'])
+    );
+    // ...and the selection loses only m2, whose title fails it.
+    await waitFor(() =>
+      expect([...result.current.selectedIds].sort()).toEqual(['e0', 'm1', 'not-loaded'])
+    );
+
+    // A pattern that does not compile is reported and prunes nothing.
+    act(() => result.current.setFilters({ titleFilter: '(' }));
+    expect(result.current.titleFilterError).not.toBeNull();
+    expect([...result.current.selectedIds].sort()).toEqual(['e0', 'm1', 'not-loaded']);
+    expect(result.current.filteredResults).toHaveLength(N);
   });
 });

@@ -1,7 +1,7 @@
 // file: web/src/components/review/QueueRail.tsx
-// version: 1.12.0
+// version: 1.13.0
 // guid: 4f8c2b96-7a15-4e30-9d82-6b0e5a3c1f74
-// last-edited: 2026-09-30
+// last-edited: 2026-10-06
 //
 // The left rail: everything that decides WHICH candidates are in front of the
 // reviewer, plus a queue overview of the ones that made it through.
@@ -59,6 +59,7 @@ import HistoryIcon from '@mui/icons-material/History';
 import SearchIcon from '@mui/icons-material/Search';
 import type { CandidateResult } from '../../services/api';
 import {
+  DEFAULT_CONFIDENCE,
   PAGE_SIZE_OPTIONS,
   REVIEW_LEVELS,
   REVIEW_LEVEL_LABELS,
@@ -69,6 +70,7 @@ import {
   type ReviewLevel,
 } from './lanes/useMetadataLane';
 import { isDecided, scoreColor, type RowState } from './spine/rowState';
+import { SelectionBar } from './SelectionBar';
 
 /** Provider chips, in the inventory's order. */
 const PROVIDERS: Array<{ id: string; label: string }> = [
@@ -149,6 +151,8 @@ export interface QueueRailProps {
   sourceCounts: Record<string, number>;
   filters: MetadataFilters;
   setFilters: (patch: Partial<MetadataFilters>) => void;
+  /** Why the Title filter is not a valid regex, shown under the field. */
+  titleFilterError?: string | null;
   reviewLevel: ReviewLevel;
   setReviewLevel: (level: ReviewLevel) => void;
   /** True when a switch was flipped by hand after the level was picked. */
@@ -271,10 +275,11 @@ export function unreviewableReason(byCause?: {
 
 /** What turning on this level does, for the slider stop's tooltip. */
 function reviewLevelDescription(level: ReviewLevel): string {
-  if (level === 'off') return 'No preset: minimum confidence 85%, nothing extra hidden.';
+  if (level === 'off')
+    return `No preset: minimum match score ${DEFAULT_CONFIDENCE}, nothing extra hidden.`;
   const f = reviewLevelFilters(level);
   const parts = [
-    `Minimum confidence ${f.confidenceThreshold}%`,
+    `Minimum match score ${f.confidenceThreshold}`,
     'hide skipped',
     'hide multi-book matches',
   ];
@@ -283,6 +288,10 @@ function reviewLevelDescription(level: ReviewLevel): string {
   if (f.onlyTranscriptionMatched) parts.push('only transcription-matched');
   return `${REVIEW_LEVEL_LABELS[level]}: ${parts.join(', ')}.`;
 }
+
+/** Tooltip for the match-score threshold: why numbers above 100 are normal. */
+const MATCH_SCORE_HELP =
+  'Scores add up evidence from several signals; 100 \u2248 one strong signal agreeing, so values above 100 are normal.';
 
 /** Human label for the active chip, for the "showing" banner. */
 const CHIP_LABELS: Record<ChipFilter, string> = {
@@ -302,6 +311,7 @@ export function QueueRail({
   sourceCounts,
   filters,
   setFilters,
+  titleFilterError = null,
   reviewLevel,
   setReviewLevel,
   levelCustomised = false,
@@ -498,7 +508,11 @@ export function QueueRail({
           >
             {unreviewableLoading
               ? `Loading the ${CHIP_LABELS[chipFilter]} books…`
-              : `Showing the ${filteredCount.toLocaleString()} ${CHIP_LABELS[chipFilter]} books. Other filters are paused.`}
+              : `Showing the ${filteredCount.toLocaleString()} ${CHIP_LABELS[chipFilter]} books${
+                  filters.titleFilter && !titleFilterError
+                    ? ` matching title /${filters.titleFilter}/`
+                    : ''
+                }. Other filters are paused.`}
           </Alert>
         )}
         {chipFilter && unreviewableError && (
@@ -548,6 +562,10 @@ export function QueueRail({
           value={filters.titleFilter}
           onChange={(e) => setFilters({ titleFilter: e.target.value })}
           placeholder="regex"
+          // An invalid pattern filters nothing; say so rather than leave the
+          // reviewer to guess why the list did not narrow.
+          error={!!titleFilterError}
+          helperText={titleFilterError ? `Invalid regex: ${titleFilterError}` : undefined}
           slotProps={{
             input: {
               endAdornment: filters.titleFilter ? (
@@ -586,17 +604,26 @@ export function QueueRail({
           ))}
         </Stack>
 
+        {/*
+          A match SCORE, not a confidence percentage. Candidate scores are
+          additive sums of evidence (internal/metafetch/score_breakdown.go) and
+          routinely exceed 1.0, so 190 is a real threshold on that scale --
+          "190%" was both the wrong unit and the wrong word. The stored filter
+          value is unchanged; only how it reads.
+        */}
         <Box>
-          <Typography variant="caption" color="text.secondary">
-            Min confidence: {filters.confidenceThreshold}%
-          </Typography>
+          <Tooltip title={MATCH_SCORE_HELP} placement="right">
+            <Typography variant="caption" color="text.secondary" data-testid="match-score-label">
+              Min match score: {filters.confidenceThreshold}
+            </Typography>
+          </Tooltip>
           <Slider
             size="small"
             min={0}
             max={300}
             value={filters.confidenceThreshold}
             onChange={(_, v) => setFilters({ confidenceThreshold: v as number })}
-            aria-label="Minimum confidence"
+            aria-label="Minimum match score"
           />
         </Box>
 
@@ -651,50 +678,25 @@ export function QueueRail({
 
       {/* The queue itself. */}
       <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
-        <Box sx={{ px: 1.5, py: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
-          {onSelectPage && rows.length > 0 && (
-            <input
-              type="checkbox"
-              data-testid="select-page"
-              aria-label={`Select all ${rows.length} on this page`}
-              checked={rows.every((r) => isSelected(r.book.id))}
-              onChange={(e) =>
-                onSelectPage(
-                  rows.map((r) => r.book.id),
-                  e.target.checked
-                )
-              }
-            />
-          )}
+        <Box sx={{ px: 1.5, py: 1, display: 'flex', flexDirection: 'column', gap: 0.5 }}>
           <Typography variant="caption" color="text.secondary">
             {loading ? 'Loading…' : `${filteredCount} shown`}
           </Typography>
-        </Box>
-        {onSelectAllMatching &&
-          rows.length > 0 &&
-          filteredCount > rows.length &&
-          rows.every((r) => isSelected(r.book.id)) && (
-            <Alert severity="info" data-testid="select-all-matching-banner" sx={{ mx: 1, mb: 1 }}>
-              {allMatchingSelected ? (
-                <>
-                  All {filteredCount.toLocaleString()} matching selected.{' '}
-                  {onClearSelection && (
-                    <Button size="small" onClick={onClearSelection} data-testid="clear-selection-banner">
-                      Clear selection
-                    </Button>
-                  )}
-                </>
-              ) : (
-                <>
-                  All {rows.length.toLocaleString()} on this page selected
-                  {selectedCount > rows.length ? ` (${selectedCount.toLocaleString()} in all)` : ''}.{' '}
-                  <Button size="small" onClick={onSelectAllMatching} data-testid="select-all-matching">
-                    Select all {filteredCount.toLocaleString()} matching
-                  </Button>
-                </>
-              )}
-            </Alert>
+          {/* Always rendered, rows or not: see SelectionBar. */}
+          {onSelectPage && onSelectAllMatching && onClearSelection && (
+            <SelectionBar
+              pageIds={rows.map((r) => r.book.id)}
+              matchingCount={filteredCount}
+              selectedCount={selectedCount}
+              allMatchingSelected={allMatchingSelected}
+              isSelected={isSelected}
+              onSelectPage={onSelectPage}
+              onSelectAllMatching={onSelectAllMatching}
+              onClearSelection={onClearSelection}
+              disabled={loading}
+            />
           )}
+        </Box>
         <Box
           component="ul"
           data-testid="queue-list"
@@ -804,7 +806,8 @@ export function QueueRail({
                   <Chip
                     size="small"
                     color={scoreColor(r.candidate.score)}
-                    label={`${Math.round(r.candidate.score * 100)}%`}
+                    // Unitless match score, the same number the threshold uses.
+                    label={`${Math.round(r.candidate.score * 100)}`}
                   />
                 )}
               </Box>
