@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_copy_hashproof_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9a4e7c13-5b2d-4f86-a0c1-7e3d9b6f2a58
 // last-edited: 2026-10-06
 
@@ -338,6 +338,21 @@ func TestFragmentFixer_CopyContentProof(t *testing.T) {
 		out := f.apply(t, "op-plan", "op-apply", []string{m.RowID}, nil)
 		require.Zero(t, out.Applied, "%+v", out.Rows)
 		require.True(t, f.live(t, "libA"))
+	})
+
+	t.Run("a content-proven copy that turns iTunes after the locked re-plan is refused before any write", func(t *testing.T) {
+		t.Parallel()
+		f := copyClaimantsFixture(t, false)
+		linkParentToITunes(t, f)
+		f.writeSame(t, "same", hpParent, hpLibA, hpLibB)
+		plan := f.plan(t, "op-plan")
+		require.Contains(t, strings.Join(findRow(t, plan, "copy:"+f.ids["parent"]).Evidence, "\n"), fragEvContentHashPrefix)
+		fx := newFragmentFixer(f.p)
+		fx.afterLockedReplan = func() { setBookPID(t, f, f.ids["libB"], "PIDLATE000000001") }
+		err := applyRowInRun(t, f, fx, context.Background(), plan, "copy:"+f.ids["parent"])
+		require.ErrorIs(t, err, repairs.ErrChangedSincePlan)
+		require.True(t, f.live(t, "libA"), "refused whole: no sibling retired first")
+		require.True(t, f.live(t, "libB"))
 	})
 
 	t.Run("same size, other bytes renamed over the path with the mtime set back: changed since plan", func(t *testing.T) {
