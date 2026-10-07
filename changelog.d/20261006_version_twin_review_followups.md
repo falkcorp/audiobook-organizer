@@ -14,7 +14,7 @@
   before the apply body, so a refused row no longer leaves a new series row
   behind.
 - **Version twin fixer: a matching narrator no longer outweighs a runtime
-  gap.** Known runtimes more than 1% apart (under the 5% edition hold) with
+  gap.** Known runtimes more than max(1%, 60 s) apart (under the 5% edition hold) with
   the primary carrying the record's narrator are now held
   (`edition_evidence_conflict`) instead of copying the record's ASIN. The
   narrator counts as edition evidence only when fewer than two runtimes are

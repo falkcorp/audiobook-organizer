@@ -1,5 +1,5 @@
 // file: web/src/components/review/RepairsPanel.tsx
-// version: 1.18.0
+// version: 1.19.0
 // guid: 9c4f1a73-2e58-4b06-a9d1-6e3b8c7f0d52
 // last-edited: 2026-10-06
 
@@ -47,9 +47,16 @@ import {
   Typography,
 } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
-import type { RepairFixer, RepairOpRef, RepairRow, RepairRowResult } from '../../services/api';
+import type {
+  RepairFixer,
+  RepairOpRef,
+  RepairOutcome,
+  RepairRow,
+  RepairRowResult,
+} from '../../services/api';
 import {
   REPAIRS_PAGE_SIZES,
+  applySeverity,
   summarizeApply,
   type RepairTrialState,
   type RepairsLane,
@@ -101,7 +108,7 @@ function applySummary(la: RepairOpRef | undefined): string | null {
   return `Last apply ${ageOf(la.completed_at ?? la.queued_at)}${la.dry_run ? ' (preview)' : ''}: ${parts.join(', ')}`;
 }
 
-const OUTCOME_LABEL: Record<string, string> = {
+const OUTCOME_LABEL: Record<RepairOutcome, string> = {
   applied: 'Applied',
   would_apply: 'Would apply (preview)',
   changed_since_plan: 'Changed since trial',
@@ -113,10 +120,7 @@ const OUTCOME_LABEL: Record<string, string> = {
   retry_later: 'Retry later (nothing written)',
 };
 
-const OUTCOME_COLOR: Record<
-  string,
-  'success' | 'info' | 'warning' | 'error' | 'default'
-> = {
+const OUTCOME_COLOR: Record<RepairOutcome, 'success' | 'info' | 'warning' | 'error' | 'default'> = {
   applied: 'success',
   would_apply: 'info',
   changed_since_plan: 'warning',
@@ -129,12 +133,15 @@ const OUTCOME_COLOR: Record<
 };
 
 function OutcomeChip({ result }: { result: RepairRowResult }) {
+  // The server may send an outcome newer than this build knows: the lookups
+  // answer undefined for it and the fallbacks below show it raw.
+  const outcome = result.outcome as RepairOutcome;
   const chip = (
     <Chip
       size="small"
       variant="outlined"
-      color={OUTCOME_COLOR[result.outcome] ?? 'default'}
-      label={OUTCOME_LABEL[result.outcome] ?? result.outcome}
+      color={OUTCOME_COLOR[outcome] ?? 'default'}
+      label={OUTCOME_LABEL[outcome] ?? result.outcome}
       data-testid={`repairs-outcome-${result.row_id}`}
     />
   );
@@ -809,14 +816,7 @@ function PlanView({ repairs }: RepairsPanelProps) {
           )}
           {repairs.applyResult && (
             <Alert
-              severity={
-                repairs.applyResult.failed > 0 ||
-                repairs.applyResult.partially_applied > 0 ||
-                repairs.applyResult.aborted ||
-                repairs.applyResult.dry_run
-                  ? 'warning'
-                  : 'success'
-              }
+              severity={applySeverity(repairs.applyResult)}
               sx={{ mx: 2 }}
               data-testid="repairs-apply-result"
               action={
@@ -829,6 +829,8 @@ function PlanView({ repairs }: RepairsPanelProps) {
               {summarizeApply(repairs.applyResult)}
               {repairs.applyResult.changed_since_plan > 0 &&
                 '. Rows that changed since the trial were left alone; re-run the trial to pick them up.'}
+              {(repairs.applyResult.retry_later ?? 0) > 0 &&
+                '. Rows marked "Retry later" could not be checked right now and were not written; apply them again in a few minutes.'}
             </Alert>
           )}
 

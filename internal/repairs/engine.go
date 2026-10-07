@@ -1,5 +1,5 @@
 // file: internal/repairs/engine.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 9b3e7f40-2d15-4a86-9c1f-6e0a4d8b7c25
 // last-edited: 2026-10-06
 
@@ -661,6 +661,12 @@ func applyOne(ctx context.Context, f Fixer, params json.RawMessage, planned Row,
 	}
 	if fresh.RowID != planned.RowID {
 		out.Outcome, out.Error = OutcomeFailed, fmt.Sprintf("replan returned row %q for %q", fresh.RowID, planned.RowID)
+		return out
+	}
+	// A transient hold (Row.RetryLater) is checked before the fingerprint:
+	// the hold changes the fingerprint, but nothing about the row did.
+	if fresh.Skipped != "" && fresh.RetryLater {
+		out.Outcome, out.Skipped, out.Error = OutcomeRetryLater, fresh.Skipped, changedWhy(fresh)
 		return out
 	}
 	if fresh.Fingerprint != planned.Fingerprint {

@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRepairsLane.ts
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7b1e5c28-3a94-4d6f-8e02-c5f9a1d7b340
 // last-edited: 2026-10-06
 
@@ -125,7 +125,12 @@ export function summarizeApply(r: RepairApplyResult): string {
   return line;
 }
 
-function applySeverity(r: RepairApplyResult): 'success' | 'warning' {
+/**
+ * The severity of an apply result, for the toast and the result banner alike:
+ * warning when anything was not written (failed, partly applied, retry later,
+ * stopped early) or when it was only a preview.
+ */
+export function applySeverity(r: RepairApplyResult): 'success' | 'warning' {
   return r.failed > 0 || r.partially_applied > 0 || (r.retry_later ?? 0) > 0 || r.aborted || r.dry_run
     ? 'warning'
     : 'success';

@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/version_twin_metadata_review2_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d63428b5-a8b1-4678-86f0-28e71e7b90a9
 // last-edited: 2026-10-06
 
@@ -7,10 +7,12 @@ package maintenance
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -166,7 +168,7 @@ func TestVersionTwinFixer_Review2_S2_NarratorEvidenceWhenRuntimesUnknown(t *test
 	require.True(t, row.Applicable(), "%s: %s", row.Skipped, row.SkipReason)
 	require.Equal(t, "B0SYNTH023", row.Proposed["primary_asin"])
 	require.Contains(t, row.Evidence, "same edition: the primary already carries the record's narrator \""+
-		cand.Narrator+"\" (no two known runtimes more than 1% apart)")
+		cand.Narrator+"\" (no two known runtimes more than max(1%, 60 s) apart)")
 
 	res := l.apply(plan, false, "gs2b")
 	require.Equal(t, 1, res.Applied, "outcomes %v rows %+v", res.ByOutcome, res.Rows)
@@ -351,8 +353,8 @@ func TestVersionTwinFixer_Review2_S2_PrimaryAndRecordRuntimeEvidence(t *testing.
 	row := rows["gs2c"]
 	require.True(t, row.Applicable(), "%s: %s", row.Skipped, row.SkipReason)
 	require.Equal(t, "B0SYNTH027", row.Proposed["primary_asin"])
-	require.Contains(t, row.Evidence, "same edition: the primary's and the record's runtimes agree within 1% "+
-		"(primary 75600s, record 75600s; twin unknown)")
+	require.Contains(t, row.Evidence, "same edition: runtimes agree within max(1%, 60 s) "+
+		"(primary 75600s, twin unknown, record 75600s)")
 }
 
 // S2 (round 3): narrator evidence is not dropped because the primary's
@@ -373,7 +375,7 @@ func TestVersionTwinFixer_Review3_S2_NarratorEvidenceWithPrimaryRuntimeUnknown(t
 	require.True(t, row.Applicable(), "%s: %s", row.Skipped, row.SkipReason)
 	require.Equal(t, "B0SYNTH031", row.Proposed["primary_asin"])
 	require.Contains(t, row.Evidence, "same edition: the primary already carries the record's narrator \""+
-		cand.Narrator+"\" (no two known runtimes more than 1% apart)")
+		cand.Narrator+"\" (no two known runtimes more than max(1%, 60 s) apart)")
 }
 
 // S2 (round 3): with the primary's runtime unknown and the twin's and the
@@ -413,19 +415,112 @@ func TestVersionTwinFixer_Review3_IdentifierGainedAfterReplanRefuses(t *testing.
 }
 
 // NIT (round 3): a candidate copy this op already journaled (only the
-// checkpoint was lost) is recognised as journaled: a re-run reports it
-// applied and adds no second journal row.
+// checkpoint was lost) is recognised as journaled, whatever old value its
+// journal row recorded: here the plan's recorded prior (Row.State) is made to
+// differ from the old value the first run journaled, so a resume that
+// journaled with the plan's prior would add a second row.
 func TestVersionTwinFixer_Review3_CopyAlreadyJournaledByThisOp(t *testing.T) {
 	l := newVTLib(t)
 	l.book("p", "gr3d", true, nil)
 	tid := l.book("t", "gr3d", false, nil)
 	l.putCache(tid, []metafetch.MetadataCandidate{vtSaga()}, metafetch.BatchSourceHash(tid, "Synthetic Saga", "Synthetic Author A"))
 	plan, _ := l.plan()
-	for run := 1; run <= 2; run++ {
-		res := l.apply(plan, false, "gr3d")
-		require.Equal(t, 1, res.Applied, "run %d: outcomes %v rows %+v", run, res.ByOutcome, res.Rows)
-		changes, err := l.st.GetOperationChanges(vtTestOpID)
-		require.NoError(t, err)
-		require.Len(t, changes, 1, "run %d", run)
+	res := l.apply(plan, false, "gr3d")
+	require.Equal(t, 1, res.Applied, "outcomes %v rows %+v", res.ByOutcome, res.Rows)
+	changes, err := l.st.GetOperationChanges(vtTestOpID)
+	require.NoError(t, err)
+	require.Len(t, changes, 1)
+	require.Equal(t, undo.MetadataCacheAbsent, changes[0].OldValue)
+
+	other, err := undo.EncodeMetadataCacheOld(&database.MetadataCandidateCache{BookID: l.ids["p"],
+		FetchedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)})
+	require.NoError(t, err)
+	require.NotEqual(t, changes[0].OldValue, other)
+	st, err := json.Marshal(vtPlanState{Prior: other})
+	require.NoError(t, err)
+	for i := range plan.Rows {
+		if plan.Rows[i].RowID == "gr3d" {
+			plan.Rows[i].State = st
+		}
 	}
+
+	res = l.apply(plan, false, "gr3d")
+	require.Equal(t, 1, res.Applied, "outcomes %v rows %+v", res.ByOutcome, res.Rows)
+	changes, err = l.st.GetOperationChanges(vtTestOpID)
+	require.NoError(t, err)
+	require.Len(t, changes, 1, "the resume journaled a second row with the plan's prior")
+}
+
+// Item 2 (round 4): a re-plan that holds on an unbuilt ISBN/ASIN index is a
+// transient hold: RunApply reports the row retry_later (not settled), not
+// changed_since_plan, and writes nothing. Once the index is built the same
+// plan applies.
+func TestVersionTwinFixer_Review4_UnbuiltIndexAtReplanIsRetryLater(t *testing.T) {
+	l := newVTLib(t)
+	l.book("p", "gr4a", true, nil)
+	l.appliedTwin("t", "gr4a", vtSagaASIN("B0SYNTH041"), nil)
+	plan, rows := l.plan()
+	require.True(t, rows["gr4a"].Applicable(), rows["gr4a"].SkipReason)
+	require.Equal(t, "B0SYNTH041", rows["gr4a"].Proposed["primary_asin"])
+
+	require.NoError(t, l.st.SetSetting("book_isbn_index_v1_done", "false", "bool", false))
+	res := l.apply(plan, false, "gr4a")
+	require.Equal(t, 1, res.RetryLater, "outcomes %v rows %+v", res.ByOutcome, res.Rows)
+	require.Zero(t, res.ChangedSincePlan)
+	require.Equal(t, repairs.OutcomeRetryLater, res.Rows[0].Outcome)
+	require.Equal(t, vtHoldIDElsewhere, res.Rows[0].Skipped)
+	require.Contains(t, res.Rows[0].Error, "index is not built")
+	require.Nil(t, l.get("p").MetadataReviewStatus)
+
+	require.NoError(t, l.st.SetISBNIndexBuilt())
+	res = l.apply(plan, false, "gr4a")
+	require.Equal(t, 1, res.Applied, "outcomes %v rows %+v", res.ByOutcome, res.Rows)
+	require.Equal(t, "B0SYNTH041", dcStr(l.get("p").ASIN))
+}
+
+// Item 3 (round 4): the pre-write identifier check with the index unbuilt
+// refuses retry_later, and the primary is not written.
+func TestVersionTwinFixer_Review4_PreWriteUnbuiltIndexIsRetryLater(t *testing.T) {
+	l := newVTLib(t)
+	l.book("p", "gr4b", true, nil)
+	l.appliedTwin("t", "gr4b", vtSagaASIN("B0SYNTH042"), nil)
+	fresh := l.vtFresh("gr4b")
+	require.Equal(t, "B0SYNTH042", vtDetailOf(t, fresh).ids.asin)
+
+	require.NoError(t, l.st.SetSetting("book_isbn_index_v1_done", "false", "bool", false))
+	err := l.fixer.Apply(context.Background(), l.writer(), fresh)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, repairs.ErrRetryLater), err.Error())
+	require.False(t, errors.Is(err, repairs.ErrChangedSincePlan), err.Error())
+	p := l.get("p")
+	require.Nil(t, p.MetadataReviewStatus)
+	require.Empty(t, dcStr(p.ASIN))
+	require.Empty(t, dcStr(p.Narrator))
+}
+
+// Item 4 (round 4): every pair of known runtimes is compared. Primary 3060 s,
+// twin 3000 s, record 3100 s: primary-twin and primary-record agree within
+// max(1%, 60 s), twin-record (100 s) does not, so there is no runtime
+// evidence and no ASIN copy; with the primary carrying the record's narrator
+// it is a conflict.
+func TestVersionTwinFixer_Review4_TwinRecordRuntimeDisagreementIsNotEvidence(t *testing.T) {
+	l := newVTLib(t)
+	cand := vtSagaASIN("B0SYNTH043")
+	cand.DurationSec = 3100
+	l.book("p", "gr4c", true, func(b *database.Book) { b.Duration = vtPtr(3060) })
+	l.appliedTwin("t", "gr4c", cand, func(b *database.Book) { b.Duration = vtPtr(3000) })
+
+	cand2 := vtSagaASIN("B0SYNTH044")
+	cand2.DurationSec = 3100
+	l.book("p2", "gr4d", true, func(b *database.Book) {
+		b.Duration = vtPtr(3060)
+		b.Narrator = vtPtr(cand2.Narrator)
+	})
+	l.appliedTwin("t2", "gr4d", cand2, func(b *database.Book) { b.Duration = vtPtr(3000) })
+
+	_, rows := l.plan()
+	row := rows["gr4c"]
+	require.True(t, row.Applicable(), "%s: %s", row.Skipped, row.SkipReason)
+	require.Empty(t, row.Proposed["primary_asin"], "no evidence, no ASIN: %v", row.Evidence)
+	require.Equal(t, vtHoldEvidenceConflict, rows["gr4d"].Skipped, rows["gr4d"].SkipReason)
 }

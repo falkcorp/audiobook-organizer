@@ -2,7 +2,7 @@
 
 - **Version twin fixer: an unknown primary runtime no longer drops narrator
   evidence.** The primary carrying the record's narrator is edition evidence
-  unless two known runtimes are more than 1% apart; a primary whose own
+  unless two known runtimes are more than max(1%, 60 s) apart; a primary whose own
   runtime is unknown, with twin and record agreeing, now gets the narrator
   and ASIN again.
 - **Version twin fixer: an identifier gained after the re-plan is caught.**

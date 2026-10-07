@@ -1,5 +1,5 @@
 // file: internal/repairs/fixer.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3e8b1c52-7a4d-4f19-9c06-5d2e8a7f1b34
 // last-edited: 2026-10-06
 
@@ -99,6 +99,13 @@ type Row struct {
 	// SkipReason says why in words.
 	Skipped    string `json:"skipped,omitempty"`
 	SkipReason string `json:"skip_reason,omitempty"`
+	// RetryLater marks a skip (Skipped set) that is transient: a condition
+	// outside the row that clears on its own, such as an index not built yet,
+	// not anything about the row itself. A re-plan returning such a row is
+	// reported retry_later (OutcomeRetryLater, not settled), not
+	// changed_since_plan, so the same plan can be applied again once the
+	// condition clears. The re-plan-time counterpart of ErrRetryLater.
+	RetryLater bool `json:"retry_later,omitempty"`
 	// State is fixer-private state stored WITH the plan: what Replan needs
 	// from plan time that the row as it is now cannot tell it (the ids of the
 	// rows a group was planned over, the values a compare-and-set must find).

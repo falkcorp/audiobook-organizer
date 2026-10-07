@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/version_twin_metadata_fixer.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 2f6c8e14-7b3a-4d59-9e02-c4a1b7d36e85
 // last-edited: 2026-10-06
 
@@ -778,6 +778,9 @@ func (f *versionTwinFixer) row(rd vtReaders, gid string, members []database.Book
 		b.note("ids-elsewhere", wIDs.String(), strings.Join(elsewhere, ","), strconv.FormatBool(indexed))
 		switch {
 		case !indexed:
+			// Transient: the index gets built without the row changing, so a
+			// re-plan holding on it reports retry_later, not changed.
+			b.r.RetryLater = true
 			return b.hold(vtHoldIDElsewhere, "the ISBN/ASIN index is not built yet (the isbn-index-build operation sets "+
 				"it), so it cannot be told whether a book outside this group carries the record's "+wIDs.String()+
 				", which the apply would copy"), true, nil
@@ -799,7 +802,7 @@ func (f *versionTwinFixer) row(rd vtReaders, gid string, members []database.Book
 			b.r.Evidence = append(b.r.Evidence, "same edition: "+evidence)
 		} else {
 			b.r.Evidence = append(b.r.Evidence, "no evidence the primary is the twin's edition (runtimes not "+
-				"known within 1%; with fewer than two runtimes known, narrator not the record's): narrator, ASIN, ISBN, "+
+				"known within max(1%, 60 s), or narrator not the record's): narrator, ASIN, ISBN, "+
 				"abridgement and runtime are not copied")
 		}
 		b.r.Reason = fmt.Sprintf("twin %s had %s metadata applied (record %s); the primary is the same book (same "+
@@ -1090,40 +1093,35 @@ func vtRuntimesAgree(a, b int) bool {
 	return d <= max(int(float64(max(a, b))*vtEvidenceTolerance), vtEvidenceSlackSec)
 }
 
+// vtEvidenceWithin is how close two runtimes must be to agree
+// (vtRuntimesAgree), in words.
+const vtEvidenceWithin = "max(1%, 60 s)"
+
 // vtEditionEvidence names the positive evidence that the primary is the
 // edition the twin's record describes ("" when there is none), or, in
 // conflict, why the evidence contradicts itself (the row is then held).
 //
 // The runtimes are the primary's and the twin's known runtimes (pSec, tSec)
-// and the record's own (cand.DurationSec), each 0 when not known.
-//   - runtimes: the primary's and the twin's agree within 1%, and so does the
-//     record's when it has one; or, the twin's not known, the primary's and
-//     the record's agree within 1%. That is evidence.
-//   - two known runtimes more than 1% apart (the 5% hold, vtEditionDiffers,
-//     already caught the wider gaps): no runtime evidence, and narrator
+// and the record's own (cand.DurationSec), each 0 when not known. Every pair
+// of known runtimes is compared (vtRuntimesAgree: within max(1%, 60 s)); they
+// "disagree" when any pair does not.
+//   - runtimes: the primary's is known, at least one of the twin's and the
+//     record's is known, and no pair disagrees. That is evidence. (Twin and
+//     record are compared too: a twin and a record that disagree with each
+//     other are not evidence even when each is close to the primary.)
+//   - the known runtimes disagree (the 5% hold, vtEditionDiffers, already
+//     caught the wider primary-twin gaps): no runtime evidence, and narrator
 //     equality cannot stand in for it; when the primary carries the record's
 //     narrator anyway the two signals contradict each other (one narrator
 //     recorded two editions), so that is a conflict, not evidence. Without
 //     a narrator match the row stays applicable without the edition fields.
 //   - narrator: the primary already carries the record's narrator. Evidence
-//     unless two known runtimes are more than 1% apart (the conflict above);
-//     an unknown runtime never takes it away (primary unknown, twin and
-//     record agreeing is still narrator evidence).
+//     unless the known runtimes disagree (the conflict above); an unknown
+//     runtime never takes it away.
 //
 // An empty narrator or an unknown runtime is never evidence.
 func vtEditionEvidence(p *database.BookCore, cand *metafetch.MetadataCandidate, pSec, tSec int) (evidence, conflict string) {
 	rec := max(cand.DurationSec, 0)
-	if vtRuntimesAgree(pSec, tSec) && (rec == 0 || vtRuntimesAgree(pSec, rec)) {
-		ev := fmt.Sprintf("runtimes agree within 1%% (primary %ds, twin %ds", pSec, tSec)
-		if rec > 0 {
-			ev += fmt.Sprintf(", record %ds", rec)
-		}
-		return ev + ")", ""
-	}
-	if tSec <= 0 && vtRuntimesAgree(pSec, rec) {
-		return fmt.Sprintf("the primary's and the record's runtimes agree within 1%% (primary %ds, record %ds; twin "+
-			"unknown)", pSec, rec), ""
-	}
 	var known []int
 	for _, v := range []int{pSec, tSec, rec} {
 		if v > 0 {
@@ -1136,17 +1134,21 @@ func vtEditionEvidence(p *database.BookCore, cand *metafetch.MetadataCandidate, 
 			disagree = disagree || !vtRuntimesAgree(known[i], known[j])
 		}
 	}
+	if !disagree && pSec > 0 && len(known) >= 2 {
+		return fmt.Sprintf("runtimes agree within %s (primary %s, twin %s, record %s)", vtEvidenceWithin,
+			vtSecStr(pSec), vtSecStr(tSec), vtSecStr(rec)), ""
+	}
 	pn := fbNorm(dcStr(p.Narrator))
 	narrator := pn != "" && pn == fbNorm(cand.Narrator)
 	switch {
 	case disagree && narrator:
-		return "", fmt.Sprintf("the primary carries the record's narrator %q, but the known runtimes are more than 1%% "+
+		return "", fmt.Sprintf("the primary carries the record's narrator %q, but the known runtimes are more than %s "+
 			"apart (primary %s, twin %s, record %s): one narrator may have recorded two editions, so the narrator is not "+
-			"evidence of this one and the record's ASIN could be another edition's", cand.Narrator,
+			"evidence of this one and the record's ASIN could be another edition's", cand.Narrator, vtEvidenceWithin,
 			vtSecStr(pSec), vtSecStr(tSec), vtSecStr(rec))
-	case narrator:
-		return fmt.Sprintf("the primary already carries the record's narrator %q (no two known runtimes more than 1%% "+
-			"apart)", cand.Narrator), ""
+	case narrator && !disagree:
+		return fmt.Sprintf("the primary already carries the record's narrator %q (no two known runtimes more than %s "+
+			"apart)", cand.Narrator, vtEvidenceWithin), ""
 	}
 	return "", ""
 }
@@ -1347,6 +1349,14 @@ func vtStillNeeds(b *database.Book, d *vtDetail) error {
 // The framework's own path guard is off for this fixer (ITunesDatabaseOnly),
 // so this and vtWriteGuard are the only iTunes checks between the re-plan
 // and the write.
+//
+// The identifier check (vtIdentifiersOutsideGroup) runs here only, not again
+// under the lock: it walks the ISBN/ASIN index and reads each hit, which is
+// not the cheap work vtWriteGuard may do. A book outside the group that gains
+// the record's ASIN or ISBN between this check and the commit (one apply's
+// width: the apply body and its ModifyBook) is not caught. That window is
+// accepted; the record hash, unlike the identifiers, is re-checked under the
+// lock (from memdb, vtWriteGuard).
 func vtPreWrite(rd vtReaders, d *vtDetail) (map[string]bool, error) {
 	b, err := rd.store.GetBookByID(d.primaryID)
 	if err != nil {
