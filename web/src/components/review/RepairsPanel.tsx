@@ -1,5 +1,5 @@
 // file: web/src/components/review/RepairsPanel.tsx
-// version: 1.19.1
+// version: 1.20.0
 // guid: 9c4f1a73-2e58-4b06-a9d1-6e3b8c7f0d52
 // last-edited: 2026-10-06
 
@@ -14,6 +14,11 @@
  *   no trial yet / trial running / trial failed
  *   rows loading / rows failed / zero rows for the tab / rows
  *   apply running / apply failed / apply result (with a preview called out)
+ *
+ * Owner rows (`owner_applicable`) are skipped rows only the owner applies,
+ * one at a time, from their own "Apply (owner)" button: they never get a
+ * checkbox, "Select page" or "Apply all" never reach them, and the server
+ * honours the request only for the owner's interactive sign-in.
  *
  * Applying during a library scan is allowed: the server pauses the scan briefly
  * while it writes. The copy says exactly that and never that anything is
@@ -118,6 +123,7 @@ const OUTCOME_LABEL: Record<RepairOutcome, string> = {
   failed: 'Failed',
   aborted_standdown_lost: 'Stopped: scan resumed',
   retry_later: 'Retry later (nothing written)',
+  owner_apply_refused: 'Owner apply refused',
 };
 
 const OUTCOME_COLOR: Record<RepairOutcome, 'success' | 'info' | 'warning' | 'error' | 'default'> = {
@@ -130,6 +136,7 @@ const OUTCOME_COLOR: Record<RepairOutcome, 'success' | 'info' | 'warning' | 'err
   failed: 'error',
   aborted_standdown_lost: 'error',
   retry_later: 'warning',
+  owner_apply_refused: 'error',
 };
 
 function OutcomeChip({ result }: { result: RepairRowResult }) {
@@ -416,9 +423,9 @@ export const SKIP_KIND_LABEL: Record<string, string> = {
   error: 'Error',
 };
 
-/** True for the skipped tab and for any one-kind view of it. */
+/** True for the skipped tab and for any one-kind view of it (owner rows are skipped rows). */
 export function isSkippedFilter(filter: string): boolean {
-  return filter === 'skipped' || filter.startsWith('skipped:');
+  return filter === 'skipped' || filter === 'owner_applicable' || filter.startsWith('skipped:');
 }
 
 /**
@@ -450,6 +457,19 @@ function SkipKindChips({ repairs }: RepairsPanelProps) {
         onClick={() => repairs.setFilter('skipped')}
         data-testid="repairs-skip-kind-all"
       />
+      {/* The owner's rows: the whole plan's count, so offered only when no
+          class narrows the list (the count must be what the chip opens). */}
+      {!repairs.rowClass && (repairs.page?.owner_applicable ?? 0) > 0 && (
+        <Chip
+          size="small"
+          clickable
+          label={`Owner apply (${repairs.page?.owner_applicable})`}
+          color={repairs.filter === 'owner_applicable' ? 'secondary' : 'default'}
+          variant={repairs.filter === 'owner_applicable' ? 'filled' : 'outlined'}
+          onClick={() => repairs.setFilter('owner_applicable')}
+          data-testid="repairs-skip-kind-owner"
+        />
+      )}
       {kinds.map((k) => {
         const active = repairs.filter === `skipped:${k}`;
         return (
@@ -538,6 +558,57 @@ function RowEvidence({ row }: { row: RepairRow }) {
   );
 }
 
+/**
+ * An owner row's proof and its own Apply button. One row per click, with a
+ * confirm naming the book (the lane's dispatch asks); no checkbox, so no
+ * selection or "apply all" ever includes it.
+ */
+function OwnerApplyCell({ row, repairs }: { row: RepairRow } & RepairsPanelProps) {
+  const fixer = repairs.selectedFixer;
+  const planOpId = repairs.planOpId;
+  const outcome = repairs.rowOutcomes.get(row.row_id);
+  const settled = repairs.settledRowIds.has(row.row_id);
+  return (
+    <Box
+      sx={{ mt: 1, p: 1, border: 1, borderColor: 'secondary.main', borderRadius: 1 }}
+      data-testid={`repairs-owner-${row.row_id}`}
+    >
+      <Typography variant="caption" component="div" sx={{ fontWeight: 600 }}>
+        Owner apply: iTunes tracks this file; only database rows change
+      </Typography>
+      {row.owner_apply_reason && (
+        <Typography variant="caption" component="div" sx={{ color: 'text.secondary' }}>
+          {row.owner_apply_reason}
+        </Typography>
+      )}
+      <Stack direction="row" spacing={1} sx={{ mt: 0.5, alignItems: 'center' }}>
+        {!settled && fixer && planOpId && (
+          <Button
+            size="small"
+            variant="outlined"
+            color="secondary"
+            disabled={repairs.applying || repairs.trial?.phase === 'running'}
+            data-testid={`repairs-owner-apply-${row.row_id}`}
+            onClick={() =>
+              repairs.dispatch({
+                lane: 'repairs',
+                type: 'ownerApplyRow',
+                fixerId: fixer.id,
+                planOpId,
+                rowId: row.row_id,
+                title: row.title || row.book_ids[0] || row.row_id,
+              })
+            }
+          >
+            Apply (owner)
+          </Button>
+        )}
+        {outcome && <OutcomeChip result={outcome} />}
+      </Stack>
+    </Box>
+  );
+}
+
 function RowsTable({ repairs }: RepairsPanelProps) {
   const { rows, filter, selectedRowIds, rowOutcomes, settledRowIds } = repairs;
   const skippedTab = isSkippedFilter(filter);
@@ -613,6 +684,7 @@ function RowsTable({ repairs }: RepairsPanelProps) {
                   <Typography variant="body2">{row.reason}</Typography>
                 )}
                 <RowEvidence row={row} />
+                {row.owner_applicable && row.skipped && <OwnerApplyCell row={row} repairs={repairs} />}
               </TableCell>
               <TableCell>
                 <Chip

@@ -1,7 +1,7 @@
 // file: web/src/services/api.repairs.test.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6f2d9a58-1b74-4c3e-8a06-d7e5b2c4f913
-// last-edited: 2026-09-27
+// last-edited: 2026-10-06
 //
 // The repairs client against a stubbed fetch, asserting on the request that
 // actually leaves the browser.
@@ -17,7 +17,9 @@ import {
   getRepairPlanRows,
   listRepairFixers,
   pollOperationV2,
+  REPAIRS_OWNER_APPLY_HEADER,
   startRepairApply,
+  startRepairOwnerApply,
   startRepairPlan,
 } from './api';
 
@@ -43,6 +45,30 @@ function lastCall(): { url: string; init: RequestInit } {
   const [url, init] = fetchMock.mock.calls[fetchMock.mock.calls.length - 1];
   return { url: String(url), init: init as RequestInit };
 }
+
+describe('startRepairOwnerApply', () => {
+  it('posts exactly {plan_op_id, row_id} to owner-apply with the CSRF header', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(202, {
+        data: { operation_id: 'op-own', def_id: 'repairs.apply', fixer_id: 'frag', status: 'queued' },
+      })
+    );
+    const started = await startRepairOwnerApply('frag', 'plan-1', 'manual:b1');
+    const { url, init } = lastCall();
+    expect(url).toBe('/api/v1/repairs/frag/owner-apply');
+    expect(init.method).toBe('POST');
+    expect(new Headers(init.headers).get(REPAIRS_OWNER_APPLY_HEADER)).toBe('1');
+    expect(JSON.parse(String(init.body))).toStrictEqual({ plan_op_id: 'plan-1', row_id: 'manual:b1' });
+    expect(started.operation_id).toBe('op-own');
+  });
+
+  it('throws the server message on a 403 (API key, not the owner)', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(403, { error: 'owner rows are applied only by the owner, signed in interactively', status: 403 })
+    );
+    await expect(startRepairOwnerApply('frag', 'plan-1', 'manual:b1')).rejects.toThrow(/signed in interactively/);
+  });
+});
 
 describe('startRepairApply', () => {
   it('posts exactly {plan_op_id, row_ids, dry_run:false}', async () => {

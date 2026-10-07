@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.161.0
+// version: 2.162.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-06
 
@@ -8028,6 +8028,15 @@ export interface RepairRow {
   members?: RepairRowMember[];
   /** What the row's decision was made from, in words. */
   evidence?: string[];
+  /**
+   * A skipped row the owner may apply himself, one at a time
+   * (startRepairOwnerApply); never part of a bulk selection.
+   */
+  owner_applicable?: boolean;
+  /** Why the owner may apply it, in words (the proof). */
+  owner_apply_reason?: string;
+  /** The books an owner apply writes (database rows only). */
+  owner_writes?: string[];
 }
 
 /** One book of a repair row. */
@@ -8045,7 +8054,11 @@ export interface RepairRowMember {
  * one, or the skipped rows of one kind (`skipped:<kind>`, a key of
  * `skipped_by_kind`) so each per-kind count opens the rows behind it.
  */
-export type RepairRowsFilter = 'applicable' | 'skipped' | `skipped:${string}`;
+export type RepairRowsFilter =
+  | 'applicable'
+  | 'skipped'
+  | 'owner_applicable'
+  | `skipped:${string}`;
 
 export interface RepairRowsPage {
   plan_op_id: string;
@@ -8058,6 +8071,8 @@ export interface RepairRowsPage {
   total: number;
   /** The whole plan's applicable count, whatever the filter. */
   applicable: number;
+  /** The whole plan's owner-applicable count (rows only the owner applies). */
+  owner_applicable?: number;
   skipped_by_kind: Record<string, number>;
   /** The whole plan's per-class tally (fixers that set a class). */
   by_class?: Record<string, number>;
@@ -8096,7 +8111,8 @@ export type RepairOutcome =
   | 'not_applicable'
   | 'failed'
   | 'aborted_standdown_lost'
-  | 'retry_later';
+  | 'retry_later'
+  | 'owner_apply_refused';
 
 export interface RepairRowResult {
   row_id: string;
@@ -8125,6 +8141,9 @@ export interface RepairApplyResult {
   standdown_held: boolean;
   aborted?: string;
   rows: RepairRowResult[];
+  /** Owner rows applied by this run, and the user who approved them. */
+  owner_rows?: number;
+  owner_user_id?: string;
 }
 
 export async function listRepairFixers(opts?: {
@@ -8211,6 +8230,30 @@ export async function startRepairApply(
     body: JSON.stringify({ plan_op_id: planOpId, row_ids: rowIds, dry_run: false }),
   });
   return readRepairStarted(response, 'repair apply');
+}
+
+/** Header the owner-apply endpoint requires (CSRF: no cross-site form can send it). */
+export const REPAIRS_OWNER_APPLY_HEADER = 'X-Repairs-Owner-Apply';
+
+/**
+ * POST /repairs/:fixer/owner-apply -- the owner's own apply of ONE
+ * owner-applicable row (database rows only). The server honours it only for
+ * an interactive admin sign-in (never an API key) from this page.
+ */
+export async function startRepairOwnerApply(
+  fixerId: string,
+  planOpId: string,
+  rowId: string
+): Promise<RepairOpStarted> {
+  const response = await apiFetch(
+    `${API_BASE}/repairs/${encodeURIComponent(fixerId)}/owner-apply`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', [REPAIRS_OWNER_APPLY_HEADER]: '1' },
+      body: JSON.stringify({ plan_op_id: planOpId, row_id: rowId }),
+    }
+  );
+  return readRepairStarted(response, 'owner apply');
 }
 
 /** Reads a finished repairs.apply operation's stored result. */

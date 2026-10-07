@@ -1,5 +1,5 @@
 // file: web/src/components/review/reviewActions.ts
-// version: 1.5.0
+// version: 1.6.0
 // guid: 5c9e0a37-1b84-4d26-9f03-7a1e6c8b2d54
 // last-edited: 2026-10-06
 //
@@ -110,7 +110,13 @@ export type RegroupAction =
 export type RepairsAction =
   | { lane: 'repairs'; type: 'runTrial'; fixerId: string }
   | { lane: 'repairs'; type: 'applyRows'; fixerId: string; planOpId: string; rowIds: string[] }
-  | { lane: 'repairs'; type: 'applyAllApplicable'; fixerId: string; planOpId: string; rowClass?: string };
+  | { lane: 'repairs'; type: 'applyAllApplicable'; fixerId: string; planOpId: string; rowClass?: string }
+  /**
+   * The owner's own apply of ONE owner-applicable row (a skipped row the plan
+   * marks `owner_applicable`): never part of a selection or "apply all".
+   * `title` names the book in the confirm.
+   */
+  | { lane: 'repairs'; type: 'ownerApplyRow'; fixerId: string; planOpId: string; rowId: string; title: string };
 
 export type ReviewAction = DupesAction | MetadataAction | RegroupAction | RepairsAction;
 
@@ -181,6 +187,7 @@ export function needsConfirmation(action: ReviewAction): boolean {
     // Returning true here would stack an ActionBar dialog on top of that one.
     case 'applyRows':
     case 'applyAllApplicable':
+    case 'ownerApplyRow':
       return false;
     default:
       return false;
