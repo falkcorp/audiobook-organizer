@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.42.0
+// version: 1.43.0
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
 // last-edited: 2026-10-06
 
@@ -185,7 +185,12 @@
 // and re-plans the row inside it (the whole-library listing, the strict
 // ownership check and every plan-time read), refusing the row if its
 // fingerprint moved. The title and folder writes compare against the values
-// stored with the plan (Row.State).
+// stored with the plan (Row.State). Before the first write of every class
+// (and before a no-parent row's plan record), every book the row retires or
+// takes rows off is read fresh and the row refused whole if any is now an
+// iTunes book (fragsITunesNow, review 2026-10-06): a member's row is moved
+// before its retire, and a parent row repointed before its fragment's, so a
+// later check would come after a write.
 //
 // RESUME. The fingerprint hashes the DECISION (the class, the members, each
 // planned file pairing, the survivor and its state, the title), not the raw
@@ -2407,7 +2412,13 @@ func (f *fragmentFixer) continueInterrupted(ctx context.Context, lib *fragLibrar
 				rowsOf[i] = row
 				continue
 			}
-			rowsOf[i] = interruptedRow(lib, rec, u.ops, why, orActions(revertAct(pj, u.ops), actFinish(rec.Survivor)))
+			// An iTunes book among the run's books is never written, so a
+			// merge by hand is not offered for it: only the revert.
+			finish := actFinish(rec.Survivor)
+			if got.Skipped == repairs.SkipITunes {
+				finish = ""
+			}
+			rowsOf[i] = interruptedRow(lib, rec, u.ops, why, orActions(revertAct(pj, u.ops), finish))
 		}
 	}
 	var emitted []fragPlanRecord
@@ -7789,6 +7800,15 @@ func (f *fragmentFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repa
 			}
 		}
 		onlyFrags := ps.ITunesParent != "" && (locked.Class == fragClassCopy)
+		// Every fragment before the first write (a moved row repoints the
+		// parent's row before it retires the fragment).
+		var fragIDs []string
+		for _, fb := range fragBooks {
+			fragIDs = append(fragIDs, fb.ID)
+		}
+		if err := fragsITunesNow(store, fragIDs); err != nil {
+			return err
+		}
 		if onlyFrags {
 			if why, err := fragGroupsITunesNow(store, fragBooks); err != nil {
 				return err
@@ -7907,6 +7927,16 @@ func (f *fragmentFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repa
 			if err := copyRetireRefusal(store, cp, plan.SurvivorID, "copy"); err != nil {
 				return err
 			}
+		}
+		// Every member too, before the plan record and the first move:
+		// MoveBookFiles has no iTunes check, and once a member's row has
+		// moved its retire has no row left to refuse.
+		var memberIDs []string
+		for _, m := range plan.Members {
+			memberIDs = append(memberIDs, m.Frag.Book.ID)
+		}
+		if err := fragsITunesNow(store, memberIDs); err != nil {
+			return err
 		}
 		// The iTunes hold, read fresh under the lock: the survivor takes the
 		// members' rows, and each retire hands a version group's primary on.
@@ -8033,6 +8063,28 @@ func (f *fragmentFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repa
 	}
 }
 
+// fragsITunesNow refuses a row before its first write when any book it
+// retires or takes rows off (ids: every fragment, member and copy) is an
+// iTunes book now, read fresh under the lock (bookITunesFresh:
+// itunesCopyWhy over the book, its rows and external ids, and the iTunes
+// library path). Review 2026-10-06: a member's row is moved onto the
+// survivor before its retire, and a moved row's parent row is repointed
+// before its fragment's, so only a check of every book ahead of every write
+// keeps a row that gained an iTunes id or path since the re-plan from
+// writing an iTunes book.
+func fragsITunesNow(store OpsStore, ids []string) error {
+	for _, id := range ids {
+		why, err := bookITunesFresh(store, nil, id)
+		if err != nil {
+			return err
+		}
+		if why != "" {
+			return fmt.Errorf("%w: under the merge lock: %s", repairs.ErrChangedSincePlan, why)
+		}
+	}
+	return nil
+}
+
 // copyRetireRefusal is retireInto's refusals for one renamed copy, checked
 // before a numbered set writes anything: the copy's book is gone or holds
 // another id, it holds anything but exactly its planned row, or it, its row
@@ -8059,9 +8111,6 @@ func copyRetireRefusal(store OpsStore, cp fragGroupCopy, survivor, role string) 
 		}
 		return nil
 	}
-	if b.ITunesPersistentID != nil && *b.ITunesPersistentID != "" {
-		return fmt.Errorf("%w: %s %s now carries an iTunes id", repairs.ErrChangedSincePlan, role, id)
-	}
 	rows, err := store.GetBookFiles(id)
 	if err != nil {
 		return fmt.Errorf("files of %s %s: %w", role, id, err)
@@ -8069,19 +8118,10 @@ func copyRetireRefusal(store OpsStore, cp fragGroupCopy, survivor, role string) 
 	if len(rows) != 1 || rows[0].ID != cp.Frag.File.ID {
 		return fmt.Errorf("%w: %s %s no longer holds exactly its planned row", repairs.ErrChangedSincePlan, role, id)
 	}
-	if rows[0].ITunesPersistentID != "" {
-		return fmt.Errorf("%w: %s %s row %s now carries an iTunes id", repairs.ErrChangedSincePlan, role, id, rows[0].ID)
-	}
-	exts, err := store.GetExternalIDsForBook(id)
-	if err != nil {
-		return fmt.Errorf("external ids of %s %s: %w", role, id, err)
-	}
-	for _, e := range exts {
-		if e.Source == "itunes" && !e.Tombstoned {
-			return fmt.Errorf("%w: %s %s now carries iTunes id %s", repairs.ErrChangedSincePlan, role, id, e.ExternalID)
-		}
-	}
-	return nil
+	// The whole iTunes test (itunesCopyWhy: the book's and row's iTunes
+	// ids, the row's iTunes path, a live itunes external id, an iTunes
+	// library path), not a partial list of it.
+	return fragsITunesNow(store, []string{id})
 }
 
 // setBookFolder points the survivor's book path at the folder its files now
@@ -8146,7 +8186,7 @@ func (f *fragmentFixer) retitle(store OpsStore, w *repairs.Writer, id, was, titl
 // target's timeline, refusing a fragment with an iTunes path on its row
 // (an iTunes book: fragCandidate.itunesWhy).
 func (f *fragmentFixer) retire(ctx context.Context, store OpsStore, w *repairs.Writer, id, target string, slice merge.SliceMapping) (int, error) {
-	return retireIntoWith(ctx, f.p, store, w, f.now, fragFixerID, id, target, &slice, retireOpts{RefuseITunesPath: true})
+	return retireInto(ctx, f.p, store, w, f.now, fragFixerID, id, target, &slice)
 }
 
 // fragEnsureStore joins OpsStore and the chapter reader for

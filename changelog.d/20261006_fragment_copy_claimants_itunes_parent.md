@@ -44,3 +44,17 @@
   retired. Such rows are review risk.
 - A path twin and its donor are held together whichever of the two is split
   off onto its own row.
+- Every fragment-consolidation apply (moved, copy, ghost, existing-book
+  join, no-parent members and renamed copies) now reads every book it
+  retires or takes rows off fresh under the merge lock, before its first
+  write and before a no-parent row's plan record, and refuses the whole row
+  if any has become an iTunes book (iTunes id on the book or a row, a row
+  iTunes path, a live itunes external id, an iTunes library path). A
+  no-parent member whose row gained an iTunes id or path after the re-plan
+  used to be moved onto the survivor and retired. Renamed copies use the
+  same full test instead of a partial list.
+- The shared retire refuses a row iTunes path by default; only the
+  consolidation-leftovers and duplicate-copies fixers opt out
+  (`retireIntoAllowingITunesPath`).
+- An interrupted run held because one of its books is an iTunes book no
+  longer offers "merge by hand", only the revert.
