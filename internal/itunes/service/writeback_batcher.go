@@ -1,5 +1,5 @@
 // file: internal/itunes/service/writeback_batcher.go
-// version: 6.0.1
+// version: 6.1.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e90
 // last-edited: 2026-10-07
 //
@@ -442,28 +442,58 @@ func (b *WriteBackBatcher) dryRunEnabled() bool {
 	return b.writeBackDryRun
 }
 
-// Enqueue adds a book ID to the pending location-update batch.
+// Errors returned by the checked enqueue methods (EnqueueBooks,
+// EnqueueRemoveChecked). Enqueue and EnqueueRemove drop them: their callers
+// are best-effort hooks that never needed to know.
+var (
+	// ErrAutoWriteBackDisabled: auto write-back is off, nothing is queued.
+	ErrAutoWriteBackDisabled = errors.New("iTunes auto write-back is disabled")
+	// ErrBatcherStopped: the batcher has been stopped, nothing is queued.
+	ErrBatcherStopped = errors.New("iTunes write-back batcher is stopped")
+	// ErrRemoveHeld: the PID is on the held list; only a release queues it.
+	ErrRemoveHeld = errors.New("iTunes write-back remove is on the held list")
+)
+
+// Enqueue adds a book ID to the pending update batch (location and metadata;
+// the flush diffs both). Best-effort: see EnqueueBooks for the checked form.
+func (b *WriteBackBatcher) Enqueue(bookID string) {
+	_, _ = b.EnqueueBooks([]string{bookID})
+}
+
+// EnqueueBooks adds book IDs to the pending update batch and returns how many
+// were newly queued (an ID already pending counts as queued once, not twice).
+// It returns ErrAutoWriteBackDisabled or ErrBatcherStopped instead of
+// silently doing nothing.
 //
 // Ordering: mark pending under b.mu, then persist outside it. completeBatch
 // keeps the key of any item pending at the time it looks, so the key is never
 // deleted under a live entry; the only race leaves a stale key, which reloads
 // as a no-op update.
-func (b *WriteBackBatcher) Enqueue(bookID string) {
+func (b *WriteBackBatcher) EnqueueBooks(bookIDs []string) (newlyQueued int, err error) {
 	if !b.autoWriteBackEnabled() {
-		return
+		return 0, ErrAutoWriteBackDisabled
 	}
 	b.mu.Lock()
 	if b.stopped {
 		b.mu.Unlock()
-		return
+		return 0, ErrBatcherStopped
 	}
-	isNew := !b.pendingBooks[bookID]
-	b.pendingBooks[bookID] = true
-	b.resetTimer()
+	var fresh []string
+	for _, id := range bookIDs {
+		if b.pendingBooks[id] {
+			continue
+		}
+		b.pendingBooks[id] = true
+		fresh = append(fresh, id)
+	}
+	if len(bookIDs) > 0 {
+		b.resetTimer()
+	}
 	b.mu.Unlock()
-	if isNew {
-		b.persist(wbKeyBook+bookID, []byte("1"))
+	for _, id := range fresh {
+		b.persist(wbKeyBook+id, []byte("1"))
 	}
+	return len(fresh), nil
 }
 
 // EnqueueAdd queues a new track for insertion into the ITL.
@@ -504,30 +534,39 @@ func (b *WriteBackBatcher) EnqueueAdd(track itunes.ITLNewTrack) {
 	b.resetTimer()
 }
 
-// EnqueueRemove queues a track PID for removal from the ITL.
+// EnqueueRemove queues a track PID for removal from the ITL. Best-effort:
+// see EnqueueRemoveChecked for the checked form.
+func (b *WriteBackBatcher) EnqueueRemove(pid string) {
+	_ = b.EnqueueRemoveChecked(pid)
+}
+
+// EnqueueRemoveChecked queues a track PID for removal from the ITL. It returns
+// ErrAutoWriteBackDisabled, ErrBatcherStopped or ErrRemoveHeld when the PID
+// was not queued.
 //
-// It does NOT touch the external-id map. Before v6.0.0 it marked the PID
-// removed here, at enqueue time, so a remove that was later dropped, refused
+// It does NOT touch the external-id map. Before v6.0.0 the remove path marked
+// the PID removed at enqueue time, so a remove that was later dropped, refused
 // by the cap, or only logged in dry-run left the DB saying "removed" while the
 // track stayed in iTunes. The tombstone is now written after the flush that
 // removes the track succeeds (see markRemovesApplied).
 //
 // A PID on the held list stays held: the owner releases held removes.
-// Ordering as in Enqueue (a stale remove key re-removes an absent PID: no-op).
-func (b *WriteBackBatcher) EnqueueRemove(pid string) {
+// Ordering as in EnqueueBooks (a stale remove key re-removes an absent PID:
+// no-op).
+func (b *WriteBackBatcher) EnqueueRemoveChecked(pid string) error {
 	if !b.autoWriteBackEnabled() {
-		return
+		return ErrAutoWriteBackDisabled
 	}
 	key := strings.ToLower(pid)
 	b.mu.Lock()
 	if b.stopped {
 		b.mu.Unlock()
-		return
+		return ErrBatcherStopped
 	}
 	if _, isHeld := b.held[key]; isHeld {
 		b.mu.Unlock()
 		slog.Warn("iTunes write-back remove is on the held list; release it to apply", "pid", key)
-		return
+		return ErrRemoveHeld
 	}
 	isNew := !b.pendingRemoves[key]
 	b.pendingRemoves[key] = true
@@ -536,6 +575,32 @@ func (b *WriteBackBatcher) EnqueueRemove(pid string) {
 	if isNew {
 		b.persist(wbKeyRemove+key, []byte("1"))
 	}
+	return nil
+}
+
+// IsRemoveHeld reports whether pid is on the held-remove list.
+func (b *WriteBackBatcher) IsRemoveHeld(pid string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	_, ok := b.held[strings.ToLower(pid)]
+	return ok
+}
+
+// IsRemovePending reports whether pid is already queued for removal.
+func (b *WriteBackBatcher) IsRemovePending(pid string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.pendingRemoves[strings.ToLower(pid)]
+}
+
+// WriteTarget reports the library file a flush writes and whether ITL
+// write-back is enabled, auto write-back is on, and dry-run is active. Callers
+// that preview a flush parse this path, not their own config read, so the
+// preview and the write use the same file.
+func (b *WriteBackBatcher) WriteTarget() (path string, itlEnabled, autoWriteBack, dryRun bool) {
+	b.cfgMu.RLock()
+	defer b.cfgMu.RUnlock()
+	return b.libraryWritePath, b.itlWriteBackEnabled, b.autoWriteBack, b.writeBackDryRun
 }
 
 // stopTimerLocked cancels the pending debounce timer, if any, and releases the
@@ -1092,125 +1157,16 @@ func (b *WriteBackBatcher) drainFlush() {
 			continue
 		}
 
-		// Get author name for metadata
-		authorName := ""
-		if book.AuthorID != nil {
-			if author, err := store.GetAuthorByID(*book.AuthorID); err == nil && author != nil {
-				authorName = author.Name
+		plan := planBookWrite(store, book, tracksByPID)
+		skippedMetadata += plan.Unchanged
+		for _, ch := range plan.Changes {
+			if ch.Location != nil {
+				locationUpdates = append(locationUpdates, *ch.Location)
 			}
-		}
-		// Narrator ends up in the Composer field for audiobooks —
-		// Apple Music shows it there and most audiobook workflows
-		// (scanners, converters, players) key on that mapping.
-		narrator := ""
-		if book.Narrator != nil {
-			narrator = *book.Narrator
-		}
-		// Genre: prefer the book's own genre when set, fall back to
-		// "Audiobook" so iTunes classifies correctly. Previously
-		// every write hardcoded "Audiobook" even when the user had
-		// set a more specific value.
-		genre := "Audiobook"
-		if book.Genre != nil && *book.Genre != "" {
-			genre = *book.Genre
-		}
-
-		files, _ := store.GetBookFiles(id)
-		if len(files) > 0 {
-			for _, f := range files {
-				if f.ITunesPersistentID == "" {
-					continue
-				}
-				// Diff-before-write (T008 / HIGH-3): only enqueue an
-				// ITLMetadataUpdate (and/or location update) when at
-				// least one field differs from the current library value.
-				// ITLTrack.Composer is not stored in the parsed struct
-				// (0x0C not read), so it is always included in the update
-				// when other fields change.
-				pidKey := strings.ToLower(f.ITunesPersistentID)
-				desiredLoc := ""
-				if f.ITunesPath != "" {
-					// SPEC §1b / TASK-006: normalize f.ITunesPath (which has
-					// historically held BOTH native paths and file:// URLs)
-					// into the canonical WinPath. Unmappable values are NOT
-					// written — per-item WARN + metric, never a raw value into
-					// 0x0D (the CRIT-2 corruption).
-					if winPath, ok := normalizeITunesLocation(f.ITunesPersistentID, f.ITunesPath); ok {
-						desiredLoc = winPath
-					}
-				}
-
-				if cur, ok := tracksByPID[pidKey]; ok {
-					// We have current library state: compare field by field.
-					// Location update is suppressed when the desired path
-					// matches the current 0x0D value (or is unmappable/empty).
-					locationChanged := desiredLoc != "" && cur.Location != desiredLoc
-					metadataChanged := cur.Name != f.Title ||
-						cur.Album != book.Title ||
-						cur.Artist != authorName ||
-						cur.Genre != genre
-
-					if !locationChanged && !metadataChanged {
-						skippedMetadata++
-						continue
-					}
-					if locationChanged {
-						locationUpdates = append(locationUpdates, itunes.ITLLocationUpdate{
-							PersistentID: f.ITunesPersistentID,
-							NewLocation:  desiredLoc,
-						})
-					}
-					if metadataChanged {
-						changedMetadata++
-						metadataUpdates = append(metadataUpdates, itunes.ITLMetadataUpdate{
-							PersistentID: f.ITunesPersistentID,
-							Name:         f.Title,
-							Album:        book.Title,
-							Artist:       authorName,
-							Composer:     narrator,
-							Genre:        genre,
-						})
-					}
-				} else {
-					// No current library state for this PID (track is new or
-					// library parse failed) — emit both unconditionally.
-					if desiredLoc != "" {
-						locationUpdates = append(locationUpdates, itunes.ITLLocationUpdate{
-							PersistentID: f.ITunesPersistentID,
-							NewLocation:  desiredLoc,
-						})
-					}
-					changedMetadata++
-					metadataUpdates = append(metadataUpdates, itunes.ITLMetadataUpdate{
-						PersistentID: f.ITunesPersistentID,
-						Name:         f.Title,
-						Album:        book.Title,
-						Artist:       authorName,
-						Composer:     narrator,
-						Genre:        genre,
-					})
-				}
+			if ch.Metadata != nil {
+				changedMetadata++
+				metadataUpdates = append(metadataUpdates, *ch.Metadata)
 			}
-		} else if book.ITunesPersistentID != nil && *book.ITunesPersistentID != "" {
-			pidKey := strings.ToLower(*book.ITunesPersistentID)
-			if cur, ok := tracksByPID[pidKey]; ok {
-				if cur.Name == book.Title &&
-					cur.Album == book.Title &&
-					cur.Artist == authorName &&
-					cur.Genre == genre {
-					skippedMetadata++
-					continue
-				}
-			}
-			changedMetadata++
-			metadataUpdates = append(metadataUpdates, itunes.ITLMetadataUpdate{
-				PersistentID: *book.ITunesPersistentID,
-				Name:         book.Title,
-				Album:        book.Title,
-				Artist:       authorName,
-				Composer:     narrator,
-				Genre:        genre,
-			})
 		}
 	}
 
