@@ -1,5 +1,5 @@
 // file: internal/server/middleware/auth_method_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 5e2b7c19-0d4a-4f86-b3e1-9a6c8d2f7041
 // last-edited: 2026-10-07
 
@@ -273,15 +273,19 @@ func TestOwnerProof_OnlyAVerifiedAccessJWT(t *testing.T) {
 	verifier := &fakeCFVerifier{byToken: map[string]*oauth.IdentityClaims{
 		"owner-jwt": {Provider: oauth.ProviderCFAccess, Subject: "sub-owner", Email: "owner@example.com", EmailVerified: true},
 		"other-jwt": {Provider: oauth.ProviderCFAccess, Subject: "sub-other", Email: "other@example.com", EmailVerified: true},
+		// A different IdP account whose address uses U+212A KELVIN SIGN.
+		"kelvin-jwt": {Provider: oauth.ProviderCFAccess, Subject: "sub-kelvin", Email: "\u212Aate@example.com", EmailVerified: true},
+		"kate-jwt":   {Provider: oauth.ProviderCFAccess, Subject: "sub-kate", Email: "kate@example.com", EmailVerified: true},
 	}}
 	cf := &CFAccessAuthenticator{verifier: verifier,
-		cfg: oauth.New(oauth.Config{AllowedEmails: []string{"owner@example.com", "other@example.com"}}), store: cfStore}
+		cfg: oauth.New(oauth.Config{AllowedEmails: []string{"owner@example.com", "other@example.com", "kate@example.com"}}), store: cfStore}
+	ownerEmail := "owner@example.com"
 	run := func(set func(r *http.Request)) string {
 		r := gin.New()
 		why := "unreached"
 		r.Use(CloudflareAccessAuth(cf), RequireAuth(authMethodStore()))
 		r.GET("/x", func(c *gin.Context) {
-			why = auth.OwnerProofWhyNot(c.Request.Context(), "owner@example.com", "books.example.com")
+			why = auth.OwnerProofWhyNot(c.Request.Context(), ownerEmail, "books.example.com")
 			c.Status(http.StatusOK)
 		})
 		req := httptest.NewRequest(http.MethodGet, "/x", nil)
@@ -299,4 +303,10 @@ func TestOwnerProof_OnlyAVerifiedAccessJWT(t *testing.T) {
 		r.Header.Set(oauth.CFAccessHeader, "owner-jwt")
 		r.Header.Set("Authorization", "Bearer abk_secret")
 	}), "an API key riding along with the owner's JWT")
+
+	// 2026-10-07 review: strings.EqualFold folded the Kelvin sign onto "k",
+	// so this other account passed as the owner.
+	ownerEmail = "kate@example.com"
+	assert.Empty(t, run(func(r *http.Request) { r.Header.Set(oauth.CFAccessHeader, "kate-jwt") }), "the owner kate's verified JWT")
+	assert.NotEmpty(t, run(func(r *http.Request) { r.Header.Set(oauth.CFAccessHeader, "kelvin-jwt") }), "a Kelvin-sign lookalike of the owner's email")
 }

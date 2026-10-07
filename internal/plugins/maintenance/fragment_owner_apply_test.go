@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_owner_apply_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 2b7e9d40-1c56-4a83-b9f2-8e0d4a6c3f17
 // last-edited: 2026-10-07
 
@@ -36,9 +36,20 @@ func ownerFixture(t *testing.T, itunesParent bool) *fragFixture {
 	return f
 }
 
+// ownerTestEmail is owner_email, and the Access email every grant here is
+// minted for (synthetic).
+const ownerTestEmail = "owner@example.test"
+
 // ownerApply runs repairs.apply for owner rows under a grant minted for
 // them (as the owner's click does), or under tok when it is not "".
 func (f *fragFixture) ownerApply(t *testing.T, planOpID, opID string, rows []string, tok string, resume *repairs.ApplyCheckpoint) *repairs.ApplyResult {
+	t.Helper()
+	return f.ownerApplyAs(t, "owner-user", planOpID, opID, rows, tok, resume)
+}
+
+// ownerApplyAs is ownerApply for an op enqueued for actor (the op row's
+// ActorUserID, as opsregistry.WithActor records it).
+func (f *fragFixture) ownerApplyAs(t *testing.T, actor, planOpID, opID string, rows []string, tok string, resume *repairs.ApplyCheckpoint) *repairs.ApplyResult {
 	t.Helper()
 	if tok == "" {
 		var err error
@@ -46,7 +57,13 @@ func (f *fragFixture) ownerApply(t *testing.T, planOpID, opID string, rows []str
 			FixerID: fragFixerID, PlanOpID: planOpID, RowIDs: rows})
 		require.NoError(t, err)
 	}
+	if f.p.ownerEmail == nil {
+		f.p.ownerEmail = func() string { return ownerTestEmail }
+	}
 	f.applyOp(opID, fragFixerID)
+	f.ops.mu.Lock()
+	f.ops.rows[opID].ActorUserID = &actor
+	f.ops.mu.Unlock()
 	no := false
 	params, err := json.Marshal(repairs.ApplyParams{FixerID: fragFixerID, PlanOpID: planOpID, DryRun: &no,
 		OwnerApplyRowIDs: rows, OwnerGrant: tok, Resume: resume})
@@ -156,6 +173,37 @@ func TestFragmentFixer_OwnerApply(t *testing.T) {
 		// The resume consumed it: the same token again finds nothing.
 		out = f.ownerApply(t, "op-plan", "op-reuse", []string{m.RowID}, tok, nil)
 		require.Equal(t, repairs.OutcomeOwnerRefused, out.Rows[0].Outcome)
+		require.True(t, f.live(t, "libA"))
+	})
+
+	// 2026-10-07 review: the grant token rides in op params, which anyone
+	// who can read operations can copy into an op of their own. The grant
+	// now redeems only in an op enqueued for the user it was minted for,
+	// and only while its Access email is still owner_email.
+	t.Run("a copied grant in another user's op, or after owner_email changed, never applies it", func(t *testing.T) {
+		t.Parallel()
+		f := ownerFixture(t, true)
+		m := findRow(t, f.plan(t, "op-plan"), fragRowOwner+":"+f.ids["parent"])
+		require.True(t, m.OwnerApplicable)
+		mint := func() string {
+			tok, err := repairs.DefaultOwnerGrants.Issue(repairs.OwnerGrant{UserID: "owner-user", AuthMethod: "cf_access", AccessEmail: ownerTestEmail,
+				FixerID: fragFixerID, PlanOpID: "op-plan", RowIDs: []string{m.RowID}})
+			require.NoError(t, err)
+			return tok
+		}
+
+		tok := mint()
+		out := f.ownerApplyAs(t, "other-admin", "op-plan", "op-copied", []string{m.RowID}, tok, nil)
+		require.Equal(t, repairs.OutcomeOwnerRefused, out.Rows[0].Outcome, "%+v", out.Rows)
+		require.True(t, f.live(t, "libA"))
+		// Consumed by the refusal: the owner's own op finds nothing either.
+		out = f.ownerApply(t, "op-plan", "op-owner-late", []string{m.RowID}, tok, nil)
+		require.Equal(t, repairs.OutcomeOwnerRefused, out.Rows[0].Outcome)
+		require.True(t, f.live(t, "libA"))
+
+		f.p.ownerEmail = func() string { return "new-owner@example.test" }
+		out = f.ownerApply(t, "op-plan", "op-owner-changed", []string{m.RowID}, mint(), nil)
+		require.Equal(t, repairs.OutcomeOwnerRefused, out.Rows[0].Outcome, "%+v", out.Rows)
 		require.True(t, f.live(t, "libA"))
 	})
 

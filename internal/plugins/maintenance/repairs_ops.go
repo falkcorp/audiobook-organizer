@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/repairs_ops.go
-// version: 1.6.1
+// version: 1.7.0
 // guid: 6f1a8d37-2e59-4b0c-8a74-3d9e5b1c7f82
 // last-edited: 2026-10-07
 
@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -140,7 +142,12 @@ func (p *Plugin) runRepairsApply(ctx context.Context, raw json.RawMessage, repor
 	// POST /operations/v2/:id/retry, which copies these params byte for
 	// byte for any caller, would apply the owner's row on someone else's
 	// request. Params written any other way, a retry or a resume find none.
-	owner := repairs.ResolveOwnerApproval(repairs.DefaultOwnerGrants, params)
+	//
+	// The grant is also bound to WHO redeems it: the op's actor must be the
+	// user the grant was minted for, and the grant's Access email must still
+	// be the configured owner (repairs.OwnerRedeemer). A failure to read the
+	// op row leaves the actor empty, which refuses.
+	owner := repairs.ResolveOwnerApproval(repairs.DefaultOwnerGrants, params, p.ownerRedeemer(reporter))
 	dryRun, derr := opmode.ResolveDryRun(repairs.ApplyOpID, params.DryRun, params.DryRunC)
 	if derr != nil {
 		return derr
@@ -227,4 +234,30 @@ func (p *Plugin) runRepairsApply(ctx context.Context, raw json.RawMessage, repor
 	_ = reporter.UpdateProgress(len(res.Rows), len(res.Rows), fmt.Sprintf("%s%s rows=%d %v not_in_plan=%d history_rows=%d history_failed=%d",
 		prefix, f.ID(), len(res.Rows), res.ByOutcome, len(res.NotInPlan), res.HistoryRows, res.HistoryFailed))
 	return nil
+}
+
+// ownerRedeemer is the running apply as repairs.ResolveOwnerApproval checks
+// it: the actor recorded on this op's row and the owner_email configured now.
+// Every failure leaves ActorUserID empty, which refuses the owner rows (the
+// rest of the apply is unaffected).
+func (p *Plugin) ownerRedeemer(reporter sdk.Reporter) repairs.OwnerRedeemer {
+	ownerEmail := p.ownerEmail
+	if ownerEmail == nil {
+		ownerEmail = func() string { return config.Snapshot().OwnerEmail }
+	}
+	who := repairs.OwnerRedeemer{IsOwner: func(accessEmail string) bool {
+		return auth.IsOwnerEmail(accessEmail, ownerEmail())
+	}}
+	opID := registry.ReporterOpID(reporter)
+	if opID == "" || p.deps == nil {
+		return who
+	}
+	reader, ok := p.deps.OperationQueueStore().(repairs.OpReader)
+	if !ok {
+		return who
+	}
+	if row, err := reader.GetOperationV2(opID); err == nil && row != nil && row.ActorUserID != nil {
+		who.ActorUserID = *row.ActorUserID
+	}
+	return who
 }

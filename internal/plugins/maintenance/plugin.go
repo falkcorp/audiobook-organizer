@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.78.0
+// version: 1.79.0
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
 // last-edited: 2026-10-07
 
@@ -33,6 +33,11 @@ type Plugin struct {
 	// Nil means config.Snapshot().ITunes (LibraryReadPath, LibraryWritePath),
 	// the only value production uses; tests point it at fixture files.
 	itunesLibraryPaths func() (read, write string)
+	// ownerEmail is the configured owner_email an owner grant is re-checked
+	// against when repairs.apply redeems it. Nil means
+	// config.Snapshot().OwnerEmail, the only value production uses; tests
+	// set it rather than the process-wide config.
+	ownerEmail func() string
 
 	repairsOnce sync.Once
 	repairsReg  *repairs.Registry
