@@ -1,5 +1,5 @@
 // file: internal/repairs/owner_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9d4e2b71-6c38-4a05-8f1e-3b7a5c0d2e96
 // last-edited: 2026-10-07
 
@@ -75,6 +75,10 @@ func ownerSetup(t *testing.T) (*memStore, *ownerFixer, *PlanResult, *creditFake,
 	return s, f, plan, j, d
 }
 
+// ownerWho is the apply run every grant in these tests is minted for: the
+// op's actor is the granting user and owner_email is the grant's email.
+var ownerWho = OwnerRedeemer{ActorUserID: "owner", IsOwner: func(e string) bool { return e == "owner@example.test" }}
+
 func grantFor(t *testing.T, g *OwnerGrants, rows ...string) string {
 	t.Helper()
 	tok, err := g.Issue(OwnerGrant{UserID: "owner", AuthMethod: "cf_access", AccessEmail: "owner@example.test", FixerID: "owner-fx", PlanOpID: "op-plan", RowIDs: rows})
@@ -134,7 +138,7 @@ func TestRunApply_OwnerGrantAppliesOwnerRowWithAudit(t *testing.T) {
 	s, f, plan, j, d := ownerSetup(t)
 	g := NewOwnerGrants()
 	p := ApplyParams{FixerID: f.ID(), PlanOpID: "op-plan", OwnerApplyRowIDs: []string{"own"}, OwnerGrant: grantFor(t, g, "own")}
-	d.Owner = ResolveOwnerApproval(g, p)
+	d.Owner = ResolveOwnerApproval(g, p, ownerWho)
 	require.Empty(t, d.Owner.Refused)
 	res, err := RunApply(context.Background(), f, plan, "op-plan", nil, false, d, nopReporter{})
 	require.NoError(t, err)
@@ -155,7 +159,7 @@ func TestRunApply_OwnerGrantAppliesOwnerRowWithAudit(t *testing.T) {
 	require.Equal(t, "journal:own", j.order[0], "the audit note precedes the write")
 
 	// The same token again (a retry, a copied param) finds nothing.
-	again := ResolveOwnerApproval(g, p)
+	again := ResolveOwnerApproval(g, p, ownerWho)
 	require.NotEmpty(t, again.Refused)
 }
 
@@ -175,7 +179,7 @@ func TestRunApply_OwnerRowsRefusedWithoutValidGrant(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			s, f, plan, _, d := ownerSetup(t)
-			d.Owner = ResolveOwnerApproval(g, p)
+			d.Owner = ResolveOwnerApproval(g, p, ownerWho)
 			if p.Resume != nil {
 				d.Resumed = p.Resume
 			}
@@ -188,6 +192,35 @@ func TestRunApply_OwnerRowsRefusedWithoutValidGrant(t *testing.T) {
 			}
 		})
 	}
+}
+
+// 2026-10-07 review: a grant token is a bearer value in op params, and any
+// caller who can read an operation could copy it into an op of its own (or
+// redeem it after owner_email changed). It now redeems only for an op
+// enqueued for the user it was minted for, while its Access email is still
+// the configured owner.
+func TestResolveOwnerApproval_BoundToRedeemer(t *testing.T) {
+	notOwner := func(string) bool { return false }
+	for name, who := range map[string]OwnerRedeemer{
+		"op enqueued for another user": {ActorUserID: "someone-else", IsOwner: ownerWho.IsOwner},
+		"op with no actor":             {IsOwner: ownerWho.IsOwner},
+		"owner_email changed since":    {ActorUserID: "owner", IsOwner: notOwner},
+		"no owner check":               {ActorUserID: "owner"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			g := NewOwnerGrants()
+			p := ApplyParams{FixerID: "owner-fx", PlanOpID: "op-plan", OwnerApplyRowIDs: []string{"own"}, OwnerGrant: grantFor(t, g, "own")}
+			a := ResolveOwnerApproval(g, p, who)
+			require.NotNil(t, a)
+			require.NotEmpty(t, a.Refused)
+			// Refused or not, the grant is consumed: the rightful run that
+			// races in after a copied token finds nothing either.
+			require.NotEmpty(t, ResolveOwnerApproval(g, p, ownerWho).Refused)
+		})
+	}
+	g := NewOwnerGrants()
+	p := ApplyParams{FixerID: "owner-fx", PlanOpID: "op-plan", OwnerApplyRowIDs: []string{"own"}, OwnerGrant: grantFor(t, g, "own")}
+	require.Empty(t, ResolveOwnerApproval(g, p, ownerWho).Refused, "the run enqueued for the owner")
 }
 
 func expiredGrant(t *testing.T, g *OwnerGrants) string {
@@ -207,7 +240,7 @@ func TestRunApply_OwnerGrantForNonOwnerRowRefused(t *testing.T) {
 	s, f, plan, _, d := ownerSetup(t)
 	g := NewOwnerGrants()
 	d.Owner = ResolveOwnerApproval(g, ApplyParams{FixerID: f.ID(), PlanOpID: "op-plan",
-		OwnerApplyRowIDs: []string{"manual"}, OwnerGrant: grantFor(t, g, "manual")})
+		OwnerApplyRowIDs: []string{"manual"}, OwnerGrant: grantFor(t, g, "manual")}, ownerWho)
 	require.Empty(t, d.Owner.Refused)
 	res, err := RunApply(context.Background(), f, plan, "op-plan", nil, false, d, nopReporter{})
 	require.NoError(t, err)

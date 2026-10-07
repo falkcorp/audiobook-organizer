@@ -1,5 +1,5 @@
 // file: internal/server/handlers/repairs/owner_apply_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4c8a1e57-3b29-4d6f-a0e4-6f2d9b7c1a83
 // last-edited: 2026-10-07
 
@@ -131,11 +131,16 @@ func TestOwnerApply_AccessOwnerEnqueuesGrantedApply(t *testing.T) {
 			require.False(t, *p.DryRun)
 			require.NotEmpty(t, p.OwnerGrant)
 
-			a := repairs.ResolveOwnerApproval(grants, p)
+			// The op is enqueued for the owner, and the grant redeems only
+			// for that actor while the Access email is still owner_email.
+			require.Equal(t, "u-owner", enq.calls[0].actor)
+			who := repairs.OwnerRedeemer{ActorUserID: enq.calls[0].actor,
+				IsOwner: func(e string) bool { return auth.IsOwnerEmail(e, testOwnerEmail) }}
+			a := repairs.ResolveOwnerApproval(grants, p, who)
 			require.Empty(t, a.Refused)
 			require.Equal(t, "u-owner", a.UserID)
 			require.Equal(t, string(auth.MethodCFAccess), a.AuthMethod)
-			require.NotEmpty(t, repairs.ResolveOwnerApproval(grants, p).Refused, "single use")
+			require.NotEmpty(t, repairs.ResolveOwnerApproval(grants, p, who).Refused, "single use")
 		})
 	}
 }

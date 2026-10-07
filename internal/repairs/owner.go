@@ -1,5 +1,5 @@
 // file: internal/repairs/owner.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7a3d5f81-2c94-4e0b-b6a7-1f8e3c2d9b54
 // last-edited: 2026-10-07
 
@@ -140,12 +140,29 @@ func (a *OwnerApproval) has(id string) bool {
 	return a != nil && a.Refused == "" && slices.Contains(a.RowIDs, id)
 }
 
+// OwnerRedeemer is the apply run redeeming a grant, as ResolveOwnerApproval
+// checks it. A grant token is a bearer value carried in op params, which any
+// caller who can read an operation can copy into an op of its own; so the
+// grant is honoured only for a run enqueued for the user it was minted for,
+// and only while its Access email is still the configured owner.
+type OwnerRedeemer struct {
+	// ActorUserID is the user the redeeming op was enqueued for (the op
+	// row's actor). Empty refuses.
+	ActorUserID string
+	// IsOwner reports whether the grant's verified Access email names the
+	// owner_email configured NOW (auth.IsOwnerEmail), so a grant cannot
+	// outlive an owner_email change. nil refuses.
+	IsOwner func(accessEmail string) bool
+}
+
 // ResolveOwnerApproval turns an apply's owner params into its approval. It
 // takes the grant from grants (consuming it) and checks it names exactly
-// this fixer, plan and rows. nil when the params request no owner rows. A
-// resumed run (p.Resume set) is refused whatever its grant: owner rows are
-// only ever applied by the run the owner's click started.
-func ResolveOwnerApproval(grants *OwnerGrants, p ApplyParams) *OwnerApproval {
+// this fixer, plan and rows, was minted for the user the run is enqueued for
+// (who.ActorUserID) and still proves the configured owner (who.IsOwner).
+// nil when the params request no owner rows. A resumed run (p.Resume set) is
+// refused whatever its grant: owner rows are only ever applied by the run
+// the owner's click started.
+func ResolveOwnerApproval(grants *OwnerGrants, p ApplyParams, who OwnerRedeemer) *OwnerApproval {
 	ids := normalizeIDs(p.OwnerApplyRowIDs)
 	if len(ids) == 0 {
 		return nil
@@ -171,6 +188,10 @@ func ResolveOwnerApproval(grants *OwnerGrants, p ApplyParams) *OwnerApproval {
 		return refuse("the owner grant names other rows")
 	case gr.AuthMethod != OwnerAuthMethod || gr.AccessEmail == "":
 		return refuse("the owner grant was not minted for a verified Cloudflare Access owner sign-in")
+	case who.ActorUserID == "" || who.ActorUserID != gr.UserID:
+		return refuse("the owner grant was minted for another user than the one this apply runs for")
+	case who.IsOwner == nil || !who.IsOwner(gr.AccessEmail):
+		return refuse("the owner grant's Cloudflare Access sign-in is not the configured owner_email")
 	}
 	return &OwnerApproval{UserID: gr.UserID, AuthMethod: gr.AuthMethod, RowIDs: ids}
 }
