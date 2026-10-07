@@ -1,7 +1,7 @@
 // file: internal/repairs/owner.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7a3d5f81-2c94-4e0b-b6a7-1f8e3c2d9b54
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 package repairs
 
@@ -23,10 +23,11 @@ import (
 // at plan time (Row.OwnerApplicable); the row stays skipped, so no bulk
 // selection, scheduled run or plain apply ever writes it.
 //
-// The only way in is a grant: the Repairs HTTP handler, for a request a
-// person authenticated interactively (a login session or a Cloudflare Access
-// SSO identity, never an API key), mints a one-shot grant in this process's
-// memory for one row of one plan, and enqueues repairs.apply naming it. The
+// The only way in is a grant: the Repairs HTTP handler, for a request that
+// carries a verified Cloudflare Access JWT for the configured owner email
+// (auth.OwnerProofWhyNot; owner decision 2026-10-07 — a password, SSO,
+// temp-login or invite session is not enough), mints a one-shot grant in this
+// process's memory for one row of one plan, and enqueues repairs.apply naming it. The
 // apply op takes (consumes) the grant before any write. Op params are never
 // trusted on their own: params written by hand (POST /operations/v2), a
 // retry, or a resume after a restart find no grant, and the row is refused
@@ -37,6 +38,10 @@ import (
 // a row the plan did not mark owner-applicable.
 const OutcomeOwnerRefused = "owner_apply_refused"
 
+// OwnerAuthMethod is the only auth method an owner grant may carry
+// (auth.MethodCFAccess; a string here so this package does not import auth).
+const OwnerAuthMethod = "cf_access"
+
 // OwnerGrantTTL is how long a minted grant waits for its apply op to start.
 // An apply queues behind at most the one running apply (ConcurrencyKey) and
 // its scan stand-down wait, so a grant that outlives this is stale.
@@ -46,6 +51,12 @@ var OwnerGrantTTL = 2 * time.Hour
 type OwnerGrant struct {
 	UserID     string
 	AuthMethod string
+	// AccessEmail is the verified Cloudflare Access email that proved the
+	// owner. Issue refuses a grant without it, or with any AuthMethod but
+	// cf_access, so every exception an owner grant unlocks (the owner row
+	// itself, and its OwnerITunesDatabaseOnly books) is reachable only from
+	// an Access-proven request, whichever caller mints it.
+	AccessEmail string
 	FixerID    string
 	PlanOpID   string
 	RowIDs     []string
@@ -75,6 +86,9 @@ var DefaultOwnerGrants = NewOwnerGrants()
 func (g *OwnerGrants) Issue(gr OwnerGrant) (string, error) {
 	if gr.UserID == "" || gr.FixerID == "" || gr.PlanOpID == "" || len(gr.RowIDs) == 0 {
 		return "", errors.New("repairs: owner grant needs a user, fixer, plan and rows")
+	}
+	if gr.AuthMethod != OwnerAuthMethod || gr.AccessEmail == "" {
+		return "", errors.New("repairs: an owner grant is minted only for a verified Cloudflare Access owner sign-in")
 	}
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
@@ -150,11 +164,13 @@ func ResolveOwnerApproval(grants *OwnerGrants, p ApplyParams) *OwnerApproval {
 	gr, ok := grants.Take(p.OwnerGrant)
 	switch {
 	case !ok:
-		return refuse("no valid owner grant (owner rows are applied only by the owner's own click in Repairs, signed in interactively; a grant is single-use, expires, and does not survive a restart)")
+		return refuse("no valid owner grant (owner rows are applied only by the owner's own click in Repairs, signed in through Cloudflare Access; a grant is single-use, expires, and does not survive a restart)")
 	case gr.FixerID != p.FixerID || gr.PlanOpID != p.PlanOpID:
 		return refuse("the owner grant is for another fixer or plan")
 	case !slices.Equal(gr.RowIDs, ids):
 		return refuse("the owner grant names other rows")
+	case gr.AuthMethod != OwnerAuthMethod || gr.AccessEmail == "":
+		return refuse("the owner grant was not minted for a verified Cloudflare Access owner sign-in")
 	}
 	return &OwnerApproval{UserID: gr.UserID, AuthMethod: gr.AuthMethod, RowIDs: ids}
 }

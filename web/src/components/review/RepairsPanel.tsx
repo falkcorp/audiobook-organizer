@@ -1,5 +1,5 @@
 // file: web/src/components/review/RepairsPanel.tsx
-// version: 1.21.0
+// version: 1.22.0
 // guid: 9c4f1a73-2e58-4b06-a9d1-6e3b8c7f0d52
 // last-edited: 2026-10-07
 
@@ -587,7 +587,11 @@ function OwnerApplyCell({ row, repairs }: { row: RepairRow } & RepairsPanelProps
             size="small"
             variant="outlined"
             color="secondary"
-            disabled={repairs.applying || repairs.trial?.phase === 'running'}
+            disabled={
+              repairs.applying ||
+              repairs.trial?.phase === 'running' ||
+              repairs.ownerStatus?.allowed === false
+            }
             data-testid={`repairs-owner-apply-${row.row_id}`}
             onClick={() =>
               repairs.dispatch({
@@ -606,6 +610,17 @@ function OwnerApplyCell({ row, repairs }: { row: RepairRow } & RepairsPanelProps
         )}
         {outcome && <OutcomeChip result={outcome} />}
       </Stack>
+      {!settled && repairs.ownerStatus?.allowed === false && (
+        <Typography
+          variant="caption"
+          component="div"
+          sx={{ mt: 0.5, color: 'warning.main' }}
+          data-testid={`repairs-owner-why-not-${row.row_id}`}
+        >
+          {repairs.ownerStatus.reason ||
+            `Owner actions need you to sign in through Cloudflare Access (${window.location.host}).`}
+        </Typography>
+      )}
     </Box>
   );
 }

@@ -1,5 +1,5 @@
 // file: internal/server/middleware/absauth.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: e7051b93-6c28-4a0f-9d34-b8f2a61c05de
 // last-edited: 2026-10-07
 
@@ -420,6 +420,7 @@ func (r *ABSIdentityResolver) Bind(c *gin.Context, id *ABSIdentity) {
 		method = auth.MethodAPIKey
 	}
 	ctx = auth.WithMethod(ctx, method)
+	ctx = auth.WithAccessEmail(ctx, "")
 	c.Request = c.Request.WithContext(ctx)
 }
 

@@ -1,5 +1,5 @@
 // file: internal/server/middleware/cfaccess.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8d1a4f92-3c07-4b56-9e28-6a0b5c2e7d41
 // last-edited: 2026-10-07
 
@@ -87,6 +87,9 @@ func CloudflareAccessAuth(a *CFAccessAuthenticator) gin.HandlerFunc {
 		ctx := auth.WithUser(c.Request.Context(), user)
 		ctx = auth.WithPermissions(ctx, perms)
 		ctx = auth.WithMethod(ctx, auth.MethodCFAccess)
+		// The verified JWT's email, for the owner check (auth.OwnerProofWhyNot).
+		// Never the unsigned Cf-Access-Authenticated-User-Email header.
+		ctx = auth.WithAccessEmail(ctx, claims.Email)
 		c.Request = c.Request.WithContext(ctx)
 		c.Next()
 	}

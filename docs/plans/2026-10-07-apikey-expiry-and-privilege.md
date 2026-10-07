@@ -1,5 +1,5 @@
 <!-- file: docs/plans/2026-10-07-apikey-expiry-and-privilege.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 67c7aa4f-72e2-4a9c-805a-92fff01c3308 -->
 <!-- last-edited: 2026-10-07 -->
 
@@ -52,11 +52,15 @@ invite creation (`role_id`), which is guarded.
 | `POST /api/v1/users/invite` | Creates a user (with a role) on acceptance, and mints a session |
 | `POST /api/v1/users/:id/deactivate` | User status (identity) change; a key could lock the owner out |
 | `POST /api/v1/users/:id/reactivate` | Re-enables a sign-in identity, for example a disabled admin whose password is known |
-| `POST /api/v1/auth/api-keys` with `user_id` ≠ caller | API key creation for another user (checked in the handler, because the same route stays open for a key's own user) |
-| `POST /api/v1/auth/api-keys/:id/rotate` on another user's key | The response carries the new token for that user's key, so it is key creation for another user (checked in the handler) |
+| `POST /api/v1/auth/api-keys` with `user_id` ≠ caller | API key creation for another user (`credRouteWhen`: the route predicate binds the body with the handler's own struct, so the guard and the handler read the same `user_id`) |
+| `POST /api/v1/auth/api-keys/:id/rotate` on another user's key | The response carries the new token for that user's key, so it is key creation for another user (`credRouteWhen`; a lookup error or a missing key counts as guarded) |
+| `PATCH /api/v1/auth/api-keys/:id` | Re-enabling a key an admin deactivated hands a credential back (added after the security review) |
+| `POST /api/v1/tools/:name/install`, `POST /api/v1/update/apply` | Install a program the server runs / replace the server binary (added after the review) |
+| `POST /api/v1/import-paths` | Adds a scan root: a path the server opens (added after the review) |
+| `PUT /api/v1/plugins/:id/settings` | Free-form plugin settings, which can name paths and programs (added after the review) |
 | `POST /api/v1/system/reset`, `POST /api/v1/system/factory-reset` | Both wipe the store, users included; the public `POST /auth/setup` then creates a fresh admin with a password, a key-to-signed-in-admin path |
 | `POST /api/v1/backup/restore` | Replaces every user, password hash and session with the backup's |
-| `PUT /api/v1/config` when it **changes** a sign-in setting | `enable_auth`, `basic_auth_*`, `oauth_*`, `cf_access_*`, `abs_api_enabled`, `abs_auth_modes`, `abs_*_ttl`, `abs_refresh_grace`, `bootstrap_key_ttl`, `bootstrap_key_ttl_days`, `write_startup_readonly_key`. Adding an email to the allowlist and setting the default role to admin is a key-to-SSO-admin path. Only a changed value is refused, so a GET→PUT round trip (settings export/import) by a key still works |
+| `PUT /api/v1/config` when it **changes** a protected setting (D13) | `enable_auth`, `basic_auth_*`, `oauth_*`, `cf_access_*`, `abs_api_enabled`, `abs_auth_modes`, `abs_*_ttl`, `abs_refresh_grace`, `bootstrap_key_ttl`, `bootstrap_key_ttl_days`, `write_startup_readonly_key`. Adding an email to the allowlist and setting the default role to admin is a key-to-SSO-admin path. Only a changed value is refused, so a GET→PUT round trip (settings export/import) by a key still works |
 
 **Not guarded, and why**
 
@@ -65,7 +69,6 @@ invite creation (`role_id`), which is guarded.
 | `POST /auth/setup`, `/auth/login`, `/auth/accept-invite`, `/auth/bootstrap`, OAuth start/callback, `GET /auth/temp-login` | Public, pre-authentication; no API key involved. The bootstrap exchange (token → key, creating the admin user when none exists) stays exactly as it is |
 | `GET /auth/me`, `GET /auth/sessions`, `GET /auth/api-keys[/:id]`, `GET /users`, `GET /users/invites` | Reads |
 | `POST /auth/logout`, `DELETE /auth/sessions/:id`, `DELETE /users/invites/:token`, `DELETE /auth/api-keys/:id` | Revocations only reduce access; automation may need them |
-| `PATCH /auth/api-keys/:id` (active/inactive) | Toggles an existing key; the caller never receives that key's token, and the key keeps its expiry |
 | `POST /auth/api-keys` for the caller's own user | Allowed, but when the caller is an API key the new key may not outlive the calling key (decision D6) |
 | `POST /auth/api-keys/:id/rotate` on a key of the caller's own user | Allowed; the new key keeps the old key's lifetime (D5), clamped to the calling key's expiry when an API key asks (D6) |
 | `POST /backup/create`, `GET /backup/list`, `DELETE /backup/:filename` | Do not change who can sign in |
@@ -153,10 +156,118 @@ Why: 0 now means 30 days on the server, so "Never" would lie. The old
 `relativeTime` only handled past dates and rendered a future expiry as
 "-29d ago".
 
-**D10. One message for every refusal:** "API keys cannot change passwords,
-users, roles, invites, sessions or sign-in settings; sign in to do this" (403).
+**D10. One message for every refusal:** `auth.CredentialChangeRefusedMessage`,
+"API keys cannot change passwords, users, roles, invites, sessions, keys of
+other users, sign-in settings, executables, database locations or server
+paths; sign in to do this" (403), used by the route guard and by PUT /config.
 Why: a single phrase is greppable in logs and tests can prove a 403 came from
 this guard and not from a permission check.
+
+## Security review follow-up (2026-10-07): three findings, and what each was
+
+**Finding 1, parser differential (`config/signin_settings.go`).** The sign-in
+check looked payload keys up exactly (`payload["oauth_default_role"]`), while
+`decodeConfigPayload` uses `encoding/json`, which matches a key to a field
+case-insensitively. An API key's `{"OAuth_Default_Role":"admin"}` therefore
+passed the check, was decoded onto `oauth_default_role`, and answered 200. The
+same differential reached the immutable, secret and removed-key lists, which
+are exact-key too. Fix, two layers:
+- One source of truth: the check runs inside `UpdateService.UpdateConfig` on
+  the DECODED candidate config versus the stored one
+  (`config.ChangedProtectedFields`, `config/protected_fields.go`), so it sees
+  exactly what would be stored however the request spelled it. It runs before
+  `Validate` (so a key cannot probe paths through validation errors) and
+  after (so a normalization cannot carry a change past it). A field counts as
+  changed only when it differs from both the stored config and its normalized
+  form, so a same-value round trip is never refused.
+- Fail closed on ambiguity: `lookupJSONField` is exact-only, so a key that
+  matches a field only by case is refused as unknown (400) before decoding.
+  `signin_settings.go` is deleted.
+
+**Finding 2, sibling-path gate parity (`wire_auth_routes.go`).** The guard was
+attached route by route (`s.credGuard()`) plus three in-handler checks, and
+the inventory was a grep. Re-enumerating from gin's `Routes()` (478 routes, 280
+state-changing) found five more credential/path routes with no guard: `PATCH
+/auth/api-keys/:id` (re-enable a deactivated key), `POST /tools/:name/install`,
+`POST /update/apply`, `POST /import-paths`, `PUT /plugins/:id/settings`. Fix:
+credential routes register only through `s.credRoute` / `s.credRouteWhen`
+(`internal/server/credential_routes.go`), which attach the one shared
+middleware and record the route; the per-handler checks are removed.
+`credential_routes_test.go` walks `Routes()` and fails on any state-changing
+route that is neither recorded nor on an exempt list with a reason; a route
+whose path looks sensitive (auth, users, keys, config, tools, plugins, backup,
+restore, …) must be exempted by exact route, never by a prefix. A second test
+sends an all-scope key to every recorded route and expects the guard's 403.
+
+**Finding 3 (same class: a check against a nil time fails open).** Both API
+key paths, `/api/v1` (`handleAPIKeyAuth`) and the ABS surface
+(`ResolveAPIKey`), checked `ExpiresAt != nil && now.After(*ExpiresAt)`, so a
+key with no expiry (a restored backup, a direct write, a stamp that failed)
+was valid forever; and `clampToCallingKey` returned the requested expiry
+unclamped when the calling key had none. Fix: one check,
+`middleware.APIKeyExpiryRefusal`, refuses a nil or zero expiry on both paths;
+the clamp refuses (403) when the caller is not a person and has no calling-key
+expiry to clamp to. Same re-audit, same class: ABS `/api/authorize` minted an
+ABS access token for a request authenticated by an `abk_` key (a second bearer
+credential with its own lifetime); it now echoes the presented key.
+
+**D13. Settings that name an executable, a path the server opens or runs, or
+the database location need an interactive session, like sign-in settings; a
+same-value round trip is allowed.** One classification,
+`configFieldRules` in `internal/config/protected_fields.go`, is the only list;
+`protected_fields_test.go` walks every `Config` leaf and fails when a field
+whose name looks like a path, program, endpoint, database or sign-in setting
+has no entry (protected or not, with a reason), and when an entry names a
+field that no longer exists. Why each is protected:
+
+| Class | Keys | Why |
+|---|---|---|
+| executable | `tools.managed_dir`, `tools.{ollama,fpcalc}.custom_path`, `tools.{ollama,fpcalc}.mode` | a program the server runs, or the switch between the managed binary and a caller-named one |
+| database | `database_path`, `database_type` (also immutable), `activity_backend`, `activity_db_path`, `activity_db_move_on_change` | where the user table and activity log live; pointing elsewhere swaps who can sign in |
+| server path | `root_dir`, `path_aliases`, `playlist_dir`, `backup_dir`, `openlibrary_dump_dir`, `whisper_clip_cache_dir`, `folder_naming_pattern`, `file_naming_pattern`, `protected_paths`, `itunes.library_write_path`, `itunes.library_read_path`, `itunes.windows_root_path`, `itunes.media_root`, `itunes.path_mappings`, `itunes.libraries.{original,ao}` (itl/xml paths), `itunes.libraries.{pointed_at,import_source}`, `plugins[].settings` | paths the server scans, writes, serves, backs up to or restores from, or the selectors between them; plugin settings are free-form and can name paths |
+| sign-in | `enable_auth`, `basic_auth_*`, `oauth_*`, `cf_access_*`, `owner_email`, `abs_api_enabled`, `abs_auth_modes`, `abs_*_ttl`, `abs_refresh_grace`, `write_startup_readonly_key`, `enable_rate_limit`, `auth_rate_limit_per_minute` | who can sign in and how hard guessing is |
+
+Import/scan roots that live outside `Config` (`POST /import-paths`) are
+guarded at the route. Left unprotected, with the reason in the rule:
+outbound endpoints (`openai_base_url`, `embedding.base_url`,
+`ai_backend.local_base_url`, `ai_endpoints`, `whisper_*` URLs,
+`metadata_sources[].base_url`, `otel_exporter_otlp_endpoint`,
+`deluge_web_url`, `download_client`), third-party credentials, exclude
+patterns, plugin on/off. See Remaining risk for the outbound endpoints.
+
+**D11. Owner proof is Cloudflare Access only (owner decision 2026-10-07).**
+Owner-only actions (Repairs owner apply, and the `OwnerITunesDatabaseOnly`
+guard exception that applies only under an owner grant) need a request that
+carries a VERIFIED Cloudflare Access JWT whose email equals the new
+`owner_email` setting, case-insensitively. Password, OAuth, temp-login and
+invite sessions keep working for everything else but are not the owner. The
+unsigned `Cf-Access-Authenticated-User-Email` header never counts: the Access
+middleware records the email from the verified claims
+(`auth.WithAccessEmail`) and nothing else writes it. `owner_email` is a
+sign-in setting (D13), so only an interactive session or the environment
+(`OWNER_EMAIL`) sets it; unset refuses every owner action.
+`repairs.OwnerGrants.Issue` refuses any grant that is not `cf_access` with an
+Access email, and `ResolveOwnerApproval` re-checks it, so the exception cannot
+be reached by another caller of `Issue`. `GET /repairs/owner-status` lets the
+Repairs page disable the button and say why ("Owner actions need you to sign
+in through Cloudflare Access (<the host the browser used>)").
+**Why:** every other identity is one the server can create or reset itself — a
+password can be changed or stolen, an admin can be created, an OAuth
+allowlist edited, a temp-login minted. The Access identity is issued by
+Cloudflare against the owner's own IdP account; the server can only verify it.
+A stolen password or a newly created admin cannot pass this check.
+
+**D12. When a request has both an Access assertion and an API key, the key
+wins (owner decision 2026-10-07).** A request that presents an `abk_` key
+(the bearer or the session cookie on `/api/v1`; the bearer or `?token=` on
+the ABS surface) is authenticated by the key and recorded `api_key`, with
+every key restriction, whatever Access assertion or session rides along.
+`CloudflareAccessAuth` skips such a request, `RequireAuth` checks the key
+first, the ABS resolver resolves the key and nothing else, and ABS `Bind`
+records an API-key identity as `api_key` (it used to be `abs`).
+**Why:** the stronger fact about the request is that automation's credential is
+on it; recording it as the person's Access login would hand a key the
+person's standing.
 
 ## Bootstrap skill and `scripts/manage-credentials.sh`
 
@@ -221,23 +332,20 @@ or set a new expiry; the WARN log lists every key it stamped.
 
 ## Remaining risk (owner's call)
 
-- **Only an identity the server cannot mint fully closes the owner-apply
-  path.** This change removes the API-key routes to a signed-in admin. A
-  person (or malware) holding an interactive admin session can still mint
-  credentials, by design. Owner apply limited to a Cloudflare Access SSO
-  identity, or a second factor at the click, is what closes that
-  (`todo.d/2026-10-07-repairs-owner-apply-review-followups.md`).
-- A request carrying both a CF Access assertion and an `abk_` bearer is
-  recorded `cf_access` (filed in the same fragment, not changed here).
-- `PUT /config` still lets a `settings.manage` key change everything that is
-  not a sign-in setting, as before. Two of those are broader than this
-  change and were found while enumerating, not fixed: `tools.fpcalc.custom_path`
-  / `tools.ollama.custom_path` name a binary the server runs, and
-  `database_path` points the server at another database on its next start.
-  Either lets a `settings.manage` key run code or swap the user table, which
-  is a superset of "become a signed-in admin". Owner's call whether those
-  keys join the sign-in list or become environment-only.
+- **Outbound endpoints are not protected.** `openai_base_url`,
+  `deluge_web_url`, `download_client.*.host` and similar name hosts the server
+  CALLS, often with a stored credential attached (the OpenAI key, a download
+  client password). A `settings.manage` key can point one elsewhere and
+  receive that credential on the next call. They are outside "a path the
+  server opens or runs", so they are classified unprotected with that reason;
+  making them interactive-only is one line each in `configFieldRules`
+  (`todo.d/2026-10-07-outbound-endpoints-and-path-arguments.md`).
+- **Per-request path arguments** (`POST /import/file`, `POST
+  /audiobooks/:id/relocate`, `POST /itunes/relocate`, `POST
+  /discovery/import`) take a path in the request body for one action; they
+  are not settings and are exempt in the route table with that reason (same
+  fragment).
+- `POST /maintenance/wipe` (admin-only, typed confirm) wipes library data,
+  not users or keys, and is exempt.
 - `auto_update.channel` only picks stable/beta from the project's own
   releases; it cannot point at another binary.
-- `PATCH /auth/api-keys/:id` re-activation of an inactive key of the
-  same user is allowed; the caller never receives that key's token.

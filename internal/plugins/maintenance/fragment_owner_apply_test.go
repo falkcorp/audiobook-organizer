@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_owner_apply_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2b7e9d40-1c56-4a83-b9f2-8e0d4a6c3f17
 // last-edited: 2026-10-07
 
@@ -42,7 +42,7 @@ func (f *fragFixture) ownerApply(t *testing.T, planOpID, opID string, rows []str
 	t.Helper()
 	if tok == "" {
 		var err error
-		tok, err = repairs.DefaultOwnerGrants.Issue(repairs.OwnerGrant{UserID: "owner-user", AuthMethod: "session",
+		tok, err = repairs.DefaultOwnerGrants.Issue(repairs.OwnerGrant{UserID: "owner-user", AuthMethod: "cf_access", AccessEmail: "owner@example.test",
 			FixerID: fragFixerID, PlanOpID: planOpID, RowIDs: rows})
 		require.NoError(t, err)
 	}
@@ -120,7 +120,7 @@ func TestFragmentFixer_OwnerApply(t *testing.T) {
 				if c.ChangeType == undo.ChangeTypeRepairOwnerApply {
 					notes++
 					require.Contains(t, c.NewValue, `"user_id":"owner-user"`)
-					require.Contains(t, c.NewValue, `"auth_method":"session"`)
+					require.Contains(t, c.NewValue, `"auth_method":"cf_access"`)
 				}
 			}
 			require.Equal(t, 1, notes, "one owner audit note")
@@ -147,7 +147,7 @@ func TestFragmentFixer_OwnerApply(t *testing.T) {
 		require.Equal(t, repairs.OutcomeOwnerRefused, out.Rows[0].Outcome)
 		require.True(t, f.live(t, "libA"))
 
-		tok, err := repairs.DefaultOwnerGrants.Issue(repairs.OwnerGrant{UserID: "owner-user", AuthMethod: "session",
+		tok, err := repairs.DefaultOwnerGrants.Issue(repairs.OwnerGrant{UserID: "owner-user", AuthMethod: "cf_access", AccessEmail: "owner@example.test",
 			FixerID: fragFixerID, PlanOpID: "op-plan", RowIDs: []string{m.RowID}})
 		require.NoError(t, err)
 		out = f.ownerApply(t, "op-plan", "op-resumed", []string{m.RowID}, tok, &repairs.ApplyCheckpoint{})
@@ -168,7 +168,7 @@ func TestFragmentFixer_OwnerApply(t *testing.T) {
 		f := ownerFixture(t, true)
 		m := findRow(t, f.plan(t, "op-plan"), fragRowOwner+":"+f.ids["parent"])
 		require.True(t, m.OwnerApplicable)
-		tok, err := repairs.DefaultOwnerGrants.Issue(repairs.OwnerGrant{UserID: "owner-user", AuthMethod: "session",
+		tok, err := repairs.DefaultOwnerGrants.Issue(repairs.OwnerGrant{UserID: "owner-user", AuthMethod: "cf_access", AccessEmail: "owner@example.test",
 			FixerID: fragFixerID, PlanOpID: "op-plan", RowIDs: []string{m.RowID}})
 		require.NoError(t, err)
 		f.applyOp("op-fails", fragFixerID)

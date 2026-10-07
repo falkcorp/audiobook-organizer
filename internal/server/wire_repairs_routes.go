@@ -1,7 +1,7 @@
 // file: internal/server/wire_repairs_routes.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4a9c1e62-3f75-4d08-b8a6-5e2d7c0b9f13
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 package server
 
@@ -23,10 +23,12 @@ func (s *Server) wireRepairsRoutes(protected *gin.RouterGroup) {
 	}
 	h := repairshandler.New(s.repairFixers, enq, s.storeForWiring())
 	protected.GET("/repairs", s.perm(auth.PermLibraryView), h.ListFixers)
+	protected.GET("/repairs/owner-status", s.perm(auth.PermLibraryView), h.GetOwnerStatus)
 	protected.POST("/repairs/:fixer/plan", s.perm(auth.PermLibraryEditMetadata), h.StartPlan)
 	protected.GET("/repairs/:fixer/plan/:op_id/rows", s.perm(auth.PermLibraryView), h.ListPlanRows)
 	protected.POST("/repairs/:fixer/apply", s.perm(auth.PermLibraryEditMetadata), h.StartApply)
 	// The owner's own apply of one owner-only row: the handler also requires
-	// an interactive sign-in, the admin role and a same-origin request.
+	// a verified Cloudflare Access sign-in as owner_email, the admin role and
+	// a same-origin request.
 	protected.POST("/repairs/:fixer/owner-apply", s.perm(auth.PermLibraryEditMetadata), h.OwnerApply)
 }
