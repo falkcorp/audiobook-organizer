@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.84.0
+// version: 2.85.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-10-07
 
@@ -175,6 +175,9 @@ type Server struct {
 	// credRoutes records every route registered through credRoute /
 	// credRouteWhen ("METHOD /full/path"), for credential_routes_test.go.
 	credRoutes map[string]credRouteKind
+	// ownerRoutes records every route registered through ownerRoute
+	// ("METHOD /full/path"), for owner_routes_test.go.
+	ownerRoutes map[string]ownerRouteKind
 	// metadataCacheH is the metadata-cache handler, kept so the startup
 	// warmer can build its review snapshot (warmMetadataReviewSnapshot).
 	metadataCacheH         *handlers.MetadataCacheHandler

@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.24.0
+// version: 4.25.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-10-07
 
@@ -1536,6 +1536,12 @@ func (s *Server) setupRoutes() {
 			// iTunes import routes
 			itunesGroup := protected.Group("/itunes")
 			{
+				// Routes that remove, overwrite or repoint tracks in the
+				// iTunes library, or turn off its safety checks, are
+				// owner-only and go through s.ownerRoute (owner_routes.go;
+				// plan D14). owner_routes_test.go fails on a new
+				// state-changing /itunes route that is not classified.
+				//
 				// NOTE: the 12 core iTunes routes (validate, test-mapping,
 				// import, write-back[/all/preview], library-stats, books,
 				// import-status[/bulk], library-status, sync) were migrated
@@ -1557,22 +1563,22 @@ func (s *Server) setupRoutes() {
 				// applies all adds/removes/updates in one atomic
 				// safeWriteITL call. Supports dry_run=true to
 				// preview without applying. Backlog 7.9.
-				itunesGroup.POST("/rebuild", s.perm(auth.PermLibraryEditMetadata), s.rebuildITLHandler)
+				s.ownerRoute(itunesGroup, http.MethodPost, "/rebuild", ownerRouteApply, s.rebuildITLHandler)
 				// Full rebuild: strip all tracks, re-insert all DB books (7.9 nuclear path).
-				itunesGroup.POST("/rebuild-full", s.perm(auth.PermLibraryEditMetadata), s.rebuildITLFullHandler)
+				s.ownerRoute(itunesGroup, http.MethodPost, "/rebuild-full", ownerRouteApply, s.rebuildITLFullHandler)
 				// Partial export: build ITL containing only specified book IDs (6.4 partial).
 				itunesGroup.POST("/export-partial", s.perm(auth.PermIntegrationsManage), s.exportITLPartialHandler)
 				// Location-only relocate: repoint each book_file's track at its
 				// current path (per-file PID match); NEVER removes/adds, so
 				// music/podcasts/playlists are untouched. dry_run=true previews.
-				itunesGroup.POST("/relocate", s.perm(auth.PermLibraryEditMetadata), s.relocateITLHandler)
+				s.ownerRoute(itunesGroup, http.MethodPost, "/relocate", ownerRouteApply, s.relocateITLHandler)
 				// Adopt-base: re-bless the identity sidecar after reseeding the
 				// writeback slot from a different library (else K13/K14 reject writes).
-				itunesGroup.POST("/adopt-base", s.perm(auth.PermLibraryEditMetadata), s.adoptBaseHandler)
+				s.ownerRoute(itunesGroup, http.MethodPost, "/adopt-base", ownerRouteAlways, s.adoptBaseHandler)
 				// Cleanup-merged (P3): remove stale duplicate audiobook tracks left
 				// by merged/superseded books; auto-cleans orphaned playlist refs.
 				// dry_run=true previews.
-				itunesGroup.POST("/cleanup-merged", s.perm(auth.PermLibraryEditMetadata), s.cleanupMergedHandler)
+				s.ownerRoute(itunesGroup, http.MethodPost, "/cleanup-merged", ownerRouteApply, s.cleanupMergedHandler)
 				// PID-integrity: read-only census of duplicate book_file iTunes PIDs
 				// (a PID must identify exactly one row) + relocate-correctness probe.
 				itunesGroup.GET("/pid-integrity", s.perm(auth.PermLibraryEditMetadata), s.pidIntegrityHandler)
@@ -1582,13 +1588,13 @@ func (s *Server) setupRoutes() {
 				// Write-back queue (2026-10-07): failures, backoff and held
 				// removes of the batcher, which no longer drops anything.
 				itunesGroup.GET("/writeback/status", s.perm(auth.PermLibraryView), s.itunesWritebackStatusHandler)
-				itunesGroup.POST("/writeback/held/release", s.perm(auth.PermLibraryEditMetadata), s.itunesWritebackReleaseHeldHandler)
+				s.ownerRoute(itunesGroup, http.MethodPost, "/writeback/held/release", ownerRouteAlways, s.itunesWritebackReleaseHeldHandler)
 
 				// ITL file transfer (6.4)
 				itunesGroup.GET("/library/download", s.perm(auth.PermIntegrationsManage), s.itunesSvcGuard(func(c *gin.Context) { s.itunesSvc.Transfer.HandleDownload(c) }))
-				itunesGroup.POST("/library/upload", s.perm(auth.PermIntegrationsManage), s.itunesSvcGuard(func(c *gin.Context) { s.itunesSvc.Transfer.HandleUpload(c) }))
+				s.ownerRoute(itunesGroup, http.MethodPost, "/library/upload", ownerRouteAlways, s.itunesSvcGuard(func(c *gin.Context) { s.itunesSvc.Transfer.HandleUpload(c) }))
 				itunesGroup.GET("/library/backups", s.perm(auth.PermIntegrationsManage), s.itunesSvcGuard(func(c *gin.Context) { s.itunesSvc.Transfer.HandleBackupList(c) }))
-				itunesGroup.POST("/library/restore", s.perm(auth.PermIntegrationsManage), s.itunesSvcGuard(func(c *gin.Context) { s.itunesSvc.Transfer.HandleRestore(c) }))
+				s.ownerRoute(itunesGroup, http.MethodPost, "/library/restore", ownerRouteAlways, s.itunesSvcGuard(func(c *gin.Context) { s.itunesSvc.Transfer.HandleRestore(c) }))
 			}
 
 			// Cover art

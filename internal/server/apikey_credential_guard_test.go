@@ -1,5 +1,5 @@
 // file: internal/server/apikey_credential_guard_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3e9a5c72-4b1d-4f08-b6e3-9d2c7a0f5e14
 // last-edited: 2026-10-07
 
@@ -43,6 +43,13 @@ type credGuardFixture struct {
 
 func setupCredGuardServer(t *testing.T) *credGuardFixture {
 	t.Helper()
+	return setupCredGuardServerWith(t, nil)
+}
+
+// setupCredGuardServerWith is setupCredGuardServer with cfg applied to the
+// config before the server (and so its router) is built.
+func setupCredGuardServerWith(t *testing.T, cfg func(*config.Config)) *credGuardFixture {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
 	origCfg := config.AppConfig
 	tempDir := t.TempDir()
@@ -51,6 +58,9 @@ func setupCredGuardServer(t *testing.T) *credGuardFixture {
 		DatabasePath: filepath.Join(tempDir, "test.pebble"),
 		RootDir:      tempDir,
 		EnableAuth:   true,
+	}
+	if cfg != nil {
+		cfg(&config.AppConfig)
 	}
 	store, err := database.NewPebbleStoreInMemory(config.AppConfig.DatabasePath)
 	require.NoError(t, err)

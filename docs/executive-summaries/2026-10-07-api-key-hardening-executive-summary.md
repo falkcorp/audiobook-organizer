@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-07-api-key-hardening-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 8cf09508-ec7f-49a1-8225-1cd5183659d8 -->
 <!-- last-edited: 2026-10-07 -->
 
@@ -50,6 +50,20 @@ Branch: `fix/apikey-expiry-and-privilege`. Plan and every decision:
   the sign-in check; five related pages had no guard; and a key with no
   expiry date was treated as never expiring.
 
+- **A second review found two more gaps in the owner check, now closed.**
+  The email match treated some look-alike characters as the same letter (a
+  "K" written with the Kelvin symbol matched a plain "k"), so a different
+  Cloudflare account with a look-alike address could pass as you. It now
+  matches plain letters only. And an approval you gave by clicking could, in
+  principle, be picked up by someone else's job; it now only works in the job
+  your click started, and stops working if the owner email changes.
+- **Changes that can remove or move tracks in your iTunes library are now
+  yours alone.** Releasing held track removals, rebuilding the iTunes
+  library, moving track locations, re-blessing the library after a swap, and
+  uploading or restoring the library file all need your Cloudflare Access
+  login. Previews (dry runs) still work for any admin. Every one of these
+  actions is logged with who did it.
+
 ## What you might notice
 
 - Anything that created users or reset passwords with an API key now gets a
@@ -57,6 +71,9 @@ Branch: `fix/apikey-expiry-and-privilege`. Plan and every decision:
 - **Set the owner email** (environment variable `OWNER_EMAIL`, or the
   `owner_email` setting from a signed-in session). Until it is set, owner
   apply is off for everyone.
+- The iTunes settings buttons for write-back and library upload/restore
+  now refuse a password sign-in with a message saying why. Use the site
+  through Cloudflare Access for those.
 - Integrations whose keys never expired (a metrics scraper, a fingerprint
   worker) stop working 30 days after this deploys unless you rotate or replace
   their keys. The startup log names them.

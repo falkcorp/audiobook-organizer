@@ -1,5 +1,5 @@
 // file: internal/server/handlers/repairs/handler.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 1d8e4c73-5a26-4b9f-8e03-7c2b9f6a1d58
 // last-edited: 2026-10-07
 
@@ -50,6 +50,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
+	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 )
 
 // Page size bounds of the rows endpoint.
@@ -97,19 +98,7 @@ func (h *Handler) ownerWhyNot(c *gin.Context) string {
 	if h.ownerEmail != nil {
 		email = h.ownerEmail()
 	}
-	return auth.OwnerProofWhyNot(c.Request.Context(), email, publicHost(c.Request))
-}
-
-// publicHost is the host the browser used, for the sign-in hint: the
-// forwarded host behind a proxy, else Host.
-func publicHost(r *http.Request) string {
-	if h := strings.TrimSpace(r.Header.Get("X-Forwarded-Host")); h != "" {
-		if i := strings.IndexByte(h, ','); i >= 0 {
-			h = strings.TrimSpace(h[:i])
-		}
-		return h
-	}
-	return r.Host
+	return auth.OwnerProofWhyNot(c.Request.Context(), email, servermiddleware.OwnerPublicHost(c.Request))
 }
 
 // OwnerStatus is GET /repairs/owner-status: whether this request may apply

@@ -1,7 +1,7 @@
 // file: internal/server/itl_relocate.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6a1d4e83-2c9f-4b07-9e15-8d3a0b6f2c41
-// last-edited: 2026-07-22
+// last-edited: 2026-10-07
 //
 // Location-only iTunes writeback ("2-way sync" audiobook relocate) HTTP handlers.
 // Unlike /rebuild (DB-authoritative — removes every ITL track not in the DB, which
@@ -58,7 +58,7 @@ func (s *Server) relocateITLHandler(c *gin.Context) {
 		return
 	}
 
-	if c.Query("dry_run") == "true" {
+	if itunesPreviewOnly(c) {
 		httputil.RespondWithOK(c, gin.H{"dry_run": true, "preview": preview})
 		return
 	}

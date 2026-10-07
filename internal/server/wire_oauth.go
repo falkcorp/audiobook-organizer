@@ -1,7 +1,7 @@
 // file: internal/server/wire_oauth.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5c2e8b04-7a19-4d63-8f05-3b6a0c9e2d47
-// last-edited: 2026-07-27
+// last-edited: 2026-10-07
 
 package server
 
@@ -17,6 +17,12 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 )
+
+// cfAccessVerifierOverride, when set, replaces Cloudflare's JWT verifier in
+// the Access middleware. Set only by tests in this package (before
+// NewServer), so the real router can be driven with Access identities
+// without Cloudflare's keys; production never assigns it.
+var cfAccessVerifierOverride servermiddleware.CFAssertionVerifier
 
 // buildOAuthWiring constructs the OAuth login handler and the Cloudflare Access
 // middleware from config. Returns (nil-safe handler, cfMiddleware-or-nil). Nothing is
@@ -79,7 +85,10 @@ func (s *Server) buildOAuthWiring() (*handlers.OAuthHandler, gin.HandlerFunc) {
 	// refreshes in the BACKGROUND, so it must get a long-lived context, not the
 	// discovery timeout context above.
 	var cfMW gin.HandlerFunc
-	if cfg.CFAccessTeamDomain != "" && cfg.CFAccessAUD != "" {
+	if cfAccessVerifierOverride != nil {
+		cfMW = servermiddleware.CloudflareAccessAuth(
+			servermiddleware.NewCFAccessAuthenticatorWithVerifier(cfAccessVerifierOverride, cfg, s.storeForWiring()))
+	} else if cfg.CFAccessTeamDomain != "" && cfg.CFAccessAUD != "" {
 		if v, verr := oauth.NewCFAccessVerifier(context.Background(), cfg.CFAccessTeamDomain, cfg.CFAccessAUD); verr == nil {
 			cfMW = servermiddleware.CloudflareAccessAuth(
 				servermiddleware.NewCFAccessAuthenticator(v, cfg, s.storeForWiring()))

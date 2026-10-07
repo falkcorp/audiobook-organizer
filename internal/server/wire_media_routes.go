@@ -1,5 +1,5 @@
 // file: internal/server/wire_media_routes.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: c9d0e1f2-a3b4-5678-cdef-901234567890
 // last-edited: 2026-10-07
 
@@ -34,8 +34,10 @@ func (s *Server) wireMediaRoutes(
 		itunesG.POST("/validate", s.perm(auth.PermLibraryEditMetadata), itunesH.Validate)
 		itunesG.POST("/test-mapping", s.perm(auth.PermLibraryEditMetadata), itunesH.TestMapping)
 		itunesG.POST("/import", s.perm(auth.PermLibraryEditMetadata), itunesH.Import)
-		itunesG.POST("/write-back", s.perm(auth.PermLibraryEditMetadata), itunesH.WriteBack)
-		itunesG.POST("/write-back-all", s.perm(auth.PermLibraryEditMetadata), itunesH.WriteBackAll)
+		// write-back takes caller-chosen path_mappings and repoints the
+		// named books' tracks: relocate by another name, so owner-only.
+		s.ownerRoute(itunesG, http.MethodPost, "/write-back", ownerRouteAlways, itunesH.WriteBack)
+		s.ownerRoute(itunesG, http.MethodPost, "/write-back-all", ownerRouteAlways, itunesH.WriteBackAll)
 		itunesG.GET("/library-stats", s.perm(auth.PermLibraryView), itunesH.LibraryStats)
 		itunesG.POST("/write-back/preview", s.perm(auth.PermLibraryEditMetadata), itunesH.WriteBackPreview)
 		itunesG.GET("/books", s.perm(auth.PermLibraryView), itunesH.ListBooks)
