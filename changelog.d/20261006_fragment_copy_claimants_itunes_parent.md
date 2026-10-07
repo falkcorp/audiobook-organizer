@@ -26,3 +26,21 @@
   re-checks the fragments' groups, external ids and user state under the
   merge lock before the first write. Moved rows into an iTunes-linked
   parent are still held.
+
+### Fixed
+
+- **Fragment consolidation never retires a fragment whose own row carries an
+  iTunes path** (review of the change above). The hands-off test
+  (`fragCandidate.itunesWhy`) now counts a row `itunes_path` as an iTunes
+  book, as `itunesCopyWhy` does, for copy, moved, ghost and no-parent rows;
+  such a fragment is listed manual-only. On prod most library-copy rows carry
+  one naming their own file. The fragment fixer's retire also refuses such a
+  row under the merge lock (`retireOpts.RefuseITunesPath`; the leftovers
+  fixer keeps its own rule that a bare iTunes path reference is not iTunes
+  ownership).
+- A fragment-only retire into an iTunes-linked parent checks every
+  fragment's external ids and listening state before the first write, so a
+  late change refuses the row whole instead of after some fragments were
+  retired. Such rows are review risk.
+- A path twin and its donor are held together whichever of the two is split
+  off onto its own row.

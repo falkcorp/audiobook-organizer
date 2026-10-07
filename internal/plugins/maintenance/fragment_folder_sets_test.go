@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_folder_sets_test.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 3b7d2c55-1a4e-4f0b-9c61-8e2f5d7a0b14
 // last-edited: 2026-10-06
 
@@ -1422,6 +1422,25 @@ func TestFragmentFixer_RetireTargetITunes(t *testing.T) {
 		r := findRow(t, f.plan(t, "op-plan"), "copy:"+f.ids["suns"])
 		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
 		require.Contains(t, r.Current["itunes_parent"], "itunes external id SUNSPID")
+		parent := f.ids["suns"]
+		b0, err := f.s.GetBookByID(parent)
+		require.NoError(t, err)
+		rows0, err := f.s.GetBookFiles(parent)
+		require.NoError(t, err)
+		exts0, err := f.s.GetExternalIDsForBook(parent)
+		require.NoError(t, err)
+		out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
+		require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+		require.False(t, f.live(t, "fragG"), "the copy is retired")
+		b1, err := f.s.GetBookByID(parent)
+		require.NoError(t, err)
+		rows1, err := f.s.GetBookFiles(parent)
+		require.NoError(t, err)
+		exts1, err := f.s.GetExternalIDsForBook(parent)
+		require.NoError(t, err)
+		require.Equal(t, *b0, *b1, "the iTunes parent is not written")
+		require.Equal(t, rows0, rows1)
+		require.Equal(t, exts0, exts1)
 	})
 	t.Run("added after the plan: refused at apply, nothing written", func(t *testing.T) {
 		f := newFragFixture(t)

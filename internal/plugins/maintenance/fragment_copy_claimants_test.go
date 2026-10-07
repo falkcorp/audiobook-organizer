@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_copy_claimants_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f8b2c61-7d4e-4a19-9c05-e2b6a8d17f43
 // last-edited: 2026-10-06
 
@@ -331,16 +331,152 @@ func TestFragmentFixer_CopyClaimants(t *testing.T) {
 		plan := f.plan(t, "op-plan")
 		u, err := f.s.CreateUser("reader", "reader@example.com", "bcrypt", "x", []string{"user"}, "active")
 		require.NoError(t, err)
+		// The state lands on the fragment that sorts LAST: the refusal must
+		// come before the first fragment is retired, not when the retire
+		// loop reaches it (review round 1, S1).
+		last, lastRole := f.ids["libA"], "libA"
+		if f.ids["libB"] > last {
+			last, lastRole = f.ids["libB"], "libB"
+		}
 		fx := newFragmentFixer(f.p)
 		fx.afterLockedReplan = func() {
-			require.NoError(t, f.s.SetUserPosition(u.ID, f.ids["libA"], f.rowIDs["libA"], 100))
+			require.NoError(t, f.s.SetUserPosition(u.ID, last, f.rowIDs[lastRole], 100))
 		}
 		err = applyRowInRun(t, f, fx, context.Background(), plan, "copy:"+f.ids["parent"])
 		require.ErrorIs(t, err, repairs.ErrChangedSincePlan)
+		require.NotErrorIs(t, err, repairs.ErrPartiallyApplied)
 		require.Contains(t, err.Error(), "listening state")
-		require.True(t, f.live(t, "libA"))
+		require.True(t, f.live(t, "libA"), "nothing retired")
+		require.True(t, f.live(t, "libB"), "nothing retired")
 		pos, err := f.s.ListUserPositionsForBook(u.ID, f.ids["parent"])
 		require.NoError(t, err)
 		require.Empty(t, pos, "nothing followed onto the parent")
 	})
+
+	t.Run("a library copy whose own row has an iTunes path is manual-only, never retired", func(t *testing.T) {
+		// Review round 1, B1: on prod most library-copy rows carry an
+		// itunes_path naming their own file; such a fragment is an iTunes
+		// book (itunesCopyWhy) and must not be retired.
+		t.Parallel()
+		for _, itParent := range []bool{false, true} {
+			f := copyClaimantsFixture(t, true)
+			if itParent {
+				linkParentToITunes(t, f)
+			}
+			f.updateRow(t, f.ids["libA"], f.rowIDs["libA"], func(r *database.BookFile) {
+				r.ITunesPath = "file://localhost/Music/iTunes Media/Many Parts/02.mp3"
+			})
+			res := f.plan(t, "op-plan")
+			m := findRow(t, res, "manual:"+f.ids["libA"])
+			require.Equal(t, fragClassManual, m.Class)
+			require.Equal(t, repairs.SkipITunes, m.Skipped)
+			require.Contains(t, m.SkipReason, "row iTunes path")
+			r := findRow(t, res, "copy:"+f.ids["parent"])
+			require.ElementsMatch(t, []string{f.ids["parent"], f.ids["libB"]}, r.BookIDs)
+			out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
+			require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+			require.True(t, f.live(t, "libA"), "the iTunes-linked copy is never retired")
+			require.False(t, f.live(t, "libB"))
+		}
+	})
+
+	t.Run("a row iTunes path landing after the locked re-plan refuses the retire", func(t *testing.T) {
+		t.Parallel()
+		f := copyClaimantsFixture(t, true)
+		plan := f.plan(t, "op-plan")
+		first, firstRole := f.ids["libA"], "libA"
+		if f.ids["libB"] < first {
+			first, firstRole = f.ids["libB"], "libB"
+		}
+		fx := newFragmentFixer(f.p)
+		fx.afterLockedReplan = func() {
+			f.updateRow(t, first, f.rowIDs[firstRole], func(r *database.BookFile) { r.ITunesPath = "file://localhost/late.mp3" })
+		}
+		err := applyRowInRun(t, f, fx, context.Background(), plan, "copy:"+f.ids["parent"])
+		require.ErrorIs(t, err, repairs.ErrChangedSincePlan)
+		require.Contains(t, err.Error(), "iTunes path")
+		require.True(t, f.live(t, "libA"))
+		require.True(t, f.live(t, "libB"))
+	})
+
+	t.Run("a donor whose path twin is hands-off is held with it", func(t *testing.T) {
+		// Review round 1, S2: the twin is split off (manual: an iTunes path
+		// on its row), so its donor, which shares its file, must not retire
+		// beside a live co-owner.
+		t.Parallel()
+		f := copyClaimantsFixture(t, true)
+		aPath := f.path("lib/Many Parts copy A/02.mp3")
+		twin := f.book(t, "twin", "Many Parts - 02", aPath, nil)
+		f.row(t, "twin", twin, aPath, "", 0, 0, 0)
+		f.updateRow(t, twin, f.rowIDs["twin"], func(r *database.BookFile) { r.ITunesPath = "file://localhost/twin.mp3" })
+		res := f.plan(t, "op-plan")
+		require.Equal(t, fragClassManual, findRow(t, res, "manual:"+twin).Class)
+		d := findRow(t, res, "held:"+f.ids["libA"])
+		require.Contains(t, d.SkipReason, "shares its file with fragment "+twin)
+		r := findRow(t, res, "copy:"+f.ids["parent"])
+		require.ElementsMatch(t, []string{f.ids["parent"], f.ids["libB"]}, r.BookIDs)
+	})
+
+	for _, tc := range []struct {
+		name string
+		link func(t *testing.T, f *fragFixture)
+	}{
+		{"book iTunes id", func(t *testing.T, f *fragFixture) { setBookPID(t, f, f.ids["parent"], "PARENTPID") }},
+		{"row iTunes id", func(t *testing.T, f *fragFixture) {
+			f.updateRow(t, f.ids["parent"], f.rowIDs["p01"], func(r *database.BookFile) { r.ITunesPersistentID = "ROWPID" })
+		}},
+		{"itunes external id", func(t *testing.T, f *fragFixture) {
+			require.NoError(t, f.s.CreateExternalIDMapping(&database.ExternalIDMapping{Source: "itunes", ExternalID: "EXTPID", BookID: f.ids["parent"]}))
+		}},
+	} {
+		t.Run("parent linked by "+tc.name+": fragment-only apply leaves it unwritten", func(t *testing.T) {
+			t.Parallel()
+			f := copyClaimantsFixture(t, true)
+			tc.link(t, f)
+			before := parentSnapshot(t, f)
+			r := findRow(t, f.plan(t, "op-plan"), "copy:"+f.ids["parent"])
+			require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+			require.Equal(t, repairs.RiskReview, r.Risk)
+			require.NotEmpty(t, r.Current["itunes_parent"])
+			out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
+			require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+			require.False(t, f.live(t, "libA"))
+			require.False(t, f.live(t, "libB"))
+			require.Equal(t, before, parentSnapshot(t, f), "the parent is not written")
+			assertOnlyFragmentsJournaled(t, f, "op-apply", f.ids["libA"], f.ids["libB"])
+		})
+	}
+}
+
+// fragParentSnap is what the fragment-only retire must leave alone.
+type fragParentSnap struct {
+	Book database.Book
+	Rows []database.BookFile
+	Exts []database.ExternalIDMapping
+	Sync bool
+}
+
+func parentSnapshot(t *testing.T, f *fragFixture) fragParentSnap {
+	t.Helper()
+	id := f.ids["parent"]
+	b, err := f.s.GetBookByID(id)
+	require.NoError(t, err)
+	rows, err := f.s.GetBookFiles(id)
+	require.NoError(t, err)
+	exts, err := f.s.GetExternalIDsForBook(id)
+	require.NoError(t, err)
+	_, has, err := f.s.GetSyncIDForBook(id)
+	require.NoError(t, err)
+	return fragParentSnap{Book: *b, Rows: rows, Exts: exts, Sync: has}
+}
+
+func assertOnlyFragmentsJournaled(t *testing.T, f *fragFixture, opID string, frags ...string) {
+	t.Helper()
+	changes, err := f.s.GetOperationChanges(opID)
+	require.NoError(t, err)
+	require.NotEmpty(t, changes)
+	for _, c := range changes {
+		require.Contains(t, frags, c.BookID, "only the fragments are written: %+v", c)
+		require.NotContains(t, []string{undo.ChangeTypeUserStateFollow, undo.ChangeTypeExternalIDReassign}, c.ChangeType, "%+v", c)
+	}
 }
