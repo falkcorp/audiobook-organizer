@@ -36,9 +36,14 @@
   `retireInto` hand-off (consolidation-leftovers, duplicate-copies and
   fragment-consolidation retires); the duplicate-copies crown; the
   fs-regroup-xml hand-off after a retired primary shell (a refusal is
-  journaled and counted as `handoffs-refused`); the regroup version-group
-  apply, both for a joiner's explicit false (checked before the link) and
-  for its `EnsureSinglePrimary` and held-group crown; and the op revert's
+  journaled and counted as `handoffs-refused`; the shell is still retired,
+  only the flag hand-off is skipped); the regroup version-group apply,
+  which checks a joiner's explicit false and the hand-off over the group's
+  post-link membership (`versionprimary.GuardPlanned` /
+  `GuardPlannedCrown`) before linking anything, so a refusal links nothing,
+  and guards its `EnsureSinglePrimary` and held-group crown again under the
+  group lock (a refusal there, after a concurrent change, leaves the link
+  in place with no flag written); and the op revert's
   settle, for its crown and its `EnsureSinglePrimary` fallback. The
   folder-books crown does not, by the owner's 2026-10-01 clearance. Other
   hand-off sites (scanner, organizer, merge service, iTunes importer,
