@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_owner_apply_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2b7e9d40-1c56-4a83-b9f2-8e0d4a6c3f17
 // last-edited: 2026-10-07
 
@@ -156,6 +156,32 @@ func TestFragmentFixer_OwnerApply(t *testing.T) {
 		// The resume consumed it: the same token again finds nothing.
 		out = f.ownerApply(t, "op-plan", "op-reuse", []string{m.RowID}, tok, nil)
 		require.Equal(t, repairs.OutcomeOwnerRefused, out.Rows[0].Outcome)
+		require.True(t, f.live(t, "libA"))
+	})
+
+	// A run that fails before it reaches the rows (here: a plan op id that
+	// does not exist) still consumes the grant, so retrying it (POST
+	// /operations/v2/:id/retry copies the params, token included, for any
+	// caller) never applies the owner's row.
+	t.Run("a run that fails early consumes the grant; its retry is refused", func(t *testing.T) {
+		t.Parallel()
+		f := ownerFixture(t, true)
+		m := findRow(t, f.plan(t, "op-plan"), "manual:"+f.ids["libA"])
+		require.True(t, m.OwnerApplicable)
+		tok, err := repairs.DefaultOwnerGrants.Issue(repairs.OwnerGrant{UserID: "owner-user", AuthMethod: "session",
+			FixerID: fragFixerID, PlanOpID: "op-plan", RowIDs: []string{m.RowID}})
+		require.NoError(t, err)
+		f.applyOp("op-fails", fragFixerID)
+		no := false
+		bad, err := json.Marshal(repairs.ApplyParams{FixerID: fragFixerID, PlanOpID: "op-no-such-plan", DryRun: &no,
+			OwnerApplyRowIDs: []string{m.RowID}, OwnerGrant: tok})
+		require.NoError(t, err)
+		require.Error(t, f.p.runRepairsApply(context.Background(), bad, &repairsOpReporter{id: "op-fails"}))
+		require.True(t, f.live(t, "libA"))
+
+		out := f.ownerApply(t, "op-plan", "op-retry", []string{m.RowID}, tok, nil)
+		require.Equal(t, repairs.OutcomeOwnerRefused, out.Rows[0].Outcome, "%+v", out.Rows)
+		require.Zero(t, out.Applied)
 		require.True(t, f.live(t, "libA"))
 	})
 
