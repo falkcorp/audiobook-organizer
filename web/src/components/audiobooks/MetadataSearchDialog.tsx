@@ -1,11 +1,12 @@
 // file: web/src/components/audiobooks/MetadataSearchDialog.tsx
-// version: 1.13.0
+// version: 2.0.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 import { useCallback, useEffect, useState, useRef } from 'react';
 import { applyFieldClick } from './fieldRangeSelect';
 import {
+  Alert,
   Avatar,
   Box,
   Button,
@@ -35,10 +36,15 @@ import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import type { Book, MetadataCandidate } from '../../services/api';
 import * as api from '../../services/api';
 import {
-  METADATA_APPLY_FIELDS,
   METADATA_APPLY_FIELD_LABELS,
   candidateApplyFieldValue,
 } from '../../config/metadataApplyFields';
+import {
+  candidateFields,
+  stagedFieldCount,
+  submitStagedApply,
+  type StagedPick,
+} from './stagedMetadataApply';
 
 interface MetadataSearchDialogProps {
   open: boolean;
@@ -78,11 +84,21 @@ export function MetadataSearchDialog({
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [results, setResults] = useState<MetadataCandidate[]>([]);
   const [loading, setLoading] = useState(false);
-  const [expandedCard, setExpandedCard] = useState<number | null>(null);
-  const [selectedFields, setSelectedFields] = useState<Set<string>>(new Set());
+  // Held as the candidate object, not a list index: the filter, the sort and
+  // a re-search all reorder the list, and an index would then point at
+  // another candidate.
+  const [expandedCard, setExpandedCard] = useState<MetadataCandidate | null>(null);
+  // Field ticks belong to ONE candidate. They were one Set shared by every
+  // card, so ticks made on card A were sent with card B's Apply Selected.
+  const [fieldSelection, setFieldSelection] = useState<{
+    candidate: MetadataCandidate | null;
+    fields: Set<string>;
+  }>({ candidate: null, fields: new Set() });
   // Anchor for shift-click range selection over the visible field rows.
   const fieldAnchorRef = useRef<string | null>(null);
-  const [applying, setApplying] = useState(false);
+  // The change the dialog applies when it closes. Picking never disables
+  // anything: a new pick replaces this one, Discard clears it.
+  const [staged, setStaged] = useState<StagedPick | null>(null);
   const [sourcesTried, setSourcesTried] = useState<string[]>([]);
   const [sourcesFailed, setSourcesFailed] = useState<Record<string, string>>({});
   const [cacheBadge, setCacheBadge] = useState<{
@@ -95,14 +111,14 @@ export function MetadataSearchDialog({
   const [sortResults, setSortResults] = useState<'score' | 'source'>('score');
   const [writeToFiles, setWriteToFiles] = useState(true);
   const [useRerank, setUseRerank] = useState(false);
-  // An apply waiting for the user to confirm it over an ASIN conflict: the
-  // candidate names another ASIN than the book carries. Opened from the
-  // search's apply_check before any request, or from the server's 409 when the
-  // check was not shown (or the book changed since).
+  // A pick waiting for the user to confirm it over an ASIN conflict: the
+  // candidate names another ASIN than the book carries (the search's
+  // apply_check). Confirming stages it with the override; a conflict the
+  // search did not flag is caught by the server at submit and offered again
+  // from the toast (submitStagedApply).
   const [asinOverride, setAsinOverride] = useState<{
     candidate: MetadataCandidate;
     fields?: string[];
-    successLabel: string;
     bookAsin: string;
     candidateAsin: string;
     detail: string;
@@ -122,7 +138,9 @@ export function MetadataSearchDialog({
       setShowAdvanced(false);
       setResults([]);
       setExpandedCard(null);
-      setSelectedFields(new Set());
+      setFieldSelection({ candidate: null, fields: new Set() });
+      setStaged(null);
+      setAsinOverride(null);
       // Search with author + narrator (series can over-constrain results)
       doSearch(q, a, n);
     }
@@ -190,89 +208,60 @@ export function MetadataSearchDialog({
     }
   };
 
-  // runApply applies candidate (fields undefined = every field). override is
-  // the book ASIN the user confirmed applying a conflicting candidate over;
-  // without it the server refuses the conflict with a 409, which reopens the
-  // confirmation instead of reading as a failure.
-  const runApply = async (
-    candidate: MetadataCandidate,
-    fields: string[] | undefined,
-    successLabel: string,
-    override?: string
-  ) => {
-    setApplying(true);
-    const bookId = book.id;
-    try {
-      const resp = await api.applyMetadataCandidate(bookId, candidate, fields, writeToFiles, override);
-      onApplied(resp.book);
-      onClose();
-      if (resp.queued) {
-        // The scan is reading this book; the change is queued, not refused.
-        toast(resp.message, 'info');
-        return;
-      }
-      toast(`${successLabel} ${resp.source}`, 'success', {
-        label: 'Undo',
-        onClick: async () => {
-          try {
-            await api.undoLastApply(bookId);
-            toast('Metadata apply undone', 'info');
-          } catch {
-            /* ignore */
-          }
-        },
-      });
-    } catch (err) {
-      const conflict = api.asinConflictOf(err);
-      if (conflict) {
-        setAsinOverride({ candidate, fields, successLabel, ...conflict });
-        return;
-      }
-      toast(err instanceof Error ? err.message : 'Failed to apply metadata', 'error');
-    } finally {
-      setApplying(false);
-    }
-  };
-
-  // requestApply asks for confirmation first when the search already flagged
-  // the candidate's ASIN as conflicting with the book's.
-  const requestApply = (
-    candidate: MetadataCandidate,
-    fields: string[] | undefined,
-    successLabel: string
-  ) => {
+  // stage records a pick, asking first when the search flagged the
+  // candidate's ASIN as conflicting with the book's.
+  const stage = (candidate: MetadataCandidate, fields: string[] | undefined) => {
     const check = candidate.apply_check;
     if (check?.asin_conflict && check.book_asin) {
       setAsinOverride({
         candidate,
         fields,
-        successLabel,
         bookAsin: check.book_asin,
         candidateAsin: candidate.asin ?? '',
         detail: check.detail ?? '',
       });
       return;
     }
-    void runApply(candidate, fields, successLabel);
+    setStaged({ candidate, fields });
   };
 
   const confirmAsinOverride = () => {
     if (!asinOverride) return;
-    const { candidate, fields, successLabel, bookAsin } = asinOverride;
+    const { candidate, fields, bookAsin } = asinOverride;
     setAsinOverride(null);
-    void runApply(candidate, fields, successLabel, bookAsin);
+    setStaged({ candidate, fields, overrideAsin: bookAsin });
   };
 
-  const handleApplyAll = (candidate: MetadataCandidate) => {
-    requestApply(candidate, undefined, 'Metadata applied from');
+  const handlePickAll = (candidate: MetadataCandidate) => {
+    stage(candidate, undefined);
   };
 
-  const handleApplySelected = (candidate: MetadataCandidate) => {
-    if (selectedFields.size === 0) {
-      toast('Select at least one field to apply', 'warning');
+  const handleStageSelected = (candidate: MetadataCandidate) => {
+    const fields =
+      fieldSelection.candidate === candidate ? Array.from(fieldSelection.fields) : [];
+    if (fields.length === 0) {
+      toast('Select at least one field to stage', 'warning');
       return;
     }
-    requestApply(candidate, Array.from(selectedFields), 'Selected fields applied from');
+    stage(candidate, fields);
+  };
+
+  // Closing applies what is staged (Escape, backdrop and the footer button
+  // alike): the owner asked for one apply when the window closes, not one per
+  // click. The apply is handed off and NOT awaited, so the dialog is gone at
+  // once and the reviewer moves on while it runs in the background.
+  const handleClose = () => {
+    if (staged) {
+      void submitStagedApply({ book, pick: staged, writeToFiles, toast, onApplied });
+      setStaged(null);
+    }
+    onClose();
+  };
+
+  // Discard drops the staged pick and closes WITHOUT applying anything.
+  const handleDiscardAndClose = () => {
+    setStaged(null);
+    onClose();
   };
 
   const handleMarkNoMatch = async () => {
@@ -285,33 +274,56 @@ export function MetadataSearchDialog({
     }
   };
 
-  const toggleField = (field: string) => {
-    setSelectedFields((prev) => {
-      const next = new Set(prev);
-      if (next.has(field)) {
-        next.delete(field);
-      } else {
-        next.add(field);
-      }
-      return next;
-    });
-  };
-  void toggleField; // retained for non-range callers/tests
-
   // Plain click toggles; shift-click selects the whole visible range from the
-  // last-clicked field (file-manager semantics). See fieldRangeSelect.ts.
-  const handleFieldClick = (field: string, shiftKey: boolean, visibleFields: string[]) => {
-    setSelectedFields((prev) => {
-      const r = applyFieldClick(prev, field, shiftKey, fieldAnchorRef.current, visibleFields);
+  // last-clicked field (file-manager semantics). See fieldRangeSelect.ts. A
+  // click on another candidate's fields starts a fresh selection for it.
+  const handleFieldClick = (
+    candidate: MetadataCandidate,
+    field: string,
+    shiftKey: boolean,
+    visibleFields: string[]
+  ) => {
+    setFieldSelection((prev) => {
+      const same = prev.candidate === candidate;
+      const r = applyFieldClick(
+        same ? prev.fields : new Set<string>(),
+        field,
+        shiftKey,
+        same ? fieldAnchorRef.current : null,
+        visibleFields
+      );
       fieldAnchorRef.current = r.anchor;
-      return r.next;
+      return { candidate, fields: r.next };
     });
   };
+
+  const stagedCount = staged ? stagedFieldCount(staged) : 0;
 
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
+    <Dialog open={open} onClose={handleClose} maxWidth="md" fullWidth>
       <DialogTitle>Search Metadata</DialogTitle>
       <DialogContent>
+        {staged ? (
+          <Alert
+            severity="info"
+            data-testid="staged-pick"
+            sx={{ mb: 2 }}
+            action={
+              <Button color="inherit" size="small" onClick={() => setStaged(null)}>
+                Discard
+              </Button>
+            }
+          >
+            Staged: {stagedCount} field{stagedCount === 1 ? '' : 's'} from{' '}
+            {staged.candidate.source} &mdash; &ldquo;{staged.candidate.title}&rdquo;
+            {staged.overrideAsin ? ' (over the ASIN conflict)' : ''}. Applied in the background
+            when you close this window; picking another result replaces it.
+          </Alert>
+        ) : (
+          <Typography variant="body2" sx={{ mb: 2, color: 'text.secondary' }}>
+            Pick a result (or some of its fields). Nothing is applied until you close this window.
+          </Typography>
+        )}
         {/* Book info bar — click to enlarge cover */}
         <Box
           sx={{
@@ -634,12 +646,16 @@ export function MetadataSearchDialog({
             .sort((a, b) =>
               sortResults === 'source' ? a.source.localeCompare(b.source) : b.score - a.score
             )
-            .map((candidate, idx) => (
+            .map((candidate, idx) => {
+              const isStaged = staged?.candidate === candidate;
+              const isExpanded = expandedCard === candidate;
+              return (
               <Box
                 key={idx}
+                data-staged={isStaged ? 'true' : undefined}
                 sx={{
-                  border: 1,
-                  borderColor: 'divider',
+                  border: isStaged ? 2 : 1,
+                  borderColor: isStaged ? 'success.main' : 'divider',
                   borderRadius: 1,
                   p: 2,
                 }}
@@ -750,12 +766,12 @@ export function MetadataSearchDialog({
                     </Stack>
                   </Box>
                   <Button
-                    variant="contained"
+                    variant={isStaged && !staged?.fields ? 'outlined' : 'contained'}
+                    color={isStaged && !staged?.fields ? 'success' : 'primary'}
                     size="small"
-                    onClick={() => handleApplyAll(candidate)}
-                    disabled={applying}
+                    onClick={() => handlePickAll(candidate)}
                   >
-                    Apply
+                    {isStaged && !staged?.fields ? 'Picked' : 'Pick'}
                   </Button>
                 </Stack>
 
@@ -763,17 +779,19 @@ export function MetadataSearchDialog({
                 <Box sx={{ mt: 1 }}>
                   <Button
                     size="small"
-                    onClick={() => setExpandedCard(expandedCard === idx ? null : idx)}
-                    endIcon={expandedCard === idx ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+                    onClick={() => setExpandedCard(isExpanded ? null : candidate)}
+                    endIcon={isExpanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
                   >
                     Select fields...
                   </Button>
-                  <Collapse in={expandedCard === idx}>
+                  <Collapse in={isExpanded}>
                     <Box sx={{ mt: 1, pl: 1 }}>
                       {(() => {
-                        const visibleFields = METADATA_APPLY_FIELDS.filter(
-                          (f) => candidateApplyFieldValue(candidate, f) !== undefined
-                        );
+                        const visibleFields = candidateFields(candidate);
+                        const ticked =
+                          fieldSelection.candidate === candidate
+                            ? fieldSelection.fields
+                            : new Set<string>();
                         return visibleFields.map((field) => {
                           const value = candidateApplyFieldValue(candidate, field);
                           return (
@@ -781,10 +799,10 @@ export function MetadataSearchDialog({
                               key={field}
                               control={
                                 <Checkbox
-                                  checked={selectedFields.has(field)}
+                                  checked={ticked.has(field)}
                                   onClick={(e) => {
                                     e.preventDefault();
-                                    handleFieldClick(field, e.shiftKey, visibleFields);
+                                    handleFieldClick(candidate, field, e.shiftKey, visibleFields);
                                   }}
                                   onChange={() => {}}
                                   size="small"
@@ -799,29 +817,47 @@ export function MetadataSearchDialog({
                         <Button
                           variant="outlined"
                           size="small"
-                          onClick={() => handleApplySelected(candidate)}
-                          disabled={applying || selectedFields.size === 0}
+                          onClick={() => handleStageSelected(candidate)}
+                          disabled={
+                            fieldSelection.candidate !== candidate ||
+                            fieldSelection.fields.size === 0
+                          }
                         >
-                          Apply Selected
+                          {isStaged && staged?.fields ? 'Re-stage selected' : 'Stage selected'}
                         </Button>
                       </Box>
                     </Box>
                   </Collapse>
                 </Box>
               </Box>
-            ))}
+              );
+            })}
         </Stack>
       </DialogContent>
       <DialogActions>
-        <Button color="warning" onClick={handleMarkNoMatch} disabled={applying}>
-          No Match Found
-        </Button>
-        <Button onClick={onClose}>Cancel</Button>
+        <Tooltip title={staged ? 'Discard the staged pick first' : ''}>
+          <span>
+            <Button color="warning" onClick={handleMarkNoMatch} disabled={!!staged}>
+              No Match Found
+            </Button>
+          </span>
+        </Tooltip>
+        <Box sx={{ flex: 1 }} />
+        {staged ? (
+          <>
+            <Button onClick={handleDiscardAndClose}>Discard &amp; close</Button>
+            <Button variant="contained" onClick={handleClose}>
+              Apply {stagedCount} field{stagedCount === 1 ? '' : 's'} &amp; close
+            </Button>
+          </>
+        ) : (
+          <Button onClick={handleClose}>Close</Button>
+        )}
       </DialogActions>
 
       {/* ASIN conflict: applying replaces the book's record with another. */}
       <Dialog open={!!asinOverride} onClose={() => setAsinOverride(null)} maxWidth="xs">
-        <DialogTitle>Apply over an ASIN conflict?</DialogTitle>
+        <DialogTitle>Pick over an ASIN conflict?</DialogTitle>
         <DialogContent>
           <Typography variant="body2" sx={{ mb: 1 }}>
             This candidate&apos;s ASIN
@@ -838,7 +874,7 @@ export function MetadataSearchDialog({
         <DialogActions>
           <Button onClick={() => setAsinOverride(null)}>Cancel</Button>
           <Button color="error" variant="contained" onClick={confirmAsinOverride}>
-            Apply anyway
+            Stage anyway
           </Button>
         </DialogActions>
       </Dialog>

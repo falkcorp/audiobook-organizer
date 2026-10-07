@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/book_scan_lock.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 070620af-532e-4357-a2a3-3f746b5e9e30
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package metadatahandler
 
@@ -195,17 +195,40 @@ func (h *Handler) lockBookForRequest(c *gin.Context, q QueuedApply) (*scanlock.H
 		hold, err = scanlock.Books.LockSet(reqCtx, []string{q.BookID})
 		return hold, err == nil
 	}
+	h.respondQueued(c, q, false)
+	return nil, false
+}
+
+// backgroundMessage is the 202 message for an apply the caller asked to run in
+// the background (apply-metadata with background:true).
+const backgroundMessage = "Your change is applying in the background; you can keep working."
+
+// respondQueued hands q to metadata.apply-when-scanned and answers 202
+// {queued, background, operation_id, message, book}. A candidate apply is
+// stamped first (edit mark + batch id) so the queued run refuses to overwrite
+// a later edit and is idempotent across a restart. background distinguishes
+// "the caller asked for a background apply" from "the scan held the book past
+// the bound"; only the message differs. The caller must have checked
+// h.queuedApply != nil.
+func (h *Handler) respondQueued(c *gin.Context, q QueuedApply, background bool) {
 	if q.Kind == QueuedApplyCandidate && h.metadataFetchService != nil {
 		h.stampQueuedCandidate(&q)
 	}
-	opID, qerr := h.queuedApply.EnqueueApplyWhenScanned(reqCtx, q)
+	opID, qerr := h.queuedApply.EnqueueApplyWhenScanned(c.Request.Context(), q)
 	if qerr != nil {
-		httputil.InternalError(c, "queue the change until the scan moves on", qerr)
-		return nil, false
+		httputil.InternalError(c, "queue the change as a background operation", qerr)
+		return
 	}
-	bookLockLog.Info("metadata %s for book %s queued behind the library scan as operation %s",
-		q.Kind, logger.SanitizeLogValue(q.BookID), opID)
-	resp := gin.H{"queued": true, "operation_id": opID, "message": queuedMessage}
+	msg := queuedMessage
+	if background {
+		msg = backgroundMessage
+		bookLockLog.Info("metadata %s for book %s queued as background operation %s",
+			q.Kind, logger.SanitizeLogValue(q.BookID), opID)
+	} else {
+		bookLockLog.Info("metadata %s for book %s queued behind the library scan as operation %s",
+			q.Kind, logger.SanitizeLogValue(q.BookID), opID)
+	}
+	resp := gin.H{"queued": true, "background": background, "operation_id": opID, "message": msg}
 	if h.store != nil {
 		if b, gerr := h.store.GetBookByID(q.BookID); gerr == nil && b != nil && h.enrichBook != nil {
 			resp["book"] = h.enrichBook(b)
@@ -213,7 +236,6 @@ func (h *Handler) lockBookForRequest(c *gin.Context, q QueuedApply) (*scanlock.H
 	}
 	// Enveloped like every success, so the client reads it from body.data.
 	httputil.RespondWithSuccess(c, http.StatusAccepted, resp)
-	return nil, false
 }
 
 // errRenameWouldFail wraps a preflight refusal so the handler can answer 409

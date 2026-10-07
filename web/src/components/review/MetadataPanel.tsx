@@ -1,5 +1,5 @@
 // file: web/src/components/review/MetadataPanel.tsx
-// version: 1.7.0
+// version: 1.8.0
 // guid: 3f9a2c07-5b41-4e86-9d02-7c1e8b503a64
 // last-edited: 2026-10-06
 //
@@ -17,7 +17,7 @@
 // intent and the shell decides how to ask. A single-row refetch needs no dialog
 // and is handled here.
 
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Box, Button } from '@mui/material';
 
 import * as api from '../../services/api';
@@ -49,6 +49,9 @@ export interface MetadataPanelProps {
   ) => void;
 }
 
+/** How long MetadataPanel waits for more apply completions before reloading. */
+const APPLIED_REFRESH_DEBOUNCE_MS = 1500;
+
 export function MetadataPanel({
   metadata,
   viewMode,
@@ -60,6 +63,26 @@ export function MetadataPanel({
   // dialog edits, so opening the dialog needs a fetch. Held as the book itself
   // rather than an id so the dialog never renders against a half-loaded row.
   const [searchBook, setSearchBook] = useState<Book | null>(null);
+
+  // Background applies finish one by one while the reviewer keeps working.
+  // Each completion asks for a lane refresh, and a refresh reloads the rail;
+  // coalesce completions that land close together into one reload so the
+  // list is not yanked once per book.
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { refresh } = metadata;
+  const refreshSoon = useCallback(() => {
+    if (refreshTimer.current) clearTimeout(refreshTimer.current);
+    refreshTimer.current = setTimeout(() => {
+      refreshTimer.current = null;
+      refresh();
+    }, APPLIED_REFRESH_DEBOUNCE_MS);
+  }, [refresh]);
+  useEffect(
+    () => () => {
+      if (refreshTimer.current) clearTimeout(refreshTimer.current);
+    },
+    []
+  );
 
   const openSearch = useCallback(
     (bookId: string) => {
@@ -232,10 +255,13 @@ export function MetadataPanel({
           book={searchBook}
           onClose={() => setSearchBook(null)}
           onApplied={() => {
-            setSearchBook(null);
+            // Fires when the background apply FINISHES, which is after the
+            // dialog closed and possibly after the reviewer opened another
+            // book's search -- so it must not touch searchBook (it used to
+            // close the dialog here, which would now close the next book's).
             // The row's status and candidate both changed server-side; refresh
             // rather than patching one row, so the summary counts stay true.
-            metadata.refresh();
+            refreshSoon();
           }}
           toast={toast}
         />

@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.manualSearch.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8c04b7e2-5d13-49af-b026-3f7159ea840c
-// last-edited: 2026-09-25
+// last-edited: 2026-10-06
 //
 // The manual-search escape hatch on the metadata lane.
 //
@@ -145,5 +145,59 @@ describe('manual metadata search from /review', () => {
 
     expect(await screen.findByText(/book vanished/i)).toBeInTheDocument();
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('a background apply finishing later neither closes the next book\'s search nor blocks it', async () => {
+    const user = userEvent.setup();
+    seed([
+      makeResult('na', { status: 'no_match', candidate: undefined }),
+      makeResult('nb', { status: 'no_match', candidate: undefined }),
+    ] as api.CandidateResult[]);
+    vi.mocked(api.getBook).mockImplementation(
+      async (id: string) => ({ id, title: `Book ${id}` }) as unknown as api.Book
+    );
+    vi.mocked(api.searchMetadataForBook).mockResolvedValue({
+      results: [{ source: 'audible', title: 'Synthetic Pick', author: 'A', score: 0.9 }],
+      query: '',
+    } as unknown as Awaited<ReturnType<typeof api.searchMetadataForBook>>);
+    vi.mocked(api.applyMetadataCandidate).mockResolvedValue({
+      message: 'applying',
+      book: { id: 'na' } as api.Book,
+      source: '',
+      queued: true,
+      background: true,
+      operation_id: 'op-a',
+    });
+    let finishA: (op: api.OperationV2) => void = () => {};
+    vi.mocked(api.pollOperationV2).mockReturnValue(
+      new Promise<api.OperationV2>((resolve) => {
+        finishA = resolve;
+      })
+    );
+    await openWorkspace();
+    await showNoMatchRows(user);
+    const loadsBefore = vi.mocked(api.getCachedReviewResults).mock.calls.length;
+
+    // Book A: pick, close. The dialog is gone at once; A's apply is pending.
+    await user.click(await screen.findByLabelText(/Search metadata for Book na/i));
+    await user.click(await screen.findByRole('button', { name: 'Pick' }));
+    await user.click(screen.getByRole('button', { name: /^Apply \d+ fields? & close$/ }));
+    await waitFor(() => expect(api.applyMetadataCandidate).toHaveBeenCalledTimes(1));
+
+    // Book B opens while A is still applying.
+    await user.click(await screen.findByLabelText(/Search metadata for Book nb/i));
+    const dialogB = await screen.findByRole('dialog');
+    expect(dialogB).toHaveTextContent('Book nb');
+
+    // A finishes: B's dialog stays open, and the lane reloads once.
+    finishA({ id: 'op-a', status: 'completed', error_message: null } as api.OperationV2);
+    await waitFor(
+      () =>
+        expect(vi.mocked(api.getCachedReviewResults).mock.calls.length).toBeGreaterThan(
+          loadsBefore
+        ),
+      { timeout: 4000 }
+    );
+    expect(screen.getByRole('dialog')).toHaveTextContent('Book nb');
   });
 });
