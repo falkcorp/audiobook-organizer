@@ -1,5 +1,5 @@
 // file: internal/repairs/engine.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 9b3e7f40-2d15-4a86-9c1f-6e0a4d8b7c25
 // last-edited: 2026-10-06
 
@@ -46,6 +46,10 @@ const (
 	OutcomeNotApplicable = "not_applicable"
 	OutcomeFailed        = "failed"
 	OutcomeAborted       = "aborted_standdown_lost"
+	// OutcomeRetryLater: the fixer wrote nothing because a check could not
+	// be answered right now (ErrRetryLater). Not settled: a resumed apply,
+	// or a new apply of the same plan, tries the row again.
+	OutcomeRetryLater = "retry_later"
 )
 
 // ErrStandDownLost aborts an apply whose scan stand-down lease lapsed: the
@@ -332,9 +336,9 @@ type ApplyCheckpoint struct {
 }
 
 // settledForResume reports whether a checkpointed outcome is final. An
-// aborted row was never attempted and is applied again on resume.
+// aborted or retry_later row wrote nothing and is applied again on resume.
 func settledForResume(outcome string) bool {
-	return outcome != "" && outcome != OutcomeAborted && outcome != OutcomeWouldApply
+	return outcome != "" && outcome != OutcomeAborted && outcome != OutcomeWouldApply && outcome != OutcomeRetryLater
 }
 
 // RowResult is the apply outcome of one requested row.
@@ -360,9 +364,11 @@ type ApplyResult struct {
 	ChangedSincePlan int            `json:"changed_since_plan"`
 	Partial          int            `json:"partially_applied"`
 	Failed           int            `json:"failed"`
-	BookWrites       int            `json:"book_writes"`
-	HistoryRows      int            `json:"history_rows"`
-	HistoryFailed    int            `json:"history_rows_failed"`
+	// RetryLater counts rows refused with ErrRetryLater (nothing written).
+	RetryLater    int `json:"retry_later"`
+	BookWrites    int `json:"book_writes"`
+	HistoryRows   int `json:"history_rows"`
+	HistoryFailed int `json:"history_rows_failed"`
 	// JournalRows counts the operation-journal rows the apply recorded
 	// (book_file steps and credit writes alike); the op revert replays them.
 	JournalRows int `json:"journal_rows,omitempty"`
@@ -599,6 +605,8 @@ func RunApply(ctx context.Context, f Fixer, plan *PlanResult, planOpID string, r
 			res.Partial++
 		case OutcomeFailed:
 			res.Failed++
+		case OutcomeRetryLater:
+			res.RetryLater++
 		}
 	}
 	if !dryRun && res.Applied+res.Partial > 0 {
@@ -699,6 +707,8 @@ func applyOne(ctx context.Context, f Fixer, params json.RawMessage, planned Row,
 			out.Outcome = OutcomeAborted
 		case errors.Is(err, ErrPartiallyApplied):
 			out.Outcome = OutcomePartial
+		case errors.Is(err, ErrRetryLater):
+			out.Outcome = OutcomeRetryLater
 		case errors.Is(err, ErrChangedSincePlan):
 			out.Outcome = OutcomeChangedSincePlan
 		default:

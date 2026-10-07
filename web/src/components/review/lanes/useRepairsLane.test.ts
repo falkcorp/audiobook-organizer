@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useRepairsLane.test.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2e8c6b14-7f39-4a50-9d21-b4a7e3c9f615
-// last-edited: 2026-09-27
+// last-edited: 2026-10-06
 //
 // The repairs lane's data layer against a mocked API.
 //
@@ -23,7 +23,9 @@ import type {
 } from '../../../services/api';
 import {
   REPAIRS_FIXER_STORAGE_KEY,
+  SETTLED_OUTCOMES,
   repairApplyConfirmMessage,
+  summarizeApply,
   useRepairsLane,
 } from './useRepairsLane';
 
@@ -535,5 +537,26 @@ describe('useRepairsLane: selection and apply', () => {
     expect(result.current.rowOutcomes.get('g1')?.outcome).toBe('applied');
     // A failed row stays retryable.
     expect(result.current.settledRowIds.has('g2')).toBe(false);
+  });
+});
+
+describe('useRepairsLane: retry_later', () => {
+  it('names retry-later rows in the summary and keeps them selectable', () => {
+    const r: RepairApplyResult = {
+      fixer_id: 'maintenance.version-twin-metadata',
+      plan_op_id: 'op-plan',
+      dry_run: false,
+      requested: 2,
+      by_outcome: { applied: 1, retry_later: 1 },
+      applied: 1,
+      changed_since_plan: 0,
+      partially_applied: 0,
+      failed: 0,
+      retry_later: 1,
+      standdown_held: true,
+      rows: [],
+    };
+    expect(summarizeApply(r)).toContain('retry later 1');
+    expect(SETTLED_OUTCOMES.has('retry_later')).toBe(false);
   });
 });
