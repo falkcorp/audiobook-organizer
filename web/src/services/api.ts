@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.156.0
+// version: 2.157.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-06
 
@@ -3921,8 +3921,15 @@ export async function applyMetadataCandidate(
   candidate: MetadataCandidate,
   fields?: string[],
   writeBack?: boolean,
-  overrideAsinConflict?: string
-): Promise<{ message: string; book: Book; source: string } & QueuedBehindScan> {
+  overrideAsinConflict?: string,
+  // background: the server answers 202 at once with the operation_id of the
+  // durable metadata.apply-when-scanned op that runs the apply, instead of
+  // holding the request open for it. Poll that op for the outcome. A server
+  // with no op to hand it to applies inline and answers 200 as before.
+  opts?: { background?: boolean }
+): Promise<
+  { message: string; book: Book; source: string; background?: boolean } & QueuedBehindScan
+> {
   // apply_check is the search's verdict on the candidate, not part of it.
   const plain: MetadataCandidate = { ...candidate };
   delete plain.apply_check;
@@ -3931,10 +3938,14 @@ export async function applyMetadataCandidate(
     fields: string[];
     write_back?: boolean;
     override_asin_conflict?: string;
+    background?: boolean;
   } = {
     candidate: plain,
     fields: fields || [],
   };
+  if (opts?.background) {
+    payload.background = true;
+  }
   if (writeBack !== undefined) {
     payload.write_back = writeBack;
   }

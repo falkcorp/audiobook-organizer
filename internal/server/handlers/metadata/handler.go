@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.37.0
+// version: 1.38.0
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 // Package metadatahandler hosts the metadata-domain HTTP handlers extracted
 // from the server package's metadata_handlers.go: batch-update / validate /
@@ -648,27 +648,41 @@ func (h *Handler) applyAudiobookMetadataImpl(c *gin.Context) {
 		// Without it, or once the book carries another ASIN, a candidate whose
 		// ASIN conflicts with the book's is refused with 409 asin_conflict.
 		OverrideASINConflict string `json:"override_asin_conflict"`
+		// Background asks for the apply to run as the durable
+		// metadata.apply-when-scanned op and the request to answer 202 at
+		// once, instead of holding the request open for the scan-lock wait,
+		// the rename preflight and the database write. The Search Metadata
+		// dialog sends it so closing the dialog never waits on the apply.
+		Background bool `json:"background"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		httputil.RespondWithBadRequest(c, "invalid request body")
 		return
 	}
 	// The ASIN check runs here first, so a refused conflict is answered now
-	// rather than queued behind a scan to fail later; applyCandidateCore runs
-	// it again under the lock against the book as it is then.
+	// rather than queued (behind a scan or in the background) to fail later;
+	// applyCandidateCore runs it again under the lock against the book as it
+	// is then.
 	if book, berr := store.GetBookByID(id); berr == nil {
 		if conflict := asinConflictRefusal(book, &body.Candidate, body.OverrideASINConflict); conflict != nil {
 			respondASINConflict(c, conflict)
 			return
 		}
 	}
+	q := QueuedApply{Kind: QueuedApplyCandidate, BookID: id,
+		Candidate: &body.Candidate, Fields: body.Fields, WriteBack: body.WriteBack,
+		OverrideASINConflict: body.OverrideASINConflict}
+	if body.Background && h.queuedApply != nil {
+		// No op to hand it to (h.queuedApply nil) falls through to the
+		// synchronous apply: slower for the caller, never lost.
+		h.respondQueued(c, q, true)
+		return
+	}
 	// Per-book scan lock (book_scan_lock.go): waits only if the library scan
 	// is reading THIS book, at most requestBookLockWait, then hands off to the
 	// queued op (202). The file job is submitted under the lock; the pool marks
 	// the book pending until it has run.
-	hold, ok := h.lockBookForRequest(c, QueuedApply{Kind: QueuedApplyCandidate, BookID: id,
-		Candidate: &body.Candidate, Fields: body.Fields, WriteBack: body.WriteBack,
-		OverrideASINConflict: body.OverrideASINConflict})
+	hold, ok := h.lockBookForRequest(c, q)
 	if !ok {
 		return
 	}

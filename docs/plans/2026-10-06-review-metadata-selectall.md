@@ -1,4 +1,4 @@
-<!-- file: PLAN.md -->
+<!-- file: docs/plans/2026-10-06-review-metadata-selectall.md -->
 <!-- version: 1.0.0 -->
 <!-- guid: 0e418856-2dc7-414a-8b2a-43f31e164235 -->
 <!-- last-edited: 2026-10-06 -->
