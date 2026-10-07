@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useRepairsLane.test.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2e8c6b14-7f39-4a50-9d21-b4a7e3c9f615
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 //
 // The repairs lane's data layer against a mocked API.
 //
@@ -25,6 +25,7 @@ import {
   REPAIRS_FIXER_STORAGE_KEY,
   SETTLED_OUTCOMES,
   repairApplyConfirmMessage,
+  repairOwnerApplyConfirmMessage,
   summarizeApply,
   useRepairsLane,
 } from './useRepairsLane';
@@ -558,5 +559,17 @@ describe('useRepairsLane: retry_later', () => {
     };
     expect(summarizeApply(r)).toContain('retry later 1');
     expect(SETTLED_OUTCOMES.has('retry_later')).toBe(false);
+  });
+});
+
+describe('repairOwnerApplyConfirmMessage', () => {
+  it('says how many fragment books one click retires and that the parent is not written', () => {
+    const many = repairOwnerApplyConfirmMessage('Synthetic Book', 'Fragment consolidation', 300);
+    expect(many).toContain('retiring 300 fragment books into the parent');
+    expect(many).toContain('The parent, every file and iTunes are not written');
+    expect(many).toContain("operation's history under your name");
+    expect(repairOwnerApplyConfirmMessage('Synthetic Book', 'Fragment consolidation', 1)).toContain(
+      'retiring 1 fragment book into the parent'
+    );
   });
 });

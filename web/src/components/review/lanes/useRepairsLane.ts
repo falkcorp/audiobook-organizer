@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useRepairsLane.ts
-// version: 1.5.0
+// version: 1.6.0
 // guid: 7b1e5c28-3a94-4d6f-8e02-c5f9a1d7b340
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 /**
  * The repairs lane's data layer: fixers, their trials (plans), plan rows, and
@@ -144,15 +144,21 @@ export function applySeverity(r: RepairApplyResult): 'success' | 'warning' {
 }
 
 /**
- * The owner-apply confirm: names the book, and says plainly that iTunes
- * tracks the file and only database rows change.
+ * The owner-apply confirm: names the book and how many fragment books the
+ * one click retires, and says plainly that iTunes tracks those files, only
+ * database rows change, and the parent is not written.
  */
-export function repairOwnerApplyConfirmMessage(title: string, fixerTitle: string): string {
+export function repairOwnerApplyConfirmMessage(
+  title: string,
+  fixerTitle: string,
+  fragments: number
+): string {
+  const what = fragments === 1 ? '1 fragment book' : `${fragments} fragment books`;
   return (
-    `Apply "${title}" from "${fixerTitle}" as the owner? ` +
-    'iTunes tracks this file; only database rows change. ' +
-    'No file is moved or written and iTunes is not touched. The change is recorded in the book ' +
-    'history under your name and can be reverted from the operation.'
+    `Apply "${title}" from "${fixerTitle}" as the owner, retiring ${what} into the parent? ` +
+    'iTunes tracks these files; only database rows change. ' +
+    'The parent, every file and iTunes are not written. The change is recorded in the ' +
+    "operation's history under your name and can be reverted from the operation."
   );
 }
 
@@ -771,7 +777,12 @@ export function useRepairsLane(toast: Toast, active = true): RepairsLane {
           // One row, its own endpoint: the server mints a one-shot grant only
           // for an interactive owner sign-in and refuses anything else.
           if (settledRowIds.has(action.rowId)) return;
-          if (!window.confirm(repairOwnerApplyConfirmMessage(action.title, fixerTitle(action.fixerId)))) {
+          const msg = repairOwnerApplyConfirmMessage(
+            action.title,
+            fixerTitle(action.fixerId),
+            action.fragments
+          );
+          if (!window.confirm(msg)) {
             return;
           }
           void runApply(
