@@ -1,7 +1,7 @@
 // file: internal/database/listing_ordering.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5b2e9c14-7a63-4f08-9d5b-8e1c6a30f472
-// last-edited: 2026-08-14
+// last-edited: 2026-10-06
 
 package database
 
@@ -63,18 +63,32 @@ func sortBooksByDeletedAtDesc(books []Book) {
 	if len(books) < 2 {
 		return
 	}
-	sort.SliceStable(books, func(i, j int) bool {
-		ai, aj := books[i].MarkedForDeletionAt, books[j].MarkedForDeletionAt
-		switch {
-		case ai == nil && aj == nil:
-			return books[i].ID < books[j].ID
-		case ai == nil:
-			// Rows with no timestamp sort after rows that have one.
-			return false
-		case aj == nil:
-			return true
-		default:
-			return ai.After(*aj)
-		}
-	})
+	sort.SliceStable(books, func(i, j int) bool { return deletedAtDescLess(&books[i], &books[j]) })
+}
+
+// sortBookPtrsByDeletedAtDesc is sortBooksByDeletedAtDesc over pointers, for
+// the memdb path, which sorts the trash without copying every Book (only the
+// requested page is copied out). Same comparator, so the two paths agree.
+func sortBookPtrsByDeletedAtDesc(books []*Book) {
+	if len(books) < 2 {
+		return
+	}
+	sort.SliceStable(books, func(i, j int) bool { return deletedAtDescLess(books[i], books[j]) })
+}
+
+// deletedAtDescLess is the trash order: most recently deleted first, rows
+// with no deletion timestamp last, ties broken by ID.
+func deletedAtDescLess(a, b *Book) bool {
+	ai, aj := a.MarkedForDeletionAt, b.MarkedForDeletionAt
+	switch {
+	case ai == nil && aj == nil:
+		return a.ID < b.ID
+	case ai == nil:
+		// Rows with no timestamp sort after rows that have one.
+		return false
+	case aj == nil:
+		return true
+	default:
+		return ai.After(*aj)
+	}
 }
