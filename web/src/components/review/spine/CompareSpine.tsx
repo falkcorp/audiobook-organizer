@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/CompareSpine.tsx
-// version: 1.11.0
+// version: 1.12.0
 // guid: 1e5b8d72-4c30-49a6-8f21-0b7e3a6c9d54
-// last-edited: 2026-09-30
+// last-edited: 2026-10-06
 //
 // The shared comparison spine: the surface that shows a reviewer what they are
 // deciding between.
@@ -386,7 +386,7 @@ function GroupedCard({
               )}
               <Stack direction="row" spacing={0.5} sx={{ mt: 0.5 }}>
                 <Chip
-                  label={`${Math.round(c.score * 100)}%`}
+                  label={`${Math.round(c.score * 100)}`}
                   size="small"
                   color={c.score >= 0.85 ? 'success' : c.score >= 0.6 ? 'warning' : 'default'}
                 />
@@ -517,7 +517,7 @@ const CompactRow = memo(function CompactRow({
         {r.candidate && (
           <>
             <Chip
-              label={`${Math.round(r.candidate.score * 100)}%`}
+              label={`${Math.round(r.candidate.score * 100)}`}
               size="small"
               color={
                 r.candidate.score >= 0.85
@@ -766,7 +766,7 @@ const CompactRow = memo(function CompactRow({
                     </Typography>
                   )}
                   <Chip
-                    label={`${Math.round(r.candidate.score * 100)}%`}
+                    label={`${Math.round(r.candidate.score * 100)}`}
                     size="small"
                     color={
                       r.candidate.score >= 0.85
@@ -996,7 +996,7 @@ const TwoColumnCard = memo(function TwoColumnCard({
                   }}
                 >
                   <Chip
-                    label={`${Math.round(r.candidate.score * 100)}%`}
+                    label={`${Math.round(r.candidate.score * 100)}`}
                     size="small"
                     color={
                       r.candidate.score >= 0.85

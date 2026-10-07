@@ -1,7 +1,7 @@
 // file: web/src/components/review/MetadataPanel.tsx
-// version: 1.6.0
+// version: 1.7.0
 // guid: 3f9a2c07-5b41-4e86-9d02-7c1e8b503a64
-// last-edited: 2026-09-30
+// last-edited: 2026-10-06
 //
 // The metadata lane's full surface: queue rail, comparison spine, action bar.
 //
@@ -26,6 +26,7 @@ import { MetadataSearchDialog } from '../audiobooks/MetadataSearchDialog';
 import { QueueRail } from './QueueRail';
 import { CompareSpine, type SpineViewMode } from './spine/CompareSpine';
 import { ActionBar } from './ActionBar';
+import { SelectionBar } from './SelectionBar';
 import { LANES } from './lanes';
 import type { MetadataLane } from './lanes/useMetadataLane';
 
@@ -93,6 +94,7 @@ export function MetadataPanel({
           sourceCounts={metadata.sourceCounts}
           filters={metadata.filters}
           setFilters={metadata.setFilters}
+          titleFilterError={metadata.titleFilterError}
           reviewLevel={metadata.reviewLevel}
           setReviewLevel={metadata.setReviewLevel}
           levelCustomised={metadata.levelCustomised}
@@ -132,6 +134,34 @@ export function MetadataPanel({
         />
 
         <Box sx={{ minWidth: 0, overflowY: 'auto' }}>
+          {/*
+            Always on screen: every view mode, chip or no chip, zero rows or
+            thousands. Sticky inside this scroll container so it stays put while
+            the spine scrolls; the opaque background keeps rows from showing
+            through it.
+          */}
+          <SelectionBar
+            testIdPrefix="main-"
+            pageIds={metadata.pageResults.map((r) => r.book.id)}
+            matchingCount={metadata.filteredResults.length}
+            selectedCount={metadata.selectedIds.size}
+            allMatchingSelected={metadata.allMatchingSelected}
+            isSelected={metadata.spineCtx.isSelected}
+            onSelectPage={metadata.setSelection}
+            onSelectAllMatching={metadata.selectAllMatching}
+            onClearSelection={metadata.clearSelection}
+            disabled={metadata.loading}
+            sx={{
+              position: 'sticky',
+              top: 0,
+              zIndex: 2,
+              bgcolor: 'background.paper',
+              borderBottom: 1,
+              borderColor: 'divider',
+              px: 2,
+              py: 1,
+            }}
+          />
           {/*
             Mirrors the Alert DupesPanel and RegroupPanel already render. Retry
             is wired to the lane's existing `refresh` -- the same one the rail's

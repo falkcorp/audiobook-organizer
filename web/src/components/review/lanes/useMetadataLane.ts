@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.28.0
+// version: 1.29.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
-// last-edited: 2026-10-02
+// last-edited: 2026-10-06
 //
 // The metadata lane's data layer, LIFTED out of MetadataReviewDialog.
 //
@@ -676,6 +676,12 @@ export interface MetadataLane {
   filters: MetadataFilters;
   setFilters: (patch: Partial<MetadataFilters>) => void;
   /**
+   * Why the Title filter is not a valid regex, or null. An invalid pattern
+   * filters nothing (the rows stay as they were), so the rail must show this
+   * -- otherwise a typo looks exactly like a filter that matched everything.
+   */
+  titleFilterError: string | null;
+  /**
    * The review-level slider. Picking a level writes every filter it owns (see
    * reviewLevelFilters). Flipping one of those switches by hand afterwards
    * leaves the level where it is; `levelCustomised` then says the switches no
@@ -1180,13 +1186,21 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     [results]
   );
 
-  const titleRegex = useMemo(() => {
-    if (!filters.titleFilter) return null;
+  // A half-typed regex does not filter yet, but it IS reported: the rail shows
+  // `titleFilterError` under the field, so a typo never silently reads as
+  // "everything matched".
+  const { titleRegex, titleFilterError } = useMemo((): {
+    titleRegex: RegExp | null;
+    titleFilterError: string | null;
+  } => {
+    if (!filters.titleFilter) return { titleRegex: null, titleFilterError: null };
     try {
-      return new RegExp(filters.titleFilter, 'i');
-    } catch {
-      // A half-typed regex is not an error state -- it just does not filter yet.
-      return null;
+      return { titleRegex: new RegExp(filters.titleFilter, 'i'), titleFilterError: null };
+    } catch (err) {
+      return {
+        titleRegex: null,
+        titleFilterError: err instanceof Error ? err.message : 'Invalid regular expression',
+      };
     }
   }, [filters.titleFilter]);
 
@@ -1245,9 +1259,12 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     [beforeRuntime, runtimeHidden, filters]
   );
 
-  // The rows a chip counts, when one is active: exactly those, with every
-  // other filter paused, so the chip's number is the number of rows shown.
-  const chipRows = useMemo((): CandidateResult[] | null => {
+  // The rows a chip counts, when one is active: exactly those, narrowed by the
+  // Title filter regex and with every OTHER filter paused. The title regex is
+  // the one filter a chip honours because it is how a reviewer picks a subset
+  // of a chip's books to act on ("the stale ones whose title starts with a
+  // digit"); the switches and threshold are what the chip exists to bypass.
+  const chipBaseRows = useMemo((): CandidateResult[] | null => {
     if (chipFilter === null) return null;
     switch (chipFilter) {
       case 'matched':
@@ -1271,6 +1288,14 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         return [...results, ...unreviewableResults].filter((r) => r.stale === true);
     }
   }, [chipFilter, results, unreviewableResults]);
+
+  const chipRows = useMemo(
+    (): CandidateResult[] | null =>
+      chipBaseRows === null || !titleRegex
+        ? chipBaseRows
+        : chipBaseRows.filter((r) => titleRegex.test(r.book.title || '')),
+    [chipBaseRows, titleRegex]
+  );
 
   // Book ids sharing a candidate with at least one other book.
   //
@@ -1970,20 +1995,53 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   // must not lose the first). When a FILTER changes -- a switch, the level,
   // the title regex, the provider, the threshold -- ids the new filter no
   // longer matches are dropped, so a bulk action never reaches books the
-  // reviewer can no longer see. That prune is skipped while a chip is active,
-  // because a chip pauses the filters and the rows shown do not change.
+  // reviewer can no longer see.
+  //
+  // While a chip is active every filter but the Title regex is paused, so only
+  // a Title change prunes, and only narrowly: an id is dropped when its title
+  // is known and fails the new regex. The selection may hold books picked in
+  // other chips (other buckets, other reasons); those are kept unless their
+  // own title now fails, and ids with no loaded row are kept outright. An
+  // empty or invalid regex prunes nothing, so half-typing a pattern never
+  // wipes a selection.
   const filtersKey = useMemo(() => JSON.stringify(filters), [filters]);
   const prunedForKeyRef = useRef(filtersKey);
+  const prunedTitleRef = useRef(filters.titleFilter);
   useEffect(() => {
     if (prunedForKeyRef.current === filtersKey) return;
     prunedForKeyRef.current = filtersKey;
-    if (chipFilter !== null) return;
+    const titleChanged = prunedTitleRef.current !== filters.titleFilter;
+    prunedTitleRef.current = filters.titleFilter;
+    if (chipFilter !== null) {
+      if (!titleChanged || !titleRegex) return;
+      const titleById = new Map<string, string>();
+      for (const r of results) titleById.set(r.book.id, r.book.title || '');
+      for (const r of unreviewableResults) titleById.set(r.book.id, r.book.title || '');
+      setSelectedIds((prev) => {
+        const next = new Set(
+          [...prev].filter((id) => {
+            const title = titleById.get(id);
+            return title === undefined || titleRegex.test(title);
+          })
+        );
+        return next.size === prev.size ? prev : next;
+      });
+      return;
+    }
     const keep = new Set(filteredResults.map((r) => r.book.id));
     setSelectedIds((prev) => {
       const next = new Set([...prev].filter((id) => keep.has(id)));
       return next.size === prev.size ? prev : next;
     });
-  }, [filtersKey, chipFilter, filteredResults]);
+  }, [
+    filtersKey,
+    filters.titleFilter,
+    chipFilter,
+    filteredResults,
+    titleRegex,
+    results,
+    unreviewableResults,
+  ]);
 
   const skipSelected = useCallback(() => {
     const ids = [...selectedIds];
@@ -2236,6 +2294,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     setPageSize,
     filters,
     setFilters,
+    titleFilterError,
     reviewLevel,
     setReviewLevel,
     levelCustomised,
