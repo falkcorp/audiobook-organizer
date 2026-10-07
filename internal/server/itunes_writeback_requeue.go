@@ -1,5 +1,5 @@
 // file: internal/server/itunes_writeback_requeue.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 1a7f4c2e-8d36-4b9a-b5e0-3c9d2f6a8e14
 // last-edited: 2026-10-07
 //
@@ -23,10 +23,12 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
+	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 )
 
@@ -127,6 +129,30 @@ func (s *Server) requeueLibrary(c *gin.Context) (*itunes.ITLLibrary, writebackTa
 	return lib, st, true
 }
 
+// requeueApplyGate is the gate the requeue handlers run on the dry_run:false
+// path. A var only so handler unit tests that call the handlers directly
+// (with no Access sign-in in the context) can stand in for the owner; the
+// gate itself is tested through the router in owner_routes tests.
+var requeueApplyGate = (*Server).requireOwnerForApply
+
+// requireOwnerForApply is the owner gate for the dry_run:false path of the
+// requeue endpoints. They carry dry_run in the JSON body, so they cannot use
+// ownerRoute (its gate reads the query string through itunesPreviewOnly). This
+// runs the same check as ownerRoute's gate on the flag the handler itself
+// decoded: servermiddleware.RequireOwner with ownerPerm (the permission leg
+// skipped when local auth is off, as ownerRoute does). It writes the 403 and
+// returns false when the caller is not the owner.
+func (s *Server) requireOwnerForApply(c *gin.Context) bool {
+	gatePerm := ownerPerm
+	if !config.AppConfig.EnableAuth {
+		gatePerm = ""
+	}
+	servermiddleware.RequireOwner(func() string { return config.Snapshot().OwnerEmail }, gatePerm, nil)(c)
+	// RequireOwner calls c.Next() when it allows; this is the last handler,
+	// so that runs nothing.
+	return !c.IsAborted()
+}
+
 // respondEnqueueError maps a checked-enqueue error to a response.
 func respondEnqueueError(c *gin.Context, err error) {
 	switch {
@@ -155,6 +181,9 @@ func (s *Server) itunesWritebackRequeueHandler(c *gin.Context) {
 		return
 	}
 	dryRun := req.DryRun == nil || *req.DryRun
+	if !dryRun && !requeueApplyGate(s, c) {
+		return
+	}
 
 	opts := itunesservice.RequeueOptions{BookIDs: req.BookIDs}
 	kinds := req.Kinds
@@ -260,6 +289,9 @@ func (s *Server) itunesWritebackRequeueRemoveHandler(c *gin.Context) {
 		return
 	}
 	dryRun := req.DryRun == nil || *req.DryRun
+	if !dryRun && !requeueApplyGate(s, c) {
+		return
+	}
 
 	lib, target, ok := s.requeueLibrary(c)
 	if !ok {
