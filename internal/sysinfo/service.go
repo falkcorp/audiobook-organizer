@@ -1,7 +1,7 @@
 // file: internal/sysinfo/service.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: h8i9j0k1-l2m3-n4o5-p6q7-r8s9t0u1v2w3
-// last-edited: 2026-09-07
+// last-edited: 2026-10-06
 
 package sysinfo
 
@@ -151,13 +151,16 @@ func (ss *SystemService) CollectSystemStatus() (*SystemStatus, error) {
 	// weeks, showing the same five pre-retirement runs to anyone who loaded the
 	// page, with nothing to indicate the list was stale.
 	//
-	// ListOperationsV2Since is the only v2 lister; a zero `since` means all
-	// history, and it sorts started_at DESC NULLS LAST, so the first five rows
-	// are the newest five. row.DefID is the wire `type` here (unlike the fixed
-	// constants the reconcile endpoints pass) because this panel displays the
-	// def name in a chip rather than keying behaviour off it.
+	// ListRecentOperationsV2 returns exactly what ListOperationsV2Since with a
+	// zero `since` (all history, started_at DESC NULLS LAST) returns for five
+	// rows, but reads a small recent window instead of decoding every
+	// operation row ever written -- which is what the zero-since call did, on
+	// every status request (5.5-6 s on production, 2026-10-06). row.DefID is
+	// the wire `type` here (unlike the fixed constants the reconcile
+	// endpoints pass) because this panel displays the def name in a chip
+	// rather than keying behaviour off it.
 	recentOps := []database.Operation{}
-	if rows, err := ss.db.ListOperationsV2Since(time.Time{}, 5); err == nil {
+	if rows, err := database.ListRecentOperationsV2(ss.db, 5, time.Now()); err == nil {
 		for i := range rows {
 			recentOps = append(recentOps, *rows[i].AsLegacyOperation(rows[i].DefID))
 		}
