@@ -1,7 +1,7 @@
 // file: web/src/components/review/RepairsPanel.test.tsx
-// version: 1.6.0
+// version: 1.7.0
 // guid: 3a7e0c95-4d21-4b8f-b6e3-8f1c2d9a5e47
-// last-edited: 2026-10-04
+// last-edited: 2026-10-06
 //
 // The repairs surface, rendered over the real lane hook with a mocked API, so
 // the clicks go through the same dispatch the workspace uses.
@@ -169,6 +169,35 @@ describe('RepairsPanel', () => {
     expect(screen.getByTestId('repairs-outcome-g2')).toHaveTextContent('Applied');
     expect(screen.queryByTestId('repairs-outcome-g1')).not.toBeInTheDocument();
     expect(screen.getByTestId('repairs-apply-result')).toHaveTextContent(/Re-run trial/);
+  });
+
+  it('shows a retry_later row as Retry later and the banner as a warning with a hint', async () => {
+    vi.mocked(api.getRepairApplyResult).mockResolvedValue({
+      fixer_id: 'vg-primary',
+      plan_op_id: 'plan-1',
+      dry_run: false,
+      requested: 1,
+      by_outcome: { retry_later: 1 },
+      applied: 0,
+      changed_since_plan: 0,
+      partially_applied: 0,
+      failed: 0,
+      retry_later: 1,
+      standdown_held: true,
+      rows: [{ row_id: 'g2', outcome: 'retry_later', error: 'memdb is not serving reads' }],
+    });
+    const user = userEvent.setup();
+    renderPanel();
+    await screen.findByTestId('repairs-row-g2');
+    await user.click(screen.getByRole('checkbox', { name: 'Select Title g2' }));
+    await user.click(screen.getByTestId('repairs-apply-selected'));
+
+    const banner = await screen.findByTestId('repairs-apply-result');
+    expect(screen.getByTestId('repairs-outcome-g2')).toHaveTextContent('Retry later (nothing written)');
+    expect(banner.className).toMatch(/Warning/);
+    expect(banner.className).not.toMatch(/Success/);
+    expect(banner).toHaveTextContent('retry later 1');
+    expect(banner).toHaveTextContent(/could not be checked right now and were not written/);
   });
 
   it('sends nothing when the confirm is cancelled', async () => {
