@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert.go
-// version: 1.64.2
+// version: 1.65.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
 // last-edited: 2026-10-07
 
@@ -665,6 +665,8 @@ func (rs *RevertService) revertChangeIn(c *database.OperationChange, plan *undo.
 		return rs.revertBookFileTrack(c)
 	case undo.ChangeTypeBookPathUpdate:
 		return rs.revertBookPathUpdate(c)
+	case undo.ChangeTypeITunesPathClear:
+		return rs.revertITunesPathClear(c)
 	case undo.ChangeTypeBookFileMove:
 		return rs.revertBookFileMove(c)
 	case undo.ChangeTypeBookSoftDelete:
@@ -1477,6 +1479,58 @@ func (rs *RevertService) revertBookPathUpdate(c *database.OperationChange) error
 		book.FilePath = c.OldValue
 		return nil
 	})
+}
+
+// revertITunesPathClear puts back an iTunes path the stale-itunes-path
+// repair cleared, on the book or on one book_file row, only while the field
+// is still empty (undo.CheckITunesPathClearCurrent: a field holding the old
+// path again is already restored; any other value was written since and is
+// refused, never overwritten). Database only: nothing on disk or in iTunes
+// is touched.
+func (rs *RevertService) revertITunesPathClear(c *database.OperationChange) error {
+	if !undo.ITunesPathClearValid(c) {
+		return fmt.Errorf("itunes_path_clear row %s is malformed (field %q)", c.ID, c.FieldName)
+	}
+	merge.LockMergeRMW()
+	defer merge.UnlockMergeRMW()
+	if c.FieldName == undo.ITunesPathBookField {
+		return rs.modifyBook(c.OperationID, c.BookID, func(book *database.Book) error {
+			cur := ""
+			if book.ITunesPath != nil {
+				cur = *book.ITunesPath
+			}
+			if err := undo.CheckITunesPathClearCurrent(cur, c); err != nil {
+				return err
+			}
+			old := c.OldValue
+			book.ITunesPath = &old
+			return nil
+		})
+	}
+	fileID, _ := undo.BookFileIDFromField(c.FieldName)
+	f, err := rs.db.GetBookFileByID(c.BookID, fileID)
+	if err != nil || f == nil {
+		return driftRefusal("book_file %s is no longer on book %s (err=%v)", fileID, c.BookID, err)
+	}
+	if err := undo.CheckITunesPathClearCurrent(f.ITunesPath, c); err != nil {
+		return err
+	}
+	written, err := rs.db.ModifyBookFile(c.BookID, fileID, func(cur *database.BookFile) error {
+		// Compare-and-set under the row's write lock: the field must still
+		// be the empty value the repair left.
+		if err := undo.CheckITunesPathClearCurrent(cur.ITunesPath, c); err != nil {
+			return err
+		}
+		cur.ITunesPath = c.OldValue
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if written == nil {
+		return driftRefusal("book_file %s vanished from book %s", fileID, c.BookID)
+	}
+	return nil
 }
 
 // revertBookFileMove moves one file of a multi-file in-place organize back

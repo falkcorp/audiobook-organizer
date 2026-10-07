@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_files.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 4d8a2f61-3c7e-4b19-8e05-9a1f6c3d7b28
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 package repairs
 
@@ -476,6 +476,69 @@ func (w *Writer) SetTrackNumber(bookID, fileID string, from, to int) error {
 		}
 		w.writes.Add(1)
 		return nil
+	})
+}
+
+// ClearBookFileITunesPath clears the itunes_path of book_file row fileID of
+// bookID, only while it still holds expect (the planned value). Nothing else
+// on the row changes; nothing on disk or in iTunes is touched. Journaled
+// first as undo.ChangeTypeITunesPathClear ("book_file:<id>", expect -> ""),
+// and voided when the compare-and-set refuses, so the op revert restores
+// exactly the writes made.
+func (w *Writer) ClearBookFileITunesPath(bookID, fileID, expect string) error {
+	if err := w.denyTagsOnly("ClearBookFileITunesPath"); err != nil {
+		return err
+	}
+	if w.files == nil {
+		return errors.New("repairs: writer has no book_file store")
+	}
+	if expect == "" {
+		return fmt.Errorf("repairs: book_file %s: no iTunes path to clear", fileID)
+	}
+	e := UndoEntry{ChangeType: undo.ChangeTypeITunesPathClear, Field: "book_file:" + fileID, Old: expect, New: ""}
+	return w.JournalStep(bookID, e, func() error {
+		written, err := w.files.ModifyBookFile(bookID, fileID, func(f *database.BookFile) error {
+			if f.ITunesPath != expect {
+				return fmt.Errorf("%w: book_file %s iTunes path is %q, not the planned %q", ErrChangedSincePlan, fileID, f.ITunesPath, expect)
+			}
+			f.ITunesPath = ""
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		if written == nil {
+			return fmt.Errorf("%w: book_file %s is no longer on book %s", ErrChangedSincePlan, fileID, bookID)
+		}
+		w.writes.Add(1)
+		return nil
+	})
+}
+
+// ClearBookITunesPath clears book bookID's own itunes_path, only while it
+// still holds expect. Journaled first as undo.ChangeTypeITunesPathClear
+// (undo.ITunesPathBookField, expect -> ""), voided on a refusal.
+func (w *Writer) ClearBookITunesPath(bookID, expect string) error {
+	if err := w.denyTagsOnly("ClearBookITunesPath"); err != nil {
+		return err
+	}
+	if expect == "" {
+		return fmt.Errorf("repairs: book %s: no iTunes path to clear", bookID)
+	}
+	e := UndoEntry{ChangeType: undo.ChangeTypeITunesPathClear, Field: undo.ITunesPathBookField, Old: expect, New: ""}
+	return w.JournalStep(bookID, e, func() error {
+		_, err := w.Modify(bookID, func(b *database.Book) error {
+			cur := ""
+			if b.ITunesPath != nil {
+				cur = *b.ITunesPath
+			}
+			if cur != expect {
+				return fmt.Errorf("%w: book %s iTunes path is %q, not the planned %q", ErrChangedSincePlan, bookID, cur, expect)
+			}
+			b.ITunesPath = nil
+			return nil
+		})
+		return err
 	})
 }
 

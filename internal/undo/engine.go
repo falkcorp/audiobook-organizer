@@ -1,7 +1,7 @@
 // file: internal/undo/engine.go
-// version: 1.31.0
+// version: 1.32.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 //
 // Undo preflight. PreflightUndoConflicts predicts what POST
 // /operations/:id/revert (audiobooks.RevertService) will do with each change
@@ -377,7 +377,8 @@ func preflightRow(store ConflictChecker, c *database.OperationChange, stamps Sof
 		return verdictOf(CheckRepairBookCreate(rbs, c))
 	case ChangeTypeBookFileReassign, ChangeTypeBookFileTrack, ChangeTypeBookPathUpdate,
 		ChangeTypeBookSoftDelete, ChangeTypeBookPrimaryDemote, ChangeTypeExternalIDReassign,
-		ChangeTypeBookFileMove, ChangeTypeBookFileRepoint, ChangeTypeBookMergedInto, ChangeTypeUserStateFollow:
+		ChangeTypeBookFileMove, ChangeTypeBookFileRepoint, ChangeTypeBookMergedInto, ChangeTypeUserStateFollow,
+		ChangeTypeITunesPathClear:
 		// A journaled step whose write never happened, or one already put
 		// back, is already restored.
 		return verdictOf(checkFsRegroupRow(store, c, stamps))
@@ -519,6 +520,16 @@ func checkFsRegroupRow(store ConflictChecker, c *database.OperationChange, stamp
 		}
 	case ChangeTypeBookPathUpdate:
 		return CheckPathUpdateCurrent(book, c)
+	case ChangeTypeITunesPathClear:
+		// The revert puts the path back only while the field is still
+		// empty (CheckITunesPathClearCurrent): on the book, or on the row,
+		// which must still be on BookID.
+		if c.FieldName == ITunesPathBookField {
+			return CheckITunesPathClearCurrent(derefStr(book.ITunesPath), c)
+		}
+		return checkFsRegroupRowCurrent(store, c, func(f *database.BookFile) error {
+			return CheckITunesPathClearCurrent(f.ITunesPath, c)
+		})
 	case ChangeTypeBookPrimaryDemote:
 		return CheckPrimaryDemoteCurrent(book, c)
 	case ChangeTypeExternalIDReassign:

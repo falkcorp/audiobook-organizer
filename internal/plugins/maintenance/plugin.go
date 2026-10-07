@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/plugin.go
-// version: 1.77.0
+// version: 1.78.0
 // guid: b2c3d4e5-f6a7-8901-bcde-123456789012
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 package maintenance
 
@@ -28,6 +28,11 @@ type Plugin struct {
 	// tests can exercise the op's bookkeeping and rollback on a filesystem that
 	// cannot clone (GitHub's runners) and can force a clone failure.
 	reflinkFile func(src, dst string) error
+	// itunesLibraryPaths names the iTunes libraries the stale-itunes-path
+	// fixer reads: the one the app imports from and the write-back .itl.
+	// Nil means config.Snapshot().ITunes (LibraryReadPath, LibraryWritePath),
+	// the only value production uses; tests point it at fixture files.
+	itunesLibraryPaths func() (read, write string)
 
 	repairsOnce sync.Once
 	repairsReg  *repairs.Registry
@@ -90,6 +95,9 @@ func (p *Plugin) Repairs() *repairs.Registry {
 			logger.New("maintenance").Error("repairs: fixer not registered: %s", logger.SanitizeLogValue(err.Error()))
 		}
 		if err := p.repairsReg.Register(newVersionTwinFixer(p)); err != nil {
+			logger.New("maintenance").Error("repairs: fixer not registered: %s", logger.SanitizeLogValue(err.Error()))
+		}
+		if err := p.repairsReg.Register(newStaleITunesPathFixer(p)); err != nil {
 			logger.New("maintenance").Error("repairs: fixer not registered: %s", logger.SanitizeLogValue(err.Error()))
 		}
 	})
