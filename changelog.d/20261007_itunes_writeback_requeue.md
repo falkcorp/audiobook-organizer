@@ -8,7 +8,8 @@ fixed batcher. Both are gated like `/writeback/held/release` and are dry runs
 unless the body sends `"dry_run": false`.
 
 - `POST /api/v1/itunes/writeback/requeue` takes `{"dry_run", "book_ids",
-  "kinds"}`. It plans every primary book with the flush's own planner, and
+  "kinds", "limit"}`. `limit` queues the first N selected books by id, so a
+  large delta can be fed to the batcher in chunks. It plans every primary book with the flush's own planner, and
   selects books where a track already in the library differs in metadata or
   location. The dry run returns counts and a 50-book sample. An explicit
   `false` queues the selected book ids. Library tracks no book claims, and DB
@@ -19,7 +20,8 @@ unless the body sends `"dry_run": false`.
   of merged-away or deleted books. It re-queues the remove of a PID only when
   all of these hold:
   - its external-id row is tombstoned;
-  - no live book holds the PID;
+  - no live book holds the PID, at book level or on any `book_file` row
+    (duplicate PIDs included);
   - the track is still in the library;
   - the PID is not held.
 
