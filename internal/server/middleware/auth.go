@@ -1,7 +1,7 @@
 // file: internal/server/middleware/auth.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 83c42ecb-1df2-4baf-9890-3f91ab4db6fe
-// last-edited: 2026-09-19
+// last-edited: 2026-10-06
 
 package middleware
 
@@ -99,6 +99,15 @@ func CurrentSession(c *gin.Context) (*database.Session, bool) {
 	return session, ok && session != nil
 }
 
+// CurrentAuthMethod reports how the request was authenticated (the method
+// the verifying stage recorded; auth.MethodNone when none did).
+func CurrentAuthMethod(c *gin.Context) auth.Method {
+	if c == nil || c.Request == nil {
+		return auth.MethodNone
+	}
+	return auth.MethodFromContext(c.Request.Context())
+}
+
 // CurrentAPIKey fetches the API key that authenticated this request, if any.
 func CurrentAPIKey(c *gin.Context) (*database.APIKey, bool) {
 	if c == nil {
@@ -189,6 +198,7 @@ func RequireAuth(store authSessionStore) gin.HandlerFunc {
 		perms := effectivePermissionsFor(store, user)
 		ctx := auth.WithUser(c.Request.Context(), user)
 		ctx = auth.WithPermissions(ctx, perms)
+		ctx = auth.WithMethod(ctx, auth.MethodSession)
 		c.Request = c.Request.WithContext(ctx)
 
 		if abortWorkerOnlyOutsideWorkerAPI(c) {
@@ -303,6 +313,7 @@ func handleAPIKeyAuth(c *gin.Context, store authKeyStore, rawToken string) {
 
 	ctx := auth.WithUser(c.Request.Context(), user)
 	ctx = auth.WithPermissions(ctx, effectivePerms)
+	ctx = auth.WithMethod(ctx, auth.MethodAPIKey)
 	c.Request = c.Request.WithContext(ctx)
 
 	if abortWorkerOnlyOutsideWorkerAPI(c) {

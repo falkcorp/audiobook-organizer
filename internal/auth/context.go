@@ -1,6 +1,7 @@
 // file: internal/auth/context.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8c4a2f1d-9b3e-4f60-a8d5-2c7e0f1b9a47
+// last-edited: 2026-10-06
 //
 // Request-scoped auth state plumbing (spec 3.7). Long-lived deps
 // (database.Store, services) live on the Server struct; per-request
@@ -21,7 +22,57 @@ type ctxKey int
 const (
 	userKey ctxKey = iota
 	permissionsKey
+	methodKey
 )
+
+// Method is how a request was authenticated: which verifier bound its
+// user. It is recorded by the stage that verified the credential, never
+// inferred from the transport (an "abk_" API key sent in the session cookie
+// is still an API key).
+type Method string
+
+// Auth methods.
+const (
+	// MethodNone: no verifier bound a user (unauthenticated, or the
+	// first-run bootstrap with no users).
+	MethodNone Method = ""
+	// MethodSession: a login session token (cookie or Bearer) issued by an
+	// interactive login (password or OAuth).
+	MethodSession Method = "session"
+	// MethodAPIKey: an "abk_" API key. Automation and agents use these.
+	MethodAPIKey Method = "api_key"
+	// MethodCFAccess: a verified Cloudflare Access SSO assertion resolved to
+	// an allowlisted user. A service-token assertion never resolves a user
+	// (internal/oauth/cfaccess.go), so this is always a person's SSO login.
+	MethodCFAccess Method = "cf_access"
+	// MethodABS: an identity bound by the Audiobookshelf-compatible surface
+	// (its own JWT sessions or API keys); the mode is recorded there.
+	MethodABS Method = "abs"
+)
+
+// Interactive reports whether m is a person's own login (a session or a
+// Cloudflare Access SSO identity) rather than a credential automation holds
+// (an API key, an ABS client token). Actions the owner reserves for himself
+// (Repairs owner apply) are honoured only for these.
+func (m Method) Interactive() bool { return m == MethodSession || m == MethodCFAccess }
+
+// WithMethod records how the request in ctx was authenticated.
+func WithMethod(ctx context.Context, m Method) context.Context {
+	if m == MethodNone {
+		return ctx
+	}
+	return context.WithValue(ctx, methodKey, m)
+}
+
+// MethodFromContext returns the method WithMethod recorded, MethodNone when
+// none was.
+func MethodFromContext(ctx context.Context) Method {
+	if ctx == nil {
+		return MethodNone
+	}
+	m, _ := ctx.Value(methodKey).(Method)
+	return m
+}
 
 // WithUser attaches the calling user to ctx. Typically set by the
 // authenticate middleware after session/JWT verification.
