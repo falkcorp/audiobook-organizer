@@ -409,7 +409,11 @@ func (svc *AudiobookService) queryAudiobooks(ctx context.Context, limit int, off
 				// production is the ~2 minute memdb warmup after startup.
 				fallbackAnswersTheKey := f.IsPrimaryVersion == nil &&
 					f.SortBy == "" && !f.ExcludeQuarantined
-				if didPushdown || fallbackAnswersTheKey {
+				// A full-match-set fetch (MatchingBookIDs passes searchFullLimit)
+				// is not a page: caching it would park the whole library in
+				// the list cache under a key no page request ever reads.
+				isPage := limit <= 100000
+				if isPage && (didPushdown || fallbackAnswersTheKey) {
 					svc.listCache.Set(cacheKey, books)
 				}
 			}

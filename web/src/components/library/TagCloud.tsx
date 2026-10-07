@@ -1,7 +1,7 @@
 // file: web/src/components/library/TagCloud.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7e6c9a1d-3f2b-4c8e-9a5d-1b6f8e2c4d9a
-// last-edited: 2026-09-11
+// last-edited: 2026-10-06
 import { useMemo, useState } from 'react';
 import { Box, Button, Chip, Collapse, IconButton, Stack, Typography } from '@mui/material';
 import { ExpandMore as ExpandMoreIcon } from '@mui/icons-material';
@@ -12,6 +12,12 @@ export interface TagCloudProps {
   availableTags: Array<{ tag: string; count: number }>;
   selectedTags: string[];
   onTagsChange: (tags: string[]) => void;
+  /**
+   * When set, an empty tag list renders the panel with this message instead of
+   * nothing — a scoped cloud whose results carry no tags should say so, not
+   * vanish and look broken.
+   */
+  emptyMessage?: string;
 }
 
 const MIN_FONT_SIZE = 0.75; // rem
@@ -92,7 +98,12 @@ function readStoredExpanded(): boolean {
  * nothing. The open/closed choice persists, so anyone who does want the full
  * cloud only has to say so once.
  */
-export function TagCloud({ availableTags, selectedTags, onTagsChange }: TagCloudProps) {
+export function TagCloud({
+  availableTags,
+  selectedTags,
+  onTagsChange,
+  emptyMessage,
+}: TagCloudProps) {
   const [expanded, setExpanded] = useState(readStoredExpanded);
 
   // Hide internal-bookkeeping namespaces (dedup:*, metadata:source:*) from
@@ -136,7 +147,15 @@ export function TagCloud({ availableTags, selectedTags, onTagsChange }: TagCloud
   }, [sortedTags, selectedTags]);
 
   if (visibleTags.length === 0) {
-    return null;
+    if (!emptyMessage) return null;
+    return (
+      <Box sx={{ p: 1.5, border: 1, borderColor: 'divider', borderRadius: 1 }}>
+        <Typography variant="subtitle2">Browse by Tag</Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+          {emptyMessage}
+        </Typography>
+      </Box>
+    );
   }
 
   const setExpandedPersisted = (next: boolean) => {

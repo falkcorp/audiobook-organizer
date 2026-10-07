@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/interfaces.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 110386de-3e07-4ef3-b0e0-2e717a249e91
 // last-edited: 2026-10-06
 
@@ -172,6 +172,9 @@ type AudiobookUserTagService interface {
 	ListAllUserTags() ([]database.TagWithCount, error)
 	GetBookUserTags(bookID string) ([]string, error)
 	BatchUpdateUserTags(bookIDs, addTags, removeTags []string) (int, error)
+	// ScopedTagFacets counts tags over every book a list request matches
+	// (GET /audiobooks/facets?scoped=1 — the Library Browse-by-Tag chips).
+	ScopedTagFacets(ctx context.Context, search string, authorID, seriesID *int, f audiobookspkg.ListFilters) (audiobookspkg.ScopedTagFacets, error)
 }
 
 // AudiobookViewDecorator AudiobookViewDecorator turns raw book rows into the detail shape the list endpoints return, and drops the caches that shape is built from.
