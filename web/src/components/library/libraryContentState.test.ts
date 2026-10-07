@@ -1,11 +1,11 @@
 // file: web/src/components/library/libraryContentState.test.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2b6f14ad-8c07-4d9e-9f31-5a70c8e2d4b6
-// last-edited: 2026-08-08
+// last-edited: 2026-10-06
 
 import { describe, expect, it } from 'vitest';
 
-import { libraryContentState } from './libraryContentState';
+import { libraryContentState, queryErrorMessage } from './libraryContentState';
 
 const ERR = new Error('Failed to fetch');
 
@@ -101,5 +101,26 @@ describe('libraryContentState', () => {
         }
       }
     }
+  });
+});
+
+// A rejected query (HTTP 400) is not "reconnecting": nothing retries it and
+// only the user can fix it, so the body that holds the search bar must render.
+describe('libraryContentState: rejected query', () => {
+  const badQuery = Object.assign(new Error('invalid filter value: title:/(?=x)/ — invalid regex'), {
+    status: 400,
+  });
+
+  it('keeps the search bar on screen for a 400 with no books', () => {
+    expect(
+      libraryContentState({ bookCount: 0, loading: false, loadError: badQuery, searchQuery: 'x' }),
+    ).toBe('content');
+    expect(queryErrorMessage(badQuery)).toContain('title:/(?=x)/');
+  });
+
+  it('does not treat a network failure or a 5xx as a query error', () => {
+    expect(queryErrorMessage(ERR)).toBeNull();
+    expect(queryErrorMessage(Object.assign(new Error('boom'), { status: 503 }))).toBeNull();
+    expect(queryErrorMessage(null)).toBeNull();
   });
 });

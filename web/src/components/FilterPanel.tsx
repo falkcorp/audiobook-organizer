@@ -1,7 +1,7 @@
 // file: web/src/components/FilterPanel.tsx
-// version: 1.2.2
+// version: 1.3.0
 // guid: 5c7d8e9f-0a1b-2c3d-4e5f-6a7b8c9d0e1f
-// last-edited: 2026-08-19
+// last-edited: 2026-10-06
 
 import React from 'react';
 import { Box, IconButton, Tooltip } from '@mui/material';
@@ -20,6 +20,8 @@ interface FilterPanelProps {
   sortOrder?: 'asc' | 'desc';
   sortOptions?: SortOption[];
   onSortChange?: (sortKey: string, order: 'asc' | 'desc') => void;
+  /** Server rejection of the current query, shown under the search box. */
+  searchErrorText?: string | null;
 }
 
 export const FilterPanel: React.FC<FilterPanelProps> = ({
@@ -33,6 +35,7 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
   sortOrder,
   sortOptions,
   onSortChange,
+  searchErrorText,
 }) => {
   return (
     <Box
@@ -57,6 +60,7 @@ export const FilterPanel: React.FC<FilterPanelProps> = ({
           sortOrder={sortOrder}
           sortOptions={sortOptions}
           onSortChange={onSortChange}
+          errorText={searchErrorText}
         />
       </Box>
       <Tooltip title="Library info">
