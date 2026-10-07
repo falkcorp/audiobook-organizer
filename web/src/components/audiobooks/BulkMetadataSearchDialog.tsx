@@ -1,11 +1,12 @@
 // file: web/src/components/audiobooks/BulkMetadataSearchDialog.tsx
-// version: 1.11.1
+// version: 1.12.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-10-06
 
 import { useCallback, useEffect, useState, useRef } from 'react';
 import { applyFieldClick } from './fieldRangeSelect';
 import {
+  Alert,
   Avatar,
   Box,
   Button,
@@ -39,26 +40,33 @@ import NavigateBeforeIcon from '@mui/icons-material/NavigateBefore';
 import NavigateNextIcon from '@mui/icons-material/NavigateNext';
 import SkipNextIcon from '@mui/icons-material/SkipNext';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
-import UndoIcon from '@mui/icons-material/Undo';
 import type { Audiobook } from '../../types';
 import type { BookFile, MetadataCandidate } from '../../services/api';
 import * as api from '../../services/api';
 import {
-  METADATA_APPLY_FIELDS,
   METADATA_APPLY_FIELD_LABELS,
   candidateApplyFieldValue,
 } from '../../config/metadataApplyFields';
+import {
+  candidateFields,
+  sameCandidate,
+  stagedFieldCount,
+  submitStagedApplies,
+  type StagedPick,
+} from './stagedMetadataApply';
 
 interface BulkMetadataSearchDialogProps {
   open: boolean;
   books: Audiobook[];
   onClose: () => void;
-  // Session end: the user closed the wizard after applying something. The
-  // parent reloads the list and clears its selection.
+  // Session end: the user closed the wizard with picks staged, which are now
+  // being applied in the background. The parent reloads the list and clears
+  // its selection.
   onComplete: () => void;
-  // Reload the library list and nothing else. Called when an apply or undo from
-  // a closed session lands late, by which time the selection may belong to a
-  // session reopened on other books, so it must not be touched.
+  // Reload the library list and nothing else. Called when the background
+  // applies of a closed session settle (or an Undo from their toast lands), by
+  // which time the selection may belong to a session reopened on other books,
+  // so it must not be touched.
   onLibraryChanged: () => void;
   toast: (
     message: string,
@@ -75,7 +83,7 @@ const SOURCE_COLORS: Record<string, 'primary' | 'secondary' | 'success' | 'warni
   manual: 'info',
 };
 
-type BookStatus = 'pending' | 'applied' | 'skipped';
+type BookStatus = 'pending' | 'skipped';
 
 function formatDuration(seconds: number): string {
   const h = Math.floor(seconds / 3600);
@@ -104,10 +112,9 @@ export function BulkMetadataSearchDialog({
   onLibraryChanged,
   toast,
 }: BulkMetadataSearchDialogProps) {
-  // The wizard's position is tracked by book id, not by list index: with
-  // "Skip applied" on, applying a book removes it from filteredBooks, which
-  // shifts every later index down by one. An index would then silently skip
-  // the next book on every apply. null means "the first book in the list".
+  // The wizard's position is tracked by book id, not by list index, so a
+  // filter change or a late list update cannot silently move it to another
+  // book. null means "the first book in the list".
   const [currentBookId, setCurrentBookId] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [authorQuery, setAuthorQuery] = useState('');
@@ -117,16 +124,29 @@ export function BulkMetadataSearchDialog({
   const [results, setResults] = useState<MetadataCandidate[]>([]);
   const [loading, setLoading] = useState(false);
   const [previewCover, setPreviewCover] = useState<string | null>(null);
-  const [applying, setApplying] = useState(false);
   const [expandedCard, setExpandedCard] = useState<number | null>(null);
-  const [selectedFields, setSelectedFields] = useState<Set<string>>(new Set());
-  // An apply waiting for the user to confirm it over an ASIN conflict (the
-  // candidate names another ASIN than the book carries): opened from the
-  // search's apply_check, or from the server's 409 asin_conflict.
+  // Field ticks belong to ONE candidate: ticking a field on another card
+  // starts a fresh selection for it, so "Stage selected" never sends one
+  // card's ticks with another card's candidate.
+  const [fieldSelection, setFieldSelection] = useState<{
+    candidate: MetadataCandidate | null;
+    fields: Set<string>;
+  }>({ candidate: null, fields: new Set() });
+  // The picks this session applies when the window closes, one per book (an
+  // apply carries one candidate, and two queued applies of one book would
+  // refuse each other). Picking never disables anything: a new pick for a
+  // book replaces its staged one, Unstage drops it, Discard drops them all.
+  const [staged, setStaged] = useState<Map<string, { book: Audiobook; pick: StagedPick }>>(
+    new Map()
+  );
+  // A pick waiting for the user to confirm it over an ASIN conflict the search
+  // flagged (the candidate names another ASIN than the book carries).
+  // Confirming stages it with the override; a conflict the search did not
+  // flag is caught by the server at submit and offered again from the toast.
   const [asinOverride, setAsinOverride] = useState<{
+    book: Audiobook;
     candidate: MetadataCandidate;
     fields?: string[];
-    successMessage: string;
     bookAsin: string;
     candidateAsin: string;
     detail: string;
@@ -135,10 +155,9 @@ export function BulkMetadataSearchDialog({
   const fieldAnchorRef = useRef<string | null>(null);
   const [bookStatuses, setBookStatuses] = useState<Map<string, BookStatus>>(new Map());
   const [writeToFiles, setWriteToFiles] = useState(true);
-  const [undoing, setUndoing] = useState(false);
   // On by default: the wizard is a queue of books still needing metadata, so
-  // books already matched (on the server, or applied in this session) are
-  // hidden. Turning it off shows every selected book, applied ones marked.
+  // books the server already reports as matched are hidden. Books staged in
+  // this session stay listed (marked Staged) so a pick can be revised.
   const [skipApplied, setSkipApplied] = useState(true);
   const [sourceFilter, setSourceFilter] = useState<string | null>(null);
   const [sortResults, setSortResults] = useState<'score' | 'source'>('score');
@@ -147,16 +166,13 @@ export function BulkMetadataSearchDialog({
   const [files, setFiles] = useState<BookFile[]>([]);
   const [filesLoading, setFilesLoading] = useState(false);
   const [filesExpanded, setFilesExpanded] = useState(false);
-  // Stack of book ids applied in this session so the persistent Undo button
-  // can revert the last apply even after navigating away / banner dismissal.
-  const [appliedStack, setAppliedStack] = useState<{ id: string; title: string }[]>([]);
   // The parent keeps this component mounted and only toggles `open`, so its
-  // state outlives a close. A request still in flight when the user closes the
-  // dialog would otherwise write into that state after handleClose reset it:
-  // a phantom "Undo Last", a stale 'applied' status that filters the book out
-  // of the next session, and a successor book from the old selection. Each
-  // async handler captures `sessionRef.current` before awaiting and drops its
-  // UI updates if handleClose (or unmount) has moved it on since.
+  // state outlives a close. A search or No Match request still in flight when
+  // the user closes the dialog would otherwise write into that state after
+  // handleClose reset it (stale results, a successor book from the old
+  // selection). Each async handler captures `sessionRef.current` before
+  // awaiting and drops its UI updates if handleClose (or unmount) has moved it
+  // on since.
   const sessionRef = useRef(0);
   const mountedRef = useRef(true);
   useEffect(() => {
@@ -167,13 +183,11 @@ export function BulkMetadataSearchDialog({
     };
   }, []);
   const isStale = (session: number) => session !== sessionRef.current;
-  // An apply or undo that lands after the dialog closed still changed the
-  // book on the server, and handleClose already decided whether to refresh
-  // before it landed. Reload the list here, unless the page itself is gone.
-  // Never onComplete: it also clears the parent's selection, and by now the
-  // dialog may have been reopened on new books (or the late write is an Undo
-  // clicked on a toast that outlived its dialog), so clearing it would empty
-  // the new session's books mid-use.
+  // The background applies of a closed session (and an Undo clicked on their
+  // toast) land after handleClose already refreshed. Reload the list here,
+  // unless the page itself is gone. Never onComplete: it also clears the
+  // parent's selection, and by now the dialog may have been reopened on new
+  // books, so clearing it would empty the new session's books mid-use.
   const refreshAfterStaleWrite = () => {
     if (mountedRef.current) onLibraryChanged();
   };
@@ -183,28 +197,25 @@ export function BulkMetadataSearchDialog({
     setCurrentBookId(null); // Reset to first book when filter changes
   };
 
-  const isSessionApplied = (id: string) => bookStatuses.get(id) === 'applied';
   // The session's work set. With "Skip applied" on, books the server already
-  // reports as matched are excluded up front. The `books` prop is never
-  // refreshed while the dialog is open, so this alone cannot see applies made
-  // in this session.
+  // reports as matched are excluded up front. Staged books stay in the list so
+  // their pick can be revised; picking moves the wizard on instead.
   const pool = skipApplied ? books.filter((b) => b.metadata_review_status !== 'matched') : books;
-  // Session-aware: a book applied in this dialog leaves the list as well.
-  const filteredBooks = skipApplied ? pool.filter((b) => !isSessionApplied(b.id)) : pool;
+  const filteredBooks = pool;
   const foundIndex =
     currentBookId === null ? -1 : filteredBooks.findIndex((b) => b.id === currentBookId);
   const currentIndex = foundIndex >= 0 ? foundIndex : 0;
   const currentBook = filteredBooks[currentIndex];
-  const appliedCount = [...bookStatuses.values()].filter((s) => s === 'applied').length;
-  const skippedCount = [...bookStatuses.values()].filter((s) => s === 'skipped').length;
-  // Books handled so far out of the work set. Measured against `pool`, not the
-  // shrinking filteredBooks, so progress cannot run past 100%.
+  const stagedCount = staged.size;
+  const skippedCount = [...bookStatuses.entries()].filter(
+    ([id, s]) => s === 'skipped' && !staged.has(id)
+  ).length;
+  // Books handled so far (staged or skipped) out of the work set.
   const poolDoneCount = pool.filter(
-    (b) => bookStatuses.has(b.id) && bookStatuses.get(b.id) !== 'pending'
+    (b) => staged.has(b.id) || bookStatuses.get(b.id) === 'skipped'
   ).length;
-  const alreadyAppliedCount = books.filter(
-    (b) => b.metadata_review_status === 'matched' || isSessionApplied(b.id)
-  ).length;
+  const alreadyAppliedCount = books.filter((b) => b.metadata_review_status === 'matched').length;
+  const currentStaged = currentBook ? staged.get(currentBook.id) : undefined;
 
   // Search when the current book changes
   const doSearch = useCallback(
@@ -214,7 +225,7 @@ export function BulkMetadataSearchDialog({
       setLoading(true);
       setResults([]);
       setExpandedCard(null);
-      setSelectedFields(new Set());
+      setFieldSelection({ candidate: null, fields: new Set() });
       try {
         const resp = await api.searchMetadataForBook(
           currentBook.id,
@@ -296,176 +307,72 @@ export function BulkMetadataSearchDialog({
 
   const handleSearch = () => doSearch(query, authorQuery, narratorQuery, seriesQuery);
 
-  // Shared by "Apply all" and "Apply selected". `fields` undefined applies the
-  // whole candidate. Every UI write after the await is dropped when the dialog
-  // was closed (or unmounted) in the meantime; see sessionRef.
-  // override is the book ASIN the user confirmed applying a conflicting
-  // candidate over; without it the server refuses the conflict with a 409,
-  // which reopens the confirmation instead of reading as a failure.
-  const applyCandidate = async (
-    candidate: MetadataCandidate,
-    fields: string[] | undefined,
-    successMessage: string,
-    override?: string
-  ) => {
-    const session = sessionRef.current;
-    setApplying(true);
-    const bookId = currentBook.id;
-    const bookTitle = currentBook.title;
-    try {
-      const resp = await api.applyMetadataCandidate(
-        bookId,
-        candidate,
-        fields,
-        writeToFiles,
-        override
-      );
-      if (isStale(session)) {
-        refreshAfterStaleWrite();
-        return;
-      }
-      if (resp?.queued) {
-        // The scan is reading this book: the change is queued and lands as
-        // soon as it moves on. Information, not a warning; no Undo yet
-        // because nothing has been applied.
-        toast(`"${bookTitle}": ${resp.message}`, 'info');
-        setBookStatuses((prev) => new Map(prev).set(bookId, 'applied'));
-        advanceFrom(bookId, skipApplied);
-        return;
-      }
-      toast(successMessage, 'success', {
-        label: 'Undo',
-        onClick: async () => {
-          try {
-            await api.undoLastApply(bookId);
-            toast(`Undid metadata apply for "${bookTitle}"`, 'info');
-            if (isStale(session)) {
-              refreshAfterStaleWrite();
-              return;
-            }
-            setBookStatuses((prev) => new Map(prev).set(bookId, 'pending'));
-            setAppliedStack((prev) => prev.filter((b) => b.id !== bookId));
-          } catch {
-            /* ignore */
-          }
-        },
-      });
-      setBookStatuses((prev) => new Map(prev).set(bookId, 'applied'));
-      setAppliedStack((prev) => [...prev, { id: bookId, title: bookTitle }]);
-      // With "Skip applied" on, the book leaves the list on this render.
-      advanceFrom(bookId, skipApplied);
-    } catch (err) {
-      if (isStale(session)) return;
-      const conflict = api.asinConflictOf(err);
-      if (conflict) {
-        setAsinOverride({ candidate, fields, successMessage, ...conflict });
-        return;
-      }
-      toast(err instanceof Error ? err.message : 'Failed to apply metadata', 'error');
-    } finally {
-      // handleClose resets `applying` itself, so a stale request must not
-      // clear the flag for an apply started in the next session.
-      if (!isStale(session)) setApplying(false);
-    }
+  // stagePick records `candidate` (narrowed to `fields`, undefined = all) as
+  // the book's pick, replacing any earlier one, and moves the wizard on to the
+  // next book. Nothing is sent: the dialog applies every staged pick when it
+  // closes.
+  const stagePick = (book: Audiobook, pick: StagedPick) => {
+    setStaged((prev) => new Map(prev).set(book.id, { book, pick }));
+    setBookStatuses((prev) => {
+      if (!prev.has(book.id)) return prev;
+      const next = new Map(prev);
+      next.delete(book.id);
+      return next;
+    });
+    advanceFrom(book.id, false);
   };
 
-  // requestApply asks for confirmation first when the search already flagged
-  // the candidate's ASIN as conflicting with the book's.
-  const requestApply = async (
-    candidate: MetadataCandidate,
-    fields: string[] | undefined,
-    successMessage: string
-  ) => {
+  // requestStage asks for confirmation first when the search flagged the
+  // candidate's ASIN as conflicting with the book's.
+  const requestStage = (candidate: MetadataCandidate, fields: string[] | undefined) => {
+    const book = currentBook;
     const check = candidate.apply_check;
     if (check?.asin_conflict && check.book_asin) {
       setAsinOverride({
+        book,
         candidate,
         fields,
-        successMessage,
         bookAsin: check.book_asin,
         candidateAsin: candidate.asin ?? '',
         detail: check.detail ?? '',
       });
       return;
     }
-    await applyCandidate(candidate, fields, successMessage);
+    stagePick(book, { candidate, fields });
   };
 
   const confirmAsinOverride = () => {
     if (!asinOverride) return;
-    const { candidate, fields, successMessage, bookAsin } = asinOverride;
+    const { book, candidate, fields, bookAsin } = asinOverride;
     setAsinOverride(null);
-    void applyCandidate(candidate, fields, successMessage, bookAsin);
+    stagePick(book, { candidate, fields, overrideAsin: bookAsin });
   };
 
-  const handleApplyAll = (candidate: MetadataCandidate) =>
-    requestApply(
-      candidate,
-      undefined,
-      `Applied metadata to "${currentBook.title}" from ${candidate.source}`
-    );
+  const handlePickAll = (candidate: MetadataCandidate) => requestStage(candidate, undefined);
 
-  const handleApplySelected = async (candidate: MetadataCandidate) => {
-    if (selectedFields.size === 0) {
-      toast('Select at least one field to apply', 'warning');
+  const handleStageSelected = (candidate: MetadataCandidate) => {
+    const fields = fieldSelection.candidate === candidate ? Array.from(fieldSelection.fields) : [];
+    if (fields.length === 0) {
+      toast('Select at least one field to stage', 'warning');
       return;
     }
-    await requestApply(
-      candidate,
-      Array.from(selectedFields),
-      `Applied selected fields to "${currentBook.title}"`
-    );
+    requestStage(candidate, fields);
   };
 
-  // Undo the most-recently applied book in this session. Works after the
-  // success banner is gone and after navigating to other books, because it
-  // keys off the applied stack rather than the current book.
-  const handleUndoLastApplied = async () => {
-    const last = appliedStack[appliedStack.length - 1];
-    if (!last) return;
-    const session = sessionRef.current;
-    setUndoing(true);
-    try {
-      await api.undoLastApply(last.id);
-      if (isStale(session)) {
-        refreshAfterStaleWrite();
-        return;
-      }
-      toast(`Undid metadata apply for "${last.title}"`, 'success');
-      setBookStatuses((prev) => new Map(prev).set(last.id, 'pending'));
-      setAppliedStack((prev) => prev.slice(0, -1));
-    } catch (err) {
-      if (isStale(session)) return;
-      toast(err instanceof Error ? err.message : 'Failed to undo', 'error');
-    } finally {
-      if (!isStale(session)) setUndoing(false);
-    }
+  const unstage = (bookId: string) => {
+    setStaged((prev) => {
+      if (!prev.has(bookId)) return prev;
+      const next = new Map(prev);
+      next.delete(bookId);
+      return next;
+    });
   };
 
-  const handleUndoCurrentBook = async () => {
-    const session = sessionRef.current;
-    const bookId = currentBook.id;
-    const bookTitle = currentBook.title;
-    setUndoing(true);
-    try {
-      const resp = await api.undoLastApply(bookId);
-      if (isStale(session)) {
-        refreshAfterStaleWrite();
-        return;
-      }
-      toast(`Undid ${resp.undone_fields.length} field(s) for "${bookTitle}"`, 'success');
-      setBookStatuses((prev) => new Map(prev).set(bookId, 'pending'));
-      setAppliedStack((prev) => prev.filter((b) => b.id !== bookId));
-    } catch (err) {
-      if (isStale(session)) return;
-      toast(err instanceof Error ? err.message : 'Failed to undo', 'error');
-    } finally {
-      if (!isStale(session)) setUndoing(false);
-    }
-  };
-
+  // Skip moves on. It never drops a staged pick: a book with one stays staged.
   const handleSkip = () => {
-    setBookStatuses((prev) => new Map(prev).set(currentBook.id, 'skipped'));
+    if (!staged.has(currentBook.id)) {
+      setBookStatuses((prev) => new Map(prev).set(currentBook.id, 'skipped'));
+    }
     advanceFrom(currentBook.id, false);
   };
 
@@ -475,6 +382,8 @@ export function BulkMetadataSearchDialog({
     try {
       await api.markNoMatch(bookId);
       if (isStale(session)) return;
+      // The newer decision wins: a book marked no match drops its staged pick.
+      unstage(bookId);
       setBookStatuses((prev) => new Map(prev).set(bookId, 'skipped'));
       advanceFrom(bookId, false);
     } catch {
@@ -483,7 +392,7 @@ export function BulkMetadataSearchDialog({
     }
   };
 
-  // Move the wizard off `bookId` after it was applied / skipped. `leavesList`
+  // Move the wizard off `bookId` after it was staged / skipped. `leavesList`
   // says the book is about to drop out of filteredBooks; then the successor is
   // the book after it or, if it was last, the one before it. The successor is
   // taken from the list as it stood when the action started, which is the
@@ -508,42 +417,71 @@ export function BulkMetadataSearchDialog({
     if (target) setCurrentBookId(target.id);
   };
 
-  const handleClose = () => {
-    if (appliedCount > 0) {
-      onComplete();
-    }
-    // Detach every request still in flight from this session (see sessionRef).
-    // Their busy flags are cleared here because they will no longer clear them.
+  // resetSession detaches every request still in flight from this session
+  // (see sessionRef) and clears the wizard for the next open.
+  const resetSession = () => {
     sessionRef.current += 1;
-    setApplying(false);
-    setUndoing(false);
     setLoading(false);
     setCurrentBookId(null);
     setBookStatuses(new Map());
-    setAppliedStack([]);
+    setStaged(new Map());
     setAsinOverride(null);
+    setFieldSelection({ candidate: null, fields: new Set() });
+  };
+
+  // Closing applies every staged pick (Escape, backdrop and the footer button
+  // alike): the owner asked for the picks to go in when the window closes, not
+  // one per click. The applies are handed off and NOT awaited, so the dialog
+  // is gone at once; each runs as a background operation and one toast reports
+  // the batch. writeToFiles is read here, at close, for every book.
+  const handleClose = () => {
+    const entries = [...staged.values()];
+    if (entries.length > 0) {
+      void submitStagedApplies({
+        entries: entries.map(({ book, pick }) => ({
+          book: { id: book.id, title: book.title },
+          pick,
+        })),
+        writeToFiles,
+        toast,
+        onDone: refreshAfterStaleWrite,
+      });
+      onComplete();
+    }
+    resetSession();
     onClose();
   };
 
-  const toggleField = (field: string) => {
-    setSelectedFields((prev) => {
-      const next = new Set(prev);
-      if (next.has(field)) next.delete(field);
-      else next.add(field);
-      return next;
-    });
+  // Discard drops every staged pick and closes WITHOUT applying anything.
+  const handleDiscardAndClose = () => {
+    resetSession();
+    onClose();
   };
-  void toggleField; // retained for non-range callers/tests
 
   // Plain click toggles; shift-click selects the whole visible range from the
-  // last-clicked field (file-manager semantics). See fieldRangeSelect.ts.
-  const handleFieldClick = (field: string, shiftKey: boolean, visibleFields: string[]) => {
-    setSelectedFields((prev) => {
-      const r = applyFieldClick(prev, field, shiftKey, fieldAnchorRef.current, visibleFields);
+  // last-clicked field (file-manager semantics). See fieldRangeSelect.ts. A
+  // click on another candidate's fields starts a fresh selection for it.
+  const handleFieldClick = (
+    candidate: MetadataCandidate,
+    field: string,
+    shiftKey: boolean,
+    visibleFields: string[]
+  ) => {
+    setFieldSelection((prev) => {
+      const same = prev.candidate === candidate;
+      const r = applyFieldClick(
+        same ? prev.fields : new Set<string>(),
+        field,
+        shiftKey,
+        same ? fieldAnchorRef.current : null,
+        visibleFields
+      );
       fieldAnchorRef.current = r.anchor;
-      return r.next;
+      return { candidate, fields: r.next };
     });
   };
+
+  const applyCloseLabel = `Apply ${stagedCount} book${stagedCount === 1 ? '' : 's'} & close`;
 
   if (!open || books.length === 0) return null;
 
@@ -568,30 +506,25 @@ export function BulkMetadataSearchDialog({
           </Typography>
         </DialogContent>
         <DialogActions>
-          {/* Reachable by applying the last remaining book, so the session's
-              undo must stay available here. Undoing re-admits the book. */}
-          {appliedStack.length > 0 && (
-            <Button
-              color="warning"
-              startIcon={<UndoIcon />}
-              onClick={handleUndoLastApplied}
-              disabled={undoing}
-              size="small"
-              variant="contained"
-            >
-              {undoing ? 'Undoing…' : `Undo Last (${appliedStack.length})`}
+          {stagedCount > 0 ? (
+            <>
+              <Button onClick={handleDiscardAndClose}>Discard all &amp; close</Button>
+              <Button onClick={handleClose} variant="contained">
+                {applyCloseLabel}
+              </Button>
+            </>
+          ) : (
+            <Button onClick={handleClose} variant="outlined">
+              Close
             </Button>
           )}
-          <Button onClick={handleClose} variant="outlined">
-            Close
-          </Button>
         </DialogActions>
       </Dialog>
     );
   }
 
   const progress = pool.length > 0 ? Math.min(100, (poolDoneCount / pool.length) * 100) : 0;
-  const status = bookStatuses.get(currentBook?.id);
+  const status = currentStaged ? 'staged' : bookStatuses.get(currentBook?.id);
 
   return (
     <Dialog open={open} onClose={handleClose} maxWidth="md" fullWidth>
@@ -608,12 +541,13 @@ export function BulkMetadataSearchDialog({
               alignItems: 'center',
             }}
           >
-            {appliedCount > 0 && (
+            {stagedCount > 0 && (
               <Chip
                 icon={<CheckCircleIcon />}
-                label={`${appliedCount} applied`}
+                label={`${stagedCount} staged`}
                 color="success"
                 size="small"
+                data-testid="bulk-staged-count"
               />
             )}
             {skippedCount > 0 && (
@@ -821,10 +755,30 @@ export function BulkMetadataSearchDialog({
                 </Collapse>
               </Box>
             </Box>
-            {status === 'applied' && <Chip label="Applied" color="success" size="small" />}
+            {status === 'staged' && <Chip label="Staged" color="success" size="small" />}
             {status === 'skipped' && <Chip label="Skipped" size="small" variant="outlined" />}
           </Stack>
         </Box>
+
+        {currentStaged && (
+          <Alert
+            severity="success"
+            sx={{ mb: 1.5 }}
+            data-testid="bulk-staged-pick"
+            action={
+              <Button color="inherit" size="small" onClick={() => unstage(currentBook.id)}>
+                Unstage
+              </Button>
+            }
+          >
+            Staged: {stagedFieldCount(currentStaged.pick)} field
+            {stagedFieldCount(currentStaged.pick) === 1 ? '' : 's'} from{' '}
+            {currentStaged.pick.candidate.source} &mdash; &ldquo;
+            {currentStaged.pick.candidate.title}&rdquo;
+            {currentStaged.pick.overrideAsin ? ' (over the ASIN conflict)' : ''}. Applied in the
+            background when you close this window; pick another result to replace it.
+          </Alert>
+        )}
 
         {/* Search */}
         <TextField
@@ -935,17 +889,6 @@ export function BulkMetadataSearchDialog({
               label={<Typography variant="body2">Skip applied</Typography>}
             />
           </Tooltip>
-          {status === 'applied' && (
-            <Button
-              size="small"
-              color="warning"
-              startIcon={<UndoIcon />}
-              onClick={handleUndoCurrentBook}
-              disabled={undoing}
-            >
-              {undoing ? 'Undoing...' : 'Undo'}
-            </Button>
-          )}
         </Stack>
 
         {/* Results */}
@@ -1015,233 +958,208 @@ export function BulkMetadataSearchDialog({
             .sort((a, b) =>
               sortResults === 'source' ? a.source.localeCompare(b.source) : b.score - a.score
             )
-            .map((candidate, idx) => (
-              <Box key={idx} sx={{ border: 1, borderColor: 'divider', borderRadius: 1, p: 1.5 }}>
-                <Stack
-                  direction="row"
-                  spacing={2}
+            .map((candidate, idx) => {
+              const isStaged =
+                !!currentStaged && sameCandidate(currentStaged.pick.candidate, candidate);
+              const pickedAll = isStaged && !currentStaged?.pick.fields;
+              const ticked =
+                fieldSelection.candidate === candidate ? fieldSelection.fields : new Set<string>();
+              return (
+                <Box
+                  key={idx}
+                  data-staged={isStaged ? 'true' : undefined}
                   sx={{
-                    alignItems: 'flex-start',
+                    border: isStaged ? 2 : 1,
+                    borderColor: isStaged ? 'success.main' : 'divider',
+                    borderRadius: 1,
+                    p: 1.5,
                   }}
                 >
-                  <Avatar
-                    src={candidate.cover_url}
-                    variant="rounded"
+                  <Stack
+                    direction="row"
+                    spacing={2}
                     sx={{
-                      width: 50,
-                      height: 65,
-                      cursor: candidate.cover_url ? 'pointer' : 'default',
-                      '&:hover': candidate.cover_url ? { opacity: 0.8 } : {},
-                    }}
-                    onClick={() => {
-                      if (candidate.cover_url) setPreviewCover(candidate.cover_url);
+                      alignItems: 'flex-start',
                     }}
                   >
-                    {candidate.title?.[0] || '?'}
-                  </Avatar>
-                  <Box sx={{ flex: 1, minWidth: 0 }}>
-                    <Typography
-                      variant="body1"
-                      noWrap
+                    <Avatar
+                      src={candidate.cover_url}
+                      variant="rounded"
                       sx={{
-                        fontWeight: 'bold',
+                        width: 50,
+                        height: 65,
+                        cursor: candidate.cover_url ? 'pointer' : 'default',
+                        '&:hover': candidate.cover_url ? { opacity: 0.8 } : {},
+                      }}
+                      onClick={() => {
+                        if (candidate.cover_url) setPreviewCover(candidate.cover_url);
                       }}
                     >
-                      {candidate.title}
-                    </Typography>
-                    <Typography
-                      variant="body2"
-                      sx={{
-                        color: 'text.secondary',
-                      }}
-                    >
-                      {candidate.author}
-                      {candidate.year ? ` (${candidate.year})` : ''}
-                    </Typography>
-                    {candidate.series && (
+                      {candidate.title?.[0] || '?'}
+                    </Avatar>
+                    <Box sx={{ flex: 1, minWidth: 0 }}>
+                      <Typography
+                        variant="body1"
+                        noWrap
+                        sx={{
+                          fontWeight: 'bold',
+                        }}
+                      >
+                        {candidate.title}
+                      </Typography>
                       <Typography
                         variant="body2"
                         sx={{
                           color: 'text.secondary',
                         }}
                       >
-                        Series: {candidate.series}
-                        {candidate.series_position ? ` · Book ${candidate.series_position}` : ''}
+                        {candidate.author}
+                        {candidate.year ? ` (${candidate.year})` : ''}
                       </Typography>
-                    )}
-                    {candidate.narrator && (
-                      <Typography
-                        variant="body2"
-                        sx={{
-                          color: 'text.secondary',
-                        }}
-                      >
-                        Narrator: {candidate.narrator}
-                      </Typography>
-                    )}
-                    <Stack direction="row" spacing={0.5} sx={{ mt: 0.5 }}>
-                      <Chip
-                        label={candidate.source}
-                        size="small"
-                        color={SOURCE_COLORS[candidate.source] || 'default'}
-                      />
-                      <Chip
-                        label={`${Math.round(candidate.score * 100)}%`}
-                        size="small"
-                        variant="outlined"
-                      />
+                      {candidate.series && (
+                        <Typography
+                          variant="body2"
+                          sx={{
+                            color: 'text.secondary',
+                          }}
+                        >
+                          Series: {candidate.series}
+                          {candidate.series_position ? ` · Book ${candidate.series_position}` : ''}
+                        </Typography>
+                      )}
                       {candidate.narrator && (
+                        <Typography
+                          variant="body2"
+                          sx={{
+                            color: 'text.secondary',
+                          }}
+                        >
+                          Narrator: {candidate.narrator}
+                        </Typography>
+                      )}
+                      <Stack direction="row" spacing={0.5} sx={{ mt: 0.5 }}>
                         <Chip
-                          icon={<HeadphonesIcon />}
-                          label="Audiobook"
+                          label={candidate.source}
                           size="small"
-                          color="info"
+                          color={SOURCE_COLORS[candidate.source] || 'default'}
+                        />
+                        <Chip
+                          label={`${Math.round(candidate.score * 100)}%`}
+                          size="small"
                           variant="outlined"
                         />
-                      )}
-                      {candidate.apply_check?.asin_conflict && (
-                        <Tooltip title={candidate.apply_check.detail ?? ''}>
+                        {candidate.narrator && (
                           <Chip
-                            icon={<WarningAmberIcon />}
-                            label="ASIN conflict"
+                            icon={<HeadphonesIcon />}
+                            label="Audiobook"
                             size="small"
-                            color="error"
+                            color="info"
+                            variant="outlined"
                           />
-                        </Tooltip>
-                      )}
-                      {candidate.apply_check?.identity_stale &&
-                        !candidate.apply_check?.asin_conflict && (
+                        )}
+                        {candidate.apply_check?.asin_conflict && (
                           <Tooltip title={candidate.apply_check.detail ?? ''}>
                             <Chip
                               icon={<WarningAmberIcon />}
-                              label="Fetched for another ASIN"
+                              label="ASIN conflict"
                               size="small"
-                              color="warning"
-                              variant="outlined"
+                              color="error"
                             />
                           </Tooltip>
                         )}
-                    </Stack>
-                  </Box>
-                  <Button
-                    variant="contained"
-                    size="small"
-                    onClick={() => handleApplyAll(candidate)}
-                    disabled={applying || bookStatuses.get(currentBook.id) === 'applied'}
-                    sx={bookStatuses.get(currentBook.id) === 'applied' ? { opacity: 0.5 } : {}}
-                    startIcon={
-                      bookStatuses.get(currentBook.id) === 'applied' ? (
-                        <CheckCircleIcon />
-                      ) : undefined
-                    }
-                  >
-                    {bookStatuses.get(currentBook.id) === 'applied' ? 'Applied' : 'Apply'}
-                  </Button>
-                </Stack>
-
-                {/* Field selector */}
-                <Box sx={{ mt: 0.5 }}>
-                  <Button
-                    size="small"
-                    onClick={() => setExpandedCard(expandedCard === idx ? null : idx)}
-                    endIcon={expandedCard === idx ? <ExpandLessIcon /> : <ExpandMoreIcon />}
-                  >
-                    Select fields...
-                  </Button>
-                  <Collapse in={expandedCard === idx}>
-                    <Box sx={{ mt: 0.5, pl: 1 }}>
-                      {(() => {
-                        const visibleFields = METADATA_APPLY_FIELDS.filter(
-                          (f) => candidateApplyFieldValue(candidate, f) !== undefined
-                        );
-                        return visibleFields.map((field) => {
-                          const value = candidateApplyFieldValue(candidate, field);
-                          return (
-                            <FormControlLabel
-                              key={field}
-                              control={
-                                <Checkbox
-                                  checked={selectedFields.has(field)}
-                                  onClick={(e) => {
-                                    e.preventDefault();
-                                    handleFieldClick(field, e.shiftKey, visibleFields);
-                                  }}
-                                  onChange={() => {}}
-                                  size="small"
-                                />
-                              }
-                              label={
-                                <Typography variant="body2">
-                                  {METADATA_APPLY_FIELD_LABELS[field]}: {value}
-                                </Typography>
-                              }
-                            />
-                          );
-                        });
-                      })()}
-                      <Box sx={{ mt: 0.5 }}>
-                        <Button
-                          variant="outlined"
-                          size="small"
-                          onClick={() => handleApplySelected(candidate)}
-                          disabled={
-                            applying ||
-                            selectedFields.size === 0 ||
-                            bookStatuses.get(currentBook.id) === 'applied'
-                          }
-                          sx={
-                            bookStatuses.get(currentBook.id) === 'applied' ? { opacity: 0.5 } : {}
-                          }
-                        >
-                          {bookStatuses.get(currentBook.id) === 'applied'
-                            ? 'Applied'
-                            : 'Apply Selected'}
-                        </Button>
-                      </Box>
+                        {candidate.apply_check?.identity_stale &&
+                          !candidate.apply_check?.asin_conflict && (
+                            <Tooltip title={candidate.apply_check.detail ?? ''}>
+                              <Chip
+                                icon={<WarningAmberIcon />}
+                                label="Fetched for another ASIN"
+                                size="small"
+                                color="warning"
+                                variant="outlined"
+                              />
+                            </Tooltip>
+                          )}
+                      </Stack>
                     </Box>
-                  </Collapse>
+                    {/* Never disabled: a pick only stages; picking again replaces it. */}
+                    <Button
+                      variant={pickedAll ? 'outlined' : 'contained'}
+                      color={pickedAll ? 'success' : 'primary'}
+                      size="small"
+                      onClick={() => handlePickAll(candidate)}
+                      startIcon={pickedAll ? <CheckCircleIcon /> : undefined}
+                    >
+                      {pickedAll ? 'Picked' : 'Pick'}
+                    </Button>
+                  </Stack>
+
+                  {/* Field selector */}
+                  <Box sx={{ mt: 0.5 }}>
+                    <Button
+                      size="small"
+                      onClick={() => setExpandedCard(expandedCard === idx ? null : idx)}
+                      endIcon={expandedCard === idx ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+                    >
+                      Select fields...
+                    </Button>
+                    <Collapse in={expandedCard === idx}>
+                      <Box sx={{ mt: 0.5, pl: 1 }}>
+                        {(() => {
+                          const visibleFields = candidateFields(candidate);
+                          return visibleFields.map((field) => {
+                            const value = candidateApplyFieldValue(candidate, field);
+                            return (
+                              <FormControlLabel
+                                key={field}
+                                control={
+                                  <Checkbox
+                                    checked={ticked.has(field)}
+                                    onClick={(e) => {
+                                      e.preventDefault();
+                                      handleFieldClick(candidate, field, e.shiftKey, visibleFields);
+                                    }}
+                                    onChange={() => {}}
+                                    size="small"
+                                  />
+                                }
+                                label={
+                                  <Typography variant="body2">
+                                    {METADATA_APPLY_FIELD_LABELS[field]}: {value}
+                                  </Typography>
+                                }
+                              />
+                            );
+                          });
+                        })()}
+                        <Box sx={{ mt: 0.5 }}>
+                          <Button
+                            variant="outlined"
+                            size="small"
+                            onClick={() => handleStageSelected(candidate)}
+                            disabled={ticked.size === 0}
+                          >
+                            {isStaged && currentStaged?.pick.fields
+                              ? 'Re-stage selected'
+                              : 'Stage selected'}
+                          </Button>
+                        </Box>
+                      </Box>
+                    </Collapse>
+                  </Box>
                 </Box>
-              </Box>
-            ))}
+              );
+            })}
         </Stack>
       </DialogContent>
 
       <DialogActions sx={{ justifyContent: 'space-between', px: 3, py: 2 }}>
         <Stack direction="row" spacing={1}>
-          <Button color="warning" onClick={handleMarkNoMatch} disabled={applying} size="small">
+          <Button color="warning" onClick={handleMarkNoMatch} size="small">
             No Match
           </Button>
           <Button onClick={handleSkip} startIcon={<SkipNextIcon />} size="small">
             Skip
           </Button>
-          {status === 'applied' && (
-            <Button
-              color="warning"
-              startIcon={<UndoIcon />}
-              onClick={handleUndoCurrentBook}
-              disabled={undoing}
-              size="small"
-              variant="outlined"
-            >
-              Undo
-            </Button>
-          )}
-          {/* Persistent undo for the last applied book — remains usable after
-              the success banner is gone and after navigating to other books. */}
-          {appliedStack.length > 0 && (
-            <Tooltip title={`Undo last applied: "${appliedStack[appliedStack.length - 1].title}"`}>
-              <Button
-                color="warning"
-                startIcon={<UndoIcon />}
-                onClick={handleUndoLastApplied}
-                disabled={undoing}
-                size="small"
-                variant="contained"
-              >
-                {undoing ? 'Undoing…' : `Undo Last (${appliedStack.length})`}
-              </Button>
-            </Tooltip>
-          )}
         </Stack>
         <Stack direction="row" spacing={1}>
           <Button
@@ -1260,21 +1178,30 @@ export function BulkMetadataSearchDialog({
           >
             Next
           </Button>
-          <Button onClick={handleClose} variant="outlined">
-            {poolDoneCount >= pool.length ? 'Done' : 'Close'}
-          </Button>
+          {stagedCount > 0 ? (
+            <>
+              <Button onClick={handleDiscardAndClose}>Discard all &amp; close</Button>
+              <Button onClick={handleClose} variant="contained">
+                {applyCloseLabel}
+              </Button>
+            </>
+          ) : (
+            <Button onClick={handleClose} variant="outlined">
+              {poolDoneCount >= pool.length ? 'Done' : 'Close'}
+            </Button>
+          )}
         </Stack>
       </DialogActions>
 
       {/* ASIN conflict: applying replaces the book's record with another. */}
       <Dialog open={!!asinOverride} onClose={() => setAsinOverride(null)} maxWidth="xs">
-        <DialogTitle>Apply over an ASIN conflict?</DialogTitle>
+        <DialogTitle>Pick over an ASIN conflict?</DialogTitle>
         <DialogContent>
           <Typography variant="body2" sx={{ mb: 1 }}>
             This candidate&apos;s ASIN
             {asinOverride?.candidateAsin ? ` (${asinOverride.candidateAsin})` : ''} is not the
             book&apos;s ({asinOverride?.bookAsin}). Applying it puts another record&apos;s metadata
-            on this book.
+            on this book. It is staged and applied when you close the window.
           </Typography>
           {asinOverride?.detail && (
             <Typography variant="caption" sx={{ color: 'text.secondary' }}>
@@ -1285,7 +1212,7 @@ export function BulkMetadataSearchDialog({
         <DialogActions>
           <Button onClick={() => setAsinOverride(null)}>Cancel</Button>
           <Button color="error" variant="contained" onClick={confirmAsinOverride}>
-            Apply anyway
+            Pick anyway
           </Button>
         </DialogActions>
       </Dialog>

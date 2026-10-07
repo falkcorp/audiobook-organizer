@@ -1,5 +1,5 @@
 <!-- file: docs/plans/2026-10-06-search-dialog-batch-apply.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 0b6f3c1e-7d2a-4f58-9e41-5a8c2d7b3e90 -->
 <!-- last-edited: 2026-10-06 -->
 
@@ -142,6 +142,7 @@ behaviour), so a frontend-only revert is also safe.
 6. **Not changed: `BulkMetadataSearchDialog`** uses the same blocking
    apply-then-wait pattern (`BulkMetadataSearchDialog.tsx:316`). Same fix
    applies; left out to stay on the reported dialog. Say the word.
+   Done since: `docs/plans/2026-10-06-bulk-search-dialog-background.md`.
 7. **Leaving the page with a pick staged drops it** (navigating away, or the
    book page unmounting). Only closing the dialog applies. WHY: "apply when I
    close the window" was the ask; submitting on unmount would also fire on

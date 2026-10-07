@@ -1,21 +1,21 @@
 // file: web/src/components/audiobooks/BulkMetadataSearchDialog.test.tsx
-// version: 1.4.0
+// version: 2.0.0
 // guid: ec4cb47b-6f18-4083-ab37-a05af679a097
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 import { useState } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import { renderWithProviders } from '../../test/renderWithProviders';
 import { BulkMetadataSearchDialog } from './BulkMetadataSearchDialog';
 import type { Audiobook } from '../../types';
-import type { MetadataCandidate } from '../../services/api';
+import type { MetadataCandidate, OperationV2 } from '../../services/api';
 
 vi.mock('../../services/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../services/api')>();
   return {
-    // The real error type and its reader: the dialog tells an ASIN-conflict
-    // refusal from any other failure with them.
+    // The real error type and its reader: the background submit tells an
+    // ASIN-conflict refusal from any other failure with them.
     ApiError: actual.ApiError,
     asinConflictOf: actual.asinConflictOf,
     searchMetadataForBook: vi.fn(),
@@ -23,6 +23,8 @@ vi.mock('../../services/api', async (importOriginal) => {
     getBookFiles: vi.fn(),
     undoLastApply: vi.fn(),
     markNoMatch: vi.fn(),
+    pollOperationV2: vi.fn(),
+    getBook: vi.fn(),
   };
 });
 
@@ -31,18 +33,31 @@ import {
   applyMetadataCandidate,
   getBookFiles,
   undoLastApply,
+  markNoMatch,
+  pollOperationV2,
+  getBook,
 } from '../../services/api';
 
 const mockSearch = vi.mocked(searchMetadataForBook);
 const mockApply = vi.mocked(applyMetadataCandidate);
 const mockGetBookFiles = vi.mocked(getBookFiles);
 const mockUndo = vi.mocked(undoLastApply);
+const mockNoMatch = vi.mocked(markNoMatch);
+const mockPoll = vi.mocked(pollOperationV2);
+const mockGetBook = vi.mocked(getBook);
 
 const candidate: MetadataCandidate = {
   title: 'Candidate Match',
   author: 'Someone Else',
   source: 'openlibrary',
   score: 0.9,
+};
+const other: MetadataCandidate = {
+  title: 'Other Match',
+  author: 'Another Writer',
+  narrator: 'Some Reader',
+  source: 'audible',
+  score: 0.8,
 };
 
 function book(id: string, overrides: Partial<Audiobook> = {}): Audiobook {
@@ -79,25 +94,32 @@ function renderDialog(books: Audiobook[]) {
 
 type ApplyResult = Awaited<ReturnType<typeof applyMetadataCandidate>>;
 
-// An apply request the test settles by hand, to act while it is in flight.
-function deferredApply() {
-  let resolve!: (v: ApplyResult) => void;
-  let reject!: (e: Error) => void;
-  mockApply.mockReturnValueOnce(
-    new Promise<ApplyResult>((res, rej) => {
-      resolve = res;
-      reject = rej;
-    })
-  );
-  return { resolve, reject };
+function accepted(bookId: string): ApplyResult {
+  return {
+    message: 'queued',
+    book: { id: bookId } as never,
+    source: 'openlibrary',
+    background: true,
+    queued: true,
+    operation_id: `op-${bookId}`,
+  };
 }
 
-const applyOk: ApplyResult = { message: 'ok', book: {} as never, source: 'openlibrary' };
+// A background apply the test settles by hand, to act while it is in flight.
+function deferredApply() {
+  let resolve!: (v: ApplyResult) => void;
+  mockApply.mockReturnValueOnce(
+    new Promise<ApplyResult>((res) => {
+      resolve = res;
+    })
+  );
+  return { resolve };
+}
 
-// The Apply button only renders once the per-book search has resolved.
+// The Pick buttons only render once the per-book search has resolved.
 async function waitForBook(title: string) {
   await screen.findByText(title);
-  return screen.findByRole('button', { name: 'Apply' });
+  return (await screen.findAllByRole('button', { name: /^(Pick|Picked)$/ }))[0];
 }
 
 function header() {
@@ -111,201 +133,252 @@ function determinateProgress() {
   return bar?.getAttribute('aria-valuenow');
 }
 
+function pickButtons() {
+  return screen.getAllByRole('button', { name: /^(Pick|Picked)$/ });
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
-  mockSearch.mockResolvedValue({ results: [candidate] } as Awaited<
+  mockSearch.mockResolvedValue({ results: [candidate, other] } as Awaited<
     ReturnType<typeof searchMetadataForBook>
   >);
   mockGetBookFiles.mockResolvedValue({ files: [], count: 0 });
-  mockApply.mockResolvedValue({
-    message: 'ok',
-    book: {} as never,
-    source: 'openlibrary',
-  });
+  mockApply.mockImplementation(async (bookId) => accepted(bookId));
+  mockPoll.mockResolvedValue({ status: 'completed' } as OperationV2);
+  mockGetBook.mockImplementation(async (id) => ({ id }) as never);
   mockUndo.mockResolvedValue({ message: 'ok', undone_fields: ['title'] });
+  mockNoMatch.mockResolvedValue(undefined);
 });
 
-describe('BulkMetadataSearchDialog — applied books', () => {
-  it('removes an applied book from the list and advances to the book after it', async () => {
-    renderDialog([book('a'), book('b'), book('c')]);
-    await waitForBook('Book A');
-    expect(header()).toBe('Search Metadata — Book 1 of 3');
-
-    fireEvent.click(screen.getByRole('button', { name: /next/i }));
-    const apply = await waitForBook('Book B');
-    fireEvent.click(apply);
-
-    // The book after B, not the book that slid into B's old index slot.
-    await waitForBook('Book C');
-    expect(mockApply).toHaveBeenCalledWith('b', candidate, undefined, true, undefined);
-    expect(screen.queryByText('Book B')).not.toBeInTheDocument();
-    expect(header()).toBe('Search Metadata — Book 2 of 2 (1 filtered)');
-    expect(screen.getByText('1 applied')).toBeInTheDocument();
-    // Progress is measured against the 3-book work set, not the shrinking list.
-    expect(Number(determinateProgress())).toBeCloseTo(100 / 3, 5);
-  });
-
-  it('keeps a book whose apply failed in the list and surfaces the error', async () => {
-    mockApply.mockRejectedValueOnce(new Error('provider timed out'));
+describe('BulkMetadataSearchDialog — picks are staged, never applied while open', () => {
+  it('a pick sends nothing, moves on to the next book and is counted as staged', async () => {
     renderDialog([book('a'), book('b'), book('c')]);
     fireEvent.click(await waitForBook('Book A'));
-
-    await waitFor(() => expect(toast).toHaveBeenCalledWith('provider timed out', 'error'));
-    expect(screen.getByText('Book A')).toBeInTheDocument();
-    expect(header()).toBe('Search Metadata — Book 1 of 3');
-    expect(screen.getByRole('button', { name: 'Apply' })).toBeEnabled();
-    expect(screen.queryByText('1 applied')).not.toBeInTheDocument();
-  });
-
-  it('shows the empty state after the last book is applied, with undo still available', async () => {
-    renderDialog([book('a')]);
-    fireEvent.click(await waitForBook('Book A'));
-
-    expect(await screen.findByText(/All 1 book\(s\) have metadata applied/)).toBeInTheDocument();
-    const undo = screen.getByRole('button', { name: /Undo Last \(1\)/ });
-    fireEvent.click(undo);
-
-    await waitFor(() => expect(mockUndo).toHaveBeenCalledWith('a'));
-    await waitForBook('Book A');
-    expect(header()).toBe('Search Metadata — Book 1 of 1');
-  });
-
-  it('hides books the server already reports as matched by default', async () => {
-    renderDialog([book('a', { metadata_review_status: 'matched' }), book('b')]);
-    await waitForBook('Book B');
-    expect(header()).toBe('Search Metadata — Book 1 of 1 (1 filtered)');
-    expect(screen.getByLabelText('Skip applied')).toBeChecked();
-  });
-
-  it('with "Skip applied" off, keeps the applied book in the list marked Applied', async () => {
-    renderDialog([book('a'), book('b'), book('c')]);
-    await waitForBook('Book A');
-    fireEvent.click(screen.getByLabelText('Skip applied'));
-    fireEvent.click(await screen.findByRole('button', { name: 'Apply' }));
 
     await waitForBook('Book B');
     expect(header()).toBe('Search Metadata — Book 2 of 3');
-
-    fireEvent.click(screen.getByRole('button', { name: /previous/i }));
-    await screen.findByText('Book A');
-    await waitFor(() =>
-      expect(screen.getAllByRole('button', { name: 'Applied' })[0]).toBeDisabled()
-    );
-    expect(screen.getByText('Applied', { selector: '.MuiChip-label' })).toBeInTheDocument();
-  });
-
-  it('applying the last of several books moves back to the book before it', async () => {
-    renderDialog([book('a'), book('b'), book('c')]);
-    await waitForBook('Book A');
-    fireEvent.click(screen.getByRole('button', { name: /next/i }));
-    await waitForBook('Book B');
-    fireEvent.click(screen.getByRole('button', { name: /next/i }));
-    fireEvent.click(await waitForBook('Book C'));
-
-    // No book after C, so the successor is the one before it, not the first
-    // book in the list and not the empty state.
-    await waitForBook('Book B');
-    expect(mockApply).toHaveBeenCalledWith('c', candidate, undefined, true, undefined);
-    expect(screen.queryByText('Book C')).not.toBeInTheDocument();
-    expect(header()).toBe('Search Metadata — Book 2 of 2 (1 filtered)');
+    expect(screen.getByTestId('bulk-staged-count')).toHaveTextContent('1 staged');
+    expect(mockApply).not.toHaveBeenCalled();
+    // Progress counts staged books as handled.
     expect(Number(determinateProgress())).toBeCloseTo(100 / 3, 5);
   });
-});
 
-describe('BulkMetadataSearchDialog — the library scan is reading the book', () => {
-  // 202 queued: the server waited its bound for the scan to move off this
-  // book and handed the change to metadata.apply-when-scanned. That is
-  // information, never a warning or an error, and there is nothing to undo
-  // yet because nothing has been applied.
-  it('shows an info toast, no warning, no Undo, and moves on', async () => {
-    const message =
-      'The library scan is reading this book right now; your change is queued and will be applied as soon as it moves on.';
-    mockApply.mockResolvedValueOnce({
-      ...applyOk,
-      queued: true,
-      operation_id: 'op-q1',
-      message,
-    });
+  it('never disables a pick: every book can be picked, and a picked book re-picked', async () => {
     renderDialog([book('a'), book('b')]);
     fireEvent.click(await waitForBook('Book A'));
-
-    await waitFor(() => expect(toast).toHaveBeenCalledWith(`"Book A": ${message}`, 'info'));
-    for (const call of toast.mock.calls) {
-      expect(call[1]).not.toBe('warning');
-      expect(call[1]).not.toBe('error');
-      expect(call[2]).toBeUndefined(); // no Undo action
-    }
     await waitForBook('Book B');
-    expect(screen.queryByRole('button', { name: /Undo Last/ })).not.toBeInTheDocument();
+    for (const b of pickButtons()) expect(b).toBeEnabled();
+    fireEvent.click(pickButtons()[0]);
+    // Last book: it stays. Both picks remain enabled, one shows Picked.
+    await waitFor(() => expect(screen.getByTestId('bulk-staged-count')).toHaveTextContent('2'));
+    for (const b of pickButtons()) expect(b).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Picked' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /Apply 2 books & close/ })).toBeEnabled();
+    expect(mockApply).not.toHaveBeenCalled();
+  });
+
+  it('a new pick for a book replaces its staged one, and going back shows it', async () => {
+    renderDialog([book('a'), book('b')]);
+    await waitForBook('Book A');
+    fireEvent.click(pickButtons()[0]); // candidate
+    await waitForBook('Book B');
+    fireEvent.click(screen.getByRole('button', { name: /previous/i }));
+    await screen.findByText('Book A');
+    // The search re-ran (new objects), yet the staged card is still marked.
+    const banner = await screen.findByTestId('bulk-staged-pick');
+    expect(banner).toHaveTextContent('Candidate Match');
+    await waitFor(() => expect(pickButtons()[0]).toHaveTextContent('Picked'));
+
+    fireEvent.click(pickButtons()[1]); // other: replaces, still one staged
+    await waitForBook('Book B');
+    expect(screen.getByTestId('bulk-staged-count')).toHaveTextContent('1 staged');
+
+    fireEvent.click(screen.getByRole('button', { name: /Apply 1 book & close/ }));
+    await waitFor(() => expect(mockApply).toHaveBeenCalledTimes(1));
+    expect(mockApply).toHaveBeenCalledWith('a', other, undefined, true, undefined, {
+      background: true,
+    });
+  });
+
+  it('Unstage drops the current book’s pick', async () => {
+    renderDialog([book('a'), book('b')]);
+    fireEvent.click(await waitForBook('Book A'));
+    await waitForBook('Book B');
+    fireEvent.click(screen.getByRole('button', { name: /previous/i }));
+    const banner = await screen.findByTestId('bulk-staged-pick');
+    fireEvent.click(within(banner).getByRole('button', { name: 'Unstage' }));
+
+    await waitFor(() => expect(screen.queryByTestId('bulk-staged-pick')).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(mockApply).not.toHaveBeenCalled();
+    expect(onComplete).not.toHaveBeenCalled();
+  });
+
+  it('No Match on a staged book drops its pick', async () => {
+    renderDialog([book('a'), book('b')]);
+    fireEvent.click(await waitForBook('Book A'));
+    await waitForBook('Book B');
+    fireEvent.click(screen.getByRole('button', { name: /previous/i }));
+    await screen.findByTestId('bulk-staged-pick');
+    fireEvent.click(screen.getByRole('button', { name: 'No Match' }));
+
+    await waitFor(() => expect(mockNoMatch).toHaveBeenCalledWith('a'));
+    await waitFor(() => expect(screen.queryByTestId('bulk-staged-count')).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /^(Close|Done)$/ }));
+    expect(mockApply).not.toHaveBeenCalled();
+  });
+
+  it('stages only the ticked fields of the card they were ticked on', async () => {
+    renderDialog([book('a')]);
+    await waitForBook('Book A');
+    const selectButtons = screen.getAllByRole('button', { name: /Select fields/ });
+    fireEvent.click(selectButtons[0]);
+    fireEvent.click(await screen.findByRole('checkbox', { name: /Title: Candidate Match/ }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Stage selected' })[0]);
+
+    await screen.findByTestId('bulk-staged-pick');
+    fireEvent.click(screen.getByRole('button', { name: /Apply 1 book & close/ }));
+    await waitFor(() =>
+      expect(mockApply).toHaveBeenCalledWith('a', candidate, ['title'], true, undefined, {
+        background: true,
+      })
+    );
   });
 });
 
-describe('BulkMetadataSearchDialog — closed while an apply is in flight', () => {
-  const books = [book('a'), book('b'), book('c')];
-
-  async function applyThenClose() {
-    const pending = deferredApply();
-    const view = renderDialog(books);
+describe('BulkMetadataSearchDialog — closing applies every staged pick in the background', () => {
+  it('submits each staged pick exactly once and closes before any apply answers', async () => {
+    const a = deferredApply();
+    const b = deferredApply();
+    renderDialog([book('a'), book('b'), book('c')]);
     fireEvent.click(await waitForBook('Book A'));
-    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
-    // Nothing had been applied yet when the user closed, so no refresh.
-    expect(onComplete).not.toHaveBeenCalled();
-    view.rerender(dialog(books, false));
-    return { ...pending, view };
-  }
+    fireEvent.click(await waitForBook('Book B'));
+    await waitForBook('Book C');
 
-  async function reopenAndExpectFreshSession(view: ReturnType<typeof renderDialog>) {
-    view.rerender(dialog(books, true));
-    const apply = await waitForBook('Book A');
-    expect(header()).toBe('Search Metadata — Book 1 of 3');
-    expect(screen.queryByRole('button', { name: /Undo Last/ })).not.toBeInTheDocument();
-    expect(screen.queryByText('1 applied')).not.toBeInTheDocument();
-    expect(apply).toBeEnabled();
-  }
+    fireEvent.click(screen.getByRole('button', { name: /Apply 2 books & close/ }));
 
-  it('a late success refreshes the list but leaks nothing into the next session', async () => {
-    const { resolve, view } = await applyThenClose();
-    await act(async () => resolve(applyOk));
+    // Closed and handed back at once: nothing waited on the server.
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    expect(toast).toHaveBeenCalledWith('Applying metadata to 2 books in the background', 'info');
+    await waitFor(() => expect(mockApply).toHaveBeenCalledTimes(2));
+    expect(mockApply).toHaveBeenCalledWith('a', candidate, undefined, true, undefined, {
+      background: true,
+    });
+    expect(mockApply).toHaveBeenCalledWith('b', candidate, undefined, true, undefined, {
+      background: true,
+    });
+    expect(onLibraryChanged).not.toHaveBeenCalled();
 
-    expect(mockApply).toHaveBeenCalledWith('a', candidate, undefined, true, undefined);
-    expect(toast).not.toHaveBeenCalled();
-    // The server did change the book, so the list behind the dialog reloads.
-    // Only the list: onComplete also clears the selection, which by now may
-    // belong to a new session (see the "reopened on a new selection" tests).
+    await act(async () => {
+      a.resolve(accepted('a'));
+      b.resolve(accepted('b'));
+    });
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith(
+        'Metadata applied to 2 of 2 books',
+        'success',
+        expect.objectContaining({ label: 'Undo all (2)' })
+      )
+    );
+    expect(mockPoll).toHaveBeenCalledWith('op-a', undefined, 1500, { requestTimeoutMs: 15000 });
+    expect(mockPoll).toHaveBeenCalledWith('op-b', undefined, 1500, { requestTimeoutMs: 15000 });
+    // Settled: the list reloads once, the selection is not touched again.
     expect(onLibraryChanged).toHaveBeenCalledTimes(1);
-    expect(onComplete).not.toHaveBeenCalled();
-    await reopenAndExpectFreshSession(view);
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    expect(mockApply).toHaveBeenCalledTimes(2);
   });
 
-  it('a late failure shows no error toast and leaks nothing into the next session', async () => {
-    const { reject, view } = await applyThenClose();
-    await act(async () => reject(new Error('provider timed out')));
+  it('Escape applies what is staged too', async () => {
+    renderDialog([book('a'), book('b')]);
+    fireEvent.click(await waitForBook('Book A'));
+    await waitForBook('Book B');
+    fireEvent.keyDown(screen.getAllByRole('dialog')[0], { key: 'Escape' });
 
+    expect(onClose).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(mockApply).toHaveBeenCalledTimes(1));
+  });
+
+  it('Discard all & close submits nothing', async () => {
+    renderDialog([book('a'), book('b')]);
+    fireEvent.click(await waitForBook('Book A'));
+    await waitForBook('Book B');
+    fireEvent.click(screen.getByRole('button', { name: /Discard all & close/ }));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    await act(async () => {});
+    expect(mockApply).not.toHaveBeenCalled();
+    expect(onComplete).not.toHaveBeenCalled();
     expect(toast).not.toHaveBeenCalled();
-    expect(onComplete).not.toHaveBeenCalled();
-    expect(onLibraryChanged).not.toHaveBeenCalled();
-    await reopenAndExpectFreshSession(view);
   });
 
-  it('a request that settles after unmount neither toasts nor refreshes', async () => {
-    const pending = deferredApply();
+  it('closing with nothing staged sends nothing and keeps the selection', async () => {
+    renderDialog([book('a')]);
+    await waitForBook('Book A');
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(mockApply).not.toHaveBeenCalled();
+    expect(onComplete).not.toHaveBeenCalled();
+  });
+
+  it('reopening starts a fresh session with nothing staged', async () => {
+    const books = [book('a'), book('b')];
     const view = renderDialog(books);
     fireEvent.click(await waitForBook('Book A'));
-    view.unmount();
-    await act(async () => pending.resolve(applyOk));
+    await waitForBook('Book B');
+    fireEvent.click(screen.getByRole('button', { name: /Apply 1 book & close/ }));
+    view.rerender(dialog(books, false));
+    view.rerender(dialog(books, true));
 
-    expect(toast).not.toHaveBeenCalled();
-    expect(onComplete).not.toHaveBeenCalled();
+    await waitForBook('Book A');
+    expect(header()).toBe('Search Metadata — Book 1 of 2');
+    expect(screen.queryByTestId('bulk-staged-count')).not.toBeInTheDocument();
+  });
+
+  it('applies that settle after unmount still report, but do not reload the list', async () => {
+    const pending = deferredApply();
+    const view = renderDialog([book('a'), book('b')]);
+    fireEvent.click(await waitForBook('Book A'));
+    await waitForBook('Book B');
+    fireEvent.click(screen.getByRole('button', { name: /Apply 1 book & close/ }));
+    view.unmount();
+    await act(async () => pending.resolve(accepted('a')));
+
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith(
+        'Metadata applied to 1 of 1 book',
+        'success',
+        expect.objectContaining({ label: 'Undo' })
+      )
+    );
     expect(onLibraryChanged).not.toHaveBeenCalled();
+  });
+
+  it('reports every failure in one toast', async () => {
+    mockApply.mockRejectedValueOnce(new Error('provider timed out'));
+    renderDialog([book('a'), book('b')]);
+    fireEvent.click(await waitForBook('Book A'));
+    fireEvent.click(await waitForBook('Book B'));
+    fireEvent.click(screen.getByRole('button', { name: /Apply 2 books & close/ }));
+
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith(
+        'Metadata apply failed for 1 book: provider timed out',
+        'error'
+      )
+    );
+    expect(toast).toHaveBeenCalledWith(
+      'Metadata applied to 1 of 2 books',
+      'success',
+      expect.objectContaining({ label: 'Undo' })
+    );
   });
 });
 
 // Mirrors how LibraryDialogs wires the dialog: the selection lives in the
-// parent, and onComplete clears it. A write from a closed session that lands
-// after the dialog was reopened on a new selection must not reach onComplete,
-// or it empties the new session's books mid-use.
+// parent, and onComplete clears it. Background applies from a closed session
+// that land after the dialog was reopened on a new selection must not reach
+// onComplete, or they empty the new session's books mid-use.
 function Harness({ open, selection }: { open: boolean; selection: Audiobook[] }) {
-  // The selection onComplete cleared; a new `selection` prop is a new, uncleared one.
   const [cleared, setCleared] = useState<Audiobook[] | null>(null);
   const books = cleared === selection ? [] : selection;
   return (
@@ -323,73 +396,32 @@ function Harness({ open, selection }: { open: boolean; selection: Audiobook[] })
   );
 }
 
-describe('BulkMetadataSearchDialog — reopened on a new selection before a late write', () => {
+describe('BulkMetadataSearchDialog — reopened on a new selection before the applies land', () => {
   const first = [book('a'), book('b')];
   const second = [book('x'), book('y')];
 
-  // Close the first session, reopen on `second`, and check the new session is
-  // showing its own books. Resets the callback mocks so the caller asserts
-  // only what the late write does.
-  async function reopenOnSecond(view: ReturnType<typeof renderWithProviders>) {
-    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
-    view.rerender(<Harness open={false} selection={first} />);
-    view.rerender(<Harness open selection={second} />);
-    await waitForBook('Book X');
-    expect(header()).toBe('Search Metadata — Book 1 of 2');
-    onComplete.mockClear();
-    onLibraryChanged.mockClear();
-    toast.mockClear();
-  }
-
-  function expectSecondSessionIntact() {
-    // The new session still has its books: nothing cleared the selection.
-    expect(onComplete).not.toHaveBeenCalled();
-    expect(screen.getByText('Book X')).toBeInTheDocument();
-    expect(header()).toBe('Search Metadata — Book 1 of 2');
-    // The server did change a book, so the list behind the dialog reloads.
-    expect(onLibraryChanged).toHaveBeenCalledTimes(1);
-  }
-
-  it('a late apply reloads the list and leaves the new selection alone', async () => {
+  it('late completions and their Undo reload the list and leave the new selection alone', async () => {
     const pending = deferredApply();
     const view = renderWithProviders(<Harness open selection={first} />);
     fireEvent.click(await waitForBook('Book A'));
-    await reopenOnSecond(view);
-
-    await act(async () => pending.resolve(applyOk));
-
-    expect(mockApply).toHaveBeenCalledWith('a', candidate, undefined, true, undefined);
-    expectSecondSessionIntact();
-  });
-
-  it('a late "Undo Last" reloads the list and leaves the new selection alone', async () => {
-    const view = renderWithProviders(<Harness open selection={first} />);
-    fireEvent.click(await waitForBook('Book A'));
     await waitForBook('Book B');
-    let resolveUndo!: (v: Awaited<ReturnType<typeof undoLastApply>>) => void;
-    mockUndo.mockReturnValueOnce(new Promise((res) => (resolveUndo = res)));
-    // The Tooltip names the button, so target its label text.
-    fireEvent.click(screen.getByText('Undo Last (1)'));
-    await reopenOnSecond(view);
+    fireEvent.click(screen.getByRole('button', { name: /Apply 1 book & close/ }));
+    view.rerender(<Harness open={false} selection={first} />);
+    view.rerender(<Harness open selection={second} />);
+    await waitForBook('Book X');
+    onComplete.mockClear();
 
-    await act(async () => resolveUndo({ message: 'ok', undone_fields: ['title'] }));
+    await act(async () => pending.resolve(accepted('a')));
+    await waitFor(() => expect(onLibraryChanged).toHaveBeenCalledTimes(1));
+    const undo = toast.mock.calls.find((c) => c[2]?.label === 'Undo')?.[2];
+    expect(undo).toBeDefined();
+    await act(async () => undo.onClick());
 
     expect(mockUndo).toHaveBeenCalledWith('a');
-    expectSecondSessionIntact();
-  });
-
-  it('an Undo clicked on a toast that outlived its dialog leaves the new selection alone', async () => {
-    const view = renderWithProviders(<Harness open selection={first} />);
-    fireEvent.click(await waitForBook('Book A'));
-    await waitForBook('Book B');
-    const undoAction = toast.mock.calls.find((c) => c[2]?.label === 'Undo')?.[2];
-    expect(undoAction).toBeDefined();
-    await reopenOnSecond(view);
-
-    await act(async () => undoAction.onClick());
-
-    expect(mockUndo).toHaveBeenCalledWith('a');
-    expectSecondSessionIntact();
+    expect(onLibraryChanged).toHaveBeenCalledTimes(2);
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(screen.getByText('Book X')).toBeInTheDocument();
+    expect(header()).toBe('Search Metadata — Book 1 of 2');
   });
 });
 
@@ -404,23 +436,45 @@ describe('BulkMetadataSearchDialog — ASIN conflict', () => {
     },
   };
 
-  it('asks before applying a flagged candidate and sends the override it was shown', async () => {
+  it('asks before staging a flagged candidate and sends the override it was shown', async () => {
     mockSearch.mockResolvedValue({ results: [conflicting] } as Awaited<
       ReturnType<typeof searchMetadataForBook>
     >);
     renderDialog([book('a')]);
     expect(await screen.findByText('ASIN conflict')).toBeInTheDocument();
     fireEvent.click(await waitForBook('Book A'));
-    expect(await screen.findByText('Apply over an ASIN conflict?')).toBeInTheDocument();
-    expect(mockApply).not.toHaveBeenCalled();
+    expect(await screen.findByText('Pick over an ASIN conflict?')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Apply anyway' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Pick anyway' }));
+    expect(await screen.findByTestId('bulk-staged-pick')).toHaveTextContent(
+      'over the ASIN conflict'
+    );
+    expect(mockApply).not.toHaveBeenCalled();
     await waitFor(() =>
-      expect(mockApply).toHaveBeenCalledWith('a', conflicting, undefined, true, 'B00BOOKASI')
+      expect(screen.queryByText('Pick over an ASIN conflict?')).not.toBeInTheDocument()
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Apply 1 book & close/ }));
+    await waitFor(() =>
+      expect(mockApply).toHaveBeenCalledWith('a', conflicting, undefined, true, 'B00BOOKASI', {
+        background: true,
+      })
     );
   });
 
-  it('turns the server refusal into the confirmation, not an error', async () => {
+  it('stages nothing when the confirmation is cancelled', async () => {
+    mockSearch.mockResolvedValue({ results: [conflicting] } as Awaited<
+      ReturnType<typeof searchMetadataForBook>
+    >);
+    renderDialog([book('a')]);
+    fireEvent.click(await waitForBook('Book A'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
+    await waitFor(() =>
+      expect(screen.queryByText('Pick over an ASIN conflict?')).not.toBeInTheDocument()
+    );
+    expect(screen.queryByTestId('bulk-staged-pick')).not.toBeInTheDocument();
+  });
+
+  it('a server refusal at submit is offered again from the toast with the override', async () => {
     const { ApiError } =
       await vi.importActual<typeof import('../../services/api')>('../../services/api');
     mockApply.mockRejectedValueOnce(
@@ -433,25 +487,21 @@ describe('BulkMetadataSearchDialog — ASIN conflict', () => {
     );
     renderDialog([book('a')]);
     fireEvent.click(await waitForBook('Book A'));
-    expect(await screen.findByText('Apply over an ASIN conflict?')).toBeInTheDocument();
-    expect(toast).not.toHaveBeenCalledWith('conflict', 'error');
+    fireEvent.click(screen.getByRole('button', { name: /Apply 1 book & close/ }));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Apply anyway' }));
     await waitFor(() =>
-      expect(mockApply).toHaveBeenLastCalledWith('a', candidate, undefined, true, 'B00BOOKASI')
+      expect(toast).toHaveBeenCalledWith(
+        'Not applied to "Book A": the candidate\'s ASIN is not the book\'s.',
+        'warning',
+        expect.objectContaining({ label: 'Apply anyway (1)' })
+      )
     );
-  });
-
-  it('applies nothing when the confirmation is cancelled', async () => {
-    mockSearch.mockResolvedValue({ results: [conflicting] } as Awaited<
-      ReturnType<typeof searchMetadataForBook>
-    >);
-    renderDialog([book('a')]);
-    fireEvent.click(await waitForBook('Book A'));
-    fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
+    const action = toast.mock.calls.find((c) => c[2]?.label === 'Apply anyway (1)')?.[2];
+    await act(async () => action.onClick());
     await waitFor(() =>
-      expect(screen.queryByText('Apply over an ASIN conflict?')).not.toBeInTheDocument()
+      expect(mockApply).toHaveBeenLastCalledWith('a', candidate, undefined, true, 'B00BOOKASI', {
+        background: true,
+      })
     );
-    expect(mockApply).not.toHaveBeenCalled();
   });
 });
