@@ -1,7 +1,7 @@
 // file: internal/repairs/guards.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 5a2c9e14-6f3b-4d87-b0e1-9c7d4a8f2e56
-// last-edited: 2026-10-05
+// last-edited: 2026-10-07
 
 package repairs
 
@@ -545,7 +545,44 @@ func GuardBooksFor(f Fixer, r GuardReader, tags GuardTagReader, series SeriesNam
 	return guardBooks(r, tags, series, res, bookIDs, AllowsITunesDatabaseOnly(f))
 }
 
+// GuardRowBooksFor is GuardBooksFor for the books of row (or of extra,
+// books a re-plan added to it, when extra is not nil), lifting the
+// books/itunes path check for the row's OwnerITunesDatabaseOnly books when
+// owner is true. The caller passes owner only for an owner row: at plan, one
+// the fixer marked owner-applicable and not applicable; at apply, one applied
+// under the owner's grant for it. Ids on that list that are not in the
+// row's BookIDs get no exception.
+func GuardRowBooksFor(f Fixer, r GuardReader, tags GuardTagReader, series SeriesNamer, res *PathResolver, row Row, extra []string, owner bool) (kind, reason string, err error) {
+	ids := row.BookIDs
+	if extra != nil {
+		ids = extra
+	}
+	if AllowsBookTagsOnly(f) {
+		return "", "", nil
+	}
+	var dbOnly map[string]bool
+	if owner && !row.Applicable() && row.OwnerApplicable && len(row.OwnerITunesDatabaseOnly) > 0 {
+		in := make(map[string]bool, len(row.BookIDs))
+		for _, id := range row.BookIDs {
+			in[id] = true
+		}
+		dbOnly = map[string]bool{}
+		for _, id := range row.OwnerITunesDatabaseOnly {
+			if in[id] {
+				dbOnly[id] = true
+			}
+		}
+	}
+	return guardBooksWith(r, tags, series, res, ids, AllowsITunesDatabaseOnly(f), dbOnly)
+}
+
 func guardBooks(r GuardReader, tags GuardTagReader, series SeriesNamer, res *PathResolver, bookIDs []string, allowITunes bool) (kind, reason string, err error) {
+	return guardBooksWith(r, tags, series, res, bookIDs, allowITunes, nil)
+}
+
+// guardBooksWith is guardBooks lifting the books/itunes path check for the
+// books in dbOnly as well (GuardRowBooksFor).
+func guardBooksWith(r GuardReader, tags GuardTagReader, series SeriesNamer, res *PathResolver, bookIDs []string, allowITunes bool, dbOnly map[string]bool) (kind, reason string, err error) {
 	ids := append([]string(nil), bookIDs...)
 	sort.Strings(ids)
 	for _, id := range ids {
@@ -569,7 +606,7 @@ func guardBooks(r GuardReader, tags GuardTagReader, series SeriesNamer, res *Pat
 		if b.SeriesID != nil && series != nil {
 			name = series(*b.SeriesID)
 		}
-		if k, why := guardBookPaths(res, id, paths, name, allowITunes); k != "" {
+		if k, why := guardBookPaths(res, id, paths, name, allowITunes || dbOnly[id]); k != "" {
 			return k, why, nil
 		}
 		// The title is evidence too: "Doctor Who: Placebo Effect" on a

@@ -1,5 +1,5 @@
 <!-- file: docs/plans/2026-10-07-stale-itunes-path.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 5f4fc883-f6c3-41f4-9539-c1c4ae4d3485 -->
 <!-- last-edited: 2026-10-07 -->
 
@@ -168,6 +168,20 @@ Two things block that today:
     - The twin passes every other guard (Doctor Who / Big Finish / Torchwood).
   - The twins are taken off the parent's `copy-unproven:` row, so each book is
     listed and counted once.
+  - **As built:** the twin is itself the fragment's iTunes link. So a fragment
+    whose own row path is cleared (or never set) goes on the owner row with its
+    twin, and so does one whose stale path still names its own file. The
+    stale-path clear is therefore not what unblocks the retire. It is the data
+    fix the owner asked for, and it removes the "iTunes-tracked" claim from 300
+    books that iTunes has no track for. Order stays: clear, then retire.
+  - Also refused: a twin row marked missing, or a twin with a live external id
+    of any source.
+  - **Under the merge lock**, `ownerTwinRefusal` re-reads each twin before the
+    first write. It must still be live, explicitly non-primary, in the fragment's
+    group, and single-row. It must have no PID, row path or itunes external id,
+    and nothing to carry. The group must still hold no other iTunes book.
+    `merge.GuardITunesProtected` is not asked about the twin: its retire writes
+    database rows only and never touches its file.
 - **D8: one narrow framework exception, not a fixer-wide opt-out.**
   - New field `repairs.Row.OwnerITunesDatabaseOnly []string`. These are books of
     an OWNER row whose books/itunes path check is lifted.
@@ -183,7 +197,10 @@ Two things block that today:
     the guard for every row it writes.
 - **D9: B2's lost reason is reported.** When every pair of a copy row is
   hands-off, each pair's "not owner-applicable: …" reason is now appended to the
-  row's skip reason. WHY: the B2 cause was invisible for a whole investigation.
+  row's skip reason. The same goes for a row held by an iTunes book in a
+  fragment's version group (`ownerWhyNotOf`), for instance a third group member.
+  A fragment with nothing iTunes about it records no reason. WHY: the B2 cause
+  was invisible for a whole investigation.
 - **Re-stamp risk (recorded, not changed).**
   - `recompute-itunes-paths` (manual, dry-run by default) and organize/rename set
     `itunes_path = ComputeITunesPath(file_path)` on every row they touch.
@@ -227,12 +244,24 @@ Two things block that today:
   - an applicable row with the list still skips;
   - a plain apply of the owner row refuses;
   - Doctor Who still refuses.
-- The twin rules each refuse when broken: twin PID, primary twin, twin listening
-  state, hash mismatch, third group member.
+- The twin rules each refuse when broken (`TestStaleITunesPath_TwinRefusals`, 13
+  cases): primary twin, unset primary flag, book PID, row PID, row iTunes path,
+  tombstoned itunes external id, live external id, listening state, hash
+  mismatch, file size mismatch, a second file row, a third group member (with
+  the D9 reason shown), and a Doctor Who title.
+- Changes after the plan are refused under the lock, with nothing retired
+  (`TestStaleITunesPath_TwinChangedSincePlan`, 4 cases): the twin gains a PID,
+  gains listening state, or is made primary; or a member joins the group.
+- The framework exception is unit-tested in
+  `internal/repairs/owner_itunes_db_only_test.go`. Mutating each of its three
+  conditions fails that test.
 - End to end, shaped like prod:
   - Setup: a fragment with a stale path, its twin under books/itunes, and an
     iTunes-linked parent whose rows' paths back no track.
-  - Before the fix the row is held.
+  - Before D7 the row was held: a probe on this fixture showed the copy row
+    held by the twin, both before and after the stale-path clear (B2, B3).
+    With D7 the owner row holds fragment and twin even before the clear
+    (`TestStaleITunesPath_TwinOwnerRowBeforeClear`).
   - Stale-path apply.
   - Fragment-consolidation re-plan: the owner row lists fragment and twin.
   - Owner apply retires both into the parent, writing nothing on the parent.
