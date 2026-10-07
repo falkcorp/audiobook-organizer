@@ -1,7 +1,7 @@
 // file: internal/server/middleware/cfaccess.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8d1a4f92-3c07-4b56-9e28-6a0b5c2e7d41
-// last-edited: 2026-08-19
+// last-edited: 2026-10-06
 
 package middleware
 
@@ -72,6 +72,7 @@ func CloudflareAccessAuth(a *CFAccessAuthenticator) gin.HandlerFunc {
 		perms := effectivePermissionsFor(a.store, user)
 		ctx := auth.WithUser(c.Request.Context(), user)
 		ctx = auth.WithPermissions(ctx, perms)
+		ctx = auth.WithMethod(ctx, auth.MethodCFAccess)
 		c.Request = c.Request.WithContext(ctx)
 		c.Next()
 	}

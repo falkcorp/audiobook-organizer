@@ -1,7 +1,7 @@
 // file: internal/server/middleware/absauth.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: e7051b93-6c28-4a0f-9d34-b8f2a61c05de
-// last-edited: 2026-09-19
+// last-edited: 2026-10-06
 
 package middleware
 
@@ -397,6 +397,10 @@ func (r *ABSIdentityResolver) Bind(c *gin.Context, id *ABSIdentity) {
 	}
 	ctx := auth.WithUser(c.Request.Context(), id.User)
 	ctx = auth.WithPermissions(ctx, perms)
+	// Every ABS identity (its JWT sessions, its API keys, a CF assertion
+	// read through this surface) is recorded as ABS: none of them counts as
+	// the owner's interactive login for owner-only actions.
+	ctx = auth.WithMethod(ctx, auth.MethodABS)
 	c.Request = c.Request.WithContext(ctx)
 }
 
