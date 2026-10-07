@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-07-itunes-writeback-drops-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 4b9e7d21-3f6a-4c58-8e1b-a2d5c7f09e63 -->
 <!-- last-edited: 2026-10-07 -->
 
@@ -34,9 +34,9 @@ sees.
   tries again: first after a minute, then gradually less often, at least once an
   hour.
 - A removal is recorded only after iTunes has really been changed.
-- A new status page (`/api/v1/itunes/writeback/status`) shows how many updates
-  are waiting, whether the last attempt failed and why, and when it will try
-  again.
+- A new status endpoint in the API (`GET /api/v1/itunes/writeback/status`; it
+  has no screen in the web app yet) shows how many updates are waiting, whether
+  the last attempt failed and why, and when it will try again.
 - If something asks to remove an unusually large number of tracks at once, those
   removals are put on hold for you to approve instead of being discarded.
 - Backups of the iTunes library are now made only before a change that will
@@ -46,6 +46,12 @@ sees.
   from ever being written was fixed too.
 
 ## What you need to do
+
+- **Close iTunes on Windows before this is deployed.** This fix turns iTunes
+  writing back on for the first time since July. If you want a cautious start,
+  deploy with `write_back_dry_run=true`, look at the status endpoint and the
+  log, then turn dry-run off. Nothing is lost by doing this: dry-run now keeps
+  the waiting updates.
 
 - The lost updates cannot be recovered from the logs, because the logs never
   listed which books they were.

@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.23.0
+// version: 4.23.1
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-10-07
 
@@ -180,6 +180,14 @@ func (s *Server) Start(cfg ServerConfig) error {
 			s.flushDeferredActivity()
 			return fmt.Errorf("container start: %w", err)
 		}
+	}
+
+	// Reload the iTunes write-back batcher's durable queue. Container.Start
+	// already calls its Start when the container built it; this explicit,
+	// idempotent call (sync.Once inside) covers a container that did not, so a
+	// queue left by the previous process is never silently ignored.
+	if s.writeBackBatcher != nil {
+		_ = s.writeBackBatcher.Start(s.bgCtx)
 	}
 
 	// Start embed queue debounce timer (activated after container start so

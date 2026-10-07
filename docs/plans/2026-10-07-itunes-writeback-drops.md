@@ -1,5 +1,5 @@
 <!-- file: docs/plans/2026-10-07-itunes-writeback-drops.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 0e2814b6-f75b-4376-803f-8aa1903a0f21 -->
 <!-- last-edited: 2026-10-07 -->
 
@@ -152,6 +152,19 @@ afterwards.
   restored from the store, but the retry time is not.
   WHY: a restart is usually a deploy that changes code or config, as this one
   does. If the write still fails, the backoff resumes from the restored count.
+- **D13. Store I/O stays outside the batcher mutex.**
+  `PebbleStore.SetRaw` writes with `pebble.Sync`, which is one fsync per call.
+  - Enqueue marks an item pending under `b.mu` and persists it after release.
+  - Adds are persisted before they are queued, so a stale add key can never
+    re-insert a written track.
+  - `completeBatch` deletes outside the lock, then rewrites the key of anything
+    re-enqueued meanwhile.
+  WHY: library-wide ops enqueue thousands of books from worker pools. One fsync
+  per book under one mutex would serialize all of them. The worst race leaves a
+  stale book or remove key, and its reload is a diffed no-op.
+- **D14. `Server.Start` also calls the batcher's `Start`.** It is idempotent.
+  WHY: `Container.Start` calls it when the container built the service. The
+  explicit call keeps a reload from depending on that wiring.
 - **D9. Playlist fix.** Look up the type-2 msdh in the pre-splice buffer, map its
   offset through the same translation as the `miph` offsets, and subtract only
   the bytes removed inside its span.
@@ -212,6 +225,13 @@ afterwards.
   real write happens only after deploy, when the batcher flushes.
 
 ## Post-deploy risk (owner)
+
+- Deploying this turns write-back on for the first time since July. Close
+  iTunes on Windows first. As an option, deploy with `write_back_dry_run=true`,
+  check `/itunes/writeback/status` and the dry-run log, then turn dry-run off.
+  The queue is kept in dry-run, so nothing is lost.
+- Head-of-line blocking: a batch that is always rejected now blocks every later
+  write until an owner acts (follow-up ITWB-1 in todo.d).
 
 - The rejection trailer shows `location-form` as the only failed guard, so with
   the root set the contract should pass. A real-library dry run of the fixed
