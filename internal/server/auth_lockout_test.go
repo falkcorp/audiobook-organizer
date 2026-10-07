@@ -1,7 +1,7 @@
 // file: internal/server/auth_lockout_test.go
-// version: 2.1.1
+// version: 2.1.2
 // guid: 8c4e5f3a-9b5a-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-09-02
+// last-edited: 2026-10-06
 
 package server_test
 
@@ -28,6 +28,13 @@ type stubAuthStore struct {
 func (s *stubAuthStore) CountUsers() (int, error) { return 1, nil }
 func (s *stubAuthStore) CreateSession(userID, ip, userAgent string, ttl time.Duration) (*database.Session, error) {
 	return &database.Session{ID: "sess-1", UserID: userID, ExpiresAt: time.Now().Add(ttl)}, nil
+}
+func (s *stubAuthStore) CreateSessionWithOrigin(userID, ip, userAgent string, ttl time.Duration, origin string) (*database.Session, error) {
+	sess, err := s.CreateSession(userID, ip, userAgent, ttl)
+	if sess != nil {
+		sess.Origin = origin
+	}
+	return sess, err
 }
 func (s *stubAuthStore) CreateUser(username, email, algo, hash string, roles []string, status string) (*database.User, error) {
 	return nil, nil

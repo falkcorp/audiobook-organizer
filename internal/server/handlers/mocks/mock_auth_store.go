@@ -180,6 +180,92 @@ func (_c *MockAuthStore_CreateSession_Call) RunAndReturn(run func(userID string,
 	return _c
 }
 
+// CreateSessionWithOrigin provides a mock function for the type MockAuthStore
+func (_mock *MockAuthStore) CreateSessionWithOrigin(userID string, ip string, userAgent string, ttl time.Duration, origin string) (*database.Session, error) {
+	ret := _mock.Called(userID, ip, userAgent, ttl, origin)
+
+	if len(ret) == 0 {
+		panic("no return value specified for CreateSessionWithOrigin")
+	}
+
+	var r0 *database.Session
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string, string, string, time.Duration, string) (*database.Session, error)); ok {
+		return returnFunc(userID, ip, userAgent, ttl, origin)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string, string, string, time.Duration, string) *database.Session); ok {
+		r0 = returnFunc(userID, ip, userAgent, ttl, origin)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*database.Session)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(string, string, string, time.Duration, string) error); ok {
+		r1 = returnFunc(userID, ip, userAgent, ttl, origin)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockAuthStore_CreateSessionWithOrigin_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CreateSessionWithOrigin'
+type MockAuthStore_CreateSessionWithOrigin_Call struct {
+	*mock.Call
+}
+
+// CreateSessionWithOrigin is a helper method to define mock.On call
+//   - userID string
+//   - ip string
+//   - userAgent string
+//   - ttl time.Duration
+//   - origin string
+func (_e *MockAuthStore_Expecter) CreateSessionWithOrigin(userID any, ip any, userAgent any, ttl any, origin any) *MockAuthStore_CreateSessionWithOrigin_Call {
+	return &MockAuthStore_CreateSessionWithOrigin_Call{Call: _e.mock.On("CreateSessionWithOrigin", userID, ip, userAgent, ttl, origin)}
+}
+
+func (_c *MockAuthStore_CreateSessionWithOrigin_Call) Run(run func(userID string, ip string, userAgent string, ttl time.Duration, origin string)) *MockAuthStore_CreateSessionWithOrigin_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 string
+		if args[2] != nil {
+			arg2 = args[2].(string)
+		}
+		var arg3 time.Duration
+		if args[3] != nil {
+			arg3 = args[3].(time.Duration)
+		}
+		var arg4 string
+		if args[4] != nil {
+			arg4 = args[4].(string)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+			arg3,
+			arg4,
+		)
+	})
+	return _c
+}
+
+func (_c *MockAuthStore_CreateSessionWithOrigin_Call) Return(session *database.Session, err error) *MockAuthStore_CreateSessionWithOrigin_Call {
+	_c.Call.Return(session, err)
+	return _c
+}
+
+func (_c *MockAuthStore_CreateSessionWithOrigin_Call) RunAndReturn(run func(userID string, ip string, userAgent string, ttl time.Duration, origin string) (*database.Session, error)) *MockAuthStore_CreateSessionWithOrigin_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // CreateUser provides a mock function for the type MockAuthStore
 func (_mock *MockAuthStore) CreateUser(username string, email string, passwordHashAlgo string, passwordHash string, roles []string, status string) (*database.User, error) {
 	ret := _mock.Called(username, email, passwordHashAlgo, passwordHash, roles, status)

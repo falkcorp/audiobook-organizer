@@ -1,7 +1,7 @@
 // file: internal/server/handlers/oauth_login.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2e9c0b47-6a31-4d58-8f04-1b5a7c2e9d63
-// last-edited: 2026-08-19
+// last-edited: 2026-10-06
 
 package handlers
 
@@ -161,11 +161,12 @@ func (h *OAuthHandler) Callback(c *gin.Context) {
 		return
 	}
 
-	session, err := h.store.CreateSession(
+	session, err := h.store.CreateSessionWithOrigin(
 		user.ID,
 		strings.TrimSpace(c.ClientIP()),
 		strings.TrimSpace(c.Request.UserAgent()),
 		defaultSessionTTL,
+		database.SessionOriginOAuth,
 	)
 	if err != nil {
 		httputil.RespondWithInternalError(c, "failed to create session")
@@ -278,5 +279,5 @@ func sanitizeReturn(ret string) string {
 type oauthHandlerStore interface {
 	oauth.UserStore
 
-	CreateSession(userID, ip, userAgent string, ttl time.Duration) (*database.Session, error)
+	CreateSessionWithOrigin(userID, ip, userAgent string, ttl time.Duration, origin string) (*database.Session, error)
 }
