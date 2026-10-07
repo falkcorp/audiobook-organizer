@@ -1,5 +1,5 @@
 // file: internal/audiobooks/filter_unified_grammar_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2c7e9a14-5b3f-4e81-9d06-a4f1c8b2e753
 // last-edited: 2026-10-06
 
@@ -212,4 +212,40 @@ func TestUnifiedGrammar_GetAudiobooksRejectsInvalidRegex(t *testing.T) {
 		FieldFilters: []FieldFilter{{Field: "year", Value: ">nope"}},
 	})
 	require.Error(t, err)
+}
+
+func TestUnifiedGrammar_FileSizeUnits(t *testing.T) {
+	mb := int64(1 << 20)
+	ten := database.Book{FileSize: new(10 * mb)}
+	thirty := database.Book{FileSize: new(30 * mb)}
+	unset := database.Book{}
+	books := []database.Book{ten, thirty, unset}
+	match := func(v string) []bool {
+		out := make([]bool, len(books))
+		for i, b := range books {
+			out[i] = fieldMatchesValue(b, "file_size", v)
+		}
+		return out
+	}
+	assert.Equal(t, []bool{false, true, false}, match(">20mb"))
+	assert.Equal(t, []bool{false, true, false}, match(">20MB"))
+	assert.Equal(t, []bool{true, false, false}, match("<20m"))
+	assert.Equal(t, []bool{true, true, false}, match("[5mb TO 40mb]"))
+	assert.Equal(t, []bool{false, true, false}, match("[20mb TO *]"))
+	assert.Equal(t, []bool{true, false, false}, match("10mb"), "bare value with unit = equality")
+	assert.Equal(t, []bool{false, true, false}, match(">20971520"), "bare number is bytes")
+	for _, bad := range []string{">abc", ">20zb", "[1mb 2mb]"} {
+		require.Error(t, ValidateFilterValue(FieldFilter{Field: "file_size", Value: bad}), bad)
+	}
+}
+
+func TestUnifiedGrammar_BitrateAndSampleRateUnits(t *testing.T) {
+	low := database.Book{Bitrate: new(48), SampleRate: new(22050)}
+	high := database.Book{Bitrate: new(128), SampleRate: new(44100)}
+	assert.True(t, fieldMatchesValue(low, "bitrate", "<64k"))
+	assert.True(t, fieldMatchesValue(low, "bitrate", "<64kbps"))
+	assert.False(t, fieldMatchesValue(high, "bitrate", "<64k"))
+	assert.True(t, fieldMatchesValue(high, "sample_rate", ">=44.1khz"))
+	assert.False(t, fieldMatchesValue(low, "sample_rate", ">=44.1khz"))
+	assert.Error(t, ValidateFilterValue(FieldFilter{Field: "bitrate", Value: "<64mb"}))
 }

@@ -1,5 +1,5 @@
 // file: internal/querygrammar/querygrammar.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9b2e4c71-0f3a-4d6e-8a15-7c3d9e2f1b40
 // last-edited: 2026-10-06
 
@@ -192,6 +192,28 @@ func IsNumber(raw string) bool {
 //	>2020  >=4.5  <64  <=3  =2019  ==2019  !=2019  2019 (equality)
 //	[2015 TO 2020]  [* TO 64]  [2015 TO *]   (inclusive; * = open side)
 func ParseNumericExpr(raw string) (Comparison, error) {
+	return ParseNumericExprUnits(raw, nil)
+}
+
+// NumberParser parses one operand of a numeric expression, applying a
+// field's units (see ParseBytes, ParseKbps, ParseHz). nil = plain number.
+type NumberParser func(s string) (float64, error)
+
+// ParseNumericExprUnits is ParseNumericExpr with a per-field unit parser for
+// every operand: file_size:>20mb, bitrate:<64k, sample_rate:[22khz TO 48khz].
+// It is the same comparison grammar the duration filter has used since
+// 2026-09-27 (ops > >= < <= == != =, [a TO b] with * open), generalised.
+func ParseNumericExprUnits(raw string, num NumberParser) (Comparison, error) {
+	if num == nil {
+		num = plainNumber
+	}
+	parseNum := func(s, raw string) (float64, error) {
+		v, err := num(strings.TrimSpace(s))
+		if err != nil || math.IsNaN(v) || math.IsInf(v, 0) {
+			return 0, fmt.Errorf("%q is not a valid value in %q (use e.g. >2020, <=64, [2015 TO 2020])", strings.TrimSpace(s), raw)
+		}
+		return v, nil
+	}
 	e := strings.TrimSpace(raw)
 	if strings.HasPrefix(e, "[") {
 		if !strings.HasSuffix(e, "]") {
@@ -238,12 +260,49 @@ func ParseNumericExpr(raw string) (Comparison, error) {
 	return Comparison{Op: op, Lo: v, Hi: v}, nil
 }
 
-func parseNum(s, raw string) (float64, error) {
-	v, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
-	if err != nil || math.IsNaN(v) || math.IsInf(v, 0) {
-		return 0, fmt.Errorf("%q is not a number in %q (use >2020, <=64, [2015 TO 2020])", strings.TrimSpace(s), raw)
+func plainNumber(s string) (float64, error) {
+	return strconv.ParseFloat(strings.TrimSpace(s), 64)
+}
+
+// unitNumber parses "<number><suffix>" where suffix (case-insensitive) is a
+// key of mult; an empty suffix is allowed when "" is a key.
+func unitNumber(s string, mult map[string]float64) (float64, error) {
+	t := strings.ToLower(strings.TrimSpace(s))
+	i := len(t)
+	for i > 0 && (t[i-1] < '0' || t[i-1] > '9') && t[i-1] != '.' {
+		i--
 	}
-	return v, nil
+	m, ok := mult[t[i:]]
+	if !ok {
+		return 0, fmt.Errorf("unknown unit %q", t[i:])
+	}
+	v, err := strconv.ParseFloat(t[:i], 64)
+	if err != nil || v < 0 {
+		return 0, fmt.Errorf("invalid number %q", s)
+	}
+	return v * m, nil
+}
+
+var byteUnits = map[string]float64{
+	"": 1, "b": 1,
+	"k": 1 << 10, "kb": 1 << 10,
+	"m": 1 << 20, "mb": 1 << 20,
+	"g": 1 << 30, "gb": 1 << 30,
+	"t": 1 << 40, "tb": 1 << 40,
+}
+
+// ParseBytes parses a size in bytes; k/kb/m/mb/g/gb/t/tb are 1024-based
+// (20mb = 20*1024*1024). A bare number is bytes.
+func ParseBytes(s string) (float64, error) { return unitNumber(s, byteUnits) }
+
+// ParseKbps parses a bitrate in kbps; "k" and "kbps" suffixes are optional.
+func ParseKbps(s string) (float64, error) {
+	return unitNumber(s, map[string]float64{"": 1, "k": 1, "kbps": 1})
+}
+
+// ParseHz parses a sample rate in Hz; "hz" and "khz" (x1000) are accepted.
+func ParseHz(s string) (float64, error) {
+	return unitNumber(s, map[string]float64{"": 1, "hz": 1, "khz": 1000})
 }
 
 // Match reports whether x satisfies the comparison.

@@ -1,5 +1,5 @@
 // file: internal/querygrammar/querygrammar_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4d8a1e63-2b7c-4f90-a5e1-8c6d3b0f2a97
 // last-edited: 2026-10-06
 
@@ -144,5 +144,44 @@ func TestParseNumericExpr_Errors(t *testing.T) {
 		if _, err := ParseNumericExpr(raw); err == nil {
 			t.Errorf("ParseNumericExpr(%q) = nil error, want error", raw)
 		}
+	}
+}
+
+func TestUnitParsers(t *testing.T) {
+	cases := []struct {
+		p    NumberParser
+		in   string
+		want float64
+	}{
+		{ParseBytes, "20mb", 20 * 1024 * 1024},
+		{ParseBytes, "20MB", 20 * 1024 * 1024},
+		{ParseBytes, "1.5g", 1.5 * 1024 * 1024 * 1024},
+		{ParseBytes, "2k", 2048},
+		{ParseBytes, "1tb", 1 << 40},
+		{ParseBytes, "100", 100},
+		{ParseKbps, "64k", 64},
+		{ParseKbps, "64kbps", 64},
+		{ParseKbps, "64", 64},
+		{ParseHz, "44.1khz", 44100},
+		{ParseHz, "22050", 22050},
+		{ParseHz, "22050hz", 22050},
+	}
+	for _, tc := range cases {
+		got, err := tc.p(tc.in)
+		if err != nil || got != tc.want {
+			t.Errorf("parse %q = %v, %v; want %v", tc.in, got, err, tc.want)
+		}
+	}
+	for _, bad := range []string{"20zb", "abc", "mb", "-5mb"} {
+		if _, err := ParseBytes(bad); err == nil {
+			t.Errorf("ParseBytes(%q) = nil error", bad)
+		}
+	}
+	c, err := ParseNumericExprUnits(">20mb", ParseBytes)
+	if err != nil || !c.Match(30*1024*1024) || c.Match(10*1024*1024) {
+		t.Fatalf(">20mb: %+v %v", c, err)
+	}
+	if _, err := ParseNumericExprUnits(">20zb", ParseBytes); err == nil {
+		t.Fatal(">20zb must be an error")
 	}
 }

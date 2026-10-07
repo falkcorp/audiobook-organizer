@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/SearchBar.tsx
-// version: 2.8.0
+// version: 2.9.0
 // last-edited: 2026-10-06
 // guid: 1d2e3f4a-5b6c-7d8e-9f0a-1b2c3d4e5f6a
 
@@ -100,7 +100,10 @@ const SEARCH_HELP = [
     example: 'duration:<20m',
     desc: 'Short files — usually chapters/tracks imported as separate books',
   },
-  { example: 'duration:[10m TO 2h]', desc: 'Runtime range (units: s, m, h; a bare number is seconds)' },
+  {
+    example: 'duration:[10m TO 2h]',
+    desc: 'Runtime range (units: s, m, h; a bare number is seconds)',
+  },
   {
     example: 'has_duration:no',
     desc: 'Runtime unknown — never matched by duration:> or duration:<',
@@ -109,7 +112,10 @@ const SEARCH_HELP = [
     example: 'metadata:applied',
     desc: 'Metadata applied: review status matched or audio_confirmed (manual or automatic apply)',
   },
-  { example: '-metadata:applied -review:no_match', desc: 'Needs metadata, excluding books ruled "no match"' },
+  {
+    example: '-metadata:applied -review:no_match',
+    desc: 'Needs metadata, excluding books ruled "no match"',
+  },
   { example: 'author:"Brandon Sanderson"', desc: 'Books by a specific author' },
   { example: 'series:Mistborn', desc: 'Books in a series' },
   { example: 'narrator:Kramer', desc: 'Books by narrator' },
@@ -154,9 +160,15 @@ const SEARCH_HELP = [
   // Title filter). Evaluated server-side over the whole library. Only syntax
   // that actually works belongs here; OR (||), fuzzy (~) and (a|b) groups
   // were listed until 2026-10-06 and never worked on a field filter.
-  { example: 'title:a*', desc: 'Wildcard: title starts with "a" (* = anything; matches the whole title)' },
+  {
+    example: 'title:a*',
+    desc: 'Wildcard: title starts with "a" (* = anything; matches the whole title)',
+  },
   { example: 'title:*saga', desc: 'Wildcard: title ends with "saga"' },
-  { example: 'title:/^\\s*\\p{L}/', desc: 'Regex (RE2, case-insensitive): title starts with a letter' },
+  {
+    example: 'title:/^\\s*\\p{L}/',
+    desc: 'Regex (RE2, case-insensitive): title starts with a letter',
+  },
   {
     example: '-title:/^\\s*\\d/',
     desc: 'Exclude titles starting with a digit — negate any filter with - or NOT (RE2 has no lookahead)',
@@ -167,7 +179,19 @@ const SEARCH_HELP = [
   { example: 'narrator:*', desc: 'Has a narrator (-narrator:* = no narrator)' },
   { example: 'year:>2020', desc: 'Published after 2020 (also >=, <, <=, !=)' },
   { example: 'year:[2015 TO 2020]', desc: 'Year range, inclusive (* leaves a side open)' },
-  { example: 'bitrate:<64', desc: 'Low bitrate (unknown bitrate never matches a comparison)' },
+  {
+    example: 'bitrate:<64',
+    desc: 'Low bitrate in kbps (64k also works; unknown bitrate never matches a comparison)',
+  },
+  {
+    example: 'file_size:>20mb',
+    desc: 'File size over 20 MB (k, mb, gb, tb are 1024-based; a bare number is bytes)',
+  },
+  {
+    example: 'file_size:[100mb TO 1gb]',
+    desc: 'Size range, inclusive — the [a TO b] form works on every numeric field',
+  },
+  { example: 'sample_rate:<44.1khz', desc: 'Sample rate below 44.1 kHz (Hz or khz)' },
 ];
 
 export interface SortOption {

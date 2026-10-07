@@ -26,3 +26,9 @@ The grammar is implemented once in Go (`internal/querygrammar`) and once in Type
 #### Review → Metadata Title filter uses the same grammar
 
 The Title box now takes exactly what `title:` takes in the Library. Plain text matches anywhere in the title, `a*` is a wildcard, `/re/` is an RE2 regex, and you can combine `title:` tokens with `-` to exclude. Plain text used to be read as a JavaScript regex; a regex now needs slashes. Lookahead and backreferences are reported as errors instead of running, because RE2 does not support them.
+
+#### Numeric filters understand units: `file_size:>20mb`, `bitrate:<64k`, `sample_rate:>=44.1khz`
+
+`file_size:>20mb` returned nothing, because the value was matched as text against the stored byte count. File size, bitrate, sample rate, channels, bit depth, series number, year and progress are now compared as numbers, using one comparison grammar. That grammar supports the operators `>`, `>=`, `<`, `<=`, `=` and `!=`, and ranges written `[a TO b]`.
+
+File size accepts the k, mb, gb and tb suffixes (1024-based). Bitrate accepts `k`/`kbps`, and sample rate accepts `khz`. A book whose value is unknown never matches a comparison. A malformed value is reported under the search box.
