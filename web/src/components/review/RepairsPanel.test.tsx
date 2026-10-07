@@ -1,5 +1,5 @@
 // file: web/src/components/review/RepairsPanel.test.tsx
-// version: 1.7.0
+// version: 1.7.1
 // guid: 3a7e0c95-4d21-4b8f-b6e3-8f1c2d9a5e47
 // last-edited: 2026-10-06
 //
@@ -197,7 +197,9 @@ describe('RepairsPanel', () => {
     expect(banner.className).toMatch(/Warning/);
     expect(banner.className).not.toMatch(/Success/);
     expect(banner).toHaveTextContent('retry later 1');
-    expect(banner).toHaveTextContent(/could not be checked right now and were not written/);
+    expect(banner).toHaveTextContent(/could not be checked right now; apply them again in a few minutes/);
+    // The outcome chip already says "nothing written"; the hint does not repeat it.
+    expect(banner).not.toHaveTextContent(/were not written/);
   });
 
   it('sends nothing when the confirm is cancelled', async () => {

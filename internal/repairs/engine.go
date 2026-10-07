@@ -1,5 +1,5 @@
 // file: internal/repairs/engine.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 9b3e7f40-2d15-4a86-9c1f-6e0a4d8b7c25
 // last-edited: 2026-10-06
 
@@ -663,9 +663,13 @@ func applyOne(ctx context.Context, f Fixer, params json.RawMessage, planned Row,
 		out.Outcome, out.Error = OutcomeFailed, fmt.Sprintf("replan returned row %q for %q", fresh.RowID, planned.RowID)
 		return out
 	}
-	// A transient hold (Row.RetryLater) is checked before the fingerprint:
-	// the hold changes the fingerprint, but nothing about the row did.
-	if fresh.Skipped != "" && fresh.RetryLater {
+	// A transient hold (Row.RetryLater) changes the fingerprint without the
+	// row changing, so it is compared by its RetryFingerprint (the row's
+	// fingerprint with the hold cleared): equal to the plan's, nothing but
+	// the hold differs and the row is retry_later (not settled; retried on
+	// resume). Different, another input changed too: changed_since_plan
+	// below, so a real change is never masked as transient.
+	if fresh.Skipped != "" && fresh.RetryLater && fresh.RetryFingerprint == planned.Fingerprint {
 		out.Outcome, out.Skipped, out.Error = OutcomeRetryLater, fresh.Skipped, changedWhy(fresh)
 		return out
 	}

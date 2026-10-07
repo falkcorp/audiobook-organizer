@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/version_twin_metadata_fixer.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 2f6c8e14-7b3a-4d59-9e02-c4a1b7d36e85
 // last-edited: 2026-10-06
 
@@ -775,12 +775,22 @@ func (f *versionTwinFixer) row(rd vtReaders, gid string, members []database.Book
 		if err != nil {
 			return repairs.Row{}, false, err
 		}
-		b.note("ids-elsewhere", wIDs.String(), strings.Join(elsewhere, ","), strconv.FormatBool(indexed))
+		idsNote := func(elsewhere []string, indexed bool) []string {
+			return []string{"ids-elsewhere", wIDs.String(), strings.Join(elsewhere, ","), strconv.FormatBool(indexed)}
+		}
+		// What this row's fingerprint would be once the index is built and
+		// finds the identifiers on no book outside the group: the applicable
+		// row's (Skipped empty, the cleared note), from the inputs so far.
+		cleared := repairs.Row{RowID: b.r.RowID, Class: b.r.Class}
+		retryFP := vtFingerprint(cleared, strings.Join(append(append([]string(nil), b.fp...), idsNote(nil, true)...), "\x00"))
+		b.note(idsNote(elsewhere, indexed)...)
 		switch {
 		case !indexed:
-			// Transient: the index gets built without the row changing, so a
-			// re-plan holding on it reports retry_later, not changed.
-			b.r.RetryLater = true
+			// Transient: the index gets built without the row changing. The
+			// engine reports the re-plan retry_later only when RetryFingerprint
+			// equals the planned fingerprint, i.e. every other input is as
+			// planned; a row that also changed is changed_since_plan.
+			b.r.RetryLater, b.r.RetryFingerprint = true, retryFP
 			return b.hold(vtHoldIDElsewhere, "the ISBN/ASIN index is not built yet (the isbn-index-build operation sets "+
 				"it), so it cannot be told whether a book outside this group carries the record's "+wIDs.String()+
 				", which the apply would copy"), true, nil
