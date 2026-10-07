@@ -1,5 +1,5 @@
 <!-- file: docs/plans/2026-10-06-unified-search-re2.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 3f6c2a9e-7d41-4b8a-9e05-c1d8f2b7a64e -->
 <!-- last-edited: 2026-10-06 -->
 
@@ -106,7 +106,12 @@ reject, because JS and RE2 differ (see §5).
     `quoted`.
   - `libraryContentState` gains a `query_error` state for 4xx.
 
-## 4. Review Title filter — follow-up (NOT in this branch)
+## 4. Review Title filter — follow-up (done in this branch after #3813 merged)
+
+Implemented in a separate commit. The `titleFilterError` and chip-row behaviours
+from #3813 are kept. An invalid value still filters nothing, and the error
+under the field now names the token and the reason. The original spec
+follows.
 
 `QueueRail.tsx` and `lanes/useMetadataLane.ts` are being edited on another
 branch, so this branch leaves them alone. The exact follow-up is:

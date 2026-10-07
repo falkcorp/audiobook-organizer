@@ -22,3 +22,7 @@ Numeric fields such as year, bitrate and series_number also accept comparisons (
 An invalid regex or a malformed comparison now returns a 400 that names the token. The error appears under the search box and in place of the book list. Background operations that resolve a filter fail instead of selecting 0 books.
 
 The grammar is implemented once in Go (`internal/querygrammar`) and once in TypeScript (`web/src/utils/queryGrammar.ts`). The TypeScript copy pre-checks queries in the browser and translates RE2 syntax to JavaScript regex syntax.
+
+#### Review → Metadata Title filter uses the same grammar
+
+The Title box now takes exactly what `title:` takes in the Library. Plain text matches anywhere in the title, `a*` is a wildcard, `/re/` is an RE2 regex, and you can combine `title:` tokens with `-` to exclude. Plain text used to be read as a JavaScript regex; a regex now needs slashes. Lookahead and backreferences are reported as errors instead of running, because RE2 does not support them.
