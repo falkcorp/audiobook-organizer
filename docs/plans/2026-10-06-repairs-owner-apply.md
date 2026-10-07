@@ -1,7 +1,7 @@
 <!-- file: docs/plans/2026-10-06-repairs-owner-apply.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 0b6f2d4e-8a31-4c57-9e12-7d5a3c9b1f60 -->
-<!-- last-edited: 2026-10-06 -->
+<!-- last-edited: 2026-10-07 -->
 
 # Owner-only apply of iTunes-tracked, content-proven fragment copies
 
@@ -36,16 +36,18 @@ filter lists them. They stay skipped (`Skipped` is unchanged), so bulk
 selection, "apply all", the scheduled runs and the plain apply path all still
 treat them as `not_applicable`.
 
-The fragment fixer marks a copy claimant owner-applicable (on its own
-`manual:<fragment>` row) only when **all** of these hold:
+The fragment fixer takes a copy claimant onto its parent's owner row,
+`owner:<parent>` (one row per parent, holding every eligible fragment: on prod
+2026-10-07 one parent's 300 content-proven chapter copies were one manual-only
+copy row, and one click applies them), only when **all** of these hold:
 - the pair is a copy, and its evidence is a content-hash proof made at plan time (`contentProofOf`);
 - the fragment's only hands-off reason is an iTunes path on its own row: `itunesWhy()` names a row iTunes path, and `itunesPID()` is empty;
 - the fragment carries no book or file PID and no live `itunes` external id. A PID would queue an iTunes remove at the purge, which is an iTunes write, so PID fragments stay ineligible;
 - the framework/fixer guard is clean on the fragment and on the parent. That means nothing under `books/itunes/**` and nothing Doctor Who / Big Finish / Torchwood, by path, series or import path;
-- the row iTunes path does not point into the iTunes library tree. iTunes Media is never touched;
+- the row iTunes path names the fragment's own file (its file:// URL percent-decoded: prod writes `002%20of%20301.m4b`) and does not point into the iTunes library tree. iTunes Media is never touched;
 - `carriesOnto` is empty: no live external id and no listening state, positions or bookmarks;
 - the fragment is not a path twin or a twin's donor;
-- the fragment's version group holds no OTHER iTunes book, and the parent is not in that group (the primary hand-off must never crown or write the parent);
+- the fragment's version group holds no OTHER iTunes book (another fragment of the row included), and the parent is not in that group (the primary hand-off must never crown or write the parent);
 - the parent is either iTunes-linked or plain, and is read without doubt.
 
 `RunPlan` also runs the framework guard (franchise tags etc.) over owner rows,
@@ -53,8 +55,9 @@ and clears the flag if the guard trips.
 
 The owner row carries `fragParentState` (`OwnerParent`, `ContentProofs`,
 mode). Its fingerprint hashes the pairing, the proof and the mode, so a re-plan
-re-stats both files (`restoreContentProofs`). An owner-eligible fragment is
-always split onto its own row, so each button names one book.
+re-stats both files of every fragment (`restoreContentProofs`). The owner
+row's apply is all or nothing at the check: every fragment is re-checked under
+the merge lock before the first write, and one refusal refuses the row.
 
 ### 2. Request: separate endpoint, interactive sessions only
 
@@ -86,7 +89,7 @@ always split onto its own row, so each button names one book.
 
 ### 4. Fragment fixer
 
-- `replanWith`: a `manual:` row with an `OwnerParent` state now goes through `replanParent` (`rebuildParentRows` → find `manual:<frag>`). Before this change it was returned unchanged.
+- `replanWith`: an `owner:<parent>` row goes through `replanParent` (`rebuildParentRows` → find `owner:<parent>`), like a copy row. Other `manual:` rows are still returned unchanged.
 - `Apply`: under the merge lock the row is re-planned. In owner mode (ctx approval for this row, plus `locked.OwnerApplicable`), it re-checks:
   - `merge.GuardITunesProtected` on the fragment and the parent (FilePath under the configured iTunes roots or `books/itunes`);
   - the fragment's version group excluding the fragment itself, with the parent not in it;
