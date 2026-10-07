@@ -1,5 +1,5 @@
 // file: internal/server/handlers/repairs/owner_apply_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4c8a1e57-3b29-4d6f-a0e4-6f2d9b7c1a83
 // last-edited: 2026-10-06
 
@@ -134,13 +134,14 @@ func TestOwnerApply_RefusesNonInteractiveOrNonAdmin(t *testing.T) {
 // cross-site by the browser is refused even for the owner's session.
 func TestOwnerApply_RefusesCrossSite(t *testing.T) {
 	for name, hdr := range map[string]map[string]string{
-		"no header":         {"Origin": "https://books.example.com"},
-		"header not 1":      {OwnerApplyHeader: "yes"},
-		"foreign origin":    {OwnerApplyHeader: "1", "Origin": "https://evil.example"},
-		"lookalike origin":  {OwnerApplyHeader: "1", "Origin": "https://books.example.com.evil.example"},
-		"null origin":       {OwnerApplyHeader: "1", "Origin": "null"},
-		"cross-site fetch":  {OwnerApplyHeader: "1", "Sec-Fetch-Site": "cross-site"},
-		"same-site sibling": {OwnerApplyHeader: "1", "Sec-Fetch-Site": "same-site"},
+		"no header":                        {"Origin": "https://books.example.com"},
+		"header not 1":                     {OwnerApplyHeader: "yes"},
+		"foreign origin":                   {OwnerApplyHeader: "1", "Origin": "https://evil.example"},
+		"lookalike origin":                 {OwnerApplyHeader: "1", "Origin": "https://books.example.com.evil.example"},
+		"null origin":                      {OwnerApplyHeader: "1", "Origin": "null"},
+		"foreign origin, cross-site fetch": {OwnerApplyHeader: "1", "Origin": "https://evil.example", "Sec-Fetch-Site": "cross-site"},
+		"cross-site fetch":                 {OwnerApplyHeader: "1", "Sec-Fetch-Site": "cross-site"},
+		"same-site sibling":                {OwnerApplyHeader: "1", "Sec-Fetch-Site": "same-site"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r, enq, _ := ownerSetup(t, ownerCaller{auth.MethodSession, ownerUser})
@@ -149,6 +150,11 @@ func TestOwnerApply_RefusesCrossSite(t *testing.T) {
 			require.Empty(t, enq.calls)
 		})
 	}
+	// Behind cloudflared or the Vite dev proxy r.Host is internal while the
+	// browser's Origin is public; the browser's own Sec-Fetch-Site decides.
+	rp, _, _ := ownerSetup(t, ownerCaller{auth.MethodSession, ownerUser})
+	require.Equal(t, http.StatusAccepted, ownerPost(rp, ownerPath, `{"plan_op_id":"op-owner-plan","row_id":"own"}`,
+		map[string]string{OwnerApplyHeader: "1", "Origin": "https://public.example.org", "Sec-Fetch-Site": "same-origin"}).Code)
 	// A non-browser client with the header and no Origin/Sec-Fetch-Site is
 	// still bound by the interactive-session requirement above.
 	r, _, _ := ownerSetup(t, ownerCaller{auth.MethodSession, ownerUser})

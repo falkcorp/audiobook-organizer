@@ -1,5 +1,5 @@
 // file: internal/server/handlers/repairs/handler.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 1d8e4c73-5a26-4b9f-8e03-7c2b9f6a1d58
 // last-edited: 2026-10-06
 
@@ -333,7 +333,7 @@ func (h *Handler) OwnerApply(c *gin.Context) {
 	case !method.Interactive() || !hasUser:
 		httputil.RespondWithForbidden(c, "owner rows are applied only by the owner, signed in interactively (not with an API key or a temp-login link)")
 		return
-	case !slices.Contains(user.Roles, "admin"):
+	case !slices.Contains(user.Roles, auth.SeedRoleAdmin):
 		httputil.RespondWithForbidden(c, "owner apply needs the admin role")
 		return
 	}
@@ -389,15 +389,20 @@ func (h *Handler) OwnerApply(c *gin.Context) {
 }
 
 // sameOriginWhyNot is why r is not a same-origin request carrying the owner
-// apply header ("" when it is). Browsers send Origin on every POST and
-// Sec-Fetch-Site on every request; either, when present, must say same
-// origin.
+// apply header ("" when it is). Sec-Fetch-Site, when sent, decides alone: the
+// browser computes it from the page and request URLs, and no proxy rewrites
+// it, whereas r.Host can be an internal name behind cloudflared or the Vite
+// dev proxy while Origin is the public one. Only a client that sends no
+// Sec-Fetch-Site has its Origin (if any) compared with r.Host.
 func sameOriginWhyNot(r *http.Request) string {
 	if r.Header.Get(OwnerApplyHeader) != "1" {
 		return "owner apply needs the " + OwnerApplyHeader + " header (sent by the Repairs page)"
 	}
-	if site := r.Header.Get("Sec-Fetch-Site"); site != "" && site != "same-origin" && site != "none" {
-		return "owner apply refused: cross-site request (" + site + ")"
+	if site := r.Header.Get("Sec-Fetch-Site"); site != "" {
+		if site != "same-origin" && site != "none" {
+			return "owner apply refused: cross-site request (" + site + ")"
+		}
+		return ""
 	}
 	if origin := r.Header.Get("Origin"); origin != "" {
 		u, err := url.Parse(origin)
