@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_copy_hashproof_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9a4e7c13-5b2d-4f86-a0c1-7e3d9b6f2a58
 // last-edited: 2026-10-06
 
@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
@@ -338,4 +339,103 @@ func TestFragmentFixer_CopyContentProof(t *testing.T) {
 		require.Zero(t, out.Applied, "%+v", out.Rows)
 		require.True(t, f.live(t, "libA"))
 	})
+
+	t.Run("same size, other bytes renamed over the path with the mtime set back: changed since plan", func(t *testing.T) {
+		t.Parallel()
+		f := copyClaimantsFixture(t, false)
+		linkParentToITunes(t, f)
+		f.writeSame(t, "same", hpParent, hpLibA, hpLibB)
+		p := f.path(hpLibA)
+		fi, err := os.Stat(p)
+		require.NoError(t, err)
+		r := findRow(t, f.plan(t, "op-plan"), "copy:"+f.ids["parent"])
+		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+		// Other bytes, same size, the old mtime restored, renamed over: size
+		// and mtime both match the plan's; the inode and ctime do not.
+		tmp := p + ".tmp"
+		require.NoError(t, os.WriteFile(tmp, fragFixtureBytes("swapped", 2002), 0o644))
+		require.NoError(t, os.Chtimes(tmp, fi.ModTime(), fi.ModTime()))
+		require.NoError(t, os.Rename(tmp, p))
+		now, err := os.Stat(p)
+		require.NoError(t, err)
+		require.Equal(t, fi.Size(), now.Size())
+		require.True(t, fi.ModTime().Equal(now.ModTime()), "the probe keeps size and mtime")
+		out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
+		require.Zero(t, out.Applied, "%+v", out.Rows)
+		require.Equal(t, repairs.OutcomeChangedSincePlan, out.Rows[0].Outcome, "%+v", out.Rows)
+		require.True(t, f.live(t, "libA"))
+		require.True(t, f.live(t, "libB"))
+	})
+
+	for _, tc := range []struct {
+		name string
+		link func(oldname, newname string) error
+	}{
+		{"hardlink", os.Link},
+		{"symlink", os.Symlink},
+	} {
+		t.Run("a "+tc.name+" to the parent's file is the same file, not a copy: held", func(t *testing.T) {
+			t.Parallel()
+			f := copyClaimantsFixture(t, false)
+			f.writeSame(t, "same", hpParent, hpLibA, hpLibB)
+			p := f.path(hpLibA)
+			require.NoError(t, os.Remove(p))
+			require.NoError(t, tc.link(f.path(hpParent), p))
+			res := f.plan(t, "op-plan")
+			a := findRow(t, res, fragClassHeld+":"+f.ids["libA"])
+			require.Equal(t, fragSkipCopyUnproven, a.Skipped)
+			require.False(t, a.Applicable())
+			require.Contains(t, a.SkipReason, "path alias")
+			require.Contains(t, a.Evidence[0], fragEvContentAlias)
+			r := findRow(t, res, "copy:"+f.ids["parent"])
+			require.ElementsMatch(t, []string{f.ids["parent"], f.ids["libB"]}, r.BookIDs, "the real copy is still proven")
+		})
+	}
+
+	t.Run("files over filehash.Threshold are never read and stay unproven, naming the cap", func(t *testing.T) {
+		t.Parallel()
+		f := newFragFixture(t)
+		big := int64(filehash.Threshold) + 1
+		sparse := func(rel string) string {
+			p := f.file(t, rel, 1)
+			require.NoError(t, os.Truncate(p, big))
+			return p
+		}
+		p1 := f.file(t, "lib/Big/01.mp3", 3001)
+		p2 := sparse("lib/Big/02.mp3")
+		parent := f.book(t, "parent", "Big", f.path("lib/Big"), nil)
+		f.row(t, "p01", parent, p1, "01.mp3", 3001, 600, 1)
+		f.row(t, "p02", parent, p2, "02.mp3", big, 600, 2)
+		c := sparse("lib/Big copy/02.mp3")
+		id := f.book(t, "copy", "02", c, nil)
+		f.row(t, "copy", id, c, "02.mp3", big, 590, 0)
+		var reads atomic.Int64
+		f.registeredFragFixer(t).hashFn = func(p string) (fragFileSig, string, error) { reads.Add(1); return fragHashFile(p) }
+		r := findRow(t, f.plan(t, "op-plan"), fragRowCopyUnproven+":"+parent)
+		require.Equal(t, fragSkipCopyUnproven, r.Skipped)
+		require.ElementsMatch(t, []string{parent, id}, r.BookIDs)
+		require.Contains(t, r.SkipReason, "content not compared")
+		require.Contains(t, r.SkipReason, "over 100 MB")
+		require.Zero(t, reads.Load(), "neither file is read")
+	})
+}
+
+// TestFragHashFile_RefusesOverThreshold: a file over filehash.Threshold is
+// refused by the hash itself, so no sampled digest can become a proof.
+func TestFragHashFile_RefusesOverThreshold(t *testing.T) {
+	t.Parallel()
+	p := t.TempDir() + "/big.mp3"
+	require.NoError(t, os.WriteFile(p, []byte("x"), 0o644))
+	require.NoError(t, os.Truncate(p, int64(filehash.Threshold)+1))
+	_, sum, err := fragHashFile(p)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "over filehash.Threshold")
+	require.Empty(t, sum)
+	small := t.TempDir() + "/small.mp3"
+	require.NoError(t, os.WriteFile(small, []byte("abc"), 0o644))
+	sig, sum, err := fragHashFile(small)
+	require.NoError(t, err)
+	require.NotEmpty(t, sum)
+	require.NotZero(t, sig.Ino)
+	require.NotZero(t, sig.CtimeNS)
 }
