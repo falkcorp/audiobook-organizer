@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.137.0
+// version: 1.138.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 package config
 
@@ -1606,13 +1606,23 @@ type Config struct {
 	// fetch cache (Audible/Audnexus/etc. API results) is considered fresh.
 	// 0 means never expire. Default 7.
 	MetadataFetchCacheTTLDays int `json:"metadata_fetch_cache_ttl_days"`
-	// BootstrapKeyTTLDays is how long (in days) a bootstrap-issued, full-scope
-	// API key remains valid before the auth middleware's existing expiry check
-	// rejects it. Unlike MetadataFetchCacheTTLDays, 0 (or any non-positive
-	// value) does NOT mean "never expire" — bootstrap keys are full-scope
-	// admin credentials and must always expire, so a non-positive value falls
-	// back to the default of 30. (SEC-1/PROC-6)
-	BootstrapKeyTTLDays int `json:"bootstrap_key_ttl_days"`
+	// BootstrapKeyTTL is how long a bootstrap-issued, full-scope admin API key
+	// stays valid: a Go duration ("8h", "90m"). Empty means the default,
+	// DefaultBootstrapKeyTTL (8h); anything over MaxBootstrapKeyTTL (24h) is
+	// capped, and an invalid or non-positive value falls back to the default.
+	// It never means "never expire". Resolve with ResolveBootstrapKeyTTL.
+	//
+	// Set from the environment / config file only (BOOTSTRAP_KEY_TTL), never
+	// from the settings API or the stored config blob (`json:"-"`): the blob
+	// used to carry a materialized default for the old days setting, and a
+	// sign-in lifetime is not something an API key should be able to raise.
+	BootstrapKeyTTL string `json:"-"`
+	// BootstrapKeyTTLDays is the DEPRECATED predecessor of BootstrapKeyTTL
+	// (whole days, default 30 until 2026-10-07). A config file or environment
+	// that still sets it is honoured, capped at MaxBootstrapKeyTTL, with a
+	// startup warning, and only when BootstrapKeyTTL is unset. `json:"-"` so
+	// the 30 that older config blobs stored is ignored. (SEC-1/PROC-6)
+	BootstrapKeyTTLDays int `json:"-"`
 	MemoryLimitPercent  int `json:"memory_limit_percent"` // % of system memory
 	MemoryLimitMB       int `json:"memory_limit_mb"`      // absolute MB
 
@@ -2450,7 +2460,13 @@ func InitConfig() {
 	viper.SetDefault("memory_limit_type", "items")
 	viper.SetDefault("cache_size", 1000)
 	viper.SetDefault("metadata_fetch_cache_ttl_days", 180)
-	viper.SetDefault("bootstrap_key_ttl_days", 30)
+	// No defaults for bootstrap_key_ttl / bootstrap_key_ttl_days: an empty
+	// bootstrap_key_ttl resolves to DefaultBootstrapKeyTTL in code, and a
+	// default for the legacy days key would make it look set on every boot
+	// (see ResolveBootstrapKeyTTL). Bound explicitly so BOOTSTRAP_KEY_TTL /
+	// BOOTSTRAP_KEY_TTL_DAYS reach them even where AutomaticEnv is not on.
+	viper.BindEnv("bootstrap_key_ttl", "BOOTSTRAP_KEY_TTL")           //nolint:errcheck
+	viper.BindEnv("bootstrap_key_ttl_days", "BOOTSTRAP_KEY_TTL_DAYS") //nolint:errcheck
 	viper.SetDefault("memory_limit_percent", 25)
 	viper.SetDefault("memory_limit_mb", 512)
 
@@ -2980,6 +2996,7 @@ func InitConfig() {
 			MemoryLimitType:           viper.GetString("memory_limit_type"),
 			CacheSize:                 viper.GetInt("cache_size"),
 			MetadataFetchCacheTTLDays: viper.GetInt("metadata_fetch_cache_ttl_days"),
+			BootstrapKeyTTL:           viper.GetString("bootstrap_key_ttl"),
 			BootstrapKeyTTLDays:       viper.GetInt("bootstrap_key_ttl_days"),
 			MemoryLimitPercent:        viper.GetInt("memory_limit_percent"),
 			MemoryLimitMB:             viper.GetInt("memory_limit_mb"),

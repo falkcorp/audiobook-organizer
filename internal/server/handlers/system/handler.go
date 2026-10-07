@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: 8475f406-df31-4286-95b0-30787397603e
-// last-edited: 2026-10-04
+// last-edited: 2026-10-07
 
 // Package system hosts the system-level HTTP handlers extracted from the server
 // package: health, status, announcements, storage, logs, activity-log,
@@ -29,6 +29,7 @@ import (
 	"io"
 	"log/slog"
 	"maps"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -43,6 +44,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/policy"
 	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
+	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 )
 
@@ -502,6 +504,21 @@ func (h *Handler) UpdateConfig(c *gin.Context) {
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		httputil.RespondWithBadRequest(c, err.Error())
 		return
+	}
+
+	// Sign-in settings (who may sign in, with what) are credentials: an API
+	// key may not change them, or it could allowlist an email it controls
+	// with the admin default role and sign in through SSO as an admin. Only a
+	// CHANGED value is refused, so a key's GET-then-PUT round trip still
+	// works. A no-op with auth off, like every other credential guard.
+	if cur := config.Snapshot(); cur.EnableAuth && !servermiddleware.CredentialChangeAllowed(c) {
+		if changed := config.ChangedSignInSettingKeys(&cur, payload); len(changed) > 0 {
+			servermiddleware.LogCredentialChangeRefusal(c)
+			httputil.RespondWithErrorFields(c, http.StatusForbidden,
+				servermiddleware.CredentialChangeRefusedMessage+" (sign-in settings: "+strings.Join(changed, ", ")+")",
+				"FORBIDDEN", map[string]any{"refused_keys": changed})
+			return
+		}
 	}
 
 	status, resp := h.configUpdate.UpdateConfig(c.Request.Context(), payload)

@@ -1,6 +1,8 @@
 #!/bin/bash
 # file: .claude/skills/server-bootstrap/scripts/bootstrap.sh
-# version: 1.0.0
+# version: 1.1.0
+# guid: b354ac0d-cda1-4b2a-81da-38c5a3f33bd0
+# last-edited: 2026-10-07
 # Restart audiobook-organizer service, extract bootstrap token, exchange for API key
 
 set -euo pipefail
@@ -19,6 +21,8 @@ if [ -z "$SERVER_IP" ]; then
 fi
 API_PORT="${2:-${AUDIOBOOK_API_PORT:-8484}}"
 TOKEN_FILE="./.api-token"
+# Matches the server's default bootstrap key lifetime (bootstrap_key_ttl = 8h
+# since 2026-10-07), so the file goes when the key stops working.
 EXPIRES_IN_SECONDS=$((8 * 3600))
 
 # Step 1: Restart service and wait for token to appear in logs
