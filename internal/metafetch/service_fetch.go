@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_fetch.go
-// version: 1.20.1
+// version: 1.20.2
 // guid: b24c7a25-2efa-4b85-adb0-2d591218eff2
 // last-edited: 2026-10-06
 
@@ -20,6 +20,10 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 )
+
+// autoFetchLog carries the auto-fetch chain's new log lines; the file's
+// older direct slog calls are ratcheted by logger.TestGuard_NoDirectSlogCalls.
+var autoFetchLog = logger.New("metafetch.auto-fetch")
 
 // ErrReviewOnlyCandidatesNotApplied is returned by FetchMetadataForBook and
 // FetchMetadataForBookByTitle when the only sources that found a match are
@@ -283,7 +287,7 @@ func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*Fetch
 			// applied. The next source in the chain may still apply its own
 			// best candidate.
 			if IsReviewOnlyCandidateSource(src.Name()) {
-				slog.Debug("auto-fetch: review-only source matched; cached for review, not applied",
+				autoFetchLog.Debug("auto-fetch: review-only source matched; cached for review, not applied",
 					"name", src.Name(), "candidate_title", meta.Title)
 				reviewOnlyFound = append(reviewOnlyFound, src.Name())
 				continue
