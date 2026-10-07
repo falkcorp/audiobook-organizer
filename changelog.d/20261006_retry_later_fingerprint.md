@@ -10,9 +10,3 @@
   `changed_since_plan` and the trial has to be re-run. The version twin
   fixer's row fingerprint itself is unchanged, so plans made before this
   deploy stay valid; other fixers are unaffected.
-- **Repairs: correction to the previous `retry_later` entry.** Only an
-  approved planned row stays selectable and is retried when the re-plan holds
-  it. A row that was already held `retry_later` when the trial ran is
-  `not_applicable` until the trial is re-run.
-- **Repairs lane:** the "Retry later" banner hint no longer repeats "were not
-  written", which the row's outcome chip already says.
