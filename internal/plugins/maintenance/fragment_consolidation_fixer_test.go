@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer_test.go
-// version: 1.29.0
+// version: 1.30.0
 // guid: 8e2d5b19-6a4c-4f37-b1d8-2c9e7a3f5d60
 // last-edited: 2026-10-06
 
@@ -7,6 +7,7 @@ package maintenance
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -100,8 +101,22 @@ func (f *fragFixture) file(t *testing.T, rel string, size int) string {
 	t.Helper()
 	p := f.path(rel)
 	require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
-	require.NoError(t, os.WriteFile(p, make([]byte, size), 0o644))
+	require.NoError(t, os.WriteFile(p, fragFixtureBytes(rel, size), 0o644))
 	return p
+}
+
+// fragFixtureBytes is size bytes of content seeded by seed. Files of one
+// size but different seeds differ in content, so a fixture's same-size files
+// are not byte-identical copies unless a test writes them so: the fixer
+// compares the content of a copy that only its name and size match
+// (proveCopiesByContent).
+func fragFixtureBytes(seed string, size int) []byte {
+	sum := sha256.Sum256([]byte(seed))
+	b := make([]byte, size)
+	for i := range b {
+		b[i] = sum[i%len(sum)] ^ byte(i/len(sum))
+	}
+	return b
 }
 
 // book creates a book whose import path-change row names importPath.
@@ -320,7 +335,8 @@ func TestFragmentFixer_PlanClassifiesEveryShape(t *testing.T) {
 	}{
 		{"moved", "moved:" + f.ids["parent"], fragClassMoved, "", []string{"parent", "fragF"}, fragEvImportPath},
 		{"copy proven", "copy:" + f.ids["suns"], fragClassCopy, "", []string{"suns", "fragG"}, fragEvImportPath},
-		{"copy unproven", fragRowCopyUnproven + ":" + f.ids["suns"], fragClassCopy, fragSkipCopyUnproven, []string{"suns", "fragH"}, fragEvNameSize},
+		// Name and size only, and the plan read both files: other bytes.
+		{"copy content differs", fragClassHeld + ":" + f.ids["fragH"], fragClassHeld, fragSkipCopyUnproven, []string{"suns", "fragH"}, fragEvContentDiffers},
 		{"no-parent", noParentRowID(f.path("lib/Loose"), "loose"), fragClassNoParent, "", []string{"loose01", "loose02", "loose03"}, ""},
 		{"duration gate", noParentRowID(f.path("lib/Long"), "long"), fragClassNoParent, fragSkipDurationGate, []string{"long01", "long02", "long03"}, ""},
 		{"itunes", "moved:" + f.ids["itunesParent"], fragClassManual, repairs.SkipITunes, []string{"itunesParent", "itunesFrag"}, ""},
@@ -345,7 +361,7 @@ func TestFragmentFixer_PlanClassifiesEveryShape(t *testing.T) {
 	}
 	require.Equal(t, 2, res.ByClass[fragClassManual])
 	require.Equal(t, 1, res.ByClass[fragClassMoved])
-	require.Equal(t, 2, res.ByClass[fragClassCopy], "proven and unproven copies are separate rows")
+	require.Equal(t, 1, res.ByClass[fragClassCopy], "the copy whose content differs is held on its own row")
 }
 
 // TestFragmentFixer_ApplyThenUndoRoundTrip applies every applicable row and
@@ -717,8 +733,10 @@ func TestFragmentFixer_SameParentRowClaims(t *testing.T) {
 		proven := findRow(t, res, "copy:"+parent)
 		require.True(t, proven.Applicable(), proven.SkipReason)
 		require.ElementsMatch(t, []string{parent, f.ids["fragJ"]}, proven.BookIDs)
-		unproven := findRow(t, res, fragRowCopyUnproven+":"+parent)
+		// The plan read both files: K's bytes are not the parent's.
+		unproven := findRow(t, res, fragClassHeld+":"+k)
 		require.Equal(t, fragSkipCopyUnproven, unproven.Skipped)
+		require.Contains(t, unproven.SkipReason, "content differs")
 		require.ElementsMatch(t, []string{parent, k}, unproven.BookIDs)
 		for _, r := range res.Rows {
 			require.NotEqual(t, fragClassAmbiguous, r.Class, "%s: %s", r.RowID, r.SkipReason)
@@ -758,7 +776,10 @@ func TestFragmentFixer_SameParentRowClaims(t *testing.T) {
 		for _, n := range []string{"A", "B"} {
 			fr := f.book(t, "frag"+n, "02", gone, nil)
 			f.row(t, n+"02", fr, gone, "02.mp3", 1102, 600, 0)
-			f.organize(t, fr, f.file(t, "lib/tmp"+n+"/02.mp3", 1102), f.path("lib/G"+n+"/02/02.mp3"))
+			// Two copies of one chapter: the same bytes.
+			tmp := f.file(t, "lib/tmp"+n+"/02.mp3", 1102)
+			require.NoError(t, os.WriteFile(tmp, fragFixtureBytes("G 02", 1102), 0o644))
+			f.organize(t, fr, tmp, f.path("lib/G"+n+"/02/02.mp3"))
 			frags = append(frags, fr)
 		}
 		res := f.plan(t, "op-plan")
@@ -776,10 +797,12 @@ func TestFragmentFixer_SameParentRowClaims(t *testing.T) {
 		require.Equal(t, 1, out.Applied, "%+v", out.Rows)
 		// Next plan: the parent has the file again (at the first fragment's
 		// path), so the other is a copy; its import path names the row's OLD
-		// path, so by today's rules it is an unproven one.
+		// path, so only its name and size match, and the plan reads both
+		// files: the same bytes, a proven copy.
 		res2 := f.plan(t, "op-plan-2")
-		copyRow := findRow(t, res2, fragRowCopyUnproven+":"+parent)
+		copyRow := findRow(t, res2, "copy:"+parent)
 		require.Contains(t, copyRow.BookIDs, other)
+		require.Contains(t, strings.Join(copyRow.Evidence, "\n"), fragEvContentHashPrefix)
 	})
 	t.Run("a parent retired since the plan is refused at apply", func(t *testing.T) {
 		f := newFragFixture(t)
@@ -802,6 +825,8 @@ func TestFragmentFixer_SameParentRowClaims(t *testing.T) {
 			f.row(t, n+"02", k, p, "02.mp3", 1002, 590, 0)
 			ks = append(ks, k)
 		}
+		// Their content is not compared (unreadable here): unproven copies.
+		f.noContentReads(t)
 		res := f.plan(t, "op-plan")
 		unproven := findRow(t, res, fragRowCopyUnproven+":"+parent)
 		require.Equal(t, fragSkipCopyUnproven, unproven.Skipped, unproven.SkipReason)
@@ -1245,9 +1270,23 @@ func TestFragmentFixer_CopyNeedsPathOrHash(t *testing.T) {
 	require.NoError(t, err)
 	h.Duration = 600 // now equal to the parent row's
 	require.NoError(t, f.s.UpdateBookFile(h.ID, h))
-	r := findRow(t, f.plan(t, "op-plan"), fragRowCopyUnproven+":"+f.ids["suns"])
-	require.Contains(t, r.BookIDs, f.ids["fragH"])
+	// The plan compares the two files' content: other bytes, so held.
+	r := findRow(t, f.plan(t, "op-plan"), fragClassHeld+":"+f.ids["fragH"])
+	require.Contains(t, r.BookIDs, f.ids["suns"])
 	require.Equal(t, fragSkipCopyUnproven, r.Skipped)
+	require.Contains(t, r.SkipReason, "content differs")
+	// With the content not compared, it is an unproven copy as before.
+	f2 := newFragFixture(t)
+	f2.seed(t)
+	h2, err := f2.s.GetBookFileByID(f2.ids["fragH"], f2.rowIDs["h01"])
+	require.NoError(t, err)
+	h2.Duration = 600
+	require.NoError(t, f2.s.UpdateBookFile(h2.ID, h2))
+	f2.noContentReads(t)
+	r2 := findRow(t, f2.plan(t, "op-plan"), fragRowCopyUnproven+":"+f2.ids["suns"])
+	require.Contains(t, r2.BookIDs, f2.ids["fragH"])
+	require.Equal(t, fragSkipCopyUnproven, r2.Skipped)
+	require.Contains(t, r2.SkipReason, "content not compared")
 }
 
 // TestFragmentFixer_RevertCrownsARetiredPrimary (M7): the hand-off promoted a

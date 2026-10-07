@@ -29,8 +29,27 @@
 //     already determines it.
 //   - copy: the fragment's file duplicates a file the parent still has on
 //     disk. A proven match (imported FROM the parent row's path with the same
-//     size on disk, or the same hash) is retired into the parent; an
-//     unproven one is a separate, skipped "copy-unproven" row.
+//     size on disk, the same recorded hash, or byte-identical content read at
+//     plan time) is retired into the parent; an unproven one is a separate,
+//     skipped "copy-unproven" row.
+//
+// CONTENT PROOF (owner decision 2026-10-06, "hash both, read-only";
+// fragment_copy_content.go). A copy claimant matched by its original name and
+// size alone, whose file and the parent row's file are both on disk at the
+// same size, is compared by content at plan time: both files are read and
+// hashed with filehash.BookFileHash (the digest book_files.file_hash holds;
+// streamed bytes, no decoding) on a pool of four. Equal digests are proof
+// (evidence "content hash equal at plan time: sha256:..."); other bytes hold
+// the claimant on a row of its own ("content differs"); a file that cannot be
+// read, or one over filehash.Threshold (sampled there, so not byte identity),
+// leaves it copy-unproven with the reason. Nothing is written for the proof:
+// it is kept in the row's evidence, state (each file's size and mtime as read)
+// and fingerprint. Re-plans, Apply's under the merge lock among them, re-stat
+// both files and never re-read them; a size or mtime that moved is a change
+// since the plan. No file under the iTunes library is ever read. A hands-off
+// claimant elsewhere (an iTunes id, Doctor Who / Big Finish) is compared too
+// (owner, 2026-10-06: "list; I apply them"): it stays on a manual-only row,
+// never applicable, with the proof in its evidence.
 //   - no-parent: three or more fragments imported from one folder (sibling
 //     CD1/CD2/Disc N folders count as one) that share a chapter key
 //     (metadata.ChapterGroupKey, the scanner's rule), each shorter than the
@@ -109,8 +128,9 @@
 // Owner decision 2026-10-06 ("retire the library copies only"): two or more
 // unproven claimants of a parent row whose file is still ON DISK are each a
 // copy of it, not a contradiction, and each pairs on its own into the
-// parent's copy-unproven row (listed for review, never auto-proven;
-// copiesOfPresentRow). It holds only when every claim decides as a copy,
+// parent's copy-unproven row (listed for review; copiesOfPresentRow). A
+// claimant whose content the plan proved (CONTENT PROOF) is a proven claimant
+// and pairs into the copy row instead; one whose content differs is held. It holds only when every claim decides as a copy,
 // each claimant's file is on disk at the size of the parent's file, and no
 // two claimants' hashes disagree; a gone parent file (only one claimant can
 // be repointed) or conflicting facts keep them all ambiguous. A claimant that
@@ -376,6 +396,9 @@ type fragmentFixer struct {
 	p *Plugin
 	// statFn replaces os.Stat in tests.
 	statFn func(string) (os.FileInfo, error)
+	// hashFn reads and hashes one file for a copy's content proof
+	// (fragHashFile; replaced in tests): its signature and digest.
+	hashFn func(string) (fragFileSig, string, error)
 	// readDir replaces os.ReadDir in tests.
 	readDir func(string) ([]os.DirEntry, error)
 	// now replaces time.Now in tests.
@@ -387,7 +410,7 @@ type fragmentFixer struct {
 }
 
 func newFragmentFixer(p *Plugin) *fragmentFixer {
-	return &fragmentFixer{p: p, statFn: os.Stat, readDir: os.ReadDir, now: time.Now}
+	return &fragmentFixer{p: p, statFn: os.Stat, hashFn: fragHashFile, readDir: os.ReadDir, now: time.Now}
 }
 
 var _ repairs.Fixer = (*fragmentFixer)(nil)
@@ -742,10 +765,16 @@ func hashesDisagree(a, b fragFile) bool {
 // moved row a shared import folder also proves it (the parent's file is gone,
 // so there is nothing else left to compare); a copy, whose parent file is
 // still on disk, is proven only by the import path (with an equal size on
-// disk) or a hash.
+// disk), a hash, or byte-identical content read at plan time
+// (proveCopiesByContent, owner decision 2026-10-06).
 func provenMatch(kind, evidence string) bool {
 	if inner, ok := twinEvidence(evidence); ok {
 		return provenMatch(kind, inner)
+	}
+	if strings.HasPrefix(evidence, fragEvContentHashPrefix) {
+		// Equal content read at plan time proves a copy (the claim loop
+		// probes with the ghost kind); never a repoint of a gone file.
+		return kind != fragClassMoved && kind != fragRowMovedUnproven
 	}
 	switch evidence {
 	case fragEvImportPath, fragEvHash, fragEvDone:
@@ -852,6 +881,10 @@ type fragLibrary struct {
 	// acts when every parent is known.
 	itunes      map[string]string
 	itunesDoubt map[string]bool
+	// content holds the content comparisons of copy claimants
+	// (proveCopiesByContent at plan, restoreContentProofs at re-plan), by
+	// contentKey(fragment file id, parent row id).
+	content map[string]fragContentProof
 	// verdicts are the owner's pair rejections (dcOwnerVerdicts) the rule's
 	// identity gate honours; verdictsErr is why they could not be read, which
 	// turns the rule off (the fragments stay ambiguous, and say why).
@@ -948,7 +981,7 @@ func (lib *fragLibrary) loadRoots(store OpsStore, root string) error {
 func newFragLibrary() *fragLibrary {
 	return &fragLibrary{books: map[string]fragBook{}, files: map[string][]fragFile{}, series: map[int]string{},
 		authors: map[int]string{}, paths: repairs.NewPathResolver(), itunes: map[string]string{},
-		itunesDoubt: map[string]bool{}, assembled: map[string]bool{}}
+		itunesDoubt: map[string]bool{}, assembled: map[string]bool{}, content: map[string]fragContentProof{}}
 }
 
 func (f *fragmentFixer) loadLibrary(store OpsStore) (*fragLibrary, error) {
@@ -1231,6 +1264,9 @@ func (f *fragmentFixer) Plan(ctx context.Context, raw json.RawMessage, rep regis
 		}
 	}
 	if err := f.resolveITunesParents(ctx, rep, store, lib, ix, live); err != nil {
+		return nil, err
+	}
+	if err := f.proveCopiesByContent(ctx, rep, lib, ix, live); err != nil {
 		return nil, err
 	}
 	rows := f.buildRows(lib, ix, live)
@@ -2817,6 +2853,26 @@ func sliceIn(rows []fragFile, target fragFile) merge.SliceMapping {
 // buildRows turns the evaluated candidates into rows. It is shared by Plan
 // (over the whole library) and Replan (over one row's books), so both reach
 // the same decision from the same state.
+// effectiveMatches is c's parent-row matches after the iTunes-parent rule
+// (disregardITunesParents): the matches kept, the iTunes parents set aside
+// (nil when the rule did not act), the parent books the kept matches name,
+// and why the rule could not act ("" when it did or was not needed).
+func (f *fragmentFixer) effectiveMatches(lib *fragLibrary, ix *fragIndex, c *fragCandidate) (ms []fragMatch, ignored []string, parents map[string]bool, note string) {
+	ms = ix.match(c)
+	parents = map[string]bool{}
+	for _, m := range ms {
+		parents[m.Row.BookID] = true
+	}
+	if len(parents) > 1 {
+		kept, ign, ok, why := f.disregardITunesParents(lib, c, ms)
+		if ok {
+			return kept, ign, map[string]bool{kept[0].Row.BookID: true}, ""
+		}
+		note = why
+	}
+	return ms, nil, parents, note
+}
+
 func (f *fragmentFixer) buildRows(lib *fragLibrary, ix *fragIndex, cands []*fragCandidate) []repairs.Row {
 	type parentKey struct{ parent, kind string }
 	pairs := map[parentKey][]fragPair{}
@@ -2829,21 +2885,11 @@ func (f *fragmentFixer) buildRows(lib *fragLibrary, ix *fragIndex, cands []*frag
 	ignoredOf := map[*fragCandidate][]string{}
 
 	for _, c := range cands {
-		ms := ix.match(c)
-		parents := map[string]bool{}
-		for _, m := range ms {
-			parents[m.Row.BookID] = true
+		ms, ignored, parents, note := f.effectiveMatches(lib, ix, c)
+		if ignored != nil {
+			ignoredOf[c] = ignored
 		}
-		note := ""
-		if len(parents) > 1 {
-			kept, ignored, ok, why := f.disregardITunesParents(lib, c, ms)
-			if ok {
-				ms, ignoredOf[c] = kept, ignored
-				parents = map[string]bool{kept[0].Row.BookID: true}
-			} else {
-				note = why
-			}
-		}
+		ms = lib.withContent(c, ms)
 		matchOf[c] = ms
 		switch {
 		case len(ms) == 0:
@@ -2858,6 +2904,11 @@ func (f *fragmentFixer) buildRows(lib *fragLibrary, ix *fragIndex, cands []*frag
 		case !c.Present:
 			rows = append(rows, f.holdRow(lib, c, fragClassHeld, fragClassHeld, fragSkipFilesMissing,
 				fmt.Sprintf("file %s is not on disk", c.File.Path), ms))
+		case len(ms) == 1 && strings.Contains(ms[0].Evidence, fragEvContentDiffers):
+			// Read at plan time: the same name and size, other bytes. Held
+			// on its own row (a copy it is not), whatever its siblings are.
+			rows = append(rows, f.holdRow(lib, c, fragClassHeld, fragClassHeld, fragSkipCopyUnproven,
+				fmt.Sprintf("content differs from parent %s row %s's file (same original name and size)", ms[0].Row.BookID, ms[0].Row.ID), ms))
 		case len(parents) > 1 || len(ms) > 1:
 			why := fmt.Sprintf("matches %d rows of %d parent books", len(ms), len(parents))
 			if note != "" {
@@ -3379,7 +3430,7 @@ func (f *fragmentFixer) parentRow(lib *fragLibrary, parentID, rowKind string, pa
 	books := []fragBook{parent}
 	extra := map[string][]string{}
 	var fpParts []string
-	done, withPID := 0, ""
+	done, withPID, notCompared := 0, "", ""
 	var st fragParentState
 	var ignored []string
 	for _, p := range pairs {
@@ -3405,12 +3456,25 @@ func (f *fragmentFixer) parentRow(lib *fragLibrary, parentID, rowKind string, pa
 		// for the same decision.
 		fpParts = append(fpParts, strings.Join([]string{p.Frag.Book.ID, p.Frag.File.ID, p.Frag.File.Path, p.Parent.ID,
 			strconv.FormatBool(provenMatch(rowKind, p.Evidence))}, "|"))
+		// A pair proven by its content carries the proof: both files' size
+		// and mtime as read and the digest. Replan restores it only while
+		// both files are unchanged (restoreContentProofs).
+		if pr, ok := lib.contentProofOf(p); ok {
+			st.ContentProofs = append(st.ContentProofs, pr)
+			fpParts = append(fpParts, pr.fingerprint())
+		}
+		if _, nc, ok := strings.Cut(p.Evidence, fragEvContentNotCompared); ok && notCompared == "" {
+			notCompared = fmt.Sprintf("fragment %s: %s", p.Frag.Book.ID, nc)
+		}
 	}
 	sort.Strings(r.BookIDs)
 	n := len(pairs)
 	r.Current = map[string]string{
 		"parent_files": strconv.Itoa(len(lib.files[parentID])),
 		"fragments":    strconv.Itoa(n),
+	}
+	if len(st.ContentProofs) > 0 {
+		r.Current["content_proven"] = strconv.Itoa(len(st.ContentProofs))
 	}
 	switch rowKind {
 	case fragClassMoved, fragRowMovedUnproven:
@@ -3433,7 +3497,10 @@ func (f *fragmentFixer) parentRow(lib *fragLibrary, parentID, rowKind string, pa
 		if rowKind == fragRowCopyUnproven {
 			r.Risk = repairs.RiskReview
 			r.Skipped = fragSkipCopyUnproven
-			r.SkipReason = fmt.Sprintf("%d match(es) are not proven by an import path with an equal size on disk, or a hash: check by hand before retiring", n)
+			r.SkipReason = fmt.Sprintf("%d match(es) are not proven by an import path with an equal size on disk, a hash, or identical content: check by hand before retiring", n)
+			if notCompared != "" {
+				r.SkipReason += "; content not compared for " + notCompared
+			}
 		}
 	}
 	if k, why := f.guard(lib, books, extra); k != "" {
@@ -3469,7 +3536,7 @@ func (f *fragmentFixer) parentRow(lib *fragLibrary, parentID, rowKind string, pa
 		st.IgnoredITunes = ignored
 		fpParts = append(fpParts, "itunes-set-aside|"+strings.Join(ignored, ","))
 	}
-	if len(st.IgnoredITunes) > 0 || st.ITunesParent != "" {
+	if len(st.IgnoredITunes) > 0 || st.ITunesParent != "" || len(st.ContentProofs) > 0 {
 		raw, err := json.Marshal(st)
 		if err != nil {
 			r.Skipped, r.SkipReason = fragSkipUnreadable, "cannot store the row's state: "+err.Error()
@@ -3497,6 +3564,12 @@ type fragParentState struct {
 	// retire; the fingerprint carries the mode, so a parent that turned
 	// iTunes-linked (or stopped being) since the plan changes the row.
 	ITunesParent string `json:"itunes_parent,omitempty"`
+	// ContentProofs are the plan's content proofs of the row's copies
+	// (proveCopiesByContent): which files, their size and mtime as read,
+	// and the digest. A re-plan re-stats both files of each and restores
+	// the proof only while both are unchanged; nothing is re-read under
+	// the lock, and nothing is ever stored on a book or row.
+	ContentProofs []fragContentProof `json:"content_proofs,omitempty"`
 }
 
 func uniqueSorted(in []string) []string {
@@ -6222,6 +6295,11 @@ func (f *fragmentFixer) replanParent(store OpsStore, lib *fragLibrary, hist Frag
 // from the stored state ps, and decides their co-owners again (holdCoOwned)
 // with the co-owners ps recorded loaded. A non-empty why is a change.
 func (f *fragmentFixer) rebuildParentRows(store OpsStore, lib *fragLibrary, hist FragmentRepairReader, ps fragParentState, parentID string, frags []string) ([]repairs.Row, string, error) {
+	// The plan's content proofs, re-stat'ed (never re-read): a file that
+	// changed since the plan is a change, said as such.
+	if why := f.restoreContentProofs(lib, ps.ContentProofs); why != "" {
+		return nil, why, nil
+	}
 	// The iTunes copies the rule set aside at plan time come back as
 	// candidate parents, so the rule is decided again here: each is
 	// re-classified, its identity gate re-run against the parent, and the
