@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/folder_books_fixer.go
-// version: 2.11.1
+// version: 2.11.2
 // guid: 3b8e5d17-9c2a-4f60-8e41-6a7d2c9f0b35
 // last-edited: 2026-10-06
 
@@ -1840,7 +1840,9 @@ func (f *folderBooksFixer) Apply(ctx context.Context, w *repairs.Writer, fresh r
 	}
 	sort.Strings(gids)
 	for _, gid := range gids {
-		did, err := f.handOff(store, w, plan.Members, gid, heirs[gid])
+		// No iTunes guard: the owner cleared this fixer for the rows of
+		// books under books/itunes/** (2026-10-01; see handOff).
+		did, err := f.handOff(store, w, plan.Members, gid, heirs[gid], nil)
 		steps += did
 		if err != nil {
 			return partial(err)
@@ -1918,7 +1920,14 @@ func (f *folderBooksFixer) electHeirs(ctx context.Context, store OpsStore, membe
 // without a primary. The demotes are journaled (OldValue "true") before Crown
 // writes and the hand-off notes after: the revert of a demote re-crowns the
 // folder-book (versionprimary.Crown), which also demotes the heir.
-func (f *folderBooksFixer) handOff(store OpsStore, w *repairs.Writer, members []string, gid, heir string) (int, error) {
+//
+// mayWrite, when set, is the crown's versionprimary.Env.MayWrite: asked under
+// the group lock about every member the crown would write, before any write
+// (versionprimary.CrownEnv). The duplicate-copies fixer passes
+// itunesguard.MayWrite. The folder-books fixer passes nil: the owner cleared
+// it (2026-10-01, repairs.ITunesDatabaseOnly) to write the database rows of
+// books under books/itunes/**, primary flags included.
+func (f *folderBooksFixer) handOff(store OpsStore, w *repairs.Writer, members []string, gid, heir string, mayWrite func(*database.Book) error) (int, error) {
 	vps := f.p.deps.VersionPrimaryStore()
 	if vps == nil {
 		return 0, errors.New("version-primary store unavailable")
@@ -1941,7 +1950,7 @@ func (f *folderBooksFixer) handOff(store OpsStore, w *repairs.Writer, members []
 		return 0, nil
 	}
 	w.Touch()
-	res, err := versionprimary.Crown(fragEnsureStore{OpsStore: store, chapters: vps}, gid, heir)
+	res, err := versionprimary.CrownEnv(fragEnsureStore{OpsStore: store, chapters: vps}, gid, heir, versionprimary.Env{MayWrite: mayWrite})
 	if err != nil {
 		return 0, fmt.Errorf("crown %s in group %s: %w", heir, gid, err)
 	}

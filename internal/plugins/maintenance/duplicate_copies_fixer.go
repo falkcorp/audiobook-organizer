@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/duplicate_copies_fixer.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 937b9ff1-48ce-4136-8ca0-74793e6ed3de
 // last-edited: 2026-10-06
 
@@ -1862,7 +1862,10 @@ func (f *duplicateCopiesFixer) Apply(ctx context.Context, w *repairs.Writer, fre
 		} else if why != "" {
 			return partial(fmt.Errorf("%w: under the merge lock: %s", repairs.ErrChangedSincePlan, why))
 		}
-		did, err := f.fb.handOff(store, w, plan.Losers, gid, heirs[gid])
+		// itunesWouldBeWritten just checked the group, but the crown asks
+		// again under its group lock about exactly the members it writes,
+		// so a flag that changed in between is refused, never written.
+		did, err := f.fb.handOff(store, w, plan.Losers, gid, heirs[gid], itunesguard.MayWrite(store, gid))
 		steps += did
 		if err != nil {
 			return partial(err)
