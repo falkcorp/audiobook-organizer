@@ -1,7 +1,7 @@
 // file: internal/database/mock_store.go
-// version: 1.138.0
+// version: 1.138.1
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 package database
 
@@ -401,13 +401,13 @@ type MockStore struct {
 	ListUsersFunc         func() ([]User, error)
 
 	// Sessions
-	CreateSessionFunc    func(userID, ip, userAgent string, ttl time.Duration) (*Session, error)
+	CreateSessionFunc func(userID, ip, userAgent string, ttl time.Duration) (*Session, error)
 	// CreateSessionWithOriginFunc; when nil, CreateSessionWithOrigin falls
 	// back to CreateSessionFunc and stamps the origin on its result.
 	CreateSessionWithOriginFunc func(userID, ip, userAgent string, ttl time.Duration, origin string) (*Session, error)
-	GetSessionFunc       func(id string) (*Session, error)
-	RevokeSessionFunc    func(id string) error
-	ListUserSessionsFunc func(userID string) ([]Session, error)
+	GetSessionFunc              func(id string) (*Session, error)
+	RevokeSessionFunc           func(id string) error
+	ListUserSessionsFunc        func(userID string) ([]Session, error)
 
 	CreateOAuthIdentityFunc               func(identity *OAuthIdentity) (*OAuthIdentity, error)
 	GetOAuthIdentityByProviderSubjectFunc func(provider, subject string) (*OAuthIdentity, error)
