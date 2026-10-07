@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/store_slices.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 8d3b6f14-2a97-4e51-b0c8-5f7e91d24a63
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package maintenance
 
@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/itunesguard"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
 
@@ -218,6 +219,9 @@ type versionGroupWriter interface {
 	// versionprimary.EnsureStore: the member reads, the flag writes and the
 	// file/chapter reads the shared primary rule ranks with.
 	versionprimary.EnsureStore
+	// itunesguard.MemberStore: the iTunes guard every primary-flag write of
+	// the apply asks first.
+	itunesguard.MemberStore
 }
 
 // bookByIDReader reads single books by ID. Read-only by construction.

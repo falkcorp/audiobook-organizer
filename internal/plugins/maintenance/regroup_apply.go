@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/regroup_apply.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: e2a7c9d4-1f68-4b03-9c5e-7a0d3f814b62
-// last-edited: 2026-10-02
+// last-edited: 2026-10-06
 
 // Package maintenance — the APPLY path for the regroup review queue (PR-B2).
 //
@@ -85,6 +85,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/itunesguard"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
@@ -412,6 +413,21 @@ func ApplyVersionGroup(store versionGroupWriter) func(context.Context, database.
 				}
 			}
 		}
+		// A joiner of a reused group with a primary is written explicit
+		// false below. That is a primary-flag write, and an iTunes book's
+		// primary flag is never written (itunesguard): asked here, before
+		// any write, so a refusal fails the item with nothing changed.
+		mayWrite := itunesguard.MayWrite(store, target)
+		if reusedHasPrimary {
+			for _, b := range books {
+				if b.VersionGroupID != nil && *b.VersionGroupID == target {
+					continue
+				}
+				if err := mayWrite(b); err != nil {
+					return fmt.Errorf("regroup version-group apply: join %s to version group %s: %w", b.ID, target, err)
+				}
+			}
+		}
 		// Link: set VersionGroupID (and a joiner's flag, above), under the
 		// book's write lock (ModifyBook), so a column another writer commits
 		// between the hold read and this write is not reverted (audit
@@ -461,8 +477,14 @@ func ApplyVersionGroup(store versionGroupWriter) func(context.Context, database.
 		// when an eligible copy exists but a better one sits outside the
 		// library -- and only when none is, the smallest ULID (pickPrimary),
 		// as before. version-group-primary-repair re-ranks the group later.
+		//
+		// Both hand-offs ask the iTunes guard (Env.MayWrite) under the group
+		// lock about exactly the members they would write. A refusal writes
+		// no flag but the link above stands: the item fails with the
+		// refusal (versionprimary.ErrWriteRefused) for a human, and a retry
+		// re-links nothing and is refused again until the group changes.
 		rootDir := config.AppConfig.RootDir
-		res, err := versionprimary.EnsureSinglePrimary(ctx, store, target, versionprimary.Env{RootDir: rootDir})
+		res, err := versionprimary.EnsureSinglePrimary(ctx, store, target, versionprimary.Env{RootDir: rootDir, MayWrite: mayWrite})
 		if err != nil {
 			return fmt.Errorf("regroup version-group apply: decide the primary of %s: %w", target, err)
 		}
@@ -471,7 +493,7 @@ func ApplyVersionGroup(store versionGroupWriter) func(context.Context, database.
 			if kerr != nil {
 				return fmt.Errorf("regroup version-group apply: choose the primary of held group %s: %w", target, kerr)
 			}
-			if res, err = versionprimary.Crown(store, target, keep); err != nil {
+			if res, err = versionprimary.CrownEnv(store, target, keep, versionprimary.Env{MayWrite: mayWrite}); err != nil {
 				return fmt.Errorf("regroup version-group apply: crown the primary of held group %s: %w", target, err)
 			}
 		}

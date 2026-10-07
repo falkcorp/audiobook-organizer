@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/folder_books_fixer.go
-// version: 2.11.2
+// version: 2.12.0
 // guid: 3b8e5d17-9c2a-4f60-8e41-6a7d2c9f0b35
 // last-edited: 2026-10-06
 
@@ -1933,6 +1933,7 @@ func (f *folderBooksFixer) handOff(store OpsStore, w *repairs.Writer, members []
 		return 0, errors.New("version-primary store unavailable")
 	}
 	var demoted []string
+	var steps []repairs.BookStep
 	for _, m := range members {
 		b, err := store.GetBookByID(m)
 		if err != nil || b == nil {
@@ -1941,21 +1942,40 @@ func (f *folderBooksFixer) handOff(store OpsStore, w *repairs.Writer, members []
 		if b.VersionGroupID == nil || *b.VersionGroupID != gid || (b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion) {
 			continue
 		}
-		if err := w.Journal(m, undo.ChangeTypeBookPrimaryDemote, "is_primary_version", "true", "false"); err != nil {
-			return 0, err
-		}
 		demoted = append(demoted, m)
+		steps = append(steps, repairs.BookStep{BookID: m, Entry: repairs.UndoEntry{
+			ChangeType: undo.ChangeTypeBookPrimaryDemote, Field: "is_primary_version", Old: "true", New: "false"}})
 	}
 	if len(demoted) == 0 {
 		return 0, nil
 	}
-	w.Touch()
-	res, err := versionprimary.CrownEnv(fragEnsureStore{OpsStore: store, chapters: vps}, gid, heir, versionprimary.Env{MayWrite: mayWrite})
+	// The demote rows are journaled before the crown writes (a crash after
+	// the write must still leave them), and every row whose demote the crown
+	// did not make is voided after it (repairs.Writer.JournalSteps): a crown
+	// the iTunes guard refused, or one that found the heir changed, writes
+	// nothing, and a member it skipped keeps its flag. Crash window: a crash
+	// between the rows and the crown leaves them live with nothing written;
+	// their revert re-crowns a folder-book that is still primary, a no-op
+	// for its flag.
+	var res versionprimary.HandoffResult
+	err := w.JournalSteps(steps, func() ([]bool, error) {
+		var cerr error
+		res, cerr = versionprimary.CrownEnv(fragEnsureStore{OpsStore: store, chapters: vps}, gid, heir, versionprimary.Env{MayWrite: mayWrite})
+		done := make([]bool, len(demoted))
+		for i, m := range demoted {
+			done[i] = wroteFalseOf(res, m)
+		}
+		return done, cerr
+	})
+	wrote := 0
+	if len(res.Writes) > 0 {
+		wrote = 1
+	}
 	if err != nil {
-		return 0, fmt.Errorf("crown %s in group %s: %w", heir, gid, err)
+		return wrote, fmt.Errorf("crown %s in group %s: %w", heir, gid, err)
 	}
 	if res.PrimaryID != heir {
-		return 1, fmt.Errorf("crown in group %s left %q primary, not %s", gid, res.PrimaryID, heir)
+		return wrote, fmt.Errorf("crown in group %s left %q primary, not %s", gid, res.PrimaryID, heir)
 	}
 	// The hand-off note is evidence the group's flags changed, so it is
 	// written only once Crown has (undo.ChangeTypeBookPrimaryHandoff). It
@@ -1964,11 +1984,25 @@ func (f *folderBooksFixer) handOff(store OpsStore, w *repairs.Writer, members []
 	// predates the operation.
 	note := undo.HandOffNoteValue(heir, res.WrotePrimary())
 	for _, m := range demoted {
+		if !wroteFalseOf(res, m) {
+			continue // its demote row was voided: the crown never wrote it
+		}
 		if err := w.Journal(m, undo.ChangeTypeBookPrimaryHandoff, "version_group_id", note, gid); err != nil {
 			return 1, err
 		}
 	}
 	return 1, nil
+}
+
+// wroteFalseOf reports whether the hand-off res demoted id (wrote its
+// explicit false).
+func wroteFalseOf(res versionprimary.HandoffResult, id string) bool {
+	for _, fw := range res.Writes {
+		if fw.BookID == id && !fw.Primary {
+			return true
+		}
+	}
+	return false
 }
 
 // dupNow re-checks, under the merge lock, that no live book other than the

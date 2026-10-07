@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-06-primary-flag-undo-and-itunes-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 9554db3c-0ebf-413d-9ff1-bbccec023eb0 -->
 <!-- last-edited: 2026-10-06 -->
 
@@ -26,10 +26,13 @@ PR: https://github.com/falkcorp/audiobook-organizer/pull/3805
   and the restored leftover comes back as a non-primary copy. This works
   both when the repair finished and when it stopped partway.
 - Books from the owner's active iTunes library are never written to. That
-  rule now also covers the primary mark, in every merge repair (duplicate
-  copies, fragment consolidation, consolidation leftovers) and in undo. If
-  a repair or an undo would have to change an iTunes book's mark, it
-  changes nothing in that group and reports which book and why.
+  rule now also covers the primary mark in the merge repairs (duplicate
+  copies, fragment consolidation, consolidation leftovers), the
+  chapter-folder repair, approving a "these are versions" review item, and
+  undo. If one of these would have to change an iTunes book's mark, it
+  changes nothing in that group and reports which book and why. Other
+  places that pick a group's primary (the library scan, organizing, the
+  iTunes import and a few more) are not covered yet.
 
 ## Undo hid the book the repair had folded the leftover into
 
@@ -57,7 +60,8 @@ When the copy already had the mark, or the repair refused, undo leaves
 that copy as primary and brings the leftover back as non-primary. When the
 repair really did move the mark, undo moves it back as before. Repairs
 recorded before this change cannot be told apart, so they still undo the
-old way. Undo of those older repairs is being checked separately.
+old way, except that an older record never lets undo change an iTunes
+book's mark. Undo of those older repairs is being checked separately.
 
 ## The primary mark of an iTunes book could change
 
@@ -72,10 +76,13 @@ and fragment-consolidation repairs at that step.
 a standing rule, so the owner's iTunes collection stays exactly as the
 owner keeps it. A rule that holds only most of the time does not do that.
 
-**The fix.** There is now one shared iTunes check. Repairs and undo run it
-on each copy at the moment they are about to change its mark, while
-holding the lock that keeps other changes out of that group. If any copy
-fails the check, nothing in the group changes. The repair stops and
+**The fix.** There is now one shared iTunes check. The repairs and undo
+listed above decide exactly which copies they will change, run the check on
+those copies while holding the lock that keeps other changes out of that
+group, and then change only those copies. If any copy fails the check,
+nothing in the group changes. If the check itself cannot read a copy (a
+database hiccup), that is treated as a failure to retry, not as "this is an
+iTunes book". The repair stops and
 reports partway done; undo leaves the group as it is and names the iTunes
 book in its result. There is one exception for undo. The owner has
 allowed the folder-books repair to update the database records of books
