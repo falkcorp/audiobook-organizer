@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.45.0
+// version: 1.46.0
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
 // last-edited: 2026-10-06
 
@@ -3050,7 +3050,7 @@ func (f *fragmentFixer) buildRows(lib *fragLibrary, ix *fragIndex, cands []*frag
 	for _, k := range copyKeys {
 		ps := pairs[k]
 		var held, split []repairs.Row
-		ps, held = f.splitManualCopies(lib, k.parent, ps)
+		ps, held = f.splitManualCopies(lib, k.parent, ps, probe)
 		split = append(split, held...)
 		if itWhy, ok := lib.itunesParent(k.parent); ok {
 			ps, held = f.splitFollowingCopies(lib, k.parent, itWhy, ps, probe)
@@ -3120,31 +3120,49 @@ func (f *fragmentFixer) copiesOfPresentRow(lib *fragLibrary, cs []*fragCandidate
 // own, so one iTunes copy does not make its siblings' row manual. A parent
 // that is itself hands-off keeps every pair (its row is manual whole), and
 // so does a row whose every fragment is hands-off.
-func (f *fragmentFixer) splitManualCopies(lib *fragLibrary, parentID string, ps []fragPair) ([]fragPair, []repairs.Row) {
+//
+// A fragment the owner may apply himself (ownerEligible: iTunes-tracked by
+// its own row's iTunes path alone, proven by content) is ALWAYS on a
+// "manual:" row of its own, marked owner-applicable (ownerRow), so the
+// owner's Apply names one book.
+func (f *fragmentFixer) splitManualCopies(lib *fragLibrary, parentID string, ps []fragPair, probe *fragProbe) ([]fragPair, []repairs.Row) {
 	if k, _ := f.guard(lib, []fragBook{lib.books[parentID]}, nil); k != "" {
 		return ps, nil
 	}
-	var keep []fragPair
-	var held []repairs.Row
+	var keep, handsOff []fragPair
+	var owner []repairs.Row
+	whys := map[string][2]string{}
 	for _, p := range ps {
 		kind, why := f.guard(lib, []fragBook{p.Frag.Book}, map[string][]string{p.Frag.Book.ID: {p.Frag.ImportPath}})
 		if kind == "" {
 			if it := p.Frag.itunesWhy(); it != "" {
 				kind, why = repairs.SkipITunes, "it is an iTunes book ("+it+"); iTunes books are never written"
+				if reason, whyNot := f.ownerEligible(lib, parentID, p, ps, probe); whyNot == "" {
+					owner = append(owner, f.ownerRow(lib, parentID, p, reason))
+					continue
+				} else {
+					why += "; not owner-applicable: " + whyNot
+				}
 			}
 		}
 		if kind == "" {
 			keep = append(keep, p)
 			continue
 		}
-		r := f.holdRow(lib, p.Frag, "manual", fragClassManual, kind,
-			fmt.Sprintf("copies parent %s row %s, but is hands-off: %s", parentID, p.Parent.ID, why),
+		handsOff = append(handsOff, p)
+		whys[p.Frag.Book.ID] = [2]string{kind, why}
+	}
+	if len(keep) == 0 {
+		return handsOff, owner
+	}
+	held := owner
+	for _, p := range handsOff {
+		w := whys[p.Frag.Book.ID]
+		r := f.holdRow(lib, p.Frag, "manual", fragClassManual, w[0],
+			fmt.Sprintf("copies parent %s row %s, but is hands-off: %s", parentID, p.Parent.ID, w[1]),
 			[]fragMatch{{Row: p.Parent, Evidence: p.Evidence}})
 		r.Class = fragClassManual
 		held = append(held, r)
-	}
-	if len(keep) == 0 {
-		return ps, nil
 	}
 	return keep, held
 }
@@ -3580,6 +3598,10 @@ type fragParentState struct {
 	// the proof only while both are unchanged; nothing is re-read under
 	// the lock, and nothing is ever stored on a book or row.
 	ContentProofs []fragContentProof `json:"content_proofs,omitempty"`
+	// OwnerParent is set on an owner-applicable manual row
+	// (fragment_owner_apply.go): the parent the fragment copies. Replan
+	// rebuilds the row against it; the row id names only the fragment.
+	OwnerParent string `json:"owner_parent,omitempty"`
 }
 
 func uniqueSorted(in []string) []string {
@@ -5454,12 +5476,23 @@ func fragGroups(frags []fragBook) map[string]bool {
 // held for an iTunes book in one of them ("" none), read as retireITunes
 // reads them (fresh when lib.groupReads is set; a read error or doubt holds).
 func (lib *fragLibrary) groupsITunes(groups map[string]bool) string {
+	return lib.groupsITunesExcept(groups, nil)
+}
+
+// groupsITunesExcept is groupsITunes with the books in except left out: the
+// owner apply's check of a fragment's own group, where the fragment itself
+// is the iTunes-tracked book being retired and every OTHER member must not
+// be an iTunes book.
+func (lib *fragLibrary) groupsITunesExcept(groups, except map[string]bool) string {
 	for _, g := range sortedKeys(groups) {
 		members, err := lib.versionGroupMembers(g)
 		if err != nil {
 			return fmt.Sprintf("version group %s of the retire is unreadable (%v), so an iTunes copy in it cannot be ruled out; decide by hand", g, err)
 		}
 		for _, m := range members {
+			if except[m.ID] {
+				continue
+			}
 			why, doubt, err := lib.memberITunesWhy(m)
 			switch {
 			case err != nil:
@@ -6241,6 +6274,15 @@ func (f *fragmentFixer) replanWith(ctx context.Context, planned repairs.Row, bea
 		return f.replanJoin(ctx, store, lib, hist, planned, beat)
 	case fragClassCarry:
 		return f.replanCarry(store, lib, planned)
+	case "manual":
+		// An owner-applicable row (fragment_owner_apply.go) is rebuilt
+		// against the parent its state names, every rule decided again;
+		// any other manual row is never applied and returns as planned.
+		var ps fragParentState
+		if len(planned.State) > 0 && json.Unmarshal(planned.State, &ps) == nil && ps.OwnerParent != "" {
+			return f.replanParent(store, lib, hist, planned, ps.OwnerParent)
+		}
+		return planned, nil
 	default:
 		return planned, nil // held and ambiguous rows are never applicable; return as planned
 	}
@@ -7283,7 +7325,10 @@ func (f *fragmentFixer) replayHandOff(ctx context.Context, store OpsStore, gid s
 // claims makes the row changed (the plan's whole-library listing no longer
 // holds); an incomplete lookup fails the row rather than guessing.
 func (f *fragmentFixer) checkOwners(store OpsStore, look database.BookFilePathLookup, planned, fresh repairs.Row) (repairs.Row, error) {
-	if !fresh.Applicable() {
+	// An owner row (skipped, owner-applicable) is checked like an
+	// applicable one: the owner's apply must not retire a book whose file a
+	// live book outside the row also holds.
+	if !fresh.Applicable() && !fresh.OwnerApplicable {
 		return fresh, nil
 	}
 	paths := rowPaths(fresh)
@@ -7369,7 +7414,8 @@ func (f *fragmentFixer) holdCoOwned(lib *fragLibrary, rows []repairs.Row) {
 	owners := liveOwners(lib)
 	for i := range rows {
 		r := &rows[i]
-		if !r.Applicable() {
+		owner := !r.Applicable() && r.OwnerApplicable
+		if !r.Applicable() && !owner {
 			continue
 		}
 		in := map[string]bool{}
@@ -7392,6 +7438,14 @@ func (f *fragmentFixer) holdCoOwned(lib *fragLibrary, rows []repairs.Row) {
 			ids = append(ids, id)
 		}
 		sort.Strings(ids)
+		if owner {
+			// An owner row proceeds beside no co-owner: any live book
+			// outside it that also holds its file withdraws the owner's
+			// Apply (fail closed).
+			r.OwnerApplicable, r.OwnerApplyReason = false, ""
+			r.SkipReason += fmt.Sprintf("; not owner-applicable: its file is also a file of live book(s) %s", strings.Join(ids, ", "))
+			continue
+		}
 		listed := map[string]bool{}
 		for _, m := range r.Members {
 			listed[m.BookID] = true
@@ -7811,7 +7865,12 @@ func (f *fragmentFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repa
 		return err
 	}
 	touched = append(touched, locked.BookIDs...)
-	if locked.Fingerprint != fresh.Fingerprint || !locked.Applicable() {
+	// Owner mode: the owner's approval names this row, and the locked
+	// re-plan still lists it for him (fragment_owner_apply.go). Nothing else
+	// lets a skipped row through.
+	o, approved := repairs.OwnerApplyFrom(ctx)
+	ownerMode := approved && o.RowID == fresh.RowID && !locked.Applicable() && locked.OwnerApplicable
+	if locked.Fingerprint != fresh.Fingerprint || (!locked.Applicable() && !ownerMode) {
 		why := locked.Reason
 		if !locked.Applicable() {
 			why = locked.SkipReason
@@ -7871,6 +7930,12 @@ func (f *fragmentFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repa
 		return nil
 	case []fragPair:
 		_, parentID, _ := strings.Cut(locked.RowID, ":")
+		if ownerMode {
+			return f.applyOwner(ctx, store, w, locked, plan)
+		}
+		if !locked.Applicable() {
+			return fmt.Errorf("%w: under the merge lock: %s", repairs.ErrChangedSincePlan, locked.SkipReason)
+		}
 		// The iTunes version-group hold, read fresh under the lock: each
 		// retire hands its fragment's group primary on.
 		var fragBooks []fragBook
