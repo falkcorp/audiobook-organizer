@@ -1,5 +1,5 @@
 // file: internal/auth/context.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8c4a2f1d-9b3e-4f60-a8d5-2c7e0f1b9a47
 // last-edited: 2026-10-07
 //
@@ -60,6 +60,13 @@ const (
 // (an API key, an ABS client token). Actions the owner reserves for himself
 // (Repairs owner apply) are honoured only for these.
 func (m Method) Interactive() bool { return m == MethodSession || m == MethodCFAccess }
+
+// CredentialChangeRefusedMessage is the one 403 message for a credential,
+// identity, sign-in setting, executable or server-path change attempted by a
+// method that may not make one (an API key, an ABS token, or no recorded
+// method). The route guard and the config service both use it, so logs and
+// tests can tell this refusal from a missing permission.
+const CredentialChangeRefusedMessage = "API keys cannot change passwords, users, roles, invites, sessions, keys of other users, sign-in settings, executables, database locations or server paths; sign in to do this"
 
 // MayChangeCredentials reports whether a request authenticated by m may
 // change credentials or identity: passwords, users, invites, temp-login

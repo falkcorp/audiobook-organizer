@@ -1,7 +1,7 @@
 // file: internal/server/handlers/fpworker/handler_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 1cf62cc0-1b49-43dd-a9f1-317ac56e7aa0
-// last-edited: 2026-09-19
+// last-edited: 2026-10-07
 
 package fpworker
 
@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -206,7 +207,8 @@ func TestRoutes_PermissionAndScope(t *testing.T) {
 	mint := func(scopes ...string) string {
 		raw, hash, err := database.GenerateAPIKeyToken()
 		require.NoError(t, err)
-		_, err = store.CreateAPIKey(&database.APIKey{UserID: svc.ID, Name: "k", TokenHash: hash, Scopes: scopes, Status: "active"})
+		exp := time.Now().Add(time.Hour)
+		_, err = store.CreateAPIKey(&database.APIKey{UserID: svc.ID, Name: "k", TokenHash: hash, Scopes: scopes, Status: "active", ExpiresAt: &exp})
 		require.NoError(t, err)
 		return raw
 	}

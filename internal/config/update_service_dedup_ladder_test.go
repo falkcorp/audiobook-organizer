@@ -1,7 +1,7 @@
 // file: internal/config/update_service_dedup_ladder_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 7d1c3a9e-5b2f-4e8a-9c6d-0f1e2a3b4c5d
-// last-edited: 2026-09-02
+// last-edited: 2026-10-07
 
 package config
 
@@ -53,7 +53,7 @@ func TestUpdateConfig_RejectsInvalidDedupLadderBeforePersisting(t *testing.T) {
 	svc.SetDedupScoreConfigSink(func(context.Context, unified.ScoreConfig) (string, error) { sinkCalls++; return "op-1", nil })
 
 	// The exact UI failure mode: a 0–1 spinner step persisted band_certain_min=1.
-	status, resp := svc.UpdateConfig(context.Background(), map[string]any{
+	status, resp := svc.UpdateConfig(sessionCtx(), map[string]any{
 		"dedup": map[string]any{"signals": map[string]any{"band_certain_min": 1}},
 	})
 
@@ -82,7 +82,7 @@ func TestUpdateConfig_RejectsUnknownConfidenceKind(t *testing.T) {
 	ms, blobs := ladderTestStore(t)
 	svc := NewUpdateService(ms)
 
-	status, resp := svc.UpdateConfig(context.Background(), map[string]any{
+	status, resp := svc.UpdateConfig(sessionCtx(), map[string]any{
 		"dedup": map[string]any{"signals": map[string]any{
 			"confidence": map[string]any{"embeding_medium": map[string]any{"min_confidence": 0.7}},
 		}},
@@ -114,7 +114,7 @@ func TestUpdateConfig_ValidDedupLadderReachesSink(t *testing.T) {
 		return "op-1", nil
 	})
 
-	status, resp := svc.UpdateConfig(context.Background(), map[string]any{
+	status, resp := svc.UpdateConfig(sessionCtx(), map[string]any{
 		"dedup": map[string]any{"signals": map[string]any{
 			"band_certain_min": 98.5, "band_high_min": 91, "band_medium_min": 76, "band_review_min": 61,
 		}},
@@ -149,7 +149,7 @@ func TestUpdateConfig_UnrelatedFieldDoesNotTriggerSink(t *testing.T) {
 	sinkCalls := 0
 	svc.SetDedupScoreConfigSink(func(context.Context, unified.ScoreConfig) (string, error) { sinkCalls++; return "op-1", nil })
 
-	if status, resp := svc.UpdateConfig(context.Background(), map[string]any{"root_dir": "/lib"}); status != http.StatusOK {
+	if status, resp := svc.UpdateConfig(sessionCtx(), map[string]any{"root_dir": "/lib"}); status != http.StatusOK {
 		t.Fatalf("status = %d; resp = %v", status, resp)
 	}
 	if sinkCalls != 0 {
@@ -188,7 +188,7 @@ func TestUpdateConfig_SinkErrorKeepsSavedLadderAndNamesTheRemedy(t *testing.T) {
 		return "", errors.New("engine hand-off failed")
 	})
 
-	status, resp := svc.UpdateConfig(context.Background(), map[string]any{
+	status, resp := svc.UpdateConfig(sessionCtx(), map[string]any{
 		"dedup": map[string]any{"signals": map[string]any{"band_certain_min": 98}},
 	})
 	if status != http.StatusInternalServerError {
@@ -233,7 +233,7 @@ func TestUpdateConfig_SuccessReportsRescoreOpID(t *testing.T) {
 		return "01JRESCORE", nil
 	})
 
-	status, resp := svc.UpdateConfig(context.Background(), map[string]any{
+	status, resp := svc.UpdateConfig(sessionCtx(), map[string]any{
 		"dedup": map[string]any{"signals": map[string]any{
 			"band_certain_min": 98.5, "band_high_min": 91, "band_medium_min": 76, "band_review_min": 61,
 		}},
@@ -276,7 +276,7 @@ func TestUpdateConfig_RejectedPutLeavesNoStrayConfidenceKey(t *testing.T) {
 	ms, blobs := ladderTestStore(t)
 	svc := NewUpdateService(ms)
 
-	status, _ := svc.UpdateConfig(context.Background(), map[string]any{
+	status, _ := svc.UpdateConfig(sessionCtx(), map[string]any{
 		"dedup": map[string]any{"signals": map[string]any{
 			"confidence": map[string]any{"embeding_medium": map[string]any{"min_confidence": 0.7}},
 		}},
@@ -294,7 +294,7 @@ func TestUpdateConfig_RejectedPutLeavesNoStrayConfidenceKey(t *testing.T) {
 		t.Errorf("live confidence map should still hold exactly the one real override, got %+v", live)
 	}
 	// (2) The live config must still be valid — i.e. a later, unrelated PUT works.
-	if status, resp := svc.UpdateConfig(context.Background(), map[string]any{"log_level": "debug"}); status != http.StatusOK {
+	if status, resp := svc.UpdateConfig(sessionCtx(), map[string]any{"log_level": "debug"}); status != http.StatusOK {
 		t.Fatalf("a later unrelated PUT returned %d (%v) — the rejected PUT poisoned the live config", status, resp)
 	}
 	if got := Snapshot().LogLevel; got != "debug" {
@@ -334,7 +334,7 @@ func TestUpdateConfig_SaveFailureRestoresMapContents(t *testing.T) {
 	ms.On("GetSetting", mock.Anything).Return((*database.Setting)(nil), nil).Maybe()
 	svc := NewUpdateService(ms)
 
-	status, _ := svc.UpdateConfig(context.Background(), map[string]any{
+	status, _ := svc.UpdateConfig(sessionCtx(), map[string]any{
 		"dedup": map[string]any{"signals": map[string]any{
 			"confidence": map[string]any{
 				string(unified.SigEmbedHigh): map[string]any{"min_confidence": 0.9, "max_confidence": 0.95},
@@ -398,7 +398,7 @@ func TestUpdateConfig_RejectedPutDoesNotRotateSecrets(t *testing.T) {
 	svc := NewUpdateService(ms)
 
 	// One PUT that rotates two secrets AND carries an invalid ladder.
-	status, _ := svc.UpdateConfig(context.Background(), map[string]any{
+	status, _ := svc.UpdateConfig(sessionCtx(), map[string]any{
 		"openai_api_key":      "rotated-openai-key",
 		"basic_auth_password": "rotated-password",
 		"dedup": map[string]any{"signals": map[string]any{
@@ -433,7 +433,7 @@ func TestUpdateConfig_InvalidConfigIsRejectedBeforeAnythingIsWritten(t *testing.
 	ms, blobs := ladderTestStore(t)
 	svc := NewUpdateService(ms)
 
-	status, resp := svc.UpdateConfig(context.Background(), map[string]any{"database_type": "mysql"})
+	status, resp := svc.UpdateConfig(sessionCtx(), map[string]any{"database_type": "mysql"})
 	if status != http.StatusBadRequest {
 		t.Fatalf("status = %d (%v), want 400 for an invalid database_type", status, resp)
 	}

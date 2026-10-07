@@ -1,5 +1,5 @@
 // file: internal/server/handlers/auth.go
-// version: 2.7.0
+// version: 2.8.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
 // last-edited: 2026-10-07
 
@@ -513,13 +513,8 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
 		httputil.RespondWithUnauthorized(c, "not authenticated")
 		return
 	}
-	// Also enforced at the route (s.credGuard); repeated here because this is
-	// the handler an admin API key used to reset an admin's password and then
-	// sign in as it. A person's session only, never an API key.
-	if !servermiddleware.CredentialChangeAllowed(c) {
-		servermiddleware.RefuseCredentialChange(c)
-		return
-	}
+	// API keys are refused at the route (server.credRoute), the one place
+	// every credential-changing route is guarded and recorded.
 	var req struct {
 		UserID          string `json:"user_id"`
 		CurrentPassword string `json:"current_password"`

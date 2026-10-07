@@ -1,5 +1,5 @@
 // file: internal/server/handlers/apikeys_expiry_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4c8e2a17-9b3d-4f61-8a05-d7e2c9b14f38
 // last-edited: 2026-10-07
 
@@ -21,13 +21,12 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	handlersmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/mocks"
-	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 )
 
 // asCaller binds user, method and permissions the way the auth middleware
 // does; key, when non-nil, is the API key that authenticated the request.
 func asCaller(c *gin.Context, user *database.User, method auth.Method, key *database.APIKey, perms ...auth.Permission) {
-	setAuthUser(c, user)
+	c.Set("auth_user", user) // not setAuthUser: that records a session method
 	if key != nil {
 		c.Set("auth_api_key", key)
 	}
@@ -112,15 +111,8 @@ func TestAPIKeyCreate_ByAPIKeyClampedToCallingKey(t *testing.T) {
 }
 
 func TestAPIKeyCreate_ForAnotherUser(t *testing.T) {
-	t.Run("an API key is refused", func(t *testing.T) {
-		store := handlersmocks.NewMockAPIKeyHandlerStore(t) // no CreateAPIKey expected
-		exp := time.Now().Add(time.Hour)
-		c, w := newAuthCtx("POST", "/auth/api-keys", map[string]any{"name": "for bob", "user_id": "bob"})
-		asCaller(c, &database.User{ID: "admin-1"}, auth.MethodAPIKey, &database.APIKey{ID: "k", ExpiresAt: &exp}, auth.All()...)
-		handlers.NewAPIKeyHandler(store).Create(c)
-		assert.Equal(t, http.StatusForbidden, w.Code)
-		assert.Contains(t, w.Body.String(), servermiddleware.CredentialChangeRefusedMessage)
-	})
+	// An API key asking for another user's key is refused at the route
+	// (server.credRouteWhen); credential_routes_test.go covers it.
 	t.Run("a signed-in admin is allowed", func(t *testing.T) {
 		store := handlersmocks.NewMockAPIKeyHandlerStore(t)
 		var created *database.APIKey
@@ -221,16 +213,8 @@ func TestAPIKeyRotate_AnotherUsersKey(t *testing.T) {
 	bobsKey := func() *database.APIKey {
 		return &database.APIKey{ID: "old", UserID: "bob", Status: "active", CreatedAt: time.Now()}
 	}
-	t.Run("an API key is refused", func(t *testing.T) {
-		store := handlersmocks.NewMockAPIKeyHandlerStore(t)
-		store.EXPECT().GetAPIKey("old").Return(bobsKey(), nil)
-		c, w := rotateCtx(t)
-		exp := time.Now().Add(time.Hour)
-		asCaller(c, &database.User{ID: "admin-1"}, auth.MethodAPIKey, &database.APIKey{ID: "k", ExpiresAt: &exp}, auth.All()...)
-		handlers.NewAPIKeyHandler(store).Rotate(c)
-		assert.Equal(t, http.StatusForbidden, w.Code)
-		assert.Contains(t, w.Body.String(), servermiddleware.CredentialChangeRefusedMessage)
-	})
+	// An API key rotating another user's key is refused at the route
+	// (server.credRouteWhen); credential_routes_test.go covers it.
 	t.Run("a signed-in admin is allowed", func(t *testing.T) {
 		store := handlersmocks.NewMockAPIKeyHandlerStore(t)
 		store.EXPECT().GetAPIKey("old").Return(bobsKey(), nil)
@@ -243,4 +227,44 @@ func TestAPIKeyRotate_AnotherUsersKey(t *testing.T) {
 		require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
 		assert.Equal(t, "bob", newKey.UserID)
 	})
+}
+
+// A caller that is not a person and has no calling key with a real expiry
+// cannot mint or rotate a key: the clamp has nothing to clamp to (the
+// 2026-10-07 review's fail-open: a key with no expiry used to mint keys of
+// any length).
+func TestAPIKey_NoExpiryToClampTo_Refused(t *testing.T) {
+	callers := map[string]func(c *gin.Context){
+		"api key without expiry": func(c *gin.Context) {
+			asCaller(c, &database.User{ID: "user-1"}, auth.MethodAPIKey, &database.APIKey{ID: "k"}, auth.All()...)
+		},
+		"api key with zero expiry": func(c *gin.Context) {
+			var zero time.Time
+			asCaller(c, &database.User{ID: "user-1"}, auth.MethodAPIKey, &database.APIKey{ID: "k", ExpiresAt: &zero}, auth.All()...)
+		},
+		"api-key method but no key on the request": func(c *gin.Context) {
+			asCaller(c, &database.User{ID: "user-1"}, auth.MethodAPIKey, nil, auth.All()...)
+		},
+		"abs token": func(c *gin.Context) {
+			asCaller(c, &database.User{ID: "user-1"}, auth.MethodABS, nil, auth.All()...)
+		},
+	}
+	for name, as := range callers {
+		t.Run("create/"+name, func(t *testing.T) {
+			store := handlersmocks.NewMockAPIKeyHandlerStore(t) // no CreateAPIKey expected
+			c, w := newAuthCtx("POST", "/auth/api-keys", map[string]any{"name": "child", "expires_in_days": 365})
+			as(c)
+			handlers.NewAPIKeyHandler(store).Create(c)
+			assert.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
+		})
+		t.Run("rotate/"+name, func(t *testing.T) {
+			exp := time.Now().Add(300 * 24 * time.Hour)
+			store := handlersmocks.NewMockAPIKeyHandlerStore(t)
+			store.EXPECT().GetAPIKey("old").Return(&database.APIKey{ID: "old", UserID: "user-1", CreatedAt: time.Now(), ExpiresAt: &exp}, nil)
+			c, w := rotateCtx(t)
+			as(c)
+			handlers.NewAPIKeyHandler(store).Rotate(c)
+			assert.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
+		})
+	}
 }

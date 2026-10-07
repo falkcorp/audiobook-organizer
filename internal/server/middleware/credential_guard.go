@@ -1,5 +1,5 @@
 // file: internal/server/middleware/credential_guard.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 562599c5-5135-460b-8cd9-1ea9f91081f6
 // last-edited: 2026-10-07
 
@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 )
 
@@ -17,7 +18,7 @@ import (
 // identity change made with a method that may not make one (an API key, an
 // ABS token, or no recorded method). One phrase everywhere, so logs and tests
 // can tell this refusal from a missing permission.
-const CredentialChangeRefusedMessage = "API keys cannot change passwords, users, roles, invites, sessions or sign-in settings; sign in to do this"
+const CredentialChangeRefusedMessage = auth.CredentialChangeRefusedMessage
 
 // CredentialChangeAllowed reports whether the request in c may change
 // credentials or identity (auth.Method.MayChangeCredentials on the method
@@ -27,8 +28,8 @@ func CredentialChangeAllowed(c *gin.Context) bool {
 }
 
 // RefuseCredentialChange writes the 403 for a refused credential change and
-// logs it. Handlers whose guard is conditional (a key for ANOTHER user) call
-// it directly; whole routes use RequireCredentialChangeMethod.
+// logs it. Routes use RequireCredentialChangeMethod or
+// RequireCredentialChangeMethodWhen; nothing else should need to call this.
 func RefuseCredentialChange(c *gin.Context) {
 	LogCredentialChangeRefusal(c)
 	httputil.RespondWithForbidden(c, CredentialChangeRefusedMessage)
@@ -60,6 +61,22 @@ func LogCredentialChangeRefusal(c *gin.Context) {
 func RequireCredentialChangeMethod() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if !CredentialChangeAllowed(c) {
+			RefuseCredentialChange(c)
+			return
+		}
+		c.Next()
+	}
+}
+
+// RequireCredentialChangeMethodWhen is RequireCredentialChangeMethod for a
+// route that is a credential change only for some requests (an API key for
+// ANOTHER user). A request whose method may change credentials passes without
+// consulting guarded; any other request is refused when guarded reports true.
+// guarded must fail closed: when it cannot tell (an unreadable body, a store
+// error), it reports true.
+func RequireCredentialChangeMethodWhen(guarded func(c *gin.Context) bool) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !CredentialChangeAllowed(c) && guarded(c) {
 			RefuseCredentialChange(c)
 			return
 		}

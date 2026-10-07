@@ -1,7 +1,7 @@
 // file: internal/server/wire_media_routes.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: c9d0e1f2-a3b4-5678-cdef-901234567890
-// last-edited: 2026-10-03
+// last-edited: 2026-10-07
 
 package server
 
@@ -11,6 +11,7 @@ import (
 	aibackendshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/aibackends"
 	toolshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/tools"
 	"github.com/gin-gonic/gin"
+	"net/http"
 )
 
 // wireMediaRoutes registers iTunes, AI, diagnostics, tools, AI-backend, and
@@ -76,7 +77,7 @@ func (s *Server) wireMediaRoutes(
 	// Tools lifecycle
 	protected.GET("/tools", s.perm(auth.PermSettingsManage), toolsH.List)
 	protected.GET("/tools/:name/status", s.perm(auth.PermSettingsManage), toolsH.Status)
-	protected.POST("/tools/:name/install", s.perm(auth.PermSettingsManage), toolsH.Install)
+	s.credRoute(protected, http.MethodPost, "/tools/:name/install", s.perm(auth.PermSettingsManage), toolsH.Install)
 
 	// AI backend-mode toggle (TASK-11): status probe + on-demand model pull.
 	protected.GET("/ai/backends/status", s.perm(auth.PermSettingsManage), aiBackendsH.Status)
@@ -93,6 +94,6 @@ func (s *Server) wireMediaRoutes(
 		plugins.POST("/:id/enable", s.perm(auth.PermSettingsManage), pluginsH.EnablePlugin)
 		plugins.POST("/:id/disable", s.perm(auth.PermSettingsManage), pluginsH.DisablePlugin)
 		plugins.GET("/:id/health", s.perm(auth.PermSettingsManage), pluginsH.PluginHealth)
-		plugins.PUT("/:id/settings", s.perm(auth.PermSettingsManage), pluginsH.UpdatePluginSettings)
+		s.credRoute(plugins, http.MethodPut, "/:id/settings", s.perm(auth.PermSettingsManage), pluginsH.UpdatePluginSettings)
 	}
 }

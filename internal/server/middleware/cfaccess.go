@@ -1,7 +1,7 @@
 // file: internal/server/middleware/cfaccess.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8d1a4f92-3c07-4b56-9e28-6a0b5c2e7d41
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 package middleware
 
@@ -46,6 +46,12 @@ func NewCFAccessAuthenticator(verifier *oauth.CFAccessVerifier, cfg *oauth.Confi
 func CloudflareAccessAuth(a *CFAccessAuthenticator) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if a == nil || a.verifier == nil || a.cfg == nil || a.store == nil {
+			c.Next()
+			return
+		}
+		// A request that presents an API key is authenticated by the key
+		// (RequireAuth), never by an Access assertion riding along with it.
+		if APIKeyFromRequest(c.Request) != "" {
 			c.Next()
 			return
 		}

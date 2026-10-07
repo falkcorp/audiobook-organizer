@@ -1,7 +1,7 @@
 // file: internal/server/middleware/absauth.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: e7051b93-6c28-4a0f-9d34-b8f2a61c05de
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 package middleware
 
@@ -297,7 +297,10 @@ type absAPIKeyStore interface {
 //   - Permissions are the key's SCOPES intersected with the owner's role
 //     permissions, exactly as /api/v1 computes them, so every ABS route keeps its
 //     normal authz. A read-only key stays read-only.
-//   - It runs LAST, so it can neither shadow nor weaken the CF or JWT paths.
+//   - Resolve tries it FIRST whenever a key is presented, and then nothing
+//     else (2026-10-07, owner decision: the key wins). A request carrying a
+//     key and an Access assertion is the key's request, with every key
+//     restriction, not the assertion's.
 //
 // There is no abs_sess record behind an API key, so SessionID stays empty; routes
 // that genuinely need a session (logout, /api/me/sessions) will behave as they do
@@ -329,8 +332,8 @@ func (r *ABSIdentityResolver) ResolveAPIKey(c *gin.Context) (*ABSIdentity, *ABSA
 	case "inactive":
 		return nil, absErr(http.StatusUnauthorized, "apikey-inactive", "API key is inactive", ABSModeAPIKey)
 	}
-	if key.ExpiresAt != nil && time.Now().After(*key.ExpiresAt) {
-		return nil, absErr(http.StatusUnauthorized, "apikey-expired", "API key has expired", ABSModeAPIKey)
+	if code, msg, refused := APIKeyExpiryRefusal(key, time.Now()); refused {
+		return nil, absErr(http.StatusUnauthorized, code, msg, ABSModeAPIKey)
 	}
 
 	user, err := r.store.GetUserByID(key.UserID)
@@ -351,6 +354,16 @@ func (r *ABSIdentityResolver) ResolveAPIKey(c *gin.Context) (*ABSIdentity, *ABSA
 func (r *ABSIdentityResolver) Resolve(c *gin.Context) (*ABSIdentity, *ABSAuthError) {
 	if !r.Enabled() {
 		return nil, absErr(http.StatusUnauthorized, "abs-auth-unavailable", "authentication required", "")
+	}
+	// A presented API key wins: the request is authenticated by the key
+	// alone, whatever Access assertion or ABS token rides along with it.
+	if PresentedAPIKey(c) != "" {
+		if id, e := r.ResolveAPIKey(c); e != nil || id != nil {
+			return id, e
+		}
+		// Keys are not accepted in the configured modes; refuse rather than
+		// fall back to a weaker-recorded identity.
+		return nil, absErr(http.StatusUnauthorized, "apikey-not-accepted", "API keys are not accepted here", ABSModeAPIKey)
 	}
 	if id, e := r.ResolveCFAssertion(c); e != nil {
 		return nil, e
@@ -397,10 +410,16 @@ func (r *ABSIdentityResolver) Bind(c *gin.Context, id *ABSIdentity) {
 	}
 	ctx := auth.WithUser(c.Request.Context(), id.User)
 	ctx = auth.WithPermissions(ctx, perms)
-	// Every ABS identity (its JWT sessions, its API keys, a CF assertion
-	// read through this surface) is recorded as ABS: none of them counts as
-	// the owner's interactive login for owner-only actions.
-	ctx = auth.WithMethod(ctx, auth.MethodABS)
+	// Every ABS identity (its JWT sessions, a CF assertion read through this
+	// surface) is recorded as ABS, and an API key as an API key: none of them
+	// counts as the owner's interactive login for owner-only actions.
+	// An API key is recorded as one wherever it is presented, so it meets
+	// every key restriction on this surface too.
+	method := auth.MethodABS
+	if id.Mode == ABSModeAPIKey {
+		method = auth.MethodAPIKey
+	}
+	ctx = auth.WithMethod(ctx, method)
 	c.Request = c.Request.WithContext(ctx)
 }
 
@@ -603,6 +622,10 @@ func absBearerFromRequest(c *gin.Context) string {
 //
 // `?token=` is accepted on safe methods only, matching absBearerFromRequest, so a key
 // cannot leak into a referer or an access log on a state-changing request.
+// PresentedAPIKey returns the "abk_" key the request carries in the places
+// the ABS surface accepts one, or "".
+func PresentedAPIKey(c *gin.Context) string { return absAPIKeyFromRequest(c) }
+
 func absAPIKeyFromRequest(c *gin.Context) string {
 	if c == nil || c.Request == nil {
 		return ""

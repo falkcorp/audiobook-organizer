@@ -1,5 +1,5 @@
 // file: internal/server/apikey_credential_guard_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3e9a5c72-4b1d-4f08-b6e3-9d2c7a0f5e14
 // last-edited: 2026-10-07
 
@@ -199,6 +199,75 @@ func TestCredentialGuard_ConfigRoundTripAllowedForKey(t *testing.T) {
 	f := setupCredGuardServer(t)
 	w := f.do(t, f.apiKey, http.MethodPut, "/api/v1/config", map[string]any{"enable_auth": true})
 	assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
+}
+
+// TestCredentialGuard_ConfigCaseVariantKeyRefused is the 2026-10-07 review's
+// parser differential through the real router: the sign-in check matched
+// payload keys exactly while the decoder matched them case-insensitively, so
+// an API key's {"OAuth_Default_Role":"admin"} answered 200 and made every new
+// SSO user an admin.
+func TestCredentialGuard_ConfigCaseVariantKeyRefused(t *testing.T) {
+	f := setupCredGuardServer(t)
+	for _, payload := range []map[string]any{
+		{"OAuth_Default_Role": "admin"},
+		{"OAUTH_ALLOWED_EMAILS": "attacker@example.test"},
+		{"Root_Dir": "/elsewhere"},
+	} {
+		w := f.do(t, f.apiKey, http.MethodPut, "/api/v1/config", payload)
+		assert.GreaterOrEqual(t, w.Code, 400, "%v: %s", payload, w.Body.String())
+	}
+	cfg := config.Snapshot()
+	assert.NotEqual(t, "admin", cfg.OAuthDefaultRole)
+	assert.Empty(t, cfg.OAuthAllowedEmails)
+
+	// Path settings need a session too; a key's same-value round trip works.
+	w := f.do(t, f.apiKey, http.MethodPut, "/api/v1/config", map[string]any{"root_dir": t.TempDir()})
+	assert.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), "refused_keys")
+	w = f.do(t, f.apiKey, http.MethodPut, "/api/v1/config", map[string]any{"root_dir": cfg.RootDir})
+	assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	w = f.do(t, f.sessionToken, http.MethodPut, "/api/v1/config", map[string]any{"root_dir": t.TempDir()})
+	assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
+}
+
+// TestCredentialGuard_SiblingRoutesRefuseKey: the routes the 2026-10-07
+// review's sibling-path finding turned up, each a way around the guard that
+// the first inventory missed — re-enabling a deactivated key, installing a
+// program, adding a scan root, writing free-form plugin settings, replacing
+// the server binary.
+func TestCredentialGuard_SiblingRoutesRefuseKey(t *testing.T) {
+	f := setupCredGuardServer(t)
+	routes := []struct{ method, path string }{
+		{http.MethodPatch, "/api/v1/auth/api-keys/" + f.targetKeyID},
+		{http.MethodPost, "/api/v1/tools/fpcalc/install"},
+		{http.MethodPost, "/api/v1/import-paths"},
+		{http.MethodPut, "/api/v1/plugins/synthetic/settings"},
+		{http.MethodPost, "/api/v1/update/apply"},
+	}
+	for _, r := range routes {
+		t.Run(r.method+" "+r.path, func(t *testing.T) {
+			w := f.do(t, f.apiKey, r.method, r.path, map[string]any{"status": "active", "path": t.TempDir(), "name": "x"})
+			assert.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
+			assert.Contains(t, w.Body.String(), servermiddleware.CredentialChangeRefusedMessage)
+		})
+	}
+}
+
+// TestCredentialGuard_KeyWithoutExpiryRefused: a key with no expiry (here
+// written straight to the store, as a restored backup would) is refused, not
+// treated as never expiring.
+func TestCredentialGuard_KeyWithoutExpiryRefused(t *testing.T) {
+	f := setupCredGuardServer(t)
+	raw, hash, err := database.GenerateAPIKeyToken()
+	require.NoError(t, err)
+	_, err = f.store.CreateAPIKey(&database.APIKey{
+		UserID: f.adminID, Name: "legacy", TokenHash: hash, Scopes: auth.All(), Status: "active", CreatedAt: time.Now(),
+	})
+	require.NoError(t, err)
+	w := f.do(t, raw, http.MethodGet, "/api/v1/auth/me", nil)
+	assert.Equal(t, http.StatusUnauthorized, w.Code, w.Body.String())
+	w = f.do(t, raw, http.MethodPost, "/api/v1/auth/api-keys", map[string]any{"name": "child", "expires_in_days": 365})
+	assert.Equal(t, http.StatusUnauthorized, w.Code, w.Body.String())
 }
 
 // Store-replacing routes: a reset or factory reset wipes every user (after

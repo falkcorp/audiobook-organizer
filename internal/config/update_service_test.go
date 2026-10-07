@@ -1,12 +1,11 @@
 // file: internal/config/update_service_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: e5f6g7h8-i9j0-k1l2-m3n4-o5p6q7r8s9t0
-// last-edited: 2026-09-12
+// last-edited: 2026-10-07
 
 package config
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"slices"
@@ -81,7 +80,7 @@ func TestUpdateService_ApplyUpdates_Success(t *testing.T) {
 		AppConfig.RootDir = originalDir
 	}()
 
-	if err := service.ApplyUpdates(context.Background(), updates); err != nil {
+	if err := service.ApplyUpdates(sessionCtx(), updates); err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
 
@@ -115,7 +114,7 @@ func TestUpdateService_FlatKeysRejected(t *testing.T) {
 		c.Dedup.EmbeddingsEnabled = true
 		c.RootDir = "/before"
 	})
-	status, resp := service.UpdateConfig(context.Background(), map[string]any{
+	status, resp := service.UpdateConfig(sessionCtx(), map[string]any{
 		"dedup_embeddings_enabled": false,
 		"root_dir":                 "/after",
 	})
@@ -142,7 +141,7 @@ func TestUpdateService_NestedTypoRejected(t *testing.T) {
 	defer func() { AppConfig.Dedup.AutoMergeEnabled = original }()
 	Mutate(func(c *Config) { c.Dedup.AutoMergeEnabled = true })
 
-	status, resp := service.UpdateConfig(context.Background(), map[string]any{
+	status, resp := service.UpdateConfig(sessionCtx(), map[string]any{
 		"dedup": map[string]any{"auto_merge_enabld": false},
 	})
 	if status != http.StatusBadRequest {
@@ -167,7 +166,7 @@ func TestUpdateService_ReadOnlyAnnotationsIgnored(t *testing.T) {
 	originalDir := AppConfig.RootDir
 	defer func() { AppConfig.RootDir = originalDir }()
 
-	err := service.ApplyUpdates(context.Background(), map[string]any{
+	err := service.ApplyUpdates(sessionCtx(), map[string]any{
 		"root_dir":                  "/annotated",
 		"env_locked":                []any{"database_path"},
 		"setting_locks":             map[string]any{"database_path": "flag --db"},
@@ -183,7 +182,8 @@ func TestUpdateService_ReadOnlyAnnotationsIgnored(t *testing.T) {
 
 // TestUnknownConfigKeys_Paths pins the walker's reporting: flat keys at the top
 // level, typos inside objects and slice elements by full path, map-typed fields
-// open to any key, and encoding/json's case-insensitive field match.
+// open to any key, and a key that matches a field only by case reported too:
+// encoding/json would decode it, but the exact-key checks would not see it.
 func TestUnknownConfigKeys_Paths(t *testing.T) {
 	payload := map[string]any{
 		"dedup_auto_merge_enabled": false,
@@ -196,7 +196,7 @@ func TestUnknownConfigKeys_Paths(t *testing.T) {
 		"ROOT_DIR": "/case-insensitive-match",
 	}
 	got := unknownConfigKeys(payload)
-	want := []string{"dedup.auto_merge_enabld", "dedup_auto_merge_enabled", "metadata_sources[0].bogus"}
+	want := []string{"ROOT_DIR", "dedup.auto_merge_enabld", "dedup_auto_merge_enabled", "metadata_sources[0].bogus"}
 	if !slices.Equal(got, want) {
 		t.Errorf("unknownConfigKeys = %v, want %v", got, want)
 	}
@@ -266,7 +266,7 @@ func TestUpdateService_NestedKeysStillApply(t *testing.T) {
 
 	Mutate(func(c *Config) { c.Dedup.EmbeddingsEnabled = true })
 	updates := map[string]any{"dedup": map[string]any{"embeddings_enabled": false}}
-	if err := service.ApplyUpdates(context.Background(), updates); err != nil {
+	if err := service.ApplyUpdates(sessionCtx(), updates); err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
 
