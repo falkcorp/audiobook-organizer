@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
@@ -317,6 +319,23 @@ func TestFragmentFixer_CopyContentProof(t *testing.T) {
 		out := f.apply(t, "op-plan", "op-apply", []string{m.RowID}, nil)
 		require.Zero(t, out.Applied, "%+v", out.Rows)
 		require.Equal(t, repairs.OutcomeNotApplicable, out.Rows[0].Outcome)
+		require.True(t, f.live(t, "libA"))
+	})
+
+	t.Run("a claimant whose own row carries an iTunes path shows the proof on its manual-only row", func(t *testing.T) {
+		t.Parallel()
+		f := copyClaimantsFixture(t, false)
+		linkParentToITunes(t, f)
+		f.writeSame(t, "same", hpParent, hpLibA, hpLibB)
+		f.updateRow(t, f.ids["libA"], f.rowIDs["libA"], func(r *database.BookFile) {
+			r.ITunesPath = "file://localhost/W:/itunes/iTunes Media/Many Parts/02.mp3"
+		})
+		res := f.plan(t, "op-plan")
+		m := rowWithBook(t, res.Rows, f.ids["libA"])
+		require.False(t, m.Applicable(), "%s", m.RowID)
+		require.Contains(t, strings.Join(m.Evidence, "\n"), fragEvContentHashPrefix, "%s: %s", m.RowID, m.SkipReason)
+		out := f.apply(t, "op-plan", "op-apply", []string{m.RowID}, nil)
+		require.Zero(t, out.Applied, "%+v", out.Rows)
 		require.True(t, f.live(t, "libA"))
 	})
 }

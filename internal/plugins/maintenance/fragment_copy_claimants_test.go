@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_copy_claimants_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3f8b2c61-7d4e-4a19-9c05-e2b6a8d17f43
 // last-edited: 2026-10-06
 
