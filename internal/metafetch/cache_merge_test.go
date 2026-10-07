@@ -1,7 +1,7 @@
 // file: internal/metafetch/cache_merge_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 6f2d8a41-93c7-4e0b-b5a2-1d7c4e9f3a58
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 // The candidate fetch's provider fallback MERGES its answer into the book's
 // cached candidates (SearchOptions.MergeWithCached). These pin the rows a
@@ -209,7 +209,7 @@ func TestMergeCandidateRows_UsableFirst(t *testing.T) {
 	assert.Equal(t, []string{"Audible:Usable Example Two", "Open Library:Usable Example", "Audible:Rejected Example"}, candSources(t, got))
 
 	got = mergeCandidateRows([]json.RawMessage{usableLow}, []json.RawMessage{blocked, usableHigh}, nil)
-	assert.Equal(t, "Audible:Rejected Example", candSources(t, got)[0], "nil ranks by score alone")
+	assert.Equal(t, "Audible:Rejected Example", candSources(t, got)[0], "nil ranks review-only last, then by score: no review-only candidate here")
 }
 
 // CarryFromSourceHash is honored by every write, not only a merge: a chain
@@ -300,6 +300,32 @@ func TestCacheSearchResponse_RefetchRanksChainAboveReviewOnly(t *testing.T) {
 		Results:      []MetadataCandidate{{Source: "Audible", Title: mergeQuery, Score: 0.92}},
 		SourcesTried: []string{"Audible"}, SourcesAnswered: []string{"Audible"},
 		InputFingerprint: fp, mergeRank: reviewOnlyLast,
+	})
+	require.Equal(t, []string{"Audible:" + mergeQuery, "Google Books:" + mergeQuery}, candSources(t, got.Candidates))
+}
+
+// A refetch that passes NO MergeRank (the search dialog, the stale refetch,
+// the lost-candidates fixer, a single-book fetch) and keeps a fallback
+// provider's candidates still ranks a review-only candidate after the
+// chain's: a higher-scoring Google Books candidate must not take slot 0 --
+// the one bulk apply reads, and refuses as review-only -- over a usable
+// Audible answer.
+func TestCacheSearchResponse_NilRankRefetchKeepsChainFirst(t *testing.T) {
+	mfs := preserveFixture(t)
+	const fp = FingerprintPrefix + "same-questions-nil-rank"
+	require.NoError(t, mfs.db.PutMetadataCache(&database.MetadataCandidateCache{
+		BookID: mergeBookID, FetchedAt: time.Now().UTC().Add(-48 * time.Hour), SearchFingerprint: fp,
+		SourceHash: hashSearchInputs(mergeBookID, mergeQuery, mergeAuthor, "", ""),
+		Candidates: []json.RawMessage{mergeCand(t, "Google Books", mergeQuery, 0.99)},
+		FallbackAttempts: map[string]database.FallbackAttempt{
+			"Google Books": {At: time.Now().UTC(), Settled: true, Outcome: "matched"},
+		},
+	}))
+	got := mfs.cacheSearchResponse(mergeBookID, mergeQuery, mergeAuthor, "", "", &SearchMetadataResponse{
+		Results:          []MetadataCandidate{{Source: "Audible", Title: mergeQuery, Score: 0.92}},
+		SourcesTried:     []string{"Audible"},
+		SourcesAnswered:  []string{"Audible"},
+		InputFingerprint: fp,
 	})
 	require.Equal(t, []string{"Audible:" + mergeQuery, "Google Books:" + mergeQuery}, candSources(t, got.Candidates))
 }

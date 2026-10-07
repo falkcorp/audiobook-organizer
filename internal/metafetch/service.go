@@ -1,7 +1,7 @@
 // file: internal/metafetch/service.go
-// version: 5.47.3
+// version: 5.47.4
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 package metafetch
 
@@ -530,7 +530,8 @@ type SearchOptions struct {
 	// (below the floor, asin_conflict), then owner-rejected ones -- so the
 	// row's first candidate, the one the review list, bulk apply and the
 	// transcription auto-apply read, is the best one there is, and an
-	// owner-rejected candidate is the first to go. nil ranks by score alone.
+	// owner-rejected candidate is the first to go. nil ranks review-only
+	// candidates after every other, then by score (reviewOnlyLastRank).
 	MergeRank func(MetadataCandidate) int
 
 	// BypassFetchCache skips the per-source fetch-cache READ, so every

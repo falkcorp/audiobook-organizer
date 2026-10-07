@@ -1,7 +1,7 @@
 // file: internal/metafetch/cache.go
-// version: 1.29.3
+// version: 1.29.4
 // guid: a4f33a2e-3b4d-4306-bdce-476758e39120
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 //
 // Cache-layer on top of metafetch.Service. The persisted record type
 // lives in internal/database (MetadataCandidateCache) — re-exported
@@ -767,8 +767,8 @@ func (mfs *Service) lockRow(bookID string) func() {
 
 // mergeCandidateRows is the union of fresh and cached candidate rows,
 // deduplicated (the same source, title and ASIN keep the fresh row), ranked
-// by rank (lower first; nil = all equal, SearchOptions.MergeRank), then by
-// score, and capped at metadataCacheTopN. A row that does not decode is kept
+// by rank (lower first; SearchOptions.MergeRank; nil = reviewOnlyLastRank),
+// then by score, and capped at metadataCacheTopN. A row that does not decode is kept
 // after the ranked ones, as cacheSearchResponse's other paths keep it.
 //
 // The cap evicts from the bottom: undecodable rows first, then the
@@ -797,9 +797,11 @@ func mergeCandidateRows(fresh, cached []json.RawMessage, rank func(MetadataCandi
 				continue
 			}
 			seen[key] = true
-			rk := 0
+			var rk int
 			if rank != nil {
 				rk = rank(c)
+			} else {
+				rk = reviewOnlyLastRank(c)
 			}
 			rows = append(rows, ranked{raw: r, score: c.Score, rank: rk})
 		}
@@ -823,6 +825,23 @@ func mergeCandidateRows(fresh, cached []json.RawMessage, rank func(MetadataCandi
 		out = append(out, r.raw)
 	}
 	return out
+}
+
+// reviewOnlyLastRank is mergeCandidateRows' rank when the caller passed none
+// (SearchOptions.MergeRank nil): a review-only candidate (Open Library,
+// Google Books; IsReviewOnlyCandidateSource) after every other, score
+// ordering each tier. Only the batch fetch passes a ranker; every other
+// refetch of a row that carries a fallback provider's candidates (the
+// search dialog, the stale refetch, the lost-candidates fixer, a single-book
+// fetch) reached the merge with none, and ranking by score alone let a
+// higher-scoring Google Books candidate take slot 0 over a usable Audible
+// one -- and bulk apply, which reads slot 0, then refused the book as
+// review-only instead of applying the chain's answer.
+func reviewOnlyLastRank(c MetadataCandidate) int {
+	if IsReviewOnlyCandidateSource(c.Source) {
+		return 1
+	}
+	return 0
 }
 
 // fallbackAnswered is the sources with a settled fallback attempt that a
