@@ -1,7 +1,7 @@
 // file: web/src/components/library/LibraryBookGrid.tsx
-// version: 1.13.0
+// version: 1.14.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 import {
   Typography,
@@ -38,7 +38,7 @@ import type { ViewMode } from '../audiobooks/SearchBar';
 import type { ParsedSearch } from '../../utils/searchParser';
 import type { ImportPath } from '../../pages/libraryTypes';
 import { STORAGE_KEYS } from '../../lib/storageKeys';
-import { libraryContentState } from './libraryContentState';
+import { libraryContentState, queryErrorMessage } from './libraryContentState';
 import { isSortAvailable } from '../../config/columnDefinitions';
 
 // Sort keys offered by the grid-view "Sort by" control. These are SERVER sort
@@ -303,6 +303,7 @@ export const LibraryBookGrid = ({
           sortOrder={sortOrder === SortOrder.Ascending ? 'asc' : 'desc'}
           sortOptions={seriesFilterActive ? LIBRARY_SORT_OPTIONS : LIBRARY_SORT_OPTIONS_UNSCOPED}
           onSortChange={handleColumnSortChange}
+          searchErrorText={queryErrorMessage(loadError)}
         />
 
         {availableTags.length > 0 && (
@@ -410,7 +411,15 @@ export const LibraryBookGrid = ({
           </Box>
         )}
 
-        {audiobooks.length === 0 && !loading && searchQuery ? (
+        {queryErrorMessage(loadError) && !loading ? (
+          // A rejected query has no results — the list below would be the
+          // PREVIOUS query's books, which is the silent-wrong-answer this
+          // grammar exists to end. Say so instead.
+          <Alert severity="error" data-testid="library-query-error">
+            <AlertTitle>This search could not run</AlertTitle>
+            {queryErrorMessage(loadError)}
+          </Alert>
+        ) : audiobooks.length === 0 && !loading && searchQuery ? (
           <Paper sx={{ p: 4, textAlign: 'center' }}>
             <Typography
               variant="h6"

@@ -1,10 +1,24 @@
 // file: web/src/components/library/libraryContentState.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7e3a5c81-46bd-4f02-9c18-3d5b9e07a2f4
-// last-edited: 2026-08-08
+// last-edited: 2026-10-06
 
 /** Which of the three mutually-exclusive Library bodies to render. */
 export type LibraryContentState = 'reconnecting' | 'empty' | 'content';
+
+/**
+ * The message of a load that failed because the QUERY was rejected (HTTP 400:
+ * an invalid regex, a malformed comparison, an unknown field), or null.
+ *
+ * Such a failure is not "reconnecting" — nothing will retry it, and only the
+ * user can fix it — so the Library keeps the search bar on screen with this
+ * message under it, and shows it in place of the (stale) book list.
+ */
+export function queryErrorMessage(loadError?: Error | null): string | null {
+  if (!loadError) return null;
+  const status = (loadError as { status?: unknown }).status;
+  return status === 400 ? loadError.message || 'The search could not run.' : null;
+}
 
 /**
  * Decides what the Library shows when it has no books to display.
@@ -37,6 +51,10 @@ export function libraryContentState({
   // Anything to show, or a request still in flight — the normal body handles
   // both, including its own in-grid spinner.
   if (bookCount > 0 || loading) return 'content';
+  // The query was rejected. Render the normal body, which holds the search
+  // bar, so the user can see the error under it and fix the query; the
+  // 'reconnecting' panel would hide the very box that needs editing.
+  if (queryErrorMessage(loadError)) return 'content';
   // Settled, but it FAILED. Never claim emptiness on the strength of a request
   // that did not come back.
   if (loadError) return 'reconnecting';

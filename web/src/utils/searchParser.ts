@@ -1,6 +1,6 @@
 // file: web/src/utils/searchParser.ts
-// version: 1.3.0
-// last-edited: 2026-09-27
+// version: 1.4.0
+// last-edited: 2026-10-06
 // guid: ADC8CF65-5107-463A-891C-CABE8C1D74CF
 
 /**
@@ -9,6 +9,11 @@
  * Examples:
  *   author:"Joshua Dalzelle" tag:scifi NOT narrator:heitsch space marine
  *   -tag:romance great books
+ *   title:a*  -title:/^\s*\d/  year:[2015 TO 2020]
+ *
+ * Values are passed to the server VERBATIM (a /regex/ keeps its slashes) and
+ * evaluated there by internal/querygrammar — see web/src/utils/queryGrammar.ts
+ * for the grammar and the client-side pre-check.
  */
 
 export interface FieldFilter {
@@ -77,6 +82,9 @@ function isKnownField(field: string): boolean {
  * - Plain text: `hello world`
  * - Field filters: `author:smith`
  * - Quoted values: `author:"Joshua Dalzelle"`
+ * - Regex values: `title:/^\s*\p{L}/`, spaces allowed inside the slashes
+ *   (`title:/chapter \d+/`); an unterminated `/…` runs to the end of the input
+ *   so the server can report it rather than it silently vanishing
  * - NOT negation: `NOT narrator:heitsch`
  * - Dash negation: `-tag:romance`
  * - Mixed: `great books author:smith NOT tag:romance`
@@ -233,6 +241,33 @@ function tryMatchFieldValue(
       quoted: true,
       endPos: closeQuote + 1,
     };
+  }
+
+  // Regex — `title:/chapter \d+/` may contain spaces, so it runs to the next
+  // UNESCAPED slash, not the next space. The slashes stay in the value: the
+  // server decides regex-vs-text from them, and handleRemoveFilter rebuilds
+  // the token from the value. Anything glued after the closing slash (e.g. a
+  // `/x/i` flag) stays in the value too, so the server rejects it visibly
+  // instead of it leaking into free text. Unterminated: take the rest of the
+  // input, like an unclosed quote.
+  if (str[valueStart] === '/') {
+    let close = -1;
+    for (let i = valueStart + 1; i < str.length; i++) {
+      if (str[i] === '\\') {
+        i++;
+        continue;
+      }
+      if (str[i] === '/') {
+        close = i;
+        break;
+      }
+    }
+    if (close === -1) {
+      return { field, value: str.substring(valueStart), quoted: false, endPos: str.length };
+    }
+    let end = close + 1;
+    while (end < str.length && str[end] !== ' ') end++;
+    return { field, value: str.substring(valueStart, end), quoted: false, endPos: end };
   }
 
   // Bracketed range — `duration:[10m TO 2h]` contains spaces, so it runs to

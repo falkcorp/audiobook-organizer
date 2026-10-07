@@ -1,6 +1,6 @@
 // file: web/src/components/audiobooks/SearchBar.tsx
-// version: 2.7.0
-// last-edited: 2026-09-27
+// version: 2.8.0
+// last-edited: 2026-10-06
 // guid: 1d2e3f4a-5b6c-7d8e-9f0a-1b2c3d4e5f6a
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -33,6 +33,7 @@ import {
   ArrowDownward as ArrowDownwardIcon,
 } from '@mui/icons-material';
 import { parseSearch, SEARCH_FIELDS, type ParsedSearch } from '../../utils/searchParser';
+import { firstSearchError } from '../../utils/queryGrammar';
 import { STORAGE_KEYS } from '../../lib/storageKeys';
 
 export type ViewMode = 'grid' | 'list';
@@ -113,7 +114,6 @@ const SEARCH_HELP = [
   { example: 'series:Mistborn', desc: 'Books in a series' },
   { example: 'narrator:Kramer', desc: 'Books by narrator' },
   { example: 'tag:favorites', desc: 'Books with a tag' },
-  { example: '-tag:read', desc: 'Exclude a tag' },
   { example: 'format:m4b', desc: 'Filter by file format' },
   { example: 'has_cover:yes', desc: 'Books with cover art' },
   { example: 'has_cover:no', desc: 'Books missing cover art' },
@@ -128,7 +128,7 @@ const SEARCH_HELP = [
   { example: 'library_state:imported', desc: 'Imported but not organized' },
   { example: 'library_state:suspicious', desc: 'Suspicious / incomplete files' },
   { example: 'language:en', desc: 'Filter by language' },
-  { example: 'year:2024', desc: 'Published in a year' },
+  { example: 'year:2024', desc: 'Published in a year (print or audiobook release year)' },
   { example: 'NOT author:Unknown', desc: 'Exclude a field value' },
   { example: 'quality:320kbps', desc: 'Filter by audio quality' },
   { example: 'publisher:Audible', desc: 'Filter by publisher' },
@@ -150,13 +150,24 @@ const SEARCH_HELP = [
   { example: 'read_status:in_progress', desc: "Books you're reading" },
   { example: '-read_status:finished', desc: 'Unfinished books' },
   { example: 'progress_pct:>75', desc: 'Nearly finished books' },
-  // Advanced DSL operators
-  { example: 'author:sanderson || author:jemisin', desc: 'OR — match either author' },
-  { example: 'year:>2020', desc: 'Published after 2020' },
-  { example: 'year:[2015 TO 2020]', desc: 'Year range' },
-  { example: 'title:vamp*', desc: 'Prefix wildcard' },
-  { example: 'author:smith~', desc: 'Fuzzy match (~2 edit distance)' },
-  { example: 'format:(m4b|mp3)', desc: 'Match either value' },
+  // Value syntax — the same in every field:value filter (and in the Review
+  // Title filter). Evaluated server-side over the whole library. Only syntax
+  // that actually works belongs here; OR (||), fuzzy (~) and (a|b) groups
+  // were listed until 2026-10-06 and never worked on a field filter.
+  { example: 'title:a*', desc: 'Wildcard: title starts with "a" (* = anything; matches the whole title)' },
+  { example: 'title:*saga', desc: 'Wildcard: title ends with "saga"' },
+  { example: 'title:/^\\s*\\p{L}/', desc: 'Regex (RE2, case-insensitive): title starts with a letter' },
+  {
+    example: '-title:/^\\s*\\d/',
+    desc: 'Exclude titles starting with a digit — negate any filter with - or NOT (RE2 has no lookahead)',
+  },
+  { example: 'author:/sanderson|jemisin/', desc: 'Regex alternation: either author' },
+  { example: 'format:/^(m4b|mp3)$/', desc: 'Regex: format is exactly m4b or mp3' },
+  { example: 'title:"a*"', desc: 'Quotes = literal text: no wildcard, regex or comparison' },
+  { example: 'narrator:*', desc: 'Has a narrator (-narrator:* = no narrator)' },
+  { example: 'year:>2020', desc: 'Published after 2020 (also >=, <, <=, !=)' },
+  { example: 'year:[2015 TO 2020]', desc: 'Year range, inclusive (* leaves a side open)' },
+  { example: 'bitrate:<64', desc: 'Low bitrate (unknown bitrate never matches a comparison)' },
 ];
 
 export interface SortOption {
@@ -183,6 +194,12 @@ interface SearchBarProps {
    * happens before pagination on the backend, never on the current page.
    */
   onSortChange?: (sortKey: string, order: 'asc' | 'desc') => void;
+  /**
+   * The server's rejection of the current query (a 400 naming the bad token,
+   * e.g. an invalid regex). Shown under the box. A client-side pre-check of
+   * the same grammar (firstSearchError) is shown first, while typing.
+   */
+  errorText?: string | null;
 }
 
 export const SearchBar: React.FC<SearchBarProps> = ({
@@ -196,8 +213,15 @@ export const SearchBar: React.FC<SearchBarProps> = ({
   sortOrder = 'asc',
   sortOptions,
   onSortChange,
+  errorText,
 }) => {
   const parsed = useMemo(() => parseSearch(value), [value]);
+  // Never let a bad query fail quietly: the client pre-check names what it
+  // can be certain of, the server's 400 names the rest.
+  const shownError = useMemo(
+    () => firstSearchError(parsed.fieldFilters) ?? (errorText || null),
+    [parsed, errorText]
+  );
   const [helpOpen, setHelpOpen] = useState(false);
   const [recentSearches, setRecentSearches] = useState<string[]>(getRecentSearches);
   const helpAnchorRef = useRef<HTMLButtonElement>(null);
@@ -284,6 +308,8 @@ export const SearchBar: React.FC<SearchBarProps> = ({
               {...params}
               placeholder={placeholder}
               onKeyDown={handleKeyDown}
+              error={!!shownError}
+              helperText={shownError ?? undefined}
               slotProps={{
                 ...params.slotProps,
 
@@ -441,7 +467,9 @@ export const SearchBar: React.FC<SearchBarProps> = ({
               mb: 1.5,
             }}
           >
-            Type free text to search titles, or use field filters:
+            Type free text to search titles, or use field filters. Every field value works the same
+            way: word = contains, &quot;quoted&quot; = exact text, a* = wildcard, /regex/ = RE2
+            regular expression (case-insensitive). Prefix - or NOT to exclude.
           </Typography>
 
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>

@@ -1,7 +1,7 @@
 // file: web/src/hooks/useLibraryQuery.ts
-// version: 1.11.0
+// version: 1.12.0
 // guid: d4e5f6a7-b8c9-0123-def0-123456789003
-// last-edited: 2026-09-27
+// last-edited: 2026-10-06
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -73,7 +73,12 @@ interface UseLibraryQueryParams {
   setImportPaths: React.Dispatch<React.SetStateAction<ImportPath[]>>;
   navigate: ReturnType<typeof useNavigate>;
   toast: (message: string, severity?: 'success' | 'error' | 'warning' | 'info', action?: { label: string; onClick: () => void }) => void;
-  buildFieldFilters: () => Array<{ field: string; value: string; negated: boolean }>;
+  buildFieldFilters: () => Array<{
+    field: string;
+    value: string;
+    negated: boolean;
+    quoted?: boolean;
+  }>;
   convertBook: (book: api.Book) => Audiobook;
 }
 
@@ -359,17 +364,15 @@ export function useLibraryQuery({
       }
       if (error instanceof api.ApiError && error.status >= 500) {
         toast('Server error occurred.', 'error');
-      } else if (error instanceof api.ApiError && error.status === 400) {
-        // The list endpoint rejects narrowing bugs — empty filter values,
-        // unknown filter fields, bare filter params — with a 400 whose message
-        // names the offending field and the fix. Burying that in the console
-        // leaves the user with a silent, non-retrying dead page (G118). No
-        // current UI path can produce these requests (dropdowns are
-        // truthiness-guarded, the search parser drops empty values, presets
-        // flow through the same guards), so this surfaces stale bundles and
-        // future regressions, not routine use.
-        toast(error.message, 'warning');
       }
+      // A 400 is a rejected QUERY — an invalid /regex/, a malformed
+      // comparison, an empty value, an unknown field — and its message names
+      // the token. It is deliberately NOT toasted: with regex in the grammar,
+      // every debounced pause while typing `/^\s*` produces one, and a toast
+      // per keystroke pause is noise. loadError carries the message to the
+      // search bar's helper text and to an error panel in place of the book
+      // list (see queryErrorMessage), where it stays until the query is fixed
+      // — never a silent dead page (G118).
       const message = error instanceof Error ? error.message : 'Failed to load audiobooks.';
       if (message.toLowerCase().includes('timeout')) {
         toast('Request timed out.', 'error');

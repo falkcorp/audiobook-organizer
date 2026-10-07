@@ -1,7 +1,7 @@
 // file: web/src/pages/Library.tsx
-// version: 1.100.0
+// version: 1.101.1
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -842,24 +842,42 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
   }, []);
 
   const buildFieldFilters = useCallback(() => {
-    const fieldFilters: Array<{ field: string; value: string; negated: boolean }> = [];
+    const fieldFilters: Array<{ field: string; value: string; negated: boolean; quoted?: boolean }> =
+      [];
+    // Sidebar picks are exact names chosen from a list, so they go quoted
+    // (literal): a name containing * or starting with / must never be read
+    // as a wildcard or a regex.
     if (filters.author)
-      fieldFilters.push({ field: 'author', value: filters.author, negated: false });
+      fieldFilters.push({ field: 'author', value: filters.author, negated: false, quoted: true });
     if (filters.series)
-      fieldFilters.push({ field: 'series', value: filters.series, negated: false });
-    if (filters.genre) fieldFilters.push({ field: 'genre', value: filters.genre, negated: false });
+      fieldFilters.push({ field: 'series', value: filters.series, negated: false, quoted: true });
+    if (filters.genre)
+      fieldFilters.push({ field: 'genre', value: filters.genre, negated: false, quoted: true });
     if (filters.language)
-      fieldFilters.push({ field: 'language', value: filters.language, negated: false });
+      fieldFilters.push({
+        field: 'language',
+        value: filters.language,
+        negated: false,
+        quoted: true,
+      });
     if (filters.versionGroupId)
       fieldFilters.push({
         field: 'version_group_id',
         value: filters.versionGroupId,
         negated: false,
+        quoted: true,
       });
     if (parsedSearch) {
       for (const ff of parsedSearch.fieldFilters) {
+        // quoted travels to the server: title:"a*" is literal text, while
+        // title:a* is a wildcard (see internal/querygrammar).
         if (ff.field !== 'tag')
-          fieldFilters.push({ field: ff.field, value: ff.value, negated: ff.negated });
+          fieldFilters.push({
+            field: ff.field,
+            value: ff.value,
+            negated: ff.negated,
+            ...(ff.quoted ? { quoted: true } : {}),
+          });
       }
     }
     return fieldFilters;

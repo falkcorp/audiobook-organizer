@@ -1,7 +1,7 @@
 // file: web/src/hooks/useLibraryQuery.test.ts
-// version: 1.4.0
+// version: 1.5.0
 // guid: 7c8d9e0f-1a2b-4c5d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-09-27
+// last-edited: 2026-10-06
 
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { vi, describe, test, expect, beforeEach } from 'vitest';
@@ -228,7 +228,7 @@ describe('useLibraryQuery 400 handling (G118)', () => {
     vi.mocked(api.getImportPaths).mockResolvedValue([]);
   });
 
-  test('a 400 from the filter guards surfaces the server message as a toast', async () => {
+  test('a 400 from the filter guards sets loadError (shown under the search bar), without a toast', async () => {
     const serverMessage =
       'filter on "title" has an empty value; an empty value matches every book rather than narrowing the results.';
     // vi.mock('../services/api') automocks ApiError too: its instances pass
@@ -248,9 +248,15 @@ describe('useLibraryQuery 400 handling (G118)', () => {
     // The guard's message names the field and the fix — it must reach the
     // user, not just the console (before this, a 400 rendered as a silent
     // non-retrying dead page).
-    await waitFor(() => expect(toast).toHaveBeenCalledWith(serverMessage, 'warning'));
     // And a 4xx is not transient: no retry may be pending.
     expect(result.current.isRetrying).toBe(false);
+    // loadError stays set for the search bar's helper text and the error
+    // panel (it must outlive the toast until the query is fixed). The
+    // automocked ApiError is not an Error subclass, so its identity is not
+    // asserted here; queryErrorMessage's own tests cover status 400.
+    await waitFor(() => expect(result.current.loadError).not.toBeNull());
+    // Not toasted: typing a regex produces a 400 at every debounced pause.
+    expect(toast).not.toHaveBeenCalled();
   });
 });
 

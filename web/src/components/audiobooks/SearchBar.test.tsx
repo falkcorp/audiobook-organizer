@@ -1,6 +1,6 @@
 // file: web/src/components/audiobooks/SearchBar.test.tsx
-// version: 1.2.0
-// last-edited: 2026-09-27
+// version: 1.3.0
+// last-edited: 2026-10-06
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, fireEvent, waitFor } from '@testing-library/react';
@@ -239,5 +239,39 @@ describe('SearchBar', () => {
       const stored = JSON.parse(localStorage.getItem('library_recent_searches') || '[]');
       expect(stored).toHaveLength(0);
     });
+  });
+});
+
+describe('SearchBar: query errors are visible (2026-10-06)', () => {
+  it('shows the server error under the box', () => {
+    renderWithProviders(
+      <SearchBar
+        {...defaultProps({
+          value: 'title:/(?=x)/',
+          errorText: 'invalid filter value: title:/(?=x)/ — RE2 has no lookahead',
+        })}
+      />
+    );
+    expect(screen.getByText(/RE2 has no lookahead/)).toBeInTheDocument();
+  });
+
+  it('shows a client pre-check error for an unterminated regex while typing', () => {
+    renderWithProviders(<SearchBar {...defaultProps({ value: 'title:/^abc' })} />);
+    expect(screen.getByText(/has no closing \//)).toBeInTheDocument();
+  });
+
+  it('shows no error for a valid regex', () => {
+    renderWithProviders(<SearchBar {...defaultProps({ value: 'title:/^\\s*\\p{L}/' })} />);
+    expect(screen.queryByText(/invalid regex|no closing/)).not.toBeInTheDocument();
+  });
+
+  it('help lists only syntax that works: no OR, fuzzy, or (a|b) groups', () => {
+    renderWithProviders(<SearchBar {...defaultProps()} />);
+    fireEvent.click(screen.getByLabelText('Search help'));
+    expect(screen.getByText('title:a*')).toBeInTheDocument();
+    expect(screen.getByText('-title:/^\\s*\\d/')).toBeInTheDocument();
+    expect(screen.queryByText(/\|\|/)).not.toBeInTheDocument();
+    expect(screen.queryByText('author:smith~')).not.toBeInTheDocument();
+    expect(screen.queryByText('format:(m4b|mp3)')).not.toBeInTheDocument();
   });
 });
