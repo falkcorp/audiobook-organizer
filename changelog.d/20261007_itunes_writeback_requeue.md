@@ -8,8 +8,11 @@ fixed batcher. Both are gated like `/writeback/held/release` and are dry runs
 unless the body sends `"dry_run": false`.
 
 - `POST /api/v1/itunes/writeback/requeue` takes `{"dry_run", "book_ids",
-  "kinds", "limit"}`. `limit` queues the first N selected books by id, so a
-  large delta can be fed to the batcher in chunks. It plans every primary book with the flush's own planner, and
+  "kinds", "limit", "after_id"}`. `limit` and the `after_id` cursor feed a
+  large delta to the batcher in chunks. Books already pending are skipped
+  before the limit applies, so a chunk the batcher keeps queued (dry-run mode)
+  is not picked again. The response reports `skipped_pending` and
+  `next_after_id`. It plans every primary book with the flush's own planner, and
   selects books where a track already in the library differs in metadata or
   location. The dry run returns counts and a 50-book sample. An explicit
   `false` queues the selected book ids. Library tracks no book claims, and DB

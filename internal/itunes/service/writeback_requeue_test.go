@@ -1,5 +1,5 @@
 // file: internal/itunes/service/writeback_requeue_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3e9b5d71-6a2c-4f08-8b4e-d1c7a5f2e9b3
 // last-edited: 2026-10-07
 //
@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -174,31 +175,93 @@ func TestPlanRequeue_Subset(t *testing.T) {
 	}
 }
 
-// The requeue selection and the flush must agree: a book PlanRequeue does not
-// select produces no update in planBookWrite for any track in the library.
-func TestPlanRequeue_AgreesWithFlushPlanner(t *testing.T) {
+// The requeue preview and the flush must agree. Every primary book of the
+// fixture is flushed through the real drainFlush (only the parse and the
+// apply are stubbed). The ops the flush emits for tracks already in the
+// library must be exactly the changes PlanRequeue reports. Its emitted ops for
+// PIDs missing from the library must match ignored_add_tracks.
+func TestPlanRequeue_MatchesWhatTheFlushWrites(t *testing.T) {
 	store, lib := requeueFixture(t)
-	tracks := TracksByPID(lib)
 	plan, err := PlanRequeue(context.Background(), store, lib, RequeueOptions{Metadata: true, Location: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	selected := map[string]bool{}
-	for _, id := range plan.SelectedBookIDs {
-		selected[id] = true
+
+	withFakeParseITLHook(t, lib, nil)
+	var captured itunes.ITLOperationSet
+	applyCalls := 0
+	withFakeITLHooks(t,
+		func(string) error { return nil },
+		func(in, out string, ops itunes.ITLOperationSet) (*itunes.ITLWriteBackResult, error) {
+			applyCalls++
+			captured = ops
+			data, _ := os.ReadFile(in)
+			_ = os.WriteFile(out, data, 0o644)
+			return &itunes.ITLWriteBackResult{OutputPath: out}, nil
+		},
+	)
+	b := &WriteBackBatcher{
+		pendingBooks:        map[string]bool{"bk-a": true, "bk-b": true, "bk-c": true, "bk-d": true},
+		pendingRemoves:      map[string]bool{},
+		autoWriteBack:       true,
+		itlWriteBackEnabled: true,
+		libraryWritePath:    makeITL(t, t.TempDir(), "library.itl", "x"),
+		store:               store,
 	}
-	for _, id := range []string{"bk-a", "bk-b", "bk-c", "bk-d"} {
-		b, _ := store.GetBookByID(id)
-		p := planBookWrite(store, b, tracks)
-		inLib := 0
-		for _, ch := range p.Changes {
-			if ch.Current != nil {
-				inLib++
+	b.flush()
+	if applyCalls != 1 {
+		t.Fatalf("flush apply calls %d, want 1", applyCalls)
+	}
+	if len(captured.Adds) != 0 || len(captured.Removes) != 0 {
+		t.Fatalf("flush emitted adds/removes: %+v", captured)
+	}
+
+	tracks := TracksByPID(lib)
+	type key struct{ kind, pid, value string }
+	flushInLib := map[key]bool{}
+	flushAbsent := map[string]bool{}
+	for _, m := range captured.MetadataUpdates {
+		pid := strings.ToLower(m.PersistentID)
+		if _, ok := tracks[pid]; !ok {
+			flushAbsent[pid] = true
+			continue
+		}
+		flushInLib[key{"meta", pid, m.Name + "|" + m.Album + "|" + m.Artist + "|" + m.Genre}] = true
+	}
+	for _, l := range captured.LocationUpdates {
+		pid := strings.ToLower(l.PersistentID)
+		if _, ok := tracks[pid]; !ok {
+			flushAbsent[pid] = true
+			continue
+		}
+		flushInLib[key{"loc", pid, l.NewLocation}] = true
+	}
+
+	planned := map[key]bool{}
+	for _, sb := range plan.Sample {
+		for _, tr := range sb.Tracks {
+			if tr.Metadata != nil {
+				to := tr.Metadata.To
+				planned[key{"meta", tr.PID, to.Name + "|" + to.Album + "|" + to.Artist + "|" + to.Genre}] = true
+			}
+			if tr.Location != nil {
+				planned[key{"loc", tr.PID, tr.Location.To}] = true
 			}
 		}
-		if (inLib > 0) != selected[id] {
-			t.Errorf("%s: flush would write %d library tracks, selected=%v", id, inLib, selected[id])
-		}
+	}
+	// Guard against an empty == empty pass: the fixture has one metadata
+	// change (bk-b) and one location change (bk-c).
+	if len(flushInLib) != 2 {
+		t.Fatalf("flush wrote %d library-track ops, want 2: %v", len(flushInLib), flushInLib)
+	}
+	if !reflect.DeepEqual(flushInLib, planned) {
+		t.Errorf("flush wrote %v\nplan reported %v", flushInLib, planned)
+	}
+	if plan.TrackMetadataChanges+plan.TrackLocationChanges != len(flushInLib) {
+		t.Errorf("plan track counts %d+%d, flush wrote %d library-track ops", plan.TrackMetadataChanges, plan.TrackLocationChanges, len(flushInLib))
+	}
+	if len(flushAbsent) != plan.IgnoredAddTracks {
+		t.Errorf("flush wrote ops for %d absent PIDs, plan ignored_add_tracks=%d", len(flushAbsent), plan.IgnoredAddTracks)
 	}
 }
 
@@ -258,6 +321,7 @@ func removeFixture(t *testing.T) (*database.MockStore, *itunes.ITLLibrary) {
 		fixtureTrack(t, "00000000000000b2", "Loser Two", `W:\L\2.m4b`),
 		fixtureTrack(t, "00000000000000b3", "Loser Three", `W:\L\3.m4b`),
 		fixtureTrack(t, "00000000000000b5", "Winner", `W:\W\5.m4b`),
+		fixtureTrack(t, "00000000000000b6", "Non-primary", `W:\N\6.m4b`),
 	}}
 	pid5 := "00000000000000B5"
 	books := map[string]*database.Book{
@@ -265,11 +329,17 @@ func removeFixture(t *testing.T) (*database.MockStore, *itunes.ITLLibrary) {
 		"bk-w":    {ID: "bk-w", Title: "Winner", ITunesPersistentID: &pid5},
 		"bk-live": {ID: "bk-live", Title: "Live primary"},
 		"bk-o":    {ID: "bk-o", Title: "Other live"},
+		// Live (not soft-deleted) but explicitly non-primary: a merged-away
+		// version that was never deleted.
+		"bk-np": {ID: "bk-np", Title: "Non-primary", IsPrimaryVersion: boolp(false)},
 	}
-	tomb := map[string]bool{"00000000000000B1": true, "00000000000000B3": true, "00000000000000B4": true, "00000000000000B5": true}
+	tomb := map[string]bool{"00000000000000B1": true, "00000000000000B3": true, "00000000000000B4": true, "00000000000000B5": true, "00000000000000B6": true}
 	store := &database.MockStore{
 		GetBookByIDFunc: func(id string) (*database.Book, error) { return books[id], nil },
 		GetBookFilesFunc: func(id string) ([]database.BookFile, error) {
+			if id == "bk-np" {
+				return []database.BookFile{{BookID: "bk-np", ITunesPersistentID: "00000000000000B6"}}, nil
+			}
 			if id != "bk-l" {
 				return nil, nil
 			}
@@ -324,6 +394,16 @@ func TestPlanRemoveRequeue_OnlyExplicitEligibleLoserPIDs(t *testing.T) {
 	}
 	if plan.Books[1].Refused == "" || plan.Books[2].Refused == "" {
 		t.Errorf("live primary and missing book must be refused: %+v", plan.Books[1:])
+	}
+
+	// A live, explicitly non-primary loser is accepted; its tombstoned PID is
+	// eligible.
+	np, err := b.PlanRemoveRequeue(store, lib, []string{"bk-np"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if np.Books[0].Refused != "" || !reflect.DeepEqual(np.EligiblePIDs, []string{"00000000000000b6"}) {
+		t.Errorf("non-primary loser: %+v", np)
 	}
 
 	if _, err := b.PlanRemoveRequeue(store, lib, nil); !errors.Is(err, ErrRemoveRequeueRequest) {
