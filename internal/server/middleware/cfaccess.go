@@ -1,5 +1,5 @@
 // file: internal/server/middleware/cfaccess.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 8d1a4f92-3c07-4b56-9e28-6a0b5c2e7d41
 // last-edited: 2026-10-07
 
@@ -35,6 +35,13 @@ func NewCFAccessAuthenticator(verifier *oauth.CFAccessVerifier, cfg *oauth.Confi
 		a.verifier = verifier
 	}
 	return a
+}
+
+// NewCFAccessAuthenticatorWithVerifier is NewCFAccessAuthenticator for any
+// CFAssertionVerifier (a test's fake). A nil verifier makes the middleware a
+// pass-through.
+func NewCFAccessAuthenticatorWithVerifier(verifier CFAssertionVerifier, cfg *oauth.Config, store cfAccessStore) *CFAccessAuthenticator {
+	return &CFAccessAuthenticator{verifier: verifier, cfg: cfg, store: store}
 }
 
 // CloudflareAccessAuth returns a middleware that, when a valid Cf-Access-Jwt-Assertion

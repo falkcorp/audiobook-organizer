@@ -1,7 +1,7 @@
 // file: internal/server/itl_rebuild.go
-// version: 3.4.0
+// version: 3.5.0
 // guid: 8f7e6d5c-4b3a-2c1d-0e9f-8a7b6c5d4e3f
-// last-edited: 2026-07-23
+// last-edited: 2026-10-07
 //
 // iTunes library rebuild service: diffs the current DB state
 // against the current ITL file and computes the minimal set of
@@ -79,7 +79,7 @@ func (s *Server) rebuildITLHandler(c *gin.Context) {
 		return
 	}
 
-	dryRun := c.Query("dry_run") == "true"
+	dryRun := itunesPreviewOnly(c)
 	if dryRun {
 		httputil.RespondWithOK(c, struct {
 			DryRun  bool                      `json:"dry_run"`
@@ -140,7 +140,7 @@ func (s *Server) rebuildITLFullHandler(c *gin.Context) {
 		return
 	}
 
-	dryRun := c.Query("dry_run") == "true"
+	dryRun := itunesPreviewOnly(c)
 	store := s.storeForWiring()
 
 	if dryRun {

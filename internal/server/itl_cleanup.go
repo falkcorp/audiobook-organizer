@@ -1,7 +1,7 @@
 // file: internal/server/itl_cleanup.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 1e8b3d47-6a02-4c9f-b73e-2d5a0f8c1b96
-// last-edited: 2026-09-10
+// last-edited: 2026-10-07
 //
 // P3 merged-track cleanup handler: measures stale duplicate audiobook tracks
 // left in the library by merged/superseded books. dry_run=true previews the
@@ -43,7 +43,7 @@ const cleanupMergedApplyRetiredMessage = "cleanup-merged apply is retired (P3 de
 // parses the .itl file), so a missing or unreadable .itl file can never turn
 // the refusal into a 500 — an apply request is refused, never "failed".
 func (s *Server) cleanupMergedHandler(c *gin.Context) {
-	if c.Query("dry_run") != "true" {
+	if !itunesPreviewOnly(c) {
 		httputil.RespondWithSuccess(c, http.StatusGone, gin.H{
 			"applied": false,
 			"error":   cleanupMergedApplyRetiredMessage,

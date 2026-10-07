@@ -1,5 +1,5 @@
 <!-- file: docs/plans/2026-10-07-apikey-expiry-and-privilege.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 67c7aa4f-72e2-4a9c-805a-92fff01c3308 -->
 <!-- last-edited: 2026-10-07 -->
 
@@ -211,6 +211,42 @@ expiry to clamp to. Same re-audit, same class: ABS `/api/authorize` minted an
 ABS access token for a request authenticated by an `abk_` key (a second bearer
 credential with its own lifetime); it now echoes the presented key.
 
+**Finding 4, the owner check (`internal/auth/owner.go`, second review).**
+Audited against: the email compared with different case, trimming or Unicode
+handling on one side; the email taken from a header instead of the verified
+claims; the JWT accepted without its signature, `iss`, `aud` or `exp`, or with
+a fallback; an empty owner matching an empty claim; the method taken without
+the key winning; a grant minted by one request and redeemed by another
+identity. Two were real:
+- **Unicode folding.** `OwnerProofWhyNot` compared with `strings.EqualFold`,
+  which applies Unicode simple folding: U+212A KELVIN SIGN equals "k" and
+  U+017F LONG S equals "s". A different IdP account named
+  `\u212Aate@example.test` passed as the owner `kate@example.test`, and the
+  sign-in allowlist (`strings.ToLower`) admits it too. Fix: `auth.IsOwnerEmail`
+  compares printable ASCII only, ASCII case only; the signed claim is never
+  trimmed (`WithAccessEmail` stores it as signed), the configured value has
+  only ASCII spaces removed, and an empty side refuses. Tests:
+  `TestIsOwnerEmail`, `TestOwnerProofWhyNot_UnicodeLookalikeRefused`, and a
+  look-alike JWT through the real Access middleware in
+  `TestOwnerProof_OnlyAVerifiedAccessJWT`; each failed on the old code.
+- **Grant redemption not bound to the redeemer.** The grant token rides in
+  the op params, and `ResolveOwnerApproval` checked fixer, plan and rows but
+  not who ran the op, so any caller who obtained the token could redeem it in
+  an op of their own, and a grant outlived an `owner_email` change. Fix:
+  `ResolveOwnerApproval` takes a `repairs.OwnerRedeemer`; the grant redeems
+  only when the op's `ActorUserID` is the user it was minted for, the row was
+  never resumed or retried in place (`RetryInterrupted` keeps the row's
+  actor whoever clicks Retry), and its Access email still passes
+  `auth.IsOwnerEmail` against the current `owner_email`. A refused grant is
+  still consumed. Tests: `TestResolveOwnerApproval_BoundToRedeemer` and the
+  copied-grant subtest of `TestFragmentFixer_OwnerApply`; both failed with
+  the checks removed.
+
+Clean: go-oidc checks the signature, `iss`, `aud` and `exp` with no fallback
+(`oauth.NewCFAccessVerifier`); the email comes only from the verified claims;
+an unset owner refuses; an API key wins (D12); `EmailVerified` is always true
+from Access and `ResolveUser` checks it.
+
 **D13. Settings that name an executable, a path the server opens or runs, or
 the database location need an interactive session, like sign-in settings; a
 same-value round trip is allowed.** One classification,
@@ -239,7 +275,8 @@ patterns, plugin on/off. See Remaining risk for the outbound endpoints.
 Owner-only actions (Repairs owner apply, and the `OwnerITunesDatabaseOnly`
 guard exception that applies only under an owner grant) need a request that
 carries a VERIFIED Cloudflare Access JWT whose email equals the new
-`owner_email` setting, case-insensitively. Password, OAuth, temp-login and
+`owner_email` setting, ASCII letters compared without case and nothing else
+(`auth.IsOwnerEmail`; see Finding 4). Password, OAuth, temp-login and
 invite sessions keep working for everything else but are not the owner. The
 unsigned `Cf-Access-Authenticated-User-Email` header never counts: the Access
 middleware records the email from the verified claims
@@ -268,6 +305,56 @@ records an API-key identity as `api_key` (it used to be `abs`).
 **Why:** the stronger fact about the request is that automation's credential is
 on it; recording it as the person's Access login would hand a key the
 person's standing.
+
+**D14. iTunes library actions that remove, overwrite or repoint tracks, or
+turn off the library's safety checks, are owner-only (coordinator, 2026-10-07,
+after #3822 added `POST /itunes/writeback/held/release`).**
+They are registered only through `s.ownerRoute` (`internal/server/owner_routes.go`),
+which attaches one shared gate, `servermiddleware.RequireOwner`: the D11 owner
+proof (so an API key, password, SSO, temp-login or invite session is always
+refused) plus `integrations.manage`. `owner_email` is read per request, and
+the gate is not skipped when local auth is off (fail closed, as owner apply;
+an install with auth off has no owner). Each allowed request is logged with
+the route, user, Access email and method; the held-release handler also logs
+`limit`, `released` and `still_held`.
+**Permission:** `integrations.manage` is the one the other whole-library
+iTunes endpoints (library upload, restore, download, backups,
+export-partial) already used, and it is admin-level: `editorPermissions()`
+in `internal/auth/seed.go` leaves it out. These routes used
+`library.edit_metadata`, which the editor role holds, so editors lose them.
+**Preview vs apply:** the four routes with a dry run keep their preview open
+at the old permission. The gate and the handlers read `dry_run` through one
+helper, `itunesPreviewOnly` (`dry_run=true` exactly), so they cannot
+disagree about a request; anything else, `TRUE`, `1` or absent, is an apply.
+
+| Route | Before | Now | Why |
+|---|---|---|---|
+| `POST /itunes/writeback/held/release` | `library.edit_metadata` | owner + `integrations.manage` | releases held mass removes (over 50 track removes in one flush) into the queue |
+| `POST /itunes/write-back-all` | `library.edit_metadata` | owner + `integrations.manage` | rewrites every linked book's track location; no preview |
+| `POST /itunes/write-back` | `library.edit_metadata` | owner + `integrations.manage` | takes caller-chosen `path_mappings` and repoints the named books' tracks: relocate under another name |
+| `POST /itunes/adopt-base` | `library.edit_metadata` | owner + `integrations.manage` | re-blesses the identity sidecar, turning off the K13/K14 wrong-library guard |
+| `POST /itunes/library/upload` | `integrations.manage` (key could) | owner + `integrations.manage` | `install=true` replaces the live library file |
+| `POST /itunes/library/restore` | `integrations.manage` (key could) | owner + `integrations.manage` | replaces the live library file with a backup |
+| `POST /itunes/rebuild` | `library.edit_metadata` | apply: owner + `integrations.manage`; preview unchanged | the diff rebuild applies removes |
+| `POST /itunes/rebuild-full` | `library.edit_metadata` | apply: owner; preview unchanged | strips every track and re-inserts |
+| `POST /itunes/relocate` | `library.edit_metadata` | apply: owner; preview unchanged | repoints every linked track |
+| `POST /itunes/cleanup-merged` | `library.edit_metadata` | apply: owner; preview unchanged | the apply is retired in the handler (410 for everyone); gated so re-enabling it cannot skip the owner |
+| `POST /itunes/validate`, `/test-mapping`, `/write-back/preview`, `/import-status/bulk` | unchanged | unchanged | read only |
+| `POST /itunes/import`, `/itunes/sync` | unchanged | unchanged | read FROM iTunes into the database; never write iTunes |
+| `POST /itunes/export-partial` | unchanged | unchanged | builds a file for download; the live library is untouched |
+| `POST /itunes/pid-repair` | unchanged | unchanged | dry-run-gated; clears duplicate PIDs on database rows only |
+
+`credential_routes_test.go` no longer exempts the `/api/v1/itunes/` prefix:
+every state-changing iTunes route is owner-gated or listed by exact route
+with its reason, and `owner_routes_test.go` checks the owner list against the
+table above and drives every owner route through the real router as a
+password session, an API key, an API key with the owner's Access JWT, another
+admin's Access JWT, a Kelvin-sign look-alike of the owner's email, and the
+unsigned email header (all refused), the owner's Access JWT (reaches the
+handler), and the owner with `owner_email` unset (refused). Outside this
+group and not changed: `POST /operations/itunes-path-reconcile` and
+`/operations/itunes-path-repair` (`scan.trigger`), filed in the owner-apply
+follow-ups fragment.
 
 ## Bootstrap skill and `scripts/manage-credentials.sh`
 
@@ -341,10 +428,15 @@ or set a new expiry; the WARN log lists every key it stamped.
   making them interactive-only is one line each in `configFieldRules`
   (`todo.d/2026-10-07-outbound-endpoints-and-path-arguments.md`).
 - **Per-request path arguments** (`POST /import/file`, `POST
-  /audiobooks/:id/relocate`, `POST /itunes/relocate`, `POST
-  /discovery/import`) take a path in the request body for one action; they
-  are not settings and are exempt in the route table with that reason (same
-  fragment).
+  /audiobooks/:id/relocate`, `POST /discovery/import`) take a path in the
+  request body for one action; they are not settings and are exempt in the
+  route table with that reason (same fragment). `POST /itunes/relocate` is
+  owner-only now (D14).
+- **The sign-in allowlist still folds Unicode.** `oauth.IsEmailAllowed`
+  lowercases with `strings.ToLower`, so a Kelvin-sign look-alike of an
+  allowlisted email is admitted and may be linked to that user by email. The
+  owner check no longer folds; admission and linking are the owner's call
+  (owner-apply follow-ups fragment).
 - `POST /maintenance/wipe` (admin-only, typed confirm) wipes library data,
   not users or keys, and is exempt.
 - `auto_update.channel` only picks stable/beta from the project's own

@@ -1,5 +1,5 @@
 // file: internal/server/credential_routes_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6d2f9a40-3b75-4e18-9c6a-8f1e0b4d27c3
 // last-edited: 2026-10-07
 
@@ -62,8 +62,6 @@ var exemptRoutes = map[string]string{
 	"POST /api/v1/plugins/:id/enable":                   "toggles code already in the binary",
 	"POST /api/v1/plugins/:id/disable":                  "toggles code already in the binary",
 	"POST /api/v1/update/check":                         "checks for an update; installs nothing",
-	"POST /api/v1/itunes/library/upload":                "uploads library CONTENT to the configured path; names no path",
-	"POST /api/v1/itunes/library/restore":               "restores the configured library file from its own backup",
 	"POST /api/v1/openlibrary/upload":                   "uploads dump content to the configured dump dir",
 	"PUT /api/v1/preferences/:key":                      "the caller's own UI preferences",
 	"DELETE /api/v1/preferences/:key":                   "the caller's own UI preferences",
@@ -84,9 +82,21 @@ var exemptRoutes = map[string]string{
 	"POST /api/v1/fingerprint/worker/lease/:id/release": "fingerprint worker protocol",
 	"POST /api/v1/fingerprint/worker/lease/:id/renew":   "fingerprint worker protocol",
 	"POST /api/v1/fingerprint/worker/results":           "fingerprint worker protocol",
-	"POST /api/v1/audiobooks/:id/user-tags":             "library tags",
-	"PUT /api/v1/audiobooks/:id/user-tags":              "library tags",
-	"DELETE /api/v1/audiobooks/:id/user-tags/:tag":      "library tags",
+	// iTunes routes that are NOT owner-only (no prefix exemption covers
+	// /api/v1/itunes/: each route is owner-gated through ownerRoute or listed
+	// here; plan D14 has the table). They read the iTunes library into the
+	// database, or read it, or write only database fields.
+	"POST /api/v1/itunes/validate":                 "reads an iTunes library file; writes nothing",
+	"POST /api/v1/itunes/test-mapping":             "tests a path mapping; writes nothing",
+	"POST /api/v1/itunes/import":                   "imports FROM iTunes into the database; never writes iTunes",
+	"POST /api/v1/itunes/sync":                     "syncs FROM iTunes into the database; never writes iTunes",
+	"POST /api/v1/itunes/write-back/preview":       "previews a write-back; writes nothing",
+	"POST /api/v1/itunes/import-status/bulk":       "reads import status (POST for the id list)",
+	"POST /api/v1/itunes/export-partial":           "builds an export file for download; the live library is untouched",
+	"POST /api/v1/itunes/pid-repair":               "dry-run-gated; clears duplicate PIDs on database rows only, never the iTunes library",
+	"POST /api/v1/audiobooks/:id/user-tags":        "library tags",
+	"PUT /api/v1/audiobooks/:id/user-tags":         "library tags",
+	"DELETE /api/v1/audiobooks/:id/user-tags/:tag": "library tags",
 }
 
 // exemptPrefixes cover whole families of library-data routes. They never
@@ -107,7 +117,6 @@ var exemptPrefixes = map[string]string{
 	"/api/v1/activity/":        "activity log maintenance",
 	"/api/v1/ai/":              "AI calls on library data",
 	"/api/v1/diagnostics/":     "diagnostics",
-	"/api/v1/itunes/":          "iTunes sync on the CONFIGURED paths (library file routes are listed exactly)",
 	"/api/v1/deluge/":          "download-client calls",
 	"/api/v1/discovery/":       "imports from the download client",
 	"/api/v1/import/":          "per-request import of a library file (plan: residual, per-request paths)",
@@ -139,8 +148,10 @@ func TestCredentialRoutes_EveryStateChangingRouteIsClassified(t *testing.T) {
 		}
 		key := r.Method + " " + r.Path
 		seen[key] = true
-		_, guarded := f.srv.credRoutes[key]
+		_, cred := f.srv.credRoutes[key]
+		_, owner := f.srv.ownerRoutes[key]
 		_, exempt := exemptRoutes[key]
+		guarded := cred || owner
 		switch {
 		case guarded && exempt:
 			bothWays = append(bothWays, key)
@@ -162,7 +173,7 @@ func TestCredentialRoutes_EveryStateChangingRouteIsClassified(t *testing.T) {
 	}
 	sort.Strings(unclassified)
 	sort.Strings(sensitivePrefixOnly)
-	assert.Empty(t, unclassified, "state-changing routes neither guarded (credRoute/credRouteWhen) nor on the exempt lists; classify each one")
+	assert.Empty(t, unclassified, "state-changing routes neither guarded (credRoute/credRouteWhen) or ownerRoute, nor on the exempt lists; classify each one")
 	assert.Empty(t, sensitivePrefixOnly, "sensitive routes covered only by a prefix exemption; guard them or exempt them by exact route with a reason")
 	assert.Empty(t, bothWays, "routes both guarded and exempted")
 
@@ -172,6 +183,9 @@ func TestCredentialRoutes_EveryStateChangingRouteIsClassified(t *testing.T) {
 	}
 	for key := range f.srv.credRoutes {
 		assert.True(t, seen[key], "guarded route %q was recorded but is not in the router", key)
+	}
+	for key := range f.srv.ownerRoutes {
+		assert.True(t, seen[key], "owner route %q was recorded but is not in the router", key)
 	}
 }
 
