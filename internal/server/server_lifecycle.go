@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.22.0
+// version: 4.23.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-10-05
+// last-edited: 2026-10-07
 
 package server
 
@@ -1563,6 +1563,10 @@ func (s *Server) setupRoutes() {
 				// PID-repair: backfill the duplicates — keep the PID on one canonical
 				// row, clear it from the rest (no row/file deletion). dry_run=true previews.
 				itunesGroup.POST("/pid-repair", s.perm(auth.PermLibraryEditMetadata), s.pidRepairHandler)
+				// Write-back queue (2026-10-07): failures, backoff and held
+				// removes of the batcher, which no longer drops anything.
+				itunesGroup.GET("/writeback/status", s.perm(auth.PermLibraryView), s.itunesWritebackStatusHandler)
+				itunesGroup.POST("/writeback/held/release", s.perm(auth.PermLibraryEditMetadata), s.itunesWritebackReleaseHeldHandler)
 
 				// ITL file transfer (6.4)
 				itunesGroup.GET("/library/download", s.perm(auth.PermIntegrationsManage), s.itunesSvcGuard(func(c *gin.Context) { s.itunesSvc.Transfer.HandleDownload(c) }))

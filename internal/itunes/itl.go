@@ -1,7 +1,7 @@
 // file: internal/itunes/itl.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 7f2a8b3c-4d5e-6f01-a2b3-c4d5e6f7a8b9
-// last-edited: 2026-07-17
+// last-edited: 2026-10-07
 
 package itunes
 
@@ -750,7 +750,7 @@ func safeWriteOrEncodeToFile(inputPath, outputPath string, mutate func([]byte) (
 	if err != nil {
 		return nil, fmt.Errorf("reading ITL: %w", err)
 	}
-	outBytes, err := safeEncodeITL(raw, mutate, DefaultContractConfig())
+	outBytes, err := safeEncodeITL(raw, mutate, WritebackContractConfig(inputPath))
 	if err != nil {
 		return nil, err
 	}

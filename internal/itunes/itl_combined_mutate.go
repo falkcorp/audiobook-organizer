@@ -1,7 +1,7 @@
 // file: internal/itunes/itl_combined_mutate.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: f7a8b9c0-d1e2-3f4a-5b6c-7d8e9f0a1b2c
-// last-edited: 2026-07-03
+// last-edited: 2026-10-07
 //
 // Combined ITL mutation: applies removes, adds, and location patches in a
 // single read-modify-write pass. This avoids redundant decrypt/compress
@@ -94,7 +94,9 @@ func ApplyITLOperations(inputPath, outputPath string, ops ITLOperationSet, cfg .
 		return &ITLWriteBackResult{OutputPath: outputPath}, nil
 	}
 
-	contractCfg := contractCfgOrDefault(cfg)
+	// The root comes from the INPUT library: the output may be a caller's .tmp
+	// beside it, and the content being judged is that library's.
+	contractCfg := withWritebackRoot(contractCfgOrDefault(cfg), inputPath)
 
 	// K13/K14/K17: arm the external-truth guards from the input library's
 	// sidecar for BOTH write routes. Identity (K13) anchors the population;
@@ -155,5 +157,5 @@ func ApplyITLOperationsInMemory(inputPath string, ops ITLOperationSet, cfg ...Co
 	if err != nil {
 		return nil, fmt.Errorf("reading ITL: %w", err)
 	}
-	return safeEncodeITL(raw, applyOpsMutate(ops, nil), contractCfgOrDefault(cfg))
+	return safeEncodeITL(raw, applyOpsMutate(ops, nil), withWritebackRoot(contractCfgOrDefault(cfg), inputPath))
 }

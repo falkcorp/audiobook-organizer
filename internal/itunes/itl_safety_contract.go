@@ -1,7 +1,7 @@
 // file: internal/itunes/itl_safety_contract.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 404bbed1-87ba-4e56-b9e4-a492a2281163
-// last-edited: 2026-09-08
+// last-edited: 2026-10-07
 //
 // ITLSafetyContract — the iTunes writeback write-safety contract (fable5 TASK-003).
 //
@@ -248,6 +248,15 @@ func RunSafetyContract(before, after []byte, hdr *hdfmHeader, cfg ContractConfig
 // no-new-dangling-refs guards degrade gracefully with no `before` (they only
 // assert absolute properties of `after`).
 func AuditITL(data []byte) ContractVerdict {
+	return AuditITLWithConfig(data, DefaultContractConfig())
+}
+
+// AuditITLWithConfig is AuditITL under a caller-supplied contract config. A
+// writer that re-reads the file it just wrote audits it with the SAME config it
+// wrote under. The write-back batcher's step-4b audit used the strict AuditITL
+// while writing the AO library, so even a correctly scoped write would have
+// been rejected on re-read (2026-10-07; see WritebackRootForLibrary).
+func AuditITLWithConfig(data []byte, cfg ContractConfig) ContractVerdict {
 	hdr, payload, err := decodeITLForContract(data)
 	if err != nil {
 		// Fail closed: an un-decodable library is a violation, not a pass.
@@ -262,7 +271,7 @@ func AuditITL(data []byte) ContractVerdict {
 			}},
 		}
 	}
-	return RunSafetyContract(nil, payload, hdr, DefaultContractConfig())
+	return RunSafetyContract(nil, payload, hdr, cfg)
 }
 
 // ---------------------------------------------------------------------------

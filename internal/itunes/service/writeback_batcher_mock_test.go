@@ -1,6 +1,7 @@
 // file: internal/itunes/service/writeback_batcher_mock_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+// last-edited: 2026-10-07
 //
 // White-box unit tests for WriteBackBatcher: NewWriteBackBatcher, Enqueue,
 // EnqueueAdd, EnqueueRemove, UpdateConfig, flush (no-op path), and Stop.
@@ -202,10 +203,9 @@ func TestWriteBackBatcher_UpdateConfig(t *testing.T) {
 }
 
 // TestWriteBackBatcher_FlushSkipsWhenDisabled verifies that when
-// ITLWriteBackEnabled is false or LibraryWritePath is empty, flush() clears
-// pending state but does not attempt any file I/O.
-// We call flush() directly and assert that pending state is reset, the batcher
-// does not panic, and firstEnqueue is zeroed (confirming a clean batch reset).
+// ITLWriteBackEnabled is false or LibraryWritePath is empty, flush() attempts
+// no file I/O and KEEPS the batch queued (v6.0.0: nothing is dropped; before,
+// the batch was cleared and lost), without arming a timer that would spin.
 func TestWriteBackBatcher_FlushSkipsWhenDisabled(t *testing.T) {
 	b := NewWriteBackBatcher(10*time.Second, disabledFlushCfg(), newMockStore())
 
@@ -217,20 +217,20 @@ func TestWriteBackBatcher_FlushSkipsWhenDisabled(t *testing.T) {
 	}
 
 	// Call flush() directly. The store is non-nil, but flushEnabled() returns
-	// (false, "") so flush exits after clearing state and logging a warning.
+	// (false, "") so flush keeps the batch and logs a warning.
+	b.mu.Lock()
+	b.stopTimerLocked() // isolate: only the flush below may act
+	b.mu.Unlock()
 	b.flush()
 
-	// Pending state must be cleared.
-	if b.HasPendingBook("book-1") {
-		t.Error("expected pending state cleared after flush")
+	if !b.HasPendingBook("book-1") {
+		t.Error("write-back disabled: the batch must stay queued, not be dropped")
 	}
-
-	// firstEnqueue must be zeroed (the batch sentinel is reset).
 	b.mu.Lock()
-	zeroed := b.firstEnqueue.IsZero()
+	armed := b.timer != nil
 	b.mu.Unlock()
-	if !zeroed {
-		t.Error("expected firstEnqueue to be zeroed after flush")
+	if armed {
+		t.Error("write-back disabled: no retry timer may be armed (it would spin)")
 	}
 
 	_ = b.Stop(context.Background())
@@ -318,9 +318,10 @@ func TestWriteBackBatcher_EnqueueWhenAutoDisabled(t *testing.T) {
 	_ = b.Stop(context.Background())
 }
 
-// TestWriteBackBatcher_HasPendingBook_AfterFlushClears verifies that after
-// a flush() call the pending set is empty even when many books were queued.
-func TestWriteBackBatcher_HasPendingBook_AfterFlushClears(t *testing.T) {
+// TestWriteBackBatcher_HasPendingBook_KeptWhenDisabled verifies that a flush
+// with write-back disabled keeps every queued book (v6.0.0; it used to clear
+// and lose them).
+func TestWriteBackBatcher_HasPendingBook_KeptWhenDisabled(t *testing.T) {
 	b := NewWriteBackBatcher(10*time.Second, disabledFlushCfg(), newMockStore())
 
 	ids := []string{"a", "b", "c", "d"}
@@ -336,8 +337,8 @@ func TestWriteBackBatcher_HasPendingBook_AfterFlushClears(t *testing.T) {
 	b.flush() // exits early because ITLWriteBackEnabled=false
 
 	for _, id := range ids {
-		if b.HasPendingBook(id) {
-			t.Errorf("expected %q cleared after flush", id)
+		if !b.HasPendingBook(id) {
+			t.Errorf("expected %q still queued after a disabled flush", id)
 		}
 	}
 
