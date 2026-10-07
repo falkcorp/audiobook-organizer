@@ -1,5 +1,5 @@
 // file: web/src/components/review/RepairsPanel.test.tsx
-// version: 1.8.0
+// version: 1.9.0
 // guid: 3a7e0c95-4d21-4b8f-b6e3-8f1c2d9a5e47
 // last-edited: 2026-10-07
 //
@@ -670,6 +670,31 @@ describe('RepairsPanel — owner rows', () => {
     // No select-all on this tab.
     expect(screen.queryByText('Select page')).not.toBeInTheDocument();
     expect(screen.queryByTestId('repairs-apply-all')).not.toBeInTheDocument();
+  });
+
+  it('says why and disables Apply (owner) when this sign-in is not the Access owner', async () => {
+    vi.mocked(api.getRepairOwnerStatus).mockResolvedValue({
+      allowed: false,
+      reason: 'Owner actions need you to sign in through Cloudflare Access (books.example.com)',
+    });
+    const user = userEvent.setup();
+    renderPanel();
+    await screen.findByTestId('repairs-row-g1');
+    await user.click(screen.getByTestId('repairs-tab-skipped'));
+    const why = await screen.findByTestId('repairs-owner-why-not-own');
+    expect(why).toHaveTextContent('sign in through Cloudflare Access (books.example.com)');
+    expect(screen.getByTestId('repairs-owner-apply-own')).toBeDisabled();
+    expect(api.startRepairOwnerApply).not.toHaveBeenCalled();
+  });
+
+  it('keeps Apply (owner) enabled with no warning for the Access owner', async () => {
+    vi.mocked(api.getRepairOwnerStatus).mockResolvedValue({ allowed: true });
+    const user = userEvent.setup();
+    renderPanel();
+    await screen.findByTestId('repairs-row-g1');
+    await user.click(screen.getByTestId('repairs-tab-skipped'));
+    expect(await screen.findByTestId('repairs-owner-apply-own')).toBeEnabled();
+    expect(screen.queryByTestId('repairs-owner-why-not-own')).not.toBeInTheDocument();
   });
 
   it('offers an Owner apply chip whose count opens exactly the owner rows', async () => {

@@ -1,7 +1,7 @@
 // file: internal/repairs/owner_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9d4e2b71-6c38-4a05-8f1e-3b7a5c0d2e96
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 package repairs
 
@@ -77,7 +77,7 @@ func ownerSetup(t *testing.T) (*memStore, *ownerFixer, *PlanResult, *creditFake,
 
 func grantFor(t *testing.T, g *OwnerGrants, rows ...string) string {
 	t.Helper()
-	tok, err := g.Issue(OwnerGrant{UserID: "owner", AuthMethod: "session", FixerID: "owner-fx", PlanOpID: "op-plan", RowIDs: rows})
+	tok, err := g.Issue(OwnerGrant{UserID: "owner", AuthMethod: "cf_access", AccessEmail: "owner@example.test", FixerID: "owner-fx", PlanOpID: "op-plan", RowIDs: rows})
 	require.NoError(t, err)
 	return tok
 }
@@ -221,7 +221,7 @@ func TestRunApply_OwnerGrantForNonOwnerRowRefused(t *testing.T) {
 func TestRunApply_ResumeNeverAppliesOwnerRows(t *testing.T) {
 	s, f, plan, _, d := ownerSetup(t)
 	d.Resumed = &ApplyCheckpoint{Settled: []RowResult{{RowID: "fix", Outcome: OutcomeApplied}}}
-	d.Owner = &OwnerApproval{UserID: "owner", AuthMethod: "session", RowIDs: []string{"own"}}
+	d.Owner = &OwnerApproval{UserID: "owner", AuthMethod: "cf_access", RowIDs: []string{"own"}}
 	res, err := RunApply(context.Background(), f, plan, "op-plan", []string{"fix"}, false, d, nopReporter{})
 	require.NoError(t, err)
 	require.Equal(t, "own", s.title("own"))
@@ -241,4 +241,31 @@ func TestOwnerApplyFrom_RequiresRowAndUser(t *testing.T) {
 	o, ok := OwnerApplyFrom(WithOwnerApply(context.Background(), OwnerApplyContext{RowID: "r", UserID: "u"}))
 	require.True(t, ok)
 	require.Equal(t, "r", o.RowID)
+}
+
+// An owner grant is minted only for a verified Cloudflare Access owner
+// sign-in (owner decision 2026-10-07), whoever calls Issue: a session, an
+// API key or an Access grant with no email is refused, so the exceptions a
+// grant unlocks (the owner row and its OwnerITunesDatabaseOnly books) cannot
+// be reached any other way.
+func TestOwnerGrants_IssueOnlyForAccessOwner(t *testing.T) {
+	g := NewOwnerGrants()
+	base := OwnerGrant{UserID: "owner", FixerID: "fx", PlanOpID: "op", RowIDs: []string{"own"}}
+	for name, mut := range map[string]func(*OwnerGrant){
+		"password session": func(gr *OwnerGrant) { gr.AuthMethod = "session"; gr.AccessEmail = "owner@example.test" },
+		"api key":          func(gr *OwnerGrant) { gr.AuthMethod = "api_key"; gr.AccessEmail = "owner@example.test" },
+		"access, no email": func(gr *OwnerGrant) { gr.AuthMethod = OwnerAuthMethod },
+		"no method":        func(gr *OwnerGrant) { gr.AccessEmail = "owner@example.test" },
+	} {
+		gr := base
+		mut(&gr)
+		if _, err := g.Issue(gr); err == nil {
+			t.Errorf("%s: Issue minted a grant", name)
+		}
+	}
+	gr := base
+	gr.AuthMethod, gr.AccessEmail = OwnerAuthMethod, "owner@example.test"
+	if _, err := g.Issue(gr); err != nil {
+		t.Fatalf("access owner grant refused: %v", err)
+	}
 }

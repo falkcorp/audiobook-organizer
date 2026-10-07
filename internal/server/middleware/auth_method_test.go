@@ -1,5 +1,5 @@
 // file: internal/server/middleware/auth_method_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5e2b7c19-0d4a-4f86-b3e1-9a6c8d2f7041
 // last-edited: 2026-10-07
 
@@ -259,4 +259,44 @@ func TestRequireAuth_APIKeyWithoutExpiryRefused(t *testing.T) {
 			assert.Contains(t, w.Body.String(), "no expiry")
 		})
 	}
+}
+
+// TestOwnerProof_OnlyAVerifiedAccessJWT: the owner check reads the email of a
+// VERIFIED Access JWT. The unsigned Cf-Access-Authenticated-User-Email header
+// is never consulted, and a key riding along with the owner's assertion is
+// the key's request.
+func TestOwnerProof_OnlyAVerifiedAccessJWT(t *testing.T) {
+	t.Parallel()
+	gin.SetMode(gin.TestMode)
+	cfStore := newFakeABSStore()
+	cfStore.addUser(activeUser("owner", "owner"))
+	verifier := &fakeCFVerifier{byToken: map[string]*oauth.IdentityClaims{
+		"owner-jwt": {Provider: oauth.ProviderCFAccess, Subject: "sub-owner", Email: "owner@example.com", EmailVerified: true},
+		"other-jwt": {Provider: oauth.ProviderCFAccess, Subject: "sub-other", Email: "other@example.com", EmailVerified: true},
+	}}
+	cf := &CFAccessAuthenticator{verifier: verifier,
+		cfg: oauth.New(oauth.Config{AllowedEmails: []string{"owner@example.com", "other@example.com"}}), store: cfStore}
+	run := func(set func(r *http.Request)) string {
+		r := gin.New()
+		why := "unreached"
+		r.Use(CloudflareAccessAuth(cf), RequireAuth(authMethodStore()))
+		r.GET("/x", func(c *gin.Context) {
+			why = auth.OwnerProofWhyNot(c.Request.Context(), "owner@example.com", "books.example.com")
+			c.Status(http.StatusOK)
+		})
+		req := httptest.NewRequest(http.MethodGet, "/x", nil)
+		set(req)
+		r.ServeHTTP(httptest.NewRecorder(), req)
+		return why
+	}
+	assert.Empty(t, run(func(r *http.Request) { r.Header.Set(oauth.CFAccessHeader, "owner-jwt") }), "the owner's verified JWT")
+	assert.NotEmpty(t, run(func(r *http.Request) { r.Header.Set(oauth.CFAccessHeader, "other-jwt") }), "another person's JWT")
+	assert.NotEmpty(t, run(func(r *http.Request) {
+		r.Header.Set("Cf-Access-Authenticated-User-Email", "owner@example.com")
+		r.Header.Set("Authorization", "Bearer sess-password")
+	}), "the unsigned email header with a password session")
+	assert.NotEmpty(t, run(func(r *http.Request) {
+		r.Header.Set(oauth.CFAccessHeader, "owner-jwt")
+		r.Header.Set("Authorization", "Bearer abk_secret")
+	}), "an API key riding along with the owner's JWT")
 }

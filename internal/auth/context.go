@@ -1,5 +1,5 @@
 // file: internal/auth/context.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8c4a2f1d-9b3e-4f60-a8d5-2c7e0f1b9a47
 // last-edited: 2026-10-07
 //
@@ -23,6 +23,7 @@ const (
 	userKey ctxKey = iota
 	permissionsKey
 	methodKey
+	accessEmailKey
 )
 
 // Method is how a request was authenticated: which verifier bound its
@@ -57,8 +58,8 @@ const (
 
 // Interactive reports whether m is a person's own login (a session or a
 // Cloudflare Access SSO identity) rather than a credential automation holds
-// (an API key, an ABS client token). Actions the owner reserves for himself
-// (Repairs owner apply) are honoured only for these.
+// (an API key, an ABS client token). Owner-only actions need more than this:
+// a verified Cloudflare Access sign-in as owner_email (OwnerProofWhyNot).
 func (m Method) Interactive() bool { return m == MethodSession || m == MethodCFAccess }
 
 // CredentialChangeRefusedMessage is the one 403 message for a credential,

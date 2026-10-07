@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useRepairsLane.ts
-// version: 1.6.0
+// version: 1.7.0
 // guid: 7b1e5c28-3a94-4d6f-8e02-c5f9a1d7b340
 // last-edited: 2026-10-07
 
@@ -218,6 +218,11 @@ export interface RepairsLane {
   /** GET /repairs failed. Distinct from an empty list (no fixers registered). */
   fixersError: string | null;
   reloadFixers: () => void;
+  /**
+   * Whether this sign-in may apply owner rows (GET /repairs/owner-status), or
+   * null while unknown / when the read failed (the server still decides).
+   */
+  ownerStatus: api.RepairOwnerStatus | null;
 
   selectedFixerId: string | null;
   selectedFixer: RepairFixer | null;
@@ -274,6 +279,7 @@ export function useRepairsLane(toast: Toast, active = true): RepairsLane {
   const [fixersLoading, setFixersLoading] = useState(false);
   const [fixersError, setFixersError] = useState<string | null>(null);
   const [fixersNonce, setFixersNonce] = useState(0);
+  const [ownerStatus, setOwnerStatus] = useState<api.RepairOwnerStatus | null>(null);
 
   const [selectedFixerId, setSelectedFixerId] = useState<string | null>(() =>
     readStored(REPAIRS_FIXER_STORAGE_KEY)
@@ -369,6 +375,22 @@ export function useRepairsLane(toast: Toast, active = true): RepairsLane {
       })
       .finally(() => {
         if (!ctrl.signal.aborted) setFixersLoading(false);
+      });
+    return () => ctrl.abort();
+  }, [active, fixersNonce]);
+
+  // ---- owner status ------------------------------------------------------
+  // Read with the fixer list. A failure leaves it unknown: the button stays,
+  // and the server's 403 names the reason if it refuses.
+  useEffect(() => {
+    if (!active) return;
+    const ctrl = new AbortController();
+    Promise.resolve(api.getRepairOwnerStatus?.({ signal: ctrl.signal }))
+      .then((st) => {
+        if (!ctrl.signal.aborted) setOwnerStatus(st ?? null);
+      })
+      .catch(() => {
+        if (!ctrl.signal.aborted) setOwnerStatus(null);
       });
     return () => ctrl.abort();
   }, [active, fixersNonce]);
@@ -813,6 +835,7 @@ export function useRepairsLane(toast: Toast, active = true): RepairsLane {
     fixersLoading,
     fixersError,
     reloadFixers,
+    ownerStatus,
     selectedFixerId: selectedFixer ? selectedFixerId : null,
     selectedFixer,
     selectFixer,

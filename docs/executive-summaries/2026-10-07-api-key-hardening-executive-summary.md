@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-07-api-key-hardening-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 8cf09508-ec7f-49a1-8225-1cd5183659d8 -->
 <!-- last-edited: 2026-10-07 -->
 
@@ -31,22 +31,40 @@ Branch: `fix/apikey-expiry-and-privilege`. Plan and every decision:
   each one, and the API keys page shows when each key expires (it used to show
   a future date as "-29d ago").
 
+- **Only your Cloudflare Access login counts as you for owner-only actions.**
+  The Repairs "Apply (owner)" button (including rows whose files have iTunes
+  copies) now works only when you reach the site through Cloudflare Access
+  and that login's email is the owner email the server is configured with.
+  A password, Google/GitHub, temp-login or invite sign-in no longer counts,
+  because the server can create or reset all of those itself; it cannot
+  create your Cloudflare login. The page says why when the button is off.
+- **API keys also can't change where the server reads, writes or runs
+  things.** Changing the library folder, backup folder, database location,
+  iTunes file paths, helper programs (fpcalc, Ollama) or plugin settings now
+  needs a signed-in session, as does installing a tool, applying an update or
+  adding a scan folder. Saving the settings page back unchanged still works.
+- **A request carrying both an API key and a Cloudflare login is treated as
+  the API key**, with every key limit.
+- **A security review of the first version found three ways around it, now
+  closed**: spelling a setting with different capital letters slipped past
+  the sign-in check; five related pages had no guard; and a key with no
+  expiry date was treated as never expiring.
+
 ## What you might notice
 
 - Anything that created users or reset passwords with an API key now gets a
   403. Do it from the web app while signed in.
+- **Set the owner email** (environment variable `OWNER_EMAIL`, or the
+  `owner_email` setting from a signed-in session). Until it is set, owner
+  apply is off for everyone.
 - Integrations whose keys never expired (a metrics scraper, a fingerprint
   worker) stop working 30 days after this deploys unless you rotate or replace
   their keys. The startup log names them.
 
 ## What is still open
 
-- A key with the settings permission can still point the server at a
-  different helper program or database file. That is a bigger hole than
-  this one (it is not about signing in) and was found, not fixed. Your call
-  whether those settings become locked to the server's own configuration.
-
-- A signed-in admin session can still reset a password or make a sign-in
-  link, by design. Limiting the owner-only Repairs actions to a Cloudflare
-  Access login, or adding a second factor at the click, is what fully closes
-  that. Your call; it is on the TODO list.
+- A key with the settings permission can still point outbound services (the
+  OpenAI address, the download client) at another host, which would send that
+  host the stored password or key. Your call whether those need a signed-in
+  session too; it is on the TODO list with a few one-off actions that take a
+  file path.

@@ -1,7 +1,7 @@
 // file: web/src/services/api.repairs.test.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6f2d9a58-1b74-4c3e-8a06-d7e5b2c4f913
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 //
 // The repairs client against a stubbed fetch, asserting on the request that
 // actually leaves the browser.
@@ -14,6 +14,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   getRepairApplyResult,
+  getRepairOwnerStatus,
   getRepairPlanRows,
   listRepairFixers,
   pollOperationV2,
@@ -67,6 +68,30 @@ describe('startRepairOwnerApply', () => {
       jsonResponse(403, { error: 'owner rows are applied only by the owner, signed in interactively', status: 403 })
     );
     await expect(startRepairOwnerApply('frag', 'plan-1', 'manual:b1')).rejects.toThrow(/signed in interactively/);
+  });
+});
+
+describe('getRepairOwnerStatus', () => {
+  it('reads {allowed, reason} from GET /repairs/owner-status', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(200, {
+        data: {
+          allowed: false,
+          reason: 'Owner actions need you to sign in through Cloudflare Access',
+        },
+      })
+    );
+    const st = await getRepairOwnerStatus();
+    expect(lastCall().url).toBe('/api/v1/repairs/owner-status');
+    expect(st).toStrictEqual({
+      allowed: false,
+      reason: 'Owner actions need you to sign in through Cloudflare Access',
+    });
+  });
+
+  it('rejects a body without a boolean allowed', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, { data: {} }));
+    await expect(getRepairOwnerStatus()).rejects.toThrow(/Unexpected response shape/);
   });
 });
 

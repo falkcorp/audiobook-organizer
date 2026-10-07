@@ -1,5 +1,5 @@
 // file: internal/server/middleware/auth.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 83c42ecb-1df2-4baf-9890-3f91ab4db6fe
 // last-edited: 2026-10-07
 
@@ -375,6 +375,7 @@ func handleAPIKeyAuth(c *gin.Context, store authKeyStore, rawToken string) {
 	ctx := auth.WithUser(c.Request.Context(), user)
 	ctx = auth.WithPermissions(ctx, effectivePerms)
 	ctx = auth.WithMethod(ctx, auth.MethodAPIKey)
+	ctx = auth.WithAccessEmail(ctx, "") // the key's request is not the Access identity's
 	c.Request = c.Request.WithContext(ctx)
 
 	if abortWorkerOnlyOutsideWorkerAPI(c) {

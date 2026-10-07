@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.163.0
+// version: 2.164.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-07
 
@@ -8240,7 +8240,8 @@ export const REPAIRS_OWNER_APPLY_HEADER = 'X-Repairs-Owner-Apply';
 /**
  * POST /repairs/:fixer/owner-apply -- the owner's own apply of ONE
  * owner-applicable row (database rows only). The server honours it only for
- * an interactive admin sign-in (never an API key) from this page.
+ * a Cloudflare Access sign-in as the configured owner (never a password or SSO
+ * session, never an API key) from this page; getRepairOwnerStatus says first.
  */
 export async function startRepairOwnerApply(
   fixerId: string,
@@ -8256,6 +8257,33 @@ export async function startRepairOwnerApply(
     }
   );
   return readRepairStarted(response, 'owner apply');
+}
+
+/** Whether this sign-in may apply owner rows, and if not, why (in words). */
+export interface RepairOwnerStatus {
+  allowed: boolean;
+  reason?: string;
+}
+
+/**
+ * GET /repairs/owner-status. Owner rows are applied only from a Cloudflare
+ * Access sign-in as the configured owner; the reason is shown on the row so
+ * the owner learns why before clicking.
+ */
+export async function getRepairOwnerStatus(opts?: {
+  signal?: AbortSignal;
+}): Promise<RepairOwnerStatus> {
+  const response = await apiFetch(`${API_BASE}/repairs/owner-status`, {
+    signal: opts?.signal,
+    timeoutMs: REPAIRS_FETCH_TIMEOUT_MS,
+  });
+  if (!response.ok) throw await buildApiError(response, 'Failed to read the owner status');
+  const body = await response.json();
+  const data = body?.data;
+  if (!data || typeof data.allowed !== 'boolean') {
+    throw new Error('Unexpected response shape from GET /api/v1/repairs/owner-status');
+  }
+  return data as RepairOwnerStatus;
 }
 
 /** Reads a finished repairs.apply operation's stored result. */

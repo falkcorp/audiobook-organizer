@@ -1,5 +1,5 @@
 // file: internal/server/handlers/repairs/handler.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 1d8e4c73-5a26-4b9f-8e03-7c2b9f6a1d58
 // last-edited: 2026-10-07
 
@@ -17,15 +17,17 @@
 //
 // POST /repairs/:fixer/owner-apply is the owner's own apply of one row the
 // plan lists for him alone (Row.OwnerApplicable; repairs/owner.go). It is
-// honoured only for a person's interactive sign-in (auth.Method.Interactive:
-// a password/OAuth session or a Cloudflare Access SSO identity; never an API
-// key, an ABS token or a temp-login session) holding the admin role, and
+// honoured only for a verified Cloudflare Access sign-in as owner_email
+// (auth.OwnerProofWhyNot, owner decision 2026-10-07; never a password, OAuth,
+// temp-login or invite session, an API key or an ABS token) holding the
+// admin role, and
 // only for a same-origin request carrying the X-Repairs-Owner-Apply header
 // (Sec-Fetch-Site same-origin, or without it an Origin naming this host; a
 // request showing neither is refused) (CSRF: a custom header cannot be sent cross-site without a CORS preflight
 // the server never grants, and the session cookie is SameSite=Strict). It
 // mints a one-shot grant and enqueues repairs.apply naming it; 403 for any
-// other caller, nothing enqueued.
+// other caller, nothing enqueued. GET /repairs/owner-status says whether the
+// caller passes the owner proof, and why not, so the page can say it first.
 package repairs
 
 import (
@@ -42,6 +44,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -76,11 +79,50 @@ type Handler struct {
 	// grants is where owner grants are minted; nil is the process's
 	// repairs.DefaultOwnerGrants (the store repairs.apply takes from).
 	grants *repairs.OwnerGrants
+	// ownerEmail returns the configured owner_email, read per request so a
+	// change takes effect without a restart.
+	ownerEmail func() string
 }
 
 // New builds the handler. enqueuer may be nil: plan/apply then answer 503.
 func New(fixers *repairs.Registry, enqueuer Enqueuer, ops OpStore) *Handler {
-	return &Handler{fixers: fixers, enqueuer: enqueuer, ops: ops}
+	return &Handler{fixers: fixers, enqueuer: enqueuer, ops: ops,
+		ownerEmail: func() string { return config.Snapshot().OwnerEmail }}
+}
+
+// ownerWhyNot is why the request is not the owner ("" when it is): a
+// verified Cloudflare Access sign-in as owner_email (auth.OwnerProofWhyNot).
+func (h *Handler) ownerWhyNot(c *gin.Context) string {
+	email := ""
+	if h.ownerEmail != nil {
+		email = h.ownerEmail()
+	}
+	return auth.OwnerProofWhyNot(c.Request.Context(), email, publicHost(c.Request))
+}
+
+// publicHost is the host the browser used, for the sign-in hint: the
+// forwarded host behind a proxy, else Host.
+func publicHost(r *http.Request) string {
+	if h := strings.TrimSpace(r.Header.Get("X-Forwarded-Host")); h != "" {
+		if i := strings.IndexByte(h, ','); i >= 0 {
+			h = strings.TrimSpace(h[:i])
+		}
+		return h
+	}
+	return r.Host
+}
+
+// OwnerStatus is GET /repairs/owner-status: whether this request may apply
+// owner rows, and if not, why, so the Repairs page can say so before a click.
+type OwnerStatus struct {
+	Allowed bool   `json:"allowed"`
+	Reason  string `json:"reason,omitempty"`
+}
+
+// GetOwnerStatus implements GET /repairs/owner-status.
+func (h *Handler) GetOwnerStatus(c *gin.Context) {
+	why := h.ownerWhyNot(c)
+	httputil.RespondWithOK(c, OwnerStatus{Allowed: why == "", Reason: why})
 }
 
 // OpRef is a pointer to a plan or apply run.
@@ -290,8 +332,8 @@ func (h *Handler) StartApply(c *gin.Context) {
 	if len(req.OwnerApplyRowIDs) > 0 {
 		// Never honoured on the bulk endpoint, whoever asks: an API key is
 		// refused outright, a person is pointed at the per-row endpoint.
-		if !auth.MethodFromContext(c.Request.Context()).Interactive() {
-			httputil.RespondWithForbidden(c, "owner rows are applied only by the owner, signed in interactively (not with an API key)")
+		if why := h.ownerWhyNot(c); why != "" {
+			httputil.RespondWithForbidden(c, why)
 			return
 		}
 		httputil.RespondWithBadRequest(c, "owner rows are applied one at a time: POST /repairs/:fixer/owner-apply {plan_op_id, row_id}")
@@ -330,9 +372,17 @@ func (h *Handler) OwnerApply(c *gin.Context) {
 	ctx := c.Request.Context()
 	method := auth.MethodFromContext(ctx)
 	user, hasUser := auth.UserFromContext(ctx)
-	switch {
-	case !method.Interactive() || !hasUser:
-		httputil.RespondWithForbidden(c, "owner rows are applied only by the owner, signed in interactively (not with an API key or a temp-login link)")
+	// The owner proof: a verified Cloudflare Access JWT for owner_email. It
+	// is checked before anything else, and the grant minted below records
+	// the Access email; repairs.OwnerGrants.Issue refuses any other kind of
+	// grant, so the exceptions an owner grant unlocks (the owner row and its
+	// OwnerITunesDatabaseOnly books) are reachable only from here.
+	switch why := h.ownerWhyNot(c); {
+	case why != "":
+		httputil.RespondWithForbidden(c, why)
+		return
+	case !hasUser:
+		httputil.RespondWithForbidden(c, "owner apply needs a signed-in user")
 		return
 	case !slices.Contains(user.Roles, auth.SeedRoleAdmin):
 		httputil.RespondWithForbidden(c, "owner apply needs the admin role")
@@ -377,7 +427,8 @@ func (h *Handler) OwnerApply(c *gin.Context) {
 		grants = repairs.DefaultOwnerGrants
 	}
 	tok, err := grants.Issue(repairs.OwnerGrant{UserID: user.ID, AuthMethod: string(method),
-		FixerID: f.ID(), PlanOpID: req.PlanOpID, RowIDs: []string{req.RowID}})
+		AccessEmail: auth.AccessEmailFromContext(ctx),
+		FixerID:     f.ID(), PlanOpID: req.PlanOpID, RowIDs: []string{req.RowID}})
 	if err != nil {
 		httputil.InternalError(c, "owner grant", err)
 		return
