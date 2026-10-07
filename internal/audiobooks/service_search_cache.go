@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_search_cache.go
-// version: 2.1.1
+// version: 2.2.0
 // guid: c3572a50-dc5f-4325-a58a-c578d837cde8
-// last-edited: 2026-09-28
+// last-edited: 2026-10-06
 
 package audiobooks
 
@@ -168,6 +168,17 @@ func (svc *AudiobookService) GetAudiobooksPage(ctx context.Context, limit int, o
 	var f ListFilters
 	if len(filters) > 0 {
 		f = filters[0]
+	}
+	// Reject a value the matcher cannot evaluate (invalid /regex/, malformed
+	// comparison, ...) before any path runs it. The list handler answers
+	// these with a 400 first; this catches every other caller — notably
+	// resolveFilterToBookIDs for background operations — which would
+	// otherwise resolve a bad filter to "0 books" without a word.
+	if err := FirstInvalidFilterValue(f.FieldFilters); err != nil {
+		return nil, 0, SearchMeta{}, fmt.Errorf("invalid filter value: %w", err)
+	}
+	if err := FirstInvalidFilterValue(f.PerUserFilters); err != nil {
+		return nil, 0, SearchMeta{}, fmt.Errorf("invalid filter value: %w", err)
 	}
 	if key, ok := svc.searchCacheKey(search, authorID, seriesID, f); ok {
 		books, total, meta, err := svc.cachedSearchPage(ctx, key, limit, offset, search, authorID, seriesID, f)

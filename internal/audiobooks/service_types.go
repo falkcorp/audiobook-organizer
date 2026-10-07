@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_types.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: a3f9b2c1-d4e5-6f70-8a9b-0c1d2e3f4a5b
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package audiobooks
 
@@ -108,6 +108,10 @@ type FieldFilter struct {
 	Field   string `json:"field"`
 	Value   string `json:"value"`
 	Negated bool   `json:"negated"`
+	// Quoted is true when the user wrote the value in double quotes
+	// (title:"a*b"). A quoted value is a literal substring: no regex, glob,
+	// or comparison. See internal/querygrammar.
+	Quoted bool `json:"quoted,omitempty"`
 }
 
 // ListFilters holds optional filters for listing audiobooks.
@@ -209,27 +213,12 @@ var strippedMemdbFields = map[string]bool{
 	"book_sig_v1":   true,
 }
 
-// strippedFieldNames returns the field names from a FieldFilter slice,
-// for log diagnostics only.
-func strippedFieldNames(ff []FieldFilter) []string {
+// strippedCompiledFieldNames returns the field names from a compiled filter
+// slice, for log diagnostics only.
+func strippedCompiledFieldNames(ff []compiledFilter) []string {
 	out := make([]string, 0, len(ff))
 	for _, f := range ff {
 		out = append(out, f.Field)
 	}
 	return out
-}
-
-// splitFieldFilters partitions a FieldFilter list into ones that can be
-// evaluated against a memdb-stripped *Book (cheap) and ones that require
-// the full Pebble-resident Book (stripped). Order within each partition
-// is preserved.
-func splitFieldFilters(filters []FieldFilter) (cheap, stripped []FieldFilter) {
-	for _, f := range filters {
-		if strippedMemdbFields[f.Field] {
-			stripped = append(stripped, f)
-		} else {
-			cheap = append(cheap, f)
-		}
-	}
-	return cheap, stripped
 }
