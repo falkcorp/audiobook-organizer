@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_copy_content.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4d7b2e95-1c6a-4f38-8e0d-b5a9c3f1e762
 // last-edited: 2026-10-06
 
@@ -49,53 +49,92 @@ const (
 	fragEvContentHashPrefix  = "content hash equal at plan time: sha256:"
 	fragEvContentDiffers     = "; content differs: "
 	fragEvContentNotCompared = "; content not compared: "
+	// fragEvContentAlias: the claimant's path and the parent row's path name
+	// ONE file (a hardlink, a symlink, a bind mount): equal bytes there prove
+	// nothing about a second copy, so the claimant is held.
+	fragEvContentAlias = "; same file as the parent row (path alias)"
 )
 
 // fragHashLimit bounds the hashing pool: the work is file reads off the
 // library's NAS, not CPU, so a small fixed limit (CLAUDE.md, concurrency).
 const fragHashLimit = 4
 
-// fragFileSig is a file's size and modification time as read: a proof holds
-// only while both are unchanged.
+// fragFileSig is a file as stat'ed when it was read: size, modification
+// time, status-change time, device and inode. A proof holds only while all
+// five are unchanged: size and mtime alone miss a same-size rewrite whose
+// mtime was set back (touch -r) or a different file renamed over the path,
+// both of which move the ctime (and a rename the inode). Dev and inode also
+// tell two paths that name one file (fragEvContentAlias).
 type fragFileSig struct {
-	Size    int64 `json:"size"`
-	MtimeNS int64 `json:"mtime_ns"`
+	Size    int64  `json:"size"`
+	MtimeNS int64  `json:"mtime_ns"`
+	CtimeNS int64  `json:"ctime_ns"`
+	Dev     uint64 `json:"dev"`
+	Ino     uint64 `json:"ino"`
 }
 
-func sigOf(fi os.FileInfo) fragFileSig {
-	return fragFileSig{Size: fi.Size(), MtimeNS: fi.ModTime().UnixNano()}
+// sigOf is fi's signature; an error when the platform gives no device,
+// inode or ctime (fileIdentity), so no proof is made without them.
+func sigOf(fi os.FileInfo) (fragFileSig, error) {
+	dev, ino, ctime, ok := fileIdentity(fi)
+	if !ok {
+		return fragFileSig{}, fmt.Errorf("%s: no device, inode or ctime from stat on this platform", fi.Name())
+	}
+	return fragFileSig{Size: fi.Size(), MtimeNS: fi.ModTime().UnixNano(), CtimeNS: ctime, Dev: dev, Ino: ino}, nil
+}
+
+// sameFile reports whether two signatures name one file (device and inode).
+func (s fragFileSig) sameFile(o fragFileSig) bool {
+	return s.Ino != 0 && s.Dev == o.Dev && s.Ino == o.Ino
 }
 
 func (s fragFileSig) String() string {
-	return fmt.Sprintf("%d bytes, mtime %d", s.Size, s.MtimeNS)
+	return fmt.Sprintf("%d bytes, mtime %d, ctime %d, dev %d, inode %d", s.Size, s.MtimeNS, s.CtimeNS, s.Dev, s.Ino)
 }
 
 // fragHashFile is the default fragmentFixer.hashFn: filehash.BookFileHash of
 // the file at path, streamed (no decoding), with the signature of the bytes
 // it read. The descriptor is stat'ed before and after the read; a file that
-// changed meanwhile is an error, never a digest.
+// changed meanwhile is an error, never a digest. A file over
+// filehash.Threshold is refused before any read: BookFileHash samples such a
+// file, and a sampled digest must never become a proof of identical bytes.
+//
+// One call is not cancellable part-way: a file of up to filehash.Threshold
+// is read to the end once started (the pool checks ctx between files).
 func fragHashFile(path string) (fragFileSig, string, error) {
 	fh, err := os.Open(path)
 	if err != nil {
 		return fragFileSig{}, "", err
 	}
 	defer fh.Close()
-	before, err := fh.Stat()
+	bfi, err := fh.Stat()
 	if err != nil {
 		return fragFileSig{}, "", err
 	}
-	sum, err := filehash.BookFileHashFromFile(fh, before.Size())
+	before, err := sigOf(bfi)
 	if err != nil {
 		return fragFileSig{}, "", err
 	}
-	after, err := fh.Stat()
+	if before.Size > filehash.Threshold {
+		return fragFileSig{}, "", fmt.Errorf("%s is %d bytes, over filehash.Threshold (%d): its file hash is sampled, not a proof of identical content",
+			path, before.Size, int64(filehash.Threshold))
+	}
+	sum, err := filehash.BookFileHashFromFile(fh, before.Size)
 	if err != nil {
 		return fragFileSig{}, "", err
 	}
-	if sigOf(before) != sigOf(after) {
-		return fragFileSig{}, "", fmt.Errorf("%s changed while it was read (%s, then %s)", path, sigOf(before), sigOf(after))
+	afi, err := fh.Stat()
+	if err != nil {
+		return fragFileSig{}, "", err
 	}
-	return sigOf(before), sum, nil
+	after, err := sigOf(afi)
+	if err != nil {
+		return fragFileSig{}, "", err
+	}
+	if before != after {
+		return fragFileSig{}, "", fmt.Errorf("%s changed while it was read (%s, then %s)", path, before, after)
+	}
+	return before, sum, nil
 }
 
 // fragContentProof is the content comparison of one fragment file against
@@ -112,12 +151,14 @@ type fragContentProof struct {
 	ParentSig    fragFileSig `json:"parent_sig"`
 	ParentDigest string      `json:"parent_digest"`
 	NotCompared  string      `json:"-"`
+	// Alias: the two paths name one file (same device and inode).
+	Alias bool `json:"-"`
 }
 
 func contentKey(fragFileID, parentRowID string) string { return fragFileID + "|" + parentRowID }
 
 func (p fragContentProof) equal() bool {
-	return p.NotCompared == "" && p.FragDigest != "" && p.FragDigest == p.ParentDigest
+	return p.NotCompared == "" && !p.Alias && p.FragDigest != "" && p.FragDigest == p.ParentDigest
 }
 
 // fingerprint is the proof as the row's fingerprint carries it: a re-plan
@@ -149,6 +190,8 @@ func (lib *fragLibrary) withContent(c *fragCandidate, ms []fragMatch) []fragMatc
 		switch {
 		case p.NotCompared != "":
 			out[i].Evidence = m.Evidence + fragEvContentNotCompared + p.NotCompared
+		case p.Alias:
+			out[i].Evidence = m.Evidence + fragEvContentAlias
 		case p.equal():
 			out[i].Evidence = fragEvContentHashPrefix + p.FragDigest
 		default:
@@ -237,6 +280,8 @@ func (f *fragmentFixer) proveCopiesByContent(ctx context.Context, rep registry.R
 		p := &fragContentProof{FragBook: j.c.Book.ID, FragFile: j.c.File.ID, FragPath: j.c.File.Path,
 			ParentRow: j.m.Row.ID, ParentPath: j.m.Row.Path}
 		out[i] = p
+		// Pre-check, so neither file is opened; fragHashFile refuses such
+		// a file too, whatever its caller.
 		if j.c.DiskSize > filehash.Threshold {
 			p.NotCompared = fmt.Sprintf("the files are over %d MB (filehash.Threshold), where the file hash samples the head and tail rather than every byte, so equal hashes would not prove identical content",
 				filehash.Threshold/(1024*1024))
@@ -259,6 +304,9 @@ func (f *fragmentFixer) proveCopiesByContent(ctx context.Context, rep registry.R
 			return nil
 		}
 		p.FragSig, p.FragDigest, p.ParentSig, p.ParentDigest = fr.sig, fr.digest, pr.sig, pr.digest
+		// Two paths of one file (a hardlink or symlink to the parent's
+		// file) are not a copy, whatever the bytes say.
+		p.Alias = fr.sig.sameFile(pr.sig)
 		return nil
 	}, registry.RunItemsOptions{
 		Concurrency: fragHashLimit,
@@ -281,7 +329,10 @@ func (f *fragmentFixer) proveCopiesByContent(ctx context.Context, rep registry.R
 
 // readableForProof reports whether the proof may read the file at path of
 // book id: never one under the iTunes library (the guard's iTunes path rule,
-// symlinks resolved), nor one the guard cannot resolve.
+// symlinks resolved), nor one the guard cannot resolve. A HARDLINK elsewhere
+// to a file under books/itunes passes this path rule (a hardlink has no
+// target path to resolve): such a file is read, read-only, and never
+// written; a hardlink of the parent's own file is then held as a path alias.
 func (lib *fragLibrary) readableForProof(id, path string) bool {
 	k, _ := repairs.GuardBookPathsWith(lib.paths, id, []string{path}, "")
 	return k != repairs.SkipITunes && k != repairs.SkipGuardUnreadable
@@ -302,11 +353,15 @@ func (f *fragmentFixer) restoreContentProofs(lib *fragLibrary, proofs []fragCont
 			if err != nil {
 				return fmt.Sprintf("file %s, whose content proved fragment %s a copy, cannot be read now: %v", side.path, p.FragBook, err)
 			}
-			if now := sigOf(fi); now != side.sig {
+			now, err := sigOf(fi)
+			if err != nil {
+				return fmt.Sprintf("file %s, whose content proved fragment %s a copy, cannot be identified now: %v", side.path, p.FragBook, err)
+			}
+			if now != side.sig {
 				return fmt.Sprintf("file %s changed since the plan compared its content (%s then, %s now)", side.path, side.sig, now)
 			}
 		}
-		if p.FragDigest == "" || p.FragDigest != p.ParentDigest {
+		if p.FragDigest == "" || p.FragDigest != p.ParentDigest || p.FragSig.sameFile(p.ParentSig) {
 			return fmt.Sprintf("the plan's content proof for fragment %s is not an equal pair", p.FragBook)
 		}
 		lib.content[contentKey(p.FragFile, p.ParentRow)] = p

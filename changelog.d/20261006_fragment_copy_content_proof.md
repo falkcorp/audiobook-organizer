@@ -19,3 +19,9 @@
   plan row's evidence, state (each file's size and mtime as read) and
   fingerprint; re-plans, including Apply's under the merge lock, only
   re-stat the two files and report `changed_since_plan` when either moved.
+- The proof is bound to each file's size, mtime, ctime, device and inode:
+  a same-size rewrite with the mtime set back, or another file renamed over
+  the path, is `changed_since_plan`. A claimant whose path is a hardlink or
+  symlink to the parent's own file is the same file, not a copy: held
+  ("same file as the parent row (path alias)"). The hash itself refuses a
+  file over 100 MB, so a sampled digest can never become a proof.

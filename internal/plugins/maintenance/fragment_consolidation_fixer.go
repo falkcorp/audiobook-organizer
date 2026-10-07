@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.43.0
+// version: 1.44.0
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
 // last-edited: 2026-10-06
 
@@ -128,12 +128,13 @@
 // Owner decision 2026-10-06 ("retire the library copies only"): two or more
 // unproven claimants of a parent row whose file is still ON DISK are each a
 // copy of it, not a contradiction, and each pairs on its own into the
-// parent's copy-unproven row (listed for review; copiesOfPresentRow). A
-// claimant whose content the plan proved (CONTENT PROOF) is a proven claimant
-// and pairs into the copy row instead; one whose content differs is held. It holds only when every claim decides as a copy,
-// each claimant's file is on disk at the size of the parent's file, and no
-// two claimants' hashes disagree; a gone parent file (only one claimant can
-// be repointed) or conflicting facts keep them all ambiguous. A claimant that
+// parent's copy-unproven row (listed for review; copiesOfPresentRow). It
+// holds only when every claim decides as a copy, each claimant's file is on
+// disk at the size of the parent's file, and no two claimants' hashes
+// disagree; a gone parent file (only one claimant can be repointed) or
+// conflicting facts keep them all ambiguous. A claimant whose content the
+// plan proved (CONTENT PROOF) is a proven claimant and pairs into the copy
+// row instead; one whose content differs is held. A claimant that
 // is itself hands-off (under the iTunes library, an iTunes id, Doctor Who /
 // Big Finish) is listed manual-only on a "manual:" row of its own
 // (splitManualCopies), so it no longer turns its siblings' copy row manual.
@@ -2850,9 +2851,6 @@ func sliceIn(rows []fragFile, target fragFile) merge.SliceMapping {
 	return merge.SliceMapping{OffsetSeconds: off, Mappable: true}
 }
 
-// buildRows turns the evaluated candidates into rows. It is shared by Plan
-// (over the whole library) and Replan (over one row's books), so both reach
-// the same decision from the same state.
 // effectiveMatches is c's parent-row matches after the iTunes-parent rule
 // (disregardITunesParents): the matches kept, the iTunes parents set aside
 // (nil when the rule did not act), the parent books the kept matches name,
@@ -2873,6 +2871,9 @@ func (f *fragmentFixer) effectiveMatches(lib *fragLibrary, ix *fragIndex, c *fra
 	return ms, nil, parents, note
 }
 
+// buildRows turns the evaluated candidates into rows. It is shared by Plan
+// (over the whole library) and Replan (over one row's books), so both reach
+// the same decision from the same state.
 func (f *fragmentFixer) buildRows(lib *fragLibrary, ix *fragIndex, cands []*fragCandidate) []repairs.Row {
 	type parentKey struct{ parent, kind string }
 	pairs := map[parentKey][]fragPair{}
@@ -2904,6 +2905,12 @@ func (f *fragmentFixer) buildRows(lib *fragLibrary, ix *fragIndex, cands []*frag
 		case !c.Present:
 			rows = append(rows, f.holdRow(lib, c, fragClassHeld, fragClassHeld, fragSkipFilesMissing,
 				fmt.Sprintf("file %s is not on disk", c.File.Path), ms))
+		case len(ms) == 1 && strings.Contains(ms[0].Evidence, fragEvContentAlias):
+			// The claimant's path and the parent row's name one file: not
+			// a copy, and retiring it would leave the parent's file owned
+			// by a retired book's row. Held on its own row.
+			rows = append(rows, f.holdRow(lib, c, fragClassHeld, fragClassHeld, fragSkipCopyUnproven,
+				fmt.Sprintf("same file as parent %s row %s (path alias)", ms[0].Row.BookID, ms[0].Row.ID), ms))
 		case len(ms) == 1 && strings.Contains(ms[0].Evidence, fragEvContentDiffers):
 			// Read at plan time: the same name and size, other bytes. Held
 			// on its own row (a copy it is not), whatever its siblings are.
