@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.46.0
+// version: 1.46.1
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 // Repairs-lane fixer "fragment-consolidation": fold chapter and disc files
 // that an old scan imported as their own books ("fragments") back into the
@@ -7829,6 +7829,12 @@ func changedRow(planned repairs.Row, why string) repairs.Row {
 	r := planned
 	r.Fingerprint = "changed:" + why
 	r.Reason = why
+	// A row skipped at plan time (an owner row) keeps its Skipped kind, but
+	// its plan-time skip reason is not why it changed: the engine reports
+	// SkipReason first (changedWhy), so it must say what changed.
+	if r.Skipped != "" {
+		r.SkipReason = why
+	}
 	r.Detail = nil
 	return r
 }

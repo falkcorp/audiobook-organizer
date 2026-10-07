@@ -1,13 +1,14 @@
 // file: internal/plugins/maintenance/fragment_owner_apply_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2b7e9d40-1c56-4a83-b9f2-8e0d4a6c3f17
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 package maintenance
 
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -218,6 +219,36 @@ func TestFragmentFixer_OwnerApply(t *testing.T) {
 		require.Zero(t, out.Applied, "%+v", out.Rows)
 		require.True(t, f.live(t, "libA"))
 	})
+
+	// The content proof is re-verified at apply time, not trusted from the
+	// plan: a fragment or parent file rewritten after the plan (same size,
+	// its mtime put back, so only ctime betrays it) refuses the owner's
+	// apply, and nothing is written.
+	for _, side := range []string{"fragment", "parent"} {
+		t.Run("a "+side+" file rewritten since the plan (mtime restored) is refused at apply time", func(t *testing.T) {
+			t.Parallel()
+			f := ownerFixture(t, false)
+			m := findRow(t, f.plan(t, "op-plan"), "manual:"+f.ids["libA"])
+			require.True(t, m.OwnerApplicable, "%s", m.SkipReason)
+			rel := hpLibA
+			if side == "parent" {
+				rel = hpParent
+			}
+			p := f.path(rel)
+			fi, err := os.Stat(p)
+			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(p, fragFixtureBytes("different", 2002), 0o644))
+			require.NoError(t, os.Chtimes(p, fi.ModTime(), fi.ModTime()))
+			out := f.ownerApply(t, "op-plan", "op-apply", []string{m.RowID}, "", nil)
+			require.Zero(t, out.Applied, "%+v", out.Rows)
+			require.Equal(t, repairs.OutcomeChangedSincePlan, out.Rows[0].Outcome, "%+v", out.Rows)
+			require.Contains(t, out.Rows[0].Error, "changed since the plan compared its content")
+			require.True(t, f.live(t, "libA"))
+			changes, err := f.s.GetOperationChanges("op-apply")
+			require.NoError(t, err)
+			require.Empty(t, changes, "no audit note and no write for a refused row")
+		})
+	}
 
 	t.Run("a fragment file moved under the iTunes library since the plan is refused", func(t *testing.T) {
 		t.Parallel()
