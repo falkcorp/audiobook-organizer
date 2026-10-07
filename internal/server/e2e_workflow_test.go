@@ -1,5 +1,5 @@
 // file: internal/server/e2e_workflow_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: c9d0e1f2-a3b4-5678-cdef-901234567012
 // last-edited: 2026-10-06
 
@@ -137,12 +137,12 @@ func TestE2E_ScanAndFetchMetadata(t *testing.T) {
 	env, cleanup := testutil.SetupIntegration(t)
 	defer cleanup()
 
-	// Mock OpenLibrary
-	mockServer := testutil.MockOpenLibraryServer(t, map[string]string{
-		"search.json": testutil.OpenLibraryHobbitResponse,
+	// Mock Audible (Open Library and Google Books are review-only and never
+	// applied by the auto-fetch, owner decision 2026-10-06)
+	mockServer := testutil.MockAudibleServer(t, func(string) []testutil.AudibleTestProduct {
+		return []testutil.AudibleTestProduct{testutil.AudibleHobbitProduct}
 	})
-	defer mockServer.Close()
-	useOnlyOpenLibrary(t, mockServer.URL)
+	useOnlyAudible(t, mockServer.URL)
 
 	// Create audiobook file
 	env.CopyFixture("test_sample.m4b", env.ImportDir, "The Hobbit.m4b")
@@ -169,5 +169,5 @@ func TestE2E_ScanAndFetchMetadata(t *testing.T) {
 	// Step 3: Verify enrichment
 	enriched, err := env.Store.GetBookByID(bookID)
 	require.NoError(t, err)
-	assert.NotNil(t, enriched.Publisher, "publisher should be populated from OpenLibrary")
+	assert.NotNil(t, enriched.Publisher, "publisher should be populated from Audible")
 }

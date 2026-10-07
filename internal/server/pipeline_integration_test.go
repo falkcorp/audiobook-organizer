@@ -1,7 +1,7 @@
 // file: internal/server/pipeline_integration_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: b1c2d3e4-f5a6-7890-abcd-ef1234567890
-// last-edited: 2026-08-20
+// last-edited: 2026-10-06
 
 package server
 
@@ -59,15 +59,13 @@ func TestPipeline_ImportThenFetchMetadata(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, book.ID)
 
-	// 3. Start mock Open Library server
-	olServer := testutil.MockOpenLibraryServer(t, map[string]string{
-		"search.json": testutil.OpenLibraryHobbitResponse,
-	})
-	defer olServer.Close()
+	// 3. Start a mock Audible (Open Library and Google Books are
+	// review-only and never applied by the auto-fetch, 2026-10-06)
+	audServer := testutil.MockAudibleServer(t, audibleAnswersTitle(testutil.AudibleHobbitProduct, "The Hobbit"))
 
-	// 4. Configure metadata sources — only Open Library, pointed at the mock
+	// 4. Configure metadata sources — only Audible, pointed at the mock
 	config.AppConfig.MetadataSources = []config.MetadataSource{
-		{ID: "openlibrary", Name: "Open Library", Enabled: true, Priority: 1, BaseURL: olServer.URL},
+		{ID: "audible", Name: "Audible", Enabled: true, Priority: 1, BaseURL: audServer.URL},
 	}
 	config.AppConfig.WriteBackMetadata = false
 
@@ -78,7 +76,7 @@ func TestPipeline_ImportThenFetchMetadata(t *testing.T) {
 	require.NotNil(t, resp)
 
 	// 7. Assert source
-	assert.Equal(t, "Open Library", resp.Source)
+	assert.Equal(t, "Audible", resp.Source)
 
 	// 8. Re-read book from DB
 	updated, err := env.Store.GetBookByID(book.ID)
@@ -129,10 +127,17 @@ func TestPipeline_FetchMetadata_MultiSourceFallback(t *testing.T) {
 	}, 0)
 	defer gbServer.Close()
 
-	// 4. Configure both sources, pointed at their mocks
+	// 3b. Mock Audible returns a Dune record too
+	audServer := testutil.MockAudibleServer(t, audibleAnswersTitle(testutil.AudibleTestProduct{
+		ASIN: "B0TESTDUNE", Title: "Dune", Authors: []string{"Frank Herbert"},
+		Publisher: "Chilton Books", Language: "en", ReleaseDate: "2007-01-01",
+	}, "Dune"))
+
+	// 4. Configure all three sources, pointed at their mocks
 	config.AppConfig.MetadataSources = []config.MetadataSource{
 		{ID: "openlibrary", Name: "Open Library", Enabled: true, Priority: 1, BaseURL: olServer.URL},
 		{ID: "google-books", Name: "Google Books", Enabled: true, Priority: 2, BaseURL: gbServer.URL},
+		{ID: "audible", Name: "Audible", Enabled: true, Priority: 3, BaseURL: audServer.URL},
 	}
 	config.AppConfig.WriteBackMetadata = false
 
@@ -142,8 +147,10 @@ func TestPipeline_FetchMetadata_MultiSourceFallback(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 
-	// 6. Assert: source is Google Books (OL failed)
-	assert.Equal(t, "Google Books", resp.Source)
+	// 6. Assert: source is Audible -- Open Library failed, and Google
+	// Books' match is review-only (fetched, never applied by the
+	// auto-fetch, owner decision 2026-10-06), so the chain moved on.
+	assert.Equal(t, "Audible", resp.Source)
 
 	// 7. Assert: book metadata updated in DB
 	updated, err := env.Store.GetBookByID(book.ID)
@@ -175,26 +182,15 @@ func TestPipeline_ChapterTitle_StillFindsBook(t *testing.T) {
 	// The service strips " - Chapter 3" via stripChapterFromTitle, then
 	// searches by title "The Hobbit" (no author in query).
 	callCount := 0
-	olServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	answer := audibleAnswersTitle(testutil.AudibleHobbitProduct, "The Hobbit")
+	audServer := testutil.MockAudibleServer(t, func(title string) []testutil.AudibleTestProduct {
 		callCount++
-		w.Header().Set("Content-Type", "application/json")
+		return answer(title) // stripped title "The Hobbit" matches; others are empty
+	})
 
-		// Stripped title "The Hobbit" should match
-		query := r.URL.Query()
-		title := query.Get("title")
-		if title == "The Hobbit" || title == "The+Hobbit" {
-			_, _ = w.Write([]byte(testutil.OpenLibraryHobbitResponse))
-			return
-		}
-
-		// Other searches: return empty
-		_, _ = w.Write([]byte(testutil.OpenLibraryEmptyResponse))
-	}))
-	defer olServer.Close()
-
-	// 3. Configure Open Library, pointed at the mock
+	// 3. Configure Audible, pointed at the mock
 	config.AppConfig.MetadataSources = []config.MetadataSource{
-		{ID: "openlibrary", Name: "Open Library", Enabled: true, Priority: 1, BaseURL: olServer.URL},
+		{ID: "audible", Name: "Audible", Enabled: true, Priority: 1, BaseURL: audServer.URL},
 	}
 	config.AppConfig.WriteBackMetadata = false
 
@@ -205,7 +201,7 @@ func TestPipeline_ChapterTitle_StillFindsBook(t *testing.T) {
 	require.NotNil(t, resp)
 
 	// 5. Assert: metadata found via title-only search with stripped chapter prefix
-	assert.Equal(t, "Open Library", resp.Source)
+	assert.Equal(t, "Audible", resp.Source)
 
 	// 6. Assert: book title in DB is now clean (from metadata response)
 	updated, err := env.Store.GetBookByID(book.ID)

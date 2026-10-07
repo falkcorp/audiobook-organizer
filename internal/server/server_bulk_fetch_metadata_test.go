@@ -1,7 +1,7 @@
 // file: internal/server/server_bulk_fetch_metadata_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 2b1c0d9e-8f7a-6b5c-4d3e-2f1a0b9c8d7e
-// last-edited: 2026-09-13
+// last-edited: 2026-10-06
 
 package server
 
@@ -10,12 +10,12 @@ import (
 	json "encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -24,33 +24,18 @@ func TestBulkFetchMetadata_MixedResults(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
 
-	// Stub OpenLibrary.
-	mux := http.NewServeMux()
-	mux.HandleFunc("/search.json", func(w http.ResponseWriter, r *http.Request) {
-		q := r.URL.Query()
-		title := q.Get("title")
-		if title == url.QueryEscape("NoResults") || title == "NoResults" {
-			_ = json.MarshalWrite(w, map[string]any{"numFound": 0, "start": 0, "docs": []any{}})
-			return
+	// Stub Audible (Open Library and Google Books are review-only and never
+	// applied by the bulk fetch, owner decision 2026-10-06).
+	aud := testutil.MockAudibleServer(t, func(title string) []testutil.AudibleTestProduct {
+		if title == "NoResults" {
+			return nil
 		}
-		_ = json.MarshalWrite(w, map[string]any{
-			"numFound": 1,
-			"start":    0,
-			"docs": []map[string]any{
-				{
-					"title":              "Fetched Title",
-					"author_name":        []string{"Meta Author"},
-					"first_publish_year": 2020,
-					"isbn":               []string{"1234567890"},
-					"publisher":          []string{"Meta Pub"},
-					"language":           []string{"eng"},
-				},
-			},
-		})
+		return []testutil.AudibleTestProduct{{
+			ASIN: "B0TESTBLK1", Title: title, Authors: []string{"Meta Author"},
+			Publisher: "Meta Pub", Language: "eng", ReleaseDate: "2020-01-01",
+		}}
 	})
-	ol := httptest.NewServer(mux)
-	defer ol.Close()
-	useOnlyOpenLibrary(t, ol.URL)
+	useOnlyAudible(t, aud.URL)
 
 	// Book that should update (has missing publisher/language/year/isbn/author).
 	tempFile := filepath.Join(t.TempDir(), "bulk1.m4b")
@@ -119,27 +104,14 @@ func TestBulkFetchMetadata_OnlyMissingFalse_AllowsOverwrite(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
 
-	// Stub OpenLibrary with a different publisher.
-	mux := http.NewServeMux()
-	mux.HandleFunc("/search.json", func(w http.ResponseWriter, r *http.Request) {
-		_ = json.MarshalWrite(w, map[string]any{
-			"numFound": 1,
-			"start":    0,
-			"docs": []map[string]any{
-				{
-					"title":              "Fetched Title",
-					"publisher":          []string{"Overwrite Pub"},
-					"author_name":        []string{"Meta Author"},
-					"first_publish_year": 2020,
-					"isbn":               []string{"1234567890"},
-					"language":           []string{"eng"},
-				},
-			},
-		})
+	// Stub Audible with a different publisher.
+	aud := testutil.MockAudibleServer(t, func(title string) []testutil.AudibleTestProduct {
+		return []testutil.AudibleTestProduct{{
+			ASIN: "B0TESTBLK2", Title: title, Authors: []string{"Meta Author"},
+			Publisher: "Overwrite Pub", Language: "eng", ReleaseDate: "2020-01-01",
+		}}
 	})
-	ol := httptest.NewServer(mux)
-	defer ol.Close()
-	useOnlyOpenLibrary(t, ol.URL)
+	useOnlyAudible(t, aud.URL)
 
 	tempFile := filepath.Join(t.TempDir(), "bulk-overwrite.m4b")
 	require.NoError(t, os.WriteFile(tempFile, []byte("audio"), 0o644))
@@ -175,16 +147,10 @@ func TestBulkFetchMetadata_UndoRestoresAuthorAndCredits(t *testing.T) {
 	defer cleanup()
 	server.writeBackBatcher = nil
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/search.json", func(w http.ResponseWriter, r *http.Request) {
-		_ = json.MarshalWrite(w, map[string]any{
-			"numFound": 1, "start": 0,
-			"docs": []map[string]any{{"title": "Bulk Book", "author_name": []string{"Bulk Author"}}},
-		})
+	aud := testutil.MockAudibleServer(t, func(string) []testutil.AudibleTestProduct {
+		return []testutil.AudibleTestProduct{{ASIN: "B0TESTBLK3", Title: "Bulk Book", Authors: []string{"Bulk Author"}}}
 	})
-	ol := httptest.NewServer(mux)
-	defer ol.Close()
-	useOnlyOpenLibrary(t, ol.URL)
+	useOnlyAudible(t, aud.URL)
 
 	store := database.GetGlobalStore()
 	tempFile := filepath.Join(t.TempDir(), "bulk-author.m4b")
@@ -236,22 +202,16 @@ func TestBulkFetchMetadata_KeepsAnEditMadeDuringTheSearch(t *testing.T) {
 
 	store := database.GetGlobalStore()
 	var bookID string
-	mux := http.NewServeMux()
-	mux.HandleFunc("/search.json", func(w http.ResponseWriter, r *http.Request) {
+	aud := testutil.MockAudibleServer(t, func(string) []testutil.AudibleTestProduct {
 		// The user saves the book page while the provider is answering.
 		if cur, err := store.GetBookByID(bookID); err == nil && cur != nil && cur.Publisher == nil {
 			pub := "User Pub"
 			cur.Publisher = &pub
 			_, _ = store.UpdateBook(bookID, cur)
 		}
-		_ = json.MarshalWrite(w, map[string]any{
-			"numFound": 1, "start": 0,
-			"docs": []map[string]any{{"title": "Edit Race Book", "author_name": []string{"Race Author"}}},
-		})
+		return []testutil.AudibleTestProduct{{ASIN: "B0TESTBLK4", Title: "Edit Race Book", Authors: []string{"Race Author"}}}
 	})
-	ol := httptest.NewServer(mux)
-	defer ol.Close()
-	useOnlyOpenLibrary(t, ol.URL)
+	useOnlyAudible(t, aud.URL)
 
 	tempFile := filepath.Join(t.TempDir(), "edit-race.m4b")
 	require.NoError(t, os.WriteFile(tempFile, []byte("audio"), 0o644))

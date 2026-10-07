@@ -1,5 +1,5 @@
 // file: internal/server/server_more_test.go
-// version: 1.13.1
+// version: 1.13.2
 // guid: 18a6b0a3-7e78-4e0f-8b8e-0e4c1dbde6de
 // last-edited: 2026-10-06
 
@@ -22,6 +22,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -181,7 +182,19 @@ func TestSearchAndFetchMetadata(t *testing.T) {
 	})
 	openLibrary := httptest.NewServer(mux)
 	defer openLibrary.Close()
-	useOnlyOpenLibrary(t, openLibrary.URL)
+	// Open Library answers the search; the fetch-metadata below applies the
+	// Audible match, since an Open Library one is review-only and never
+	// applied by the auto-fetch (owner decision 2026-10-06).
+	audible := testutil.MockAudibleServer(t, audibleAnswersTitle(testutil.AudibleTestProduct{
+		ASIN: "B0TESTSRF1", Title: "Test Book", Authors: []string{"Test Author"},
+		Publisher: "Test Publisher", Language: "eng", ReleaseDate: "2020-01-01",
+	}, "Test Book"))
+	origSources := config.AppConfig.MetadataSources
+	config.AppConfig.MetadataSources = []config.MetadataSource{
+		{ID: "openlibrary", Name: "Open Library", Enabled: true, Priority: 1, BaseURL: openLibrary.URL},
+		{ID: "audible", Name: "Audible", Enabled: true, Priority: 2, BaseURL: audible.URL},
+	}
+	t.Cleanup(func() { config.AppConfig.MetadataSources = origSources })
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/metadata/search", nil)
 	w := httptest.NewRecorder()

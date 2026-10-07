@@ -91,3 +91,14 @@
     are funded against the day's background Google share after every book
     already owed a Google lookup; an unfunded one is still selected, with
     its Google step put off (`ChainCapped`).
+  - **Auto-fetch fetches but never applies Open Library / Google Books**
+    (owner decision): `FetchMetadataForBook` (organize, the iTunes import
+    enrichment, the single-book "Fetch metadata" button) and
+    `FetchMetadataForBookByTitle` (the production-company resolvers) still
+    search them, and `FetchMetadataForBook` caches the answer in the
+    per-provider fetch cache for review, but the chain moves on to the
+    next source instead of applying; with no other match they return
+    `metafetch.ErrReviewOnlyCandidatesNotApplied` and write nothing.
+    `POST /metadata/bulk-fetch` applies the best non-review-only candidate
+    or reports `review_only`. The iTunes enrichment does not count that
+    answer toward its rate-limit breaker.

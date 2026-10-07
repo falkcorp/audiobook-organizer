@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-06-google-books-shared-budget-and-fallback-executive-summary.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.2.1 -->
 <!-- guid: eecc3fe7-e8de-499f-8114-d48d6f8a6ec1 -->
 <!-- last-edited: 2026-10-06 -->
 
@@ -69,3 +69,8 @@
   - **Unsearched books share the allowance.** Books never searched before can
     end up needing a Google lookup too. They now draw on the same daily
     allowance, after the books already waiting for one.
+  - **Automatic lookups never apply Open Library or Google matches.** This
+    follows your "fetch but don't apply" decision. Organizing, the iTunes
+    import, the "Fetch metadata" button and the production-company cleanup
+    still look these sources up, and their matches are kept for review. A
+    book is only updated automatically from another source's match.
