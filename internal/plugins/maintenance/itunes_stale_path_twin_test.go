@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_stale_path_twin_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 389e1da9-89bf-4ccc-bd83-816813eaccf9
 // last-edited: 2026-10-07
 
@@ -312,4 +312,39 @@ func TestStaleITunesPath_OwnerRowPathClearedSincePlan(t *testing.T) {
 	out := f.ownerApply(t, "op-plan", "op-apply", []string{m.RowID}, "", nil)
 	require.Zero(t, out.Applied, "%+v", out.Rows)
 	require.True(t, f.live(t, "libA"))
+}
+
+// An ordinary fragment (no iTunes path, no iTunes book in its version
+// group) on a row held for another book's sake carries no "not
+// owner-applicable" reason: the owner row was never its question (D9).
+func TestStaleITunesPath_PlainGroupedFragmentNoOwnerReason(t *testing.T) {
+	t.Parallel()
+	f := newStaleFixture(t, []string{twTrackURL}, []string{twTrackNative})
+	p1 := f.file(t, "lib/Unknown Author/Many Parts/01.mp3", 2001)
+	p2 := f.file(t, twParent02, 2002)
+	parent := f.book(t, "parent", "Many Parts", f.path("lib/Unknown Author/Many Parts"), nil)
+	f.row(t, "p01", parent, p1, "01.mp3", 2001, 600, 1)
+	f.row(t, "p02", parent, p2, "02.mp3", 2002, 600, 2)
+	fp := f.file(t, twFrag, 2002)
+	frag := f.book(t, "frag", "02", fp, nil)
+	f.row(t, "frag", frag, fp, "02.mp3", 2002, 590, 0)
+	f.writeSame(t, "same", twParent02, twFrag)
+	f.setVG(t, frag, "vg-placeholder-frag", true)
+	// Listening state on the fragment: ownerEligible would refuse it, which
+	// must not be shown, since nothing iTunes is about this fragment.
+	u, err := f.s.CreateUser("reader", "reader@example.com", "bcrypt", "x", []string{"user"}, "active")
+	require.NoError(t, err)
+	require.NoError(t, f.s.SetUserPosition(u.ID, frag, f.rowIDs["frag"], 100))
+	// The parent's version group holds an iTunes book: that holds the row.
+	ip := f.file(t, "books/itunes/iTunes Media/Audiobooks/Placeholder Author/Many Parts.m4b", 3000)
+	it := f.book(t, "it", "Many Parts", ip, nil)
+	f.row(t, "it", it, ip, "Many Parts.m4b", 3000, 1200, 0)
+	f.setVG(t, parent, "vg-placeholder-parent", true)
+	f.setVG(t, it, "vg-placeholder-parent", false)
+
+	r := rowWithBook(t, f.plan(t, "op-plan").Rows, frag)
+	require.False(t, r.Applicable(), "%s", r.RowID)
+	require.False(t, r.OwnerApplicable, "%s", r.RowID)
+	require.Contains(t, r.SkipReason, "iTunes", "%s", r.RowID)
+	require.NotContains(t, r.SkipReason, "not owner-applicable", "%s", r.RowID)
 }

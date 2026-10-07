@@ -1,5 +1,5 @@
 <!-- file: docs/plans/2026-10-07-stale-itunes-path.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 5f4fc883-f6c3-41f4-9539-c1c4ae4d3485 -->
 <!-- last-edited: 2026-10-07 -->
 
@@ -176,6 +176,10 @@ Two things block that today:
     books that iTunes has no track for. Order stays: clear, then retire.
   - Also refused: a twin row marked missing, or a twin with a live external id
     of any source.
+  - **Who is asked.** A fragment with no iTunes path is asked about the owner
+    row only when its version group holds another iTunes book, or cannot be
+    read. An ordinary grouped fragment is never asked, so no owner reason is
+    recorded for it or shown on a row held for something else.
   - **Under the merge lock**, `ownerTwinRefusal` re-reads each twin before the
     first write. It must still be live, explicitly non-primary, in the fragment's
     group, and single-row. It must have no PID, row path or itunes external id,
@@ -207,6 +211,26 @@ Two things block that today:
   - A cleared row can therefore get its computed path back if one of them runs
     before the consolidation re-plan.
   - Run the consolidation plan and owner apply straight after the stale-path apply.
+
+## Prod census (2026-10-07, GET-only, API)
+
+- 300 fragment/twin pairs, each version group exactly {fragment, twin}; the
+  parent is alone in its own group.
+- **300/300 pass every rule the API can show.** Twins: explicit non-primary,
+  no PID on book or row, one row, no row `itunes_path`, file present, no
+  external ids, sizes equal, recorded hash equals the fragment's. Fragments:
+  primary, one row, no PID, no external ids.
+- Not covered by the API: listening state of users other than the API key's
+  user (`/position` is per user), and whether `/external-ids` lists tombstoned
+  ids. The plan's fragment-consolidation run answers both for every user
+  (`merge.UserStateProbe`, `GetExternalIDsForBook`).
+- **Scale of one row.** All 300 fragments and their 300 twins land on ONE
+  owner row (`owner:<parent>`), applied under one grant. Any change to any of
+  the 600 books after the plan makes the whole row `changed_since_plan`: re-plan
+  and approve again. An apply cut off part-way is `partially_applied`; every
+  step is journaled, so the op revert undoes what was written, and a re-plan
+  lists what is left (a fragment whose twin was already retired falls to an
+  ordinary row).
 
 ## Files
 

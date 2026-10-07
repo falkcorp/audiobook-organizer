@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.48.0
+// version: 1.48.1
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
 // last-edited: 2026-10-07
 
@@ -3176,10 +3176,17 @@ func (f *fragmentFixer) splitManualCopies(lib *fragLibrary, parentID string, ps 
 		if kind == "" {
 			it := p.Frag.itunesWhy()
 			// A fragment iTunes-tracked by its own row's iTunes path, or
-			// one whose version group may hold an iTunes twin (the library
-			// copy of an iTunes file: the twin would hold its retire), is
-			// asked whether the owner may apply it (ownerEligible).
-			if it != "" || p.Frag.Book.VersionGroup != "" {
+			// one whose version group holds (or may hold: an unreadable
+			// group answers too) another iTunes book, which may be its
+			// iTunes twin (the library copy of an iTunes file), is asked
+			// whether the owner may apply it (ownerEligible). Any other
+			// fragment is an ordinary one: no owner reason is recorded
+			// for it, so none is shown on a row held for something else.
+			askOwner := it != ""
+			if g := p.Frag.Book.VersionGroup; !askOwner && g != "" {
+				askOwner = lib.groupsITunesExcept(map[string]bool{g: true}, map[string]bool{p.Frag.Book.ID: true}) != ""
+			}
+			if askOwner {
 				whyNot, twins := f.ownerEligible(lib, parentID, p, ps, probe)
 				if whyNot == "" {
 					ownerPairs = append(ownerPairs, p)
