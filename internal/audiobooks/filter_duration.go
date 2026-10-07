@@ -1,7 +1,7 @@
 // file: internal/audiobooks/filter_duration.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 7c1e5a92-3f04-4d8b-b6e1-0a9d2c47f815
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package audiobooks
 
@@ -96,24 +96,14 @@ func parseDurationExpr(expr string) (durationExpr, error) {
 }
 
 // ValidateFilterValue reports an error for a filter value the matcher cannot
-// evaluate, so the handler can answer 400 instead of a silent count:0. Only
-// fields with a grammar are checked; substring fields accept anything.
+// evaluate, so the handler can answer 400 instead of a silent count:0: a
+// malformed duration, has_duration:maybe, metadata:whatever, an invalid or
+// unterminated /regex/ (RE2 — lookahead is rejected), or a malformed numeric
+// comparison/range. It runs the SAME compile the matcher runs
+// (compileFieldFilter), so the two cannot disagree about what is valid.
 func ValidateFilterValue(f FieldFilter) error {
-	switch {
-	case durationFilterFields[f.Field]:
-		if _, err := parseDurationExpr(f.Value); err != nil {
-			return fmt.Errorf("%s: %w", f.Field, err)
-		}
-	case f.Field == "has_duration":
-		if _, ok := parseYesNo(f.Value); !ok {
-			return fmt.Errorf("has_duration: value must be yes or no, got %q", f.Value)
-		}
-	case f.Field == "metadata":
-		if _, ok := metadataFilterWantsApplied(f.Value); !ok {
-			return fmt.Errorf("metadata: value must be applied (or none), got %q", f.Value)
-		}
-	}
-	return nil
+	_, err := compileFieldFilter(f)
+	return err
 }
 
 // FirstInvalidFilterValue returns the first validation error among filters.

@@ -1,7 +1,7 @@
 // file: internal/server/metadata_ops.go
-// version: 1.36.0
+// version: 1.37.0
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
-// last-edited: 2026-10-04
+// last-edited: 2026-10-06
 //
 // Async-operation machinery for the metadata domain, relocated verbatim from
 // metadata_handlers.go (ADR-003 Phase 4) when the 19 metadata HTTP handlers
@@ -545,6 +545,7 @@ func (s *Server) resolveFilterToBookIDs(ctx context.Context, f operations.Filter
 			Field:   ff.Field,
 			Value:   ff.Value,
 			Negated: ff.Negated,
+			Quoted:  ff.Quoted,
 		})
 	}
 	var authorID, seriesID *int

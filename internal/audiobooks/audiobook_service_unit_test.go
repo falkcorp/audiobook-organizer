@@ -1,5 +1,5 @@
 // file: internal/audiobooks/audiobook_service_unit_test.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 // last-edited: 2026-10-06
 
@@ -839,12 +839,12 @@ func TestAudiobookService_GetAudiobooks_PerUserNoUserID(t *testing.T) {
 	assert.Len(t, got, 2, "no user → per-user filter skipped, all books returned")
 }
 
-// --- numericCompare / user_rating_* field filters ---
+// --- user_rating_* numeric field filters (unified grammar) ---
 
 // TestNumericCompare_Operators verifies every comparison operator against a
-// known book field value of 4.0.
+// known book field value of 4.0, through the matcher the list uses.
 func TestNumericCompare_Operators(t *testing.T) {
-	val := new(4.0)
+	book := database.Book{UserRatingOverall: new(4.0)}
 	tests := []struct {
 		expr string
 		want bool
@@ -875,23 +875,26 @@ func TestNumericCompare_Operators(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.expr, func(t *testing.T) {
-			got := numericCompare(val, tc.expr)
-			assert.Equal(t, tc.want, got, "numericCompare(%v, %q)", *val, tc.expr)
+			got := fieldMatchesValue(book, "user_rating_overall", tc.expr)
+			assert.Equal(t, tc.want, got, "user_rating_overall:%s against 4.0", tc.expr)
 		})
 	}
 }
 
 // TestNumericCompare_NilField ensures a nil rating always returns false.
 func TestNumericCompare_NilField(t *testing.T) {
-	assert.False(t, numericCompare(nil, ">0"))
-	assert.False(t, numericCompare(nil, "==0"))
+	assert.False(t, fieldMatchesValue(database.Book{}, "user_rating_overall", ">0"))
+	assert.False(t, fieldMatchesValue(database.Book{}, "user_rating_overall", "==0"))
 }
 
-// TestNumericCompare_InvalidExpr ensures an unparseable expression returns false.
+// TestNumericCompare_InvalidExpr ensures an unparseable expression matches
+// nothing AND is rejected by validation (a 400, never a silent count:0).
 func TestNumericCompare_InvalidExpr(t *testing.T) {
-	val := new(3.0)
-	assert.False(t, numericCompare(val, ">abc"))
-	assert.False(t, numericCompare(val, ">="))
+	book := database.Book{UserRatingOverall: new(3.0)}
+	for _, expr := range []string{">abc", ">="} {
+		assert.False(t, fieldMatchesValue(book, "user_rating_overall", expr))
+		assert.Error(t, ValidateFilterValue(FieldFilter{Field: "user_rating_overall", Value: expr}))
+	}
 }
 
 // TestFieldMatchesValue_UserRatingFields checks that fieldMatchesValue routes

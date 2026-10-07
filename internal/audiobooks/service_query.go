@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.31.1
+// version: 1.32.0
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
-// last-edited: 2026-09-28
+// last-edited: 2026-10-06
 
 package audiobooks
 
@@ -639,7 +639,13 @@ func (svc *AudiobookService) queryAudiobooks(ctx context.Context, limit int, off
 		// (description / version_notes / book_sig_v1). Route those filters
 		// through the Pebble fallback so they don't silently miss.
 		if len(f.FieldFilters) > 0 {
-			cheapFF, strippedFF := splitFieldFilters(f.FieldFilters)
+			// Compile every value once for the whole loop, not per row.
+			compiledFF, compiledOK := mustCompileForPredicate(f.FieldFilters)
+			if !compiledOK {
+				compiledFF = nil
+				filtered = filtered[:0] // fail closed; see mustCompileForPredicate
+			}
+			cheapFF, strippedFF := splitCompiledFilters(compiledFF)
 			var pebbleLookups int64
 			var warnOnce sync.Once
 			warnFn := func(id string, err error) {
@@ -891,6 +897,12 @@ func (svc *AudiobookService) CountAudiobooksFiltered(ctx context.Context, filter
 	// SortBy doesn't affect counts; clear it so buildBookSummaryFilter
 	// doesn't reject the filter for non-title sort. Counts don't depend
 	// on iteration order.
+	if err := FirstInvalidFilterValue(filters.FieldFilters); err != nil {
+		return 0, fmt.Errorf("invalid filter value: %w", err)
+	}
+	if err := FirstInvalidFilterValue(filters.PerUserFilters); err != nil {
+		return 0, fmt.Errorf("invalid filter value: %w", err)
+	}
 	filtersForCount := filters
 	filtersForCount.SortBy = ""
 	bsf, pushdownOK := svc.buildBookSummaryFilter(filtersForCount, true)

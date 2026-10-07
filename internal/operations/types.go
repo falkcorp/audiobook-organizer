@@ -1,7 +1,7 @@
 // file: internal/operations/types.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: f1e2d3c4-b5a6-7890-abcd-ef1234567890
-// last-edited: 2026-07-01
+// last-edited: 2026-10-06
 //
 // SelectionSpec and related types for server-side bulk operation targeting.
 // A SelectionSpec describes which books an operation targets without requiring
@@ -46,4 +46,7 @@ type FieldFilter struct {
 	Field   string `json:"field"`
 	Value   string `json:"value"`
 	Negated bool   `json:"negated"`
+	// Quoted marks a "quoted" value: a literal substring, never a regex,
+	// glob, or comparison. See internal/querygrammar.
+	Quoted bool `json:"quoted,omitempty"`
 }

@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_filtering.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: b4e8c3d2-e5f6-7a80-9b0c-1d2e3f4a5b6c
-// last-edited: 2026-09-27
+// last-edited: 2026-10-06
 
 package audiobooks
 
@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/querygrammar"
 	"math"
 )
 
@@ -188,13 +189,14 @@ func matchesPerUserFilter(state *database.UserBookState, f FieldFilter) bool {
 	case "read_status":
 		return strings.EqualFold(state.Status, f.Value)
 	case "progress_pct":
-		// Listing-side FieldFilters carry no operator (parser strips
-		// them at this layer), so equality is the only sensible match.
-		want, err := strconv.Atoi(f.Value)
+		// Unified numeric grammar: progress_pct:>75, <=10, [25 TO 75], 50.
+		// This used to be strconv.Atoi equality, so the search help's own
+		// example progress_pct:>75 failed to parse and matched nothing.
+		c, err := querygrammar.ParseNumericExpr(f.Value)
 		if err != nil {
 			return false
 		}
-		return state.ProgressPct == want
+		return c.Match(float64(state.ProgressPct))
 	case "last_played":
 		// Without an operator we can only test presence — value is
 		// ignored. Useful as `-last_played:` (never played).
@@ -263,29 +265,26 @@ func matchesFieldFilters(book database.Book, filters []FieldFilter) bool {
 // matchesFieldFiltersRT is matchesFieldFilters with the runtime source the
 // duration: filter compares against (nil = stored Book.Duration).
 func matchesFieldFiltersRT(book database.Book, filters []FieldFilter, rt runtimeFunc) bool {
+	// Fail CLOSED on an empty value. Falling through would reach
+	// strings.Contains(x, "") == true and match every book — see
+	// FirstEmptyFilterValue. Matching nothing is visibly wrong and harmless;
+	// matching everything is invisibly wrong and, on the background-op path,
+	// destructive. Negated is deliberately not consulted: neither `f == ""`
+	// nor `f != ""` is a constraint anyone can have meant.
 	for _, f := range filters {
-		// Fail CLOSED on an empty value. Falling through would reach
-		// strings.Contains(x, "") == true and match every book — see
-		// FirstEmptyFilterValue. Matching nothing is visibly wrong and harmless;
-		// matching everything is invisibly wrong and, on the background-op path,
-		// destructive. Negated is deliberately not consulted: neither `f == ""`
-		// nor `f != ""` is a constraint anyone can have meant.
-		//
-		// No in-repo code builds a filter with an empty value (the list warmer's
-		// constructions all carry real values), so this only ever fires on input
-		// that the boundary validation should already have rejected.
 		if f.Value == "" {
 			return false
 		}
-		matches := fieldMatchesValueRT(book, f.Field, f.Value, rt)
-		if f.Negated && matches {
-			return false // NOT filter: exclude if matches
-		}
-		if !f.Negated && !matches {
-			return false // positive filter: exclude if doesn't match
-		}
 	}
-	return true
+	// Convenience path for single-row callers and tests: compiles per call.
+	// The list paths compile once per request (see compileFieldFilters) and
+	// call matchesCompiledFilters directly. An uncompilable value matches
+	// nothing — the boundary validation answers it with a 400 first.
+	cfs, ok := mustCompileForPredicate(filters)
+	if !ok {
+		return false
+	}
+	return matchesCompiledFilters(book, cfs, rt)
 }
 
 // matchesFieldFiltersWithStrippedFallback evaluates field filters against a
@@ -314,7 +313,7 @@ func matchesFieldFiltersRT(book database.Book, filters []FieldFilter, rt runtime
 // caller can log a per-query count at DEBUG.
 func matchesFieldFiltersWithStrippedFallback(
 	memBook *database.Book,
-	cheap, stripped []FieldFilter,
+	cheap, stripped []compiledFilter,
 	fetchFull func(id string) (*database.Book, error),
 	pebbleLookups *int64,
 	warnOnce func(id string, err error),
@@ -327,7 +326,7 @@ func matchesFieldFiltersWithStrippedFallback(
 			hydrated := hydrateAuthorSeriesNames(*memBook, authorNames, seriesNames)
 			cheapBook = &hydrated
 		}
-		if !matchesFieldFiltersRT(*cheapBook, cheap, rt) {
+		if !matchesCompiledFilters(*cheapBook, cheap, rt) {
 			return false
 		}
 	}
@@ -344,7 +343,7 @@ func matchesFieldFiltersWithStrippedFallback(
 		}
 		return false
 	}
-	return matchesFieldFiltersRT(*full, stripped, rt)
+	return matchesCompiledFilters(*full, stripped, rt)
 }
 
 // hydrateAuthorSeriesNames returns a copy of book with Author/Series
@@ -404,53 +403,22 @@ func (svc *AudiobookService) buildAuthorSeriesNameMaps(filters []FieldFilter) (a
 }
 
 // fieldMatchesValue checks whether a book's field value matches the search
-// value. For user_rating_* fields the value may be a numeric comparison
-// expression such as ">4", "<=3.5", ">=4", "<3", "==5", "!=2"; any other
-// value is treated as an equality check.  All other fields use
-// case-insensitive substring matching.  Unknown fields return false.
+// value under the unified grammar (internal/querygrammar): substring, "quoted"
+// literal, /RE2/ regex, * glob, and numeric comparisons/ranges for the
+// numeric fields. An invalid value or an unknown field matches nothing.
 func fieldMatchesValue(book database.Book, field, value string) bool {
 	return fieldMatchesValueRT(book, field, value, nil)
 }
 
 // fieldMatchesValueRT is fieldMatchesValue with an explicit runtime source for
 // the duration fields (nil = stored Book.Duration). See filter_duration.go.
+// It compiles the value per call; row loops use compileFieldFilters instead.
 func fieldMatchesValueRT(book database.Book, field, value string, rt runtimeFunc) bool {
-	// Fields with a grammar — never substring-matched.
-	switch {
-	case durationFilterFields[field]:
-		return durationMatches(&book, value, rt)
-	case field == "has_duration":
-		want, ok := parseYesNo(value)
-		if !ok {
-			return false
-		}
-		if rt == nil {
-			rt = storedRuntime
-		}
-		_, known := rt(&book)
-		return known == want
-	case field == "metadata":
-		want, ok := metadataFilterWantsApplied(value)
-		if !ok {
-			return false
-		}
-		return BookMetadataApplied(&book) == want
-	}
-	// Numeric rating fields — delegate to numericCompare.
-	switch field {
-	case "user_rating_overall":
-		return numericCompare(book.UserRatingOverall, value)
-	case "user_rating_story":
-		return numericCompare(book.UserRatingStory, value)
-	case "user_rating_performance":
-		return numericCompare(book.UserRatingPerformance, value)
-	}
-
-	bookValue, known := bookFieldValue(book, field)
-	if !known {
+	cf, err := compileFieldFilter(FieldFilter{Field: field, Value: value})
+	if err != nil {
 		return false
 	}
-	return strings.Contains(strings.ToLower(bookValue), strings.ToLower(value))
+	return fieldMatchesCompiled(&book, &cf, rt)
 }
 
 // bookFieldValue renders a book field as the string the substring matcher
@@ -714,57 +682,6 @@ var allFilterFieldNames = []string{
 	"year", "created_at", "updated_at", "marked_for_deletion",
 	"read_status", "progress_pct", "last_played",
 	"user_rating_overall", "user_rating_story", "user_rating_performance",
-}
-
-// numericCompare evaluates a filter value expression against a nullable
-// float64 book field.  The expression may start with one of the operators
-// >=, <=, !=, ==, >, <.  A bare number (no operator prefix) is treated as
-// == equality.  If the book field is nil (unset) the function always returns
-// false.
-func numericCompare(fieldVal *float64, expr string) bool {
-	if fieldVal == nil {
-		return false
-	}
-	bookNum := *fieldVal
-
-	var op string
-	var numStr string
-	switch {
-	case strings.HasPrefix(expr, ">="):
-		op, numStr = ">=", expr[2:]
-	case strings.HasPrefix(expr, "<="):
-		op, numStr = "<=", expr[2:]
-	case strings.HasPrefix(expr, "!="):
-		op, numStr = "!=", expr[2:]
-	case strings.HasPrefix(expr, "=="):
-		op, numStr = "==", expr[2:]
-	case strings.HasPrefix(expr, ">"):
-		op, numStr = ">", expr[1:]
-	case strings.HasPrefix(expr, "<"):
-		op, numStr = "<", expr[1:]
-	default:
-		op, numStr = "==", expr
-	}
-
-	threshold, err := strconv.ParseFloat(strings.TrimSpace(numStr), 64)
-	if err != nil {
-		return false // unparseable — treat as no match
-	}
-
-	switch op {
-	case ">":
-		return bookNum > threshold
-	case "<":
-		return bookNum < threshold
-	case ">=":
-		return bookNum >= threshold
-	case "<=":
-		return bookNum <= threshold
-	case "!=":
-		return bookNum != threshold
-	default: // "=="
-		return bookNum == threshold
-	}
 }
 
 // bookSummaryToBook converts a BookSummary to a Book struct for compatibility.
@@ -1067,11 +984,17 @@ func (svc *AudiobookService) buildBookSummaryFilterWithLookupCount(f ListFilters
 	var markedForDeletion *bool
 	remainingFF := make([]FieldFilter, 0, len(f.FieldFilters))
 	for _, ff := range f.FieldFilters {
-		if !ff.Negated && (ff.Field == "review" || ff.Field == "metadata_review_status") && reviewStatus == "" {
+		// Only a plain literal may be plucked: the store compares these
+		// exact-match (strings.EqualFold), so review:/^no/ or
+		// library_state:org* pushed down would be compared as literal text
+		// and return 0 books — the same silent-zero this grammar exists to
+		// end. Regex/glob/quoted values stay on the predicate.
+		plain := !ff.Quoted && querygrammar.IsPlainLiteral(ff.Value, false)
+		if plain && !ff.Negated && (ff.Field == "review" || ff.Field == "metadata_review_status") && reviewStatus == "" {
 			reviewStatus = ff.Value
 			continue
 		}
-		if !ff.Negated && ff.Field == "library_state" && libraryState == "" {
+		if plain && !ff.Negated && ff.Field == "library_state" && libraryState == "" {
 			libraryState = ff.Value
 			continue
 		}
@@ -1105,10 +1028,12 @@ func (svc *AudiobookService) buildBookSummaryFilterWithLookupCount(f ListFilters
 		fpStatus := f.FingerprintStatus
 		fpCovMin := f.CoveragePercentMin
 		fpCovMax := f.CoveragePercentMax
-		cheapFF, strippedFF := splitFieldFilters(remainingFF)
+		// Compile every value ONCE for the whole walk, not per row.
+		compiledFF, compiledOK := mustCompileForPredicate(remainingFF)
+		cheapFF, strippedFF := splitCompiledFilters(compiledFF)
 		if len(strippedFF) > 0 {
 			slog.Debug("predicate uses stripped-field Pebble fallback",
-				"stripped_fields", strippedFieldNames(strippedFF),
+				"stripped_fields", strippedCompiledFieldNames(strippedFF),
 				"cheap_filter_count", len(cheapFF))
 		}
 		authorNames, seriesNames := svc.buildAuthorSeriesNameMaps(remainingFF)
@@ -1130,6 +1055,9 @@ func (svc *AudiobookService) buildBookSummaryFilterWithLookupCount(f ListFilters
 			return store.GetBookByID(id)
 		}
 		predicate = func(b *database.Book) bool {
+			if !compiledOK {
+				return false // fail closed; see mustCompileForPredicate
+			}
 			if len(remainingFF) > 0 {
 				if !matchesFieldFiltersWithStrippedFallback(b, cheapFF, strippedFF, fetchFull, pebbleLookups, warnFn, authorNames, seriesNames, rtFn) {
 					return false
