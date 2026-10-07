@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/retire_into.go
-// version: 1.16.0
+// version: 1.16.1
 // guid: dadb4da5-0f2d-4678-abf3-4ac97f3ecb66
 // last-edited: 2026-10-07
 
@@ -124,11 +124,14 @@ type retireOpts struct {
 	// AllowITunesPath lets a book with an iTunes path on one of its rows be
 	// retired. By default such a book is refused as an iTunes book
 	// (itunesCopyWhy's "row iTunes path"; review 2026-10-06). Set only for
-	// two callers: consolidation-leftovers, through retireIntoExpecting
+	// three callers: consolidation-leftovers, through retireIntoExpecting
 	// (owner decision 2026-10-06: a bare iTunes path reference does not make
-	// a leftover iTunes-owned), and duplicate-copies, through
+	// a leftover iTunes-owned); duplicate-copies, through
 	// retireIntoAllowingITunesPath (its losers are judged by its own iTunes
-	// rules before the apply).
+	// rules before the apply); and fragment-consolidation's owner apply
+	// (fragment_owner_apply.go applyOwner), only for a row the owner's own
+	// grant names, after ownerRetireRefusal re-read the row's iTunes path
+	// under the merge lock.
 	AllowITunesPath bool
 }
 
