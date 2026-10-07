@@ -81,6 +81,8 @@ func TestFragmentFixer_CopyClaimants(t *testing.T) {
 	t.Run("unproven library copies are listed as copies; the iTunes Media one is manual-only", func(t *testing.T) {
 		t.Parallel()
 		f := copyClaimantsFixture(t, false)
+		// Content not compared (unreadable here): the name-and-size rules.
+		f.noContentReads(t)
 		res := f.plan(t, "op-plan")
 		r := findRow(t, res, fragRowCopyUnproven+":"+f.ids["parent"])
 		require.Equal(t, fragClassCopy, r.Class)
@@ -97,6 +99,8 @@ func TestFragmentFixer_CopyClaimants(t *testing.T) {
 	t.Run("unproven copies of an iTunes-linked parent are still only listed", func(t *testing.T) {
 		t.Parallel()
 		f := copyClaimantsFixture(t, false)
+		// Content not compared (unreadable here): the name-and-size rules.
+		f.noContentReads(t)
 		linkParentToITunes(t, f)
 		r := findRow(t, f.plan(t, "op-plan"), fragRowCopyUnproven+":"+f.ids["parent"])
 		require.Equal(t, fragSkipCopyUnproven, r.Skipped, r.SkipReason)
@@ -252,6 +256,8 @@ func TestFragmentFixer_CopyClaimants(t *testing.T) {
 	t.Run("claimants whose sizes on disk conflict stay ambiguous", func(t *testing.T) {
 		t.Parallel()
 		f := copyClaimantsFixture(t, false)
+		// Content not compared (unreadable here): the name-and-size rules.
+		f.noContentReads(t)
 		require.NoError(t, os.WriteFile(f.path("lib/Many Parts copy B/02.mp3"), make([]byte, 2100), 0o644))
 		res := f.plan(t, "op-plan")
 		for _, role := range []string{"libA", "libB"} {
@@ -267,6 +273,8 @@ func TestFragmentFixer_CopyClaimants(t *testing.T) {
 	t.Run("claimants whose hashes disagree stay ambiguous", func(t *testing.T) {
 		t.Parallel()
 		f := copyClaimantsFixture(t, false)
+		// Content not compared (unreadable here): the name-and-size rules.
+		f.noContentReads(t)
 		// The parent row has no hash, so each still matches it by name and
 		// size; the claimants' own hashes say they are different audio.
 		f.updateRow(t, f.ids["libA"], f.rowIDs["libA"], func(r *database.BookFile) { r.FileHash = "hash-a" })
