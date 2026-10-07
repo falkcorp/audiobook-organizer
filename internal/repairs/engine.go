@@ -1,7 +1,7 @@
 // file: internal/repairs/engine.go
-// version: 1.17.0
+// version: 1.17.1
 // guid: 9b3e7f40-2d15-4a86-9c1f-6e0a4d8b7c25
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 package repairs
 
@@ -668,8 +668,12 @@ func applyOne(ctx context.Context, f Fixer, params json.RawMessage, planned Row,
 	// fingerprint with the hold cleared): equal to the plan's, nothing but
 	// the hold differs and the row is retry_later (not settled; retried on
 	// resume). Different, another input changed too: changed_since_plan
-	// below, so a real change is never masked as transient.
-	if fresh.Skipped != "" && fresh.RetryLater && fresh.RetryFingerprint == planned.Fingerprint {
+	// below, so a real change is never masked as transient. An empty
+	// RetryFingerprint never matches, not even a planned row whose own
+	// Fingerprint is empty (nothing makes a fixer set one): "" == "" would
+	// report any hold on such a row retry_later whatever else changed.
+	if fresh.Skipped != "" && fresh.RetryLater && fresh.RetryFingerprint != "" &&
+		fresh.RetryFingerprint == planned.Fingerprint {
 		out.Outcome, out.Skipped, out.Error = OutcomeRetryLater, fresh.Skipped, changedWhy(fresh)
 		return out
 	}

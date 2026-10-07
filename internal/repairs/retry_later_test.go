@@ -1,7 +1,7 @@
 // file: internal/repairs/retry_later_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5c1d8e27-9a43-4b6f-8e12-7f0a3c9d4b61
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 package repairs
 
@@ -27,6 +27,8 @@ type holdFixer struct {
 	hold       map[string]bool
 	shiftRetry map[string]bool
 	noSkip     map[string]bool
+	// noRetryFP rows come back held with RetryFingerprint left empty.
+	noRetryFP map[string]bool
 }
 
 func (f *holdFixer) set(m *map[string]bool, id string, on bool) {
@@ -51,6 +53,9 @@ func (f *holdFixer) Replan(ctx context.Context, p json.RawMessage, planned Row, 
 	retryFP := r.Fingerprint
 	if f.shiftRetry[r.RowID] {
 		retryFP += " (record refreshed)"
+	}
+	if f.noRetryFP[r.RowID] {
+		retryFP = ""
 	}
 	r.RetryLater, r.RetryFingerprint = true, retryFP
 	r.Fingerprint = "held:" + r.Fingerprint
@@ -141,5 +146,29 @@ func TestRunApply_RetryLaterWithChangedInputsIsChangedSincePlan(t *testing.T) {
 	require.Zero(t, res.RetryLater)
 	require.Equal(t, OutcomeChangedSincePlan, res.Rows[0].Outcome)
 	require.Equal(t, "index_not_built", res.Rows[0].Skipped)
+	require.Equal(t, " One ", s.title("b1"))
+}
+
+// (d) An empty RetryFingerprint never matches, not even a planned row whose
+// own Fingerprint is empty: "" == "" must not report a held row retry_later
+// (fail closed), so it is changed_since_plan.
+func TestRunApply_EmptyRetryFingerprintNeverMatchesEmptyPlanned(t *testing.T) {
+	s := newMemStore()
+	seed(s)
+	f := &holdFixer{trimFixer: trimFixer{s: s}}
+	plan := planFor(t, s, f)
+	for i := range plan.Rows {
+		if plan.Rows[i].RowID == "b1" {
+			plan.Rows[i].Fingerprint = ""
+		}
+	}
+	f.set(&f.hold, "b1", true)
+	f.set(&f.noRetryFP, "b1", true)
+
+	res, err := RunApply(context.Background(), f, plan, "op-plan", []string{"b1"}, false, deps(s, &fakeStandDown{renewsLeft: -1}), nopReporter{})
+	require.NoError(t, err)
+	require.Equal(t, 1, res.ChangedSincePlan, "outcomes %v rows %+v", res.ByOutcome, res.Rows)
+	require.Zero(t, res.RetryLater)
+	require.Equal(t, OutcomeChangedSincePlan, res.Rows[0].Outcome)
 	require.Equal(t, " One ", s.title("b1"))
 }
