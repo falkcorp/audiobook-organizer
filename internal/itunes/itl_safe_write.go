@@ -1,7 +1,7 @@
 // file: internal/itunes/itl_safe_write.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-09-01
+// last-edited: 2026-10-07
 //
 // SafeWriteITL — the single atomic iTunes-library writeback chokepoint
 // (fable5 TASK-004). Implements SPEC 2 §3 (the 8-step atomic write protocol,
@@ -177,6 +177,9 @@ func resolveOptions(opts ...SafeWriteOption) safeWriteOptions {
 //   - On success the previous library is preserved as <path>.bak-<RFC3339>.
 func SafeWriteITL(path string, mutate func(before []byte) (after []byte, err error), opts ...SafeWriteOption) (*WriteReport, error) {
 	o := resolveOptions(opts...)
+	// Scope the location-form guard to this library's own media root when it is
+	// the AO writeback library (WritebackRootForLibrary); "" leaves it strict.
+	o.contractCfg = withWritebackRoot(o.contractCfg, path)
 
 	// Step 8 (precondition): refuse to write if the library may be open in iTunes.
 	if o.libraryNotInUse != nil {
@@ -467,7 +470,9 @@ func PinLastKnownGood(path string) error {
 	}
 	// Validate before pinning: refuse to pin a library that does not decode
 	// (a pinned-bad LKG would defeat the purpose).
-	if v := AuditITL(data); !v.Pass {
+	// Audit under the library's own scope: a strict AuditITL refused to pin the
+	// AO writeback library for its own ".itunes-writeback/" media locations.
+	if v := AuditITLWithConfig(data, WritebackContractConfig(path)); !v.Pass {
 		return fmt.Errorf("PinLastKnownGood: refusing to pin un-auditable library %s: %s", path, v.Error())
 	}
 	lkg := path + ".bak-lkg"

@@ -1,12 +1,12 @@
 // file: internal/itunes/itl_le_repair.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 1f2a3b4c-5d6e-7f8a-9b0c-1d2e3f4a5b6c
 //
 // Surgical repair for ITL files damaged by the May-2026 RemoveTracksByPIDLE
 // bug: removes only the orphaned `mtph` playlist track items and updates the
 // enclosing `miph` and playlist `msdh` length/count fields. Does NOT touch
 // the master track list. Safe to run on production libraries.
-// last-edited: 2026-09-02
+// last-edited: 2026-10-07
 
 package itunes
 
@@ -107,33 +107,25 @@ func RepairITLDropDanglingMtphLE(data []byte, hits []MtphHitLE) []byte {
 	copy(sorted, hits)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Offset > sorted[j].Offset })
 
-	// Track per-miph bytes removed so we can decrement parent totalLens
-	// after the splice. Keys are ORIGINAL miph offsets; we'll map them to
-	// post-splice offsets at update time.
-	bytesPerMiph := map[int]int{}
-	for _, h := range sorted {
-		if h.ParentMiphOffset >= 0 {
-			bytesPerMiph[h.ParentMiphOffset] += h.Length
-		}
-	}
-
 	// Build the new buffer by splicing.
 	result := make([]byte, len(data))
 	copy(result, data)
-	totalRemoved := 0
+	// spliced records the hits actually cut, so every later length fix-up
+	// subtracts exactly what left the buffer.
+	var spliced []MtphHitLE
 	for _, h := range sorted {
 		if h.Offset+h.Length > len(result) {
 			continue
 		}
 		result = append(result[:h.Offset], result[h.Offset+h.Length:]...)
-		totalRemoved += h.Length
+		spliced = append(spliced, h)
 	}
 
 	// To translate ORIGINAL offsets to POST-splice offsets, remember that
 	// every byte removed before an offset shifts that offset down. Sort
 	// removals ascending and accumulate.
-	ascHits := make([]MtphHitLE, len(hits))
-	copy(ascHits, hits)
+	ascHits := make([]MtphHitLE, len(spliced))
+	copy(ascHits, spliced)
 	sort.Slice(ascHits, func(i, j int) bool { return ascHits[i].Offset < ascHits[j].Offset })
 
 	translate := func(origOffset int) int {
@@ -144,6 +136,15 @@ func RepairITLDropDanglingMtphLE(data []byte, hits []MtphHitLE) []byte {
 			}
 		}
 		return origOffset - removed
+	}
+
+	// Track per-miph bytes removed so we can decrement parent totalLens.
+	// Keys are ORIGINAL miph offsets, mapped to post-splice offsets below.
+	bytesPerMiph := map[int]int{}
+	for _, h := range spliced {
+		if h.ParentMiphOffset >= 0 {
+			bytesPerMiph[h.ParentMiphOffset] += h.Length
+		}
 	}
 
 	// Decrement each affected miph's totalLen field.
@@ -173,13 +174,31 @@ func RepairITLDropDanglingMtphLE(data []byte, hits []MtphHitLE) []byte {
 		}
 	}
 
-	// Update playlist-list msdh totalLen.
-	msdhOffset, _, msdhTotalLen := findMsdhByType(result, 2)
-	if msdhOffset >= 0 && msdhOffset+12 <= len(result) {
-		// findMsdhByType reads from the post-splice buffer so msdhTotalLen
-		// here is the OLD value still encoded — we must subtract removed.
-		newMsdhTotal := max(msdhTotalLen-totalRemoved, 0)
-		writeUint32LE(result, msdhOffset+8, uint32(newMsdhTotal))
+	// Update the playlist-list msdh totalLen.
+	//
+	// Locate it in the PRE-splice buffer. Looking it up in `result` (the old
+	// code) read the msdh's stale totalLen against the shortened buffer: once
+	// the bytes removed exceeded the bytes of the containers after it (~27
+	// playlist entries on the real libraries), offset+totalLen overran the
+	// buffer, findMsdhByType returned -1, and the decrement was silently
+	// skipped. The container-tiling guard then rejected every such write
+	// (fail-safe, but no large removal could ever land; 2026-10-07).
+	//
+	// Its offset is mapped through the same translation as the miph offsets,
+	// and only bytes actually spliced out from inside its span are subtracted,
+	// so the update holds even if a hit ever lay outside the playlist list.
+	origMsdh, _, origMsdhTotal := findMsdhByType(data, 2)
+	if origMsdh >= 0 {
+		removedInside := 0
+		for _, h := range spliced {
+			if h.Offset >= origMsdh && h.Offset+h.Length <= origMsdh+origMsdhTotal {
+				removedInside += h.Length
+			}
+		}
+		newMsdh := translate(origMsdh)
+		if removedInside > 0 && newMsdh >= 0 && newMsdh+12 <= len(result) {
+			writeUint32LE(result, newMsdh+8, uint32(max(origMsdhTotal-removedInside, 0)))
+		}
 	}
 
 	return result

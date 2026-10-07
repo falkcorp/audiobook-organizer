@@ -1,7 +1,7 @@
 // file: internal/itunes/service/writeback_batcher_stop_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9e3ff3be-ea09-4128-9948-ff447812da3d
-// last-edited: 2026-09-10
+// last-edited: 2026-10-07
 //
 // Regression tests for WriteBackBatcher shutdown and single-writer
 // discipline (TODO.md "writeback_batcher.Stop() waits for nothing").
@@ -70,32 +70,28 @@ func enabledFlushCfg(itlPath string) WriteBackBatcherConfig {
 	}
 }
 
-// TestStop_JoinsTombstoneGoroutine proves Stop waits for the EnqueueRemove
-// external-id tombstone goroutine (writeback_batcher.go's `go func()` inside
-// EnqueueRemove) instead of returning out from under it.
-//
-// Pre-fix this fails: Stop returns immediately and the MarkExternalIDRemoved
-// call is still sleeping, so `done` is still false.
-func TestStop_JoinsTombstoneGoroutine(t *testing.T) {
-	var done atomic.Bool
+// TestEnqueueRemove_DoesNotTombstone proves EnqueueRemove no longer marks the
+// external id removed (v6.0.0). The tombstone used to be written at enqueue
+// time, so a dropped, held or dry-run remove left the DB saying "removed"
+// while the track stayed in iTunes. It is now written only after the flush
+// that removes the track succeeds (TestFlush_RemoveTombstonedOnlyAfterWrite).
+func TestEnqueueRemove_DoesNotTombstone(t *testing.T) {
+	var calls atomic.Int32
 	store := &database.MockStore{
 		MarkExternalIDRemovedFunc: func(_, _ string) error {
-			time.Sleep(150 * time.Millisecond)
-			done.Store(true)
+			calls.Add(1)
 			return nil
 		},
 	}
-
-	// ITL write-back stays disabled: this test is about the goroutine join,
-	// not about the write path, so flush must not touch any file.
+	// ITL write-back stays disabled: flush must not touch any file.
 	b := NewWriteBackBatcher(10*time.Second, disabledFlushCfg(), store)
 	b.EnqueueRemove("AABBCCDD11223344")
 
 	if err := b.Stop(context.Background()); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
-	if !done.Load() {
-		t.Error("Stop returned while the EnqueueRemove tombstone goroutine was still running; Stop must join every goroutine the batcher started")
+	if n := calls.Load(); n != 0 {
+		t.Errorf("MarkExternalIDRemoved called %d times for a remove that was never written", n)
 	}
 }
 

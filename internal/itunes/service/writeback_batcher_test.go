@@ -1,7 +1,7 @@
 // file: internal/itunes/service/writeback_batcher_test.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: d4e5f6a7-b8c9-0123-def4-56789abcdef0
-// last-edited: 2026-09-02
+// last-edited: 2026-10-07
 
 package itunesservice
 
@@ -40,7 +40,7 @@ func withFakeITLHooks(t *testing.T, validate func(string) error, apply func(in, 
 	// that no real audit could pass. TestSafeWriteITL_AuditRejection covers
 	// the audit path explicitly.
 	prevAudit := itlAuditFileFn
-	itlAuditFileFn = func(string) error { return nil }
+	itlAuditFileFn = func(string, itunes.ContractConfig) error { return nil }
 	t.Cleanup(func() {
 		itlValidateFn = prevValidate
 		itlApplyOperationsFn = prevApply
@@ -141,7 +141,7 @@ func TestSafeWriteITL_AuditRejection(t *testing.T) {
 			return &itunes.ITLWriteBackResult{UpdatedCount: 1, OutputPath: out}, nil
 		},
 	)
-	itlAuditFileFn = func(string) error { return fmt.Errorf("mhoh-format: fake violation") }
+	itlAuditFileFn = func(string, itunes.ContractConfig) error { return fmt.Errorf("mhoh-format: fake violation") }
 
 	err := SafeWriteITL(itlPath, itunes.ITLOperationSet{
 		LocationUpdates: []itunes.ITLLocationUpdate{{PersistentID: "aa", NewLocation: "x"}},
@@ -362,8 +362,9 @@ func TestPruneITLBackups_KeepZero(t *testing.T) {
 
 // TestFlush_RefusesOverCap proves the safety circuit-breaker fires
 // when pendingRemoves exceeds MaxRemovesPerFlush. The flush MUST
-// drop the entire batch (no partial writes, no SafeWriteITL call)
-// and log loudly. Regression guard for the May-2026 incident where
+// apply none of the removes (no partial writes, no SafeWriteITL call
+// when nothing else is queued) and log loudly. Since v6.0.0 the
+// removes are HELD for the owner, not dropped. Regression guard for the May-2026 incident where
 // a buggy cleanup-orphans call enqueued ~90 K removes and wiped the
 // user's iTunes library.
 func TestFlush_RefusesOverCap(t *testing.T) {
@@ -396,6 +397,9 @@ func TestFlush_RefusesOverCap(t *testing.T) {
 
 	if applyCalls != 0 {
 		t.Errorf("flush over-cap: expected 0 SafeWriteITL apply calls, got %d", applyCalls)
+	}
+	if st := b.Status(); st.HeldRemoves != MaxRemovesPerFlush+1 || st.PendingRemoves != 0 {
+		t.Errorf("flush over-cap: removes must be held, not dropped or applied: %+v", st)
 	}
 }
 
