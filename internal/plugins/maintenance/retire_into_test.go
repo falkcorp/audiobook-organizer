@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retire_into_test.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 90cd2c0f-e6c5-4176-8d2c-bc587eea86cd
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 package maintenance
 
@@ -843,4 +843,45 @@ func TestRetireInto_HandOffNeverWritesAnITunesMember(t *testing.T) {
 			require.True(t, refused, "the refusal is journaled for the revert")
 		})
 	}
+}
+
+// Round 2: a hand-off that FAILS before its first write (here the guard's
+// own read fails, which is deliberately not a refusal) wrote nothing either.
+// It is noted like a refusal, so the op's revert never demotes the
+// incumbent S, whose explicit true predates the op, to re-crown the retired
+// L (the Splashdown shape: both explicit true). Before the fix no note was
+// written and the revert crowned L over S.
+func TestRetireInto_HandOffFailedBeforeAnyWriteKeepsTheIncumbentOnRevert(t *testing.T) {
+	d := newDCFixture(t)
+	s, l := d.dune(t)
+	n := d.copyBook(t, "N", "Dune", "lib/Dune third", dcRow{track: 1, dur: 600, hash: "n1"})
+	yes := true
+	groupOf(t, d, "vg-dune", map[string]*bool{s: &yes, l: &yes, n: nil})
+	readErr := errors.New("synthetic guard read failure")
+	w := repairs.NewWriter(d.s, d.s, dcFixerID, "bulk_update", "repairs-").WithJournal(d.s, d.s, "op-readerr")
+	_, err := retireIntoExpecting(context.Background(), d.p, d.s, w, time.Now, dcFixerID, l, s, nil,
+		handOffRules{mayWrite: func(*database.Book) error { return readErr }})
+	require.ErrorIs(t, err, readErr)
+	require.False(t, errors.Is(err, versionprimary.ErrWriteRefused), "a read error is not a refusal")
+	changes, err := d.s.GetOperationChanges("op-readerr")
+	require.NoError(t, err)
+	noted := false
+	for _, c := range changes {
+		noted = noted || (c.BookID == l && c.ChangeType == undo.ChangeTypeBookPrimaryHandoffRefused)
+	}
+	require.True(t, noted, "a hand-off that wrote nothing is noted for the revert")
+	nb, err := d.s.GetBookByID(n)
+	require.NoError(t, err)
+	require.Nil(t, nb.IsPrimaryVersion, "nothing was written")
+
+	_, err = audiobooks.NewRevertService(d.s).RevertOperation("op-readerr")
+	require.NoError(t, err)
+	sb, err := d.s.GetBookByID(s)
+	require.NoError(t, err)
+	require.NotNil(t, sb.IsPrimaryVersion)
+	require.True(t, *sb.IsPrimaryVersion, "the incumbent the op never wrote keeps its flag")
+	lb, err := d.s.GetBookByID(l)
+	require.NoError(t, err)
+	require.NotNil(t, lb.IsPrimaryVersion)
+	require.False(t, *lb.IsPrimaryVersion, "the retired book comes back non-primary beside the incumbent")
 }

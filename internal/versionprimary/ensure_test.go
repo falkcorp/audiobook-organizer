@@ -1,7 +1,7 @@
 // file: internal/versionprimary/ensure_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3e8a1b64-2f9c-4d07-b5a3-91c6e0d4f728
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 package versionprimary_test
 
@@ -230,12 +230,22 @@ func TestEnsureSinglePrimary_MayWriteReadErrorIsNotARefusal(t *testing.T) {
 	require.ErrorIs(t, err, readErr)
 	require.False(t, errors.Is(err, versionprimary.ErrWriteRefused), "%v", err)
 	require.NotEqual(t, versionprimary.OutcomeWriteRefused, res.Outcome)
+	require.False(t, res.WriteAttempted, "failed before any write")
 	require.Equal(t, "true", f.Flag(t, a))
 	require.Equal(t, "nil", f.Flag(t, b))
-	_, err = versionprimary.CrownEnv(f.S, "g", b, versionprimary.Env{MayWrite: func(*database.Book) error { return readErr }})
+	res, err = versionprimary.CrownEnv(f.S, "g", b, versionprimary.Env{MayWrite: func(*database.Book) error { return readErr }})
 	require.ErrorIs(t, err, readErr)
 	require.False(t, errors.Is(err, versionprimary.ErrWriteRefused))
+	require.False(t, res.WriteAttempted, "failed before any write")
 	require.Equal(t, "nil", f.Flag(t, b))
+	// The same hand-offs with the guard allowing: they write, and say so.
+	res, err = versionprimary.EnsureSinglePrimary(context.Background(), f.S, "g", versionprimary.Env{RootDir: f.Root})
+	require.NoError(t, err)
+	require.True(t, res.WriteAttempted)
+	res, err = versionprimary.CrownEnv(f.S, "g", b, versionprimary.Env{})
+	require.NoError(t, err)
+	require.True(t, res.WriteAttempted)
+	require.Equal(t, "true", f.Flag(t, b))
 }
 
 // B2(a): a winner read explicit true is not in the write set, so it is not

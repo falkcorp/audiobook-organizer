@@ -62,3 +62,14 @@
   its reverts depend on this.
 - `versionprimary.EnsureSinglePrimary` with `Env.Expect` set now refuses an
   empty group (or no group) instead of reporting success.
+- A retire or fs-regroup-xml hand-off that fails before its first write (a
+  failed group read, or a failed iTunes-guard read) now journals the same
+  `book_primary_handoff_refused` note as a refusal
+  (`versionprimary.HandoffResult.WriteAttempted`), so the op revert never
+  demotes an incumbent whose primary flag predates the operation to
+  re-crown the retired book.
+- When the op revert's crown back is refused by the iTunes guard, the
+  originals it would have re-crowned come back explicit non-primary instead
+  of keeping their restored true beside the true the operation's hand-off
+  wrote, so the group is never left with an extra primary. The group is
+  still listed in `SettleSkipped`.

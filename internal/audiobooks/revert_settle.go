@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_settle.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 3f8c2a71-5d94-4e6b-b0a3-9c1e7d2f4a58
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 package audiobooks
 
@@ -411,6 +411,13 @@ func (rs *RevertService) settleGroups(operationID string, in settleInput, result
 // flag and the original comes back explicit false -- the rule
 // versionprimary.YieldToIncumbent applies to a restored row.
 //
+// When (a)'s crown is refused (it would write an iTunes member the
+// operation never wrote: versionprimary.ErrWriteRefused), nothing of it is
+// written; every original then yields the same way, so its restored true
+// never stays beside the true the operation's hand-off wrote, the group is
+// judged as in (b)/(c), and the refusal is returned (the caller reports the
+// group as left unsettled, SettleSkipped).
+//
 // owed is set for a group retried only from the operation's owed record:
 // if any Electable member is explicit true now that was not when the settle
 // failed, that is a later pick (a user's) and nothing is written; the owed
@@ -492,6 +499,29 @@ func (rs *RevertService) settleGroup(opID, gid string, originals []string, owed 
 			}
 		}
 	}
+	// yieldAll returns every electable original explicit non-primary and
+	// recounts the group's primaries without them.
+	yieldAll := func() error {
+		for _, y := range originals {
+			if !electable[y] {
+				continue
+			}
+			if err := rs.yieldOriginal(opID, y); err != nil {
+				return fmt.Errorf("return %s non-primary in group %s: %w", y, gid, err)
+			}
+		}
+		effective = 0
+		for i := range members {
+			m := &members[i]
+			if !slices.Contains(originals, m.ID) && electable[m.ID] && database.EffectiveIsPrimaryVersion(m.IsPrimaryVersion) {
+				effective++
+			}
+		}
+		return nil
+	}
+	// refused: the crown of an original was refused (ErrWriteRefused); the
+	// originals yielded and the group is reported as left unsettled.
+	var refused error
 	for _, o := range originals {
 		if !electable[o] {
 			continue
@@ -508,34 +538,43 @@ func (rs *RevertService) settleGroup(opID, gid string, originals []string, owed 
 			// EVERY electable original yields (a folder-books row demotes
 			// each primary folder-book, so there can be several): one left
 			// true would be elected over the later pick below.
-			for _, y := range originals {
-				if !electable[y] {
-					continue
-				}
-				if err := rs.yieldOriginal(opID, y); err != nil {
-					return explicit, fmt.Errorf("return %s non-primary in group %s: %w", y, gid, err)
-				}
-			}
-			effective = 0
-			for i := range members {
-				m := &members[i]
-				if !slices.Contains(originals, m.ID) && electable[m.ID] && database.EffectiveIsPrimaryVersion(m.IsPrimaryVersion) {
-					effective++
-				}
+			if err := yieldAll(); err != nil {
+				return explicit, err
 			}
 			break
 		}
-		if _, err := versionprimary.CrownEnv(hist, gid, o, versionprimary.Env{MayWrite: mayWrite}); err != nil {
-			return explicit, fmt.Errorf("crown %s and demote the rest of group %s: %w", o, gid, err)
+		_, err := versionprimary.CrownEnv(hist, gid, o, versionprimary.Env{MayWrite: mayWrite})
+		if err == nil {
+			return nil, nil
 		}
-		return nil, nil
+		err = fmt.Errorf("crown %s and demote the rest of group %s: %w", o, gid, err)
+		if !errors.Is(err, versionprimary.ErrWriteRefused) {
+			return explicit, err
+		}
+		// The crown would write an iTunes member the operation never
+		// wrote, so it wrote nothing. The original's restored true must not
+		// stay beside the true the operation's hand-off wrote (two primaries
+		// in Audiobookshelf): every original yields -- it is the
+		// operation's own write, so the guard does not apply -- and the
+		// group is judged as it stands below. The group is still reported
+		// as left unsettled (the refusal is returned): the original did not
+		// get its flag back.
+		revertLog.Info("revert: version group %s: crowning %s back would write an iTunes book's primary flag; the originals return non-primary",
+			logger.SanitizeLogValue(gid), logger.SanitizeLogValue(o))
+		if yerr := yieldAll(); yerr != nil {
+			return explicit, errors.Join(err, yerr)
+		}
+		refused = err
+		break
 	}
-	if effective == 1 {
-		return nil, nil
+	if effective != 1 {
+		if _, err := versionprimary.EnsureSinglePrimary(context.Background(), hist, gid,
+			versionprimary.Env{RootDir: merge.TrashRestoreEnv().RootDir, MayWrite: mayWrite}); err != nil {
+			return explicit, fmt.Errorf("hand off version group %s: %w", gid, err)
+		}
 	}
-	if _, err := versionprimary.EnsureSinglePrimary(context.Background(), hist, gid,
-		versionprimary.Env{RootDir: merge.TrashRestoreEnv().RootDir, MayWrite: mayWrite}); err != nil {
-		return explicit, fmt.Errorf("hand off version group %s: %w", gid, err)
+	if refused != nil {
+		return nil, refused
 	}
 	return nil, nil
 }
