@@ -1,7 +1,7 @@
 // file: internal/server/wire_system_routes.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: a7b8c9d0-e1f2-3456-abcd-789012345678
-// last-edited: 2026-09-10
+// last-edited: 2026-10-07
 
 package server
 
@@ -38,8 +38,11 @@ func (s *Server) wireSystemRoutes(
 	adminOnly := protected.Group("")
 	adminOnly.Use(servermiddleware.RequireAdmin())
 	{
-		adminOnly.POST("/system/reset", systemH.ResetSystem)
-		adminOnly.POST("/system/factory-reset", systemH.FactoryReset)
+		// s.credGuard(): both wipe the store, users included, after which the
+		// public POST /auth/setup creates a fresh admin with a password. An
+		// API key must not be able to take that path to a signed-in admin.
+		adminOnly.POST("/system/reset", s.credGuard(), systemH.ResetSystem)
+		adminOnly.POST("/system/factory-reset", s.credGuard(), systemH.FactoryReset)
 	}
 	protected.GET("/config", s.perm(auth.PermSettingsManage), systemH.GetConfig)
 	protected.PUT("/config", s.perm(auth.PermSettingsManage), systemH.UpdateConfig)
@@ -53,7 +56,9 @@ func (s *Server) wireSystemRoutes(
 	protected.GET("/dashboard", s.perm(auth.PermLibraryView), systemH.GetDashboard)
 	protected.POST("/backup/create", s.perm(auth.PermSettingsManage), systemH.CreateBackup)
 	protected.GET("/backup/list", s.perm(auth.PermSettingsManage), systemH.ListBackups)
-	protected.POST("/backup/restore", s.perm(auth.PermSettingsManage), systemH.RestoreBackup)
+	// s.credGuard(): a restore replaces every user, password hash and session
+	// with the backup's, so it is a credential change.
+	protected.POST("/backup/restore", s.credGuard(), s.perm(auth.PermSettingsManage), systemH.RestoreBackup)
 	protected.DELETE("/backup/:filename", s.perm(auth.PermSettingsManage), systemH.DeleteBackup)
 	protected.GET("/library/quick-queries", s.perm(auth.PermLibraryView), systemH.GetQuickQueries)
 	protected.GET("/maintenance/transcribe-stats", s.perm(auth.PermLibraryView), systemH.GetTranscribeStats)

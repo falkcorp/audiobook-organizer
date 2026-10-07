@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.162.0
+// version: 2.163.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -7130,6 +7130,8 @@ export interface CreateAPIKeyResponse {
   scopes: string[];
   expires_at?: string;
   created_at: string;
+  /** Set when the server shortened the requested expiry (e.g. to the calling key's). */
+  note?: string;
 }
 
 export async function createAPIKey(body: CreateAPIKeyRequest): Promise<CreateAPIKeyResponse> {

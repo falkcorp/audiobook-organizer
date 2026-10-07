@@ -3,9 +3,9 @@ name: server-bootstrap
 description: Initialize server authentication and retrieve API key. SSH to the audiobook-organizer server, restart the service, read the bootstrap token from the .bootstrap-token file (no longer logged in plaintext — pen-test CRIT-1), exchange it for an API key via POST /api/v1/auth/bootstrap, and write the key to .claude/.api-token (shared across worktrees, auto-cleanup after 8 hours). Use when starting fresh or when the API key has expired.
 ---
 <!-- file: .claude/skills/server-bootstrap/SKILL.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: c84a3747-3844-4bce-bf01-ed434f6d1bd2 -->
-<!-- last-edited: 2026-09-09 -->
+<!-- last-edited: 2026-10-07 -->
 
 # Server Bootstrap
 
@@ -70,7 +70,8 @@ The skill will:
    > ```
 4. POST to `/api/v1/auth/bootstrap` to exchange token for API key
 5. Write key + expiry to `.claude/.api-token` (shared, .gitignored)
-6. Schedule cleanup after 8 hours (non-blocking background process)
+6. Schedule cleanup after 8 hours (non-blocking background process). That
+   is also when the server-side key expires (default `bootstrap_key_ttl` = 8h).
 
 > Note: the journalctl startup log still prints a `token_file` path + expiry (not the secret), so journalctl confirms *when* a fresh token was written — but the token value only lives in the file above.
 
@@ -114,10 +115,38 @@ The API uses the standard success envelope, so extract the bearer key with
 `jq -er '.data.api_key'`, not `.api_key`. The bootstrap token is consumed by a
 successful exchange even if a client subsequently fails to parse the response.
 
-`expires_at` is the server-side expiry of the issued key (default 30 days,
-config `bootstrap_key_ttl_days`; SEC-1/PROC-6). This is unrelated to the
-8-hour client-side `.claude/.api-token` cleanup convention above — the
-server TTL is much longer, so there's no conflict between the two.
+`expires_at` is the server-side expiry of the issued key. Since 2026-10-07
+it is **8 hours** by default (config `bootstrap_key_ttl`, a Go duration such
+as `8h`; capped at 24h). The 8-hour `.claude/.api-token` cleanup above now
+matches it: when the file disappears, the key behind it has expired too.
+Until 2026-10-07 the server default was 30 days and only the local file went
+away after 8 hours.
+
+The old setting `bootstrap_key_ttl_days` is deprecated. A config file or
+environment that still sets it is honoured, capped at 24 hours, with a startup
+warning. Replace it with `bootstrap_key_ttl`.
+
+### What a bootstrap key cannot do
+
+A bootstrap key is a full-scope admin API key, and **no API key may change
+credentials or identity.** These answer 403 ("API keys cannot change
+passwords, users, roles, invites, sessions or sign-in settings; sign in to do
+this"):
+
+- `PUT /api/v1/auth/me/password` (own change or the `user_id` admin reset)
+- `PATCH /api/v1/auth/me` (email)
+- `POST /api/v1/auth/temp-tokens`, `POST /api/v1/users/:id/reset-password`
+- `POST /api/v1/users/invite`, `POST /api/v1/users/:id/deactivate`, `.../reactivate`
+- `POST /api/v1/auth/api-keys` with another user's `user_id`, and rotating
+  another user's key
+- `POST /api/v1/system/reset`, `/system/factory-reset`, `/backup/restore`
+- `PUT /api/v1/config` when it changes a sign-in setting (`enable_auth`,
+  `basic_auth_*`, `oauth_*`, `cf_access_*`, `abs_api_enabled`,
+  `abs_auth_modes`, the ABS token lifetimes, `write_startup_readonly_key`)
+
+To create a user (for example a `claude_*` login) or reset a password, the
+owner does it from the web UI while signed in. A key the bootstrap key creates
+or rotates can't outlive it, so it also expires within 8 hours.
 
 See [references/bootstrap-api.md](references/bootstrap-api.md) for full API details.
 

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/auth.go
-// version: 2.6.0
+// version: 2.7.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 package handlers
 
@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
@@ -50,23 +51,17 @@ type AuthSessionStore interface {
 	RevokeSession(id string) error
 }
 
-// AuthRoleReader resolves roles by id or name.
-type AuthRoleReader interface {
-	GetRoleByID(id string) (*database.Role, error)
-	GetRoleByName(name string) (*database.Role, error)
-}
-
 // AuthStore is the narrow database interface AuthHandler requires.
 // Only the methods actually called by the handler are listed here.
 //
-// Split into the 4 interfaces above on 2026-08-18. This name is retained as
-// their composition so the method set is byte-identical and no consumer moves; the
-// type checker proves it.
+// Split into interfaces on 2026-08-18. This name is retained as their
+// composition so no consumer moves. AuthRoleReader was dropped on 2026-10-07:
+// ChangePassword's only role lookups were replaced by the request's effective
+// permissions (auth.Can).
 type AuthStore interface {
 	AuthUserReader
 	AuthUserWriter
 	AuthSessionStore
-	AuthRoleReader
 }
 
 const (
@@ -518,6 +513,13 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
 		httputil.RespondWithUnauthorized(c, "not authenticated")
 		return
 	}
+	// Also enforced at the route (s.credGuard); repeated here because this is
+	// the handler an admin API key used to reset an admin's password and then
+	// sign in as it. A person's session only, never an API key.
+	if !servermiddleware.CredentialChangeAllowed(c) {
+		servermiddleware.RefuseCredentialChange(c)
+		return
+	}
 	var req struct {
 		UserID          string `json:"user_id"`
 		CurrentPassword string `json:"current_password"`
@@ -534,22 +536,10 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
 	targetID := caller.ID
 	isAdminReset := false
 	if req.UserID != "" && req.UserID != caller.ID {
-		isAdmin := false
-		for _, roleRef := range caller.Roles {
-			r, _ := h.store.GetRoleByName(roleRef)
-			if r == nil {
-				r, _ = h.store.GetRoleByID(roleRef)
-			}
-			if r == nil {
-				continue
-			}
-			for _, p := range r.Permissions {
-				if p == "users.manage" {
-					isAdmin = true
-				}
-			}
-		}
-		if !isAdmin {
+		// The request's effective permissions (the auth middleware's union of
+		// the caller's roles), not a fresh walk of the user's roles: the walk
+		// ignored everything about how the request was authenticated.
+		if !auth.Can(c.Request.Context(), auth.PermUsersManage) {
 			httputil.RespondWithForbidden(c, "only admins can reset another user's password")
 			return
 		}

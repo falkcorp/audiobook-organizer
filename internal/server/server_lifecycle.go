@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.23.1
+// version: 4.24.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-10-07
 
@@ -929,6 +929,14 @@ func (s *Server) seedRolesAndTokens() {
 	if err := auth.SeedSystemUser(s.storeForWiring()); err != nil {
 		slog.Warn("seed system user", "err", err)
 	}
+
+	// Every API key expires since 2026-10-07. Keys created before that with
+	// no expiry are listed and given one (now + 30 days), once; see
+	// stampNeverExpiringAPIKeys. Non-fatal: a failure retries next start.
+	if _, err := stampNeverExpiringAPIKeys(s.storeForWiring(), time.Now()); err != nil {
+		slog.Error("api key expiry stamp failed; will retry next start", "err", err)
+	}
+	logBootstrapKeyTTLConfig()
 
 	// Initialize the one-time bootstrap token and startup read-only key.
 	//

@@ -1,7 +1,7 @@
 // file: internal/auth/context.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8c4a2f1d-9b3e-4f60-a8d5-2c7e0f1b9a47
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 //
 // Request-scoped auth state plumbing (spec 3.7). Long-lived deps
 // (database.Store, services) live on the Server struct; per-request
@@ -60,6 +60,26 @@ const (
 // (an API key, an ABS client token). Actions the owner reserves for himself
 // (Repairs owner apply) are honoured only for these.
 func (m Method) Interactive() bool { return m == MethodSession || m == MethodCFAccess }
+
+// MayChangeCredentials reports whether a request authenticated by m may
+// change credentials or identity: passwords, users, invites, temp-login
+// links, keys for another user, sign-in settings.
+//
+// An allowlist, so a method nobody classified fails closed. A person's
+// session is allowed whether it came from their own sign-in or was delegated
+// (temp-login, invite, pre-origin): the reset-password flow is an admin
+// minting a temp-login link and the user's delegated session then setting
+// the password. An API key, an ABS client token and the empty method are
+// refused. Every route that mints a delegated session is itself guarded by
+// this check, so a key cannot reach one.
+func (m Method) MayChangeCredentials() bool {
+	switch m {
+	case MethodSession, MethodSessionDelegated, MethodCFAccess:
+		return true
+	default:
+		return false
+	}
+}
 
 // WithMethod records how the request in ctx was authenticated.
 //

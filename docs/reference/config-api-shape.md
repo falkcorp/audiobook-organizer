@@ -1,7 +1,7 @@
 <!-- file: docs/reference/config-api-shape.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: 2b7f9c31-a4e8-4f1d-b8a2-6c5d9e3f2a17 -->
-<!-- last-edited: 2026-09-12 -->
+<!-- last-edited: 2026-10-07 -->
 
 # Config API Shape Reference
 
@@ -57,6 +57,24 @@ This field cannot be changed at runtime. The request will return `400` if it app
 - `database_type`
 
 (`enable_sqlite` was removed with the inert `--enable-sqlite3-i-know-the-risks` flag. A payload that still carries it, with any value, is also rejected with `400`: the error says the setting was removed and SQLite is no longer selectable. It is never silently dropped.)
+
+### Sign-in settings (not changeable with an API key)
+
+A request authenticated by an API key gets `403` (`refused_keys` lists them)
+when it **changes** any of: `enable_auth`, `basic_auth_enabled`,
+`basic_auth_username`, `basic_auth_password`, `oauth_enabled`,
+`oauth_github_client_id`, `oauth_github_client_secret`,
+`oauth_google_client_id`, `oauth_google_client_secret`,
+`oauth_redirect_base_url`, `oauth_allowed_emails`, `oauth_default_role`,
+`cf_access_team_domain`, `cf_access_aud`, `abs_api_enabled`,
+`abs_auth_modes`, `abs_access_token_ttl`, `abs_refresh_token_ttl`,
+`abs_refresh_grace`, `write_startup_readonly_key`. Sending the current value
+(or a masked secret) is not a change, so a GET-then-PUT round trip still
+works. Change these signed in to the web UI. (Since 2026-10-07; see
+`docs/plans/2026-10-07-apikey-expiry-and-privilege.md`.)
+
+`bootstrap_key_ttl` / `bootstrap_key_ttl_days` are not API fields at all:
+they are read from the environment or config file only.
 
 ### Secret fields (accepted as flat top-level keys only)
 

@@ -1,7 +1,7 @@
 // file: web/src/components/settings/APIKeysTab.tsx
-// version: 1.2.3
+// version: 1.3.0
 // guid: f6a7b8c9-d0e1-2345-fabc-456789012345
-// last-edited: 2026-09-19
+// last-edited: 2026-10-07
 import { useState, useEffect, useRef } from 'react';
 import {
   Box,
@@ -43,6 +43,7 @@ import {
   CheckBoxOutlineBlank as CheckBoxOutlineBlankIcon,
 } from '@mui/icons-material';
 import * as api from '../../services/api';
+import { API_KEY_EXPIRY_OPTIONS, formatKeyExpiry } from '../../utils/apiKeyExpiry';
 
 const ALL_SCOPES = [
   'library.view',
@@ -58,15 +59,6 @@ const ALL_SCOPES = [
   'requests.approve',
   // Remote fingerprint worker API only; give a worker key this scope alone.
   'fingerprint.worker',
-];
-
-const EXPIRES_OPTIONS = [
-  { label: '30 days', value: 30 },
-  { label: '60 days', value: 60 },
-  { label: '90 days', value: 90 },
-  { label: '180 days', value: 180 },
-  { label: '365 days', value: 365 },
-  { label: 'Never', value: 0 },
 ];
 
 function relativeTime(dateStr: string): string {
@@ -108,6 +100,8 @@ export function APIKeysTab() {
   const [newExpires, setNewExpires] = useState(90);
   const [creating, setCreating] = useState(false);
   const [createdToken, setCreatedToken] = useState<string | null>(null);
+  const [createdNote, setCreatedNote] = useState<string | null>(null);
+  const [createdExpiresAt, setCreatedExpiresAt] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isUnmountedRef = useRef(false);
@@ -151,6 +145,8 @@ export function APIKeysTab() {
         expires_in_days: newExpires,
       });
       setCreatedToken(resp.token);
+      setCreatedNote(resp.note ?? null);
+      setCreatedExpiresAt(resp.expires_at ?? null);
       setCreateOpen(false);
       setNewName('');
       setNewDesc('');
@@ -371,11 +367,13 @@ export function APIKeysTab() {
                       </TableCell>
                       <TableCell>
                         {k.expires_at ? (
-                          <Chip
-                            label={expired ? 'Expired' : relativeTime(k.expires_at)}
-                            color={expired || expiringSoon ? 'error' : 'default'}
-                            size="small"
-                          />
+                          <Tooltip title={new Date(k.expires_at).toLocaleString()}>
+                            <Chip
+                              label={formatKeyExpiry(k.expires_at)}
+                              color={expired || expiringSoon ? 'error' : 'default'}
+                              size="small"
+                            />
+                          </Tooltip>
                         ) : (
                           <Typography
                             variant="caption"
@@ -494,7 +492,7 @@ export function APIKeysTab() {
                 value={newExpires}
                 onChange={(e) => setNewExpires(Number(e.target.value))}
               >
-                {EXPIRES_OPTIONS.map((o) => (
+                {API_KEY_EXPIRY_OPTIONS.map((o) => (
                   <MenuItem key={o.value} value={o.value}>
                     {o.label}
                   </MenuItem>
@@ -517,6 +515,17 @@ export function APIKeysTab() {
           <Alert severity="warning" sx={{ mb: 2 }}>
             Copy this token now. You will not be able to see it again.
           </Alert>
+          {createdExpiresAt && (
+            <Typography variant="body2" sx={{ mb: 1 }}>
+              Expires {new Date(createdExpiresAt).toLocaleString()} (
+              {formatKeyExpiry(createdExpiresAt)}).
+            </Typography>
+          )}
+          {createdNote && (
+            <Alert severity="info" sx={{ mb: 2 }}>
+              {createdNote}
+            </Alert>
+          )}
           <Box
             sx={{
               display: 'flex',
@@ -549,6 +558,8 @@ export function APIKeysTab() {
             variant="contained"
             onClick={() => {
               setCreatedToken(null);
+              setCreatedNote(null);
+              setCreatedExpiresAt(null);
               setCopied(false);
             }}
           >

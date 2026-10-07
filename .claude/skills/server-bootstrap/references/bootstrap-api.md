@@ -1,7 +1,7 @@
 <!-- file: .claude/skills/server-bootstrap/references/bootstrap-api.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: b8a2de28-0304-4440-9d73-c79f227e1235 -->
-<!-- last-edited: 2026-09-09 -->
+<!-- last-edited: 2026-10-07 -->
 
 # Bootstrap API Reference
 
@@ -46,6 +46,10 @@ Exchanges a one-time bootstrap token for a full-privilege API key.
 - **user_id**: Admin user ID.
 - **username**: Always "admin" for bootstrap-created users.
 - **scopes**: API scopes (always "all" for bootstrap).
+- **expires_at**: When the key stops working: 8 hours after issue by default
+  (config `bootstrap_key_ttl`, a Go duration, capped at 24h; the deprecated
+  `bootstrap_key_ttl_days` is honoured but capped at 24h with a warning).
+  Before 2026-10-07 this defaulted to 30 days.
 - **generated_password**: (Only on first-time bootstrap) Temporary password for the admin user.
 
 ### Error Responses
@@ -77,7 +81,11 @@ curl -H "Authorization: Bearer abbs_xxxxxxxxxxxxx" \
   http://server:8484/api/v1/audiobooks
 ```
 
-The API key has full permissions (`scopes: ["all"]`).
+The API key has full permissions (`scopes: ["all"]`), except that no API key
+may change credentials or identity: password changes and resets, invites,
+temp-login links, user (de)activation, keys for another user and sign-in
+settings answer 403. Do those signed in to the web UI. See SKILL.md, "What a
+bootstrap key cannot do".
 
 ## Token File Format (.api-token)
 

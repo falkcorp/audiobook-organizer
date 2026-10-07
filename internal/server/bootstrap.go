@@ -1,7 +1,7 @@
 // file: internal/server/bootstrap.go
-// version: 1.15.1
+// version: 1.16.0
 // guid: 3e7c9a12-4f6b-4d8e-b5a1-2c8f0e3d9b47
-// last-edited: 2026-09-13
+// last-edited: 2026-10-07
 
 package server
 
@@ -345,13 +345,13 @@ func (s *Server) handleBootstrap(c *gin.Context) {
 	scopes := auth.All()
 
 	// Bootstrap-issued keys are full-scope admin credentials and must always
-	// expire (SEC-1/PROC-6) — a non-positive configured TTL falls back to the
-	// default of 30 days rather than "never expire".
-	ttlDays := config.AppConfig.BootstrapKeyTTLDays
-	if ttlDays <= 0 {
-		ttlDays = 30
-	}
-	expiresAt := time.Now().Add(time.Duration(ttlDays) * 24 * time.Hour)
+	// expire (SEC-1/PROC-6): 8h by default, never more than 24h, and a bad
+	// configured value falls back to the default rather than "never expire".
+	// The resolver's warning is logged once at startup
+	// (logBootstrapKeyTTLConfig), not on every exchange.
+	cfgSnap := config.Snapshot()
+	ttl, _ := cfgSnap.ResolveBootstrapKeyTTL()
+	expiresAt := time.Now().Add(ttl)
 
 	key := &database.APIKey{
 		ID:          ulid.Make().String(),
