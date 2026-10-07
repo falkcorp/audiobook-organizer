@@ -1,7 +1,7 @@
 // file: internal/repairs/fixer.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 3e8b1c52-7a4d-4f19-9c06-5d2e8a7f1b34
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 // Package repairs is the shared framework behind the Repairs lane of /review:
 // one contract every library fixer implements, and one engine that plans,
@@ -116,6 +116,17 @@ type Row struct {
 	// RetryLater without it) never matches, so such a row is
 	// changed_since_plan: fail closed.
 	RetryFingerprint string `json:"retry_fingerprint,omitempty"`
+	// OwnerApplicable marks a skipped row the fixer decided, at plan time,
+	// the owner may apply himself by clicking Apply on it (owner.go). It
+	// stays skipped: no bulk selection, scheduled run or plain apply writes
+	// it; only an apply holding a consumed owner grant naming it does.
+	// OwnerApplyReason says why the row qualifies and what that apply writes.
+	OwnerApplicable  bool   `json:"owner_applicable,omitempty"`
+	OwnerApplyReason string `json:"owner_apply_reason,omitempty"`
+	// OwnerWrites are the books an owner apply of the row writes (the rest
+	// of BookIDs are only read). The engine journals the owner's audit note
+	// on these, so a book the row only reads (a parent) gets none.
+	OwnerWrites []string `json:"owner_writes,omitempty"`
 	// State is fixer-private state stored WITH the plan: what Replan needs
 	// from plan time that the row as it is now cannot tell it (the ids of the
 	// rows a group was planned over, the values a compare-and-set must find).

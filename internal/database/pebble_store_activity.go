@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_activity.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 2e007a48-ab98-4cd4-bd6a-f85b75de0cfa
-// last-edited: 2026-10-04
+// last-edited: 2026-10-06
 
 package database
 
@@ -122,7 +122,11 @@ var opChangePruneBeforeCommit func()
 // continues or holds that run, and once it aged out the folder would be
 // planned afresh around another survivor, splitting one work into two live
 // books. One row per apply run, so keeping them costs little.
-var OpChangeTypesKeptByPrune = map[string]bool{"repair_plan_record": true}
+//
+// "repair_owner_apply" (undo.ChangeTypeRepairOwnerApply) is the audit record
+// that the owner himself applied an iTunes-tracked Repairs row: kept for as
+// long as the store is, like any audit trail.
+var OpChangeTypesKeptByPrune = map[string]bool{"repair_plan_record": true, "repair_owner_apply": true}
 
 // PruneOperationChanges deletes operation change entries older than the given
 // time, each with its opchange_by_book: index entry. Undecodable rows are

@@ -1,5 +1,5 @@
 // file: internal/repairs/engine.go
-// version: 1.17.1
+// version: 1.18.0
 // guid: 9b3e7f40-2d15-4a86-9c1f-6e0a4d8b7c25
 // last-edited: 2026-10-07
 
@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -21,6 +22,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/undo"
 )
 
 // Op ids of the two framework operations.
@@ -74,7 +76,10 @@ type PlanResult struct {
 	// ByClass counts every row (applicable and skipped) by Row.Class, for a
 	// fixer that sets one. Each count is a filter of the rows endpoint.
 	ByClass map[string]int `json:"by_class,omitempty"`
-	Rows    []Row          `json:"rows"`
+	// OwnerApplicable counts the skipped rows the owner may apply himself
+	// (Row.OwnerApplicable); the owner_applicable filter pages them.
+	OwnerApplicable int   `json:"owner_applicable,omitempty"`
+	Rows            []Row `json:"rows"`
 }
 
 // PlanDeps is what RunPlan needs besides the fixer.
@@ -112,9 +117,13 @@ func RunPlan(ctx context.Context, f Fixer, params json.RawMessage, deps PlanDeps
 		}
 		seen[rows[i].RowID] = true
 	}
+	// The guard runs over every applicable row and over every owner row
+	// (skipped, but one the owner may apply): a guard the fixer's own check
+	// cannot see (a franchise tag) withdraws the owner's Apply rather than
+	// show a button the apply would refuse.
 	idx := make([]int, 0, len(rows))
 	for i := range rows {
-		if rows[i].Applicable() {
+		if rows[i].Applicable() || rows[i].OwnerApplicable {
 			idx = append(idx, i)
 		}
 	}
@@ -131,10 +140,17 @@ func RunPlan(ctx context.Context, f Fixer, params json.RawMessage, deps PlanDeps
 	gerr := registry.RunItems(ctx, reporter, idx, func(_ context.Context, i int) error {
 		defer done.Add(1)
 		kind, why, err := GuardBooksFor(f, deps.Guard, deps.Tags, deps.Series, paths, rows[i].BookIDs)
+		if err != nil {
+			kind, why = SkipGuardUnreadable, err.Error()
+		}
 		switch {
-		case err != nil:
-			rows[i].Skipped, rows[i].SkipReason = SkipGuardUnreadable, err.Error()
-		case kind != "":
+		case kind == "":
+		case !rows[i].Applicable():
+			// An owner row: it stays skipped as the fixer said, and loses
+			// the owner's Apply with the guard's reason.
+			rows[i].OwnerApplicable, rows[i].OwnerApplyReason = false, ""
+			rows[i].SkipReason += "; not owner-applicable: " + why
+		default:
 			rows[i].Skipped, rows[i].SkipReason = kind, why
 		}
 		return nil
@@ -153,8 +169,13 @@ func RunPlan(ctx context.Context, f Fixer, params json.RawMessage, deps PlanDeps
 	for i := range rows {
 		if rows[i].Applicable() {
 			res.Applicable++
+			// A fixer marks only skipped rows owner-applicable.
+			rows[i].OwnerApplicable, rows[i].OwnerApplyReason = false, ""
 		} else {
 			res.SkippedByKind[rows[i].Skipped]++
+			if rows[i].OwnerApplicable {
+				res.OwnerApplicable++
+			}
 		}
 		if c := rows[i].Class; c != "" {
 			if res.ByClass == nil {
@@ -214,6 +235,9 @@ const (
 	// the skipped rows of that kind, so each per-kind count the lane shows
 	// opens the rows behind it.
 	FilterSkippedKindPrefix = FilterSkipped + ":"
+	// FilterOwnerApplicable pages the rows the owner may apply himself
+	// (Row.OwnerApplicable).
+	FilterOwnerApplicable = "owner_applicable"
 )
 
 // RowsPage is one page of a stored plan.
@@ -229,6 +253,9 @@ type RowsPage struct {
 	Applicable int       `json:"applicable"`
 	// SkippedByKind is the whole plan's tally, whatever the filter.
 	SkippedByKind map[string]int `json:"skipped_by_kind"`
+	// OwnerApplicable is the whole plan's owner-row count, whatever the
+	// filter.
+	OwnerApplicable int `json:"owner_applicable,omitempty"`
 	// ByClass is the whole plan's per-class tally, whatever the filter.
 	ByClass map[string]int `json:"by_class,omitempty"`
 	// ByClassInFilter tallies by class only the rows matching filter (class
@@ -260,10 +287,12 @@ func (p *PlanResult) Page(planOpID, filter, class string, offset, limit int) (*R
 		inScope = func(r *Row) bool { return r.Applicable() }
 	case FilterSkipped:
 		inScope = func(r *Row) bool { return !r.Applicable() }
+	case FilterOwnerApplicable:
+		inScope = func(r *Row) bool { return r.OwnerApplicable && !r.Applicable() }
 	default:
 		kind, ok := strings.CutPrefix(filter, FilterSkippedKindPrefix)
 		if !ok || kind == "" {
-			return nil, fmt.Errorf("repairs: unknown filter %q (want applicable, skipped or skipped:<kind>)", filter)
+			return nil, fmt.Errorf("repairs: unknown filter %q (want applicable, skipped, owner_applicable or skipped:<kind>)", filter)
 		}
 		inScope = func(r *Row) bool { return r.Skipped == kind }
 	}
@@ -301,7 +330,7 @@ func (p *PlanResult) Page(planOpID, filter, class string, offset, limit int) (*R
 	}
 	out := &RowsPage{PlanOpID: planOpID, FixerID: p.FixerID, PlannedAt: p.PlannedAt, Filter: filter,
 		Class: class, Offset: offset, Limit: limit, Total: len(match), Applicable: p.Applicable,
-		SkippedByKind: p.SkippedByKind, ByClass: p.ByClass, ByClassInFilter: inFilter,
+		SkippedByKind: p.SkippedByKind, OwnerApplicable: p.OwnerApplicable, ByClass: p.ByClass, ByClassInFilter: inFilter,
 		SkippedByKindInClass: kindsInClass, ApplicableInClass: applicableInClass, Rows: []Row{}}
 	if offset < len(match) {
 		end := offset + limit
@@ -326,6 +355,13 @@ type ApplyParams struct {
 	// already settled. A resumed run keeps those results and does not
 	// re-apply them.
 	Resume *ApplyCheckpoint `json:"resume,omitempty"`
+	// OwnerApplyRowIDs are owner rows (Row.OwnerApplicable) the owner chose
+	// to apply, and OwnerGrant the one-shot grant the Repairs handler minted
+	// for them (owner.go). Neither is trusted on its own: the op takes the
+	// grant from the process's grant store and refuses every owner row
+	// without one (ResolveOwnerApproval).
+	OwnerApplyRowIDs []string `json:"owner_apply_row_ids,omitempty"`
+	OwnerGrant       string   `json:"owner_grant,omitempty"`
 }
 
 // ApplyCheckpoint is what repairs.apply checkpoints while it runs: every row
@@ -350,6 +386,9 @@ type RowResult struct {
 	// its reason in Error).
 	Skipped string `json:"skipped,omitempty"`
 	Error   string `json:"error,omitempty"`
+	// OwnerUserID is set on an owner row (owner.go): the user whose grant
+	// the row ran under.
+	OwnerUserID string `json:"owner_user_id,omitempty"`
 }
 
 // ApplyResult is the stored result of repairs.apply.
@@ -377,10 +416,14 @@ type ApplyResult struct {
 	// FollowUp is what an AfterApplier fixer started for the applied books
 	// (an operation id); FollowUpError is why it could not. Neither changes
 	// any row's outcome: the writes were already made.
-	FollowUp      string      `json:"follow_up,omitempty"`
-	FollowUpError string      `json:"follow_up_error,omitempty"`
-	Aborted       string      `json:"aborted,omitempty"`
-	Rows          []RowResult `json:"rows"`
+	FollowUp      string `json:"follow_up,omitempty"`
+	FollowUpError string `json:"follow_up_error,omitempty"`
+	Aborted       string `json:"aborted,omitempty"`
+	// OwnerRows / OwnerUserID: the owner rows the run was asked for and the
+	// user whose grant they ran under ("" when refused).
+	OwnerRows   int         `json:"owner_rows,omitempty"`
+	OwnerUserID string      `json:"owner_user_id,omitempty"`
+	Rows        []RowResult `json:"rows"`
 }
 
 // ApplyDeps is what RunApply needs besides the fixer and the plan.
@@ -411,6 +454,9 @@ type ApplyDeps struct {
 	// each write-run row settles (throttled; see checkpointEvery). A dry run
 	// never checkpoints.
 	Checkpoint func(ApplyCheckpoint) error
+	// Owner is the run's owner approval (ResolveOwnerApproval): the owner
+	// rows it may apply, or why it may not. nil when none were requested.
+	Owner *OwnerApproval
 }
 
 // checkpointEvery / checkpointInterval throttle ApplyDeps.Checkpoint: a row
@@ -468,9 +514,31 @@ func RunApply(ctx context.Context, f Fixer, plan *PlanResult, planOpID string, r
 	for i := range plan.Rows {
 		byID[plan.Rows[i].RowID] = &plan.Rows[i]
 	}
+	// Owner rows (owner.go) come only from deps.Owner, the run's consumed
+	// grant; a row named in both lists runs as an owner row.
+	var ownerIDs []string
+	if deps.Owner != nil {
+		ownerIDs = normalizeIDs(deps.Owner.RowIDs)
+		res.OwnerRows = len(ownerIDs)
+		if deps.Owner.Refused == "" && deps.Resumed != nil {
+			// ResolveOwnerApproval refuses a resumed run already; held here
+			// too so no caller can hand RunApply a resume with a live grant.
+			o := *deps.Owner
+			o.Refused = "a resumed apply never applies owner rows; apply it again from Repairs"
+			deps.Owner = &o
+		}
+		if deps.Owner.Refused == "" {
+			res.OwnerUserID = deps.Owner.UserID
+		}
+	}
+	isOwner := make(map[string]bool, len(ownerIDs))
+	for _, id := range ownerIDs {
+		isOwner[id] = true
+	}
 	ids := normalizeIDs(rowIDs)
-	res.Requested = len(ids)
-	if len(ids) == 0 {
+	ids = slices.DeleteFunc(ids, func(id string) bool { return isOwner[id] })
+	res.Requested = len(ids) + len(ownerIDs)
+	if res.Requested == 0 {
 		return res, fmt.Errorf("repairs: apply %s: no row_ids; pick them from the plan", f.ID())
 	}
 	var (
@@ -500,7 +568,24 @@ func RunApply(ctx context.Context, f Fixer, plan *PlanResult, planOpID string, r
 		case !ok:
 			res.NotInPlan = append(res.NotInPlan, id)
 		case !row.Applicable():
+			// An owner row named here (a bulk selection, "apply all") is
+			// skipped like any other: only an owner grant applies it.
 			record(RowResult{RowID: id, Outcome: OutcomeNotApplicable, Skipped: row.Skipped})
+		default:
+			selected = append(selected, *row)
+		}
+	}
+	for _, id := range ownerIDs {
+		row, ok := byID[id]
+		switch {
+		case resumed[id]:
+		case !ok:
+			res.NotInPlan = append(res.NotInPlan, id)
+		case deps.Owner.Refused != "":
+			record(RowResult{RowID: id, Outcome: OutcomeOwnerRefused, Skipped: row.Skipped, Error: deps.Owner.Refused})
+		case row.Applicable() || !row.OwnerApplicable:
+			record(RowResult{RowID: id, Outcome: OutcomeOwnerRefused, Skipped: row.Skipped,
+				Error: "the plan does not list this row as one the owner may apply"})
 		default:
 			selected = append(selected, *row)
 		}
@@ -579,7 +664,7 @@ func RunApply(ctx context.Context, f Fixer, plan *PlanResult, planOpID string, r
 	}
 	runErr := registry.RunItems(ctx, reporter, parts, func(pctx context.Context, part []Row) error {
 		for _, planned := range part {
-			settle(applyOne(pctx, f, plan.Params, planned, dryRun, deps, holder, held, &lost, reporter))
+			settle(applyOne(pctx, f, plan.Params, planned, isOwner[planned.RowID], dryRun, deps, holder, held, &lost, reporter))
 			done.Add(1)
 		}
 		return nil
@@ -609,6 +694,16 @@ func RunApply(ctx context.Context, f Fixer, plan *PlanResult, planOpID string, r
 			res.RetryLater++
 		}
 	}
+	if res.OwnerUserID != "" && reporter != nil {
+		applied := 0
+		for _, r := range results {
+			if r.OwnerUserID != "" && (r.Outcome == OutcomeApplied || r.Outcome == OutcomePartial) {
+				applied++
+			}
+		}
+		_ = reporter.Log(slog.LevelInfo, fmt.Sprintf("repairs.apply %s: owner apply by user %s (%s): %d of %d owner row(s) written",
+			f.ID(), deps.Owner.UserID, deps.Owner.AuthMethod, applied, len(ownerIDs)))
+	}
 	if !dryRun && res.Applied+res.Partial > 0 {
 		// Not ctx: a cancelled apply still leaves the books its finished
 		// rows wrote, and their follow-up is owed all the same.
@@ -630,9 +725,15 @@ func RunApply(ctx context.Context, f Fixer, plan *PlanResult, planOpID string, r
 	return res, nil
 }
 
-func applyOne(ctx context.Context, f Fixer, params json.RawMessage, planned Row, dryRun bool,
+func applyOne(ctx context.Context, f Fixer, params json.RawMessage, planned Row, owner, dryRun bool,
 	deps ApplyDeps, holder string, held bool, lost *atomic.Bool, reporter registry.Reporter) RowResult {
 	out := RowResult{RowID: planned.RowID}
+	if owner {
+		// The owner's approval is on ctx for the fixer's Replan and Apply:
+		// a fixer relaxes its own owner-only refusals for this row alone.
+		out.OwnerUserID = deps.Owner.UserID
+		ctx = WithOwnerApply(ctx, OwnerApplyContext{RowID: planned.RowID, UserID: deps.Owner.UserID, AuthMethod: deps.Owner.AuthMethod})
+	}
 	abort := func() RowResult {
 		out.Outcome = OutcomeAborted
 		return out
@@ -684,7 +785,13 @@ func applyOne(ctx context.Context, f Fixer, params json.RawMessage, planned Row,
 		out.Outcome, out.Skipped, out.Error = OutcomeChangedSincePlan, fresh.Skipped, changedWhy(fresh)
 		return out
 	}
-	if !fresh.Applicable() {
+	switch {
+	case owner && (fresh.Applicable() || !fresh.OwnerApplicable):
+		// The fingerprint matched, but the re-plan no longer offers the row
+		// to the owner.
+		out.Outcome, out.Skipped, out.Error = OutcomeOwnerRefused, fresh.Skipped, "the row is no longer one the owner may apply"
+		return out
+	case !owner && !fresh.Applicable():
 		out.Outcome, out.Skipped = OutcomeNotApplicable, fresh.Skipped
 		return out
 	}
@@ -707,6 +814,20 @@ func applyOne(ctx context.Context, f Fixer, params json.RawMessage, planned Row,
 	if StandDownLost(deps.StandDown, holder, held) {
 		lost.Store(true)
 		return abort()
+	}
+	if owner {
+		// The audit note goes into the op journal before the fixer's first
+		// write (ledger before write): who applied the owner-only row.
+		if err := journalOwnerApply(deps, f.ID(), fresh); err != nil {
+			out.Error = "owner audit note not journaled; nothing written: " + err.Error()
+			if errors.Is(err, ErrStandDownLost) {
+				lost.Store(true)
+				out.Outcome = OutcomeAborted
+				return out
+			}
+			out.Outcome = OutcomeFailed
+			return out
+		}
 	}
 	if err := f.Apply(ctx, deps.Writer, fresh); err != nil {
 		out.Error = err.Error()
@@ -864,4 +985,38 @@ func newIDs(old, fresh []string) []string {
 		}
 	}
 	return out
+}
+
+// ownerApplyNote is the NewValue of an owner apply's audit note
+// (undo.ChangeTypeRepairOwnerApply).
+type ownerApplyNote struct {
+	UserID     string `json:"user_id"`
+	AuthMethod string `json:"auth_method"`
+	FixerID    string `json:"fixer_id"`
+	RowID      string `json:"row_id"`
+	Reason     string `json:"reason,omitempty"`
+}
+
+// journalOwnerApply journals the owner's audit note for row on every book
+// the owner apply writes (Row.OwnerWrites; every book of the row when the
+// fixer named none).
+func journalOwnerApply(deps ApplyDeps, fixerID string, row Row) error {
+	if deps.Writer == nil {
+		return errors.New("no writer")
+	}
+	v, err := json.Marshal(ownerApplyNote{UserID: deps.Owner.UserID, AuthMethod: deps.Owner.AuthMethod,
+		FixerID: fixerID, RowID: row.RowID, Reason: row.OwnerApplyReason})
+	if err != nil {
+		return err
+	}
+	books := row.OwnerWrites
+	if len(books) == 0 {
+		books = row.BookIDs
+	}
+	for _, id := range books {
+		if err := deps.Writer.Journal(id, undo.ChangeTypeRepairOwnerApply, "row:"+row.RowID, "", string(v)); err != nil {
+			return err
+		}
+	}
+	return nil
 }

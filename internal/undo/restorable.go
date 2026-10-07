@@ -1,5 +1,5 @@
 // file: internal/undo/restorable.go
-// version: 1.32.0
+// version: 1.33.0
 // guid: 6c1f0e9a-4b27-4d3e-9a58-e2b7c41d0f93
 // last-edited: 2026-10-07
 
@@ -139,6 +139,14 @@ const (
 	// it lets a later plan CONTINUE an interrupted run with the decision it
 	// started, instead of re-electing from state the run already changed.
 	ChangeTypeRepairPlanRecord = "repair_plan_record"
+	// ChangeTypeRepairOwnerApply: the owner applied a Repairs row the plan
+	// listed for him alone (repairs owner apply: an iTunes-tracked library
+	// copy, database rows only), journaled on each book the row writes
+	// before its first write. FieldName is "row:<row id>"; NewValue is JSON
+	// naming the user, how he signed in, the fixer, the plan and the row. An
+	// audit note, nothing to undo: the row's own journaled steps are what the
+	// op revert restores.
+	ChangeTypeRepairOwnerApply = "repair_owner_apply"
 	// ChangeTypeExternalIDReassign: one external id, named in FieldName as
 	// "external_id:<source>/<id>", moved from the book BookID (== OldValue) to
 	// the book NewValue. Restorable: it moves back while it still names
@@ -668,7 +676,7 @@ func NotRestorableLabel(c *database.OperationChange) string {
 	switch c.ChangeType {
 	case "file_move", "organize_rename",
 		"organize_failed", "organize_skipped", "organize_summary",
-		ChangeTypeRepairPlanRecord, ChangeTypeBookPrimaryHandoffRefused:
+		ChangeTypeRepairPlanRecord, ChangeTypeBookPrimaryHandoffRefused, ChangeTypeRepairOwnerApply:
 		return ""
 	case ChangeTypeTagWrite:
 		// A tag_write row restores exactly OldValue into one book_file. Rows
@@ -806,10 +814,12 @@ func NotRestorableLabel(c *database.OperationChange) string {
 
 // IsLedgerOnly reports whether c records no change to its book at all, only
 // evidence an operation keeps for itself (a Repairs plan record, a refused
-// primary hand-off). User-facing per-book change lists leave such rows out;
+// primary hand-off, a Repairs owner-apply audit note). User-facing per-book
+// change lists leave such rows out;
 // the operation's own change list keeps them.
 func IsLedgerOnly(c *database.OperationChange) bool {
-	return c != nil && (c.ChangeType == ChangeTypeRepairPlanRecord || c.ChangeType == ChangeTypeBookPrimaryHandoffRefused)
+	return c != nil && (c.ChangeType == ChangeTypeRepairPlanRecord || c.ChangeType == ChangeTypeBookPrimaryHandoffRefused ||
+		c.ChangeType == ChangeTypeRepairOwnerApply)
 }
 
 // IsRestorable reports whether the revert engine can reverse c.
