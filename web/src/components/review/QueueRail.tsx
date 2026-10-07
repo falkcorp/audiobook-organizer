@@ -1,5 +1,5 @@
 // file: web/src/components/review/QueueRail.tsx
-// version: 1.13.0
+// version: 1.14.0
 // guid: 4f8c2b96-7a15-4e30-9d82-6b0e5a3c1f74
 // last-edited: 2026-10-06
 //
@@ -510,7 +510,7 @@ export function QueueRail({
               ? `Loading the ${CHIP_LABELS[chipFilter]} books…`
               : `Showing the ${filteredCount.toLocaleString()} ${CHIP_LABELS[chipFilter]} books${
                   filters.titleFilter && !titleFilterError
-                    ? ` matching title /${filters.titleFilter}/`
+                    ? ` matching title ${filters.titleFilter}`
                     : ''
                 }. Other filters are paused.`}
           </Alert>
@@ -561,11 +561,13 @@ export function QueueRail({
           label="Title filter"
           value={filters.titleFilter}
           onChange={(e) => setFilters({ titleFilter: e.target.value })}
-          placeholder="regex"
+          // Same grammar as title: in the Library search bar (queryGrammar.ts).
+          placeholder="text, a*, /regex/"
           // An invalid pattern filters nothing; say so rather than leave the
-          // reviewer to guess why the list did not narrow.
+          // reviewer to guess why the list did not narrow. The message names
+          // the token and the reason (e.g. RE2 has no lookahead).
           error={!!titleFilterError}
-          helperText={titleFilterError ? `Invalid regex: ${titleFilterError}` : undefined}
+          helperText={titleFilterError ?? undefined}
           slotProps={{
             input: {
               endAdornment: filters.titleFilter ? (

@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.29.0
+// version: 1.30.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
 // last-edited: 2026-10-06
 //
@@ -48,6 +48,7 @@ import { STORAGE_KEYS } from '../../../lib/storageKeys';
 import type { CandidateGroup, SpineContext } from '../spine/CompareSpine';
 import { runtimeHiddenBySwitch, type RowState } from '../spine/rowState';
 import type { MetadataAction } from '../reviewActions';
+import { compileTitleFilter } from '../../../utils/queryGrammar';
 
 // Upper bound on how long a dispatched apply keeps its rows protected from
 // reconciliation. See runApplyOp for why this is bounded at all.
@@ -1186,22 +1187,25 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     [results]
   );
 
-  // A half-typed regex does not filter yet, but it IS reported: the rail shows
-  // `titleFilterError` under the field, so a typo never silently reads as
-  // "everything matched".
+  // The Title box takes the SAME grammar as `title:` in the Library search bar
+  // (owner decision 2026-10-06: one syntax, RE2 regex): `text` = contains,
+  // `a*` = wildcard, `/re/` = RE2 regex (case-insensitive), `"x"` = literal,
+  // and `title:` tokens with `-` negation. compileTitleFilter translates RE2
+  // to JS (\p{L} needs the u flag) and rejects what RE2 rejects (lookahead,
+  // backreferences) instead of silently running it.
+  //
+  // A half-typed or invalid value does not filter yet, but it IS reported:
+  // the rail shows `titleFilterError` under the field, so a typo never
+  // silently reads as "everything matched". `titleRegex` keeps its name for
+  // the chip/prune call sites; it is any object with test().
   const { titleRegex, titleFilterError } = useMemo((): {
-    titleRegex: RegExp | null;
+    titleRegex: { test: (s: string) => boolean } | null;
     titleFilterError: string | null;
   } => {
-    if (!filters.titleFilter) return { titleRegex: null, titleFilterError: null };
-    try {
-      return { titleRegex: new RegExp(filters.titleFilter, 'i'), titleFilterError: null };
-    } catch (err) {
-      return {
-        titleRegex: null,
-        titleFilterError: err instanceof Error ? err.message : 'Invalid regular expression',
-      };
-    }
+    const compiled = compileTitleFilter(filters.titleFilter);
+    if (!compiled.active) return { titleRegex: null, titleFilterError: null };
+    if (compiled.error) return { titleRegex: null, titleFilterError: compiled.error };
+    return { titleRegex: compiled, titleFilterError: null };
   }, [filters.titleFilter]);
 
   // Split at the runtime filter so the rail can say how many rows that one

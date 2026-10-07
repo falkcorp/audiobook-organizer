@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.chipFilters.test.tsx
-// version: 1.5.0
+// version: 1.6.0
 // guid: 0d6c2e8a-94b1-4f37-8a5e-2c71b9e04f36
 // last-edited: 2026-10-06
 //
@@ -449,7 +449,7 @@ describe('chips combine with the title regex', () => {
     // m2 is below every preset's score floor: a paused filter, so it shows.
     await waitFor(() => expect(listedIds().sort()).toEqual(['m1', 'm2']));
 
-    await user.type(screen.getByLabelText('Title filter'), 'm2$');
+    await user.type(screen.getByLabelText('Title filter'), '/m2$/');
     await waitFor(() => expect(listedIds()).toEqual(['m2']));
     expect(screen.getByTestId('chip-filter-banner')).toHaveTextContent(
       'Showing the 1 matched books matching title /m2$/. Other filters are paused.'
@@ -474,7 +474,7 @@ describe('chips combine with the title regex', () => {
     await user.click(screen.getByTestId('main-select-page'));
     expect(screen.getByTestId('main-selection-count')).toHaveTextContent('2 selected');
 
-    await user.type(screen.getByLabelText('Title filter'), 'm1$');
+    await user.type(screen.getByLabelText('Title filter'), '/m1$/');
     await waitFor(() =>
       expect(screen.getByTestId('main-selection-count')).toHaveTextContent('1 selected')
     );
@@ -486,8 +486,8 @@ describe('chips combine with the title regex', () => {
     await openWorkspace();
     await user.click(screen.getByTestId('chip-matched'));
     await waitFor(() => expect(listedIds()).toHaveLength(2));
-    await user.type(screen.getByLabelText('Title filter'), 'Book (');
-    expect(await screen.findByText(/^Invalid regex:/)).toBeInTheDocument();
+    await user.type(screen.getByLabelText('Title filter'), '/Book (/');
+    expect(await screen.findByText(/invalid regex/)).toBeInTheDocument();
     expect(screen.getByLabelText('Title filter')).toHaveAttribute('aria-invalid', 'true');
     // Nothing is filtered by a pattern that does not compile.
     expect(listedIds()).toHaveLength(2);

@@ -1,5 +1,5 @@
 // file: web/src/components/review/ReviewWorkspace.selectAll.test.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7a3f0c52-e1d9-4b86-9f24-58c0d6a1b3e7
 // last-edited: 2026-10-06
 //
@@ -268,7 +268,7 @@ describe('lane: chunked apply and filter-change pruning', () => {
     act(() => result.current.setPage(3));
     expect(result.current.selectedIds.size).toBe(N);
 
-    act(() => result.current.setFilters({ titleFilter: '^Keep' }));
+    act(() => result.current.setFilters({ titleFilter: '/^Keep/' }));
     await waitFor(() => expect(result.current.selectedIds.size).toBe(10));
     expect(result.current.allMatchingSelected).toBe(true);
   });
@@ -296,7 +296,7 @@ describe('lane: title regex inside a chip view', () => {
     expect(result.current.selectedIds.size).toBe(4);
 
     // The chip honours the regex...
-    act(() => result.current.setFilters({ titleFilter: '^(Alpha|Book e0$)' }));
+    act(() => result.current.setFilters({ titleFilter: '/^(Alpha|Book e0$)/' }));
     await waitFor(() =>
       expect(result.current.filteredResults.map((r) => r.book.id)).toEqual(['e0'])
     );
@@ -306,9 +306,15 @@ describe('lane: title regex inside a chip view', () => {
     );
 
     // A pattern that does not compile is reported and prunes nothing.
-    act(() => result.current.setFilters({ titleFilter: '(' }));
+    act(() => result.current.setFilters({ titleFilter: '/(/' }));
     expect(result.current.titleFilterError).not.toBeNull();
     expect([...result.current.selectedIds].sort()).toEqual(['e0', 'm1', 'not-loaded']);
+    expect(result.current.filteredResults).toHaveLength(N);
+
+    // RE2 has no lookahead: the shared grammar rejects it visibly (JS would
+    // have run it), and it prunes nothing either.
+    act(() => result.current.setFilters({ titleFilter: '/^(?!Book)/' }));
+    expect(result.current.titleFilterError).toMatch(/lookahead/);
     expect(result.current.filteredResults).toHaveLength(N);
   });
 });
