@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.25.0
+// version: 4.26.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-10-07
 
@@ -1589,6 +1589,17 @@ func (s *Server) setupRoutes() {
 				// removes of the batcher, which no longer drops anything.
 				itunesGroup.GET("/writeback/status", s.perm(auth.PermLibraryView), s.itunesWritebackStatusHandler)
 				s.ownerRoute(itunesGroup, http.MethodPost, "/writeback/held/release", ownerRouteAlways, s.itunesWritebackReleaseHeldHandler)
+				// Requeue (2026-10-07): put books whose tracks differ back on the
+				// queue (updates only), and re-queue the remove of an explicit
+				// merged-away loser. dry_run is a JSON body field (default true),
+				// so these are not ownerRoute routes: itunesPreviewOnly reads the
+				// query string, and a gate reading a different flag than the
+				// handler is the parser-differential class. The preview stays on
+				// library.edit_metadata; the handlers run requireOwnerForApply
+				// (the same proof and permission as ownerRoute) on the
+				// dry_run:false path.
+				itunesGroup.POST("/writeback/requeue", s.perm(auth.PermLibraryEditMetadata), s.itunesWritebackRequeueHandler)
+				itunesGroup.POST("/writeback/requeue-remove", s.perm(auth.PermLibraryEditMetadata), s.itunesWritebackRequeueRemoveHandler)
 
 				// ITL file transfer (6.4)
 				itunesGroup.GET("/library/download", s.perm(auth.PermIntegrationsManage), s.itunesSvcGuard(func(c *gin.Context) { s.itunesSvc.Transfer.HandleDownload(c) }))
