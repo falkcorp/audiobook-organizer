@@ -1,5 +1,5 @@
 // file: internal/repairs/fixer.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 3e8b1c52-7a4d-4f19-9c06-5d2e8a7f1b34
 // last-edited: 2026-10-07
 
@@ -127,6 +127,18 @@ type Row struct {
 	// of BookIDs are only read). The engine journals the owner's audit note
 	// on these, so a book the row only reads (a parent) gets none.
 	OwnerWrites []string `json:"owner_writes,omitempty"`
+	// OwnerITunesDatabaseOnly are books of an owner row whose files sit
+	// under books/itunes/** and whose DATABASE rows the owner's apply of the
+	// row writes (never a file, never an iTunes id): the fragment
+	// consolidation's iTunes twins, retired into the parent beside their
+	// library copy (docs/plans/2026-10-07-stale-itunes-path.md D7). The
+	// framework guard lifts its books/itunes path check for exactly these
+	// books, and only while the row is owner-applicable (plan) or applied
+	// under the owner's grant for it (apply); every other check (Doctor Who
+	// / Big Finish / Torchwood by path, title, credits, transcription, tags;
+	// an unreadable path) still runs for them. An applicable row, or a plain
+	// apply, gets no exception from it. Every id must also be in BookIDs.
+	OwnerITunesDatabaseOnly []string `json:"owner_itunes_database_only,omitempty"`
 	// State is fixer-private state stored WITH the plan: what Replan needs
 	// from plan time that the row as it is now cannot tell it (the ids of the
 	// rows a group was planned over, the values a compare-and-set must find).

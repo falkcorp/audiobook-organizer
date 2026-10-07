@@ -1,5 +1,5 @@
 // file: internal/repairs/engine.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: 9b3e7f40-2d15-4a86-9c1f-6e0a4d8b7c25
 // last-edited: 2026-10-07
 
@@ -139,7 +139,9 @@ func RunPlan(ctx context.Context, f Fixer, params json.RawMessage, deps PlanDeps
 	// row, so the slice needs no lock.
 	gerr := registry.RunItems(ctx, reporter, idx, func(_ context.Context, i int) error {
 		defer done.Add(1)
-		kind, why, err := GuardBooksFor(f, deps.Guard, deps.Tags, deps.Series, paths, rows[i].BookIDs)
+		// An owner row's OwnerITunesDatabaseOnly books get the one lifted
+		// check (GuardRowBooksFor); an applicable row gets none.
+		kind, why, err := GuardRowBooksFor(f, deps.Guard, deps.Tags, deps.Series, paths, rows[i], nil, true)
 		if err != nil {
 			kind, why = SkipGuardUnreadable, err.Error()
 		}
@@ -748,7 +750,10 @@ func applyOne(ctx context.Context, f Fixer, params json.RawMessage, planned Row,
 		lost.Store(true)
 		return abort()
 	}
-	if kind, why, err := GuardBooksFor(f, deps.Guard, deps.Tags, deps.Series, deps.paths, planned.BookIDs); err != nil {
+	// The owner row's OwnerITunesDatabaseOnly books are exempt from the
+	// books/itunes path check only under the owner's grant (owner); a plain
+	// apply of the same row is guarded in full.
+	if kind, why, err := GuardRowBooksFor(f, deps.Guard, deps.Tags, deps.Series, deps.paths, planned, nil, owner); err != nil {
 		out.Outcome, out.Skipped, out.Error = OutcomeGuarded, SkipGuardUnreadable, err.Error()
 		return out
 	} else if kind != "" {
@@ -795,9 +800,16 @@ func applyOne(ctx context.Context, f Fixer, params json.RawMessage, planned Row,
 		out.Outcome, out.Skipped = OutcomeNotApplicable, fresh.Skipped
 		return out
 	}
+	// The books the owner's apply may write under books/itunes/** are the
+	// ones the owner was shown: a re-plan that lists others is a change.
+	if !sameIDSet(planned.OwnerITunesDatabaseOnly, fresh.OwnerITunesDatabaseOnly) {
+		out.Outcome, out.Skipped = OutcomeChangedSincePlan, fresh.Skipped
+		out.Error = "the iTunes-library books the row writes differ from the plan's"
+		return out
+	}
 	// A book the re-plan added to the row must pass the guard too.
 	if extra := newIDs(planned.BookIDs, fresh.BookIDs); len(extra) > 0 {
-		if kind, why, err := GuardBooksFor(f, deps.Guard, deps.Tags, deps.Series, deps.paths, extra); err != nil {
+		if kind, why, err := GuardRowBooksFor(f, deps.Guard, deps.Tags, deps.Series, deps.paths, fresh, extra, owner); err != nil {
 			out.Outcome, out.Skipped, out.Error = OutcomeGuarded, SkipGuardUnreadable, err.Error()
 			return out
 		} else if kind != "" {
@@ -971,6 +983,11 @@ func normalizeIDs(ids []string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// sameIDSet reports whether a and b hold the same ids.
+func sameIDSet(a, b []string) bool {
+	return len(newIDs(a, b)) == 0 && len(newIDs(b, a)) == 0
 }
 
 func newIDs(old, fresh []string) []string {
