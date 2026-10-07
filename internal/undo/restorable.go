@@ -1,7 +1,7 @@
 // file: internal/undo/restorable.go
-// version: 1.31.0
+// version: 1.32.0
 // guid: 6c1f0e9a-4b27-4d3e-9a58-e2b7c41d0f93
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 package undo
 
@@ -124,7 +124,8 @@ const (
 	// it demoted), the operation's hand-off of the book's version group
 	// (NewValue) REFUSED and wrote no member's flag (an unexpected winner,
 	// or a member the caller may not write: versionprimary.ErrUnexpectedWinner,
-	// ErrWriteRefused). A ledger note (IsLedgerOnly), written after the
+	// ErrWriteRefused), or failed before its first write
+	// (versionprimary.HandoffResult.WriteAttempted false). A ledger note (IsLedgerOnly), written after the
 	// refusal: it is the revert's evidence that every other member's
 	// explicit true predates the operation, so BookID's restored true
 	// yields to it rather than re-crown over it. Not evidence of a

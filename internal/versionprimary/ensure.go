@@ -1,7 +1,7 @@
 // file: internal/versionprimary/ensure.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 0b7e4c52-9a1d-4f38-8c6e-2d51f0a7b9e3
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 package versionprimary
 
@@ -131,6 +131,13 @@ type HandoffResult struct {
 	// Decision is set when Elect ran.
 	Decision *Decision   `json:"decision,omitempty"`
 	Writes   []FlagWrite `json:"writes,omitempty"`
+	// WriteAttempted is set once the hand-off starts writing (its first
+	// ModifyBook). False on any return before that -- a refusal, an
+	// unexpected winner, a failed read or a failed guard read -- so a
+	// caller can journal that the hand-off wrote no member's flag even when
+	// it failed (a write that errored may still have committed, so it is
+	// never "nothing written").
+	WriteAttempted bool `json:"-"`
 }
 
 // WrotePrimary reports whether the hand-off itself wrote PrimaryID's
@@ -465,6 +472,7 @@ func EnsureSinglePrimary(ctx context.Context, store EnsureStore, gid string, env
 	}
 	if inc != nil {
 		res.Outcome, res.PrimaryID = OutcomeHealthy, inc.ID
+		res.WriteAttempted = true
 		res.Writes, err = plan.demote(store, gid)
 		return res, err
 	}
@@ -687,6 +695,7 @@ func (p writePlan) guard(gid string, mayWrite func(*database.Book) error) error 
 // nothing written (OutcomeWinnerChanged).
 func (p writePlan) write(store EnsureStore, gid, outcome string, res HandoffResult) (HandoffResult, error) {
 	winnerID := p.keep.ID
+	res.WriteAttempted = true
 	prev, wrote := "", false
 	written, err := store.ModifyBook(winnerID, func(b *database.Book) error {
 		wrote = false

@@ -1,12 +1,13 @@
 // file: internal/plugins/maintenance/fs_regroup_primary_handoff_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7c3a9e15-4d2b-4f80-a6e1-b95d0c28f473
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 package maintenance
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -141,4 +142,82 @@ func TestFsRegroupDuplicates_HandOffNeverWritesAnITunesMember(t *testing.T) {
 	}
 	require.Equal(t, 1, refused)
 	require.Zero(t, handOff)
+}
+
+// extIDErrStore fails GetExternalIDsForBook for one book: the iTunes
+// guard's read of that member fails (a failure, not a refusal).
+type extIDErrStore struct {
+	*fsGuardStore
+	failFor string
+}
+
+func (s *extIDErrStore) GetExternalIDsForBook(bookID string) ([]database.ExternalIDMapping, error) {
+	if bookID == s.failFor {
+		return nil, errors.New("synthetic external-id read failure")
+	}
+	return s.fsGuardStore.GetExternalIDsForBook(bookID)
+}
+
+// Round 2: the retired shell's hand-off fails before any write (the guard's
+// read of a member it would demote fails). It wrote nothing, so it is noted
+// like a refusal: the revert of the regroup leaves the library copy K,
+// whose explicit true predates the op, primary instead of crowning the
+// shell back over it. Before the fix no note was written and the revert
+// demoted K.
+func TestFsRegroupDuplicates_HandOffFailedBeforeAnyWriteKeepsTheIncumbentOnRevert(t *testing.T) {
+	s := regroupStore(t)
+	root := t.TempDir()
+	prev := config.AppConfig.RootDir
+	config.AppConfig.RootDir = root
+	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+
+	owner, shells := seedDuplicates(t, s, "/lib/Ada Quill/Metal Swarm")
+	vg := "vg-shell-readerr"
+	yes := true
+	for id, flag := range map[string]*bool{shells[0]: &yes, owner: nil} {
+		_, err := s.ModifyBook(id, func(b *database.Book) error {
+			b.VersionGroupID, b.IsPrimaryVersion = &vg, flag
+			return nil
+		})
+		require.NoError(t, err)
+	}
+	libPath := filepath.Join(root, "Ada Quill", "Metal Swarm", "ms.m4b")
+	require.NoError(t, os.MkdirAll(filepath.Dir(libPath), 0o755))
+	require.NoError(t, os.WriteFile(libPath, []byte("m4b"), 0o644))
+	organized := "organized"
+	k, err := s.CreateBook(&database.Book{Title: "Metal Swarm (library)", FilePath: libPath, LibraryState: &organized, VersionGroupID: &vg})
+	require.NoError(t, err)
+	_, err = s.ModifyBook(k.ID, func(b *database.Book) error { b.IsPrimaryVersion = &yes; return nil })
+	require.NoError(t, err)
+	require.NoError(t, s.CreateBookFile(&database.BookFile{ID: "bf-lib-readerr", BookID: k.ID, FilePath: libPath}))
+
+	plan := fsPlan(t, s)
+	require.Len(t, fsGroupsOf(plan, fsCatDuplicates), 1, plan.summary())
+	st := &extIDErrStore{fsGuardStore: &fsGuardStore{PebbleStore: s}, failFor: owner}
+	res, _ := applyFSRepairPlan(context.Background(), st, nil, fsQueue{}, plan, fsRegroupParams{}, &opIDReporter{id: "op-vg-readerr"})
+	require.Zero(t, res.HandOffsRefused, res.String())
+	require.Equal(t, 1, res.Errors, res.String())
+	require.True(t, fsSoftDeleted(t, s, shells[0]))
+	ob, err := s.GetBookByID(owner)
+	require.NoError(t, err)
+	require.Nil(t, ob.IsPrimaryVersion, "nothing was written")
+
+	changes, err := s.GetOperationChanges("op-vg-readerr")
+	require.NoError(t, err)
+	noted := false
+	for _, c := range changes {
+		noted = noted || (c.BookID == shells[0] && c.ChangeType == undo.ChangeTypeBookPrimaryHandoffRefused)
+	}
+	require.True(t, noted, "a hand-off that wrote nothing is noted for the revert")
+
+	_, err = audiobooks.NewRevertService(s).RevertOperation("op-vg-readerr")
+	require.NoError(t, err)
+	kb, err := s.GetBookByID(k.ID)
+	require.NoError(t, err)
+	require.NotNil(t, kb.IsPrimaryVersion)
+	require.True(t, *kb.IsPrimaryVersion, "the incumbent the op never wrote keeps its flag")
+	sb, err := s.GetBookByID(shells[0])
+	require.NoError(t, err)
+	require.NotNil(t, sb.IsPrimaryVersion)
+	require.False(t, *sb.IsPrimaryVersion, "the shell comes back non-primary beside the incumbent")
 }

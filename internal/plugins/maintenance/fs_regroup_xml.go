@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fs_regroup_xml.go
-// version: 2.16.0
+// version: 2.17.0
 // guid: 7d2a9c14-3e86-4b50-9f71-2c8e0a6d4b95
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 // Package maintenance — op maintenance.fs-regroup-xml.
 //
@@ -1476,6 +1476,12 @@ func (a *fsApplier) retire(kind, folder, shellID, targetID, note string) {
 			a.errs.Add(1)
 			a.log(slog.LevelWarn, "%s %q: primary hand-off in group %s after retiring %s: %v", kind, folder,
 				logger.SanitizeLogValue(*b.VersionGroupID), shellID, herr)
+			if !res.WriteAttempted {
+				// Failed before any write: noted like a refusal, so the
+				// revert never demotes a member whose true predates the
+				// regroup.
+				a.journal(shellID, fsChangeHandOffRefused, "version_group_id", "", gid)
+			}
 		} else {
 			// Crowned or kept (undo.HandOffNoteValue): the revert never
 			// demotes a member whose true predates the regroup.

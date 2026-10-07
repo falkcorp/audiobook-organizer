@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retire_into.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: dadb4da5-0f2d-4678-abf3-4ac97f3ecb66
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 // The shared retire of the Repairs-lane merge fixers: fold one book into
 // another as merge.Service retires an absorbed book, every step journaled
@@ -438,7 +438,9 @@ func followUserStateInto(p *Plugin, w *repairs.Writer, target, id string, slice 
 // rules (handOffRules) may refuse the hand-off: nothing is written, a
 // refusal note (undo.ChangeTypeBookPrimaryHandoffRefused) is journaled so
 // the revert likewise leaves every other member's flag alone, and the
-// refusal is returned, logged with the group.
+// refusal is returned, logged with the group. A hand-off that fails before
+// its first write (a failed read, or a failed guard read) is noted the same
+// way: it wrote nothing either.
 func retireHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Writer, fixerID, id, groupID string, rules handOffRules) error {
 	vps := p.deps.VersionPrimaryStore()
 	if vps == nil {
@@ -454,9 +456,12 @@ func retireHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Wr
 		fragLog.Warn("%s: primary hand-off in group %s: %s", fixerID,
 			logger.SanitizeLogValue(groupID), logger.SanitizeLogValue(err.Error()))
 		err = fmt.Errorf("primary hand-off of %s in group %s: %w", id, groupID, err)
-		if errors.Is(err, versionprimary.ErrUnexpectedWinner) || errors.Is(err, versionprimary.ErrWriteRefused) {
-			// Refused before any write: say so, so the revert of this
-			// op does not demote a member whose true it never wrote.
+		if !res.WriteAttempted {
+			// Refused, or failed, before any write (an unexpected winner, a
+			// guard refusal, a failed read or guard read): say so, so the
+			// revert of this op does not demote a member whose true it
+			// never wrote. A failure after the first write attempt is not
+			// noted: that write may have committed.
 			if jerr := w.Journal(id, undo.ChangeTypeBookPrimaryHandoffRefused, "version_group_id", "", groupID); jerr != nil {
 				if errors.Is(jerr, repairs.ErrStandDownLost) {
 					return errors.Join(err, fmt.Errorf("journal the refused primary hand-off of %s: %w", id, jerr))

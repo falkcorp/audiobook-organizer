@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_history_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 829118c5-b507-4c65-8bb6-eaf346c88634
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 package audiobooks
 
@@ -333,6 +333,10 @@ func TestRevertSettle_AmbiguousCrownedNoteNeverUnlocksAnITunesMember(t *testing.
 	require.NoError(t, err)
 	require.NotNil(t, xb.IsPrimaryVersion)
 	require.True(t, *xb.IsPrimaryVersion, "the iTunes member keeps the flag the operation never wrote")
+	ob, err := s.GetBookByID(o.ID)
+	require.NoError(t, err)
+	require.NotNil(t, ob.IsPrimaryVersion)
+	require.False(t, *ob.IsPrimaryVersion, "the refused crown leaves no second primary beside the iTunes member")
 
 	// The unambiguous "wrote:" form is the operation's own write: put back.
 	ev = handOffEvidenceOf([]*database.OperationChange{{BookID: o.ID, ChangeType: undo.ChangeTypeBookPrimaryHandoff,
@@ -347,6 +351,47 @@ func TestRevertSettle_AmbiguousCrownedNoteNeverUnlocksAnITunesMember(t *testing.
 	xb, err = s.GetBookByID(x.ID)
 	require.NoError(t, err)
 	require.False(t, *xb.IsPrimaryVersion, "the operation wrote X's true, so its revert puts X back")
+}
+
+// Round 2: the crown back is refused because an iTunes member X turned
+// writable (nil) after the operation, whose hand-off wrote C's true. The
+// demote revert has already restored the original O's true: the refused
+// crown must not leave O true beside C (two primaries). O yields (its flag
+// is the operation's own write), C keeps the true the operation wrote, X is
+// never written, and the group is reported as left unsettled.
+func TestRevertSettle_RefusedCrownLeavesNoSecondPrimary(t *testing.T) {
+	s := newRevertPebble(t)
+	rs := NewRevertService(s)
+	gid, yes, pid := "vg-refused-crown", true, "FEDCBA9876543210"
+	o, err := s.CreateBook(&database.Book{Title: "O", FilePath: "/x/o", VersionGroupID: &gid, IsPrimaryVersion: &yes})
+	require.NoError(t, err)
+	c, err := s.CreateBook(&database.Book{Title: "C", FilePath: "/x/c", VersionGroupID: &gid, IsPrimaryVersion: &yes})
+	require.NoError(t, err)
+	x, err := s.CreateBook(&database.Book{Title: "X", FilePath: "/x/x", VersionGroupID: &gid, ITunesPersistentID: &pid})
+	require.NoError(t, err)
+	ev := handOffEvidenceOf([]*database.OperationChange{{BookID: o.ID, ChangeType: undo.ChangeTypeBookPrimaryHandoff,
+		FieldName: "version_group_id", OldValue: undo.HandOffNoteValue(c.ID, true), NewValue: gid}})
+	result := &RevertResult{}
+	msgs := rs.settleGroups("op-refused-crown", settleInput{touched: []settleTouch{
+		{bookID: o.ID, changeType: undo.ChangeTypeBookPrimaryDemote, oldValue: "true"},
+	}, crowned: ev}, result)
+	require.Empty(t, msgs)
+	require.Empty(t, result.HandOffFailed)
+	require.Len(t, result.SettleSkipped, 1, "%+v", result)
+	require.Contains(t, result.SettleSkipped[0], "iTunes copy "+x.ID)
+	require.True(t, result.Partial())
+	require.False(t, rs.hasSettleOwed("op-refused-crown"), "not recorded for retry")
+	want := map[string]*bool{o.ID: new(bool), c.ID: &yes, x.ID: nil}
+	for id, w := range want {
+		b, err := s.GetBookByID(id)
+		require.NoError(t, err)
+		if w == nil {
+			require.Nil(t, b.IsPrimaryVersion, "the iTunes copy's flag is never written")
+			continue
+		}
+		require.NotNil(t, b.IsPrimaryVersion, id)
+		require.Equal(t, *w, *b.IsPrimaryVersion, id)
+	}
 }
 
 // S1: the evidence is the group's, not one original's: a kept note on the

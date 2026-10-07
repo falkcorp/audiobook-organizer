@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert.go
-// version: 1.64.1
+// version: 1.64.2
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 package audiobooks
 
@@ -294,7 +294,10 @@ type RevertResult struct {
 	// stand because settling them would write an iTunes book's primary flag
 	// (itunesguard; versionprimary.ErrWriteRefused), which is never done:
 	// group, originals and the member refused. Not recorded for retry. The
-	// rows are restored and marked; the result is Partial.
+	// rows are restored and marked, except that the originals the refused
+	// crown would have re-crowned come back explicit non-primary (never a
+	// second primary beside the operation's hand-off); the result is
+	// Partial.
 	SettleSkipped []string `json:"settle_skipped,omitempty"`
 }
 
