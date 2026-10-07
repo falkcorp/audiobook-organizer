@@ -1,5 +1,5 @@
 // file: internal/metafetch/cache.go
-// version: 1.29.2
+// version: 1.29.3
 // guid: a4f33a2e-3b4d-4306-bdce-476758e39120
 // last-edited: 2026-10-06
 //
@@ -619,7 +619,7 @@ func (mfs *Service) cacheSearchResponse(bookID, query, author, narrator, series 
 	var prev *MetadataCandidateCache
 	if mfs.db != nil {
 		if p, perr := mfs.db.GetMetadataCache(bookID); perr == nil && p != nil &&
-			(p.SourceHash == sourceHash || (resp.carryFromHash != "" && p.SourceHash == resp.carryFromHash)) {
+			(p.SourceHash == sourceHash || (resp.carryFromRow && p.SourceHash == resp.carryFromHash)) {
 			prev = p
 		}
 	}
@@ -1006,22 +1006,53 @@ const (
 // CachedQueryMatchesIdentity for a stand-in query). It may be hashed from
 // other inputs than a search would hash today (the raw author credit before
 // 2026-10-06's cleaning, a pre-2026-09-28 no-author row); its SourceHash is
-// what the caller passes as SearchOptions.CarryFromSourceHash, so a refetch
-// that answers nothing keeps its candidates instead of writing an empty row
-// over them. nil when there is no row, it has no SourceHash, or it answers
-// another identity (or the authors cannot be read: unchecked is not vouched).
+// what the caller passes to SearchOptions.CarryFrom, so a refetch that
+// answers nothing keeps its candidates instead of writing an empty row over
+// them. Two more row shapes are vouched, for carrying only (the batch
+// verdict does not serve them as fresh):
+//   - a legacy row with no SourceHash, the way the apply gate accepts it
+//     (ValidateCachedIdentity fails open; the store drops a row when a write
+//     changes the book's title or author, so one still here was not left
+//     behind by such a change);
+//   - a search dialog's plain fetch (handlers/metadata searchAudiobookMetadata
+//     with no typed query), hashed with no inputs at all because the search
+//     resolved the book's own title and author itself: its search
+//     fingerprint, which binds the questions that search asked, must equal
+//     the fingerprint of a search of the book now -- the same proof a
+//     pre-2026-09-28 no-author row gives (cachedQueryMatches).
+//
+// nil when there is no row, or it answers another identity (or the authors
+// cannot be read: unchecked is not vouched).
 func (mfs *Service) VouchedCachedRow(book *database.Book, query string) *MetadataCandidateCache {
 	if mfs == nil || mfs.db == nil || book == nil {
 		return nil
 	}
 	entry, err := mfs.db.GetMetadataCache(book.ID)
-	if err != nil || entry == nil || entry.SourceHash == "" {
+	if err != nil || entry == nil {
 		return nil
 	}
-	if !mfs.cachedRowVouched(entry, book, query) {
-		return nil
+	if mfs.cachedRowVouched(entry, book, query) || mfs.plainFetchRowVouched(entry, book, query) {
+		return entry
 	}
-	return entry
+	return nil
+}
+
+// plainFetchRowVouched reports whether entry is a search dialog's plain-fetch
+// row (hashed with no inputs) whose search fingerprint proves it asked the
+// questions a search of book asks now (VouchedCachedRow).
+func (mfs *Service) plainFetchRowVouched(entry *MetadataCandidateCache, book *database.Book, query string) bool {
+	if entry.SourceHash != hashSearchInputs(book.ID, "", "", "", "") || entry.SearchFingerprint == "" {
+		return false
+	}
+	live, lerr := database.LiveBookAuthorNames(mfs.db, book)
+	if lerr != nil {
+		return false
+	}
+	hint := ""
+	if len(live) > 0 {
+		hint = SearchAuthorHint(live[0])
+	}
+	return mfs.matchSearchFingerprint(entry.SearchFingerprint, book, query, hint, "") != fingerprintStale
 }
 
 // cachedRowVouched is the identity check CachedBatchVerdict and
