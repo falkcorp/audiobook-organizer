@@ -1,5 +1,5 @@
 <!-- file: docs/plans/2026-10-06-slow-page-requests.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 5b7e2c1a-9d43-4f6e-8a21-3c0f7d9e4b85 -->
 <!-- last-edited: 2026-10-06 -->
 
@@ -216,10 +216,14 @@ one build. It applies only when the response is cacheable, and never with
 `Prefer: respond-async` or `allow-stale`, since those change the response
 shape.
 
-- The builder runs under `context.WithoutCancel`, so one client leaving does
-  not cancel the others.
-- `applied_filters` is set inside the shared closure, so no caller mutates a
-  shared map.
+- The shared build is reference-counted per key (`listFlight`). Each caller
+  waits on its own request context, and a caller that leaves gets 499.
+- The build's context is cancelled when the last waiter leaves, and it has a
+  hard 5-minute ceiling. (Security review: an earlier version detached the
+  build with `context.WithoutCancel`, so abandoned builds kept running.)
+- `applied_filters` and the cache fill happen inside the shared build. Errors
+  reach only the callers that waited, are never cached, and go through the
+  same PendingError → 202 handling as the unshared path.
 
 This does not make a cold build fast. It stops 14 copies of it from competing
 for the same CPU.
