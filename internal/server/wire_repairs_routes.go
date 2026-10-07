@@ -1,7 +1,7 @@
 // file: internal/server/wire_repairs_routes.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4a9c1e62-3f75-4d08-b8a6-5e2d7c0b9f13
-// last-edited: 2026-09-27
+// last-edited: 2026-10-06
 
 package server
 
@@ -26,4 +26,7 @@ func (s *Server) wireRepairsRoutes(protected *gin.RouterGroup) {
 	protected.POST("/repairs/:fixer/plan", s.perm(auth.PermLibraryEditMetadata), h.StartPlan)
 	protected.GET("/repairs/:fixer/plan/:op_id/rows", s.perm(auth.PermLibraryView), h.ListPlanRows)
 	protected.POST("/repairs/:fixer/apply", s.perm(auth.PermLibraryEditMetadata), h.StartApply)
+	// The owner's own apply of one owner-only row: the handler also requires
+	// an interactive sign-in, the admin role and a same-origin request.
+	protected.POST("/repairs/:fixer/owner-apply", s.perm(auth.PermLibraryEditMetadata), h.OwnerApply)
 }
