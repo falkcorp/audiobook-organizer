@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.26.0
+// version: 1.27.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
 // last-edited: 2026-10-06
 
@@ -72,6 +72,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"
+	"golang.org/x/sync/singleflight"
 )
 
 // facetsCacheKey is the single cache key under which audiobookFacets stores /
@@ -111,6 +112,9 @@ type Handler struct {
 	// under heavy multi-method use, passed by pointer. The handlers nil-check
 	// them exactly where the originals did.
 	listCache *cache.Cache[gin.H]
+	// listFlight collapses concurrent identical list-cache misses into one
+	// build (ListAudiobooks). The zero value is ready to use.
+	listFlight singleflight.Group
 	// searchCached reports whether a search request is served by the shared
 	// search result cache (AudiobookService.SearchIsCached).
 	searchCached func(search string, authorID, seriesID *int, f audiobookspkg.ListFilters) bool
@@ -724,6 +728,36 @@ func (h *Handler) ListAudiobooks(c *gin.Context) {
 	if wantsStaleSearch(c) {
 		reqCtx = audiobookspkg.WithStaleSearchResponse(reqCtx)
 	}
+	// Identical cache misses share ONE build. After every prod restart the
+	// list cache and memdb are cold, and the Library's retry loop re-issues
+	// the same query: 14 identical requests landed in one second at
+	// 2026-10-06T16:47Z, each building the same response (44-160 s apiece)
+	// and competing for the same CPU. Only a cacheable request without the
+	// async/stale preferences joins -- those change the response shape. The
+	// shared build runs detached from any one caller's cancellation, so the
+	// first client leaving does not fail the others; it is bounded by the
+	// build itself, exactly as the cache fill it replaces was.
+	if useListCache && !wantsAsyncSearch(c) && !wantsStaleSearch(c) {
+		v, err, _ := h.listFlight.Do(cacheKey, func() (any, error) {
+			resp, err := h.buildListResponse(context.WithoutCancel(reqCtx), params.Limit, params.Offset, params.Search, authorID, seriesID, filters, showQuarantined)
+			if err != nil {
+				return nil, err
+			}
+			// Set inside the shared build: every joined caller receives the
+			// same map, and it is never written after it leaves here (cache
+			// hits share it the same way).
+			resp["applied_filters"] = appliedFilters
+			h.listCache.Set(cacheKey, resp)
+			return resp, nil
+		})
+		if err != nil {
+			httputil.InternalError(c, "failed to list audiobooks", err)
+			return
+		}
+		httputil.RespondWithOK(c, v.(gin.H))
+		return
+	}
+
 	resp, err := h.buildListResponse(reqCtx, params.Limit, params.Offset, params.Search, authorID, seriesID, filters, showQuarantined)
 	var pending *searchcache.PendingError
 	if errors.As(err, &pending) {

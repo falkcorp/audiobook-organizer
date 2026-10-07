@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler_test.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 5cd764d5-8036-425c-842e-c49d0d44acec
 // last-edited: 2026-10-06
 
@@ -58,6 +58,9 @@ type recorders struct {
 	// dropped predicate -- the stub returns the same canned page either way.
 	listFilters     audiobookspkg.ListFilters
 	listFiltersSeen bool
+	// listHook, when set, runs inside buildListResponse before it returns
+	// (a test uses it to hold a build open while identical requests arrive).
+	listHook func()
 	facetsResp      gin.H
 	facetsErr       error
 	facetsCalls     int
@@ -124,6 +127,9 @@ func newHandlerWithStore(t *testing.T, wrap func(*audiobooksmocks.MockAudiobooks
 		changelog,
 		lc, fc, ac, sc,
 		func(ctx context.Context, limit, offset int, search string, authorID, seriesID *int, filters audiobookspkg.ListFilters, showQuarantined bool) (gin.H, error) {
+			if rec.listHook != nil {
+				rec.listHook()
+			}
 			rec.listFilters = filters
 			rec.listFiltersSeen = true
 			if rec.listResp == nil {
