@@ -1,7 +1,7 @@
 // file: internal/config/unknown_keys.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6a4394fd-1b48-48cc-9b88-0642eff0623f
-// last-edited: 2026-09-12
+// last-edited: 2026-10-07
 
 package config
 
@@ -30,7 +30,8 @@ var (
 
 // unknownConfigKeys returns, sorted, the dotted path of every key in payload
 // that json.Unmarshal would silently ignore when decoding onto a Config — a key
-// with no matching field at its level. Nested objects are walked through struct
+// with no matching field at its level — or that matches a field only by case
+// (see lookupJSONField). Nested objects are walked through struct
 // fields, map values and slice elements, so {"dedup":{"typo":1}} reports
 // "dedup.typo" and {"metadata_sources":[{"typo":1}]} reports
 // "metadata_sources[0].typo". Map-typed fields (credentials, plugins, ...)
@@ -127,18 +128,18 @@ func jsonFieldTypes(t reflect.Type) map[string]reflect.Type {
 	return fields
 }
 
-// lookupJSONField matches key the way encoding/json does: an exact name first,
-// then a case-insensitive one.
+// lookupJSONField matches key EXACTLY. encoding/json would also accept a key
+// that differs only in case ("OAuth_Default_Role" lands on
+// oauth_default_role), but every other check in UpdateConfig — the immutable,
+// secret and removed-key lists — looks keys up exactly, so a case variant used
+// to reach a field those checks never saw (security review, 2026-10-07).
+// Refusing the variant here makes the exact spelling the only one that decodes,
+// so the key-name checks and the decoder can no longer disagree.
+// ChangedProtectedFields compares the decoded structs as well, so the
+// interactive-session rule does not depend on this alone.
 func lookupJSONField(fields map[string]reflect.Type, key string) (reflect.Type, bool) {
-	if t, ok := fields[key]; ok {
-		return t, true
-	}
-	for name, t := range fields {
-		if strings.EqualFold(name, key) {
-			return t, true
-		}
-	}
-	return nil, false
+	t, ok := fields[key]
+	return t, ok
 }
 
 func joinKeyPath(path, key string) string {

@@ -1,7 +1,7 @@
 // file: internal/server/apikey_expiry_sweep.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 481f65a7-e54a-4be2-b43e-d6d992fcbd60
-// last-edited: 2026-09-12
+// last-edited: 2026-10-07
 
 package server
 
@@ -25,11 +25,10 @@ const (
 // sweep (SEC-1/PROC-6): it logs slog.Warn for active API keys approaching
 // expiry, and a one-time-per-process deprecation warning for legacy active
 // keys that have no expiry at all (ExpiresAt == nil). It NEVER rejects,
-// revokes, or otherwise modifies a key — enforcement remains solely in the
-// pre-existing middleware check (internal/server/middleware/auth.go,
-// `key.ExpiresAt != nil && time.Now().After(*key.ExpiresAt)`), which already
-// treats a nil ExpiresAt as "never expires". This function must not change
-// that behavior.
+// revokes, or otherwise modifies a key — enforcement is solely
+// middleware.APIKeyExpiryRefusal, which since 2026-10-07 refuses a key with no
+// expiry (stampNeverExpiringAPIKeys gives legacy keys one at startup). This
+// function must not enforce anything itself.
 //
 // It runs forever until s.bgCtx is canceled (intended to be started from
 // Server.Start via `s.bgWG.Go("apikey-expiry-sweep", func() {

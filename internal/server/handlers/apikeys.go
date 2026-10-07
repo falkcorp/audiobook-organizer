@@ -1,5 +1,5 @@
 // file: internal/server/handlers/apikeys.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f01234567890
 // last-edited: 2026-10-07
 
@@ -45,19 +45,29 @@ const (
 const clampedNote = "expiry shortened to the expiry of the API key that made this request: a key cannot mint a key that outlives it (sign in to extend it)"
 
 // clampToCallingKey limits exp to the expiry of the API key that
-// authenticated the request, if one did: a key may not mint a key that
-// outlives it (an 8h bootstrap key must not turn into a 365-day one).
-// Reports whether it clamped.
-func clampToCallingKey(c *gin.Context, exp time.Time) (time.Time, bool) {
-	k, ok := servermiddleware.CurrentAPIKey(c)
-	if !ok || k == nil || k.ExpiresAt == nil {
-		return exp, false
+// authenticated the request: a key may not mint a key that outlives it (an 8h
+// bootstrap key must not turn into a 365-day one). A signed-in person is not
+// clamped. Reports whether it clamped, and ok=false when the caller is not a
+// person and no calling key with a real expiry is on the request — the clamp
+// then has nothing to clamp to, and the caller must refuse rather than mint
+// an unclamped key (it used to return exp unchanged there: a key with no
+// expiry minted keys of any length, the 2026-10-07 review's fail-open).
+func clampToCallingKey(c *gin.Context, exp time.Time) (clampedExp time.Time, clamped, ok bool) {
+	if servermiddleware.CredentialChangeAllowed(c) {
+		return exp, false, true
+	}
+	k, found := servermiddleware.CurrentAPIKey(c)
+	if !found || k == nil || k.ExpiresAt == nil || k.ExpiresAt.IsZero() {
+		return time.Time{}, false, false
 	}
 	if exp.After(*k.ExpiresAt) {
-		return *k.ExpiresAt, true
+		return *k.ExpiresAt, true, true
 	}
-	return exp, false
+	return exp, false, true
 }
+
+// noClampMessage is the 403 when clampToCallingKey has nothing to clamp to.
+const noClampMessage = "this credential has no expiry to limit a new key to; sign in to create or rotate keys"
 
 // ---- Request / response types -----------------------------------------------
 
@@ -186,11 +196,7 @@ func (h *APIKeyHandler) Create(c *gin.Context) {
 	targetUserID := caller.ID
 	if req.UserID != "" && req.UserID != caller.ID {
 		// Creating a key for another user is minting a credential for them:
-		// a person's session only, never an API key.
-		if !servermiddleware.CredentialChangeAllowed(c) {
-			servermiddleware.RefuseCredentialChange(c)
-			return
-		}
+		// an API key is refused at the route (server.credRouteWhen).
 		if !isAdminUser(c) {
 			httputil.RespondWithForbidden(c, "only admins can create keys for other users")
 			return
@@ -230,7 +236,11 @@ func (h *APIKeyHandler) Create(c *gin.Context) {
 	if days == 0 {
 		days = DefaultAPIKeyTTLDays
 	}
-	exp, clamped := clampToCallingKey(c, time.Now().Add(time.Duration(days)*24*time.Hour))
+	exp, clamped, ok := clampToCallingKey(c, time.Now().Add(time.Duration(days)*24*time.Hour))
+	if !ok {
+		httputil.RespondWithForbidden(c, noClampMessage)
+		return
+	}
 	key.ExpiresAt = &exp
 	created, err := h.store.CreateAPIKey(key)
 	if err != nil {
@@ -454,11 +464,8 @@ func (h *APIKeyHandler) Rotate(c *gin.Context) {
 	}
 	if oldKey.UserID != caller.ID {
 		// The response carries the new token for ANOTHER user's key, so this
-		// is minting a credential for them: a person's session only.
-		if !servermiddleware.CredentialChangeAllowed(c) {
-			servermiddleware.RefuseCredentialChange(c)
-			return
-		}
+		// is minting a credential for them: an API key is refused at the
+		// route (server.credRouteWhen).
 		if !isAdminUser(c) {
 			httputil.RespondWithForbidden(c, "access denied")
 			return
@@ -475,7 +482,11 @@ func (h *APIKeyHandler) Rotate(c *gin.Context) {
 	// bootstrap key could rotate a year-long sibling key of the same user and
 	// walk away with a fresh year-long token. Extending a key past the
 	// calling key's own expiry takes a signed-in session.
-	newExpiresAt, clamped := clampToCallingKey(c, time.Now().Add(rotatedKeyLifetime(oldKey)))
+	newExpiresAt, clamped, clampOK := clampToCallingKey(c, time.Now().Add(rotatedKeyLifetime(oldKey)))
+	if !clampOK {
+		httputil.RespondWithForbidden(c, noClampMessage)
+		return
+	}
 
 	newKey := &database.APIKey{
 		UserID:      oldKey.UserID,

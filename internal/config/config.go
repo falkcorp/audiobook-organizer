@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.138.0
+// version: 1.139.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-10-07
 
@@ -1553,6 +1553,15 @@ type Config struct {
 	// identity, resolving/creating a session without a second app-level login.
 	CFAccessTeamDomain string `json:"cf_access_team_domain"` // e.g. myteam.cloudflareaccess.com
 	CFAccessAUD        string `json:"cf_access_aud"`         // Access application AUD tag
+	// OwnerEmail is the Cloudflare Access identity that owner-only actions
+	// (Repairs owner apply) require: a request is the owner only when it
+	// carries a VERIFIED Cf-Access-Jwt-Assertion whose email equals this,
+	// case-insensitively. A password, OAuth, temp-login or invite session is
+	// never enough, because the server can create those identities itself
+	// (a stolen password, a newly created admin) and cannot create this one.
+	// Empty refuses every owner-only action. A sign-in setting: only an
+	// interactive session may change it (protected_fields.go).
+	OwnerEmail string `json:"owner_email"`
 
 	// ── Audiobookshelf-compatible sync API (design spec Phase 1) ─────────────
 	//
@@ -2162,6 +2171,9 @@ func applyEnvAuthoritativeConfig(c *Config) {
 	if viper.IsSet("cf_access_aud") {
 		c.CFAccessAUD = viper.GetString("cf_access_aud")
 	}
+	if viper.IsSet("owner_email") {
+		c.OwnerEmail = viper.GetString("owner_email")
+	}
 	if viper.IsSet("whisper_remote_url") {
 		c.WhisperRemoteURL = viper.GetString("whisper_remote_url")
 	}
@@ -2434,6 +2446,7 @@ func InitConfig() {
 	viper.SetDefault("oauth_default_role", "viewer")
 	viper.SetDefault("cf_access_team_domain", "")
 	viper.SetDefault("cf_access_aud", "")
+	viper.SetDefault("owner_email", "")
 	viper.BindEnv("oauth_enabled", "OAUTH_ENABLED")                           //nolint:errcheck
 	viper.BindEnv("oauth_github_client_id", "OAUTH_GITHUB_CLIENT_ID")         //nolint:errcheck
 	viper.BindEnv("oauth_github_client_secret", "OAUTH_GITHUB_CLIENT_SECRET") //nolint:errcheck
@@ -2444,6 +2457,7 @@ func InitConfig() {
 	viper.BindEnv("oauth_default_role", "OAUTH_DEFAULT_ROLE")                 //nolint:errcheck
 	viper.BindEnv("cf_access_team_domain", "CF_ACCESS_TEAM_DOMAIN")           //nolint:errcheck
 	viper.BindEnv("cf_access_aud", "CF_ACCESS_AUD")                           //nolint:errcheck
+	viper.BindEnv("owner_email", "OWNER_EMAIL")                               //nolint:errcheck
 
 	registerABSDefaults()
 
@@ -2978,6 +2992,7 @@ func InitConfig() {
 			OAuthDefaultRole:        viper.GetString("oauth_default_role"),
 			CFAccessTeamDomain:      viper.GetString("cf_access_team_domain"),
 			CFAccessAUD:             viper.GetString("cf_access_aud"),
+			OwnerEmail:              viper.GetString("owner_email"),
 			WhisperRemoteURL:        viper.GetString("whisper_remote_url"),
 			WhisperEndpoints:        ParseWhisperEndpoints(viper.GetString("whisper_endpoints")),
 			WhisperRequires:         ParseLabelList(viper.GetString("whisper_requires")),

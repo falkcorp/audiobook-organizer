@@ -1,7 +1,7 @@
 // file: internal/server/handlers/auth_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: d5e6f7a8-b9c0-1234-5678-90abcdef0123
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 package handlers_test
 
@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	handlersmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/mocks"
@@ -37,8 +38,14 @@ func newAuthCtx(method, path string, body any) (*gin.Context, *httptest.Response
 	return c, w
 }
 
+// setAuthUser makes c a request from user's own signed-in session: the user
+// on the gin context and MethodSession on the request context, as RequireAuth
+// records them. Tests of another auth method override the method (asCaller).
 func setAuthUser(c *gin.Context, user *database.User) {
 	c.Set("auth_user", user)
+	if c.Request != nil {
+		c.Request = c.Request.WithContext(auth.WithMethod(c.Request.Context(), auth.MethodSession))
+	}
 }
 
 func setAuthSession(c *gin.Context, session *database.Session) {

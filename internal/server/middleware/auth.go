@@ -1,7 +1,7 @@
 // file: internal/server/middleware/auth.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 83c42ecb-1df2-4baf-9890-3f91ab4db6fe
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 package middleware
 
@@ -73,6 +73,31 @@ func SessionTokenFromRequest(r *http.Request) string {
 	return ""
 }
 
+// APIKeyFromRequest returns the first "abk_" API key the request presents in
+// any place /api/v1 accepts a credential (the Authorization bearer, then the
+// session cookie), or "". It is how "the key wins" is decided: a request that
+// presents a key is authenticated BY THE KEY and gets every key restriction,
+// whatever else it carries (a Cloudflare Access assertion, a session). Without
+// that, a caller holding both a key and a browser's Access cookie could have
+// the request recorded as an interactive cf_access login.
+func APIKeyFromRequest(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	authHeader := strings.TrimSpace(r.Header.Get("Authorization"))
+	if strings.HasPrefix(strings.ToLower(authHeader), "bearer ") {
+		if tok := strings.TrimSpace(authHeader[len("Bearer "):]); strings.HasPrefix(tok, "abk_") {
+			return tok
+		}
+	}
+	if cookie, err := r.Cookie(SessionCookieName); err == nil {
+		if tok := strings.TrimSpace(cookie.Value); strings.HasPrefix(tok, "abk_") {
+			return tok
+		}
+	}
+	return ""
+}
+
 // CurrentUser fetches the authenticated user from Gin context.
 func CurrentUser(c *gin.Context) (*database.User, bool) {
 	if c == nil {
@@ -140,6 +165,13 @@ func RequireAuth(store authSessionStore) gin.HandlerFunc {
 		if userCount == 0 {
 			// First-run bootstrap mode: setup endpoint can create the first admin.
 			c.Next()
+			return
+		}
+
+		// A presented API key wins over anything else on the request: it is
+		// checked first, and an identity an earlier stage bound is replaced.
+		if key := APIKeyFromRequest(c.Request); key != "" {
+			handleAPIKeyAuth(c, store, key)
 			return
 		}
 
@@ -248,6 +280,26 @@ func abortWorkerOnlyOutsideWorkerAPI(c *gin.Context) bool {
 	return true
 }
 
+// APIKeyExpiryRefusal is the ONE expiry check for an API key, used by every
+// path that accepts one (/api/v1 here, the ABS surface in absauth.go). It
+// reports a short code and a message when the key must be refused.
+//
+// Every API key has an expiry (2026-10-07): creators always set one, and
+// stampNeverExpiringAPIKeys gives keys from before that rule one at startup,
+// before the listener opens. A key that still has none, or a zero one,
+// arrived some other way (a restored backup, a direct write), and "no expiry"
+// must not read as "valid forever". Both paths used to check
+// `ExpiresAt != nil && now.After(*ExpiresAt)`, which waved a nil through.
+func APIKeyExpiryRefusal(key *database.APIKey, now time.Time) (code, msg string, refused bool) {
+	if key.ExpiresAt == nil || key.ExpiresAt.IsZero() {
+		return "apikey-no-expiry", "API key has no expiry; create a new key", true
+	}
+	if now.After(*key.ExpiresAt) {
+		return "apikey-expired", "API key has expired", true
+	}
+	return "", "", false
+}
+
 // handleAPIKeyAuth validates an "abk_" prefixed token and, on success, binds
 // the user and scoped permissions to the context then calls c.Next().
 func handleAPIKeyAuth(c *gin.Context, store authKeyStore, rawToken string) {
@@ -274,8 +326,8 @@ func handleAPIKeyAuth(c *gin.Context, store authKeyStore, rawToken string) {
 		c.Abort()
 		return
 	}
-	if key.ExpiresAt != nil && time.Now().After(*key.ExpiresAt) {
-		httputil.RespondWithUnauthorized(c, "API key has expired")
+	if _, msg, refused := APIKeyExpiryRefusal(key, time.Now()); refused {
+		httputil.RespondWithUnauthorized(c, msg)
 		c.Abort()
 		return
 	}
@@ -318,6 +370,8 @@ func handleAPIKeyAuth(c *gin.Context, store authKeyStore, rawToken string) {
 	c.Set(contextUserKey, user)
 	c.Set(contextAPIKeyKey, key)
 
+	// The key replaces anything an earlier stage bound (CloudflareAccessAuth
+	// skips a request that presents a key, but this does not rely on it).
 	ctx := auth.WithUser(c.Request.Context(), user)
 	ctx = auth.WithPermissions(ctx, effectivePerms)
 	ctx = auth.WithMethod(ctx, auth.MethodAPIKey)

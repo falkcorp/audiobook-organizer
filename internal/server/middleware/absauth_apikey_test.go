@@ -1,7 +1,7 @@
 // file: internal/server/middleware/absauth_apikey_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5d3b8a71-9e64-4c02-b1f7-8a06d2e93c45
-// last-edited: 2026-09-19
+// last-edited: 2026-10-07
 
 package middleware
 
@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/oauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
@@ -35,7 +36,17 @@ func (s *apiKeyStore) GetAPIKeyByHash(hash string) (*database.APIKey, error) {
 	return s.keys[hash], nil
 }
 
+// addKey stores k under raw. A key with no ExpiresAt gets one an hour out,
+// like every key a creator mints; addKeyAsStored keeps it as given.
 func (s *apiKeyStore) addKey(raw string, k *database.APIKey) {
+	if k.ExpiresAt == nil {
+		exp := time.Now().Add(time.Hour)
+		k.ExpiresAt = &exp
+	}
+	s.addKeyAsStored(raw, k)
+}
+
+func (s *apiKeyStore) addKeyAsStored(raw string, k *database.APIKey) {
 	k.TokenHash = database.HashAPIKeyToken(raw)
 	s.keys[k.TokenHash] = k
 }
@@ -122,6 +133,24 @@ func TestABSAPIKey_ExpiredRejected(t *testing.T) {
 
 	if w := h.get("abk_expired"); w.Code != http.StatusUnauthorized {
 		t.Fatalf("expired key should be 401, got %d", w.Code)
+	}
+}
+
+// A key with no expiry (a restored backup, a direct write — every creator
+// sets one) is refused on the ABS surface too, not read as "never expires".
+// The 2026-10-07 review's fail-open: both key paths checked
+// `ExpiresAt != nil && now.After(...)`.
+func TestABSAPIKey_NoExpiryRejected(t *testing.T) {
+	h := newAPIKeyHarness(t)
+	h.store.addUser(&database.User{ID: "u1", Username: "admin", Status: "active"})
+	h.store.addKeyAsStored("abk_noexp", &database.APIKey{ID: "k1", UserID: "u1", Status: "active"})
+	var zero time.Time
+	h.store.addKeyAsStored("abk_zeroexp", &database.APIKey{ID: "k2", UserID: "u1", Status: "active", ExpiresAt: &zero})
+
+	for _, raw := range []string{"abk_noexp", "abk_zeroexp"} {
+		if w := h.get(raw); w.Code != http.StatusUnauthorized {
+			t.Errorf("%s: a key with no expiry should be 401, got %d", raw, w.Code)
+		}
 	}
 }
 
@@ -216,5 +245,40 @@ func TestABSAPIKey_QueryTokenReachesAPIKeyCheck(t *testing.T) {
 	h.router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/items/item-1/file/ino-1?token="+revoked, nil))
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("revoked ?token= key must be 401, got %d", w.Code)
+	}
+}
+
+// TestABSAPIKey_WinsOverAccessAssertion (owner decision 2026-10-07): an ABS
+// request carrying a verified Access assertion AND an API key is the key's
+// request, bound in API-key mode and recorded as api_key.
+func TestABSAPIKey_WinsOverAccessAssertion(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg, err := absauth.Load(absauth.Settings{Enabled: true, JWTSecret: absTestSecret, AuthModes: "cf,jwt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := newAPIKeyStore(newFakeABSStore())
+	store.addUser(&database.User{ID: "u1", Username: "owner", Email: "owner@example.com", Status: "active"})
+	store.addKey("abk_valid", &database.APIKey{ID: "k1", UserID: "u1", Status: "active"})
+	verifier := &fakeCFVerifier{byToken: map[string]*oauth.IdentityClaims{
+		"human": {Provider: oauth.ProviderCFAccess, Subject: "sub-owner", Email: "owner@example.com", EmailVerified: true},
+	}}
+	resolver := NewABSIdentityResolver(cfg, verifier, oauth.New(oauth.Config{AllowedEmails: []string{"owner@example.com"}}), store)
+	r := gin.New()
+	var method auth.Method
+	r.GET("/api/me", ABSRequireAuth(resolver), func(c *gin.Context) {
+		method = CurrentAuthMethod(c)
+		c.JSON(http.StatusOK, gin.H{"mode": ABSAuthMode(c)})
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+	req.Header.Set(oauth.CFAccessHeader, "human")
+	req.Header.Set("Authorization", "Bearer abk_valid")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), ABSModeAPIKey) {
+		t.Fatalf("got %d %s, want the API-key mode", w.Code, w.Body.String())
+	}
+	if method != auth.MethodAPIKey {
+		t.Fatalf("method = %q, want api_key", method)
 	}
 }

@@ -1672,7 +1672,7 @@ func (s *Server) setupRoutes() {
 			// Update routes
 			protected.GET("/update/status", s.perm(auth.PermSettingsManage), s.getUpdateStatus)
 			protected.POST("/update/check", s.perm(auth.PermSettingsManage), s.checkForUpdate)
-			protected.POST("/update/apply", s.perm(auth.PermSettingsManage), s.applyUpdate)
+			s.credRoute(protected, http.MethodPost, "/update/apply", s.perm(auth.PermSettingsManage), s.applyUpdate)
 
 			// Blocked hashes management routes migrated to the handlers/system
 			// sub-package (wireHandlers).

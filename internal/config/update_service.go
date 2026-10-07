@@ -1,7 +1,7 @@
 // file: internal/config/update_service.go
-// version: 3.25.0
+// version: 3.26.0
 // guid: f6g7h8i9-j0k1-l2m3-n4o5-p6q7r8s9t0u1
-// last-edited: 2026-09-13
+// last-edited: 2026-10-07
 
 package config
 
@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 )
@@ -538,6 +539,9 @@ func (us *UpdateService) UpdateConfig(ctx context.Context, payload map[string]an
 		endpointsErr error
 		ladderErr    error
 		validateErr  error
+		// refused lists the protected fields a non-interactive caller tried
+		// to change; see ChangedProtectedFields.
+		refused []string
 		// prior is a DEEP copy of the whole in-memory config as it stood
 		// immediately before the update, captured under the write lock. It is
 		// the rollback target when the save fails, and includes the secret
@@ -636,16 +640,49 @@ func (us *UpdateService) UpdateConfig(ctx context.Context, payload map[string]an
 		// failure than the one being guarded, and the old handler-level check
 		// never had this problem: it saved first and only reverted memory, so
 		// the write still landed.
-		candidateErr := candidate.Validate()
+		// Protected fields (sign-in settings, executables, database and
+		// server paths — protected_fields.go) need an interactive session.
+		// Compared on the decoded structs, so the check sees exactly what
+		// would be stored however the request spelled it. A field counts as
+		// changed only when it differs from both the stored config and its
+		// normalized form, so a GET-then-PUT round trip of an old blob that
+		// Validate rewrites is not refused. Checked BEFORE validation too, so
+		// a key cannot probe the filesystem through Validate's path errors,
+		// and AFTER, so a normalization cannot carry a change past it. Off
+		// with auth off, like every other credential guard; an unknown caller
+		// (no method on the context) is refused.
 		priorCheck := prior.Clone()
-		if candidateErr != nil && priorCheck.Validate() == nil {
+		priorValid := priorCheck.Validate() == nil
+		checkProtected := func() bool {
+			if !prior.EnableAuth || auth.MethodFromContext(ctx).MayChangeCredentials() {
+				return true
+			}
+			refused = intersectSorted(ChangedProtectedFields(prior, candidate), ChangedProtectedFields(priorCheck, candidate))
+			return len(refused) == 0
+		}
+		if !checkProtected() {
+			return
+		}
+		candidateErr := candidate.Validate()
+		if candidateErr != nil && priorValid {
 			validateErr = candidateErr
+			return
+		}
+		if !checkProtected() {
 			return
 		}
 		*c = *candidate
 	})
 	if unmarshalErr != nil {
 		return http.StatusBadRequest, map[string]any{"error": "failed to apply config: " + unmarshalErr.Error()}
+	}
+	if len(refused) > 0 {
+		slog.Warn("config update refused: protected settings need an interactive session; nothing persisted",
+			"method", string(auth.MethodFromContext(ctx)), "refused_keys", refused)
+		return http.StatusForbidden, map[string]any{
+			"error":        ProtectedSettingsRefusedMessage + " (" + strings.Join(refused, ", ") + ")",
+			"refused_keys": refused,
+		}
 	}
 	if endpointsErr != nil {
 		slog.Warn("config update rejected: invalid ai_endpoints; nothing persisted", "err", endpointsErr)
@@ -740,6 +777,24 @@ func (us *UpdateService) UpdateConfig(ctx context.Context, payload map[string]an
 // running scan, while the endpoint does the same work inside the request with
 // no such exclusion. Keep this in sync with dedup.RescoreRemedy.
 const DedupRescoreRemedy = `queue it as an operation: POST /api/v1/operations/v2 {"def_id":"dedup.rescore","params":{"apply":true}} — or, if you need it inline, POST /api/v1/dedup/rescore {"apply":true}`
+
+// ProtectedSettingsRefusedMessage is the 403 for a PUT /config that would
+// change a protected setting from an API key or other non-interactive caller.
+const ProtectedSettingsRefusedMessage = auth.CredentialChangeRefusedMessage
+
+// intersectSorted returns the elements of a that are also in b, in a's order.
+func intersectSorted(a, b []string) []string {
+	var out []string
+	for _, x := range a {
+		for _, y := range b {
+			if x == y {
+				out = append(out, x)
+				break
+			}
+		}
+	}
+	return out
+}
 
 // payloadString extracts a string value from the payload if present and non-empty.
 func payloadString(payload map[string]any, key string) (string, bool) {

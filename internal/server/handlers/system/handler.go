@@ -1,5 +1,5 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: 8475f406-df31-4286-95b0-30787397603e
 // last-edited: 2026-10-07
 
@@ -29,7 +29,6 @@ import (
 	"io"
 	"log/slog"
 	"maps"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -506,21 +505,9 @@ func (h *Handler) UpdateConfig(c *gin.Context) {
 		return
 	}
 
-	// Sign-in settings (who may sign in, with what) are credentials: an API
-	// key may not change them, or it could allowlist an email it controls
-	// with the admin default role and sign in through SSO as an admin. Only a
-	// CHANGED value is refused, so a key's GET-then-PUT round trip still
-	// works. A no-op with auth off, like every other credential guard.
-	if cur := config.Snapshot(); cur.EnableAuth && !servermiddleware.CredentialChangeAllowed(c) {
-		if changed := config.ChangedSignInSettingKeys(&cur, payload); len(changed) > 0 {
-			servermiddleware.LogCredentialChangeRefusal(c)
-			httputil.RespondWithErrorFields(c, http.StatusForbidden,
-				servermiddleware.CredentialChangeRefusedMessage+" (sign-in settings: "+strings.Join(changed, ", ")+")",
-				"FORBIDDEN", map[string]any{"refused_keys": changed})
-			return
-		}
-	}
-
+	// Protected settings (sign-in, executables, database and server paths)
+	// are refused for an API key inside UpdateService, on the decoded config,
+	// so the check cannot disagree with the decoder about which key was meant.
 	status, resp := h.configUpdate.UpdateConfig(c.Request.Context(), payload)
 	if status >= 400 {
 		// No rollback here: UpdateService owns the in-memory/persisted state
@@ -538,6 +525,12 @@ func (h *Handler) UpdateConfig(c *gin.Context) {
 		if unknown, ok := resp["unknown_keys"].([]string); ok && len(unknown) > 0 {
 			httputil.RespondWithErrorFields(c, status, errMsg, "CONFIG_ERROR",
 				map[string]any{"unknown_keys": unknown})
+			return
+		}
+		if refused, ok := resp["refused_keys"].([]string); ok && len(refused) > 0 {
+			servermiddleware.LogCredentialChangeRefusal(c)
+			httputil.RespondWithErrorFields(c, status, errMsg, "FORBIDDEN",
+				map[string]any{"refused_keys": refused})
 			return
 		}
 		httputil.RespondWithError(c, status, errMsg, "CONFIG_ERROR")

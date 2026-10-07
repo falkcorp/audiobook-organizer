@@ -1,7 +1,7 @@
 // file: internal/server/middleware/auth_method_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5e2b7c19-0d4a-4f86-b3e1-9a6c8d2f7041
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 package middleware
 
@@ -34,7 +34,8 @@ func authMethodStore() *database.MockStore {
 			return &database.User{ID: id, Username: id, Status: "active", Roles: []string{"admin"}}, nil
 		},
 		GetAPIKeyByHashFunc: func(string) (*database.APIKey, error) {
-			return &database.APIKey{ID: "k1", UserID: "owner", Status: "active"}, nil
+			exp := time.Now().Add(time.Hour)
+			return &database.APIKey{ID: "k1", UserID: "owner", Status: "active", ExpiresAt: &exp}, nil
 		},
 		TouchAPIKeyLastUsedFunc: func(string, time.Time, string) error { return nil },
 	}
@@ -176,6 +177,52 @@ func TestCloudflareAccess_HumanIsInteractive_ServiceTokenIsNot(t *testing.T) {
 	assert.Equal(t, auth.MethodAPIKey, m)
 }
 
+// TestCloudflareAccess_APIKeyWins (owner decision 2026-10-07): a request that
+// presents an API key is the key's request, recorded as api_key with every key
+// restriction, even when it ALSO carries a verified Access assertion for an
+// allowlisted person — in the bearer or in the session cookie.
+func TestCloudflareAccess_APIKeyWins(t *testing.T) {
+	t.Parallel()
+	gin.SetMode(gin.TestMode)
+	cfStore := newFakeABSStore()
+	cfStore.addUser(activeUser("owner", "owner"))
+	verifier := &fakeCFVerifier{byToken: map[string]*oauth.IdentityClaims{
+		"human": {Provider: oauth.ProviderCFAccess, Subject: "sub-owner", Email: "owner@example.com", EmailVerified: true},
+	}}
+	cf := &CFAccessAuthenticator{verifier: verifier, cfg: oauth.New(oauth.Config{AllowedEmails: []string{"owner@example.com"}}), store: cfStore}
+	cases := map[string]func(r *http.Request){
+		"bearer key":                func(r *http.Request) { r.Header.Set("Authorization", "Bearer abk_secret") },
+		"key in the session cookie": func(r *http.Request) { r.AddCookie(&http.Cookie{Name: SessionCookieName, Value: "abk_secret"}) },
+		"session bearer + key cookie": func(r *http.Request) {
+			r.Header.Set("Authorization", "Bearer sess-password")
+			r.AddCookie(&http.Cookie{Name: SessionCookieName, Value: "abk_secret"})
+		},
+		"access cookie + bearer key": func(r *http.Request) {
+			r.Header.Del(oauth.CFAccessHeader)
+			r.AddCookie(&http.Cookie{Name: "CF_Authorization", Value: "human"})
+			r.Header.Set("Authorization", "Bearer abk_secret")
+		},
+	}
+	for name, add := range cases {
+		t.Run(name, func(t *testing.T) {
+			r := gin.New()
+			var got auth.Method
+			r.Use(CloudflareAccessAuth(cf), RequireAuth(authMethodStore()))
+			r.GET("/protected", func(c *gin.Context) {
+				got = CurrentAuthMethod(c)
+				c.Status(http.StatusOK)
+			})
+			req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+			req.Header.Set(oauth.CFAccessHeader, "human")
+			add(req)
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+			assert.Equal(t, auth.MethodAPIKey, got)
+		})
+	}
+}
+
 // TestABSBind_IsNeverInteractive: every identity the ABS surface binds is
 // recorded as abs, never as an interactive login.
 func TestABSBind_IsNeverInteractive(t *testing.T) {
@@ -187,4 +234,29 @@ func TestABSBind_IsNeverInteractive(t *testing.T) {
 	(&ABSIdentityResolver{}).Bind(c, &ABSIdentity{User: activeUser("owner", "owner"), Mode: ABSModeJWT, SessionID: "s1"})
 	assert.Equal(t, auth.MethodABS, CurrentAuthMethod(c))
 	assert.False(t, CurrentAuthMethod(c).Interactive())
+}
+
+// TestRequireAuth_APIKeyWithoutExpiryRefused: /api/v1 refuses a key with no
+// (or a zero) expiry instead of treating it as never expiring — the
+// 2026-10-07 review's fail-open on a nil time.
+func TestRequireAuth_APIKeyWithoutExpiryRefused(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	var zero time.Time
+	for name, exp := range map[string]*time.Time{"nil": nil, "zero": &zero} {
+		t.Run(name, func(t *testing.T) {
+			store := authMethodStore()
+			store.GetAPIKeyByHashFunc = func(string) (*database.APIKey, error) {
+				return &database.APIKey{ID: "k1", UserID: "owner", Status: "active", ExpiresAt: exp}, nil
+			}
+			r := gin.New()
+			r.Use(RequireAuth(store))
+			r.GET("/x", func(c *gin.Context) { c.Status(http.StatusOK) })
+			req := httptest.NewRequest(http.MethodGet, "/x", nil)
+			req.Header.Set("Authorization", "Bearer abk_secret")
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+			assert.Equal(t, http.StatusUnauthorized, w.Code, w.Body.String())
+			assert.Contains(t, w.Body.String(), "no expiry")
+		})
+	}
 }

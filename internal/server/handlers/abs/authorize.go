@@ -1,7 +1,7 @@
 // file: internal/server/handlers/abs/authorize.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7e14b0c9-53a6-4d82-91f7-2c8de6a04b13
-// last-edited: 2026-08-01
+// last-edited: 2026-10-07
 
 package abs
 
@@ -73,6 +73,13 @@ func (h *Handler) Authorize(c *gin.Context) {
 	}
 
 	accessToken := currentAccessToken(c)
+	if accessToken == "" && servermiddleware.ABSAuthMode(c) == servermiddleware.ABSModeAPIKey {
+		// An API key is echoed, never exchanged: minting an ABS access token
+		// here turned any key (an 8h bootstrap key, one about to expire)
+		// into a second bearer credential with its own lifetime — the
+		// minting-a-session-from-a-key class the 2026-10-07 review covers.
+		accessToken = servermiddleware.PresentedAPIKey(c)
+	}
 	if accessToken == "" {
 		if minted, _, mintErr := h.cfg.MintAccessToken(user.ID, servermiddleware.ABSSessionID(c), h.now()); mintErr == nil {
 			accessToken = minted
