@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_live_author_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: 6b0e3f27-94c1-4a8d-b2e5-1d7c9a4f0e63
-// last-edited: 2026-09-28
+// last-edited: 2026-10-06
 //
 // The certainty gate must judge a candidate against the book's LIVE author
 // (AuthorID and the book_authors join), never the denormalized Book.Author
@@ -211,7 +211,7 @@ func TestPreviewBulkApplyRow_AuthorsUnreadableIsBlocked(t *testing.T) {
 	cand := metafetch.MetadataCandidate{Title: "Valis", Score: 0.95}
 	plan := cachedApplyPlan{Book: &database.Book{ID: "valis", Title: "Valis"}, Candidate: &cand,
 		Reason: applySkipAuthorsUnreadable, Err: errors.New("read author 101 of valis: pebble: closed")}
-	row := previewBulkApplyRow(blockingPreview{&fakeApplySvc{}}, "valis", plan, true)
+	row := previewBulkApplyRow(blockingPreview{&fakeApplySvc{}}, "valis", plan, true, false)
 	if row.Verdict != previewVerdictBlocked || row.Reason != applySkipAuthorsUnreadable {
 		t.Fatalf("verdict %q reason %q, want blocked/%s", row.Verdict, row.Reason, applySkipAuthorsUnreadable)
 	}

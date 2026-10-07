@@ -1,5 +1,5 @@
 // file: internal/server/candidate_fallback_round3_test.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: 7f057c74-2af0-44a5-bf9a-214d739ab5f0
 // last-edited: 2026-10-06
 
@@ -7,6 +7,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"testing"
@@ -51,6 +52,72 @@ func TestUnseenOwnerMarker_DoesNotLiftReviewOnlySource(t *testing.T) {
 			if !out.Applied || !out.OwnerReviewed {
 				t.Fatalf("%s via %s matching the shown candidate: outcome %+v, want applied as owner-reviewed", source, name, out)
 			}
+		}
+	}
+}
+
+// The select-all (all_cached) preview reports the hashless marker's rule, the
+// one its apply runs under: a review-only candidate is not "would apply"
+// there, while a listed-book preview still says a single-row Apply would land
+// it, and a chain candidate refused on certainty legs is "would apply" under
+// both rules.
+func TestBulkApplyPreview_SelectAllUsesTheUnseenRule(t *testing.T) {
+	tenHours := 36000
+	books := fakeBooks{"b1": {ID: "b1", Title: "Moon Book", FilePath: "/lib/Zed Quill/Moon Book/Moon Book.m4b", Duration: &tenHours}}
+	for _, source := range []string{"Google Books", "Open Library"} {
+		cand := metafetch.MetadataCandidate{Title: "Moon Book", Author: "Zed Quill", Source: source, Score: 0.99, DurationSec: 36000}
+		svc := fakePreviewSvc{&fakeApplySvc{candidates: candidateJSON(t, cand)}}
+		plan := planCachedApply(svc, books, "b1", nil, nil)
+		if plan.Gate == nil || plan.Gate.Reason != applygate.ReasonReviewOnlySource {
+			t.Fatalf("%s: plan gate %+v, want review_only_source", source, plan.Gate)
+		}
+		if row := previewBulkApplyRow(svc, "b1", plan, false, false); !row.OwnerReviewedWouldApply {
+			t.Fatalf("%s listed preview: %+v, want a single-row Apply to land it", source, row)
+		}
+		if row := previewBulkApplyRow(svc, "b1", plan, false, true); row.OwnerReviewedWouldApply || row.Verdict != previewVerdictBlocked {
+			t.Fatalf("%s select-all preview: %+v, want blocked and not owner-reviewable", source, row)
+		}
+	}
+
+	chainBooks, chain := refusedByAuthorAndTranscription()
+	svc := fakePreviewSvc{&fakeApplySvc{candidates: candidateJSON(t, chain)}}
+	plan := planCachedApply(svc, chainBooks, "b1", nil, nil)
+	if row := previewBulkApplyRow(svc, "b1", plan, false, true); !row.OwnerReviewedWouldApply {
+		t.Fatalf("chain candidate, select-all preview: %+v, want the marker to lift the certainty legs", row)
+	}
+
+	// The op wires it: all_cached runs the marker's rule, a book_ids list the
+	// single-row rule.
+	cand := metafetch.MetadataCandidate{Title: "Moon Book", Author: "Zed Quill", Source: "Google Books", Score: 0.99, DurationSec: 36000}
+	for _, tc := range []struct {
+		name   string
+		params bulkApplyPreviewParams
+		want   bool
+	}{
+		{"all_cached", bulkApplyPreviewParams{AllCached: true}, false},
+		{"book_ids", bulkApplyPreviewParams{BookIDs: []string{"b1"}}, true},
+	} {
+		svc := listingPreviewSvc{fakePreviewSvc: fakePreviewSvc{&fakeApplySvc{candidates: candidateJSON(t, cand)}}, ids: []string{"b1"}}
+		res := &previewResults{}
+		if err := runBulkApplyPreview(context.Background(), &previewTestReporter{}, svc, books, res, "op-preview", tc.params); err != nil {
+			t.Fatalf("%s: runBulkApplyPreview: %v", tc.name, err)
+		}
+		found := false
+		for _, r := range res.rows {
+			if r.BookID != "b1" {
+				continue
+			}
+			var row bulkApplyPreviewRow
+			if err := json.Unmarshal([]byte(r.ResultJSON), &row); err != nil {
+				t.Fatal(err)
+			}
+			found = true
+			if row.OwnerReviewedWouldApply != tc.want {
+				t.Fatalf("%s preview: owner_reviewed_would_apply %v, want %v (%+v)", tc.name, row.OwnerReviewedWouldApply, tc.want, row)
+			}
+		}
+		if !found {
+			t.Fatalf("%s preview wrote no row for b1", tc.name)
 		}
 	}
 }

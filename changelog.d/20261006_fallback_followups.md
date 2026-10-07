@@ -95,10 +95,28 @@
     (owner decision): `FetchMetadataForBook` (organize, the iTunes import
     enrichment, the single-book "Fetch metadata" button) and
     `FetchMetadataForBookByTitle` (the production-company resolvers) still
-    search them, and `FetchMetadataForBook` caches the answer in the
-    per-provider fetch cache for review, but the chain moves on to the
-    next source instead of applying; with no other match they return
-    `metafetch.ErrReviewOnlyCandidatesNotApplied` and write nothing.
+    search them, but the chain moves on to the next source instead of
+    applying; with no other match they return
+    `metafetch.ErrReviewOnlyCandidatesNotApplied` (a
+    `ReviewOnlyNotAppliedError` naming the sources) and write nothing to
+    the book. `FetchMetadataForBook` leaves the answer in the per-provider
+    fetch cache, which the batch candidate fetch replays when it next
+    reaches the book: that is when the match shows on the review page, not
+    at once. `FetchMetadataForBookByTitle` caches nothing. The single-book
+    button answers 200 "Match found, left for review" (`review_only`), not
+    a 404, and shows it as an info toast.
     `POST /metadata/bulk-fetch` applies the best non-review-only candidate
     or reports `review_only`. The iTunes enrichment does not count that
     answer toward its rate-limit breaker.
+  - **An empty refetch keeps the candidates of two more row shapes**: a
+    legacy row with no `SourceHash` (forced refetch), and a plain-fetch row
+    hashed with no author or narrator (forced or not).
+    `VouchedCachedRow` now vouches a hashless row the way the gate does, and
+    a plain-fetch row by its search fingerprint; the carry is an explicit
+    flag (`SearchOptions.CarryFromRow`, set by `SearchOptions.CarryFrom`),
+    so an empty hash can be carried. The batch verdict and the gate are
+    unchanged.
+  - The all-cached (select-all) bulk-apply preview reports
+    `owner_reviewed_would_apply` under the hashless marker's rule, the one
+    its apply runs under, so it no longer says a review-only candidate would
+    apply. A listed-book preview keeps the single-row Apply's rule.
