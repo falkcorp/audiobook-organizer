@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_metadata_cache.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 3f8b41d7-9e26-4c05-b1a8-7d0e5c26f934
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package database
 
@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
-	"sort"
 	"strings"
 	"sync"
 
@@ -87,51 +86,8 @@ func (p *PebbleStore) DeleteMetadataCache(bookID string) error {
 	return nil
 }
 
-// ListMetadataCacheKeys returns one summary per cached entry, ordered
-// by FetchedAt descending. Caller paginates.
-func (p *PebbleStore) ListMetadataCacheKeys() ([]MetadataCacheSummary, error) {
-	iter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte(metadataCacheKeyPrefix),
-		UpperBound: []byte("metadata_cache;"), // ';' is one byte after ':'
-	})
-	if err != nil {
-		return nil, fmt.Errorf("new iter metadata_cache: %w", err)
-	}
-	defer iter.Close()
-
-	var out []MetadataCacheSummary
-	for iter.First(); iter.Valid(); iter.Next() {
-		var entry MetadataCandidateCache
-		if err := json.Unmarshal(iter.Value(), &entry); err != nil {
-			// Skip corrupt rows rather than fail the whole list.
-			continue
-		}
-		out = append(out, MetadataCacheSummary{
-			BookID:         entry.BookID,
-			FetchedAt:      entry.FetchedAt,
-			CandidateCount: len(entry.Candidates),
-		})
-	}
-	// FetchedAt descending, with the book id breaking ties.
-	//
-	// The tiebreak makes this a TOTAL order, which is what callers that paginate
-	// need: FetchedAt alone leaves rows sharing a timestamp in an order that can
-	// differ between calls, so a client walking offset=0,50,100 could be handed
-	// one row twice and never see another. Entries written by the same batch
-	// fetch routinely share a timestamp, so the ties are common, not theoretical.
-	//
-	// It only orders rows that FetchedAt leaves equal -- rows with distinct
-	// timestamps keep the order they already had, so the existing callers
-	// (GetCacheReviewResults, ListCachedCandidates) see no change in their
-	// primary ordering.
-	sort.Slice(out, func(i, j int) bool {
-		if !out[i].FetchedAt.Equal(out[j].FetchedAt) {
-			return out[i].FetchedAt.After(out[j].FetchedAt)
-		}
-		return out[i].BookID < out[j].BookID
-	})
-	return out, nil
-}
+// ListMetadataCacheKeys lives in pebble_store_metadata_cache_summaries.go: it
+// is served from an in-process index kept current by the change log below.
 
 // MetadataCacheGeneration is the metadata-cache generation: the number of
 // writes to the "metadata_cache:" keyspace since this store was opened. Every

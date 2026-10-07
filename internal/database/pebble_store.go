@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.208.0
+// version: 1.209.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package database
 
@@ -204,6 +204,9 @@ type PebbleStore struct {
 	// re-read only those rows (MetadataCacheChangedSince).
 	cacheGen     cache.Generation
 	cacheChanges idChangeLog
+	// cacheSummaries serves ListMetadataCacheKeys from memory, caught up
+	// through cacheChanges (pebble_store_metadata_cache_summaries.go).
+	cacheSummaries metadataCacheSummaryIndex
 
 	// libraryStatsDirty is set by InvalidateLibraryStats and cleared when a
 	// recompute starts. It replaces a Pebble Delete of stats:library that ran on
