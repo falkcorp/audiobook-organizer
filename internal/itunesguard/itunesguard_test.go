@@ -1,5 +1,5 @@
 // file: internal/itunesguard/itunesguard_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: ccf32e01-0cfc-4d6c-bc5b-fb300898a243
 // last-edited: 2026-10-06
 
@@ -12,14 +12,16 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
 
 type fakeStore struct {
 	rows map[string][]database.BookFile
 	exts map[string][]database.ExternalIDMapping
+	fail error
 }
 
-func (s fakeStore) GetBookFiles(id string) ([]database.BookFile, error) { return s.rows[id], nil }
+func (s fakeStore) GetBookFiles(id string) ([]database.BookFile, error) { return s.rows[id], s.fail }
 func (s fakeStore) GetExternalIDsForBook(id string) ([]database.ExternalIDMapping, error) {
 	return s.exts[id], nil
 }
@@ -42,7 +44,15 @@ func TestMayWrite(t *testing.T) {
 	} {
 		err := may(b)
 		require.True(t, errors.Is(err, ErrITunesMember), "%s: %v", name, err)
+		require.True(t, errors.Is(err, versionprimary.ErrWriteRefused), "%s: a refusal", name)
 	}
 	require.NoError(t, may(&database.Book{ID: "tomb", FilePath: "/x/t.m4b"}), "a tombstoned itunes id is no iTunes copy")
 	require.NoError(t, may(&database.Book{ID: "plain", FilePath: "/x/plain.m4b"}))
+
+	// A failed read is a failure, never a refusal.
+	readErr := errors.New("store read failed")
+	err := MayWrite(fakeStore{fail: readErr}, "g")(&database.Book{ID: "plain", FilePath: "/x/plain.m4b"})
+	require.ErrorIs(t, err, readErr)
+	require.False(t, errors.Is(err, versionprimary.ErrWriteRefused))
+	require.False(t, errors.Is(err, ErrITunesMember))
 }

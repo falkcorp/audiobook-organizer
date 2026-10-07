@@ -1,5 +1,5 @@
 // file: internal/versionprimary/ensure.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 0b7e4c52-9a1d-4f38-8c6e-2d51f0a7b9e3
 // last-edited: 2026-10-06
 
@@ -74,17 +74,22 @@ type Env struct {
 	// be the expected primary.
 	Expect string
 	// MayWrite, when set, is asked about every member whose
-	// is_primary_version EnsureSinglePrimary is about to write -- the
-	// winner when its flag is not already explicit true, and every member
-	// it would demote -- with the rows it read under the group lock, BEFORE
-	// any of them is written. A non-nil answer refuses the whole hand-off:
-	// nothing is written and the error is returned wrapped in
-	// ErrWriteRefused. A Repairs fixer passes its never-write-an-iTunes-book
-	// rule here, so a member whose flag changed after the fixer's own
-	// check (an explicit false turned nil or true, which makes it a member
-	// the hand-off demotes) is refused under the lock rather than written.
-	// demoteOthers never writes a member read as explicit false, so the
-	// members asked are every member the hand-off can write.
+	// is_primary_version the hand-off is about to write, BEFORE any of
+	// them is written, with the rows read under the group lock. The write
+	// set is decided once from that read (writePlan) -- the winner when its
+	// read flag is not explicit true, and every member it demotes, with
+	// their electability as read -- and the hand-off then writes exactly
+	// that set: never a member it did not ask about (a winner whose fresh
+	// row lost its true aborts the hand-off; a member that turned
+	// electable after the read is not written).
+	//
+	// A REFUSAL must wrap ErrWriteRefused: the whole hand-off is then
+	// refused, nothing is written, and the error is returned (still
+	// wrapping ErrWriteRefused, outcome OutcomeWriteRefused). Any other
+	// error (a failed read) is a failure, not a refusal: nothing is
+	// written and it is returned WITHOUT ErrWriteRefused, so a caller
+	// retries it rather than recording a refusal. A Repairs fixer passes
+	// its never-write-an-iTunes-book rule here (itunesguard.MayWrite).
 	MayWrite func(m *database.Book) error
 }
 
@@ -93,7 +98,8 @@ type Env struct {
 var ErrUnexpectedWinner = errors.New("the hand-off's winner is not the expected member")
 
 // ErrWriteRefused: Env.MayWrite refused a member the hand-off would write,
-// so nothing was written.
+// so nothing was written. A MayWrite refusal wraps it (itunesguard's
+// ErrITunesMember does); a hand-off returns it only for such a refusal.
 var ErrWriteRefused = errors.New("the hand-off would write a member the caller refuses")
 
 // Hand-off outcomes.
@@ -437,27 +443,29 @@ func EnsureSinglePrimary(ctx context.Context, store EnsureStore, gid string, env
 			return res, fmt.Errorf("%w: group %s would make %s primary, not the expected %s", ErrUnexpectedWinner, gid, got, env.Expect)
 		}
 	}
-	if env.MayWrite != nil {
-		keep, winnerWrite := "", false
-		switch {
-		case inc != nil:
-			keep = inc.ID
-		case d.Kind != DecisionHeld:
-			keep, winnerWrite = d.WinnerID, true
-		}
-		if keep != "" {
-			if err := guardWrites(members, keep, winnerWrite, alive, env.MayWrite); err != nil {
+	keep, crown := "", false
+	switch {
+	case inc != nil:
+		keep = inc.ID
+	case d.Kind != DecisionHeld:
+		keep, crown = d.WinnerID, true
+	}
+	var plan writePlan
+	if keep != "" {
+		plan = planWrites(members, keep, crown, alive)
+		if err := plan.guard(gid, env.MayWrite); err != nil {
+			if errors.Is(err, ErrWriteRefused) {
 				res.Outcome = OutcomeWriteRefused
-				if inc == nil {
-					res.Decision = &d
-				}
-				return res, fmt.Errorf("%w: group %s: %w", ErrWriteRefused, gid, err)
 			}
+			if inc == nil {
+				res.Decision = &d
+			}
+			return res, err
 		}
 	}
 	if inc != nil {
 		res.Outcome, res.PrimaryID = OutcomeHealthy, inc.ID
-		res.Writes, err = demoteOthers(store, gid, members, inc.ID, alive)
+		res.Writes, err = plan.demote(store, gid)
 		return res, err
 	}
 	res.Decision = &d
@@ -472,7 +480,7 @@ func EnsureSinglePrimary(ctx context.Context, store EnsureStore, gid string, env
 		}
 		return res, nil
 	}
-	return writeWinner(store, gid, members, d.WinnerID, alive, OutcomeElected, res)
+	return plan.write(store, gid, OutcomeElected, res)
 }
 
 // decideSingle is EnsureSinglePrimary's decision, with no writes: the
@@ -558,34 +566,106 @@ func CrownEnv(store EnsureStore, gid, keepID string, env Env) (HandoffResult, er
 		res.Outcome = OutcomeCrownNotMember
 		return res, nil
 	}
-	if env.MayWrite != nil {
-		if err := guardWrites(members, keepID, true, alive, env.MayWrite); err != nil {
+	plan := planWrites(members, keepID, true, alive)
+	if err := plan.guard(gid, env.MayWrite); err != nil {
+		if errors.Is(err, ErrWriteRefused) {
 			res.Outcome = OutcomeWriteRefused
-			return res, fmt.Errorf("%w: group %s: %w", ErrWriteRefused, gid, err)
 		}
+		return res, err
 	}
-	return writeWinner(store, gid, members, keepID, alive, OutcomeCrowned, res)
+	return plan.write(store, gid, OutcomeCrowned, res)
 }
 
-// writeWinner writes explicit true on winnerID, then explicit false on every
-// other live member. When the winner write aborts, no demotion is written.
-func writeWinner(store EnsureStore, gid string, members []database.Book, winnerID string,
-	alive func(string) bool, outcome string, res HandoffResult) (HandoffResult, error) {
-	var observedMerge *string
+// writePlan is the exact set of is_primary_version writes one hand-off
+// makes, decided ONCE from the members read under the group lock: guard asks
+// Env.MayWrite about exactly this set, and write/demote write exactly this
+// set, so no member is ever written that the guard was not asked about.
+type writePlan struct {
+	keep *database.Book
+	// winner: keep's explicit true is written (crown, and keep's read flag
+	// is not explicit true).
+	winner bool
+	// demotes: every member other than keep that was Electable at the read
+	// and not explicit false, in members order.
+	demotes []*database.Book
+}
+
+// planWrites decides the write set of a hand-off that keeps keepID: its
+// winner write when crown and keepID's read flag is not explicit true, and
+// every member demoted (Electable at the read, by alive evaluated here once,
+// and not read explicit false).
+func planWrites(members []database.Book, keepID string, crown bool, alive func(string) bool) writePlan {
+	var p writePlan
 	for i := range members {
-		if members[i].ID == winnerID {
-			observedMerge = members[i].MergedIntoBookID
+		m := &members[i]
+		if m.ID == keepID {
+			p.keep = m
+			p.winner = crown && !explicitTrue(m)
+			continue
+		}
+		if !Electable(m, alive) || (m.IsPrimaryVersion != nil && !*m.IsPrimaryVersion) {
+			continue
+		}
+		p.demotes = append(p.demotes, m)
+	}
+	return p
+}
+
+// guard asks mayWrite (nil allows all) about every member of the plan,
+// before any write. A refusal (wrapping ErrWriteRefused) is returned
+// wrapped with the group and member; any other error is returned as a
+// failure, without ErrWriteRefused.
+func (p writePlan) guard(gid string, mayWrite func(*database.Book) error) error {
+	if mayWrite == nil {
+		return nil
+	}
+	ask := func(m *database.Book) error {
+		err := mayWrite(m)
+		switch {
+		case err == nil:
+			return nil
+		case errors.Is(err, ErrWriteRefused):
+			return fmt.Errorf("group %s: member %s: %w", gid, m.ID, err)
+		default:
+			return fmt.Errorf("group %s: check member %s before writing its primary flag: %w", gid, m.ID, err)
 		}
 	}
+	if p.winner && p.keep != nil {
+		if err := ask(p.keep); err != nil {
+			return err
+		}
+	}
+	for _, m := range p.demotes {
+		if err := ask(m); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// write makes the plan's winner write, then its demotes. The winner's fresh
+// row must still be what was planned from: live, in the group, with the
+// merge pointer read, and -- since only a planned write was guarded -- its
+// flag as read when the plan writes it, or still explicit true when the
+// plan does not (keep was already primary). Anything else aborts with
+// nothing written (OutcomeWinnerChanged).
+func (p writePlan) write(store EnsureStore, gid, outcome string, res HandoffResult) (HandoffResult, error) {
+	winnerID := p.keep.ID
 	prev, wrote := "", false
 	written, err := store.ModifyBook(winnerID, func(b *database.Book) error {
 		wrote = false
 		if b.IsSoftDeleted() || b.VersionGroupID == nil || *b.VersionGroupID != gid ||
-			derefStr(b.MergedIntoBookID) != derefStr(observedMerge) {
+			derefStr(b.MergedIntoBookID) != derefStr(p.keep.MergedIntoBookID) {
 			return errHandoffAbort
 		}
-		if explicitTrue(b) {
-			return database.ErrSkipBookWrite
+		if !p.winner {
+			if explicitTrue(b) {
+				return database.ErrSkipBookWrite
+			}
+			return errHandoffAbort // lost the true it was planned with; this write was never guarded
+		}
+		if storedFlag(b.IsPrimaryVersion) != storedFlag(p.keep.IsPrimaryVersion) {
+			return errHandoffAbort
 		}
 		prev = storedFlag(b.IsPrimaryVersion)
 		t := true
@@ -594,7 +674,7 @@ func writeWinner(store EnsureStore, gid string, members []database.Book, winnerI
 		return nil
 	})
 	switch {
-	case errors.Is(err, errHandoffAbort) || (err == nil && written == nil):
+	case errors.Is(err, errHandoffAbort) || (err == nil && written == nil): // changed, or gone
 		res.Outcome = OutcomeWinnerChanged
 		ensureLog.Info("version group %s: winner %s changed before the write; nothing written",
 			logger.SanitizeLogValue(gid), logger.SanitizeLogValue(winnerID))
@@ -606,59 +686,22 @@ func writeWinner(store EnsureStore, gid string, members []database.Book, winnerI
 	if wrote {
 		res.Writes = append(res.Writes, FlagWrite{BookID: winnerID, Previous: prev, Primary: true})
 	}
-	demoted, err := demoteOthers(store, gid, members, winnerID, alive)
+	demoted, err := p.demote(store, gid)
 	res.Writes = append(res.Writes, demoted...)
 	return res, err
 }
 
-// guardWrites asks mayWrite about every member the hand-off keeping keepID
-// would write, as members were read under the group lock: keepID itself
-// when winnerWrite and it is not already explicit true (writeWinner skips
-// that write), and every member demoteOthers would demote (wouldDemote). It
-// returns the first refusal, naming the member; nothing has been written.
-func guardWrites(members []database.Book, keepID string, winnerWrite bool, alive func(string) bool,
-	mayWrite func(*database.Book) error) error {
-	for i := range members {
-		m := &members[i]
-		write := wouldDemote(m, keepID, alive)
-		if m.ID == keepID {
-			write = winnerWrite && !explicitTrue(m)
-		}
-		if !write {
-			continue
-		}
-		if err := mayWrite(m); err != nil {
-			return fmt.Errorf("member %s: %w", m.ID, err)
-		}
-	}
-	return nil
-}
-
-// wouldDemote reports whether demoteOthers, keeping keepID, writes member m
-// (as read): a live member other than keepID that is not already explicit
-// false. guardWrites asks the same question, so the two cannot drift.
-func wouldDemote(m *database.Book, keepID string, alive func(string) bool) bool {
-	if m.ID == keepID || !Electable(m, alive) {
-		return false
-	}
-	return m.IsPrimaryVersion == nil || *m.IsPrimaryVersion
-}
-
-// demoteOthers writes explicit false on every live member other than keepID
-// that is not already explicit false (wouldDemote). A member that left the
-// group since the read is skipped.
-func demoteOthers(store EnsureStore, gid string, members []database.Book, keepID string,
-	alive func(string) bool) ([]FlagWrite, error) {
+// demote writes explicit false on every planned demote, and on no other
+// member. A planned member whose fresh row left the group, was soft-deleted,
+// changed its merge pointer, or is explicit false by now is skipped.
+func (p writePlan) demote(store EnsureStore, gid string) ([]FlagWrite, error) {
 	var writes []FlagWrite
-	for i := range members {
-		m := &members[i]
-		if !wouldDemote(m, keepID, alive) {
-			continue
-		}
+	for _, m := range p.demotes {
 		prev, wrote := "", false
 		if _, err := store.ModifyBook(m.ID, func(b *database.Book) error {
 			wrote = false
-			if b.VersionGroupID == nil || *b.VersionGroupID != gid ||
+			if b.IsSoftDeleted() || b.VersionGroupID == nil || *b.VersionGroupID != gid ||
+				derefStr(b.MergedIntoBookID) != derefStr(m.MergedIntoBookID) ||
 				(b.IsPrimaryVersion != nil && !*b.IsPrimaryVersion) {
 				return database.ErrSkipBookWrite
 			}

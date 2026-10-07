@@ -1,5 +1,5 @@
 // file: internal/itunesguard/itunesguard.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 1de95145-912c-41bf-badc-055bca21b429
 // last-edited: 2026-10-06
 
@@ -15,13 +15,13 @@
 package itunesguard
 
 import (
-	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
+	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
 
 // Row is the iTunes-relevant part of one book_file row.
@@ -109,13 +109,18 @@ func MemberWhy(store MemberStore, res *repairs.PathResolver, gid string, b *data
 	return "", nil
 }
 
-// ErrITunesMember is wrapped by MayWrite's refusal.
-var ErrITunesMember = errors.New("an iTunes book's primary flag is never written")
+// ErrITunesMember is wrapped by MayWrite's refusal. It wraps
+// versionprimary.ErrWriteRefused, so the hand-off reports it as a refusal
+// (nothing written, never retried as a failure).
+var ErrITunesMember = fmt.Errorf("an iTunes book's primary flag is never written: %w", versionprimary.ErrWriteRefused)
 
 // MayWrite is the versionprimary Env.MayWrite rule for group gid: it refuses
-// (ErrITunesMember, with MemberWhy's reason) every member MemberWhy names, and
-// returns a read error as is. Each call shares one path resolver, so it is
-// for one hand-off at a time, never concurrent use.
+// (ErrITunesMember, with MemberWhy's reason) every member MemberWhy names. A
+// failed read is returned as is, NOT as a refusal: the hand-off then fails
+// without ErrWriteRefused and its caller retries it, so a transient store
+// error is never recorded as "this member is an iTunes book". Each call
+// shares one path resolver, so it is for one hand-off at a time, never
+// concurrent use.
 func MayWrite(store MemberStore, gid string) func(*database.Book) error {
 	res := repairs.NewPathResolver()
 	return func(m *database.Book) error {

@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_history_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 829118c5-b507-4c65-8bb6-eaf346c88634
 // last-edited: 2026-10-06
 
@@ -305,4 +305,98 @@ func TestRevertSettle_NeverWritesAnITunesMember(t *testing.T) {
 	require.NotNil(t, ob.IsPrimaryVersion)
 	require.False(t, *ob.IsPrimaryVersion, "the crown wrote nothing")
 	require.False(t, rs.hasSettleOwed("op-itunes"), "not recorded for retry")
+}
+
+// B1: an ambiguous "crowned:<id>" note (2026-10-02..06) may name a member
+// the hand-off only kept. It never puts that member past the iTunes guard:
+// an explicit-true iTunes X the operation never wrote is not demoted, the
+// group is left as it stands and reported.
+func TestRevertSettle_AmbiguousCrownedNoteNeverUnlocksAnITunesMember(t *testing.T) {
+	s := newRevertPebble(t)
+	rs := NewRevertService(s)
+	gid, yes, pid := "vg-legacy", true, "0123456789ABCDEF"
+	o, err := s.CreateBook(&database.Book{Title: "O", FilePath: "/x/o", VersionGroupID: &gid, IsPrimaryVersion: &yes})
+	require.NoError(t, err)
+	x, err := s.CreateBook(&database.Book{Title: "X", FilePath: "/x/x", VersionGroupID: &gid, IsPrimaryVersion: &yes, ITunesPersistentID: &pid})
+	require.NoError(t, err)
+	ev := handOffEvidenceOf([]*database.OperationChange{{BookID: o.ID, ChangeType: undo.ChangeTypeBookPrimaryHandoff,
+		FieldName: "version_group_id", OldValue: undo.HandOffCrownedValue(x.ID), NewValue: gid}})
+	require.Equal(t, []string{x.ID}, ev[o.ID].crowned)
+	require.Empty(t, ev[o.ID].wrote, "the ambiguous form is never proof of a write")
+	result := &RevertResult{}
+	msgs := rs.settleGroups("op-legacy", settleInput{touched: []settleTouch{
+		{bookID: o.ID, changeType: undo.ChangeTypeBookPrimaryDemote, oldValue: "true"},
+	}, crowned: ev}, result)
+	require.Empty(t, msgs)
+	require.Len(t, result.SettleSkipped, 1, "%+v", result)
+	xb, err := s.GetBookByID(x.ID)
+	require.NoError(t, err)
+	require.NotNil(t, xb.IsPrimaryVersion)
+	require.True(t, *xb.IsPrimaryVersion, "the iTunes member keeps the flag the operation never wrote")
+
+	// The unambiguous "wrote:" form is the operation's own write: put back.
+	ev = handOffEvidenceOf([]*database.OperationChange{{BookID: o.ID, ChangeType: undo.ChangeTypeBookPrimaryHandoff,
+		FieldName: "version_group_id", OldValue: undo.HandOffNoteValue(x.ID, true), NewValue: gid}})
+	require.Equal(t, []string{x.ID}, ev[o.ID].wrote)
+	result = &RevertResult{}
+	msgs = rs.settleGroups("op-wrote", settleInput{touched: []settleTouch{
+		{bookID: o.ID, changeType: undo.ChangeTypeBookPrimaryDemote, oldValue: "true"},
+	}, crowned: ev}, result)
+	require.Empty(t, msgs)
+	require.Empty(t, result.SettleSkipped)
+	xb, err = s.GetBookByID(x.ID)
+	require.NoError(t, err)
+	require.False(t, *xb.IsPrimaryVersion, "the operation wrote X's true, so its revert puts X back")
+}
+
+// S1: the evidence is the group's, not one original's: a kept note on the
+// SECOND original still makes the first one yield to the kept incumbent.
+func TestRevertSettle_EvidenceIsUnionedAcrossOriginals(t *testing.T) {
+	s := newRevertPebble(t)
+	rs := NewRevertService(s)
+	gid, yes := "vg-union", true
+	o1, err := s.CreateBook(&database.Book{Title: "O1", FilePath: "/x/o1", VersionGroupID: &gid, IsPrimaryVersion: &yes})
+	require.NoError(t, err)
+	o2, err := s.CreateBook(&database.Book{Title: "O2", FilePath: "/x/o2", VersionGroupID: &gid, IsPrimaryVersion: &yes})
+	require.NoError(t, err)
+	k, err := s.CreateBook(&database.Book{Title: "K", FilePath: "/x/k", VersionGroupID: &gid, IsPrimaryVersion: &yes})
+	require.NoError(t, err)
+	ev := handOffEvidenceOf([]*database.OperationChange{{BookID: o2.ID, ChangeType: undo.ChangeTypeBookPrimaryHandoff,
+		FieldName: "version_group_id", OldValue: undo.HandOffNoteValue(k.ID, false), NewValue: gid}})
+	_, err = rs.settleGroup("op-union", gid, []string{o1.ID, o2.ID}, nil, ev)
+	require.NoError(t, err)
+	for id, want := range map[string]bool{o1.ID: false, o2.ID: false, k.ID: true} {
+		b, err := s.GetBookByID(id)
+		require.NoError(t, err)
+		require.NotNil(t, b.IsPrimaryVersion)
+		require.Equal(t, want, *b.IsPrimaryVersion, id)
+	}
+}
+
+// B3: a failed read in the iTunes guard is a failure, not a refusal: the
+// group goes to HandOffFailed and is owed a retry, never SettleSkipped.
+func TestRevertSettle_GuardReadErrorIsRetriedNotSkipped(t *testing.T) {
+	s := newRevertPebble(t)
+	rs := NewRevertService(&extFailStore{PebbleStore: s})
+	gid, no := "vg-readerr", false
+	o, err := s.CreateBook(&database.Book{Title: "O", FilePath: "/x/o", VersionGroupID: &gid, IsPrimaryVersion: &no})
+	require.NoError(t, err)
+	_, err = s.CreateBook(&database.Book{Title: "X", FilePath: "/x/x", VersionGroupID: &gid})
+	require.NoError(t, err)
+	result := &RevertResult{}
+	msgs := rs.settleGroups("op-readerr", settleInput{touched: []settleTouch{
+		{bookID: o.ID, changeType: undo.ChangeTypeBookPrimaryDemote, oldValue: "true"},
+	}}, result)
+	require.Len(t, msgs, 1)
+	require.Empty(t, result.SettleSkipped)
+	require.Len(t, result.HandOffFailed, 1)
+	require.Contains(t, result.HandOffFailed[0], "external ids unreadable")
+	require.True(t, rs.hasSettleOwed("op-readerr"), "owed a retry")
+}
+
+// extFailStore fails every external-id read (the iTunes guard's).
+type extFailStore struct{ *database.PebbleStore }
+
+func (s *extFailStore) GetExternalIDsForBook(string) ([]database.ExternalIDMapping, error) {
+	return nil, errors.New("external ids unreadable")
 }

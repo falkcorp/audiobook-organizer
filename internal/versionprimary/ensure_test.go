@@ -1,5 +1,5 @@
 // file: internal/versionprimary/ensure_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3e8a1b64-2f9c-4d07-b5a3-91c6e0d4f728
 // last-edited: 2026-10-06
 
@@ -8,6 +8,7 @@ package versionprimary_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -157,7 +158,7 @@ func TestEnsureSinglePrimary_MayWriteRefusesBeforeAnyWrite(t *testing.T) {
 		return func(m *database.Book) error {
 			*asked = append(*asked, m.ID)
 			if m.ID == id {
-				return errors.New("an iTunes copy")
+				return fmt.Errorf("an iTunes copy: %w", versionprimary.ErrWriteRefused)
 			}
 			return nil
 		}
@@ -216,6 +217,79 @@ func TestHandoffResult_WrotePrimary(t *testing.T) {
 	require.False(t, res.WrotePrimary())
 }
 
+// A MayWrite error that is not a refusal (a failed read) writes nothing and
+// is returned WITHOUT ErrWriteRefused, so a caller retries it instead of
+// recording a refusal.
+func TestEnsureSinglePrimary_MayWriteReadErrorIsNotARefusal(t *testing.T) {
+	f := vptest.New(t)
+	a := f.Book(t, vptest.Spec{ID: "a", Group: "g", Primary: "true"})
+	b := f.Book(t, vptest.Spec{ID: "b", Group: "g", Primary: "nil"})
+	readErr := errors.New("store read failed")
+	res, err := versionprimary.EnsureSinglePrimary(context.Background(), f.S, "g",
+		versionprimary.Env{RootDir: f.Root, MayWrite: func(*database.Book) error { return readErr }})
+	require.ErrorIs(t, err, readErr)
+	require.False(t, errors.Is(err, versionprimary.ErrWriteRefused), "%v", err)
+	require.NotEqual(t, versionprimary.OutcomeWriteRefused, res.Outcome)
+	require.Equal(t, "true", f.Flag(t, a))
+	require.Equal(t, "nil", f.Flag(t, b))
+	_, err = versionprimary.CrownEnv(f.S, "g", b, versionprimary.Env{MayWrite: func(*database.Book) error { return readErr }})
+	require.ErrorIs(t, err, readErr)
+	require.False(t, errors.Is(err, versionprimary.ErrWriteRefused))
+	require.Equal(t, "nil", f.Flag(t, b))
+}
+
+// B2(a): a winner read explicit true is not in the write set, so it is not
+// asked about. If its flag drops after the guard (a writer that does not
+// take the group lock), the crown aborts rather than write it unasked.
+func TestCrownEnv_WinnerThatLostItsTrueAfterTheGuardIsNotWritten(t *testing.T) {
+	f := vptest.New(t)
+	keep := f.Book(t, vptest.Spec{ID: "a", Group: "g", Primary: "true"})
+	other := f.Book(t, vptest.Spec{ID: "b", Group: "g", Primary: "nil"})
+	var asked []string
+	res, err := versionprimary.CrownEnv(f.S, "g", keep, versionprimary.Env{MayWrite: func(m *database.Book) error {
+		asked = append(asked, m.ID)
+		if m.ID == other {
+			_, err := f.S.ModifyBook(keep, func(b *database.Book) error { b.IsPrimaryVersion = nil; return nil })
+			require.NoError(t, err)
+		}
+		return nil
+	}})
+	require.NoError(t, err)
+	require.Equal(t, []string{other}, asked, "the winner read explicit true is not in the write set")
+	require.Equal(t, versionprimary.OutcomeWinnerChanged, res.Outcome)
+	require.Empty(t, res.Writes)
+	require.Equal(t, "nil", f.Flag(t, keep), "never written: it was not asked about")
+	require.Equal(t, "nil", f.Flag(t, other))
+}
+
+// B2(b): a member not electable at the read (a merge loser of a live
+// survivor) is not in the write set. If it turns electable after the guard
+// (its survivor trashed), the hand-off does not demote it unasked.
+func TestEnsureSinglePrimary_MemberElectableOnlyAfterTheGuardIsNotWritten(t *testing.T) {
+	f := vptest.New(t)
+	inc := f.Book(t, vptest.Spec{ID: "a", Group: "g", Primary: "true"})
+	d := f.Book(t, vptest.Spec{ID: "d", Group: "g", Primary: "nil"})
+	surv := f.Book(t, vptest.Spec{ID: "s"})
+	loser := f.Book(t, vptest.Spec{ID: "c", Group: "g", Primary: "nil"})
+	_, err := f.S.ModifyBook(loser, func(b *database.Book) error { b.MergedIntoBookID = &surv; return nil })
+	require.NoError(t, err)
+	var asked []string
+	res, err := versionprimary.EnsureSinglePrimary(context.Background(), f.S, "g",
+		versionprimary.Env{RootDir: f.Root, MayWrite: func(m *database.Book) error {
+			asked = append(asked, m.ID)
+			if m.ID == d {
+				f.SoftDelete(t, surv)
+			}
+			return nil
+		}})
+	require.NoError(t, err)
+	require.Equal(t, versionprimary.OutcomeHealthy, res.Outcome)
+	require.Equal(t, []string{d}, asked)
+	require.Equal(t, "false", f.Flag(t, d))
+	require.Equal(t, "nil", f.Flag(t, loser), "not in the guarded write set, so never written")
+	require.Equal(t, "true", f.Flag(t, inc))
+}
+
 func TestEnsureSinglePrimary_EmptyGroupID(t *testing.T) {
 	f := vptest.New(t)
 	res := ensure(t, f, "")
@@ -241,7 +315,7 @@ func TestCrownEnv_MayWriteRefusesBeforeAnyWrite(t *testing.T) {
 	b := f.Book(t, vptest.Spec{ID: "b", Group: "g", Primary: "false"})
 	res, err := versionprimary.CrownEnv(f.S, "g", b, versionprimary.Env{MayWrite: func(m *database.Book) error {
 		if m.ID == a {
-			return errors.New("an iTunes copy")
+			return fmt.Errorf("an iTunes copy: %w", versionprimary.ErrWriteRefused)
 		}
 		return nil
 	}})
