@@ -1,5 +1,5 @@
 // file: internal/audiobooks/revert_settle.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 3f8c2a71-5d94-4e6b-b0a3-9c1e7d2f4a58
 // last-edited: 2026-10-06
 
@@ -384,9 +384,30 @@ func (rs *RevertService) settleGroup(opID, gid string, originals []string, owed 
 	// operation_revert, BatchID the operation id (revertHistoryStore).
 	hist := revertHistoryStore{revertServiceStore: rs.db, opID: opID}
 	// Neither the crown nor the hand-off below writes an iTunes book's
-	// primary flag: each asks this under the group lock about every member
-	// it would write, and refuses the whole write (ErrWriteRefused) instead.
-	mayWrite := itunesguard.MayWrite(rs.db, gid)
+	// primary flag that the operation did not write: each asks this under
+	// the group lock about every member it would write, and refuses the
+	// whole write (ErrWriteRefused) instead. The exception is a member
+	// whose flag THIS operation wrote -- an original it demoted, or a
+	// member its hand-off crowned -- the folder-books fixer being cleared
+	// by the owner (2026-10-01, repairs.ITunesDatabaseOnly) to write the
+	// rows of books under books/itunes/**. Putting that flag back is the
+	// undo of the operation's own write, as the row reverts before this
+	// pass already do for the originals; refusing it would leave the group
+	// with the original's restored true beside the crowned member's.
+	own := map[string]bool{}
+	for _, o := range originals {
+		own[o] = true
+		for _, c := range crowned[o].crowned {
+			own[c] = true
+		}
+	}
+	guard := itunesguard.MayWrite(rs.db, gid)
+	mayWrite := func(m *database.Book) error {
+		if own[m.ID] {
+			return nil
+		}
+		return guard(m)
+	}
 	merge.LockMergeRMW()
 	defer merge.UnlockMergeRMW()
 	members, err := rs.db.GetBooksByVersionGroup(gid)

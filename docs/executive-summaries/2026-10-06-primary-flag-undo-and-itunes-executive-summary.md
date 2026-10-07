@@ -77,7 +77,12 @@ on each copy at the moment they are about to change its mark, while
 holding the lock that keeps other changes out of that group. If any copy
 fails the check, nothing in the group changes. The repair stops and
 reports partway done; undo leaves the group as it is and names the iTunes
-book in its result.
+book in its result. There is one exception for undo. The owner has
+allowed the folder-books repair to update the database records of books
+stored under the iTunes folder, so that repair can change those books'
+primary marks. Undo may put back a mark that the same repair changed,
+because that only reverses the repair's own change. Undo never changes the
+mark of any other iTunes book.
 
 Verified by automated tests, using made-up books, that reproduce both
 problems: the real book keeps its primary mark after undo, and the iTunes

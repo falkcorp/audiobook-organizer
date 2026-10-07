@@ -30,6 +30,11 @@
   op revert's settle passes it to its crown and to its
   `EnsureSinglePrimary` fallback. A group it would have to write is left as
   it stands and listed in the new `RevertResult.SettleSkipped`. That makes
-  the result partial, and the group is not recorded for retry.
+  the result partial, and the group is not recorded for retry. One
+  exception: the revert may still write a member whose flag the same
+  operation wrote (an original it demoted, or a member its hand-off
+  crowned), because putting it back undoes the operation's own write. The
+  folder-books fixer is cleared to write books under `books/itunes/**`, and
+  its reverts depend on this.
 - `versionprimary.EnsureSinglePrimary` with `Env.Expect` set now refuses an
   empty group (or no group) instead of reporting success.
