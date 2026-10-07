@@ -1,7 +1,7 @@
 // file: internal/undo/current.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2e7b4c19-8d3a-4f60-9b15-c6a0e8d2f473
-// last-edited: 2026-09-29
+// last-edited: 2026-10-07
 
 package undo
 
@@ -161,6 +161,15 @@ func CheckReassignCurrent(onTarget, onSource bool, c *database.OperationChange) 
 	return refuse(ReasonChangedSince, "%s is on neither book %s nor book %s", c.FieldName, c.BookID, c.OldValue)
 }
 
+// CheckITunesPathClearCurrent compares the iTunes path a
+// ChangeTypeITunesPathClear row cleared (on a book or a book_file row) with
+// cur, the field as it is now: still empty (revert it), the old path again
+// (already restored), or anything else (refused: something wrote a new
+// path since, which the revert must not overwrite).
+func CheckITunesPathClearCurrent(cur string, c *database.OperationChange) error {
+	return checkValue(c, cur, "iTunes path of "+c.FieldName)
+}
+
 func checkValue(c *database.OperationChange, cur, what string) error {
 	switch cur {
 	case c.NewValue:
@@ -169,4 +178,12 @@ func checkValue(c *database.OperationChange, cur, what string) error {
 		return ErrAlreadyRestored
 	}
 	return refuse(ReasonChangedSince, "%s is %q, not the %q the operation set", what, cur, c.NewValue)
+}
+
+// derefStr is *p, "" for nil.
+func derefStr(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }

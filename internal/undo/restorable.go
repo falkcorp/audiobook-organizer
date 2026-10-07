@@ -1,5 +1,5 @@
 // file: internal/undo/restorable.go
-// version: 1.33.0
+// version: 1.34.0
 // guid: 6c1f0e9a-4b27-4d3e-9a58-e2b7c41d0f93
 // last-edited: 2026-10-07
 
@@ -172,7 +172,32 @@ const (
 	// written back, and the survivor's is put back only while it still holds
 	// what the follow left (a later listen there is kept).
 	ChangeTypeUserStateFollow = "user_state_follow"
+	// ChangeTypeITunesPathClear: an iTunes path that no track of either
+	// iTunes library backs was cleared (the stale-itunes-path repair).
+	// FieldName names where it lived: "book_file:<id>" for a book_file row's
+	// itunes_path, ITunesPathBookField for the book's own. OldValue is the
+	// path, NewValue "". Restorable: put back while the field is still
+	// empty; nothing on disk or in iTunes is touched either way.
+	ChangeTypeITunesPathClear = "itunes_path_clear"
 )
+
+// ITunesPathBookField is the FieldName of a ChangeTypeITunesPathClear row
+// that cleared the book's own itunes_path (not a book_file row's).
+const ITunesPathBookField = "itunes_path"
+
+// ITunesPathClearValid reports whether a ChangeTypeITunesPathClear row names
+// where it lived and what it cleared: a revert of one that does not would
+// restore nothing, or an empty path.
+func ITunesPathClearValid(c *database.OperationChange) bool {
+	if c.OldValue == "" || c.NewValue != "" {
+		return false
+	}
+	if c.FieldName == ITunesPathBookField {
+		return true
+	}
+	_, ok := BookFileIDFromField(c.FieldName)
+	return ok
+}
 
 // SameFileLocation reports whether a row's location matches want where a
 // repoint compare-and-set looks: the path and the Missing flag. Hash and size
@@ -731,6 +756,11 @@ func NotRestorableLabel(c *database.OperationChange) string {
 		}
 		if _, err := DecodeUserStateFollow(c.NewValue); err != nil {
 			return c.ChangeType + ":(unparsable)"
+		}
+		return ""
+	case ChangeTypeITunesPathClear:
+		if !ITunesPathClearValid(c) {
+			return c.ChangeType + ":(malformed)"
 		}
 		return ""
 	case ChangeTypeBookFileRepoint:
