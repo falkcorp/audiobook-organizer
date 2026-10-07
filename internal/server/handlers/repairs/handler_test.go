@@ -1,5 +1,5 @@
 // file: internal/server/handlers/repairs/handler_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8e3f6b21-7c94-4a0d-9b52-2d1a8e5c7f36
 // last-edited: 2026-10-07
 
@@ -42,8 +42,10 @@ func (f stubFixer) Apply(context.Context, *repairs.Writer, repairs.Row) error { 
 type enqueued struct {
 	defID  string
 	params json.RawMessage
-	// actor is the opsregistry.WithActor user the op was enqueued for.
-	actor string
+	// actor is the opsregistry.WithActor user the op was enqueued for, and
+	// actorMethod its opsregistry.WithActorAuthMethod.
+	actor       string
+	actorMethod string
 }
 
 type fakeEnqueuer struct {
@@ -64,7 +66,7 @@ func (e *fakeEnqueuer) EnqueueOp(_ context.Context, defID string, params any, op
 	for _, o := range opts {
 		o(&eo)
 	}
-	e.calls = append(e.calls, enqueued{defID: defID, params: data, actor: eo.ActorUserID})
+	e.calls = append(e.calls, enqueued{defID: defID, params: data, actor: eo.ActorUserID, actorMethod: eo.ActorAuthMethod})
 	if e.fixedID != "" {
 		return e.fixedID, nil
 	}

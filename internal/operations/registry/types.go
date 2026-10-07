@@ -1,7 +1,7 @@
 // file: internal/operations/registry/types.go
-// version: 2.12.0
+// version: 2.13.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-10-01
+// last-edited: 2026-10-07
 
 // Package registry provides the UOS-02 in-memory OperationDef registry,
 // dispatcher, and in-process worker pool. See the spec at
@@ -409,13 +409,16 @@ type EnqueueOption func(*EnqueueOptions)
 
 // EnqueueOptions carries optional metadata for a new operation run.
 type EnqueueOptions struct {
-	ParentID     string
-	ActorUserID  string
-	TraceID      string
-	SpanID       string
-	ParentSpanID string
-	Priority     *Priority
-	Requires     []Requirement // per-enqueue requirements added on top of the def's Requires
+	ParentID    string
+	ActorUserID string
+	// ActorAuthMethod records how ActorUserID was authenticated
+	// (WithActorAuthMethod).
+	ActorAuthMethod string
+	TraceID         string
+	SpanID          string
+	ParentSpanID    string
+	Priority        *Priority
+	Requires        []Requirement // per-enqueue requirements added on top of the def's Requires
 }
 
 // WithParent sets the parent run ID for trigger lineage.
@@ -426,6 +429,13 @@ func WithParent(id string) EnqueueOption {
 // WithActor sets the user ID of the actor triggering the run.
 func WithActor(userID string) EnqueueOption {
 	return func(o *EnqueueOptions) { o.ActorUserID = userID }
+}
+
+// WithActorAuthMethod records how the actor triggering the run was
+// authenticated (an auth.Method string), stored on the op row as
+// ActorAuthMethod.
+func WithActorAuthMethod(method string) EnqueueOption {
+	return func(o *EnqueueOptions) { o.ActorAuthMethod = method }
 }
 
 // WithPriority overrides the OperationDef's DefaultPriority for this run.

@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-07-api-key-hardening-executive-summary.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 8cf09508-ec7f-49a1-8225-1cd5183659d8 -->
 <!-- last-edited: 2026-10-07 -->
 
@@ -64,13 +64,23 @@ Branch: `fix/apikey-expiry-and-privilege`. Plan and every decision:
   login. Previews (dry runs) still work for any admin. Every one of these
   actions is logged with who did it.
 
+- **Nobody but you can change who the owner is.** A third review found that
+  any signed-in admin (or anyone holding a stolen password) could change the
+  owner email to their own, or point the Cloudflare settings at a login
+  service they control, and then act as you. Now, once the owner email is
+  set, only your own Cloudflare login can change it or those Cloudflare
+  settings, and only you can wipe or restore the database (both could clear
+  the owner email). The very first owner email can only be set by that
+  person, signed in through Cloudflare as that email. Your own API keys can
+  never act as you either.
+
 ## What you might notice
 
 - Anything that created users or reset passwords with an API key now gets a
   403. Do it from the web app while signed in.
 - **Set the owner email** (environment variable `OWNER_EMAIL`, or the
-  `owner_email` setting from a signed-in session). Until it is set, owner
-  apply is off for everyone.
+  `owner_email` setting while signed in through Cloudflare Access as that
+  same email). Until it is set, owner apply is off for everyone.
 - The iTunes settings buttons for write-back and library upload/restore
   now refuse a password sign-in with a message saying why. Use the site
   through Cloudflare Access for those.

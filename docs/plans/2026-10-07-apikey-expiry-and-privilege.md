@@ -1,5 +1,5 @@
 <!-- file: docs/plans/2026-10-07-apikey-expiry-and-privilege.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 67c7aa4f-72e2-4a9c-805a-92fff01c3308 -->
 <!-- last-edited: 2026-10-07 -->
 
@@ -356,6 +356,57 @@ handler), and the owner with `owner_email` unset (refused). Outside this
 group and not changed: `POST /operations/itunes-path-reconcile` and
 `/operations/itunes-path-repair` (`scan.trigger`), filed in the owner-apply
 follow-ups fragment.
+
+**D15. Only the owner may change who the owner is (second security review,
+2026-10-07, BLOCKER).** The owner proof (D11) was only as strong as the
+settings behind it, and any interactive session could change those: the
+sign-in rule (D13) lets every session, and every request with auth off,
+change sign-in settings. So a second admin signed in through Access as
+other@, or a stolen password session, could `PUT owner_email=other@` and
+then pass every owner gate, or point `cf_access_team_domain` /
+`cf_access_aud` at an Access team it controls and mint the owner's JWT after
+a restart.
+- **The owner trust root** (`ownerTrustRootFields` in
+  `internal/config/protected_fields.go`): `owner_email`,
+  `cf_access_team_domain`, `cf_access_aud`, `enable_auth` (turns every other
+  guard off) and `oauth_allowed_emails` (which Access identities are admitted
+  at all). Each is also a sign-in rule, so an API key is refused regardless.
+  Audited and left out, because none of them is part of the owner proof:
+  `oauth_default_role` and the other SSO settings (roles and other sign-in
+  methods), basic auth, the ABS settings, rate limits.
+- **Owner set:** `UpdateService` refuses a change to any of them unless
+  `auth.OwnerProofWhyNot` passes for the CURRENT `owner_email`, for every
+  auth method and with local auth on or off (403, `refused_keys`).
+- **No owner yet:** the first `owner_email` may be set only by a verified
+  Access sign-in whose email is that value (`auth.IsOwnerEmail`), so nobody
+  can name someone else or a look-alike. The other four keep the D13 rule
+  until then, because Access has to be configurable before anyone can prove
+  to be the owner through it.
+- **Paths that could UNSET the owner** and so reopen the first-set rule:
+  `POST /system/reset` and `/system/factory-reset` (`config.ResetToDefaults`
+  clears `owner_email`) and `POST /backup/restore` (the restored database can
+  predate it). While an owner is set they now also need the owner
+  (`s.ownerGateWhenOwnerSet`); before any owner exists they keep their
+  existing guards.
+- **Host-level paths stay open on purpose:** the `OWNER_EMAIL` and `CF_ACCESS_*`
+  environment variables and the config file are applied
+  environment-authoritatively at load (`config.go`, `viper.IsSet`) and win
+  over the database value; they need the host, not a request.
+- **Grant redemption:** an owner grant is honoured only in an op whose
+  `ActorAuthMethod` is `cf_access` (new field on the op row, set by
+  `registry.WithActorAuthMethod`, recorded only by the Repairs owner-apply
+  handler). The owner's own API key that reads the token from
+  `GET /operations` and enqueues `repairs.apply` is refused (owner decision:
+  a key is never the owner). `POST /operations/v2` records no actor today,
+  so such an op was already refused, but only by that accident.
+Tests: `TestUpdateConfig_OwnerTrustRoot` (50 cases; 34 fail with the check
+removed), `TestOwnerTrustRoot_ConfigThroughTheRouter` (auth on and off:
+another admin's Access JWT, a look-alike, a password session, an API key and
+no sign-in refused; the owner may hand ownership on; first-set rule),
+`TestOwnerTrustRoot_RestoreNeedsTheOwnerWhileOneIsSet`,
+`TestOwnerRoutes_AuthOffStillNeedsTheOwner`, and the API-key subtest of
+`TestFragmentFixer_OwnerApply` (it applied the row with the method check
+removed).
 
 ## Bootstrap skill and `scripts/manage-credentials.sh`
 

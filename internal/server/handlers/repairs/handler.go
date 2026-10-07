@@ -1,5 +1,5 @@
 // file: internal/server/handlers/repairs/handler.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 1d8e4c73-5a26-4b9f-8e03-7c2b9f6a1d58
 // last-edited: 2026-10-07
 
@@ -426,7 +426,7 @@ func (h *Handler) OwnerApply(c *gin.Context) {
 	h.enqueue(c, repairs.ApplyOpID, f.ID(), lastApplyKey(f.ID()), repairs.ApplyParams{
 		FixerID: f.ID(), PlanOpID: req.PlanOpID, DryRun: &no,
 		OwnerApplyRowIDs: []string{req.RowID}, OwnerGrant: tok,
-	}, opsregistry.WithActor(user.ID))
+	}, opsregistry.WithActor(user.ID), opsregistry.WithActorAuthMethod(string(method)))
 }
 
 // sameOriginWhyNot is why r is not a same-origin request carrying the owner

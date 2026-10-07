@@ -1,7 +1,7 @@
 // file: internal/database/iface_ops_v2.go
-// version: 2.15.0
+// version: 2.16.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-09-12
+// last-edited: 2026-10-07
 
 package database
 
@@ -37,11 +37,17 @@ type OpDefinitionV2Row struct {
 
 // OperationV2Row is a queued/running/terminal row from operations_v2.
 type OperationV2Row struct {
-	ID                string
-	DefID             string
-	Plugin            string
-	ParentID          *string
-	ActorUserID       *string
+	ID          string
+	DefID       string
+	Plugin      string
+	ParentID    *string
+	ActorUserID *string
+	// ActorAuthMethod is how the actor was authenticated when the op was
+	// enqueued (auth.Method: "cf_access", "session", "api_key", ...), set by
+	// registry.WithActorAuthMethod; "" for ops enqueued without one and for
+	// every row written before 2026-10-07. Repairs owner grants are honoured
+	// only in an op enqueued by a verified Cloudflare Access request.
+	ActorAuthMethod   string `json:",omitempty"`
 	TraceID           string
 	SpanID            string
 	ParentSpanID      *string

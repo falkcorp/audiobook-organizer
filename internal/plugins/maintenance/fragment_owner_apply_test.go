@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_owner_apply_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 2b7e9d40-1c56-4a83-b9f2-8e0d4a6c3f17
 // last-edited: 2026-10-07
 
@@ -51,6 +51,13 @@ func (f *fragFixture) ownerApply(t *testing.T, planOpID, opID string, rows []str
 // ActorUserID, as opsregistry.WithActor records it).
 func (f *fragFixture) ownerApplyAs(t *testing.T, actor, planOpID, opID string, rows []string, tok string, resume *repairs.ApplyCheckpoint) *repairs.ApplyResult {
 	t.Helper()
+	return f.ownerApplyAsMethod(t, actor, "cf_access", planOpID, opID, rows, tok, resume)
+}
+
+// ownerApplyAsMethod is ownerApplyAs for an op enqueued by a request
+// authenticated by method (the op row's ActorAuthMethod).
+func (f *fragFixture) ownerApplyAsMethod(t *testing.T, actor, method, planOpID, opID string, rows []string, tok string, resume *repairs.ApplyCheckpoint) *repairs.ApplyResult {
+	t.Helper()
 	if tok == "" {
 		var err error
 		tok, err = repairs.DefaultOwnerGrants.Issue(repairs.OwnerGrant{UserID: "owner-user", AuthMethod: "cf_access", AccessEmail: "owner@example.test",
@@ -63,6 +70,7 @@ func (f *fragFixture) ownerApplyAs(t *testing.T, actor, planOpID, opID string, r
 	f.applyOp(opID, fragFixerID)
 	f.ops.mu.Lock()
 	f.ops.rows[opID].ActorUserID = &actor
+	f.ops.rows[opID].ActorAuthMethod = method
 	f.ops.mu.Unlock()
 	no := false
 	params, err := json.Marshal(repairs.ApplyParams{FixerID: fragFixerID, PlanOpID: planOpID, DryRun: &no,
@@ -200,6 +208,16 @@ func TestFragmentFixer_OwnerApply(t *testing.T) {
 		out = f.ownerApply(t, "op-plan", "op-owner-late", []string{m.RowID}, tok, nil)
 		require.Equal(t, repairs.OutcomeOwnerRefused, out.Rows[0].Outcome)
 		require.True(t, f.live(t, "libA"))
+
+		// A key is never the owner: the owner's own API key that read the
+		// token from GET /operations and enqueued repairs.apply (the op's
+		// actor IS the owner) is refused, as is an op with no method.
+		for _, method := range []string{"api_key", "session", ""} {
+			tok = mint()
+			out = f.ownerApplyAsMethod(t, "owner-user", method, "op-plan", "op-by-"+method+"-x", []string{m.RowID}, tok, nil)
+			require.Equal(t, repairs.OutcomeOwnerRefused, out.Rows[0].Outcome, "method %q: %+v", method, out.Rows)
+			require.True(t, f.live(t, "libA"))
+		}
 
 		// The owner's own op, retried in place by anyone (the row keeps its
 		// actor through RetryInterrupted), never carries the grant.
