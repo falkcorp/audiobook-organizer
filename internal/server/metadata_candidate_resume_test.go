@@ -1,7 +1,7 @@
 // file: internal/server/metadata_candidate_resume_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: d8016715-746c-43a2-ba58-66617900815d
-// last-edited: 2026-09-11
+// last-edited: 2026-10-06
 
 package server
 
@@ -11,6 +11,8 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 )
 
 // TestMetadataCandidateFetch_ResumeSkipsCheckpointedBooks is the test a
@@ -38,17 +40,49 @@ func TestMetadataCandidateFetch_ResumeSkipsCheckpointedBooks(t *testing.T) {
 		t.Fatalf("marshal params: %v", err)
 	}
 
+	// Pin the pool size. Left at zero, candidateFetchWorkers sizes the pool
+	// from the enabled sources' budget, clamped to [16, 32] — and the gate
+	// below only bounds the overshoot to workers-1 books past the cancel
+	// point. At 32 workers that bound is 30+31 = 61, which no longer proves
+	// the interrupt lands short of the whole batch. At 8 it is 30..37 of 60.
+	const workers = 8
+	prevWorkers := config.AppConfig.MetadataCandidateFetchWorkers
+	config.AppConfig.MetadataCandidateFetchWorkers = workers
+	t.Cleanup(func() { config.AppConfig.MetadataCandidateFetchWorkers = prevWorkers })
+
 	// ---- first attempt: interrupted partway ----
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	first := &resumeRecorder{opID: "op-candidate-resume-1"}
+	// The first progress call is the "starting" line; every later one is a
+	// finished book. Cancel once half the batch has been fetched, so the
+	// checkpoint has both a periodic write (cadence 25) and the final one on
+	// the way out to prove itself with.
+	//
+	// The cancel point must be a GATE, not just a cancel() call. The recorder
+	// appends the progress call under its lock and runs this callback after
+	// unlocking, so the worker that drew nth == 1+n/2 can be descheduled
+	// before it reaches cancel() while the other workers fetch every
+	// remaining book — a "book not found" fetch is only a store read and a
+	// result write, so 30 of them fit in one scheduling gap under load
+	// ("checkpoint owes 0 of 60" in a full-package -race run on 2026-10-06;
+	// reproduced 8 in 4,000 under CPU stress). So every later callback waits
+	// until the cancel has landed. A worker checks ctx before each book and
+	// its callback returns only after cancel, so each other worker finishes
+	// at most one book past the gate: between n/2 and n/2+workers-1 books are
+	// fetched. Blocking here cannot deadlock: neither the recorder nor the
+	// worker pool holds a lock across UpdateProgress, the candidate-fetch
+	// claim is released before it, and the 1+n/2 callback itself never waits.
+	// The same race and the same gate are in
+	// TestBulkWriteBack_ResumeSkipsCheckpointedBooks.
+	canceled := make(chan struct{})
 	first.onProgress = func(nth int) {
-		// The first call is the "starting" line; every later one is a finished
-		// book. Cancel once roughly half the batch has been fetched, so the
-		// checkpoint has both a periodic write (cadence 25) and the final one
-		// on the way out to prove itself with.
-		if nth == 1+n/2 {
+		switch {
+		case nth == 1+n/2:
 			cancel()
+			close(canceled)
+		case nth > 1+n/2:
+			<-canceled
 		}
 	}
 	runErr := s.runMetadataCandidateFetchOp(ctx, params, first)
