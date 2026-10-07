@@ -1,5 +1,5 @@
 // file: internal/config/protected_fields.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c41d2e8-5a96-4b3f-8e17-2f0b9d6a4c53
 // last-edited: 2026-10-07
 
@@ -215,6 +215,44 @@ func ChangedProtectedFields(before, after *Config) []string {
 		if errA != nil || errB != nil || !reflect.DeepEqual(a, b) {
 			// A rule that no longer resolves is reported as changed: the
 			// check fails closed, and the completeness test names it.
+			changed = append(changed, path)
+		}
+	}
+	sort.Strings(changed)
+	return changed
+}
+
+// ownerTrustRootFields are the settings that decide WHO the owner is or how
+// the owner's identity is proven (auth.OwnerProofWhyNot). They are sign-in
+// settings too (configFieldRules), so an API key can never change them; on
+// top of that, once owner_email is set, only the owner may change them
+// (UpdateService; plan D15), whatever the caller's auth method and whether or
+// not local auth is on. Without this a second admin signed in through
+// Access, or a stolen password session, could set owner_email to itself, or
+// point cf_access_* at a team it controls and mint the owner's JWT.
+//
+// Not here, with the reason: oauth_default_role and the rest of the sign-in
+// class decide roles or other sign-in methods, none of which is the owner
+// proof; basic auth, ABS and rate limits likewise.
+var ownerTrustRootFields = map[string]string{
+	"owner_email":           "names the owner",
+	"cf_access_team_domain": "which Cloudflare Access team mints the JWT that proves the owner",
+	"cf_access_aud":         "which Cloudflare Access application's JWT proves the owner",
+	"enable_auth":           "turns every other sign-in guard off",
+	"oauth_allowed_emails":  "which Access identities are admitted at all",
+}
+
+// ChangedOwnerTrustRoot returns the ownerTrustRootFields that differ between
+// before and after, sorted. Same comparison as ChangedProtectedFields.
+func ChangedOwnerTrustRoot(before, after *Config) []string {
+	if before == nil || after == nil {
+		return nil
+	}
+	var changed []string
+	for path := range ownerTrustRootFields {
+		a, errA := projectField(reflect.ValueOf(*before), strings.Split(path, "."))
+		b, errB := projectField(reflect.ValueOf(*after), strings.Split(path, "."))
+		if errA != nil || errB != nil || !reflect.DeepEqual(a, b) {
 			changed = append(changed, path)
 		}
 	}

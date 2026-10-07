@@ -1,5 +1,5 @@
 // file: internal/server/wire_system_routes.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: a7b8c9d0-e1f2-3456-abcd-789012345678
 // last-edited: 2026-10-07
 
@@ -42,8 +42,10 @@ func (s *Server) wireSystemRoutes(
 		// s.credRoute: both wipe the store, users included, after which the
 		// public POST /auth/setup creates a fresh admin with a password. An
 		// API key must not be able to take that path to a signed-in admin.
-		s.credRoute(adminOnly, http.MethodPost, "/system/reset", systemH.ResetSystem)
-		s.credRoute(adminOnly, http.MethodPost, "/system/factory-reset", systemH.FactoryReset)
+		// Both also clear owner_email, so while an owner is set only the
+		// owner may run them (ownerGateWhenOwnerSet; plan D15).
+		s.credRoute(adminOnly, http.MethodPost, "/system/reset", s.ownerGateWhenOwnerSet(), systemH.ResetSystem)
+		s.credRoute(adminOnly, http.MethodPost, "/system/factory-reset", s.ownerGateWhenOwnerSet(), systemH.FactoryReset)
 	}
 	protected.GET("/config", s.perm(auth.PermSettingsManage), systemH.GetConfig)
 	protected.PUT("/config", s.perm(auth.PermSettingsManage), systemH.UpdateConfig)
@@ -58,8 +60,10 @@ func (s *Server) wireSystemRoutes(
 	protected.POST("/backup/create", s.perm(auth.PermSettingsManage), systemH.CreateBackup)
 	protected.GET("/backup/list", s.perm(auth.PermSettingsManage), systemH.ListBackups)
 	// s.credRoute: a restore replaces every user, password hash and session
-	// with the backup's, so it is a credential change.
-	s.credRoute(protected, http.MethodPost, "/backup/restore", s.perm(auth.PermSettingsManage), systemH.RestoreBackup)
+	// with the backup's, so it is a credential change; and the restored
+	// settings can predate owner_email, so it is owner-only while an owner
+	// is set (ownerGateWhenOwnerSet; plan D15).
+	s.credRoute(protected, http.MethodPost, "/backup/restore", s.perm(auth.PermSettingsManage), s.ownerGateWhenOwnerSet(), systemH.RestoreBackup)
 	protected.DELETE("/backup/:filename", s.perm(auth.PermSettingsManage), systemH.DeleteBackup)
 	protected.GET("/library/quick-queries", s.perm(auth.PermLibraryView), systemH.GetQuickQueries)
 	protected.GET("/maintenance/transcribe-stats", s.perm(auth.PermLibraryView), systemH.GetTranscribeStats)

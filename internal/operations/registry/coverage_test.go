@@ -1,7 +1,7 @@
 // file: internal/operations/registry/coverage_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: a3b4c5d6-e7f8-9a0b-1c2d-3e4f5a6b7c8d
-// last-edited: 2026-09-02
+// last-edited: 2026-10-07
 
 // coverage_test.go provides additional tests targeting uncovered code paths
 // in the UOS-02 registry package to meet the ≥80% coverage requirement.
@@ -67,6 +67,7 @@ func TestEnqueueOptions_WithParentAndActor(t *testing.T) {
 	opID, err := r.EnqueueOp(context.Background(), "test.opts", nil,
 		registry.WithParent("parent-id"),
 		registry.WithActor("user-123"),
+		registry.WithActorAuthMethod("cf_access"),
 	)
 	if err != nil {
 		t.Fatalf("EnqueueOp: %v", err)
@@ -80,6 +81,9 @@ func TestEnqueueOptions_WithParentAndActor(t *testing.T) {
 	}
 	if row.ActorUserID == nil || *row.ActorUserID != "user-123" {
 		t.Errorf("expected actor_user_id=user-123, got %v", row.ActorUserID)
+	}
+	if row.ActorAuthMethod != "cf_access" {
+		t.Errorf("expected actor auth method cf_access, got %q", row.ActorAuthMethod)
 	}
 }
 

@@ -1,7 +1,7 @@
 // file: internal/operations/registry/registry.go
-// version: 3.33.0
+// version: 3.34.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-10-03
+// last-edited: 2026-10-07
 
 package registry
 
@@ -938,22 +938,23 @@ func (r *Registry) EnqueueOp(ctx context.Context, defID string, params any, opts
 	}
 
 	row := database.OperationV2Row{
-		ID:             opID,
-		DefID:          def.ID,
-		Plugin:         def.Plugin,
-		ParentID:       parentID,
-		ActorUserID:    actorUserID,
-		TraceID:        traceID,
-		SpanID:         spanID,
-		ParentSpanID:   parentSpanID,
-		Status:         status,
-		Priority:       int(priority),
-		Params:         string(rawParams),
-		QueuedAt:       now,
-		SubjectType:    subjectType,
-		SubjectID:      subjectID,
-		Requirements:   requirementsJSON,
-		ReqSnapshotRev: reqSnapshotRev,
+		ID:              opID,
+		DefID:           def.ID,
+		Plugin:          def.Plugin,
+		ParentID:        parentID,
+		ActorUserID:     actorUserID,
+		ActorAuthMethod: eopts.ActorAuthMethod,
+		TraceID:         traceID,
+		SpanID:          spanID,
+		ParentSpanID:    parentSpanID,
+		Status:          status,
+		Priority:        int(priority),
+		Params:          string(rawParams),
+		QueuedAt:        now,
+		SubjectType:     subjectType,
+		SubjectID:       subjectID,
+		Requirements:    requirementsJSON,
+		ReqSnapshotRev:  reqSnapshotRev,
 	}
 
 	stampQueuedSummary(def, &row)

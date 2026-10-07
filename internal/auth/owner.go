@@ -1,5 +1,5 @@
 // file: internal/auth/owner.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3b8e1d47-6f2a-4c95-a0d3-9e7c4b5f2a18
 // last-edited: 2026-10-07
 
@@ -48,7 +48,7 @@ func AccessEmailFromContext(ctx context.Context) string {
 // unset ownerEmail refuses everyone.
 func OwnerProofWhyNot(ctx context.Context, ownerEmail, host string) string {
 	if strings.TrimSpace(ownerEmail) == "" {
-		return "Owner actions are turned off: no owner email is configured (owner_email; set it from a signed-in session)"
+		return "Owner actions are turned off: no owner email is configured (set OWNER_EMAIL on the server, or set owner_email while signed in through Cloudflare Access as that email)"
 	}
 	if MethodFromContext(ctx) != MethodCFAccess {
 		hint := "Cloudflare Access"

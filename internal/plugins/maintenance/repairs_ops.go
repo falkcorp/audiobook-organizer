@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/repairs_ops.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 6f1a8d37-2e59-4b0c-8a74-3d9e5b1c7f82
 // last-edited: 2026-10-07
 
@@ -259,7 +259,14 @@ func (p *Plugin) ownerRedeemer(reporter sdk.Reporter) repairs.OwnerRedeemer {
 	if !ok {
 		return who
 	}
+	// ActorAuthMethod: a key is never the owner (owner decision
+	// 2026-10-07). Only the Repairs owner-apply handler enqueues with
+	// cf_access; an op enqueued any other way (POST /operations/v2 by the
+	// owner's own API key that read the token from GET /operations, a
+	// session, a future path that records the actor) carries another
+	// method or none, and is refused.
 	if row, err := reader.GetOperationV2(opID); err == nil && row != nil && row.ActorUserID != nil &&
+		row.ActorAuthMethod == repairs.OwnerAuthMethod &&
 		row.ManualRetryCount == 0 && row.ResumeCount == 0 {
 		who.ActorUserID = *row.ActorUserID
 	}

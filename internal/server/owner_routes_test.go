@@ -1,5 +1,5 @@
 // file: internal/server/owner_routes_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7b2d9e41-6c85-4f30-a1e7-4c9f2b8d6a15
 // last-edited: 2026-10-07
 
@@ -69,6 +69,12 @@ func (f fakeAccessVerifier) Verify(_ context.Context, raw string) (*oauth.Identi
 // an Access identity resolves to an admin. Call it BEFORE building the server.
 // For tests of an owner route's handler behaviour, which must reach the
 // handler through the owner gate rather than around it.
+//
+// It mutates process-wide state (config.AppConfig and
+// cfAccessVerifierOverride) and restores both in t.Cleanup. That is safe
+// only because no test in package server runs in parallel (see the
+// prohibition in server_more_test.go); setupOwnerRouteServerAuth relies on
+// the same rule.
 func asTestOwner(t *testing.T) map[string]string {
 	t.Helper()
 	const email = "test-owner@example.test"
@@ -95,6 +101,13 @@ type ownerRouteFixture struct {
 
 func setupOwnerRouteServer(t *testing.T) *ownerRouteFixture {
 	t.Helper()
+	return setupOwnerRouteServerAuth(t, true)
+}
+
+// setupOwnerRouteServerAuth is setupOwnerRouteServer with local auth on or
+// off. The Access middleware runs either way.
+func setupOwnerRouteServerAuth(t *testing.T, authOn bool) *ownerRouteFixture {
+	t.Helper()
 	cfAccessVerifierOverride = fakeAccessVerifier{
 		"jwt-owner":     {Provider: oauth.ProviderCFAccess, Subject: "sub-owner", Email: ownerRouteEmail, EmailVerified: true},
 		"jwt-other":     {Provider: oauth.ProviderCFAccess, Subject: "sub-other", Email: otherAdminEmail, EmailVerified: true},
@@ -105,6 +118,7 @@ func setupOwnerRouteServer(t *testing.T) *ownerRouteFixture {
 		c.OwnerEmail = ownerRouteEmail
 		c.OAuthAllowedEmails = ownerRouteEmail + "," + otherAdminEmail
 		c.OAuthDefaultRole = auth.SeedRoleAdmin
+		c.EnableAuth = authOn
 	})
 	// The owner's local account: an admin, so only the owner proof differs
 	// between it and the password-session admin.
@@ -115,7 +129,12 @@ func setupOwnerRouteServer(t *testing.T) *ownerRouteFixture {
 
 // request sends method path with the given headers and no body.
 func (f *ownerRouteFixture) request(method, path string, hdr map[string]string) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(method, path, strings.NewReader("{}"))
+	return f.requestBody(method, path, "{}", hdr)
+}
+
+// requestBody is request with a JSON body.
+func (f *ownerRouteFixture) requestBody(method, path, body string, hdr map[string]string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	for k, v := range hdr {
 		req.Header.Set(k, v)
@@ -236,4 +255,117 @@ func TestOwnerRoutes_CleanupMergedApplyStaysRetired(t *testing.T) {
 	f := setupOwnerRouteServer(t)
 	w := f.request(http.MethodPost, "/api/v1/itunes/cleanup-merged", map[string]string{oauth.CFAccessHeader: "jwt-owner"})
 	assert.Contains(t, w.Body.String(), cleanupMergedApplyRetiredMessage)
+}
+
+// With local auth off every request is anonymous to the permission model,
+// but the owner proof still holds: no sign-in, another admin's Access JWT and
+// an API key all get the owner refusal (2026-10-07 second review).
+func TestOwnerRoutes_AuthOffStillNeedsTheOwner(t *testing.T) {
+	f := setupOwnerRouteServerAuth(t, false)
+	callers := map[string]map[string]string{
+		"no sign-in":                      nil,
+		"another admin's Access sign-in":  {oauth.CFAccessHeader: "jwt-other"},
+		"API key":                         {"Authorization": "Bearer " + f.apiKey},
+		"Kelvin-sign look-alike of owner": {oauth.CFAccessHeader: "jwt-lookalike"},
+	}
+	for _, key := range slices.Sorted(maps.Keys(wantOwnerRoutes)) {
+		method, path, _ := strings.Cut(key, " ")
+		for name, hdr := range callers {
+			t.Run(key+"/"+name, func(t *testing.T) {
+				w := f.request(method, path, hdr)
+				assert.True(t, ownerRefused(w), "got %d: %s", w.Code, w.Body.String())
+			})
+		}
+		t.Run(key+"/the owner", func(t *testing.T) {
+			w := f.request(method, path, map[string]string{oauth.CFAccessHeader: "jwt-owner"})
+			assert.False(t, ownerRefused(w), "the owner was refused: %s", w.Body.String())
+		})
+	}
+}
+
+// putOwnerEmail sends PUT /api/v1/config {"owner_email": email}.
+func (f *ownerRouteFixture) putOwnerEmail(email string, hdr map[string]string) *httptest.ResponseRecorder {
+	return f.requestBody(http.MethodPut, "/api/v1/config", `{"owner_email":"`+email+`"}`, hdr)
+}
+
+// TestOwnerTrustRoot_ConfigThroughTheRouter is the second review's BLOCKER
+// end to end: once an owner is set, only the owner may change owner_email (or
+// cf_access_*, enable_auth, oauth_allowed_emails); the first owner_email may
+// be set only by that person signed in through Access as that email. Auth on
+// and off.
+func TestOwnerTrustRoot_ConfigThroughTheRouter(t *testing.T) {
+	for _, authOn := range []bool{true, false} {
+		name := "auth on"
+		if !authOn {
+			name = "auth off"
+		}
+		t.Run(name, func(t *testing.T) {
+			f := setupOwnerRouteServerAuth(t, authOn)
+			refused := map[string]map[string]string{
+				"another admin's Access sign-in": {oauth.CFAccessHeader: "jwt-other"},
+				"a look-alike Access sign-in":    {oauth.CFAccessHeader: "jwt-lookalike"},
+				"password session":               {"Authorization": "Bearer " + f.sessionToken},
+				"API key":                        {"Authorization": "Bearer " + f.apiKey},
+			}
+			if !authOn {
+				refused["no sign-in"] = nil
+			}
+			for caller, hdr := range refused {
+				w := f.putOwnerEmail(otherAdminEmail, hdr)
+				assert.Equal(t, http.StatusForbidden, w.Code, "%s: %s", caller, w.Body.String())
+				assert.Contains(t, w.Body.String(), "Only the owner may change", caller)
+				assert.Equal(t, ownerRouteEmail, config.Snapshot().OwnerEmail, "%s changed owner_email", caller)
+				w = f.requestBody(http.MethodPut, "/api/v1/config", `{"cf_access_team_domain":"attacker.example.test"}`, hdr)
+				assert.Equal(t, http.StatusForbidden, w.Code, "%s cf_access_team_domain: %s", caller, w.Body.String())
+				assert.Contains(t, w.Body.String(), "Only the owner may change", caller)
+			}
+			// The owner may hand ownership on.
+			w := f.putOwnerEmail(otherAdminEmail, map[string]string{oauth.CFAccessHeader: "jwt-owner"})
+			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+			assert.Equal(t, otherAdminEmail, config.Snapshot().OwnerEmail)
+
+			// First set: only that person, through Access as that email.
+			config.AppConfig.OwnerEmail = ""
+			for caller, hdr := range map[string]map[string]string{
+				"another person's Access sign-in": {oauth.CFAccessHeader: "jwt-other"},
+				"password session":                {"Authorization": "Bearer " + f.sessionToken},
+				"API key":                         {"Authorization": "Bearer " + f.apiKey},
+			} {
+				w := f.putOwnerEmail(ownerRouteEmail, hdr)
+				assert.Equal(t, http.StatusForbidden, w.Code, "first set by %s: %s", caller, w.Body.String())
+				assert.Contains(t, w.Body.String(), "first owner_email", caller)
+				assert.Empty(t, config.Snapshot().OwnerEmail)
+			}
+			w = f.putOwnerEmail(ownerRouteEmail, map[string]string{oauth.CFAccessHeader: "jwt-owner"})
+			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+			assert.Equal(t, ownerRouteEmail, config.Snapshot().OwnerEmail)
+		})
+	}
+}
+
+// Backup restore (and system/factory reset, behind the same gate) can bring
+// owner_email back to unset, after which the first Access user could claim
+// ownership; while an owner is set only the owner reaches them.
+func TestOwnerTrustRoot_RestoreNeedsTheOwnerWhileOneIsSet(t *testing.T) {
+	f := setupOwnerRouteServer(t)
+	body := `{"backup_filename":"no-such-backup.tar.gz"}`
+	for caller, hdr := range map[string]map[string]string{
+		"password session":               {"Authorization": "Bearer " + f.sessionToken},
+		"another admin's Access sign-in": {oauth.CFAccessHeader: "jwt-other"},
+	} {
+		w := f.requestBody(http.MethodPost, "/api/v1/backup/restore", body, hdr)
+		assert.True(t, ownerRefused(w), "%s got %d: %s", caller, w.Code, w.Body.String())
+		w = f.requestBody(http.MethodPost, "/api/v1/system/reset", `{"confirm":"RESET"}`, hdr)
+		assert.True(t, ownerRefused(w), "%s reset got %d: %s", caller, w.Code, w.Body.String())
+		w = f.requestBody(http.MethodPost, "/api/v1/system/factory-reset", `{"confirm":"RESET"}`, hdr)
+		assert.True(t, ownerRefused(w), "%s factory reset got %d: %s", caller, w.Code, w.Body.String())
+	}
+	w := f.requestBody(http.MethodPost, "/api/v1/backup/restore", body, map[string]string{oauth.CFAccessHeader: "jwt-owner"})
+	assert.False(t, ownerRefused(w), "the owner was refused: %s", w.Body.String())
+
+	// No owner yet: the ordinary guards only (a signed-in session reaches
+	// the handler, which then fails on the missing backup).
+	config.AppConfig.OwnerEmail = ""
+	w = f.requestBody(http.MethodPost, "/api/v1/backup/restore", body, map[string]string{"Authorization": "Bearer " + f.sessionToken})
+	assert.False(t, ownerRefused(w), "refused with no owner set: %s", w.Body.String())
 }
