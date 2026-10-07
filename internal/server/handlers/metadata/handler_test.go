@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/handler_test.go
-// version: 1.15.1
+// version: 1.15.2
 // guid: 1d31ef73-7c7a-4c3b-a840-01b0865023d7
 // last-edited: 2026-10-06
 
@@ -243,6 +243,24 @@ func TestFetchAudiobookMetadata_NotFound(t *testing.T) {
 	w := doReq(h.FetchAudiobookMetadata, http.MethodPost, "/audiobooks/bx/fetch-metadata", nil, idParam("bx"))
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("want 404, got %d", w.Code)
+	}
+}
+
+// A fetch whose only match is review-only (owner decision 2026-10-06) is
+// not a 404: a match was found and left for review, the book is unchanged
+// and nothing is queued for write-back.
+func TestFetchAudiobookMetadata_ReviewOnlyMatchIsLeftForReview(t *testing.T) {
+	h, d := newHandler(t)
+	d.mfs.EXPECT().FetchMetadataForBook(mock.Anything, "b1").
+		Return(nil, &metafetch.ReviewOnlyNotAppliedError{Title: "T", Sources: []string{"Open Library"}})
+	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "T"}, nil)
+	w := doReq(h.FetchAudiobookMetadata, http.MethodPost, "/audiobooks/b1/fetch-metadata", nil, idParam("b1"))
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `"review_only":true`) || !strings.Contains(body, "Match found, left for review: Open Library") {
+		t.Fatalf("body %s, want review_only and the left-for-review message", body)
 	}
 }
 

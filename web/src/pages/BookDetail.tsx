@@ -1,5 +1,5 @@
 // file: web/src/pages/BookDetail.tsx
-// version: 1.64.0
+// version: 1.65.0
 // guid: 4d2f7c6a-1b3e-4c5d-8f7a-9b0c1d2e3f4a
 // last-edited: 2026-10-06
 
@@ -589,6 +589,11 @@ export const BookDetail = () => {
       const result = await api.fetchBookMetadata(book.id);
       if (result.queued) {
         // The scan is reading this book; the fetch is queued, not refused.
+        toast(result.message, 'info');
+        return;
+      }
+      if (result.review_only) {
+        // A review-only source matched; the book is unchanged.
         toast(result.message, 'info');
         return;
       }

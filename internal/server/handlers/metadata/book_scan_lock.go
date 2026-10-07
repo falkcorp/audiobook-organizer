@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/book_scan_lock.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 070620af-532e-4357-a2a3-3f746b5e9e30
 // last-edited: 2026-10-06
 
@@ -468,6 +468,12 @@ func (h *Handler) RunQueuedApply(ctx context.Context, q QueuedApply, beat func(m
 		return err
 	case QueuedFetch:
 		_, err := h.fetchCore(ctx, q.BookID)
+		if errors.Is(err, metafetch.ErrReviewOnlyCandidatesNotApplied) {
+			// A match was found and left for review (the auto-fetch never
+			// applies a review-only source): the queued fetch did its job.
+			bookLockLog.Info("queued fetch for book %s: %s", logger.SanitizeLogValue(q.BookID), logger.SanitizeLogValue(err.Error()))
+			return nil
+		}
 		return err
 	default:
 		return fmt.Errorf("unknown queued apply kind %q", q.Kind)

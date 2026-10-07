@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.39.0
+// version: 1.40.0
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
 // last-edited: 2026-10-06
 
@@ -455,6 +455,24 @@ func (h *Handler) fetchAudiobookMetadataImpl(c *gin.Context) {
 	// fetchCore also invalidates the candidate cache (fetch+apply rewrites
 	// the book's identity) and enqueues the iTunes write-back.
 	resp, err := h.fetchCore(c.Request.Context(), id)
+	if errors.Is(err, metafetch.ErrReviewOnlyCandidatesNotApplied) {
+		// A match WAS found, on a review-only source (Open Library, Google
+		// Books), and the auto-fetch never applies one (owner decision
+		// 2026-10-06). Not a 404: nothing is missing, the match waits for the
+		// owner's review. The book is returned unchanged.
+		book, berr := store.GetBookByID(id)
+		if berr != nil || book == nil {
+			httputil.RespondWithError(c, 404, "audiobook not found", "NOT_FOUND")
+			return
+		}
+		httputil.RespondWithOK(c, gin.H{
+			"message":     "Match found, left for review: " + reviewOnlySources(err) + " matches are applied by hand from the review page, never automatically.",
+			"book":        h.enrichBook(book),
+			"source":      "",
+			"review_only": true,
+		})
+		return
+	}
 	if err != nil {
 		httputil.RespondWithError(c, 404, err.Error(), "NOT_FOUND")
 		return
@@ -470,6 +488,16 @@ func (h *Handler) fetchAudiobookMetadataImpl(c *gin.Context) {
 		"book":    h.enrichBook(enrichedBook),
 		"source":  resp.Source,
 	})
+}
+
+// reviewOnlySources names the review-only sources that matched in a
+// metafetch.ErrReviewOnlyCandidatesNotApplied error, for a message.
+func reviewOnlySources(err error) string {
+	var ro *metafetch.ReviewOnlyNotAppliedError
+	if errors.As(err, &ro) && len(ro.Sources) > 0 {
+		return strings.Join(ro.Sources, " and ")
+	}
+	return "Open Library / Google Books"
 }
 
 // searchAudiobookMetadata handles POST /api/v1/audiobooks/:id/search-metadata.
