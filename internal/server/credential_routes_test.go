@@ -1,5 +1,5 @@
 // file: internal/server/credential_routes_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6d2f9a40-3b75-4e18-9c6a-8f1e0b4d27c3
 // last-edited: 2026-10-07
 
@@ -94,6 +94,8 @@ var exemptRoutes = map[string]string{
 	"POST /api/v1/itunes/import-status/bulk":       "reads import status (POST for the id list)",
 	"POST /api/v1/itunes/export-partial":           "builds an export file for download; the live library is untouched",
 	"POST /api/v1/itunes/pid-repair":               "dry-run-gated; clears duplicate PIDs on database rows only, never the iTunes library",
+	"POST /api/v1/itunes/writeback/requeue":        "preview open; the dry_run:false path is owner-gated in the handler (requireOwnerForApply); queues updates only",
+	"POST /api/v1/itunes/writeback/requeue-remove": "preview open; the dry_run:false path is owner-gated in the handler (requireOwnerForApply); explicit ids only",
 	"POST /api/v1/audiobooks/:id/user-tags":        "library tags",
 	"PUT /api/v1/audiobooks/:id/user-tags":         "library tags",
 	"DELETE /api/v1/audiobooks/:id/user-tags/:tag": "library tags",

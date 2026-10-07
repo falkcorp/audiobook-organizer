@@ -1,5 +1,5 @@
 // file: internal/server/itunes_writeback_requeue_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8d4f2b6a-1c73-4e95-a0b8-5f9e3d7c2a61
 // last-edited: 2026-10-07
 //
@@ -59,6 +59,12 @@ func requeueTestServer(t *testing.T, auto bool) (*Server, *itunesservice.WriteBa
 	orig := requeueParseITL
 	requeueParseITL = func(string) (*itunes.ITLLibrary, error) { return lib, nil }
 	t.Cleanup(func() { requeueParseITL = orig })
+	// These tests call the handlers directly, with no Access sign-in in the
+	// context; the owner gate is covered through the router in
+	// TestWritebackRequeue_ApplyIsOwnerOnly.
+	origGate := requeueApplyGate
+	requeueApplyGate = func(*Server, *gin.Context) bool { return true }
+	t.Cleanup(func() { requeueApplyGate = origGate })
 
 	deleted := true
 	books := []database.Book{
@@ -278,5 +284,35 @@ func TestWritebackRequeueRemove_ExplicitIDOnly(t *testing.T) {
 	}
 	if !b.IsRemovePending("00000000000000C7") || b.Status().PendingRemoves != 1 {
 		t.Errorf("remove not queued: %+v", b.Status())
+	}
+}
+
+// Through the real router: the preview stays open to an API key, the apply
+// path needs the owner's verified Access sign-in.
+func TestWritebackRequeue_ApplyIsOwnerOnly(t *testing.T) {
+	f := setupOwnerRouteServer(t)
+	orig := requeueParseITL
+	requeueParseITL = func(string) (*itunes.ITLLibrary, error) { return &itunes.ITLLibrary{}, nil }
+	t.Cleanup(func() { requeueParseITL = orig })
+	b := itunesservice.NewWriteBackBatcher(time.Hour, itunesservice.WriteBackBatcherConfig{
+		AutoWriteBack: true, ITLWriteBackEnabled: true, LibraryWritePath: "/synthetic/library.itl", WriteBackDryRun: true,
+	}, nil)
+	t.Cleanup(func() { _ = b.Stop(context.Background()) })
+	f.srv.writeBackBatcher = b
+
+	key := map[string]string{"Authorization": "Bearer " + f.apiKey}
+	for _, route := range []struct{ path, preview, apply string }{
+		{"/api/v1/itunes/writeback/requeue", `{}`, `{"dry_run":false}`},
+		{"/api/v1/itunes/writeback/requeue-remove", `{"book_ids":["bk-x"]}`, `{"dry_run":false,"book_ids":["bk-x"]}`},
+	} {
+		if w := f.requestBody(http.MethodPost, route.path, route.preview, key); w.Code != http.StatusOK {
+			t.Errorf("%s preview with an API key: %d %s, want 200", route.path, w.Code, w.Body.String())
+		}
+		if w := f.requestBody(http.MethodPost, route.path, route.apply, key); !ownerRefused(w) {
+			t.Errorf("%s apply with an API key: %d %s, want 403", route.path, w.Code, w.Body.String())
+		}
+	}
+	if st := b.Status(); st.PendingUpdates != 0 || st.PendingRemoves != 0 {
+		t.Errorf("a refused apply queued something: %+v", st)
 	}
 }
