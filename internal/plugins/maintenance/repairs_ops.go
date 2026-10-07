@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repairs_ops.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 6f1a8d37-2e59-4b0c-8a74-3d9e5b1c7f82
-// last-edited: 2026-10-05
+// last-edited: 2026-10-06
 
 package maintenance
 
@@ -55,6 +55,8 @@ func (p *Plugin) repairsApplyDef() sdk.OperationDef {
 		Plugin:      "maintenance",
 		DisplayName: "Repairs: apply",
 		Description: "Applies explicit row_ids of a stored repairs.plan (params: fixer_id, plan_op_id, row_ids). " +
+			"Rows a plan lists for the owner alone (owner_applicable) are applied only under a one-shot owner grant " +
+			"minted by POST /repairs/:fixer/owner-apply for an interactive sign-in; never from params alone, a retry or a resume. " +
 			"PREVIEW BY DEFAULT: only dry_run=false writes. Each row is re-planned and refused as " +
 			"changed_since_plan when its fingerprint moved; hands-off rows are refused again on fresh reads. " +
 			"A write pauses a running library.scan through the scan stand-down (waiting until it parks) " +
@@ -166,6 +168,10 @@ func (p *Plugin) runRepairsApply(ctx context.Context, raw json.RawMessage, repor
 		Guard: store, Tags: p.repairsGuardTags(), Series: repairs.SeriesNamesFrom(all),
 		StandDown: p.deps, OpID: opID, Wait: p.standDownWait,
 		Resumed: params.Resume,
+		// Owner rows run only under a grant the Repairs handler minted for
+		// the owner's interactive click, taken (consumed) here; params
+		// written any other way, a retry or a resume find none.
+		Owner: repairs.ResolveOwnerApproval(repairs.DefaultOwnerGrants, params),
 	}
 	if !dryRun {
 		// Every book_file step is journaled under this op's id, so POST

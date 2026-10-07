@@ -702,7 +702,7 @@ func (rs *RevertService) revertChangeIn(c *database.OperationChange, plan *undo.
 	case undo.ChangeTypeMetadataCacheCopy:
 		return rs.revertMetadataCacheCopy(c)
 	case "organize_failed", "organize_skipped", "organize_summary",
-		undo.ChangeTypeRepairPlanRecord:
+		undo.ChangeTypeRepairPlanRecord, undo.ChangeTypeRepairOwnerApply:
 		// No filesystem or DB mutation recorded; nothing to reverse.
 		return nil
 	default:
