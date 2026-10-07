@@ -1,5 +1,5 @@
 // file: internal/server/server_test.go
-// version: 2.11.0
+// version: 2.11.1
 // guid: b2c3d4e5-f6a7-8901-bcde-234567890abc
 // last-edited: 2026-10-06
 
@@ -28,6 +28,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil"
 	"github.com/gin-gonic/gin"
 	"github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/assert"
@@ -853,23 +854,13 @@ func TestBulkFetchMetadataRespectsOverridesAndMissingFields(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/search.json" {
-			http.NotFound(w, r)
-			return
-		}
-		title := r.URL.Query().Get("title")
-		if title == "The Hobbit" {
-			_, err := w.Write([]byte(`{"numFound":1,"start":0,"docs":[{"title":"The Hobbit","author_name":["J.R.R. Tolkien"],"first_publish_year":1937,"isbn":["1234567890"],"publisher":["Test Publisher"],"language":["eng"]}]}`))
-			_ = err
-			return
-		}
-		_, err := w.Write([]byte(`{"numFound":0,"start":0,"docs":[]}`))
-		_ = err
-	}))
-	defer mockServer.Close()
-
-	useOnlyOpenLibrary(t, mockServer.URL)
+	// Audible: Open Library and Google Books are review-only and never
+	// applied by the bulk fetch (owner decision 2026-10-06).
+	mockServer := testutil.MockAudibleServer(t, audibleAnswersTitle(testutil.AudibleTestProduct{
+		ASIN: "B0TESTHOB2", Title: "The Hobbit", Authors: []string{"J.R.R. Tolkien"},
+		Publisher: "Test Publisher", Language: "eng", ReleaseDate: "1937-01-01",
+	}, "The Hobbit"))
+	useOnlyAudible(t, mockServer.URL)
 
 	// Act: bulk fetch metadata for both books.
 	payload := map[string]any{
