@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_source_fields_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0dfe3afe-fcd9-49ee-a139-7a5fd7ad56c9
-// last-edited: 2026-09-11
+// last-edited: 2026-10-08
 
 package itunesservice
 
@@ -19,12 +19,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// These tests pin the fix for an ITL-sourced sync zeroing stored bookmarks.
+// These tests pin the fix for an ITL-sourced update zeroing stored bookmarks.
 // ParseITLAsLibrary decodes no bookmark, so every ITL track arrives with
 // Bookmark == 0, and before itunes.SourceFields the existing-book update path
-// in Sync wrote that 0 over whatever the book had. The Library values here use
-// the same capability sets the real parsers declare; source_fields_test.go in
-// package itunes pins the parsers to those sets.
+// wrote that 0 over whatever the book had. That path was the incremental Sync
+// until 2026-10-08; it is now a re-import's link (linkITunesMetadata), which
+// refreshes the playback fields. The Library values here use the same
+// capability sets the real parsers declare; source_fields_test.go in package
+// itunes pins the parsers to those sets.
 
 const sourceFieldsPID = "A1B2C3D4E5F60718"
 
@@ -66,7 +68,7 @@ func sourceFieldsLibrary(filePath string, carries itunes.SourceFields, track itu
 	return &itunes.Library{Tracks: map[string]*itunes.Track{"1": &track}, Carries: carries}
 }
 
-// seedSyncedBook stores a book an earlier XML sync already populated with a
+// seedSyncedBook stores a book an earlier XML import already populated with a
 // bookmark, play count and last-played date.
 func seedSyncedBook(t *testing.T, store *database.PebbleStore, filePath string) string {
 	t.Helper()
@@ -90,14 +92,26 @@ type playbackWant struct {
 	lastPlayed time.Time
 }
 
-func runSyncAndRead(t *testing.T, carries itunes.SourceFields, track itunes.Track) *database.Book {
+// runImportLibrary runs the import path on an already-parsed library, the way
+// Execute does after parsing. Import mode with PreserveLocation, so no file
+// is organized.
+func runImportLibrary(t *testing.T, imp *Importer, lib *itunes.Library) {
+	t.Helper()
+	req := ImportRequest{LibraryPath: filepath.Join(t.TempDir(), "lib"), ImportMode: "import", PreserveLocation: true}
+	require.NoError(t, imp.executeLibrary(context.Background(), "op-"+t.Name(), req, lib, 0, logger.New("test")))
+}
+
+func runImportAndRead(t *testing.T, carries itunes.SourceFields, track itunes.Track) *database.Book {
 	t.Helper()
 	imp, store := newSourceFieldsImporter(t)
 	filePath := sourceFieldsAudioFile(t)
 	bookID := seedSyncedBook(t, store, filePath)
 
 	lib := sourceFieldsLibrary(filePath, carries, track)
-	require.NoError(t, imp.syncLibrary(context.Background(), lib, filepath.Join(t.TempDir(), "lib"), nil, nil, logger.New("test")))
+	runImportLibrary(t, imp, lib)
+	books, err := store.GetAllBooksCore(0, 0)
+	require.NoError(t, err)
+	require.Len(t, books, 1, "the re-import must link to the seeded book, not add one")
 
 	got, err := store.GetBookByID(bookID)
 	require.NoError(t, err)
@@ -105,8 +119,8 @@ func runSyncAndRead(t *testing.T, carries itunes.SourceFields, track itunes.Trac
 	// Rating is carried by every source and the seeded book has none, so a
 	// rating of 60 proves UpdateBook actually ran. Without it, "the bookmark
 	// survived" could just mean nothing was written at all.
-	require.NotNil(t, got.ITunesRating, "sync must have written the book")
-	require.Equal(t, 60, *got.ITunesRating, "sync must have written the book")
+	require.NotNil(t, got.ITunesRating, "the re-import must have written the book")
+	require.Equal(t, 60, *got.ITunesRating, "the re-import must have written the book")
 	return got
 }
 
@@ -121,7 +135,7 @@ func assertPlayback(t *testing.T, got *database.Book, want playbackWant) {
 		"ITunesLastPlayed = %v, want %v", got.ITunesLastPlayed, want.lastPlayed)
 }
 
-func TestSyncLibrary_UncarriedPlaybackFieldsArePreserved(t *testing.T) {
+func TestReimport_UncarriedPlaybackFieldsArePreserved(t *testing.T) {
 	cases := []struct {
 		name    string
 		carries itunes.SourceFields
@@ -155,13 +169,13 @@ func TestSyncLibrary_UncarriedPlaybackFieldsArePreserved(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := runSyncAndRead(t, tc.carries, tc.track)
+			got := runImportAndRead(t, tc.carries, tc.track)
 			assertPlayback(t, got, tc.want)
 		})
 	}
 }
 
-func TestSyncLibrary_XMLSourceWritesPlaybackFields(t *testing.T) {
+func TestReimport_XMLSourceWritesPlaybackFields(t *testing.T) {
 	cases := []struct {
 		name  string
 		track itunes.Track
@@ -184,18 +198,18 @@ func TestSyncLibrary_XMLSourceWritesPlaybackFields(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := runSyncAndRead(t, itunes.XMLSourceFields(), tc.track)
+			got := runImportAndRead(t, itunes.XMLSourceFields(), tc.track)
 			assertPlayback(t, got, tc.want)
 		})
 	}
 }
 
-func TestSyncLibrary_ITLInsertLeavesBookmarkUnset(t *testing.T) {
+func TestImport_ITLInsertLeavesBookmarkUnset(t *testing.T) {
 	imp, store := newSourceFieldsImporter(t)
 	filePath := sourceFieldsAudioFile(t)
 
 	lib := sourceFieldsLibrary(filePath, itunes.ITLSourceFields(), itunes.Track{PlayCount: 3, Rating: 20})
-	require.NoError(t, imp.syncLibrary(context.Background(), lib, filepath.Join(t.TempDir(), "lib"), nil, nil, logger.New("test")))
+	runImportLibrary(t, imp, lib)
 
 	books, err := store.GetAllBooksCore(0, 0)
 	require.NoError(t, err)
@@ -205,13 +219,13 @@ func TestSyncLibrary_ITLInsertLeavesBookmarkUnset(t *testing.T) {
 			bookID = b.ID
 		}
 	}
-	require.NotEmpty(t, bookID, "sync must have inserted the book")
+	require.NotEmpty(t, bookID, "the import must have inserted the book")
 
 	got, err := store.GetBookByID(bookID)
 	require.NoError(t, err)
 	require.NotNil(t, got)
-	// nil, not &0: linkITunesMetadata only fills nil fields, so &0 would stop
-	// a later XML import from supplying the real bookmark.
+	// nil, not &0: linkITunesMetadata refreshes from every non-nil field, so
+	// &0 would be written over a real bookmark by the next ITL re-import.
 	assert.Nil(t, got.ITunesBookmark, "an ITL insert has no bookmark to record")
 	assert.Nil(t, got.ITunesLastPlayed, "no play date was decoded")
 	require.NotNil(t, got.ITunesPlayCount, "ITL carries play count")

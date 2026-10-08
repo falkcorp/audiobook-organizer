@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_execute_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-10-07
+// last-edited: 2026-10-08
 
 package itunesservice
 
@@ -113,56 +113,5 @@ func TestExecute_ParseFailure(t *testing.T) {
 	}, log)
 
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to parse library")
-}
-
-// ---------------------------------------------------------------------------
-// Sync — empty library (no audiobook groups) → early return nil, no store calls
-// ---------------------------------------------------------------------------
-
-func TestSync_EmptyLibrary(t *testing.T) {
-	enableSyncForTest(t)
-	xmlContent := `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-	<key>Major Version</key><integer>1</integer>
-	<key>Minor Version</key><integer>1</integer>
-	<key>Tracks</key>
-	<dict>
-		<key>1</key>
-		<dict>
-			<key>Track ID</key><integer>1</integer>
-			<key>Name</key><string>Pop Song</string>
-			<key>Genre</key><string>Pop</string>
-			<key>Kind</key><string>MPEG audio file</string>
-			<key>Location</key><string>file:///Users/test/Music/song.mp3</string>
-		</dict>
-	</dict>
-	<key>Playlists</key><array/>
-</dict>
-</plist>`
-
-	dir := t.TempDir()
-	xmlPath := filepath.Join(dir, "iTunes Library.xml")
-	require.NoError(t, os.WriteFile(xmlPath, []byte(xmlContent), 0o644))
-
-	// No store is needed — Sync returns before any store access when totalGroups == 0
-	imp := &Importer{cfg: Config{}}
-	log := logger.New("test")
-	err := imp.Sync(context.Background(), xmlPath, nil, nil, log)
-	assert.NoError(t, err)
-}
-
-func TestSync_ParseFailure(t *testing.T) {
-	enableSyncForTest(t)
-	dir := t.TempDir()
-	badPath := filepath.Join(dir, "bad.xml")
-	require.NoError(t, os.WriteFile(badPath, []byte("not xml"), 0o644))
-
-	imp := &Importer{cfg: Config{}}
-	log := logger.New("test")
-	err := imp.Sync(context.Background(), badPath, nil, nil, log)
-	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to parse library")
 }

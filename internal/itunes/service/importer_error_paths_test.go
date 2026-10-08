@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_error_paths_test.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: a7c3f2e1-4d8b-4e6a-9f0c-2b5d7e3a8c1f
-// last-edited: 2026-10-07
+// last-edited: 2026-10-08
 
 // Package itunesservice - error and edge-case tests for importer.go (TODO 4.13d).
 //
@@ -23,7 +23,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -124,50 +123,6 @@ func TestExecute_NonXMLBinary_ReturnsError(t *testing.T) {
 	require.Error(t, err, "binary file must return an error from Execute")
 }
 
-func TestSync_CorruptXML_ReturnsError(t *testing.T) {
-	enableSyncForTest(t)
-	dir := t.TempDir()
-	badPath := filepath.Join(dir, "bad.xml")
-	require.NoError(t, os.WriteFile(badPath, []byte("<not valid plist"), 0o644))
-
-	imp := &Importer{cfg: Config{}}
-	log := logger.New("test")
-	err := imp.Sync(context.Background(), badPath, nil, nil, log)
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to parse library")
-}
-
-// ---------------------------------------------------------------------------
-// 3. Concurrent sync — two Sync calls that both succeed must not corrupt
-//    shared Importer state.  We use a library with zero audiobooks so both
-//    return early and this is purely a concurrency/no-panic guard.
-// ---------------------------------------------------------------------------
-
-func TestSync_Concurrent_NoPanic(t *testing.T) {
-	enableSyncForTest(t)
-	xmlContent := validEmptyXML()
-	dir := t.TempDir()
-	xmlPath := filepath.Join(dir, "iTunes Library.xml")
-	require.NoError(t, os.WriteFile(xmlPath, []byte(xmlContent), 0o644))
-
-	imp := &Importer{cfg: Config{}}
-	log := logger.New("test")
-
-	var wg sync.WaitGroup
-	errs := make([]error, 4)
-	for i := range 4 {
-		wg.Go(func() {
-			errs[i] = imp.Sync(context.Background(), xmlPath, nil, nil, log)
-		})
-	}
-	wg.Wait()
-
-	for i, err := range errs {
-		assert.NoError(t, err, "concurrent Sync %d should not error", i)
-	}
-}
-
 // ---------------------------------------------------------------------------
 // 5a. External-ID collision: tombstoned PID → track is skipped (no CreateBook).
 // ---------------------------------------------------------------------------
@@ -205,6 +160,9 @@ func TestExecute_TombstonedPID_Skipped(t *testing.T) {
 
 	assert.NoError(t, err)
 	// CreateBook must not have been called (testify mock enforces this).
+	snap := imp.GetStatus("op-tombstone")
+	assert.Equal(t, 1, snap.Skipped, "a tombstoned album is counted as skipped")
+	assert.Equal(t, 0, snap.Failed)
 }
 
 // ---------------------------------------------------------------------------
@@ -358,31 +316,6 @@ func TestExecute_CreateBookFails_ContinuesAndCountsFailed(t *testing.T) {
 	snap := imp.GetStatus("op-fail-create")
 	assert.Equal(t, 1, snap.Failed, "failed counter should be 1")
 	assert.Equal(t, 0, snap.Imported, "no book should have been imported")
-}
-
-// ---------------------------------------------------------------------------
-// 7. Sync GetAllBooks failure → Sync returns error.
-// ---------------------------------------------------------------------------
-
-func TestSync_GetAllBooksFails_ReturnsError(t *testing.T) {
-	enableSyncForTest(t)
-	dir := t.TempDir()
-	trackPath := filepath.Join(dir, "sync-chapter.m4b")
-	require.NoError(t, os.WriteFile(trackPath, bytes.Repeat([]byte("e"), 512), 0o644))
-
-	pid := "SYNC_PID_001"
-	xmlPath := writeXMLWithAudiobook(t, dir, "Sync Book", "Sync Author", pid, trackPath)
-
-	m := dbmocks.NewMockStore(t)
-	// After parsing and grouping, Sync calls GetAllBooksCore for the PID index.
-	m.EXPECT().GetAllBooksCore(0, 0).Return(nil, fmt.Errorf("database connection lost")).Once()
-
-	imp := newImporter(Deps{Store: m})
-	log := logger.New("test")
-	err := imp.Sync(context.Background(), xmlPath, nil, nil, log)
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to load books for index")
 }
 
 // ---------------------------------------------------------------------------
