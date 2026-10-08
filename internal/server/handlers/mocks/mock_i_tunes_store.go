@@ -361,66 +361,6 @@ func (_c *MockITunesStore_ListBooksByITunesPID_Call) RunAndReturn(run func(limit
 	return _c
 }
 
-// MarkITunesSynced provides a mock function for the type MockITunesStore
-func (_mock *MockITunesStore) MarkITunesSynced(bookIDs []string) (int64, error) {
-	ret := _mock.Called(bookIDs)
-
-	if len(ret) == 0 {
-		panic("no return value specified for MarkITunesSynced")
-	}
-
-	var r0 int64
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func([]string) (int64, error)); ok {
-		return returnFunc(bookIDs)
-	}
-	if returnFunc, ok := ret.Get(0).(func([]string) int64); ok {
-		r0 = returnFunc(bookIDs)
-	} else {
-		r0 = ret.Get(0).(int64)
-	}
-	if returnFunc, ok := ret.Get(1).(func([]string) error); ok {
-		r1 = returnFunc(bookIDs)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockITunesStore_MarkITunesSynced_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'MarkITunesSynced'
-type MockITunesStore_MarkITunesSynced_Call struct {
-	*mock.Call
-}
-
-// MarkITunesSynced is a helper method to define mock.On call
-//   - bookIDs []string
-func (_e *MockITunesStore_Expecter) MarkITunesSynced(bookIDs any) *MockITunesStore_MarkITunesSynced_Call {
-	return &MockITunesStore_MarkITunesSynced_Call{Call: _e.mock.On("MarkITunesSynced", bookIDs)}
-}
-
-func (_c *MockITunesStore_MarkITunesSynced_Call) Run(run func(bookIDs []string)) *MockITunesStore_MarkITunesSynced_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 []string
-		if args[0] != nil {
-			arg0 = args[0].([]string)
-		}
-		run(
-			arg0,
-		)
-	})
-	return _c
-}
-
-func (_c *MockITunesStore_MarkITunesSynced_Call) Return(n int64, err error) *MockITunesStore_MarkITunesSynced_Call {
-	_c.Call.Return(n, err)
-	return _c
-}
-
-func (_c *MockITunesStore_MarkITunesSynced_Call) RunAndReturn(run func(bookIDs []string) (int64, error)) *MockITunesStore_MarkITunesSynced_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // SearchBooks provides a mock function for the type MockITunesStore
 func (_mock *MockITunesStore) SearchBooks(query string, limit int, offset int) ([]database.Book, error) {
 	ret := _mock.Called(query, limit, offset)

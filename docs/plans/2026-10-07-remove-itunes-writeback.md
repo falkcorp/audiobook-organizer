@@ -1,5 +1,5 @@
 <!-- file: docs/plans/2026-10-07-remove-itunes-writeback.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 7372ebf8-5194-48d4-af7b-3f85421f435f -->
 <!-- last-edited: 2026-10-07 -->
 
@@ -208,20 +208,31 @@ scripts). About 29,000 lines removed.
   writers.
 - **GET `/itunes/books`.** It is read-only, but its only UI was the removed
   browse tab.
+- **`isAudiobookITL`** stays for the cross-type PID census. The target-shape
+  guard around it (`LibraryShape`, `InspectLibraryShape`) is removed, along
+  with the rebuild writers it protected.
 
 ### Not done / follow-ups
 
 1. **`internal/writeback/`** (`enqueuer.go`, `outbox.go`) is imported by
    nothing. The session's permission classifier blocked `git rm -r` on it, so
    the owner should delete it by hand.
-2. **ITunesPath drift could revert organized paths.** Organize, rename,
-   metafetch and repoint still write a computed `ITunesPath` onto `book_file`
-   rows, and iTunes never receives it now.
-   - iTunes sync matches a track by PID. It skips only when the stored
-     `ITunesPath` equals the track's Location; otherwise it upserts a row with
-     `FilePath` set to the iTunes location (`importer.go` near line 1057).
-   - So a sync can rewrite an organized file's `FilePath` back to the iTunes
-     path. Investigate before the next sync runs.
+2. **ITunesPath drift reverts organized paths (confirmed by reading the code,
+   not reproduced in a test).** Organize, rename, metafetch and repoint still
+   write a computed `ITunesPath` onto `book_file` rows, and nothing moves
+   iTunes to match it now.
+   - iTunes sync matches a track by PID and skips it only when the stored
+     `ITunesPath` equals the track's Location (`importer.go` near line 1057).
+     Otherwise it upserts a row whose `FilePath` is the decoded iTunes
+     location.
+   - `BatchUpsertBookFiles` matches that row by PID. `FilePath` is
+     `bfUpsertOwned` (`bookfile_merge.go:185`), so the iTunes path replaces the
+     organized one.
+   - This branch does not widen the exposure: write-back was already off on
+     the host.
+   - Two fix shapes:
+     - (a) stop writing a computed `ITunesPath` (leave the imported Location);
+     - (b) on a PID match, have sync leave `FilePath` alone.
 3. **`ITunesPlayCountBumpedAt`** is now written only by merge's
    `carryPlayCountMark`. Both can be removed.
 4. **Dead store methods:**

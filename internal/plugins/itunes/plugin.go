@@ -1,5 +1,5 @@
 // file: internal/plugins/itunes/plugin.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
 // last-edited: 2026-10-07
 
@@ -75,7 +75,7 @@ func (p *Plugin) OperationDefs() []sdk.OperationDef {
 		//
 		// positionSyncDef is a stub too, but it has no server-side counterpart,
 		// so it stays registered: dropping it would make the op vanish rather
-		// than fail, and "unknown op" is a worse error than an honest one. Its
+		// than fail, and "unknown op" is a worse error than a plain refusal. Its
 		// Run returns an error instead of nil -- see runPositionSync. The real
 		// implementation it should call, svc.Positions.Sync, exists and has
 		// never been wired to anything.

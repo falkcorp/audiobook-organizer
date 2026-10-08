@@ -5,7 +5,6 @@
 package handlersmocks
 
 import (
-	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	mock "github.com/stretchr/testify/mock"
 )
@@ -44,63 +43,6 @@ type MockITunesImporter_Expecter struct {
 
 func (_m *MockITunesImporter) EXPECT() *MockITunesImporter_Expecter {
 	return &MockITunesImporter_Expecter{mock: &_m.Mock}
-}
-
-// CollectITLUpdatesWithBookIDs provides a mock function for the type MockITunesImporter
-func (_mock *MockITunesImporter) CollectITLUpdatesWithBookIDs() ([]itunes.ITLLocationUpdate, []string) {
-	ret := _mock.Called()
-
-	if len(ret) == 0 {
-		panic("no return value specified for CollectITLUpdatesWithBookIDs")
-	}
-
-	var r0 []itunes.ITLLocationUpdate
-	var r1 []string
-	if returnFunc, ok := ret.Get(0).(func() ([]itunes.ITLLocationUpdate, []string)); ok {
-		return returnFunc()
-	}
-	if returnFunc, ok := ret.Get(0).(func() []itunes.ITLLocationUpdate); ok {
-		r0 = returnFunc()
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]itunes.ITLLocationUpdate)
-		}
-	}
-	if returnFunc, ok := ret.Get(1).(func() []string); ok {
-		r1 = returnFunc()
-	} else {
-		if ret.Get(1) != nil {
-			r1 = ret.Get(1).([]string)
-		}
-	}
-	return r0, r1
-}
-
-// MockITunesImporter_CollectITLUpdatesWithBookIDs_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CollectITLUpdatesWithBookIDs'
-type MockITunesImporter_CollectITLUpdatesWithBookIDs_Call struct {
-	*mock.Call
-}
-
-// CollectITLUpdatesWithBookIDs is a helper method to define mock.On call
-func (_e *MockITunesImporter_Expecter) CollectITLUpdatesWithBookIDs() *MockITunesImporter_CollectITLUpdatesWithBookIDs_Call {
-	return &MockITunesImporter_CollectITLUpdatesWithBookIDs_Call{Call: _e.mock.On("CollectITLUpdatesWithBookIDs")}
-}
-
-func (_c *MockITunesImporter_CollectITLUpdatesWithBookIDs_Call) Run(run func()) *MockITunesImporter_CollectITLUpdatesWithBookIDs_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		run()
-	})
-	return _c
-}
-
-func (_c *MockITunesImporter_CollectITLUpdatesWithBookIDs_Call) Return(iTLLocationUpdates []itunes.ITLLocationUpdate, strings []string) *MockITunesImporter_CollectITLUpdatesWithBookIDs_Call {
-	_c.Call.Return(iTLLocationUpdates, strings)
-	return _c
-}
-
-func (_c *MockITunesImporter_CollectITLUpdatesWithBookIDs_Call) RunAndReturn(run func() ([]itunes.ITLLocationUpdate, []string)) *MockITunesImporter_CollectITLUpdatesWithBookIDs_Call {
-	_c.Call.Return(run)
-	return _c
 }
 
 // DiscoverLibraryPath provides a mock function for the type MockITunesImporter

@@ -1,5 +1,5 @@
 // file: internal/server/owner_routes_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 7b2d9e41-6c85-4f30-a1e7-4c9f2b8d6a15
 // last-edited: 2026-10-07
 
@@ -46,38 +46,6 @@ func (f fakeAccessVerifier) Verify(_ context.Context, raw string) (*oauth.Identi
 	return nil, errors.New("fake access verifier: unknown token")
 }
 
-// asTestOwner makes the next server built in this test (newTestServer /
-// NewServer read it in setupRoutes) accept the returned header as the owner's
-// verified Access sign-in: owner_email is set, the email is allowlisted, and
-// an Access identity resolves to an admin. Call it BEFORE building the server.
-// For tests of an owner route's handler behaviour, which must reach the
-// handler through the owner gate rather than around it.
-//
-// It mutates process-wide state (config.AppConfig and
-// cfAccessVerifierOverride) and restores both in t.Cleanup. That is safe
-// only because no test in package server runs in parallel (see the
-// prohibition in server_more_test.go); setupOwnerRouteServerAuth relies on
-// the same rule.
-func asTestOwner(t *testing.T) map[string]string {
-	t.Helper()
-	const email = "test-owner@example.test"
-	prevVerifier := cfAccessVerifierOverride
-	cfAccessVerifierOverride = fakeAccessVerifier{
-		"jwt-test-owner": {Provider: oauth.ProviderCFAccess, Subject: "sub-test-owner", Email: email, EmailVerified: true},
-	}
-	prev := config.AppConfig
-	config.AppConfig.OwnerEmail = email
-	config.AppConfig.OAuthAllowedEmails = email
-	config.AppConfig.OAuthDefaultRole = auth.SeedRoleAdmin
-	t.Cleanup(func() {
-		cfAccessVerifierOverride = prevVerifier
-		config.AppConfig.OwnerEmail = prev.OwnerEmail
-		config.AppConfig.OAuthAllowedEmails = prev.OAuthAllowedEmails
-		config.AppConfig.OAuthDefaultRole = prev.OAuthDefaultRole
-	})
-	return map[string]string{oauth.CFAccessHeader: "jwt-test-owner"}
-}
-
 type ownerRouteFixture struct {
 	*credGuardFixture
 }
@@ -110,12 +78,7 @@ func setupOwnerRouteServerAuth(t *testing.T, authOn bool) *ownerRouteFixture {
 	return &ownerRouteFixture{f}
 }
 
-// request sends method path with the given headers and no body.
-func (f *ownerRouteFixture) request(method, path string, hdr map[string]string) *httptest.ResponseRecorder {
-	return f.requestBody(method, path, "{}", hdr)
-}
-
-// requestBody is request with a JSON body.
+// requestBody sends a request with a JSON body.
 func (f *ownerRouteFixture) requestBody(method, path, body string, hdr map[string]string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -215,6 +178,23 @@ func TestOwnerTrustRoot_RestoreNeedsTheOwnerWhileOneIsSet(t *testing.T) {
 		assert.True(t, ownerRefused(w), "%s reset got %d: %s", caller, w.Code, w.Body.String())
 		w = f.requestBody(http.MethodPost, "/api/v1/system/factory-reset", `{"confirm":"RESET"}`, hdr)
 		assert.True(t, ownerRefused(w), "%s factory reset got %d: %s", caller, w.Code, w.Body.String())
+	}
+	// The callers the owner proof must never accept. Ported from the removed
+	// owner-route table (the iTunes write routes it covered are gone; restore
+	// and reset still go through the same RequireOwner gate). A 401, or the
+	// credential guard's 403 for an API key, stops the caller before the owner
+	// gate, which is also a refusal: what matters is that no handler runs.
+	for caller, hdr := range map[string]map[string]string{
+		"API key (admin, every scope)": {"Authorization": "Bearer " + f.apiKey},
+		"API key with the owner's Access JWT riding along": {
+			"Authorization": "Bearer " + f.apiKey, oauth.CFAccessHeader: "jwt-owner"},
+		"Access sign-in as a Kelvin-sign lookalike of the owner": {oauth.CFAccessHeader: "jwt-lookalike"},
+		"password session plus the unsigned Access email header": {
+			"Authorization": "Bearer " + f.sessionToken, "Cf-Access-Authenticated-User-Email": ownerRouteEmail},
+	} {
+		w := f.requestBody(http.MethodPost, "/api/v1/backup/restore", body, hdr)
+		assert.Contains(t, []int{http.StatusUnauthorized, http.StatusForbidden}, w.Code,
+			"%s reached the restore handler: %d %s", caller, w.Code, w.Body.String())
 	}
 	w := f.requestBody(http.MethodPost, "/api/v1/backup/restore", body, map[string]string{oauth.CFAccessHeader: "jwt-owner"})
 	assert.False(t, ownerRefused(w), "the owner was refused: %s", w.Body.String())
