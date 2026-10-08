@@ -27,9 +27,9 @@ func sampleFeedback(book string, label CandidateFeedbackLabel) CandidateFeedback
 	return CandidateFeedback{
 		BookID: book,
 		Label:  label,
-		Query:  CandidateFeedbackQuery{Title: "Dune", Author: "Frank Herbert", Mode: CandidateFeedbackModeBrowse},
+		Query:  CandidateFeedbackQuery{Title: "Sample Saga", Author: "A. Writer", Mode: CandidateFeedbackModeBrowse},
 		Candidate: CandidateFeedbackCandidate{
-			Source: "audible", ASIN: "B000TEST01", Title: "Dune Messiah", Author: "Frank Herbert",
+			Source: "audible", ASIN: "B0EXAMPLE1", Title: "Sample Sequel", Author: "A. Writer",
 			SourceHash: "abc123",
 		},
 		Score:          2.13,

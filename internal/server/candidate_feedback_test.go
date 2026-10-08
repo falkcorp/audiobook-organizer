@@ -38,9 +38,9 @@ func candidateFeedbackCtx(t *testing.T, method, target, body string, user *datab
 const feedbackBody = `{
   "book_id": "BOOK1",
   "label": "negative",
-  "query": {"title": " Dune ", "author": "Frank Herbert", "browse": true},
-  "candidate": {"source": "audible", "asin": "B000TEST01", "title": "Dune Messiah",
-                "author": "Frank Herbert", "narrator": "Scott Brick", "series": "Dune",
+  "query": {"title": " Sample Book ", "author": "A. Writer", "browse": true},
+  "candidate": {"source": "audible", "asin": "B0EXAMPLE1", "title": "Sample Sequel",
+                "author": "A. Writer", "narrator": "N. Reader", "series": "Sample Saga",
                 "series_position": "2", "year": 2007, "score": 2.13,
                 "score_breakdown": {"score": 1.5, "steps": []}},
   "rank": 2,
@@ -62,11 +62,11 @@ func TestCandidateFeedback_PostDeleteExport(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &saved); err != nil {
 		t.Fatal(err)
 	}
-	wantHash := metafetch.CandidateSourceHash(metafetch.MetadataCandidate{Source: "audible", ASIN: "B000TEST01"})
+	wantHash := metafetch.CandidateSourceHash(metafetch.MetadataCandidate{Source: "audible", ASIN: "B0EXAMPLE1"})
 	if saved.ID == "" || saved.Label != database.CandidateFeedbackNegative ||
-		saved.Query.Mode != database.CandidateFeedbackModeBrowse || saved.Query.Title != "Dune" ||
+		saved.Query.Mode != database.CandidateFeedbackModeBrowse || saved.Query.Title != "Sample Book" ||
 		saved.UserID != "u-1" || saved.Username != "alice" || saved.Score != 2.13 ||
-		saved.Rank != 2 || saved.ResultCount != 7 || saved.Candidate.Narrator != "Scott Brick" ||
+		saved.Rank != 2 || saved.ResultCount != 7 || saved.Candidate.Narrator != "N. Reader" ||
 		saved.Candidate.SourceHash == "" || saved.Candidate.SourceHash != wantHash ||
 		!strings.Contains(string(saved.ScoreBreakdown), `"score":1.5`) {
 		t.Fatalf("saved record wrong: %+v", saved)
