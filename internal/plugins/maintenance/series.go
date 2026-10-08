@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/series.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: f6a7b8c9-d0e1-2345-f012-567890123456
-// last-edited: 2026-09-12
+// last-edited: 2026-10-07
 
 package maintenance
 

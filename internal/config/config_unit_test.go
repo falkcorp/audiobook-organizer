@@ -1,6 +1,6 @@
 // file: internal/config/config_unit_test.go
-// version: 1.14.0
-// last-edited: 2026-09-12
+// version: 1.15.0
+// last-edited: 2026-10-07
 
 package config
 

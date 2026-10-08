@@ -1,7 +1,7 @@
 // file: internal/server/server_undo_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-09-13
+// last-edited: 2026-10-07
 
 package server
 

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_unreviewable_bucket_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3b7e91c4-58d2-4a6f-9e13-c0a4f27d8b95
-// last-edited: 2026-10-05
+// last-edited: 2026-10-07
 
 // GET /metadata/cache/review?bucket=unreviewable lists the books the review
 // rail's chips count but the default list drops (owner request 2026-09-27:

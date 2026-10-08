@@ -1,7 +1,7 @@
 // file: internal/plugins/itunes/plugin_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: a7b8c9d0-e1f2-3456-ghij-567890123456
-// last-edited: 2026-09-25
+// last-edited: 2026-10-07
 
 package itunes
 

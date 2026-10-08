@@ -1,7 +1,7 @@
 // file: internal/itunes/itl_le.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: b4e8d927-6c3f-4a81-9e02-f7b3c8d4e56a
-// last-edited: 2026-09-02
+// last-edited: 2026-10-07
 
 package itunes
 

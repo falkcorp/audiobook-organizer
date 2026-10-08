@@ -1,7 +1,7 @@
 // file: internal/server/handlers/organize_library_copy_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 68af52f3-742d-4b0c-99ba-e3a73e2e0443
-// last-edited: 2026-09-30
+// last-edited: 2026-10-07
 
 package handlers_test
 

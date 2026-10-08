@@ -1,7 +1,7 @@
 // file: internal/server/registry_wire.go
-// version: 1.28.0
+// version: 1.29.0
 // guid: e2c1977d-0023-498f-81bd-76e9912eec89
-// last-edited: 2026-09-13
+// last-edited: 2026-10-07
 
 package server
 

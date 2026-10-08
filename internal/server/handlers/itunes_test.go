@@ -1,7 +1,7 @@
 // file: internal/server/handlers/itunes_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9c2a4e71-6b53-4d18-8f0a-2e7c1b9d3a64
-// last-edited: 2026-09-12
+// last-edited: 2026-10-07
 
 package handlers_test
 

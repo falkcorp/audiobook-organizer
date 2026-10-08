@@ -1,7 +1,7 @@
 // file: internal/itunes/itl_le_test.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: c5f9e038-7d4a-4b92-af13-g8c4d9e5f67b
-// last-edited: 2026-08-20
+// last-edited: 2026-10-07
 
 package itunes
 

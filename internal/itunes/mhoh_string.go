@@ -1,7 +1,7 @@
 // file: internal/itunes/mhoh_string.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 6f3b9d12-4a87-4c0e-9b21-7e5d2a8c1f04
-// last-edited: 2026-07-03
+// last-edited: 2026-10-07
 
 // iTunes-conformant mhoh string encoders/decoders (fable5 TASK-005, CRIT-1).
 //

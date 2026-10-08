@@ -1,5 +1,5 @@
 // file: internal/server/wire_media_routes.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: c9d0e1f2-a3b4-5678-cdef-901234567890
 // last-edited: 2026-10-07
 

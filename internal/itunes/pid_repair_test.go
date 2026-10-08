@@ -1,7 +1,7 @@
 // file: internal/itunes/pid_repair_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3e7b0a94-6c21-4d58-8f39-2a1c7e5b0d64
-// last-edited: 2026-08-04
+// last-edited: 2026-10-07
 
 package itunes
 

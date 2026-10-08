@@ -1,7 +1,7 @@
 // file: internal/config/persistence_test.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-09-12
+// last-edited: 2026-10-07
 
 package config
 

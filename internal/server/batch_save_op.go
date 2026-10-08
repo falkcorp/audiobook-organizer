@@ -1,7 +1,7 @@
 // file: internal/server/batch_save_op.go
-// version: 1.13.1
+// version: 1.14.0
 // guid: 3f2a1b4c-5d6e-7f8a-9b0c-1d2e3f4a5b6c
-// last-edited: 2026-09-14
+// last-edited: 2026-10-07
 //
 // batch_save_op registers the "metadata.batch-save" v2 OperationDef.
 // The HTTP handler batchWriteBackAudiobooks creates a v1 op record for

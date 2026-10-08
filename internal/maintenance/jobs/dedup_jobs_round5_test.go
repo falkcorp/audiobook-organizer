@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/dedup_jobs_round5_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8e4a1c73-2f6b-4d90-a5c8-3b7e9f1d2a64
-// last-edited: 2026-09-13
+// last-edited: 2026-10-07
 
 package jobs
 

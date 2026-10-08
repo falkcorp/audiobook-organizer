@@ -1,7 +1,7 @@
 // file: internal/server/server_middleware.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 6a093405-441a-4c14-a9c5-46326ea767c1
-// last-edited: 2026-09-14
+// last-edited: 2026-10-07
 
 package server
 

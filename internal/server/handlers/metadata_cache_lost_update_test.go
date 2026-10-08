@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_lost_update_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 6f1c2a84-9d3e-4b7a-a5c1-2e8f0d4b9c71
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 package handlers_test
 

@@ -1,7 +1,7 @@
 // file: internal/itunes/library_shape.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2b7e9c14-6a05-4d38-9f27-8c1b3a0e5d62
-// last-edited: 2026-07-23
+// last-edited: 2026-10-07
 //
 // Target-shape guard for the destructive rebuild writebacks. The DB-authoritative
 // /rebuild (ComputeITLDiff) and /rebuild-full (RebuildITLFromDB) were designed for a

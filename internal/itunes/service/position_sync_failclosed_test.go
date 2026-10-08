@@ -1,7 +1,7 @@
 // file: internal/itunes/service/position_sync_failclosed_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4c9e2a7f-6d13-4b80-95e1-a7f3d8c2b640
-// last-edited: 2026-09-19
+// last-edited: 2026-10-07
 
 package itunesservice
 

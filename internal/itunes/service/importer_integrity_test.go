@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_integrity_test.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 9c1d7e2f-3a4b-4c5d-8e6f-0a1b2c3d4e5f
-// last-edited: 2026-09-13
+// last-edited: 2026-10-07
 //
 // Integrity-finding regression tests from the 2026-07-17 multi-discipline
 // review:

@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_single.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: d6a0e5f4-a7b8-9c01-bd2e-3f4a5b6c7d8e
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 package audiobooks
 

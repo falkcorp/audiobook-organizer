@@ -1,7 +1,7 @@
 // file: internal/config/itunes_libraries_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8a1c4e70-2d63-4b95-9f28-5c0e7a3b1d46
-// last-edited: 2026-07-23
+// last-edited: 2026-10-07
 
 package config
 

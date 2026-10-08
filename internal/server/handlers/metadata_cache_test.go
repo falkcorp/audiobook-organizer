@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_test.go
-// version: 2.12.0
+// version: 2.13.0
 // guid: 6b1c0a94-2f7d-4c8e-9a15-3d0e7b28c4f1
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 // Tests for BatchApplyFromCache's DISPATCH behaviour.
 //

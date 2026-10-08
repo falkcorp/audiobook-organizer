@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler_asin_conflict_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4a8e2f63-1c9d-4b07-95e3-d6b0c7a1f248
-// last-edited: 2026-10-05
+// last-edited: 2026-10-07
 
 package metadatahandler_test
 

@@ -1,7 +1,7 @@
 // file: internal/itunes/pid_repair.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5a9d3c62-7e14-4b80-9f26-1c8b0a3e6d47
-// last-edited: 2026-07-23
+// last-edited: 2026-10-07
 //
 // Backfill repair for duplicate book_file iTunes PIDs (the ~8,987 the census
 // found). A PID must identify exactly one book_file; where several rows share one

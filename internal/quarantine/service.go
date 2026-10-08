@@ -1,7 +1,7 @@
 // file: internal/quarantine/service.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-10-03
+// last-edited: 2026-10-07
 
 package quarantine
 

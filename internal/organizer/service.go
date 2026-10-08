@@ -1,7 +1,7 @@
 // file: internal/organizer/service.go
-// version: 1.57.0
+// version: 1.58.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
-// last-edited: 2026-10-04
+// last-edited: 2026-10-07
 
 package organizer
 

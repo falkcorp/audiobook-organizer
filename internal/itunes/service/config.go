@@ -1,6 +1,7 @@
 // file: internal/itunes/service/config.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6d05155e-42e3-4319-a2a7-2e80d10be2aa
+// last-edited: 2026-10-07
 
 package itunesservice
 

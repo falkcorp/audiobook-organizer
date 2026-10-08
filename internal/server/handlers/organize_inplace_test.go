@@ -1,7 +1,7 @@
 // file: internal/server/handlers/organize_inplace_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9a4c7e21-5d3b-4f80-b6e2-1c8d0a7f3e94
-// last-edited: 2026-09-28
+// last-edited: 2026-10-07
 
 package handlers_test
 

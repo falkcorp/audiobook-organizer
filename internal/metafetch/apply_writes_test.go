@@ -1,7 +1,7 @@
 // file: internal/metafetch/apply_writes_test.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 5d095e77-781b-4acb-8d3f-c564f5f88f77
-// last-edited: 2026-09-14
+// last-edited: 2026-10-07
 //
 // Pins that a metadata apply writes every selected field, never a deselected
 // one, records provenance for every field it writes, downloads the new cover,

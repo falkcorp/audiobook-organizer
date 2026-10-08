@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_wiring.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 571bfbf4-238b-49cb-a6d8-b302921dd1c4
-// last-edited: 2026-10-02
+// last-edited: 2026-10-07
 
 package metafetch
 

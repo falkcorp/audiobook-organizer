@@ -1,5 +1,6 @@
 // file: internal/metafetch/lifecycle.go
-// version: 1.5.0
+// version: 1.6.0
+// last-edited: 2026-10-07
 
 // Lifecycle methods on *metafetch.Service that the serviceregistry
 // container picks up via interface satisfaction. PostInit wires the

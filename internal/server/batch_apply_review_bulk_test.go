@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_review_bulk_test.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 5f2c8a91-3d6e-4b17-9a40-c7e1b5d3f820
-// last-edited: 2026-09-27
+// last-edited: 2026-10-07
 //
 // Owner ruling 2026-09-27: EVERY apply button on the /review page (single
 // row, Apply selected, Apply page, Apply high confidence, group Apply All) is

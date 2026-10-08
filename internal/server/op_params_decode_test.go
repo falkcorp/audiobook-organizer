@@ -1,7 +1,7 @@
 // file: internal/server/op_params_decode_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5a7c1e93-2d84-4f60-b1a7-9e3c05d8f271
-// last-edited: 2026-08-24
+// last-edited: 2026-10-07
 
 package server
 

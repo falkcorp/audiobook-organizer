@@ -1,7 +1,7 @@
 // file: internal/server/op_preview_default_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9d4e2f7a-3c61-4b85-8e02-5a7b1c9d6e34
-// last-edited: 2026-09-25
+// last-edited: 2026-10-07
 
 package server
 

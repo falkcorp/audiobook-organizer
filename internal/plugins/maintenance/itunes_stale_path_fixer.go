@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/itunes_stale_path_fixer.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2b2165f1-de86-4181-9a6d-4ed73bb98fbc
 // last-edited: 2026-10-07
 

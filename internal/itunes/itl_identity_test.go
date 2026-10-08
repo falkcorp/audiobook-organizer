@@ -1,7 +1,7 @@
 // file: internal/itunes/itl_identity_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 8b3c4d5e-6f7a-4b8c-9d0e-2f3a4b5c6d7e
-// last-edited: 2026-09-02
+// last-edited: 2026-10-07
 //
 // Tests for the library-identity fingerprint (K13) and expected-magnitude
 // (K14) guards — the external-truth anchors added after the July 2026

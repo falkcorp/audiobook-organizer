@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/dedup_books.go
-// version: 3.8.0
+// version: 3.9.0
 // guid: a1000010-0000-0000-0000-000000000010
-// last-edited: 2026-10-02
+// last-edited: 2026-10-07
 
 package jobs
 

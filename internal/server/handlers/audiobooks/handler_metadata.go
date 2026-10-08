@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_metadata.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 591661c3-5e87-4559-9a08-3203eec4fb68
-// last-edited: 2026-10-05
+// last-edited: 2026-10-07
 
 // Metadata-history / undo / field-state / path-history / external-id /
 // changelog / changes endpoints for the audiobooks domain. Split out of

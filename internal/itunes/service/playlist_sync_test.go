@@ -1,7 +1,7 @@
 // file: internal/itunes/service/playlist_sync_test.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 502086aa-eba7-403d-96e5-b82be1dbaecb
-// last-edited: 2026-09-13
+// last-edited: 2026-10-07
 
 package itunesservice
 

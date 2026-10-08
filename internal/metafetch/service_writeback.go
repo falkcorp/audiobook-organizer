@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_writeback.go
-// version: 1.22.1
+// version: 1.23.0
 // guid: fad73c11-30c2-4fdc-addd-45afef25d792
-// last-edited: 2026-09-27
+// last-edited: 2026-10-07
 
 package metafetch
 

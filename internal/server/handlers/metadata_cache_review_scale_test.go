@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_review_scale_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3f7b2d90-5c1e-4a86-9e43-8b6d1f0c2a75
-// last-edited: 2026-10-04
+// last-edited: 2026-10-07
 
 package handlers
 

@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_live_author_test.go
-// version: 1.0.4
+// version: 1.1.0
 // guid: 6b0e3f27-94c1-4a8d-b2e5-1d7c9a4f0e63
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 //
 // The certainty gate must judge a candidate against the book's LIVE author
 // (AuthorID and the book_authors join), never the denormalized Book.Author

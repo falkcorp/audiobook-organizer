@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_gate_test.go
-// version: 1.4.2
+// version: 1.5.0
 // guid: 8b4f2d70-1e9a-4c63-a7d5-f0c3e6b91a24
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 //
 // The certainty gate on both bulk-apply paths, and the dry run's read-only
 // contract.

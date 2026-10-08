@@ -1,7 +1,7 @@
 // file: internal/deluge/import.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-09-19
+// last-edited: 2026-10-07
 //
 // ImportToLibrary copies a Deluge-managed file into the library root,
 // updates the BookFile record, and optionally tells Deluge to move

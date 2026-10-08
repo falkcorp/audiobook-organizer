@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.75.11 -->
+<!-- version: 10.76.0 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-07 -->
 
@@ -485,7 +485,7 @@ into one of the curated sections below, is a normal direct edit.
       one of two things: every author writer refreshes the snapshot, or the
       snapshot is dropped from the row and hydrated from `AuthorID` on read.
 
-- [ ] **ITUNES-WB-STAGING** The iTunes write-back batch is repeatedly REJECTED
+- [x] **ITUNES-WB-STAGING** The iTunes write-back batch is repeatedly REJECTED — ✅ CLOSED 2026-10-07: superseded, iTunes write-back removed (iTunes is import-only; docs/plans/2026-10-07-remove-itunes-writeback.md).
       by `ITLSafetyContract`: a track location contains the staging marker
       `.itunes-writeback/`, and the contract refuses to write any location
       under that marker. The batch retries and is refused again on every
@@ -599,7 +599,7 @@ into one of the curated sections below, is a normal direct edit.
   - **`/dedup/purge-legacy-fp` route vs op `dedup.purge-legacy-fp-candidates`.** The audit flags the mismatch under class 8. It is a route-name question, not an op ID, so it was left alone.
   - **Alias removal.** Delete a FormerID only after `audiobook_organizer_operation_deprecated_def_id_total{alias=...}` has stayed flat for a long window AND no stored row can still carry the ID.
 
-- [ ] **OPS-PREVIEW-HTTP-ENDPOINTS** Owner decision needed: five HTTP endpoints outside the op registry write on an omitted `dry_run` (`POST /discovery/import` defaults LIVE and swallows bind errors; `POST /audiobooks/bulk-write-back` enqueues `library.bulk-write-back`; `POST /itunes/pid-repair`; `POST /itunes/rebuild` and `/rebuild-full` read `?dry_run` only). The 2026-09-25 preview-by-default rule was stated for operations; flipping these changes what existing UI buttons do. List + evidence: `docs/audits/2026-09-25-op-preview-default-inventory.md` section 7. They are allowlisted in `internal/operations/opmode/guard_test.go`; remove each entry when its endpoint is converted. — ❓ owner decision 2026-10-03: make the 5 non-registry endpoints preview-by-default (breaking API change) or keep LIVE default?
+- [ ] **OPS-PREVIEW-HTTP-ENDPOINTS** Owner decision needed: five HTTP endpoints outside the op registry write on an omitted `dry_run` (`POST /discovery/import` defaults LIVE and swallows bind errors; `POST /audiobooks/bulk-write-back` enqueues `library.bulk-write-back`; `POST /itunes/pid-repair`; `POST /itunes/rebuild` and `/rebuild-full` read `?dry_run` only — both removed 2026-10-07 with iTunes write-back, so three remain). The 2026-09-25 preview-by-default rule was stated for operations; flipping these changes what existing UI buttons do. List + evidence: `docs/audits/2026-09-25-op-preview-default-inventory.md` section 7. They are allowlisted in `internal/operations/opmode/guard_test.go`; remove each entry when its endpoint is converted. — ❓ owner decision 2026-10-03: make the 5 non-registry endpoints preview-by-default (breaking API change) or keep LIVE default?
 - [ ] **OPS-WITHOUT-PREVIEW-MODE** 112 registered ops have no mode flag at all and run their only mode on `{}`; many declare `library.write` (library.organize, library.scan, reconcile.apply, entities.author-merge, dedup.book-merge, the scheduler.* cleanups, ...). Decide which need a preview mode. Inventory section 5. — ❓ owner decision 2026-10-03: which library.write ops get a preview mode, and in what order?
 - [ ] **DURATION-BACKFILL-ONTO-OPMODE** Move `maintenance.duration-backfill`'s inline dry_run/dryRun resolution (`internal/plugins/maintenance/duration_backfill.go` ~:482-494) onto `opmode.ResolveDryRun` and add it to `TestOps_DryRunRoutesThroughOpmode`. Skipped on 2026-09-25 because another agent was editing the duration files on proposed-main.
 
@@ -18375,7 +18375,7 @@ condition, not a regression. Verify through `books.jdfalk.com` instead.
   library's own media root (LibrarySet). See `docs/specs/2026-07-23-itunes-2way-p0-findings.md`
   (P0 status table) + `docs/specs/2026-07-23-itunes-2way-sync-system-design.md` §4–6.
 
-- [ ] **`isAudiobookITL` under-classifies audiobooks (fail-safe, but fix carefully).**
+- [x] **`isAudiobookITL` under-classifies audiobooks (fail-safe, but fix carefully).** — ✅ CLOSED 2026-10-07: superseded, iTunes write-back removed (iTunes is import-only; docs/plans/2026-10-07-remove-itunes-writeback.md).
   P0 cross-type census (§F5) found it misses `Audio Book`/`audio book` (it checks the
   substring `"audiobook"` with NO space — 705 tracks on prod) and every literary-genre
   audiobook (Science Fiction, Fantasy, Suspense, Comedy, …) — 3,436 AO-owned audiobooks
@@ -18404,7 +18404,7 @@ condition, not a regression. Verify through `books.jdfalk.com` instead.
   `TestITLRelocateContractStatus` (env-gated). See
   `docs/specs/2026-07-23-itunes-2way-p0-findings.md` §F7.
 
-- [ ] **iTunes 2-way-sync — continuation (P3 redefine + reverse sync + footgun audit).**
+- [x] **iTunes 2-way-sync — continuation (P3 redefine + reverse sync + footgun audit).** — ✅ CLOSED 2026-10-07: superseded, iTunes write-back removed (iTunes is import-only; docs/plans/2026-10-07-remove-itunes-writeback.md).
   P1 relocate is applied+verified on prod (6,414). Still open, per
   `docs/plans/2026-07-23-itunes-2way-sync-continuation.md`: (1) redefine the P3
   merged-track removal to provable-duplicates-only (version_group/MergedIntoBookID
@@ -18426,7 +18426,7 @@ condition, not a regression. Verify through `books.jdfalk.com` instead.
   census to confirm 0 duplicates → review the 3 ambiguous groups by hand. See
   `docs/specs/2026-07-23-itunes-2way-sync-continuation-findings.md` §1.5b.
 
-- [ ] **iTunes 2-way sync writeback (edit-in-place, preserve play-state).** The deployed
+- [x] **iTunes 2-way sync writeback (edit-in-place, preserve play-state).** The deployed — ✅ CLOSED 2026-10-07: superseded, iTunes write-back removed (iTunes is import-only; docs/plans/2026-10-07-remove-itunes-writeback.md).
   `rebuild-full` writeback regenerates the library (12,193 tracks / 14 playlists) vs the real
   97,782 / 356 — valid but lossy (no play counts, ratings, playback bookmarks, music/podcasts,
   user playlists). Redirect to surgical edit-in-place via `UpdateITLLocations`, scope-gated by

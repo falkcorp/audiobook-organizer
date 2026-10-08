@@ -1,9 +1,15 @@
 <!-- file: docs/plans/2026-10-07-itunes-writeback-drops.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 0e2814b6-f75b-4376-803f-8aa1903a0f21 -->
 <!-- last-edited: 2026-10-07 -->
 
 # Plan: the iTunes write-back drops every batch
+
+> **Superseded 2026-10-07.** The owner dropped iTunes write-back: "Drop itunes
+> writeback. We will do import only and then not care." The code this plan
+> changed was removed; see
+> [`2026-10-07-remove-itunes-writeback.md`](2026-10-07-remove-itunes-writeback.md).
+> Kept for the record only.
 
 Branch `fix/itunes-writeback-drops`, worktree `aorg-itunes-writeback`, based on
 origin/main `0135c2308`. The owner approved "Fix now"; the plan was pre-approved,

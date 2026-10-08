@@ -128,7 +128,6 @@ func TestMergeBooks_AllowsFullyScannedBooks(t *testing.T) {
 	// The loser (book-2) is written twice: the version-group loop, then
 	// SoftDeleteBook.
 	expectModifyBookTimes(mockStore, book2, 2)
-	mockStore.EXPECT().GetExternalIDsForBook("book-2").Return(nil, nil)
 	mockStore.EXPECT().ReassignExternalIDs("book-2", "book-1").Return(nil)
 	expectUserStateFollow(mockStore, "book-2", "book-1")
 

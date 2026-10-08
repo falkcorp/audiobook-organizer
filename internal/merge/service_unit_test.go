@@ -152,8 +152,7 @@ func TestUnit_MergeBooks_AutoSelectM4B(t *testing.T) {
 	expectModifyBookTimes(mockStore, book1, 2)
 	expectModifyBook(mockStore, book2)
 
-	// Loser cleanup: GetExternalIDsForBook, ReassignExternalIDs, then SoftDeleteBook
-	mockStore.EXPECT().GetExternalIDsForBook("book-1").Return(nil, nil)
+	// Loser cleanup: ReassignExternalIDs, then SoftDeleteBook
 	mockStore.EXPECT().ReassignExternalIDs("book-1", "book-2").Return(nil)
 	expectUserStateFollow(mockStore, "book-1", "book-2")
 
@@ -183,7 +182,6 @@ func TestUnit_MergeBooks_ExplicitPrimaryOverridesAuto(t *testing.T) {
 	expectModifyBookTimes(mockStore, book2, 2)
 
 	// Loser is book-2 (explicit override)
-	mockStore.EXPECT().GetExternalIDsForBook("book-2").Return(nil, nil)
 	mockStore.EXPECT().ReassignExternalIDs("book-2", "book-1").Return(nil)
 	expectUserStateFollow(mockStore, "book-2", "book-1")
 

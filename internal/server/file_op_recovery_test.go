@@ -1,7 +1,7 @@
 // file: internal/server/file_op_recovery_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2b8e5d17-4c6a-49f3-a0e1-7d93c5b28f46
-// last-edited: 2026-09-12
+// last-edited: 2026-10-07
 
 package server
 

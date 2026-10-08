@@ -1,7 +1,7 @@
 // file: internal/server/server_bulk_fetch_metadata_test.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 2b1c0d9e-8f7a-6b5c-4d3e-2f1a0b9c8d7e
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 package server
 
