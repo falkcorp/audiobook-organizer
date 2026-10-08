@@ -152,8 +152,8 @@ func (s *Server) isProtectedPath(filePath string) bool {
 			return true
 		}
 	}
-	if config.AppConfig.ITunes.LibraryWritePath != "" {
-		itunesDir := filepath.Dir(config.AppConfig.ITunes.LibraryWritePath)
+	if config.AppConfig.ITunes.LibraryITLPath != "" {
+		itunesDir := filepath.Dir(config.AppConfig.ITunes.LibraryITLPath)
 		itunesAbs, _ := filepath.Abs(itunesDir)
 		if strings.HasPrefix(absPath, itunesAbs+"/") || absPath == itunesAbs {
 			return true

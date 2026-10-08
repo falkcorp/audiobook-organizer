@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"testing"
 
@@ -449,7 +450,6 @@ func TestInitConfigDefaults(t *testing.T) {
 	t.Run("iTunes defaults", func(t *testing.T) {
 		assert.True(t, AppConfig.ITunes.SyncEnabled)
 		assert.Equal(t, 30, AppConfig.ITunes.SyncInterval)
-		assert.False(t, AppConfig.ITunes.AutoWriteBack)
 	})
 
 	t.Run("auto-update defaults", func(t *testing.T) {
@@ -513,7 +513,7 @@ func TestInitConfigITunesBackwardCompat(t *testing.T) {
 		viper.Reset()
 		viper.Set("itunes_library_itl_path", "/old/path.itl")
 		InitConfig()
-		assert.Equal(t, "/old/path.itl", AppConfig.ITunes.LibraryWritePath)
+		assert.Equal(t, "/old/path.itl", AppConfig.ITunes.LibraryITLPath)
 	})
 
 	t.Run("old itunes_library_xml_path maps to read path", func(t *testing.T) {
@@ -528,16 +528,28 @@ func TestInitConfigITunesBackwardCompat(t *testing.T) {
 		viper.Set("itunes_library_write_path", "/new/path.itl")
 		viper.Set("itunes_library_itl_path", "/old/path.itl")
 		InitConfig()
-		assert.Equal(t, "/new/path.itl", AppConfig.ITunes.LibraryWritePath)
+		assert.Equal(t, "/new/path.itl", AppConfig.ITunes.LibraryITLPath)
 	})
 }
 
-func TestInitConfigITLWriteBackAutoEnable(t *testing.T) {
+// A configured ITL path no longer turns anything on: iTunes write-back was
+// removed on 2026-10-07, and the old rule that auto-enabled it whenever
+// library_write_path was set (overriding ITUNES_WRITE_BACK_ENABLED=false in
+// prod) went with it. The removed keys still load without error.
+func TestInitConfigITLPathEnablesNoWriteBack(t *testing.T) {
 	viper.Reset()
+	t.Setenv("ITUNES_WRITE_BACK_ENABLED", "true")
+	t.Setenv("ITUNES_AUTO_WRITE_BACK", "true")
+	t.Setenv("ITUNES_WRITEBACK_DRYRUN", "true")
 	viper.Set("itunes_library_write_path", "/some/path.itl")
-	viper.Set("itl_write_back_enabled", false)
+	viper.Set("itl_write_back_enabled", true)
+	viper.Set("itunes.write_back_enabled", true)
+	viper.Set("itunes.auto_write_back", true)
+	viper.Set("itunes.write_back_dry_run", true)
 	InitConfig()
-	assert.True(t, AppConfig.ITunes.WriteBackEnabled, "should auto-enable when write path is set")
+	assert.Equal(t, "/some/path.itl", AppConfig.ITunes.LibraryITLPath)
+	_, ok := reflect.TypeOf(ITunesConfig{}).FieldByName("WriteBackEnabled")
+	assert.False(t, ok, "ITunesConfig must carry no write-back switch")
 }
 
 func TestInitConfigOpenLibraryDumpDir(t *testing.T) {
@@ -621,8 +633,8 @@ func TestApplySettingStringKeys(t *testing.T) {
 		{"log_level", "debug", func() string { return AppConfig.LogLevel }},
 		{"log_format", "json", func() string { return AppConfig.LogFormat }},
 		{"auto_update_channel", "beta", func() string { return AppConfig.AutoUpdate.Channel }},
-		{"itunes_library_write_path", "/itl/path", func() string { return AppConfig.ITunes.LibraryWritePath }},
-		{"itunes_library_itl_path", "/itl/path2", func() string { return AppConfig.ITunes.LibraryWritePath }},
+		{"itunes_library_write_path", "/itl/path", func() string { return AppConfig.ITunes.LibraryITLPath }},
+		{"itunes_library_itl_path", "/itl/path2", func() string { return AppConfig.ITunes.LibraryITLPath }},
 		{"itunes_library_read_path", "/xml/path", func() string { return AppConfig.ITunes.LibraryReadPath }},
 		{"itunes_library_xml_path", "/xml/path2", func() string { return AppConfig.ITunes.LibraryReadPath }},
 		{"basic_auth_username", "admin", func() string { return AppConfig.BasicAuthUsername }},
@@ -659,8 +671,6 @@ func TestApplySettingBoolKeys(t *testing.T) {
 		{"auto_update_enabled", func() bool { return AppConfig.AutoUpdate.Enabled }},
 		{"purge_soft_deleted_delete_files", func() bool { return AppConfig.PurgeSoftDeletedDeleteFiles }},
 		{"itunes_sync_enabled", func() bool { return AppConfig.ITunes.SyncEnabled }},
-		{"itl_write_back_enabled", func() bool { return AppConfig.ITunes.WriteBackEnabled }},
-		{"itunes_auto_write_back", func() bool { return AppConfig.ITunes.AutoWriteBack }},
 		{"maintenance_window_enabled", func() bool { return AppConfig.Maintenance.Enabled }},
 		{"maintenance_window_dedup_refresh", func() bool { return AppConfig.Maintenance.DedupRefresh }},
 		{"maintenance_window_series_prune", func() bool { return AppConfig.Maintenance.SeriesPrune }},

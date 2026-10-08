@@ -72,7 +72,7 @@ func TestDDMergeDuplicateBook_PrimaryChangedAfterPlanIsReplanned(t *testing.T) {
 		ddSetGroup(t, s, z.ID, vg, &yes)
 	}}
 
-	if err := ddMergeDuplicateBook(store, keeper, dup, false, nil); err != nil {
+	if err := ddMergeDuplicateBook(store, keeper, dup, false); err != nil {
 		t.Fatalf("err = %v, want the merge to finish on a fresh plan", err)
 	}
 	if g := ddMustGet(t, s, dup.ID); !g.IsSoftDeleted() {
@@ -115,7 +115,7 @@ func TestDDMergeDuplicateBook_SuccessorRetiredAfterPlanIsReplanned(t *testing.T)
 		}
 	}}
 
-	if err := ddMergeDuplicateBook(store, ddMustGet(t, s, keeper.ID), ddMustGet(t, s, dup.ID), false, nil); err != nil {
+	if err := ddMergeDuplicateBook(store, ddMustGet(t, s, keeper.ID), ddMustGet(t, s, dup.ID), false); err != nil {
 		t.Fatalf("err = %v, want the merge to finish on a fresh plan", err)
 	}
 	if g := ddMustGet(t, s, dup.ID); !g.IsSoftDeleted() {
@@ -160,7 +160,7 @@ func TestDDMergeDuplicateBook_RetireStillRefusedIsAFailureNamingTheDup(t *testin
 	const vg = "vg-keeps-changing"
 	keeper, dup, file := ddPrimaryPair(t, s, vg)
 
-	err := ddMergeDuplicateBook(ddFlipOnRetire{PebbleStore: s, dupID: dup.ID}, keeper, dup, false, nil)
+	err := ddMergeDuplicateBook(ddFlipOnRetire{PebbleStore: s, dupID: dup.ID}, keeper, dup, false)
 	if err == nil {
 		t.Fatal("err = nil, want a failure: the dup could not be retired")
 	}
@@ -200,7 +200,7 @@ func TestDDMergeDuplicateBook_DryRunRefusesRetiredLikeApply(t *testing.T) {
 			sim := newDDSim()
 			sim.retire(gone.ID, "")
 			k, d := *keeper, *dup
-			if err := ddMergeDuplicateBookSim(s, sim, &k, &d, true, nil); !errors.Is(err, errDDRefused) {
+			if err := ddMergeDuplicateBookSim(s, sim, &k, &d, true); !errors.Is(err, errDDRefused) {
 				t.Fatalf("dry-run err = %v, want errDDRefused", err)
 			}
 
@@ -212,7 +212,7 @@ func TestDDMergeDuplicateBook_DryRunRefusesRetiredLikeApply(t *testing.T) {
 				t.Fatal(err)
 			}
 			k, d = *keeper, *dup
-			if err := ddMergeDuplicateBookSim(s, newDDSim(), &k, &d, false, nil); !errors.Is(err, errDDRefused) {
+			if err := ddMergeDuplicateBookSim(s, newDDSim(), &k, &d, false); !errors.Is(err, errDDRefused) {
 				t.Fatalf("apply err = %v, want errDDRefused", err)
 			}
 		})

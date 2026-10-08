@@ -80,7 +80,7 @@ func TestApply_PinFromAStaleReviewSnapshotIsRefused(t *testing.T) {
 
 	svc := &fakeApplySvc{candidates: candidateJSON(t, newCand)}
 	books := fakeBooks{book.ID: book}
-	out := applyCachedCandidateForBookTimed(svc, books, nil, book.ID, true, nil, metafetch.NewApplyPhaseTimings(), nil, &pin, "")
+	out := applyCachedCandidateForBookTimed(svc, books, book.ID, true, nil, metafetch.NewApplyPhaseTimings(), nil, &pin, "")
 	require.False(t, out.Applied)
 	require.Equal(t, applySkipStaleCandidate, out.Reason)
 	require.Empty(t, svc.appliedIDs)

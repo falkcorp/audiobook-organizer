@@ -943,7 +943,8 @@ func TestMigrateITunesFields_FlatBlob(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, true, it["sync_enabled"])
 	assert.Equal(t, float64(30), it["sync_interval"])
-	assert.Equal(t, false, it["write_back_enabled"])
+	assert.NotContains(t, it, "write_back_enabled", "iTunes write-back was removed; the flat key is dropped")
+	assert.NotContains(t, it, "auto_write_back")
 	assert.Equal(t, "/mnt/itunes.itl", it["library_write_path"])
 	assert.Equal(t, true, it["path_trim_enabled"])
 	assert.Equal(t, "/data", result["root_dir"])
@@ -1238,4 +1239,32 @@ func TestLoadConfigFromDatabaseEnvAuthoritative(t *testing.T) {
 		assert.Equal(t, 42, AppConfig.ITunes.SyncInterval,
 			"UI-managed itunes value must survive the env overlay untouched")
 	})
+}
+
+// A stored config written before iTunes write-back was removed (2026-10-07)
+// still carries itunes.write_back_enabled / auto_write_back /
+// write_back_dry_run, and the flat itl_write_back_enabled /
+// itunes_auto_write_back settings rows. It must load without error, keep the
+// ITL path, and turn nothing on.
+func TestLoadConfigFromDatabase_RemovedITunesWriteBackKeysLoad(t *testing.T) {
+	resetConfigTestState()
+	t.Cleanup(resetConfigTestState)
+
+	blob := `{"itunes":{"sync_enabled":true,"sync_interval":30,` +
+		`"write_back_enabled":true,"auto_write_back":true,"write_back_dry_run":true,` +
+		`"library_write_path":"/mnt/ao/iTunes Library.itl","library_read_path":"/mnt/orig/iTunes Library.xml"}}`
+
+	store := mocks.NewMockStore(t)
+	setupMigrationExpectations(store)
+	store.On("SetSetting", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	store.EXPECT().GetAllSettings().Return([]database.Setting{
+		{Key: "config_blob", Value: blob, Type: "string"},
+		{Key: "itl_write_back_enabled", Value: "true", Type: "bool"},
+		{Key: "itunes_auto_write_back", Value: "true", Type: "bool"},
+	}, nil).Once()
+
+	require.NoError(t, LoadConfigFromDatabase(store))
+	assert.Equal(t, "/mnt/ao/iTunes Library.itl", AppConfig.ITunes.LibraryITLPath)
+	assert.Equal(t, "/mnt/orig/iTunes Library.xml", AppConfig.ITunes.LibraryReadPath)
+	assert.True(t, AppConfig.ITunes.SyncEnabled)
 }

@@ -117,15 +117,6 @@ func bulkManualOnlyGuard(books bookReader, book *database.Book, rowApproval bool
 	return applygate.BulkManualOnlyGuard(applygate.ManualOnlyReaders{Files: books, Series: books, Authors: books, Tags: books}, book, searchQuery)
 }
 
-// itunesEnqueuer mirrors handlers.WriteBackEnqueuer: the iTunes library sync
-// batcher, which does NOT touch audio tags. Named explicitly here because
-// confusing it for the tag writer is exactly the defect this path once had —
-// metadata landed in the database, the iTunes batcher was enqueued, and no audio
-// file was ever written.
-type itunesEnqueuer interface {
-	Enqueue(bookID string)
-}
-
 // applyOutcome is the result of applying one book's cached candidate.
 type applyOutcome struct {
 	Applied bool
@@ -664,12 +655,11 @@ func fetchTimeIdentity(fetchedTitle, fetchedAuthor, searchQuery string, book *da
 func applyCachedCandidateForBook(
 	svc cachedApplyService,
 	books bookReader,
-	itunes itunesEnqueuer,
 	id string,
 	writeBack bool,
 	checkpoint func() error,
 ) applyOutcome {
-	return applyCachedCandidateForBookTimed(svc, books, itunes, id, writeBack, checkpoint, metafetch.NewApplyPhaseTimings(), nil, nil, "")
+	return applyCachedCandidateForBookTimed(svc, books, id, writeBack, checkpoint, metafetch.NewApplyPhaseTimings(), nil, nil, "")
 }
 
 // applyCachedCandidateForBookTimed is applyCachedCandidateForBook recording
@@ -683,7 +673,6 @@ func applyCachedCandidateForBook(
 func applyCachedCandidateForBookTimed(
 	svc cachedApplyService,
 	books bookReader,
-	itunes itunesEnqueuer,
 	id string,
 	writeBack bool,
 	checkpoint func() error,
@@ -767,12 +756,6 @@ func applyCachedCandidateForBookTimed(
 			failWriteBack(err)
 		}
 		return out
-	}
-
-	// iTunes library sync is enqueued BEFORE the file work (matching the
-	// single-book path) so a failure writing tags cannot lose it.
-	if itunes != nil {
-		itunes.Enqueue(id)
 	}
 
 	// Cover download, then the file I/O (the rename lives in there), then the

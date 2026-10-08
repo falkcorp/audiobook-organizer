@@ -175,10 +175,10 @@ func TestDedupBooks_StaleKeeperCopyDryRunMatchesApply(t *testing.T) {
 		k1, m1 := *books["K"], *books["M1"]
 		x, k2 := *books["X"], *books["K"] // k2: phase 3's stale copy of K
 		sim := newDDSim()
-		if err := ddMergeDuplicateBookSim(s, sim, &k1, &m1, dry, nil); err != nil {
+		if err := ddMergeDuplicateBookSim(s, sim, &k1, &m1, dry); err != nil {
 			t.Fatalf("dry=%v phase-2 merge: %v", dry, err)
 		}
-		if err := ddMergeDuplicateBookSim(s, sim, &x, &k2, dry, nil); err != nil {
+		if err := ddMergeDuplicateBookSim(s, sim, &x, &k2, dry); err != nil {
 			t.Fatalf("dry=%v phase-3 merge: %v", dry, err)
 		}
 		for _, id := range sim.handoffs {

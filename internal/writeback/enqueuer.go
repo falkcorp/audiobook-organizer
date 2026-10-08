@@ -1,17 +1,14 @@
 // file: internal/writeback/enqueuer.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5c255544-6862-47a8-bb9f-cce7630ecba5
-// last-edited: 2026-05-01
+// last-edited: 2026-10-07
 
 package writeback
 
-import itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
-
-// Enqueuer is a type alias for itunesservice.Enqueuer. The canonical
-// interface lives in internal/itunes/service/enqueuer.go; this alias
-// lets writeback-package callers use `writeback.Enqueuer` without
-// importing the itunes/service package directly.
-type Enqueuer = itunesservice.Enqueuer
-
-// Compile-time proof *itunesservice.WriteBackBatcher satisfies Enqueuer.
-var _ Enqueuer = (*itunesservice.WriteBackBatcher)(nil)
+// Enqueuer is the batcher surface the outbox replays into. The iTunes
+// write-back batcher that implemented it was removed on 2026-10-07 (iTunes is
+// an import-only source); nothing in the tree imports this package any more,
+// and it is slated for deletion.
+type Enqueuer interface {
+	Enqueue(bookID string)
+}

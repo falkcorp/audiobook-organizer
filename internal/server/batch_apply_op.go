@@ -445,14 +445,6 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 					applied.Load(), notApplied.Load(), writeFailed.Load())
 			})
 
-			// itunes may be a typed nil (*itunesservice.WriteBackBatcher)(nil), which
-			// is NOT == nil once boxed in an interface. Normalize to an untyped nil
-			// so the guard inside applyCachedCandidateForBook actually fires.
-			var itunes itunesEnqueuer
-			if s.writeBackBatcher != nil {
-				itunes = s.writeBackBatcher
-			}
-
 			// The file work runs inline in the op's own worker, NOT via
 			// fileIOPool.Submit as the old handler did. That is deliberate and is
 			// the whole point of the change: Submit returns immediately, so an op
@@ -524,7 +516,7 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 					}
 					defer releaseFileWrite()
 				}
-				out := applyCachedCandidateForBookTimed(svc, applyBooks, itunes, id, p.WriteBack,
+				out := applyCachedCandidateForBookTimed(svc, applyBooks, id, p.WriteBack,
 					func() error { return opsregistry.ScanStandDownCheckpoint(ctx) }, pt, claims, p.pinOf(id), p.Mode)
 
 				if out.OwnerReviewed && out.Gate != nil {

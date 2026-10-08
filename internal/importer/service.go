@@ -21,7 +21,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
-	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
@@ -95,19 +94,12 @@ type collisionStore interface {
 
 type ImportService struct {
 	db          Store
-	provisioner *itunesservice.TrackProvisioner
 	dedupEngine *dedup.Engine
 	// opRegistry is the UOS operation registry. When set and
 	// config.AppConfig.Dedup.OnImportViaScheduler is true, post-import dedup
 	// checks are routed through the scheduler (dedup.check-book op) instead
 	// of the eager goroutine. Nil when the registry is not yet available.
 	opRegistry sdk.Registry
-}
-
-// SetTrackProvisioner wires the iTunes track provisioner for newly-imported
-// books. Pass nil to disable ITL track provisioning (e.g. in tests).
-func (is *ImportService) SetTrackProvisioner(p *itunesservice.TrackProvisioner) {
-	is.provisioner = p
 }
 
 func (is *ImportService) SetDedupEngine(e *dedup.Engine) {
@@ -405,14 +397,6 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 	if bfErr := is.db.CreateBookFile(bf); bfErr != nil {
 		slog.Warn("import: could not create book_file row — the book has no route to its audio, and organize will skip it",
 			"book_id", created.ID, "path", created.FilePath, "err", bfErr)
-	}
-
-	// Provision ITL track via the injected iTunes service.
-	// Nil provisioner → iTunes disabled or not wired; book is still created.
-	if is.provisioner != nil {
-		if err := is.provisioner.ProvisionAll(created); err != nil {
-			slog.Warn("ITL track provisioning failed", "id", created.ID, "err", err)
-		}
 	}
 
 	// Post-import dedup check — two paths, selected by config flag:

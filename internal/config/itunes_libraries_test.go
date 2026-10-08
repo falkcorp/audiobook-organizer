@@ -15,10 +15,10 @@ func TestLibrarySetResolve(t *testing.T) {
 	const origXML = "/mnt/bigdata/books/itunes/iTunes Library.xml"
 
 	t.Run("unconfigured is a no-op (legacy paths preserved)", func(t *testing.T) {
-		c := &ITunesConfig{LibraryReadPath: "/legacy/read.xml", LibraryWritePath: "/legacy/write.itl"}
+		c := &ITunesConfig{LibraryReadPath: "/legacy/read.xml", LibraryITLPath: "/legacy/write.itl"}
 		c.Resolve()
-		if c.LibraryReadPath != "/legacy/read.xml" || c.LibraryWritePath != "/legacy/write.itl" {
-			t.Fatalf("unconfigured Resolve mutated legacy paths: read=%q write=%q", c.LibraryReadPath, c.LibraryWritePath)
+		if c.LibraryReadPath != "/legacy/read.xml" || c.LibraryITLPath != "/legacy/write.itl" {
+			t.Fatalf("unconfigured Resolve mutated legacy paths: read=%q write=%q", c.LibraryReadPath, c.LibraryITLPath)
 		}
 	})
 
@@ -29,8 +29,8 @@ func TestLibrarySetResolve(t *testing.T) {
 			ImportSource: "ao",
 		}}
 		c.Resolve()
-		if c.LibraryWritePath != aoITL {
-			t.Errorf("write path = %q, want AO itl", c.LibraryWritePath)
+		if c.LibraryITLPath != aoITL {
+			t.Errorf("write path = %q, want AO itl", c.LibraryITLPath)
 		}
 		if c.LibraryReadPath != aoITL {
 			t.Errorf("read path = %q, want AO itl (import_source=ao)", c.LibraryReadPath)
@@ -44,8 +44,8 @@ func TestLibrarySetResolve(t *testing.T) {
 			ImportSource: "original",
 		}}
 		c.Resolve()
-		if c.LibraryWritePath != aoITL {
-			t.Errorf("write path = %q, want AO itl (write target never changes)", c.LibraryWritePath)
+		if c.LibraryITLPath != aoITL {
+			t.Errorf("write path = %q, want AO itl (write target never changes)", c.LibraryITLPath)
 		}
 		if c.LibraryReadPath != origXML {
 			t.Errorf("read path = %q, want Original xml", c.LibraryReadPath)
@@ -60,7 +60,7 @@ func TestValidateLibraries(t *testing.T) {
 
 	good := func() *ITunesConfig {
 		return &ITunesConfig{
-			WriteBackEnabled: true,
+			SyncEnabled: true,
 			Libraries: LibrarySet{
 				Original:     LibraryRef{ITLPath: origITL, Frozen: true},
 				AO:           LibraryRef{ITLPath: aoITL},
@@ -71,7 +71,7 @@ func TestValidateLibraries(t *testing.T) {
 	}
 
 	t.Run("unconfigured returns no errors (back-compat)", func(t *testing.T) {
-		if errs := (&ITunesConfig{WriteBackEnabled: true}).ValidateLibraries(protected); errs != nil {
+		if errs := (&ITunesConfig{SyncEnabled: true}).ValidateLibraries(protected); errs != nil {
 			t.Fatalf("unconfigured should be inert, got %v", errs)
 		}
 	})

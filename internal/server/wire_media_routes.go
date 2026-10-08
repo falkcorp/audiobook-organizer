@@ -6,12 +6,13 @@
 package server
 
 import (
+	"net/http"
+
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	aibackendshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/aibackends"
 	toolshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/tools"
 	"github.com/gin-gonic/gin"
-	"net/http"
 )
 
 // wireMediaRoutes registers iTunes, AI, diagnostics, tools, AI-backend, and
@@ -26,7 +27,9 @@ func (s *Server) wireMediaRoutes(
 	aiBackendsH *aibackendshandler.Handler,
 	pluginsH *handlers.PluginsHandler,
 ) {
-	// iTunes (12 migrated routes; survivors stay in server_lifecycle.go).
+	// iTunes (9 migrated routes; survivors stay in server_lifecycle.go). The
+	// write-back routes (write-back, write-back-all, write-back/preview) went
+	// with iTunes write-back on 2026-10-07.
 	// Two protected.Group("/itunes") blocks (here + survivors) is fine in Gin
 	// since there is no duplicate method+path.
 	itunesG := protected.Group("/itunes")
@@ -34,12 +37,7 @@ func (s *Server) wireMediaRoutes(
 		itunesG.POST("/validate", s.perm(auth.PermLibraryEditMetadata), itunesH.Validate)
 		itunesG.POST("/test-mapping", s.perm(auth.PermLibraryEditMetadata), itunesH.TestMapping)
 		itunesG.POST("/import", s.perm(auth.PermLibraryEditMetadata), itunesH.Import)
-		// write-back takes caller-chosen path_mappings and repoints the
-		// named books' tracks: relocate by another name, so owner-only.
-		s.ownerRoute(itunesG, http.MethodPost, "/write-back", ownerRouteAlways, itunesH.WriteBack)
-		s.ownerRoute(itunesG, http.MethodPost, "/write-back-all", ownerRouteAlways, itunesH.WriteBackAll)
 		itunesG.GET("/library-stats", s.perm(auth.PermLibraryView), itunesH.LibraryStats)
-		itunesG.POST("/write-back/preview", s.perm(auth.PermLibraryEditMetadata), itunesH.WriteBackPreview)
 		itunesG.GET("/books", s.perm(auth.PermLibraryView), itunesH.ListBooks)
 		itunesG.GET("/import-status/:id", s.perm(auth.PermLibraryView), itunesH.ImportStatus)
 		itunesG.POST("/import-status/bulk", s.perm(auth.PermLibraryEditMetadata), itunesH.ImportStatusBulk)

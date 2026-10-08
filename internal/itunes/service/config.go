@@ -10,18 +10,11 @@ import "time"
 // value at construction so the service has no transitive dependency on
 // the global config singleton.
 type Config struct {
-	Enabled             bool
-	LibraryReadPath     string
-	LibraryWritePath    string
-	DefaultMappings     []PathMapping
-	SyncInterval        time.Duration
-	WriteBackInterval   time.Duration
-	WriteBackMaxBatch   int
-	BackupKeep          int
-	ImportConcurrency   int
-	AutoWriteBack       bool // mirror of config.AppConfig.ITunes.AutoWriteBack
-	ITLWriteBackEnabled bool // mirror of config.AppConfig.ITunes.WriteBackEnabled
-	WriteBackDryRun     bool // mirror of config.AppConfig.ITunes.WriteBackDryRun
+	Enabled           bool
+	LibraryReadPath   string
+	DefaultMappings   []PathMapping
+	SyncInterval      time.Duration
+	ImportConcurrency int
 }
 
 // PathMapping is a single ITunesPath → OrganizedPath transform applied

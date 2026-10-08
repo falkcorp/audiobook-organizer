@@ -438,9 +438,6 @@ func (s *Server) applyOpResultCandidateLocked(books bookReader, opID, bookID str
 				batchApplyCandidatesLog.Warn("background apply file work failed for book %s: %s",
 					logger.SanitizeLogValue(bookID), logger.SanitizeLogValue(err.Error()))
 			}
-			if s.writeBackBatcher != nil {
-				s.writeBackBatcher.Enqueue(bookID)
-			}
 		})
 		if !submitted {
 			// The pool is stopping (shutdown): the database has the applied

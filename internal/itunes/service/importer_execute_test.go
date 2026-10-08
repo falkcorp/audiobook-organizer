@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -22,96 +21,6 @@ import (
 // ---------------------------------------------------------------------------
 // RecordITLReadTime + CheckITLConflict
 // ---------------------------------------------------------------------------
-
-func TestRecordITLReadTime(t *testing.T) {
-	// Reset state first so tests are isolated
-	itlState.mu.Lock()
-	itlState.lastRead = time.Time{}
-	itlState.mu.Unlock()
-
-	RecordITLReadTime()
-
-	itlState.mu.Lock()
-	last := itlState.lastRead
-	itlState.mu.Unlock()
-
-	assert.False(t, last.IsZero(), "lastRead must be set after RecordITLReadTime")
-	assert.WithinDuration(t, time.Now(), last, 2*time.Second)
-}
-
-func TestCheckITLConflict_ZeroLastRead(t *testing.T) {
-	itlState.mu.Lock()
-	itlState.lastRead = time.Time{}
-	itlState.mu.Unlock()
-
-	// No file needed — returns nil when lastRead is zero
-	err := CheckITLConflict("/nonexistent/path.itl")
-	assert.NoError(t, err, "should be nil when lastRead is zero")
-}
-
-// TestCheckITLConflict_UnstatableFailsClosed replaces a test that asserted the
-// OPPOSITE, and the replacement is deliberate rather than test rot.
-//
-// The old test read:
-//
-//	// File doesn't exist — stat fails → no conflict (returns nil)
-//	assert.NoError(t, err, "missing file should not be flagged as conflict")
-//
-// It was pinning the defect. CheckITLConflict exists to REFUSE a write when the
-// ITL may have changed underneath us; a stat error means "cannot verify", and
-// answering nil converts that into "verified safe" — the one answer the
-// function is not entitled to give. The write it gates lands in
-// books/itunes/**, which is hands-off, and an overwrite there is not
-// recoverable from anything the app owns.
-//
-// The only caller (server/handlers/itunes.go) already stats the path itself and
-// returns 400 if it is missing, so this branch is not the ordinary
-// "no library configured" path — it means the file went away, or became
-// unreadable, between that check and this one. That is precisely when refusing
-// is right.
-func TestCheckITLConflict_UnstatableFailsClosed(t *testing.T) {
-	itlState.mu.Lock()
-	itlState.lastRead = time.Now()
-	itlState.mu.Unlock()
-
-	err := CheckITLConflict("/nonexistent/path.itl")
-	assert.Error(t, err, "an unstatable ITL must fail CLOSED — 'cannot verify' is not 'no conflict'")
-	assert.Contains(t, err.Error(), "refusing to write",
-		"the error must say what was refused, not just that stat failed")
-}
-
-func TestCheckITLConflict_NoConflict(t *testing.T) {
-	dir := t.TempDir()
-	itlPath := filepath.Join(dir, "iTunes Library.itl")
-	require.NoError(t, os.WriteFile(itlPath, []byte("data"), 0o644))
-
-	// Record the read AFTER the file was written → no conflict
-	time.Sleep(5 * time.Millisecond)
-	RecordITLReadTime()
-
-	err := CheckITLConflict(itlPath)
-	assert.NoError(t, err)
-}
-
-func TestCheckITLConflict_Conflict(t *testing.T) {
-	dir := t.TempDir()
-	itlPath := filepath.Join(dir, "iTunes Library.itl")
-
-	// Record read first, then write the file 3 seconds later → conflict
-	RecordITLReadTime()
-	time.Sleep(10 * time.Millisecond)
-
-	// Fake an older lastRead by backdating it
-	itlState.mu.Lock()
-	itlState.lastRead = time.Now().Add(-5 * time.Second)
-	itlState.mu.Unlock()
-
-	require.NoError(t, os.WriteFile(itlPath, []byte("modified"), 0o644))
-
-	err := CheckITLConflict(itlPath)
-	assert.Error(t, err, "should detect conflict when file is newer than lastRead+2s")
-	assert.Contains(t, err.Error(), "ITL conflict")
-}
 
 // ---------------------------------------------------------------------------
 // newImporter

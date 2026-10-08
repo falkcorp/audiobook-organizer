@@ -526,7 +526,7 @@ func protectedSetup(t *testing.T) (root, itunes string) {
 	require.NoError(t, os.MkdirAll(itunes, 0o755))
 	config.AppConfig.RootDir = root
 	config.AppConfig.ITunes.LibraryReadPath = filepath.Join(itunes, "iTunes Library.xml")
-	config.AppConfig.ITunes.LibraryWritePath = ""
+	config.AppConfig.ITunes.LibraryITLPath = ""
 	return root, itunes
 }
 

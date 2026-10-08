@@ -455,22 +455,6 @@ func (s *Server) RegisterLibraryTranscodeOp(reg *opsregistry.Registry) error {
 			op.AddEntity("books", newBook.ID)
 			progress.Log("info", fmt.Sprintf("Created M4B version %s (group %s) of %s", newBook.ID, *newBook.VersionGroupID, p.BookID), nil)
 
-			if !config.AppConfig.ITunes.WriteBackEnabled &&
-				originalBook.ITunesPersistentID != nil &&
-				*originalBook.ITunesPersistentID != "" {
-				if err := s.Ops().CreateDeferredITunesUpdate(
-					originalBook.ID,
-					*originalBook.ITunesPersistentID,
-					originalBook.FilePath,
-					newBook.FilePath,
-					"transcode",
-				); err != nil {
-					progress.Log("warn", fmt.Sprintf("Failed to create deferred iTunes update: %v", err), nil)
-				} else {
-					progress.Log("info", "M4B created. iTunes library update deferred until write-back is enabled.", nil)
-				}
-			}
-
 			op.SetStatus("success")
 			logging.Info(ctx, "transcode complete", "book_id", p.BookID, "new_book_id", newBook.ID, "output_path", outputPath)
 			return nil

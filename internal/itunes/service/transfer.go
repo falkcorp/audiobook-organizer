@@ -3,33 +3,24 @@
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-09-01
 //
-// ITL file transfer handlers: download, upload+validate, backup
-// list, and restore. Part of backlog 6.4.
+// ITL file transfer handler: download. Part of backlog 6.4. Upload, backup
+// list and restore went with iTunes write-back on 2026-10-07: the app never
+// writes the iTunes library.
 
 package itunesservice
 
 import (
 	"fmt"
-	"io"
 	"net/http"
 	"os"
-	"path/filepath"
-	"strings"
-	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
-	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 	"github.com/gin-gonic/gin"
 )
 
-// maxITLUploadSize is the maximum allowed ITL upload (500 MB).
-const maxITLUploadSize = 500 << 20
-
-// TransferService owns the ITL file transfer HTTP handlers: download,
-// upload+validate, backup list, and restore. No store / batcher deps —
-// pure filesystem operations keyed off config.AppConfig.ITunes.LibraryWritePath.
+// TransferService owns the ITL download HTTP handler. No store deps — a pure
+// filesystem read keyed off config.AppConfig.ITunes.LibraryITLPath.
 type TransferService struct{}
 
 func newTransferService() *TransferService { return &TransferService{} }
@@ -38,9 +29,9 @@ func newTransferService() *TransferService { return &TransferService{} }
 //
 // GET /api/v1/itunes/library/download
 func (t *TransferService) HandleDownload(c *gin.Context) {
-	itlPath := config.AppConfig.ITunes.LibraryWritePath
+	itlPath := config.AppConfig.ITunes.LibraryITLPath
 	if itlPath == "" {
-		httputil.RespondWithNotFound(c, "ITunesLibraryWritePath is not configured", "")
+		httputil.RespondWithNotFound(c, "the iTunes library ITL path (itunes.library_write_path) is not configured", "")
 		return
 	}
 
@@ -58,222 +49,4 @@ func (t *TransferService) HandleDownload(c *gin.Context) {
 	c.Header("Content-Length", fmt.Sprintf("%d", info.Size()))
 	c.Header("Last-Modified", info.ModTime().UTC().Format(http.TimeFormat))
 	c.File(itlPath)
-}
-
-// ITLUploadResponse is returned after uploading an ITL file.
-type ITLUploadResponse struct {
-	Valid     bool   `json:"valid"`
-	Installed bool   `json:"installed"`
-	Tracks    int    `json:"tracks"`
-	Playlists int    `json:"playlists"`
-	Version   string `json:"version"`
-	Error     string `json:"error,omitempty"`
-}
-
-// HandleUpload accepts a multipart ITL upload, validates it, and
-// optionally installs it as the active library.
-//
-// POST /api/v1/itunes/library/upload?install=true|false
-func (t *TransferService) HandleUpload(c *gin.Context) {
-	itlPath := config.AppConfig.ITunes.LibraryWritePath
-	if itlPath == "" {
-		httputil.RespondWithBadRequest(c, "ITunesLibraryWritePath is not configured")
-		return
-	}
-
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxITLUploadSize)
-
-	file, _, err := c.Request.FormFile("library")
-	if err != nil {
-		httputil.RespondWithBadRequest(c, fmt.Sprintf("missing or invalid 'library' form field: %v", err))
-		return
-	}
-	defer file.Close()
-
-	dir := filepath.Dir(itlPath)
-	tmp, err := os.CreateTemp(dir, "itl-upload-*.tmp")
-	if err != nil {
-		httputil.RespondWithInternalError(c, fmt.Sprintf("cannot create temp file: %v", err))
-		return
-	}
-	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath)
-
-	if _, err := io.Copy(tmp, file); err != nil {
-		tmp.Close()
-		httputil.RespondWithInternalError(c, fmt.Sprintf("failed writing upload to disk: %v", err))
-		return
-	}
-	tmp.Close()
-
-	lib, parseErr := itunes.ParseITL(tmpPath)
-	if parseErr != nil {
-		httputil.RespondWithSuccess(c, http.StatusBadRequest, ITLUploadResponse{
-			Valid: false,
-			Error: fmt.Sprintf("invalid ITL file: %v", parseErr),
-		})
-		return
-	}
-
-	resp := ITLUploadResponse{
-		Valid:     true,
-		Tracks:    len(lib.Tracks),
-		Playlists: len(lib.Playlists),
-		Version:   lib.Version,
-	}
-
-	install := c.Query("install") == "true"
-	if !install {
-		httputil.RespondWithOK(c, resp)
-		return
-	}
-
-	if err := backupITLFile(itlPath); err != nil {
-		httputil.RespondWithInternalError(c, fmt.Sprintf("failed to back up current ITL: %v", err))
-		return
-	}
-
-	if err := os.Rename(tmpPath, itlPath); err != nil {
-		httputil.RespondWithInternalError(c, fmt.Sprintf("failed to install uploaded ITL: %v", err))
-		return
-	}
-
-	resp.Installed = true
-	httputil.RespondWithOK(c, resp)
-}
-
-// ITLBackupEntry describes a single .bak-* ITL backup file.
-type ITLBackupEntry struct {
-	Name      string    `json:"name"`
-	Size      int64     `json:"size"`
-	Timestamp time.Time `json:"timestamp"`
-}
-
-// HandleBackupList returns all .bak-* backups of the ITL file,
-// sorted newest-first.
-//
-// GET /api/v1/itunes/library/backups
-func (t *TransferService) HandleBackupList(c *gin.Context) {
-	itlPath := config.AppConfig.ITunes.LibraryWritePath
-	if itlPath == "" {
-		httputil.RespondWithBadRequest(c, "ITunesLibraryWritePath is not configured")
-		return
-	}
-
-	// itunes.ListBackups, not a local ReadDir sorted by ModTime: the
-	// safe-write path creates its backup by RENAMING the live library, so that
-	// file's ModTime is the LIBRARY's mtime, not the moment the backup was
-	// taken. Sorting by it showed the hardened backups as far older than they
-	// were. The stamp in the name is the only field that means "when this
-	// backup was made"; ModTime is the fallback for a name that predates any
-	// known layout.
-	backupFiles, err := itunes.ListBackups(itlPath)
-	if err != nil {
-		httputil.RespondWithInternalError(c, fmt.Sprintf("cannot read directory: %v", err))
-		return
-	}
-
-	backups := make([]ITLBackupEntry, 0, len(backupFiles))
-	for _, b := range backupFiles {
-		info, statErr := os.Stat(b.Path)
-		if statErr != nil {
-			continue
-		}
-		ts := b.Time
-		if !b.Dated {
-			ts = info.ModTime()
-		}
-		backups = append(backups, ITLBackupEntry{
-			Name:      b.Name,
-			Size:      info.Size(),
-			Timestamp: ts,
-		})
-	}
-
-	httputil.RespondWithOK(c, gin.H{
-		"backups": backups,
-		"count":   len(backups),
-	})
-}
-
-// ITLRestoreRequest specifies which backup to restore.
-type ITLRestoreRequest struct {
-	BackupName string `json:"backup_name" binding:"required"`
-}
-
-// HandleRestore restores a named backup as the active ITL file.
-//
-// POST /api/v1/itunes/library/restore
-func (t *TransferService) HandleRestore(c *gin.Context) {
-	itlPath := config.AppConfig.ITunes.LibraryWritePath
-	if itlPath == "" {
-		httputil.RespondWithBadRequest(c, "ITunesLibraryWritePath is not configured")
-		return
-	}
-
-	var req ITLRestoreRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		httputil.RespondWithBadRequest(c, fmt.Sprintf("invalid request: %v", err))
-		return
-	}
-
-	if filepath.Base(req.BackupName) != req.BackupName {
-		httputil.RespondWithBadRequest(c, "backup_name must be a filename, not a path")
-		return
-	}
-
-	dir := filepath.Dir(itlPath)
-	base := filepath.Base(itlPath)
-	backupPath := filepath.Join(dir, req.BackupName)
-
-	if !strings.HasPrefix(req.BackupName, base+".bak-") {
-		httputil.RespondWithBadRequest(c, "not a recognized ITL backup file")
-		return
-	}
-
-	lib, err := itunes.ParseITL(backupPath)
-	if err != nil {
-		httputil.RespondWithBadRequest(c, fmt.Sprintf("backup file is invalid: %v", err))
-		return
-	}
-
-	if err := backupITLFile(itlPath); err != nil {
-		httputil.RespondWithInternalError(c, fmt.Sprintf("failed to back up current ITL before restore: %v", err))
-		return
-	}
-
-	// CopyFileAtomic: this writes over the LIVE iTunes library, so it must
-	// never be observed truncated — temp beside it, fsync, then rename.
-	if err := fileops.CopyFileAtomic(backupPath, itlPath); err != nil {
-		httputil.RespondWithInternalError(c, fmt.Sprintf("failed to restore backup: %v", err))
-		return
-	}
-
-	httputil.RespondWithOK(c, gin.H{
-		"restored":  true,
-		"tracks":    len(lib.Tracks),
-		"playlists": len(lib.Playlists),
-		"version":   lib.Version,
-	})
-}
-
-// backupITLFile creates a timestamped .bak-* copy of the given path.
-func backupITLFile(itlPath string) error {
-	if _, err := os.Stat(itlPath); os.IsNotExist(err) {
-		return nil
-	}
-
-	// itunes.BackupName: this path's own "20060102T150405Z" was one of three
-	// formats sharing the directory, and the lexical rotators could not order
-	// them against each other. See internal/itunes/backupname.go.
-	backupPath := itunes.BackupName(itlPath, time.Now())
-	// CopyFileAtomic keeps the temp-then-rename this path always had, so a
-	// half-written backup is never visible under a .bak- name that
-	// HandleBackupList and RotateBackups both match on. What it fixes is the
-	// mode and the fsync: the old local copy used os.CreateTemp (0600) and
-	// renamed that into place, so every backup it ever wrote was owner-only,
-	// and it never fsynced — a backup still in page cache when the library is
-	// rewritten is not a backup. backupPath does not exist, so the mode comes
-	// from the library itself.
-	return fileops.CopyFileAtomic(itlPath, backupPath)
 }

@@ -18,7 +18,7 @@ import (
 // outcome carries both from the plan for every path through the apply.
 func TestBatchApplyOutcome_AppliedLineNamesBookAndCandidate(t *testing.T) {
 	svc := &fakeApplySvc{candidates: oneCandidate(t), skippedLocked: []string{"title"}}
-	out := applyCachedCandidateForBook(svc, fakeBooks{}, nil, "b1", false, nil)
+	out := applyCachedCandidateForBook(svc, fakeBooks{}, "b1", false, nil)
 	if !out.Applied {
 		t.Fatalf("outcome = %+v, want applied", out)
 	}
@@ -36,7 +36,7 @@ func TestBatchApplyOutcome_AppliedLineNamesBookAndCandidate(t *testing.T) {
 func TestBatchApplyOutcome_RefusedLineCarriesReasonGateAndError(t *testing.T) {
 	blocked := errors.New("two files plan the same target\nforged line")
 	svc := &fakeApplySvc{candidates: oneCandidate(t), preflightErr: blocked}
-	out := applyCachedCandidateForBook(svc, fakeBooks{}, nil, "b1", true, nil)
+	out := applyCachedCandidateForBook(svc, fakeBooks{}, "b1", true, nil)
 	if out.Applied || out.BookTitle != "A Title" {
 		t.Fatalf("outcome = %+v, want refused with the book stamped", out)
 	}

@@ -31,7 +31,7 @@ func ownerReviewFixture() (fakeBooks, metafetch.MetadataCandidate) {
 func TestOwnerReview_NoPinIsHardGated(t *testing.T) {
 	books, cand := ownerReviewFixture()
 	svc := &fakeApplySvc{candidates: candidateJSON(t, cand)}
-	out := applyCachedCandidateForBookTimed(svc, books, nil, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, nil, "")
+	out := applyCachedCandidateForBookTimed(svc, books, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, nil, "")
 	if out.Applied || out.Reason != applySkipGateBlocked || out.OwnerReviewed {
 		t.Fatalf("no pin: outcome %+v, want gate_blocked", out)
 	}
@@ -54,12 +54,12 @@ func TestOwnerReview_NonRowPinIsHardGated(t *testing.T) {
 	books, cand := ownerReviewFixture()
 	svc := &fakeApplySvc{candidates: candidateJSON(t, cand)}
 	pin := metafetch.PinOf(cand) // no origin
-	out := applyCachedCandidateForBookTimed(svc, books, nil, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, &pin, "")
+	out := applyCachedCandidateForBookTimed(svc, books, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, &pin, "")
 	if out.Applied || out.OwnerReviewed || out.Reason != applySkipGateBlocked {
 		t.Fatalf("non-row pin: outcome %+v, want gate_blocked", out)
 	}
 	pin.Origin = "bulk"
-	out = applyCachedCandidateForBookTimed(svc, books, nil, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, &pin, "")
+	out = applyCachedCandidateForBookTimed(svc, books, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, &pin, "")
 	if out.Applied || out.OwnerReviewed || out.Reason != applySkipGateBlocked {
 		t.Fatalf("bulk-origin pin: outcome %+v, want gate_blocked", out)
 	}
@@ -75,7 +75,7 @@ func TestOwnerReview_ASINConflictStillBlocks(t *testing.T) {
 	b.ASIN = &old
 	books["b1"] = &b
 	svc := &fakeApplySvc{candidates: candidateJSON(t, cand)}
-	out := applyCachedCandidateForBookTimed(svc, books, nil, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand), "")
+	out := applyCachedCandidateForBookTimed(svc, books, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand), "")
 	if out.Applied || out.OwnerReviewed || out.Reason != applySkipGateBlocked {
 		t.Fatalf("asin conflict with a row pin: outcome %+v, want gate_blocked", out)
 	}
@@ -85,7 +85,7 @@ func TestOwnerReview_MatchingPinAppliesAndRecordsOverride(t *testing.T) {
 	books, cand := ownerReviewFixture()
 	svc := &fakeApplySvc{candidates: candidateJSON(t, cand)}
 	pin := rowPin(cand)
-	out := applyCachedCandidateForBookTimed(svc, books, nil, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, pin, "")
+	out := applyCachedCandidateForBookTimed(svc, books, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, pin, "")
 	if !out.Applied || !out.OwnerReviewed {
 		t.Fatalf("matching pin: outcome %+v, want applied as owner-reviewed", out)
 	}
@@ -113,7 +113,7 @@ func TestOwnerReview_StalePinRefusesAndWritesNothing(t *testing.T) {
 	svc := &fakeApplySvc{candidates: candidateJSON(t, cand)}
 	shown := *rowPin(cand)
 	shown.Title = "Big Cats (a different record)"
-	out := applyCachedCandidateForBookTimed(svc, books, nil, "b1", true, nil, metafetch.NewApplyPhaseTimings(), nil, &shown, "")
+	out := applyCachedCandidateForBookTimed(svc, books, "b1", true, nil, metafetch.NewApplyPhaseTimings(), nil, &shown, "")
 	if out.Applied || out.Reason != applySkipStaleCandidate {
 		t.Fatalf("stale pin: outcome %+v, want %s", out, applySkipStaleCandidate)
 	}
@@ -128,7 +128,7 @@ func TestOwnerReview_StalePinRefusesAndWritesNothing(t *testing.T) {
 func TestOwnerReview_StaleIdentityStillBlocks(t *testing.T) {
 	books, cand := ownerReviewFixture()
 	svc := &fakeApplySvc{candidates: candidateJSON(t, cand), identityErr: metafetch.ErrStaleMetadataCache}
-	out := applyCachedCandidateForBookTimed(svc, books, nil, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand), "")
+	out := applyCachedCandidateForBookTimed(svc, books, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand), "")
 	if out.Applied || out.Reason != applySkipGateBlocked || out.Gate == nil || out.Gate.Reason != applygate.ReasonIdentityStale {
 		t.Fatalf("stale identity with a pin: outcome %+v", out)
 	}
@@ -139,7 +139,7 @@ func TestOwnerReview_StaleIdentityStillBlocks(t *testing.T) {
 func TestOwnerReview_RenamePreflightStillBlocks(t *testing.T) {
 	books, cand := ownerReviewFixture()
 	svc := &fakeApplySvc{candidates: candidateJSON(t, cand), preflightErr: metafetch.ErrApplyFileWorkWouldFail}
-	out := applyCachedCandidateForBookTimed(svc, books, nil, "b1", true, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand), "")
+	out := applyCachedCandidateForBookTimed(svc, books, "b1", true, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand), "")
 	if out.Applied || out.Reason != applySkipFileWorkWouldFail || !out.OwnerReviewed {
 		t.Fatalf("preflight with a pin: outcome %+v", out)
 	}
@@ -190,7 +190,7 @@ func (f fakePreviewSvc) PreviewMetadataCandidateWithOptions(_ string, _ metafetc
 func TestOwnerReview_ApprovedRowOverwritesUnreviewedFills(t *testing.T) {
 	books, cand := ownerReviewFixture()
 	svc := &fakeApplySvc{candidates: candidateJSON(t, cand)}
-	out := applyCachedCandidateForBookTimed(svc, books, nil, "b1", true, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand), "")
+	out := applyCachedCandidateForBookTimed(svc, books, "b1", true, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand), "")
 	if !out.Applied || !out.OwnerReviewed || len(svc.applyOpts) != 1 || len(svc.preflightOpts) != 1 {
 		t.Fatalf("reviewed row: outcome %+v apply %+v preflight %+v", out, svc.applyOpts, svc.preflightOpts)
 	}
@@ -204,7 +204,7 @@ func TestOwnerReview_ApprovedRowOverwritesUnreviewedFills(t *testing.T) {
 	}
 
 	plain := &fakeApplySvc{candidates: oneCandidate(t)}
-	out = applyCachedCandidateForBook(plain, fakeBooks{}, nil, "b1", true, nil)
+	out = applyCachedCandidateForBook(plain, fakeBooks{}, "b1", true, nil)
 	if !out.Applied || out.OwnerReviewed || !plain.applyOpts[0].FillOnly || !plain.preflightOpts[0].FillOnly {
 		t.Fatalf("unreviewed row must be fill-only: outcome %+v apply %+v preflight %+v", out, plain.applyOpts, plain.preflightOpts)
 	}
@@ -244,7 +244,7 @@ func TestOwnerReview_PreviewUsesTheApplyOptions(t *testing.T) {
 	}
 	// The preview of the pinned row and the apply of it use one value.
 	apply := &fakeApplySvc{candidates: candidateJSON(t, cand)}
-	applyCachedCandidateForBookTimed(apply, books, nil, "b1", true, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand), "")
+	applyCachedCandidateForBookTimed(apply, books, "b1", true, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand), "")
 	if len(apply.applyOpts) != 1 || !reflect.DeepEqual(apply.applyOpts[0], rec.previewOpts[1]) {
 		t.Fatalf("preview %+v and apply %+v of the same reviewed row disagree", rec.previewOpts[1], apply.applyOpts)
 	}
@@ -370,7 +370,7 @@ func gatePassingRow(t *testing.T) ([]json.RawMessage, metafetch.MetadataCandidat
 func TestReviewApproved_GatePassedRowOverwrites(t *testing.T) {
 	raw, cand := gatePassingRow(t)
 	svc := &fakeApplySvc{candidates: raw}
-	out := applyCachedCandidateForBookTimed(svc, fakeBooks{}, nil, "b1", true, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand), "")
+	out := applyCachedCandidateForBookTimed(svc, fakeBooks{}, "b1", true, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand), "")
 	if !out.Applied || out.OwnerReviewed || len(svc.applyOpts) != 1 || len(svc.preflightOpts) != 1 {
 		t.Fatalf("approved gate-passed row: outcome %+v apply %+v preflight %+v", out, svc.applyOpts, svc.preflightOpts)
 	}
@@ -382,14 +382,14 @@ func TestReviewApproved_GatePassedRowOverwrites(t *testing.T) {
 	}
 
 	plain := &fakeApplySvc{candidates: oneCandidate(t)}
-	out = applyCachedCandidateForBookTimed(plain, fakeBooks{}, nil, "b1", true, nil, metafetch.NewApplyPhaseTimings(), nil, nil, "")
+	out = applyCachedCandidateForBookTimed(plain, fakeBooks{}, "b1", true, nil, metafetch.NewApplyPhaseTimings(), nil, nil, "")
 	if !out.Applied || len(plain.applyOpts) != 1 || !plain.applyOpts[0].FillOnly || !plain.preflightOpts[0].FillOnly {
 		t.Fatalf("an unpinned row must stay fill-only: outcome %+v apply %+v", out, plain.applyOpts)
 	}
 
 	other := &fakeApplySvc{candidates: oneCandidate(t)}
 	pin := metafetch.PinOf(cand) // no origin: not a review-lane approval
-	out = applyCachedCandidateForBookTimed(other, fakeBooks{}, nil, "b1", true, nil, metafetch.NewApplyPhaseTimings(), nil, &pin, "")
+	out = applyCachedCandidateForBookTimed(other, fakeBooks{}, "b1", true, nil, metafetch.NewApplyPhaseTimings(), nil, &pin, "")
 	if !out.Applied || len(other.applyOpts) != 1 || !other.applyOpts[0].FillOnly {
 		t.Fatalf("a non-row pin must stay fill-only: outcome %+v apply %+v", out, other.applyOpts)
 	}
@@ -402,7 +402,7 @@ func TestReviewApproved_StalePinOnGatePassedRowWritesNothing(t *testing.T) {
 	svc := &fakeApplySvc{candidates: raw}
 	shown := *rowPin(cand)
 	shown.Title = "A Title (a different record)"
-	out := applyCachedCandidateForBookTimed(svc, fakeBooks{}, nil, "b1", true, nil, metafetch.NewApplyPhaseTimings(), nil, &shown, "")
+	out := applyCachedCandidateForBookTimed(svc, fakeBooks{}, "b1", true, nil, metafetch.NewApplyPhaseTimings(), nil, &shown, "")
 	if out.Applied || out.Reason != applySkipStaleCandidate {
 		t.Fatalf("stale pin: outcome %+v, want %s", out, applySkipStaleCandidate)
 	}
@@ -418,7 +418,7 @@ func TestReviewApproved_PreviewOptionsEqualApplyOptions(t *testing.T) {
 	prev := fakePreviewSvc{&fakeApplySvc{candidates: oneCandidate(t)}}
 	previewBulkApplyRow(prev, "b1", planCachedApply(prev, fakeBooks{}, "b1", nil, nil), true, false)
 	bulk := &fakeApplySvc{candidates: oneCandidate(t)}
-	applyCachedCandidateForBookTimed(bulk, fakeBooks{}, nil, "b1", true, nil, metafetch.NewApplyPhaseTimings(), nil, nil, "")
+	applyCachedCandidateForBookTimed(bulk, fakeBooks{}, "b1", true, nil, metafetch.NewApplyPhaseTimings(), nil, nil, "")
 	if len(prev.previewOpts) != 1 || len(bulk.applyOpts) != 1 || !reflect.DeepEqual(prev.previewOpts[0], bulk.applyOpts[0]) {
 		t.Fatalf("gate-passed row: preview %+v, pinless apply %+v", prev.previewOpts, bulk.applyOpts)
 	}
@@ -427,7 +427,7 @@ func TestReviewApproved_PreviewOptionsEqualApplyOptions(t *testing.T) {
 	rprev := fakePreviewSvc{&fakeApplySvc{candidates: candidateJSON(t, cand)}}
 	previewBulkApplyRow(rprev, "b1", planCachedApply(rprev, books, "b1", nil, nil), true, false)
 	reviewed := &fakeApplySvc{candidates: candidateJSON(t, cand)}
-	applyCachedCandidateForBookTimed(reviewed, books, nil, "b1", true, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand), "")
+	applyCachedCandidateForBookTimed(reviewed, books, "b1", true, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand), "")
 	if len(rprev.previewOpts) != 1 || len(reviewed.applyOpts) != 1 || !reflect.DeepEqual(rprev.previewOpts[0], reviewed.applyOpts[0]) {
 		t.Fatalf("review-only row: preview %+v, review-lane apply %+v", rprev.previewOpts, reviewed.applyOpts)
 	}

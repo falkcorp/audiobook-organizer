@@ -184,7 +184,7 @@ func TestDDMergeDuplicateBook_MoveFailureKeepsOnePrimary(t *testing.T) {
 	s := ddRealStore(t)
 	const vg = "vg-move-fail"
 	keeper, dup, _ := ddPrimaryPair(t, s, vg)
-	if err := ddMergeDuplicateBook(ddMoveFails{s}, keeper, dup, false, nil); err == nil {
+	if err := ddMergeDuplicateBook(ddMoveFails{s}, keeper, dup, false); err == nil {
 		t.Fatal("merge succeeded although the move failed")
 	}
 	if got := ddLiveExplicitPrimaries(t, s, vg); len(got) != 1 || got[0] != "Dup" {
@@ -210,7 +210,7 @@ func TestDDMergeDuplicateBook_PostMoveFailureRerunConverges(t *testing.T) {
 	fail := true
 	store := ddReassignFails{PebbleStore: s, fail: &fail}
 
-	if err := ddMergeDuplicateBook(store, keeper, dup, false, nil); err == nil {
+	if err := ddMergeDuplicateBook(store, keeper, dup, false); err == nil {
 		t.Fatal("merge succeeded although the external-ID reassign failed")
 	}
 	if g := ddMustGet(t, s, dup.ID); g.IsSoftDeleted() {
@@ -222,7 +222,7 @@ func TestDDMergeDuplicateBook_PostMoveFailureRerunConverges(t *testing.T) {
 
 	fail = false
 	keeper, dup = ddMustGet(t, s, keeper.ID), ddMustGet(t, s, dup.ID)
-	if err := ddMergeDuplicateBook(store, keeper, dup, false, nil); err != nil {
+	if err := ddMergeDuplicateBook(store, keeper, dup, false); err != nil {
 		t.Fatalf("rerun: %v", err)
 	}
 	if g := ddMustGet(t, s, dup.ID); !g.IsSoftDeleted() || g.FilePath != "" {
@@ -416,7 +416,7 @@ func TestDedupBooks_DryRunHandoffMatchesApply(t *testing.T) {
 				}
 				sim := newDDSim()
 				for _, p := range tc.pairs {
-					if err := ddMergeDuplicateBookSim(s, sim, byTitle[p.keeper], byTitle[p.dup], dry, nil); err != nil {
+					if err := ddMergeDuplicateBookSim(s, sim, byTitle[p.keeper], byTitle[p.dup], dry); err != nil {
 						t.Fatalf("dry=%v merge %s<-%s: %v", dry, p.keeper, p.dup, err)
 					}
 				}

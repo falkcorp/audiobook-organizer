@@ -57,7 +57,7 @@ func TestApplyCachedCandidate_SkipsAlreadyAppliedBook(t *testing.T) {
 			t.Run(status+"/"+tc.name, func(t *testing.T) {
 				svc := &fakeApplySvc{candidates: raw}
 				itunes := &fakeITunes{}
-				out := applyCachedCandidateForBookTimed(svc, appliedBooks(status), itunes, "b1", true, nil,
+				out := applyCachedCandidateForBookTimed(svc, appliedBooks(status), "b1", true, nil,
 					metafetch.NewApplyPhaseTimings(), nil, tc.pin, tc.mode)
 				if out.Applied || len(svc.appliedIDs) != 0 || len(svc.finishCalls) != 0 || len(svc.preflightIDs) != 0 || len(itunes.ids) != 0 {
 					t.Fatalf("an applied book was applied again: outcome %+v applied %v finish %d preflight %v itunes %v",
@@ -84,7 +84,7 @@ func TestApplyCachedCandidate_RowApprovalReappliesAppliedBook(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc := &fakeApplySvc{candidates: raw}
-	out := applyCachedCandidateForBookTimed(svc, appliedBooks("matched"), &fakeITunes{}, "b1", false, nil,
+	out := applyCachedCandidateForBookTimed(svc, appliedBooks("matched"), "b1", false, nil,
 		metafetch.NewApplyPhaseTimings(), nil, rowPin(cand), "")
 	if !out.Applied || len(svc.appliedIDs) != 1 {
 		t.Fatalf("the owner's row approval of an applied book was refused: outcome %+v", out)
@@ -96,7 +96,7 @@ func TestApplyCachedCandidate_RowApprovalReappliesAppliedBook(t *testing.T) {
 	other := cand
 	other.Title = "Some Other Record"
 	stale := &fakeApplySvc{candidates: raw}
-	out = applyCachedCandidateForBookTimed(stale, appliedBooks("matched"), &fakeITunes{}, "b1", false, nil,
+	out = applyCachedCandidateForBookTimed(stale, appliedBooks("matched"), "b1", false, nil,
 		metafetch.NewApplyPhaseTimings(), nil, rowPin(other), "")
 	if out.Applied || out.Reason != applySkipStaleCandidate {
 		t.Fatalf("stale row pin on an applied book: outcome %+v, want %s", out, applySkipStaleCandidate)

@@ -38,7 +38,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/importer"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	_ "github.com/falkcorp/audiobook-organizer/internal/maintenance/jobs"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
@@ -64,6 +63,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 	acoustidplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/acoustid"
 	dedupplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/dedup"
+
 	// The one list of service-registry plugins (internal/plugins/plugins.go).
 	_ "github.com/falkcorp/audiobook-organizer/internal/plugins"
 	maintenanceplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance"
@@ -285,9 +285,8 @@ type Server struct {
 	// claim a book before fetching it (candidate_refetch.go).
 	candidateFetchClaims bookFetchClaims
 
-	hub              *realtime.EventHub
-	writeBackBatcher *itunesservice.WriteBackBatcher
-	fileIOPool       *FileIOPool
+	hub        *realtime.EventHub
+	fileIOPool *FileIOPool
 	// opRegistry is the UOS-02 registry. Plugins register their OperationDefs
 	// here; the registry owns dispatch and worker pool lifecycle.
 	// No plugins are registered until their own bot-tasks wire them in.
@@ -724,11 +723,6 @@ func NewServer(store database.Store) *Server {
 	// Propagate rootDir into the store so LibraryStats can split organized vs unorganized.
 	resolvedStore.SetRootDir(config.AppConfig.RootDir)
 
-	// Inject the iTunes write-back enqueuer into the maintenance package.
-	if server.writeBackBatcher != nil {
-		maintenance.InjectEnqueuer(server.writeBackBatcher)
-	}
-
 	// server.eventBus and server.quarantineSvc are now populated by
 	// wireServerFromContainer above (W2). Only the global plugin registry
 	// needs explicit construction here.
@@ -959,23 +953,12 @@ func NewServer(store database.Store) *Server {
 		bookChanges.Add(string(kind), id)
 	})
 
-	// The batcher moved under itunesservice.Service in Phase 2 M1 step 2.
-	// Server still keeps a typed field for back-compat with the many call
-	// sites that were already using server.writeBackBatcher — but it now
-	// points at the service-owned instance. When the service is nil (test
-	// paths), the field stays nil and enqueues are silent no-ops via the
-	// `if batcher != nil` guards already in place.
-	server.writeBackBatcher = server.itunesSvc.Batcher
 	server.fileIOPool = NewFileIOPool(4)
 	server.fileIOPool.SetStore(resolvedStore)
 
-	// writeBackBatcher fan-out into metafetch / merge / quarantine /
-	// audiobook now happens in those services' PostInit hooks (they pull
-	// "writebackbatcher" via TryGet on their local enqueuer interface).
-	// organizeService.SetWriteBackBatcher + ScanEnqueuer stay inline:
-	// OrganizeService lives in this package and ScanEnqueuer captures
-	// server.opRegistry — not yet a clean container service.
-	server.organizeService.SetWriteBackBatcher(server.writeBackBatcher)
+	// ScanEnqueuer stays inline: OrganizeService lives in this package and
+	// ScanEnqueuer captures server.opRegistry — not yet a clean container
+	// service.
 	server.organizeService.ScanEnqueuer = func(ctx context.Context) error {
 		_, err := server.opRegistry.EnqueueOp(ctx, "library.scan", nil)
 		return err
@@ -991,17 +974,10 @@ func NewServer(store database.Store) *Server {
 		}
 	}
 
-	// ImportService uses the iTunes service's TrackProvisioner (moved
-	// during Phase 2 M1 step 1). Nil provisioner → ITL track provisioning
-	// is skipped (service is disabled or construction failed above).
-	server.importService.SetTrackProvisioner(server.itunesSvc.Provisioner)
 	server.importService.SetDedupEngine(server.dedupEngine)
 	// M4: wire the UOS registry so the importer can enqueue dedup.check-book
 	// when DedupOnImportViaScheduler is enabled in config (default false).
 	server.importService.SetRegistry(server.opRegistry)
-	// After M1 step 2, the batcher is owned by itunesservice.Service and
-	// Provisioner was wired with the real Enqueuer at Service.New() time.
-	// No SetEnqueuer hop needed.
 
 	// Register file-op recovery handler (uses server closure instead of globalServer)
 	RegisterFileOpRecovery("apply_metadata", func(bookID string) {
@@ -1009,11 +985,7 @@ func NewServer(store database.Store) *Server {
 			slog.Warn("no server instance for apply_metadata recovery of book", "bookID", bookID)
 			return
 		}
-		var enqueue func(string)
-		if server.writeBackBatcher != nil {
-			enqueue = server.writeBackBatcher.Enqueue
-		}
-		recoverApplyMetadataFileOp(server.metadataFetchService, enqueue, bookID)
+		recoverApplyMetadataFileOp(server.metadataFetchService, bookID)
 	})
 	RegisterFileOpRecovery(autoFetchFileOpType, func(bookID string) {
 		if server.metadataFetchService == nil {
@@ -1023,8 +995,8 @@ func NewServer(store database.Store) *Server {
 		recoverAutoFetchFileOp(server.metadataFetchService, bookID)
 	})
 
-	// Activity-service fan-out into metafetch / audiobook / scanner /
-	// itunesSvc.Repair now happens in those services' PostInit hooks.
+	// Activity-service fan-out into metafetch / audiobook / scanner now
+	// happens in those services' PostInit hooks.
 	// What's left in this block is genuinely server-internal: starting
 	// the writer, the global log.SetOutput, extraOpsRegistrar back-fill,
 	// the itunesActivityFn closure, scanner.SetScanHooks (process-global),

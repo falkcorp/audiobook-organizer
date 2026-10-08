@@ -115,7 +115,7 @@ var configFieldRules = map[string]fieldRule{
 	"folder_naming_pattern":          {FieldServerPath, "decides where organize writes files"},
 	"file_naming_pattern":            {FieldServerPath, "decides where organize writes files"},
 	"protected_paths":                {FieldServerPath, "paths the server must never write or delete"},
-	"itunes.library_write_path":      {FieldServerPath, "iTunes library file the server writes"},
+	"itunes.library_write_path":      {FieldServerPath, "iTunes library (.itl) file the server reads and protects (never writes)"},
 	"itunes.library_read_path":       {FieldServerPath, "iTunes library file the server reads"},
 	"itunes.windows_root_path":       {FieldServerPath, "maps iTunes paths to server paths"},
 	"itunes.media_root":              {FieldServerPath, "maps iTunes paths to server paths"},

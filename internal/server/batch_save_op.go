@@ -242,10 +242,6 @@ func (s *Server) RegisterBatchSaveToFilesOp(reg *opsregistry.Registry) error {
 					}
 				}
 
-				// Enqueue ITL write-back
-				if s.writeBackBatcher != nil {
-					s.writeBackBatcher.Enqueue(id)
-				}
 				return nil
 			}
 

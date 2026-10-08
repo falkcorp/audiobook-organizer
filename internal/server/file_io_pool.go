@@ -316,11 +316,7 @@ func InitFileIOPool() {
 			slog.Warn("no server instance for apply_metadata recovery of book", "bookID", bookID)
 			return
 		}
-		var enqueue func(string)
-		if srv.writeBackBatcher != nil {
-			enqueue = srv.writeBackBatcher.Enqueue
-		}
-		recoverApplyMetadataFileOp(srv.metadataFetchService, enqueue, bookID)
+		recoverApplyMetadataFileOp(srv.metadataFetchService, bookID)
 	})
 }
 
@@ -454,12 +450,9 @@ type applyMetadataRecoverer interface {
 // pending cover URL was not persisted with the job, so nothing is downloaded.
 // FinishApplyFileWork takes the path lock itself, per write, so the replay is
 // locked exactly like the live job.
-func recoverApplyMetadataFileOp(svc applyMetadataRecoverer, enqueue func(string), bookID string) {
+func recoverApplyMetadataFileOp(svc applyMetadataRecoverer, bookID string) {
 	if err := svc.FinishApplyFileWork(bookID, "", true, true, nil); err != nil {
 		slog.Warn("recovery apply file work failed", "bookID", bookID, "err", err)
-	}
-	if enqueue != nil {
-		enqueue(bookID)
 	}
 }
 

@@ -580,8 +580,6 @@ func TestInitConfig_ITunesDefaults(t *testing.T) {
 	snap := Snapshot()
 	assert.True(t, snap.ITunes.SyncEnabled)
 	assert.Equal(t, 30, snap.ITunes.SyncInterval)
-	assert.False(t, snap.ITunes.WriteBackEnabled)
-	assert.False(t, snap.ITunes.AutoWriteBack)
 }
 
 func TestInitConfig_ITunesFromEnv(t *testing.T) {
@@ -591,7 +589,8 @@ func TestInitConfig_ITunesFromEnv(t *testing.T) {
 	InitConfig()
 	snap := Snapshot()
 	assert.Equal(t, 60, snap.ITunes.SyncInterval)
-	assert.True(t, snap.ITunes.AutoWriteBack)
+	// ITUNES_AUTO_WRITE_BACK is a removed setting (iTunes write-back went
+	// 2026-10-07): an environment that still sets it must load cleanly.
 }
 
 func TestInitConfig_MaintenanceDefaults(t *testing.T) {

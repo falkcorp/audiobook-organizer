@@ -61,7 +61,7 @@ func ddDup() *database.Book {
 func TestDDMergeDuplicateBook_KeeperLockedBlankStaysBlank(t *testing.T) {
 	store, writes := ddLockFixture(t, []string{database.FieldKeyNarrator}, nil)
 
-	if err := ddMergeDuplicateBook(store, &database.Book{ID: "keep"}, ddDup(), false, nil); err != nil {
+	if err := ddMergeDuplicateBook(store, &database.Book{ID: "keep"}, ddDup(), false); err != nil {
 		t.Fatalf("ddMergeDuplicateBook: %v", err)
 	}
 	keeper := writes["keep"]
@@ -84,7 +84,7 @@ func TestDDMergeDuplicateBook_KeeperLockedBlankStaysBlank(t *testing.T) {
 func TestDDMergeDuplicateBook_LockReadErrorLeavesBothRows(t *testing.T) {
 	store, writes := ddLockFixture(t, nil, errors.New("pebble: closed"))
 
-	err := ddMergeDuplicateBook(store, &database.Book{ID: "keep"}, ddDup(), false, nil)
+	err := ddMergeDuplicateBook(store, &database.Book{ID: "keep"}, ddDup(), false)
 	if !errors.Is(err, database.ErrFieldLocksUnavailable) {
 		t.Fatalf("err = %v, want ErrFieldLocksUnavailable", err)
 	}

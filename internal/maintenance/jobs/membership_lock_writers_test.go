@@ -59,7 +59,7 @@ func ddKeeperFillCase(t *testing.T, f *vptest.Fixture) (func() error, func() boo
 		if err != nil {
 			return err
 		}
-		return ddMergeDuplicateBook(f.S, keeper, dup, false, nil)
+		return ddMergeDuplicateBook(f.S, keeper, dup, false)
 	}
 	unchanged := func() bool {
 		b, err := f.S.GetBookByID(d)

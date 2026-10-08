@@ -180,11 +180,11 @@ func (s *Server) ExecuteSeriesPrune(ctx context.Context, progress operations.Pro
 	return s.executeSeriesPrune(ctx, s.store, progress, opID)
 }
 
-func (s *Server) ExecuteSeriesNormalizeCore(ctx context.Context, opID string, enqueueWB func(string)) ([]string, error) {
+func (s *Server) ExecuteSeriesNormalizeCore(ctx context.Context, opID string) ([]string, error) {
 	if s.store == nil {
 		return nil, fmt.Errorf("database not initialized")
 	}
-	return executeSeriesNormalizeCore(ctx, s.store, opID, enqueueWB)
+	return executeSeriesNormalizeCore(ctx, s.store, opID)
 }
 
 // ---- one-shot startup ops ----
@@ -227,12 +227,6 @@ func (s *Server) CleanupTrashedVersions() int {
 
 func (s *Server) ActivityFlushOp(opID string) {
 	activity.FlushOperation(s.activityWriter, opID)
-}
-
-func (s *Server) EnqueueWriteBack(bookID string) {
-	if s.writeBackBatcher != nil {
-		s.writeBackBatcher.Enqueue(bookID)
-	}
 }
 
 func (s *Server) PollBatch(ctx context.Context) (int, error) {

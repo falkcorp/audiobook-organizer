@@ -447,18 +447,21 @@ type DedupBoilerplateConfig struct {
 	ExtraPrefixPatterns []string `json:"extra_prefix_patterns" mapstructure:"extra_prefix_patterns"`
 }
 
-// ITunesConfig holds all settings for the iTunes sync and write-back subsystem.
+// ITunesConfig holds all settings for the iTunes import/sync subsystem.
+//
+// iTunes is an import-only source (owner decision 2026-10-07): nothing here
+// enables a write to the iTunes library. The write-back keys a stored config
+// may still hold (write_back_enabled, auto_write_back, write_back_dry_run)
+// have no field and are ignored on load.
 type ITunesConfig struct {
-	SyncEnabled      bool   `json:"sync_enabled"       mapstructure:"sync_enabled"`
-	SyncInterval     int    `json:"sync_interval"      mapstructure:"sync_interval"`
-	WriteBackEnabled bool   `json:"write_back_enabled" mapstructure:"write_back_enabled"`
-	LibraryWritePath string `json:"library_write_path" mapstructure:"library_write_path"`
-	LibraryReadPath  string `json:"library_read_path"  mapstructure:"library_read_path"`
-	AutoWriteBack    bool   `json:"auto_write_back"    mapstructure:"auto_write_back"`
-	// WriteBackDryRun logs every write-back flush in detail but performs no
-	// write to disk. Meant to be toggled via ITUNES_WRITEBACK_DRYRUN + a
-	// service restart to diagnose a suspicious enqueue pattern without risk.
-	WriteBackDryRun bool            `json:"write_back_dry_run" mapstructure:"write_back_dry_run"`
+	SyncEnabled  bool `json:"sync_enabled"       mapstructure:"sync_enabled"`
+	SyncInterval int  `json:"sync_interval"      mapstructure:"sync_interval"`
+	// LibraryITLPath is the iTunes library (.itl) file. The app reads it (ITL
+	// parse for PID census, stale-path checks, download) and protects its
+	// directory from deletion; it never writes it. The stored key keeps its
+	// historical name, library_write_path, so existing configs load unchanged.
+	LibraryITLPath  string          `json:"library_write_path" mapstructure:"library_write_path"`
+	LibraryReadPath string          `json:"library_read_path"  mapstructure:"library_read_path"`
 	PathTrimEnabled bool            `json:"path_trim_enabled"  mapstructure:"path_trim_enabled"`
 	WindowsRootPath string          `json:"windows_root_path"  mapstructure:"windows_root_path"`
 	MediaRoot       string          `json:"media_root"         mapstructure:"media_root"`
@@ -466,7 +469,7 @@ type ITunesConfig struct {
 
 	// Libraries is the explicit 4-state library model (Original/AO x .itl/.xml)
 	// plus the PointedAt/ImportSource mode facts. Inert until populated: when empty,
-	// the legacy LibraryReadPath/LibraryWritePath fields are used as-is. See
+	// the legacy LibraryReadPath/LibraryITLPath fields are used as-is. See
 	// itunes_libraries.go and docs/specs/2026-07-23-itunes-2way-sync-system-design.md.
 	Libraries LibrarySet `json:"libraries" mapstructure:"libraries"`
 }
@@ -1652,7 +1655,7 @@ type Config struct {
 	LogFormat         string `json:"log_format"` // 'text' or 'json'
 	EnableJsonLogging bool   `json:"enable_json_logging"`
 
-	// ITunes holds all iTunes sync and write-back settings.
+	// ITunes holds all iTunes import/sync settings.
 	// Previously these were 10 flat fields; Wave 4 nests them here.
 	ITunes ITunesConfig `json:"itunes" mapstructure:"itunes"`
 
@@ -2611,19 +2614,13 @@ func InitConfig() {
 	// BindEnv maps env vars so ITUNES_SYNC_ENABLED etc. override even without AutomaticEnv.
 	viper.SetDefault("itunes.sync_enabled", true)
 	viper.SetDefault("itunes.sync_interval", 30)
-	viper.SetDefault("itunes.write_back_enabled", false)
 	viper.SetDefault("itunes.library_write_path", "")
 	viper.SetDefault("itunes.library_read_path", "")
-	viper.SetDefault("itunes.auto_write_back", false)
-	viper.SetDefault("itunes.write_back_dry_run", false)
 	viper.SetDefault("itunes.path_trim_enabled", false)
 	viper.SetDefault("itunes.windows_root_path", "")
 	viper.SetDefault("itunes.media_root", "")
-	viper.BindEnv("itunes.sync_enabled", "ITUNES_SYNC_ENABLED")             //nolint:errcheck
-	viper.BindEnv("itunes.sync_interval", "ITUNES_SYNC_INTERVAL")           //nolint:errcheck
-	viper.BindEnv("itunes.write_back_enabled", "ITUNES_WRITE_BACK_ENABLED") //nolint:errcheck
-	viper.BindEnv("itunes.auto_write_back", "ITUNES_AUTO_WRITE_BACK")       //nolint:errcheck
-	viper.BindEnv("itunes.write_back_dry_run", "ITUNES_WRITEBACK_DRYRUN")   //nolint:errcheck
+	viper.BindEnv("itunes.sync_enabled", "ITUNES_SYNC_ENABLED")   //nolint:errcheck
+	viper.BindEnv("itunes.sync_interval", "ITUNES_SYNC_INTERVAL") //nolint:errcheck
 
 	// Auto-update defaults
 	viper.SetDefault("auto_update.enabled", false)
@@ -3069,16 +3066,13 @@ func InitConfig() {
 
 			// iTunes sync (nested sub-struct)
 			ITunes: ITunesConfig{
-				SyncEnabled:      viper.GetBool("itunes.sync_enabled"),
-				SyncInterval:     viper.GetInt("itunes.sync_interval"),
-				WriteBackEnabled: viper.GetBool("itunes.write_back_enabled"),
-				LibraryWritePath: viper.GetString("itunes.library_write_path"),
-				LibraryReadPath:  viper.GetString("itunes.library_read_path"),
-				AutoWriteBack:    viper.GetBool("itunes.auto_write_back"),
-				WriteBackDryRun:  viper.GetBool("itunes.write_back_dry_run"),
-				PathTrimEnabled:  viper.GetBool("itunes.path_trim_enabled"),
-				WindowsRootPath:  viper.GetString("itunes.windows_root_path"),
-				MediaRoot:        viper.GetString("itunes.media_root"),
+				SyncEnabled:     viper.GetBool("itunes.sync_enabled"),
+				SyncInterval:    viper.GetInt("itunes.sync_interval"),
+				LibraryITLPath:  viper.GetString("itunes.library_write_path"),
+				LibraryReadPath: viper.GetString("itunes.library_read_path"),
+				PathTrimEnabled: viper.GetBool("itunes.path_trim_enabled"),
+				WindowsRootPath: viper.GetString("itunes.windows_root_path"),
+				MediaRoot:       viper.GetString("itunes.media_root"),
 				// PathMappings loaded from DB blob, not viper
 				Libraries: LibrarySet{
 					Original: LibraryRef{
@@ -3410,13 +3404,13 @@ func InitConfig() {
 		// Backward compatibility: map old flat viper key names to the nested struct.
 		// These keys were set directly (e.g. via viper.Set in tests or old config files)
 		// using the pre-Wave-4 flat names, which are no longer read in the struct literal.
-		if c.ITunes.LibraryWritePath == "" {
+		if c.ITunes.LibraryITLPath == "" {
 			if v := viper.GetString("itunes_library_write_path"); v != "" {
-				c.ITunes.LibraryWritePath = v
+				c.ITunes.LibraryITLPath = v
 			}
 		}
-		if c.ITunes.LibraryWritePath == "" {
-			c.ITunes.LibraryWritePath = viper.GetString("itunes_library_itl_path")
+		if c.ITunes.LibraryITLPath == "" {
+			c.ITunes.LibraryITLPath = viper.GetString("itunes_library_itl_path")
 		}
 		if c.ITunes.LibraryReadPath == "" {
 			if v := viper.GetString("itunes_library_read_path"); v != "" {
@@ -3426,18 +3420,6 @@ func InitConfig() {
 		if c.ITunes.LibraryReadPath == "" {
 			c.ITunes.LibraryReadPath = viper.GetString("itunes_library_xml_path")
 		}
-		// Also pick up the flat write_back and sync keys if set via old viper keys
-		if !c.ITunes.WriteBackEnabled {
-			if viper.IsSet("itl_write_back_enabled") {
-				c.ITunes.WriteBackEnabled = viper.GetBool("itl_write_back_enabled")
-			}
-		}
-
-		// Auto-enable ITL write-back when a write path is configured
-		if c.ITunes.LibraryWritePath != "" && !c.ITunes.WriteBackEnabled {
-			c.ITunes.WriteBackEnabled = true
-		}
-
 		// Normalize database type
 		if c.DatabaseType == "sqlite3" {
 			c.DatabaseType = "sqlite"
