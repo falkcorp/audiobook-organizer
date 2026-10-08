@@ -36,18 +36,6 @@ func TestStubOps_NoCronSchedule(t *testing.T) {
 	if s := p.positionSyncDef().Schedule; s != nil {
 		t.Errorf("itunes.position-sync is a stub but has schedule %q — remove it or implement the op", *s)
 	}
-	if s := p.pathReconciledDef().Schedule; s != nil {
-		t.Errorf("itunes.path-reconcile is a stub but has schedule %q — remove it or implement the op", *s)
-	}
-	// pathRepairDef was missing from this list until 2026-08-19. It is the only
-	// one of the five stub defs kept alive by neither this test nor an explicit
-	// keepalive (importDef has one at import.go:46), which is why staticcheck
-	// reported it as unused while its identical siblings passed. The gap was not
-	// only cosmetic: a Schedule added here would have reproduced the exact C1
-	// incident this test exists to prevent, with no test to catch it.
-	if s := p.pathRepairDef().Schedule; s != nil {
-		t.Errorf("itunes.path-repair is a stub but has schedule %q — remove it or implement the op", *s)
-	}
 }
 
 // stubWarnReporter captures Log calls so the not-implemented warning can be
@@ -96,11 +84,9 @@ func TestStubRuns_FailInsteadOfReportingSuccess(t *testing.T) {
 	p := New(nil)
 	rep := &stubWarnReporter{}
 	runs := map[string]func(context.Context) error{
-		"itunes.sync":           func(ctx context.Context) error { return p.runSync(ctx, nil, rep) },
-		"itunes.position-sync":  func(ctx context.Context) error { return p.runPositionSync(ctx, nil, rep) },
-		"itunes.import":         func(ctx context.Context) error { return p.runImport(ctx, nil, rep) },
-		"itunes.path-reconcile": func(ctx context.Context) error { return p.runPathReconcile(ctx, nil, rep) },
-		"itunes.path-repair":    func(ctx context.Context) error { return p.runPathRepair(ctx, nil, rep) },
+		"itunes.sync":          func(ctx context.Context) error { return p.runSync(ctx, nil, rep) },
+		"itunes.position-sync": func(ctx context.Context) error { return p.runPositionSync(ctx, nil, rep) },
+		"itunes.import":        func(ctx context.Context) error { return p.runImport(ctx, nil, rep) },
 	}
 
 	for id, run := range runs {
@@ -131,10 +117,8 @@ func TestRegister_OnlyRegistersDefsWithARealRun(t *testing.T) {
 	// These IDs have working implementations registered from internal/server.
 	// A plugin stub claiming any of them silently disables the real op.
 	shadowed := map[string]string{
-		"itunes.sync":           "server.RegisterITunesSyncOp (Importer.Sync)",
-		"itunes.import":         "server.RegisterITunesImportOp (Importer.Execute)",
-		"itunes.path-reconcile": "server.RegisterITunesPathReconcileOp (Paths.Reconcile)",
-		"itunes.path-repair":    "server.RegisterITunesPathRepairOp (Repair.Repair)",
+		"itunes.sync":   "server.RegisterITunesSyncOp (Importer.Sync)",
+		"itunes.import": "server.RegisterITunesImportOp (Importer.Execute)",
 	}
 
 	p := New(nil)

@@ -72,8 +72,6 @@ func (p *Plugin) OperationDefs() []sdk.OperationDef {
 		// EXCLUDED, all stubs whose real implementation lives in internal/server:
 		//   syncDef           -> server.RegisterITunesSyncOp (Importer.Sync)
 		//   importDef         -> server.RegisterITunesImportOp (Importer.Execute)
-		//   pathReconciledDef -> server.RegisterITunesPathReconcileOp (Paths.Reconcile)
-		//   pathRepairDef     -> server.RegisterITunesPathRepairOp (Repair.Repair)
 		//
 		// positionSyncDef is a stub too, but it has no server-side counterpart,
 		// so it stays registered: dropping it would make the op vanish rather

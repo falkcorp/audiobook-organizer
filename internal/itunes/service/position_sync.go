@@ -31,8 +31,8 @@ const adminUserID = "_local"
 
 // positionSyncStore is what the iTunes position sync reads and writes.
 //
-// Measured with an empty-interface compiler probe: 8 direct calls (7 since
-// 2026-09-13, when GetBookByID + UpdateBook became one ModifyBook), plus
+// Measured with an empty-interface compiler probe: 3 direct calls (ModifyBook
+// left on 2026-10-07 with the play-count mark it wrote), plus
 // readstatus.Store because this package forwards its store to
 // readstatus.RecomputeUserBookState and SetManualStatus. Embedding that
 // interface states the forwarding relationship instead of duplicating its
@@ -46,7 +46,6 @@ type positionSyncStore interface {
 	readstatus.Store
 
 	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
-	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	GetUserPosition(userID, bookID string) (*database.UserPosition, error)
 	SetUserPosition(userID, bookID, segmentID string, positionSeconds float64) error
 }
@@ -125,7 +124,6 @@ func (p *PositionSync) pullBookmarks() int {
 
 	// Also seed "finished" from iTunes play_count > 0 with no existing state.
 	stateErrs := 0
-	markErrs := 0 // books whose "already counted" mark failed; not seeded
 	for _, book := range books {
 		if book.ITunesPlayCount == nil || *book.ITunesPlayCount <= 0 {
 			continue
@@ -133,9 +131,7 @@ func (p *PositionSync) pullBookmarks() int {
 		// The "no state yet" check and the seed are one step under the
 		// per-(user, book) user-state stripe (database.LockUserBookState), so
 		// an ABS sync or the Repairs writer cannot write a state between
-		// them that the seed would then overwrite. Order: stripe, then the
-		// book's write stripe inside ModifyBook; nothing takes them the
-		// other way round.
+		// them that the seed would then overwrite.
 		ok := func() bool {
 			defer database.LockUserBookState(adminUserID, book.ID)()
 			state, err := p.store.GetUserBookState(adminUserID, book.ID)
@@ -149,28 +145,13 @@ func (p *PositionSync) pullBookmarks() int {
 			if state != nil {
 				return false
 			}
-			// This finish came FROM iTunes' play count, so it has already been
-			// counted there. The book is marked as counted first, and the
-			// Finished state is written only once that mark is stored, carrying
-			// the same stamp. A finish can then never exist unmarked: if the
-			// mark fails, nothing is seeded and the next run tries again. If
-			// the state write fails, the mark is left without a finish, which
-			// is harmless because a later real finish is dated after it.
+			// Nothing is pushed back to iTunes (import-only since
+			// 2026-10-07), so this seed no longer stamps the book's
+			// ITunesPlayCountBumpedAt: that mark only stopped the removed
+			// push from counting an iTunes-sourced finish twice.
 			finish := time.Now()
-			if _, err := p.store.ModifyBook(book.ID, func(b *database.Book) error {
-				if b.ITunesPlayCountBumpedAt != nil && !finish.After(*b.ITunesPlayCountBumpedAt) {
-					return database.ErrSkipBookWrite
-				}
-				b.ITunesPlayCountBumpedAt = &finish
-				return nil
-			}); err != nil {
-				markErrs++
-				p.log.Warn("itunes position sync: mark the iTunes finish of %s as counted: %v; not seeding finished", book.ID, err)
-				return false
-			}
-			// With no stored row, SetUserBookState keeps a stamp the caller
-			// supplies, so the seeded finish is dated exactly at the mark. The
-			// fields are the ones readstatus.SetManualStatus writes for a book
+			// With no stored row, SetUserBookState keeps the stamp the caller
+			// supplies. The fields are the ones readstatus.SetManualStatus writes for a book
 			// with no state.
 			if err := p.store.SetUserBookState(&database.UserBookState{
 				UserID:         adminUserID,
@@ -192,9 +173,6 @@ func (p *PositionSync) pullBookmarks() int {
 	}
 	if stateErrs > 0 {
 		p.log.Warn("itunes position sync: %d read-state errors while seeding finished status", stateErrs)
-	}
-	if markErrs > 0 {
-		p.log.Warn("itunes position sync: %d books not seeded as finished because marking their iTunes finish as counted failed", markErrs)
 	}
 
 	return seeded

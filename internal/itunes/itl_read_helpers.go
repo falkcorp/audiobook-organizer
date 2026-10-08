@@ -11,16 +11,17 @@
 package itunes
 
 import (
-	"log/slog"
 	"strings"
 
-	"github.com/falkcorp/audiobook-organizer/internal/metrics"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
 // headerFixedPrefix is the bytes before the version string: "hdfm"(4) +
 // headerLen(4) + fileLen(4) + unknown(4) + verLen(1) = 17. The remainder
 // (which carries the count fields) begins at 17 + len(version).
 const headerFixedPrefix = 17
+
+var itlReadHelpersLog = logger.New("itunes.itl")
 
 // findMsdhByType finds the msdh container with the given blockType.
 // Returns (offset, headerLen, totalLen) or (-1, 0, 0) if not found.
@@ -158,18 +159,16 @@ func scanMtphRange(data []byte, start, end int, masterTIDs map[uint32]struct{}, 
 // native Windows ITL 0x0D form (W:\...). ReverseRemapPath yields forward slashes;
 // the ITL 0x0D form needs backslashes and isWindowsAbsPath rejects any '/', so we
 // flip separators before validating. An unmappable path (still /mnt/... → \mnt\...
-// with no drive letter) is rejected → skipped, never written raw (CRIT-2).
-// metricLabel distinguishes the caller in the unmappable metric.
-func canonicalWinLocationForFile(localPath, pidForLog, metricLabel string, mappings []PathMapping) (string, bool) {
+// with no drive letter) is rejected: it matches no iTunes location.
+func canonicalWinLocationForFile(localPath, pidForLog string, mappings []PathMapping) (string, bool) {
 	if localPath == "" {
 		return "", false
 	}
 	winish := strings.ReplaceAll(ReverseRemapPath(localPath, mappings), "/", `\`)
 	pair, err := NewLocationPair(winish)
 	if err != nil {
-		metrics.RecordITunesLocationUnmappable(metricLabel)
-		slog.Warn("ITL relocate: skipping file with unmappable location (never written raw — CRIT-2)",
-			"pid", pidForLog, "local", localPath, "error", err.Error())
+		itlReadHelpersLog.Warn("iTunes location: local path %s (pid %s) maps to no Windows location: %v",
+			localPath, pidForLog, err)
 		return "", false
 	}
 	return pair.WinPath, true

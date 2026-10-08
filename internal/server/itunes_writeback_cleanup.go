@@ -9,9 +9,8 @@
 package server
 
 import (
-	"log/slog"
-
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
 // legacyITunesWriteBackPrefixes are the raw-KV prefixes the removed iTunes
@@ -23,6 +22,8 @@ var legacyITunesWriteBackPrefixes = []string{
 	"itunes_writeback:",
 	"pref:_system:outbox:writeback:",
 }
+
+var legacyITunesWriteBackLog = logger.New("server.itunes-writeback-cleanup")
 
 // legacyITunesWriteBackPageSize bounds each scan page and delete batch.
 const legacyITunesWriteBackPageSize = 500
@@ -49,7 +50,7 @@ func purgeLegacyITunesWriteBackKeys(store legacyKVCleaner) int {
 			// so the next matching key is the first one left.
 			pairs, _, err := store.ScanPrefixPage(prefix, "", legacyITunesWriteBackPageSize)
 			if err != nil {
-				slog.Warn("iTunes write-back cleanup: scan failed; retried next startup", "prefix", prefix, "err", err)
+				legacyITunesWriteBackLog.Warn("iTunes write-back cleanup: scan of %s failed; retried next startup: %v", prefix, err)
 				break
 			}
 			if len(pairs) == 0 {
@@ -60,7 +61,7 @@ func purgeLegacyITunesWriteBackKeys(store legacyKVCleaner) int {
 				keys[i] = kv.Key
 			}
 			if err := store.DeleteRawBatch(keys); err != nil {
-				slog.Warn("iTunes write-back cleanup: delete failed; retried next startup", "prefix", prefix, "err", err)
+				legacyITunesWriteBackLog.Warn("iTunes write-back cleanup: delete under %s failed; retried next startup: %v", prefix, err)
 				break
 			}
 			deleted += len(keys)
@@ -70,7 +71,7 @@ func purgeLegacyITunesWriteBackKeys(store legacyKVCleaner) int {
 		}
 	}
 	if deleted > 0 {
-		slog.Info("iTunes write-back cleanup: deleted leftover write-back keys", "count", deleted)
+		legacyITunesWriteBackLog.Info("iTunes write-back cleanup: deleted %d leftover write-back keys", deleted)
 	}
 	return deleted
 }

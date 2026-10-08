@@ -38,10 +38,10 @@ package metafetch
 // user-locked (ISBN-13 only when the book has no ISBN-10 either), through
 // repairs.Writer (ModifyBook + one metadata-history row under its own batch id,
 // so each write is visible and revertable per book). Nothing here enqueues tag
-// write-back or iTunes (ITL) write-back: those are explicit enqueues on the
-// metafetch service's apply path (Service.SetWriteBackBatcher), and the store's
-// book write has no hook that reaches either. Writing a DB column on a book
-// whose files live under books/itunes/** therefore touches no iTunes file.
+// write-back, and iTunes (ITL) write-back no longer exists (iTunes is
+// import-only since 2026-10-07); the store's book write has no hook that
+// reaches a file. Writing a DB column on a book whose files live under
+// books/itunes/** therefore touches no iTunes file.
 //
 // Scan stand-down: not held. A whole-library pass runs for hours and holding
 // the stand-down would park every library scan for that long. Since #3635 a

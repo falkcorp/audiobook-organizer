@@ -238,7 +238,7 @@ func pickDiffFileKeeper(owners []database.BookFile, trackLocation string, mappin
 	}
 	match := -1
 	for i := range owners {
-		loc, ok := canonicalWinLocationForFile(owners[i].FilePath, owners[i].ITunesPersistentID, "pid_repair", mappings)
+		loc, ok := canonicalWinLocationForFile(owners[i].FilePath, owners[i].ITunesPersistentID, mappings)
 		if ok && strings.EqualFold(loc, trackLocation) {
 			if match != -1 {
 				return 0, false // ambiguous: two owners canonicalize to the track loc
