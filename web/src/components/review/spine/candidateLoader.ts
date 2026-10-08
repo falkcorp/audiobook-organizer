@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/candidateLoader.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 88122df6-96ce-4289-bd2b-f18276f10984
 // last-edited: 2026-10-07
 //
@@ -13,6 +13,9 @@
 //   so a fast scroll does not leave a queue of hundreds behind it: a cache
 //   miss on that endpoint asks real providers, and Google Books has a daily
 //   quota. Answers are memoized per book + query, so scrolling back is free.
+//   A "Search again" query is a browse search (browse: true): the search
+//   function may hand back a partial answer first (the local author catalog)
+//   through onPartial, shown while the full search runs.
 // - createLimiter: the same cap for applies (one background op per book).
 // - fillableFields: the 'Fill empty fields' half of the page's apply toggle
 //   for the per-book apply endpoint, which takes a field list, not a mode.
@@ -32,17 +35,20 @@ export const CANDIDATE_APPLY_CONCURRENCY = 4;
 export interface CandidateQuery {
   title: string;
   author: string;
+  /** A browse search: what was typed, not the book's identity (Search again). */
+  browse?: boolean;
 }
 
 export type CandidateSearchFn = (
   bookId: string,
-  query: CandidateQuery
+  query: CandidateQuery,
+  onPartial?: (results: MetadataCandidate[]) => void
 ) => Promise<MetadataCandidate[]>;
 
 export type CandidateEntry =
   | { status: 'idle' }
   | { status: 'queued' }
-  | { status: 'loading' }
+  | { status: 'loading'; partial?: MetadataCandidate[] }
   | { status: 'done'; results: MetadataCandidate[] }
   | { status: 'error'; error: string };
 
@@ -51,7 +57,7 @@ const QUEUED: CandidateEntry = { status: 'queued' };
 const LOADING: CandidateEntry = { status: 'loading' };
 
 export function candidateKey(bookId: string, q: CandidateQuery): string {
-  return `${bookId}\u0000${q.title.trim()}\u0000${q.author.trim()}`;
+  return `${bookId}\u0000${q.title.trim()}\u0000${q.author.trim()}\u0000${q.browse ? 'b' : ''}`;
 }
 
 interface Job {
@@ -103,6 +109,18 @@ export class CandidateLoader {
     this.pump();
   }
 
+  /**
+   * Run a search again even if its answer is cached (the same text submitted
+   * twice): a settled answer is dropped and the search re-queued. A search
+   * already queued or running is left alone.
+   */
+  refresh(bookId: string, query: CandidateQuery): void {
+    const key = candidateKey(bookId, query);
+    const cur = this.get(key).status;
+    if (cur === 'done' || cur === 'error') this.entries.delete(key);
+    this.request(bookId, query);
+  }
+
   /** Drop a search that has not started yet (its card left the viewport). */
   cancel(bookId: string, query: CandidateQuery): void {
     const key = candidateKey(bookId, query);
@@ -121,7 +139,9 @@ export class CandidateLoader {
       const job = this.queue.shift()!;
       this.active++;
       this.set(job.key, LOADING);
-      this.search(job.bookId, job.query)
+      this.search(job.bookId, job.query, (partial) => {
+        if (this.get(job.key).status === 'loading') this.set(job.key, { status: 'loading', partial });
+      })
         .then(
           (results) => this.set(job.key, { status: 'done', results }),
           (err: unknown) =>

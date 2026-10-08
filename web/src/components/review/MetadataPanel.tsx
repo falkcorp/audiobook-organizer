@@ -1,5 +1,5 @@
 // file: web/src/components/review/MetadataPanel.tsx
-// version: 1.9.1
+// version: 1.10.0
 // guid: 3f9a2c07-5b41-4e86-9d02-7c1e8b503a64
 // last-edited: 2026-10-07
 //
@@ -97,11 +97,38 @@ export function MetadataPanel({
   // still there when the reviewer scrolls back to it.
   const candidateLoader = useMemo(
     () =>
-      new CandidateLoader((bookId, q) =>
-        api
-          .searchMetadataForBook(bookId, q.title, q.author || undefined)
-          .then((resp) => resp.results ?? [])
-      ),
+      new CandidateLoader(async (bookId, q, onPartial) => {
+        if (!q.browse) {
+          const resp = await api.searchMetadataForBook(bookId, q.title, q.author || undefined);
+          return resp.results ?? [];
+        }
+        // Search again: the local author catalog answers at once (no
+        // provider request), then the full browse search replaces it. A
+        // failed catalog read only loses the early answer.
+        const opts = { browse: true };
+        if (q.author.trim()) {
+          void api
+            .searchMetadataForBook(bookId, q.title, q.author, undefined, undefined, undefined, undefined, {
+              ...opts,
+              catalogOnly: true,
+            })
+            .then((resp) => {
+              if (resp.results?.length) onPartial?.(resp.results);
+            })
+            .catch(() => undefined);
+        }
+        const resp = await api.searchMetadataForBook(
+          bookId,
+          q.title,
+          q.author || undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          opts
+        );
+        return resp.results ?? [];
+      }),
     []
   );
   const applyLimiter = useMemo(() => createLimiter(CANDIDATE_APPLY_CONCURRENCY), []);
