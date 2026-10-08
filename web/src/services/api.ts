@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.169.0
+// version: 2.170.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-10-07
+// last-edited: 2026-10-08
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -426,7 +426,11 @@ export interface ITunesImportStatus {
   message: string;
   total_books?: number;
   processed?: number;
+  /** Albums added as new books. */
   imported?: number;
+  /** Albums matched to a book already in the library (by iTunes ID, then path). */
+  linked?: number;
+  /** Albums left alone: a deleted iTunes ID, or a match that is ambiguous or marked for deletion. */
   skipped?: number;
   failed?: number;
   errors?: string[];
@@ -884,8 +888,6 @@ export interface ITunesPathMap {
 }
 
 export interface ITunesConfig {
-  sync_enabled: boolean;
-  sync_interval: number;
   // The .itl the PID-integrity check and the library download read. The key
   // keeps its old name so stored configs load; nothing writes the file.
   library_write_path: string;
@@ -1050,10 +1052,9 @@ export interface Config {
   auto_write_tags_on_apply?: boolean;
   verify_after_write?: boolean;
 
-  // iTunes sync
+  // iTunes import
   itunes_library_read_path?: string;
   itunes_library_write_path?: string;
-  itunes_sync_enabled?: boolean;
 
   // Sub-structs (CFG-1 nested fields)
   embedding?: EmbeddingConfig;
@@ -2960,7 +2961,7 @@ export async function startOrganize(
   folderPath?: string,
   priority?: number,
   bookIds?: string[],
-  options?: { fetchMetadataFirst?: boolean; syncITunesFirst?: boolean }
+  options?: { fetchMetadataFirst?: boolean }
 ): Promise<{ id: string }> {
   void priority; // ignored server-side; see startScan
   return wrapTrigger('library.organize', () =>
@@ -2970,7 +2971,6 @@ export async function startOrganize(
         folder_path: folderPath,
         book_ids: bookIds,
         fetch_metadata_first: options?.fetchMetadataFirst,
-        sync_itunes_first: options?.syncITunesFirst,
       },
       'Failed to start organize'
     )
@@ -3392,19 +3392,18 @@ export async function importITunesLibrary(
   return body.data;
 }
 
-export async function startITunesSync(
-  libraryPath?: string,
-  force?: boolean
-): Promise<{ operation_id: string; message: string }> {
-  return wrapTrigger('itunes.sync', async () => {
-    const response = await apiFetch(`${API_BASE}/itunes/sync`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ library_path: libraryPath, force: force ?? true }),
-    });
-    if (!response.ok) throw await buildApiError(response, 'Sync failed');
-    return (await response.json()).data;
-  });
+/**
+ * Number of books already linked to iTunes (books carrying an iTunes
+ * persistent ID). Read from GET /itunes/books, whose `count` is exact when no
+ * search is given. Used to warn before a repeat import.
+ */
+export async function getITunesLinkedBookCount(): Promise<number> {
+  const response = await apiFetch(`${API_BASE}/itunes/books?limit=1`);
+  if (!response.ok) {
+    throw await buildApiError(response, 'Failed to count iTunes-linked books');
+  }
+  const body = await response.json();
+  return typeof body.data?.count === 'number' ? body.data.count : 0;
 }
 
 export async function getITunesLibraryStatus(path: string): Promise<ITunesLibraryStatus> {

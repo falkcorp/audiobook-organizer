@@ -1,7 +1,7 @@
 <!-- file: docs/developer-guide.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 7f8a9b0c-1d2e-3f4a-5b6c-7d8e9f0a1b2c -->
-<!-- last-edited: 2026-02-26 -->
+<!-- last-edited: 2026-10-08 -->
 
 # Developer Guide
 
@@ -171,7 +171,6 @@ All endpoints live under `/api/v1/`. The server uses Gin with optional authentic
 |--------|------|-------------|
 | `POST` | `/api/v1/itunes/validate` | Validate iTunes library XML |
 | `POST` | `/api/v1/itunes/import` | Import from iTunes library |
-| `POST` | `/api/v1/itunes/sync` | Sync with iTunes |
 
 An OpenAPI specification is available at `docs/openapi.yaml`.
 
