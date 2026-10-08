@@ -1,5 +1,5 @@
 // file: internal/server/handlers/audiobooks/handler_test.go
-// version: 1.16.0
+// version: 1.16.1
 // guid: 5cd764d5-8036-425c-842e-c49d0d44acec
 // last-edited: 2026-10-07
 
@@ -60,11 +60,11 @@ type recorders struct {
 	listFiltersSeen bool
 	// listHook, when set, runs inside buildListResponse before it returns
 	// (a test uses it to hold a build open while identical requests arrive).
-	listHook func()
-	facetsResp      gin.H
-	facetsErr       error
-	facetsCalls     int
-	extIDStore      audiobookshandler.ExternalIDStore
+	listHook    func()
+	facetsResp  gin.H
+	facetsErr   error
+	facetsCalls int
+	extIDStore  audiobookshandler.ExternalIDStore
 }
 
 type testDeps struct {
