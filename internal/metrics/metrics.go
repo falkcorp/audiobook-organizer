@@ -236,18 +236,6 @@ var (
 		Buckets:   prometheus.ExponentialBuckets(0.0000005, 4, 10), // 500ns up to ~130ms
 	}, []string{"cache"})
 
-	// itunesLocationUnmappable counts iTunes writeback location values that could
-	// NOT be normalized into a valid 0x0B/0x0D LocationPair and were therefore
-	// SKIPPED (never written raw — CRIT-2). The {reason} label is a small enum
-	// (url_unmappable|invalid_path), never the path itself (cardinality). A
-	// nonzero value here is an actionable data-quality signal: stale URL-shaped or
-	// staging-dir f.ITunesPath rows that writeback refused to touch.
-	itunesLocationUnmappable = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: "audiobook_organizer",
-		Name:      "itunes_location_unmappable_total",
-		Help:      "Total iTunes writeback location values skipped because they could not be normalized into a valid 0x0B/0x0D pair (CRIT-2)",
-	}, []string{"reason"})
-
 	// organizeTargetPathCollision counts how many times generateTargetPath
 	// produced a path already claimed by a DIFFERENT book within the same
 	// organize run (DEC-11). Detection-only: the fix (deduping the collision)
@@ -316,7 +304,7 @@ func Register() {
 			catalogHarvestAuthorsGauge, catalogEntriesStaleGauge,
 			opActivityMirrorDroppedTotal, sortByRequestedTotal, operationDeprecatedDefIDTotal,
 			cacheHits, cacheMisses, cacheSets, cacheInvalidations, cacheEvictions, cacheSize, cacheGetDuration,
-			itunesLocationUnmappable, organizeTargetPathCollision, aiBackendAvailable,
+			organizeTargetPathCollision, aiBackendAvailable,
 			opItemsProcessed, opItemsTotal,
 			absListeningStatsReadFailures,
 			pebbleCollectorInstance)
@@ -331,13 +319,6 @@ func Register() {
 			cacheSets.WithLabelValues(name)
 		}
 	})
-}
-
-// RecordITunesLocationUnmappable counts a writeback location value that could not
-// be normalized into a valid 0x0B/0x0D pair and was skipped (CRIT-2 / TASK-006).
-// reason is a small enum: "url_unmappable" or "invalid_path".
-func RecordITunesLocationUnmappable(reason string) {
-	itunesLocationUnmappable.WithLabelValues(reason).Inc()
 }
 
 // RecordOrganizeTargetPathCollision counts one instance of generateTargetPath

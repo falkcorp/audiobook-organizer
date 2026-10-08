@@ -43,7 +43,7 @@ func TestPickDiffFileKeeper(t *testing.T) {
 	}
 
 	// Track sits at the AO copy (post-relocate) → keep the AO owner (index 1).
-	aoLoc, ok := canonicalWinLocationForFile(aoPath, "PID", "t", mappings)
+	aoLoc, ok := canonicalWinLocationForFile(aoPath, "PID", mappings)
 	if !ok {
 		t.Fatal("aoPath should canonicalize")
 	}

@@ -1,6 +1,7 @@
 // file: internal/itunes/service/position_sync_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 0a8b9c6d-1e7f-4a70-b8c5-3d7e0f1b9a99
+// last-edited: 2026-10-07
 
 package itunesservice
 
@@ -88,6 +89,46 @@ func TestPullITunesBookmarks_SeedsFinishedFromPlayCount(t *testing.T) {
 	state, _ := store.GetUserBookState(adminUserID, book.ID)
 	if state == nil || state.Status != database.UserBookStatusFinished {
 		t.Errorf("state = %+v, want finished", state)
+	}
+}
+
+// Seeding a finish from iTunes is import only: it writes the user state and
+// leaves the book row alone. The ITunesPlayCountBumpedAt mark existed only so
+// the removed push would not count the finish into iTunes a second time.
+func TestPullITunesBookmarks_FinishSeedDoesNotWriteTheBook(t *testing.T) {
+	store := setupSyncTestStore(t)
+
+	pc := 2
+	book, err := store.CreateBook(&database.Book{
+		Title: "Played", FilePath: "/tmp/b2", Format: "m4b",
+		ITunesPlayCount: &pc,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.GetBookByID(book.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if seeded := newPositionSync(store).pullBookmarks(); seeded != 1 {
+		t.Fatalf("seeded = %d, want 1", seeded)
+	}
+
+	after, err := store.GetBookByID(book.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.ITunesPlayCountBumpedAt != nil {
+		t.Errorf("ITunesPlayCountBumpedAt = %v, want nil: the seed must not write the book", after.ITunesPlayCountBumpedAt)
+	}
+	if (before.UpdatedAt == nil) != (after.UpdatedAt == nil) ||
+		(before.UpdatedAt != nil && !after.UpdatedAt.Equal(*before.UpdatedAt)) {
+		t.Errorf("book UpdatedAt moved %v -> %v: the seed wrote the book row", before.UpdatedAt, after.UpdatedAt)
+	}
+	state, _ := store.GetUserBookState(adminUserID, book.ID)
+	if state == nil || state.Status != database.UserBookStatusFinished || state.FinishedAt == nil {
+		t.Errorf("state = %+v, want finished with a FinishedAt", state)
 	}
 }
 
