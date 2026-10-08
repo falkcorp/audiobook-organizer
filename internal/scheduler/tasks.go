@@ -1,7 +1,7 @@
 // file: internal/scheduler/tasks.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: 9b4c7e21-a5f3-4d08-b2e6-3c8d1f7a0e54
-// last-edited: 2026-10-05
+// last-edited: 2026-10-07
 
 // Package scheduler — task registrations.
 // All 23 registered tasks are defined here. Each task's TriggerFn and
@@ -85,6 +85,33 @@ type candidateFetchTaskParams struct {
 // costs one library read and no provider request.
 func candidateFetchInterval() time.Duration {
 	mins := config.AppConfig.Scheduled.CandidateFetch.Interval
+	if mins <= 0 {
+		return 0
+	}
+	return time.Duration(mins) * time.Minute
+}
+
+// catalog_harvest task: catalog.harvest-authors over every library author.
+// catalogHarvestTaskParams mirrors the dry_run key of the server's
+// (unexported) catalogHarvestParams; it carries ONLY that key, set to false,
+// so the scheduled run writes. Every other param takes the op's default:
+// every in-scope author (catalog.BuildScope: the authors of live books with a
+// present file), the 30-day re-harvest interval, 4 workers sharing one
+// sub-limiter at catalog.harvest_rate_fraction (0.5) of Audible's budget, on
+// top of Audible's shared token bucket.
+const (
+	catalogHarvestTaskName = "catalog_harvest"
+	catalogHarvestOpID     = "catalog.harvest-authors"
+)
+
+type catalogHarvestTaskParams struct {
+	DryRun *bool `json:"dry_run"`
+}
+
+// catalogHarvestInterval is scheduled.catalog_harvest.interval (minutes,
+// default 1440 = daily; 0 disables the task).
+func catalogHarvestInterval() time.Duration {
+	mins := config.AppConfig.Scheduled.CatalogHarvest.Interval
 	if mins <= 0 {
 		return 0
 	}
@@ -748,6 +775,70 @@ func (ts *TaskScheduler) registerAllTasks() {
 			return ok
 		},
 		GetInterval:            candidateFetchInterval,
+		RunOnStart:             func() bool { return false },
+		RunInMaintenanceWindow: func() bool { return false },
+	})
+
+	// catalog_harvest: catalog.harvest-authors was registered at every
+	// startup but nothing ever enqueued it (prod journal, 14 days to
+	// 2026-10-07: catalog.enabled=true, zero runs), so the author catalog the
+	// Candidates view's author search reads was never filled. This task runs
+	// it LIVE over every library author.
+	//
+	// The op defaults to a dry run when dry_run is omitted
+	// (opmode.ResolveDryRun), so the trigger sends dry_run=false explicitly;
+	// an empty params struct would census every tick and write nothing.
+	//
+	// Repeat runs are cheap: an author whose last harvest is complete is
+	// re-listed only after 30 days (catalog.Due), so after the first pass a
+	// daily tick lists the new and the due authors. The op's DependsOn holds
+	// it QUEUED while metadata.candidate-fetch or metafetch.asin-backfill
+	// runs (all three spend Audible's budget), and they wait on it the same
+	// way. Not on startup (memdb warmup) and not in the maintenance window
+	// (the first pass is hours of rate-limited requests).
+	ts.registerTask(TaskDefinition{
+		Name:        catalogHarvestTaskName,
+		Description: "List every Audible title by each library author into the author catalog (catalog.harvest-authors, live)",
+		Category:    "maintenance",
+		TriggerFn: func(source string) (*database.Operation, error) {
+			store := ts.deps.Store()
+			if store == nil {
+				return nil, fmt.Errorf("database not initialized")
+			}
+			// The op's ConcurrencyKey QUEUES a duplicate, so a harvest that
+			// outlasts the interval would stack another behind it.
+			if ts.hasActiveV2Op(catalogHarvestOpID) {
+				schedLog.Info("%s: a %s run is already queued or running, skipping this tick (source=%s)",
+					catalogHarvestTaskName, catalogHarvestOpID, source)
+				return nil, nil
+			}
+			if prev := ts.previousRunID(catalogHarvestTaskName); prev != "" {
+				if row, err := store.GetOperationV2(prev); err == nil && row != nil {
+					if row.Status == "queued" || row.Status == "running" {
+						schedLog.Info("%s: previous run %s still %s, skipping this tick (source=%s)",
+							catalogHarvestTaskName, prev, row.Status, source)
+						return nil, nil
+					}
+				}
+			}
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), catalogHarvestOpID, catalogHarvestTaskParams{DryRun: opmode.Live()})
+			if enqErr != nil {
+				return nil, fmt.Errorf("failed to enqueue %s: %w", catalogHarvestOpID, enqErr)
+			}
+			ts.setPreviousRunID(catalogHarvestTaskName, v2ID)
+			return v2ScheduledOp(v2ID, catalogHarvestTaskName), nil
+		},
+		// Enabled when scheduled.catalog_harvest.interval > 0, catalog.enabled
+		// is on (the op refuses to run otherwise, so a tick would only fail),
+		// and the op is registered in this binary.
+		IsEnabled: func() bool {
+			if ts.deps.OpRegistry == nil || catalogHarvestInterval() <= 0 || !config.AppConfig.Catalog.Enabled {
+				return false
+			}
+			_, ok := ts.deps.OpRegistry.Def(catalogHarvestOpID)
+			return ok
+		},
+		GetInterval:            catalogHarvestInterval,
 		RunOnStart:             func() bool { return false },
 		RunInMaintenanceWindow: func() bool { return false },
 	})

@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.140.0
+// version: 1.141.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-10-07
 
@@ -1049,6 +1049,14 @@ type ScheduledTasksConfig struct {
 	// apply) on its own interval, in minutes. Gated like ASINBackfill: only
 	// Interval is read, 0 turns it off. Ships at 360 (6h).
 	CandidateFetch ScheduledTaskConfig `json:"candidate_fetch" mapstructure:"candidate_fetch"`
+	// CatalogHarvest schedules the catalog_harvest task
+	// (catalog.harvest-authors, live) on its own interval, in minutes. Gated
+	// like CandidateFetch: only Interval is read, 0 turns it off; the task
+	// also needs catalog.enabled. Ships at 1440 (daily). The op re-lists an
+	// author only after its 30-day re-harvest interval (partial and failed
+	// authors retry every run), so after the first pass a daily tick costs
+	// the new authors plus the month's due ones.
+	CatalogHarvest ScheduledTaskConfig `json:"catalog_harvest" mapstructure:"catalog_harvest"`
 }
 
 // Config holds application configuration
@@ -2529,6 +2537,9 @@ func InitConfig() {
 	// candidate_fetch: scheduled whenever interval > 0 (minutes; see
 	// ScheduledTasksConfig.CandidateFetch). Ships ON at 6h.
 	viper.SetDefault("scheduled.candidate_fetch.interval", 360)
+	// catalog_harvest: scheduled whenever interval > 0 and catalog.enabled
+	// (minutes; see ScheduledTasksConfig.CatalogHarvest). Ships ON daily.
+	viper.SetDefault("scheduled.catalog_harvest.interval", 1440)
 	// label_refinement ships DISABLED (INIT-1 T6): the scheduled dry-run chain
 	// (dedup.rebuild-gold-labels → dedup.calibrate-composite) only runs when an
 	// owner flips enabled=true. Interval is weekly (10080 min).
@@ -2571,6 +2582,7 @@ func InitConfig() {
 	viper.BindEnv("scheduled.metadata_upgrade.interval", "SCHEDULED_METADATA_UPGRADE_INTERVAL")                     //nolint:errcheck
 	viper.BindEnv("scheduled.metadata_upgrade.on_startup", "SCHEDULED_METADATA_UPGRADE_ON_STARTUP")                 //nolint:errcheck
 	viper.BindEnv("scheduled.asin_backfill.interval", "SCHEDULED_ASIN_BACKFILL_INTERVAL")                           //nolint:errcheck
+	viper.BindEnv("scheduled.catalog_harvest.interval", "SCHEDULED_CATALOG_HARVEST_INTERVAL")                       //nolint:errcheck
 	viper.BindEnv("scheduled.label_refinement.enabled", "SCHEDULED_LABEL_REFINEMENT_ENABLED")                       //nolint:errcheck
 	viper.BindEnv("scheduled.label_refinement.interval", "SCHEDULED_LABEL_REFINEMENT_INTERVAL")                     //nolint:errcheck
 	viper.BindEnv("scheduled.label_refinement.on_startup", "SCHEDULED_LABEL_REFINEMENT_ON_STARTUP")                 //nolint:errcheck
@@ -3254,6 +3266,9 @@ func InitConfig() {
 				},
 				CandidateFetch: ScheduledTaskConfig{
 					Interval: viper.GetInt("scheduled.candidate_fetch.interval"),
+				},
+				CatalogHarvest: ScheduledTaskConfig{
+					Interval: viper.GetInt("scheduled.catalog_harvest.interval"),
 				},
 				LabelRefinement: ScheduledTaskConfig{
 					Enabled:   viper.GetBool("scheduled.label_refinement.enabled"),
@@ -3952,6 +3967,10 @@ func ResetToDefaults() {
 				// candidate_fetch defaults ON the same way.
 				CandidateFetch: ScheduledTaskConfig{
 					Interval: 360,
+				},
+				// catalog_harvest defaults ON (daily) the same way.
+				CatalogHarvest: ScheduledTaskConfig{
+					Interval: 1440,
 				},
 			},
 
