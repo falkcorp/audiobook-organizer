@@ -1,7 +1,7 @@
 // file: internal/server/handlers/filesystem.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: c4d5e6f7-a8b9-0123-cdef-012345678901
-// last-edited: 2026-09-25
+// last-edited: 2026-10-08
 
 // Package handlers — FilesystemHandler covers home-directory, filesystem
 // browse, exclusion CRUD, import-path CRUD, and the on-demand single-file
@@ -484,7 +484,7 @@ type folderAutoScanParams struct {
 // folderAutoScanParams. If you change either struct, change the other in the
 // same commit.
 //
-// All four fields are mirrored even though this handler only ever sets BookIDs.
+// All three fields are mirrored even though this handler only ever sets BookIDs.
 // The registry's ConcurrencyKey dedupe BYTE-COMPARES marshalled params against
 // the active op's stored params (registry.go:632-670), so the shape this
 // produces is not private to this call site — keeping it identical to the
@@ -494,5 +494,4 @@ type libraryOrganizeParams struct {
 	FolderPath         *string  `json:"folder_path,omitempty"`
 	BookIDs            []string `json:"book_ids,omitempty"`
 	FetchMetadataFirst bool     `json:"fetch_metadata_first"`
-	SyncITunesFirst    bool     `json:"sync_itunes_first"`
 }

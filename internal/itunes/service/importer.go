@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer.go
-// version: 1.38.0
+// version: 1.39.0
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
-// last-edited: 2026-10-07
+// last-edited: 2026-10-08
 
 package itunesservice
 
@@ -108,16 +108,11 @@ type bookWriter interface {
 	CreateBook(book *database.Book) (*database.Book, error)
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
 	// ModifyBook is the lost-update-safe write: every import step that
-	// changes an EXISTING row (link, hash validation, soft-delete, organize,
-	// sync playback fields) goes through it, never GetBookByID -> UpdateBook.
+	// changes an EXISTING row (link and its playback refresh, hash
+	// validation, soft-delete, organize) goes through it, never GetBookByID -> UpdateBook.
 	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	CreateBookFile(file *database.BookFile) error
 	UpdateBookFile(id string, file *database.BookFile) error
-	// BatchUpsertBookFilesKeepPaths is the sync's file write: a track that
-	// matches an existing book_file never changes that row's FilePath (owner
-	// decision 2026-10-07, "Sync never moves files"); its iTunes location
-	// lands in ITunesPath only.
-	BatchUpsertBookFilesKeepPaths(files []*database.BookFile) error
 }
 
 // contributorWriter resolves and links authors and series. Import is
@@ -171,7 +166,9 @@ type importerStore interface {
 	importerVersionStore
 }
 
-// Importer runs the iTunes import pipeline and incremental sync.
+// Importer runs the iTunes import pipeline. There is no incremental sync:
+// import is the one iTunes action, and running it again links rather than
+// duplicates (see executeLibrary).
 type Importer struct {
 	store            importerStore
 	activityFn       func(database.ActivityEntry)
@@ -386,6 +383,29 @@ func (imp *Importer) Execute(ctx context.Context, opID string, req ImportRequest
 		operations.ClearState(imp.store, opID)
 		return fmt.Errorf("failed to parse library: %w", err)
 	}
+	return imp.executeLibrary(ctx, opID, req, library, resumeIndex, log)
+}
+
+// executeLibrary applies an already-parsed library. It is split from Execute
+// so the import path can be exercised with a Library of either source format
+// (the ITL fixture builders live in package itunes's tests and cannot be
+// reached from here). library.Carries decides which playback fields a new
+// book records and which ones a link refreshes (see itunes.SourceFields).
+//
+// Import is the only iTunes action (owner decision 2026-10-08): there is no
+// incremental sync, and it runs only when someone starts it. Running it again
+// is safe as far as matching allows. Each album is, in order:
+//   - skipped when its first track's iTunes ID is tombstoned;
+//   - linked to the book that iTunes ID is already mapped to;
+//   - linked to the one live book at its path or holding one of its track
+//     PIDs on book_files (findExistingImportTarget);
+//   - otherwise added as a new book.
+//
+// A link refreshes only the book's iTunes fields (linkITunesMetadata). It
+// never moves a file and never changes a stored FilePath, on the book or on
+// any book_file row.
+func (imp *Importer) executeLibrary(ctx context.Context, opID string, req ImportRequest, library *itunes.Library, resumeIndex int, log logger.Logger) error {
+	status := imp.statusMap.load(opID)
 
 	log.UpdateProgress(0, 0, fmt.Sprintf("Parsed %d tracks, grouping into albums...", len(library.Tracks)))
 	log.Info("Parsed %d tracks, grouping into albums...", len(library.Tracks))
@@ -446,6 +466,9 @@ func (imp *Importer) Execute(ctx context.Context, opID string, req ImportRequest
 			firstPID := group.tracks[0].PersistentID
 			if firstPID != "" {
 				if tombstoned, _ := imp.store.IsExternalIDTombstoned("itunes", firstPID); tombstoned {
+					// The book this iTunes ID belonged to was deleted on
+					// purpose; re-adding it is what the tombstone forbids.
+					incImportSkipped(status)
 					updateImportProgress(log, status, processed, totalGroups, book.Title)
 					continue
 				}
@@ -473,7 +496,17 @@ func (imp *Importer) Execute(ctx context.Context, opID string, req ImportRequest
 		// created a second book for every album already in the library.
 		existingID, lookupErr := imp.findExistingImportTarget(book, group)
 		if lookupErr != nil {
-			recordImportFailure(status, lookupErr.Error())
+			// A refusal (several matching books, or only books marked for
+			// deletion) is a skip: nothing is wrong with the import, the
+			// album just cannot be placed safely. A failed lookup is a
+			// failure. Both are listed in the run's errors.
+			var refused *importTargetRefusedError
+			if errors.As(lookupErr, &refused) {
+				incImportSkipped(status)
+				recordImportError(status, lookupErr.Error())
+			} else {
+				recordImportFailure(status, lookupErr.Error())
+			}
 			log.Warn("%s", lookupErr.Error())
 			updateImportProgress(log, status, processed, totalGroups, book.Title)
 			continue
@@ -545,7 +578,7 @@ func (imp *Importer) Execute(ctx context.Context, opID string, req ImportRequest
 				TrackNumber: &trackNum,
 				FilePath:    trackPath,
 			}); mapErr != nil {
-				// M5: a silently dropped mapping means the next sync can't
+				// M5: a silently dropped mapping means the next import can't
 				// match this track by PID — count it and say so.
 				incImportMappingError(status)
 				log.Warn("Failed to create iTunes external-ID mapping for '%s' (pid=%s, track %d): %v", book.Title, albumTrack.PersistentID, trackNum, mapErr)
@@ -801,385 +834,6 @@ func (imp *Importer) softDeleteBlockedBook(bookID, hashedPath, hash string, impo
 	return true
 }
 
-// Sync performs an incremental sync from the iTunes library XML.
-// ErrSyncDisabled is returned by Sync while itunes.sync_enabled is false.
-var ErrSyncDisabled = errors.New("iTunes sync is disabled (itunes.sync_enabled=false)")
-
-// Sync applies the iTunes library XML to the store. It refuses with
-// ErrSyncDisabled while itunes.sync_enabled is false. Until 2026-09-24 that
-// flag gated nothing: neither the itunes.sync op nor organize's pre-sync read
-// it, so "disable the sync" left both able to repoint every PID-matched row
-// whose ITunesPath differs from the XML Location back to the iTunes file,
-// which is what an organized or library-cloned row looks like until iTunes
-// regenerates its XML. Checked here, the one choke point, so every caller
-// honors it.
-func (imp *Importer) Sync(ctx context.Context, libraryPath string, pathMappings []itunes.PathMapping, activityFn func(database.ActivityEntry), log logger.Logger) error {
-	if !config.AppConfig.ITunes.SyncEnabled {
-		log.Info("Skipping iTunes sync of %s: itunes.sync_enabled is false", libraryPath)
-		return ErrSyncDisabled
-	}
-	log.UpdateProgress(0, 0, "Parsing iTunes library XML...")
-	log.Info("Starting iTunes sync from %s", libraryPath)
-
-	library, err := itunes.ParseLibrary(libraryPath)
-	if err != nil {
-		return fmt.Errorf("failed to parse library: %w", err)
-	}
-	return imp.syncLibrary(ctx, library, libraryPath, pathMappings, activityFn, log)
-}
-
-// syncLibrary applies an already-parsed library to the store. It is split from
-// Sync so the update path can be exercised with a Library of either source
-// format: the ITL fixture builders live in package itunes's tests and cannot
-// be reached from here. library.Carries decides which playback fields are
-// written (see itunes.SourceFields).
-func (imp *Importer) syncLibrary(ctx context.Context, library *itunes.Library, libraryPath string, pathMappings []itunes.PathMapping, activityFn func(database.ActivityEntry), log logger.Logger) error {
-	trackCount := len(library.Tracks)
-	log.Info("Parsed %d tracks from iTunes library", trackCount)
-	log.UpdateProgress(0, 0, fmt.Sprintf("Grouping %d tracks by album...", trackCount))
-
-	groups := imp.groupTracksByAlbum(library)
-	totalGroups := len(groups)
-	log.Info("Found %d audiobook groups from %d tracks", totalGroups, trackCount)
-	if totalGroups == 0 {
-		log.UpdateProgress(0, 0, "No audiobooks found in library")
-		log.Warn("No audiobooks found in library")
-		return nil
-	}
-
-	importOpts := itunes.ImportOptions{
-		LibraryPath:  libraryPath,
-		PathMappings: pathMappings,
-	}
-
-	log.UpdateProgress(0, 0, "Building persistent ID index...")
-	// Core-typed: the matching indices below only ever read/write Core-safe
-	// fields (ITunesPersistentID, FilePath, Title, ITunesPlayCount,
-	// ITunesRating, ITunesBookmark, ITunesLastPlayed). The actual writeback
-	// hydrates a full row (see below) so it never wipes Author/Series.
-	allBooks, err := imp.store.GetAllBooksCore(0, 0)
-	if err != nil {
-		return fmt.Errorf("failed to load books for index: %w", err)
-	}
-	// pathIndex maps a path to EVERY book at it. It was a last-wins map (and
-	// there was a bare-title index beside it) until 2026-09-13: when two
-	// books shared a path or a title, a PID miss attached this album's PID,
-	// play count, rating, bookmark and book_files to whichever book happened
-	// to be indexed last. Now a path held by more than one book is never
-	// picked from (see the ambiguity skip below), and the title fallback is
-	// gone -- a title names a work, not a book row, and BookCore carries no
-	// author or track count to disambiguate it.
-	pidIndex := make(map[string]*database.BookCore, len(allBooks))
-	pathIndex := make(map[string][]*database.BookCore, len(allBooks))
-	// idIndex resolves the book a track's book_file PID names; deletedAtPath
-	// holds the books marked for deletion at each path, which are never a
-	// match but are reported instead of creating a new book beside them.
-	idIndex := make(map[string]*database.BookCore, len(allBooks))
-	deletedAtPath := make(map[string][]string)
-	for i := range allBooks {
-		idIndex[allBooks[i].ID] = &allBooks[i]
-		if allBooks[i].ITunesPersistentID != nil && *allBooks[i].ITunesPersistentID != "" {
-			pidIndex[*allBooks[i].ITunesPersistentID] = &allBooks[i]
-		}
-		if allBooks[i].FilePath == "" {
-			continue
-		}
-		if isMarkedForDeletion(allBooks[i].MarkedForDeletion) {
-			deletedAtPath[allBooks[i].FilePath] = append(deletedAtPath[allBooks[i].FilePath], allBooks[i].ID)
-			continue
-		}
-		pathIndex[allBooks[i].FilePath] = append(pathIndex[allBooks[i].FilePath], &allBooks[i])
-	}
-	log.Info("Indexed %d books (%d with iTunes persistent IDs)", len(allBooks), len(pidIndex))
-
-	const batchFlushSize = 500
-	var pendingFiles []*database.BookFile
-	refusedFileRows := 0
-
-	flushPendingFiles := func() {
-		if len(pendingFiles) == 0 {
-			return
-		}
-		// KeepPaths: a pending row for an EXISTING book_file (matched by PID
-		// or path) carries the iTunes location in FilePath; through the plain
-		// upsert that overwrote an organized row's path with its old iTunes
-		// file. Sync never moves files -- the stored FilePath stays, the
-		// iTunes location is recorded in ITunesPath. New tracks still create
-		// their rows at the iTunes location.
-		if err := imp.store.BatchUpsertBookFilesKeepPaths(pendingFiles); err != nil {
-			// Rows whose book was deleted during the sync are refused one by
-			// one; every other row in the batch IS written. Count and name the
-			// refused ones here and in the summary: they are not retried
-			// (their book is gone) and must not vanish unreported.
-			var refused *database.BookFileRowsRefusedError
-			if errors.As(err, &refused) {
-				refusedFileRows += len(refused.RefusedFileIDs)
-				log.Warn("iTunes sync: %d file row(s) not written because their book or the row itself was deleted during the sync (missing books %v; reason by row %v); the other %d rows of the batch were written",
-					len(refused.RefusedFileIDs), refused.MissingBookIDs, refused.Reasons, refused.Committed)
-			} else {
-				log.Error("BatchUpsertBookFilesKeepPaths failed (continuing): %v", err)
-			}
-		}
-		pendingFiles = pendingFiles[:0]
-	}
-
-	var updated, newBooks, unchanged, skippedAmbiguous, skippedDeleted, skippedLookup int
-	for i, group := range groups {
-		if log.IsCanceled() {
-			log.Info("iTunes sync canceled")
-			return nil
-		}
-		if len(group.tracks) == 0 {
-			continue
-		}
-
-		firstTrack := group.tracks[0]
-		persistentID := firstTrack.PersistentID
-		if persistentID == "" {
-			continue
-		}
-
-		existing := pidIndex[persistentID]
-
-		if existing == nil {
-			// No book carries tracks[0]'s PID. Before creating one, look for
-			// the book this album already is: by path AND by every track's
-			// PID on book_files. The path alone misses an organized book
-			// (its FilePath moved under RootDir); the book PID alone misses
-			// whenever tracks[0] is not the track whose PID was recorded.
-			// Until 2026-09-13 those two misses together created a duplicate
-			// book and moved the album's book_file PIDs onto it.
-			title, bookPath := group.key, ""
-			if book, err := imp.buildBookFromAlbumGroup(group, libraryPath, importOpts, library.Carries); err == nil {
-				title, bookPath = book.Title, book.FilePath
-			}
-			live, deleted, err := imp.syncExistingCandidates(group, bookPath, pathIndex, deletedAtPath, idIndex)
-			switch {
-			case err != nil:
-				log.Warn("iTunes sync: skipped '%s' (pid=%s): %v; not creating a book it may already have", title, persistentID, err)
-				skippedLookup++
-				continue
-			case len(live) > 1:
-				// Neither link (which book?) nor create (the album is
-				// already in the library): skip until the duplicates are
-				// resolved.
-				log.Warn("iTunes sync: skipped '%s' (pid=%s): it matches %d books (%s); not attaching it to any of them",
-					title, persistentID, len(live), describeMatches(live))
-				skippedAmbiguous++
-				continue
-			case len(live) == 1:
-				for id := range live {
-					existing = idIndex[id]
-				}
-			case len(deleted) > 0:
-				log.Warn("iTunes sync: skipped '%s' (pid=%s): it belongs to %d book(s) marked for deletion (%s); restore or purge them first -- not creating a second book beside them",
-					title, persistentID, len(deleted), describeMatches(deleted))
-				skippedDeleted++
-				continue
-			}
-		}
-
-		if existing != nil && (existing.ITunesPersistentID == nil || *existing.ITunesPersistentID == "") {
-			existing.ITunesPersistentID = new(persistentID)
-			pidIndex[persistentID] = existing
-		}
-
-		if existing != nil {
-			changed := false
-
-			// Playback fields are overwritten only when the source format
-			// carries them (itunes.SourceFields). An ITL-sourced sync has no
-			// bookmark to offer, and writing its 0 here used to wipe the
-			// stored bookmark on every such sync. A carried 0 is still
-			// written: from XML it is a genuine reset.
-			carries := library.Carries
-
-			if carries.PlayCount {
-				newPlayCount := new(firstTrack.PlayCount)
-				if existing.ITunesPlayCount == nil || *existing.ITunesPlayCount != *newPlayCount {
-					existing.ITunesPlayCount = newPlayCount
-					changed = true
-				}
-			}
-
-			newRating := new(firstTrack.Rating)
-			if existing.ITunesRating == nil || *existing.ITunesRating != *newRating {
-				existing.ITunesRating = newRating
-				changed = true
-			}
-
-			if carries.Bookmark {
-				newBookmark := new(firstTrack.Bookmark)
-				if existing.ITunesBookmark == nil || *existing.ITunesBookmark != *newBookmark {
-					existing.ITunesBookmark = newBookmark
-					changed = true
-				}
-			}
-
-			if carries.PlayDate && firstTrack.PlayDate > 0 {
-				lastPlayed := time.Unix(firstTrack.PlayDate, 0)
-				if existing.ITunesLastPlayed == nil || !existing.ITunesLastPlayed.Equal(lastPlayed) {
-					existing.ITunesLastPlayed = &lastPlayed
-					changed = true
-				}
-			}
-
-			if firstTrack.Location == "" {
-				log.Debug("No Location for PID %s (%s)", persistentID, existing.Title)
-			}
-
-			if changed {
-				// existing is Core (slim): write only the iTunes fields onto
-				// the freshly read full row, under the book's write lock.
-				full, err := imp.store.ModifyBook(existing.ID, func(fresh *database.Book) error {
-					fresh.ITunesPersistentID = existing.ITunesPersistentID
-					fresh.ITunesPlayCount = existing.ITunesPlayCount
-					fresh.ITunesRating = existing.ITunesRating
-					fresh.ITunesBookmark = existing.ITunesBookmark
-					fresh.ITunesLastPlayed = existing.ITunesLastPlayed
-					return nil
-				})
-				if err != nil || full == nil {
-					log.Error("Failed to update '%s': %v", existing.Title, err)
-				} else {
-					updated++
-					if activityFn != nil {
-						activityFn(database.ActivityEntry{
-							Tier:    "change",
-							Type:    "itunes_sync",
-							Level:   "info",
-							Source:  "scheduler",
-							BookID:  full.ID,
-							Summary: fmt.Sprintf("iTunes sync updated: %s", full.Title),
-							Tags:    []string{"itunes"},
-						})
-					}
-				}
-			} else {
-				unchanged++
-			}
-
-			for _, track := range group.tracks {
-				if track.PersistentID == "" {
-					continue
-				}
-				existingFile, _ := imp.store.GetBookFileByPID(track.PersistentID)
-				if existingFile != nil && existingFile.ITunesPath == track.Location {
-					continue
-				}
-
-				remappedPath := importOpts.RemapPath(track.Location)
-				decodedPath, _ := itunes.DecodeLocation(remappedPath)
-				if decodedPath == "" {
-					decodedPath = remappedPath
-				}
-				decodedPath = remapWindowsPath(decodedPath, importOpts)
-				pendingFiles = append(pendingFiles, &database.BookFile{
-					BookID:             existing.ID,
-					FilePath:           decodedPath,
-					ITunesPath:         track.Location,
-					ITunesPersistentID: track.PersistentID,
-					TrackNumber:        track.TrackNumber,
-					TrackCount:         track.TrackCount,
-					DiscNumber:         track.DiscNumber,
-					DiscCount:          track.DiscCount,
-					Title:              track.Name,
-					Format:             strings.TrimPrefix(filepath.Ext(decodedPath), "."),
-					Duration:           trackDurationSeconds(track),
-					FileSize:           track.Size,
-				})
-			}
-		} else {
-			book, err := imp.buildBookFromAlbumGroup(group, libraryPath, importOpts, library.Carries)
-			if err != nil {
-				log.Warn("Failed to build book from group '%s': %v", group.key, err)
-				continue
-			}
-			imp.assignAuthorAndSeries(book, firstTrack)
-			book.LibraryState = new("imported")
-
-			created, err := imp.store.CreateBook(book)
-			if err != nil {
-				log.Error("Failed to create '%s': %v", book.Title, err)
-			} else {
-				newBooks++
-				imp.publishBookCreated(ctx, created.ID)
-				if created.AuthorID != nil && len(book.Authors) > 0 {
-					for i := range book.Authors {
-						book.Authors[i].BookID = created.ID
-					}
-					_ = imp.store.SetBookAuthors(created.ID, book.Authors)
-				} else if created.AuthorID != nil {
-					_ = imp.store.SetBookAuthors(created.ID, []database.BookAuthor{
-						{BookID: created.ID, AuthorID: *created.AuthorID, Role: "author", Position: 0},
-					})
-				}
-
-				for _, track := range group.tracks {
-					remappedPath := importOpts.RemapPath(track.Location)
-					decodedPath, _ := itunes.DecodeLocation(remappedPath)
-					if decodedPath == "" {
-						decodedPath = remappedPath
-					}
-					decodedPath = remapWindowsPath(decodedPath, importOpts)
-					pendingFiles = append(pendingFiles, &database.BookFile{
-						BookID:             created.ID,
-						FilePath:           decodedPath,
-						ITunesPath:         track.Location,
-						ITunesPersistentID: track.PersistentID,
-						TrackNumber:        track.TrackNumber,
-						TrackCount:         track.TrackCount,
-						DiscNumber:         track.DiscNumber,
-						DiscCount:          track.DiscCount,
-						Title:              track.Name,
-						Format:             strings.TrimPrefix(filepath.Ext(decodedPath), "."),
-						Duration:           trackDurationSeconds(track),
-						FileSize:           track.Size,
-					})
-				}
-			}
-		}
-
-		if len(pendingFiles) >= batchFlushSize {
-			flushPendingFiles()
-		}
-
-		processed := i + 1
-		if processed%importProgressBatch == 0 || processed == totalGroups {
-			message := fmt.Sprintf("Syncing book %d of %d (updated %d, new %d, unchanged %d)",
-				processed, totalGroups, updated, newBooks, unchanged)
-			log.UpdateProgress(processed, totalGroups, message)
-		}
-	}
-
-	flushPendingFiles()
-
-	if fp, err := itunes.ComputeFingerprint(libraryPath); err == nil {
-		_ = imp.store.SaveLibraryFingerprint(fp.Path, fp.Size, fp.ModTime, fp.CRC32)
-	}
-
-	summary := fmt.Sprintf("Sync completed: %d updated, %d new, %d unchanged, %d skipped (matches several books), %d skipped (belongs to a book marked for deletion), %d skipped (lookup failed), %d file rows refused (book deleted during sync) (from %d tracks, %d groups)",
-		updated, newBooks, unchanged, skippedAmbiguous, skippedDeleted, skippedLookup, refusedFileRows, trackCount, totalGroups)
-	log.UpdateProgress(totalGroups, totalGroups, summary)
-	log.Info("%s", summary)
-	_ = ctx
-	return nil
-}
-
-// DiscoverLibraryPath finds the library path from the most recently imported book.
-func (imp *Importer) DiscoverLibraryPath() string {
-	books, err := imp.store.GetAllBooksCore(100, 0)
-	if err != nil {
-		return ""
-	}
-	for _, book := range books {
-		if book.ITunesImportSource != nil && *book.ITunesImportSource != "" {
-			return *book.ITunesImportSource
-		}
-	}
-	return ""
-}
-
 // --- private helpers ---
 
 func (imp *Importer) groupTracksByAlbum(library *itunes.Library) []albumGroup {
@@ -1320,7 +974,7 @@ func agreedStrippedTitle(tracks []*itunes.Track) string {
 
 // sortTracksByDiscTrack orders tracks by disc, then track number, then PID
 // and track ID. The tie-breaks are what make tracks[0] -- the track whose PID
-// sync keys the book on -- the same on every run: groupTracksByAlbum builds
+// import keys the book on -- the same on every run: groupTracksByAlbum builds
 // the slice from a map, so tracks sharing disc/track numbers (0/0 on untagged
 // albums) arrived in a different order each time, and sort.Slice was free to
 // leave them that way. Until 2026-09-13 a different tracks[0] meant a PID
@@ -1957,43 +1611,64 @@ func (imp *Importer) applyOrganizedFileMetadata(book *database.Book, newPath str
 	}
 }
 
-// linkITunesMetadata fills the iTunes fields an existing book is still
-// missing from importBook, under the book's write lock. It returns linked ==
-// false (and no error) when the book no longer exists, so the caller can fall
-// through to creating one.
+// linkITunesMetadata attaches an album to an existing book, under the book's
+// write lock. It returns linked == false (and no error) only when the book no
+// longer exists, so the caller can fall through to creating one; a book whose
+// fields are already current is still linked (ModifyBook returns the row for
+// ErrSkipBookWrite).
 //
-// It touches ONLY iTunes fields. Until 2026-09-13 it also minted a version
-// group for a groupless book and forced IsPrimaryVersion=true on every linked
-// book -- so linking a non-primary copy made a group with two primaries, and
-// a book that was not primary on purpose became one. Version-group
+// It touches ONLY iTunes fields, in two ways:
+//   - Identity and provenance (PersistentID, DateAdded, ImportSource) are
+//     filled only when missing. A book's iTunes ID is never replaced here:
+//     moving it is the job of merge, retire and repoint.
+//   - Playback state (PlayCount, Rating, Bookmark, LastPlayed) is refreshed
+//     from the library: a re-import is how these get updated now that there
+//     is no incremental sync (removed 2026-10-08). importBook carries a
+//     playback field only when the source format does (see
+//     buildBookFromAlbumGroup and itunes.SourceFields), so a nil field is
+//     "unknown" and leaves the stored value alone. That is what keeps an
+//     ITL-sourced re-import, which decodes no bookmark, from writing 0 over a
+//     real one. LastPlayed is nil when iTunes has no play date, so it is never
+//     cleared.
+//
+// Never written: FilePath, book_file rows, version-group membership and
+// primary status. Until 2026-09-13 this minted a version group for a
+// groupless book and forced IsPrimaryVersion=true on every linked book -- so
+// linking a non-primary copy made a group with two primaries. Version-group
 // membership and primary status belong to the grouping and election passes
 // (reconcile.ElectMissingPrimaries repairs a group with no primary), not to
 // an import attaching play counts.
 func (imp *Importer) linkITunesMetadata(bookID string, importBook *database.Book, log logger.Logger) (bool, error) {
 	row, err := imp.store.ModifyBook(bookID, func(existing *database.Book) error {
 		changed := false
-		if existing.ITunesPersistentID == nil && importBook.ITunesPersistentID != nil {
-			existing.ITunesPersistentID = importBook.ITunesPersistentID
-			changed = true
+		fill := func(dst **string, src *string) {
+			if *dst == nil && src != nil {
+				*dst = src
+				changed = true
+			}
 		}
-		if existing.ITunesPlayCount == nil && importBook.ITunesPlayCount != nil {
-			existing.ITunesPlayCount = importBook.ITunesPlayCount
-			changed = true
-		}
-		if existing.ITunesRating == nil && importBook.ITunesRating != nil {
-			existing.ITunesRating = importBook.ITunesRating
-			changed = true
-		}
-		if existing.ITunesBookmark == nil && importBook.ITunesBookmark != nil {
-			existing.ITunesBookmark = importBook.ITunesBookmark
-			changed = true
-		}
+		fill(&existing.ITunesPersistentID, importBook.ITunesPersistentID)
+		fill(&existing.ITunesImportSource, importBook.ITunesImportSource)
 		if existing.ITunesDateAdded == nil && importBook.ITunesDateAdded != nil {
 			existing.ITunesDateAdded = importBook.ITunesDateAdded
 			changed = true
 		}
-		if existing.ITunesImportSource == nil && importBook.ITunesImportSource != nil {
-			existing.ITunesImportSource = importBook.ITunesImportSource
+
+		if v := importBook.ITunesPlayCount; v != nil && (existing.ITunesPlayCount == nil || *existing.ITunesPlayCount != *v) {
+			existing.ITunesPlayCount = new(*v)
+			changed = true
+		}
+		if v := importBook.ITunesRating; v != nil && (existing.ITunesRating == nil || *existing.ITunesRating != *v) {
+			existing.ITunesRating = new(*v)
+			changed = true
+		}
+		if v := importBook.ITunesBookmark; v != nil && (existing.ITunesBookmark == nil || *existing.ITunesBookmark != *v) {
+			existing.ITunesBookmark = new(*v)
+			changed = true
+		}
+		if v := importBook.ITunesLastPlayed; v != nil && (existing.ITunesLastPlayed == nil || !existing.ITunesLastPlayed.Equal(*v)) {
+			lastPlayed := *v
+			existing.ITunesLastPlayed = &lastPlayed
 			changed = true
 		}
 		if !changed {
@@ -2007,6 +1682,13 @@ func (imp *Importer) linkITunesMetadata(bookID string, importBook *database.Book
 	}
 	return row != nil, nil
 }
+
+// importTargetRefusedError is a findExistingImportTarget result that is a
+// deliberate refusal (the album matches several books, or only books marked
+// for deletion) rather than a failed lookup. Execute counts it as skipped.
+type importTargetRefusedError struct{ msg string }
+
+func (e *importTargetRefusedError) Error() string { return e.msg }
 
 // findExistingImportTarget returns the ID of the one live book this album
 // group already has, looked up by the book path and by every track's PID on
@@ -2069,22 +1751,21 @@ func (imp *Importer) findExistingImportTarget(book *database.Book, group albumGr
 		ids[id] = "track pid " + pid
 	}
 	if len(ids) > 1 {
-		return "", fmt.Errorf("skipped '%s': its path and track PIDs match %d different books (%s); not linking or creating", book.Title, len(ids), describeMatches(ids))
+		return "", &importTargetRefusedError{msg: fmt.Sprintf("skipped '%s': its path and track PIDs match %d different books (%s); not linking or creating", book.Title, len(ids), describeMatches(ids))}
 	}
 	for id := range ids {
 		return id, nil
 	}
 	if len(deleted) > 0 {
-		return "", fmt.Errorf("skipped '%s': it is already in the library as %d book(s) marked for deletion (%s); restore or purge them before re-importing -- not linking to a deleted book or creating a second one beside it", book.Title, len(deleted), describeMatches(deleted))
+		return "", &importTargetRefusedError{msg: fmt.Sprintf("skipped '%s': it is already in the library as %d book(s) marked for deletion (%s); restore or purge them before re-importing -- not linking to a deleted book or creating a second one beside it", book.Title, len(deleted), describeMatches(deleted))}
 	}
 	return "", nil
 }
 
 // bookIDsByTrackPIDs returns the books this group's tracks already belong to,
 // found by each track's PID on book_files: book ID -> the PID that found it.
-// A lookup error is returned rather than read as "no match". Used by both
-// Execute (findExistingImportTarget) and syncLibrary (syncExistingCandidates),
-// each of which combines it with its own path lookup.
+// A lookup error is returned rather than read as "no match". Used by
+// findExistingImportTarget, which combines it with its own path lookup.
 func (imp *Importer) bookIDsByTrackPIDs(group albumGroup) (map[string]string, error) {
 	ids := map[string]string{}
 	for _, track := range group.tracks {
@@ -2102,57 +1783,6 @@ func (imp *Importer) bookIDsByTrackPIDs(group albumGroup) (map[string]string, er
 		}
 	}
 	return ids, nil
-}
-
-// syncExistingCandidates finds, for a sync group no book carries tracks[0]'s
-// PID for, the books it already is: every live book at bookPath (from the
-// sync's snapshot) and the book each track's PID names on book_files. It
-// returns live matches and books marked for deletion separately (ID -> the
-// key that found it). A PID naming a book outside the snapshot is read from
-// the store: gone is ignored, marked is reported as deleted, and live (created
-// since the snapshot) is an error, so the group waits for the next sync
-// rather than guessing.
-func (imp *Importer) syncExistingCandidates(group albumGroup, bookPath string, pathIndex map[string][]*database.BookCore, deletedAtPath map[string][]string, idIndex map[string]*database.BookCore) (live, deleted map[string]string, err error) {
-	live, deleted = map[string]string{}, map[string]string{}
-	if bookPath != "" {
-		for _, m := range pathIndex[bookPath] {
-			live[m.ID] = "path " + bookPath
-		}
-		for _, id := range deletedAtPath[bookPath] {
-			deleted[id] = "path " + bookPath
-		}
-	}
-	byPID, err := imp.bookIDsByTrackPIDs(group)
-	if err != nil {
-		return nil, nil, err
-	}
-	for id, pid := range byPID {
-		if _, seen := live[id]; seen {
-			continue
-		}
-		key := "track pid " + pid
-		if core := idIndex[id]; core != nil {
-			if isMarkedForDeletion(core.MarkedForDeletion) {
-				deleted[id] = key
-			} else {
-				live[id] = key
-			}
-			continue
-		}
-		b, err := imp.store.GetBookByID(id)
-		if err != nil {
-			return nil, nil, fmt.Errorf("existing-book lookup of %s (by %s) failed: %w", id, key, err)
-		}
-		switch {
-		case b == nil:
-			// The file row names a book that no longer exists.
-		case isMarkedForDeletion(b.MarkedForDeletion):
-			deleted[id] = key
-		default:
-			return nil, nil, fmt.Errorf("book %s (by %s) was created after this sync read the library; leaving the group for the next sync", id, key)
-		}
-	}
-	return live, deleted, nil
 }
 
 // describeMatches renders ID -> key matches as a sorted, readable list.
@@ -2266,9 +1896,9 @@ func (imp *Importer) buildBookFromAlbumGroup(group albumGroup, libraryPath strin
 	}
 	// Playback fields are set only when the source format carries them
 	// (itunes.SourceFields). An uncarried field stays nil ("unknown") rather
-	// than &0: linkITunesMetadata fills only nil fields, so &0 would stop a
-	// later XML import from ever supplying the real value, and position sync
-	// already treats nil and 0 alike.
+	// than &0: linkITunesMetadata refreshes a stored field from every non-nil
+	// one, so &0 from an ITL would overwrite a real bookmark on re-import,
+	// and position sync already treats nil and 0 alike.
 	if carries.PlayCount {
 		book.ITunesPlayCount = new(firstTrack.PlayCount)
 	}

@@ -1,7 +1,7 @@
 // file: internal/server/library_core_ops.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-07
+// last-edited: 2026-10-08
 
 // library_core_ops registers the scan, organize, and transcode OperationDefs
 // that previously went through the legacy BridgeQueue.
@@ -34,7 +34,6 @@ type libraryOrganizeParams struct {
 	FolderPath         *string  `json:"folder_path,omitempty"`
 	BookIDs            []string `json:"book_ids,omitempty"`
 	FetchMetadataFirst bool     `json:"fetch_metadata_first"`
-	SyncITunesFirst    bool     `json:"sync_itunes_first"`
 }
 
 type libraryTranscodeParams struct {
@@ -330,15 +329,13 @@ func (s *Server) RegisterLibraryOrganizeOp(reg *opsregistry.Registry) error {
 			logging.Info(ctx, "library organize starting",
 				"book_count", len(p.BookIDs),
 				"folder_path", folderPath,
-				"fetch_metadata_first", p.FetchMetadataFirst,
-				"sync_itunes_first", p.SyncITunesFirst)
+				"fetch_metadata_first", p.FetchMetadataFirst)
 
 			progress := registryProgressAdapter{r: reporter}
 			organizeReq := &OrganizeRequest{
 				FolderPath:         p.FolderPath,
 				BookIDs:            p.BookIDs,
 				FetchMetadataFirst: p.FetchMetadataFirst,
-				SyncITunesFirst:    p.SyncITunesFirst,
 				OperationID:        opID,
 				// Per-book scan lock: a running scan never reads a book while
 				// this organize moves it (organizer.organizeBooksOpts).
