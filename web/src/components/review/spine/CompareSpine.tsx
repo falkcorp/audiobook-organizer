@@ -83,7 +83,9 @@ import {
   runtimeDiffers,
   type RowState,
 } from './rowState';
-import { BookInfoPanel, bookSummaryLine } from './BookInfoPanel';
+import { BookInfoPanel } from './BookInfoPanel';
+import { bookSummaryLine } from './bookInfo';
+import type { SpineViewMode } from './viewMode';
 import { CandidatesCard, type CandidatesContext } from './CandidatesCard';
 
 /**
@@ -198,17 +200,7 @@ export interface SpineRowProps {
   pathVars: PathVar[];
 }
 
-/**
- * `compact` and `two-column` are the reviewer's explicit choice, carried over
- * from the dialog's ToggleButtonGroup unchanged. `candidates` (2026-10-07,
- * replacing `auto`) shows every ranked search candidate per book.
- */
-export type SpineViewMode = 'compact' | 'two-column' | 'candidates';
-
-/** Any other value -- notably the retired 'auto' -- reads as the default. */
-export function normalizeViewMode(v: unknown): SpineViewMode {
-  return v === 'two-column' || v === 'candidates' ? v : 'compact';
-}
+export type { SpineViewMode } from './viewMode';
 
 function GroupedCard({
   group,

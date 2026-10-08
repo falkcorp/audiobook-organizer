@@ -23,13 +23,12 @@ import { Alert, Box, Button } from '@mui/material';
 import * as api from '../../services/api';
 import type { Book, MetadataCandidate } from '../../services/api';
 import { MetadataSearchDialog } from '../audiobooks/MetadataSearchDialog';
-import { submitStagedApply } from '../audiobooks/stagedMetadataApply';
 import type { CandidatesContext } from './spine/CandidatesCard';
 import {
   CANDIDATE_APPLY_CONCURRENCY,
   CandidateLoader,
+  applyCandidateToBook,
   createLimiter,
-  fillableFields,
 } from './spine/candidateLoader';
 import { QueueRail } from './QueueRail';
 import { CompareSpine, type SpineViewMode } from './spine/CompareSpine';
@@ -115,40 +114,15 @@ export function MetadataPanel({
 
   const applyCandidate = useCallback(
     (bookId: string, candidate: MetadataCandidate) =>
-      applyLimiter(async () => {
-        // The full Book: submitStagedApply needs it, and 'Fill empty fields'
-        // decides against the book as it is NOW, not as the list showed it.
-        let book: Book;
-        try {
-          book = await api.getBook(bookId);
-        } catch (err) {
-          toast(err instanceof Error ? err.message : 'Could not load that book', 'error');
-          return;
-        }
-        let fields: string[] | undefined;
-        if (applyModeRef.current === 'fill') {
-          // The per-book apply takes a field list, not a mode: fill sends
-          // only the fields the book has empty. Replace sends them all.
-          fields = fillableFields(book, candidate);
-          if (fields.length === 0) {
-            toast(
-              `Nothing to fill on "${book.title}": every field this candidate carries is already set. Switch to Replace existing to overwrite.`,
-              'info'
-            );
-            return;
-          }
-        }
-        // The Search Metadata dialog's background apply: one op per book,
-        // ASIN conflicts offered back on the toast. Write-back on, as the
-        // dialog does.
-        await submitStagedApply({
-          book,
-          pick: { candidate, fields },
-          writeToFiles: true,
+      applyLimiter(() =>
+        applyCandidateToBook({
+          bookId,
+          candidate,
+          mode: applyModeRef.current,
           toast,
-          onApplied: () => refreshSoon(),
-        });
-      }),
+          onApplied: refreshSoon,
+        })
+      ),
     [applyLimiter, toast, refreshSoon]
   );
   const candidatesCtx: CandidatesContext = useMemo(
