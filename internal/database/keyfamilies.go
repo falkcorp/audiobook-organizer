@@ -1,7 +1,7 @@
 // file: internal/database/keyfamilies.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 12fbfb04-5d87-4708-8975-48081212acb1
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 package database
 
@@ -260,6 +260,7 @@ var keyFamilies = []KeyFamily{
 	{"upos:", "user playback positions per segment", "internal/database/pebble_store_playback.go"},
 
 	// ── Review and tags ──
+	{"candfb:", "metadata-candidate thumbs-up/down labels (scoring training data)", "internal/database/candidate_feedback.go"},
 	{"review_item:", "review items and their indexes", "internal/database/review_store.go"},
 	{"tag_idx:", "tag reverse index", "internal/database/pebble_store.go"},
 }

@@ -1,7 +1,7 @@
 // file: internal/server/wire_metadata_routes.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d4e5f6a7-b8c9-0123-defa-456789012345
-// last-edited: 2026-09-03
+// last-edited: 2026-10-07
 
 package server
 
@@ -45,4 +45,11 @@ func (s *Server) wireMetadataRoutes(
 	protected.GET("/metadata/providers/throttles", s.perm(auth.PermLibraryView), metadataH.ListProviderThrottles)
 	protected.DELETE("/metadata/providers/throttles", s.perm(auth.PermLibraryEditMetadata), metadataH.ClearAllProviderThrottles)
 	protected.DELETE("/metadata/providers/throttles/:id", s.perm(auth.PermLibraryEditMetadata), metadataH.ClearProviderThrottle)
+
+	// Metadata-candidate feedback (thumbs-down / implicit thumbs-up on apply),
+	// kept as scoring training data. Recording a label is a metadata judgement,
+	// so all three take the edit permission (the export carries user ids).
+	protected.POST("/metadata/candidate-feedback", s.perm(auth.PermLibraryEditMetadata), s.handlePutCandidateFeedback)
+	protected.DELETE("/metadata/candidate-feedback/:id", s.perm(auth.PermLibraryEditMetadata), s.handleDeleteCandidateFeedback)
+	protected.GET("/metadata/candidate-feedback", s.perm(auth.PermLibraryEditMetadata), s.handleExportCandidateFeedback)
 }
