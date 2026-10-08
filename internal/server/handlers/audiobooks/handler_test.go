@@ -71,7 +71,6 @@ type testDeps struct {
 	store      *audiobooksmocks.MockAudiobooksStore
 	svc        *audiobooksmocks.MockAudiobookService
 	updater    *audiobooksmocks.MockAudiobookUpdater
-	writeBack  *audiobooksmocks.MockWriteBackEnqueuer
 	metaState  *audiobooksmocks.MockMetadataStateService
 	metaFetch  *audiobooksmocks.MockMetadataFetchService
 	batchSvc   *audiobooksmocks.MockBatchService
@@ -103,7 +102,6 @@ func newHandlerWithStore(t *testing.T, wrap func(*audiobooksmocks.MockAudiobooks
 	}
 	svc := audiobooksmocks.NewMockAudiobookService(t)
 	updater := audiobooksmocks.NewMockAudiobookUpdater(t)
-	writeBack := audiobooksmocks.NewMockWriteBackEnqueuer(t)
 	metaState := audiobooksmocks.NewMockMetadataStateService(t)
 	metaFetch := audiobooksmocks.NewMockMetadataFetchService(t)
 	batchSvc := audiobooksmocks.NewMockBatchService(t)
@@ -120,7 +118,6 @@ func newHandlerWithStore(t *testing.T, wrap func(*audiobooksmocks.MockAudiobooks
 		store,
 		svc,
 		updater,
-		func() audiobookshandler.WriteBackEnqueuer { return writeBack },
 		metaState,
 		metaFetch,
 		batchSvc,
@@ -161,7 +158,7 @@ func newHandlerWithStore(t *testing.T, wrap func(*audiobooksmocks.MockAudiobooks
 			rec.publishedEvents = append(rec.publishedEvents, event)
 		},
 	)
-	return h, testDeps{mockStore, svc, updater, writeBack, metaState, metaFetch, batchSvc, changelog, lc, fc, ac, sc, rec}
+	return h, testDeps{mockStore, svc, updater, metaState, metaFetch, batchSvc, changelog, lc, fc, ac, sc, rec}
 }
 
 // newCtx builds a gin test context for the given method/target with optional
@@ -947,7 +944,6 @@ func TestUpdateAudiobook_Success(t *testing.T) {
 	d.updater.EXPECT().UpdateAudiobookWithWarnings(mock.Anything, "b1", mock.Anything).
 		Return(&database.Book{ID: "b1", Title: "New"}, nil, nil)
 	d.svc.EXPECT().InvalidateListCache().Return()
-	d.writeBack.EXPECT().Enqueue("b1").Return()
 	c, w := newCtx("PUT", "/audiobooks/b1", map[string]any{"title": "New"}, p("id", "b1"))
 	h.UpdateAudiobook(c)
 	if w.Code != http.StatusOK || d.rec.enrichCalls != 1 {
@@ -964,7 +960,6 @@ func TestUpdateAudiobook_PartialSaveReturnsWarnings(t *testing.T) {
 	d.updater.EXPECT().UpdateAudiobookWithWarnings(mock.Anything, "b1", mock.Anything).
 		Return(&database.Book{ID: "b1", Title: "New"}, []string{warn}, nil)
 	d.svc.EXPECT().InvalidateListCache().Return()
-	d.writeBack.EXPECT().Enqueue("b1").Return()
 	c, w := newCtx("PUT", "/audiobooks/b1", map[string]any{"title": "New"}, p("id", "b1"))
 	h.UpdateAudiobook(c)
 	if w.Code != http.StatusOK {
@@ -990,7 +985,6 @@ func TestUpdateAudiobook_CleanSaveHasNoWarningsKey(t *testing.T) {
 	d.updater.EXPECT().UpdateAudiobookWithWarnings(mock.Anything, "b1", mock.Anything).
 		Return(&database.Book{ID: "b1", Title: "New"}, nil, nil)
 	d.svc.EXPECT().InvalidateListCache().Return()
-	d.writeBack.EXPECT().Enqueue("b1").Return()
 	c, w := newCtx("PUT", "/audiobooks/b1", map[string]any{"title": "New"}, p("id", "b1"))
 	h.UpdateAudiobook(c)
 	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), `"warnings"`) {
@@ -1010,7 +1004,6 @@ func TestUpdateAudiobook_ProtectedPathSkipsWriteBack(t *testing.T) {
 	d.store.EXPECT().GetBookAuthors("b1").Return([]database.BookAuthor{{AuthorID: 1}}, nil).Maybe()
 	d.store.EXPECT().GetBookNarrators("b1").Return([]database.BookNarrator{}, nil).Maybe()
 	d.svc.EXPECT().InvalidateListCache().Return()
-	d.writeBack.EXPECT().Enqueue("b1").Return()
 	c, w := newCtx("PUT", "/audiobooks/b1", map[string]any{"title": "New"}, p("id", "b1"))
 	h.UpdateAudiobook(c)
 	if w.Code != http.StatusOK {

@@ -60,8 +60,6 @@ func w3allOps() []w3registrar {
 		{"library.scan", (*Server).RegisterLibraryScanOp, true},
 		{"library.organize", (*Server).RegisterLibraryOrganizeOp, true},
 		{"library.folder-auto-scan", (*Server).RegisterFolderAutoScanOp, true},
-		{"itunes.path-reconcile", (*Server).RegisterITunesPathReconcileOp, true},
-		{"itunes.path-repair", (*Server).RegisterITunesPathRepairOp, true},
 		{"openlibrary.download", (*Server).RegisterOLDownloadOp, true},
 		{"openlibrary.import", (*Server).RegisterOLImportOp, true},
 		{"diagnostics.export", (*Server).RegisterDiagnosticsExportOp, true},

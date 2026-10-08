@@ -144,10 +144,7 @@ func TestExecuteSeriesNormalizeCore_RenamesAndEnqueues(t *testing.T) {
 		return nil
 	}
 
-	var enqueuedBooks []string
-	enqueueWB := func(id string) { enqueuedBooks = append(enqueuedBooks, id) }
-
-	affected, err := executeSeriesNormalizeCore(context.Background(), store, "op-norm", enqueueWB)
+	affected, err := executeSeriesNormalizeCore(context.Background(), store, "op-norm")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -165,9 +162,6 @@ func TestExecuteSeriesNormalizeCore_RenamesAndEnqueues(t *testing.T) {
 		renameRows[0].OldValue != "The Long Earth One" || renameRows[0].NewValue != "The Long Earth" ||
 		renameRows[0].OperationID != "op-norm" || renameRows[0].BookID != "" {
 		t.Errorf("series_rename rows = %+v, want one: series 1, The Long Earth One -> The Long Earth, op-norm", renameRows)
-	}
-	if len(enqueuedBooks) == 0 {
-		t.Errorf("expected write-back enqueues for affected books")
 	}
 	if len(affected) == 0 {
 		t.Errorf("expected affected book IDs returned")

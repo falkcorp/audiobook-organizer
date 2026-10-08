@@ -347,12 +347,10 @@ func TestRepointFolderAudio_ITunesNeverWritten(t *testing.T) {
 			rows: map[string][]database.BookFile{"b1": {{ID: "r1", BookID: "b1",
 				FilePath: filepath.Join(folder, "Book - 01.mp3"), FileSize: 200,
 				ITunesPersistentID: "ABCDEF0123456789", ITunesPath: "file://localhost/W:/itunes/Book%20-%2001.mp3"}}}}
-		wb := &rfWriteBacks{}
 		got := rfOnly(t, rfRunEnv(t, rfEnv{store: store, rootDir: root, queue: fsQueue{},
-			itunesPathFor: rfTestMapping(root), enqueueWriteBack: wb.add}, false))
+			itunesPathFor: rfTestMapping(root)}, false))
 		require.Equal(t, "itunes-path", got.Reason)
 		require.Empty(t, store.updates)
-		require.Empty(t, wb.ids())
 	})
 }
 
@@ -368,12 +366,10 @@ func TestRepointFolderAudio_ITunesRootRowRefusedEvenWithLibraryFolder(t *testing
 		rows: map[string][]database.BookFile{"b1": {{ID: "r1", BookID: "b1",
 			FilePath: filepath.Join(root, "books", "itunes", "gone", "Book - 01.mp3"), FileSize: 200,
 			ITunesPersistentID: "ABCDEF0123456789", ITunesPath: "file://localhost/W:/itunes/Book%20-%2001.mp3"}}}}
-	wb := &rfWriteBacks{}
 	got := rfOnly(t, rfRunEnv(t, rfEnv{store: store, rootDir: root, queue: fsQueue{},
-		itunesPathFor: rfTestMapping(root), enqueueWriteBack: wb.add}, false))
+		itunesPathFor: rfTestMapping(root)}, false))
 	require.Equal(t, "itunes-path", got.Reason, got.Detail)
 	require.Empty(t, store.updates)
-	require.Empty(t, wb.ids())
 }
 
 // A row whose iTunes link changed between the plan and the write (an iTunes
@@ -389,32 +385,11 @@ func TestRepointFolderAudio_ITunesLinkChangedSincePlanIsSkipped(t *testing.T) {
 			}
 		}
 	}
-	wb := &rfWriteBacks{}
 	got := rfOnly(t, rfRunEnv(t, rfEnv{store: store, rootDir: root, queue: fsQueue{},
-		itunesPathFor: rfTestMapping(root), enqueueWriteBack: wb.add}, false))
+		itunesPathFor: rfTestMapping(root)}, false))
 	require.Equal(t, rfOutcomeChanged, got.Outcome, got.Error)
 	require.Contains(t, got.Error, "iTunes link changed")
 	require.Empty(t, store.updates)
-	require.Empty(t, wb.ids())
-}
-
-// rfWriteBacks records EnqueueWriteBack calls; the write phase calls it from
-// worker goroutines.
-type rfWriteBacks struct {
-	mu  sync.Mutex
-	got []string
-}
-
-func (w *rfWriteBacks) add(id string) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.got = append(w.got, id)
-}
-
-func (w *rfWriteBacks) ids() []string {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return append([]string(nil), w.got...)
 }
 
 // rfTestMapping maps root to W:/lib, the shape metafetch.ComputeITunesPath
@@ -453,13 +428,12 @@ func TestRepointFolderAudio_ITunesLinkedConsolidationRewritesKeptRowITunesPath(t
 	root := t.TempDir()
 	rfStubProbe(t, 3600)
 	store, target := seedITunesConsolidated(t, root)
-	wb := &rfWriteBacks{}
 	// Through the REAL mapping: a configured path mapping and
 	// metafetch.ComputeITunesPath, as the op wires it in production.
 	prev := config.AppConfig.ITunes.PathMappings
 	config.AppConfig.ITunes.PathMappings = []config.ITunesPathMap{{From: "W:/lib", To: root}}
 	t.Cleanup(func() { config.AppConfig.ITunes.PathMappings = prev })
-	env := rfEnv{store: store, rootDir: root, queue: fsQueue{}, enqueueWriteBack: wb.add}
+	env := rfEnv{store: store, rootDir: root, queue: fsQueue{}}
 	env.itunesPathFor = rfProductionITunesPathFor()
 	wantITunes := "file://localhost/W:/lib/Author/Book/Book.m4b"
 
@@ -479,7 +453,6 @@ func TestRepointFolderAudio_ITunesLinkedConsolidationRewritesKeptRowITunesPath(t
 	require.Equal(t, "fb", repoint.FileID)
 	require.Equal(t, "file://localhost/W:/old/Book - 01.mp3", repoint.OldITunesPath)
 	require.Equal(t, wantITunes, repoint.NewITunesPath)
-	require.Empty(t, wb.ids(), "a dry run never enqueues write-back")
 	reportPath := filepath.Join(t.TempDir(), "rf.tsv")
 	require.NoError(t, writeRFReport(reportPath, []rfBookResult{rfOnly(t, rfRunEnv(t, env, true))}))
 	tsv, err := os.ReadFile(reportPath)
@@ -504,7 +477,6 @@ func TestRepointFolderAudio_ITunesLinkedConsolidationRewritesKeptRowITunesPath(t
 		require.Equal(t, "file://localhost/W:/old/"+filepath.Base(u.FilePath), u.ITunesPath,
 			"a superseded row keeps its itunes_path")
 	}
-	require.Equal(t, []string{"b1"}, wb.ids(), "the book is enqueued for iTunes write-back once")
 }
 
 func TestRepointFolderAudio_ITunesLinkedSizeMatchRewritesITunesPath(t *testing.T) {
@@ -522,9 +494,8 @@ func TestRepointFolderAudio_ITunesLinkedSizeMatchRewritesITunesPath(t *testing.T
 			FilePath: filepath.Join(folder, "Part 2.mp3"), FileSize: 777,
 			ITunesPersistentID: "PID-p2", ITunesPath: "file://localhost/W:/old/Part%202.mp3"}}},
 	}
-	wb := &rfWriteBacks{}
 	got := rfOnly(t, rfRunEnv(t, rfEnv{store: store, rootDir: root, queue: fsQueue{},
-		itunesPathFor: rfTestMapping(root), enqueueWriteBack: wb.add}, false))
+		itunesPathFor: rfTestMapping(root)}, false))
 	require.Equal(t, rfDecisionSizeMatch, got.Decision, got.Reason+" "+got.Detail)
 	require.Equal(t, rfOutcomeApplied, got.Outcome, got.Error)
 	u, ok := store.updateByID("p2")
@@ -533,7 +504,6 @@ func TestRepointFolderAudio_ITunesLinkedSizeMatchRewritesITunesPath(t *testing.T
 	require.Equal(t, "PID-p2", u.ITunesPersistentID)
 	_, touched := store.updateByID("p1")
 	require.False(t, touched, "a present row is not rewritten")
-	require.Equal(t, []string{"b1"}, wb.ids())
 }
 
 func TestRepointFolderAudio_ITunesPathUnmappableIsAmbiguous(t *testing.T) {
@@ -546,13 +516,11 @@ func TestRepointFolderAudio_ITunesPathUnmappableIsAmbiguous(t *testing.T) {
 			root := t.TempDir()
 			rfStubProbe(t, 3600)
 			store, _ := seedITunesConsolidated(t, root)
-			wb := &rfWriteBacks{}
 			got := rfOnly(t, rfRunEnv(t, rfEnv{store: store, rootDir: root, queue: fsQueue{},
-				itunesPathFor: mapping, enqueueWriteBack: wb.add}, false))
+				itunesPathFor: mapping}, false))
 			require.Equal(t, rfDecisionAmbiguous, got.Decision)
 			require.Equal(t, "itunes-path-unmappable", got.Reason, got.Detail)
 			require.Empty(t, store.updates, "an unmappable book is not written")
-			require.Empty(t, wb.ids())
 		})
 	}
 }
@@ -563,14 +531,12 @@ func TestRepointFolderAudio_UnlinkedRowGetsNoITunesPath(t *testing.T) {
 	root := t.TempDir()
 	rfStubProbe(t, 3600)
 	store, _ := seedConsolidated(t, root, 250)
-	wb := &rfWriteBacks{}
 	got := rfOnly(t, rfRunEnv(t, rfEnv{store: store, rootDir: root, queue: fsQueue{},
-		itunesPathFor: rfTestMapping(root), enqueueWriteBack: wb.add}, false))
+		itunesPathFor: rfTestMapping(root)}, false))
 	require.Equal(t, rfOutcomeApplied, got.Outcome, got.Error)
 	kept, ok := store.updateByID("fb")
 	require.True(t, ok)
 	require.Empty(t, kept.ITunesPath)
-	require.Empty(t, wb.ids())
 }
 
 func TestRepointFolderAudio_SupersededRowWithDurationIsAmbiguous(t *testing.T) {

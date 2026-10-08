@@ -212,7 +212,7 @@ func (d fakeDeps) RunAutoPurgeSoftDeleted(_ string) {}
 func (d fakeDeps) ExecuteSeriesPrune(_ context.Context, _ operations.ProgressReporter, _ string) error {
 	return nil
 }
-func (d fakeDeps) ExecuteSeriesNormalizeCore(_ context.Context, _ string, _ func(string)) ([]string, error) {
+func (d fakeDeps) ExecuteSeriesNormalizeCore(_ context.Context, _ string) ([]string, error) {
 	return nil, nil
 }
 func (d fakeDeps) BackfillExternalIDs(_ func(int, int, string)) error { return nil }
@@ -226,7 +226,6 @@ func (d fakeDeps) TranscodeMalformedM4BFiles(_ context.Context, _ func(int, int,
 func (d fakeDeps) CleanupOrphanedTempFiles(_ string, _ string) int { return 0 }
 func (d fakeDeps) CleanupTrashedVersions() int                     { return 0 }
 func (d fakeDeps) ActivityFlushOp(_ string)                        {}
-func (d fakeDeps) EnqueueWriteBack(_ string)                       {}
 func (d fakeDeps) PollBatch(_ context.Context) (int, error)        { return 0, nil }
 func (d fakeDeps) DedupTriageExactPending(_ context.Context, _ bool) (*TriageReport, error) {
 	return &TriageReport{}, nil

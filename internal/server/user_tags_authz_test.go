@@ -88,9 +88,6 @@ func setupUserTagsAuthzTestServer(t *testing.T) (srv *Server, adminToken, viewer
 		if server.fileIOPool != nil {
 			server.fileIOPool.Stop()
 		}
-		if server.writeBackBatcher != nil {
-			_ = server.writeBackBatcher.Stop(context.Background())
-		}
 		database.SetGlobalStore(nil)
 		store.Close()
 		_ = os.RemoveAll(tempDir)

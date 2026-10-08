@@ -109,7 +109,7 @@ func (s *organizeSvcSpy) CreateOrganizedVersion(book *database.Book, landing *or
 func organizeBook(t *testing.T, store *organizeStoreFake, svc *organizeSvcSpy) (*httptest.ResponseRecorder, map[string]any) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	h := handlers.NewOrganizeHandler(store, nil, nil, svc, nil, nil, false)
+	h := handlers.NewOrganizeHandler(store, nil, nil, svc, nil, false)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodPost, "/audiobooks/"+store.book.ID+"/organize", nil)

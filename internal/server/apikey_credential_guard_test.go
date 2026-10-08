@@ -107,9 +107,6 @@ func setupCredGuardServerWith(t *testing.T, cfg func(*config.Config)) *credGuard
 		if srv.fileIOPool != nil {
 			srv.fileIOPool.Stop()
 		}
-		if srv.writeBackBatcher != nil {
-			_ = srv.writeBackBatcher.Stop(context.Background())
-		}
 		database.SetGlobalStore(nil)
 		store.Close()
 		_ = os.RemoveAll(tempDir)

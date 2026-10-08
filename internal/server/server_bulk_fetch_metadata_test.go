@@ -145,7 +145,6 @@ func TestBulkFetchMetadata_OnlyMissingFalse_AllowsOverwrite(t *testing.T) {
 func TestBulkFetchMetadata_UndoRestoresAuthorAndCredits(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
-	server.writeBackBatcher = nil
 
 	aud := testutil.MockAudibleServer(t, func(string) []testutil.AudibleTestProduct {
 		return []testutil.AudibleTestProduct{{ASIN: "B0TESTBLK3", Title: "Bulk Book", Authors: []string{"Bulk Author"}}}
@@ -198,7 +197,6 @@ func TestBulkFetchMetadata_UndoRestoresAuthorAndCredits(t *testing.T) {
 func TestBulkFetchMetadata_KeepsAnEditMadeDuringTheSearch(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
-	server.writeBackBatcher = nil
 
 	store := database.GetGlobalStore()
 	var bookID string

@@ -54,7 +54,6 @@ type recorders struct {
 type testDeps struct {
 	store *metadatamocks.MockMetadataStore
 	mfs   *metadatamocks.MockMetadataFetchService
-	wb    *metadatamocks.MockWriteBackEnqueuer
 	reg   *metadatamocks.MockOperationsRegistry
 	pool  *metadatamocks.MockFileIOPool
 	cache *cache.Cache[gin.H]
@@ -62,7 +61,7 @@ type testDeps struct {
 }
 
 type cfg struct {
-	hasWB, hasReg, hasPool, hasMFS bool
+	hasReg, hasPool, hasMFS bool
 }
 
 func noReg(c *cfg) { c.hasReg = false }
@@ -72,14 +71,13 @@ func noReg(c *cfg) { c.hasReg = false }
 // exercise the in-method nil guards.
 func newHandler(t *testing.T, opts ...func(*cfg)) (*metadatahandler.Handler, testDeps) {
 	t.Helper()
-	cf := &cfg{hasWB: true, hasReg: true, hasPool: true, hasMFS: true}
+	cf := &cfg{hasReg: true, hasPool: true, hasMFS: true}
 	for _, o := range opts {
 		o(cf)
 	}
 
 	store := metadatamocks.NewMockMetadataStore(t)
 	mfs := metadatamocks.NewMockMetadataFetchService(t)
-	wb := metadatamocks.NewMockWriteBackEnqueuer(t)
 	reg := metadatamocks.NewMockOperationsRegistry(t)
 	pool := metadatamocks.NewMockFileIOPool(t)
 	lc := cache.New[gin.H]("meta-test", time.Minute)
@@ -101,12 +99,6 @@ func newHandler(t *testing.T, opts ...func(*cfg)) (*metadatahandler.Handler, tes
 	h := metadatahandler.New(
 		store,
 		mfsArg,
-		func() metadatahandler.WriteBackEnqueuer {
-			if cf.hasWB {
-				return wb
-			}
-			return nil
-		},
 		regArg,
 		poolArg,
 		lc,
@@ -121,7 +113,7 @@ func newHandler(t *testing.T, opts ...func(*cfg)) (*metadatahandler.Handler, tes
 		},
 		func(ctx context.Context, e plugin.Event) { rec.publishedEvents = append(rec.publishedEvents, e) },
 	)
-	return h, testDeps{store: store, mfs: mfs, wb: wb, reg: reg, pool: pool, cache: lc, rec: rec}
+	return h, testDeps{store: store, mfs: mfs, reg: reg, pool: pool, cache: lc, rec: rec}
 }
 
 // doReq runs a single handler against a synthetic gin context with the given
@@ -226,7 +218,6 @@ func TestFetchAudiobookMetadata(t *testing.T) {
 	d.mfs.EXPECT().FetchMetadataForBook(mock.Anything, "b1").Return(&metafetch.FetchMetadataResponse{
 		Message: "ok", Source: "audible", Book: &database.Book{ID: "b1", Title: "T"},
 	}, nil)
-	d.wb.EXPECT().Enqueue("b1").Return()
 	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "T2"}, nil)
 	w := doReq(h.FetchAudiobookMetadata, http.MethodPost, "/audiobooks/b1/fetch-metadata", nil, idParam("b1"))
 	if w.Code != http.StatusOK {
@@ -341,7 +332,6 @@ func TestApplyAudiobookMetadata_NoFileSequelSkipsRenamePreflight(t *testing.T) {
 	h, d := newHandler(t, noPool)
 	d.mfs.EXPECT().ApplyMetadataCandidate("b1", mock.Anything, mock.Anything).
 		Return(&metafetch.FetchMetadataResponse{Message: "applied", Source: "audible", Book: &database.Book{ID: "b1"}}, nil)
-	d.wb.EXPECT().Enqueue("b1").Return()
 	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "T"}, nil)
 	w := doReq(h.ApplyAudiobookMetadata, http.MethodPost, "/audiobooks/b1/apply-metadata",
 		map[string]any{"candidate": map[string]any{"title": "X"}}, idParam("b1"))
@@ -369,7 +359,6 @@ func TestApplyAudiobookMetadata(t *testing.T) {
 	d.mfs.EXPECT().RenamePreflight("b1", mock.Anything, []string{"title"}).Return(nil)
 	d.mfs.EXPECT().ApplyMetadataCandidate("b1", mock.Anything, mock.Anything).
 		Return(&metafetch.FetchMetadataResponse{Message: "applied", Source: "audible", Book: &database.Book{ID: "b1"}}, nil)
-	d.wb.EXPECT().Enqueue("b1").Return()
 	// Background pool submit fires synchronously in test (we don't run fn).
 	d.pool.EXPECT().Submit("b1", mock.Anything).Return(true)
 	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "T"}, nil)
@@ -727,7 +716,6 @@ func TestBulkFetchMetadata_ParallelPreservesOrderAndCounts(t *testing.T) {
 	h := metadatahandler.New(
 		store,
 		mfs,
-		func() metadatahandler.WriteBackEnqueuer { return nil },
 		nil, // opRegistry: unused by bulkFetchMetadataImpl
 		nil, // fileIOPool: unused by bulkFetchMetadataImpl
 		cache.New[gin.H]("meta-test-parallel", time.Minute),

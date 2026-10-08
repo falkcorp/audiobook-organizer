@@ -157,12 +157,6 @@ func newAudiobooksHandler(s *Server) *audiobookshandler.Handler {
 		s.storeForWiring(),
 		abSvc,
 		abUpdater,
-		func() audiobookshandler.WriteBackEnqueuer {
-			if s.writeBackBatcher == nil {
-				return nil
-			}
-			return s.writeBackBatcher
-		},
 		abMetaState,
 		abMetaFetch,
 		abBatch,

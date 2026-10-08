@@ -171,9 +171,6 @@ func setupTestServerFS(t *testing.T, inMemory bool) (*Server, func()) {
 		if server.fileIOPool != nil {
 			server.fileIOPool.Stop()
 		}
-		if server.writeBackBatcher != nil {
-			_ = server.writeBackBatcher.Stop(context.Background())
-		}
 		// Close the SQLite activity store (stopping its checkpointer) while
 		// tempDir still exists: removing the directory under a live
 		// checkpointer is what made it log a WARN into later tests' captures.
@@ -246,9 +243,6 @@ func setupTestServerWithStore(t *testing.T, store database.Store) (*Server, func
 	cleanup := func() {
 		if server.fileIOPool != nil {
 			server.fileIOPool.Stop()
-		}
-		if server.writeBackBatcher != nil {
-			_ = server.writeBackBatcher.Stop(context.Background())
 		}
 		config.AppConfig = origCfg
 		// Don't close the store - caller is responsible for cleanup

@@ -34,13 +34,13 @@ func (f *fakeApplyRecoverer) FinishApplyFileWork(id, cover string, fileIO, write
 func TestRecoverApplyMetadataFileOp_WritesTagsOnce(t *testing.T) {
 	f := &fakeApplyRecoverer{}
 	var enqueued []string
-	recoverApplyMetadataFileOp(f, func(id string) { enqueued = append(enqueued, id) }, "b1")
+	recoverApplyMetadataFileOp(f, "b1")
 
 	assert.Equal(t, []string{"b1||true|true"}, f.calls, "one pass through the shared sequel")
 	assert.Equal(t, 1, f.tagWrites)
 	assert.Equal(t, []string{"b1"}, enqueued)
 
-	recoverApplyMetadataFileOp(f, nil, "b2") // no batcher wired
+	recoverApplyMetadataFileOp(f, "b2") // no batcher wired
 	assert.Equal(t, 2, f.tagWrites)
 }
 

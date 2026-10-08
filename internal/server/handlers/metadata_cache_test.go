@@ -98,8 +98,7 @@ func newDispatchHandler(t *testing.T, ops handlers.OpEnqueuer) *handlers.Metadat
 	store.EXPECT().GetRaw(mock.Anything).Return(nil, nil).Maybe() // authority lists: no known people
 	store.EXPECT().GetBookFilesForIDsCore(mock.Anything).Return(map[string][]database.BookFileCore{}, nil).Maybe()
 	svc := handlersmocks.NewMockMetadataCacheFetchService(t)
-	batcher := handlersmocks.NewMockWriteBackEnqueuer(t)
-	return handlers.NewMetadataCacheHandler(store, svc, batcher, nil, ops, nil)
+	return handlers.NewMetadataCacheHandler(store, svc, nil, ops, nil)
 }
 
 // TestBatchApplyFromCache_EnqueuesOpWithBookIDs pins the core contract: the
@@ -329,7 +328,7 @@ func TestGetCacheReviewResults_CountsOnlyReviewableRows(t *testing.T) {
 	// counted as though there were.
 	svc.EXPECT().GetCachedCandidates("b3").Return(&metafetch.MetadataCandidateCache{}, true, nil)
 
-	h := handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil, nil)
+	h := handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil)
 	c, w := reviewCtx("limit=0&offset=0")
 	h.GetCacheReviewResults(c)
 
@@ -401,7 +400,7 @@ func TestGetCacheReviewResults_UnreviewableSplitByCause(t *testing.T) {
 			Candidates: []json.RawMessage{json.RawMessage(`{"title":`)},
 		}, true, nil)
 
-	h := handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil, nil)
+	h := handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil)
 	c, w := reviewCtx("limit=0&offset=0")
 	h.GetCacheReviewResults(c)
 
@@ -472,7 +471,7 @@ func TestGetCacheReviewResults_FlagsStaleRows(t *testing.T) {
 	svc.EXPECT().GetCachedCandidates("fresh").Return(withCandidate, true, nil)
 	svc.EXPECT().GetCachedCandidates("stale").Return(withCandidate, true, nil)
 
-	h := handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil, nil)
+	h := handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil)
 	c, w := reviewCtx("limit=0&offset=0")
 	h.GetCacheReviewResults(c)
 
@@ -577,7 +576,7 @@ func cachedFixture(t *testing.T, statuses []*string) (*handlersmocks.MockMetadat
 
 func TestListCachedCandidates_LimitAndOffsetPageTheResults(t *testing.T) {
 	store, svc := cachedFixture(t, make([]*string, 5))
-	h := handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil, nil)
+	h := handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil)
 
 	c, w := cachedCtx("limit=2")
 	h.ListCachedCandidates(c)
@@ -593,7 +592,7 @@ func TestListCachedCandidates_LimitAndOffsetPageTheResults(t *testing.T) {
 
 func TestListCachedCandidates_OffsetSkipsIntoTheSet(t *testing.T) {
 	store, svc := cachedFixture(t, make([]*string, 5))
-	h := handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil, nil)
+	h := handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil)
 
 	c, w := cachedCtx("limit=2&offset=2")
 	h.ListCachedCandidates(c)
@@ -609,7 +608,7 @@ func TestListCachedCandidates_OffsetSkipsIntoTheSet(t *testing.T) {
 // slice bound.
 func TestListCachedCandidates_OffsetPastEndIsEmpty(t *testing.T) {
 	store, svc := cachedFixture(t, make([]*string, 3))
-	h := handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil, nil)
+	h := handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil)
 
 	c, w := cachedCtx("offset=99")
 	h.ListCachedCandidates(c)
@@ -626,7 +625,7 @@ func TestListCachedCandidates_OffsetPastEndIsEmpty(t *testing.T) {
 // than load-bearing. It guards the wire contract, which outlives the caller.
 func TestListCachedCandidates_NoLimitReturnsEveryRow(t *testing.T) {
 	store, svc := cachedFixture(t, make([]*string, 5))
-	h := handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil, nil)
+	h := handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil)
 
 	c, w := cachedCtx("")
 	h.ListCachedCandidates(c)
@@ -644,7 +643,7 @@ func TestListCachedCandidates_FiltersBeforePaginating(t *testing.T) {
 	// Interleaved on purpose: the pending rows are not the leading ones, so a
 	// paginate-then-filter implementation returns fewer rows than asked for.
 	store, svc := cachedFixture(t, []*string{&matched, nil, &matched, nil, &matched, nil})
-	h := handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil, nil)
+	h := handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil)
 
 	c, w := cachedCtx("status=pending&limit=2")
 	h.ListCachedCandidates(c)
@@ -660,7 +659,7 @@ func TestListCachedCandidates_FiltersBeforePaginating(t *testing.T) {
 func TestListCachedCandidates_StatusMatchedFilters(t *testing.T) {
 	matched := "matched"
 	store, svc := cachedFixture(t, []*string{&matched, nil, &matched})
-	h := handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil, nil)
+	h := handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil)
 
 	c, w := cachedCtx("status=matched")
 	h.ListCachedCandidates(c)
@@ -691,7 +690,7 @@ func TestListCachedCandidates_OrphanedRowDroppedViaFallback(t *testing.T) {
 	}, nil).Once()
 	store.EXPECT().GetBookByID("gone").Return(nil, nil).Once()
 
-	h := handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil, nil)
+	h := handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil)
 	c, w := cachedCtx("")
 	h.ListCachedCandidates(c)
 
@@ -716,7 +715,7 @@ func TestListCachedCandidates_BatchFailureFallsBackToPointReads(t *testing.T) {
 	store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "One"}, nil).Once()
 	store.EXPECT().GetBookByID("b2").Return(&database.Book{ID: "b2", Title: "Two"}, nil).Once()
 
-	h := handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil, nil)
+	h := handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil)
 	c, w := cachedCtx("")
 	h.ListCachedCandidates(c)
 
@@ -755,7 +754,7 @@ func pagedReviewHandler(t *testing.T, n int) *handlers.MetadataCacheHandler {
 	withCandidate := &metafetch.MetadataCandidateCache{Candidates: []json.RawMessage{raw}}
 	svc.EXPECT().GetCachedCandidates(mock.Anything).Return(withCandidate, true, nil)
 
-	return handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil, nil)
+	return handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil)
 }
 
 type pagedReviewBody struct {
@@ -1011,7 +1010,7 @@ func TestListCachedCandidates_UsesListingFieldsNotFullBookReads(t *testing.T) {
 		{BookID: "b0"}, {BookID: "b1"}, {BookID: "gone"}, {BookID: "b3"},
 	}, nil)
 
-	h := handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil, nil)
+	h := handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil)
 	c, w := cachedCtx("status=pending&limit=1")
 	h.ListCachedCandidates(c)
 

@@ -94,7 +94,7 @@ func newNormalizeFixture(t *testing.T, series []database.Series, books map[strin
 
 func (f *normalizeFixture) run(t *testing.T) {
 	t.Helper()
-	if _, err := executeSeriesNormalizeCore(context.Background(), f.store, "", func(string) {}); err != nil {
+	if _, err := executeSeriesNormalizeCore(context.Background(), f.store, ""); err != nil {
 		t.Fatalf("executeSeriesNormalizeCore: %v", err)
 	}
 }
@@ -437,7 +437,7 @@ func TestExecuteSeriesNormalize_FailsClosedBeforeRenaming(t *testing.T) {
 		return nil, errors.New("scan failed")
 	}
 
-	_, err := executeSeriesNormalizeCore(context.Background(), f.store, "", func(string) {})
+	_, err := executeSeriesNormalizeCore(context.Background(), f.store, "")
 	if err == nil {
 		t.Fatal("executeSeriesNormalizeCore succeeded without series membership; it must fail closed")
 	}

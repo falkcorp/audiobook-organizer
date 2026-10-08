@@ -48,7 +48,7 @@ func TestApply_PinFromAStaleReviewSnapshotIsRefused(t *testing.T) {
 	}
 	put(shownCand)
 
-	h := handlers.NewMetadataCacheHandler(store, metafetch.NewService(store), nil, nil, nil, nil)
+	h := handlers.NewMetadataCacheHandler(store, metafetch.NewService(store), nil, nil, nil)
 	serve := func() metabatch.CandidateResult {
 		w := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(w)

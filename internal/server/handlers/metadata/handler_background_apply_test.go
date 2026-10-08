@@ -89,7 +89,6 @@ func TestApplyAudiobookMetadata_BackgroundWithoutQueuerAppliesInline(t *testing.
 	d.mfs.EXPECT().RenamePreflight("b1", mock.Anything, mock.Anything).Return(nil)
 	d.mfs.EXPECT().ApplyMetadataCandidate("b1", mock.Anything, mock.Anything).
 		Return(&metafetch.FetchMetadataResponse{Message: "applied", Book: &database.Book{ID: "b1"}}, nil)
-	d.wb.EXPECT().Enqueue("b1").Return()
 	d.pool.EXPECT().Submit("b1", mock.Anything).Return(true)
 
 	w := doReq(h.ApplyAudiobookMetadata, http.MethodPost, "/audiobooks/b1/apply-metadata",

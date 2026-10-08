@@ -6,8 +6,6 @@
 package server
 
 import (
-	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -17,9 +15,6 @@ import (
 	"testing"
 	"time"
 
-	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
-
-	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/stretchr/testify/assert"
@@ -141,7 +136,6 @@ func mustGetBook(t *testing.T, id string) *database.Book {
 func TestUndoLastApply_RevertsBatch(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
-	server.writeBackBatcher = nil
 
 	book := createApplyBook(t, "undo-batch")
 	applyCandidate(t, server, book.ID, metafetch.MetadataCandidate{
@@ -186,7 +180,6 @@ func filterStrings(v any, keep ...string) []any {
 func TestUndoLastApply_LeavesFieldChangedSince(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
-	server.writeBackBatcher = nil
 
 	book := createApplyBook(t, "undo-changed-since")
 	applyCandidate(t, server, book.ID, metafetch.MetadataCandidate{
@@ -213,7 +206,6 @@ func TestUndoLastApply_LeavesFieldChangedSince(t *testing.T) {
 func TestUndoLastApply_UndoesOnlyTheLatestApply(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
-	server.writeBackBatcher = nil
 
 	book := createApplyBook(t, "undo-latest")
 	applyCandidate(t, server, book.ID, metafetch.MetadataCandidate{Publisher: "Pub One", Source: "Open Library"})
@@ -234,7 +226,6 @@ func TestUndoLastApply_UndoesOnlyTheLatestApply(t *testing.T) {
 func TestUndoLastApply_SecondCallIsRefused(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
-	server.writeBackBatcher = nil
 
 	book := createApplyBook(t, "undo-twice")
 	applyCandidate(t, server, book.ID, metafetch.MetadataCandidate{Publisher: "Pub One", Source: "Open Library"})
@@ -256,7 +247,6 @@ func TestUndoLastApply_SecondCallIsRefused(t *testing.T) {
 func TestUndoLastApply_AuthorNeverRevertedAlone(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
-	server.writeBackBatcher = nil
 
 	store := database.GetGlobalStore()
 	author, err := store.CreateAuthor("Applied Author")
@@ -326,240 +316,6 @@ func TestApplyHistory_RecordsOnlyWhatTheApplyWrote(t *testing.T) {
 	assert.True(t, sawDescription, "the applied description must be recorded")
 }
 
-func TestUndoLastApply_WriteBackBatcherEnqueued(t *testing.T) {
-	server, cleanup := setupTestServer(t)
-	defer cleanup()
-
-	book := createApplyBook(t, "undo-writeback")
-
-	// Set up a real batcher (with auto write-back enabled)
-	origBatcher := server.writeBackBatcher
-	origConfig := config.AppConfig
-	config.AppConfig.ITunes.AutoWriteBack = true
-	config.AppConfig.ITunes.LibraryReadPath = "/fake/path.xml"
-	batcher := itunesservice.NewWriteBackBatcher(1*time.Hour, itunesservice.WriteBackBatcherConfig{AutoWriteBack: true, ITLWriteBackEnabled: true, LibraryITLPath: "/tmp/test.itl"}, nil) // long delay so it won't flush
-	server.writeBackBatcher = nil
-	applyCandidate(t, server, book.ID, metafetch.MetadataCandidate{Publisher: "Applied Pub", Source: "Open Library"})
-	server.writeBackBatcher = batcher
-	defer func() {
-		// Stop the server's fileIOPool before restoring globals to avoid races
-		// with in-flight workers reading config.AppConfig.
-		if server.fileIOPool != nil {
-			server.fileIOPool.Stop()
-		}
-		// Stop pool workers before restoring globals to avoid races
-		if p := GetGlobalFileIOPool(); p != nil {
-			p.Stop()
-			SetGlobalFileIOPool(nil)
-		}
-		_ = batcher.Stop(context.Background())
-		server.writeBackBatcher = origBatcher
-		config.AppConfig = origConfig
-	}()
-
-	code, _ := postUndoLastApply(t, server, book.ID)
-	assert.Equal(t, http.StatusOK, code)
-	assert.True(t, batcher.HasPendingBook(book.ID), "expected book ID to be enqueued in WriteBackBatcher")
-}
-
-// ---------- applyAudiobookMetadata write_back flag tests ----------
-
-func TestApplyAudiobookMetadata_WriteBackTrue(t *testing.T) {
-	server, cleanup := setupTestServer(t)
-	defer cleanup()
-
-	// Create a book to apply metadata to
-	tempFile := filepath.Join(t.TempDir(), "apply-wb-true.m4b")
-	require.NoError(t, os.WriteFile(tempFile, []byte("audio"), 0o644))
-	book, err := database.GetGlobalStore().CreateBook(&database.Book{
-		Title:    "Apply WriteBack True",
-		FilePath: tempFile,
-		Format:   "m4b",
-	})
-	require.NoError(t, err)
-
-	// Set up batcher
-	origBatcher := server.writeBackBatcher
-	origConfig := config.AppConfig
-	config.AppConfig.ITunes.AutoWriteBack = true
-	config.AppConfig.ITunes.LibraryReadPath = "/fake/path.xml"
-	batcher := itunesservice.NewWriteBackBatcher(1*time.Hour, itunesservice.WriteBackBatcherConfig{AutoWriteBack: true, ITLWriteBackEnabled: true, LibraryITLPath: "/tmp/test.itl"}, nil)
-	server.writeBackBatcher = batcher
-	defer func() {
-		// Stop the server's fileIOPool before restoring globals to avoid races
-		// with in-flight workers reading config.AppConfig.
-		if server.fileIOPool != nil {
-			server.fileIOPool.Stop()
-		}
-		// Stop pool workers before restoring globals to avoid races
-		if p := GetGlobalFileIOPool(); p != nil {
-			p.Stop()
-			SetGlobalFileIOPool(nil)
-		}
-		_ = batcher.Stop(context.Background())
-		server.writeBackBatcher = origBatcher
-		config.AppConfig = origConfig
-	}()
-
-	writeBack := true
-	payload := map[string]any{
-		"candidate": map[string]any{
-			"title":  "New Title",
-			"author": "New Author",
-			"source": "Open Library",
-			"score":  0.95,
-		},
-		"fields":     []string{"title", "author"},
-		"write_back": writeBack,
-	}
-	body, err := json.Marshal(payload)
-	require.NoError(t, err)
-
-	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/audiobooks/%s/apply-metadata", book.ID), bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	server.router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	// Write-back now runs in a background goroutine — wait briefly for it to enqueue
-	time.Sleep(500 * time.Millisecond)
-
-	// Verify enqueued
-	enqueued := batcher.HasPendingBook(book.ID)
-	assert.True(t, enqueued, "expected book ID to be enqueued when write_back=true")
-}
-
-func TestApplyAudiobookMetadata_WriteBackOmitted(t *testing.T) {
-	server, cleanup := setupTestServer(t)
-	defer cleanup()
-
-	// Create a book
-	tempFile := filepath.Join(t.TempDir(), "apply-wb-omit.m4b")
-	require.NoError(t, os.WriteFile(tempFile, []byte("audio"), 0o644))
-	book, err := database.GetGlobalStore().CreateBook(&database.Book{
-		Title:    "Apply WriteBack Omit",
-		FilePath: tempFile,
-		Format:   "m4b",
-	})
-	require.NoError(t, err)
-
-	// Set up batcher
-	origBatcher := server.writeBackBatcher
-	origConfig := config.AppConfig
-	config.AppConfig.ITunes.AutoWriteBack = true
-	config.AppConfig.ITunes.LibraryReadPath = "/fake/path.xml"
-	batcher := itunesservice.NewWriteBackBatcher(1*time.Hour, itunesservice.WriteBackBatcherConfig{AutoWriteBack: true, ITLWriteBackEnabled: true, LibraryITLPath: "/tmp/test.itl"}, nil)
-	server.writeBackBatcher = batcher
-	defer func() {
-		// Stop the server's fileIOPool before restoring globals to avoid races
-		// with in-flight workers reading config.AppConfig.
-		if server.fileIOPool != nil {
-			server.fileIOPool.Stop()
-		}
-		// Stop pool workers before restoring globals to avoid races
-		if p := GetGlobalFileIOPool(); p != nil {
-			p.Stop()
-			SetGlobalFileIOPool(nil)
-		}
-		_ = batcher.Stop(context.Background())
-		server.writeBackBatcher = origBatcher
-		config.AppConfig = origConfig
-	}()
-
-	// Omit write_back field entirely — should default to true
-	payload := map[string]any{
-		"candidate": map[string]any{
-			"title":  "New Title",
-			"author": "New Author",
-			"source": "Open Library",
-			"score":  0.95,
-		},
-		"fields": []string{"title", "author"},
-	}
-	body, err := json.Marshal(payload)
-	require.NoError(t, err)
-
-	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/audiobooks/%s/apply-metadata", book.ID), bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	server.router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	// Write-back now runs in a background goroutine — wait briefly for it to enqueue
-	time.Sleep(500 * time.Millisecond)
-
-	// Verify enqueued (defaults to true)
-	enqueued := batcher.HasPendingBook(book.ID)
-	assert.True(t, enqueued, "expected book ID to be enqueued when write_back is omitted (defaults to true)")
-}
-
-func TestApplyAudiobookMetadata_WriteBackFalse(t *testing.T) {
-	server, cleanup := setupTestServer(t)
-	defer cleanup()
-
-	// Create a book
-	tempFile := filepath.Join(t.TempDir(), "apply-wb-false.m4b")
-	require.NoError(t, os.WriteFile(tempFile, []byte("audio"), 0o644))
-	book, err := database.GetGlobalStore().CreateBook(&database.Book{
-		Title:    "Apply WriteBack False",
-		FilePath: tempFile,
-		Format:   "m4b",
-	})
-	require.NoError(t, err)
-
-	// Set up batcher
-	origBatcher := server.writeBackBatcher
-	origConfig := config.AppConfig
-	config.AppConfig.ITunes.AutoWriteBack = true
-	config.AppConfig.ITunes.LibraryReadPath = "/fake/path.xml"
-	batcher := itunesservice.NewWriteBackBatcher(1*time.Hour, itunesservice.WriteBackBatcherConfig{AutoWriteBack: true, ITLWriteBackEnabled: true, LibraryITLPath: "/tmp/test.itl"}, nil)
-	server.writeBackBatcher = batcher
-	defer func() {
-		// Stop the server's fileIOPool before restoring globals to avoid races
-		// with in-flight workers reading config.AppConfig.
-		if server.fileIOPool != nil {
-			server.fileIOPool.Stop()
-		}
-		// Stop pool workers before restoring globals to avoid races
-		if p := GetGlobalFileIOPool(); p != nil {
-			p.Stop()
-			SetGlobalFileIOPool(nil)
-		}
-		_ = batcher.Stop(context.Background())
-		server.writeBackBatcher = origBatcher
-		config.AppConfig = origConfig
-	}()
-
-	writeBack := false
-	payload := map[string]any{
-		"candidate": map[string]any{
-			"title":  "New Title",
-			"author": "New Author",
-			"source": "Open Library",
-			"score":  0.95,
-		},
-		"fields":     []string{"title", "author"},
-		"write_back": writeBack,
-	}
-	body, err := json.Marshal(payload)
-	require.NoError(t, err)
-
-	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/audiobooks/%s/apply-metadata", book.ID), bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	server.router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	// Verify NOT enqueued
-	enqueued := batcher.HasPendingBook(book.ID)
-	assert.False(t, enqueued, "expected book ID NOT to be enqueued when write_back=false")
-}
-
-// derefStr reads an optional string; the store may hand back an empty
-// string where the row held none.
 func derefStr(p *string) string {
 	if p == nil {
 		return ""

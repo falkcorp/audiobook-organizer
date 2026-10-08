@@ -242,7 +242,6 @@ func TestRunQueuedApply_CandidateWithNoLaterEditApplies(t *testing.T) {
 	d.mfs.EXPECT().RenamePreflight("b1", mock.Anything, mock.Anything).Return(nil)
 	d.mfs.EXPECT().ApplyMetadataCandidateWithOptions("b1", mock.Anything, mock.Anything,
 		metafetch.ApplyOptions{BatchID: "apply-queued-own"}).Return(&metafetch.FetchMetadataResponse{}, nil)
-	d.wb.EXPECT().Enqueue("b1").Maybe()
 	d.pool.EXPECT().Submit("b1", mock.Anything).Return(false)
 	if err := h.RunQueuedApply(context.Background(), queuedCandidate(), nil); err != nil {
 		t.Fatalf("RunQueuedApply: %v", err)

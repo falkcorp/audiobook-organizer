@@ -141,7 +141,7 @@ func TestClearMetadataNoMatch_DoesNotRevertConcurrentColumns(t *testing.T) {
 		d := 4242
 		b.Duration = &d
 	}
-	h := handlers.NewMetadataCacheHandler(store, handlersmocks.NewMockMetadataCacheFetchService(t), nil, nil, nil, nil)
+	h := handlers.NewMetadataCacheHandler(store, handlersmocks.NewMockMetadataCacheFetchService(t), nil, nil, nil)
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -165,7 +165,7 @@ func TestClearMetadataNoMatch_DoesNotRevertConcurrentColumns(t *testing.T) {
 func TestClearMetadataNoMatch_MissingBookIs404(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := newLostUpdateCacheStore()
-	h := handlers.NewMetadataCacheHandler(store, handlersmocks.NewMockMetadataCacheFetchService(t), nil, nil, nil, nil)
+	h := handlers.NewMetadataCacheHandler(store, handlersmocks.NewMockMetadataCacheFetchService(t), nil, nil, nil)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodPost, "/audiobooks/gone/clear-no-match", nil)
