@@ -1,7 +1,7 @@
 // file: internal/itunes/service/import_corruption_regression_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4e9a1c7b-8d23-4f5e-b6a0-2c7d9e1f3b58
-// last-edited: 2026-10-07
+// last-edited: 2026-10-08
 //
 // Regression tests for the 2026-09-13 iTunes import audit: each one runs the
 // real code path against a real PebbleStore and asserts the stored data.
@@ -53,8 +53,9 @@ func setNarrator(t *testing.T, store database.Store, id string) {
 }
 
 // Finding 1: a PID miss must not attach the album to a book that merely
-// shares its title.
-func TestSyncLibrary_TitleCollisionDoesNotAttachToEitherBook(t *testing.T) {
+// shares its title. (Pinned on the incremental sync until it was removed on
+// 2026-10-08; import has no title fallback either, and this keeps it so.)
+func TestImport_TitleCollisionDoesNotAttachToEitherBook(t *testing.T) {
 	imp, store := newSourceFieldsImporter(t)
 	filePath := sourceFieldsAudioFile(t)
 	var ids []string
@@ -65,7 +66,7 @@ func TestSyncLibrary_TitleCollisionDoesNotAttachToEitherBook(t *testing.T) {
 	}
 
 	lib := sourceFieldsLibrary(filePath, itunes.XMLSourceFields(), itunes.Track{PlayCount: 9, Rating: 60})
-	require.NoError(t, imp.syncLibrary(context.Background(), lib, filepath.Join(t.TempDir(), "lib"), nil, nil, logger.New("test")))
+	runImportLibrary(t, imp, lib)
 
 	for _, id := range ids {
 		got, err := store.GetBookByID(id)
@@ -76,33 +77,6 @@ func TestSyncLibrary_TitleCollisionDoesNotAttachToEitherBook(t *testing.T) {
 		require.NoError(t, err)
 		assert.Empty(t, files, "book %s must not get the album's files", id)
 	}
-}
-
-// Finding 1: a path held by two books is ambiguous -- neither is picked and
-// no third book is created for the path.
-func TestSyncLibrary_PathHeldByTwoBooksIsSkipped(t *testing.T) {
-	imp, store := newSourceFieldsImporter(t)
-	filePath := sourceFieldsAudioFile(t)
-	var ids []string
-	for _, title := range []string{"Copy One", "Copy Two"} {
-		b, err := store.CreateBook(&database.Book{Title: title, FilePath: filePath, Format: "m4b"})
-		require.NoError(t, err)
-		ids = append(ids, b.ID)
-	}
-
-	lib := sourceFieldsLibrary(filePath, itunes.XMLSourceFields(), itunes.Track{PlayCount: 9, Rating: 60})
-	require.NoError(t, imp.syncLibrary(context.Background(), lib, filepath.Join(t.TempDir(), "lib"), nil, nil, logger.New("test")))
-
-	for _, id := range ids {
-		got, err := store.GetBookByID(id)
-		require.NoError(t, err)
-		assert.Nil(t, got.ITunesPersistentID, "book %s shares the path with another book; it must not get the PID", id)
-		assert.Nil(t, got.ITunesRating, "book %s must not get the rating", id)
-		files, err := store.GetBookFiles(id)
-		require.NoError(t, err)
-		assert.Empty(t, files, "book %s must not get the album's files", id)
-	}
-	assert.Len(t, allBooks(t, store), 2, "an ambiguous path must not create a third book")
 }
 
 // raceOrganizer stands in for the file copy: while it "copies", another
@@ -278,9 +252,10 @@ func TestExecute_ReimportByTrackPIDLinksWithoutSkipDuplicates(t *testing.T) {
 
 // Review item 1: an organized book (its FilePath moved under RootDir) whose
 // album tracks share disc/track 0/0 must be found by its tracks' book_file
-// PIDs on every sync. Neither the path nor a book-level PID matches it, so
+// PIDs on every import. Neither the path nor a book-level PID matches it, so
 // until the review fix each sync created a duplicate and moved the file PIDs.
-func TestSyncLibrary_OrganizedZeroNumberedAlbumStaysOneBook(t *testing.T) {
+// (Pinned on the incremental sync until it was removed on 2026-10-08.)
+func TestImport_OrganizedZeroNumberedAlbumStaysOneBook(t *testing.T) {
 	imp, store := newSourceFieldsImporter(t)
 	itunesDir := filepath.Join(t.TempDir(), "iTunes Media", "Author Z", "Zero Book")
 	require.NoError(t, os.MkdirAll(itunesDir, 0o755))
@@ -305,9 +280,9 @@ func TestSyncLibrary_OrganizedZeroNumberedAlbumStaysOneBook(t *testing.T) {
 	}
 
 	for run := 1; run <= 2; run++ {
-		require.NoError(t, imp.syncLibrary(context.Background(), lib, filepath.Join(t.TempDir(), "lib"), nil, nil, logger.New("test")))
+		runImportLibrary(t, imp, lib)
 		books := allBooks(t, store)
-		require.Len(t, books, 1, "sync run %d created a duplicate of the organized book", run)
+		require.Len(t, books, 1, "import run %d created a duplicate of the organized book", run)
 		assert.Equal(t, book.ID, books[0].ID)
 	}
 	for _, pid := range pids {
