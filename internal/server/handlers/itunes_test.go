@@ -1,7 +1,7 @@
 // file: internal/server/handlers/itunes_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9c2a4e71-6b53-4d18-8f0a-2e7c1b9d3a64
-// last-edited: 2026-10-07
+// last-edited: 2026-10-08
 
 package handlers_test
 
@@ -57,15 +57,6 @@ func TestITunesHandler_Import_ServiceDisabled_503(t *testing.T) {
 	h := handlers.NewITunesHandler(svc, nil, nil, handlersmocks.NewMockITunesStore(t))
 	c, w := newITunesCtx(http.MethodPost, "/itunes/import", `{}`, nil)
 	h.Import(c)
-
-	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
-}
-
-func TestITunesHandler_Sync_ServiceNil_503(t *testing.T) {
-	// A nil ITunesService (iTunes not configured) must also yield 503, not panic.
-	h := handlers.NewITunesHandler(nil, nil, nil, handlersmocks.NewMockITunesStore(t))
-	c, w := newITunesCtx(http.MethodPost, "/itunes/sync", `{}`, nil)
-	h.Sync(c)
 
 	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
 }
@@ -391,37 +382,6 @@ func TestITunesHandler_LibraryStatus_NoFingerprint_OK(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), "last_synced")
-}
-
-// ── Sync ─────────────────────────────────────────────────────────────────────
-
-func TestITunesHandler_Sync_NilRegistry_500(t *testing.T) {
-	store := handlersmocks.NewMockITunesStore(t)
-	imp := handlersmocks.NewMockITunesImporter(t)
-	// store non-nil, registry nil → "operation registry not initialized".
-	h := handlers.NewITunesHandler(enabledSvc(t), imp, nil, store)
-	c, w := newITunesCtx(http.MethodPost, "/itunes/sync", `{}`, nil)
-	h.Sync(c)
-
-	assert.Equal(t, http.StatusInternalServerError, w.Code)
-}
-
-func TestITunesHandler_Sync_NoLibraryPath_400(t *testing.T) {
-	orig := config.AppConfig
-	defer func() { config.AppConfig = orig }()
-	config.AppConfig.ITunes.LibraryReadPath = ""
-
-	store := handlersmocks.NewMockITunesStore(t)
-	reg := handlersmocks.NewMockOperationsRegistry(t)
-	imp := handlersmocks.NewMockITunesImporter(t)
-	// No request path, no configured read path, importer discovers nothing.
-	imp.EXPECT().DiscoverLibraryPath().Return("")
-
-	h := handlers.NewITunesHandler(enabledSvc(t), imp, reg, store)
-	c, w := newITunesCtx(http.MethodPost, "/itunes/sync", `{}`, nil)
-	h.Sync(c)
-
-	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
 // ── LibraryStats ─────────────────────────────────────────────────────────────

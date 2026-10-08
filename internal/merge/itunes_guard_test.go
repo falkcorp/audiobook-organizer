@@ -1,7 +1,7 @@
 // file: internal/merge/itunes_guard_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8d025d9c-5d1a-4c6a-b6d3-6c88a9739dd6
-// last-edited: 2026-09-13
+// last-edited: 2026-10-08
 
 package merge
 
@@ -145,21 +145,23 @@ func TestITunesProtectedRoots(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{testITunesLibFolder, testITunesMedia}, roots)
 
-	// Empty config with sync OFF: no configured roots, merges allowed (the
-	// books/itunes/ segment match still applies).
+	// No iTunes library configured at all: no configured roots, merges
+	// allowed (the books/itunes/ segment match still applies).
 	roots, err = ITunesProtectedRoots(config.ITunesConfig{})
 	require.NoError(t, err)
 	assert.Empty(t, roots)
 
-	// Empty config with sync ON: refuse — a live library at an unknown place.
-	_, err = ITunesProtectedRoots(config.ITunesConfig{SyncEnabled: true})
+	// An .itl configured but no read path or media root: refuse — a library
+	// exists but its media is at an unknown place. (This signal was
+	// itunes.sync_enabled until the sync was removed on 2026-10-08.)
+	_, err = ITunesProtectedRoots(config.ITunesConfig{LibraryITLPath: testITunesLibFolder + "/iTunes Library.itl"})
 	require.ErrorIs(t, err, ErrITunesProtected)
 	assert.True(t, IsRefusal(err))
 }
 
-func TestGuardITunesProtected_SyncOnEmptyPathsRefusesEveryMerge(t *testing.T) {
+func TestGuardITunesProtected_ITLWithoutMediaPathsRefusesEveryMerge(t *testing.T) {
 	withITunesConfig(t, func(c *config.ITunesConfig) {
-		c.SyncEnabled = true
+		c.LibraryITLPath = testITunesLibFolder + "/iTunes Library.itl"
 		c.LibraryReadPath = ""
 		c.MediaRoot = ""
 	})

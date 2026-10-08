@@ -1,7 +1,7 @@
 // file: internal/server/credential_routes_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6d2f9a40-3b75-4e18-9c6a-8f1e0b4d27c3
-// last-edited: 2026-10-07
+// last-edited: 2026-10-08
 
 // Route-table coverage for the credential guard (2026-10-07 security review,
 // "sibling-path gate parity"): every state-changing route in the real router
@@ -89,7 +89,6 @@ var exemptRoutes = map[string]string{
 	"POST /api/v1/itunes/validate":                 "reads an iTunes library file; writes nothing",
 	"POST /api/v1/itunes/test-mapping":             "tests a path mapping; writes nothing",
 	"POST /api/v1/itunes/import":                   "imports FROM iTunes into the database; never writes iTunes",
-	"POST /api/v1/itunes/sync":                     "syncs FROM iTunes into the database; never writes iTunes",
 	"POST /api/v1/itunes/import-status/bulk":       "reads import status (POST for the id list)",
 	"POST /api/v1/itunes/pid-repair":               "dry-run-gated; clears duplicate PIDs on database rows only, never the iTunes library",
 	"POST /api/v1/audiobooks/:id/user-tags":        "library tags",

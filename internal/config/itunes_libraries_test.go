@@ -1,7 +1,7 @@
 // file: internal/config/itunes_libraries_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8a1c4e70-2d63-4b95-9f28-5c0e7a3b1d46
-// last-edited: 2026-10-07
+// last-edited: 2026-10-08
 
 package config
 
@@ -60,7 +60,6 @@ func TestValidateLibraries(t *testing.T) {
 
 	good := func() *ITunesConfig {
 		return &ITunesConfig{
-			SyncEnabled: true,
 			Libraries: LibrarySet{
 				Original:     LibraryRef{ITLPath: origITL, Frozen: true},
 				AO:           LibraryRef{ITLPath: aoITL},
@@ -71,7 +70,7 @@ func TestValidateLibraries(t *testing.T) {
 	}
 
 	t.Run("unconfigured returns no errors (back-compat)", func(t *testing.T) {
-		if errs := (&ITunesConfig{SyncEnabled: true}).ValidateLibraries(protected); errs != nil {
+		if errs := (&ITunesConfig{}).ValidateLibraries(protected); errs != nil {
 			t.Fatalf("unconfigured should be inert, got %v", errs)
 		}
 	})
@@ -107,12 +106,14 @@ func TestValidateLibraries(t *testing.T) {
 		}
 	})
 
-	t.Run("no AO write target while enabled -> error", func(t *testing.T) {
+	// AO was the write-back target. With write-back (2026-10-07) and the
+	// sync (2026-10-08) removed, an unset AO path is not an error.
+	t.Run("no AO write target -> no error", func(t *testing.T) {
 		c := good()
 		c.Libraries.AO.ITLPath = ""
-		errs := c.ValidateLibraries(protected)
-		if !hasErr(errs, "must be set when itunes sync") {
-			t.Fatalf("expected zero-value-target error, got %v", errs)
+		c.Libraries.PointedAt = "original"
+		if errs := c.ValidateLibraries(protected); len(errs) != 0 {
+			t.Fatalf("an unset AO path must not fail validation, got %v", errs)
 		}
 	})
 }

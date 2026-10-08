@@ -1,7 +1,7 @@
 // file: internal/server/handlers/scheduler_admin_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5b86925c-8469-4216-83f5-c7733c9ff488
-// last-edited: 2026-10-02
+// last-edited: 2026-10-08
 
 // Unit tests for the task-scheduler and maintenance-window HTTP handlers,
 // moved verbatim (renamed to the SchedulerHandler receiver and its own
@@ -232,7 +232,6 @@ func acceptedBoolFields() []taskBoolField {
 		{"reconcile_scan", "enabled", func() bool { return config.AppConfig.Scheduled.Reconcile.Enabled }},
 		{"reconcile_scan", "run_on_startup", func() bool { return config.AppConfig.Scheduled.Reconcile.OnStartup }},
 		{"reconcile_scan", "run_in_maintenance_window", func() bool { return config.AppConfig.Maintenance.Reconcile }},
-		{"itunes_sync", "enabled", func() bool { return config.AppConfig.ITunes.SyncEnabled }},
 		{"purge_deleted", "run_in_maintenance_window", func() bool { return config.AppConfig.Maintenance.PurgeDeleted }},
 		{"purge_old_logs", "run_in_maintenance_window", func() bool { return config.AppConfig.Maintenance.PurgeOldLogs }},
 		{"tombstone_cleanup", "run_in_maintenance_window", func() bool { return config.AppConfig.Maintenance.TombstoneCleanup }},
@@ -250,7 +249,6 @@ func acceptedIntFields() []taskIntField {
 		{"series_prune", "interval_minutes", func() int { return config.AppConfig.Scheduled.SeriesPrune.Interval }},
 		{"library_scan", "interval_minutes", func() int { return config.AppConfig.Scheduled.LibraryScan.Interval }},
 		{"reconcile_scan", "interval_minutes", func() int { return config.AppConfig.Scheduled.Reconcile.Interval }},
-		{"itunes_sync", "interval_minutes", func() int { return config.AppConfig.ITunes.SyncInterval }},
 		{"metadata_upgrade", "interval_minutes", func() int { return config.AppConfig.Scheduled.MetadataUpgrade.Interval }},
 		{"asin_backfill", "interval_minutes", func() int { return config.AppConfig.Scheduled.ASINBackfill.Interval }},
 	}
@@ -274,8 +272,6 @@ func rejectedFields() []struct{ task, field string } {
 		{"library_organize", "enabled"},
 		{"library_organize", "interval_minutes"},
 		{"library_organize", "run_on_startup"},
-		{"itunes_sync", "run_on_startup"},
-		{"itunes_sync", "run_in_maintenance_window"},
 		{"metadata_upgrade", "enabled"},
 		{"metadata_upgrade", "run_in_maintenance_window"},
 		{"asin_backfill", "enabled"},

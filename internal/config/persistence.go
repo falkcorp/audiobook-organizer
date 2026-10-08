@@ -1,7 +1,7 @@
 // file: internal/config/persistence.go
-// version: 1.41.0
+// version: 1.42.0
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
-// last-edited: 2026-10-07
+// last-edited: 2026-10-08
 
 package config
 
@@ -410,8 +410,6 @@ func migrateITunesBlob(blob string) (string, bool) {
 	}
 
 	type flatShape struct {
-		ITunesSyncEnabled      bool   `json:"itunes_sync_enabled"`
-		ITunesSyncInterval     int    `json:"itunes_sync_interval"`
 		ITunesLibraryWritePath string `json:"itunes_library_write_path"`
 		ITunesLibraryReadPath  string `json:"itunes_library_read_path"`
 		ITunesPathTrimEnabled  bool   `json:"itunes_path_trim_enabled"`
@@ -421,9 +419,10 @@ func migrateITunesBlob(blob string) (string, bool) {
 	var old flatShape
 	json.Unmarshal([]byte(blob), &old) //nolint:errcheck — already parsed above
 
+	// itunes_sync_enabled / itunes_sync_interval are only the flat-shape
+	// marker now: the sync they configured was removed on 2026-10-08, so
+	// they are dropped rather than carried into the nested blob.
 	raw["itunes"] = map[string]any{
-		"sync_enabled":       old.ITunesSyncEnabled,
-		"sync_interval":      old.ITunesSyncInterval,
 		"library_write_path": old.ITunesLibraryWritePath,
 		"library_read_path":  old.ITunesLibraryReadPath,
 		"path_trim_enabled":  old.ITunesPathTrimEnabled,
@@ -1208,16 +1207,11 @@ func applySetting(key, value, typ string) error {
 				c.PurgeSoftDeletedDeleteFiles = b
 			}
 
-		// iTunes sync (legacy flat keys — new installs use the blob).
+		// iTunes (legacy flat keys — new installs use the blob).
 		// These cases handle pre-Wave-4 installs that stored settings as individual rows.
-		case "itunes_sync_enabled":
-			if b, err := strconv.ParseBool(value); err == nil {
-				c.ITunes.SyncEnabled = b
-			}
-		case "itunes_sync_interval":
-			if i, err := strconv.Atoi(value); err == nil {
-				c.ITunes.SyncInterval = i
-			}
+		case "itunes_sync_enabled", "itunes_sync_interval":
+			// The incremental iTunes sync was removed on 2026-10-08 (import
+			// is manual only). A stored value is accepted and ignored.
 		case "itl_write_back_enabled", "itunes_auto_write_back":
 			// iTunes write-back was removed on 2026-10-07 (iTunes is
 			// import-only). A stored value is accepted and ignored.

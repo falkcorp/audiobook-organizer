@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe_transport_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 7f2b4a8d-9c3e-4d15-b6a2-0e8f1c5d7a93
-// last-edited: 2026-09-19
+// last-edited: 2026-10-08
 
 package maintenance
 
@@ -31,9 +31,11 @@ func transportTestFixture(t *testing.T, bookID, fileHash string) (*database.Mock
 
 	cacheDir := t.TempDir()
 	origCacheDir := config.AppConfig.WhisperClipCacheDir
-	// InitConfig loads every viper default, including itunes.sync_enabled=true
-	// with no library paths. Left in place, that makes the merge iTunes guard
-	// refuse every merge in later tests of this package, so restore it too.
+	// InitConfig loads every viper default, including the itunes.* block.
+	// Until 2026-10-08 that included itunes.sync_enabled=true with no library
+	// paths, which made the merge iTunes guard refuse every merge in later
+	// tests of this package. The key is gone; the iTunes block is still
+	// restored so no other default leaks into later tests.
 	origITunes := config.Snapshot().ITunes
 	t.Setenv("WHISPER_CLIP_CACHE_DIR", cacheDir)
 	config.InitConfig()

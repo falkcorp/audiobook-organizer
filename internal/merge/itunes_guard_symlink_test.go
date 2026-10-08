@@ -1,7 +1,7 @@
 // file: internal/merge/itunes_guard_symlink_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9f1d4b62-2e7a-4c85-b3f0-6a8c1e5d7b24
-// last-edited: 2026-09-13
+// last-edited: 2026-10-08
 
 package merge
 
@@ -70,7 +70,7 @@ func TestCheckITunesPath_DanglingLinkIntoSymlinkedRootIsRefused(t *testing.T) {
 	withITunesConfig(t, func(c *config.ITunesConfig) {
 		c.MediaRoot = rootLink
 		c.LibraryReadPath = ""
-		c.SyncEnabled = false
+		c.LibraryITLPath = ""
 	})
 
 	abs := filepath.Join(dir, "lib", "dangling.m4b")
@@ -121,7 +121,7 @@ func TestCheckITunesPath_RelativeDanglingLinkInSymlinkedFolderIsRefused(t *testi
 	withITunesConfig(t, func(c *config.ITunesConfig) {
 		c.MediaRoot = realRoot
 		c.LibraryReadPath = ""
-		c.SyncEnabled = false
+		c.LibraryITLPath = ""
 	})
 	d := filepath.Join(dir, "lib", "d")
 	mustSymlink(t, x, d)

@@ -1,7 +1,7 @@
 // file: internal/plugins/itunes/plugin_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: a7b8c9d0-e1f2-3456-ghij-567890123456
-// last-edited: 2026-10-07
+// last-edited: 2026-10-08
 
 package itunes
 
@@ -30,9 +30,6 @@ func TestPlugin_NilGuard(t *testing.T) {
 // real implementation.
 func TestStubOps_NoCronSchedule(t *testing.T) {
 	p := New(nil)
-	if s := p.syncDef().Schedule; s != nil {
-		t.Errorf("itunes.sync is a stub but has schedule %q — remove it or implement the op", *s)
-	}
 	if s := p.positionSyncDef().Schedule; s != nil {
 		t.Errorf("itunes.position-sync is a stub but has schedule %q — remove it or implement the op", *s)
 	}
@@ -84,7 +81,6 @@ func TestStubRuns_FailInsteadOfReportingSuccess(t *testing.T) {
 	p := New(nil)
 	rep := &stubWarnReporter{}
 	runs := map[string]func(context.Context) error{
-		"itunes.sync":          func(ctx context.Context) error { return p.runSync(ctx, nil, rep) },
 		"itunes.position-sync": func(ctx context.Context) error { return p.runPositionSync(ctx, nil, rep) },
 		"itunes.import":        func(ctx context.Context) error { return p.runImport(ctx, nil, rep) },
 	}
@@ -117,7 +113,6 @@ func TestRegister_OnlyRegistersDefsWithARealRun(t *testing.T) {
 	// These IDs have working implementations registered from internal/server.
 	// A plugin stub claiming any of them silently disables the real op.
 	shadowed := map[string]string{
-		"itunes.sync":   "server.RegisterITunesSyncOp (Importer.Sync)",
 		"itunes.import": "server.RegisterITunesImportOp (Importer.Execute)",
 	}
 

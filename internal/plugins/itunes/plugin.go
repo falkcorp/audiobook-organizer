@@ -1,7 +1,7 @@
 // file: internal/plugins/itunes/plugin.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-10-07
+// last-edited: 2026-10-08
 
 // Package itunes is the UOS plugin for iTunes/Music library operations.
 // It wraps the internal iTunes service and registers OperationDefs through
@@ -54,7 +54,7 @@ func (p *Plugin) Version() string { return "1.0.0" }
 // From 2026-07-17 until 2026-08-16 this package registered four stubs. Three of
 // them -- itunes.sync, itunes.path-reconcile, itunes.path-repair -- shadowed
 // the working implementations in internal/server/itunes_ops.go and
-// itunes_path_ops.go, which wire Importer.Sync, Paths.Reconcile and
+// itunes_path_ops.go, which wired Importer.Sync, Paths.Reconcile and
 // Repair.Repair. Each stub returned nil, so all three operations reported
 // "completed" in production without doing anything. The only evidence was one
 // WARN per boot from the registrar loop, and that WARN was swallowed.
@@ -69,9 +69,11 @@ func (p *Plugin) Version() string { return "1.0.0" }
 // enumerate these IDs without an enabled Service.
 func (p *Plugin) OperationDefs() []sdk.OperationDef {
 	return []sdk.OperationDef{
-		// EXCLUDED, all stubs whose real implementation lives in internal/server:
-		//   syncDef           -> server.RegisterITunesSyncOp (Importer.Sync)
+		// EXCLUDED, a stub whose real implementation lives in internal/server:
 		//   importDef         -> server.RegisterITunesImportOp (Importer.Execute)
+		//
+		// The itunes.sync stub (syncDef) was deleted on 2026-10-08 along with
+		// the server op it shadowed: iTunes import is manual only.
 		//
 		// positionSyncDef is a stub too, but it has no server-side counterpart,
 		// so it stays registered: dropping it would make the op vanish rather

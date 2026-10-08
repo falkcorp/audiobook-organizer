@@ -1,7 +1,7 @@
 // file: internal/server/itunes_handlers_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3a4b5c6d-7e8f-9a0b-1c2d-3e4f5a6b7c8d
-// last-edited: 2026-10-07
+// last-edited: 2026-10-08
 
 package server
 
@@ -33,7 +33,6 @@ func TestITunesDisabled_ReturnsServiceUnavailable(t *testing.T) {
 		{http.MethodPost, "/api/v1/itunes/import"},
 		{http.MethodGet, "/api/v1/itunes/import-status/fake-op"},
 		{http.MethodPost, "/api/v1/itunes/import-status/bulk"},
-		{http.MethodPost, "/api/v1/itunes/sync"},
 		// Routes registered via itunesSvcGuard (sub-component method pointers)
 		{http.MethodGet, "/api/v1/itunes/library/download"},
 	}

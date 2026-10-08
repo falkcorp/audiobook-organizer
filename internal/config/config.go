@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.141.0
+// version: 1.142.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-10-07
+// last-edited: 2026-10-08
 
 package config
 
@@ -447,15 +447,19 @@ type DedupBoilerplateConfig struct {
 	ExtraPrefixPatterns []string `json:"extra_prefix_patterns" mapstructure:"extra_prefix_patterns"`
 }
 
-// ITunesConfig holds all settings for the iTunes import/sync subsystem.
+// ITunesConfig holds all settings for the iTunes import subsystem.
 //
 // iTunes is an import-only source (owner decision 2026-10-07): nothing here
 // enables a write to the iTunes library. The write-back keys a stored config
 // may still hold (write_back_enabled, auto_write_back, write_back_dry_run)
 // have no field and are ignored on load.
+//
+// Import is also manual only (owner decision 2026-10-08): there is no
+// incremental or scheduled sync. The sync keys a stored config or the
+// environment may still hold (sync_enabled, sync_interval,
+// ITUNES_SYNC_ENABLED, ITUNES_SYNC_INTERVAL) have no field and are ignored
+// on load.
 type ITunesConfig struct {
-	SyncEnabled  bool `json:"sync_enabled"       mapstructure:"sync_enabled"`
-	SyncInterval int  `json:"sync_interval"      mapstructure:"sync_interval"`
 	// LibraryITLPath is the iTunes library (.itl) file. The app reads it (ITL
 	// parse for PID census, stale-path checks, download) and protects its
 	// directory from deletion; it never writes it. The stored key keeps its
@@ -1655,7 +1659,7 @@ type Config struct {
 	LogFormat         string `json:"log_format"` // 'text' or 'json'
 	EnableJsonLogging bool   `json:"enable_json_logging"`
 
-	// ITunes holds all iTunes import/sync settings.
+	// ITunes holds all iTunes import settings.
 	// Previously these were 10 flat fields; Wave 4 nests them here.
 	ITunes ITunesConfig `json:"itunes" mapstructure:"itunes"`
 
@@ -2610,17 +2614,14 @@ func InitConfig() {
 	viper.BindEnv("scheduled.reconcile.interval", "SCHEDULED_RECONCILE_INTERVAL")                                   //nolint:errcheck
 	viper.BindEnv("scheduled.reconcile.on_startup", "SCHEDULED_RECONCILE_ON_STARTUP")                               //nolint:errcheck
 
-	// iTunes sync defaults (nested under "itunes.*").
-	// BindEnv maps env vars so ITUNES_SYNC_ENABLED etc. override even without AutomaticEnv.
-	viper.SetDefault("itunes.sync_enabled", true)
-	viper.SetDefault("itunes.sync_interval", 30)
+	// iTunes import defaults (nested under "itunes.*"). The sync keys
+	// (itunes.sync_enabled / sync_interval and their env vars) were removed
+	// on 2026-10-08 with the incremental sync; a stored value is ignored.
 	viper.SetDefault("itunes.library_write_path", "")
 	viper.SetDefault("itunes.library_read_path", "")
 	viper.SetDefault("itunes.path_trim_enabled", false)
 	viper.SetDefault("itunes.windows_root_path", "")
 	viper.SetDefault("itunes.media_root", "")
-	viper.BindEnv("itunes.sync_enabled", "ITUNES_SYNC_ENABLED")   //nolint:errcheck
-	viper.BindEnv("itunes.sync_interval", "ITUNES_SYNC_INTERVAL") //nolint:errcheck
 
 	// Auto-update defaults
 	viper.SetDefault("auto_update.enabled", false)
@@ -3064,10 +3065,8 @@ func InitConfig() {
 				AcoustIDNightlyLimit: viper.GetInt("maintenance.acoustid_nightly_limit"),
 			},
 
-			// iTunes sync (nested sub-struct)
+			// iTunes import (nested sub-struct)
 			ITunes: ITunesConfig{
-				SyncEnabled:     viper.GetBool("itunes.sync_enabled"),
-				SyncInterval:    viper.GetInt("itunes.sync_interval"),
 				LibraryITLPath:  viper.GetString("itunes.library_write_path"),
 				LibraryReadPath: viper.GetString("itunes.library_read_path"),
 				PathTrimEnabled: viper.GetBool("itunes.path_trim_enabled"),
@@ -3954,12 +3953,6 @@ func ResetToDefaults() {
 				CatalogHarvest: ScheduledTaskConfig{
 					Interval: 360,
 				},
-			},
-
-			// iTunes sync (nested sub-struct)
-			ITunes: ITunesConfig{
-				SyncEnabled:  true,
-				SyncInterval: 30,
 			},
 
 			// Download client integration
