@@ -89,11 +89,6 @@ type OrganizeStore interface {
 	CreateOperationChange(change *database.OperationChange) error
 }
 
-// OrganizeWriteBackEnqueuer is an alias for the shared WriteBackEnqueuer; kept
-// here so existing call sites that reference OrganizeWriteBackEnqueuer continue
-// to compile without change.
-type OrganizeWriteBackEnqueuer = WriteBackEnqueuer
-
 // -----------------------------------------------------------------------
 // Handler
 // -----------------------------------------------------------------------
@@ -101,7 +96,7 @@ type OrganizeWriteBackEnqueuer = WriteBackEnqueuer
 // OrganizeHandler handles rename-preview, rename-apply, organize-preview, and
 // the single-book organize HTTP endpoints.
 //
-// renameSvc, previewSvc, organizeSvc, writeBack, and publisher may be
+// renameSvc, previewSvc, organizeSvc, and publisher may be
 // constructed via their concrete types in wireHandlers; tests may inject
 // fakes through the interface.
 type OrganizeHandler struct {
@@ -109,7 +104,6 @@ type OrganizeHandler struct {
 	renameSvc    RenameServicer
 	previewSvc   OrganizePreviewServicer
 	organizeSvc  OrganizeServicer
-	writeBack    WriteBackEnqueuer // may be nil
 	publisher    EventPublisher
 	autoOrganize bool
 
@@ -135,13 +129,11 @@ func (h *OrganizeHandler) SetLibraryCopyResolver(resolve organizer.LibraryCopyRe
 }
 
 // NewOrganizeHandler constructs an OrganizeHandler.
-// writeBack may be nil (the handler is nil-safe).
 func NewOrganizeHandler(
 	store OrganizeStore,
 	renameSvc RenameServicer,
 	previewSvc OrganizePreviewServicer,
 	organizeSvc OrganizeServicer,
-	writeBack WriteBackEnqueuer,
 	publisher EventPublisher,
 	autoOrganize bool,
 ) *OrganizeHandler {
@@ -150,7 +142,6 @@ func NewOrganizeHandler(
 		renameSvc:    renameSvc,
 		previewSvc:   previewSvc,
 		organizeSvc:  organizeSvc,
-		writeBack:    writeBack,
 		publisher:    publisher,
 		autoOrganize: autoOrganize,
 	}
@@ -210,11 +201,6 @@ func (h *OrganizeHandler) ApplyRename(c *gin.Context) {
 		}
 		httputil.InternalError(c, "failed to apply rename", err)
 		return
-	}
-
-	// Rename moved the file on disk → push a location update to iTunes.
-	if h.writeBack != nil {
-		h.writeBack.Enqueue(id)
 	}
 
 	httputil.RespondWithOK(c, result)

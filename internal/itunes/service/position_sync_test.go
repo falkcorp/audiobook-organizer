@@ -33,7 +33,7 @@ func TestPullITunesBookmarks_SeedsPosition(t *testing.T) {
 		ID: "f1", BookID: book.ID, FilePath: "/tmp/f1", Duration: 3600,
 	})
 
-	seeded := newPositionSync(store, nil).pullBookmarks()
+	seeded := newPositionSync(store).pullBookmarks()
 	if seeded != 1 {
 		t.Errorf("seeded = %d, want 1", seeded)
 	}
@@ -60,7 +60,7 @@ func TestPullITunesBookmarks_SkipsExisting(t *testing.T) {
 	})
 	_ = store.SetUserPosition(adminUserID, book.ID, "f1", 200.0)
 
-	seeded := newPositionSync(store, nil).pullBookmarks()
+	seeded := newPositionSync(store).pullBookmarks()
 	if seeded != 0 {
 		t.Errorf("should skip already-tracked, seeded = %d", seeded)
 	}
@@ -80,7 +80,7 @@ func TestPullITunesBookmarks_SeedsFinishedFromPlayCount(t *testing.T) {
 		ITunesPlayCount: &pc,
 	})
 
-	seeded := newPositionSync(store, nil).pullBookmarks()
+	seeded := newPositionSync(store).pullBookmarks()
 	if seeded != 1 {
 		t.Errorf("seeded = %d, want 1 (finished from play count)", seeded)
 	}
@@ -98,7 +98,7 @@ func TestPullITunesBookmarks_NoBookmarkNoSeed(t *testing.T) {
 		Title: "No Bookmark", FilePath: "/tmp/b1", Format: "m4b",
 	})
 
-	seeded := newPositionSync(store, nil).pullBookmarks()
+	seeded := newPositionSync(store).pullBookmarks()
 	if seeded != 0 {
 		t.Errorf("should not seed without bookmark, seeded = %d", seeded)
 	}
@@ -116,12 +116,7 @@ func TestSyncITunesPositions_EndToEnd(t *testing.T) {
 		ID: "f1", BookID: book.ID, FilePath: "/tmp/f1", Duration: 3600,
 	})
 
-	pulled, pushed := newPositionSync(store, nil).Sync()
-	if pulled != 1 {
+	if pulled := newPositionSync(store).Sync(); pulled != 1 {
 		t.Errorf("pulled = %d, want 1", pulled)
-	}
-	// Push returns 0 because writeBackBatcher is nil in tests.
-	if pushed != 0 {
-		t.Errorf("pushed = %d, want 0 (no batcher)", pushed)
 	}
 }

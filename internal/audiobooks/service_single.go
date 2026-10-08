@@ -602,19 +602,17 @@ func (svc *AudiobookService) purgeCarryingState(book *database.Book, deleteFiles
 
 // purgeDeleteRow is the purge's row delete: the tombstone snapshot, the row,
 // and then the side effects that must happen only to a book that is really
-// gone -- external-ID tombstones so a reimport is blocked, and iTunes
-// removes for the PIDs no other book holds (itunesPIDsToRemove). On a carry
-// it runs under the merge lock as the carry's delete, so a carry that fails
-// leaves none of these behind.
+// gone -- external-ID tombstones so a reimport is blocked. On a carry it runs
+// under the merge lock as the carry's delete, so a carry that fails leaves
+// none of these behind.
 //
-// Ordering: everything that can refuse (reading the external IDs and the
-// PIDs) runs first, then the snapshot and DeleteBook; the side effects run
-// only after DeleteBook succeeded. Until 2026-10-05 the tombstones and the
-// iTunes removes ran BEFORE DeleteBook, so a DeleteBook that failed (for
-// example a file row landing meanwhile: ErrBookOwnsFiles) left a live book
-// whose external IDs were blocked and whose tracks had been queued for
-// removal from iTunes. A side effect that fails after the delete is logged:
-// the row is gone either way, and nothing here can put it back.
+// Ordering: everything that can refuse (reading the external IDs) runs
+// first, then the snapshot and DeleteBook; the side effects run only after
+// DeleteBook succeeded. Until 2026-10-05 the tombstones ran BEFORE
+// DeleteBook, so a DeleteBook that failed (for example a file row landing
+// meanwhile: ErrBookOwnsFiles) left a live book whose external IDs were
+// blocked. A side effect that fails after the delete is logged: the row is
+// gone either way, and nothing here can put it back.
 func (svc *AudiobookService) purgeDeleteRow(book *database.Book) error {
 	eidStore := asExternalIDStore(svc.store)
 	var extIDs []database.ExternalIDMapping
@@ -624,13 +622,6 @@ func (svc *AudiobookService) purgeDeleteRow(book *database.Book) error {
 			return fmt.Errorf("cannot read the external IDs to tombstone: %w", err)
 		}
 	}
-	// Defense-in-depth: iTunes removes for any PIDs still on this book.
-	// Soft-delete already enqueues these but if the book was soft-deleted
-	// before that hook existed, this is the last chance to clean iTunes
-	// before the row vanishes. Decided before the delete, while the row and
-	// its group can still be read.
-	pids := svc.itunesPIDsToRemove(book)
-
 	// Step 1: Create tombstone (snapshot of book for rollback)
 	if err := svc.store.CreateBookTombstone(book); err != nil {
 		return fmt.Errorf("failed to create tombstone: %w", err)
@@ -652,93 +643,7 @@ func (svc *AudiobookService) purgeDeleteRow(book *database.Book) error {
 			}
 		}
 	}
-	if svc.itunesEnqueuer != nil {
-		for _, pid := range pids {
-			svc.itunesEnqueuer.EnqueueRemove(pid)
-		}
-	}
 	return nil
-}
-
-// pidOwnerReader finds what still holds an iTunes persistent ID.
-type pidOwnerReader interface {
-	GetBookFileByPID(itunesPID string) (*database.BookFile, error)
-}
-
-// itunesPIDsToRemove is collectITunesPIDsForBook less every PID another
-// book still holds, so deleting book never removes a live copy's track from
-// the iTunes library (ITL): a PID on any book_file row, mapped as an
-// "itunes" external ID to another book, or set as the legacy
-// ITunesPersistentID of another live member of book's version group (a
-// copy made from the same iTunes track carries the same legacy PID). A
-// lookup that fails keeps the PID (logged): an iTunes entry left behind is
-// recoverable, a live copy's track removed from the user's iTunes library
-// is not. No enqueuer wired: nothing to remove.
-func (svc *AudiobookService) itunesPIDsToRemove(book *database.Book) []string {
-	if svc.itunesEnqueuer == nil {
-		return nil
-	}
-	pids := svc.collectITunesPIDsForBook(book.ID, book)
-	if len(pids) == 0 {
-		return nil
-	}
-	keep := func(pid, why string) {
-		singleLog.Info("delete %s: iTunes track %s kept: %s",
-			logger.SanitizeLogValue(book.ID), logger.SanitizeLogValue(pid), logger.SanitizeLogValue(why))
-	}
-	var groupPIDs map[string]string
-	groupErr := error(nil)
-	if book.VersionGroupID != nil && *book.VersionGroupID != "" {
-		members, err := svc.store.GetBooksByVersionGroup(*book.VersionGroupID)
-		if err != nil {
-			groupErr = err
-		} else {
-			groupPIDs = map[string]string{}
-			for i := range members {
-				m := &members[i]
-				if m.ID != book.ID && !database.IsInTrash(m) && m.ITunesPersistentID != nil && *m.ITunesPersistentID != "" {
-					groupPIDs[*m.ITunesPersistentID] = m.ID
-				}
-			}
-		}
-	}
-	files, _ := database.AsCapability[pidOwnerReader](svc.store)
-	eid := asExternalIDStore(svc.store)
-	var out []string
-	for _, pid := range pids {
-		if groupErr != nil {
-			keep(pid, fmt.Sprintf("cannot read the version group to check for a copy sharing it: %v", groupErr))
-			continue
-		}
-		if other, ok := groupPIDs[pid]; ok {
-			keep(pid, "live copy "+other+" has the same iTunes track")
-			continue
-		}
-		if files != nil {
-			f, err := files.GetBookFileByPID(pid)
-			if err != nil {
-				keep(pid, fmt.Sprintf("cannot check which file holds it: %v", err))
-				continue
-			}
-			if f != nil && f.BookID != book.ID {
-				keep(pid, "book "+f.BookID+" has a file with this track")
-				continue
-			}
-		}
-		if eid != nil {
-			owner, err := eid.GetBookByExternalID("itunes", pid)
-			if err != nil {
-				keep(pid, fmt.Sprintf("cannot check which book it is mapped to: %v", err))
-				continue
-			}
-			if owner != "" && owner != book.ID {
-				keep(pid, "it is mapped to book "+owner)
-				continue
-			}
-		}
-		out = append(out, pid)
-	}
-	return out
 }
 
 // purgeFinish runs after the row is gone: the on-disk removal when

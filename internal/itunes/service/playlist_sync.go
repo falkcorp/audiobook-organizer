@@ -12,11 +12,8 @@
 //   for audit. Runs once (idempotent — skips playlists already
 //   imported by iTunes PID).
 //
-// Task 6: Push playlists to ITL.
-//   For dirty playlists with no iTunes PID, creates a new ITL
-//   playlist. For dirty playlists with an existing PID, updates the
-//   track list. Smart playlists are pushed as static (materialized)
-//   since iTunes will manage its own smart criteria.
+// Task 6 (push playlists to the ITL) was removed with iTunes write-back
+// on 2026-10-07: iTunes is an import-only source.
 
 package itunesservice
 
@@ -37,33 +34,25 @@ import (
 // database.UserPlaylistStore wholesale, 9 transitively.
 type playlistSyncStore interface {
 	GetUserPlaylistByITunesPID(pid string) (*database.UserPlaylist, error)
-	ListDirtyUserPlaylists() ([]database.UserPlaylist, error)
 	CreateUserPlaylist(p *database.UserPlaylist) (*database.UserPlaylist, error)
 	UpdateUserPlaylist(p *database.UserPlaylist) error
 }
 
-// PlaylistSync owns the two-way iTunes-playlist sync paths (import
-// smart playlists from the ITL, push dirty playlists back out).
+// PlaylistSync imports smart playlists from the ITL.
 type PlaylistSync struct {
-	store    playlistSyncStore
-	enqueuer Enqueuer
+	store playlistSyncStore
 }
 
-// newPlaylistSync wires a PlaylistSync with the given store and
-// enqueuer. A nil enqueuer disables the push direction's ITL write-back
-// enqueue (the dirty flag is still cleared).
-func newPlaylistSync(store playlistSyncStore, enqueuer Enqueuer) *PlaylistSync {
-	return &PlaylistSync{store: store, enqueuer: enqueuer}
+// newPlaylistSync wires a PlaylistSync with the given store.
+func newPlaylistSync(store playlistSyncStore) *PlaylistSync {
+	return &PlaylistSync{store: store}
 }
 
-// NewPlaylistImporter builds a PlaylistSync for the IMPORT direction only.
-//
-// The enqueuer is nil, so PushDirty's ITL write-back enqueue is disabled — this
-// constructor exists for callers (the maintenance op) that must never write to
-// the iTunes library. Import reads an already-parsed *ITLLibrary and writes only
-// UserPlaylist rows in our own store.
+// NewPlaylistImporter builds a PlaylistSync for callers outside the Service
+// (the maintenance op). Import reads an already-parsed *ITLLibrary and writes
+// only UserPlaylist rows in our own store.
 func NewPlaylistImporter(store database.UserPlaylistStore) *PlaylistSync {
-	return &PlaylistSync{store: store, enqueuer: nil}
+	return &PlaylistSync{store: store}
 }
 
 // PlaylistImportOptions controls a smart-playlist migration run.
@@ -188,48 +177,4 @@ func (p *PlaylistSync) MigrateSmartPlaylists(lib *itunes.ITLLibrary, opts Playli
 	}
 
 	return res
-}
-
-// PushDirty writes dirty playlists to the ITL. Smart playlists are
-// materialized first (the materialized_book_ids field is used).
-// Returns the number pushed.
-//
-// Placeholder that enqueues the playlist book IDs for the ITL
-// write-back batcher. Full ITL playlist creation requires the ITL
-// writer to support playlist insertion, which is tracked separately.
-func (p *PlaylistSync) PushDirty() int {
-	dirties, err := p.store.ListDirtyUserPlaylists()
-	if err != nil {
-		slog.Warn("list dirty playlists", "err", err)
-		return 0
-	}
-
-	pushed := 0
-	for i := range dirties {
-		pl := &dirties[i]
-
-		bookIDs := pl.BookIDs
-		if pl.Type == database.UserPlaylistTypeSmart {
-			bookIDs = pl.MaterializedBookIDs
-		}
-
-		if len(bookIDs) == 0 {
-			continue
-		}
-
-		if p.enqueuer != nil {
-			for _, bid := range bookIDs {
-				p.enqueuer.Enqueue(bid)
-			}
-		}
-
-		pl.Dirty = false
-		if err := p.store.UpdateUserPlaylist(pl); err != nil {
-			slog.Warn("clear dirty for", "pl", pl.ID, "err", err)
-			continue
-		}
-		pushed++
-	}
-
-	return pushed
 }

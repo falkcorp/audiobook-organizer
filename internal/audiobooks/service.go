@@ -195,13 +195,6 @@ type audiobookStore interface {
 	perUserStateStore
 }
 
-// ITunesEnqueuer is the narrow surface AudiobookService uses to push
-// iTunes mutations from delete/purge paths. Satisfied by
-// *itunesservice.WriteBackBatcher. Optional — nil-safe.
-type ITunesEnqueuer interface {
-	EnqueueRemove(pid string)
-}
-
 // AudiobookService handles all audiobook business logic
 type AudiobookService struct {
 	store           audiobookStore
@@ -215,10 +208,6 @@ type AudiobookService struct {
 	// resultCache is the shared search result cache (service_search_cache.go);
 	// nil disables it.
 	resultCache *searchcache.Cache
-	// itunesEnqueuer is wired by the Server after the WriteBackBatcher
-	// is constructed. Nil-safe — when nil the delete/purge paths skip
-	// the iTunes side-effect (e.g. tests, iTunes disabled in config).
-	itunesEnqueuer ITunesEnqueuer
 	// libGen scopes listCache keys to the store's book-mutation counter, so a
 	// created/updated/deleted book puts every previously cached page out of
 	// reach. Resolved from the store once at construction; never nil.
@@ -254,12 +243,6 @@ func (svc *AudiobookService) SetActivityService(as *activity.Service) {
 // Calling with nil reverts to the Store.SearchBooks fallback.
 func (svc *AudiobookService) SetSearchIndex(idx *search.BleveIndex) {
 	svc.searchIndex = idx
-}
-
-// SetITunesEnqueuer wires (or re-wires) the iTunes write-back batcher.
-// Nil disables iTunes side-effects in delete/purge paths.
-func (svc *AudiobookService) SetITunesEnqueuer(e ITunesEnqueuer) {
-	svc.itunesEnqueuer = e
 }
 
 // NewAudiobookService creates a new AudiobookService instance

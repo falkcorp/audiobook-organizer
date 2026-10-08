@@ -168,15 +168,10 @@ type MetadataCacheFetchService interface {
 	WriteBackMetadataForBook(id string, segmentFilter ...[]string) (int, error)
 }
 
-// MetadataCacheWriteBackEnqueuer is an alias for the shared WriteBackEnqueuer;
-// kept here so existing call sites continue to compile without change.
-type MetadataCacheWriteBackEnqueuer = WriteBackEnqueuer
-
 // MetadataCacheHandler handles the persistent metadata-cache HTTP endpoints.
 type MetadataCacheHandler struct {
-	store   MetadataCacheBookStore
-	svc     MetadataCacheFetchService
-	batcher WriteBackEnqueuer // may be nil — iTunes library sync, NOT audio tags
+	store MetadataCacheBookStore
+	svc   MetadataCacheFetchService
 	// fileIOPool schedules the audio-tag / cover-art file work off the request
 	// path. May be nil; when it is, BatchApplyFromCache logs at warn rather
 	// than skipping silently (see the comment in BatchApplyFromCache).
@@ -218,8 +213,8 @@ type OpEnqueuer interface {
 // false-negatives — see the wiring in wire_handlers.go.
 //
 // scanActive may be nil; the slow-request WARN then omits library_scan_active.
-func NewMetadataCacheHandler(store MetadataCacheBookStore, svc MetadataCacheFetchService, batcher WriteBackEnqueuer, fileIOPool FileIOPool, ops OpEnqueuer, scanActive func() bool) *MetadataCacheHandler {
-	h := &MetadataCacheHandler{store: store, svc: svc, batcher: batcher, fileIOPool: fileIOPool, ops: ops, scanActive: scanActive}
+func NewMetadataCacheHandler(store MetadataCacheBookStore, svc MetadataCacheFetchService, fileIOPool FileIOPool, ops OpEnqueuer, scanActive func() bool) *MetadataCacheHandler {
+	h := &MetadataCacheHandler{store: store, svc: svc, fileIOPool: fileIOPool, ops: ops, scanActive: scanActive}
 	if store != nil && svc != nil {
 		b := newReviewSnapshotBuilder(store, svc)
 		if g, ok := database.AsCapability[metadataCacheGenerationReader](store); ok {
@@ -1028,8 +1023,8 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 // FILE I/O — KEEP IN STEP WITH THE SINGLE-BOOK PATH. The sibling is
 // applyAudiobookMetadataImpl in internal/server/handlers/metadata/handler.go.
 // The two drifted apart once: the sibling wrote tags and embedded cover art
-// while this path only updated the database and enqueued h.batcher — which is
-// the *iTunes* library batcher, not the tag writer. Applied metadata never
+// while this path only updated the database and enqueued the (since removed)
+// iTunes library batcher, not the tag writer. Applied metadata never
 // reached the files and nothing logged a failure. If you add file-side work to
 // either path, add it to both.
 func (h *MetadataCacheHandler) BatchApplyFromCache(c *gin.Context) {

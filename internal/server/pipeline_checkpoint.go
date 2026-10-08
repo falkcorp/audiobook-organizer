@@ -17,7 +17,6 @@ import (
 const (
 	phaseRename       = organizer.PhaseRename
 	phaseTags         = organizer.PhaseTags
-	phaseITunes       = organizer.PhaseITunes
 	checkpointPrefix  = organizer.CheckpointPrefix
 	checkpointTTLDays = organizer.CheckpointTTLDays
 )

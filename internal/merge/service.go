@@ -26,12 +26,6 @@ import (
 	ulid "github.com/oklog/ulid/v2"
 )
 
-// WriteBackEnqueuer is satisfied by anything that can enqueue an iTunes
-// track removal (e.g. *server.WriteBackBatcher).
-type WriteBackEnqueuer interface {
-	EnqueueRemove(pid string)
-}
-
 // ExternalIDReassigner is the subset of external-ID operations that
 // Service needs. Satisfied by the concrete store when it implements
 // ReassignExternalIDs.
@@ -66,14 +60,8 @@ func AsExternalIDReassigner(s any) ExternalIDReassigner {
 // dedup.MergeBooks path so any two merges are mutually exclusive on a shared
 // book row.
 type Service struct {
-	db               Store
-	writeBackBatcher WriteBackEnqueuer
-	syncFollower     SyncFollower
-}
-
-// SetWriteBackBatcher sets the iTunes write-back batcher.
-func (ms *Service) SetWriteBackBatcher(b WriteBackEnqueuer) {
-	ms.writeBackBatcher = b
+	db           Store
+	syncFollower SyncFollower
 }
 
 // SetSyncFollower overrides the sync-identity follower wired by NewService.
@@ -83,7 +71,7 @@ func (ms *Service) SetWriteBackBatcher(b WriteBackEnqueuer) {
 // database.Store — e.g. serializeProbe in service_concurrent_test.go — and a
 // database.AsSyncIdentityStore assertion through such a wrapper returns nil,
 // which would silently no-op the whole hook without failing anything. Injecting
-// once, mirroring SetWriteBackBatcher, makes that failure mode explicit.
+// once makes that failure mode explicit.
 func (ms *Service) SetSyncFollower(f SyncFollower) {
 	ms.syncFollower = f
 }
@@ -378,12 +366,8 @@ func preferOnTie(a, b *database.Book) bool {
 //  2. External IDs (iTunes PIDs, Audible ASINs, etc.) are
 //     reassigned from losers to the winner so lookups still
 //     resolve to the surviving entity.
-//  3. **iTunes ITL cleanup**: before reassignment, we collect
-//     each loser's iTunes PIDs and enqueue them for removal via
-//     writeBackBatcher.EnqueueRemove. This matches the
-//     behavior of maintenance_fixups.mergeDuplicateBook — the
-//     UI merge path used to skip this step, which left the
-//     losers' tracks alive in the iTunes library forever.
+//  3. The iTunes library is not touched: iTunes is an import-only
+//     source (owner decision 2026-10-07), so no ITL removals are queued.
 //  4. Loser DB rows are soft-deleted (MarkedForDeletion=true).
 //     They stay recoverable via the existing soft-delete
 //     restore flow for at least the retention window.
@@ -1281,19 +1265,16 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 	// --- Per-loser cleanup ---
 	//
 	// For each non-primary book we:
-	//  (a) collect its iTunes PIDs BEFORE reassignment so we
-	//      know which tracks to remove from the ITL,
 	//  (b) reassign all external IDs to the winner so future
 	//      lookups resolve,
-	//  (c) enqueue ITL removals for the collected PIDs so
-	//      iTunes no longer shows duplicate tracks for this
-	//      version group,
 	//  (d) soft-delete the loser so it drops off the default
 	//      library view. Its files on disk and its book_file
 	//      rows are left alone (see item 5 on MergeBooks).
+	// (Steps (a) and (c), collecting the loser's iTunes PIDs and queueing
+	// their ITL removals, went with iTunes write-back on 2026-10-07.)
 	//
 	// Ordering is the repair path: a loser is soft-deleted (d) ONLY after
-	// (a)-(c) succeeded for it. If (a) or (b) fails the loser is left LIVE
+	// (b) succeeded for it. If (b) fails the loser is left LIVE
 	// (still a non-primary member of the group, visible as an extra version)
 	// and reported, so a retried merge re-enters this loop for it. Soft-
 	// deleting first and warning about a failed reassign would return
@@ -1320,26 +1301,6 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 			continue
 		}
 
-		// (a) Collect PIDs before reassignment. A read failure here is not
-		// skippable: once (b) moves the mappings to the winner the loser's
-		// PIDs are unrecoverable, so the ITL removals would be lost for good.
-		var dupPIDs []string
-		mappings, err := ms.db.GetExternalIDsForBook(book.ID)
-		if err != nil {
-			slog.Error("merge: cannot read loser's external IDs; loser left live for retry",
-				"id", book.ID, "primary", resolvedPrimaryID, "err", err)
-			loserErrs = append(loserErrs, fmt.Errorf("read external IDs of loser %s: %w", book.ID, err))
-			continue
-		}
-		for _, m := range mappings {
-			// m.BookID must be the loser itself. A mapping another book owns
-			// (a stale reverse-index entry) would queue removal of the
-			// survivor's own iTunes track.
-			if m.Source == "itunes" && m.ExternalID != "" && !m.Tombstoned && m.BookID == book.ID {
-				dupPIDs = append(dupPIDs, m.ExternalID)
-			}
-		}
-
 		// (b) Reassign external IDs to the winner. On failure the loser stays
 		// live so the retry re-runs this step; see the ordering note above.
 		if eidStore != nil {
@@ -1349,17 +1310,6 @@ func (ms *Service) MergeBooksWithOptions(bookIDs []string, primaryID string, opt
 				loserErrs = append(loserErrs, fmt.Errorf("reassign external IDs of loser %s: %w", book.ID, err))
 				continue
 			}
-		}
-
-		// (c) Queue iTunes removals for the loser's tracks so
-		// the ITL stops showing them. Best-effort — a nil
-		// batcher (e.g. tests, or iTunes write-back disabled)
-		// means we just skip.
-		if ms.writeBackBatcher != nil && len(dupPIDs) > 0 {
-			for _, pid := range dupPIDs {
-				ms.writeBackBatcher.EnqueueRemove(pid)
-			}
-			slog.Info("merge queued ITL removals for loser", "count", len(dupPIDs), "id", book.ID)
 		}
 
 		// (d) Soft-delete the loser. A failure here is a real failure of

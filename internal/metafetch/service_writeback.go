@@ -749,16 +749,7 @@ func (mfs *Service) runApplyPipeline(ctx context.Context, id string, book *datab
 		}
 	}
 
-	// Enqueue iTunes writeback so the batcher picks up both location
-	// (if the file was renamed) and metadata changes. The apply
-	// handler also enqueues after this returns; the batcher dedupes
-	// on book ID so the duplicate is harmless.
 	postStart := time.Now()
-	if mfs.writeBackBatcher != nil && !hasCheckpoint(mfs.db, id, phaseITunes) {
-		mfs.writeBackBatcher.Enqueue(id)
-		setCheckpoint(mfs.db, id, phaseITunes)
-	}
-
 	// All phases complete — clear checkpoints.
 	clearCheckpoints(mfs.db, id)
 	pt.Since(PhaseDBPost, postStart)

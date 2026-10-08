@@ -189,7 +189,6 @@ packages:
       SplitBookCandidateStore:
       MetadataCacheBookStore:
       MetadataCacheFetchService:
-      WriteBackEnqueuer:
       FileIOPool:
       EventPublisher:
       RenameServicer:
@@ -276,7 +275,6 @@ packages:
       AudiobooksStore:
       AudiobookService:
       AudiobookUpdater:
-      WriteBackEnqueuer:
       MetadataStateService:
       MetadataFetchService:
       BatchService:
@@ -290,6 +288,5 @@ packages:
     interfaces:
       MetadataStore:
       MetadataFetchService:
-      WriteBackEnqueuer:
       OperationsRegistry:
       FileIOPool:

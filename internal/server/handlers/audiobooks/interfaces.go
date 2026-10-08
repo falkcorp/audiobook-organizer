@@ -210,13 +210,6 @@ type AudiobookUpdater interface {
 	UpdateAudiobookWithWarnings(ctx context.Context, id string, payload map[string]any) (*database.Book, []string, error)
 }
 
-// WriteBackEnqueuer is the narrow *itunesservice.WriteBackBatcher subset used by
-// updateAudiobook / undoLastApply / batchUpdateAudiobooks / batchOperations to
-// queue books for iTunes auto write-back. Only Enqueue is used.
-type WriteBackEnqueuer interface {
-	Enqueue(bookID string)
-}
-
 // MetadataStateService is the narrow *metafetch.MetadataStateService subset used
 // by undoMetadataChange / undoLastApply. LoadMetadataState is NOT here — it
 // returns an unexported map type, so getAudiobookFieldStates reaches it through

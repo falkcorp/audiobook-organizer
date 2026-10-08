@@ -1410,11 +1410,6 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 			}
 		}
 
-		// Remove the book's tracks from iTunes. Soft-delete is treated
-		// as "user no longer wants this in their library" and the
-		// iTunes side should reflect that immediately.
-		svc.enqueueITunesRemovesForBook(id, book)
-
 		svc.InvalidateListCache()
 		return map[string]any{
 			"message":     "audiobook soft deleted",
@@ -1446,7 +1441,7 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 	}
 
 	// Refuse a book that still owns book_file rows BEFORE any side effect
-	// (hash block, iTunes removes). DeleteBook never deletes those rows, so a
+	// (the hash block). DeleteBook never deletes those rows, so a
 	// hard delete would orphan every one of them; it refuses too
 	// (database.ErrBookOwnsFiles), but only after the hash block below had
 	// already been written. Fail closed on a read error.
@@ -1459,14 +1454,13 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 
 	// A live book users have listening state on is deleted only after that
 	// state is carried to another version Audiobookshelf lists, or refused
-	// (merge.HardDeleteKeepingUserState). The hash block and the iTunes
-	// removes run inside the delete, so a refusal leaves neither behind.
+	// (merge.HardDeleteKeepingUserState). The hash block runs inside the
+	// delete, so a refusal leaves none behind.
 	merger, ok := database.AsCapability[merge.UserProgressMerger](svc.store)
 	if !ok {
 		return nil, fmt.Errorf("hard delete %s: the store cannot check or carry users' listening state, so the delete is refused", id)
 	}
 	blocked := false
-	var itunesPIDs []string
 	del := func() error {
 		// Optionally block the hash right before deleting.
 		if opts.BlockHash && book.FileHash != nil && *book.FileHash != "" {
@@ -1477,8 +1471,6 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 				blocked = true
 			}
 		}
-		// The PIDs no other book holds, captured while the row exists.
-		itunesPIDs = svc.itunesPIDsToRemove(book)
 		return svc.store.DeleteBook(id)
 	}
 	carriedTo, err := merge.HardDeleteKeepingUserState(merger, svc.store, book, del)
@@ -1495,12 +1487,6 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 	// read before the delete, so it still names the group.
 	svc.handOffPrimary(book)
 
-	if svc.itunesEnqueuer != nil {
-		for _, pid := range itunesPIDs {
-			svc.itunesEnqueuer.EnqueueRemove(pid)
-		}
-	}
-
 	svc.InvalidateListCache()
 	res := map[string]any{
 		"message": "audiobook deleted",
@@ -1510,40 +1496,6 @@ func (svc *AudiobookService) DeleteAudiobook(ctx context.Context, id string, opt
 		res["progress_moved_to"] = carriedTo
 	}
 	return res, nil
-}
-
-// collectITunesPIDsForBook returns every PID stored on the book's
-// book_files plus the legacy Book.ITunesPersistentID field. Used by
-// hard-delete to pre-capture PIDs before the row is gone, and by the
-// orphan-cleanup endpoint.
-func (svc *AudiobookService) collectITunesPIDsForBook(bookID string, book *database.Book) []string {
-	pids := []string{}
-	files, _ := svc.store.GetBookFiles(bookID)
-	for _, f := range files {
-		if f.ITunesPersistentID != "" {
-			pids = append(pids, f.ITunesPersistentID)
-		}
-	}
-	if book != nil && book.ITunesPersistentID != nil && *book.ITunesPersistentID != "" {
-		pids = append(pids, *book.ITunesPersistentID)
-	}
-	return pids
-}
-
-// enqueueITunesRemovesForBook is a soft-delete helper: it enqueues an
-// iTunes remove, via the wired batcher, for each of the book's PIDs that no
-// other book still holds (itunesPIDsToRemove: a live copy of the same
-// iTunes track keeps it in the iTunes library). No-op if the batcher isn't
-// wired.
-func (svc *AudiobookService) enqueueITunesRemovesForBook(bookID string, book *database.Book) {
-	if svc.itunesEnqueuer == nil || book == nil {
-		return
-	}
-	b := *book
-	b.ID = bookID
-	for _, pid := range svc.itunesPIDsToRemove(&b) {
-		svc.itunesEnqueuer.EnqueueRemove(pid)
-	}
 }
 
 // userEditFieldExtractors is the WRITER side of the field-lock vocabulary. Each

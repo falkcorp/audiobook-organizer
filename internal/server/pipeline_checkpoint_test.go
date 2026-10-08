@@ -63,7 +63,4 @@ func TestConstantsForwarded(t *testing.T) {
 	if phaseTags != organizer.PhaseTags {
 		t.Error("phaseTags constant mismatch")
 	}
-	if phaseITunes != organizer.PhaseITunes {
-		t.Error("phaseITunes constant mismatch")
-	}
 }

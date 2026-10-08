@@ -79,23 +79,11 @@ func TestNew_Enabled_ConstructsAllSubComponents(t *testing.T) {
 	}
 
 	// All sub-components must be wired — nil means a wiring step was skipped.
-	if svc.Batcher == nil {
-		t.Error("Batcher is nil")
-	}
-	if svc.Provisioner == nil {
-		t.Error("Provisioner is nil")
-	}
 	if svc.Positions == nil {
 		t.Error("Positions is nil")
 	}
 	if svc.Playlists == nil {
 		t.Error("Playlists is nil")
-	}
-	if svc.Paths == nil {
-		t.Error("Paths is nil")
-	}
-	if svc.Repair == nil {
-		t.Error("Repair is nil")
 	}
 	if svc.Transfer == nil {
 		t.Error("Transfer is nil")

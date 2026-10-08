@@ -17,7 +17,7 @@
 // metadatapkg) and internal/metafetch.
 //
 // Dependencies that lived on the *Server receiver are reached through narrow
-// interfaces (MetadataStore, MetadataFetchService, WriteBackEnqueuer,
+// interfaces (MetadataStore, MetadataFetchService,
 // OperationsRegistry, FileIOPool) plus the concrete *cache.Cache[gin.H] (the
 // cache exception) and a set of INJECTED func fields that wrap helpers /
 // behavior that STAY in package server because they reference server- or
@@ -37,8 +37,7 @@
 // As a result package metadatahandler never imports package server.
 //
 // The store is a WIRE-TIME SNAPSHOT (assigned once in New, never swapped after
-// that). The write-back batcher remains a lazy provider closure because
-// integration tests swap server.writeBackBatcher post-wire. The interface-typed
+// that). The interface-typed
 // service deps (metadataFetchService, opRegistry, fileIOPool) are wire-time
 // snapshots, each guarded against typed-nil boxing by the controller in
 // wire_handlers.go.
@@ -85,14 +84,6 @@ type Handler struct {
 	store MetadataStore
 
 	metadataFetchService MetadataFetchService
-
-	// getWriteBack resolves the iTunes write-back batcher LAZILY, at request
-	// time. server.writeBackBatcher is swapped AFTER wireHandlers by integration
-	// tests (and the original handlers read it at request time / late binding),
-	// so a wire-time snapshot would capture the pre-swap value and miss the
-	// enqueue. The provider performs the typed-nil guard so the in-method
-	// `!= nil` checks (mirroring the old `s.writeBackBatcher != nil` guards) hold.
-	getWriteBack func() WriteBackEnqueuer
 
 	// opRegistry backs handleBulkWriteBack / batchWriteBackAudiobooks. Interface
 	// snapshot, typed-nil guarded by the controller so the in-method
@@ -145,7 +136,6 @@ type Handler struct {
 func New(
 	store MetadataStore,
 	metadataFetchService MetadataFetchService,
-	getWriteBack func() WriteBackEnqueuer,
 	opRegistry OperationsRegistry,
 	fileIOPool FileIOPool,
 	listCache *cache.Cache[gin.H],
@@ -157,7 +147,6 @@ func New(
 	h := &Handler{
 		store:                      store,
 		metadataFetchService:       metadataFetchService,
-		getWriteBack:               getWriteBack,
 		opRegistry:                 opRegistry,
 		fileIOPool:                 fileIOPool,
 		listCache:                  listCache,
@@ -168,15 +157,6 @@ func New(
 	}
 	h.browseSources = h.defaultBrowseSources
 	return h
-}
-
-// resolveWriteBack returns the live write-back batcher via the lazy provider, or
-// nil if no provider was supplied or the provider yields nil.
-func (h *Handler) resolveWriteBack() WriteBackEnqueuer {
-	if h.getWriteBack == nil {
-		return nil
-	}
-	return h.getWriteBack()
 }
 
 // ratingPatchRequest aliases the canonical type from internal/server/handlers

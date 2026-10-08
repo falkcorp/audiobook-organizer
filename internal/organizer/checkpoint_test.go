@@ -44,11 +44,11 @@ func TestCheckpoint_ClearAll(t *testing.T) {
 
 	SetCheckpoint(store, "b1", PhaseRename)
 	SetCheckpoint(store, "b1", PhaseTags)
-	SetCheckpoint(store, "b1", PhaseITunes)
+	SetCheckpoint(store, "b1", legacyPhaseITunes)
 
 	ClearCheckpoints(store, "b1")
 
-	for _, phase := range []string{PhaseRename, PhaseTags, PhaseITunes} {
+	for _, phase := range []string{PhaseRename, PhaseTags, legacyPhaseITunes} {
 		if HasCheckpoint(store, "b1", phase) {
 			t.Errorf("phase %s should be cleared", phase)
 		}
