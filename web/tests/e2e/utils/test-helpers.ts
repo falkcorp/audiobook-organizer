@@ -1,7 +1,7 @@
 // file: web/tests/e2e/utils/test-helpers.ts
-// version: 2.19.0
+// version: 2.20.0
 // guid: a1b2c3d4-e5f6-7890-abcd-e1f2a3b4c5d6
-// last-edited: 2026-09-25
+// last-edited: 2026-10-07
 
 import { Page } from '@playwright/test';
 
@@ -1749,14 +1749,6 @@ export async function setupMockApiRoutes(
       };
       const opId = pathname.split('/').pop() || itunesImportStatus.operation_id;
       return route.fulfill(jsonResponse({ ...itunesImportStatus, operation_id: opId }));
-    }
-
-    if (pathname === '/api/v1/itunes/write-back' && method === 'POST') {
-      return route.fulfill(jsonResponse({
-        success: true,
-        updated_count: 0,
-        message: 'Write-back completed',
-      }));
     }
 
     if (pathname === '/api/v1/itunes/resolve-conflicts' && method === 'POST') {

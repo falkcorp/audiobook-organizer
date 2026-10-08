@@ -1,6 +1,6 @@
 // file: web/tests/e2e/itunes-bidirectional-sync.spec.ts
-// version: 1.3.0
-// last-edited: 2026-03-02
+// version: 1.4.0
+// last-edited: 2026-10-07
 // guid: f1e2a3b4-c5d6-7890-fghi-j1k2l3m4n5o6
 
 import { test, expect } from '@playwright/test';
@@ -37,58 +37,6 @@ test.describe('iTunes Bidirectional Sync', () => {
     // At least one book should appear from iTunes import
     const bookElements = await page.locator('[role="button"]').filter({ hasText: /.+/ }).count();
     expect(bookElements).toBeGreaterThan(0);
-  });
-
-  // TODO(jdfalk): Enable once iTunes write-back UI is fully implemented
-  test.skip('organizer edits then write-back to iTunes', async ({ page }) => {
-    // First import some books
-    await page.goto('/settings');
-    await page.waitForLoadState('networkidle');
-    await page.getByRole('tab', { name: 'iTunes Import' }).click();
-
-    const testLibraryPath = 'testdata/itunes/Library.xml';
-    await page.getByLabel('iTunes Library Path').fill(testLibraryPath);
-    await page.getByRole('button', { name: 'Validate Import' }).click();
-    await expect(page.getByText(/validation results|found \d+ books/i)).toBeVisible({ timeout: 5000 });
-    await page.getByRole('button', { name: 'Import Library' }).click();
-    await expect(page.getByRole('alert').filter({ hasText: /import complete/i })).toBeVisible({ timeout: 10000 });
-
-    // Navigate to library and find a book
-    await page.goto('/library');
-    await page.waitForLoadState('networkidle');
-    const firstBook = page.locator('[role="button"]').first();
-    await expect(firstBook).toBeVisible();
-    await firstBook.click();
-
-    // Edit comments field
-    await page.waitForLoadState('domcontentloaded');
-    const commentsField = page.locator('textarea, input[placeholder*="comment"]').first();
-    if (await commentsField.isVisible().catch(() => false)) {
-      await commentsField.click();
-      await commentsField.fill('Edited via test - should sync to iTunes');
-
-      // Save changes (click save or navigate away)
-      const saveButton = page.locator('button').filter({ hasText: /save|confirm/i }).first();
-      if (await saveButton.isVisible().catch(() => false)) {
-        await saveButton.click();
-      }
-    }
-
-    // Navigate to iTunes settings and write-back
-    await page.goto('/settings');
-    await page.waitForLoadState('networkidle');
-    await page.getByRole('tab', { name: 'iTunes Import' }).click();
-
-    // Click Force Sync to iTunes button (triggers a confirm dialog)
-    const forceSyncButton = page.getByRole('button', { name: /force sync to itunes|write.*back/i }).first();
-    if (await forceSyncButton.isVisible().catch(() => false)) {
-      // Accept the native confirm dialog
-      page.once('dialog', (dialog) => dialog.accept());
-      await forceSyncButton.click();
-
-      // After confirming, the write-back dialog should open
-      await expect(page.getByRole('dialog', { name: /write.*back/i })).toBeVisible({ timeout: 5000 });
-    }
   });
 
   test('iTunes conflict - newer iTunes data takes precedence', async ({ page }) => {
