@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/CandidatesCard.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: ceb6a375-997d-44e0-8c71-d83c1980ea33
 // last-edited: 2026-10-07
 //
@@ -21,6 +21,14 @@
 // title narrows them, and every answer is listed -- no filtering to the
 // book's own title. The cached pick is not shown in its place while a browse
 // search runs: it is the answer to a different question.
+//
+// Every candidate row carries a thumbs-down, "Not the best match" (owner
+// request 2026-10-07). It is NOT a reject and NOT a skip: it never touches the
+// book's review state and never hides the candidate. It records a labelled
+// negative example (book, the query, the candidate, its score and derivation)
+// as scorer training data, and marks the row; a second click undoes it. An
+// Apply that lands records the applied candidate as the positive for the same
+// book and query. See internal/database/candidate_feedback.go.
 
 import {
   Alert,
@@ -31,11 +39,16 @@ import {
   Chip,
   CircularProgress,
   Collapse,
+  IconButton,
   Stack,
   TextField,
+  Tooltip,
   Typography,
 } from '@mui/material';
+import ThumbDownIcon from '@mui/icons-material/ThumbDown';
+import ThumbDownOutlinedIcon from '@mui/icons-material/ThumbDownOutlined';
 import { memo, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import * as api from '../../../services/api';
 import type { MetadataCandidate } from '../../../services/api';
 import { EvidencePanel } from '../evidence/EvidencePanel';
 import { metadataEvidence } from '../evidence/adapters';
@@ -55,8 +68,26 @@ import type { SpineRowProps } from './CompareSpine';
 /** What the candidates view needs beyond a row's props; built once by the panel. */
 export interface CandidatesContext {
   loader: CandidateLoader;
-  /** Apply one candidate to one book through the per-book background apply. */
-  apply: (bookId: string, candidate: MetadataCandidate) => Promise<void>;
+  /**
+   * Apply one candidate to one book through the per-book background apply.
+   * Resolves true only when the apply landed.
+   */
+  apply: (bookId: string, candidate: MetadataCandidate) => Promise<boolean>;
+}
+
+/**
+ * A candidate's identity for its thumbs-down mark: provider and the ids and
+ * names it carries -- not its list position, which moves as results arrive.
+ */
+export function candidateIdentity(c: MetadataCandidate): string {
+  return [c.source, c.asin ?? '', c.isbn13 ?? '', c.isbn10 ?? '', c.isbn ?? '', c.title, c.author ?? '']
+    .map((v) => String(v).trim().toLowerCase())
+    .join('\u0000');
+}
+
+/** A thumbs-down mark: `id` once the server has recorded it. */
+interface FeedbackMark {
+  id?: string;
 }
 
 
@@ -86,6 +117,8 @@ function CandidateItem({
   applying,
   onApply,
   onReject,
+  thumbsDown,
+  onThumbsDown,
 }: {
   c: MetadataCandidate;
   isTop: boolean;
@@ -95,12 +128,26 @@ function CandidateItem({
   applying: boolean;
   onApply: () => void;
   onReject: () => void;
+  /** This row's thumbs-down mark, when it has one. */
+  thumbsDown?: FeedbackMark;
+  onThumbsDown: () => void;
 }) {
   const [showEvidence, setShowEvidence] = useState(false);
+  const marked = !!thumbsDown;
+  // Saving: the mark is shown but the server has not answered yet, so an
+  // undo has no id to send. One click at a time.
+  const saving = marked && !thumbsDown.id;
   return (
     <Box
       data-testid="candidate-item"
-      sx={{ p: 1, border: 1, borderColor: isTop ? 'primary.main' : 'divider', borderRadius: 1 }}
+      data-thumbs-down={marked ? 'true' : undefined}
+      sx={{
+        p: 1,
+        border: 1,
+        borderColor: marked ? 'warning.main' : isTop ? 'primary.main' : 'divider',
+        borderStyle: marked ? 'dashed' : 'solid',
+        borderRadius: 1,
+      }}
     >
       <Stack direction="row" spacing={1} sx={{ alignItems: 'flex-start' }}>
         <Avatar src={c.cover_url || ''} variant="rounded" sx={{ width: 48, height: 64 }} />
@@ -131,6 +178,9 @@ function CandidateItem({
             {c.year ? <Typography variant="caption">{c.year}</Typography> : null}
             {isTop && <Chip label="Best match" size="small" color="primary" variant="outlined" />}
             {isCached && <Chip label="Cached pick" size="small" variant="outlined" />}
+            {marked && (
+              <Chip label="Not the best match" size="small" color="warning" variant="outlined" />
+            )}
             {c.from_catalog && (
               <Chip
                 label="Catalog"
@@ -152,22 +202,38 @@ function CandidateItem({
             <EvidencePanel evidence={metadataEvidence(c)} />
           </Collapse>
         </Box>
-        {actionable && (
-          <Stack spacing={0.5}>
-            <Button
-              size="small"
-              variant="contained"
-              color="success"
-              disabled={applying}
-              onClick={onApply}
-            >
-              Apply
-            </Button>
-            <Button size="small" variant="outlined" color="error" onClick={onReject}>
-              Reject
-            </Button>
-          </Stack>
-        )}
+        <Stack spacing={0.5} sx={{ alignItems: 'flex-end' }}>
+          <Tooltip title={marked ? 'Not the best match (click to undo)' : 'Not the best match'}>
+            <span>
+              <IconButton
+                size="small"
+                aria-label="Not the best match"
+                aria-pressed={marked}
+                color={marked ? 'warning' : 'default'}
+                disabled={saving}
+                onClick={onThumbsDown}
+              >
+                {marked ? <ThumbDownIcon fontSize="small" /> : <ThumbDownOutlinedIcon fontSize="small" />}
+              </IconButton>
+            </span>
+          </Tooltip>
+          {actionable && (
+            <>
+              <Button
+                size="small"
+                variant="contained"
+                color="success"
+                disabled={applying}
+                onClick={onApply}
+              >
+                Apply
+              </Button>
+              <Button size="small" variant="outlined" color="error" onClick={onReject}>
+                Reject
+              </Button>
+            </>
+          )}
+        </Stack>
       </Stack>
     </Box>
   );
@@ -198,13 +264,75 @@ export const CandidatesCard = memo(function CandidatesCard({
   // One apply per book: the panel refuses a second while the first runs, and
   // the card disables every Apply until it settles.
   const [applying, setApplying] = useState(false);
-  const applyOne = (c: MetadataCandidate) => {
-    setApplying(true);
-    void cands.apply(bookId, c).finally(() => setApplying(false));
-  };
 
   const { loader } = cands;
   const key = candidateKey(bookId, query);
+
+  // Thumbs-down marks for THIS query (the label is per book + query +
+  // candidate), keyed by candidateKey + candidateIdentity.
+  const [marks, setMarks] = useState<Map<string, FeedbackMark>>(() => new Map());
+  const [feedbackError, setFeedbackError] = useState<string | null>(null);
+  const markKey = (c: MetadataCandidate) => `${key}\u0001${candidateIdentity(c)}`;
+  const setMark = (k: string, m: FeedbackMark | undefined) =>
+    setMarks((prev) => {
+      const next = new Map(prev);
+      if (m) next.set(k, m);
+      else next.delete(k);
+      return next;
+    });
+  const feedbackInput = (
+    c: MetadataCandidate,
+    label: api.CandidateFeedbackLabel,
+    rank: number,
+    count: number
+  ): api.CandidateFeedbackInput => ({
+    book_id: bookId,
+    label,
+    query: { title: query.title, author: query.author, browse: !!query.browse },
+    candidate: c,
+    rank,
+    result_count: count,
+  });
+
+  const thumbsDown = (c: MetadataCandidate, rank: number, count: number) => {
+    const k = markKey(c);
+    const cur = marks.get(k);
+    setFeedbackError(null);
+    if (cur) {
+      if (!cur.id) return; // still saving
+      setMark(k, undefined);
+      api.deleteCandidateFeedback(cur.id, 'negative').catch((err: unknown) => {
+        setMark(k, cur);
+        setFeedbackError(err instanceof Error ? err.message : 'Could not undo the feedback');
+      });
+      return;
+    }
+    setMark(k, {});
+    api
+      .recordCandidateFeedback(feedbackInput(c, 'negative', rank, count))
+      .then((res) => setMark(k, { id: res.id }))
+      .catch((err: unknown) => {
+        setMark(k, undefined);
+        setFeedbackError(err instanceof Error ? err.message : 'Could not record the feedback');
+      });
+  };
+
+  const applyOne = (c: MetadataCandidate, rank: number, count: number) => {
+    setApplying(true);
+    void cands
+      .apply(bookId, c)
+      .then((applied) => {
+        if (!applied) return;
+        // The applied candidate is the positive for this book + query. It
+        // overwrites a thumbs-down on the same candidate server-side, so the
+        // mark goes too.
+        setMark(markKey(c), undefined);
+        api.recordCandidateFeedback(feedbackInput(c, 'positive', rank, count)).catch((err: unknown) => {
+          setFeedbackError(err instanceof Error ? err.message : 'Could not record the applied match');
+        });
+      })
+      .finally(() => setApplying(false));
+  };
   const subscribe = useCallback((cb: () => void) => loader.subscribe(key, cb), [loader, key]);
   const entry = useSyncExternalStore(subscribe, () => loader.get(key));
 
@@ -352,6 +480,11 @@ export const CandidatesCard = memo(function CandidatesCard({
                 </Typography>
               </Stack>
             )}
+            {feedbackError && (
+              <Alert severity="warning" sx={{ mb: 1 }} onClose={() => setFeedbackError(null)}>
+                {feedbackError}
+              </Alert>
+            )}
             {entry.status === 'error' && (
               <Alert severity="error" sx={{ mb: 1 }}>
                 {entry.error}
@@ -371,8 +504,10 @@ export const CandidatesCard = memo(function CandidatesCard({
                   isCached={!!cached && sameCandidate(cached, c)}
                   actionable={actionable}
                   applying={applying}
-                  onApply={() => applyOne(c)}
+                  onApply={() => applyOne(c, i + 1, visible.length)}
                   onReject={() => reject(c)}
+                  thumbsDown={marks.get(markKey(c))}
+                  onThumbsDown={() => thumbsDown(c, i + 1, visible.length)}
                 />
               ))}
             </Stack>

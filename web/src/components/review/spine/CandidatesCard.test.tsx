@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/CandidatesCard.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: e012200e-9c38-4a1d-8587-8ac43ce9803b
 // last-edited: 2026-10-07
 
@@ -268,7 +268,7 @@ describe('Candidates view', () => {
 
   it('Apply hands the chosen candidate to the panel; Reject of the cached pick is the lane reject', async () => {
     const user = userEvent.setup();
-    const apply = vi.fn(() => Promise.resolve());
+    const apply = vi.fn(() => Promise.resolve(false));
     const loader = new CandidateLoader(() => Promise.resolve([cand('High', 0.95), cached]));
     const spineCtx = ctx();
     renderCards([row('b1')], { loader, apply }, spineCtx);
@@ -353,7 +353,7 @@ describe('applyCandidateToBook', () => {
 describe('one apply per book', () => {
   it('disables every Apply in the card while one is running', async () => {
     const user = userEvent.setup();
-    const gate = deferred<void>();
+    const gate = deferred<boolean>();
     const apply = vi.fn(() => gate.promise);
     const loader = new CandidateLoader(() => Promise.resolve([cand('High', 0.95), cached]));
     renderCards([row('b1')], { loader, apply });
@@ -362,7 +362,98 @@ describe('one apply per book', () => {
     await user.click(buttons()[0]);
     expect(apply).toHaveBeenCalledTimes(1);
     buttons().forEach((b) => expect(b).toBeDisabled());
-    await act(async () => gate.resolve());
+    await act(async () => gate.resolve(false));
     buttons().forEach((b) => expect(b).not.toBeDisabled());
+  });
+});
+
+describe('Not the best match (thumbs-down)', () => {
+  function setup(applyResult = true) {
+    const user = userEvent.setup();
+    const results = [cand('High', 0.95), cand('Cached Pick', 0.8), cand('Low', 0.4)];
+    const loader = new CandidateLoader(() => Promise.resolve(results));
+    const apply = vi.fn(() => Promise.resolve(applyResult));
+    const spineCtx = ctx();
+    vi.mocked(api.recordCandidateFeedback).mockReset();
+    vi.mocked(api.deleteCandidateFeedback).mockReset();
+    vi.mocked(api.recordCandidateFeedback).mockResolvedValue({ id: 'b1:q:c', label: 'negative' });
+    vi.mocked(api.deleteCandidateFeedback).mockResolvedValue({ removed: true });
+    renderCards([row('b1')], { loader, apply }, spineCtx);
+    return { user, apply, spineCtx };
+  }
+
+  const items = () => within(screen.getByTestId('candidate-list')).getAllByTestId('candidate-item');
+  const itemFor = (title: string) => items().find((el) => within(el).queryByText(title))!;
+
+  it('records a negative label with the query, marks the row, and neither hides nor rejects', async () => {
+    const { user, spineCtx } = setup();
+    await waitFor(() => expect(items()).toHaveLength(3));
+
+    const low = itemFor('Low');
+    await user.click(within(low).getByRole('button', { name: 'Not the best match' }));
+
+    await waitFor(() => expect(api.recordCandidateFeedback).toHaveBeenCalledTimes(1));
+    expect(api.recordCandidateFeedback).toHaveBeenCalledWith({
+      book_id: 'b1',
+      label: 'negative',
+      query: { title: 'Book b1', author: 'Someone', browse: false },
+      candidate: expect.objectContaining({ title: 'Low', source: 'audible', score: 0.4 }),
+      rank: 3,
+      result_count: 3,
+    });
+    expect(items()).toHaveLength(3);
+    expect(itemFor('Low')).toHaveAttribute('data-thumbs-down', 'true');
+    expect(within(itemFor('Low')).getByText('Not the best match')).toBeInTheDocument();
+    expect(itemFor('High')).not.toHaveAttribute('data-thumbs-down');
+    expect(spineCtx.onAction).not.toHaveBeenCalled();
+  });
+
+  it('a second click undoes it with a DELETE for the negative label', async () => {
+    const { user, spineCtx } = setup();
+    await waitFor(() => expect(items()).toHaveLength(3));
+    const button = () => within(itemFor('Low')).getByRole('button', { name: 'Not the best match' });
+
+    await user.click(button());
+    await waitFor(() => expect(button()).not.toBeDisabled());
+    await user.click(button());
+
+    await waitFor(() => expect(api.deleteCandidateFeedback).toHaveBeenCalledWith('b1:q:c', 'negative'));
+    expect(itemFor('Low')).not.toHaveAttribute('data-thumbs-down');
+    expect(items()).toHaveLength(3);
+    expect(spineCtx.onAction).not.toHaveBeenCalled();
+  });
+
+  it('drops the mark when the server refuses the label', async () => {
+    const { user } = setup();
+    vi.mocked(api.recordCandidateFeedback).mockRejectedValue(new Error('nope'));
+    await waitFor(() => expect(items()).toHaveLength(3));
+    await user.click(within(itemFor('Low')).getByRole('button', { name: 'Not the best match' }));
+    expect(await screen.findByText('nope')).toBeInTheDocument();
+    expect(itemFor('Low')).not.toHaveAttribute('data-thumbs-down');
+  });
+
+  it('records the applied candidate as the positive once the apply lands', async () => {
+    const { user, apply } = setup(true);
+    await waitFor(() => expect(items()).toHaveLength(3));
+    await user.click(within(itemFor('High')).getByRole('button', { name: 'Apply' }));
+
+    await waitFor(() => expect(api.recordCandidateFeedback).toHaveBeenCalledTimes(1));
+    expect(apply).toHaveBeenCalledWith('b1', expect.objectContaining({ title: 'High' }));
+    expect(api.recordCandidateFeedback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        label: 'positive',
+        candidate: expect.objectContaining({ title: 'High' }),
+        rank: 1,
+      })
+    );
+  });
+
+  it('records no positive when the apply did not land', async () => {
+    const { user, apply } = setup(false);
+    await waitFor(() => expect(items()).toHaveLength(3));
+    await user.click(within(itemFor('High')).getByRole('button', { name: 'Apply' }));
+    await waitFor(() => expect(apply).toHaveBeenCalled());
+    await act(async () => {});
+    expect(api.recordCandidateFeedback).not.toHaveBeenCalled();
   });
 });
