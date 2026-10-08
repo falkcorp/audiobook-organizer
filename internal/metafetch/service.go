@@ -1,5 +1,5 @@
 // file: internal/metafetch/service.go
-// version: 5.47.4
+// version: 5.48.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
 // last-edited: 2026-10-07
 
@@ -301,6 +301,10 @@ type MetadataCandidate struct {
 	Description string `json:"description,omitempty"`
 	Language    string `json:"language,omitempty"`
 	Source      string `json:"source"`
+	// FromCatalog marks a candidate read from the local author catalog
+	// (BrowseSearch) rather than asked of the provider live. Source stays the
+	// provider's name ("Audible"), which the apply path keys provenance on.
+	FromCatalog bool `json:"from_catalog,omitempty"`
 
 	// Content-matcher SIGNAL fields carried through the candidate so the review
 	// UI and the metadata_cache sidecar (which the Phase 4 matcher reads) retain

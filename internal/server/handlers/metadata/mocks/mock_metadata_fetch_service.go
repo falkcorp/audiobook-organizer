@@ -386,6 +386,86 @@ func (_c *MockMetadataFetchService_ApplyMetadataSystemTags_Call) RunAndReturn(ru
 	return _c
 }
 
+// BrowseSearch provides a mock function for the type MockMetadataFetchService
+func (_mock *MockMetadataFetchService) BrowseSearch(ctx context.Context, bookID string, q metafetch.BrowseQuery, src metafetch.BrowseSources) (*metafetch.SearchMetadataResponse, error) {
+	ret := _mock.Called(ctx, bookID, q, src)
+
+	if len(ret) == 0 {
+		panic("no return value specified for BrowseSearch")
+	}
+
+	var r0 *metafetch.SearchMetadataResponse
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, metafetch.BrowseQuery, metafetch.BrowseSources) (*metafetch.SearchMetadataResponse, error)); ok {
+		return returnFunc(ctx, bookID, q, src)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, metafetch.BrowseQuery, metafetch.BrowseSources) *metafetch.SearchMetadataResponse); ok {
+		r0 = returnFunc(ctx, bookID, q, src)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*metafetch.SearchMetadataResponse)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, metafetch.BrowseQuery, metafetch.BrowseSources) error); ok {
+		r1 = returnFunc(ctx, bookID, q, src)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockMetadataFetchService_BrowseSearch_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'BrowseSearch'
+type MockMetadataFetchService_BrowseSearch_Call struct {
+	*mock.Call
+}
+
+// BrowseSearch is a helper method to define mock.On call
+//   - ctx context.Context
+//   - bookID string
+//   - q metafetch.BrowseQuery
+//   - src metafetch.BrowseSources
+func (_e *MockMetadataFetchService_Expecter) BrowseSearch(ctx any, bookID any, q any, src any) *MockMetadataFetchService_BrowseSearch_Call {
+	return &MockMetadataFetchService_BrowseSearch_Call{Call: _e.mock.On("BrowseSearch", ctx, bookID, q, src)}
+}
+
+func (_c *MockMetadataFetchService_BrowseSearch_Call) Run(run func(ctx context.Context, bookID string, q metafetch.BrowseQuery, src metafetch.BrowseSources)) *MockMetadataFetchService_BrowseSearch_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 metafetch.BrowseQuery
+		if args[2] != nil {
+			arg2 = args[2].(metafetch.BrowseQuery)
+		}
+		var arg3 metafetch.BrowseSources
+		if args[3] != nil {
+			arg3 = args[3].(metafetch.BrowseSources)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+			arg3,
+		)
+	})
+	return _c
+}
+
+func (_c *MockMetadataFetchService_BrowseSearch_Call) Return(searchMetadataResponse *metafetch.SearchMetadataResponse, err error) *MockMetadataFetchService_BrowseSearch_Call {
+	_c.Call.Return(searchMetadataResponse, err)
+	return _c
+}
+
+func (_c *MockMetadataFetchService_BrowseSearch_Call) RunAndReturn(run func(ctx context.Context, bookID string, q metafetch.BrowseQuery, src metafetch.BrowseSources) (*metafetch.SearchMetadataResponse, error)) *MockMetadataFetchService_BrowseSearch_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // CommitApply provides a mock function for the type MockMetadataFetchService
 func (_mock *MockMetadataFetchService) CommitApply(id string, before *database.Book, book *database.Book, credits *metafetch.AuthorCredits, source string) (*database.Book, error) {
 	ret := _mock.Called(id, before, book, credits, source)

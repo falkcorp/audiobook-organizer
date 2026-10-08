@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.40.0
+// version: 1.41.0
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 // Package metadatahandler hosts the metadata-domain HTTP handlers extracted
 // from the server package's metadata_handlers.go: batch-update / validate /
@@ -134,6 +134,11 @@ type Handler struct {
 	// publishEvent wraps *Server.publishEvent (the shared plugin event bus), used
 	// by applyAudiobookMetadata.
 	publishEvent func(ctx context.Context, event plugin.Event)
+
+	// browseSources returns the author-catalog reads the browse search
+	// (Candidates view "Search again") uses. New sets the production
+	// default (defaultBrowseSources); tests replace it.
+	browseSources func() metafetch.BrowseSources
 }
 
 // New constructs a metadata Handler from its dependencies.
@@ -149,7 +154,7 @@ func New(
 	updateFetchedMetadataState func(bookID string, values map[string]any) error,
 	publishEvent func(ctx context.Context, event plugin.Event),
 ) *Handler {
-	return &Handler{
+	h := &Handler{
 		store:                      store,
 		metadataFetchService:       metadataFetchService,
 		getWriteBack:               getWriteBack,
@@ -161,6 +166,8 @@ func New(
 		updateFetchedMetadataState: updateFetchedMetadataState,
 		publishEvent:               publishEvent,
 	}
+	h.browseSources = h.defaultBrowseSources
+	return h
 }
 
 // resolveWriteBack returns the live write-back batcher via the lazy provider, or
@@ -526,9 +533,21 @@ func (h *Handler) searchAudiobookMetadataImpl(c *gin.Context) {
 		Narrator  string `json:"narrator"`
 		Series    string `json:"series"`
 		UseRerank bool   `json:"use_rerank"`
+		// Browse asks the browse search (metafetch.BrowseSearch): what was
+		// typed, not the book's identity -- an empty query stays empty
+		// instead of becoming the book's title, the author catalog answers
+		// first, and no answer is dropped for a low score. The Candidates
+		// view's "Search again" sends it. CatalogOnly (with Browse) answers
+		// from the local catalog alone, without a provider request.
+		Browse      bool `json:"browse"`
+		CatalogOnly bool `json:"catalog_only"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil && !errors.Is(err, io.EOF) {
 		httputil.RespondWithBadRequest(c, "invalid request body: "+err.Error())
+		return
+	}
+	if body.Browse {
+		h.browseSearch(c, id, body.Query, body.Author, body.CatalogOnly, c.Query("refresh") == "true")
 		return
 	}
 	refresh := c.Query("refresh") == "true"

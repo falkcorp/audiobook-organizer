@@ -1,7 +1,7 @@
 // file: internal/database/catalog_entry_store.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 0b7c4e91-5d2a-4f38-9e61-3a8d2f7c5b14
-// last-edited: 2026-10-01
+// last-edited: 2026-10-07
 
 package database
 
@@ -550,6 +550,58 @@ func (s *CatalogStore) GetEntry(id string) (*CatalogEntry, error) {
 		return nil, fmt.Errorf("catalog entry %s: decode: %w", id, err)
 	}
 	return &e, nil
+}
+
+// EntryIDsByAuthorName returns the ids of entries filed under an author name
+// key (catalog.AuthorNameKey's "name:<folded>" form) whose folded name
+// CONTAINS fold, so "phelps" finds "Joseph Phelps" and "Phelps, Joseph". An
+// exact key ("name:"+fold) is walked first; the substring walk over every
+// cat_author:name: key runs only when the exact key holds nothing. Both walks
+// are keys-only (never an entry value). limit caps the ids returned (<= 0:
+// no cap); ids are deduplicated, since a co-authored entry is filed under
+// each of its authors.
+func (s *CatalogStore) EntryIDsByAuthorName(fold string, limit int) ([]string, error) {
+	if fold == "" {
+		return nil, nil
+	}
+	exact, err := s.idsUnder(catAuthorPrefix + "name:" + fold + ":")
+	if err != nil {
+		return nil, err
+	}
+	if len(exact) > 0 {
+		if limit > 0 && len(exact) > limit {
+			exact = exact[:limit]
+		}
+		return exact, nil
+	}
+	p := []byte(catAuthorPrefix + "name:")
+	if s.scanHook != nil {
+		s.scanHook(string(p))
+	}
+	iter, err := s.db.NewIter(&pebble.IterOptions{LowerBound: p, UpperBound: prefixUpperBound(p)})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+	seen := map[string]bool{}
+	var ids []string
+	for iter.First(); iter.Valid(); iter.Next() {
+		rest := string(bytes.TrimPrefix(iter.Key(), p))
+		i := strings.LastIndexByte(rest, ':')
+		if i < 0 {
+			continue
+		}
+		name, id := rest[:i], rest[i+1:]
+		if !strings.Contains(name, fold) || seen[id] {
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
+		if limit > 0 && len(ids) >= limit {
+			break
+		}
+	}
+	return ids, iter.Error()
 }
 
 // GetEntryByProviderID resolves (provider, marketplace, pid) to an entry.
