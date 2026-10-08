@@ -29,7 +29,7 @@ func TestPullITunesBookmarks_UnreadablePositionIsNotSeededOver(t *testing.T) {
 	_ = store.CreateBookFile(&database.BookFile{ID: "f1", BookID: book.ID, FilePath: "/tmp/f1", Duration: 3600})
 	_ = store.SetUserPosition(adminUserID, book.ID, "f1", 2000)
 
-	if seeded := newPositionSync(unreadablePositionSyncStore{store}, nil).pullBookmarks(); seeded != 0 {
+	if seeded := newPositionSync(unreadablePositionSyncStore{store}).pullBookmarks(); seeded != 0 {
 		t.Fatalf("seeded %d over an unreadable position, want 0", seeded)
 	}
 	if pos, _ := store.GetUserPosition(adminUserID, book.ID); pos == nil || pos.PositionSeconds != 2000 {

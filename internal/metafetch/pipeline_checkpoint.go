@@ -18,7 +18,6 @@ const (
 	checkpointPrefix  = organizer.CheckpointPrefix
 	phaseRename       = organizer.PhaseRename
 	phaseTags         = organizer.PhaseTags
-	phaseITunes       = organizer.PhaseITunes
 	checkpointTTLDays = organizer.CheckpointTTLDays
 )
 

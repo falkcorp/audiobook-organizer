@@ -32,11 +32,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 )
 
-// WriteBackEnqueuer is satisfied by server.WriteBackBatcher.
-type WriteBackEnqueuer interface {
-	Enqueue(bookID string)
-}
-
 // forwardedStores is what metafetch hands its store to rather than calls
 // itself. Every entry is another package's declared parameter type, so this is
 // the literal forwarding requirement, and it is kept separate from the groups
@@ -208,7 +203,6 @@ type Service struct {
 	dedupEngine       *dedup.Engine
 	metadataScorer    ai.MetadataCandidateScorer // optional; nil = fallback to F1
 	llmScorer         ai.MetadataCandidateScorer // optional; nil = no LLM rerank tier
-	writeBackBatcher  WriteBackEnqueuer
 	// safeWriteDeps guards tag/cover writes against Deluge-protected paths.
 	// Zero-value = no guard (writes proceed in-place). Set via SetSafeWriteDeps.
 	safeWriteDeps tagger.SafeWriteDeps
@@ -1055,13 +1049,6 @@ func (mfs *Service) RunApplyPipelineRenameOnly(ctx context.Context, id string, _
 				slog.Warn("dedup re-check failed for book after metadata apply", "id", logger.SanitizeLogValue(id), "error", logger.SanitizeLogValue(err.Error()))
 			}
 		}()
-	}
-
-	// Enqueue iTunes writeback so location changes from the rename
-	// propagate to iTunes. Callers (bulk write-back) also enqueue,
-	// the batcher dedupes.
-	if mfs.writeBackBatcher != nil {
-		mfs.writeBackBatcher.Enqueue(id)
 	}
 
 	return nil

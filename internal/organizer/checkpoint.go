@@ -34,9 +34,14 @@ const (
 	CheckpointPrefix  = "pipeline_checkpoint:"
 	PhaseRename       = "rename"
 	PhaseTags         = "tags"
-	PhaseITunes       = "itunes"
 	CheckpointTTLDays = 7
 )
+
+// legacyPhaseITunes is the checkpoint the removed iTunes write-back enqueue
+// set. Nothing sets it any more (iTunes write-back went 2026-10-07);
+// ClearCheckpoints still clears it so markers left by an older binary do
+// not linger until the TTL sweep.
+const legacyPhaseITunes = "itunes"
 
 // SetCheckpoint marks a phase as complete for a book.
 func SetCheckpoint(store database.UserPreferenceStore, bookID, phase string) {
@@ -54,7 +59,7 @@ func HasCheckpoint(store database.UserPreferenceStore, bookID, phase string) boo
 // ClearCheckpoints removes all phase markers for a book.
 // Called after the full pipeline completes successfully.
 func ClearCheckpoints(store database.UserPreferenceStore, bookID string) {
-	for _, phase := range []string{PhaseRename, PhaseTags, PhaseITunes} {
+	for _, phase := range []string{PhaseRename, PhaseTags, legacyPhaseITunes} {
 		key := CheckpointPrefix + bookID + ":" + phase
 		_ = store.SetUserPreferenceForUser("_system", key, "")
 	}

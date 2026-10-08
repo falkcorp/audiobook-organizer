@@ -183,9 +183,6 @@ func (h *Handler) undoBookFieldChange(c *gin.Context, id, field string) {
 		return
 	}
 	if len(res.Reverted) > 0 {
-		if wb := h.resolveWriteBack(); wb != nil {
-			wb.Enqueue(id)
-		}
 		// The cached candidates are NOT deleted here. UndoFieldChange writes
 		// through ModifyBook, and the store drops them in that same write when
 		// the undo changes the title or the author's name
@@ -233,9 +230,6 @@ func (h *Handler) UndoLastApply(c *gin.Context) {
 		return
 	}
 
-	if wb := h.resolveWriteBack(); len(res.Reverted) > 0 && wb != nil {
-		wb.Enqueue(id)
-	}
 	// The cached candidates are left to the store, as for a single-field
 	// undo (undoBookFieldChange): UndoLastApply writes through ModifyBook,
 	// which drops them when the reverted title or author changes what the

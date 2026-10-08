@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
@@ -29,13 +28,6 @@ type Deps struct {
 	Realtime   *realtime.EventHub // may be nil; means no SSE push
 	Config     Config
 	Logger     logger.Logger
-	// AudiobookRoot is the on-disk audiobook tree the path-repair
-	// operation walks for tier B (embedded tag scan) and tier C
-	// (fuzzy match). Empty disables those tiers.
-	AudiobookRoot string
-	// ReportDir is where the path-repair operation drops its JSON
-	// report file. Empty means inline-only (no file).
-	ReportDir string
 	// EventBus is where the service publishes lifecycle events. The
 	// dedup engine subscribes to plugin.EventBookImported and runs its
 	// dedup-on-import check there. May be nil (no events published).
@@ -68,14 +60,10 @@ type Service struct {
 	deps Deps
 
 	// Sub-components. Nil when the service is disabled; populated by New.
-	Importer    *Importer
-	Batcher     *WriteBackBatcher
-	Positions   *PositionSync
-	Paths       *PathReconciler
-	Repair      *PathRepairer
-	Playlists   *PlaylistSync
-	Provisioner *TrackProvisioner
-	Transfer    *TransferService
+	Importer  *Importer
+	Positions *PositionSync
+	Playlists *PlaylistSync
+	Transfer  *TransferService
 }
 
 // New constructs a fully-wired iTunes service. Returns ErrITunesDisabled
@@ -92,55 +80,14 @@ func New(deps Deps) (*Service, error) {
 		deps: deps,
 	}
 
-	// M1 step 2: Batcher lives here now. Built first so sub-components
-	// that need it (Provisioner today, Positions/Playlists/etc. in later
-	// M1 steps) can be wired with the real handle at construction time
-	// instead of via post-hoc setters.
-	svc.Batcher = NewWriteBackBatcher(5*time.Second, WriteBackBatcherConfig{
-		AutoWriteBack:       deps.Config.AutoWriteBack,
-		ITLWriteBackEnabled: deps.Config.ITLWriteBackEnabled,
-		LibraryWritePath:    deps.Config.LibraryWritePath,
-		WriteBackDryRun:     deps.Config.WriteBackDryRun,
-	}, deps.Store)
+	// PositionSync: pulls iTunes bookmarks into the admin user's positions.
+	svc.Positions = newPositionSync(deps.Store)
 
-	// SPEC 3 §4: wire the iTunes-in-use precondition. File-activity on the
-	// library and its journal siblings is the only signal visible from this
-	// side of the share; a hit defers the flush one debounce cycle (work is
-	// re-enqueued, never lost). Before this, SetLibraryNotInUse had no
-	// production caller and every write raced a potentially-open iTunes.
-	if p := deps.Config.LibraryWritePath; p != "" {
-		svc.Batcher.SetLibraryNotInUse(itunes.FileActivityLibraryCheck(p, 2*time.Minute))
-	}
+	// PlaylistSync: imports smart playlists from the ITL.
+	svc.Playlists = newPlaylistSync(deps.Store)
 
-	// M1 step 1: Provisioner. Gets the real batcher directly — no
-	// SetEnqueuer hop needed now that Batcher is wired above.
-	svc.Provisioner = newTrackProvisioner(deps.Store, svc.Batcher, deps.Config)
-
-	// M1 step 3: PositionSync. Reads/writes admin user positions and
-	// pushes bookmark updates via the batcher.
-	svc.Positions = newPositionSync(deps.Store, svc.Batcher)
-
-	// M1 step 4: PlaylistSync. Imports smart playlists from the ITL
-	// and pushes dirty playlists back out. Pushes use the batcher.
-	svc.Playlists = newPlaylistSync(deps.Store, svc.Batcher)
-
-	// M1 step 5: PathReconciler. Backfill operation that fixes up
-	// iTunes paths after library reorganizations.
-	svc.Paths = newPathReconciler(deps.Store, svc.Batcher)
-
-	// PathRepairer. Recovers cases where iTunes still references a
-	// stale on-disk path after organize: dumps the iTunes XML, finds
-	// missing locations, and re-discovers them via PID lookup,
-	// embedded tag scan, or fuzzy match. Apply mode enqueues fixes
-	// through the same Batcher.
-	svc.Repair = newPathRepairer(deps.Store, svc.Batcher, PathRepairConfig{
-		XMLPath:       deps.Config.LibraryReadPath,
-		AudiobookRoot: deps.AudiobookRoot,
-		ReportDir:     deps.ReportDir,
-	})
-
-	// M1 step 6: TransferService. ITL download/upload/backup/restore
-	// handlers. No deps — keyed off config.AppConfig.
+	// TransferService: the ITL download handler. No deps — keyed off
+	// config.AppConfig.
 	svc.Transfer = newTransferService()
 
 	// M1 step 7: Importer. Owns the full import + sync pipeline.
@@ -166,8 +113,8 @@ func (s *Service) Enabled() bool {
 	return s.deps.Config.Enabled
 }
 
-// Start launches any long-lived sub-component goroutines (currently just
-// the WriteBackBatcher, wired in PR 2's step 2f). No-op when disabled.
+// Start launches any long-lived sub-component goroutines (none since iTunes
+// write-back was removed on 2026-10-07). No-op when disabled.
 func (s *Service) Start(ctx context.Context) error {
 	if !s.Enabled() {
 		return nil

@@ -15,21 +15,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// b3FakeEnqueuer is a minimal WriteBackEnqueuer that just records every PID
-// it was asked to remove, so tests can assert the ITL-cleanup enqueue call
-// (MergeBooks step 3 in the doc comment) actually fires with the right PIDs.
-type b3FakeEnqueuer struct {
-	removed []string
-}
-
-func (f *b3FakeEnqueuer) EnqueueRemove(pid string) { f.removed = append(f.removed, pid) }
-
-// TestB3_MergeBooks_ITunesPIDCollectionAndITLEnqueue drives the full loser
-// cleanup sequence on a real store: the loser's iTunes PID is collected
-// BEFORE reassignment, external IDs move to the winner, and the collected
-// PID is enqueued for ITL removal via the batcher. A non-itunes / tombstoned
-// mapping on the loser must NOT be enqueued.
-func TestB3_MergeBooks_ITunesPIDCollectionAndITLEnqueue(t *testing.T) {
+// TestB3_MergeBooks_ReassignsExternalIDs drives the loser cleanup sequence on
+// a real store: the loser's external IDs (iTunes and Audible) move to the
+// winner.
+func TestB3_MergeBooks_ReassignsExternalIDs(t *testing.T) {
 	store := setupTestStore(t)
 
 	loser := &database.Book{ID: ulid.Make().String(), Title: "Loser", Format: "mp3", FilePath: "/tmp/b3loser.mp3"}
@@ -49,17 +38,11 @@ func TestB3_MergeBooks_ITunesPIDCollectionAndITLEnqueue(t *testing.T) {
 		Source: "itunes", ExternalID: "B3-PID-TOMBSTONED", BookID: loser.ID, Tombstoned: true,
 	}))
 
-	enq := &b3FakeEnqueuer{}
 	ms := NewService(store)
-	ms.SetWriteBackBatcher(enq)
 
 	result, err := ms.MergeBooks([]string{loser.ID, winner.ID}, winner.ID)
 	require.NoError(t, err)
 	assert.Equal(t, winner.ID, result.PrimaryID)
-
-	// Only the live itunes PID is enqueued for ITL removal — not the audible
-	// ASIN, and not the tombstoned itunes mapping.
-	assert.Equal(t, []string{"B3-PID-LIVE"}, enq.removed)
 
 	// External IDs (both itunes and audible) are reassigned to the winner.
 	mappings, err := store.GetExternalIDsForBook(winner.ID)
@@ -72,28 +55,6 @@ func TestB3_MergeBooks_ITunesPIDCollectionAndITLEnqueue(t *testing.T) {
 	assert.True(t, got["B3-ASIN-1"], "audible ASIN reassigned to winner")
 
 	dbtest.AssertStoreInvariants(t, store)
-}
-
-// TestB3_MergeBooks_NoWriteBackBatcher_SkipsEnqueueSilently verifies the
-// documented best-effort behavior: a nil writeBackBatcher (e.g. iTunes
-// write-back disabled) must not panic and must not block the merge.
-func TestB3_MergeBooks_NoWriteBackBatcher_SkipsEnqueueSilently(t *testing.T) {
-	store := setupTestStore(t)
-
-	loser := &database.Book{ID: ulid.Make().String(), Title: "Loser", Format: "mp3", FilePath: "/tmp/b3nobatch-loser.mp3"}
-	winner := &database.Book{ID: ulid.Make().String(), Title: "Winner", Format: "m4b", FilePath: "/tmp/b3nobatch-winner.m4b"}
-	_, err := store.CreateBook(loser)
-	require.NoError(t, err)
-	_, err = store.CreateBook(winner)
-	require.NoError(t, err)
-	require.NoError(t, store.CreateExternalIDMapping(&database.ExternalIDMapping{
-		Source: "itunes", ExternalID: "B3-PID-NOBATCH", BookID: loser.ID,
-	}))
-
-	ms := NewService(store) // writeBackBatcher left nil
-	result, err := ms.MergeBooks([]string{loser.ID, winner.ID}, winner.ID)
-	require.NoError(t, err)
-	assert.Equal(t, winner.ID, result.PrimaryID)
 }
 
 // TestB3_MergeBooks_DuplicatePrimaryInBookIDs_NoDoublePrimary is a

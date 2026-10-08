@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
-// --- iTunes enqueuer wiring on delete paths ---
+// --- delete paths ---
 
 // expectNoUserState lets a mock store answer the hard delete's listening
 // state checks (merge.HardDeleteKeepingUserState) with "no users, no
@@ -28,47 +28,10 @@ func expectNoUserState(m *mocks.MockStore) {
 	m.EXPECT().ScanPrefix(mock.Anything).Return(nil, nil).Maybe()
 }
 
-// fakeITunesEnqueuer captures EnqueueRemove calls for assertion.
-type fakeITunesEnqueuer struct {
-	pids []string
-}
-
-func (f *fakeITunesEnqueuer) EnqueueRemove(pid string) {
-	f.pids = append(f.pids, pid)
-}
-
-func TestAudiobookService_DeleteAudiobook_HardDelete_EnqueuesITunesRemoves(t *testing.T) {
+// A book that still owns file rows cannot be hard-deleted.
+func TestAudiobookService_DeleteAudiobook_HardDeleteRefusedWhileFilesOwned(t *testing.T) {
 	mockStore := mocks.NewMockStore(t)
 	svc := NewAudiobookService(mockStore)
-	enq := &fakeITunesEnqueuer{}
-	svc.SetITunesEnqueuer(enq)
-
-	// A hard delete is only possible for a book that owns no book_file rows
-	// (database.ErrBookOwnsFiles), so the PID it can still carry is the
-	// book-level one.
-	pid := "deadbeefdeadbeef"
-	book := &database.Book{ID: "del-itl", Title: "Has an iTunes Track", ITunesPersistentID: &pid}
-	mockStore.EXPECT().GetBookByID("del-itl").Return(book, nil)
-	mockStore.EXPECT().GetBookFiles("del-itl").Return(nil, nil)
-	mockStore.EXPECT().DeleteBook("del-itl").Return(nil)
-	expectNoUserState(mockStore)
-	// No other book holds the PID, so its iTunes remove is queued.
-	mockStore.EXPECT().GetBookFileByPID(pid).Return(nil, nil).Maybe()
-	mockStore.EXPECT().GetBookByExternalID("itunes", pid).Return("", nil).Maybe()
-
-	_, err := svc.DeleteAudiobook(context.Background(), "del-itl", &DeleteAudiobookOptions{})
-	assert.NoError(t, err)
-	assert.ElementsMatch(t, []string{pid}, enq.pids)
-}
-
-// A book whose file rows carry iTunes PIDs cannot be hard-deleted, and the
-// refusal comes before the iTunes removes are enqueued: a book that stays must
-// keep its tracks.
-func TestAudiobookService_DeleteAudiobook_HardDeleteRefused_EnqueuesNothing(t *testing.T) {
-	mockStore := mocks.NewMockStore(t)
-	svc := NewAudiobookService(mockStore)
-	enq := &fakeITunesEnqueuer{}
-	svc.SetITunesEnqueuer(enq)
 
 	book := &database.Book{ID: "del-itl2", Title: "Has iTunes Tracks"}
 	mockStore.EXPECT().GetBookByID("del-itl2").Return(book, nil)
@@ -79,37 +42,6 @@ func TestAudiobookService_DeleteAudiobook_HardDeleteRefused_EnqueuesNothing(t *t
 
 	_, err := svc.DeleteAudiobook(context.Background(), "del-itl2", &DeleteAudiobookOptions{})
 	assert.ErrorIs(t, err, database.ErrBookOwnsFiles)
-	assert.Empty(t, enq.pids)
-}
-
-func TestAudiobookService_DeleteAudiobook_SoftDelete_EnqueuesITunesRemoves(t *testing.T) {
-	mockStore := mocks.NewMockStore(t)
-	svc := NewAudiobookService(mockStore)
-	enq := &fakeITunesEnqueuer{}
-	svc.SetITunesEnqueuer(enq)
-
-	pid := "0011223344556677"
-	book := &database.Book{ID: "sd-itl", Title: "Soft Delete Has Tracks"}
-	mockStore.EXPECT().GetBookByID("sd-itl").Return(book, nil)
-	mockStore.EXPECT().ModifyBook("sd-itl", mock.Anything).RunAndReturn(
-		func(id string, fn func(*database.Book) error) (*database.Book, error) {
-			fresh := *book
-			if err := fn(&fresh); err != nil {
-				return nil, err
-			}
-			return &fresh, nil
-		})
-	mockStore.EXPECT().GetBookFiles("sd-itl").Return([]database.BookFile{
-		{ID: "f1", ITunesPersistentID: pid},
-	}, nil)
-	// The PID is the book's own file's and mapped to no other book, so its
-	// iTunes remove is queued (itunesPIDsToRemove).
-	mockStore.EXPECT().GetBookFileByPID(pid).Return(&database.BookFile{ID: "f1", BookID: "sd-itl", ITunesPersistentID: pid}, nil).Maybe()
-	mockStore.EXPECT().GetBookByExternalID("itunes", pid).Return("sd-itl", nil).Maybe()
-
-	_, err := svc.DeleteAudiobook(context.Background(), "sd-itl", &DeleteAudiobookOptions{SoftDelete: true})
-	assert.NoError(t, err)
-	assert.Equal(t, []string{pid}, enq.pids)
 }
 
 // --- GetAudiobooks ---

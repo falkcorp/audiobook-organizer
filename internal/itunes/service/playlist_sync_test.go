@@ -19,7 +19,7 @@ import (
 func TestMigrateSmartPlaylists_NilLibrary(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	ps := newPlaylistSync(nil, nil)
+	ps := newPlaylistSync(nil)
 	res := ps.MigrateSmartPlaylists(nil, PlaylistImportOptions{})
 	imported, skipped := res.Imported, res.Skipped
 	if imported != 0 || skipped != 0 {
@@ -46,7 +46,7 @@ func TestMigrateSmartPlaylists_SkipsNonSmart(t *testing.T) {
 		},
 	}
 
-	ps := newPlaylistSync(store, nil)
+	ps := newPlaylistSync(store)
 	res := ps.MigrateSmartPlaylists(lib, PlaylistImportOptions{})
 	imported, skipped := res.Imported, res.Skipped
 	if imported != 0 || skipped != 0 {
@@ -85,7 +85,7 @@ func TestMigrateSmartPlaylists_SkipsAlreadyImported(t *testing.T) {
 		},
 	}
 
-	ps := newPlaylistSync(store, nil)
+	ps := newPlaylistSync(store)
 	res := ps.MigrateSmartPlaylists(lib, PlaylistImportOptions{})
 	imported, skipped := res.Imported, res.Skipped
 	if imported != 0 {
@@ -132,7 +132,7 @@ func TestMigrateSmartPlaylists_UntranslatableCriteriaYieldEmptyQuery(t *testing.
 		},
 	}
 
-	res := newPlaylistSync(store, nil).MigrateSmartPlaylists(lib, PlaylistImportOptions{DryRun: true})
+	res := newPlaylistSync(store).MigrateSmartPlaylists(lib, PlaylistImportOptions{DryRun: true})
 	if len(res.Items) != 2 {
 		t.Fatalf("items = %d, want 2", len(res.Items))
 	}
@@ -145,26 +145,5 @@ func TestMigrateSmartPlaylists_UntranslatableCriteriaYieldEmptyQuery(t *testing.
 	}
 	if bad := res.Items[1]; bad.Status != "unparseable" {
 		t.Errorf("non-SLst item = %+v, want unparseable", bad)
-	}
-}
-
-func TestPushDirty_NoDirty(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	pebblePath := filepath.Join(t.TempDir(), "pebble")
-	store, err := database.NewPebbleStore(pebblePath)
-	if err != nil {
-		t.Fatalf("open pebble: %v", err)
-	}
-	origStore := database.GetGlobalStore()
-	database.SetGlobalStore(store)
-	t.Cleanup(func() {
-		database.SetGlobalStore(origStore)
-		store.Close()
-	})
-
-	pushed := newPlaylistSync(store, nil).PushDirty()
-	if pushed != 0 {
-		t.Errorf("expected 0 pushed with no dirty playlists, got %d", pushed)
 	}
 }

@@ -19,7 +19,7 @@
 // audiobookspkg.
 //
 // Dependencies that lived on the *Server receiver are reached through narrow
-// interfaces (AudiobookService, AudiobookUpdater, WriteBackEnqueuer,
+// interfaces (AudiobookService, AudiobookUpdater,
 // MetadataStateService, MetadataFetchService, BatchService, ChangelogService,
 // ExternalIDStore) plus concrete *cache.Cache[T] caches (the cache exception)
 // and a set of INJECTED func fields that wrap helpers / behavior that STAY in
@@ -42,8 +42,6 @@
 // The store is a WIRE-TIME SNAPSHOT (assigned once in New, never swapped after
 // that). The interface-typed service deps are also wire-time snapshots, each
 // guarded against typed-nil boxing by the controller in wire_handlers.go.
-// The write-back batcher is the sole exception: it remains a lazy provider
-// closure because integration tests swap server.writeBackBatcher post-wire.
 
 package audiobookshandler
 
@@ -92,15 +90,6 @@ type Handler struct {
 
 	audiobookService AudiobookService
 	audiobookUpdater AudiobookUpdater
-
-	// getWriteBack resolves the iTunes write-back batcher LAZILY, at request time.
-	// Unlike the other service deps, server.writeBackBatcher is swapped AFTER
-	// wireHandlers by integration tests (and the original handlers read
-	// s.writeBackBatcher at request time / late binding), so a wire-time snapshot
-	// would capture the pre-swap value and miss the enqueue. The provider performs
-	// the typed-nil guard so the in-method `!= nil` checks (mirroring the old
-	// `s.writeBackBatcher != nil` guards) hold.
-	getWriteBack func() WriteBackEnqueuer
 
 	metadataStateService MetadataStateService
 	metadataFetchService MetadataFetchService
@@ -225,7 +214,6 @@ func New(
 	store AudiobooksStore,
 	audiobookService AudiobookService,
 	audiobookUpdater AudiobookUpdater,
-	getWriteBack func() WriteBackEnqueuer,
 	metadataStateService MetadataStateService,
 	metadataFetchService MetadataFetchService,
 	batchService BatchService,
@@ -246,7 +234,6 @@ func New(
 		store:                store,
 		audiobookService:     audiobookService,
 		audiobookUpdater:     audiobookUpdater,
-		getWriteBack:         getWriteBack,
 		metadataStateService: metadataStateService,
 		metadataFetchService: metadataFetchService,
 		batchService:         batchService,
@@ -263,15 +250,6 @@ func New(
 		getExternalIDStore:   getExternalIDStore,
 		publishEvent:         publishEvent,
 	}
-}
-
-// resolveWriteBack returns the live write-back batcher via the lazy provider, or
-// nil if no provider was supplied or the provider yields nil.
-func (h *Handler) resolveWriteBack() WriteBackEnqueuer {
-	if h.getWriteBack == nil {
-		return nil
-	}
-	return h.getWriteBack()
 }
 
 // bareParamAllowList names fields that are BOTH a filter field and a genuine

@@ -32,8 +32,8 @@ import (
 //   - SetMetadataLLMScorer (W4 metadatallmscorer, config-gated)
 //   - SetActivityService (W2 activity, DatabasePath-gated)
 //
-// Several other SetX calls (SetOLStore, SetSafeWriteDeps,
-// SetWriteBackBatcher) still live inline in NewServer because they depend
+// Several other SetX calls (SetOLStore, SetSafeWriteDeps)
+// still live inline in NewServer because they depend
 // on server-local state (olService, protectedPathCache) that isn't in
 // the container yet. Those move when their underlying services migrate.
 func (mfs *Service) PostInit(ctx context.Context, c *serviceregistry.Container) error {
@@ -63,14 +63,6 @@ func (mfs *Service) PostInit(ctx context.Context, c *serviceregistry.Container) 
 	// Activity service — DatabasePath-gated
 	if svc, ok := serviceregistry.TryGet[*activity.Service](c, "activity"); ok && svc != nil {
 		mfs.SetActivityService(svc)
-	}
-
-	// iTunes write-back enqueuer — type-asserted via the local
-	// WriteBackEnqueuer interface so this file stays out of any
-	// internal/itunes/service import cycle (itunes/service imports
-	// metafetch).
-	if enq, ok := serviceregistry.TryGet[WriteBackEnqueuer](c, "writebackbatcher"); ok && enq != nil {
-		mfs.SetWriteBackBatcher(enq)
 	}
 
 	// OL dump store — local-first lookups. olservice opens the store

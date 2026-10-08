@@ -47,7 +47,6 @@ type BookRows interface {
 	// write time, under the book's write lock. See database.BookMutator.
 	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	GetAllBooksCore(limit, offset int) ([]database.BookCore, error)
-	GetITunesPurgePendingBooks() ([]database.Book, error)
 }
 
 // FileRows reads and repoints a book's book_file rows as its files move.
@@ -82,17 +81,11 @@ type Store interface {
 	ScanFailCounts
 }
 
-// WriteBackEnqueuer is the narrow interface for queuing iTunes track removals.
-type WriteBackEnqueuer interface {
-	EnqueueRemove(pid string)
-}
-
 // QuarantineService handles quarantining and unquarantining audiobook files.
 type QuarantineService struct {
-	store   Store
-	cfg     *config.Config
-	events  plugin.EventPublisher
-	batcher WriteBackEnqueuer
+	store  Store
+	cfg    *config.Config
+	events plugin.EventPublisher
 }
 
 // NewQuarantineService creates a QuarantineService with the given dependencies.
@@ -100,18 +93,12 @@ func NewQuarantineService(store Store, cfg *config.Config, events plugin.EventPu
 	return &QuarantineService{store: store, cfg: cfg, events: events}
 }
 
-// SetWriteBackBatcher wires in the iTunes write-back batcher (optional; nil is safe).
-func (qs *QuarantineService) SetWriteBackBatcher(batcher WriteBackEnqueuer) {
-	qs.batcher = batcher
-}
-
 const scanFailThreshold = 3
 
 // QuarantineBook moves a book out of the library into
 // .failed/{author}/{title} [{bookID}]/, repoints every one of the book's
 // book_file rows at the file's new location in the same pass, updates the
-// book row, sets iTunes purge_pending if linked, and publishes a
-// book.quarantined event.
+// book row, and publishes a book.quarantined event.
 //
 // Until 2026-09-12 only the book row moved: every book_file row kept pointing
 // at the old path, so a quarantined book's files read as MISSING while the
@@ -247,10 +234,6 @@ func (qs *QuarantineService) QuarantineBook(bookID, reason string) error {
 			if complete {
 				b.QuarantineReason = &reason
 				b.QuarantinedAt = &now
-				if b.ITunesPersistentID != nil {
-					purge := "purge_pending"
-					b.ITunesSyncStatus = &purge
-				}
 			}
 			return nil
 		})
@@ -392,10 +375,6 @@ func (qs *QuarantineService) UnquarantineBook(bookID string) error {
 			if complete {
 				b.QuarantineReason = nil
 				b.QuarantinedAt = nil
-				if b.ITunesSyncStatus != nil && *b.ITunesSyncStatus == "purge_pending" {
-					dirty := "dirty"
-					b.ITunesSyncStatus = &dirty
-				}
 			}
 			return nil
 		})
@@ -973,41 +952,6 @@ var (
 // autoQuarantineLog carries the auto-quarantine failure lines through the
 // sanitizing logger rather than log/slog (TestGuard_NoDirectSlogCalls).
 var autoQuarantineLog = logger.New("quarantine")
-
-// ProcessITunesPurgePending finds books with itunes_sync_status = "purge_pending",
-// enqueues their PIDs for ITL removal, and clears their iTunes linkage.
-// Called at the start of each iTunes sync cycle.
-func (qs *QuarantineService) ProcessITunesPurgePending() {
-	if qs.store == nil || qs.batcher == nil {
-		return
-	}
-	books, err := qs.store.GetITunesPurgePendingBooks()
-	if err != nil || len(books) == 0 {
-		return
-	}
-	for _, b := range books {
-		if b.ITunesPersistentID == nil {
-			continue
-		}
-		qs.batcher.EnqueueRemove(*b.ITunesPersistentID)
-		slog.Info("ProcessITunesPurgePending queued ITL removal for", "persistentID", *b.ITunesPersistentID, "bookID", b.ID)
-
-		// Clear iTunes linkage so the book is no longer tied to iTunes. Only
-		// the two iTunes columns change; `b` came from a list read and is not
-		// written back whole. A row that is gone by now needs nothing.
-		cleared := "unlinked"
-		if _, err := qs.store.ModifyBook(b.ID, func(row *database.Book) error {
-			if row.ITunesPersistentID == nil && row.ITunesSyncStatus != nil && *row.ITunesSyncStatus == cleared {
-				return database.ErrSkipBookWrite
-			}
-			row.ITunesSyncStatus = &cleared
-			row.ITunesPersistentID = nil
-			return nil
-		}); err != nil {
-			slog.Warn("ProcessITunesPurgePending ModifyBook", "bookID", b.ID, "err", err)
-		}
-	}
-}
 
 // sanitizeDirName strips characters unsafe for directory names, including path
 // traversal sequences and control characters.

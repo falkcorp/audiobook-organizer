@@ -134,11 +134,6 @@ func (h *Handler) UpdateAudiobook(c *gin.Context) {
 		}
 	}
 
-	// Enqueue for iTunes auto write-back if enabled
-	if wb := h.resolveWriteBack(); wb != nil {
-		wb.Enqueue(id)
-	}
-
 	// Invalidate caches since book-author and book-series relationships may have changed.
 	// Also clear the shared audiobookService's list cache (a no-op unless
 	// config.CacheInvalidateOnBookUpdate is on) — the update service owns a
@@ -277,15 +272,6 @@ func (h *Handler) BatchUpdateAudiobooks(c *gin.Context) {
 
 	resp := h.batchService.UpdateAudiobooks(&req)
 
-	// Enqueue all updated books for iTunes auto write-back
-	if wb := h.resolveWriteBack(); wb != nil && resp != nil {
-		for _, item := range resp.Results {
-			if item.Success {
-				wb.Enqueue(item.ID)
-			}
-		}
-	}
-
 	httputil.RespondWithOK(c, resp)
 }
 
@@ -309,14 +295,6 @@ func (h *Handler) BatchOperations(c *gin.Context) {
 	}
 
 	resp := h.batchService.ExecuteOperations(&req)
-
-	if wb := h.resolveWriteBack(); wb != nil {
-		for _, r := range resp.Results {
-			if r.Success {
-				wb.Enqueue(r.ID)
-			}
-		}
-	}
 
 	httputil.RespondWithOK(c, resp)
 }

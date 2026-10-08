@@ -4,8 +4,10 @@
 // guid: 4f9bbf9f-0d28-46d5-be9c-e9ce3a422593
 
 // Package itunesservice contains the iTunes integration: import pipeline,
-// ITL write-back batcher, position sync, path reconcile, playlist sync,
-// track provisioner, and ITL transfer. The low-level ITL parser, fingerprint,
+// position import, playlist import, and ITL download. iTunes is an
+// import-only source (owner decision 2026-10-07; the write-back batcher,
+// path reconcile/repair and track provisioner were removed). The low-level
+// ITL parser, fingerprint,
 // path mapping, and smart-criteria translator live in the parent package
 // internal/itunes and are untouched by this extraction.
 //
@@ -22,18 +24,14 @@ package itunesservice
 // That width was never a statement about iTunes being a hub; it was the sum of
 // six subsystems and an import pipeline each holding the aggregate rather than
 // the slice it used. The fix was applied to those parameter types first
-// (writeback_batcher.go, path_reconcile.go, playlist_sync.go,
-// track_provisioner.go, position_sync.go, path_repair.go, importer.go), and this
+// (playlist_sync.go, position_sync.go, importer.go and the since-removed
+// write-back subsystems), and this
 // declaration then followed from them rather than being negotiated on its own.
 //
 // Adding a method here should feel wrong: put it on the subsystem interface that
 // needs it, in that subsystem's file, and let this stay a list of names.
 type Store interface {
-	WriteBackStore
-	pathReconcilerStore
-	pathRepairerStore
 	playlistSyncStore
 	positionSyncStore
-	provisionerStore
 	importerStore
 }

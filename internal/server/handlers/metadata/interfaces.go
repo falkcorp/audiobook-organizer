@@ -240,15 +240,6 @@ type MetadataFetchService interface {
 	MetadataHistoryRecorder
 }
 
-// WriteBackEnqueuer is the narrow *itunesservice.WriteBackBatcher subset used by
-// fetchAudiobookMetadata / applyAudiobookMetadata to queue books for iTunes
-// auto write-back. Only Enqueue is used. Resolved through a provider closure
-// (getWriteBack) because server.writeBackBatcher is swapped post-wire by
-// integration tests and the original handlers read it at request time.
-type WriteBackEnqueuer interface {
-	Enqueue(bookID string)
-}
-
 // OperationsRegistry is the narrow operations-registry subset the
 // handleBulkWriteBack / batchWriteBackAudiobooks triggers require: only
 // EnqueueOp. The variadic opts param is preserved so the concrete

@@ -7,7 +7,6 @@ package audiobooks
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -285,63 +284,6 @@ func TestTrashProgressInfo_ForViewer(t *testing.T) {
 	all := info.ForViewer("c", true)
 	require.Equal(t, info.Summary, all.Summary)
 	require.Zero(t, all.OtherUsers)
-}
-
-// G7: the purge's iTunes removes skip a PID a live copy still holds (the
-// same legacy track on a sibling), and run only after the row is gone.
-func TestPurgeDeleteRow_ITunesRemovesSpareSharedPIDAndFollowTheDelete(t *testing.T) {
-	svc, store, _ := setupPurgeBoundary(t)
-	enq := &fakeITunesEnqueuer{}
-	svc.SetITunesEnqueuer(enq)
-	gid := "g1"
-	shared, own := "SHAREDPID0000001", "OWNPID0000000002"
-	_, err := store.CreateBook(&database.Book{ID: "keep", Title: "k", Format: "m4b", VersionGroupID: &gid,
-		IsPrimaryVersion: new(true), LibraryState: new("organized"), ITunesPersistentID: &shared})
-	require.NoError(t, err)
-	groupBook(t, store, "dup", gid, true, false)
-	_, err = store.ModifyBook("dup", func(b *database.Book) error { b.ITunesPersistentID = &shared; return nil })
-	require.NoError(t, err)
-	groupBook(t, store, "solo", "g2", true, false)
-	_, err = store.ModifyBook("solo", func(b *database.Book) error { b.ITunesPersistentID = &own; return nil })
-	require.NoError(t, err)
-
-	dup, err := store.GetBookByID("dup")
-	require.NoError(t, err)
-	require.NoError(t, svc.purgeDeleteRow(dup))
-	require.Empty(t, enq.pids, "the live copy's iTunes track is not removed")
-
-	solo, err := store.GetBookByID("solo")
-	require.NoError(t, err)
-	require.NoError(t, store.CreateBookFile(&database.BookFile{BookID: "solo", FilePath: "/x/solo.m4b", Format: "m4b"}))
-	err = svc.purgeDeleteRow(solo)
-	require.True(t, errors.Is(err, database.ErrBookOwnsFiles), "err = %v", err)
-	require.Empty(t, enq.pids, "a delete that failed queued no iTunes remove")
-	require.False(t, bookGone(t, store, "solo"))
-}
-
-// G7: a soft delete does not queue the iTunes remove of a legacy PID a live
-// copy of the book still carries; the book's own unshared PID is queued.
-func TestSoftDelete_ITunesRemoveSparesSharedPID(t *testing.T) {
-	svc, store, _ := setupPurgeBoundary(t)
-	enq := &fakeITunesEnqueuer{}
-	svc.SetITunesEnqueuer(enq)
-	gid := "g1"
-	shared, own := "SHAREDPID0000003", "OWNPID0000000004"
-	_, err := store.CreateBook(&database.Book{ID: "keep", Title: "k", Format: "m4b", VersionGroupID: &gid,
-		IsPrimaryVersion: new(true), LibraryState: new("organized"), ITunesPersistentID: &shared})
-	require.NoError(t, err)
-	_, err = store.CreateBook(&database.Book{ID: "copy", Title: "c", Format: "m4b", VersionGroupID: &gid,
-		IsPrimaryVersion: new(false), LibraryState: new("imported"), ITunesPersistentID: &shared})
-	require.NoError(t, err)
-	_, err = store.CreateBook(&database.Book{ID: "solo", Title: "s", Format: "m4b", ITunesPersistentID: &own})
-	require.NoError(t, err)
-
-	_, err = svc.DeleteAudiobook(context.Background(), "copy", &DeleteAudiobookOptions{SoftDelete: true})
-	require.NoError(t, err)
-	require.Empty(t, enq.pids, "the live copy's iTunes track stays")
-	_, err = svc.DeleteAudiobook(context.Background(), "solo", &DeleteAudiobookOptions{SoftDelete: true})
-	require.NoError(t, err)
-	require.Equal(t, []string{own}, enq.pids)
 }
 
 // A: "Purge now" with block_hash still blocks the hash once the book is gone.

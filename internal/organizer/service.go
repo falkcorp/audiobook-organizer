@@ -148,17 +148,10 @@ type Store interface {
 // Compile-time proof that PebbleStore satisfies organizer.Store.
 var _ Store = (*database.PebbleStore)(nil)
 
-// WriteBackEnqueuer is the interface for enqueuing iTunes write-back requests.
-// Implemented by the server's WriteBackBatcher.
-type WriteBackEnqueuer interface {
-	Enqueue(bookID string)
-}
-
 // Service orchestrates the library organization operation.
 type Service struct {
-	db               Store
-	organizeHooks    OrganizeHooks
-	writeBackBatcher WriteBackEnqueuer
+	db            Store
+	organizeHooks OrganizeHooks
 	// ScanEnqueuer enqueues a background library scan. Wired by the server
 	// package after construction to avoid a circular import.
 	ScanEnqueuer func(ctx context.Context) error
@@ -223,11 +216,6 @@ func VersionGroupLockKey(book *database.Book) string {
 		return "vg:" + *book.VersionGroupID
 	}
 	return "vg:book:" + book.ID
-}
-
-// SetWriteBackBatcher sets the iTunes write-back batcher.
-func (orgSvc *Service) SetWriteBackBatcher(b WriteBackEnqueuer) {
-	orgSvc.writeBackBatcher = b
 }
 
 // SetOrganizeHooks sets optional hooks that are propagated to every
@@ -440,11 +428,6 @@ func (orgSvc *Service) PerformOrganizeStats(ctx context.Context, req *Request, l
 	stats := orgSvc.organizeBooksOpts(ctx, booksToOrganize, alreadyCorrect, log, req.OperationID, req.LockBooksAgainstScan)
 	stats.addCollision(OutcomePlaceholderSkipped, heldBack.placeholderTitle)
 	stats.addCollision(OutcomeVersionGroupUnreadable, heldBack.versionGroupUnreadable)
-
-	// Post-organize auto write-back now rides the batcher.
-	if stats.Organized > 0 || stats.ReOrganized > 0 {
-		// Note: auto-rescan disabled — organize already updates all paths and book_files.
-	}
 
 	return stats, organizeOutcomeError(stats)
 }
@@ -1726,12 +1709,7 @@ func (orgSvc *Service) organizeBooksOpts(ctx context.Context, booksToOrganize []
 			statsMu.Unlock()
 		}
 
-		// --- Step 3: Enqueue iTunes writeback ---
-		if err == nil && commitErr == nil && oldPath != newPath && orgSvc.writeBackBatcher != nil {
-			orgSvc.writeBackBatcher.Enqueue(book.ID)
-		}
-
-		// --- Step 4: Progress reporting ---
+		// --- Step 3: Progress reporting ---
 		count := progressCounter.Add(1)
 		if count%50 == 0 || count == int64(len(booksToOrganize)) {
 			log.UpdateProgress(int(count), len(booksToOrganize),

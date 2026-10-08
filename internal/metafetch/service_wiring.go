@@ -28,11 +28,6 @@ func (mfs *Service) SetActivityService(svc *activity.Service) {
 	mfs.activityService = svc
 }
 
-// SetWriteBackBatcher sets the iTunes write-back batcher.
-func (mfs *Service) SetWriteBackBatcher(b WriteBackEnqueuer) {
-	mfs.writeBackBatcher = b
-}
-
 // SetSafeWriteDeps installs the Deluge pre-flight guard for cover-art and tag
 // writes. Must be called before any cover embedding occurs.
 //

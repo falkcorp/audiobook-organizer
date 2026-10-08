@@ -1221,11 +1221,6 @@ func TestServiceSetters(t *testing.T) {
 		}
 	})
 
-	t.Run("SetWriteBackBatcher", func(t *testing.T) {
-		// Just verify it doesn't panic
-		svc.SetWriteBackBatcher(nil)
-	})
-
 	t.Run("ScanEnqueuer", func(t *testing.T) {
 		// Verify ScanEnqueuer can be set without panic
 		svc.ScanEnqueuer = nil

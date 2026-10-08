@@ -33,17 +33,6 @@ func TestB3_AsExternalIDReassigner_NotImplementing(t *testing.T) {
 	assert.Nil(t, AsExternalIDReassigner("just a string"))
 }
 
-// TestB3_SetWriteBackBatcher_Wires verifies the setter actually assigns the
-// unexported field (exercised indirectly via a merge that has a PID to
-// enqueue — the batcher-not-nil branch is separately covered by
-// TestB3_MergeBooks_ITunesPIDCollectionAndITLEnqueue, so here we only check
-// that a nil batcher is a legal no-op set, matching the "itunes-disabled"
-// PostInit path documented on lifecycle.go).
-func TestB3_SetWriteBackBatcher_NilIsLegalNoOp(t *testing.T) {
-	ms := NewService(nil)
-	assert.NotPanics(t, func() { ms.SetWriteBackBatcher(nil) })
-}
-
 // TestB3_LockUnlockMergeRMW_RoundTrips exercises the exported
 // LockMergeRMW/UnlockMergeRMW pair used by dedup.MergeBooks to share the
 // package-level merge serialization lock. A bare lock/unlock round trip

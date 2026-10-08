@@ -17,19 +17,6 @@ type EventPublisher interface {
 	Publish(ctx context.Context, event plugin.Event)
 }
 
-// WriteBackEnqueuer is the narrow interface for enqueuing book write-back jobs.
-//
-// NOTE: the concrete implementation wired in production is
-// *itunesservice.WriteBackBatcher — it syncs the book to the iTunes library.
-// It is NOT the audio-tag writer. Writing tags into the audio files themselves
-// goes through metafetch.Service.FinishApplyFileWork (or WriteBackMetadataForBook
-// for an explicit write-back), scheduled off the request path via FileIOPool.
-// Conflating the two is what caused the Metadata Review screen to update only
-// the database and never the files (fix/review-apply-writes-tags).
-type WriteBackEnqueuer interface {
-	Enqueue(bookID string)
-}
-
 // FileIOPool is the narrow *server.FileIOPool subset used by handlers that
 // schedule slow file I/O (cover-art embedding, audio tag writes, renames) off
 // the HTTP request path. Only Submit is used.

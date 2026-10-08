@@ -493,13 +493,11 @@ func TestPipelineCheckpoints(t *testing.T) {
 	t.Run("clear", func(t *testing.T) {
 		setCheckpoint(mock, "book-2", phaseRename)
 		setCheckpoint(mock, "book-2", phaseTags)
-		setCheckpoint(mock, "book-2", phaseITunes)
 		assert.True(t, hasCheckpoint(mock, "book-2", phaseRename))
 
 		clearCheckpoints(mock, "book-2")
 		assert.False(t, hasCheckpoint(mock, "book-2", phaseRename))
 		assert.False(t, hasCheckpoint(mock, "book-2", phaseTags))
-		assert.False(t, hasCheckpoint(mock, "book-2", phaseITunes))
 	})
 
 	t.Run("cleanup_stale_noop", func(t *testing.T) {
@@ -1043,13 +1041,6 @@ func TestPickBestMatchFromScored_WrongEditionRejected(t *testing.T) {
 func TestServiceSetterEdgeCases(t *testing.T) {
 	mock := &database.MockStore{}
 	svc := NewService(mock)
-
-	t.Run("set_write_back_batcher", func(t *testing.T) {
-		assert.Nil(t, svc.writeBackBatcher)
-		// Just confirm no panic with nil batcher
-		svc.SetWriteBackBatcher(nil)
-		assert.Nil(t, svc.writeBackBatcher)
-	})
 
 	t.Run("set_metadata_scorer", func(t *testing.T) {
 		assert.Nil(t, svc.metadataScorer)

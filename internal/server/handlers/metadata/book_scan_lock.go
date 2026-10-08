@@ -313,11 +313,6 @@ func (h *Handler) applyCandidateCore(ctx context.Context, id string, cand metafe
 	// answers for the book.
 
 	shouldWriteBack := writeBack == nil || *writeBack
-	// Enqueue before the pool submission so the iTunes batcher picks up the
-	// change even if the file job panics on a malformed file.
-	if wb := h.resolveWriteBack(); shouldWriteBack && wb != nil {
-		wb.Enqueue(id)
-	}
 	if pool := h.fileIOPool; pool != nil {
 		mfs := h.metadataFetchService
 		pendingCover := resp.PendingCoverURL
@@ -412,9 +407,6 @@ func (h *Handler) fetchCore(ctx context.Context, id string) (*metafetch.FetchMet
 	}
 	// No candidate-cache drop: the store drops the row when the fetched
 	// metadata changed the title or author (see applyCandidateCore).
-	if wb := h.resolveWriteBack(); wb != nil {
-		wb.Enqueue(id)
-	}
 	return resp, nil
 }
 
