@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.tsx
-// version: 1.13.0
+// version: 1.14.0
 // guid: 8e0b4d59-1c76-42a3-95f8-7d2a6b3e0c81
-// last-edited: 2026-09-30
+// last-edited: 2026-10-07
 //
 // The unified review workspace: one screen for dedup, metadata apply, the
 // review queue, and library repairs.
@@ -54,14 +54,14 @@ import {
 } from '@mui/material';
 import ViewListIcon from '@mui/icons-material/ViewList';
 import ViewColumnIcon from '@mui/icons-material/ViewColumn';
-import AutoAwesomeMosaicIcon from '@mui/icons-material/AutoAwesomeMosaic';
+import FormatListNumberedIcon from '@mui/icons-material/FormatListNumbered';
 import * as api from '../../services/api';
 import type { DedupBand } from '../../services/api';
 import { useToast } from '../toast/ToastProvider';
 import { CoverLightbox } from '../CoverLightbox';
 import { coverFullSizeUrl } from '../../utils/coverUrl';
 import { CommandBar, type CommandMenu } from './CommandBar';
-import type { SpineViewMode } from './spine/CompareSpine';
+import { normalizeViewMode, type SpineViewMode } from './spine/CompareSpine';
 import { DupesPanel } from './DupesPanel';
 import { RegroupPanel } from './RegroupPanel';
 import { RepairsPanel } from './RepairsPanel';
@@ -572,7 +572,7 @@ export function ReviewWorkspace() {
           size="small"
           exclusive
           value={viewMode}
-          onChange={(_, v: SpineViewMode | null) => v && setViewMode(v)}
+          onChange={(_, v: SpineViewMode | null) => v && setViewMode(normalizeViewMode(v))}
           aria-label="Comparison layout"
           sx={{ ml: 'auto' }}
         >
@@ -582,10 +582,10 @@ export function ReviewWorkspace() {
           <ToggleButton value="two-column" aria-label="Two columns">
             <ViewColumnIcon fontSize="small" />
           </ToggleButton>
-          {/* The one addition PLAN.md authorises: collapse on the spine's own
-              width rather than the window's. */}
-          <ToggleButton value="auto" aria-label="Auto layout">
-            <AutoAwesomeMosaicIcon fontSize="small" />
+          {/* Every ranked search candidate per book (was 'auto' until
+              2026-10-07). The dupes lane renders it as its compact view. */}
+          <ToggleButton value="candidates" aria-label="Candidates">
+            <FormatListNumberedIcon fontSize="small" />
           </ToggleButton>
         </ToggleButtonGroup>
       </Box>

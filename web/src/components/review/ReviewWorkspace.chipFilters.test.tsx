@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.chipFilters.test.tsx
-// version: 1.8.0
+// version: 1.9.0
 // guid: 0d6c2e8a-94b1-4f37-8a5e-2c71b9e04f36
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 //
 // Owner, 2026-09-27: "the 11324 with no candidates let me click on the chips
 // at the left bar in the review page". Every summary chip filters the list to
@@ -395,7 +395,7 @@ describe('selection bar: always on screen', () => {
   const VIEW_MODES = [
     ['Compact rows', 'compact'],
     ['Two columns', 'two-column'],
-    ['Auto layout', 'auto'],
+    ['Candidates', 'candidates'],
   ] as const;
 
   it.each(VIEW_MODES)('is above the spine in the %s view', async (label, mode) => {

@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/CompareSpine.tsx
-// version: 1.12.0
+// version: 1.13.0
 // guid: 1e5b8d72-4c30-49a6-8f21-0b7e3a6c9d54
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 //
 // The shared comparison spine: the surface that shows a reviewer what they are
 // deciding between.
@@ -27,7 +27,10 @@
 //      chip called the same function and meant opposite things. Here they
 //      dispatch `skip` and `unskip`. Net behaviour is identical; the intent is
 //      now readable at the call site.
-//   3. `auto` view mode -- see below. The one addition PLAN.md authorises.
+//   3. A third view mode. It was `auto` (the two-column card collapsing on
+//      the spine's width); since 2026-10-07 it is `candidates` -- the full
+//      ranked candidate list per book (./CandidatesCard.tsx), which keeps the
+//      same container-query collapse.
 //   4. `EvidenceSection` -- the recorded scoring derivation, which the dialog
 //      never had. It is the reason the backend instrumentation exists.
 //
@@ -68,29 +71,20 @@ import type {
 import type { MetadataAction } from '../reviewActions';
 import { EvidencePanel } from '../evidence/EvidencePanel';
 import { metadataEvidence } from '../evidence/adapters';
-import { PathLinks, usePathAliases } from '../../common/PathLinks';
+import { usePathAliases } from '../../common/PathLinks';
 import { usePathVars, type PathVar } from '../../../utils/formatPath';
 import {
   SOURCE_COLORS,
+  SPINE_TWO_COLUMN_MIN,
   formatDuration,
-  formatFileSize,
   getRowSx,
   isRowActionable,
+  noCandidateLabel,
   runtimeDiffers,
   type RowState,
 } from './rowState';
-
-// bookRuntimeLabel is the book's runtime as the server computed it from its
-// files. A partial runtime (some chapters never probed) is shown as a lower
-// bound with its coverage, never as the book's length: showing it bare is how
-// a 10 h book read as "40m" next to a 10 h candidate.
-function bookRuntimeLabel(book: CandidateResult['book']): string | undefined {
-  if (book.duration_seconds) return formatDuration(book.duration_seconds);
-  if (book.runtime_status === 'partial' && book.runtime_lower_bound_seconds) {
-    return `at least ${formatDuration(book.runtime_lower_bound_seconds)} (${book.runtime_files_known} of ${book.runtime_files_counted} files measured)`;
-  }
-  return undefined;
-}
+import { BookInfoPanel, bookSummaryLine } from './BookInfoPanel';
+import { CandidatesCard, type CandidatesContext } from './CandidatesCard';
 
 /**
  * "Why did it score that?" -- the recorded derivation for one candidate.
@@ -206,10 +200,15 @@ export interface SpineRowProps {
 
 /**
  * `compact` and `two-column` are the reviewer's explicit choice, carried over
- * from the dialog's ToggleButtonGroup unchanged. `auto` is new: it defers to the
- * spine's own width instead of the window's.
+ * from the dialog's ToggleButtonGroup unchanged. `candidates` (2026-10-07,
+ * replacing `auto`) shows every ranked search candidate per book.
  */
-export type SpineViewMode = 'compact' | 'two-column' | 'auto';
+export type SpineViewMode = 'compact' | 'two-column' | 'candidates';
+
+/** Any other value -- notably the retired 'auto' -- reads as the default. */
+export function normalizeViewMode(v: unknown): SpineViewMode {
+  return v === 'two-column' || v === 'candidates' ? v : 'compact';
+}
 
 function GroupedCard({
   group,
@@ -270,44 +269,7 @@ function GroupedCard({
                   sx={{ width: 40, height: 50 }}
                 />
                 <Box sx={{ minWidth: 0 }}>
-                  <Typography
-                    variant="body2"
-                    sx={{
-                      fontWeight: 'bold',
-                    }}
-                  >
-                    {r.book.title}
-                  </Typography>
-                  <Stack
-                    direction="row"
-                    spacing={0.5}
-                    sx={{
-                      flexWrap: 'wrap',
-                    }}
-                  >
-                    {r.book.format && <Chip label={r.book.format} size="small" />}
-                    {bookRuntimeLabel(r.book) && (
-                      <Typography variant="caption">{bookRuntimeLabel(r.book)}</Typography>
-                    )}
-                    {r.book.file_size_bytes && (
-                      <Typography variant="caption">
-                        · {formatFileSize(r.book.file_size_bytes)}
-                      </Typography>
-                    )}
-                  </Stack>
-                  <PathLinks path={r.book.file_path} aliases={pathAliases} vars={pathVars} />
-                  {r.book.itunes_path && (
-                    <Typography
-                      variant="caption"
-                      sx={{
-                        color: 'info.main',
-                        display: 'block',
-                        wordBreak: 'break-all',
-                      }}
-                    >
-                      iTunes: {r.book.itunes_path}
-                    </Typography>
-                  )}
+                  <BookInfoPanel book={r.book} pathAliases={pathAliases} pathVars={pathVars} />
                   {ctx.rowState(r.book.id) === 'applied' && (
                     <Chip label="Applied" size="small" color="success" sx={{ mt: 0.5 }} />
                   )}
@@ -503,15 +465,24 @@ const CompactRow = memo(function CompactRow({
                 {' \u2192 '}
                 <strong>{r.candidate.title}</strong>
               </>
-            ) : r.status === 'no_match' ? (
-              <Chip label="No match" size="small" sx={{ ml: 1 }} />
-            ) : r.status === 'error' ? (
-              <Chip label="Error" size="small" color="error" sx={{ ml: 1 }} />
-            ) : r.status === 'decode_error' ? (
-              <Chip label="Candidate will not decode" size="small" color="error" sx={{ ml: 1 }} />
-            ) : r.status === 'no_candidates' || r.status === 'resolved_no_candidates' ? (
-              <Chip label="No candidate" size="small" sx={{ ml: 1 }} />
-            ) : null}
+            ) : (
+              <Chip
+                label={noCandidateLabel(r).label}
+                title={noCandidateLabel(r).detail}
+                color={noCandidateLabel(r).color}
+                size="small"
+                sx={{ ml: 1 }}
+                data-testid="no-candidate-chip"
+              />
+            )}
+          </Typography>
+          <Typography
+            variant="caption"
+            noWrap
+            sx={{ display: 'block', color: 'text.secondary' }}
+            data-testid="book-summary-line"
+          >
+            {bookSummaryLine(r.book)}
           </Typography>
         </Box>
         {r.candidate && (
@@ -621,74 +592,26 @@ const CompactRow = memo(function CompactRow({
         )}
       </Stack>
 
-      {/* Expanded two-column detail for this row */}
-      {isExpanded && r.candidate && (
+      {/* Expanded two-column detail for this row. The book half shows for
+          every row, candidate or not: it is the book's full info. */}
+      {isExpanded && (
         <Box sx={{ p: 2, pl: 7, bgcolor: 'action.hover', borderRadius: 1 }}>
           <Stack direction="row" spacing={2}>
-            <Box sx={{ flex: 1 }}>
+            <Box sx={{ flex: 1, minWidth: 0 }}>
               <Typography variant="subtitle2" gutterBottom>
                 Current
               </Typography>
-              <Stack
-                direction="row"
-                spacing={1}
-                sx={{
-                  alignItems: 'flex-start',
-                }}
-              >
+              <Stack direction="row" spacing={1} sx={{ alignItems: 'flex-start' }}>
                 <Avatar
                   src={r.book.cover_url || ''}
                   variant="rounded"
                   sx={{ width: 60, height: 80, cursor: r.book.cover_url ? 'pointer' : 'default' }}
                   onClick={() => r.book.cover_url && handlers.onPreviewCover(r.book.cover_url)}
                 />
-                <Box>
-                  <Typography
-                    variant="body2"
-                    sx={{
-                      fontWeight: 'bold',
-                    }}
-                  >
-                    {r.book.title}
-                  </Typography>
-                  <Typography variant="body2">{r.book.author}</Typography>
-                  {r.book.format && <Chip label={r.book.format} size="small" sx={{ mt: 0.5 }} />}
-                  {bookRuntimeLabel(r.book) && (
-                    <Typography
-                      variant="caption"
-                      sx={{
-                        display: 'block',
-                      }}
-                    >
-                      {bookRuntimeLabel(r.book)}
-                    </Typography>
-                  )}
-                  {r.book.file_size_bytes && (
-                    <Typography
-                      variant="caption"
-                      sx={{
-                        display: 'block',
-                      }}
-                    >
-                      {formatFileSize(r.book.file_size_bytes)}
-                    </Typography>
-                  )}
-                  <PathLinks path={r.book.file_path} aliases={pathAliases} vars={pathVars} />
-                  {r.book.itunes_path && (
-                    <Typography
-                      variant="caption"
-                      sx={{
-                        color: 'info.main',
-                        display: 'block',
-                        wordBreak: 'break-all',
-                      }}
-                    >
-                      iTunes: {r.book.itunes_path}
-                    </Typography>
-                  )}
-                </Box>
+                <BookInfoPanel book={r.book} pathAliases={pathAliases} pathVars={pathVars} />
               </Stack>
             </Box>
+            {r.candidate && (
             <Box sx={{ flex: 1 }}>
               <Typography variant="subtitle2" gutterBottom>
                 Proposed
@@ -803,8 +726,9 @@ const CompactRow = memo(function CompactRow({
                 </Box>
               </Stack>
             </Box>
+            )}
           </Stack>
-          <EvidenceSection candidate={r.candidate} />
+          {r.candidate && <EvidenceSection candidate={r.candidate} />}
         </Box>
       )}
     </Box>
@@ -854,51 +778,7 @@ const TwoColumnCard = memo(function TwoColumnCard({
               sx={{ width: 60, height: 80, cursor: r.book.cover_url ? 'pointer' : 'default' }}
               onClick={() => r.book.cover_url && handlers.onPreviewCover(r.book.cover_url)}
             />
-            <Box sx={{ minWidth: 0 }}>
-              <Typography
-                variant="body2"
-                sx={{
-                  fontWeight: 'bold',
-                }}
-              >
-                {r.book.title}
-              </Typography>
-              <Typography variant="body2">{r.book.author}</Typography>
-              {r.book.format && <Chip label={r.book.format} size="small" sx={{ mt: 0.5 }} />}
-              {bookRuntimeLabel(r.book) && (
-                <Typography
-                  variant="caption"
-                  sx={{
-                    display: 'block',
-                  }}
-                >
-                  {bookRuntimeLabel(r.book)}
-                </Typography>
-              )}
-              {r.book.file_size_bytes && (
-                <Typography
-                  variant="caption"
-                  sx={{
-                    display: 'block',
-                  }}
-                >
-                  {formatFileSize(r.book.file_size_bytes)}
-                </Typography>
-              )}
-              <PathLinks path={r.book.file_path} aliases={pathAliases} vars={pathVars} />
-              {r.book.itunes_path && (
-                <Typography
-                  variant="caption"
-                  sx={{
-                    color: 'info.main',
-                    display: 'block',
-                    wordBreak: 'break-all',
-                  }}
-                >
-                  iTunes: {r.book.itunes_path}
-                </Typography>
-              )}
-            </Box>
+            <BookInfoPanel book={r.book} pathAliases={pathAliases} pathVars={pathVars} />
           </Stack>
         </Box>
 
@@ -1091,12 +971,10 @@ const TwoColumnCard = memo(function TwoColumnCard({
           ) : (
             <Box sx={{ display: 'flex', alignItems: 'center', height: '100%' }}>
               <Chip
-                label={
-                  r.status === 'no_match'
-                    ? 'No match found'
-                    : `Error: ${r.error_message || 'Unknown'}`
-                }
-                color={r.status === 'error' ? 'error' : 'default'}
+                label={noCandidateLabel(r).label}
+                title={noCandidateLabel(r).detail}
+                color={noCandidateLabel(r).color}
+                data-testid="no-candidate-chip"
               />
             </Box>
           )}
@@ -1107,16 +985,8 @@ const TwoColumnCard = memo(function TwoColumnCard({
   );
 });
 
-/**
- * Width at which `auto` shows the two-column comparison.
- *
- * 700px is the spine's OWN width, not the viewport's -- which is the entire
- * point. The dialog's two-column card is a `Stack direction="row"` with
- * `flex: 1 / flex: 1` and no responsive collapse at any width: put it beside a
- * queue rail on a laptop and both columns squish rather than stacking. A media
- * query cannot fix that, because the window can be wide while the spine is not.
- */
-export const SPINE_TWO_COLUMN_MIN = 700;
+/** Re-exported from ./rowState, where the candidates card reads it too. */
+export { SPINE_TWO_COLUMN_MIN };
 
 /**
  * The comparison surface.
@@ -1134,6 +1004,7 @@ export function CompareSpine({
   emptyMessage = 'Nothing to compare.',
   loading = false,
   errored = false,
+  candidates,
 }: {
   rows: CandidateResult[];
   groups?: CandidateGroup[];
@@ -1155,9 +1026,14 @@ export function CompareSpine({
    * exact symptom this change exists to remove.
    */
   errored?: boolean;
+  /**
+   * The candidates view's loader and apply. Without it the `candidates` mode
+   * falls back to the two-column card (a spine with no search wiring).
+   */
+  candidates?: CandidatesContext;
 }) {
   // Called once here and threaded down to every render site as a plain prop --
-  // the three renderers (GroupedCard, CompactRow, TwoColumnCard/AutoCard) stay
+  // the renderers (GroupedCard, CompactRow, TwoColumnCard, CandidatesCard) stay
   // pure and don't each re-fetch config on their own.
   const pathAliases = usePathAliases();
   const pathVars = usePathVars();
@@ -1218,7 +1094,7 @@ export function CompareSpine({
       data-testid="compare-spine"
       data-view-mode={viewMode}
       sx={{
-        // The spine IS the container the auto-mode query resolves against. This
+        // The spine IS the container the candidates card's query resolves against. This
         // declaration has to be on this element: put it on the row and
         // `@container` measures the row, which is already as wide as the spine,
         // and the collapse never fires.
@@ -1252,41 +1128,12 @@ export function CompareSpine({
           <CompactRow key={r.book.id} {...rowProps} />
         ) : viewMode === 'two-column' ? (
           <TwoColumnCard key={r.book.id} {...rowProps} />
+        ) : candidates ? (
+          <CandidatesCard key={r.book.id} {...rowProps} cands={candidates} />
         ) : (
-          <AutoCard key={r.book.id} {...rowProps} />
+          <TwoColumnCard key={r.book.id} {...rowProps} />
         );
       })}
     </Box>
   );
 }
-
-/**
- * `auto`: the two-column card, collapsed to a single column when the SPINE is
- * narrow.
- *
- * Implemented by rendering the same TwoColumnCard inside a wrapper that flips
- * its inner `Stack` from row to column via a container query, rather than by
- * forking the renderer. Forking would double the surface that Phase 7's
- * inventory has to check, and the two copies would drift.
- *
- * jsdom does not evaluate container queries, so a unit test can assert that the
- * rule is emitted but not that the collapse happens. Whether it actually
- * reflows is a browser-level question and belongs to the visual harness -- the
- * same split used for the theme's signal colours.
- */
-const AutoCard = memo(function AutoCard(props: SpineRowProps) {
-  return (
-    <Box
-      data-testid="spine-auto-card"
-      sx={{
-        [`@container spine (max-width: ${SPINE_TWO_COLUMN_MIN - 1}px)`]: {
-          '& > div > .MuiStack-root': {
-            flexDirection: 'column',
-          },
-        },
-      }}
-    >
-      <TwoColumnCard {...props} />
-    </Box>
-  );
-});

@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.test.tsx
-// version: 1.15.0
+// version: 1.16.0
 // guid: 3c8f0a62-9b47-4d15-8e30-1f7a2c5b9d64
-// last-edited: 2026-10-02
+// last-edited: 2026-10-07
 
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
@@ -302,15 +302,15 @@ describe('rescore', () => {
 });
 
 describe('view mode', () => {
-  it('offers three positions, including the auto mode', async () => {
-    // Two are carried from the dialog's toggle; `auto` is the one addition
-    // PLAN.md authorises, and closes an unchecked port-inventory row.
+  it('offers three positions, including the candidates view', async () => {
+    // Two are carried from the dialog's toggle; the third was `auto` until
+    // 2026-10-07 and is now the full ranked candidate list per book.
     renderWorkspace();
     await waitFor(() => expect(screen.getByTestId('compare-spine')).toBeInTheDocument());
 
     expect(screen.getByRole('button', { name: 'Compact rows' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Two columns' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Auto layout' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Candidates' })).toBeInTheDocument();
   });
 
   it('drives the spine, which nothing did before the shell existed', async () => {
@@ -319,9 +319,9 @@ describe('view mode', () => {
     const spine = await screen.findByTestId('compare-spine');
     expect(spine).toHaveAttribute('data-view-mode', 'compact');
 
-    await user.click(screen.getByRole('button', { name: 'Auto layout' }));
+    await user.click(screen.getByRole('button', { name: 'Candidates' }));
     await waitFor(() =>
-      expect(screen.getByTestId('compare-spine')).toHaveAttribute('data-view-mode', 'auto')
+      expect(screen.getByTestId('compare-spine')).toHaveAttribute('data-view-mode', 'candidates')
     );
   });
 });

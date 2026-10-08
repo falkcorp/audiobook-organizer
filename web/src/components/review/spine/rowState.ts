@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/rowState.ts
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4d17c69b-0e83-4a25-91f6-7b2c8a034e51
-// last-edited: 2026-09-30
+// last-edited: 2026-10-07
 //
 // Row-state derivations and formatting, lifted verbatim from
 // MetadataReviewDialog so CompareSpine can reuse them rather than reimplement
@@ -195,3 +195,91 @@ export function runtimeDiffersFromBook(r: RuntimeRow): boolean {
 export function runtimeHiddenBySwitch(r: RuntimeRow): boolean {
   return runtimeDiffers(r.candidate?.duration_delta_sec) || runtimeDiffersFromBook(r);
 }
+
+/** What a candidate-less row's chip says, and how loud it is. */
+export interface NoCandidateLabel {
+  label: string;
+  color: 'error' | 'warning' | 'default';
+  /** Longer explanation for a tooltip. */
+  detail: string;
+}
+
+/**
+ * The chip for a row with no candidate, by the row's status.
+ *
+ * Every renderer uses this one mapping. The two-column card used to label
+ * every candidate-less row that was not `no_match` as
+ * `Error: ${error_message || 'Unknown'}` -- but the unreviewable bucket's
+ * `no_candidates` and `resolved_no_candidates` rows are not errors and the
+ * server never sends an `error_message` for them (it sets one only for
+ * `decode_error`), so every one of them read "Error: Unknown".
+ */
+export function noCandidateLabel(r: {
+  status: string;
+  error_message?: string;
+  fetched_at?: string;
+  fallback_deferred?: boolean;
+}): NoCandidateLabel {
+  const when = r.fetched_at ? ` Last searched ${new Date(r.fetched_at).toLocaleDateString()}.` : '';
+  const deferred = r.fallback_deferred
+    ? ' A fallback provider lookup was deferred and will be retried.'
+    : '';
+  switch (r.status) {
+    case 'no_match':
+      return { label: 'No match found', color: 'default', detail: `No provider returned a match.${when}` };
+    case 'no_candidates':
+      return {
+        label: 'No candidates cached',
+        color: 'default',
+        detail: `The metadata cache holds no candidate for this book; a refetch or a manual search may find one.${when}${deferred}`,
+      };
+    case 'resolved_no_candidates':
+      return {
+        label: 'Reviewed — no candidate left',
+        color: 'default',
+        detail: `The book was already ruled on and has no stored candidate.${when}`,
+      };
+    case 'decode_error':
+      return {
+        label: `Candidate will not decode${r.error_message ? `: ${r.error_message}` : ''}`,
+        color: 'error',
+        detail: r.error_message || 'The stored candidate could not be decoded.',
+      };
+    case 'skipped':
+      return {
+        label: 'Not searched',
+        color: 'default',
+        detail: 'The candidate fetch did not search this book (marked no match, or no usable title).',
+      };
+    case 'deferred':
+      return {
+        label: 'Lookup deferred',
+        color: 'warning',
+        detail: `The fallback lookup was put off (budget spent or provider held); a later run asks again.${when}`,
+      };
+    case 'error':
+      return {
+        label: r.error_message ? `Error: ${r.error_message}` : 'Error (no reason recorded)',
+        color: 'error',
+        detail: r.error_message || 'The server reported an error for this row without a reason.',
+      };
+    default:
+      return {
+        label: r.error_message ? r.error_message : `No candidate (${r.status})`,
+        color: r.error_message ? 'error' : 'default',
+        detail: r.error_message || `Status: ${r.status}`,
+      };
+  }
+}
+
+/**
+ * Width at which the candidates card shows its two columns side by side
+ * (CandidatesCard); below it the card stacks them.
+ *
+ * 700px is the spine's OWN width, not the viewport's -- which is the entire
+ * point. The dialog's two-column card is a `Stack direction="row"` with
+ * `flex: 1 / flex: 1` and no responsive collapse at any width: put it beside a
+ * queue rail on a laptop and both columns squish rather than stacking. A media
+ * query cannot fix that, because the window can be wide while the spine is not.
+ */
+export const SPINE_TWO_COLUMN_MIN = 700;

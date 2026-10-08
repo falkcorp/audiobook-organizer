@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/CompareSpine.test.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: f30a6c85-2b47-4e19-93d0-8a5c1e7b402f
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
@@ -14,6 +14,15 @@ import * as api from '../../../services/api';
 import type { CandidateResult, Config, MetadataCandidate, PathAlias } from '../../../services/api';
 import type { MetadataAction } from '../reviewActions';
 import type { RowState } from './rowState';
+import { CandidateLoader } from './candidateLoader';
+import type { CandidatesContext } from './CandidatesCard';
+
+function makeCandidatesCtx(): CandidatesContext {
+  return {
+    loader: new CandidateLoader(() => new Promise(() => {})),
+    apply: vi.fn(() => Promise.resolve()),
+  };
+}
 
 // Task 7 wired PathLinks into all three CompareSpine render sites
 // (GroupedCard, CompactRow, TwoColumnCard), which pulls in usePathVars()
@@ -97,14 +106,19 @@ describe('view mode dispatch', () => {
     const { ctx } = makeCtx();
     const { rerender } = renderSpine({ rows: [row('b1')], viewMode: 'compact', ctx });
     expect(screen.getByTestId('compare-spine')).toHaveAttribute('data-view-mode', 'compact');
-    expect(screen.queryByTestId('spine-auto-card')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('spine-candidates-card')).not.toBeInTheDocument();
 
     rerender(
       <ThemeProvider theme={appTheme} defaultMode="dark">
-        <CompareSpine rows={[row('b1')]} viewMode="auto" ctx={ctx} />
+        <CompareSpine
+          rows={[row('b1')]}
+          viewMode="candidates"
+          ctx={ctx}
+          candidates={makeCandidatesCtx()}
+        />
       </ThemeProvider>
     );
-    expect(screen.getByTestId('spine-auto-card')).toBeInTheDocument();
+    expect(screen.getByTestId('spine-candidates-card')).toBeInTheDocument();
   });
 
   it('explains an empty spine rather than rendering a blank box', () => {
@@ -255,8 +269,8 @@ describe('what the reviewer must be able to see', () => {
       viewMode: 'compact',
       ctx,
     });
-    expect(screen.getByText('No match')).toBeInTheDocument();
-    expect(screen.getByText('Error')).toBeInTheDocument();
+    expect(screen.getByText('No match found')).toBeInTheDocument();
+    expect(screen.getByText('Error (no reason recorded)')).toBeInTheDocument();
   });
 });
 
@@ -342,7 +356,7 @@ describe('expansion is compact-only', () => {
   });
 });
 
-describe('auto mode', () => {
+describe('candidates mode', () => {
   it('makes the spine the container the query resolves against', () => {
     // If `container-type` lands on the row instead of the spine, the query
     // measures a box that is already as wide as the spine and the collapse never
@@ -350,7 +364,7 @@ describe('auto mode', () => {
     // declaration is on the right element; whether it reflows is a browser
     // question for the visual harness.
     const { ctx } = makeCtx();
-    renderSpine({ rows: [row('b1')], viewMode: 'auto', ctx });
+    renderSpine({ rows: [row('b1')], viewMode: 'candidates', ctx, candidates: makeCandidatesCtx() });
     const spine = screen.getByTestId('compare-spine');
     expect(getComputedStyle(spine).containerType).toBe('inline-size');
   });
@@ -361,17 +375,94 @@ describe('auto mode', () => {
     // A media query cannot fix it -- the window is wide while the spine is not.
     expect(SPINE_TWO_COLUMN_MIN).toBe(700);
     const { ctx } = makeCtx();
-    renderSpine({ rows: [row('b1')], viewMode: 'auto', ctx });
-    expect(screen.getByTestId('spine-auto-card')).toBeInTheDocument();
+    renderSpine({ rows: [row('b1')], viewMode: 'candidates', ctx, candidates: makeCandidatesCtx() });
+    expect(screen.getByTestId('spine-candidates-card')).toBeInTheDocument();
   });
 
-  it('reuses the two-column renderer rather than forking it', () => {
-    // Forking would double what Phase 7's inventory has to check, and the two
-    // copies would drift. The auto card must contain the same content.
+  it('shows the cached candidate at once, before the full list arrives', () => {
     const { ctx } = makeCtx();
-    renderSpine({ rows: [row('b1')], viewMode: 'auto', ctx });
-    const auto = screen.getByTestId('spine-auto-card');
-    expect(within(auto).getByText('Mistborn: The Final Empire')).toBeInTheDocument();
+    renderSpine({ rows: [row('b1')], viewMode: 'candidates', ctx, candidates: makeCandidatesCtx() });
+    const card = screen.getByTestId('spine-candidates-card');
+    expect(within(card).getByText('Mistborn: The Final Empire')).toBeInTheDocument();
+  });
+
+  it('falls back to the two-column card when the spine has no search wiring', () => {
+    const { ctx } = makeCtx();
+    renderSpine({ rows: [row('b1')], viewMode: 'candidates', ctx });
+    expect(screen.queryByTestId('spine-candidates-card')).not.toBeInTheDocument();
+    expect(screen.getByText('Mistborn: The Final Empire')).toBeInTheDocument();
+  });
+});
+
+describe('candidate-less rows', () => {
+  // 18,881 rows read "Error: Unknown": the two-column card called every
+  // candidate-less row that was not no_match an error, and the unreviewable
+  // bucket's rows are not errors and carry no error_message.
+  it.each([
+    ['no_candidates', 'No candidates cached'],
+    ['resolved_no_candidates', 'Reviewed — no candidate left'],
+    ['no_match', 'No match found'],
+  ] as const)('labels %s for what it is in every view', (status, label) => {
+    const { ctx } = makeCtx();
+    for (const viewMode of ['compact', 'two-column'] as const) {
+      const { unmount } = renderSpine({
+        rows: [row('b1', { candidate: undefined, status })],
+        viewMode,
+        ctx,
+      });
+      const chip = screen.getByTestId('no-candidate-chip');
+      expect(chip).toHaveTextContent(label);
+      expect(chip).not.toHaveTextContent('Unknown');
+      unmount();
+    }
+  });
+
+  it('shows the server reason for a decode error', () => {
+    const { ctx } = makeCtx();
+    renderSpine({
+      rows: [
+        row('b1', {
+          candidate: undefined,
+          status: 'decode_error',
+          error_message: 'stored candidate will not decode: bad json',
+        }),
+      ],
+      viewMode: 'two-column',
+      ctx,
+    });
+    expect(screen.getByTestId('no-candidate-chip')).toHaveTextContent('bad json');
+  });
+});
+
+describe('book info on every card', () => {
+  const info = {
+    narrator: 'Reader Person',
+    series: 'Saga',
+    series_position: '2',
+    asin: 'B000TEST01',
+    file_count: 12,
+    format: 'm4b',
+    file_size_bytes: 1073741824 * 2,
+  };
+  it('shows the book-info block in the two-column card', () => {
+    const { ctx } = makeCtx();
+    const r = row('b1');
+    renderSpine({ rows: [{ ...r, book: { ...r.book, ...info } }], viewMode: 'two-column', ctx });
+    const panel = screen.getByTestId('book-info-panel');
+    expect(panel).toHaveTextContent('Narrated by Reader Person');
+    expect(panel).toHaveTextContent('Series: Saga');
+    expect(panel).toHaveTextContent('ASIN B000TEST01');
+    expect(panel).toHaveTextContent('12 files');
+  });
+
+  it('summarises the book on the collapsed compact row', () => {
+    const { ctx } = makeCtx();
+    const r = row('b1');
+    renderSpine({ rows: [{ ...r, book: { ...r.book, ...info } }], viewMode: 'compact', ctx });
+    const line = screen.getByTestId('book-summary-line');
+    expect(line).toHaveTextContent('narr. Reader Person');
+    expect(line).toHaveTextContent('2.0 GB');
+    expect(line).toHaveTextContent('12 files');
   });
 });
 

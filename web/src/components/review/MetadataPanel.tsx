@@ -1,7 +1,7 @@
 // file: web/src/components/review/MetadataPanel.tsx
-// version: 1.8.0
+// version: 1.9.0
 // guid: 3f9a2c07-5b41-4e86-9d02-7c1e8b503a64
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 //
 // The metadata lane's full surface: queue rail, comparison spine, action bar.
 //
@@ -17,12 +17,20 @@
 // intent and the shell decides how to ask. A single-row refetch needs no dialog
 // and is handled here.
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Box, Button } from '@mui/material';
 
 import * as api from '../../services/api';
-import type { Book } from '../../services/api';
+import type { Book, MetadataCandidate } from '../../services/api';
 import { MetadataSearchDialog } from '../audiobooks/MetadataSearchDialog';
+import { submitStagedApply } from '../audiobooks/stagedMetadataApply';
+import type { CandidatesContext } from './spine/CandidatesCard';
+import {
+  CANDIDATE_APPLY_CONCURRENCY,
+  CandidateLoader,
+  createLimiter,
+  fillableFields,
+} from './spine/candidateLoader';
 import { QueueRail } from './QueueRail';
 import { CompareSpine, type SpineViewMode } from './spine/CompareSpine';
 import { ActionBar } from './ActionBar';
@@ -82,6 +90,70 @@ export function MetadataPanel({
       if (refreshTimer.current) clearTimeout(refreshTimer.current);
     },
     []
+  );
+
+  // The candidates view. One loader for the panel (its cap of 4 searches in
+  // flight is per page, not per card) and one apply limiter (4 background
+  // applies at a time). Both live as long as the panel, so a book's answer is
+  // still there when the reviewer scrolls back to it.
+  const candidateLoader = useMemo(
+    () =>
+      new CandidateLoader((bookId, q) =>
+        api
+          .searchMetadataForBook(bookId, q.title, q.author || undefined)
+          .then((resp) => resp.results ?? [])
+      ),
+    []
+  );
+  const applyLimiter = useMemo(() => createLimiter(CANDIDATE_APPLY_CONCURRENCY), []);
+  // Read at click time, so the context below stays stable (it is a prop of
+  // every memoized card) while the toggle still decides each apply.
+  const applyModeRef = useRef(metadata.bulkApplyMode);
+  useEffect(() => {
+    applyModeRef.current = metadata.bulkApplyMode;
+  }, [metadata.bulkApplyMode]);
+
+  const applyCandidate = useCallback(
+    (bookId: string, candidate: MetadataCandidate) =>
+      applyLimiter(async () => {
+        // The full Book: submitStagedApply needs it, and 'Fill empty fields'
+        // decides against the book as it is NOW, not as the list showed it.
+        let book: Book;
+        try {
+          book = await api.getBook(bookId);
+        } catch (err) {
+          toast(err instanceof Error ? err.message : 'Could not load that book', 'error');
+          return;
+        }
+        let fields: string[] | undefined;
+        if (applyModeRef.current === 'fill') {
+          // The per-book apply takes a field list, not a mode: fill sends
+          // only the fields the book has empty. Replace sends them all.
+          fields = fillableFields(book, candidate);
+          if (fields.length === 0) {
+            toast(
+              `Nothing to fill on "${book.title}": every field this candidate carries is already set. Switch to Replace existing to overwrite.`,
+              'info'
+            );
+            return;
+          }
+        }
+        // The Search Metadata dialog's background apply: one op per book,
+        // ASIN conflicts offered back on the toast. Write-back on, as the
+        // dialog does.
+        await submitStagedApply({
+          book,
+          pick: { candidate, fields },
+          writeToFiles: true,
+          toast,
+          onApplied: () => refreshSoon(),
+        });
+      }),
+    [applyLimiter, toast, refreshSoon]
+  );
+  const candidatesCtx: CandidatesContext = useMemo(
+    () => ({ loader: candidateLoader, apply: applyCandidate }),
+    [candidateLoader, applyCandidate]
   );
 
   const openSearch = useCallback(
@@ -213,6 +285,7 @@ export function MetadataPanel({
             emptyMessage={LANES.metadata.emptyMessage}
             loading={metadata.loading}
             errored={!!metadata.error}
+            candidates={candidatesCtx}
           />
         </Box>
       </Box>
