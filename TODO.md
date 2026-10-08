@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.76.1 -->
+<!-- version: 10.76.2 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-10-07 -->
+<!-- last-edited: 2026-10-08 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,45 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **CANDFB-1** Feed the `candfb:` candidate-feedback labels (Review →
+      Candidates thumbs-down / applied positives) into
+      `metafetch.calibrate-scoring` as a non-circular segment next to the
+      manual-override one: a negative that outranked the applied candidate is
+      a direct scoring miss. Also: the Candidates card keeps its thumbs-down
+      marks per session only; hydrate them from `GET
+      /metadata/candidate-feedback?book_id=` if the owner wants marks to
+      survive a reload.
+
+- [ ] **FALLBACK-BUDGET-XPROC** The shared Google Books daily budget (`metadata/dailyquota`) is guarded by an in-process mutex only. A child-mode process (`cmd/child_mode.go`, `Isolate: true`) would read, increment and save the same key under its own mutex and could lose counts. No production op sets `Isolate: true` today. Move the read-increment-save into one store transaction, or refuse Google Books calls from child mode.
+- [ ] **FALLBACK-UNSETTLED-GOOGLE-ERR** A Google Books error that is neither deferrable nor a 4xx (for example a decode failure) is recorded as unsettled, so the book stays owed and is retried each quota day in its rotation turn. That contradicts the `fallbackDeferrable` comment. Either settle every non-deferrable error, or correct the comment and keep the bounded retry.
+
+- [ ] **ITWB-1** Follow-ups from the iTunes write-back drop fix (docs/plans/2026-10-07-itunes-writeback-drops.md):
+  - Head-of-line blocking. A batch that is rejected every time (another guard, or the 20% mhoh cap on a large regenerated delta) now stays queued, and every later update merges into it. The retries back off to once an hour and never land. Add an owner action that splits the queue or evicts one item, with an audit record. Today the only lever is deleting `itunes_writeback:q:*` raw keys (`internal/itunes/service/writeback_batcher.go`).
+  - Web panel for `GET /api/v1/itunes/writeback/status`: pending, held, last error, next retry, plus a release-held button.
+  - Regenerate the dropped updates: 4,293 book updates logged 09-23..10-07, plus earlier ones that cannot be counted. After deploy, with iTunes closed, run `POST /itunes/rebuild?dry_run=true`, review the delta, and re-enqueue the changed books. Never run the rebuild's remove set unreviewed.
+  - Re-enqueue the one dropped remove: merge loser `01KXXVAF46CM0NWZMSA44X1XTB` (op `01M4A2F6SMCBENB3R9WG0EFCPT`, 2026-10-06 22:18). It was tombstoned at enqueue, so the DB says removed while the track is likely still in iTunes. The owner decides.
+  - `cmd/itl-check` and `cmd/itl-diff` still audit with the strict `AuditITL` and report about 46k false location-form violations on the AO library. Switch them to `AuditITLWithConfig(data, WritebackContractConfig(path))`.
+
+- [ ] **Owner's call: should outbound endpoints and per-request path arguments need an interactive session too? (found 2026-10-07 while classifying config fields, `docs/plans/2026-10-07-apikey-expiry-and-privilege.md` Remaining risk)**
+  - [ ] Outbound endpoints that carry a stored credential (`openai_base_url`, `embedding.base_url`, `ai_backend.local_base_url`, `ai_endpoints`, `whisper_remote_url`, `whisper_endpoints`, `metadata_sources[].base_url`, `deluge_web_url`, `download_client.*.host`, `otel_exporter_otlp_endpoint`): a `settings.manage` API key can point one at a host it controls and receive the credential on the next call. Making a field interactive-only is one entry in `configFieldRules` (`internal/config/protected_fields.go`).
+  - [ ] Per-request path arguments (`POST /import/file`, `POST /audiobooks/:id/relocate`, `POST /discovery/import`) are exempt in `internal/server/credential_routes_test.go`; guarding one is moving it to `s.credRoute`.
+
+- [ ] **PR3805-R2** Follow-ups from the round-2 review of #3805 (op revert keeps an incumbent; iTunes hand-off guard):
+  - Regroup version-group apply asks the iTunes guard about a joiner even when the joiner is already explicit false. Linking it writes no flag change, so this refuses more than it needs to. It fails closed, so it is safe. Skip the guard for a joiner whose flag is already explicit false (`internal/plugins/maintenance/regroup_apply.go`).
+  - fs-regroup-xml counts `handoffs-refused`, but the op's final status ignores the count. A group left without a primary after a refused hand-off reads as a clean success. Surface a non-zero `HandOffsRefused` in the op status/summary as a partial result (`internal/plugins/maintenance/fs_regroup_xml.go`, the `switch` after the summary log).
+  - A hand-off that is held (no eligible member) still journals a `book_primary_handoff` note naming nobody (`OldValue` ""). The revert then falls back to the crown-back rule and can demote an incumbent the op never wrote. Journal `kept:`/refused-style evidence for held outcomes too (`retireHandOff`, `fsApplier.retire`).
+  - A hand-off whose winner write succeeds but whose demotes then fail journals no note, so the revert has no evidence of the winner write. Journal `wrote:<id>` when `res.WrotePrimary()` holds, even on a demote error (`retireHandOff`).
+
+- [ ] **Repairs owner apply (#3810) review follow-ups (SHOULD-FIX)**
+  - [x] Bind the owner grant to the op it was minted for. **Done 2026-10-07 (branch `fix/apikey-expiry-and-privilege`, plan Finding 4):** `ResolveOwnerApproval` takes a `repairs.OwnerRedeemer`; the grant redeems only in an op whose `ActorUserID` is the user it was minted for, on a row never resumed or retried in place, while its Access email is still the configured `owner_email` (`auth.IsOwnerEmail`). Was: `OwnerGrants.Issue` records user, fixer, plan and rows but not the `repairs.apply` op id, so any apply op whose params carry the token and name the same fixer/plan/row consumes it.
+  - [x] A credential that can manage users can make itself an "interactive" admin. **API-key half done 2026-10-07 (branch `fix/apikey-expiry-and-privilege`, owner approved):** no API key may change a password, mint a temp-login/reset link, invite, (de)activate a user, mint or rotate a key for another user, or change a sign-in setting in `PUT /config`; see `docs/plans/2026-10-07-apikey-expiry-and-privilege.md`. The residual (a signed-in admin session can still mint credentials, so only an SSO-only identity or a second factor fully closes owner apply) is the next item.
+  - [x] Owner apply: only an identity the server cannot mint fully closes the admin-credential path. **Done 2026-10-07 (owner decision: Cloudflare Access only; branch `fix/apikey-expiry-and-privilege`, plan D11):** owner apply needs a verified Access JWT whose email is the new `owner_email` setting (sign-in class, interactive-only, empty refuses everything); `repairs.OwnerGrants.Issue` refuses any other grant, so the `OwnerITunesDatabaseOnly` exception is reachable only from an Access-proven request.
+  - [x] **Done 2026-10-07 (owner decision: the key wins; plan D12):** a request presenting an `abk_` key (bearer or session cookie on /api/v1, bearer or `?token=` on the ABS surface) is authenticated by the key and recorded `api_key`, whatever Access assertion it also carries. Was: `CloudflareAccessAuth` binds a user before `RequireAuth` looks at the bearer token, so a request carrying both a CF Access assertion and an `abk_` key is recorded `cf_access` (interactive). Only an SSO user's own browser or `cloudflared access` holds that assertion, so this is low risk, but record the stronger fact: when an `Authorization: Bearer abk_...` header is also present, mark the method `api_key` (WithMethod's downgrade rule already allows it).
+  - [ ] The engine journals the owner audit note on every fragment before the fixer's Apply, and the fixer's under-lock checks (ownerRetireRefusal) can still refuse the row after that, leaving ledger-only `repair_owner_apply` notes on an op that wrote nothing. Journal the notes from the fixer after its pre-checks pass (or void them on a refusal) so the operation's history only names the owner on a row that was written.
+  - [ ] The sign-in allowlist folds Unicode the way the owner check used to. `oauth.Config.IsEmailAllowed` lowercases with `strings.ToLower`, which maps U+212A KELVIN SIGN to "k", so an IdP account `\u212Aate@…` is admitted when `kate@…` is allowlisted, and `ResolveUser` then looks the user up by that email (`GetUserByEmail`) and may link the new identity to Kate's account. The owner check no longer folds (`auth.IsOwnerEmail`, ASCII only), but sign-in admission and account linking still do. Owner's call: refuse non-ASCII emails at admission (locks out IDN mailboxes) or keep non-ASCII mailboxes but refuse any email whose Unicode case folding differs from its ASCII lowercase.
+  - [ ] Two iTunes routes outside `/api/v1/itunes/` were not in the 2026-10-07 owner-route audit: `POST /operations/itunes-path-reconcile` and `POST /operations/itunes-path-repair` (`scan.trigger`, `?apply=true` applies). Check whether the repair's apply writes the iTunes library; if it does, register it through `s.ownerRoute` like `/itunes/relocate`.
+  - [ ] The iTunes settings page (write-back, transfer upload/restore) does not ask `owner-status` before offering owner-only buttons; a password session now gets the 403 reason only after clicking. Reuse `GET /repairs/owner-status` (or a general `/auth/owner-status`) to disable them with the reason, as the Repairs page does.
 
 - [ ] **CHAPTER-SETS-R5a** Chapter-set apply re-check (#3787 round 5): `refreshAudioOf`
       (`internal/plugins/maintenance/fragment_folder_sets.go`) does not see a
