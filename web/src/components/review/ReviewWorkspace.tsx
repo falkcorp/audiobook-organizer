@@ -61,7 +61,7 @@ import { useToast } from '../toast/ToastProvider';
 import { CoverLightbox } from '../CoverLightbox';
 import { coverFullSizeUrl } from '../../utils/coverUrl';
 import { CommandBar, type CommandMenu } from './CommandBar';
-import { normalizeViewMode, type SpineViewMode } from './spine/CompareSpine';
+import { normalizeViewMode, type SpineViewMode } from './spine/viewMode';
 import { DupesPanel } from './DupesPanel';
 import { RegroupPanel } from './RegroupPanel';
 import { RepairsPanel } from './RepairsPanel';

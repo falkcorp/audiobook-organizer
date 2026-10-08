@@ -17,7 +17,9 @@
 // - fillableFields: the 'Fill empty fields' half of the page's apply toggle
 //   for the per-book apply endpoint, which takes a field list, not a mode.
 
-import type { Book, MetadataCandidate } from '../../../services/api';
+import * as api from '../../../services/api';
+import type { Book, BulkApplyMode, MetadataCandidate } from '../../../services/api';
+import { submitStagedApply, type ToastFn } from '../../audiobooks/stagedMetadataApply';
 import {
   METADATA_APPLY_FIELDS,
   candidateApplyFieldValue,
@@ -218,5 +220,47 @@ export function fillableFields(book: Book, candidate: MetadataCandidate): Metada
     if (candidateApplyFieldValue(candidate, f) === undefined) return false;
     const cur = bookFieldValue(book, f);
     return cur !== undefined && isEmpty(cur);
+  });
+}
+
+/**
+ * Applies one candidate to one book through the Search Metadata dialog's
+ * background apply (POST /audiobooks/:id/apply-metadata, background: true):
+ * one op per book, an ASIN conflict offered back on the toast. 'fill' sends
+ * only the fields the book has empty, read from the book as it is now;
+ * 'replace' sends every field. Write-back on, as the dialog does.
+ */
+export async function applyCandidateToBook(args: {
+  bookId: string;
+  candidate: MetadataCandidate;
+  mode: BulkApplyMode;
+  toast: ToastFn;
+  onApplied: () => void;
+}): Promise<void> {
+  const { bookId, candidate, mode, toast, onApplied } = args;
+  let book: Book;
+  try {
+    book = await api.getBook(bookId);
+  } catch (err) {
+    toast(err instanceof Error ? err.message : 'Could not load that book', 'error');
+    return;
+  }
+  let fields: string[] | undefined;
+  if (mode === 'fill') {
+    fields = fillableFields(book, candidate);
+    if (fields.length === 0) {
+      toast(
+        `Nothing to fill on "${book.title}": every field this candidate carries is already set. Switch to Replace existing to overwrite.`,
+        'info'
+      );
+      return;
+    }
+  }
+  await submitStagedApply({
+    book,
+    pick: { candidate, fields },
+    writeToFiles: true,
+    toast,
+    onApplied: () => onApplied(),
   });
 }
