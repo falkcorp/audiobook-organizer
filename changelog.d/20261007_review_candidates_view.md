@@ -9,16 +9,18 @@ Reject and a collapsible "How this score was reached", plus a per-book
 "Search again" with editable title and author. The cached pick shows at once;
 the full list loads only for cards on screen, at most 4 searches at a time.
 Applies use the dialog's per-book background apply (at most 4 at a time) and
-respect the page's Fill empty fields / Replace existing toggle. Rejecting a
-candidate other than the cached pick hides it for the session only (there is no
-candidate-level reject on the server).
+respect the page's Fill empty fields / Replace existing toggle; one apply per
+book at a time. Reject on the cached pick is the page's existing per-book
+reject; Reject on any other candidate hides it for the session only (the server
+has no per-book candidate-level reject).
 
 #### Book info on every review card
 
 Every metadata review view now shows narrator, series, ASIN/ISBN, runtime, size,
 file count with an expandable file list, and paths. The review list response
 gains `narrator`, `series`, `series_position`, `asin`, `isbn` and `file_count`
-on each row's `book`.
+on each row's `book`; series names held only by id are resolved with one batch
+read per response.
 
 ### Fixed
 
