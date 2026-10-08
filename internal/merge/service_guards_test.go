@@ -1,7 +1,7 @@
 // file: internal/merge/service_guards_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7b2e9d4c-1a5f-4e83-9c6b-2d8f0a3e5b17
-// last-edited: 2026-09-02
+// last-edited: 2026-10-07
 
 package merge
 

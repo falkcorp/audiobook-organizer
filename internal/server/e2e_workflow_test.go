@@ -1,7 +1,7 @@
 // file: internal/server/e2e_workflow_test.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: c9d0e1f2-a3b4-5678-cdef-901234567012
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 package server
 
@@ -122,10 +122,6 @@ func TestE2E_ITunesImportOrganizeWriteBack(t *testing.T) {
 		}
 	}
 	assert.Greater(t, organizedCount, 0, "at least one book should be in library dir")
-
-	// Step 7: Test write-back separately with a book that has a persistent ID
-	// (The organize+rescan flow may not preserve iTunes persistent IDs,
-	//  so we test write-back independently in TestITunesWriteBack)
 
 	// Verify the iTunes library is still parseable
 	lib, err := itunes.ParseLibrary(xmlPath)

@@ -1,7 +1,7 @@
 // file: internal/server/op_id_aliases_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2a7c5e93-1d4b-4f60-8e2a-b9c3d7f15e48
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 // Guard tests for operation-ID renames.
 //
@@ -58,6 +58,12 @@ var retiredOpIDs = map[string]string{
 	// to an op that needs fixer_id, and the alias guard below would then
 	// forbid the fixer from naming its own id.
 	"maintenance.repair-junk-titles": "absorbed into the junk-title Repairs fixer",
+	// Removed 2026-10-07 with iTunes write-back (iTunes is import-only). Both
+	// rewrote locations in the iTunes library; nothing replaces them.
+	"itunes.path-reconcile": "removed with iTunes write-back; no successor",
+	"itunes.path-repair":    "removed with iTunes write-back; no successor",
+	// It generated synthetic .itl files for testing the removed writers.
+	"maintenance.generate-itl-tests": "removed with iTunes write-back; no successor",
 }
 
 // bootRegisteredOpIDs boots a server the way TestNewServer_RegistersOpsWithEmptyRootDir

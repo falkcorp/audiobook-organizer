@@ -33,14 +33,12 @@ func (f *fakeApplyRecoverer) FinishApplyFileWork(id, cover string, fileIO, write
 // tagging every file twice under auto_write_tags_on_apply.
 func TestRecoverApplyMetadataFileOp_WritesTagsOnce(t *testing.T) {
 	f := &fakeApplyRecoverer{}
-	var enqueued []string
 	recoverApplyMetadataFileOp(f, "b1")
 
 	assert.Equal(t, []string{"b1||true|true"}, f.calls, "one pass through the shared sequel")
 	assert.Equal(t, 1, f.tagWrites)
-	assert.Equal(t, []string{"b1"}, enqueued)
 
-	recoverApplyMetadataFileOp(f, "b2") // no batcher wired
+	recoverApplyMetadataFileOp(f, "b2")
 	assert.Equal(t, 2, f.tagWrites)
 }
 
