@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retire_into_test.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 90cd2c0f-e6c5-4176-8d2c-bc587eea86cd
-// last-edited: 2026-10-07
+// last-edited: 2026-10-08
 
 package maintenance
 
@@ -813,15 +813,11 @@ func TestRetireInto_HandOffNeverWritesAnITunesMember(t *testing.T) {
 	plain := func(d *dcFixture, w *repairs.Writer, fixerID, l, s string) (int, error) {
 		return retireInto(context.Background(), d.p, d.s, w, time.Now, fixerID, l, s, nil)
 	}
-	// The retire wrappers main added (duplicate-copies' row-iTunes-path
-	// allowance, the fragment-only retire into an iTunes parent) carry the
-	// same hand-off guard: AllowITunesPath and Only change which book may be
+	// The duplicate-copies wrapper (its row-iTunes-path allowance) carries
+	// the same hand-off guard: AllowITunesPath changes which book may be
 	// retired, never which member the hand-off may write.
 	allowPath := func(d *dcFixture, w *repairs.Writer, fixerID, l, s string) (int, error) {
 		return retireIntoAllowingITunesPath(context.Background(), d.p, d.s, w, time.Now, fixerID, l, s, nil)
-	}
-	only := func(d *dcFixture, w *repairs.Writer, fixerID, l, s string) (int, error) {
-		return retireIntoOnly(context.Background(), d.p, d.s, w, time.Now, fixerID, l, s, "synthetic iTunes parent")
 	}
 	for _, tc := range []struct {
 		name, fixerID string
@@ -830,7 +826,6 @@ func TestRetireInto_HandOffNeverWritesAnITunesMember(t *testing.T) {
 		{dcFixerID, dcFixerID, plain},
 		{fragFixerID, fragFixerID, plain},
 		{"allowing-itunes-path", dcFixerID, allowPath},
-		{"fragment-only", fragFixerID, only},
 	} {
 		fixerID, retire := tc.fixerID, tc.retire
 		t.Run(tc.name, func(t *testing.T) {

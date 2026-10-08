@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retire_into.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: dadb4da5-0f2d-4678-abf3-4ac97f3ecb66
-// last-edited: 2026-10-07
+// last-edited: 2026-10-08
 
 // The shared retire of the Repairs-lane merge fixers: fold one book into
 // another as merge.Service retires an absorbed book, every step journaled
@@ -55,8 +55,9 @@ import (
 //
 // Every refusal (an iTunes id on the book, an iTunes id or (unless
 // retireOpts.AllowITunesPath) an iTunes path on one of its rows, or an
-// iTunes id among its external ids) is checked BEFORE step 1, so a refused retire has written
-// nothing. The count is the steps written, a persisted follow snapshot
+// iTunes id among its external ids; none of them under
+// retireOpts.ITunesDatabaseOnly) is checked BEFORE step 1, so a refused
+// retire has written nothing. The count is the steps written, a persisted follow snapshot
 // included, so a failure after it reports partially_applied; a book already
 // soft-deleted counts none (the last step of an earlier run).
 //
@@ -89,6 +90,14 @@ func retireIntoAllowingITunesPath(ctx context.Context, p *Plugin, store OpsStore
 	return retireIntoWith(ctx, p, store, w, clock, fixerID, id, target, slice, retireOpts{AllowITunesPath: true})
 }
 
+// retireIntoITunesDatabaseOnly is retireInto for fragment consolidation
+// (retireOpts.ITunesDatabaseOnly; owner decision 2026-10-08: iTunes is
+// import-only, so an iTunes-tracked fragment is consolidated like any
+// other).
+func retireIntoITunesDatabaseOnly(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Writer, clock func() time.Time, fixerID, id, target string, slice *merge.SliceMapping) (int, error) {
+	return retireIntoWith(ctx, p, store, w, clock, fixerID, id, target, slice, retireOpts{ITunesDatabaseOnly: true})
+}
+
 // handOffRules are what a retire's primary hand-off must respect, checked
 // by versionprimary under the group lock before it writes anything:
 //
@@ -116,54 +125,34 @@ type retireOpts struct {
 	Expect string
 	// MayWrite is asked, under the group lock, about every member whose
 	// primary flag the hand-off would write (handOffRules.mayWrite). nil
-	// means itunesguard.MayWrite over the retired book's group; a caller
-	// passes its own only to add to that rule (or a test, to fail it).
+	// means itunesguard.MayWrite over the retired book's group (nothing
+	// under ITunesDatabaseOnly); a caller passes its own only to add to that
+	// rule (or a test, to fail it).
 	MayWrite func(*database.Book) error
-	// Only, when set, is why target must not be written (retireIntoOnly).
-	Only string
 	// AllowITunesPath lets a book with an iTunes path on one of its rows be
 	// retired. By default such a book is refused as an iTunes book
 	// (itunesCopyWhy's "row iTunes path"; review 2026-10-06). Set only for
-	// three callers: consolidation-leftovers, through retireIntoExpecting
+	// two callers: consolidation-leftovers, through retireIntoExpecting
 	// (owner decision 2026-10-06: a bare iTunes path reference does not make
-	// a leftover iTunes-owned); duplicate-copies, through
+	// a leftover iTunes-owned); and duplicate-copies, through
 	// retireIntoAllowingITunesPath (its losers are judged by its own iTunes
-	// rules before the apply); and fragment-consolidation's owner apply,
-	// through retireIntoOnlyAllowingITunesPath, only for a row the owner's
-	// own grant names, after ownerRetireRefusal re-read the row's iTunes
-	// path under the merge lock.
+	// rules before the apply).
 	AllowITunesPath bool
-}
-
-// retireIntoOnlyAllowingITunesPath is retireIntoOnly for a book whose own
-// row carries an iTunes path: the fragment-consolidation owner apply
-// (fragment_owner_apply.go), only for a row the owner's grant names, after
-// ownerRetireRefusal. MayWrite stays nil, so the hand-off keeps the default
-// iTunes guard: the owner authorises retiring the fragment, never writing a
-// primary flag onto an iTunes-tracked member.
-func retireIntoOnlyAllowingITunesPath(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Writer, clock func() time.Time, fixerID, id, target, targetWhy string) (int, error) {
-	return retireIntoWith(ctx, p, store, w, clock, fixerID, id, target, nil, retireOpts{Only: targetWhy, AllowITunesPath: true})
-}
-
-// retireIntoOnly is retireInto for a target that must not be written
-// (owner decision 2026-10-06: a copy retired into an iTunes-linked parent;
-// targetWhy says why it is iTunes-linked). Only the retired book is
-// written: steps 3 and 4 and its own group's hand-off. Steps 1 and 2 are
-// not run, so no listening state, positions, bookmarks or sync redirect
-// follow onto target and no external id moves to it; a book that has any
-// of those to carry is refused BEFORE the first write (ErrChangedSincePlan),
-// as is one whose user state cannot be read. The caller has checked that
-// the retired book's version group holds no iTunes book.
-func retireIntoOnly(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Writer, clock func() time.Time, fixerID, id, target, targetWhy string) (int, error) {
-	return retireIntoWith(ctx, p, store, w, clock, fixerID, id, target, nil, retireOpts{Only: targetWhy})
+	// ITunesDatabaseOnly treats an iTunes-tracked book like any other: no
+	// iTunes refusal (book or row iTunes id, row iTunes path, itunes
+	// external id) and no iTunes guard on the hand-off. Set only by
+	// fragment consolidation (retireIntoITunesDatabaseOnly; owner decision
+	// 2026-10-08). The retire writes database rows only: no file is moved
+	// and the iTunes library is never written (iTunes is import-only); the
+	// retired book's rows keep their iTunes ids and paths, so the next
+	// import still finds them on the book they moved to.
+	ITunesDatabaseOnly bool
 }
 
 // retireIntoWith is retireInto with opts: the hand-off's expected winner
-// (opts.Expect), writing book id alone when opts.Only is set
-// (retireIntoOnly), refusing a row iTunes path unless opts.AllowITunesPath
-// is set.
+// (opts.Expect), refusing a row iTunes path unless opts.AllowITunesPath
+// is set, and no iTunes refusal at all under opts.ITunesDatabaseOnly.
 func retireIntoWith(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Writer, clock func() time.Time, fixerID, id, target string, slice *merge.SliceMapping, opts retireOpts) (int, error) {
-	only := opts.Only
 	rules := handOffRules{expect: opts.Expect, mayWrite: opts.MayWrite}
 	b, err := store.GetBookByID(id)
 	if err != nil {
@@ -172,7 +161,7 @@ func retireIntoWith(ctx context.Context, p *Plugin, store OpsStore, w *repairs.W
 	if b == nil {
 		return 0, fmt.Errorf("%w: book %s vanished", repairs.ErrChangedSincePlan, id)
 	}
-	if rules.mayWrite == nil && b.VersionGroupID != nil {
+	if rules.mayWrite == nil && b.VersionGroupID != nil && !opts.ITunesDatabaseOnly {
 		// Every retire's hand-off refuses to write an iTunes book's
 		// primary flag (itunesguard.MayWrite), asked under the group lock
 		// about exactly the members it would write. This is about the
@@ -187,7 +176,8 @@ func retireIntoWith(ctx context.Context, p *Plugin, store OpsStore, w *repairs.W
 		return 0, resumeHandOff(ctx, p, store, w, fixerID, id, target, rules)
 	}
 	// Refusals first: nothing is written for a refused retire.
-	if b.ITunesPersistentID != nil && *b.ITunesPersistentID != "" {
+	itunesOK := opts.ITunesDatabaseOnly
+	if !itunesOK && b.ITunesPersistentID != nil && *b.ITunesPersistentID != "" {
 		return 0, fmt.Errorf("%w: book %s now carries an iTunes id", repairs.ErrChangedSincePlan, id)
 	}
 	rows, err := store.GetBookFiles(id)
@@ -195,12 +185,12 @@ func retireIntoWith(ctx context.Context, p *Plugin, store OpsStore, w *repairs.W
 		return 0, fmt.Errorf("files of %s: %w", id, err)
 	}
 	for _, r := range rows {
-		if r.ITunesPersistentID != "" {
+		if !itunesOK && r.ITunesPersistentID != "" {
 			return 0, fmt.Errorf("%w: book %s row %s now carries an iTunes id", repairs.ErrChangedSincePlan, id, r.ID)
 		}
 		// A row iTunes path makes the book an iTunes book too
 		// (itunesCopyWhy), and iTunes books are never written.
-		if !opts.AllowITunesPath && r.ITunesPath != "" {
+		if !itunesOK && !opts.AllowITunesPath && r.ITunesPath != "" {
 			return 0, fmt.Errorf("%w: book %s row %s now carries an iTunes path", repairs.ErrChangedSincePlan, id, r.ID)
 		}
 	}
@@ -209,27 +199,20 @@ func retireIntoWith(ctx context.Context, p *Plugin, store OpsStore, w *repairs.W
 		return 0, fmt.Errorf("external ids of %s: %w", id, err)
 	}
 	for _, e := range exts {
-		if e.Source == "itunes" && !e.Tombstoned {
+		if !itunesOK && e.Source == "itunes" && !e.Tombstoned {
 			return 0, fmt.Errorf("%w: book %s now carries iTunes id %s", repairs.ErrChangedSincePlan, id, e.ExternalID)
-		}
-	}
-	if only != "" {
-		if err := onlyRetireRefusal(p, id, target, only, exts); err != nil {
-			return 0, err
 		}
 	}
 	steps := 0
 	// 1. listening state
-	if only == "" {
-		did, err := followUserStateInto(p, w, target, id, slice)
-		steps += did
-		if err != nil {
-			return steps, fmt.Errorf("carry listening state of %s: %w", id, err)
-		}
+	did, err := followUserStateInto(p, w, target, id, slice)
+	steps += did
+	if err != nil {
+		return steps, fmt.Errorf("carry listening state of %s: %w", id, err)
 	}
 	// 2. external ids
 	for _, e := range exts {
-		if e.Tombstoned || only != "" {
+		if e.Tombstoned {
 			// A tombstoned mapping records an id taken off this book (an
 			// iTunes track removed, a mismatch undone): it stays on the
 			// retired book rather than land on the survivor.
@@ -324,37 +307,6 @@ func retireIntoWith(ctx context.Context, p *Plugin, store OpsStore, w *repairs.W
 		}
 	}
 	return steps, nil
-}
-
-// onlyRetireRefusal refuses a retireIntoOnly of book id whose retire would
-// have to carry something onto target: a live external id, or listening
-// state, positions or bookmarks (merge.BookHasCarryableUserState). State
-// that cannot be read refuses too: fail closed.
-func onlyRetireRefusal(p *Plugin, id, target, targetWhy string, exts []database.ExternalIDMapping) error {
-	for _, e := range exts {
-		if !e.Tombstoned {
-			return fmt.Errorf("%w: parent %s is iTunes-linked (%s); external id %s/%s of %s would have to move onto it",
-				repairs.ErrChangedSincePlan, target, targetWhy, e.Source, e.ExternalID, id)
-		}
-	}
-	um := p.deps.MergeUserStateStore()
-	if um == nil {
-		return fmt.Errorf("user-state store unavailable: listening state of %s cannot be ruled out, and parent %s is iTunes-linked", id, target)
-	}
-	has, err := merge.BookHasCarryableUserState(um, id)
-	if err != nil {
-		return fmt.Errorf("read listening state of %s: %w", id, err)
-	}
-	if has {
-		return fmt.Errorf("%w: parent %s is iTunes-linked (%s); listening state, positions or bookmarks of %s would have to move onto it",
-			repairs.ErrChangedSincePlan, target, targetWhy, id)
-	}
-	// A window remains: a sync client is not under the merge lock, so state
-	// can land on the book between this read and the soft-delete. It is not
-	// lost: it stays on the retired book, the op revert brings the book back
-	// with it, and the purge refuses a book with carryable state
-	// (merge.BookHasCarryableUserState) rather than drop it.
-	return nil
 }
 
 // followUserStateInto carries every user's state and positions on the retired book

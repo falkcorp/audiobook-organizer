@@ -1,7 +1,7 @@
 // file: internal/repairs/guards.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 5a2c9e14-6f3b-4d87-b0e1-9c7d4a8f2e56
-// last-edited: 2026-10-07
+// last-edited: 2026-10-08
 
 package repairs
 
@@ -52,9 +52,18 @@ func GuardBookPathsWith(res *PathResolver, bookID string, paths []string, series
 	return guardBookPaths(res, bookID, paths, seriesName, false)
 }
 
+// GuardBookPathsFor is GuardBookPathsWith for fixer f: the books/itunes path
+// check is skipped when f opted out of it (ITunesDatabaseOnly), the way the
+// framework's own row guard (GuardBooksFor) skips it, so a fixer labelling
+// its rows at plan agrees with the guard that runs at apply. Doctor Who /
+// Big Finish / Torchwood and an unreadable path stay guarded.
+func GuardBookPathsFor(f Fixer, res *PathResolver, bookID string, paths []string, seriesName string) (kind, reason string) {
+	return guardBookPaths(res, bookID, paths, seriesName, AllowsITunesDatabaseOnly(f))
+}
+
 // ITunesDatabaseOnly is implemented by a fixer the owner has cleared to write
 // the DATABASE rows of books whose files sit under books/itunes/** (owner
-// decision 2026-10-01, folder-books only). For such a fixer the guard skips
+// decisions 2026-10-01, folder-books; 2026-10-08, fragment consolidation). For such a fixer the guard skips
 // the iTunes path check; Doctor Who / Big Finish / Torchwood stays guarded.
 // The fixer itself must never move, rename or delete anything there and never
 // change an iTunes persistent id.

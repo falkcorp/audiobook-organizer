@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duplicate_copies_fixer_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: c1cb262a-d405-4d1a-9eb7-a3c341190585
-// last-edited: 2026-10-06
+// last-edited: 2026-10-08
 
 package maintenance
 
@@ -539,10 +539,11 @@ func TestDuplicateCopies_UnlocksAnAmbiguousFragment(t *testing.T) {
 	require.False(t, d.live(t, "frag"))
 }
 
-// TestFragmentFixer_DisregardsITunesParents: a non-iTunes fragment matching
-// one non-iTunes parent plus an iTunes copy of it takes the non-iTunes one as
-// its parent; the iTunes copy is never written. An iTunes fragment with the
-// same matches stays manual-only.
+// TestFragmentFixer_DisregardsITunesParents: a fragment matching one
+// non-iTunes parent plus an iTunes copy of it takes the non-iTunes one as
+// its parent; the iTunes copy is never written. Since 2026-10-08 (owner:
+// iTunes fragments are combined like any other) an iTunes fragment with the
+// same matches takes the same parent instead of staying manual-only.
 func TestFragmentFixer_DisregardsITunesParents(t *testing.T) {
 	d := newDCFixture(t)
 	parent := d.copyBook(t, "P", "Dune", "lib/Dune", dcRow{track: 1, dur: 600, hash: "h1"}, dcRow{track: 2, dur: 600, hash: "h2"})
@@ -561,11 +562,11 @@ func TestFragmentFixer_DisregardsITunesParents(t *testing.T) {
 	res := d.planFor(t, fragFixerID, "op-plan", nil)
 	r := findRow(t, res, "copy:"+parent)
 	require.True(t, r.Applicable(), r.SkipReason)
-	require.ElementsMatch(t, []string{parent, frag}, r.BookIDs, "the iTunes parent is not in the row's books")
+	require.ElementsMatch(t, []string{parent, frag, itFrag}, r.BookIDs, "the iTunes parent is not in the row's books")
 	require.Contains(t, fmt.Sprint(r.Evidence), it)
-	m := findRow(t, res, "ambiguous:"+itFrag)
-	require.Equal(t, fragClassManual, m.Class, "an iTunes fragment stays manual-only")
-	require.NotEmpty(t, m.Skipped)
+	for _, row := range res.Rows {
+		require.NotEqual(t, "ambiguous:"+itFrag, row.RowID, "the iTunes fragment is not left ambiguous")
+	}
 
 	out := d.applyFor(t, fragFixerID, "op-plan", "op-apply", []string{r.RowID})
 	require.Equal(t, 1, out.Applied, "%+v", out.Rows)
