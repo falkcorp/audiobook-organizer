@@ -1,5 +1,5 @@
 <!-- file: docs/plans/2026-10-07-remove-itunes-writeback.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.2.1 -->
 <!-- guid: 7372ebf8-5194-48d4-af7b-3f85421f435f -->
 <!-- last-edited: 2026-10-07 -->
 
@@ -115,9 +115,11 @@ PR is deployed, so a revert puts back code that does nothing.
 
 ## Final inventory (2026-10-07)
 
-Branch `refactor/remove-itunes-writeback`. Diff against `origin/main`: 85 files
-deleted (47 Go production files, 34 Go test files, 2 web files, 2 PowerShell
-scripts). About 29,000 lines removed.
+Branch `refactor/remove-itunes-writeback`, diffed against merge-base
+`74d2ad9e7`: 84 files deleted (46 Go production files, 34 Go test files, 2 web
+files, 2 PowerShell scripts). `itl_le_verify.go` was cut down to the read-only
+`itl_read_helpers.go`, which git reports as a rename. 278 files changed in
+total: 1,945 lines added and 30,250 removed.
 
 ### Removed
 
