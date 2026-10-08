@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/CandidatesCard.tsx
-// version: 1.0.1
+// version: 1.0.2
 // guid: ceb6a375-997d-44e0-8c71-d83c1980ea33
 // last-edited: 2026-10-07
 //
@@ -74,6 +74,7 @@ function useInView(ref: React.RefObject<HTMLElement | null>): boolean {
 function CandidateItem({
   c,
   isTop,
+  isCached,
   actionable,
   applying,
   onApply,
@@ -81,6 +82,7 @@ function CandidateItem({
 }: {
   c: MetadataCandidate;
   isTop: boolean;
+  isCached: boolean;
   actionable: boolean;
   /** An apply for this BOOK is running: every Apply in the card waits. */
   applying: boolean;
@@ -120,7 +122,8 @@ function CandidateItem({
               color={SOURCE_COLORS[c.source] || 'default'}
             />
             {c.year ? <Typography variant="caption">{c.year}</Typography> : null}
-            {isTop && <Chip label="Cached pick" size="small" variant="outlined" />}
+            {isTop && <Chip label="Best match" size="small" color="primary" variant="outlined" />}
+            {isCached && <Chip label="Cached pick" size="small" variant="outlined" />}
           </Stack>
           <Button
             size="small"
@@ -206,6 +209,13 @@ export const CandidatesCard = memo(function CandidatesCard({
         ? [cached]
         : [];
   const visible = list.filter((c) => !hidden.some((h) => sameCandidate(h, c)));
+  // The highlight follows the highest score in the current list, not the
+  // background scan's cached pick: a fresh search can find a better match
+  // (owner report 2026-10-07: Audible 284 sat below a highlighted 213 pick).
+  const best = visible.reduce<MetadataCandidate | undefined>(
+    (b, c) => (b === undefined || c.score > b.score ? c : b),
+    undefined,
+  );
 
   const reject = (c: MetadataCandidate) => {
     if (cached && sameCandidate(cached, c)) {
@@ -333,7 +343,8 @@ export const CandidatesCard = memo(function CandidatesCard({
                 <CandidateItem
                   key={`${c.source}:${c.asin ?? ''}:${c.isbn ?? ''}:${c.title}:${i}`}
                   c={c}
-                  isTop={!!cached && sameCandidate(cached, c)}
+                  isTop={c === best}
+                  isCached={!!cached && sameCandidate(cached, c)}
                   actionable={actionable}
                   applying={applying}
                   onApply={() => applyOne(c)}
