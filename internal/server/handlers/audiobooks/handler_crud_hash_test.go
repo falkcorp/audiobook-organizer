@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_crud_hash_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9c4e1a73-8d25-4f6b-b3e0-7a2d6f9c1e58
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 package audiobookshandler_test
 

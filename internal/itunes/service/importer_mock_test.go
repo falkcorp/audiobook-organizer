@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_mock_test.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: e7f1a2b3-4c5d-6e7f-8a9b-0c1d2e3f4a5b
-// last-edited: 2026-09-26
+// last-edited: 2026-10-07
 
 package itunesservice
 

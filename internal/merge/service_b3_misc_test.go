@@ -1,7 +1,7 @@
 // file: internal/merge/service_b3_misc_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2f8b6d1c-5e9a-4c3f-8b7d-0a1e2c4f6d8b
-// last-edited: 2026-07-18
+// last-edited: 2026-10-07
 
 package merge
 

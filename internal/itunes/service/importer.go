@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer.go
-// version: 1.36.1
+// version: 1.37.0
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 package itunesservice
 
@@ -129,14 +129,12 @@ type contributorWriter interface {
 
 // itunesImportState is the bookkeeping that makes an import incremental and
 // idempotent: which external IDs are mapped or tombstoned, which hashes are
-// blocked, the library fingerprint, and updates deferred from an earlier run.
+// blocked, and the library fingerprint.
 type itunesImportState interface {
 	CreateExternalIDMapping(mapping *database.ExternalIDMapping) error
 	IsExternalIDTombstoned(source, externalID string) (bool, error)
 	IsHashBlocked(hash string) (bool, error)
 	SaveLibraryFingerprint(path string, size int64, modTime time.Time, crc32 uint32) error
-	GetPendingDeferredITunesUpdates() ([]database.DeferredITunesUpdate, error)
-	MarkDeferredITunesUpdateApplied(id int) error
 }
 
 // importerCheckpointStore is the resume surface. internal/operations deliberately

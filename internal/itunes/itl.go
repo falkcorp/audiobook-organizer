@@ -1,5 +1,5 @@
 // file: internal/itunes/itl.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 7f2a8b3c-4d5e-6f01-a2b3-c4d5e6f7a8b9
 // last-edited: 2026-10-07
 

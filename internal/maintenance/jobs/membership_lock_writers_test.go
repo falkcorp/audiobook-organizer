@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/membership_lock_writers_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8a3d5f92-1e6c-4b07-9d48-c2f7e0a1b635
-// last-edited: 2026-10-02
+// last-edited: 2026-10-07
 
 package jobs
 

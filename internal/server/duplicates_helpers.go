@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_helpers.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: 550a807d-8c00-4e34-9a8c-52a80710a0b9
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 //
 // Shared, non-HTTP helpers that were extracted from duplicates_handlers.go when
 // the 17 duplicates HTTP handlers moved to internal/server/handlers/duplicates.

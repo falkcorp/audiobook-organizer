@@ -1,5 +1,6 @@
 // file: internal/audiobooks/lifecycle.go
-// version: 1.1.0
+// version: 1.2.0
+// last-edited: 2026-10-07
 
 // PostInit method on *AudiobookService. Pulls optional deps from the
 // container — replaces inline Set* calls from NewServer's activity

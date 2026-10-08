@@ -1,7 +1,7 @@
 // file: internal/organizer/checkpoint.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7f8a9b0c-1d2e-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-08-19
+// last-edited: 2026-10-07
 //
 // Phase checkpoints for the metadata apply pipeline (GFO-4).
 //

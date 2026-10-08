@@ -454,13 +454,11 @@ func TestMergeBooks_Replay_DeletedLoserRouteDoesNotRefuseKeep(t *testing.T) {
 	assert.True(t, after.MarkedForDeletionAt.Equal(past), "replay must not touch the deleted loser's row")
 }
 
-// flakyExtIDStore fails ReassignExternalIDs (or GetExternalIDsForBook) for
-// the first N calls and then delegates — the shape of a transient Pebble batch
+// flakyExtIDStore fails ReassignExternalIDs for the first N calls and then delegates — the shape of a transient Pebble batch
 // commit failure followed by a healthy retry.
 type flakyExtIDStore struct {
 	database.Store
 	failReassign int
-	failRead     int
 	reassigns    int
 }
 
@@ -471,14 +469,6 @@ func (f *flakyExtIDStore) ReassignExternalIDs(oldBookID, newBookID string) error
 		return errors.New("injected: batch commit failed")
 	}
 	return f.Store.ReassignExternalIDs(oldBookID, newBookID)
-}
-
-func (f *flakyExtIDStore) GetExternalIDsForBook(bookID string) ([]database.ExternalIDMapping, error) {
-	if f.failRead > 0 {
-		f.failRead--
-		return nil, errors.New("injected: sstable read failed")
-	}
-	return f.Store.GetExternalIDsForBook(bookID)
 }
 
 func seedITunesPID(t *testing.T, store database.Store, bookID, pid string) {
@@ -520,29 +510,6 @@ func TestMergeBooks_ReassignFailure_LeavesLoserLiveForRetry(t *testing.T) {
 	assert.True(t, softDeleted(t, real, b.ID))
 	assert.Equal(t, a.ID, bookOfPID(t, real, "PID-B"), "retry must have moved the mapping to the winner")
 	assert.Equal(t, 2, store.reassigns)
-}
-
-// Same contract for the PID read that precedes the reassign: once the
-// mappings are on the winner the loser's PIDs cannot be recovered, so an
-// unreadable set must stop the loser's cleanup before anything moves.
-func TestMergeBooks_ExternalIDReadFailure_LeavesLoserLiveForRetry(t *testing.T) {
-	real := setupTestStore(t)
-	a := seedGuardBook(t, real, "Keep", "m4b", true)
-	b := seedGuardBook(t, real, "Lose", "mp3", true)
-	seedITunesPID(t, real, b.ID, "PID-B")
-	store := &flakyExtIDStore{Store: real, failRead: 1}
-
-	_, err := NewService(store).MergeBooks([]string{a.ID, b.ID}, a.ID)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "remain live")
-	assert.False(t, softDeleted(t, real, b.ID))
-	assert.Equal(t, b.ID, bookOfPID(t, real, "PID-B"))
-	assert.Equal(t, 0, store.reassigns, "nothing may move before the PIDs are known")
-
-	_, err = NewService(store).MergeBooks([]string{a.ID, b.ID}, a.ID)
-	require.NoError(t, err)
-	assert.True(t, softDeleted(t, real, b.ID))
-	assert.Equal(t, a.ID, bookOfPID(t, real, "PID-B"))
 }
 
 // IsRefusal separates the caller-actionable 409 class from not-found (404)

@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_owner_review_test.go
-// version: 1.6.5
+// version: 1.7.0
 // guid: 1a8c5e37-6f02-4d94-b7e3-9c4d2a0f5b81
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 //
 // An owner-reviewed apply: the review lane pins the candidate it showed, and
 // a matching pin lifts the certainty legs of the gate. A stale pin, no pin,

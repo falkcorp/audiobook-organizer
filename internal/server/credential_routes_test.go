@@ -1,5 +1,5 @@
 // file: internal/server/credential_routes_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6d2f9a40-3b75-4e18-9c6a-8f1e0b4d27c3
 // last-edited: 2026-10-07
 

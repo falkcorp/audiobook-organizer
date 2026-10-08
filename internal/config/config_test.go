@@ -1,7 +1,7 @@
 // file: internal/config/config_test.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-10-03
+// last-edited: 2026-10-07
 
 package config
 

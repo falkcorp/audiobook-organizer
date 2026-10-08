@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.36.3
+// version: 1.37.0
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 package server
 

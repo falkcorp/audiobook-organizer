@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_log_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 52dae0d7-3e3f-4a00-ae07-42d80b9fe194
-// last-edited: 2026-09-28
+// last-edited: 2026-10-07
 
 package server
 

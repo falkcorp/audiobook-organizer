@@ -1,7 +1,7 @@
 // file: internal/server/candidate_fallback_round3_test.go
-// version: 1.0.5
+// version: 1.1.0
 // guid: 7f057c74-2af0-44a5-bf9a-214d739ab5f0
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 package server
 

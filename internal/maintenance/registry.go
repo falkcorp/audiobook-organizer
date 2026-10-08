@@ -1,7 +1,7 @@
 // file: internal/maintenance/registry.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 22222222-2222-2222-2222-222222222222
-// last-edited: 2026-05-04
+// last-edited: 2026-10-07
 
 package maintenance
 

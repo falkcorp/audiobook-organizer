@@ -1,5 +1,5 @@
 // file: internal/config/protected_fields.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7c41d2e8-5a96-4b3f-8e17-2f0b9d6a4c53
 // last-edited: 2026-10-07
 

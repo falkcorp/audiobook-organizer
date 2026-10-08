@@ -1,7 +1,7 @@
 // file: internal/merge/service_b3_realstore_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6a2f9e14-3c7b-4d8a-9e10-b8f2a5c6d7e1
-// last-edited: 2026-09-13
+// last-edited: 2026-10-07
 
 package merge
 

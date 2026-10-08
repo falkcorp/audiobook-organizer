@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_already_applied_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 5b2e8c71-4d9a-4f06-a3e1-7c8d2f9b0e46
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 package server
 

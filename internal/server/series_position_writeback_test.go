@@ -1,7 +1,7 @@
 // file: internal/server/series_position_writeback_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 1e6f4a92-8c07-4d31-b5a8-72c9e0d3f416
-// last-edited: 2026-09-13
+// last-edited: 2026-10-07
 
 package server
 

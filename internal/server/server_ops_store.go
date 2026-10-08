@@ -1,7 +1,7 @@
 // file: internal/server/server_ops_store.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 5a2e91c7-3f04-4b68-9d15-8c73e06af241
-// last-edited: 2026-10-03
+// last-edited: 2026-10-07
 
 package server
 
@@ -47,7 +47,6 @@ type ServerOpsStore interface {
 	serverAuthStore
 	serverConfigStore
 	serverStatsReader
-	serverITunesDeferStore
 }
 
 // ----- composites -----
@@ -321,11 +320,6 @@ type serverSettingsStore interface {
 	SetRaw(key string, value []byte) error
 	SetRootDir(rootDir string)
 	SetSetting(key string, value string, typ string, isSecret bool) error
-}
-
-// serverITunesDeferStore: Queues a deferred iTunes path update.
-type serverITunesDeferStore interface {
-	CreateDeferredITunesUpdate(bookID string, persistentID string, oldPath string, newPath string, updateType string) error
 }
 
 // Compile-time proof that the concrete store satisfies the narrow view. If a

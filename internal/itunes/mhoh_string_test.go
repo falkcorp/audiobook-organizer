@@ -1,6 +1,7 @@
 // file: internal/itunes/mhoh_string_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2c8e7a14-9b03-4f6d-8a51-d3f0b6e29c87
+// last-edited: 2026-10-07
 //
 // Tests for the iTunes-conformant mhoh string encoders (TASK-005, CRIT-1):
 //   - property round-trips: encode → parse == input (ASCII, Latin-1, CJK, curly-quote)

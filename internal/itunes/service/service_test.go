@@ -1,7 +1,7 @@
 // file: internal/itunes/service/service_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 4ab6d921-bccd-4265-b04b-31faaacd5826
-// last-edited: 2026-09-02
+// last-edited: 2026-10-07
 
 package itunesservice
 

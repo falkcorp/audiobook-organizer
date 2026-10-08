@@ -1,7 +1,7 @@
 // file: internal/server/handlers/organize_scan_lock_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 0e8b5c27-4a13-4f96-b7d2-c93a61e8f405
-// last-edited: 2026-09-30
+// last-edited: 2026-10-07
 
 package handlers_test
 

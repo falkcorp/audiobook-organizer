@@ -1,7 +1,7 @@
 // file: internal/server/file_io_pool.go
-// version: 2.10.0
+// version: 2.11.0
 // guid: c4d5e6f7-a8b9-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-09-30
+// last-edited: 2026-10-07
 //
 // Bounded worker pool for file I/O operations (cover embed, tag write,
 // rename). Tracks pending jobs in PebbleDB so they survive restarts.

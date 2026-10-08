@@ -1,7 +1,7 @@
 // file: internal/server/handlers/organize.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: b3c4d5e6-f7a8-9012-bcde-f01234567890
-// last-edited: 2026-09-30
+// last-edited: 2026-10-07
 
 // Package handlers — OrganizeHandler covers the rename-preview, rename-apply,
 // organize-preview, and single-book organize HTTP endpoints.

@@ -1,7 +1,7 @@
 // file: internal/config/itunes_libraries.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5b2e9c47-1a08-4d63-8f92-3c7a0e6b1d54
-// last-edited: 2026-09-26
+// last-edited: 2026-10-07
 //
 // The 4-state iTunes library model + its config-load Resolve/Validate. Two physical
 // libraries (Original = the real hands-off tree under books/itunes/**; AO = the

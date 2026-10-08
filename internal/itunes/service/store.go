@@ -1,6 +1,6 @@
 // file: internal/itunes/service/store.go
-// version: 1.1.0
-// last-edited: 2026-08-18
+// version: 1.2.0
+// last-edited: 2026-10-07
 // guid: 4f9bbf9f-0d28-46d5-be9c-e9ce3a422593
 
 // Package itunesservice contains the iTunes integration: import pipeline,

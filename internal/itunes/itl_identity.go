@@ -1,7 +1,7 @@
 // file: internal/itunes/itl_identity.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 4f8a2b1c-9d3e-4c7a-b5f6-1e2d3c4b5a69
-// last-edited: 2026-08-20
+// last-edited: 2026-10-07
 //
 // Library identity fingerprinting for the ITLSafetyContract (SPEC 3 / K13–K14).
 //

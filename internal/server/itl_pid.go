@@ -1,7 +1,7 @@
 // file: internal/server/itl_pid.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: d6b1f048-3e29-4a75-9c81-0f2a7b4c6e93
-// last-edited: 2026-08-14
+// last-edited: 2026-10-07
 //
 // book_file iTunes-PID integrity endpoints. /pid-integrity is a read-only census
 // of duplicate PIDs (a PID must identify exactly one book_file). /pid-repair

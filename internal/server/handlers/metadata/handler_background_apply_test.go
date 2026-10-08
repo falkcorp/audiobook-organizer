@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler_background_apply_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6e2b9d47-3f81-4c0a-b5d6-1a7e8c4f9b23
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 package metadatahandler_test
 

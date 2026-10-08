@@ -1,7 +1,7 @@
 // file: internal/itunes/service/playlist_sync.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: 1e9f0a8b-2c3d-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-09-13
+// last-edited: 2026-10-07
 //
 // iTunes playlist sync (spec 3.4 tasks 5-6).
 //

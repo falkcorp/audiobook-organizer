@@ -1,5 +1,5 @@
 // file: internal/server/apikey_credential_guard_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3e9a5c72-4b1d-4f08-b6e3-9d2c7a0f5e14
 // last-edited: 2026-10-07
 

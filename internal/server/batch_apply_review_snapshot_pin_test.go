@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_review_snapshot_pin_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2b7d4e91-6c05-4a38-9f1e-7d3a8c52e0b4
-// last-edited: 2026-10-02
+// last-edited: 2026-10-07
 
 package server
 

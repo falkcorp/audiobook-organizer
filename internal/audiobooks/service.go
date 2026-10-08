@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service.go
-// version: 1.54.0
+// version: 1.55.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 // Package audiobooks provides the core business logic for managing audiobooks,
 // including CRUD operations, metadata management, search, deduplication, and

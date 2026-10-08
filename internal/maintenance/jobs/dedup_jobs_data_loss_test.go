@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/dedup_jobs_data_loss_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5e2b8c47-91d3-4f60-a7c8-2d4e6f1a9b30
-// last-edited: 2026-09-13
+// last-edited: 2026-10-07
 
 package jobs
 

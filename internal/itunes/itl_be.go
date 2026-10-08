@@ -1,7 +1,7 @@
 // file: internal/itunes/itl_be.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: a3f7c821-5b4e-4d92-8f01-e6a2b9c3d47f
-// last-edited: 2026-09-02
+// last-edited: 2026-10-07
 
 package itunes
 

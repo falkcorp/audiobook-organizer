@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/repoint_missing_to_folder_audio.go
-// version: 1.3.2
+// version: 1.4.0
 // guid: 5169412c-6469-4f70-9073-b544025dd08e
-// last-edited: 2026-10-05
+// last-edited: 2026-10-07
 
 // Package maintenance — maintenance.repoint-missing-to-folder-audio.
 //

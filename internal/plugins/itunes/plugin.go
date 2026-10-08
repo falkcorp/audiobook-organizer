@@ -1,7 +1,7 @@
 // file: internal/plugins/itunes/plugin.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-// last-edited: 2026-09-25
+// last-edited: 2026-10-07
 
 // Package itunes is the UOS plugin for iTunes/Music library operations.
 // It wraps the internal iTunes service and registers OperationDefs through

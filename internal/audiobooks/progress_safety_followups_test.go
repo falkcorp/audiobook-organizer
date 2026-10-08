@@ -1,7 +1,7 @@
 // file: internal/audiobooks/progress_safety_followups_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 47073aff-f39f-47da-8927-07cdae028edb
-// last-edited: 2026-10-05
+// last-edited: 2026-10-07
 
 package audiobooks
 

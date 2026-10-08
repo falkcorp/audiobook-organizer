@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_error_paths_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: a7c3f2e1-4d8b-4e6a-9f0c-2b5d7e3a8c1f
-// last-edited: 2026-09-24
+// last-edited: 2026-10-07
 
 // Package itunesservice - error and edge-case tests for importer.go (TODO 4.13d).
 //

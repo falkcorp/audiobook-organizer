@@ -1,7 +1,7 @@
 // file: internal/itunes/service/position_sync.go
-// version: 2.7.0
+// version: 2.8.0
 // guid: 9f7a8b5c-0d6e-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-05
+// last-edited: 2026-10-07
 //
 // One-way sync from the iTunes Bookmark / Play Count fields (spec 3.6
 // task 4) into the app's per-user position/state tracking (spec 3.6).

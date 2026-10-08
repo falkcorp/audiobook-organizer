@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/book_scan_lock.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 070620af-532e-4357-a2a3-3f746b5e9e30
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 package metadatahandler
 

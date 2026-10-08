@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler_series_clear_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7f040721-48bc-4639-919d-3da56ceab6e3
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 package audiobookshandler_test
 

@@ -1,9 +1,15 @@
 <!-- file: docs/plans/2026-10-07-itunes-writeback-requeue.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 4187f421-1b4d-445f-a098-917d3feef234 -->
 <!-- last-edited: 2026-10-07 -->
 
 # Plan: re-enqueue the dropped iTunes write-back updates
+
+> **Superseded 2026-10-07.** The owner dropped iTunes write-back: "Drop itunes
+> writeback. We will do import only and then not care." The code this plan
+> changed was removed; see
+> [`2026-10-07-remove-itunes-writeback.md`](2026-10-07-remove-itunes-writeback.md).
+> Kept for the record only.
 
 Branch `feat/itunes-writeback-requeue`, worktree `aorg-wb-requeue`, based on
 `origin/main` 7bf98d864 (the batcher fix from #3821/#3822 is in).

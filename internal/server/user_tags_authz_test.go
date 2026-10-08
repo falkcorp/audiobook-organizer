@@ -1,7 +1,7 @@
 // file: internal/server/user_tags_authz_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7a4e9b3c-2f1d-4a6e-9c8b-5d3f0e1a2b4c
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 // Regression coverage for the book user-tags write routes' authorization
 // guard (fixed in this change). setupUserTagRoutes previously registered

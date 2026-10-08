@@ -1,7 +1,7 @@
 // file: internal/server/handlers/interfaces.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: e5f6a7b8-c9d0-1234-5678-90abcdef0123
-// last-edited: 2026-09-12
+// last-edited: 2026-10-07
 
 package handlers
 

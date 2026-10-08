@@ -1,6 +1,7 @@
 // file: internal/server/pipeline_checkpoint.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 7f8a9b0c-1d2e-4a70-b8c5-3d7e0f1b9a99
+// last-edited: 2026-10-07
 //
 // Thin forwarding layer — the real implementation now lives in
 // internal/organizer/checkpoint.go. This file provides backward

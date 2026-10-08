@@ -1,7 +1,7 @@
 // file: internal/itunes/service/transfer.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-01
+// last-edited: 2026-10-07
 //
 // ITL file transfer handler: download. Part of backlog 6.4. Upload, backup
 // list and restore went with iTunes write-back on 2026-10-07: the app never

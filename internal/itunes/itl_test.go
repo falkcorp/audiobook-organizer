@@ -1,6 +1,7 @@
 // file: internal/itunes/itl_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 8a3b9c4d-5e6f-7012-b3c4-d5e6f7a8b9c0
+// last-edited: 2026-10-07
 
 package itunes
 

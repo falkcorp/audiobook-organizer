@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.85.0
+// version: 2.86.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-10-07
 

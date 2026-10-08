@@ -1,7 +1,7 @@
 // file: internal/server/server_test.go
-// version: 2.11.1
+// version: 2.12.0
 // guid: b2c3d4e5-f6a7-8901-bcde-234567890abc
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 // NOTE(fable5 T022): setupTestServer ported from NewSQLiteStore to NewPebbleStore.
 

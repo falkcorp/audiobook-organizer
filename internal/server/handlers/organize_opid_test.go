@@ -1,7 +1,7 @@
 // file: internal/server/handlers/organize_opid_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4f8b2d61-9c07-4a35-b8e2-6d1a3f70c974
-// last-edited: 2026-09-02
+// last-edited: 2026-10-07
 
 package handlers_test
 

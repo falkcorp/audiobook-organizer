@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_stale_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: bd448962-829a-45be-aa5f-86e10c847ff3
-// last-edited: 2026-10-05
+// last-edited: 2026-10-07
 
 // The review rail's `stale` count and the refetch-all-stale set
 // (StaleCachedBookIDs, behind POST batch-fetch-candidates {stale:true}) must be

@@ -35,7 +35,11 @@ import (
 // (repoint_version_primary.go): it moves is_primary_version from an organized
 // single-chapter book onto its imported twin so a chapter run whose members are
 // all non-primary versions can be consolidated.
-const wantJobCount = 38
+//
+// 2026-10-07: 38 → 37. `generate-itl-tests` was deleted with iTunes write-back
+// (iTunes is import-only): it wrote synthetic .itl variants for testing the
+// removed writers.
+const wantJobCount = 37
 
 // TestEveryJobDeclaresAUsablePolicy is the reason ExecutionPolicy can be a struct
 // rather than five separate interface methods.

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_buckets_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9e04b3d7-6c81-4a25-b3f0-72d9a1c86e53
-// last-edited: 2026-10-05
+// last-edited: 2026-10-07
 
 // The review rail's chips were reporting a different library than the one the
 // reviewer was looking at. Four separate defects, all visible in one screenshot

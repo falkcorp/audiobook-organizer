@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_mock_test.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
-// last-edited: 2026-10-02
+// last-edited: 2026-10-07
 
 package metafetch
 

@@ -1,5 +1,5 @@
 // file: internal/itunes/itl_safety_contract_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 2eb18728-e3ee-494d-b37d-3bb7e7c516a4
 //
 // Regression suite for ITLSafetyContract (fable5 TASK-003), implementing the
@@ -14,7 +14,7 @@
 // Pattern per test: build the clean LE payload → apply ONE specific corruption →
 // assert the NAMED guard fires AND every other guard stays silent. The clean
 // payload is also asserted to pass every guard (TestContract_CleanPasses).
-// last-edited: 2026-09-02
+// last-edited: 2026-10-07
 
 package itunes
 

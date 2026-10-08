@@ -1,7 +1,7 @@
 // file: internal/organizer/unit_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
-// last-edited: 2026-09-14
+// last-edited: 2026-10-07
 
 package organizer
 
