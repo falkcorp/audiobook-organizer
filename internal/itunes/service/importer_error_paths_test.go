@@ -376,9 +376,8 @@ func TestSync_GetAllBooksFails_ReturnsError(t *testing.T) {
 	m := dbmocks.NewMockStore(t)
 	// After parsing and grouping, Sync calls GetAllBooksCore for the PID index.
 	m.EXPECT().GetAllBooksCore(0, 0).Return(nil, fmt.Errorf("database connection lost")).Once()
-	// No deferred iTunes updates (ITLWriteBackEnabled = false).
 
-	imp := newImporter(Deps{Store: m, Config: Config{ITLWriteBackEnabled: false}})
+	imp := newImporter(Deps{Store: m})
 	log := logger.New("test")
 	err := imp.Sync(context.Background(), xmlPath, nil, nil, log)
 

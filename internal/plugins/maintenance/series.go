@@ -42,10 +42,7 @@ func (p *Plugin) seriesNormalizeDef() sdk.OperationDef {
 }
 
 func (p *Plugin) runSeriesNormalize(ctx context.Context, _ json.RawMessage, reporter sdk.Reporter) error {
-	enqueueWB := func(bookID string) {
-		p.deps.EnqueueWriteBack(bookID)
-	}
-	affected, err := p.deps.ExecuteSeriesNormalizeCore(ctx, registry.ReporterOpID(reporter), enqueueWB)
+	affected, err := p.deps.ExecuteSeriesNormalizeCore(ctx, registry.ReporterOpID(reporter))
 	// Renaming a series changes the cached series list, which carries a 24-hour
 	// TTL. Without this the normalize lands in the store while /api/v1/series
 	// keeps serving the old names. Only invalidate when rows actually changed;

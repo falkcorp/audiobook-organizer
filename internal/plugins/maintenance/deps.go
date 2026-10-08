@@ -622,7 +622,7 @@ type SeriesRunners interface {
 	// ExecuteSeriesNormalizeCore delegates to server.executeSeriesNormalizeCore.
 	// Returns slice of affected series IDs and any error. opID keys the
 	// series_rename change rows that make each rename undoable.
-	ExecuteSeriesNormalizeCore(ctx context.Context, opID string, enqueueWB func(string)) ([]string, error)
+	ExecuteSeriesNormalizeCore(ctx context.Context, opID string) ([]string, error)
 }
 
 // MediaFileRunners runs the audio-container repair operations.
@@ -704,8 +704,6 @@ type ActivityLogOps interface {
 
 // WriteBackOps covers the iTunes write-back queue.
 type WriteBackOps interface {
-	// EnqueueWriteBack enqueues a book for write-back via the batcher (no-op if nil).
-	EnqueueWriteBack(bookID string)
 	// PollBatch polls OpenAI for completed batch jobs; returns processed count.
 	PollBatch(ctx context.Context) (int, error)
 }

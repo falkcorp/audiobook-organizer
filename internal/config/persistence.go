@@ -412,10 +412,8 @@ func migrateITunesBlob(blob string) (string, bool) {
 	type flatShape struct {
 		ITunesSyncEnabled      bool   `json:"itunes_sync_enabled"`
 		ITunesSyncInterval     int    `json:"itunes_sync_interval"`
-		ITLWriteBackEnabled    bool   `json:"itl_write_back_enabled"`
 		ITunesLibraryWritePath string `json:"itunes_library_write_path"`
 		ITunesLibraryReadPath  string `json:"itunes_library_read_path"`
-		ITunesAutoWriteBack    bool   `json:"itunes_auto_write_back"`
 		ITunesPathTrimEnabled  bool   `json:"itunes_path_trim_enabled"`
 		ITunesWindowsRootPath  string `json:"itunes_windows_root_path"`
 		ITunesMediaRoot        string `json:"itunes_media_root"`
@@ -426,10 +424,8 @@ func migrateITunesBlob(blob string) (string, bool) {
 	raw["itunes"] = map[string]any{
 		"sync_enabled":       old.ITunesSyncEnabled,
 		"sync_interval":      old.ITunesSyncInterval,
-		"write_back_enabled": old.ITLWriteBackEnabled,
 		"library_write_path": old.ITunesLibraryWritePath,
 		"library_read_path":  old.ITunesLibraryReadPath,
-		"auto_write_back":    old.ITunesAutoWriteBack,
 		"path_trim_enabled":  old.ITunesPathTrimEnabled,
 		"windows_root_path":  old.ITunesWindowsRootPath,
 		"media_root":         old.ITunesMediaRoot,
@@ -1222,18 +1218,13 @@ func applySetting(key, value, typ string) error {
 			if i, err := strconv.Atoi(value); err == nil {
 				c.ITunes.SyncInterval = i
 			}
-		case "itl_write_back_enabled":
-			if b, err := strconv.ParseBool(value); err == nil {
-				c.ITunes.WriteBackEnabled = b
-			}
+		case "itl_write_back_enabled", "itunes_auto_write_back":
+			// iTunes write-back was removed on 2026-10-07 (iTunes is
+			// import-only). A stored value is accepted and ignored.
 		case "itunes_library_write_path", "itunes_library_itl_path":
-			c.ITunes.LibraryWritePath = value
+			c.ITunes.LibraryITLPath = value
 		case "itunes_library_read_path", "itunes_library_xml_path":
 			c.ITunes.LibraryReadPath = value
-		case "itunes_auto_write_back":
-			if b, err := strconv.ParseBool(value); err == nil {
-				c.ITunes.AutoWriteBack = b
-			}
 		case "itunes_path_trim_enabled":
 			if b, err := strconv.ParseBool(value); err == nil {
 				c.ITunes.PathTrimEnabled = b

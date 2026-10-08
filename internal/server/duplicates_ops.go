@@ -829,12 +829,6 @@ func (s *Server) RegisterSeriesNormalizeOp(reg *opsregistry.Registry) error {
 			logging.Info(ctx, "series normalization starting")
 			_ = progress.Log("info", "Starting series name normalization...", nil)
 
-			enqueueWB := func(bookID string) {
-				if s.writeBackBatcher != nil {
-					s.writeBackBatcher.Enqueue(bookID)
-				}
-			}
-
 			// A partial failure must NOT discard the work that succeeded.
 			//
 			// This used to return immediately, skipping organize and write-back for
@@ -846,7 +840,7 @@ func (s *Server) RegisterSeriesNormalizeOp(reg *opsregistry.Registry) error {
 			// Organizing what was collected and THEN reporting the failure leaves
 			// the files consistent with the series rows that did change. The op
 			// still ends "failed", so the error is not swallowed.
-			affectedBookIDs, opErr := executeSeriesNormalizeCore(ctx, store, opID, enqueueWB)
+			affectedBookIDs, opErr := executeSeriesNormalizeCore(ctx, store, opID)
 			if opErr != nil {
 				logging.Error(ctx, "series normalization reported errors; organizing the books it did collect before failing the operation",
 					"err", opErr, "affected_books", len(affectedBookIDs))

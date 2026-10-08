@@ -329,9 +329,7 @@ func init() {
 	//
 	// Construction never returns an error in practice: itunesservice.New
 	// returns NewDisabled() when cfg.Enabled is false. The "Enabled: true"
-	// flag here mirrors the pre-container inline construction in NewServer
-	// — the per-feature toggles (AutoWriteBack, ITLWriteBackEnabled) come
-	// from AppConfig.
+	// flag here mirrors the pre-container inline construction in NewServer.
 	serviceregistry.Register(serviceregistry.ServiceDef{
 		Name:   serviceregistry.KeyITunes,
 		Needs:  []string{serviceregistry.KeyStore, serviceregistry.KeyConfig, serviceregistry.KeyEventBus, serviceregistry.KeyMetaFetch},
@@ -344,17 +342,11 @@ func init() {
 			svc, err := itunesservice.New(itunesservice.Deps{
 				Store: store,
 				Config: itunesservice.Config{
-					Enabled:             true,
-					LibraryReadPath:     cfg.ITunes.LibraryReadPath,
-					LibraryWritePath:    cfg.ITunes.LibraryWritePath,
-					AutoWriteBack:       cfg.ITunes.AutoWriteBack,
-					ITLWriteBackEnabled: cfg.ITunes.WriteBackEnabled,
-					WriteBackDryRun:     cfg.ITunes.WriteBackDryRun,
+					Enabled:         true,
+					LibraryReadPath: cfg.ITunes.LibraryReadPath,
 				},
-				AudiobookRoot: cfg.RootDir,
-				ReportDir:     filepath.Join(cfg.RootDir, "reports"),
-				EventBus:      bus,
-				Metafetch:     mf,
+				EventBus:  bus,
+				Metafetch: mf,
 				OrganizerFactory: func() itunesservice.BookOrganizer {
 					org := organizer.NewOrganizer(cfg)
 					org.SetStore(store)

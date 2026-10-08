@@ -182,12 +182,11 @@ func (s *Server) Start(cfg ServerConfig) error {
 		}
 	}
 
-	// Reload the iTunes write-back batcher's durable queue. Container.Start
-	// already calls its Start when the container built it; this explicit,
-	// idempotent call (sync.Once inside) covers a container that did not, so a
-	// queue left by the previous process is never silently ignored.
-	if s.writeBackBatcher != nil {
-		_ = s.writeBackBatcher.Start(s.bgCtx)
+	// Delete what the removed iTunes write-back left in the store (its
+	// durable queue, held removes, status and outbox rows). Idempotent: once
+	// they are gone this is one empty scan per prefix.
+	if st := s.storeForWiring(); st != nil {
+		purgeLegacyITunesWriteBackKeys(st)
 	}
 
 	// Start embed queue debounce timer (activated after container start so
@@ -557,12 +556,6 @@ func (s *Server) Start(cfg ServerConfig) error {
 		p.Stop()
 	}
 
-	// Flush the ITL write-back batcher
-	if s.writeBackBatcher != nil {
-		slog.Info("Flushing iTunes write-back batcher...")
-		_ = s.writeBackBatcher.Stop(context.Background())
-	}
-
 	// Shut down the iTunes service (no-op in PR 1 since NewDisabled is
 	// always used; PR 2 onward may have live sub-components to flush).
 	if s.itunesSvc != nil {
@@ -586,8 +579,7 @@ func (s *Server) Start(cfg ServerConfig) error {
 	// the inline Stop here pre-flip), updateScheduler (previously never
 	// stopped — a leak), and any future Stopper additions. Inline Stops
 	// above remain the source of truth for the carefully-sequenced
-	// teardown (opRegistry drain before bgCancel, writeBackBatcher flush
-	// before itunesSvc.Shutdown, etc.); Container.Stop is idempotent on
+	// teardown (opRegistry drain before bgCancel, etc.); Container.Stop is idempotent on
 	// already-stopped services for those.
 	if s.container != nil {
 		if err := s.container.Stop(context.Background()); err != nil {
@@ -1518,8 +1510,6 @@ func (s *Server) setupRoutes() {
 			protected.POST("/operations/reconcile", s.perm(auth.PermScanTrigger), s.startReconcile)
 			protected.POST("/operations/reconcile/scan", s.perm(auth.PermScanTrigger), s.startReconcileScan)
 			protected.GET("/operations/reconcile/scan/latest", s.perm(auth.PermLibraryView), s.latestReconcileScan)
-			protected.POST("/operations/itunes-path-reconcile", s.perm(auth.PermScanTrigger), s.itunesSvcGuard(s.handleITunesPathReconcile))
-			protected.POST("/operations/itunes-path-repair", s.perm(auth.PermScanTrigger), s.itunesSvcGuard(s.handleITunesPathRepair))
 			protected.POST("/operations/cleanup-version-groups", s.perm(auth.PermSettingsManage), s.cleanupDuplicateVersionGroupsHandler)
 			protected.POST("/operations/mark-broken-segments", s.perm(auth.PermSettingsManage), s.markBrokenSegmentBooksHandler)
 			protected.POST("/operations/merge-novg-duplicates", s.perm(auth.PermSettingsManage), s.mergeNoVGDuplicatesHandler)
@@ -1536,76 +1526,31 @@ func (s *Server) setupRoutes() {
 			// iTunes import routes
 			itunesGroup := protected.Group("/itunes")
 			{
-				// Routes that remove, overwrite or repoint tracks in the
-				// iTunes library, or turn off its safety checks, are
-				// owner-only and go through s.ownerRoute (owner_routes.go;
-				// plan D14). owner_routes_test.go fails on a new
-				// state-changing /itunes route that is not classified.
+				// iTunes is an import-only source (owner decision 2026-10-07).
+				// Every route that wrote the iTunes library -- rebuild,
+				// rebuild-full, export-partial, relocate, adopt-base,
+				// cleanup-merged, write-back[/all/preview], writeback/status,
+				// writeback/held/release, writeback/requeue[-remove],
+				// library/upload, library/restore, library/backups -- was
+				// removed with the write-back subsystem. removed_itunes_routes_test.go
+				// pins that they stay gone.
 				//
-				// NOTE: the 12 core iTunes routes (validate, test-mapping,
-				// import, write-back[/all/preview], library-stats, books,
-				// import-status[/bulk], library-status, sync) were migrated
-				// to handlers.ITunesHandler and are now registered in
-				// wireHandlers (wire_handlers.go). The survivors below stay
-				// here because they still call *Server methods directly.
+				// NOTE: the core iTunes routes (validate, test-mapping, import,
+				// library-stats, books, import-status[/bulk], library-status,
+				// sync) are handlers.ITunesHandler routes registered in
+				// wireHandlers (wire_handlers.go). The survivors below stay here
+				// because they still call *Server methods directly.
 				//
-				// REMOVED in v5: cleanup-orphans was a bulk-remove
-				// endpoint that inferred "what should not be in iTunes"
-				// from the DB. With a stale or partially-cleared DB
-				// (or with manually-managed iTunes content), it would
-				// wipe legitimate tracks. Targeted-only removes (one
-				// PID per explicit user delete via the per-book delete
-				// path) are the only safe pattern. Any future bulk
-				// reconciliation must be opt-in, dry-run-by-default,
-				// preview-required, and reviewed item-by-item.
-				// Diff-and-batch rebuild: computes the full diff
-				// between the DB and the current ITL file, then
-				// applies all adds/removes/updates in one atomic
-				// safeWriteITL call. Supports dry_run=true to
-				// preview without applying. Backlog 7.9.
-				s.ownerRoute(itunesGroup, http.MethodPost, "/rebuild", ownerRouteApply, s.rebuildITLHandler)
-				// Full rebuild: strip all tracks, re-insert all DB books (7.9 nuclear path).
-				s.ownerRoute(itunesGroup, http.MethodPost, "/rebuild-full", ownerRouteApply, s.rebuildITLFullHandler)
-				// Partial export: build ITL containing only specified book IDs (6.4 partial).
-				itunesGroup.POST("/export-partial", s.perm(auth.PermIntegrationsManage), s.exportITLPartialHandler)
-				// Location-only relocate: repoint each book_file's track at its
-				// current path (per-file PID match); NEVER removes/adds, so
-				// music/podcasts/playlists are untouched. dry_run=true previews.
-				s.ownerRoute(itunesGroup, http.MethodPost, "/relocate", ownerRouteApply, s.relocateITLHandler)
-				// Adopt-base: re-bless the identity sidecar after reseeding the
-				// writeback slot from a different library (else K13/K14 reject writes).
-				s.ownerRoute(itunesGroup, http.MethodPost, "/adopt-base", ownerRouteAlways, s.adoptBaseHandler)
-				// Cleanup-merged (P3): remove stale duplicate audiobook tracks left
-				// by merged/superseded books; auto-cleans orphaned playlist refs.
-				// dry_run=true previews.
-				s.ownerRoute(itunesGroup, http.MethodPost, "/cleanup-merged", ownerRouteApply, s.cleanupMergedHandler)
 				// PID-integrity: read-only census of duplicate book_file iTunes PIDs
-				// (a PID must identify exactly one row) + relocate-correctness probe.
+				// (a PID must identify exactly one row).
 				itunesGroup.GET("/pid-integrity", s.perm(auth.PermLibraryEditMetadata), s.pidIntegrityHandler)
 				// PID-repair: backfill the duplicates — keep the PID on one canonical
-				// row, clear it from the rest (no row/file deletion). dry_run=true previews.
+				// row, clear it from the rest (DB rows only; no row/file deletion,
+				// no ITL write). dry_run=true previews.
 				itunesGroup.POST("/pid-repair", s.perm(auth.PermLibraryEditMetadata), s.pidRepairHandler)
-				// Write-back queue (2026-10-07): failures, backoff and held
-				// removes of the batcher, which no longer drops anything.
-				itunesGroup.GET("/writeback/status", s.perm(auth.PermLibraryView), s.itunesWritebackStatusHandler)
-				s.ownerRoute(itunesGroup, http.MethodPost, "/writeback/held/release", ownerRouteAlways, s.itunesWritebackReleaseHeldHandler)
-				// Requeue (2026-10-07): put books whose tracks differ back on the
-				// queue (updates only), and re-queue the remove of an explicit
-				// merged-away loser. dry_run is a JSON body field (default true),
-				// so these are not ownerRoute routes: itunesPreviewOnly reads the
-				// query string, and a gate reading a different flag than the
-				// handler is the parser-differential class. The preview stays on
-				// library.edit_metadata; the handlers run requireOwnerForApply
-				// (the same proof and permission as ownerRoute) on the
-				// dry_run:false path.
-				itunesGroup.POST("/writeback/requeue", s.perm(auth.PermLibraryEditMetadata), s.itunesWritebackRequeueHandler)
-				itunesGroup.POST("/writeback/requeue-remove", s.perm(auth.PermLibraryEditMetadata), s.itunesWritebackRequeueRemoveHandler)
 
-				// ITL file transfer (6.4)
+				// ITL download (6.4): a read of the library file.
 				itunesGroup.GET("/library/download", s.perm(auth.PermIntegrationsManage), s.itunesSvcGuard(func(c *gin.Context) { s.itunesSvc.Transfer.HandleDownload(c) }))
-				s.ownerRoute(itunesGroup, http.MethodPost, "/library/upload", ownerRouteAlways, s.itunesSvcGuard(func(c *gin.Context) { s.itunesSvc.Transfer.HandleUpload(c) }))
-				itunesGroup.GET("/library/backups", s.perm(auth.PermIntegrationsManage), s.itunesSvcGuard(func(c *gin.Context) { s.itunesSvc.Transfer.HandleBackupList(c) }))
-				s.ownerRoute(itunesGroup, http.MethodPost, "/library/restore", ownerRouteAlways, s.itunesSvcGuard(func(c *gin.Context) { s.itunesSvc.Transfer.HandleRestore(c) }))
 			}
 
 			// Cover art

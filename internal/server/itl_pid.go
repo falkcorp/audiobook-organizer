@@ -24,7 +24,7 @@ import (
 // pidIntegrityHandler handles GET/POST /api/v1/itunes/pid-integrity. Always
 // read-only: it reports the duplicate-PID census + relocate-correctness probe.
 func (s *Server) pidIntegrityHandler(c *gin.Context) {
-	itlPath, _ := resolveITLWritePath(c) // best-effort: census works without the ITL
+	itlPath, _ := resolveITLPath(c) // best-effort: census works without the ITL
 	report, err := itunes.ComputePIDIntegrity(s.storeForWiring(), itlPath)
 	if err != nil {
 		httputil.RespondWithInternalError(c, fmt.Sprintf("pid-integrity census failed: %v", err))
@@ -56,7 +56,7 @@ func pidRepairDryRun(c *gin.Context) bool {
 // repair plan preview; otherwise it clears the redundant PID copies. Destructive to
 // the itunes_persistent_id FIELD only (no row/file deletion) → guarded by dry_run.
 func (s *Server) pidRepairHandler(c *gin.Context) {
-	itlPath, ok := resolveITLWritePath(c)
+	itlPath, ok := resolveITLPath(c)
 	if !ok {
 		return
 	}

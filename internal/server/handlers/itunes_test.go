@@ -192,7 +192,7 @@ func TestITunesHandler_WriteBackAll_NoITLPath_400(t *testing.T) {
 	orig := config.AppConfig
 	defer func() { config.AppConfig = orig }()
 	config.AppConfig.ITunes.WriteBackEnabled = true
-	config.AppConfig.ITunes.LibraryWritePath = ""
+	config.AppConfig.ITunes.LibraryITLPath = ""
 
 	store := handlersmocks.NewMockITunesStore(t)
 	h := handlers.NewITunesHandler(enabledSvc(t), nil, nil, store)
@@ -504,7 +504,7 @@ func TestITunesHandler_Sync_NoLibraryPath_400(t *testing.T) {
 func TestITunesHandler_LibraryStats_NoITLPath_400(t *testing.T) {
 	orig := config.AppConfig
 	defer func() { config.AppConfig = orig }()
-	config.AppConfig.ITunes.LibraryWritePath = ""
+	config.AppConfig.ITunes.LibraryITLPath = ""
 
 	h := handlers.NewITunesHandler(enabledSvc(t), nil, nil, handlersmocks.NewMockITunesStore(t))
 	c, w := newITunesCtx(http.MethodGet, "/itunes/library-stats", "", nil)

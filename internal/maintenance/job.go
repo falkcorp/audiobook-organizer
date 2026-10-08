@@ -70,18 +70,6 @@ type ProgressReporter interface {
 	Log(level, message string, details *string)
 }
 
-// WriteBackEnqueuer is the narrow interface jobs use for iTunes write-back.
-// Satisfied by *itunesservice.WriteBackBatcher.
-type WriteBackEnqueuer interface {
-	Enqueue(bookID string)
-	EnqueueRemove(pid string)
-}
-
-// EnqueuerInjectable is implemented by jobs that need the write-back enqueuer.
-type EnqueuerInjectable interface {
-	InjectEnqueuer(e WriteBackEnqueuer)
-}
-
 // PermissionAware is optionally implemented by jobs that require a non-default
 // permission. The dispatcher uses this to enforce per-job access control.
 // Jobs that do not implement this interface default to the settings.manage permission.

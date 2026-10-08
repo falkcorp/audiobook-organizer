@@ -403,7 +403,7 @@ func staticProtection(cfg *config.Config, protected tagger.PathChecker, path str
 			return "the configured protected path " + p
 		}
 	}
-	for _, lib := range []string{cfg.ITunes.LibraryReadPath, cfg.ITunes.LibraryWritePath} {
+	for _, lib := range []string{cfg.ITunes.LibraryReadPath, cfg.ITunes.LibraryITLPath} {
 		if lib == "" {
 			continue
 		}

@@ -75,7 +75,7 @@ func (f *fakeApplySvc) RenamePreflightWithOptions(id string, _ metafetch.Metadat
 func TestApplyCachedCandidate_RenamePreflightRefusesBeforeAnyWrite(t *testing.T) {
 	blocked := errors.New("compute target paths failed: two files of one book plan the same target path")
 	svc := &fakeApplySvc{candidates: oneCandidate(t), preflightErr: blocked}
-	out := applyCachedCandidateForBook(svc, fakeBooks{}, nil, "b1", true, nil)
+	out := applyCachedCandidateForBook(svc, fakeBooks{}, "b1", true, nil)
 
 	if out.Applied || out.Reason != applySkipFileWorkWouldFail || !errors.Is(out.Err, blocked) {
 		t.Fatalf("outcome = %+v, want refused with %q", out, applySkipFileWorkWouldFail)
@@ -92,7 +92,7 @@ func TestApplyCachedCandidate_RenamePreflightRefusesBeforeAnyWrite(t *testing.T)
 // cannot block a database-only apply.
 func TestApplyCachedCandidate_NoWriteBackSkipsRenamePreflight(t *testing.T) {
 	svc := &fakeApplySvc{candidates: oneCandidate(t), preflightErr: errors.New("would fail")}
-	out := applyCachedCandidateForBook(svc, fakeBooks{}, nil, "b1", false, nil)
+	out := applyCachedCandidateForBook(svc, fakeBooks{}, "b1", false, nil)
 	if !out.Applied {
 		t.Fatalf("outcome = %+v, want applied", out)
 	}
@@ -124,7 +124,7 @@ func (blockingPreview) PreviewMetadataCandidateWithOptions(string, metafetch.Met
 // A passing preflight changes nothing: the apply and its file work run as before.
 func TestApplyCachedCandidate_PassingPreflightApplies(t *testing.T) {
 	svc := &fakeApplySvc{candidates: oneCandidate(t)}
-	out := applyCachedCandidateForBook(svc, fakeBooks{}, nil, "b1", true, nil)
+	out := applyCachedCandidateForBook(svc, fakeBooks{}, "b1", true, nil)
 	if !out.Applied || len(svc.preflightIDs) != 1 || len(svc.appliedIDs) != 1 || len(svc.finishCalls) != 1 {
 		t.Fatalf("outcome %+v preflight %v applied %v finish %d", out, svc.preflightIDs, svc.appliedIDs, len(svc.finishCalls))
 	}
@@ -195,7 +195,7 @@ func TestApplyCachedCandidate_HistoryIncompleteIsAppliedAndFlagged(t *testing.T)
 		candidates: candidateJSON(t, cand),
 		historyErr: errors.Join(errors.New("change history not recorded: disk full"), metafetch.ErrApplyHistoryIncomplete),
 	}
-	out := applyCachedCandidateForBookTimed(svc, books, nil, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand), "")
+	out := applyCachedCandidateForBookTimed(svc, books, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand), "")
 	if !out.Applied || !out.OwnerReviewed || !out.HistoryFailed || !errors.Is(out.Err, metafetch.ErrApplyHistoryIncomplete) {
 		t.Fatalf("outcome %+v, want applied, owner-reviewed, history failed", out)
 	}
@@ -205,7 +205,7 @@ func TestApplyCachedCandidate_HistoryIncompleteIsAppliedAndFlagged(t *testing.T)
 
 	// Any other apply error is still a failed apply.
 	svc = &fakeApplySvc{candidates: candidateJSON(t, cand), applyErr: errors.New("boom")}
-	out = applyCachedCandidateForBookTimed(svc, books, nil, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand), "")
+	out = applyCachedCandidateForBookTimed(svc, books, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand), "")
 	if out.Applied || out.HistoryFailed || out.Reason != applySkipApplyFailed {
 		t.Fatalf("plain apply error: outcome %+v, want %s", out, applySkipApplyFailed)
 	}
@@ -223,7 +223,7 @@ func TestApplyCachedCandidate_HistoryAndWriteBackFailuresBothSurface(t *testing.
 			historyErr: errors.Join(errors.New("change history not recorded: disk full"), metafetch.ErrApplyHistoryIncomplete),
 			finishErr:  errors.New("rename files: cross-device link"),
 		}
-		out := applyCachedCandidateForBookTimed(svc, books, &fakeITunes{}, "b1", writeBack, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand), "")
+		out := applyCachedCandidateForBookTimed(svc, books, "b1", writeBack, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand), "")
 		if !out.Applied || !out.HistoryFailed || !out.WriteBackFailed {
 			t.Fatalf("writeBack=%v: outcome %+v, want applied with history AND write-back flagged", writeBack, out)
 		}
@@ -261,7 +261,7 @@ func TestApplyCachedCandidate_ForwardsStandDownCheckpoint(t *testing.T) {
 	lost := errors.New("scan stand-down lost")
 	for _, writeBack := range []bool{true, false} {
 		svc := &fakeApplySvc{candidates: oneCandidate(t)}
-		applyCachedCandidateForBook(svc, fakeBooks{}, nil, "b1", writeBack, func() error { return lost })
+		applyCachedCandidateForBook(svc, fakeBooks{}, "b1", writeBack, func() error { return lost })
 		if len(svc.checkpoints) != 1 || svc.checkpoints[0] == nil {
 			t.Fatalf("writeBack=%v: the file work got no stand-down checkpoint (%d calls)", writeBack, len(svc.checkpoints))
 		}
@@ -292,7 +292,7 @@ func TestApplyCachedCandidate_WritesFilesForAppliedBook(t *testing.T) {
 	svc := &fakeApplySvc{candidates: oneCandidate(t)}
 	itunes := &fakeITunes{}
 
-	out := applyCachedCandidateForBook(svc, fakeBooks{}, itunes, "b1", true, nil)
+	out := applyCachedCandidateForBook(svc, fakeBooks{}, "b1", true, nil)
 
 	if !out.Applied || out.WriteBackFailed {
 		t.Fatalf("expected clean apply, got %+v", out)
@@ -316,7 +316,7 @@ func TestApplyCachedCandidate_WriteBackFalseSuppressesFileIO(t *testing.T) {
 	svc := &fakeApplySvc{candidates: oneCandidate(t)}
 	itunes := &fakeITunes{}
 
-	out := applyCachedCandidateForBook(svc, fakeBooks{}, itunes, "b1", false, nil)
+	out := applyCachedCandidateForBook(svc, fakeBooks{}, "b1", false, nil)
 
 	if !out.Applied {
 		t.Fatalf("expected applied, got %+v", out)
@@ -347,7 +347,7 @@ func TestApplyCachedCandidate_ReportsSkipReasons(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			out := applyCachedCandidateForBook(tt.svc, fakeBooks{}, &fakeITunes{}, "b1", true, nil)
+			out := applyCachedCandidateForBook(tt.svc, fakeBooks{}, "b1", true, nil)
 			if out.Applied {
 				t.Fatalf("expected not applied, got %+v", out)
 			}
@@ -366,7 +366,7 @@ func TestApplyCachedCandidate_ReportsSkipReasons(t *testing.T) {
 func TestApplyCachedCandidate_ApplyFailureIsNotReportedAsApplied(t *testing.T) {
 	svc := &fakeApplySvc{candidates: oneCandidate(t), applyErr: errors.New("apply exploded")}
 
-	out := applyCachedCandidateForBook(svc, fakeBooks{}, &fakeITunes{}, "b1", true, nil)
+	out := applyCachedCandidateForBook(svc, fakeBooks{}, "b1", true, nil)
 
 	if out.Applied {
 		t.Fatalf("apply failed but was reported applied: %+v", out)
@@ -386,7 +386,7 @@ func TestApplyCachedCandidate_ApplyFailureIsNotReportedAsApplied(t *testing.T) {
 func TestApplyCachedCandidate_WriteBackFailureStaysApplied(t *testing.T) {
 	svc := &fakeApplySvc{candidates: oneCandidate(t), finishErr: errors.New("disk full")}
 
-	out := applyCachedCandidateForBook(svc, fakeBooks{}, &fakeITunes{}, "b1", true, nil)
+	out := applyCachedCandidateForBook(svc, fakeBooks{}, "b1", true, nil)
 
 	if !out.Applied {
 		t.Fatalf("write-back failure must not unset Applied: %+v", out)
@@ -407,7 +407,7 @@ func TestApplyCachedCandidate_WriteBackFailureStaysApplied(t *testing.T) {
 func TestApplyCachedCandidate_FileIOFailureIsReported(t *testing.T) {
 	svc := &fakeApplySvc{candidates: oneCandidate(t), finishErr: errors.New("rename files: cross-device link")}
 
-	out := applyCachedCandidateForBook(svc, fakeBooks{}, &fakeITunes{}, "b1", true, nil)
+	out := applyCachedCandidateForBook(svc, fakeBooks{}, "b1", true, nil)
 
 	if !out.Applied {
 		t.Fatalf("a file-I/O failure must not unset Applied: %+v", out)
@@ -433,7 +433,7 @@ func TestApplyCachedCandidate_DownloadsPendingCover(t *testing.T) {
 	const cover = "https://covers.example.test/new.jpg"
 	for _, writeBack := range []bool{true, false} {
 		svc := &fakeApplySvc{candidates: oneCandidate(t), pendingCover: cover}
-		_ = applyCachedCandidateForBook(svc, fakeBooks{}, &fakeITunes{}, "b1", writeBack, nil)
+		_ = applyCachedCandidateForBook(svc, fakeBooks{}, "b1", writeBack, nil)
 		if len(svc.finishCalls) != 1 || svc.finishCalls[0].cover != cover {
 			t.Errorf("writeBack=%v: file work = %+v, want one call carrying the pending cover %q",
 				writeBack, svc.finishCalls, cover)
@@ -456,7 +456,7 @@ func TestApplyCachedCandidate_ReportsSkippedLockedFields(t *testing.T) {
 
 	t.Run("no write-back", func(t *testing.T) {
 		svc := &fakeApplySvc{candidates: oneCandidate(t), skippedLocked: locked}
-		out := applyCachedCandidateForBook(svc, fakeBooks{}, nil, "b1", false, nil)
+		out := applyCachedCandidateForBook(svc, fakeBooks{}, "b1", false, nil)
 		if !out.Applied {
 			t.Fatalf("expected Applied: %+v", out)
 		}
@@ -467,7 +467,7 @@ func TestApplyCachedCandidate_ReportsSkippedLockedFields(t *testing.T) {
 
 	t.Run("write-back succeeds", func(t *testing.T) {
 		svc := &fakeApplySvc{candidates: oneCandidate(t), skippedLocked: locked}
-		out := applyCachedCandidateForBook(svc, fakeBooks{}, &fakeITunes{}, "b1", true, nil)
+		out := applyCachedCandidateForBook(svc, fakeBooks{}, "b1", true, nil)
 		if !out.Applied || out.WriteBackFailed {
 			t.Fatalf("expected a clean apply: %+v", out)
 		}
@@ -478,7 +478,7 @@ func TestApplyCachedCandidate_ReportsSkippedLockedFields(t *testing.T) {
 
 	t.Run("write-back fails", func(t *testing.T) {
 		svc := &fakeApplySvc{candidates: oneCandidate(t), skippedLocked: locked, finishErr: errors.New("disk full")}
-		out := applyCachedCandidateForBook(svc, fakeBooks{}, &fakeITunes{}, "b1", true, nil)
+		out := applyCachedCandidateForBook(svc, fakeBooks{}, "b1", true, nil)
 		if !out.Applied || !out.WriteBackFailed {
 			t.Fatalf("expected applied with write-back failure: %+v", out)
 		}
@@ -489,7 +489,7 @@ func TestApplyCachedCandidate_ReportsSkippedLockedFields(t *testing.T) {
 
 	t.Run("nothing locked", func(t *testing.T) {
 		svc := &fakeApplySvc{candidates: oneCandidate(t)}
-		out := applyCachedCandidateForBook(svc, fakeBooks{}, nil, "b1", false, nil)
+		out := applyCachedCandidateForBook(svc, fakeBooks{}, "b1", false, nil)
 		if len(out.SkippedLocked) != 0 {
 			t.Errorf("SkippedLocked = %v, want none", out.SkippedLocked)
 		}

@@ -326,9 +326,6 @@ type rfEnv struct {
 	// itunesPathFor maps a library file path to the iTunes location recorded
 	// in itunes_path, or "" when no mapping covers it. nil means no mapping.
 	itunesPathFor func(string) string
-	// enqueueWriteBack queues a book for iTunes write-back after its
-	// itunes_path changed. May be nil (tests, no batcher).
-	enqueueWriteBack func(bookID string)
 }
 
 func (p *Plugin) repointMissingToFolderAudioDef() sdk.OperationDef {
@@ -389,8 +386,7 @@ func (p *Plugin) runRepointMissingToFolderAudio(ctx context.Context, raw json.Ra
 		scan: p.deps, queue: p.deps.OperationQueueStore(),
 		// The same mapping organize, path-reconcile, path-repair and
 		// recompute-itunes-paths write itunes_path with.
-		itunesPathFor:    rfProductionITunesPathFor(),
-		enqueueWriteBack: p.deps.EnqueueWriteBack}
+		itunesPathFor: rfProductionITunesPathFor()}
 	report, runErr := repointMissingToFolderAudio(ctx, env, params, reporter)
 	if report != nil {
 		if len(report.Books) > 0 {
@@ -1109,13 +1105,6 @@ func applyRFBook(ctx context.Context, env rfEnv, liveBooks map[string]bool, r rf
 		out = append(out, f)
 	}
 	res := writeBookFileBatch(ctx, env.store, out, bookFileBatchOpts{Reporter: reporter, Abort: abort})
-	if res.Applied > 0 && len(plan.ITunesNew) > 0 && env.enqueueWriteBack != nil {
-		// Repointed rows are written first, so any applied row means a new
-		// itunes_path may be stored. The batcher re-reads the rows at flush and
-		// emits a location update only for a PID whose ITL location differs,
-		// so enqueueing after a partial write is safe and never stale.
-		env.enqueueWriteBack(r.BookID)
-	}
 	switch {
 	case res.RowErrs > 0:
 		return rfOutcomeFailed, fmt.Sprintf("%d of %d row writes failed", res.RowErrs, len(out))

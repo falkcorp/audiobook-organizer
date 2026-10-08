@@ -88,7 +88,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	if st := s.storeForWiring(); st != nil {
 		mcScanActive = func() bool { return handlers.LibraryScanActive(st.ListActiveOperationsV2) }
 	}
-	metaCacheH := handlers.NewMetadataCacheHandler(s.storeForWiring(), s.metadataFetchService, s.writeBackBatcher, mcFileIOPool, s.opRegistry, mcScanActive)
+	metaCacheH := handlers.NewMetadataCacheHandler(s.storeForWiring(), s.metadataFetchService, mcFileIOPool, s.opRegistry, mcScanActive)
 	// Kept for the startup warmer (warmMetadataReviewSnapshot). Its background
 	// snapshot rebuilds run in bgWG under bgCtx, so Stop() waits for one
 	// instead of closing the store under it.
@@ -523,7 +523,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	//
 	// Guard typed-nil boxing for each interface-typed concrete-pointer dep so the
 	// handler's in-method nil guards (mirroring the old `s.audiobookService`/
-	// `s.writeBackBatcher`/`s.metadataFetchService` checks) hold. All of these are
+	// `s.metadataFetchService` checks) hold. All of these are
 	// wired before setupRoutes and never swapped post-wire, so snapshotting them
 	// here is safe. The store is a LAZY provider closure (not a snapshot): the
 	// original handlers read s.Ops() at request time and a router-integration
@@ -567,15 +567,6 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		s.storeForWiring(),
 		abSvc,
 		abUpdater,
-		// Lazy provider: server.writeBackBatcher is swapped post-wire by
-		// integration tests and the original handlers read it at request time, so
-		// snapshotting would capture the pre-swap value. Nil stays a nil interface.
-		func() audiobookshandler.WriteBackEnqueuer {
-			if s.writeBackBatcher == nil {
-				return nil
-			}
-			return s.writeBackBatcher
-		},
 		abMetaState,
 		abMetaFetch,
 		abBatch,
@@ -607,10 +598,9 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	// external search, per-book fetch / search / apply / mark-no-match / revert,
 	// metadata-rejections, cow-versions(+prune), write-back, bulk fetch + bulk
 	// write-back enqueue, batch write-back enqueue, fields, rating PATCH).
+	// "write-back" here is the audio-tag write-back, not iTunes.
 	//
-	// store and writeBackBatcher are resolved through lazy provider closures
-	// (swapped post-wire by integration tests / read at request time by the
-	// originals). metadataFetchService / opRegistry / fileIOPool are wire-time
+	// metadataFetchService / opRegistry / fileIOPool are wire-time
 	// interface snapshots, each typed-nil guarded so the in-method `!= nil` /
 	// `== nil` checks hold. enrichBook wraps the server-private
 	// enrichBookForResponseSingle (return type private → any). loadMetadataState /
@@ -631,15 +621,6 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	metadataH := metadatahandler.New(
 		s.storeForWiring(),
 		mdMetaFetch,
-		// Lazy provider: server.writeBackBatcher is swapped post-wire by
-		// integration tests and the original handlers read it at request time, so
-		// snapshotting would capture the pre-swap value. Nil stays a nil interface.
-		func() metadatahandler.WriteBackEnqueuer {
-			if s.writeBackBatcher == nil {
-				return nil
-			}
-			return s.writeBackBatcher
-		},
 		mdOpRegistry,
 		mdFileIOPool,
 		s.listCache,
@@ -756,10 +737,6 @@ func (s *Server) newOrganizeHandler() *handlers.OrganizeHandler {
 	if s.organizeService != nil {
 		organizeSvc = s.organizeService
 	}
-	var writeBack handlers.WriteBackEnqueuer
-	if s.writeBackBatcher != nil {
-		writeBack = s.writeBackBatcher
-	}
 	var publisher handlers.EventPublisher
 	if s.eventBus != nil {
 		publisher = s.eventBus
@@ -769,7 +746,6 @@ func (s *Server) newOrganizeHandler() *handlers.OrganizeHandler {
 		NewRenameService(s.storeForWiring()),
 		organizePreviewSvc,
 		organizeSvc,
-		writeBack,
 		publisher,
 		config.AppConfig.AutoOrganize,
 	)

@@ -337,7 +337,7 @@ func TestUndoLastApply_WriteBackBatcherEnqueued(t *testing.T) {
 	origConfig := config.AppConfig
 	config.AppConfig.ITunes.AutoWriteBack = true
 	config.AppConfig.ITunes.LibraryReadPath = "/fake/path.xml"
-	batcher := itunesservice.NewWriteBackBatcher(1*time.Hour, itunesservice.WriteBackBatcherConfig{AutoWriteBack: true, ITLWriteBackEnabled: true, LibraryWritePath: "/tmp/test.itl"}, nil) // long delay so it won't flush
+	batcher := itunesservice.NewWriteBackBatcher(1*time.Hour, itunesservice.WriteBackBatcherConfig{AutoWriteBack: true, ITLWriteBackEnabled: true, LibraryITLPath: "/tmp/test.itl"}, nil) // long delay so it won't flush
 	server.writeBackBatcher = nil
 	applyCandidate(t, server, book.ID, metafetch.MetadataCandidate{Publisher: "Applied Pub", Source: "Open Library"})
 	server.writeBackBatcher = batcher
@@ -383,7 +383,7 @@ func TestApplyAudiobookMetadata_WriteBackTrue(t *testing.T) {
 	origConfig := config.AppConfig
 	config.AppConfig.ITunes.AutoWriteBack = true
 	config.AppConfig.ITunes.LibraryReadPath = "/fake/path.xml"
-	batcher := itunesservice.NewWriteBackBatcher(1*time.Hour, itunesservice.WriteBackBatcherConfig{AutoWriteBack: true, ITLWriteBackEnabled: true, LibraryWritePath: "/tmp/test.itl"}, nil)
+	batcher := itunesservice.NewWriteBackBatcher(1*time.Hour, itunesservice.WriteBackBatcherConfig{AutoWriteBack: true, ITLWriteBackEnabled: true, LibraryITLPath: "/tmp/test.itl"}, nil)
 	server.writeBackBatcher = batcher
 	defer func() {
 		// Stop the server's fileIOPool before restoring globals to avoid races
@@ -449,7 +449,7 @@ func TestApplyAudiobookMetadata_WriteBackOmitted(t *testing.T) {
 	origConfig := config.AppConfig
 	config.AppConfig.ITunes.AutoWriteBack = true
 	config.AppConfig.ITunes.LibraryReadPath = "/fake/path.xml"
-	batcher := itunesservice.NewWriteBackBatcher(1*time.Hour, itunesservice.WriteBackBatcherConfig{AutoWriteBack: true, ITLWriteBackEnabled: true, LibraryWritePath: "/tmp/test.itl"}, nil)
+	batcher := itunesservice.NewWriteBackBatcher(1*time.Hour, itunesservice.WriteBackBatcherConfig{AutoWriteBack: true, ITLWriteBackEnabled: true, LibraryITLPath: "/tmp/test.itl"}, nil)
 	server.writeBackBatcher = batcher
 	defer func() {
 		// Stop the server's fileIOPool before restoring globals to avoid races
@@ -514,7 +514,7 @@ func TestApplyAudiobookMetadata_WriteBackFalse(t *testing.T) {
 	origConfig := config.AppConfig
 	config.AppConfig.ITunes.AutoWriteBack = true
 	config.AppConfig.ITunes.LibraryReadPath = "/fake/path.xml"
-	batcher := itunesservice.NewWriteBackBatcher(1*time.Hour, itunesservice.WriteBackBatcherConfig{AutoWriteBack: true, ITLWriteBackEnabled: true, LibraryWritePath: "/tmp/test.itl"}, nil)
+	batcher := itunesservice.NewWriteBackBatcher(1*time.Hour, itunesservice.WriteBackBatcherConfig{AutoWriteBack: true, ITLWriteBackEnabled: true, LibraryITLPath: "/tmp/test.itl"}, nil)
 	server.writeBackBatcher = batcher
 	defer func() {
 		// Stop the server's fileIOPool before restoring globals to avoid races

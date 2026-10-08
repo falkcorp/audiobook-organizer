@@ -143,7 +143,7 @@ func (f *staleITunesPathFixer) libraryPaths() (read, write string) {
 		return f.p.itunesLibraryPaths()
 	}
 	cfg := config.Snapshot().ITunes
-	return cfg.LibraryReadPath, cfg.LibraryWritePath
+	return cfg.LibraryReadPath, cfg.LibraryITLPath
 }
 
 // loadLibrary reads and parses both libraries (read-only). Any failure is

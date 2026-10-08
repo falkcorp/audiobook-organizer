@@ -335,7 +335,7 @@ func fsRegroupProtectedPath(p string) bool {
 			return true
 		}
 	}
-	for _, lib := range []string{config.AppConfig.ITunes.LibraryReadPath, config.AppConfig.ITunes.LibraryWritePath} {
+	for _, lib := range []string{config.AppConfig.ITunes.LibraryReadPath, config.AppConfig.ITunes.LibraryITLPath} {
 		if lib != "" && under(filepath.Dir(lib)) {
 			return true
 		}

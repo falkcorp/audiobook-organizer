@@ -65,7 +65,7 @@ func hasReason(reasons []string, want string) bool {
 func TestReviewBulk_FixtureRefusesAndPinlessIsGated(t *testing.T) {
 	books, cand := refusedByAuthorAndTranscription()
 	svc := &fakeApplySvc{candidates: candidateJSON(t, cand)}
-	out := applyCachedCandidateForBookTimed(svc, books, nil, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, nil, "")
+	out := applyCachedCandidateForBookTimed(svc, books, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, nil, "")
 	if out.Applied || out.OwnerReviewed || out.Reason != applySkipGateBlocked {
 		t.Fatalf("pinless: outcome %+v, want gate_blocked", out)
 	}
@@ -95,7 +95,7 @@ func TestReviewBulk_OverridesCertaintyLegsAndRecordsIt(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			books, cand := refusedByAuthorAndTranscription()
 			svc := &fakeApplySvc{candidates: candidateJSON(t, cand)}
-			out := applyCachedCandidateForBookTimed(svc, books, nil, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, pin(cand), "")
+			out := applyCachedCandidateForBookTimed(svc, books, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, pin(cand), "")
 			if !out.Applied || !out.OwnerReviewed {
 				t.Fatalf("outcome %+v, want applied as owner-reviewed", out)
 			}
@@ -126,7 +126,7 @@ func TestReviewBulk_ASINConflictStillBlocks(t *testing.T) {
 			old := "B00OLDASIN"
 			books["b1"].ASIN = &old
 			svc := &fakeApplySvc{candidates: candidateJSON(t, cand)}
-			out := applyCachedCandidateForBookTimed(svc, books, nil, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, pin(cand), "")
+			out := applyCachedCandidateForBookTimed(svc, books, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, pin(cand), "")
 			if out.Applied || out.OwnerReviewed || out.Reason != applySkipGateBlocked {
 				t.Fatalf("outcome %+v, want gate_blocked", out)
 			}

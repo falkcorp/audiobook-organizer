@@ -30,7 +30,7 @@ type Plugin struct {
 	reflinkFile func(src, dst string) error
 	// itunesLibraryPaths names the iTunes libraries the stale-itunes-path
 	// fixer reads: the one the app imports from and the write-back .itl.
-	// Nil means config.Snapshot().ITunes (LibraryReadPath, LibraryWritePath),
+	// Nil means config.Snapshot().ITunes (LibraryReadPath, LibraryITLPath),
 	// the only value production uses; tests point it at fixture files.
 	itunesLibraryPaths func() (read, write string)
 	// ownerEmail is the configured owner_email an owner grant is re-checked

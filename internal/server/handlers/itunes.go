@@ -11,7 +11,6 @@ import (
 	stdlog "log/slog"
 	"net/http"
 	"os"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -21,7 +20,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
 )
 
@@ -62,69 +60,14 @@ type ITunesImportResponse struct {
 	Message     string `json:"message"`
 }
 
-// ITunesWriteBackRequest represents a write-back request for iTunes ITL updates.
-type ITunesWriteBackRequest struct {
-	LibraryPath  string               `json:"library_path"`
-	AudiobookIDs []string             `json:"audiobook_ids"`
-	PathMappings []itunes.PathMapping `json:"path_mappings,omitempty"`
-}
-
-// ITunesWriteBackResponse reports the result of an ITL write-back.
-type ITunesWriteBackResponse struct {
-	Success      bool   `json:"success"`
-	UpdatedCount int    `json:"updated_count"`
-	Message      string `json:"message"`
-}
-
-// ITunesBookMapping is a single book-to-iTunes-path mapping used in preview.
-//
-// Four path columns surface the full picture so users can see exactly what
-// is currently in iTunes vs what AO has on disk vs what AO would write back:
-//
-//   - ITunesPath               — what iTunes currently has, e.g. W:/foo/bar.m4b
-//   - ITunesPathTranslated     — local equivalent of ITunesPath after applying
-//     forward path mappings (so users can stat it)
-//   - AOPath                   — where AO has the file on disk (book.FilePath)
-//   - AOITunesTranslatedPath   — what AO will write into the iTunes ITL when
-//     write-back runs (ReverseRemapPath of AOPath)
-//
-// PathDiffers is true iff AOITunesTranslatedPath != ITunesPath — i.e. the
-// thing AO wants to write does not match what iTunes already has.
-//
-// Backwards compatibility: LocalPath is preserved as an alias of AOPath so
-// older clients keep working through the migration. Remove once no caller
-// reads it.
+// ITunesBookMapping is one book with an iTunes persistent ID, as listed by
+// GET /itunes/books.
 type ITunesBookMapping struct {
-	BookID                 string `json:"book_id"`
-	Title                  string `json:"title"`
-	Author                 string `json:"author"`
-	ITunesPersistentID     string `json:"itunes_persistent_id"`
-	ITunesPath             string `json:"itunes_path,omitempty"`
-	ITunesPathTranslated   string `json:"itunes_path_translated,omitempty"`
-	AOPath                 string `json:"ao_path"`
-	AOITunesTranslatedPath string `json:"ao_itunes_translated_path,omitempty"`
-	PathDiffers            bool   `json:"path_differs,omitempty"`
-
-	// LocalPath duplicates AOPath for backwards compatibility with the
-	// previous response shape. Will be removed once no caller reads it.
-	LocalPath string `json:"local_path"`
-}
-
-// ITunesWriteBackPreviewRequest is the wire type for POST /itunes/write-back-preview.
-//
-// LibraryPath is now optional — when empty, the handler uses the configured
-// ITunesLibraryReadPath. The dialog used to require the user to type this
-// path on every preview, which was confusing because the actual write-back
-// always targets the configured ITunesLibraryWritePath (.itl) regardless.
-type ITunesWriteBackPreviewRequest struct {
-	LibraryPath string   `json:"library_path,omitempty"`
-	BookIDs     []string `json:"book_ids,omitempty"`
-}
-
-// ITunesWriteBackPreviewResponse is returned by POST /itunes/write-back-preview.
-type ITunesWriteBackPreviewResponse struct {
-	Items []ITunesBookMapping `json:"items"`
-	Total int                 `json:"total"`
+	BookID             string `json:"book_id"`
+	Title              string `json:"title"`
+	Author             string `json:"author"`
+	ITunesPersistentID string `json:"itunes_persistent_id"`
+	LocalPath          string `json:"local_path"`
 }
 
 // ITunesImportStatusResponse is returned by GET /itunes/import/:id.
@@ -214,7 +157,6 @@ type ITunesImporter interface {
 	GetStatus(opID string) *itunesservice.ImportStatusSnapshot
 	GetStatusBulk(ids []string) map[string]*itunesservice.ImportStatusSnapshot
 	DiscoverLibraryPath() string
-	CollectITLUpdatesWithBookIDs() ([]itunes.ITLLocationUpdate, []string)
 }
 
 // ITunesStore is the narrow database interface ITunesHandler requires. It lists
@@ -229,7 +171,6 @@ type ITunesStore interface {
 	// is no CreateOperation/GetOperationByID here to reach one.
 	GetOperationV2(id string) (*database.OperationV2Row, error)
 	GetLibraryFingerprint(path string) (*database.LibraryFingerprintRecord, error)
-	MarkITunesSynced(bookIDs []string) (int64, error)
 }
 
 // ITunesHandler handles the iTunes HTTP endpoints: validate, test-mapping,
@@ -398,292 +339,6 @@ func (h *ITunesHandler) Import(c *gin.Context) {
 		OperationID: opID,
 		Status:      "queued",
 		Message:     "iTunes import operation queued",
-	})
-}
-
-// WriteBack updates the iTunes ITL binary with new file paths.
-func (h *ITunesHandler) WriteBack(c *gin.Context) {
-	if h.store == nil {
-		httputil.RespondWithInternalError(c, "database not initialized")
-		return
-	}
-
-	var req ITunesWriteBackRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		httputil.RespondWithBadRequest(c, err.Error())
-		return
-	}
-
-	if !config.AppConfig.ITunes.WriteBackEnabled || config.AppConfig.ITunes.LibraryWritePath == "" {
-		httputil.RespondWithBadRequest(c, "ITL write-back is not enabled in config")
-		return
-	}
-
-	pathMappings := req.PathMappings
-	if len(pathMappings) == 0 {
-		for _, m := range config.AppConfig.ITunes.PathMappings {
-			pathMappings = append(pathMappings, itunes.PathMapping{From: m.From, To: m.To})
-		}
-	}
-
-	var itlUpdates []itunes.ITLLocationUpdate
-	for _, id := range req.AudiobookIDs {
-		book, err := h.store.GetBookByID(id)
-		if err != nil {
-			httputil.RespondWithInternalError(c, fmt.Sprintf("failed to get audiobook %s: %v", id, err))
-			return
-		}
-		if book == nil || book.ITunesPersistentID == nil || *book.ITunesPersistentID == "" {
-			continue
-		}
-
-		// TASK-006 / SPEC §1b: normalize the remapped path into the canonical
-		// WinPath (the LE writer derives the 0x0B URL). Unmappable values are
-		// skipped with a WARN + metric, never written raw into 0x0D (CRIT-2).
-		itunesPath := itunes.ReverseRemapPath(book.FilePath, pathMappings)
-		pair, err := itunes.NewLocationPair(itunesPath)
-		if err != nil {
-			metrics.RecordITunesLocationUnmappable("invalid_path")
-			stdlog.Warn("iTunes update-locations: skipping unmappable location (never written raw — CRIT-2)",
-				"pid", *book.ITunesPersistentID, "raw", logger.SanitizeLogValue(itunesPath), "error", err.Error())
-			continue
-		}
-		itlUpdates = append(itlUpdates, itunes.ITLLocationUpdate{
-			PersistentID: *book.ITunesPersistentID,
-			NewLocation:  pair.WinPath,
-		})
-	}
-
-	if len(itlUpdates) == 0 {
-		httputil.RespondWithBadRequest(c, "no audiobooks with iTunes persistent IDs found")
-		return
-	}
-
-	itlPath := config.AppConfig.ITunes.LibraryWritePath
-	itlResult, itlErr := itunes.UpdateITLLocations(itlPath, itlPath+".tmp", itlUpdates)
-	if itlErr != nil {
-		stdlog.Warn("ITL write-back failed", "err", itlErr)
-		httputil.RespondWithInternalError(c, fmt.Sprintf("ITL write-back failed: %v", itlErr))
-		return
-	}
-
-	if renameErr := itunes.RenameITLFile(itlPath+".tmp", itlPath); renameErr != nil {
-		stdlog.Warn("ITL rename failed", "err", renameErr)
-		httputil.RespondWithInternalError(c, fmt.Sprintf("ITL rename failed: %v", renameErr))
-		return
-	}
-
-	stdlog.Info("ITL write-back: updated tracks", "count", itlResult.UpdatedCount)
-	httputil.RespondWithOK(c, ITunesWriteBackResponse{
-		Success:      true,
-		UpdatedCount: itlResult.UpdatedCount,
-		Message:      fmt.Sprintf("Successfully updated %d audiobook locations in ITL", itlResult.UpdatedCount),
-	})
-}
-
-// WriteBackAll writes ALL books with iTunes persistent IDs back to the ITL.
-func (h *ITunesHandler) WriteBackAll(c *gin.Context) {
-	if !h.itunesEnabledOrError(c) {
-		return
-	}
-	if h.store == nil {
-		httputil.RespondWithInternalError(c, "database not initialized")
-		return
-	}
-
-	if !config.AppConfig.ITunes.WriteBackEnabled {
-		httputil.RespondWithBadRequest(c, "ITL write-back is not enabled in config")
-		return
-	}
-
-	itlPath := config.AppConfig.ITunes.LibraryWritePath
-	if itlPath == "" {
-		httputil.RespondWithBadRequest(c, "no ITL library path configured")
-		return
-	}
-
-	if _, err := os.Stat(itlPath); os.IsNotExist(err) {
-		httputil.RespondWithBadRequest(c, "ITL file not found at configured path")
-		return
-	}
-
-	if err := itunesservice.CheckITLConflict(itlPath); err != nil {
-		httputil.RespondWithConflict(c, err.Error())
-		return
-	}
-
-	itlUpdates, writtenBookIDs := h.importer.CollectITLUpdatesWithBookIDs()
-
-	if len(itlUpdates) == 0 {
-		httputil.RespondWithOK(c, gin.H{
-			"success":       true,
-			"updated_count": 0,
-			"message":       "no books with iTunes persistent IDs found",
-		})
-		return
-	}
-
-	itlResult, itlErr := itunes.UpdateITLLocations(itlPath, itlPath+".tmp", itlUpdates)
-	if itlErr != nil {
-		httputil.RespondWithInternalError(c, fmt.Sprintf("ITL write-back failed: %v", itlErr))
-		return
-	}
-
-	if renameErr := itunes.RenameITLFile(itlPath+".tmp", itlPath); renameErr != nil {
-		httputil.RespondWithInternalError(c, fmt.Sprintf("ITL rename failed: %v", renameErr))
-		return
-	}
-
-	itunesservice.RecordITLReadTime()
-	stdlog.Info("Bulk ITL write-back: updated tracks out of candidates", "updated", itlResult.UpdatedCount, "candidates", len(itlUpdates))
-
-	if n, markErr := h.store.MarkITunesSynced(writtenBookIDs); markErr == nil && n > 0 {
-		stdlog.Info("Marked books as iTunes-synced after write-back", "count", n)
-	}
-
-	httputil.RespondWithOK(c, gin.H{
-		"success":            true,
-		"updated_count":      itlResult.UpdatedCount,
-		"file_pid_pairs":     len(itlUpdates),
-		"primary_book_count": len(writtenBookIDs),
-		"message":            fmt.Sprintf("ITL write-back complete: %d ITL chunks updated across %d (file,PID) pairs from %d primary books", itlResult.UpdatedCount, len(itlUpdates), len(writtenBookIDs)),
-	})
-}
-
-// WriteBackPreview returns a comparison of local paths vs iTunes paths.
-func (h *ITunesHandler) WriteBackPreview(c *gin.Context) {
-	if h.store == nil {
-		httputil.RespondWithInternalError(c, "database not initialized")
-		return
-	}
-
-	var req ITunesWriteBackPreviewRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		httputil.RespondWithBadRequest(c, err.Error())
-		return
-	}
-
-	// Fall back to the configured read path when the request omits one.
-	// The dialog no longer requires users to type the .xml path — they
-	// configure it once in Settings and the preview endpoint uses it
-	// directly. The actual write-back always targets the configured
-	// ITunesLibraryWritePath (.itl) regardless of this read path.
-	libraryPath := strings.TrimSpace(req.LibraryPath)
-	if libraryPath != "" {
-		cleanLibPath, err := pathvalidation.CleanAbsolutePath(libraryPath)
-		if err != nil {
-			httputil.RespondWithBadRequest(c, "invalid library_path: "+err.Error())
-			return
-		}
-		libraryPath = cleanLibPath
-	} else {
-		libraryPath = config.AppConfig.ITunes.LibraryReadPath
-	}
-	if libraryPath == "" {
-		httputil.RespondWithBadRequest(c, "no iTunes library path configured (set ITunesLibraryReadPath in settings)")
-		return
-	}
-
-	if _, err := os.Stat(libraryPath); os.IsNotExist(err) {
-		httputil.RespondWithBadRequest(c, "iTunes library file not found")
-		return
-	}
-
-	library, err := itunes.ParseLibrary(libraryPath)
-	if err != nil {
-		httputil.InternalError(c, "failed to parse iTunes library", err)
-		return
-	}
-
-	itunesLocations := make(map[string]string)
-	for _, track := range library.Tracks {
-		if track.PersistentID != "" {
-			decoded, decErr := itunes.DecodeLocation(track.Location)
-			if decErr == nil {
-				itunesLocations[track.PersistentID] = decoded
-			} else {
-				itunesLocations[track.PersistentID] = track.Location
-			}
-		}
-	}
-
-	var books []database.Book
-	if len(req.BookIDs) > 0 {
-		for _, id := range req.BookIDs {
-			book, bErr := h.store.GetBookByID(id)
-			if bErr != nil || book == nil {
-				continue
-			}
-			// Soft-deleted books are excluded here as well as in the
-			// ListBooksByITunesPID branch below. Fixing only the listing
-			// would have left this path open: a client that names book IDs
-			// explicitly goes through GetBookByID, which returns trashed rows
-			// by design (that is how restore reads them), so the exclusion has
-			// to be stated at the point of use. The preview decides what gets
-			// written back into the iTunes library, and that must not include
-			// a book the user put in the trash — by whichever route it was
-			// asked for.
-			if book.IsSoftDeleted() {
-				continue
-			}
-			if book.ITunesPersistentID != nil && *book.ITunesPersistentID != "" {
-				books = append(books, *book)
-			}
-		}
-	} else {
-		// Pushdown: use the memdb itunes_persistent_id index so we only
-		// walk books that actually have a PID, instead of loading all
-		// ~50K books and post-filtering.
-		var bErr error
-		books, bErr = h.store.ListBooksByITunesPID(0, 0)
-		if bErr != nil {
-			httputil.InternalError(c, "failed to list books", bErr)
-			return
-		}
-	}
-
-	var previewMappings []itunes.PathMapping
-	for _, m := range config.AppConfig.ITunes.PathMappings {
-		previewMappings = append(previewMappings, itunes.PathMapping{From: m.From, To: m.To})
-	}
-	// Forward-mapper for translating an iTunes location into its local
-	// equivalent. Wraps the existing ImportOptions.RemapPath because that
-	// is the canonical forward direction; the receiver pattern is
-	// historical and not worth refactoring here.
-	forwardOpts := itunes.ImportOptions{PathMappings: previewMappings}
-
-	items := make([]ITunesBookMapping, 0, len(books))
-	for _, book := range books {
-		persistentID := *book.ITunesPersistentID
-		itunesPath := itunesLocations[persistentID]
-		author := ""
-		if book.AuthorID != nil {
-			if a, aErr := h.store.GetAuthorByID(*book.AuthorID); aErr == nil && a != nil {
-				author = a.Name
-			}
-		}
-		aoITunesTranslated := itunes.ReverseRemapPath(book.FilePath, previewMappings)
-		itunesTranslated := ""
-		if itunesPath != "" {
-			itunesTranslated = forwardOpts.RemapPath(itunesPath)
-		}
-		items = append(items, ITunesBookMapping{
-			BookID:                 book.ID,
-			Title:                  book.Title,
-			Author:                 author,
-			ITunesPersistentID:     persistentID,
-			ITunesPath:             itunesPath,
-			ITunesPathTranslated:   itunesTranslated,
-			AOPath:                 book.FilePath,
-			AOITunesTranslatedPath: aoITunesTranslated,
-			PathDiffers:            aoITunesTranslated != itunesPath,
-			LocalPath:              book.FilePath,
-		})
-	}
-
-	httputil.RespondWithOK(c, ITunesWriteBackPreviewResponse{
-		Items: items,
-		Total: len(items),
 	})
 }
 
@@ -1008,7 +663,7 @@ func (h *ITunesHandler) LibraryStats(c *gin.Context) {
 	if !h.itunesEnabledOrError(c) {
 		return
 	}
-	itlPath := config.AppConfig.ITunes.LibraryWritePath
+	itlPath := config.AppConfig.ITunes.LibraryITLPath
 	if itlPath == "" {
 		httputil.RespondWithBadRequest(c, "no ITL library path configured")
 		return

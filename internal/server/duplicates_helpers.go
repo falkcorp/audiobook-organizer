@@ -888,7 +888,6 @@ func executeSeriesNormalizeCore(
 	ctx context.Context,
 	store maintenanceStore,
 	operationID string,
-	enqueueWriteBack func(bookID string),
 ) (affectedBookIDs []string, err error) {
 	// Fatal, and deliberately so. An empty action list means "nothing needs
 	// normalizing"; a failed listing means "nothing was examined". Continuing past
@@ -1128,10 +1127,6 @@ func executeSeriesNormalizeCore(
 	// before it, would be clobbered by that full-column replacement.
 	if pErr := writeStrippedSeriesPositions(ctx, store, positionByBook); pErr != nil {
 		errs = append(errs, pErr.Error())
-	}
-
-	for _, id := range affectedBookIDs {
-		enqueueWriteBack(id)
 	}
 
 	if len(errs) > 0 {

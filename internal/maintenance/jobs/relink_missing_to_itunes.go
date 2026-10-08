@@ -25,11 +25,7 @@ import (
 
 func init() { maintenance.Register(&relinkMissingToITunesJob{}) }
 
-type relinkMissingToITunesJob struct {
-	enqueuer maintenance.WriteBackEnqueuer
-}
-
-func (j *relinkMissingToITunesJob) InjectEnqueuer(e maintenance.WriteBackEnqueuer) { j.enqueuer = e }
+type relinkMissingToITunesJob struct{}
 
 func (j *relinkMissingToITunesJob) ID() string       { return "relink-missing-to-itunes" }
 func (j *relinkMissingToITunesJob) Name() string     { return "Relink Missing to iTunes" }
@@ -138,9 +134,6 @@ func (j *relinkMissingToITunesJob) Run(ctx context.Context, store maintenance.Jo
 					break
 				}
 				rmt_updateBookFiles(store, book.ID, newFP, fi, organizerRoot)
-				if j.enqueuer != nil {
-					j.enqueuer.Enqueue(book.ID)
-				}
 			}
 		default:
 			best := rmt_disambiguate(matches, authorName, book.Title)
@@ -161,9 +154,6 @@ func (j *relinkMissingToITunesJob) Run(ctx context.Context, store maintenance.Jo
 						break
 					}
 					rmt_updateBookFiles(store, book.ID, best, fi, organizerRoot)
-					if j.enqueuer != nil {
-						j.enqueuer.Enqueue(book.ID)
-					}
 				}
 			} else {
 				ambiguous++

@@ -81,7 +81,7 @@ func TestDDMergeDuplicateBook_MovesFilesAndClearsDupPath(t *testing.T) {
 	dup := ddMustBook(t, s, &database.Book{Title: "Book", FilePath: shared})
 	f := ddMustFile(t, s, &database.BookFile{BookID: dup.ID, FilePath: shared, ITunesPersistentID: "PID-1"})
 
-	if err := ddMergeDuplicateBook(s, keeper, dup, false, nil); err != nil {
+	if err := ddMergeDuplicateBook(s, keeper, dup, false); err != nil {
 		t.Fatalf("ddMergeDuplicateBook: %v", err)
 	}
 
@@ -124,7 +124,7 @@ func TestDDMergeDuplicateBook_MoveFailureLeavesDupLive(t *testing.T) {
 		},
 		MoveBookFilesToBookFunc: func([]string, string, string) error { return boom },
 	}
-	err := ddMergeDuplicateBook(store, &database.Book{ID: "keep"}, &database.Book{ID: "dup"}, false, nil)
+	err := ddMergeDuplicateBook(store, &database.Book{ID: "keep"}, &database.Book{ID: "dup"}, false)
 	if !errors.Is(err, boom) {
 		t.Fatalf("err = %v, want the move failure", err)
 	}
@@ -143,7 +143,7 @@ func TestDDMergeDuplicateBook_RefusesITunesLibrary(t *testing.T) {
 	ddMustFile(t, s, &database.BookFile{BookID: dup.ID, FilePath: p})
 
 	for _, dry := range []bool{true, false} {
-		err := ddMergeDuplicateBook(s, keeper, dup, dry, nil)
+		err := ddMergeDuplicateBook(s, keeper, dup, dry)
 		if !errors.Is(err, merge.ErrITunesProtected) {
 			t.Fatalf("dryRun=%v: err = %v, want ErrITunesProtected", dry, err)
 		}
@@ -188,7 +188,7 @@ func TestDDMergeDuplicateBook_PrimaryDupHandsOffToKeeper(t *testing.T) {
 	}
 	keeper, dup = ddMustGet(t, s, keeper.ID), ddMustGet(t, s, dup.ID)
 
-	if err := ddMergeDuplicateBook(s, keeper, dup, false, nil); err != nil {
+	if err := ddMergeDuplicateBook(s, keeper, dup, false); err != nil {
 		t.Fatalf("ddMergeDuplicateBook: %v", err)
 	}
 	members, err := s.GetBooksByVersionGroup(vg)

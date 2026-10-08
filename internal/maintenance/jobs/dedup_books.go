@@ -28,11 +28,7 @@ var ddLog = logger.New("dedup-books")
 
 func init() { maintenance.Register(&dedupBooksJob{}) }
 
-type dedupBooksJob struct {
-	enqueuer maintenance.WriteBackEnqueuer
-}
-
-func (j *dedupBooksJob) InjectEnqueuer(e maintenance.WriteBackEnqueuer) { j.enqueuer = e }
+type dedupBooksJob struct{}
 
 func (j *dedupBooksJob) ID() string       { return "dedup-books" }
 func (j *dedupBooksJob) Name() string     { return "Deduplicate Books" }
@@ -170,7 +166,7 @@ func (j *dedupBooksJob) Run(ctx context.Context, store maintenance.JobStore, rep
 				continue
 			}
 			dup := &live[i]
-			mergeErr := ddMergeDuplicateBookSim(store, sim, keeper, dup, dryRun, j.enqueuer)
+			mergeErr := ddMergeDuplicateBookSim(store, sim, keeper, dup, dryRun)
 			phase2.record(mergeErr)
 			if mergeErr != nil {
 				ddLog.Error("phase2 merge dup=%s keeper=%s: %s", logger.SanitizeLogValue(dup.ID), logger.SanitizeLogValue(keeper.ID), logger.SanitizeLogValue(mergeErr.Error()))
@@ -238,7 +234,7 @@ func (j *dedupBooksJob) Run(ctx context.Context, store maintenance.JobStore, rep
 				continue
 			}
 			dup := &live[i]
-			mergeErr := ddMergeDuplicateBookSim(store, sim, keeper, dup, dryRun, j.enqueuer)
+			mergeErr := ddMergeDuplicateBookSim(store, sim, keeper, dup, dryRun)
 			phase3.record(mergeErr)
 			if mergeErr != nil {
 				ddLog.Error("phase3 merge dup=%s keeper=%s: %s", logger.SanitizeLogValue(dup.ID), logger.SanitizeLogValue(keeper.ID), logger.SanitizeLogValue(mergeErr.Error()))
@@ -949,12 +945,12 @@ func ddRetireMergedDup(store ddMergeStore, sim *ddSim, keeper, dup *database.Boo
 // fresh read of the dup right before the retire (ddRetireMergedDup), because
 // by then steps 2-4 have written and a refusal can no longer leave "nothing
 // happened".
-func ddMergeDuplicateBook(store ddMergeStore, keeper *database.Book, dup *database.Book, dryRun bool, enqueuer maintenance.WriteBackEnqueuer) error {
-	return ddMergeDuplicateBookSim(store, nil, keeper, dup, dryRun, enqueuer)
+func ddMergeDuplicateBook(store ddMergeStore, keeper *database.Book, dup *database.Book, dryRun bool) error {
+	return ddMergeDuplicateBookSim(store, nil, keeper, dup, dryRun)
 }
 
 // ddMergeDuplicateBookSim is ddMergeDuplicateBook with the run's overlay.
-func ddMergeDuplicateBookSim(store ddMergeStore, sim *ddSim, keeper *database.Book, dup *database.Book, dryRun bool, enqueuer maintenance.WriteBackEnqueuer) error {
+func ddMergeDuplicateBookSim(store ddMergeStore, sim *ddSim, keeper *database.Book, dup *database.Book, dryRun bool) error {
 	// The caller's copies were loaded before earlier merges in this run: a
 	// keeper that joined a group and was promoted in phase 2 can be phase 3's
 	// dup and still read as groupless and non-primary, so its group would be
@@ -1073,16 +1069,6 @@ func ddMergeDuplicateBookSim(store ddMergeStore, sim *ddSim, keeper *database.Bo
 		}
 	}
 
-	dupMappings, err := store.GetExternalIDsForBook(dup.ID)
-	if err != nil {
-		return fmt.Errorf("read external IDs of dup %s: %w", dup.ID, err)
-	}
-	var dupPIDs []string
-	for _, m := range dupMappings {
-		if m.Source == "itunes" && m.ExternalID != "" && !m.Tombstoned {
-			dupPIDs = append(dupPIDs, m.ExternalID)
-		}
-	}
 	if err := store.ReassignExternalIDs(dup.ID, keeper.ID); err != nil {
 		return fmt.Errorf("reassign external IDs %s -> %s: %w", dup.ID, keeper.ID, err)
 	}
@@ -1116,13 +1102,6 @@ func ddMergeDuplicateBookSim(store ddMergeStore, sim *ddSim, keeper *database.Bo
 		keeper.IsPrimaryVersion = &t
 	}
 	sim.retire(dup.ID, successor)
-
-	if enqueuer != nil && len(dupPIDs) > 0 {
-		for _, pid := range dupPIDs {
-			enqueuer.EnqueueRemove(pid)
-		}
-		ddLog.Info("queued ITL removals for dup count=%d dup=%s", len(dupPIDs), logger.SanitizeLogValue(dup.ID))
-	}
 	return nil
 }
 

@@ -25,7 +25,7 @@ func noMatchBooks() fakeBooks {
 // file work runs, and the book is reported under its own skip reason.
 func TestApplyCachedCandidate_SkipsNoMatchBook(t *testing.T) {
 	svc := &fakeApplySvc{candidates: oneCandidate(t)}
-	out := applyCachedCandidateForBook(svc, noMatchBooks(), &fakeITunes{}, "b1", true, nil)
+	out := applyCachedCandidateForBook(svc, noMatchBooks(), "b1", true, nil)
 	if out.Applied || len(svc.appliedIDs) != 0 || len(svc.finishCalls) != 0 {
 		t.Fatalf("a no-match book was applied: outcome %+v applied %v finish %d", out, svc.appliedIDs, len(svc.finishCalls))
 	}
@@ -56,7 +56,7 @@ func TestApplyCachedCandidate_ReviewApprovalOverridesNoMatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	pin := rowPin(cand)
-	out := applyCachedCandidateForBookTimed(svc, noMatchBooks(), &fakeITunes{}, "b1", false, nil,
+	out := applyCachedCandidateForBookTimed(svc, noMatchBooks(), "b1", false, nil,
 		metafetch.NewApplyPhaseTimings(), nil, pin, "")
 	if !out.Applied || len(svc.appliedIDs) != 1 {
 		t.Fatalf("the owner's approval was refused: outcome %+v", out)

@@ -50,7 +50,7 @@ func TestApplyCachedCandidate_GateRefuses(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			svc := &fakeApplySvc{candidates: candidateJSON(t, tc.cand), identityErr: tc.identity}
-			out := applyCachedCandidateForBook(svc, bigCats1, &fakeITunes{}, "b1", true, nil)
+			out := applyCachedCandidateForBook(svc, bigCats1, "b1", true, nil)
 			if out.Applied || out.Reason != applySkipGateBlocked {
 				t.Fatalf("applied=%v reason=%q, want refused with %q", out.Applied, out.Reason, applySkipGateBlocked)
 			}
@@ -66,7 +66,7 @@ func TestApplyCachedCandidate_GateRefuses(t *testing.T) {
 
 	// And the matching volume at 0.95 goes through.
 	svc := &fakeApplySvc{candidates: candidateJSON(t, metafetch.MetadataCandidate{Title: "Big Cats 1", SeriesPosition: "1", Score: 0.95, DurationSec: tenHours})}
-	if out := applyCachedCandidateForBook(svc, bigCats1, &fakeITunes{}, "b1", false, nil); !out.Applied {
+	if out := applyCachedCandidateForBook(svc, bigCats1, "b1", false, nil); !out.Applied {
 		t.Fatalf("matching volume refused: reason=%q err=%v gate=%+v", out.Reason, out.Err, out.Gate)
 	}
 }

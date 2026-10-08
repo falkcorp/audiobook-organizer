@@ -11,7 +11,7 @@
 //
 // This is SCAFFOLD (P0): the types + derivation + fail-closed assertions. It is
 // inert until an operator populates ITunesConfig.Libraries — when Libraries is
-// empty, Resolve() is a no-op and the legacy LibraryReadPath/LibraryWritePath are
+// empty, Resolve() is a no-op and the legacy LibraryReadPath/LibraryITLPath are
 // left exactly as loaded, so nothing changes for existing deployments.
 
 package config
@@ -57,18 +57,18 @@ func (s LibrarySet) Configured() bool {
 	return s.AO.ITLPath != "" || s.Original.ITLPath != "" || s.Original.XMLPath != ""
 }
 
-// Resolve derives the legacy LibraryReadPath/LibraryWritePath shims from the
+// Resolve derives the legacy LibraryReadPath/LibraryITLPath shims from the
 // 4-state model so every ambient reader keeps working unchanged (spec §2.3). It is
 // a no-op when Libraries is not configured, preserving legacy behavior exactly.
 //
-//   - LibraryWritePath := Libraries.AO.ITLPath — always (the write target never changes).
+//   - LibraryITLPath := Libraries.AO.ITLPath — always (the write target never changes).
 //   - LibraryReadPath  := ImportSource=="ao" ? Libraries.AO.ITLPath : Libraries.Original.XMLPath.
 func (c *ITunesConfig) Resolve() {
 	if c == nil || !c.Libraries.Configured() {
 		return
 	}
 	if c.Libraries.AO.ITLPath != "" {
-		c.LibraryWritePath = c.Libraries.AO.ITLPath
+		c.LibraryITLPath = c.Libraries.AO.ITLPath
 	}
 	switch c.Libraries.ImportSource {
 	case "ao":
@@ -133,9 +133,9 @@ func (c *ITunesConfig) ValidateLibraries(protectedPaths []string) []string {
 		errs = append(errs, "itunes.libraries.original.frozen must be true while pointed_at==\"ao\" (the recoverable fallback source cannot be mutable)")
 	}
 
-	// 4. No zero-value write target while any sync-cycle op is enabled.
-	if (c.SyncEnabled || c.WriteBackEnabled) && L.AO.ITLPath == "" {
-		errs = append(errs, "itunes.libraries.ao.itl_path must be set when itunes sync/write-back is enabled (no zero-value write target)")
+	// 4. No zero-value AO library while sync is enabled.
+	if c.SyncEnabled && L.AO.ITLPath == "" {
+		errs = append(errs, "itunes.libraries.ao.itl_path must be set when itunes sync is enabled")
 	}
 
 	return errs
