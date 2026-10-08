@@ -77,15 +77,6 @@ func FileSHA256Hex(data []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// MatchesFileSHA reports whether data hashes to the recorded FileSHA256.
-// Returns true when no checksum is recorded (nothing to contradict).
-func (id *LibraryIdentity) MatchesFileSHA(data []byte) bool {
-	if id == nil || id.FileSHA256 == "" {
-		return true
-	}
-	return FileSHA256Hex(data) == id.FileSHA256
-}
-
 // ExtractLibraryPIDHex returns the Library Persistent ID from an hdfm header
 // as 16 lowercase hex chars (MSB-first, matching the Album Artwork cache dir
 // name), or "" when the header is nil or too short to carry the field.

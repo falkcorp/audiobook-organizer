@@ -1,101 +1,49 @@
-// file: internal/itunes/itl_le_verify.go
-// version: 1.0.1
-// guid: 8d9e0f1a-2b3c-4d5e-6f7a-8b9c0d1e2f3a
+// file: internal/itunes/itl_read_helpers.go
+// version: 1.0.0
+// guid: 2d6f9a41-8c3e-4b7d-a5f2-91e0c4b8d763
+// last-edited: 2026-10-07
 //
-// Consistency verification for LE-format ITL payloads. Detects dangling
-// references that would cause iTunes to refuse the library as "damaged":
-//
-//   * `mtph` (playlist track items) referencing TrackIDs that don't exist
-//     in the master track list (msdh blockType 1).
-//
-// This guards against the May-2026 corruption class where RemoveTracksByPIDLE
-// excised mith blocks but left orphaned references in playlists, causing
-// iTunes to mark the library file as damaged on next open.
-// last-edited: 2026-09-02
+// Read-side ITL helpers that lived in the removed writer files (iTunes is
+// import-only since 2026-10-07). The safety-contract audit, the identity
+// computation, the mhoh audit and the PID repair planner still use them; none
+// of them writes the library.
 
 package itunes
 
 import (
-	"fmt"
+	"log/slog"
+	"strings"
+
+	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 )
 
-// VerifyITLNoNewDanglingRefsLE checks that `after` does not introduce any new
-// dangling playlist→track references that were not already present in
-// `before`. iTunes tolerates a small number of pre-existing orphan mtph items,
-// but introducing new ones causes it to mark the library as damaged on next
-// open.
-//
-// Returns nil if `after` is at least as clean as `before`. Returns a non-nil
-// error naming the newly-introduced dangling TIDs otherwise. If either
-// payload isn't recognizably LE, the check is skipped (returns nil).
-func VerifyITLNoNewDanglingRefsLE(before, after []byte) error {
-	if !detectLE(after) {
-		return nil
-	}
-	afterTIDs := CollectMasterTrackIDsLE(after)
-	if afterTIDs == nil {
-		return nil
-	}
-	afterDangling := FindDanglingMtphRefsLE(after, afterTIDs)
-	if len(afterDangling) == 0 {
-		return nil
-	}
+// headerFixedPrefix is the bytes before the version string: "hdfm"(4) +
+// headerLen(4) + fileLen(4) + unknown(4) + verLen(1) = 17. The remainder
+// (which carries the count fields) begins at 17 + len(version).
+const headerFixedPrefix = 17
 
-	// Build the baseline orphan set so we can ignore pre-existing ones.
-	preExisting := map[uint32]struct{}{}
-	if before != nil && detectLE(before) {
-		if beforeTIDs := CollectMasterTrackIDsLE(before); beforeTIDs != nil {
-			for _, tid := range FindDanglingMtphRefsLE(before, beforeTIDs) {
-				preExisting[tid] = struct{}{}
-			}
+// findMsdhByType finds the msdh container with the given blockType.
+// Returns (offset, headerLen, totalLen) or (-1, 0, 0) if not found.
+func findMsdhByType(data []byte, blockType int) (int, int, int) {
+	offset := 0
+	for offset+16 <= len(data) {
+		tag := readTag(data, offset)
+		if tag != "msdh" {
+			break
 		}
-	}
+		hdrLen := int(readUint32LE(data, offset+4))
+		totalLen := int(readUint32LE(data, offset+8))
+		bt := int(readUint32LE(data, offset+12))
 
-	var introduced []uint32
-	for _, tid := range afterDangling {
-		if _, ok := preExisting[tid]; !ok {
-			introduced = append(introduced, tid)
+		if totalLen < 16 || offset+totalLen > len(data) {
+			break
 		}
+		if bt == blockType {
+			return offset, hdrLen, totalLen
+		}
+		offset += totalLen
 	}
-	if len(introduced) == 0 {
-		return nil
-	}
-
-	const sample = 5
-	preview := introduced
-	if len(preview) > sample {
-		preview = preview[:sample]
-	}
-	return fmt.Errorf("itl consistency check failed: write would introduce %d new dangling playlist track refs (e.g. TrackIDs %v); refusing to write to avoid corrupting iTunes library", len(introduced), preview)
-}
-
-// VerifyITLNoDanglingRefsLE checks that `data` has no dangling playlist→track
-// references at all. Prefer VerifyITLNoNewDanglingRefsLE when validating a
-// write, since iTunes tolerates a small number of pre-existing orphans.
-func VerifyITLNoDanglingRefsLE(data []byte) error {
-	if !detectLE(data) {
-		return nil
-	}
-
-	tids := CollectMasterTrackIDsLE(data)
-	if tids == nil {
-		// Couldn't locate master track list — don't fail-closed on parse
-		// surprises, but log the situation by returning nil. Callers can
-		// still detect catastrophic corruption via track count assertions.
-		return nil
-	}
-
-	missing := FindDanglingMtphRefsLE(data, tids)
-	if len(missing) == 0 {
-		return nil
-	}
-
-	const sample = 5
-	preview := missing
-	if len(preview) > sample {
-		preview = preview[:sample]
-	}
-	return fmt.Errorf("itl consistency check failed: %d playlist track refs point at non-existent tracks (e.g. TrackIDs %v); refusing to write to avoid corrupting iTunes library", len(missing), preview)
+	return -1, 0, 0
 }
 
 // CollectMasterTrackIDsLE walks the master-track-list msdh (blockType 1) and
@@ -204,4 +152,25 @@ func scanMtphRange(data []byte, start, end int, masterTIDs map[uint32]struct{}, 
 
 		offset += chunkSize
 	}
+}
+
+// canonicalWinLocationForFile canonicalizes a single local FilePath into the
+// native Windows ITL 0x0D form (W:\...). ReverseRemapPath yields forward slashes;
+// the ITL 0x0D form needs backslashes and isWindowsAbsPath rejects any '/', so we
+// flip separators before validating. An unmappable path (still /mnt/... → \mnt\...
+// with no drive letter) is rejected → skipped, never written raw (CRIT-2).
+// metricLabel distinguishes the caller in the unmappable metric.
+func canonicalWinLocationForFile(localPath, pidForLog, metricLabel string, mappings []PathMapping) (string, bool) {
+	if localPath == "" {
+		return "", false
+	}
+	winish := strings.ReplaceAll(ReverseRemapPath(localPath, mappings), "/", `\`)
+	pair, err := NewLocationPair(winish)
+	if err != nil {
+		metrics.RecordITunesLocationUnmappable(metricLabel)
+		slog.Warn("ITL relocate: skipping file with unmappable location (never written raw — CRIT-2)",
+			"pid", pidForLog, "local", localPath, "error", err.Error())
+		return "", false
+	}
+	return pair.WinPath, true
 }

@@ -148,7 +148,6 @@ var slogRatchet = map[string]int{
 	"internal/maintenance/jobs/fix_book_file_paths.go":           4,
 	"internal/maintenance/jobs/fix_file_modes.go":                2,
 	"internal/maintenance/jobs/fix_read_by_narrator.go":          2,
-	"internal/maintenance/jobs/generate_itl_tests.go":            3,
 	"internal/maintenance/jobs/normalize_primary_flags.go":       5,
 	"internal/maintenance/jobs/prune_book_snapshots.go":          1,
 	"internal/maintenance/jobs/purge_ua_duplicates.go":           4,

@@ -52,7 +52,7 @@ func TestHandleDownload_NotConfigured(t *testing.T) {
 	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/library/download", nil))
 
 	assert.Equal(t, http.StatusNotFound, w.Code)
-	assert.Contains(t, w.Body.String(), "ITunesLibraryWritePath is not configured")
+	assert.Contains(t, w.Body.String(), "itunes.library_write_path) is not configured")
 }
 
 func TestHandleDownload_FileNotFound(t *testing.T) {

@@ -254,10 +254,9 @@ func buildSyntheticITL(t *testing.T, version string, compress bool, pid [8]byte,
 	return file.Bytes()
 }
 
-func TestSyntheticITL_ParseAndUpdate(t *testing.T) {
+func TestSyntheticITL_Parse(t *testing.T) {
 	pid := [8]byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}
 	originalLoc := "/music/old/song.mp3"
-	newLoc := "/music/new/song.mp3"
 
 	for _, compress := range []bool{false, true} {
 		name := "uncompressed"
@@ -277,13 +276,6 @@ func TestSyntheticITL_ParseAndUpdate(t *testing.T) {
 			assert.Equal(t, originalLoc, lib.Tracks[0].Location)
 			assert.Equal(t, 42, lib.Tracks[0].TrackID)
 			assert.Equal(t, pid, lib.Tracks[0].PersistentID)
-
-			// Update — BE fixture, so BE writeback is refused (K12).
-			outPath := filepath.Join(tmpDir, "updated.itl")
-			_, err = UpdateITLLocations(itlPath, outPath, []ITLLocationUpdate{
-				{PersistentID: pidToHex(pid), NewLocation: newLoc},
-			})
-			require.ErrorIs(t, err, ErrBEWritebackUnsupported, "BE writeback must be refused (K12)")
 		})
 	}
 }
@@ -297,14 +289,6 @@ func TestSyntheticITL_Validate(t *testing.T) {
 
 	err := ValidateITL(itlPath)
 	assert.NoError(t, err)
-}
-
-func TestUpdateITLLocations_NoUpdates(t *testing.T) {
-	tmpDir := t.TempDir()
-	outPath := filepath.Join(tmpDir, "out.itl")
-	result, err := UpdateITLLocations("", outPath, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 0, result.UpdatedCount)
 }
 
 // ---------------------------------------------------------------------------
@@ -397,111 +381,6 @@ func TestParseITL_Playlists(t *testing.T) {
 	assert.Equal(t, "My Playlist", lib.Playlists[0].Title)
 	require.Len(t, lib.Playlists[0].Items, 1)
 	assert.Equal(t, 99, lib.Playlists[0].Items[0])
-}
-
-// TestInsertITLTracks: buildSyntheticITL emits a big-endian payload, refused by
-// the SafeWriteITL chokepoint (TASK-004, SPEC §3 step 1 / K12). The LE insert
-// path is covered by itl_le_*_test.go and the combined-mutate tests.
-func TestInsertITLTracks(t *testing.T) {
-	pid := [8]byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}
-	itlData := buildSyntheticITL(t, "12.0.0", false, pid, "/music/existing.mp3")
-
-	tmpDir := t.TempDir()
-	itlPath := filepath.Join(tmpDir, "test.itl")
-	outPath := filepath.Join(tmpDir, "out.itl")
-	require.NoError(t, os.WriteFile(itlPath, itlData, 0644))
-
-	_, err := InsertITLTracks(itlPath, outPath, []ITLNewTrack{
-		{
-			Location:    "/music/new_song.mp3",
-			Name:        "New Song",
-			Album:       "New Album",
-			Artist:      "New Artist",
-			Genre:       "Rock",
-			Kind:        "MPEG audio file",
-			Size:        5000000,
-			TotalTime:   240000,
-			TrackNumber: 1,
-			Year:        2025,
-			BitRate:     320,
-			SampleRate:  44100,
-		},
-	})
-	require.ErrorIs(t, err, ErrBEWritebackUnsupported)
-	_, statErr := os.Stat(outPath)
-	require.Error(t, statErr, "refused BE write must not create output")
-}
-
-func TestInsertITLTracks_NoTracks(t *testing.T) {
-	tmpDir := t.TempDir()
-	outPath := filepath.Join(tmpDir, "out.itl")
-	result, err := InsertITLTracks("", outPath, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 0, result.UpdatedCount)
-}
-
-func TestRewriteITLExtensions(t *testing.T) {
-	pid := [8]byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}
-	itlData := buildSyntheticITL(t, "12.0.0", false, pid, "/music/song.flac")
-
-	tmpDir := t.TempDir()
-	itlPath := filepath.Join(tmpDir, "test.itl")
-	outPath := filepath.Join(tmpDir, "out.itl")
-	require.NoError(t, os.WriteFile(itlPath, itlData, 0644))
-
-	// BE fixture — extension rewrite is a BE-only path; BE writeback refused (K12).
-	_, err := RewriteITLExtensions(itlPath, outPath, ".flac", ".mp3")
-	require.ErrorIs(t, err, ErrBEWritebackUnsupported, "BE writeback must be refused (K12)")
-}
-
-// TestInsertITLPlaylist verifies that the BE synthetic library is REFUSED by the
-// SafeWriteITL chokepoint (TASK-004, SPEC §3 step 1 / K12). buildSyntheticITL
-// emits a big-endian "htim"/"hohm" payload (no "msdh" magic); BE writeback is
-// unvalidated and shares CRIT-1's flag-invention risk, so every writeback entry
-// point now refuses it rather than corrupt the library.
-func TestInsertITLPlaylist(t *testing.T) {
-	pid := [8]byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}
-	itlData := buildSyntheticITL(t, "12.0.0", false, pid, "/music/song.mp3")
-
-	tmpDir := t.TempDir()
-	itlPath := filepath.Join(tmpDir, "test.itl")
-	outPath := filepath.Join(tmpDir, "out.itl")
-	require.NoError(t, os.WriteFile(itlPath, itlData, 0644))
-
-	_, err := InsertITLPlaylist(itlPath, outPath, ITLNewPlaylist{
-		Title:    "Test Playlist",
-		TrackIDs: []int{42},
-	})
-	require.ErrorIs(t, err, ErrBEWritebackUnsupported)
-	// The refused write must not produce an output file.
-	_, statErr := os.Stat(outPath)
-	require.Error(t, statErr, "refused BE write must not create output")
-}
-
-func TestBuildHtimChunk(t *testing.T) {
-	track := ITLNewTrack{
-		Size:        1234567,
-		TotalTime:   300000,
-		TrackNumber: 5,
-		Year:        2024,
-		BitRate:     256,
-		SampleRate:  48000,
-		DiscNumber:  2,
-	}
-	htim := buildHtimChunk(100, track)
-
-	// Parse it back
-	parsed := parseHtimBE(htim, 0, len(htim))
-	assert.Equal(t, 100, parsed.TrackID)
-	assert.Equal(t, 1234567, parsed.Size)
-	assert.Equal(t, 300000, parsed.TotalTime)
-	assert.Equal(t, 5, parsed.TrackNumber)
-	assert.Equal(t, 2024, parsed.Year)
-	assert.Equal(t, 256, parsed.BitRate)
-	assert.Equal(t, 48000, parsed.SampleRate)
-	assert.Equal(t, 2, parsed.DiscNumber)
-	// Persistent ID should be non-zero (random)
-	assert.NotEqual(t, [8]byte{}, parsed.PersistentID)
 }
 
 // ---------------------------------------------------------------------------
@@ -702,25 +581,6 @@ func TestParseFixtureITL(t *testing.T) {
 			assert.Equal(t, tid, pl.Items[j], "playlist %d item %d", i, j)
 		}
 	}
-}
-
-// TestFixtureITL_UpdateLocations verifies write-back works on the fixture.
-func TestFixtureITL_UpdateLocations(t *testing.T) {
-	if _, err := os.Stat(fixtureITLPath); os.IsNotExist(err) {
-		data := buildFixtureITL()
-		require.NoError(t, os.MkdirAll(filepath.Dir(fixtureITLPath), 0755))
-		require.NoError(t, os.WriteFile(fixtureITLPath, data, 0644))
-	}
-
-	tmpDir := t.TempDir()
-	outPath := filepath.Join(tmpDir, "updated.itl")
-
-	// BE fixture (buildFixtureITL) — BE writeback refused (K12).
-	hobbitPID := pidToHex(fixtureTracks[0].persistentID)
-	_, err := UpdateITLLocations(fixtureITLPath, outPath, []ITLLocationUpdate{
-		{PersistentID: hobbitPID, NewLocation: "/new/path/The Hobbit.m4b"},
-	})
-	require.ErrorIs(t, err, ErrBEWritebackUnsupported, "BE writeback must be refused (K12)")
 }
 
 // TestFixtureITL_Validate verifies the fixture passes validation.
