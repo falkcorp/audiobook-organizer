@@ -1,5 +1,5 @@
 // file: web/src/components/review/RepairsPanel.test.tsx
-// version: 1.10.0
+// version: 1.11.0
 // guid: 3a7e0c95-4d21-4b8f-b6e3-8f1c2d9a5e47
 // last-edited: 2026-10-08
 //
@@ -11,9 +11,10 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../services/api';
-import type { OperationV2, RepairFixer, RepairRow, RepairRowsFilter } from '../../services/api';
+import type { Book, OperationV2, RepairFixer, RepairRow, RepairRowsFilter } from '../../services/api';
 import { RepairsPanel, SKIP_KIND_LABEL } from './RepairsPanel';
 import { useRepairsLane } from './lanes/useRepairsLane';
+import type { SpineViewMode } from './spine/viewMode';
 
 vi.mock('../../services/api');
 
@@ -60,17 +61,25 @@ function skippedByKind(): Record<string, number> {
 
 const toast = vi.fn();
 
-function Harness() {
+function Harness({ viewMode }: { viewMode?: SpineViewMode }) {
   const repairs = useRepairsLane(toast, true);
-  return <RepairsPanel repairs={repairs} />;
+  return <RepairsPanel repairs={repairs} viewMode={viewMode} />;
 }
 
-function renderPanel() {
+function renderPanel(viewMode?: SpineViewMode) {
   return render(
     <MemoryRouter>
-      <Harness />
+      <Harness viewMode={viewMode} />
     </MemoryRouter>
   );
+}
+
+/**
+ * Opens a compact row (the default view): its members, evidence, class and an
+ * owner row's Apply button live in the opened part.
+ */
+async function expandRow(user: ReturnType<typeof userEvent.setup>, rowId: string) {
+  await user.click(await screen.findByTestId(`repairs-row-expand-${rowId}`));
 }
 
 let confirmSpy: ReturnType<typeof vi.spyOn>;
@@ -381,6 +390,7 @@ describe('RepairsPanel — classified rows', () => {
     const user = userEvent.setup();
     renderPanel();
     const r = await screen.findByTestId('repairs-row-moved:P');
+    await expandRow(user, 'moved:P');
     const toggle = within(r).getByTestId('repairs-row-members-moved:P');
     expect(toggle).toHaveTextContent('3 books in this row');
     await user.click(toggle);
@@ -390,6 +400,7 @@ describe('RepairsPanel — classified rows', () => {
     expect(within(r).getAllByText(/fragment · 1 file$/)).toHaveLength(2);
     // A row with no member detail still links every book id.
     const np = screen.getByTestId('repairs-row-no-parent:x');
+    await expandRow(user, 'no-parent:x');
     await user.click(within(np).getByTestId('repairs-row-members-no-parent:x'));
     expect(within(np).getByRole('link', { name: 'C' })).toHaveAttribute('href', '/library/C');
   });
@@ -397,6 +408,7 @@ describe('RepairsPanel — classified rows', () => {
   it('shows the evidence, folding a long list behind a toggle', async () => {
     const user = userEvent.setup();
     renderPanel();
+    await expandRow(user, 'moved:P');
     const ev = await screen.findByTestId('repairs-row-evidence-moved:P');
     expect(within(ev).getByText('a ← row 1: import path')).toBeInTheDocument();
     expect(within(ev).queryByText('d')).not.toBeInTheDocument();
@@ -660,6 +672,8 @@ describe('RepairsPanel — owner rows', () => {
     await screen.findByTestId('repairs-row-g1');
     await user.click(screen.getByTestId('repairs-tab-skipped'));
     const own = await screen.findByTestId('repairs-row-own');
+    await expandRow(user, 'own');
+    await expandRow(user, 'man');
     expect(within(own).getByText(/byte-identical to the parent file/)).toBeInTheDocument();
     expect(within(own).getByText(/iTunes tracks these files; only database rows change/)).toBeInTheDocument();
     expect(within(own).getByRole('button', { name: 'Apply (owner)' })).toBeInTheDocument();
@@ -680,6 +694,7 @@ describe('RepairsPanel — owner rows', () => {
     renderPanel();
     await screen.findByTestId('repairs-row-g1');
     await user.click(screen.getByTestId('repairs-tab-skipped'));
+    await expandRow(user, 'own');
     const why = await screen.findByTestId('repairs-owner-why-not-own');
     expect(why).toHaveTextContent('sign in through Cloudflare Access (books.example.com)');
     expect(screen.getByTestId('repairs-owner-apply-own')).toBeDisabled();
@@ -692,6 +707,7 @@ describe('RepairsPanel — owner rows', () => {
     renderPanel();
     await screen.findByTestId('repairs-row-g1');
     await user.click(screen.getByTestId('repairs-tab-skipped'));
+    await expandRow(user, 'own');
     expect(await screen.findByTestId('repairs-owner-apply-own')).toBeEnabled();
     expect(screen.queryByTestId('repairs-owner-why-not-own')).not.toBeInTheDocument();
   });
@@ -719,6 +735,7 @@ describe('RepairsPanel — owner rows', () => {
     renderPanel();
     await screen.findByTestId('repairs-row-g1');
     await user.click(screen.getByTestId('repairs-tab-skipped'));
+    await expandRow(user, 'own');
     await user.click(await screen.findByTestId('repairs-owner-apply-own'));
 
     expect(confirmSpy).toHaveBeenCalledTimes(1);
@@ -741,6 +758,7 @@ describe('RepairsPanel — owner rows', () => {
     renderPanel();
     await screen.findByTestId('repairs-row-g1');
     await user.click(screen.getByTestId('repairs-tab-skipped'));
+    await expandRow(user, 'own');
     await user.click(await screen.findByTestId('repairs-owner-apply-own'));
     expect(confirmSpy).toHaveBeenCalledTimes(1);
     expect(api.startRepairOwnerApply).not.toHaveBeenCalled();
@@ -819,5 +837,194 @@ describe('RepairsPanel — layout', () => {
     expect(toggle).toHaveTextContent('Less');
     expect(screen.getByTestId('repairs-fixer-description')).not.toHaveStyle({ whiteSpace: 'nowrap' });
     expect(within(screen.getByTestId('repairs-fixer-header')).getByText(/pauses briefly/)).toBeInTheDocument();
+  });
+});
+
+describe('RepairsPanel — view modes', () => {
+  // g1 and g2 share a reason (one fix); g3 has its own. Members give the
+  // Details view books to look up.
+  const V1 = row('v1', {
+    reason: 'same fix',
+    current: { series: 'Series S', position: '2' },
+    proposed: { series: '' },
+    book_ids: ['P', 'F1'],
+    members: [
+      { book_id: 'P', title: 'Title P', role: 'parent', files: 2 },
+      { book_id: 'F1', title: 'Title F1', role: 'fragment', files: 1, missing_files: 1 },
+    ],
+    evidence: ['e1', 'e2', 'e3', 'e4'],
+  });
+  const V2 = row('v2', { reason: 'same fix', current: { series: 'Series S' }, proposed: {}, book_ids: ['Q'] });
+  const V3 = row('v3', { reason: 'other fix', book_ids: ['R'] });
+  const ROWS = [V3, V1, V2];
+
+  const BOOK_P = {
+    id: 'P',
+    title: 'Title P',
+    author_name: 'Author A',
+    narrator: 'Reader One',
+    series_name: 'Series S',
+    series_position_raw: '2',
+    duration: 3723,
+    file_path: '/stale/path.m4b',
+    missing: false,
+  } as unknown as Book;
+
+  beforeEach(() => {
+    vi.mocked(api.getRepairPlanRows).mockImplementation(
+      async (fixerId: string, planOpId: string, q: { filter: RepairRowsFilter; offset: number; limit: number }) => {
+        const all = q.filter === 'applicable' ? ROWS : [];
+        return {
+          plan_op_id: planOpId,
+          fixer_id: fixerId,
+          planned_at: '2026-09-27T10:01:00Z',
+          filter: q.filter,
+          offset: q.offset,
+          limit: q.limit,
+          total: all.length,
+          applicable: ROWS.length,
+          skipped_by_kind: {},
+          rows: all.slice(q.offset, q.offset + q.limit),
+        };
+      }
+    );
+    vi.mocked(api.getBooksByIds).mockResolvedValue([BOOK_P]);
+    vi.mocked(api.getBookFiles).mockResolvedValue({ files: [], count: 0 });
+  });
+
+  it('renders each mode with its own testids', async () => {
+    const { unmount } = renderPanel('compact');
+    expect(await screen.findByTestId('repairs-compact')).toBeInTheDocument();
+    expect(screen.getByTestId('repairs-row-summary-v1')).toHaveTextContent(
+      'position: 2 → (none); series: Series S → (none)'
+    );
+    unmount();
+
+    const d = renderPanel('two-column');
+    expect(await screen.findByTestId('repairs-details')).toBeInTheDocument();
+    expect(screen.getByTestId('repairs-row-now-v1')).toHaveTextContent('series: Series S');
+    expect(screen.getByTestId('repairs-row-after-v1')).toHaveTextContent('series: (none)');
+    expect(screen.queryByTestId('repairs-compact')).not.toBeInTheDocument();
+    d.unmount();
+
+    renderPanel('candidates');
+    expect(await screen.findByTestId('repairs-grouped')).toBeInTheDocument();
+    expect(screen.getByText(/Set Rows per page to 500 to group more/)).toBeInTheDocument();
+    expect(screen.queryByTestId('repairs-compact')).not.toBeInTheDocument();
+  });
+
+  it('compact: the chevron opens the full reason and the evidence', async () => {
+    const user = userEvent.setup();
+    renderPanel('compact');
+    const r = await screen.findByTestId('repairs-row-v1');
+    expect(within(r).queryByTestId('repairs-row-evidence-v1')).not.toBeInTheDocument();
+    await user.click(within(r).getByTestId('repairs-row-expand-v1'));
+    expect(within(r).getByTestId('repairs-row-evidence-v1')).toHaveTextContent('e1');
+    expect(within(r).getByTestId('repairs-row-detail-v1')).toHaveTextContent('same fix');
+    expect(r).toHaveAttribute('data-expanded', 'true');
+    await user.click(within(r).getByTestId('repairs-row-expand-v1'));
+    expect(within(r).queryByTestId('repairs-row-evidence-v1')).not.toBeInTheDocument();
+  });
+
+  it('details: one book request for every member on the page, then narrator and series', async () => {
+    renderPanel('two-column');
+    const member = await screen.findByTestId('repairs-member-v1-P');
+    await vi.waitFor(() => expect(member).toHaveTextContent('read by Reader One'));
+    expect(member).toHaveTextContent('Author A');
+    expect(member).toHaveTextContent('Series S #2');
+    expect(member).toHaveTextContent('1:02');
+    expect(api.getBooksByIds).toHaveBeenCalledTimes(1);
+    const ids = vi.mocked(api.getBooksByIds).mock.calls[0][0];
+    expect([...ids].sort()).toEqual(['F1', 'P', 'Q', 'R']);
+    expect(vi.mocked(api.getBooksByIds).mock.calls[0][1]).toBeInstanceOf(AbortSignal);
+    // A member the response did not include says so rather than showing blank.
+    expect(screen.getByTestId('repairs-member-v2-Q')).toHaveTextContent('Book not found in the library.');
+    // Details shows every line of evidence, no fold.
+    expect(within(screen.getByTestId('repairs-row-evidence-v1')).getByText('e4')).toBeInTheDocument();
+  });
+
+  it('details: a failed book request shows an error with Retry, and Retry asks again', async () => {
+    vi.mocked(api.getBooksByIds).mockRejectedValueOnce(new Error('books exploded'));
+    const user = userEvent.setup();
+    renderPanel('two-column');
+    const err = await screen.findByTestId('repairs-details-books-error');
+    expect(err).toHaveTextContent('books exploded');
+    expect(screen.getByTestId('repairs-member-v1-P')).toHaveTextContent('Book details could not be loaded.');
+    await user.click(within(err).getByRole('button', { name: 'Retry' }));
+    await vi.waitFor(() =>
+      expect(screen.getByTestId('repairs-member-v1-P')).toHaveTextContent('read by Reader One')
+    );
+    expect(screen.queryByTestId('repairs-details-books-error')).not.toBeInTheDocument();
+    expect(api.getBooksByIds).toHaveBeenCalledTimes(2);
+  });
+
+  it('details: Show files fetches the book\'s file rows and lists their paths', async () => {
+    vi.mocked(api.getBookFiles).mockResolvedValue({
+      files: [{ id: 'f1', book_id: 'P', file_path: '/library/a/b.mp3' } as api.BookFile],
+      count: 1,
+    });
+    const user = userEvent.setup();
+    renderPanel('two-column');
+    await user.click(await screen.findByTestId('repairs-member-files-v1-P-show'));
+    expect(api.getBookFiles).toHaveBeenCalledTimes(1);
+    expect(api.getBookFiles).toHaveBeenCalledWith('P', expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    const files = await screen.findByTestId('repairs-member-files-v1-P');
+    expect(files).toHaveTextContent('/library/a/b.mp3');
+    // Never the book's stale file_path.
+    expect(screen.queryByText('/stale/path.m4b')).not.toBeInTheDocument();
+  });
+
+  it('grouped: rows with the same reason form one group, biggest first', async () => {
+    renderPanel('candidates');
+    const g0 = await screen.findByTestId('repairs-group-0');
+    expect(within(g0).getByText('same fix')).toBeInTheDocument();
+    expect(within(g0).getByTestId('repairs-group-0-count')).toHaveTextContent('2 rows');
+    expect(within(g0).getByTestId('repairs-group-0-titles')).toHaveTextContent('Title v1 · Title v2');
+    const g1 = screen.getByTestId('repairs-group-1');
+    expect(within(g1).getByText('other fix')).toBeInTheDocument();
+    expect(within(g1).getByTestId('repairs-group-1-count')).toHaveTextContent('1 row');
+    expect(screen.queryByTestId('repairs-group-2')).not.toBeInTheDocument();
+  });
+
+  it('grouped: the group checkbox ticks exactly its rows', async () => {
+    const user = userEvent.setup();
+    renderPanel('candidates');
+    await screen.findByTestId('repairs-group-0');
+    await user.click(screen.getByRole('checkbox', { name: 'Select group: same fix' }));
+    expect(screen.getByTestId('repairs-selected-count')).toHaveTextContent('2 selected');
+    await user.click(screen.getByTestId('repairs-group-0-expand'));
+    expect(screen.getByRole('checkbox', { name: 'Select Title v1' })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'Select Title v2' })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'Select group: other fix' })).not.toBeChecked();
+    // Untick one row: the group reads as partly ticked.
+    await user.click(screen.getByRole('checkbox', { name: 'Select Title v2' }));
+    expect(screen.getByRole('checkbox', { name: 'Select group: same fix' })).toHaveAttribute(
+      'data-indeterminate',
+      'true'
+    );
+    await user.click(screen.getByRole('checkbox', { name: 'Select group: same fix' }));
+    expect(screen.getByTestId('repairs-selected-count')).toHaveTextContent('2 selected');
+    // A fully ticked group's checkbox unticks exactly its rows.
+    await user.click(screen.getByRole('checkbox', { name: 'Select group: other fix' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Select group: same fix' }));
+    expect(screen.getByTestId('repairs-selected-count')).toHaveTextContent('1 selected');
+    expect(screen.getByRole('checkbox', { name: 'Select Title v1' })).not.toBeChecked();
+  });
+
+  it('grouped: Apply group sends exactly the group\'s rows through the apply-selected path', async () => {
+    const user = userEvent.setup();
+    renderPanel('candidates');
+    await screen.findByTestId('repairs-group-0');
+    // A row of another group is ticked first; Apply group must not send it.
+    await user.click(screen.getByRole('checkbox', { name: 'Select group: other fix' }));
+    expect(screen.getByTestId('repairs-selected-count')).toHaveTextContent('1 selected');
+    await user.click(screen.getByTestId('repairs-group-0-apply'));
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    expect(confirmSpy.mock.calls[0][0]).toMatch(/^Apply 2 repair row/);
+    await vi.waitFor(() => expect(api.startRepairApply).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(api.startRepairApply).mock.calls[0][2]).toEqual(['v1', 'v2']);
+    // The finished apply clears the selection, as Apply selected does.
+    await screen.findByTestId('repairs-apply-result');
+    expect(screen.getByTestId('repairs-selected-count')).toHaveTextContent('0 selected');
   });
 });

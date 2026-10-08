@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.test.tsx
-// version: 1.16.0
+// version: 1.17.0
 // guid: 3c8f0a62-9b47-4d15-8e30-1f7a2c5b9d64
-// last-edited: 2026-10-07
+// last-edited: 2026-10-08
 
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
@@ -311,6 +311,55 @@ describe('view mode', () => {
     expect(screen.getByRole('button', { name: 'Compact rows' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Two columns' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Candidates' })).toBeInTheDocument();
+  });
+
+  it('hides the toggle on the regroup lane, which has no view modes', async () => {
+    renderWorkspace(['/review?lane=regroup']);
+    expect(await screen.findByTestId('regroup-rail')).toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: 'Comparison layout' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Compact rows' })).not.toBeInTheDocument();
+  });
+
+  it('names the positions after the repairs views on the repairs lane', async () => {
+    renderWorkspace(['/review?lane=repairs']);
+    expect(await screen.findByTestId('repairs-panel')).toBeInTheDocument();
+    const group = screen.getByRole('group', { name: 'Comparison layout' });
+    expect(within(group).getByRole('button', { name: 'Compact rows' })).toBeInTheDocument();
+    expect(within(group).getByRole('button', { name: 'Details' })).toBeInTheDocument();
+    expect(within(group).getByRole('button', { name: 'Grouped by fix' })).toBeInTheDocument();
+    expect(within(group).queryByRole('button', { name: 'Two columns' })).not.toBeInTheDocument();
+  });
+
+  it('switches the repairs rows between Compact, Details and Grouped', async () => {
+    vi.mocked(api.listRepairFixers).mockResolvedValue([
+      {
+        id: 'fx',
+        title: 'Fixer X',
+        description: 'Fixes x.',
+        last_plan: { operation_id: 'plan-x', status: 'completed', queued_at: '2026-10-01T00:00:00Z', total: 1, applicable: 1 },
+      },
+    ]);
+    vi.mocked(api.getRepairPlanRows).mockImplementation(async (fixerId, planOpId, q) => ({
+      plan_op_id: planOpId,
+      fixer_id: fixerId,
+      planned_at: '2026-10-01T00:00:00Z',
+      filter: q.filter,
+      offset: q.offset,
+      limit: q.limit,
+      total: 1,
+      applicable: 1,
+      skipped_by_kind: {},
+      rows: [{ row_id: 'r1', book_ids: ['b1'], title: 'Title r1', reason: 'fix r1', risk: 'low', fingerprint: 'fp' }],
+    }));
+    vi.mocked(api.getBooksByIds).mockResolvedValue([]);
+    window.localStorage.setItem('review-repairs-fixer', 'fx');
+    const user = userEvent.setup();
+    renderWorkspace(['/review?lane=repairs']);
+    expect(await screen.findByTestId('repairs-compact')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Details' }));
+    expect(await screen.findByTestId('repairs-details')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Grouped by fix' }));
+    expect(await screen.findByTestId('repairs-grouped')).toBeInTheDocument();
   });
 
   it('drives the spine, which nothing did before the shell existed', async () => {

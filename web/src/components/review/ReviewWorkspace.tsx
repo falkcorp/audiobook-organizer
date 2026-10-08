@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.tsx
-// version: 1.14.0
+// version: 1.15.0
 // guid: 8e0b4d59-1c76-42a3-95f8-7d2a6b3e0c81
-// last-edited: 2026-10-07
+// last-edited: 2026-10-08
 //
 // The unified review workspace: one screen for dedup, metadata apply, the
 // review queue, and library repairs.
@@ -50,6 +50,7 @@ import {
   Tabs,
   ToggleButton,
   ToggleButtonGroup,
+  Tooltip,
   Typography,
 } from '@mui/material';
 import ViewListIcon from '@mui/icons-material/ViewList';
@@ -83,6 +84,28 @@ import type { ReviewLane } from './reviewActions';
  * more than the four lines it occupies.
  */
 const UNPORTED: Partial<Record<ReviewLane, { where: string; href: string }>> = {};
+
+/**
+ * The view toggle's three positions. Every ranked search candidate per book
+ * is `candidates` (was 'auto' until 2026-10-07); the dupes lane renders it as
+ * its compact view.
+ */
+const VIEW_MODE_BUTTONS = [
+  { value: 'compact', Icon: ViewListIcon },
+  { value: 'two-column', Icon: ViewColumnIcon },
+  { value: 'candidates', Icon: FormatListNumberedIcon },
+] as const satisfies ReadonlyArray<{ value: SpineViewMode; Icon: unknown }>;
+
+/**
+ * What each position is called on a lane. The repairs lane maps the same
+ * three modes onto its own views: Compact rows, Details, Grouped by fix.
+ */
+function viewModeLabel(lane: ReviewLane, mode: SpineViewMode): string {
+  if (lane === 'repairs') {
+    return mode === 'compact' ? 'Compact rows' : mode === 'two-column' ? 'Details' : 'Grouped by fix';
+  }
+  return mode === 'compact' ? 'Compact rows' : mode === 'two-column' ? 'Two columns' : 'Candidates';
+}
 
 /**
  * Builds a CSV from the rows currently loaded.
@@ -568,26 +591,31 @@ export function ReviewWorkspace() {
 
         <CommandBar menus={menus} />
 
-        <ToggleButtonGroup
-          size="small"
-          exclusive
-          value={viewMode}
-          onChange={(_, v: SpineViewMode | null) => v && setViewMode(normalizeViewMode(v))}
-          aria-label="Comparison layout"
-          sx={{ ml: 'auto' }}
-        >
-          <ToggleButton value="compact" aria-label="Compact rows">
-            <ViewListIcon fontSize="small" />
-          </ToggleButton>
-          <ToggleButton value="two-column" aria-label="Two columns">
-            <ViewColumnIcon fontSize="small" />
-          </ToggleButton>
-          {/* Every ranked search candidate per book (was 'auto' until
-              2026-10-07). The dupes lane renders it as its compact view. */}
-          <ToggleButton value="candidates" aria-label="Candidates">
-            <FormatListNumberedIcon fontSize="small" />
-          </ToggleButton>
-        </ToggleButtonGroup>
+        {/* Hidden on lanes that ignore it (regroup, and any unported lane):
+            three buttons that do nothing read as broken. */}
+        {lane !== 'regroup' && !unported && (
+          <ToggleButtonGroup
+            size="small"
+            exclusive
+            value={viewMode}
+            onChange={(_, v: SpineViewMode | null) => v && setViewMode(normalizeViewMode(v))}
+            aria-label="Comparison layout"
+            sx={{ ml: 'auto' }}
+          >
+            {VIEW_MODE_BUTTONS.map(({ value, Icon }) => {
+              const name = viewModeLabel(lane, value);
+              // The group passes selection through context, so a Tooltip
+              // wrapper does not cut the button off from it.
+              return (
+                <Tooltip key={value} title={name}>
+                  <ToggleButton value={value} aria-label={name}>
+                    <Icon fontSize="small" />
+                  </ToggleButton>
+                </Tooltip>
+              );
+            })}
+          </ToggleButtonGroup>
+        )}
       </Box>
 
       {/* The one-button dedup run's progress / merge prompt / result. */}
@@ -596,7 +624,7 @@ export function ReviewWorkspace() {
       {/* Every lane has an explicit branch: the last one falls through to
           metadata, so a lane missing here would silently show metadata. */}
       {lane === 'repairs' ? (
-        <RepairsPanel repairs={repairs} />
+        <RepairsPanel repairs={repairs} viewMode={viewMode} />
       ) : lane === 'regroup' ? (
         <RegroupPanel regroup={regroup} />
       ) : lane === 'dupes' ? (

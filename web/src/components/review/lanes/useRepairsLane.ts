@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useRepairsLane.ts
-// version: 1.7.0
+// version: 1.8.0
 // guid: 7b1e5c28-3a94-4d6f-8e02-c5f9a1d7b340
-// last-edited: 2026-10-07
+// last-edited: 2026-10-08
 
 /**
  * The repairs lane's data layer: fixers, their trials (plans), plan rows, and
@@ -256,6 +256,11 @@ export interface RepairsLane {
   toggleRow: (rowId: string) => void;
   /** Selects every applicable row on the loaded page. */
   selectPage: () => void;
+  /**
+   * Ticks (`on`) or unticks the given rows, leaving every other row as it is.
+   * Skipped and already-settled rows are never ticked.
+   */
+  selectRows: (rowIds: readonly string[], on: boolean) => void;
   clearSelection: () => void;
 
   /** An apply is in flight for the selected fixer. */
@@ -580,6 +585,21 @@ export function useRepairsLane(toast: Toast, active = true): RepairsLane {
     });
   }, [rows, settledRowIds]);
 
+  const selectRows = useCallback(
+    (rowIds: readonly string[], on: boolean) => {
+      const skipped = new Set(rows.filter((r) => r.skipped).map((r) => r.row_id));
+      setSelectedRowIds((prev) => {
+        const next = new Set(prev);
+        for (const id of rowIds) {
+          if (!on) next.delete(id);
+          else if (!skipped.has(id) && !settledRowIds.has(id)) next.add(id);
+        }
+        return next;
+      });
+    },
+    [rows, settledRowIds]
+  );
+
   const clearSelection = useCallback(() => setSelectedRowIds(new Set()), []);
 
   const setFilter = useCallback((f: RepairRowsFilter) => {
@@ -860,6 +880,7 @@ export function useRepairsLane(toast: Toast, active = true): RepairsLane {
     selectedRowIds,
     toggleRow,
     selectPage,
+    selectRows,
     clearSelection,
     applying: applyingFor !== null && applyingFor === selectedFixerId,
     applyError: selectedFixerId ? (applyErrors[selectedFixerId] ?? null) : null,
