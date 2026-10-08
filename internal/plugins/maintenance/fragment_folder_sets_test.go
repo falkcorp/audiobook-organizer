@@ -1,13 +1,12 @@
 // file: internal/plugins/maintenance/fragment_folder_sets_test.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 3b7d2c55-1a4e-4f0b-9c61-8e2f5d7a0b14
-// last-edited: 2026-10-06
+// last-edited: 2026-10-08
 
 package maintenance
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -222,16 +221,14 @@ func TestFragmentFixer_FolderChapterSet(t *testing.T) {
 		r := findRow(t, f.plan(t, "op-plan"), setRowID(f, setDir, someWorkKey))
 		require.Equal(t, fragSkipSetShort, r.Skipped)
 	})
-	t.Run("iTunes sets are their own class, never applicable", func(t *testing.T) {
+	t.Run("iTunes sets are ordinary sets (owner 2026-10-08)", func(t *testing.T) {
 		f := newFragFixture(t)
 		dir := "books/itunes/iTunes Media/Audiobooks/Christopher Paolini"
 		f.folderSet(t, dir, seq(1, 6), someWorkStem, 900, 9000)
 		res := f.plan(t, "op-plan")
 		r := findRow(t, res, setRowID(f, dir, someWorkKey))
-		require.Equal(t, fragClassITunesSet, r.Class)
-		require.Equal(t, repairs.SkipITunes, r.Skipped)
-		require.False(t, r.Applicable())
-		require.Zero(t, res.Applicable)
+		require.Equal(t, fragClassFolderSet, r.Class)
+		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
 	})
 	t.Run("a book in the folder that is no fragment holds the set", func(t *testing.T) {
 		f := newFragFixture(t)
@@ -519,13 +516,13 @@ func TestFragmentFixer_ParentChapterSet(t *testing.T) {
 		require.Equal(t, "Some Saga", r.Proposed["title"])
 		require.NotContains(t, r.BookIDs, junk)
 	})
-	t.Run("iTunes parent sets are listed, never applicable", func(t *testing.T) {
+	t.Run("iTunes parent sets are ordinary sets (owner 2026-10-08)", func(t *testing.T) {
 		f := newFragFixture(t)
 		d := "books/itunes/iTunes Media/Audiobooks/Horizon Storms"
 		f.parentSet(t, d, seq(1, 6), horizonStem, 900, 9000)
 		r := findRow(t, f.plan(t, "op-plan"), parentRowID(f, d, horizonKey))
-		require.Equal(t, fragClassITunesSet, r.Class)
-		require.False(t, r.Applicable())
+		require.Equal(t, fragClassParentSet, r.Class)
+		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
 	})
 }
 
@@ -970,40 +967,35 @@ func TestFragmentFixer_ChapterSetJoinTargetVersionGroup(t *testing.T) {
 		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
 		require.Equal(t, existing, r.Proposed["join"])
 	})
-	t.Run("the target's own group holds an iTunes copy: held", func(t *testing.T) {
-		// Retiring frags[0] (primary by default) hands vg-target's primary
-		// on, and the ranking favours the iTunes book: a write to it.
-		f := newFragFixture(t)
-		_, sibling, _ := ownGroup(t, f, bookPID(t, f))
-		res := f.plan(t, "op-plan")
-		r := findRow(t, res, joinID(f))
-		require.Equal(t, repairs.SkipITunes, r.Skipped, r.SkipReason)
-		require.Contains(t, r.SkipReason, sibling)
-		require.Contains(t, r.SkipReason, "vg-target")
-		require.Zero(t, res.Applicable)
-	})
-	t.Run("an iTunes file row on the target group's sibling: held", func(t *testing.T) {
-		f := newFragFixture(t)
-		_, sibling, _ := ownGroup(t, f, func(id string) {
-			rows, err := f.s.GetBookFiles(id)
-			require.NoError(t, err)
-			require.Len(t, rows, 1)
-			rows[0].ITunesPersistentID = "ROWPID01"
-			require.NoError(t, f.s.UpdateBookFile(rows[0].ID, &rows[0]))
+	// Owner 2026-10-08: an iTunes book in the target's group is an ordinary
+	// member; the join stands and applies.
+	for name, mark := range map[string]func(t *testing.T, f *fragFixture) func(string){
+		"a book iTunes id": bookPID,
+		"a row iTunes id": func(t *testing.T, f *fragFixture) func(string) {
+			return func(id string) {
+				rows, err := f.s.GetBookFiles(id)
+				require.NoError(t, err)
+				require.Len(t, rows, 1)
+				rows[0].ITunesPersistentID = "ROWPID01"
+				require.NoError(t, f.s.UpdateBookFile(rows[0].ID, &rows[0]))
+			}
+		},
+		"a live itunes external id": func(t *testing.T, f *fragFixture) func(string) {
+			return func(id string) {
+				require.NoError(t, f.s.CreateExternalIDMapping(&database.ExternalIDMapping{Source: "itunes", ExternalID: "LIVEPID", BookID: id}))
+			}
+		},
+	} {
+		t.Run("the target group's sibling carries "+name+": still joins and applies", func(t *testing.T) {
+			f := newFragFixture(t)
+			existing, _, _ := ownGroup(t, f, mark(t, f))
+			r := findRow(t, f.plan(t, "op-plan"), joinID(f))
+			require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+			require.Equal(t, existing, r.Proposed["join"])
+			out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
+			require.Equal(t, 1, out.Applied, "%+v", out.Rows)
 		})
-		r := findRow(t, f.plan(t, "op-plan"), joinID(f))
-		require.Equal(t, repairs.SkipITunes, r.Skipped, r.SkipReason)
-		require.Contains(t, r.SkipReason, sibling)
-	})
-	t.Run("a live itunes external id on the sibling: held", func(t *testing.T) {
-		f := newFragFixture(t)
-		_, sibling, _ := ownGroup(t, f, func(id string) {
-			require.NoError(t, f.s.CreateExternalIDMapping(&database.ExternalIDMapping{Source: "itunes", ExternalID: "LIVEPID", BookID: id}))
-		})
-		r := findRow(t, f.plan(t, "op-plan"), joinID(f))
-		require.Equal(t, repairs.SkipITunes, r.Skipped, r.SkipReason)
-		require.Contains(t, r.SkipReason, sibling)
-	})
+	}
 	t.Run("a tombstoned itunes external id on the sibling: still joins", func(t *testing.T) {
 		f := newFragFixture(t)
 		existing, _, _ := ownGroup(t, f, func(id string) {
@@ -1013,7 +1005,7 @@ func TestFragmentFixer_ChapterSetJoinTargetVersionGroup(t *testing.T) {
 		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
 		require.Equal(t, existing, r.Proposed["join"])
 	})
-	t.Run("a fragment's own group holds an iTunes copy: held", func(t *testing.T) {
+	t.Run("a fragment's own group holds an iTunes copy: held as any other version", func(t *testing.T) {
 		f := newFragFixture(t)
 		f.existingBook(t, "work", "Some Work", "lib/Other/Some Work", 6, 900)
 		p := f.file(t, "lib/iTunesish/Other Edition.m4b", 4321)
@@ -1023,25 +1015,8 @@ func TestFragmentFixer_ChapterSetJoinTargetVersionGroup(t *testing.T) {
 		setVG(t, f, "vg-frag", frags[2], it)
 		bookPID(t, f)(it)
 		r := findRow(t, f.plan(t, "op-plan"), joinID(f))
-		require.Equal(t, repairs.SkipITunes, r.Skipped, r.SkipReason)
+		require.Equal(t, fragSkipVersionGroupParent, r.Skipped, r.SkipReason)
 		require.Contains(t, r.SkipReason, it)
-		require.Contains(t, r.SkipReason, "vg-frag")
-	})
-	t.Run("an iTunes id on the target group's sibling since the plan: refused at apply, nothing written", func(t *testing.T) {
-		f := newFragFixture(t)
-		_, sibling, frags := ownGroup(t, f, nil)
-		r := findRow(t, f.plan(t, "op-plan"), joinID(f))
-		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
-		bookPID(t, f)(sibling)
-		before, err := f.s.GetBookByID(sibling)
-		require.NoError(t, err)
-		out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
-		require.Zero(t, out.Applied, "%+v", out.Rows)
-		require.Contains(t, fmt.Sprintf("%+v", out.Rows), sibling)
-		f.requireUntouched(t, frags)
-		after, err := f.s.GetBookByID(sibling)
-		require.NoError(t, err)
-		require.Equal(t, before.IsPrimaryVersion, after.IsPrimaryVersion, "the iTunes book is never written")
 	})
 	t.Run("versioned with a chapter copy outside the row: held", func(t *testing.T) {
 		f := newFragFixture(t)
@@ -1054,34 +1029,6 @@ func TestFragmentFixer_ChapterSetJoinTargetVersionGroup(t *testing.T) {
 		require.Contains(t, r.SkipReason, cp[0])
 	})
 }
-
-// TestFragJoinGroupITunesFailsClosed: a version group member whose external
-// ids cannot be read holds the join; an unreadable group listing does too.
-func TestFragJoinGroupITunesFailsClosed(t *testing.T) {
-	lib := newFragLibrary()
-	lib.books["t"] = fragBook{ID: "t", VersionGroup: "g"}
-	lib.books["s"] = fragBook{ID: "s", VersionGroup: "g", FilePath: "/lib/s"}
-	lib.extIDs = func(id string) ([]database.ExternalIDMapping, error) {
-		if id == "s" {
-			return nil, errors.New("disk on fire")
-		}
-		return nil, nil
-	}
-	why := lib.retireITunes("t", nil)
-	require.Contains(t, why, "book s of version group g cannot be read")
-	lib.extIDs = func(string) ([]database.ExternalIDMapping, error) { return nil, nil }
-	require.Empty(t, lib.retireITunes("t", nil), "no iTunes member: the join stands")
-	lib.groupReads = failingGroupReads{}
-	require.Contains(t, lib.retireITunes("t", nil), "version group g of the retire is unreadable")
-}
-
-type failingGroupReads struct{}
-
-func (failingGroupReads) GetBooksByVersionGroup(string) ([]database.Book, error) {
-	return nil, errors.New("listing failed")
-}
-
-func (failingGroupReads) GetBookFiles(string) ([]database.BookFile, error) { return nil, nil }
 
 // countingFragStore counts the whole-library file listings the re-check
 // makes (the ~742k-row read on prod).
@@ -1258,88 +1205,6 @@ func TestFragmentFixer_ChapterSetRecheckFailsClosed(t *testing.T) {
 	f.requireUntouched(t, frags[0])
 }
 
-// TestFragmentFixer_ParentRowITunesVersionGroup (PR #3787 review, round 3):
-// a moved or copy row retires its fragments into the parent, which hands
-// each fragment's version-group primary on and re-ranks the parent's group,
-// as a join does: an iTunes copy in any of those groups holds the row, at
-// plan and again under the merge lock.
-func TestFragmentFixer_ParentRowITunesVersionGroup(t *testing.T) {
-	sibling := func(t *testing.T, f *fragFixture, role string, group string, pid string) string {
-		p := f.file(t, "lib/Elsewhere/"+role+".m4b", 4321)
-		id := f.book(t, role, "Another Edition "+role, p, nil)
-		f.row(t, role, id, p, role+".m4b", 4321, 5400, 0)
-		_, err := f.s.ModifyBook(id, func(b *database.Book) error {
-			b.VersionGroupID = &group
-			if pid != "" {
-				b.ITunesPersistentID = &pid
-			}
-			return nil
-		})
-		require.NoError(t, err)
-		return id
-	}
-	inGroup := func(t *testing.T, f *fragFixture, id, group string) {
-		_, err := f.s.ModifyBook(id, func(b *database.Book) error { b.VersionGroupID = &group; return nil })
-		require.NoError(t, err)
-	}
-	t.Run("a fragment's group without an iTunes copy: still applicable", func(t *testing.T) {
-		f := newFragFixture(t)
-		f.seed(t)
-		inGroup(t, f, f.ids["fragF"], "vg-frag")
-		sibling(t, f, "plain", "vg-frag", "")
-		r := findRow(t, f.plan(t, "op-plan"), "moved:"+f.ids["parent"])
-		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
-	})
-	t.Run("an iTunes copy in a fragment's group: held", func(t *testing.T) {
-		f := newFragFixture(t)
-		f.seed(t)
-		inGroup(t, f, f.ids["fragF"], "vg-frag")
-		it := sibling(t, f, "it", "vg-frag", "ITPID01")
-		r := findRow(t, f.plan(t, "op-plan"), "moved:"+f.ids["parent"])
-		require.Equal(t, repairs.SkipITunes, r.Skipped, r.SkipReason)
-		require.Contains(t, r.SkipReason, it)
-		require.Contains(t, r.SkipReason, "vg-frag")
-	})
-	t.Run("an iTunes copy in the parent's group: held", func(t *testing.T) {
-		f := newFragFixture(t)
-		f.seed(t)
-		inGroup(t, f, f.ids["suns"], "vg-parent")
-		it := sibling(t, f, "it", "vg-parent", "ITPID02")
-		r := findRow(t, f.plan(t, "op-plan"), "copy:"+f.ids["suns"])
-		require.Equal(t, repairs.SkipITunes, r.Skipped, r.SkipReason)
-		require.Contains(t, r.SkipReason, it)
-		require.Contains(t, r.SkipReason, "vg-parent")
-	})
-	t.Run("an iTunes id added after the plan: refused at apply, nothing written", func(t *testing.T) {
-		f := newFragFixture(t)
-		f.seed(t)
-		inGroup(t, f, f.ids["fragF"], "vg-frag")
-		it := sibling(t, f, "it", "vg-frag", "")
-		r := findRow(t, f.plan(t, "op-plan"), "moved:"+f.ids["parent"])
-		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
-		pid := "ITPID03"
-		_, err := f.s.ModifyBook(it, func(b *database.Book) error { b.ITunesPersistentID = &pid; return nil })
-		require.NoError(t, err)
-		before, err := f.s.GetBookByID(it)
-		require.NoError(t, err)
-		parentRows, err := f.s.GetBookFiles(f.ids["parent"])
-		require.NoError(t, err)
-		out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
-		require.Zero(t, out.Applied, "%+v", out.Rows)
-		// The re-plan holds the row for the iTunes copy: not applicable.
-		require.Len(t, out.Rows, 1)
-		require.Equal(t, repairs.OutcomeNotApplicable, out.Rows[0].Outcome, "%+v", out.Rows)
-		require.Equal(t, repairs.SkipITunes, out.Rows[0].Skipped, "%+v", out.Rows)
-		require.True(t, f.live(t, "fragF"), "the fragment is not retired")
-		after, err := f.s.GetBookByID(it)
-		require.NoError(t, err)
-		require.Equal(t, before.IsPrimaryVersion, after.IsPrimaryVersion, "the iTunes book is never written")
-		nowRows, err := f.s.GetBookFiles(f.ids["parent"])
-		require.NoError(t, err)
-		require.Equal(t, parentRows, nowRows, "the parent's rows are not repointed")
-	})
-}
-
 // TestFragmentFixer_ChapterSetRecheckCandidatesAreThePlansUnmatched (PR #3787
 // review): the re-check treats as "a chapter fragment, not a book" only what
 // the plan would, its unmatched set. A fragment matched to a parent is a
@@ -1385,327 +1250,6 @@ func setBookPID(t *testing.T, f *fragFixture, id, pid string) {
 	t.Helper()
 	_, err := f.s.ModifyBook(id, func(b *database.Book) error { b.ITunesPersistentID = &pid; return nil })
 	require.NoError(t, err)
-}
-
-// TestFragmentFixer_RetireTargetITunes (PR #3787 re-review B1): a moved or
-// copy row writes its parent (rows repointed, fragments retired into it,
-// state carried, totals recomputed) whether or not the parent is versioned:
-// an iTunes parent holds the row, at plan and under the merge lock.
-func TestFragmentFixer_RetireTargetITunes(t *testing.T) {
-	moved := func(f *fragFixture) string { return "moved:" + f.ids["parent"] }
-	t.Run("book iTunes id on an ungrouped parent: held", func(t *testing.T) {
-		f := newFragFixture(t)
-		f.seed(t)
-		setBookPID(t, f, f.ids["parent"], "PARENTPID")
-		r := findRow(t, f.plan(t, "op-plan"), moved(f))
-		require.Equal(t, repairs.SkipITunes, r.Skipped, r.SkipReason)
-		require.Contains(t, r.SkipReason, f.ids["parent"])
-	})
-	t.Run("an iTunes id on a parent row: held", func(t *testing.T) {
-		f := newFragFixture(t)
-		f.seed(t)
-		rows, err := f.s.GetBookFiles(f.ids["parent"])
-		require.NoError(t, err)
-		rows[0].ITunesPersistentID = "ROWPID"
-		require.NoError(t, f.s.UpdateBookFile(rows[0].ID, &rows[0]))
-		r := findRow(t, f.plan(t, "op-plan"), moved(f))
-		require.Equal(t, repairs.SkipITunes, r.Skipped, r.SkipReason)
-		require.Contains(t, r.SkipReason, f.ids["parent"])
-	})
-	t.Run("a live itunes external id on the copy parent: the copy retires writing the fragment only", func(t *testing.T) {
-		// Owner decision 2026-10-06: a copy row into an iTunes-linked parent
-		// is no longer held; it retires its fragments without writing the
-		// parent (TestFragmentFixer_CopyClaimants covers the writes).
-		f := newFragFixture(t)
-		f.seed(t)
-		require.NoError(t, f.s.CreateExternalIDMapping(&database.ExternalIDMapping{Source: "itunes", ExternalID: "SUNSPID", BookID: f.ids["suns"]}))
-		r := findRow(t, f.plan(t, "op-plan"), "copy:"+f.ids["suns"])
-		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
-		require.Contains(t, r.Current["itunes_parent"], "itunes external id SUNSPID")
-		parent := f.ids["suns"]
-		b0, err := f.s.GetBookByID(parent)
-		require.NoError(t, err)
-		rows0, err := f.s.GetBookFiles(parent)
-		require.NoError(t, err)
-		exts0, err := f.s.GetExternalIDsForBook(parent)
-		require.NoError(t, err)
-		out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
-		require.Equal(t, 1, out.Applied, "%+v", out.Rows)
-		require.False(t, f.live(t, "fragG"), "the copy is retired")
-		b1, err := f.s.GetBookByID(parent)
-		require.NoError(t, err)
-		rows1, err := f.s.GetBookFiles(parent)
-		require.NoError(t, err)
-		exts1, err := f.s.GetExternalIDsForBook(parent)
-		require.NoError(t, err)
-		require.Equal(t, *b0, *b1, "the iTunes parent is not written")
-		require.Equal(t, rows0, rows1)
-		require.Equal(t, exts0, exts1)
-	})
-	t.Run("added after the plan: refused at apply, nothing written", func(t *testing.T) {
-		f := newFragFixture(t)
-		f.seed(t)
-		r := findRow(t, f.plan(t, "op-plan"), moved(f))
-		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
-		setBookPID(t, f, f.ids["parent"], "LATEPID")
-		before, err := f.s.GetBookFiles(f.ids["parent"])
-		require.NoError(t, err)
-		out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
-		require.Zero(t, out.Applied, "%+v", out.Rows)
-		require.Equal(t, repairs.SkipITunes, out.Rows[0].Skipped, "%+v", out.Rows)
-		require.True(t, f.live(t, "fragF"))
-		after, err := f.s.GetBookFiles(f.ids["parent"])
-		require.NoError(t, err)
-		require.Equal(t, before, after, "the iTunes parent's rows are not repointed")
-	})
-	t.Run("landing after the locked re-plan: the pre-write check refuses", func(t *testing.T) {
-		// N3: only Apply's own check under the lock can see this one.
-		f := newFragFixture(t)
-		f.seed(t)
-		plan := f.plan(t, "op-plan")
-		fx := newFragmentFixer(f.p)
-		fx.afterLockedReplan = func() { setBookPID(t, f, f.ids["parent"], "RACEPID") }
-		before, err := f.s.GetBookFiles(f.ids["parent"])
-		require.NoError(t, err)
-		err = applyRowInRun(t, f, fx, context.Background(), plan, moved(f))
-		require.ErrorIs(t, err, repairs.ErrChangedSincePlan)
-		require.Contains(t, err.Error(), "which this row writes")
-		require.True(t, f.live(t, "fragF"))
-		after, err := f.s.GetBookFiles(f.ids["parent"])
-		require.NoError(t, err)
-		require.Equal(t, before, after)
-	})
-}
-
-// TestFragmentFixer_SurvivorRowITunes (PR #3787 re-review S3): a no-parent
-// row retires its members into its survivor, handing each member's version
-// group primary on: an iTunes book in such a group holds the row, at plan
-// and under the merge lock.
-func TestFragmentFixer_SurvivorRowITunes(t *testing.T) {
-	loose := func(f *fragFixture) string { return noParentRowID(f.path("lib/Loose"), "loose") }
-	itunesSibling := func(t *testing.T, f *fragFixture, member, pid string) string {
-		p := f.file(t, "lib/Elsewhere/sib.m4b", 4321)
-		id := f.book(t, "sib", "Loose Other Edition", p, nil)
-		f.row(t, "sib", id, p, "sib.m4b", 4321, 5400, 0)
-		g := "vg-loose"
-		for _, b := range []string{member, id} {
-			_, err := f.s.ModifyBook(b, func(bk *database.Book) error { bk.VersionGroupID = &g; return nil })
-			require.NoError(t, err)
-		}
-		if pid != "" {
-			setBookPID(t, f, id, pid)
-		}
-		return id
-	}
-	memberOf := func(t *testing.T, f *fragFixture, r repairs.Row) string {
-		for _, id := range r.BookIDs {
-			if id != r.Proposed["survivor"] {
-				return id
-			}
-		}
-		t.Fatal("no member")
-		return ""
-	}
-	t.Run("an iTunes book in a member's group: held", func(t *testing.T) {
-		f := newFragFixture(t)
-		f.seed(t)
-		r0 := findRow(t, f.plan(t, "op-plan0"), loose(f))
-		require.True(t, r0.Applicable(), "%s: %s", r0.Skipped, r0.SkipReason)
-		sib := itunesSibling(t, f, memberOf(t, f, r0), "LOOSEPID")
-		r := findRow(t, f.plan(t, "op-plan"), loose(f))
-		require.Equal(t, repairs.SkipITunes, r.Skipped, r.SkipReason)
-		require.Contains(t, r.SkipReason, sib)
-	})
-	t.Run("landing after the locked re-plan: the pre-write check refuses", func(t *testing.T) {
-		f := newFragFixture(t)
-		f.seed(t)
-		r0 := findRow(t, f.plan(t, "op-plan0"), loose(f))
-		member := memberOf(t, f, r0)
-		sib := itunesSibling(t, f, member, "")
-		plan := f.plan(t, "op-plan")
-		r := findRow(t, plan, loose(f))
-		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
-		fx := newFragmentFixer(f.p)
-		fx.afterLockedReplan = func() { setBookPID(t, f, sib, "RACEPID") }
-		err := applyRowInRun(t, f, fx, context.Background(), plan, r.RowID)
-		require.ErrorIs(t, err, repairs.ErrChangedSincePlan)
-		require.Contains(t, err.Error(), sib)
-		for _, id := range r.BookIDs {
-			rows, err := f.s.GetBookFiles(id)
-			require.NoError(t, err)
-			require.Len(t, rows, 1, "book %s keeps its one row: nothing moved", id)
-			b, err := f.s.GetBookByID(id)
-			require.NoError(t, err)
-			require.False(t, b.IsSoftDeleted(), "book %s not retired", id)
-		}
-	})
-}
-
-// TestFragmentFixer_CarryRowNeverOntoITunes (PR #3787 re-review S4): a carry
-// row moves file rows onto its terminal book; an iTunes terminal holds it at
-// plan, in the re-plan, and under the merge lock. Round 5: the rows leave a
-// retired book too, so an iTunes source book, or an iTunes id or path on a
-// moved row itself, holds it the same way.
-func TestFragmentFixer_CarryRowNeverOntoITunes(t *testing.T) {
-	setup := func(t *testing.T) (*fragFixture, string, string, string) {
-		f := newFragFixture(t)
-		px := f.file(t, "lib/X/x.mp3", 1111)
-		x := f.book(t, "x", "Terminal", px, nil)
-		f.row(t, "x", x, px, "x.mp3", 1111, 600, 1)
-		ps := f.file(t, "lib/S/s.mp3", 2222)
-		sb := f.book(t, "s", "Retired Survivor", ps, nil)
-		f.row(t, "s", sb, ps, "s.mp3", 2222, 600, 1)
-		yes := true
-		_, err := f.s.ModifyBook(sb, func(b *database.Book) error {
-			b.MarkedForDeletion, b.MergedIntoBookID = &yes, &x
-			return nil
-		})
-		require.NoError(t, err)
-		return f, x, sb, f.rowIDs["s"]
-	}
-	build := func(t *testing.T, f *fragFixture, x, sb, file string) repairs.Row {
-		store, _, err := newFragmentFixer(f.p).stores()
-		require.NoError(t, err)
-		lib := newFragLibrary()
-		lib.extIDs, lib.groupReads = store.GetExternalIDsForBook, store
-		for _, id := range []string{x, sb} {
-			require.NoError(t, replanLoad(store, lib, id))
-		}
-		rec := fragPlanRecord{RowID: "no-parent:carrytest", Survivor: sb, BookIDs: []string{sb}, PlannedAt: time.Now()}
-		r, err := carryRow(store, lib, rec, []string{"op-old"}, x, []fragCarry{{File: file, From: sb, To: x}})
-		require.NoError(t, err)
-		return r
-	}
-	onS := func(t *testing.T, f *fragFixture, sb string) {
-		rows, err := f.s.GetBookFiles(sb)
-		require.NoError(t, err)
-		require.Len(t, rows, 1, "the file stays on the retired book")
-	}
-	t.Run("an iTunes terminal: held at plan", func(t *testing.T) {
-		f, x, sb, file := setup(t)
-		setBookPID(t, f, x, "TERMPID")
-		r := build(t, f, x, sb, file)
-		require.Equal(t, repairs.SkipITunes, r.Skipped, r.SkipReason)
-		require.Contains(t, r.SkipReason, x)
-	})
-	t.Run("a plain terminal: applicable, and it moves", func(t *testing.T) {
-		f, x, sb, file := setup(t)
-		r := build(t, f, x, sb, file)
-		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
-		fx := newFragmentFixer(f.p)
-		fresh, err := fx.Replan(context.Background(), nil, r, nil)
-		require.NoError(t, err)
-		require.True(t, fresh.Applicable(), "%s: %s", fresh.Skipped, fresh.SkipReason)
-		require.NoError(t, fx.Apply(context.Background(), f.fragWriter(t, "op-apply"), fresh))
-		rows, err := f.s.GetBookFiles(sb)
-		require.NoError(t, err)
-		require.Empty(t, rows, "control: the carry moves the file off S")
-	})
-	t.Run("an iTunes id since the plan: the re-plan holds it", func(t *testing.T) {
-		f, x, sb, file := setup(t)
-		r := build(t, f, x, sb, file)
-		setBookPID(t, f, x, "LATEPID")
-		fresh, err := newFragmentFixer(f.p).Replan(context.Background(), nil, r, nil)
-		require.NoError(t, err)
-		require.Equal(t, repairs.SkipITunes, fresh.Skipped, fresh.SkipReason)
-		onS(t, f, sb)
-	})
-	t.Run("landing after the locked re-plan: the pre-write check refuses", func(t *testing.T) {
-		f, x, sb, file := setup(t)
-		r := build(t, f, x, sb, file)
-		fx := newFragmentFixer(f.p)
-		fx.afterLockedReplan = func() { setBookPID(t, f, x, "RACEPID") }
-		fresh, err := fx.Replan(context.Background(), nil, r, nil)
-		require.NoError(t, err)
-		err = fx.Apply(context.Background(), f.fragWriter(t, "op-apply"), fresh)
-		require.ErrorIs(t, err, repairs.ErrChangedSincePlan)
-		require.Contains(t, err.Error(), x)
-		onS(t, f, sb)
-	})
-
-	// The moved row itself, on the retired book: an iTunes id or path.
-	setRowITunes := func(t *testing.T, f *fragFixture, sb, pid, path string) {
-		t.Helper()
-		rows, err := f.s.GetBookFiles(sb)
-		require.NoError(t, err)
-		require.Len(t, rows, 1)
-		rows[0].ITunesPersistentID, rows[0].ITunesPath = pid, path
-		require.NoError(t, f.s.UpdateBookFile(rows[0].ID, &rows[0]))
-	}
-	const itunesPath = "file:///Users/synthetic/Music/iTunes/iTunes%20Media/Audiobooks/s.mp3"
-	t.Run("an iTunes source book: held at plan", func(t *testing.T) {
-		f, x, sb, file := setup(t)
-		setBookPID(t, f, sb, "SRCPID")
-		r := build(t, f, x, sb, file)
-		require.Equal(t, repairs.SkipITunes, r.Skipped, r.SkipReason)
-		require.Contains(t, r.SkipReason, sb)
-	})
-	t.Run("an iTunes id on the moved row: held at plan", func(t *testing.T) {
-		f, x, sb, file := setup(t)
-		setRowITunes(t, f, sb, "ROWPID0123456789", "")
-		r := build(t, f, x, sb, file)
-		require.Equal(t, repairs.SkipITunes, r.Skipped, r.SkipReason)
-		require.Contains(t, r.SkipReason, "ROWPID0123456789")
-	})
-	t.Run("an iTunes path on the moved row: held at plan", func(t *testing.T) {
-		f, x, sb, file := setup(t)
-		setRowITunes(t, f, sb, "", itunesPath)
-		r := build(t, f, x, sb, file)
-		require.Equal(t, repairs.SkipITunes, r.Skipped, r.SkipReason)
-		require.Contains(t, r.SkipReason, "iTunes path")
-	})
-	t.Run("a source book the snapshot lacks (a full plan's): read fresh, an iTunes row on it holds", func(t *testing.T) {
-		f, x, sb, file := setup(t)
-		setRowITunes(t, f, sb, "FRESHROWPID0123", "")
-		store, _, err := newFragmentFixer(f.p).stores()
-		require.NoError(t, err)
-		lib := newFragLibrary()
-		lib.extIDs, lib.groupReads = store.GetExternalIDsForBook, store
-		require.NoError(t, replanLoad(store, lib, x))
-		_, held := lib.books[sb]
-		require.False(t, held, "the retired source is not in this snapshot")
-		rec := fragPlanRecord{RowID: "no-parent:carrytest", Survivor: sb, BookIDs: []string{sb}, PlannedAt: time.Now()}
-		r, err := carryRow(store, lib, rec, []string{"op-old"}, x, []fragCarry{{File: file, From: sb, To: x}})
-		require.NoError(t, err)
-		require.Equal(t, repairs.SkipITunes, r.Skipped, r.SkipReason)
-		require.Contains(t, r.SkipReason, "FRESHROWPID0123")
-	})
-	t.Run("an iTunes id on the source book since the plan: the re-plan holds it", func(t *testing.T) {
-		f, x, sb, file := setup(t)
-		r := build(t, f, x, sb, file)
-		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
-		setBookPID(t, f, sb, "LATESRCPID")
-		fresh, err := newFragmentFixer(f.p).Replan(context.Background(), nil, r, nil)
-		require.NoError(t, err)
-		require.Equal(t, repairs.SkipITunes, fresh.Skipped, fresh.SkipReason)
-		onS(t, f, sb)
-	})
-	t.Run("the source book turns iTunes after the locked re-plan: refused", func(t *testing.T) {
-		f, x, sb, file := setup(t)
-		r := build(t, f, x, sb, file)
-		fx := newFragmentFixer(f.p)
-		fx.afterLockedReplan = func() { setBookPID(t, f, sb, "RACESRCPID") }
-		fresh, err := fx.Replan(context.Background(), nil, r, nil)
-		require.NoError(t, err)
-		require.True(t, fresh.Applicable(), "%s: %s", fresh.Skipped, fresh.SkipReason)
-		err = fx.Apply(context.Background(), f.fragWriter(t, "op-apply"), fresh)
-		require.ErrorIs(t, err, repairs.ErrChangedSincePlan)
-		require.Contains(t, err.Error(), sb)
-		onS(t, f, sb)
-	})
-	t.Run("the moved row turns iTunes after the locked re-plan: refused", func(t *testing.T) {
-		f, x, sb, file := setup(t)
-		r := build(t, f, x, sb, file)
-		fx := newFragmentFixer(f.p)
-		fx.afterLockedReplan = func() { setRowITunes(t, f, sb, "RACEROWPID01234", "") }
-		fresh, err := fx.Replan(context.Background(), nil, r, nil)
-		require.NoError(t, err)
-		require.True(t, fresh.Applicable(), "%s: %s", fresh.Skipped, fresh.SkipReason)
-		err = fx.Apply(context.Background(), f.fragWriter(t, "op-apply"), fresh)
-		require.ErrorIs(t, err, repairs.ErrChangedSincePlan)
-		require.Contains(t, err.Error(), "RACEROWPID01234")
-		onS(t, f, sb)
-	})
 }
 
 // TestFragmentFixer_ChapterSetRecheckForeignHoldAcrossOtherRows (PR #3787

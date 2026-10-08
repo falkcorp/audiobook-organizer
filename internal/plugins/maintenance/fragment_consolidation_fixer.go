@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.48.1
+// version: 1.49.0
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
-// last-edited: 2026-10-07
+// last-edited: 2026-10-08
 
 // Repairs-lane fixer "fragment-consolidation": fold chapter and disc files
 // that an old scan imported as their own books ("fragments") back into the
@@ -48,8 +48,9 @@
 // merge lock among them, re-stat both files and never re-read them; any of
 // the five that moved is a change since the plan (a chmod, chown or xattr
 // change moves the ctime too: fail closed). A file whose stat gives no inode
-// is never proven. No file under the iTunes library is ever read. A hands-off
-// claimant elsewhere (an iTunes id, Doctor Who / Big Finish) is compared too
+// is never proven. A file under the iTunes library is read like any other
+// (read-only, 2026-10-08). A hands-off claimant (Doctor Who / Big Finish) is
+// compared too
 // (owner, 2026-10-06: "list; I apply them"): it stays on a manual-only row,
 // never applicable, with the proof in its evidence.
 //   - no-parent: three or more fragments imported from one folder (sibling
@@ -62,17 +63,14 @@
 //     position skips the row), titles it from the folder (unless the title
 //     is locked), points its path at the folder only when that folder's
 //     audio is exactly the group's files, and retires the emptied members.
-//   - manual-only: anything with a path under books/itunes/** (symlinks
-//     resolved), Doctor Who / Big Finish / Torchwood by path or series, or a
-//     fragment that is an iTunes book (fragCandidate.itunesWhy: an iTunes
-//     persistent id on the book, its row or an itunes external id, or an
-//     iTunes path on its row; review 2026-10-06: on prod most library-copy
-//     rows carry one naming their own file). Listed, never applied.
+//   - manual-only: Doctor Who / Big Finish / Torchwood by path or series
+//     (symlinks resolved), or a path that cannot be resolved. Listed, never
+//     applied. A book iTunes knows about is NOT manual-only (see ITUNES).
 //   - ambiguous: a fragment that matches two parents or two parent rows, or
 //     a parent row two fragments claim. Listed, never applied. One exception
-//     (owner, 2026-10-01): a fragment that is not itself an iTunes copy and
-//     matches exactly one non-iTunes parent plus iTunes copies of it takes
-//     the non-iTunes one as its single parent. The iTunes copies are listed
+//     (owner, 2026-10-01): a fragment that matches exactly one non-iTunes
+//     parent plus iTunes copies of it takes the non-iTunes one as its
+//     single parent. The iTunes copies are listed
 //     in the evidence and are never in the row's books, so never written.
 //
 // A plan with the read-only assume_retired param is a what-if: the snapshot
@@ -104,9 +102,8 @@
 //     ("Turn Coat - 27 1", "Metro 2034 - 03 Chapter 3"), numbered with no
 //     gap, an hour or more in total, with no parent book, version or copy of
 //     their audio in the library. Applied as a no-parent row (one book, the
-//     members' rows moved onto it in number order). itunes-chapter-set is
-//     the same set under the iTunes library: listed, never applicable. See
-//     fragment_folder_sets.go.
+//     members' rows moved onto it in number order); under the iTunes
+//     library too (owner decision 2026-10-08). See fragment_folder_sets.go.
 //   - unplaced (2026-10-05): a fragment no group took (fewer than three
 //     same-key siblings, a numbered file left over in a folder of works side
 //     by side, no chapter key). Listed with the reason, never applied; these
@@ -137,8 +134,8 @@
 // conflicting facts keep them all ambiguous. A claimant whose content the
 // plan proved (CONTENT PROOF) is a proven claimant and pairs into the copy
 // row instead; one whose content differs is held. A claimant that
-// is itself hands-off (under the iTunes library, an iTunes id, Doctor Who /
-// Big Finish) is listed manual-only on a "manual:" row of its own
+// is itself hands-off (Doctor Who / Big Finish / Torchwood) is listed
+// manual-only on a "manual:" row of its own
 // (splitManualCopies), so it no longer turns its siblings' copy row manual.
 // A path twin and its donor share one file, so when either is split off onto
 // its own row the other is held with it (splitOrphanTwins): retiring one
@@ -154,45 +151,26 @@
 // it, or a book outside the row holds a file a run moved out of that folder)
 // is held: applying it would make a second live book of the work.
 //
-// ITUNES BOOKS A ROW WOULD WRITE (retireITunes, targetITunes, 2026-10-06).
-// Every applicable row is held (skipped_itunes) when it would write an iTunes
-// book: its target itself (a join's target, a moved/copy/ghost row's parent,
-// a no-parent row's survivor, a carry row's terminal), grouped or not; a
-// retired book a carry row takes file rows off (carryITunes: its own rows,
-// the moved ones among them, by their iTunes ids and paths); or,
-// for a row that retires fragments, a live book in the target's version group
-// or a fragment's (retiring a fragment that reads as primary hands its
-// group's primary on, and the ranking favours an iTunes id). Read fresh at
-// plan and again under the merge lock before the first write.
-//
-// One exception (owner decision 2026-10-06): a copy row (copy or
-// copy-unproven) whose parent is iTunes-linked by itunesCopyWhy's test (a
-// book or row iTunes id, a row iTunes path, a live itunes external id; a
-// parent under the iTunes library is guarded manual-only before this) is not
-// held for its parent. It retires its fragments WRITING THE FRAGMENTS ONLY
-// (retireIntoOnly): no listening state, positions, bookmarks or sync
-// redirect follow onto the parent, no external id moves to it, and nothing on
-// the parent or its version group (tags, metadata, primary flags) changes. A
-// fragment that would have to carry a live external id or listening state
-// onto the parent is held on a row of its own (splitFollowingCopies,
-// skipped_itunes, "parent is iTunes-linked; ... would have to move onto
-// it"), and an iTunes book in a fragment's own version group (where the
-// retire hands the primary on; a fragment grouped with the parent is one)
-// holds the row. Such a row is review risk. Only a positive iTunes answer
-// opens this path: a parent that cannot be read or told is held as before. The mode is in the row's state
-// and fingerprint, so a parent that turned iTunes-linked since the plan
-// refuses the row, and Apply re-checks, under the lock and before the first
-// write, the fragments' groups and every fragment's external ids and user
-// state (each retire reads them again at its own write).
+// ITUNES (owner decision 2026-10-08, "combine them too"). iTunes is
+// import-only (its write-back is gone), so a fragment, parent, survivor or
+// join target iTunes knows about (an iTunes persistent id on a book or row,
+// a row iTunes path, an itunes external id, a file under books/itunes/**) is
+// planned and applied exactly like any other (ITunesDatabaseOnly; the
+// framework guard lifts its books/itunes check for this fixer). Every write
+// is a database row: no file is moved, renamed or deleted, the iTunes
+// library is never written, and every book_file row keeps its iTunes
+// persistent id and iTunes path, so the next import finds each track on the
+// book its row now belongs to. Until then every such row was manual-only or
+// held (skipped_itunes), copies into an iTunes-linked parent were retired
+// writing the fragment alone, and an owner-only row retired iTunes twins.
 //
 // RETIRING a fragment into its parent or survivor is what merge.Service does
 // for an absorbed book: every user's listening state and positions follow it
 // (merge.FollowAbsorbedJournaled, as a slice of the survivor's timeline), its
 // external ids move over, it is demoted, and it is soft-deleted with
 // merged_into_book_id set and its file_path CLEARED (that path is now a file
-// the survivor owns, and the purge deletes a purged book's file_path). Into
-// an iTunes-linked copy parent the first two steps are not run (see ITUNES
-// BOOKS A ROW WOULD WRITE).
+// the survivor owns, and the purge deletes a purged book's file_path). The
+// retire refuses nothing for iTunes (retireIntoITunesDatabaseOnly).
 //
 // EVERY STEP IS UNDOABLE, AND JOURNALED FIRST. Each write goes through
 // repairs.Writer, which records its OperationChange under the apply op's id
@@ -208,12 +186,7 @@
 // and re-plans the row inside it (the whole-library listing, the strict
 // ownership check and every plan-time read), refusing the row if its
 // fingerprint moved. The title and folder writes compare against the values
-// stored with the plan (Row.State). Before the first write of every class
-// (and before a no-parent row's plan record), every book the row retires or
-// takes rows off is read fresh and the row refused whole if any is now an
-// iTunes book (fragsITunesNow, review 2026-10-06): a member's row is moved
-// before its retire, and a parent row repointed before its fragment's, so a
-// later check would come after a write.
+// stored with the plan (Row.State).
 //
 // RESUME. The fingerprint hashes the DECISION (the class, the members, each
 // planned file pairing, the survivor and its state, the title), not the raw
@@ -249,7 +222,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 	"unicode"
@@ -266,7 +238,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
-	"golang.org/x/sync/errgroup"
 )
 
 const fragFixerID = "fragment-consolidation"
@@ -314,9 +285,6 @@ const (
 const (
 	fragRowCopyUnproven  = "copy-unproven"
 	fragRowMovedUnproven = "moved-unproven"
-	// fragRowOwner: a parent's content-proven, iTunes-tracked copies that
-	// only the owner applies (fragment_owner_apply.go).
-	fragRowOwner = "owner"
 )
 
 // Skip kinds this fixer sets itself (the framework adds the guard kinds).
@@ -419,7 +387,18 @@ func newFragmentFixer(p *Plugin) *fragmentFixer {
 	return &fragmentFixer{p: p, statFn: os.Stat, hashFn: fragHashFile, readDir: os.ReadDir, now: time.Now}
 }
 
-var _ repairs.Fixer = (*fragmentFixer)(nil)
+var (
+	_ repairs.Fixer              = (*fragmentFixer)(nil)
+	_ repairs.ITunesDatabaseOnly = (*fragmentFixer)(nil)
+)
+
+// ITunesDatabaseOnly: the owner cleared this fixer (2026-10-08, "combine
+// them too") to consolidate fragments iTunes knows about exactly like any
+// other. iTunes is import-only, so the fixer writes database rows only: no
+// file is moved, renamed or deleted, the iTunes library is never written,
+// and every row keeps its iTunes persistent id and iTunes path. Doctor Who /
+// Big Finish / Torchwood stays guarded.
+func (f *fragmentFixer) ITunesDatabaseOnly() bool { return true }
 
 func (f *fragmentFixer) ID() string    { return fragFixerID }
 func (f *fragmentFixer) Title() string { return "Chapter fragments" }
@@ -431,9 +410,9 @@ func (f *fragmentFixer) Description() string {
 		"chapters' work is already a live book of the same title — retire them into it when the durations agree, " +
 		"never assemble a second copy. Folder chapter set: numbered files of one name in one folder, no gaps, an " +
 		"hour or more, no parent or copy in the library — one book, in number order. Listening progress " +
-		"and external ids follow each retired fragment. iTunes (including fragments with an iTunes id) and " +
-		"Doctor Who / Big Finish / Torchwood are listed for manual action only. Every step is undoable from the " +
-		"apply operation."
+		"and external ids follow each retired fragment. Fragments iTunes knows about are combined like any other: " +
+		"only database rows change (no file is moved and the iTunes library is never written). Doctor Who / " +
+		"Big Finish / Torchwood are listed for manual action only. Every step is undoable from the apply operation."
 }
 
 // fragParams are the fixer params. BookIDs limits the plan to fragments
@@ -556,7 +535,6 @@ func (x fragFile) location() undo.BookFileLocation {
 type fragCandidate struct {
 	Book       fragBook
 	File       fragFile
-	ExtIDs     []database.ExternalIDMapping
 	ImportPath string // where the file was when the book was imported ("" unknown)
 	OrigName   string // the pre-organize basename ("" unknown)
 	Present    bool   // the fragment's own file is on disk
@@ -579,38 +557,6 @@ func (c *fragCandidate) origDir() string {
 		return filepath.Dir(c.ImportPath)
 	}
 	return filepath.Dir(c.File.Path)
-}
-
-// itunesPID names an iTunes persistent id the fragment carries, "" when it
-// carries none. Retiring such a fragment would queue an iTunes remove for
-// that id when the purge reaches the retired book.
-func (c *fragCandidate) itunesPID() string {
-	switch {
-	case c.Book.ITunesPID != "":
-		return "book iTunes id " + c.Book.ITunesPID
-	case c.File.ITunesPID != "":
-		return "file iTunes id " + c.File.ITunesPID
-	}
-	for _, e := range c.ExtIDs {
-		if e.Source == "itunes" && e.ExternalID != "" && !e.Tombstoned {
-			return "itunes external id " + e.ExternalID
-		}
-	}
-	return ""
-}
-
-// itunesWhy names why the fragment is an iTunes book ("" when it is not):
-// an iTunes id it carries (itunesPID), or an iTunes path on its own row
-// (itunesCopyWhy's "row iTunes path"; on prod most library copies carry one
-// naming their own file). Retiring such a book writes an iTunes book.
-func (c *fragCandidate) itunesWhy() string {
-	if pid := c.itunesPID(); pid != "" {
-		return pid
-	}
-	if c.File.ITunesPath != "" {
-		return "row iTunes path " + c.File.ITunesPath
-	}
-	return ""
 }
 
 // fragIndex indexes parent rows (rows of books with two or more rows).
@@ -847,12 +793,6 @@ func (f *fragmentFixer) candidateFrom(store OpsStore, b fragBook, file fragFile,
 	if kind == metadata.ChapterKeyNone && !metadata.IsChapterOnlyTitle(b.Title) {
 		return nil, false, nil
 	}
-	exts, err := store.GetExternalIDsForBook(b.ID)
-	if err != nil {
-		// The iTunes-id guard reads these: fail rather than plan past it.
-		return nil, false, fmt.Errorf("external ids of %s: %w", b.ID, err)
-	}
-	c.ExtIDs = exts
 	if fi, err := f.statFn(file.Path); err == nil {
 		c.Present = true
 		c.DiskSize = fi.Size()
@@ -887,13 +827,6 @@ type fragLibrary struct {
 	// acts when every parent is known.
 	itunes      map[string]string
 	itunesDoubt map[string]bool
-	// ownerWhyNot is why a fragment the owner row was asked about (an
-	// iTunes path on its row, or a version group) is not owner-applicable,
-	// by fragment id (splitManualCopies). The copy row that ends up holding
-	// it names the reason (parentRow, ownerWhyNotOf): it was
-	// computed and then dropped until 2026-10-07, which hid that an iTunes
-	// twin in the version group was what held 300 prod copies.
-	ownerWhyNot map[string]string
 	// content holds the content comparisons of copy claimants
 	// (proveCopiesByContent at plan, restoreContentProofs at re-plan), by
 	// contentKey(fragment file id, parent row id).
@@ -914,13 +847,6 @@ type fragLibrary struct {
 	// loads every book it needs by id. existingBookCheck reads it to credit
 	// fragments an earlier join already retired.
 	lookupBook func(id string) (fragBook, bool)
-	// extIDs reads a book's external ids (the join target's iTunes check);
-	// set by every plan and re-plan, nil only in a snapshot built by hand.
-	extIDs func(id string) ([]database.ExternalIDMapping, error)
-	// groupReads reads a version group's members and their rows fresh (the
-	// join's iTunes-group check, retireITunes); set by every plan and
-	// re-plan, nil only in a snapshot built by hand.
-	groupReads fragGroupReads
 	// assembled are the books a no-parent apply of this fixer assembled (the
 	// survivor of a plan record not reverted): never a join target while a
 	// book that is not one agrees (S3, 2026-10-05: 13 such books were second
@@ -1052,8 +978,6 @@ func (f *fragmentFixer) loadLibraryFrom(store OpsStore, list func(limit, offset 
 	if err := lib.loadRoots(store, f.p.deps.RootDir()); err != nil {
 		return nil, err
 	}
-	lib.extIDs = store.GetExternalIDsForBook
-	lib.groupReads = store
 	lib.setLookup(store)
 	return lib, nil
 }
@@ -1446,9 +1370,9 @@ func (lib *fragLibrary) dcBookOf(id string) *dcBook {
 }
 
 // disregardITunesParents is the owner's 2026-10-01 rule: when a fragment
-// that is not itself an iTunes copy matches exactly one non-iTunes parent
-// book plus one or more iTunes copies of it, the non-iTunes parent is its
-// single parent. It returns the matches to that parent and the iTunes
+// (an iTunes one too, since 2026-10-08) matches exactly one non-iTunes
+// parent book plus one or more iTunes copies of it, the non-iTunes parent
+// is its single parent. It returns the matches to that parent and the iTunes
 // parents set aside (never written: they are not in the row's books).
 //
 // "Copies of it" is proven, not assumed: every iTunes parent set aside must
@@ -1460,19 +1384,16 @@ func (lib *fragLibrary) dcBookOf(id string) *dcBook {
 // a work: under 60 s, or an intro/credits title.
 //
 // ok is false when the rule does not apply (a parent the plan could not tell,
-// two non-iTunes parents, no iTunes parent, an iTunes or non-chapter
-// fragment, an iTunes parent not proven a copy, or verdicts unreadable).
+// two non-iTunes parents, no iTunes parent, a non-chapter fragment, an
+// iTunes parent not proven a copy, or verdicts unreadable).
 // note says why when the rule would have acted but could not read the
 // owner's verdicts; the fragment's ambiguous row carries it.
 func (f *fragmentFixer) disregardITunesParents(lib *fragLibrary, c *fragCandidate, ms []fragMatch) (kept []fragMatch, ignored []string, ok bool, note string) {
-	if c.itunesPID() != "" || c.File.ITunesPath != "" {
-		return nil, nil, false, ""
-	}
 	if !dcLinkRow(database.BookFileCore{ID: c.File.ID, FilePath: c.File.Path, Duration: c.File.Duration}) ||
 		boilerplate.IsBoilerplateTitle(c.Book.Title) {
 		return nil, nil, false, ""
 	}
-	if k, _ := f.guard(lib, []fragBook{c.Book}, map[string][]string{c.Book.ID: {c.ImportPath}}); k == repairs.SkipITunes || k == repairs.SkipGuardUnreadable {
+	if k, _ := f.guard(lib, []fragBook{c.Book}, map[string][]string{c.Book.ID: {c.ImportPath}}); k == repairs.SkipGuardUnreadable {
 		return nil, nil, false, ""
 	}
 	keep := ""
@@ -2461,13 +2382,7 @@ func (f *fragmentFixer) continueInterrupted(ctx context.Context, lib *fragLibrar
 				rowsOf[i] = row
 				continue
 			}
-			// An iTunes book among the run's books is never written, so a
-			// merge by hand is not offered for it: only the revert.
-			finish := actFinish(rec.Survivor)
-			if got.Skipped == repairs.SkipITunes {
-				finish = ""
-			}
-			rowsOf[i] = interruptedRow(lib, rec, u.ops, why, orActions(revertAct(pj, u.ops), finish))
+			rowsOf[i] = interruptedRow(lib, rec, u.ops, why, orActions(revertAct(pj, u.ops), actFinish(rec.Survivor)))
 		}
 	}
 	var emitted []fragPlanRecord
@@ -2616,11 +2531,6 @@ func carryRow(store OpsStore, lib *fragLibrary, rec fragPlanRecord, ops []string
 		State:       state,
 		Detail:      carry,
 		Fingerprint: fragFingerprint(fp...)}
-	// The files move off the retired books onto terminal: never off or
-	// onto an iTunes book, nor an iTunes file row.
-	if why := lib.carryITunes(store, terminal, carry); why != "" {
-		r.Skipped, r.SkipReason = repairs.SkipITunes, why
-	}
 	for _, id := range ids {
 		b, ok := lib.books[id]
 		if !ok {
@@ -2667,9 +2577,6 @@ func (f *fragmentFixer) replanCarry(store OpsStore, lib *fragLibrary, planned re
 	}
 	got := planned
 	got.Detail = carry
-	if why := lib.carryITunes(store, carry[0].To, carry); why != "" {
-		got.Skipped, got.SkipReason = repairs.SkipITunes, why
-	}
 	return got, nil
 }
 
@@ -2683,35 +2590,6 @@ func carryFroms(carry []fragCarry) []string {
 	}
 	sort.Strings(froms)
 	return froms
-}
-
-// carryITunes is why a carry row is held as writing an iTunes book ("" none):
-// the book its files move onto (targetITunes), or a retired book they leave.
-// Taking rows off a book writes it too, and targetITunes judges a book by
-// its rows (itunesCopyWhy: each row's iTunes id and iTunes path), so the
-// moved rows themselves are judged with the rest of the book they leave;
-// all read fresh when lib.groupReads is set. A full plan's snapshot holds
-// live books only, so a retired book it lacks is read fresh from store
-// (book, rows, external ids); a read that fails holds: fail closed.
-func (lib *fragLibrary) carryITunes(store OpsStore, to string, carry []fragCarry) string {
-	if why := lib.targetITunes(to); why != "" {
-		return why
-	}
-	for _, from := range carryFroms(carry) {
-		why := ""
-		if _, ok := lib.books[from]; ok {
-			why = lib.targetITunes(from)
-		} else {
-			var err error
-			if why, err = bookITunesFresh(store, lib.paths, from); err != nil {
-				why = fmt.Sprintf("book %s, which the files leave, cannot be read (%v), so whether it is an iTunes copy cannot be told; decide by hand", from, err)
-			}
-		}
-		if why != "" {
-			return why
-		}
-	}
-	return ""
 }
 
 // survivorGoneWhy says how a record's survivor left the live library: the
@@ -3040,11 +2918,9 @@ func (f *fragmentFixer) buildRows(lib *fragLibrary, ix *fragIndex, cands []*frag
 		pairs[d.k] = append(pairs[d.k], twin)
 	}
 	unmatched = stillUnmatched
-	// Copy rows: a fragment that is itself hands-off (an iTunes copy, Doctor
-	// Who / Big Finish) is listed manual-only on its own row rather than
-	// turning its siblings' row manual; and a copy into an iTunes-linked
-	// parent drops the fragments that would carry anything onto it.
-	probe := f.lazyUserStateProbe()
+	// Copy rows: a fragment that is itself hands-off (Doctor Who / Big
+	// Finish / Torchwood) is listed manual-only on its own row rather than
+	// turning its siblings' row manual.
 	var copyKeys []parentKey
 	for k := range pairs {
 		if k.kind == fragClassCopy || k.kind == fragRowCopyUnproven {
@@ -3057,49 +2933,15 @@ func (f *fragmentFixer) buildRows(lib *fragLibrary, ix *fragIndex, cands []*frag
 		}
 		return copyKeys[i].kind < copyKeys[j].kind
 	})
-	// The iTunes twins an owner row carries (by parent): they are listed and
-	// written there, so they leave the parent's copy-unproven row ("copy"
-	// sorts before "copy-unproven", so the owner row is built first).
-	ownerTwins := map[string]map[string]bool{}
 	for _, k := range copyKeys {
-		ps := pairs[k]
-		if taken := ownerTwins[k.parent]; len(taken) > 0 {
-			var rest []fragPair
-			for _, p := range ps {
-				if !taken[p.Frag.Book.ID] {
-					rest = append(rest, p)
-				}
-			}
-			ps = rest
-			pairs[k] = rest
-			if len(ps) == 0 {
-				delete(pairs, k)
-				continue
-			}
-		}
-		var held, split []repairs.Row
-		var twins map[string]bool
-		ps, held, twins = f.splitManualCopies(lib, k.parent, ps, probe)
-		if len(twins) > 0 {
-			if ownerTwins[k.parent] == nil {
-				ownerTwins[k.parent] = map[string]bool{}
-			}
-			for id := range twins {
-				ownerTwins[k.parent][id] = true
-			}
-		}
-		split = append(split, held...)
-		if itWhy, ok := lib.itunesParent(k.parent); ok {
-			ps, held = f.splitFollowingCopies(lib, k.parent, itWhy, ps, probe)
-			split = append(split, held...)
-		}
+		ps, split := f.splitManualCopies(lib, k.parent, pairs[k])
 		heldWhy := map[string]string{}
 		for _, r := range split {
 			_, id, _ := strings.Cut(r.RowID, ":")
 			heldWhy[id] = r.SkipReason
 		}
 		rows = append(rows, split...)
-		ps, held = f.splitOrphanTwins(lib, k.parent, ps, pairs[k], heldWhy)
+		ps, held := f.splitOrphanTwins(lib, k.parent, ps, pairs[k], heldWhy)
 		rows = append(rows, held...)
 		if len(ps) == 0 {
 			delete(pairs, k)
@@ -3153,59 +2995,20 @@ func (f *fragmentFixer) copiesOfPresentRow(lib *fragLibrary, cs []*fragCandidate
 
 // splitManualCopies takes out of a copy row's pairs the fragments that are
 // hands-off on their own (the guard over the fragment's paths and import
-// path, or an iTunes id on it) and lists each manual-only on a row of its
-// own, so one iTunes copy does not make its siblings' row manual. A parent
-// that is itself hands-off keeps every pair (its row is manual whole), and
-// so does a row whose every fragment is hands-off.
-//
-// The fragments the owner may apply himself (ownerEligible: each
-// iTunes-tracked by its own row's iTunes path alone, proven by content) are
-// ALWAYS taken off the parent's copy row onto ONE owner row of their own,
-// "owner:<parent>" (ownerRow), marked owner-applicable: one Apply (owner)
-// retires them all or, on any refusal, none.
-func (f *fragmentFixer) splitManualCopies(lib *fragLibrary, parentID string, ps []fragPair, probe *fragProbe) ([]fragPair, []repairs.Row, map[string]bool) {
+// path: Doctor Who / Big Finish / Torchwood, or a path that cannot be told)
+// and lists each manual-only on a row of its own, so one hands-off copy does
+// not make its siblings' row manual. A parent that is itself hands-off keeps
+// every pair (its row is manual whole), and so does a row whose every
+// fragment is hands-off. An iTunes-tracked fragment is an ordinary one
+// (owner decision 2026-10-08; ITunesDatabaseOnly).
+func (f *fragmentFixer) splitManualCopies(lib *fragLibrary, parentID string, ps []fragPair) ([]fragPair, []repairs.Row) {
 	if k, _ := f.guard(lib, []fragBook{lib.books[parentID]}, nil); k != "" {
-		return ps, nil, nil
+		return ps, nil
 	}
-	var keep, handsOff, ownerPairs []fragPair
-	var held []repairs.Row
+	var keep, handsOff []fragPair
 	whys := map[string][2]string{}
-	twinsOf := map[string][]fragTwin{}
 	for _, p := range ps {
 		kind, why := f.guard(lib, []fragBook{p.Frag.Book}, map[string][]string{p.Frag.Book.ID: {p.Frag.ImportPath}})
-		if kind == "" {
-			it := p.Frag.itunesWhy()
-			// A fragment iTunes-tracked by its own row's iTunes path, or
-			// one whose version group holds (or may hold: an unreadable
-			// group answers too) another iTunes book, which may be its
-			// iTunes twin (the library copy of an iTunes file), is asked
-			// whether the owner may apply it (ownerEligible). Any other
-			// fragment is an ordinary one: no owner reason is recorded
-			// for it, so none is shown on a row held for something else.
-			askOwner := it != ""
-			if g := p.Frag.Book.VersionGroup; !askOwner && g != "" {
-				askOwner = lib.groupsITunesExcept(map[string]bool{g: true}, map[string]bool{p.Frag.Book.ID: true}) != ""
-			}
-			if askOwner {
-				whyNot, twins := f.ownerEligible(lib, parentID, p, ps, probe)
-				if whyNot == "" {
-					ownerPairs = append(ownerPairs, p)
-					twinsOf[p.Frag.Book.ID] = twins
-					continue
-				}
-				if whyNot != ownerNoITunesLink {
-					// Shown wherever the row is then held (D9).
-					if lib.ownerWhyNot == nil {
-						lib.ownerWhyNot = map[string]string{}
-					}
-					lib.ownerWhyNot[p.Frag.Book.ID] = whyNot
-				}
-				if it != "" {
-					kind, why = repairs.SkipITunes, "it is an iTunes book ("+it+"); iTunes books are never written"
-					why += "; not owner-applicable: " + whyNot
-				}
-			}
-		}
 		if kind == "" {
 			keep = append(keep, p)
 			continue
@@ -3213,21 +3016,10 @@ func (f *fragmentFixer) splitManualCopies(lib *fragLibrary, parentID string, ps 
 		handsOff = append(handsOff, p)
 		whys[p.Frag.Book.ID] = [2]string{kind, why}
 	}
-	var taken map[string]bool
-	if len(ownerPairs) > 0 {
-		held = append(held, f.ownerRow(lib, parentID, ownerPairs, twinsOf))
-		for _, ts := range twinsOf {
-			for _, t := range ts {
-				if taken == nil {
-					taken = map[string]bool{}
-				}
-				taken[t.ID] = true
-			}
-		}
-	}
 	if len(keep) == 0 {
-		return handsOff, held, taken
+		return handsOff, nil
 	}
+	var held []repairs.Row
 	for _, p := range handsOff {
 		w := whys[p.Frag.Book.ID]
 		r := f.holdRow(lib, p.Frag, "manual", fragClassManual, w[0],
@@ -3236,7 +3028,7 @@ func (f *fragmentFixer) splitManualCopies(lib *fragLibrary, parentID string, ps 
 		r.Class = fragClassManual
 		held = append(held, r)
 	}
-	return keep, held, taken
+	return keep, held
 }
 
 // splitOrphanTwins keeps a path twin and its donor (the fragment whose
@@ -3300,132 +3092,6 @@ func (f *fragmentFixer) splitOrphanTwins(lib *fragLibrary, parentID string, kept
 	return kept, held
 }
 
-// fragProbe is a lazily made merge.UserStateProbe (one ListUsers per plan).
-// init is once-only, so has is safe from several goroutines.
-type fragProbe struct {
-	make  func() (*merge.UserStateProbe, error)
-	once  sync.Once
-	probe *merge.UserStateProbe
-	err   error
-}
-
-func (fp *fragProbe) init() {
-	fp.once.Do(func() { fp.probe, fp.err = fp.make() })
-}
-
-func (f *fragmentFixer) lazyUserStateProbe() *fragProbe {
-	return &fragProbe{make: func() (*merge.UserStateProbe, error) {
-		um := f.p.deps.MergeUserStateStore()
-		if um == nil {
-			return nil, errors.New("the user-state store is unavailable")
-		}
-		return merge.NewUserStateProbe(um)
-	}}
-}
-
-// has reports whether book id has listening state a retire would carry
-// (merge.BookHasCarryableUserState: positions, a book state, owed
-// bookmarks).
-func (fp *fragProbe) has(id string) (bool, error) {
-	fp.init()
-	if fp.err != nil {
-		return false, fp.err
-	}
-	return fp.probe.Has(id)
-}
-
-// ownerWhyNotOf is why the first of pairs the owner's row was asked about
-// is not on it ("" none), for a held row's reason (D9: the owner sees why
-// the row is not theirs to apply, not only the iTunes book that holds it).
-func (lib *fragLibrary) ownerWhyNotOf(pairs []fragPair) string {
-	for _, p := range pairs {
-		if w := lib.ownerWhyNot[p.Frag.Book.ID]; w != "" {
-			return fmt.Sprintf("; not owner-applicable (fragment %s): %s", p.Frag.Book.ID, w)
-		}
-	}
-	return ""
-}
-
-// itunesParent is why parent id is an iTunes-linked book (itunesCopyWhy:
-// a book or row iTunes id, a row iTunes path, a live itunes external id, a
-// path in the iTunes library), ok only for a positive answer: a book that
-// cannot be read or told is not "iTunes-linked" here, and the ordinary
-// retire check (retireITunes) then holds its row.
-func (lib *fragLibrary) itunesParent(id string) (why string, ok bool) {
-	b, found := lib.books[id]
-	if !found {
-		return "", false
-	}
-	why, doubt, err := lib.memberITunesWhy(b)
-	if err != nil || doubt || why == "" {
-		return "", false
-	}
-	return why, true
-}
-
-// fragmentOnlyParent is itunesParent for a row of kind rowKind: only a copy
-// row retires into an iTunes-linked parent, writing the fragments alone
-// (a moved row repoints the parent's own row).
-func (lib *fragLibrary) fragmentOnlyParent(rowKind, parentID string) (string, bool) {
-	if rowKind != fragClassCopy && rowKind != fragRowCopyUnproven {
-		return "", false
-	}
-	return lib.itunesParent(parentID)
-}
-
-// splitFollowingCopies takes out of a copy row into iTunes-linked parent
-// parentID (itWhy) every fragment whose retire would have to carry something
-// onto the parent: a live external id, or listening state, positions or
-// bookmarks (owner rule 2026-10-06: the parent is never written). Each is
-// held on a row of its own, so its siblings still retire.
-func (f *fragmentFixer) splitFollowingCopies(lib *fragLibrary, parentID, itWhy string, ps []fragPair, probe *fragProbe) ([]fragPair, []repairs.Row) {
-	// One user-state read per fragment, on a bounded pool: a parent of a
-	// few hundred chapter files has as many copies (CLAUDE.md, concurrency).
-	// Each worker writes only its own index; the probe is made first.
-	whats := make([]string, len(ps))
-	probe.init()
-	var g errgroup.Group
-	g.SetLimit(runtime.NumCPU())
-	for i := range ps {
-		g.Go(func() error {
-			whats[i] = carriesOnto(ps[i].Frag, probe)
-			return nil
-		})
-	}
-	_ = g.Wait() // every worker returns nil; a read error is its "what"
-	var keep []fragPair
-	var held []repairs.Row
-	for i, p := range ps {
-		if whats[i] == "" {
-			keep = append(keep, p)
-			continue
-		}
-		held = append(held, f.holdRow(lib, p.Frag, fragClassHeld, fragClassHeld, repairs.SkipITunes,
-			fmt.Sprintf("copies parent %s row %s; parent is iTunes-linked (%s), so only the fragment may be written, but %s would have to move onto it",
-				parentID, p.Parent.ID, itWhy, whats[i]),
-			[]fragMatch{{Row: p.Parent, Evidence: p.Evidence}}))
-	}
-	return keep, held
-}
-
-// carriesOnto is what retiring fragment c would carry onto its survivor
-// ("" nothing): a live external id, or listening state, positions or
-// bookmarks (state that cannot be read counts: fail closed).
-func carriesOnto(c *fragCandidate, probe *fragProbe) string {
-	for _, e := range c.ExtIDs {
-		if !e.Tombstoned {
-			return "its external id " + e.Source + "/" + e.ExternalID
-		}
-	}
-	switch has, err := probe.has(c.Book.ID); {
-	case err != nil:
-		return "listening state that cannot be ruled out (" + err.Error() + ")"
-	case has:
-		return "its listening state, positions or bookmarks"
-	}
-	return ""
-}
-
 // pairFor decides the kind of one fragment's claim on one parent row: ghost
 // when the fragment's own file is gone, moved when the parent row's path is
 // gone, copy when both are on disk; an unproven moved or copy claim gets its
@@ -3465,7 +3131,8 @@ func (f *fragmentFixer) pairFor(c *fragCandidate, m fragMatch, lib *fragLibrary,
 
 // guard runs the framework's hands-off check over every path the row names,
 // the fragments' import paths included, so a row can be labelled
-// manual-only by the fixer itself.
+// manual-only by the fixer itself. The books/itunes path check is lifted
+// (ITunesDatabaseOnly), as the framework's apply guard lifts it.
 func (f *fragmentFixer) guard(lib *fragLibrary, books []fragBook, extra map[string][]string) (kind, why string) {
 	for _, b := range books {
 		paths := []string{b.FilePath}
@@ -3473,7 +3140,7 @@ func (f *fragmentFixer) guard(lib *fragLibrary, books []fragBook, extra map[stri
 			paths = append(paths, r.Path)
 		}
 		paths = append(paths, extra[b.ID]...)
-		if k, w := repairs.GuardBookPathsWith(lib.paths, b.ID, paths, lib.seriesName(b)); k != "" {
+		if k, w := repairs.GuardBookPathsFor(f, lib.paths, b.ID, paths, lib.seriesName(b)); k != "" {
 			return k, w
 		}
 	}
@@ -3515,7 +3182,7 @@ func (f *fragmentFixer) holdRow(lib *fragLibrary, c *fragCandidate, idPrefix, cl
 			}
 		}
 	}
-	if k, _ := f.guard(lib, books, map[string][]string{c.Book.ID: {c.ImportPath}}); k != "" || c.itunesWhy() != "" {
+	if k, _ := f.guard(lib, books, map[string][]string{c.Book.ID: {c.ImportPath}}); k != "" {
 		r.Class = fragClassManual
 	}
 	r.Fingerprint = fragFingerprint(idPrefix, c.Book.ID, why)
@@ -3541,7 +3208,7 @@ func (f *fragmentFixer) parentRow(lib *fragLibrary, parentID, rowKind string, pa
 	books := []fragBook{parent}
 	extra := map[string][]string{}
 	var fpParts []string
-	done, withPID, notCompared := 0, "", ""
+	done, notCompared := 0, ""
 	var st fragParentState
 	var ignored []string
 	for _, p := range pairs {
@@ -3552,12 +3219,6 @@ func (f *fragmentFixer) parentRow(lib *fragLibrary, parentID, rowKind string, pa
 		extra[p.Frag.Book.ID] = []string{p.Frag.ImportPath}
 		if p.Done {
 			done++
-		}
-		if it := p.Frag.itunesWhy(); it != "" && withPID == "" {
-			withPID = fmt.Sprintf("fragment %s is an iTunes book (%s)", p.Frag.Book.ID, it)
-			if whyNot := lib.ownerWhyNot[p.Frag.Book.ID]; whyNot != "" {
-				withPID += "; not owner-applicable: " + whyNot
-			}
 		}
 		r.Evidence = append(r.Evidence, fmt.Sprintf("%s ← parent row %s (%s): %s",
 			p.Frag.File.Path, p.Parent.ID, filepath.Base(p.Parent.Path), p.Evidence))
@@ -3620,30 +3281,6 @@ func (f *fragmentFixer) parentRow(lib *fragLibrary, parentID, rowKind string, pa
 	}
 	if k, why := f.guard(lib, books, extra); k != "" {
 		r.Class, r.Skipped, r.SkipReason = fragClassManual, k, why
-	} else if withPID != "" {
-		r.Class, r.Skipped, r.SkipReason = fragClassManual, repairs.SkipITunes,
-			withPID+"; iTunes books are never written (an iTunes id would also queue an iTunes remove at the purge)"
-	} else if itWhy, ok := lib.fragmentOnlyParent(rowKind, parentID); ok {
-		// A copy into an iTunes-linked parent writes the fragments only
-		// (owner, 2026-10-06): no listening state, external id or primary
-		// flag reaches the parent (retireIntoOnly; fragments that would
-		// carry any were split off by splitFollowingCopies). The fragments'
-		// own version groups still get their primary handed on, so an
-		// iTunes book in one of them holds the row.
-		st.ITunesParent = itWhy
-		r.Risk = repairs.RiskReview
-		r.Current["itunes_parent"] = itWhy
-		r.Proposed["action"] += "; the parent is iTunes-linked (" + itWhy + "), so only the fragments are written: " +
-			"nothing on the parent or its version group changes"
-		if why := lib.groupsITunes(fragGroups(books[1:])); why != "" {
-			r.Risk, r.Skipped, r.SkipReason = repairs.RiskReview, repairs.SkipITunes, why+lib.ownerWhyNotOf(pairs)
-		}
-		fpParts = append(fpParts, "fragment-only|itunes-parent")
-	} else if why := lib.retireITunes(parentID, books[1:]); why != "" {
-		// Retiring a fragment into the parent hands its version group's
-		// primary on (and the parent's group is re-ranked), exactly as a
-		// join does: held for an iTunes copy in any of those groups.
-		r.Risk, r.Skipped, r.SkipReason = repairs.RiskReview, repairs.SkipITunes, why+lib.ownerWhyNotOf(pairs)
 	}
 	if len(ignored) > 0 {
 		// Replan re-reads these and re-runs the rule's identity gate on them.
@@ -3651,7 +3288,7 @@ func (f *fragmentFixer) parentRow(lib *fragLibrary, parentID, rowKind string, pa
 		st.IgnoredITunes = ignored
 		fpParts = append(fpParts, "itunes-set-aside|"+strings.Join(ignored, ","))
 	}
-	if len(st.IgnoredITunes) > 0 || st.ITunesParent != "" || len(st.ContentProofs) > 0 {
+	if len(st.IgnoredITunes) > 0 || len(st.ContentProofs) > 0 {
 		raw, err := json.Marshal(st)
 		if err != nil {
 			r.Skipped, r.SkipReason = fragSkipUnreadable, "cannot store the row's state: "+err.Error()
@@ -3673,26 +3310,12 @@ type fragParentState struct {
 	// (owner rule 2026-10-05: totals disagree, so a different book sharing
 	// files). Replan loads them and decides again; checkOwners allows them.
 	CoOwners []string `json:"co_owners,omitempty"`
-	// ITunesParent is why the parent of a copy row is iTunes-linked: the
-	// row retires its fragments writing them alone (fragmentOnlyParent,
-	// retireIntoOnly). Apply reads it from the locked re-plan to pick that
-	// retire; the fingerprint carries the mode, so a parent that turned
-	// iTunes-linked (or stopped being) since the plan changes the row.
-	ITunesParent string `json:"itunes_parent,omitempty"`
 	// ContentProofs are the plan's content proofs of the row's copies
 	// (proveCopiesByContent): which files, their signatures as read (size,
 	// mtime, ctime, device, inode), and the digest. A re-plan re-stats both files of each and restores
 	// the proof only while both are unchanged; nothing is re-read under
 	// the lock, and nothing is ever stored on a book or row.
 	ContentProofs []fragContentProof `json:"content_proofs,omitempty"`
-	// OwnerParent is set on an owner row (fragment_owner_apply.go): the
-	// parent its fragments copy, which Apply checks against the row id.
-	OwnerParent string `json:"owner_parent,omitempty"`
-	// OwnerTwins, on an owner row, are each fragment's iTunes twins
-	// (fragment_owner_apply.go ownerTwins): the non-primary books of its
-	// version group whose only file is the iTunes library's copy of the same
-	// audio. Apply retires them into the parent first, database rows only.
-	OwnerTwins map[string][]string `json:"owner_twins,omitempty"`
 }
 
 func uniqueSorted(in []string) []string {
@@ -4551,7 +4174,6 @@ func (f *fragmentFixer) noParentRows(lib *fragLibrary, cands []*fragCandidate) [
 	}
 	holdSameAudioRows(rows)
 	f.classifyFolderSets(lib, live, rows, sets, cands)
-	holdSurvivorITunes(lib, rows)
 	for _, c := range cands {
 		if placed[c] {
 			continue
@@ -4564,9 +4186,9 @@ func (f *fragmentFixer) noParentRows(lib *fragLibrary, cands []*fragCandidate) [
 		r := f.holdRow(lib, c, fragClassUnplaced, fragClassUnplaced, d.kind, d.why, nil)
 		if r.Class == fragClassManual {
 			// Counted where the census looks for it: an unplaced fragment that
-			// is also hands-off (iTunes, Doctor Who) is still unplaced.
+			// is also hands-off (Doctor Who) is still unplaced.
 			r.Class = fragClassUnplaced
-			r.Evidence = append(r.Evidence, "also manual-only (iTunes or a hands-off path or series): never applied by this fixer")
+			r.Evidence = append(r.Evidence, "also manual-only (a hands-off path or series): never applied by this fixer")
 		}
 		rows = append(rows, r)
 	}
@@ -5397,14 +5019,8 @@ func (f *fragmentFixer) joinExisting(lib *fragLibrary, r *repairs.Row, plan *fra
 		return
 	}
 	target := lib.books[e.id]
-	if k, why := f.joinTargetBookRefusal(lib, e.id); k != "" {
+	if k, why := f.joinTargetRefusal(lib, e.id); k != "" {
 		r.Class, r.Skipped, r.SkipReason = fragClassManual, k, why
-		return
-	}
-	// The join stands as the decision, held: its version groups hold an
-	// iTunes copy the retire hand-off would write (retireITunes).
-	if why := lib.retireITunes(e.id, planFragBooks(plan)); why != "" {
-		f.holdExisting(lib, r, plan, e.id, repairs.SkipITunes, why)
 		return
 	}
 	plan.Join = e.id
@@ -5461,332 +5077,11 @@ func (f *fragmentFixer) joinExisting(lib *fragLibrary, r *repairs.Row, plan *fra
 }
 
 // joinTargetRefusal is why a book cannot be a join target ("" none): a
-// hands-off path or series (the framework guard), or an iTunes id on the
-// book, on any of its file rows, or as an un-tombstoned external id. Writing
-// to it (listening state, external ids) would touch an iTunes-tracked book.
-// An unreadable external id list refuses too: fail closed. frags are the
-// fragments the join retires: a version group of the target's or of any of
-// theirs holding a live iTunes copy refuses the join too (retireITunes).
-func (f *fragmentFixer) joinTargetRefusal(lib *fragLibrary, id string, frags []fragBook) (kind, why string) {
-	if k, w := f.joinTargetBookRefusal(lib, id); k != "" {
-		return k, w
-	}
-	if w := lib.retireITunes(id, frags); w != "" {
-		return repairs.SkipITunes, w
-	}
-	return "", ""
-}
-
-// holdSurvivorITunes holds each applicable no-parent row (assembled into
-// its survivor, not joined) that would write an iTunes book (retireITunes):
-// the survivor itself, or a book in a version group of the survivor or of a
-// member or copy it retires (each retire hands its group's primary on).
-// Plan and the group re-plan both run it (noParentRows).
-func holdSurvivorITunes(lib *fragLibrary, rows []repairs.Row) {
-	for i := range rows {
-		r := &rows[i]
-		plan, ok := r.Detail.(*fragGroupPlan)
-		if !ok || plan.Join != "" || plan.SurvivorID == "" || !r.Applicable() {
-			continue
-		}
-		if why := lib.retireITunes(plan.SurvivorID, survivorRetirees(plan)); why != "" {
-			r.Risk, r.Skipped, r.SkipReason = repairs.RiskReview, repairs.SkipITunes, why
-		}
-	}
-}
-
-// survivorRetirees lists the books a no-parent plan retires into its
-// survivor: its members and copies but the survivor.
-func survivorRetirees(plan *fragGroupPlan) []fragBook {
-	var out []fragBook
-	for _, b := range planFragBooks(plan) {
-		if b.ID != plan.SurvivorID {
-			out = append(out, b)
-		}
-	}
-	return out
-}
-
-// planFragBooks lists the books a group plan's join retires: its members and
-// copies.
-func planFragBooks(plan *fragGroupPlan) []fragBook {
-	var out []fragBook
-	for _, m := range plan.Members {
-		out = append(out, m.Frag.Book)
-	}
-	for _, cp := range plan.Copies {
-		out = append(out, cp.Frag.Book)
-	}
-	return out
-}
-
-// retireITunes is why a row that retires fragments into target (a join, a
-// moved/copy/ghost row into its parent, a no-parent row into its survivor)
-// is held for an iTunes book it would write ("" none):
-//   - target itself, grouped or not: its rows are repointed or moved onto,
-//     listening state and external ids are carried to it, its totals are
-//     recomputed;
-//   - any live book in target's version group or a fragment's: retiring a
-//     fragment that reads as primary demotes it and hands its group's
-//     primary on (versionprimary.EnsureSinglePrimary), which ranks an iTunes
-//     id up and writes is_primary_version on the iTunes book, and the
-//     target's own group is re-ranked the same way.
-//
-// Owner rule: iTunes books stay untouched. "iTunes book" is itunesCopyWhy's
-// test: a book or file-row iTunes id, a file-row iTunes path, an
-// un-tombstoned itunes external id, or a path in the iTunes library. Books
-// are read fresh, point by point (lib.groupReads), so a re-plan whose
-// snapshot holds only the row's books sees every member. A read that fails,
-// or a book that cannot be told, holds too: fail closed.
-func (lib *fragLibrary) retireITunes(target string, frags []fragBook) string {
-	// The target itself first, grouped or not: every retire writes it
-	// (rows repointed or moved onto it, listening state and external ids
-	// carried to it, its totals recomputed).
-	if why := lib.targetITunes(target); why != "" {
-		return why
-	}
-	groups := fragGroups(frags)
-	if g := lib.books[target].VersionGroup; g != "" {
-		groups[g] = true
-	}
-	return lib.groupsITunes(groups)
-}
-
-// fragGroups is the set of the version groups frags belong to.
-func fragGroups(frags []fragBook) map[string]bool {
-	groups := map[string]bool{}
-	for _, b := range frags {
-		if b.VersionGroup != "" {
-			groups[b.VersionGroup] = true
-		}
-	}
-	return groups
-}
-
-// groupsITunes is why a retire whose primary hand-off writes in groups is
-// held for an iTunes book in one of them ("" none), read as retireITunes
-// reads them (fresh when lib.groupReads is set; a read error or doubt holds).
-func (lib *fragLibrary) groupsITunes(groups map[string]bool) string {
-	return lib.groupsITunesExcept(groups, nil)
-}
-
-// groupsITunesExcept is groupsITunes with the books in except left out: the
-// owner apply's check of a fragment's own group, where the fragment itself
-// is the iTunes-tracked book being retired and every OTHER member must not
-// be an iTunes book.
-func (lib *fragLibrary) groupsITunesExcept(groups, except map[string]bool) string {
-	for _, g := range sortedKeys(groups) {
-		members, err := lib.versionGroupMembers(g)
-		if err != nil {
-			return fmt.Sprintf("version group %s of the retire is unreadable (%v), so an iTunes copy in it cannot be ruled out; decide by hand", g, err)
-		}
-		for _, m := range members {
-			if except[m.ID] {
-				continue
-			}
-			why, doubt, err := lib.memberITunesWhy(m)
-			switch {
-			case err != nil:
-				return fmt.Sprintf("book %s of version group %s cannot be read (%v), so whether it is an iTunes copy cannot be told; decide by hand", m.ID, g, err)
-			case doubt:
-				return fmt.Sprintf("whether book %s of version group %s is an iTunes copy cannot be told; decide by hand", m.ID, g)
-			case why != "":
-				return fmt.Sprintf("version group %s, which this retire writes to (a retired fragment's primary is handed on within it), holds iTunes copy %s (%q: %s); iTunes books are never written, so the row is held; decide by hand",
-					g, m.ID, m.Title, why)
-			}
-		}
-	}
-	return ""
-}
-
-// targetITunes is why book target, which a row writes (rows repointed or
-// moved onto it, state carried to it, totals recomputed), is held as an
-// iTunes book ("" none; itunesCopyWhy, read fresh when lib.groupReads is
-// set). A book the snapshot does not hold is not judged here: every caller
-// has refused a gone target already. Fail closed on a read error or doubt.
-func (lib *fragLibrary) targetITunes(target string) string {
-	tb, ok := lib.books[target]
-	if !ok {
-		return ""
-	}
-	why, doubt, err := lib.memberITunesWhy(tb)
-	switch {
-	case err != nil:
-		return fmt.Sprintf("book %s, which this row writes, cannot be read (%v), so whether it is an iTunes copy cannot be told; decide by hand", target, err)
-	case doubt:
-		return fmt.Sprintf("whether book %s, which this row writes, is an iTunes copy cannot be told; decide by hand", target)
-	case why != "":
-		return fmt.Sprintf("book %s (%q), which this row writes, is an iTunes copy (%s); iTunes books are never written, so the row is held; decide by hand",
-			target, tb.Title, why)
-	}
-	return ""
-}
-
-// targetITunesNow is targetITunes for a write about to land on target, read
-// fresh from store.
-func targetITunesNow(store OpsStore, target string) (string, error) {
-	return groupITunesNow(store, target, nil)
-}
-
-// leaveITunesNow is targetITunes for a retired book a carry is about to take
-// file rows off, read fresh from store: the book, its rows (the moved ones
-// among them) and its external ids. Not its version group: taking rows off a
-// retired book hands no primary on.
-func leaveITunesNow(store OpsStore, from string) (string, error) {
-	return bookITunesFresh(store, nil, from)
-}
-
-// bookITunesFresh is targetITunes for book id read fresh from store (its
-// book, rows and external ids; not its version group), with paths the
-// guard's resolver (nil: a fresh one).
-func bookITunesFresh(store OpsStore, paths *repairs.PathResolver, id string) (string, error) {
-	b, err := store.GetBookByID(id)
-	if err != nil {
-		return "", fmt.Errorf("%s: read carry source %s: %w", fragFixerID, id, err)
-	}
-	if b == nil {
-		return fmt.Sprintf("book %s, which the files leave, is gone", id), nil
-	}
-	lib := newFragLibrary()
-	lib.paths = paths
-	lib.extIDs, lib.groupReads = store.GetExternalIDsForBook, store
-	lib.books[id] = fragBookOf(b)
-	return lib.targetITunes(id), nil
-}
-
-// groupITunesNow is retireITunes for a retire into target about to be
-// written (a join, a moved/copy/ghost row into its parent, a no-parent row
-// into its survivor), with the target read fresh from store. frags carry the re-plan's fresh version groups.
-func groupITunesNow(store OpsStore, target string, frags []fragBook) (string, error) {
-	tb, err := store.GetBookByID(target)
-	if err != nil {
-		return "", fmt.Errorf("%s: read retire target %s: %w", fragFixerID, target, err)
-	}
-	if tb == nil {
-		return fmt.Sprintf("the retire target %s is gone", target), nil
-	}
-	lib := newFragLibrary()
-	lib.extIDs, lib.groupReads = store.GetExternalIDsForBook, store
-	lib.books[target] = fragBookOf(tb)
-	return lib.retireITunes(target, frags), nil
-}
-
-// fragGroupsITunesNow is groupITunesNow for a retire that writes the
-// fragments alone (retireIntoOnly): only the fragments' own version groups,
-// whose primary each retire hands on. Each fragment is read fresh from
-// store for its group (not the re-plan's copy of it), and so is each group.
-func fragGroupsITunesNow(store OpsStore, frags []fragBook) (string, error) {
-	var fresh []fragBook
-	for _, fb := range frags {
-		b, err := store.GetBookByID(fb.ID)
-		if err != nil {
-			return "", fmt.Errorf("%s: read fragment %s: %w", fragFixerID, fb.ID, err)
-		}
-		if b == nil {
-			return fmt.Sprintf("fragment %s is gone", fb.ID), nil
-		}
-		fresh = append(fresh, fragBookOf(b))
-	}
-	lib := newFragLibrary()
-	lib.extIDs, lib.groupReads = store.GetExternalIDsForBook, store
-	return lib.groupsITunes(fragGroups(fresh)), nil
-}
-
-// fragGroupReads are the point reads retireITunes makes: a version
-// group's members and each member's file rows. External ids go through
-// lib.extIDs.
-type fragGroupReads interface {
-	GetBooksByVersionGroup(groupID string) ([]database.Book, error)
-	GetBookFiles(bookID string) ([]database.BookFile, error)
-}
-
-// versionGroupMembers lists group g's live books: read from the store when
-// lib.groupReads is set (every plan and re-plan), else from the snapshot (a
-// snapshot built by hand).
-func (lib *fragLibrary) versionGroupMembers(g string) ([]fragBook, error) {
-	var out []fragBook
-	if lib.groupReads == nil {
-		for _, b := range lib.books {
-			if b.VersionGroup == g && !b.SoftDeleted {
-				out = append(out, b)
-			}
-		}
-		sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
-		return out, nil
-	}
-	books, err := lib.groupReads.GetBooksByVersionGroup(g)
-	if err != nil {
-		return nil, err
-	}
-	for i := range books {
-		if b := fragBookOf(&books[i]); !b.SoftDeleted {
-			out = append(out, b)
-		}
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
-	return out, nil
-}
-
-// memberITunesWhy tells whether live book b is an iTunes copy
-// (itunesCopyWhy over its rows and external ids, read fresh when
-// lib.groupReads is set).
-func (lib *fragLibrary) memberITunesWhy(b fragBook) (why string, doubt bool, err error) {
-	rows := lib.files[b.ID]
-	if lib.groupReads != nil {
-		got, err := lib.groupReads.GetBookFiles(b.ID)
-		if err != nil {
-			return "", false, fmt.Errorf("files of %s: %w", b.ID, err)
-		}
-		rows = nil
-		for i := range got {
-			rows = append(rows, fragFileOf(b.ID, &got[i]))
-		}
-	}
-	var exts []database.ExternalIDMapping
-	if lib.extIDs != nil {
-		if exts, err = lib.extIDs(b.ID); err != nil {
-			return "", false, fmt.Errorf("external ids of %s: %w", b.ID, err)
-		}
-	}
-	paths := []string{b.FilePath}
-	for _, r := range rows {
-		paths = append(paths, r.Path)
-	}
-	res := lib.paths
-	if res == nil {
-		res = repairs.NewPathResolver()
-	}
-	why, doubt = itunesCopyWhy(res, b.ID, b.ITunesPID, paths, rows, exts)
-	return why, doubt, nil
-}
-
-// joinTargetBookRefusal is joinTargetRefusal's test of the target book
-// itself.
-func (f *fragmentFixer) joinTargetBookRefusal(lib *fragLibrary, id string) (kind, why string) {
-	target := lib.books[id]
-	if k, w := f.guard(lib, []fragBook{target}, nil); k != "" {
-		return k, w
-	}
-	if target.ITunesPID != "" {
-		return repairs.SkipITunes, fmt.Sprintf("the existing book %s carries book iTunes id %s", id, target.ITunesPID)
-	}
-	for _, r := range lib.files[id] {
-		if r.ITunesPID != "" {
-			return repairs.SkipITunes, fmt.Sprintf("the existing book %s's row %s carries iTunes id %s", id, r.ID, r.ITunesPID)
-		}
-	}
-	if lib.extIDs != nil {
-		exts, err := lib.extIDs(id)
-		if err != nil {
-			return repairs.SkipITunes, fmt.Sprintf("the existing book %s's external ids are unreadable (%v), so an iTunes id on it cannot be ruled out", id, err)
-		}
-		for _, e := range exts {
-			if e.Source == "itunes" && e.ExternalID != "" && !e.Tombstoned {
-				return repairs.SkipITunes, fmt.Sprintf("the existing book %s carries itunes external id %s", id, e.ExternalID)
-			}
-		}
-	}
-	return "", ""
+// hands-off path or series (the framework guard; Doctor Who / Big Finish /
+// Torchwood). An iTunes-tracked target is joined like any other (owner
+// decision 2026-10-08; ITunesDatabaseOnly).
+func (f *fragmentFixer) joinTargetRefusal(lib *fragLibrary, id string) (kind, why string) {
+	return f.guard(lib, []fragBook{lib.books[id]}, nil)
 }
 
 // joinOffsets places each member and copy on the target's timeline: at the
@@ -6178,7 +5473,7 @@ func (f *fragmentFixer) noParentRow(lib *fragLibrary, dir, key string, cs []*fra
 		state.Roles[cp.Frag.Book.ID] = fragPlannedRole{Copy: true, Of: cp.Of}
 	}
 	var fpParts []string
-	missing, unknown, long, withPID := 0, 0, 0, ""
+	missing, unknown, long := 0, 0, 0
 	limit := repairChapterMaxSec()
 	for _, m := range plan.Members {
 		role := "fragment"
@@ -6196,9 +5491,6 @@ func (f *fragmentFixer) noParentRow(lib *fragLibrary, dir, key string, cs []*fra
 		case d >= limit:
 			long++
 		}
-		if it := m.Frag.itunesWhy(); it != "" && withPID == "" {
-			withPID = fmt.Sprintf("member %s is an iTunes book (%s)", m.Frag.Book.ID, it)
-		}
 		fpParts = append(fpParts, fmt.Sprintf("%s|%s|%s|%d", m.Frag.Book.ID, m.Frag.File.ID, m.Frag.File.Path, m.Track))
 	}
 	for _, cp := range plan.Copies {
@@ -6206,12 +5498,6 @@ func (f *fragmentFixer) noParentRow(lib *fragLibrary, dir, key string, cs []*fra
 		state.Files[cp.Frag.Book.ID] = cp.Frag.File.ID
 		if !cp.Frag.Present {
 			missing++
-		}
-		// A copy is retired like a member, so an iTunes id on it makes the
-		// row manual exactly as one on a member does (retireInto refuses it,
-		// and the refusal would come after the members had moved).
-		if it := cp.Frag.itunesWhy(); it != "" && withPID == "" {
-			withPID = fmt.Sprintf("copy %s is an iTunes book (%s)", cp.Frag.Book.ID, it)
 		}
 		fpParts = append(fpParts, fmt.Sprintf("copy|%s|%s|%s|%s", cp.Frag.Book.ID, cp.Frag.File.ID, cp.Frag.File.Path, cp.Of))
 	}
@@ -6298,9 +5584,6 @@ func (f *fragmentFixer) noParentRow(lib *fragLibrary, dir, key string, cs []*fra
 	}
 	if k, why := f.guard(lib, books, extra); k != "" {
 		r.Class, r.Skipped, r.SkipReason = fragClassManual, k, why
-	} else if withPID != "" {
-		r.Class, r.Skipped, r.SkipReason = fragClassManual, repairs.SkipITunes,
-			withPID+"; iTunes books are never written (an iTunes id would also queue an iTunes remove at the purge)"
 	}
 	r.Fingerprint = fragFingerprint(append([]string{fragClassNoParent, dir, key, plan.SurvivorID, survivorState,
 		plan.Title, plan.Folder}, fpParts...)...)
@@ -6335,8 +5618,6 @@ func (f *fragmentFixer) replanWith(ctx context.Context, planned repairs.Row, bea
 		return repairs.Row{}, err
 	}
 	lib := newFragLibrary()
-	lib.extIDs = store.GetExternalIDsForBook
-	lib.groupReads = store
 	all, err := store.GetAllSeries()
 	if err != nil {
 		return repairs.Row{}, fmt.Errorf("list series: %w", err)
@@ -6365,11 +5646,6 @@ func (f *fragmentFixer) replanWith(ctx context.Context, planned repairs.Row, bea
 		return f.replanJoin(ctx, store, lib, hist, planned, beat)
 	case fragClassCarry:
 		return f.replanCarry(store, lib, planned)
-	case fragRowOwner:
-		// The owner row (fragment_owner_apply.go) is rebuilt against its
-		// parent like a copy row: every content proof re-stat'ed, every
-		// owner rule decided again.
-		return f.replanParent(store, lib, hist, planned, rest)
 	default:
 		return planned, nil // held and ambiguous rows are never applicable; return as planned
 	}
@@ -6412,17 +5688,9 @@ func (f *fragmentFixer) replanParent(store OpsStore, lib *fragLibrary, hist Frag
 			return changedRow(planned, "the plan's stored iTunes parents are unreadable; plan again"), nil
 		}
 	}
-	// An owner row's iTunes twins are not fragments of the parent: the
-	// rebuilt owner row finds them again in each fragment's version group.
-	twin := map[string]bool{}
-	for _, ts := range ps.OwnerTwins {
-		for _, id := range ts {
-			twin[id] = true
-		}
-	}
 	var frags []string
 	for _, id := range planned.BookIDs {
-		if id != parentID && !twin[id] {
+		if id != parentID {
 			frags = append(frags, id)
 		}
 	}
@@ -7846,17 +7114,13 @@ func (f *fragmentFixer) joinCoOwner(lib *fragLibrary, r *repairs.Row, id string)
 	}
 	target := lib.books[id]
 	frags := map[string]*fragCandidate{}
-	var fragBooks []fragBook
 	for _, p := range pairs {
 		if p.Done {
 			return false
 		}
-		if _, seen := frags[p.Frag.Book.ID]; !seen {
-			fragBooks = append(fragBooks, p.Frag.Book)
-		}
 		frags[p.Frag.Book.ID] = p.Frag
 	}
-	if k, _ := f.joinTargetRefusal(lib, id, fragBooks); k != "" {
+	if k, _ := f.joinTargetRefusal(lib, id); k != "" {
 		return false
 	}
 	var cs []*fragCandidate
@@ -7966,12 +7230,7 @@ func (f *fragmentFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repa
 		return err
 	}
 	touched = append(touched, locked.BookIDs...)
-	// Owner mode: the owner's approval names this row, and the locked
-	// re-plan still lists it for him (fragment_owner_apply.go). Nothing else
-	// lets a skipped row through.
-	o, approved := repairs.OwnerApplyFrom(ctx)
-	ownerMode := approved && o.RowID == fresh.RowID && !locked.Applicable() && locked.OwnerApplicable
-	if locked.Fingerprint != fresh.Fingerprint || (!locked.Applicable() && !ownerMode) {
+	if locked.Fingerprint != fresh.Fingerprint || !locked.Applicable() {
 		why := locked.Reason
 		if !locked.Applicable() {
 			why = locked.SkipReason
@@ -7990,13 +7249,6 @@ func (f *fragmentFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repa
 	}
 	switch plan := locked.Detail.(type) {
 	case []fragCarry:
-		// The iTunes hold on the book the files move onto, read fresh
-		// under the lock.
-		if why, err := targetITunesNow(store, plan[0].To); err != nil {
-			return err
-		} else if why != "" {
-			return fmt.Errorf("%w: under the merge lock: %s", repairs.ErrChangedSincePlan, why)
-		}
 		// Grouped by the book the files are on: one journaled move each
 		// (repairs.Writer.MoveBookFiles), which a revert puts back.
 		byFrom := map[string][]string{}
@@ -8008,17 +7260,6 @@ func (f *fragmentFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repa
 			byFrom[c.From] = append(byFrom[c.From], c.File)
 		}
 		sort.Strings(froms)
-		// The iTunes hold on each book the files leave (its own iTunes id,
-		// external ids, and its rows' iTunes ids and paths, the moved rows
-		// among them), read fresh under the lock: MoveBookFiles has no
-		// iTunes check of its own.
-		for _, from := range froms {
-			if why, err := leaveITunesNow(store, from); err != nil {
-				return err
-			} else if why != "" {
-				return fmt.Errorf("%w: under the merge lock: %s", repairs.ErrChangedSincePlan, why)
-			}
-		}
 		for _, from := range froms {
 			if err := ctx.Err(); err != nil {
 				return partial(err)
@@ -8031,61 +7272,6 @@ func (f *fragmentFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repa
 		return nil
 	case []fragPair:
 		_, parentID, _ := strings.Cut(locked.RowID, ":")
-		if ownerMode {
-			return f.applyOwner(ctx, store, w, locked, plan)
-		}
-		if !locked.Applicable() {
-			return fmt.Errorf("%w: under the merge lock: %s", repairs.ErrChangedSincePlan, locked.SkipReason)
-		}
-		// The iTunes version-group hold, read fresh under the lock: each
-		// retire hands its fragment's group primary on.
-		var fragBooks []fragBook
-		for _, p := range plan {
-			fragBooks = append(fragBooks, p.Frag.Book)
-		}
-		// A copy into an iTunes-linked parent (the locked re-plan's state)
-		// writes the fragments only: its check is the fragments' own groups
-		// (the parent is iTunes-linked, so groupITunesNow would refuse it),
-		// and each retire refuses a fragment that has anything to carry.
-		var ps fragParentState
-		if len(locked.State) > 0 {
-			if err := json.Unmarshal(locked.State, &ps); err != nil {
-				return fmt.Errorf("%w: under the merge lock: the row's state is unreadable: %v", repairs.ErrChangedSincePlan, err)
-			}
-		}
-		onlyFrags := ps.ITunesParent != "" && (locked.Class == fragClassCopy)
-		// Every fragment before the first write (a moved row repoints the
-		// parent's row before it retires the fragment).
-		var fragIDs []string
-		for _, fb := range fragBooks {
-			fragIDs = append(fragIDs, fb.ID)
-		}
-		if err := fragsITunesNow(store, fragIDs); err != nil {
-			return err
-		}
-		if onlyFrags {
-			if why, err := fragGroupsITunesNow(store, fragBooks); err != nil {
-				return err
-			} else if why != "" {
-				return fmt.Errorf("%w: under the merge lock: %s", repairs.ErrChangedSincePlan, why)
-			}
-			// Every fragment's carry check before the first write, so a
-			// late one refuses the row whole rather than after its siblings
-			// were retired (retireIntoOnly checks again at its own write).
-			for _, fb := range fragBooks {
-				exts, err := store.GetExternalIDsForBook(fb.ID)
-				if err != nil {
-					return fmt.Errorf("external ids of %s: %w", fb.ID, err)
-				}
-				if err := onlyRetireRefusal(f.p, fb.ID, parentID, ps.ITunesParent, exts); err != nil {
-					return err
-				}
-			}
-		} else if why, err := groupITunesNow(store, parentID, fragBooks); err != nil {
-			return err
-		} else if why != "" {
-			return fmt.Errorf("%w: under the merge lock: %s", repairs.ErrChangedSincePlan, why)
-		}
 		// A parent row is repointed once per row, and from the pair that
 		// carries the file's own facts: a path twin's pair names the same
 		// parent row and the same file as its donor's but has no hash or
@@ -8115,12 +7301,7 @@ func (f *fragmentFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repa
 				repointed[p.Parent.ID] = true
 				steps++
 			}
-			var did int
-			if onlyFrags {
-				did, err = retireIntoOnly(ctx, f.p, store, w, f.now, fragFixerID, p.Frag.Book.ID, parentID, ps.ITunesParent)
-			} else {
-				did, err = f.retire(ctx, store, w, p.Frag.Book.ID, parentID, p.Slice)
-			}
+			did, err := f.retire(ctx, store, w, p.Frag.Book.ID, parentID, p.Slice)
 			steps += did
 			if err != nil {
 				return partial(err)
@@ -8154,13 +7335,6 @@ func (f *fragmentFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repa
 					return err
 				}
 			}
-			// The iTunes version-group hold, read fresh under the lock: the
-			// retire hand-off and the target's re-rank write in these groups.
-			if why, err := groupITunesNow(store, plan.Join, planFragBooks(plan)); err != nil {
-				return err
-			} else if why != "" {
-				return fmt.Errorf("%w: under the merge lock: %s", repairs.ErrChangedSincePlan, why)
-			}
 			for _, j := range all {
 				if err := ctx.Err(); err != nil {
 					return partial(err)
@@ -8181,23 +7355,6 @@ func (f *fragmentFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repa
 			if err := copyRetireRefusal(store, cp, plan.SurvivorID, "copy"); err != nil {
 				return err
 			}
-		}
-		// Every member too, before the plan record and the first move:
-		// MoveBookFiles has no iTunes check, and once a member's row has
-		// moved its retire has no row left to refuse.
-		var memberIDs []string
-		for _, m := range plan.Members {
-			memberIDs = append(memberIDs, m.Frag.Book.ID)
-		}
-		if err := fragsITunesNow(store, memberIDs); err != nil {
-			return err
-		}
-		// The iTunes hold, read fresh under the lock: the survivor takes the
-		// members' rows, and each retire hands a version group's primary on.
-		if why, err := groupITunesNow(store, plan.SurvivorID, survivorRetirees(plan)); err != nil {
-			return err
-		} else if why != "" {
-			return fmt.Errorf("%w: under the merge lock: %s", repairs.ErrChangedSincePlan, why)
 		}
 		// The run's plan record goes into the journal before its first
 		// write, so a plan made after a cut CONTINUES this run with this
@@ -8317,32 +7474,9 @@ func (f *fragmentFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repa
 	}
 }
 
-// fragsITunesNow refuses a row before its first write when any book it
-// retires or takes rows off (ids: every fragment, member and copy) is an
-// iTunes book now, read fresh under the lock (bookITunesFresh:
-// itunesCopyWhy over the book, its rows and external ids, and the iTunes
-// library path). Review 2026-10-06: a member's row is moved onto the
-// survivor before its retire, and a moved row's parent row is repointed
-// before its fragment's, so only a check of every book ahead of every write
-// keeps a row that gained an iTunes id or path since the re-plan from
-// writing an iTunes book.
-func fragsITunesNow(store OpsStore, ids []string) error {
-	for _, id := range ids {
-		why, err := bookITunesFresh(store, nil, id)
-		if err != nil {
-			return err
-		}
-		if why != "" {
-			return fmt.Errorf("%w: under the merge lock: %s", repairs.ErrChangedSincePlan, why)
-		}
-	}
-	return nil
-}
-
 // copyRetireRefusal is retireInto's refusals for one renamed copy, checked
 // before a numbered set writes anything: the copy's book is gone or holds
-// another id, it holds anything but exactly its planned row, or it, its row
-// or an un-tombstoned external id carries an iTunes id. A copy an earlier,
+// another id, or it holds anything but exactly its planned row. A copy an earlier,
 // cut-off run already retired INTO survivor is not refused (retireInto
 // resumes it); one retired into any other book is.
 func copyRetireRefusal(store OpsStore, cp fragGroupCopy, survivor, role string) error {
@@ -8372,10 +7506,7 @@ func copyRetireRefusal(store OpsStore, cp fragGroupCopy, survivor, role string) 
 	if len(rows) != 1 || rows[0].ID != cp.Frag.File.ID {
 		return fmt.Errorf("%w: %s %s no longer holds exactly its planned row", repairs.ErrChangedSincePlan, role, id)
 	}
-	// The whole iTunes test (itunesCopyWhy: the book's and row's iTunes
-	// ids, the row's iTunes path, a live itunes external id, an iTunes
-	// library path), not a partial list of it.
-	return fragsITunesNow(store, []string{id})
+	return nil
 }
 
 // setBookFolder points the survivor's book path at the folder its files now
@@ -8437,10 +7568,11 @@ func (f *fragmentFixer) retitle(store OpsStore, w *repairs.Writer, id, was, titl
 }
 
 // retire folds fragment id into target (the shared retire), as a slice of
-// target's timeline, refusing a fragment with an iTunes path on its row
-// (an iTunes book: fragCandidate.itunesWhy).
+// target's timeline. An iTunes-tracked fragment is retired like any other
+// (retireIntoITunesDatabaseOnly): database rows only, its rows keep their
+// iTunes ids and paths.
 func (f *fragmentFixer) retire(ctx context.Context, store OpsStore, w *repairs.Writer, id, target string, slice merge.SliceMapping) (int, error) {
-	return retireInto(ctx, f.p, store, w, f.now, fragFixerID, id, target, &slice)
+	return retireIntoITunesDatabaseOnly(ctx, f.p, store, w, f.now, fragFixerID, id, target, &slice)
 }
 
 // fragEnsureStore joins OpsStore and the chapter reader for

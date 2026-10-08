@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_folder_sets.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 9f01b698-b911-4ecc-818e-6d10f415e768
-// last-edited: 2026-10-06
+// last-edited: 2026-10-08
 
 // Folder chapter sets: the fragment-consolidation fixer's rule for a folder
 // of numbered chapter files that share one name, that no parent book owns,
@@ -49,9 +49,10 @@
 //     book outside the set (skipped_version_group_parent), or when a live
 //     book outside the set holds a file of the same hash, or of the same size
 //     and duration, as one of the set's (skipped_duplicate_audio);
-//   - hands-off: a set the iTunes guard (or an iTunes persistent id) stops
-//     is its own class, itunes-chapter-set, never applicable. Doctor Who /
-//     Big Finish / Torchwood stays manual-only.
+//   - hands-off: Doctor Who / Big Finish / Torchwood stays manual-only. A
+//     set under the iTunes library or carrying an iTunes persistent id is an
+//     ordinary set (owner decision 2026-10-08; it was its own never-applied
+//     class, itunes-chapter-set, until then).
 //
 // PARENT SETS (owner decision 2026-10-05 20:45, "group by parent"). What is
 // still lone after the folder sets is grouped by the folder ABOVE each
@@ -122,9 +123,6 @@ const (
 	// comment). Applicable when every test passes; never applied without
 	// the owner's approval of its row id.
 	fragClassFolderSet = "folder-chapter-set"
-	// fragClassITunesSet: a folder chapter set under the iTunes library or
-	// carrying an iTunes persistent id. Listed apart, never applicable.
-	fragClassITunesSet = "itunes-chapter-set"
 	// fragClassParentSet: a parent chapter set (owner decision 2026-10-05
 	// 20:45, "group by parent"): one-file-per-folder chapters grouped by
 	// the folder above their folders (".../Horizon Storms/Chapter 001/x.mp3"
@@ -761,9 +759,6 @@ func (f *fragmentFixer) classifyFolderSets(lib *fragLibrary, live *fragLive, row
 		f.folderSetEvidence(r, set)
 		switch r.Class {
 		case fragClassManual:
-			if r.Skipped == repairs.SkipITunes {
-				r.Class = fragClassITunesSet
-			}
 			continue
 		case fragClassNoParent:
 			r.Class = fragClassFolderSet

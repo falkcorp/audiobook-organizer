@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_copy_content.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4d7b2e95-1c6a-4f38-8e0d-b5a9c3f1e762
-// last-edited: 2026-10-06
+// last-edited: 2026-10-08
 
 // Content proof of a copy claimant (owner decision 2026-10-06, "hash both,
 // read-only"). A fragment that matches a parent row by its original name and
@@ -345,14 +345,15 @@ func (f *fragmentFixer) proveCopiesByContent(ctx context.Context, rep registry.R
 }
 
 // readableForProof reports whether the proof may read the file at path of
-// book id: never one under the iTunes library (the guard's iTunes path rule,
-// symlinks resolved), nor one the guard cannot resolve. A HARDLINK elsewhere
-// to a file under books/itunes passes this path rule (a hardlink has no
-// target path to resolve): such a file is read, read-only, and never
-// written; a hardlink of the parent's own file is then held as a path alias.
+// book id: never one the guard cannot resolve (symlinks resolved). A file
+// under the iTunes library is read like any other (owner decision
+// 2026-10-08: iTunes is import-only and fragment consolidation treats its
+// books like any other; repairs.ITunesDatabaseOnly): read-only, streamed
+// bytes, never written.
 func (lib *fragLibrary) readableForProof(id, path string) bool {
-	k, _ := repairs.GuardBookPathsWith(lib.paths, id, []string{path}, "")
-	return k != repairs.SkipITunes && k != repairs.SkipGuardUnreadable
+	// A nil *fragmentFixer answers ITunesDatabaseOnly without a receiver.
+	k, _ := repairs.GuardBookPathsFor((*fragmentFixer)(nil), lib.paths, id, []string{path}, "")
+	return k != repairs.SkipGuardUnreadable
 }
 
 // restoreContentProofs puts the plan's content proofs back into a re-plan's

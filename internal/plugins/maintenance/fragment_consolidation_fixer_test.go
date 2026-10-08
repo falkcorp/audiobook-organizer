@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer_test.go
-// version: 1.30.0
+// version: 1.31.0
 // guid: 8e2d5b19-6a4c-4f37-b1d8-2c9e7a3f5d60
-// last-edited: 2026-10-06
+// last-edited: 2026-10-08
 
 package maintenance
 
@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -158,7 +159,8 @@ func (f *fragFixture) organize(t *testing.T, bookID, from, to string) {
 //	unproven    Suns: fragment H named 01.mp3 at the same size, no link
 //	no-parent   Loose: three short "Loose 0N" books, no parent
 //	gate        Long: three hour-long "Long 0N" books
-//	itunes      books/itunes Eldest twin: moved shape under the frozen tree
+//	itunes      books/itunes Eldest twin: moved shape under the iTunes tree,
+//	            applicable like any other (owner 2026-10-08)
 //	doctor who  "Doctor Who - Loose": no-parent shape, manual only
 func (f *fragFixture) seed(t *testing.T) {
 	t.Helper()
@@ -339,7 +341,7 @@ func TestFragmentFixer_PlanClassifiesEveryShape(t *testing.T) {
 		{"copy content differs", fragClassHeld + ":" + f.ids["fragH"], fragClassHeld, fragSkipCopyUnproven, []string{"suns", "fragH"}, fragEvContentDiffers},
 		{"no-parent", noParentRowID(f.path("lib/Loose"), "loose"), fragClassNoParent, "", []string{"loose01", "loose02", "loose03"}, ""},
 		{"duration gate", noParentRowID(f.path("lib/Long"), "long"), fragClassNoParent, fragSkipDurationGate, []string{"long01", "long02", "long03"}, ""},
-		{"itunes", "moved:" + f.ids["itunesParent"], fragClassManual, repairs.SkipITunes, []string{"itunesParent", "itunesFrag"}, ""},
+		{"itunes", "moved:" + f.ids["itunesParent"], fragClassMoved, "", []string{"itunesParent", "itunesFrag"}, fragEvImportPath},
 		{"ghost: fragment file missing, one proven parent", "ghost:" + f.ids["heldParent"], fragClassGhost, "", []string{"heldFrag", "heldParent"}, fragEvImportPath},
 		{"doctor who", noParentRowID(f.path("lib/Doctor Who - Loose"), ""), fragClassManual, repairs.SkipOwnerManual, []string{"dw01", "dw02", "dw03"}, ""},
 	}
@@ -359,8 +361,8 @@ func TestFragmentFixer_PlanClassifiesEveryShape(t *testing.T) {
 			}
 		})
 	}
-	require.Equal(t, 2, res.ByClass[fragClassManual])
-	require.Equal(t, 1, res.ByClass[fragClassMoved])
+	require.Equal(t, 1, res.ByClass[fragClassManual], "Doctor Who only")
+	require.Equal(t, 2, res.ByClass[fragClassMoved], "Eldest and its iTunes twin")
 	require.Equal(t, 1, res.ByClass[fragClassCopy], "the copy whose content differs is held on its own row")
 }
 
@@ -377,12 +379,12 @@ func TestFragmentFixer_ApplyThenUndoRoundTrip(t *testing.T) {
 			ids = append(ids, r.RowID)
 		}
 	}
-	require.Len(t, ids, 4, "moved, proven copy, no-parent and ghost")
+	require.Len(t, ids, 5, "moved (twice: one under the iTunes tree), proven copy, no-parent and ghost")
 	before03 := *f.fileRow(t, "parent", "p03")
 	beforeHp02 := *f.fileRow(t, "heldParent", "hp02")
 
 	out := f.apply(t, "op-plan", "op-apply", ids, nil)
-	require.Equal(t, 4, out.Applied, "%+v", out.Rows)
+	require.Equal(t, 5, out.Applied, "%+v", out.Rows)
 
 	// ghost: the fragment is retired into the parent; neither book's missing
 	// row is touched (nothing is repointed, nothing is deleted).
@@ -433,8 +435,14 @@ func TestFragmentFixer_ApplyThenUndoRoundTrip(t *testing.T) {
 			survivorPath = f.path("lib/Loose/Loose " + n + ".mp3")
 		}
 	}
+	// iTunes: the fragment is retired into the iTunes parent like any other;
+	// only database rows changed (the parent's row is repointed, no file
+	// moved), and the row keeps its own iTunes facts.
+	require.False(t, f.live(t, "itunesFrag"))
+	i02 := f.fileRow(t, "itunesParent", "i02")
+	require.Equal(t, f.path("lib/Eldest iTunes/02/02.mp3"), i02.FilePath)
+	require.FileExists(t, f.path("lib/Eldest iTunes/02/02.mp3"))
 	// hands-off rows untouched.
-	require.True(t, f.live(t, "itunesFrag"))
 	require.True(t, f.live(t, "dw01"))
 
 	// Every step is restorable and the preflight sees no conflict.
@@ -457,7 +465,7 @@ func TestFragmentFixer_ApplyThenUndoRoundTrip(t *testing.T) {
 	after03 := f.fileRow(t, "parent", "p03")
 	require.Equal(t, before03.FilePath, after03.FilePath)
 	require.Equal(t, before03.Missing, after03.Missing)
-	for _, role := range []string{"fragF", "fragG", "loose01", "loose02", "loose03", "heldFrag"} {
+	for _, role := range []string{"fragF", "fragG", "loose01", "loose02", "loose03", "heldFrag", "itunesFrag"} {
 		require.True(t, f.live(t, role), "%s restored", role)
 	}
 	for _, n := range []string{"01", "02", "03"} {
@@ -943,8 +951,9 @@ func TestFragmentFixer_PathProvenCopyComparesSizeOnDisk(t *testing.T) {
 	require.False(t, r.Applicable())
 }
 
-// TestFragmentFixer_SymlinkIntoITunesIsManual (L2).
-func TestFragmentFixer_SymlinkIntoITunesIsManual(t *testing.T) {
+// TestFragmentFixer_SymlinkIntoITunesIsOrdinary (L2; owner 2026-10-08): a
+// group behind a symlink into books/itunes is planned like any other.
+func TestFragmentFixer_SymlinkIntoITunesIsOrdinary(t *testing.T) {
 	t.Parallel()
 	f := newFragFixture(t)
 	require.NoError(t, os.MkdirAll(f.path("books/itunes/Real"), 0o755))
@@ -952,14 +961,16 @@ func TestFragmentFixer_SymlinkIntoITunesIsManual(t *testing.T) {
 	require.NoError(t, os.Symlink(f.path("books/itunes/Real"), f.path("lib/Link")))
 	ids := f.looseGroup(t, "lib/Link", "Chap", 3, func(int) bool { return true })
 	r := rowWithBooks(t, f.plan(t, "op-plan"), ids)
-	require.Equal(t, fragClassManual, r.Class)
-	require.Equal(t, repairs.SkipITunes, r.Skipped, r.SkipReason)
+	require.Equal(t, fragClassNoParent, r.Class)
+	require.NotEqual(t, repairs.SkipITunes, r.Skipped, r.SkipReason)
 }
 
-// TestFragmentFixer_ITunesIDMakesFragmentManual (H5): a fragment carrying an
-// iTunes persistent id is never retired (the purge would queue an iTunes
-// remove for it).
-func TestFragmentFixer_ITunesIDMakesFragmentManual(t *testing.T) {
+// TestFragmentFixer_ITunesIDFragmentIsOrdinary (owner 2026-10-08, "combine
+// them too"; was H5): a fragment carrying an iTunes persistent id, on its
+// book or its row, is planned and applied like any other. iTunes is
+// import-only, so only database rows change, and a moved row keeps its
+// iTunes id and path so the next import finds it on the survivor.
+func TestFragmentFixer_ITunesIDFragmentIsOrdinary(t *testing.T) {
 	t.Parallel()
 	f := newFragFixture(t)
 	f.seed(t)
@@ -969,14 +980,38 @@ func TestFragmentFixer_ITunesIDMakesFragmentManual(t *testing.T) {
 	row, err := f.s.GetBookFileByID(f.ids["loose02"], f.rowIDs["l02"])
 	require.NoError(t, err)
 	row.ITunesPersistentID = "0123456789ABCDEF"
+	row.ITunesPath = "file://localhost/W:/itunes/iTunes%20Media/Audiobooks/Loose/Loose%2002.mp3"
 	require.NoError(t, f.s.UpdateBookFile(row.ID, row))
 
 	res := f.plan(t, "op-plan")
-	for _, id := range []string{"moved:" + f.ids["parent"], noParentRowID(f.path("lib/Loose"), "loose")} {
+	ids := []string{"moved:" + f.ids["parent"], noParentRowID(f.path("lib/Loose"), "loose")}
+	for _, id := range ids {
 		r := findRow(t, res, id)
-		require.Equal(t, fragClassManual, r.Class, id)
-		require.Equal(t, repairs.SkipITunes, r.Skipped, r.SkipReason)
+		require.NotEqual(t, fragClassManual, r.Class, id)
+		require.True(t, r.Applicable(), "%s: %s: %s", id, r.Skipped, r.SkipReason)
 	}
+	out := f.apply(t, "op-plan", "op-apply", ids, nil)
+	require.Equal(t, 2, out.Applied, "%+v", out.Rows)
+	require.False(t, f.live(t, "fragF"))
+	// The row with the iTunes id now belongs to the survivor, its iTunes
+	// facts intact.
+	var moved *database.BookFile
+	for _, n := range []string{"01", "02", "03"} {
+		rows, err := f.s.GetBookFiles(f.ids["loose"+n])
+		require.NoError(t, err)
+		for i := range rows {
+			if rows[i].ID == f.rowIDs["l02"] {
+				moved = &rows[i]
+			}
+		}
+	}
+	require.NotNil(t, moved)
+	require.Equal(t, "0123456789ABCDEF", moved.ITunesPersistentID)
+	require.Equal(t, row.ITunesPath, moved.ITunesPath)
+	got, err := f.s.GetBookFileByPID("0123456789ABCDEF")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Equal(t, row.ITunesPath, got.ITunesPath, "the importer's match (PID and iTunes path) still holds")
 }
 
 // TestFragmentFixer_RetireIsAMerge (H4, H5, M7): the retired fragment names
@@ -1414,10 +1449,11 @@ func TestFragmentFixer_JournaledStepNeverWrittenIsAlreadyRestored(t *testing.T) 
 	require.True(t, f.live(t, "fragF"))
 }
 
-// TestFragmentFixer_RetireRefusesBeforeFollowingProgress (N4): an iTunes id
-// found at retire time refuses the retire before any user state moves or is
-// journaled.
-func TestFragmentFixer_RetireRefusesBeforeFollowingProgress(t *testing.T) {
+// TestFragmentFixer_RetireCarriesAnITunesFragment (was N4's refusal; owner
+// 2026-10-08): an iTunes id on the fragment no longer refuses the retire.
+// Its user state and its itunes external id follow it onto the parent like
+// any other fragment's.
+func TestFragmentFixer_RetireCarriesAnITunesFragment(t *testing.T) {
 	t.Parallel()
 	f := newFragFixture(t)
 	f.seed(t)
@@ -1427,16 +1463,19 @@ func TestFragmentFixer_RetireRefusesBeforeFollowingProgress(t *testing.T) {
 	require.NoError(t, f.s.SetUserPosition(u.ID, frag, f.rowIDs["f03"], 100))
 	require.NoError(t, f.s.CreateExternalIDMapping(&database.ExternalIDMapping{Source: "itunes", ExternalID: "ABCDEF0123456789", BookID: frag}))
 
-	w := f.fragWriter(t, "op-refuse")
+	w := f.fragWriter(t, "op-retire")
 	steps, err := newFragmentFixer(f.p).retire(context.Background(), f.s, w, frag, parent, merge.SliceMapping{})
-	require.ErrorIs(t, err, repairs.ErrChangedSincePlan)
-	require.Zero(t, steps)
-	changes, err := f.s.GetOperationChanges("op-refuse")
 	require.NoError(t, err)
-	require.Empty(t, changes, "nothing journaled")
+	require.NotZero(t, steps)
+	require.False(t, f.live(t, "fragF"))
+	exts, err := f.s.GetExternalIDsForBook(parent)
+	require.NoError(t, err)
+	require.True(t, slices.ContainsFunc(exts, func(e database.ExternalIDMapping) bool {
+		return e.Source == "itunes" && e.ExternalID == "ABCDEF0123456789"
+	}), "the itunes id follows the fragment: %+v", exts)
 	pos, err := f.s.ListUserPositionsForBook(u.ID, frag)
 	require.NoError(t, err)
-	require.Len(t, pos, 1, "the position stayed on the fragment")
+	require.Empty(t, pos, "the position followed the fragment")
 }
 
 // TestFragmentFixer_PendingFollowNeverDrainsALiveFragment (N4): a pending
@@ -2655,7 +2694,7 @@ func TestFragmentFixer_NumberedCopiesReview(t *testing.T) {
 		require.Len(t, r.Detail.(*fragGroupPlan).Copies, 8)
 	})
 
-	t.Run("an iTunes id on a copy makes the row manual", func(t *testing.T) {
+	t.Run("an iTunes id on a copy is ordinary (owner 2026-10-08)", func(t *testing.T) {
 		f := newFragFixture(t)
 		_, copies := f.seedChapterCopies(t, dir, nil)
 		rows, err := f.s.GetBookFiles(copies[3])
@@ -2663,48 +2702,8 @@ func TestFragmentFixer_NumberedCopiesReview(t *testing.T) {
 		rows[0].ITunesPersistentID = "0123456789ABCDEF"
 		require.NoError(t, f.s.UpdateBookFile(rows[0].ID, &rows[0]))
 		r := findRow(t, f.plan(t, "op-plan"), noParentRowID(f.path(dir), fragNumberedKey))
-		require.Equal(t, fragClassManual, r.Class)
-		require.Equal(t, repairs.SkipITunes, r.Skipped)
-		require.Contains(t, r.SkipReason, "copy "+copies[3])
-	})
-
-	t.Run("an iTunes id put on a copy after the plan writes nothing", func(t *testing.T) {
-		f := newFragFixture(t)
-		orig, copies := f.seedChapterCopies(t, dir, nil)
-		res := f.plan(t, "op-plan")
-		r := findRow(t, res, noParentRowID(f.path(dir), fragNumberedKey))
-		require.True(t, r.Applicable(), r.SkipReason)
-		plan := r.Detail.(*fragGroupPlan)
-		rows, err := f.s.GetBookFiles(copies[5])
-		require.NoError(t, err)
-		rows[0].ITunesPersistentID = "0123456789ABCDEF"
-		require.NoError(t, f.s.UpdateBookFile(rows[0].ID, &rows[0]))
-
-		var cp fragGroupCopy
-		for _, c := range plan.Copies {
-			if c.Frag.Book.ID == copies[5] {
-				cp = c
-			}
-		}
-		// The Apply pre-check, called directly: the engine's pre-apply
-		// Replan (repairs.RunApply) refuses this row first, so Apply never
-		// reaches the pre-check here.
-		require.ErrorIs(t, copyRetireRefusal(f.s, cp, plan.SurvivorID, "copy"), repairs.ErrChangedSincePlan)
-
-		out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
-		require.Equal(t, 0, out.Applied, "outcomes %v", out.ByOutcome)
-		require.Zero(t, out.ByOutcome[repairs.OutcomePartial])
-		require.Len(t, out.Rows, 1)
-		require.Equal(t, repairs.OutcomeNotApplicable, out.Rows[0].Outcome, "refused by the engine's pre-apply Replan")
-		require.Equal(t, repairs.SkipITunes, out.Rows[0].Skipped)
-		for _, id := range orig {
-			b, err := f.s.GetBookByID(id)
-			require.NoError(t, err)
-			require.False(t, b.IsSoftDeleted(), "member %s untouched", id)
-			own, err := f.s.GetBookFiles(id)
-			require.NoError(t, err)
-			require.Len(t, own, 1, "member %s keeps its row", id)
-		}
+		require.NotEqual(t, fragClassManual, r.Class)
+		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
 	})
 
 	t.Run("a copy carrying an ASIN holds the set", func(t *testing.T) {
@@ -4727,11 +4726,21 @@ func TestFragmentFixer_JoinOffsets(t *testing.T) {
 	require.Equal(t, []float64{0, 500, 1200}, []float64{plan.Members[0].Offset, plan.Members[1].Offset, plan.Members[2].Offset})
 }
 
-// TestFragmentFixer_JoinTargetITunes (N2): an iTunes id on the target's file
-// row or as an external id makes the join manual-only, like one on the book.
+// TestFragmentFixer_JoinTargetITunes (was N2; owner 2026-10-08): an existing
+// book that iTunes knows about (an iTunes id on its row, or an itunes
+// external id) is joined like any other.
 func TestFragmentFixer_JoinTargetITunes(t *testing.T) {
 	t.Parallel()
 	const dir = "lib/Christopher Paolini/Book 2 - Eldest"
+	check := func(t *testing.T, f *fragFixture) {
+		t.Helper()
+		res := f.plan(t, "op-plan")
+		r := findRow(t, res, existingRowID(f.path(dir), "eldest"))
+		require.Equal(t, fragClassExistingBook, r.Class)
+		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
+		out := f.apply(t, "op-plan", "op-apply", []string{r.RowID}, nil)
+		require.Equal(t, 1, out.Applied, "%+v", out.Rows)
+	}
 	t.Run("row-level", func(t *testing.T) {
 		f := newFragFixture(t)
 		existing := f.existingBook(t, "eldest", "Eldest", "lib/Shelf/Eldest", 3, 600)
@@ -4740,26 +4749,19 @@ func TestFragmentFixer_JoinTargetITunes(t *testing.T) {
 		rows[0].ITunesPersistentID = "ABCDEF0123456789"
 		require.NoError(t, f.s.UpdateBookFile(rows[0].ID, &rows[0]))
 		f.chapterFrags(t, dir, "Eldest", 3, 600)
-		res := f.plan(t, "op-plan")
-		r := findRow(t, res, noParentRowID(f.path(dir), "eldest"))
-		require.Equal(t, fragClassManual, r.Class)
-		require.Equal(t, repairs.SkipITunes, r.Skipped)
-		require.Contains(t, r.SkipReason, "ABCDEF0123456789")
-		require.Zero(t, res.Applicable)
+		check(t, f)
 	})
 	t.Run("external id", func(t *testing.T) {
 		f := newFragFixture(t)
 		existing := f.existingBook(t, "eldest", "Eldest", "lib/Shelf/Eldest", 3, 600)
 		require.NoError(t, f.s.CreateExternalIDMapping(&database.ExternalIDMapping{Source: "itunes", ExternalID: "FEDCBA9876543210", BookID: existing}))
 		f.chapterFrags(t, dir, "Eldest", 3, 600)
-		r := findRow(t, f.plan(t, "op-plan"), noParentRowID(f.path(dir), "eldest"))
-		require.Equal(t, repairs.SkipITunes, r.Skipped)
-		require.Contains(t, r.SkipReason, "FEDCBA9876543210")
+		check(t, f)
 	})
 }
 
-// TestFragmentFixer_UnplacedITunesCounted (N4): an unplaced fragment that is
-// also hands-off is counted under unplaced, not manual-only.
+// TestFragmentFixer_UnplacedITunesCounted (N4): an unplaced fragment under
+// the iTunes library is counted under unplaced, not manual-only.
 func TestFragmentFixer_UnplacedITunesCounted(t *testing.T) {
 	t.Parallel()
 	f := newFragFixture(t)
