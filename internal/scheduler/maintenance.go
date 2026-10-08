@@ -1,7 +1,7 @@
 // file: internal/scheduler/maintenance.go
-// version: 1.10.0
+// version: 1.11.0
 // guid: 7d2e8f4a-c3b1-4a09-8e5f-2d6c0b9a3e71
-// last-edited: 2026-10-05
+// last-edited: 2026-10-07
 
 package scheduler
 
@@ -168,6 +168,7 @@ var taskV2DefIDs = map[string]string{
 	"series_normalize":            "dedup.series-normalize",
 	"asin_backfill":               "metafetch.asin-backfill",
 	"candidate_fetch":             "metadata.candidate-fetch",
+	"catalog_harvest":             "catalog.harvest-authors",
 	"temp_file_cleanup":           "scheduler.temp-file-cleanup",
 	"trash_cleanup":               "scheduler.trash-cleanup",
 	"metadata_upgrade":            "scheduler.metadata-upgrade",
