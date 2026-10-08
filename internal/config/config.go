@@ -1052,10 +1052,10 @@ type ScheduledTasksConfig struct {
 	// CatalogHarvest schedules the catalog_harvest task
 	// (catalog.harvest-authors, live) on its own interval, in minutes. Gated
 	// like CandidateFetch: only Interval is read, 0 turns it off; the task
-	// also needs catalog.enabled. Ships at 1440 (daily). The op re-lists an
-	// author only after its 30-day re-harvest interval (partial and failed
-	// authors retry every run), so after the first pass a daily tick costs
-	// the new authors plus the month's due ones.
+	// also needs catalog.enabled. Ships at 360 (6h), like its siblings. The
+	// op re-lists an author only after its 30-day re-harvest interval
+	// (partial and failed authors retry every run), so after the first pass a
+	// tick costs a library read plus the new and due authors' requests.
 	CatalogHarvest ScheduledTaskConfig `json:"catalog_harvest" mapstructure:"catalog_harvest"`
 }
 
@@ -2538,8 +2538,8 @@ func InitConfig() {
 	// ScheduledTasksConfig.CandidateFetch). Ships ON at 6h.
 	viper.SetDefault("scheduled.candidate_fetch.interval", 360)
 	// catalog_harvest: scheduled whenever interval > 0 and catalog.enabled
-	// (minutes; see ScheduledTasksConfig.CatalogHarvest). Ships ON daily.
-	viper.SetDefault("scheduled.catalog_harvest.interval", 1440)
+	// (minutes; see ScheduledTasksConfig.CatalogHarvest). Ships ON at 6h.
+	viper.SetDefault("scheduled.catalog_harvest.interval", 360)
 	// label_refinement ships DISABLED (INIT-1 T6): the scheduled dry-run chain
 	// (dedup.rebuild-gold-labels → dedup.calibrate-composite) only runs when an
 	// owner flips enabled=true. Interval is weekly (10080 min).
@@ -3968,9 +3968,9 @@ func ResetToDefaults() {
 				CandidateFetch: ScheduledTaskConfig{
 					Interval: 360,
 				},
-				// catalog_harvest defaults ON (daily) the same way.
+				// catalog_harvest defaults ON (6h) the same way.
 				CatalogHarvest: ScheduledTaskConfig{
-					Interval: 1440,
+					Interval: 360,
 				},
 			},
 

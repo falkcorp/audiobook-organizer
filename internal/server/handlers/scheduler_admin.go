@@ -365,7 +365,7 @@ func bindingForTask(name string) (taskConfigBinding, bool) {
 		}, true
 	case "catalog_harvest":
 		// Same gate as candidate_fetch: scheduled whenever the interval is >
-		// 0 (default 1440 = daily) and catalog.enabled, 0 turns it off; never
+		// 0 (default 360 = 6h) and catalog.enabled, 0 turns it off; never
 		// on startup or in the window (see
 		// config.ScheduledTasksConfig.CatalogHarvest).
 		return taskConfigBinding{

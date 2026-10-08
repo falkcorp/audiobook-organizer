@@ -109,7 +109,8 @@ type catalogHarvestTaskParams struct {
 }
 
 // catalogHarvestInterval is scheduled.catalog_harvest.interval (minutes,
-// default 1440 = daily; 0 disables the task).
+// default 360 = 6h; 0 disables the task). The durable interval clock
+// (interval_clock.go) carries the cadence across restarts.
 func catalogHarvestInterval() time.Duration {
 	mins := config.AppConfig.Scheduled.CatalogHarvest.Interval
 	if mins <= 0 {
@@ -791,7 +792,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 	//
 	// Repeat runs are cheap: an author whose last harvest is complete is
 	// re-listed only after 30 days (catalog.Due), so after the first pass a
-	// daily tick lists the new and the due authors. The op's DependsOn holds
+	// 6h tick lists only the new and the due authors. The op's DependsOn holds
 	// it QUEUED while metadata.candidate-fetch or metafetch.asin-backfill
 	// runs (all three spend Audible's budget), and they wait on it the same
 	// way. Not on startup (memdb warmup) and not in the maintenance window
