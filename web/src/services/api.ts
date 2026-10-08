@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.165.0
+// version: 2.166.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-07
 
@@ -3782,6 +3782,9 @@ export interface MetadataCandidate {
    *  Whisper-transcribed intro, causing a score multiplier to be applied.
    *  Use as a filter to find books where audio data confirmed the match. */
   transcription_boosted?: boolean;
+  /** Read from the local author catalog (harvested Audible listings) rather
+   *  than asked of the provider live. Source stays the provider's name. */
+  from_catalog?: boolean;
   /** The additive score component contributed by the duration signal, banded by
    *  |candidate - book| / book: <5% -> +20, <10% -> +15, <20% -> +10,
    *  >50% -> -10, >100% -> -20. Zero when either side lacks a duration.
@@ -3933,7 +3936,12 @@ export async function searchMetadataForBook(
   useRerank?: boolean,
   // METADATA-CACHED-MATCHER: pass refresh=true to bypass the persistent
   // cache and force a fresh fetch chain. Default false (use cache).
-  refresh?: boolean
+  refresh?: boolean,
+  // browse: a free search by what was typed (the Candidates view's "Search
+  // again"): an empty query stays empty instead of becoming the book's title,
+  // the local author catalog answers first, and nothing is dropped for a low
+  // score. catalogOnly (with browse) answers from the catalog alone, at once.
+  opts?: { browse?: boolean; catalogOnly?: boolean }
 ): Promise<SearchMetadataResponse> {
   const body: {
     query: string;
@@ -3941,11 +3949,15 @@ export async function searchMetadataForBook(
     narrator?: string;
     series?: string;
     use_rerank?: boolean;
+    browse?: boolean;
+    catalog_only?: boolean;
   } = { query: query || '' };
   if (author) body.author = author;
   if (narrator) body.narrator = narrator;
   if (series) body.series = series;
   if (useRerank) body.use_rerank = true;
+  if (opts?.browse) body.browse = true;
+  if (opts?.browse && opts.catalogOnly) body.catalog_only = true;
   const url = refresh
     ? `${API_BASE}/audiobooks/${bookId}/search-metadata?refresh=true`
     : `${API_BASE}/audiobooks/${bookId}/search-metadata`;

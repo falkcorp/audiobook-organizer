@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/CandidatesCard.tsx
-// version: 1.0.2
+// version: 1.1.0
 // guid: ceb6a375-997d-44e0-8c71-d83c1980ea33
 // last-edited: 2026-10-07
 //
@@ -14,6 +14,13 @@
 // background per-book apply, at most 4 in flight). Until the list arrives the
 // row's cached top candidate is shown, so the card is never empty while the
 // search runs.
+//
+// "Search again" is a BROWSE search (browse: true): what was typed, not the
+// book's identity. An author alone lists that author's books (the local
+// author catalog first, shown at once, then the live answers), a partial
+// title narrows them, and every answer is listed -- no filtering to the
+// book's own title. The cached pick is not shown in its place while a browse
+// search runs: it is the answer to a different question.
 
 import {
   Alert,
@@ -124,6 +131,14 @@ function CandidateItem({
             {c.year ? <Typography variant="caption">{c.year}</Typography> : null}
             {isTop && <Chip label="Best match" size="small" color="primary" variant="outlined" />}
             {isCached && <Chip label="Cached pick" size="small" variant="outlined" />}
+            {c.from_catalog && (
+              <Chip
+                label="Catalog"
+                size="small"
+                variant="outlined"
+                title="From the local author catalog (harvested Audible listings)"
+              />
+            )}
           </Stack>
           <Button
             size="small"
@@ -205,9 +220,11 @@ export const CandidatesCard = memo(function CandidatesCard({
   const list: MetadataCandidate[] =
     entry.status === 'done'
       ? [...entry.results].sort((a, b) => b.score - a.score)
-      : cached
-        ? [cached]
-        : [];
+      : entry.status === 'loading' && entry.partial
+        ? [...entry.partial].sort((a, b) => b.score - a.score)
+        : cached && !query.browse
+          ? [cached]
+          : [];
   const visible = list.filter((c) => !hidden.some((h) => sameCandidate(h, c)));
   // The highlight follows the highest score in the current list, not the
   // background scan's cached pick: a fresh search can find a better match
@@ -297,7 +314,14 @@ export const CandidatesCard = memo(function CandidatesCard({
               onSubmit={(e: React.FormEvent) => {
                 e.preventDefault();
                 setHidden([]);
-                setQuery({ title: draft.title, author: draft.author });
+                const next: CandidateQuery = { title: draft.title, author: draft.author, browse: true };
+                if (candidateKey(bookId, next) === key) {
+                  // The same text again: run it again rather than replay
+                  // the memoized answer.
+                  loader.refresh(bookId, next);
+                } else {
+                  setQuery(next);
+                }
               }}
             >
               <TextField

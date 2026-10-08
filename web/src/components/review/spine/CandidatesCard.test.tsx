@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/CandidatesCard.test.tsx
-// version: 1.0.1
+// version: 1.1.0
 // guid: e012200e-9c38-4a1d-8587-8ac43ce9803b
 // last-edited: 2026-10-07
 
@@ -176,7 +176,7 @@ describe('Candidates view', () => {
     const loader = new CandidateLoader(search);
     renderCards([row('b1')], { loader, apply: vi.fn() });
     await waitFor(() =>
-      expect(search).toHaveBeenCalledWith('b1', { title: 'Book b1', author: 'Someone' })
+      expect(search).toHaveBeenCalledWith('b1', { title: 'Book b1', author: 'Someone' }, expect.any(Function))
     );
 
     const title = screen.getByTestId('search-again-title');
@@ -188,11 +188,75 @@ describe('Candidates view', () => {
     await user.click(screen.getByRole('button', { name: 'Search again' }));
 
     await waitFor(() =>
-      expect(search).toHaveBeenLastCalledWith('b1', {
-        title: 'The Real Title',
-        author: 'Real Author',
-      })
+      expect(search).toHaveBeenLastCalledWith(
+        'b1',
+        { title: 'The Real Title', author: 'Real Author', browse: true },
+        expect.any(Function)
+      )
     );
+  });
+
+  it('Search again with only an author lists every book the search returns, catalog first', async () => {
+    const user = userEvent.setup();
+    const full = deferred<MetadataCandidate[]>();
+    const search = vi.fn(
+      (_id: string, q: CandidateQuery, onPartial?: (r: MetadataCandidate[]) => void) => {
+        if (!q.browse) return Promise.resolve([cached]);
+        // The catalog answers first, the full browse search later.
+        onPartial?.([
+          { ...cand('Catalog Book One', 0.6), from_catalog: true },
+          { ...cand('Catalog Book Two', 0.5), from_catalog: true },
+        ]);
+        return full.promise;
+      }
+    );
+    const loader = new CandidateLoader(search);
+    renderCards([row('b1')], { loader, apply: vi.fn() });
+    await screen.findByText('Cached Pick');
+
+    await user.clear(screen.getByTestId('search-again-title'));
+    const author = screen.getByTestId('search-again-author');
+    await user.clear(author);
+    await user.type(author, 'joseph phelps');
+    await user.click(screen.getByRole('button', { name: 'Search again' }));
+
+    await waitFor(() =>
+      expect(search).toHaveBeenLastCalledWith(
+        'b1',
+        { title: '', author: 'joseph phelps', browse: true },
+        expect.any(Function)
+      )
+    );
+    // The catalog's answer shows while the full search runs, in place of the
+    // cached pick (the answer to a different question).
+    await screen.findByText('Catalog Book One');
+    expect(screen.getByText('Catalog Book Two')).toBeInTheDocument();
+    expect(screen.queryByText('Cached Pick')).not.toBeInTheDocument();
+    expect(screen.getAllByText('Catalog')).toHaveLength(2);
+
+    await act(async () => {
+      full.resolve([
+        { ...cand('Catalog Book One', 0.6), from_catalog: true },
+        { ...cand('Catalog Book Two', 0.5), from_catalog: true },
+        cand('Live Book Three', 0.4),
+        cand('Live Book Four', 0.3),
+      ]);
+    });
+    await screen.findByText('Live Book Three');
+    expect(within(screen.getByTestId('candidate-list')).getAllByTestId('candidate-item')).toHaveLength(4);
+  });
+
+  it('Search again with the same text runs the search again', async () => {
+    const user = userEvent.setup();
+    const search = vi.fn((_id: string, _q: CandidateQuery) => Promise.resolve([cand('R', 0.7)]));
+    const loader = new CandidateLoader(search);
+    renderCards([row('b1')], { loader, apply: vi.fn() });
+    await waitFor(() => expect(search).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole('button', { name: 'Search again' }));
+    await waitFor(() => expect(search).toHaveBeenCalledTimes(2));
+    await screen.findByText('R');
+    await user.click(screen.getByRole('button', { name: 'Search again' }));
+    await waitFor(() => expect(search).toHaveBeenCalledTimes(3));
   });
 
   it('Apply hands the chosen candidate to the panel; Reject of the cached pick is the lane reject', async () => {
