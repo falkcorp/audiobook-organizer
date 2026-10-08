@@ -1,7 +1,7 @@
 <!-- file: docs/AI-REFERENCE.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: e5f4g3h2-i1j0-k9l8-m7n6-o5p4q3r2s1t0 -->
-<!-- last-edited: 2026-09-11 -->
+<!-- last-edited: 2026-10-08 -->
 
 # AI Reference Guide — Audiobook Organizer
 
@@ -253,7 +253,6 @@ All routes are under `/api/v1/` via Gin. Auth middleware on `protected` group.
 | POST | `/itunes/write-back` | `handleITunesWriteBack` |
 | GET | `/itunes/write-back/preview` | `handleITunesWriteBackPreview` |
 | GET | `/itunes/books` | `handleITunesBooks` |
-| POST | `/itunes/sync` | `handleITunesSync` |
 | GET | `/itunes/status` | `handleITunesLibraryStatus` |
 | GET | `/itunes/import-status/:id` | `handleITunesImportStatus` |
 | POST | `/itunes/import-status/bulk` | `handleITunesImportStatusBulk` |

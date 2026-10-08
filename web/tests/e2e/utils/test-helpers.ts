@@ -1,7 +1,7 @@
 // file: web/tests/e2e/utils/test-helpers.ts
-// version: 2.20.0
+// version: 2.21.0
 // guid: a1b2c3d4-e5f6-7890-abcd-e1f2a3b4c5d6
-// last-edited: 2026-10-07
+// last-edited: 2026-10-08
 
 import { Page } from '@playwright/test';
 
@@ -152,6 +152,7 @@ interface MockITunesImportStatus {
   total_books?: number;
   processed?: number;
   imported?: number;
+  linked?: number;
   skipped?: number;
   failed?: number;
   errors?: string[];
@@ -160,6 +161,8 @@ interface MockITunesImportStatus {
 interface MockITunesState {
   validation?: MockITunesValidation;
   importStatus?: MockITunesImportStatus;
+  /** GET /itunes/books count: books already linked to iTunes. Default 0. */
+  linkedBookCount?: number;
 }
 
 export interface MockAuthUser {
@@ -1743,6 +1746,7 @@ export async function setupMockApiRoutes(
         total_books: 12,
         processed: 12,
         imported: 11,
+        linked: 0,
         skipped: 1,
         failed: 0,
         errors: [],
@@ -1751,8 +1755,9 @@ export async function setupMockApiRoutes(
       return route.fulfill(jsonResponse({ ...itunesImportStatus, operation_id: opId }));
     }
 
-    if (pathname === '/api/v1/itunes/resolve-conflicts' && method === 'POST') {
-      return route.fulfill(jsonResponse({ success: true, message: 'Conflicts resolved' }));
+    if (pathname === '/api/v1/itunes/books' && method === 'GET') {
+      const count = (mockState.itunes as MockITunesState).linkedBookCount ?? 0;
+      return route.fulfill(jsonResponse({ items: [], count }));
     }
 
     // Version management

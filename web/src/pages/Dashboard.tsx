@@ -1,7 +1,7 @@
 // file: web/src/pages/Dashboard.tsx
-// version: 1.16.0
+// version: 1.17.0
 // guid: 2f3a4b5c-6d7e-8f9a-0b1c-2d3e4f5a6b7c
-// last-edited: 2026-09-11
+// last-edited: 2026-10-08
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -28,8 +28,6 @@ import {
   ListItemText,
   Chip,
   CardActionArea,
-  Checkbox,
-  FormControlLabel,
   Skeleton,
   Tooltip,
 } from '@mui/material';
@@ -119,7 +117,6 @@ export function Dashboard() {
   const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [organizeDialogOpen, setOrganizeDialogOpen] = useState(false);
   const [organizeInProgress, setOrganizeInProgress] = useState(false);
-  const [syncITunesFirst, setSyncITunesFirst] = useState(true);
   const [scanInProgress, setScanInProgress] = useState(false);
 
   // Ref for auto-refresh interval
@@ -326,9 +323,7 @@ export function Dashboard() {
     setOrganizeInProgress(true);
     setActionNotice(null);
     try {
-      const op = await api.startOrganize(undefined, undefined, undefined, {
-        syncITunesFirst,
-      });
+      const op = await api.startOrganize();
       useOperationsStore.getState().startPolling(op.id, 'organize');
       setActionNotice('Organize operation started.');
       setOrganizeDialogOpen(false);
@@ -867,15 +862,6 @@ export function Dashboard() {
           >
             This will organize all books currently scanned but not yet imported to the library.
           </Typography>
-          <FormControlLabel
-            control={
-              <Checkbox
-                checked={syncITunesFirst}
-                onChange={(e) => setSyncITunesFirst(e.target.checked)}
-              />
-            }
-            label="Sync iTunes library first"
-          />
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setOrganizeDialogOpen(false)} disabled={organizeInProgress}>

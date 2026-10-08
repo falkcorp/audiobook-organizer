@@ -1,7 +1,7 @@
 // file: web/src/components/settings/ITunesImport.tsx
-// version: 1.23.0
+// version: 1.24.0
 // guid: 4eb9b74d-7192-497b-849a-092833ae63a4
-// last-edited: 2026-10-07
+// last-edited: 2026-10-08
 import { useEffect, useRef, useState } from 'react';
 import {
   Alert,
@@ -12,7 +12,6 @@ import {
   CardContent,
   CardHeader,
   Checkbox,
-  Divider,
   Dialog,
   DialogActions,
   DialogContent,
@@ -36,19 +35,16 @@ import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
 import FolderOpenIcon from '@mui/icons-material/FolderOpen';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
-import CloudDownloadIcon from '@mui/icons-material/CloudDownload';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
-import SyncIcon from '@mui/icons-material/Sync';
 import IconButton from '@mui/material/IconButton';
-import { ITunesConflictDialog, type ConflictItem } from './ITunesConflictDialog';
 import { ServerFileBrowser } from '../common/ServerFileBrowser';
 import {
   cancelOperation,
   getConfig,
   getITunesImportStatus,
   getITunesLibraryStatus,
+  getITunesLinkedBookCount,
   importITunesLibrary,
-  startITunesSync,
   updateConfig,
   type ITunesImportRequest,
   type ITunesImportStatus,
@@ -112,11 +108,10 @@ export function ITunesImport() {
   const [importing, setImporting] = useState(false);
   const [importStatus, setImportStatus] = useState<ITunesImportStatus | null>(null);
   const [showMissingFiles, setShowMissingFiles] = useState(false);
-  const [showConflictDialog, setShowConflictDialog] = useState(false);
-  const [pendingConflicts] = useState<ConflictItem[]>([]);
-  const [syncingWithConflicts, setSyncingWithConflicts] = useState(false);
   const [libraryChanged, setLibraryChanged] = useState(false);
-  const [forceImportConfirmOpen, setForceImportConfirmOpen] = useState(false);
+  // Open while asking whether to import again over books already linked.
+  const [reimportConfirmOpen, setReimportConfirmOpen] = useState(false);
+  const [checkingPriorImport, setCheckingPriorImport] = useState(false);
   const pollTimeoutRef = useRef<number | null>(null);
   const pollingUnmountedRef = useRef(false);
 
@@ -238,7 +233,30 @@ export function ITunesImport() {
     }
   };
 
-  const handleImport = async () => {
+  // Import is the only iTunes action, and it can be run again: each album is
+  // matched to an existing book by iTunes ID, then by file path, before a new
+  // book is added. When books are already linked to iTunes, the repeat run is
+  // confirmed first, because matching cannot catch everything.
+  const handleImportClick = async () => {
+    setCheckingPriorImport(true);
+    let linkedCount: number;
+    try {
+      linkedCount = await getITunesLinkedBookCount();
+    } catch {
+      // Could not tell whether a previous import exists: warn rather than
+      // skip the warning.
+      linkedCount = 1;
+    } finally {
+      setCheckingPriorImport(false);
+    }
+    if (linkedCount > 0) {
+      setReimportConfirmOpen(true);
+      return;
+    }
+    await startImport();
+  };
+
+  const startImport = async () => {
     setImporting(true);
 
     setImportStatus(null);
@@ -296,33 +314,6 @@ export function ITunesImport() {
     };
 
     await poll();
-  };
-
-  const handleConflictResolve = async (resolutions: Record<string, 'itunes' | 'organizer'>) => {
-    setSyncingWithConflicts(true);
-    try {
-      // Send resolutions to backend for sync
-      const response = await fetch(`${import.meta.env.VITE_API_BASE}/itunes/resolve-conflicts`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ resolutions }),
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to apply conflict resolutions');
-      }
-
-      setShowConflictDialog(false);
-
-      // Refresh sync status
-      if (importStatus?.operation_id) {
-        await pollImportStatus(importStatus.operation_id);
-      }
-    } catch (err) {
-      toast(err instanceof Error ? err.message : 'Conflict resolution failed', 'error');
-    } finally {
-      setSyncingWithConflicts(false);
-    }
   };
 
   return (
@@ -625,11 +616,11 @@ export function ITunesImport() {
         <Box sx={{ mt: 3 }}>
           <Button
             variant="contained"
-            onClick={handleImport}
-            disabled={!validationResult || importing}
+            onClick={handleImportClick}
+            disabled={!validationResult || importing || checkingPriorImport}
             startIcon={importing ? undefined : <CloudUploadIcon />}
           >
-            {importing ? 'Importing...' : 'Import Library'}
+            {importing ? 'Importing...' : 'Import iTunes library'}
           </Button>
         </Box>
 
@@ -691,6 +682,16 @@ export function ITunesImport() {
                 )}
               </Typography>
               <Stack direction="row" spacing={1}>
+                {importStatus.linked !== undefined && importStatus.linked > 0 && (
+                  <Typography
+                    variant="caption"
+                    sx={{
+                      color: 'info.main',
+                    }}
+                  >
+                    {importStatus.linked} linked
+                  </Typography>
+                )}
                 {importStatus.imported !== undefined && importStatus.imported > 0 && (
                   <Typography
                     variant="caption"
@@ -698,7 +699,7 @@ export function ITunesImport() {
                       color: 'success.main',
                     }}
                   >
-                    {importStatus.imported} imported
+                    {importStatus.imported} added
                   </Typography>
                 )}
                 {importStatus.skipped !== undefined && importStatus.skipped > 0 && (
@@ -743,11 +744,10 @@ export function ITunesImport() {
             {importStatus.status === 'completed' && (
               <Alert severity="success" sx={{ mt: 2 }}>
                 <AlertTitle>Import Complete</AlertTitle>
-                <Typography variant="body2">
-                  Imported <strong>{importStatus.imported ?? 0}</strong> audiobooks
-                  {importStatus.skipped !== undefined && importStatus.skipped > 0
-                    ? `, skipped ${importStatus.skipped}`
-                    : ''}
+                <Typography variant="body2" data-testid="itunes-import-result">
+                  Linked <strong>{importStatus.linked ?? 0}</strong>, added{' '}
+                  <strong>{importStatus.imported ?? 0}</strong>, skipped{' '}
+                  <strong>{importStatus.skipped ?? 0}</strong>
                   {importStatus.failed !== undefined && importStatus.failed > 0
                     ? `, ${importStatus.failed} failed`
                     : ''}
@@ -763,77 +763,6 @@ export function ITunesImport() {
             )}
           </Paper>
         )}
-
-        <Divider sx={{ my: 3 }} />
-
-        {/* Force Sync Buttons Section */}
-        <Box sx={{ mt: 3, mb: 3 }}>
-          <Typography variant="h6" gutterBottom>
-            Force Sync Options
-          </Typography>
-          <Typography variant="body2" color="textSecondary" sx={{ mb: 2 }}>
-            Use these buttons for manual sync control. Choose which direction takes precedence.
-          </Typography>
-
-          <Stack
-            direction="row"
-            spacing={2}
-            sx={{
-              flexWrap: 'wrap',
-            }}
-          >
-            <Button
-              variant="contained"
-              color="primary"
-              startIcon={<SyncIcon />}
-              onClick={async () => {
-                try {
-                  const result = await startITunesSync(settings.libraryPath || undefined, true);
-                  if (result.operation_id) {
-                    useOperationsStore.getState().startPolling(result.operation_id, 'itunes_sync');
-                  } else if (result.message) {
-                    toast(result.message, 'warning');
-                  }
-                } catch (err) {
-                  toast(err instanceof Error ? err.message : 'Sync failed', 'error');
-                }
-              }}
-              disabled={!settings.libraryPath || importing}
-            >
-              Sync Now
-            </Button>
-
-            <Tooltip title={!settings.libraryPath ? 'Set an iTunes Library XML path first' : ''}>
-              <span>
-                <Button
-                  variant="contained"
-                  startIcon={<CloudDownloadIcon />}
-                  onClick={() => setForceImportConfirmOpen(true)}
-                  disabled={!settings.libraryPath || importing}
-                >
-                  Force Import from iTunes
-                </Button>
-              </span>
-            </Tooltip>
-
-
-            <Button
-              variant="outlined"
-              onClick={() => {
-                // Retry last failed operation
-                if (importStatus?.status === 'failed') {
-                  setImporting(true);
-                  pollImportStatus(importStatus.operation_id);
-                }
-              }}
-              disabled={!importStatus || importStatus.status !== 'failed'}
-            >
-              Retry Failed Sync
-            </Button>
-          </Stack>
-        </Box>
-
-        {/* Write-back is now automatic when ITL path is configured */}
 
         <Dialog
           open={showMissingFiles}
@@ -868,51 +797,34 @@ export function ITunesImport() {
           </DialogActions>
         </Dialog>
 
-        <ITunesConflictDialog
-          open={showConflictDialog}
-          conflicts={pendingConflicts}
-          loading={syncingWithConflicts}
-          onResolve={handleConflictResolve}
-          onCancel={() => setShowConflictDialog(false)}
-        />
-
-        <Dialog open={forceImportConfirmOpen} onClose={() => setForceImportConfirmOpen(false)}>
-          <DialogTitle>Force Import from iTunes</DialogTitle>
+        <Dialog
+          open={reimportConfirmOpen}
+          onClose={() => setReimportConfirmOpen(false)}
+          aria-labelledby="itunes-reimport-title"
+        >
+          <DialogTitle id="itunes-reimport-title">Import iTunes library again?</DialogTitle>
           <DialogContent>
             <Typography>
-              Force import from iTunes will overwrite organizer changes. Continue?
+              You&apos;ve imported from iTunes before. We match each album to your existing books
+              by iTunes ID, then by file path. Albums iTunes has re-created with new IDs, or whose
+              files moved, can&apos;t be matched and will be added as new books, so you may see
+              duplicates. Nothing in iTunes is changed, and no files are moved.
             </Typography>
           </DialogContent>
           <DialogActions>
-            <Button onClick={() => setForceImportConfirmOpen(false)}>Cancel</Button>
+            <Button onClick={() => setReimportConfirmOpen(false)}>Cancel</Button>
             <Button
-              color="warning"
               variant="contained"
-              onClick={async () => {
-                setForceImportConfirmOpen(false);
-                setImporting(true);
-                try {
-                  const request: ITunesImportRequest = {
-                    library_path: settings.libraryPath,
-                    import_mode: 'import',
-                    preserve_location: settings.preserveLocation,
-                    import_playlists: settings.importPlaylists,
-                    skip_duplicates: settings.skipDuplicates,
-                    path_mappings: settings.pathMappings.filter((m) => m.from && m.to),
-                  };
-                  const result = await importITunesLibrary(request);
-                  useOperationsStore.getState().startPolling(result.operation_id, 'itunes_import');
-                  await pollImportStatus(result.operation_id);
-                } catch (err) {
-                  toast(err instanceof Error ? err.message : 'Force import failed', 'error');
-                  setImporting(false);
-                }
+              onClick={() => {
+                setReimportConfirmOpen(false);
+                void startImport();
               }}
             >
-              Force Import
+              Import anyway
             </Button>
           </DialogActions>
         </Dialog>
+
         {/* File browser dialog for selecting XML/ITL paths */}
         <Dialog
           open={browseTarget !== null}
