@@ -1,5 +1,5 @@
 // file: web/src/components/review/RepairsPanel.tsx
-// version: 1.23.0
+// version: 1.24.0
 // guid: 9c4f1a73-2e58-4b06-a9d1-6e3b8c7f0d52
 // last-edited: 2026-10-08
 
@@ -29,42 +29,33 @@
  * the rail and collapsed in the header behind "More"; the expanded state is
  * remembered too. Both are per-viewer conveniences, so storage failures fall
  * back to the defaults.
+ *
+ * The rows render in the workspace's three view modes (2026-10-08): compact
+ * is one line per row that opens for detail (repairs/RepairsCompactView),
+ * two-column is a card per row with book metadata and files
+ * (repairs/RepairsDetailsView), and candidates groups the page's rows by fix
+ * (repairs/RepairsGroupedView).
  */
 
 import { useCallback, useRef, useState } from 'react';
-import { Link as RouterLink } from 'react-router-dom';
 import {
   Alert,
   AlertTitle,
   Box,
   Button,
-  Checkbox,
   Chip,
   CircularProgress,
   LinearProgress,
-  Link,
   List,
   ListItemButton,
   Stack,
   Tab,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
   TablePagination,
-  TableRow,
   Tabs,
-  Tooltip,
   Typography,
 } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
-import type {
-  RepairFixer,
-  RepairOpRef,
-  RepairOutcome,
-  RepairRow,
-  RepairRowResult,
-} from '../../services/api';
+import type { RepairFixer, RepairOpRef } from '../../services/api';
 import {
   REPAIRS_PAGE_SIZES,
   applySeverity,
@@ -72,9 +63,19 @@ import {
   type RepairTrialState,
   type RepairsLane,
 } from './lanes/useRepairsLane';
+import type { SpineViewMode } from './spine/viewMode';
+import { classLabel, isSkippedFilter } from './repairs/rowHelpers';
+import { RepairsCompactView } from './repairs/RepairsCompactView';
+import { RepairsDetailsView } from './repairs/RepairsDetailsView';
+import { RepairsGroupedView } from './repairs/RepairsGroupedView';
 
 export interface RepairsPanelProps {
   repairs: RepairsLane;
+  /**
+   * The workspace's view toggle: compact = Compact rows, two-column =
+   * Details, candidates = Grouped by fix.
+   */
+  viewMode?: SpineViewMode;
 }
 
 /** "3 h ago" style age. Coarse on purpose: this is a freshness hint. */
@@ -117,83 +118,6 @@ function applySummary(la: RepairOpRef | undefined): string | null {
   if (o.failed) parts.push(`failed ${o.failed}`);
   if (o.retry_later) parts.push(`retry later ${o.retry_later}`);
   return `Last apply ${ageOf(la.completed_at ?? la.queued_at)}${la.dry_run ? ' (preview)' : ''}: ${parts.join(', ')}`;
-}
-
-const OUTCOME_LABEL: Record<RepairOutcome, string> = {
-  applied: 'Applied',
-  would_apply: 'Would apply (preview)',
-  changed_since_plan: 'Changed since trial',
-  partially_applied: 'Partly applied',
-  skipped_guard: 'Skipped by guard',
-  not_applicable: 'Not applicable',
-  failed: 'Failed',
-  aborted_standdown_lost: 'Stopped: scan resumed',
-  retry_later: 'Retry later (nothing written)',
-  owner_apply_refused: 'Owner apply refused',
-};
-
-const OUTCOME_COLOR: Record<RepairOutcome, 'success' | 'info' | 'warning' | 'error' | 'default'> = {
-  applied: 'success',
-  would_apply: 'info',
-  changed_since_plan: 'warning',
-  partially_applied: 'warning',
-  skipped_guard: 'default',
-  not_applicable: 'default',
-  failed: 'error',
-  aborted_standdown_lost: 'error',
-  retry_later: 'warning',
-  owner_apply_refused: 'error',
-};
-
-function OutcomeChip({ result }: { result: RepairRowResult }) {
-  // The server may send an outcome newer than this build knows: the lookups
-  // answer undefined for it and the fallbacks below show it raw.
-  const outcome = result.outcome as RepairOutcome;
-  const chip = (
-    <Chip
-      size="small"
-      variant="outlined"
-      color={OUTCOME_COLOR[outcome] ?? 'default'}
-      label={OUTCOME_LABEL[outcome] ?? result.outcome}
-      data-testid={`repairs-outcome-${result.row_id}`}
-    />
-  );
-  const detail = result.error || result.skipped;
-  return detail ? <Tooltip title={detail}>{chip}</Tooltip> : chip;
-}
-
-function DiffCell({ row }: { row: RepairRow }) {
-  const cur = row.current ?? {};
-  const prop = row.proposed ?? {};
-  const keys = [...new Set([...Object.keys(cur), ...Object.keys(prop)])].sort();
-  if (keys.length === 0) return <Typography variant="body2">—</Typography>;
-  return (
-    <Stack spacing={0.25}>
-      {keys.map((k) => {
-        const changed = cur[k] !== prop[k];
-        return (
-          <Typography
-            key={k}
-            variant="body2"
-            sx={{ color: changed ? 'text.primary' : 'text.secondary', wordBreak: 'break-word' }}
-          >
-            <Box component="span" sx={{ fontWeight: 600 }}>
-              {k}
-            </Box>
-            : {cur[k] ?? '—'}
-            {changed && (
-              <>
-                {' → '}
-                <Box component="span" sx={{ fontWeight: 600 }}>
-                  {prop[k] ?? '—'}
-                </Box>
-              </>
-            )}
-          </Typography>
-        );
-      })}
-    </Stack>
-  );
 }
 
 const RAIL_WIDTH_KEY = 'repairs.railWidth';
@@ -378,35 +302,6 @@ function FixerRail({ repairs, width }: RepairsPanelProps & { width: number }) {
   );
 }
 
-/** Words for a fixer's row class, falling back to the class id. */
-function classLabel(c: string): string {
-  const labels: Record<string, string> = {
-    moved: 'Moved',
-    copy: 'Copy',
-    'no-parent': 'No parent',
-    'manual-only': 'Manual only',
-    ambiguous: 'Ambiguous',
-    held: 'Held',
-    carry: 'Finish an interrupted repair (move its files off a merged survivor)',
-    'existing-book': 'Existing book (never a second copy)',
-    unplaced: 'Unplaced fragment (no chapter group)',
-    relink: 'Relink (history agrees or none)',
-    'held-cleared-by-history': 'Cleared (history)',
-    'held-name-mismatch': 'Name mismatch',
-    'held-series-id-mismatch': 'Series id ≠ stored object',
-    'name-match': 'Name match',
-    orphan: 'Orphan',
-    duplicate_link: 'Combined credit beside its authors',
-    combined_only: 'Only the combined credit',
-    partial_link: 'Some of its authors credited',
-    split_new_authors: 'Creates a missing author',
-    by_prefix: 'Byline ("By: ...") removed',
-    single_word_name: 'Single-word pen name',
-    error: 'Error',
-  };
-  return labels[c] ?? c;
-}
-
 /**
  * One chip per row class on the current tab, each with the count of rows it
  * lists. Clicking a chip narrows the rows to that class ("All" clears it), so
@@ -515,11 +410,6 @@ export const SKIP_KIND_LABEL: Record<string, string> = {
   error: 'Error',
 };
 
-/** True for the skipped tab and for any one-kind view of it (owner rows are skipped rows). */
-export function isSkippedFilter(filter: string): boolean {
-  return filter === 'skipped' || filter === 'owner_applicable' || filter.startsWith('skipped:');
-}
-
 /**
  * One chip per skip kind with its count. Each chip pages exactly the rows it
  * counts ("every count opens its books"); "All skipped" goes back. Under a
@@ -581,236 +471,6 @@ function SkipKindChips({ repairs }: RepairsPanelProps) {
   );
 }
 
-
-/**
- * Every book of a row, each a link to the book, with its role and file
- * counts. Rows with one book show nothing extra (the title above links it);
- * rows with more show a "N books" toggle that lists them all.
- */
-function RowMembers({ row }: { row: RepairRow }) {
-  const [open, setOpen] = useState(false);
-  const members =
-    row.members && row.members.length > 0
-      ? row.members
-      : row.book_ids.map((id) => ({ book_id: id, files: 0 }) as NonNullable<RepairRow['members']>[number]);
-  if (members.length <= 1) return null;
-  return (
-    <Box>
-      <Button
-        size="small"
-        variant="text"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        sx={{ p: 0, minWidth: 0, textTransform: 'none' }}
-        data-testid={`repairs-row-members-${row.row_id}`}
-      >
-        {members.length} books in this row
-      </Button>
-      {open && (
-        <Box component="ul" sx={{ m: 0, pl: 2 }}>
-          {members.map((m) => (
-            <li key={m.book_id}>
-              <Link component={RouterLink} to={`/library/${encodeURIComponent(m.book_id)}`}>
-                {m.title || m.book_id}
-              </Link>
-              <Typography variant="caption" sx={{ color: 'text.secondary', ml: 0.5 }}>
-                {[m.role, m.files ? `${m.files} file${m.files === 1 ? '' : 's'}` : '', m.missing_files ? `${m.missing_files} missing` : '']
-                  .filter(Boolean)
-                  .join(' · ')}
-              </Typography>
-            </li>
-          ))}
-        </Box>
-      )}
-    </Box>
-  );
-}
-
-const EVIDENCE_SHOWN = 3;
-
-/** What the row's decision was made from; long lists fold behind a toggle. */
-function RowEvidence({ row }: { row: RepairRow }) {
-  const [all, setAll] = useState(false);
-  const ev = row.evidence ?? [];
-  if (ev.length === 0) return null;
-  const shown = all ? ev : ev.slice(0, EVIDENCE_SHOWN);
-  return (
-    <Box data-testid={`repairs-row-evidence-${row.row_id}`}>
-      {shown.map((e, i) => (
-        <Typography key={i} variant="caption" component="div" sx={{ color: 'text.secondary', wordBreak: 'break-all' }}>
-          {e}
-        </Typography>
-      ))}
-      {ev.length > EVIDENCE_SHOWN && (
-        <Button size="small" onClick={() => setAll((v) => !v)} sx={{ p: 0, minWidth: 0, textTransform: 'none' }}>
-          {all ? 'Show less' : `Show all ${ev.length}`}
-        </Button>
-      )}
-    </Box>
-  );
-}
-
-/**
- * An owner row's proof and its own Apply button. One row per click, with a
- * confirm naming the book (the lane's dispatch asks); no checkbox, so no
- * selection or "apply all" ever includes it.
- */
-function OwnerApplyCell({ row, repairs }: { row: RepairRow } & RepairsPanelProps) {
-  const fixer = repairs.selectedFixer;
-  const planOpId = repairs.planOpId;
-  const outcome = repairs.rowOutcomes.get(row.row_id);
-  const settled = repairs.settledRowIds.has(row.row_id);
-  return (
-    <Box
-      sx={{ mt: 1, p: 1, border: 1, borderColor: 'secondary.main', borderRadius: 1 }}
-      data-testid={`repairs-owner-${row.row_id}`}
-    >
-      <Typography variant="caption" component="div" sx={{ fontWeight: 600 }}>
-        Owner apply: iTunes tracks these files; only database rows change
-      </Typography>
-      {row.owner_apply_reason && (
-        <Typography variant="caption" component="div" sx={{ color: 'text.secondary' }}>
-          {row.owner_apply_reason}
-        </Typography>
-      )}
-      <Stack direction="row" spacing={1} sx={{ mt: 0.5, alignItems: 'center' }}>
-        {!settled && fixer && planOpId && (
-          <Button
-            size="small"
-            variant="outlined"
-            color="secondary"
-            disabled={
-              repairs.applying ||
-              repairs.trial?.phase === 'running' ||
-              repairs.ownerStatus?.allowed === false
-            }
-            data-testid={`repairs-owner-apply-${row.row_id}`}
-            onClick={() =>
-              repairs.dispatch({
-                lane: 'repairs',
-                type: 'ownerApplyRow',
-                fixerId: fixer.id,
-                planOpId,
-                rowId: row.row_id,
-                title: row.title || row.book_ids[0] || row.row_id,
-                fragments: row.owner_writes?.length ?? 1,
-              })
-            }
-          >
-            Apply (owner)
-          </Button>
-        )}
-        {outcome && <OutcomeChip result={outcome} />}
-      </Stack>
-      {!settled && repairs.ownerStatus?.allowed === false && (
-        <Typography
-          variant="caption"
-          component="div"
-          sx={{ mt: 0.5, color: 'warning.main' }}
-          data-testid={`repairs-owner-why-not-${row.row_id}`}
-        >
-          {repairs.ownerStatus.reason ||
-            `Owner actions need you to sign in through Cloudflare Access (${window.location.host}).`}
-        </Typography>
-      )}
-    </Box>
-  );
-}
-
-function RowsTable({ repairs }: RepairsPanelProps) {
-  const { rows, filter, selectedRowIds, rowOutcomes, settledRowIds } = repairs;
-  const skippedTab = isSkippedFilter(filter);
-  return (
-    <Table size="small" stickyHeader data-testid="repairs-rows">
-      <TableHead>
-        <TableRow>
-          {!skippedTab && <TableCell padding="checkbox" />}
-          <TableCell>Book</TableCell>
-          <TableCell>Current → proposed</TableCell>
-          <TableCell>{skippedTab ? 'Why skipped' : 'Reason'}</TableCell>
-          <TableCell>Risk</TableCell>
-          {!skippedTab && <TableCell>Result</TableCell>}
-        </TableRow>
-      </TableHead>
-      <TableBody>
-        {rows.map((row) => {
-          const outcome = rowOutcomes.get(row.row_id);
-          const bookId = row.book_ids[0];
-          return (
-            <TableRow key={row.row_id} hover data-testid={`repairs-row-${row.row_id}`}>
-              {!skippedTab && (
-                <TableCell padding="checkbox">
-                  {/* Skipped rows never reach this tab's checkbox column; the
-                      guard is here too so a mixed page cannot offer one. A row
-                      an apply already settled is not offered again either:
-                      the stored trial still lists it, the library no longer
-                      matches it. */}
-                  {!row.skipped && !settledRowIds.has(row.row_id) && (
-                    <Checkbox
-                      size="small"
-                      checked={selectedRowIds.has(row.row_id)}
-                      onChange={() => repairs.toggleRow(row.row_id)}
-                      slotProps={{ input: { 'aria-label': `Select ${row.title || row.row_id}` } }}
-                    />
-                  )}
-                </TableCell>
-              )}
-              <TableCell sx={{ minWidth: 180 }}>
-                {bookId ? (
-                  <Link component={RouterLink} to={`/library/${encodeURIComponent(bookId)}`}>
-                    {row.title || bookId}
-                  </Link>
-                ) : (
-                  row.title || row.row_id
-                )}
-                {row.author && (
-                  <Typography variant="body2" sx={{ color: 'text.secondary' }}>
-                    {row.author}
-                  </Typography>
-                )}
-                {row.class && (
-                  <Box>
-                    <Chip size="small" variant="outlined" label={classLabel(row.class)} sx={{ mt: 0.5 }} />
-                  </Box>
-                )}
-                <RowMembers row={row} />
-              </TableCell>
-              <TableCell sx={{ minWidth: 220 }}>
-                <DiffCell row={row} />
-              </TableCell>
-              <TableCell sx={{ minWidth: 200 }}>
-                {skippedTab ? (
-                  <>
-                    <Typography variant="body2">{row.skip_reason || row.skipped}</Typography>
-                    {row.skip_reason && row.skipped && (
-                      <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-                        {row.skipped}
-                      </Typography>
-                    )}
-                  </>
-                ) : (
-                  <Typography variant="body2">{row.reason}</Typography>
-                )}
-                <RowEvidence row={row} />
-                {row.owner_applicable && row.skipped && <OwnerApplyCell row={row} repairs={repairs} />}
-              </TableCell>
-              <TableCell>
-                <Chip
-                  size="small"
-                  label={row.risk === 'review' ? 'Review' : row.risk === 'low' ? 'Low' : row.risk}
-                  color={row.risk === 'review' ? 'warning' : 'default'}
-                  variant={row.risk === 'low' ? 'outlined' : 'filled'}
-                />
-              </TableCell>
-              {!skippedTab && <TableCell>{outcome && <OutcomeChip result={outcome} />}</TableCell>}
-            </TableRow>
-          );
-        })}
-      </TableBody>
-    </Table>
-  );
-}
-
 function FixerHeader({ title, description }: { title: string; description: string }) {
   const [open, setOpen] = useState(() => readStored(DESC_OPEN_KEY) === '1');
   const toggle = () => {
@@ -851,7 +511,13 @@ function FixerHeader({ title, description }: { title: string; description: strin
   );
 }
 
-function PlanView({ repairs }: RepairsPanelProps) {
+function RowsView({ repairs, viewMode = 'compact' }: RepairsPanelProps) {
+  if (viewMode === 'two-column') return <RepairsDetailsView repairs={repairs} />;
+  if (viewMode === 'candidates') return <RepairsGroupedView repairs={repairs} />;
+  return <RepairsCompactView repairs={repairs} />;
+}
+
+function PlanView({ repairs, viewMode }: RepairsPanelProps) {
   const fixer = repairs.selectedFixer;
   const { page, planOpId, trial } = repairs;
   if (!fixer) return null;
@@ -1068,7 +734,7 @@ function PlanView({ repairs }: RepairsPanelProps) {
                   : 'The trial skipped no rows.'}
               </Typography>
             )}
-            {page && page.total > 0 && <RowsTable repairs={repairs} />}
+            {page && page.total > 0 && <RowsView repairs={repairs} viewMode={viewMode} />}
           </Box>
           {page && page.total > 0 && (
             <TablePagination
@@ -1087,7 +753,7 @@ function PlanView({ repairs }: RepairsPanelProps) {
   );
 }
 
-export function RepairsPanel({ repairs }: RepairsPanelProps) {
+export function RepairsPanel({ repairs, viewMode = 'compact' }: RepairsPanelProps) {
   const [railWidth, setRailWidth] = useState(initialRailWidth);
   const resizeRail = useCallback((w: number, persist: boolean) => {
     const next = clampRail(w);
@@ -1107,7 +773,7 @@ export function RepairsPanel({ repairs }: RepairsPanelProps) {
       <FixerRail repairs={repairs} width={railWidth} />
       <RailResizer width={railWidth} onResize={resizeRail} />
       {repairs.selectedFixer ? (
-        <PlanView repairs={repairs} />
+        <PlanView repairs={repairs} viewMode={viewMode} />
       ) : (
         !repairs.fixersLoading &&
         !repairs.fixersError &&
