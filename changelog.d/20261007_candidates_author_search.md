@@ -21,8 +21,8 @@ same text again re-runs the search.
 
 `catalog.harvest-authors` was registered but never run, so the author catalog
 was empty. The new `catalog_harvest` task enqueues it live
-(`dry_run: false`) over every library author once a day
-(`scheduled.catalog_harvest.interval`, default 1440 minutes, 0 turns it off;
+(`dry_run: false`) over every library author every 6 hours
+(`scheduled.catalog_harvest.interval`, default 360 minutes, 0 turns it off;
 also requires `catalog.enabled`). The op's own pacing applies: 4 workers
 sharing a sub-limiter at half of Audible's 8 req/s, on top of Audible's shared
 token bucket, and an author is re-listed only after 30 days.

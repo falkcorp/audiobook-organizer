@@ -42,7 +42,9 @@ export interface CandidateQuery {
 export type CandidateSearchFn = (
   bookId: string,
   query: CandidateQuery,
-  onPartial?: (results: MetadataCandidate[]) => void
+  onPartial?: (results: MetadataCandidate[]) => void,
+  /** Set on a refresh(): bypass the server's short-lived answer cache. */
+  opts?: { refresh: true }
 ) => Promise<MetadataCandidate[]>;
 
 export type CandidateEntry =
@@ -64,6 +66,7 @@ interface Job {
   key: string;
   bookId: string;
   query: CandidateQuery;
+  refresh?: boolean;
 }
 
 export class CandidateLoader {
@@ -111,14 +114,16 @@ export class CandidateLoader {
 
   /**
    * Run a search again even if its answer is cached (the same text submitted
-   * twice): a settled answer is dropped and the search re-queued. A search
-   * already queued or running is left alone.
+   * twice), asking the server to bypass its short-lived answer cache too. A
+   * search already queued or running is left alone.
    */
   refresh(bookId: string, query: CandidateQuery): void {
     const key = candidateKey(bookId, query);
     const cur = this.get(key).status;
-    if (cur === 'done' || cur === 'error') this.entries.delete(key);
-    this.request(bookId, query);
+    if (cur === 'loading' || cur === 'queued') return;
+    this.queue.push({ key, bookId, query, refresh: true });
+    this.set(key, QUEUED);
+    this.pump();
   }
 
   /** Drop a search that has not started yet (its card left the viewport). */
@@ -139,9 +144,13 @@ export class CandidateLoader {
       const job = this.queue.shift()!;
       this.active++;
       this.set(job.key, LOADING);
-      this.search(job.bookId, job.query, (partial) => {
+      const onPartial = (partial: MetadataCandidate[]) => {
         if (this.get(job.key).status === 'loading') this.set(job.key, { status: 'loading', partial });
-      })
+      };
+      (job.refresh
+        ? this.search(job.bookId, job.query, onPartial, { refresh: true })
+        : this.search(job.bookId, job.query, onPartial)
+      )
         .then(
           (results) => this.set(job.key, { status: 'done', results }),
           (err: unknown) =>

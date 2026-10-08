@@ -56,7 +56,7 @@ func catalogHarvestTaskFixture(t *testing.T, active ...database.OperationV2Row) 
 }
 
 // The catalog_harvest task enqueues catalog.harvest-authors LIVE
-// (dry_run=false: the op's default is a census that writes nothing), daily
+// (dry_run=false: the op's default is a census that writes nothing), every 6h
 // by default, over every author (no authors filter), never on startup or in
 // the maintenance window.
 func TestCatalogHarvestTask_EnqueuesLiveRunOverEveryAuthor(t *testing.T) {
@@ -67,7 +67,7 @@ func TestCatalogHarvestTask_EnqueuesLiveRunOverEveryAuthor(t *testing.T) {
 	assert.False(t, task.RunOnStart())
 	assert.False(t, task.RunInMaintenanceWindow())
 	assert.False(t, ts.inMaintenanceOrder(catalogHarvestTaskName))
-	assert.Equal(t, 24*time.Hour, task.GetInterval())
+	assert.Equal(t, 6*time.Hour, task.GetInterval())
 	assert.Equal(t, catalogHarvestOpID, taskV2DefIDs[catalogHarvestTaskName])
 
 	op, err := task.TriggerFn("test")

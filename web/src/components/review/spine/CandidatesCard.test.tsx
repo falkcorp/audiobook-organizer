@@ -257,6 +257,13 @@ describe('Candidates view', () => {
     await screen.findByText('R');
     await user.click(screen.getByRole('button', { name: 'Search again' }));
     await waitFor(() => expect(search).toHaveBeenCalledTimes(3));
+    // ...and asks the server past its short-lived answer cache.
+    expect(search).toHaveBeenLastCalledWith(
+      'b1',
+      { title: 'Book b1', author: 'Someone', browse: true },
+      expect.any(Function),
+      { refresh: true }
+    );
   });
 
   it('Apply hands the chosen candidate to the panel; Reject of the cached pick is the lane reject', async () => {

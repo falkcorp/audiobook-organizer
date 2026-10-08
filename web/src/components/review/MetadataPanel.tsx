@@ -97,9 +97,17 @@ export function MetadataPanel({
   // still there when the reviewer scrolls back to it.
   const candidateLoader = useMemo(
     () =>
-      new CandidateLoader(async (bookId, q, onPartial) => {
+      new CandidateLoader(async (bookId, q, onPartial, searchOpts) => {
         if (!q.browse) {
-          const resp = await api.searchMetadataForBook(bookId, q.title, q.author || undefined);
+          const resp = await api.searchMetadataForBook(
+            bookId,
+            q.title,
+            q.author || undefined,
+            undefined,
+            undefined,
+            undefined,
+            searchOpts?.refresh
+          );
           return resp.results ?? [];
         }
         // Search again: the local author catalog answers at once (no
@@ -124,7 +132,7 @@ export function MetadataPanel({
           undefined,
           undefined,
           undefined,
-          undefined,
+          searchOpts?.refresh,
           opts
         );
         return resp.results ?? [];
