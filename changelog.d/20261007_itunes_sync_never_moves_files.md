@@ -1,0 +1,1 @@
+- iTunes sync never moves files: a track that matches an existing book_file (by PID or path) no longer overwrites its FilePath/Format with the iTunes location, which could point an organized book back at its old iTunes file; the location is recorded in ITunesPath only (new `BatchUpsertBookFilesKeepPaths`). New tracks are still created as before.

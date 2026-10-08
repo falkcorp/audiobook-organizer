@@ -1,5 +1,5 @@
 // file: internal/itunes/service/importer.go
-// version: 1.37.0
+// version: 1.38.0
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
 // last-edited: 2026-10-07
 
@@ -113,7 +113,11 @@ type bookWriter interface {
 	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	CreateBookFile(file *database.BookFile) error
 	UpdateBookFile(id string, file *database.BookFile) error
-	BatchUpsertBookFiles(files []*database.BookFile) error
+	// BatchUpsertBookFilesKeepPaths is the sync's file write: a track that
+	// matches an existing book_file never changes that row's FilePath (owner
+	// decision 2026-10-07, "Sync never moves files"); its iTunes location
+	// lands in ITunesPath only.
+	BatchUpsertBookFilesKeepPaths(files []*database.BookFile) error
 }
 
 // contributorWriter resolves and links authors and series. Import is
@@ -896,7 +900,13 @@ func (imp *Importer) syncLibrary(ctx context.Context, library *itunes.Library, l
 		if len(pendingFiles) == 0 {
 			return
 		}
-		if err := imp.store.BatchUpsertBookFiles(pendingFiles); err != nil {
+		// KeepPaths: a pending row for an EXISTING book_file (matched by PID
+		// or path) carries the iTunes location in FilePath; through the plain
+		// upsert that overwrote an organized row's path with its old iTunes
+		// file. Sync never moves files -- the stored FilePath stays, the
+		// iTunes location is recorded in ITunesPath. New tracks still create
+		// their rows at the iTunes location.
+		if err := imp.store.BatchUpsertBookFilesKeepPaths(pendingFiles); err != nil {
 			// Rows whose book was deleted during the sync are refused one by
 			// one; every other row in the batch IS written. Count and name the
 			// refused ones here and in the summary: they are not retried
@@ -907,7 +917,7 @@ func (imp *Importer) syncLibrary(ctx context.Context, library *itunes.Library, l
 				log.Warn("iTunes sync: %d file row(s) not written because their book or the row itself was deleted during the sync (missing books %v; reason by row %v); the other %d rows of the batch were written",
 					len(refused.RefusedFileIDs), refused.MissingBookIDs, refused.Reasons, refused.Committed)
 			} else {
-				log.Error("BatchUpsertBookFiles failed (continuing): %v", err)
+				log.Error("BatchUpsertBookFilesKeepPaths failed (continuing): %v", err)
 			}
 		}
 		pendingFiles = pendingFiles[:0]
