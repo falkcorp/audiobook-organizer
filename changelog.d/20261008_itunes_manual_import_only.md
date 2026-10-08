@@ -43,6 +43,11 @@ linked to iTunes, clicking **Import iTunes library** first shows a warning
 that albums iTunes re-created with new IDs, or whose files moved, will be
 added as new books; the choices are **Import anyway** and **Cancel**.
 
+The import's metadata-lookup and organize phases now act only on the books
+the current run created. They used to sweep every book in `imported` state
+with an iTunes import source, so a re-import in organize mode would have
+organized (copied, and repointed the `FilePath` of) books it had only linked.
+
 The merge iTunes guard's "a library exists but its location is unknown"
 refusal now keys on a configured `.itl` path (`itunes.library_write_path`)
 instead of the removed `itunes.sync_enabled`, which defaulted to on.

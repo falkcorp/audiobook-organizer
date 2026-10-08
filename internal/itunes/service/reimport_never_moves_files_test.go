@@ -11,11 +11,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -143,4 +145,58 @@ func TestExecute_ImportSameLibraryTwice_AddsNoBooks(t *testing.T) {
 	for _, b := range booksAfterSecond {
 		assert.Equal(t, pathsAfterFirst[b.ID], b.FilePath, "a re-import must not change a book's FilePath")
 	}
+}
+
+// countingOrganizer records every organize call. A re-import must make none
+// for a book it only linked.
+type countingOrganizer struct {
+	mu    sync.Mutex
+	calls []string
+}
+
+func (o *countingOrganizer) OrganizeSingleFile(book *database.Book) (*organizer.Landing, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.calls = append(o.calls, book.ID)
+	return nil, fmt.Errorf("organize called for %s", book.ID)
+}
+
+func (o *countingOrganizer) OrganizeBookDirectory(book *database.Book, _ []database.BookFile) (*organizer.Landing, error) {
+	return o.OrganizeSingleFile(book)
+}
+
+// A re-import in organize mode organizes only the books it created. Until
+// 2026-10-08 the organize phase swept every book in "imported" state with an
+// iTunes import source, so it organized -- copied, and repointed the FilePath
+// of -- a book the re-import had only linked.
+func TestExecute_ReimportInOrganizeModeLeavesLinkedBookAlone(t *testing.T) {
+	store := newRegressionStore(t)
+	dir := t.TempDir()
+	trackPath := filepath.Join(dir, "linked.m4b")
+	require.NoError(t, os.WriteFile(trackPath, bytes.Repeat([]byte("l"), 512), 0o644))
+	pid := "REIMPORT_ORGANIZE_PID"
+	xmlPath := writeXMLWithAudiobook(t, dir, "Linked Book", "Author L", pid, trackPath)
+
+	linked, err := store.CreateBook(&database.Book{
+		Title: "Linked Book", FilePath: trackPath, Format: "m4b",
+		LibraryState: new("imported"), ITunesImportSource: new(xmlPath),
+	})
+	require.NoError(t, err)
+
+	org := &countingOrganizer{}
+	imp := newImporter(Deps{Store: store, Config: Config{}})
+	imp.organizerFactory = func() BookOrganizer { return org }
+	req := ImportRequest{LibraryPath: xmlPath, ImportMode: "organize"}
+	require.NoError(t, imp.Execute(context.Background(), "op-reimport-organize", req, logger.New("test")))
+
+	snap := imp.GetStatus("op-reimport-organize")
+	require.Equal(t, 1, snap.Linked, "errors: %v", snap.Errors)
+	require.Equal(t, 0, snap.Imported)
+	assert.Empty(t, org.calls, "a linked book must not be organized by a re-import")
+
+	got, err := store.GetBookByID(linked.ID)
+	require.NoError(t, err)
+	assert.Equal(t, trackPath, got.FilePath, "a re-import must not change a linked book's FilePath")
+	require.NotNil(t, got.LibraryState)
+	assert.Equal(t, "imported", *got.LibraryState)
 }

@@ -713,14 +713,14 @@ func (imp *Importer) executeLibrary(ctx context.Context, opID string, req Import
 	if req.FetchMetadata {
 		logCheckpointErr(operations.SaveCheckpoint(imp.store, opID, "itunes_import", "enriching", 0, 0), opID, "enriching")
 		log.Info("Starting metadata enrichment phase...")
-		imp.enrichImportedBooks(ctx, status, log)
+		imp.enrichImportedBooks(ctx, newBookIDs, status, log)
 	}
 
 	// Phase 5: Organize
 	if importMode == itunes.ImportModeOrganize && !req.PreserveLocation {
 		logCheckpointErr(operations.SaveCheckpoint(imp.store, opID, "itunes_import", "organizing", 0, 0), opID, "organizing")
 		log.Info("Starting organize phase...")
-		imp.organizeImportedBooks(ctx, status, log)
+		imp.organizeImportedBooks(ctx, newBookIDs, status, log)
 	}
 
 	logCheckpointErr(operations.ClearState(imp.store, opID), opID, "clear-state")
@@ -1045,9 +1045,13 @@ const enrichBreakerThreshold = 5
 //     status.go remain available if a future change starts using it.
 //   - The local `enriched` tally is guarded by its own mutex, same pattern
 //     as organizeImportedBooks' `organized` counter.
-func (imp *Importer) enrichImportedBooks(ctx context.Context, status *itunesImportStatus, log logger.Logger) {
+func (imp *Importer) enrichImportedBooks(ctx context.Context, bookIDs []string, status *itunesImportStatus, log logger.Logger) {
 	if imp.mfs == nil {
 		log.Warn("Metadata enrichment skipped: no metafetch service wired")
+		return
+	}
+	inRun := runBookSet(bookIDs)
+	if len(inRun) == 0 {
 		return
 	}
 
@@ -1061,9 +1065,12 @@ func (imp *Importer) enrichImportedBooks(ctx context.Context, status *itunesImpo
 	// original sequential loop applied inline per iteration. Keeps
 	// RunItems' Concurrency fan-out and progress denominator scoped to real
 	// work only (mirrors organizeImportedBooks' toOrganize pre-filter).
-	toEnrich := make([]*database.BookCore, 0, len(books))
+	toEnrich := make([]*database.BookCore, 0, len(inRun))
 	for i := range books {
 		book := &books[i]
+		if !inRun[book.ID] {
+			continue
+		}
 		if book.LibraryState == nil || *book.LibraryState != "imported" {
 			continue
 		}
@@ -1146,6 +1153,20 @@ func (imp *Importer) enrichImportedBooks(ctx context.Context, status *itunesImpo
 // package-level const's doc comment for why fixed-vs-NumCPU), or
 // enrichConcurrencyOverride when a test has set it to force a specific
 // pool size (e.g. 1 for the sequential path).
+// runBookSet is the set of books an import run created. The enrich and
+// organize phases act on these books only. Until 2026-10-08 both swept every
+// book in "imported" state with an iTunes import source, so a re-import in
+// organize mode organized -- moved, and repointed the FilePath of -- books it
+// had only linked, or that an earlier run had imported. A re-import never
+// moves a linked book's files.
+func runBookSet(bookIDs []string) map[string]bool {
+	set := make(map[string]bool, len(bookIDs))
+	for _, id := range bookIDs {
+		set[id] = true
+	}
+	return set
+}
+
 func (imp *Importer) enrichConcurrency() int {
 	if imp.enrichConcurrencyOverride > 0 {
 		return imp.enrichConcurrencyOverride
@@ -1179,7 +1200,11 @@ func (imp *Importer) enrichConcurrency() int {
 //     (distinct destinations) still runs fully in parallel while the rare
 //     colliding case gets the same one-wins/one-fails outcome the serial
 //     loop always produced (order-independent, same result set).
-func (imp *Importer) organizeImportedBooks(ctx context.Context, status *itunesImportStatus, log logger.Logger) {
+func (imp *Importer) organizeImportedBooks(ctx context.Context, bookIDs []string, status *itunesImportStatus, log logger.Logger) {
+	inRun := runBookSet(bookIDs)
+	if len(inRun) == 0 {
+		return
+	}
 	core, err := imp.store.GetAllBooksCore(0, 0)
 	if err != nil {
 		log.Error("Failed to list books for organize: %v", err)
@@ -1199,9 +1224,12 @@ func (imp *Importer) organizeImportedBooks(ctx context.Context, status *itunesIm
 	// late worker wrote it back) and records the organize result with a
 	// three-way merge inside ModifyBook, so a field another writer changed
 	// while the file was being copied is kept rather than reverted.
-	toOrganize := make([]string, 0, len(core))
+	toOrganize := make([]string, 0, len(inRun))
 	for i := range core {
 		c := &core[i]
+		if !inRun[c.ID] {
+			continue
+		}
 		if c.LibraryState == nil || *c.LibraryState != "imported" {
 			continue
 		}
