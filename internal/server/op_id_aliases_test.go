@@ -1,7 +1,7 @@
 // file: internal/server/op_id_aliases_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 2a7c5e93-1d4b-4f60-8e2a-b9c3d7f15e48
-// last-edited: 2026-10-07
+// last-edited: 2026-10-08
 
 // Guard tests for operation-ID renames.
 //
@@ -64,6 +64,11 @@ var retiredOpIDs = map[string]string{
 	"itunes.path-repair":    "removed with iTunes write-back; no successor",
 	// It generated synthetic .itl files for testing the removed writers.
 	"maintenance.generate-itl-tests": "removed with iTunes write-back; no successor",
+	// Removed 2026-10-08: iTunes import is manual only. Re-running
+	// itunes.import links each album to its existing book, which is what the
+	// incremental sync did. Not aliased to itunes.import: an old sync enqueue
+	// ({library_path, path_mappings}) is not an import request.
+	"itunes.sync": "removed; itunes.import (manual, re-runnable) replaces it",
 }
 
 // bootRegisteredOpIDs boots a server the way TestNewServer_RegistersOpsWithEmptyRootDir

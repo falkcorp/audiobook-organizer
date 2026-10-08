@@ -1,7 +1,7 @@
 # file: internal/server/testdata/write_op_modes.golden
-# version: 1.10.0
+# version: 1.11.0
 # guid: 656b77a9-3e50-456c-9945-dbbebbd7e041
-# last-edited: 2026-10-07
+# last-edited: 2026-10-08
 #
 # What `{}` does for every registered operation that can write (declares
 # library.write, files.write or db.migrate, or declares no capabilities at all).
@@ -77,7 +77,6 @@ itunes.heal	no-mode
 itunes.import	no-mode
 itunes.position-sync	no-mode
 itunes.regroup	preview
-itunes.sync	no-mode
 library.ai-parse	no-mode
 library.bulk-write-back	no-mode
 library.folder-auto-scan	no-mode

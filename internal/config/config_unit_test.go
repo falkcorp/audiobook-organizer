@@ -1,6 +1,6 @@
 // file: internal/config/config_unit_test.go
-// version: 1.15.0
-// last-edited: 2026-10-07
+// version: 1.16.0
+// last-edited: 2026-10-08
 
 package config
 
@@ -448,8 +448,8 @@ func TestInitConfigDefaults(t *testing.T) {
 	})
 
 	t.Run("iTunes defaults", func(t *testing.T) {
-		assert.True(t, AppConfig.ITunes.SyncEnabled)
-		assert.Equal(t, 30, AppConfig.ITunes.SyncInterval)
+		assert.Equal(t, "", AppConfig.ITunes.LibraryReadPath)
+		assert.Equal(t, "", AppConfig.ITunes.LibraryITLPath)
 	})
 
 	t.Run("auto-update defaults", func(t *testing.T) {
@@ -670,7 +670,6 @@ func TestApplySettingBoolKeys(t *testing.T) {
 		{"enable_json_logging", func() bool { return AppConfig.EnableJsonLogging }},
 		{"auto_update_enabled", func() bool { return AppConfig.AutoUpdate.Enabled }},
 		{"purge_soft_deleted_delete_files", func() bool { return AppConfig.PurgeSoftDeletedDeleteFiles }},
-		{"itunes_sync_enabled", func() bool { return AppConfig.ITunes.SyncEnabled }},
 		{"maintenance_window_enabled", func() bool { return AppConfig.Maintenance.Enabled }},
 		{"maintenance_window_dedup_refresh", func() bool { return AppConfig.Maintenance.DedupRefresh }},
 		{"maintenance_window_series_prune", func() bool { return AppConfig.Maintenance.SeriesPrune }},
@@ -742,7 +741,6 @@ func TestApplySettingIntKeys(t *testing.T) {
 		{"auto_update_window_start", "2", func() int { return AppConfig.AutoUpdate.WindowStart }},
 		{"auto_update_window_end", "5", func() int { return AppConfig.AutoUpdate.WindowEnd }},
 		{"purge_soft_deleted_after_days", "30", func() int { return AppConfig.PurgeSoftDeletedAfterDays }},
-		{"itunes_sync_interval", "60", func() int { return AppConfig.ITunes.SyncInterval }},
 		{"maintenance_window_start", "3", func() int { return AppConfig.Maintenance.WindowStart }},
 		{"maintenance_window_end", "6", func() int { return AppConfig.Maintenance.WindowEnd }},
 		{"scheduled_dedup_refresh_interval", "24", func() int { return AppConfig.Scheduled.DedupRefresh.Interval }},

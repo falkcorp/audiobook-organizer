@@ -1,7 +1,7 @@
 // file: internal/scheduler/scheduler.go
-// version: 1.16.2
+// version: 1.17.0
 // guid: 3f7a9c21-b4d8-4e05-a6f2-8c1d0e3b7a94
-// last-edited: 2026-10-02
+// last-edited: 2026-10-08
 
 // Package scheduler implements the unified task scheduling system.
 // TaskScheduler manages all registered tasks, their schedules, and manual
@@ -74,7 +74,7 @@ type SchedulerDeps struct {
 
 // TaskDefinition defines a registered task in the unified task system.
 type TaskDefinition struct {
-	Name        string // unique key: "library_scan", "itunes_sync", etc.
+	Name        string // unique key: "library_scan", "dedup_refresh", etc.
 	Description string // human-readable
 	Category    string // "maintenance", "library", "sync"
 	// TriggerFn creates and enqueues an operation, returning it.

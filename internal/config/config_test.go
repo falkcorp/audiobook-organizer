@@ -1,11 +1,12 @@
 // file: internal/config/config_test.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-10-07
+// last-edited: 2026-10-08
 
 package config
 
 import (
+	"reflect"
 	"slices"
 	"sync"
 	"testing"
@@ -574,23 +575,29 @@ func TestInitConfig_MetadataScoringFromEnv(t *testing.T) {
 	assert.Equal(t, 10, snap.MetadataScoring.LLMRerankTopK)
 }
 
-func TestInitConfig_ITunesDefaults(t *testing.T) {
+// The incremental iTunes sync was removed on 2026-10-08 (import is manual
+// only), and with it the sync_enabled / sync_interval settings.
+func TestInitConfig_ITunesHasNoSyncSettings(t *testing.T) {
 	viper.Reset()
 	InitConfig()
-	snap := Snapshot()
-	assert.True(t, snap.ITunes.SyncEnabled)
-	assert.Equal(t, 30, snap.ITunes.SyncInterval)
+	typ := reflect.TypeOf(Snapshot().ITunes)
+	for _, name := range []string{"SyncEnabled", "SyncInterval"} {
+		_, ok := typ.FieldByName(name)
+		assert.False(t, ok, "ITunesConfig must carry no %s: there is no iTunes sync", name)
+	}
 }
 
 func TestInitConfig_ITunesFromEnv(t *testing.T) {
+	t.Setenv("ITUNES_SYNC_ENABLED", "true")
 	t.Setenv("ITUNES_SYNC_INTERVAL", "60")
 	t.Setenv("ITUNES_AUTO_WRITE_BACK", "true")
 	viper.Reset()
 	InitConfig()
 	snap := Snapshot()
-	assert.Equal(t, 60, snap.ITunes.SyncInterval)
-	// ITUNES_AUTO_WRITE_BACK is a removed setting (iTunes write-back went
-	// 2026-10-07): an environment that still sets it must load cleanly.
+	assert.Equal(t, "", snap.ITunes.LibraryReadPath)
+	// ITUNES_SYNC_ENABLED / ITUNES_SYNC_INTERVAL (sync removed 2026-10-08) and
+	// ITUNES_AUTO_WRITE_BACK (write-back removed 2026-10-07) are removed
+	// settings: an environment that still sets them must load cleanly.
 }
 
 func TestInitConfig_MaintenanceDefaults(t *testing.T) {

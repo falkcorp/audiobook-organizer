@@ -1,7 +1,7 @@
 // file: internal/server/handlers/scheduler_admin.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: c8cffbf7-1356-4211-ad0e-28307563161b
-// last-edited: 2026-10-07
+// last-edited: 2026-10-08
 
 // TODO.md scheduler-config item (was line 4563 as of commit 46628240): the
 // task-scheduler endpoints (list/run/configure tasks) and the
@@ -279,15 +279,6 @@ func bindingForTask(name string) (taskConfigBinding, bool) {
 		// interval_minutes and run_on_startup are read by the task definition
 		// but were not bound before, so they were dropped silently too.
 		return full(&sched.Reconcile, &maint.Reconcile), true
-	case "itunes_sync":
-		return taskConfigBinding{
-			enabled:  &config.AppConfig.ITunes.SyncEnabled,
-			interval: &config.AppConfig.ITunes.SyncInterval,
-			hints: map[string]string{
-				"run_on_startup":            "iTunes sync does not run on startup",
-				"run_in_maintenance_window": "iTunes sync is not part of the maintenance window",
-			},
-		}, true
 	case "purge_deleted":
 		return windowOnly(&maint.PurgeDeleted, map[string]string{
 			"enabled":          "derived from purge_soft_deleted_after_days; set that key via PUT /config, 0 disables the purge",

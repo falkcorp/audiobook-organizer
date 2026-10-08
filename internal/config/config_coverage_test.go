@@ -1,6 +1,6 @@
 // file: internal/config/config_coverage_test.go
-// version: 1.2.0
-// last-edited: 2026-06-16
+// version: 1.3.0
+// last-edited: 2026-10-08
 
 package config
 
@@ -181,8 +181,8 @@ func TestCoverage_ITunesConfig(t *testing.T) {
 	InitConfig()
 
 	// Test ITunes-related defaults exist
-	if AppConfig.ITunes.SyncInterval != 0 && AppConfig.ITunes.SyncInterval < 0 {
-		t.Error("ITunesSyncInterval has unexpected negative value")
+	if AppConfig.ITunes.LibraryReadPath != "" {
+		t.Errorf("itunes.library_read_path defaults to %q, want empty", AppConfig.ITunes.LibraryReadPath)
 	}
 }
 

@@ -1,11 +1,9 @@
 // file: internal/itunes/service/config.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6d05155e-42e3-4319-a2a7-2e80d10be2aa
-// last-edited: 2026-10-07
+// last-edited: 2026-10-08
 
 package itunesservice
-
-import "time"
 
 // Config is the iTunes-specific slice of config.AppConfig, passed by
 // value at construction so the service has no transitive dependency on
@@ -14,7 +12,6 @@ type Config struct {
 	Enabled           bool
 	LibraryReadPath   string
 	DefaultMappings   []PathMapping
-	SyncInterval      time.Duration
 	ImportConcurrency int
 }
 

@@ -1,7 +1,7 @@
 // file: internal/config/persistence_test.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-10-07
+// last-edited: 2026-10-08
 
 package config
 
@@ -941,8 +941,8 @@ func TestMigrateITunesFields_FlatBlob(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(migrated), &result))
 	it, ok := result["itunes"].(map[string]any)
 	require.True(t, ok)
-	assert.Equal(t, true, it["sync_enabled"])
-	assert.Equal(t, float64(30), it["sync_interval"])
+	assert.NotContains(t, it, "sync_enabled", "the iTunes sync was removed; the flat key is dropped")
+	assert.NotContains(t, it, "sync_interval")
 	assert.NotContains(t, it, "write_back_enabled", "iTunes write-back was removed; the flat key is dropped")
 	assert.NotContains(t, it, "auto_write_back")
 	assert.Equal(t, "/mnt/itunes.itl", it["library_write_path"])
@@ -1187,7 +1187,6 @@ func TestLoadConfigFromDatabaseEnvAuthoritative(t *testing.T) {
 	bindForTest := func() {
 		viper.BindEnv("cf_access_team_domain", "CF_ACCESS_TEAM_DOMAIN") //nolint:errcheck
 		viper.BindEnv("oauth_enabled", "OAUTH_ENABLED")                 //nolint:errcheck
-		viper.BindEnv("itunes.sync_interval", "ITUNES_SYNC_INTERVAL")   //nolint:errcheck
 	}
 
 	t.Run("env wins over config blob", func(t *testing.T) {
@@ -1222,7 +1221,7 @@ func TestLoadConfigFromDatabaseEnvAuthoritative(t *testing.T) {
 
 		blob, err := json.Marshal(Config{
 			CFAccessTeamDomain: "blob-team.cloudflareaccess.com",
-			ITunes:             ITunesConfig{SyncInterval: 42},
+			ITunes:             ITunesConfig{MediaRoot: "/blob/media"},
 		})
 		require.NoError(t, err)
 
@@ -1236,7 +1235,7 @@ func TestLoadConfigFromDatabaseEnvAuthoritative(t *testing.T) {
 		require.NoError(t, LoadConfigFromDatabase(store))
 		assert.Equal(t, "blob-team.cloudflareaccess.com", AppConfig.CFAccessTeamDomain,
 			"env-authoritative blob value must survive when no env override is present")
-		assert.Equal(t, 42, AppConfig.ITunes.SyncInterval,
+		assert.Equal(t, "/blob/media", AppConfig.ITunes.MediaRoot,
 			"UI-managed itunes value must survive the env overlay untouched")
 	})
 }
@@ -1266,5 +1265,42 @@ func TestLoadConfigFromDatabase_RemovedITunesWriteBackKeysLoad(t *testing.T) {
 	require.NoError(t, LoadConfigFromDatabase(store))
 	assert.Equal(t, "/mnt/ao/iTunes Library.itl", AppConfig.ITunes.LibraryITLPath)
 	assert.Equal(t, "/mnt/orig/iTunes Library.xml", AppConfig.ITunes.LibraryReadPath)
-	assert.True(t, AppConfig.ITunes.SyncEnabled)
+}
+
+// A stored config written before the incremental iTunes sync was removed
+// (2026-10-08) still carries itunes.sync_enabled / sync_interval in the blob
+// and may still have the flat itunes_sync_enabled / itunes_sync_interval
+// settings rows. It must load without error and keep every other iTunes
+// setting; the sync keys are ignored.
+func TestLoadConfigFromDatabase_RemovedITunesSyncKeysLoad(t *testing.T) {
+	resetConfigTestState()
+	t.Cleanup(resetConfigTestState)
+
+	blob := `{"itunes":{"sync_enabled":true,"sync_interval":30,` +
+		`"library_write_path":"/mnt/ao/iTunes Library.itl","library_read_path":"/mnt/orig/iTunes Library.xml",` +
+		`"media_root":"/mnt/orig/iTunes Media"}}`
+
+	store := mocks.NewMockStore(t)
+	setupMigrationExpectations(store)
+	store.On("SetSetting", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	store.EXPECT().GetAllSettings().Return([]database.Setting{
+		{Key: "config_blob", Value: blob, Type: "string"},
+		{Key: "itunes_sync_enabled", Value: "true", Type: "bool"},
+		{Key: "itunes_sync_interval", Value: "45", Type: "int"},
+	}, nil).Once()
+
+	require.NoError(t, LoadConfigFromDatabase(store))
+	assert.Equal(t, "/mnt/ao/iTunes Library.itl", AppConfig.ITunes.LibraryITLPath)
+	assert.Equal(t, "/mnt/orig/iTunes Library.xml", AppConfig.ITunes.LibraryReadPath)
+	assert.Equal(t, "/mnt/orig/iTunes Media", AppConfig.ITunes.MediaRoot)
+}
+
+// The flat settings rows are accepted and ignored one by one, too.
+func TestApplySetting_RemovedITunesSyncKeysAreIgnored(t *testing.T) {
+	prev := AppConfig
+	t.Cleanup(func() { AppConfig = prev })
+	AppConfig = Config{}
+	require.NoError(t, applySetting("itunes_sync_enabled", "true", "bool"))
+	require.NoError(t, applySetting("itunes_sync_interval", "60", "int"))
+	assert.Equal(t, ITunesConfig{}, AppConfig.ITunes, "a removed sync key must change nothing")
 }

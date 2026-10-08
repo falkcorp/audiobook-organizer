@@ -1,7 +1,7 @@
 // file: internal/merge/itunes_guard.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 7a35388d-79af-4a1e-a553-a61d6dfcf4ae
-// last-edited: 2026-10-01
+// last-edited: 2026-10-08
 
 package merge
 
@@ -91,11 +91,17 @@ const frozenITunesSegmentRoot = pathutil.FrozenITunesSegment
 // layout, the whole iTunes tree) and itunes.media_root.
 //
 // Empty configuration:
-//   - sync DISABLED and both paths empty: no configured roots, no error. The
-//     guard still applies the config-independent books/itunes/ segment match.
-//   - sync ENABLED and both paths empty: an *ITunesProtectedError. The app is
-//     told an iTunes library is live but not where it is, so no merge can be
-//     proven safe; refusing is the fail-closed reading.
+//   - no iTunes library configured at all (library_read_path, media_root and
+//     library_write_path all empty): no configured roots, no error. The guard
+//     still applies the config-independent books/itunes/ segment match.
+//   - an .itl configured (itunes.library_write_path) but neither
+//     library_read_path nor media_root: an *ITunesProtectedError. The app is
+//     told an iTunes library exists but not where its media is, so no merge
+//     can be proven safe; refusing is the fail-closed reading.
+//
+// Until 2026-10-08 the "a library exists" signal was itunes.sync_enabled
+// (default true). The sync and that key were removed when import became
+// manual only; a configured .itl path is the signal that replaced it.
 func ITunesProtectedRoots(cfg config.ITunesConfig) ([]string, error) {
 	var roots []string
 	if cfg.LibraryReadPath != "" {
@@ -104,8 +110,8 @@ func ITunesProtectedRoots(cfg config.ITunesConfig) ([]string, error) {
 	if cfg.MediaRoot != "" {
 		roots = append(roots, filepath.Clean(cfg.MediaRoot))
 	}
-	if len(roots) == 0 && cfg.SyncEnabled {
-		return nil, &ITunesProtectedError{Reason: "iTunes sync is enabled but neither itunes.library_read_path nor itunes.media_root is set, so no merge can be proven to stay outside the iTunes library"}
+	if len(roots) == 0 && cfg.LibraryITLPath != "" {
+		return nil, &ITunesProtectedError{Reason: "an iTunes library is configured (itunes.library_write_path) but neither itunes.library_read_path nor itunes.media_root is set, so no merge can be proven to stay outside the iTunes library"}
 	}
 	return roots, nil
 }

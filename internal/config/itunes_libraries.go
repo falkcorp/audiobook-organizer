@@ -1,7 +1,7 @@
 // file: internal/config/itunes_libraries.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5b2e9c47-1a08-4d63-8f92-3c7a0e6b1d54
-// last-edited: 2026-10-07
+// last-edited: 2026-10-08
 //
 // The 4-state iTunes library model + its config-load Resolve/Validate. Two physical
 // libraries (Original = the real hands-off tree under books/itunes/**; AO = the
@@ -133,10 +133,9 @@ func (c *ITunesConfig) ValidateLibraries(protectedPaths []string) []string {
 		errs = append(errs, "itunes.libraries.original.frozen must be true while pointed_at==\"ao\" (the recoverable fallback source cannot be mutable)")
 	}
 
-	// 4. No zero-value AO library while sync is enabled.
-	if c.SyncEnabled && L.AO.ITLPath == "" {
-		errs = append(errs, "itunes.libraries.ao.itl_path must be set when itunes sync is enabled")
-	}
+	// A former rule 4 required libraries.ao.itl_path while itunes sync was
+	// enabled: AO was the write-back target. Write-back (2026-10-07) and the
+	// sync (2026-10-08) are both gone, so nothing needs a write target.
 
 	return errs
 }
