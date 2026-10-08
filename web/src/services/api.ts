@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.166.0
+// version: 2.167.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-07
 
@@ -412,25 +412,11 @@ export interface ITunesImportResponse {
   message: string;
 }
 
-export interface ITunesWriteBackRequest {
-  library_path: string;
-  audiobook_ids: string[];
-  create_backup: boolean;
-  force_overwrite?: boolean;
-}
-
 export interface ITunesLibraryStatus {
   changed_since_import: boolean;
   fingerprint_stored: string;
   last_imported: string;
   last_external_change: string;
-}
-
-export interface ITunesWriteBackResponse {
-  success: boolean;
-  updated_count: number;
-  backup_path?: string;
-  message: string;
 }
 
 export interface ITunesImportStatus {
@@ -900,10 +886,10 @@ export interface ITunesPathMap {
 export interface ITunesConfig {
   sync_enabled: boolean;
   sync_interval: number;
-  write_back_enabled: boolean;
+  // The .itl the PID-integrity check and the library download read. The key
+  // keeps its old name so stored configs load; nothing writes the file.
   library_write_path: string;
   library_read_path: string;
-  auto_write_back: boolean;
   path_trim_enabled: boolean;
   windows_root_path: string;
   media_root: string;
@@ -1067,8 +1053,6 @@ export interface Config {
   // iTunes sync
   itunes_library_read_path?: string;
   itunes_library_write_path?: string;
-  itl_write_back_enabled?: boolean;
-  itunes_auto_write_back?: boolean;
   itunes_sync_enabled?: boolean;
 
   // Sub-structs (CFG-1 nested fields)
@@ -3403,87 +3387,6 @@ export async function importITunesLibrary(
   });
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to import iTunes library');
-  }
-  const body = await response.json();
-  return body.data;
-}
-
-export async function writeBackITunesLibrary(
-  payload: ITunesWriteBackRequest
-): Promise<ITunesWriteBackResponse> {
-  const response = await apiFetch(`${API_BASE}/itunes/write-back`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  if (response.status === 409) {
-    const data = await response.json();
-    throw new ApiError(data.message || 'Library modified', 409, data);
-  }
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to write back iTunes library');
-  }
-  const body = await response.json();
-  return body.data;
-}
-
-// ITunesBookMapping mirrors the backend ITunesBookMapping struct. Four
-// path columns surface the full picture: what iTunes currently has, the
-// local equivalent of that, where AO has the file on disk, and what AO
-// would write back into iTunes. local_path is preserved as an alias of
-// ao_path for callers that still read the older field name.
-export interface ITunesBookMapping {
-  book_id: string;
-  title: string;
-  author: string;
-  itunes_persistent_id: string;
-  itunes_path?: string;
-  itunes_path_translated?: string;
-  ao_path: string;
-  ao_itunes_translated_path?: string;
-  path_differs?: boolean;
-  /** @deprecated Use ao_path. Kept for backwards compatibility during migration. */
-  local_path: string;
-}
-
-// getITunesBooks lists books that carry an iTunes persistent ID.
-// `count` is exact unless `truncated` is true: a search that filled the
-// backend's over-fetch window (10,000 search rows) only saw the matches inside
-// it, so `count` is then a lower bound and the caller should prompt the user to
-// refine the search. `truncated` is omitted when false. It is unrelated to
-// PaginatedResponse's `has_more`, which means "another page exists".
-export async function getITunesBooks(
-  search?: string,
-  limit?: number,
-  offset?: number
-): Promise<{ items: ITunesBookMapping[]; count: number; truncated?: boolean }> {
-  const params = new URLSearchParams();
-  if (search) params.set('search', search);
-  if (limit != null) params.set('limit', String(limit));
-  if (offset != null) params.set('offset', String(offset));
-  const response = await apiFetch(`${API_BASE}/itunes/books?${params.toString()}`);
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to fetch iTunes books');
-  }
-  const body = await response.json();
-  return body.data;
-}
-
-// previewITunesWriteBack accepts an optional libraryPath. When omitted (or
-// empty) the backend uses the configured ITunesLibraryReadPath — the dialog
-// no longer asks the user for this on every preview because it's a
-// configure-once value that lives in Settings.
-export async function previewITunesWriteBack(
-  libraryPath?: string,
-  bookIds?: string[]
-): Promise<{ items: ITunesBookMapping[]; total: number }> {
-  const response = await apiFetch(`${API_BASE}/itunes/write-back/preview`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ library_path: libraryPath || undefined, book_ids: bookIds }),
-  });
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to preview write-back');
   }
   const body = await response.json();
   return body.data;
