@@ -1,7 +1,7 @@
 // file: web/src/components/review/RepairsPanel.test.tsx
-// version: 1.9.0
+// version: 1.10.0
 // guid: 3a7e0c95-4d21-4b8f-b6e3-8f1c2d9a5e47
-// last-edited: 2026-10-07
+// last-edited: 2026-10-08
 //
 // The repairs surface, rendered over the real lane hook with a mocked API, so
 // the clicks go through the same dispatch the workspace uses.
@@ -147,8 +147,7 @@ describe('RepairsPanel', () => {
     );
     expect(within(r1).getByText('reason g1')).toBeInTheDocument();
     expect(within(screen.getByTestId('repairs-row-g2')).getByText('Review')).toBeInTheDocument();
-    // The scan note is present and says "pauses", not "blocked".
-    expect(screen.getAllByText(/pauses briefly/).length).toBeGreaterThan(0);
+    // The scan note (behind the header's More) says "pauses", never "blocked".
     expect(screen.queryByText(/blocked/i)).not.toBeInTheDocument();
   });
 
@@ -778,5 +777,47 @@ describe('SKIP_KIND_LABEL', () => {
       expect(SKIP_KIND_LABEL[kind], kind).toBeTruthy();
       expect(SKIP_KIND_LABEL[kind]).not.toEqual(kind);
     }
+  });
+});
+
+const RAIL_MIN = 200;
+const RAIL_MAX = 640;
+
+describe('RepairsPanel — layout', () => {
+  it('resizes the fixer list from the keyboard, clamps it, and remembers the width', async () => {
+    const user = userEvent.setup();
+    const first = renderPanel();
+    await screen.findByTestId('repairs-fixer-vg-primary');
+    const sep = screen.getByRole('separator', { name: 'Resize fixer list' });
+    expect(sep).toHaveAttribute('aria-valuenow', '320');
+    sep.focus();
+    await user.keyboard('{ArrowRight}{ArrowRight}');
+    expect(sep).toHaveAttribute('aria-valuenow', '368');
+    for (let i = 0; i < 40; i++) await user.keyboard('{ArrowLeft}');
+    expect(sep).toHaveAttribute('aria-valuenow', String(RAIL_MIN));
+    for (let i = 0; i < 40; i++) await user.keyboard('{ArrowRight}');
+    expect(sep).toHaveAttribute('aria-valuenow', String(RAIL_MAX));
+    first.unmount();
+
+    renderPanel();
+    await screen.findByTestId('repairs-fixer-vg-primary');
+    expect(screen.getByRole('separator', { name: 'Resize fixer list' })).toHaveAttribute(
+      'aria-valuenow',
+      String(RAIL_MAX)
+    );
+  });
+
+  it('collapses the fixer description to one line until More is clicked', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    await screen.findByTestId('repairs-fixer-header');
+    const toggle = screen.getByTestId('repairs-description-toggle');
+    expect(toggle).toHaveTextContent('More');
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getByTestId('repairs-fixer-description')).toHaveStyle({ whiteSpace: 'nowrap' });
+    await user.click(toggle);
+    expect(toggle).toHaveTextContent('Less');
+    expect(screen.getByTestId('repairs-fixer-description')).not.toHaveStyle({ whiteSpace: 'nowrap' });
+    expect(within(screen.getByTestId('repairs-fixer-header')).getByText(/pauses briefly/)).toBeInTheDocument();
   });
 });

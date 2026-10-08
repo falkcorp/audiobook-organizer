@@ -1,7 +1,7 @@
 // file: web/src/components/review/RepairsPanel.tsx
-// version: 1.22.0
+// version: 1.23.0
 // guid: 9c4f1a73-2e58-4b06-a9d1-6e3b8c7f0d52
-// last-edited: 2026-10-07
+// last-edited: 2026-10-08
 
 /**
  * The repairs lane's surface: a rail of fixers and the selected fixer's trial.
@@ -23,9 +23,15 @@
  * Applying during a library scan is allowed: the server pauses the scan briefly
  * while it writes. The copy says exactly that and never that anything is
  * blocked.
+ *
+ * The rail is resizable (drag the divider, or focus it and use the arrow keys)
+ * and its width is remembered per browser. Fixer descriptions are clamped in
+ * the rail and collapsed in the header behind "More"; the expanded state is
+ * remembered too. Both are per-viewer conveniences, so storage failures fall
+ * back to the defaults.
  */
 
-import { useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { Link as RouterLink } from 'react-router-dom';
 import {
   Alert,
@@ -190,15 +196,101 @@ function DiffCell({ row }: { row: RepairRow }) {
   );
 }
 
-function FixerRail({ repairs }: RepairsPanelProps) {
+const RAIL_WIDTH_KEY = 'repairs.railWidth';
+const DESC_OPEN_KEY = 'repairs.descriptionOpen';
+const RAIL_MIN = 200;
+const RAIL_MAX = 640;
+const RAIL_DEFAULT = 320;
+const RAIL_KEY_STEP = 24;
+
+function readStored(key: string): string | null {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeStored(key: string, value: string) {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // Private window or blocked storage: the setting just isn't remembered.
+  }
+}
+
+function clampRail(w: number): number {
+  return Math.min(RAIL_MAX, Math.max(RAIL_MIN, Math.round(w)));
+}
+
+function initialRailWidth(): number {
+  const n = Number(readStored(RAIL_WIDTH_KEY));
+  return Number.isFinite(n) && n > 0 ? clampRail(n) : RAIL_DEFAULT;
+}
+
+// Two lines of the description in the rail; the full text is in the header.
+const CLAMP_2 = {
+  display: '-webkit-box',
+  WebkitLineClamp: 2,
+  WebkitBoxOrient: 'vertical',
+  overflow: 'hidden',
+} as const;
+
+function RailResizer({ width, onResize }: { width: number; onResize: (w: number, persist: boolean) => void }) {
+  const start = useRef<{ x: number; w: number } | null>(null);
+  return (
+    <Box
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize fixer list"
+      aria-valuemin={RAIL_MIN}
+      aria-valuemax={RAIL_MAX}
+      aria-valuenow={width}
+      tabIndex={0}
+      data-testid="repairs-rail-resizer"
+      onPointerDown={(e) => {
+        e.preventDefault();
+        e.currentTarget.setPointerCapture(e.pointerId);
+        start.current = { x: e.clientX, w: width };
+      }}
+      onPointerMove={(e) => {
+        if (!start.current) return;
+        onResize(start.current.w + e.clientX - start.current.x, false);
+      }}
+      onPointerUp={(e) => {
+        if (!start.current) return;
+        onResize(start.current.w + e.clientX - start.current.x, true);
+        start.current = null;
+      }}
+      onDoubleClick={() => onResize(RAIL_DEFAULT, true)}
+      onKeyDown={(e) => {
+        if (e.key === 'ArrowLeft') onResize(width - RAIL_KEY_STEP, true);
+        else if (e.key === 'ArrowRight') onResize(width + RAIL_KEY_STEP, true);
+        else return;
+        e.preventDefault();
+      }}
+      sx={{
+        display: { xs: 'none', md: 'block' },
+        width: 6,
+        flexShrink: 0,
+        cursor: 'col-resize',
+        touchAction: 'none',
+        borderRight: 1,
+        borderColor: 'divider',
+        '&:hover, &:focus-visible': { bgcolor: 'primary.main', opacity: 0.5, outline: 'none' },
+      }}
+    />
+  );
+}
+
+function FixerRail({ repairs, width }: RepairsPanelProps & { width: number }) {
   const { fixers, selectedFixerId, trials } = repairs;
   return (
     <Box
       data-testid="repairs-rail"
       sx={{
-        width: { xs: '100%', md: 320 },
+        width: { xs: '100%', md: width },
         flexShrink: 0,
-        borderRight: { md: 1 },
         borderBottom: { xs: 1, md: 0 },
         borderColor: 'divider',
         overflowY: 'auto',
@@ -251,7 +343,7 @@ function FixerRail({ repairs }: RepairsPanelProps) {
               sx={{ display: 'block', py: 1, borderBottom: 1, borderColor: 'divider' }}
             >
               <Typography variant="subtitle2">{f.title}</Typography>
-              <Typography variant="body2" sx={{ color: 'text.secondary', mb: 0.5 }}>
+              <Typography variant="body2" title={f.description} sx={{ color: 'text.secondary', mb: 0.5, ...CLAMP_2 }}>
                 {f.description}
               </Typography>
               <Typography variant="caption" component="div" data-testid={`repairs-fixer-plan-${f.id}`}>
@@ -719,6 +811,46 @@ function RowsTable({ repairs }: RepairsPanelProps) {
   );
 }
 
+function FixerHeader({ title, description }: { title: string; description: string }) {
+  const [open, setOpen] = useState(() => readStored(DESC_OPEN_KEY) === '1');
+  const toggle = () => {
+    setOpen((o) => {
+      writeStored(DESC_OPEN_KEY, o ? '0' : '1');
+      return !o;
+    });
+  };
+  return (
+    <Box sx={{ px: 2, py: 1, borderBottom: 1, borderColor: 'divider' }} data-testid="repairs-fixer-header">
+      <Stack direction="row" sx={{ alignItems: 'baseline', gap: 1 }}>
+        <Typography variant="h6" sx={{ flexShrink: 0 }}>
+          {title}
+        </Typography>
+        <Typography
+          variant="body2"
+          data-testid="repairs-fixer-description"
+          sx={{
+            color: 'text.secondary',
+            flex: 1,
+            minWidth: 0,
+            ...(open ? {} : { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }),
+          }}
+        >
+          {description}
+        </Typography>
+        <Button size="small" onClick={toggle} aria-expanded={open} data-testid="repairs-description-toggle" sx={{ flexShrink: 0 }}>
+          {open ? 'Less' : 'More'}
+        </Button>
+      </Stack>
+      {open && (
+        <Typography variant="caption" component="div" sx={{ color: 'text.secondary', mt: 0.5 }}>
+          A trial writes nothing. Applying writes the chosen rows and records each change in the
+          book history. If a library scan is running, it pauses briefly while the rows are written.
+        </Typography>
+      )}
+    </Box>
+  );
+}
+
 function PlanView({ repairs }: RepairsPanelProps) {
   const fixer = repairs.selectedFixer;
   const { page, planOpId, trial } = repairs;
@@ -741,16 +873,7 @@ function PlanView({ repairs }: RepairsPanelProps) {
 
   return (
     <Box sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-      <Box sx={{ px: 2, py: 1.5, borderBottom: 1, borderColor: 'divider' }}>
-        <Typography variant="h6">{fixer.title}</Typography>
-        <Typography variant="body2" sx={{ color: 'text.secondary' }}>
-          {fixer.description}
-        </Typography>
-        <Typography variant="caption" component="div" sx={{ color: 'text.secondary', mt: 0.5 }}>
-          A trial writes nothing. Applying writes the chosen rows and records each change in the
-          book history. If a library scan is running, it pauses briefly while the rows are written.
-        </Typography>
-      </Box>
+      <FixerHeader title={fixer.title} description={fixer.description} />
 
       {running && (
         <Alert severity="info" sx={{ m: 2, mb: 0 }} data-testid="repairs-trial-running" icon={<CircularProgress size={18} />}>
@@ -965,6 +1088,12 @@ function PlanView({ repairs }: RepairsPanelProps) {
 }
 
 export function RepairsPanel({ repairs }: RepairsPanelProps) {
+  const [railWidth, setRailWidth] = useState(initialRailWidth);
+  const resizeRail = useCallback((w: number, persist: boolean) => {
+    const next = clampRail(w);
+    setRailWidth(next);
+    if (persist) writeStored(RAIL_WIDTH_KEY, String(next));
+  }, []);
   return (
     <Box
       data-testid="repairs-panel"
@@ -975,7 +1104,8 @@ export function RepairsPanel({ repairs }: RepairsPanelProps) {
         flexDirection: { xs: 'column', md: 'row' },
       }}
     >
-      <FixerRail repairs={repairs} />
+      <FixerRail repairs={repairs} width={railWidth} />
+      <RailResizer width={railWidth} onResize={resizeRail} />
       {repairs.selectedFixer ? (
         <PlanView repairs={repairs} />
       ) : (
