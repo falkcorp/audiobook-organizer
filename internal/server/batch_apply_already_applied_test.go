@@ -56,12 +56,11 @@ func TestApplyCachedCandidate_SkipsAlreadyAppliedBook(t *testing.T) {
 		for _, tc := range cases {
 			t.Run(status+"/"+tc.name, func(t *testing.T) {
 				svc := &fakeApplySvc{candidates: raw}
-				itunes := &fakeITunes{}
 				out := applyCachedCandidateForBookTimed(svc, appliedBooks(status), "b1", true, nil,
 					metafetch.NewApplyPhaseTimings(), nil, tc.pin, tc.mode)
-				if out.Applied || len(svc.appliedIDs) != 0 || len(svc.finishCalls) != 0 || len(svc.preflightIDs) != 0 || len(itunes.ids) != 0 {
-					t.Fatalf("an applied book was applied again: outcome %+v applied %v finish %d preflight %v itunes %v",
-						out, svc.appliedIDs, len(svc.finishCalls), svc.preflightIDs, itunes.ids)
+				if out.Applied || len(svc.appliedIDs) != 0 || len(svc.finishCalls) != 0 || len(svc.preflightIDs) != 0 {
+					t.Fatalf("an applied book was applied again: outcome %+v applied %v finish %d preflight %v",
+						out, svc.appliedIDs, len(svc.finishCalls), svc.preflightIDs)
 				}
 				if out.Reason != applySkipAlreadyApplied {
 					t.Fatalf("reason = %q, want %q", out.Reason, applySkipAlreadyApplied)

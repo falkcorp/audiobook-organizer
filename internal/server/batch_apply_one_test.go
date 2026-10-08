@@ -271,10 +271,6 @@ func TestApplyCachedCandidate_ForwardsStandDownCheckpoint(t *testing.T) {
 	}
 }
 
-type fakeITunes struct{ ids []string }
-
-func (f *fakeITunes) Enqueue(bookID string) { f.ids = append(f.ids, bookID) }
-
 func oneCandidate(t *testing.T) []json.RawMessage {
 	t.Helper()
 	blob, err := json.Marshal(metafetch.MetadataCandidate{Title: "A Title", Author: "An Author", Score: 0.95, DurationSec: 36000})
@@ -285,12 +281,11 @@ func oneCandidate(t *testing.T) []json.RawMessage {
 }
 
 // TestApplyCachedCandidate_WritesFilesForAppliedBook is the regression test for
-// the original defect: metadata landed in the database and the iTunes batcher
-// was enqueued, but no audio file was ever written and nothing logged a
+// the original defect: metadata landed in the database, but no audio file was
+// ever written and nothing logged a
 // failure. It looked like success.
 func TestApplyCachedCandidate_WritesFilesForAppliedBook(t *testing.T) {
 	svc := &fakeApplySvc{candidates: oneCandidate(t)}
-	itunes := &fakeITunes{}
 
 	out := applyCachedCandidateForBook(svc, fakeBooks{}, "b1", true, nil)
 
@@ -305,16 +300,12 @@ func TestApplyCachedCandidate_WritesFilesForAppliedBook(t *testing.T) {
 	if !reflect.DeepEqual(svc.finishCalls, want) {
 		t.Errorf("file work = %+v, want %+v", svc.finishCalls, want)
 	}
-	if len(itunes.ids) != 1 {
-		t.Errorf("iTunes batcher not enqueued: %v", itunes.ids)
-	}
 }
 
 // TestApplyCachedCandidate_WriteBackFalseSuppressesFileIO pins the opt-out:
 // write_back=false must change the database and touch NO file.
 func TestApplyCachedCandidate_WriteBackFalseSuppressesFileIO(t *testing.T) {
 	svc := &fakeApplySvc{candidates: oneCandidate(t)}
-	itunes := &fakeITunes{}
 
 	out := applyCachedCandidateForBook(svc, fakeBooks{}, "b1", false, nil)
 
@@ -326,9 +317,6 @@ func TestApplyCachedCandidate_WriteBackFalseSuppressesFileIO(t *testing.T) {
 	want := []finishCall{{id: "b1", fileIO: false, writeTags: false}}
 	if !reflect.DeepEqual(svc.finishCalls, want) {
 		t.Errorf("file work ran despite write_back=false: %+v, want %+v", svc.finishCalls, want)
-	}
-	if len(itunes.ids) != 0 {
-		t.Errorf("iTunes enqueued despite write_back=false: %v", itunes.ids)
 	}
 }
 

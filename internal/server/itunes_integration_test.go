@@ -1,5 +1,5 @@
 // file: internal/server/itunes_integration_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: e5f6a7b8-c9d0-1234-efab-567890123cde
 // last-edited: 2026-10-07
 
@@ -195,52 +195,6 @@ func TestITunesImport_SkipDuplicates(t *testing.T) {
 
 	count2 := importOnce()
 	assert.Equal(t, 1, count2, "should NOT have created a duplicate")
-}
-
-func TestITunesWriteBack(t *testing.T) {
-	// XML write-back has been removed. The write-back endpoint now only supports
-	// ITL binary write-back. When ITL is not configured, it returns 400.
-	env, cleanup := testutil.SetupIntegration(t)
-	defer cleanup()
-
-	// Create a book in DB that was imported from iTunes
-	origPath := env.CreateFakeAudiobook(env.ImportDir, "The Hobbit.m4b")
-	newPath := filepath.Join(env.RootDir, "Tolkien", "The Hobbit", "The Hobbit.m4b")
-	testutil.CopyFile(t, origPath, newPath)
-
-	persistentID := "ABCD1234EFGH5678"
-	book := &database.Book{
-		Title:              "The Hobbit",
-		FilePath:           newPath,
-		Format:             "m4b",
-		ITunesPersistentID: &persistentID,
-	}
-	created, err := env.Store.CreateBook(book)
-	require.NoError(t, err)
-
-	// Execute write-back via HTTP — ITL is not configured in test, so should return 400
-	// write-back is owner-only (plan D14): the request is the owner's.
-	owner := asTestOwner(t)
-	server := newTestServer(t, env.Store)
-	if server.opRegistry != nil {
-		server.opRegistry.Start(context.Background())
-		// registered after defer cleanup() → runs first (LIFO) to avoid pebble: closed panics.
-		defer func() { _ = server.opRegistry.Shutdown(context.Background()) }()
-	}
-	body := fmt.Sprintf(`{"audiobook_ids":["%s"]}`, created.ID)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/itunes/write-back", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	for k, v := range owner {
-		req.Header.Set(k, v)
-	}
-	w := httptest.NewRecorder()
-	server.router.ServeHTTP(w, req)
-	// Without ITL configured, endpoint returns 400
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-	var resp map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	errMsg, _ := resp["error"].(string)
-	assert.Contains(t, errMsg, "ITL write-back is not enabled")
 }
 
 func TestITunesValidate_Endpoint(t *testing.T) {

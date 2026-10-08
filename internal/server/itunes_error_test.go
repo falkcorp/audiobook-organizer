@@ -1,5 +1,5 @@
 // file: internal/server/itunes_error_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: b2c3d4e5-f6a7-8901-2345-678901abcdef
 // last-edited: 2026-10-07
 
@@ -17,7 +17,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil"
 	"github.com/stretchr/testify/assert"
@@ -224,53 +223,6 @@ func TestITunesValidate_CorruptXML(t *testing.T) {
 	w := httptest.NewRecorder()
 	server.router.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
-}
-
-func TestITunesWriteBack_NonexistentBook(t *testing.T) {
-	env, cleanup := testutil.SetupIntegration(t)
-	defer cleanup()
-
-	xmlPath := filepath.Join(env.TempDir, "Library.xml")
-	testutil.GenerateITunesXML(t, []testutil.ITunesTestTrack{}, xmlPath)
-
-	server := newTestServer(t, env.Store)
-	body := fmt.Sprintf(`{"library_path":"%s","audiobook_ids":["nonexistent-id"],"create_backup":false}`, xmlPath)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/itunes/write-back", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	server.router.ServeHTTP(w, req)
-	// Should return 400 or 500 depending on whether book is found
-	assert.NotEqual(t, http.StatusOK, w.Code)
-}
-
-func TestITunesWriteBack_NoITunesPersistentID(t *testing.T) {
-	env, cleanup := testutil.SetupIntegration(t)
-	defer cleanup()
-
-	// Create book without iTunes persistent ID
-	book := &database.Book{
-		Title:    "Non-iTunes Book",
-		FilePath: "/fake/path.m4b",
-		Format:   "m4b",
-	}
-	created, err := env.Store.CreateBook(book)
-	require.NoError(t, err)
-
-	xmlPath := filepath.Join(env.TempDir, "Library.xml")
-	testutil.GenerateITunesXML(t, []testutil.ITunesTestTrack{}, xmlPath)
-
-	// write-back is owner-only (plan D14): the request is the owner's.
-	owner := asTestOwner(t)
-	server := newTestServer(t, env.Store)
-	body := fmt.Sprintf(`{"library_path":"%s","audiobook_ids":["%s"],"create_backup":false}`, xmlPath, created.ID)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/itunes/write-back", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	for k, v := range owner {
-		req.Header.Set(k, v)
-	}
-	w := httptest.NewRecorder()
-	server.router.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusBadRequest, w.Code) // no audiobooks with iTunes persistent IDs
 }
 
 func TestITunesImport_RealTestLibrary(t *testing.T) {

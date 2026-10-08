@@ -1,7 +1,7 @@
 // file: internal/merge/provisional_guard_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 51f8f6c7-7a87-45e9-b9fa-cecc30246566
-// last-edited: 2026-09-26
+// last-edited: 2026-10-07
 
 package merge
 
