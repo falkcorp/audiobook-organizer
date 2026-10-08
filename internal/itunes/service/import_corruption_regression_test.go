@@ -114,7 +114,7 @@ func TestOrganizeImportedBooks_KeepsConcurrentEdit(t *testing.T) {
 
 	org := &raceOrganizer{t: t, store: store, landing: landing}
 	imp := &Importer{store: store, organizerFactory: func() BookOrganizer { return org }}
-	imp.organizeImportedBooks(context.Background(), &itunesImportStatus{}, logger.New("test"))
+	imp.organizeImportedBooks(context.Background(), []string{book.ID}, &itunesImportStatus{}, logger.New("test"))
 
 	got, err := store.GetBookByID(book.ID)
 	require.NoError(t, err)

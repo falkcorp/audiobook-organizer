@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_organize_parallel_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 3f9a1c7e-2b6d-4a58-9e0f-7c1d5b8a4e2f
-// last-edited: 2026-09-13
+// last-edited: 2026-10-08
 
 package itunesservice
 
@@ -163,7 +163,7 @@ func TestOrganizeImportedBooks_ParallelMatchesSerial_NoDestinationRace(t *testin
 	seqStatus := &itunesImportStatus{}
 	seqLog := logger.New("test-seq")
 
-	seqImp.organizeImportedBooks(context.Background(), seqStatus, seqLog)
+	seqImp.organizeImportedBooks(context.Background(), fixtureBookIDs(totalBooks), seqStatus, seqLog)
 
 	require.Equal(t, totalBooks, seqOrg.calls, "sequential run must organize every imported book")
 	for key, max := range seqOrg.maxInFlight {
@@ -184,7 +184,7 @@ func TestOrganizeImportedBooks_ParallelMatchesSerial_NoDestinationRace(t *testin
 	parStatus := &itunesImportStatus{}
 	parLog := logger.New("test-par")
 
-	parImp.organizeImportedBooks(context.Background(), parStatus, parLog)
+	parImp.organizeImportedBooks(context.Background(), fixtureBookIDs(totalBooks), parStatus, parLog)
 
 	require.Equal(t, totalBooks, parOrg.calls, "parallel run must organize every imported book — same result set as serial")
 
@@ -206,14 +206,13 @@ func TestOrganizeImportedBooks_ParallelMatchesSerial_NoDestinationRace(t *testin
 // imported books) for both concurrency settings — RunItems must be a
 // no-op and must not panic on an empty slice.
 func TestOrganizeImportedBooks_EmptyList(t *testing.T) {
-	m := dbmocks.NewMockStore(t)
-	m.EXPECT().GetAllBooksCore(0, 0).Return(nil, nil)
+	m := dbmocks.NewMockStore(t) // no new books: no store read at all
 
 	imp := &Importer{store: m, organizeConcurrencyOverride: 4}
 	status := &itunesImportStatus{}
 	log := logger.New("test-empty")
 
-	imp.organizeImportedBooks(context.Background(), status, log)
+	imp.organizeImportedBooks(context.Background(), nil, status, log)
 
 	require.Equal(t, 0, status.Failed)
 }

@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_enrich_parallel_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8d3a5b1e-6f2c-4a97-9e1d-3c7b8f4a2d6e
-// last-edited: 2026-10-06
+// last-edited: 2026-10-08
 
 package itunesservice
 
@@ -85,6 +85,17 @@ var _ metadataFetcher = (*fakeMetadataFetcher)(nil)
 // answer the GetAllBooks/GetBookAuthors/SetBookAuthors calls
 // enrichImportedBooks makes. Every book starts with zero existing authors,
 // so a successful fetch always exercises the SetBookAuthors call.
+// fixtureBookIDs is the IDs buildEnrichFixture / buildOrganizeFixture give
+// their n books: the books "this run created", which the enrich and organize
+// phases are scoped to.
+func fixtureBookIDs(n int) []string {
+	ids := make([]string, n)
+	for i := range n {
+		ids[i] = fmt.Sprintf("book-%d", i)
+	}
+	return ids
+}
+
 func buildEnrichFixture(t *testing.T, n int) ([]database.Book, *dbmocks.MockStore) {
 	t.Helper()
 
@@ -143,7 +154,7 @@ func TestEnrichImportedBooks_ParallelMatchesSerial(t *testing.T) {
 	seqStatus := &itunesImportStatus{}
 	seqLog := logger.New("test-enrich-seq")
 
-	seqImp.enrichImportedBooks(context.Background(), seqStatus, seqLog)
+	seqImp.enrichImportedBooks(context.Background(), fixtureBookIDs(totalBooks), seqStatus, seqLog)
 
 	require.Equal(t, totalBooks, seqFetcher.callCount(), "sequential run must fetch metadata for every imported book")
 	require.LessOrEqual(t, seqFetcher.maxInFlight, 1, "sequential run must never have concurrent FetchMetadataForBook calls")
@@ -162,7 +173,7 @@ func TestEnrichImportedBooks_ParallelMatchesSerial(t *testing.T) {
 	parStatus := &itunesImportStatus{}
 	parLog := logger.New("test-enrich-par")
 
-	parImp.enrichImportedBooks(context.Background(), parStatus, parLog)
+	parImp.enrichImportedBooks(context.Background(), fixtureBookIDs(totalBooks), parStatus, parLog)
 
 	require.Equal(t, totalBooks, parFetcher.callCount(), "parallel run must fetch metadata for every imported book — same result set as serial")
 	for _, b := range parBooks {
@@ -173,15 +184,14 @@ func TestEnrichImportedBooks_ParallelMatchesSerial(t *testing.T) {
 // TestEnrichImportedBooks_EmptyList exercises the zero-books path (no
 // imported books) — RunItems must be a no-op and must not panic.
 func TestEnrichImportedBooks_EmptyList(t *testing.T) {
-	m := dbmocks.NewMockStore(t)
-	m.EXPECT().GetAllBooksCore(0, 0).Return(nil, nil)
+	m := dbmocks.NewMockStore(t) // no new books: no store read at all
 
 	fetcher := newFakeMetadataFetcher(nil)
 	imp := &Importer{store: m, mfs: fetcher, enrichConcurrencyOverride: 4}
 	status := &itunesImportStatus{}
 	log := logger.New("test-enrich-empty")
 
-	imp.enrichImportedBooks(context.Background(), status, log)
+	imp.enrichImportedBooks(context.Background(), nil, status, log)
 
 	require.Equal(t, 0, fetcher.callCount())
 }
@@ -194,7 +204,7 @@ func TestEnrichImportedBooks_NoMetafetchService(t *testing.T) {
 	status := &itunesImportStatus{}
 	log := logger.New("test-enrich-no-mfs")
 
-	imp.enrichImportedBooks(context.Background(), status, log)
+	imp.enrichImportedBooks(context.Background(), fixtureBookIDs(3), status, log)
 }
 
 // TestEnrichImportedBooks_BreakerCancelsRemainingWork is the correctness-
@@ -218,7 +228,7 @@ func TestEnrichImportedBooks_BreakerCancelsRemainingWork(t *testing.T) {
 	status := &itunesImportStatus{}
 	log := logger.New("test-enrich-breaker")
 
-	imp.enrichImportedBooks(context.Background(), status, log)
+	imp.enrichImportedBooks(context.Background(), fixtureBookIDs(totalBooks), status, log)
 
 	attempted := fetcher.callCount()
 	require.Less(t, attempted, totalBooks/2,
@@ -258,7 +268,7 @@ func TestEnrichImportedBooks_BreakerResetsOnSuccess(t *testing.T) {
 	status := &itunesImportStatus{}
 	log := logger.New("test-enrich-breaker-reset")
 
-	imp.enrichImportedBooks(context.Background(), status, log)
+	imp.enrichImportedBooks(context.Background(), fixtureBookIDs(totalBooks), status, log)
 
 	require.Equal(t, totalBooks, fetcher.callCount(),
 		"alternating fail/succeed must never trip the breaker (aggregate counter resets on success), all books attempted")
@@ -275,6 +285,6 @@ func TestEnrichImportedBooks_ReviewOnlyMatchesDoNotTripBreaker(t *testing.T) {
 	fetcher := newFakeMetadataFetcher(func(string) bool { return true })
 	fetcher.failErr = fmt.Errorf("%w: synthetic", metafetch.ErrReviewOnlyCandidatesNotApplied)
 	imp := &Importer{store: store, mfs: fetcher, enrichConcurrencyOverride: 1}
-	imp.enrichImportedBooks(context.Background(), &itunesImportStatus{}, logger.New("test-enrich-review-only"))
+	imp.enrichImportedBooks(context.Background(), fixtureBookIDs(totalBooks), &itunesImportStatus{}, logger.New("test-enrich-review-only"))
 	require.Equal(t, totalBooks, fetcher.callCount(), "review-only answers must not trip the breaker")
 }

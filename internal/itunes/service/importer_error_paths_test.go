@@ -581,20 +581,6 @@ func TestOrganizeOneBook_SingleFile_StillUsesOrganizeBook(t *testing.T) {
 // helpers
 // ---------------------------------------------------------------------------
 
-// validEmptyXML builds a minimal iTunes Library XML with no audiobook tracks.
-func validEmptyXML() string {
-	return `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-	<key>Major Version</key><integer>1</integer>
-	<key>Minor Version</key><integer>1</integer>
-	<key>Tracks</key><dict/>
-	<key>Playlists</key><array/>
-</dict>
-</plist>`
-}
-
 // writeXMLWithAudiobook writes a valid iTunes XML with a single audiobook track
 // that maps the given persistent ID to the given on-disk file path, and returns
 // the XML file path.
