@@ -78,23 +78,3 @@ func shapeFromLibrary(lib *ITLLibrary) *LibraryShape {
 		shape.Playlists > realLibraryPlaylistThreshold
 	return shape
 }
-
-// GuardRebuildTarget refuses a destructive DB-authoritative rebuild when the target
-// library looks real, unless the caller passes an explicit override. Returns a
-// non-nil error describing the refusal when blocked; nil when the rebuild may
-// proceed. Fail-closed: a parse error blocks (returns an error), never allows.
-func GuardRebuildTarget(itlPath string, allowFullLibrary bool) (*LibraryShape, error) {
-	shape, err := InspectLibraryShape(itlPath)
-	if err != nil {
-		return nil, err
-	}
-	if shape.LooksReal && !allowFullLibrary {
-		return shape, fmt.Errorf(
-			"refusing DB-authoritative rebuild: target library looks REAL "+
-				"(%d tracks, %d non-audiobook, %d playlists) — this would remove music/podcasts "+
-				"and shatter playlists. Use the edit-in-place /relocate + /cleanup-merged path instead. "+
-				"To override deliberately, pass allow_full_library=true",
-			shape.Tracks, shape.NonAudiobookTracks, shape.Playlists)
-	}
-	return shape, nil
-}

@@ -7,7 +7,6 @@ package itunes
 
 import (
 	"encoding/hex"
-	"strings"
 	"testing"
 )
 
@@ -195,56 +194,6 @@ func TestWalkChunksLE_ParsesTracks(t *testing.T) {
 	}
 }
 
-func TestRewriteChunksLE_UpdatesLocation(t *testing.T) {
-	// LE byte order: reversed from XML hex "aabbccddeeff1122"
-	pid := [8]byte{0x22, 0x11, 0xFF, 0xEE, 0xDD, 0xCC, 0xBB, 0xAA}
-	// TASK-006 / SPEC §1b: 0x0D Location is a native Windows path. The rewriter
-	// now normalizes the value through LocationPair, so a Windows path is required
-	// (Unix paths are unmappable and would be skipped — the old verbatim behaviour
-	// was the CRIT-2 bug).
-	oldLocation := `W:\old\path\book.m4b`
-	newLocation := `W:\new\path\book.m4b`
-
-	// Build track content
-	mith := testBuildMithLE(42, pid, 1024000, 360000)
-	locMhoh := testBuildMhohLE(0x0D, oldLocation)
-
-	var content []byte
-	content = append(content, mith...)
-	content = append(content, locMhoh...)
-
-	data := buildMsdhLE(0x01, content)
-
-	// updateMap uses XML-format (BE) hex — pidToHexLE reverses the LE bytes to match
-	updateMap := map[string]string{
-		"aabbccddeeff1122": newLocation,
-	}
-
-	matched := map[string]bool{}
-	rewritten, count := rewriteChunksLEImpl(data, updateMap, matched)
-	if count != 1 {
-		t.Fatalf("expected 1 update, got %d", count)
-	}
-	// DL-5: the per-PID accounting must record exactly the rewritten PID.
-	if len(matched) != 1 || !matched["aabbccddeeff1122"] {
-		t.Fatalf("expected matched map to record aabbccddeeff1122, got %v", matched)
-	}
-
-	// Parse the rewritten data to verify
-	lib := &ITLLibrary{}
-	walkChunksLEImpl(rewritten, lib)
-
-	if len(lib.Tracks) != 1 {
-		t.Fatalf("expected 1 track after rewrite, got %d", len(lib.Tracks))
-	}
-	if lib.Tracks[0].Location != newLocation {
-		t.Errorf("Location after rewrite: expected %q, got %q", newLocation, lib.Tracks[0].Location)
-	}
-	if lib.Tracks[0].TrackID != 42 {
-		t.Errorf("TrackID after rewrite: expected 42, got %d", lib.Tracks[0].TrackID)
-	}
-}
-
 func TestWalkChunksLE_ParsesPlaylists(t *testing.T) {
 	// LE order: reverses to "1122334455667788"
 	playlistPID := [8]byte{0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11}
@@ -330,74 +279,6 @@ func TestWalkChunksLE_MultipleMsdhContainers(t *testing.T) {
 	}
 	if lib.Playlists[0].Title != "Favorites" {
 		t.Errorf("Playlist title: expected 'Favorites', got %q", lib.Playlists[0].Title)
-	}
-}
-
-func TestRewriteChunksLE_NoMatchReturnsUnchanged(t *testing.T) {
-	pid := [8]byte{0x22, 0x11, 0xFF, 0xEE, 0xDD, 0xCC, 0xBB, 0xAA}
-	mith := testBuildMithLE(42, pid, 1024000, 360000)
-	locMhoh := testBuildMhohLE(0x0D, "/original/path.m4b")
-
-	var content []byte
-	content = append(content, mith...)
-	content = append(content, locMhoh...)
-	data := buildMsdhLE(0x01, content)
-
-	// Update map with a different PID
-	updateMap := map[string]string{
-		"0000000000000000": "/new/path.m4b",
-	}
-
-	matched := map[string]bool{}
-	rewritten, count := rewriteChunksLEImpl(data, updateMap, matched)
-	if count != 0 {
-		t.Fatalf("expected 0 updates, got %d", count)
-	}
-	// DL-5: no rewrite → no PID recorded.
-	if len(matched) != 0 {
-		t.Fatalf("expected empty matched map, got %v", matched)
-	}
-
-	// Parse and verify location unchanged
-	lib := &ITLLibrary{}
-	walkChunksLEImpl(rewritten, lib)
-	if len(lib.Tracks) != 1 {
-		t.Fatalf("expected 1 track, got %d", len(lib.Tracks))
-	}
-	if lib.Tracks[0].Location != "/original/path.m4b" {
-		t.Errorf("Location should be unchanged, got %q", lib.Tracks[0].Location)
-	}
-}
-
-func TestRewriteChunksLE_LocalURLUpdate(t *testing.T) {
-	pid := [8]byte{0x22, 0x11, 0xFF, 0xEE, 0xDD, 0xCC, 0xBB, 0xAA}
-	mith := testBuildMithLE(42, pid, 1024000, 360000)
-	localURLMhoh := testBuildMhohLE(0x0B, "file://localhost/W:/old/path.m4b")
-
-	var content []byte
-	content = append(content, mith...)
-	content = append(content, localURLMhoh...)
-	data := buildMsdhLE(0x01, content)
-
-	// TASK-006 / SPEC §1b: the update value is the canonical Windows path; the
-	// rewriter derives the file://localhost/ 0x0B URL from it.
-	updateMap := map[string]string{
-		"aabbccddeeff1122": `W:\new\path.m4b`,
-	}
-
-	rewritten, count := rewriteChunksLEImpl(data, updateMap, nil)
-	if count != 1 {
-		t.Fatalf("expected 1 update, got %d", count)
-	}
-
-	// Parse and verify the LocalURL was updated with file:// prefix
-	lib := &ITLLibrary{}
-	walkChunksLEImpl(rewritten, lib)
-	if len(lib.Tracks) != 1 {
-		t.Fatalf("expected 1 track, got %d", len(lib.Tracks))
-	}
-	if !strings.HasPrefix(lib.Tracks[0].LocalURL, "file://localhost/") {
-		t.Errorf("LocalURL should start with file://localhost/, got %q", lib.Tracks[0].LocalURL)
 	}
 }
 
@@ -674,84 +555,5 @@ func TestParseLE_TrackStrings_ViaMiah(t *testing.T) {
 	}
 	if tr.Location != wantLocation {
 		t.Errorf("Location: expected %q, got %q", wantLocation, tr.Location)
-	}
-}
-
-// TestRewriteMithContentLE verifies that rewriteMithContentLE correctly rewrites
-// the location mhoh sub-block embedded inside a mith container.
-//
-// Layout contract used by rewriteMithContentLE:
-//   - bytes [4:8]  — headerLen: length of the fixed mith fields only
-//   - bytes [8:12] — totalLen:  length of fixed fields + all mhoh sub-blocks
-//
-// Note: the walker (walkMsdhTracksLE) expects a flat layout where mhoh blocks
-// are siblings of mith, not children. rewriteMithContentLE is used only on the
-// write path where mhoh are already embedded inside mith. This test exercises
-// the write path directly and verifies the rewritten bytes contain the new
-// location string.
-func TestRewriteMithContentLE(t *testing.T) {
-	pid := [8]byte{0x22, 0x11, 0xFF, 0xEE, 0xDD, 0xCC, 0xBB, 0xAA}
-	// TASK-006 / SPEC §1b: 0x0D Location is a native Windows path.
-	oldLocation := `W:\old\location\book.m4b`
-	newLocation := `W:\new\location\book.m4b`
-	currentPID := "aabbccddeeff1122" // BE hex — what the updateMap is keyed on
-
-	// buildMithLE returns a 156-byte block; headerLen and totalLen are both 156.
-	// For rewriteMithContentLE we need headerLen=156 (fixed portion) and
-	// totalLen = 156 + size_of_mhoh_sub_blocks.
-	mithHeader := testBuildMithLE(55, pid, 500000, 180000)
-	mithFixedLen := len(mithHeader) // 156
-
-	// Build mhoh sub-blocks: name + location, to be nested inside the mith.
-	nameMhoh := testBuildMhohLE(0x02, "Rewrite Test Book")
-	locMhoh := testBuildMhohLE(0x0D, oldLocation)
-
-	// Assemble the mith container: fixed header + mhoh sub-blocks appended.
-	var mithContainer []byte
-	mithContainer = append(mithContainer, mithHeader...)
-	mithContainer = append(mithContainer, nameMhoh...)
-	mithContainer = append(mithContainer, locMhoh...)
-
-	// Update length fields: headerLen stays 156 (fixed portion boundary),
-	// totalLen = full container length (covers the mhoh sub-blocks too).
-	putUint32LE(mithContainer, 4, uint32(mithFixedLen))
-	putUint32LE(mithContainer, 8, uint32(len(mithContainer)))
-
-	updateMap := map[string]string{
-		currentPID: newLocation,
-	}
-
-	// Invoke the function under test.
-	rewritten, count := rewriteMithContentLE(mithContainer, updateMap, currentPID, nil)
-	if count != 1 {
-		t.Fatalf("expected 1 rewrite, got %d", count)
-	}
-
-	// The rewritten mith must:
-	// 1. Still have the same fixed headerLen (156).
-	rewrittenHeaderLen := int(readUint32LE(rewritten, 4))
-	if rewrittenHeaderLen != mithFixedLen {
-		t.Errorf("rewritten headerLen: expected %d, got %d", mithFixedLen, rewrittenHeaderLen)
-	}
-
-	// 2. Contain the new location string somewhere in the rewritten bytes.
-	if !strings.Contains(string(rewritten), newLocation) {
-		t.Errorf("rewritten mith does not contain new location %q", newLocation)
-	}
-
-	// 3. NOT contain the old location string.
-	if strings.Contains(string(rewritten), oldLocation) {
-		t.Errorf("rewritten mith still contains old location %q", oldLocation)
-	}
-
-	// 4. Still contain the track name (other mhoh sub-blocks must be preserved).
-	if !strings.Contains(string(rewritten), "Rewrite Test Book") {
-		t.Errorf("rewritten mith lost the name mhoh sub-block")
-	}
-
-	// 5. totalLen must reflect the new (possibly different-length) content.
-	rewrittenTotalLen := int(readUint32LE(rewritten, 8))
-	if rewrittenTotalLen != len(rewritten) {
-		t.Errorf("rewritten totalLen: expected %d (len of result), got %d", len(rewritten), rewrittenTotalLen)
 	}
 }

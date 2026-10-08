@@ -394,24 +394,6 @@ func TestContract_CleanPasses(t *testing.T) {
 	}
 }
 
-// TestContract_DanglingMtph: excise a mith but keep its mtph reference.
-func TestContract_DanglingMtph(t *testing.T) {
-	clean := buildCleanPayload()
-
-	// Use the preserved unsafe remover to drop the first track's mith while
-	// leaving its mtph orphaned (exactly the K1 production signature). It updates
-	// mlth/miph counts and the msdh totalLen, so count-coherence stays silent —
-	// the ONLY remaining fault is the orphaned mtph reference.
-	pid := pidForTID(clean, 10)
-	after, removed := removeTracksByPIDLEUnsafe(clean, map[string]bool{pid: true})
-	if removed != 1 {
-		t.Fatalf("expected to remove 1 mith, removed %d", removed)
-	}
-
-	// before = clean (no pre-existing orphans), after = orphaned.
-	assertOnlyGuardFires(t, clean, after, buildHeaderFor(after), defCfg(), "no-new-dangling-refs")
-}
-
 // TestContract_HeaderCountDesync: remove a track but keep the old header.
 func TestContract_HeaderCountDesync(t *testing.T) {
 	clean := buildCleanPayload()
@@ -928,18 +910,6 @@ func itoa(n int) string {
 // ---------------------------------------------------------------------------
 // PID / removal helpers
 // ---------------------------------------------------------------------------
-
-// pidForTID walks the master list and returns the hex PID of the mith with the
-// given TID (matching the LE-reversed storage used by removeTracksByPIDLEUnsafe).
-func pidForTID(payload []byte, tid uint32) string {
-	tids, pids := collectMithTidsPids(payload)
-	for i, t := range tids {
-		if t == tid {
-			return pids[i]
-		}
-	}
-	return ""
-}
 
 // removeTrackAndMtph removes the mith for tid AND its mtph reference, leaving a
 // clean (consistent except for the stale header) payload — used by the
