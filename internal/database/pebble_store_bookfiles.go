@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.43.0
+// version: 1.44.0
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 package database
 
@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -1797,7 +1798,31 @@ func (s *PebbleStore) UpsertBookFile(file *BookFile) error {
 // refresh below iterates `files` in slice order, so the last element publishes
 // last — do not reorder that loop.
 func (s *PebbleStore) BatchUpsertBookFiles(files []*BookFile) error {
-	return s.batchUpsertBookFiles(files, nil)
+	return s.batchUpsertBookFiles(files, nil, bookFileUpsertOpts{})
+}
+
+// BatchUpsertBookFilesKeepPaths is BatchUpsertBookFiles for a caller that
+// reports where an EXTERNAL system thinks a file lives (the iTunes sync) rather
+// than where the library keeps it. A row that matches an existing book_file —
+// by iTunes PID, by path, by ID, or by a row staged earlier in the same batch —
+// keeps that row's stored FilePath and Format whatever the incoming row
+// carries; every other field merges exactly as in BatchUpsertBookFiles, so the
+// caller still fills metadata and records its own location in ITunesPath. A row
+// that matches nothing is created with the incoming FilePath, as before.
+//
+// Why: owner decision 2026-10-07, "Sync never moves files." FilePath is
+// bfUpsertOwned, so through BatchUpsertBookFiles a sync that matched an
+// organized row by PID wrote the iTunes location over it and pointed the book
+// back at its old iTunes file.
+func (s *PebbleStore) BatchUpsertBookFilesKeepPaths(files []*BookFile) error {
+	return s.batchUpsertBookFiles(files, nil, bookFileUpsertOpts{keepStoredPath: true})
+}
+
+// bookFileUpsertOpts are per-caller rules for batchUpsertBookFiles.
+type bookFileUpsertOpts struct {
+	// keepStoredPath: a matched row keeps its stored FilePath and Format
+	// (BatchUpsertBookFilesKeepPaths).
+	keepStoredPath bool
 }
 
 // BatchUpsertScannedBookFiles is BatchUpsertBookFiles for the library scanner:
@@ -1816,22 +1841,24 @@ func (s *PebbleStore) BatchUpsertScannedBookFiles(rows []ScannedBookFile) error 
 		files[i] = r.File
 		present[i] = r.Present
 	}
-	return s.batchUpsertBookFiles(files, present)
+	return s.batchUpsertBookFiles(files, present, bookFileUpsertOpts{})
 }
 
 // batchUpsertBookFiles is the shared body. present is nil (no row observed on
 // disk) or parallel to files.
-func (s *PebbleStore) batchUpsertBookFiles(files []*BookFile, present []bool) error {
+func (s *PebbleStore) batchUpsertBookFiles(files []*BookFile, present []bool, opts bookFileUpsertOpts) error {
 	if present != nil && len(present) != len(files) {
 		return fmt.Errorf("batchUpsertBookFiles: %d presence flags for %d rows", len(present), len(files))
 	}
-	return s.partitionedBookFileWrite(files, present, s.batchUpsertBookFilesAttempt)
+	return s.partitionedBookFileWrite(files, present, func(fs []*BookFile, p []bool) (*stagedBookFileRows, error) {
+		return s.batchUpsertBookFilesAttempt(fs, p, opts)
+	})
 }
 
 // batchUpsertBookFilesAttempt is one staging pass of batchUpsertBookFiles; it
 // returns the rows it staged as NEW, grouped by owner book (see
 // partitionedBookFileWrite).
-func (s *PebbleStore) batchUpsertBookFilesAttempt(files []*BookFile, present []bool) (*stagedBookFileRows, error) {
+func (s *PebbleStore) batchUpsertBookFilesAttempt(files []*BookFile, present []bool, opts bookFileUpsertOpts) (*stagedBookFileRows, error) {
 	if len(files) == 0 {
 		return nil, nil
 	}
@@ -1995,6 +2022,9 @@ func (s *PebbleStore) batchUpsertBookFilesAttempt(files []*BookFile, present []b
 			// fields (duration, media info, tags, fingerprint, transcript) so the
 			// backfills recompute them for the new bytes.
 			mergeBookFileFromStored(file, existing, bookFileWriteUpsert, scanPresenceOf(present, fileIdx))
+			if opts.keepStoredPath {
+				keepStoredBookFilePath(file, existing)
+			}
 
 			if err := s.deleteBookFileSecondaryIndexes(batch, existing); err != nil {
 				batch.Close()
@@ -2900,4 +2930,21 @@ func (s *PebbleStore) resolveBookFileByIDStrict(id string) (*BookFile, error) {
 		return nil, fmt.Errorf("decode book_file row %s: %w", primaryKey, err)
 	}
 	return &f, nil
+}
+
+// keepStoredBookFilePath puts the stored row's location back on a matched
+// incoming row (BatchUpsertBookFilesKeepPaths). Format is restored with it
+// because callers derive it from the path they carry, so an incoming Format
+// describes the external file, not the one FilePath now names. A stored row
+// with no Format gets the one its own path implies.
+func keepStoredBookFilePath(file, existing *BookFile) {
+	if existing.FilePath == "" {
+		return
+	}
+	file.FilePath = existing.FilePath
+	if existing.Format != "" {
+		file.Format = existing.Format
+	} else {
+		file.Format = strings.ToLower(strings.TrimPrefix(filepath.Ext(existing.FilePath), "."))
+	}
 }

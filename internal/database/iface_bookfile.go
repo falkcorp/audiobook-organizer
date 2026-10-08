@@ -1,7 +1,7 @@
 // file: internal/database/iface_bookfile.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 5247968b-3814-4892-879d-a8a5531c2960
-// last-edited: 2026-10-02
+// last-edited: 2026-10-07
 
 package database
 
@@ -74,6 +74,11 @@ type BookFileUpserter interface {
 	// pebble_store_bookfile_modify.go.
 	ModifyBookFile(bookID, fileID string, fn func(*BookFile) error) (*BookFile, error)
 	BatchUpsertBookFiles(files []*BookFile) error
+	// BatchUpsertBookFilesKeepPaths is BatchUpsertBookFiles except that a row
+	// matching an existing book_file keeps that row's stored FilePath and
+	// Format. It is the iTunes sync's write: sync never moves files (owner
+	// decision 2026-10-07), it records the iTunes location in ITunesPath only.
+	BatchUpsertBookFilesKeepPaths(files []*BookFile) error
 	// BatchUpsertScannedBookFiles is BatchUpsertBookFiles for the library
 	// scanner. Each row carries whether the scanner's own stat of FilePath
 	// succeeded; for those rows the upsert writes Missing=false (the file is

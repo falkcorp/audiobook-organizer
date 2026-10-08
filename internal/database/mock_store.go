@@ -1,5 +1,5 @@
 // file: internal/database/mock_store.go
-// version: 1.138.1
+// version: 1.139.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-10-07
 
@@ -594,6 +594,7 @@ type MockStore struct {
 	PatchBookFileFieldsFunc                 func(bookID, fileID string, patch BookFileFieldPatch) (*BookFile, *BookFile, error)
 	ModifyBookFileFunc                      func(bookID, fileID string, fn func(*BookFile) error) (*BookFile, error)
 	BatchUpsertBookFilesFunc                func(files []*BookFile) error
+	BatchUpsertBookFilesKeepPathsFunc       func(files []*BookFile) error
 	BatchUpsertScannedBookFilesFunc         func(rows []ScannedBookFile) error
 	MoveBookFilesToBookFunc                 func(fileIDs []string, sourceBookID, targetBookID string) error
 	MoveBookFilesToBookBulkFunc             func(moves []BookFileMove, targetBookID string) error
@@ -3555,6 +3556,12 @@ func (m *MockStore) ModifyBookFile(bookID, fileID string, fn func(*BookFile) err
 func (m *MockStore) BatchUpsertBookFiles(files []*BookFile) error {
 	if m.BatchUpsertBookFilesFunc != nil {
 		return m.BatchUpsertBookFilesFunc(files)
+	}
+	return nil
+}
+func (m *MockStore) BatchUpsertBookFilesKeepPaths(files []*BookFile) error {
+	if m.BatchUpsertBookFilesKeepPathsFunc != nil {
+		return m.BatchUpsertBookFilesKeepPathsFunc(files)
 	}
 	return nil
 }

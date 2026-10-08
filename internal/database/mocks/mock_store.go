@@ -5694,6 +5694,57 @@ func (_c *MockStore_BatchUpsertBookFiles_Call) RunAndReturn(run func(files []*da
 	return _c
 }
 
+// BatchUpsertBookFilesKeepPaths provides a mock function for the type MockStore
+func (_mock *MockStore) BatchUpsertBookFilesKeepPaths(files []*database.BookFile) error {
+	ret := _mock.Called(files)
+
+	if len(ret) == 0 {
+		panic("no return value specified for BatchUpsertBookFilesKeepPaths")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func([]*database.BookFile) error); ok {
+		r0 = returnFunc(files)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockStore_BatchUpsertBookFilesKeepPaths_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'BatchUpsertBookFilesKeepPaths'
+type MockStore_BatchUpsertBookFilesKeepPaths_Call struct {
+	*mock.Call
+}
+
+// BatchUpsertBookFilesKeepPaths is a helper method to define mock.On call
+//   - files []*database.BookFile
+func (_e *MockStore_Expecter) BatchUpsertBookFilesKeepPaths(files any) *MockStore_BatchUpsertBookFilesKeepPaths_Call {
+	return &MockStore_BatchUpsertBookFilesKeepPaths_Call{Call: _e.mock.On("BatchUpsertBookFilesKeepPaths", files)}
+}
+
+func (_c *MockStore_BatchUpsertBookFilesKeepPaths_Call) Run(run func(files []*database.BookFile)) *MockStore_BatchUpsertBookFilesKeepPaths_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 []*database.BookFile
+		if args[0] != nil {
+			arg0 = args[0].([]*database.BookFile)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_BatchUpsertBookFilesKeepPaths_Call) Return(err error) *MockStore_BatchUpsertBookFilesKeepPaths_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockStore_BatchUpsertBookFilesKeepPaths_Call) RunAndReturn(run func(files []*database.BookFile) error) *MockStore_BatchUpsertBookFilesKeepPaths_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // BatchUpsertScannedBookFiles provides a mock function for the type MockStore
 func (_mock *MockStore) BatchUpsertScannedBookFiles(rows []database.ScannedBookFile) error {
 	ret := _mock.Called(rows)
