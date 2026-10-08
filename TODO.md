@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.76.0 -->
+<!-- version: 10.76.1 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
 <!-- last-edited: 2026-10-07 -->
 
@@ -18375,7 +18375,7 @@ condition, not a regression. Verify through `books.jdfalk.com` instead.
   library's own media root (LibrarySet). See `docs/specs/2026-07-23-itunes-2way-p0-findings.md`
   (P0 status table) + `docs/specs/2026-07-23-itunes-2way-sync-system-design.md` §4–6.
 
-- [x] **`isAudiobookITL` under-classifies audiobooks (fail-safe, but fix carefully).** — ✅ CLOSED 2026-10-07: superseded, iTunes write-back removed (iTunes is import-only; docs/plans/2026-10-07-remove-itunes-writeback.md).
+- [ ] **`isAudiobookITL` under-classifies audiobooks (fail-safe, but fix carefully).** — 2026-10-07: `GuardRebuildTarget` and its thresholds were removed with iTunes write-back; the classifier still drives the cross-type PID census (`internal/itunes/cross_type.go`), so the under-count below still matters there.
   P0 cross-type census (§F5) found it misses `Audio Book`/`audio book` (it checks the
   substring `"audiobook"` with NO space — 705 tracks on prod) and every literary-genre
   audiobook (Science Fiction, Fantasy, Suspense, Comedy, …) — 3,436 AO-owned audiobooks
@@ -18404,7 +18404,7 @@ condition, not a regression. Verify through `books.jdfalk.com` instead.
   `TestITLRelocateContractStatus` (env-gated). See
   `docs/specs/2026-07-23-itunes-2way-p0-findings.md` §F7.
 
-- [x] **iTunes 2-way-sync — continuation (P3 redefine + reverse sync + footgun audit).** — ✅ CLOSED 2026-10-07: superseded, iTunes write-back removed (iTunes is import-only; docs/plans/2026-10-07-remove-itunes-writeback.md).
+- [ ] **iTunes 2-way-sync — continuation (P3 redefine + reverse sync + footgun audit).** — 2026-10-07: parts (1) and (3) are closed (merged-track removal, `/rebuild`, `/rebuild-full` and adopt-base were removed with iTunes write-back). Part (2), the import direction, is still open.
   P1 relocate is applied+verified on prod (6,414). Still open, per
   `docs/plans/2026-07-23-itunes-2way-sync-continuation.md`: (1) redefine the P3
   merged-track removal to provable-duplicates-only (version_group/MergedIntoBookID
