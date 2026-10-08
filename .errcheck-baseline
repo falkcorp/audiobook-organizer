@@ -1,7 +1,7 @@
 # file: .errcheck-baseline
-# version: 1.5.2
+# version: 1.6.0
 # guid: 7a4d1e92-3f6b-4c85-9a02-1e6b8d4f2c73
-# last-edited: 2026-10-06
+# last-edited: 2026-10-07
 
 # The number of `errcheck` findings tolerated in the tree. This is a RATCHET,
 # exactly like .interface-width-baseline: CI fails if the count goes UP, and
@@ -72,4 +72,9 @@
 # 2026-10-06 (fix/candidate-keep-followups, #3776): 818 -> 815, measured
 # with this script after rebasing onto #3777. Field undo and undo-last-apply
 # paths no longer discard a cache-invalidation error: they no longer invalidate.
-815
+# 2026-10-07 (refactor/remove-itunes-writeback): 815 -> 779, measured with
+# this script. iTunes became import-only and the write-back batcher, ITL
+# mutators, safe-write, rebuild/relocate/cleanup writers and their cmd tools
+# were deleted along with the unchecked errors they carried. Nothing here
+# fixes a finding in code that still exists.
+779
