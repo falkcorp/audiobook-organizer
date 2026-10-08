@@ -1,7 +1,7 @@
 // file: internal/metafetch/search_fanout.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: f2309d86-b2ad-4db6-9612-f5872d0e00df
-// last-edited: 2026-10-03
+// last-edited: 2026-10-07
 
 package metafetch
 
@@ -248,9 +248,10 @@ func poolHasStrong(states []*fanoutSource, c strongCriteria) bool {
 func (mfs *Service) askVariant(p fanoutParams, st *fanoutSource, v queryVariant) {
 	st.asked++
 	cacheSource := variantCacheSource(st.src, v)
-	if !p.opts.BypassFetchCache {
-		maxAge := time.Duration(config.AppConfig.MetadataFetchCacheTTLDays) * 24 * time.Hour
-		if cached, _, err := database.GetCachedMetadataFetchWithMaxAge(mfs.db, p.bookID, cacheSource, p.identity, maxAge); err == nil && cached != nil {
+	if p.opts.BypassFetchCache {
+		metrics.RecordCacheMiss(searchCacheName, searchCacheMissBypass)
+	} else {
+		if cached, _, err := database.GetCachedMetadataFetchWithMaxAge(mfs.db, p.bookID, cacheSource, p.identity, fetchCacheMaxAge()); err == nil && cached != nil {
 			var rs []metadata.BookMetadata
 			if jerr := json.Unmarshal(cached.Results, &rs); jerr == nil {
 				// Entries cached before #1940 lack the year-kind flag; re-derive
@@ -260,11 +261,13 @@ func (mfs *Service) askVariant(p fanoutParams, st *fanoutSource, v queryVariant)
 					rs[i].PublishYearIsAudiobookRelease = isRelease
 				}
 				metrics.IncMetadataFetch(metadata.ProviderKey(st.src), metrics.FetchSourceCacheHit)
+				metrics.RecordCacheHit(searchCacheName)
 				st.results = append(st.results, p.accept(v, rs)...)
 				return
 			}
 		}
 		metrics.IncMetadataFetch(metadata.ProviderKey(st.src), metrics.FetchSourceCacheMiss)
+		metrics.RecordCacheMiss(searchCacheName, searchCacheMissNotCached)
 	}
 	if err := waitForLimiter(p.ctx, p.limiter); err != nil {
 		st.note(p.ctx, err)
@@ -289,10 +292,86 @@ func (mfs *Service) askVariant(p fanoutParams, st *fanoutSource, v queryVariant)
 			if perr := database.PutCachedMetadataFetch(mfs.db, p.bookID, cacheSource, p.identity, blob, 0); perr != nil {
 				searchFanoutLog.Warn("search variant cache put failed: book=%s source=%s err=%v",
 					logger.SanitizeLogValue(p.bookID), st.name, perr)
+			} else {
+				metrics.RecordCacheSet(searchCacheName)
 			}
 		}
 	}
 	st.results = append(st.results, p.accept(v, rs)...)
+}
+
+// searchCacheName is the {cache} label of the interactive/batch SEARCH's
+// fetch-cache decisions (audiobook_organizer_cache_{hits,misses,sets}_total):
+// one count per question the search fan-out would otherwise send a provider
+// (a title variant in askVariant, an ASIN lookup in cachedLookupASIN). It is
+// deliberately a second view of the same rows: cache="metadata_fetch" is
+// recorded by the database layer on EVERY row read (the single-book fetch,
+// the bulk chain walk and the search alike, with a miss reason per check),
+// while "metadata_search" answers "did this search ask a provider or not".
+const (
+	searchCacheName = "metadata_search"
+	// searchCacheMissNotCached: no fresh row for this identity and question
+	// (the database layer's metadata_fetch misses carry the precise reason).
+	searchCacheMissNotCached = "not_found"
+	// searchCacheMissBypass: the caller forced a refresh
+	// (SearchOptions.BypassFetchCache), so the read was skipped on purpose.
+	searchCacheMissBypass = "bypass"
+)
+
+// fetchCacheMaxAge is the configured fetch-cache TTL. Zero or negative means
+// no age limit (GetCachedMetadataFetchWithMaxAge), never "cache disabled".
+func fetchCacheMaxAge() time.Duration {
+	return time.Duration(config.AppConfig.MetadataFetchCacheTTLDays) * 24 * time.Hour
+}
+
+// asinCacheSource is the fetch-cache "source" key of one ASIN lookup: the
+// provider id plus the ASIN. Like the per-variant rows it lives under the
+// book's metadata_fetch_cache:<bookID>: prefix, so the book's prefix delete
+// (InvalidateAllCachedMetadataFetchesForBook) clears it too.
+func asinCacheSource(providerID, asin string) string {
+	return providerID + "#asin" + strings.ToUpper(strings.TrimSpace(asin))
+}
+
+// cachedLookupASIN is lookupASIN behind the per-book fetch cache. Before this
+// existed every search -- including an identical repeat of one the user had
+// just run -- re-asked Audible/Audnexus for the book's own ASIN and for the
+// runtime enrichment, because only the title variants were cached.
+//
+// Read unless p.opts.BypassFetchCache (a forced refresh still writes). Only a
+// found record is written: an error, a throttle refusal and a "no such ASIN"
+// (nil, nil) are never cached, so a transient failure or an empty answer can
+// never stand in for a good record on the next search.
+func (mfs *Service) cachedLookupASIN(p fanoutParams, providerID, asin string) (*metadata.BookMetadata, error) {
+	cacheSource := asinCacheSource(providerID, asin)
+	if p.opts.BypassFetchCache {
+		metrics.RecordCacheMiss(searchCacheName, searchCacheMissBypass)
+	} else {
+		if cached, _, err := database.GetCachedMetadataFetchWithMaxAge(mfs.db, p.bookID, cacheSource, p.identity, fetchCacheMaxAge()); err == nil && cached != nil {
+			var rs []metadata.BookMetadata
+			if jerr := json.Unmarshal(cached.Results, &rs); jerr == nil && len(rs) > 0 {
+				// Audible and Audnexus both report the audiobook RELEASE year.
+				rs[0].PublishYearIsAudiobookRelease = true
+				metrics.IncMetadataFetch(providerID, metrics.FetchSourceCacheHit)
+				metrics.RecordCacheHit(searchCacheName)
+				return &rs[0], nil
+			}
+		}
+		metrics.IncMetadataFetch(providerID, metrics.FetchSourceCacheMiss)
+		metrics.RecordCacheMiss(searchCacheName, searchCacheMissNotCached)
+	}
+	res, err := mfs.lookupASIN(p.ctx, p.limiter, providerID, asin)
+	if err != nil || res == nil {
+		return res, err
+	}
+	if blob, merr := json.Marshal([]metadata.BookMetadata{*res}); merr == nil {
+		if perr := database.PutCachedMetadataFetch(mfs.db, p.bookID, cacheSource, p.identity, blob, 0); perr != nil {
+			searchFanoutLog.Warn("search ASIN lookup cache put failed: book=%s provider=%s err=%v",
+				logger.SanitizeLogValue(p.bookID), providerID, perr)
+		} else {
+			metrics.RecordCacheSet(searchCacheName)
+		}
+	}
+	return res, nil
 }
 
 // lookupASIN looks asin up on Audible or Audnexus. LookupByASIN is not on the
@@ -354,7 +433,8 @@ func (mfs *Service) lookupASIN(ctx context.Context, limiter *rate.Limiter, provi
 // Audnexus for nothing. Audible's own answers always carry a runtime, so in
 // practice this is the only way Audnexus is asked about an ASIN another
 // source found.
-func (mfs *Service) enrichRuntimeByASIN(ctx context.Context, limiter *rate.Limiter, states []*fanoutSource, bookDurationSec int) {
+func (mfs *Service) enrichRuntimeByASIN(p fanoutParams, states []*fanoutSource, bookDurationSec int) {
+	ctx := p.ctx
 	if bookDurationSec <= 0 {
 		return
 	}
@@ -379,7 +459,7 @@ func (mfs *Service) enrichRuntimeByASIN(ctx context.Context, limiter *rate.Limit
 				return
 			}
 			done[asin] = true
-			got, err := mfs.lookupASIN(ctx, limiter, metadata.SourceIDAudnexus, asin)
+			got, err := mfs.cachedLookupASIN(p, metadata.SourceIDAudnexus, asin)
 			if err != nil || got == nil {
 				continue
 			}
