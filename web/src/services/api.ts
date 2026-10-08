@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.164.0
+// version: 2.165.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-07
 
@@ -4532,6 +4532,17 @@ export interface CandidateBookInfo {
    * the book's files, so no canonical runtime exists for them.
    */
   stored_duration_seconds?: number;
+  /** The book's current values, for the review cards' book-info block. */
+  narrator?: string;
+  series?: string;
+  series_position?: string;
+  asin?: string;
+  isbn?: string;
+  /**
+   * How many book_file rows the book has. Absent when the row was built
+   * without reading files (the unreviewable bucket): unknown, not zero.
+   */
+  file_count?: number;
 }
 
 /**
