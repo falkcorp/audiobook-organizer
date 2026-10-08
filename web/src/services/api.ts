@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.168.0
+// version: 2.169.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-07
 
@@ -5097,6 +5097,50 @@ export async function batchRejectCandidates(
     body: JSON.stringify({ operation_id: operationId, book_ids: bookIds }),
   });
   if (!response.ok) throw await buildApiError(response, 'Failed to reject candidates');
+  return response.json();
+}
+
+/** A label on one metadata candidate, kept as scorer training data. */
+export type CandidateFeedbackLabel = 'negative' | 'positive';
+
+export interface CandidateFeedbackInput {
+  book_id: string;
+  label: CandidateFeedbackLabel;
+  /** The search that produced the list; browse = a "Search again" search. */
+  query: { title: string; author: string; browse: boolean };
+  candidate: MetadataCandidate;
+  /** 1-based position by score in the list shown. */
+  rank?: number;
+  result_count?: number;
+}
+
+/**
+ * Records "not the best match" (negative) or "the one applied" (positive) for
+ * one candidate. Upserts: the same book + query + candidate is one record.
+ * Returns the record id, used to undo.
+ */
+export async function recordCandidateFeedback(
+  input: CandidateFeedbackInput
+): Promise<{ id: string; label: CandidateFeedbackLabel }> {
+  const response = await apiFetch(`${API_BASE}/metadata/candidate-feedback`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) throw await buildApiError(response, 'Failed to record candidate feedback');
+  return response.json();
+}
+
+/** Undoes a label; only removes the record while it still carries `label`. */
+export async function deleteCandidateFeedback(
+  id: string,
+  label: CandidateFeedbackLabel
+): Promise<{ removed: boolean }> {
+  const response = await apiFetch(
+    `${API_BASE}/metadata/candidate-feedback/${encodeURIComponent(id)}?label=${label}`,
+    { method: 'DELETE' }
+  );
+  if (!response.ok) throw await buildApiError(response, 'Failed to remove candidate feedback');
   return response.json();
 }
 

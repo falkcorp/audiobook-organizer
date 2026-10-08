@@ -1,5 +1,5 @@
 // file: web/src/components/review/MetadataPanel.tsx
-// version: 1.10.0
+// version: 1.11.0
 // guid: 3f9a2c07-5b41-4e86-9d02-7c1e8b503a64
 // last-edited: 2026-10-07
 //
@@ -151,14 +151,14 @@ export function MetadataPanel({
   // each other (StagedPick), so a second click waits for the first to settle.
   const applyingBooks = useRef(new Set<string>());
   const applyCandidate = useCallback(
-    async (bookId: string, candidate: MetadataCandidate) => {
+    async (bookId: string, candidate: MetadataCandidate): Promise<boolean> => {
       if (applyingBooks.current.has(bookId)) {
         toast('An apply for this book is already running; wait for it to finish.', 'warning');
-        return;
+        return false;
       }
       applyingBooks.current.add(bookId);
       try {
-        await applyLimiter(() =>
+        return await applyLimiter(() =>
           applyCandidateToBook({
             bookId,
             candidate,

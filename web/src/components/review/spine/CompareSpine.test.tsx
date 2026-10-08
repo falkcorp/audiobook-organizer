@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/CompareSpine.test.tsx
-// version: 1.5.0
+// version: 1.6.0
 // guid: f30a6c85-2b47-4e19-93d0-8a5c1e7b402f
 // last-edited: 2026-10-07
 
@@ -20,7 +20,7 @@ import type { CandidatesContext } from './CandidatesCard';
 function makeCandidatesCtx(): CandidatesContext {
   return {
     loader: new CandidateLoader(() => new Promise(() => {})),
-    apply: vi.fn(() => Promise.resolve()),
+    apply: vi.fn(() => Promise.resolve(true)),
   };
 }
 

@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/candidateLoader.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 88122df6-96ce-4289-bd2b-f18276f10984
 // last-edited: 2026-10-07
 //
@@ -258,6 +258,10 @@ export function fillableFields(book: Book, candidate: MetadataCandidate): Metada
  * one op per book, an ASIN conflict offered back on the toast. 'fill' sends
  * only the fields the book has empty, read from the book as it is now;
  * 'replace' sends every field. Write-back on, as the dialog does.
+ *
+ * Resolves true only when the apply landed, so a caller can record the
+ * candidate as the chosen one; false when nothing was applied (no book, nothing
+ * to fill, an ASIN conflict, a failure).
  */
 export async function applyCandidateToBook(args: {
   bookId: string;
@@ -265,14 +269,14 @@ export async function applyCandidateToBook(args: {
   mode: BulkApplyMode;
   toast: ToastFn;
   onApplied: () => void;
-}): Promise<void> {
+}): Promise<boolean> {
   const { bookId, candidate, mode, toast, onApplied } = args;
   let book: Book;
   try {
     book = await api.getBook(bookId);
   } catch (err) {
     toast(err instanceof Error ? err.message : 'Could not load that book', 'error');
-    return;
+    return false;
   }
   let fields: string[] | undefined;
   if (mode === 'fill') {
@@ -282,10 +286,10 @@ export async function applyCandidateToBook(args: {
         `Nothing to fill on "${book.title}": every field this candidate carries is already set. Switch to Replace existing to overwrite.`,
         'info'
       );
-      return;
+      return false;
     }
   }
-  await submitStagedApply({
+  return submitStagedApply({
     book,
     pick: { candidate, fields },
     writeToFiles: true,

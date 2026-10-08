@@ -1,7 +1,7 @@
 // file: web/src/components/audiobooks/stagedMetadataApply.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2c7a9e14-5b3f-4d81-a6e0-9f1b8d3c7e52
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 //
 // The Search Metadata dialogs' staged picks and the detached background
 // applies that run them when a dialog closes: one pick (MetadataSearchDialog)
@@ -173,6 +173,10 @@ export async function awaitStagedApply(
  * it to the end. It is deliberately detached from the dialog: the dialog has
  * already closed when this runs, so it touches only the caller-owned toast and
  * onApplied, never dialog state. The reviewer keeps working while it polls.
+ *
+ * Resolves true only when the apply landed (inline, or the background op
+ * finished); false for a conflict, a failure, or a lost op. An "Apply anyway"
+ * taken from the conflict toast is a later, separate submit.
  */
 export async function submitStagedApply(args: {
   book: Book;
@@ -180,7 +184,7 @@ export async function submitStagedApply(args: {
   writeToFiles: boolean;
   toast: ToastFn;
   onApplied: (updatedBook: Book) => void;
-}): Promise<void> {
+}): Promise<boolean> {
   const { book, pick, writeToFiles, toast, onApplied } = args;
   const label = bookLabel(book);
   const undoAction = {
@@ -208,27 +212,28 @@ export async function submitStagedApply(args: {
             void submitStagedApply({ ...args, pick: { ...pick, overrideAsin: start.bookAsin } }),
         }
       );
-      return;
+      return false;
     case 'failed':
       toast(start.message, 'error');
-      return;
+      return false;
     case 'inline':
       onApplied(start.book);
       toast(`Metadata applied to ${label} from ${start.source}`, 'success', undoAction);
-      return;
+      return true;
   }
   toast(`Applying metadata to ${label} in the background`, 'info');
   const end = await awaitStagedApply(book, start);
   if (end.kind === 'lost') {
     toast(end.message, 'warning');
-    return;
+    return false;
   }
   if (end.kind === 'failed') {
     toast(end.message, 'error');
-    return;
+    return false;
   }
   if (end.book) onApplied(end.book);
   toast(`Metadata applied to ${label} from ${pick.candidate.source}`, 'success', undoAction);
+  return true;
 }
 
 /** How many applies (and op polls, and undos) a bulk submit runs at once. */
