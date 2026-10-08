@@ -1,7 +1,7 @@
 // file: internal/metabatch/candidates.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 //
 // Package metabatch contains pure service types and logic for the
 // metadata candidate batch fetch / apply pipeline. HTTP handlers live
@@ -69,6 +69,24 @@ type CandidateBookInfo struct {
 	// why it does not share duration_seconds: those rows are built without
 	// reading the book's files, so no canonical runtime exists to report.
 	StoredDurationSec int `json:"stored_duration_seconds,omitempty"`
+	// Narrator, Series, SeriesPosition, ASIN and ISBN are the book's current
+	// values, served so every review card can show what an apply would
+	// change (the review page's book-info block). Empty when unset. Series
+	// is the embedded Series object's name; a book whose series is held only
+	// by SeriesID leaves it empty here and the handler resolves it
+	// (ResolveSeriesName).
+	Narrator       string `json:"narrator,omitempty"`
+	Series         string `json:"series,omitempty"`
+	SeriesPosition string `json:"series_position,omitempty"`
+	ASIN           string `json:"asin,omitempty"`
+	ISBN           string `json:"isbn,omitempty"`
+	// SeriesID is carried (not serialized) so a caller can resolve Series
+	// when the book row holds only the id.
+	SeriesID *int `json:"-"`
+	// FileCount is how many book_file rows the book has. Zero (omitted) on
+	// rows built without reading files (BuildCandidateBookInfoNoFiles), where
+	// the count is unknown rather than zero.
+	FileCount int `json:"file_count,omitempty"`
 }
 
 // CandidateResult holds the metadata candidate search result for a single book.
@@ -252,7 +270,9 @@ func BuildCandidateBookInfo(store BookFilesGetter, book *database.Book) Candidat
 type BookFileFacts struct {
 	ITunesPath string
 	Runtime    database.BookRuntime
-	Err        error
+	// FileCount is len(rows) of a successful read; 0 when the read failed.
+	FileCount int
+	Err       error
 }
 
 // ReadBookFileFacts reads book's file rows from store and reduces them to
@@ -262,6 +282,9 @@ func ReadBookFileFacts(store BookFilesGetter, book *database.Book) BookFileFacts
 	var f BookFileFacts
 	if bfErr == nil && len(bfs) > 0 {
 		f.ITunesPath = bfs[0].ITunesPath
+	}
+	if bfErr == nil {
+		f.FileCount = len(bfs)
 	}
 	f.Runtime = database.ComputeBookRuntime(book, bfs)
 	f.Err = bfErr
@@ -273,6 +296,7 @@ func ReadBookFileFacts(store BookFilesGetter, book *database.Book) BookFileFacts
 func BuildCandidateBookInfoWithFacts(book *database.Book, facts BookFileFacts) CandidateBookInfo {
 	info := bookRowInfo(book)
 	info.ITunesPath = facts.ITunesPath
+	info.FileCount = facts.FileCount
 	applyRuntimeInfo(&info, facts.Runtime, facts.Err)
 	return info
 }
@@ -318,7 +342,58 @@ func bookRowInfo(book *database.Book) CandidateBookInfo {
 	if book.TranscribedTitle != nil && *book.TranscribedTitle != "" {
 		info.TranscribedTitle = *book.TranscribedTitle
 	}
+	info.Narrator = derefString(book.Narrator)
+	info.ASIN = derefString(book.ASIN)
+	info.ISBN = derefString(book.ISBN13)
+	if info.ISBN == "" {
+		info.ISBN = derefString(book.ISBN10)
+	}
+	info.SeriesID = book.SeriesID
+	if book.Series != nil && book.SeriesID != nil && book.Series.ID == *book.SeriesID {
+		info.Series = book.Series.Name
+	}
+	if raw := derefString(book.SeriesPositionRaw); raw != "" {
+		info.SeriesPosition = raw
+	} else if book.SeriesSequence != nil && *book.SeriesSequence > 0 {
+		info.SeriesPosition = fmt.Sprintf("%d", *book.SeriesSequence)
+	}
 	return info
+}
+
+// SeriesGetter is the read ResolveSeriesName needs.
+type SeriesGetter interface {
+	GetSeriesByID(id int) (*database.Series, error)
+}
+
+// ResolveSeriesName fills info.Series from store when the book row held only
+// a SeriesID (the embedded Series object is dropped when it cannot be kept
+// consistent; reads then fall back to GetSeriesByID). cache, when non-nil,
+// memoizes names by id across one listing so a page of books in one series
+// costs one read. A failed read leaves Series empty.
+func ResolveSeriesName(store SeriesGetter, info *CandidateBookInfo, cache map[int]string) {
+	if info.Series != "" || info.SeriesID == nil || store == nil {
+		return
+	}
+	id := *info.SeriesID
+	if name, ok := cache[id]; ok {
+		info.Series = name
+		return
+	}
+	s, err := store.GetSeriesByID(id)
+	if err != nil || s == nil {
+		return
+	}
+	info.Series = s.Name
+	if cache != nil {
+		cache[id] = s.Name
+	}
+}
+
+func derefString(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }
 
 // CountByStatus counts CandidateResults with the given status.
