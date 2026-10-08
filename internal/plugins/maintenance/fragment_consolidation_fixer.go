@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.49.0
+// version: 1.50.0
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
 // last-edited: 2026-10-08
 
@@ -409,7 +409,9 @@ func (f *fragmentFixer) Description() string {
 		"from one folder — move every chapter onto one organized primary book in track order. Existing book: the " +
 		"chapters' work is already a live book of the same title — retire them into it when the durations agree, " +
 		"never assemble a second copy. Folder chapter set: numbered files of one name in one folder, no gaps, an " +
-		"hour or more, no parent or copy in the library — one book, in number order. Listening progress " +
+		"hour or more, no parent or copy in the library — one book, in number order. A numbered set whose folder " +
+		"names no work (chapter files directly in an author folder) takes its title from the album tag every file " +
+		"shares, and is held when they share none. Listening progress " +
 		"and external ids follow each retired fragment. Fragments iTunes knows about are combined like any other: " +
 		"only database rows change (no file is moved and the iTunes library is never written). Doctor Who / " +
 		"Big Finish / Torchwood are listed for manual action only. Every step is undoable from the apply operation."
@@ -512,18 +514,103 @@ type fragFile struct {
 	Missing          bool
 	ITunesPID        string
 	ITunesPath       string
+	// Album is the file's album tag as book_file.raw_tags recorded it at
+	// import ("" none or not recorded). A numbered set in an author folder
+	// takes its title from it when every file carries the same one
+	// (fragSharedAlbumTitle).
+	Album string
 }
 
 func fragFileOf(bookID string, r *database.BookFile) fragFile {
 	return fragFile{ID: r.ID, BookID: bookID, Path: r.FilePath, OriginalFilename: r.OriginalFilename, Size: r.FileSize,
 		Hash: r.FileHash, OrigHash: r.OriginalFileHash, Duration: r.Duration, Track: r.TrackNumber, Missing: r.Missing,
-		ITunesPID: r.ITunesPersistentID, ITunesPath: r.ITunesPath}
+		ITunesPID: r.ITunesPersistentID, ITunesPath: r.ITunesPath, Album: fragAlbumTag(r.RawTags)}
 }
 
 func fragFileOfCore(r *database.BookFileCore) fragFile {
 	return fragFile{ID: r.ID, BookID: r.BookID, Path: r.FilePath, OriginalFilename: r.OriginalFilename, Size: r.FileSize,
 		Hash: r.FileHash, OrigHash: r.OriginalFileHash, Duration: r.Duration, Track: r.TrackNumber, Missing: r.Missing,
-		ITunesPID: r.ITunesPersistentID, ITunesPath: r.ITunesPath}
+		ITunesPID: r.ITunesPersistentID, ITunesPath: r.ITunesPath, Album: fragAlbumTag(r.RawTags)}
+}
+
+// fragAlbumTagKeys are the raw tag keys, lower-cased, that hold a file's
+// album across the tag readers: the normalized name (taglib "ALBUM"), the
+// ID3v2.3/2.4 and v2.2 frames, and the MP4 atom. Matched whole, never by
+// prefix: "album_artist", "albumartist", "TPE2", "albumsort" and "TSOA" are
+// not the album.
+var fragAlbumTagKeys = map[string]bool{"album": true, "talb": true, "tal": true, "©alb": true, "\xa9alb": true}
+
+// fragAlbumTag is the album a file's stored raw tags carry ("" none). Keys
+// are read in sorted order so a row holding two album keys always gives the
+// same answer.
+func fragAlbumTag(tags map[string]string) string {
+	if len(tags) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(tags))
+	for k := range tags {
+		// The raw key too: ToLower turns the invalid-UTF-8 "\xa9alb" into
+		// U+FFFD + "alb".
+		if fragAlbumTagKeys[k] || fragAlbumTagKeys[strings.ToLower(k)] {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if v := strings.TrimSpace(tags[k]); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// fragGenericAlbums are album tags that name no work (lower-cased, spaces
+// collapsed): a tagger's placeholder or the library's own shelf name.
+var fragGenericAlbums = map[string]bool{
+	"audiobooks": true, "audiobook": true, "audio books": true, "audio book": true, "unknown album": true,
+	"unknown": true, "untitled": true, "no album": true, "album": true, "books": true,
+}
+
+// fragAlbumKey is an album compared across files: trimmed, lower-cased,
+// runs of white space collapsed.
+func fragAlbumKey(s string) string {
+	return strings.Join(strings.Fields(strings.ToLower(s)), " ")
+}
+
+// fragSharedAlbumTitle is the title of a numbered set whose folder gives
+// none (owner 2026-10-08, "iTunes album tag"): chapter files directly in an
+// author folder ("iTunes Media/Audiobooks/<Author>/01 ….mp3") name no work
+// by their folder, but the album tag every one of them carries does. It
+// answers only when EVERY file of the set, renamed copies included, carries
+// a non-empty album and all of them are the same album (by case and
+// spacing). It refuses an album that is the folder's name or the name of a
+// member's author (the album then names the author, not the work), and a
+// generic one ("Audiobooks", "Unknown Album", a chapter word, a placeholder).
+func fragSharedAlbumTitle(lib *fragLibrary, dir string, first *fragCandidate, cs []*fragCandidate) (string, bool) {
+	if len(cs) == 0 || first == nil {
+		return "", false
+	}
+	key := fragAlbumKey(first.File.Album)
+	if key == "" {
+		return "", false
+	}
+	for _, c := range cs {
+		if fragAlbumKey(c.File.Album) != key {
+			return "", false
+		}
+	}
+	title := strings.TrimSpace(first.File.Album)
+	folder := strings.TrimSpace(filepath.Base(filepath.Clean(dir)))
+	if fragGenericAlbums[key] || fragSetTitleGeneric(title) || strings.EqualFold(title, folder) ||
+		fragAlbumKey(folder) == key || folderNamesAuthor(title, folder) {
+		return "", false
+	}
+	for _, c := range cs {
+		if a := lib.authorName(c.Book); a != "" && (fragAlbumKey(a) == key || folderNamesAuthor(title, a)) {
+			return "", false
+		}
+	}
+	return title, true
 }
 
 func (x fragFile) location() undo.BookFileLocation {
@@ -4074,7 +4161,7 @@ func (f *fragmentFixer) noParentRows(lib *fragLibrary, cands []*fragCandidate) [
 				row.Skipped, row.SkipReason = fragSkipNumberedUnsure, set.small
 			case row.Proposed["title"] == "":
 				row.Skipped, row.SkipReason = fragSkipNumberedUnsure,
-					"the folder gives no title for the work (a generic folder, or one directly under a root); the survivor would keep one chapter's name"
+					"the folder gives no title for the work (a generic folder, or one directly under a root), and the files share no usable album tag; the survivor would keep one chapter's name"
 			}
 		}
 		for _, c := range set.members {
@@ -5419,6 +5506,7 @@ func (f *fragmentFixer) noParentRow(lib *fragLibrary, dir, key string, cs []*fra
 	if plan.SurvivorID != "" {
 		survivorState = fmt.Sprintf("organized=%t primary=%t", survivor.Organized, survivor.Primary)
 	}
+	albumTitle := false
 	// Title and Folder are decided from the group alone, never from whether
 	// the survivor already has them: a run cut off after the retitle must
 	// re-plan to the same fingerprint (the write is then a no-op).
@@ -5430,6 +5518,12 @@ func (f *fragmentFixer) noParentRow(lib *fragLibrary, dir, key string, cs []*fra
 	default:
 		if t, _, ok := metadata.ChapterTitleFromDirectory(filepath.Join(dir, "x"), ""); ok {
 			plan.Title = t
+		} else if key == fragNumberedKey && len(plan.Members) > 0 {
+			// The folder names no work (an author folder): the album tag
+			// every file shares does, or the row stays held for its title.
+			if t, ok := fragSharedAlbumTitle(lib, dir, plan.Members[0].Frag, cs); ok {
+				plan.Title, albumTitle = t, true
+			}
 		}
 	}
 	if set != nil {
@@ -5534,6 +5628,10 @@ func (f *fragmentFixer) noParentRow(lib *fragLibrary, dir, key string, cs []*fra
 		shared,
 		fmt.Sprintf("durations of the %d kept chapter file(s): %d known, %d unknown, %d at or over %d min", len(plan.Members), len(plan.Members)-unknown, unknown, long, limit/60),
 		"none of these files matched a row of a multi-file book (other live books holding them are checked as co-owners, and same-titled books as existing books, below)",
+	}
+	if albumTitle {
+		r.Evidence = append(r.Evidence, fmt.Sprintf("title %q from the album tag all %d files share (book_file raw tags); the folder %q names no work",
+			plan.Title, len(cs), filepath.Base(filepath.Clean(dir))))
 	}
 	if len(stems) > 0 {
 		more := ""
