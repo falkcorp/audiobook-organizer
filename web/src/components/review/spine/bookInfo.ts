@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/bookInfo.ts
-// version: 1.0.0
+// version: 1.0.1
 // guid: 17b02240-0976-461f-8bd7-30b77b14dd0a
 // last-edited: 2026-10-07
 //
@@ -34,7 +34,7 @@ export function bookFileCount(book: CandidateBookInfo): number | undefined {
   return undefined;
 }
 
-/** One line for a dense row: author · narrator · series · format · runtime · size · files. */
+/** One line for a dense row: author · narrator · series · format · runtime · size · files · ASIN · ISBN. */
 export function bookSummaryLine(book: CandidateBookInfo): string {
   const files = bookFileCount(book);
   return [
@@ -45,6 +45,8 @@ export function bookSummaryLine(book: CandidateBookInfo): string {
     bookRuntimeLabel(book),
     book.file_size_bytes ? formatFileSize(book.file_size_bytes) : '',
     files ? `${files} file${files === 1 ? '' : 's'}` : '',
+    book.asin ? `ASIN ${book.asin}` : '',
+    book.isbn ? `ISBN ${book.isbn}` : '',
   ]
     .filter(Boolean)
     .join(' · ');

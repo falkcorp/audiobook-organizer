@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/CandidatesCard.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: ceb6a375-997d-44e0-8c71-d83c1980ea33
 // last-edited: 2026-10-07
 //
@@ -75,17 +75,19 @@ function CandidateItem({
   c,
   isTop,
   actionable,
+  applying,
   onApply,
   onReject,
 }: {
   c: MetadataCandidate;
   isTop: boolean;
   actionable: boolean;
+  /** An apply for this BOOK is running: every Apply in the card waits. */
+  applying: boolean;
   onApply: () => void;
   onReject: () => void;
 }) {
   const [showEvidence, setShowEvidence] = useState(false);
-  const [busy, setBusy] = useState(false);
   return (
     <Box
       data-testid="candidate-item"
@@ -138,11 +140,8 @@ function CandidateItem({
               size="small"
               variant="contained"
               color="success"
-              disabled={busy}
-              onClick={() => {
-                setBusy(true);
-                Promise.resolve(onApply()).finally(() => setBusy(false));
-              }}
+              disabled={applying}
+              onClick={onApply}
             >
               Apply
             </Button>
@@ -178,6 +177,13 @@ export const CandidatesCard = memo(function CandidatesCard({
   // reject is the lane's per-book reject): there is no candidate-level reject
   // endpoint, so these are hidden locally.
   const [hidden, setHidden] = useState<MetadataCandidate[]>([]);
+  // One apply per book: the panel refuses a second while the first runs, and
+  // the card disables every Apply until it settles.
+  const [applying, setApplying] = useState(false);
+  const applyOne = (c: MetadataCandidate) => {
+    setApplying(true);
+    void cands.apply(bookId, c).finally(() => setApplying(false));
+  };
 
   const { loader } = cands;
   const key = candidateKey(bookId, query);
@@ -329,7 +335,8 @@ export const CandidatesCard = memo(function CandidatesCard({
                   c={c}
                   isTop={!!cached && sameCandidate(cached, c)}
                   actionable={actionable}
-                  onApply={() => cands.apply(bookId, c)}
+                  applying={applying}
+                  onApply={() => applyOne(c)}
                   onReject={() => reject(c)}
                 />
               ))}

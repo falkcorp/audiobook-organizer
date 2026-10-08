@@ -1,5 +1,5 @@
 // file: web/src/components/review/spine/CandidatesCard.test.tsx
-// version: 1.0.0
+// version: 1.0.1
 // guid: e012200e-9c38-4a1d-8587-8ac43ce9803b
 // last-edited: 2026-10-07
 
@@ -276,5 +276,22 @@ describe('applyCandidateToBook', () => {
     await applyCandidateToBook({ bookId: 'b1', candidate: full, mode: 'fill', toast, onApplied: vi.fn() });
     expect(api.applyMetadataCandidate).not.toHaveBeenCalled();
     expect(toast).toHaveBeenCalledWith(expect.stringContaining('Nothing to fill'), 'info');
+  });
+});
+
+describe('one apply per book', () => {
+  it('disables every Apply in the card while one is running', async () => {
+    const user = userEvent.setup();
+    const gate = deferred<void>();
+    const apply = vi.fn(() => gate.promise);
+    const loader = new CandidateLoader(() => Promise.resolve([cand('High', 0.95), cached]));
+    renderCards([row('b1')], { loader, apply });
+    await screen.findByText('High');
+    const buttons = () => screen.getAllByRole('button', { name: 'Apply' });
+    await user.click(buttons()[0]);
+    expect(apply).toHaveBeenCalledTimes(1);
+    buttons().forEach((b) => expect(b).toBeDisabled());
+    await act(async () => gate.resolve());
+    buttons().forEach((b) => expect(b).not.toBeDisabled());
   });
 });

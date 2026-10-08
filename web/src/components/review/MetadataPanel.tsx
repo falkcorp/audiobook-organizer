@@ -1,5 +1,5 @@
 // file: web/src/components/review/MetadataPanel.tsx
-// version: 1.9.0
+// version: 1.9.1
 // guid: 3f9a2c07-5b41-4e86-9d02-7c1e8b503a64
 // last-edited: 2026-10-07
 //
@@ -112,17 +112,30 @@ export function MetadataPanel({
     applyModeRef.current = metadata.bulkApplyMode;
   }, [metadata.bulkApplyMode]);
 
+  // One apply per book at a time: two queued applies of the same book refuse
+  // each other (StagedPick), so a second click waits for the first to settle.
+  const applyingBooks = useRef(new Set<string>());
   const applyCandidate = useCallback(
-    (bookId: string, candidate: MetadataCandidate) =>
-      applyLimiter(() =>
-        applyCandidateToBook({
-          bookId,
-          candidate,
-          mode: applyModeRef.current,
-          toast,
-          onApplied: refreshSoon,
-        })
-      ),
+    async (bookId: string, candidate: MetadataCandidate) => {
+      if (applyingBooks.current.has(bookId)) {
+        toast('An apply for this book is already running; wait for it to finish.', 'warning');
+        return;
+      }
+      applyingBooks.current.add(bookId);
+      try {
+        await applyLimiter(() =>
+          applyCandidateToBook({
+            bookId,
+            candidate,
+            mode: applyModeRef.current,
+            toast,
+            onApplied: refreshSoon,
+          })
+        );
+      } finally {
+        applyingBooks.current.delete(bookId);
+      }
+    },
     [applyLimiter, toast, refreshSoon]
   );
   const candidatesCtx: CandidatesContext = useMemo(

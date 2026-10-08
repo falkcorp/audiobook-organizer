@@ -1,5 +1,5 @@
 // file: internal/metabatch/candidates_bookinfo_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 52b4b4c0-7157-4e40-901c-2a88bddf805e
 // last-edited: 2026-10-07
 
@@ -7,6 +7,7 @@ package metabatch_test
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -14,7 +15,7 @@ import (
 )
 
 func strp(s string) *string { return &s }
-func intp(i int) *int        { return &i }
+func intp(i int) *int       { return &i }
 
 // The review cards' book-info block reads these off the list response.
 func TestBuildCandidateBookInfo_ReviewCardFields(t *testing.T) {
@@ -61,41 +62,62 @@ func TestBuildCandidateBookInfo_FileCountUnknownOnReadErrorAndNoFiles(t *testing
 
 type seriesStore struct {
 	calls int
+	ids   []int
 	err   error
 }
 
-func (s *seriesStore) GetSeriesByID(id int) (*database.Series, error) {
+func (s *seriesStore) GetSeriesByIDs(ids []int) (map[int]*database.Series, error) {
 	s.calls++
+	s.ids = append(s.ids, ids...)
 	if s.err != nil {
 		return nil, s.err
 	}
-	return &database.Series{ID: id, Name: "Resolved"}, nil
+	out := map[int]*database.Series{}
+	for _, id := range ids {
+		out[id] = &database.Series{ID: id, Name: fmt.Sprintf("Series %d", id)}
+	}
+	return out, nil
 }
 
-func TestResolveSeriesName(t *testing.T) {
+func TestResolveSeriesNames_OneBatchReadForTheWholeListing(t *testing.T) {
 	// A stale embedded object (another series' id) is not trusted.
-	book := &database.Book{ID: "b1", SeriesID: intp(9), Series: &database.Series{ID: 8, Name: "Old"}}
-	info := metabatch.BuildCandidateBookInfoNoFiles(book)
-	if info.Series != "" {
+	stale := &database.Book{ID: "b0", SeriesID: intp(9), Series: &database.Series{ID: 8, Name: "Old"}}
+	if info := metabatch.BuildCandidateBookInfoNoFiles(stale); info.Series != "" {
 		t.Fatalf("stale embedded series leaked: %q", info.Series)
 	}
-	store := &seriesStore{}
-	cache := map[int]string{}
-	metabatch.ResolveSeriesName(store, &info, cache)
-	again := metabatch.BuildCandidateBookInfoNoFiles(book)
-	metabatch.ResolveSeriesName(store, &again, cache)
-	if info.Series != "Resolved" || again.Series != "Resolved" {
-		t.Errorf("resolved = %q / %q", info.Series, again.Series)
+	var results []metabatch.CandidateResult
+	for i := 0; i < 500; i++ {
+		b := &database.Book{ID: fmt.Sprintf("b%d", i), SeriesID: intp(i % 3)}
+		results = append(results, metabatch.CandidateResult{Book: metabatch.BuildCandidateBookInfoNoFiles(b)})
 	}
-	if store.calls != 1 {
-		t.Errorf("series reads = %d, want 1 (memoized)", store.calls)
-	}
+	embedded := &database.Book{ID: "e", SeriesID: intp(5), Series: &database.Series{ID: 5, Name: "Kept"}}
+	results = append(results, metabatch.CandidateResult{Book: metabatch.BuildCandidateBookInfoNoFiles(embedded)})
+	results = append(results, metabatch.CandidateResult{Book: metabatch.BuildCandidateBookInfoNoFiles(&database.Book{ID: "none"})})
 
-	failing := metabatch.BuildCandidateBookInfoNoFiles(book)
-	metabatch.ResolveSeriesName(&seriesStore{err: errors.New("x")}, &failing, nil)
-	if failing.Series != "" {
-		t.Errorf("failed read set series %q", failing.Series)
+	store := &seriesStore{}
+	metabatch.ResolveSeriesNames(store, results)
+	if store.calls != 1 {
+		t.Fatalf("series reads = %d, want 1 batch read for %d rows", store.calls, len(results))
 	}
-	var none metabatch.SeriesGetter
-	metabatch.ResolveSeriesName(none, &failing, nil) // nil store: no panic
+	if len(store.ids) != 3 {
+		t.Errorf("ids asked = %v, want the 3 distinct missing ids", store.ids)
+	}
+	if results[4].Book.Series != "Series 1" || results[500].Book.Series != "Kept" || results[501].Book.Series != "" {
+		t.Errorf("names = %q / %q / %q", results[4].Book.Series, results[500].Book.Series, results[501].Book.Series)
+	}
+}
+
+func TestResolveSeriesNames_NoReadWhenNothingMissingAndSafeOnFailure(t *testing.T) {
+	store := &seriesStore{}
+	metabatch.ResolveSeriesNames(store, []metabatch.CandidateResult{{Book: metabatch.CandidateBookInfo{ID: "x"}}})
+	if store.calls != 0 {
+		t.Errorf("read issued with nothing to resolve")
+	}
+	failing := []metabatch.CandidateResult{{Book: metabatch.BuildCandidateBookInfoNoFiles(&database.Book{ID: "b", SeriesID: intp(1)})}}
+	metabatch.ResolveSeriesNames(&seriesStore{err: errors.New("x")}, failing)
+	if failing[0].Book.Series != "" {
+		t.Errorf("failed read set series %q", failing[0].Book.Series)
+	}
+	var none metabatch.SeriesBatchGetter
+	metabatch.ResolveSeriesNames(none, failing) // nil store: no panic
 }

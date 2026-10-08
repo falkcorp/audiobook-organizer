@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.31.0
+// version: 1.31.1
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-10-07
 
@@ -588,16 +588,12 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		h.reviewSnap.requestRebuild()
 	}
 	lookupBook := set.book
-	// The cards' book-info block shows the series name. A book row that holds
-	// only its SeriesID (no embedded Series object) needs a series read; done
-	// for the served page only, memoized by id. A store without the read
-	// leaves those names empty rather than failing the listing.
-	seriesStore, _ := database.AsCapability[metabatch.SeriesGetter](h.store)
-	seriesNames := map[int]string{}
-	pageBookInfo := func(info metabatch.CandidateBookInfo) metabatch.CandidateBookInfo {
-		metabatch.ResolveSeriesName(seriesStore, &info, seriesNames)
-		return info
-	}
+	// The cards' book-info block shows the series name; a book row holding
+	// only its SeriesID needs the series table. Resolved in ONE batch read per
+	// response (metabatch.ResolveSeriesNames) -- both buckets are served whole
+	// to the lane (all=true), so a per-row read here would be an N+1 over the
+	// library. A store without the batch read leaves those names empty.
+	seriesStore, _ := database.AsCapability[metabatch.SeriesBatchGetter](h.store)
 	// orphaned counts cache rows that outlived their book. loadCacheRows counts
 	// it where the row is dropped: that is the only place that still knows WHY
 	// the row is going away, and a subtraction at the end cannot tell it apart
@@ -909,7 +905,7 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 				reviewStatus = *book.MetadataReviewStatus
 			}
 			rows = append(rows, metabatch.CandidateResult{
-				Book:             pageBookInfo(metabatch.BuildCandidateBookInfoNoFiles(book)),
+				Book:             metabatch.BuildCandidateBookInfoNoFiles(book),
 				Status:           u.status,
 				Error:            u.errMsg,
 				FetchedAt:        &fetchedAt,
@@ -919,6 +915,7 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 				ReviewStatus:     reviewStatus,
 			})
 		}
+		metabatch.ResolveSeriesNames(seriesStore, rows)
 		summary["results"] = rows
 		summary["bucket"] = reviewBucketUnreviewable
 		summary["total_count"] = len(unreviewableRows)
@@ -982,7 +979,7 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		// the candidates it still shows are older than the TTL.
 		isFresh := page[i].lastChecked.After(freshCutoff)
 		results = append(results, metabatch.CandidateResult{
-			Book:             pageBookInfo(metabatch.BuildCandidateBookInfoWithFacts(book, page[i].files)),
+			Book:             metabatch.BuildCandidateBookInfoWithFacts(book, page[i].files),
 			Candidate:        &cand,
 			Status:           page[i].status,
 			FetchedAt:        &fetchedAt,
@@ -997,6 +994,7 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		})
 	}
 
+	metabatch.ResolveSeriesNames(seriesStore, results)
 	summary["results"] = results
 	summary["total_count"] = len(reviewable)
 	// Whether `results` is the whole reviewable set, and the page size that

@@ -1,5 +1,5 @@
 // file: internal/metabatch/candidates.go
-// version: 1.16.0
+// version: 1.16.1
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-10-07
 //
@@ -74,7 +74,7 @@ type CandidateBookInfo struct {
 	// change (the review page's book-info block). Empty when unset. Series
 	// is the embedded Series object's name; a book whose series is held only
 	// by SeriesID leaves it empty here and the handler resolves it
-	// (ResolveSeriesName).
+	// (ResolveSeriesNames).
 	Narrator       string `json:"narrator,omitempty"`
 	Series         string `json:"series,omitempty"`
 	SeriesPosition string `json:"series_position,omitempty"`
@@ -360,32 +360,46 @@ func bookRowInfo(book *database.Book) CandidateBookInfo {
 	return info
 }
 
-// SeriesGetter is the read ResolveSeriesName needs.
-type SeriesGetter interface {
-	GetSeriesByID(id int) (*database.Series, error)
+// SeriesBatchGetter is the read ResolveSeriesNames needs.
+type SeriesBatchGetter interface {
+	GetSeriesByIDs(ids []int) (map[int]*database.Series, error)
 }
 
-// ResolveSeriesName fills info.Series from store when the book row held only
-// a SeriesID (the embedded Series object is dropped when it cannot be kept
-// consistent; reads then fall back to GetSeriesByID). cache, when non-nil,
-// memoizes names by id across one listing so a page of books in one series
-// costs one read. A failed read leaves Series empty.
-func ResolveSeriesName(store SeriesGetter, info *CandidateBookInfo, cache map[int]string) {
-	if info.Series != "" || info.SeriesID == nil || store == nil {
+// ResolveSeriesNames fills Book.Series on every result whose book row held
+// only a SeriesID (the embedded Series object is dropped when it cannot be
+// kept consistent; reads then fall back to the series table). The review
+// listing serves whole buckets (the lane sends all=true), so this is ONE
+// batch read for every missing id across results, never a read per row, and
+// none at all when no row needs one. A nil store or a failed read leaves those
+// names empty.
+func ResolveSeriesNames(store SeriesBatchGetter, results []CandidateResult) {
+	if store == nil {
 		return
 	}
-	id := *info.SeriesID
-	if name, ok := cache[id]; ok {
-		info.Series = name
+	seen := map[int]bool{}
+	var ids []int
+	for i := range results {
+		b := &results[i].Book
+		if b.Series == "" && b.SeriesID != nil && !seen[*b.SeriesID] {
+			seen[*b.SeriesID] = true
+			ids = append(ids, *b.SeriesID)
+		}
+	}
+	if len(ids) == 0 {
 		return
 	}
-	s, err := store.GetSeriesByID(id)
-	if err != nil || s == nil {
+	byID, err := store.GetSeriesByIDs(ids)
+	if err != nil {
 		return
 	}
-	info.Series = s.Name
-	if cache != nil {
-		cache[id] = s.Name
+	for i := range results {
+		b := &results[i].Book
+		if b.Series != "" || b.SeriesID == nil {
+			continue
+		}
+		if s := byID[*b.SeriesID]; s != nil {
+			b.Series = s.Name
+		}
 	}
 }
 
