@@ -78,7 +78,6 @@ func TestUpdateAudiobook_EmptySeriesNameResponseHasNoSeries(t *testing.T) {
 func realUpdateHandler(store *database.PebbleStore, svc *audiobooksmocks.MockAudiobookService) *audiobookshandler.Handler {
 	return audiobookshandler.New(
 		store, svc, audiobookspkg.NewAudiobookUpdateService(store),
-		func() audiobookshandler.WriteBackEnqueuer { return nil },
 		nil, nil, nil, nil,
 		cache.New[gin.H]("l", 0), cache.New[gin.H]("f", 0),
 		cache.New[*audiobookspkg.AuthorWithCountListResponse]("a", 0),

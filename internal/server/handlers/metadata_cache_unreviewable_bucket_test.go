@@ -129,7 +129,7 @@ func unreviewableFixture(t *testing.T, allowFileReads bool) *handlers.MetadataCa
 		Candidates: []json.RawMessage{json.RawMessage(`"not an object"`)},
 	}, true, nil)
 
-	return handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil, nil)
+	return handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil)
 }
 
 func TestGetCacheReviewResults_UnreviewableBucketMatchesTheChips(t *testing.T) {
@@ -226,7 +226,7 @@ func TestGetCacheReviewResults_RejectsUnknownBucket(t *testing.T) {
 	store.EXPECT().GetRaw(mock.Anything).Return(nil, nil).Maybe() // authority lists: no known people
 	store.EXPECT().GetBookFilesForIDsCore(mock.Anything).Return(map[string][]database.BookFileCore{}, nil).Maybe()
 	svc := handlersmocks.NewMockMetadataCacheFetchService(t)
-	h := handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil, nil)
+	h := handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil)
 	c, w := reviewCtx("bucket=everything")
 	h.GetCacheReviewResults(c)
 	assert.Equal(t, http.StatusBadRequest, w.Code)

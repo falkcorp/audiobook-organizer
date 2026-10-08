@@ -247,7 +247,7 @@ func serveReview(t testing.TB, h *MetadataCacheHandler, query string) (reviewRes
 func TestReviewIndex_SameRowsAndCountsAsAll(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store, svc := reviewSeed(t, 300)
-	h := NewMetadataCacheHandler(store, svc, nil, nil, nil, nil)
+	h := NewMetadataCacheHandler(store, svc, nil, nil, nil)
 
 	all, _ := serveReview(t, h, "all=true")
 	idx, _ := serveReview(t, h, "all=true&view=index")
@@ -316,7 +316,7 @@ func TestReviewIndex_SameRowsAndCountsAsAll(t *testing.T) {
 func TestReviewSnapshot_StatusIsLive(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store, svc := reviewSeed(t, 60)
-	h := NewMetadataCacheHandler(store, svc, nil, nil, nil, nil)
+	h := NewMetadataCacheHandler(store, svc, nil, nil, nil)
 	before, _ := serveReview(t, h, "all=true")
 	var target string
 	for _, r := range before.Data.Results {
@@ -401,7 +401,7 @@ func BenchmarkReviewLoad(b *testing.B) {
 		}
 		b.ReportMetric(float64(len(prev.rows)), "rows")
 	})
-	h := NewMetadataCacheHandler(store, svc, nil, nil, nil, nil)
+	h := NewMetadataCacheHandler(store, svc, nil, nil, nil)
 	_, _ = serveReview(b, h, "limit=1") // build the snapshot once
 	for _, q := range []string{"all=true", "all=true&view=index", "limit=50&offset=1000", "ids=" + firstIDs(b, h, 50)} {
 		b.Run("after_warm_"+strings.NewReplacer("=", "_", "&", "+", ",", "").Replace(q[:min(len(q), 24)]), func(b *testing.B) {
@@ -442,7 +442,7 @@ func firstIDs(b *testing.B, h *MetadataCacheHandler, n int) string {
 // counter -- without it the snapshot would rebuild only on marks and age.
 func TestReviewSnapshot_RealStoreResolvesTheWriteCounter(t *testing.T) {
 	store, svc := reviewSeed(t, 3)
-	h := NewMetadataCacheHandler(store, svc, nil, nil, nil, nil)
+	h := NewMetadataCacheHandler(store, svc, nil, nil, nil)
 	require.NotNil(t, h.reviewSnap.gen)
 	before := h.reviewSnap.gen()
 	require.NoError(t, store.PutMetadataCache(&database.MetadataCandidateCache{BookID: "x"}))

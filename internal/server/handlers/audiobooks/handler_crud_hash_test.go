@@ -62,7 +62,6 @@ func TestUpdateAudiobook_WriteBackRecordsNewFileHash(t *testing.T) {
 	d.store.EXPECT().GetBookNarrators("b1").Return([]database.BookNarrator{}, nil).Maybe()
 	d.store.EXPECT().SetLastWrittenAt("b1", mock.Anything).Return(nil)
 	d.svc.EXPECT().InvalidateListCache().Return()
-	d.writeBack.EXPECT().Enqueue("b1").Return()
 	c, w := newCtx("PUT", "/audiobooks/b1", map[string]any{"title": "A New Title"}, p("id", "b1"))
 	h.UpdateAudiobook(c)
 	if w.Code != http.StatusOK {

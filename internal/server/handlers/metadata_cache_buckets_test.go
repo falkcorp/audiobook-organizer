@@ -116,7 +116,7 @@ func TestGetCacheReviewResults_BucketsAndStaleness(t *testing.T) {
 	preserved.LastEmptyFetchAt = &now
 	svc.EXPECT().GetCachedCandidates("preserved").Return(preserved, true, nil)
 
-	h := handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil, nil)
+	h := handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil)
 	c, w := reviewCtx("limit=0&offset=0")
 	h.GetCacheReviewResults(c)
 

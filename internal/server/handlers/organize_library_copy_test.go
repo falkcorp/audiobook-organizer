@@ -111,7 +111,7 @@ func TestOrganizeHandlers_ProtectedOriginalActsOnItsLibraryCopy(t *testing.T) {
 	orgSvc.SetOrganizeHooks(spy)
 	previewSvc := organizer.NewPreviewService(store)
 	previewSvc.ResolveLibraryCopy = resolve
-	h := handlers.NewOrganizeHandler(store, nil, previewSvc, orgSvc, nil, nil, false)
+	h := handlers.NewOrganizeHandler(store, nil, previewSvc, orgSvc, nil, false)
 	h.SetLibraryCopyResolver(resolve)
 
 	call := func(method string, fn gin.HandlerFunc) (int, map[string]any) {

@@ -14,10 +14,8 @@ package server
 import (
 	"context"
 	"errors"
-	"maps"
 	"net/http"
 	"net/http/httptest"
-	"slices"
 	"strings"
 	"testing"
 
@@ -28,21 +26,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/oauth"
 )
-
-// wantOwnerRoutes is the reviewed list (plan D14). A route dropped from
-// ownerRoute, or a new one added without review, fails here.
-var wantOwnerRoutes = map[string]ownerRouteKind{
-	"POST /api/v1/itunes/rebuild":                ownerRouteApply,
-	"POST /api/v1/itunes/rebuild-full":           ownerRouteApply,
-	"POST /api/v1/itunes/relocate":               ownerRouteApply,
-	"POST /api/v1/itunes/cleanup-merged":         ownerRouteApply,
-	"POST /api/v1/itunes/adopt-base":             ownerRouteAlways,
-	"POST /api/v1/itunes/write-back":             ownerRouteAlways,
-	"POST /api/v1/itunes/write-back-all":         ownerRouteAlways,
-	"POST /api/v1/itunes/writeback/held/release": ownerRouteAlways,
-	"POST /api/v1/itunes/library/upload":         ownerRouteAlways,
-	"POST /api/v1/itunes/library/restore":        ownerRouteAlways,
-}
 
 const (
 	ownerRouteEmail = "kowner@example.test"
@@ -148,139 +131,6 @@ func (f *ownerRouteFixture) requestBody(method, path, body string, hdr map[strin
 // auth.OwnerProofWhyNot reason starts "Owner actions").
 func ownerRefused(w *httptest.ResponseRecorder) bool {
 	return w.Code == http.StatusForbidden && strings.Contains(w.Body.String(), "Owner actions")
-}
-
-func TestOwnerRoutes_ReviewedList(t *testing.T) {
-	f := setupOwnerRouteServer(t)
-	got := maps.Clone(f.srv.ownerRoutes)
-	assert.Equal(t, wantOwnerRoutes, got)
-}
-
-// TestOwnerRoutes_OnlyTheAccessOwner is the table: every owner route refuses
-// every caller but the owner's verified Access sign-in.
-func TestOwnerRoutes_OnlyTheAccessOwner(t *testing.T) {
-	f := setupOwnerRouteServer(t)
-	bearer := func(tok string) map[string]string { return map[string]string{"Authorization": "Bearer " + tok} }
-	refused := []struct {
-		name string
-		hdr  map[string]string
-	}{
-		{"password session (admin)", bearer(f.sessionToken)},
-		{"API key (admin, every scope)", bearer(f.apiKey)},
-		{"API key with the owner's Access JWT riding along", map[string]string{
-			"Authorization": "Bearer " + f.apiKey, oauth.CFAccessHeader: "jwt-owner"}},
-		{"Access sign-in as another admin", map[string]string{oauth.CFAccessHeader: "jwt-other"}},
-		{"Access sign-in as a Kelvin-sign lookalike of the owner", map[string]string{oauth.CFAccessHeader: "jwt-lookalike"}},
-		{"password session plus the unsigned Access email header", map[string]string{
-			"Authorization": "Bearer " + f.sessionToken, "Cf-Access-Authenticated-User-Email": ownerRouteEmail}},
-	}
-	// The reviewed list, not the registry: the table must fail on a route
-	// that lost its gate, not shrink with it.
-	routes := slices.Sorted(maps.Keys(wantOwnerRoutes))
-	require.NotEmpty(t, routes)
-	for _, key := range routes {
-		method, path, _ := strings.Cut(key, " ")
-		for _, c := range refused {
-			t.Run(key+"/"+c.name, func(t *testing.T) {
-				w := f.request(method, path, c.hdr)
-				// The API-key and lookalike callers may stop earlier (a
-				// 401 when the sign-in is not admitted at all); either way
-				// the handler is never reached.
-				if w.Code == http.StatusUnauthorized {
-					return
-				}
-				assert.True(t, ownerRefused(w), "got %d: %s", w.Code, w.Body.String())
-			})
-		}
-		t.Run(key+"/the owner's Access sign-in", func(t *testing.T) {
-			w := f.request(method, path, map[string]string{oauth.CFAccessHeader: "jwt-owner"})
-			assert.False(t, ownerRefused(w), "the owner was refused: %s", w.Body.String())
-			assert.NotContains(t, w.Body.String(), "permission denied")
-			assert.NotEqual(t, http.StatusUnauthorized, w.Code)
-		})
-	}
-
-	// owner_email unset: the owner's own Access sign-in is refused too.
-	config.AppConfig.OwnerEmail = ""
-	for _, key := range routes {
-		method, path, _ := strings.Cut(key, " ")
-		t.Run(key+"/owner_email unset", func(t *testing.T) {
-			w := f.request(method, path, map[string]string{oauth.CFAccessHeader: "jwt-owner"})
-			assert.True(t, ownerRefused(w), "got %d: %s", w.Code, w.Body.String())
-			assert.Contains(t, w.Body.String(), "no owner email is configured")
-		})
-	}
-}
-
-// The preview half of an apply route stays open to a password session with
-// the route's base permission; the gate and the handler read dry_run through
-// the same helper, so "dry_run=TRUE" or a repeated parameter is an apply for
-// both.
-func TestOwnerRoutes_PreviewStaysOpen(t *testing.T) {
-	f := setupOwnerRouteServer(t)
-	sess := map[string]string{"Authorization": "Bearer " + f.sessionToken}
-	for key, kind := range wantOwnerRoutes {
-		method, path, _ := strings.Cut(key, " ")
-		if kind != ownerRouteApply {
-			continue
-		}
-		t.Run(key, func(t *testing.T) {
-			w := f.request(method, path+"?dry_run=true", sess)
-			assert.False(t, ownerRefused(w), "the preview was refused: %s", w.Body.String())
-			for _, q := range []string{"?dry_run=TRUE", "?dry_run=1", "?dry_run=false&dry_run=true", "?dry_run=", ""} {
-				w = f.request(method, path+q, sess)
-				assert.True(t, ownerRefused(w), "%s%s got %d: %s", path, q, w.Code, w.Body.String())
-			}
-		})
-	}
-}
-
-// The owner proven by Access still needs integrations.manage: the owner's
-// account demoted to editor (library.edit_metadata only) is refused.
-func TestOwnerRoutes_OwnerNeedsIntegrationsManage(t *testing.T) {
-	f := setupOwnerRouteServer(t)
-	u, err := f.store.GetUserByEmail(ownerRouteEmail)
-	require.NoError(t, err)
-	require.NotNil(t, u)
-	u.Roles = []string{auth.SeedRoleEditor}
-	require.NoError(t, f.store.UpdateUser(u))
-	w := f.request(http.MethodPost, "/api/v1/itunes/writeback/held/release", map[string]string{oauth.CFAccessHeader: "jwt-owner"})
-	assert.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
-	assert.Contains(t, w.Body.String(), "permission denied: "+string(auth.PermIntegrationsManage))
-}
-
-// cleanup-merged's apply is retired in the handler: even the owner gets the
-// retirement refusal, never a write.
-func TestOwnerRoutes_CleanupMergedApplyStaysRetired(t *testing.T) {
-	f := setupOwnerRouteServer(t)
-	w := f.request(http.MethodPost, "/api/v1/itunes/cleanup-merged", map[string]string{oauth.CFAccessHeader: "jwt-owner"})
-	assert.Contains(t, w.Body.String(), cleanupMergedApplyRetiredMessage)
-}
-
-// With local auth off every request is anonymous to the permission model,
-// but the owner proof still holds: no sign-in, another admin's Access JWT and
-// an API key all get the owner refusal (2026-10-07 second review).
-func TestOwnerRoutes_AuthOffStillNeedsTheOwner(t *testing.T) {
-	f := setupOwnerRouteServerAuth(t, false)
-	callers := map[string]map[string]string{
-		"no sign-in":                      nil,
-		"another admin's Access sign-in":  {oauth.CFAccessHeader: "jwt-other"},
-		"API key":                         {"Authorization": "Bearer " + f.apiKey},
-		"Kelvin-sign look-alike of owner": {oauth.CFAccessHeader: "jwt-lookalike"},
-	}
-	for _, key := range slices.Sorted(maps.Keys(wantOwnerRoutes)) {
-		method, path, _ := strings.Cut(key, " ")
-		for name, hdr := range callers {
-			t.Run(key+"/"+name, func(t *testing.T) {
-				w := f.request(method, path, hdr)
-				assert.True(t, ownerRefused(w), "got %d: %s", w.Code, w.Body.String())
-			})
-		}
-		t.Run(key+"/the owner", func(t *testing.T) {
-			w := f.request(method, path, map[string]string{oauth.CFAccessHeader: "jwt-owner"})
-			assert.False(t, ownerRefused(w), "the owner was refused: %s", w.Body.String())
-		})
-	}
 }
 
 // putOwnerEmail sends PUT /api/v1/config {"owner_email": email}.

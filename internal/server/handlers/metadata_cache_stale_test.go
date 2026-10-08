@@ -99,7 +99,7 @@ func TestStaleCachedBookIDs_MatchesTheSummaryStaleCount(t *testing.T) {
 	}, ids)
 
 	// The count the rail shows, from the same fixture.
-	h := handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil, nil)
+	h := handlers.NewMetadataCacheHandler(store, svc, nil, nil, nil)
 	c, w := reviewCtx("all=true")
 	h.GetCacheReviewResults(c)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
