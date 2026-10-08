@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.86.0
+// version: 2.87.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-10-07
+// last-edited: 2026-10-08
 
 package server
 
@@ -237,7 +237,6 @@ type Server struct {
 	metricsStore       database.MetricsStorer
 	dedupEngine        *dedup.Engine
 	activityWriter     *activity.Writer
-	itunesActivityFn   func(entry database.ActivityEntry)
 	eventBus           *plugin.EventBus
 	pluginRegistry     *plugin.Registry
 	quarantineSvc      *quarantine.QuarantineService
@@ -961,16 +960,6 @@ func NewServer(store database.Store) *Server {
 		return err
 	}
 
-	// Wire iTunes-specific organizer callbacks now that itunesSvc is ready.
-	if server.itunesSvc.Enabled() {
-		server.organizeService.DiscoverITunesLibraryPath = func() string {
-			return server.itunesSvc.Importer.DiscoverLibraryPath()
-		}
-		server.organizeService.ExecuteITunesSync = func(ctx context.Context, log logger.Logger, libraryPath string) error {
-			return server.itunesSvc.Importer.Sync(ctx, libraryPath, nil, server.itunesActivityFn, log)
-		}
-	}
-
 	server.importService.SetDedupEngine(server.dedupEngine)
 	// M4: wire the UOS registry so the importer can enqueue dedup.check-book
 	// when DedupOnImportViaScheduler is enabled in config (default false).
@@ -996,7 +985,7 @@ func NewServer(store database.Store) *Server {
 	// happens in those services' PostInit hooks.
 	// What's left in this block is genuinely server-internal: starting
 	// the writer, the global log.SetOutput, extraOpsRegistrar back-fill,
-	// the itunesActivityFn closure, scanner.SetScanHooks (process-global),
+	// scanner.SetScanHooks (process-global),
 	// and the startup-record entry.
 	if server.activityService != nil {
 		// activityWriter is started by Container.Start in Server.Start
@@ -1021,11 +1010,6 @@ func NewServer(store database.Store) *Server {
 			// via aw → stdout).
 			handler := slog.NewTextHandler(aw, &slog.HandlerOptions{Level: slog.LevelInfo})
 			slog.SetDefault(slog.New(handler))
-		}
-
-		// Task 15: iTunes sync → activity log
-		server.itunesActivityFn = func(entry database.ActivityEntry) {
-			_ = server.activityService.Record(entry)
 		}
 
 		// Task 16: Scanner → activity log (via ScanHooks interface)

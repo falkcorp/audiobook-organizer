@@ -1,7 +1,7 @@
 // file: internal/itunes/service/types.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 43dcecba-4cba-4139-bd4c-5047a9a1f0c0
-// last-edited: 2026-09-02
+// last-edited: 2026-10-08
 
 package itunesservice
 
@@ -156,17 +156,4 @@ type ImportStatusSnapshot struct {
 	Linked    int
 	Failed    int
 	Errors    []string
-}
-
-// SyncRequest is the wire type for POST /itunes/sync.
-type SyncRequest struct {
-	LibraryPath  string        `json:"library_path,omitempty"`
-	PathMappings []PathMapping `json:"path_mappings,omitempty"`
-	Force        bool          `json:"force,omitempty"`
-}
-
-// SyncResponse acknowledges a queued sync.
-type SyncResponse struct {
-	OperationID string `json:"operation_id"`
-	Message     string `json:"message"`
 }

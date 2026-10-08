@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_mock_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: e7f1a2b3-4c5d-6e7f-8a9b-0c1d2e3f4a5b
-// last-edited: 2026-10-07
+// last-edited: 2026-10-08
 
 package itunesservice
 
@@ -97,41 +97,6 @@ func TestGetStatusBulk_Mixed(t *testing.T) {
 	unknown := result[unknownID]
 	require.NotNil(t, unknown, "unknown ID should return zero-value snapshot, not nil")
 	assert.Equal(t, 0, unknown.Total)
-}
-
-// ---------------------------------------------------------------------------
-// DiscoverLibraryPath tests
-// ---------------------------------------------------------------------------
-
-func TestDiscoverLibraryPath_FromConfig(t *testing.T) {
-	// DiscoverLibraryPath scans books for ITunesImportSource.
-	// "from config" means we return via a book that has the source set.
-	source := "/mnt/bigdata/books/itunes/iTunes Library.xml"
-	isPrimary := true
-
-	book := database.Book{
-		ID:                 "book-src",
-		IsPrimaryVersion:   &isPrimary,
-		ITunesImportSource: func() *string { s := source; return &s }(),
-	}
-
-	m := dbmocks.NewMockStore(t)
-	m.EXPECT().GetAllBooksCore(100, 0).Return([]database.BookCore{book.Core()}, nil)
-
-	imp := newMockImporter(m)
-	result := imp.DiscoverLibraryPath()
-
-	assert.Equal(t, source, result)
-}
-
-func TestDiscoverLibraryPath_Empty(t *testing.T) {
-	m := dbmocks.NewMockStore(t)
-	m.EXPECT().GetAllBooksCore(100, 0).Return([]database.BookCore{}, nil)
-
-	imp := newMockImporter(m)
-	result := imp.DiscoverLibraryPath()
-
-	assert.Equal(t, "", result)
 }
 
 // ---------------------------------------------------------------------------

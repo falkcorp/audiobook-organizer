@@ -1,7 +1,7 @@
 // file: internal/server/wire_media_routes.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: c9d0e1f2-a3b4-5678-cdef-901234567890
-// last-edited: 2026-10-07
+// last-edited: 2026-10-08
 
 package server
 
@@ -42,7 +42,6 @@ func (s *Server) wireMediaRoutes(
 		itunesG.GET("/import-status/:id", s.perm(auth.PermLibraryView), itunesH.ImportStatus)
 		itunesG.POST("/import-status/bulk", s.perm(auth.PermLibraryEditMetadata), itunesH.ImportStatusBulk)
 		itunesG.GET("/library-status", s.perm(auth.PermLibraryView), itunesH.LibraryStatus)
-		itunesG.POST("/sync", s.perm(auth.PermLibraryEditMetadata), itunesH.Sync)
 	}
 
 	// AI domain (migrated from server_lifecycle.go).

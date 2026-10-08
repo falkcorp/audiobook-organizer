@@ -45,50 +45,6 @@ func (_m *MockITunesImporter) EXPECT() *MockITunesImporter_Expecter {
 	return &MockITunesImporter_Expecter{mock: &_m.Mock}
 }
 
-// DiscoverLibraryPath provides a mock function for the type MockITunesImporter
-func (_mock *MockITunesImporter) DiscoverLibraryPath() string {
-	ret := _mock.Called()
-
-	if len(ret) == 0 {
-		panic("no return value specified for DiscoverLibraryPath")
-	}
-
-	var r0 string
-	if returnFunc, ok := ret.Get(0).(func() string); ok {
-		r0 = returnFunc()
-	} else {
-		r0 = ret.Get(0).(string)
-	}
-	return r0
-}
-
-// MockITunesImporter_DiscoverLibraryPath_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DiscoverLibraryPath'
-type MockITunesImporter_DiscoverLibraryPath_Call struct {
-	*mock.Call
-}
-
-// DiscoverLibraryPath is a helper method to define mock.On call
-func (_e *MockITunesImporter_Expecter) DiscoverLibraryPath() *MockITunesImporter_DiscoverLibraryPath_Call {
-	return &MockITunesImporter_DiscoverLibraryPath_Call{Call: _e.mock.On("DiscoverLibraryPath")}
-}
-
-func (_c *MockITunesImporter_DiscoverLibraryPath_Call) Run(run func()) *MockITunesImporter_DiscoverLibraryPath_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		run()
-	})
-	return _c
-}
-
-func (_c *MockITunesImporter_DiscoverLibraryPath_Call) Return(s string) *MockITunesImporter_DiscoverLibraryPath_Call {
-	_c.Call.Return(s)
-	return _c
-}
-
-func (_c *MockITunesImporter_DiscoverLibraryPath_Call) RunAndReturn(run func() string) *MockITunesImporter_DiscoverLibraryPath_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // GetStatus provides a mock function for the type MockITunesImporter
 func (_mock *MockITunesImporter) GetStatus(opID string) *itunesservice.ImportStatusSnapshot {
 	ret := _mock.Called(opID)

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/itunes.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: d4e5f6a7-b8c9-0123-defa-123456789012
-// last-edited: 2026-10-07
+// last-edited: 2026-10-08
 
 package handlers
 
@@ -79,6 +79,7 @@ type ITunesImportStatusResponse struct {
 	TotalBooks  int      `json:"total_books"`
 	Processed   int      `json:"processed"`
 	Imported    int      `json:"imported"`
+	Linked      int      `json:"linked"`
 	Skipped     int      `json:"skipped"`
 	Failed      int      `json:"failed"`
 	Errors      []string `json:"errors,omitempty"`
@@ -104,23 +105,10 @@ type ITunesTestExample struct {
 	Path  string `json:"path"`
 }
 
-// ITunesSyncRequest is the wire type for POST /itunes/sync.
-type ITunesSyncRequest struct {
-	LibraryPath  string               `json:"library_path,omitempty"`
-	PathMappings []itunes.PathMapping `json:"path_mappings,omitempty"`
-	Force        bool                 `json:"force,omitempty"`
-}
-
-// ITunesSyncResponse acknowledges a sync operation.
-type ITunesSyncResponse struct {
-	OperationID string `json:"operation_id"`
-	Message     string `json:"message"`
-}
-
 // --- enqueue param wrappers ---
 //
 // These mirror the unexported server-package types of the same shape
-// (server.itunesImportOpParams / server.itunesSyncOpParams). EnqueueOp
+// (server.itunesImportOpParams). EnqueueOp
 // json.Marshals params immediately, and the op executors in package server
 // json.Unmarshal them back into their own copies — so the wire shape (JSON
 // tags) must stay byte-identical to the server-side definitions, even though
@@ -129,12 +117,6 @@ type ITunesSyncResponse struct {
 type itunesImportOpParams struct {
 	LegacyOpID string                      `json:"legacy_op_id"`
 	Request    itunesservice.ImportRequest `json:"request"`
-}
-
-type itunesSyncOpParams struct {
-	LegacyOpID   string               `json:"legacy_op_id"`
-	LibraryPath  string               `json:"library_path"`
-	PathMappings []itunes.PathMapping `json:"path_mappings"`
 }
 
 // --- narrow dependency interfaces ---
@@ -156,7 +138,6 @@ type ITunesService interface {
 type ITunesImporter interface {
 	GetStatus(opID string) *itunesservice.ImportStatusSnapshot
 	GetStatusBulk(ids []string) map[string]*itunesservice.ImportStatusSnapshot
-	DiscoverLibraryPath() string
 }
 
 // ITunesStore is the narrow database interface ITunesHandler requires. It lists
@@ -174,7 +155,7 @@ type ITunesStore interface {
 }
 
 // ITunesHandler handles the iTunes HTTP endpoints: validate, test-mapping,
-// import (+ status), write-back (+ all/preview), library-status, sync,
+// import (+ status), library-status,
 // library-stats, and listing iTunes-linked books. All business logic lives in
 // internal/itunes/service; this layer is request/response translation plus the
 // enabled/disabled and database-initialized guards.
@@ -473,6 +454,7 @@ func (h *ITunesHandler) ImportStatus(c *gin.Context) {
 		TotalBooks:  snapshot.Total,
 		Processed:   snapshot.Processed,
 		Imported:    snapshot.Imported,
+		Linked:      snapshot.Linked,
 		Skipped:     snapshot.Skipped,
 		Failed:      snapshot.Failed,
 		Errors:      snapshot.Errors,
@@ -518,6 +500,7 @@ func (h *ITunesHandler) ImportStatusBulk(c *gin.Context) {
 			TotalBooks:  snapshot.Total,
 			Processed:   snapshot.Processed,
 			Imported:    snapshot.Imported,
+			Linked:      snapshot.Linked,
 			Skipped:     snapshot.Skipped,
 			Failed:      snapshot.Failed,
 			Errors:      snapshot.Errors,
@@ -575,80 +558,6 @@ func (h *ITunesHandler) LibraryStatus(c *gin.Context) {
 		"last_synced": rec.ModTime,
 		"size":        rec.Size,
 		"changed":     changed,
-	})
-}
-
-// Sync triggers an incremental sync from iTunes Library.xml.
-func (h *ITunesHandler) Sync(c *gin.Context) {
-	if !h.itunesEnabledOrError(c) {
-		return
-	}
-	if h.store == nil {
-		httputil.RespondWithInternalError(c, "database not initialized")
-		return
-	}
-	if h.registry == nil {
-		httputil.RespondWithInternalError(c, "operation registry not initialized")
-		return
-	}
-
-	var req ITunesSyncRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		req = ITunesSyncRequest{}
-	}
-
-	libraryPath := req.LibraryPath
-	if libraryPath != "" {
-		cleanLibPath, err := pathvalidation.CleanAbsolutePath(libraryPath)
-		if err != nil {
-			httputil.RespondWithBadRequest(c, "invalid library_path: "+err.Error())
-			return
-		}
-		libraryPath = cleanLibPath
-	} else {
-		libraryPath = config.AppConfig.ITunes.LibraryReadPath
-		if libraryPath == "" {
-			libraryPath = h.importer.DiscoverLibraryPath()
-		}
-	}
-	if libraryPath == "" {
-		httputil.RespondWithBadRequest(c, "no iTunes library path configured or provided")
-		return
-	}
-
-	if _, err := os.Stat(libraryPath); os.IsNotExist(err) {
-		httputil.RespondWithBadRequest(c, "iTunes library file not found")
-		return
-	}
-
-	if !req.Force {
-		if rec, err := h.store.GetLibraryFingerprint(libraryPath); err == nil && rec != nil {
-			if info, statErr := os.Stat(libraryPath); statErr == nil {
-				if info.Size() == rec.Size && info.ModTime().Equal(rec.ModTime) {
-					httputil.RespondWithOK(c, gin.H{"message": "no changes detected — use force:true to sync anyway", "operation_id": ""})
-					return
-				}
-			}
-		}
-	}
-
-	pathMappings := req.PathMappings
-	if len(pathMappings) == 0 {
-		for _, m := range config.AppConfig.ITunes.PathMappings {
-			pathMappings = append(pathMappings, itunes.PathMapping{From: m.From, To: m.To})
-		}
-	}
-
-	syncParams := itunesSyncOpParams{LibraryPath: libraryPath, PathMappings: pathMappings}
-	opID, enqErr := h.registry.EnqueueOp(c.Request.Context(), "itunes.sync", syncParams)
-	if enqErr != nil {
-		httputil.InternalError(c, "failed to enqueue operation", enqErr)
-		return
-	}
-
-	httputil.RespondWithSuccess(c, http.StatusAccepted, ITunesSyncResponse{
-		OperationID: opID,
-		Message:     "iTunes sync operation queued",
 	})
 }
 

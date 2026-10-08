@@ -1,7 +1,7 @@
 // file: internal/organizer/service.go
-// version: 1.58.0
+// version: 1.59.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
-// last-edited: 2026-10-07
+// last-edited: 2026-10-08
 
 package organizer
 
@@ -166,14 +166,6 @@ type Service struct {
 	// alone. Set by the server package after construction.
 	ResolveLibraryCopy LibraryCopyResolver
 
-	// DiscoverITunesLibraryPath discovers the iTunes library path.
-	// Set by the server package after construction.
-	DiscoverITunesLibraryPath func() string
-
-	// ExecuteITunesSync executes an iTunes library sync.
-	// Set by the server package after construction.
-	ExecuteITunesSync func(ctx context.Context, log logger.Logger, libraryPath string) error
-
 	// ApplyOrganizedFileMetadata applies metadata from an organized file to a Book.
 	// Set by the server package after construction.
 	ApplyOrganizedFileMetadata func(book *database.Book, newPath string)
@@ -247,10 +239,6 @@ func NewService(db Store) *Service {
 	return &Service{
 		db: db,
 		// Default no-ops for optional callbacks
-		DiscoverITunesLibraryPath: func() string { return "" },
-		ExecuteITunesSync: func(ctx context.Context, log logger.Logger, libraryPath string) error {
-			return nil
-		},
 		ApplyOrganizedFileMetadata: func(book *database.Book, newPath string) {},
 		ComputeITunesPath:          func(_ string) string { return "" },
 		FetchMetadataForBook:       func(_ context.Context, _ string) (any, error) { return nil, nil },
@@ -262,7 +250,6 @@ type Request struct {
 	FolderPath         *string
 	Priority           *int
 	FetchMetadataFirst bool
-	SyncITunesFirst    bool
 	OperationID        string
 	BookIDs            []string // if set, only organize these books
 	// LockBooksAgainstScan makes each book's organize take its per-book scan
@@ -315,11 +302,6 @@ func (orgSvc *Service) PerformOrganize(ctx context.Context, req *Request, log lo
 // failed before organizing anything.
 func (orgSvc *Service) PerformOrganizeStats(ctx context.Context, req *Request, log logger.Logger) (*Stats, error) {
 	log.Info("Starting file organization")
-
-	// Optional: sync iTunes library first to ensure all books are up to date
-	if req.SyncITunesFirst {
-		orgSvc.syncITunesBeforeOrganize(ctx, log)
-	}
 
 	// Auto-backup database before organizing
 	orgSvc.autoBackup(ctx, log)
@@ -727,27 +709,6 @@ func (orgSvc *Service) autoBackup(ctx context.Context, log logger.Logger) backup
 	log.Info("Auto-backup created: %s (%d bytes) in %s via %s",
 		info.Filename, info.Size, time.Since(start).Truncate(time.Second), method)
 	return method
-}
-
-func (orgSvc *Service) syncITunesBeforeOrganize(ctx context.Context, log logger.Logger) {
-	if !config.AppConfig.ITunes.SyncEnabled {
-		log.Info("Skipping iTunes sync before organize: itunes.sync_enabled is false")
-		return
-	}
-	libraryPath := orgSvc.DiscoverITunesLibraryPath()
-	if libraryPath == "" {
-		log.Info("Skipping iTunes sync: no library found")
-		return
-	}
-
-	log.Info("Running iTunes sync before organize: %s", libraryPath)
-
-	if err := orgSvc.ExecuteITunesSync(ctx, log, libraryPath); err != nil {
-		log.Warn("iTunes pre-sync failed (continuing with organize): %s", err.Error())
-		return
-	}
-
-	log.Info("iTunes sync completed successfully")
 }
 
 func (orgSvc *Service) FilterBooksNeedingOrganization(allBooks []database.Book, log logger.Logger) ([]database.Book, []database.Book) {
