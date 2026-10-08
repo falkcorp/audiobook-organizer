@@ -310,7 +310,11 @@ export const CandidatesCard = memo(function CandidatesCard({
     setMark(k, {});
     api
       .recordCandidateFeedback(feedbackInput(c, 'negative', rank, count))
-      .then((res) => setMark(k, { id: res.id }))
+      // Only while the mark is still there: an Apply of the same candidate
+      // may have cleared it (and turned the record positive) meanwhile.
+      .then((res) =>
+        setMarks((prev) => (prev.has(k) ? new Map(prev).set(k, { id: res.id }) : prev))
+      )
       .catch((err: unknown) => {
         setMark(k, undefined);
         setFeedbackError(err instanceof Error ? err.message : 'Could not record the feedback');

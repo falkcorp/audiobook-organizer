@@ -132,12 +132,18 @@ func (s *Server) handleDeleteCandidateFeedback(c *gin.Context) {
 // handleExportCandidateFeedback streams every label as JSON Lines, one record
 // per line, paging the key space so memory does not grow with the dataset.
 func (s *Server) handleExportCandidateFeedback(c *gin.Context) {
+	bookID := c.Query("book_id")
+	if strings.ContainsAny(bookID, ":/") {
+		// Checked before the stream headers go on, so the 400 is plain JSON.
+		httputil.RespondWithBadRequest(c, "book_id may not contain ':' or '/'")
+		return
+	}
 	c.Header("Content-Type", "application/x-ndjson")
 	c.Header("Content-Disposition", `attachment; filename="candidate-feedback.jsonl"`)
 	c.Status(http.StatusOK)
 	enc := json.NewEncoder(c.Writer)
 	n := 0
-	err := s.candidateFeedbackStore().Each(c.Query("book_id"), func(fb *database.CandidateFeedback) error {
+	err := s.candidateFeedbackStore().Each(bookID, func(fb *database.CandidateFeedback) error {
 		n++
 		return enc.Encode(fb)
 	})
@@ -150,9 +156,7 @@ func (s *Server) handleExportCandidateFeedback(c *gin.Context) {
 		// truncated body and the log line above.
 		return
 	}
-	if errors.Is(err, database.ErrCandidateFeedbackInvalid) {
-		httputil.RespondWithBadRequest(c, err.Error())
-		return
-	}
+	c.Header("Content-Type", "application/json")
+	c.Header("Content-Disposition", "")
 	httputil.RespondWithInternalError(c, "could not export candidate feedback")
 }
