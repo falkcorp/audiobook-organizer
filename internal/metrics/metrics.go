@@ -1,7 +1,7 @@
 // file: internal/metrics/metrics.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: 9f8e7d6c-5b4a-3210-9fed-cba876543210
-// last-edited: 2026-10-04
+// last-edited: 2026-10-07
 
 package metrics
 
@@ -321,6 +321,15 @@ func Register() {
 			absListeningStatsReadFailures,
 			pebbleCollectorInstance)
 		prometheus.MustRegister(pipelineCollectors...)
+		// The metadata-provider caches are DB-backed and only touched when a
+		// metadata search or fetch runs, so after a restart their series did
+		// not exist until the first lookup -- indistinguishable in Grafana from
+		// "this cache has no metric". Export them at zero from startup.
+		for _, name := range []string{"metadata_fetch", "metadata_search"} {
+			cacheHits.WithLabelValues(name)
+			cacheMisses.WithLabelValues(name, "not_found")
+			cacheSets.WithLabelValues(name)
+		}
 	})
 }
 

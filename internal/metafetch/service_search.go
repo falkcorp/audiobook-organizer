@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_search.go
-// version: 1.40.3
+// version: 1.40.4
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
-// last-edited: 2026-10-06
+// last-edited: 2026-10-07
 
 package metafetch
 
@@ -1226,9 +1226,10 @@ func (mfs *Service) searchMetadataForBook(
 	// "; "-separated, so sharesPerson can tell the names apart.
 	people := strings.Trim(searchAuthor+"; "+bookNarrator, "; ")
 	strong := newStrongCriteria(in.parsed, searchTitle, in.literal, asinToLookup, searchAuthor, bookDurationSec)
-	states := mfs.runSearchFanout(fanoutParams{
+	fp := fanoutParams{
 		ctx: ctx, limiter: limiter, bookID: id, identity: searchIdentity, opts: opts, people: people, strong: strong,
-	}, sources, variants)
+	}
+	states := mfs.runSearchFanout(fp, sources, variants)
 	// One Audnexus lookup per book: the own-ASIN fallback below, when it may
 	// run, is reserved first; otherwise one runtime fill.
 	//
@@ -1241,7 +1242,7 @@ func (mfs *Service) searchMetadataForBook(
 	needOwnASIN := asinToLookup != "" && !poolHasASINWithRuntime(states, asinToLookup) &&
 		asinLookupAllowed(opts, sources)
 	if !needOwnASIN {
-		mfs.enrichRuntimeByASIN(ctx, limiter, states, bookDurationSec)
+		mfs.enrichRuntimeByASIN(fp, states, bookDurationSec)
 	}
 
 	type sourceFetch struct {
@@ -1458,14 +1459,14 @@ func (mfs *Service) searchMetadataForBook(
 		return fallback
 	}
 	if needOwnASIN {
-		result, err := mfs.lookupASIN(ctx, limiter, metadata.SourceIDAudible, asinToLookup)
+		result, err := mfs.cachedLookupASIN(fp, metadata.SourceIDAudible, asinToLookup)
 		if err != nil {
 			lookupFailed[providerName(metadata.SourceIDAudible, "Audible")] = err
 		}
 		if err != nil || result == nil {
 			searchFanoutLog.Debug("search ASIN lookup on Audible failed, trying Audnexus: asin=%s err=%v",
 				logger.SanitizeLogValue(asinToLookup), err)
-			result, err = mfs.lookupASIN(ctx, limiter, metadata.SourceIDAudnexus, asinToLookup)
+			result, err = mfs.cachedLookupASIN(fp, metadata.SourceIDAudnexus, asinToLookup)
 			if err != nil {
 				lookupFailed[providerName(metadata.SourceIDAudnexus, "Audnexus (Audible)")] = err
 			} else {
