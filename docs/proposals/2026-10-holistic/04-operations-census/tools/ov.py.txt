@@ -1,0 +1,91 @@
+# file: docs/proposals/2026-10-holistic/04-operations-census/tools/ov.py.txt
+# version: 1.0.0
+# guid: ecc58d67-bf7f-49f9-96aa-945357ab6cb9
+# last-edited: 2026-10-08
+import json
+rows=json.load(open('rows.json')); defs={r['ID']:r for r in json.load(open('defs.json'))}
+use=json.load(open('usage.json'))
+ov={}
+def V(i,v): ov.setdefault(i,{})['verdict']=v
+def T(i,t): ov.setdefault(i,{})['trig']=t
+# trigger corrections
+T('maintenance.window','sched-task: maintenance window (scheduler/maintenance.go:241, daily inside configured window); UI /maintenance-window/run')
+for i,l in [('dedup.series-dedup','handlers/duplicates/handler.go:732'),('dedup.series-merge','handlers/duplicates/handler.go:786'),('dedup.series-scan','handlers/duplicates/handler.go:642')]:
+  T(i,'code-enqueue: '+l+' (launchOp, dedup page)')
+T('dedup.series-prune','sched-task:series_prune; code-enqueue: handlers/duplicates/handler.go:756 (launchOp)')
+T('dedup.series-normalize','sched-task:series_normalize (interval 0, window off: effectively manual); code-enqueue: handlers/duplicates/handler.go:808')
+T('entities.author-merge','code-enqueue: handlers/entities/handler.go:1190 (opType var, :729)')
+T('entities.resolve-production-author','code-enqueue: handlers/entities/handler.go:1190 (opType var, :1063)')
+T('maintenance.recompact-activity-digests','code-enqueue: handlers/activity_compact.go:149 (activity page button)')
+T('maintenance.compact-activity-log','code-enqueue: handlers/activity_compact.go:107; web')
+for i in ['repairs.plan','repairs.apply']: T(i,'code-enqueue: handlers/repairs/handler.go:494 (Repairs tab); web')
+T('dedup.check-book','code-enqueue: importer/service.go:412 ONLY when dedup.on_import_via_scheduler=true (default false: an inline goroutine runs instead)')
+T('metadata.candidate-fetch','sched-task:candidate_fetch; code-enqueue: metadata_batch_candidates.go:209; child of 2 Repairs fixers')
+T('deluge.protected-paths-sync','cron-decl(unread): */30 — never runs on a schedule; API-only. Harmless: the cache refreshes lazily on TTL')
+for i in ['maintenance.orphan-row-blocking-probe']:
+  pass
+# verdicts
+twins={ # loser -> survivor, note
+ 'scheduler.purge-deleted':('maintenance.purge-deleted','body copy of Server.runAutoPurgeSoftDeleted (extra_ops.go:1023 vs audiobooks_helpers.go:253)'),
+ 'scheduler.temp-file-cleanup':('maintenance.temp-file-cleanup','both call sweep.CleanupOrphanedTempFiles'),
+ 'scheduler.trash-cleanup':('maintenance.trash-cleanup','both call CleanupTrashedVersions'),
+ 'scheduler.tombstone-cleanup':('maintenance.tombstone-cleanup','both call ResolveTombstoneChains'),
+ 'scheduler.db-optimize':('maintenance.db-optimize','db.go comment: "same work under another ID"'),
+ 'scheduler.cleanup-old-backups':('maintenance.cleanup-old-backups','DIVERGED: scheduler copy uses PurgeSoftDeletedAfterDays as backup retention (extra_ops.go:686); plugin copy uses BackupRetentionDays'),
+ 'scheduler.metadata-refresh':('maintenance.metadata-refresh','scheduler has its own runMetadataRefreshScan copy (extra_ops.go:1060) vs metadata_ops.go:1186'),
+ 'scheduler.author-split-scan':('maintenance.author-split-scan','~240-line inline copy; both carry the ModifyBook fix, i.e. fixed twice'),
+ 'scheduler.resolve-production-authors':('maintenance.resolve-production-authors','parallel copies'),
+ 'maintenance.series-prune':('dedup.series-prune','both call Server.executeSeriesPrune'),
+ 'maintenance.series-normalize':('dedup.series-normalize','both call executeSeriesNormalizeCore'),
+}
+for l,(s,n) in twins.items():
+  V(l,f'PRUNE twin -> merge into `{s}` (FormerIDs alias). {n}')
+  V(s,ov.get(s,{}).get('verdict','') or f'keep (survivor of twin `{l}`; retarget TaskScheduler)')
+V('scheduler.isbn-enrichment','PRUNE: retired stub, returns ErrISBNEnrichmentRetired; add to retiredOpIDs')
+V('maintenance.isbn-enrichment','PRUNE: retired stub, returns ErrISBNEnrichmentRetired; add to retiredOpIDs')
+V('maintenance.batch-poller','PRUNE or ADOPT: unreached; batch_poller task polls inline (tasks.go:1248). Pick one path (see N3)')
+V('maintenance.author-dedup-scan','REVIEW near-twin of dedup.author-scan (the scheduled one); cron unread, API-only')
+V('scheduler.dedup-llm-review','REVIEW near-twin of dedup.llm-review (both call Engine.RunLLMReview?); different ConcurrencyKeys, so they can run concurrently')
+V('maintenance.reconcile-scan','REVIEW near-twin of reconcile.scan (BuildReconcilePreview vs RunReconcileScan)')
+V('maintenance.cleanup-backups','REVIEW third "delete .bak" implementation (different regex, extra_ops.go:719 comment)')
+V('maintenance.fix-book-file-paths','REVIEW: marks missing book_files; overlaps mark-missing-files (the dashboard counter writer)')
+V('maintenance.repair-missing-files','REVIEW: overlaps missing-file-repoint + recover-missing-files')
+V('maintenance.bulk-fetch-metadata','REVIEW: third whole-library fetch (vs library.bulk-metadata-fetch, metadata.candidate-fetch)')
+V('maintenance.author-title-fragment-scan','REVIEW report-only; absorbable into Repairs fixer plan')
+V('operations.backfill-legacy-status','PRUNE with v1 table: one-shot ran 2026-08-22 (1,737 rows), re-run found 0; v1 has 0 writers')
+for i in ['maintenance.external-id-backfill','maintenance.movement-atom-cleanup','maintenance.malformed-m4b-remux','maintenance.malformed-m4b-transcode','maintenance.book-atpath-index-backfill','maintenance.opchange-book-index-rebuild','maintenance.activity-filter-index-backfill','maintenance.repair-merged-user-state']:
+  V(i,'keep; CONVERT its boot goroutine twin to enqueue this op (§3)')
+for i in ['library.bulk-write-back','maintenance.bulk-write-back']:
+  V(i,'OUT OF SCOPE (write-back ban; do not touch)')
+V('maintenance.file-integrity-check','FIX: cron declared, no task -> never scheduled. Wire a task or drop Schedule')
+V('maintenance.orphan-book-files-cleanup','FIX: cron declared, no task -> never scheduled. Wire a task or drop Schedule')
+V('deluge.protected-paths-sync','FIX: drop the unread Schedule (lazy cache already refreshes); keep as manual button')
+for i in ['acoustid.lsh-backfill','acoustid.reset-all','deluge.centralize','deluge.path-update']:
+  V(i,(ov.get(i,{}).get('verdict','keep')+'; RunItems without Concurrency (sequential)').lstrip('; '))
+# usage
+for r in rows:
+  u=use[r['id']]; short=r['id'].split('.',1)[1]; m=sorted(set(x for x in u['mem']+(u['memshort'] if ('-' in short and len(short)>=10) else []) if x!='MEMORY.md'))
+  ov.setdefault(r['id'],{})['usage']=(f"memory:{len(m)} ("+', '.join(x.replace('.md','') for x in m[:2])+")" if m else 'memory:0')+f"; docs:{u['docs']}"
+  d=defs[r['id']]
+  idem=[]
+  if d['ResumePolicy']=='requeue': idem.append('declared-idempotent(requeue)')
+  if d['DedupeQueuedRuns']: idem.append('dedupe-queued')
+  if 'dry' in (d['Description'] or '').lower() or 'report' in (d['Description'] or '').lower() or 'read-only' in (d['Description'] or '').lower(): idem.append('dry-run/report')
+  ov[r['id']]['idem']=','.join(idem) or 'unverified'
+  ov[r['id']]['what']=(d['Description'] or d['DisplayName']).split('. ')[0][:140]
+json.dump(ov,open('overrides.json','w'),indent=1)
+print(len(ov))
+# public-repo scrub: drop quoted example strings (they can carry real titles/names) and library counts
+import re
+for k,v in ov.items():
+  w=v.get('what','')
+  w=re.sub(r"[\"'‘“][^\"'’”]{1,80}[\"'’”]",'"…"',w)
+  w=re.sub(r"\(e\.g$|e\.g$",'',w).strip()
+  w=re.sub(r"Measured [0-9,]+ of [0-9,]+[^.]*",'',w)
+  v['what']=w
+json.dump(ov,open('overrides.json','w'),indent=1)
+for k,v in ov.items():
+  w=v['what']
+  w=re.split(r'\s*\(\s*["\'“‘…]|["“…]|\s\(e\.g', w)[0].rstrip(' ,:;—-')
+  v['what']=w
+json.dump(ov,open('overrides.json','w'),indent=1)

@@ -1,0 +1,104 @@
+<!-- file: docs/proposals/2026-10-holistic/06-bleeding-edge/react-router-files.md -->
+<!-- version: 1.0.0 -->
+<!-- guid: c4a9e2b7-5f13-4d0a-8e6c-1b7d3f9a2e50 -->
+<!-- last-edited: 2026-10-08 -->
+
+# react-router 8 file list (appendix to 06, PR P10)
+
+Command: `grep -rlE "from ['\"]react-router-dom['\"]" web/src web/tests` at HEAD, 2026-10-08. 95 files (10 test files). Plus `web/vite.config.ts` (chunk regex), `web/package.json`, `web/package-lock.json`.
+
+- `web/src/App.test.tsx`
+- `web/src/App.tsx`
+- `web/src/components/AnnouncementBanner.tsx`
+- `web/src/components/FingerprintVisualsColumn.tsx`
+- `web/src/components/ReviewBanner.tsx`
+- `web/src/components/bookdetail/BookDetailInfoTab.authorlink.test.tsx`
+- `web/src/components/bookdetail/BookDetailInfoTab.serieslink.test.tsx`
+- `web/src/components/bookdetail/BookDetailInfoTab.tsx`
+- `web/src/components/bookdetail/BookDetailStatusAlerts.test.tsx`
+- `web/src/components/bookdetail/BookDetailStatusAlerts.tsx`
+- `web/src/components/bookdetail/BookDetailVersionGroup.tsx`
+- `web/src/components/dedup/CandidateCompareDrawer.tsx`
+- `web/src/components/dedup/DedupAIReviewTab.tsx`
+- `web/src/components/dedup/DedupAcousticTab.tsx`
+- `web/src/components/dedup/DedupAuthorTab.tsx`
+- `web/src/components/dedup/DedupEmbeddingTab.tsx`
+- `web/src/components/dedup/DedupSplitBookTab.tsx`
+- `web/src/components/dedup/__tests__/CandidateCompareDrawer.test.tsx`
+- `web/src/components/dedup/__tests__/DedupAIReviewTab.test.tsx`
+- `web/src/components/dedup/__tests__/DedupAcousticTab.selectAll.test.tsx`
+- `web/src/components/dedup/__tests__/DedupAuthorTab.test.tsx`
+- `web/src/components/dedup/__tests__/DedupBookTab.selectAll.test.tsx`
+- `web/src/components/dedup/__tests__/DedupBookTab.test.tsx`
+- `web/src/components/dedup/__tests__/DedupEmbeddingTab.test.tsx`
+- `web/src/components/dedup/__tests__/dedupTabs.selectAll.test.tsx`
+- `web/src/components/layout/OperationsIndicator.grouping.test.tsx`
+- `web/src/components/layout/OperationsIndicator.loadError.test.tsx`
+- `web/src/components/layout/OperationsIndicator.order.test.tsx`
+- `web/src/components/layout/OperationsIndicator.queued.test.tsx`
+- `web/src/components/layout/OperationsIndicator.terminal.test.tsx`
+- `web/src/components/layout/OperationsIndicator.tsx`
+- `web/src/components/layout/Sidebar.tsx`
+- `web/src/components/layout/TopBar.tsx`
+- `web/src/components/layout/UserMenu.tsx`
+- `web/src/components/review/CommandBar.test.tsx`
+- `web/src/components/review/CommandBar.tsx`
+- `web/src/components/review/DupesPanel.tsx`
+- `web/src/components/review/RepairsPanel.test.tsx`
+- `web/src/components/review/ReviewWorkspace.chipFilters.test.tsx`
+- `web/src/components/review/ReviewWorkspace.manualSearch.test.tsx`
+- `web/src/components/review/ReviewWorkspace.refetchStale.test.tsx`
+- `web/src/components/review/ReviewWorkspace.replaceConfirm.test.tsx`
+- `web/src/components/review/ReviewWorkspace.searchProviders.test.tsx`
+- `web/src/components/review/ReviewWorkspace.selectAll.test.tsx`
+- `web/src/components/review/ReviewWorkspace.test.tsx`
+- `web/src/components/review/ReviewWorkspace.tsx`
+- `web/src/components/review/lanes/useDupesLane.selection.test.tsx`
+- `web/src/components/review/repairs/RepairsDetailsView.tsx`
+- `web/src/components/review/repairs/RowParts.tsx`
+- `web/src/components/review/spine/DupesSpine.memo.test.tsx`
+- `web/src/components/review/spine/DupesSpine.test.tsx`
+- `web/src/components/review/spine/DupesSpine.tsx`
+- `web/src/components/review/spine/RegroupSpine.memo.test.tsx`
+- `web/src/components/review/useDedupPipeline.tsx`
+- `web/src/hooks/useKeyboardShortcuts.ts`
+- `web/src/hooks/useLibraryQuery.ts`
+- `web/src/hooks/useSettingsHandlers.ts`
+- `web/src/hooks/useUnsavedChangesBlocker.ts`
+- `web/src/main.tsx`
+- `web/src/pages/ActivityLog.test.tsx`
+- `web/src/pages/ActivityLog.tsx`
+- `web/src/pages/AuthorDetail.test.tsx`
+- `web/src/pages/AuthorDetail.tsx`
+- `web/src/pages/Authors.tsx`
+- `web/src/pages/BookDedup.tsx`
+- `web/src/pages/BookDetail.edit-save.test.tsx`
+- `web/src/pages/BookDetail.files-history.test.tsx`
+- `web/src/pages/BookDetail.hash-chain.test.tsx`
+- `web/src/pages/BookDetail.race.test.tsx`
+- `web/src/pages/BookDetail.reviewOnlyFetch.test.tsx`
+- `web/src/pages/BookDetail.tsx`
+- `web/src/pages/BookDetail.unlock.test.tsx`
+- `web/src/pages/Dashboard.tsx`
+- `web/src/pages/DedupLabels.tsx`
+- `web/src/pages/FileBrowser.tsx`
+- `web/src/pages/Library.bulkFetch.test.tsx`
+- `web/src/pages/Library.fetchOpToast.test.tsx`
+- `web/src/pages/Library.importFile.test.tsx`
+- `web/src/pages/Library.resetNavigation.test.tsx`
+- `web/src/pages/Library.savedFilterPresets.test.tsx`
+- `web/src/pages/Library.scopedTagCloud.test.tsx`
+- `web/src/pages/Library.seriesChip.test.tsx`
+- `web/src/pages/Library.seriesIdLink.test.tsx`
+- `web/src/pages/Library.tsx`
+- `web/src/pages/Login.test.tsx`
+- `web/src/pages/Login.tsx`
+- `web/src/pages/PlaylistDetail.tsx`
+- `web/src/pages/Playlists.tsx`
+- `web/src/pages/Series.tsx`
+- `web/src/pages/Settings.tsx`
+- `web/src/pages/Setup.tsx`
+- `web/src/pages/System.tsx`
+- `web/src/pages/__tests__/DedupLabels.test.tsx`
+- `web/src/test/renderWithProviders.tsx`
+- `web/tests/unit/BookDetail.test.tsx`

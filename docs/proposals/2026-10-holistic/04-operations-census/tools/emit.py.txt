@@ -1,0 +1,78 @@
+# file: docs/proposals/2026-10-holistic/04-operations-census/tools/emit.py.txt
+# version: 1.0.0
+# guid: 16cf830d-c888-43df-98dc-e401fb10832c
+# last-edited: 2026-10-08
+import json,csv,os,sys
+D=os.path.join(os.environ.get('REPO', '.'), 'docs/proposals/2026-10-holistic/04-operations-census')
+rows=[r for r in json.load(open('rows.json')) if r['id']!='maintenance.orphan-row-blocking-probe']
+ov=json.load(open('overrides.json')) if os.path.exists('overrides.json') else {}
+COND={'deluge':'RootDir!="" AND Deluge client','itunes':'RootDir!="" AND iTunes enabled','acoustid':'dedup engine AND embedding store','dedup':'dedup update service wired'}
+for r in rows:
+  o=ov.get(r['id'],{})
+  r.update(o)
+  r['cond']=COND.get(r['id'].split('.')[0],'always') if r['plugin'] in ('deluge','itunes','acoustid','dedup') and not r['loc'].startswith('internal/server') else 'always'
+def esc(s): return str(s).replace('|','\\|').replace('\n',' ')
+with open(D+'/ops-census.csv','w',newline='') as f:
+  w=csv.writer(f); cols=['id','plugin','cond','loc','what','trig','ri','conc','resume','cancel','live','key','writes','timeout','idem','usage','verdict']
+  w.writerow(cols)
+  for r in rows: w.writerow([r.get(c,'') for c in cols])
+hdr='''<!-- file: docs/proposals/2026-10-holistic/04-operations-census/ops-census.md -->
+<!-- version: 1.1.0 -->
+<!-- guid: 9f4c2a71-3e58-4b06-8d1a-6c7e0b5f2d94 -->
+<!-- last-edited: 2026-10-08 -->
+
+# Operations census: every registered OperationDef at HEAD
+
+**Source of truth.** Generated from a real registry boot, not from grep. A test file supplied through
+`go test -overlay` (no repo file was changed) called the same `bootRegisteredOpIDs` helper
+that `TestOpIDs_NoRenameWithoutAlias` uses. That helper registers the server's ops plus every SDK plugin's `OperationDefs()`. The test then dumped
+`opRegistry.ActiveDefs()`.
+
+- Result: **241 defs, minus 7 that only test code registers = 234 production defs.** The 7 are the 6 `maintenance.test-probe-*` jobs plus `maintenance.orphan-row-blocking-probe`, which `maintenance_orphan_row_test.go:64` registers. The ledger lists it anyway. Base commit: `f7211eb39`.
+- `op_ids.golden` holds 247 lines: 235 registered IDs, 7 FormerIDs aliases, and 5 IDs retired on purpose. The 235 includes the test-only `orphan-row-blocking-probe`.
+- **To reproduce,** use the copies in `tools/`. Each carries a `.txt` suffix so that `go vet ./...` does not compile it.
+  1. Copy `tools/census_test.go.txt` to a scratch path and write an overlay JSON that maps `<repo>/internal/server/zz_census_overlay_test.go` to that path.
+  2. Run `CENSUS_OUT=defs.json go test -overlay overlay.json ./internal/server -run TestZZCensusDump`.
+  3. With `REPO` set to the absolute repo root, run `python3 -I tools/locate.py.txt`, then `gen.py.txt`, `ov.py.txt` and `emit.py.txt`. Each script reads its JSON inputs from its own directory.
+  4. For the RunItems Concurrency scan, copy `tools/runitems_scan.go.txt` to `main.go` in an empty directory and run `go run main.go <repo>`.
+
+**Column key**
+
+| Column | Meaning |
+|---|---|
+| `def` | The file and line of the def's `ID:` line, or of the maintenance job's `ID()` method. |
+| `trigger` | `sched-task:X`: the `internal/scheduler/tasks.go` TaskScheduler task X enqueues it. That task fires on an interval, at startup, or in the maintenance window, depending on config. |
+| | `cron-decl(unread)`: the def declares `Schedule`, but **nothing evaluates it**. See finding F2. |
+| | `child-of`: another op enqueues it. |
+| | `UI:/maintenance/jobs`: listed and run from the Maintenance page. |
+| | `code-enqueue`: a Go call site enqueues it (an HTTP handler or a fixer). |
+| | `web:`: the ID appears literally in `web/src` (usually through `triggerOp`). |
+| | `API-only`: nothing in the repo enqueues it. Only a hand-typed `POST /api/v1/operations/v2 {def_id}` runs it. |
+| `RI` | The number of `RunItems(` calls in the def's run file. This is file-level and approximate. |
+| `conc` | The `Concurrency:` expressions found in that file. Empty means RunItems runs sequentially. |
+| `resume` | The `ResumePolicy`. |
+| `C` | Whether the op is `Cancellable`. |
+| `live` | The `Liveness` mode. |
+| `key` | The `ConcurrencyKey`. |
+| `idempotency` | Derived only from `requeue` (the policy declares a re-run is safe), `DedupeQueuedRuns`, or a dry-run/report-only description. Everything else is `unverified`, not proven non-idempotent. |
+| `last-known usage` | How many memory notes name the op on a line that also says ran, applied, dry run or similar, plus how many current docs mention it. Memory notes live outside this public repo, so only their file names are cited. |
+| `verdict` | This census's recommendation. See `../04-operations-census.md` §2. |
+
+**Registration gates (the `cond` column).**
+- The gate that hid 105 maintenance ops when RootDir was empty is gone. `TestNewServer_RegistersOpsWithEmptyRootDir` (`internal/server/server_op_registration_test.go:30`) pins that.
+- The SDK plugins still register conditionally:
+  - deluge: RootDir and a Deluge client (`internal/plugins/deluge/register.go:34,38`);
+  - itunes: RootDir and the iTunes service enabled (`internal/plugins/itunes/register.go:52`);
+  - acoustid: the dedup engine and the embedding store (`internal/plugins/acoustid/register.go:32`);
+  - dedup: the update service wired (`internal/plugins/dedup/register.go:82`).
+- The census boot registers those plugins' `OperationDefs()` by hand. So `cond` says when each one actually exists in a production process.
+- The 8 `dedup.*` defs that `internal/server/duplicates_ops.go` registers are unconditional.
+
+| id | cond | def | what | trigger | RI | conc | resume | C | live | key | idempotency | last-known usage | verdict |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+'''
+with open(D+'/ops-census.md','w') as f:
+  f.write(hdr)
+  for r in rows:
+    f.write('| `%s` | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n'%(r['id'],esc(r['cond']),esc(r['loc']),esc(r.get('what') or r['name']),esc(r['trig']),r['ri'],esc(r['conc']),r['resume'],'Y' if r['cancel'] else 'N',r['live'],esc(r['key']) if r['key']!=r['id'] else '=id',esc(r.get('idem','')),esc(r.get('usage','')),esc(r.get('verdict') or 'keep')))
+print(len(rows))
