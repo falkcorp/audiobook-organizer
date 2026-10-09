@@ -1,5 +1,5 @@
 # file: .github/workflows/ci.yml
-# version: 3.18.0
+# version: 3.19.0
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
 # last-edited: 2026-10-09
 
@@ -9,6 +9,18 @@
 # Full suite (property tests, coverage, E2E) runs via nightly.yml.
 name: Continuous Integration
 
+# No `paths-ignore` here, on purpose (07-C2, 2026-10-09). The `changes` job
+# below decides which jobs run; a docs-only event still produces a run in
+# which everything but `changes` is skipped. That run concludes `success`,
+# which matters on main: auto-revert.yml's span selector
+# (.github/workflows/scripts/auto_revert.py, select_span) walks back from a
+# red commit to the newest commit whose gate run is GREEN, and a commit with
+# NO run is "unverified" -- it stays inside the revert span and cannot
+# anchor it. A trigger-level filter would give every docs-only push no run,
+# so each one would widen the next revert span, be reverted though
+# innocent, and three in a row would exceed max_span and downgrade the
+# revert to a report. auto-revert-backstop.yml's `--limit 1` lookup has the
+# same blind spot. A ~15 s `changes` job per docs push buys a green anchor.
 on:
   push:
     branches: [main, master]
@@ -25,9 +37,65 @@ permissions:
   checks: write
 
 jobs:
+  # What changed, so the jobs below can skip what cannot be affected.
+  #   go=true   any changed path outside web/ and outside the docs globs
+  #             (docs/, *.md, changelog.d/, todo.d/, .claude/, agents/, skills/)
+  #   web=true  any changed path under web/ or .github/workflows/
+  # A workflow-file change sets both. Any error reading the diff fails OPEN
+  # (both true): a missed skip costs minutes, a wrong skip hides a failure.
+  # No Go test reads a file under a docs glob as an input (07-C2 Step 6,
+  # verified 2026-10-09: the two grep hits only assert on literal path
+  # strings), so docs-only really cannot change a Go verdict.
+  changes:
+    name: Changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      go: ${{ steps.classify.outputs.go }}
+      web: ${{ steps.classify.outputs.web }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Classify changed paths
+        id: classify
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          go=true; web=true; range=''
+          case "$EVENT" in
+            pull_request) range="origin/${BASE_REF}...HEAD" ;;
+            push) [[ "$BEFORE" =~ ^0+$ ]] || range="${BEFORE}...${AFTER}" ;;
+          esac
+          if [ -n "$range" ] && files=$(git diff --name-only "$range") && [ -n "$files" ]; then
+            go=false; web=false
+            while IFS= read -r f; do
+              case "$f" in web/*|.github/workflows/*) web=true ;; esac
+              case "$f" in
+                web/*|docs/*|*.md|changelog.d/*|todo.d/*|.claude/*|agents/*|skills/*) ;;
+                *) go=true ;;
+              esac
+            done <<<"$files"
+          fi
+          echo "go=$go web=$web (${range:-no range: fail open})"
+          { echo "go=$go"; echo "web=$web"; } >> "$GITHUB_OUTPUT"
+
   # Parallel fast jobs via reusable minimal workflow
   ci:
     name: Minimal CI
+    needs: changes
+    # The reusable workflow has no input to skip its Go jobs (07-C3 asks for
+    # one upstream), so a web-only change still runs them; only the frontend
+    # half is switchable from here.
+    if: ${{ needs.changes.outputs.go == 'true' || needs.changes.outputs.web == 'true' }}
     # Pin bumped 2026-08-12 to pick up falkcorp/github-common#346, which raises
     # the `Go Tests (short, race)` job cap from 20 to 35 minutes. That job runs
     # `go test -short -race -timeout 30m ./...`, so at a cap of 20 the runner
@@ -48,7 +116,7 @@ jobs:
       node-version: '26'
       system-packages: 'libtag1-dev'
       frontend-working-dir: 'web'
-      run-frontend: true
+      run-frontend: ${{ needs.changes.outputs.web == 'true' }}
       go-lint: true
       # --enable-only OVERRIDES .golangci.yml's enable list, and it is load-bearing,
       # not a tidiness flag. That config also enables errcheck, which currently has
@@ -93,10 +161,10 @@ jobs:
   # the baseline is a count rather than a per-file list, and
   # docs/audits/2026-08-18-interface-width-shapes.md for what the 5 are.
   #
-  # Fails in BOTH directions: up (a new wide interface) and down (the count
-  # dropped and nobody lowered the baseline, which would silently re-open room
-  # for a wide interface later). Mutation-verified 3/3 on 2026-08-18 against a
-  # fresh clone of main.
+  # One-way since 2026-10-09 (D47, #3867): fails only when the count goes UP.
+  # A drop prints a ::notice:: naming the new number and passes; the earning
+  # PR (or 07-G4's scheduled job) lowers the baseline. Until then a drop
+  # also failed, which turned main red on an improvement.
   #
   # This job reports and does not block -- and that is the design, not a gap.
   # main has NO required status checks (verified 2026-08-20, after classic branch
@@ -111,6 +179,8 @@ jobs:
   # produce.
   interface-width:
     name: Interface Width Ratchet
+    needs: changes
+    if: ${{ needs.changes.outputs.go == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -175,6 +245,8 @@ jobs:
   # consequential.
   errcheck-ratchet:
     name: Errcheck Ratchet
+    needs: changes
+    if: ${{ needs.changes.outputs.go == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -251,6 +323,8 @@ jobs:
   # anyway -- and then this job fails on main, and the merge gets reverted.
   repo-guards:
     name: Repo Guards
+    needs: changes
+    if: ${{ needs.changes.outputs.go == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -324,6 +398,8 @@ jobs:
   # Project-specific: verify mockery mocks are not stale
   mocks-check:
     name: Mock Freshness
+    needs: changes
+    if: ${{ needs.changes.outputs.go == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -420,6 +496,8 @@ jobs:
   # looked. assemble_todo.py now strips them on collect; this job is the second
   # layer, catching a leak that arrives some other way (a hand edit, a different
   # assembler, a revert). Seconds to run, and it needs no toolchain.
+  # Deliberately NOT gated on `changes`: TODO.md is a docs path, and this is
+  # the one job a docs-only change must still run.
   todo-header-lint:
     name: TODO Fragment Headers
     runs-on: ubuntu-latest
@@ -442,6 +520,8 @@ jobs:
   # next morning.
   coverage-gate:
     name: Coverage Floor (PR gate)
+    needs: changes
+    if: ${{ needs.changes.outputs.go == 'true' }}
     runs-on: ubuntu-latest
     # 35, not 20. `make test-short` runs go test with `-timeout 25m`, so a cap
     # of 20 would let the runner kill this job BEFORE Go's own timeout could
@@ -523,6 +603,8 @@ jobs:
   # interface-width above: there are no required status checks).
   fixture-tests:
     name: Fixture Tests (no -short, race) ${{ matrix.shard }}
+    needs: changes
+    if: ${{ needs.changes.outputs.go == 'true' }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
