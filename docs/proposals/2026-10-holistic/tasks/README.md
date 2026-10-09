@@ -1,5 +1,5 @@
 <!-- file: docs/proposals/2026-10-holistic/tasks/README.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 2f8c6a4e-9b1d-4e73-8a5c-6d0f3b2e7c19 -->
 <!-- last-edited: 2026-10-09 -->
 
@@ -23,9 +23,10 @@ One brief per PR for waves 0, 1, 2 and freeze window F of `../08-integrated-road
 ## How to run one
 
 1. Pick the first brief in the wave whose **`Merge first`** list is fully merged. That list (the first sentence of every brief's `Depends on` cell, and the last column of the table below) is the only authoritative ordering; the prose after it explains why. The `Blocks` cell is generated from the `Merge first` lists by `scripts/check_task_briefs.py --regen-blocks --index` (which also verifies ids, wave order and cycles, and rebuilds this page); it is never hand-edited. Ids named as "not briefed" are wave 3 and 4 roadmap PRs with no brief yet.
-2. Start a subagent with the model in its header and this instruction: "Execute `docs/proposals/2026-10-holistic/tasks/<file>` exactly. Read it fully first. Work in a worktree. Report in the brief's Report format."
-3. Merge one PR at a time (CI is single-threaded). Hotspot files have a fixed order in `../08-integrated-roadmap.md` §4. Where a §4 chain crosses waves (for example `config.go`: 02 PR 10 is wave 3 but sits mid-chain), the earlier wave merges first and the chain is only a rebase order.
-4. Re-plan after 02-PR4 lands: the `ident:` counts replace the dated bucket estimates.
+2. Before the first brief of a wave starts, bring every brief in that wave up to the current `00-TEMPLATE.md`: a cold-read of all 25 wave-0 briefs on 2026-10-09 found the same seven gaps in nearly every one (no re-verify grep block, no `Already done if` idempotency probe, no `Anti-over-suppression` line, relative worktree path, trailers not spelled out, placeholder changelog names, the `Merge first` id repeated in the prose). The template now carries all seven; a wave-0 brief is the shape to copy. Run the brief's re-verify greps at `origin/main` and fix any drift before handing it out.
+3. Start a subagent with the model in its header and this instruction: "Execute `docs/proposals/2026-10-holistic/tasks/<file>` exactly. Read it fully first. Work in a worktree. Report in the brief's Report format."
+4. Merge one PR at a time (CI is single-threaded). Hotspot files have a fixed order in `../08-integrated-roadmap.md` §4. Where a §4 chain crosses waves (for example `config.go`: 02 PR 10 is wave 3 but sits mid-chain), the earlier wave merges first and the chain is only a rebase order.
+5. Re-plan after 02-PR4 lands: the `ident:` counts replace the dated bucket estimates.
 
 ### Hub files: expect a rebase conflict, keep both sides
 
