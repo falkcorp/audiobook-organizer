@@ -1,7 +1,7 @@
 # file: .github/workflows/ci.yml
-# version: 3.17.2
+# version: 3.18.0
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
-# last-edited: 2026-10-06
+# last-edited: 2026-10-09
 
 # Fast parallel CI for PRs and pushes.
 # Runs go vet/build, short tests, frontend lint/build, and frontend unit tests
@@ -147,7 +147,7 @@ jobs:
       # would trip the ratchet and look like a code change.
       - name: Install golangci-lint
         run: |
-          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - name: Check interface width against baseline
@@ -208,7 +208,7 @@ jobs:
       # count on its own and trip the ratchet as if code had changed.
       - name: Install golangci-lint
         run: |
-          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - name: Check errcheck findings against baseline
@@ -332,10 +332,19 @@ jobs:
         with:
           submodules: recursive
 
+      # Pinned to the exact patch, unlike every other job's floating '1.27':
+      # mockery v3.8.0 (the newest release on 2026-10-09) vendors an x/tools
+      # that reads export data up to format version 4, and go1.27.2 writes
+      # version 5, so under 1.27.2 it fails every package with "could not
+      # import fmt ... export data version 5 is greater than maximum supported
+      # version 4" (ci.yml run 37886715226, the first after setup-go started
+      # resolving '1.27' to 1.27.2). Return this to '1.27' when a mockery
+      # release reads version 5; the golangci-lint jobs already moved to
+      # v2.14.0 for the same reason and float again.
       - name: Set up Go (no built-in cache)
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.27'
+          go-version: '1.27.1'
           cache: false
 
       - name: Restore Go cache (manual)

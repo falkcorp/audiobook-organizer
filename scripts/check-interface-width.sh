@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # file: scripts/check-interface-width.sh
-# version: 1.5.0
+# version: 1.6.0
 # guid: 5f1c07a3-84be-4d29-9e60-3b7a2d5c81ef
-# last-edited: 2026-08-19
+# last-edited: 2026-10-09
 #
 # Ratchet on the number of `interfacebloat` findings. See
 # .interface-width-baseline for why this counts rather than listing files.
@@ -87,7 +87,42 @@ this gate measured nothing. Exit 0 means clean and 1 means findings; anything
 else is a run failure, most often a version mismatch -- this repo's .golangci.yml
 is v2 format, and a v1 binary earlier on PATH exits 3 without linting anything.
 
-  golangci-lint --version   # expected: 2.x, CI pins v2.12.2
+  golangci-lint --version   # expected: 2.x, CI pins v2.14.0
+
+MSG
+  exit 2
+fi
+
+# Exit 1 with no "N issues" summary is a third "did not run" shape: the binary
+# started but died before linting (an "exec format error" from a binary built
+# for another GOOS, a panic, an OOM kill reported through a wrapper). Only a
+# run that reached its summary line produced a count.
+if [[ "$rc" -eq 1 ]] && ! printf '%s\n' "$output" | grep -qE '^[0-9]+ issues'; then
+  printf '%s\n' "$output" | tail -5 >&2
+  cat >&2 <<MSG
+
+FAIL: golangci-lint exited 1 without printing its "N issues" summary, so it did
+not finish a run and the count above is not a measurement.
+
+MSG
+  exit 2
+fi
+
+# A typecheck failure is also "did not run": golangci-lint exits 1 for it, the
+# same as for real findings, and under --enable-only every other linter's
+# findings are dropped, so a tree the linter could not type-check reports
+# ZERO findings and exit 1 -- the shape of a complete clean-up. It happened on
+# 2026-10-09: setup-go's floating '1.27' picked up go1.27.2, whose export data
+# (format version 5) golangci-lint v2.12.2's x/tools cannot read, and this gate
+# printed actual=0 against a baseline in the hundreds. Refuse the number.
+if printf '%s\n' "$output" | grep -qE '^\* typecheck: [0-9]+$|\(typecheck\)$'; then
+  printf '%s\n' "$output" | grep -E '\(typecheck\)$|^\* typecheck:' | head -5 >&2
+  cat >&2 <<MSG
+
+FAIL: golangci-lint could not type-check the tree (see the typecheck lines
+above), so any count it printed is not a measurement. The usual cause is a Go
+toolchain newer than the one golangci-lint's own x/tools understands: compare
+\`go version\` with the Go that built the binary (\`golangci-lint version\`).
 
 MSG
   exit 2
