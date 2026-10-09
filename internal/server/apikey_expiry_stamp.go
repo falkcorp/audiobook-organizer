@@ -1,19 +1,22 @@
 // file: internal/server/apikey_expiry_stamp.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 03e89930-38be-47ce-a24e-71825969fb5b
-// last-edited: 2026-10-07
+// last-edited: 2026-10-09
 
 package server
 
 import (
 	"fmt"
-	"log/slog"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 )
+
+// apiKeyExpiryLog carries this file's diagnostics through the log-injection barrier.
+var apiKeyExpiryLog = logger.New("server.apikey-expiry")
 
 // apiKeyExpiryStampDoneKey records that the one-time expiry stamp for keys
 // created before every key had an expiry has run (2026-10-07).
@@ -74,34 +77,34 @@ func stampNeverExpiringAPIKeys(store apiKeyExpiryStampStore, now time.Time) (api
 
 	if res.AlreadyDone {
 		for _, k := range never {
-			slog.Warn("api key has no expiry (the one-time expiry stamp already ran; set one by rotating it)",
-				"key_id", k.ID, "name", k.Name, "user", k.UserID, "created", k.CreatedAt, "status", k.Status)
+			apiKeyExpiryLog.Warn("api key has no expiry (the one-time expiry stamp already ran; set one by rotating it): key_id=%v name=%v user=%v created=%v status=%v",
+				k.ID, k.Name, k.UserID, k.CreatedAt, k.Status)
 		}
 		return res, nil
 	}
 
 	expiresAt := now.Add(handlers.DefaultAPIKeyTTL)
 	if len(never) > 0 {
-		slog.Warn("api keys with no expiry found; giving each one a one-time expiry",
-			"count", len(never), "expires_at", expiresAt)
+		apiKeyExpiryLog.Warn("api keys with no expiry found; giving each one a one-time expiry: count=%d expires_at=%v",
+			len(never), expiresAt)
 	}
 	failed := 0
 	for _, k := range never {
 		if err := store.SetAPIKeyExpiry(k.ID, expiresAt); err != nil {
 			failed++
-			slog.Error("api key expiry stamp: write failed; will retry next start",
-				"key_id", k.ID, "name", k.Name, "user", k.UserID, "err", err)
+			apiKeyExpiryLog.Error("api key expiry stamp: write failed; will retry next start: key_id=%v name=%v user=%v err=%v",
+				k.ID, k.Name, k.UserID, err)
 			continue
 		}
 		res.Stamped++
-		slog.Warn("api key had no expiry; it now expires (create or rotate a replacement before then)",
-			"key_id", k.ID, "name", k.Name, "user", k.UserID, "created", k.CreatedAt,
-			"status", k.Status, "expires_at", expiresAt)
+		apiKeyExpiryLog.Warn("api key had no expiry; it now expires (create or rotate a replacement before then): key_id=%v name=%v user=%v created=%v status=%v expires_at=%v",
+			k.ID, k.Name, k.UserID, k.CreatedAt,
+			k.Status, expiresAt)
 	}
 
 	if partial {
-		slog.Error("api key expiry stamp: some key records could not be read; not marking done, will retry next start",
-			"unreadable", unreadable, "err", err)
+		apiKeyExpiryLog.Error("api key expiry stamp: some key records could not be read; not marking done, will retry next start: unreadable=%v err=%v",
+			unreadable, err)
 		return res, nil
 	}
 	if failed > 0 {
@@ -111,7 +114,7 @@ func stampNeverExpiringAPIKeys(store apiKeyExpiryStampStore, now time.Time) (api
 		return res, fmt.Errorf("record expiry stamp done flag: %w", err)
 	}
 	res.FlagSet = true
-	slog.Info("api key expiry stamp done", "stamped", res.Stamped, "expires_at", expiresAt)
+	apiKeyExpiryLog.Info("api key expiry stamp done: stamped=%d expires_at=%v", res.Stamped, expiresAt)
 	return res, nil
 }
 
@@ -122,8 +125,8 @@ func logBootstrapKeyTTLConfig() {
 	cfg := config.Snapshot()
 	ttl, warning := cfg.ResolveBootstrapKeyTTL()
 	if warning != "" {
-		slog.Warn("bootstrap key lifetime config: "+warning, "ttl", ttl.String())
+		apiKeyExpiryLog.Warn("bootstrap key lifetime config: %s: ttl=%s", warning, ttl.String())
 		return
 	}
-	slog.Info("bootstrap key lifetime", "ttl", ttl.String())
+	apiKeyExpiryLog.Info("bootstrap key lifetime: ttl=%s", ttl.String())
 }

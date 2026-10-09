@@ -1,12 +1,11 @@
 // file: internal/server/middleware/owner_guard.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8c4f2e17-9a63-4d05-b1e8-6f3a7d2c5b90
-// last-edited: 2026-10-07
+// last-edited: 2026-10-09
 
 package middleware
 
 import (
-	"log/slog"
 	"net/http"
 	"strings"
 
@@ -14,7 +13,11 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
+
+// ownerGuardLog carries this file's diagnostics through the log-injection barrier.
+var ownerGuardLog = logger.New("http")
 
 // OwnerPublicHost is the host the browser used, for the owner sign-in hint:
 // the first X-Forwarded-Host behind a proxy, else Host. Display only; it
@@ -61,23 +64,26 @@ func RequireOwner(ownerEmail func() string, perm auth.Permission, applies func(*
 			userID = u.ID
 		}
 		if why := auth.OwnerProofWhyNot(ctx, email, OwnerPublicHost(c.Request)); why != "" {
-			slog.Warn("owner action refused", "route", c.FullPath(), "http_method", c.Request.Method,
-				"method", string(auth.MethodFromContext(ctx)), "user", userID, "why", why)
+			ownerGuardLog.Warn("owner action refused: route=%s http_method=%s method=%s user=%v why=%s",
+				c.FullPath(), c.Request.Method,
+				string(auth.MethodFromContext(ctx)), userID, why)
 			httputil.RespondWithForbidden(c, why)
 			c.Abort()
 			return
 		}
 		if perm != "" && !auth.Can(ctx, perm) {
-			slog.Warn("owner action refused", "route", c.FullPath(), "http_method", c.Request.Method,
-				"user", userID, "why", "missing permission "+string(perm))
+			ownerGuardLog.Warn("owner action refused: route=%s http_method=%s user=%v why=%s",
+				c.FullPath(), c.Request.Method,
+				userID, "missing permission "+string(perm))
 			httputil.RespondWithForbidden(c, "permission denied: "+string(perm))
 			c.Abort()
 			return
 		}
 		// The audit line for every owner action: who, proven how, did what.
-		slog.Info("owner action allowed", "route", c.FullPath(), "http_method", c.Request.Method,
-			"user", userID, "access_email", auth.AccessEmailFromContext(ctx),
-			"method", string(auth.MethodFromContext(ctx)), "query", c.Request.URL.RawQuery)
+		ownerGuardLog.Info("owner action allowed: route=%s http_method=%s user=%v access_email=%v method=%s query=%s",
+			c.FullPath(), c.Request.Method,
+			userID, auth.AccessEmailFromContext(ctx),
+			string(auth.MethodFromContext(ctx)), c.Request.URL.RawQuery)
 		c.Next()
 	}
 }

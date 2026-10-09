@@ -1,14 +1,13 @@
 // file: internal/server/candidate_feedback.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 432e499b-32d5-468b-9799-b4874d2e0f55
-// last-edited: 2026-10-07
+// last-edited: 2026-10-09
 
 package server
 
 import (
 	"encoding/json"
 	"errors"
-	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -21,6 +20,9 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 )
+
+// candidateFeedbackLog carries this file's diagnostics through the log-injection barrier.
+var candidateFeedbackLog = logger.New("server.candidate-feedback")
 
 // Metadata-candidate feedback endpoints (owner request 2026-10-07): the
 // Candidates view's per-row thumbs-down ("not the best match") and the
@@ -106,7 +108,7 @@ func (s *Server) handlePutCandidateFeedback(c *gin.Context) {
 		return
 	}
 	if err != nil {
-		slog.Error("candidate feedback write failed", "book", logger.SanitizeLogValue(req.BookID), "error", err)
+		candidateFeedbackLog.Error("candidate feedback write failed: book=%s error=%v", logger.SanitizeLogValue(req.BookID), err)
 		httputil.RespondWithInternalError(c, "could not record candidate feedback")
 		return
 	}
@@ -122,7 +124,7 @@ func (s *Server) handleDeleteCandidateFeedback(c *gin.Context) {
 	id := c.Param("id")
 	removed, err := s.candidateFeedbackStore().Delete(id, label)
 	if err != nil {
-		slog.Error("candidate feedback delete failed", "id", logger.SanitizeLogValue(id), "error", err)
+		candidateFeedbackLog.Error("candidate feedback delete failed: id=%s error=%v", logger.SanitizeLogValue(id), err)
 		httputil.RespondWithInternalError(c, "could not remove candidate feedback")
 		return
 	}
@@ -150,7 +152,7 @@ func (s *Server) handleExportCandidateFeedback(c *gin.Context) {
 	if err == nil {
 		return
 	}
-	slog.Error("candidate feedback export failed", "records_written", n, "error", err)
+	candidateFeedbackLog.Error("candidate feedback export failed: records_written=%d error=%v", n, err)
 	if c.Writer.Written() {
 		// Mid-stream: the status is sent, so the only signal left is a
 		// truncated body and the log line above.

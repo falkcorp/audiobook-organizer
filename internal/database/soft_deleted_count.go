@@ -1,7 +1,7 @@
 // file: internal/database/soft_deleted_count.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 7e50b3c8-1a92-4d67-8f24-c65e09a1d3b7
-// last-edited: 2026-10-06
+// last-edited: 2026-10-09
 
 package database
 
@@ -9,9 +9,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
+
+// softDeletedCountLog carries this file's diagnostics through the log-injection barrier.
+var softDeletedCountLog = logger.New("database.soft-deleted-count")
 
 // SoftDeletedCountStore is the optional capability of counting the soft-deleted
 // set without materializing it. It exists because the ONLY prior way to answer
@@ -92,8 +96,8 @@ func (p *PebbleStore) CountSoftDeletedBooks(olderThan *time.Time) (int, error) {
 		if !errors.Is(err, ErrMemdbIncomplete) {
 			return 0, err
 		}
-		slog.Error("soft-deleted count: memdb is missing rows; falling through to the authoritative Pebble scan",
-			"error", err, "lost_rows", m.LostRows())
+		softDeletedCountLog.Error("soft-deleted count: memdb is missing rows; falling through to the authoritative Pebble scan: error=%v lost_rows=%v",
+			err, m.LostRows())
 	}
 
 	n := 0
