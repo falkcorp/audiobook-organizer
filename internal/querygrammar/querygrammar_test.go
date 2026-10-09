@@ -1,5 +1,5 @@
 // file: internal/querygrammar/querygrammar_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4d8a1e63-2b7c-4f90-a5e1-8c6d3b0f2a97
 // last-edited: 2026-10-09
 
@@ -7,6 +7,8 @@ package querygrammar
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"slices"
 	"strings"
@@ -21,7 +23,7 @@ type conformanceCase struct {
 	Pattern         string   `json:"pattern"`
 	Quoted          bool     `json:"quoted"`
 	Input           string   `json:"input"`
-	WantMatch       *bool    `json:"want_match"`
+	WantMatch       optBool  `json:"want_match"`
 	WantError       bool     `json:"want_error"`
 	GoErrorContains string   `json:"go_error_contains"`
 	TSErrorMatches  string   `json:"ts_error_matches"`
@@ -29,8 +31,55 @@ type conformanceCase struct {
 	SkipReason      string   `json:"skip_reason"`
 }
 
+// optBool is a bool that knows whether the row set it. A JSON null is
+// rejected outright: the TS reader sees null as "present" and Go's *bool
+// would see it as "absent", so the two suites would classify the same row
+// differently. Rejecting it at decode time keeps one rule for both.
+type optBool struct {
+	set bool
+	val bool
+}
+
+func (o *optBool) UnmarshalJSON(b []byte) error {
+	if string(b) == "null" {
+		return errors.New("want_match must be true or false, not null")
+	}
+	o.set = true
+	return json.Unmarshal(b, &o.val)
+}
+
+// conformanceEngines is every engine a row may name. The same list lives in
+// web/src/utils/queryGrammar.test.ts (CONFORMANCE_ENGINES).
+var conformanceEngines = []string{"go", "ts"}
+
+// validate applies the row-shape rules both suites share, so a malformed row
+// fails in both rather than running in one and skipping in the other:
+// exactly one of want_match / want_error; engines absent or a non-empty
+// subset of conformanceEngines with no unknown names; skip_reason required
+// only when engines actually excludes one.
+func (c conformanceCase) validate() error {
+	if c.WantMatch.set == c.WantError {
+		return errors.New("a case sets exactly one of want_match and want_error")
+	}
+	if c.Engines == nil {
+		return nil
+	}
+	if len(c.Engines) == 0 {
+		return errors.New("engines must be absent or a non-empty subset of go,ts")
+	}
+	for _, e := range c.Engines {
+		if !slices.Contains(conformanceEngines, e) {
+			return fmt.Errorf("unknown engine %q (want one of %v)", e, conformanceEngines)
+		}
+	}
+	if len(c.Engines) < len(conformanceEngines) && c.SkipReason == "" {
+		return errors.New("a case that excludes an engine must carry a skip_reason")
+	}
+	return nil
+}
+
 func (c conformanceCase) runsOn(engine string) bool {
-	return len(c.Engines) == 0 || slices.Contains(c.Engines, engine)
+	return c.Engines == nil || slices.Contains(c.Engines, engine)
 }
 
 func TestConformanceCorpus(t *testing.T) {
@@ -48,11 +97,8 @@ func TestConformanceCorpus(t *testing.T) {
 			skipped++
 		}
 		t.Run(tc.Name, func(t *testing.T) {
-			if (tc.WantMatch == nil) == !tc.WantError {
-				t.Fatal("a case sets exactly one of want_match and want_error")
-			}
-			if len(tc.Engines) > 0 && tc.SkipReason == "" {
-				t.Fatal("a case restricted by engines must carry a skip_reason")
+			if err := tc.validate(); err != nil {
+				t.Fatal(err)
 			}
 			if !tc.runsOn("go") {
 				t.Skip(tc.SkipReason)
@@ -70,12 +116,63 @@ func TestConformanceCorpus(t *testing.T) {
 			if err != nil {
 				t.Fatalf("CompileText(%q): %v", tc.Pattern, err)
 			}
-			if got := m.Match(tc.Input); got != *tc.WantMatch {
-				t.Fatalf("Match(%q) with %q = %v, want %v", tc.Input, tc.Pattern, got, *tc.WantMatch)
+			if got := m.Match(tc.Input); got != tc.WantMatch.val {
+				t.Fatalf("Match(%q) with %q = %v, want %v", tc.Input, tc.Pattern, got, tc.WantMatch.val)
 			}
 		})
 	}
 	t.Logf("conformance corpus (go): %d cases, %d run, %d skipped", len(cases), len(cases)-skipped, skipped)
+}
+
+// TestConformanceCase_Validate locks the row-shape rules shared with the TS
+// suite (validateCase in web/src/utils/queryGrammar.test.ts): the same inputs
+// must be accepted or rejected on both sides.
+func TestConformanceCase_Validate(t *testing.T) {
+	cases := []struct {
+		name    string
+		row     string
+		wantErr string // "" = valid; "decode" = rejected while decoding
+	}{
+		{"match row", `{"name":"x","pattern":"a","want_match":true}`, ""},
+		{"error row", `{"name":"x","pattern":"a","want_error":true}`, ""},
+		{"explicit both engines, no skip_reason", `{"name":"x","pattern":"a","want_match":true,"engines":["go","ts"]}`, ""},
+		{"go only with skip_reason", `{"name":"x","pattern":"a","want_match":true,"engines":["go"],"skip_reason":"ts differs"}`, ""},
+		{"want_match null", `{"name":"x","pattern":"a","want_match":null}`, "decode"},
+		{"neither expectation", `{"name":"x","pattern":"a"}`, "exactly one of want_match and want_error"},
+		{"both expectations", `{"name":"x","pattern":"a","want_match":false,"want_error":true}`, "exactly one of want_match and want_error"},
+		{"empty engines", `{"name":"x","pattern":"a","want_match":true,"engines":[]}`, "non-empty subset"},
+		{"unknown engine", `{"name":"x","pattern":"a","want_match":true,"engines":["golang"],"skip_reason":"r"}`, "unknown engine"},
+		{"excludes an engine, no skip_reason", `{"name":"x","pattern":"a","want_match":true,"engines":["go"]}`, "must carry a skip_reason"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var c conformanceCase
+			err := json.Unmarshal([]byte(tc.row), &c)
+			if tc.wantErr == "decode" {
+				if err == nil {
+					t.Fatal("decoded, want a decode error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			err = c.validate()
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("validate() = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("validate() = %v, want error containing %q", err, tc.wantErr)
+			}
+		})
+	}
+	only := conformanceCase{Engines: []string{"go"}}
+	if only.runsOn("ts") || !only.runsOn("go") {
+		t.Fatal("engines [go] must run on go and not on ts")
+	}
 }
 
 func TestIsPlainLiteral(t *testing.T) {
