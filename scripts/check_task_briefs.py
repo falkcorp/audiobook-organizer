@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/check_task_briefs.py
-# version: 1.0.1
+# version: 1.0.2
 # guid: 93f31e1f-3605-4f23-902b-2b8cf08b8c2d
 # last-edited: 2026-10-09
 
@@ -31,7 +31,9 @@ import sys
 
 TASKS = os.path.join(os.path.dirname(__file__), "..", "docs", "proposals", "2026-10-holistic", "tasks")
 WAVE_ORDER = {"0": 0, "1": 1, "2": 2, "F": 3, "3": 4, "4": 5}
-MERGE_FIRST_RE = re.compile(r"^\*\*Merge first:\*\* (.*?)\. ")
+# The list ends at the first ". "; a cell that is only the list ("**Merge first:** none.")
+# ends at the period itself, so accept end-of-string there too.
+MERGE_FIRST_RE = re.compile(r"^\*\*Merge first:\*\* (.*?)\.(?: |$)")
 BLOCKS_RE = re.compile(
     r"^(.*?)(?:; not briefed \(roadmap waves 3 to 4\): (.*?))?"
     r" \(generated from every brief's `Merge first` list on \d{4}-\d{2}-\d{2}; do not hand-edit\)$"
