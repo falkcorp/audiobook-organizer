@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/duplicate_copies_fixer.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: 937b9ff1-48ce-4136-8ca0-74793e6ed3de
-// last-edited: 2026-10-06
+// last-edited: 2026-10-09
 
 // Repairs-lane fixer "duplicate-copies": merge whole copies of one book that
 // live as separate books, so a chapter fragment that matches every copy has a
@@ -69,7 +69,7 @@
 // The loser must keep a hash-matched row (an emptied live book reads as an
 // abandoned group to the fragment fixer); no book_file row is ever deleted.
 //
-// RETIRE (retireInto, shared with the fragment fixer, whole-book rule): every
+// RETIRE (retireIntoWith, shared with the fragment fixer, whole-book rule): every
 // user's listening state follows (a loser with progress is skipped unless the
 // two copies' track layouts are identical), external ids move, it is demoted
 // and soft-deleted with merged_into set and file_path cleared. A loser that

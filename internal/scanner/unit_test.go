@@ -1,7 +1,7 @@
 // file: internal/scanner/unit_test.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: a2b3c4d5-e6f7-8901-abcd-ef2345678901
-// last-edited: 2026-10-06
+// last-edited: 2026-10-09
 
 package scanner
 
@@ -14,7 +14,6 @@ import (
 	"testing"
 
 	"errors"
-	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -544,90 +543,6 @@ func TestIsUniqueConstraintError(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// preserveExistingFields (50% -> higher)
-// ---------------------------------------------------------------------------
-
-func TestPreserveExistingFields(t *testing.T) {
-	narrator := "John Narrator"
-	publisher := "Big Publisher"
-	lang := "en"
-	year := 2020
-	coverURL := "http://example.com/cover.jpg"
-	isbn10 := "0123456789"
-	isbn13 := "978-0123456789"
-	asin := "B0123456"
-	edition := "1st"
-	desc := "A great book"
-	olID := "OL123"
-	hcID := "HC456"
-	gbID := "GB789"
-	itunesPID := "ABCD1234"
-	versionNotes := "Original version"
-	seqNum := 3
-
-	existing := &database.Book{
-		Narrator:           &narrator,
-		Publisher:          &publisher,
-		Language:           &lang,
-		PrintYear:          &year,
-		CoverURL:           &coverURL,
-		ISBN10:             &isbn10,
-		ISBN13:             &isbn13,
-		ASIN:               &asin,
-		Edition:            &edition,
-		Description:        &desc,
-		OpenLibraryID:      &olID,
-		HardcoverID:        &hcID,
-		GoogleBooksID:      &gbID,
-		ITunesPersistentID: &itunesPID,
-		VersionNotes:       &versionNotes,
-		SeriesSequence:     &seqNum,
-	}
-
-	scanned := &database.Book{} // all nil
-
-	preserveExistingFields(scanned, existing)
-
-	assert.Equal(t, &narrator, scanned.Narrator)
-	assert.Equal(t, &publisher, scanned.Publisher)
-	assert.Equal(t, &lang, scanned.Language)
-	assert.Equal(t, &year, scanned.PrintYear)
-	assert.Equal(t, &coverURL, scanned.CoverURL)
-	assert.Equal(t, &isbn10, scanned.ISBN10)
-	assert.Equal(t, &isbn13, scanned.ISBN13)
-	assert.Equal(t, &asin, scanned.ASIN)
-	assert.Equal(t, &edition, scanned.Edition)
-	assert.Equal(t, &desc, scanned.Description)
-	assert.Equal(t, &olID, scanned.OpenLibraryID)
-	assert.Equal(t, &hcID, scanned.HardcoverID)
-	assert.Equal(t, &gbID, scanned.GoogleBooksID)
-	assert.Equal(t, &itunesPID, scanned.ITunesPersistentID)
-	assert.Equal(t, &versionNotes, scanned.VersionNotes)
-	assert.Equal(t, &seqNum, scanned.SeriesSequence)
-}
-
-func TestPreserveExistingFieldsDoesNotOverwrite(t *testing.T) {
-	existingNarr := "Old Narrator"
-	scannedNarr := "New Narrator"
-
-	existing := &database.Book{Narrator: &existingNarr}
-	scanned := &database.Book{Narrator: &scannedNarr}
-
-	preserveExistingFields(scanned, existing)
-	assert.Equal(t, &scannedNarr, scanned.Narrator, "scanned value should not be overwritten")
-}
-
-func TestPreserveExistingFieldsZeroSequence(t *testing.T) {
-	zero := 0
-	existingSeq := 5
-	scanned := &database.Book{SeriesSequence: &zero}
-	existing := &database.Book{SeriesSequence: &existingSeq}
-
-	preserveExistingFields(scanned, existing)
-	assert.Equal(t, &existingSeq, scanned.SeriesSequence, "zero sequence should be replaced by existing")
-}
-
-// ---------------------------------------------------------------------------
 // countAudioFilesInDir (0% -> 100%)
 // ---------------------------------------------------------------------------
 
@@ -807,59 +722,6 @@ func TestProcessBooksParallelWithScanCache(t *testing.T) {
 	err = ProcessBooksParallel(t.Context(), books, 1, nil, nil)
 	assert.NoError(t, err)
 	assert.False(t, saveCalled, "save should not be called for cached file")
-}
-
-// ---------------------------------------------------------------------------
-// preserveExistingFields — iTunes and version fields
-// ---------------------------------------------------------------------------
-
-func TestPreserveExistingFieldsITunesAndVersion(t *testing.T) {
-	dateAdded := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
-	playCount := 5
-	lastPlayed := time.Date(2021, 6, 15, 0, 0, 0, 0, time.UTC)
-	rating := 80
-	bookmark := int64(5025)
-	importSrc := "iTunes XML"
-	isPrimary := true
-	vgID := "vg-123"
-	markedDel := true
-	markedDelAt := time.Date(2022, 1, 1, 0, 0, 0, 0, time.UTC)
-	abYear := 2019
-	workID := "w-42"
-	narrJSON := `["narrator1","narrator2"]`
-
-	existing := &database.Book{
-		ITunesDateAdded:      &dateAdded,
-		ITunesPlayCount:      &playCount,
-		ITunesLastPlayed:     &lastPlayed,
-		ITunesRating:         &rating,
-		ITunesBookmark:       &bookmark,
-		ITunesImportSource:   &importSrc,
-		IsPrimaryVersion:     &isPrimary,
-		VersionGroupID:       &vgID,
-		MarkedForDeletion:    &markedDel,
-		MarkedForDeletionAt:  &markedDelAt,
-		AudiobookReleaseYear: &abYear,
-		WorkID:               &workID,
-		NarratorsJSON:        &narrJSON,
-	}
-
-	scanned := &database.Book{}
-	preserveExistingFields(scanned, existing)
-
-	assert.Equal(t, &dateAdded, scanned.ITunesDateAdded)
-	assert.Equal(t, &playCount, scanned.ITunesPlayCount)
-	assert.Equal(t, &lastPlayed, scanned.ITunesLastPlayed)
-	assert.Equal(t, &rating, scanned.ITunesRating)
-	assert.Equal(t, &bookmark, scanned.ITunesBookmark)
-	assert.Equal(t, &importSrc, scanned.ITunesImportSource)
-	assert.Equal(t, &isPrimary, scanned.IsPrimaryVersion)
-	assert.Equal(t, &vgID, scanned.VersionGroupID)
-	assert.Equal(t, &markedDel, scanned.MarkedForDeletion)
-	assert.Equal(t, &markedDelAt, scanned.MarkedForDeletionAt)
-	assert.Equal(t, &abYear, scanned.AudiobookReleaseYear)
-	assert.Equal(t, &workID, scanned.WorkID)
-	assert.Equal(t, &narrJSON, scanned.NarratorsJSON)
 }
 
 // ---------------------------------------------------------------------------

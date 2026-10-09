@@ -1,5 +1,5 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.21.0
+// version: 1.21.1
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
 // last-edited: 2026-10-09
 
@@ -10,8 +10,8 @@ package logger
 // one-way: the test no longer fails when a count improves, so lowering a
 // ceiling by hand in the PR that lowers the count is the rule.
 const (
-	slogRatchetFileCeiling = 296
-	slogRatchetCallCeiling = 1699
+	slogRatchetFileCeiling = 295
+	slogRatchetCallCeiling = 1696
 )
 
 // slogRatchet is every non-test file under internal/ and cmd/ that called
@@ -304,7 +304,6 @@ var slogRatchet = map[string]int{
 	"internal/sweep/sweeper.go":                                  3,
 	"internal/sweep/temp_cleanup.go":                             1,
 	"internal/tagger/safe_write.go":                              2,
-	"internal/tagger/tagger.go":                                  3,
 	"internal/telemetry/telemetry.go":                            1,
 	"internal/tools/embed_queue.go":                              2,
 	"internal/tools/ollama_daemon.go":                            6,
