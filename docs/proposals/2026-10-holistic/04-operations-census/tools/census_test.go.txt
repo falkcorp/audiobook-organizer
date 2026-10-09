@@ -1,0 +1,73 @@
+// file: docs/proposals/2026-10-holistic/04-operations-census/tools/census_test.go.txt
+// version: 1.0.0
+// guid: 497b77d3-ab26-4e80-995d-a8e2d6097371
+// last-edited: 2026-10-08
+package server
+
+import (
+	"encoding/json"
+	"os"
+	"reflect"
+	"runtime"
+	"sort"
+	"testing"
+)
+
+type censusRow struct {
+	ID, Plugin, DisplayName, Description string
+	RunAt                                string
+	Schedule                             string
+	Cancellable, Isolate, Batchable      bool
+	DedupeQueuedRuns                     bool
+	ResumePolicy, Liveness               string
+	ConcurrencyKey                       string
+	Triggers, DependsOn, FormerIDs       []string
+	Capabilities, Writes, Permissions    []string
+	Timeout, ProgressTimeout             string
+	Requires                             int
+	Notify                               int
+}
+
+func TestZZCensusDump(t *testing.T) {
+	_, _, _ = 0, 0, 0
+	srv, _, _ := bootRegisteredOpIDs(t)
+	var rows []censusRow
+	for _, d := range srv.opRegistry.ActiveDefs() {
+		r := censusRow{ID: d.ID, Plugin: d.Plugin, DisplayName: d.DisplayName, Description: d.Description,
+			Cancellable: d.Cancellable, Isolate: d.Isolate, Batchable: d.Batchable, DedupeQueuedRuns: d.DedupeQueuedRuns,
+			ResumePolicy: rp(int(d.ResumePolicy)), Liveness: d.Liveness.String(), ConcurrencyKey: d.ConcurrencyKey,
+			DependsOn: d.DependsOn, FormerIDs: d.FormerIDs, Timeout: d.Timeout.String(), ProgressTimeout: d.ProgressTimeout.String(),
+			Requires: len(d.Requires), Notify: int(d.NotifyLevel)}
+		if d.Schedule != nil {
+			r.Schedule = *d.Schedule
+		}
+		for _, tr := range d.Triggers {
+			r.Triggers = append(r.Triggers, tr.EventName)
+		}
+		for _, c := range d.Capabilities {
+			r.Capabilities = append(r.Capabilities, string(c))
+		}
+		for _, c := range d.Writes {
+			r.Writes = append(r.Writes, string(c))
+		}
+		for _, c := range d.Permissions {
+			r.Permissions = append(r.Permissions, string(c))
+		}
+		if d.Run != nil {
+			f := runtime.FuncForPC(reflect.ValueOf(d.Run).Pointer())
+			if f != nil {
+				file, line := f.FileLine(reflect.ValueOf(d.Run).Pointer())
+				r.RunAt = file + ":" + itoa(line) + " " + f.Name()
+			}
+		}
+		rows = append(rows, r)
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].ID < rows[j].ID })
+	b, _ := json.MarshalIndent(rows, "", " ")
+	os.WriteFile(os.Getenv("CENSUS_OUT"), b, 0o644)
+	t.Logf("dumped %d", len(rows))
+}
+
+func itoa(i int) string { b, _ := json.Marshal(i); return string(b) }
+
+func rp(p int) string { return []string{"unspecified", "restart", "requeue", "drop", "ask"}[p] }

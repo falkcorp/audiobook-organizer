@@ -1,0 +1,75 @@
+// file: docs/proposals/2026-10-holistic/04-operations-census/tools/runitems_scan.go.txt
+// version: 1.0.0
+// guid: 8e7abb60-283e-42fb-8c88-d298a27e3041
+// last-edited: 2026-10-08
+package main
+
+import (
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/printer"
+	"go/token"
+	"os"
+	"path/filepath"
+	"strings"
+	"bytes"
+)
+
+func main() {
+	root := os.Args[1]
+	filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || !strings.HasSuffix(p, ".go") || strings.HasSuffix(p, "_test.go") || strings.Contains(p, "/web/") || strings.Contains(p, "operations/registry/") || strings.Contains(p, "/mocks/") {
+			return nil
+		}
+		fs := token.NewFileSet()
+		f, err := parser.ParseFile(fs, p, nil, 0)
+		if err != nil {
+			return nil
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			c, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			name := ""
+			switch fn := c.Fun.(type) {
+			case *ast.SelectorExpr:
+				name = fn.Sel.Name
+			case *ast.Ident:
+				name = fn.Name
+			case *ast.IndexExpr:
+				if s, ok := fn.X.(*ast.SelectorExpr); ok { name = s.Sel.Name }
+			case *ast.IndexListExpr:
+				if s, ok := fn.X.(*ast.SelectorExpr); ok { name = s.Sel.Name }
+			}
+			if name != "RunItems" {
+				return true
+			}
+			res := "NO-OPTIONS-ARG"
+			if len(c.Args) >= 5 {
+				last := c.Args[len(c.Args)-1]
+				if cl, ok := last.(*ast.CompositeLit); ok {
+					res = "Concurrency-UNSET(sequential)"
+					for _, e := range cl.Elts {
+						if kv, ok := e.(*ast.KeyValueExpr); ok {
+							if k, ok := kv.Key.(*ast.Ident); ok && k.Name == "Concurrency" {
+								var b bytes.Buffer
+								printer.Fprint(&b, fs, kv.Value)
+								res = "Concurrency=" + b.String()
+							}
+						}
+					}
+				} else {
+					var b bytes.Buffer
+					printer.Fprint(&b, fs, last)
+					res = "opts-var:" + b.String()
+				}
+			}
+			rel, _ := filepath.Rel(root, p)
+			fmt.Printf("%s:%d\t%s\n", rel, fs.Position(c.Pos()).Line, res)
+			return true
+		})
+		return nil
+	})
+}
