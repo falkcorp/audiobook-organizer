@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.34.0
+// version: 1.35.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
 // last-edited: 2026-10-09
 //
@@ -46,6 +46,7 @@ import * as api from '../../../services/api';
 import { isAuthRedirectError } from '../../../utils/apiFetch';
 import { STORAGE_KEYS } from '../../../lib/storageKeys';
 import type { CandidateGroup, SpineContext } from '../spine/CompareSpine';
+import type { CandidateDetailState } from '../evidence/adapters';
 import { runtimeHiddenBySwitch, type RowState } from '../spine/rowState';
 import type { MetadataAction } from '../reviewActions';
 import { compileTitleFilter } from '../../../utils/queryGrammar';
@@ -670,6 +671,22 @@ export interface MetadataLane {
   groupedBookIds: Set<string>;
   /** Rows to hand the spine: the page minus anything rendered as a group. */
   rows: CandidateResult[];
+  /**
+   * Book ids on the current page whose candidate is still the index row: the
+   * per-page detail fetch (`ids=`) that carries its breakdown has not been
+   * applied yet. True from the moment the page's index rows are shown. Keyed
+   * by book id, which is what the fetch asks for and what the spine addresses
+   * rows by; a group's books share one candidate but are fetched one by one.
+   */
+  detailPending: ReadonlySet<string>;
+  /**
+   * Book ids on the current page whose detail fetch rejected, or whose detail
+   * the server answered with a different candidate (or none) than the index
+   * row's. Distinct from `detailPending`: nothing is in flight for these. A
+   * refresh asks again (so does a page change, after a rejected fetch; a
+   * book the server left out keeps its ask so the mismatch guard cannot loop).
+   */
+  detailFailed: ReadonlySet<string>;
 
   sourceCounts: Record<string, number>;
   summary: MetadataLaneSummary;
@@ -815,6 +832,18 @@ export interface MetadataLane {
 }
 
 /**
+ * Whether detail row `d` is the full row for index row `r`: it carries a
+ * candidate and that candidate's hash is the one the index served. The page
+ * swap and the detail state are both decided by this, so they cannot disagree.
+ */
+function detailMatches(
+  r: CandidateResult,
+  d: CandidateResult | undefined
+): d is CandidateResult & { candidate: MetadataCandidate } {
+  return !!d?.candidate && d.candidate_hash === r.candidate_hash;
+}
+
+/**
  * @param active  Whether to fetch. The workspace passes `lane === 'metadata'`
  *                so switching lanes does not keep three fetches in flight.
  */
@@ -843,6 +872,10 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   // Reset with every index load so a refreshed index never shows an older
   // detail row.
   const [detailsById, setDetailsById] = useState<Map<string, CandidateResult>>(() => new Map());
+  // Book ids whose detail fetch rejected, or whose book the detail response
+  // left out. Without this a failed fetch is indistinguishable from one still
+  // in flight. Cleared for the ids of every new ask, and with the index.
+  const [detailFailedIds, setDetailFailedIds] = useState<Set<string>>(() => new Set());
   const [unreviewableError, setUnreviewableError] = useState<string | null>(null);
   // The refreshKey the loaded bucket belongs to, or -1 for "never loaded". A
   // refresh invalidates it, and the load effect fetches again only if a chip
@@ -1079,6 +1112,7 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         detailEpochRef.current += 1;
         detailAskedRef.current = new Set();
         setDetailsById(new Map());
+        setDetailFailedIds(new Set());
         const tc = data.total_count ?? allResults.length;
         setSummary({
           matched: data.matched ?? allResults.filter((r) => r.status === 'matched').length,
@@ -1394,12 +1428,44 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     () =>
       pageIndexRows.map((r) => {
         const d = detailsById.get(r.book.id);
-        return d?.candidate && d.candidate_hash === r.candidate_hash
-          ? { ...r, candidate: d.candidate }
-          : r;
+        return detailMatches(r, d) ? { ...r, candidate: d.candidate } : r;
       }),
     [pageIndexRows, detailsById]
   );
+
+  // Per visible book: is its candidate the full row yet? Derived from the
+  // same two inputs as the swap above, so it can never say 'loaded' for a row
+  // the swap left as the index row. A detail that arrived for a DIFFERENT
+  // candidate is 'failed', not 'loaded': the row shows the index candidate,
+  // whose breakdown the server no longer has.
+  const detailState = useMemo(() => {
+    const out = new Map<string, CandidateDetailState>();
+    for (const r of pageIndexRows) {
+      if (!r.candidate) continue;
+      const d = detailsById.get(r.book.id);
+      out.set(
+        r.book.id,
+        d
+          ? detailMatches(r, d)
+            ? 'loaded'
+            : 'failed'
+          : detailFailedIds.has(r.book.id)
+            ? 'failed'
+            : 'pending'
+      );
+    }
+    return out;
+  }, [pageIndexRows, detailsById, detailFailedIds]);
+  const detailPending = useMemo(() => {
+    const out = new Set<string>();
+    detailState.forEach((state, id) => state === 'pending' && out.add(id));
+    return out;
+  }, [detailState]);
+  const detailFailed = useMemo(() => {
+    const out = new Set<string>();
+    detailState.forEach((state, id) => state === 'failed' && out.add(id));
+    return out;
+  }, [detailState]);
 
   // Fetch the full rows for the visible page's books that have not been asked
   // for since the index loaded. One request per page change, sized by the
@@ -1419,6 +1485,13 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       .map((r) => r.book.id);
     if (missing.length === 0) return;
     missing.forEach((id) => detailAskedRef.current.add(id));
+    // Asking again puts a previously failed id back in flight.
+    setDetailFailedIds((prev) => {
+      if (!missing.some((id) => prev.has(id))) return prev;
+      const next = new Set(prev);
+      missing.forEach((id) => next.delete(id));
+      return next;
+    });
     const epoch = detailEpochRef.current;
     api
       .getCachedReviewResults(0, 0, false, 'reviewable', { ids: missing })
@@ -1430,6 +1503,13 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
           for (const r of fetched) next.set(r.book.id, r);
           return next;
         });
+        // A book the response left out has nothing to swap in and nothing
+        // in flight: it is failed, not pending. (Below, it is also a
+        // `changed` row, which refetches the index once.)
+        const absent = missing.filter((id) => !fetched.some((r) => r.book.id === id));
+        if (absent.length > 0) {
+          setDetailFailedIds((prev) => new Set([...prev, ...absent]));
+        }
         // A detail whose hash is not the index row's, or a book the server no
         // longer lists, means the server's candidates moved since the index
         // was loaded. The row would show without its description and its
@@ -1456,10 +1536,13 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         );
       })
       .catch(() => {
-        // The index rows are still shown, just without their descriptions.
-        // Forget the ask so the next page change or refresh tries again.
+        // The index rows are still shown, just without their descriptions and
+        // breakdowns. Say so (`detailFailed`): left as pending, the evidence
+        // panel would spin for ever. Forget the ask so the next page change
+        // or refresh tries again.
         if (epoch !== detailEpochRef.current) return;
         missing.forEach((id) => detailAskedRef.current.delete(id));
+        setDetailFailedIds((prev) => new Set([...prev, ...missing]));
       });
     // refresh and toast are stable callbacks.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2124,9 +2207,21 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
       onAction: dispatch,
       expandedId,
       onToggleExpand: toggleExpand,
+      // A book not on this page (or without a candidate) has no detail to
+      // wait for; 'loaded' lets the panel judge the candidate it was given.
+      detailState: (id) => detailState.get(id) ?? 'loaded',
       bulkApplyMode,
     }),
-    [rowStates, selectedIds, toggleSelect, dispatch, expandedId, toggleExpand, bulkApplyMode]
+    [
+      rowStates,
+      selectedIds,
+      toggleSelect,
+      dispatch,
+      expandedId,
+      toggleExpand,
+      detailState,
+      bulkApplyMode,
+    ]
   );
 
   const [refetching, setRefetching] = useState(false);
@@ -2316,6 +2411,8 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
     groups,
     groupedBookIds,
     rows,
+    detailPending,
+    detailFailed,
     sourceCounts,
     summary,
     page,

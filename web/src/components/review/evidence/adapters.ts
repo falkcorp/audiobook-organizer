@@ -1,7 +1,7 @@
 // file: web/src/components/review/evidence/adapters.ts
-// version: 2.1.0
+// version: 2.2.0
 // guid: e21a8c47-3f60-4b95-8d1e-7a4c0b6f2953
-// last-edited: 2026-09-27
+// last-edited: 2026-10-09
 //
 // Lane payload -> Evidence. One adapter per lane, each choosing the evidence
 // kind that matches how that lane's number was actually computed.
@@ -17,6 +17,19 @@ import type { RecommendationEvidence } from '../../../lib/reviewPayload';
 import { evidenceFacts } from '../../../lib/reviewPayload';
 import type { ConfidenceEvidence, FactsEvidence, WaterfallEvidence } from './types';
 import { exactRuleLabel, isPrimaryKind, signalLabel } from './signalLabels';
+
+/**
+ * Whether the lane holds a candidate's FULL row yet.
+ *
+ * The metadata lane shows its index rows at once and fetches each page's full
+ * rows (`ids=`) afterwards; the breakdown lives only on the full row. A
+ * candidate is `pending` from the moment its index row is shown until that
+ * response has been applied, `failed` when the fetch rejected or the server
+ * answered with a different candidate (a page change or refresh retries), and
+ * `loaded` otherwise -- including for every caller that never had an index row
+ * to begin with, which is why it is the default.
+ */
+export type CandidateDetailState = 'pending' | 'loaded' | 'failed';
 
 /**
  * Dedup -> confidence rows, NO bar.
@@ -119,15 +132,43 @@ export function regroupEvidence(
  * synthesising steps from the summary fields (`duration_score` and friends),
  * which are signal summaries rather than contributions and would not replay to
  * the score.
+ *
+ * BUT only once the candidate is known to be the full row. The review index
+ * (`?view=index`) serves every candidate without its breakdown, and the lane
+ * fills the breakdown in per page from an `ids=` detail fetch. Until that
+ * fetch lands the candidate has no breakdown for a reason that has nothing to
+ * do with how it was scored, and after it fails the same is true. Saying "no
+ * recorded derivation" in either case is a false claim about the scorer, so
+ * `detail` says which of the three the caller is in and the "without a
+ * recorded derivation" text is reserved for a LOADED candidate without one.
  */
 export function metadataEvidence(
-  candidate: MetadataCandidate | null | undefined
+  candidate: MetadataCandidate | null | undefined,
+  detail: CandidateDetailState = 'loaded'
 ): WaterfallEvidence {
   if (!candidate) {
     return { kind: 'waterfall', score: 0, steps: [], emptyReason: 'No candidate selected.' };
   }
   const breakdown = candidate.score_breakdown;
   if (!breakdown || breakdown.steps.length === 0) {
+    if (detail === 'pending') {
+      return {
+        kind: 'waterfall',
+        score: candidate.score,
+        steps: [],
+        loading: true,
+        emptyReason: 'Loading the score derivation…',
+      };
+    }
+    if (detail === 'failed') {
+      return {
+        kind: 'waterfall',
+        score: candidate.score,
+        steps: [],
+        emptyReason:
+          'The score derivation could not be loaded. Change page or refresh the list to try again.',
+      };
+    }
     return {
       kind: 'waterfall',
       score: candidate.score,

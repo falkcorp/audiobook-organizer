@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/CompareSpine.test.tsx
-// version: 1.6.0
+// version: 1.7.0
 // guid: f30a6c85-2b47-4e19-93d0-8a5c1e7b402f
-// last-edited: 2026-10-07
+// last-edited: 2026-10-09
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
@@ -88,6 +88,7 @@ function makeCtx(over: Partial<SpineContext> = {}) {
     onAction,
     expandedId: null,
     onToggleExpand: vi.fn(),
+    detailState: () => 'loaded',
     ...over,
   };
   return { ctx, onAction, states };
@@ -334,6 +335,53 @@ describe('grouped results', () => {
   });
 });
 
+describe('the score derivation while the row is still an index row', () => {
+  // The lane shows index rows (no breakdown) before their detail fetch
+  // answers. The spine resolves `ctx.detailState` per row -- like `rowState`
+  // -- and hands it to the evidence section, so a pending row says it is
+  // loading rather than that the candidate was scored without a derivation.
+  const slim = row('s1'); // `candidate` has no score_breakdown
+
+  it('shows the loading note on a two-column card whose detail is pending', () => {
+    const { ctx } = makeCtx({ detailState: () => 'pending' });
+    renderSpine({ rows: [slim], viewMode: 'two-column', ctx });
+    const section = screen.getByTestId('evidence-section');
+    expect(within(section).getByText(/loading the score derivation/i)).toBeInTheDocument();
+    expect(within(section).queryByText(/without a recorded derivation/i)).not.toBeInTheDocument();
+  });
+
+  it('shows the failure note once the detail fetch failed', () => {
+    const { ctx } = makeCtx({ detailState: () => 'failed' });
+    renderSpine({ rows: [slim], viewMode: 'two-column', ctx });
+    const section = screen.getByTestId('evidence-section');
+    expect(within(section).getByText(/could not be loaded/i)).toBeInTheDocument();
+    expect(within(section).queryByRole('progressbar')).not.toBeInTheDocument();
+  });
+
+  it('says a loaded candidate has no derivation only once it is loaded', () => {
+    const { ctx } = makeCtx({ detailState: () => 'loaded' });
+    renderSpine({ rows: [slim], viewMode: 'two-column', ctx });
+    const section = screen.getByTestId('evidence-section');
+    expect(within(section).getByText(/without a recorded derivation/i)).toBeInTheDocument();
+  });
+
+  it('asks per row, so a loaded row next to a pending one renders its own state', () => {
+    const states: Record<string, 'pending' | 'loaded'> = { s1: 'pending', s2: 'loaded' };
+    const { ctx } = makeCtx({ detailState: (id) => states[id] ?? 'loaded' });
+    renderSpine({ rows: [slim, row('s2')], viewMode: 'two-column', ctx });
+    const sections = screen.getAllByTestId('evidence-section');
+    expect(within(sections[0]).getByText(/loading the score derivation/i)).toBeInTheDocument();
+    expect(within(sections[1]).getByText(/without a recorded derivation/i)).toBeInTheDocument();
+  });
+
+  it('threads the state into the expanded compact row too', () => {
+    const { ctx } = makeCtx({ detailState: () => 'pending', expandedId: 's1' });
+    renderSpine({ rows: [slim], viewMode: 'compact', ctx });
+    const section = screen.getByTestId('evidence-section');
+    expect(within(section).getByText(/loading the score derivation/i)).toBeInTheDocument();
+  });
+});
+
 describe('expansion is compact-only', () => {
   it('expands the row the context names', () => {
     const { ctx } = makeCtx({ expandedId: 'b1' });
@@ -364,7 +412,12 @@ describe('candidates mode', () => {
     // declaration is on the right element; whether it reflows is a browser
     // question for the visual harness.
     const { ctx } = makeCtx();
-    renderSpine({ rows: [row('b1')], viewMode: 'candidates', ctx, candidates: makeCandidatesCtx() });
+    renderSpine({
+      rows: [row('b1')],
+      viewMode: 'candidates',
+      ctx,
+      candidates: makeCandidatesCtx(),
+    });
     const spine = screen.getByTestId('compare-spine');
     expect(getComputedStyle(spine).containerType).toBe('inline-size');
   });
@@ -375,13 +428,23 @@ describe('candidates mode', () => {
     // A media query cannot fix it -- the window is wide while the spine is not.
     expect(SPINE_TWO_COLUMN_MIN).toBe(700);
     const { ctx } = makeCtx();
-    renderSpine({ rows: [row('b1')], viewMode: 'candidates', ctx, candidates: makeCandidatesCtx() });
+    renderSpine({
+      rows: [row('b1')],
+      viewMode: 'candidates',
+      ctx,
+      candidates: makeCandidatesCtx(),
+    });
     expect(screen.getByTestId('spine-candidates-card')).toBeInTheDocument();
   });
 
   it('shows the cached candidate at once, before the full list arrives', () => {
     const { ctx } = makeCtx();
-    renderSpine({ rows: [row('b1')], viewMode: 'candidates', ctx, candidates: makeCandidatesCtx() });
+    renderSpine({
+      rows: [row('b1')],
+      viewMode: 'candidates',
+      ctx,
+      candidates: makeCandidatesCtx(),
+    });
     const card = screen.getByTestId('spine-candidates-card');
     expect(within(card).getByText('Mistborn: The Final Empire')).toBeInTheDocument();
   });

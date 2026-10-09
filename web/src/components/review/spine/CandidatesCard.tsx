@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/CandidatesCard.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: ceb6a375-997d-44e0-8c71-d83c1980ea33
-// last-edited: 2026-10-07
+// last-edited: 2026-10-09
 //
 // The Candidates view's card (owner-approved 2026-10-07): the book's full info
 // on the LEFT, and on the RIGHT the full ranked candidate list the per-book
@@ -51,7 +51,7 @@ import { memo, useCallback, useEffect, useRef, useState, useSyncExternalStore } 
 import * as api from '../../../services/api';
 import type { MetadataCandidate } from '../../../services/api';
 import { EvidencePanel } from '../evidence/EvidencePanel';
-import { metadataEvidence } from '../evidence/adapters';
+import { metadataEvidence, type CandidateDetailState } from '../evidence/adapters';
 import { sameCandidate } from '../../audiobooks/stagedMetadataApply';
 import { BookInfoPanel } from './BookInfoPanel';
 import { candidateKey, type CandidateLoader, type CandidateQuery } from './candidateLoader';
@@ -80,7 +80,15 @@ export interface CandidatesContext {
  * names it carries -- not its list position, which moves as results arrive.
  */
 export function candidateIdentity(c: MetadataCandidate): string {
-  return [c.source, c.asin ?? '', c.isbn13 ?? '', c.isbn10 ?? '', c.isbn ?? '', c.title, c.author ?? '']
+  return [
+    c.source,
+    c.asin ?? '',
+    c.isbn13 ?? '',
+    c.isbn10 ?? '',
+    c.isbn ?? '',
+    c.title,
+    c.author ?? '',
+  ]
     .map((v) => String(v).trim().toLowerCase())
     .join('\u0000');
 }
@@ -89,7 +97,6 @@ export function candidateIdentity(c: MetadataCandidate): string {
 interface FeedbackMark {
   id?: string;
 }
-
 
 /** True once the element is on screen; true at once where there is no observer. */
 function useInView(ref: React.RefObject<HTMLElement | null>): boolean {
@@ -113,6 +120,7 @@ function CandidateItem({
   c,
   isTop,
   isCached,
+  detail,
   actionable,
   applying,
   onApply,
@@ -123,6 +131,12 @@ function CandidateItem({
   c: MetadataCandidate;
   isTop: boolean;
   isCached: boolean;
+  /**
+   * Whether `c` is a full candidate. The cached pick shown before the search
+   * answers is the lane's INDEX row, which carries no breakdown until the
+   * lane's detail fetch lands; a search result is always full.
+   */
+  detail: CandidateDetailState;
   actionable: boolean;
   /** An apply for this BOOK is running: every Apply in the card waits. */
   applying: boolean;
@@ -167,7 +181,11 @@ function CandidateItem({
               {c.series_position ? ` · Book ${c.series_position}` : ''}
             </Typography>
           )}
-          <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', mt: 0.5, alignItems: 'center' }}>
+          <Stack
+            direction="row"
+            spacing={0.5}
+            sx={{ flexWrap: 'wrap', mt: 0.5, alignItems: 'center' }}
+          >
             <Chip label={`${Math.round(c.score * 100)}`} size="small" color={scoreColor(c.score)} />
             <Chip
               label={c.source}
@@ -199,7 +217,7 @@ function CandidateItem({
             {showEvidence ? 'Hide' : 'How this score was reached'}
           </Button>
           <Collapse in={showEvidence} unmountOnExit>
-            <EvidencePanel evidence={metadataEvidence(c)} />
+            <EvidencePanel evidence={metadataEvidence(c, detail)} />
           </Collapse>
         </Box>
         <Stack spacing={0.5} sx={{ alignItems: 'flex-end' }}>
@@ -213,7 +231,11 @@ function CandidateItem({
                 disabled={saving}
                 onClick={onThumbsDown}
               >
-                {marked ? <ThumbDownIcon fontSize="small" /> : <ThumbDownOutlinedIcon fontSize="small" />}
+                {marked ? (
+                  <ThumbDownIcon fontSize="small" />
+                ) : (
+                  <ThumbDownOutlinedIcon fontSize="small" />
+                )}
               </IconButton>
             </span>
           </Tooltip>
@@ -243,6 +265,7 @@ export const CandidatesCard = memo(function CandidatesCard({
   r,
   selected,
   rowState,
+  detail,
   handlers,
   pathAliases,
   pathVars,
@@ -331,9 +354,13 @@ export const CandidatesCard = memo(function CandidatesCard({
         // overwrites a thumbs-down on the same candidate server-side, so the
         // mark goes too.
         setMark(markKey(c), undefined);
-        api.recordCandidateFeedback(feedbackInput(c, 'positive', rank, count)).catch((err: unknown) => {
-          setFeedbackError(err instanceof Error ? err.message : 'Could not record the applied match');
-        });
+        api
+          .recordCandidateFeedback(feedbackInput(c, 'positive', rank, count))
+          .catch((err: unknown) => {
+            setFeedbackError(
+              err instanceof Error ? err.message : 'Could not record the applied match'
+            );
+          });
       })
       .finally(() => setApplying(false));
   };
@@ -363,7 +390,7 @@ export const CandidatesCard = memo(function CandidatesCard({
   // (owner report 2026-10-07: Audible 284 sat below a highlighted 213 pick).
   const best = visible.reduce<MetadataCandidate | undefined>(
     (b, c) => (b === undefined || c.score > b.score ? c : b),
-    undefined,
+    undefined
   );
 
   const reject = (c: MetadataCandidate) => {
@@ -416,14 +443,18 @@ export const CandidatesCard = memo(function CandidatesCard({
                 data-testid="no-candidate-chip"
               />
             )}
-            {rowState === 'applied' && <Chip label="Applied" size="small" color="success" sx={{ mt: 1 }} />}
+            {rowState === 'applied' && (
+              <Chip label="Applied" size="small" color="success" sx={{ mt: 1 }} />
+            )}
             {rowState === 'rejected' && (
               <Chip
                 label="Rejected — click to undo"
                 size="small"
                 color="error"
                 sx={{ mt: 1, cursor: 'pointer' }}
-                onClick={() => handlers.onAction({ lane: 'metadata', type: 'unreject', id: bookId })}
+                onClick={() =>
+                  handlers.onAction({ lane: 'metadata', type: 'unreject', id: bookId })
+                }
               />
             )}
             {rowState === 'skipped' && (
@@ -446,7 +477,11 @@ export const CandidatesCard = memo(function CandidatesCard({
               onSubmit={(e: React.FormEvent) => {
                 e.preventDefault();
                 setHidden([]);
-                const next: CandidateQuery = { title: draft.title, author: draft.author, browse: true };
+                const next: CandidateQuery = {
+                  title: draft.title,
+                  author: draft.author,
+                  browse: true,
+                };
                 if (candidateKey(bookId, next) === key) {
                   // The same text again: run it again rather than replay
                   // the memoized answer.
@@ -506,6 +541,9 @@ export const CandidatesCard = memo(function CandidatesCard({
                   c={c}
                   isTop={c === best}
                   isCached={!!cached && sameCandidate(cached, c)}
+                  // Only the cached object ITSELF is the index row. A search
+                  // result that is the same candidate is a full one.
+                  detail={c === cached ? detail : 'loaded'}
                   actionable={actionable}
                   applying={applying}
                   onApply={() => applyOne(c, i + 1, visible.length)}

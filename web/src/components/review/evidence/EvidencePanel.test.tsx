@@ -1,7 +1,7 @@
 // file: web/src/components/review/evidence/EvidencePanel.test.tsx
-// version: 2.1.0
+// version: 2.2.0
 // guid: 4f8b0d13-97a2-4c65-b83e-1e6a5c9f0d27
-// last-edited: 2026-09-27
+// last-edited: 2026-10-09
 
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
@@ -155,6 +155,64 @@ describe('waterfall rendering', () => {
   });
 });
 
+describe('a candidate whose full row is not here yet', () => {
+  // The review index serves every candidate WITHOUT its breakdown; the lane
+  // fetches each page's full rows afterwards. During that window -- and for
+  // ever after it fails -- the candidate has no breakdown for a reason that
+  // has nothing to do with the scorer, so the panel must not say it was
+  // "produced without a recorded derivation". Three states, three renderings.
+  const indexRow = {
+    title: 'Cand one',
+    author: 'Author one',
+    source: 'test-source',
+    score: 1.2,
+  } as unknown as MetadataCandidate;
+
+  it('shows a loading note, with a progress indicator, while the detail is pending', () => {
+    renderPanel(metadataEvidence(indexRow, 'pending'));
+    expect(screen.getByText(/loading the score derivation/i)).toBeInTheDocument();
+    expect(screen.getByTestId('evidence-loading')).toBeInTheDocument();
+    expect(screen.getByRole('progressbar')).toBeInTheDocument();
+    expect(screen.queryByText(/without a recorded derivation/i)).not.toBeInTheDocument();
+  });
+
+  it('says the derivation could not be loaded when the detail fetch failed', () => {
+    renderPanel(metadataEvidence(indexRow, 'failed'));
+    expect(screen.getByText(/could not be loaded/i)).toBeInTheDocument();
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+    expect(screen.queryByText(/without a recorded derivation/i)).not.toBeInTheDocument();
+  });
+
+  it('reserves "without a recorded derivation" for a loaded candidate without one', () => {
+    renderPanel(metadataEvidence(indexRow, 'loaded'));
+    expect(screen.getByText(/without a recorded derivation/i)).toBeInTheDocument();
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+    expect(screen.queryByText(/could not be loaded/i)).not.toBeInTheDocument();
+  });
+
+  it('defaults to loaded, for callers whose candidates are always full rows', () => {
+    expect(metadataEvidence(indexRow)).toEqual(metadataEvidence(indexRow, 'loaded'));
+  });
+
+  it('renders a breakdown it has regardless of the detail state', () => {
+    // A row the lane already swapped is never reported pending, but a caller
+    // that has the steps must never hide them behind a spinner either.
+    const full = {
+      ...indexRow,
+      score_breakdown: {
+        score: 1.2,
+        steps: [{ id: 'base', label: 'Base similarity', op: 'base', operand: 1.2, running: 1.2 }],
+      },
+    } as unknown as MetadataCandidate;
+    const ev = metadataEvidence(full, 'pending');
+    expect(ev.steps).toHaveLength(1);
+    expect(ev.loading).toBeUndefined();
+    renderPanel(ev);
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+    expect(screen.getByText('Base similarity')).toBeInTheDocument();
+  });
+});
+
 describe('signal colours are theme-driven', () => {
   // The hues carry meaning: they identify which signal a row is. The old panel
   // hardcoded values chosen against white, several of which were unreadable on
@@ -164,7 +222,7 @@ describe('signal colours are theme-driven', () => {
   // jsdom does NOT resolve CSS custom properties: it returns the literal
   // `var(--mui-palette-signal-exact_file)` for both schemes, so a computed-style
   // comparison here would pass whether or not the two schemes actually differ.
-  // Split the claim into the two halves that can each be checked honestly:
+  // Split the claim into the two halves that can each be checked on their own:
   // the theme really does define different hues, and the component really does
   // reference the variable rather than a baked-in literal. Whether the variable
   // resolves to a legible colour on real paper is a browser-level question, and
