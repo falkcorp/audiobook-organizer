@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/check_task_briefs.py
-# version: 1.0.0
+# version: 1.0.1
 # guid: 93f31e1f-3605-4f23-902b-2b8cf08b8c2d
 # last-edited: 2026-10-09
 
@@ -31,13 +31,26 @@ import sys
 
 TASKS = os.path.join(os.path.dirname(__file__), "..", "docs", "proposals", "2026-10-holistic", "tasks")
 WAVE_ORDER = {"0": 0, "1": 1, "2": 2, "F": 3, "3": 4, "4": 5}
-ID_RE = re.compile(r"\b(0[0-9]|1[01])[- ](PR|P|C|G|X|M|S|T|D|V|U|F|R) ?(\d+[a-z]?)\b")
 MERGE_FIRST_RE = re.compile(r"^\*\*Merge first:\*\* (.*?)\. ")
-BLOCKS_RE = re.compile(r"^(.*?)(?:; not briefed \(roadmap waves 3 to 4\): (.*?))? \(generated from every brief's `Merge first` list on \d{4}-\d{2}-\d{2}; do not hand-edit\)$")
+BLOCKS_RE = re.compile(
+    r"^(.*?)(?:; not briefed \(roadmap waves 3 to 4\): (.*?))?"
+    r" \(generated from every brief's `Merge first` list on \d{4}-\d{2}-\d{2}; do not hand-edit\)$"
+)
+GENERATED_DATE_RE = re.compile(r" on \d{4}-\d{2}-\d{2};")
+
+
+def read(path: str) -> str:
+    with open(path, encoding="utf-8") as fh:
+        return fh.read()
+
+
+def write(path: str, text: str) -> None:
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(text)
 
 
 def field(text: str, name: str) -> str:
-    m = re.search(r"^\| %s \| *(.*?) *\|$" % re.escape(name), text, re.M)
+    m = re.search(rf"^\| {re.escape(name)} \| *(.*?) *\|$", text, re.M)
     return m.group(1) if m else ""
 
 
@@ -47,7 +60,7 @@ def load(root: str) -> dict[str, dict]:
         if path.endswith("README.md"):
             continue
         bid = os.path.basename(path)[:-3]
-        text = open(path, encoding="utf-8").read()
+        text = read(path)
         title = re.search(r"^# [0-9A-Za-z-]+: (.*)$", text, re.M)
         mf = MERGE_FIRST_RE.match(field(text, "Depends on"))
         bl = BLOCKS_RE.match(field(text, "Blocks"))
@@ -93,7 +106,7 @@ def verify(briefs: dict[str, dict]) -> int:
         for x in b["blocks"]:
             if x not in briefs or bid not in briefs[x]["merge_first"]:
                 report(f"{bid}: Blocks names {x} but {x} does not list {bid} in Merge first; run --regen-blocks")
-    color = {bid: 0 for bid in briefs}
+    color = dict.fromkeys(briefs, 0)
 
     def dfs(u: str, stack: list[str]) -> None:
         color[u] = 1
@@ -123,6 +136,12 @@ def bump_header(text: str, today: str) -> str:
     return re.sub(r"<!-- last-edited: \d{4}-\d{2}-\d{2} -->", f"<!-- last-edited: {today} -->", text, count=1)
 
 
+def replace_row(text: str, name: str, cell: str) -> tuple[str, int]:
+    """Replace one header-table row; the replacement is passed through a function so no escapes are processed."""
+    row = f"| {name} | {cell} |"
+    return re.subn(rf"^\| {re.escape(name)} \| .*? \|$", lambda _m, row=row: row, text, count=1, flags=re.M)
+
+
 def regen_blocks(briefs: dict[str, dict]) -> int:
     today = datetime.date.today().isoformat()
     blocked_by: dict[str, set[str]] = {bid: set() for bid in briefs}
@@ -138,13 +157,13 @@ def regen_blocks(briefs: dict[str, dict]) -> int:
             cell += "; not briefed (roadmap waves 3 to 4): " + ", ".join(b["blocks_dangling"])
         cell += f" (generated from every brief's `Merge first` list on {today}; do not hand-edit)"
         old_cell = field(b["text"], "Blocks")
-        if re.sub(r" on \d{4}-\d{2}-\d{2};", " on DATE;", old_cell) == re.sub(r" on \d{4}-\d{2}-\d{2};", " on DATE;", cell):
+        if GENERATED_DATE_RE.sub(" on DATE;", old_cell) == GENERATED_DATE_RE.sub(" on DATE;", cell):
             continue
-        text, n = re.subn(r"^\| Blocks \| .*? \|$", lambda m: f"| Blocks | {cell} |", b["text"], count=1, flags=re.M)
+        text, n = replace_row(b["text"], "Blocks", cell)
         if n != 1:
             print(f"{bid}: no Blocks row")
             continue
-        open(b["path"], "w", encoding="utf-8").write(bump_header(text, today))
+        write(b["path"], bump_header(text, today))
         changed += 1
     print(f"Blocks rewritten: {changed}")
     return 0
@@ -152,39 +171,48 @@ def regen_blocks(briefs: dict[str, dict]) -> int:
 
 def regen_index(briefs: dict[str, dict], root: str) -> int:
     readme = os.path.join(root, "README.md")
-    src = open(readme, encoding="utf-8").read()
+    old = read(readme)
     rows = sorted(briefs.items(), key=lambda kv: (WAVE_ORDER.get(kv[1]["wave"], 9), kv[0]))
     sonnet = sum(1 for _, b in rows if b["model"] == "sonnet")
     opus = sum(1 for _, b in rows if b["model"] == "opus")
     if sonnet + opus != len(rows):
-        print("model cells that are neither sonnet nor opus:", [bid for bid, b in rows if b["model"] not in ("sonnet", "opus")])
+        odd = [bid for bid, b in rows if b["model"] not in ("sonnet", "opus")]
+        print(f"model cells that are neither sonnet nor opus: {odd}")
         return 1
     waves = {w: sum(1 for _, b in rows if b["wave"] == w) for w in WAVE_ORDER}
-    counts = "| Count | Value |\n|---|---|\n| Briefs | %d |\n| Sonnet / Opus | %d / %d |\n" % (len(rows), sonnet, opus)
-    counts += "".join("| Wave %s | %d |\n" % (w, waves[w]) for w in WAVE_ORDER if waves[w])
-    src, c1 = re.subn(r"\| Count \| Value \|\n\|---\|---\|\n(?:\|.*\|\n)+", counts, src, count=1)
+    counts = f"| Count | Value |\n|---|---|\n| Briefs | {len(rows)} |\n| Sonnet / Opus | {sonnet} / {opus} |\n"
+    counts += "".join(f"| Wave {w} | {waves[w]} |\n" for w in WAVE_ORDER if waves[w])
+    src, c1 = re.subn(r"\| Count \| Value \|\n\|---\|---\|\n(?:\|.*\|\n)+", lambda _m: counts, old, count=1)
     table = "| Brief | Title | Wave | Model | Size | Merge first |\n|---|---|---|---|---|---|\n"
     for bid, b in rows:
-        table += "| [%s](%s/%s.md) | %s | %s | %s | %s | %s |\n" % (
-            bid, bid.split("-")[0], bid, b["title"], b["wave"], b["model"], b["size"],
-            ", ".join(b["merge_first"]) if b["merge_first"] else "none",
+        merge_first = ", ".join(b["merge_first"]) if b["merge_first"] else "none"
+        table += (
+            f"| [{bid}]({bid.split('-')[0]}/{bid}.md) | {b['title']} | {b['wave']} | {b['model']} | {b['size']} |"
+            f" {merge_first} |\n"
         )
     src, c2 = re.subn(
-        r"\| Brief \| Title \| Wave \| Model \| Size \| (?:Depends on|Merge first) \|\n\|---\|---\|---\|---\|---\|---\|\n(?:\|.*\|\n)+",
-        table, src, count=1,
+        r"\| Brief \| Title \| Wave \| Model \| Size \| (?:Depends on|Merge first) \|\n"
+        r"\|---\|---\|---\|---\|---\|---\|\n(?:\|.*\|\n)+",
+        lambda _m: table,
+        src,
+        count=1,
     )
     if c1 != 1 or c2 != 1:
         print("README.md: counts box or brief table not found")
         return 1
-    old = open(readme, encoding="utf-8").read()
     if src != old:
         src = re.sub(
             r"<!-- version: (\d+)\.(\d+)\.(\d+) -->",
-            lambda m: f"<!-- version: {m.group(1)}.{int(m.group(2)) + 1}.0 -->", src, count=1,
+            lambda m: f"<!-- version: {m.group(1)}.{int(m.group(2)) + 1}.0 -->",
+            src,
+            count=1,
         )
-        src = re.sub(r"<!-- last-edited: \d{4}-\d{2}-\d{2} -->", f"<!-- last-edited: {datetime.date.today().isoformat()} -->", src, count=1)
-        open(readme, "w", encoding="utf-8").write(src)
-    print("index: briefs=%d sonnet=%d opus=%d waves=%s%s" % (len(rows), sonnet, opus, {w: n for w, n in waves.items() if n}, "" if src != old else " (unchanged)"))
+        today = datetime.date.today().isoformat()
+        src = re.sub(r"<!-- last-edited: \d{4}-\d{2}-\d{2} -->", f"<!-- last-edited: {today} -->", src, count=1)
+        write(readme, src)
+    live = {w: n for w, n in waves.items() if n}
+    suffix = "" if src != old else " (unchanged)"
+    print(f"index: briefs={len(rows)} sonnet={sonnet} opus={opus} waves={live}{suffix}")
     return 0
 
 
@@ -198,11 +226,10 @@ def main() -> int:
     if not briefs:
         print("no briefs under", args.tasks)
         return 1
+    rc = 0
     if args.regen_blocks:
         rc = regen_blocks(briefs)
         briefs = load(args.tasks)
-    else:
-        rc = 0
     if args.index:
         rc = regen_index(briefs, args.tasks) or rc
         briefs = load(args.tasks)
