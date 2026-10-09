@@ -1,5 +1,5 @@
 // file: internal/audiobooks/filter_compiled.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 6a1f3c8e-9d24-4b7a-b0e5-2f8c4d1a7e36
 // last-edited: 2026-10-09
 
@@ -124,8 +124,14 @@ func compileFieldFilter(f FieldFilter) (compiledFilter, error) {
 	return cf, nil
 }
 
+// compileFiltersHook is a test hook; nil in production.
+var compileFiltersHook func()
+
 // compileFieldFilters compiles every filter, stopping at the first error.
 func compileFieldFilters(filters []FieldFilter) ([]compiledFilter, error) {
+	if compileFiltersHook != nil {
+		compileFiltersHook()
+	}
 	out := make([]compiledFilter, 0, len(filters))
 	for _, f := range filters {
 		cf, err := compileFieldFilter(f)
