@@ -1,5 +1,5 @@
 // file: internal/server/handlers/operations/pause_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 94ae9a81-a763-45fb-b24a-f9ede23037aa
 // last-edited: 2026-10-09
 
@@ -7,6 +7,7 @@ package operations_test
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"testing"
 
@@ -69,4 +70,23 @@ func TestGetPauseState_NoRunningOps(t *testing.T) {
 	assert.Empty(t, body.Data.RunningPausable)
 	assert.Empty(t, body.Data.RunningNotPausable)
 	assert.Empty(t, body.Data.Note)
+}
+
+// A store failure must not read as "nothing running": the handler still
+// answers 200 with the in-process pause state, and the lists are empty
+// because the read failed, which it logs (pause.go), not because the library
+// is idle.
+func TestGetPauseState_StoreError_StillReportsPauseState(t *testing.T) {
+	h, store, _, _, _, _ := newTestHandler(t)
+	store.EXPECT().ListOperationsV2Since(mock.Anything, mock.Anything).Return(nil, errors.New("pebble: closed")).Maybe()
+
+	w := run(http.MethodGet, "/operations/pause", "/operations/pause", nil, func(r *gin.Engine) {
+		r.GET("/operations/pause", h.GetPauseState)
+	})
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var body pauseStateBody
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	assert.Empty(t, body.Data.RunningPausable)
+	assert.Empty(t, body.Data.RunningNotPausable)
 }
