@@ -1,5 +1,5 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
 // last-edited: 2026-10-09
 
@@ -262,7 +262,7 @@ var slogRatchet = map[string]int{
 	"internal/server/handlers/metadata/handler.go":               3,
 	"internal/server/handlers/metadata_cache.go":                 3,
 	"internal/server/handlers/openai_validate.go":                3,
-	"internal/server/handlers/operations/handler.go":             3,
+	"internal/server/handlers/operations/handler.go":             2,
 	"internal/server/handlers/operations_v2.go":                  6,
 	"internal/server/handlers/organize.go":                       1,
 	"internal/server/handlers/reading.go":                        1,

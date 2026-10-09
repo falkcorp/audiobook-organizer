@@ -1,14 +1,16 @@
 // file: internal/server/handlers/operations/pause.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3f6b0c28-5a17-4e93-b2d4-91e7c05a8b63
-// last-edited: 2026-09-20
+// last-edited: 2026-10-09
 
 package operations
 
 import (
 	"encoding/json"
 	"strings"
+	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
@@ -117,19 +119,23 @@ func (h *Handler) GetPauseState(c *gin.Context) {
 func (h *Handler) pauseStatePayload() pauseResponse {
 	resp := pauseResponse{PauseState: registry.OperationsPauseState()}
 	if h.store != nil {
-		// GetRecentOperations + a terminal-status filter, because the store
-		// exposes no "active" reader here. isTerminalStatus must stay in sync
-		// with the backend's interrupted_* family; enumerating the three
-		// obvious statuses is the bug this codebase has hit before.
-		if ops, err := h.store.GetRecentOperations(200); err == nil {
+		// The newest v2 rows + a terminal-status filter, because the store
+		// exposes no "active" reader here. Until 2026-10-09 this read the v1
+		// keyspace, which has had no writer since 2026-08-23, so both lists
+		// were always empty. ListRecentOperationsV2 rather than a zero-since
+		// ListOperationsV2Since: the latter decodes and sorts the whole table.
+		// isTerminalOpStatus must stay in sync with the backend's interrupted_*
+		// family; enumerating the three obvious statuses is the bug this
+		// codebase has hit before.
+		if ops, err := database.ListRecentOperationsV2(h.store, 200, time.Now()); err == nil {
 			for _, op := range ops {
 				if isTerminalOpStatus(op.Status) {
 					continue
 				}
-				if pausableDefs[op.Type] {
-					resp.RunningPausable = append(resp.RunningPausable, op.Type)
+				if pausableDefs[op.DefID] {
+					resp.RunningPausable = append(resp.RunningPausable, op.DefID)
 				} else {
-					resp.RunningNotPausable = append(resp.RunningNotPausable, op.Type)
+					resp.RunningNotPausable = append(resp.RunningNotPausable, op.DefID)
 				}
 			}
 		}

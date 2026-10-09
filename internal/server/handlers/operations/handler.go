@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/handler.go
-// version: 1.15.1
+// version: 1.16.0
 // guid: 1b7fbd86-cdda-4921-b2d0-786f5cadb438
-// last-edited: 2026-09-13
+// last-edited: 2026-10-09
 
 // Package operations hosts the background-operation HTTP handlers extracted
 // from the server package: the long-running scan / organize / optimize /
@@ -63,6 +63,14 @@ type Handler struct {
 	// at call time, which this preserves). The provider closure performs the
 	// typed-nil guard so a nil *scheduler.TaskScheduler is never boxed into a
 	// non-nil interface (which would defeat the in-method nil checks).
+	//
+	// Unread since the six task/maintenance-window methods moved to
+	// handlers.SchedulerHandler (TODO.md scheduler-config item, 2026-08-22),
+	// and its reader resolveScheduler was deleted on 2026-10-09 (01-P3). The
+	// field stays because removing it means narrowing New's getScheduler param,
+	// which cascades to every operations.New call site (wire_handlers.go,
+	// handlers_integration_test.go). Drop getScheduler and Scheduler together
+	// when the v1-operations-record retirement touches New's signature anyway.
 	getScheduler func() Scheduler
 	pipeline     ScanCanceler
 	scanStore    AIScanLister
@@ -125,26 +133,6 @@ func New(
 	}
 }
 
-// resolveScheduler returns the live scheduler via the lazy provider, or nil if
-// no provider was supplied (e.g. some unit tests) or the provider yields nil.
-//
-// Unused since the six task/maintenance-window methods that called it moved to
-// handlers.SchedulerHandler (TODO.md scheduler-config item, 2026-08-22).
-// Removing it would mean narrowing New's getScheduler param too, which
-// cascades to every operations.New call site (wire_handlers.go,
-// handlers_integration_test.go) -- out of scope for this mechanical
-// extraction per the task brief. Follow-up: drop getScheduler/resolveScheduler/
-// Scheduler from this package when the v1-operations-record retirement work
-// elsewhere in this backlog touches New's signature anyway.
-//
-//lint:ignore U1000 kept for constructor signature compatibility, see doc above (2026-08-22)
-func (h *Handler) resolveScheduler() Scheduler {
-	if h.getScheduler == nil {
-		return nil
-	}
-	return h.getScheduler()
-}
-
 // --- Operation starters ---
 
 // --- Operation status / cancel ---
@@ -157,53 +145,6 @@ func (h *Handler) resolveScheduler() Scheduler {
 // progresses, so the legacy shape is materialised, not derived. A read-time
 // converter alongside a write-time bridge is two sources of truth for the same
 // row -- worth saying out loud while the kill-v1 migration is still in flight.
-
-// CancelOperation implements DELETE /operations/:id.
-func (h *Handler) CancelOperation(c *gin.Context) {
-	if h.store == nil {
-		httputil.RespondWithInternalError(c, "database not initialized")
-		return
-	}
-
-	id := c.Param("id")
-
-	// Check if this is an AI scan operation — cancel via pipeline manager
-	if h.pipeline != nil && h.scanStore != nil {
-		scans, _ := h.scanStore.ListScans()
-		for _, scan := range scans {
-			if scan.OperationID == id {
-				if err := h.pipeline.CancelScan(scan.ID); err != nil {
-					slog.Info("canceloperation AI scan cancel warning", "scan", scan.ID, "err", err)
-				}
-				httputil.RespondWithNoContent(c)
-				return
-			}
-		}
-	}
-
-	// Try cancel via v2 registry (running and queued v2 ops). Deliberately
-	// left as `err == nil` rather than distinguishing registry.ErrOpNotFound
-	// from other errors (see TASK-115): this legacy route already tolerates
-	// ANY Cancel error by falling through to the force-update below, so an
-	// unknown id here still ends up 204 via the fallback path — unlike
-	// DELETE /operations/v2/:id, which now answers 404 for an unknown id.
-	// This route is being retired separately per other TODO items; its
-	// force-update fallback is the intended behavior for a stale/legacy id
-	// and is out of scope for this change.
-	if h.registry != nil {
-		if err := h.registry.Cancel(id); err == nil {
-			httputil.RespondWithNoContent(c)
-			return
-		}
-	}
-
-	// Fallback: force-update DB status (e.g., stale after restart)
-	if dbErr := h.store.UpdateOperationStatus(id, "canceled", 0, 0, "force canceled (stale operation)"); dbErr != nil {
-		httputil.InternalError(c, "failed to cancel operation", dbErr)
-		return
-	}
-	httputil.RespondWithNoContent(c)
-}
 
 // ClearStaleOperations repairs operation rows that are stuck reading as
 // in-flight. Implements POST /operations/clear-stale.

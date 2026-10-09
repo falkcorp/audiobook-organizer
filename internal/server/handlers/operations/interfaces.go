@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/interfaces.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 37502068-5061-401b-841e-0b191567f0bf
-// last-edited: 2026-09-11
+// last-edited: 2026-10-09
 
 // Narrow dependency interfaces for the operations domain handlers (scan /
 // organize / optimize / transcode triggers, operation status / logs / result /
@@ -13,12 +13,13 @@
 //
 // Tasks and the maintenance window moved to handlers.SchedulerHandler
 // (TODO.md scheduler-config item, 2026-08-22); Scheduler below is kept
-// unused for the same reason resolveScheduler is in handler.go.
+// unused for the same reason the getScheduler field is in handler.go.
 
 package operations
 
 import (
 	"context"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -59,6 +60,11 @@ type operationsRecordStore interface {
 	GetOperationV2(id string) (*database.OperationV2Row, error)
 	GetOperationChanges(operationID string) ([]*database.OperationChange, error)
 	GetRecentOperations(limit int) ([]database.Operation, error)
+	// ListOperationsV2Since backs the pause state's running-op lists, through
+	// database.ListRecentOperationsV2 (which takes an OperationsV2SinceLister).
+	// Never call it directly with a zero since: that decodes and sorts the whole
+	// v2 table.
+	ListOperationsV2Since(since time.Time, limit int) ([]database.OperationV2Row, error)
 	UpdateOperationStatus(id, status string, progress, total int, message string) error
 }
 
@@ -73,9 +79,12 @@ type OperationsStore interface {
 }
 
 // OperationsRegistry is the narrow operations-registry subset the operations
-// handlers require: EnqueueOp (scan / organize / optimize / transcode starters)
-// and Cancel (cancelOperation v2 path). The variadic opts param on EnqueueOp is
-// preserved so the concrete *opsregistry.Registry satisfies the interface.
+// handlers once required: EnqueueOp (scan / organize / optimize / transcode
+// starters) and Cancel (the unrouted CancelOperation's v2 path). No handler
+// method in this package calls either since CancelOperation was deleted
+// (2026-10-09, 01-P3); kept for New's signature, like Scheduler below. The
+// variadic opts param on EnqueueOp is preserved so the concrete
+// *opsregistry.Registry satisfies the interface.
 type OperationsRegistry interface {
 	EnqueueOp(ctx context.Context, defID string, params any, opts ...opsregistry.EnqueueOption) (string, error)
 	Cancel(opID string) error
@@ -87,8 +96,8 @@ type OperationsRegistry interface {
 // copy, since this package cannot import package handlers without a cycle).
 // Unused here since that move; kept only because removing it means narrowing
 // New's getScheduler param, which cascades to every operations.New call
-// site — out of scope for that mechanical extraction. See resolveScheduler's
-// doc comment in handler.go for the fuller reasoning.
+// site — out of scope for that mechanical extraction. See the getScheduler
+// field's doc comment in handler.go for the fuller reasoning.
 type Scheduler interface {
 	ListTasks() []scheduler.TaskInfo
 	RunTaskManual(name string) (*database.Operation, error)
@@ -97,15 +106,18 @@ type Scheduler interface {
 	GetLastMaintenanceRunDate() string
 }
 
-// ScanCanceler is the narrow *aiscan.PipelineManager subset used by
-// cancelOperation to cancel an in-flight AI scan by scan ID.
+// ScanCanceler is the narrow *aiscan.PipelineManager subset the unrouted
+// CancelOperation used to cancel an in-flight AI scan by scan ID. Unused since
+// CancelOperation was deleted (2026-10-09, 01-P3); kept for New's signature,
+// like Scheduler above.
 type ScanCanceler interface {
 	CancelScan(scanID int) error
 }
 
-// AIScanLister is the narrow *database.AIScanStore subset used by
-// cancelOperation to find the AI scan whose OperationID matches the op being
-// canceled.
+// AIScanLister is the narrow *database.AIScanStore subset the unrouted
+// CancelOperation used to find the AI scan whose OperationID matched the op
+// being canceled. Unused since that deletion (2026-10-09, 01-P3); kept for
+// New's signature, like Scheduler above.
 type AIScanLister interface {
 	ListScans() ([]database.Scan, error)
 }
