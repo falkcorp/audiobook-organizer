@@ -1,5 +1,5 @@
 <!-- file: docs/proposals/2026-10-holistic/tasks/01/01-README.md -->
-<!-- version: 1.0.3 -->
+<!-- version: 1.0.4 -->
 <!-- guid: ae2155fb-ede4-4669-bc91-6c7b6c927cdd -->
 <!-- last-edited: 2026-10-09 -->
 
@@ -24,7 +24,7 @@ Briefs: **40** (opus: 2, sonnet: 38). Wave 0: 6, wave 1: 8, wave 2: 15, freeze w
 | [01-P8](01-P8.md) | Route every web request through apiFetch | 1 | sonnet | M | 01 P7 (both touch `web/src/services/playlistApi.ts`) |
 | [01-P9](01-P9.md) | CI ratchet for dead Go code (deadcode) and a knip report | 1 | sonnet | S | 07 C3 (ci.yml order: C2 -> C3 -> 06 P2 -> 01 P9 -> 07 G4); the tier-1 PRs P2, P4, P5, P6, P7 merged first so the baseline captures the cleaned state; 07 C1 (ratchets are one-way) |
 | [01-P76](01-P76.md) | Delete internal/download and its config | 2 | sonnet | S | 07 C1; 01 P79a (config.go order: P79a -> P76); 10 PR 0–2 (D68) |
-| [01-P77](01-P77.md) | Delete the rename preview and apply routes | 1 | sonnet | S | 01 P5 (both edit `wire_handlers.go` / `audiobooks_compat.go`); 01 P7 and 05 PR 1 on `api.ts` (R16 order: P7 -> 03 PR 3 -> 05 PR 1 -> P77) |
+| [01-P77](01-P77.md) | Delete the rename preview and apply routes | 1 | sonnet | S | 01 P5 (both edit `wire_handlers.go` / `audiobooks_compat.go`); 01 P7 and 05 PR 1 on `api.ts` (R16 order: P7 -> 05 PR 1 -> P77; 03 PR 3 is wave 2 and rebases on this) |
 | [01-P79b](01-P79b.md) | Honour create_backups on tag writes | 1 | opus | S | 04 P3a (the scheduled cleanup must read `backup_retention_days` first, so the new `.bak-*` siblings are swept); 01 P6 (edits `internal/tagger/safe_write.go` first); 01 P79a (config doc order) |
 | [01-P79c](01-P79c.md) | Honour verify_after_write on tag writes | 1 | sonnet | S | 01 P6 (edits `tagger/safe_write.go` first); 01 P79a; 01 P79b (same file, merge in that order) |
 | [01-P81a](01-P81a.md) | Retire the wipe route (first of the P81 series) | 1 | sonnet | S | 01 P3 and 07 R4 (server_lifecycle.go order: 01 P3 -> 07 R2 -> R3 -> R4 -> 01 P81 wipe) |

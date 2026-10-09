@@ -1,5 +1,5 @@
 <!-- file: docs/proposals/2026-10-holistic/tasks/06/06-README.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: 4e8b2d71-5a39-4c06-b1f4-7d2a9c3e6f58 -->
 <!-- last-edited: 2026-10-09 -->
 
@@ -13,7 +13,7 @@ Source: `docs/proposals/2026-10-holistic/06-bleeding-edge-go-node.md` (v1.3.0) a
 |---|---|---|---|---|---|
 | [06-P1](06-P1.md) | Go 1.27.2 across the 18 pinned files | 0 | sonnet | S | 07 C1 |
 | [06-P2](06-P2.md) | Drift check covers Woodpecker, `ci_remote.py`, workflow patch level | 0 | sonnet | S | P1; 07 C3 (on `ci.yml`) |
-| [06-P3](06-P3.md) | pprof tag in every deploy, committed Makefile owns build flags | 3 (roadmap) | sonnet | S | 07 C3 |
+| [06-P3](06-P3.md) | pprof tag in every deploy, committed Makefile owns build flags | 1 (pulled forward 2026-10-09; before 07-R4 on `Makefile.local.example`) | sonnet | S | 07 C3 |
 | [06-P4](06-P4.md) | Flight recorder with watchdog and search-stall hooks | 3 (roadmap) | **opus** | M | none hard (P3 for one test) |
 | [06-P5](06-P5.md) | go fix batch 1 (ten simple analyzers, 80 files) | F | sonnet | M | P1; 01 T1-T7; 02 PR 9a |
 | [06-P6a](06-P6a.md) | go fix batch 2, `internal/database` (33) | F | sonnet | M | P5; 01 T1 |
@@ -39,7 +39,7 @@ P6 is five briefs (P6a to P6e), so the folder holds 15 briefs plus this README.
 
 ## Notes for the coordinator
 
-1. **Waves.** The task asked for waves 0, 1, 2 and F. In the roadmap (`08-integrated-roadmap.md` §5) only P1 and P2 are wave 0 and P5 to P8 are freeze window F. There is no 06 PR in wave 1 or 2. P3, P4, P12 (Observability row), P9 and P11 (Frontend row) are listed under **wave 3**; each brief says so and notes it may be pulled forward when it has no code dependency (P3, P4, P9).
+1. **Waves.** The task asked for waves 0, 1, 2 and F. In the roadmap (`08-integrated-roadmap.md` §5) only P1 and P2 are wave 0 and P5 to P8 are freeze window F. P3 was pulled forward to **wave 1** on 2026-10-09 (07-R4 and P3 both require P3 before R4 on `Makefile.local.example`). P4, P12 (Observability row), P9 and P11 (Frontend row) stay under **wave 3**; each brief says so and notes it may be pulled forward when it has no code dependency (P4, P9).
 2. **P1 versus the 7 `ci.yml` lines.** `ci.yml` has no `1.27.1` string (it passes a floating `'1.27'` at lines 47, 125, 189, 265, 338, 464, 529), so it is not among the 18 pinned files. Those lines belong to P2, as in the source doc.
 3. **P2 goes beyond the source doc, on purpose.** `check_toolchain_versions.py` today requires every workflow `go-version:` to be the floating minor, so changing only `ci.yml` to `'1.27.2'` would fail the existing check. The brief applies the full-pin rule to all 14 literals in 8 workflows (the 7 in `ci.yml` plus `binary-smoke`, `codeql`, `e2e`, `frontend-ci`, `nightly`, `security`, `vulnerability-scan`) and carries a Decision flag with a fallback if the owner prefers floating minors. It also requires the agent to confirm that the `falkcorp/github-common` reusable workflows pass the value straight to setup-go.
 4. **P1 also fixes a latent test trap.** `scripts/tests/test_check_toolchain_versions.py` mutates `.envrc` and `Dockerfile.build-cgo` to `1.27.2` as the "wrong" value; after the bump those mutations would be no-ops. The brief has the tests derive the pin from the Makefile.

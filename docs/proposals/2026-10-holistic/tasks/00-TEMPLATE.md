@@ -1,5 +1,5 @@
 <!-- file: docs/proposals/2026-10-holistic/tasks/00-TEMPLATE.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 5c1d9e2f-3b7a-4d86-9f0e-2a6c4b8d1e37 -->
 <!-- last-edited: 2026-10-09 -->
 
@@ -20,8 +20,8 @@ One file per PR, named `<workstream>-<pr-id>.md` (for example `01-P1.md`, `07-C1
 | Model | sonnet (default) or opus (only when the task needs cross-package judgment, a new runtime invariant, or a data migration) |
 | Wave | 0 / 1 / 2 / F / 3 / 4 |
 | Size | S / M / L |
-| Depends on | task ids that must be merged first, or "none" |
-| Blocks | task ids waiting on this one |
+| Depends on | `**Merge first:** <comma-separated brief ids, or none>.` then prose (why; rebase-order notes; ids that are wave 3/4 and not briefed). Only the Merge first list is authoritative; `scripts/check_task_briefs.py` verifies it (ids exist, waves respect it, no cycles) |
+| Blocks | generated: run `scripts/check_task_briefs.py --regen-blocks --index` after editing any Merge first list or Wave; never hand-edit |
 | Owner decisions | D-numbers from 09-owner-decisions.md that this task implements |
 | Spec | the section of the proposal doc this task comes from, by path and heading |
 

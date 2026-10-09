@@ -1,5 +1,5 @@
 <!-- file: docs/proposals/2026-10-holistic/tasks/05/05-README.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: 7d3e9b14-5c2a-4f68-a1e0-9b4c6d8f2a73 -->
 <!-- last-edited: 2026-10-09 -->
 
@@ -20,7 +20,7 @@ briefs were verified at repo HEAD `93a9b745f`; re-grep before editing.
 | [05-PR5](05-PR5.md) | `pkg/ops` SDK, chunk-leased runner and ledger, Writer, v2 adapter | 1 | opus | L | PR3, PR4, 08 X2, 07 R2-R4 |
 | [05-PR6](05-PR6.md) | `opstest` harness, fault injection, conformance, mutation tests | 1 | opus | M | PR5 |
 | [05-PR7](05-PR7.md) | `opscatalog`, `oplint` as go/analysis, startup gate, ledger embed | 1 | opus | M | PR5, PR6, 07 S3 |
-| [05-PR8](05-PR8.md) | `ops.Schedule` in TaskScheduler plus cron evaluator | 1 | sonnet | M | PR5, PR7, 04 P1 (and 04 P4a, P9, P12, 02 PR14 order) |
+| [05-PR8](05-PR8.md) | `ops.Schedule` in TaskScheduler plus cron evaluator | 1 | sonnet | M | PR5, PR7, 04 P1 (and 04 P4a-P4f, P9, P12; 02 PR14 is a `tasks.go` rebase note only, this PR does not edit that file) |
 | [05-PR9](05-PR9.md) | `/api/v3/ops/*` census, timeline, SSE | 1 | sonnet | M | PR4, PR5, PR8 |
 
 Model split: opus 6 (PR1, 3, 4, 5, 6, 7), sonnet 4 (PR0, 2, 8, 9). PR7 was moved from the
