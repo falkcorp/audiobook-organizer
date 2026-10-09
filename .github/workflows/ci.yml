@@ -1,5 +1,5 @@
 # file: .github/workflows/ci.yml
-# version: 3.20.0
+# version: 3.21.0
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
 # last-edited: 2026-10-09
 
@@ -582,14 +582,39 @@ jobs:
           go-version: '1.27'
           cache: false
 
-      - name: Restore Go cache (manual)
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      # Not the shared `Restore Go cache (manual)` step the other jobs use.
+      # That cache is keyed on go.sum alone, so once any job has saved it for
+      # a go.sum, every later job hits the exact key and actions/cache never
+      # saves again: it holds only the first saver's build objects, which were
+      # not built with -race -covermode=atomic, so each shard recompiled the
+      # whole module graph race-instrumented from scratch. On PR #3882
+      # (2026-10-09) the split-package `go test -list` alone took 9 min 18 s per
+      # shard before the first test ran, against ~6 min of tests.
+      #
+      # So the shards keep their own race-flavoured cache, keyed by day so it
+      # refreshes: a shard restores today's entry, else the newest earlier one
+      # (then the shared cache, for the module download at least), and a
+      # shard on main saves it after its run when today's key is new. The
+      # four shards race for that one save; the first to finish wins and the
+      # others find the key reserved and skip, so it is one save a day of
+      # one shard's objects plus the shared dependency graph. PR runs read
+      # main's entries (a PR can read its base branch's caches) and never
+      # save, so PR branches add no cache churn against the 10 GB repo cap.
+      - name: Day stamp for the race build cache
+        id: stamp
+        run: echo "day=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Go race build cache
+        id: race-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-          key: ${{ runner.os }}-go-1.27-${{ hashFiles('**/go.sum') }}
+          key: ${{ runner.os }}-go-1.27-race-short-${{ hashFiles('**/go.sum') }}-${{ steps.stamp.outputs.day }}
           restore-keys: |
+            ${{ runner.os }}-go-1.27-race-short-${{ hashFiles('**/go.sum') }}-
+            ${{ runner.os }}-go-1.27-race-short-
             ${{ runner.os }}-go-1.27-
             ${{ runner.os }}-go-
 
@@ -603,6 +628,17 @@ jobs:
         run: |
           echo "n=${SHARD%%/*}" >> "$GITHUB_OUTPUT"
           make test-short-shard SHARD="$SHARD"
+
+      # !cancelled(), not the default success(): a red run's compiled objects
+      # are as reusable as a green run's, and the next run is what pays.
+      - name: Save Go race build cache (main, first run of the day)
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && steps.race-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ steps.race-cache.outputs.cache-primary-key }}
 
       - name: Upload shard coverage profile
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

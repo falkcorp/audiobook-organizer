@@ -1,5 +1,5 @@
 # file: scripts/tests/test_short_test_shards.py
-# version: 1.0.0
+# version: 1.1.0
 # guid: e4a7c1b9-58d2-4f36-a0c3-2d9b6f8e1a74
 # last-edited: 2026-10-09
 """Tests for scripts/ci/short_test_shards.py: plan completeness, determinism, merge.
@@ -55,8 +55,8 @@ WEIGHTS = {"big": 320, "huge": 470, "small/a": 40}
 TIMINGS = {"huge": {"TestHuge00": 120.0, "TestHuge01": 80.0}}
 
 
-def stub_lister(path: str, go_args: list[str]) -> list[str]:
-    return sorted(NAMES.get(path, []))
+def stub_lister(paths: list[str], go_args: list[str]) -> dict[str, list[str]]:
+    return {p: sorted(NAMES.get(p, [])) for p in paths}
 
 
 def plan(count: int = 4) -> tuple[list[list[sts.Unit]], dict[str, list[str]]]:
@@ -118,7 +118,7 @@ class CompletenessTest(unittest.TestCase):
         bins, listed = plan()
         self.assertEqual(sts.verify(bins, PKGS, listed), [])
         total = sum(len(v) for v in NAMES.values())
-        self.assertEqual(sts.full_check(bins, PKGS, listed, [], stub_lister, 2), (total, 0, 0))
+        self.assertEqual(sts.full_check(bins, PKGS, listed, [], stub_lister), (total, 0, 0))
 
     def _drop_one_name(self, bins: list[list[sts.Unit]]) -> list[list[sts.Unit]]:
         out = [list(b) for b in bins]
@@ -135,7 +135,7 @@ class CompletenessTest(unittest.TestCase):
         errors = sts.verify(broken, PKGS, listed)
         self.assertEqual(len(errors), 1)
         self.assertIn("huge: 1 tests in no group", errors[0])
-        total, dup, missing = sts.full_check(broken, PKGS, listed, [], stub_lister, 2)
+        total, dup, missing = sts.full_check(broken, PKGS, listed, [], stub_lister)
         self.assertEqual((dup, missing), (0, 1))
 
     def test_duplicated_name_fails(self) -> None:
@@ -153,13 +153,13 @@ class CompletenessTest(unittest.TestCase):
         self.assertTrue(
             any("in more than one group" in e for e in sts.verify(broken, PKGS, listed))
         )
-        self.assertEqual(sts.full_check(broken, PKGS, listed, [], stub_lister, 2)[1], 1)
+        self.assertEqual(sts.full_check(broken, PKGS, listed, [], stub_lister)[1], 1)
 
     def test_dropped_whole_package_fails(self) -> None:
         bins, listed = plan()
         broken = [[u for u in b if u.pkg.key != "small/c"] for b in bins]
         self.assertIn("small/c: not assigned to any shard", sts.verify(broken, PKGS, listed))
-        self.assertEqual(sts.full_check(broken, PKGS, listed, [], stub_lister, 2)[2], 3)
+        self.assertEqual(sts.full_check(broken, PKGS, listed, [], stub_lister)[2], 3)
 
     def test_package_without_tests_must_still_be_assigned(self) -> None:
         # It contributes uncovered statements to the coverage total.
@@ -203,7 +203,7 @@ class CompletenessTest(unittest.TestCase):
     def test_lister_failure_propagates(self) -> None:
         # A compile error makes go_test_shards.list_tests raise SystemExit;
         # it must surface, not be swallowed into an unsplit package.
-        def failing(path: str, go_args: list[str]) -> list[str]:
+        def failing(paths: list[str], go_args: list[str]) -> dict[str, list[str]]:
             raise SystemExit("::error::go test -list failed")
 
         with self.assertRaises(SystemExit):

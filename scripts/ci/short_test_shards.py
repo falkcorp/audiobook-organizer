@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/ci/short_test_shards.py
-# version: 1.0.0
+# version: 1.1.0
 # guid: 6c2f9a47-3e1b-4d88-9f05-b7a1d4e3c862
 # last-edited: 2026-10-09
 """Run the whole short Go test suite as one of N shards, then merge coverage.
@@ -25,7 +25,8 @@ matrix):
   * Completeness. Before anything runs, every shard checks that each package
     is assigned exactly once (whole, or as split groups and never both) and
     that the split groups of every split package cover its `go test -list`
-    names exactly once. `--check` extends the name-level check to every test
+    names exactly once (one `go test -list` call for all split packages,
+    go_test_shards.list_tests_many: see there for why not one per package). `--check` extends the name-level check to every test
     package. A compile error in a listed package fails the shard
     (go_test_shards.list_tests exits non-zero), and a split group whose
     pattern matched nothing fails it too.
@@ -88,7 +89,8 @@ _DEFAULT_SHARDS = 4
 # largest today is ~76 KB (all of internal/plugins/maintenance in one group).
 _MAX_PATTERN = 120_000
 
-Lister = Callable[[str, list[str]], list[str]]
+# Import paths -> their `go test -list` names, in one go invocation.
+Lister = Callable[[list[str], list[str]], dict[str, list[str]]]
 
 
 @dataclass(frozen=True)
@@ -149,14 +151,10 @@ def _estimate(names: list[str], timings: dict[str, float]) -> dict[str, float]:
     return {n: timings.get(n, default) for n in names}
 
 
-def _list_all(
-    pkgs: list[Package], go_args: list[str], lister: Lister, jobs: int
-) -> dict[str, list[str]]:
+def _list_all(pkgs: list[Package], go_args: list[str], lister: Lister) -> dict[str, list[str]]:
     if not pkgs:
         return {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, jobs)) as ex:
-        futs = {p.path: ex.submit(lister, p.path, go_args) for p in pkgs}
-        return {path: f.result() for path, f in futs.items()}
+    return lister([p.path for p in pkgs], go_args)
 
 
 def build_units(
@@ -165,7 +163,6 @@ def build_units(
     timings: dict[str, dict[str, float]],
     go_args: list[str],
     lister: Lister,
-    jobs: int = 4,
 ) -> tuple[list[Unit], dict[str, list[str]]]:
     """Return the units and the `go test -list` names of every split package."""
     split = {}
@@ -173,7 +170,7 @@ def build_units(
         w = package_weight(p, weights, timings)
         if p.has_tests and w > _SPLIT_CAP:
             split[p.path] = math.ceil(w / _SPLIT_CAP)
-    listed = _list_all([p for p in pkgs if p.path in split], go_args, lister, jobs)
+    listed = _list_all([p for p in pkgs if p.path in split], go_args, lister)
 
     units: list[Unit] = []
     for p in pkgs:
@@ -255,12 +252,11 @@ def full_check(
     listed: dict[str, list[str]],
     go_args: list[str],
     lister: Lister,
-    jobs: int,
 ) -> tuple[int, int, int]:
     """Name-level union over every test package: (total, duplicates, missing)."""
     need = [p for p in pkgs if p.has_tests and p.path not in listed]
     every = dict(listed)
-    every.update(_list_all(need, go_args, lister, jobs))
+    every.update(_list_all(need, go_args, lister))
     assigned: Counter[tuple[str, str]] = Counter()
     for b in bins:
         for u in b:
@@ -386,7 +382,7 @@ def _parse_shard(spec: str) -> tuple[int, int]:
 
 def main(
     argv: list[str] | None = None,
-    lister: Lister = gts.list_tests,
+    lister: Lister = gts.list_tests_many,
     loader: Callable[[], list[Package]] = load_packages,
 ) -> int:
     ap = argparse.ArgumentParser(
@@ -398,8 +394,7 @@ def main(
         "--jobs",
         type=int,
         default=0,
-        help="concurrent go test calls in a shard (default 0: all at once); "
-        "`go test -list` runs use the CPU count",
+        help="concurrent go test calls in a shard (default 0: all at once)",
     )
     ap.add_argument("--weights", default=os.path.join(_HERE, "short_test_weights.json"))
     ap.add_argument("--timings", default=os.path.join(_HERE, "go_test_timings.json"))
@@ -438,8 +433,7 @@ def main(
     weights = _load_json(a.weights, required=True)
     timings = _load_json(a.timings, required=False)
     pkgs = loader()
-    list_jobs = os.cpu_count() or 1
-    units, listed = build_units(pkgs, weights, timings, go_args, lister, list_jobs)
+    units, listed = build_units(pkgs, weights, timings, go_args, lister)
     bins = assign(units, count)
     errors = verify(bins, pkgs, listed)
     for e in errors:
@@ -450,7 +444,7 @@ def main(
     if a.plan:
         _print_plan(bins, index)
     if a.check:
-        total, dup, missing = full_check(bins, pkgs, listed, go_args, lister, list_jobs)
+        total, dup, missing = full_check(bins, pkgs, listed, go_args, lister)
         print(
             f"{'OK' if not dup and not missing else 'FAIL'}: {total} tests across {count} shards, {dup} duplicates, {missing} missing",
             flush=True,
