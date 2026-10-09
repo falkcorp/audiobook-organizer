@@ -1,7 +1,7 @@
 // file: internal/server/handlers_integration_test.go
-// version: 1.14.0
+// version: 1.14.1
 // guid: 3f4a5b6c-7d8e-9f0a-1b2c-3d4e5f6a7b8c
-// last-edited: 2026-10-07
+// last-edited: 2026-10-09
 
 package server
 
@@ -15,6 +15,7 @@ import (
 	"context"
 	"fmt"
 
+	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/batch"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
@@ -47,8 +48,8 @@ func newOperationsHandler(s *Server) *operations.Handler {
 		func(id string) (*undo.UndoConflictReport, error) {
 			return undo.PreflightUndoConflicts(s.storeForWiring(), id)
 		},
-		func(id string) (*RevertResult, error) {
-			return NewRevertService(s.storeForWiring()).RevertOperation(id)
+		func(id string) (*audiobookspkg.RevertResult, error) {
+			return audiobookspkg.NewRevertService(s.storeForWiring()).RevertOperation(id)
 		},
 	)
 }

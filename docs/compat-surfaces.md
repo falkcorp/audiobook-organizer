@@ -1,7 +1,7 @@
 <!-- file: docs/compat-surfaces.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: c3d4e5f6-7890-abcd-ef12-345678901234 -->
-<!-- last-edited: 2026-06-23 -->
+<!-- last-edited: 2026-10-09 -->
 
 # Backward-Compatibility Surfaces
 
@@ -17,18 +17,9 @@ whenever a caller sweep is done.
 
 ## Internal Server Package → organizer
 
-All four files below exist because types were extracted from `internal/server`
-into `internal/organizer` (PRs #1232–#1239). The server package needs the old
-names until callers in other packages are updated to import `organizer` directly.
-
-| File | Re-exports | Removal condition |
-|---|---|---|
-| `internal/server/file_move.go` | `MoveBookFileResult`, `MoveBookFile` from `organizer` | Update all `server.MoveBookFileResult`/`server.MoveBookFile` usages (check with `findReferences`) then delete file |
-| `internal/server/pipeline_checkpoint.go` | Phase constants + `CheckpointData` etc. from `organizer` | Same: sweep `server.phaseRename` etc., then delete |
-| `internal/server/file_pipeline.go` | `FileRenameEntry`, `FilePipelineResult`, `RenameResult`, `RelocateRequest/Result` from `organizer` | Sweep + delete |
-| `internal/server/deluge_importer_adapter.go` | `LibraryImporterAdapter` from `deluge` | Sweep callers inside `internal/server/`, update to `deluge.LibraryImporterAdapter`, then delete |
-
-**How to remove:** `grep -r 'server\.MoveBookFile\|server\.FileRename\|server\.FilePipeline\|server\.RelocateRequest\|server\.LibraryImporterAdapter' internal/` to find callers; update imports; delete shim file.
+The `internal/server` re-export files from the `organizer` and `deluge`
+extraction (PRs #1232–#1239) have all been removed; callers import those
+packages directly.
 
 ---
 

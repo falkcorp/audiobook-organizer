@@ -1,7 +1,7 @@
 // file: internal/server/series_rename_ops.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: f9b6a9b0-62cc-40eb-8c93-e281b6dce050
-// last-edited: 2026-09-12
+// last-edited: 2026-10-09
 
 // series_rename_ops registers entities.series-rename, the queued operation
 // behind PUT /series/:id/name and PATCH /series/:id. Both endpoints used to
@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"time"
 
+	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -141,8 +142,8 @@ func (s *Server) invalidateSeriesCaches() {
 // operation's change ledger and, when any series_rename row was restored,
 // drops the series caches so GET /series shows the restored name at once.
 // A partial revert still invalidates, since its restored rows did land.
-func (s *Server) revertOperation(id string) (*RevertResult, error) {
-	res, err := NewRevertService(s.storeForWiring()).RevertOperation(id)
+func (s *Server) revertOperation(id string) (*audiobookspkg.RevertResult, error) {
+	res, err := audiobookspkg.NewRevertService(s.storeForWiring()).RevertOperation(id)
 	if res != nil && res.RestoredTypes[undo.ChangeTypeSeriesRename] > 0 {
 		s.invalidateSeriesCaches()
 	}

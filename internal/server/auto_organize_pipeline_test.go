@@ -1,7 +1,7 @@
 // file: internal/server/auto_organize_pipeline_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6c30f8a4-97b1-4de2-8f05-c4e2b16a73d9
-// last-edited: 2026-08-24
+// last-edited: 2026-10-09
 
 package server
 
@@ -13,6 +13,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -128,7 +129,7 @@ func TestAutoOrganizeHandsWorkToTheRealPipeline(t *testing.T) {
 	// temp dir lands on, which would make this test's behaviour machine-specific.
 	config.AppConfig.OrganizationStrategy = "copy"
 
-	srv := &Server{store: store, organizeService: NewOrganizeService(store)}
+	srv := &Server{store: store, organizeService: audiobookspkg.NewOrganizeService(store)}
 	srv.autoOrganizeScannedBooks(context.Background(),
 		[]scanner.Book{{FilePath: bookPath}}, logger.New("test"))
 

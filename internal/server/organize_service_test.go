@@ -1,7 +1,7 @@
 // file: internal/server/organize_service_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
-// last-edited: 2026-10-02
+// last-edited: 2026-10-09
 
 package server
 
@@ -13,6 +13,7 @@ import (
 	"sync"
 	"testing"
 
+	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -20,7 +21,7 @@ import (
 
 func TestOrganizeService_FilterBooksNeedingOrganization(t *testing.T) {
 	mockDB := &database.MockStore{}
-	os := NewOrganizeService(mockDB)
+	os := audiobookspkg.NewOrganizeService(mockDB)
 
 	books := []database.Book{
 		{ID: "1", Title: "Book 1", FilePath: "/import/book1.m4b"},
@@ -46,7 +47,7 @@ func TestOrganizeService_PerformOrganize_NoBooksToOrganize(t *testing.T) {
 			return []database.BookCore{}, nil
 		},
 	}
-	svc := NewOrganizeService(mockDB)
+	svc := audiobookspkg.NewOrganizeService(mockDB)
 
 	ctx := context.Background()
 	testLog := logger.New("test")
@@ -157,7 +158,7 @@ func TestOrganizeService_PerformOrganize_WithBooks(t *testing.T) {
 		},
 	}
 
-	svc := NewOrganizeService(mockDB)
+	svc := audiobookspkg.NewOrganizeService(mockDB)
 	ctx := context.Background()
 	testLog := logger.New("test")
 	req := &OrganizeRequest{}
