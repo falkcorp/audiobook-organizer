@@ -1,5 +1,5 @@
 <!-- file: docs/proposals/2026-10-holistic/09-owner-decisions.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 3b9e6f2a-71c4-4d0e-a8b5-9f1c2e7d4a60 -->
 <!-- last-edited: 2026-10-09 -->
 
@@ -77,7 +77,7 @@ These are the owner's answers to the decisions in `08-integrated-roadmap.md` §7
 |---|---|
 | D52 | **Deluge cleanup after organize (new feature).** Once every file in a torrent has a verified matching `book_file` in the library (same size and a content hash or fingerprint match; never path alone), remove the torrent **and its downloaded data** from Deluge, but only after seeding reaches **ratio 1.0 or 14 days, whichever comes first**. Both thresholds are settings. It is built as a Repairs-style fixer (trial → approve → apply) on the ops v3 Fixer kind, with a declared `Deletes` effect and a journal. It never touches library files or `book_file` rows. It needs its own design doc before implementation; reuse the existing Deluge client and evaluate `versions/swap.go`'s `NotifyDelugeAfterVersionSwap`. |
 
-## Round-2 open decisions (D53–D67)
+## Round-2 open decisions (D53–D68)
 
 Appended by the coordinator on 2026-10-09 from `08-integrated-roadmap.md` §7 (v1.1.0). Answered by the owner on 2026-10-09; the third column is the owner's answer (the reviewers' recommendation unless it says otherwise). Nothing above this heading was changed. (One note on the record above: D14d says "about 25 `client_golang` series"; 11 measured 69 families, and its ratchet baseline is 69.)
 
@@ -98,3 +98,5 @@ Appended by the coordinator on 2026-10-09 from `08-integrated-roadmap.md` §7 (v
 | D65 | 10 Q5. Build the fixer on v2 `repairs.Fixer` now, or wait for 05 PR 5–7? | **Wait for 05 PR 5–7.** 10 PR 0–2 ship now. | **answered 2026-10-09** |
 | D66 | 11 Q1–Q3. Scope labels off (`WithoutScopeInfo`), gRPC only, cumulative temporality? | **Yes to all three.** No scope labels, gRPC only, cumulative. **Owner, 2026-10-09: Prometheus compatibility is a hard requirement and stays; the `/metrics` scrape endpoint is the primary surface, OTLP push is an optional second reader.** Every new OTel instrument must appear on `/metrics` with a Prometheus-conventional name; the series-name contract test in 11 PR 1 guards that. | **answered 2026-10-09** |
 | D67 | 11 Q5–Q7. Pebble collector stays on `client_golang`; the five `ai_dispatch_*` names stay unprefixed; `internal/metrics` is deleted only when its last family has moved on touch? | **Yes to all three.** Pebble collector stays; `ai_dispatch_*` names stay bare; `internal/metrics` deleted when its last family has moved. | **answered 2026-10-09** |
+| D68 | 01 P76 (task brief). Deleting `internal/download` leaves three live readers of `download_client.torrent.deluge` (`internal/deluge/integration.go`, `internal/server/deluge_integration.go`, `internal/maintenance/jobs/bulk_deluge_import.go`): drop the fallback, keep a Deluge-only struct, or defer? | **Defer 01 P76 to wave 2**, after 10 PR 0–2 decide the Deluge config shape; the fallbacks stay until then. Recommended was keep-with-Deluge-only-struct. | **answered 2026-10-09** |
+| D5 (note) | 04 P3a. `backup_retention_days` does not exist today; the brief introduces it (default = the current hard-coded retention). | **Approved**: add the setting with today's default. | **answered 2026-10-09** |
