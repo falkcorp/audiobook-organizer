@@ -1,5 +1,5 @@
 // file: internal/audiobooks/filter_compiled.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 6a1f3c8e-9d24-4b7a-b0e5-2f8c4d1a7e36
 // last-edited: 2026-10-09
 
@@ -8,6 +8,7 @@ package audiobooks
 import (
 	"fmt"
 	"strconv"
+	"sync/atomic"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -124,13 +125,14 @@ func compileFieldFilter(f FieldFilter) (compiledFilter, error) {
 	return cf, nil
 }
 
-// compileFiltersHook is a test hook; nil in production.
-var compileFiltersHook func()
+// compileFiltersHook is a test hook; unset in production. Atomic so the
+// guard test can swap it while a request goroutine may be compiling.
+var compileFiltersHook atomic.Pointer[func()]
 
 // compileFieldFilters compiles every filter, stopping at the first error.
 func compileFieldFilters(filters []FieldFilter) ([]compiledFilter, error) {
-	if compileFiltersHook != nil {
-		compileFiltersHook()
+	if hook := compileFiltersHook.Load(); hook != nil {
+		(*hook)()
 	}
 	out := make([]compiledFilter, 0, len(filters))
 	for _, f := range filters {

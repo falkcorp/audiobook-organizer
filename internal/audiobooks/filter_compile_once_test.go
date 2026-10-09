@@ -1,5 +1,5 @@
 // file: internal/audiobooks/filter_compile_once_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: f11ca9f6-e8e7-49d7-9b65-2a501c9b4d52
 // last-edited: 2026-10-09
 
@@ -31,9 +31,10 @@ func TestListPath_CompilesFiltersOncePerRequest(t *testing.T) {
 	svc := NewAudiobookService(ps)
 
 	var compiles atomic.Int64
-	prev := compileFiltersHook
-	compileFiltersHook = func() { compiles.Add(1) }
-	t.Cleanup(func() { compileFiltersHook = prev })
+	prev := compileFiltersHook.Load()
+	hook := func() { compiles.Add(1) }
+	compileFiltersHook.Store(&hook)
+	t.Cleanup(func() { compileFiltersHook.Store(prev) })
 
 	// total may be -1 ("unknown") on the post-filter path; only the page
 	// and the compile count matter here.
