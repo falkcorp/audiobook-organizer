@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/ci/go_test_shards.py
-# version: 1.1.0
+# version: 1.2.0
 # guid: 3b8e6d21-7c4f-4a90-b1e5-9f2d0c7a6e48
-# last-edited: 2026-09-29
+# last-edited: 2026-10-09
 """Run Go test packages split into shards, then merge their coverage.
 
 `go test` runs packages in parallel but each package's tests in one process,
@@ -43,21 +43,65 @@ import time
 _NAME_RE = re.compile(r"^(Test|Fuzz|Example)[A-Za-z0-9_]*$")
 
 
-def list_tests(pkg: str, go_args: list[str]) -> list[str]:
+# The per-package summary line that ends a package's names in -list output:
+# `ok  \tpkg\t0.01s`, `?   \tpkg\t[no test files]` or `FAIL\tpkg [build failed]`.
+_SUMMARY_RE = re.compile(r"^(ok|FAIL|\?)\s+(\S+)")
+
+
+def _build_flags(go_args: list[str]) -> list[str]:
     # -list compiles the package with the same flags the shards use, so the
     # shards reuse its compiled objects from the build cache (each still links
     # its own test binary).
     # Only flags that change the compiled binary; test flags such as -timeout
     # may take their value as a separate argument, which -list would misread.
-    build_flags = [a for a in go_args if a in ("-race", "-cover", "-trimpath") or a.startswith(("-covermode=", "-tags=", "-gcflags="))]
-    res = subprocess.run(["go", "test", *build_flags, "-list", ".", pkg], capture_output=True, text=True)
+    return [a for a in go_args if a in ("-race", "-cover", "-trimpath") or a.startswith(("-covermode=", "-tags=", "-gcflags="))]
+
+
+def list_tests(pkg: str, go_args: list[str]) -> list[str]:
+    return list_tests_many([pkg], go_args)[pkg]
+
+
+def list_tests_many(pkgs: list[str], go_args: list[str]) -> dict[str, list[str]]:
+    """`go test -list` names of each import path in pkgs, in ONE go invocation.
+
+    One call, not one per package: every -list call compiles its package and
+    the whole dependency graph beneath it with the build flags, and several
+    calls at once over packages that share most of that graph each compile
+    it again (the build cache deduplicates finished objects, not work in
+    flight). One call builds the shared graph once, with go's own
+    parallelism. Measured on PR #3882 (2026-10-09, cold cache): six calls
+    across four workers took 9 min 18 s per shard before the first test ran.
+    """
+    if not pkgs:
+        return {}
+    res = subprocess.run(
+        ["go", "test", *_build_flags(go_args), "-list", ".", *pkgs], capture_output=True, text=True
+    )
     if res.returncode != 0:
-        # A compile error in the package's tests surfaces here first; show it,
+        # A compile error in a package's tests surfaces here first; show it,
         # as a plain `go test` would have.
         print(res.stdout + res.stderr, flush=True)
-        raise SystemExit(f"::error::go test -list {pkg} failed (exit {res.returncode})")
-    out = res.stdout
-    return sorted({ln.strip() for ln in out.splitlines() if _NAME_RE.match(ln.strip())})
+        raise SystemExit(f"::error::go test -list {' '.join(pkgs)} failed (exit {res.returncode})")
+    # go test prints each package's output as a block, in argument order:
+    # the names, then the package's summary line.
+    found: dict[str, set[str]] = {}
+    pending: set[str] = set()
+    for raw in res.stdout.splitlines():
+        ln = raw.strip()
+        m = _SUMMARY_RE.match(ln)
+        if m:
+            found[m.group(2)] = pending
+            pending = set()
+        elif _NAME_RE.match(ln):
+            pending.add(ln)
+    missing = [p for p in pkgs if p not in found]
+    if missing or pending:
+        print(res.stdout, flush=True)
+        raise SystemExit(
+            f"::error::go test -list output could not be attributed to packages "
+            f"(no summary line for {', '.join(missing) or 'the trailing names'})"
+        )
+    return {p: sorted(found[p]) for p in pkgs}
 
 
 def balance(names: list[str], shards: int, timings: dict[str, float]) -> list[list[str]]:
