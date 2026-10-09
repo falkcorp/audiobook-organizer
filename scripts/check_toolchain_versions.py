@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/check_toolchain_versions.py
-# version: 1.1.0
+# version: 1.2.0
 # guid: 983ded55-56c4-4f7e-b15e-a2f724b54016
-# last-edited: 2026-09-12
+# last-edited: 2026-10-09
 """Fail when any Go or Node toolchain copy drifts from its pin (CI-04, CI-03).
 
 Run by ``.github/workflows/test-action-integration.yml`` ("Check version
@@ -19,6 +19,9 @@ two-component / minimum by design and the check would go red on a correct tree.
      goX.Y.Z`` in ``Makefile``; every one of these must equal it:
        - ``.envrc``                 ``export GOTOOLCHAIN=goX.Y.Z``
        - ``.vscode/settings.json``  every ``"GOTOOLCHAIN": "goX.Y.Z"``
+       - ``.github/workflows/*.yml`` every step-level ``GOTOOLCHAIN: goX.Y.Z``
+         (a job that must run a tool under the exact pin while setup-go
+         keeps its floating ``'X.Y'``; the Mock Freshness job since 2026-10-09)
        - ``Dockerfile``, ``Dockerfile.build-cgo`` (and any other top-level
          ``Dockerfile*`` with a golang stage) ``FROM golang:X.Y.Z-...``. EVERY
          golang stage, in the required files and in any other ``Dockerfile*``,
@@ -71,6 +74,7 @@ GOLANG_REF_RE = re.compile(
 GOMOD_GO_RE = re.compile(r"^go\s+(\S+)\s*$", re.M)
 GOMOD_TOOLCHAIN_RE = re.compile(r"^toolchain\s+\S+", re.M)
 WORKFLOW_KEY_RE = re.compile(r"^\s*(?:-\s+)?(go-version|node-version)\s*:\s*(.*?)\s*$")
+WORKFLOW_GOTOOLCHAIN_RE = re.compile(r"^\s*GOTOOLCHAIN\s*:\s*['\"]?go([^'\"\s]+)['\"]?\s*$")
 FULL_VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 GOMOD_VERSION_RE = re.compile(r"^(\d+)\.(\d+)(?:\.(\d+))?$")
 
@@ -250,12 +254,18 @@ def check(root: pathlib.Path, action_node_output: str | None) -> list[str]:
     workflow_files = sorted(p for p in (root / ".github/workflows").glob("*.y*ml") if p.is_file())
     if not workflow_files:
         c.error(".github/workflows", "no workflow files found")
-    counts = {"go-version": 0, "node-version": 0}
+    counts = {"go-version": 0, "node-version": 0, "GOTOOLCHAIN": 0}
     node_rows: list[tuple[str, int, str]] = []
     for path in workflow_files:
         rel = path.relative_to(root).as_posix()
         for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             if line.lstrip().startswith("#"):
+                continue
+            g = WORKFLOW_GOTOOLCHAIN_RE.match(line)
+            if g:
+                counts["GOTOOLCHAIN"] += 1
+                if g.group(1) != pin_full:
+                    c.error(rel, f"GOTOOLCHAIN go{g.group(1)} != Makefile pin go{pin_full}", lineno)
                 continue
             m = WORKFLOW_KEY_RE.match(line)
             if not m:
@@ -270,6 +280,7 @@ def check(root: pathlib.Path, action_node_output: str | None) -> list[str]:
             else:
                 node_rows.append((rel, lineno, value))
     c.info(".github/workflows go-version literals", str(counts["go-version"]))
+    c.info(".github/workflows GOTOOLCHAIN literals", str(counts["GOTOOLCHAIN"]))
     if counts["go-version"] == 0:
         c.error(".github/workflows", "no literal go-version found in any workflow; the check would be vacuous")
 
