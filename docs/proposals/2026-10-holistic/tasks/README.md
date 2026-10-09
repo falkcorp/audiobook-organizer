@@ -1,5 +1,5 @@
 <!-- file: docs/proposals/2026-10-holistic/tasks/README.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 2f8c6a4e-9b1d-4e73-8a5c-6d0f3b2e7c19 -->
 <!-- last-edited: 2026-10-09 -->
 
@@ -14,8 +14,8 @@ One brief per PR for waves 0, 1, 2 and freeze window F of `../08-integrated-road
 | Briefs | 151 |
 | Sonnet / Opus | 122 / 29 |
 | Wave 0 | 25 |
-| Wave 1 | 65 |
-| Wave 2 | 35 |
+| Wave 1 | 64 |
+| Wave 2 | 36 |
 | Wave F | 19 |
 | Wave 3 | 6 |
 | Wave 4 | 1 |
@@ -58,7 +58,6 @@ One brief per PR for waves 0, 1, 2 and freeze window F of `../08-integrated-road
 | [11-PR1](11/11-PR1.md) | telemetry.Meter helper, histogram views, and the `/metrics` series-name contract golden (69 families) | 0 | opus | M | none |
 | [01-P2](01/01-P2.md) | Delete the NutsDB activity stack | 1 | sonnet | M | 01 P1 (merged) |
 | [01-P7](01/01-P7.md) | Delete unused web files, exports and the dead vite test config | 1 | sonnet | M | 07 C1 |
-| [01-P76](01/01-P76.md) | Delete internal/download and its config | 1 | sonnet | S | 07 C1; 01 P79a (config.go order: P79a -> P76) |
 | [01-P77](01/01-P77.md) | Delete the rename preview and apply routes | 1 | sonnet | S | 01 P5 (both edit `wire_handlers.go` / `audiobooks_compat.go` |
 | [01-P79b](01/01-P79b.md) | Honour create_backups on tag writes | 1 | opus | S | 04 P3a (the scheduled cleanup must read `backup_retention_da |
 | [01-P79c](01/01-P79c.md) | Honour verify_after_write on tag writes | 1 | sonnet | S | 01 P6 (edits `tagger/safe_write.go` first); 01 P79a; 01 P79b |
@@ -124,6 +123,7 @@ One brief per PR for waves 0, 1, 2 and freeze window F of `../08-integrated-road
 | [01-P72](01/01-P72.md) | Drop dead dedup routes and verb aliases | 2 | sonnet | M | 01 P3 (handler tests), 01 P7 (the api.ts wrappers for these  |
 | [01-P73](01/01-P73.md) | Delete the dead dedup category C cluster (MergeBooks and friends) | 2 | sonnet | M | 03 PR 11 (both touch dedup tests); 02 PR 11/12 rebase on thi |
 | [01-P75](01/01-P75.md) | Delete the SQLite activity backend | 2 | opus | M | 01 P1 shipped for at least one release (D11); 01 P2 (go.mod  |
+| [01-P76](01/01-P76.md) | Delete internal/download and its config | 2 | sonnet | S | 07 C1; 01 P79a (config.go order: P79a -> P76); 10 PR 0–2 mer |
 | [01-P80](01/01-P80.md) | Remove the 11 unread Settings fields and their UI | 2 | sonnet | M | 01 P76 and 01 P79a (config.go order: P79a -> P76 -> 04 P10 - |
 | [01-P81b](01/01-P81b.md) | Retire the reading-state routes (books/:id aliases and status repair) | 2 | sonnet | S | 01 P81a (creates `gone()`), 01 P72, 03 PR 12 (same wiring fi |
 | [01-P81c](01/01-P81c.md) | Retire the collections and playlist-export routes | 2 | sonnet | S | 01 P81a (creates `gone()`), 01 P72, 03 PR 12 (same wiring fi |
