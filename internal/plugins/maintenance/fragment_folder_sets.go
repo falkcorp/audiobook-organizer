@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_folder_sets.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 9f01b698-b911-4ecc-818e-6d10f415e768
-// last-edited: 2026-10-08
+// last-edited: 2026-10-09
 
 // Folder chapter sets: the fragment-consolidation fixer's rule for a folder
 // of numbered chapter files that share one name, that no parent book owns,
@@ -983,7 +983,7 @@ func liveByVersionGroup(lib *fragLibrary) map[string][]string {
 // join's target: it and its own version group (the versions the fragments
 // join) are left out. A member versioned with any other live book is held,
 // a chapter fragment's copy included: retiring a primary member hands its
-// group's primary to that book (retireInto), a write to a book outside the
+// group's primary to that book (retireIntoWith), a write to a book outside the
 // row. byGroup is liveByVersionGroup's map. "" none.
 func folderSetVersionGroup(lib *fragLibrary, r *repairs.Row, byGroup map[string][]string, except string) string {
 	exceptGroup := ""

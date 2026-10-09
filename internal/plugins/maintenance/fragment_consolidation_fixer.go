@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/fragment_consolidation_fixer.go
-// version: 1.50.0
+// version: 1.50.1
 // guid: 5c9e1a47-2b8d-4f63-a0e7-8d3b6f1c4e92
-// last-edited: 2026-10-08
+// last-edited: 2026-10-09
 
 // Repairs-lane fixer "fragment-consolidation": fold chapter and disc files
 // that an old scan imported as their own books ("fragments") back into the
@@ -1987,12 +1987,12 @@ func (f *fragmentFixer) recordDone(store OpsStore, lib *fragLibrary, pj *fragPla
 			return false, terminal, "", nil, nil
 		}
 		if !dedupLoser[o] {
-			// Retired through merged_into (a retireInto, a combine) into
+			// Retired through merged_into (a retireIntoWith, a combine) into
 			// the terminal: whoever retired it chose which rows stay on
 			// it. The invariant this relies on: a planned row left on a
 			// merged_into retiree has its hash twin on the winner (the
 			// duplicate-copies fold moves every row the winner has no twin
-			// of and keeps the rest; retireInto itself never moves rows),
+			// of and keeps the rest; retireIntoWith itself never moves rows),
 			// so its audio is in view and carrying it would put duplicate
 			// audio on the terminal. Checked, not assumed: a row with no
 			// twin on the terminal (or no hash to tell) is out of view, and
@@ -2092,7 +2092,7 @@ func hashTwinOn(lib *fragLibrary, from, fid, to string) bool {
 // offers a restore); viaRedirect says it was found through a MergeBooks
 // redirect (a dedup loser). The evidence is what a merge leaves on the
 // record:
-//   - merged_into_book_id (every retireInto, a combine): followed as
+//   - merged_into_book_id (every retireIntoWith, a combine): followed as
 //     merge.ResolveMergeSurvivor follows it. Undo restores the column, so it
 //     is never stale;
 //   - otherwise the sync redirect merge.Service.MergeBooks records from a
@@ -3597,7 +3597,7 @@ type fragGroupState struct {
 	// Survivor and Roles are the plan's own choices: the survivor, each
 	// member's track, and each copy's kept member. Replan pins them
 	// (fragPin) rather than re-electing: the apply itself changes the flags
-	// the election and keptOfCopies read (retireInto demotes before it
+	// the election and keptOfCopies read (retireIntoWith demotes before it
 	// soft-deletes, and its version-group hand-off crowns another member),
 	// so a re-election after a cut could keep a different file per chapter
 	// or another survivor, and the row would never resume. Rows planned
@@ -5888,7 +5888,7 @@ func (f *fragmentFixer) rebuildParentRows(store OpsStore, lib *fragLibrary, hist
 // and the fragments. A fragment a cut-off run of this fixer already retired
 // INTO the target (merged_into names it AND a journaled retire of this
 // fixer's names it: fragJournal.retiredHere) is evaluated as live
-// (retireInto resumes it); one retired anywhere else, or by anyone else, or
+// (retireIntoWith resumes it); one retired anywhere else, or by anyone else, or
 // holding any row but its planned one, is a change. The decision is taken
 // again by noParentRows, whose existing-book check sees the target.
 func (f *fragmentFixer) replanJoin(ctx context.Context, store OpsStore, lib *fragLibrary, hist FragmentRepairReader, planned repairs.Row, beat func(string) error) (repairs.Row, error) {
@@ -6626,7 +6626,7 @@ func (jr *fragJournal) pruned(id string) bool {
 }
 
 // retireNote reports whether hand-off note c was written by a fixer that
-// retires through retireInto (retireFixerIDs): one of them may finish
+// retires through retireIntoWith (retireFixerIDs): one of them may finish
 // another's owed hand-off (resumeHandOff), so the member its note names is
 // crowned by the hand-off this row's demote made owed.
 func (jr *fragJournal) retireNote(c *database.OperationChange) bool {
@@ -6723,7 +6723,7 @@ func (jr *fragJournal) noteCrowns(b fragBook, cr *fragCrowns) {
 // A member (retiree, not the survivor) whose journal rows the 90-day prune
 // removed (jr.pruned) has no demote row left either: its primary flag
 // dropped is this row's own demote, since the run demotes every member it
-// retires (retireInto demotes before it soft-deletes) and the row retires
+// retires (retireIntoWith demotes before it soft-deletes) and the row retires
 // it anyway.
 //
 // Any other difference (a member organized in place, demoted or crowned by
@@ -7446,7 +7446,7 @@ func (f *fragmentFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repa
 			}
 			return nil
 		}
-		// Copies are retired last, so a copy retireInto would refuse is
+		// Copies are retired last, so a copy retireIntoWith would refuse is
 		// found here, before the first write: a refusal then writes nothing
 		// instead of leaving the members moved and the copy live.
 		for _, cp := range plan.Copies {
@@ -7572,10 +7572,10 @@ func (f *fragmentFixer) Apply(ctx context.Context, w *repairs.Writer, fresh repa
 	}
 }
 
-// copyRetireRefusal is retireInto's refusals for one renamed copy, checked
+// copyRetireRefusal is retireIntoWith's refusals for one renamed copy, checked
 // before a numbered set writes anything: the copy's book is gone or holds
 // another id, or it holds anything but exactly its planned row. A copy an earlier,
-// cut-off run already retired INTO survivor is not refused (retireInto
+// cut-off run already retired INTO survivor is not refused (retireIntoWith
 // resumes it); one retired into any other book is.
 func copyRetireRefusal(store OpsStore, cp fragGroupCopy, survivor, role string) error {
 	id := cp.Frag.Book.ID
@@ -7587,7 +7587,7 @@ func copyRetireRefusal(store OpsStore, cp fragGroupCopy, survivor, role string) 
 		return fmt.Errorf("%w: %s %s vanished", repairs.ErrChangedSincePlan, role, id)
 	}
 	if b.IsSoftDeleted() {
-		// Retired already: a cut-off run of this row, resumed by retireInto.
+		// Retired already: a cut-off run of this row, resumed by retireIntoWith.
 		// Only where it went is checked here. For a no-parent row the locked
 		// Replan that just ran also attributed the retire to this fixer's
 		// journal (replanGroup); for an existing-book join, replanJoin

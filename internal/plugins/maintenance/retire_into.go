@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retire_into.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: dadb4da5-0f2d-4678-abf3-4ac97f3ecb66
-// last-edited: 2026-10-08
+// last-edited: 2026-10-09
 
 // The shared retire of the Repairs-lane merge fixers: fold one book into
 // another as merge.Service retires an absorbed book, every step journaled
@@ -27,49 +27,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
 
-// retireInto folds book id (a fragment, a duplicate copy) into target the way
-// merge.Service retires an absorbed book, each step journaled first so the op
-// revert restores it. The fragment-consolidation, duplicate-copies and
-// consolidation-leftovers fixers share it (fixerID names the caller in logs):
-//
-//  1. every user's listening state and positions follow onto target
-//     (user_state_follow): as a slice of its timeline when slice is set, by
-//     the whole-book rule (merge/user_state_merge.go) when it is nil;
-//  2. the retired book's external ids move to target (external_id_reassign); an
-//     un-tombstoned iTunes id refuses the row instead;
-//  3. a primary retired book is demoted (book_primary_demote, OldValue "true"
-//     for an unset flag too, so the revert crowns it back and the group's
-//     hand-off is undone with it -- unless the hand-off's note shows another
-//     member's true predates the op, which the book then yields to; see
-//     retireHandOff);
-//  4. one write sets merged_into_book_id (book_merged_into), CLEARS
-//     file_path (book_path_update: the path is now a file target owns, and
-//     the purge deletes a purged book's file_path) and soft-deletes it
-//     (book_soft_delete).
-//
-// Its version group is then handed a primary: by retireHandOff when the
-// book was primary at the read, else by resumeHandOff when the evidence says
-// an earlier run demoted it and never handed off (see owedHandOff). The
-// fragment's book_file row,
-// if it still has one, is kept.
-//
-// Every refusal (an iTunes id on the book, an iTunes id or (unless
-// retireOpts.AllowITunesPath) an iTunes path on one of its rows, or an
-// iTunes id among its external ids; none of them under
-// retireOpts.ITunesDatabaseOnly) is checked BEFORE step 1, so a refused
-// retire has written nothing. The count is the steps written, a persisted follow snapshot
-// included, so a failure after it reports partially_applied; a book already
-// soft-deleted counts none (the last step of an earlier run).
-//
-// A follow that could not move every user leaves merge's pending-repair
-// record behind. Its sweep defers while the retired book is live
-// (merge.ErrPendingLoserLive), so it never drains progress off a book a
-// failed retire left live; the op revert drops the record.
-func retireInto(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Writer, clock func() time.Time, fixerID, id, target string, slice *merge.SliceMapping) (int, error) {
-	return retireIntoWith(ctx, p, store, w, clock, fixerID, id, target, slice, retireOpts{})
-}
-
-// retireIntoExpecting is retireInto whose primary hand-off writes nothing
+// retireIntoExpecting is retireIntoWith whose primary hand-off writes nothing
 // unless versionprimary, deciding under its group lock, leaves expect
 // primary (versionprimary.Env.Expect; "" expects nothing). A different
 // winner stops the row with versionprimary.ErrUnexpectedWinner after the
@@ -84,13 +42,13 @@ func retireIntoExpecting(ctx context.Context, p *Plugin, store OpsStore, w *repa
 	return retireIntoWith(ctx, p, store, w, clock, fixerID, id, target, slice, retireOpts{Expect: rules.expect, MayWrite: rules.mayWrite, AllowITunesPath: true})
 }
 
-// retireIntoAllowingITunesPath is retireInto for duplicate-copies, whose own
+// retireIntoAllowingITunesPath is retireIntoWith for duplicate-copies, whose own
 // rules decide a row iTunes path (retireOpts.AllowITunesPath).
 func retireIntoAllowingITunesPath(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Writer, clock func() time.Time, fixerID, id, target string, slice *merge.SliceMapping) (int, error) {
 	return retireIntoWith(ctx, p, store, w, clock, fixerID, id, target, slice, retireOpts{AllowITunesPath: true})
 }
 
-// retireIntoITunesDatabaseOnly is retireInto for fragment consolidation
+// retireIntoITunesDatabaseOnly is retireIntoWith for fragment consolidation
 // (retireOpts.ITunesDatabaseOnly; owner decision 2026-10-08: iTunes is
 // import-only, so an iTunes-tracked fragment is consolidated like any
 // other).
@@ -149,9 +107,49 @@ type retireOpts struct {
 	ITunesDatabaseOnly bool
 }
 
-// retireIntoWith is retireInto with opts: the hand-off's expected winner
-// (opts.Expect), refusing a row iTunes path unless opts.AllowITunesPath
-// is set, and no iTunes refusal at all under opts.ITunesDatabaseOnly.
+// retireIntoWith folds book id (a fragment, a duplicate copy) into target the way
+// merge.Service retires an absorbed book, each step journaled first so the op
+// revert restores it. The fragment-consolidation, duplicate-copies and
+// consolidation-leftovers fixers share it (fixerID names the caller in logs):
+//
+//  1. every user's listening state and positions follow onto target
+//     (user_state_follow): as a slice of its timeline when slice is set, by
+//     the whole-book rule (merge/user_state_merge.go) when it is nil;
+//  2. the retired book's external ids move to target (external_id_reassign); an
+//     un-tombstoned iTunes id refuses the row instead;
+//  3. a primary retired book is demoted (book_primary_demote, OldValue "true"
+//     for an unset flag too, so the revert crowns it back and the group's
+//     hand-off is undone with it -- unless the hand-off's note shows another
+//     member's true predates the op, which the book then yields to; see
+//     retireHandOff);
+//  4. one write sets merged_into_book_id (book_merged_into), CLEARS
+//     file_path (book_path_update: the path is now a file target owns, and
+//     the purge deletes a purged book's file_path) and soft-deletes it
+//     (book_soft_delete).
+//
+// Its version group is then handed a primary: by retireHandOff when the
+// book was primary at the read, else by resumeHandOff when the evidence says
+// an earlier run demoted it and never handed off (see owedHandOff). The
+// fragment's book_file row,
+// if it still has one, is kept.
+//
+// Every refusal (an iTunes id on the book, an iTunes id or (unless
+// retireOpts.AllowITunesPath) an iTunes path on one of its rows, or an
+// iTunes id among its external ids; none of them under
+// retireOpts.ITunesDatabaseOnly) is checked BEFORE step 1, so a refused
+// retire has written nothing. The count is the steps written, a persisted follow snapshot
+// included, so a failure after it reports partially_applied; a book already
+// soft-deleted counts none (the last step of an earlier run).
+//
+// A follow that could not move every user leaves merge's pending-repair
+// record behind. Its sweep defers while the retired book is live
+// (merge.ErrPendingLoserLive), so it never drains progress off a book a
+// failed retire left live; the op revert drops the record.
+//
+// opts carries the hand-off's expected winner (opts.Expect), refusing a row
+// iTunes path unless opts.AllowITunesPath is set, and no iTunes refusal at
+// all under opts.ITunesDatabaseOnly. The zero retireOpts is the guarded
+// default; callers go through the named wrappers above it.
 func retireIntoWith(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Writer, clock func() time.Time, fixerID, id, target string, slice *merge.SliceMapping, opts retireOpts) (int, error) {
 	rules := handOffRules{expect: opts.Expect, mayWrite: opts.MayWrite}
 	b, err := store.GetBookByID(id)
@@ -453,7 +451,7 @@ func retireHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Wr
 // (POST /operations/v2/:id/retry) is a new op whose journal holds none of the
 // first run's rows, so the evidence is the book's state, every op's journal
 // and the fixer's history, never the op id. Shared by every fixer that
-// retires through retireInto, both for a book met already retired and for a
+// retires through retireIntoWith, both for a book met already retired and for a
 // book retired just now that was not primary at the read (its demote may be
 // an earlier run's).
 //
@@ -618,7 +616,7 @@ func resumeHandOff(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Wr
 	return retireHandOff(ctx, p, store, w, fixerID, b.ID, gid, rules)
 }
 
-// retireFixerIDs are the fixers that retire through retireInto: a demote
+// retireFixerIDs are the fixers that retire through retireIntoWith: a demote
 // recorded under any of them is a retire's demote, whose owed hand-off any
 // of them may finish (resumeHandOff).
 var retireFixerIDs = map[string]bool{fragFixerID: true, dcFixerID: true, leftoverFixerID: true}

@@ -1,7 +1,7 @@
 // file: internal/tagger/safe_write.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 4a7e1c3b-9f02-4d85-b8e6-2f5a0d3c7b91
-// last-edited: 2026-09-14
+// last-edited: 2026-10-09
 //
 // WriteTagsSafe / WriteImageSafe — pre-flight guard for all taglib writes.
 //
@@ -148,15 +148,6 @@ func WriteTagsSafe(ctx context.Context, path string, tags map[string][]string, o
 func WriteTagsInPlace(path string, tags map[string][]string, opts taglib.WriteOption) error {
 	if err := taglib.WriteTags(path, tags, opts); err != nil {
 		return fmt.Errorf("WriteTagsInPlace: %w", err)
-	}
-	return nil
-}
-
-// WriteImageInPlace embeds cover art directly into path with no copy-and-rename
-// wrapper. Same contract and same caveats as WriteTagsInPlace.
-func WriteImageInPlace(path string, data []byte) error {
-	if err := taglib.WriteImage(path, data); err != nil {
-		return fmt.Errorf("WriteImageInPlace: %w", err)
 	}
 	return nil
 }

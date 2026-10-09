@@ -1,148 +1,18 @@
 // file: internal/tagger/tagger_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 8c9d0e1f-2a3b-4c5d-6e7f-8a9b0c1d2e3f
-// last-edited: 2026-06-10
+// last-edited: 2026-10-09
 
 // NOTE(fable5 T022): setupTaggerDB and TestUpdateSeriesTags were removed;
 // they tested the SQLite-backed UpdateSeriesTags path which was removed in
-// fable5 T022. The file-format tests below remain unchanged.
+// fable5 T022. The placeholder file-format tests (updateFileTags and its
+// per-format helpers) went with those helpers on 2026-10-09 (01-P6).
 
 package tagger
 
 import (
 	"testing"
 )
-
-func TestUpdateM4BTags(t *testing.T) {
-	// Test the placeholder implementation
-	filePath := "/test/path/book.m4b"
-	seriesTag := "Test Series, Book 1"
-
-	err := updateM4BTags(filePath, seriesTag)
-	if err != nil {
-		t.Errorf("updateM4BTags failed: %v", err)
-	}
-
-	// Since this is a placeholder, it should always succeed
-	t.Log("updateM4BTags executed successfully (placeholder)")
-}
-
-func TestUpdateMP3Tags(t *testing.T) {
-	// Test the placeholder implementation
-	filePath := "/test/path/book.mp3"
-	seriesTag := "Test Series, Book 1"
-
-	err := updateMP3Tags(filePath, seriesTag)
-	if err != nil {
-		t.Errorf("updateMP3Tags failed: %v", err)
-	}
-
-	t.Log("updateMP3Tags executed successfully (placeholder)")
-}
-
-func TestUpdateFLACTags(t *testing.T) {
-	// Test the placeholder implementation
-	filePath := "/test/path/book.flac"
-	seriesTag := "Test Series, Book 1"
-
-	err := updateFLACTags(filePath, seriesTag)
-	if err != nil {
-		t.Errorf("updateFLACTags failed: %v", err)
-	}
-
-	t.Log("updateFLACTags executed successfully (placeholder)")
-}
-
-func TestUpdateFileTags_M4B(t *testing.T) {
-	filePath := "/test/path/book.m4b"
-	title := "Test Book"
-	seriesTag := "Test Series, Book 1"
-
-	err := updateFileTags(filePath, title, seriesTag)
-	if err != nil {
-		t.Errorf("updateFileTags for M4B failed: %v", err)
-	}
-}
-
-func TestUpdateFileTags_MP3(t *testing.T) {
-	filePath := "/test/path/book.mp3"
-	title := "Test Book"
-	seriesTag := "Test Series, Book 1"
-
-	err := updateFileTags(filePath, title, seriesTag)
-	if err != nil {
-		t.Errorf("updateFileTags for MP3 failed: %v", err)
-	}
-}
-
-func TestUpdateFileTags_FLAC(t *testing.T) {
-	filePath := "/test/path/book.flac"
-	title := "Test Book"
-	seriesTag := "Test Series, Book 1"
-
-	err := updateFileTags(filePath, title, seriesTag)
-	if err != nil {
-		t.Errorf("updateFileTags for FLAC failed: %v", err)
-	}
-}
-
-func TestUpdateFileTags_M4A(t *testing.T) {
-	filePath := "/test/path/book.m4a"
-	title := "Test Book"
-	seriesTag := "Test Series, Book 1"
-
-	err := updateFileTags(filePath, title, seriesTag)
-	if err != nil {
-		t.Errorf("updateFileTags for M4A failed: %v", err)
-	}
-}
-
-func TestUpdateFileTags_AAC(t *testing.T) {
-	filePath := "/test/path/book.aac"
-	title := "Test Book"
-	seriesTag := "Test Series, Book 1"
-
-	err := updateFileTags(filePath, title, seriesTag)
-	if err != nil {
-		t.Errorf("updateFileTags for AAC failed: %v", err)
-	}
-}
-
-func TestUpdateFileTags_UnsupportedFormat(t *testing.T) {
-	filePath := "/test/path/book.wav"
-	title := "Test Book"
-	seriesTag := "Test Series, Book 1"
-
-	err := updateFileTags(filePath, title, seriesTag)
-	if err == nil {
-		t.Error("Expected error for unsupported format")
-	}
-
-	if err.Error() != "unsupported file format: .wav" {
-		t.Errorf("Unexpected error message: %v", err)
-	}
-}
-
-func TestUpdateFileTags_CaseInsensitive(t *testing.T) {
-	tests := []struct {
-		filePath string
-		ext      string
-	}{
-		{"/test/book.M4B", ".M4B"},
-		{"/test/book.Mp3", ".Mp3"},
-		{"/test/book.FLAC", ".FLAC"},
-		{"/test/book.M4A", ".M4A"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.ext, func(t *testing.T) {
-			err := updateFileTags(tt.filePath, "Title", "Series")
-			if err != nil {
-				t.Errorf("updateFileTags should handle case-insensitive extensions: %v", err)
-			}
-		})
-	}
-}
 
 // TestUpdateSeriesTagsReturnsError verifies that the legacy SQLite-backed
 // UpdateSeriesTags path (removed in fable5 T022) now returns an error

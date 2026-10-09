@@ -1,7 +1,7 @@
 // file: internal/scanner/scanner.go
-// version: 1.130.0
+// version: 1.131.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-06
+// last-edited: 2026-10-09
 
 package scanner
 
@@ -4518,111 +4518,6 @@ func isUniqueConstraintError(err error) bool {
 		strings.Contains(lower, "duplicate key")
 }
 
-// preserveExistingFields keeps enriched metadata fields from the existing database record
-// when the scanner doesn't extract them (i.e. produces nil/zero). This prevents rescan
-// from wiping out data added by metadata fetch, AI parse, or manual edits.
-func preserveExistingFields(scanned *database.Book, existing *database.Book) {
-	if scanned.Narrator == nil && existing.Narrator != nil {
-		scanned.Narrator = existing.Narrator
-	}
-	if scanned.NarratorsJSON == nil && existing.NarratorsJSON != nil {
-		scanned.NarratorsJSON = existing.NarratorsJSON
-	}
-	if scanned.Publisher == nil && existing.Publisher != nil {
-		scanned.Publisher = existing.Publisher
-	}
-	if scanned.Language == nil && existing.Language != nil {
-		scanned.Language = existing.Language
-	}
-	if scanned.PrintYear == nil && existing.PrintYear != nil {
-		scanned.PrintYear = existing.PrintYear
-	}
-	if scanned.AudiobookReleaseYear == nil && existing.AudiobookReleaseYear != nil {
-		scanned.AudiobookReleaseYear = existing.AudiobookReleaseYear
-	}
-	if scanned.CoverURL == nil && existing.CoverURL != nil {
-		scanned.CoverURL = existing.CoverURL
-	}
-	if scanned.WorkID == nil && existing.WorkID != nil {
-		scanned.WorkID = existing.WorkID
-	}
-	if scanned.ISBN10 == nil && existing.ISBN10 != nil {
-		scanned.ISBN10 = existing.ISBN10
-	}
-	if scanned.ISBN13 == nil && existing.ISBN13 != nil {
-		scanned.ISBN13 = existing.ISBN13
-	}
-	if scanned.ASIN == nil && existing.ASIN != nil {
-		scanned.ASIN = existing.ASIN
-	}
-	if scanned.Edition == nil && existing.Edition != nil {
-		scanned.Edition = existing.Edition
-	}
-	if scanned.Description == nil && existing.Description != nil {
-		scanned.Description = existing.Description
-	}
-	// Preserve external provider IDs
-	if scanned.OpenLibraryID == nil && existing.OpenLibraryID != nil {
-		scanned.OpenLibraryID = existing.OpenLibraryID
-	}
-	if scanned.HardcoverID == nil && existing.HardcoverID != nil {
-		scanned.HardcoverID = existing.HardcoverID
-	}
-	if scanned.GoogleBooksID == nil && existing.GoogleBooksID != nil {
-		scanned.GoogleBooksID = existing.GoogleBooksID
-	}
-	// Preserve iTunes fields
-	if scanned.ITunesPersistentID == nil && existing.ITunesPersistentID != nil {
-		scanned.ITunesPersistentID = existing.ITunesPersistentID
-	}
-	if scanned.ITunesDateAdded == nil && existing.ITunesDateAdded != nil {
-		scanned.ITunesDateAdded = existing.ITunesDateAdded
-	}
-	if scanned.ITunesPlayCount == nil && existing.ITunesPlayCount != nil {
-		scanned.ITunesPlayCount = existing.ITunesPlayCount
-	}
-	if scanned.ITunesLastPlayed == nil && existing.ITunesLastPlayed != nil {
-		scanned.ITunesLastPlayed = existing.ITunesLastPlayed
-	}
-	if scanned.ITunesRating == nil && existing.ITunesRating != nil {
-		scanned.ITunesRating = existing.ITunesRating
-	}
-	if scanned.ITunesBookmark == nil && existing.ITunesBookmark != nil {
-		scanned.ITunesBookmark = existing.ITunesBookmark
-	}
-	if scanned.ITunesImportSource == nil && existing.ITunesImportSource != nil {
-		scanned.ITunesImportSource = existing.ITunesImportSource
-	}
-	// Preserve version management fields
-	if scanned.IsPrimaryVersion == nil && existing.IsPrimaryVersion != nil {
-		scanned.IsPrimaryVersion = existing.IsPrimaryVersion
-	}
-	if scanned.VersionGroupID == nil && existing.VersionGroupID != nil {
-		scanned.VersionGroupID = existing.VersionGroupID
-	}
-	if scanned.VersionNotes == nil && existing.VersionNotes != nil {
-		scanned.VersionNotes = existing.VersionNotes
-	}
-	// Preserve deletion state
-	if scanned.MarkedForDeletion == nil && existing.MarkedForDeletion != nil {
-		scanned.MarkedForDeletion = existing.MarkedForDeletion
-	}
-	if scanned.MarkedForDeletionAt == nil && existing.MarkedForDeletionAt != nil {
-		scanned.MarkedForDeletionAt = existing.MarkedForDeletionAt
-	}
-	if scanned.PreTrashLibraryState == nil && existing.PreTrashLibraryState != nil {
-		scanned.PreTrashLibraryState = existing.PreTrashLibraryState
-	}
-	// Preserve series sequence if scan has nil/zero and existing has a value
-	if (scanned.SeriesSequence == nil || *scanned.SeriesSequence == 0) && existing.SeriesSequence != nil && *existing.SeriesSequence != 0 {
-		scanned.SeriesSequence = existing.SeriesSequence
-	}
-	// Preserve SourceImportPath — once set it must never be overwritten
-	if scanned.SourceImportPath == nil && existing.SourceImportPath != nil {
-		scanned.SourceImportPath = existing.SourceImportPath
-	}
-}
-
 // joinRacedRow carries a version link onto a row another writer created at
 // the same path while the scan was working (the raced-row carry in
 // saveBook): an ungrouped raced row joins groupID with primary as its flag; a
@@ -4664,7 +4559,7 @@ func joinRacedRow(racedID, groupID string, primary *bool) (joined bool, heldGrou
 //
 // The rule for every overlaid field is "scanned value wins if present (non-nil
 // / non-zero), else keep existing." This reproduces the prior behavior for the
-// fields preserveExistingFields already guarded and for the always-set
+// fields the old preserveExistingFields helper (deleted 2026-10-09) guarded and for the always-set
 // LibraryState/Quantity, and adds the same guard to the fields the old code
 // overwrote unconditionally (Title/AuthorID/SeriesID/Format/hashes/Duration) —
 // which is precisely the wipe this fixes (an untagged file yields nil

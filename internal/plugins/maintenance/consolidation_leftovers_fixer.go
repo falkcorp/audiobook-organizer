@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/consolidation_leftovers_fixer.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 6df37df9-b008-41ad-bd69-47b00e4cb50c
-// last-edited: 2026-10-06
+// last-edited: 2026-10-09
 
 package maintenance
 
@@ -131,7 +131,7 @@ const (
 // must match: each dead row not yet Missing is marked Missing in place
 // (Writer.RepointBookFile to its own path with Missing=true; journaled, never
 // deleted), then the leftover is retired into the combined book with
-// retireInto, the retire the fragment and duplicate-copies fixers share:
+// retireIntoWith, the retire the fragment and duplicate-copies fixers share:
 // every user's listening state follows by the whole-book rule, external ids
 // move, a primary is demoted with its version group handed off, and the book
 // is soft-deleted with merged_into_book_id naming the combined book. Every
@@ -867,7 +867,7 @@ func leftoverWalkOwners(store OpsStore, scope string, size int64, seen map[strin
 // for a book this fixer retires (owner decision 2026-10-06): the 09-06
 // leftovers carry the iTunes library's reference to the organizer folder in
 // itunes_path, and that alone does not make the book iTunes-owned. It does
-// for the same-path owner, the survivor the retire writes. retireInto still
+// for the same-path owner, the survivor the retire writes. retireIntoWith still
 // refuses a retired book or row with a persistent id and an un-tombstoned
 // itunes external id.
 func leftoverITunesWhy(res *repairs.PathResolver, b *database.BookCore, rows []database.BookFileCore, exts []database.ExternalIDMapping, countPathRef bool) (why string, doubt bool) {

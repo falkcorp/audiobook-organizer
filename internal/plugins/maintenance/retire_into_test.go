@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/retire_into_test.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 90cd2c0f-e6c5-4176-8d2c-bc587eea86cd
-// last-edited: 2026-10-08
+// last-edited: 2026-10-09
 
 package maintenance
 
@@ -17,10 +17,18 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
+
+// retireInto is retireIntoWith with the zero (guarded) retireOpts, kept for
+// the tests only: production callers go through a named wrapper so none can
+// reach the default by mistake.
+func retireInto(ctx context.Context, p *Plugin, store OpsStore, w *repairs.Writer, clock func() time.Time, fixerID, id, target string, slice *merge.SliceMapping) (int, error) {
+	return retireIntoWith(ctx, p, store, w, clock, fixerID, id, target, slice, retireOpts{})
+}
 
 // journalCountingStore is the ops store with GetBookChanges (the unindexed
 // opchange scan) counted.

@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/consolidation_leftovers_samepath.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 7285fcc4-a331-4b0a-89c0-e606c9f5f7b3
-// last-edited: 2026-10-06
+// last-edited: 2026-10-09
 
 // The same-path-twin class of the consolidation-leftovers fixer (owner
 // decision 2026-10-06, plan op 01M48JSTKZV97BK42W675089GY): a leftover whose
@@ -600,10 +600,10 @@ func (s *leftoverSource) samePathHandOff(ctx context.Context, members []database
 	for i := range after {
 		m := &after[i]
 		if m.ID == leftover {
-			// retireInto hands off (elects) only for a leftover that is
+			// retireIntoWith hands off (elects) only for a leftover that is
 			// primary at its read, an unset flag included.
 			leftoverPrimary = m.IsPrimaryVersion == nil || *m.IsPrimaryVersion
-			// As retireInto's soft-delete writes it: flagged, stamped,
+			// As retireIntoWith's soft-delete writes it: flagged, stamped,
 			// merged into the owner, path cleared. The stamp's value is
 			// never read by the prediction; it is set so the simulated row
 			// is the shape every soft-deleted row has.

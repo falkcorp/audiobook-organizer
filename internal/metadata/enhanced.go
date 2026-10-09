@@ -1,7 +1,7 @@
 // file: internal/metadata/enhanced.go
-// version: 1.23.1
+// version: 1.24.0
 // guid: 7e8d9c0b-1a2f-3e4d-5c6b-7a8d9c0b1a2f
-// last-edited: 2026-10-04
+// last-edited: 2026-10-09
 
 package metadata
 
@@ -518,96 +518,6 @@ func writeMetadataViaCLI(filePath string, metadata map[string]any, config fileop
 	default:
 		return fmt.Errorf("unsupported file format: %s", filepath.Ext(filePath))
 	}
-}
-
-// WriteM4BCustomTags writes custom tags to M4B/M4A files using ffmpeg.
-// Exported so it can be called separately from the main write path.
-func WriteM4BCustomTags(filePath string, metadata map[string]any) error {
-	return writeM4BCustomTagsWithFFmpeg(filePath, metadata)
-}
-
-// writeM4BCustomTagsWithFFmpeg writes custom/freeform tags to M4B files using ffmpeg.
-// TagLib handles standard MP4 atoms but silently drops custom tags.
-// ffmpeg can write arbitrary metadata including custom fields.
-func writeM4BCustomTagsWithFFmpeg(filePath string, metadata map[string]any) error {
-	ffmpegPath, err := exec.LookPath("ffmpeg")
-	if err != nil {
-		return fmt.Errorf("ffmpeg not found: %w", err)
-	}
-
-	// Only write tags that taglib can't handle for MP4
-	customTags := map[string]string{}
-
-	if narrator, ok := metadata["narrator"].(string); ok && narrator != "" {
-		customTags["NARRATOR"] = narrator
-	}
-	if lang, ok := metadata["language"].(string); ok && lang != "" {
-		customTags["LANGUAGE"] = strings.ToLower(lang)
-	}
-	if pub, ok := metadata["publisher"].(string); ok && pub != "" {
-		customTags["PUBLISHER"] = pub
-	}
-	if isbn10, ok := metadata["isbn10"].(string); ok && isbn10 != "" {
-		customTags["ISBN10"] = isbn10
-	}
-	if isbn13, ok := metadata["isbn13"].(string); ok && isbn13 != "" {
-		customTags["ISBN13"] = isbn13
-	}
-	if series, ok := metadata["series"].(string); ok && series != "" {
-		customTags["SERIES"] = series
-	}
-	// positiveIntTag, not a bare .(int): callers disagree on the type (the
-	// review/apply path builds string values, JSON decodes to float64) and an
-	// assertion that misses drops the tag silently, which makes the file rewrite
-	// itself on every run forever. See the comment on positiveIntTag.
-	if si, ok := positiveIntTag(metadata["series_index"]); ok {
-		customTags["SERIES_INDEX"] = si
-	}
-	if asin, ok := metadata["asin"].(string); ok && asin != "" {
-		customTags["ASIN"] = asin
-	}
-	customTags["AUDIOBOOK_ORGANIZER_VERSION"] = CustomTagVersion
-
-	if len(customTags) == 0 {
-		return nil
-	}
-
-	// Build ffmpeg command: copy all streams, add metadata
-	// Use -nostdin and -loglevel error to suppress progress output
-	// Use same extension so ffmpeg can detect the output format
-	ext := filepath.Ext(filePath) // .m4b or .m4a
-	tmpPath := filePath + ".tmp" + ext
-	args := []string{"-nostdin", "-loglevel", "error", "-y", "-i", filePath}
-
-	// Preserve audio streams, chapters, and existing metadata. Use -map 0:a
-	// (not -map 0) because M4B files may have bin_data subtitle streams that
-	// cause ffmpeg to fail.
-	args = append(args, "-map", "0:a")
-	args = append(args, "-map_chapters", "0")
-	args = append(args, "-map_metadata", "0")
-	args = append(args, "-c", "copy") // No re-encoding
-
-	for k, v := range customTags {
-		args = append(args, "-metadata", fmt.Sprintf("%s=%s", k, v))
-	}
-
-	args = append(args, tmpPath)
-
-	cmd := exec.Command(ffmpegPath, args...)
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		_ = os.Remove(tmpPath)
-		return fmt.Errorf("ffmpeg failed: %w, stderr: %s", err, stderr.String()[:min(stderr.Len(), 500)])
-	}
-
-	// Atomic replace
-	if err := os.Rename(tmpPath, filePath); err != nil {
-		_ = os.Remove(tmpPath)
-		return fmt.Errorf("rename failed: %w", err)
-	}
-
-	return nil
 }
 
 // writeM4BMetadata writes metadata to M4B/M4A files using AtomicParsley.
