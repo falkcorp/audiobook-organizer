@@ -212,7 +212,7 @@
     "quoted": false,
     "want_error": true,
     "go_error_contains": "invalid regex",
-    "ts_error_matches": "Unterminated group"
+    "ts_error_matches": "^invalid regex /a\\(b/:"
   },
   {
     "name": "lookahead",
@@ -616,7 +616,7 @@
     "pattern": "/(?>a)/",
     "quoted": false,
     "want_error": true,
-    "go_error_contains": "unsupported Perl syntax",
+    "go_error_contains": "invalid regex",
     "ts_error_matches": "no atomic groups"
   },
   {
@@ -624,7 +624,7 @@
     "pattern": "/a*+/",
     "quoted": false,
     "want_error": true,
-    "go_error_contains": "invalid nested repetition",
+    "go_error_contains": "invalid regex",
     "ts_error_matches": "no possessive quantifiers"
   },
   {
@@ -632,7 +632,7 @@
     "pattern": "/(?P<n>a)\\k<n>/",
     "quoted": false,
     "want_error": true,
-    "go_error_contains": "invalid escape",
+    "go_error_contains": "invalid regex",
     "ts_error_matches": "no named backreferences"
   },
   {

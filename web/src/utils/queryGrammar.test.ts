@@ -1,5 +1,5 @@
 // file: web/src/utils/queryGrammar.test.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5f9c3a28-1e6d-4b70-8c42-b7e0d4a9f163
 // last-edited: 2026-10-09
 
@@ -151,7 +151,86 @@ const corpus: ConformanceCase[] = JSON.parse(
     'utf8'
   )
 );
-const runsOnTs = (c: ConformanceCase) => !c.engines || c.engines.includes('ts');
+// The same list lives in internal/querygrammar/querygrammar_test.go
+// (conformanceEngines).
+const CONFORMANCE_ENGINES: ReadonlyArray<string> = ['go', 'ts'];
+
+// The row-shape rules both suites share, so a malformed row fails in both
+// rather than running in one and skipping in the other: exactly one of
+// want_match / want_error (and never null); engines absent or a non-empty
+// subset of CONFORMANCE_ENGINES with no unknown names; skip_reason required
+// only when engines actually excludes one. Returns the first violation.
+function validateCase(c: ConformanceCase): string | null {
+  const raw = c as { want_match?: unknown };
+  if ('want_match' in raw && raw.want_match === null) {
+    return 'want_match must be true or false, not null';
+  }
+  if ((c.want_match === undefined) === !c.want_error) {
+    return 'a case sets exactly one of want_match and want_error';
+  }
+  if (c.engines === undefined) return null;
+  if (c.engines.length === 0) {
+    return 'engines must be absent or a non-empty subset of go,ts';
+  }
+  for (const e of c.engines) {
+    if (!CONFORMANCE_ENGINES.includes(e)) {
+      return `unknown engine "${e}" (want one of ${CONFORMANCE_ENGINES.join(',')})`;
+    }
+  }
+  if (c.engines.length < CONFORMANCE_ENGINES.length && !c.skip_reason) {
+    return 'a case that excludes an engine must carry a skip_reason';
+  }
+  return null;
+}
+
+const runsOnTs = (c: ConformanceCase) => c.engines === undefined || c.engines.includes('ts');
+
+// Locks the row-shape rules shared with the Go suite
+// (TestConformanceCase_Validate): the same inputs must be accepted or
+// rejected on both sides.
+describe('conformance corpus row shape', () => {
+  const row = (extra: Record<string, unknown>): ConformanceCase =>
+    ({ name: 'x', pattern: 'a', quoted: false, ...extra }) as ConformanceCase;
+  const cases: Array<[string, Record<string, unknown>, string | null]> = [
+    ['match row', { want_match: true }, null],
+    ['error row', { want_error: true }, null],
+    ['explicit both engines, no skip_reason', { want_match: true, engines: ['go', 'ts'] }, null],
+    [
+      'go only with skip_reason',
+      { want_match: true, engines: ['go'], skip_reason: 'ts differs' },
+      null,
+    ],
+    ['want_match null', { want_match: null }, 'not null'],
+    ['neither expectation', {}, 'exactly one of want_match and want_error'],
+    [
+      'both expectations',
+      { want_match: false, want_error: true },
+      'exactly one of want_match and want_error',
+    ],
+    ['empty engines', { want_match: true, engines: [] }, 'non-empty subset'],
+    [
+      'unknown engine',
+      { want_match: true, engines: ['golang'], skip_reason: 'r' },
+      'unknown engine',
+    ],
+    [
+      'excludes an engine, no skip_reason',
+      { want_match: true, engines: ['go'] },
+      'must carry a skip_reason',
+    ],
+  ];
+  for (const [name, extra, want] of cases) {
+    it(name, () => {
+      const got = validateCase(row(extra));
+      if (want === null) expect(got).toBeNull();
+      else expect(got).toContain(want);
+    });
+  }
+  it('engines [go] runs on go and not on ts', () => {
+    expect(runsOnTs(row({ want_match: true, engines: ['go'], skip_reason: 'r' }))).toBe(false);
+    expect(runsOnTs(row({ want_match: true }))).toBe(true);
+  });
+});
 
 describe('conformance corpus', () => {
   const skipped = corpus.filter((c) => !runsOnTs(c)).length;
@@ -161,8 +240,7 @@ describe('conformance corpus', () => {
 
   for (const c of corpus) {
     it(c.name, (ctx) => {
-      expect((c.want_match === undefined) !== !c.want_error).toBe(true);
-      if (c.engines) expect(c.skip_reason).toBeTruthy();
+      expect(validateCase(c)).toBeNull();
       if (!runsOnTs(c)) ctx.skip(c.skip_reason);
       const m = compileValue(c.pattern, c.quoted);
       if (c.want_error) {
