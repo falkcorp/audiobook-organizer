@@ -1,5 +1,5 @@
 <!-- file: docs/proposals/2026-10-holistic/tasks/00-TEMPLATE.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.2.1 -->
 <!-- guid: 5c1d9e2f-3b7a-4d86-9f0e-2a6c4b8d1e37 -->
 <!-- last-edited: 2026-10-09 -->
 
@@ -45,7 +45,7 @@ Numbered, concrete, in order. Name functions and symbols. Say what must NOT chan
 ## Tests
 - Which existing tests must stay green (package paths).
 - New tests to add, by file and case name.
-- The exact commands: `go test ./internal/...`, `cd web && npx vitest run <path>`, `npx tsc --noEmit -p web`, `make ci` where required. Every command must run as written against the repo at the brief's anchor commit (no placeholder names, no tests that do not exist yet unless a Step creates them first).
+- The exact commands: `go test ./internal/...`, `cd web && npx vitest run <path>`, `(cd web && npx tsc --noEmit)`, `make ci` where required. Every command must run as written against the repo at the brief's anchor commit (no placeholder names, no tests that do not exist yet unless a Step creates them first).
 - Anti-over-suppression: for any brief that adds a lint/ratchet baseline, an allow-list, a skip, or a golden file, one check that proves the gate still rejects a fresh violation. Write `Anti-over-suppression: N/A` when nothing is gated.
 
 ## Acceptance
