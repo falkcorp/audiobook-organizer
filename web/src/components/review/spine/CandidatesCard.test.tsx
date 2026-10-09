@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/CandidatesCard.test.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: e012200e-9c38-4a1d-8587-8ac43ce9803b
-// last-edited: 2026-10-07
+// last-edited: 2026-10-09
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
@@ -27,7 +27,10 @@ vi.mock('../../../services/api');
 // scrolled these cards into view" looks like to the card.
 const realIO = globalThis.IntersectionObserver;
 beforeEach(() => {
-  vi.mocked(api.getConfig).mockResolvedValue({ root_dir: '', path_aliases: [] } as unknown as Config);
+  vi.mocked(api.getConfig).mockResolvedValue({
+    root_dir: '',
+    path_aliases: [],
+  } as unknown as Config);
   globalThis.IntersectionObserver = class {
     constructor(private cb: IntersectionObserverCallback) {}
     observe(el: Element) {
@@ -70,6 +73,7 @@ function ctx(): SpineContext {
     onAction: vi.fn(),
     expandedId: null,
     onToggleExpand: vi.fn(),
+    detailState: () => 'loaded',
   };
 }
 
@@ -151,7 +155,9 @@ describe('Candidates view', () => {
     expect(within(list).getByText('Cached Pick')).toBeInTheDocument();
     expect(screen.getByText('Searching…')).toBeInTheDocument();
 
-    await act(async () => d.resolve([cand('Low', 0.4), cand('Cached Pick', 0.8), cand('High', 0.95)]));
+    await act(async () =>
+      d.resolve([cand('Low', 0.4), cand('Cached Pick', 0.8), cand('High', 0.95)])
+    );
     const titles = within(list)
       .getAllByTestId('candidate-item')
       .map((el) => el.querySelector('.MuiTypography-body2')?.textContent);
@@ -176,7 +182,11 @@ describe('Candidates view', () => {
     const loader = new CandidateLoader(search);
     renderCards([row('b1')], { loader, apply: vi.fn() });
     await waitFor(() =>
-      expect(search).toHaveBeenCalledWith('b1', { title: 'Book b1', author: 'Someone' }, expect.any(Function))
+      expect(search).toHaveBeenCalledWith(
+        'b1',
+        { title: 'Book b1', author: 'Someone' },
+        expect.any(Function)
+      )
     );
 
     const title = screen.getByTestId('search-again-title');
@@ -243,7 +253,9 @@ describe('Candidates view', () => {
       ]);
     });
     await screen.findByText('Live Book Three');
-    expect(within(screen.getByTestId('candidate-list')).getAllByTestId('candidate-item')).toHaveLength(4);
+    expect(
+      within(screen.getByTestId('candidate-list')).getAllByTestId('candidate-item')
+    ).toHaveLength(4);
   });
 
   it('Search again with the same text runs the search again', async () => {
@@ -318,7 +330,13 @@ describe('applyCandidateToBook', () => {
   });
 
   it('fill mode sends only the empty fields, as a background per-book apply', async () => {
-    await applyCandidateToBook({ bookId: 'b1', candidate, mode: 'fill', toast: vi.fn(), onApplied: vi.fn() });
+    await applyCandidateToBook({
+      bookId: 'b1',
+      candidate,
+      mode: 'fill',
+      toast: vi.fn(),
+      onApplied: vi.fn(),
+    });
     expect(api.applyMetadataCandidate).toHaveBeenCalledWith(
       'b1',
       candidate,
@@ -330,7 +348,13 @@ describe('applyCandidateToBook', () => {
   });
 
   it('replace mode sends every field', async () => {
-    await applyCandidateToBook({ bookId: 'b1', candidate, mode: 'replace', toast: vi.fn(), onApplied: vi.fn() });
+    await applyCandidateToBook({
+      bookId: 'b1',
+      candidate,
+      mode: 'replace',
+      toast: vi.fn(),
+      onApplied: vi.fn(),
+    });
     expect(api.applyMetadataCandidate).toHaveBeenCalledWith(
       'b1',
       candidate,
@@ -344,7 +368,13 @@ describe('applyCandidateToBook', () => {
   it('fill mode with nothing empty applies nothing and says so', async () => {
     const toast = vi.fn();
     const full = { ...candidate, narrator: undefined } as unknown as MetadataCandidate;
-    await applyCandidateToBook({ bookId: 'b1', candidate: full, mode: 'fill', toast, onApplied: vi.fn() });
+    await applyCandidateToBook({
+      bookId: 'b1',
+      candidate: full,
+      mode: 'fill',
+      toast,
+      onApplied: vi.fn(),
+    });
     expect(api.applyMetadataCandidate).not.toHaveBeenCalled();
     expect(toast).toHaveBeenCalledWith(expect.stringContaining('Nothing to fill'), 'info');
   });
@@ -417,7 +447,9 @@ describe('Not the best match (thumbs-down)', () => {
     await waitFor(() => expect(button()).not.toBeDisabled());
     await user.click(button());
 
-    await waitFor(() => expect(api.deleteCandidateFeedback).toHaveBeenCalledWith('b1:q:c', 'negative'));
+    await waitFor(() =>
+      expect(api.deleteCandidateFeedback).toHaveBeenCalledWith('b1:q:c', 'negative')
+    );
     expect(itemFor('Low')).not.toHaveAttribute('data-thumbs-down');
     expect(items()).toHaveLength(3);
     expect(spineCtx.onAction).not.toHaveBeenCalled();

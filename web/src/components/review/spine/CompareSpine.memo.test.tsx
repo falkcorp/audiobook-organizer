@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/CompareSpine.memo.test.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3f6c8b25-7d41-4e93-a052-9c1b7e4a0d68
-// last-edited: 2026-09-01
+// last-edited: 2026-10-09
 //
 // Ticking one checkbox must re-render ONE row, not the whole page.
 //
@@ -34,9 +34,8 @@ import type { CandidateResult } from '../../../services/api';
 // on every call would hand each row a new prop every render and defeat the
 // memo -- making this file fail for a reason that exists only in the test.
 vi.mock('../../common/PathLinks', async () => {
-  const actual = await vi.importActual<typeof import('../../common/PathLinks')>(
-    '../../common/PathLinks'
-  );
+  const actual =
+    await vi.importActual<typeof import('../../common/PathLinks')>('../../common/PathLinks');
   const NO_ALIASES: never[] = [];
   // Must stay a REAL hook. The production `usePathAliases` holds a useState,
   // and the hook-ordering tests below depend on CompareSpine calling at least
@@ -130,6 +129,7 @@ function Harness() {
       onAction: noop,
       expandedId: null,
       onToggleExpand: noop,
+      detailState: () => 'loaded',
     }),
     [selectedIds, toggleSelect, noop]
   );
@@ -203,6 +203,7 @@ describe('CompareSpine hook ordering', () => {
     onAction: () => {},
     expandedId: null,
     onToggleExpand: () => {},
+    detailState: () => 'loaded',
   };
 
   it('survives the loading -> populated transition', () => {

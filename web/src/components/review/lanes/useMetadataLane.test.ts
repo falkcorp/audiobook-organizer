@@ -1,5 +1,5 @@
 // file: web/src/components/review/lanes/useMetadataLane.test.ts
-// version: 1.28.0
+// version: 1.29.0
 // guid: 6b2d9f47-8c05-4e31-a97b-3d40f5a1c862
 // last-edited: 2026-10-09
 //
@@ -1869,5 +1869,116 @@ describe('index + per-page details (the 93 MB / 119 s full list timed out)', () 
     expect(
       result.current.results.find((r) => r.book.id === ids[0])?.candidate?.score_breakdown
     ).toBeUndefined();
+  });
+
+  // Until the detail lands, every visible candidate is the index row and has
+  // no breakdown. The evidence panel reads that as "scored without a recorded
+  // derivation" unless the lane says the row is still on its way -- so the
+  // lane must say so, from the first paint, and must say something DIFFERENT
+  // once the fetch has failed, or the panel spins for ever on a dead server.
+  it("reports a page's rows as pending until their detail response is applied", async () => {
+    const breakdown: api.MetadataScoreBreakdown = {
+      score: 2.0,
+      steps: [{ id: 'base', label: 'Base similarity', op: 'base', operand: 2.0, running: 2.0 }],
+    };
+    const ids = ['b000', 'b001'];
+    let resolveDetail!: (v: ReviewResponse) => void;
+    vi.mocked(api.getCachedReviewResults).mockImplementation(
+      async (_limit, _offset, _all, _bucket, options = {}) => {
+        if (options.ids) {
+          return new Promise<ReviewResponse>((r) => {
+            resolveDetail = r;
+          });
+        }
+        return reviewPayload(
+          ids.map((id) => makeResult(id, { candidate_hash: `h-${id}` }))
+        ) as ReviewResponse;
+      }
+    );
+
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    // The index is shown; the detail has not answered.
+    expect([...result.current.detailPending].sort()).toEqual(ids);
+    expect(result.current.detailFailed.size).toBe(0);
+    expect(result.current.spineCtx.detailState('b000')).toBe('pending');
+    expect(result.current.pageResults[0].candidate?.score_breakdown).toBeUndefined();
+
+    await act(async () => {
+      resolveDetail(
+        reviewPayload(
+          ids.map((id) =>
+            makeResult(id, { candidate_hash: `h-${id}` }, { score_breakdown: breakdown })
+          )
+        ) as ReviewResponse
+      );
+    });
+    await waitFor(() => expect(result.current.detailPending.size).toBe(0));
+    expect(result.current.detailFailed.size).toBe(0);
+    expect(result.current.spineCtx.detailState('b000')).toBe('loaded');
+    expect(result.current.pageResults[0].candidate?.score_breakdown).toEqual(breakdown);
+    // A book that is not on the page has nothing to wait for.
+    expect(result.current.spineCtx.detailState('not-here')).toBe('loaded');
+  });
+
+  it('reports a rejected detail fetch as failed -- not pending, not loaded', async () => {
+    const ids = ['b000', 'b001'];
+    vi.mocked(api.getCachedReviewResults).mockImplementation(
+      async (_limit, _offset, _all, _bucket, options = {}) => {
+        if (options.ids) throw new Error('detail 500');
+        return reviewPayload(
+          ids.map((id) => makeResult(id, { candidate_hash: `h-${id}` }))
+        ) as ReviewResponse;
+      }
+    );
+
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    await waitFor(() => expect([...result.current.detailFailed].sort()).toEqual(ids));
+    expect(result.current.detailPending.size).toBe(0);
+    expect(result.current.spineCtx.detailState('b000')).toBe('failed');
+    // The rows are still shown, as index rows.
+    expect(result.current.pageResults.map((r) => r.book.id)).toEqual(ids);
+    expect(result.current.pageResults[0].candidate?.score_breakdown).toBeUndefined();
+
+    // The next ask -- here a refresh -- puts them back in flight, and a
+    // response that now succeeds clears the failure.
+    vi.mocked(api.getCachedReviewResults).mockImplementation(
+      async (_limit, _offset, _all, _bucket, options = {}) => {
+        const rows = ids.map((id) => makeResult(id, { candidate_hash: `h-${id}` }));
+        if (options.ids) return reviewPayload(rows) as ReviewResponse;
+        return reviewPayload(rows) as ReviewResponse;
+      }
+    );
+    act(() => result.current.refresh());
+    await waitFor(() => expect(result.current.spineCtx.detailState('b000')).toBe('loaded'));
+    expect(result.current.detailFailed.size).toBe(0);
+    expect(result.current.detailPending.size).toBe(0);
+  });
+
+  it('reports a book the detail response left out as failed, never as pending', async () => {
+    // The server no longer lists b001. The lane refetches the index once for
+    // the mismatch (the existing guard) and, when the second detail still
+    // leaves it out, warns. Either way the row must not sit in "loading".
+    const ids = ['b000', 'b001'];
+    vi.mocked(api.getCachedReviewResults).mockImplementation(
+      async (_limit, _offset, _all, _bucket, options = {}) => {
+        const rows = ids.map((id) => makeResult(id, { candidate_hash: `h-${id}` }));
+        if (options.ids) {
+          return reviewPayload(rows.filter((r) => r.book.id !== 'b001')) as ReviewResponse;
+        }
+        return reviewPayload(rows) as ReviewResponse;
+      }
+    );
+
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith(expect.stringMatching(/changed on the server/), 'warning')
+    );
+    await waitFor(() => expect(result.current.spineCtx.detailState('b001')).toBe('failed'));
+    expect(result.current.spineCtx.detailState('b000')).toBe('loaded');
+    expect([...result.current.detailFailed]).toEqual(['b001']);
+    expect(result.current.detailPending.size).toBe(0);
   });
 });

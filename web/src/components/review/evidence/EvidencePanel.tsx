@@ -1,7 +1,7 @@
 // file: web/src/components/review/evidence/EvidencePanel.tsx
-// version: 2.1.0
+// version: 2.2.0
 // guid: c07f4b91-8d23-4e56-a1b8-5f2c9d0e3a74
-// last-edited: 2026-09-27
+// last-edited: 2026-10-09
 //
 // The shared "why did it conclude that" panel, promoted out of the dedup lane
 // so all three review lanes explain themselves the same way.
@@ -13,7 +13,7 @@
 // noisy-OR product, metadata's is a multiplicative pipeline, and regroup has no
 // score at all. So there is no share bar in this file at all any more.
 
-import { Box, Chip, Stack, Tooltip, Typography } from '@mui/material';
+import { Box, Chip, CircularProgress, Stack, Tooltip, Typography } from '@mui/material';
 import type { Theme } from '@mui/material/styles';
 import type {
   ConfidenceEvidence,
@@ -87,7 +87,7 @@ function num(value: number, digits = 2): string {
  * which is invalid, so the browser discards the declaration and the element
  * falls back to its auto width -- frequently reading as a FULL bar. A step we
  * could not parse would then be drawn as the strongest one on screen. Zero is
- * the honest width for a quantity we do not have.
+ * the truthful width for a quantity we do not have.
  */
 function barPercent(value: number): string {
   if (!Number.isFinite(value)) return '0%';
@@ -114,6 +114,30 @@ function EmptyNote({ children }: { children: React.ReactNode }) {
         {children}
       </Typography>
     </Box>
+  );
+}
+
+/**
+ * The evidence is still on its way. Visually an EmptyNote with a spinner, but
+ * it is a different claim: an EmptyNote is a conclusion about what was
+ * recorded, this is a wait. The metadata lane shows its index rows before
+ * their breakdowns arrive, so a bare EmptyNote here read as "this candidate
+ * has no derivation" for every row on the page for as long as the detail
+ * fetch took -- and for ever when it failed.
+ */
+function LoadingNote({ children }: { children: React.ReactNode }) {
+  return (
+    <Stack
+      direction="row"
+      spacing={1}
+      sx={{ p: 1, alignItems: 'center' }}
+      data-testid="evidence-loading"
+    >
+      <CircularProgress size={14} aria-label="Loading" />
+      <Typography variant="body2" sx={{ color: 'text.secondary', fontStyle: 'italic' }}>
+        {children}
+      </Typography>
+    </Stack>
   );
 }
 
@@ -200,17 +224,8 @@ function ConfidenceView({ evidence }: { evidence: ConfidenceEvidence }) {
 
       <Stack>
         {evidence.signals.map((s, i) => (
-          <Tooltip
-            key={s.id}
-            title={s.detail || s.label}
-            placement="left"
-          >
-            <Stack
-              direction="row"
-              spacing={1}
-              data-testid="evidence-signal-row"
-              sx={zebraRowSx(i)}
-            >
+          <Tooltip key={s.id} title={s.detail || s.label} placement="left">
+            <Stack direction="row" spacing={1} data-testid="evidence-signal-row" sx={zebraRowSx(i)}>
               <Box
                 data-testid={`signal-swatch-${s.id}`}
                 sx={(theme) => ({
@@ -344,6 +359,9 @@ function toneColor(tone: 'up' | 'down' | 'neutral'): string {
 
 function WaterfallView({ evidence }: { evidence: WaterfallEvidence }) {
   if (evidence.steps.length === 0) {
+    if (evidence.loading) {
+      return <LoadingNote>{evidence.emptyReason ?? 'Loading the score derivation…'}</LoadingNote>;
+    }
     return (
       <EmptyNote>{evidence.emptyReason ?? 'No derivation recorded for this candidate.'}</EmptyNote>
     );
@@ -389,12 +407,7 @@ function WaterfallView({ evidence }: { evidence: WaterfallEvidence }) {
           const tone = stepTone(step, previousRunning);
           return (
             <Tooltip key={step.id} title={step.detail ?? ''} placement="left">
-              <Stack
-                direction="row"
-                spacing={1}
-                data-testid="evidence-step-row"
-                sx={zebraRowSx(i)}
-              >
+              <Stack direction="row" spacing={1} data-testid="evidence-step-row" sx={zebraRowSx(i)}>
                 <Typography variant="caption" sx={{ flex: 1, minWidth: 0 }} noWrap>
                   {step.label}
                   {step.capped && (

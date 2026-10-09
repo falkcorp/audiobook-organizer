@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/CompareSpine.tsx
-// version: 1.13.0
+// version: 1.14.0
 // guid: 1e5b8d72-4c30-49a6-8f21-0b7e3a6c9d54
-// last-edited: 2026-10-07
+// last-edited: 2026-10-09
 //
 // The shared comparison spine: the surface that shows a reviewer what they are
 // deciding between.
@@ -70,7 +70,7 @@ import type {
 } from '../../../services/api';
 import type { MetadataAction } from '../reviewActions';
 import { EvidencePanel } from '../evidence/EvidencePanel';
-import { metadataEvidence } from '../evidence/adapters';
+import { metadataEvidence, type CandidateDetailState } from '../evidence/adapters';
 import { usePathAliases } from '../../common/PathLinks';
 import { usePathVars, type PathVar } from '../../../utils/formatPath';
 import {
@@ -117,13 +117,25 @@ function candidateSubtitle(candidate: MetadataCandidate): string | null {
   return subtitle;
 }
 
-function EvidenceSection({ candidate }: { candidate: MetadataCandidate }) {
+function EvidenceSection({
+  candidate,
+  detail,
+}: {
+  candidate: MetadataCandidate;
+  /**
+   * Whether `candidate` is the full row yet. The lane shows the index row
+   * (no breakdown) first and swaps the full row in when its detail fetch
+   * lands, so the panel must be told which it has: an index row with no
+   * breakdown is "still loading", not "scored without a derivation".
+   */
+  detail: CandidateDetailState;
+}) {
   return (
     <Box sx={{ mt: 2 }} data-testid="evidence-section">
       <Typography variant="subtitle2" gutterBottom>
         How this score was reached
       </Typography>
-      <EvidencePanel evidence={metadataEvidence(candidate)} />
+      <EvidencePanel evidence={metadataEvidence(candidate, detail)} />
     </Box>
   );
 }
@@ -156,6 +168,12 @@ export interface SpineContext {
   /** Compact mode only. Single-open: opening one closes the other. */
   expandedId: string | null;
   onToggleExpand: (id: string) => void;
+  /**
+   * Whether this book's candidate is its full row yet -- see
+   * CandidateDetailState. The lane answers from its per-page detail fetch;
+   * an owner whose rows are always full answers 'loaded'.
+   */
+  detailState: (id: string) => CandidateDetailState;
   /**
    * The lane's bulk-apply toggle, so a group's Apply All can say when it will
    * replace existing values. Absent reads as 'fill'.
@@ -194,6 +212,8 @@ export interface SpineRowProps {
   rowState: RowState | undefined;
   /** Compact mode only; ignored by the two-column renderers. */
   expanded: boolean;
+  /** Resolved by the spine from `ctx.detailState`, like `rowState`. */
+  detail: CandidateDetailState;
   handlers: SpineHandlers;
   pathAliases: PathAlias[];
   /** Threaded, not re-derived per row -- see the vars prop on PathLinksProps. */
@@ -406,6 +426,7 @@ const CompactRow = memo(function CompactRow({
   selected,
   rowState,
   expanded,
+  detail,
   handlers,
   pathAliases,
   pathVars,
@@ -604,123 +625,123 @@ const CompactRow = memo(function CompactRow({
               </Stack>
             </Box>
             {r.candidate && (
-            <Box sx={{ flex: 1 }}>
-              <Typography variant="subtitle2" gutterBottom>
-                Proposed
-              </Typography>
-              <Stack
-                direction="row"
-                spacing={1}
-                sx={{
-                  alignItems: 'flex-start',
-                }}
-              >
-                <Avatar
-                  src={r.candidate.cover_url || ''}
-                  variant="rounded"
+              <Box sx={{ flex: 1 }}>
+                <Typography variant="subtitle2" gutterBottom>
+                  Proposed
+                </Typography>
+                <Stack
+                  direction="row"
+                  spacing={1}
                   sx={{
-                    width: 60,
-                    height: 80,
-                    cursor: r.candidate?.cover_url ? 'pointer' : 'default',
+                    alignItems: 'flex-start',
                   }}
-                  onClick={() =>
-                    r.candidate?.cover_url && handlers.onPreviewCover(r.candidate.cover_url)
-                  }
-                />
-                <Box>
-                  <Typography
-                    variant="body2"
+                >
+                  <Avatar
+                    src={r.candidate.cover_url || ''}
+                    variant="rounded"
                     sx={{
-                      fontWeight: 'bold',
+                      width: 60,
+                      height: 80,
+                      cursor: r.candidate?.cover_url ? 'pointer' : 'default',
                     }}
-                  >
-                    {r.candidate.title}
-                  </Typography>
-                  {candidateSubtitle(r.candidate) && (
-                    <Typography variant="body2" sx={{ fontStyle: 'italic' }}>
-                      {candidateSubtitle(r.candidate)}
-                    </Typography>
-                  )}
-                  <Typography variant="body2">{r.candidate.author}</Typography>
-                  {r.candidate.narrator && (
+                    onClick={() =>
+                      r.candidate?.cover_url && handlers.onPreviewCover(r.candidate.cover_url)
+                    }
+                  />
+                  <Box>
                     <Typography
                       variant="body2"
                       sx={{
-                        color: 'text.secondary',
+                        fontWeight: 'bold',
                       }}
                     >
-                      Narrated by {r.candidate.narrator}
+                      {r.candidate.title}
                     </Typography>
-                  )}
-                  {r.candidate.series && (
-                    <Typography variant="body2">
-                      Series: {r.candidate.series}
-                      {r.candidate.series_position
-                        ? ` \u00b7 Book ${r.candidate.series_position}`
-                        : ''}
-                    </Typography>
-                  )}
-                  {r.candidate.year && (
-                    <Typography
-                      variant="caption"
-                      sx={{
-                        display: 'block',
-                      }}
-                    >
-                      {r.candidate.year}
-                    </Typography>
-                  )}
-                  {r.candidate.publisher && (
-                    <Typography
-                      variant="caption"
-                      sx={{
-                        display: 'block',
-                      }}
-                    >
-                      {r.candidate.publisher}
-                    </Typography>
-                  )}
-                  <Chip
-                    label={`${Math.round(r.candidate.score * 100)}`}
-                    size="small"
-                    color={
-                      r.candidate.score >= 0.85
-                        ? 'success'
-                        : r.candidate.score >= 0.6
-                          ? 'warning'
-                          : 'default'
-                    }
-                    sx={{ mt: 0.5, mr: 0.5 }}
-                  />
-                  <Chip
-                    label={r.candidate.source}
-                    size="small"
-                    color={SOURCE_COLORS[r.candidate.source] || 'default'}
-                    variant="outlined"
-                    sx={{ mt: 0.5, mr: 0.5 }}
-                  />
-                  {(r.candidate.audible_rating_overall ?? 0) > 0 && (
+                    {candidateSubtitle(r.candidate) && (
+                      <Typography variant="body2" sx={{ fontStyle: 'italic' }}>
+                        {candidateSubtitle(r.candidate)}
+                      </Typography>
+                    )}
+                    <Typography variant="body2">{r.candidate.author}</Typography>
+                    {r.candidate.narrator && (
+                      <Typography
+                        variant="body2"
+                        sx={{
+                          color: 'text.secondary',
+                        }}
+                      >
+                        Narrated by {r.candidate.narrator}
+                      </Typography>
+                    )}
+                    {r.candidate.series && (
+                      <Typography variant="body2">
+                        Series: {r.candidate.series}
+                        {r.candidate.series_position
+                          ? ` \u00b7 Book ${r.candidate.series_position}`
+                          : ''}
+                      </Typography>
+                    )}
+                    {r.candidate.year && (
+                      <Typography
+                        variant="caption"
+                        sx={{
+                          display: 'block',
+                        }}
+                      >
+                        {r.candidate.year}
+                      </Typography>
+                    )}
+                    {r.candidate.publisher && (
+                      <Typography
+                        variant="caption"
+                        sx={{
+                          display: 'block',
+                        }}
+                      >
+                        {r.candidate.publisher}
+                      </Typography>
+                    )}
                     <Chip
-                      label={`★ ${r.candidate.audible_rating_overall!.toFixed(1)}${(r.candidate.audible_rating_count ?? 0) > 0 ? ` (${r.candidate.audible_rating_count!.toLocaleString()})` : ''}`}
+                      label={`${Math.round(r.candidate.score * 100)}`}
                       size="small"
-                      variant="outlined"
-                      sx={{ mt: 0.5, mr: 0.5, fontWeight: 500 }}
+                      color={
+                        r.candidate.score >= 0.85
+                          ? 'success'
+                          : r.candidate.score >= 0.6
+                            ? 'warning'
+                            : 'default'
+                      }
+                      sx={{ mt: 0.5, mr: 0.5 }}
                     />
-                  )}
-                  {(r.candidate.google_rating_average ?? 0) > 0 && (
                     <Chip
-                      label={`G★ ${r.candidate.google_rating_average!.toFixed(1)}${(r.candidate.google_rating_count ?? 0) > 0 ? ` (${r.candidate.google_rating_count!.toLocaleString()})` : ''}`}
+                      label={r.candidate.source}
                       size="small"
+                      color={SOURCE_COLORS[r.candidate.source] || 'default'}
                       variant="outlined"
-                      sx={{ mt: 0.5, fontWeight: 500 }}
+                      sx={{ mt: 0.5, mr: 0.5 }}
                     />
-                  )}
-                </Box>
-              </Stack>
-            </Box>
+                    {(r.candidate.audible_rating_overall ?? 0) > 0 && (
+                      <Chip
+                        label={`★ ${r.candidate.audible_rating_overall!.toFixed(1)}${(r.candidate.audible_rating_count ?? 0) > 0 ? ` (${r.candidate.audible_rating_count!.toLocaleString()})` : ''}`}
+                        size="small"
+                        variant="outlined"
+                        sx={{ mt: 0.5, mr: 0.5, fontWeight: 500 }}
+                      />
+                    )}
+                    {(r.candidate.google_rating_average ?? 0) > 0 && (
+                      <Chip
+                        label={`G★ ${r.candidate.google_rating_average!.toFixed(1)}${(r.candidate.google_rating_count ?? 0) > 0 ? ` (${r.candidate.google_rating_count!.toLocaleString()})` : ''}`}
+                        size="small"
+                        variant="outlined"
+                        sx={{ mt: 0.5, fontWeight: 500 }}
+                      />
+                    )}
+                  </Box>
+                </Stack>
+              </Box>
             )}
           </Stack>
-          {r.candidate && <EvidenceSection candidate={r.candidate} />}
+          {r.candidate && <EvidenceSection candidate={r.candidate} detail={detail} />}
         </Box>
       )}
     </Box>
@@ -731,6 +752,7 @@ const TwoColumnCard = memo(function TwoColumnCard({
   r,
   selected,
   rowState,
+  detail,
   handlers,
   pathAliases,
   pathVars,
@@ -972,7 +994,7 @@ const TwoColumnCard = memo(function TwoColumnCard({
           )}
         </Box>
       </Stack>
-      {r.candidate && <EvidenceSection candidate={r.candidate} />}
+      {r.candidate && <EvidenceSection candidate={r.candidate} detail={detail} />}
     </Box>
   );
 });
@@ -984,7 +1006,7 @@ export { SPINE_TWO_COLUMN_MIN };
  * The comparison surface.
  *
  * Grouped results always render as grouped cards regardless of view mode: a
- * group is several books competing for ONE candidate, and there is no honest way
+ * group is several books competing for ONE candidate, and there is no faithful way
  * to show that as a row per book -- each row would repeat the same candidate and
  * imply each book had its own match.
  */
@@ -1112,6 +1134,7 @@ export function CompareSpine({
           selected: ctx.isSelected(r.book.id),
           rowState: ctx.rowState(r.book.id),
           expanded: ctx.expandedId === r.book.id,
+          detail: ctx.detailState(r.book.id),
           handlers,
           pathAliases,
           pathVars,

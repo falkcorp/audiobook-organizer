@@ -1,7 +1,7 @@
 // file: web/src/components/review/evidence/types.ts
-// version: 2.1.0
+// version: 2.2.0
 // guid: 8b3f1a94-6c02-4e7d-95a1-2f8e4d0c7b63
-// last-edited: 2026-09-27
+// last-edited: 2026-10-09
 //
 // The evidence model behind the unified EvidencePanel.
 //
@@ -176,6 +176,12 @@ export interface WaterfallEvidence {
   score: number;
   steps: WaterfallStep[];
   emptyReason?: string;
+  /**
+   * The steps are absent because they are still being fetched, not because
+   * none were recorded. The panel renders `emptyReason` with a progress
+   * indicator instead of as a conclusion.
+   */
+  loading?: boolean;
 }
 
 export type Evidence = ConfidenceEvidence | FactsEvidence | WaterfallEvidence;
