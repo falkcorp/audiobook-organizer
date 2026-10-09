@@ -1,5 +1,5 @@
 # file: .github/workflows/ci.yml
-# version: 3.19.0
+# version: 3.20.0
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
 # last-edited: 2026-10-09
 
@@ -92,9 +92,9 @@ jobs:
   ci:
     name: Minimal CI
     needs: changes
-    # The reusable workflow has no input to skip its Go jobs (07-C3 asks for
-    # one upstream), so a web-only change still runs them; only the frontend
-    # half is switchable from here.
+    # Its Go Tests job is off for good (run-go-tests below); its Go Vet & Build
+    # and Go Lint jobs have no skip input, so a web-only change still runs
+    # them. Only the frontend half is switchable per change from here.
     if: ${{ needs.changes.outputs.go == 'true' || needs.changes.outputs.web == 'true' }}
     # Pin bumped 2026-08-12 to pick up falkcorp/github-common#346, which raises
     # the `Go Tests (short, race)` job cap from 20 to 35 minutes. That job runs
@@ -110,13 +110,20 @@ jobs:
     # golangci-lint ran in ZERO workflows in this repo -- .golangci.yml existed
     # and had never once executed in CI (`make ci` runs staticcheck, not
     # golangci-lint).
-    uses: falkcorp/github-common/.github/workflows/reusable-ci-minimal.yml@828afb50d0d18c426c72a6ed1060123677bee674 # main 2026-08-18 (adds go-lint + advisory super-linter jobs)
+    #
+    # Pin bumped again 2026-10-09 to pick up falkcorp/github-common#371, which
+    # adds the `run-go-tests` input set to false below (07-C3). The same range
+    # also moves that workflow's own action pins (checkout v7.0.1, setup-go
+    # v7.0.0, cache v6.1.0, super-linter v8.7.0).
+    uses: falkcorp/github-common/.github/workflows/reusable-ci-minimal.yml@8d94ff2c3a745b323088c98659851c82313e5fd0 # main 2026-10-09 (adds run-go-tests)
     with:
       go-version: '1.27'
       node-version: '26'
       system-packages: 'libtag1-dev'
       frontend-working-dir: 'web'
       run-frontend: ${{ needs.changes.outputs.web == 'true' }}
+      # go-test-short-shards below runs the same suite in four shards and replaces the built-in Go Tests (short, race) job.
+      run-go-tests: false
       go-lint: true
       # --enable-only OVERRIDES .golangci.yml's enable list, and it is load-bearing,
       # not a tidiness flag. That config also enables errcheck, which currently has
@@ -511,41 +518,57 @@ jobs:
       - name: Lint TODO.md for leaked fragment headers
         run: python3 scripts/assemble_todo.py --lint
 
-  # Project-specific: coverage floor gate on every PR (T12 follow-up).
-  # Previously this gate (`make ci`'s coverage-check-short, floor read from
-  # .ci/coverage-floor.txt) only ran nightly via reusable-ci.yml's separate
-  # go-test-coverage/.testcoverage.yml mechanism — never on PRs. This job
-  # mirrors `make ci`'s local gate exactly (same two targets a contributor
-  # runs locally) so a coverage regression is caught before merge, not the
-  # next morning.
-  coverage-gate:
-    name: Coverage Floor (PR gate)
+  # Project-specific: the short Go suite, in four shards (07-C3, 2026-10-09).
+  #
+  # Before this, the same `go test -short -race ./...` ran twice on every PR:
+  # Minimal CI's `Go Tests (short, race)` (~19 min) and this file's
+  # `coverage-gate` job (`make test-short`, ~23 min), and the PR waited for the
+  # slower one. Now Minimal CI's copy is off (run-go-tests: false on the `ci`
+  # job above) and this matrix runs the suite once, in four parallel shards.
+  #
+  # How the split works: scripts/ci/short_test_shards.py (via
+  # `make test-short-shard SHARD=k/4`) takes every package `go list ./...`
+  # reports. A package heavier than 150 s (scripts/ci/short_test_weights.json)
+  # is split into groups of top-level test names, balanced by the per-test
+  # seconds in scripts/ci/go_test_timings.json, each run as its own
+  # `go test -run '^(...)$'`; every other package runs whole. Units are dealt
+  # longest-first into four bins, deterministically, so every shard computes
+  # the same plan. Before running, each shard checks that every package and
+  # every split test name is assigned exactly once and that no shard is empty;
+  # a compile error in a split package fails `go test -list` and the shard.
+  # `short_test_shards.py --check` runs the same check over every test name.
+  # Each shard uploads its merged profile as coverage-k.out; the `coverage`
+  # job below merges the four and applies the floor.
+  go-test-short-shards:
+    name: Go Tests (short, race) shard ${{ matrix.shard }}
     needs: changes
     if: ${{ needs.changes.outputs.go == 'true' }}
     runs-on: ubuntu-latest
-    # 35, not 20. `make test-short` runs go test with `-timeout 25m`, so a cap
-    # of 20 would let the runner kill this job BEFORE Go's own timeout could
-    # fire — and Go's timeout is the only thing that prints a goroutine dump
-    # naming the stuck test.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ['1/4', '2/4', '3/4', '4/4']
+    # 35, not 20. `make test-short-shard` runs go test with `-timeout 25m`, so
+    # a cap of 20 would let the runner kill this job BEFORE Go's own timeout
+    # could fire — and Go's timeout is the only thing that prints a goroutine
+    # dump naming the stuck test.
     #
     # INVARIANT: the job cap must stay strictly greater than the longest
     # `-timeout` passed to any go test invocation in the steps below, plus
     # setup. If you raise the test timeout, raise this too.
     #
     # CORRECTION (2026-08-12): an earlier version of this comment credited the
-    # #2311/#2315 `conclusion=cancelled` failures to this job. That was wrong.
-    # Those cancellations were on `Minimal CI / Go Tests (short, race)`, which
-    # is NOT defined in this file — the `Minimal CI /` prefix means it comes
-    # from the reusable workflow referenced by the `ci` job above
+    # #2311/#2315 `conclusion=cancelled` failures to this job's predecessor
+    # (`coverage-gate`). That was wrong. Those cancellations were on
+    # `Minimal CI / Go Tests (short, race)`, which is NOT defined in this file
+    # — the `Minimal CI /` prefix means it comes from the reusable workflow
+    # referenced by the `ci` job above
     # (falkcorp/github-common/.github/workflows/reusable-ci-minimal.yml), where
-    # the cap was 20 against its own `go test -timeout 30m`. This job is a
-    # different job that has never been the one cancelled; it completed in
+    # the cap was 20 against its own `go test -timeout 30m`. coverage-gate was
+    # a different job that was never the one cancelled; it completed in
     # 13m21s on the run where Go Tests was killed at 20m16s. Fixed upstream in
     # falkcorp/github-common#346; that workflow exposes no timeout input, so it
     # could not have been fixed from this repo.
-    #
-    # This is a diagnosis fix, not a performance fix: internal/server alone is a
-    # ~500s package (TODO-SRVTIMEOUT) and sharding it is still open.
     timeout-minutes: 35
     steps:
       - name: Checkout
@@ -573,17 +596,86 @@ jobs:
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libtag1-dev bc
 
-      - name: Run short tests with coverage profile
-        run: make test-short
+      - name: Run short tests, one shard, with coverage profile
+        id: shard
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          echo "n=${SHARD%%/*}" >> "$GITHUB_OUTPUT"
+          make test-short-shard SHARD="$SHARD"
+
+      - name: Upload shard coverage profile
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-${{ steps.shard.outputs.n }}
+          path: coverage-${{ steps.shard.outputs.n }}.out
+          if-no-files-found: error
+          retention-days: 3
+
+  # Project-specific: coverage floor gate on every PR (T12 follow-up).
+  # Previously this gate (`make ci`'s coverage-check-short, floor read from
+  # .ci/coverage-floor.txt) only ran nightly via reusable-ci.yml's separate
+  # go-test-coverage/.testcoverage.yml mechanism — never on PRs. It still
+  # applies `make ci`'s local gate exactly (coverage-check-short, unchanged),
+  # but to the four shard profiles merged block by block
+  # (`short_test_shards.py --merge`, which fails if any shard's profile is
+  # missing) instead of a profile from a run of its own. The display name is
+  # the one the `coverage-gate` job had, so the check name stays the same.
+  coverage:
+    name: Coverage Floor (PR gate)
+    needs: [changes, go-test-short-shards]
+    if: ${{ needs.changes.outputs.go == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+
+      # `go tool cover -func` resolves the profile's packages to source files,
+      # so the toolchain and module cache are needed even though nothing runs.
+      - name: Set up Go (no built-in cache)
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27'
+          cache: false
+
+      - name: Restore Go cache (manual)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-1.27-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-1.27-
+            ${{ runner.os }}-go-
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libtag1-dev bc
+
+      - name: Download shard coverage profiles
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: coverage-*
+          path: shard-coverage
+          merge-multiple: true
+
+      - name: Merge shard profiles into coverage.out
+        run: >-
+          python3 scripts/ci/short_test_shards.py --merge coverage.out
+          shard-coverage/coverage-1.out shard-coverage/coverage-2.out
+          shard-coverage/coverage-3.out shard-coverage/coverage-4.out
 
       - name: Check coverage floor (.ci/coverage-floor.txt)
         run: make coverage-check-short
 
   # Project-specific: the tests that -short skips, run WITHOUT -short.
   #
-  # Every other Go test run that gates a PR passes -short: `make test-short`
-  # in coverage-gate above, Minimal CI's `go test -short -race ./...`, and all
-  # three Woodpecker test workflows. Tests built on the real-store fixture
+  # Every other Go test run that gates a PR passes -short: the
+  # go-test-short-shards matrix above (`make test-short-shard`), and all three
+  # Woodpecker test workflows. Tests built on the real-store fixture
   # internal/versionprimary/vptest (its New skips under -short) and every other
   # testing.Short() skip -- the merge, undo and redirect state-machine tests in
   # internal/merge, internal/dedup, internal/reconcile and
@@ -610,7 +702,7 @@ jobs:
       fail-fast: false
       matrix:
         shard: ['1/3', '2/3', '3/3']
-    # INVARIANT (same as coverage-gate): the job cap must stay strictly greater
+    # INVARIANT (same as go-test-short-shards): the job cap must stay strictly greater
     # than the 25m `-timeout` that `make test-fixtures` passes to go test, plus
     # setup, or the runner kills the job before Go prints the goroutine dump.
     timeout-minutes: 35

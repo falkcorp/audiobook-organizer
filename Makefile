@@ -1,7 +1,7 @@
 # file: Makefile
-# version: 2.34.1
+# version: 2.35.0
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
-# last-edited: 2026-10-06
+# last-edited: 2026-10-09
 
 BINARY := audiobook-organizer
 ROOT_DIR := $(shell git rev-parse --show-toplevel 2>/dev/null || pwd)
@@ -55,7 +55,7 @@ BACKUP_DIR  ?= $(CURDIR)/backups
 
 .PHONY: all build build-api run run-api install clean help \
         web-install web-build web-dev web-test web-lint web-lint-memory \
-        test test-short test-fixtures test-all test-all-short test-nightly test-frontend test-e2e test-e2e-demo \
+        test test-short test-short-shard test-fixtures test-all test-all-short test-nightly test-frontend test-e2e test-e2e-demo \
         coverage coverage-check coverage-check-short ci \
         vet mocks mocks-check staticcheck oplint sdkguard bench-check fmt-check \
         docker docker-run docker-stop \
@@ -86,6 +86,7 @@ help:
 	@echo "Testing:"
 	@echo "  make test           - Run Go backend tests (full — includes slow prop tests, ~15 min)"
 	@echo "  make test-short     - Run Go backend tests in -short mode + coverage (slow prop tests skipped, ~8 min)"
+	@echo "  make test-short-shard SHARD=k/N - Run shard k of N of the -short suite (CI matrix), writes coverage-k.out"
 	@echo "  make test-all       - Run all tests: backend (full) + frontend"
 	@echo "  make test-all-short - Run all tests: backend (-short) + frontend (for local ci)"
 	@echo "  make test-nightly   - Run all tests including slow property tests (for nightly CI)"
@@ -270,6 +271,24 @@ test-short: vet
 	@echo "🧪 Running backend tests (-short — slow prop tests skipped, with coverage)..."
 	@go test ./... -short -race -coverprofile=coverage.out -covermode=atomic -timeout 25m
 	@echo "✅ Short backend tests passed, coverage profile generated"
+
+## test-short-shard: Run shard SHARD=k/N of the same short suite as test-short
+## (same -short -race -covermode=atomic -timeout 25m), writing coverage-k.out.
+## ci.yml's go-test-short-shards matrix runs this with N=4 and its coverage job
+## merges the four profiles (`short_test_shards.py --merge`) into coverage.out
+## for coverage-check-short. scripts/ci/short_test_shards.py splits the heavy
+## packages by test name, checks that every package and every listed test is
+## assigned exactly once before running anything, and fails on an empty shard.
+## `--plan` / `--check` on that script print the split without running tests.
+##
+## No `vet` prerequisite: Minimal CI's Go Vet & Build job gates it, and each
+## matrix shard would pay for it again. test-short is unchanged.
+SHARD ?=
+test-short-shard:
+	@if [ -z "$(SHARD)" ]; then echo "❌ usage: make test-short-shard SHARD=k/N"; exit 1; fi
+	@echo "🧪 Running short backend tests, shard $(SHARD) (with coverage)..."
+	@python3 scripts/ci/short_test_shards.py --shard $(SHARD) --out coverage-$(firstword $(subst /, ,$(SHARD))).out -- -short -race -covermode=atomic -timeout 25m
+	@echo "✅ Short backend tests passed for shard $(SHARD): coverage-$(firstword $(subst /, ,$(SHARD))).out"
 
 ## test-fixtures: Run, WITHOUT -short and with -race, every package whose
 ## tests skip under -short (a direct testing.Short() call, or a fixture helper
