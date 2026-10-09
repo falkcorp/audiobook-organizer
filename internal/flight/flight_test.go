@@ -1,7 +1,7 @@
 // file: internal/flight/flight_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4c9e2a6b-7d13-4f58-a2b0-9e6d1c3f7a85
-// last-edited: 2026-10-06
+// last-edited: 2026-10-09
 
 package flight
 
@@ -153,5 +153,35 @@ func TestGroup_BuildHasDeadline(t *testing.T) {
 	})
 	if !ok || time.Until(deadline) > time.Hour || time.Until(deadline) < time.Hour-time.Minute {
 		t.Fatalf("build deadline = %v (set %v), want about 1h from now", deadline, ok)
+	}
+}
+
+// A caller whose context is already done gets its error back without a build
+// being started or joined: there is nobody to wait for the result, and a
+// build that ran anyway could finish before the caller's departure cancelled
+// it (the flaky TestScopedTagFacets_CancelledCallerGetsErrorNothingCached).
+func TestGroup_AlreadyCancelledCallerStartsNoBuild(t *testing.T) {
+	var f Group[int]
+	var builds atomic.Int32
+	build := func(ctx context.Context) (int, error) {
+		builds.Add(1)
+		return 1, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for i := 0; i < 50; i++ {
+		if _, err := f.Do(ctx, "k", 0, build); !errors.Is(err, context.Canceled) {
+			t.Fatalf("err %v, want context.Canceled", err)
+		}
+	}
+	if n := builds.Load(); n != 0 {
+		t.Fatalf("build ran %d times for a caller that had already left", n)
+	}
+	if f.InFlight("k") {
+		t.Fatal("a build is registered for a caller that had already left")
+	}
+	// A live caller afterwards builds normally.
+	if v, err := f.Do(context.Background(), "k", 0, build); err != nil || v != 1 {
+		t.Fatalf("live caller: %v, %v", v, err)
 	}
 }
