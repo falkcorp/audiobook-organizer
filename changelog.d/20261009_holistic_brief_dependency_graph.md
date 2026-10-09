@@ -1,0 +1,3 @@
+### Changed
+
+- Holistic roadmap task briefs: every brief's `Depends on` cell now opens with a canonical `**Merge first:** <ids>` list and every `Blocks` cell is generated from those lists, after a cross-brief check found one wave contradiction (06-P3 was wave 3 but 07-R4 and 01-P81a needed it in wave 1), a 04-P9/04-P12 ordering loop, two wave-1 briefs waiting on wave-2 PRs that were only rebase-order notes (05-PR8 on 02-PR14, 01-P77 on 03-PR3), four briefs depending on the pre-split id `01 P81`, and ~200 Blocks/Depends mismatches. 06-P3 moves to wave 1. The index gains a hub-file rebase rule for the six files that most sibling PRs touch.
