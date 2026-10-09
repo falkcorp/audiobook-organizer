@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert.go
-// version: 1.65.0
+// version: 1.66.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
-// last-edited: 2026-10-07
+// last-edited: 2026-10-09
 
 package audiobooks
 
@@ -1496,13 +1496,16 @@ func (rs *RevertService) revertITunesPathClear(c *database.OperationChange) erro
 	if c.FieldName == undo.ITunesPathBookField {
 		return rs.modifyBook(c.OperationID, c.BookID, func(book *database.Book) error {
 			cur := ""
+			//lint:ignore SA1019 the revert restores the legacy book.itunes_path column the stale-path repair cleared; it must read and write that exact column
 			if book.ITunesPath != nil {
+				//lint:ignore SA1019 the revert restores the legacy book.itunes_path column the stale-path repair cleared; it must read and write that exact column
 				cur = *book.ITunesPath
 			}
 			if err := undo.CheckITunesPathClearCurrent(cur, c); err != nil {
 				return err
 			}
 			old := c.OldValue
+			//lint:ignore SA1019 the revert restores the legacy book.itunes_path column the stale-path repair cleared; it must read and write that exact column
 			book.ITunesPath = &old
 			return nil
 		})
