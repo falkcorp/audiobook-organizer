@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/ci/short_test_shards.py
-# version: 1.1.0
+# version: 1.2.0
 # guid: 6c2f9a47-3e1b-4d88-9f05-b7a1d4e3c862
 # last-edited: 2026-10-09
 """Run the whole short Go test suite as one of N shards, then merge coverage.
@@ -144,11 +144,24 @@ def package_weight(
     return _DEFAULT_WEIGHT
 
 
+# No test is free. go_test_timings.json records `go test -json` elapsed
+# seconds, which round to 0.00 for most tests, so a split group of a thousand
+# such tests estimated at nothing. Measured on the first warm run of main's
+# gate (37990246364, 2026-10-09): internal/plugins/maintenance's three groups
+# were estimated at 114 s each; the two with ~250 tests ran 122-125 s, the one
+# with 1,098 "free" tests ran 355 s. Solving both for a per-test cost gives
+# 0.27 s on a 4-vCPU runner under -race (process start, fixture setup, Pebble
+# open/close), so every test is estimated at no less than this.
+_MIN_TEST_SECONDS = 0.25
+
+
 def _estimate(names: list[str], timings: dict[str, float]) -> dict[str, float]:
-    # The same per-name estimate balance() uses: unknown names get the median.
+    # The same per-name rule balance() uses for unknown names (the median of
+    # the known ones), plus the floor above; balance() is then handed this
+    # estimate as its timings so both agree.
     known = sorted(timings[n] for n in names if n in timings)
     default = known[len(known) // 2] if known else 1.0
-    return {n: timings.get(n, default) for n in names}
+    return {n: max(timings.get(n, default), _MIN_TEST_SECONDS) for n in names}
 
 
 def _list_all(pkgs: list[Package], go_args: list[str], lister: Lister) -> dict[str, list[str]]:
@@ -184,7 +197,7 @@ def build_units(
         pkg_timings = timings.get(p.key, {})
         est = _estimate(names, pkg_timings)
         total = sum(est.values()) or 1.0
-        for i, group in enumerate(gts.balance(names, split[p.path], pkg_timings), start=1):
+        for i, group in enumerate(gts.balance(names, split[p.path], est), start=1):
             units.append(Unit(p, i, tuple(group), w * sum(est[n] for n in group) / total))
     return units, listed
 

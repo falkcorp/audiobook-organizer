@@ -1,5 +1,5 @@
 # file: scripts/tests/test_short_test_shards.py
-# version: 1.1.0
+# version: 1.2.0
 # guid: e4a7c1b9-58d2-4f36-a0c3-2d9b6f8e1a74
 # last-edited: 2026-10-09
 """Tests for scripts/ci/short_test_shards.py: plan completeness, determinism, merge.
@@ -330,3 +330,21 @@ class ShardSpecTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EstimateFloorTest(unittest.TestCase):
+    def test_zero_second_tests_are_not_free(self) -> None:
+        # Recorded 0.00 s tests cost the floor, so a split spreads them by
+        # count instead of piling every "free" test into one group.
+        names = [f"TestZ{i:03d}" for i in range(300)] + ["TestBig"]
+        timings = dict.fromkeys(names, 0.0)
+        timings["TestBig"] = 60.0
+        est = sts._estimate(names, timings)
+        self.assertEqual(est["TestZ000"], sts._MIN_TEST_SECONDS)
+        self.assertEqual(est["TestBig"], 60.0)
+        groups = sts.gts.balance(names, 3, est)
+        sizes = sorted(len(g) for g in groups)
+        # TestBig alone outweighs 240 floor tests, so its group is small and
+        # the other two share the rest nearly evenly.
+        self.assertLess(sizes[0], 100)
+        self.assertLess(sizes[2] - sizes[1], 5)
