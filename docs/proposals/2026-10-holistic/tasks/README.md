@@ -1,5 +1,5 @@
 <!-- file: docs/proposals/2026-10-holistic/tasks/README.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: 2f8c6a4e-9b1d-4e73-8a5c-6d0f3b2e7c19 -->
 <!-- last-edited: 2026-10-09 -->
 
@@ -28,6 +28,11 @@ One brief per PR for waves 0, 1, 2 and freeze window F of `../08-integrated-road
 4. Merge one PR at a time (CI is single-threaded). Hotspot files have a fixed order in `../08-integrated-roadmap.md` §4. Where a §4 chain crosses waves (for example `config.go`: 02 PR 10 is wave 3 but sits mid-chain), the earlier wave merges first and the chain is only a rebase order.
 5. Re-plan after 02-PR4 lands: the `ident:` counts replace the dated bucket estimates.
 
+### Two execution notes (2026-10-09)
+
+- The `Claude-Session:` trailer names the **executing** session. The literal URL in a brief's Guardrails is the coordinator's; an agent running in its own session (a cloud session, for example) writes its own URL instead, and that is correct, not drift.
+- The TypeScript check is `(cd web && npx tsc --noEmit)`. The old form `npx tsc --noEmit -p web` from the repo root resolves the root `node_modules` tsc (5.7.3), which rejects `web/tsconfig.json` with TS5103; `web/` pins tsc 6.0.3.
+
 ### Hub files: expect a rebase conflict, keep both sides
 
 427 same-wave brief pairs with no ordering between them touch the same file. Six files account for most of it. After a sibling merges, `git fetch origin main && git rebase origin/main`; for every conflict in one of these files keep **both** sides' edits, then run the file's own test. Never resolve by dropping the sibling's change, and never stop to ask about a conflict in one of these.
@@ -39,7 +44,7 @@ One brief per PR for waves 0, 1, 2 and freeze window F of `../08-integrated-road
 | `internal/server/testdata/write_op_modes.golden` | hand-maintained list, no `-update` flag | `go test ./internal/server -run TestWriteOps_ -count=1` |
 | `internal/server/op_twin_merge_test.go` (created by 04-P5) | 04-P4a to P4f and P14a to P14f each append rows | keep every row; `go test ./internal/server -count=1` |
 | `internal/scheduler/tasks.go`, `maintenance.go`, `extra_ops.go`; `internal/server/scheduler_extra_ops.go` | registration lists; siblings delete adjacent lines | keep both deletions; `go build ./... && go test ./internal/scheduler/... ./internal/server/ -count=1` |
-| `web/src/components/review/ReviewWorkspace.tsx`, `web/src/services/api.ts`, `internal/config/config.go` | §4 chains; disjoint hunks | keep both; `npx tsc --noEmit -p web` / `go build ./...` |
+| `web/src/components/review/ReviewWorkspace.tsx`, `web/src/services/api.ts`, `internal/config/config.go` | §4 chains; disjoint hunks | keep both; `(cd web && npx tsc --noEmit)` / `go build ./...` |
 
 `changelog.d/` never conflicts: every fragment has its own file name.
 
