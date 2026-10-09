@@ -59,7 +59,7 @@ First line: `Already done if <one shell test>; stop.` (an idempotency probe such
 - Worktree rule (absolute form; the agent has no cwd guarantee): `REPO=/Users/jdfalk/repos/github.com/jdfalk/audiobook-organizer; git -C "$REPO" fetch origin main && git -C "$REPO" worktree add "$REPO/../aorg-<id>" -b <branch> origin/main; cd "$REPO/../aorg-<id>"`; never edit main.
 - File headers: bump version and last-edited on every touched file; changelog fragment at a concrete path `changelog.d/<YYYYMMDD>_<topic>.md` (no `<name>` placeholders) with a `### Changed` / `### Fixed` heading, never `## `, and no file header.
 - Commit: the literal subject line, then explicit `git add` of named files only. The body ends with the two trailers `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>` (or `Claude Opus 5.5` when the Model row says opus) and `Claude-Session: <the session URL the coordinator passes in>`.
-- The word "honest" must not appear in any file the PR touches.
+- The banned word (the one the coordinator lists in `.standards`-level hygiene, spelled h-o-n-e-s-t) must not appear in any file the PR touches; `grep -rli` for it before committing.
 
 ## Report format
 What to put in the hand-back: files changed, test output lines, counts, anything unverified.
