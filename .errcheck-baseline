@@ -1,11 +1,14 @@
 # file: .errcheck-baseline
-# version: 1.7.0
+# version: 1.8.0
 # guid: 7a4d1e92-3f6b-4c85-9a02-1e6b8d4f2c73
 # last-edited: 2026-10-09
 
-# The number of `errcheck` findings tolerated in the tree. This is a RATCHET,
-# exactly like .interface-width-baseline: CI fails if the count goes UP, and
-# also fails if it goes DOWN without this number being lowered in the same PR.
+# The number of `errcheck` findings tolerated in the tree. This is a ONE-WAY
+# RATCHET, exactly like .interface-width-baseline: CI fails if the count goes
+# UP. If it goes DOWN, CI passes and prints a notice with the new number;
+# lower this file to it in the PR that earned the drop (or let 07-G4's
+# scheduled job do it). Until 2026-10-09 a drop also failed (owner decision
+# D47 made it one-way, task 07-C1).
 #
 # Why this exists. Wave 0 of the silent-failure sweep
 # (docs/audits/2026-08-11-silent-failure-error-discards.md) wired errcheck into
