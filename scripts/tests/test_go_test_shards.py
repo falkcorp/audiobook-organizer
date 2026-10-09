@@ -1,5 +1,5 @@
 # file: scripts/tests/test_go_test_shards.py
-# version: 1.1.0
+# version: 1.2.0
 # guid: 9d4a1f63-2b7e-4c85-a0f1-6e3b8c2d7a59
 # last-edited: 2026-10-09
 """Tests for scripts/ci/go_test_shards.py: shard balancing and coverage merge.
@@ -98,6 +98,8 @@ class ListTestsManyTest(unittest.TestCase):
 
         def fake_run(cmd: list[str], **kwargs: object) -> mock.Mock:
             calls.append(cmd)
+            if cmd[1] == "list":
+                return mock.Mock(returncode=0, stdout="m/a\nm/none\nm/b\n", stderr="")
             return mock.Mock(returncode=0, stdout=self.OUT, stderr="")
 
         with mock.patch.object(gts.subprocess, "run", fake_run):
@@ -106,10 +108,29 @@ class ListTestsManyTest(unittest.TestCase):
             got,
             {"m/a": ["ExampleA", "TestA1", "TestA2"], "m/none": [], "m/b": ["FuzzB", "TestB1"]},
         )
-        self.assertEqual(calls, [["go", "test", "-race", "-list", ".", "m/a", "m/none", "m/b"]])
+        self.assertEqual(
+            calls,
+            [
+                ["go", "list", "-f", "{{.ImportPath}}", "m/a", "m/none", "m/b"],
+                ["go", "test", "-race", "-list", ".", "m/a", "m/none", "m/b"],
+            ],
+        )
+
+    def test_relative_paths_are_resolved_to_import_paths(self) -> None:
+        # The fixture sharder passes `./internal/x`; the summary lines say the
+        # import path. Names must still come back under the caller's key.
+        def fake_run(cmd: list[str], **kwargs: object) -> mock.Mock:
+            if cmd[1] == "list":
+                return mock.Mock(returncode=0, stdout="m/b\n", stderr="")
+            return mock.Mock(returncode=0, stdout="TestB1\nFuzzB\nok  \tm/b\t0.02s\n", stderr="")
+
+        with mock.patch.object(gts.subprocess, "run", fake_run):
+            self.assertEqual(gts.list_tests("./b", []), ["FuzzB", "TestB1"])
 
     def test_single_package_wrapper_keeps_its_shape(self) -> None:
         def fake_run(cmd: list[str], **kwargs: object) -> mock.Mock:
+            if cmd[1] == "list":
+                return mock.Mock(returncode=0, stdout="m/b\n", stderr="")
             return mock.Mock(returncode=0, stdout="TestB1\nFuzzB\nok  \tm/b\t0.02s\n", stderr="")
 
         with mock.patch.object(gts.subprocess, "run", fake_run):
@@ -117,12 +138,16 @@ class ListTestsManyTest(unittest.TestCase):
 
     def test_build_failure_and_unattributed_output_fail_loudly(self) -> None:
         def failing(cmd: list[str], **kwargs: object) -> mock.Mock:
+            if cmd[1] == "list":
+                return mock.Mock(returncode=0, stdout="m/a\n", stderr="")
             return mock.Mock(returncode=1, stdout="FAIL\tm/a [build failed]\n", stderr="x.go:1: boom")
 
         with mock.patch.object(gts.subprocess, "run", failing), self.assertRaises(SystemExit):
             gts.list_tests_many(["m/a"], [])
 
         def truncated(cmd: list[str], **kwargs: object) -> mock.Mock:
+            if cmd[1] == "list":
+                return mock.Mock(returncode=0, stdout="m/a\n", stderr="")
             return mock.Mock(returncode=0, stdout="TestA1\n", stderr="")
 
         with mock.patch.object(gts.subprocess, "run", truncated), self.assertRaises(SystemExit):
