@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # file: scripts/ci/go_test_shards.py
-# version: 1.2.0
+# version: 1.3.0
 # guid: 3b8e6d21-7c4f-4a90-b1e5-9f2d0c7a6e48
 # last-edited: 2026-10-09
 """Run Go test packages split into shards, then merge their coverage.
@@ -74,6 +74,24 @@ def list_tests_many(pkgs: list[str], go_args: list[str]) -> dict[str, list[str]]
     """
     if not pkgs:
         return {}
+    # The summary lines name packages by import path, whatever form the
+    # caller used (`./internal/database` from the fixture sharder, import
+    # paths from the short-test sharder), so resolve first. Missed on
+    # 2026-10-09 (#3882): the relative form matched nothing and every
+    # Woodpecker fixture step failed with "no summary line".
+    lst = subprocess.run(
+        ["go", "list", "-f", "{{.ImportPath}}", *pkgs], capture_output=True, text=True
+    )
+    if lst.returncode != 0:
+        print(lst.stdout + lst.stderr, flush=True)
+        raise SystemExit(f"::error::go list {' '.join(pkgs)} failed (exit {lst.returncode})")
+    imports = lst.stdout.split()
+    if len(imports) != len(pkgs):
+        raise SystemExit(
+            f"::error::go list resolved {len(pkgs)} packages to {len(imports)} import paths; "
+            "list_tests_many takes one package per argument, no patterns"
+        )
+    by_import = dict(zip(pkgs, imports))
     res = subprocess.run(
         ["go", "test", *_build_flags(go_args), "-list", ".", *pkgs], capture_output=True, text=True
     )
@@ -94,14 +112,14 @@ def list_tests_many(pkgs: list[str], go_args: list[str]) -> dict[str, list[str]]
             pending = set()
         elif _NAME_RE.match(ln):
             pending.add(ln)
-    missing = [p for p in pkgs if p not in found]
+    missing = [p for p in pkgs if by_import[p] not in found]
     if missing or pending:
         print(res.stdout, flush=True)
         raise SystemExit(
             f"::error::go test -list output could not be attributed to packages "
             f"(no summary line for {', '.join(missing) or 'the trailing names'})"
         )
-    return {p: sorted(found[p]) for p in pkgs}
+    return {p: sorted(found[by_import[p]]) for p in pkgs}
 
 
 def balance(names: list[str], shards: int, timings: dict[str, float]) -> list[list[str]]:
