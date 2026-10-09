@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
 # file: scripts/check-interface-width.sh
-# version: 1.6.0
+# version: 1.7.0
 # guid: 5f1c07a3-84be-4d29-9e60-3b7a2d5c81ef
 # last-edited: 2026-10-09
 #
 # Ratchet on the number of `interfacebloat` findings. See
 # .interface-width-baseline for why this counts rather than listing files.
+#
+# ONE-WAY since 2026-10-09 (owner decision D47, task 07-C1): only a count
+# that goes UP fails. A count that goes DOWN prints a ::notice:: naming the
+# new number and exits 0; lower the baseline by hand in the PR that earned
+# it, or let the scheduled job from 07-G4 do it.
 set -euo pipefail
 
 root=$(git rev-parse --show-toplevel)
@@ -211,13 +216,9 @@ MSG
 fi
 
 if [[ "$actual" -lt "$baseline" ]]; then
-  cat >&2 <<MSG
-
-FAIL: interface width went DOWN ($baseline -> $actual) but the baseline was not
-lowered. Set the number in $BASELINE_FILE to $actual in this same PR so the
-ratchet holds the ground you just took.
-MSG
-  exit 1
+  # One-way ratchet (D47): a drop is good news, not a failure. Say so where
+  # the Actions summary shows it and fall through to OK.
+  echo "::notice::interface width went DOWN ($baseline -> $actual); lower $BASELINE_FILE to $actual (the scheduled job in 07-G4 does this)"
 fi
 
 echo "interface-width: OK"

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # file: scripts/check-errcheck-ratchet.sh
-# version: 1.2.0
+# version: 1.3.0
 # guid: 9c3e7a1d-5b48-4f0a-8e6c-2d1a9f7b3c05
 # last-edited: 2026-10-09
 #
@@ -17,6 +17,13 @@
 # UP" instead of "are there any findings", so it can gate from day one while the
 # backlog is paid down wave by wave -- same shape as interface-width, which
 # solved the identical problem for interfacebloat.
+#
+# ONE-WAY since 2026-10-09 (owner decision D47, task 07-C1): only a count
+# that goes UP fails. A count that goes DOWN prints a ::notice:: naming the
+# new number and exits 0; lower the baseline by hand in the PR that earned
+# it, or let the scheduled job from 07-G4 do it. Until 2026-10-09 a drop
+# also failed, which is what turned main red when a merge lowered the count
+# from 779 to 770 and the next docs-only PR inherited the failure.
 #
 # Why GOOS/GOARCH are pinned below: this codebase has several build-tagged
 # files (internal/fileops/reflink_{darwin,linux}.go,
@@ -163,15 +170,9 @@ MSG
 fi
 
 if [[ "$actual" -lt "$baseline" ]]; then
-  cat >&2 <<MSG
-
-FAIL: errcheck findings went DOWN ($baseline -> $actual) but the baseline was
-not lowered. Set the number in $BASELINE_FILE to $actual in this same PR so the
-ratchet holds the ground you just took -- this is expected and good news, it
-just needs to be recorded, exactly like paying down the interface-width
-baseline.
-MSG
-  exit 1
+  # One-way ratchet (D47): a drop is good news, not a failure. Say so where
+  # the Actions summary shows it and fall through to OK.
+  echo "::notice::errcheck findings went DOWN ($baseline -> $actual); lower $BASELINE_FILE to $actual (the scheduled job in 07-G4 does this)"
 fi
 
 echo "errcheck-ratchet: OK"
