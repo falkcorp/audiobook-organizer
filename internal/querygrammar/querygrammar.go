@@ -349,3 +349,5 @@ func (c Comparison) MatchAny(values []float64) bool {
 	}
 	return false
 }
+
+// 07-C2 throwaway: go-only probe, PR closed after
