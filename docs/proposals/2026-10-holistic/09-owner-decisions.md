@@ -1,5 +1,5 @@
 <!-- file: docs/proposals/2026-10-holistic/09-owner-decisions.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: 3b9e6f2a-71c4-4d0e-a8b5-9f1c2e7d4a60 -->
 <!-- last-edited: 2026-10-09 -->
 
@@ -77,7 +77,7 @@ These are the owner's answers to the decisions in `08-integrated-roadmap.md` §7
 |---|---|
 | D52 | **Deluge cleanup after organize (new feature).** Once every file in a torrent has a verified matching `book_file` in the library (same size and a content hash or fingerprint match; never path alone), remove the torrent **and its downloaded data** from Deluge, but only after seeding reaches **ratio 1.0 or 14 days, whichever comes first**. Both thresholds are settings. It is built as a Repairs-style fixer (trial → approve → apply) on the ops v3 Fixer kind, with a declared `Deletes` effect and a journal. It never touches library files or `book_file` rows. It needs its own design doc before implementation; reuse the existing Deluge client and evaluate `versions/swap.go`'s `NotifyDelugeAfterVersionSwap`. |
 
-## Round-2 open decisions (D53–D72)
+## Round-2 open decisions (D53–D73)
 
 Appended by the coordinator on 2026-10-09 from `08-integrated-roadmap.md` §7 (v1.1.0). Answered by the owner on 2026-10-09; the third column is the owner's answer (the reviewers' recommendation unless it says otherwise). Nothing above this heading was changed. (One note on the record above: D14d says "about 25 `client_golang` series"; 11 measured 69 families, and its ratchet baseline is 69.)
 
@@ -104,3 +104,4 @@ Appended by the coordinator on 2026-10-09 from `08-integrated-roadmap.md` §7 (v
 | D70 | 01 P72 Q6. Do any owner scripts or curl habits call the 20 dead dedup/verb-alias/ai-review routes? | **No.** P72 proceeds; handlers that lose their last route are deleted. | **answered 2026-10-09** |
 | D71 | 01 P81b. Does anything Mac-side sync listening position through `/books/:id/position`? | **No.** Retire the `/books/` alias behind `gone()`; `/audiobooks/:id/position` stays. | **answered 2026-10-09** |
 | D72 | 06 P2 decision flag. Pin workflow `go-version:` to the full patch (14 literals, 8 workflows, checker flips to full-pin equality) or keep floating minors? | **Full patch pin everywhere.** | **answered 2026-10-09** |
+| D73 | 01 Q6 / appendix C triage. Which of the 72 no-caller routes survive? | **Keep the 24 read-only diagnostic GETs** (db-census, fingerprint-failures, signals/coverage, work/stats, iTunes stats, merge journals, cache stats, activity-log, AI/tool status, op-defs, deluge discover/labels, metadata fields/throttles, policy tags, series normalize preview, two maintenance status GETs); **retire the other 48** (write/undo paths and orphan CRUD) behind 410 stubs for one release. Listed in appendix C "Kept by owner (D73)". | **answered 2026-10-09** |

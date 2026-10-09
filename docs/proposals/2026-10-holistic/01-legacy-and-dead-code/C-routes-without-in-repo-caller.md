@@ -1,5 +1,5 @@
 <!-- file: docs/proposals/2026-10-holistic/01-legacy-and-dead-code/C-routes-without-in-repo-caller.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: cf3c3044-cbe2-474c-a6b1-851a99f8650f -->
 <!-- last-edited: 2026-10-09 -->
 
@@ -44,7 +44,7 @@ This is a **floor and a triage list, not a dead list**: routes behind config/bui
 
 P72 also removes the verb aliases and non-`/dedup` routes 03 listed (`/audiobooks/merge`, `/series/normalize*`, `/authors/duplicates/ai-review*`), some of which matched a frontend string in an unused `api.ts` wrapper and so are not in the 93.
 
-## For owner triage (Q6): 72
+## For owner triage (Q6): 72 — answered 2026-10-09 (D73): keep the 24 listed under "Kept by owner", retire the other 48
 
 - `DELETE /api/v1/audiobooks/:id/alternative-titles`
 - `DELETE /api/v1/books/:id/status`
@@ -118,6 +118,35 @@ P72 also removes the verb aliases and non-`/dedup` routes 03 listed (`/audiobook
 - `POST /api/v1/series/:id/tags`
 - `PUT /api/v1/audiobooks/:id/narrators`
 - `PUT /api/v1/collections/:id`
+
+## Kept by owner (D73, answered 2026-10-09): 24
+
+Read-only diagnostic and census routes used from curl and Claude sessions. These stay registered; the P81 briefs mark their rows `(KEEP, D73)`. Every other route in the triage list above is retired behind a 410 `gone()` stub for one release.
+
+- `GET /api/v1/diagnostics/db-census`
+- `GET /api/v1/diagnostics/fingerprint-failures`
+- `GET /api/v1/signals/coverage`
+- `GET /api/v1/work/stats`
+- `GET /api/v1/itunes/library-stats`
+- `GET /api/v1/itunes/pid-integrity`
+- `GET /api/v1/merge/combine-journal`
+- `GET /api/v1/merge/sibling-journal`
+- `GET /api/v1/cache/stats/history`
+- `GET /api/v1/cache/stats/keys`
+- `GET /api/v1/system/activity-log`
+- `GET /api/v1/ai/capabilities`
+- `GET /api/v1/ai/endpoints/status`
+- `GET /api/v1/deluge/discover`
+- `GET /api/v1/deluge/labels`
+- `GET /api/v1/tools/:name/status`
+- `GET /api/v1/op-defs/:id`
+- `GET /api/v1/narrators/count`
+- `GET /api/v1/metadata/fields`
+- `GET /api/v1/metadata/providers/throttles`
+- `GET /api/v1/policy/tags`
+- `GET /api/v1/series/normalize/preview`
+- `GET /api/v1/maintenance/repair-missing-files/:id`
+- `GET /api/v1/maintenance/scan-composer-tags/:id`
 
 ## Referenced only by scripts or skills (keep unless the script is retired)
 
