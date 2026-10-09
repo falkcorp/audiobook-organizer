@@ -1,88 +1,81 @@
 // file: internal/querygrammar/querygrammar_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4d8a1e63-2b7c-4f90-a5e1-8c6d3b0f2a97
-// last-edited: 2026-10-06
+// last-edited: 2026-10-09
 
 package querygrammar
 
 import (
+	"encoding/json"
+	"os"
+	"slices"
 	"strings"
 	"testing"
 )
 
-func TestCompileText_Match(t *testing.T) {
-	cases := []struct {
-		name   string
-		raw    string
-		quoted bool
-		in     string
-		want   bool
-	}{
-		{"substring case-insensitive", "vamp", false, "The VAMPIRE Lestat", true},
-		{"substring miss", "zzz", false, "Dune", false},
-		{"quoted literal star", "a*", true, "Is a* b", true},
-		{"quoted literal star is not glob", "a*", true, "Anathem", false},
-		{"quoted slash is literal", "/x/", true, "path /x/ here", true},
-		{"glob prefix", "a*", false, "Anathem", true},
-		{"glob prefix case-insensitive", "a*", false, "anathem", true},
-		{"glob prefix trims leading space", "a*", false, "  Anathem", true},
-		{"glob prefix is whole-value not any word", "a*", false, "The Anathem", false},
-		{"glob suffix", "*saga", false, "Hyperion Saga", true},
-		{"glob contains", "*vamp*", false, "The Vampire Lestat", true},
-		{"glob middle", "the*lestat", false, "The Vampire Lestat", true},
-		{"glob escapes regex metachars", "a.c*", false, "abcd", false},
-		{"glob escapes regex metachars hit", "a.c*", false, "a.cd", true},
-		{"star alone = non-empty", "*", false, "x", true},
-		{"star alone empty", "*", false, "   ", false},
-		{"regex anchored letter start", `/^\s*\p{L}/`, false, "  Émile", true},
-		{"regex anchored letter start miss digit", `/^\s*\p{L}/`, false, "01 - Chapter", false},
-		{"regex case-insensitive default", "/^dune$/", false, "DUNE", true},
-		{"regex case-sensitive opt-out", "/(?-i)^dune$/", false, "DUNE", false},
-		{"regex with spaces", "/chapter \\d+/", false, "Chapter 12", true},
-		{"regex escaped slash", `/a\/b/`, false, "a/b", true},
-		{"regex alternation", "/^(m4b|mp3)$/", false, "MP3", true},
-		{"regex alternation miss", "/^(m4b|mp3)$/", false, "flac", false},
-		{"regex unanchored", "/vamp/", false, "The Vampire", true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			m, err := CompileText(tc.raw, tc.quoted)
-			if err != nil {
-				t.Fatalf("CompileText(%q): %v", tc.raw, err)
-			}
-			if got := m.Match(tc.in); got != tc.want {
-				t.Fatalf("Match(%q) with %q = %v, want %v", tc.in, tc.raw, got, tc.want)
-			}
-		})
-	}
+// conformanceCase is one row of testdata/conformance.json, the corpus shared
+// with web/src/utils/queryGrammar.test.ts so the Go engine and the TypeScript
+// RE2 translation cannot drift apart without one of the two suites failing.
+type conformanceCase struct {
+	Name            string   `json:"name"`
+	Pattern         string   `json:"pattern"`
+	Quoted          bool     `json:"quoted"`
+	Input           string   `json:"input"`
+	WantMatch       *bool    `json:"want_match"`
+	WantError       bool     `json:"want_error"`
+	GoErrorContains string   `json:"go_error_contains"`
+	TSErrorMatches  string   `json:"ts_error_matches"`
+	Engines         []string `json:"engines"`
+	SkipReason      string   `json:"skip_reason"`
 }
 
-func TestCompileText_Errors(t *testing.T) {
-	cases := []struct {
-		name    string
-		raw     string
-		wantSub string
-	}{
-		{"empty", "", "empty value"},
-		{"unterminated", "/abc", "no closing /"},
-		{"empty regex", "//", "empty regex"},
-		{"trailing flags", "/abc/i", "after the closing /"},
-		{"bad syntax", "/a(b/", "invalid regex"},
-		{"lookahead", "/^(?!The)/", "no lookahead"},
-		{"lookbehind", "/(?<=a)b/", "no lookahead"},
-		{"backref", `/(a)\1/`, "invalid regex"},
+func (c conformanceCase) runsOn(engine string) bool {
+	return len(c.Engines) == 0 || slices.Contains(c.Engines, engine)
+}
+
+func TestConformanceCorpus(t *testing.T) {
+	b, err := os.ReadFile("testdata/conformance.json")
+	if err != nil {
+		t.Fatal(err)
 	}
+	var cases []conformanceCase
+	if err := json.Unmarshal(b, &cases); err != nil {
+		t.Fatalf("testdata/conformance.json: %v", err)
+	}
+	skipped := 0
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := CompileText(tc.raw, false)
-			if err == nil {
-				t.Fatalf("CompileText(%q) = nil error, want error containing %q", tc.raw, tc.wantSub)
+		if !tc.runsOn("go") {
+			skipped++
+		}
+		t.Run(tc.Name, func(t *testing.T) {
+			if (tc.WantMatch == nil) == !tc.WantError {
+				t.Fatal("a case sets exactly one of want_match and want_error")
 			}
-			if !strings.Contains(err.Error(), tc.wantSub) {
-				t.Fatalf("CompileText(%q) error %q, want it to contain %q", tc.raw, err, tc.wantSub)
+			if len(tc.Engines) > 0 && tc.SkipReason == "" {
+				t.Fatal("a case restricted by engines must carry a skip_reason")
+			}
+			if !tc.runsOn("go") {
+				t.Skip(tc.SkipReason)
+			}
+			m, err := CompileText(tc.Pattern, tc.Quoted)
+			if tc.WantError {
+				if err == nil {
+					t.Fatalf("CompileText(%q) = nil error, want error containing %q", tc.Pattern, tc.GoErrorContains)
+				}
+				if tc.GoErrorContains == "" || !strings.Contains(err.Error(), tc.GoErrorContains) {
+					t.Fatalf("CompileText(%q) error %q, want it to contain %q", tc.Pattern, err, tc.GoErrorContains)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("CompileText(%q): %v", tc.Pattern, err)
+			}
+			if got := m.Match(tc.Input); got != *tc.WantMatch {
+				t.Fatalf("Match(%q) with %q = %v, want %v", tc.Input, tc.Pattern, got, *tc.WantMatch)
 			}
 		})
 	}
+	t.Logf("conformance corpus (go): %d cases, %d run, %d skipped", len(cases), len(cases)-skipped, skipped)
 }
 
 func TestIsPlainLiteral(t *testing.T) {

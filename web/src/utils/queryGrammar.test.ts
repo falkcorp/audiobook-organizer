@@ -1,8 +1,10 @@
 // file: web/src/utils/queryGrammar.test.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5f9c3a28-1e6d-4b70-8c42-b7e0d4a9f163
-// last-edited: 2026-10-06
+// last-edited: 2026-10-09
 
+import fs from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   compileTitleFilter,
@@ -126,4 +128,50 @@ describe('compileTitleFilter (Review Title box follow-up)', () => {
   it('other fields are an error', () => {
     expect(compileTitleFilter('author:x').error).toMatch(/only title:/);
   });
+});
+
+interface ConformanceCase {
+  name: string;
+  pattern: string;
+  quoted: boolean;
+  input?: string;
+  want_match?: boolean;
+  want_error?: boolean;
+  go_error_contains?: string;
+  ts_error_matches?: string;
+  engines?: Array<'go' | 'ts'>;
+  skip_reason?: string;
+}
+
+// The corpus internal/querygrammar's TestConformanceCorpus also reads: one
+// file, so the RE2-to-JS translation cannot drift from the Go engine silently.
+const corpus: ConformanceCase[] = JSON.parse(
+  fs.readFileSync(
+    path.resolve(__dirname, '../../../internal/querygrammar/testdata/conformance.json'),
+    'utf8'
+  )
+);
+const runsOnTs = (c: ConformanceCase) => !c.engines || c.engines.includes('ts');
+
+describe('conformance corpus', () => {
+  const skipped = corpus.filter((c) => !runsOnTs(c)).length;
+  console.info(
+    `conformance corpus (ts): ${corpus.length} cases, ${corpus.length - skipped} run, ${skipped} skipped`
+  );
+
+  for (const c of corpus) {
+    it(c.name, (ctx) => {
+      expect((c.want_match === undefined) !== !c.want_error).toBe(true);
+      if (c.engines) expect(c.skip_reason).toBeTruthy();
+      if (!runsOnTs(c)) ctx.skip(c.skip_reason);
+      const m = compileValue(c.pattern, c.quoted);
+      if (c.want_error) {
+        expect(c.ts_error_matches).toBeTruthy();
+        expect(m.error).toMatch(new RegExp(c.ts_error_matches as string));
+        return;
+      }
+      expect(m.error).toBeNull();
+      expect(m.test(c.input ?? '')).toBe(c.want_match);
+    });
+  }
 });
