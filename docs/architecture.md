@@ -1,7 +1,7 @@
 <!-- file: docs/architecture.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 1a9b8c7d-6e5f-4a3b-92c1-d0e9f8a7b6c5 -->
-<!-- last-edited: 2026-10-03 -->
+<!-- last-edited: 2026-10-09 -->
 
 # Architecture
 
@@ -15,7 +15,7 @@ Audiobook Organizer is a single-binary Go application with an embedded React fro
 
 - Backend: Go HTTP API using Gin
 - Frontend: React + TypeScript + Material UI
-- Data: Pebble (default) or SQLite for the main store (`database_type`); memdb in-memory query layer; activity log on its own backend (`activity_backend`: SQLite or NutsDB)
+- Data: Pebble (default) or SQLite for the main store (`database_type`); memdb in-memory query layer; activity log on its own backend (`activity_backend`: Pebble by default, SQLite legacy opt-in until P75)
 - Realtime: SSE event stream (`/api/events`)
 - Background execution: Operations v2 registry (`internal/operations/registry`) — every long-running job is an `OperationDef` registered by a plugin and launched/polled via `/api/v1/operations/v2`
 

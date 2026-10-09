@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.142.0
+// version: 1.143.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-10-08
+// last-edited: 2026-10-09
 
 package config
 
@@ -1075,12 +1075,12 @@ type Config struct {
 	DatabaseType string      `json:"database_type"` // "pebble" (default) or "sqlite"
 
 	// ActivityBackend selects the activity-log store backend, independent of the
-	// main DatabaseType. "sqlite" (default, empty ⇒ sqlite) engages the SQLite
-	// activity store behind a Pebble→SQLite migration wrapper: writes go to both,
-	// reads stay on Pebble until a one-time backfill copies history and verifies
-	// per-tier parity, then reads flip to SQLite (bounded compaction, no index
-	// leak). "pebble" is the escape hatch — Pebble-only, no SQLite opened — and
-	// is the instant rollback for the migration.
+	// main DatabaseType. "pebble" is the default (and an empty value means the
+	// same): Pebble-only, no SQLite opened. "sqlite" is the legacy opt-in being
+	// retired (P75): it engages the SQLite activity store behind a Pebble→SQLite
+	// migration wrapper, where writes go to both and reads stay on Pebble until a
+	// one-time backfill copies history and verifies per-tier parity, then flip
+	// to SQLite. Setting "pebble" is still the instant rollback from "sqlite".
 	ActivityBackend string `json:"activity_backend" mapstructure:"activity_backend"`
 	// ActivityDBPath is the SQLite activity file. Empty resolves via
 	// ResolveActivityDBPath: {RootDir}/.activity/activity.sqlite when a library
@@ -2228,6 +2228,9 @@ func applyEnvAuthoritativeConfig(c *Config) {
 	// blob, so without this a systemd Environment=ACTIVITY_BACKEND=pebble rollback
 	// would be silently dropped at boot and SQLite would re-engage. This lever
 	// exists to halt the Pebble→SQLite migration/backfill (the 2026-09-07 OOM).
+	// The registered SetDefault keeps IsSet permanently true, so with the
+	// environment silent this writes the "pebble" default over whatever the blob
+	// holds: a restored blob can never select SQLite on its own.
 	if viper.IsSet("activity_backend") {
 		c.ActivityBackend = viper.GetString("activity_backend")
 	}
@@ -2739,7 +2742,7 @@ func InitConfig() {
 	// AutomaticEnv() is not active in this codebase, so without this BindEnv the
 	// ActivityBackend field is settable only from config.yaml (root:600 on prod,
 	// not editable via the deploy's NOPASSWD levers).
-	viper.SetDefault("activity_backend", "")
+	viper.SetDefault("activity_backend", "pebble")
 	viper.SetDefault("activity_db_path", "")
 	viper.SetDefault("activity_db_move_on_change", true)
 	viper.BindEnv("activity_backend", "ACTIVITY_BACKEND")                     //nolint:errcheck

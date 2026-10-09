@@ -1,7 +1,7 @@
 <!-- file: docs/reference/config-api-shape.md -->
-<!-- version: 1.9.0 -->
+<!-- version: 1.10.0 -->
 <!-- guid: 2b7f9c31-a4e8-4f1d-b8a2-6c5d9e3f2a17 -->
-<!-- last-edited: 2026-10-07 -->
+<!-- last-edited: 2026-10-09 -->
 
 # Config API Shape Reference
 
@@ -78,6 +78,12 @@ trip still works. Keys are matched exactly: a key that matches a setting only
 by letter case (`OAuth_Default_Role`) is rejected as unknown (`400`). Change
 these signed in to the web UI. (Since 2026-10-07; see
 `docs/plans/2026-10-07-apikey-expiry-and-privilege.md`.)
+
+`activity_backend` defaults to `pebble` (the Pebble-only activity log); an
+empty value means the same. `sqlite` is the legacy opt-in, kept until P75
+removes it. With `ACTIVITY_BACKEND` unset in the environment, the default
+replaces whatever the stored config holds at boot, so a restored config can
+never select SQLite on its own.
 
 ### Owner trust root (only the owner)
 

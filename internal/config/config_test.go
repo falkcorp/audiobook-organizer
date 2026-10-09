@@ -1,7 +1,7 @@
 // file: internal/config/config_test.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-10-08
+// last-edited: 2026-10-09
 
 package config
 
@@ -690,7 +690,7 @@ func TestInitConfig_AcoustIDAPIKeyFromEnv(t *testing.T) {
 func TestInitConfig_ActivityBackendFromEnv(t *testing.T) {
 	viper.Reset()
 	InitConfig()
-	assert.Equal(t, "", Snapshot().ActivityBackend, "default backend is empty (SQLite path)")
+	assert.Equal(t, "pebble", Snapshot().ActivityBackend, "default backend is pebble (Pebble-only path)")
 
 	t.Setenv("ACTIVITY_BACKEND", "pebble")
 	t.Setenv("ACTIVITY_DB_PATH", "/tmp/activity-test.sqlite")

@@ -1,7 +1,7 @@
 // file: internal/config/activity_db_path_env_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f1c8a52-9d47-4e6b-8c03-2a7e5b9d1f64
-// last-edited: 2026-09-07
+// last-edited: 2026-10-09
 
 package config
 
@@ -118,7 +118,8 @@ func TestActivityDBPath_EnvStillWinsOverBlob(t *testing.T) {
 // activity_db_path moved to envSupplied() so the UI can own it. activity_backend must
 // NOT: it is the OOM rollback lever from the 2026-09-07 SQLite incident, and an
 // operator who pulls the env var to stop an OOM loop must not have a restored blob
-// re-engage SQLite underneath them.
+// re-engage SQLite underneath them. With the environment silent the applied value
+// is the registered "pebble" default, so the blob's choice is replaced, not kept.
 func TestActivityBackend_BlobStillCannotOverrideTheRollbackLever(t *testing.T) {
 	resetViper(t)
 	InitConfig() // no ACTIVITY_BACKEND in the environment
@@ -126,8 +127,8 @@ func TestActivityBackend_BlobStillCannotOverrideTheRollbackLever(t *testing.T) {
 	c := &Config{ActivityBackend: "sqlite"} // as if restored from the blob
 	applyEnvAuthoritativeConfig(c)
 
-	if c.ActivityBackend != "" {
-		t.Fatalf("ActivityBackend = %q, want \"\" — the blob must not be able to select "+
+	if c.ActivityBackend != "pebble" {
+		t.Fatalf("ActivityBackend = %q, want \"pebble\" — the blob must not be able to select "+
 			"the activity backend when the operator's environment is silent", c.ActivityBackend)
 	}
 }

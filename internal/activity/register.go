@@ -1,6 +1,6 @@
 // file: internal/activity/register.go
-// version: 1.9.0
-// last-edited: 2026-09-19
+// version: 1.10.0
+// last-edited: 2026-10-09
 // guid: c4d5e6f7-a8b9-0009-2345-000000000009
 
 // Package activity — service registry wiring for the activity log.
@@ -83,14 +83,16 @@ func init() {
 				return nil, fmt.Errorf("activitystore: pebble activity store not available")
 			}
 
-			// ActivityBackend selects the store. "pebble" is the escape hatch /
-			// rollback (Pebble-only, no SQLite opened). Empty or "sqlite"
-			// (default) engages the SQLite backend behind a migration wrapper:
-			// writes dual to both, reads stay on Pebble until the backfill copies
-			// history + verifies parity, then flip (see activity-sql-migration).
+			// ActivityBackend selects the store. Anything but "sqlite" (the
+			// "pebble" default, or an empty value from a config that predates
+			// it) is Pebble-only, with no SQLite opened. "sqlite" is the legacy
+			// opt-in being retired (P75): it engages the SQLite backend behind a
+			// migration wrapper, where writes dual to both and reads stay on
+			// Pebble until the backfill copies history + verifies parity, then
+			// flip (see activity-sql-migration).
 			backend := strings.ToLower(strings.TrimSpace(cfg.ActivityBackend))
-			if backend == "pebble" {
-				slog.Info("[activity] Pebble-only activity store wired (ActivityBackend=pebble)")
+			if backend != "sqlite" {
+				slog.Info("[activity] Pebble-only activity store wired", "activity_backend", backend)
 				return pebbleStore, nil
 			}
 
