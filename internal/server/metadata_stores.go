@@ -1,7 +1,7 @@
 // file: internal/server/metadata_stores.go
-// version: 1.11.0
+// version: 1.11.1
 // guid: b8e04c27-5a91-4f36-9d18-2c73e5a081f4
-// last-edited: 2026-10-06
+// last-edited: 2026-10-09
 
 package server
 
@@ -10,7 +10,6 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/deluge"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 )
 
@@ -126,6 +125,3 @@ type metadataResultsReader interface {
 // rawKVWriter: FileIOPool persists pending file ops under a raw key prefix and
 // scans them back on recovery. database.RawKVStore is exactly that surface.
 type rawKVWriter = database.RawKVStore
-
-// delugeAdapterStore is a pure forward into the deluge package's own interface.
-type delugeAdapterStore = deluge.Store

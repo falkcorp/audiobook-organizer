@@ -1,7 +1,7 @@
 // file: internal/server/wire_handlers.go
-// version: 2.47.0
+// version: 2.47.1
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
-// last-edited: 2026-10-07
+// last-edited: 2026-10-09
 
 package server
 
@@ -729,7 +729,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 // handler exactly as production builds it.
 func (s *Server) newOrganizeHandler() *handlers.OrganizeHandler {
 	resolveLibraryCopy := s.organizeLibraryCopyResolver()
-	organizePreviewSvc := NewOrganizePreviewService(s.storeForWiring())
+	organizePreviewSvc := audiobookspkg.NewOrganizePreviewService(s.storeForWiring())
 	organizePreviewSvc.ResolveLibraryCopy = resolveLibraryCopy
 	// Typed-nil guard, as elsewhere in this file: a nil *organizer.Service
 	// boxed into the interface would pass the handler's nil checks.
@@ -743,7 +743,7 @@ func (s *Server) newOrganizeHandler() *handlers.OrganizeHandler {
 	}
 	organizeH := handlers.NewOrganizeHandler(
 		s.storeForWiring(),
-		NewRenameService(s.storeForWiring()),
+		audiobookspkg.NewRenameService(s.storeForWiring()),
 		organizePreviewSvc,
 		organizeSvc,
 		publisher,

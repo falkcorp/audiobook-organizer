@@ -1,7 +1,7 @@
 // file: internal/server/server_library_clone_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8d2e4b17-6a3c-4f59-b0e8-5c1a9d7f2e64
-// last-edited: 2026-09-24
+// last-edited: 2026-10-09
 
 package server
 
@@ -16,6 +16,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
@@ -71,7 +72,7 @@ func cloneFixture(t *testing.T, nFiles int) (*Server, *database.PebbleStore, *da
 	}
 	files, err := store.GetBookFiles(book.ID)
 	require.NoError(t, err)
-	return &Server{store: store, organizeService: NewOrganizeService(store)}, store, book, files, root
+	return &Server{store: store, organizeService: audiobookspkg.NewOrganizeService(store)}, store, book, files, root
 }
 
 func TestCloneBookIntoLibrary(t *testing.T) {

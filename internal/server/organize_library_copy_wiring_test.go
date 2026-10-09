@@ -1,7 +1,7 @@
 // file: internal/server/organize_library_copy_wiring_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 96b14120-70fb-45b5-93bd-c9e1c9449b82
-// last-edited: 2026-09-30
+// last-edited: 2026-10-09
 
 package server
 
@@ -16,6 +16,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
@@ -70,7 +71,7 @@ func newOrgWiringFixture(t *testing.T) *orgWiringFixture {
 	}
 	srv := &Server{
 		store:                store,
-		organizeService:      NewOrganizeService(store),
+		organizeService:      audiobookspkg.NewOrganizeService(store),
 		metadataFetchService: metafetch.NewService(store),
 	}
 	return &orgWiringFixture{srv: srv, store: store, root: root, itunes: itunes, author: author.ID}
