@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.32.0
+// version: 1.33.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-10-09
 
@@ -478,10 +478,13 @@ func (h *MetadataCacheHandler) cachedListingFields(ids []string) map[string]data
 // (absent or bucket=reviewable) response is unchanged.
 //
 // view=index serves the review page's index: the same summary and every row
-// of the bucket, with each candidate's description dropped -- the one large
-// field nothing but the visible row reads. The page filters, groups, counts
-// and selects over the index exactly as it did over the full list, and
-// fetches full rows for the rows it shows with ids=.
+// of the bucket, with each candidate's description, score_breakdown and
+// category_tags dropped -- the large fields nothing but the visible row reads
+// (the breakdown only by the evidence panel; the tags by nothing in the web
+// UI). The page filters, groups, counts and selects over the index exactly as
+// it did over the full list, and fetches full rows for the rows it shows with
+// ids=. candidate_hash is the full candidate's, so the dropped fields never
+// change a pin.
 //
 // ids=a,b,c (comma separated) restricts `results` to those books, in bucket
 // order, ignoring limit and offset. Only those books are re-read, so the
@@ -771,7 +774,12 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 		}
 		cand := *p.row.cand
 		if indexView {
+			// cand is a copy; ScoreBreakdown is a pointer and CategoryTags a
+			// slice header, so clearing them here leaves the snapshot's row
+			// (and every later detail response) intact.
 			cand.Description = ""
+			cand.ScoreBreakdown = nil
+			cand.CategoryTags = nil
 		}
 		reviewable = append(reviewable, reviewableRow{
 			sum:         p.sum,

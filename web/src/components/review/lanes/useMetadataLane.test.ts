@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useMetadataLane.test.ts
-// version: 1.27.0
+// version: 1.28.0
 // guid: 6b2d9f47-8c05-4e31-a97b-3d40f5a1c862
-// last-edited: 2026-10-02
+// last-edited: 2026-10-09
 //
 // The dialog this hook was lifted from had no tests for any of the behaviour
 // below. Two of these guards -- the stale-response discard and the page clamp --
@@ -1834,5 +1834,40 @@ describe('index + per-page details (the 93 MB / 119 s full list timed out)', () 
     // b050 sits on page 3, which was never shown: its pin still carries the
     // candidate and hash the index served.
     expect(pins.b050).toMatchObject({ content_hash: 'h-b050', title: 'Cand b050' });
+  });
+
+  it('evidence panel reads the breakdown from the detail page, not the index row', async () => {
+    // The server's index view carries no score_breakdown; only the ids= detail
+    // rows do. The spine's evidence panel renders from pageResults, so the
+    // breakdown must arrive there from the detail fetch while the index row
+    // (results) stays without one.
+    const breakdown: api.MetadataScoreBreakdown = {
+      score: 2.0,
+      steps: [{ id: 'base', label: 'Base similarity', op: 'base', operand: 2.0, running: 2.0 }],
+    };
+    const ids = ['b000', 'b001', 'b002'];
+    vi.mocked(api.getCachedReviewResults).mockImplementation(
+      async (_limit, _offset, _all, _bucket, options = {}) => {
+        if (options.ids) {
+          const rows = options.ids.map((id) =>
+            makeResult(id, { candidate_hash: `h-${id}` }, { score_breakdown: breakdown })
+          );
+          return reviewPayload(rows) as Awaited<ReturnType<typeof api.getCachedReviewResults>>;
+        }
+        const index = ids.map((id) => makeResult(id, { candidate_hash: `h-${id}` }));
+        return reviewPayload(index) as Awaited<ReturnType<typeof api.getCachedReviewResults>>;
+      }
+    );
+
+    const { result } = renderHook(() => useMetadataLane(toast));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    await waitFor(() =>
+      expect(result.current.pageResults[0].candidate?.score_breakdown).toEqual(breakdown)
+    );
+    expect(result.current.pageResults[0].book.id).toBe(ids[0]);
+    // The index row itself never carried it.
+    expect(
+      result.current.results.find((r) => r.book.id === ids[0])?.candidate?.score_breakdown
+    ).toBeUndefined();
   });
 });

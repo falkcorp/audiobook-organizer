@@ -1,7 +1,7 @@
 // file: internal/metrics/pipeline_metrics.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 1bafd1d0-de42-4e6d-a079-b28e4ea4858b
-// last-edited: 2026-10-03
+// last-edited: 2026-10-09
 
 package metrics
 
@@ -55,8 +55,9 @@ const (
 )
 
 // Bounded label values for review_index_request_seconds{view}: the review
-// listing's two shapes. "index" is GET ...?view=index (descriptions stripped,
-// what the review page loads first); "full" is every other listing request.
+// listing's two shapes. "index" is GET ...?view=index (descriptions, score
+// breakdowns and category tags stripped, what the review page loads first);
+// "full" is every other listing request.
 const (
 	ReviewViewIndex = "index"
 	ReviewViewFull  = "full"

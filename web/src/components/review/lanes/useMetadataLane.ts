@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.33.0
+// version: 1.34.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
-// last-edited: 2026-10-06
+// last-edited: 2026-10-09
 //
 // The metadata lane's data layer, LIFTED out of MetadataReviewDialog.
 //
@@ -959,6 +959,10 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
   // view=index drops each candidate's description, which only a visible row
   // reads (fetched per page below). The full list was 93 MB and 119 s on
   // production and timed out; the index is served from the server's snapshot.
+  // It also drops score_breakdown and category_tags: a breakdown arrives only
+  // through the per-page detail fetch (`ids:` below, swapped into
+  // `pageResults`), which is the only thing the evidence panel renders from.
+  // Never read either field from `results`.
   useEffect(() => {
     if (!active) return;
     setLoading(true);
