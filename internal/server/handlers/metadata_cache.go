@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.31.1
+// version: 1.32.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-10-07
+// last-edited: 2026-10-09
 
 // Package handlers contains extracted HTTP handler types for the audiobook
 // organizer server. MetadataCacheHandler covers the persistent metadata-cache
@@ -435,7 +435,7 @@ func (h *MetadataCacheHandler) cachedListingFields(ids []string) map[string]data
 			add(&fetched[i])
 		}
 	} else {
-		slog.Warn("ListCachedCandidates batch book fetch failed; falling back to per-book reads", "err", berr)
+		metadataCacheLog.Warn("ListCachedCandidates batch book fetch failed; falling back to per-book reads: err=%v", berr)
 	}
 	for _, id := range ids {
 		if _, ok := out[id]; ok {

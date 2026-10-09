@@ -1,7 +1,7 @@
 // file: internal/config/update_service.go
-// version: 3.28.0
+// version: 3.29.0
 // guid: f6g7h8i9-j0k1-l2m3-n4o5-p6q7r8s9t0u1
-// last-edited: 2026-10-07
+// last-edited: 2026-10-09
 
 package config
 
@@ -19,7 +19,11 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
+
+// updateServiceLog carries this file's diagnostics through the log-injection barrier.
+var updateServiceLog = logger.New("config")
 
 // DedupScoreConfigSink receives the effective dedup score ladder after a
 // config update that changed it has been persisted. The dedup plugin installs
@@ -691,17 +695,17 @@ func (us *UpdateService) UpdateConfig(ctx context.Context, payload map[string]an
 		return http.StatusBadRequest, map[string]any{"error": "failed to apply config: " + unmarshalErr.Error()}
 	}
 	if len(ownerRefused) > 0 {
-		slog.Warn("config update refused: owner trust-root settings; nothing persisted",
-			"method", string(auth.MethodFromContext(ctx)), "access_email", auth.AccessEmailFromContext(ctx),
-			"refused_keys", ownerRefused, "why", ownerWhy)
+		updateServiceLog.Warn("config update refused: owner trust-root settings; nothing persisted: method=%s access_email=%v refused_keys=%v why=%s",
+			string(auth.MethodFromContext(ctx)), auth.AccessEmailFromContext(ctx),
+			ownerRefused, ownerWhy)
 		return http.StatusForbidden, map[string]any{
 			"error":        ownerWhy + " (" + strings.Join(ownerRefused, ", ") + ")",
 			"refused_keys": ownerRefused,
 		}
 	}
 	if len(refused) > 0 {
-		slog.Warn("config update refused: protected settings need an interactive session; nothing persisted",
-			"method", string(auth.MethodFromContext(ctx)), "refused_keys", refused)
+		updateServiceLog.Warn("config update refused: protected settings need an interactive session; nothing persisted: method=%s refused_keys=%v",
+			string(auth.MethodFromContext(ctx)), refused)
 		return http.StatusForbidden, map[string]any{
 			"error":        ProtectedSettingsRefusedMessage + " (" + strings.Join(refused, ", ") + ")",
 			"refused_keys": refused,

@@ -1,15 +1,17 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
-// last-edited: 2026-10-07
+// last-edited: 2026-10-09
 
 package logger
 
 // The ceilings may only go DOWN. Raising one to fit a new file or a new call
-// is the exact change TestGuard_NoDirectSlogCalls exists to stop.
+// is the exact change TestGuard_NoDirectSlogCalls exists to stop. The gate is
+// one-way: the test no longer fails when a count improves, so lowering a
+// ceiling by hand in the PR that lowers the count is the rule.
 const (
-	slogRatchetFileCeiling = 309
-	slogRatchetCallCeiling = 1765
+	slogRatchetFileCeiling = 296
+	slogRatchetCallCeiling = 1699
 )
 
 // slogRatchet is every non-test file under internal/ and cmd/ that called
@@ -115,7 +117,6 @@ var slogRatchet = map[string]int{
 	"internal/itunes/backfill.go":                                22,
 	"internal/itunes/cross_type.go":                              1,
 	"internal/itunes/import.go":                                  7,
-	"internal/itunes/library_watcher.go":                         2,
 	"internal/itunes/pid_integrity.go":                           2,
 	"internal/itunes/pid_repair.go":                              4,
 	"internal/itunes/service/importer.go":                        10,

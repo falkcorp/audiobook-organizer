@@ -1,15 +1,19 @@
 // file: internal/database/book_listing_fields.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4c6a2e85-1f93-4b7d-9e08-7a5d3c1b2f69
-// last-edited: 2026-10-06
+// last-edited: 2026-10-09
 
 package database
 
 import (
 	"errors"
 	"fmt"
-	"log/slog"
+
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
+
+// bookListingFieldsLog carries this file's diagnostics through the log-injection barrier.
+var bookListingFieldsLog = logger.New("database.book-listing-fields")
 
 // BookListingFields is the slice of a book a per-row listing over the whole
 // metadata cache reads: whether the book exists, its title and its review
@@ -76,7 +80,7 @@ func (p *PebbleStore) GetBookListingFields(ids []string) (map[string]BookListing
 		if !errors.Is(err, ErrMemdbIncomplete) {
 			return nil, err
 		}
-		slog.Warn("book listing fields: memdb is missing rows; reading from Pebble", "error", err)
+		bookListingFieldsLog.Warn("book listing fields: memdb is missing rows; reading from Pebble: error=%v", err)
 	}
 	books, err := p.GetBooksByIDs(ids)
 	if err != nil {

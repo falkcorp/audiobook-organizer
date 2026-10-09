@@ -1,18 +1,20 @@
 // file: internal/server/middleware/credential_guard.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 562599c5-5135-460b-8cd9-1ea9f91081f6
-// last-edited: 2026-10-07
+// last-edited: 2026-10-09
 
 package middleware
 
 import (
-	"log/slog"
-
 	"github.com/gin-gonic/gin"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
+
+// credentialGuardLog carries this file's diagnostics through the log-injection barrier.
+var credentialGuardLog = logger.New("http")
 
 // CredentialChangeRefusedMessage is the 403 message for a credential or
 // identity change made with a method that may not make one (an API key, an
@@ -49,9 +51,9 @@ func LogCredentialChangeRefusal(c *gin.Context) {
 	if k, ok := CurrentAPIKey(c); ok && k != nil {
 		keyID = k.ID
 	}
-	slog.Warn("credential change refused for non-interactive auth method",
-		"method", string(method), "user", userID, "api_key", keyID,
-		"route", c.FullPath(), "http_method", c.Request.Method)
+	credentialGuardLog.Warn("credential change refused for non-interactive auth method: method=%s user=%v api_key=%v route=%s http_method=%s",
+		string(method), userID, keyID,
+		c.FullPath(), c.Request.Method)
 }
 
 // RequireCredentialChangeMethod refuses the route to any request whose auth

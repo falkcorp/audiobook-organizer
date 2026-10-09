@@ -154,7 +154,7 @@ func TestListRecentOperationsV2_ReadsOnlyRecentWindow(t *testing.T) {
 	now := time.Now().UTC()
 	rng := rand.New(rand.NewPCG(3, 3))
 	seedRecentOps(t, p, rng, now.Add(-2*time.Hour), 3_000, 300*24*time.Hour) // old history
-	seedRecentOps(t, p, rng, now, 60, 30*time.Minute)                       // a busy last half hour
+	seedRecentOps(t, p, rng, now, 60, 30*time.Minute)                        // a busy last half hour
 	reconcileTimeline(t, p)
 
 	c := &countingLister{PebbleStore: p}

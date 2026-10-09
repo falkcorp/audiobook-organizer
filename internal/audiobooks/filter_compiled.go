@@ -1,18 +1,21 @@
 // file: internal/audiobooks/filter_compiled.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6a1f3c8e-9d24-4b7a-b0e5-2f8c4d1a7e36
-// last-edited: 2026-10-06
+// last-edited: 2026-10-09
 
 package audiobooks
 
 import (
 	"fmt"
-	"log/slog"
 	"strconv"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/querygrammar"
 )
+
+// filterCompiledLog carries this file's diagnostics through the log-injection barrier.
+var filterCompiledLog = logger.New("audiobooks.filter")
 
 // compiledFilter is a FieldFilter with its value parsed ONCE, before the row
 // loop. Regex compilation per row would run regexp.Compile ~68K times per
@@ -141,7 +144,7 @@ func compileFieldFilters(filters []FieldFilter) ([]compiledFilter, error) {
 func mustCompileForPredicate(filters []FieldFilter) ([]compiledFilter, bool) {
 	cfs, err := compileFieldFilters(filters)
 	if err != nil {
-		slog.Error("field filter reached the matcher without validation; matching nothing", "err", err)
+		filterCompiledLog.Error("field filter reached the matcher without validation; matching nothing: err=%v", err)
 		return nil, false
 	}
 	return cfs, true
