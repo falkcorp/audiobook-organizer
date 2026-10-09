@@ -1,5 +1,5 @@
 # file: .github/workflows/ci.yml
-# version: 3.21.0
+# version: 3.22.0
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
 # last-edited: 2026-10-09
 
@@ -591,18 +591,23 @@ jobs:
       # (2026-10-09) the split-package `go test -list` alone took 9 min 18 s per
       # shard before the first test ran, against ~6 min of tests.
       #
-      # So the shards keep their own race-flavoured cache, keyed by day so it
-      # refreshes: a shard restores today's entry, else the newest earlier one
-      # (then the shared cache, for the module download at least), and a
-      # shard on main saves it after its run when today's key is new. The
-      # four shards race for that one save; the first to finish wins and the
-      # others find the key reserved and skip, so it is one save a day of
-      # one shard's objects plus the shared dependency graph. PR runs read
-      # main's entries (a PR can read its base branch's caches) and never
-      # save, so PR branches add no cache churn against the 10 GB repo cap.
-      - name: Day stamp for the race build cache
+      # So the shards keep their own race-flavoured cache, keyed by a six-hour
+      # slot so it refreshes: a shard restores the current slot's entry, else
+      # the newest earlier one (then the shared cache, for the module download
+      # at least), and a shard on main saves it after its run when the slot's
+      # key is new. The four shards race for that one save; the first to
+      # finish wins and the others find the key reserved and skip, so it is at
+      # most four saves a day of one shard's objects plus the shared dependency
+      # graph. PR runs read main's entries (a PR can read its base branch's
+      # caches) and never save, so PR branches add no cache churn against the
+      # 10 GB repo cap. Why not a day: main merges ten-plus PRs a day, and a
+      # refactor that touches a package most of the tree imports (three of
+      # them landed within three hours of the first save on 2026-10-09) makes
+      # a day-old entry mostly cold; measured, a shard went from 4.5 to 8.5
+      # minutes against the same entry.
+      - name: Slot stamp for the race build cache
         id: stamp
-        run: echo "day=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+        run: echo "slot=$(date -u +%F)-$(( $(date -u +%-H) / 6 ))" >> "$GITHUB_OUTPUT"
 
       - name: Restore Go race build cache
         id: race-cache
@@ -611,7 +616,7 @@ jobs:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-          key: ${{ runner.os }}-go-1.27-race-short-${{ hashFiles('**/go.sum') }}-${{ steps.stamp.outputs.day }}
+          key: ${{ runner.os }}-go-1.27-race-short-${{ hashFiles('**/go.sum') }}-${{ steps.stamp.outputs.slot }}
           restore-keys: |
             ${{ runner.os }}-go-1.27-race-short-${{ hashFiles('**/go.sum') }}-
             ${{ runner.os }}-go-1.27-race-short-
@@ -631,7 +636,7 @@ jobs:
 
       # !cancelled(), not the default success(): a red run's compiled objects
       # are as reusable as a green run's, and the next run is what pays.
-      - name: Save Go race build cache (main, first run of the day)
+      - name: Save Go race build cache (main, first run of the slot)
         if: ${{ !cancelled() && github.ref == 'refs/heads/main' && steps.race-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
