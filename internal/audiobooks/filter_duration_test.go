@@ -1,7 +1,7 @@
 // file: internal/audiobooks/filter_duration_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9a3d6e14-2c7b-4f58-8e01-6b4f2d9c7a35
-// last-edited: 2026-09-27
+// last-edited: 2026-10-09
 
 package audiobooks
 
@@ -232,9 +232,13 @@ func syntheticLibrary(n int) ([]database.Book, coreFiles) {
 	return books, files
 }
 
-// BenchmarkOwnerQuery_100k measures the per-query predicate cost over 100k
-// books with the runtime index warm: "-metadata:applied duration:>20m".
-func BenchmarkOwnerQuery_100k(b *testing.B) {
+// BenchmarkOwnerQuery_100k_ConveniencePath measures the per-query predicate
+// cost over 100k books with the runtime index warm:
+// "-metadata:applied duration:>20m". It goes through matchesFieldFiltersRT,
+// which compiles the filters again for every row, so it is an upper bound and
+// NOT the production path; BenchmarkCompiledPredicate_100k measures that
+// (filters compiled once per request).
+func BenchmarkOwnerQuery_100k_ConveniencePath(b *testing.B) {
 	books, files := syntheticLibrary(100_000)
 	ri := newRuntimeIndex()
 	if !ri.ensure(files) {
