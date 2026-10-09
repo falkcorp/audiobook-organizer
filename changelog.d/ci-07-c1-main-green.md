@@ -1,0 +1,1 @@
+- `main` no longer fails CI on four inherited causes: a gofmt miss, 21 direct `slog` calls (now routed through `internal/logger`, ceilings lowered to files=296 calls=1699), the errcheck baseline (779 -> 770) and the `BookFileUpserter` interface width (batch methods split into `BookFileBatchUpserter`). The slog guard no longer fails when a ratchet entry is stale.

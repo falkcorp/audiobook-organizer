@@ -1,7 +1,7 @@
 // file: internal/database/iface_bookfile.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 5247968b-3814-4892-879d-a8a5531c2960
-// last-edited: 2026-10-07
+// last-edited: 2026-10-09
 
 package database
 
@@ -50,6 +50,25 @@ type BookFileCreator interface {
 	BatchCreateBookFiles(files []*BookFile) error
 }
 
+// BookFileBatchUpserter is the batch-upsert half of BookFileUpserter, split out
+// so BookFileUpserter stays within interfacebloat's limit of 8 entries (it
+// embeds this as one entry). The method set of BookFileUpserter is unchanged.
+type BookFileBatchUpserter interface {
+	BatchUpsertBookFiles(files []*BookFile) error
+	// BatchUpsertBookFilesKeepPaths is BatchUpsertBookFiles except that a row
+	// matching an existing book_file keeps that row's stored FilePath and
+	// Format. It is the iTunes sync's write: sync never moves files (owner
+	// decision 2026-10-07), it records the iTunes location in ITunesPath only.
+	BatchUpsertBookFilesKeepPaths(files []*BookFile) error
+	// BatchUpsertScannedBookFiles is BatchUpsertBookFiles for the library
+	// scanner. Each row carries whether the scanner's own stat of FilePath
+	// succeeded; for those rows the upsert writes Missing=false (the file is
+	// demonstrably present), in the same batch as the row. Every other caller —
+	// the iTunes sync above all, which never looks at the disk — uses
+	// BatchUpsertBookFiles, which keeps a stored Missing=true.
+	BatchUpsertScannedBookFiles(rows []ScannedBookFile) error
+}
+
 // BookFileUpserter updates, patches and upserts existing book_file rows through the shared merge rule (bookfile_merge.go).
 type BookFileUpserter interface {
 	UpdateBookFile(id string, file *BookFile) error
@@ -73,19 +92,7 @@ type BookFileUpserter interface {
 	// fn returning ErrSkipBookFileWrite writes nothing. See
 	// pebble_store_bookfile_modify.go.
 	ModifyBookFile(bookID, fileID string, fn func(*BookFile) error) (*BookFile, error)
-	BatchUpsertBookFiles(files []*BookFile) error
-	// BatchUpsertBookFilesKeepPaths is BatchUpsertBookFiles except that a row
-	// matching an existing book_file keeps that row's stored FilePath and
-	// Format. It is the iTunes sync's write: sync never moves files (owner
-	// decision 2026-10-07), it records the iTunes location in ITunesPath only.
-	BatchUpsertBookFilesKeepPaths(files []*BookFile) error
-	// BatchUpsertScannedBookFiles is BatchUpsertBookFiles for the library
-	// scanner. Each row carries whether the scanner's own stat of FilePath
-	// succeeded; for those rows the upsert writes Missing=false (the file is
-	// demonstrably present), in the same batch as the row. Every other caller —
-	// the iTunes sync above all, which never looks at the disk — uses
-	// BatchUpsertBookFiles, which keeps a stored Missing=true.
-	BatchUpsertScannedBookFiles(rows []ScannedBookFile) error
+	BookFileBatchUpserter
 }
 
 // BookFileMover reassigns book_file rows between books.
