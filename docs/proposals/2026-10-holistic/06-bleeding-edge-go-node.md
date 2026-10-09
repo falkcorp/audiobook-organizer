@@ -1,13 +1,26 @@
 <!-- file: docs/proposals/2026-10-holistic/06-bleeding-edge-go-node.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 3f6e0b52-6c1a-4d77-9b0e-5a2d8c41e906 -->
-<!-- last-edited: 2026-10-08 -->
+<!-- last-edited: 2026-10-09 -->
 
 # 06: Bleeding-edge Go and Node features
 
 Analyst: `bleeding`. Researched 2026-10-08. Every version claim below was read
 from the repo's pin files, `web/package-lock.json`, `npm view <pkg> dist-tags`
 or the upstream release notes linked next to it. Nothing is from memory.
+
+### Round-2 review (r4, 2026-10-09)
+
+Re-verified in the `aorg-review2` worktree at `ebda30d47`. Changes made in this pass:
+
+- **Go 1.27.2 confirmed** from `https://go.dev/dl/?mode=json` on 2026-10-09: the current stable set is `go1.27.2` and `go1.26.9`. The claim stands.
+- **P1's file count re-measured: 18**, by `grep -rlF '1.27.1' . --exclude-dir={node_modules,.git,web,docs,.claude,.standards}` minus `CHANGELOG.md` and `TODO.md` (history, not pins): 13 functional + 5 docs, exactly the list in the P1 row. The P1 row said "15 files" in its Files column while the summary said 18; the row now says 18.
+- **New finding F24:** `.github/workflows/ci.yml:47` passes `go-version: '1.27'` (a floating minor, not the pinned patch) to the reusable workflow, and the six project jobs pass the same value to `actions/setup-go` (`ci.yml:125,189,265,338,464,529`). It does not contain the string `1.27.1`, so no pin grep finds it, and P2's drift check should assert it equals the Makefile pin. Added to P2.
+- **D37–D40 cross-check:** D37 accepted Q7 (the committed `Makefile` owns the generic build flags) but P3 did not carry it; P3 now adds the `GO_BUILD_TAGS` / `GO_LDFLAGS` variables and the `deploy-debug` example calling `make build-linux`. D38, D39, D40 match P4/P12, P9 and S4 as written. **D50** (go fix batches only in freeze window F, regenerated, after 01 tier 2) is now stated in §4's order line.
+- **P4 hook points verified:** `internal/operations/registry/watchdog.go:55` `watchdogCycle` and `internal/server/search_reconciler.go:473` `checkSearchIndexStall` exist at HEAD. The route-registration file is now named: `internal/server/wire_handlers.go` (there is no `wire_diagnostics_routes.go`; the handler file is new).
+- **TS 7 side-by-side made concrete (S5, P9):** `npm view typescript dist-tags` gives `latest: 7.0.2`, `next: 7.1.0-dev.20261008.1`; `npm view @typescript/typescript6 version` gives `6.0.2`. The TS 7 announcement confirms `@typescript/typescript6` ships its binary as `tsc6` so both can be installed; the exact `package.json` scripts and which binary each runs are in S5. The 7.1 dates in F9 remain unverified third-party figures and are marked so.
+- **Over-sold, toned down:** rank 2 "costs nothing at runtime" (importing `net/http/pprof` registers on `http.DefaultServeMux`; the listener must use its own mux, now in S2); PGO "2–14 %" and Vitest "8–25 %" are upstream claims, labelled as such in the table; F14's "unlock rate" stays medium.
+- **Not changed:** the go fix census, the react-router file list, the synctest list (all appendices re-read, not re-run; the tree moved only in `docs/` since they were generated).
 
 ## 1. Summary
 
@@ -62,6 +75,7 @@ or the upstream release notes linked next to it. Nothing is from memory.
 | F21 | **Test-time sleeps.** 294 `time.Sleep` calls in 132 `_test.go` files, plus 43 `Eventually(` polls. `testing/synctest` (stable since 1.25; `synctest.Sleep` added in 1.27) is used in only 6 tests. Each converted test becomes deterministic and runs in virtual time. Count-only evidence: which sleeps are bubble-compatible (no real I/O, no Pebble) needs per-file review | `grep -rnE --include=*_test.go 'time\.Sleep\('` = 294 / 132 files | high (count), low (convertible share) | flakiness, CI time |
 | F22 | `unique` (Go 1.23) and `weak` (Go 1.24) are unused (the two `"weak"` grep hits are string literals). Interning repeated strings in memdb (genre, codec, format, author names) could cut heap, but there is no heap profile to size it, and F2 blocks getting one | `grep -rnE '"unique"|"weak"' --include=*.go` | high (absence), low (benefit) | assess |
 | F23 | Go 1.28 (Feb 2027, draft notes) adds vet analyzers `scannererr` and `sqlrowserr`, `regexp` iterator methods, `testing/synctest.Subtest`. Nothing to do now; noted for the next bump | [go1.28 draft](https://tip.golang.org/doc/go1.28) | medium (draft) | future |
+| F24 | *(r4)* **`ci.yml` does not pin the patch.** `.github/workflows/ci.yml:47` passes `go-version: '1.27'` to the reusable workflow, and the six project jobs pass the same floating value to `actions/setup-go` (`ci.yml:125,189,265,338,464,529`). GitHub runners therefore moved to 1.27.2 on 2026-10-08 by themselves while every other path pins 1.27.1, and no grep for `1.27.1` sees the file. `scripts/check_toolchain_versions.py` reads workflow `go-version:` lines but accepts the minor-only form | `grep -n "go-version" .github/workflows/ci.yml` | high | drift (hand to P2) |
 
 ### 2.2 `go fix` modernizer census (F6)
 
@@ -122,14 +136,14 @@ bounded place, measure, then widen. **Assess** = measure before deciding.
 | Rank | Ring | Item | Needs | Status upstream | Payoff (measured where possible) | Finding |
 |-----:|------|------|-------|-----------------|----------------------------------|---------|
 | 1 | **Adopt** | Bump Go 1.27.1 → **1.27.2** | Go 1.27.2 | stable, released 2026-10-08 | security fixes in `net/http`, `os`, `crypto/tls`, `html/template`, `net/textproto`, `go`; bug fixes in `encoding/json`, `encoding/json/v2`, `go fix`, vet | F1 |
-| 2 | **Adopt** | Ship the `pprof` tag in the **normal** deploy build. The listener stays off unless `ABK_PPROF_ADDR` is set, and binds to loopback. Bring `Makefile.local.example`'s `deploy-debug` in line with the owner's working private version: `pprof` tag, no `-N -l` | Go ≥1.0; `goroutineleak` needs 1.27 | stable | profiling prod then needs only an env drop-in and a restart, not a new binary; the example stops handing out an unoptimized, listener-less recipe | F2, F4 |
+| 2 | **Adopt** | Ship the `pprof` tag in the **normal** deploy build. The listener stays off unless `ABK_PPROF_ADDR` is set, and binds to loopback. Bring `Makefile.local.example`'s `deploy-debug` in line with the owner's working private version: `pprof` tag, no `-N -l` | Go ≥1.0; `goroutineleak` needs 1.27 | stable | profiling prod then needs only an env drop-in and a restart, not a new binary; the example stops handing out an unoptimized, listener-less recipe. Runtime cost when the listener is off: the `net/http/pprof` import registers handlers on `http.DefaultServeMux` and nothing else (S2 keeps the listener on its own mux) | F2, F4 |
 | 3 | **Adopt** | `runtime/trace.FlightRecorder`, always on, snapshot to disk when the ops watchdog writes a stuck / never_reported strike and when the search index stalls; admin-only download | Go 1.25+ | stable since 1.25 | turns two "went silent" incident classes into a trace file of the last N seconds; one recorder per process, one `WriteTo` at a time ([pkg doc](https://pkg.go.dev/runtime/trace#FlightRecorder)) | F3 |
 | 4 | **Adopt** | `go fix` modernizers, in four batches (safe mechanical; `rangeint`/loops; `newexpr`; `waitgroupgo`), never `omitzero` in a batch | Go 1.26+ `go fix`, 1.27 analyzers | stable | see §2.2 for exact counts; every hunk is a semantics-preserving rewrite by construction except `omitzero` | F6, F7 |
 | 5 | **Adopt** | Typecheck with **TypeScript 7** (`tsc` from `typescript@7`, aliased `@typescript/native`) in `npm run build` and CI; keep `typescript@6` installed only for typescript-eslint | TS 7.0.2 | stable (no JS API until 7.1) | **8.74 s → 1.61 s** (5.4x) per typecheck, 0 errors, same 1,614 files; negative control agrees | F8, F9, F10 |
 | 6 | **Adopt** | react-router 7.18.4 → **8.4.0** (`react-router-dom` → `react-router`) | React ≥19.2.7 (have 19.3.0) | stable | removes the last frontend major lag; import rewrites in 95 files | F11 |
 | 7 | **Adopt** | Toolchain drift check covers `.woodpecker/*.yaml` | — | — | closes a silent drift path the rank-1 bump would hit | F20 |
-| 8 | **Trial** | PGO: `default.pgo`-style profile from prod, applied to deploy/release builds only via `-pgo=<path>` | Go 1.21+, rank 2 first | stable | documented 2-14% CPU ([go.dev/doc/pgo](https://go.dev/doc/pgo)); measure on the scan and dedup ops before/after | F5 |
-| 9 | **Trial** | Vitest 4.1 → **5.0.x**, then turn on `fsModuleCache` | Node ≥22.12, Vite ≥6.4 (have 26 / 8.2) | stable since 2026-09-03 | main break already proven harmless (1,834/1,834 with `clearMocks:true`); upstream claims 8-25% faster; `import` (167 s) is the cost centre it targets | F12 |
+| 8 | **Trial** | PGO: `default.pgo`-style profile from prod, applied to deploy/release builds only via `-pgo=<path>` | Go 1.21+, rank 2 first | stable | **upstream claim, not measured here:** 2-14% CPU on "typical programs" ([go.dev/doc/pgo](https://go.dev/doc/pgo)); the payoff for this binary is unknown until the P12 A/B on the scan and dedup ops | F5 |
+| 9 | **Trial** | Vitest 4.1 → **5.0.x**, then turn on `fsModuleCache` | Node ≥22.12, Vite ≥6.4 (have 26 / 8.2) | stable since 2026-09-03 | main break already proven harmless (1,834/1,834 with `clearMocks:true`); **upstream claim, not measured here:** 8-25% faster; `import` (167 s) is the cost centre it targets | F12 |
 | 10 | **Trial** | Replace `try { … } finally { setLoading(false) }` with `useTransition` / Actions `isPending`, file by file, starting with the compiler short list | React 19 (have 19.3) | stable | 130 boolean-reset `finally` blocks in 61 files; each one removed deletes the shape behind 84% of compiler bailouts. Re-run the compiler logger from `docs/react-compiler-adoption.md` to count the unlock | F14, F15 |
 | 11 | **Trial** | `testing/synctest` for sleep-based tests, starting with the files with the most `time.Sleep` | Go 1.25 (+`synctest.Sleep` 1.27) | stable | 294 sleeps in 132 test files; each converted test is deterministic and runs in virtual time | F21 |
 | 12 | **Trial** | Node-native `.ts` for the 3 `.mjs` test scripts | Node 26 | stable | small: those scripts get typechecked | F19 |
@@ -151,6 +165,8 @@ yet on the day of the PR, the PR waits for them; it does not split pins.
 
 **S2. Profiling on prod (rank 2).**
 - Committed `Makefile` `build-linux` (:146-150), which the normal deploy uses, adds `pprof` to `-tags`. The listener is still gated by `ABK_PPROF_ADDR` (`pprof_debug.go:24-35`). The committed unit file does not set it, so a default deploy exposes nothing.
+- *(r4, D37 Q7 accepted)* The committed `Makefile` owns the generic flags: two variables, `GO_BUILD_TAGS := pprof` and `GO_LDFLAGS := -s -w` plus `-trimpath`, used by `build`, `build-linux` and `build-api`; P12 later appends `-pgo=pgo/prod.pprof` to the deploy targets only. `Makefile.local.example`'s `deploy` and `deploy-debug` call `make build-linux` and keep only host, ssh and drop-in details, so a build-flag PR never needs a hand edit of the private file.
+- `pprof_debug.go` serves the listener from its own `http.NewServeMux()` with the `net/http/pprof` handlers mounted explicitly; the import's side-effect registration on `http.DefaultServeMux` is then inert (the server never serves `DefaultServeMux`; the PR asserts that with a grep for `http.ListenAndServe(` / `http.Handle(` outside the pprof file).
 - `Makefile.local.example`: `deploy-debug` copies the shape of the working private recipe (`pprof` tag, optimized, listener set through the local drop-in). Drop `-gcflags="all=-N -l"`, which is a delve setting.
 - The private `Makefile.local` is the owner's file, and no PR edits it (Q7).
 - `/debug/pprof/goroutineleak` (on by default in Go 1.27) comes with this.
@@ -182,10 +198,40 @@ touches none of it, and is re-run with `-tags "pprof bench"` to catch tagged fil
 }
 "scripts": { "typecheck": "tsc -p .", "build": "tsc -p . && vite build" }
 ```
-Which `tsc` binary wins on `PATH` with both installed must be checked in the PR (the
-TS 6 alias ships `tsc6`, per the [TS 7 announcement](https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/)).
-The `@typescript/typescript6` alias resolves to 6.0.2 today, one patch below the installed 6.0.3. That is fine for parse-only lint, but note it in the PR. TS 7 defaults that bite other repos are already explicit here: `strict: true` and
-`types: ["vitest/globals", "node"]` are set, and `baseUrl` is gone (`web/tsconfig.json:6-8`).
+*(r4, verified 2026-10-09)* **Which binary runs what.** npm installs a package's
+`bin` entries under the package's own names, not the alias name. `typescript@7.0.2`
+declares `tsc` (and `tsserver`); `@typescript/typescript6@6.0.2` declares `tsc6`
+(the [TS 7 announcement](https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/):
+"This package provides an executable named `tsc6`, so that if needed, you can
+install TypeScript 7.0 (which ships its own `tsc` binary) side-by-side without
+naming conflicts"). So with the two aliases above, `web/node_modules/.bin/` holds
+`tsc` = TS 7 and `tsc6` = TS 6, with no collision. Module resolution is the
+other way round: `import 'typescript'` (what `typescript-eslint` and
+`@typescript-eslint/parser` do) resolves the alias named `typescript`, which is
+the TS 6 package; TS 7.0 has no JS API at all ("it does not ship with an API",
+same announcement), so nothing can resolve it by accident.
+
+Scripts, exactly:
+
+```jsonc
+"scripts": {
+  "build":          "tsc -p . --noEmit && vite build",   // TS 7 typecheck, then Vite (oxc strips types; no TS API)
+  "typecheck":      "tsc -p . --noEmit",                 // TS 7, 1.6 s measured
+  "typecheck:ts6":  "tsc6 -p . --noEmit",                // TS 6 control, kept one release, run in P9's CI step only
+  "lint":           "eslint ."                           // typescript-eslint 8.71.1 → TS 6.0.2 via the `typescript` alias
+}
+```
+
+Today `"build": "tsc && vite build"` (`web/package.json:8`) runs whichever `tsc`
+is installed, so after P9 it is TS 7 without a script change; the explicit `-p .
+--noEmit` is added so the intent is visible. Vite 8 and Vitest 4/5 compile TS
+with oxc/esbuild and never load the `typescript` module, so they are unaffected
+by which alias carries that name. The `@typescript/typescript6` alias resolves to
+6.0.2 today, one patch below the installed 6.0.3; fine for parse-only lint, noted
+in the PR. TS 7 defaults that bite other repos are already explicit here:
+`strict: true` and `types: ["vitest/globals", "node"]` are set, and `baseUrl` is
+gone (`web/tsconfig.json:6-8`). Baseline re-measured in the review worktree:
+TS 6.0.3 `tsc --noEmit -p web` = 8.9 s wall, 0 errors.
 
 **S6. react-router 8 (rank 6).** Follow the upgrade report §2 (sed over the 95 files in the appendix),
 plus the `vendor` regex in `web/vite.config.ts` and the exact-file chunk check the
@@ -202,15 +248,15 @@ version-header bumps on every touched non-fragment file.
 
 | PR | Title | Files touched (exact) | Tests / verification | Rollback | Size |
 |----|-------|-----------------------|----------------------|----------|------|
-| P1 | `chore(go): bump toolchain to go1.27.2` | measured with `grep -rnF '1.27.1'`, 15 files. **Pins (functional):** `Makefile:43`, `.envrc:10`, `.vscode/settings.json:7,10`, `Dockerfile:25,27`, `Dockerfile.build-cgo:21,23`, `.woodpecker/checks-lint.yaml:47,49`, `.woodpecker/checks-build.yaml:18,41`, `.woodpecker/test-database.yaml:45`, `.woodpecker/test-fixtures.yaml:43`, `.woodpecker/test-rest.yaml:50`, `.woodpecker/test-server-scanner.yaml:42`, `scripts/ci_remote.py:76`, `scripts/tests/test_check_toolchain_versions.py` (fixture literals at :85-159). **Docs mentioning the pin:** `CLAUDE.md:180`, `Makefile.local.example:21`, `.github/codeql/README.md:127,142`, `agents/go-specialist.md:15`, `skills/project-context/SKILL.md:52`. Also `.standards/instructions/go.md` (git submodule, empty in the analysis worktree so not read here; if it lists the patch, that is a separate PR to `falkcorp/.github`). Plus `changelog.d/<new>.md` | `python3 scripts/check_toolchain_versions.py`; `python3 -m pytest scripts/tests/test_check_toolchain_versions.py`; `make ci`; Woodpecker green on amd64 and arm64 | revert the commit | S |
-| P2 | `ci(toolchain): drift-check Woodpecker and ci_remote.py` | `scripts/check_toolchain_versions.py`, `scripts/tests/test_check_toolchain_versions.py`, `changelog.d/<new>.md` | new test cases: a mismatched Woodpecker `GOTOOLCHAIN`, a mismatched `go_image` digest, and a mismatched `ci_remote.py` constant each fail | revert | S |
-| P3 | `feat(ops): pprof tag in the deploy build; fix stale debug example` | `Makefile` (`build-linux` tags, :146-148), `Makefile.local.example` (`deploy-debug`, :107-116), `docs/BUILD_TAGS_GUIDE.md`, `changelog.d/<new>.md`. The owner mirrors the change in the private `Makefile.local` (Q7) | `go build -tags "pprof" .`; start the binary without `ABK_PPROF_ADDR` and confirm no listener (`lsof -i :6060` empty); with it set, `curl localhost:6060/debug/pprof/goroutineleak?debug=1` | revert; the listener is opt-in anyway | S |
-| P4 | `feat(diag): always-on flight recorder with watchdog snapshots` | new `internal/diag/flight/flight.go`, `internal/diag/flight/flight_test.go`; `internal/operations/registry/watchdog.go` (strike branch); `internal/server/search_reconciler.go` (`checkSearchIndexStall`); `internal/server/server.go` (start/stop near `bgCtx` at :599); `internal/server/handlers/diagnostics.go` + route registration file; `web/src/services/api.ts` only if a UI link is wanted (optional, defer); `changelog.d/<new>.md` | unit: snapshot writes a file `go tool trace` can open; rate limit; max-files rotation; concurrent `Snapshot` calls return without blocking; watchdog test asserts a snapshot is requested on a stuck strike (a fake clock already exists: `livenessClock`); a coexistence test runs the recorder and hits `/debug/pprof/trace?seconds=1` under the `pprof` tag (the pkg doc is ambiguous on whether `trace.Start` and an active recorder coexist); CPU and RSS gate, before/after, on a scan of a fixture library | env `ABK_FLIGHT_RECORDER=off`, or revert | M |
+| P1 | `chore(go): bump toolchain to go1.27.2` | measured with `grep -rlF '1.27.1' . --exclude-dir={node_modules,.git,web,docs,.claude,.standards}` minus `CHANGELOG.md` and `TODO.md`: **18 files** (r4 re-count 2026-10-09; 13 functional + 5 docs). **Pins (functional):** `Makefile:43`, `.envrc:10`, `.vscode/settings.json:7,10`, `Dockerfile:25,27`, `Dockerfile.build-cgo:21,23`, `.woodpecker/checks-lint.yaml:47,49`, `.woodpecker/checks-build.yaml:18,41`, `.woodpecker/test-database.yaml:45`, `.woodpecker/test-fixtures.yaml:43`, `.woodpecker/test-rest.yaml:50`, `.woodpecker/test-server-scanner.yaml:42`, `scripts/ci_remote.py:76`, `scripts/tests/test_check_toolchain_versions.py` (fixture literals at :85-159). **Docs mentioning the pin:** `CLAUDE.md:180`, `Makefile.local.example:21`, `.github/codeql/README.md:127,142`, `agents/go-specialist.md:15`, `skills/project-context/SKILL.md:52`. Also `.standards/instructions/go.md` (git submodule, empty in the analysis worktree so not read here; if it lists the patch, that is a separate PR to `falkcorp/.github`). Plus `changelog.d/<new>.md` | `python3 scripts/check_toolchain_versions.py`; `python3 -m pytest scripts/tests/test_check_toolchain_versions.py`; `make ci`; Woodpecker green on amd64 and arm64 | revert the commit | S |
+| P2 | `ci(toolchain): drift-check Woodpecker, ci_remote.py and the workflow patch` | `scripts/check_toolchain_versions.py`, `scripts/tests/test_check_toolchain_versions.py`, `.github/workflows/ci.yml` (`go-version: '1.27'` → `'1.27.2'` at :47, :125, :189, :265, :338, :464, :529; r4 F24), `changelog.d/<new>.md` | new test cases: a mismatched Woodpecker `GOTOOLCHAIN`, a mismatched `go_image` digest, a mismatched `ci_remote.py` constant, and a minor-only workflow `go-version:` each fail | revert | S |
+| P3 | `feat(ops): pprof tag in the deploy build; committed Makefile owns the build flags; fix stale debug example` | `Makefile` (`GO_BUILD_TAGS`, `GO_LDFLAGS` variables; `build`, `build-api`, `build-linux` :143-150 use them), `Makefile.local.example` (`deploy` and `deploy-debug`, :107-116, call `make build-linux`), `pprof_debug.go` (own mux, see S2), `docs/BUILD_TAGS_GUIDE.md`, `changelog.d/<new>.md`. The owner mirrors the change in the private `Makefile.local` once (D37 Q7) | `go build -tags "pprof" .`; start the binary without `ABK_PPROF_ADDR` and confirm no listener (`lsof -i :6060` empty); with it set, `curl localhost:6060/debug/pprof/goroutineleak?debug=1`; grep asserts no `http.DefaultServeMux` use outside `pprof_debug.go` | revert; the listener is opt-in anyway | S |
+| P4 | `feat(diag): always-on flight recorder with watchdog snapshots` | new `internal/diag/flight/flight.go`, `internal/diag/flight/flight_test.go`; `internal/operations/registry/watchdog.go` (`watchdogCycle`, :55, the stuck / never_reported strike branch); `internal/server/search_reconciler.go` (`checkSearchIndexStall`, :473, the `return true` path); `internal/server/server.go` (start/stop near `bgCtx` at :599); new `internal/server/handlers/diagnostics_traces.go`; `internal/server/wire_handlers.go` (route registration; r4: verified this is where the diagnostics routes are wired, there is no separate diagnostics wiring file); `web/src/services/api.ts` only if a UI link is wanted (optional, defer); `changelog.d/<new>.md` | unit: snapshot writes a file `go tool trace` can open; rate limit; max-files rotation; concurrent `Snapshot` calls return without blocking; watchdog test asserts a snapshot is requested on a stuck strike (a fake clock already exists: `livenessClock`); a coexistence test runs the recorder and hits `/debug/pprof/trace?seconds=1` under the `pprof` tag (the pkg doc is ambiguous on whether `trace.Start` and an active recorder coexist); CPU and RSS gate, before/after, on a scan of a fixture library | env `ABK_FLIGHT_RECORDER=off`, or revert | M |
 | P5 | `refactor(go): go fix batch 1 (any, forvar, minmax, errorsastype, reflecttypefor, stringscut*, stringsbuilder, stditerators, inline)` | **80 files**, listed in [appendix: gofix-batches.md §P5](06-bleeding-edge/gofix-batches.md); re-run at PR time | `make ci`; `go vet ./...`; `-race` on touched packages | revert | M |
 | P6 | `refactor(go): go fix batch 2 (rangeint, mapsloop, slicescontains, slicesbackward, stringsseq, embedlit)` | **220 files**, [appendix §P6](06-bleeding-edge/gofix-batches.md); can be split by top-level package if review load is too high | as above | revert | M-L |
 | P7 | `refactor(go): go fix batch 3 (newexpr)` | **67 files**, all `_test.go`, 381 hunks, [appendix §P7](06-bleeding-edge/gofix-batches.md) | as above; review that every `new(expr)` replaced a local `ptr`-style helper, then delete now-unused helpers in the same PR | revert | M |
 | P8 | `refactor(go): go fix batch 4 (waitgroupgo, testingcontext)` | **29 files**, [appendix §P8](06-bleeding-edge/gofix-batches.md) | `-race -count=3` on touched packages (concurrency shape changes) | revert | M |
-| P9 | `build(web): typecheck with TypeScript 7, keep TS 6 for lint` | `web/package.json`, `web/package-lock.json`, `Makefile` (only if a `web-typecheck` target is added), `.github/workflows/frontend-ci.yml` only if needed: it delegates to `falkcorp/github-common/.github/workflows/reusable-ci.yml` (line 64), so which npm script it runs must be read there first, `changelog.d/<new>.md` | `time npm run typecheck` before/after in the PR body; seeded-error control; `npm run lint` still passes on TS 6 | revert package.json/lock | S |
+| P9 | `build(web): typecheck with TypeScript 7, keep TS 6 for lint` | `web/package.json` (the two aliases and the four scripts in S5), `web/package-lock.json`, `Makefile` (`web-typecheck` target calling `npm run typecheck --prefix web`; `make build` keeps calling `npm run build`), `.github/workflows/frontend-ci.yml` only if needed: it delegates to `falkcorp/github-common/.github/workflows/reusable-ci.yml` (line 64), so which npm script it runs must be read there first, `changelog.d/<new>.md` | `time npm run typecheck` before/after in the PR body (8.9 s → about 1.6 s expected); seeded-error control on both `tsc` and `tsc6`; `npm run lint` still passes on TS 6 (`node -e "console.log(require('typescript').version)"` in `web/` prints 6.0.2); `ls web/node_modules/.bin/tsc web/node_modules/.bin/tsc6` both exist | revert package.json/lock | S |
 | P10 | `feat(web): react-router 8` | the 95 files in [appendix: react-router-files.md](06-bleeding-edge/react-router-files.md), `web/vite.config.ts`, `web/package.json`, `web/package-lock.json`, `changelog.d/<new>.md` | `npm run build`; `vitest run`; Playwright e2e chromium + webkit; the exact-file chunk check from the `vite.config.ts` comment | revert | M |
 | P11 | `test(web): Vitest 5` | `web/package.json`, `web/package-lock.json`, `web/vitest.config.ts`, (coordinator: the shadowed test block in web/vite.config.ts is deleted by 01 P7, not here), `changelog.d/<new>.md` | full `vitest run` timed before/after; then a second commit enabling `fsModuleCache` timed again | revert | S-M |
 | P12 | `perf(go): PGO for deploy builds` | new `pgo/prod.pprof` (merged CPU profiles; committed as a plain file, **not LFS**, because CI never fetches LFS and the LFS budget is exhausted per project memory), `Makefile` (`build-linux`: `-trimpath -pgo=pgo/prod.pprof`), `Makefile.local.example` (same flags on deploy), `docs/BUILD_TAGS_GUIDE.md` (one section on PGO), `changelog.d/<new>.md` | A/B: the same op (e.g. a scan of a fixture library) timed on PGO vs non-PGO binaries; CPU profile diff. Before the first commit, `go tool pprof -raw` on the profile and grep it for home-directory paths: the deploy build must use `-trimpath` first, or the profile carries the builder's absolute paths into a public repo | build with `-pgo=off` | S |
@@ -221,6 +267,11 @@ Order: P1 → P2 → P3 → P4 (P4 can start in parallel with P3; it does not ne
 tag) → P5..P8 sequentially (each touches many files; never two at once) → P12 after
 P3 has been live long enough to collect profiles. Frontend: P9 → P10 → P11 → P13+,
 independent of the Go chain.
+
+*(r4)* **D50 binds P5–P8:** they run only inside freeze window F, after 01's
+tier-2 sweep, and each batch's file list is regenerated with `go fix -diff` at
+PR time; the appendix lists are the 2026-10-08 census, not the PR's input. D40
+keeps `omitzero` out of every batch (`-omitzero=false`).
 
 ## 5. Risks and what must not break
 
@@ -261,7 +312,11 @@ independent of the Go chain.
   operations v3 (05) replaces the watchdog, the snapshot hook moves into the v3
   liveness checker as a requirement, not an afterthought.
 - **07 (design):** owns where `internal/diag/flight` lives and whether diagnostics
-  endpoints get a dedicated admin surface.
+  endpoints get a dedicated admin surface. 07's new CI-throughput set (07 C1–C3)
+  changes `.github/workflows/ci.yml`, which P2 also edits (the `go-version` patch
+  pin); P2 goes after 07 C1. 07 appendix C picks the server-state library
+  (TanStack Query v5) that 07 §3.5 said 06 would choose; 06 has no separate
+  opinion.
 - **02 (search):** the search-index stall hook (P4) and any memdb interning
   (Assess, rank 13) touch 02's area.
 

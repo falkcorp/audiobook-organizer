@@ -1,7 +1,7 @@
 <!-- file: docs/proposals/2026-10-holistic/04-operations-census.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.1 -->
 <!-- guid: 3b8e1f52-6c4d-4a97-9e20-7d1c5a4f8b63 -->
-<!-- last-edited: 2026-10-08 -->
+<!-- last-edited: 2026-10-09 -->
 
 # 04: Operations census, prune list and non-op jobs
 
@@ -10,6 +10,21 @@
 **What this is.** A planning exercise only. No code was changed.
 
 > **Coordinator note (08, 2026-10-08).** (1) The missing `Permissions` are wider than the twins. At HEAD 147 of 198 `OperationDef` literals declare none, which is every def under `internal/plugins/*`, and `defPermissionsHeld` (`handlers/operations_v2.go:648`) passes an empty list. So the seeded editor role can run every plugin op through `POST /operations/v2`, destructive ones included. 08 adds early PR X2 (an empty list means `settings.manage`). P4 still ports `settings.manage` explicitly. (2) Q2 is verified safe: `orphan-book-files-cleanup` cannot write `book_file` rows (08 §2 a). (3) P3 is split. P3a is a one-line fix to `extra_ops.go:686`, gated on Q4, and goes in wave 0. P3b, the consolidation, stays after P4f. (4) P8 is gated on 01 Q2: if the SQLite backend is deleted, P8 is dropped. (5) The v1 retention purge is owned by 01 P74.
+
+### Round-2 review (r1)
+
+Re-checked at HEAD `ebda30d47` on 2026-10-09; the code is identical to the measured HEAD `f7211eb39`. Owner decisions D1, D4, D5, D23, D24, D26, D27 are treated as fixed. Changes:
+
+- **F5 overstated the twins.** It said "10 boot goroutines duplicate an op that is already registered". Seven do (C1–C7). The version-group index (C12) has no op twin, the embedding backfill (C13) only overlaps `dedup.embed-scan`, and `merge-user-state-repair` (`server_lifecycle.go:1891`) has no def at all (`grep -rn 'merge-user-state-repair"' internal` finds only the `bgWG.Go` call) and is on the §2.4.2 keep list. F5 and the §1 bullet now say 10 whole-library boot goroutines, 7 exact twins.
+- **D27 table C rewritten** with every pair's introduction date (`git log -S'"<id>"' --reverse` for defs; `git log --diff-filter=A` for the four `internal/maintenance/jobs` files, all added 2026-05-01) and the newer survivor named. One pair conflicts with D4: `scheduler.dedup-llm-review` is three days newer than `dedup.llm-review`, but D4 retires the `scheduler.*` namespace, so `dedup.llm-review` is proposed as survivor with the scheduler ID as a `FormerIDs` alias. The owner should confirm (§7 Q5).
+- **The reconcile pair carries a behaviour port**: `maintenance.reconcile-scan` saves results that `/operations/reconcile/scan/latest` (`server/reconcile.go:68`) serves and that 03 PR 9b reads; the survivor `reconcile.scan` must save them too before the loser is aliased.
+- **D23/D24 written out**: P1 schedules `file-integrity-check` and `orphan-book-files-cleanup` with `settings.manage`; the other 12 cron-declared defs are listed by name, cron string and why each stays off (§2.2 D).
+- **P3 split into P3a/P3b** as 08 recorded (P3a: the one-line `extra_ops.go:686` fix in wave 0 after the two prod values are compared; P3b: the three-cleaner consolidation after P4f). The table row was still a single P3.
+- **P4 simplified from 9 PRs to 6**: the four twins with no body diff (`temp-file-cleanup`, `trash-cleanup`, `tombstone-cleanup`, `db-optimize`) ship as one mechanical PR (P4a). `cleanup-old-backups` keeps the letter P4f so 08's "P3b after P4f" stays true.
+- **D1/X2 noted on the twins**: once X2 lands, an undeclared `Permissions` already means `settings.manage` on the trigger route, so a survivor with no `Permissions` is no longer an editor-can-delete hole; P4 still declares it explicitly because the def is the documentation.
+- **D26 applied**: P12 deletes `maintenance.batch-poller` and adds it to `retiredOpIDs`; the inline loop stays.
+- **`scheduler.metadata-upgrade` flagged**: it is the twelfth `scheduler.*` def, has no twin, and is not in table A. D4 retires the namespace, so it needs a rename to `maintenance.metadata-upgrade` with a `FormerIDs` alias in the 05 namespace wave, not a prune.
+- §7 questions now carry their decision.
 
 **The full table.**
 - [`04-operations-census/ops-census.md`](04-operations-census/ops-census.md) has one row per op, 234 rows in all.
@@ -48,18 +63,11 @@
   - Each pair has two ConcurrencyKeys and no `Writes`, so the two twins can run at the same time over the same rows.
   - Usually only one twin is reachable. The other appears nowhere except its own definition.
   - One pair has drifted apart. The **scheduled** `scheduler.cleanup-old-backups` reads `PurgeSoftDeletedAfterDays` as its backup-retention setting (`internal/scheduler/extra_ops.go:686`). Its unscheduled twin reads `BackupRetentionDays`.
-- **Recommended for pruning: 13 defs with high confidence, 2 more conditional on other work, and 8 near-duplicates for the owner to decide** (§2.2).
-- **10 boot goroutines duplicate an op that is already registered.** They do the same work outside the operations system, so nobody can see progress, cancel them or resume them. (F5)
-  - external-id backfill
-  - movement-atom strip
-  - malformed-M4B remux
-  - malformed-M4B transcode
-  - book_atpath index
-  - opchange index
-  - activity filter-index reconcile
-  - merge-user-state repair loop
-  - embedding backfill
-  - version-group index
+- **Pruning: 13 defs with high confidence, 2 conditional on other work (both now decided), and 7 near-duplicate pairs decided by D27 with the newer op surviving** (§2.2 table C; one pair, C2, needs the owner to confirm the D4-over-date call).
+- **10 boot goroutines do whole-library work outside the operations system, and 7 of them duplicate an op that is already registered.** Nobody can see their progress, cancel them or resume them. (F5)
+  - exact twins of a registered op: external-id backfill, movement-atom strip, malformed-M4B remux, malformed-M4B transcode, book_atpath index, opchange index, activity filter-index reconcile;
+  - overlap only: embedding backfill (`dedup.embed-scan` takes no marker), version-group index (no op yet);
+  - no op, kept on purpose: the merge-user-state repair loop (§2.4.2).
 - **15 non-op jobs should be converted into ops or deleted:** 11 definite, 4 candidates, plus 1 deletion (the inert v1 stale-op reaper). See §2.4.
 - **The RootDir gate is mostly gone, and the memory note about it is stale.**
   - The note `project_operations_registry_state.md` says "RootDir gates 105 ops". That gate was removed and `server_op_registration_test.go:30` pins the removal.
@@ -85,7 +93,7 @@
 | F2 | 14 defs declare a cron schedule and have no TaskScheduler task. | `deluge.protected-paths-sync`, `maintenance.{author-dedup-scan, author-split-scan, batch-poller, cleanup-old-backups, db-optimize, file-integrity-check, metadata-refresh, orphan-book-files-cleanup, purge-deleted, series-prune, temp-file-cleanup, tombstone-cleanup, trash-cleanup}`. The script cross-joins the `Schedule` field with the `EnqueueOp` targets parsed from `tasks.go`. | high | Two report-only health checks never run: `file-integrity-check` and `orphan-book-files-cleanup`. The other 12 are covered by a twin (F3) or are harmless. |
 | F3 | There are 11 twin pairs, each registered under a `scheduler.*` and a `maintenance.*` ID (or `dedup.*` and `maintenance.*`). | See §2.2 table A. `taskV2DefIDs` (`scheduler/maintenance.go:152-188`) points at the `scheduler.*` side. The `maintenance.*` side appears only at its own definition: run `git grep -n '"maintenance.purge-deleted"'` and get 2 hits, both in `cleanup.go`. | high | Every fix has to land twice (the author-split `ModifyBook` fix is in both `extra_ops.go:476` and `maintenance/author.go:306`). The twins carry different ConcurrencyKeys, so they can run at the same time. One pair has already drifted (F4). |
 | F4 | The backup cleanup that actually runs uses the wrong retention setting. | `extra_ops.go:686` sets `retentionDays := config.AppConfig.PurgeSoftDeletedAfterDays`, while `maintenance/cleanup.go:370` uses `p.deps.BackupRetentionDays()`. `extra_ops.go:719` notes there are three implementations. The third is `internal/maintenance/jobs/cleanup_backups.go`. | high | Backup files can be deleted earlier than the backup-retention setting allows. |
-| F5 | 10 boot goroutines duplicate registered ops. | `server_lifecycle.go`: `:971` (external-id-backfill), `:1024` (versiongroup-backfill), `:1055` (book-atpath-backfill), `:1140` (opchange-index-backfill), `:1178` (strip-movement-atoms), `:1186` (remux-malformed-m4b), `:1233` (transcode+quarantine) and `:1891` (merge-user-state-repair). Also `server.go:935` (embedding-backfill) and `activity/register.go:60` (reconcileFilterIndexAtBoot). The comment at `server_lifecycle.go:972-979` admits it is "unclear whether that path [the op] is ever enqueued". | high | Hours-long walks run invisibly. They log progress only through slog (`startupProgressLogger`) and cannot be cancelled except by restarting the process. |
+| F5 | 10 boot goroutines do whole-library work outside the op system; 7 duplicate a registered op exactly. | Exact twins, `server_lifecycle.go`: `:971` (external-id-backfill), `:1055` (book-atpath-backfill), `:1140` (opchange-index-backfill), `:1178` (strip-movement-atoms), `:1186` (remux-malformed-m4b), `:1233` (transcode+quarantine); and `activity/register.go:60` (reconcileFilterIndexAtBoot). Overlap only: `:1024` (versiongroup-backfill, no op) and `server.go:935` (embedding-backfill vs `dedup.embed-scan`). No op and kept: `:1891` (merge-user-state-repair; `grep -rn 'merge-user-state-repair"' internal` finds only the `bgWG.Go` call). The comment at `server_lifecycle.go:972-979` admits it is "unclear whether that path [the op] is ever enqueued". | high | Hours-long walks run invisibly. They log progress only through slog (`startupProgressLogger`) and cannot be cancelled except by restarting the process. |
 | F6 | The batch poller exists twice. | The `batch_poller` task calls `PollBatches` inline every 5 minutes (`tasks.go:1248-1275`). The `maintenance.batch-poller` def (`maintenance/batch_poller.go:22`) is reached by nothing. | high | Low impact; it is dead weight. |
 | F7 | There are two retired ISBN-enrichment stubs. | `scheduler.isbn-enrichment` (`extra_ops.go:752`) and `maintenance.isbn-enrichment` (`maintenance/metadata.go:74`) both return `ErrISBNEnrichmentRetired`. Neither appears in `taskV2DefIDs`. | high | Prunable. The `retiredOpIDs` mechanism (`op_id_aliases_test.go:52`) now covers the "fail loudly" case they exist for. |
 | F8 | The v1 stale-operation reaper still runs every minute and does nothing. | The ticker is at `server_lifecycle.go:450-465`. `failStaleOperations` (`:1706`) reads and writes only the v1 `operation:` keyspace, which has had zero writers since 2026-08-23 (memory note `project_operations_v1_retirement_state`, which matches HEAD). The startup resume sweep it shipped with is already gone: `grep resumeInterruptedOperations` finds no definition. | high | A useless goroutine plus a misleading `operation_timeout_minutes` setting. Deleting it is a config-deprecation decision (hand to 01). |
@@ -115,12 +123,12 @@
 | `maintenance.series-prune` (`maintenance/series.go:64`) | `dedup.series-prune` | None: both call `executeSeriesPrune`. `dedup.*` is the side the UI and the task use. | Survivor is stricter: library.edit_metadata, cancellable, Liveness manual, Timeout 2h. Nothing to port | Yes |
 | `maintenance.series-normalize` (`series.go:23`) | `dedup.series-normalize` | None: both call `executeSeriesNormalizeCore`. | Survivor is stricter: library.edit_metadata, cancellable, Liveness manual, Timeout 4h. Nothing to port | Yes |
 
-**Survivor direction for the nine `scheduler.*` pairs.**
+**Survivor direction for the nine `scheduler.*` pairs. Decided: D4.** `maintenance.*` survives; the `scheduler.*` IDs become `FormerIDs`, carrying `settings.manage` and the larger timeout.
 - For 7 of the 9 pairs, the bodies that remain in `maintenance/` delegate to `Server` methods or `sweep` helpers.
 - `author-split-scan` and `resolve-production-authors` carry inline logic over `OpsStore` on **both** sides (`maintenance/author.go:130,394`). For those two pairs the merge is a body diff, not a delete.
 
 **Def-level diffs, from a field-by-field comparison of the census dump.**
-- **Every surviving `maintenance.*` twin declares no `Permissions`.** If they survive as they are, the only gate left is the generic trigger route's `scan.trigger`, and the seeded editor role holds that. Editors could then run purge-deleted and cleanup-old-backups, both of which delete. **Each P4 PR must carry `Permissions: settings.manage` over to the survivor.** This blocks the PR.
+- **Every surviving `maintenance.*` twin declares no `Permissions`.** If they survive as they are, the only gate left is the generic trigger route's `scan.trigger`, and the seeded editor role holds that. Editors could then run purge-deleted and cleanup-old-backups, both of which delete. **Each P4 PR must carry `Permissions: settings.manage` over to the survivor.** This blocks the PR. *Round 2:* D1 (08 X2) makes an undeclared `Permissions` mean `settings.manage` on the trigger route, so after X2 the hole is closed even for a survivor that forgets; P4 still declares it, because the def is where the next reader looks, and the permission test in the P4 row asserts it either way.
 - The dry-run default is the same on both sides. Both resolve `{}` through `opmode.ParseDryRun` and land on preview (`opmode/dryrun.go:53`). The scheduler sends `schedulerExtraOpParams{}` (`tasks.go:44`), so the scheduled author-split and resolve-production-authors runs are previews today, and they stay previews after the merge.
 - The resume policy changes from drop to requeue for three pairs. Requeue declares the op idempotent, so the P4 PR must justify it or keep drop.
 - Keep the larger `Timeout` of the two. Prod runs were sized against the scheduler's budget. The `scheduler.*` bodies in `extra_ops.go`, a 1,116-line file, duplicate those methods instead. If 05 retires the `scheduler` plugin namespace, this is the direction that agrees with it. **Open question Q1** lets the owner reverse the choice of which ID is canonical; the bodies merge either way.
@@ -134,28 +142,54 @@
 | `maintenance.batch-poller` | Unreached (F6). | Yes, unless Q3 adopts it. | Add to `retiredOpIDs`. |
 | `operations.backfill-legacy-status` (`legacy_backfill_op.go:40`) | Applied on 2026-08-22: 1,737 rows. A re-run found 0 of 10,245 non-terminal (memory note `project_operations_v1_retirement_state`). | **Conditional:** remove only together with the v1 `operation:` keyspace (01/05). Until then it doubles as a "did someone start writing v1 rows again" detector. | None. It writes v1 rows only. |
 
-**C. Near-duplicates for the owner (not auto-prunable).**
+**C. Near-duplicates: decided by D27 (keep the newer op, one small PR each after P4, 2-week soak before any flag is retired).**
 
-| Op | Overlaps with | Why it isn't automatic |
-|---|---|---|
-| `maintenance.author-dedup-scan` | `dedup.author-scan` (the scheduled one) | Different store paths. Its cron is unread, so today it runs only through the API. |
-| `scheduler.dedup-llm-review` | `dedup.llm-review` | Both run `Engine.RunLLMReview`. They have different keys, so both can run at once. |
-| `maintenance.reconcile-scan` (scheduled) | `reconcile.scan` (UI) | They call `BuildReconcilePreviewWithProgress` and `RunReconcileScan` respectively. One saves results, the other previews. |
-| `maintenance.cleanup-backups` (a job) | The two cleaners in table A | Matches `.backup` and `.bak` with a different regex. |
-| `maintenance.fix-book-file-paths` (a job) | `maintenance.mark-missing-files` | Both write `book_file.Missing`. Only the latter clears stale flags in both directions (`mark_missing_files.go:364`). |
-| `maintenance.repair-missing-files` (a job) | `missing-file-repoint` and `recover-missing-files` | The newer ops hold the scan stand-down. Check whether the job does. |
-| `maintenance.bulk-fetch-metadata` (a job) | `library.bulk-metadata-fetch`, `metadata.candidate-fetch` | Three whole-library fetchers. |
-| `maintenance.author-title-fragment-scan` | The Repairs fixers' plan phase | Report-only. It could become a fixer, following the precedent of `maintenance.repair-junk-titles` (`op_id_aliases_test.go:58`). |
+Dates are when the ID first appears in `internal/` (`git log -S'"<id>"' --date=short --reverse | head -1`). The four `internal/maintenance/jobs` jobs build their ID as `"maintenance." + ID()`, so their date is the file's first commit (`git log --diff-filter=A`): all four were added 2026-05-01. The `usage` column of the census shows prod runs only for `mark-missing-files`, `missing-file-repoint` and `recover-missing-files`; none of the four jobs has a recorded prod run.
+
+| # | Older op (retire → `retiredOpIDs`, or alias) | Newer survivor | Dates (old / new) | What the PR must carry over | PR |
+|---|---|---|---|---|---|
+| C1 | `maintenance.author-dedup-scan` (`author.go:28`) | **`dedup.author-scan`** (`duplicates_ops.go:295`), already the `dedup_refresh` task target | 2026-05-07 / 2026-05-10 | Nothing: the survivor is scheduled and is what 03 G6 reuses. Alias the old ID. | P14a |
+| C2 | `scheduler.dedup-llm-review` (`extra_ops.go:160`) | **`dedup.llm-review`** (`plugins/dedup/llm_review.go:19`) | 2026-05-10 / 2026-05-07 | **Conflict:** by date the scheduler op is newer, but D4 retires the `scheduler.*` namespace, and both call `Engine.RunLLMReview`. Proposed: `dedup.llm-review` survives, `scheduler.dedup-llm-review` becomes its `FormerIDs` alias, the `dedup_llm_review` task (`maintenance.go:168`) retargets, and the survivor keeps its `child-of: dedup.run-all` role. Owner to confirm (Q5). | P14b |
+| C3 | `maintenance.reconcile-scan` (`reconcile.go:27`, nightly `reconcile_scan` task) | **`reconcile.scan`** (`reconcile_ops.go:42`, UI) | 2026-05-07 / 2026-05-10 | **Behaviour port:** the old op calls `BuildReconcilePreviewWithProgress` and saves results; `/operations/reconcile/scan/latest` (`server/reconcile.go:68`) and 03 PR 9b read them. The survivor must save results too, the task retargets, and the op type `recentReconcileScans` filters on must be updated. 03 PR 9b waits for this PR. | P14c |
+| C4 | `maintenance.cleanup-backups` (job, `jobs/cleanup_backups.go:28`) | **`maintenance.cleanup-old-backups`** (`cleanup.go:346`), after P4f | 2026-05-01 / 2026-05-07 | Its `.backup` + `.bak` regex, if P3b's shared helper does not already cover it. This is P3b, not a separate PR. | P3b |
+| C5 | `maintenance.fix-book-file-paths` (job, `jobs/fix_book_file_paths.go:22`) | **`maintenance.mark-missing-files`** (`mark_missing_files.go:166`) | 2026-05-01 / 2026-09-05 | Nothing: the survivor clears stale flags in both directions (`mark_missing_files.go:364`), the job only sets them. The `/maintenance/jobs` UI entry goes with it. | P14d |
+| C6 | `maintenance.repair-missing-files` (job, `jobs/repair_missing_files.go:32`) | **`maintenance.missing-file-repoint`** + **`maintenance.recover-missing-files`** | 2026-05-01 / 2026-08-20 and 2026-09-05 | Nothing: the two survivors hold the scan stand-down and have prod runs. Also retire `GET /maintenance/repair-missing-files/:id` (01 appendix C lists it) and the `/maintenance/jobs` entry. | P14e |
+| C7 | `maintenance.bulk-fetch-metadata` (job, `jobs/bulk_fetch_metadata.go:38`) | **`library.bulk-metadata-fetch`** (`metadata_ops.go:593`, web) and **`metadata.candidate-fetch`** (`metadata_candidate_op.go:113`, task + 2 fixers) | 2026-05-01 / both 2026-05-10 | Nothing: both survivors are reachable and do different halves (apply vs candidate cache). Only the job retires. | P14f |
+| C8 | `maintenance.author-title-fragment-scan` (`author_title_fragment_report.go:157`) | **itself** (2026-09-12; nothing older overlaps it) | — | Not a prune. D27's rule keeps it. Turning it into a Repairs fixer (precedent `maintenance.repair-junk-titles`, `op_id_aliases_test.go:58`) is a 03/Repairs follow-up, not census work. | — |
+
+Each P14x PR: delete the loser def (or the job), add it to `retiredOpIDs` or as a `FormerIDs` alias on the survivor, keep the `op_ids.golden` line, retarget any task, and update `TestOpIDs_NoRenameWithoutAlias`. Size S each; C3 is M.
 
 **Excluded on purpose:**
 - `library.bulk-write-back` and `maintenance.bulk-write-back` are covered by the write-back ban.
 - The iTunes plugin ops are covered by the ban on iTunes writes. `itunes.heal` and `itunes.clone-into-library` touch iTunes-sourced files.
 - `scan` ConcurrencyKey sharing is left alone.
 
+**D. The 14 cron-declared defs with no TaskScheduler task (D23, D24).** D23 schedules the first two; D24 keeps the other 12 off by default and asks that they be listed for the owner by name.
+
+| Def | Cron it declares | Why it stays off (D24) |
+|---|---|---|
+| `maintenance.file-integrity-check` (`integrity_check.go:26`) | `30 2 * * *` | **Scheduled by P1 (D23)**, report-only, `settings.manage` added. |
+| `maintenance.orphan-book-files-cleanup` (`orphan_book_files.go:39`) | `15 2 * * *` | **Scheduled by P1 (D23)**, report-only (08 §2 a: it cannot write `book_file` rows), `settings.manage` added. |
+| `deluge.protected-paths-sync` (`deluge/protected_paths.go:18`) | `*/30 * * * *` | The protected list is loaded at boot and on Deluge changes; a half-hourly op row adds noise. Revisit with D52. |
+| `maintenance.author-dedup-scan` (`author.go:28`) | `0 1 * * *` | Retired by D27 C1; its twin `dedup.author-scan` runs on the `dedup_refresh` task. |
+| `maintenance.author-split-scan` (`author.go:106`) | `0 2 * * 1` | Twin of the scheduled `scheduler.author-split-scan` (table A); after P4e the task points here. |
+| `maintenance.batch-poller` (`batch_poller.go:22`) | `*/5 * * * *` | Deleted by D26 / P12; the inline loop is the poller. |
+| `maintenance.cleanup-old-backups` (`cleanup.go:346`) | `0 5 * * *` | Twin of the scheduled `scheduler.cleanup-old-backups`; after P4f the task points here. |
+| `maintenance.db-optimize` (`db.go:24`) | `0 2 * * 0` | Twin of the scheduled `scheduler.db-optimize`; after P4a the task points here. |
+| `maintenance.metadata-refresh` (`metadata.go:24`) | `0 6 * * *` | Twin of the scheduled `scheduler.metadata-refresh`; after P4c the task points here. |
+| `maintenance.purge-deleted` (`cleanup.go:30`) | `0 3 * * *` | Twin of the scheduled `scheduler.purge-deleted`; after P4b the task points here. It deletes. |
+| `maintenance.series-prune` (`series.go:64`) | `0 3 * * 2` | Twin of `dedup.series-prune`, which the `series_prune` task runs weekly (P5 aliases it). |
+| `maintenance.temp-file-cleanup` (`cleanup.go:104`) | `30 1 * * *` | Twin of the scheduled `scheduler.temp-file-cleanup`; after P4a the task points here. |
+| `maintenance.tombstone-cleanup` (`cleanup.go:64`) | `0 4 * * *` | Twin of the scheduled `scheduler.tombstone-cleanup`; after P4a the task points here. |
+| `maintenance.trash-cleanup` (`cleanup.go:419`) | `0 6 * * *` | Twin of the scheduled `scheduler.trash-cleanup`; after P4a the task points here. |
+
+So of the 12 that stay off, 9 are covered by a twin that already runs on a task, 1 is retired (C1), 1 is deleted (batch-poller) and only `deluge.protected-paths-sync` is a real "declared but never runs" op. The `Schedule` strings themselves are documentation until 05 makes the trigger part of the def (§2.4.3); P1's guard test stops a new one being added without a driver.
+
 **Prune count:**
 - 13 high-confidence: 11 twins from table A and 2 ISBN stubs.
-- 2 conditional: `batch-poller` and `backfill-legacy-status`.
-- 8 for the owner to review (table C).
+- 2 conditional: `batch-poller` (now decided, D26) and `backfill-legacy-status` (D17: stays until 01 P74).
+- 7 decided by D27 (table C, C1–C7); C8 is not a prune.
+- Total deleted: 13 + 1 (`batch-poller`) + 7 = 21. `backfill-legacy-status` stays on the frozen allowlist, so it is not counted as deleted.
 
 ### 2.3 What is not a prune
 
@@ -232,10 +266,12 @@ It works. Its weak point is that a def's own declaration says nothing about when
 
 | PR | Size | Touches | Tests | Rollback |
 |---|---|---|---|---|
-| P1: drop the unread `Schedule` or wire the missing tasks; add the schedule-has-driver guard | S | `internal/plugins/maintenance/{cleanup.go, db.go, metadata.go, author.go, series.go, batch_poller.go, integrity_check.go, orphan_book_files.go}`, `internal/plugins/deluge/protected_paths.go`, new `internal/server/op_schedule_driver_test.go`, and `internal/scheduler/tasks.go` if Q2 says to wire `file-integrity-check` and `orphan-book-files-cleanup` | The guard test fails before the fix and passes after; `go test ./internal/scheduler ./internal/server` | Revert. Behavior is unchanged unless tasks are added. |
+| P1 (D23): schedule `file-integrity-check` and `orphan-book-files-cleanup` as TaskScheduler tasks in the maintenance window, add `Permissions: settings.manage` to both defs, and add the schedule-has-driver guard; the other 12 declared crons stay off (D24, §2.2 D) | S | `internal/scheduler/tasks.go` and `maintenance.go` (two new tasks + `taskV2DefIDs` entries), `internal/plugins/maintenance/{integrity_check.go, orphan_book_files.go}` (Permissions), new `internal/server/op_schedule_driver_test.go` with an allow-list naming the 12 D24 defs and the reason each is off | The guard test fails before the fix and passes after; `go test ./internal/scheduler ./internal/server`; a permission test that an editor gets 403 on both | Revert. Behavior is unchanged except the two report-only runs. |
 | P2: retire the two ISBN stubs | S | `internal/scheduler/extra_ops.go`, `internal/scheduler/scheduler.go` (registrar list), `internal/plugins/maintenance/{metadata.go, plugin.go}`, `internal/server/op_id_aliases_test.go` (`retiredOpIDs` +2) | `TestOpIDs_NoRenameWithoutAlias` | Revert |
-| P3: fix backup retention and consolidate the three `.bak` cleaners into one helper | M | `internal/scheduler/extra_ops.go`, `internal/plugins/maintenance/cleanup.go`, `internal/maintenance/jobs/cleanup_backups.go`, `internal/sweep/` (new shared helper), `changelog.d/` | A table test on retention days; the app-dir guard tests keep passing | Revert. Note: it changes what gets deleted, so it needs owner sign-off (Q4). |
-| P4a–P4i: one PR per `scheduler.*` twin. Diff the bodies, port anything missing into the survivor, **port `Permissions: settings.manage` and the larger Timeout**, decide on drop or requeue, delete the loser, add the `FormerIDs` alias, retarget the task | M each (P4h author-split is L) | `internal/scheduler/{extra_ops.go, tasks.go, maintenance.go}`, the matching `internal/plugins/maintenance/*.go`, `internal/server/testdata/op_ids.golden` (unchanged), and tests under `internal/scheduler/*_test.go` that name the loser ID | Existing scheduler tests retargeted; an alias-resolve test; a permission test that an editor gets 403 on the survivor; `hasActiveV2Op` canonicalizes aliases already (`maintenance.go:113`) | Revert the PR. The alias keeps old rows resolving. |
+| P3a (D5, wave 0): the scheduled backup cleanup reads `backup_retention_days` | S | `internal/scheduler/extra_ops.go:686` (`PurgeSoftDeletedAfterDays` → `BackupRetentionDays`), `changelog.d/` | A table test on retention days | Revert. **Pre-step, done by the owner, no code:** read both values from prod's `GET /config` and record them in the PR; if `backup_retention_days` is shorter, the first run after deploy deletes `.bak-*` files that the old setting would have kept. |
+| P3b (D5): consolidate the three `.bak` cleaners into one `sweep` helper; retire the `cleanup-backups` job (D27 C4) | M | `internal/plugins/maintenance/cleanup.go`, `internal/maintenance/jobs/cleanup_backups.go` (delete), `internal/sweep/` (new shared helper that also matches the job's `.backup` pattern), `internal/server/op_id_aliases_test.go` (`retiredOpIDs` +1), `changelog.d/` | The helper's predicate test covers all three old patterns; the app-dir guard tests keep passing | Revert. After P4f, so `extra_ops.go` is already gone. |
+| P4a: the four twins with **no body diff** in one PR (`temp-file-cleanup`, `trash-cleanup`, `tombstone-cleanup`, `db-optimize`): delete the `scheduler.*` def, add `FormerIDs`, retarget the task, **port `Permissions: settings.manage` and the larger Timeout** to the survivor | M | `internal/scheduler/{extra_ops.go, tasks.go, maintenance.go}`, `internal/plugins/maintenance/{cleanup.go, db.go}`, `internal/server/testdata/op_ids.golden` (unchanged), scheduler tests naming the loser IDs | Existing scheduler tests retargeted; an alias-resolve test per ID; a permission test that an editor gets 403 on each survivor; `hasActiveV2Op` canonicalizes aliases already (`maintenance.go:113`) | Revert. The aliases keep old rows resolving. |
+| P4b `purge-deleted`, P4c `metadata-refresh`, P4d `resolve-production-authors`, P4e `author-split-scan` (L), P4f `cleanup-old-backups` (after P3a): one PR each, because each needs a body diff or a behaviour change; same mechanics as P4a, plus "drop vs requeue" justified in the PR for P4c–e | M each; P4e L | as P4a, plus `internal/plugins/maintenance/{cleanup.go, metadata.go, author.go}` and `internal/server/audiobooks_helpers.go` (P4b: the two `runAutoPurgeSoftDeleted` copies become one) | as P4a; P4b adds a test that the survivor deletes nothing on `{}` params (preview default) | Revert the one PR. |
 | P5: series twins | S | `internal/plugins/maintenance/{series.go, plugin.go}`, `internal/server/duplicates_ops.go` (`FormerIDs`) | Alias test | Revert |
 | P6: boot twins enqueue their op (C1–C5, C7) | M | `internal/server/server_lifecycle.go` (`startBackfills`), `internal/activity/register.go`, `internal/plugins/maintenance/{backfill.go, book_atpath_index.go, activity_filter_index_backfill.go}` (params: `force`, `if_needed`) | A boot test that the ops get enqueued; the sentinel short-circuit stays inside each op | Revert. The goroutines come back. |
 | P7: opchange `ensure` mode (C6) | M | `internal/server/server_lifecycle.go`, `internal/plugins/maintenance/opchange_book_index.go` | Run the existing index tests through the op | Revert |
@@ -243,18 +279,19 @@ It works. Its weak point is that a def's own declaration says nothing about when
 | P9: label refinement as a parent op (C9) | S | `internal/scheduler/tasks.go`, new `internal/plugins/dedup/label_refinement.go` | `childop` test | Revert |
 | P10: dedup-on-import always uses the op (C10) | M | `internal/importer/service.go`, `internal/server/server_search.go`, `internal/metafetch/service.go`, `internal/config/config.go` (deprecate the flag) | Batch coalescing test | Flip the flag back |
 | P11: set `Concurrency` on the 5 sequential RunItems calls, plus the AST lint | S | `internal/plugins/acoustid/{lsh_backfill.go, reset_all.go}`, `internal/plugins/deluge/{centralization.go, path_update.go}` (respect Deluge rate limits), new `scripts/lint_runitems_concurrency.go` or a test | `-race` test running each op concurrently (CLAUDE.md: the Label closure runs in workers) | Revert |
-| P12: batch poller decision (C14) | S | `internal/scheduler/tasks.go`, `internal/plugins/maintenance/batch_poller.go` | — | Revert |
+| P12 (D26): delete `maintenance.batch-poller`; the inline `batch_poller` task loop stays | S | delete `internal/plugins/maintenance/batch_poller.go` and its test; `internal/plugins/maintenance/plugin.go` (registration); `internal/server/op_id_aliases_test.go` (`retiredOpIDs` +1); `internal/scheduler/tasks.go:1248-1275` unchanged apart from a comment naming it the only poller | `TestOpIDs_NoRenameWithoutAlias`; the existing `batch_poller` task test | Revert |
 | P13: fold the transcode temp ticker into the temp-file op (C11) | S | `internal/server/server_lifecycle.go`, `internal/plugins/maintenance/cleanup.go`, `internal/transcode/transcode.go` | Cleanup predicate test | Revert |
+| P14a–P14f (D27): the near-duplicate pairs, one PR each, newer op survives (§2.2 table C). P14c carries the reconcile save-results port and gates 03 PR 9b | S each; P14c M | per pair: the loser's def file or `internal/maintenance/jobs/*.go` job, `internal/server/op_id_aliases_test.go`, the survivor's def (`FormerIDs`), `internal/scheduler/maintenance.go` when a task retargets (P14b, P14c), `internal/server/reconcile.go` (P14c), the `/maintenance/jobs` UI list and `GET /maintenance/repair-missing-files/:id` (P14e) | alias-resolve test; `TestOpIDs_NoRenameWithoutAlias`; P14c: the latest-scan endpoint still returns the survivor's saved results | Revert the one PR; the alias keeps old rows resolving. A 2-week soak before any flag or alias is removed (D27). |
 
-**Order:** P1 → P2 → P5 → P4a–i (one at a time, because they all touch `extra_ops.go` and `tasks.go`) → P3 (after the P4 cleanup-old-backups PR) → P11 → P6 → P7 → P9 → P12 → P13 → P10 → P8.
+**Order:** P3a (wave 0, with X2) → P1 → P2 → P5 → P4a → P4b → P4c → P4d → P4e → P4f (one at a time, because they all touch `extra_ops.go` and `tasks.go`) → P3b → P11 → P14a–f (after P4, per D27; P14c before 03 PR 9b) → P6 → P7 → P9 → P12 → P13 → P10 → P8 (dropped if 01 P75 deletes the SQLite backend first, D11).
 
-**Collision note.** P1, P2, P4, P9, P12 and P13 all touch `internal/scheduler/tasks.go` or `extra_ops.go`. Serialize them.
+**Collision note.** P1, P2, P3a, P4, P9, P12, P13 and P14b/c all touch `internal/scheduler/tasks.go`, `maintenance.go` or `extra_ops.go`. Serialize them.
 
 ## 5. Risks and what must not break
 
 - **Resume and history.** A deleted ID with no alias strands its rows. Every PR here adds `FormerIDs` or `retiredOpIDs`. `TestOpIDs_NoRenameWithoutAlias` is the gate.
 - **Twins that run at the same time today.** Collapsing them is safer, not riskier. But until P4 lands, never run both IDs of a pair together.
-- **P3 changes what gets deleted.** Get owner sign-off first.
+- **P3a and P3b change what gets deleted.** D5 gives the sign-off, conditional on the owner comparing the two prod values first; P3a records both in its PR.
 - **Moving work out of boot goroutines (P6, P7) changes timing.** It moves into the registry's worker pool of 8. A boot enqueue must not starve user-triggered ops: use `PriorityLow`. C5 and C6 must keep their "wait for memdb warmup" behavior (memory note `project_memdb_warmup_is_async_after_restart`).
 - **The scan ConcurrencyKey stays as it is.** No proposal here touches `library.scan` or its key.
 - **Untouched:** `internal/writeback/`, the write-back ops, and the iTunes ops.
@@ -277,24 +314,27 @@ It works. Its weak point is that a def's own declaration says nothing about when
 
 ## 7. Open questions for the owner
 
-**Q1. Which ID survives for the nine `scheduler.*` twins?**
+All six are answered in `09-owner-decisions.md`: **Q1 = D4, Q2 = D23, Q3 = D26, Q4 = D5, Q5 = D27, Q6 = D17.** The text is kept for the record; one point under Q5 still needs the owner's confirmation.
+
+**Q1. Which ID survives for the nine `scheduler.*` twins?** *(D4: `maintenance.*`, as recommended.)*
 Recommended: `maintenance.*`, with `scheduler.*` kept as `FormerIDs`.
 - 7 of the 9 surviving bodies already delegate to the shared Server code.
 - Whichever ID survives, it must carry `settings.manage`.
 - The duplicate `scheduler.*` bodies in `extra_ops.go`, a 1,116-line file, go away.
 - The aliases keep old rows and the tasks page working.
 
-**Q2. Should `maintenance.file-integrity-check` and `maintenance.orphan-book-files-cleanup` actually run nightly?** Their defs claim they do, and they never have.
+**Q2. Should `maintenance.file-integrity-check` and `maintenance.orphan-book-files-cleanup` actually run nightly?** *(D23: yes, both report-only; P1. D24: the other 12 stay off and are listed in §2.2 D.)* Their defs claim they do, and they never have.
 Recommended: yes, as TaskScheduler tasks inside the maintenance window. Both are report-only. *(Coordinator verified the orphan op cannot delete or modify `book_file` rows. Its only store access is the 3-method read interface `orphanFileScanner`, `delete:true` errors out, and no caller of `DeleteBookFilesByIDs` exists in either orphan op. Add `Permissions: settings.manage` to both defs in the same PR.)*
 
-**Q3. Batch poller: should it be an op every 5 minutes, or stay an inline loop?**
+**Q3. Batch poller: should it be an op every 5 minutes, or stay an inline loop?** *(D26: inline; delete the def. P12.)*
 Recommended: keep it inline as a v3 "service loop" and delete `maintenance.batch-poller`. 288 op rows a day add noise and no value.
 
-**Q4. Backup retention.** Today the scheduled cleanup deletes `.bak-*` files after `purge_soft_deleted_after_days`.
+**Q4. Backup retention.** *(D5: `backup_retention_days`, after comparing the two prod values. P3a.)* Today the scheduled cleanup deletes `.bak-*` files after `purge_soft_deleted_after_days`.
 Recommended: switch to `backup_retention_days`, as the twin does, and say so in the changelog. First check that the two values differ in prod; if they don't, nothing changes.
 
-**Q5. Table C near-duplicates.**
+**Q5. Table C near-duplicates.** *(D27: keep the newer op, one PR each, 2-week soak. Applied in §2.2 table C as P14a–f.)*
 Recommended: decide each one in its own small PR after P4. Default to keeping the newer op, which holds the scan stand-down, and moving the older job to `retiredOpIDs`.
+**Still open for the owner (Q5a):** pair C2. `scheduler.dedup-llm-review` is the newer ID by three days, but D4 retires the `scheduler.*` namespace. Recommended: `dedup.llm-review` survives and the scheduler ID becomes its alias, so D4 wins over the date. Say so, or pick the scheduler ID and accept one `scheduler.*` def outliving D4.
 
-**Q6. Should `operations.backfill-legacy-status` stay until the v1 keyspace is deleted?**
+**Q6. Should `operations.backfill-legacy-status` stay until the v1 keyspace is deleted?** *(D17: yes, until 01 P74 after 05 PR 4.)*
 Recommended: yes. Today it is a cheap regression detector.

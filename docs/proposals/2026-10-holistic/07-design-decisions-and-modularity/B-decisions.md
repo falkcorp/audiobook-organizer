@@ -1,7 +1,7 @@
 <!-- file: docs/proposals/2026-10-holistic/07-design-decisions-and-modularity/B-decisions.md -->
-<!-- version: 1.0.1 -->
+<!-- version: 1.1.0 -->
 <!-- guid: b0c07363-6f2d-4bd2-88ce-ee029d22e7b7 -->
-<!-- last-edited: 2026-10-08 -->
+<!-- last-edited: 2026-10-09 -->
 
 # Appendix B: decision register
 
@@ -777,6 +777,14 @@ and so on).**
 (repairs, the smallest), then measure lines removed and test runtime before
 doing the rest. Workstream 06 may already list the library; this decision is
 about the pattern.
+
+*(r4, 2026-10-09; owner D48 = pilot.)* The library is chosen in
+[C-server-state-library.md](C-server-state-library.md): **TanStack Query v5**
+(10.7 KB gzip measured, 1.7 % of the 636 KB of JS shipped). The Repairs lane's
+server-state code is 215 lines by reading (§1.2 there); the acceptance bar is at
+least 150 removed with its 22 tests green. SWR, RTK Query and an in-house
+zustand helper are compared there; RTK Query is excluded because the app runs
+zustand, not Redux.
 
 **Migration effort.** M per lane, so L in total.
 

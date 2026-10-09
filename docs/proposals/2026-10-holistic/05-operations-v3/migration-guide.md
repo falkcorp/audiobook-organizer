@@ -1,7 +1,7 @@
 <!-- file: docs/proposals/2026-10-holistic/05-operations-v3/migration-guide.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.1 -->
 <!-- guid: e8493f08-8cd4-4429-83ec-d6b6fd01e206 -->
-<!-- last-edited: 2026-10-08 -->
+<!-- last-edited: 2026-10-09 -->
 
 # Operations v3 — migration guide
 
@@ -41,7 +41,7 @@ ported family by family to native kinds, and the adapter is deleted when the las
 | v2 shape | how to recognise it | v3 kind | port notes |
 |---|---|---|---|
 | single function, `LivenessManual` or `LivenessNone`, no `RunItems` | 154 `manual` + 17 `none` in census `live` column | `ops.Task` | thread `rc.Context()` into blocking calls; `Uninterruptible` only with a reason and budget |
-| `RunItems` over a slice | 63 `run_items` in census | `ops.Batch` | move the loop body into `Item`; tallies → `rc.Count`; delete `Label` counters; delete hand `NewProgress`; pick `SourceOrder` |
+| `RunItems` over a slice | 63 `run_items` in census | `ops.Batch` | move the loop body into `Item`; tallies → `rc.Count`; delete `Label` counters; delete hand `NewProgress`; delete hand checkpoints (the chunk ledger replaces `CheckpointStateFn`); pick `SourceOrder`; make `Item` idempotent (a resume re-runs the unfinished chunks) |
 | `sdk.PageBooks` / paged walk | `grep -rn 'PageBooks(' internal` | `ops.Batch` with `Source.Pages` | keep the page size |
 | `opmode.ResolveDryRun` + per-row plan in the result | 26 files | `ops.Fixer` if a person picks rows; else `ops.Batch` with framework `Mode` | delete `dry_run`/`dryRun` params; preview is default |
 | `repairs.Fixer` | 19 fixers via 2 defs (`repairs.plan`/`apply`) | `ops.Fixer` | `Plan`+`Replan` → `Candidates`+`Load`+`Evaluate`; fingerprint inputs → `Row.Inputs`; `RetryFingerprint` deleted |
@@ -60,16 +60,29 @@ ported family by family to native kinds, and the adapter is deleted when the las
 - [ ] `Schedule` copied from the op's `TaskDefinition` **cadence as it runs today**, not from
       its declared cron (F1). A cron that differs from today's cadence is listed in the PR body
       and needs the owner's answer (parent §7 Q2) before it is switched on.
+- [ ] **D8:** if the op writes and its scheduled run writes **today** (the task passes a
+      live mode), the `Schedule` carries `.Live()`; if today's scheduled run is a preview
+      (the scheduler sends `{}`, e.g. `author-split-scan`, census §2.2), it stays a preview
+      and the PR body says so. `ValidateCatalog` refuses a scheduled writer with neither.
+- [ ] **D1:** `Permission` set explicitly (`settings.manage` for anything that writes or
+      deletes, unless the census row says editors use it today).
+- [ ] **D49:** if 07 has carved the op's domain package out of `internal/plugins/maintenance`,
+      the op moves into it in this same PR; an op is never moved twice. If the domain package
+      does not exist yet, the port PR creates it with the `Deps`/`Ops()` shape of
+      `sdk-api.md` §11.1.
+- [ ] `Item` idempotent for Batch/Fixer (chunk re-runs); `ChunkSize` left at the default
+      unless items take minutes (then lower it) and the PR body says why.
 - [ ] `LegacyResume` set if the def can have non-terminal migrated runs.
-- [ ] `opstest.Conformance(t, Def, params)` passes under `-race`.
+- [ ] `opstest.Conformance(t, Def, params)` passes under `-race`, including `CrashMidChunk`.
 - [ ] The op's ID is unchanged (or the old one is in `FormerIDs`); `op_ids.golden` untouched.
 - [ ] Any frontend caller of the op's old bespoke route is pointed at `/api/v3/ops/runs`.
+- [ ] Never port `maintenance.repair-library-state` (D41: frozen, API-only, never scheduled).
 
 ## 2. Compat shim period
 
 | item | during the shim | removed in |
 |---|---|---|
-| `registry.OperationDef` + `RegisterOp` | adapter onto the runtime; unchanged signature | PR 15 (a `v2compat` subset stays for the 5 frozen IDs) |
+| `registry.OperationDef` + `RegisterOp` | adapter onto the runtime; unchanged signature | PR 15 (a `v2compat` subset stays for the 4 frozen IDs) |
 | `pkg/plugin/sdk` | kept, re-pointed at the adapter; marked Deprecated | PR 15 |
 | `registry.RunItems` | kept for un-ported ops; gains a `Concurrency` default of 1 with a WARN per call naming the def, so the remaining sequential sites are visible on every run | PR 15 |
 | `opv2:op:` mirror rows | dual-written in the same batch | PR 16 |
@@ -85,33 +98,40 @@ the metadata apply family for last, when the runtime has carried the rest for we
 |---|---|---|---|
 | A | read-only reports and censuses (`*-report`, `*-audit`, `*-census`, `*-verify`) | 12 | no writes: proves Task/Batch, progress, schedule, generated UI with zero data risk |
 | B | housekeeping with a schedule (`scheduler.*`, `maintenance.purge-*`, `*-cleanup`, activity compaction, AI-journal prune) | 22 after the census twin merges | removes the TaskScheduler/cron duplication (F1, F24); census decides twin survivors |
-| C | `internal/maintenance` jobs | 37 | kills the context-value plumbing (F27) |
+| C | `internal/maintenance` jobs | 33 (37 − 4 D27 losers) | kills the context-value plumbing (F27) |
 | D | Repairs fixers | 19 fixers via 2 defs (`repairs.plan`/`apply`) | the Fixer kind's reference users; owner already uses this flow |
-| E | batch writers (acoustid, dedup scans, backfills, repoint/recover/mark-missing) | 115 | fence + journal + default concurrency pay off most here |
-| F | AI and metadata (`ai.*`, `metadata.*`, `library.bulk-metadata-fetch`, `metafetch.*`) | 16 | approval gate for bulk apply (F16); needs `applygate` as a Guard |
+| E | batch writers (acoustid, dedup scans, backfills, repoint/recover/mark-missing) | 113 (115 − 2 D27 losers) | fence + journal + default concurrency pay off most here |
+| F | AI and metadata (`ai.*`, `metadata.*`, `library.bulk-metadata-fetch`, `metafetch.*`) | 15 (16 − 1 D27 loser) | approval gate for bulk apply (F16); needs `applygate` as a Guard |
 | G | pipelines (`maintenance.window`, `maintenance.library-optimize`, `dedup.run-all`, identification pipeline if workstream 02 wants one) | — | needs every child already native |
 | H | `library.*` incl. `library.scan`, organize, import | 9 | last: scan stand-down, resume and the single scan key must behave the same under v3 |
 
-**Census hook (applied, census v1.1.0, 234 defs).** Before each wave's PRs are cut, re-read
-`ops-census.csv` and drop new `prune` rows. At census v1.1.0 the result is:
+**Census hook (applied, census v1.2.0, 234 defs, owner decisions D26/D27/D41 applied by r3).**
+Before each wave's PRs are cut, re-read `ops-census.csv` and drop new `prune` rows. At
+census v1.2.0 with the owner's answers the result is:
 
 | census verdict | ops | v3 handling |
 |---|---|---|
-| prune, twin (11) | `scheduler.{purge-deleted, temp-file-cleanup, trash-cleanup, tombstone-cleanup, db-optimize, cleanup-old-backups, metadata-refresh, author-split-scan, resolve-production-authors}`, `maintenance.{series-prune, series-normalize}` | not ported; merged by census PRs P4a-P4i **before** wave B; each ID becomes a `FormerIDs` alias on its survivor; survivor gains `Permissions: settings.manage` (R19) and the larger timeout |
+| prune, twin (11) | `scheduler.{purge-deleted, temp-file-cleanup, trash-cleanup, tombstone-cleanup, db-optimize, cleanup-old-backups, metadata-refresh, author-split-scan, resolve-production-authors}`, `maintenance.{series-prune, series-normalize}` | not ported; merged by census PRs P4a to P4f **before** wave B; each ID becomes a `FormerIDs` alias on its survivor; survivor gains `Permissions: settings.manage` (R19) and the larger timeout |
 | prune, retired stub (2) | `scheduler.isbn-enrichment`, `maintenance.isbn-enrichment` | not ported; ID → `internal/opscatalog/tombstones.go` (fails loudly) |
-| conditional (2) | `maintenance.batch-poller` (census Q3), `operations.backfill-legacy-status` (removed with the v1 keyspace, workstream 01) | stay on the adapter; never ported natively |
-| owner review (8, census §2.2 C) | near-duplicates | ported as-is only if the owner keeps both; otherwise the survivor only |
+| prune, D26 (1) | `maintenance.batch-poller` | deleted by census P12 (the inline loop stays as a service loop); tombstone |
+| prune, D27 (7) | the older op of each table-C pair: `maintenance.{author-dedup-scan, reconcile-scan}`, `scheduler.dedup-llm-review`, and the four jobs `maintenance.{cleanup-backups, fix-book-file-paths, repair-missing-files, bulk-fetch-metadata}` | not ported; the newer op (`dedup.author-scan`, `reconcile.scan`, the Repairs fixers' plan phase, `dedup.llm-review`, the table-A cleanup survivor, `mark-missing-files`, `missing-file-repoint`/`recover-missing-files`, `library.bulk-metadata-fetch`/`metadata.candidate-fetch`) is what ports; each loser → `retiredOpIDs` in its census Q5 PR after D27's 2-week soak. If a Q5 PR picks the other side of a pair, the family count moves by one but the total does not |
+| conditional (1) | `operations.backfill-legacy-status` (removed with the v1 keyspace, workstream 01 P74) | stays on the adapter; never ported natively |
+| frozen, D41 (1) | `maintenance.repair-library-state` | stays on the adapter, body untouched, API-only, never scheduled |
 | out of scope (2) | `library.bulk-write-back`, `maintenance.bulk-write-back` | stay on the adapter, bodies untouched (write-back ban) |
 
-So 18 of 234 defs are never ported natively: 13 are deleted (aliases/tombstones), and 5 stay on
-the frozen `v2compat` allowlist after PR 15 (the 2 conditionals, the 2 write-back ops, and
-`maintenance.repair-library-state` pending the owner). The other 216 port as measured in
-`implementation-briefs.md` PR 12A-H: A 12, B 22, C 37, D 2, E 115, F 16, G 3, H 9. Census F2's 14
+So **25 of 234** defs are never ported natively: **21** are deleted (11 aliases, 2 stub
+tombstones, 1 D26 tombstone, 7 D27 retirements) and **4** stay on the frozen `v2compat`
+allowlist after PR 15 (`backfill-legacy-status`, `repair-library-state`, the 2 write-back
+ops). The other **209** port in `implementation-briefs.md` PR 12A-H: A 12, B 22, C 33, D 2,
+E 113, F 15, G 3, H 9 (= 209; r3 recomputed from `ops-census.csv`: 234 − 13 − 1 − 7 − 4 = 209,
+and the D27 losers were subtracted from the v1.3.0 measured split by their `loc` file:
+4 in `internal/maintenance/jobs/` → C, `author.go` →
+E4, `reconcile.go` → E5, `extra_ops.go` → F). Census F2's 14
 cron-only defs are this guide's F1 list. Their `Schedule` is ported **disabled** until the owner answers
 parent Q2. The exception is `maintenance.file-integrity-check` and `maintenance.orphan-book-files-cleanup`,
-which census flags as report-only health checks that never run; the recommended answer is to
-switch those on. The census's 11 non-op background jobs (boot goroutines and similar) become
-v3 defs in their family's wave, with an enqueue-on-boot `Schedule` instead of a raw goroutine.
+which D23 switches on, report-only, inside the maintenance window. The census's 11 non-op
+background jobs (boot goroutines and similar) become v3 defs in their family's wave, with
+an enqueue-on-boot `Schedule` instead of a raw goroutine.
 
 ## 4. Persisted state
 

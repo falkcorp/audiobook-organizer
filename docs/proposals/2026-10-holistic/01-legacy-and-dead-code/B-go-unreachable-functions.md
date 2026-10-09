@@ -1,7 +1,7 @@
 <!-- file: docs/proposals/2026-10-holistic/01-legacy-and-dead-code/B-go-unreachable-functions.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: e9a08669-520b-4b1c-b381-a1f0e354c62c -->
-<!-- last-edited: 2026-10-08 -->
+<!-- last-edited: 2026-10-09 -->
 
 # Appendix B: Go functions unreachable from any main
 
@@ -124,7 +124,7 @@ Source: `deadcode ./...` (x/tools v0.51.0) at f7211eb39. Excludes `pkg/`, `inter
 | 29 | `internal/itunes/xml_export.go:46` | `encodeWindowsPathToURL` | B unwired (owner) |  |
 | 25 | `internal/download/deluge.go:53` | `DelugeClient.call` | B unwired (owner) |  |
 | 24 | `internal/download/sabnzbd.go:219` | `SABnzbdClient.ListCompleted` | B unwired (owner) |  |
-| 23 | `internal/ai/telemetry.go:29` | `WithOpenAISpan` | B unwired (owner) | T |
+| 23 | `internal/ai/telemetry.go:29` | `WithOpenAISpan` | B kept; wired by 11 PR 7 (D55) | T |
 | 23 | `internal/download/deluge.go:220` | `DelugeClient.ListCompleted` | B unwired (owner) |  |
 | 23 | `internal/download/qbittorrent.go:41` | `QBittorrentClient.Connect` | B unwired (owner) |  |
 | 22 | `internal/download/deluge.go:80` | `DelugeClient.Connect` | B unwired (owner) |  |
@@ -180,7 +180,7 @@ Source: `deadcode ./...` (x/tools v0.51.0) at f7211eb39. Excludes `pkg/`, `inter
 | 7 | `internal/download/qbittorrent.go:206` | `QBittorrentClient.UpdateStoragePath` | B unwired (owner) |  |
 | 7 | `internal/plugins/itunes/adapter.go:25` | `NewLoggerWrapper` | B unwired (owner) | T |
 | 7 | `internal/versions/swap.go:210` | `filePaths` | B unwired (owner) |  |
-| 6 | `internal/ai/telemetry.go:44` | `RecordOpenAIMetric` | B unwired (owner) | T |
+| 6 | `internal/ai/telemetry.go:44` | `RecordOpenAIMetric` | B kept; wired by 11 PR 7 (D55) | T |
 | 6 | `internal/itunes/itl_identity.go:75` | `FileSHA256Hex` | B unwired (owner) | T |
 | 6 | `internal/server/deluge_integration.go:44` | `NotifyDelugeAfterOrganize` | B unwired (owner) |  |
 | 6 | `internal/server/deluge_integration.go:51` | `NotifyDelugeAfterVersionSwap` | B unwired (owner) | T |

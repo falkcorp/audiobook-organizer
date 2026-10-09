@@ -1,13 +1,32 @@
 <!-- file: docs/proposals/2026-10-holistic/02-filter-identification-pipeline/D-review-filtering-memory.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 2e7b4c19-8d5a-4f63-a1e0-6c9d3b7f2a58 -->
-<!-- last-edited: 2026-10-08 -->
+<!-- last-edited: 2026-10-09 -->
 
 # D36: Review filtering, browser memory and server-side queries
 
 Analyst: `search`. This follows up on 02 Q7 and decision D36. Code was read on `main` at
 `5129e40e5`, read-only. All measurements use synthetic data on an M1 Max. No production
 calls were made.
+
+### Round-2 review (r2)
+
+- Accepted by the owner as **D36**; R0–R4 are now PRs 15–19 in the main doc §4 Phase 2b,
+  which carries the full file lists, tests, rollback and sizes. This appendix keeps the
+  measurements.
+- The incremental snapshot and bounded overlay the owner approved on 2026-10-02 **shipped**
+  before this review (`d9463d669`, `df23cbe95`; `metadata_cache_snapshot.go` v2.1.0). §2
+  below said "rebuilt incrementally" and that is right at HEAD; the dated memory note
+  calling it unbuilt is stale. R2 is therefore not blocked on a snapshot PR.
+- R0's measurement procedure and its record location are spelled out in PR 15; heap
+  snapshot files are never committed (they hold library titles).
+- R2's page response carries `generation`, and the result LRU is keyed by both the cache
+  and the book generation, so an `ids=all` list can never be applied against newer data
+  than the page it was counted on.
+- R3's flag is `review_metadata_server_query` in `config.go`, read through `api.getConfig()`,
+  the same pattern as `review_apply_enabled`.
+- Under server paging, every `refresh()` after an apply batch (seven call sites) becomes a
+  page-plus-facets refetch of about 130 KB, not a reload of the index.
 
 **The owner's question:** do not hold the whole review set in the browser, and use the
 fast in-memory store on the server.
@@ -112,8 +131,8 @@ snapshot already is one.
 **Caching.** No new cache is needed. The snapshot is the cache: it has generations and
 incremental rebuilds.
 
-- Add a small LRU of the last ~32 result ID lists, keyed by (snapshot generation, normalized
-  filter, sort).
+- Add a small LRU of the last ~32 result ID lists, keyed by (cache generation, book
+  generation, normalized filter, sort).
 - Paging, the count and "select all N" then reuse one evaluation.
 - Any write moves the generation, so a cached list never outlives the data.
 
@@ -157,12 +176,13 @@ snapshot plus the overlay:
 
 ### PRs
 
-**PR R0 (S): measure first.** Take Chrome heap snapshots of the Review tab at idle, after one
-refresh, and after 10 applies. Record retained `results` arrays.
+**PR R0 (S) = main doc PR 15: measure first.** Take Chrome heap snapshots of the Review tab
+at idle, after one refresh, and after 10 applies. Record retained `results` arrays. The exact
+measurements and the audit-note location are in PR 15.
 - Files: none in the repo. Results go in a note under `docs/audits/`.
 - Rollback: n/a.
 
-**PR R1 (S): slim the index view now.**
+**PR R1 (S) = PR 16: slim the index view now.**
 - Files: `internal/server/handlers/metadata_cache.go` (in the `indexView` branch, also clear
   `ScoreBreakdown`; and `CategoryTags` if the rail does not read it);
   `internal/server/handlers/metadata_cache_test.go` (assert the index rows carry no
@@ -171,12 +191,12 @@ refresh, and after 10 applies. Record retained `results` arrays.
 - Effect: about 2.2× less transferred and held (measured 103 MB → 47 MB of JSON at 40k rows).
 - Rollback: revert.
 
-**PR R2 (M): server-side review query.**
+**PR R2 (M) = PR 17: server-side review query.**
 - Files:
   - new `internal/server/handlers/metadata_cache_query.go` and `metadata_cache_query_test.go`:
     parse the filters (reusing `internal/querygrammar`), one pass over `snapshot.rows` with
     the overlay, sort, slice the page, compute facet counts, and an `ids=all` mode that
-    returns IDs only;
+    returns `{ids, total, generation}` only;
   - `internal/server/handlers/metadata_cache_snapshot.go`: precompute a lowered title on
     `snapshotRow` at build time, and add the result-list LRU keyed by snapshot generation;
   - `internal/server/handlers/metadata_cache.go`: route `view=page` to the new code;
@@ -186,7 +206,7 @@ refresh, and after 10 applies. Record retained `results` arrays.
   title-grammar conformance corpus (main doc PR 3) runs against this path.
 - Rollback: the old `view=index` stays served.
 
-**PR R3 (M): switch the Metadata lane to page mode.**
+**PR R3 (M) = PR 18: switch the Metadata lane to page mode, behind `review_metadata_server_query`.**
 - Files:
   - `web/src/services/api.ts`: `getReviewPage` and `getReviewMatchingIds`;
   - `web/src/components/review/lanes/useMetadataLane.ts`: replace the full-index load and
@@ -195,9 +215,9 @@ refresh, and after 10 applies. Record retained `results` arrays.
   - `web/src/components/review/QueueRail.tsx`: chip counts come from the server facets;
   - `web/src/components/review/ReviewWorkspace.tsx`: "select all N" uses the IDs call;
   - `web/src/components/review/lanes/useMetadataLane.test.ts`.
-- Rollback: a feature flag falls back to the index mode for one release.
+- Rollback: the flag off falls back to the index mode for one release.
 
-**PR R4 (S): retire the full-index mode** once R3 has run for one release.
+**PR R4 (S) = PR 19: retire the full-index mode** once R3 has run for one release.
 - Files: `useMetadataLane.ts`; the `indexView` path in `metadata_cache.go`.
 
 **Fallback, if the owner prefers to keep the browser approach for now:** ship R0 and R1

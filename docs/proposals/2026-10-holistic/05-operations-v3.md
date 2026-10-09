@@ -1,13 +1,35 @@
 <!-- file: docs/proposals/2026-10-holistic/05-operations-v3.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.1 -->
 <!-- guid: fe9f7129-1fc9-41d5-9d0c-1fec611d8147 -->
-<!-- last-edited: 2026-10-08 -->
+<!-- last-edited: 2026-10-09 -->
 
 # 05 — Operations v3
 
 Status: complete; census applied at 04 v1.1.0, design (07) hand-offs applied (analyst `opsv3`).
 
 > **Coordinator note (08, 2026-10-08).** Amended by the coordinator: F9's reader list is replaced by 01 M3's HEAD re-measure; R19 is scoped so adapted v2 defs cannot crash-loop startup; §3.9 gains the four requirements workstream 02 sent (they never reached this analyst); the fix-library-states risk row is corrected; and two port rules are added for wave 12E (existing `book_file` delete sites, and in-process audio decode). Details in `08-integrated-roadmap.md` §3.
+
+### Round-2 review (r3)
+
+Reviewed 2026-10-09.
+
+Owner decisions in `09-owner-decisions.md` applied as fixed; 02's three relayed gaps closed.
+
+- **D28a chunk leasing replaces the contiguous-prefix watermark** (`sdk-api.md` §5, `state-and-persistence.md` §2.1, `examples.md` Example 2 worked resume, `opstest.CrashMidChunk`). Invariant: every item is processed at least once; no completed chunk is processed twice. Ledger (bitmap / key-range list) in `opv3:ledger:`, written only by the runner's ledger goroutine; leases with worker id + heartbeat, never reassigned in-process; `ChunkSize` default 256.
+- **PartitionBy composes by partition-major chunking** (partition first, chunks never split a partition; hash-to-workers rejected because chunk membership would depend on the worker count). `PartitionBy` requires `Snapshot` (exception: `DirtySet`).
+- **Typed progress** gains `Failed`, `Chunks{done,total,size}` and `Workers[]` (chunk, item, index, heartbeat, stuck); PR 10's `ProgressView` renders one row per worker. `Summary` type defined (it was used by Example 2 but never declared).
+- **AppendOnly + chunks**: chunks cut from the cursor stream; the ledger records completed key ranges, so a deletion between runs cannot shift chunk membership; `Unordered` restarts from zero.
+- **D14d**: ops metrics are OTel instruments on the `internal/telemetry` meter (PR 2, PR 11 name each instrument and its exported Prometheus series); no new `client_golang` counters; details in 11.
+- **State machine cut from 12 to 10**: `pending` folded into `queued{wait_reason}` (readiness already needed that shape), `superseded` into `dropped{successor_id}` (v3 resume keeps the op id, so nothing v3 ever supersedes). `stopping`, `timed_out`, `interrupted`, `awaiting_decision` kept, each on an incident or live policy.
+- **Pipeline kind trimmed**: `PerSubject`/`FanOut`/`Gate` removed (0 users; 02 chose Batch over a dirty set; a Fixer Live run can only start from an approved plan, so no gate type is needed).
+- **Port counts recomputed after D26/D27/D41**: 209 ported (A 12, B 22, C 33, D 2, E 113, F 15, G 3, H 9), 21 pruned, 4 frozen; 234 total. Was 216/13/5.
+- **PR 3 is independent** (depends on nothing; wave 1): fence in `registry/fence.go`, key held until exit, zombie WARN after 10 min (D6); the `ops.zombies` gauge and alert follow in PR 2/11.
+- **D1/D44 preconditions on PR 5** (08 PR X2; 07 readiness R2-R4), **D8** `.Live()` rule in PR 8 and the port checklist, **D23** in PR 8, **D25** 30 days from 12H in PR 4/16, **D41** in 12E4 and PR 15, **D49** domain moves inside each wave; a landing order is stated at the top of the briefs.
+- **Examples fixed against the SDK**: `deps.Store` (forbidden by §11.1) → narrow `deps.Paths` / `deps.Files` / `deps.Books`; `ops.Books`, `ops.RiskLow`, `ops.ErrChangedSincePlan`, `Summary` now declared; `s.Skipped()` → field.
+- **02 gaps** (`sdk-api.md` §1.5): `DirtySet` clears by compare-and-delete on a mark epoch; `Budget` is a rate budget and does not model Google's day quota (02 keeps that planner); one 256-key page is one chunk; 02 PR 14's `Pages`/`Item`/`Finish`/`PartitionBy` names match, so wave 12F is a constructor swap.
+- Every brief now has files, tests, rollback, size and done-when.
+- *Proposed, not applied:* wrap the 2 write-back ops and `repair-library-state` as native Tasks over their untouched bodies so `v2compat` can be deleted in PR 15 (needs the owner's word on what "frozen" covers).
+- *Unresolved:* exact loser per D27 pair is decided in each census Q5 PR; the family counts above assume the table-C left column retires. 11 may rename the OTel instruments; the briefs follow 11 if so.
 
 Measured at HEAD `f7211eb39` in the worktree `aorg-holistic`. Every count below
 was taken with the command next to it. Paths are repo-relative.
@@ -18,12 +40,12 @@ was taken with the command next to it. Paths are repo-relative.
 - **Evolve the executor, replace the authoring surface** (§3.2). The registry's dispatcher, worker, resume and stand-down code carries 57 post-incident fixes. It stays in place and gains typed states, a fence and `opv3:` records. An adapter runs unported v2 defs on the same executor, so the `library.scan` key is never split.
 - **30 findings checked at HEAD** (§2.2). Among them: 14 cron-only schedules with no timer path (F1, census F2); four status classifiers that disagree (F2); a timeout recorded as a cancel (F3); writes after cancel and a slot freed while the goroutine still runs (F4, F5); 5 truly sequential `RunItems` calls (F7); and `oplint` dead and absent from CI (F29). The memory note "RootDir gates 105 ops" is stale; that gate is fixed (F8).
 - **Writes go through a fenced Writer:** fence → intent (write-ahead) → write → history, with "previous" captured inside the critical section and no delete method. Preview is structural, the default for every writer. Any writer can require an approved plan, stored on the run with the approver and a verified auth method (§3.5-3.6).
-- **One 12-state machine** is generated into Go and TypeScript. It includes `stopping` (holds the key until the goroutine exits), `timed_out` and `superseded`, and replaces the four classifiers (`state-and-persistence.md`).
-- **Batches are parallel by default** (`Concurrency` defaults to CPU). Counters belong to the runner. Resume legality comes from the source order (Snapshot/AppendOnly/Unordered), not from per-call opt-in (§3.7-3.8).
+- **One 10-state machine** is generated into Go and TypeScript. It includes `stopping` (holds the key until the goroutine exits) and `timed_out`, and replaces the four classifiers (`state-and-persistence.md`).
+- **Batches are parallel by default** (`Concurrency` defaults to CPU) and **resume by chunk leasing** (D28a): the source is cut into 256-item chunks leased to workers, a per-run ledger records finished chunks, and a resume re-leases only unfinished ones. Counters, leases, progress and partitioning belong to the runner; the author writes `Item`. Resume legality comes from the source order (Snapshot/AppendOnly/Unordered) (§3.7-3.8).
 - **One schedule declaration** replaces cron fields plus TaskScheduler entries. `maintenance.window` becomes a generated Pipeline. Census endpoints (exact totals) and timeline endpoints (time windows) have different names (§3.10-3.11).
 - **Registration fails early:** `oplint` is rewritten as `go/analysis` and runs in `make ci`. One catalog (`internal/opscatalog`) holds every op. Startup is refused for a ledger ID that resolves to nothing, an empty `Permission` (R19), or an ops `Deps` field typed as `database.Store` (R21). Ops wait for the store readiness signal (R20).
 - **Persisted state:** migration 065 adds `opv3:` with every op id unchanged. `opv2:` is dual-written until PR 16, so rollback means deploying the old binary. `ops export-v2` covers rollback after the mirror is removed.
-- **About 30 PRs:** PR 0-11 build the platform, waves 12A-H port ops family by family, and PR 13-16 retire the old paths. Waves begin with read-only reports and end with `library.*`. 216 of 234 defs are ported; 13 are deleted per the census, and 5 stay on a frozen `v2compat` allowlist (2 write-back ops under the ban, 2 census conditionals, `repair-library-state` pending the owner). iTunes op bodies stay untouched (`migration-guide.md` §3, `implementation-briefs.md`).
+- **About 30 PRs:** PR 0-11 build the platform, waves 12A-H port ops family by family, and PR 13-16 retire the old paths. Waves begin with read-only reports and end with `library.*`. 209 of 234 defs are ported; 21 are deleted (census prunes plus D26 and D27), and 4 stay on a frozen `v2compat` allowlist (2 write-back ops under the ban, `backfill-legacy-status` until 01 P74, `repair-library-state` per D41). iTunes op bodies stay untouched (`migration-guide.md` §3, `implementation-briefs.md`).
 
 ## 2. Findings
 
@@ -229,12 +251,13 @@ struct literal), so a default can change without touching 234 call sites.
 
 ### 3.4 State machine
 
-Twelve states, one table, one transition function, CAS on `(state, attempt, fence_epoch)`
+Ten states, one table, one transition function, CAS on `(state, attempt, fence_epoch)`
 (`state-and-persistence.md` §1). New compared with v2: `stopping` (a stop was requested and
-the goroutine is still alive; slot and key still held; writes refused), `timed_out`
-(distinct from `canceled`), `superseded` (closed in favor of a successor), and
-`awaiting_decision` as a named state instead of `interrupted_ask`. Every transition is logged
-to `opv3:evt:`.
+the goroutine is still alive; slot and key still held until it exits, with a WARN and the
+`ops.zombies` alert after 10 minutes — D6), `timed_out` (distinct from `canceled`), and
+`awaiting_decision` as a named state instead of `interrupted_ask`. `waiting_deps` becomes
+`queued` with a `wait_reason` (deps, readiness, pause), and v2's requeue rows become
+`dropped` with a `successor_id`. Every transition is logged to `opv3:evt:`.
 
 ### 3.5 Writes: fence first, then intent → write → history
 
@@ -278,35 +301,45 @@ the same fence/intent/history steps around an op-supplied function.
 ### 3.7 Concurrency and partitioning
 
 `Batch` and `Fixer` default to `CPU()` workers. `Network(n, why)` for rate-limited backends,
-`Sequential(why)` when order matters, `FromParam` for operator tuning. `PartitionBy` routes
-items with the same key to one worker in source order; the Fixer default is the row id. The
-`Label` callback receives the item only, and counters are runner-owned atomics, so the v2
-Label race (CLAUDE.md) has nothing left to race on. `opstest` runs every Batch with at least
-4 workers under `-race`.
+`Sequential(why)` when order matters, `FromParam` for operator tuning. Work is handed out as
+**chunks** (default 256 items, `ChunkSize` per def) leased to workers; `PartitionBy` groups
+the frozen snapshot by key and cuts chunks that never split a partition, so items with the
+same key run on one worker in source order (the Fixer default is the row id). The `Label`
+callback receives the item only, and counters are runner-owned atomics merged by the single
+ledger goroutine, so the v2 Label race (CLAUDE.md) has nothing left to race on. `opstest`
+runs every Batch with at least 4 workers under `-race` and with `ChunkSize` 1, 3 and default.
 
-### 3.8 Resume
+### 3.8 Resume (D28a: chunk leasing)
 
 Resume keeps the op id in every policy (`sdk-api.md` §5). For `Batch` and Fixer apply the
-runner freezes the item keys at start (`opv3:snap:`) and resumes from the contiguous
-watermark (the v2 `completionTracker` algorithm, `run_items.go:113-140`), so every whole-library
-batch is resumable by default (today 171 of 234 defs drop on restart, F30). A source declared
-`Unordered` (the activity digest-tier shape, F11) restarts from zero; `ValidateCatalog`
-refuses `ResumeContinue` on it. `library.scan`'s own resume, quiesce and stand-down semantics
-are carried over unchanged; a deploy still resumes it, and a deploy is still the owner's call.
+runner freezes the item keys at start (`opv3:snap:`), cuts them into chunks and records each
+finished chunk in a per-run ledger (`opv3:ledger:`, a bitmap for snapshots, a completed
+key-range list for `AppendOnly` streams). A resume re-leases only the chunks the ledger does
+not record, including those that were in flight at the crash; items of a partial chunk run
+again, which is why `Item` must be idempotent; a finished chunk is never re-run. **Invariant:
+every item is processed at least once; no completed chunk is processed twice.** Progress
+(chunks done/total, items done/total, per-worker chunk and item, items/s, ETA, failed) is
+read from the same ledger and lease table, so status is always visible. This makes every
+whole-library batch resumable by default (today 171 of 234 defs drop on restart, F30)
+without the first draft's contiguous-prefix watermark, which would have redone every item
+above the slowest worker. A source declared `Unordered` (the activity digest-tier shape,
+F11) restarts from zero; `ValidateCatalog` refuses `ResumeContinue` on it. `library.scan`'s
+own checkpoint, resume, quiesce and stand-down semantics are carried over unchanged; it is
+not a chunked Batch; a deploy still resumes it, and a deploy is still the owner's call.
 
 ### 3.9 Pipelines
 
 `Pipeline` stages name child defs, `After` dependencies, a typed `Params` builder from earlier
-stage results, optional `PerSubject` fan-out bounded by `FanOut`, optional `Gate` (approval
-before a stage) and `OnFail`. The parent's liveness and progress are derived from its
+stage results and `OnFail` (r3 removed `PerSubject`/`FanOut`/`Gate`: no user; see
+`sdk-api.md` §1.4). The parent's liveness and progress are derived from its
 children (absorbing `childop.Follow`), so a parent is neither reaped while a child is healthy
 nor kept alive by a wedged one. Standing per-subject prerequisites (`Requires`, `op:deprev:`,
 `op:completion:`) carry over as `ops.AfterFor` / `ops.FieldSet`.
 
 **Workstream 02's four requirements (relayed by the coordinator, 2026-10-08; 02 §6 could not reach this analyst):**
 1. *Per-subject data prerequisites for stages.* **Met** by `AfterFor` / `FieldSet` plus Pipeline `After`.
-2. *A durable per-subject dirty-set source.* **Not met at v1.1.0.** Add `ops.DirtySet(prefix)`: a `Source` whose `Pages` drains `<prefix><subjectID>` keys (the `idx:sidx:dirty:` pattern), `Order: Unordered` (re-marks can land below the cursor), and whose items are cleared only after `Item` succeeds. `identification.advance` is then a **Batch** over the dirty set with `Schedule.Every`, not a `PerSubject` Pipeline: about 11k child rows would bring back the batch-poller noise problem.
-3. *Per-provider budget shared across ops.* **Partly met already, outside the SDK.** `internal/metadata/throttle_registry.go` is process-wide and evaluated at call time, but it is a hold-off for errors, not a rate budget. Add one `ops.Budget("audible")` declaration that names the existing provider limiter, so the dispatcher can see contention. Do not add a second limiter.
+2. *A durable per-subject dirty-set source.* **Met (`sdk-api.md` §1.5).** `ops.DirtySet(prefix, load)`: a `Source` whose `Pages` drains `<prefix><subjectID>` keys (the `idx:sidx:dirty:` pattern) 256 at a time, `Order: Unordered` (re-marks can land below the cursor). An entry is cleared after `Item` succeeds **by compare-and-delete on its mark epoch**, so a subject re-marked while in flight stays dirty (02 §6 gap 1). One page is one D28a chunk (gap 3). `identification.advance` is a **Batch** over the dirty set with `Schedule.Every`, and 02 PR 14 is already written in that shape (`Pages`/`Item`/`Finish`, `PartitionBy` book id) on the v2 adapter, so its 12F port is a constructor swap.
+3. *Per-provider budget shared across ops.* **Met for rate, not for day quotas.** `ops.Budget("audible")` names the existing process-wide limiter (`internal/metadata/throttle_registry.go`) so the dispatcher can see contention; it is a per-second / in-flight budget. It does **not** model Google Books' 1,000-calls-per-day quota; 02 keeps its day-quota planner and nothing in 05 should be expected to replace it (02 §6 gap 2). No second limiter is added.
 4. *A "surfaced" terminal state per subject, with a reason, countable in the UI.* **Assigned to 02's `ident` index** (`ident_reason`), not to run state. A Batch item that ends surfaced reports `Skip(reason)`. The countable number lives in the book index, where the goal count also lives.
 
 02 PR 14 ships **first as a v2 op with its own dirty set** (02's stated fallback), so the metadata goal does not wait for this platform. It is ported to the v3 Batch in wave 12F.
@@ -331,16 +364,21 @@ copies the cadence the op runs on today; a declared cron that does not run today
 
 ### 3.11 Observability
 
-**Metrics** (Prometheus, `internal/metrics`), labels limited to `def` and `outcome` to bound
-cardinality:
+**Metrics** are **OpenTelemetry instruments on the `internal/telemetry` meter** (D14d),
+which the existing Prometheus reader already exports on `/metrics`; the table shows the
+exported series names, and the briefs (PR 2, PR 11) give the OTel instrument for each.
+No new `client_golang` counters; the four existing ones in `internal/metrics/metrics.go`
+move when next touched (see 11). Labels limited to `def` and `outcome`/`result`/`state` to
+bound cardinality:
 
 | metric | type | answers |
 |---|---|---|
 | `ops_runs_total{def,outcome}` | counter | outcome = succeeded/failed/canceled/timed_out/dropped/interrupted |
 | `ops_run_duration_seconds{def,outcome}` | histogram | |
 | `ops_runs{def,state}` | gauge from `opv3:meta:counts` | **census**: how many runs are in each state now |
-| `ops_inflight{def}` / `ops_zombies{def}` | gauge | is anything stuck in `stopping` |
+| `ops_inflight{def}` / `ops_zombies{def}` | gauge | is anything stuck in `stopping` (alert at 10 min, D6) |
 | `ops_items_total{def,result}` | counter | ok / failed / skipped |
+| `ops_chunks_total{def,result}` / `ops_worker_stuck{def}` | counter / gauge | chunks done vs re-run after resume; workers with a stale heartbeat |
 | `ops_item_duration_seconds{def}` | histogram | per-item latency |
 | `ops_last_progress_age_seconds{def}` | gauge | the watchdog's view, exported |
 | `ops_checkpoint_age_seconds{def}` | gauge | how much a restart would redo |
@@ -412,10 +450,10 @@ the table is the index.
 |---|---|---|---|---|
 | 0 | Docs truth pass for operations | `docs/AI-REFERENCE.md`, `internal/operations/registry/types.go` (header), `docs/development/writing-a-plugin.md` | S | — |
 | 1 | Typed run state table + generated TS | `internal/operations/state/*` (new), `internal/database/pebble_store_ops_v2.go`, `internal/operations/registry/{registry,legacy_op_status,retry}.go`, `tools/cmd/opsgen/main.go` (new), `web/src/generated/ops.ts` (new), `web/src/services/api.ts`, `Makefile` | M | 0 |
-| 2 | `timed_out` status and lifecycle metrics | `internal/operations/registry/worker.go`, `internal/metrics/metrics.go`, `internal/operations/state/*`, `deploy/prometheus/alert-rules.yml` | S | 1 |
-| 3 | Fence + hold the exclusive key until exit; per-row cancel in Repairs apply | `internal/operations/registry/{worker,registry,reporter_db,scan_standdown}.go`, `internal/repairs/{engine,writer}.go` | M | 1 |
-| 4 | `opv3:` keyspace, migration 065, v2 mirror | `internal/database/{iface_ops_v3,pebble_store_ops_v3,migrations,keyfamilies,pebble_store_ops_v2}.go` | L | 1 |
-| 5 | `pkg/ops` SDK + Batch runner + adapter | `pkg/ops/*` (new), `internal/operations/registry/{v3_adapter,batch_runner}.go` (new), `internal/operations/opswriter/*` (new), `internal/repairs/writer.go` | L | 3, 4 |
+| 2 | `timed_out` status and lifecycle metrics (OTel, D14d) | `internal/operations/registry/{worker,otel_metrics}.go`, `internal/operations/state/*`, `deploy/prometheus/alert-rules.yml` | S | 1 (lands after 4, see brief) |
+| 3 | Fence + hold the exclusive key until exit (D6); per-row cancel in Repairs apply | `internal/operations/registry/{fence,worker,registry,reporter_db,scan_standdown}.go`, `internal/repairs/{engine,writer}.go` | M | — (wave 1, independent) |
+| 4 | `opv3:` keyspace incl. chunk ledger, migration 065, v2 mirror | `internal/database/{iface_ops_v3,pebble_store_ops_v3,migrations,keyfamilies,pebble_store_ops_v2}.go` | L | 1 |
+| 5 | `pkg/ops` SDK + chunk-leasing Batch runner (D28a) + Writer + adapter | `pkg/ops/*` (new), `internal/operations/registry/{v3_adapter,batch_runner,chunk_ledger}.go` (new), `internal/operations/opswriter/*` (new), `internal/repairs/writer.go` | L | 3, 4, 08 PR X2 (D1), 07 readiness R2-R4 (D44) |
 | 6 | `opstest` harness + Conformance | `pkg/ops/opstest/*` (new) | M | 5 |
 | 7 | One catalog, rewritten `oplint`, startup ledger check | `internal/opscatalog/*` (new), `tools/cmd/oplint/*`, `internal/server/{server,op_registrars,server_lifecycle}.go`, `internal/plugins/plugins.go`, `internal/plugins/plugins_wiring_test.go`, `Makefile` | M | 5 |
 | 8 | Single scheduler source + cron evaluator | `internal/scheduler/{scheduler,tasks,maintenance}.go`, `internal/scheduler/cron.go` (new), `go.mod` | M | 5 |
@@ -426,7 +464,7 @@ the table is the index.
 | 13 | Retire `internal/maintenance` job framework + `maintenance.job` op | `internal/maintenance/**`, `internal/server/maintenance_job_op.go`, `internal/server/maintenance_dispatcher.go` | M | 12C |
 | 14 | Retire `repairs.plan`/`repairs.apply` + `/api/v1/repairs` | `internal/plugins/maintenance/repairs_ops.go`, `internal/server/wire_repairs_routes.go`, `internal/server/handlers/repairs/**`, `internal/repairs/engine.go` | M | 12D, 10 |
 | 15 | Delete adapter, `pkg/plugin/sdk`, legacy `RunItems`, `TaskDefinition` | `internal/operations/registry/{v3_adapter,run_items,types}.go`, `pkg/plugin/sdk/**`, `internal/scheduler/tasks.go`, `tools/cmd/sdkguard/**` | L | 12A-H |
-| 16 | Remove the `opv2:` mirror; ship `ops export-v2` | `internal/database/pebble_store_ops_v3.go`, `cmd/ops_export.go` (new) | S | 15 + soak (Q4) |
+| 16 | Remove the `opv2:` mirror; ship `ops export-v2` | `internal/database/pebble_store_ops_v3.go`, `cmd/ops_export.go` (new) | S | 15 + 30 days after 12H (D25) |
 
 Retiring the `opv2:`/v1 key families after the soak is workstream 01's PR, not listed here.
 
@@ -444,7 +482,8 @@ Retiring the `opv2:`/v1 key families after the soak is workstream 01's PR, not l
 | never run fix-library-states | *Coordinator:* the `fix-library-states` maintenance job was **deleted** on 2026-09-10, and `internal/maintenance/jobs/fix_library_states_test.go` pins its absence. Nothing ports it. `maintenance.repair-library-state` is a different op: dry-run by default, API-only, with an evidence gate (`OrganizedFileHash`) and an iTunes exclusion. It stays on the frozen allowlist with no schedule, and porting it is owner decision 08 §7. |
 | owner-manual franchise rule and iTunes path guard on fixers | carried over as framework Guards from `internal/repairs/guards.go` |
 | AudioBooth (Swift, external) may call `/api/v1/operations/*` | v1 endpoints stay as adapters until checked (Q6) |
-| zombie holds a key forever | `ops_zombies` alert after 10m; the UI offers restart; a restart clears it (boot sweep → `interrupted{crash}`) |
+| zombie holds a key forever | D6: the key is held until the goroutine exits, never freed on a timer; WARN log and `ops_zombies` alert after 10m; the UI offers restart; a restart clears it (boot sweep → `interrupted{crash}`) |
+| a resume redoes hours of finished work, or skips an item | chunk ledger (D28a): finished chunks never re-run, unfinished ones always do; `CrashMidChunk` in Conformance proves both for every Batch/Fixer |
 | migration 065 slows boot | batched 500, progress logged per 10k; PR 0 adds the `opv2:` row count to the db census so the cost is known before PR 4 ships |
 | a port silently changes a schedule | port checklist: today's cadence is copied; declared crons that never ran stay disabled until Q2 |
 | more parallelism exposes races in op bodies | Conformance runs ≥4 workers under `-race`; ops with shared state must partition or declare `Sequential(why)` |
@@ -464,7 +503,7 @@ Retiring the `opv2:`/v1 key families after the soak is workstream 01's PR, not l
   the 13 high-confidence prunes (11 twins → `FormerIDs` aliases on the survivor; 2 ISBN stubs
   → `retiredOpIDs`/tombstones) are **not ported**; the 2 conditional ones
   (`maintenance.batch-poller`, `operations.backfill-legacy-status`) stay on the adapter until
-  their condition resolves; the 8 table-C near-duplicates wait for the owner. Census P4a-P4i
+  their condition resolves; the 7 table-C near-duplicate pairs (C1 to C7) are decided by D27 (6 P14 PRs plus P3b; C2 is pending D54). Census P4a to P4f
   (twin merges, carrying `Permissions: settings.manage` to the survivor) land **before**
   wave 12B. Census F2 (14 cron-only defs) is this doc's F1. The 11 non-op background jobs the
   census converts become v3 defs in the wave of their family.
@@ -480,6 +519,11 @@ Retiring the `opv2:`/v1 key families after the soak is workstream 01's PR, not l
 
 ## 7. Open questions for the owner
 
+*r3: the owner answered these in `09-owner-decisions.md`: Q2 → D23/D24, Q3 → D28/D28a,
+Q4 → D25 (30 days after the last wave), Q5 → D8, Q8 → D28a (chunk ledger, not watermark),
+Q10 → D28, Q11 → D6. Q1, Q6, Q7 and Q9 keep the recommended answer unless the owner says
+otherwise. The table is kept for the record.*
+
 | Q | question | recommended answer |
 |---|---|---|
 | Q1 | Keep the SDK public at `pkg/ops`, or make it `internal/ops`? No external plugin exists. | `pkg/ops`: keeps the plugin story open at no cost; the guard is the linter, not the path. |
@@ -489,7 +533,7 @@ Retiring the `opv2:`/v1 key families after the soak is workstream 01's PR, not l
 | Q5 | Scheduled writers must declare `.Live()`; otherwise a scheduled run is a preview. OK? | Yes; it is the 2026-09-25 rule applied to schedules. |
 | Q6 | Keep `/api/v1/operations/*` as adapters until AudioBooth is checked? | Yes; delete only after AudioBooth's calls are listed. |
 | Q7 | A re-save that changes no tracked field (e.g. an index rebuild): history row or not? | No history row; the intent and its clear are still recorded. |
-| Q8 | Switch whole-library batches from "drop on restart" to "resume from watermark" as they are ported? | Yes, per def in its port PR, listed in the PR body; `library.scan` resume rules stay as they are. |
+| Q8 | Switch whole-library batches from "drop on restart" to "resume from the chunk ledger" as they are ported? | Yes (D28a), per def in its port PR, listed in the PR body; `library.scan` resume rules stay as they are. |
 | Q9 | Should manual bulk metadata apply require an approved plan (Approval), while the nightly metadata upgrade keeps running on `applygate` alone? | Yes. |
 | Q10 | Drop subprocess isolation (`Isolate`, 0 users)? | Yes. |
 | Q11 | Hold a zombie's exclusive key until its goroutine exits (safe) instead of freeing it after 5s (today)? | Yes, with the 10-minute zombie alert and restart as the way out. |

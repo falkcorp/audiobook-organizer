@@ -1,11 +1,13 @@
 <!-- file: docs/proposals/2026-10-holistic/03-dedup-page-retirement/A-endpoint-inventory.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 5e2c7a90-1d4b-4f63-a8e7-c03b9d6f1a24 -->
-<!-- last-edited: 2026-10-08 -->
+<!-- last-edited: 2026-10-09 -->
 
 # Appendix A: endpoint inventory of the old /dedup page
 
 Parent: [`../03-dedup-page-retirement.md`](../03-dedup-page-retirement.md). Measured at HEAD `f7211eb39`.
+
+**Round-2 (r1, 2026-10-09).** Re-checked at HEAD `ebda30d47` (code identical to `f7211eb39`). No verdict changed. Two cross-references added: (1) the "dead after G8" rows for `/operations/reconcile/scan/latest` and `POST /operations/reconcile` depend on 04 D27 keeping a reconcile op that still saves results (main doc §3.2 G8 note); (2) `POST /dedup/reset-acoustid` enqueues `acoustid.reset-all` then `acoustid.fingerprint-rescan` (`handlers/dedup/handler.go:2286-2292`), which under D2 is Mac-worker work, so its G5 reuse carries the risk noted in the main doc §5.
 
 ## A.1 Method
 

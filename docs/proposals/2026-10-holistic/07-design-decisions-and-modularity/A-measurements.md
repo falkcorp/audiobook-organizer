@@ -1,7 +1,7 @@
 <!-- file: docs/proposals/2026-10-holistic/07-design-decisions-and-modularity/A-measurements.md -->
-<!-- version: 1.0.1 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 85d4dbee-1393-4289-a567-f958cc02ccd7 -->
-<!-- last-edited: 2026-10-08 -->
+<!-- last-edited: 2026-10-09 -->
 
 # Appendix A: measurements behind workstream 07
 
@@ -80,6 +80,93 @@ AST flattening of embedded interfaces in `internal/database/*.go`
 | BookStore | 62 | 5 |
 | BookFileStore | 46 | 8 |
 | OpsV2Store | 39 | 8 |
+
+*(r4, 2026-10-09)* Re-measured at `ebda30d47` with the program below (same
+numbers: Store 455, catalogStore 130, operationsStore 97, mediaStore 77,
+enrichmentStore 65, accountStore 44, platformStore 42, BookStore 62,
+BookFileStore 46, OpsV2Store 39; 0 methods from other packages). Run it from any
+scratch directory as `go run flatten.go <repo>/internal/database Store catalogStore …`;
+07-G1 turns it into `internal/database/store_width_test.go`.
+
+```go
+package main
+
+import (
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
+	"sort"
+	"strings"
+)
+
+func main() {
+	dir := os.Args[1]
+	fset := token.NewFileSet()
+	pkgs, err := parser.ParseDir(fset, dir,
+		func(fi os.FileInfo) bool { return !strings.HasSuffix(fi.Name(), "_test.go") }, 0)
+	if err != nil {
+		panic(err)
+	}
+	ifaces := map[string]*ast.InterfaceType{}
+	for _, p := range pkgs {
+		for _, f := range p.Files {
+			for _, d := range f.Decls {
+				gd, ok := d.(*ast.GenDecl)
+				if !ok {
+					continue
+				}
+				for _, s := range gd.Specs {
+					if ts, ok := s.(*ast.TypeSpec); ok {
+						if it, ok := ts.Type.(*ast.InterfaceType); ok {
+							ifaces[ts.Name.Name] = it
+						}
+					}
+				}
+			}
+		}
+	}
+	var flatten func(name string, seen map[string]bool) map[string]bool
+	flatten = func(name string, seen map[string]bool) map[string]bool {
+		out := map[string]bool{}
+		it, ok := ifaces[name]
+		if !ok || seen[name] {
+			return out
+		}
+		seen[name] = true
+		for _, m := range it.Methods.List {
+			if len(m.Names) > 0 {
+				for _, n := range m.Names {
+					out[n.Name] = true
+				}
+				continue
+			}
+			switch t := m.Type.(type) {
+			case *ast.Ident: // embedded interface from this package
+				for k := range flatten(t.Name, seen) {
+					out[k] = true
+				}
+			case *ast.SelectorExpr: // embedded interface from another package
+				out["<external:"+t.Sel.Name+">"] = true
+			}
+		}
+		return out
+	}
+	names := os.Args[2:]
+	sort.Strings(names)
+	for _, n := range names {
+		m := flatten(n, map[string]bool{})
+		ext := 0
+		for k := range m {
+			if strings.HasPrefix(k, "<external") {
+				ext++
+			}
+		}
+		fmt.Printf("%s\t%d methods (%d from other packages)\n", n, len(m), ext)
+	}
+}
+```
 
 The same script run on `a0312c104` (2026-08-19, the end of the sweep; non-test
 files extracted read-only with `git show` into the scratchpad) gives 398, which
@@ -185,3 +272,69 @@ Compile time alone for the test binary, warm cache (`go test -run '^$'`): intern
   - Interface Width Ratchet: "baseline=0 actual=1";
   - Repo Guards;
   - Go Tests.
+
+## A.9 CI throughput (r4, measured 2026-10-09)
+
+`gh run list --workflow ci.yml --limit 12 --json databaseId,status,conclusion,event,headBranch,createdAt,updatedAt`
+(duration = `updatedAt - createdAt`):
+
+| Run | Event | Branch kind | Wall | Conclusion |
+|---|---|---|---:|---|
+| 37865901335 | push | `main` (docs-only merge) | 45 min | failure |
+| 37865893192 | pull_request | docs-only PR | 22 min | failure |
+| 37843473291 | push | `main` | 39 min | failure |
+| 37843467591 | pull_request | feature | 24 min | failure |
+| 37810595550 | push | `main` | 48 min | failure |
+| 37810591463 | pull_request | feature | 19 min | failure |
+| 37731107628 | push | `main` | 4 min | cancelled (superseded) |
+| 37731105360 | pull_request | feature | 24 min | failure |
+| 37731107628 and older | | | | all failure or cancelled; 0 successes in 12 |
+
+Per-job wall on the docs-only PR run `37865893192` (`gh run view --json jobs`,
+all 16 jobs started together at 00:39:39 UTC, no queueing):
+
+| Job | Minutes | Result |
+|---|---:|---|
+| Coverage Floor (PR gate) (`make test-short`, `-race -coverprofile`) | 22.7 | failure (slog guard test) |
+| Minimal CI / Go Tests (short, race) (`go test -short -race ./...`) | 19.3 | failure (slog guard test) |
+| Fixture Tests 1/3, 2/3, 3/3 | 6.7, 9.3, 8.5 | success |
+| Minimal CI / Go Vet & Build | 5.0 | success |
+| Minimal CI / Frontend Unit Tests | 3.8 | success |
+| Mock Freshness | 3.1 | success |
+| Repo Guards (`make fmt-check` and others) | 3.5 | failure (`internal/database/ops_v2_recent_test.go` not gofmt-clean) |
+| Errcheck Ratchet | 2.9 | failure (779 → 770, baseline not lowered) |
+| Super Linter (advisory), Frontend Lint & Build, Go Lint | 1.8, 1.5, 1.2 | success |
+| Interface Width Ratchet | 0.9 | failure (`iface_bookfile.go:54`, 9 methods) |
+| TODO Fragment Headers | 0.1 | success |
+
+So the PR's wall time is the two full short-test runs, which run the same
+suite twice in parallel. The `main` run `37865901335` for the same commit shows
+the second cost: its 11 passing jobs started at 00:39:45 and its 5 failing jobs
+restarted at 01:02:43, which is `auto-revert.yml`'s "one free re-run" of the
+failed jobs (`auto-revert.yml:85-97`, `gh run rerun --failed`), adding 23 min.
+
+Why `main` is red, from `gh run view 37865893192 --log-failed` (all four
+inherited, none caused by the PR):
+
+1. `make fmt-check` → `internal/database/ops_v2_recent_test.go` (`gofmt -l`
+   lists it locally too with go1.27.1; unformatted since `300d26dd3`,
+   2026-10-06).
+2. `TestGuard_NoDirectSlogCalls` (`internal/logger/slog_guard_test.go:61`): 10
+   files "not on the ratchet" or over their allowance, plus
+   `internal/itunes/library_watcher.go: ratchet allows 2, file now has 0`, a
+   two-way failure on an improvement. This single test fails both the Go Tests
+   job and the Coverage Floor job.
+3. Errcheck Ratchet: 779 → 770, two-way.
+4. Interface Width Ratchet: `internal/database/iface_bookfile.go:54:23` has 9
+   methods (`interfacebloat` limit 8), baseline 0.
+
+Other inputs to 07-C2/C3: `ci.yml` has no `paths` filter (`frontend-ci.yml`,
+`e2e.yml`, `memory-leak-scan.yml` do); the reusable
+`falkcorp/github-common/.github/workflows/reusable-ci-minimal.yml` exposes
+`run-frontend` but no input to skip its Go test job (inputs read via
+`gh api repos/falkcorp/github-common/contents/...` on 2026-10-09); `make
+test-short` runs `go test ./... -short -race -coverprofile=coverage.out
+-covermode=atomic -timeout 25m` (`Makefile:269-272`); the fixture job already
+shards by measured package weight (`scripts/ci/fixture_test_packages.py`).
+Test counts in the two slow packages: `internal/plugins/maintenance` 182
+`_test.go` files, 1,589 `func Test`; `internal/server` 272 files, 1,397.
