@@ -332,19 +332,21 @@ jobs:
         with:
           submodules: recursive
 
-      # Pinned to the exact patch, unlike every other job's floating '1.27':
+      # setup-go keeps the floating '1.27' like every other job (the toolchain
+      # drift check in scripts/check_toolchain_versions.py requires it), but the
+      # two mockery steps below run under GOTOOLCHAIN=go1.27.1, the Makefile pin:
       # mockery v3.8.0 (the newest release on 2026-10-09) vendors an x/tools
       # that reads export data up to format version 4, and go1.27.2 writes
       # version 5, so under 1.27.2 it fails every package with "could not
       # import fmt ... export data version 5 is greater than maximum supported
       # version 4" (ci.yml run 37886715226, the first after setup-go started
-      # resolving '1.27' to 1.27.2). Return this to '1.27' when a mockery
-      # release reads version 5; the golangci-lint jobs already moved to
-      # v2.14.0 for the same reason and float again.
+      # resolving '1.27' to 1.27.2). Drop the two env lines when a mockery
+      # release reads version 5; the golangci-lint jobs moved to v2.14.0 for
+      # the same reason and need no pin.
       - name: Set up Go (no built-in cache)
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.27.1'
+          go-version: '1.27'
           cache: false
 
       - name: Restore Go cache (manual)
@@ -370,6 +372,8 @@ jobs:
       # overwrites the previous one), so v2 cannot regenerate this repo's
       # mocks at all. Do not downgrade this pin to v2.
       - name: Install mockery
+        env:
+          GOTOOLCHAIN: go1.27.1
         run: go install github.com/vektra/mockery/v3@v3.8.0
 
       # `git diff` compares the working tree against the INDEX, so it is blind
@@ -380,6 +384,8 @@ jobs:
       # --porcelain` lists untracked entries (as `??`) alongside modified ones,
       # so it sees both halves of "stale".
       - name: Check mockery mocks are fresh
+        env:
+          GOTOOLCHAIN: go1.27.1
         run: |
           set -e
           mockery
