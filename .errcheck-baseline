@@ -1,7 +1,7 @@
 # file: .errcheck-baseline
-# version: 1.6.0
+# version: 1.7.0
 # guid: 7a4d1e92-3f6b-4c85-9a02-1e6b8d4f2c73
-# last-edited: 2026-10-07
+# last-edited: 2026-10-09
 
 # The number of `errcheck` findings tolerated in the tree. This is a RATCHET,
 # exactly like .interface-width-baseline: CI fails if the count goes UP, and
@@ -77,4 +77,5 @@
 # mutators, safe-write, rebuild/relocate/cleanup writers and their cmd tools
 # were deleted along with the unchecked errors they carried. Nothing here
 # fixes a finding in code that still exists.
-779
+# 2026-10-09 (07-C1): 779 -> 770, measured with this script
+770
