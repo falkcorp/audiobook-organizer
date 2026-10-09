@@ -1,7 +1,7 @@
 // file: internal/flight/flight.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 8e4b1d7a-2c6f-4a93-b0d5-7f3e9a1c6b28
-// last-edited: 2026-10-06
+// last-edited: 2026-10-09
 
 // Package flight collapses concurrent identical requests into one build and
 // cancels that build when the LAST caller waiting on it leaves.
@@ -46,6 +46,17 @@ type call[T any] struct {
 // context: reqCtx's values, the group's own cancellation, and timeout (<= 0
 // means no deadline).
 func (g *Group[T]) Do(reqCtx context.Context, key string, timeout time.Duration, build func(ctx context.Context) (T, error)) (T, error) {
+	// A caller whose context is already done would start (or join) a build it
+	// will never wait for. Starting one anyway is a race: with nothing else to
+	// do the build can finish, and the caller's own code cache the result,
+	// before this caller gets as far as leaving and cancelling it. Seen as a
+	// flaky "a cancelled build must not be cached" in
+	// internal/audiobooks on 2026-10-09 (ci.yml run 37959711861). Answer the
+	// caller without touching the group.
+	if err := reqCtx.Err(); err != nil {
+		var zero T
+		return zero, err
+	}
 	g.mu.Lock()
 	if g.calls == nil {
 		g.calls = make(map[string]*call[T])
