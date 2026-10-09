@@ -1,5 +1,5 @@
 <!-- file: docs/proposals/2026-10-holistic/09-owner-decisions.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: 3b9e6f2a-71c4-4d0e-a8b5-9f1c2e7d4a60 -->
 <!-- last-edited: 2026-10-09 -->
 
@@ -77,7 +77,7 @@ These are the owner's answers to the decisions in `08-integrated-roadmap.md` §7
 |---|---|
 | D52 | **Deluge cleanup after organize (new feature).** Once every file in a torrent has a verified matching `book_file` in the library (same size and a content hash or fingerprint match; never path alone), remove the torrent **and its downloaded data** from Deluge, but only after seeding reaches **ratio 1.0 or 14 days, whichever comes first**. Both thresholds are settings. It is built as a Repairs-style fixer (trial → approve → apply) on the ops v3 Fixer kind, with a declared `Deletes` effect and a journal. It never touches library files or `book_file` rows. It needs its own design doc before implementation; reuse the existing Deluge client and evaluate `versions/swap.go`'s `NotifyDelugeAfterVersionSwap`. |
 
-## Round-2 open decisions (D53–D68)
+## Round-2 open decisions (D53–D72)
 
 Appended by the coordinator on 2026-10-09 from `08-integrated-roadmap.md` §7 (v1.1.0). Answered by the owner on 2026-10-09; the third column is the owner's answer (the reviewers' recommendation unless it says otherwise). Nothing above this heading was changed. (One note on the record above: D14d says "about 25 `client_golang` series"; 11 measured 69 families, and its ratchet baseline is 69.)
 
@@ -100,3 +100,7 @@ Appended by the coordinator on 2026-10-09 from `08-integrated-roadmap.md` §7 (v
 | D67 | 11 Q5–Q7. Pebble collector stays on `client_golang`; the five `ai_dispatch_*` names stay unprefixed; `internal/metrics` is deleted only when its last family has moved on touch? | **Yes to all three.** Pebble collector stays; `ai_dispatch_*` names stay bare; `internal/metrics` deleted when its last family has moved. | **answered 2026-10-09** |
 | D68 | 01 P76 (task brief). Deleting `internal/download` leaves three live readers of `download_client.torrent.deluge` (`internal/deluge/integration.go`, `internal/server/deluge_integration.go`, `internal/maintenance/jobs/bulk_deluge_import.go`): drop the fallback, keep a Deluge-only struct, or defer? | **Defer 01 P76 to wave 2**, after 10 PR 0–2 decide the Deluge config shape; the fallbacks stay until then. Recommended was keep-with-Deluge-only-struct. | **answered 2026-10-09** |
 | D5 (note) | 04 P3a. `backup_retention_days` does not exist today; the brief introduces it (default = the current hard-coded retention). | **Approved**: add the setting with today's default. | **answered 2026-10-09** |
+| D69 | 01 P79b (task brief). With `create_backups` honoured, do the two bulk write-back ops keep a `.bak-*` sibling per file? `SafeWriteDeps` is a package singleton, so the opt-out must be a context value. | **Bulk skips backups** via `tagger.WithoutBackup(ctx)` at the three bulk entry points; single-book edits keep them when the setting is on. | **answered 2026-10-09** |
+| D70 | 01 P72 Q6. Do any owner scripts or curl habits call the 20 dead dedup/verb-alias/ai-review routes? | **No.** P72 proceeds; handlers that lose their last route are deleted. | **answered 2026-10-09** |
+| D71 | 01 P81b. Does anything Mac-side sync listening position through `/books/:id/position`? | **No.** Retire the `/books/` alias behind `gone()`; `/audiobooks/:id/position` stays. | **answered 2026-10-09** |
+| D72 | 06 P2 decision flag. Pin workflow `go-version:` to the full patch (14 literals, 8 workflows, checker flips to full-pin equality) or keep floating minors? | **Full patch pin everywhere.** | **answered 2026-10-09** |
