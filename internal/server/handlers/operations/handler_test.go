@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/handler_test.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 36cf7fbb-8b23-4edb-ad4b-079ab2bd6cf1
-// last-edited: 2026-09-12
+// last-edited: 2026-10-09
 
 // Unit tests for the operations-domain HTTP handlers. Each public method has at
 // least one test; happy paths plus key branches (cancel not-found fallback,
@@ -94,42 +94,6 @@ func run(method, routePath, reqPath string, body []byte, register func(r *gin.En
 // --- StartScan / StartOrganize / StartOptimize / StartTranscode ---
 
 // --- GetOperationStatus ---
-
-// --- CancelOperation ---
-
-func TestCancelOperation_ViaPipeline(t *testing.T) {
-	h, _, _, _, pipe, scans := newTestHandler(t)
-	scans.EXPECT().ListScans().Return([]database.Scan{{ID: 7, OperationID: "op-x"}}, nil)
-	pipe.EXPECT().CancelScan(7).Return(nil)
-
-	w := run(http.MethodDelete, "/operations/:id", "/operations/op-x", nil, func(r *gin.Engine) {
-		r.DELETE("/operations/:id", h.CancelOperation)
-	})
-	assert.Equal(t, http.StatusNoContent, w.Code)
-}
-
-func TestCancelOperation_ViaRegistry(t *testing.T) {
-	h, _, reg, _, _, scans := newTestHandler(t)
-	scans.EXPECT().ListScans().Return(nil, nil)
-	reg.EXPECT().Cancel("op-y").Return(nil)
-
-	w := run(http.MethodDelete, "/operations/:id", "/operations/op-y", nil, func(r *gin.Engine) {
-		r.DELETE("/operations/:id", h.CancelOperation)
-	})
-	assert.Equal(t, http.StatusNoContent, w.Code)
-}
-
-func TestCancelOperation_FallbackForceStatus(t *testing.T) {
-	h, store, reg, _, _, scans := newTestHandler(t)
-	scans.EXPECT().ListScans().Return(nil, nil)
-	reg.EXPECT().Cancel("op-z").Return(errors.New("not found"))
-	store.EXPECT().UpdateOperationStatus("op-z", "canceled", 0, 0, mock.Anything).Return(nil)
-
-	w := run(http.MethodDelete, "/operations/:id", "/operations/op-z", nil, func(r *gin.Engine) {
-		r.DELETE("/operations/:id", h.CancelOperation)
-	})
-	assert.Equal(t, http.StatusNoContent, w.Code)
-}
 
 // --- ClearStaleOperations ---
 

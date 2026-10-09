@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.27.0
+// version: 4.28.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-10-07
+// last-edited: 2026-10-09
 
 package server
 
@@ -440,23 +440,6 @@ func (s *Server) Start(cfg ServerConfig) error {
 				select {
 				case <-sessionCleanupTicker.C:
 					pruneExpiredSessions(s.Ops(), sessionLog, time.Now())
-				case <-shutdown:
-					return
-				}
-			}
-		})
-	}
-
-	// Periodically mark stale operations as failed.
-	if s.Ops() != nil && config.AppConfig.OperationTimeoutMinutes > 0 {
-		staleTimeout := time.Duration(config.AppConfig.OperationTimeoutMinutes) * time.Minute
-		staleTicker := time.NewTicker(1 * time.Minute)
-		backgroundWG.Go(func() {
-			defer staleTicker.Stop()
-			for {
-				select {
-				case <-staleTicker.C:
-					s.failStaleOperations(staleTimeout)
 				case <-shutdown:
 					return
 				}
@@ -1701,32 +1684,6 @@ func (s *Server) collectStaleOperations(timeout time.Duration) ([]database.Opera
 		stale = append(stale, op)
 	}
 	return stale, nil
-}
-
-func (s *Server) failStaleOperations(timeout time.Duration) {
-	staleLog := logger.NewWithActivityLog("reaper", s.storeForWiring())
-	stale, err := s.collectStaleOperations(timeout)
-	if err != nil {
-		staleLog.Warn("stale operation check failed: %v", err)
-		return
-	}
-	if len(stale) == 0 {
-		return
-	}
-
-	for _, op := range stale {
-		msg := fmt.Sprintf("operation timed out after %s", timeout)
-		if err := s.Ops().UpdateOperationError(op.ID, msg); err != nil {
-			staleLog.Warn("failed to mark stale operation %s as failed: %v", op.ID, err)
-			continue
-		}
-		if s.hub != nil {
-			s.hub.SendOperationStatus(op.ID, "failed", map[string]any{
-				"error": msg,
-			})
-		}
-		staleLog.Warn("marked stale operation as failed: id=%s type=%s", op.ID, op.Type)
-	}
 }
 
 func GetDefaultServerConfig() ServerConfig {

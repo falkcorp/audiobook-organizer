@@ -5,6 +5,8 @@
 package operationsmocks
 
 import (
+	"time"
+
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	mock "github.com/stretchr/testify/mock"
 )
@@ -1010,6 +1012,74 @@ func (_c *MockOperationsStore_ListBookTombstones_Call) Return(books []database.B
 }
 
 func (_c *MockOperationsStore_ListBookTombstones_Call) RunAndReturn(run func(limit int) ([]database.Book, error)) *MockOperationsStore_ListBookTombstones_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// ListOperationsV2Since provides a mock function for the type MockOperationsStore
+func (_mock *MockOperationsStore) ListOperationsV2Since(since time.Time, limit int) ([]database.OperationV2Row, error) {
+	ret := _mock.Called(since, limit)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListOperationsV2Since")
+	}
+
+	var r0 []database.OperationV2Row
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(time.Time, int) ([]database.OperationV2Row, error)); ok {
+		return returnFunc(since, limit)
+	}
+	if returnFunc, ok := ret.Get(0).(func(time.Time, int) []database.OperationV2Row); ok {
+		r0 = returnFunc(since, limit)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]database.OperationV2Row)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(time.Time, int) error); ok {
+		r1 = returnFunc(since, limit)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockOperationsStore_ListOperationsV2Since_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListOperationsV2Since'
+type MockOperationsStore_ListOperationsV2Since_Call struct {
+	*mock.Call
+}
+
+// ListOperationsV2Since is a helper method to define mock.On call
+//   - since time.Time
+//   - limit int
+func (_e *MockOperationsStore_Expecter) ListOperationsV2Since(since any, limit any) *MockOperationsStore_ListOperationsV2Since_Call {
+	return &MockOperationsStore_ListOperationsV2Since_Call{Call: _e.mock.On("ListOperationsV2Since", since, limit)}
+}
+
+func (_c *MockOperationsStore_ListOperationsV2Since_Call) Run(run func(since time.Time, limit int)) *MockOperationsStore_ListOperationsV2Since_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 time.Time
+		if args[0] != nil {
+			arg0 = args[0].(time.Time)
+		}
+		var arg1 int
+		if args[1] != nil {
+			arg1 = args[1].(int)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockOperationsStore_ListOperationsV2Since_Call) Return(operationV2Rows []database.OperationV2Row, err error) *MockOperationsStore_ListOperationsV2Since_Call {
+	_c.Call.Return(operationV2Rows, err)
+	return _c
+}
+
+func (_c *MockOperationsStore_ListOperationsV2Since_Call) RunAndReturn(run func(since time.Time, limit int) ([]database.OperationV2Row, error)) *MockOperationsStore_ListOperationsV2Since_Call {
 	_c.Call.Return(run)
 	return _c
 }
