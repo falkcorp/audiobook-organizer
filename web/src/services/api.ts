@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.170.0
+// version: 2.171.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-10-08
+// last-edited: 2026-10-09
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -4735,8 +4735,9 @@ export type ReviewBucket = 'reviewable' | 'unreviewable';
 /**
  * Extra shapes of the review request.
  *
- * - `view: 'index'` returns every row with each candidate's `description`
- *   dropped: the only large field, and one only a visible row reads. Counts,
+ * - `view: 'index'` returns every row with each candidate's `description`,
+ *   `score_breakdown` and `category_tags` dropped: the large fields, which
+ *   only a visible row (its `ids` detail) reads. Counts,
  *   statuses, stale flags and `candidate_hash` are those of the full rows, so
  *   filters, grouping, chips and bulk-apply pins work on the index unchanged.
  * - `ids` returns the full rows of just those books (in bucket order),

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_review_scale_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 3f7b2d90-5c1e-4a86-9e43-8b6d1f0c2a75
-// last-edited: 2026-10-07
+// last-edited: 2026-10-09
 
 package handlers
 
@@ -36,7 +36,8 @@ import (
 //     legacy candidate filter and its runtime read;
 //   - ~10% chapter-shaped titles ("07") filed as separate rows in a shared
 //     folder, which make the resolver list that folder;
-//   - 1-4 files per book, ten candidates per row with a ~1 KB description;
+//   - 1-4 files per book, ten candidates per row with a ~1 KB description,
+//     an 8-step score breakdown and two category tags;
 //   - a spread of review statuses, empty and undecodable rows, stale rows.
 func reviewSeed(tb testing.TB, n int) (*database.PebbleStore, *metafetch.Service) {
 	tb.Helper()
@@ -45,6 +46,7 @@ func reviewSeed(tb testing.TB, n int) (*database.PebbleStore, *metafetch.Service
 	tb.Cleanup(func() { _ = store.Close() })
 
 	desc := strings.Repeat("A long publisher description of the book. ", 25)
+	breakdown := seedScoreBreakdown()
 	now := time.Now()
 	statuses := []string{"", "", "", "", "no_match", "matched", "audio_confirmed"}
 	for i := 0; i < n; i++ {
@@ -88,6 +90,8 @@ func reviewSeed(tb testing.TB, n int) (*database.PebbleStore, *metafetch.Service
 					"source": []string{"audible", "google_books", "open_library"}[k%3],
 					"score":  0.5 + float64(k%5)/10, "description": desc,
 					"duration_sec": 3600 + k*60, "narrator": "Reader",
+					"score_breakdown": breakdown,
+					"category_tags":   []string{fmt.Sprintf("Category %02d", k), "Category 99"},
 				})
 				require.NoError(tb, merr)
 				entry.Candidates = append(entry.Candidates, raw)
@@ -101,6 +105,32 @@ func reviewSeed(tb testing.TB, n int) (*database.PebbleStore, *metafetch.Service
 	_, err = store.BackfillBookAtPathIndex(context.Background())
 	require.NoError(tb, err)
 	return store, metafetch.NewService(store)
+}
+
+// seedScoreBreakdown is a synthetic 8-step derivation the size of the
+// scorer's: a base, six multipliers and one additive term, each with a label
+// and an explanation sentence. Running totals replay, so it reads as a real
+// breakdown to anything that recomposes it.
+func seedScoreBreakdown() *metafetch.ScoreBreakdown {
+	steps := []metafetch.ScoreStep{{
+		ID: "base", Label: "Base similarity", Op: metafetch.ScoreOpBase, Operand: 0.8, Running: 0.8,
+		Detail: "Weighted title and author similarity between the book and the candidate.",
+	}}
+	running := 0.8
+	for i, id := range []string{"compilation", "length", "series", "narrator", "language", "edition"} {
+		running *= 0.98
+		steps = append(steps, metafetch.ScoreStep{
+			ID: id, Label: fmt.Sprintf("Penalty %d (%s)", i+1, id), Op: metafetch.ScoreOpMultiply,
+			Operand: 0.98, Running: running,
+			Detail: fmt.Sprintf("The candidate's %s differs slightly from the book's, so the score is scaled down.", id),
+		})
+	}
+	running += 0.05
+	steps = append(steps, metafetch.ScoreStep{
+		ID: "rich_metadata", Label: "Rich metadata bonus", Op: metafetch.ScoreOpAdd, Operand: 0.05, Running: running,
+		Detail: "The candidate carries a cover, an ISBN, a narrator and a duration.", Capped: true,
+	})
+	return &metafetch.ScoreBreakdown{Score: running, Steps: steps}
 }
 
 // legacyReviewRows is the loader as it was before the snapshot (origin/main
@@ -270,9 +300,13 @@ func TestReviewIndex_SameRowsAndCountsAsAll(t *testing.T) {
 		require.Equal(t, *ar.Stale, *xr.Stale)
 		require.Equal(t, ar.CandidateHash, xr.CandidateHash)
 		require.Empty(t, xr.Candidate.Description, "the index drops descriptions")
+		require.Nil(t, xr.Candidate.ScoreBreakdown, "the index drops score breakdowns")
+		require.Nil(t, xr.Candidate.CategoryTags, "the index drops category tags")
 		full := *ar.Candidate
 		full.Description = ""
-		require.Equal(t, full, *xr.Candidate, "only the description differs")
+		full.ScoreBreakdown = nil
+		full.CategoryTags = nil
+		require.Equal(t, full, *xr.Candidate, "only the description, score breakdown and category tags differ")
 	}
 
 	// stale == the refetch-all-stale set.
@@ -308,6 +342,81 @@ func TestReviewIndex_SameRowsAndCountsAsAll(t *testing.T) {
 	require.Positive(t, len(un.Data.Results))
 	one, _ := serveReview(t, h, "bucket=unreviewable&ids="+un.Data.Results[0].Book.ID)
 	require.Equal(t, un.Data.Results[:1], one.Data.Results)
+}
+
+// TestMetadataCache_IndexViewOmitsScoreBreakdown: no index row carries a score
+// breakdown or category tags, while each still carries the fields the page
+// filters, groups and pins on (score, title, hash).
+func TestMetadataCache_IndexViewOmitsScoreBreakdown(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store, svc := reviewSeed(t, 120)
+	h := NewMetadataCacheHandler(store, svc, nil, nil, nil)
+
+	idx, _ := serveReview(t, h, "all=true&view=index")
+	require.Positive(t, len(idx.Data.Results))
+	for _, r := range idx.Data.Results {
+		require.NotNil(t, r.Candidate)
+		require.Nil(t, r.Candidate.ScoreBreakdown, "book %s", r.Book.ID)
+		require.Nil(t, r.Candidate.CategoryTags, "book %s", r.Book.ID)
+		require.NotEmpty(t, r.Candidate.Title)
+		require.Positive(t, r.Candidate.Score)
+		require.NotEmpty(t, r.CandidateHash)
+	}
+}
+
+// TestMetadataCache_DetailViewKeepsScoreBreakdown is the anti-over-suppression
+// check: the ids= detail rows the evidence panel is fed from keep the full
+// breakdown and tags, and their hash is the index row's, so the page swaps the
+// detail candidate in.
+func TestMetadataCache_DetailViewKeepsScoreBreakdown(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store, svc := reviewSeed(t, 120)
+	h := NewMetadataCacheHandler(store, svc, nil, nil, nil)
+
+	idx, _ := serveReview(t, h, "all=true&view=index")
+	require.GreaterOrEqual(t, len(idx.Data.Results), 3)
+	pick := []string{idx.Data.Results[0].Book.ID, idx.Data.Results[2].Book.ID}
+	detail, _ := serveReview(t, h, "ids="+strings.Join(pick, ","))
+	require.Len(t, detail.Data.Results, 2)
+	want := seedScoreBreakdown()
+	for i, d := range detail.Data.Results {
+		require.NotNil(t, d.Candidate)
+		require.NotNil(t, d.Candidate.ScoreBreakdown, "book %s", d.Book.ID)
+		require.Len(t, d.Candidate.ScoreBreakdown.Steps, 8)
+		require.Equal(t, want, d.Candidate.ScoreBreakdown)
+		require.Len(t, d.Candidate.CategoryTags, 2)
+		require.NotEmpty(t, d.Candidate.Description)
+		ix := idx.Data.Results[[]int{0, 2}[i]]
+		require.Equal(t, ix.Book.ID, d.Book.ID)
+		require.Equal(t, ix.CandidateHash, d.CandidateHash, "the index pins the full candidate")
+		require.Equal(t, ix.Candidate.Score, d.Candidate.Score)
+		require.Equal(t, ix.Candidate.Title, d.Candidate.Title)
+	}
+}
+
+// TestMetadataCache_IndexViewDoesNotMutateSnapshot: the index clears fields on
+// a copy of the snapshot's candidate. A second request against the same
+// snapshot -- an all=true listing and an ids= detail -- still sees every
+// breakdown, and a second index request is byte-identical to the first.
+func TestMetadataCache_IndexViewDoesNotMutateSnapshot(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store, svc := reviewSeed(t, 120)
+	h := NewMetadataCacheHandler(store, svc, nil, nil, nil)
+
+	first, firstBytes := serveReview(t, h, "all=true&view=index")
+	all, _ := serveReview(t, h, "all=true")
+	require.Len(t, all.Data.Results, len(first.Data.Results))
+	for _, r := range all.Data.Results {
+		require.NotNil(t, r.Candidate.ScoreBreakdown, "book %s lost its breakdown after an index request", r.Book.ID)
+		require.NotEmpty(t, r.Candidate.CategoryTags, "book %s", r.Book.ID)
+	}
+	detail, _ := serveReview(t, h, "ids="+first.Data.Results[1].Book.ID)
+	require.Len(t, detail.Data.Results, 1)
+	require.NotNil(t, detail.Data.Results[0].Candidate.ScoreBreakdown)
+
+	second, secondBytes := serveReview(t, h, "all=true&view=index")
+	require.Equal(t, firstBytes, secondBytes)
+	require.Equal(t, first.Data.Results, second.Data.Results)
 }
 
 // TestReviewSnapshot_StatusIsLive: a book ruled on after the snapshot was
