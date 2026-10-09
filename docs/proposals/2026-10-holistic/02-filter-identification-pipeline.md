@@ -1,12 +1,54 @@
 <!-- file: docs/proposals/2026-10-holistic/02-filter-identification-pipeline.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 7244e5a7-f9c2-4d5a-9260-ecfcc99e7585 -->
-<!-- last-edited: 2026-10-08 -->
+<!-- last-edited: 2026-10-09 -->
 
 # 02 — Filtering, search and the identification pipeline
 
-Analyst: `search`. Reviewed at HEAD `f7211eb39` in the `aorg-holistic` worktree.
+Analyst: `search`. Reviewed at HEAD `f7211eb39` in the `aorg-holistic` worktree; round-2
+anchors re-checked at `ebda30d47` (the `aorg-review2` worktree, 2026-10-09).
 This is a planning document only. No code was changed.
+
+### Round-2 review (r2)
+
+Reviewer persona: search and information-retrieval engineering. Owner answers in
+`09-owner-decisions.md` are treated as fixed. Changes in this round:
+
+- **D36 promoted into the plan** as Phase 2b, PRs 15–19 (R0–R4 of appendix D), with files,
+  tests, rollback, size and the flag name `review_metadata_server_query`. The coordinator's
+  snapshot question is settled in PR 17: the incremental review snapshot the owner approved
+  on 2026-10-02 **already shipped** (`d9463d669`, `df23cbe95`; `metadata_cache_snapshot.go`
+  v2.1.0), so it is not a prerequisite, and the dated memory note that calls it unbuilt is
+  stale.
+- PR 15 (R0) now says exactly what to measure and where to record it; snapshots themselves
+  are never committed (they contain library titles).
+- Anchors fixed at HEAD: `applygate.go:56`→`:58`, `service_scoring.go:982`→`:983`,
+  `engine.go:5012` (function) plus `:5088` (the nested loop), `metadata_fetch_cache.go:105-120`→`:121`,
+  the `Author missing` / `No narrator` lines (`service_search.go:1377`, `:1408`).
+- §3.4: the P1 key's normalization is specified (today's `queryVariant.key()` is only
+  lowercase and trim, `search_variants.go:588-590`); author credits stay an **ordered** list
+  in the key; P1 stores the raw, pre-`accept` answer; throttled calls never make an entry.
+- §3.4: D30's negative TTLs are kept, with one rule added: a negative entry is keyed to the
+  question, so a question change (new variant, folder parse) bypasses it with no bust.
+- §3.3 B2 / PR 7: D31's "measure first" is PR 7a (a read-only coverage report); the index
+  question is answered (no new title index; one `cat_author:alias:` key for credit variants).
+- §3.5 / PR 11: a **second blocking pass** (rarest title token × duration bucket) over all
+  books, because the title-prefix block misses the number-leading and article-leading shapes
+  this library is full of. The SymSpell alternative is dropped.
+- PR 9a added: "missing author or narrator counts as disagreement" (I8) gets its own PR
+  ahead of the new scorer, with the gate verified against title-only candidates.
+- PR 9: shadow mode now states what is logged, where, and how the owner's precision curve
+  is produced (D35).
+- §6: 05 §3.9 covers DirtySet, Budget and `ident_reason`; three gaps are written out for the
+  coordinator (compare-and-delete on the dirty mark, a day-quota budget that v3's rate budget
+  does not cover, and the chunk size).
+- PR 14 stays a v2 op first (D28a confirmed); it is now specified so the v3 port is a
+  mechanical move (source + item + finish, no loop code of its own).
+- Simplified: PR 12 (signature LSH) is parked until the re-fingerprint; PR 13's
+  `FormulaVersion` bump rides on the next bump that happens anyway; the roaring-bitmap index
+  in §3.5 is deferred until PR 1's benchmark shows a walk over 100 ms; Q7 is superseded.
+- Appendix A anchors updated; appendix C's PR references follow the renumbering; appendix D
+  gains the shipped-snapshot note, the `generation` field and the flag name.
 
 Appendices are in [`02-filter-identification-pipeline/`](02-filter-identification-pipeline/):
 
@@ -59,8 +101,8 @@ call was made:
      That is how 1,180 books lost their candidates on 2026-10-06.
 5. **Scores are not probabilities, but the gate treats them as if they were.**
    - The fan-out score is a product of multipliers with no clamp. The comment at
-     `internal/metafetch/service_scoring.go:982` says tail scores "routinely 1.5-4.0".
-   - `applygate.MinScore = 0.90` (`internal/applygate/applygate.go:56`) is a fixed floor on
+     `internal/metafetch/service_scoring.go:983` says tail scores "routinely 1.5-4.0".
+   - `applygate.MinScore = 0.90` (`internal/applygate/applygate.go:58`) is a fixed floor on
      that unbounded scale.
    - "Author missing" is scored ×0.75, so a missing value counts as disagreement.
    - Dedup's noisy-OR treats embedding and metadata-fuzzy as independent evidence, though
@@ -91,7 +133,8 @@ call was made:
      RE2-to-JS translation.
    - Nothing tests the two for agreement.
 9. **Dedup candidate generation still has quadratic blocks.**
-   - `BookSignatureScan` compares every pair of signed books (`internal/dedup/engine.go:5012`):
+   - `BookSignatureScan` compares every pair of signed books (`internal/dedup/engine.go:5012`,
+     nested loop at `:5088`):
      O(n²/2), parallel but quadratic.
    - Exact-title and duration checks re-fetch the author's whole block once per book. They
      compare every pair from both sides, run Levenshtein before cheap integer checks, and
@@ -105,8 +148,9 @@ call was made:
       decisions;
     - **a probability-space decision**, with the applygate legs kept as vetoes.
 
-    The plan is 15 phased PRs (section 4; PR 5 is split into 5a and 5b). An `ident:` filter makes the goal number a
-    clickable, O(1) count.
+    The plan is 21 phased PRs (section 4; PR 5 is split into 5a and 5b, PR 7 into 7a and 7b,
+    PR 9a precedes PR 9, PRs 15–19 are the D36 Review lane work, and PR 12 is parked). An
+    `ident:` filter makes the goal number a clickable, O(1) count.
 
 ---
 
@@ -141,12 +185,12 @@ with an estimated effect, **L** = an inference that needs a production measureme
 | I4 | **No negative caching.** `askVariant` writes the cache only `if len(rs) > 0`, and the source comment says "never an empty one". Only the candidate-cache layer records `LastEmptyFetchAt`. | `search_fanout.go:287-299` | H | Each fetch pass over the ~8.9k zero-candidate books re-asks every provider for every variant: up to 4 Audible asks + 2 Open Library asks + Google per book. |
 | I5 | **`asin-backfill` duplicates Audible searches.** It searches Audible by title and author for every book with no ASIN, outside the fetch cache, while `candidate-fetch` searches Audible for the same books. | `asin_backfill.go:159-161`, `:809-827`; no `CachedMetadataFetch` reference in the file | H | Doubled Audible spend on the same books every 6 h, limited only by its retry-after marker. |
 | I6 | **A title change deletes candidates.** `candidateSearchIdentityChanged` → `stageDeleteIfPresent(metadataCacheKey(id))` runs in the storage layer on any change to `Title`, or to `AuthorID` by name. | `internal/database/pebble_store.go:3392-3400`, `:3496-3510` Command: `grep -n 'candidateSearchIdentityChanged\|stageDeleteIfPresent' internal/database/pebble_store.go`. | H | This is the shape behind the 1,180 rows lost on 2026-10-06 (dated note). The candidates could have been kept as stale and rescored. Instead they are lost, and the providers are asked again. |
-| I7 | **The score scale and the gate do not match.** Base F1 (0–1) × author 1.5 × narrator 1.3 × "has narrator" 1.15 × series boost × ASIN 2.0, unclamped ("intentionally NOT clamped", `service_scoring.go:551`; "routinely 1.5-4.0", `:982`). The bulk gate compares that **raw** number with 0.90: `if c.Score < floor` at `internal/applygate/applygate.go:199`, with the floor set at `:56`. No normalization happens between the two. `grep -rn '\.Score = ' internal/metafetch` finds only the LLM-rerank rescale (`service_scoring.go:1001-1005`), which keeps the unbounded scale on purpose. An F1 of 0.60 with an author match (0.60 × 1.5 = 0.90) passes the score leg. | file:line as cited | H | The score leg filters almost nothing. The evidence leg (`CheckEvidence`) does the real work, and it is a hand-tuned rule set. |
-| I8 | **Missing values are scored as disagreement.** `"Author missing" ×0.75` (`service_search.go`, the `bookAuthor != ""` branch); `"No narrator" ×0.85`. | grep `Author missing` in `internal/metafetch/service_search.go` Command: `grep -n 'Author missing\|No narrator' internal/metafetch/service_search.go`. | H | Open Library and Google rows, which have no narrator by construction, are pushed down whatever their title match. Fellegi–Sunter models "missing" as its own level. |
+| I7 | **The score scale and the gate do not match.** Base F1 (0–1) × author 1.5 × narrator 1.3 × "has narrator" 1.15 × series boost × ASIN 2.0, unclamped ("intentionally NOT clamped", `service_scoring.go:551`; "routinely 1.5-4.0", `:983`). The bulk gate compares that **raw** number with 0.90: `if c.Score < floor` at `internal/applygate/applygate.go:199`, with the floor set at `:58`. No normalization happens between the two. `grep -rn '\.Score = ' internal/metafetch` finds only the LLM-rerank rescale (`service_scoring.go:1001-1005`), which keeps the unbounded scale on purpose. An F1 of 0.60 with an author match (0.60 × 1.5 = 0.90) passes the score leg. | file:line as cited | H | The score leg filters almost nothing. The evidence leg (`CheckEvidence`) does the real work, and it is a hand-tuned rule set. |
+| I8 | **Missing values are scored as disagreement.** `"Author missing" ×0.75` (`service_search.go:1377`); `"No narrator" ×0.85` (`:1408`). | Command: `grep -n 'Author missing\|No narrator' internal/metafetch/service_search.go`. | H | Open Library and Google rows, which have no narrator by construction, are pushed down whatever their title match. Fellegi–Sunter models "missing" as its own level. |
 | I9 | A calibration harness exists, but it measures **top-1 accuracy of a re-implementation** of the scorer. It does not measure probability calibration, and it states the circularity bias itself. | `internal/plugins/metafetch/calibrate_scoring.go:1-55` | H | Useful as a test harness, but it cannot produce a confidence. |
 | I10 | **Window fingerprints are collected and never compared.** `fingerprint.WindowSetSimilarity` has no production caller. The dedup acoustid collector reads head prints only. | `grep -rn WindowSetSimilarity internal --include=*.go \| grep -v _test` → only `internal/fingerprint/*`; `internal/dedup/collectors_acoustid.go` (no window reference) | H | All the Mac decode time on windowed prints produces no signal. It is also the natural evidence for linking fragments to their parent. |
 | I11 | Transcription, narrator and file size are still not unified dedup signals. Chapter structure now is. | `grep SigTranscript\|SigNarrator\|SigFileSize` → none; `internal/dedup/unified/score.go:70` (`SigChapterStructure`) | H | Corrects `project_signals_collected_but_never_scored` for chapters. |
-| I12 | **`BookSignatureScan` is O(n²/2)** over books that have a signature. It is sharded across workers but has no LSH banding. | `internal/dedup/engine.go:5012`+ (nested `for j := i + 1`) | H | At 40k signed books that is 8×10⁸ masked Hamming compares. Book signatures stay garbage until the re-fingerprint (dated note), so this compares noise today. |
+| I12 | **`BookSignatureScan` is O(n²/2)** over books that have a signature. It is sharded across workers but has no LSH banding. | `internal/dedup/engine.go:5012` (function), `:5088` (nested `for j := i + 1`) | H | At 40k signed books that is 8×10⁸ masked Hamming compares. Book signatures stay garbage until the re-fingerprint (dated note), so this compares noise today. |
 | I13 | **Exact-title and duration checks block on author, inefficiently.** Each book calls `GetBooksByAuthorIDCore` itself, twice (title and duration), and compares against every other book in the block. Each pair is therefore evaluated from both sides. `allNormalizedTitleForms(other)` is recomputed for every (book, other) pair. Levenshtein runs before the cheap series-number check. | `internal/dedup/engine.go:1661-1720` (`checkExactTitle`), `:1794-1880` (`checkDurationMatch`) Command: `grep -n 'GetBooksByAuthorIDCore\|allNormalizedTitleForms' internal/dedup/engine.go`. | H | Work is 2 × 2 × Σₐ kₐ² × forms². One prolific or junk author with k in the thousands dominates the run. |
 | I14 | **Books with no `AuthorID` never get title or duration dedup.** Both checks return early on `book.AuthorID == nil`. | `engine.go:1662`, `:1795` Command: `grep -n 'book.AuthorID == nil' internal/dedup/engine.go`. | H | A recall hole. The scale is roughly 5,756 books with no author link, a figure derived from the author-data note and not measured at HEAD. Those books are only reachable through embedding top-K or LSH. |
 | I15 | **Noisy-OR double-counts correlated text evidence.** `SigEmbedHigh` and `SigMetaFuzzy` are both functions of title and author, but `ComposeScore` multiplies their complements as if they were independent. | `internal/dedup/unified/compose.go` (noisy-OR loop) | M | Inflated dedup confidence on text-only pairs. That is the shape of the "same title, different book" false positive. |
@@ -235,8 +279,8 @@ across all sources.
 
 | Sub-stage | Index used | Cost per book | Provider calls |
 |---|---|---|---|
-| B1 Identifier | `CatalogStore.GetEntryByProviderID` (local); otherwise a global per-ASIN product cache `pcache:asin:<ASIN>` | O(1) point read | 0 on a hit |
-| B2 Local catalog | `cat_author:name:<fold>` exact key (`catalog_entry_store.go:563`). For each author credit, titles in that block are scored with trigram Jaccard on folded titles, then a bounded Levenshtein on the top few. Bulk use must not take the substring fallback walk (it scans every author key), so B2 requires an exact folded-credit key or an `author_alias` hit. | O(k_author) titles per credit, typically under a few hundred (`SearchLimit`) | 0 |
+| B1 Identifier | `CatalogStore.GetEntryByProviderID` (`catalog_entry_store.go:608`, backed by the existing `cat_pid:` key, so it is already a point read); otherwise a global per-ASIN product cache `pcache:asin:<ASIN>` | O(1) point read | 0 on a hit |
+| B2 Local catalog | `cat_author:name:<fold>` exact key (`catalog_entry_store.go:563`). For **each** credit in the book's ordered credit list (`GetBookAuthors`, `pebble_store_authors.go:694`), titles in that block are scored with trigram Jaccard on folded titles, then a bounded Levenshtein on the top few. Bulk use must not take the substring fallback walk (it scans every author key), so B2 requires an exact folded-credit key or a `cat_author:alias:<fold>` hit. **D31 index answer (r2):** no new title index is needed, because the author block bounds the work; the one new key is `cat_author:alias:<fold> → cat_author:name key`, written from the harvest's own name variants and from the authority list, so a credit such as an initialled or reordered name still lands on its block. A block over 2,000 entries (a junk or franchise row) is skipped and counted in the run's `oversize_block` counter rather than scanned. | O(k_author) titles per credit, typically under a few hundred (`SearchLimit`) | 0 |
 | B3 Propagation | Version group (`memIdxVersionGroupID`), exact file hash, and the window-print inverted index (new, §3.5). An already-identified book's applied candidate is offered to the unidentified copy as a candidate (never auto-applied without the vetoes). | O(1)–O(log n) | 0 |
 | B4 Provider fan-out | Today's `runSearchFanout`, with every ask going through the **query-keyed cache** (§3.4) | Up to 4 variants × sources, until the first strong match | Only on a cache miss |
 
@@ -292,10 +336,43 @@ across all sources.
 | C book candidates | `metadata_cache:<bookID>` (today's) plus `question_fp` | The scored candidate list | No TTL. **Stale** when the book's question fingerprint changes. | Becomes **stale, not deleted** (replaces I6). The driver rescores it from P1/P2 with no provider call; only a missing P1 entry costs a call. |
 | L local catalog | `cat_*` (today's) | Harvested entries | The harvest's own 30-day due rule | `MarkUnseen` (today's) |
 
+- **What "normalized question" means (r2).** Today's variant key is only `ToLower` plus
+  `TrimSpace` of title and author (`queryVariant.key()`, `search_variants.go:588-590`), so
+  `"Title: Part 2"` and `"Title - Part 2"` are two keys, and so are `"A, B"` and `"A , B"`.
+  The P1 key hashes a canonical form of **exactly the parameters sent to the provider**,
+  and nothing looser, because a key looser than the provider's own matching would serve one
+  question another question's answer:
+  - Unicode NFKC, then case folding (`strings.ToLower` is not a case fold: `İ` and `ß`
+    differ), then whitespace collapsed to one space;
+  - punctuation that no provider tokenizer keeps (quotes, apostrophes, commas, periods,
+    colons, dashes, brackets) stripped to a space; letters, digits and `&` kept;
+  - **author credits are an ordered list**, per the 2026-10-04 rule: each credit is
+    normalized on its own and the list is joined with `\x1f` **in credit order**, never
+    sorted. `"A, B"` and `"B, A"` are different questions to a provider and get different
+    keys; the ordered form is what the flat "A, B and C" string is derived from, so the key
+    is derived from the list, not from the flat string;
+  - narrator, series, ISBN and ASIN fields are included only for the calls that send them
+    (`SearchByContext`); a field the call does not send never changes the key;
+  - the provider id, endpoint and marketplace are a prefix, outside the hash, so a bust by
+    provider is a prefix delete.
+- **P1 stores the raw, pre-filter answer.** `askVariant` applies the variant's `accept`
+  filter after the call (`search_fanout.go:594`); the P1 entry holds what the provider
+  returned, and each book's variant filter runs on read. Otherwise a strict variant (a
+  series-slot anchor) would write an empty entry that a looser variant for another book then
+  replays as "no answer".
+- **A negative entry is the empty raw answer to one question.** Because it is keyed to the
+  question, a new variant, a folder-parse title or a changed credit list is a new key and
+  bypasses it with no bust. The per-book "Search again" bust (D30) deletes the P1 keys the
+  book's current question maps to, through the pointer row below. A call that returns
+  `ErrProviderThrottled` (`throttle_registry.go`), any error, or a 429 writes nothing, and
+  that is tested.
+- **D30 TTLs kept as decided** (Audible and Audnexus 14 d, Open Library 30 d, Google 7 d).
+  One refinement that costs nothing: the entry records `asked_at` and the driver orders
+  re-asks by age, so the first calls after an expiry go to the oldest questions.
 - The book-scoped `metadata_fetch_cache:<bookID>:…` rows become **pointers**
   (`bookID → [P1 keys]`) during migration. Readers try P1 first and fall back to the legacy
   per-book row. This follows the same "read old, write new" convergence pattern
-  `CachedMetadataForProvider` already uses (`metadata_fetch_cache.go:105-120`).
+  `CachedMetadataForProvider` already uses (`metadata_fetch_cache.go:121`).
 - **Quota-aware scheduling.** A day-quota provider (Google, 1,000 per day) gets a daily
   budget. The driver spends it on the books with the highest expected gain, which is
   `P(no Audible match) × P(Google answers)`, estimated per `ident_reason` bucket.
@@ -304,14 +381,15 @@ across all sources.
 
 | Need | Structure | Why this one | Size at this scale |
 |---|---|---|---|
-| Enum filter fields (library_state, review status, `ident`, has_cover, metadata applied, quarantine, primary) | Per-value posting lists as **roaring bitmaps** over a dense book ordinal, maintained in the memdb write-through | Intersection of the most selective lists first is O(N/64) per AND, with popcount for counts. That turns the count walk into microseconds. | ~100k ordinals: a few KB per value |
+| Enum filter fields (library_state, review status, `ident`, has_cover, metadata applied, quarantine, primary) | Per-value posting lists as **roaring bitmaps** over a dense book ordinal, maintained in the memdb write-through. **Deferred (r2):** build this only if PR 1's production-path benchmark shows a single walk over 100 ms at 40k primary rows. The result-cache extension in the row below already collapses 3–4 walks per filter change into one, with no write-path change, and that is the cheaper first step. | Intersection of the most selective lists first is O(N/64) per AND, with popcount for counts. That turns the count walk into microseconds. | ~100k ordinals: a few KB per value |
 | Field text filters (title, author credits, narrator, series) | **None new.** RE2 full scan over the survivors of the bitmap intersection | At 40k primary rows, with an assumed ~40 B average title, that is about 1.6 MB of text. RE2 over that should take single-digit ms. This is derived, not measured; PR 1 adds the benchmark. A trigram index in codesearch style pays off only at 10⁶+ docs or with long fields. | — |
 | `description:` regex | Route plain words to Bleve (already indexed). Run a regex as a bounded-concurrency verify over survivors, never over 40k point reads in one goroutine. | Avoids the per-row Pebble read in F6 | — |
 | Filter-only result reuse | Extend `searchcache` to queries with no free text, so one evaluation serves page, count, facets and select-all, with incremental patches from the change log | The cache already exists, with patching, singleflight and byte caps | 128 MiB cap today |
 | Author catalog title match (B2) | Exact folded-credit key, then an in-block trigram set per entry (computed on read; k is small) | Blocking on author makes the block small. A global title index is not needed. | — |
 | Window-print candidate generation | An inverted index `fpwinidx:<band>:<hash> → fileID`, built by **MinHash/LSH over each window's 32-bit sub-fingerprint values** (b bands × r rows). It mirrors the existing head-print `fpidx` (`internal/database/pebble_store_lsh.go`). | Candidate pairs in O(n·b), followed by `WindowSetSimilarity` for verification | ~742k files × windows × b bands of key-only rows. Size it in PR 11. |
 | Book-signature pairs (I12) | LSH banding over the masked signature bits (SimHash-style bands), replacing the nested loop | O(n·b + candidate pairs), instead of O(n²) | — |
-| Title dedup without an author (I14) | A sorted-neighbourhood block on `normalizeTitle(title)` prefix plus duration bucket, or a **SymSpell** delete-dictionary at d≤2 over normalized titles | Restores recall without going quadratic | ~40k titles × deletes at d≤2 |
+| Title dedup without an author (I14), pass 1 | A sorted-neighbourhood block on `normalizeTitle(title)` prefix (`engine.go:4454`) plus duration bucket | Restores recall for books with no `AuthorID` without going quadratic | O(n log n) sort plus a window of w = 20 |
+| Title dedup, **pass 2 (r2), over all books** | **Rarest-token blocking:** for each normalized title, the token with the lowest document frequency across titles (stop words and series markers such as `book`, `vol`, `part` and bare numbers excluded), paired with a 2 % duration bucket (and its two neighbours, so a pair on a bucket edge is not lost). Blocks over 500 members are skipped and counted. | The prefix block misses exactly the shapes this library has: a leading series name or number ("Series 3 - Title", 11,934 number-leading books on 2026-10-03) and a leading article. It also misses pairs whose author rows differ in spelling, which the author block cannot see (about 5,756 books have no author link at all). A rare token plus the runtime is a stronger blocking key than the prefix and is cheap: one map build and one pass. | O(n) map build; candidate pairs ≈ Σ_blocks k²/2 with k small by construction |
 
 ### 3.6 Complexity before and after (derived; details in appendix B)
 
@@ -354,9 +432,12 @@ version headers.
 **PR 3 (S): one grammar, two engines, one corpus (F9).**
 - Files: new `internal/querygrammar/testdata/conformance.json` (pattern, input, expected,
   error); `internal/querygrammar/querygrammar_test.go` (reads the corpus);
-  `web/src/utils/queryGrammar.test.ts` (reads the same JSON); a 150 ms debounce on the Review
-  title field in `web/src/components/review/QueueRail.tsx`.
-- Tests: both suites run on the same corpus.
+  `web/src/utils/queryGrammar.test.ts` (reads the same JSON). The 150 ms debounce on the
+  Review title field moves to PR 18, where the field becomes a server query; until then the
+  client filter is cheap enough (0.96 ms at 40k rows, appendix D) not to need one.
+- Tests: both suites run on the same corpus. The corpus is also what PR 17 runs against the
+  server-side Review query, so the Library, the old client filter and the new server filter
+  all answer the same cases the same way.
 - Rollback: revert.
 
 ### Phase 2: make the goal measurable, and stop losing work
@@ -408,18 +489,152 @@ version headers.
   A key that omitted context fields would serve one book another book's answer.
 - Rollback: a config flag `metadata_fetch.shared_cache=false` restores per-book keys.
 
+### Phase 2b: Review → Metadata lane filters on the server (D36, appendix D)
+
+The owner accepted appendix D's recommendation as D36. These five PRs are appendix D's
+R0–R4, numbered into this plan. They can run in parallel with Phase 2 (different files)
+and must land before PR 4's `ident:` filter reaches the Review grammar, so the filter is
+added once, on the server.
+
+**Snapshot prerequisite, settled (r2).** The coordinator asked whether the incremental
+review snapshot the owner approved on 2026-10-02 is a prerequisite of PR 17. It is not,
+because it already shipped: `d9463d669` ("rebuild the review snapshot incrementally and
+overlay only changed books") and `df23cbe95`, both in `main` before this review's HEAD.
+`metadata_cache_snapshot.go` (v2.1.0, 2026-10-03) rebuilds incrementally from the cache and
+book change logs, carries rows over by pointer, re-reads at most `overlayRebuildThreshold`
+(2,000) changed books per request, and starts a rebuild only after a request finds the
+generation moved and never within `reviewSnapshotMinInterval` (45 s) of the last one. The
+memory note that describes this design as "NOT implemented yet" is stale and should be
+corrected by whoever owns it. What PR 17 adds is the query; what it inherits is the
+snapshot. The one cost the shipped work did not remove is the one PR 17 does remove: the
+full JSON encode of every row on every `view=index` request.
+
+**PR 15 (S) = R0: measure the Review tab's heap first.** No repo files change except the
+audit note.
+- What to measure, in Chrome on the owner's machine against production, Review → Metadata:
+  1. **Which process is large.** Chrome's Task Manager, "Memory footprint" and "JavaScript
+     memory" columns, for the Review tab's renderer, the GPU process and the browser process.
+     A 16 GB figure that sits on the GPU process or the browser process is not this lane's
+     heap and ends the lane investigation.
+  2. **Three heap snapshots** (DevTools → Memory → Heap snapshot): (a) at idle after first
+     paint; (b) after one `refresh()` (apply one book, let the poll settle); (c) after ten
+     applies in one batch, settled. For each, record total JS heap, the count and retained
+     size of `Array` objects with more than 10,000 elements (these are `results` arrays; more
+     than one alive in (b) or (c) means a retained old array), the retained size of the
+     largest `Map` (the `rowStates` map), and the detached-DOM count.
+  3. **The `view=index` response size** from the Network panel, and `total_count` from its
+     summary, so the rows-to-bytes ratio can be checked against appendix D's 3.4 KB per row.
+- Where to record it: `docs/audits/2026-10-DD-review-tab-heap-snapshot.md` (DD = the day it
+  ran), one table per snapshot, figures only. **The snapshot files are never committed and
+  never attached to an issue**: they contain every library title and path, and the repo is
+  public. If the retained-array count is above one in (b) or (c), the audit names the
+  closure that holds it (DevTools "Retainers" view) as a finding for PR 18 to fix, since the
+  lane's `useEffect` chain is rewritten there anyway.
+- Rollback: n/a.
+
+**PR 16 (S) = R1: slim the index view now.**
+- Files: `internal/server/handlers/metadata_cache.go` (in the `indexView` branch at `:773`,
+  also clear `ScoreBreakdown`, and `CategoryTags` if the rail does not read it);
+  `internal/server/handlers/metadata_cache_test.go` (an index row carries no breakdown);
+  `web/src/components/review/lanes/useMetadataLane.ts` (a comment and a test asserting the
+  evidence panel reads breakdowns only from the per-page detail fetch at `:1420`).
+- Effect, measured on synthetic rows: 103 MB → 47 MB of JSON at 40k rows (appendix D).
+- Rollback: revert.
+
+**PR 17 (M) = R2: the server-side review query.**
+- Files:
+  - new `internal/server/handlers/metadata_cache_query.go` and
+    `metadata_cache_query_test.go`: parse the request (`q` in the shared title grammar via
+    `querygrammar.CompileText`; the source, status, stale, deferred, runtime and transcription
+    chips; `hide_applied`, `hide_rejected`, `hide_skipped`, `hide_no_match`; `sort`; `limit`
+    and `offset`), one pass over `snapshot.rows` with the live overlay, sort, slice the page,
+    compute the chip facet counts, and an **`ids=all` mode that returns only `{ids, total,
+    generation}`** for "select all N";
+  - `internal/server/handlers/metadata_cache_snapshot.go`: a folded title precomputed on
+    `snapshotRow` at build time; a result-list LRU of the last 32 `[]rowIndex` keyed by
+    `(cacheGen, bookGen, normalized filter, sort)`, so page, count, facets and `ids=all` for
+    one filter reuse one evaluation;
+  - `internal/server/handlers/metadata_cache.go`: route `view=page` to the new code; every
+    page response carries `generation` so the lane can tell a stale page from a current one;
+  - `internal/server/wire_library_routes.go`: nothing, unless the query gets its own path.
+- **Never a full rebuild, never the 56k overlay, from a keystroke (r2, for the coordinator):**
+  the query reads the snapshot through the same stale-while-revalidate path the index view
+  uses, so a request is served the current snapshot and at most *asks* for a background
+  rebuild, which is still throttled to one per 45 s. The overlay reads only the books the
+  book change log names since the snapshot's `bookGen` (bounded at 2,000, past which the
+  request asks for a rebuild instead of reading), and it runs **once per evaluation, not
+  once per page**, because the LRU entry is keyed by both generations. The only request that
+  waits on a build is the first one after a cold start, exactly as today.
+- Tests: page, count and facets agree with the current client derivation on fixtures (port
+  the `useMemo` chain's cases); the PR 3 conformance corpus runs against this path; an
+  `ids=all` call after a page call hits the LRU (zero extra evaluations); a write that moves
+  either generation misses the LRU; a filter over an unchanged snapshot never triggers a
+  build (assert on the builder's counter).
+- Rollback: `view=index` stays served; nothing reads `view=page` until PR 18.
+
+**PR 18 (M) = R3: switch the lane to page mode behind a flag.**
+- Flag: **`review_metadata_server_query`** (bool, default `false`) in
+  `internal/config/config.go`, next to `review_apply_enabled` (`config.go:1533`), read by the
+  lane through the existing `api.getConfig()` (`web/src/services/api.ts:3001`). This follows
+  the one flag pattern the Review page already has, rather than adding a frontend flag
+  system.
+- Files:
+  - `web/src/services/api.ts`: `getReviewPage(params)` and `getReviewMatchingIds(params)`;
+  - `web/src/components/review/lanes/useMetadataLane.ts`: when the flag is on, replace the
+    full-index load (`:973`) and the `useMemo` filter chain (`:1208-1238` and following)
+    with one server query per settled filter (AbortController, 150 ms debounce), keep the
+    per-page detail fetch (`:1420`), and make every `refresh()` call site (seven today) a
+    **page refetch plus a facet refetch**, about 130 KB, instead of the whole index;
+  - `selectAllMatching` (`:1995`) calls `getReviewMatchingIds` and keeps **IDs only** (1.2 MB
+    at 40k rows), the same shape as the Repairs lane's `collectApplicableIds`
+    (`useRepairsLane.ts:650-667`); `allMatchingSelected` becomes "every id in the current
+    ids list is selected"; the apply path already sends `APPLY_CHUNK_SIZE` (500) ids per
+    request (`:92`), so nothing downstream changes;
+  - `web/src/components/review/QueueRail.tsx`: chip counts come from the server facets;
+  - `web/src/components/review/ReviewWorkspace.tsx`: "select all N" uses the ids call; the
+    `SpineViewMode` switch (`spine/viewMode.ts`) is untouched, because it chooses how the
+    visible page is drawn and never what is loaded;
+  - `web/src/components/review/lanes/useMetadataLane.test.ts`: both modes.
+- Tests: the lane renders the same rows for the same filter in both modes on a fixture; a
+  keystroke inside the debounce window sends no request; an aborted request never updates
+  state; select-all over 2 pages selects `total` ids.
+- Rollback: set the flag to `false`; the index mode is still complete code for one release.
+- Size M; the lane file is 2,300 lines, so the diff is reviewed in two commits (query hook,
+  then call sites).
+
+**PR 19 (S) = R4: retire the full-index mode** one release after PR 18 has run with the
+flag on.
+- Files: `useMetadataLane.ts` (delete the index path and the flag read); `metadata_cache.go`
+  (delete the `indexView` branch; `view=index` returns 410 for one release, then is
+  removed); `config.go` (delete the flag).
+- Rollback: revert; the flag comes back defaulting to `true`.
+
 ### Phase 3: candidate recall for the goal
 
-**PR 7 (M): local catalog blocking stage, B1 and B2 (I2).**
+**PR 7a (S): catalog coverage report (D31, "measure first").**
+- Files: new `internal/plugins/catalog/coverage_report.go` (a read-only op
+  `catalog.coverage-report`): for every primary book with `ident ∈ {unasked, asked_empty}`,
+  look up each credit's fold in `cat_author:name:` and report: books with at least one
+  credit harvested, books with none, and the top 50 unharvested credits by book count (names
+  only in the op result, never in the repo). `register.go` for the op.
+- Tests: a fixture catalog and library give the expected three counts.
+- Rollback: delete the op. It reads only.
+- The number this produces is the ceiling on what PR 7b can move; the owner sees it before
+  7b is built.
+
+**PR 7b (M): local catalog blocking stage, B1 and B2 (I2).**
 - Files: `internal/catalog/search.go` (bulk `MatchBook(question) []BookMetadata`, exact key
-  only); `internal/database/catalog_entry_store.go` (an `EntriesForAuthorKey` exact-only
-  variant); `internal/metafetch/service_search.go` (a B1/B2 stage ahead of
-  `runSearchFanout`, with candidates tagged by stage of origin);
+  only, every credit in order); `internal/database/catalog_entry_store.go` (an
+  `EntriesForAuthorKey` exact-only variant; the `cat_author:alias:` key and its write-through
+  from the harvest); `internal/database/keyfamilies.go` (the alias family);
+  `internal/metafetch/service_search.go` (a B1/B2 stage ahead of `runSearchFanout`, with
+  candidates tagged by stage of origin and marked review-only per D31);
   `internal/server/metadata_candidate_op.go` (per-run counters: candidates from the catalog
-  versus providers).
+  versus providers, and `oversize_block`).
 - Tests: a synthetic catalog plus a book with a literal series-decorated title yields a
   candidate with zero provider calls; a homonym author produces no cross-match (reuse
-  `disambig.go`).
+  `disambig.go`); a second-position credit finds its block; an alias finds its block; a
+  block over the cap is skipped and counted.
 - Rollback: a config flag `metadata_fetch.catalog_stage=false`.
 
 **PR 8 (M): window-print index plus a `SigWindowAcoustID` signal plus fragment containment
@@ -436,14 +651,55 @@ evidence (I10).**
 
 ### Phase 4: one scorer and calibrated confidence
 
+**PR 9a (S): a missing author or narrator is not a disagreement (I8).** This is a bug in
+today's scorer and it ships on its own, before the new scorer, so its effect is measurable
+alone.
+- Files: `internal/metafetch/service_search.go` (`:1377` `Author missing` and `:1408`
+  `No narrator`: the multiplier becomes 1.0 and the breakdown step is kept, relabelled
+  `author_unknown` / `narrator_unknown`, so the evidence panel still shows that the field was
+  absent); `internal/metafetch/score_breakdown.go` (the label);
+  `internal/applygate/evidence.go` (**verify, then guard:** a title-only candidate with no
+  author on either side must still fail `CheckEvidence`; if the current rule set lets it
+  through once the ×0.75 is gone, add an `author_unknown` reason to the evidence leg so the
+  auto-apply gate is unchanged in effect).
+- Tests: a scorer table case per field; an applygate regression that a title-only match
+  with an unknown author never auto-applies; the existing `calibrate-scoring` harness runs
+  before and after and its top-1 accuracy does not drop.
+- Rollback: revert.
+- Why its own PR: the multiplier pushes every Open Library and Google row down by
+  construction (they carry no narrator), which is a ranking error in the review queue today,
+  independent of any calibration.
+
 **PR 9 (L): the `matchscore` package.**
 - Files: new `internal/matchscore/features.go`, `weights.go` (Fellegi–Sunter m/u tables,
   versioned), `calibrate.go` (Platt and isotonic, ECE), `matchscore_test.go`;
   `internal/plugins/metafetch/calibrate_scoring.go` (fits and reports, writes no config);
   `internal/metafetch/service_search.go` (computes `P` alongside today's score and stores
   both on `MetadataCandidate`; **shadow mode**).
+- **What shadow mode records, and where (D35, r2).**
+  - On every `MetadataCandidate` written to `metadata_cache:<bookID>`: `p` (0–1), `features`
+    (the level chosen per feature, a small string map), `weights_version`. Rows are already
+    rewritten on every fetch, so this adds about 200 bytes per candidate and no new keyspace.
+  - `matchscore:neg:<bookID>:<sha8(candidate)>`: a sampled copy (1 in 4, capped at 50k rows,
+    30-day TTL) of the candidates today's scorer **discards** at `score <= minScore`
+    (`service_search.go:1351`), with the same fields. Without these there are no true
+    negatives to fit on (I18).
+  - Per bulk run, in the op result of `metadata.candidate-fetch` and `batch-apply-cached`:
+    `shadow_disagreements` = candidates where the legacy score leg and `P ≥ τ_auto` disagree,
+    split both ways, with the first 20 book ids of each (ids, never titles, in the result).
+  - Log line, Info, once per run: the two disagreement counts and the run's ECE on rows that
+    have a label.
+- **How the owner gets the precision curve.** `metafetch.calibrate-scoring` gains a report
+  mode: over the **manual segment** (rows whose outcome the owner decided: applied by hand or
+  through an approved list = positive; rejected or overridden = negative) it tabulates, for τ
+  from 0.50 to 0.995 in steps of 0.005, precision, recall, the count above τ and the count of
+  would-be auto-applies. The table is the op result (visible in the operations UI like any
+  result) and a CSV download. It runs nightly during the two shadow weeks. The owner picks
+  τ_review from it (D35: the lowest P with precision ≥ 0.5) and confirms τ_auto = 0.98 against
+  it; those two values go into config in PR 10, never into code.
 - Tests: weights recovered from synthetic labelled data; ECE on a held-out split; a golden
-  test that shadow mode does not change ranking.
+  test that shadow mode does not change ranking; the sampled-negative writer honours its cap
+  and TTL; the report's precision at a known τ on a fixture equals the hand count.
 - Rollback: shadow mode has no effect on decisions.
 
 **PR 10 (M): decide on P.**
@@ -457,22 +713,34 @@ evidence (I10).**
 
 ### Phase 5: dedup blocking
 
-**PR 11 (S): exact-title and duration blocking (I13, I14).**
+**PR 11 (M): exact-title and duration blocking, two passes (I13, I14).**
 - Files: `internal/dedup/engine.go` (`checkExactTitle` and `checkDurationMatch` take a
   per-author block prepared once per author in `FullScan`, compare i<j once, memoize forms,
-  run the integer prefilters first, and use a bounded Levenshtein; a new no-author block
-  keyed on normalized title prefix plus duration bucket).
-- Tests: `engine_fullscan_layer1_parallel_test.go` stays green, and candidate sets are
-  identical to serial on fixtures, apart from the added no-author pairs.
-- Rollback: revert.
+  run the integer prefilters first, and use a bounded Levenshtein); new
+  `internal/dedup/blocking.go` (**pass 1**: the no-author sorted-neighbourhood block on
+  normalized title prefix plus duration bucket; **pass 2**: the rarest-token × duration-bucket
+  block over all books, §3.5, with the block cap and counter); the pairs from both passes go
+  through the same `checkExactTitle` comparison body, so there is one matching rule.
+- Why pass 2 (r2): the author block and the prefix block both miss pairs whose titles start
+  differently (a series name or number first, an article first) or whose author rows are
+  spelled differently. Record-linkage practice is to union two cheap blocking keys rather than
+  loosen one; the union's recall against the quadratic baseline is the number to report.
+- Tests: `engine_fullscan_layer1_parallel_test.go` stays green; candidate sets are identical
+  to serial on fixtures apart from the added pairs; on a synthetic 20k-title fixture with
+  planted duplicates of the three shapes above, the union of the three blocks finds ≥ 0.98 of
+  the planted pairs that brute force finds; a block over the cap is skipped and counted.
+- Rollback: a config flag disables pass 2; pass 1 is revert.
+- Size M, up from S, because of the second pass.
 
-**PR 12 (M): `BookSignatureScan` LSH (I12).**
+**PR 12 (M): `BookSignatureScan` LSH (I12). PARKED (r2).**
 - Files: `internal/dedup/engine.go` (`BookSignatureScan`); `internal/fingerprint/lsh.go`
   (`BookSigBands`).
 - Tests: recall ≥ 0.99 against brute force on synthetic signatures at the
   `FuzzyMinSimilarity` threshold.
 - Rollback: a config flag selects brute force.
-- Gate: run this only after the re-fingerprint, per the dated note.
+- Parked because the signatures it would index are garbage until the re-fingerprint (dated
+  note), so the O(n²) scan compares noise today and speeding it up moves no number. It stays
+  in the plan as written and is scheduled when the re-fingerprint is.
 
 **PR 13 (S): correlated text evidence in noisy-OR (I15).**
 - Files: `internal/dedup/unified/compose.go` (group `SigEmbedHigh`, `SigEmbedMedium` and
@@ -480,7 +748,10 @@ evidence (I10).**
   `internal/dedup/unified/config.go`; `FormulaVersion` bumped to `noisy-or-v2`.
 - Tests: `compose_test.go` tables.
 - Rollback: revert. **Bumping `FormulaVersion` triggers a corpus-wide rescore**, which the
-  owner must schedule.
+  owner must schedule (D33: in a window with no scan).
+- Timing (r2): this PR does not move recall, only confidence on text-only pairs. It rides on
+  the next `FormulaVersion` bump that happens for another reason (PR 8's new signal is one),
+  so the corpus is rescored once, not twice.
 
 ### Phase 6: orchestration
 
@@ -494,6 +765,27 @@ evidence (I10).**
 - Tests: drift re-derivation; a surfaced file does not block its book; dirty-set drain under
   restart.
 - Rollback: disable the op. The 6-hour tick still runs.
+- **Ships as a v2 op first, and that is still right under D28a (r2).** The goal number
+  should not wait on the v3 runtime, and D28a changes the runner, not the op author's
+  surface. To make the v3 port a mechanical move, `advance.go` is written in the v3 shape
+  from day one and the v2 adapter is the only thing that is thrown away:
+  - `Source`: a `Pages(after, limit)` function over `ident:dirty:` keys, page size **256**
+    to match D28a's chunk, `Key = bookID`, `Order = Unordered` (a re-mark can land below the
+    cursor). No `Items` slice is ever materialized.
+  - `Item(ctx, bookID)`: the whole per-book pipeline (Q → B → S → X) as one idempotent
+    function. It clears the dirty mark with a **compare-and-delete** on the mark's epoch it
+    read at start, so a re-mark during processing survives.
+  - `Finish(summary)`: counters only.
+  - `PartitionBy = bookID`, `Concurrency = Network(n, "sum of enabled provider budgets")`,
+    the same derivation as `metadata_candidate_op.go:264-277`.
+  - The v2 adapter in `register.go` calls `registry.RunItems` with **`Concurrency` set
+    explicitly** (CLAUDE.md: it defaults to 1) and `Label` reading only the item, and owns
+    nothing else. The v3 port replaces the adapter with `ops.Batch{Source: ops.DirtySet("ident:dirty:")}`
+    and deletes it; `advance.go` does not change. Chunk leasing, the ledger and status come
+    from the v3 runner (D28a) and the v2 adapter does not try to emulate them.
+  - Status while still on v2: items done and the current book id per worker, from the
+    existing `RunItems` progress, which is enough for "status is always visible" until the
+    port.
 
 ---
 
@@ -518,6 +810,15 @@ evidence (I10).**
 - **Bans honoured.** No server decode (window prints already exist, and PR 8 only compares
   them). No iTunes writes. No `book_file` deletes. The scan ConcurrencyKey is untouched. The
   `internal/writeback/` package is untouched.
+- **The Review lane switch (PRs 17–18)** must never make a keystroke wait on a snapshot
+  build or read 56k books: the query is served the current snapshot, the overlay is bounded
+  at 2,000 changed books, and the LRU is keyed by both generations. A regression here is a
+  test failure (PR 17's builder-counter assertion), not a production surprise.
+- **Select all N under server paging** hands the apply path an id list it did not see
+  rendered. The ids come from the same evaluation as the count the owner clicked, the
+  response carries `generation`, and the lane refuses to apply a list whose generation is
+  older than the current page's. Review-apply still goes through the bulk gate and its
+  dry-run list.
 - **Search index.** No mapping change is proposed. Any future one must go through the marker
   file and coverage-seeded rebuild (`search_coverage.go`), never the empty-index bulk build.
 
@@ -540,6 +841,27 @@ evidence (I10).**
   reachable. The coordinator should pass it on.
 
   *Coordinator (08): relayed and resolved in 05 §3.9 v1.2.0. (1) is met. (2) is added as `ops.DirtySet`. (3) names the existing process-wide provider limiter instead of adding a second one. (4) lives in this doc's `ident_reason` index, not in run state. PR 14 ships first as a v2 op, using the fallback above, so the goal does not wait for ops v3.*
+
+  **r2 check of 05 §3.9 (read, not edited).** Items (1), (2), (4) and the v2-first decision
+  are covered as stated. Three things 05 §3.9 does not say, which the coordinator should
+  carry to `opsv3` so the PR 14 port stays mechanical:
+  1. **`ops.DirtySet` must clear by compare-and-delete, not by key.** §3.9 says items are
+     "cleared only after `Item` succeeds". If the clear is a plain delete, a book re-marked
+     while its item ran (a scan writing the same book) loses its mark and is never
+     re-advanced. The mark's value must be an epoch (or the marking write's generation) and
+     the clear must delete only if the stored epoch equals the one the item read at start.
+     This is how PR 14's v2 adapter will behave, so the v3 source has to match it.
+  2. **`ops.Budget("audible")` is a rate budget; the driver also needs a day quota.** Google's
+     1,000 calls per day (§3.4) is a different kind of limit from Audible's 8/s. §3.9's
+     `Budget` names the existing per-second limiter and says nothing about a daily
+     allowance, a reset time, or who decides which items spend it. Decision for the
+     coordinator: the day quota stays in 02 (PR 6 config plus the driver's expected-gain
+     ordering) and v3 is only asked to expose `Budget` as a read so the dispatcher can show
+     contention; v3 does not own quota policy.
+  3. **Chunk size.** D28a's "about 256 items" and the `DirtySet` `Pages` limit should be the
+     same constant, so a leased chunk is one page. PR 14 uses 256 for its page size now.
+
+  None of these blocks PR 14 as a v2 op.
 - **03 (dedup page retirement).** PRs 8, 11, 12 and 13 change dedup candidate sets and
   scores. Parity tests in 03 should pin the candidate set **before** these land, or be
   re-baselined afterwards. The fragment-containment evidence in PR 8 would feed the Review
@@ -565,4 +887,4 @@ evidence (I10).**
 | Q4 | A retitle should mark candidates stale instead of deleting them. Agreed? | **Yes.** It is the root shape of the 1,180-row loss. Stale rows are never applied, only rescored. |
 | Q5 | Should `author:` filter on every credited author, not only the primary one (F7)? | **Yes.** It is consistent with the 10-04 "credits are always ordered lists" rule and with Bleve free text. |
 | Q6 | Should window-print similarity become a dedup signal and fragment-to-parent evidence? | **Yes, at a supporting weight**, until a calibration on the owner's merge decisions sets a primary weight. |
-| Q7 | Should the Review page's filtering stay client-side? | **Yes for now**, with the shared conformance corpus (PR 3). Move it server-side only if the snapshot grows past what the client can filter in under 50 ms. |
+| Q7 | Should the Review page's filtering stay client-side? | **Superseded by D36.** The owner chose server-side, measured (appendix D); the work is PRs 15–19 in Phase 2b. |

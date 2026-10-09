@@ -1,13 +1,26 @@
 <!-- file: docs/proposals/2026-10-holistic/03-dedup-page-retirement.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.1 -->
 <!-- guid: 3b8e1f52-6c0d-4a97-9e2b-7f14d5a0c863 -->
-<!-- last-edited: 2026-10-08 -->
+<!-- last-edited: 2026-10-09 -->
 
 # 03: Retire the old /dedup page
 
 Analyst: `dedup`. Measured at HEAD `f7211eb39`, in the `aorg-holistic` worktree. This is a planning document only: no code was changed.
 
 > **Coordinator note (08, 2026-10-08).** (1) PR 11 no longer deletes `BulkActionBar.tsx` and its test, `FingerprintVisualsColumn.tsx`, or the four dead `api.ts` wrappers: 01 P7 owns them, so no file is deleted twice. (2) The dead `dedup` category C cluster (`MergeBooks`, `guardKeeperAudioRoute`, `retireMergedLoser` and 12 more funcs, 705 lines), which 01 had marked "see 03", was named nowhere in this doc. It is now 01 P73, with the guard-parity check as its precondition. (3) PR 9's three fixers are written as v2 `repairs.Fixer`s and port to v3 in 05 wave 12D. See `08-integrated-roadmap.md` §3.
+
+### Round-2 review (r1)
+
+Re-checked at HEAD `ebda30d47` on 2026-10-09; the code is identical to the measured HEAD `f7211eb39`, so the anchors hold. Owner decisions D19–D22 (and D2) are treated as fixed. Changes:
+
+- **Parity matrix re-checked against the Review code.** `useDupesLane.ts:106-112` filters are still `band`, `status`, `bothUnmatched`, `entityId`, `search`; `layer` appears only as a read at `:531`; `entity_type: 'book'` is hardcoded at `:362,667`. The old tabs' control labels (`grep -o 'label="…"'` over the five tabs) surface nothing the 78 rows miss: `rowsPerPage` is C09, "Book A ID / Book B ID" is C65, the undo-dismiss banner is C59, the "iTunes" chip is C08. No row added; the count stays 78.
+- **G9 redirect gains a default row.** A `/dedup` link with no `?tab=` or an unknown one (the dead `FingerprintVisualsColumn.tsx:86` comment documents a legacy `tab=unified`) must land on `/review?lane=dupes` and keep `book`/`band`; `initialLaneFrom` already falls to `dupes` on either param (`ReviewWorkspace.tsx:165-170`). Deep links therefore survive the redirect.
+- **New risk for the Mac fingerprint workers (G5, D2).** "Reset all audio fingerprints" enqueues `acoustid.reset-all` **then** `acoustid.fingerprint-rescan` (`handlers/dedup/handler.go:2286-2292`). Under D2 that rescan is whole-library work for the Mac workers, not the server. The confirm dialog must say so, and the command is hidden while no worker has checked in.
+- **D21 applied**: split-book is ported as a fixer and measured against the fragment fixer (C67, G8, PR 9c); the "only if the owner keeps it" wording is gone.
+- **PR 7 contradicted appendix B**: it ported `BookDedup.validation.test.tsx`, which appendix B drops because it tests a local copy of `validateBookID`. The port is removed. PR 7 is split into **7a** (lane scaffolding + Authors sub-view) and **7b** (Series sub-view), each with its own E2E block; PR 9 is split into **9a/9b/9c**, one fixer each, since they are independent Go changes with independent rollbacks.
+- **PR 11's E2E line fixed**: the "Scheduler Tasks for Dedup" block **moves** to an operations spec (appendix B already said so); 04 keeps the `dedup_refresh` task pointing at `dedup.author-scan`, so nothing in 04 makes it deletable.
+- **D27 touches G8**: `reconcile.scan` (UI) and `maintenance.reconcile-scan` (nightly) are a 04 near-duplicate pair; PR 9b's plan source reads `/operations/reconcile/scan/latest` (`server/reconcile.go:68`, `recentReconcileScans`), so PR 9b must be written against whichever op 04's D27 PR keeps, and that PR must keep writing the saved results the fixer reads (§6).
+- §7 questions now carry their decision. No change to the endpoint inventory or the delete list in appendix A.
 
 Appendices are in [`03-dedup-page-retirement/`](03-dedup-page-retirement/):
 
@@ -60,12 +73,12 @@ Appendices are in [`03-dedup-page-retirement/`](03-dedup-page-retirement/):
   - a runbook curls `/dedup/labels/stats` and `/dedup/labels/export`.
   - **AudioBooth calls no `/api/v1` route at all.** Its route manifest lists `/api/...` ABS paths only (`tests/audiobooth-decode/manifest.json`, 0 matches for `api/v1`). Confidence: high.
   - **Exactly 5 routes (plus 2 deprecated aliases) become dead** when the page goes, without being reused by a gap package (Appendix A §A.3).
-- **Plan: 13 PRs in 4 phases** (§4):
+- **Plan: 16 PRs in 4 phases** (§4; round 2 split PR 7 into 7a/7b and PR 9 into 9a/9b/9c):
   - Phase 0, 1 PR: relocate the shared compare-drawer closure.
-  - Phase 1, 8 PRs: close the gaps.
+  - Phase 1, 11 PRs: close the gaps.
   - Phase 2, 1 PR: repoint links and add a `?tab=`-aware redirect.
   - Phase 3, 3 PRs: delete the frontend, then the backend routes, then the docs.
-- **Six owner decisions are needed**, each with a recommended answer (§7). The main one is where author and series dedup should live. Recommended: a new **Authors lane** in Review, with series dedup inside it, and series prune as a Repairs fixer.
+- **The six owner decisions are answered** (D19–D22, D2; §7): a new **Authors & series lane** in Review (G6, G7), Gold Labels as a Dupes-lane sub-view (G1), split-book ported as a fixer and measured (G8), the per-page cluster view now with a server-side "recommended" keep later (G3, G2), and fingerprinting on the Mac workers only.
 
 ## 2. Findings
 
@@ -240,7 +253,7 @@ Legend:
 
 | # | Capability | Old page | Review | Useful? | Dest | Size |
 |---|---|---|---|---|---|---|
-| C67 | Scan for split-book clusters (`dedup.split-book-scan`) | `:204-210` | **MISSING**. It partly overlaps the `fragment-consolidation` fixer (F15). | Yes, unless the owner retires it (Q3) | RF (G8) | M (G8) |
+| C67 | Scan for split-book clusters (`dedup.split-book-scan`) | `:204-210` | **MISSING**. It partly overlaps the `fragment-consolidation` fixer (F15). | Yes. D21: port it as a fixer, measure it against the fragment fixer on prod trials, then decide whether it stays | RF (G8) | M (G8) |
 | C68 | List and expand clusters, with a suggested keep | `:76,152,183` | **MISSING** | Yes | RF (G8) | S (G8) |
 | C69 | Merge one cluster | `:237-247` | **MISSING** | Yes | RF (G8) | S (G8) |
 | C70 | Bulk merge from an imported candidate file | `:259-289` | **MISSING**. The CLI `tools/cmd/merge-split-books` does the same. | No in the UI: the Repairs "approve all" replaces it | OB | 0 (obsolete) |
@@ -375,7 +388,7 @@ Every gap package follows the patterns already in the workspace:
 - **Settings → Dedup** (`components/settings/DedupSettingsSection.tsx`): add an AcoustID.org API key field, shown masked, saved with `updateConfig({acoustid_api_key})`. This is the same call `DedupAcousticTab.tsx:856-862` makes.
 - **Dedup menu → Advanced → Maintenance**: add two commands.
   - "Look up fingerprints online" (`triggerAcoustIDOnlineLookup`).
-  - "Reset all audio fingerprints…" (`resetAcoustIDFingerprints`), behind a confirm dialog that says it deletes every stored fingerprint and queues a rescan.
+  - "Reset all audio fingerprints…" (`resetAcoustIDFingerprints`), behind a confirm dialog that says it deletes every stored fingerprint and queues a rescan. The handler enqueues `acoustid.reset-all` and then `acoustid.fingerprint-rescan` (`handlers/dedup/handler.go:2286-2292`). Under D2 the rescan runs on the Mac fingerprint workers, so the dialog must state that it queues a whole-library re-fingerprint for the workers (days, not minutes), and the command is shown only while a worker has checked in (`GET /fingerprint/worker/hello` lease state; reuse whatever indicator `pages/Library.tsx` uses for "Fingerprint Books" after D2 lands). The server must never decode audio for it.
 - **Compare drawer**: add an "Audio match" section to `CandidateCompareDrawer`. It calls `compareAcoustID(book_a, book_b)` on demand and renders the response the way `AcousticComparePanel` does (`DedupAcousticTab.tsx:200-276`). This replaces the panel where you type in two ids.
 
 #### G6: Authors lane (C14-C22, C29-C33, C54). Size L.
@@ -411,7 +424,9 @@ These are Go and the Repairs registry, so they are backend work. They are listed
 |---|---|---|---|
 | `dedup.series-prune` | `SeriesPrunePreview` (`duplicates/handler.go:738`) | `dedup.series-prune` op | C34 |
 | `reconcile.missing-files` | latest `reconcile.scan` preview (`/operations/reconcile/scan/latest`) | `reconcile.apply` with the picked rows | C36-C38. The "no candidate file" books become skipped rows that carry a reason, so they stay countable and clickable. |
-| `dedup.split-books` | `ListSplitBookCandidates` | `dedup.split-book-merge` per row | C67-C69. **Only if the owner keeps it (Q3).** |
+| `dedup.split-books` | `ListSplitBookCandidates` | `dedup.split-book-merge` per row | C67-C69. **D21: port it, then measure.** Run its trial and the fragment fixer's trial on prod; if every split-book row is also a fragment "no parent" row, retire it and the CLI in a follow-up. |
+
+**D27 dependency for `reconcile.missing-files`.** The plan source `/operations/reconcile/scan/latest` is served by `server/reconcile.go:68` (`latestReconcileScan` → `recentReconcileScans(store, 200)`), which reads saved scan results. 04's D27 pair "`maintenance.reconcile-scan` (nightly, saves) vs `reconcile.scan` (UI, previews)" keeps the newer `reconcile.scan`; that 04 PR must make the survivor persist its results the way the nightly one does, or PR 9b has no plan source. PR 9b is written after that 04 PR, against the survivor's op type.
 
 After G8, the reconcile command's description (`ReviewWorkspace.tsx:375`) points to Repairs → "Missing files".
 
@@ -430,6 +445,9 @@ A new `DedupRedirect` element replaces the `/dedup` route. It maps `?tab=` and k
 | `?tab=reconcile`, `?tab=split-books` | `/review?lane=repairs&fixer=<id>` |
 | `/dedup/labels` | `/review?lane=dupes&view=labels` |
 | `/authors/dedup`, `/books/dedup` | through the same element |
+| no `?tab=`, or an unknown value (the legacy `tab=unified` that `FingerprintVisualsColumn.tsx:86` documents) | `/review?lane=dupes`, keeping `book` and `band`; `initialLaneFrom` (`ReviewWorkspace.tsx:165-170`) already lands on the dupes lane for either param, so a `?book=` deep link keeps working |
+
+Every row keeps `?book=` and `?band=` verbatim. Unknown extra params are dropped, not forwarded, so a stale bookmark cannot seed a lane filter it never had.
 
 Also in G9:
 
@@ -457,7 +475,7 @@ These files must move, not be deleted. Target: `web/src/components/review/compar
 
 ## 4. Implementation plan
 
-The gap PRs (1-9) are independent of each other except where a "Needs" line says otherwise. Deletions (11-13) wait for **all** of them. Every frontend PR runs `npx --prefix web tsc --noEmit` and the Vitest suite. It follows the red-then-green rule: revert the fix, see the test fail, restore it, see the test pass.
+The gap PRs (1 to 9c) are independent of each other except where a "Needs" line says otherwise. Deletions (11-13) wait for **all** of them. Every frontend PR runs `npx --prefix web tsc --noEmit` and the Vitest suite. It follows the red-then-green rule: revert the fix, see the test fail, restore it, see the test pass.
 
 ### Phase 0: prepare
 
@@ -504,31 +522,40 @@ The gap PRs (1-9) are independent of each other except where a "Needs" line says
 - Tests: `dupesClusters.test.ts` (components, primary choice, a cluster split across a page boundary); `DupesClusterSpine.test.tsx`; port the cluster cases from `components/dedup/__tests__/DedupEmbeddingTab.test.tsx`.
 - Rollback: revert.
 
-**PR 7. G6: Authors lane, with the Authors and Series sub-views.** Size L.
+**PR 7a. G6: Authors lane scaffolding and the Authors sub-view.** Size M. (Was half of an L-sized PR 7; split in round 2 because the Series sub-view is a separate endpoint family with its own E2E block, and the lane must be reviewable before the second sub-view lands.)
 
 - Files: new `lanes/authors.ts`, `lanes/useAuthorsLane.ts`, `AuthorsPanel.tsx` and `spine/AuthorGroupSpine.tsx`; edit `lanes/index.ts`, `reviewActions.ts`, `ReviewWorkspace.tsx`.
-- Tests: port `components/dedup/__tests__/DedupAuthorTab.test.tsx`, plus the author part of `dedupTabs.selectAll.test.tsx`, plus `pages/__tests__/BookDedup.validation.test.tsx` → `lanes/useAuthorsLane.test.ts` and `AuthorsPanel.test.tsx`. Add series cases.
-- E2E: rewrite `web/tests/e2e/dedup.spec.ts` "Author Dedup", "Book Preview Popover" and "Series Dedup", and `dedup-operations.spec.ts`, against `/review?lane=authors` (Appendix B).
+- Tests: port `components/dedup/__tests__/DedupAuthorTab.test.tsx` and the author part of `dedupTabs.selectAll.test.tsx` → `lanes/useAuthorsLane.test.ts` and `AuthorsPanel.test.tsx`. `pages/__tests__/BookDedup.validation.test.tsx` is **not** ported: appendix B drops it because it tests a local copy of `validateBookID`, not the product.
+- E2E: rewrite `web/tests/e2e/dedup.spec.ts` "Author Dedup", "Book Preview Popover", "Dedup Refresh Operations", "Dedup Pagination" and "Dedup Bulk Actions", and `dedup-operations.spec.ts` "Production Company Resolution", "Dedup Operation Progress" and "Dedup Error Handling", against `/review?lane=authors` (Appendix B).
 - Rollback: revert. The lane is additive.
 
-**PR 8. G7: AI scans sub-view.** Size M. Needs PR 7.
+**PR 7b. G6: Series sub-view.** Size S. Needs PR 7a.
+
+- Files: `lanes/useAuthorsLane.ts` (series fetch and verbs, typed `series`), `AuthorsPanel.tsx` (segmented control gains "Series"), `spine/AuthorGroupSpine.tsx` (series card variant), `ReviewWorkspace.tsx` (`view=series` seed).
+- Tests: series cases in `useAuthorsLane.test.ts` and `AuthorsPanel.test.tsx`; the series part of `dedupTabs.selectAll.test.tsx`.
+- E2E: `dedup.spec.ts` "Series Dedup" against `/review?lane=authors&view=series`.
+- Rollback: revert.
+
+**PR 8. G7: AI scans sub-view.** Size M. Needs PR 7a.
 
 - Files: `lanes/useAuthorsLane.ts` (or a new `lanes/useAIScans.ts`), `AuthorsPanel.tsx`.
 - Tests: port `components/dedup/__tests__/DedupAIReviewTab.test.tsx`.
 - Rollback: revert.
 
-**PR 9. G8: Repairs fixers for series prune, reconcile and (if kept) split-books.** Size L. Go side; owned outside `web/`.
+**PR 9a, 9b, 9c. G8: one Repairs fixer per PR.** Go side; owned outside `web/`. (Was one L-sized PR 9; split in round 2 because the three fixers share no code, each has its own rollback, and 9b is gated on a 04 PR that 9a and 9c are not.) They are v2 `repairs.Fixer`s and port to v3 in 05 wave 12D.
 
-- Files:
-  - new `internal/plugins/maintenance/series_prune_fixer.go`, `reconcile_fixer.go` and `split_books_fixer.go`, each with a `_test.go`;
-  - their registration in `internal/plugins/maintenance/plugin.go`;
-  - `web/src/components/review/ReviewWorkspace.tsx:375` (the description text).
-- Tests: Go unit tests per fixer (trial rows, apply, iTunes rows never written); `RepairsPanel.test.tsx` fixture with the new ids.
-- Rollback: unregister the fixers.
+| PR | Fixer | Files | Tests | Gate | Size |
+|---|---|---|---|---|---|
+| 9a | `dedup.series-prune` | new `internal/plugins/maintenance/series_prune_fixer.go` + `_test.go`; registration in `plugin.go` | trial rows match `SeriesPrunePreview` (`duplicates/handler.go:738`); apply runs `dedup.series-prune`; a series referenced by any book is never a row | — | S |
+| 9b | `reconcile.missing-files` | new `internal/plugins/maintenance/reconcile_fixer.go` + `_test.go`; `internal/plugins/maintenance/plugin.go`; `web/src/components/review/ReviewWorkspace.tsx:375` (the description text) | trial rows come from the latest saved scan; "no candidate file" books are skipped rows with a reason; apply runs `reconcile.apply` with the picked rows only; iTunes rows never written | **after 04's D27 PR for the reconcile pair** (§3.2 G8 note) | M |
+| 9c | `dedup.split-books` | new `internal/plugins/maintenance/split_books_fixer.go` + `_test.go`; `internal/plugins/maintenance/plugin.go` | trial rows match `ListSplitBookCandidates`; apply runs `dedup.split-book-merge` per row; iTunes rows excluded the way `duplicate_copies_fixer.go:41-45` does | D21: ship, then run both trials on prod and record the overlap before deciding to retire | M |
+
+- Shared: `RepairsPanel.test.tsx` fixture gains each new id in its own PR.
+- Rollback: unregister the one fixer.
 
 ### Phase 2: repoint
 
-**PR 10. G9: redirect, sidebar, announcement link.** Size S. Needs PRs 2, 5, 7, 8 and 9.
+**PR 10. G9: redirect, sidebar, announcement link.** Size S. Needs PRs 2, 5, 7a, 7b, 8, 9a, 9b and 9c.
 
 - Files: `web/src/App.tsx` (new `DedupRedirect` replacing the `/dedup`, `/dedup/labels`, `/authors/dedup` and `/books/dedup` routes); new `web/src/pages/DedupRedirect.tsx` plus a test; `components/layout/Sidebar.tsx`; `components/review/ReviewWorkspace.tsx` (`initialLaneFrom` accepts `layer` and `view`); `components/review/lanes/useRepairsLane.ts` and `RepairsPanel.tsx` (`?fixer=` seed); `internal/server/handlers/system/handler.go:243` (Go owner).
 - Tests: `DedupRedirect.test.tsx`, one case per row of the G9 table; `Sidebar` test; Go test asserting the announcement link.
@@ -545,7 +572,7 @@ The gap PRs (1-9) are independent of each other except where a "Needs" line says
   - tests: `DedupAcousticTab.selectAll.test.tsx`, `DedupAIReviewTab.test.tsx`, `DedupAuthorTab.test.tsx`, `DedupBookTab.test.tsx`, `DedupBookTab.selectAll.test.tsx`, `DedupEmbeddingTab.test.tsx`, `dedupTabs.selectAll.test.tsx` (each ported or dropped per Appendix B);
   - `web/src/components/common/BulkConfirmDialog.tsx`, if `grep` still shows no importer outside the deleted tabs;
   - the `services/api.ts` wrappers whose only callers were deleted: `getBookDuplicates`, `getBookDedupScanResults`, `scanBookDuplicates`, `linkBookDuplicatesAsVersions`, `rejectBookDuplicateGroup`, and `queueBulkSplitBookMerge` (if G8 does not use it). The four dead wrappers `triggerDedupRefresh`, `requestAIAuthorReview`, `applyAIAuthorReview` and `getReconcilePreview` are deleted by 01 P7, not here.
-- E2E: delete `web/tests/e2e/dedup.spec.ts` "Dedup Tab Navigation"; replace it with redirect assertions in `review-dupes-lane.spec.ts`. Delete the `dedup-operations.spec.ts` "Scheduler Tasks for Dedup" block only if 04's census confirms those tasks moved. Otherwise move it to an operations spec.
+- E2E: delete `web/tests/e2e/dedup.spec.ts` "Dedup Tab Navigation"; its replacement redirect assertions landed in `review-dupes-lane.spec.ts` in PR 10. The `dedup-operations.spec.ts` "Scheduler Tasks for Dedup" block **moves** to an operations spec in PR 10 (appendix B.2); 04 keeps the `dedup_refresh` task on `dedup.author-scan` (`scheduler/maintenance.go:166`), so the block stays valid and is not deletable. After both moves, `dedup.spec.ts` and `dedup-operations.spec.ts` are empty and are deleted here.
 - Rollback: revert. The redirect is already live, so nothing user-visible breaks.
 
 **PR 12. Delete the backend routes that are now dead.** Size S. Go side.
@@ -580,6 +607,7 @@ The gap PRs (1-9) are independent of each other except where a "Needs" line says
 - **The cluster page boundary (G3)** can mislead: a cluster may look smaller than it is. The card must say so (§3.2 G3).
 - **Removal order.** PR 11 must not merge before PR 10 is live. Otherwise the backend announcement and bookmarks land on a 404 inside the SPA.
 - **Not deleting a route that has a non-browser caller.** Check every route in PR 12 against Appendix A §A.4 again at merge time.
+- **Mac fingerprint workers (D2).** The G5 reset command queues `acoustid.fingerprint-rescan` for the whole library after wiping every fingerprint. Under D2 that is worker-side work; the server's decoders are guarded. The command must not be reachable while no worker is connected, and its dialog must name the cost. Nothing else in this plan enqueues fingerprinting: the Dupes lane's "Find acoustic duplicates" (C56) compares stored fingerprints only.
 - **Hard bans respected:**
   - no `book_file` deletion;
   - no audio decoding added: G5 only moves buttons that queue existing ops, and C55 stays where it is;
@@ -592,8 +620,8 @@ The gap PRs (1-9) are independent of each other except where a "Needs" line says
   - `dedup.book-scan` (F13, obsolete);
   - `dedup.author-scan`, `dedup.series-scan`, `dedup.series-dedup`, `dedup.series-prune` and `ai.author-scan` (all kept, via G6, G7 and G8);
   - `dedup.split-book-scan` and `dedup.split-book-bulk-merge` (Q3; the CLI also uses the routes).
-  - Also for 04: whether `acoustid.fingerprint-rescan` (C55) may run on the server at all, given the no-decode rule.
-  - Assumption: 04 keeps every op that G6, G7 and G8 reuse.
+  - Also for 04: whether `acoustid.fingerprint-rescan` (C55) may run on the server at all, given the no-decode rule. **Answered by D2:** the server decoders are guarded and Fingerprint Books goes to the Mac workers.
+  - Assumption: 04 keeps every op that G6, G7 and G8 reuse. **Round 2:** 04's D27 pairs touch two of them. `dedup.author-scan` survives its pair (it is the newer op and the `dedup_refresh` task target), so G6 is unaffected. `reconcile.scan` survives its pair, but the nightly `maintenance.reconcile-scan` is the op that saves the results PR 9b reads; 04's PR for that pair must carry the save over before PR 9b is written.
 - **01 (dead code).**
   - `web/src/components/FingerprintVisualsColumn.tsx` and `web/src/components/dedup/BulkActionBar.tsx` (F4).
   - Frontend wrappers with no caller: `triggerDedupRefresh`, `requestAIAuthorReview`, `applyAIAuthorReview`, `getReconcilePreview`.
@@ -607,11 +635,13 @@ The gap PRs (1-9) are independent of each other except where a "Needs" line says
 
 ## 7. Open questions for the owner
 
-| # | Question | Recommended answer |
-|---|---|---|
-| Q1 | Where do author and series dedup go: a new Review lane, or Repairs fixers? | **A new "Authors & series" lane (G6, G7).** These are judgement calls per group (canonical name, role, exclusions), not trial-then-approve fixes. Repairs suits mechanical fixes. |
-| Q2 | Should Gold Labels stay its own page (moved to `/review/labels`), or become a sub-view of the Dupes lane? | **A sub-view of the Dupes lane (G1).** It is the history of the decisions that lane makes, and "Manage labels" already sits in its menu. |
-| Q3 | Keep the split-book detector as a Repairs fixer, or retire it in favour of the `fragment-consolidation` fixer? | **Port it as a fixer (G8) first, then measure.** Run both trials on prod. If every split-book row also appears in the fragment fixer's "no parent" rows, retire split-book and its CLI in a follow-up. The detector also covers a grandparent-folder shape that the fixer does not claim to cover (F15). |
-| Q4 | The cluster view is built per page. Is that acceptable for the first version, with a server-side clustering endpoint later? | **Yes**, provided each card states when pairs for its books are on other pages (§3.2 G3). |
-| Q5 | Remove the "Fingerprint Books" button from dedup tooling entirely, since fingerprinting decodes audio? | **Yes, from the dedup surfaces.** Leave the existing Library button. Defer the server-decode question to 04. |
-| Q6 | Bulk "keep A/B" means "keep the older/newer record" (§3.2 G2). Add a server-side `keep_side: "recommended"` that applies the lane's keep rule (`lanes/keepDecision.ts`) and refuses ties? | **Yes, as a follow-up to G2.** Ship older/newer labels first for parity, then add the recommended side, which is the verb a reviewer actually wants at scale. Server change: `handlers/dedup/handler.go:1281-1297`. |
+All six are answered in `09-owner-decisions.md`; the text is kept for the record with the decision beside it.
+
+| # | Question | Recommended answer | Decision |
+|---|---|---|---|
+| Q1 | Where do author and series dedup go: a new Review lane, or Repairs fixers? | **A new "Authors & series" lane (G6, G7).** These are judgement calls per group (canonical name, role, exclusions), not trial-then-approve fixes. Repairs suits mechanical fixes. | **D19: yes.** PRs 7a, 7b, 8. |
+| Q2 | Should Gold Labels stay its own page (moved to `/review/labels`), or become a sub-view of the Dupes lane? | **A sub-view of the Dupes lane (G1).** It is the history of the decisions that lane makes, and "Manage labels" already sits in its menu. | **D20: yes.** PR 5. |
+| Q3 | Keep the split-book detector as a Repairs fixer, or retire it in favour of the `fragment-consolidation` fixer? | **Port it as a fixer (G8) first, then measure.** Run both trials on prod. If every split-book row also appears in the fragment fixer's "no parent" rows, retire split-book and its CLI in a follow-up. The detector also covers a grandparent-folder shape that the fixer does not claim to cover (F15). | **D21: port, measure, then decide.** PR 9c. |
+| Q4 | The cluster view is built per page. Is that acceptable for the first version, with a server-side clustering endpoint later? | **Yes**, provided each card states when pairs for its books are on other pages (§3.2 G3). | **D22: yes.** PR 6. |
+| Q5 | Remove the "Fingerprint Books" button from dedup tooling entirely, since fingerprinting decodes audio? | **Yes, from the dedup surfaces.** Leave the existing Library button. Defer the server-decode question to 04. | **D2** settles the decode question: the server decoders are guarded and Fingerprint Books goes to the Mac workers. The button stays on Library only (C55). |
+| Q6 | Bulk "keep A/B" means "keep the older/newer record" (§3.2 G2). Add a server-side `keep_side: "recommended"` that applies the lane's keep rule (`lanes/keepDecision.ts`) and refuses ties? | **Yes, as a follow-up to G2.** Ship older/newer labels first for parity, then add the recommended side, which is the verb a reviewer actually wants at scale. Server change: `handlers/dedup/handler.go:1281-1297`. | **D22: yes, as a follow-up.** |

@@ -1,9 +1,15 @@
 <!-- file: docs/proposals/2026-10-holistic/01-legacy-and-dead-code/C-routes-without-in-repo-caller.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: cf3c3044-cbe2-474c-a6b1-851a99f8650f -->
-<!-- last-edited: 2026-10-08 -->
+<!-- last-edited: 2026-10-09 -->
 
 # Appendix C: API routes with no in-repo caller
+
+**Round-2 (r1, 2026-10-09), applying D9.** The owner marks the routes their scripts use; the rest are retired per handler group with a 410 stub for one release (01 P81). Three things to know before marking:
+
+- **`POST /api/v1/maintenance/wipe` is retired regardless** (D9). It is the first P81 PR: `server_lifecycle.go:1589`, `maintenance_fixups.go` (`handleWipe`, `prefixWiper`), `maintenance_wipe_prefixes_test.go`, `credential_routes_test.go:58`.
+- **The 410 pattern already exists**: `server_lifecycle.go:1495-1501` answers `/operations/active` and `/operations/recent` with `http.StatusGone` and a `message` naming the replacement (UOS-14). P81 lifts it into one helper rather than adding a second shape.
+- **Routes tied to other decisions**: `GET /maintenance/repair-missing-files/:id` belongs to the `maintenance.repair-missing-files` job that 04 D27 retires in favour of `missing-file-repoint` / `recover-missing-files`, so it goes with that 04 PR, not here. `GET /series/normalize/preview` goes with 01 P72. `GET /books/:id/position` and `POST /books/:id/position` are the ABS-style reading-position pair; AudioBooth uses the root-mounted `/api/...` ABS group, not `/api/v1` (03 F19), so they are only a curl risk, but the owner should confirm no Mac-side script syncs positions through them before marking.
 
 Method: the Gin route table was dumped from a test server built with `setupCredGuardServer` (a scratch copy; no repo edit): 467 routes. Each `/api/v1` path was turned into a regex (params and `${...}` interpolations as wildcards, per-file `API_BASE` resolved) and searched in non-test `web/src`, then in `cmd/`, `scripts/`, `.claude/`. 356 matched the frontend, 12 matched only scripts/skills, 93 matched nothing.
 

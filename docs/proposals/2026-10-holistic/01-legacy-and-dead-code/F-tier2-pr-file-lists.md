@@ -1,9 +1,11 @@
 <!-- file: docs/proposals/2026-10-holistic/01-legacy-and-dead-code/F-tier2-pr-file-lists.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: 23309fcd-d3d0-4cd8-b3aa-34aa05fe1388 -->
-<!-- last-edited: 2026-10-08 -->
+<!-- last-edited: 2026-10-09 -->
 
-# Appendix F: Tier-2 PRs (P10..n), one per package
+# Appendix F: Tier-2 file lists (superseded grouping: 11 PRs T1 to T11)
+
+> **Superseded grouping (08 §5, freeze F):** the per-package PRs below are shipped as 11 grouped PRs, T1 to T11. The file lists are unchanged; P36 is P73's.
 
 Category D of appendix B: unreachable from every main, not superseded-by-name, not an unwired feature, not dedup, not a test seam, not part of the SQLite activity backend. Each PR deletes the listed functions in these files plus any test that only exercises them, then runs `go build ./... && go vet ./...` and the package tests. Re-check each function for reflection/JSON use before deleting. Size S unless marked.
 

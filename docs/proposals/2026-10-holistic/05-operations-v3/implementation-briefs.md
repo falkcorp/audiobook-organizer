@@ -1,7 +1,7 @@
 <!-- file: docs/proposals/2026-10-holistic/05-operations-v3/implementation-briefs.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.1 -->
 <!-- guid: 21e3c9de-3b45-456a-87b0-5f7485a01b3f -->
-<!-- last-edited: 2026-10-08 -->
+<!-- last-edited: 2026-10-09 -->
 
 # Operations v3 — implementation briefs
 
@@ -14,6 +14,16 @@ exist at HEAD `f7211eb39`. Every changed file gets its version header bumped; ev
 Standing rules for every PR below: work in a worktree; no `go work init`; never touch
 `internal/writeback/`; never change the `library.scan` exclusive key string; never add a
 delete path for `book_file` rows; no audio decoding on the server.
+
+**Owner decisions applied (r3, 2026-10-09).** D1 (PR 5, PR 7, 08 PR X2 first), D6 (PR 3, PR 11),
+D8 (PR 8, port checklist), D14d (PR 2, PR 11: OTel instruments, see 11), D23 (PR 8),
+D25 (PR 16), D26/D27 (PR 12 counts, PR 15), D28a (PR 5, PR 6), D41 (12E4, PR 15),
+D44 (PR 5 precondition), D49 (PR 12).
+
+**Landing order** (dependencies, not a calendar): 08 PR X2 → PR 0 → PR 1 → **PR 3** (independent
+of 1; may land first) → PR 4 → PR 2 → 07 readiness R2-R4 → PR 5 → PR 6 → PR 7 → PR 8 → PR 9 →
+PR 10 → PR 11 → census P4a to P4f → 12A … 12H (D49 domain moves inside each wave) → PR 13 → PR 14 →
+01 P74 (optional, shrinks the allowlist) → PR 15 → 30-day soak from 12H (D25) → PR 16.
 
 ---
 
@@ -67,10 +77,21 @@ only delegations to `state`.
 **Files.** `internal/operations/registry/worker.go` (`finalStatusForCanceledRun` returns
 `timed_out` for `DeadlineExceeded`; `recordRunMetrics` counts it as failed and adds
 interrupted/dropped); `internal/operations/state/state.go` (add `timed_out`, terminal);
-`internal/metrics/metrics.go` (`ops_runs_total{def,outcome}`, keep old counters as aliases for
-one release); `deploy/prometheus/alert-rules.yml` (include `timed_out`); regenerate
-`web/src/generated/ops.ts`.
-**Tests.** Registry test: a def with a 10ms timeout ends `timed_out`; metric increments.
+`internal/operations/registry/otel_metrics.go` (new: the instruments below, created once
+from the `internal/telemetry` meter, **not** `client_golang` counters — D14d; the existing
+four `internal/metrics/metrics.go` counters stay untouched and are retired in 11's
+"touch-and-move" rule); `deploy/prometheus/alert-rules.yml` (include `timed_out`);
+regenerate `web/src/generated/ops.ts`.
+**Instruments (OTel names → the Prometheus series the existing reader exports).**
+`ops.runs` Int64Counter{def,outcome} → `ops_runs_total`; `ops.run.duration`
+Float64Histogram, unit `s`, {def,outcome} → `ops_run_duration_seconds`; `ops.inflight`
+Int64UpDownCounter{def} → `ops_inflight`; `ops.zombies` Int64UpDownCounter{def} →
+`ops_zombies` (D6: incremented when a `stopping` run outlives the abandon grace,
+decremented when its goroutine returns). Labels are `def` and `outcome` only. The full
+instrument list, naming rules and the OTLP second reader are in 11 (`11-metrics-strategy.md`).
+**Tests.** Registry test: a def with a 10ms timeout ends `timed_out`; the `ops.runs`
+counter increments with `outcome=timed_out`, read back through an in-memory
+`sdk/metric` reader.
 **Rollback.** Revert. Rows already written `timed_out` read as terminal via the state table
 on the old binary? No — the old binary does not know it. Mitigation: the old binary's
 `isTerminalV2Status` allowlist treats unknown as live; Clear Stale would offer them. Accept,
@@ -81,14 +102,22 @@ forced timeout.
 
 ## PR 3 — Fence; hold the key until exit; per-row cancel in Repairs (M)
 
-**Goal.** No writes after a stop; no overlap with a zombie (F4, F5, F13).
+**Goal.** No writes after a stop; no overlap with a zombie (F4, F5, F13; owner D6).
+**Depends on.** Nothing. It lands in wave 1 on the v2 status vocabulary: no typed state,
+no `opv3:` key, no OTel instrument is required. The `stopping` state (PR 1/4) and the
+`ops.zombies` gauge (PR 2) attach to the handle this PR introduces; until then the zombie
+count is visible in the registry status endpoint and the log.
 **Files.**
-- `internal/operations/registry/worker.go` — `runHandle.fence atomic.Uint64`; revoke on
-  cancel, timeout, watchdog, quiesce, abandonment; on abandonment keep `concurrencyKey` and
-  `writes` held (do not `releaseRunHandle`) until the goroutine's deferred exit; still free
-  the worker slot so the pool does not shrink.
+- `internal/operations/registry/fence.go` (new) — `type Fence` (`atomic.Uint64` epoch +
+  revoked flag), `ErrFenced`, `FenceFromContext(ctx) Fence`.
+- `internal/operations/registry/worker.go` — `runHandle.fence`; revoke on cancel, timeout,
+  watchdog, quiesce, abandonment; on abandonment keep `concurrencyKey` and `writes` held
+  (do not `releaseRunHandle`) until the goroutine's deferred exit; still free the worker
+  slot so the pool does not shrink; the v2 row keeps its terminal status as today, but the
+  handle is marked `zombie` and **after 10 minutes** the worker logs at WARN once a minute
+  with the op id and def (D6's alert is PR 11; the log is the wave-1 fallback).
 - `internal/operations/registry/registry.go` — `Cancel` revokes the fence before canceling
-  ctx; `FenceFromContext(ctx) Fence` exported for writers.
+  ctx; the status endpoint lists zombies (`op_id`, `def_id`, held key, age).
 - `internal/operations/registry/reporter_db.go` — reporter carries the fence.
 - `internal/operations/registry/scan_standdown.go` — a lost lease revokes the holder's fence.
 - `internal/repairs/writer.go` — every write method checks the fence first (`ErrFenced`).
@@ -96,17 +125,21 @@ forced timeout.
   (`:668`).
 **Tests.** Registry: an op that ignores ctx and writes in a loop; after `Cancel`, the fake
 writer records zero writes; a second enqueue of the same def stays queued until the zombie
-returns. Repairs: cancel during a 10-row partition stops after the in-flight row. Run with
-`-race`.
+returns; a zombie older than 10 minutes (fake clock) produces the WARN line. Repairs: cancel
+during a 10-row partition stops after the in-flight row. Run with `-race`.
 **Rollback.** Revert. No persisted change.
+**Size.** M.
 **Done when.** The 2026-10-01 shape (apply keeps retiring after cancel) is reproduced in a
-test and fails before / passes after.
+test and fails before / passes after; a second run of a def never starts while its zombie
+holds the key.
 
 ## PR 4 — `opv3:` keyspace, migration 065, v2 mirror (L)
 
 **Goal.** v3 run records with exact census indexes; v2 kept readable for rollback (R18).
 **Files.** `internal/database/iface_ops_v3.go` (new: `OpsV3Store`), `internal/database/pebble_store_ops_v3.go`
-(new: keys per `state-and-persistence.md` §2, CAS transitions, `meta:counts`, mirror writer),
+(new: keys per `state-and-persistence.md` §2 incl. `opv3:snap:`, `opv3:snap:…:chunks` and
+`opv3:ledger:` (§2.1); CAS transitions; `meta:counts`; mirror writer; the ten-state table
+with `wait_reason` and `successor_id` fields),
 `internal/database/pebble_store_ops_v3_test.go` (new), `internal/database/migrations.go`
 (migration 065 Up/Down), `internal/database/migration065_test.go` (new),
 `internal/database/keyfamilies.go` (register `opv3:` families),
@@ -120,7 +153,9 @@ the registry's writes to v3 + mirror in one batch; 4) census of `opv2:` rows add
 round-trip (write v3, read via v2 API, same status family); `ix:state` counts equal a full
 scan after 10k random transitions.
 **Rollback.** Deploy previous binary: it reads mirrored `opv2:` rows; `opv3:` inert.
-Migration 065 Down resets the version only.
+Migration 065 Down resets the version only. The mirror stays on until PR 16 (D25: 30 days
+after 12H).
+**Size.** L.
 **Done when.** `GET` of a run via the old v2 endpoint and via the store's v3 read agree for
 every state.
 
@@ -130,25 +165,45 @@ every state.
 **Files.** `pkg/ops/{definition,task,batch,fixer,pipeline,rc,progress,schedule,effects,approval,lanes,errors}.go`
 (new); `internal/operations/registry/v3_adapter.go` (new: runs an `ops.Definition` as a
 registry def, and wraps a v2 `OperationDef` as an `ops.Definition` for the catalog);
-`internal/operations/registry/batch_runner.go` (new: generalizes `run_items.go` — snapshot,
-watermark, partitions, atomic counters, cancel per item, pause gate, stand-down renewal);
+`internal/operations/registry/batch_runner.go` (new: generalizes `run_items.go` into the
+**chunk-leasing runner** of `sdk-api.md` §5 — snapshot freeze, partition-major chunk cut,
+lease table with per-worker heartbeat, the single ledger goroutine that writes
+`opv3:ledger:` + lease table + progress in one batch, atomic counters, cancel per item,
+pause gate, stand-down renewal, `Summary`); `internal/operations/registry/chunk_ledger.go`
+(new: bitmap and key-range ledger, resume = "lease every unset chunk");
 `internal/operations/opswriter/{writer,intent,history,fence}.go` (new: the core of
-`internal/repairs/writer*.go`); `internal/repairs/writer.go` (becomes a wrapper over
-`opswriter`, same method set, test pinning the method set kept).
-**Also.** Dispatcher readiness wait (`NeedsReady`, `sdk-api.md` §11.1) on 07's readiness state; `ValidateCatalog` rejects an empty `Permission` **on native v3 defs only** (coordinator: 147 adapted plugin defs declare none; they rely on 08 PR X2's default until ported); `oplint` rule against `database.Store` in `Deps`.
+`internal/repairs/writer*.go`; `fence.go` moves from PR 3's `registry/fence.go`);
+`internal/repairs/writer.go` (becomes a wrapper over `opswriter`, same method set, test
+pinning the method set kept).
+**Preconditions.** 08 PR X2 merged (D1: an empty v2 permission list means `settings.manage`,
+so adapted defs do not fail `ValidateCatalog`); 07's readiness PRs R2-R4 merged (D44:
+`Type=notify`, readiness in `/health`; the owner installs the unit).
+**Also.** Dispatcher readiness wait (`NeedsReady`, `sdk-api.md` §11.1) on 07's readiness state; `ValidateCatalog` rejects an empty `Permission` **on native v3 defs only** (coordinator: 147 adapted plugin defs declare none; they rely on 08 PR X2's default until ported); `oplint` rule against `database.Store` in `Deps`; `PartitionBy` refused on non-`Snapshot` sources.
 **Tests.** Unit tests per kind using a minimal in-package fake; a run queued before readiness waits and does not time out; Writer ordering test
-(intent → write → history, previous captured in callback); preview refuses and records.
+(intent → write → history, previous captured in callback); preview refuses and records;
+chunk runner: 1,000 items at `ChunkSize` 256 and 3 with 8 workers, kill after chunk
+completions {0, 2}, resume leases exactly {1, 3}; `PartitionBy` with a 700-item partition
+yields one oversized chunk and the partition's items run on one worker in order; the
+ledger write rate is bounded (≤ 1 batch / 2 s under a 10k-item run of 1 ms items); all
+under `-race`.
 **Rollback.** Revert; nothing uses `pkg/ops` yet except tests.
-**Done when.** Example 1 and Example 2 from `examples.md` compile and pass in-package tests.
+**Size.** L (split into 5a SDK types + 5b runner/ledger + 5c writer + 5d adapter if it exceeds ~1,500 lines).
+**Done when.** Examples 1, 2 and 3 from `examples.md` compile and pass in-package tests;
+the worked resume in `examples.md` Example 2 is a passing test.
 
 ## PR 6 — `opstest` harness and Conformance (M)
 
 **Files.** `pkg/ops/opstest/{world,run,faults,conformance,fakes}.go` (new) and tests.
+`faults.go` carries `CancelAt`, `CrashAt`, `CrashMidChunk`, `InsertBelowCursor`,
+`AbandonAt`, `LoseLeaseAt` and the `ChunkSize` override (`sdk-api.md` §12).
 **Tests.** Conformance passes for the three example defs; each fault injector has a
 deliberately broken def that it catches (mutation-style: a def that writes after cancel, a
-def with an `AppendOnly` lie, a def that records history before the write).
+def with an `AppendOnly` lie, a def that records history before the write, a def whose
+`Item` is not idempotent so `CrashMidChunk` double-counts, a def whose `PartitionBy` items
+would be touched from two workers if chunks split partitions).
 **Rollback.** Revert.
-**Done when.** `go test -race ./pkg/ops/...` green with ≥4 workers.
+**Size.** M.
+**Done when.** `go test -race ./pkg/ops/...` green with ≥4 workers and `ChunkSize` in {1, 3, default}.
 
 ## PR 7 — One catalog, rewritten oplint, startup ledger check (M)
 
@@ -175,12 +230,20 @@ dependency choice in the PR body — a small parser or `github.com/robfig/cron/v
 only), `internal/scheduler/maintenance.go` (`taskV2DefIDs` shrinks as defs port),
 `internal/scheduler/tasks.go` (unchanged entries for un-ported ops), `go.mod`/`go.sum` if a
 dependency is added, `internal/database/pebble_store_ops_v3.go` (`opv3:sched:`).
-**Rule.** A def whose v2 `Schedule` cron has no `TaskDefinition` today is registered with
-`Schedule` **disabled** (shown in the def list as "declared, not active") until the owner
-answers Q2.
+**Rules.** (1) A def whose v2 `Schedule` cron has no `TaskDefinition` today is registered
+with `Schedule` **disabled** (shown in the def list as "declared, not active"); the two
+D23 exceptions, `maintenance.file-integrity-check` and `maintenance.orphan-book-files-cleanup`,
+are enabled report-only inside the maintenance window with `Permission: settings.manage`.
+(2) **D8:** a scheduled run of a writer is a Preview unless the schedule says `.Live()`;
+the scheduler passes `mode` from the schedule, never from a default, and
+`ValidateCatalog` refuses a scheduled writer that declares neither `.Live()` nor
+`.Preview()` (an explicit "this nightly run is a dry run", so the choice is visible in the
+def list). Ported schedules copy what the task does today (port checklist).
 **Tests.** Cron evaluation table; coalescing into a running run; missed-fire counting; a
-disabled schedule never fires.
+disabled schedule never fires; a scheduled writer without `.Live()` runs in Preview and
+writes nothing.
 **Rollback.** Revert; TaskScheduler keeps running every v2 task.
+**Size.** M.
 **Done when.** `GET /api/v3/ops/defs` (PR 9) or a unit test lists next-fire times equal to
 today's cadence for every scheduled op.
 
@@ -194,8 +257,10 @@ mapped to v2 vocabulary).
 `Approval.Approver` + verified auth method from the request's auth context.
 **Tests.** Census `total` equals the number of runs inserted across 3 pages; timeline
 `complete=false` when the window is truncated; params rejected by schema return 400 before
-anything is queued; an approval with an unverified auth method is refused.
+anything is queued; an approval with an unverified auth method is refused; `GET
+/api/v3/ops/runs/:id` and the SSE delta carry `progress.chunks` and `progress.workers`.
 **Rollback.** Revert; v1 endpoints unaffected.
+**Size.** M.
 
 ## PR 10 — Frontend on v3 (L)
 
@@ -203,47 +268,81 @@ anything is queued; an approval with an unverified auth method is refused.
 `web/src/stores/operationGrouping.ts`, `web/src/components/OperationActivityPanel.tsx`,
 `web/src/pages/ActivityLog.tsx`, `web/src/components/review/**` (Repairs lane on
 `/api/v3/ops/defs?kind=fixer` and `/api/v3/ops/runs/:id/rows`),
-`web/src/components/ops/OpForm.tsx` (new), `web/src/components/ops/ProgressView.tsx` (new),
+`web/src/components/ops/OpForm.tsx` (new), `web/src/components/ops/ProgressView.tsx` (new:
+progress bar, `chunks done/total`, items/s, ETA, failed, and **one row per worker** with
+chunk, current item, position in the chunk, heartbeat age and a stuck marker — D28a),
 the 27 `.tsx` files that render progress from `progress_current`
 (`grep -rln 'progress_current\|ProgressBar\|LinearProgress' web/src --include='*.tsx' | grep -v test`).
-**Tests.** Vitest per component; Playwright: run a preview, approve two rows, apply, see the
-revert button; a zombie renders as "stopping".
+**Tests.** Vitest per component (ProgressView with 0, 1 and 8 workers; a stuck worker);
+Playwright: run a preview, approve two rows, apply, see the revert button; a zombie renders
+as "stopping"; a running batch shows worker rows that change between polls.
 **Rollback.** Revert; backend still serves v1 shapes.
+**Size.** L.
 
 ## PR 11 — Grafana dashboard and alerts (S)
 
-**Files.** `deploy/grafana/dashboards/operations.json` (new), `deploy/prometheus/alert-rules.yml`
-(zombie > 10m, fenced writes > 0, intents unresolved > 0 for 1h, schedule missed),
-`deploy/grafana/README.md`.
+**Files.** `internal/operations/registry/otel_metrics.go` (the remaining instruments of
+parent §3.11, on the `internal/telemetry` meter — D14d; see 11 for naming and the OTLP
+reader), `deploy/grafana/dashboards/operations.json` (new), `deploy/prometheus/alert-rules.yml`
+(`ops_zombies > 0 for 10m` — D6; `increase(ops_fenced_writes_total[1h]) > 0`;
+`ops_intents_unresolved > 0 for 1h`; `increase(ops_schedule_missed_total[1d]) > 0`;
+`ops_worker_stuck > 0 for 15m`), `deploy/grafana/README.md`.
+**Instruments added here** (OTel name → Prometheus series): `ops.runs.by_state`
+Int64ObservableGauge{def,state} → `ops_runs`; `ops.items` Int64Counter{def,result} →
+`ops_items_total`; `ops.item.duration` Float64Histogram `s` {def} → `ops_item_duration_seconds`;
+`ops.chunks` Int64Counter{def,result=done|re-run} → `ops_chunks_total`; `ops.worker.stuck`
+Int64ObservableGauge{def} → `ops_worker_stuck`; `ops.last_progress.age`, `ops.checkpoint.age`
+Float64ObservableGauge `s` {def}; `ops.fenced_writes` Int64Counter{def} →
+`ops_fenced_writes_total`; `ops.intents.unresolved` Int64ObservableGauge{def};
+`ops.standdown.wait` Float64Histogram `s`; `ops.schedule.lag` Float64ObservableGauge `s` {def};
+`ops.schedule.missed` Int64Counter{def}. Labels: `def`, `outcome`/`result`/`state` only.
+**Tests.** Each alert rule has a `promtool test rules` case; the dashboard JSON is validated
+by `deploy/grafana` CI.
 **Rollback.** Revert.
+**Size.** S.
 
 ## PR 12A-H — Port waves
 
 Each wave is one PR per row group below (split further if a PR exceeds ~1,500 lines). Before
 cutting a wave, re-read `04-operations-census/ops-census.csv`: skip `prune`, fold `merge`
-(applied at census v1.1.0, see `migration-guide.md` §3). When 07 splits
-`internal/plugins/maintenance` by domain, each op moves into its domain package in the same
-PR that ports it, so no op is moved twice.
-Every ported def follows `migration-guide.md` §1.3. **Measured split** (census v1.1.0, 234 defs; script: the brief file lists matched against the CSV `loc` column, overlaps in `duplicates_ops.go`, `extra_ops.go`, `book_atpath_index.go` and `apply_when_scanned_op.go` resolved by ID): 12A 12, 12B 22, 12C 37, 12D 2, 12E 115, 12F 16, 12G 3, 12H 9 = 216 ported; 13 pruned (aliases/tombstones); 5 frozen (PR 15). The family assignment below was computed
-from the census CSV (first draft); file lists are the defs' `loc` files.
+(applied at census v1.2.0, see `migration-guide.md` §3). **D49:** the `internal/plugins/maintenance`
+split by domain (07) happens **inside these waves**: each op moves into its domain package
+in the same PR that ports it (creating the package with the `sdk-api.md` §11.1 shape when
+it is the first op of that domain), so no op is moved twice and 07 ships no separate
+move-only PR for ops.
+Every ported def follows `migration-guide.md` §1.3. **Split after the owner's decisions**
+(r3, census v1.2.0, 234 defs; D26 deletes `batch-poller`, D27 retires the 7 older
+near-duplicates, D41 freezes `repair-library-state`): 12A 12, 12B 22, 12C 33, 12D 2,
+12E 113, 12F 15, 12G 3, 12H 9 = **209 ported**; **21 pruned** (11 aliases, 2 stub
+tombstones, 1 D26 tombstone, 7 D27 retirements); **4 frozen** (PR 15); 209 + 21 + 4 = 234.
+The v1.3.0 measured split (216 = A 12, B 22, C 37, D 2, E 115, F 16, G 3, H 9; script: the
+brief file lists matched against the CSV `loc` column, overlaps in `duplicates_ops.go`,
+`extra_ops.go`, `book_atpath_index.go` and `apply_when_scanned_op.go` resolved by ID) is the
+base; the D27 losers were subtracted by `loc`: 4 jobs from C, 1 from E4, 1 from E5, 1 from F.
+Every wave PR has the same **tests** (Conformance per def incl. `CrashMidChunk`, the
+existing op tests retargeted, `-race`), the same **rollback** (revert the PR; the adapter
+keeps running the un-ported v2 def, ids unchanged) and is **size** L unless split.
+The family assignment below was computed from the census CSV; file lists are the defs' `loc` files.
 
 **12A — read-only reports (12 defs).** `internal/plugins/maintenance/{author_whitespace_collision_report,book_atpath_index,book_shape_report,booksig_recovery_audit,credit_census,db_census_exact,file_provenance_export,filepath_collision_report,missing_file_audit,unknown_author_audit,version_group_primary_report}.go`, `internal/server/diagnostics_ops.go`. Note `book_atpath_index.go` also holds a writer (`book-atpath-index-backfill`, wave 12E).
 
 **12B — housekeeping (22 defs after census; precondition: census PRs P4a-P4i merged).** `internal/plugins/dedup/{cleanup_orphan_author_embeddings,cleanup_orphan_embeddings,purge_legacy_fp,purge_stale}.go`, `internal/plugins/maintenance/{activity_reclaim,ai_journal_prune,author_purge_empty,cleanup,compact_activity_log,db,narrator_purge_empty,nightly_compact_activity_log,orphan_book_files,recompact_activity_digests,series}.go`, `internal/scheduler/extra_ops.go`, `internal/server/duplicates_ops.go` (series-prune only), `internal/scheduler/tasks.go` (remove ported `TaskDefinition`s). The activity-compaction defs must declare `Unordered` sources wherever they read tiers with backdated keys (F11).
 
-**12C — `internal/maintenance` jobs (37 defs).** `internal/maintenance/jobs/*.go` (37 files listed in the census), `internal/server/maintenance_job_op.go`, `internal/server/maintenance_dispatcher.go`. Replace `maintenance.OperationIDFromCtx` / `RawParamsFromCtx` with `rc`. Keep each job's ID.
+**12C — `internal/maintenance` jobs (33 defs; D27 retires `cleanup_backups.go`, `fix_book_file_paths.go`, `repair_missing_files.go`, `bulk_fetch_metadata.go` instead of porting them).** `internal/maintenance/jobs/*.go` (the 33 remaining files listed in the census), `internal/server/maintenance_job_op.go`, `internal/server/maintenance_dispatcher.go`. Replace `maintenance.OperationIDFromCtx` / `RawParamsFromCtx` with `rc`. Keep each job's ID. `maintenance.revert-metadata-fetch` still ports: it reads the history of past `bulk-fetch-metadata` runs, which the retirement does not delete.
 
 **12D — Repairs fixers (19 fixers, plus the 3 that 03 PR 9 adds first as v2 fixers: `series_prune_fixer.go`, `reconcile_fixer.go`, `split_books_fixer.go` (coordinator); plus the 2 defs `repairs.plan`/`repairs.apply` that run them until PR 14).** `internal/plugins/maintenance/{audible_read_status,author_named_series,combined_author,consolidation_leftovers,duplicate_copies,folder_books,fragment_consolidation,itunes_stale_path,junk_author,junk_title,letter_l_ordinal,lost_candidates,relink_stale_series,reparse_folder_names,scan_title_revert,swapped_title_author,tag_franchise,version_group_primary,version_twin_metadata}_fixer.go`, `internal/plugins/maintenance/plugin.go` (`Repairs()` → bundle), `internal/repairs/guards.go` (→ framework Guards). The iTunes stale-path fixer keeps its database-only rule; it must not gain any file or iTunes write.
 
-**12E — batch writers (115 defs; split into 6 PRs: 11 + 25 + 18 + 34 + 13 + 14).**
+**12E — batch writers (113 defs; split into 6 PRs: 11 + 25 + 18 + 33 + 12 + 14).** Every
+Batch here gets the chunk-leasing runner, so this is where D28a's "parallel by design,
+status always visible" lands for the whole library.
 - 12E1 acoustid + deluge: `internal/plugins/acoustid/{backfill,duration_backfill,fingerprint_rescan,lsh_backfill,online_lookup,reset_all,scan,window_backfill}.go`, `internal/plugins/deluge/{centralization,path_update,protected_paths}.go`. Fingerprinting stays on `LaneMac`.
 - 12E2 dedup: the 30 `internal/plugins/dedup/*.go` files in the census list (`auto_resolve` gains concurrency here by partitioning by group, F28).
 - 12E3 book_file row writers (*coordinator: "never a delete" is not true of every body at HEAD. `dedupe_book_file_rows_crossfolder.go:230` and `itunes_clone_into_library.go:1274` call `DeleteBookFilesByIDs`: the first deletes a journaled exact duplicate, the second undoes a clone. Port those bodies unchanged under a declared `Deletes(ResBookFiles)` effect that `oplint` flags for owner review. Add no new delete. The admin-only `POST /maintenance/wipe` (`maintenance_fixups.go:354`) also deletes every `book_file` row; 01 Q6 should retire it.*) `internal/plugins/maintenance/{build_folder_book_files,dedupe_book_file_rows,mark_missing_files,merge_same_path_dupes,missing_file_repair,missing_file_repoint,move_book_file_rows,orphan_book_files_repoint_plan,probe_directory_books,recover_missing_files,relink_unlinked,repoint_book_file_rows,repoint_missing_to_folder_audio,repoint_unrecorded_renames,rewrite_path_prefix,book_atpath_index,opchange_book_index,file_provenance_capture}.go`. Never a delete; repoint only.
-- 12E4 author/series/title/tag: `internal/plugins/maintenance/{author,author_conjunction_repair,author_duplicate_merge,author_id_repair,author_path_link,author_strip_merge,author_title_fragment_report,authority_build,narrator_split_joined,series,series_denumber_op,series_phantom_repair,tag_backfill,title_backfill,title_repair,version_group_primary_repair,chapters_backfill,duration_backfill,cover_ops,dedup_ops,dedup_triage,auto_match_transcribed,clear_apply_rename_failures,repair_merged_user_state,repair_transcribe_status,review_status_index_repair,activity_filter_index_backfill,booksig_sidecar_migrate,backfill}.go`. `maintenance.repair-library-state` (`library_state_repair.go`) is **not** ported unless the census and the owner keep it, given the standing rule against running library-state rewrites.
-- 12E5 iTunes and audio-file ops (bodies untouched; adapter or thin native wrapper only): `internal/plugins/itunes/{import,position_sync}.go`, `internal/plugins/maintenance/{itunes_clone_into_library,itunes_playlist_import,itunes_regroup,fs_regroup_xml,intro_transcribe,intro_migrate_single_file,extract_wav_clips,regroup_shattered_ai,integrity_check,reconcile}.go` (`write_back.go` and `batch_poller.go` are on the frozen list, PR 15). Transcription and WAV extraction keep running only where they run today; no new server-side decode. *Coordinator: "where they run today" includes in-process ffmpeg and fpcalc on the server, in `intro_transcribe.go`, `extract_wav_clips.go` and `acoustid/fingerprint_rescan.go`. Only `window_backfill.go` has a remote-only guard (`allow_server_decode`). These defs port with `Lane: LaneMac` and no in-process fallback, or stay frozen. Until then, 08 PR X3 adds the same refusal guard to the v2 bodies.*
+- 12E4 author/series/title/tag (33 defs; D27 retires `maintenance.author-dedup-scan` in `author.go`; `maintenance.author-title-fragment-scan` in `author_title_fragment_report.go` is kept per 04 table C row C8): `internal/plugins/maintenance/{author,author_conjunction_repair,author_duplicate_merge,author_id_repair,author_path_link,author_strip_merge,authority_build,narrator_split_joined,series,series_denumber_op,series_phantom_repair,tag_backfill,title_backfill,title_repair,version_group_primary_repair,chapters_backfill,duration_backfill,cover_ops,dedup_ops,dedup_triage,auto_match_transcribed,clear_apply_rename_failures,repair_merged_user_state,repair_transcribe_status,review_status_index_repair,activity_filter_index_backfill,booksig_sidecar_migrate,backfill}.go`. `maintenance.repair-library-state` (`library_state_repair.go`) is **not** ported (D41): it stays on the frozen allowlist, API-only, never scheduled.
+- 12E5 iTunes and audio-file ops (12 defs; D27 retires `maintenance.reconcile-scan` in `reconcile.go`, `reconcile.scan` ports in 12E6; bodies untouched; adapter or thin native wrapper only): `internal/plugins/itunes/{import,position_sync}.go`, `internal/plugins/maintenance/{itunes_clone_into_library,itunes_playlist_import,itunes_regroup,fs_regroup_xml,intro_transcribe,intro_migrate_single_file,extract_wav_clips,regroup_shattered_ai,integrity_check}.go` (`write_back.go` is on the frozen list, PR 15; `batch_poller.go` is deleted by census P12 per D26). Transcription and WAV extraction keep running only where they run today; no new server-side decode. *Coordinator: "where they run today" includes in-process ffmpeg and fpcalc on the server, in `intro_transcribe.go`, `extract_wav_clips.go` and `acoustid/fingerprint_rescan.go`. Only `window_backfill.go` has a remote-only guard (`allow_server_decode`). These defs port with `Lane: LaneMac` and no in-process fallback, or stay frozen. Until then, 08 PR X3 adds the same refusal guard to the v2 bodies.*
 - 12E6 server ops (incl. the 7 `dedup.*` defs in `duplicates_ops.go` other than `dedup.series-prune`, which is 12B): `internal/server/{catalog_harvest_op,diagnostics_ai_ops,duplicates_ops,entities_ops,legacy_backfill_op,reconcile_ops,series_rename_ops}.go`. `operations.backfill-legacy-status` stays on the adapter until workstream 01 removes the v1 keyspace (census: conditional prune).
 
-**12F — AI and metadata (16 defs, incl. `scheduler.metadata-upgrade`, `scheduler.dedup-llm-review` and `metadata.apply-when-scanned`; `maintenance.isbn-enrichment` is tombstoned, not ported).** `internal/plugins/maintenance/{metadata,metadata_cache_reap}.go`, `internal/plugins/metafetch/{asin_backfill,calibrate_scoring}.go`, `internal/scheduler/extra_ops.go` (metadata/isbn ops), `internal/server/{ai_ops,aiscan_op,apply_when_scanned_op,batch_apply_op,batch_save_op,bulk_apply_preview,metadata_candidate_op,openlibrary_ops}.go`, `internal/applygate/*` (exposed as a Guard, logic unchanged). Bulk apply gets `Approval{PlanRequired}` per Q9.
+**12F — AI and metadata (15 defs, incl. `scheduler.metadata-upgrade` and `metadata.apply-when-scanned`; `scheduler.dedup-llm-review` is retired per D27 and its task retargets `dedup.llm-review`; `maintenance.isbn-enrichment` is tombstoned, not ported).** `internal/plugins/maintenance/{metadata,metadata_cache_reap}.go`, `internal/plugins/metafetch/{asin_backfill,calibrate_scoring}.go`, `internal/scheduler/extra_ops.go` (metadata/isbn ops), `internal/server/{ai_ops,aiscan_op,apply_when_scanned_op,batch_apply_op,batch_save_op,bulk_apply_preview,metadata_candidate_op,openlibrary_ops}.go`, `internal/applygate/*` (exposed as a Guard, logic unchanged). Bulk apply gets `Approval{PlanRequired}` per Q9.
 
 **12G — pipelines (3 defs).** `internal/plugins/dedup/run_all.go`, `internal/plugins/maintenance/optimize.go`, `internal/server/scheduler_maintenance_window_op.go`, `internal/operations/childop/follow.go` (absorbed into the Pipeline runner, then deleted).
 
@@ -252,12 +351,16 @@ from the census CSV (first draft); file lists are the defs' `loc` files.
 ## PR 13 — Retire the `internal/maintenance` job framework (M)
 
 **Files.** `internal/maintenance/{job,progress,registry,result}.go`, `internal/maintenance/jobs/` (now thin or empty), `internal/server/maintenance_job_op.go`, `internal/server/maintenance_dispatcher.go`, `GET /api/v1/maintenance/jobs` route (adapter onto `/api/v3/ops/defs` until the frontend stops calling it).
+**Tests.** `grep -rn 'OperationIDFromCtx\|RawParamsFromCtx' internal` is empty; the jobs page lists the same 33 ids from `/api/v3/ops/defs`.
 **Rollback.** Revert (wave 12C kept every ID).
+**Size.** M.
 
 ## PR 14 — Retire `repairs.plan` / `repairs.apply` and `/api/v1/repairs` (M)
 
 **Files.** `internal/plugins/maintenance/repairs_ops.go`, `internal/server/wire_repairs_routes.go`, `internal/server/handlers/repairs/**`, `internal/repairs/engine.go` (logic now in the Fixer runner), settings keys `setting:repairs_last_plan_op:` / `setting:repairs_last_apply_op:` (read by v3 for one release, then dropped).
+**Tests.** Playwright: the Repairs lane runs trial → approve → apply for one fixer with the v1 routes gone; a plan stored before this PR is still listed.
 **Rollback.** Revert; stored plans are run results under the same op ids.
+**Size.** M.
 
 ## PR 15 — Delete the adapter and v2 authoring surface, except a frozen allowlist (L)
 
@@ -265,18 +368,27 @@ from the census CSV (first draft); file lists are the defs' `loc` files.
 **Frozen allowlist** (`internal/operations/registry/v2compat/allowlist.go`, new; `oplint`
 fails any other ID using `v2compat`):
 - `library.bulk-write-back`, `maintenance.bulk-write-back`: census OUT OF SCOPE (write-back ban); registration and bodies untouched until the owner lifts it;
-- `maintenance.batch-poller`: until census Q3 picks prune or adopt;
-- `operations.backfill-legacy-status`: until workstream 01 removes the v1 keyspace;
-- `maintenance.repair-library-state`: not ported, no schedule, until the owner decides (standing rule against library-state rewrites).
+- `operations.backfill-legacy-status`: until workstream 01 P74 removes the v1 keyspace (if P74 lands first, the allowlist is 3);
+- `maintenance.repair-library-state`: D41 — frozen, API-only, never scheduled, body untouched.
 
-`v2compat` keeps only what those five use (`OperationDef` subset, `Reporter`, `RegisterOp`), runs them on the same executor, and maps their status into the v3 state table.
+(`maintenance.batch-poller` left the list: D26 deletes it in census P12.)
+
+`v2compat` keeps only what those four use (`OperationDef` subset, `Reporter`, `RegisterOp`), runs them on the same executor, and maps their status into the v3 state table.
+*r3 proposal, not applied:* the two write-back ops and `repair-library-state` could each
+become a native `Task` whose `Run` calls the untouched v2 body function (as 12E5 does for
+iTunes), which would shrink `v2compat` to zero and delete it in PR 15. The bodies would
+not change and `internal/writeback/` would not be touched, but "frozen" has so far meant
+"registration untouched" too, so this needs the owner's word before PR 15 is cut.
 **Files.** `internal/operations/registry/v3_adapter.go` (→ `v2compat/`), `internal/operations/registry/{run_items,types,reporter}.go` (v2 parts not used by the allowlist), `pkg/plugin/sdk/**`, `tools/cmd/sdkguard/**`, `internal/scheduler/tasks.go` (all `TaskDefinition`s gone), `internal/scheduler/maintenance.go` (`taskV2DefIDs`), `internal/server/op_registrars.go`, `internal/operations/registry/subprocess.go` and `cmd/child_mode.go` (Q10), `internal/operations/opmode/` (mode is a framework field), `internal/operations/trigger_source.go`.
-**Tests.** Allowlist test: exactly the five IDs register through `v2compat`; each still runs in a smoke test.
+**Tests.** Allowlist test: exactly the four IDs register through `v2compat`; each still runs in a smoke test.
 **Rollback.** Revert.
-**Done when.** `grep -rn 'registry.OperationDef\|sdk.OperationDef' internal pkg` matches only `v2compat/` and the five allowlisted files.
+**Size.** L.
+**Done when.** `grep -rn 'registry.OperationDef\|sdk.OperationDef' internal pkg` matches only `v2compat/` and the four allowlisted files.
 
 ## PR 16 — Remove the `opv2:` mirror; ship `ops export-v2` (S)
 
 **Files.** `internal/database/pebble_store_ops_v3.go` (mirror off), `cmd/ops_export.go` (new subcommand), `docs/` runbook entry for downgrade after this point.
-**Precondition.** Owner-chosen soak (Q4) has elapsed since PR 15.
+**Precondition.** D25: 30 days have elapsed since the last port wave (12H) shipped to prod, and PR 15 has landed.
+**Tests.** `ops export-v2` on a store with 1,000 v3-only runs produces rows the previous binary's `GET /api/v1/operations/v2/:id` reads for every state.
 **Rollback.** Re-enable the mirror (one flag in the store) and run `ops export-v2` for runs made while it was off.
+**Size.** S.

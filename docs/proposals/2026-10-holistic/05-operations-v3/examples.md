@@ -1,13 +1,17 @@
 <!-- file: docs/proposals/2026-10-holistic/05-operations-v3/examples.md -->
-<!-- version: 1.0.1 -->
+<!-- version: 1.1.0 -->
 <!-- guid: ead1652c-f4a7-4477-b22f-271c27847356 -->
-<!-- last-edited: 2026-10-08 -->
+<!-- last-edited: 2026-10-09 -->
 
 # Operations v3 — three worked examples, compared with v2
 
 Each example is a real v2 op at HEAD `f7211eb39`, rewritten against the
 [`sdk-api.md`](sdk-api.md) sketch. Line counts for v2 are `wc -l` of the real files; v3
 counts are of the sketches below, comments excluded. Parent: [`../05-operations-v3.md`](../05-operations-v3.md).
+
+Round-2 (r3) checked every name and signature below against `sdk-api.md` v1.2.0. In each
+example `deps` is the package's `Deps` struct of narrow interfaces (`sdk-api.md` §11.1);
+the first draft wrote `deps.Store`, which §11.1 itself forbids.
 
 ---
 
@@ -38,7 +42,7 @@ var SizeRefresh = ops.Task("library.size-refresh", ops.TaskSpec[ops.NoParams, Si
 		Schedule: ops.InMaintenanceWindow(30).When(func() bool { return config.AppConfig.Maintenance.LibrarySizeRefresh }),
 	},
 	Run: func(rc *ops.RC, _ ops.NoParams) (SizeResult, error) {
-		folders, err := deps.Store.GetAllImportPaths()
+		folders, err := deps.Paths.GetAllImportPaths(rc.Context())
 		if err != nil {
 			return SizeResult{}, err
 		}
@@ -50,6 +54,13 @@ var SizeRefresh = ops.Task("library.size-refresh", ops.TaskSpec[ops.NoParams, Si
 type SizeResult struct {
 	LibraryBytes int64 `json:"library_bytes"`
 	ImportBytes  int64 `json:"import_bytes"`
+}
+
+// Deps for the package: one narrow interface per capability (sdk-api.md §11.1).
+type Deps struct {
+	Paths interface {
+		GetAllImportPaths(ctx context.Context) ([]string, error)
+	}
 }
 ```
 
@@ -92,13 +103,13 @@ var LSHBackfill = ops.Batch("acoustid.lsh-backfill", ops.BatchSpec[ops.NoParams,
 		Exclusive: "acoustid.fingerprint",
 	},
 	Source: func(rc *ops.RC, _ ops.NoParams) (ops.Source[database.BookFileCore], error) {
-		files, err := deps.Store.GetAllBookFilesCore()
+		files, err := deps.Files.GetAllBookFilesCore(rc.Context()) // deps.Files: narrow BookFileRows interface
 		return ops.Source[database.BookFileCore]{
 			Items: files, Key: func(f database.BookFileCore) string { return f.ID },
-			Order: ops.Snapshot,
+			Order: ops.Snapshot, Total: ops.Known(int64(len(files))),
 		}, err
 	},
-	// Concurrency omitted: CPU() is the default.
+	// Concurrency omitted: CPU() is the default. ChunkSize omitted: 256.
 	Label: func(f database.BookFileCore) string { return f.ID },
 	Item: func(rc *ops.ItemRC, _ ops.NoParams, f database.BookFileCore) error {
 		switch {
@@ -118,17 +129,49 @@ var LSHBackfill = ops.Batch("acoustid.lsh-backfill", ops.BatchSpec[ops.NoParams,
 		return err // counted as failed; OnItemError default is Continue
 	},
 	Finish: func(rc *ops.RC, _ ops.NoParams, s ops.Summary) (LSHResult, error) {
-		return LSHResult{Indexed: s.Counter("indexed"), Skipped: s.Skipped(), Failed: s.Failed}, nil
+		return LSHResult{Indexed: s.Counter("indexed"), Skipped: s.Skipped, Failed: s.Failed}, nil
 	},
 })
 ```
 
 What the runner now does that the v2 author wrote by hand or forgot: worker pool at
 `NumCPU`, cancel check per item, atomic counters (no Label race), progress
-`{done, total, unit:"files", counters}`, a frozen snapshot plus watermark so a deploy resumes
-at the watermark (default `ResumeContinue` for a `Snapshot` source), the fence on every
-write, preview by default (a manual run with no mode reports how many files *would* be
-re-saved and writes nothing).
+`{done, total, unit:"files", failed, chunks, workers[]}`, a frozen snapshot cut into chunks
+plus the completed-chunk ledger so a deploy resumes by re-leasing only the unfinished chunks
+(default `ResumeContinue` for a `Snapshot` source), the fence on every write, preview by
+default (a manual run with no mode reports how many files *would* be re-saved and writes
+nothing).
+
+**Worked resume (D28a).** Say the snapshot holds 1,000 file ids and `ChunkSize` is 256, so
+there are 4 chunks: 0 = ids 0-255, 1 = 256-511, 2 = 512-767, 3 = 768-999. Eight workers
+start; four of them lease chunks 0-3 and the other four idle (fewer chunks than workers, so
+a 1,000-item run is a bad fit for 256; `opstest` runs the def at `ChunkSize` 1 and 3 as
+well). The ops page shows four worker rows, each with its chunk, its current file id, how
+far into the chunk it is and its heartbeat age, plus "chunks 0/4, items 0/1000".
+
+- Worker 2 finishes chunk 2 first (its files were mostly `already_indexed`): the ledger
+  goroutine sets bit 2 and writes ledger + lease table + progress in one batch:
+  "chunks 1/4, items 256/1000".
+- Worker 0 finishes chunk 0: bit 0 set, "chunks 2/4, items 512/1000".
+- The process is killed by a deploy while worker 1 is at item 100 of chunk 1 and worker 3
+  at item 40 of chunk 3. The last ledger batch (written at most 2 s earlier) holds bits
+  {0, 2}, the lease table `{1: worker 1 at 100, 3: worker 3 at 40}` and items done = 652.
+- On boot the run is `interrupted{crash}`; the def's policy is `ResumeContinue`, so the
+  next attempt reads the ledger: chunks 0 and 2 are done and are **never leased again**;
+  chunks 1 and 3 are not done and are leased from their **first** item. The 140 items
+  those two workers had finished run again; `ModifyBookFile` on an already-indexed file is
+  a no-op re-save, which is why `Help` says "Idempotent". Progress resumes at 512/1000, not
+  652, because only completed chunks count across attempts.
+- Both chunks finish; ledger full; `Finish` runs once with `Summary{Done: 1000, …,
+  ChunksDone: 4, ChunksTotal: 4}`.
+
+Under the first draft's contiguous-prefix watermark the same crash would have resumed at
+the lowest unfinished item (256) and re-run chunk 2's 256 finished items as well; with 8
+workers far apart on a 100k-file run the redo would have been most of the run.
+
+With `PartitionBy` (not needed here; the Fixer in Example 3 uses it) the snapshot would be
+grouped by key first and chunk boundaries pushed to partition edges (`sdk-api.md` §5.2), so
+a version group never straddles two chunks.
 
 `ModifyBookFile` with a no-op fn still writes the row: the v3 Writer treats "fn returned nil"
 as "write" for `ModifyBookFile`. A def that wants "write only if changed" uses `Changed`.
@@ -141,7 +184,8 @@ and its clear are still recorded.
 | lines | 167 (≈90 code) | ~40 |
 | concurrency | 1 (omitted) | NumCPU (default) |
 | race exposure if someone raises concurrency | yes (plain ints in Label) | none (atomic counters) |
-| resume on deploy | dropped | watermark |
+| resume on deploy | dropped | unfinished chunks re-leased; finished chunks never re-run |
+| status while running | `current/total` + a message | per-worker rows: chunk, item, heartbeat; items/s; ETA; failed |
 | writes fenced / journaled | no / no | yes / yes |
 | preview | none | default |
 
@@ -174,7 +218,7 @@ var LetterLOrdinals = ops.Fixer("maintenance.normalize-letter-l-ordinals", ops.F
 		Effects: ops.Writes(ops.ResBooks, ops.ResFieldStates),
 	},
 	Candidates: func(rc *ops.RC, _ ops.NoParams) (ops.Source[database.BookCore], error) {
-		all, err := deps.Store.GetAllBooksCore(0, 0)
+		all, err := deps.Books.GetAllBooksCore(rc.Context(), 0, 0) // deps.Books: narrow BookReader interface
 		var out []database.BookCore
 		for _, b := range all {
 			if !b.IsSoftDeleted() && util.HasLetterLOrdinal(b.Title) {
@@ -184,7 +228,7 @@ var LetterLOrdinals = ops.Fixer("maintenance.normalize-letter-l-ordinals", ops.F
 		return ops.Source[database.BookCore]{Items: out, Key: func(b database.BookCore) string { return b.ID }, Order: ops.Snapshot}, err
 	},
 	Load: func(rc *ops.RC, _ ops.NoParams, id string) (database.BookCore, bool, error) {
-		b, err := deps.Store.GetBookByID(id)
+		b, err := deps.Books.GetBookByID(rc.Context(), id)
 		if err != nil || b == nil || b.IsSoftDeleted() {
 			return database.BookCore{}, false, err
 		}
@@ -225,7 +269,10 @@ Flow the framework provides, with no fixer code:
    The runtime checks the approver's permission and verified auth method, records the
    approval on the run, re-`Load`s and re-`Evaluate`s each row, refuses fingerprint changes
    (`changed_since_plan`), holds the scan stand-down with per-write renewal, and applies
-   through the fenced Writer, partitioned by `Row.ID`, checking cancel before **every row**.
+   through the fenced Writer, partitioned by `Row.ID` (partition-major chunks, `sdk-api.md`
+   §5.2), checking cancel before **every row**. A deploy mid-apply resumes as `ResumeAsk`
+   (the Fixer-apply default): the person sees "chunks 3/9 applied" and chooses continue or
+   drop; continue re-leases only the unfinished chunks and re-evaluates each row again.
 3. Undo is the run's revert (`POST /api/v3/ops/runs/:id/revert`), reading the history rows
    the Writer wrote after each commit.
 
@@ -250,6 +297,7 @@ Flow the framework provides, with no fixer code:
 | cancel ignored (F4-F6) | cooperative, unverified; slot freed after 5s | fenced writes; slot held until exit; conformance test |
 | ledger before write (F10) | 64 hand-written sites | Writer orders intent → write → history |
 | unsafe cursor resume (F11) | per-op knowledge | `SourceOrder` + `InsertBelowCursor` fault |
+| deploy discards a whole-library run (F30) | 171 of 234 defs drop | chunk ledger; `CrashMidChunk` fault proves only unfinished chunks re-run |
 | status classifiers disagree (F2) | 4 functions | one table, generated TS |
 | timeout looks like cancel (F3) | `canceled` | `timed_out` |
 | timeline read as census (F12) | caller must read three flags | separate census endpoint with exact counts |

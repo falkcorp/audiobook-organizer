@@ -1,9 +1,15 @@
 <!-- file: docs/proposals/2026-10-holistic/02-filter-identification-pipeline/A-stage-inventory.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 3b8e1f52-6c0a-4d97-a2f4-9e7d1c5b8a30 -->
-<!-- last-edited: 2026-10-08 -->
+<!-- last-edited: 2026-10-09 -->
 
 # Appendix A: stage inventory at HEAD `f7211eb39`
+
+### Round-2 review (r2)
+
+- Anchors re-checked at `ebda30d47` on 2026-10-09; the book-signature row now cites the
+  nested loop (`engine.go:5088`) as well as the function (`:5012`). The review-lane row
+  records that the snapshot it reads is rebuilt incrementally since `d9463d669`.
 
 Each row gives the stage's algorithm, its complexity, how often it runs, and how it caches.
 Here N is the number of books (about 100k), P the number of primary books (about 40.6k), F
@@ -22,7 +28,7 @@ population figures are derived from dated notes, not measured at HEAD.
 | Free text | `searchWithBleve` (Bleve scorch, BM25-style tf-idf); `searchPostFilterWindow` = 10,000 over-fetch when post-filters apply | Inverted index | O(postings) + O(window) post-filter | Each page | `searchcache` (128 MiB, incremental patch from the change log) |
 | Stripped-field filter | `internal/audiobooks/service_filtering.go:314` | One Pebble `GetBookByID` for each row that survives the cheap filters | O(survivors) point reads | Each walk | None |
 | Per-user filter | predicate in `service_filtering.go` (~:1066) | One `GetUserBookState` per row | O(P) point reads | Each walk | None |
-| Review lane filters | `web/src/components/review/lanes/useMetadataLane.ts:960-1270` | Client-side array filters over the full index snapshot | O(R), with R ≈ 16k reviewable rows | Every keystroke (no debounce) | The server review snapshot (`reviewSnapshot`) |
+| Review lane filters | `web/src/components/review/lanes/useMetadataLane.ts:960-1270` | Client-side array filters over the full index snapshot | O(R), with R ≈ 16k reviewable rows | Every keystroke (no debounce) | The server review snapshot (`reviewSnapshot`, rebuilt incrementally from the change logs since `d9463d669`) |
 
 ## Identification
 
@@ -50,7 +56,7 @@ population figures are derived from dated notes, not measured at HEAD.
 | Embedding | `collectors_embedding.go`, HNSW (`internal/server/registry_wire.go:41-71`) | ANN top-K | O(log n) per query | chromem is brute force if selected |
 | Meta-fuzzy | `collectors_metadata.go` | Levenshtein over embedding top-K + LSH candidates | O(K) | Already blocked |
 | Head-print LSH | `pebble_store_lsh.go`, `collectors_acoustid.go` | Banded LSH, then Hamming | Sub-linear | Prints cover only the first 120 s |
-| Book signature | `engine.go:5012` | Every pair of signed books | O(n²/2) | Signatures stay garbage until the re-fingerprint (dated note) |
+| Book signature | `engine.go:5012` (function), `:5088` (nested loop) | Every pair of signed books | O(n²/2) | Signatures stay garbage until the re-fingerprint (dated note) |
 | Window prints | `internal/database/fingerprint_window.go` (`fpwin:`), `internal/fingerprint/window_similarity.go:86` | `WindowSetSimilarity` exists | — | **No production caller** |
 | Chapters | `collectors_chapters.go:65-126` | Per-chapter boundary match | O(candidates × chapters) | Scored now (`SigChapterStructure`) |
 | Compose | `internal/dedup/unified/compose.go` | Noisy-OR over primary signals, plus supporting boosts | O(signals) | Assumes independence |

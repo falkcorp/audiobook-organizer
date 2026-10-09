@@ -1,7 +1,7 @@
 <!-- file: docs/proposals/2026-10-holistic/05-operations-v3/sdk-api.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: b4575f26-f7c3-4fb6-a442-b74a31581e88 -->
-<!-- last-edited: 2026-10-08 -->
+<!-- last-edited: 2026-10-09 -->
 
 # Operations v3 — SDK API sketch (`pkg/ops`)
 
@@ -119,10 +119,11 @@ A Task's liveness is its own business: it must call `rc.Progress().Set(...)` or
 type BatchSpec[P any, T any, R any] struct {
 	Common
 	// Source produces the items. See Source below: its Order decides whether a
-	// watermark resume is legal.
+	// chunk-ledger resume is legal (§5).
 	Source func(rc *RC, p P) (Source[T], error)
-	// Item does the work for one item. It must be idempotent for the items a
-	// resume may re-run (everything at or above the watermark).
+	// Item does the work for one item. It must be idempotent: a resume re-runs
+	// every item of a chunk that was not recorded complete, including items of
+	// that chunk that had already finished (§5).
 	Item func(rc *ItemRC, p P, item T) error
 	// Finish runs once after every item settled (also after a cancel, with
 	// rc.Canceled() true). It builds the result from the counters.
@@ -132,8 +133,14 @@ type BatchSpec[P any, T any, R any] struct {
 	Concurrency Concurrency
 	// PartitionBy, when set, routes every item with the same key to the same
 	// worker, in source order. Use it for apply paths that must never touch one
-	// row from two workers (CLAUDE.md "partition into disjoint sets").
+	// row from two workers (CLAUDE.md "partition into disjoint sets"). How it
+	// composes with chunks is in §5.2.
 	PartitionBy func(T) string
+	// ChunkSize is the number of items leased to a worker at a time (§5).
+	// Default 256; opstest runs each def with small sizes as well. Tune it
+	// down for slow items (an item that takes minutes) so a crash re-runs
+	// little, and up for sub-millisecond items so the ledger write rate stays low.
+	ChunkSize int
 	// ItemTimeout bounds one item; 0 = none. The clock starts after the pause
 	// gate, as in v2 run_items.go.
 	ItemTimeout time.Duration
@@ -161,9 +168,9 @@ type Source[T any] struct {
 	// Pages streams items for sources too large to hold (book files).
 	Pages func(ctx context.Context, after string, limit int) (items []T, next string, err error)
 	// Key returns an item's stable id (book id, file id). Required: the
-	// snapshot, the watermark and the journal are all keyed by it.
+	// snapshot, the chunk ledger and the journal are all keyed by it.
 	Key func(T) string
-	// Order says whether a cursor/watermark resume is sound for this source.
+	// Order says whether a chunk-ledger resume is sound for this source.
 	Order SourceOrder
 	// Total, when the source cannot cheaply count, may be Unknown(); progress
 	// then shows a rate and no percentage instead of a fake 0/0.
@@ -173,12 +180,15 @@ type Source[T any] struct {
 type SourceOrder int
 
 const (
-	// Snapshot: the runner freezes the item KEYS at start (opv3:snap:) and
-	// resumes over that frozen order. Always safe. Default for Items sources.
+	// Snapshot: the runner freezes the item KEYS at start (opv3:snap:), cuts
+	// them into chunks and resumes over that frozen chunk table. Always safe.
+	// Default for Items sources; required when PartitionBy is set (§5.2).
 	Snapshot SourceOrder = iota + 1
 	// AppendOnly: new items only ever sort AFTER existing ones, so a cursor
-	// resume cannot skip anything. The author asserts it; opstest checks it
-	// with an insert-below-cursor fault.
+	// resume cannot skip anything. Chunks are cut from the stream as pages
+	// arrive and the ledger records completed KEY RANGES, not chunk numbers
+	// (§5.3). The author asserts it; opstest checks it with an
+	// insert-below-cursor fault.
 	AppendOnly
 	// Unordered: items can appear below the cursor (the activity digest tier,
 	// which writes backdated keys). Resume restarts from zero; the def must
@@ -276,19 +286,57 @@ type Stage[P any] struct {
 	// results of the stages it waits on (typed hand-off: results are decoded
 	// into the child's R type, not passed as raw JSON).
 	Params func(p P, results Results) (any, error)
-	// PerSubject fans the stage out: one child run per subject the previous
-	// stage produced, each with its own row, bounded by FanOut.
-	PerSubject func(results Results) ([]Subject, error)
-	FanOut     Concurrency
-	// Gate, when set, stops the pipeline for approval before this stage (a
-	// Fixer apply stage always gates).
-	Gate *Approval
-	// OnFail: StopPipeline (default) | ContinueOthers | SkipSubject.
+	// OnFail: StopPipeline (default) | ContinueOthers.
 	OnFail StageFailure
 }
 
 func Pipeline[P any](id string, s PipelineSpec[P]) Definition
 ```
+
+*Round-2 cut (r3).* The first draft also had `PerSubject`/`FanOut` (one child run per
+subject) and `Gate` (approval before a stage). Both are removed. The three pipelines that
+exist at HEAD (`maintenance.window`, `maintenance.library-optimize`, `dedup.run-all`) are
+linear chains of whole-library children, and workstream 02 chose a `Batch` over a dirty set
+for `identification.advance` precisely to avoid ~11k child rows (parent §3.9). A stage that
+needs a person's approval is a Fixer, and a Fixer's Live run can only be started from an
+approved plan (§6), so a pipeline can contain a Fixer *plan* stage and must stop there; no
+separate gate type is needed. Fan-out over subjects, if ever needed, is a `Batch` whose
+`Item` calls `rc.Enqueue`/`rc.Await`.
+
+### 1.5 Sources and budgets for workstream 02 (`DirtySet`, `Budget`)
+
+```go
+// DirtySet is a Source over a durable per-subject dirty set (02's
+// idx:sidx:dirty:<subjectID> pattern). Pages drains it 256 keys at a time;
+// Order is Unordered (a re-mark can land below the cursor) so resume is
+// ResumeFromZero, which is cheap because processed entries are gone.
+func DirtySet[T any](prefix string, load func(ctx context.Context, ids []string) ([]T, error)) Source[T]
+
+// Budget names an EXISTING provider limiter (internal/metadata/throttle_registry.go)
+// so the dispatcher can see contention between ops that share it. It is a
+// rate budget: calls per second and in-flight concurrency. It does NOT model
+// a calendar quota such as Google Books' 1,000 calls per day; workstream 02
+// keeps its day-quota planner, and a def that needs one declares Budget for
+// the rate and calls 02's planner for the day.
+func Budget(provider string) BudgetRef
+```
+
+Rules the runner enforces for a `DirtySet` source (closing 02 §6's three gaps):
+1. **Mark epochs, compare-and-delete.** Each dirty entry carries a mark epoch set by the
+   marker. The runner reads the epoch with the page, hands the item to `Item`, and after
+   `Item` succeeds deletes the entry **only if its epoch is unchanged**. An item re-marked
+   while in flight keeps its newer epoch, stays dirty, and is drained on the next page or
+   run. A plain delete after processing would lose that re-mark.
+2. **One page is one chunk.** The `DirtySet` page size and the D28a `ChunkSize` default are
+   both 256, and a Batch over a `DirtySet` leases each page as exactly one chunk (§5.3,
+   `Unordered` row): the lease table shows the page's first key as the chunk id. With
+   `PartitionBy` (02 PR 14 partitions by book id) the subject id is the key, which is
+   unique per entry, so partition-major grouping is the identity and `ValidateCatalog`
+   allows `PartitionBy` on a `DirtySet` as the one exception to the Snapshot-only rule.
+3. **Names match 02 PR 14.** 02's driver is already written as `Source.Pages` /
+   `Item` / `Finish` with `PartitionBy: bookID` on the v2 adapter; the wave-12F port is a
+   constructor swap (`ops.Batch(...)` with `Source: ops.DirtySet(...)`), nothing in the
+   body changes.
 
 Per-subject dependencies that outlive one pipeline run (v2 `Requires` / `DepsScheduler`,
 `op:deprev:` / `op:completion:`) stay, renamed:
@@ -388,8 +436,21 @@ type Writer interface {
 // delete book_file rows; repoint them).
 
 var (
-	ErrFenced  = errors.New("ops: run is fenced (canceled, abandoned or lease lost); write refused")
-	ErrPreview = errors.New("ops: preview mode; write recorded, not performed")
+	ErrFenced           = errors.New("ops: run is fenced (canceled, abandoned or lease lost); write refused")
+	ErrPreview          = errors.New("ops: preview mode; write recorded, not performed")
+	ErrChangedSincePlan = errors.New("ops: row changed since the plan; refused") // returned from a Fixer Apply fn
+)
+
+// Subjects and risk, used by Row (§1.3).
+type Subject struct{ Type SubjectType; ID string }
+func Books(ids ...string) []Subject
+func BookFiles(ids ...string) []Subject
+
+type Risk int
+const (
+	RiskLow Risk = iota + 1
+	RiskMedium
+	RiskHigh
 )
 ```
 
@@ -425,15 +486,91 @@ func Uninterruptible(reason string, budget time.Duration) CancelContract
 
 ---
 
-## 5. Resume
+## 5. Resume: chunk leasing (owner decision D28a)
+
+**Invariant.** *Every item is processed at least once; no completed chunk is processed twice.*
+The op author writes only `Item`. Chunking, leasing, the ledger, counters, partitioning,
+progress and resume belong to the runner. This replaces the contiguous-prefix watermark of
+the first draft (v2's `completionTracker`), which forced a resume to redo every item above
+the lowest unfinished one even when 7 of 8 workers had run far ahead of it.
+
+### 5.1 Chunks, leases, ledger
+
+- **Chunks.** The runner cuts the source into chunks of `ChunkSize` items (default 256).
+  For a `Snapshot` source the keys are frozen at start into `opv3:snap:{op}:{page}` and chunk
+  *c* is the key range `[c·size, (c+1)·size)` of that frozen order, so the chunk table is a
+  pure function of the snapshot and never depends on the worker count. Chunk boundaries are
+  adjusted for partitions as in §5.2.
+- **Leases.** A free chunk is leased to a worker. A lease is `{chunk, worker_id, leased_at,
+  heartbeat_at, item_index}`; the worker heartbeats after every item (and `rc.Touch()`
+  inside a long item) by updating its lease in the runner's in-memory lease table. Leases
+  live in one process: a lease is **never reassigned while its owner goroutine is alive**,
+  because the runner cannot kill a goroutine and two owners would break the invariant. A
+  worker whose heartbeat is older than `ItemTimeout` (or `Timeout/6` when `ItemTimeout` is
+  0) is reported as stuck in progress and to the watchdog, which is what trips the run's
+  `ProgressTimeout` today; the way out is cancel or restart, and on restart the chunk is
+  simply unfinished.
+- **Ledger.** Completed chunks are recorded in a per-run ledger, `opv3:ledger:{op}`: a bitmap
+  for `Snapshot` sources (one bit per chunk; 1M items at 256 per chunk is 4,096 bits), a
+  completed-key-range list for `AppendOnly` sources (§5.3). A chunk is "complete" only when
+  every one of its items returned from `Item` (ok, failed-and-continued, or skipped); an
+  item error with `OnItemError: Stop` leaves the chunk incomplete. **All ledger writes are
+  serialized by the runner:** workers send completions to one ledger goroutine, which folds
+  them into the bitmap and writes the ledger, the lease table and the progress snapshot in
+  one Pebble batch, at most every 2 s or on every completion when completions are rarer than
+  that. There is no concurrent writer of the ledger, so there is nothing for a worker to
+  race on.
+- **Counters and Label.** Per-item counters (`ok`, `failed`, `skipped:<reason>`, op-defined
+  via `rc.Count`) are runner-owned atomics, merged into the ledger batch. `Label(T)` is
+  called by the worker for its own current item and stored on its lease; it receives the
+  item only and reads nothing shared, so the v2 Label race (CLAUDE.md) has nothing to race on.
+- **Resume.** On resume (same op id, next attempt) the runner reads the ledger, marks every
+  chunk whose bit is unset as free, including chunks that were in flight at the crash, and
+  leases them again. Items of a partially finished chunk are run again; `Item` idempotence
+  covers that. A chunk whose bit is set is never leased again. `ResumeContinue` therefore
+  means "lease the unfinished chunks"; there is no prefix and no watermark.
+- **Finish.** When the ledger is full, `Finish` runs once with the `Summary` (§7). After a
+  cancel, `Finish` runs with the partial summary and `rc.Canceled()` true, as before.
+
+### 5.2 PartitionBy composes with chunks: partition-major chunking
+
+Chosen: **partition first, then cut chunks that never split a partition.** With
+`PartitionBy` set, the snapshot freezes keys grouped by partition key (a stable sort by key,
+so source order is preserved inside a partition). Chunks are then cut every `ChunkSize`
+items, but a boundary is pushed forward to the next partition edge, so a chunk holds whole
+partitions; a partition larger than `ChunkSize` becomes one oversized chunk on its own. The
+chunk boundaries are stored with the snapshot (`opv3:snap:{op}:chunks` → `[]int32` start
+offsets) because they are no longer arithmetic. Each chunk is executed sequentially by its
+holder, so every item of a partition runs on one worker, in source order, and any free
+worker can take any free chunk.
+
+Rejected: **hash partitions to workers** (`hash(key) mod W`). Chunk membership would then
+depend on `W`, so a resume after a config change, on a smaller machine, or with `FromParam`
+tuned differently would re-run or skip the wrong items; a slow partition would pin one
+worker while the others idle, because chunks could not be stolen; and the ledger would need
+one bitmap per worker. Partition-major chunking keeps the ledger a function of the snapshot
+alone and keeps work stealing.
+
+`PartitionBy` requires `Order: Snapshot`; `ValidateCatalog` refuses it with `AppendOnly` or
+`Unordered`, because grouping needs the whole key set. The one exception is a `DirtySet`
+source whose partition key is the entry key itself (§1.5). Fixer apply uses this path with
+`Row.ID` as the default partition key.
+
+### 5.3 How each `Order` interacts with chunks
+
+| Order | chunk table | ledger | resume |
+|---|---|---|---|
+| `Snapshot` | frozen keys in `opv3:snap:`; chunk = fixed range (or partition-adjusted range) | bitmap | re-lease unset chunks; never re-lease a set chunk |
+| `AppendOnly` | chunks are cut from the cursor stream in arrival order: the runner takes `ChunkSize` items from `Pages` and leases them as a chunk `{first_key, last_key}`; no frozen snapshot | completed-key-range list `[{first,last}]`, merged when adjacent | re-read `Pages` from the cursor of the lowest incomplete range's `first_key`; every item whose key falls inside a completed range is skipped without calling `Item`; items after the old tail are new and are chunked as they arrive. Ranges, not chunk numbers, so a deletion between runs cannot shift chunk membership |
+| `Unordered` | chunks are cut from the stream as for `AppendOnly`; for a `DirtySet` one 256-key page is one chunk (§1.5) | none | `ResumeFromZero`: the stream is read again from the start and every item re-runs (for a `DirtySet`, only entries still dirty); `ValidateCatalog` refuses `ResumeContinue` |
 
 ```go
 type ResumePolicy int
 
 const (
-	// ResumeContinue: Batch/Fixer-apply resume from the watermark over the
-	// frozen snapshot (or the cursor, for AppendOnly sources). Tasks resume
-	// with rc.Restore(). Default for Batch with Snapshot/AppendOnly sources.
+	// ResumeContinue: Batch/Fixer-apply re-lease the chunks the ledger does
+	// not record as complete (§5.1), including the ones that were in flight.
+	// Tasks resume with rc.Restore(). Default for Batch with Snapshot/AppendOnly sources.
 	ResumeContinue ResumePolicy = iota + 1
 	// ResumeFromZero: start over in place (same op id). Requires idempotent
 	// work. Default for Batch with an Unordered source and for Fixer plans.
@@ -450,10 +587,11 @@ Differences from v2, each answering a finding:
 - A resume **keeps the op id** in every policy. v2 `ResumeRequeue` minted a new row and
   closed the old one `interrupted_dropped` (`resume.go:482-497`), which moved the anchor that `opchange:`,
   `op_result:` and activity rows hang off (memory: v1 retirement note, `bulk_fetch_metadata`).
-- The watermark is computed by the runner from the frozen snapshot, as v2
-  `completionTracker` does, but the op cannot opt out of it by forgetting
-  `CheckpointStateFn`.
-- `Unordered` sources cannot select `ResumeContinue`; `ValidateDefinition` refuses it.
+- The chunk ledger is written by the runner; the op cannot opt out of it by forgetting
+  `CheckpointStateFn`, and cannot write it wrong, because the op never sees it.
+- `Unordered` sources cannot select `ResumeContinue`; `ValidateCatalog` refuses it.
+- `library.scan` keeps its own checkpoint format and resume rules (parent §3.8); it is not
+  a chunked Batch.
 
 ---
 
@@ -499,20 +637,55 @@ type Total struct{ n int64; known bool }
 func Known(n int64) Total
 func Unknown() Total
 
-// Snapshot is what the API and SSE carry.
+// Snapshot is what the API and SSE carry. For a Batch/Fixer the runner fills
+// it from the chunk ledger and the lease table (§5); a Task fills Done/Total
+// itself and has no Chunks or Workers.
 type ProgressSnapshot struct {
 	Phase     string           `json:"phase"`
 	Phases    []string         `json:"phases"`       // declared order
-	Done      int64            `json:"done"`
+	Done      int64            `json:"done"`         // items settled (ok + failed + skipped)
 	Total     *int64           `json:"total"`        // null = unknown, never 0/0
 	Unit      string           `json:"unit"`         // "books", "files", "rows"
+	Failed    int64            `json:"failed"`       // items whose Item returned an error
 	Counters  map[string]int64 `json:"counters"`     // ok, failed, skipped:<reason>, op-defined
-	RatePerS  float64          `json:"rate_per_s"`
+	Chunks    *ChunkProgress   `json:"chunks"`       // Batch/Fixer only
+	Workers   []WorkerProgress `json:"workers"`      // one row per worker, Batch/Fixer only
+	RatePerS  float64          `json:"rate_per_s"`   // items/s over the last 30 s
 	ETA       *time.Duration   `json:"eta"`          // only when Total known
-	Current   string           `json:"current"`      // Label(item) of an in-flight item
+	Current   string           `json:"current"`      // Label(item) of the most recently started item
 	UpdatedAt time.Time        `json:"updated_at"`
 }
+
+type ChunkProgress struct {
+	Done  int `json:"done"`
+	Total int `json:"total"`   // for AppendOnly: chunks cut so far
+	Size  int `json:"size"`    // ChunkSize in effect
+}
+
+type WorkerProgress struct {
+	Worker    int       `json:"worker"`     // 0..Concurrency-1
+	Chunk     int       `json:"chunk"`      // -1 when idle
+	Item      string    `json:"item"`       // Label(current item)
+	ItemIndex int       `json:"item_index"` // position inside the chunk
+	ChunkSize int       `json:"chunk_size"` // items in this chunk (partition-adjusted)
+	Heartbeat time.Time `json:"heartbeat"`
+	Stuck     bool      `json:"stuck"`      // heartbeat older than the item budget (§5.1)
+}
+
+// Summary is what Finish receives: the final counters, read from the ledger.
+type Summary struct {
+	Done, Total, Failed, Skipped int64
+	Counters                     map[string]int64 // op-defined via rc.Count, plus skipped:<reason>
+	ChunksDone, ChunksTotal      int
+	Canceled                     bool
+}
+
+func (s Summary) Counter(name string) int64
 ```
+
+The ops UI renders `Workers` as one row per worker (chunk, item, items into the chunk,
+heartbeat age, a "stuck" marker) under the run's progress bar, and `Chunks.Done/Total` next
+to `Done/Total`. This is the owner's "status is always visible" requirement (D28).
 
 ---
 
@@ -673,9 +846,11 @@ Failure points, in order:
    `internal/plugins/plugins_wiring_test.go:23`) runs `go list -deps ./cmd/...` and requires
    every bundle package.
 3. **Startup:** `ValidateCatalog` refuses to start on a duplicate ID, an invalid schedule, an
-   `Unordered` source with `ResumeContinue`, a Fixer without `Writes`, a def without
-   `Permission`, or a ledger ID (the
-   embedded `op_ids.golden`) that resolves to no def, alias or tombstone.
+   `Unordered` source with `ResumeContinue`, `PartitionBy` on a non-`Snapshot` source, a
+   Fixer without `Writes`, a native def without `Permission` (D1: adapted v2 defs get
+   `settings.manage` from 08 PR X2 until ported), a scheduled writer whose schedule has
+   neither `.Live()` nor an explicit preview note (D8), or a ledger ID (the embedded
+   `op_ids.golden`) that resolves to no def, alias or tombstone.
 
 ---
 
@@ -693,11 +868,16 @@ type RunOpt func(*runCfg)
 func Live() RunOpt                         // default is Preview, as in prod
 func Seed(n int64) RunOpt                  // completion order of concurrent items
 func Workers(n int) RunOpt                 // default GOMAXPROCS, never 1
+func ChunkSize(n int) RunOpt               // override the def's ChunkSize (Conformance also runs 1, 3 and the default)
 func CancelAt(item int) RunOpt             // cancel when item n starts
 func CrashAt(item int) RunOpt              // stop the world after item n; Outcome.Resume() continues
+func CrashMidChunk(chunk, item int) RunOpt // stop the world while chunk c is leased and item i of it is done;
+                                           // Resume() must re-run chunk c from its first item, never re-run
+                                           // any chunk the ledger recorded, run every item >= 1 time and the
+                                           // items of chunk c <= 2 times, and leave Done == Total
 func InsertBelowCursor(item any) RunOpt    // proves an AppendOnly claim or fails it
 func AbandonAt(item int) RunOpt            // item goroutine ignores ctx; asserts fenced writes
-func LoseLeaseAt(item int) RunOpt
+func LoseLeaseAt(item int) RunOpt          // the scan stand-down lease, not a chunk lease
 
 type Outcome struct {
 	State    state.State
@@ -715,10 +895,13 @@ func (o *Outcome) Resume(opts ...RunOpt) *Outcome
 //   - Preview performs zero writes;
 //   - every History row follows its Write (ledger-after-write);
 //   - no Write after the fence is revoked (CancelAt, AbandonAt, LoseLeaseAt);
-//   - crash + resume processes every item at least once and never skips one
-//     below the watermark; for AppendOnly, InsertBelowCursor fails the claim;
+//   - crash + resume (CrashAt and CrashMidChunk at several chunks) processes
+//     every item at least once and re-runs no chunk the ledger recorded;
+//     with PartitionBy, every item of one partition ran on one worker in
+//     source order; for AppendOnly, InsertBelowCursor fails the claim;
 //   - progress Done is monotone and ends equal to Total when Total is known;
-//   - runs under -race with Workers >= 4.
+//     Chunks.Done ends equal to Chunks.Total;
+//   - runs under -race with Workers >= 4 and ChunkSize in {1, 3, default}.
 func Conformance(t *testing.T, def ops.Definition, params any, opts ...ConformanceOpt)
 ```
 

@@ -1,5 +1,5 @@
 <!-- file: docs/proposals/2026-10-holistic/09-owner-decisions.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 3b9e6f2a-71c4-4d0e-a8b5-9f1c2e7d4a60 -->
 <!-- last-edited: 2026-10-09 -->
 
@@ -76,3 +76,25 @@ These are the owner's answers to the decisions in `08-integrated-roadmap.md` §7
 | # | Item |
 |---|---|
 | D52 | **Deluge cleanup after organize (new feature).** Once every file in a torrent has a verified matching `book_file` in the library (same size and a content hash or fingerprint match; never path alone), remove the torrent **and its downloaded data** from Deluge, but only after seeding reaches **ratio 1.0 or 14 days, whichever comes first**. Both thresholds are settings. It is built as a Repairs-style fixer (trial → approve → apply) on the ops v3 Fixer kind, with a declared `Deletes` effect and a journal. It never touches library files or `book_file` rows. It needs its own design doc before implementation; reuse the existing Deluge client and evaluate `versions/swap.go`'s `NotifyDelugeAfterVersionSwap`. |
+
+## Round-2 open decisions (D53–D67)
+
+Appended by the coordinator on 2026-10-09 from `08-integrated-roadmap.md` §7 (v1.1.0). Answered by the owner on 2026-10-09; the third column is the owner's answer (the reviewers' recommendation unless it says otherwise). Nothing above this heading was changed. (One note on the record above: D14d says "about 25 `client_golang` series"; 11 measured 69 families, and its ratchet baseline is 69.)
+
+| # | Question (source) | Recommended answer | Status |
+|---|---|---|---|
+| D53 | 05 r3. Wrap the four frozen ops (`library.bulk-write-back`, `maintenance.bulk-write-back`, `operations.backfill-legacy-status` until 01 P74, `maintenance.repair-library-state`) as native v3 Tasks whose `Run` calls the untouched v2 body, so `v2compat` can be deleted in 05 PR 15? | **Yes.** Wrap the four frozen ops as native v3 Tasks over untouched bodies; `v2compat` is deleted in 05 PR 15. | **answered 2026-10-09** |
+| D54 | 04 Q5a. Pair C2: `scheduler.dedup-llm-review` is three days newer than `dedup.llm-review`, but D4 retires `scheduler.*`. Which survives? | **`dedup.llm-review` survives**; `scheduler.dedup-llm-review` becomes its FormerIDs alias. | **answered 2026-10-09** |
+| D55 | 01 Q10. The three category-B files with no decision: `internal/deluge/importer_adapter.go`, `internal/plugins/deluge/import.go`, `internal/ai/telemetry.go`. | **Keep the two Deluge files until 10 PR 2. Do NOT delete `ai/telemetry.go`: the owner wants AI metrics.** New 11 PR 7 adds OTel instruments per provider/model/task (requests, latency histogram, tokens in/out, failures by reason, parse-accepted ratio) on `/metrics`, and wires the dormant `WithOpenAISpan` helper so AI calls also trace. Owner: "should we add metrics around ai and have this data put somewhere?" | **answered 2026-10-09** |
+| D56 | 01 P79a. Flip the `embed_cover_art` default to `true` in the same PR that gates the live cover embed on it? | **Yes.** Flip `embed_cover_art` to `true` in the same PR as the gate. | **answered 2026-10-09** |
+| D57 | 10 Q6. Copy model (the cleanup fixer) or seed-from-library model (`deluge_move_enabled`)? | **Copy model.** `deluge_move_enabled` stays false and is marked deprecated in Settings; the fixer refuses torrents whose files sit in the library. | **answered 2026-10-09** |
+| D58 | 10 Q7. Add `deluge_cleanup_min_age_hours` (default 24) beyond the ratio and age thresholds? | **Yes**, `deluge_cleanup_min_age_hours` default 24. | **answered 2026-10-09** |
+| D59 | 07 F3 / appendix C. Adopt TanStack Query v5 for the Repairs pilot, with the bar: at least 150 of 215 server-state lines removed, 22 tests green in at most 3.5 s, bundle at most 650 KB, compiler bailouts not higher; revert on a miss? | **Yes, TanStack Query v5** for the Repairs pilot with the stated bar (≥150 of 215 lines removed, 22 tests green, no new compiler bailouts); revert on a miss. | **answered 2026-10-09** |
+| D60 | 07 Q9. Put 07 C1–C3 (CI throughput) at the very front of wave 0, ahead of the Go 1.27.2 bump, and request the `run-go-tests` input from `falkcorp/github-common`? | **Yes.** 07 C1–C3 go to the very front of wave 0; request the `run-go-tests` input, inline fallback. | **answered 2026-10-09** |
+| D61 | 11 §3.3. OTLP metric exporter behind new keys (`otel_metrics_otlp_endpoint`, `_interval`, `_insecure`, `telemetry_environment`), off by default, never fatal, no fallback to the trace endpoint? | **Yes.** OTLP metric keys off by default, never fatal, no fallback to the trace endpoint. | **answered 2026-10-09** |
+| D62 | 10 Q1 + Q3. Eligibility: only audio files must be verified (sidecars are "discarded with the data"); "in the library" means every file is under `RootDir`, not the `organized` state flag? | **Yes to both.** Audio files only; "in the library" = every file under RootDir. | **answered 2026-10-09** |
+| D63 | 10 Q2. Scope only torrents with the discovery label by default (empty = all)? | **The discovery label by default**; empty means all. | **answered 2026-10-09** |
+| D64 | 10 Q4 + Q8. The app never deletes a directory Deluge left behind (`orphan_data` rows are held); a Mac-only fingerprint lane is a later v2 only if the `unverifiable` count stays large after the hash backfill? | **Yes to both.** No app-side directory deletes; the Mac fingerprint lane only if `unverifiable` stays large. | **answered 2026-10-09** |
+| D65 | 10 Q5. Build the fixer on v2 `repairs.Fixer` now, or wait for 05 PR 5–7? | **Wait for 05 PR 5–7.** 10 PR 0–2 ship now. | **answered 2026-10-09** |
+| D66 | 11 Q1–Q3. Scope labels off (`WithoutScopeInfo`), gRPC only, cumulative temporality? | **Yes to all three.** No scope labels, gRPC only, cumulative. **Owner, 2026-10-09: Prometheus compatibility is a hard requirement and stays; the `/metrics` scrape endpoint is the primary surface, OTLP push is an optional second reader.** Every new OTel instrument must appear on `/metrics` with a Prometheus-conventional name; the series-name contract test in 11 PR 1 guards that. | **answered 2026-10-09** |
+| D67 | 11 Q5–Q7. Pebble collector stays on `client_golang`; the five `ai_dispatch_*` names stay unprefixed; `internal/metrics` is deleted only when its last family has moved on touch? | **Yes to all three.** Pebble collector stays; `ai_dispatch_*` names stay bare; `internal/metrics` deleted when its last family has moved. | **answered 2026-10-09** |
