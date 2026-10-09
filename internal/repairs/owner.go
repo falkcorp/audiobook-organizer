@@ -1,7 +1,7 @@
 // file: internal/repairs/owner.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7a3d5f81-2c94-4e0b-b6a7-1f8e3c2d9b54
-// last-edited: 2026-10-07
+// last-edited: 2026-10-09
 
 package repairs
 
@@ -134,10 +134,6 @@ type OwnerApproval struct {
 	// mode (no grant, a resume, a mismatch); every one of them is then
 	// reported OutcomeOwnerRefused with this reason.
 	Refused string
-}
-
-func (a *OwnerApproval) has(id string) bool {
-	return a != nil && a.Refused == "" && slices.Contains(a.RowIDs, id)
 }
 
 // OwnerRedeemer is the apply run redeeming a grant, as ResolveOwnerApproval

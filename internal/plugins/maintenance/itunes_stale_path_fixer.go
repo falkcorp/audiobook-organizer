@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_stale_path_fixer.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2b2165f1-de86-4181-9a6d-4ed73bb98fbc
-// last-edited: 2026-10-07
+// last-edited: 2026-10-09
 
 // Repairs-lane fixer "stale-itunes-path": clear an itunes_path that no iTunes
 // track backs (plan: docs/plans/2026-10-07-stale-itunes-path.md).
@@ -345,6 +345,7 @@ func (f *staleITunesPathFixer) Plan(ctx context.Context, raw json.RawMessage, re
 			if b.IsSoftDeleted() {
 				continue
 			}
+			//lint:ignore SA1019 the stale-path fixer exists to drain the legacy book.itunes_path column, so it reads it by design
 			if !withPath[b.ID] && (b.ITunesPath == nil || *b.ITunesPath == "") {
 				continue
 			}
@@ -410,7 +411,9 @@ func (f *staleITunesPathFixer) evaluate(in *staleITPInput, lib *staleITPLibrary)
 		return hold(staleITPClassGone, staleITPSkipGone, "the book no longer exists or was retired")
 	}
 	var fields []staleITPField
+	//lint:ignore SA1019 the stale-path fixer exists to drain the legacy book.itunes_path column, so it reads it by design
 	if b.ITunesPath != nil && *b.ITunesPath != "" {
+		//lint:ignore SA1019 the stale-path fixer exists to drain the legacy book.itunes_path column, so it reads it by design
 		fields = append(fields, staleITPField{Path: *b.ITunesPath})
 	}
 	rows := append([]database.BookFileCore(nil), in.Rows...)

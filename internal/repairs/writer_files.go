@@ -1,7 +1,7 @@
 // file: internal/repairs/writer_files.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 4d8a2f61-3c7e-4b19-8e05-9a1f6c3d7b28
-// last-edited: 2026-10-07
+// last-edited: 2026-10-09
 
 package repairs
 
@@ -529,12 +529,15 @@ func (w *Writer) ClearBookITunesPath(bookID, expect string) error {
 	return w.JournalStep(bookID, e, func() error {
 		_, err := w.Modify(bookID, func(b *database.Book) error {
 			cur := ""
+			//lint:ignore SA1019 clears the legacy book.itunes_path column (journaled so the repair can be undone); it must touch that exact column
 			if b.ITunesPath != nil {
+				//lint:ignore SA1019 clears the legacy book.itunes_path column (journaled so the repair can be undone); it must touch that exact column
 				cur = *b.ITunesPath
 			}
 			if cur != expect {
 				return fmt.Errorf("%w: book %s iTunes path is %q, not the planned %q", ErrChangedSincePlan, bookID, cur, expect)
 			}
+			//lint:ignore SA1019 clears the legacy book.itunes_path column (journaled so the repair can be undone); it must touch that exact column
 			b.ITunesPath = nil
 			return nil
 		})

@@ -1,7 +1,7 @@
 // file: internal/undo/engine.go
-// version: 1.32.0
+// version: 1.33.0
 // guid: 2e7a9f1c-3b4d-4e8f-a1c5-7d9e2f4b8c3a
-// last-edited: 2026-10-07
+// last-edited: 2026-10-09
 //
 // Undo preflight. PreflightUndoConflicts predicts what POST
 // /operations/:id/revert (audiobooks.RevertService) will do with each change
@@ -525,6 +525,7 @@ func checkFsRegroupRow(store ConflictChecker, c *database.OperationChange, stamp
 		// empty (CheckITunesPathClearCurrent): on the book, or on the row,
 		// which must still be on BookID.
 		if c.FieldName == ITunesPathBookField {
+			//lint:ignore SA1019 preflight checks the legacy book.itunes_path column the stale-path repair cleared, matching the revert
 			return CheckITunesPathClearCurrent(derefStr(book.ITunesPath), c)
 		}
 		return checkFsRegroupRowCurrent(store, c, func(f *database.BookFile) error {

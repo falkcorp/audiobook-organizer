@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/itunes_stale_path_fixer_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 77c1b0a8-cdba-4f18-8dc7-b8dce6613846
-// last-edited: 2026-10-07
+// last-edited: 2026-10-09
 
 package maintenance
 
@@ -157,6 +157,7 @@ func TestStaleITunesPath(t *testing.T) {
 		// A book-level stale path, too.
 		bid := f.staleBook(t, "b", stalePathB)
 		pb := stalePathB
+		//lint:ignore SA1019 test of the legacy book.itunes_path column the stale-path fixer drains
 		_, err := f.s.ModifyBook(bid, func(b *database.Book) error { b.ITunesPath = &pb; return nil })
 		require.NoError(t, err)
 
@@ -176,6 +177,7 @@ func TestStaleITunesPath(t *testing.T) {
 		require.Empty(t, f.rowITunesPath(t, "b"))
 		b, err := f.s.GetBookByID(bid)
 		require.NoError(t, err)
+		//lint:ignore SA1019 test of the legacy book.itunes_path column the stale-path fixer drains
 		require.True(t, b.ITunesPath == nil || *b.ITunesPath == "")
 		// The file and everything else on the row are untouched.
 		rows, err := f.s.GetBookFiles(id)
@@ -205,7 +207,9 @@ func TestStaleITunesPath(t *testing.T) {
 		require.Equal(t, stalePathB, f.rowITunesPath(t, "b"))
 		b, err = f.s.GetBookByID(bid)
 		require.NoError(t, err)
+		//lint:ignore SA1019 test of the legacy book.itunes_path column the stale-path fixer drains
 		require.NotNil(t, b.ITunesPath)
+		//lint:ignore SA1019 test of the legacy book.itunes_path column the stale-path fixer drains
 		require.Equal(t, stalePathB, *b.ITunesPath)
 	})
 
