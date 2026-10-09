@@ -1,11 +1,11 @@
 // file: internal/server/handlers/operations/handler_test.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 36cf7fbb-8b23-4edb-ad4b-079ab2bd6cf1
 // last-edited: 2026-10-09
 
 // Unit tests for the operations-domain HTTP handlers. Each public method has at
-// least one test; happy paths plus key branches (cancel not-found fallback,
-// stale-op clear) are covered. The store is exercised through the generated
+// least one test; happy paths plus key branches (stale-op clear, pause-state
+// store failure) are covered. The store is exercised through the generated
 // operationsmocks (which satisfy the narrow OperationsStore — a superset of
 // the real store); the registry / pipeline / scan-store deps use their
 // generated mocks, and the three injected funcs (collectStale / preflightUndo

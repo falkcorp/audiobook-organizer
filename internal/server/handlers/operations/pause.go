@@ -1,5 +1,5 @@
 // file: internal/server/handlers/operations/pause.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3f6b0c28-5a17-4e93-b2d4-91e7c05a8b63
 // last-edited: 2026-10-09
 
@@ -127,16 +127,22 @@ func (h *Handler) pauseStatePayload() pauseResponse {
 		// isTerminalOpStatus must stay in sync with the backend's interrupted_*
 		// family; enumerating the three obvious statuses is the bug this
 		// codebase has hit before.
-		if ops, err := database.ListRecentOperationsV2(h.store, 200, time.Now()); err == nil {
-			for _, op := range ops {
-				if isTerminalOpStatus(op.Status) {
-					continue
-				}
-				if pausableDefs[op.DefID] {
-					resp.RunningPausable = append(resp.RunningPausable, op.DefID)
-				} else {
-					resp.RunningNotPausable = append(resp.RunningNotPausable, op.DefID)
-				}
+		ops, err := database.ListRecentOperationsV2(h.store, 200, time.Now())
+		if err != nil {
+			// Still 200 with the pause state: the hold itself is in-process and
+			// known. But say why both lists are empty, or a store failure reads
+			// exactly like "nothing running", the state this endpoint wrongly
+			// reported for six weeks when it read the dead v1 keyspace.
+			pauseLog.Warn("operations pause: running-op list unavailable: %v", logging.SanitizeErr(err))
+		}
+		for _, op := range ops {
+			if isTerminalOpStatus(op.Status) {
+				continue
+			}
+			if pausableDefs[op.DefID] {
+				resp.RunningPausable = append(resp.RunningPausable, op.DefID)
+			} else {
+				resp.RunningNotPausable = append(resp.RunningNotPausable, op.DefID)
 			}
 		}
 	}
