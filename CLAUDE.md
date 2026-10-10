@@ -1,7 +1,7 @@
 <!-- file: CLAUDE.md -->
-<!-- version: 4.15.0 -->
+<!-- version: 4.15.1 -->
 <!-- guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f -->
-<!-- last-edited: 2026-09-12 -->
+<!-- last-edited: 2026-10-09 -->
 
 # CLAUDE.md
 
@@ -177,7 +177,7 @@ make web-dev         # Vite dev server (frontend only)
 make help            # All targets
 ```
 
-> **Note:** `go.mod` says `go 1.27.0` and every build path pins `go1.27.1` (`Makefile`, `.envrc`, both Dockerfiles, CI `go-version`). When upgrading, move them together — `.standards/instructions/go.md` lists every copy of the pin.
+> **Note:** `go.mod` says `go 1.27.0` and every build path pins `go1.27.2` (`Makefile`, `.envrc`, both Dockerfiles, CI `go-version`). When upgrading, move them together — `.standards/instructions/go.md` lists every copy of the pin.
 
 ## Setup: Git Pre-Commit Hook & Credentials Management
 

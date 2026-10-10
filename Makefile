@@ -1,5 +1,5 @@
 # file: Makefile
-# version: 2.36.0
+# version: 2.36.1
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
 # last-edited: 2026-10-10
 
@@ -40,7 +40,7 @@ LDFLAGS := -X main.version=$(VERSION)
 # is GA and the default in Go 1.27 (the opt-out is GOEXPERIMENT=nojsonv2), so
 # the pin that every build path carried from 1.25/1.26 would only document a
 # requirement that no longer exists.
-export GOTOOLCHAIN := go1.27.1
+export GOTOOLCHAIN := go1.27.2
 
 # Overridable deployment variables (set in Makefile.local or via environment)
 DEPLOY_HOST ?=

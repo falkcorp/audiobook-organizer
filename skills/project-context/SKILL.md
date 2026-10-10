@@ -1,7 +1,7 @@
 ---
 name: project-context
 description: Load project context for the audiobook-organizer codebase. Invoke this skill at the start of any agent that needs project knowledge. Reads live docs files — no hardcoded values. Falls back to generic behavior on non-audiobook-organizer projects.
-version: 1.2.0
+version: 1.2.1
 ---
 
 # Project Context Loader
@@ -49,7 +49,7 @@ After reading, emit this block (fill in from what you read):
 
 ```
 === PROJECT CONTEXT ===
-Language/Framework: Go 1.27 (toolchain pinned go1.27.1 in Makefile/.envrc/Dockerfiles/CI) + React 19/TypeScript (Vite, MUI 9); HTTP = Gin
+Language/Framework: Go 1.27 (toolchain pinned go1.27.2 in Makefile/.envrc/Dockerfiles/CI) + React 19/TypeScript (Vite, MUI 9); HTTP = Gin
 Build: make build (full) | make build-api (backend only) | make deploy / deploy-debug exist ONLY via Makefile.local (see Makefile.local.example)
 Test:  make test | make test-all | make test-e2e | make ci (local gate) | make ci-woodpecker (offload)
 DB:    PebbleDB (sole store; activity log too) — SQLite REMOVED, NutsDB dead code

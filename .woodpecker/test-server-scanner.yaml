@@ -1,7 +1,7 @@
 # file: .woodpecker/test-server-scanner.yaml
-# version: 2.2.0
+# version: 2.2.1
 # guid: 7a2d4e81-0c63-4f9b-b5e2-9d1f3a6c8e27
-# last-edited: 2026-10-02
+# last-edited: 2026-10-09
 #
 # `make ci` test-short, part 2 of 3: internal/server, internal/scanner and
 # internal/server/handlers/abs, each as shard processes
@@ -39,7 +39,7 @@ steps:
     # container image; the step runs on the host with the agent's PATH.
     image: bash
     environment:
-      GOTOOLCHAIN: go1.27.1
+      GOTOOLCHAIN: go1.27.2
       # The local backend gives every pipeline a fresh HOME, so Go's default
       # caches (under $HOME, including the downloaded toolchain) were
       # re-created per run and never removed: 107 leftover workdirs held 117 GB

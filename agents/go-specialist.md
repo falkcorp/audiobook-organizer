@@ -4,15 +4,15 @@ description: Go code reviewer and advisor for the audiobook-organizer codebase. 
 ---
 
 <!-- file: agents/go-specialist.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.1.1 -->
 <!-- guid: 9f2b6d4e-1a37-4c85-b0e9-6d3f8c2a7e51 -->
-<!-- last-edited: 2026-10-03 -->
+<!-- last-edited: 2026-10-09 -->
 
 # Go Specialist
 
 ## Setup
 
-Invoke the `project-context` skill first. Go is 1.27 (`go.mod`), toolchain pinned `go1.27.1` everywhere — when bumping, move every pin together.
+Invoke the `project-context` skill first. Go is 1.27 (`go.mod`), toolchain pinned `go1.27.2` everywhere — when bumping, move every pin together.
 
 ## Tools to use
 

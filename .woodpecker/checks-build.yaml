@@ -1,5 +1,5 @@
 # file: .woodpecker/checks-build.yaml
-# version: 1.3.0
+# version: 1.3.1
 # guid: 544e8a0d-e5d0-4952-8fb5-c05cde1dd245
 # last-edited: 2026-10-10
 #
@@ -15,7 +15,7 @@
 # tank/ci dataset, shared with test-rest and test-database. Node is the
 # official v26 tarball under /tank/ci/tools/node (checksum-verified; see
 # docs/ci/woodpecker.md). PATH puts the pinned Go toolchain's own bin first so
-# fmt-check runs gofmt 1.27.1, not the older /usr/bin/gofmt from Ubuntu's Go.
+# fmt-check runs gofmt 1.27.2, not the older /usr/bin/gofmt from Ubuntu's Go.
 
 labels:
   host: u1
@@ -38,7 +38,7 @@ clone:
 
 variables:
   - &go_env
-    GOTOOLCHAIN: go1.27.1
+    GOTOOLCHAIN: go1.27.2
     # -trimpath: every run clones into a new woodpecker-local-<n> workdir, and
     # without it Go keys each package's cache entry on that directory, so the
     # shared cache would never hit (see test-server-scanner.yaml).
