@@ -1,7 +1,7 @@
 // file: internal/operations/registry/worker.go
-// version: 2.27.0
+// version: 2.27.1
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-10-04
+// last-edited: 2026-10-10
 
 package registry
 
@@ -432,6 +432,7 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 	// loop to join.
 	if dbr, ok := reporter.(*dbReporter); ok {
 		reporterForJoin = dbr
+		dbr.ops = r.ops
 	}
 
 	// Canonical "operation started" log line, with all the tags downstream
@@ -440,6 +441,7 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 	// gets this even if its Run forgets to emit one.
 	runStartedAt := time.Now().UTC()
 	metrics.IncOperationStarted(qr.defID)
+	r.ops.Started(qr.defID)
 	reporter.Logger().LogAttrs(runCtx, slog.LevelInfo, "operation started",
 		slog.String("phase", "start"),
 		slog.String("op_display", def.DisplayName),
@@ -470,7 +472,7 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 		}
 		// R-1: fan out op.terminal so the UI bell stops showing this op as running.
 		r.publishOpTerminal(qr.opID, qr.defID, finalStatus)
-		recordRunMetrics(qr.defID, finalStatus, runStartedAt)
+		r.recordRunMetrics(qr.defID, finalStatus, runStartedAt)
 		// C-5: notify the dep scheduler on ALL terminal transitions (the
 		// subprocess path previously notified on none of them).
 		r.notifyDepTerminal(finalStatus, qr)
@@ -644,7 +646,7 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 
 	// R-1: fan out op.terminal so the UI bell stops showing this op as running.
 	r.publishOpTerminal(qr.opID, qr.defID, finalStatus)
-	recordRunMetrics(qr.defID, finalStatus, runStartedAt)
+	r.recordRunMetrics(qr.defID, finalStatus, runStartedAt)
 
 	// Notify the dependency scheduler (async; non-blocking) so waiting_deps ops
 	// for the same subject can be re-evaluated or failed as appropriate.
@@ -671,7 +673,7 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 // Before 2026-10-03 the four Inc* helpers and ObserveOperationDuration were
 // defined in internal/metrics and called from nowhere: the deploy/prometheus
 // alert rules on operations_failed_total had never had a sample to fire on.
-func recordRunMetrics(defID, finalStatus string, startedAt time.Time) {
+func (r *Registry) recordRunMetrics(defID, finalStatus string, startedAt time.Time) {
 	switch finalStatus {
 	case "completed":
 		metrics.IncOperationCompleted(defID)
@@ -680,7 +682,12 @@ func recordRunMetrics(defID, finalStatus string, startedAt time.Time) {
 	case "canceled":
 		metrics.IncOperationCanceled(defID)
 	}
-	metrics.ObserveOperationDuration(defID, time.Since(startedAt))
+	took := time.Since(startedAt)
+	metrics.ObserveOperationDuration(defID, took)
+	// The OTel twin (ops.runs, ops.run.duration) records only the outcomes
+	// that exist at HEAD; see opsmetrics.OutcomeFor. Both families are emitted
+	// during the soak.
+	r.ops.Finished(defID, finalStatus, took)
 }
 
 // notifyDepTerminal notifies the dependency scheduler for every subject of a

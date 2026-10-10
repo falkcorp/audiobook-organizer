@@ -1,0 +1,25 @@
+# file: deploy/prometheus/recording-rules.yml
+# version: 1.0.0
+# guid: 6e1b9d34-0f7a-4c82-b5a3-d28c4f9e7a10
+# last-edited: 2026-10-10
+#
+# TEMPLATE / SNIPPET -- Prometheus recording rules for audiobook-organizer.
+# Like alert-rules.yml this is not evaluated by this repo; load it as a rule
+# file in an operator's own Prometheus.
+#
+# Names use the colon convention (level:metric:operation) so a recorded series
+# never collides with a metric name the binary still emits.
+
+groups:
+  - name: audiobook_organizer_compat
+    rules:
+      # Per-operation item totals under the old op_type spelling. The OTel
+      # counter audiobook_organizer_ops_items_total (plural "ops") carries
+      # def_id; the legacy per-run gauge audiobook_organizer_op_items_total
+      # carried op_id and op_type. Dashboards written against op_type can read
+      # this series instead. The label_replace copies def_id into op_type (the
+      # two hold the same operation id).
+      - record: audiobook_organizer:ops_items_by_op_type:sum
+        expr: >-
+          label_replace(sum by (def_id) (audiobook_organizer_ops_items_total),
+          "op_type", "$1", "def_id", "(.*)")

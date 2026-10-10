@@ -1,7 +1,7 @@
 // file: internal/operations/registry/reporter_db.go
-// version: 1.13.0
+// version: 1.13.1
 // guid: 1a2b3c4d-5e6f-7890-abcd-ef0123456789
-// last-edited: 2026-10-04
+// last-edited: 2026-10-10
 
 package registry
 
@@ -21,6 +21,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
+	"github.com/falkcorp/audiobook-organizer/internal/opsmetrics"
 )
 
 // Bus is satisfied by the EventHub in UOS-06. A nil Bus is safe; all
@@ -90,6 +91,13 @@ type dbReporter struct {
 	pendingLog        *pendingProgressLine // newest suppressed line, written at run end
 	nowFn             func() time.Time     // clock for the throttle; time.Now unless a test replaces it
 	shapeLogsInWindow int                  // shape-change lines written since the last time-based line
+
+	// ops records ops.items; newDBReporter defaults it to the global-provider
+	// recorder and the registry replaces it with its own. reportedItems is the
+	// high-water mark of progress already added to ops.items{outcome=processed}
+	// (atomic: UpdateProgress may be called from several goroutines).
+	ops           *opsmetrics.Recorder
+	reportedItems atomic.Int64
 
 	// setCurrentItemFn, if non-nil, updates the runHandle's in-memory label.
 	setCurrentItemFn func(string)
@@ -271,6 +279,7 @@ func newDBReporter(
 		synchronous:           synchronous,
 		progressFlushInterval: flushInterval,
 		nowFn:                 time.Now,
+		ops:                   opsmetrics.Default(),
 	}
 
 	// Every log line emitted via reporter.Logger() inherits these attrs.
@@ -444,6 +453,7 @@ func (r *dbReporter) UpdateProgress(current, total int, message string) error {
 	// rather than only by a human watching the UI. Cleared on terminal
 	// transition by registry.publishOpTerminal -> metrics.ClearOpProgress.
 	metrics.SetOpProgress(r.opID, r.defID, current, total)
+	r.countProcessedItems(current)
 
 	if r.synchronous {
 		if err := r.store.UpdateOpProgressV2(r.opID, current, total, message); err != nil {
@@ -871,4 +881,21 @@ func attrsToJSON(attrs []slog.Attr) string {
 		return "{}"
 	}
 	return string(b)
+}
+
+// countProcessedItems adds the progress made since the last report to
+// ops.items{outcome=processed}. The count is a high-water mark: a progress
+// value that goes backwards (a phase reset, a re-estimate) adds nothing and
+// does not lower the mark, so the same items are never counted twice.
+func (r *dbReporter) countProcessedItems(current int) {
+	for {
+		last := r.reportedItems.Load()
+		if int64(current) <= last {
+			return
+		}
+		if r.reportedItems.CompareAndSwap(last, int64(current)) {
+			r.ops.Items(r.defID, opsmetrics.ItemsProcessed, int64(current)-last)
+			return
+		}
+	}
 }
