@@ -1,5 +1,5 @@
 // file: internal/opsmetrics/promrules_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c4e8a1b6-52d9-4730-9f1a-7b3d6e0c8a25
 // last-edited: 2026-10-10
 
@@ -80,13 +80,19 @@ func TestPromRules_YAMLParse(t *testing.T) {
 	if e := alerts["AudiobookOrganizerOpStalled"]; !strings.Contains(e, "audiobook_organizer_op_items_processed") {
 		t.Errorf("OpStalled expr changed: %q", e)
 	}
+	// V2 rules are per def_id, so the alert carries the label the
+	// description names, and the failure threshold applies per operation as
+	// the old per-op_type rule did.
 	v2f, ok := alerts["AudiobookOrganizerOpFailuresHighV2"]
-	if !ok || !strings.Contains(v2f, "audiobook_organizer_ops_runs_total") || !strings.Contains(v2f, "timed_out") {
+	if !ok || !strings.Contains(v2f, "audiobook_organizer_ops_runs_total") || !strings.Contains(v2f, "timed_out") ||
+		!strings.Contains(v2f, "sum by (def_id)") {
 		t.Errorf("OpFailuresHighV2 missing or wrong: %q", v2f)
 	}
+	// The stall rule reads the progress-age gauge (liveness), not item
+	// throughput, which cannot see a phase that heartbeats a constant value.
 	v2s, ok := alerts["AudiobookOrganizerOpStalledV2"]
-	if !ok || !strings.Contains(v2s, "audiobook_organizer_ops_inflight") || !strings.Contains(v2s, "audiobook_organizer_ops_items_total") ||
-		!strings.Contains(v2s, "unless on (def_id)") {
+	if !ok || !strings.Contains(v2s, "max by (def_id) (audiobook_organizer_ops_progress_age_seconds)") ||
+		!strings.Contains(v2s, "> 1800") {
 		t.Errorf("OpStalledV2 missing or wrong: %q", v2s)
 	}
 	if _, ok := records["audiobook_organizer:ops_items_by_op_type:sum"]; !ok {

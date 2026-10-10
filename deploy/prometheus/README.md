@@ -1,5 +1,5 @@
 <!-- file: deploy/prometheus/README.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.2.1 -->
 <!-- guid: e3f4a5b6-c7d8-4e9f-0a1b-2c3d4e5f6a7b -->
 <!-- last-edited: 2026-10-10 -->
 
@@ -36,12 +36,22 @@ something to plug into their own Prometheus + Alertmanager install.
 
 **Dual-rule soak (11-PR4).** Operation metrics now exist as OTel instruments
 (`audiobook_organizer_ops_runs_total`, `..._ops_run_duration_seconds`,
-`..._ops_items_total`, `..._ops_inflight`; note the plural `ops`, which is not
-the legacy per-run gauge `op_items_total`). `alert-rules.yml` carries
-`AudiobookOrganizerOpFailuresHighV2` and `AudiobookOrganizerOpStalledV2` beside
-the two original rules, and the legacy series are still emitted. Both sets run
-until 2026-11-09; then the old rules and the legacy gauges are deleted in a
-follow-up (see `todo.d/`).
+`..._ops_items_total`, `..._ops_inflight`, `..._ops_progress_age_seconds`; note
+the plural `ops`, which is not the legacy per-run gauge `op_items_total`).
+`alert-rules.yml` carries `AudiobookOrganizerOpFailuresHighV2` and
+`AudiobookOrganizerOpStalledV2` beside the two original rules, and the legacy
+series are still emitted. Both sets run until 2026-11-09; then the old rules
+and the legacy gauges are deleted in a follow-up (see `todo.d/`).
+
+When comparing the two stall rules during the soak, note that they measure
+different things. The old rule fires on zero item throughput per run. V2
+fires when a def's most idle executing run has not called `UpdateProgress`
+for 30 minutes, and a heartbeat that repeats the same value counts as
+progress. V2 is therefore expected to stay quiet where the old rule fires on
+phases that report a constant value, such as the pre-organize database backup
+at 0/0 or the iTunes hash pass pinned at total/total. Both rules are
+pre-empted by the registry watchdog, which cancels a run that is silent for
+longer than its def's `ProgressTimeout` (5 minutes by default).
 
 Neither file is installed, run, or evaluated by this repo. See
 [`docs/system/runbooks.md`](../../docs/system/runbooks.md), section
