@@ -1,5 +1,5 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 4.25.0
+// version: 4.26.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
 // last-edited: 2026-10-10
 //
@@ -16,7 +16,6 @@ import (
 	"log/slog"
 	"net/http"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -957,7 +956,7 @@ func (s *Server) handleRejectCandidates(c *gin.Context) {
 		// apply gate refuses it (applygate.ReasonOwnerRejected), and the
 		// book's cached row is re-ordered below so it leaves slot 0.
 		if cr.Candidate != nil {
-			if err := store.SetRaw(metafetch.RejectedCandidateStoreKey(r.BookID, cr.Candidate.Source, cr.Candidate.Title), []byte("1")); err != nil {
+			if err := metafetch.RecordRejection(s.storeForWiring(), r.BookID, cr.Candidate); err != nil {
 				// The rejections already written still re-rank their rows.
 				s.rerankAfterRejection(c, "reject", touched)
 				httputil.InternalError(c, "failed to record rejection", err)
@@ -1029,10 +1028,10 @@ func (s *Server) handleUnrejectCandidates(c *gin.Context) {
 		})
 
 		// Remove the rejection: every stored key that matches it, whatever
-		// case it was written in (matching folds case,
-		// metafetch.RejectionKey), or the candidate would stay rejected.
+		// case it was written in (metafetch.RemoveRejection), or the
+		// candidate would stay rejected.
 		if cr.Candidate != nil {
-			if err := deleteRejectionKeys(s.storeForWiring(), r.BookID, cr.Candidate.Source, cr.Candidate.Title); err != nil {
+			if _, err := metafetch.RemoveRejection(s.storeForWiring(), r.BookID, cr.Candidate); err != nil {
 				s.rerankAfterRejection(c, "unreject", touched)
 				httputil.InternalError(c, "failed to remove rejection", err)
 				return
@@ -1201,31 +1200,6 @@ func (s *Server) handleListMetadataResults(c *gin.Context) {
 		"limit":     pp.Limit,
 		"offset":    pp.Offset,
 	})
-}
-
-// rejectionKeyStore is what deleteRejectionKeys reads and deletes.
-type rejectionKeyStore interface {
-	ScanPrefix(prefix string) ([]database.KVPair, error)
-	DeleteRaw(key string) error
-}
-
-// deleteRejectionKeys removes every stored rejection of source|title for
-// bookID, in whatever case each was written.
-func deleteRejectionKeys(store rejectionKeyStore, bookID, source, title string) error {
-	prefix := metafetch.RejectedCandidateBookPrefix(bookID)
-	pairs, err := store.ScanPrefix(prefix)
-	if err != nil {
-		return fmt.Errorf("read rejections for book %s: %w", bookID, err)
-	}
-	want := metafetch.RejectionKey(source, title)
-	for _, kv := range pairs {
-		if suffix, ok := strings.CutPrefix(kv.Key, prefix); ok && metafetch.RejectionKeyOfStored(suffix) == want {
-			if err := store.DeleteRaw(kv.Key); err != nil {
-				return fmt.Errorf("delete rejection %s: %w", kv.Key, err)
-			}
-		}
-	}
-	return nil
 }
 
 // rerankAfterRejection re-ranks the cached rows of the books a reject or
