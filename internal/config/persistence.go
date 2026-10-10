@@ -1,5 +1,5 @@
 // file: internal/config/persistence.go
-// version: 1.45.0
+// version: 1.46.0
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
 // last-edited: 2026-10-10
 
@@ -687,14 +687,34 @@ func saveRawBlob(store database.SettingsStore, rawJSON string) error {
 	return store.SetSetting("config_blob", rawJSON, "json", false)
 }
 
+// checkConfigBlob reports whether a stored config_blob value is a JSON
+// object. Empty, "null", a non-object, and a syntax error are all rejected:
+// json.Unmarshal of "null" into a struct succeeds and changes nothing, so it
+// would otherwise load as an all-defaults config. No writer stores an empty
+// blob (SaveConfigToDatabase and saveRawBlob both write marshalled JSON).
+func checkConfigBlob(value string) error {
+	if value == "" {
+		return fmt.Errorf("value is empty")
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(value), &obj); err != nil {
+		return fmt.Errorf("not a JSON object: %w", err)
+	}
+	if obj == nil {
+		return fmt.Errorf("value is JSON null")
+	}
+	return nil
+}
+
 // LoadConfigFromDatabase loads settings from database and applies them to AppConfig.
 //
 // Load order (blob-first):
 //  1. If "config_blob" exists: unmarshal the full non-secret Config JSON directly onto
 //     AppConfig — every field is restored automatically, no registration needed.
 //  2. Always load individual secret rows (they are NOT included in the blob).
-//  3. If no blob is found (existing install): fall back to individual applySetting keys
-//     so existing data is preserved.
+//  3. If no blob row exists (existing install): fall back to individual applySetting keys
+//     so existing data is preserved. A blob row that exists but does not parse
+//     (or does not match Config) is an error, never a fallback.
 func LoadConfigFromDatabase(store database.SettingsStore) error {
 	if store == nil {
 		return fmt.Errorf("store is nil")
@@ -724,7 +744,19 @@ func LoadConfigFromDatabase(store database.SettingsStore) error {
 
 	// --- Blob path (new installs and post-first-save upgrades) ---
 	blobFound := false
-	if blob, ok := settingsMap["config_blob"]; ok && blob.Value != "" {
+	if blob, ok := settingsMap["config_blob"]; ok {
+		// A config_blob row that exists but does not parse is an error, not
+		// "no blob". Falling back to the legacy per-key rows (stale or absent
+		// on any install that has saved since the blob format) means running
+		// on defaults, and the first SaveConfigToDatabase would then overwrite
+		// the repairable blob with them. Checked BEFORE the migrations below,
+		// so a blob that is not a JSON object is never rewritten or marked
+		// migrated; field types are probed further down, before the one-shot
+		// embed_cover_art marker.
+		if err := checkConfigBlob(blob.Value); err != nil {
+			return fmt.Errorf("stored config_blob is unreadable; refusing to run on defaults "+
+				"because the next settings save would overwrite it: %w", err)
+		}
 		// Preserve immutable fields — they must come from the runtime environment,
 		// not from a stored blob that could have been created under different flags.
 		// WHY Snapshot: reads AppConfig.DatabaseType under the read lock.
@@ -817,6 +849,21 @@ func LoadConfigFromDatabase(store database.SettingsStore) error {
 			}
 		}
 
+		// Type-check the (reshaped) blob against Config BEFORE the one-shot
+		// embed_cover_art step below, which records its marker even when it
+		// changes nothing: a marker written against a blob we then refuse to
+		// load would skip that migration once the operator repairs the blob.
+		// This is a probe on a throwaway copy; the real load is further down.
+		// It runs after the reshaping migrations above on purpose, because a
+		// pre-migration flat blob is not expected to match today's Config.
+		// Those migrations only move existing values into nested shape, so a
+		// rewrite they persist before this check preserves the operator's data.
+		probe := Snapshot()
+		if err := json.Unmarshal([]byte(blobStr), &probe); err != nil {
+			return fmt.Errorf("stored config_blob does not match the config schema; refusing to run "+
+				"on defaults because the next settings save would overwrite it: %w", err)
+		}
+
 		// One-shot: a stored embed_cover_art=false predates the setting doing
 		// anything, so drop it and let the new default (true) apply.
 		if _, done := settingsMap[embedCoverArtMigratedKey]; !done {
@@ -871,29 +918,31 @@ func LoadConfigFromDatabase(store database.SettingsStore) error {
 		// struct field itself) are dropped by json.Unmarshal on purpose and NOT
 		// warned about: nobody set them, and the next save rewrites the blob
 		// without them. Operator-written sources warn — see removedConfigKeys.
-		if err := json.Unmarshal([]byte(blobStr), &loaded); err == nil {
-			// WHY Mutate: whole-struct assignment races with HTTP readers.
-			Mutate(func(c *Config) {
-				*c = loaded
-				c.DatabaseType = savedDBType
-			})
-			blobFound = true
-			slog.Info("Loaded config from blob ( bytes)", "count", len(blob.Value))
-
-			// Name every key the blob did not contain and that therefore kept
-			// its default. Before the seeding fix those keys were silently
-			// zeroed, so an operator had no way to see that a shipped default
-			// had been discarded. Now the inheritance is stated at boot.
-			//
-			// Measured on production 2026-08-12 against the blob in place at the
-			// time: 33 keys inherit a non-zero default this way, including
-			// scheduled.library_scan.{enabled,interval}. Logged rather than
-			// suppressed precisely because that is a behaviour change an
-			// operator must be able to see and audit after an upgrade.
-			logDefaultsPreservedOverBlob(blobStr, loaded)
-		} else {
-			slog.Warn("Failed to parse config_blob — falling back to individual keys", "err", err)
+		if err := json.Unmarshal([]byte(blobStr), &loaded); err != nil {
+			// The probe above parsed an almost identical blob, so this is not
+			// expected; kept as an error so it can never fall back to defaults.
+			return fmt.Errorf("stored config_blob does not match the config schema; refusing to run "+
+				"on defaults because the next settings save would overwrite it: %w", err)
 		}
+		// WHY Mutate: whole-struct assignment races with HTTP readers.
+		Mutate(func(c *Config) {
+			*c = loaded
+			c.DatabaseType = savedDBType
+		})
+		blobFound = true
+		slog.Info("Loaded config from blob ( bytes)", "count", len(blob.Value))
+
+		// Name every key the blob did not contain and that therefore kept
+		// its default. Before the seeding fix those keys were silently
+		// zeroed, so an operator had no way to see that a shipped default
+		// had been discarded. Now the inheritance is stated at boot.
+		//
+		// Measured on production 2026-08-12 against the blob in place at the
+		// time: 33 keys inherit a non-zero default this way, including
+		// scheduled.library_scan.{enabled,interval}. Logged rather than
+		// suppressed precisely because that is a behaviour change an
+		// operator must be able to see and audit after an upgrade.
+		logDefaultsPreservedOverBlob(blobStr, loaded)
 	}
 
 	// --- Secret loading (always, blob or legacy) ---
