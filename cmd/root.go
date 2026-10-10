@@ -1,7 +1,7 @@
 // file: cmd/root.go
-// version: 1.24.0
+// version: 1.25.0
 // guid: 6a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
-// last-edited: 2026-10-06
+// last-edited: 2026-10-10
 
 package cmd
 
@@ -273,7 +273,12 @@ var serveCmd = &cobra.Command{
 
 		// Initialize OpenTelemetry: the Prometheus-exporting meter provider
 		// always; the OTLP tracer only when OTEL_EXPORTER_OTLP_ENDPOINT is set.
-		otelCfg := telemetry.LoadConfig("audiobook-organizer", config.AppConfig.OTelExporterOTLPEndpoint)
+		appCfg := config.Snapshot()
+		otelCfg := telemetry.LoadConfig("audiobook-organizer", appCfg.OTelExporterOTLPEndpoint,
+			telemetry.WithMetricsOTLP(appCfg.OTelMetricsOTLPEndpoint,
+				telemetry.ParseMetricsInterval(appCfg.OTelMetricsOTLPInterval),
+				appCfg.OTelMetricsOTLPInsecure),
+			telemetry.WithEnvironment(appCfg.TelemetryEnvironment))
 		otelShutdown, err := telemetry.InitOTEL(context.Background(), otelCfg)
 		if err != nil {
 			return fmt.Errorf("failed to initialize OpenTelemetry: %w", err)

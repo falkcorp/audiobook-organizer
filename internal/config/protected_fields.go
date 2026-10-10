@@ -1,7 +1,7 @@
 // file: internal/config/protected_fields.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7c41d2e8-5a96-4b3f-8e17-2f0b9d6a4c53
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 
 package config
 
@@ -169,6 +169,10 @@ var configFieldRules = map[string]fieldRule{
 	"whisper_endpoints":           {FieldUnprotected, "outbound endpoints"},
 	"metadata_sources[].base_url": {FieldUnprotected, "outbound endpoint"},
 	"otel_exporter_otlp_endpoint": {FieldUnprotected, "outbound endpoint"},
+	"otel_metrics_otlp_endpoint":  {FieldUnprotected, "outbound endpoint"},
+	"otel_metrics_otlp_interval":  {FieldUnprotected, "push period; no filesystem or credential effect"},
+	"otel_metrics_otlp_insecure":  {FieldUnprotected, "transport toggle for the outbound metrics endpoint"},
+	"telemetry_environment":       {FieldUnprotected, "label value on exported telemetry"},
 	"deluge_web_url":              {FieldUnprotected, "outbound endpoint"},
 	"download_client":             {FieldUnprotected, "outbound endpoints"},
 }

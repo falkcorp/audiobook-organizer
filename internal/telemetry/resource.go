@@ -1,11 +1,13 @@
 // file: internal/telemetry/resource.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-10-10
 
 package telemetry
 
 import (
+	"strings"
+
 	"github.com/oklog/ulid/v2"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/resource"
@@ -16,10 +18,11 @@ import (
 // the 11-PR1 brief and spec 11 §3.3 chose. semconv v1.27.0 names the current
 // key DeploymentEnvironmentNameKey ("deployment.environment.name"); 11-PR2,
 // which adds the telemetry_environment config key, decides whether to move to
-// it. The value is fixed to "prod" until then.
+// it. The key stays "deployment.environment"; the value comes from
+// Config.Environment and defaults to "prod".
 const (
 	deploymentEnvironmentKey = attribute.Key("deployment.environment")
-	deploymentEnvironment    = "prod"
+	defaultEnvironment       = "prod"
 )
 
 // instanceID identifies this process: a random ULID drawn once at start-up.
@@ -32,11 +35,20 @@ var instanceID = ulid.Make().String()
 // (per-process, hostname-free) and deployment.environment, on top of the SDK
 // defaults (telemetry.sdk.*). It reads no host or process detectors.
 func NewResource(serviceName string) *resource.Resource {
+	return NewResourceWithEnvironment(serviceName, "")
+}
+
+// NewResourceWithEnvironment is NewResource with an explicit
+// deployment.environment value; empty means "prod".
+func NewResourceWithEnvironment(serviceName, environment string) *resource.Resource {
+	if strings.TrimSpace(environment) == "" {
+		environment = defaultEnvironment
+	}
 	own := resource.NewSchemaless(
 		semconv.ServiceNameKey.String(serviceName),
 		semconv.ServiceVersionKey.String(Version()),
 		semconv.ServiceInstanceIDKey.String(instanceID),
-		deploymentEnvironmentKey.String(deploymentEnvironment),
+		deploymentEnvironmentKey.String(environment),
 	)
 	r, err := resource.Merge(resource.Default(), own)
 	if err != nil {
