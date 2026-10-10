@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_writeback.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: fad73c11-30c2-4fdc-addd-45afef25d792
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 
 package metafetch
 
@@ -737,7 +737,7 @@ func (mfs *Service) runApplyPipeline(ctx context.Context, id string, book *datab
 		tags.handled = true
 		if !hasCheckpoint(mfs.db, id, phaseTags) {
 			// id is the target's own id here, and targetID names that book.
-			if written, err := mfs.writeTags(id, targetID, pt); err != nil {
+			if written, err := mfs.writeTags(ctx, id, targetID, pt); err != nil {
 				tags.err = err
 				slog.Warn("tag writing failed for book",
 					"book_id", logger.SanitizeLogValue(id), "book_title", logger.SanitizeLogValue(book.Title),
@@ -772,6 +772,15 @@ func (mfs *Service) runApplyPipeline(ctx context.Context, id string, book *datab
 // internal tag write (writeTags) calls writeBackForBook directly, never this,
 // because it already holds these locks.
 func (mfs *Service) WriteBackMetadataForBook(id string, segmentFilter ...[]string) (int, error) {
+	return mfs.WriteBackMetadataForBookContext(context.Background(), id, segmentFilter...)
+}
+
+// WriteBackMetadataForBookContext is WriteBackMetadataForBook under ctx. The
+// ctx reaches every tag and cover write the write-back makes, so a ctx wrapped
+// with tagger.WithoutBackup (the bulk write-back ops, owner decision D69)
+// leaves no .bak-* sibling, while a single-book write-back keeps one when
+// create_backups is on. ctx is not used for cancellation here.
+func (mfs *Service) WriteBackMetadataForBookContext(ctx context.Context, id string, segmentFilter ...[]string) (int, error) {
 	var sf []string
 	if len(segmentFilter) > 0 {
 		sf = segmentFilter[0]
@@ -788,7 +797,7 @@ func (mfs *Service) WriteBackMetadataForBook(id string, segmentFilter ...[]strin
 		return 0, err
 	}
 	defer releasePath()
-	return mfs.writeBackForBook(id, sf, targetID, nil)
+	return mfs.writeBackForBook(ctx, id, sf, targetID, nil)
 }
 
 // writeBackForBook is the single tag-write implementation behind
@@ -799,7 +808,7 @@ func (mfs *Service) WriteBackMetadataForBook(id string, segmentFilter ...[]strin
 //
 // targetID is the book its caller locked (lockLibraryCopy); the files written
 // are that book's, and a book that now resolves elsewhere is an error.
-func (mfs *Service) writeBackForBook(id string, segmentFilter []string, targetID string, pt *ApplyPhaseTimings) (int, error) {
+func (mfs *Service) writeBackForBook(ctx context.Context, id string, segmentFilter []string, targetID string, pt *ApplyPhaseTimings) (int, error) {
 	prepStart := time.Now()
 	book, err := mfs.db.GetBookByID(id)
 	if err != nil || book == nil {
@@ -906,7 +915,7 @@ func (mfs *Service) writeBackForBook(id string, segmentFilter []string, targetID
 	pt.Since(PhaseTagPrep, prepStart)
 	embedStart := time.Now()
 	if config.AppConfig.RootDir != "" {
-		mfs.embedCoverInBookFiles(book, metadata.CoverPathForBook(config.AppConfig.RootDir, book.ID))
+		mfs.embedCoverInBookFiles(ctx, book, metadata.CoverPathForBook(config.AppConfig.RootDir, book.ID))
 	}
 	pt.Since(PhaseEmbed, embedStart)
 
@@ -958,7 +967,7 @@ func (mfs *Service) writeBackForBook(id string, segmentFilter []string, targetID
 				skippedN.Add(1)
 				return
 			}
-			if err := mfs.writeFileTagsSafe(bf.FilePath, tagMap,
+			if err := mfs.writeFileTagsSafe(ctx, bf.FilePath, tagMap,
 				fileops.WriteTagsSafeOptions{BookFileID: bf.ID, Store: mfs.db}, opConfig); errors.Is(err, tagger.ErrProtectedPathWrite) {
 				logProtectedWriteSkip(bf.FilePath, err)
 				skippedN.Add(1)
@@ -1013,7 +1022,7 @@ func (mfs *Service) writeBackForBook(id string, segmentFilter []string, targetID
 						slog.Debug("write-back all tags match, skipping", "value", f)
 						return
 					}
-					if err := mfs.writeFileTagsSafe(f, fm, mfs.bookFileWriteOpts(f), opConfig); errors.Is(err, tagger.ErrProtectedPathWrite) {
+					if err := mfs.writeFileTagsSafe(ctx, f, fm, mfs.bookFileWriteOpts(f), opConfig); errors.Is(err, tagger.ErrProtectedPathWrite) {
 						logProtectedWriteSkip(f, err)
 						skippedN.Add(1)
 					} else if err != nil {
@@ -1032,7 +1041,7 @@ func (mfs *Service) writeBackForBook(id string, segmentFilter []string, targetID
 				fm := FilterUnchangedTags(book.FilePath, fullTagMap)
 				if len(fm) == 0 {
 					slog.Debug("write-back all tags match, skipping", "path", book.FilePath)
-				} else if err := mfs.writeFileTagsSafe(book.FilePath, fm, mfs.bookFileWriteOpts(book.FilePath), opConfig); errors.Is(err, tagger.ErrProtectedPathWrite) {
+				} else if err := mfs.writeFileTagsSafe(ctx, book.FilePath, fm, mfs.bookFileWriteOpts(book.FilePath), opConfig); errors.Is(err, tagger.ErrProtectedPathWrite) {
 					logProtectedWriteSkip(book.FilePath, err)
 					skippedN.Add(1)
 				} else if err != nil {
@@ -1075,7 +1084,7 @@ func (mfs *Service) writeBackForBook(id string, segmentFilter []string, targetID
 				}
 				// Same guarded write as the book's own files: a sibling under a
 				// protected directory inside RootDir is refused, not rewritten.
-				if err := mfs.writeFileTagsSafe(sib.FilePath, tagMap, mfs.bookFileWriteOpts(sib.FilePath), opConfig); errors.Is(err, tagger.ErrProtectedPathWrite) {
+				if err := mfs.writeFileTagsSafe(ctx, sib.FilePath, tagMap, mfs.bookFileWriteOpts(sib.FilePath), opConfig); errors.Is(err, tagger.ErrProtectedPathWrite) {
 					logProtectedWriteSkip(sib.FilePath, err)
 					skippedProtected++
 				} else if err != nil {

@@ -1,15 +1,18 @@
 // file: internal/fileops/write_tags_safe.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: b4c5d6e7-f8a9-0b1c-2d3e-4f5a6b7c8d9e
-// last-edited: 2026-09-13
+// last-edited: 2026-10-10
 
 package fileops
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -42,12 +45,47 @@ type WriteTagsSafeOptions struct {
 	// bytes, so unlike either SHA it is unchanged by this write — which makes
 	// it the most durable link back to a pristine original.
 	TorrentHash string
+	// KeepBackup leaves the pre-write bytes beside the file as
+	// <name>.bak-<unix seconds> before the tagged copy is renamed in (the
+	// create_backups setting). The backup is taken after the tag write on the
+	// temp copy has succeeded, so a failed write leaves no sibling behind, and
+	// it is a full copy rather than a rename of the original, so path exists
+	// at every instant. A failed backup fails the write and leaves the original
+	// untouched. The backup-cleanup op sweeps .bak-* siblings past
+	// backup_retention_days.
+	KeepBackup bool
+}
+
+// maxBackupNameAttempts bounds the suffix search in keepBackup: a second write
+// of the same file within one second must not overwrite the first backup (that
+// one holds the older, more original bytes), so the name gets a -1, -2, ...
+// suffix instead.
+const maxBackupNameAttempts = 100
+
+// keepBackup copies path to a fresh sibling named <path>.bak-<unix>, adding a
+// -N suffix when that name is taken. It returns the backup's path. The copy is
+// exclusive (O_EXCL) and fsynced, file and directory, by CopyFileExclusive.
+func keepBackup(path string, now time.Time) (string, error) {
+	base := path + ".bak-" + strconv.FormatInt(now.Unix(), 10)
+	name := base
+	for i := 1; i <= maxBackupNameAttempts; i++ {
+		err := CopyFileExclusive(path, name)
+		if err == nil {
+			return name, nil
+		}
+		if !errors.Is(err, fs.ErrExist) {
+			return "", err
+		}
+		name = base + "-" + strconv.Itoa(i)
+	}
+	return "", fmt.Errorf("no free backup name for %s after %d attempts", path, maxBackupNameAttempts)
 }
 
 // WriteTagsSafe writes audio metadata tags to path safely:
 //  1. Copies the file to a sibling temp file in the same directory
 //  2. Calls writeFn(tmpPath) to perform the actual tag write on the copy
-//  3. On success: atomically renames the temp file over the original
+//  3. With opts.KeepBackup, copies the original to <path>.bak-<unix>
+//  4. On success: atomically renames the temp file over the original
 //
 // When BOTH opts.BookFileID and opts.Store are set it additionally computes
 // original_file_hash before the write and post_metadata_hash after it, and
@@ -130,6 +168,15 @@ func WriteTagsSafe(path string, writeFn func(tmpPath string) error, opts WriteTa
 	// Step 4: let the caller write tags into the temp copy.
 	if err = writeFn(tmpPath); err != nil {
 		return originalHash, "", fmt.Errorf("WriteTagsSafe: writeFn: %w", err)
+	}
+
+	// Step 4a: keep the pre-write bytes beside the file. This runs only after
+	// writeFn succeeded, so a failed tag write leaves no backup, and it copies
+	// rather than renaming the original away so path never stops existing.
+	if opts.KeepBackup {
+		if _, err = keepBackup(path, time.Now()); err != nil {
+			return originalHash, "", fmt.Errorf("WriteTagsSafe: backup original: %w", err)
+		}
 	}
 
 	// Step 5: atomic rename — old file replaced only on success.

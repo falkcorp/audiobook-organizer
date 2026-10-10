@@ -1,7 +1,7 @@
 // file: internal/server/movement_atom_cleanup.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: c2d3e4f5-a6b7-8c9d-0e1f-2a3b4c5d6e7f
-// last-edited: 2026-09-14
+// last-edited: 2026-10-10
 
 package server
 
@@ -74,6 +74,9 @@ func (s *Server) stripMovementAtoms(ctx context.Context) movementAtomCleanupResu
 
 	// Build safe-write deps from server state so protected paths are guarded.
 	deps := s.safeWriteDeps()
+	// A whole-library rewrite keeps no .bak-* sibling per file (owner
+	// decision D69, as for the bulk write-back ops).
+	writeCtx := tagger.WithoutBackup(ctx)
 	app := appdirs.Current()
 
 	slog.Info("Starting movement atom cleanup under …", "root", root)
@@ -110,7 +113,7 @@ func (s *Server) stripMovementAtoms(ctx context.Context) movementAtomCleanupResu
 			return nil
 		}
 
-		changed, err := removeMovementAtomsFromFile(path, deps)
+		changed, err := removeMovementAtomsFromFile(writeCtx, path, deps)
 		switch {
 		case errors.Is(err, tagger.ErrProtectedPathWrite):
 			log.Info("movement atom cleanup: skipping protected file %s: %v", logger.SanitizeLogValue(path), err)
@@ -171,7 +174,7 @@ func (s *Server) stripMovementAtoms(ctx context.Context) movementAtomCleanupResu
 // (tagger.ErrProtectedPathWrite, counted as skipped by the caller), never
 // imported: the walk covers files outside any book folder, and an import
 // copied a Deluge-seeding file to RootDir/<basename> and repointed its row.
-func removeMovementAtomsFromFile(path string, deps tagger.SafeWriteDeps) (bool, error) {
+func removeMovementAtomsFromFile(ctx context.Context, path string, deps tagger.SafeWriteDeps) (bool, error) {
 	deps.Importer = nil
 	tags, err := taglib.ReadTags(path)
 	if err != nil {
@@ -193,7 +196,7 @@ func removeMovementAtomsFromFile(path string, deps tagger.SafeWriteDeps) (bool, 
 	// row of the file written (looked up only for files actually rewritten,
 	// after any protected-path redirect).
 	deps = metadata.WithBookFileHashes(deps)
-	if err := tagger.WriteTagsSafe(context.Background(), path, tags, taglib.Clear, deps); err != nil {
+	if err := tagger.WriteTagsSafe(ctx, path, tags, taglib.Clear, deps); err != nil {
 		return false, err
 	}
 	return true, nil

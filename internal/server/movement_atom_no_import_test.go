@@ -1,7 +1,7 @@
 // file: internal/server/movement_atom_no_import_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9e4a7c23-1b5d-4f86-a2c0-6d8e3f1b7a54
-// last-edited: 2026-09-14
+// last-edited: 2026-10-10
 
 package server
 
@@ -68,7 +68,7 @@ func TestRemoveMovementAtomsFromFile_ProtectedPathRefusedNeverImported(t *testin
 	imp := &countingLibraryImporter{dest: filepath.Join(t.TempDir(), "book.m4a")}
 	deps := tagger.SafeWriteDeps{ProtectedCache: seedingDirChecker{dir: seeding}, Importer: imp}
 
-	changed, err := removeMovementAtomsFromFile(path, deps)
+	changed, err := removeMovementAtomsFromFile(context.Background(), path, deps)
 	require.True(t, errors.Is(err, tagger.ErrProtectedPathWrite), "err = %v, want ErrProtectedPathWrite", err)
 	require.False(t, changed)
 	require.Zero(t, imp.calls.Load(), "a protected file was handed to the importer")

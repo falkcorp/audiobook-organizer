@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_files.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: 969b284a-5657-442b-beba-275e325e000b
-// last-edited: 2026-09-14
+// last-edited: 2026-10-10
 
 package metafetch
 
@@ -107,11 +107,11 @@ type tagWriteResult struct {
 // writeTags is the one tag write every apply path goes through, on the files
 // of targetID: the book the job locked (lockLibraryCopy). tagWriter is a test
 // seam that counts it; nil in production.
-func (mfs *Service) writeTags(id, targetID string, pt *ApplyPhaseTimings) (int, error) {
+func (mfs *Service) writeTags(ctx context.Context, id, targetID string, pt *ApplyPhaseTimings) (int, error) {
 	if mfs.tagWriter != nil {
 		return mfs.tagWriter(id)
 	}
-	return mfs.writeBackForBook(id, nil, targetID, pt)
+	return mfs.writeBackForBook(ctx, id, nil, targetID, pt)
 }
 
 // copyPolicy says whether lockLibraryCopy may create a library copy for a book
@@ -654,7 +654,9 @@ func (mfs *Service) FinishAutoFetchFileWork(id, pendingCoverURL string, writeTag
 			"book_id", logger.SanitizeLogValue(id), "path", logger.SanitizeLogValue(book.FilePath))
 		return nil
 	}
-	mfs.embedCover(id, book, targetID)
+	// Auto-fetch file work is per book (the Fetch button, an import's
+	// enrichment) and holds no ctx: it keeps backups when create_backups is on.
+	mfs.embedCover(context.Background(), id, book, targetID)
 	if !writeTags {
 		return nil
 	}
@@ -663,7 +665,7 @@ func (mfs *Service) FinishAutoFetchFileWork(id, pendingCoverURL string, writeTag
 		return fmt.Errorf("auto-fetch file work: %w", err)
 	}
 	defer release()
-	if _, err := mfs.writeTags(id, targetID, nil); err != nil {
+	if _, err := mfs.writeTags(context.Background(), id, targetID, nil); err != nil {
 		return fmt.Errorf("auto-fetch file work: write tags for book %s: %w", id, err)
 	}
 	return nil
@@ -700,7 +702,7 @@ func (mfs *Service) finishFileWork(ctx context.Context, id, targetID string, fil
 		if err != nil {
 			tags.err = err
 		} else {
-			if _, err := mfs.writeTags(id, targetID, pt); err != nil {
+			if _, err := mfs.writeTags(ctx, id, targetID, pt); err != nil {
 				tags.err = err
 			}
 			release()
@@ -720,7 +722,7 @@ func (mfs *Service) finishFileWork(ctx context.Context, id, targetID string, fil
 // the library copy's, for a protected book), holding the path lock on those
 // files. Slow: ffmpeg. A target that no longer matches is logged and nothing
 // is embedded; the embed reports no error by design (ApplyMetadataFileIO).
-func (mfs *Service) embedCover(id string, book *database.Book, targetID string) {
+func (mfs *Service) embedCover(ctx context.Context, id string, book *database.Book, targetID string) {
 	if config.AppConfig.RootDir == "" {
 		return
 	}
@@ -737,7 +739,7 @@ func (mfs *Service) embedCover(id string, book *database.Book, targetID string) 
 	}
 	release := mfs.lockPath(target.FilePath)
 	defer release()
-	mfs.embedCoverInBookFiles(target, metadata.CoverPathForBook(config.AppConfig.RootDir, id))
+	mfs.embedCoverInBookFiles(ctx, target, metadata.CoverPathForBook(config.AppConfig.RootDir, id))
 }
 
 // ApplyMetadataFileIO runs the slow file operations after metadata is applied:
@@ -792,7 +794,7 @@ func (mfs *Service) applyMetadataFileIO(ctx context.Context, id, targetID string
 	}
 
 	embedStart := time.Now()
-	mfs.embedCover(id, book, targetID)
+	mfs.embedCover(ctx, id, book, targetID)
 	pt.Since(PhaseEmbed, embedStart)
 
 	// Run file rename + tag write pipeline

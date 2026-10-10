@@ -1,7 +1,7 @@
 // file: internal/server/metadata_ops.go
-// version: 1.37.0
+// version: 1.38.0
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
-// last-edited: 2026-10-06
+// last-edited: 2026-10-10
 //
 // Async-operation machinery for the metadata domain, relocated verbatim from
 // metadata_handlers.go (ADR-003 Phase 4) when the 19 metadata HTTP handlers
@@ -1088,7 +1088,9 @@ func (s *Server) runBulkWriteBack(
 		// (above). See path_locks.go for the three hazards that closes
 		// (version-group siblings, protected-path redirect, and the
 		// one-second-granularity .bak- backup name).
-		count, writeErr := mfs.WriteBackMetadataForBook(bookID)
+		// ctx carries the caller's tagger.WithoutBackup opt-out down to the
+		// tag and cover writes (WriteBackMetadataForBookContext).
+		count, writeErr := mfs.WriteBackMetadataForBookContext(ctx, bookID)
 
 		if writeErr != nil {
 			failed.Add(1)

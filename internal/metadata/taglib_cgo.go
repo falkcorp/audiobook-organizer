@@ -1,6 +1,6 @@
 // file: internal/metadata/taglib_cgo.go
-// version: 1.7.1
-// last-edited: 2026-09-14
+// version: 1.8.0
+// last-edited: 2026-10-10
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
 //
 // Native CGO bindings to TagLib C API for high-performance tag writing.
@@ -35,7 +35,9 @@ var taglibAvailable = true
 //
 // If packageSafeWriteDeps is configured, a protected (Deluge-managed) path is
 // refused with tagger.ErrProtectedPathWrite; it is never imported (see SetSafeWriteDeps).
-func writeMetadataWithTaglib(filePath string, metadata map[string]interface{}, _ fileops.OperationConfig) error {
+//
+// The write keeps a .bak-* sibling when tagger.BackupWanted(ctx) says so.
+func writeMetadataWithTaglib(ctx context.Context, filePath string, metadata map[string]interface{}, _ fileops.OperationConfig) error {
 	abs, err := filepath.Abs(filePath)
 	if err != nil {
 		return fmt.Errorf("taglib abs path: %w", err)
@@ -49,14 +51,14 @@ func writeMetadataWithTaglib(filePath string, metadata map[string]interface{}, _
 	// Run the pre-flight protection check. If the path is protected and the
 	// importer is wired, this returns the library copy path; otherwise it
 	// returns abs unchanged.
-	effectivePath, err := resolvePathForWrite(abs)
+	effectivePath, err := resolvePathForWrite(ctx, abs)
 	if err != nil {
 		return fmt.Errorf("taglib write resolve: %w", err)
 	}
 
 	_, _, err = fileops.WriteTagsSafe(effectivePath, func(tmpPath string) error {
 		return writeTagMapWithTaglib(effectivePath, tmpPath, tags)
-	}, BookFileHashOptions(effectivePath))
+	}, writeOptions(ctx, effectivePath))
 	if err != nil {
 		return fmt.Errorf("taglib write: %w", err)
 	}
@@ -97,20 +99,20 @@ func writeMetadataWithTaglibInPlace(filePath string, metadata map[string]interfa
 //
 // If packageSafeWriteDeps is configured, a protected (Deluge-managed) path is
 // refused with tagger.ErrProtectedPathWrite; it is never imported (see SetSafeWriteDeps).
-func writeSingleTagWithTaglib(filePath, tagName, value string) error {
+func writeSingleTagWithTaglib(ctx context.Context, filePath, tagName, value string) error {
 	abs, err := filepath.Abs(filePath)
 	if err != nil {
 		return fmt.Errorf("taglib abs: %w", err)
 	}
 
-	effectivePath, err := resolvePathForWrite(abs)
+	effectivePath, err := resolvePathForWrite(ctx, abs)
 	if err != nil {
 		return fmt.Errorf("taglib single-tag resolve: %w", err)
 	}
 
 	_, _, err = fileops.WriteTagsSafe(effectivePath, func(tmpPath string) error {
 		return writeSingleTagToPath(effectivePath, tmpPath, tagName, value)
-	}, BookFileHashOptions(effectivePath))
+	}, writeOptions(ctx, effectivePath))
 	if err != nil {
 		return fmt.Errorf("taglib single-tag: %w", err)
 	}
@@ -120,14 +122,14 @@ func writeSingleTagWithTaglib(filePath, tagName, value string) error {
 // writePropertiesWithTaglib writes tags as given, property by property, through
 // the safe copy-and-rename write. WriteTagProperties is the caller and reads
 // the file back, so a property this writer does not remove fails there.
-func writePropertiesWithTaglib(abs string, tags map[string][]string) error {
-	effectivePath, err := resolvePathForWrite(abs)
+func writePropertiesWithTaglib(ctx context.Context, abs string, tags map[string][]string) error {
+	effectivePath, err := resolvePathForWrite(ctx, abs)
 	if err != nil {
 		return fmt.Errorf("taglib properties resolve: %w", err)
 	}
 	_, _, err = fileops.WriteTagsSafe(effectivePath, func(tmpPath string) error {
 		return writeTagMapWithTaglib(effectivePath, tmpPath, tags)
-	}, fileops.WriteTagsSafeOptions{})
+	}, fileops.WriteTagsSafeOptions{KeepBackup: tagger.BackupWanted(ctx)})
 	if err != nil {
 		return fmt.Errorf("taglib properties: %w", err)
 	}
@@ -203,8 +205,16 @@ func writeSingleTagToPath(effectivePath, tmpPath, tagName, value string) error {
 
 // resolvePathForWrite runs the pre-flight protection check using the
 // package-level safe-write deps. Returns the effective path to write to.
-func resolvePathForWrite(abs string) (string, error) {
-	return tagger.ResolvePathForWrite(context.Background(), abs, packageSafeWriteDeps)
+func resolvePathForWrite(ctx context.Context, abs string) (string, error) {
+	return tagger.ResolvePathForWrite(ctx, abs, packageSafeWriteDeps)
+}
+
+// writeOptions is BookFileHashOptions plus the create_backups decision for
+// ctx, the native writer's counterpart of tagger's own writeOptions.
+func writeOptions(ctx context.Context, effectivePath string) fileops.WriteTagsSafeOptions {
+	o := BookFileHashOptions(effectivePath)
+	o.KeepBackup = tagger.BackupWanted(ctx)
+	return o
 }
 
 // readTagsWithTaglib reads tags from a file via native TagLib (CGO).

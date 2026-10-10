@@ -1,7 +1,7 @@
 // file: internal/metafetch/apply_timings.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8d4c2a61-9f3e-4b07-a5d8-1e6b7c0f29a3
-// last-edited: 2026-09-14
+// last-edited: 2026-10-10
 
 package metafetch
 
@@ -200,16 +200,21 @@ func (mfs *Service) runFileWrites(n int, fn func(i int)) {
 // RootDir/<basename> with no book folder: a multi-file book's files collided
 // or half-imported, a single-file book's row kept the seeding path, and with
 // DelugeMoveEnabled the torrent's storage was moved into the library root.
-func (mfs *Service) writeFileTagsSafe(path string, tagMap map[string]any, opts fileops.WriteTagsSafeOptions, opConfig fileops.OperationConfig) error {
+//
+// ctx decides the create_backups sibling (tagger.BackupWanted): this write is
+// shared by the single-book write-back, the apply pipeline and the bulk
+// write-back ops, and only the bulk ops wrap ctx with tagger.WithoutBackup.
+func (mfs *Service) writeFileTagsSafe(ctx context.Context, path string, tagMap map[string]any, opts fileops.WriteTagsSafeOptions, opConfig fileops.OperationConfig) error {
 	deps := mfs.safeWriteDeps
 	deps.Importer = nil
-	if _, err := tagger.ResolvePathForWrite(context.Background(), path, deps); err != nil {
+	if _, err := tagger.ResolvePathForWrite(ctx, path, deps); err != nil {
 		return err
 	}
 	if mfs.fileTagWrite != nil {
 		return mfs.fileTagWrite(path, tagMap)
 	}
 	backupFileBeforeWrite(path)
+	opts.KeepBackup = tagger.BackupWanted(ctx)
 	_, _, err := fileops.WriteTagsSafe(path, func(tmpPath string) error {
 		return metadata.WriteMetadataToFileInPlace(tmpPath, tagMap, opConfig)
 	}, opts)
