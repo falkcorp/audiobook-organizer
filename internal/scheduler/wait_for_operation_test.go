@@ -1,5 +1,5 @@
 // file: internal/scheduler/wait_for_operation_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 8c2e4f61-9a37-4b0d-85e2-1f6a3d7c9b40
 // last-edited: 2026-10-10
 
@@ -108,9 +108,8 @@ func TestWaitForOperationKeepsPollingOnStoreError(t *testing.T) {
 // window would never reach its remaining tasks.
 //
 // interrupted_ask and the legacy interrupted_restart / bare interrupted were
-// added on 2026-10-10 when the predicate moved to state.Props.Settled: none of
-// them moves again in-session (ask waits for a person), so the old list held
-// the window on them until ctx expired.
+// added on 2026-10-10 when the predicate moved to state.Props.Settled, so the
+// wait agrees with every other caller of the table.
 func TestWaitForOperationTerminalStatuses(t *testing.T) {
 	terminal := []string{
 		"completed", "failed", "canceled", "interrupted_dropped", "interrupted_quiesced",

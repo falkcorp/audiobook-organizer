@@ -1,7 +1,7 @@
 // file: internal/operations/childop/follow_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2b8d4e17-6a93-4c5f-b1e2-9f7a3c0d5e64
-// last-edited: 2026-09-28
+// last-edited: 2026-10-10
 
 package childop
 
@@ -53,7 +53,10 @@ func follow(t *testing.T, r Reader, paused func() bool) (*database.OperationV2Ro
 }
 
 func TestFollow_ReturnsTerminalRow(t *testing.T) {
-	for _, status := range []string{"completed", "failed", "canceled", "interrupted_dropped", "interrupted_quiesced"} {
+	for _, status := range []string{
+		"completed", "failed", "canceled", "interrupted_dropped", "interrupted_quiesced",
+		"interrupted_ask", "interrupted_restart", "interrupted",
+	} {
 		r := &scriptReader{rows: []*database.OperationV2Row{row("running", 1, 2, "a"), row(status, 2, 2, "")}}
 		final, _, err := follow(t, r, nil)
 		if err != nil || final == nil || final.Status != status {
