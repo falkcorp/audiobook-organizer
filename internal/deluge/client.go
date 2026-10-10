@@ -1,5 +1,5 @@
 // file: internal/deluge/client.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9a7b8c6d-0e1f-4a70-b8c5-3d7e0f1b9a99
 //
 // Deluge Web JSON-RPC client (backlog 6.1).
@@ -13,7 +13,7 @@
 //   - Detail reads (ratio, seed time, files) and removal with data
 //
 // Reference: https://deluge.readthedocs.io/en/latest/reference/webapi.html
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package deluge
 
@@ -40,6 +40,9 @@ type Client struct {
 	client   *http.Client
 	mu       sync.Mutex
 	authed   bool
+	// loginGen counts successful logins, guarded by mu; callAuthed uses it to
+	// avoid re-logging in when a concurrent caller already did.
+	loginGen uint64
 	reqID    atomic.Int64
 }
 
@@ -51,7 +54,8 @@ type TorrentStatus struct {
 	State    string  `json:"state"`
 	Progress float64 `json:"progress"`
 	Label    string  `json:"label"`
-	// TotalSize is populated when requested via GetTorrent.
+	// TotalSize is filled by ListTorrents (and the detail reads); GetTorrent
+	// does not request total_size.
 	TotalSize int64 `json:"total_size"`
 }
 
@@ -68,6 +72,7 @@ type TorrentFile struct {
 // fields are Unix seconds and may be fractional; 0 means unknown.
 type TorrentDetail struct {
 	TorrentStatus
+	// Ratio is share ratio; Deluge reports -1 when total_done is 0.
 	Ratio          float64       `json:"ratio"`
 	SeedingTime    int64         `json:"seeding_time"` // seconds
 	TimeAdded      float64       `json:"time_added"`
@@ -104,10 +109,24 @@ type rpcResponse struct {
 	Error  *rpcError       `json:"error"`
 }
 
+// rpcError is a Deluge JSON-RPC error object. call returns it (as *rpcError)
+// for server-reported errors only, so transport and decode failures can never
+// be mistaken for one.
 type rpcError struct {
 	Message string `json:"message"`
 	Code    int    `json:"code"`
 }
+
+func (e *rpcError) Error() string {
+	return fmt.Sprintf("deluge error %d: %s", e.Code, e.Message)
+}
+
+// Deluge json_api error codes: 1 is NotAuthorizedError, raised before the
+// method runs; 4 is the generic method-failure code carrying the traceback text.
+const (
+	rpcCodeNotAuthenticated = 1
+	rpcCodeMethodFailure    = 4
+)
 
 // New creates a Deluge Web JSON-RPC client.
 // baseURL is the Deluge Web UI URL (e.g. "http://<deluge-host>:8112").
@@ -152,7 +171,7 @@ func (c *Client) call(method string, params ...any) (json.RawMessage, error) {
 		return nil, fmt.Errorf("decode response: %w (body: %s)", err, string(raw[:min(200, len(raw))]))
 	}
 	if rpcResp.Error != nil {
-		return nil, fmt.Errorf("deluge error %d: %s", rpcResp.Error.Code, rpcResp.Error.Message)
+		return nil, rpcResp.Error
 	}
 	return rpcResp.Result, nil
 }
@@ -162,12 +181,20 @@ func (c *Client) call(method string, params ...any) (json.RawMessage, error) {
 // replays the request once. It lives outside call because Login holds c.mu and
 // itself uses call. auth.login is never replayed.
 func (c *Client) callAuthed(method string, params ...any) (json.RawMessage, error) {
+	c.mu.Lock()
+	gen := c.loginGen
+	c.mu.Unlock()
 	result, err := c.call(method, params...)
 	if err == nil || method == "auth.login" || !isAuthError(err) {
 		return result, err
 	}
+	// Clear the cached login only if nobody has logged in since this request
+	// was sent; otherwise a concurrent caller already refreshed the session
+	// and Login below is a no-op.
 	c.mu.Lock()
-	c.authed = false
+	if c.loginGen == gen {
+		c.authed = false
+	}
 	c.mu.Unlock()
 	if lerr := c.Login(); lerr != nil {
 		return nil, lerr
@@ -175,18 +202,24 @@ func (c *Client) callAuthed(method string, params ...any) (json.RawMessage, erro
 	return c.call(method, params...)
 }
 
+// isAuthError is true only for a Deluge RPC error with the not-authenticated
+// code. Transport and decode errors (including a proxy page whose body happens
+// to contain the phrase) are never auth errors.
 func isAuthError(err error) bool {
-	return err != nil && strings.Contains(strings.ToLower(err.Error()), "not authenticated")
+	var re *rpcError
+	return errors.As(err, &re) && re.Code == rpcCodeNotAuthenticated
 }
 
-// isUnknownTorrentError reports an RPC error naming an invalid/unknown torrent.
+// isUnknownTorrentError reports a method-failure RPC error for a torrent id
+// Deluge does not hold. torrentmanager raises
+// InvalidTorrentError('torrent_id %s not in session.').
 func isUnknownTorrentError(err error) bool {
-	if err == nil {
+	var re *rpcError
+	if !errors.As(err, &re) || re.Code != rpcCodeMethodFailure {
 		return false
 	}
-	m := strings.ToLower(err.Error())
-	return strings.Contains(m, "invalid torrent") || strings.Contains(m, "unknown torrent") ||
-		strings.Contains(m, "torrent not found") || strings.Contains(m, "invalidtorrenterror")
+	m := strings.ToLower(re.Message)
+	return strings.Contains(m, "invalidtorrenterror") || strings.Contains(m, "not in session")
 }
 
 // NormalizeTorrentID lowercases a torrent id and accepts only a 40 (SHA-1) or
@@ -223,6 +256,7 @@ func (c *Client) Login() error {
 		return fmt.Errorf("auth.login failed (result: %s)", string(result))
 	}
 	c.authed = true
+	c.loginGen++
 	return nil
 }
 
@@ -361,7 +395,8 @@ func (c *Client) GetTorrentDetail(hash string) (*TorrentDetail, error) {
 const detailChunkSize = 50
 
 // ListTorrentDetails fetches detail for the given hashes, at most 50 per
-// request, sorted by hash.
+// request, sorted by hash. Hashes Deluge does not know are silently omitted
+// from the result, so callers must compare input against output.
 func (c *Client) ListTorrentDetails(hashes []string) ([]TorrentDetail, error) {
 	ids := make([]string, 0, len(hashes))
 	for _, h := range hashes {
