@@ -1,5 +1,5 @@
 // file: internal/server/op_twin_merge_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7e3c9a15-2b84-4d61-9f0a-c5d8e1b36a72
 // last-edited: 2026-10-10
 
@@ -75,6 +75,11 @@ func TestTwinMerge_AliasPermissionAndTimeout(t *testing.T) {
 				h.TriggerOperationV2(c)
 
 				assert.Equal(t, http.StatusForbidden, w.Code, "caller with only scan.trigger on %q", id)
+				// The body must name the survivor's permission. Without this the
+				// alias leg also passes against the pre-merge loser def, whose empty
+				// Permissions fall back to settings.manage and refuse scan.trigger too.
+				assert.Contains(t, w.Body.String(), string(row.perms[0]),
+					"403 on %q must come from the survivor's gate", id)
 			}
 		})
 	}
