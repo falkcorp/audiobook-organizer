@@ -1,5 +1,5 @@
 // file: internal/metafetch/service.go
-// version: 5.49.0
+// version: 5.50.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
 // last-edited: 2026-10-09
 
@@ -627,7 +627,6 @@ func (mfs *Service) embedCoverInBookFiles(book *database.Book, coverPath string)
 	// that already matches is still skipped — and skipping is what matters, as an
 	// embed is a full rewrite of the audio file.
 	embedded, skipped, skippedProtected, failed := 0, 0, 0, 0
-	embedLog := logger.New("metafetch-cover-embed")
 	archived := false
 	for _, f := range files {
 		if newHash != "" {
@@ -662,11 +661,11 @@ func (mfs *Service) embedCoverInBookFiles(book *database.Book, coverPath string)
 		case errors.Is(err, tagger.ErrProtectedPathWrite):
 			// The guard refused a protected file (no library copy to write
 			// to). Left alone on purpose, so not a failure.
-			embedLog.Info("cover art embed skipped protected file %s for book %s: %v",
+			coverEmbedLog.Info("cover art embed skipped protected file %s for book %s: %v",
 				logger.SanitizeLogValue(f), logger.SanitizeLogValue(book.ID), err)
 			skippedProtected++
 		case err != nil:
-			embedLog.Warn("cover art embedding failed for file %s (book %s %q, cover %s): %v",
+			coverEmbedLog.Warn("cover art embedding failed for file %s (book %s %q, cover %s): %v",
 				logger.SanitizeLogValue(f), logger.SanitizeLogValue(book.ID), logger.SanitizeLogValue(book.Title),
 				logger.SanitizeLogValue(coverPath), err)
 			failed++
@@ -675,7 +674,7 @@ func (mfs *Service) embedCoverInBookFiles(book *database.Book, coverPath string)
 		}
 	}
 	if embedded > 0 || failed > 0 || skippedProtected > 0 {
-		embedLog.Info("cover art embed complete for book %s: embedded=%d skipped_unchanged=%d skipped_protected=%d failed=%d files=%d",
+		coverEmbedLog.Info("cover art embed complete for book %s: embedded=%d skipped_unchanged=%d skipped_protected=%d failed=%d files=%d",
 			logger.SanitizeLogValue(book.ID), embedded, skipped, skippedProtected, failed, len(files))
 	} else if skipped > 0 {
 		slog.Debug("cover art already present in every file, nothing to embed",
