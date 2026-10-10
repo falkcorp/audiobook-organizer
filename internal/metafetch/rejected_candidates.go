@@ -1,5 +1,5 @@
 // file: internal/metafetch/rejected_candidates.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 486771bb-091f-46bb-8846-ff740d2e8ab3
 // last-edited: 2026-10-10
 
@@ -30,7 +30,7 @@ import (
 //
 // The key's VALUE says which of that source+title's records were rejected
 // (RejectionValue). Since 2026-10-10 it holds the rejected record's
-// identifiers, {"ids":["asin:b00x..."]} -- its ASIN, or every ISBN form it
+// identifiers, {"ids":["asin:b00x..."]} -- its ASIN, or every ISBN (as ISBN-13) it
 // carries when it has no ASIN -- so rejecting the abridged record does not
 // also refuse the unabridged record with the same title. A value with no
 // identifier (every key written before then holds "1") rejects every record
