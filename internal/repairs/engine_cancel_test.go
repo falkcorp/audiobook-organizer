@@ -1,5 +1,5 @@
 // file: internal/repairs/engine_cancel_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: e2567da4-edf5-4121-ae72-9a5d4d295154
 // last-edited: 2026-10-10
 
@@ -206,24 +206,124 @@ func TestApply_FencedWriteMidRowIsNotSettled(t *testing.T) {
 
 // When the registry revoked the fence because the stand-down lease was lost,
 // a refused write still reports ErrStandDownLost (callers stop on it), as
-// well as the fence's error.
+// well as the fence's error. The loss is read from the non-renewing check:
+// a fenced write never renews the lease.
 func TestWriter_FenceAfterLostLeaseKeepsStandDownLost(t *testing.T) {
 	s := newMemStore()
 	s.add("b1", "One", "/lib/A/One/one.m4b", nil)
 	w := NewWriter(s, s, "t", "bulk_update", "rp-")
-	w.setLease(func() bool { return false })
+	renewals := 0
+	w.setLease(func() bool { renewals++; return false })
+	w.setLeaseValid(func() bool { return false })
 	w.setFence(func() error { return registry.ErrFenced })
 	_, err := w.Modify("b1", func(*database.Book) error { return nil })
 	require.ErrorIs(t, err, ErrStandDownLost)
 	require.ErrorIs(t, err, registry.ErrFenced)
+	require.Zero(t, renewals, "a fenced write renewed the lease")
 
 	// A fence revoked by a plain cancel, with the lease still held, is
 	// ErrFenced alone.
 	w2 := NewWriter(s, s, "t", "bulk_update", "rp-")
-	w2.setLease(func() bool { return true })
+	w2.setLease(func() bool { renewals++; return true })
+	w2.setLeaseValid(func() bool { return true })
 	w2.setFence(func() error { return registry.ErrFenced })
 	_, err = w2.Modify("b1", func(*database.Book) error { return nil })
 	require.ErrorIs(t, err, registry.ErrFenced)
 	require.NotErrorIs(t, err, ErrStandDownLost)
 	require.Equal(t, "One", s.title("b1"))
+	require.Zero(t, renewals, "a fenced write renewed the lease")
+}
+
+// renewCountingStandDown counts lease renewals.
+type renewCountingStandDown struct {
+	fakeStandDown
+	renews atomic.Int32
+}
+
+func (s *renewCountingStandDown) RenewScanStandDown(holder string) bool {
+	s.renews.Add(1)
+	return s.fakeStandDown.RenewScanStandDown(holder)
+}
+
+// retryingFixer writes once, then has its run fenced (as the registry does on
+// a cancel) and keeps retrying the write, like a fixer that ignores errors.
+type retryingFixer struct {
+	partitionFixer
+	sd            *renewCountingStandDown
+	written       int
+	refused       int
+	renewsAtFence int32
+	onFence       func() // runs as the fence is revoked
+}
+
+func (f *retryingFixer) Apply(_ context.Context, w *Writer, fresh Row) error {
+	retire := func(b *database.Book) error { b.Title = "retired"; return nil }
+	if _, err := w.Modify("b"+fresh.RowID, retire); err != nil {
+		return err
+	}
+	f.written++
+	// The registry revokes the run's fence (user cancel). Installed directly:
+	// a revocable registry.Fence cannot be built outside the registry, and
+	// the registry's own tests cover the revoke; this pins the Writer side.
+	w.setFence(func() error { return registry.ErrFenced })
+	if f.onFence != nil {
+		f.onFence()
+	}
+	f.renewsAtFence = f.sd.renews.Load()
+	var last error
+	for range 49 {
+		if _, err := w.Modify("b"+fresh.RowID, retire); err != nil {
+			f.refused++
+			last = err
+			continue
+		}
+		f.written++
+	}
+	return last
+}
+
+// A canceled (fenced) run that keeps calling the Writer must not keep its
+// stand-down lease alive: every fenced write is refused without a renewal,
+// so the lease lapses on schedule and the parked library scan resumes.
+// RunApply installs the non-renewing check beside the renewal, so a fenced
+// write still tells a lost lease from a cancel without renewing.
+//
+// When the fence was revoked because the lease was lost, the same check
+// reports the loss, so the row is aborted_standdown_lost rather than
+// canceled_skipped (the "lease lost" case fails if RunApply stops installing
+// setLeaseValid).
+func TestApply_FencedWritesNeverRenewTheLease(t *testing.T) {
+	cases := []struct {
+		name      string
+		leaseLost bool
+		want      string
+	}{
+		{name: "cancel", want: OutcomeCanceledSkip},
+		{name: "lease lost", leaseLost: true, want: OutcomeAborted},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newMemStore()
+			s.add("shared", "Shared", "/lib/A/shared/x.m4b", nil)
+			s.add("br00", "br00", "/lib/A/br00/x.m4b", nil)
+			sd := &renewCountingStandDown{fakeStandDown: fakeStandDown{renewsLeft: -1}}
+			f := &retryingFixer{partitionFixer: partitionFixer{n: 1}, sd: sd}
+			if tc.leaseLost {
+				f.onFence = func() {
+					sd.mu.Lock()
+					sd.renewsLeft = 0 // ScanStandDownValid now reports false
+					sd.mu.Unlock()
+				}
+			}
+			plan := planFor(t, s, f)
+			d := deps(s, sd)
+			res, _ := RunApply(context.Background(), f, plan, "op-plan", []string{"r00"}, false, d, nopReporter{})
+			require.Len(t, res.Rows, 1)
+			require.Equal(t, tc.want, res.Rows[0].Outcome, "%+v", res.Rows)
+			require.Equal(t, 1, f.written, "writes landed after the fence was revoked")
+			require.Equal(t, 49, f.refused)
+			require.NotZero(t, f.renewsAtFence, "the unfenced write should have renewed (test setup)")
+			require.Equal(t, f.renewsAtFence, sd.renews.Load(), "fenced retries renewed the lease")
+		})
+	}
 }
