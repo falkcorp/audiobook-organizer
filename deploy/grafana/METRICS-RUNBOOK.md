@@ -1,5 +1,5 @@
 <!-- file: deploy/grafana/METRICS-RUNBOOK.md -->
-<!-- version: 1.6.0 -->
+<!-- version: 1.7.0 -->
 <!-- guid: 5a2c8e71-3d94-4b60-8f17-c9e0a4d63b25 -->
 <!-- last-edited: 2026-10-10 -->
 
@@ -88,9 +88,18 @@ fragment as a last line of defence.
 
 Whatever the form, gRPC is handed an explicit `dns:///host:port` target, so a
 host called `unix` or `dns` is dialled as a host, never as a resolver scheme.
-For the trace exporter an `http://` endpoint is plaintext and `https://` is TLS
-with the system roots; a bare or `dns:///` trace endpoint still follows
-`OTEL_EXPORTER_OTLP_[TRACES_]INSECURE`.
+**Trace and metric exporters differ on certificates, on purpose:**
+
+- *Trace* (`otel_exporter_otlp_endpoint`): `http://` is pinned plaintext (a
+  certificate variable cannot turn it into TLS) and `https://` is TLS that
+  still honours `OTEL_EXPORTER_OTLP_[TRACES_]CERTIFICATE` and the client
+  certificate variables, so a private CA works as it always did;
+  `OTEL_EXPORTER_OTLP_INSECURE` cannot downgrade `https://`. A bare or
+  `dns:///` trace endpoint states no transport and follows
+  `OTEL_EXPORTER_OTLP_[TRACES_]INSECURE`.
+- *Metric* (`otel_metrics_otlp_endpoint`): the transport is pinned from the
+  endpoint and `otel_metrics_otlp_insecure` alone, and certificate variables
+  are ignored (system roots only; see below).
 
 One rule, applied to every form: an `http://` URL is plaintext and an
 `https://` URL is TLS (the URL decides; the insecure key is not consulted); a

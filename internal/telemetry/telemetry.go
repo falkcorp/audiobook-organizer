@@ -1,5 +1,5 @@
 // file: internal/telemetry/telemetry.go
-// version: 2.10.0
+// version: 2.11.0
 // guid: 2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-10-10
 
@@ -125,22 +125,43 @@ func traceEndpointOption(endpoint string) ([]otlptracegrpc.Option, error) {
 	if err != nil {
 		return nil, err
 	}
-	return append([]otlptracegrpc.Option{otlptracegrpc.WithEndpoint(t.GRPCTarget())}, traceTransportOptions(t)...), nil
+	return traceOptions(t), nil
 }
 
-// traceTransportOptions pins the transport where the endpoint states it:
-// http:// is plaintext and https:// is TLS (system roots), whatever the
-// generic OTEL_EXPORTER_OTLP_INSECURE says. A bare host:port or dns:/// target
-// states nothing, so it keeps following the SDK's environment
-// (OTEL_EXPORTER_OTLP_[TRACES_]INSECURE, see TRACING-RUNBOOK.md).
-func traceTransportOptions(t otlpTarget) []otlptracegrpc.Option {
+// traceOptions builds the exporter options for a validated trace endpoint.
+// Options are applied in order, after the environment, so a later one wins.
+//
+//   - http://: plaintext, pinned with insecure credentials as well as
+//     WithInsecure, because credentials installed by
+//     OTEL_EXPORTER_OTLP_[TRACES_]CERTIFICATE / CLIENT_CERTIFICATE beat the
+//     insecure flag and would otherwise turn it into TLS.
+//   - https://: TLS. WithEndpointURL sets Insecure=false (an
+//     OTEL_EXPORTER_OTLP_INSECURE=true cannot downgrade it) and sets NO
+//     credentials, so a CA or client certificate from the environment is
+//     still honoured, as it was before this package pinned anything. The
+//     WithEndpoint after it replaces the dial target with the explicit
+//     dns:///host:port (WithEndpointURL alone would dial the bare host:port).
+//   - bare host:port and dns:///: no transport stated, so the SDK's
+//     environment decides (OTEL_EXPORTER_OTLP_[TRACES_]INSECURE, see
+//     TRACING-RUNBOOK.md).
+//
+// The metric exporter differs on purpose: it ignores the certificate
+// environment (see metricEndpointOption).
+func traceOptions(t otlpTarget) []otlptracegrpc.Option {
 	switch {
 	case strings.HasPrefix(t.URL, "http://"):
-		return []otlptracegrpc.Option{otlptracegrpc.WithInsecure()}
+		return []otlptracegrpc.Option{
+			otlptracegrpc.WithEndpoint(t.GRPCTarget()),
+			otlptracegrpc.WithInsecure(),
+			otlptracegrpc.WithTLSCredentials(grpcinsecure.NewCredentials()),
+		}
 	case strings.HasPrefix(t.URL, "https://"):
-		return []otlptracegrpc.Option{otlptracegrpc.WithTLSCredentials(credentials.NewTLS(nil))}
+		return []otlptracegrpc.Option{
+			otlptracegrpc.WithEndpointURL(t.URL),
+			otlptracegrpc.WithEndpoint(t.GRPCTarget()),
+		}
 	}
-	return nil
+	return []otlptracegrpc.Option{otlptracegrpc.WithEndpoint(t.GRPCTarget())}
 }
 
 // initSummary builds the one start-up log line for the whole init (this

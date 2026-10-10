@@ -1,5 +1,5 @@
 // file: internal/telemetry/sdklog.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 5b7e2d90-14c8-4a3f-8d61-e9a0c3f72b58
 // last-edited: 2026-10-10
 
@@ -28,16 +28,19 @@ import (
 // installSDKLogSink replaces it, process-wide and once, with a logr sink that
 // keeps the message and the KEY NAMES and drops every value (and the error
 // text, which url.Parse builds from its input). Verbosity: the SDK logs
-// warnings at V(1), info at V(4) and debug at V(5), and errors through
+// warnings at V(1), info at V(4) and debug at V(8), and errors through
 // Error(). Only errors and warnings are logged, all at warn level; info and
 // debug chatter stays off. Lines go through the same class-keyed limiter as
 // the error handler.
 
 var installSDKLogOnce sync.Once
 
+// setOTelLogger is otel.SetLogger; a variable so a test can observe the install.
+var setOTelLogger = otel.SetLogger
+
 func installSDKLogSink() {
 	installSDKLogOnce.Do(func() {
-		otel.SetLogger(newSDKLogger(newRateLimitedErrorHandler(exportErrorLogInterval, time.Now,
+		setOTelLogger(newSDKLogger(newRateLimitedErrorHandler(exportErrorLogInterval, time.Now,
 			func(level slog.Level, msg string, attrs ...any) {
 				emit(context.Background(), level, msg, attrs...)
 			})))
@@ -55,17 +58,17 @@ func (s *sdkLogSink) Init(logr.RuntimeInfo) {}
 // Enabled: errors (V(0) in logr terms) and the SDK's warning level V(1).
 func (s *sdkLogSink) Enabled(level int) bool { return level <= 1 }
 
-func (s *sdkLogSink) Info(_ int, msg string, kv ...any) { s.log(msg, kv) }
+func (s *sdkLogSink) Info(_ int, msg string, kv ...any) { s.log(msg, nil, kv) }
 
-func (s *sdkLogSink) Error(_ error, msg string, kv ...any) { s.log(msg, kv) }
+func (s *sdkLogSink) Error(err error, msg string, kv ...any) { s.log(msg, err, kv) }
 
 func (s *sdkLogSink) WithValues(...any) logr.LogSink { return s }
 
 func (s *sdkLogSink) WithName(string) logr.LogSink { return s }
 
-// log keeps the message (capped, redacted) and the key names. Values and the
-// error are never read.
-func (s *sdkLogSink) log(msg string, kv []any) {
+// log keeps the message (capped, redacted), the error's type and the key
+// names. Values and the error's text are never read.
+func (s *sdkLogSink) log(msg string, err error, kv []any) {
 	var keys []string
 	for i := 0; i < len(kv); i += 2 {
 		if k, ok := kv[i].(string); ok {
@@ -73,7 +76,13 @@ func (s *sdkLogSink) log(msg string, kv []any) {
 		}
 	}
 	sort.Strings(keys)
-	text := fmt.Sprintf("%s (value keys: %s)", capString(msg, 200), strings.Join(keys, ","))
+	// The error's TYPE (never its text, which url.Parse and strconv build from
+	// their input) tells an operator what kind of failure it was.
+	errType := ""
+	if err != nil {
+		errType = fmt.Sprintf(" [%T]", err)
+	}
+	text := fmt.Sprintf("%s%s (value keys: %s)", capString(msg, 200), errType, strings.Join(keys, ","))
 	s.h.handleAt(slog.LevelWarn, "OpenTelemetry SDK log (values dropped, rate limited)", text)
 }
 

@@ -1,5 +1,5 @@
 // file: internal/telemetry/sdklog_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c1a9e43-2b86-4d05-a3f7-d84e60b19c2a
 // last-edited: 2026-10-10
 
@@ -36,6 +36,9 @@ func hostile(t *testing.T) {
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "https://user:p^ss_"+sentinel+"@tempo:4317")
 	t.Setenv("OTEL_EXPORTER_OTLP_HEADERS", "malformed_"+sentinel)
 	t.Setenv("OTEL_EXPORTER_OTLP_METRICS_HEADERS", "malformed2_"+sentinel)
+	// strconv's error for a bad duration quotes its input: this one catches a
+	// sink that logs err.Error().
+	t.Setenv("OTEL_EXPORTER_OTLP_TIMEOUT", "x"+sentinel)
 }
 
 func buildExporters(t *testing.T) {
@@ -58,9 +61,9 @@ func buildExporters(t *testing.T) {
 func TestSDKLog_ControlRawLoggerLeaks(t *testing.T) {
 	hostile(t)
 	c := &capture{}
-	prev := logr.Discard()
 	otel.SetLogger(funcr.New(func(prefix, args string) { c.add(prefix + args) }, funcr.Options{Verbosity: 10}))
-	t.Cleanup(func() { otel.SetLogger(prev) })
+	// There is no getter for the previous logger; restore the discard logger.
+	t.Cleanup(func() { otel.SetLogger(logr.Discard()) })
 	buildExporters(t)
 	if !strings.Contains(c.all(), sentinel) {
 		t.Skipf("the SDK did not log the hostile input with a raw logger (%q); nothing to guard", c.all())
@@ -105,5 +108,29 @@ func TestRunShutdowns_SkipsNil(t *testing.T) {
 	err := runShutdowns(context.Background(), []func(context.Context) error{nil, func(context.Context) error { called = true; return nil }})
 	if err != nil || !called {
 		t.Errorf("err=%v called=%v, want nil/true", err, called)
+	}
+}
+
+// InitOTEL itself installs the sink: the logger it hands to otel.SetLogger is
+// ours, and installing happens before any exporter is built.
+func TestInitOTEL_InstallsTheSDKLogSink(t *testing.T) {
+	hostile(t)
+	var installed []logr.Logger
+	prevSet := setOTelLogger
+	setOTelLogger = func(l logr.Logger) { installed = append(installed, l); prevSet(l) }
+	installSDKLogOnce = sync.Once{} // other tests have already run InitOTEL
+	t.Cleanup(func() {
+		setOTelLogger = prevSet
+		otel.SetLogger(logr.Discard())
+	})
+
+	if _, err := InitOTEL(context.Background(), LoadConfig("t", "")); err != nil {
+		t.Fatal(err)
+	}
+	if len(installed) != 1 {
+		t.Fatalf("InitOTEL installed %d SDK loggers, want 1", len(installed))
+	}
+	if _, ok := installed[0].GetSink().(*sdkLogSink); !ok {
+		t.Fatalf("installed sink is %T, want *sdkLogSink", installed[0].GetSink())
 	}
 }
