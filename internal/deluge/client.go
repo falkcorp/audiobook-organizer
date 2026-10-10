@@ -1,5 +1,5 @@
 // file: internal/deluge/client.go
-// version: 1.2.1
+// version: 1.3.0
 // guid: 9a7b8c6d-0e1f-4a70-b8c5-3d7e0f1b9a99
 //
 // Deluge Web JSON-RPC client (backlog 6.1).
@@ -10,19 +10,23 @@
 //   - Listing torrents (core.get_torrents_status)
 //   - Getting single torrent info (core.get_torrent_status)
 //   - Moving torrent storage (core.move_storage)
+//   - Detail reads (ratio, seed time, files) and removal with data
 //
 // Reference: https://deluge.readthedocs.io/en/latest/reference/webapi.html
-// last-edited: 2026-09-02
+// last-edited: 2026-10-09
 
 package deluge
 
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
+	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -50,6 +54,43 @@ type TorrentStatus struct {
 	// TotalSize is populated when requested via GetTorrent.
 	TotalSize int64 `json:"total_size"`
 }
+
+// TorrentFile is one entry of Deluge's `files` status field. Path is relative
+// to the torrent's save_path.
+type TorrentFile struct {
+	Index  int    `json:"index"`
+	Path   string `json:"path"`
+	Size   int64  `json:"size"`
+	Offset int64  `json:"offset"`
+}
+
+// TorrentDetail is TorrentStatus plus what a cleanup decision needs. The time
+// fields are Unix seconds and may be fractional; 0 means unknown.
+type TorrentDetail struct {
+	TorrentStatus
+	Ratio          float64       `json:"ratio"`
+	SeedingTime    int64         `json:"seeding_time"` // seconds
+	TimeAdded      float64       `json:"time_added"`
+	CompletedTime  float64       `json:"completed_time"`
+	IsFinished     bool          `json:"is_finished"`
+	Files          []TorrentFile `json:"files"`
+	FileProgress   []float64     `json:"file_progress"`
+	FilePriorities []int         `json:"file_priorities"`
+	TotalDone      int64         `json:"total_done"`
+}
+
+// AbsPath returns the on-disk path of one of the torrent's files.
+func (d TorrentDetail) AbsPath(f TorrentFile) string {
+	return filepath.Join(d.SavePath, f.Path)
+}
+
+var (
+	// ErrTorrentNotFound means Deluge does not know the torrent (already
+	// removed), as opposed to Deluge being unreachable.
+	ErrTorrentNotFound = errors.New("deluge: torrent not found")
+	// ErrRemoveRefused means core.remove_torrent answered false.
+	ErrRemoveRefused = errors.New("deluge: remove_torrent refused")
+)
 
 type rpcRequest struct {
 	Method string `json:"method"`
@@ -116,6 +157,55 @@ func (c *Client) call(method string, params ...any) (json.RawMessage, error) {
 	return rpcResp.Result, nil
 }
 
+// callAuthed is call plus a one-shot recovery from an expired web session:
+// on a "Not authenticated" error it clears the cached login, logs in again and
+// replays the request once. It lives outside call because Login holds c.mu and
+// itself uses call. auth.login is never replayed.
+func (c *Client) callAuthed(method string, params ...any) (json.RawMessage, error) {
+	result, err := c.call(method, params...)
+	if err == nil || method == "auth.login" || !isAuthError(err) {
+		return result, err
+	}
+	c.mu.Lock()
+	c.authed = false
+	c.mu.Unlock()
+	if lerr := c.Login(); lerr != nil {
+		return nil, lerr
+	}
+	return c.call(method, params...)
+}
+
+func isAuthError(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "not authenticated")
+}
+
+// isUnknownTorrentError reports an RPC error naming an invalid/unknown torrent.
+func isUnknownTorrentError(err error) bool {
+	if err == nil {
+		return false
+	}
+	m := strings.ToLower(err.Error())
+	return strings.Contains(m, "invalid torrent") || strings.Contains(m, "unknown torrent") ||
+		strings.Contains(m, "torrent not found") || strings.Contains(m, "invalidtorrenterror")
+}
+
+// NormalizeTorrentID lowercases a torrent id and accepts only a 40 (SHA-1) or
+// 64 (SHA-256) character hex string, so an empty or malformed id can never
+// reach core.remove_torrent.
+func NormalizeTorrentID(s string) (string, error) {
+	if n := len(s); n != 40 && n != 64 {
+		return "", fmt.Errorf("deluge: invalid torrent id: want 40 or 64 hex characters, got %d characters", n)
+	}
+	out := strings.ToLower(s)
+	for i := 0; i < len(out); i++ {
+		ch := out[i]
+		if !(ch >= '0' && ch <= '9' || ch >= 'a' && ch <= 'f') {
+			return "", errors.New("deluge: invalid torrent id: non-hex character")
+		}
+	}
+	return out, nil
+}
+
 // Login authenticates with the Deluge Web UI. Must be called before
 // other methods. Idempotent — skips if already authenticated.
 func (c *Client) Login() error {
@@ -141,12 +231,18 @@ func (c *Client) Login() error {
 // or if the torrent has no label — both are safe to ignore.
 var torrentFields = []string{"hash", "name", "save_path", "state", "progress", "label", "total_size"}
 
+// torrentDetailFields is torrentFields plus the cleanup-decision fields. It is
+// built from a copy so the two lists cannot drift.
+var torrentDetailFields = append(append([]string{}, torrentFields...),
+	"ratio", "seeding_time", "time_added", "completed_time", "is_finished",
+	"files", "file_progress", "file_priorities", "total_done")
+
 // ListTorrents returns all torrents with the standard field set.
 func (c *Client) ListTorrents() (map[string]TorrentStatus, error) {
 	if err := c.Login(); err != nil {
 		return nil, err
 	}
-	result, err := c.call("core.get_torrents_status", map[string]any{}, torrentFields)
+	result, err := c.callAuthed("core.get_torrents_status", map[string]any{}, torrentFields)
 	if err != nil {
 		return nil, err
 	}
@@ -180,7 +276,7 @@ func (c *Client) ListLabels() ([]string, error) {
 	if err := c.Login(); err != nil {
 		return nil, err
 	}
-	result, err := c.call("label.get_labels")
+	result, err := c.callAuthed("label.get_labels")
 	if err != nil {
 		// Label plugin may not be installed — treat as empty list.
 		return []string{}, nil
@@ -198,7 +294,7 @@ func (c *Client) GetTorrent(torrentID string) (*TorrentStatus, error) {
 		return nil, err
 	}
 	fields := []string{"hash", "name", "save_path", "state", "progress"}
-	result, err := c.call("core.get_torrent_status", torrentID, fields)
+	result, err := c.callAuthed("core.get_torrent_status", torrentID, fields)
 	if err != nil {
 		return nil, err
 	}
@@ -217,7 +313,7 @@ func (c *Client) MoveStorage(torrentIDs []string, destPath string) error {
 	if err := c.Login(); err != nil {
 		return err
 	}
-	_, err := c.call("core.move_storage", torrentIDs, destPath)
+	_, err := c.callAuthed("core.move_storage", torrentIDs, destPath)
 	return err
 }
 
@@ -226,11 +322,121 @@ func (c *Client) Connected() (bool, error) {
 	if err := c.Login(); err != nil {
 		return false, err
 	}
-	result, err := c.call("web.connected")
+	result, err := c.callAuthed("web.connected")
 	if err != nil {
 		return false, err
 	}
 	var connected bool
 	_ = json.Unmarshal(result, &connected)
 	return connected, nil
+}
+
+// GetTorrentDetail returns the detail field set for one torrent. A torrent
+// Deluge does not know yields ErrTorrentNotFound.
+func (c *Client) GetTorrentDetail(hash string) (*TorrentDetail, error) {
+	id, err := NormalizeTorrentID(hash)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.Login(); err != nil {
+		return nil, err
+	}
+	result, err := c.callAuthed("core.get_torrent_status", id, torrentDetailFields)
+	if err != nil {
+		if isUnknownTorrentError(err) {
+			return nil, fmt.Errorf("%w: %s", ErrTorrentNotFound, id)
+		}
+		return nil, err
+	}
+	var d TorrentDetail
+	if err := json.Unmarshal(result, &d); err != nil {
+		return nil, fmt.Errorf("decode torrent detail: %w", err)
+	}
+	if d.Hash == "" {
+		return nil, fmt.Errorf("%w: %s", ErrTorrentNotFound, id)
+	}
+	return &d, nil
+}
+
+const detailChunkSize = 50
+
+// ListTorrentDetails fetches detail for the given hashes, at most 50 per
+// request, sorted by hash.
+func (c *Client) ListTorrentDetails(hashes []string) ([]TorrentDetail, error) {
+	ids := make([]string, 0, len(hashes))
+	for _, h := range hashes {
+		id, err := NormalizeTorrentID(h)
+		if err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	out := make([]TorrentDetail, 0, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	if err := c.Login(); err != nil {
+		return nil, err
+	}
+	for start := 0; start < len(ids); start += detailChunkSize {
+		end := min(start+detailChunkSize, len(ids))
+		result, err := c.callAuthed("core.get_torrents_status",
+			map[string]any{"id": ids[start:end]}, torrentDetailFields)
+		if err != nil {
+			return nil, err
+		}
+		var m map[string]TorrentDetail
+		if err := json.Unmarshal(result, &m); err != nil {
+			return nil, fmt.Errorf("decode torrent details: %w", err)
+		}
+		for _, d := range m {
+			out = append(out, d)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Hash < out[j].Hash })
+	return out, nil
+}
+
+// ListTorrentDetailsByLabel resolves the label with the light listing (same
+// case-insensitive semantics as ListTorrentsByLabel) and then fetches detail,
+// including the file list, only for the matching torrents.
+func (c *Client) ListTorrentDetailsByLabel(label string) ([]TorrentDetail, error) {
+	light, err := c.ListTorrentsByLabel(label)
+	if err != nil {
+		return nil, err
+	}
+	hashes := make([]string, 0, len(light))
+	for _, t := range light {
+		hashes = append(hashes, t.Hash)
+	}
+	return c.ListTorrentDetails(hashes)
+}
+
+// RemoveTorrent removes a torrent, and its downloaded data when removeData is
+// true. A false result is returned as ErrRemoveRefused so a caller that ignores
+// the bool still fails closed. It has no production caller until the cleanup
+// fixer lands.
+func (c *Client) RemoveTorrent(hash string, removeData bool) (bool, error) {
+	id, err := NormalizeTorrentID(hash)
+	if err != nil {
+		return false, err
+	}
+	if err := c.Login(); err != nil {
+		return false, err
+	}
+	result, err := c.callAuthed("core.remove_torrent", id, removeData)
+	if err != nil {
+		if isUnknownTorrentError(err) {
+			return false, fmt.Errorf("%w: %s", ErrTorrentNotFound, id)
+		}
+		return false, fmt.Errorf("remove torrent %s: %w", id, err)
+	}
+	var ok bool
+	if err := json.Unmarshal(result, &ok); err != nil {
+		return false, fmt.Errorf("remove torrent %s: decode result %s: %w", id, string(result), err)
+	}
+	if !ok {
+		return false, fmt.Errorf("%w: %s", ErrRemoveRefused, id)
+	}
+	return true, nil
 }
