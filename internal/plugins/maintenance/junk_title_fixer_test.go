@@ -1,14 +1,16 @@
 // file: internal/plugins/maintenance/junk_title_fixer_test.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: 3a8d6f52-1e9c-4b07-92d4-6c5b0e8a7f13
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package maintenance
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -917,13 +919,15 @@ func TestJunkTitleFixer_CandidateReadIsTheFilteredRow(t *testing.T) {
 	lib := newJunkLib(t)
 	id := lib.ids["candidate"]
 	raw := newJunkTitleFixer(&Plugin{deps: fakeDeps{store: lib.store}, standDownWait: noWait})
-	title, _, ok := raw.candidateTitle(&database.Book{ID: id}, "Author A")
+	title, _, ok, err := raw.candidateTitle(&database.Book{ID: id}, "Author A")
+	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, "Candidate Title", title)
 
 	filtered := newJunkTitleFixer(&Plugin{deps: filteredCacheDeps{fakeDeps: fakeDeps{store: lib.store},
 		filtered: map[string]*database.MetadataCandidateCache{id: {BookID: id}}}, standDownWait: noWait})
-	_, _, ok = filtered.candidateTitle(&database.Book{ID: id}, "Author A")
+	_, _, ok, err = filtered.candidateTitle(&database.Book{ID: id}, "Author A")
+	require.NoError(t, err)
 	require.False(t, ok, "the filtered row has no candidate; the raw row must not be read")
 }
 
@@ -998,19 +1002,24 @@ func TestJunkTitleFixer_CandidateTitlePrefersTheBooksASIN(t *testing.T) {
 		cand("No ASIN", "", 0.97),
 		cand("The Book Itself", "b00bookasi", 0.92),
 	}}
-	f := newJunkTitleFixer(&Plugin{deps: filteredCacheDeps{filtered: map[string]*database.MetadataCandidateCache{"b1": row}}, standDownWait: noWait})
+	lib := newJunkLib(t)
+	f := newJunkTitleFixer(&Plugin{deps: filteredCacheDeps{fakeDeps: fakeDeps{store: lib.store},
+		filtered: map[string]*database.MetadataCandidateCache{"b1": row}}, standDownWait: noWait})
 	asin := "B00BOOKASI"
-	title, score, ok := f.candidateTitle(&database.Book{ID: "b1", ASIN: &asin}, "Author A")
+	title, score, ok, err := f.candidateTitle(&database.Book{ID: "b1", ASIN: &asin}, "Author A")
+	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, "The Book Itself", title)
 	require.InDelta(t, 0.92, score, 1e-9)
 
 	other := "B00NOMATCH"
-	title, _, ok = f.candidateTitle(&database.Book{ID: "b1", ASIN: &other}, "Author A")
+	title, _, ok, err = f.candidateTitle(&database.Book{ID: "b1", ASIN: &other}, "Author A")
+	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, "No ASIN", title, "candidates naming another ASIN are skipped")
 
-	title, _, ok = f.candidateTitle(&database.Book{ID: "b1"}, "Author A")
+	title, _, ok, err = f.candidateTitle(&database.Book{ID: "b1"}, "Author A")
+	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, "Other Record", title, "a book with no ASIN keeps the highest score")
 }
@@ -1034,7 +1043,8 @@ func TestJunkTitleFixer_StaleCandidateRowIsNotProposed(t *testing.T) {
 	require.True(t, marked.Stale, "the stored row carries the mark")
 
 	f := newJunkTitleFixer(&Plugin{deps: fakeDeps{store: lib.store}, standDownWait: noWait})
-	_, _, ok := f.candidateTitle(&database.Book{ID: id}, "Author A")
+	_, _, ok, err := f.candidateTitle(&database.Book{ID: id}, "Author A")
+	require.NoError(t, err)
 	require.False(t, ok, "a stale row offers no candidate title")
 
 	r := planRows(t, lib.store)[id]
@@ -1054,13 +1064,65 @@ func TestJunkTitleFixer_CandidateTitleSkipsASINReplacedCandidates(t *testing.T) 
 		cand("Old Record", "B00OLDASIN", 0.99),
 		cand("No ASIN", "", 0.97),
 	}}
-	f := newJunkTitleFixer(&Plugin{deps: filteredCacheDeps{filtered: map[string]*database.MetadataCandidateCache{"b1": row}}, standDownWait: noWait})
+	lib := newJunkLib(t)
+	f := newJunkTitleFixer(&Plugin{deps: filteredCacheDeps{fakeDeps: fakeDeps{store: lib.store},
+		filtered: map[string]*database.MetadataCandidateCache{"b1": row}}, standDownWait: noWait})
 	cur := "B00NEWASIN"
-	_, _, ok := f.candidateTitle(&database.Book{ID: "b1", ASIN: &cur}, "Author A")
+	_, _, ok, err := f.candidateTitle(&database.Book{ID: "b1", ASIN: &cur}, "Author A")
+	require.NoError(t, err)
 	require.False(t, ok, "candidates fetched for the replaced ASIN are refused")
 
 	row.Candidates = append(row.Candidates, cand("The Current Record", "B00NEWASIN", 0.9))
-	title, _, ok := f.candidateTitle(&database.Book{ID: "b1", ASIN: &cur}, "Author A")
+	title, _, ok, err := f.candidateTitle(&database.Book{ID: "b1", ASIN: &cur}, "Author A")
+	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, "The Current Record", title, "a candidate carrying the book's current ASIN is current")
+}
+
+// Review round 3, S5: a candidate the owner rejected for the book is never
+// the proposed title, wherever it sits in the row; the next trustworthy
+// candidate is. An unreadable rejection list proposes no candidate title.
+func TestJunkTitleFixer_CandidateTitleSkipsOwnerRejected(t *testing.T) {
+	cand := func(source, title, asin string, score float64) json.RawMessage {
+		b, err := json.Marshal(map[string]any{"source": source, "title": title, "author": "Author A", "asin": asin, "score": score})
+		require.NoError(t, err)
+		return b
+	}
+	row := &database.MetadataCandidateCache{BookID: "b1", Candidates: []json.RawMessage{
+		cand("Audible", "Next Best Record", "B0SYNJUNK2", 0.80),
+		cand("Audible", "Rejected Record", "B0SYNJUNK1", 0.99),
+	}}
+	lib := newJunkLib(t)
+	f := newJunkTitleFixer(&Plugin{deps: filteredCacheDeps{fakeDeps: fakeDeps{store: lib.store},
+		filtered: map[string]*database.MetadataCandidateCache{"b1": row}}, standDownWait: noWait})
+
+	title, _, ok, err := f.candidateTitle(&database.Book{ID: "b1"}, "Author A")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, "Rejected Record", title, "fixture: without a rejection the higher score wins")
+
+	// Rejected under another source with the same ASIN: refused too.
+	require.NoError(t, metafetch.RecordRejection(lib.store, "b1",
+		&metafetch.MetadataCandidate{Source: "Audnexus (Audible)", Title: "Rejected Record", ASIN: "B0SYNJUNK1"}))
+	title, score, ok, err := f.candidateTitle(&database.Book{ID: "b1"}, "Author A")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, "Next Best Record", title, "the owner-rejected candidate was proposed")
+	require.InDelta(t, 0.80, score, 1e-9)
+
+	failing := newJunkTitleFixer(&Plugin{deps: filteredCacheDeps{fakeDeps: fakeDeps{store: failingRejectionScanStore{lib.store}},
+		filtered: map[string]*database.MetadataCandidateCache{"b1": row}}, standDownWait: noWait})
+	_, _, ok, err = failing.candidateTitle(&database.Book{ID: "b1"}, "Author A")
+	require.Error(t, err)
+	require.False(t, ok, "no candidate title with the rejections unreadable")
+}
+
+// failingRejectionScanStore cannot read the owner's rejections.
+type failingRejectionScanStore struct{ database.Store }
+
+func (f failingRejectionScanStore) ScanPrefix(prefix string) ([]database.KVPair, error) {
+	if strings.HasPrefix(prefix, metafetch.RejectedCandidatePrefix) {
+		return nil, errors.New("scan failed")
+	}
+	return f.Store.ScanPrefix(prefix)
 }

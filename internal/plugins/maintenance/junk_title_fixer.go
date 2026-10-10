@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_title_fixer.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: 7c3e9a15-2b6d-4f48-a9e1-5d0b8c4f7a26
-// last-edited: 2026-10-10
+// last-edited: 2026-10-11
 
 package maintenance
 
@@ -800,7 +800,13 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 	// candidateTitle gates each candidate through CandidateIdentityStale,
 	// which reads the book's ID and ASIN; ToBook carries both.
 	full := b.ToBook()
-	if t, score, ok := f.candidateTitle(&full, author); ok {
+	t, score, ok, candErr := f.candidateTitle(&full, author)
+	if candErr != nil {
+		// Fail closed: with the owner's rejections unreadable, any cached
+		// candidate may be one the owner turned down for this book.
+		return repairs.Row{}, fmt.Errorf("candidate title of %s: %w", b.ID, candErr)
+	}
+	if ok {
 		switch {
 		case embedded && !titleAgreesWithAny(t, agreeWith):
 			refusedCandidate = t
@@ -1431,7 +1437,7 @@ func (f *junkTitleFixer) fragmentReason(idx *junkIndex, b database.BookCore, kin
 // junk title, so a candidate that disagrees on the author is noise). Ties
 // keep the cache's order.
 //
-// The book's ASIN (bookASIN) decides first. A candidate naming another ASIN
+// The book's ASIN (b.ASIN) decides first. A candidate naming another ASIN
 // is skipped: it is another record (the bulk gate's asin_conflict). Among the
 // trustworthy rest, one carrying the book's own ASIN wins over any higher
 // score: the book's candidates survive an ASIN fill, so the record the ASIN
@@ -1447,17 +1453,34 @@ func (f *junkTitleFixer) fragmentReason(idx *junkIndex, b database.BookCore, kin
 // re-credited after the fetch) offers nothing, and a candidate fetched for an
 // ASIN the book no longer carries is skipped. Without it a book retitled into
 // a junk title would be offered the old title's candidates.
-func (f *junkTitleFixer) candidateTitle(b *database.Book, author string) (string, float64, bool) {
+//
+// A candidate the owner rejected for the book (metafetch.RejectedSet: its
+// source and title, or an ASIN or ISBN the owner rejected under any source)
+// is skipped inside the loop too, so the next trustworthy candidate is the
+// one chosen and a rejected record never becomes evidence. The row's order
+// does not protect this loop: it takes the best candidate wherever it sits,
+// so the re-rank that moves a rejected candidate down is no help here. An
+// unreadable rejection list is returned as err (the caller fails the row
+// closed); no title is chosen then. A nil book offers nothing.
+func (f *junkTitleFixer) candidateTitle(b *database.Book, author string) (string, float64, bool, error) {
 	if b == nil {
-		return "", 0, false
+		return "", 0, false, nil
 	}
 	entry, err := f.p.deps.CachedMetadataCandidates(b.ID)
 	if err != nil || entry == nil || entry.Stale {
-		return "", 0, false
+		return "", 0, false, nil
 	}
 	a := strings.TrimSpace(author)
 	if a == "" || authorname.IsPlaceholderAuthor(a) {
-		return "", 0, false
+		return "", 0, false, nil
+	}
+	store := f.p.deps.OpsStore()
+	if store == nil {
+		return "", 0, false, fmt.Errorf("read owner rejections: database not initialized")
+	}
+	rejected, err := metafetch.LoadRejectedCandidates(store, b.ID)
+	if err != nil {
+		return "", 0, false, err
 	}
 	own := ""
 	if b.ASIN != nil {
@@ -1469,7 +1492,7 @@ func (f *junkTitleFixer) candidateTitle(b *database.Book, author string) (string
 		if json.Unmarshal(raw, &c) != nil || c.Score < junkCandidateMinScore || c.DurationMismatch {
 			continue
 		}
-		if metafetch.CandidateIdentityStale(entry, b, &c) != nil {
+		if metafetch.CandidateIdentityStale(entry, b, &c) != nil || rejected.HasCandidate(&c) {
 			continue
 		}
 		if !strings.EqualFold(util.NormalizeAuthor(c.Author), util.NormalizeAuthor(a)) {
@@ -1485,7 +1508,7 @@ func (f *junkTitleFixer) candidateTitle(b *database.Book, author string) (string
 			best, bestScore, found, bestOwn = c.Title, c.Score, true, isOwn
 		}
 	}
-	return best, bestScore, found
+	return best, bestScore, found, nil
 }
 
 // catalogEditionRe is a bracketed edition marker on a catalog title:
