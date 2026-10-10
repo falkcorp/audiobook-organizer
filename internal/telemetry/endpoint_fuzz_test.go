@@ -1,5 +1,5 @@
 // file: internal/telemetry/endpoint_fuzz_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f8a1c64-9d27-4e50-b6a3-0c71e5d9f284
 // last-edited: 2026-10-10
 
@@ -13,6 +13,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 // sentinel can never appear in an accepted endpoint: '_' is not valid in a
@@ -57,9 +60,12 @@ func endpointSeeds() []string {
 		"ht tp://collector:4317", "http//collector:4317",
 		// IPv6 brackets
 		"[" + S + "]:4317", "https://[" + S + "]:4317", "[::1" + S + "]:4317", "[::1%" + S + "]:4317", "[fe80::1%eth0]:4317",
-		"[::1]", "[::1]:", "[1.2.3.4]:4317", "[::1]x:4317",
+		"[::1]", "[::1]:", "[192.0.2.1]:4317", "[::1]x:4317",
 		// whitespace, control, unicode, encoding
 		"collector :4317", "collector:4317 " + S, "collector\n:4317", "collector\x00:4317", "colléctor:4317",
+		// hosts that gRPC would read as a resolver scheme or a number
+		"unix:4317", "dns:4317", "https://dns:443", "passthrough:4317", "unix-abstract:4317", "http://unix:4317",
+		"4317:4317", "1.2.3:4317", "300.1.1.1:4317", "a..b:4317", "a.-b:4317", strings.Repeat("a", 64) + ":4317",
 		"https://collector%2f" + S + ":4317", "https://collector:4317/%2e%2e/" + S, "",
 	}
 }
@@ -96,6 +102,11 @@ func checkEndpoint(t *testing.T, in string) {
 		if dial != disp {
 			t.Fatalf("%q (%s): dial target %q != Display() %q", in, key, dial, disp)
 		}
+		// gRPC must read the explicit target as exactly dns:///host:port.
+		hostPort := strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(disp, "https://"), "http://"), "dns:///")
+		if got := canonicalGRPCTarget(t, tgt.GRPCTarget()); got != "dns:///"+hostPort {
+			t.Fatalf("%q (%s): gRPC reads %q as %q, want dns:///%s", in, key, tgt.GRPCTarget(), got, hostPort)
+		}
 		again, err := parseOTLPEndpoint(key, disp)
 		if err != nil || again != tgt {
 			t.Fatalf("%q (%s): canonical %q does not parse back to itself (%+v, %v)", in, key, disp, again, err)
@@ -106,6 +117,19 @@ func checkEndpoint(t *testing.T, in string) {
 			}
 		}
 	}
+}
+
+// canonicalGRPCTarget creates (it does not dial: grpc.NewClient connects on
+// first use) and closes a client for target and returns how gRPC canonicalises
+// it.
+func canonicalGRPCTarget(t *testing.T, target string) string {
+	t.Helper()
+	cc, err := grpc.NewClient(target, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("grpc.NewClient(%q): %v", target, err)
+	}
+	defer cc.Close()
+	return cc.CanonicalTarget()
 }
 
 // checkNoLeak runs the same input through initSummary and the error handler
@@ -168,7 +192,7 @@ func TestOTLPEndpoint_Table(t *testing.T) {
 		"", "127.0.0.1", "http://127.0.0.1", "http://:4317", ":4317", "ftp://host:21", "invalid://endpoint", "dns:///", "dns://x:4317",
 		"collector:4317/x", "https://collector:4317/x", "https://collector:4317//", "https://collector:4317/?a=b", "https://collector:4317#f",
 		"https://u:p@collector:4317", "u@collector:4317", "collector:4317?x", "collector:abc", "collector:0", "collector:65536",
-		"collector:+1", "col lector:4317", "[::1%eth0]:4317", "[1.2.3.4]:4317", "-h:4317", "h-:4317", ".h:4317", "h.:4317",
+		"collector:+1", "col lector:4317", "[::1%eth0]:4317", "[192.0.2.1]:4317", "-h:4317", "h-:4317", ".h:4317", "h.:4317", "4317:4317", "1.2.3:4317", "300.1.1.1:4317", "a..b:4317", "a.-b:4317", strings.Repeat("a", 64) + ":4317",
 		"https://%7e:4317", "dns:///tempo:4317/", "dns:///u@tempo:4317", strings.Repeat("a", 254) + ":4317",
 	}
 	for _, in := range refused {
@@ -178,7 +202,7 @@ func TestOTLPEndpoint_Table(t *testing.T) {
 			}
 		}
 	}
-	if _, err := parseOTLPEndpoint(keyTraceEndpoint, strings.Repeat("a", 253)+":4317"); err != nil {
+	if _, err := parseOTLPEndpoint(keyTraceEndpoint, strings.Join([]string{strings.Repeat("a", 63), strings.Repeat("b", 63), strings.Repeat("c", 63), strings.Repeat("d", 61)}, ".")+":4317"); err != nil {
 		t.Errorf("a 253-byte host was refused: %v", err)
 	}
 }

@@ -11,6 +11,7 @@ require (
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/gin-contrib/gzip v1.2.8
 	github.com/gin-gonic/gin v1.12.0
+	github.com/go-logr/logr v1.4.4
 	github.com/go-playground/validator/v10 v10.30.5
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/hashicorp/go-memdb v1.3.5
@@ -96,7 +97,6 @@ require (
 	github.com/getsentry/sentry-go v0.49.0 // indirect
 	github.com/gin-contrib/sse v1.1.2 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
-	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-playground/locales v0.14.2 // indirect
 	github.com/go-playground/universal-translator v0.18.2 // indirect

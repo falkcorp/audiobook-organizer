@@ -1,5 +1,5 @@
 // file: internal/telemetry/errorhandler.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9d3f6b21-7a48-4c05-b1e9-2f60c8a4d7e3
 // last-edited: 2026-10-10
 
@@ -67,7 +67,13 @@ func (h *rateLimitedErrorHandler) Handle(err error) {
 	if err == nil {
 		return
 	}
-	text := redactEndpointSecrets(err.Error())
+	h.handleAt(slog.LevelError, "OpenTelemetry error (rate limited)", err.Error())
+}
+
+// handleAt is Handle with a level and message: the shared class-keyed limiter
+// for the error handler and the SDK log sink.
+func (h *rateLimitedErrorHandler) handleAt(level slog.Level, msg, raw string) {
+	text := redactEndpointSecrets(raw)
 	key := errorClassKey(text)
 
 	h.mu.Lock()
@@ -100,7 +106,7 @@ func (h *rateLimitedErrorHandler) Handle(err error) {
 	c.suppressed, c.last = 0, t
 	h.mu.Unlock()
 
-	h.log(slog.LevelError, "OpenTelemetry error (rate limited)",
+	h.log(level, msg,
 		"error", text,
 		"suppressed_since_last", suppressed,
 		"min_interval", h.interval.String())
@@ -151,7 +157,7 @@ func redactEndpointSecrets(s string) string {
 				rest = rest[:qi]
 			}
 		} else {
-			// Same rule as parseHTTPEndpoint: the authority ends at the first
+			// Same idea as the strict parser's authority: it ends at the first
 			// '/', '?' or '#'; userinfo lives only inside it; everything
 			// after host[:port] (path, query, fragment) can hold a token.
 			if end := strings.IndexAny(rest, "/?#"); end >= 0 {

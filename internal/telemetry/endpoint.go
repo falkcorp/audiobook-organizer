@@ -1,5 +1,5 @@
 // file: internal/telemetry/endpoint.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 6e0f4b1a-52c7-4d83-9a1e-3b7c8d2f5a40
 // last-edited: 2026-10-10
 
@@ -34,6 +34,19 @@ type otlpTarget struct {
 	Bare bool
 }
 
+// GRPCTarget is the target handed to gRPC for every accepted form:
+// "dns:///host:port" (IPv6 as "dns:///[addr]:port"). gRPC picks a resolver from
+// a target's scheme, so a bare "unix:4317" or "dns:4317" would be dialled as a
+// unix socket or as host "4317"; the explicit dns:/// prefix removes that
+// ambiguity. Display() stays the canonical form the operator wrote.
+func (t otlpTarget) GRPCTarget() string {
+	hp := t.Display()
+	for _, prefix := range []string{"https://", "http://", "dns:///"} {
+		hp = strings.TrimPrefix(hp, prefix)
+	}
+	return "dns:///" + hp
+}
+
 // Display is the canonical endpoint: exactly the string handed to the
 // exporter (WithEndpointURL for a URL, WithEndpoint otherwise), so what is
 // logged is what is dialled.
@@ -44,9 +57,35 @@ func (t otlpTarget) Display() string {
 	return t.Target
 }
 
-// hostRE is a DNS-style host: letters, digits, '.', '-', not starting or
-// ending with '.' or '-'.
-var hostRE = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$`)
+// labelRE is one DNS label: 1-63 letters, digits or '-', not starting or
+// ending with '-'.
+var labelRE = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
+
+// validHost reports whether host is a DNS name (dot-separated labels, no empty
+// label, at most 253 bytes) or an IPv4 address. A dotted or plain run of digits
+// that is not a valid IPv4 address ("4317", "1.2.3", "300.1.1.1") is refused:
+// it is a number, not a host.
+func validHost(host string) bool {
+	if len(host) > 253 {
+		return false
+	}
+	allNumeric := true
+	for _, label := range strings.Split(host, ".") {
+		if !labelRE.MatchString(label) {
+			return false
+		}
+		for _, c := range label {
+			if c < '0' || c > '9' {
+				allNumeric = false
+			}
+		}
+	}
+	if allNumeric {
+		addr, err := netip.ParseAddr(host)
+		return err == nil && addr.Is4()
+	}
+	return true
+}
 
 // parseOTLPEndpoint validates endpoint strictly and rebuilds it. key is the
 // config key it came from and is the only context in any error.
@@ -58,8 +97,9 @@ var hostRE = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$`)
 //   - http://host:port and https://host:port, with at most one trailing '/'
 //   - dns:///host:port
 //
-// host is a DNS name ([A-Za-z0-9.-], no leading or trailing '.' or '-', at
-// most 253 bytes) or a bracketed IPv6 address that netip.ParseAddr accepts
+// host is a DNS name (dot-separated labels of 1-63 letters, digits or '-', not
+// starting or ending with '-', no empty label, at most 253 bytes), an IPv4
+// address, or a bracketed IPv6 address that netip.ParseAddr accepts
 // (no zone). port is a number from 1 to 65535.
 //
 // Everything else is REFUSED, never repaired: userinfo or any '@', '?', '#',
@@ -124,7 +164,7 @@ func canonicalHostPort(s string) (string, bool) {
 			return "", false
 		}
 		host, port = s[:i], s[i+1:]
-		if len(host) > 253 || !hostRE.MatchString(host) {
+		if !validHost(host) {
 			return "", false
 		}
 	}

@@ -201,7 +201,7 @@ func TestInitOTEL_UnreachableCollectorDoesNotBlockStart(t *testing.T) {
 
 func TestMetricEndpointOption_Forms(t *testing.T) {
 	ok := []string{"127.0.0.1:4317", "localhost:4317", "[::1]:4317", "tempo:4317",
-		"http://127.0.0.1:4317", "https://collector.example:4317", "dns:///tempo:4317", " http://127.0.0.1:4317 "}
+		"http://127.0.0.1:4317", "https://collector.example.invalid:4317", "dns:///tempo:4317", " http://127.0.0.1:4317 "}
 	for _, ep := range ok {
 		tgt, err := parseOTLPEndpoint(keyMetricsEndpoint, ep)
 		if err != nil {

@@ -1,5 +1,5 @@
 // file: internal/telemetry/telemetry.go
-// version: 2.9.0
+// version: 2.10.0
 // guid: 2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-10-10
 
@@ -42,6 +42,10 @@ import (
 //
 // Nothing enabled returns a no-op shutdown.
 func InitOTEL(ctx context.Context, cfg *Config) (func(context.Context) error, error) {
+	// Before any exporter is built: the SDK's own logger prints raw env input
+	// (see installSDKLogSink), and it is used while exporters are constructed.
+	installSDKLogSink()
+
 	var shutdowns []func(context.Context) error
 
 	// Tracing is started first and is never fatal. A wrong endpoint, or an
@@ -94,6 +98,9 @@ func InitOTEL(ctx context.Context, cfg *Config) (func(context.Context) error, er
 func runShutdowns(ctx context.Context, fns []func(context.Context) error) error {
 	var errs []error
 	for i, fn := range fns {
+		if fn == nil {
+			continue
+		}
 		fctx, cancel := ctx, context.CancelFunc(func() {})
 		if dl, ok := ctx.Deadline(); ok {
 			fctx, cancel = context.WithTimeout(ctx, time.Until(dl)/time.Duration(len(fns)-i))
@@ -113,15 +120,27 @@ func runShutdowns(ctx context.Context, fns []func(context.Context) error) error 
 // log line; it never stops the server. What is passed to the exporter is the
 // canonical string rebuilt from the validated parts, which is also what is
 // logged.
-func traceEndpointOption(endpoint string) (otlptracegrpc.Option, error) {
+func traceEndpointOption(endpoint string) ([]otlptracegrpc.Option, error) {
 	t, err := parseOTLPEndpoint(keyTraceEndpoint, endpoint)
 	if err != nil {
 		return nil, err
 	}
-	if t.URL != "" {
-		return otlptracegrpc.WithEndpointURL(t.URL), nil
+	return append([]otlptracegrpc.Option{otlptracegrpc.WithEndpoint(t.GRPCTarget())}, traceTransportOptions(t)...), nil
+}
+
+// traceTransportOptions pins the transport where the endpoint states it:
+// http:// is plaintext and https:// is TLS (system roots), whatever the
+// generic OTEL_EXPORTER_OTLP_INSECURE says. A bare host:port or dns:/// target
+// states nothing, so it keeps following the SDK's environment
+// (OTEL_EXPORTER_OTLP_[TRACES_]INSECURE, see TRACING-RUNBOOK.md).
+func traceTransportOptions(t otlpTarget) []otlptracegrpc.Option {
+	switch {
+	case strings.HasPrefix(t.URL, "http://"):
+		return []otlptracegrpc.Option{otlptracegrpc.WithInsecure()}
+	case strings.HasPrefix(t.URL, "https://"):
+		return []otlptracegrpc.Option{otlptracegrpc.WithTLSCredentials(credentials.NewTLS(nil))}
 	}
-	return otlptracegrpc.WithEndpoint(t.Target), nil
+	return nil
 }
 
 // initSummary builds the one start-up log line for the whole init (this
@@ -204,12 +223,7 @@ func metricPlaintext(t otlpTarget, insecure bool) bool {
 // Headers, temporality and histogram aggregation are pinned in newOTLPReader,
 // which lists what is pinned and what still follows the environment.
 func metricEndpointOption(t otlpTarget, insecure bool) []otlpmetricgrpc.Option {
-	var opts []otlpmetricgrpc.Option
-	if t.URL != "" {
-		opts = append(opts, otlpmetricgrpc.WithEndpointURL(t.URL))
-	} else {
-		opts = append(opts, otlpmetricgrpc.WithEndpoint(t.Target))
-	}
+	opts := []otlpmetricgrpc.Option{otlpmetricgrpc.WithEndpoint(t.GRPCTarget())}
 	if metricPlaintext(t, insecure) {
 		return append(opts, otlpmetricgrpc.WithInsecure(),
 			otlpmetricgrpc.WithTLSCredentials(grpcinsecure.NewCredentials()))
@@ -224,7 +238,7 @@ func initTracing(ctx context.Context, cfg *Config) (*sdktrace.TracerProvider, er
 	if err != nil {
 		return nil, err
 	}
-	exporter, err := otlptracegrpc.New(ctx, opt)
+	exporter, err := otlptracegrpc.New(ctx, opt...)
 	if err != nil {
 		return nil, err
 	}
