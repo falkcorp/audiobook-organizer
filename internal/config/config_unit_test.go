@@ -380,7 +380,7 @@ func TestInitConfigDefaults(t *testing.T) {
 
 	t.Run("metadata defaults", func(t *testing.T) {
 		assert.False(t, AppConfig.WriteBackMetadata)
-		assert.False(t, AppConfig.EmbedCoverArt)
+		assert.True(t, AppConfig.EmbedCoverArt)
 		assert.Equal(t, "en", AppConfig.Language)
 	})
 
