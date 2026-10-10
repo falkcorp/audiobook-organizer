@@ -1,5 +1,5 @@
 // file: internal/metadata/enhanced.go
-// version: 1.28.0
+// version: 1.28.1
 // guid: 7e8d9c0b-1a2f-3e4d-5c6b-7a8d9c0b1a2f
 // last-edited: 2026-10-10
 
@@ -516,7 +516,7 @@ func WriteMetadataToFile(filePath string, metadata map[string]any, config fileop
 			return fmt.Errorf("write metadata to %s: backup before CLI write: %w", filePath, berr)
 		}
 		before, _ = os.Stat(target)
-		slog.Debug("backup before CLI tag write", "path", logger.SanitizeLogValue(bak))
+		logger.New("metadata").Debug("backup before CLI tag write: %s", logger.SanitizeLogValue(bak))
 	}
 
 	// The CLI writers rewrite the file outside fileops.WriteTagsSafe, so the
