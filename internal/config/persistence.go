@@ -1189,6 +1189,10 @@ func applySetting(key, value, typ string) error {
 			if b, err := strconv.ParseBool(value); err == nil {
 				c.CreateBackups = b
 			}
+		case "review_metadata_server_query":
+			if b, err := strconv.ParseBool(value); err == nil {
+				c.ReviewMetadataServerQuery = b
+			}
 		case "supported_extensions":
 			var extensions []string
 			if err := json.Unmarshal([]byte(value), &extensions); err == nil {
