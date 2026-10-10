@@ -1,10 +1,10 @@
 // file: internal/scheduler/tasks.go
-// version: 1.22.0
+// version: 1.22.1
 // guid: 9b4c7e21-a5f3-4d08-b2e6-3c8d1f7a0e54
 // last-edited: 2026-10-10
 
 // Package scheduler — task registrations.
-// All 23 registered tasks are defined here. Each task's TriggerFn and
+// Every registered task is defined here. Each task's TriggerFn and
 // IsEnabled read from SchedulerDeps (not *Server) so the scheduler package
 // remains independent of the server package.
 package scheduler
@@ -1143,7 +1143,9 @@ func (ts *TaskScheduler) registerAllTasks() {
 			return v2ScheduledOp(v2ID, "file-integrity-check"), nil
 		},
 		IsEnabled:              func() bool { return true },
-		GetInterval:            func() time.Duration { return 24 * time.Hour },
+		// 0 on purpose: window-only, like trash_cleanup. A positive interval would
+		// also put the task on the durable interval clock and run it outside the window.
+		GetInterval:            func() time.Duration { return 0 },
 		RunOnStart:             func() bool { return false },
 		RunInMaintenanceWindow: func() bool { return true },
 	})
@@ -1165,7 +1167,9 @@ func (ts *TaskScheduler) registerAllTasks() {
 			return v2ScheduledOp(v2ID, "orphan-book-files-cleanup"), nil
 		},
 		IsEnabled:              func() bool { return true },
-		GetInterval:            func() time.Duration { return 24 * time.Hour },
+		// 0 on purpose: window-only, like trash_cleanup. A positive interval would
+		// also put the task on the durable interval clock and run it outside the window.
+		GetInterval:            func() time.Duration { return 0 },
 		RunOnStart:             func() bool { return false },
 		RunInMaintenanceWindow: func() bool { return true },
 	})
