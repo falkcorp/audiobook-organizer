@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe_work_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 7a4c2e9d-1b6f-4d38-9e5a-c0f3b8d21a76
-// last-edited: 2026-09-12
+// last-edited: 2026-10-09
 
 package maintenance
 
@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/serverdecode"
 )
 
 // workFixture: seven listed ids with every transcription state the selector
@@ -282,6 +283,7 @@ func (d rootDeps) RootDir() string { return d.root }
 // library, the stats:transcribe aggregate says 250 with 300 skipped, and only
 // the 250 work books are written.
 func TestRunIntroTranscribe_DenominatorIsBooksNeedingWork(t *testing.T) {
+	t.Setenv(serverdecode.EnvVar, "1") // these tests drive the transcribe run itself, which is refused unless decoding is allowed
 	const transcribed, missing = 300, 250
 	ids := make([]string, 0, transcribed+missing)
 	books := map[string]*database.Book{}
@@ -367,6 +369,7 @@ func TestRunIntroTranscribe_DenominatorIsBooksNeedingWork(t *testing.T) {
 // A run with nothing to do still publishes its skip count and marks itself
 // done, so a monitor reading stats:transcribe never sees a run that vanished.
 func TestRunIntroTranscribe_NothingToDoStillPublishesStats(t *testing.T) {
+	t.Setenv(serverdecode.EnvVar, "1") // these tests drive the transcribe run itself, which is refused unless decoding is allowed
 	mock := &database.MockStore{
 		ListBookIDsFunc: func() ([]string, error) { return []string{"a"}, nil },
 		GetBookByIDFunc: func(id string) (*database.Book, error) {
@@ -390,6 +393,7 @@ func TestRunIntroTranscribe_NothingToDoStillPublishesStats(t *testing.T) {
 // A store that fails EVERY read must not turn into a successful "nothing to
 // transcribe" run: the run errors and the aggregate is never marked done.
 func TestRunIntroTranscribe_TotalStoreFailureIsAnError(t *testing.T) {
+	t.Setenv(serverdecode.EnvVar, "1") // these tests drive the transcribe run itself, which is refused unless decoding is allowed
 	mock := &database.MockStore{
 		ListBookIDsFunc: func() ([]string, error) { return []string{"a", "b", "c"}, nil },
 		GetBookByIDFunc: func(string) (*database.Book, error) { return nil, errors.New("pebble: closed") },
@@ -409,6 +413,7 @@ func TestRunIntroTranscribe_TotalStoreFailureIsAnError(t *testing.T) {
 // could read and the aggregate carries the unreadable count so the gap
 // between library size and total+skipped is explained where the monitor looks.
 func TestRunIntroTranscribe_PartialUnreadableIsPersisted(t *testing.T) {
+	t.Setenv(serverdecode.EnvVar, "1") // these tests drive the transcribe run itself, which is refused unless decoding is allowed
 	ids, mock := workFixture()
 	mock.UpdateBookFunc = func(_ string, b *database.Book) (*database.Book, error) { return b, nil }
 	store := &statsStore{MockStore: mock}
@@ -427,6 +432,7 @@ func TestRunIntroTranscribe_PartialUnreadableIsPersisted(t *testing.T) {
 // w = missing), checkpoint t2: exactly w2 w3 w4 are attempted in that order,
 // total 3, skipped 1 (t3 — books before the checkpoint are not counted).
 func TestRunIntroTranscribe_ResumeSelectsAfterCheckpointInFullList(t *testing.T) {
+	t.Setenv(serverdecode.EnvVar, "1") // these tests drive the transcribe run itself, which is refused unless decoding is allowed
 	ids := []string{"t1", "w1", "t2", "w2", "w3", "t3", "w4"}
 	newStore := func() (*statsStore, *[]string) {
 		writes := &[]string{}
@@ -483,6 +489,7 @@ func TestRunIntroTranscribe_ResumeSelectsAfterCheckpointInFullList(t *testing.T)
 // unreadable (deferred, so attempted+deferred still equals total) and one
 // gains a transcript (skipped, not attempted).
 func TestRunIntroTranscribe_PageTimeChangesAreCounted(t *testing.T) {
+	t.Setenv(serverdecode.EnvVar, "1") // these tests drive the transcribe run itself, which is refused unless decoding is allowed
 	ids := []string{"stale", "done-meanwhile", "fine"}
 	reads := map[string]int{}
 	var mu sync.Mutex
@@ -522,6 +529,7 @@ func TestRunIntroTranscribe_PageTimeChangesAreCounted(t *testing.T) {
 // the checkpoint in byte order, as GetAllBooksFullFrom does, instead of
 // restarting the whole library from the first book.
 func TestRunIntroTranscribe_ResumeAfterVanishedCheckpointSeeksToSuccessor(t *testing.T) {
+	t.Setenv(serverdecode.EnvVar, "1")      // these tests drive the transcribe run itself, which is refused unless decoding is allowed
 	ids := []string{"w1", "w3", "w5", "w7"} // byte order, as ListBookIDs returns
 	var (
 		mu     sync.Mutex

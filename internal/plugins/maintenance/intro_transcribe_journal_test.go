@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/intro_transcribe_journal_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 0b42d884-b844-4201-ba60-046bfb995928
-// last-edited: 2026-09-19
+// last-edited: 2026-10-09
 
 package maintenance
 
@@ -24,6 +24,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/serverdecode"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
 )
 
@@ -153,6 +154,7 @@ func (s writeCountingStore) ModifyBook(id string, fn func(*database.Book) error)
 // cache (the cache hit runs before the source-file stat, so no ffmpeg).
 func journalTestEnv(t *testing.T, fw *fakeWhisper, batchSize int) string {
 	t.Helper()
+	t.Setenv(serverdecode.EnvVar, "1") // these tests drive the transcribe run itself, which is refused unless decoding is allowed
 	cacheDir := t.TempDir()
 	orig := config.Snapshot()
 	config.Mutate(func(c *config.Config) {

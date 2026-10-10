@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/optimize.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: d4e5f6a7-b8c9-0123-4567-890123456789
-// last-edited: 2026-09-28
+// last-edited: 2026-10-09
 
 package maintenance
 
@@ -15,6 +15,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/childop"
+	"github.com/falkcorp/audiobook-organizer/internal/serverdecode"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -143,6 +144,26 @@ func (p *Plugin) runOptimize(ctx context.Context, _ json.RawMessage, reporter sd
 				)
 				_ = reporter.Log(slog.LevelInfo,
 					"Skipping acoustid-backfill: disabled by maintenance.acoustid_backfill")
+				continue
+			}
+			kept = append(kept, ch)
+		}
+		children = kept
+	}
+
+	// fingerprint-rescan decodes audio in-process, which is refused unless the host
+	// opted in (ALLOW_SERVER_DECODE). Drop the child up front so the sweep does not
+	// report one failed child on every run.
+	if !serverdecode.Allowed() {
+		kept := make([]childOp, 0, len(children))
+		for _, ch := range children {
+			if ch.defID == "acoustid.fingerprint-rescan" {
+				logging.Info(ctx, "maintenance.library-optimize: fingerprint-rescan-missing excluded",
+					"operation_id", opID,
+					"reason", serverdecode.EnvVar+" is not set",
+				)
+				_ = reporter.Log(slog.LevelInfo,
+					"Skipping fingerprint-rescan-missing: in-process audio decoding is not allowed on this server")
 				continue
 			}
 			kept = append(kept, ch)

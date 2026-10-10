@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/optimize_backfill_gate_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 8e3a1c96-5b70-4d2f-9a41-c7f0d6b28e53
-// last-edited: 2026-09-02
+// last-edited: 2026-10-09
 
 package maintenance
 
@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/serverdecode"
 )
 
 // optimizeGateDeps records which child ops the optimize sweep actually enqueues.
@@ -38,6 +39,7 @@ func TestOptimize_AcoustIDBackfillRespectsTheFlag(t *testing.T) {
 	run := func(t *testing.T, enabled bool) (*optimizeGateDeps, *fakeReporter) {
 		t.Helper()
 		config.AppConfig.Maintenance.AcoustIDBackfill = enabled
+		t.Setenv(serverdecode.EnvVar, "1") // the fingerprint-rescan child only runs when decoding is allowed
 		deps := &optimizeGateDeps{}
 		rep := &fakeReporter{}
 		if err := New(deps).runOptimize(context.Background(), nil, rep); err != nil {
@@ -94,4 +96,53 @@ func TestAcoustIDBackfillDefaultsOff(t *testing.T) {
 	if c.AcoustIDBackfill {
 		t.Fatal("zero value must be false")
 	}
+}
+
+// The fingerprint-rescan child decodes audio in-process, so without ALLOW_SERVER_DECODE
+// the sweep must drop it up front (and say so) rather than enqueue a child that is
+// certain to fail; with the variable set it still runs.
+func TestOptimize_FingerprintRescanChildFollowsServerDecodeSwitch(t *testing.T) {
+	prev := config.AppConfig.Maintenance.AcoustIDBackfill
+	t.Cleanup(func() { config.AppConfig.Maintenance.AcoustIDBackfill = prev })
+	config.AppConfig.Maintenance.AcoustIDBackfill = true
+
+	run := func(t *testing.T) (*optimizeGateDeps, *fakeReporter) {
+		t.Helper()
+		deps := &optimizeGateDeps{}
+		rep := &fakeReporter{}
+		if err := New(deps).runOptimize(context.Background(), nil, rep); err != nil {
+			t.Fatalf("runOptimize: %v", err)
+		}
+		return deps, rep
+	}
+
+	t.Run("unset excludes the child and announces it", func(t *testing.T) {
+		t.Setenv(serverdecode.EnvVar, "")
+		deps, rep := run(t)
+		if slices.Contains(deps.enqueued, "acoustid.fingerprint-rescan") {
+			t.Fatalf("fingerprint-rescan was enqueued with decoding not allowed: %v", deps.enqueued)
+		}
+		for _, want := range []string{"maintenance.temp-file-cleanup", "acoustid.scan", "acoustid.backfill"} {
+			if !slices.Contains(deps.enqueued, want) {
+				t.Errorf("%s should still run, got %v", want, deps.enqueued)
+			}
+		}
+		var announced bool
+		for _, msg := range rep.logs {
+			if strings.Contains(msg, "fingerprint-rescan-missing") && strings.Contains(msg, "Skipping") {
+				announced = true
+			}
+		}
+		if !announced {
+			t.Errorf("the exclusion must be reported to the operator, got logs %v", rep.logs)
+		}
+	})
+
+	t.Run("set includes the child", func(t *testing.T) {
+		t.Setenv(serverdecode.EnvVar, "1")
+		deps, _ := run(t)
+		if !slices.Contains(deps.enqueued, "acoustid.fingerprint-rescan") {
+			t.Fatalf("fingerprint-rescan must run when decoding is allowed, got %v", deps.enqueued)
+		}
+	})
 }

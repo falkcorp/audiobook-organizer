@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/extract_wav_clips.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: e1f2a3b4-c5d6-7890-abcd-ef1234567890
-// last-edited: 2026-09-01
+// last-edited: 2026-10-09
 
 package maintenance
 
@@ -22,6 +22,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/serverdecode"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -50,6 +51,9 @@ type extractWAVParams struct {
 }
 
 func (p *Plugin) runExtractWAVClips(ctx context.Context, rawParams json.RawMessage, reporter sdk.Reporter) error {
+	if err := serverdecode.Check("maintenance.extract-wav-clips"); err != nil {
+		return err
+	}
 	store := p.deps.OpsStore()
 	if store == nil {
 		return fmt.Errorf("database not initialized")

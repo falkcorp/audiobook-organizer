@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/optimize_watchdog_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5e1f8c3a-9b27-4d60-a4c8-3d6b2f9e7a15
-// last-edited: 2026-09-28
+// last-edited: 2026-10-09
 
 package maintenance
 
@@ -16,6 +16,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/childop"
+	"github.com/falkcorp/audiobook-organizer/internal/serverdecode"
 )
 
 // simClock is simulated wall time: every read of a child row is one minute.
@@ -135,6 +136,7 @@ func (r *gapReporter) maxGap() time.Duration {
 
 func runOptimizeSim(t *testing.T, d *followDeps) *gapReporter {
 	t.Helper()
+	t.Setenv(serverdecode.EnvVar, "1") // the sweep only has 4 children when decoding is allowed
 	prev := config.AppConfig.Maintenance.AcoustIDBackfill
 	config.AppConfig.Maintenance.AcoustIDBackfill = true
 	t.Cleanup(func() { config.AppConfig.Maintenance.AcoustIDBackfill = prev })

@@ -1,7 +1,7 @@
 // file: internal/plugins/acoustid/fingerprint_rescan.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: a7b8c9d0-e1f2-3456-def0-123456789abc
-// last-edited: 2026-08-30
+// last-edited: 2026-10-09
 
 package acoustid
 
@@ -20,6 +20,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
+	"github.com/falkcorp/audiobook-organizer/internal/serverdecode"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -70,6 +71,9 @@ func (p *Plugin) fingerprintRescanDef() sdk.OperationDef {
 }
 
 func (p *Plugin) runFingerprintRescan(ctx context.Context, params json.RawMessage, reporter sdk.Reporter) error {
+	if err := serverdecode.Check("acoustid.fingerprint-rescan"); err != nil {
+		return err
+	}
 	if p.store == nil {
 		return fmt.Errorf("database store not available")
 	}
