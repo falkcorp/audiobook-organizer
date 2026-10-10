@@ -1,11 +1,12 @@
 // file: internal/metadata/tag_properties.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6f3c9a27-4e1d-4b85-9c20-7a5e1d8b3f64
-// last-edited: 2026-09-14
+// last-edited: 2026-10-10
 
 package metadata
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -296,7 +297,9 @@ func WriteTagProperties(path string, values map[string]string) error {
 	if err != nil {
 		return fmt.Errorf("tag properties abs path: %w", err)
 	}
-	if err := writePropertiesWithTaglib(abs, tags); err != nil {
+	// A tag revert is a single-book edit, so it keeps a backup when
+	// create_backups is on.
+	if err := writePropertiesWithTaglib(context.Background(), abs, tags); err != nil {
 		return fmt.Errorf("write tag properties to %s: %w", path, err)
 	}
 	raw, err := readTagsWithTaglib(abs)

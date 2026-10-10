@@ -1,7 +1,7 @@
 // file: internal/maintenance/jobs/scan_composer_tags.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: d9e5f3c4-6a7b-8c9d-0e1f-2a3b4c5d6e7f
-// last-edited: 2026-09-14
+// last-edited: 2026-10-10
 
 package jobs
 
@@ -202,7 +202,9 @@ func (j *scanComposerTagsJob) Run(ctx context.Context, store maintenance.JobStor
 						Author: w.author, Narrator: w.narrator, WillWrite: willWrite,
 					}
 					if !dryRun && category != "ok" && willWrite != composer {
-						if writeErr := metadata.WriteSingleTag(w.filePath, "COMPOSER", willWrite); errors.Is(writeErr, tagger.ErrProtectedPathWrite) {
+						// A library-wide tag fix keeps no .bak-* sibling per
+						// file (owner decision D69, as for bulk write-back).
+						if writeErr := metadata.WriteSingleTagContext(tagger.WithoutBackup(ctx), w.filePath, "COMPOSER", willWrite); errors.Is(writeErr, tagger.ErrProtectedPathWrite) {
 							// Keep the category (what is wrong with the tag) and
 							// flag that the fix was not written because the file is
 							// protected. Overwriting the category lost the finding.

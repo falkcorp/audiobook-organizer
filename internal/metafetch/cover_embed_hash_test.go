@@ -1,12 +1,13 @@
 // file: internal/metafetch/cover_embed_hash_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4d8b2f60-1a97-4e3c-8c52-b6e9a0d7f314
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package metafetch
 
 import (
 	"bytes"
+	"context"
 	"image"
 	"image/color"
 	"image/png"
@@ -72,7 +73,7 @@ func TestEmbedCoverInBookFiles_RecordsNewFileHash(t *testing.T) {
 	}
 
 	svc := NewService(store)
-	svc.embedCoverInBookFiles(book, coverPath)
+	svc.embedCoverInBookFiles(context.Background(), book, coverPath)
 
 	after, err := filehash.BookFileHash(path)
 	if err != nil {
@@ -162,7 +163,7 @@ func TestEmbedCoverInBookFiles_RespectsEmbedCoverArt(t *testing.T) {
 				t.Fatalf("BookFileHash: %v", err)
 			}
 
-			NewService(store).embedCoverInBookFiles(book, coverPath)
+			NewService(store).embedCoverInBookFiles(context.Background(), book, coverPath)
 
 			after, err := filehash.BookFileHash(path)
 			if err != nil {

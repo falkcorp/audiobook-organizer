@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/write_back.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: d0e1f2a3-b4c5-6789-3456-901234567890
-// last-edited: 2026-09-12
+// last-edited: 2026-10-10
 
 package maintenance
 
@@ -9,9 +9,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"log/slog"
 	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -47,6 +49,10 @@ func (p *Plugin) bulkWriteBackDef() sdk.OperationDef {
 }
 
 func (p *Plugin) runBulkWriteBack(ctx context.Context, raw json.RawMessage, reporter sdk.Reporter) (retErr error) {
+	// Bulk write-back keeps no .bak-* sibling per file (owner decision D69):
+	// its safety net is the provenance ledger, and create_backups would double
+	// the library's footprint until the backup-cleanup op runs.
+	ctx = tagger.WithoutBackup(ctx)
 	var params BulkWriteBackParams
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &params); err != nil {
