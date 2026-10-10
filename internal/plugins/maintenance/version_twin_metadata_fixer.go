@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_twin_metadata_fixer.go
-// version: 1.5.1
+// version: 1.6.0
 // guid: 2f6c8e14-7b3a-4d59-9e02-c4a1b7d36e85
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package maintenance
 
@@ -446,7 +446,15 @@ func vtResumed(rd vtReaders, planned, fresh repairs.Row, opID string) (repairs.R
 		if !vtIsCopyOf(cur, src) {
 			return repairs.Row{}, false, nil
 		}
-		stamp := undo.MetadataCacheStamp(cur)
+		// The stamp of the row as the copy wrote it: a retitle of the
+		// primary since marks the row Stale in place, which changes its
+		// stamp (undo.MetadataCacheStamp), and the journal row of whichever
+		// op made the copy recorded the unmarked one. Journaling the
+		// unmarked stamp here also keeps the revert's compare-and-set strict:
+		// a row marked Stale since refuses as changed-since.
+		written := *cur
+		written.Stale, written.StaleQuestionFP = false, ""
+		stamp := undo.MetadataCacheStamp(&written)
 		// The cache row carries no op id, so an identical copy could be
 		// another op's (two apply ops of one plan). An un-reverted journal row
 		// of any op recording this copy means it is that op's, not this one's.

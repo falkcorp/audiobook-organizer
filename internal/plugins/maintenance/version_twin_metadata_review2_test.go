@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/version_twin_metadata_review2_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: d63428b5-a8b1-4678-86f0-28e71e7b90a9
-// last-edited: 2026-10-06
+// last-edited: 2026-10-10
 
 package maintenance
 
@@ -557,4 +557,38 @@ func TestVersionTwinFixer_Review5_UnbuiltIndexDoesNotMaskRefreshedRecord(t *test
 	require.Equal(t, repairs.OutcomeChangedSincePlan, res.Rows[0].Outcome)
 	require.Nil(t, l.get("p").MetadataReviewStatus)
 	require.Empty(t, dcStr(l.get("p").ASIN))
+}
+
+// The resume's journal lookup matches the copy as it was written. A retitle
+// of the primary after op A's copy marks the copied row Stale in place, which
+// changes its revert stamp (undo.MetadataCacheStamp); op B, run on the same
+// plan row afterwards, must still find op A's journal row and not take the
+// copy for its own.
+func TestVersionTwinFixer_StaleCopyIsNotResumedByAnotherOp(t *testing.T) {
+	l := newVTLib(t)
+	l.book("p", "gs3s", true, nil)
+	tid := l.book("t", "gs3s", false, nil)
+	l.putCache(tid, []metafetch.MetadataCandidate{vtSaga()}, metafetch.BatchSourceHash(tid, "Synthetic Saga", "Synthetic Author A"))
+	plan, _ := l.plan()
+	res := l.apply(plan, false, "gs3s")
+	require.Equal(t, 1, res.Applied, "op A: outcomes %v rows %+v", res.ByOutcome, res.Rows)
+
+	cur, err := l.st.GetMetadataCache(l.ids["p"])
+	require.NoError(t, err)
+	require.NotNil(t, cur)
+	cur.Stale, cur.StaleQuestionFP = true, cur.SearchFingerprint
+	require.NoError(t, l.st.PutMetadataCache(cur))
+
+	const opB = "op-version-twin-apply-stale-b"
+	series, err := l.st.GetAllSeries()
+	require.NoError(t, err)
+	deps := repairs.ApplyDeps{Guard: l.st, Tags: l.p.repairsGuardTags(), Series: repairs.SeriesNamesFrom(series), OpID: opB,
+		Writer: repairs.NewWriter(l.st, l.st, l.fixer.ID(), "bulk_update", "repairs-").WithJournal(l.st, l.st, opB)}
+	resB, err := repairs.RunApply(context.Background(), l.fixer, plan, "op-version-twin-plan", []string{"gs3s"}, false, deps,
+		&repairsOpReporter{id: opB})
+	require.NoError(t, err)
+	require.Zero(t, resB.Applied, "op B: outcomes %v rows %+v", resB.ByOutcome, resB.Rows)
+	changes, err := l.st.GetOperationChanges(opB)
+	require.NoError(t, err)
+	require.Empty(t, changes, "op B journaled op A's copy")
 }
