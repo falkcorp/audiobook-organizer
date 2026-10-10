@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_filter_index.go
-// version: 1.3.1
+// version: 1.3.2
 // guid: 419286ad-e5d1-42f3-8085-b930b8834c0b
-// last-edited: 2026-09-26
+// last-edited: 2026-10-09
 
 // Pebble activity store — secondary indexes for the source, type and level
 // filters, the query planner that uses them, and the backfill that builds them
@@ -671,7 +671,7 @@ type ActivityQueryResult struct {
 // answer. Optional, like ActivityCounter, so a backend whose Query is always
 // complete is not forced to implement it; activity.Service falls back to Query
 // with Partial=false. Every activity-store WRAPPER forwards it (see
-// MigratingActivityStore and InstrumentedActivityStorer) — a wrapper that did
+// MigratingActivityStore) — a wrapper that did
 // not would hide the flag with no error.
 type ActivityPartialQuerier interface {
 	QueryWithPartial(ctx context.Context, f ActivityFilter) (ActivityQueryResult, error)

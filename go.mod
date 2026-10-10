@@ -11,11 +11,11 @@ require (
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/gin-contrib/gzip v1.2.8
 	github.com/gin-gonic/gin v1.12.0
+	github.com/go-playground/validator/v10 v10.30.5
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/hashicorp/go-memdb v1.3.5
 	github.com/klauspost/compress v1.20.1
 	github.com/lithammer/fuzzysearch v1.1.8
-	github.com/nutsdb/nutsdb v1.1.0
 	github.com/oklog/ulid/v2 v2.1.2
 	github.com/openai/openai-go/v3 v3.71.1
 	github.com/philippgille/chromem-go v0.7.0
@@ -56,8 +56,6 @@ require (
 	github.com/RaduBerinde/axisds v0.1.0 // indirect
 	github.com/RaduBerinde/btreemap v0.0.0-20260105202824-d3184786f603 // indirect
 	github.com/RoaringBitmap/roaring/v2 v2.26.0 // indirect
-	github.com/antlabs/stl v0.0.2 // indirect
-	github.com/antlabs/timer v0.1.4 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bits-and-blooms/bitset v1.25.0 // indirect
 	github.com/blevesearch/bleve_index_api v1.4.1 // indirect
@@ -78,7 +76,6 @@ require (
 	github.com/blevesearch/zapx/v15 v15.4.3 // indirect
 	github.com/blevesearch/zapx/v16 v16.3.4 // indirect
 	github.com/blevesearch/zapx/v17 v17.2.3 // indirect
-	github.com/bwmarrin/snowflake v0.3.0 // indirect
 	github.com/bytedance/gopkg v0.1.4 // indirect
 	github.com/bytedance/sonic v1.15.4 // indirect
 	github.com/bytedance/sonic/loader v0.5.2 // indirect
@@ -94,7 +91,6 @@ require (
 	github.com/cockroachdb/tokenbucket v0.0.0-20250429170803-42689b6311bb // indirect
 	github.com/coder/websocket v1.8.15 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/edsrzf/mmap-go v1.2.0 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.15 // indirect
 	github.com/getsentry/sentry-go v0.49.0 // indirect
 	github.com/gin-contrib/sse v1.1.2 // indirect
@@ -103,11 +99,9 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-playground/locales v0.14.2 // indirect
 	github.com/go-playground/universal-translator v0.18.2 // indirect
-	github.com/go-playground/validator/v10 v10.30.5 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/goccy/go-json v0.11.2 // indirect
 	github.com/goccy/go-yaml v1.19.2 // indirect
-	github.com/gofrs/flock v0.13.1 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/snappy v1.0.0 // indirect
 	github.com/google/renameio v1.0.1 // indirect
@@ -143,7 +137,6 @@ require (
 	github.com/stretchr/objx v0.5.3 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect
 	github.com/tetratelabs/wazero v1.12.0 // indirect
-	github.com/tidwall/btree v1.8.1 // indirect
 	github.com/tidwall/gjson v1.19.0 // indirect
 	github.com/tidwall/match v1.2.0 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
@@ -152,7 +145,6 @@ require (
 	github.com/ugorji/go/codec v1.3.2 // indirect
 	github.com/viterin/partial v1.1.0 // indirect
 	github.com/viterin/vek v0.4.3 // indirect
-	github.com/xujiajun/utils v0.0.0-20220904132955-5f7c5b914235 // indirect
 	go.etcd.io/bbolt v1.5.0 // indirect
 	go.mongodb.org/mongo-driver/v2 v2.9.1 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect

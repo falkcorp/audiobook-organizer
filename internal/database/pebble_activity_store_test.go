@@ -1,23 +1,21 @@
 // file: internal/database/pebble_activity_store_test.go
-// version: 1.4.1
+// version: 1.4.2
 // guid: c9d0e1f2-a3b4-0010-3456-000000000010
-// last-edited: 2026-10-03
+// last-edited: 2026-10-09
 
 // Package database — parity test suite for PebbleActivityStore.
 //
 // WHY a separate test file:
 //   - The existing activity_store_test.go and activity_compact_test.go test the SQLite
-//     ActivityStore.  The NutsDB variant is tested in activity_compact_test.go (see
-//     TestNutsActivityStore_RecompactDigests).
+//     ActivityStore; activity_compact_test.go also runs against PebbleActivityStore.
 //   - This file runs the SAME behavioral scenarios over PebbleActivityStore so any
 //     regression in the new backend is caught at the same granularity as the others.
-//   - "Parity gate" = every test here must pass, matching the Nuts/SQL test names.
+//   - "Parity gate" = every test here must pass, matching the SQL test names.
 package database
 
 import (
 	"context"
 	"encoding/json"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -567,181 +565,4 @@ func TestPebbleActivityStore_Close_Noop(t *testing.T) {
 	require.NoError(t, s.Close())
 	// Close must be idempotent.
 	require.NoError(t, s.Close())
-}
-
-// ── dual-write: entry lands in both backends ──────────────────────────────────
-
-// TestDualWriteActivityStore_WritesReplicated verifies that Record writes to both
-// backends (NutsDB and Pebble) so a query on either returns the entry.
-func TestDualWriteActivityStore_WritesReplicated(t *testing.T) {
-	nutsStore := newTestNutsActivityStore(t)
-	pebbleStore := newTestPebbleActivityStore(t)
-
-	// Start in read-from-nuts mode.
-	dual := NewDualWriteActivityStore(nutsStore, pebbleStore, false)
-
-	entry := ActivityEntry{
-		Tier:    "change",
-		Type:    "tag_write",
-		Level:   "info",
-		Source:  "dual-write-test",
-		Summary: "dual write test entry",
-	}
-	id, err := dual.Record(entry)
-	require.NoError(t, err)
-	assert.Greater(t, id, int64(0))
-
-	// Query from NutsDB (primary when ReadFromPebble=false).
-	resNuts, totalNuts, err := dual.Query(context.Background(), ActivityFilter{Limit: 10})
-	require.NoError(t, err)
-	assert.Equal(t, 1, totalNuts)
-	assert.Equal(t, "dual-write-test", resNuts[0].Source)
-
-	// Query Pebble directly to confirm replication.
-	resPebble, totalPebble, err := pebbleStore.Query(context.Background(), ActivityFilter{Limit: 10})
-	require.NoError(t, err)
-	assert.Equal(t, 1, totalPebble, "entry must also land in Pebble")
-	assert.Equal(t, "dual-write-test", resPebble[0].Source)
-
-	// Flip to read-from-pebble and verify reads come from Pebble.
-	dual.ReadFromPebble = true
-	resAfterFlip, totalAfterFlip, err := dual.Query(context.Background(), ActivityFilter{Limit: 10})
-	require.NoError(t, err)
-	assert.Equal(t, 1, totalAfterFlip)
-	assert.Equal(t, "dual-write-test", resAfterFlip[0].Source)
-}
-
-// ── backfill: sentinel check ──────────────────────────────────────────────────
-
-func TestIsActivityPebbleBackfillDone_FalseBeforeFlag(t *testing.T) {
-	dir := t.TempDir()
-	db, err := pebble.Open(filepath.Join(dir, "test.pebble"), &pebble.Options{})
-	require.NoError(t, err)
-	defer db.Close()
-
-	assert.False(t, IsActivityPebbleBackfillDone(db))
-}
-
-func TestIsActivityPebbleBackfillDone_TrueAfterFlag(t *testing.T) {
-	dir := t.TempDir()
-	db, err := pebble.Open(filepath.Join(dir, "test.pebble"), &pebble.Options{})
-	require.NoError(t, err)
-	defer db.Close()
-
-	require.NoError(t, db.Set([]byte(ActivityPebbleBackfillKey), []byte("2026-01-01"), pebble.Sync))
-	assert.True(t, IsActivityPebbleBackfillDone(db))
-}
-
-// ── backfill: dry-run counts ──────────────────────────────────────────────────
-
-func TestBackfillNutsActivityToPebble_DryRun(t *testing.T) {
-	nutsStore := newTestNutsActivityStore(t)
-	pebbleDir := t.TempDir()
-	db, err := pebble.Open(filepath.Join(pebbleDir, "test.pebble"), &pebble.Options{})
-	require.NoError(t, err)
-	defer db.Close()
-	pebbleStore := NewPebbleActivityStore(db)
-
-	// Write 5 entries across 3 tiers to NutsDB.
-	for _, tier := range []string{"change", "debug", "audit"} {
-		for range 1 {
-			_, err := nutsStore.Record(ActivityEntry{
-				Tier:    tier,
-				Type:    "test",
-				Level:   "info",
-				Source:  "backfill-test",
-				Summary: "test " + tier,
-			})
-			require.NoError(t, err)
-		}
-	}
-	// Also add 2 more to change.
-	for range 2 {
-		_, err := nutsStore.Record(ActivityEntry{
-			Tier: "change", Type: "extra", Level: "info",
-			Source: "backfill-test", Summary: "extra",
-		})
-		require.NoError(t, err)
-	}
-
-	res, err := BackfillNutsActivityToPebble(context.Background(), nutsStore, pebbleStore, true)
-	require.NoError(t, err)
-	assert.True(t, res.DryRun)
-	assert.False(t, res.AlreadyDone)
-	assert.Equal(t, 5, res.EntriesCopied, "dry-run should count 5 entries")
-
-	// Confirm Pebble is still empty (dry-run).
-	_, total, err := pebbleStore.Query(context.Background(), ActivityFilter{Limit: 50})
-	require.NoError(t, err)
-	assert.Equal(t, 0, total, "dry-run must not write to Pebble")
-
-	// Confirm sentinel NOT written.
-	assert.False(t, IsActivityPebbleBackfillDone(db))
-}
-
-// ── backfill: apply — copies all entries and writes sentinel ─────────────────
-
-func TestBackfillNutsActivityToPebble_Apply(t *testing.T) {
-	nutsStore := newTestNutsActivityStore(t)
-	pebbleDir := t.TempDir()
-	db, err := pebble.Open(filepath.Join(pebbleDir, "test.pebble"), &pebble.Options{})
-	require.NoError(t, err)
-	defer db.Close()
-	pebbleStore := NewPebbleActivityStore(db)
-
-	// Write 3 entries to NutsDB.
-	for range 3 {
-		_, err := nutsStore.Record(ActivityEntry{
-			Tier:    "change",
-			Type:    "test",
-			Level:   "info",
-			Source:  "backfill-apply-test",
-			Summary: "entry",
-			BookID:  "book-99",
-		})
-		require.NoError(t, err)
-	}
-
-	res, err := BackfillNutsActivityToPebble(context.Background(), nutsStore, pebbleStore, false)
-	require.NoError(t, err)
-	assert.False(t, res.DryRun)
-	assert.False(t, res.AlreadyDone)
-	assert.Equal(t, 3, res.EntriesCopied)
-
-	// Sentinel must be set.
-	assert.True(t, IsActivityPebbleBackfillDone(db))
-
-	// Pebble must have the entries.
-	_, total, err := pebbleStore.Query(context.Background(), ActivityFilter{Limit: 50})
-	require.NoError(t, err)
-	assert.Equal(t, 3, total, "Pebble must have all 3 copied entries")
-}
-
-// ── backfill: idempotent after sentinel ───────────────────────────────────────
-
-func TestBackfillNutsActivityToPebble_Idempotent(t *testing.T) {
-	nutsStore := newTestNutsActivityStore(t)
-	pebbleDir := t.TempDir()
-	db, err := pebble.Open(filepath.Join(pebbleDir, "test.pebble"), &pebble.Options{})
-	require.NoError(t, err)
-	defer db.Close()
-	pebbleStore := NewPebbleActivityStore(db)
-
-	_, err = nutsStore.Record(ActivityEntry{
-		Tier: "change", Type: "test", Level: "info",
-		Source: "sentinel-test", Summary: "one entry",
-	})
-	require.NoError(t, err)
-
-	// First run.
-	r1, err := BackfillNutsActivityToPebble(context.Background(), nutsStore, pebbleStore, false)
-	require.NoError(t, err)
-	assert.Equal(t, 1, r1.EntriesCopied)
-	assert.True(t, IsActivityPebbleBackfillDone(db))
-
-	// Second run — should return AlreadyDone=true with 0 copies.
-	r2, err := BackfillNutsActivityToPebble(context.Background(), nutsStore, pebbleStore, false)
-	require.NoError(t, err)
-	assert.True(t, r2.AlreadyDone, "second run must short-circuit on sentinel")
-	assert.Equal(t, 0, r2.EntriesCopied)
 }

@@ -1,7 +1,7 @@
 // file: internal/database/activity_tag_aliases_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 9e4a7c12-5f38-4d6b-b0e1-3a8d2c7f6b95
-// last-edited: 2026-09-26
+// last-edited: 2026-10-09
 
 package database
 
@@ -112,13 +112,6 @@ func assertTagAliasQueries(t *testing.T, s typeAliasActivityStore) {
 	_, total, err = s.Query(ctx, ActivityFilter{TagAliases: aliases, Limit: 50})
 	require.NoError(t, err)
 	assert.Equal(t, 7, total)
-}
-
-func TestActivityTagAliases_Nuts(t *testing.T) {
-	s := newTestNutsActivityStore(t)
-	seedTagAliasRows(t, s)
-	assertTagAliasQueries(t, s)
-	assertExcludeTagAliasQueries(t, s)
 }
 
 func TestActivityTagAliases_SQL(t *testing.T) {

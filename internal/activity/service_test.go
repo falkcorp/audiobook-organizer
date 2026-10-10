@@ -1,10 +1,10 @@
 // file: internal/activity/service_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-09-11
+// last-edited: 2026-10-09
 
-// NOTE(fable5 T022): Ported from SQLite ActivityStore to NutsActivityStore.
-// Tier names updated to match NutsActivityStore's supported tiers
+// NOTE(fable5 T022): Ported from SQLite ActivityStore to the Pebble activity
+// store. Tier names match its supported tiers
 // (change/debug/audit/info/batch/system/digest).
 
 package activity
@@ -20,18 +20,14 @@ import (
 )
 
 func TestService_RecordAndQuery(t *testing.T) {
-	dir := t.TempDir()
-
-	store, err := database.NewNutsActivityStore(dir)
-	require.NoError(t, err)
-	defer store.Close()
+	store := newTestPebbleActivityStore(t)
 
 	svc := NewService(store)
 	require.NotNil(t, svc)
 	assert.Equal(t, store, svc.Store())
 
 	// Record two entries with different tiers.
-	err = svc.Record(database.ActivityEntry{
+	err := svc.Record(database.ActivityEntry{
 		Tier:    "change",
 		Type:    "tag_write",
 		Level:   "info",

@@ -10,10 +10,6 @@ github.com/RoaringBitmap/roaring/v2 v2.26.0 h1:K30ZxF4vZcIKvJsbmgfiep2K64f+dILJq
 github.com/RoaringBitmap/roaring/v2 v2.26.0/go.mod h1:BZufmFbox589n3j5eOmyTaLSGXbRLc2LmQvjKjzSEGU=
 github.com/aclements/go-perfevent v0.0.0-20240301234650-f7843625020f h1:JjxwchlOepwsUWcQwD2mLUAGE9aCp0/ehy6yCHFBOvo=
 github.com/aclements/go-perfevent v0.0.0-20240301234650-f7843625020f/go.mod h1:tMDTce/yLLN/SK8gMOxQfnyeMeCg8KGzp0D1cbECEeo=
-github.com/antlabs/stl v0.0.2 h1:sna1AXR5yIkNE9lWhCcKbheFJSVfCa3vugnGyakI79s=
-github.com/antlabs/stl v0.0.2/go.mod h1:kKrO4xrn9cfS1mJVo+/BqePZjAYMXqD0amGF2Ouq7ac=
-github.com/antlabs/timer v0.1.4 h1:MHdE00MDnNfhJCmqSOdLXs35uGNwfkMwfbynxrGmQ1c=
-github.com/antlabs/timer v0.1.4/go.mod h1:mpw4zlD5KVjstEyUDp43DGLWsY076Mdo4bS78NTseRE=
 github.com/beorn7/perks v1.0.1 h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=
 github.com/beorn7/perks v1.0.1/go.mod h1:G2ZrVWU2WbWT9wwq4/hrbKbnv/1ERSJQ0ibhJ6rlkpw=
 github.com/bits-and-blooms/bitset v1.25.0 h1:0Ro0qF4abCkM6SqWPVj29sFhAbMPAZpaDD7xhJ10beM=
@@ -56,8 +52,6 @@ github.com/blevesearch/zapx/v16 v16.3.4 h1:hDAqA8qusZTNbPEL7//w5P65UZ2de6yhSeUaT
 github.com/blevesearch/zapx/v16 v16.3.4/go.mod h1:zqkPPqs9GS9FzVWzCO3Wf1X044yWAV17+4zb+FTiEHg=
 github.com/blevesearch/zapx/v17 v17.2.3 h1:UYYJPAt5b2tVxldx5h0jmv23RMsg8/UZKFVya7v92po=
 github.com/blevesearch/zapx/v17 v17.2.3/go.mod h1:r7mb4QWbDQSkbAnOjCb9iCfkcrzajB4yBdJpuBIo/fE=
-github.com/bwmarrin/snowflake v0.3.0 h1:xm67bEhkKh6ij1790JB83OujPR5CzNe8QuQqAgISZN0=
-github.com/bwmarrin/snowflake v0.3.0/go.mod h1:NdZxfVWX+oR6y2K0o6qAYv6gIOP9rjG0/E9WsDpxqwE=
 github.com/bytedance/gopkg v0.1.4 h1:oZnQwnX82KAIWb7033bEwtxvTqXcYMxDBaQxo5JJHWM=
 github.com/bytedance/gopkg v0.1.4/go.mod h1:v1zWfPm21Fb+OsyXN2VAHdL6TBb2L88anLQgdyje6R4=
 github.com/bytedance/sonic v1.15.4 h1:FgtV/4aBHpla9AxuMpuuzVUpa/Cf3izufkxNmnEzdI8=
@@ -106,8 +100,6 @@ github.com/dhowden/tag v0.0.0-20240417053706-3d75831295e8 h1:OtSeLS5y0Uy01jaKK4m
 github.com/dhowden/tag v0.0.0-20240417053706-3d75831295e8/go.mod h1:apkPC/CR3s48O2D7Y++n1XWEpgPNNCjXYga3PPbJe2E=
 github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkpeCY=
 github.com/dustin/go-humanize v1.0.1/go.mod h1:Mu1zIs6XwVuF/gI1OepvI0qD18qycQx+mFykh5fBlto=
-github.com/edsrzf/mmap-go v1.2.0 h1:hXLYlkbaPzt1SaQk+anYwKSRNhufIDCchSPkUD6dD84=
-github.com/edsrzf/mmap-go v1.2.0/go.mod h1:19H/e8pUPLicwkyNgOykDXkJ9F0MHE+Z52B8EIth78Q=
 github.com/frankban/quicktest v1.14.6 h1:7Xjx+VpznH+oBnejlPUj8oUpdxnVs4f8XU8WnHkI4W8=
 github.com/frankban/quicktest v1.14.6/go.mod h1:4ptaffx2x8+WTWXmUCuVU6aPUX1/Mz7zb5vbUoiM6w0=
 github.com/fsnotify/fsnotify v1.10.1 h1:b0/UzAf9yR5rhf3RPm9gf3ehBPpf0oZKIjtpKrx59Ho=
@@ -147,8 +139,6 @@ github.com/goccy/go-json v0.11.2 h1:jdZv93Tt4ioR8yW1CoNsvSxrcZlCXAUU1aZXN7gpXUA=
 github.com/goccy/go-json v0.11.2/go.mod h1:3NdmfEkZlB7YI5UFw/qdFKq8XN1aiWR0YyRPWZNQltY=
 github.com/goccy/go-yaml v1.19.2 h1:PmFC1S6h8ljIz6gMRBopkjP1TVT7xuwrButHID66PoM=
 github.com/goccy/go-yaml v1.19.2/go.mod h1:XBurs7gK8ATbW4ZPGKgcbrY1Br56PdM69F7LkFRi1kA=
-github.com/gofrs/flock v0.13.1 h1:jjREztyBeSKBZYAC+mgc1laB+xsgy4kYMf3FbKF2UBo=
-github.com/gofrs/flock v0.13.1/go.mod h1:sf4BFiHwnvgxa25DlQoDqXQnwRMEOwqxRq37P6MzzmE=
 github.com/gogo/protobuf v1.3.2 h1:Ov1cvc58UF3b5XjBnZv7+opcTcQFZebYjWzi34vdm4Q=
 github.com/gogo/protobuf v1.3.2/go.mod h1:P1XiOD3dCwIKUDQYPy72D8LYyHL2YPYrpS2s69NZV8Q=
 github.com/golang-jwt/jwt/v5 v5.3.1 h1:kYf81DTWFe7t+1VvL7eS+jKFVWaUnK9cB1qbwn63YCY=
@@ -216,8 +206,6 @@ github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 h1:C3w9PqII01/Oq
 github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822/go.mod h1:+n7T8mK8HuQTcFwEeznm/DIxMOiR9yIdICNftLE1DvQ=
 github.com/ncruces/go-strftime v1.0.0 h1:HMFp8mLCTPp341M/ZnA4qaf7ZlsbTc+miZjCLOFAw7w=
 github.com/ncruces/go-strftime v1.0.0/go.mod h1:Fwc5htZGVVkseilnfgOVb9mKy6w1naJmn9CehxcKcls=
-github.com/nutsdb/nutsdb v1.1.0 h1:fNGFzBHGqF2mB5BF8Qk8W94c3/ZzwdCdKAH7azwx70Y=
-github.com/nutsdb/nutsdb v1.1.0/go.mod h1:aKCtgSprZf2Mp1dIQD00Iya3DttoTErSSOnRx5ZtpAs=
 github.com/oklog/ulid/v2 v2.1.2 h1:IEclFb9JNvzYA6MW2SCxbLzcHTVsfqm3PrqGQJH5zec=
 github.com/oklog/ulid/v2 v2.1.2/go.mod h1:rcEKHmBBKfef9DhnvX7y1HZBYxjXb0cP5ExxNsTT1QQ=
 github.com/openai/openai-go/v3 v3.71.1 h1:s+gWLEUvnV3sZqtZ+mlWZ3ePTtfuIV5EBY+fsnb8Njo=
@@ -287,8 +275,6 @@ github.com/subosito/gotenv v1.6.0 h1:9NlTDc1FTs4qu0DDq7AEtTPNw6SVm7uBMsUCUjABIf8
 github.com/subosito/gotenv v1.6.0/go.mod h1:Dk4QP5c2W3ibzajGcXpNraDfq2IrhjMIvMSWPKKo0FU=
 github.com/tetratelabs/wazero v1.12.0 h1:DuWcpNu/FzgEXgGBDp8J1Spc+CWOvvtvVyjKlaZopYU=
 github.com/tetratelabs/wazero v1.12.0/go.mod h1:LvKtzl2RqO4gyF27BiXU+nKAjcV8f38U+kP/q2vgxh0=
-github.com/tidwall/btree v1.8.1 h1:27ehoXvm5AG/g+1VxLS1SD3vRhp/H7LuEfwNvddEdmA=
-github.com/tidwall/btree v1.8.1/go.mod h1:jBbTdUWhSZClZWoDg54VnvV7/54modSOzDN7VXftj1A=
 github.com/tidwall/gjson v1.14.2/go.mod h1:/wbyibRr2FHMks5tjHJ5F8dMZh3AcwJEMf5vlfC0lxk=
 github.com/tidwall/gjson v1.19.0 h1:xwxm7n691Uf3u5OFjzngavjGTh55KX5q/9w9xHW88JU=
 github.com/tidwall/gjson v1.19.0/go.mod h1:V37/opeE/JbLUOfH0QTXiNez2l0RUjYUhpT4szFQAfc=
@@ -308,8 +294,6 @@ github.com/viterin/partial v1.1.0 h1:iH1l1xqBlapXsYzADS1dcbizg3iQUKTU1rbwkHv/80E
 github.com/viterin/partial v1.1.0/go.mod h1:oKGAo7/wylWkJTLrWX8n+f4aDPtQMQ6VG4dd2qur5QA=
 github.com/viterin/vek v0.4.3 h1:cogdlNjd6EJYtNbmTN0lJCey2htrfSo1AHWpc6DVncQ=
 github.com/viterin/vek v0.4.3/go.mod h1:A4JRAe8OvbhdzBL5ofzjBS0J29FyUrf95tQogvtHHUc=
-github.com/xujiajun/utils v0.0.0-20220904132955-5f7c5b914235 h1:w0si+uee0iAaCJO9q86T6yrhdadgcsoNuh47LrUykzg=
-github.com/xujiajun/utils v0.0.0-20220904132955-5f7c5b914235/go.mod h1:MR4+0R6A9NS5IABnIM3384FfOq8QFVnm7WDrBOhIaMU=
 github.com/yuin/goldmark v1.1.27/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
 github.com/yuin/goldmark v1.2.1/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
 github.com/yuin/goldmark v1.4.13/go.mod h1:6yULJ656Px+3vBD8DxQVa3kxgyrAnzto9xy5taEt/CY=

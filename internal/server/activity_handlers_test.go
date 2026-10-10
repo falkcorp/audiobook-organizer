@@ -1,11 +1,11 @@
 // file: internal/server/activity_handlers_test.go
-// version: 5.3.0
+// version: 5.3.1
 // guid: d4e5f6a7-b8c9-0123-defa-234567890123
-// last-edited: 2026-09-10
+// last-edited: 2026-10-09
 
 // Updated for Phase 2 handler extraction: tests now use handlers.ActivityHandler
 // directly instead of *Server methods.
-// NOTE(fable5 T022): Ported NewSQLiteActivityStore → NewNutsActivityStore.
+// NOTE(fable5 T022): Ported NewSQLiteActivityStore → the Pebble activity store.
 
 package server
 
@@ -20,6 +20,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/pebble/v2"
+	"github.com/cockroachdb/pebble/v2/vfs"
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
@@ -28,16 +30,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// setupActivityTestRouter creates a temporary NutsActivityStore, wraps it in an
+// setupActivityTestRouter creates an in-memory PebbleActivityStore, wraps it in an
 // ActivityService, mounts the ListActivity handler on a minimal gin router,
 // and returns the router plus a cleanup function.
 func setupActivityTestRouter(t *testing.T) (*gin.Engine, func()) {
 	t.Helper()
 
-	dir := t.TempDir()
-
-	store, err := database.NewNutsActivityStore(dir)
-	require.NoError(t, err)
+	store := newTestPebbleActivityStore(t)
 
 	svc := activity.NewService(store)
 
@@ -83,10 +82,7 @@ func TestListActivity_Empty(t *testing.T) {
 // verifies that filtering by tier=change returns only the one matching entry.
 func TestListActivity_WithFilters(t *testing.T) {
 	// Use a fresh store so we can seed specific data.
-	dir := t.TempDir()
-	store, err := database.NewNutsActivityStore(dir)
-	require.NoError(t, err)
-	defer store.Close()
+	store := newTestPebbleActivityStore(t)
 
 	svc := activity.NewService(store)
 	gin.SetMode(gin.TestMode)
@@ -96,7 +92,7 @@ func TestListActivity_WithFilters(t *testing.T) {
 
 	now := time.Now().UTC()
 
-	err = svc.Record(database.ActivityEntry{
+	err := svc.Record(database.ActivityEntry{
 		Tier:      "change",
 		Type:      "metadata_apply",
 		Level:     "info",
@@ -140,10 +136,7 @@ func TestListActivity_WithFilters(t *testing.T) {
 // TestListActivity_SearchParam verifies that the search query param filters
 // entries by substring match on summary.
 func TestListActivity_SearchParam(t *testing.T) {
-	dir := t.TempDir()
-	store, err := database.NewNutsActivityStore(dir)
-	require.NoError(t, err)
-	defer store.Close()
+	store := newTestPebbleActivityStore(t)
 
 	svc := activity.NewService(store)
 	gin.SetMode(gin.TestMode)
@@ -191,10 +184,7 @@ func TestListActivity_SearchParam(t *testing.T) {
 // TestListActivitySources verifies that the sources endpoint returns distinct
 // source names with counts, ordered by count descending.
 func TestListActivitySources(t *testing.T) {
-	dir := t.TempDir()
-	store, err := database.NewNutsActivityStore(dir)
-	require.NoError(t, err)
-	defer store.Close()
+	store := newTestPebbleActivityStore(t)
 
 	svc := activity.NewService(store)
 	gin.SetMode(gin.TestMode)
@@ -260,10 +250,7 @@ func TestListOperationActivity_FallbackToOpLogs(t *testing.T) {
 	defer sqlStore.Close()
 
 	// Activity service backed by a fresh empty store — no entries for the op.
-	actDir := t.TempDir()
-	actStore, err := database.NewNutsActivityStore(actDir)
-	require.NoError(t, err)
-	defer actStore.Close()
+	actStore := newTestPebbleActivityStore(t)
 	actSvc := activity.NewService(actStore)
 
 	opID := "test-fallback-op-001"
@@ -310,10 +297,7 @@ func TestListOperationActivity_FallbackToOpLogs(t *testing.T) {
 }
 
 func TestListOperationActivity_WithRecordedEntries(t *testing.T) {
-	dir := t.TempDir()
-	store, err := database.NewNutsActivityStore(dir)
-	require.NoError(t, err)
-	defer store.Close()
+	store := newTestPebbleActivityStore(t)
 
 	svc := activity.NewService(store)
 	gin.SetMode(gin.TestMode)
@@ -410,9 +394,7 @@ func mergedActivityFixture(t *testing.T) (*gin.Engine, string, string, time.Time
 	require.NoError(t, database.RunMigrations(mainStore))
 	t.Cleanup(func() { mainStore.Close() })
 
-	actStore, err := database.NewNutsActivityStore(t.TempDir())
-	require.NoError(t, err)
-	t.Cleanup(func() { actStore.Close() })
+	actStore := newTestPebbleActivityStore(t)
 	actSvc := activity.NewService(actStore)
 
 	opA, opB := "merged-op-a", "merged-op-b"
@@ -514,4 +496,14 @@ func TestListMergedOperationActivity_BadInput(t *testing.T) {
 	assert.Equal(t, []string{opA}, resp.Data.OperationIDs)
 	assert.Len(t, resp.Data.Entries, 2)
 	assert.Equal(t, 2, resp.Data.Total)
+}
+
+// newTestPebbleActivityStore opens an in-memory PebbleDB and returns a
+// PebbleActivityStore on it; the database is closed when the test ends.
+func newTestPebbleActivityStore(t *testing.T) *database.PebbleActivityStore {
+	t.Helper()
+	db, err := pebble.Open("test.pebble", &pebble.Options{FS: vfs.NewMem()})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	return database.NewPebbleActivityStore(db)
 }

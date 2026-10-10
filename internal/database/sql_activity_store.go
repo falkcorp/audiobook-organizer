@@ -1,7 +1,7 @@
 // file: internal/database/sql_activity_store.go
-// version: 1.19.1
+// version: 1.19.2
 // guid: 2c9a7e14-8b30-4d6f-a1e2-5f7b9c0d3e28
-// last-edited: 2026-10-04
+// last-edited: 2026-10-09
 
 // Package database — backend-agnostic SQL activity store.
 //
@@ -588,7 +588,7 @@ func (s *SQLActivityStore) buildFilter(f ActivityFilter) (string, []any) {
 	}
 
 	// Search is a case-sensitive substring on summary. The ActivityFilter.Search
-	// field doc says "LIKE %search%", but the Pebble/Nuts matchesFilter uses
+	// field doc says "LIKE %search%", but the Pebble matchesFilter uses
 	// strings.Contains (case-sensitive). instr() matches that behaviour exactly;
 	// the divergence from the field comment is deliberate and preserves prod
 	// results.

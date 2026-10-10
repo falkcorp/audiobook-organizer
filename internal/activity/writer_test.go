@@ -1,7 +1,7 @@
 // file: internal/activity/writer_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: f7e8d9c0-b1a2-4e3f-9c8d-7b6a5e4f3d2c
-// last-edited: 2026-08-11
+// last-edited: 2026-10-09
 
 package activity
 
@@ -12,6 +12,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/cockroachdb/pebble/v2"
+	"github.com/cockroachdb/pebble/v2/vfs"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
@@ -90,13 +93,7 @@ func TestParseLogLine(t *testing.T) {
 }
 
 func TestWriter_CapturesLogs(t *testing.T) {
-	dir := t.TempDir()
-
-	store, err := database.NewNutsActivityStore(dir)
-	if err != nil {
-		t.Fatalf("NewNutsActivityStore: %v", err)
-	}
-	defer store.Close()
+	store := newTestPebbleActivityStore(t)
 
 	// Redirect stdout to discard during test to keep output clean
 	origStdout := os.Stdout
@@ -222,13 +219,7 @@ func TestParseLogLine_MessageWithMultipleColons(t *testing.T) {
 // TestWriter_Flush verifies that Flush() synchronously drains all
 // pending channel entries into the store.
 func TestWriter_Flush(t *testing.T) {
-	dir := t.TempDir()
-
-	store, err := database.NewNutsActivityStore(dir)
-	if err != nil {
-		t.Fatalf("NewNutsActivityStore: %v", err)
-	}
-	defer store.Close()
+	store := newTestPebbleActivityStore(t)
 
 	devNull, _ := os.Open(os.DevNull)
 	defer devNull.Close()
@@ -274,13 +265,7 @@ func TestWriter_Flush(t *testing.T) {
 }
 
 func TestWriter_DropsDebugOnBackpressure(t *testing.T) {
-	dir := t.TempDir()
-
-	store, err := database.NewNutsActivityStore(dir)
-	if err != nil {
-		t.Fatalf("NewNutsActivityStore: %v", err)
-	}
-	defer store.Close()
+	store := newTestPebbleActivityStore(t)
 
 	devNull, _ := os.Open(os.DevNull)
 	defer devNull.Close()
@@ -307,4 +292,16 @@ func TestWriter_DropsDebugOnBackpressure(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("test timed out: Write blocked instead of dropping debug entry")
 	}
+}
+
+// newTestPebbleActivityStore opens an in-memory PebbleDB and returns a
+// PebbleActivityStore on it; the database is closed when the test ends.
+func newTestPebbleActivityStore(t *testing.T) *database.PebbleActivityStore {
+	t.Helper()
+	db, err := pebble.Open("test.pebble", &pebble.Options{FS: vfs.NewMem()})
+	if err != nil {
+		t.Fatalf("pebble.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	return database.NewPebbleActivityStore(db)
 }

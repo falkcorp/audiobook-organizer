@@ -1,5 +1,5 @@
 // file: internal/database/store_coverage_test.go
-// version: 2.10.0
+// version: 2.10.1
 // guid: a1b2c3d4-e5f6-7890-abcd-ef0123456789
 // last-edited: 2026-10-09
 
@@ -1242,13 +1242,10 @@ func createBookWithDuration(t *testing.T, store Store, title, filePath string, a
 // --- Activity Store: WipeAllActivity ---
 
 func TestCoverage_WipeAllActivity(t *testing.T) {
-	dir := t.TempDir()
-	as, err := NewNutsActivityStore(dir)
-	require.NoError(t, err)
-	defer as.Close()
+	as := newTestPebbleActivityStore(t)
 
 	// Record some activity
-	_, err = as.Record(ActivityEntry{
+	_, err := as.Record(ActivityEntry{
 		Source:  "test_source",
 		Type:    "test_action",
 		Summary: "test summary",

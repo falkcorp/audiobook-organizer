@@ -1,11 +1,11 @@
 // file: internal/database/activity_types.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-09-26
+// last-edited: 2026-10-09
 
 // Package database — activity log types and helpers previously defined in
 // activity_store.go (the legacy SQLite backend). Extracted here in fable5
-// TASK-022 so NutsActivityStore, activity.Service, and their callers continue
+// TASK-022 so the activity stores, activity.Service, and their callers continue
 // to compile.
 
 package database
