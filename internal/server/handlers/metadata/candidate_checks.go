@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/candidate_checks.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7d2c5e91-3a8b-4f60-b1e4-9c0f6a2d8e57
 // last-edited: 2026-10-10
 
@@ -36,13 +36,18 @@ type candidateApplyCheck struct {
 	// the apply does not refuse it, since the person is choosing.
 	IdentityStale bool `json:"identity_stale,omitempty"`
 	// OwnerRejected: the owner rejected this candidate for this book (POST
-	// /metadata/batch-reject-candidates). Applying it is refused, here as on
-	// every bulk path (applygate.ReasonOwnerRejected); un-reject it first.
+	// /metadata/batch-reject-candidates), or an ASIN or ISBN it carries under
+	// any source. Applying it is refused, here as on every bulk path
+	// (applygate.ReasonOwnerRejected); the dialog's "Undo" (POST
+	// /metadata/unreject-candidate) lifts it. The dialog renders it from
+	// this flag alone: it adds nothing to Detail, so an Undo that clears
+	// the flag leaves no stale rejection text behind.
 	OwnerRejected bool `json:"owner_rejected,omitempty"`
 	// BookASIN is the book's ASIN the checks ran against: the value an
 	// override of the conflict must send back (applyRequest.OverrideASIN).
 	BookASIN string `json:"book_asin,omitempty"`
-	// Detail says what disagreed, in words.
+	// Detail says what disagreed, in words: the ASIN conflict and the stale
+	// identity (the tooltips of their chips). Not the owner rejection.
 	Detail string `json:"detail,omitempty"`
 }
 
@@ -83,9 +88,6 @@ func checkCandidate(book *database.Book, entry *metafetch.MetadataCandidateCache
 	if err := metafetch.CandidateIdentityStale(entry, book, c); err != nil {
 		out.IdentityStale = true
 		details = append(details, err.Error())
-	}
-	if out.OwnerRejected {
-		details = append(details, "you rejected this candidate for this book; un-reject it to apply it")
 	}
 	out.Detail = strings.Join(details, "; ")
 	return out
@@ -144,8 +146,8 @@ func asinConflictRefusal(book *database.Book, cand *metafetch.MetadataCandidate,
 
 // errOwnerRejected refuses a single-book apply of a candidate the owner
 // rejected for the book. Unlike an ASIN conflict there is no override on the
-// apply: the owner un-rejects the candidate (POST
-// /metadata/batch-unreject-candidates) and then applies it.
+// apply: the owner un-rejects the candidate (the search window's "Undo", POST
+// /metadata/unreject-candidate) and then applies it.
 type errOwnerRejected struct {
 	Source, Title string
 }
