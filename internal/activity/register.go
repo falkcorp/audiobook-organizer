@@ -1,6 +1,6 @@
 // file: internal/activity/register.go
-// version: 1.10.1
-// last-edited: 2026-10-09
+// version: 1.10.2
+// last-edited: 2026-10-10
 // guid: c4d5e6f7-a8b9-0009-2345-000000000009
 
 // Package activity — service registry wiring for the activity log.
@@ -22,6 +22,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
 )
 
@@ -47,7 +48,7 @@ func init() {
 			s := database.NewPebbleActivityStoreFromStore(store)
 			if s == nil {
 				// Non-Pebble backend (test double, SQLite) — return nil pointer;
-				// the activitystore Build checks for nil and falls back to NutsDB-only.
+				// the activitystore Build treats nil as a hard error (no fallback backend).
 				return (*database.PebbleActivityStore)(nil), nil
 			}
 			slog.Info("[activity] Pebble activity store initialised")
@@ -92,6 +93,9 @@ func init() {
 			// flip (see activity-sql-migration).
 			backend := strings.ToLower(strings.TrimSpace(cfg.ActivityBackend))
 			if backend != "sqlite" {
+				if !recognisedActivityBackend(backend) {
+					logger.New("activity").Warn("unrecognised ActivityBackend value %q; using the Pebble activity store", backend)
+				}
 				slog.Info("[activity] Pebble-only activity store wired", "activity_backend", backend)
 				return pebbleStore, nil
 			}
@@ -205,4 +209,12 @@ func reconcileFilterIndexAtBoot(s *database.PebbleActivityStore) {
 		serviceLog.Warn("filter-index boot reconcile indexed %d row(s) written without filter keys after seen-through=%d",
 			res.Reindexed, res.SeenThrough)
 	}
+}
+
+// recognisedActivityBackend reports whether v (already lower-cased and
+// trimmed) is a documented ActivityBackend value. Anything else is served by
+// Pebble, so a retired or mistyped value must be called out rather than
+// silently accepted.
+func recognisedActivityBackend(v string) bool {
+	return v == "" || v == "pebble" || v == "sqlite"
 }

@@ -1,7 +1,7 @@
 // file: internal/database/activity_compact_progress.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 7f3e9a21-5c4d-4b8e-9d1f-2a6b8c0e4d73
-// last-edited: 2026-09-13
+// last-edited: 2026-10-10
 
 package database
 
@@ -17,8 +17,8 @@ import (
 // emits one more per backend when that backend returns (Done=true, Result =
 // its final counters, Err = its error, if any).
 type CompactProgressEvent struct {
-	// Backend names the store that produced the event: "sqlite", "pebble" or
-	// "nuts". A wrapper never relabels a backend's own events.
+	// Backend names the store that produced the event: "sqlite" or "pebble".
+	// A wrapper never relabels a backend's own events.
 	Backend string
 	// Result is the running (Done=false) or final (Done=true) counters for
 	// Backend alone — never a cross-backend total.
@@ -134,7 +134,7 @@ const activityMaintenanceProgressEvery = 100
 type MaintenanceProgressEvent struct {
 	// Phase is one of the MaintenancePhase* constants.
 	Phase string
-	// Backend names the store the event is about: "sqlite", "pebble" or "nuts".
+	// Backend names the store the event is about: "sqlite" or "pebble".
 	Backend string
 	// Rows is the running or final count for Backend alone — rows deleted for
 	// summarize/prune, index entries deleted for repair-indexes.

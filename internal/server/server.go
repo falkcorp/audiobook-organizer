@@ -1,7 +1,7 @@
 // file: internal/server/server.go
-// version: 2.87.0
+// version: 2.87.1
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-10-08
+// last-edited: 2026-10-10
 
 package server
 
@@ -654,7 +654,7 @@ func NewServer(store database.Store) *Server {
 		// in scheduler group. No additional explicit names needed.
 		Include() // explicit Include() reserved for ad-hoc additions
 	// `activity` (+ `activitystore`) only registers when DatabasePath is
-	// set — the NutsDB sidecar can't open without a path.
+	// set — the activitystore Build errors on an empty DatabasePath.
 	if config.AppConfig.DatabasePath != "" {
 		regContainer.IncludeGroup("activity")
 	}

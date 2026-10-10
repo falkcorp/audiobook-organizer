@@ -1,7 +1,7 @@
 // file: internal/activity/register_backend_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 6d2e8b41-37a9-4c5f-9e0d-1b8a4f7c2e93
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package activity
 
@@ -57,5 +57,14 @@ func TestActivityStore_BackendSelection(t *testing.T) {
 			}
 			require.IsType(t, tc.want, got, "ActivityBackend=%q built the wrong store", tc.backend)
 		})
+	}
+}
+
+func TestRecognisedActivityBackend(t *testing.T) {
+	for _, v := range []string{"", "pebble", "sqlite"} {
+		require.True(t, recognisedActivityBackend(v), "%q", v)
+	}
+	for _, v := range []string{"nuts", "nutsdb", "dual", "pebbel"} {
+		require.False(t, recognisedActivityBackend(v), "%q", v)
 	}
 }
