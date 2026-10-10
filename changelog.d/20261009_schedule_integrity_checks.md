@@ -1,0 +1,3 @@
+### Added
+
+- The nightly maintenance window now runs the two report-only health checks that declared a nightly schedule but never ran: the file integrity check (flags files whose hash changed with no recorded tag write) and the orphan book-file scan (counts file rows whose book no longer exists). Both only report; neither changes or deletes anything. Both now require the `settings.manage` permission to start by hand. A new test fails any operation that declares a schedule with nothing driving it, with an explicit list of the twelve operations that intentionally stay off.

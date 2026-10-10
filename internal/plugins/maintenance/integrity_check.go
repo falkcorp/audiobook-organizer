@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/integrity_check.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 7f4a2b3c-9d1e-4f6a-8b5c-2e0d1f3a4b5c
-// last-edited: 2026-09-13
+// last-edited: 2026-10-10
 
 package maintenance
 
@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -36,7 +37,10 @@ func (p *Plugin) integrityCheckDef() sdk.OperationDef {
 		Timeout:         30 * time.Minute,
 		Schedule:        &sched,
 		Capabilities:    []sdk.Capability{sdk.CapLibraryRead},
-		Run:             p.runIntegrityCheck,
+		// Explicit so the def does not rely on the empty-means-settings.manage
+		// default (08-X2); the scheduler now enqueues it nightly.
+		Permissions: []auth.Permission{auth.PermSettingsManage},
+		Run:         p.runIntegrityCheck,
 	}
 }
 
