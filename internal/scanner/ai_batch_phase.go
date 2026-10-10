@@ -1,5 +1,5 @@
 // file: internal/scanner/ai_batch_phase.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: dc72fe25-f58e-4135-88f4-7f842e7e9a7a
 // last-edited: 2026-10-10
 
@@ -80,7 +80,7 @@ type aiBatchParser interface {
 // saveBook between them puts the queued batch's fields on a row organize has
 // already demoted. See saveAIFieldsToPrimary for the full reasoning.
 //
-// The returned summary is the only honest record of what happened. Every
+// The returned summary is the only accurate record of what happened. Every
 // failure in this phase is a log.Warn and a `return nil` -- deliberately, since
 // a dead LLM must not fail the scan -- which means the phase looks identical
 // from the outside whether it parsed every book or aborted on batch 1 of 10.
@@ -354,6 +354,23 @@ func runAIBatchPhase(ctx context.Context, parser aiBatchParser, books []Book, ca
 				}
 			}
 
+			// Items of a batch that was REACHED (its first call was made) and
+			// that ended with no result and no error of their own: a failed
+			// call (out.err) or a split the phase stopped (out.stopped) left
+			// them unresolved. Not accepted, counted once here -- neither loop
+			// above sees them (not resolved, no book error). One rule for both
+			// causes: a cancel during the first call and an abort between split
+			// calls account for the same situation the same way. A batch the
+			// phase never reached (skipped before its first call) has no
+			// disposition and is not counted.
+			if out.err != nil || out.stopped {
+				for i := range batch {
+					if !out.resolved[i] && out.bookErrs[i] == nil {
+						recordParseResult(ai.TaskBatchParse, false)
+					}
+				}
+			}
+
 			if aiErr := out.err; aiErr != nil {
 				// The books this failure leaves unparsed: those no call resolved
 				// and that were not already counted as failed books above. For a
@@ -363,10 +380,6 @@ func runAIBatchPhase(ctx context.Context, parser aiBatchParser, books []Book, ca
 				for i := range batch {
 					if !out.resolved[i] && out.bookErrs[i] == nil {
 						failedNames = append(failedNames, filenames[i])
-						// Left unresolved by the failure, with no error of its
-						// own: not accepted. Not counted by either loop above
-						// (not resolved, no book error), so once here.
-						recordParseResult(ai.TaskBatchParse, false)
 					}
 				}
 
