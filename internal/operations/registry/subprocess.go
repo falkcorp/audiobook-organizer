@@ -1,7 +1,7 @@
 // file: internal/operations/registry/subprocess.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 2b3c4d5e-6f7a-8901-bcde-f01234567890
-// last-edited: 2026-10-04
+// last-edited: 2026-10-10
 
 // Package registry — subprocess runner for Isolate=true operations.
 //
@@ -128,7 +128,14 @@ func RunChildMode(r *Registry) {
 	defer cancelRun()
 	// Subprocess runs in a separate process; no runHandle to stamp, so
 	// touchProgressFn is nil and synchronous mode preserves DB writes.
-	reporter := newDBReporter(ctx, opID, def.ID, def.DisplayName, def.Plugin, "", "", r.store, nil, r.activityRecorder, r.logger, nil, nil, 0, true)
+	// ops.items is counted on this registry's recorder like the in-process
+	// path, but the recorder lives in the child process, whose meter provider
+	// nobody scrapes: an Isolate def's items do not reach the parent's
+	// /metrics (no production def sets Isolate today). The child is a fresh
+	// attempt of a row the parent already marked running, so it is seeded from
+	// the row like the in-process path.
+	reporter := newDBReporter(ctx, opID, def.ID, def.DisplayName, def.Plugin, "", "", r.store, nil, r.activityRecorder, r.logger, nil, nil, 0, true,
+		r.newAttemptItems(opID, def.ID))
 
 	// Run.
 	runErr := def.Run(ctx, hs.Params, reporter)

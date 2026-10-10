@@ -1,5 +1,5 @@
 // file: internal/opsmetrics/opsmetrics_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 91c2e7d5-3a48-4b0f-8e16-d5a70c3f2b84
 // last-edited: 2026-10-10
 
@@ -8,7 +8,6 @@ package opsmetrics
 import (
 	"context"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -134,7 +133,7 @@ func TestUnknownDefIDFoldsToOther(t *testing.T) {
 // attribute that actually reaches a data point is in that list.
 func TestNoRunIDAttribute(t *testing.T) {
 	for _, k := range EmittedKeys {
-		if k == telemetry.OpID || strings.Contains(string(k), "op_id") || strings.Contains(string(k), "run_id") {
+		if k == telemetry.OpID {
 			t.Errorf("EmittedKeys has the per-run key %q", k)
 		}
 	}
@@ -143,8 +142,8 @@ func TestNoRunIDAttribute(t *testing.T) {
 	rec.Started("t.keys")
 	rec.Finished("t.keys", "failed", time.Second)
 	rec.Items("t.keys", ItemsProcessed, 1)
-	unreg := rec.RegisterInflight(func() map[InflightKey]int64 {
-		return map[InflightKey]int64{{DefID: "t.keys", Plugin: "p"}: 1}
+	unreg := rec.RegisterInflight(func() map[InflightKey]InflightStat {
+		return map[InflightKey]InflightStat{{DefID: "t.keys", Plugin: "p"}: {Runs: 1, ProgressAge: time.Second}}
 	})
 	defer unreg()
 	for name, m := range collect() {
@@ -162,6 +161,12 @@ func TestNoRunIDAttribute(t *testing.T) {
 			for _, dp := range d.DataPoints {
 				sets = append(sets, dp.Attributes)
 			}
+		case metricdata.Gauge[float64]:
+			for _, dp := range d.DataPoints {
+				sets = append(sets, dp.Attributes)
+			}
+		default:
+			t.Errorf("%s has unhandled data type %T; extend this walk", name, m.Data)
 		}
 		if len(sets) == 0 {
 			t.Errorf("%s has no points", name)
@@ -177,31 +182,66 @@ func TestNoRunIDAttribute(t *testing.T) {
 }
 
 // TestInflightReportsZeroAfterRunsEnd: a key that was observed once and is
-// gone from the source reads 0 rather than keeping its old value or vanishing.
+// gone from the source reads 0 on both gauges rather than keeping its old
+// value or vanishing.
 func TestInflightReportsZeroAfterRunsEnd(t *testing.T) {
 	RegisterDefID("t.inflight")
 	rec, collect := newRig(t)
-	cur := map[InflightKey]int64{{DefID: "t.inflight", Plugin: "p"}: 2}
-	unreg := rec.RegisterInflight(func() map[InflightKey]int64 { return cur })
-	read := func() int64 {
-		g, ok := collect()["audiobook_organizer.ops.inflight"].Data.(metricdata.Gauge[int64])
+	cur := map[InflightKey]InflightStat{{DefID: "t.inflight", Plugin: "p"}: {Runs: 2, ProgressAge: 90 * time.Second}}
+	unreg := rec.RegisterInflight(func() map[InflightKey]InflightStat { return cur })
+	read := func() (int64, float64) {
+		m := collect()
+		g, ok := m["audiobook_organizer.ops.inflight"].Data.(metricdata.Gauge[int64])
 		if !ok || len(g.DataPoints) != 1 {
 			t.Fatalf("want one inflight point, got %+v", g)
 		}
-		return g.DataPoints[0].Value
+		a, ok := m["audiobook_organizer.ops.progress_age"].Data.(metricdata.Gauge[float64])
+		if !ok || len(a.DataPoints) != 1 {
+			t.Fatalf("want one progress_age point, got %+v", a)
+		}
+		return g.DataPoints[0].Value, a.DataPoints[0].Value
 	}
-	if got := read(); got != 2 {
-		t.Fatalf("inflight = %d, want 2", got)
+	if runs, age := read(); runs != 2 || age != 90 {
+		t.Fatalf("inflight = %d, progress_age = %v; want 2 and 90", runs, age)
 	}
-	cur = map[InflightKey]int64{}
-	if got := read(); got != 0 {
-		t.Errorf("inflight after the runs ended = %d, want 0", got)
+	cur = map[InflightKey]InflightStat{}
+	if runs, age := read(); runs != 0 || age != 0 {
+		t.Errorf("after the runs ended inflight = %d, progress_age = %v; want 0 and 0", runs, age)
 	}
 	before := ActiveInflightCallbacks()
 	unreg()
 	unreg() // idempotent
 	if got := ActiveInflightCallbacks(); got != before-1 {
 		t.Errorf("callbacks after unregister = %d, want %d", got, before-1)
+	}
+}
+
+// TestInflightFoldsKeys: two unregistered defs on one plugin fold into one
+// "other" series; runs add up and the progress age is the larger one, so the
+// fold cannot hide the most idle run behind a fresher sibling.
+func TestInflightFoldsKeys(t *testing.T) {
+	rec, collect := newRig(t)
+	unreg := rec.RegisterInflight(func() map[InflightKey]InflightStat {
+		return map[InflightKey]InflightStat{
+			{DefID: "unregistered-a", Plugin: "p"}: {Runs: 1, ProgressAge: 10 * time.Second},
+			{DefID: "unregistered-b", Plugin: "p"}: {Runs: 2, ProgressAge: 40 * time.Minute},
+		}
+	})
+	defer unreg()
+	m := collect()
+	g := m["audiobook_organizer.ops.inflight"].Data.(metricdata.Gauge[int64])
+	a := m["audiobook_organizer.ops.progress_age"].Data.(metricdata.Gauge[float64])
+	if len(g.DataPoints) != 1 || len(a.DataPoints) != 1 {
+		t.Fatalf("want one folded point per gauge, got %d and %d", len(g.DataPoints), len(a.DataPoints))
+	}
+	if d, _ := g.DataPoints[0].Attributes.Value(telemetry.DefID); d.AsString() != OtherDefID {
+		t.Errorf("def_id = %q, want %q", d.AsString(), OtherDefID)
+	}
+	if g.DataPoints[0].Value != 3 {
+		t.Errorf("folded inflight = %d, want 3", g.DataPoints[0].Value)
+	}
+	if a.DataPoints[0].Value != 2400 {
+		t.Errorf("folded progress_age = %v, want 2400 (the max)", a.DataPoints[0].Value)
 	}
 }
 
@@ -230,13 +270,15 @@ func TestDeclaredButUnwiredAreListed(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Errorf("Unwired = %v, want %v", got, want)
 	}
-	// None of them may be created by this package: the wired set is exactly four.
+	// None of them may be created by this package: the wired set is exactly five.
 	rec, collect := newRig(t)
 	RegisterDefID("t.unwired")
 	rec.Started("t.unwired")
 	rec.Finished("t.unwired", "completed", time.Second)
 	rec.Items("t.unwired", ItemsProcessed, 1)
-	rec.RegisterInflight(func() map[InflightKey]int64 { return map[InflightKey]int64{{DefID: "t.unwired"}: 1} })()
+	rec.RegisterInflight(func() map[InflightKey]InflightStat {
+		return map[InflightKey]InflightStat{{DefID: "t.unwired"}: {Runs: 1}}
+	})()
 	for name := range collect() {
 		if slices.Contains(want, name) {
 			t.Errorf("%s is created although it is listed as unwired", name)

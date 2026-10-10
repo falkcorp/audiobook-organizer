@@ -1,5 +1,5 @@
 // file: internal/operations/registry/worker.go
-// version: 2.27.1
+// version: 2.27.2
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
 // last-edited: 2026-10-10
 
@@ -426,13 +426,13 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 	}
 	reporter := newDBReporter(runCtx, qr.opID, qr.defID, def.DisplayName, qr.plugin,
 		"", "", // traceID / spanID loaded from DB row in future; empty for now
-		r.store, r.bus, r.activityRecorder, r.logger, setItemFn, touchFn, flushInterval, def.Synchronous)
+		r.store, r.bus, r.activityRecorder, r.logger, setItemFn, touchFn, flushInterval, def.Synchronous,
+		r.newAttemptItems(qr.opID, qr.defID))
 	// Same assertion the markTerminal call sites below use: newDBReporter
 	// returns the Reporter interface, and only the DB-backed one has a flush
 	// loop to join.
 	if dbr, ok := reporter.(*dbReporter); ok {
 		reporterForJoin = dbr
-		dbr.ops = r.ops
 	}
 
 	// Canonical "operation started" log line, with all the tags downstream
@@ -688,6 +688,20 @@ func (r *Registry) recordRunMetrics(defID, finalStatus string, startedAt time.Ti
 	// that exist at HEAD; see opsmetrics.OutcomeFor. Both families are emitted
 	// during the soak.
 	r.ops.Finished(defID, finalStatus, took)
+}
+
+// newAttemptItems builds the ops.items counter for this attempt, seeded with
+// the row's persisted progress. A fresh row carries 0/0 (or its queued
+// summary), so nothing changes for it; a resumed or retried row still carries
+// the previous attempt's progress, and seeding from it keeps a resumed op whose
+// first report is its checkpoint position from counting those items again
+// (processedItems). A failed read seeds 0/0, the fresh-run behaviour.
+func (r *Registry) newAttemptItems(opID, defID string) *processedItems {
+	var cur, total int
+	if row, err := r.store.GetOperationV2(opID); err == nil && row != nil {
+		cur, total = row.ProgressCurrent, row.ProgressTotal
+	}
+	return newProcessedItems(r.ops, defID, cur, total)
 }
 
 // notifyDepTerminal notifies the dependency scheduler for every subject of a
