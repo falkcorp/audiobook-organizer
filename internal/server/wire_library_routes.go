@@ -1,7 +1,7 @@
 // file: internal/server/wire_library_routes.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: b2c3d4e5-f6a7-8901-bcde-f23456789012
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 
 package server
 
@@ -61,9 +61,7 @@ func (s *Server) wireLibraryRoutes(
 	protected.DELETE("/import-paths/:id", s.perm(auth.PermSettingsManage), filesystemH.RemoveImportPath)
 	protected.POST("/import/file", s.perm(auth.PermScanTrigger), filesystemH.ImportFile)
 
-	// Organize + rename
-	protected.POST("/audiobooks/:id/rename/preview", s.perm(auth.PermLibraryOrganize), organizeH.PreviewRename)
-	protected.POST("/audiobooks/:id/rename/apply", s.perm(auth.PermLibraryOrganize), organizeH.ApplyRename)
+	// Organize
 	protected.GET("/audiobooks/:id/preview-organize", s.perm(auth.PermLibraryOrganize), organizeH.PreviewOrganize)
 	protected.POST("/audiobooks/:id/organize", s.perm(auth.PermLibraryOrganize), organizeH.OrganizeBook)
 

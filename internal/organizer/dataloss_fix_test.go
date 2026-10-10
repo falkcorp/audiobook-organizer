@@ -1,7 +1,7 @@
 // file: internal/organizer/dataloss_fix_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: ff38c140-155a-4c69-b3ea-b350a8503066
-// last-edited: 2026-09-14
+// last-edited: 2026-10-10
 
 package organizer
 
@@ -207,63 +207,6 @@ func TestRenameFilesPartialSucceededReportedOnFailure(t *testing.T) {
 		t.Errorf("occupant destroyed: %q err=%v", data, rerr)
 	}
 	assertNoRenameTemps(t, dst2)
-}
-
-// ---------------------------------------------------------------------------
-// RenameService.moveFile / hardlinkOrCopy collision refusal (DL-2)
-// ---------------------------------------------------------------------------
-
-func TestMoveFileRefusesOverwrite(t *testing.T) {
-	mockStore := newMockStore(t)
-	svc := NewRenameService(mockStore)
-
-	tmpDir := t.TempDir()
-	src := filepath.Join(tmpDir, "src.m4b")
-	dst := filepath.Join(tmpDir, "dst.m4b")
-	if err := os.WriteFile(src, []byte("new"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(dst, []byte("existing book"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	err := svc.moveFile(src, dst)
-	if err == nil {
-		t.Fatal("expected collision error, got nil")
-	}
-	if data, rerr := os.ReadFile(dst); rerr != nil || string(data) != "existing book" {
-		t.Errorf("destination corrupted: %q err=%v", data, rerr)
-	}
-	if _, serr := os.Stat(src); serr != nil {
-		t.Errorf("source lost: %v", serr)
-	}
-}
-
-func TestHardlinkOrCopyRefusesOverwrite(t *testing.T) {
-	mockStore := newMockStore(t)
-	svc := NewRenameService(mockStore)
-
-	tmpDir := t.TempDir()
-	src := filepath.Join(tmpDir, "src.m4b")
-	dst := filepath.Join(tmpDir, "dst.m4b")
-	if err := os.WriteFile(src, []byte("new"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(dst, []byte("existing book"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	err := svc.hardlinkOrCopy(src, dst)
-	if err == nil {
-		t.Fatal("expected collision error, got nil")
-	}
-	if data, rerr := os.ReadFile(dst); rerr != nil || string(data) != "existing book" {
-		t.Errorf("destination corrupted: %q err=%v", data, rerr)
-	}
-	// No leftover temp file from the copy fallback.
-	if _, terr := os.Stat(dst + ".tmp"); !os.IsNotExist(terr) {
-		t.Error("copy temp file left behind")
-	}
 }
 
 // ---------------------------------------------------------------------------

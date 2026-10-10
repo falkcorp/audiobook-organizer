@@ -1,12 +1,12 @@
 // file: internal/server/handlers/organize.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: b3c4d5e6-f7a8-9012-bcde-f01234567890
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 
-// Package handlers — OrganizeHandler covers the rename-preview, rename-apply,
-// organize-preview, and single-book organize HTTP endpoints.
+// Package handlers — OrganizeHandler covers the organize-preview and
+// single-book organize HTTP endpoints.
 //
-// The concrete service types (organizer.RenameService, organizer.Service,
+// The concrete service types (organizer.Service,
 // organizer.PreviewService) live in internal/organizer, which is not
 // internal/server, so there is no circular-import risk. We define narrow
 // interfaces here so tests can inject fakes without touching the organizer
@@ -37,12 +37,6 @@ import (
 // -----------------------------------------------------------------------
 // Narrow interfaces
 // -----------------------------------------------------------------------
-
-// RenameServicer is the narrow interface for the rename service.
-type RenameServicer interface {
-	PreviewRename(bookID string) (*organizer.RenamePreview, error)
-	ApplyRename(bookID, operationID string) (*organizer.RenameApplyResult, error)
-}
 
 // OrganizePreviewServicer is the narrow interface for the organize-preview service.
 type OrganizePreviewServicer interface {
@@ -82,7 +76,7 @@ type OrganizeStore interface {
 	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
 	GetBookFiles(bookID string) ([]database.BookFile, error)
 	GetBookVersionsByBookID(bookID string) ([]database.BookVersion, error)
-	// CreateOperation is deliberately absent. ApplyRename and OrganizeBook are
+	// CreateOperation is deliberately absent. OrganizeBook is
 	// synchronous and use a bare ULID as the opchange correlation key; leaving
 	// the method off makes minting a v1 row here a compile error rather than
 	// something a reviewer has to catch.
@@ -93,15 +87,14 @@ type OrganizeStore interface {
 // Handler
 // -----------------------------------------------------------------------
 
-// OrganizeHandler handles rename-preview, rename-apply, organize-preview, and
-// the single-book organize HTTP endpoints.
+// OrganizeHandler handles the organize-preview and the single-book
+// organize HTTP endpoints.
 //
-// renameSvc, previewSvc, organizeSvc, and publisher may be
+// previewSvc, organizeSvc, and publisher may be
 // constructed via their concrete types in wireHandlers; tests may inject
 // fakes through the interface.
 type OrganizeHandler struct {
 	store        OrganizeStore
-	renameSvc    RenameServicer
 	previewSvc   OrganizePreviewServicer
 	organizeSvc  OrganizeServicer
 	publisher    EventPublisher
@@ -131,7 +124,6 @@ func (h *OrganizeHandler) SetLibraryCopyResolver(resolve organizer.LibraryCopyRe
 // NewOrganizeHandler constructs an OrganizeHandler.
 func NewOrganizeHandler(
 	store OrganizeStore,
-	renameSvc RenameServicer,
 	previewSvc OrganizePreviewServicer,
 	organizeSvc OrganizeServicer,
 	publisher EventPublisher,
@@ -139,7 +131,6 @@ func NewOrganizeHandler(
 ) *OrganizeHandler {
 	return &OrganizeHandler{
 		store:        store,
-		renameSvc:    renameSvc,
 		previewSvc:   previewSvc,
 		organizeSvc:  organizeSvc,
 		publisher:    publisher,
@@ -150,61 +141,6 @@ func NewOrganizeHandler(
 // -----------------------------------------------------------------------
 // Handlers
 // -----------------------------------------------------------------------
-
-// PreviewRename handles GET /api/v1/audiobooks/:id/rename/preview.
-// Returns the current path, proposed path, and tag diff for a book.
-func (h *OrganizeHandler) PreviewRename(c *gin.Context) {
-	id := c.Param("id")
-	if id == "" {
-		httputil.RespondWithBadRequest(c, "book id is required")
-		return
-	}
-
-	preview, err := h.renameSvc.PreviewRename(id)
-	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			httputil.RespondWithNotFound(c, "book", id)
-			return
-		}
-		httputil.InternalError(c, "failed to preview rename", err)
-		return
-	}
-
-	httputil.RespondWithOK(c, preview)
-}
-
-// ApplyRename handles POST /api/v1/audiobooks/:id/rename/apply.
-// Executes the rename, tag write, and DB update for a book.
-func (h *OrganizeHandler) ApplyRename(c *gin.Context) {
-	id := c.Param("id")
-	if id == "" {
-		httputil.RespondWithBadRequest(c, "book id is required")
-		return
-	}
-
-	// The id is the correlation key for the OperationChange records the rename
-	// writes; undo replays them with a GetOperationChanges prefix scan over
-	// "opchange:<id>:", which never loads an operations row. No row is created.
-	//
-	// One used to be, as v1 type "rename", and nothing ever read it: the v1
-	// list/status/logs routes were retired 2026-08-16, GetOperationTimeline
-	// reads ListOperationsV2Since only, and CreateOperation stamps status
-	// "pending" which isResumableOpStatus excludes — so the restart sweep never
-	// touched it either. Every rename since has left one immortal pending row.
-	opID := ulid.Make().String()
-
-	result, err := h.renameSvc.ApplyRename(id, opID)
-	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			httputil.RespondWithNotFound(c, "book", id)
-			return
-		}
-		httputil.InternalError(c, "failed to apply rename", err)
-		return
-	}
-
-	httputil.RespondWithOK(c, result)
-}
 
 // PreviewOrganize handles GET /api/v1/audiobooks/:id/organize/preview.
 // Returns a step-by-step preview of what organizing a single book would do.
@@ -263,8 +199,9 @@ func (h *OrganizeHandler) OrganizeBook(c *gin.Context) {
 // step could not resolve, and the core resolves here.
 func (h *OrganizeHandler) organizeBookCore(ctx context.Context, r organizeResponder, id string, locked *database.Book) {
 
-	// Correlation key only — see ApplyRename above for why no operations row is
-	// created. The v1 row this used to mint as type "organize" was never read.
+	// Correlation key only — no operations row is created: undo replays the
+	// OperationChange records with a GetOperationChanges prefix scan keyed on
+	// this id, which never loads an operations row. The v1 row this used to mint as type "organize" was never read.
 	opID := ulid.Make().String()
 
 	requested, err := h.store.GetBookByID(id)

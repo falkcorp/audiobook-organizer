@@ -1,5 +1,5 @@
 // file: internal/logger/slog_guard_ratchet_test.go
-// version: 1.21.3
+// version: 1.21.4
 // guid: 0b8d6f21-4a7c-4e93-a5d2-c3f19e8b7a64
 // last-edited: 2026-10-10
 
@@ -194,7 +194,6 @@ var slogRatchet = map[string]int{
 	"internal/organizer/move.go":                                 4,
 	"internal/organizer/organizer.go":                            16,
 	"internal/organizer/pipeline.go":                             8,
-	"internal/organizer/rename.go":                               6,
 	"internal/organizer/saferename.go":                           4,
 	"internal/playlist/playlist.go":                              1,
 	"internal/plugin/events.go":                                  2,

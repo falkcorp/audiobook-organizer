@@ -1,7 +1,7 @@
 // file: internal/audiobooks/revert_tag_realfile_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 5d2b8e46-1f7a-4c93-b0e5-8a6c3d9f2e17
-// last-edited: 2026-09-14
+// last-edited: 2026-10-10
 
 package audiobooks
 
@@ -12,8 +12,8 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -57,6 +57,23 @@ func makeRevertTestAudioExt(t *testing.T, ext string, props map[string][]string)
 	return path
 }
 
+// filterUnchangedTagProperties drops each tag whose file property already
+// holds the value. When the file cannot be read everything is kept.
+func filterUnchangedTagProperties(path string, tags map[string]any) map[string]any {
+	current, err := metadata.ReadTagValues(path)
+	if err != nil {
+		return tags
+	}
+	out := make(map[string]any, len(tags))
+	for k, v := range tags {
+		if cur, known := current[k]; known && cur == fmt.Sprint(v) {
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
 // realTagBook creates a single-file book at path with one tag_write row per
 // entry of rows ({tag, old, new}).
 func realTagBook(t *testing.T, store *database.PebbleStore, op, path string, rows ...[3]string) {
@@ -75,8 +92,8 @@ func realTagBook(t *testing.T, store *database.PebbleStore, op, path string, row
 	}
 }
 
-// The organize tag write through the service NewRenameService wires, then its
-// undo: every tag_write row must name a value the file really holds after the
+// The organize tag write (organizer.BuildTagMetadata through the revert's own
+// tag reader and writer), then its undo: every tag_write row must name a value the file really holds after the
 // write, and reverting them all must put the file back as it was. The organize
 // write went through the write-back map, which ignored album_artist and
 // composer (their rows claimed writes that never happened) and fanned artist
@@ -128,28 +145,21 @@ func organizeRoundTrip(t *testing.T, ext string, orig map[string][]string) {
 	assert.NotContains(t, tags, "ALBUM", "organize added ALBUM; undo removes it")
 }
 
-// organizeAndRecord runs the organize tag write NewRenameService wires on path
+// organizeAndRecord runs the organize tag write on path
 // ("New Title" by "New Author", read by "The Narrator"), records one tag_write
 // row per written key under op the way the organizer does, and returns the
 // number of rows.
 func organizeAndRecord(t *testing.T, store *database.PebbleStore, path, op string) int {
 	t.Helper()
-	svc := NewRenameService(store)
-	meta := svc.BuildTagMetadata(&database.Book{Title: "New Title"}, "New Author", "The Narrator")
+	meta := organizer.BuildTagMetadata(&database.Book{Title: "New Title"}, "New Author", "The Narrator")
 
-	filtered := svc.FilterUnchangedTags(path, meta)
-	current, err := svc.ReadCurrentTags(path)
+	filtered := filterUnchangedTagProperties(path, meta)
+	current, err := metadata.ReadTagProperties(path)
 	require.NoError(t, err)
 	if current["genre"] == "Audiobook" {
 		assert.NotContains(t, filtered, "genre", "an unchanged tag is not written")
 	}
-	write := svc.WriteTags
-	if write == nil { // the organizer's own default
-		write = func(p string, m map[string]any) error {
-			return metadata.WriteMetadataToFile(p, m, fileops.OperationConfig{VerifyChecksums: true})
-		}
-	}
-	require.NoError(t, write(path, filtered))
+	require.NoError(t, defaultRevertWriteTags(path, filtered))
 
 	written := diskTags(t, path)
 	assert.Equal(t, []string{"New Author"}, written["ALBUMARTIST"], "organize writes ALBUMARTIST = author")
@@ -247,25 +257,17 @@ func TestRevertTagWrite_RealFile_UndoLeavesLaterComposer(t *testing.T) {
 // organize that put the narrator into ALBUMARTIST made the next scan take the
 // narrator as the author. A COMPOSER the owner set is left alone.
 func TestOrganizeTagWrite_RealFile_AuthorReadsBackAsAuthor(t *testing.T) {
-	store := newRevertPebble(t)
 	path := makeRevertTestAudio(t, map[string][]string{
 		"TITLE":    {"Orig Title"},
 		"ARTIST":   {"Orig Artist"},
 		"COMPOSER": {"Owner Composer"},
 	})
-	svc := NewRenameService(store)
-	meta := svc.BuildTagMetadata(&database.Book{Title: "New Title"}, "New Author", "The Narrator")
+	meta := organizer.BuildTagMetadata(&database.Book{Title: "New Title"}, "New Author", "The Narrator")
 	assert.NotContains(t, meta, "album_artist")
 	assert.NotContains(t, meta, "composer")
 
-	filtered := svc.FilterUnchangedTags(path, meta)
-	write := svc.WriteTags
-	if write == nil {
-		write = func(p string, m map[string]any) error {
-			return metadata.WriteMetadataToFile(p, m, fileops.OperationConfig{VerifyChecksums: true})
-		}
-	}
-	require.NoError(t, write(path, filtered))
+	filtered := filterUnchangedTagProperties(path, meta)
+	require.NoError(t, defaultRevertWriteTags(path, filtered))
 
 	md, err := metadata.ExtractMetadata(path, nil)
 	require.NoError(t, err)

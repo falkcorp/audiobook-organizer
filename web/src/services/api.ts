@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.174.0
+// version: 2.174.1
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-10
 
@@ -5301,51 +5301,6 @@ export async function cancelAIScan(id: number): Promise<void> {
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to cancel scan');
   }
-}
-
-// --- Rename Preview & Apply ---
-
-export interface TagChange {
-  field: string;
-  current: string;
-  proposed: string;
-}
-
-export interface RenamePreview {
-  book_id: string;
-  current_path: string;
-  proposed_path: string;
-  tag_changes: TagChange[];
-}
-
-export interface RenameApplyResult {
-  book_id: string;
-  old_path: string;
-  new_path: string;
-  tags_written: number;
-  message: string;
-}
-
-export async function previewRename(bookId: string): Promise<RenamePreview> {
-  const response = await apiFetch(`${API_BASE}/audiobooks/${bookId}/rename/preview`, {
-    method: 'POST',
-  });
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to preview rename');
-  }
-  const body = await response.json();
-  return body.data;
-}
-
-export async function applyRename(bookId: string): Promise<RenameApplyResult> {
-  const response = await apiFetch(`${API_BASE}/audiobooks/${bookId}/rename/apply`, {
-    method: 'POST',
-  });
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to apply rename');
-  }
-  const body = await response.json();
-  return body.data;
 }
 
 // ---- Organize Preview & Execute ----

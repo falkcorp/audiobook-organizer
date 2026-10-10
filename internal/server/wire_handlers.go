@@ -1,7 +1,7 @@
 // file: internal/server/wire_handlers.go
-// version: 2.47.1
+// version: 2.47.2
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package server
 
@@ -743,7 +743,6 @@ func (s *Server) newOrganizeHandler() *handlers.OrganizeHandler {
 	}
 	organizeH := handlers.NewOrganizeHandler(
 		s.storeForWiring(),
-		audiobookspkg.NewRenameService(s.storeForWiring()),
 		organizePreviewSvc,
 		organizeSvc,
 		publisher,

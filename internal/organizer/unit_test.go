@@ -1,7 +1,7 @@
 // file: internal/organizer/unit_test.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f90
-// last-edited: 2026-10-08
+// last-edited: 2026-10-10
 
 package organizer
 
@@ -556,45 +556,13 @@ func TestNewPreviewService(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// NewRenameService
-// ---------------------------------------------------------------------------
-
-func TestNewRenameService(t *testing.T) {
-	mockStore := newMockStore(t)
-	svc := NewRenameService(mockStore)
-	if svc == nil {
-		t.Fatal("NewRenameService returned nil")
-	}
-	if svc.db != mockStore {
-		t.Error("db not set correctly")
-	}
-	// Default IsProtectedPath
-	if svc.IsProtectedPath("/any") {
-		t.Error("default IsProtectedPath should return false")
-	}
-	// Default FilterUnchangedTags returns input
-	tags := map[string]any{"title": "X"}
-	filtered := svc.FilterUnchangedTags("/file", tags)
-	if len(filtered) != 1 {
-		t.Errorf("default FilterUnchangedTags should return input, got %d entries", len(filtered))
-	}
-	// Default ComputeITunesPath returns empty
-	if p := svc.ComputeITunesPath("/file"); p != "" {
-		t.Errorf("default ComputeITunesPath should return empty, got %q", p)
-	}
-}
-
-// ---------------------------------------------------------------------------
 // BuildTagMetadata
 // ---------------------------------------------------------------------------
 
 func TestBuildTagMetadata(t *testing.T) {
-	mockStore := newMockStore(t)
-	svc := NewRenameService(mockStore)
-
 	t.Run("basic metadata", func(t *testing.T) {
 		book := &database.Book{Title: "My Book"}
-		meta := svc.BuildTagMetadata(book, "Author Name", "Narrator Name")
+		meta := BuildTagMetadata(book, "Author Name", "Narrator Name")
 
 		if meta["title"] != "My Book" {
 			t.Errorf("title = %v", meta["title"])
@@ -622,7 +590,7 @@ func TestBuildTagMetadata(t *testing.T) {
 
 	t.Run("empty author and narrator omitted", func(t *testing.T) {
 		book := &database.Book{Title: "Solo"}
-		meta := svc.BuildTagMetadata(book, "", "")
+		meta := BuildTagMetadata(book, "", "")
 
 		if _, ok := meta["artist"]; ok {
 			t.Error("artist should not be set for empty author")
@@ -640,7 +608,7 @@ func TestBuildTagMetadata(t *testing.T) {
 			AudiobookReleaseYear: &releaseYear,
 			PrintYear:            &printYear,
 		}
-		meta := svc.BuildTagMetadata(book, "", "")
+		meta := BuildTagMetadata(book, "", "")
 		if meta["year"] != "2022" {
 			t.Errorf("year = %v, want 2022", meta["year"])
 		}
@@ -652,7 +620,7 @@ func TestBuildTagMetadata(t *testing.T) {
 			Title:     "Book",
 			PrintYear: &printYear,
 		}
-		meta := svc.BuildTagMetadata(book, "", "")
+		meta := BuildTagMetadata(book, "", "")
 		if meta["year"] != "1995" {
 			t.Errorf("year = %v, want 1995", meta["year"])
 		}
@@ -660,62 +628,9 @@ func TestBuildTagMetadata(t *testing.T) {
 
 	t.Run("no year when both nil", func(t *testing.T) {
 		book := &database.Book{Title: "Book"}
-		meta := svc.BuildTagMetadata(book, "", "")
+		meta := BuildTagMetadata(book, "", "")
 		if _, ok := meta["year"]; ok {
 			t.Error("year should not be set when both years are nil")
-		}
-	})
-}
-
-// ---------------------------------------------------------------------------
-// computeTagChanges
-// ---------------------------------------------------------------------------
-
-func TestComputeTagChanges(t *testing.T) {
-	mockStore := newMockStore(t)
-	svc := NewRenameService(mockStore)
-
-	t.Run("all fields populated", func(t *testing.T) {
-		releaseYear := 2020
-		book := &database.Book{
-			Title:                "Book",
-			AudiobookReleaseYear: &releaseYear,
-		}
-		changes := svc.computeTagChanges(book, "Author", "Narrator")
-
-		fieldMap := make(map[string]string)
-		for _, c := range changes {
-			fieldMap[c.Field] = c.Proposed
-		}
-
-		if fieldMap["title"] != "Book" {
-			t.Errorf("title = %q", fieldMap["title"])
-		}
-		if fieldMap["album"] != "Book" {
-			t.Errorf("album = %q", fieldMap["album"])
-		}
-		if fieldMap["artist"] != "Author" {
-			t.Errorf("artist = %q", fieldMap["artist"])
-		}
-		if fieldMap["narrator"] != "Narrator" {
-			t.Errorf("narrator = %q", fieldMap["narrator"])
-		}
-		if fieldMap["genre"] != "Audiobook" {
-			t.Errorf("genre = %q", fieldMap["genre"])
-		}
-		if fieldMap["year"] != "2020" {
-			t.Errorf("year = %q", fieldMap["year"])
-		}
-	})
-
-	t.Run("empty title produces no title change", func(t *testing.T) {
-		book := &database.Book{Title: ""}
-		changes := svc.computeTagChanges(book, "", "")
-
-		for _, c := range changes {
-			if c.Field == "title" {
-				t.Error("should not have title change for empty title")
-			}
 		}
 	})
 }
@@ -727,7 +642,6 @@ func TestComputeTagChanges(t *testing.T) {
 func TestResolveNarratorNames(t *testing.T) {
 	t.Run("uses book narrators from DB", func(t *testing.T) {
 		mockStore := newMockStore(t)
-		svc := NewRenameService(mockStore)
 
 		mockStore.On("GetBookNarrators", "book-1").Return([]database.BookNarrator{
 			{BookID: "book-1", NarratorID: 1},
@@ -737,7 +651,7 @@ func TestResolveNarratorNames(t *testing.T) {
 		mockStore.On("GetNarratorByID", 2).Return(&database.Narrator{ID: 2, Name: "Bob"}, nil)
 
 		book := &database.Book{ID: "book-1"}
-		result := svc.resolveNarratorNames("book-1", book)
+		result := resolveNarratorNames(mockStore, "book-1", book)
 		if result != "Alice & Bob" {
 			t.Errorf("expected 'Alice & Bob', got %q", result)
 		}
@@ -745,13 +659,12 @@ func TestResolveNarratorNames(t *testing.T) {
 
 	t.Run("falls back to book.Narrator field", func(t *testing.T) {
 		mockStore := newMockStore(t)
-		svc := NewRenameService(mockStore)
 
 		mockStore.On("GetBookNarrators", "book-2").Return([]database.BookNarrator{}, nil)
 
 		narrator := "Charlie"
 		book := &database.Book{ID: "book-2", Narrator: &narrator}
-		result := svc.resolveNarratorNames("book-2", book)
+		result := resolveNarratorNames(mockStore, "book-2", book)
 		if result != "Charlie" {
 			t.Errorf("expected 'Charlie', got %q", result)
 		}
@@ -759,12 +672,11 @@ func TestResolveNarratorNames(t *testing.T) {
 
 	t.Run("empty when no narrators", func(t *testing.T) {
 		mockStore := newMockStore(t)
-		svc := NewRenameService(mockStore)
 
 		mockStore.On("GetBookNarrators", "book-3").Return([]database.BookNarrator{}, nil)
 
 		book := &database.Book{ID: "book-3"}
-		result := svc.resolveNarratorNames("book-3", book)
+		result := resolveNarratorNames(mockStore, "book-3", book)
 		if result != "" {
 			t.Errorf("expected empty, got %q", result)
 		}
@@ -832,23 +744,7 @@ func TestPreviewOrganize_BookNotFound(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// PreviewRename (error path)
-// ---------------------------------------------------------------------------
-
-func TestPreviewRename_BookNotFound(t *testing.T) {
-	mockStore := newMockStore(t)
-	svc := NewRenameService(mockStore)
-
-	mockStore.On("GetBookByID", "gone").Return(nil, fmt.Errorf("not found"))
-
-	_, err := svc.PreviewRename("gone")
-	if err == nil {
-		t.Fatal("expected error for nonexistent book")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// stringPtr / stringOrDefault helpers
+// stringPtr helper
 // ---------------------------------------------------------------------------
 
 func TestStringHelpers(t *testing.T) {
@@ -859,18 +755,6 @@ func TestStringHelpers(t *testing.T) {
 		}
 	})
 
-	t.Run("stringOrDefault nil", func(t *testing.T) {
-		if got := stringOrDefault(nil, "default"); got != "default" {
-			t.Errorf("expected 'default', got %q", got)
-		}
-	})
-
-	t.Run("stringOrDefault non-nil", func(t *testing.T) {
-		s := "value"
-		if got := stringOrDefault(&s, "default"); got != "value" {
-			t.Errorf("expected 'value', got %q", got)
-		}
-	})
 }
 
 // ---------------------------------------------------------------------------
@@ -1065,128 +949,6 @@ func TestEnsureUnderRoot(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// RenameService.moveFile
-// ---------------------------------------------------------------------------
-
-func TestMoveFile(t *testing.T) {
-	mockStore := newMockStore(t)
-	svc := NewRenameService(mockStore)
-
-	t.Run("same filesystem rename", func(t *testing.T) {
-		tmpDir := t.TempDir()
-		src := filepath.Join(tmpDir, "src.m4b")
-		dst := filepath.Join(tmpDir, "dst.m4b")
-		os.WriteFile(src, []byte("data"), 0644)
-
-		err := svc.moveFile(src, dst)
-		if err != nil {
-			t.Fatalf("moveFile: %v", err)
-		}
-		if _, err := os.Stat(dst); err != nil {
-			t.Errorf("dest not found: %v", err)
-		}
-		if _, err := os.Stat(src); !os.IsNotExist(err) {
-			t.Error("source should not exist")
-		}
-	})
-
-	t.Run("creates destination directory", func(t *testing.T) {
-		tmpDir := t.TempDir()
-		src := filepath.Join(tmpDir, "src.m4b")
-		dst := filepath.Join(tmpDir, "sub", "dir", "dst.m4b")
-		os.WriteFile(src, []byte("data"), 0644)
-
-		err := svc.moveFile(src, dst)
-		if err != nil {
-			t.Fatalf("moveFile: %v", err)
-		}
-		if _, err := os.Stat(dst); err != nil {
-			t.Errorf("dest not found: %v", err)
-		}
-	})
-}
-
-// ---------------------------------------------------------------------------
-// RenameService.hardlinkOrCopy
-// ---------------------------------------------------------------------------
-
-func TestHardlinkOrCopy(t *testing.T) {
-	mockStore := newMockStore(t)
-	svc := NewRenameService(mockStore)
-
-	t.Run("creates file at destination", func(t *testing.T) {
-		tmpDir := t.TempDir()
-		src := filepath.Join(tmpDir, "src.m4b")
-		dst := filepath.Join(tmpDir, "sub", "dst.m4b")
-		os.WriteFile(src, []byte("content"), 0644)
-
-		err := svc.hardlinkOrCopy(src, dst)
-		if err != nil {
-			t.Fatalf("hardlinkOrCopy: %v", err)
-		}
-		// Verify destination exists with correct content
-		data, err := os.ReadFile(dst)
-		if err != nil {
-			t.Fatalf("read dst: %v", err)
-		}
-		if string(data) != "content" {
-			t.Errorf("content = %q, want 'content'", data)
-		}
-		// Source should still exist (never deleted)
-		if _, err := os.Stat(src); err != nil {
-			t.Errorf("source should still exist: %v", err)
-		}
-	})
-
-	t.Run("source not found", func(t *testing.T) {
-		tmpDir := t.TempDir()
-		err := svc.hardlinkOrCopy("/no/such/file.m4b", filepath.Join(tmpDir, "dst.m4b"))
-		if err == nil {
-			t.Fatal("expected error for missing source")
-		}
-	})
-}
-
-// ---------------------------------------------------------------------------
-// RenameService.copyAndDelete
-// ---------------------------------------------------------------------------
-
-func TestCopyAndDelete(t *testing.T) {
-	mockStore := newMockStore(t)
-	svc := NewRenameService(mockStore)
-
-	t.Run("copies and removes source", func(t *testing.T) {
-		tmpDir := t.TempDir()
-		src := filepath.Join(tmpDir, "src.m4b")
-		dst := filepath.Join(tmpDir, "dst.m4b")
-		os.WriteFile(src, []byte("audio data"), 0644)
-
-		err := svc.copyAndDelete(src, dst)
-		if err != nil {
-			t.Fatalf("copyAndDelete: %v", err)
-		}
-		data, err := os.ReadFile(dst)
-		if err != nil {
-			t.Fatalf("read dst: %v", err)
-		}
-		if string(data) != "audio data" {
-			t.Errorf("content = %q", data)
-		}
-		if _, err := os.Stat(src); !os.IsNotExist(err) {
-			t.Error("source should be deleted after copy")
-		}
-	})
-
-	t.Run("source not found", func(t *testing.T) {
-		tmpDir := t.TempDir()
-		err := svc.copyAndDelete("/no/such.m4b", filepath.Join(tmpDir, "dst.m4b"))
-		if err == nil {
-			t.Fatal("expected error for missing source")
-		}
-	})
-}
-
-// ---------------------------------------------------------------------------
 // NewService and setters
 // ---------------------------------------------------------------------------
 
@@ -1276,50 +1038,6 @@ func TestPreviewStepTypes(t *testing.T) {
 	}
 	if !resp.NeedsCopy {
 		t.Error("NeedsCopy should be true")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// PreviewRename (success path)
-// ---------------------------------------------------------------------------
-
-func TestPreviewRename_Success(t *testing.T) {
-	tmpDir := t.TempDir()
-	config.AppConfig = config.Config{
-		RootDir:             tmpDir,
-		FolderNamingPattern: "{author}",
-		FileNamingPattern:   "{title}",
-	}
-
-	mockStore := newMockStore(t)
-	mockStore.On("GetBookAuthors", mock.Anything).Return(nil, nil).Maybe()
-	svc := NewRenameService(mockStore)
-
-	book := &database.Book{
-		ID:       "book-1",
-		Title:    "Foundation",
-		FilePath: "/old/foundation.m4b",
-		Author:   &database.Author{Name: "Asimov"},
-	}
-	mockStore.On("GetBookByID", "book-1").Return(book, nil)
-	mockStore.On("GetBookNarrators", "book-1").Return([]database.BookNarrator{}, nil)
-
-	preview, err := svc.PreviewRename("book-1")
-	if err != nil {
-		t.Fatalf("PreviewRename: %v", err)
-	}
-	if preview.BookID != "book-1" {
-		t.Errorf("BookID = %q", preview.BookID)
-	}
-	if preview.CurrentPath != "/old/foundation.m4b" {
-		t.Errorf("CurrentPath = %q", preview.CurrentPath)
-	}
-	expected := filepath.Join(tmpDir, "Asimov", "Foundation.m4b")
-	if preview.ProposedPath != expected {
-		t.Errorf("ProposedPath = %q, want %q", preview.ProposedPath, expected)
-	}
-	if len(preview.TagChanges) == 0 {
-		t.Error("expected tag changes")
 	}
 }
 
@@ -1834,25 +1552,6 @@ func TestPreviewOrganize_MultiFileProtected(t *testing.T) {
 	}
 	if !foundFlatWarning {
 		t.Error("expected flat_itunes_directory warning")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// NewRenameService defaults coverage
-// ---------------------------------------------------------------------------
-
-func TestNewRenameService_DefaultResolve(t *testing.T) {
-	mockStore := newMockStore(t)
-	svc := NewRenameService(mockStore)
-
-	book := &database.Book{
-		Title:  "Test",
-		Author: &database.Author{Name: "A"},
-		Series: &database.Series{Name: "S"},
-	}
-	a, s := svc.ResolveAuthorAndSeriesNames(book)
-	if a != "A" || s != "S" {
-		t.Errorf("got %q/%q", a, s)
 	}
 }
 
