@@ -1,9 +1,9 @@
 // file: internal/server/activity_integration_test.go
-// version: 3.1.0
+// version: 3.1.1
 // guid: f8a3b2c1-d4e5-6f7a-8b9c-0d1e2f3a4b5c
-// last-edited: 2026-08-11
+// last-edited: 2026-10-09
 
-// NOTE(fable5 T022): Ported NewSQLiteActivityStore → NewNutsActivityStore.
+// NOTE(fable5 T022): Ported NewSQLiteActivityStore → the Pebble activity store.
 
 package server
 
@@ -23,11 +23,7 @@ import (
 
 func TestActivity_Integration_RecordAndHTTPQuery(t *testing.T) {
 	// Setup: create temp store, service, and router
-	store, err := database.NewNutsActivityStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("NewNutsActivityStore: %v", err)
-	}
-	defer store.Close()
+	store := newTestPebbleActivityStore(t)
 
 	svc := activity.NewService(store)
 	gin.SetMode(gin.TestMode)
@@ -143,11 +139,7 @@ func TestActivity_Integration_RecordAndHTTPQuery(t *testing.T) {
 }
 
 func TestActivity_Integration_TeeWriterCapture(t *testing.T) {
-	store, err := database.NewNutsActivityStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("NewNutsActivityStore: %v", err)
-	}
-	defer store.Close()
+	store := newTestPebbleActivityStore(t)
 
 	w := activity.NewWriter(store, 1000)
 	// Disable the default gin source skip so all 3 lines (including [GIN]) are stored

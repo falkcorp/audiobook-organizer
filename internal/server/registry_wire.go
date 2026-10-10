@@ -1,7 +1,7 @@
 // file: internal/server/registry_wire.go
-// version: 1.29.0
+// version: 1.29.1
 // guid: e2c1977d-0023-498f-81bd-76e9912eec89
-// last-edited: 2026-10-07
+// last-edited: 2026-10-09
 
 package server
 
@@ -256,10 +256,10 @@ func init() {
 		},
 	})
 
-	// metricsstore — Pebble-backed cache-stats snapshot store (TASK-22 cutover
-	// from NutsMetricsStore). Shares the main PebbleDB instance under the
+	// metricsstore — Pebble-backed cache-stats snapshot store (replaced the
+	// retired NutsDB metrics store). Shares the main PebbleDB instance under the
 	// "met:" key prefix; TTL is emulated via the sweep-pebble-metrics-ttl
-	// maintenance job rather than NutsDB's native per-key expiry. Returns a
+	// maintenance job rather than a native per-key expiry. Returns a
 	// nil *PebbleMetricsStore + logs when DatabasePath is empty (test paths)
 	// or the store isn't a *database.PebbleStore — server code nil-checks
 	// before use.
@@ -448,8 +448,8 @@ func wireServerFromContainer(s *Server, c *serviceregistry.Container) {
 	if scanStore, ok := serviceregistry.TryGet[*database.AIScanStore](c, "aiscanstore"); ok && scanStore != nil {
 		s.aiScanStore = scanStore
 	}
-	// WHY MetricsStorer interface: the metricsstore may be a NutsMetricsStore or
-	// a PebbleMetricsStore — both implement MetricsStorer.
+	// WHY MetricsStorer interface: the metricsstore is a PebbleMetricsStore, but
+	// callers depend only on the MetricsStorer interface.
 	if ms, ok := serviceregistry.TryGet[database.MetricsStorer](c, "metricsstore"); ok && ms != nil {
 		s.metricsStore = ms
 	}

@@ -1,7 +1,7 @@
 // file: internal/database/activity_summarize_grouping_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: d4544dd5-4577-4b7b-8e9c-59e9fdfba58b
-// last-edited: 2026-10-03
+// last-edited: 2026-10-09
 
 package database
 
@@ -17,7 +17,7 @@ import (
 )
 
 // summarizeBackend is the slice of the store surface these tests drive, so one
-// body runs against all three activity backends (Pebble, SQLite, Nuts).
+// body runs against all three activity backends (Pebble, SQLite).
 type summarizeBackend interface {
 	Record(ActivityEntry) (int64, error)
 	Query(context.Context, ActivityFilter) ([]ActivityEntry, int, error)
@@ -28,7 +28,6 @@ func summarizeBackends(t *testing.T) map[string]func() summarizeBackend {
 	return map[string]func() summarizeBackend{
 		"pebble": func() summarizeBackend { return newTestPebbleActivityStore(t) },
 		"sqlite": func() summarizeBackend { return newTestSQLStore(t) },
-		"nuts":   func() summarizeBackend { return newTestNutsActivityStore(t) },
 	}
 }
 
@@ -110,11 +109,9 @@ func TestSummarize_OldFormatSummaryStillReadable(t *testing.T) {
 			})
 			require.NoError(t, err)
 
-			if name != "nuts" { // Nuts never set PrunedAt on its summaries; see Summarize.
-				deleted, err := s.Summarize(ctx, pruned.Add(48*time.Hour), "change")
-				require.NoError(t, err)
-				assert.Zero(t, deleted, "an already-summarized row is not summarized again")
-			}
+			deleted, err := s.Summarize(ctx, pruned.Add(48*time.Hour), "change")
+			require.NoError(t, err)
+			assert.Zero(t, deleted, "an already-summarized row is not summarized again")
 			rows, total, err := s.Query(ctx, ActivityFilter{Tier: "change", Limit: 10})
 			require.NoError(t, err)
 			require.Equal(t, 1, total)
@@ -125,7 +122,7 @@ func TestSummarize_OldFormatSummaryStillReadable(t *testing.T) {
 }
 
 // seedSummarizeEntries writes entries through RecordBatch on a backend that
-// has one (Pebble, SQLite) and through Record otherwise (Nuts). RecordBatch
+// has one (Pebble, SQLite) and through Record otherwise. RecordBatch
 // runs the same per-row encoding and content key as Record in one commit;
 // these tests are about Summarize, and on SQLite a commit per row made seeding
 // 1,000 rows take 25 s on a loaded Mac (2026-10-03), against a few
@@ -165,9 +162,6 @@ func seedSummarizeGroup(t *testing.T, s summarizeBackend, day time.Time, n int) 
 // op_ids_sample were unreachable by any filter.
 func TestSummarize_OperationIDFindsSummary(t *testing.T) {
 	for name, mk := range summarizeBackends(t) {
-		if name == "nuts" {
-			continue // legacy backend: its op filter reads a per-op bucket only; see NutsActivityStore.Summarize
-		}
 		t.Run(name, func(t *testing.T) {
 			s := mk()
 			ctx := context.Background()
@@ -199,9 +193,6 @@ func TestSummarize_OperationIDFindsSummary(t *testing.T) {
 // a summary, and never one unbounded delete.
 func TestSummarize_ChunkedDeleteNeverLosesRows(t *testing.T) {
 	for name, mk := range summarizeBackends(t) {
-		if name == "nuts" {
-			continue
-		}
 		t.Run(name, func(t *testing.T) {
 			s := mk()
 			day := time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC)

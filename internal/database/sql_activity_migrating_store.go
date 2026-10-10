@@ -1,17 +1,14 @@
 // file: internal/database/sql_activity_migrating_store.go
-// version: 1.7.0
+// version: 1.7.1
 // guid: 4a1d8c62-7e59-4b03-9c8f-6d2e1a0b7f35
-// last-edited: 2026-09-19
+// last-edited: 2026-10-09
 
 // Package database — backend-migration wrapper for the activity log.
 //
 // MigratingActivityStore drives a live, no-downtime cutover from one
 // ActivityStorer (primary, e.g. Pebble) to another (secondary, e.g. SQLite),
-// the same shape as the Nuts→Pebble DualWriteActivityStore but generalized and
-// race-safe. It is distinct from that wrapper on purpose: DualWriteActivityStore
-// hardcodes nuts/pebble semantics and is retained as a rollback reference for
-// that earlier migration; conflating the two migrations in one type would tangle
-// their cutover state.
+// generalized and race-safe so the same wrapper serves any primary/secondary
+// pair; conflating cutover state across migrations would tangle it.
 //
 // ROUTING (deliberately NOT symmetric):
 //
@@ -307,19 +304,14 @@ func (m *MigratingActivityStore) CompactByDay(ctx context.Context, olderThan tim
 }
 
 // activityBackendName labels a backend for CompactProgressEvent.Backend using
-// the same vocabulary the stores use for their own events. Wrappers
-// (instrumentation) are unwrapped by type switch; an unknown type is named by
-// its Go type so a log line is never blank.
+// the same vocabulary the stores use for their own events. An unknown type is
+// named by its Go type so a log line is never blank.
 func activityBackendName(s ActivityStorer) string {
-	switch v := s.(type) {
+	switch s.(type) {
 	case *SQLActivityStore:
 		return "sqlite"
 	case *PebbleActivityStore:
 		return "pebble"
-	case *NutsActivityStore:
-		return "nuts"
-	case *InstrumentedActivityStorer:
-		return activityBackendName(v.store)
 	default:
 		return fmt.Sprintf("%T", s)
 	}

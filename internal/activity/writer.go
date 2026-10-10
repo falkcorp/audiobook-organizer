@@ -1,7 +1,7 @@
 // file: internal/activity/writer.go
-// version: 1.8.4
+// version: 1.8.5
 // guid: c3d4e5f6-a7b8-4c9d-0e1f-2a3b4c5d6e7f
-// last-edited: 2026-09-11
+// last-edited: 2026-10-09
 
 package activity
 
@@ -26,8 +26,9 @@ import (
 // WHY a narrow interface plus a runtime type assertion, and NOT a method on
 // database.ActivityStorer — the placement question, answered rather than
 // assumed. Widening the interface was measured, not estimated: adding
-// RecordBatch to database.ActivityWriter and rebuilding breaks the four real
-// implementations (Pebble, Nuts, DualWrite, Instrumented) plus exactly one test
+// RecordBatch to database.ActivityWriter and rebuilding broke the four real
+// implementations of the time (Pebble, Nuts, DualWrite, Instrumented; the last
+// three are since deleted) plus exactly one test
 // fake, which is a small enough blast radius that cost alone does not decide it.
 //
 // What decides it is the shape of the capability. The comment on

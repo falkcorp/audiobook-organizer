@@ -1,5 +1,5 @@
 // file: internal/activity/register.go
-// version: 1.10.0
+// version: 1.10.1
 // last-edited: 2026-10-09
 // guid: c4d5e6f7-a8b9-0009-2345-000000000009
 
@@ -172,8 +172,8 @@ func init() {
 		Needs:  []string{serviceregistry.KeyActivityStore},
 		Groups: []string{serviceregistry.KeyActivity},
 		Build: func(c *serviceregistry.Container) (any, error) {
-			// Use the ActivityStorer interface — the activitystore may be any of
-			// *NutsActivityStore, *DualWriteActivityStore (all implement ActivityStorer).
+			// Use the ActivityStorer interface — the activitystore may be any
+			// ActivityStorer implementation (Pebble, SQL, or the migrating wrapper).
 			store := serviceregistry.Get[database.ActivityStorer](c, serviceregistry.KeyActivityStore)
 			return NewService(store), nil
 		},

@@ -1,7 +1,7 @@
 // file: internal/database/activity_compact_test.go
-// version: 2.2.1
+// version: 2.2.2
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-09-02
+// last-edited: 2026-10-09
 
 package database
 
@@ -21,22 +21,12 @@ import (
 // text Summarize generates, capturing the count and the RFC3339 span.
 var summarizeSpanRE = regexp.MustCompile(`Summary: (\d+) \S+ entries \((\S+) to (\S+)\)`)
 
-// newTestNutsActivityStore creates a temp NutsActivityStore and registers cleanup.
-func newTestNutsActivityStore(t *testing.T) *NutsActivityStore {
-	t.Helper()
-	dir := t.TempDir()
-	store, err := NewNutsActivityStore(dir)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = store.Close() })
-	return store
-}
-
 // TestCompactByDay_BasicCompaction inserts 5 change-tier entries across 2
 // days plus 1 audit entry on day 1, compacts, and verifies 2 digests
 // created, 6 entries deleted (audit folds into day 1's digest), and the
 // audit entry is reflected in that digest.
 func TestCompactByDay_BasicCompaction(t *testing.T) {
-	s := newTestNutsActivityStore(t)
+	s := newTestPebbleActivityStore(t)
 
 	day1 := time.Date(2025, 6, 10, 12, 0, 0, 0, time.UTC)
 	day2 := time.Date(2025, 6, 11, 14, 0, 0, 0, time.UTC)
@@ -141,7 +131,7 @@ func TestCompactByDay_BasicCompaction(t *testing.T) {
 // TestCompactByDay_Idempotent verifies that compacting twice is a no-op the
 // second time.
 func TestCompactByDay_Idempotent(t *testing.T) {
-	s := newTestNutsActivityStore(t)
+	s := newTestPebbleActivityStore(t)
 
 	ts := time.Date(2025, 5, 1, 10, 0, 0, 0, time.UTC)
 	olderThan := time.Date(2025, 5, 2, 0, 0, 0, 0, time.UTC)
@@ -175,7 +165,7 @@ func TestCompactByDay_Idempotent(t *testing.T) {
 // left as raw rows. This is the regression test for the "Compact →
 // Everything (now)" button leaving pages of audit entries behind.
 func TestCompactByDay_FoldsAuditTier(t *testing.T) {
-	s := newTestNutsActivityStore(t)
+	s := newTestPebbleActivityStore(t)
 
 	ts := time.Date(2025, 4, 15, 8, 0, 0, 0, time.UTC)
 	olderThan := time.Date(2025, 4, 16, 0, 0, 0, 0, time.UTC)
@@ -219,7 +209,7 @@ func TestCompactByDay_FoldsAuditTier(t *testing.T) {
 // TestCompactByDay_TruncatesLargeDays inserts 600 entries on one day and
 // verifies items are capped at 500 with truncation metadata.
 func TestCompactByDay_TruncatesLargeDays(t *testing.T) {
-	s := newTestNutsActivityStore(t)
+	s := newTestPebbleActivityStore(t)
 
 	day := time.Date(2025, 3, 20, 6, 0, 0, 0, time.UTC)
 	olderThan := time.Date(2025, 3, 21, 0, 0, 0, 0, time.UTC)
@@ -272,7 +262,7 @@ func TestCompactByDay_TruncatesLargeDays(t *testing.T) {
 // permanently uncompacted. This test proves that's fixed: the second run
 // merges new entries into the existing digest and deletes the originals.
 func TestCompactByDay_MergesIntoExistingDigest(t *testing.T) {
-	s := newTestNutsActivityStore(t)
+	s := newTestPebbleActivityStore(t)
 
 	// Day 1: three initial entries at 08:00 on 2025-05-15.
 	day := time.Date(2025, 5, 15, 8, 0, 0, 0, time.UTC)
@@ -345,7 +335,7 @@ func TestCompactByDay_MergesIntoExistingDigest(t *testing.T) {
 // carries the source row's timestamp (non-zero) and any tags from that row.
 // This regression test covers the 2026-05-20 addition of these fields.
 func TestCompactByDay_DigestItemTimestampAndTags(t *testing.T) {
-	s := newTestNutsActivityStore(t)
+	s := newTestPebbleActivityStore(t)
 
 	base := time.Date(2026, 5, 1, 9, 0, 0, 0, time.UTC)
 	olderThan := time.Date(2026, 5, 2, 0, 0, 0, 0, time.UTC)
@@ -395,57 +385,6 @@ func TestCompactByDay_DigestItemTimestampAndTags(t *testing.T) {
 	}
 }
 
-// TestNutsActivityStore_RecompactDigests verifies that RecompactDigests:
-//  1. Re-derives type+tags on legacy digest items (type=system_log, empty tags).
-//  2. Returns the correct touched count.
-//  3. Is idempotent: a second run returns 0 touched.
-func TestNutsActivityStore_RecompactDigests(t *testing.T) {
-	s := newTestNutsActivityStore(t)
-	ctx := context.Background()
-
-	day := time.Date(2025, 3, 10, 0, 0, 0, 0, time.UTC)
-
-	// Insert 3 entries with legacy-style types that should be re-derived.
-	for i := range 3 {
-		_, err := s.Record(ActivityEntry{
-			Tier:      "change",
-			Type:      "system_log", // legacy type — should be re-derived
-			Level:     "info",
-			Source:    "compaction",
-			Summary:   "applied metadata to book",
-			Timestamp: day.Add(time.Duration(i) * time.Minute),
-			Tags:      []string{}, // empty tags — triggers isLegacyItem
-		})
-		require.NoError(t, err)
-	}
-
-	// Compact to create a digest.
-	olderThan := day.Add(24 * time.Hour)
-	_, err := s.CompactByDay(ctx, olderThan)
-	require.NoError(t, err)
-
-	// Run RecompactDigests — should touch exactly 1 digest.
-	res, err := s.RecompactDigests(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, 1, res.Touched, "first run: should touch the one digest")
-	assert.Equal(t, 0, res.Skipped, "first run: nothing should be skipped")
-
-	// Read back the digest and verify items got proper types and tags.
-	dd, _, err := s.findExistingDigest(day.Format("2006-01-02"))
-	require.NoError(t, err)
-	require.Len(t, dd.Items, 3, "digest should still have 3 items")
-	for i, item := range dd.Items {
-		assert.NotEqual(t, "system_log", item.Type, "item %d: type should be re-derived away from system_log", i)
-		assert.NotEmpty(t, item.Tags, "item %d: tags should be populated after recompact", i)
-	}
-
-	// Idempotency: second run should touch 0 (all items now have proper types/tags).
-	res2, err := s.RecompactDigests(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, 0, res2.Touched, "second run: should be idempotent (0 touched)")
-	assert.Equal(t, 1, res2.Skipped, "second run: digest should be skipped as already clean")
-}
-
 // summaryDateSpan parses the "(first to last)" RFC3339 span out of a
 // Summarize-generated Summary string and returns the entry count and each
 // side's calendar date.
@@ -469,7 +408,7 @@ func summaryDateSpan(t *testing.T, summary string) (count int, firstDate, lastDa
 // summarization window collapsed into one "N entries (day1 to dayN)" row —
 // the opposite of the per-day boundary CompactByDay enforces.
 func TestSummarize_GroupsByDay(t *testing.T) {
-	s := newTestNutsActivityStore(t)
+	s := newTestPebbleActivityStore(t)
 	ctx := context.Background()
 
 	day1 := time.Date(2025, 6, 1, 10, 0, 0, 0, time.UTC)

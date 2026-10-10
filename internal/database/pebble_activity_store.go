@@ -1,16 +1,16 @@
 // file: internal/database/pebble_activity_store.go
-// version: 1.30.1
+// version: 1.30.2
 // guid: d4e5f6a7-b8c9-0004-def0-000000000004
-// last-edited: 2026-09-26
+// last-edited: 2026-10-09
 
 // Package database — PebbleDB-backed activity log store.
 //
 // WHY a Pebble backend:
-//   - The NutsDB activity store (nuts_activity_store.go) works but carries an
-//     entire extra storage engine dependency (nutsdb/nutsdb). Pebble is already
-//     the primary database engine. Removing NutsDB requires a Pebble backend
-//     that satisfies the same ActivityStorer interface.
-//   - Key layout mirrors NutsDB verbatim so lexicographic ordering and range
+//   - The former NutsDB activity store carried an entire extra storage engine
+//     dependency. Pebble is already the primary database engine, so this
+//     backend satisfies the ActivityStorer interface without it (the NutsDB
+//     store has since been deleted).
+//   - Key layout mirrors the former NutsDB layout verbatim so lexicographic ordering and range
 //     scans behave identically (no behavioral change to callers).
 //
 // Key layout (all keys are []byte; prefixes end with ':'):
@@ -103,7 +103,7 @@ var (
 
 // PebbleActivityStore persists activity log entries in a shared PebbleDB database.
 // It satisfies the ActivityStorer interface and is a drop-in replacement for both
-// ActivityStore (SQLite) and NutsActivityStore.
+// ActivityStore (SQLite) and the retired NutsDB activity store.
 //
 // The caller retains ownership of the *pebble.DB — Close() on this store is a no-op.
 type PebbleActivityStore struct {

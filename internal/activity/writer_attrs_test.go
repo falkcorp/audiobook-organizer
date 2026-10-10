@@ -1,7 +1,7 @@
 // file: internal/activity/writer_attrs_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2b7d4e91-6c05-4a83-91ff-0d5e7a3c8b46
-// last-edited: 2026-08-16
+// last-edited: 2026-10-09
 
 package activity
 
@@ -146,10 +146,7 @@ func TestEndsWithPreposition(t *testing.T) {
 // This drives a real slog line through the real io.Writer and asserts on what
 // was persisted, plus that the attrs survived as queryable details.
 func TestWriter_PersistsRenderedSummary(t *testing.T) {
-	dir := t.TempDir()
-	store, err := database.NewNutsActivityStore(dir)
-	require.NoError(t, err)
-	defer store.Close()
+	store := newTestPebbleActivityStore(t)
 
 	devNull, err := os.Open(os.DevNull)
 	require.NoError(t, err)

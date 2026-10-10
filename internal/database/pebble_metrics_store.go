@@ -1,11 +1,11 @@
 // file: internal/database/pebble_metrics_store.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: e5f6a7b8-c9d0-0005-ef01-000000000005
 
 // Package database — PebbleDB-backed cache-stats metrics store.
 //
 // WHY a Pebble backend:
-//   - NutsMetricsStore (nuts_metrics_store.go) uses NutsDB's per-entry TTL
+//   - The former NutsDB metrics store used NutsDB's per-entry TTL
 //     (30-day expiry). Pebble has no built-in per-key TTL, so we emulate it:
 //     (a) writes record a 30-day expiry timestamp in each value's JSON, and
 //     (b) a TTL sweep function (called from maintenance) prunes expired entries.
@@ -20,7 +20,7 @@
 // The "met:" prefix avoids collision with all other PebbleDB key families.
 // Cache names are stored in met:_idx: so GetCacheStatsHistory can enumerate
 // all known names without scanning every met: key.
-// last-edited: 2026-09-02
+// last-edited: 2026-10-09
 
 package database
 
@@ -35,7 +35,7 @@ import (
 
 const (
 	// pmetTTLSeconds is the time-to-live for metrics snapshots: 30 days.
-	// Mirrors NutsMetricsStore's metricsTTL constant.
+	// Mirrors the retired NutsDB metrics store's metricsTTL constant.
 	pmetTTLSeconds = 30 * 24 * 3600
 
 	pmetKeyMaxNano = "99999999999999999999"
@@ -44,7 +44,7 @@ const (
 
 // PebbleMetricsStore persists cache-stats snapshots in a shared PebbleDB database.
 // It satisfies the MetricsStorer interface and is a drop-in replacement for
-// NutsMetricsStore.
+// the retired NutsDB metrics store.
 //
 // The caller retains ownership of the *pebble.DB — Close() on this store is a no-op.
 type PebbleMetricsStore struct {
@@ -179,7 +179,7 @@ func (s *PebbleMetricsStore) GetCacheStatsHistory(cacheName string, since time.T
 }
 
 // PruneCacheStatsHistory deletes snapshots older than olderThan.
-// Unlike NutsMetricsStore (which relies solely on TTL), this method provides
+// Unlike the retired NutsDB store (which relies solely on TTL), this method provides
 // an explicit prune so maintenance can reclaim space on demand.
 func (s *PebbleMetricsStore) PruneCacheStatsHistory(olderThan time.Time) (int64, error) {
 	names, err := s.cacheNames("")
