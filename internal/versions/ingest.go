@@ -1,7 +1,7 @@
 // file: internal/versions/ingest.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 3e1f2a9b-4c5d-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-09-01
+// last-edited: 2026-10-10
 //
 // Version creation on ingest (spec 3.1 task 5).
 //
@@ -29,11 +29,15 @@ import (
 
 // IngestVersionParams describes the provenance of a newly-ingested file.
 type IngestVersionParams struct {
-	BookID      string
-	FilePath    string
-	Format      string
-	Source      string // "imported", "scanned", "organized", "deluge"
-	TorrentHash string // empty for non-torrent sources
+	BookID   string
+	FilePath string
+	Format   string
+	// Source is "deluge" whenever TorrentHash is set.
+	Source string // "imported", "scanned", "organized", "deluge"
+	// TorrentHash is empty for non-torrent sources. The book_file link below
+	// (VersionID, FileHash) only happens when that row already exists at call
+	// time; a caller that creates the row afterwards gets an orphaned version.
+	TorrentHash string
 }
 
 // CreateIngestVersion creates a BookVersion for a newly-ingested file.

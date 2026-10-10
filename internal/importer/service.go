@@ -1,7 +1,7 @@
 // file: internal/importer/service.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: d0e1f2a3-b4c5-6d7e-8f9a-0b1c2d3e4f5b
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 
 package importer
 
@@ -134,6 +134,31 @@ type ImportFileRequest struct {
 	// everywhere until 2026-08-25, which is exactly the bug this comment exists
 	// to stop recurring.
 	Organize bool `json:"organize"`
+	// TorrentHash is the infohash of the torrent this file came from. The
+	// caller has already normalized it (lower-case hex) and, where it can,
+	// verified it against Deluge; ImportFile only re-checks its shape and
+	// ignores an empty value. When set it is written onto the new
+	// BookVersion (TorrentHash, Source "deluge") and the new BookFile
+	// (DelugeHash). It does not mark the file as copied: the later copy into
+	// the library sets ImportedFromDelugeAt and DelugeOriginalPath.
+	TorrentHash string `json:"torrent_hash,omitempty"`
+}
+
+// validTorrentHash reports whether s is exactly 40 (SHA-1) or 64 (SHA-256)
+// lowercase hex characters. internal/importer does not import
+// internal/deluge, so this mirrors deluge.NormalizeTorrentID's accepted
+// shape; a server test asserts the two agree.
+func validTorrentHash(s string) bool {
+	if n := len(s); n != 40 && n != 64 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		if !(ch >= '0' && ch <= '9' || ch >= 'a' && ch <= 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 type ImportFileResponse struct {
@@ -161,6 +186,9 @@ type ImportFileResponse struct {
 }
 
 func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse, error) {
+	if req.TorrentHash != "" && !validTorrentHash(req.TorrentHash) {
+		return nil, fmt.Errorf("invalid torrent hash: want 40 or 64 lowercase hex characters")
+	}
 	// Validate the path is inside an allowed directory before any filesystem
 	// access (go/path-injection); returns the cleaned absolute path.
 	absPath, err := fileops.ValidateUserPath(is.db, req.FilePath)
@@ -329,9 +357,14 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 	}
 
 	// Create version row for the imported file (spec 3.1).
+	versionSource := "imported"
+	if req.TorrentHash != "" {
+		versionSource = "deluge"
+	}
 	if _, verErr := versions.CreateIngestVersion(is.db, versions.IngestVersionParams{
 		BookID: created.ID, FilePath: created.FilePath,
-		Format: created.Format, Source: "imported",
+		Format: created.Format, Source: versionSource,
+		TorrentHash: req.TorrentHash,
 	}); verErr != nil {
 		slog.Warn("create ingest version", "id", created.ID, "err", verErr)
 	}
@@ -381,6 +414,9 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 		TrackCount:       meta.TrackTotal,
 		DiscNumber:       meta.DiscNumber,
 		DiscCount:        meta.DiscTotal,
+		// DelugeHash only; ImportedFromDelugeAt and DelugeOriginalPath stay
+		// unset because the file has not been copied (copy model, D57).
+		DelugeHash: req.TorrentHash,
 	}
 	if meta.TrackNumber > 0 {
 		bf.TrackNumber = meta.TrackNumber

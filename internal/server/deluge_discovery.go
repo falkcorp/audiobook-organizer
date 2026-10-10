@@ -1,7 +1,7 @@
 // file: internal/server/deluge_discovery.go
-// version: 3.3.0
+// version: 3.4.0
 // guid: e6f7a8b9-c0d1-2e3f-4a5b-6c7d8e9f0a1b
-// last-edited: 2026-09-14
+// last-edited: 2026-10-10
 //
 // Deluge label-based audiobook discovery — HTTP handlers.
 //
@@ -13,6 +13,8 @@ package server
 import (
 	"errors"
 	"net/http"
+	"path/filepath"
+	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	delugeclient "github.com/falkcorp/audiobook-organizer/internal/deluge"
@@ -94,9 +96,18 @@ func (s *Server) handleDelugeDiscoverImport(c *gin.Context) {
 		return
 	}
 
+	// Resolve the torrent link BEFORE importing: a hash that does not check out
+	// against Deluge is rejected (400) or dropped (unlinked), and only a
+	// verified hash is ever handed to ImportFile.
+	verifiedHash, linkNote, ok := s.verifyDiscoveryTorrentHash(c, req.ContentPath, req.TorrentHash)
+	if !ok {
+		return
+	}
+
 	resp, err := s.importService.ImportFile(&importer.ImportFileRequest{
-		FilePath: req.ContentPath,
-		Organize: false,
+		FilePath:    req.ContentPath,
+		Organize:    false,
+		TorrentHash: verifiedHash,
 	})
 	if err != nil {
 		httputil.InternalError(c, "failed to import file", err)
@@ -104,9 +115,68 @@ func (s *Server) handleDelugeDiscoverImport(c *gin.Context) {
 	}
 
 	httputil.RespondWithCreated(c, struct {
-		Book        any    `json:"book"`
-		TorrentHash string `json:"torrent_hash"`
-	}{Book: resp, TorrentHash: req.TorrentHash})
+		Book            any    `json:"book"`
+		TorrentHash     string `json:"torrent_hash"`
+		TorrentLinked   bool   `json:"torrent_linked"`
+		TorrentLinkNote string `json:"torrent_link_note,omitempty"`
+	}{Book: resp, TorrentHash: req.TorrentHash, TorrentLinked: verifiedHash != "", TorrentLinkNote: linkNote})
+}
+
+// verifyDiscoveryTorrentHash normalizes the caller's torrent hash and
+// cross-checks it against Deluge. It returns the hash to store (empty when the
+// import must proceed unlinked), a note explaining why it is empty, and
+// ok=false when it has already written a 400 response.
+//
+// An unverifiable hash is dropped, never stored: Deluge not configured or
+// unreachable proceeds unlinked; a malformed hash, a torrent Deluge does not
+// know, or a content_path that is not a file of that torrent is a 400.
+func (s *Server) verifyDiscoveryTorrentHash(c *gin.Context, contentPath, rawHash string) (hash, note string, ok bool) {
+	if rawHash == "" {
+		return "", "", true
+	}
+	hash, err := delugeclient.NormalizeTorrentID(rawHash)
+	if err != nil {
+		httputil.RespondWithBadRequest(c, "torrent_hash is not a valid torrent id: "+err.Error())
+		return "", "", false
+	}
+	client := getDelugeClient()
+	if client == nil {
+		return "", "deluge not configured", true
+	}
+	detail, err := client.GetTorrentDetail(hash)
+	if err != nil {
+		if errors.Is(err, delugeclient.ErrTorrentNotFound) {
+			httputil.RespondWithBadRequest(c, "torrent_hash does not name a torrent in Deluge")
+			return "", "", false
+		}
+		return "", "deluge unreachable: " + shortLinkError(err), true
+	}
+	// The route imports exactly one file, so an exact match against one entry
+	// of the torrent's file list is the strong check. Compare cleaned
+	// absolute paths, never raw strings.
+	want, absErr := filepath.Abs(contentPath)
+	if absErr != nil {
+		httputil.RespondWithBadRequest(c, "content_path is not a valid path")
+		return "", "", false
+	}
+	for _, f := range detail.Files {
+		if abs, aerr := filepath.Abs(detail.AbsPath(f)); aerr == nil && abs == want {
+			return hash, "", true
+		}
+	}
+	httputil.RespondWithBadRequest(c, "content_path is not a file of that torrent")
+	return "", "", false
+}
+
+// shortLinkError bounds an upstream error to a short single line for the
+// response note.
+func shortLinkError(err error) string {
+	msg := strings.Join(strings.Fields(err.Error()), " ")
+	const maxLen = 120
+	if len(msg) > maxLen {
+		msg = msg[:maxLen] + "..."
+	}
+	return msg
 }
 
 // handleDiscoveryImport triggers importToLibrary for all book_files that
