@@ -1,7 +1,7 @@
 // file: internal/versions/fingerprint.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8d5e7f4c-9c5a-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-08-19
+// last-edited: 2026-10-10
 //
 // Fingerprint check for incoming files (spec 3.1 task 4).
 //
@@ -69,6 +69,40 @@ func CheckFingerprint(
 	}
 
 	return &FingerprintMatch{Matched: false}
+}
+
+// LiveTorrentHolder returns the version that currently owns torrentHash in
+// the one-to-one idx:bv:torrent:<hash> index, but only when that ownership is
+// live: the version is not purged, blocked or trashed (those are
+// CheckFingerprint's business), and its book still exists and is not marked
+// for deletion. It returns (nil, nil) when nothing live holds the hash,
+// including a stale index entry whose version or book is gone: DeleteBook does
+// not remove a book's versions, so the key can outlive its book, and treating
+// such an entry as live would refuse that torrent forever.
+//
+// Callers use it to refuse a second link: CreateBookVersion overwrites the
+// index unconditionally, so linking a hash that a live version already holds
+// moves the torrent away from the book that owns it. A read error is returned,
+// never guessed at.
+func LiveTorrentHolder(store TorrentHolderReader, torrentHash string) (*database.BookVersion, error) {
+	if torrentHash == "" {
+		return nil, nil
+	}
+	ver, err := store.GetBookVersionByTorrentHash(torrentHash)
+	if err != nil {
+		return nil, err
+	}
+	if ver == nil || isPurgedOrBlocked(ver.Status) {
+		return nil, nil
+	}
+	book, err := store.GetBookByID(ver.BookID)
+	if err != nil {
+		return nil, err
+	}
+	if book == nil || (book.MarkedForDeletion != nil && *book.MarkedForDeletion) {
+		return nil, nil
+	}
+	return ver, nil
 }
 
 // isPurgedOrBlocked returns true for version statuses that indicate

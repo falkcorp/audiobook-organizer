@@ -1,5 +1,5 @@
 // file: internal/importer/service.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: d0e1f2a3-b4c5-6d7e-8f9a-0b1c2d3e4f5b
 // last-edited: 2026-10-10
 
@@ -48,8 +48,8 @@ type importForwarded interface {
 	database.ImportPathStore
 	// merge.BookTitle.
 	merge.BookReader
-	// versions.CheckFingerprint.
-	versions.FingerprintReader
+	// versions.CheckFingerprint and versions.LiveTorrentHolder.
+	versions.TorrentHolderReader
 	// versions.CreateIngestVersion.
 	versions.IngestStore
 }
@@ -145,8 +145,9 @@ type ImportFileRequest struct {
 	// ImportFile does NOT verify the hash against Deluge. It checks only the
 	// shape (40 or 64 lower-case hex) and trusts the caller for the rest, so a
 	// new caller must do its own verification first. An empty value means "no
-	// torrent". A hash whose content was previously purged or blocked is never
-	// linked (see ImportFileResponse.TorrentLinked). When it is linked it is
+	// torrent". A hash whose content was previously purged or blocked, or that
+	// a live version of another book already holds, is never linked (see
+	// ImportFileResponse.TorrentLinked). When it is linked it is
 	// written onto the new BookVersion (TorrentHash, Source "deluge") and the
 	// new BookFile (DelugeHash). It does not mark the file as copied: the later
 	// copy into the library sets ImportedFromDelugeAt and DelugeOriginalPath.
@@ -219,6 +220,14 @@ const (
 	// TorrentLinkNoteFileFailed: the version carrying the hash was created but
 	// the book_file row was not, so the link is incomplete.
 	TorrentLinkNoteFileFailed = "book file row not recorded"
+	// TorrentLinkNoteAlreadyLinked: a live version of another book already
+	// holds the hash in the one-to-one torrent index. Linking again would move
+	// the index to the new book and orphan the existing link, so the file is
+	// imported unlinked and the existing link is left alone.
+	TorrentLinkNoteAlreadyLinked = "torrent already linked to another book"
+	// TorrentLinkNoteLookupFailed: the torrent index could not be read, so
+	// whether the hash is already linked is unknown and it is not linked.
+	TorrentLinkNoteLookupFailed = "torrent index not readable"
 )
 
 func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse, error) {
@@ -396,6 +405,32 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 			linkHash = ""
 			linkNote = TorrentLinkNotePurged
 			purged = true
+		}
+	}
+	// Already-linked guard, also BEFORE the book row exists. The torrent index
+	// is one-to-one and CreateBookVersion overwrites it unconditionally, so a
+	// second link (a retried or doubled discover import) would move the index
+	// from the book that owns the torrent to this new one, orphaning the first
+	// link. The discover handler refuses such a request with 409 before calling
+	// here; this guard keeps any other caller, or a request that raced past the
+	// handler's check, from stealing the index. Unlike the purge guard the new
+	// book still gets an ordinary unlinked version: nothing about the content
+	// is refused, only the second link. A concurrent pair can still both pass
+	// this check (check-then-create, no lock); the sequential retry cannot.
+	if linkHash != "" {
+		holder, holdErr := versions.LiveTorrentHolder(is.db, linkHash)
+		switch {
+		case holdErr != nil:
+			logger.New("importer").Warn("could not read the torrent index for %s; importing %s without the torrent link: %s",
+				linkHash, logger.SanitizeLogValue(req.FilePath), logger.SanitizeLogValue(holdErr.Error()))
+			linkHash = ""
+			linkNote = TorrentLinkNoteLookupFailed
+		case holder != nil:
+			logger.New("importer").Warn("torrent %s is already linked to book %s (version %s); importing %s without the torrent link",
+				linkHash, logger.SanitizeLogValue(holder.BookID), logger.SanitizeLogValue(holder.ID),
+				logger.SanitizeLogValue(req.FilePath))
+			linkHash = ""
+			linkNote = TorrentLinkNoteAlreadyLinked
 		}
 	}
 

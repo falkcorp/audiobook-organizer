@@ -1,5 +1,5 @@
 // file: internal/importer/service_torrent_hash_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7b0f6d2e-3a41-4c85-9e17-5d8a2c4b1f90
 // last-edited: 2026-10-10
 
@@ -245,5 +245,119 @@ func TestImportFile_TorrentHashVersionFailureDropsFileHash(t *testing.T) {
 	}
 	if resp.TorrentLinked || resp.TorrentLinkNote != TorrentLinkNoteVersionFailed {
 		t.Errorf("want unlinked with note %q, got linked=%v note=%q", TorrentLinkNoteVersionFailed, resp.TorrentLinked, resp.TorrentLinkNote)
+	}
+}
+
+// alreadyLinkedStore is torrentStore where the torrent index already names an
+// active version ("v-old") of book "b-old"; bookExists controls whether that
+// book is still there.
+func alreadyLinkedStore(dir string, rows *[]*database.BookFile, vers *[]*database.BookVersion, created *int, bookExists bool) *database.MockStore {
+	st := torrentStore(dir, rows, vers, created)
+	st.GetBookVersionByTorrentHashFunc = func(hash string) (*database.BookVersion, error) {
+		return &database.BookVersion{ID: "v-old", BookID: "b-old", Status: database.BookVersionStatusActive, TorrentHash: hash}, nil
+	}
+	inner := st.GetBookByIDFunc
+	st.GetBookByIDFunc = func(id string) (*database.Book, error) {
+		if id == "b-old" {
+			if bookExists {
+				return &database.Book{ID: "b-old", Title: "Example Book"}, nil
+			}
+			return nil, nil
+		}
+		if inner != nil {
+			return inner(id)
+		}
+		return nil, nil
+	}
+	return st
+}
+
+// A hash a live version already holds is not linked a second time: the import
+// goes ahead with an ordinary unlinked version, so CreateBookVersion never
+// sees the hash and cannot move the one-to-one torrent index to the new book.
+func TestImportFile_TorrentHashAlreadyLinkedImportsUnlinked(t *testing.T) {
+	withSupportedExt(t)
+	dir, path := stageFixture(t)
+
+	var rows []*database.BookFile
+	var vers []*database.BookVersion
+	var created int
+	is := NewImportService(alreadyLinkedStore(dir, &rows, &vers, &created, true))
+
+	resp, err := is.ImportFile(&ImportFileRequest{FilePath: path, TorrentHash: testTorrentHash})
+	if err != nil {
+		t.Fatalf("an already-linked hash must not fail the import: %v", err)
+	}
+	if created != 1 {
+		t.Errorf("the book is created exactly once, got %d CreateBook calls", created)
+	}
+	if len(vers) != 1 {
+		t.Fatalf("the new book still gets one ordinary version, got %d", len(vers))
+	}
+	if vers[0].TorrentHash != "" {
+		t.Errorf("the new version must not carry the hash (it would steal the index): TorrentHash = %q", vers[0].TorrentHash)
+	}
+	if vers[0].Source != "imported" {
+		t.Errorf("version Source = %q, want imported", vers[0].Source)
+	}
+	if len(rows) != 1 || rows[0].DelugeHash != "" {
+		t.Fatalf("the file row must be written without the hash, got %+v", rows)
+	}
+	if resp.TorrentLinked || resp.TorrentLinkNote != TorrentLinkNoteAlreadyLinked {
+		t.Errorf("want unlinked with note %q, got linked=%v note=%q", TorrentLinkNoteAlreadyLinked, resp.TorrentLinked, resp.TorrentLinkNote)
+	}
+}
+
+// Control: an index entry whose book no longer exists is stale, not a live
+// holder, so the hash links normally. Without this the guard could refuse a
+// torrent forever after its book was deleted.
+func TestImportFile_TorrentHashStaleHolderStillLinks(t *testing.T) {
+	withSupportedExt(t)
+	dir, path := stageFixture(t)
+
+	var rows []*database.BookFile
+	var vers []*database.BookVersion
+	var created int
+	is := NewImportService(alreadyLinkedStore(dir, &rows, &vers, &created, false))
+
+	resp, err := is.ImportFile(&ImportFileRequest{FilePath: path, TorrentHash: testTorrentHash})
+	if err != nil {
+		t.Fatalf("import failed: %v", err)
+	}
+	if !resp.TorrentLinked || resp.TorrentLinkNote != "" {
+		t.Errorf("want linked with no note, got linked=%v note=%q", resp.TorrentLinked, resp.TorrentLinkNote)
+	}
+	if len(vers) != 1 || vers[0].TorrentHash != testTorrentHash {
+		t.Errorf("the version must carry the hash, got %+v", vers)
+	}
+}
+
+// The torrent index cannot be read: whether the hash is already linked is
+// unknown, so it is not linked, and the import still succeeds.
+func TestImportFile_TorrentHashIndexErrorImportsUnlinked(t *testing.T) {
+	withSupportedExt(t)
+	dir, path := stageFixture(t)
+
+	var rows []*database.BookFile
+	var vers []*database.BookVersion
+	var created int
+	st := torrentStore(dir, &rows, &vers, &created)
+	st.GetBookVersionByTorrentHashFunc = func(string) (*database.BookVersion, error) {
+		return nil, errors.New("synthetic index failure")
+	}
+	is := NewImportService(st)
+
+	resp, err := is.ImportFile(&ImportFileRequest{FilePath: path, TorrentHash: testTorrentHash})
+	if err != nil {
+		t.Fatalf("an index read failure must not fail the import: %v", err)
+	}
+	if len(vers) != 1 || vers[0].TorrentHash != "" {
+		t.Errorf("want one unlinked version, got %+v", vers)
+	}
+	if len(rows) != 1 || rows[0].DelugeHash != "" {
+		t.Errorf("the file row must not carry the hash, got %+v", rows)
+	}
+	if resp.TorrentLinked || resp.TorrentLinkNote != TorrentLinkNoteLookupFailed {
+		t.Errorf("want unlinked with note %q, got linked=%v note=%q", TorrentLinkNoteLookupFailed, resp.TorrentLinked, resp.TorrentLinkNote)
 	}
 }
