@@ -1083,12 +1083,8 @@ func truncateActivity(s string, maxLen int) string {
 	return s[:maxLen] + "..."
 }
 
-// bookFileLister and rejectedKeyScanner are the two one-method surfaces the
-// free functions in batch.go need. Each took database.Store.
+// bookFileLister is the one-method surface the free functions in batch.go
+// need. It took database.Store.
 type bookFileLister interface {
 	GetBookFiles(bookID string) ([]database.BookFile, error)
-}
-
-type rejectedKeyScanner interface {
-	ScanPrefix(prefix string) ([]database.KVPair, error)
 }

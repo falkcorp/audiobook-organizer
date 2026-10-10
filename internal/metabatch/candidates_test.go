@@ -1,7 +1,7 @@
 // file: internal/metabatch/candidates_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-09-19
+// last-edited: 2026-10-10
 
 package metabatch_test
 
@@ -174,16 +174,20 @@ func TestLoadRejectedCandidateKeys_WithRejections(t *testing.T) {
 	prefix := fmt.Sprintf("rejected_candidate:%s:", bookID)
 	store := &mockRawKVStore{
 		pairs: []database.KVPair{
-			{Key: prefix + "audible|Project Hail Mary", Value: []byte("1")},
-			{Key: prefix + "hardcover|The Martian", Value: []byte("1")},
+			{Key: prefix + "audible|Quiet Harbor", Value: []byte("1")},
+			{Key: prefix + "hardcover|The Long Field", Value: []byte("1")},
 		},
 	}
 	keys := metabatch.LoadRejectedCandidateKeys(store, bookID)
-	if !keys["audible|Project Hail Mary"] {
-		t.Error("expected 'audible|Project Hail Mary' to be in rejected keys")
+	if !keys.Has("audible", "Quiet Harbor") {
+		t.Error("expected 'audible|Quiet Harbor' to be in rejected keys")
 	}
-	if !keys["hardcover|The Martian"] {
-		t.Error("expected 'hardcover|The Martian' to be in rejected keys")
+	if !keys.Has("hardcover", "The Long Field") {
+		t.Error("expected 'hardcover|The Long Field' to be in rejected keys")
+	}
+	// Matching folds case, as the cached row's dedup does.
+	if !keys.Has("Audible", "QUIET HARBOR") {
+		t.Error("expected a case-folded match")
 	}
 }
 

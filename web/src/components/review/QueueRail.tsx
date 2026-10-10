@@ -1,7 +1,7 @@
 // file: web/src/components/review/QueueRail.tsx
-// version: 1.15.0
+// version: 1.16.0
 // guid: 4f8c2b96-7a15-4e30-9d82-6b0e5a3c1f74
-// last-edited: 2026-10-06
+// last-edited: 2026-10-10
 //
 // The left rail: everything that decides WHICH candidates are in front of the
 // reviewer, plus a queue overview of the ones that made it through.
@@ -791,6 +791,21 @@ export function QueueRail({
                     >
                       <SearchIcon fontSize="small" />
                     </IconButton>
+                  </Tooltip>
+                )}
+                {/* The owner rejected this candidate: every apply button
+                    refuses it server-side, so say so on the row rather than
+                    let an apply come back blocked with no visible reason. */}
+                {r.owner_rejected === true && (
+                  <Tooltip title="You rejected this candidate for this book. It will not be applied by any button; un-reject it to apply it.">
+                    <Chip
+                      size="small"
+                      color="error"
+                      variant="outlined"
+                      label="Rejected"
+                      data-testid={`owner-rejected-${r.book.id}`}
+                      aria-label={`Candidate for ${r.book.title} was rejected by you`}
+                    />
                   </Tooltip>
                 )}
                 {/* Explicitly false, not falsy: a row with no age is not a

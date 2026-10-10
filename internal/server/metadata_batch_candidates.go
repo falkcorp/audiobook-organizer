@@ -1,7 +1,7 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 4.24.3
+// version: 4.25.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
-// last-edited: 2026-10-06
+// last-edited: 2026-10-10
 //
 // HTTP handlers for the metadata candidate batch fetch / apply pipeline.
 // Pure service types and logic live in internal/metabatch.
@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -538,8 +539,7 @@ func candidateResultFromEntry(
 	rejectedKeys := metabatch.LoadRejectedCandidateKeys(store, bookID)
 	var filtered []metafetch.MetadataCandidate
 	for _, c := range resp.Results {
-		key := c.Source + "|" + c.Title
-		if !rejectedKeys[key] {
+		if !rejectedKeys.HasCandidate(&c) {
 			filtered = append(filtered, c)
 		}
 	}
@@ -890,7 +890,10 @@ func (s *Server) handleBatchApplyCandidates(c *gin.Context) {
 }
 
 // handleRejectCandidates stores rejected candidates so future fetches exclude them.
-// The rejection is stored as an operation_result with status "rejected".
+// The rejection is stored as an operation_result with status "rejected", and
+// as the owner's rejection key (metafetch.RejectedCandidateStoreKey), which
+// every apply path refuses whatever op or pin it comes from; the book's
+// cached row is then re-ordered so the rejected candidate leaves slot 0.
 func (s *Server) handleRejectCandidates(c *gin.Context) {
 	// The list this feeds is memoised; a status change must not keep offering a
 	// candidate the user just acted on.
@@ -920,6 +923,7 @@ func (s *Server) handleRejectCandidates(c *gin.Context) {
 	}
 
 	rejected := 0
+	var touched []string
 	for _, r := range results {
 		if !rejectSet[r.BookID] {
 			continue
@@ -940,13 +944,23 @@ func (s *Server) handleRejectCandidates(c *gin.Context) {
 			Status:      "rejected",
 		})
 
-		// Store a fast-lookup rejection key for the batch fetch dedup
+		// Store the owner's rejection: the batch fetch's pick skips it, the
+		// apply gate refuses it (applygate.ReasonOwnerRejected), and the
+		// book's cached row is re-ordered below so it leaves slot 0.
 		if cr.Candidate != nil {
-			rejectKey := fmt.Sprintf("rejected_candidate:%s:%s|%s", r.BookID, cr.Candidate.Source, cr.Candidate.Title)
-			_ = store.SetRaw(rejectKey, []byte("1"))
+			if err := store.SetRaw(metafetch.RejectedCandidateStoreKey(r.BookID, cr.Candidate.Source, cr.Candidate.Title), []byte("1")); err != nil {
+				// The rejections already written still re-rank their rows.
+				s.rerankAfterRejection(c, "reject", touched)
+				httputil.InternalError(c, "failed to record rejection", err)
+				return
+			}
+			touched = append(touched, r.BookID)
 		}
 		rejected++
 	}
+	// Slot 0 of the cached row is what the review lane shows and every bulk
+	// apply reads; move the rejected candidate out of it (owner_rejected_rerank.go).
+	s.rerankAfterRejection(c, "reject", touched)
 
 	httputil.RespondWithOK(c, struct {
 		Rejected int `json:"rejected"`
@@ -983,6 +997,7 @@ func (s *Server) handleUnrejectCandidates(c *gin.Context) {
 	}
 
 	unrejected := 0
+	var touched []string
 	for _, r := range results {
 		if !unrejectSet[r.BookID] {
 			continue
@@ -1004,13 +1019,21 @@ func (s *Server) handleUnrejectCandidates(c *gin.Context) {
 			Status:      "matched",
 		})
 
-		// Remove the fast-lookup rejection key
+		// Remove the rejection: every stored key that matches it, whatever
+		// case it was written in (matching folds case,
+		// metafetch.RejectionKey), or the candidate would stay rejected.
 		if cr.Candidate != nil {
-			rejectKey := fmt.Sprintf("rejected_candidate:%s:%s|%s", r.BookID, cr.Candidate.Source, cr.Candidate.Title)
-			_ = store.DeleteRaw(rejectKey)
+			if err := deleteRejectionKeys(s.storeForWiring(), r.BookID, cr.Candidate.Source, cr.Candidate.Title); err != nil {
+				s.rerankAfterRejection(c, "unreject", touched)
+				httputil.InternalError(c, "failed to remove rejection", err)
+				return
+			}
+			touched = append(touched, r.BookID)
 		}
 		unrejected++
 	}
+	// The un-rejected candidate ranks by its score again in the cached row.
+	s.rerankAfterRejection(c, "unreject", touched)
 
 	httputil.RespondWithOK(c, struct {
 		Unrejected int `json:"unrejected"`
@@ -1169,4 +1192,41 @@ func (s *Server) handleListMetadataResults(c *gin.Context) {
 		"limit":     pp.Limit,
 		"offset":    pp.Offset,
 	})
+}
+
+// rejectionKeyStore is what deleteRejectionKeys reads and deletes.
+type rejectionKeyStore interface {
+	ScanPrefix(prefix string) ([]database.KVPair, error)
+	DeleteRaw(key string) error
+}
+
+// deleteRejectionKeys removes every stored rejection of source|title for
+// bookID, in whatever case each was written.
+func deleteRejectionKeys(store rejectionKeyStore, bookID, source, title string) error {
+	prefix := metafetch.RejectedCandidateBookPrefix(bookID)
+	pairs, err := store.ScanPrefix(prefix)
+	if err != nil {
+		return fmt.Errorf("read rejections for book %s: %w", bookID, err)
+	}
+	want := metafetch.RejectionKey(source, title)
+	for _, kv := range pairs {
+		if suffix, ok := strings.CutPrefix(kv.Key, prefix); ok && metafetch.RejectionKeyOfStored(suffix) == want {
+			if err := store.DeleteRaw(kv.Key); err != nil {
+				return fmt.Errorf("delete rejection %s: %w", kv.Key, err)
+			}
+		}
+	}
+	return nil
+}
+
+// rerankAfterRejection re-ranks the cached rows of the books a reject or
+// un-reject request changed. It is not cancelled with the request: a client
+// that disconnects must not leave a rejected candidate in slot 0 (the
+// one-time pass has already run by then).
+func (s *Server) rerankAfterRejection(c *gin.Context, what string, bookIDs []string) {
+	if len(bookIDs) == 0 {
+		return
+	}
+	counts := rerankCachedRows(context.WithoutCancel(c.Request.Context()), s.storeForWiring(), s.metadataFetchService, bookIDs)
+	ownerRejectedLog.Info("%s: re-ranked cached rows: %s", what, counts)
 }

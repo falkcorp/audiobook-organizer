@@ -1,7 +1,7 @@
 // file: internal/metabatch/upgrade_applycap_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 2c9d5e71-8f4b-4a3e-b6d0-7e1c3a5f9d24
-// last-edited: 2026-10-05
+// last-edited: 2026-10-10
 
 package metabatch
 
@@ -24,6 +24,7 @@ type capStubStore struct {
 	tagLookups int
 }
 
+func (s *capStubStore) ScanPrefix(string) ([]database.KVPair, error)          { return nil, nil }
 func (s *capStubStore) GetRecentOperations(int) ([]database.Operation, error) { return nil, nil }
 func (s *capStubStore) ListOperationsV2Since(time.Time, int) ([]database.OperationV2Row, error) {
 	return nil, nil

@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.37.2
+// version: 1.38.0
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package server
 
@@ -91,6 +91,9 @@ type bookReader interface {
 	// authority.Reader: the resolver refuses a title that is a known
 	// person's name (the authority lists).
 	authority.Reader
+	// RejectedCandidateReader feeds the gate's owner-rejected leg
+	// (applygate.LoadRejections): the same store the reject handler writes.
+	metafetch.RejectedCandidateReader
 }
 
 // bulkManualOnlyGuard builds the certainty gate's owner-manual-only input
@@ -437,7 +440,13 @@ func planCachedApply(svc cachedApplyService, books bookReader, id string, claims
 	// (web/src/components/review/lanes/useMetadataLane.ts), so several row
 	// approvals arrive together. A bulk button's pin (origin "review_bulk") and the
 	// hashless marker are not row pins and get the guard.
-	v := applygate.EvaluateTranscribed(book, authors, gateRuntime(books, book), &cand, idErr, claims, ts,
+	//
+	// The owner's rejections are read for every caller, pinned or not: a
+	// rejected candidate is refused as owner_rejected, and no pin lifts that
+	// (applygate.OwnerReviewOverridable) -- the lane sends a pin for whatever
+	// it showed, so a pin is no proof the owner meant to undo a rejection.
+	v := applygate.EvaluateTranscribed(book, authors, gateRuntime(books, book), &cand, idErr, claims,
+		applygate.LoadRejections(books, book.ID), ts,
 		bulkManualOnlyGuard(books, book, pin != nil && pin.IsRowReview(), metabatch.ResolveCandidateSearchQuery(books, book).Title))
 	// Any owner-review pin (row, bulk, or the hashless marker) lifts the
 	// certainty gate -- the marker short of review_only_source (below). A single-row pin is an approval that overwrites
@@ -509,8 +518,12 @@ func planOpResultApply(books bookReader, id string, cr CandidateResult, claims *
 			metafetch.ErrStaleMetadataCache, book.ID, cr.SearchQuerySource, cr.SearchQuery)
 		ts.ExplainsStaleIdentity = ts.Query != ""
 	}
-	// Nobody picks candidates on this path: it is always bulk.
-	v := applygate.EvaluateTranscribed(book, authors, gateRuntime(books, book), &cand, idErr, claims, ts,
+	// Nobody picks candidates on this path: it is always bulk. The owner's
+	// rejections are read from the store, not from this op's result status:
+	// a rejection flips the status only in the op the owner had open, so
+	// another op's result for the same candidate still says "matched".
+	v := applygate.EvaluateTranscribed(book, authors, gateRuntime(books, book), &cand, idErr, claims,
+		applygate.LoadRejections(books, book.ID), ts,
 		bulkManualOnlyGuard(books, book, false, cr.SearchQuery))
 	plan := cachedApplyPlan{Book: book, Candidate: &cand, Gate: &v}
 	if !v.Allowed {

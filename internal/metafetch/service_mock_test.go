@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_mock_test.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 
 package metafetch
 
@@ -507,15 +507,33 @@ func TestPipelineCheckpoints(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// LoadRejectedCandidateKeys
+// LoadRejectedCandidates
 // ---------------------------------------------------------------------------
 
-func TestLoadRejectedCandidateKeys(t *testing.T) {
+func TestLoadRejectedCandidates(t *testing.T) {
 	// MockStore.ScanPrefix returns nil by default, so this tests the empty path.
 	t.Run("empty_results", func(t *testing.T) {
 		mock := &database.MockStore{}
-		keys := LoadRejectedCandidateKeys(mock, "book-1")
+		keys, err := LoadRejectedCandidates(mock, "book-1")
+		assert.NoError(t, err)
 		assert.Empty(t, keys)
+	})
+	t.Run("folds_case_of_stored_keys", func(t *testing.T) {
+		mock := &database.MockStore{ScanPrefixFunc: func(string) ([]database.KVPair, error) {
+			return []database.KVPair{{Key: RejectedCandidateStoreKey("book-1", "Audible", "Quiet Harbor"), Value: []byte("1")}}, nil
+		}}
+		keys, err := LoadRejectedCandidates(mock, "book-1")
+		assert.NoError(t, err)
+		assert.True(t, keys.Has("audible", "QUIET HARBOR"))
+		assert.True(t, keys.HasCandidate(&MetadataCandidate{Source: "Audible", Title: "Quiet Harbor"}))
+		assert.False(t, keys.Has("Audible", "Quiet Harbor Returns"))
+	})
+	t.Run("scan_error_is_returned", func(t *testing.T) {
+		mock := &database.MockStore{ScanPrefixFunc: func(string) ([]database.KVPair, error) {
+			return nil, assert.AnError
+		}}
+		_, err := LoadRejectedCandidates(mock, "book-1")
+		assert.Error(t, err)
 	})
 }
 
