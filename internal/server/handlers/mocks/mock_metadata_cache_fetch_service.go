@@ -122,16 +122,16 @@ func (_c *MockMetadataCacheFetchService_ApplyMetadataCandidate_Call) RunAndRetur
 }
 
 // ApplyMetadataFileIO provides a mock function for the type MockMetadataCacheFetchService
-func (_mock *MockMetadataCacheFetchService) ApplyMetadataFileIO(id string) error {
-	ret := _mock.Called(id)
+func (_mock *MockMetadataCacheFetchService) ApplyMetadataFileIO(ctx context.Context, id string) error {
+	ret := _mock.Called(ctx, id)
 
 	if len(ret) == 0 {
 		panic("no return value specified for ApplyMetadataFileIO")
 	}
 
 	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(string) error); ok {
-		r0 = returnFunc(id)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) error); ok {
+		r0 = returnFunc(ctx, id)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -144,19 +144,25 @@ type MockMetadataCacheFetchService_ApplyMetadataFileIO_Call struct {
 }
 
 // ApplyMetadataFileIO is a helper method to define mock.On call
+//   - ctx context.Context
 //   - id string
-func (_e *MockMetadataCacheFetchService_Expecter) ApplyMetadataFileIO(id any) *MockMetadataCacheFetchService_ApplyMetadataFileIO_Call {
-	return &MockMetadataCacheFetchService_ApplyMetadataFileIO_Call{Call: _e.mock.On("ApplyMetadataFileIO", id)}
+func (_e *MockMetadataCacheFetchService_Expecter) ApplyMetadataFileIO(ctx any, id any) *MockMetadataCacheFetchService_ApplyMetadataFileIO_Call {
+	return &MockMetadataCacheFetchService_ApplyMetadataFileIO_Call{Call: _e.mock.On("ApplyMetadataFileIO", ctx, id)}
 }
 
-func (_c *MockMetadataCacheFetchService_ApplyMetadataFileIO_Call) Run(run func(id string)) *MockMetadataCacheFetchService_ApplyMetadataFileIO_Call {
+func (_c *MockMetadataCacheFetchService_ApplyMetadataFileIO_Call) Run(run func(ctx context.Context, id string)) *MockMetadataCacheFetchService_ApplyMetadataFileIO_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 string
+		var arg0 context.Context
 		if args[0] != nil {
-			arg0 = args[0].(string)
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
 		}
 		run(
 			arg0,
+			arg1,
 		)
 	})
 	return _c
@@ -167,7 +173,7 @@ func (_c *MockMetadataCacheFetchService_ApplyMetadataFileIO_Call) Return(err err
 	return _c
 }
 
-func (_c *MockMetadataCacheFetchService_ApplyMetadataFileIO_Call) RunAndReturn(run func(id string) error) *MockMetadataCacheFetchService_ApplyMetadataFileIO_Call {
+func (_c *MockMetadataCacheFetchService_ApplyMetadataFileIO_Call) RunAndReturn(run func(ctx context.Context, id string) error) *MockMetadataCacheFetchService_ApplyMetadataFileIO_Call {
 	_c.Call.Return(run)
 	return _c
 }

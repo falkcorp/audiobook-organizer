@@ -719,16 +719,16 @@ func (_c *MockMetadataFetchService_FetchMetadataForBook_Call) RunAndReturn(run f
 }
 
 // FinishApplyFileWork provides a mock function for the type MockMetadataFetchService
-func (_mock *MockMetadataFetchService) FinishApplyFileWork(id string, pendingCoverURL string, fileIO bool, writeTags bool, checkpoint func() error) error {
-	ret := _mock.Called(id, pendingCoverURL, fileIO, writeTags, checkpoint)
+func (_mock *MockMetadataFetchService) FinishApplyFileWork(ctx context.Context, id string, pendingCoverURL string, fileIO bool, writeTags bool, checkpoint func() error) error {
+	ret := _mock.Called(ctx, id, pendingCoverURL, fileIO, writeTags, checkpoint)
 
 	if len(ret) == 0 {
 		panic("no return value specified for FinishApplyFileWork")
 	}
 
 	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(string, string, bool, bool, func() error) error); ok {
-		r0 = returnFunc(id, pendingCoverURL, fileIO, writeTags, checkpoint)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, bool, bool, func() error) error); ok {
+		r0 = returnFunc(ctx, id, pendingCoverURL, fileIO, writeTags, checkpoint)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -741,36 +741,41 @@ type MockMetadataFetchService_FinishApplyFileWork_Call struct {
 }
 
 // FinishApplyFileWork is a helper method to define mock.On call
+//   - ctx context.Context
 //   - id string
 //   - pendingCoverURL string
 //   - fileIO bool
 //   - writeTags bool
 //   - checkpoint func() error
-func (_e *MockMetadataFetchService_Expecter) FinishApplyFileWork(id any, pendingCoverURL any, fileIO any, writeTags any, checkpoint any) *MockMetadataFetchService_FinishApplyFileWork_Call {
-	return &MockMetadataFetchService_FinishApplyFileWork_Call{Call: _e.mock.On("FinishApplyFileWork", id, pendingCoverURL, fileIO, writeTags, checkpoint)}
+func (_e *MockMetadataFetchService_Expecter) FinishApplyFileWork(ctx any, id any, pendingCoverURL any, fileIO any, writeTags any, checkpoint any) *MockMetadataFetchService_FinishApplyFileWork_Call {
+	return &MockMetadataFetchService_FinishApplyFileWork_Call{Call: _e.mock.On("FinishApplyFileWork", ctx, id, pendingCoverURL, fileIO, writeTags, checkpoint)}
 }
 
-func (_c *MockMetadataFetchService_FinishApplyFileWork_Call) Run(run func(id string, pendingCoverURL string, fileIO bool, writeTags bool, checkpoint func() error)) *MockMetadataFetchService_FinishApplyFileWork_Call {
+func (_c *MockMetadataFetchService_FinishApplyFileWork_Call) Run(run func(ctx context.Context, id string, pendingCoverURL string, fileIO bool, writeTags bool, checkpoint func() error)) *MockMetadataFetchService_FinishApplyFileWork_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 string
+		var arg0 context.Context
 		if args[0] != nil {
-			arg0 = args[0].(string)
+			arg0 = args[0].(context.Context)
 		}
 		var arg1 string
 		if args[1] != nil {
 			arg1 = args[1].(string)
 		}
-		var arg2 bool
+		var arg2 string
 		if args[2] != nil {
-			arg2 = args[2].(bool)
+			arg2 = args[2].(string)
 		}
 		var arg3 bool
 		if args[3] != nil {
 			arg3 = args[3].(bool)
 		}
-		var arg4 func() error
+		var arg4 bool
 		if args[4] != nil {
-			arg4 = args[4].(func() error)
+			arg4 = args[4].(bool)
+		}
+		var arg5 func() error
+		if args[5] != nil {
+			arg5 = args[5].(func() error)
 		}
 		run(
 			arg0,
@@ -778,6 +783,7 @@ func (_c *MockMetadataFetchService_FinishApplyFileWork_Call) Run(run func(id str
 			arg2,
 			arg3,
 			arg4,
+			arg5,
 		)
 	})
 	return _c
@@ -788,7 +794,7 @@ func (_c *MockMetadataFetchService_FinishApplyFileWork_Call) Return(err error) *
 	return _c
 }
 
-func (_c *MockMetadataFetchService_FinishApplyFileWork_Call) RunAndReturn(run func(id string, pendingCoverURL string, fileIO bool, writeTags bool, checkpoint func() error) error) *MockMetadataFetchService_FinishApplyFileWork_Call {
+func (_c *MockMetadataFetchService_FinishApplyFileWork_Call) RunAndReturn(run func(ctx context.Context, id string, pendingCoverURL string, fileIO bool, writeTags bool, checkpoint func() error) error) *MockMetadataFetchService_FinishApplyFileWork_Call {
 	_c.Call.Return(run)
 	return _c
 }

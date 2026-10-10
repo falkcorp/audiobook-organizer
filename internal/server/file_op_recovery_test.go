@@ -1,11 +1,12 @@
 // file: internal/server/file_op_recovery_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 2b8e5d17-4c6a-49f3-a0e1-7d93c5b28f46
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 
 package server
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -19,9 +20,11 @@ import (
 type fakeApplyRecoverer struct {
 	calls     []string
 	tagWrites int
+	ctxs      []context.Context
 }
 
-func (f *fakeApplyRecoverer) FinishApplyFileWork(id, cover string, fileIO, writeTags bool, _ func() error) error {
+func (f *fakeApplyRecoverer) FinishApplyFileWork(ctx context.Context, id, cover string, fileIO, writeTags bool, _ func() error) error {
+	f.ctxs = append(f.ctxs, ctx)
 	f.calls = append(f.calls, fmt.Sprintf("%s|%s|%v|%v", id, cover, fileIO, writeTags))
 	if writeTags {
 		f.tagWrites++

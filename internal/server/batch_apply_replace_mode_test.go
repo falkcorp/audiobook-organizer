@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_replace_mode_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 29f23ca2-e262-4623-9ea4-7a09bd0e7836
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 //
 // Owner ruling 2026-09-27: the review page's bulk buttons get a toggle, "Fill
 // empty fields" (default) or "Replace existing". The request's mode reaches
@@ -13,6 +13,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -104,7 +105,7 @@ func TestReplaceMode_BulkPinAndMarkerOverwriteFillKeeps(t *testing.T) {
 func TestReplaceMode_OutcomeReportsOwnerReplace(t *testing.T) {
 	books, cand := passingFixture()
 	svc := &fakeApplySvc{candidates: candidateJSON(t, cand)}
-	out := applyCachedCandidateForBookTimed(svc, books, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, bulkPin(cand), replace)
+	out := applyCachedCandidateForBookTimed(context.Background(), svc, books, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, bulkPin(cand), replace)
 	if !out.Applied || !out.OwnerReplace || out.OwnerReviewed {
 		t.Fatalf("outcome %+v, want applied as owner replace (gate passed, nothing overridden)", out)
 	}
@@ -131,7 +132,7 @@ func TestReplaceMode_IgnoredWithoutReviewBulkPin(t *testing.T) {
 		t.Run(name+", gate passes", func(t *testing.T) {
 			books, cand := passingFixture()
 			svc := &fakeApplySvc{candidates: candidateJSON(t, cand)}
-			out := applyCachedCandidateForBookTimed(svc, books, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, pin(cand), replace)
+			out := applyCachedCandidateForBookTimed(context.Background(), svc, books, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, pin(cand), replace)
 			if !out.Applied || out.OwnerReplace || out.OwnerReviewed {
 				t.Fatalf("outcome %+v, want an ordinary applied book", out)
 			}
@@ -142,7 +143,7 @@ func TestReplaceMode_IgnoredWithoutReviewBulkPin(t *testing.T) {
 		t.Run(name+", gate refuses", func(t *testing.T) {
 			books, cand := refusedByAuthorAndTranscription()
 			svc := &fakeApplySvc{candidates: candidateJSON(t, cand)}
-			out := applyCachedCandidateForBookTimed(svc, books, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, pin(cand), replace)
+			out := applyCachedCandidateForBookTimed(context.Background(), svc, books, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, pin(cand), replace)
 			if out.Applied || out.OwnerReplace || out.Reason != applySkipGateBlocked || len(svc.applyOpts) != 0 {
 				t.Fatalf("outcome %+v opts %+v, want gate_blocked and nothing applied", out, svc.applyOpts)
 			}
@@ -151,7 +152,7 @@ func TestReplaceMode_IgnoredWithoutReviewBulkPin(t *testing.T) {
 
 	books, cand := passingFixture()
 	svc := &fakeApplySvc{candidates: candidateJSON(t, cand)}
-	out := applyCachedCandidateForBookTimed(svc, books, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand), replace)
+	out := applyCachedCandidateForBookTimed(context.Background(), svc, books, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand), replace)
 	if !out.Applied || out.OwnerReplace || len(svc.applyOpts) != 1 || svc.applyOpts[0].FillOnly || svc.applyOpts[0].OwnerReplace {
 		t.Fatalf("row pin: outcome %+v opts %+v, want an overwrite without the owner-replace label", out, svc.applyOpts)
 	}

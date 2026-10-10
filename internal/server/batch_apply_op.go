@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_op.go
-// version: 1.26.0
+// version: 1.27.0
 // guid: 8a3f21d7-6c04-4b91-a2e5-7d0f3b8c5194
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 //
 // batch_apply_op registers the "metadata.batch-apply-cached" v2 OperationDef.
 // The HTTP handler BatchApplyFromCache enqueues this and returns the op id
@@ -25,6 +25,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 )
 
 // errText renders an error for a log attribute, tolerating nil. The callers
@@ -320,6 +321,9 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 		Permissions:           []auth.Permission{auth.PermLibraryEditMetadata},
 		Capabilities:          []opsregistry.Capability{opsregistry.CapLibraryRead, opsregistry.CapLibraryWrite, opsregistry.CapFilesWrite},
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) (retErr error) {
+			// A batch apply keeps no .bak-* sibling per file (owner
+			// decision D69): its tag and cover writes are bulk writes.
+			ctx = tagger.WithoutBackup(ctx)
 			var p batchApplyOpParams
 			if len(rawParams) > 0 {
 				if err := json.Unmarshal(rawParams, &p); err != nil {
@@ -516,7 +520,7 @@ func (s *Server) RegisterBatchApplyFromCacheOp(reg *opsregistry.Registry) error 
 					}
 					defer releaseFileWrite()
 				}
-				out := applyCachedCandidateForBookTimed(svc, applyBooks, id, p.WriteBack,
+				out := applyCachedCandidateForBookTimed(ctx, svc, applyBooks, id, p.WriteBack,
 					func() error { return opsregistry.ScanStandDownCheckpoint(ctx) }, pt, claims, p.pinOf(id), p.Mode)
 
 				if out.OwnerReviewed && out.Gate != nil {

@@ -1,7 +1,7 @@
 // file: internal/server/file_io_pool.go
-// version: 2.11.0
+// version: 2.12.0
 // guid: c4d5e6f7-a8b9-0c1d-2e3f-4a5b6c7d8e9f
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 //
 // Bounded worker pool for file I/O operations (cover embed, tag write,
 // rename). Tracks pending jobs in PebbleDB so they survive restarts.
@@ -13,6 +13,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 
@@ -24,6 +25,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/scanlock"
+	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 )
 
 const pendingFileOpPrefix = "pending_file_op:"
@@ -439,7 +441,7 @@ func recoverInterruptedFileOps(pool *FileIOPool) {
 type applyMetadataRecoverer interface {
 	// checkpoint, when non-nil, is the caller's scan stand-down check, re-run
 	// before each file-writing step; nil means the caller holds none.
-	FinishApplyFileWork(id, pendingCoverURL string, fileIO, writeTags bool, checkpoint func() error) error
+	FinishApplyFileWork(ctx context.Context, id, pendingCoverURL string, fileIO, writeTags bool, checkpoint func() error) error
 }
 
 // recoverApplyMetadataFileOp replays an interrupted apply's file work through
@@ -451,7 +453,9 @@ type applyMetadataRecoverer interface {
 // FinishApplyFileWork takes the path lock itself, per write, so the replay is
 // locked exactly like the live job.
 func recoverApplyMetadataFileOp(svc applyMetadataRecoverer, bookID string) {
-	if err := svc.FinishApplyFileWork(bookID, "", true, true, nil); err != nil {
+	// The restart replay re-runs every interrupted job at once: a bulk write,
+	// so no .bak-* sibling per file (owner decision D69).
+	if err := svc.FinishApplyFileWork(tagger.WithoutBackup(context.Background()), bookID, "", true, true, nil); err != nil {
 		slog.Warn("recovery apply file work failed", "bookID", bookID, "err", err)
 	}
 }
@@ -463,7 +467,7 @@ const autoFetchFileOpType = "auto_fetch_file_work"
 
 // autoFetchRecoverer is the slice of *metafetch.Service the auto-fetch replay needs.
 type autoFetchRecoverer interface {
-	FinishAutoFetchFileWork(id, pendingCoverURL string, writeTags bool) error
+	FinishAutoFetchFileWork(ctx context.Context, id, pendingCoverURL string, writeTags bool) error
 }
 
 // recoverAutoFetchFileOp replays interrupted auto-fetch file work. It is
@@ -471,7 +475,8 @@ type autoFetchRecoverer interface {
 // takes no lock here: FinishAutoFetchFileWork locks each write on the path it
 // writes (the library copy's for a protected book).
 func recoverAutoFetchFileOp(svc autoFetchRecoverer, bookID string) {
-	if err := svc.FinishAutoFetchFileWork(bookID, "", config.AppConfig.WriteBackMetadata); err != nil {
+	// Bulk, like the apply replay above: no .bak-* sibling per file (D69).
+	if err := svc.FinishAutoFetchFileWork(tagger.WithoutBackup(context.Background()), bookID, "", config.AppConfig.WriteBackMetadata); err != nil {
 		slog.Warn("recovery auto-fetch file work failed", "bookID", bookID, "err", err)
 	}
 }
