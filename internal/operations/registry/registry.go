@@ -1,5 +1,5 @@
 // file: internal/operations/registry/registry.go
-// version: 3.37.0
+// version: 3.38.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-10-10
 
@@ -1148,7 +1148,12 @@ func (r *Registry) publishOpTerminal(opID, defID, status string) {
 // persisted status (interrupted_quiesced, waiting_deps, interrupted_ask, or a
 // zombie "running" row with no handle), the row is moved to "canceled" so the
 // startup resume sweep never picks it up again.
-// Returns ErrOpNotFound for an unknown id or a row that is already terminal.
+// If the op is a zombie (its goroutine outlived the abandon grace, so its
+// handle stays in r.running until the goroutine exits), its run was already
+// stopped -- fence revoked, context canceled -- and only the row is left to
+// cancel: see the zombie note in the body.
+// Returns ErrOpNotFound for an unknown id or a row that is already terminal;
+// a zombie whose row is already terminal returns nil (it is still stopping).
 func (r *Registry) Cancel(opID string) error {
 	r.mu.Lock()
 	h, running := r.running[opID]
@@ -1160,17 +1165,28 @@ func (r *Registry) Cancel(opID string) error {
 	}
 	r.mu.Unlock()
 
-	if running {
+	// A zombie skips ONLY the handle work below and falls through to the row
+	// paths. Its context is already canceled and its fence revoked, so there
+	// is nothing to stop, and userCanceled must not be touched: it already
+	// decided the terminal status written at abandonment. But its row is not
+	// always terminal, so the row paths still have to run:
+	//   - a scan stand-down quiesce writes interrupted_quiesced
+	//     (finalStatusForCanceledRun), a live, resumable status;
+	//   - a holder that stops waiting re-queues that row IN PLACE, under the
+	//     same op id, while the zombie still runs (resumeQuiescedOp ->
+	//     requeueInPlace); Gate 0 keeps it from dispatching until the zombie
+	//     exits, and then it would run;
+	//   - a shutdown-branch zombie's row is still "running".
+	// Returning early here (as 05-PR3 first did) answered success and left
+	// such a row live, so the scan the user had just canceled ran again.
+	zombie := running && h.cancel != nil && h.zombie.Load()
+	if zombie {
+		r.logger.Info("registry: cancel of an op already stopping (goroutine has not exited yet); canceling its row",
+			"op_id", logger.SanitizeLogValue(opID))
+	}
+
+	if running && !zombie {
 		if h.cancel != nil {
-			// Zombie (its goroutine outlived the abandon grace): it was already
-			// stopped -- fence revoked, context canceled, row terminal. A second
-			// cancel changes nothing; in particular it must not touch
-			// userCanceled, which already decided the row's terminal status.
-			if h.zombie.Load() {
-				r.logger.Info("registry: cancel of an op already stopping (goroutine has not exited yet)",
-					"op_id", logger.SanitizeLogValue(opID))
-				return nil
-			}
 			r.logger.Info("registry: canceling running op", "op_id", logger.SanitizeLogValue(opID))
 			// Withdraw the write permit first, so the run cannot write in the
 			// window between seeing ctx.Done() and returning (cancelIfActive
@@ -1241,16 +1257,36 @@ func (r *Registry) Cancel(opID string) error {
 	// canceled if this write lands after them, and if a worker has already
 	// claimed the row the window is the same one the queued path above has
 	// always had (C-1). ListResumableOperationsV2 is consulted only at boot,
-	// before the HTTP server serves, so the sweep itself cannot interleave.
+	// before the HTTP server serves, so the boot sweep cannot interleave.
+	//
+	// The RUNTIME re-queue paths can: resumeQuiescedOp (a stand-down holder
+	// releasing or giving up, possibly while the quiesced scan is still a
+	// zombie) and RetryInterrupted each read an interrupted row and then flip
+	// it to queued. Landing this write between that read and that flip would
+	// lose the cancel -- the row ends queued and the scan runs. retryMu is the
+	// lock both of them hold across their read-then-flip, so taking it here
+	// makes the three mutually exclusive: either the re-queue finished first
+	// (this read sees "queued", which is not terminal, and the write below
+	// cancels it) or it runs after and sees "canceled", which it skips.
+	r.retryMu.Lock()
+	defer r.retryMu.Unlock()
 	row, gerr := r.store.GetOperationV2(opID)
 	if gerr != nil || row == nil || row.ID == "" {
 		return ErrOpNotFound
 	}
 	if isTerminalStatus(row.Status) {
+		if zombie {
+			// Already stopped and already terminal: a repeat cancel of a run
+			// whose goroutine has not exited yet is a no-op, not an error.
+			return nil
+		}
 		return ErrOpNotFound
 	}
 	now := time.Now().UTC()
 	msg := fmt.Sprintf("canceled by user while %s (not running)", row.Status)
+	if zombie {
+		msg = fmt.Sprintf("canceled by user while %s (run already stopped; its goroutine had not exited yet)", row.Status)
+	}
 	if err := r.store.UpdateOperationV2Status(opID, "canceled", nil, &now, &msg); err != nil {
 		return fmt.Errorf("registry: cancel op %s: %w", opID, err)
 	}
