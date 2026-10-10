@@ -1,5 +1,5 @@
 // file: internal/config/persistence.go
-// version: 1.43.0
+// version: 1.44.0
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
 // last-edited: 2026-10-09
 
@@ -814,15 +814,22 @@ func LoadConfigFromDatabase(store database.SettingsStore) error {
 		// One-shot: a stored embed_cover_art=false predates the setting doing
 		// anything, so drop it and let the new default (true) apply.
 		if _, done := settingsMap[embedCoverArtMigratedKey]; !done {
+			// The marker is written only when no rewrite was needed or the
+			// rewrite persisted, so a failed save is retried on the next boot
+			// instead of freezing the stale false as an operator choice.
+			persisted := true
 			if migrated, changed := migrateEmbedCoverArtBlob(blobStr); changed {
-				chapterConsolidationLog.Info("dropped stale embed_cover_art=false from the stored blob")
+				configLog.Info("dropped stale embed_cover_art=false from the stored blob")
 				blobStr = migrated
 				if saveErr := saveRawBlob(store, migrated); saveErr != nil {
-					chapterConsolidationLog.Warn("failed to persist embed_cover_art blob migration: %v", saveErr)
+					persisted = false
+					configLog.Warn("failed to persist embed_cover_art blob migration, will retry next boot: %v", saveErr)
 				}
 			}
-			if markErr := store.SetSetting(embedCoverArtMigratedKey, "true", "bool", false); markErr != nil {
-				chapterConsolidationLog.Warn("failed to record embed_cover_art migration marker: %v", markErr)
+			if persisted {
+				if markErr := store.SetSetting(embedCoverArtMigratedKey, "true", "bool", false); markErr != nil {
+					configLog.Warn("failed to record embed_cover_art migration marker: %v", markErr)
+				}
 			}
 		}
 

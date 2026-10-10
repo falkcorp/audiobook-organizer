@@ -1,5 +1,5 @@
 // file: internal/config/persistence_test.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-10-09
 
@@ -1319,7 +1319,11 @@ func TestMigrateEmbedCoverArtBlob(t *testing.T) {
 }
 
 func TestLoadConfigFromDatabase_EmbedCoverArtMigration(t *testing.T) {
-	run := func(t *testing.T, blob string, marked bool) (loaded bool, saved string) {
+	// run loads blob and reports the resulting setting, the last config_blob
+	// the loader saved (this migration runs after its siblings, so it is the
+	// last writer when it changes anything) and whether the marker was written.
+	// saveFails makes every config_blob save error.
+	run := func(t *testing.T, blob string, marked, saveFails bool) (loaded bool, saved string, st *mocks.MockStore) {
 		resetConfigTestState()
 		t.Cleanup(resetConfigTestState)
 		viper.SetDefault("embed_cover_art", true)
@@ -1331,32 +1335,55 @@ func TestLoadConfigFromDatabase_EmbedCoverArtMigration(t *testing.T) {
 			settings = append(settings, database.Setting{Key: embedCoverArtMigratedKey, Value: "true"})
 		}
 		store.EXPECT().GetAllSettings().Return(settings, nil).Once()
+		saveErr := error(nil)
+		if saveFails {
+			saveErr = fmt.Errorf("disk full")
+		}
 		store.On("SetSetting", "config_blob", mock.Anything, "json", false).Run(func(args mock.Arguments) {
 			saved = args.String(1)
-		}).Return(nil).Maybe()
-		store.On("SetSetting", embedCoverArtMigratedKey, "true", "bool", false).Return(nil).Maybe()
+		}).Return(saveErr).Maybe()
+		if !marked && !saveFails {
+			store.On("SetSetting", embedCoverArtMigratedKey, "true", "bool", false).Return(nil).Once()
+		}
 		require.NoError(t, LoadConfigFromDatabase(store))
-		return Snapshot().EmbedCoverArt, saved
+		return Snapshot().EmbedCoverArt, saved, store
+	}
+	markerWritten := func(store *mocks.MockStore) bool {
+		for _, c := range store.Calls {
+			if c.Method == "SetSetting" && c.Arguments.String(0) == embedCoverArtMigratedKey {
+				return true
+			}
+		}
+		return false
 	}
 
-	t.Run("stored false loads as true and the key leaves the blob", func(t *testing.T) {
-		got, saved := run(t, `{"embed_cover_art":false}`, false)
+	t.Run("stored false loads as true, leaves the blob, and writes the marker once", func(t *testing.T) {
+		got, saved, store := run(t, `{"embed_cover_art":false}`, false, false)
 		assert.True(t, got)
+		assert.NotEmpty(t, saved)
 		assert.NotContains(t, saved, "embed_cover_art")
+		assert.True(t, markerWritten(store))
 	})
-	t.Run("stored true is untouched", func(t *testing.T) {
-		got, saved := run(t, `{"embed_cover_art":true}`, false)
+	t.Run("stored true is untouched and writes the marker", func(t *testing.T) {
+		got, _, store := run(t, `{"embed_cover_art":true}`, false, false)
 		assert.True(t, got)
-		assert.Contains(t, saved, `"embed_cover_art":true`)
+		assert.True(t, markerWritten(store))
 	})
-	t.Run("absent key is untouched", func(t *testing.T) {
-		got, saved := run(t, `{"language":"en"}`, false)
+	t.Run("absent key is untouched and writes the marker", func(t *testing.T) {
+		got, _, store := run(t, `{"language":"en"}`, false, false)
 		assert.True(t, got)
-		assert.NotContains(t, saved, "embed_cover_art")
+		assert.True(t, markerWritten(store))
 	})
-	t.Run("after the marker, a stored false is an operator choice", func(t *testing.T) {
-		got, saved := run(t, `{"embed_cover_art":false}`, true)
+	t.Run("after the marker, a stored false is an operator choice and nothing is rewritten", func(t *testing.T) {
+		got, _, store := run(t, `{"embed_cover_art":false}`, true, false)
 		assert.False(t, got)
-		assert.Contains(t, saved, `"embed_cover_art":false`)
+		assert.False(t, markerWritten(store))
+		store.AssertNotCalled(t, "SetSetting", embedCoverArtMigratedKey, mock.Anything, mock.Anything, mock.Anything)
+	})
+	t.Run("a failed blob save does not write the marker, so the next boot retries", func(t *testing.T) {
+		got, _, store := run(t, `{"embed_cover_art":false}`, false, true)
+		assert.True(t, got, "this boot still uses the migrated value")
+		assert.False(t, markerWritten(store))
+		store.AssertNotCalled(t, "SetSetting", embedCoverArtMigratedKey, mock.Anything, mock.Anything, mock.Anything)
 	})
 }

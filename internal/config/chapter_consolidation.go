@@ -1,7 +1,7 @@
 // file: internal/config/chapter_consolidation.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 352b4f24-83a2-44dd-83d3-0d58454324bf
-// last-edited: 2026-10-03
+// last-edited: 2026-10-09
 
 package config
 
@@ -13,10 +13,10 @@ import "github.com/falkcorp/audiobook-organizer/internal/logger"
 // here, so the number exists once.
 const DefaultChapterConsolidationThresholdMin = 10
 
-// chapterConsolidationLog carries the normalization warning. It goes through
+// configLog carries the normalization warning. It goes through
 // internal/logger rather than log/slog so the line gets the log-injection
 // barrier (TestGuard_NoDirectSlogCalls).
-var chapterConsolidationLog = logger.New("config")
+var configLog = logger.New("config")
 
 // ResolveChapterConsolidationThresholdMin returns the effective import-scanner
 // chapter threshold in minutes: the configured value, or
@@ -55,7 +55,7 @@ func normalizeChapterConsolidationThreshold(c *Config, where string) bool {
 	if c == nil || c.ChapterConsolidationThresholdMin > 0 {
 		return false
 	}
-	chapterConsolidationLog.Warn(
+	configLog.Warn(
 		"config: chapter_consolidation_threshold_min=%d in %s is not a usable threshold; using the default %d. "+
 			"0 no longer disables chapter consolidation (a stray zero silently stopped multi-file grouping in 2026-08)",
 		c.ChapterConsolidationThresholdMin, where, DefaultChapterConsolidationThresholdMin)
