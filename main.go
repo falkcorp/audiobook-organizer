@@ -1,7 +1,7 @@
 // file: main.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 5f6a7b8c-9d0e-1f2a-3b4c-5d6e7f8a9b0c
-// last-edited: 2026-10-03
+// last-edited: 2026-10-09
 
 package main
 
@@ -13,6 +13,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/server"
+	"github.com/falkcorp/audiobook-organizer/internal/telemetry"
 )
 
 // version is set at build time via -ldflags "-X main.version=..."
@@ -28,6 +29,7 @@ func run() int {
 	// Set version everywhere
 	cmd.SetVersion(version)
 	server.SetVersion(version)
+	telemetry.SetVersion(version)
 	server.SetEmbeddedFS(WebFS)
 
 	// `make rollback` asks the previous binary which storage format it

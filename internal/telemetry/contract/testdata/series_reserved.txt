@@ -1,0 +1,5 @@
+ai_requests_total
+ai_request_duration_seconds
+ai_tokens_total
+ai_failures_total
+ai_parse_results_total

@@ -1,7 +1,7 @@
 // file: internal/aidispatch/metrics.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: a8bcb9cf-e760-4b64-b4b9-35d8b18de82d
-// last-edited: 2026-09-19
+// last-edited: 2026-10-09
 
 package aidispatch
 
@@ -57,3 +57,10 @@ func ensureMetrics() {
 		}
 	})
 }
+
+// RegisterMetrics registers the five ai_dispatch_* families with the default
+// Prometheus registry now instead of on the first Call. Production never calls
+// it (registration stays lazy, as the comment above says); the /metrics series
+// contract test in internal/telemetry/contract does, so it can pin the
+// families without depending on Call being the first thing to run.
+func RegisterMetrics() { ensureMetrics() }

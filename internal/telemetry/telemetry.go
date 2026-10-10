@@ -1,5 +1,5 @@
 // file: internal/telemetry/telemetry.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: 2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-10-09
 
@@ -62,7 +62,7 @@ func InitOTEL(ctx context.Context, cfg *Config) (func(context.Context) error, er
 	}
 
 	if cfg.MetricsEnabled {
-		shutdownMetrics, err := initMetrics()
+		shutdownMetrics, err := initMetrics(cfg.ServiceName)
 		if err != nil {
 			return nil, err
 		}
@@ -171,14 +171,27 @@ var (
 
 // initMetrics builds (once) the Prometheus-exporting meter provider, installs
 // it globally and returns its idempotent shutdown.
-func initMetrics() (func(context.Context) error, error) {
+//
+//   - WithoutScopeInfo: no otel_scope_name / otel_scope_version labels, so an
+//     OTel family exports the same label set as the client_golang family it
+//     replaces (spec 11 §3.3). target_info stays on.
+//   - The resource carries service.name/version/instance.id and
+//     deployment.environment onto target_info.
+//   - Views() declares every histogram's buckets (views.go).
+//
+// The first caller's serviceName wins: the provider is built once per process.
+func initMetrics(serviceName string) (func(context.Context) error, error) {
 	meterOnce.Do(func() {
-		exporter, err := prometheus.New()
+		exporter, err := prometheus.New(prometheus.WithoutScopeInfo())
 		if err != nil {
 			meterErr = err
 			return
 		}
-		meterProvider = metric.NewMeterProvider(metric.WithReader(exporter))
+		opts := append([]metric.Option{
+			metric.WithReader(exporter),
+			metric.WithResource(NewResource(serviceName)),
+		}, Views()...)
+		meterProvider = metric.NewMeterProvider(opts...)
 	})
 	if meterErr != nil {
 		return nil, meterErr
