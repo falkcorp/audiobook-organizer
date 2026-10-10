@@ -1,5 +1,5 @@
 // file: internal/telemetry/telemetry.go
-// version: 2.5.0
+// version: 2.6.0
 // guid: 2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-10-10
 
@@ -77,6 +77,18 @@ func InitOTEL(ctx context.Context, cfg *Config) (func(context.Context) error, er
 		shutdowns = append(shutdowns, shutdownMetrics)
 	}
 
+	// Userinfo in an endpoint is dropped at parse time (gRPC never uses it).
+	// Say so once, naming the keys but never the value.
+	var dropped []string
+	if t, _ := parseOTLPEndpoint(cfg.ExporterEndpoint); t.DroppedUserinfo {
+		dropped = append(dropped, "otel_exporter_otlp_endpoint")
+	}
+	if t, _ := parseOTLPEndpoint(cfg.MetricsOTLPEndpoint); t.DroppedUserinfo {
+		dropped = append(dropped, "otel_metrics_otlp_endpoint")
+	}
+	if len(dropped) > 0 {
+		emit(ctx, slog.LevelWarn, "OpenTelemetry endpoint userinfo (user:pass@) was dropped: OTLP/gRPC does not use it", "keys", strings.Join(dropped, ","))
+	}
 	level, msg, attrs := initSummary(cfg, tracing, tracingErr, otlp)
 	if otlp.Enabled {
 		installExportErrorHandler()

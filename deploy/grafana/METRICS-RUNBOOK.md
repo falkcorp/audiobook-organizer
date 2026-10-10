@@ -1,5 +1,5 @@
 <!-- file: deploy/grafana/METRICS-RUNBOOK.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 5a2c8e71-3d94-4b60-8f17-c9e0a4d63b25 -->
 <!-- last-edited: 2026-10-10 -->
 
@@ -53,6 +53,10 @@ Accepted endpoint forms:
 - `https://collector.example.invalid:4317`: TLS.
 - `collector.example.invalid:4317` or `dns:///collector.example.invalid:4317`:
   TLS, unless `otel_metrics_otlp_insecure` is true.
+
+Userinfo (`user:pass@`) in either OTLP endpoint is dropped at parse time:
+OTLP/gRPC never uses it, and dropping it keeps it out of errors and logs. A
+single warning at start-up names the config key, never the value.
 
 A URL needs both a host and a port; `http://host` is rejected and logged.
 
