@@ -1,7 +1,7 @@
 // file: web/src/utils/queryGrammar.ts
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8e5b2d17-4c9a-4f36-b1e8-0d7a3c6f9e24
-// last-edited: 2026-10-06
+// last-edited: 2026-10-10
 
 /**
  * The ONE search value grammar shared by the Library search bar and the
@@ -23,6 +23,11 @@
  *   a* *a *a*     glob on the WHOLE trimmed value; only * is a wildcard
  *   *             the value is non-empty
  *   >N [a TO b]   numeric fields only (server-side)
+ *
+ * Server-side limits (internal/querygrammar): a value is at most 256 bytes, a
+ * compiled regex at most 500 instructions, and a regex or glob is matched
+ * against only the first 16 KB of a field (a plain word sees all of it). The
+ * client-side evaluator does not cut; the fields it holds (titles) are short.
  */
 
 import { parseSearch, type FieldFilter } from './searchParser';
@@ -87,7 +92,11 @@ export function firstSearchError(filters: readonly FieldFilter[]): string | null
       }
       continue;
     }
-    if (f.field === 'read_status' && !f.quoted && (f.value.includes('*') || f.value.startsWith('/'))) {
+    if (
+      f.field === 'read_status' &&
+      !f.quoted &&
+      (f.value.includes('*') || f.value.startsWith('/'))
+    ) {
       return `read_status:${f.value} — read_status takes an exact status, not a pattern`;
     }
     const err = regexValueError(f.value, f.quoted);
@@ -136,7 +145,8 @@ export function re2ToJsRegExp(pattern: string): { regex: RegExp | null; error: s
   if (lead) {
     for (const f of lead[1] ?? '') flags.add(f);
     for (const f of lead[2] ?? '') flags.delete(f);
-    if (flags.has('U')) return { regex: null, error: 'the (?U) ungreedy flag is not supported here' };
+    if (flags.has('U'))
+      return { regex: null, error: 'the (?U) ungreedy flag is not supported here' };
     src = src.slice(lead[0].length);
   }
   let out = '';
@@ -209,7 +219,10 @@ export function re2ToJsRegExp(pattern: string): { regex: RegExp | null; error: s
         continue;
       }
       if (!src.startsWith('(?:', i) && !src.startsWith('(?<', i)) {
-        return { regex: null, error: 'inline flag groups are only supported at the start, e.g. (?-i)' };
+        return {
+          regex: null,
+          error: 'inline flag groups are only supported at the start, e.g. (?-i)',
+        };
       }
     }
     out += ch;

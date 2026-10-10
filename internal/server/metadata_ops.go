@@ -1,7 +1,7 @@
 // file: internal/server/metadata_ops.go
-// version: 1.37.0
+// version: 1.38.0
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
-// last-edited: 2026-10-06
+// last-edited: 2026-10-10
 //
 // Async-operation machinery for the metadata domain, relocated verbatim from
 // metadata_handlers.go (ADR-003 Phase 4) when the 19 metadata HTTP handlers
@@ -26,8 +26,10 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -45,6 +47,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/policy"
+	"github.com/falkcorp/audiobook-organizer/internal/querygrammar"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	ulid "github.com/oklog/ulid/v2"
 	"golang.org/x/sync/errgroup"
@@ -510,6 +513,39 @@ func (a registryProgressAdapter) LogAttrs(level slog.Level, message string, attr
 // bulkMetadataFetchV2Params aliases the canonical type from internal/server/handlers.
 type bulkMetadataFetchV2Params = handlers.BulkMetadataFetchV2Params
 
+// searchBusyRetries is how many times a background resolve runs while every
+// pattern slot is busy (querygrammar.BusyError) before it gives up, and
+// searchBusyRetryWait how long it waits between tries: 1-4 s, jittered so
+// queued operations do not retry in step. A var so tests can shorten it.
+const searchBusyRetries = 5
+
+var searchBusyRetryWait = func() time.Duration {
+	return time.Second + rand.N(3*time.Second)
+}
+
+// retryWhileSearchBusy runs resolve, and runs it again after a pause while
+// it fails only because every pattern slot is busy: that is a moment of
+// load, not a fact about the filter, and a background operation can wait it
+// out where an HTTP request answers 503. A spent budget
+// (querygrammar.TooSlowError) and every other error are returned at once;
+// a cancelled ctx stops the waiting.
+func retryWhileSearchBusy(ctx context.Context, resolve func() ([]string, error)) ([]string, error) {
+	for attempt := 1; ; attempt++ {
+		ids, err := resolve()
+		var busy *querygrammar.BusyError
+		if err == nil || !errors.As(err, &busy) || attempt == searchBusyRetries {
+			return ids, err
+		}
+		timer := time.NewTimer(searchBusyRetryWait())
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		}
+	}
+}
+
 // resolveFilterToBookIDs translates a FilterSpec into a concrete list of primary-
 // version book IDs.  IsPrimaryVersion=true and quarantine exclusion are always
 // applied.  If f.OnlyUnmatched is set, books that already have a "matched"
@@ -652,7 +688,7 @@ func (s *Server) RegisterBulkMetadataFetchOp(reg *opsregistry.Registry) error {
 			progress := registryProgressAdapter{r: reporter}
 
 			bookIDs, err := operations.ResolveBookIDs(p.Selection, func(f operations.FilterSpec) ([]string, error) {
-				return s.resolveFilterToBookIDs(ctx, f)
+				return retryWhileSearchBusy(ctx, func() ([]string, error) { return s.resolveFilterToBookIDs(ctx, f) })
 			})
 			if err != nil {
 				return fmt.Errorf("bulk_metadata_fetch: resolve selection: %w", err)

@@ -642,5 +642,84 @@
     "want_error": true,
     "go_error_contains": "no lookahead",
     "ts_error_matches": "no lookahead"
+  },
+  {
+    "name": "limit value over 256 bytes",
+    "pattern": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "quoted": false,
+    "want_error": true,
+    "go_error_contains": "the limit is 256",
+    "engines": [
+      "go"
+    ],
+    "skip_reason": "the size limits (MaxTextValueBytes, MaxPatternInst) are enforced by the Go engine, which evaluates every search on the server; the TS pre-check does not mirror them"
+  },
+  {
+    "name": "limit quoted value over 256 bytes",
+    "pattern": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "quoted": true,
+    "want_error": true,
+    "go_error_contains": "the limit is 256",
+    "engines": [
+      "go"
+    ],
+    "skip_reason": "the size limits (MaxTextValueBytes, MaxPatternInst) are enforced by the Go engine, which evaluates every search on the server; the TS pre-check does not mirror them"
+  },
+  {
+    "name": "limit value of exactly 256 bytes is accepted",
+    "pattern": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "quoted": false,
+    "input": "xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "want_match": true
+  },
+  {
+    "name": "limit regex repeat expands past the program size",
+    "pattern": "/(.*){1000}/",
+    "quoted": false,
+    "want_error": true,
+    "go_error_contains": "too complex",
+    "engines": [
+      "go"
+    ],
+    "skip_reason": "the size limits (MaxTextValueBytes, MaxPatternInst) are enforced by the Go engine, which evaluates every search on the server; the TS pre-check does not mirror them"
+  },
+  {
+    "name": "limit nested optional repeat",
+    "pattern": "/(?:.?){1000}zzz/",
+    "quoted": false,
+    "want_error": true,
+    "go_error_contains": "too complex",
+    "engines": [
+      "go"
+    ],
+    "skip_reason": "the size limits (MaxTextValueBytes, MaxPatternInst) are enforced by the Go engine, which evaluates every search on the server; the TS pre-check does not mirror them"
+  },
+  {
+    "name": "limit a wildcard with 128 stars is accepted",
+    "pattern": "a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*",
+    "quoted": false,
+    "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "want_match": true
+  },
+  {
+    "name": "limit an ordinary counted repeat is accepted",
+    "pattern": "/^[a-z]{3}\\d{2}/",
+    "quoted": false,
+    "input": "abc12 Delta",
+    "want_match": true
+  },
+  {
+    "name": "limit a long-title cleanup regex is accepted",
+    "pattern": "/.{120}/",
+    "quoted": false,
+    "input": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "want_match": true
+  },
+  {
+    "name": "limit an open-ended counted repeat is accepted",
+    "pattern": "/^.{100,}$/",
+    "quoted": false,
+    "input": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+    "want_match": false
   }
 ]

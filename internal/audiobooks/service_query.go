@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_query.go
-// version: 1.33.1
+// version: 1.34.0
 // guid: c5f9d4e3-f6a7-8b90-ac1d-2e3f4a5b6c7d
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package audiobooks
 
@@ -19,6 +19,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/querygrammar"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 )
@@ -75,7 +76,42 @@ func (svc *AudiobookService) GetAudiobooksWithTotal(ctx context.Context, limit i
 // re-evaluates changed books with no window, so a capped build would disagree
 // with its own patches), and it hydrates hits fail-closed (see hydrateBuild):
 // a list that silently lost rows to a read error must not be cached.
+//
+// A query whose field filters hold a regex or glob takes one pattern slot
+// (querygrammar.AcquirePatternSlot; a *BusyError when none frees within its
+// wait) and a Budget of libraryPatternBudget for its pattern matches, or
+// shares the request's (WithSharedSearchAllowance, search_allowance.go). A spent
+// budget returns its *TooSlowError and nothing else: the walk's predicate can
+// only answer false once the budget is spent, so any rows it produced are
+// incomplete and are dropped. Every list path (GetAudiobooksPage, the search
+// result cache's builds, MatchingBookIDs) runs through here, so the slot is
+// taken at this ONE level and never nested (CountAudiobooksFiltered, the
+// other scan, is never called from inside this one).
 func (svc *AudiobookService) queryAudiobooks(ctx context.Context, limit int, offset int, search string, authorID *int, seriesID *int, f ListFilters, restrict map[string]struct{}, build bool) ([]database.Book, int, error) {
+	if !fieldFiltersCostly(f.FieldFilters) {
+		return svc.queryAudiobooksBudgeted(ctx, limit, offset, search, authorID, seriesID, f, restrict, build, nil)
+	}
+	budget, end, err := patternAllowance(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer end()
+	books, total, err := svc.queryAudiobooksBudgeted(ctx, limit, offset, search, authorID, seriesID, f, restrict, build, budget)
+	if berr := budget.Err(); berr != nil {
+		return nil, 0, berr
+	}
+	return books, total, err
+}
+
+// libraryPatternBudget is the regex/glob matching time one Library list or
+// count scan may spend (querygrammar.Budget). It times only the pattern
+// matches, not the scan: a cold memdb or a slow Pebble read must not turn a
+// plain search into "simplify your pattern". A var so tests can shrink it.
+var libraryPatternBudget = querygrammar.DefaultPatternBudget
+
+// queryAudiobooksBudgeted is queryAudiobooks with the pattern budget its
+// field-filter matches are timed against (nil: untimed).
+func (svc *AudiobookService) queryAudiobooksBudgeted(ctx context.Context, limit int, offset int, search string, authorID *int, seriesID *int, f ListFilters, restrict map[string]struct{}, build bool, budget *querygrammar.Budget) ([]database.Book, int, error) {
 
 	// A bare series listing with no sort defaults to reading order. Set here,
 	// before hasSorting/heavySorting below read SortBy, so the default takes
@@ -456,7 +492,7 @@ func (svc *AudiobookService) queryAudiobooks(ctx context.Context, limit int, off
 			// non-title sorts and fingerprint filters always fell back; now they
 			// go through pushdown with predicates, reducing fetched rows from
 			// ~68K (unfiltered) to only the filtered subset (e.g. ~38K primary).
-			if bsf, pushdownOK, pebbleLookups := svc.buildBookSummaryFilterWithLookupCount(f, sortAsc); pushdownOK {
+			if bsf, pushdownOK, pebbleLookups := svc.buildBookSummaryFilterWithLookupCount(f, sortAsc, budget); pushdownOK {
 				// Always ask for the PAGE. bsf carries the sort for every key
 				// database.CanSortBooksBy accepts, and a store with the
 				// filtered-summary capability orders the match set and
@@ -649,6 +685,7 @@ func (svc *AudiobookService) queryAudiobooks(ctx context.Context, limit int, off
 				compiledFF = nil
 				filtered = filtered[:0] // fail closed; see mustCompileForPredicate
 			}
+			withBudget(compiledFF, budget) // a spent budget is checked by queryAudiobooks
 			cheapFF, strippedFF := splitCompiledFilters(compiledFF)
 			var pebbleLookups int64
 			var warnOnce sync.Once
@@ -908,11 +945,29 @@ func (svc *AudiobookService) CountAudiobooksFiltered(ctx context.Context, filter
 	if err := FirstInvalidFilterValue(filters.PerUserFilters); err != nil {
 		return 0, fmt.Errorf("invalid filter value: %w", err)
 	}
+	if err := CheckFilterSetSize(filters.FieldFilters, filters.PerUserFilters); err != nil {
+		return 0, fmt.Errorf("invalid filter value: %w", err)
+	}
 	filtersForCount := filters
 	filtersForCount.SortBy = ""
-	bsf, pushdownOK := svc.buildBookSummaryFilter(filtersForCount, true)
+	// The same slot and budget rule as queryAudiobooks: a count is the same
+	// walk over the same predicate.
+	var budget *querygrammar.Budget
+	if fieldFiltersCostly(filters.FieldFilters) {
+		b, end, err := patternAllowance(ctx)
+		if err != nil {
+			return 0, err
+		}
+		defer end()
+		budget = b
+	}
+	bsf, pushdownOK := svc.buildBookSummaryFilter(filtersForCount, true, budget)
 	if pushdownOK {
-		return svc.countSummariesPushdownFiltered(bsf)
+		n, err := svc.countSummariesPushdownFiltered(bsf)
+		if berr := budget.Err(); berr != nil {
+			return 0, berr // a count over a spent budget is short, never a fact
+		}
+		return n, err
 	}
 
 	// Unreachable in practice — buildBookSummaryFilter now returns pushdownOK=true

@@ -1,7 +1,7 @@
 // file: internal/querygrammar/querygrammar_test.go
-// version: 1.3.0
+// version: 1.6.0
 // guid: 4d8a1e63-2b7c-4f90-a5e1-8c6d3b0f2a97
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package querygrammar
 
@@ -10,9 +10,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp/syntax"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // conformanceCase is one row of testdata/conformance.json, the corpus shared
@@ -273,5 +275,137 @@ func TestUnitParsers(t *testing.T) {
 	}
 	if _, err := ParseNumericExprUnits(">20zb", ParseBytes); err == nil {
 		t.Fatal(">20zb must be an error")
+	}
+}
+
+// TestLimits_RefuseQuickly: the patterns measured at 1.3 s, 23.5 s and
+// 2 m 10 s over 40,000 titles before the limits are refused at compile time,
+// in well under a millisecond each, with an error that says why.
+func TestLimits_RefuseQuickly(t *testing.T) {
+	cases := map[string]struct {
+		raw  string
+		want string
+	}{
+		"repeat of a star":          {`/(.*){1000}/`, "too complex"},
+		"nested optional repeat":    {`/(?:.?){1000}zzz/`, "too complex"},
+		"30 KB regex":               {"/" + strings.Repeat("(a|b)", 6000) + "/", "the limit is 256"},
+		"30 KB literal":             {strings.Repeat("a", 30000), "the limit is 256"},
+		"30 KB quoted literal":      {strings.Repeat("a", 30000), "the limit is 256"},
+		"repeat of a star over 500": {`/(.*){250}/`, "1002 instructions; the limit is 500"},
+	}
+	for name, tc := range cases {
+		start := time.Now()
+		_, err := CompileText(tc.raw, name == "30 KB quoted literal")
+		took := time.Since(start)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("%s: err = %v, want it to contain %q", name, err, tc.want)
+		}
+		if took > 50*time.Millisecond {
+			t.Fatalf("%s: refusing took %s", name, took)
+		}
+		t.Logf("%s: refused in %s: %v", name, took, err)
+	}
+}
+
+// TestLimits_OrdinaryPatternsFit pins the instruction counts the limits'
+// doc comment quotes, and that ordinary title patterns compile.
+func TestLimits_OrdinaryPatternsFit(t *testing.T) {
+	inst := func(expr string) int {
+		re, err := syntax.Parse(expr, syntax.Perl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		prog, err := syntax.Compile(re.Simplify())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(prog.Inst)
+	}
+	for expr, want := range map[string]int{
+		`(?i)(?:.?){10}zzz`:   25,
+		`(?i)(?:.?){30}zzz`:   65,
+		`(?i)(.*){1000}`:      4002,
+		`(?i)(?:.?){1000}zzz`: 2005,
+		`(?i)[a-z]{50}`:       52,
+		`(?i).{120}`:          122,
+		`(?i).{100,}`:         103,
+		`(?i)(.*){100}`:       402,
+	} {
+		if got := inst(expr); got != want {
+			t.Errorf("%s: %d instructions, the doc says %d", expr, got, want)
+		}
+	}
+	for _, raw := range []string{`/^\s*\p{L}/`, `/[a-z]{50}/`, `/(a|b|c|d|e|f|g|h|i|j|k|l|m|n|o|p|q|r|s|t|u|v|w|x|y|z){20}/`, `/chapter \d+/`, "the*lestat", strings.Repeat("x", MaxTextValueBytes),
+		`/.{120}/`, `/.{100,}/`, `/^.{100,}$/`, `/(.*){100}/`, strings.Repeat("a*", MaxTextValueBytes/2)} {
+		if _, err := CompileText(raw, false); err != nil {
+			t.Errorf("CompileText(%q): %v", raw, err)
+		}
+	}
+}
+
+// longestEcho is the longest run of input bytes msg repeats. Tests use it to
+// pin that an error names a refused value in at most ShortToken's 64 bytes.
+func longestEcho(msg, input string) int {
+	best := 0
+	for i := range input {
+		for j := i + best + 1; j <= len(input); j++ {
+			if !strings.Contains(msg, input[i:j]) {
+				break
+			}
+			best = j - i
+		}
+	}
+	return best
+}
+
+// TestErrors_DoNotEchoTheValue: CompileText's own errors never repeat the
+// value (the caller names it, shortened); regexp's message, which quotes the
+// whole expression, is reduced to its reason.
+func TestErrors_DoNotEchoTheValue(t *testing.T) {
+	unclosed := "/" + strings.Repeat("ab", 101)                        // 203 bytes, no closing /
+	complexRe := "/(?:\\pL?){245}zzz" + strings.Repeat("q", 222) + "/" // 240 bytes
+	badParen := "/(" + strings.Repeat("c", 200) + "/"
+	flags := "/abc/" + strings.Repeat("i", 150)
+	for _, raw := range []string{unclosed, complexRe, badParen, flags} {
+		_, err := CompileText(raw, false)
+		if err == nil {
+			t.Fatalf("%.30s… compiled", raw)
+		}
+		if n := longestEcho(err.Error(), raw); n > 64 {
+			t.Errorf("%d-byte value: error echoes %d bytes of it: %s", len(raw), n, err)
+		}
+		t.Logf("%d bytes -> %s", len(raw), err)
+	}
+}
+
+// TestMatch_PatternInputIsCut: a regex or glob sees the first
+// MaxPatternInputBytes of a field, cut on a rune boundary; a substring sees
+// all of it. And the worst admitted program over a 1 MB field takes about
+// what it takes over 16 KB.
+func TestMatch_PatternInputIsCut(t *testing.T) {
+	head := strings.Repeat("é", MaxPatternInputBytes/2-1) + "x" // 16 KB - 1 byte
+	field := head + "é" + strings.Repeat("y", 100) + "TAIL"
+	if got := cutPatternInput(field); got != head {
+		t.Fatalf("cut to %d bytes, want %d (rune boundary)", len(got), len(head))
+	}
+	re := mustCompile(t, "/tail/")
+	if re.Match(field) {
+		t.Fatal("a regex must not see past MaxPatternInputBytes")
+	}
+	if !mustCompile(t, "tail").Match(field) {
+		t.Fatal("a substring sees the whole field")
+	}
+	if !mustCompile(t, "/^é+x/").Match(field) {
+		t.Fatal("the cut keeps the start of the field")
+	}
+
+	mb := strings.Repeat("A long description of the book with many words and sentences. ", 16700) // ~1 MB
+	slow := mustCompile(t, `/(?:\pL?){245}zzz/`)
+	start := time.Now()
+	slow.Match(mb)
+	took := time.Since(start)
+	t.Logf("(?:\\pL?){245}zzz over %d bytes (cut to %d): %s", len(mb), MaxPatternInputBytes, took)
+	if took > 2*time.Second { // ~80 ms on an M1 Max; uncut it was 5.1 s
+		t.Fatalf("one match over a 1 MB field took %s", took)
 	}
 }
