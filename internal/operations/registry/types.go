@@ -1,5 +1,5 @@
 // file: internal/operations/registry/types.go
-// version: 2.13.2
+// version: 2.13.3
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-10-10
 
@@ -85,7 +85,7 @@ type OperationDef struct {
 
 	// NoWarmupWait exempts this def from the startup warmup hold. By default the
 	// dispatcher keeps a queued run of this def back (up to
-	// operations.WarmupWaitTimeout) until the store has finished warming its
+	// WarmupWaitTimeout) until the store has finished warming its
 	// in-memory read layer after a restart, so it does not run against the slow
 	// fallback read path. Set this only on a USER-TRIGGERED def that finishes in
 	// seconds: a person is watching it, and waiting a couple of minutes for a

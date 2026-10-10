@@ -1,9 +1,9 @@
-// file: internal/operations/warmup_gate.go
-// version: 2.0.1
+// file: internal/operations/registry/warmup_gate.go
+// version: 2.0.2
 // guid: 9d3a7e52-6c14-4b0f-8a21-5f7e0c9b3d84
 // last-edited: 2026-10-10
 
-package operations
+package registry
 
 import (
 	"log/slog"

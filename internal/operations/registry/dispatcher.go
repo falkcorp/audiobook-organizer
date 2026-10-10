@@ -1,5 +1,5 @@
 // file: internal/operations/registry/dispatcher.go
-// version: 2.6.2
+// version: 2.6.3
 // guid: a7b8c9d0-e1f2-3a4b-5c6d-7e8f9a0b1c2d
 // last-edited: 2026-10-10
 
@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/operations"
 )
 
 // runDispatcher is the central dispatch loop. It ticks every 100ms or
@@ -69,7 +68,7 @@ func (r *Registry) dispatchCycle(ctx context.Context) {
 	// watchdog clock started, so an exempt (interactive) op always finds a free
 	// worker and nothing time-based is spent on the wait. Registry.Cancel and
 	// Shutdown act on a held op exactly as on any queued op. The hold is bounded
-	// by operations.WarmupWaitTimeout.
+	// by WarmupWaitTimeout.
 	holdForWarmup := r.warmupHolding()
 	if !holdForWarmup {
 		r.restoreWarmupHeld()
@@ -441,14 +440,14 @@ func (r *Registry) checkDependsOn(depDefIDs []string) bool {
 // The store is resolved through the decorator chain each cycle (cheap); a store
 // with no warmup to report on never holds.
 func (r *Registry) warmupHolding() bool {
-	src, _ := database.AsCapability[operations.WarmupStatuser](r.store)
+	src, _ := database.AsCapability[WarmupStatuser](r.store)
 	if src == nil {
 		return false
 	}
 	return r.warmupGate.Holding(r.livenessClock(), src, r.logger)
 }
 
-// announceWarmupHeld posts operations.WarmupStatusMessage on a held queued row,
+// announceWarmupHeld posts WarmupStatusMessage on a held queued row,
 // once per row, keeping the row's progress numbers and remembering what it said
 // before so restoreWarmupHeld can put it back.
 func (r *Registry) announceWarmupHeld(row database.OperationV2Row) {
@@ -467,7 +466,7 @@ func (r *Registry) announceWarmupHeld(row database.OperationV2Row) {
 	// still queued (a cancel that landed between this cycle's snapshot and now
 	// leaves a terminal row untouched), and it stamps neither last_progress_at
 	// nor high_water_progress, which a hold must never move.
-	written, err := r.store.SetOpQueuedProgressV2(row.ID, row.ProgressCurrent, row.ProgressTotal, operations.WarmupStatusMessage)
+	written, err := r.store.SetOpQueuedProgressV2(row.ID, row.ProgressCurrent, row.ProgressTotal, WarmupStatusMessage)
 	if err != nil {
 		r.logger.Warn("registry: could not post the startup-warmup wait message", "op_id", row.ID, "error", err)
 		return
@@ -494,7 +493,7 @@ func (r *Registry) restoreWarmupHeld() {
 		// the pre-hold one. Whether the row is still queued is decided by
 		// SetOpQueuedProgressV2 itself, atomically with the write.
 		cur, err := r.store.GetOperationV2(id)
-		if err != nil || cur == nil || cur.ProgressMessage != operations.WarmupStatusMessage {
+		if err != nil || cur == nil || cur.ProgressMessage != WarmupStatusMessage {
 			continue
 		}
 		written, err := r.store.SetOpQueuedProgressV2(id, prev.ProgressCurrent, prev.ProgressTotal, prev.ProgressMessage)
