@@ -1,5 +1,5 @@
 // file: internal/telemetry/config.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: 1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-10-10
 
@@ -11,10 +11,10 @@ import "time"
 // metrics need no endpoint and are on wherever telemetry is on at all; tracing
 // needs an OTLP collector and is on only when one is configured.
 type Config struct {
-	// ExporterEndpoint is the OTLP/gRPC collector for traces: a URL
-	// ("http://host:port" plaintext, "https://host:port" TLS) or a bare
-	// "host:port" / "dns:///host:port" (see traceEndpointOption). Empty
-	// means no tracing; one that cannot be used turns tracing off and is
+	// ExporterEndpoint is the OTLP/gRPC collector for traces: "host:port",
+	// "http://host:port" (plaintext), "https://host:port" (TLS) or
+	// "dns:///host:port" (see parseOTLPEndpoint; anything else is refused).
+	// Empty means no tracing; one that is refused turns tracing off and is
 	// logged, it never stops the server.
 	ExporterEndpoint string
 	ServiceName      string

@@ -1,5 +1,5 @@
 // file: internal/telemetry/telemetry.go
-// version: 2.8.0
+// version: 2.9.0
 // guid: 2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-10-10
 
@@ -9,7 +9,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -78,22 +77,6 @@ func InitOTEL(ctx context.Context, cfg *Config) (func(context.Context) error, er
 		shutdowns = append(shutdowns, shutdownMetrics)
 	}
 
-	// Userinfo, query, fragment and (http/https) path are dropped from an
-	// endpoint at parse time (gRPC never uses them). Say so once, naming the
-	// key and the kind of thing dropped, never the value.
-	var dropped []string
-	for key, ep := range map[string]string{
-		"otel_exporter_otlp_endpoint": cfg.ExporterEndpoint,
-		"otel_metrics_otlp_endpoint":  cfg.MetricsOTLPEndpoint,
-	} {
-		if t, _ := parseOTLPEndpoint(ep); len(t.Dropped()) > 0 {
-			dropped = append(dropped, key+"("+strings.Join(t.Dropped(), "+")+")")
-		}
-	}
-	if len(dropped) > 0 {
-		sort.Strings(dropped)
-		emit(ctx, slog.LevelWarn, "OpenTelemetry endpoint extras were dropped: OTLP/gRPC does not use them", "keys", strings.Join(dropped, ","))
-	}
 	level, msg, attrs := initSummary(cfg, tracing, tracingErr, otlp)
 	if otlp.Enabled {
 		installExportErrorHandler()
@@ -123,22 +106,15 @@ func runShutdowns(ctx context.Context, fns []func(context.Context) error) error 
 	return errors.Join(errs...)
 }
 
-// traceEndpointOption turns the configured endpoint into the exporter option
-// that reaches it. Two forms are accepted:
-//
-//   - a URL, "http://host:port" or "https://host:port": the form the OTel
-//     spec gives OTEL_EXPORTER_OTLP_ENDPOINT, which the SDK also reads for
-//     itself. "http" is plaintext gRPC, "https" is TLS.
-//   - a bare "host:port" (or a "dns:///host:port" gRPC target): TLS unless
-//     OTEL_EXPORTER_OTLP_TRACES_INSECURE or OTEL_EXPORTER_OTLP_INSECURE is
-//     true, which the SDK honours.
-//
-// The old check ran url.Parse on the bare form, which rejects "127.0.0.1:4317"
-// ("first path segment in URL cannot contain colon") and reads "localhost" in
-// "localhost:4317" as a scheme, so no bare endpoint ever passed; and a URL
-// that did pass was handed to WithEndpoint, which wants host:port.
+// traceEndpointOption turns the configured trace endpoint into the exporter
+// option that reaches it. The accepted forms, and the fixed error for
+// everything else, are parseOTLPEndpoint's: host:port, http(s)://host:port and
+// dns:///host:port. A refused endpoint turns tracing OFF with one error-level
+// log line; it never stops the server. What is passed to the exporter is the
+// canonical string rebuilt from the validated parts, which is also what is
+// logged.
 func traceEndpointOption(endpoint string) (otlptracegrpc.Option, error) {
-	t, err := parseOTLPEndpoint(endpoint)
+	t, err := parseOTLPEndpoint(keyTraceEndpoint, endpoint)
 	if err != nil {
 		return nil, err
 	}
@@ -151,14 +127,15 @@ func traceEndpointOption(endpoint string) (otlptracegrpc.Option, error) {
 // initSummary builds the one start-up log line for the whole init (this
 // package is allowed one direct slog call, in emit: internal/logger's
 // ratchet). Each half that could not be started adds its own clause to the
-// message, so a start with both OFF says both. Endpoints and error text are
-// redacted of URL userinfo.
+// message, so a start with both OFF says both. Endpoints are logged in their
+// canonical form only (otlpTarget.Display); error text from third parties is
+// passed through redactEndpointSecrets as a backstop.
 func initSummary(cfg *Config, tracing bool, tracingErr error, otlp otlpStatus) (slog.Level, string, []any) {
 	level, msg, attrs := slog.LevelInfo, "OpenTelemetry initialized", []any{
-		"metrics", cfg.MetricsEnabled, "tracing", tracing, "endpoint", displayEndpoint(cfg.ExporterEndpoint),
+		"metrics", cfg.MetricsEnabled, "tracing", tracing, "endpoint", displayEndpoint(keyTraceEndpoint, cfg.ExporterEndpoint),
 		"otlp_metrics", otlp.Enabled}
 	if cfg.MetricsOTLPEndpoint != "" {
-		attrs = append(attrs, "otlp_metrics_endpoint", displayEndpoint(cfg.MetricsOTLPEndpoint))
+		attrs = append(attrs, "otlp_metrics_endpoint", displayEndpoint(keyMetricsEndpoint, cfg.MetricsOTLPEndpoint))
 	}
 	var off []string
 	if tracingErr != nil {
@@ -181,11 +158,11 @@ func initSummary(cfg *Config, tracing bool, tracingErr error, otlp otlpStatus) (
 // displayEndpoint is the loggable form of a configured endpoint: the parsed
 // target's Display(), never the configured string. An endpoint that does not
 // parse is reported as "(invalid)" rather than echoed.
-func displayEndpoint(endpoint string) string {
+func displayEndpoint(key, endpoint string) string {
 	if strings.TrimSpace(endpoint) == "" {
 		return ""
 	}
-	t, err := parseOTLPEndpoint(endpoint)
+	t, err := parseOTLPEndpoint(key, endpoint)
 	if err != nil {
 		return "(invalid)"
 	}
@@ -372,7 +349,7 @@ func newMeterProvider(ctx context.Context, cfg *Config, promOpts ...prometheus.O
 }
 
 func newOTLPReader(ctx context.Context, cfg *Config) (metric.Reader, string, error) {
-	target, err := parseOTLPEndpoint(cfg.MetricsOTLPEndpoint)
+	target, err := parseOTLPEndpoint(keyMetricsEndpoint, cfg.MetricsOTLPEndpoint)
 	if err != nil {
 		return nil, "", err
 	}

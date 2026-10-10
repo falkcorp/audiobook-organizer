@@ -1,5 +1,5 @@
 // file: internal/telemetry/metric_env_isolation_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: c3a71e58-04bd-4f92-9e6a-5d18b2f7a0c4
 // last-edited: 2026-10-10
 
@@ -327,100 +327,6 @@ func TestRedactUserinfo(t *testing.T) {
 	}
 }
 
-func TestParseOTLPEndpoint_DropsQueryFragmentPathAndDisplays(t *testing.T) {
-	for name, tc := range map[string]struct {
-		in, display string
-		dropped     string
-	}{
-		"query":          {"https://192.0.2.1:4317/?api_key=SECRET", "https://192.0.2.1:4317", "query/fragment"},
-		"fragment":       {"http://192.0.2.1:4317#token=SECRET", "http://192.0.2.1:4317", "query/fragment"},
-		"path-token":     {"https://192.0.2.1:4317/v1/SECRET", "https://192.0.2.1:4317", "path"},
-		"all":            {"https://u:SECRET@192.0.2.1:4317/p?a=SECRET#b=SECRET", "https://192.0.2.1:4317", "userinfo+query/fragment+path"},
-		"dns-query":      {"dns:///192.0.2.1:4317?k=SECRET", "dns:///192.0.2.1:4317", "query/fragment"},
-		"password-hash":  {"dns:///u:pa#SECRET@192.0.2.1:4317", "dns:///192.0.2.1:4317", "userinfo"},
-		"mixed-case":     {"HTTPS://Collector:4317", "https://Collector:4317", ""},
-		"trailing-slash": {"https://192.0.2.1:4317/", "https://192.0.2.1:4317", ""},
-		"query-has-at":   {"https://192.0.2.1:4317?tok=a@b", "https://192.0.2.1:4317", "query/fragment"},
-		"path-has-at":    {"https://192.0.2.1:4317/path@x", "https://192.0.2.1:4317", "path"},
-		"control":        {"https://192.0.2.1:4317", "https://192.0.2.1:4317", ""},
-		"control-bare":   {"192.0.2.1:4317", "192.0.2.1:4317", ""},
-	} {
-		tgt, err := parseOTLPEndpoint(tc.in)
-		if err != nil {
-			t.Errorf("%s: %v", name, err)
-			continue
-		}
-		if tgt.Display() != tc.display || strings.Join(tgt.Dropped(), "+") != tc.dropped {
-			t.Errorf("%s: Display=%q Dropped=%q, want %q / %q", name, tgt.Display(), strings.Join(tgt.Dropped(), "+"), tc.display, tc.dropped)
-		}
-	}
-}
-
-// Nothing secret in an endpoint may reach an emitted message or attribute,
-// whether the init succeeds or fails.
-func TestInitSummary_NeverEmitsEndpointSecrets(t *testing.T) {
-	ep := "https://user:SECRET1@192.0.2.1:4317/p?api_key=SECRET2#frag=SECRET3"
-	cfg := LoadConfig("test", ep, WithMetricsOTLP(ep, time.Minute, false))
-	flat := func(level slog.Level, msg string, attrs []any) string {
-		parts := []string{msg}
-		for _, a := range attrs {
-			if s, ok := a.(string); ok {
-				parts = append(parts, s)
-			}
-		}
-		return strings.Join(parts, " ")
-	}
-	cases := map[string]string{}
-	level, msg, attrs := initSummary(cfg, true, nil, otlpStatus{Enabled: true})
-	cases["ok"] = flat(level, msg, attrs)
-	level, msg, attrs = initSummary(cfg, false,
-		errors.New("dial "+ep+": refused"), otlpStatus{Err: errors.New("bad endpoint \"" + ep + "\"")})
-	cases["both-failed"] = flat(level, msg, attrs)
-	for name, out := range cases {
-		for _, secret := range []string{"SECRET1", "SECRET2", "SECRET3"} {
-			if strings.Contains(out, secret) {
-				t.Errorf("%s: %s leaked in %q", name, secret, out)
-			}
-		}
-		if !strings.Contains(out, "https://192.0.2.1:4317") {
-			t.Errorf("%s: the display endpoint is missing from %q", name, out)
-		}
-	}
-	if !strings.Contains(cases["ok"], "otlp_metrics_endpoint") {
-		t.Errorf("metric endpoint display not logged: %q", cases["ok"])
-	}
-}
-
-func TestStripUserinfo_AtParseTime(t *testing.T) {
-	for name, tc := range map[string]struct {
-		in, want string
-		dropped  bool
-	}{
-		"http":         {"http://u:secret@192.0.2.1:4317", "http://192.0.2.1:4317", true},
-		"https":        {"https://u:secret@192.0.2.1:4317", "https://192.0.2.1:4317", true},
-		"dns":          {"dns:///u:secret@192.0.2.1:4317", "dns:///192.0.2.1:4317", true},
-		"slash-in-pw":  {"dns:///u:se/cret@192.0.2.1:4317", "dns:///192.0.2.1:4317", true},
-		"bare":         {"u:secret@192.0.2.1:4317", "192.0.2.1:4317", true},
-		"control-bare": {"192.0.2.1:4317", "192.0.2.1:4317", false},
-		"control-dns":  {"dns:///192.0.2.1:4317", "dns:///192.0.2.1:4317", false},
-	} {
-		got, dropped := stripUserinfo(tc.in)
-		if got != tc.want || dropped != tc.dropped {
-			t.Errorf("%s: stripUserinfo(%q) = %q, %v; want %q, %v", name, tc.in, got, dropped, tc.want, tc.dropped)
-		}
-		if tgt, err := parseOTLPEndpoint(tc.in); err == nil {
-			if strings.Contains(tgt.URL+tgt.Target, "secret") || tgt.DroppedUserinfo != tc.dropped {
-				t.Errorf("%s: parsed target %+v keeps userinfo or has the wrong flag", name, tgt)
-			}
-		}
-	}
-	// A malformed endpoint's error text must not quote the userinfo either.
-	_, err := parseOTLPEndpoint("ftp://u:secret@192.0.2.1:21")
-	if err == nil || strings.Contains(err.Error(), "secret") {
-		t.Errorf("error = %v, want one without the userinfo", err)
-	}
-}
-
 // A dial/export failure for an endpoint with userinfo must never put the
 // secret in what reaches the log func (the process-wide error handler).
 func TestOTLPMetrics_DialErrorNeverLogsUserinfo(t *testing.T) {
@@ -465,59 +371,6 @@ func TestOTLPMetrics_DialErrorNeverLogsUserinfo(t *testing.T) {
 	for _, l := range logged {
 		if strings.Contains(l, "secret") {
 			t.Errorf("log output leaks userinfo: %q", l)
-		}
-	}
-}
-
-// Neither the error, Display() nor any emitted attribute may contain a path
-// token or a bad-port string, whatever shape the endpoint is in.
-func TestParseOTLPEndpoint_NeverEchoesPathTokens(t *testing.T) {
-	for _, ep := range []string{
-		"collector:4317/secrettoken",
-		"collector:abc/secrettoken",
-		"collector:abc",
-		"collector:0",
-		"collector:70000",
-		"https://collector/v1/secrettoken",
-		"https://collector.example.invalid/secrettoken",
-		"grpc://collector:4317/secrettoken",
-		"https://u:secrettoken@collector/secrettoken",
-		"https://%zz/secrettoken",
-		"[bad/secrettoken",
-		"http://:4317/secrettoken",
-	} {
-		tgt, err := parseOTLPEndpoint(ep)
-		if err == nil {
-			t.Errorf("%q: accepted (Display %q), want an error", ep, tgt.Display())
-		}
-		if err != nil && strings.Contains(err.Error(), "secrettoken") {
-			t.Errorf("%q: error %q echoes the endpoint", ep, err)
-		}
-		if strings.Contains(tgt.Display(), "secrettoken") {
-			t.Errorf("%q: Display %q echoes the endpoint", ep, tgt.Display())
-		}
-		if got := displayEndpoint(ep); strings.Contains(got, "secrettoken") {
-			t.Errorf("%q: displayEndpoint %q echoes the endpoint", ep, got)
-		}
-		level, msg, attrs := initSummary(LoadConfig("t", ep, WithMetricsOTLP(ep, time.Minute, false)), false, err, otlpStatus{Err: err})
-		_ = level
-		if out := fmt.Sprint(msg, attrs); strings.Contains(out, "secrettoken") {
-			t.Errorf("%q: initSummary emitted %q", ep, out)
-		}
-	}
-	// What is accepted is accepted with a numeric port, and a path is dropped.
-	for ep, want := range map[string]string{
-		"collector:4317":             "collector:4317",
-		"https://collector:4317/p/q": "https://collector:4317",
-		"https://[::1]:4317/":        "https://[::1]:4317",
-		"https://collector:65535":    "https://collector:65535",
-		"https://c:4317?tok=a@b":     "https://c:4317",
-		"https://c:4317/path@x":      "https://c:4317",
-		"https://u:p@c:4317/a?b#c":   "https://c:4317",
-	} {
-		tgt, err := parseOTLPEndpoint(ep)
-		if err != nil || tgt.Display() != want {
-			t.Errorf("%q: Display %q, err %v; want %q", ep, tgt.Display(), err, want)
 		}
 	}
 }

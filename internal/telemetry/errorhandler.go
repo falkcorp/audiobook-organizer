@@ -129,7 +129,8 @@ var urlTokenRE = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[^\s"'<>]*`)
 // up to the last '@' that precedes a '?'/'#' tail, so "dns:///u:p@h", a
 // password containing '/' or '@' and several tokens per string are covered)
 // and the "?query" and "#fragment". The primary defence is
-// parseOTLPEndpoint, which strips the same things at parse time.
+// parseOTLPEndpoint, which refuses such endpoints outright. This is only a
+// backstop for third-party text (gRPC errors) that goes through the handler.
 func redactEndpointSecrets(s string) string {
 	return urlTokenRE.ReplaceAllStringFunc(s, func(tok string) string {
 		i := strings.Index(tok, "://")

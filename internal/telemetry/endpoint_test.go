@@ -21,19 +21,19 @@ func TestParseOTLPEndpoint_Forms(t *testing.T) {
 		" http://127.0.0.1:4317 ":        {URL: "http://127.0.0.1:4317"},
 	}
 	for ep, want := range ok {
-		got, err := parseOTLPEndpoint(ep)
+		got, err := parseOTLPEndpoint(keyMetricsEndpoint, ep)
 		if err != nil {
-			t.Errorf("parseOTLPEndpoint(%q) = %v, want accepted", ep, err)
+			t.Errorf("parseOTLPEndpoint(keyMetricsEndpoint, %q) = %v, want accepted", ep, err)
 			continue
 		}
 		if got != want {
-			t.Errorf("parseOTLPEndpoint(%q) = %+v, want %+v", ep, got, want)
+			t.Errorf("parseOTLPEndpoint(keyMetricsEndpoint, %q) = %+v, want %+v", ep, got, want)
 		}
 	}
 	bad := []string{"", "127.0.0.1", "http://127.0.0.1", "http://:4317", "ftp://host:21", "invalid://endpoint", "dns:///", ":4317"}
 	for _, ep := range bad {
-		if _, err := parseOTLPEndpoint(ep); err == nil {
-			t.Errorf("parseOTLPEndpoint(%q) accepted, want an error", ep)
+		if _, err := parseOTLPEndpoint(keyMetricsEndpoint, ep); err == nil {
+			t.Errorf("parseOTLPEndpoint(keyMetricsEndpoint, %q) accepted, want an error", ep)
 		}
 	}
 }

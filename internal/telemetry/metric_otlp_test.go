@@ -203,9 +203,9 @@ func TestMetricEndpointOption_Forms(t *testing.T) {
 	ok := []string{"127.0.0.1:4317", "localhost:4317", "[::1]:4317", "tempo:4317",
 		"http://127.0.0.1:4317", "https://collector.example:4317", "dns:///tempo:4317", " http://127.0.0.1:4317 "}
 	for _, ep := range ok {
-		tgt, err := parseOTLPEndpoint(ep)
+		tgt, err := parseOTLPEndpoint(keyMetricsEndpoint, ep)
 		if err != nil {
-			t.Errorf("parseOTLPEndpoint(%q) = %v, want accepted", ep, err)
+			t.Errorf("parseOTLPEndpoint(keyMetricsEndpoint, %q) = %v, want accepted", ep, err)
 			continue
 		}
 		for _, insecure := range []bool{false, true} {
@@ -220,8 +220,8 @@ func TestMetricEndpointOption_Forms(t *testing.T) {
 		}
 	}
 	for _, ep := range []string{"", "127.0.0.1", "http://127.0.0.1", "ftp://host:21", "dns:///", ":4317"} {
-		if _, err := parseOTLPEndpoint(ep); err == nil {
-			t.Errorf("parseOTLPEndpoint(%q) accepted, want an error", ep)
+		if _, err := parseOTLPEndpoint(keyMetricsEndpoint, ep); err == nil {
+			t.Errorf("parseOTLPEndpoint(keyMetricsEndpoint, %q) accepted, want an error", ep)
 		}
 	}
 }
@@ -272,7 +272,7 @@ func TestMetricPlaintext_OneRule(t *testing.T) {
 		{"dns:///collector.example.invalid:4317", false, false},
 		{"dns:///collector.example.invalid:4317", true, true},
 	} {
-		tgt, err := parseOTLPEndpoint(tc.ep)
+		tgt, err := parseOTLPEndpoint(keyMetricsEndpoint, tc.ep)
 		if err != nil {
 			t.Fatal(err)
 		}

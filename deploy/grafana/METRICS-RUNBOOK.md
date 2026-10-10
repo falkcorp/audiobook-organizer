@@ -1,5 +1,5 @@
 <!-- file: deploy/grafana/METRICS-RUNBOOK.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: 5a2c8e71-3d94-4b60-8f17-c9e0a4d63b25 -->
 <!-- last-edited: 2026-10-10 -->
 
@@ -18,7 +18,7 @@ Properties, in the order they matter in an incident:
   export costs the OTLP copy only. The server starts and `/metrics` keeps
   serving. A malformed endpoint is reported once, at start-up, as an
   error-level line: `OpenTelemetry initialized with the OTLP metric push OFF`,
-  with an `otlp_metrics_error` attribute (URL userinfo is redacted). A
+  with an `otlp_metrics_error` attribute. A
   failing export is logged by a rate-limited handler keyed by error class (the
   message with digits normalised): each distinct error is logged at least once
   per 10 minutes and repeats of the same one are counted
@@ -51,30 +51,36 @@ These keys take effect only from the environment or the config file. A value
 set through the UI or API is saved in `config_blob` and does **not** take
 effect: telemetry reads its configuration before the database is loaded.
 
-Accepted endpoint forms:
+Accepted endpoint forms (the same set for `otel_metrics_otlp_endpoint` and
+`otel_exporter_otlp_endpoint`; the scheme is case-insensitive and surrounding
+whitespace is trimmed):
 
+- `collector.example.invalid:4317` or `[2001:db8::1]:4317`: bare `host:port`,
+  TLS unless `otel_metrics_otlp_insecure` is true.
 - `http://collector.example.invalid:4317`: plaintext gRPC.
-- `https://collector.example.invalid:4317`: TLS.
-- `collector.example.invalid:4317` or `dns:///collector.example.invalid:4317`:
-  TLS, unless `otel_metrics_otlp_insecure` is true.
+- `https://collector.example.invalid:4317`: TLS. For `http(s)` one trailing
+  `/` is allowed.
+- `dns:///collector.example.invalid:4317`: TLS unless
+  `otel_metrics_otlp_insecure` is true.
 
-Anything after `host:port` that could carry a secret is dropped from either
-OTLP endpoint at parse time: userinfo (`user:pass@`), `?query`, `#fragment`
-and, for `http(s)` URLs, the path. OTLP/gRPC authenticates with headers and
-credentials only and the SDK ignores the path, so nothing functional changes;
-a `dns:///` target keeps its path because that is the target name. A single
-start-up warning names the config key and what was dropped, never the value.
-The start-up line shows the endpoint as `scheme://host:port` (attribute
-`endpoint`, plus `otlp_metrics_endpoint` when the push is on); an endpoint that
-does not parse is shown as `(invalid)`. Error text is also scrubbed of URL
-userinfo, query and fragment as a backstop.
+The host is a DNS name (letters, digits, `.` and `-`, not starting or ending
+with `.` or `-`, at most 253 bytes) or a bracketed IPv6 address. **The port is
+required** and must be a number from 1 to 65535.
 
-**The port is required** and must be a number from 1 to 65535, in every form:
-`http://host`, `host:abc` and `host:0` are rejected and logged. A bare
-`host:port` takes no path (`host:4317/x` is rejected). For `http(s)` the
-userinfo is looked for only before the first `/`, `?` or `#`, so a password
-containing `/`, `?` or `#` must be percent-encoded. Parse errors never quote
-the endpoint, so a path or token in a bad value cannot reach the log.
+**Everything else is refused, not repaired**: userinfo or any `@`, `?`, `#`,
+`%`, any path other than that one trailing `/`, whitespace inside the value,
+and any other scheme. A refused metrics endpoint turns the OTLP push OFF and a
+refused trace endpoint turns tracing OFF, each with one error-level start-up
+line carrying a fixed message that names the config key and quotes none of the
+value (`... is not a valid OTLP/gRPC endpoint (expected host:port,
+http(s)://host:port or dns:///host:port)`); the server keeps running. The
+endpoint is rebuilt from the validated scheme, host and port, and that
+canonical string is both what is dialled and what the start-up line shows
+(`endpoint`, plus `otlp_metrics_endpoint` when the push is on; `(invalid)` for
+a refused one). OTLP/gRPC needs nothing else, and credentials belong in
+headers or TLS, never in the endpoint. Third-party error text that reaches the
+error handler is additionally scrubbed of URL userinfo, path, query and
+fragment as a last line of defence.
 
 ### Transport rule
 
