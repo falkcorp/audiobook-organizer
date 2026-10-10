@@ -1,5 +1,5 @@
 // file: internal/server/handlers/operations_v2.go
-// version: 1.13.0
+// version: 1.13.1
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-10-09
 
@@ -639,12 +639,10 @@ func (h *OperationsV2Handler) TriggerOperationV2(c *gin.Context) {
 // EnqueueOp has ~20 non-HTTP callers (internal/scheduler/tasks.go alone
 // enqueues 15 op types from context.Background(), plus internal/importer and
 // the dedup/maintenance plugins). Those carry no user and no permission set,
-// so a check down there would fail closed on every scheduled run. Scheduler
-// driven EnqueueOp calls bypass this handler on purpose, so scheduled runs
-// are unaffected.
+// so a check down there would fail closed on every scheduled run.
 //
-// Semantics are AND: every permission the def declares must be held. The
-// first two-permission def should not be a coin flip.
+// Semantics are AND: every permission the def declares must be held, so the
+// first two-permission def is not a coin flip.
 //
 // An unknown def_id deliberately skips the check and falls through to
 // EnqueueOp, preserving today's error response. Nothing runs either way.
