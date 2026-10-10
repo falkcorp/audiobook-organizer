@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_title_fixer.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 7c3e9a15-2b6d-4f48-a9e1-5d0b8c4f7a26
-// last-edited: 2026-10-05
+// last-edited: 2026-10-10
 
 package maintenance
 
@@ -27,6 +27,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/metastate"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
@@ -796,7 +797,10 @@ func (f *junkTitleFixer) evaluate(idx *junkIndex, b database.BookCore) (repairs.
 
 	spoken, _ := accept(transcribed, junkSrcTranscribed)
 	candidate, refusedCandidate := "", ""
-	if t, score, ok := f.candidateTitle(b.ID, author, b.ASIN); ok {
+	// candidateTitle gates each candidate through CandidateIdentityStale,
+	// which reads the book's ID and ASIN; ToBook carries both.
+	full := b.ToBook()
+	if t, score, ok := f.candidateTitle(&full, author); ok {
 		switch {
 		case embedded && !titleAgreesWithAny(t, agreeWith):
 			refusedCandidate = t
@@ -1437,9 +1441,18 @@ func (f *junkTitleFixer) fragmentReason(idx *junkIndex, b database.BookCore, kin
 // candidates an earlier search version cached are filtered by the current
 // position rules there, and a raw MetadataCacheStore read would offer a
 // sibling the old ladder pooled as this book's title.
-func (f *junkTitleFixer) candidateTitle(bookID, author string, bookASIN *string) (string, float64, bool) {
-	entry, err := f.p.deps.CachedMetadataCandidates(bookID)
-	if err != nil || entry == nil {
+//
+// Every candidate also passes metafetch.CandidateIdentityStale, the gate the
+// other apply paths use: a row marked Stale (the book was retitled or
+// re-credited after the fetch) offers nothing, and a candidate fetched for an
+// ASIN the book no longer carries is skipped. Without it a book retitled into
+// a junk title would be offered the old title's candidates.
+func (f *junkTitleFixer) candidateTitle(b *database.Book, author string) (string, float64, bool) {
+	if b == nil {
+		return "", 0, false
+	}
+	entry, err := f.p.deps.CachedMetadataCandidates(b.ID)
+	if err != nil || entry == nil || entry.Stale {
 		return "", 0, false
 	}
 	a := strings.TrimSpace(author)
@@ -1447,19 +1460,16 @@ func (f *junkTitleFixer) candidateTitle(bookID, author string, bookASIN *string)
 		return "", 0, false
 	}
 	own := ""
-	if bookASIN != nil {
-		own = strings.TrimSpace(*bookASIN)
+	if b.ASIN != nil {
+		own = strings.TrimSpace(*b.ASIN)
 	}
 	best, bestScore, found, bestOwn := "", 0.0, false, false
 	for _, raw := range entry.Candidates {
-		var c struct {
-			Title            string  `json:"title"`
-			Author           string  `json:"author"`
-			ASIN             string  `json:"asin"`
-			Score            float64 `json:"score"`
-			DurationMismatch bool    `json:"duration_mismatch"`
-		}
+		var c metafetch.MetadataCandidate
 		if json.Unmarshal(raw, &c) != nil || c.Score < junkCandidateMinScore || c.DurationMismatch {
+			continue
+		}
+		if metafetch.CandidateIdentityStale(entry, b, &c) != nil {
 			continue
 		}
 		if !strings.EqualFold(util.NormalizeAuthor(c.Author), util.NormalizeAuthor(a)) {

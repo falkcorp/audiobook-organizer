@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/junk_title_fixer_test.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 3a8d6f52-1e9c-4b07-92d4-6c5b0e8a7f13
-// last-edited: 2026-10-05
+// last-edited: 2026-10-10
 
 package maintenance
 
@@ -917,13 +917,13 @@ func TestJunkTitleFixer_CandidateReadIsTheFilteredRow(t *testing.T) {
 	lib := newJunkLib(t)
 	id := lib.ids["candidate"]
 	raw := newJunkTitleFixer(&Plugin{deps: fakeDeps{store: lib.store}, standDownWait: noWait})
-	title, _, ok := raw.candidateTitle(id, "Author A", nil)
+	title, _, ok := raw.candidateTitle(&database.Book{ID: id}, "Author A")
 	require.True(t, ok)
 	require.Equal(t, "Candidate Title", title)
 
 	filtered := newJunkTitleFixer(&Plugin{deps: filteredCacheDeps{fakeDeps: fakeDeps{store: lib.store},
 		filtered: map[string]*database.MetadataCandidateCache{id: {BookID: id}}}, standDownWait: noWait})
-	_, _, ok = filtered.candidateTitle(id, "Author A", nil)
+	_, _, ok = filtered.candidateTitle(&database.Book{ID: id}, "Author A")
 	require.False(t, ok, "the filtered row has no candidate; the raw row must not be read")
 }
 
@@ -1000,17 +1000,67 @@ func TestJunkTitleFixer_CandidateTitlePrefersTheBooksASIN(t *testing.T) {
 	}}
 	f := newJunkTitleFixer(&Plugin{deps: filteredCacheDeps{filtered: map[string]*database.MetadataCandidateCache{"b1": row}}, standDownWait: noWait})
 	asin := "B00BOOKASI"
-	title, score, ok := f.candidateTitle("b1", "Author A", &asin)
+	title, score, ok := f.candidateTitle(&database.Book{ID: "b1", ASIN: &asin}, "Author A")
 	require.True(t, ok)
 	require.Equal(t, "The Book Itself", title)
 	require.InDelta(t, 0.92, score, 1e-9)
 
 	other := "B00NOMATCH"
-	title, _, ok = f.candidateTitle("b1", "Author A", &other)
+	title, _, ok = f.candidateTitle(&database.Book{ID: "b1", ASIN: &other}, "Author A")
 	require.True(t, ok)
 	require.Equal(t, "No ASIN", title, "candidates naming another ASIN are skipped")
 
-	title, _, ok = f.candidateTitle("b1", "Author A", nil)
+	title, _, ok = f.candidateTitle(&database.Book{ID: "b1"}, "Author A")
 	require.True(t, ok)
 	require.Equal(t, "Other Record", title, "a book with no ASIN keeps the highest score")
+}
+
+// A row marked Stale (the book was retitled or re-credited after the fetch)
+// answers another question: the fixer proposes none of its candidates, where
+// the same row unmarked proposes "Candidate Title" (TestJunkTitleFixer_PlanDecisions).
+func TestJunkTitleFixer_StaleCandidateRowIsNotProposed(t *testing.T) {
+	lib := newJunkLib(t)
+	id := lib.ids["candidate"]
+	require.Equal(t, "Candidate Title", planRows(t, lib.store)[id].Proposed["title"], "precondition: the unmarked row proposes")
+
+	entry, err := lib.store.GetMetadataCache(id)
+	require.NoError(t, err)
+	require.NotNil(t, entry)
+	entry.Stale = true
+	entry.StaleQuestionFP = "fp-old-question"
+	require.NoError(t, lib.store.PutMetadataCache(entry))
+	marked, err := lib.store.GetMetadataCache(id)
+	require.NoError(t, err)
+	require.True(t, marked.Stale, "the stored row carries the mark")
+
+	f := newJunkTitleFixer(&Plugin{deps: fakeDeps{store: lib.store}, standDownWait: noWait})
+	_, _, ok := f.candidateTitle(&database.Book{ID: id}, "Author A")
+	require.False(t, ok, "a stale row offers no candidate title")
+
+	r := planRows(t, lib.store)[id]
+	require.NotEqual(t, "Candidate Title", r.Proposed["title"], "a stale row's candidate must not be proposed (%s)", r.Reason)
+	require.False(t, r.Applicable() && r.Proposed["title"] != "", "nothing else vouches for a title here: %v (%s)", r.Proposed, r.Reason)
+}
+
+// A row fetched for an ASIN the book no longer carries offers only the
+// candidate naming the book's current ASIN: CandidateIdentityStale's ASIN leg.
+func TestJunkTitleFixer_CandidateTitleSkipsASINReplacedCandidates(t *testing.T) {
+	cand := func(title, asin string, score float64) json.RawMessage {
+		b, err := json.Marshal(map[string]any{"title": title, "author": "Author A", "asin": asin, "score": score})
+		require.NoError(t, err)
+		return b
+	}
+	row := &database.MetadataCandidateCache{BookID: "b1", FetchedForASIN: "B00OLDASIN", Candidates: []json.RawMessage{
+		cand("Old Record", "B00OLDASIN", 0.99),
+		cand("No ASIN", "", 0.97),
+	}}
+	f := newJunkTitleFixer(&Plugin{deps: filteredCacheDeps{filtered: map[string]*database.MetadataCandidateCache{"b1": row}}, standDownWait: noWait})
+	cur := "B00NEWASIN"
+	_, _, ok := f.candidateTitle(&database.Book{ID: "b1", ASIN: &cur}, "Author A")
+	require.False(t, ok, "candidates fetched for the replaced ASIN are refused")
+
+	row.Candidates = append(row.Candidates, cand("The Current Record", "B00NEWASIN", 0.9))
+	title, _, ok := f.candidateTitle(&database.Book{ID: "b1", ASIN: &cur}, "Author A")
+	require.True(t, ok)
+	require.Equal(t, "The Current Record", title, "a candidate carrying the book's current ASIN is current")
 }
