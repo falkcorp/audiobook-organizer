@@ -1,5 +1,5 @@
 // file: internal/server/server.go
-// version: 2.87.1
+// version: 2.88.0
 // guid: 4c5d6e7f-8a9b-0c1d-2e3f-4a5b6c7d8e9f
 // last-edited: 2026-10-10
 
@@ -351,7 +351,7 @@ type Server struct {
 	// if needed (rare — most access is via the typed fields above).
 	container *serviceregistry.Container
 
-	// extraOpsRegistrar holds the ExtraOpsRegistrar for 13 scheduler ops
+	// extraOpsRegistrar holds the ExtraOpsRegistrar for 7 scheduler ops
 	// that were extracted from scheduler_extra_ops.go (SERVER-THIN-RESIDUAL).
 	// Constructed early (before opRegistrars loop) with empty deps; deps are
 	// filled in after all services are wired so closures see correct values
@@ -730,13 +730,12 @@ func NewServer(store database.Store) *Server {
 	// available — same lifecycle as before.
 
 	// SERVER-THIN-RESIDUAL: build the ExtraOpsRegistrar before the opRegistrars
-	// loop so the 13 scheduler ops (scheduler_extra_ops.go shim) can delegate
+	// loop so the 7 scheduler ops (scheduler_extra_ops.go shim) can delegate
 	// to it. Fields available from wireServerFromContainer are set now;
-	// aiScanStore, dedupEngine, and activityWriter are back-filled below after
+	// dedupEngine and activityWriter are back-filled below after
 	// their lazy initialisation. Closures see the updated values at op run time.
 	server.extraOpsRegistrar = scheduler.NewExtraOpsRegistrar(resolvedStore, scheduler.ExtraOpsDeps{
 		DedupCache:           server.dedupCache,
-		OLService:            server.olService,
 		MetadataFetchService: server.metadataFetchService,
 		AudiobookService:     server.audiobookService,
 		ScanStandDown:        server,
@@ -788,12 +787,9 @@ func NewServer(store database.Store) *Server {
 	// these now; no inline server-side wiring needed.
 
 	// aiScanStore + pipelineManager are container-built (registry_wire.go
-	// "aiscanstore" + "pipelinemanager"). Back-fill extraOpsRegistrar's
-	// AIScanStore dep — the registrar was constructed before
-	// wireServerFromContainer populated the field.
-	if server.aiScanStore != nil {
-		server.extraOpsRegistrar.Deps.AIScanStore = server.aiScanStore
-	}
+	// "aiscanstore" + "pipelinemanager"). Nothing to back-fill into
+	// extraOpsRegistrar: its only reader, scheduler.db-optimize, was merged
+	// into maintenance.db-optimize on 2026-10-10.
 
 	// server.activityService is now populated by wireServerFromContainer
 	// when config.DatabasePath is set (W2). Nothing to do here.

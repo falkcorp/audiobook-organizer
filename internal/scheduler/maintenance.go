@@ -1,5 +1,5 @@
 // file: internal/scheduler/maintenance.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: 7d2e8f4a-c3b1-4a09-8e5f-2d6c0b9a3e71
 // last-edited: 2026-10-10
 
@@ -169,15 +169,15 @@ var taskV2DefIDs = map[string]string{
 	"asin_backfill":               "metafetch.asin-backfill",
 	"candidate_fetch":             "metadata.candidate-fetch",
 	"catalog_harvest":             "catalog.harvest-authors",
-	"temp_file_cleanup":           "scheduler.temp-file-cleanup",
-	"trash_cleanup":               "scheduler.trash-cleanup",
+	"temp_file_cleanup":           "maintenance.temp-file-cleanup",
+	"trash_cleanup":               "maintenance.trash-cleanup",
 	"metadata_upgrade":            "scheduler.metadata-upgrade",
 	"author_split_scan":           "scheduler.author-split-scan",
-	"db_optimize":                 "scheduler.db-optimize",
+	"db_optimize":                 "maintenance.db-optimize",
 	"acoustid_online_lookup":      "acoustid.lookup-online",
 	"cleanup_old_backups":         "scheduler.cleanup-old-backups",
 	"purge_deleted":               "scheduler.purge-deleted",
-	"tombstone_cleanup":           "scheduler.tombstone-cleanup",
+	"tombstone_cleanup":           "maintenance.tombstone-cleanup",
 	"resolve_production_authors":  "scheduler.resolve-production-authors",
 	"metadata_refresh":            "scheduler.metadata-refresh",
 	"reconcile_scan":              "maintenance.reconcile-scan",

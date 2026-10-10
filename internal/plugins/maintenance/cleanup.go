@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
-// last-edited: 2026-09-19
+// last-edited: 2026-10-10
 
 package maintenance
 
@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
+	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
@@ -58,10 +59,17 @@ func (p *Plugin) runPurgeDeleted(ctx context.Context, _ json.RawMessage, reporte
 
 // --- tombstone-cleanup ---
 
+// tombstoneCleanupDef is the only registration of the tombstone chain
+// resolution. scheduler.tombstone-cleanup ran the same body under its own ID
+// and ConcurrencyKey until 2026-10-10; it resolves here as a FormerID, and the
+// tombstone_cleanup scheduler task enqueues this def. Permissions and the 1h
+// Timeout are the stricter gate and longer budget the merged def carried.
 func (p *Plugin) tombstoneCleanupDef() sdk.OperationDef {
 	sched := "0 4 * * *" // 04:00 daily
 	return sdk.OperationDef{
 		ID:              "maintenance.tombstone-cleanup",
+		FormerIDs:       []string{"scheduler.tombstone-cleanup"},
+		Permissions:     []auth.Permission{auth.PermSettingsManage},
 		Liveness:        sdk.LivenessManual,
 		Plugin:          "maintenance",
 		DisplayName:     "Resolve author tombstone chains",
@@ -71,7 +79,7 @@ func (p *Plugin) tombstoneCleanupDef() sdk.OperationDef {
 		ConcurrencyKey:  "maintenance.tombstone-cleanup",
 		Cancellable:     false,
 		Isolate:         false,
-		Timeout:         45 * time.Minute,
+		Timeout:         1 * time.Hour,
 		Schedule:        &sched,
 		Capabilities:    []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite},
 		Run:             p.runTombstoneCleanup,
@@ -98,12 +106,20 @@ func (p *Plugin) runTombstoneCleanup(_ context.Context, _ json.RawMessage, repor
 
 // --- temp-file-cleanup ---
 
+// tempFileCleanupDef is the only registration of the orphaned temp-file sweep.
+// scheduler.temp-file-cleanup ran the same sweep under its own ID and
+// ConcurrencyKey until 2026-10-10; it resolves here as a FormerID, and the
+// temp_file_cleanup scheduler task enqueues this def. Permissions and the 1h
+// budgets are the stricter gate and longer budgets the merged def carried: the
+// sweep deletes files, so the alias must not widen who can run it.
 func (p *Plugin) tempFileCleanupDef() sdk.OperationDef {
 	sched := "30 1 * * *" // 01:30 daily
 	return sdk.OperationDef{
 		ID:              "maintenance.temp-file-cleanup",
+		FormerIDs:       []string{"scheduler.temp-file-cleanup"},
+		Permissions:     []auth.Permission{auth.PermSettingsManage},
 		Liveness:        sdk.LivenessNone,
-		ProgressTimeout: 20 * time.Minute, // LivenessNone requires an explicit budget
+		ProgressTimeout: 1 * time.Hour, // LivenessNone requires an explicit budget
 		Plugin:          "maintenance",
 		DisplayName:     "Clean orphaned temp files",
 		Description:     "Removes orphaned *.tmp.m4b / *.tmp.m4a files left by crashed ffmpeg operations.",
@@ -112,7 +128,7 @@ func (p *Plugin) tempFileCleanupDef() sdk.OperationDef {
 		ConcurrencyKey:  "maintenance.temp-file-cleanup",
 		Cancellable:     false,
 		Isolate:         false,
-		Timeout:         20 * time.Minute,
+		Timeout:         1 * time.Hour,
 		Schedule:        &sched,
 		Capabilities:    []sdk.Capability{sdk.CapLibraryRead, sdk.CapFilesRead, sdk.CapFilesWrite},
 		Run:             p.runTempFileCleanup,
@@ -413,12 +429,19 @@ func (p *Plugin) runCleanupOldBackups(ctx context.Context, _ json.RawMessage, re
 
 // --- trash-cleanup ---
 
+// trashCleanupDef is the only registration of the trashed-version purge.
+// scheduler.trash-cleanup ran the same body under its own ID and
+// ConcurrencyKey until 2026-10-10; it resolves here as a FormerID, and the
+// trash_cleanup scheduler task enqueues this def. Permissions and the 1h
+// budgets are the stricter gate and longer budgets the merged def carried.
 func (p *Plugin) trashCleanupDef() sdk.OperationDef {
 	sched := "0 6 * * *" // 06:00 daily
 	return sdk.OperationDef{
 		ID:              "maintenance.trash-cleanup",
+		FormerIDs:       []string{"scheduler.trash-cleanup"},
+		Permissions:     []auth.Permission{auth.PermSettingsManage},
 		Liveness:        sdk.LivenessNone,
-		ProgressTimeout: 20 * time.Minute, // LivenessNone requires an explicit budget
+		ProgressTimeout: 1 * time.Hour, // LivenessNone requires an explicit budget
 		Plugin:          "maintenance",
 		DisplayName:     "Purge trashed book versions",
 		Description:     "Purges trashed book file versions past their 14-day TTL.",
@@ -427,7 +450,7 @@ func (p *Plugin) trashCleanupDef() sdk.OperationDef {
 		ConcurrencyKey:  "maintenance.trash-cleanup",
 		Cancellable:     false,
 		Isolate:         false,
-		Timeout:         20 * time.Minute,
+		Timeout:         1 * time.Hour,
 		Schedule:        &sched,
 		Capabilities:    []sdk.Capability{sdk.CapLibraryRead, sdk.CapLibraryWrite, sdk.CapFilesWrite},
 		Run:             p.runTrashCleanup,
