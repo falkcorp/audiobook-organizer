@@ -1,7 +1,7 @@
 // file: internal/aidispatch/dispatch.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 7e784d44-f9f1-4637-919b-c5cf3aa6ac53
-// last-edited: 2026-09-26
+// last-edited: 2026-10-10
 
 package aidispatch
 
@@ -15,7 +15,10 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel/metric"
+
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/telemetry"
 )
 
 // dispatchLog carries the per-request attribution lines.
@@ -337,7 +340,7 @@ func Call[T any](ctx context.Context, d *Dispatcher, c Capability, fn func(conte
 	}
 	cands, refusals := d.candidates(spec)
 	if len(cands) == 0 {
-		noCapableTotal.WithLabelValues(c.id).Inc()
+		noCapable.Add(ctx, 1, metric.WithAttributes(telemetry.Capability.String(c.id)))
 		err := &NoCapableEndpointError{Capability: c.id, Refusals: refusals}
 		d.logNoCapable(err)
 		return zero, err
@@ -390,7 +393,7 @@ func Call[T any](ctx context.Context, d *Dispatcher, c Capability, fn func(conte
 		if pick < 0 {
 			pick = 0
 			r, err := d.slots.Acquire(ctx, remaining[0].ID, remaining[0].Concurrency, d.totals[spec.Kind])
-			slotWaitSeconds.WithLabelValues(remaining[0].ID).Observe(time.Since(waitStart).Seconds())
+			slotWait.Record(ctx, time.Since(waitStart).Seconds(), metric.WithAttributes(telemetry.Endpoint.String(remaining[0].ID)))
 			if err != nil {
 				// Acquire has no timeout of its own: it fails only when the
 				// CALLER's ctx is done, so trying the next endpoint would fail
@@ -401,7 +404,7 @@ func Call[T any](ctx context.Context, d *Dispatcher, c Capability, fn func(conte
 			}
 			release = r
 		} else {
-			slotWaitSeconds.WithLabelValues(remaining[pick].ID).Observe(time.Since(waitStart).Seconds())
+			slotWait.Record(ctx, time.Since(waitStart).Seconds(), metric.WithAttributes(telemetry.Endpoint.String(remaining[pick].ID)))
 		}
 		ep := remaining[pick]
 		remaining = append(remaining[:pick:pick], remaining[pick+1:]...)
@@ -422,13 +425,18 @@ func Call[T any](ctx context.Context, d *Dispatcher, c Capability, fn func(conte
 		res, err := func() (T, error) {
 			defer release()
 			defer cancel()
-			inflightGauge.WithLabelValues(ep.ID).Inc()
-			defer inflightGauge.WithLabelValues(ep.ID).Dec()
+			inflightAttrs := metric.WithAttributes(telemetry.Endpoint.String(ep.ID))
+			inflight.Add(ctx, 1, inflightAttrs)
+			// WithoutCancel: a cancelled ctx must not drop the decrement.
+			defer inflight.Add(context.WithoutCancel(ctx), -1, inflightAttrs)
 			return fn(attemptCtx, Target{Endpoint: ep, Capability: c, Model: model})
 		}()
 
 		class := Classify(ctx, err)
-		requestsTotal.WithLabelValues(c.id, ep.ID, class.String()).Inc()
+		requests.Add(ctx, 1, metric.WithAttributes(
+			telemetry.Capability.String(c.id),
+			telemetry.Endpoint.String(ep.ID),
+			telemetry.Outcome.String(class.String())))
 		d.attribution.Record(ep.ID, c.id, class, time.Now())
 		// One line per routed request, so an operation log names the endpoint
 		// that served (or failed) each piece of work.
@@ -460,7 +468,10 @@ func Call[T any](ctx context.Context, d *Dispatcher, c Capability, fn func(conte
 		if class == ClassDeadline && deadlines > 1 {
 			break
 		}
-		failoverTotal.WithLabelValues(c.id, ep.ID, class.String()).Inc()
+		failover.Add(ctx, 1, metric.WithAttributes(
+			telemetry.Capability.String(c.id),
+			telemetry.Endpoint.String(ep.ID),
+			telemetry.Class.String(class.String())))
 	}
 	if len(attempts) == 0 {
 		// Unreachable today: the first candidate is always attempted (the
