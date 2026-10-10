@@ -1096,6 +1096,21 @@ func (imp *Importer) enrichImportedBooks(ctx context.Context, bookIDs []string, 
 			breakerFails.Store(0)
 			return nil
 		}
+		if errors.Is(err, metafetch.ErrOwnerRejectedNotApplied) {
+			// Every provider answered; the only matches are records the
+			// owner rejected for this book, and none is ever applied. The
+			// providers answered, so this resets the breaker too.
+			log.Debug("Only owner-rejected matches for '%s', not applied: %v", book.Title, err)
+			breakerFails.Store(0)
+			return nil
+		}
+		if errors.Is(err, metafetch.ErrOwnerRejectionCheckFailed) {
+			// The book's rejections could not be read, so nothing was
+			// fetched or applied. A local read failure, not a provider one:
+			// it does not count toward the rate-limit breaker.
+			log.Warn("Skipped metadata enrichment for '%s': %v", book.Title, err)
+			return nil
+		}
 		if err != nil {
 			log.Debug("No metadata found for '%s': %v", book.Title, err)
 			if breakerFails.Add(1) >= enrichBreakerThreshold {
