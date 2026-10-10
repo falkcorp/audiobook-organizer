@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.41.1
+// version: 1.42.0
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
 // last-edited: 2026-10-10
 
@@ -545,8 +545,18 @@ func (h *Handler) searchAudiobookMetadataImpl(c *gin.Context) {
 	cacheKey := fmt.Sprintf("meta_search:%s:%s:%s:%s:%s:%t",
 		id, body.Query, body.Author, body.Narrator, body.Series, body.UseRerank)
 	plainFetch := body.Query == "" && body.Author == "" && body.Narrator == "" && body.Series == ""
+	// staleRow: the persistent row is marked Stale (the book was retitled or
+	// re-credited after its candidates were fetched), so they answer another
+	// question. It is a cache miss: the plain fetch below searches the
+	// current title and rewrites the row unmarked. The 60-second listCache is
+	// skipped too, since a plain-fetch entry there predates the retitle (every
+	// path that writes one after it either reads an unmarked row or rewrites
+	// the row unmarked).
+	staleRow := false
 	if !refresh && plainFetch && h.metadataFetchService != nil {
-		if entry, fresh, err := h.metadataFetchService.GetCachedCandidates(id); err == nil && entry != nil {
+		entry, fresh, err := h.metadataFetchService.GetCachedCandidates(id)
+		staleRow = err == nil && entry != nil && entry.Stale
+		if err == nil && entry != nil && !entry.Stale {
 			results := decodeCachedCandidates(entry)
 			respH := gin.H{
 				"results":    results,
@@ -563,7 +573,7 @@ func (h *Handler) searchAudiobookMetadataImpl(c *gin.Context) {
 
 	// 60-second in-memory cache: still useful for back-to-back UI re-renders
 	// even after the persistent cache lands. Keyed identically.
-	if !refresh {
+	if !refresh && !staleRow {
 		if cached, ok := h.listCache.Get(cacheKey); ok {
 			// Results of a fresh search (an alternative query, or a plain
 			// fetch whose cache row has since gone): no cache row to judge.

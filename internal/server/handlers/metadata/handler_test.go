@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler_test.go
-// version: 1.16.0
+// version: 1.17.0
 // guid: 1d31ef73-7c7a-4c3b-a840-01b0865023d7
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 
 // Tests for the metadata-domain handlers. The store / metadata-fetch-service /
 // write-back-enqueuer / operations-registry / file-io-pool deps are generated
@@ -277,6 +277,55 @@ func TestSearchAudiobookMetadata_PlainFetchAndCache(t *testing.T) {
 	w := doReq(h.SearchAudiobookMetadata, http.MethodPost, "/audiobooks/b1/search-metadata", nil, idParam("b1"))
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// A cache row marked Stale (the book was retitled after its candidates were
+// fetched) is a cache miss for the plain fetch: the dialog searches the
+// current title instead of serving the old title's candidates, and does not
+// fall back to the 60-second listCache entry written before the retitle.
+func TestSearchAudiobookMetadata_StaleRowIsACacheMiss(t *testing.T) {
+	h, d := newHandler(t)
+	old := &metafetch.MetadataCandidateCache{BookID: "b1", FetchedAt: time.Now(),
+		Candidates: []json.RawMessage{json.RawMessage(`{"title":"Title 000001","author":"Author 07","score":0.9}`)}}
+	// First open, before the retitle: served from the row, which also fills
+	// the 60-second listCache.
+	d.mfs.EXPECT().GetCachedCandidates("b1").Return(old, true, nil).Once()
+	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "Title 000001"}, nil)
+	w := doReq(h.SearchAudiobookMetadata, http.MethodPost, "/audiobooks/b1/search-metadata", nil, idParam("b1"))
+	if w.Code != http.StatusOK {
+		t.Fatalf("first open: want 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// The retitle marks the row Stale; the next open searches again.
+	stale := *old
+	stale.Stale = true
+	stale.StaleQuestionFP = "fp-old-question"
+	d.mfs.EXPECT().GetCachedCandidates("b1").Return(&stale, true, nil).Once()
+	d.mfs.EXPECT().FetchAndCache(mock.Anything, "b1", "", "", "", "", mock.Anything).
+		Return(&metafetch.MetadataCandidateCache{BookID: "b1", FetchedAt: time.Now(),
+			Candidates: []json.RawMessage{json.RawMessage(`{"title":"Title 000002","author":"Author 07","score":0.9}`)}}, nil).Once()
+	w = doReq(h.SearchAudiobookMetadata, http.MethodPost, "/audiobooks/b1/search-metadata", nil, idParam("b1"))
+	if w.Code != http.StatusOK {
+		t.Fatalf("after retitle: want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var env struct {
+		Data struct {
+			FromCache bool `json:"from_cache"`
+			Results   []struct {
+				Title string `json:"title"`
+			} `json:"results"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	body := env.Data
+	if body.FromCache {
+		t.Fatalf("a stale row was served from cache: %s", w.Body.String())
+	}
+	if len(body.Results) != 1 || body.Results[0].Title != "Title 000002" {
+		t.Fatalf("want the fresh search's candidate, got %s", w.Body.String())
 	}
 }
 
