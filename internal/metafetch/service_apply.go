@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.54.0
+// version: 1.55.0
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
-// last-edited: 2026-10-06
+// last-edited: 2026-10-10
 
 package metafetch
 
@@ -693,6 +693,31 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 		return nil, fmt.Errorf("book %s: %w", id, ErrMarkedNoMatch)
 	}
 
+	// The owner's rejections: a candidate the owner rejected for this book is
+	// never applied, by any caller and with any options (no pin, no
+	// hand-pick lifts it; the owner un-rejects it first). Every candidate
+	// apply comes through here -- the cached and op-result bulk applies, the
+	// nightly upgrade, the version-twin fixer, the transcription auto-match,
+	// the single-book dialog, apply-when-scanned -- so this is the backstop
+	// behind each caller's own check (which reports the refusal its own
+	// way), and it covers any caller added later. It reads the list now,
+	// and again under the book's write stripe (rejectionGuard, below), the
+	// stripe RecordRejection writes under, so a rejection made after the
+	// caller planned its apply still wins. An unreadable list refuses the
+	// apply (ErrOwnerRejectionCheckFailed). The candidate is checked as
+	// given, before FilterApplyFields or the fill-only strip zero its
+	// identifiers.
+	candidateIDs := candidateIdentifiers(&candidate)
+	rejectionGuard := func(*database.Book) error {
+		if rErr := mfs.refuseOwnerRejected(id, candidate.Source, candidate.Title, candidateIDs); rErr != nil {
+			return fmt.Errorf("book %s: %w", id, rErr)
+		}
+		return nil
+	}
+	if rErr := rejectionGuard(book); rErr != nil {
+		return nil, rErr
+	}
+
 	// The caller's Guard runs once here, on the row as read, before the apply
 	// body: the body resolves or creates a Series row (applyMetadataUnguarded)
 	// before the commit, so a guard that refuses only under the write lock
@@ -870,9 +895,11 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 			return nil
 		}
 	}
+	// The owner-rejection check runs again here, under the write stripe.
 	// The caller's own under-lock check (ApplyOptions.Guard) runs after the
-	// no_match one, on the same fresh row, inside the same ModifyBook.
-	commitGuard := composeCommitGuards(noMatchGuard, opts.Guard)
+	// no_match and rejection ones, on the same fresh row, inside the same
+	// ModifyBook.
+	commitGuard := composeCommitGuards(noMatchGuard, rejectionGuard, opts.Guard)
 	updatedBook, updateErr := mfs.commitApply(id, before, book, credits, historySource, opts.BatchID, commitGuard)
 	if updatedBook == nil {
 		return nil, updateErr

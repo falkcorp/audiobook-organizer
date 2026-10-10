@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/book_scan_lock.go
-// version: 1.13.0
+// version: 1.14.0
 // guid: 070620af-532e-4357-a2a3-3f746b5e9e30
 // last-edited: 2026-10-10
 
@@ -307,6 +307,12 @@ func (h *Handler) applyCandidateCore(ctx context.Context, id string, cand metafe
 		resp, err = h.metadataFetchService.ApplyMetadataCandidate(id, cand, fields)
 	default:
 		resp, err = h.metadataFetchService.ApplyMetadataCandidateWithOptions(id, cand, fields, metafetch.ApplyOptions{BatchID: batchID})
+	}
+	if errors.Is(err, metafetch.ErrOwnerRejectedNotApplied) {
+		// The apply's own re-read (under the book's write stripe) found a
+		// rejection made after the check above: the same 409 owner_rejected
+		// refusal, nothing written.
+		return nil, &errOwnerRejected{Source: cand.Source, Title: cand.Title}
 	}
 	if err != nil {
 		return nil, err

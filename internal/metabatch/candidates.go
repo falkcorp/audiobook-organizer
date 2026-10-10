@@ -1,5 +1,5 @@
 // file: internal/metabatch/candidates.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-10-10
 //
@@ -439,9 +439,6 @@ func LoadRejectedCandidateKeys(store RejectedCandidateReader, bookID string) met
 	keys, err := metafetch.LoadRejectedCandidates(store, bookID)
 	if err != nil {
 		return metafetch.RejectedSet{}
-	}
-	if keys == nil {
-		keys = metafetch.RejectedSet{}
 	}
 	return keys
 }

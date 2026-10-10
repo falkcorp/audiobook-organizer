@@ -1,5 +1,5 @@
 // file: internal/metafetch/rejected_candidates.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 486771bb-091f-46bb-8846-ff740d2e8ab3
 // last-edited: 2026-10-10
 
@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -36,6 +37,21 @@ import (
 // of that source+title, as it always did. Matching (Rejection.Matches) uses
 // the identifiers when both the rejection and the candidate carry one of the
 // same kind, and falls back to source+title otherwise.
+//
+// Identifiers are book-wide, across every source (owner decision
+// 2026-10-10): a rejected ASIN names one Audible product, which Audible and
+// Audnexus ("Audnexus (Audible)") both serve, and a rejected ISBN names one
+// edition whichever provider reports it. So an identifier-precise rejection
+// refuses any provider's record for that book carrying one of its
+// identifiers, whatever the record's source or title (RejectedSet.Matches).
+// That index is a positive match only: the source+title fallback above
+// stays inside the rejection's own source+title, so an ASIN rejection under
+// Audible does not refuse an unrelated ISBN-only record of another
+// provider. A value with no identifier (every legacy "1") stays title-wide
+// under its own source and joins no index. ISBNs are compared as ISBN-13
+// (an ISBN-10 converted), so one provider's ISBN-10 meets another's
+// ISBN-13. Undo (RemoveRejection) takes the record's identifiers out of
+// every key of the book, whichever source it was stored under.
 //
 // Matching folds case (RejectionKey, and the identifiers), the same way
 // mergeCandidateRows dedups the cached row: two candidates the cache treats
@@ -165,8 +181,47 @@ func normalizeIdentifier(v string) string {
 	return b.String()
 }
 
+// canonicalISBN is an ISBN in matching form: an ISBN-10 converted to its
+// ISBN-13 ("0-00-000001-X" and "9780000000011" are one edition), anything
+// else as normalizeIdentifier leaves it. One provider reporting only the
+// ISBN-10 and another only the ISBN-13 must still meet (the cross-source
+// index, RejectedSet).
+func canonicalISBN(v string) string {
+	n := normalizeIdentifier(v)
+	if len(n) != 10 {
+		return n
+	}
+	for i := 0; i < 9; i++ {
+		if n[i] < '0' || n[i] > '9' {
+			return n
+		}
+	}
+	if last := n[9]; (last < '0' || last > '9') && last != 'x' {
+		return n
+	}
+	core := "978" + n[:9]
+	sum := 0
+	for i := 0; i < len(core); i++ {
+		d := int(core[i] - '0')
+		if i%2 == 1 {
+			d *= 3
+		}
+		sum += d
+	}
+	return core + strconv.Itoa((10-sum%10)%10)
+}
+
+// canonicalIdentifier is a stored or built typed identifier ("asin:...",
+// "isbn:...") in matching form.
+func canonicalIdentifier(kind, val string) string {
+	if kind == "isbn" {
+		return "isbn:" + canonicalISBN(val)
+	}
+	return kind + ":" + normalizeIdentifier(val)
+}
+
 // CandidateIdentifiers is a record's identifiers in matching form: its
-// ASIN, and every ISBN form it carries.
+// ASIN, and every ISBN it carries as ISBN-13 (canonicalISBN), once each.
 func CandidateIdentifiers(asin, isbn, isbn10, isbn13 string) []string {
 	var ids []string
 	if a := normalizeIdentifier(asin); a != "" {
@@ -174,7 +229,7 @@ func CandidateIdentifiers(asin, isbn, isbn10, isbn13 string) []string {
 	}
 	seen := map[string]bool{}
 	for _, v := range []string{isbn13, isbn, isbn10} {
-		if n := normalizeIdentifier(v); n != "" && !seen[n] {
+		if n := canonicalISBN(v); n != "" && !seen[n] {
 			seen[n] = true
 			ids = append(ids, "isbn:"+n)
 		}
@@ -216,7 +271,9 @@ func parseRejectionValue(v []byte) (every bool, ids []string) {
 	}
 	for _, id := range rv.IDs {
 		if kind, val, ok := strings.Cut(strings.ToLower(id), ":"); ok && val != "" {
-			ids = append(ids, kind+":"+val)
+			if c := canonicalIdentifier(kind, val); !strings.HasSuffix(c, ":") {
+				ids = append(ids, c)
+			}
 		}
 	}
 	if len(ids) == 0 {
@@ -280,24 +337,55 @@ func UnrejectValue(existing []byte, candIDs []string) (value []byte, remove bool
 	return encodeRejection(r), false
 }
 
-// RejectedSet is one book's rejections, by matching key (RejectionKey).
-// nil holds none.
-type RejectedSet map[string]*Rejection
+// RejectedSet is one book's rejections: by matching key (RejectionKey),
+// and the identifiers of every identifier-precise rejection book-wide,
+// across sources (see the file comment). The zero value holds none.
+type RejectedSet struct {
+	byKey map[string]*Rejection
+	ids   map[string]bool
+}
 
-func (s RejectedSet) add(suffix string, value []byte) {
+func (s *RejectedSet) add(suffix string, value []byte) {
+	if s.byKey == nil {
+		s.byKey = map[string]*Rejection{}
+	}
 	key := RejectionKeyOfStored(suffix)
-	r := s[key]
+	r := s.byKey[key]
 	if r == nil {
 		r = &Rejection{}
-		s[key] = r
+		s.byKey[key] = r
 	}
-	r.merge(parseRejectionValue(value))
+	every, ids := parseRejectionValue(value)
+	r.merge(every, ids)
+	if every {
+		// A value naming no identifier (a legacy "1") is title-wide under
+		// its own source and nothing more: it joins no book-wide index.
+		return
+	}
+	if s.ids == nil {
+		s.ids = map[string]bool{}
+	}
+	for _, id := range ids {
+		s.ids[id] = true
+	}
+}
+
+// Empty reports whether the set holds no rejection.
+func (s RejectedSet) Empty() bool {
+	return len(s.byKey) == 0
 }
 
 // Matches reports whether the owner rejected the source+title record
-// carrying ids (CandidateIdentifiers).
+// carrying ids (CandidateIdentifiers): one of ids is an identifier the
+// owner rejected for this book under any source or title, or the
+// source+title's own rejection refuses it (Rejection.Matches).
 func (s RejectedSet) Matches(source, title string, ids []string) bool {
-	return s[RejectionKey(source, title)].Matches(ids)
+	for _, id := range ids {
+		if s.ids[id] {
+			return true
+		}
+	}
+	return s.byKey[RejectionKey(source, title)].Matches(ids)
 }
 
 // Has reports whether the owner rejected a record of source|title that
@@ -324,17 +412,14 @@ func (s RejectedSet) HasMetadata(source string, m *metadata.BookMetadata) bool {
 // on it (applygate.ReasonOwnerRejectionCheckFailed).
 func LoadRejectedCandidates(r RejectedCandidateReader, bookID string) (RejectedSet, error) {
 	if r == nil {
-		return nil, nil
+		return RejectedSet{}, nil
 	}
 	prefix := RejectedCandidateBookPrefix(bookID)
 	pairs, err := r.ScanPrefix(prefix)
 	if err != nil {
-		return nil, fmt.Errorf("read owner rejections for book %s: %w", bookID, err)
+		return RejectedSet{}, fmt.Errorf("read owner rejections for book %s: %w", bookID, err)
 	}
-	if len(pairs) == 0 {
-		return nil, nil
-	}
-	set := make(RejectedSet, len(pairs))
+	var set RejectedSet
 	for _, kv := range pairs {
 		if suffix, ok := strings.CutPrefix(kv.Key, prefix); ok && suffix != "" {
 			set.add(suffix, kv.Value)
@@ -361,20 +446,52 @@ func LoadAllRejectedCandidates(r RejectedCandidateReader) (map[string]RejectedSe
 		if !ok {
 			continue
 		}
-		if out[bookID] == nil {
-			out[bookID] = RejectedSet{}
-		}
-		out[bookID].add(suffix, kv.Value)
+		set := out[bookID]
+		set.add(suffix, kv.Value)
+		out[bookID] = set
 	}
 	return out, nil
 }
 
-// RejectionStore writes the owner's rejections (database.RawKVStore has it).
+// RejectionStore writes the owner's rejections (database.Store has it).
+//
+// ModifyBook is there for its lock, not to write the book: a rejection is
+// written holding the book's write stripe (underBookWriteLock), the stripe
+// every candidate apply re-reads the rejections under just before its
+// commit (Service.ApplyMetadataCandidateWithOptions, the auto-fetch's
+// commitApply guard). A rejection and an apply of the same book are
+// therefore ordered: either the rejection is in before the apply's check,
+// and the apply is refused, or the apply committed first.
 type RejectionStore interface {
 	RejectedCandidateReader
 	GetRaw(key string) ([]byte, error)
 	SetRaw(key string, value []byte) error
 	DeleteRaw(key string) error
+	ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error)
+}
+
+// underBookWriteLock runs fn holding bookID's write stripe (a ModifyBook
+// that writes nothing: database.ErrSkipBookWrite). fn does only raw-key
+// reads and writes, nothing slow, and no book write (the stripe rules in
+// database/pebble_store_book_lock.go). Lock order: the book stripe, then
+// rejectionWriteMu inside fn; nothing takes them the other way round. A
+// book with no row runs fn without the stripe: no apply can commit to it.
+// A failed read of the row is returned and fn does not run.
+func underBookWriteLock(store RejectionStore, bookID string, fn func() error) error {
+	called := false
+	var inner error
+	_, err := store.ModifyBook(bookID, func(*database.Book) error {
+		called = true
+		inner = fn()
+		return database.ErrSkipBookWrite
+	})
+	if err != nil {
+		return fmt.Errorf("hold the write lock of book %s: %w", bookID, err)
+	}
+	if !called {
+		return fn()
+	}
+	return inner
 }
 
 // rejectionWriteMu serializes the read-modify-write of a rejection key's
@@ -384,11 +501,16 @@ type RejectionStore interface {
 var rejectionWriteMu sync.Mutex
 
 // RecordRejection stores the owner's rejection of c for bookID: c's
-// identifiers join the key's value (RejectionValue).
+// identifiers join the key's value (RejectionValue). It holds the book's
+// write stripe while it writes (RejectionStore).
 func RecordRejection(store RejectionStore, bookID string, c *MetadataCandidate) error {
 	if c == nil {
 		return nil
 	}
+	return underBookWriteLock(store, bookID, func() error { return recordRejection(store, bookID, c) })
+}
+
+func recordRejection(store RejectionStore, bookID string, c *MetadataCandidate) error {
 	rejectionWriteMu.Lock()
 	defer rejectionWriteMu.Unlock()
 	key := RejectedCandidateStoreKey(bookID, c.Source, c.Title)
@@ -402,14 +524,29 @@ func RecordRejection(store RejectionStore, bookID string, c *MetadataCandidate) 
 	return nil
 }
 
-// RemoveRejection un-rejects c for bookID: every stored key of c's
-// source+title, in whatever case it was written, gives up c
-// (UnrejectValue), so afterwards c matches no rejection. changed reports
-// whether any key was rewritten or deleted.
+// RemoveRejection un-rejects c for bookID, so afterwards c matches no
+// rejection: every stored key of c's source+title, in whatever case it was
+// written, gives up c (UnrejectValue), and c's identifiers leave every
+// other key of the book too, whichever source or title it was stored under
+// (the book-wide index; see the file comment). A key left with no
+// identifier is deleted, never rewritten: an empty value would read as
+// "every record of the title". A key that names no identifier (a legacy
+// "1") of another source+title is left alone; it never matched c. changed
+// reports whether any key was rewritten or deleted. It holds the book's
+// write stripe while it writes (RejectionStore).
 func RemoveRejection(store RejectionStore, bookID string, c *MetadataCandidate) (changed bool, err error) {
 	if c == nil {
 		return false, nil
 	}
+	err = underBookWriteLock(store, bookID, func() error {
+		var rErr error
+		changed, rErr = removeRejection(store, bookID, c)
+		return rErr
+	})
+	return changed, err
+}
+
+func removeRejection(store RejectionStore, bookID string, c *MetadataCandidate) (changed bool, err error) {
 	rejectionWriteMu.Lock()
 	defer rejectionWriteMu.Unlock()
 	prefix := RejectedCandidateBookPrefix(bookID)
@@ -421,10 +558,16 @@ func RemoveRejection(store RejectionStore, bookID string, c *MetadataCandidate) 
 	ids := candidateIdentifiers(c)
 	for _, kv := range pairs {
 		suffix, ok := strings.CutPrefix(kv.Key, prefix)
-		if !ok || RejectionKeyOfStored(suffix) != want {
+		if !ok {
 			continue
 		}
-		value, remove := UnrejectValue(kv.Value, ids)
+		var value []byte
+		var remove bool
+		if RejectionKeyOfStored(suffix) == want {
+			value, remove = UnrejectValue(kv.Value, ids)
+		} else if value, remove, ok = dropIdentifiers(kv.Value, ids); !ok {
+			continue
+		}
 		switch {
 		case remove:
 			if err := store.DeleteRaw(kv.Key); err != nil {
@@ -442,6 +585,33 @@ func RemoveRejection(store RejectionStore, bookID string, c *MetadataCandidate) 
 		changed = true
 	}
 	return changed, nil
+}
+
+// dropIdentifiers takes ids out of another source+title's stored value
+// existing: the value to write back, or remove=true when no identifier is
+// left (the key is deleted; re-encoding an empty set would widen it to every
+// record of its title). touched is false when the value held none of ids,
+// or names no identifier at all (a legacy "1", which never matched c).
+func dropIdentifiers(existing []byte, ids []string) (value []byte, remove, touched bool) {
+	every, held := parseRejectionValue(existing)
+	if every {
+		return nil, false, false
+	}
+	r := &Rejection{}
+	r.merge(false, held)
+	for _, id := range ids {
+		if r.IDs[id] {
+			delete(r.IDs, id)
+			touched = true
+		}
+	}
+	if !touched {
+		return nil, false, false
+	}
+	if len(r.IDs) == 0 {
+		return nil, true, true
+	}
+	return encodeRejection(r), false, true
 }
 
 // RerankOutcome is what RerankCachedCandidates did to one row.

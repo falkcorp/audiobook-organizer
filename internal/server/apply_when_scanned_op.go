@@ -1,7 +1,7 @@
 // file: internal/server/apply_when_scanned_op.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 4c1f7e2a-9b3d-4e85-a6f0-2d8c5b71e934
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 
 package server
 
@@ -403,6 +403,12 @@ func (s *Server) applyOpResultCandidateLocked(books bookReader, opID, bookID str
 
 	// Batch apply: fill-only (owner decision A3#3).
 	resp, err := mfs.ApplyMetadataCandidateWithOptions(bookID, candidate, nil, metafetch.ApplyOptions{FillOnly: true})
+	if err != nil && (errors.Is(err, metafetch.ErrOwnerRejectedNotApplied) || errors.Is(err, metafetch.ErrOwnerRejectionCheckFailed)) {
+		// The owner rejected the candidate after the plan's gate read the
+		// rejections (or the apply's re-read failed): refused before any
+		// write, like the gate's own owner_rejected refusal.
+		return opResultApplyOutcome{blocked: true, blockMsg: fmt.Sprintf("%s: %v", bookID, err)}
+	}
 	if err != nil && errors.Is(err, metafetch.ErrMarkedNoMatch) {
 		// Marked "no match" between the plan and the apply.
 		return opResultApplyOutcome{skipped: true}

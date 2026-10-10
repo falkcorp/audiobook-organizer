@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_fetch.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: b24c7a25-2efa-4b85-adb0-2d591218eff2
 // last-edited: 2026-10-10
 
@@ -85,9 +85,30 @@ func (e *OwnerRejectedNotAppliedError) Is(target error) bool {
 func (mfs *Service) loadFetchRejections(bookID string) (RejectedSet, error) {
 	rejected, err := LoadRejectedCandidates(mfs.db, bookID)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrOwnerRejectionCheckFailed, err)
+		return RejectedSet{}, fmt.Errorf("%w: %v", ErrOwnerRejectionCheckFailed, err)
 	}
 	return rejected, nil
+}
+
+// refuseOwnerRejected re-reads bookID's rejections and refuses source's
+// record (its title and identifiers as the provider gave them, before any
+// field strip zeroes them) when the owner rejected it:
+// OwnerRejectedNotAppliedError, or ErrOwnerRejectionCheckFailed when the
+// list cannot be read. It is the check an apply runs just before it writes,
+// and again under the book's write stripe as its commit guard, so a
+// rejection made while the providers were searched (seconds to minutes) is
+// honoured. RecordRejection writes under the same stripe, which orders the
+// two. It does one prefix scan of the owner's manual rejections, cheap
+// enough under the stripe.
+func (mfs *Service) refuseOwnerRejected(bookID, source, title string, ids []string) error {
+	rejected, err := mfs.loadFetchRejections(bookID)
+	if err != nil {
+		return err
+	}
+	if rejected.Matches(source, title, ids) {
+		return &OwnerRejectedNotAppliedError{Title: title, Sources: []string{source}}
+	}
+	return nil
 }
 
 // dropOwnerRejected removes from results the records of source the owner
@@ -114,7 +135,7 @@ func dropOwnerRejected(results []metadata.BookMetadata, rejected RejectedSet, so
 func pickNotRejected(results []metadata.BookMetadata, rejected RejectedSet, source string,
 	pick func([]metadata.BookMetadata) []metadata.BookMetadata) (scored []metadata.BookMetadata, ownerRejected bool) {
 	scored = pick(results)
-	if len(scored) == 0 || len(rejected) == 0 || IsReviewOnlyCandidateSource(source) ||
+	if len(scored) == 0 || rejected.Empty() || IsReviewOnlyCandidateSource(source) ||
 		!rejected.HasMetadata(source, &scored[0]) {
 		return scored, false
 	}
@@ -387,6 +408,10 @@ func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*Fetch
 				}
 			}
 			meta := scored[0]
+			// The record as the provider gave it, for the owner-rejection
+			// re-check before the write (the title may be replaced and the
+			// identifiers stripped below).
+			pickedTitle, pickedIDs := meta.Title, CandidateIdentifiers(meta.ASIN, meta.ISBN, meta.ISBN10, meta.ISBN13)
 			NormalizeMetaSeries(&meta)
 
 			// When the book has an audio-derived (transcribed) title, require the
@@ -414,6 +439,20 @@ func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*Fetch
 			// Safety: never apply empty/untitled metadata
 			if meta.Title == "" || strings.ToLower(meta.Title) == "untitled" {
 				meta.Title = book.Title // keep original
+			}
+
+			// The owner's rejections again, read now rather than before the
+			// search: a rejection made while the providers answered must be
+			// honoured, and the series filter above can promote a record the
+			// pick never compared. A rejected record moves on to the next
+			// source like the pick's own refusal; an unreadable list fails
+			// the book closed.
+			if rErr := mfs.refuseOwnerRejected(id, src.Name(), pickedTitle, pickedIDs); rErr != nil {
+				if errors.Is(rErr, ErrOwnerRejectedNotApplied) {
+					ownerRejectedFound = append(ownerRejectedFound, src.Name())
+					continue
+				}
+				return nil, rErr
 			}
 
 			// Record history, strip the user's locked fields, and apply with
@@ -455,7 +494,12 @@ func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*Fetch
 			// History is recorded from the committed row (CommitApply). A
 			// book with an error means the write stands and its history did
 			// not land; CommitApply logged it and undo refuses that apply.
-			updatedBook, updateErr := mfs.CommitApply(id, historyBefore, book, credits, src.Name())
+			//
+			// The commit guard checks the owner's rejections once more under
+			// the book's write stripe, the stripe RecordRejection writes
+			// under, so a rejection and this write are ordered.
+			updatedBook, updateErr := mfs.commitApply(id, historyBefore, book, credits, src.Name(), "",
+				func(*database.Book) error { return mfs.refuseOwnerRejected(id, src.Name(), pickedTitle, pickedIDs) })
 			if updatedBook == nil {
 				return nil, updateErr
 			}
@@ -590,6 +634,7 @@ func (mfs *Service) FetchMetadataForBookByTitle(id string) (*FetchMetadataRespon
 			continue
 		}
 		meta := scored[0]
+		pickedTitle, pickedIDs := meta.Title, CandidateIdentifiers(meta.ASIN, meta.ISBN, meta.ISBN10, meta.ISBN13)
 		NormalizeMetaSeries(&meta)
 
 		// Review-only source (owner decision 2026-10-06, "fetch but don't
@@ -600,6 +645,16 @@ func (mfs *Service) FetchMetadataForBookByTitle(id string) (*FetchMetadataRespon
 		if IsReviewOnlyCandidateSource(src.Name()) {
 			reviewOnlyFound = append(reviewOnlyFound, src.Name())
 			continue
+		}
+
+		// Re-read the owner's rejections just before the write (see
+		// FetchMetadataForBook).
+		if rErr := mfs.refuseOwnerRejected(id, src.Name(), pickedTitle, pickedIDs); rErr != nil {
+			if errors.Is(rErr, ErrOwnerRejectedNotApplied) {
+				ownerRejectedFound = append(ownerRejectedFound, src.Name())
+				continue
+			}
+			return nil, rErr
 		}
 
 		fetched := meta
@@ -623,8 +678,10 @@ func (mfs *Service) FetchMetadataForBookByTitle(id string) (*FetchMetadataRespon
 		// of the earlier read reverted any write that landed meanwhile.
 		// History is recorded from the committed row (CommitApply). A book
 		// with an error means the write stands and its history did not land;
-		// CommitApply logged it and undo refuses that apply.
-		updatedBook, updateErr := mfs.CommitApply(id, historyBefore, book, credits, src.Name())
+		// CommitApply logged it and undo refuses that apply. The guard is
+		// the owner-rejection check under the write stripe.
+		updatedBook, updateErr := mfs.commitApply(id, historyBefore, book, credits, src.Name(), "",
+			func(*database.Book) error { return mfs.refuseOwnerRejected(id, src.Name(), pickedTitle, pickedIDs) })
 		if updatedBook == nil {
 			return nil, updateErr
 		}

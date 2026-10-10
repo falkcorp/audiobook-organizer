@@ -1,7 +1,7 @@
 // file: internal/metabatch/usable_candidate_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 2be72b85-1d35-4b20-a84d-8612dec97417
-// last-edited: 2026-10-06
+// last-edited: 2026-10-10
 
 package metabatch
 
@@ -47,7 +47,7 @@ func TestMergeRanker_Tiers(t *testing.T) {
 	}
 	// The fallback trigger still counts a usable review-only candidate as
 	// usable: the fallback found something to review.
-	if why := CandidateRefusal(nil, book, nil, &cases[1].c); why != "" {
+	if why := CandidateRefusal(metafetch.RejectedSet{}, book, nil, &cases[1].c); why != "" {
 		t.Errorf("CandidateRefusal(usable Google) = %q, want usable", why)
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.58.0
+// version: 1.59.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
 // last-edited: 2026-10-10
 
@@ -927,6 +927,11 @@ func (s *Server) ApplyTranscriptionCandidate(_ context.Context, bookID, gatedTit
 		metafetch.ApplyOptions{FillOnly: true, RefuseEmptyWrite: true})
 	if errors.Is(err, metafetch.ErrNothingToApply) {
 		return fmt.Errorf("book %s: %w", bookID, maintenanceplugin.ErrTranscriptionNothingToFill)
+	}
+	if errors.Is(err, metafetch.ErrOwnerRejectedNotApplied) {
+		// Rejected after the check above: the apply's own re-read under the
+		// book's write stripe refused it, nothing written.
+		return fmt.Errorf("%w: book %s: %v", errTranscriptionOwnerRejected, bookID, err)
 	}
 	return err
 }
