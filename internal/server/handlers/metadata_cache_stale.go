@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_stale.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: ba7b75e1-2940-4864-ac78-6a8982bcd9a3
-// last-edited: 2026-10-06
+// last-edited: 2026-10-10
 
 package handlers
 
@@ -409,7 +409,11 @@ func loadCacheRowsByID(ctx context.Context, store cacheRowBookReader, svc cacheR
 			case r.book == nil:
 				outcome[lo+i] = outcomeOrphan
 			default:
-				r.sum = metafetch.MetadataCacheSummary{BookID: r.sum.BookID, FetchedAt: entry.FetchedAt, CandidateCount: len(entry.Candidates)}
+				// Stale is carried like the summary index carries it
+				// (pebble_store_metadata_cache_summaries.go): the review
+				// listing routes a Stale row's pending book out of the
+				// reviewable list, and the full build reads it from there.
+				r.sum = metafetch.MetadataCacheSummary{BookID: r.sum.BookID, FetchedAt: entry.FetchedAt, CandidateCount: len(entry.Candidates), Stale: entry.Stale}
 				l.fill(r, entry, files)
 			}
 		}

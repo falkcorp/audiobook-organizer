@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/rowState.test.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: a80c5f34-7d16-4e92-b503-6c1f9a27e408
-// last-edited: 2026-09-30
+// last-edited: 2026-10-10
 
 import { describe, expect, it } from 'vitest';
 import {
@@ -11,6 +11,7 @@ import {
   formatFileSize,
   getRowSx,
   isRowActionable,
+  noCandidateLabel,
   runtimeDiffers,
   runtimeHiddenBySwitch,
   scoreColor,
@@ -174,5 +175,15 @@ describe('runtimeHiddenBySwitch', () => {
 
   it('keeps a row whose runtime is unknown', () => {
     expect(runtimeHiddenBySwitch({ book: {}, candidate: null })).toBe(false);
+  });
+});
+
+describe('noCandidateLabel for an identity-stale row', () => {
+  it('says the book was retitled since its search, not that it has no candidate', () => {
+    const l = noCandidateLabel({ status: 'identity_stale' });
+    expect(l.label).toBe('Retitled since this search');
+    expect(l.color).toBe('default');
+    expect(l.detail).toMatch(/answer the old title/);
+    expect(l.detail).toMatch(/candidate fetch searches the current title/);
   });
 });

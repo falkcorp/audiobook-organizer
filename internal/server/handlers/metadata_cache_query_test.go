@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_query_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 6c1f0e2a-9b47-4d35-8e60-2a7d4c9b1f38
 // last-edited: 2026-10-10
 
@@ -138,14 +138,16 @@ func serveReviewRaw(t testing.TB, h *MetadataCacheHandler, query string) (int, [
 // buildReviewableRows touches, captured on the code BEFORE the extraction
 // (task 02-PR17 step 2). Regenerate only for an intended response change:
 // REVIEW_GOLDEN_PRINT=1 go test -run TestReviewQuery_IndexViewByteIdentical.
+// 02-PR5b added unreviewable_by_cause.identity_stale (0 here, no retitled
+// row) and nothing else: stripping that key reproduces the previous hashes.
 var reviewGoldenHashes = map[string]string{
-	"all=true&view=index":                   "daeab0dc896d8bf936a608a9416961e336a2d285c2552c91e7eb35fa4f7cf78a",
-	"all=true":                              "2f79e13970811e3ba26d192e279475f7f7f27cb8f023d8608ff5a8dcccccc9f2",
-	"limit=5&offset=3":                      "f88953f6361aea5593f2faffaa49d9976e66497644b1785994d87818f96d7ae4",
-	"all=true&bucket=unreviewable":          "fc12ba7a5863d07f5715b70da1e889eb1b715d548b771f0f7b64b79220e2339a",
-	"bucket=unreviewable&limit=2&offset=1":  "927210916592d2e41f966d4532d91fe64f5429d17d576d1e89994354b708f3be",
-	"ids=" + goldenIDList(0, 3, 13, 17, 22): "38858fc128c003ae24f7445ae22ca4a081bed98d75c19be92bb64fdeffe2c1bf",
-	"view=index&ids=" + goldenIDList(1, 4):  "5b68a4adf82861d12ddd40bcecffad3a0cd5b973782d72ec01a879cc694d787e",
+	"all=true&view=index":                   "88397ecb6870b592d58fd28a482678ca4fe42598c5c992d6487ef0d147125f14",
+	"all=true":                              "697375efdaf7ad738c1cfdb3d83512d3cff3d13eb432956d667f8951f17bfce9",
+	"limit=5&offset=3":                      "dd513352834280ef54d115d4a7a7145a7739e0e68dfaef65d160840fb399c981",
+	"all=true&bucket=unreviewable":          "f6408cf3c3ba04498b5976560ee1217304bab6bbbb210c61ae6a96c3cec93012",
+	"bucket=unreviewable&limit=2&offset=1":  "efe547860be27f941013397d7170a52d5ffa6d4498a235ad9374ad611a653386",
+	"ids=" + goldenIDList(0, 3, 13, 17, 22): "7c7dd7112565c7e1264b6984ba5d4b6422721de361ed9f3a1528ca58cfda5114",
+	"view=index&ids=" + goldenIDList(1, 4):  "afc4b96550d1c9be09983526f3b73a7e351761629c2ed0a88b08a2af71142090",
 }
 
 func goldenIDList(is ...int) string {
@@ -253,6 +255,9 @@ func snapshotFromCases(t testing.TB, rows []queryCaseRow) *reviewSnapshot {
 			searchable:       true,
 			fallbackDeferred: fr.FallbackDeferred,
 		}
+		// A row marked Stale on its summary (a retitle kept it, database.UpdateBook)
+		// is the identity-stale case; fr.Stale above is the TTL age instead.
+		lr.sum.Stale = fr.Status == unreviewableStatusIdentityStale
 		if fr.Stale {
 			lr.lastChecked = queryOldCheck
 		}
@@ -457,7 +462,12 @@ func oneTitleRow(title string) queryCaseRow {
 // whatever the other switches say, and only the title narrows it.
 func TestReviewQuery_ChipPausesOtherFilters(t *testing.T) {
 	f := loadQueryCases(t)
-	base := baseFromSnapshot(t, snapshotFromCases(t, f.Rows))
+	// The shared fixture holds no retitled pending book; add one here so the
+	// identity_stale chip has a row to list like every other chip.
+	retitled := oneTitleRow("Retitled Pending")
+	retitled.Bucket, retitled.Status = reviewBucketUnreviewable, unreviewableStatusIdentityStale
+	retitled.Book.ID = "i01"
+	base := baseFromSnapshot(t, snapshotFromCases(t, append(slices.Clone(f.Rows), retitled)))
 	for _, chip := range reviewChips {
 		bare := listIDs(mustEvaluate(t, base, mustReviewQuery(t, map[string]string{"chip": chip})))
 		loaded := listIDs(mustEvaluate(t, base, mustReviewQuery(t, map[string]string{
@@ -1070,4 +1080,35 @@ func TestCompileReviewTitleFilter_ErrorsDoNotEchoLongInput(t *testing.T) {
 			t.Errorf("%.20s...: error is %d bytes", q, len(err.Error()))
 		}
 	}
+}
+
+// TestReviewQuery_IdentityStaleRowMatchesTheListing: the server-side query and
+// the listing endpoint run one derivation (buildReviewableRows), so a pending
+// book whose row is marked Stale is dropped from the reviewable rows by both,
+// counted under the same cause, and a reviewed book with the same mark keeps
+// its verdict row in both.
+func TestReviewQuery_IdentityStaleRowMatchesTheListing(t *testing.T) {
+	pending := oneTitleRow("Retitled Pending")
+	pending.Book.ID, pending.Status = "i01", unreviewableStatusIdentityStale
+	applied := oneTitleRow("Retitled Applied")
+	applied.Book.ID, applied.Status = "i02", reviewStatusApplied
+	done := "matched"
+	applied.ReviewStatus = &done
+	snap := snapshotFromCases(t, []queryCaseRow{pending, applied})
+	// The applied row carries the same Stale mark on its summary.
+	snap.rows[1].sum.Stale = true
+	base := baseFromSnapshot(t, snap)
+
+	require.Equal(t, 1, base.rows.identityStale)
+	require.Len(t, base.rows.reviewable, 1, "only the reviewed book stays reviewable")
+	require.Equal(t, "i02", base.rows.reviewable[0].row.sum.BookID)
+	require.Len(t, base.rows.unreviewable, 1)
+	require.Equal(t, unreviewableStatusIdentityStale, base.rows.unreviewable[0].status)
+
+	sum := base.rows.summary(&base.set)
+	require.Equal(t, 1, sum["unreviewable"])
+	require.Equal(t, 1, sum["unreviewable_by_cause"].(gin.H)["identity_stale"])
+
+	l := mustEvaluate(t, base, mustReviewQuery(t, map[string]string{"chip": "identity_stale"}))
+	require.Equal(t, []string{"i01"}, listIDs(l))
 }

@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.chipFilters.test.tsx
-// version: 1.9.0
+// version: 1.10.0
 // guid: 0d6c2e8a-94b1-4f37-8a5e-2c71b9e04f36
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 //
 // Owner, 2026-09-27: "the 11324 with no candidates let me click on the chips
 // at the left bar in the review page". Every summary chip filters the list to
@@ -70,14 +70,16 @@ const unreviewable = [
     stale: false,
   }),
   emptyRow('d1', 'decode_error', { error_message: 'stored candidate will not decode' }),
+  // Retitled after its candidates were fetched: no candidate is served.
+  emptyRow('s1', 'identity_stale'),
 ];
 const summary = {
   matched: 2,
   no_match: 1,
   errors: 1,
   stale: 2, // m1 + e1, the rows the server flags stale; n1 and r1 are old but not flagged
-  unreviewable: 6,
-  unreviewable_by_cause: { orphaned: 3, no_candidates: 2, decode_errors: 1 },
+  unreviewable: 7,
+  unreviewable_by_cause: { orphaned: 3, no_candidates: 2, decode_errors: 1, identity_stale: 1 },
   resolved_no_candidates: 1,
   deferred: 2, // m1 + e2, the rows whose fallback lookup was deferred
 };
@@ -194,6 +196,7 @@ describe('summary chips filter the list to exactly the books they count', () => 
     ['no_candidates', ['e1', 'e2']],
     ['resolved_no_candidates', ['r1']],
     ['errors', ['d1']],
+    ['identity_stale', ['s1']],
     ['stale', ['m1', 'e1']],
     ['deferred', ['m1', 'e2']],
   ] as const)(
@@ -220,6 +223,19 @@ describe('summary chips filter the list to exactly the books they count', () => 
     await waitFor(() => expect(listedIds()).toHaveLength(2));
     const list = screen.getByTestId('queue-list');
     expect(within(list).getAllByText(/no candidate/)).toHaveLength(2);
+  });
+
+  it('the retitled chip counts the identity-stale books and labels each', async () => {
+    const user = userEvent.setup();
+    await openWorkspace();
+
+    const chip = screen.getByTestId('chip-identity_stale');
+    expect(chip).toHaveTextContent('1 retitled, awaiting refetch');
+    await user.click(chip);
+
+    await waitFor(() => expect(listedIds()).toEqual(['s1']));
+    const list = screen.getByTestId('queue-list');
+    expect(within(list).getByText(/retitled since its search/)).toBeInTheDocument();
   });
 
   it('the deferred chip counts the rows the server flags fallback_deferred', async () => {

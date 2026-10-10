@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.34.0
+// version: 1.35.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-10-10
 
@@ -49,6 +49,7 @@ const defaultReviewPageSize = 200
 //	no_candidates          -> unreviewable_by_cause.no_candidates
 //	resolved_no_candidates -> resolved_no_candidates
 //	decode_error           -> errors (and unreviewable_by_cause.decode_errors)
+//	identity_stale         -> unreviewable_by_cause.identity_stale
 //
 // Orphaned rows (the book is gone) are never listed: there is no book to show.
 const (
@@ -58,6 +59,7 @@ const (
 	unreviewableStatusNoCandidates         = "no_candidates"
 	unreviewableStatusResolvedNoCandidates = "resolved_no_candidates"
 	unreviewableStatusDecodeError          = "decode_error"
+	unreviewableStatusIdentityStale        = "identity_stale"
 )
 
 // reviewViewLabel maps the request's view flag onto the bounded
@@ -923,6 +925,10 @@ type reviewRows struct {
 	// verdict but lost its evidence, and nothing downstream could tell it
 	// apart from a book nobody has ever fetched for.
 	noCandidatesPending, noCandidatesReviewed int
+	// identityStale counts pending books whose row is marked Stale (the book
+	// was retitled or re-credited after the fetch, database.UpdateBook): its
+	// candidates answer the old title, so it is not offered for review.
+	identityStale int
 	// stale is counted across every non-orphaned row, NOT just the reviewable
 	// ones. Counting it inside the reviewable loop -- which is what this did
 	// until 2026-09-08 -- structurally hid every stale row that had no
@@ -977,6 +983,24 @@ func buildReviewableRows(set *reviewOverlay, now time.Time, withUnreviewable boo
 		rowStale := cacheRowStale(row.loadedCacheRow, out.freshCutoff)
 		if rowStale {
 			out.stale++
+		}
+		if row.sum.Stale && !reviewed[i] {
+			// The candidates were fetched for a title or author the book no
+			// longer has. Offered as a pending review they read as current,
+			// every apply is refused (metafetch.CandidateIdentityStale), and
+			// a "No match" taken on them would drop the book from the very
+			// refetch that replaces them (unfetchedCandidateBookIDs and
+			// cacheRowStale both skip no_match). So no candidate is served;
+			// the candidate fetch selects the book and its rewrite clears the
+			// mark. A reviewed book keeps its row where its verdict files it:
+			// every title-changing apply leaves a Stale row on an applied
+			// book that no refetch ever revisits, and counting those here
+			// would be a backlog nothing clears.
+			out.identityStale++
+			if withUnreviewable {
+				out.unreviewable = append(out.unreviewable, unreviewableRow{row: row, status: unreviewableStatusIdentityStale, stale: rowStale})
+			}
+			continue
 		}
 		if row.candidateCount == 0 {
 			// No cached candidate means nothing to review. Not an error.
@@ -1036,7 +1060,7 @@ func (r *reviewRows) summary(set *reviewOverlay) gin.H {
 		// never agreed.
 		//
 		// This is the same value `total - len(reviewable)` produced, since every
-		// dropped row passes through exactly one of these three counters -- but
+		// dropped row passes through exactly one of these counters -- but
 		// summed from the causes rather than inferred, so the causes can be
 		// reported alongside it. Knowing the number is 8,532 tells an operator
 		// nothing about what to DO; knowing 3,354 of it is rows whose book is
@@ -1045,8 +1069,10 @@ func (r *reviewRows) summary(set *reviewOverlay) gin.H {
 		// noCandidatesReviewed is deliberately NOT part of this sum. Those books
 		// have a verdict; there is nothing for a reviewer to do with them, so
 		// filing them under "unreviewable" reported settled work as a backlog.
-		// They are reported separately as `resolved_no_candidates`.
-		"unreviewable": orphaned + r.noCandidatesPending + r.decodeErrors + set.readErrors,
+		// They are reported separately as `resolved_no_candidates`. A reviewed
+		// book whose row is marked Stale stays in its verdict bucket for the
+		// same reason (identityStale counts pending books only).
+		"unreviewable": orphaned + r.noCandidatesPending + r.decodeErrors + set.readErrors + r.identityStale,
 		// Rows whose last search is past MetadataCacheTTL, counted over every
 		// non-orphaned row (reviewable or not), minus books the owner marked
 		// "no match" (the candidate fetch never searches those, so no refetch
@@ -1068,11 +1094,15 @@ func (r *reviewRows) summary(set *reviewOverlay) gin.H {
 			// candidate for it. A refetch is the fix for these.
 			"no_candidates": r.noCandidatesPending,
 			// Stored, but the JSON would not decode. Also counted in `errors`;
-			// this repeats it so the three causes sum to `unreviewable`.
+			// this repeats it so the causes sum to `unreviewable`.
 			"decode_errors": r.decodeErrors,
 			// The book's live read failed on this request (a store fault, not a
 			// missing book). Also counted in `errors`.
 			"book_read_errors": set.readErrors,
+			// Nobody has ruled on the book, and its cached candidates were
+			// fetched for a title or author it no longer has (the row is
+			// marked Stale). The candidate fetch refetches these.
+			"identity_stale": r.identityStale,
 		},
 		// Books already ruled on that have no candidate left to show. Not a
 		// backlog and not an error -- reported so the number is visible rather
