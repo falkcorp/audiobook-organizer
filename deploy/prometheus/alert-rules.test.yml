@@ -1,0 +1,76 @@
+# file: deploy/prometheus/alert-rules.test.yml
+# version: 1.0.0
+# guid: 5f1c8e3a-2b7d-4c96-a0e4-8d3b6f2a9c71
+# last-edited: 2026-10-10
+#
+# promtool unit tests for alert-rules.yml:
+#   promtool test rules deploy/prometheus/alert-rules.test.yml
+# internal/opsmetrics TestPromRules_Promtool runs this when promtool is on
+# PATH. The name does not end in "rules.yml", so the check-rules glob there
+# does not read it as a rule file.
+#
+# AudiobookOrganizerOpStalledV2 judges each def against its own silence
+# budget (ops.progress_timeout) with a 30-minute floor. Series are sampled
+# every minute; progress_age climbs 60 s per sample, i.e. the run is silent.
+
+rule_files:
+  - alert-rules.yml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    input_series:
+      # A LivenessNone def with a 2h budget, silent for the whole window.
+      - series: 'audiobook_organizer_ops_progress_age_seconds{def_id="scheduler.dedup-llm-review",plugin="scheduler"}'
+        values: '0+60x150'
+      - series: 'audiobook_organizer_ops_progress_timeout_seconds{def_id="scheduler.dedup-llm-review",plugin="scheduler"}'
+        values: '7200+0x150'
+      # A def on the default 5m budget, silent for the whole window.
+      - series: 'audiobook_organizer_ops_progress_age_seconds{def_id="library.scan",plugin="scanner"}'
+        values: '0+60x150'
+      - series: 'audiobook_organizer_ops_progress_timeout_seconds{def_id="library.scan",plugin="scanner"}'
+        values: '300+0x150'
+    alert_rule_test:
+      # 60m into a 2h budget: healthy, quiet. The default def, 30m past its
+      # floor (age > 1800 since 31m, plus for: 5m), already fires.
+      - eval_time: 60m
+        alertname: AudiobookOrganizerOpStalledV2
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              def_id: library.scan
+            exp_annotations:
+              summary: "audiobook-organizer operation appears stalled"
+              description: "Operation library.scan has a run in flight that has not reported progress for 1h 0m 0s, longer than the silence budget its watchdog allows (and at least 30 minutes), so it is likely wedged and the watchdog did not stop it. Check `journalctl -u audiobook-organizer` and the Operations tab for that operation's last log line."
+      # The default def silent 40m fires; the 2h def is still quiet.
+      - eval_time: 40m
+        alertname: AudiobookOrganizerOpStalledV2
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              def_id: library.scan
+            exp_annotations:
+              summary: "audiobook-organizer operation appears stalled"
+              description: "Operation library.scan has a run in flight that has not reported progress for 40m 0s, longer than the silence budget its watchdog allows (and at least 30 minutes), so it is likely wedged and the watchdog did not stop it. Check `journalctl -u audiobook-organizer` and the Operations tab for that operation's last log line."
+      # 33m: the default def is past the floor but still inside for: 5m.
+      - eval_time: 33m
+        alertname: AudiobookOrganizerOpStalledV2
+        exp_alerts: []
+      # 130m: the 2h def has outlived its budget, so the watchdog failed to
+      # stop it and it fires too.
+      - eval_time: 130m
+        alertname: AudiobookOrganizerOpStalledV2
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              def_id: library.scan
+            exp_annotations:
+              summary: "audiobook-organizer operation appears stalled"
+              description: "Operation library.scan has a run in flight that has not reported progress for 2h 10m 0s, longer than the silence budget its watchdog allows (and at least 30 minutes), so it is likely wedged and the watchdog did not stop it. Check `journalctl -u audiobook-organizer` and the Operations tab for that operation's last log line."
+          - exp_labels:
+              severity: warning
+              def_id: scheduler.dedup-llm-review
+            exp_annotations:
+              summary: "audiobook-organizer operation appears stalled"
+              description: "Operation scheduler.dedup-llm-review has a run in flight that has not reported progress for 2h 10m 0s, longer than the silence budget its watchdog allows (and at least 30 minutes), so it is likely wedged and the watchdog did not stop it. Check `journalctl -u audiobook-organizer` and the Operations tab for that operation's last log line."

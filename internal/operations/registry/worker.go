@@ -1,5 +1,5 @@
 // file: internal/operations/registry/worker.go
-// version: 2.27.2
+// version: 2.27.3
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
 // last-edited: 2026-10-10
 
@@ -694,8 +694,11 @@ func (r *Registry) recordRunMetrics(defID, finalStatus string, startedAt time.Ti
 // the row's persisted progress. A fresh row carries 0/0 (or its queued
 // summary), so nothing changes for it; a resumed or retried row still carries
 // the previous attempt's progress, and seeding from it keeps a resumed op whose
-// first report is its checkpoint position from counting those items again
-// (processedItems). A failed read seeds 0/0, the fresh-run behaviour.
+// first report is its checkpoint position from counting those items again. An
+// attempt that restarts below the seed (a retry from zero, a checkpoint that
+// trails the flushed progress) starts a segment at its first report instead
+// of losing every report up to the old position (processedItems). A failed
+// read seeds 0/0, the fresh-run behaviour.
 func (r *Registry) newAttemptItems(opID, defID string) *processedItems {
 	var cur, total int
 	if row, err := r.store.GetOperationV2(opID); err == nil && row != nil {

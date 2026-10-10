@@ -1,5 +1,5 @@
 # file: deploy/prometheus/alert-rules.yml
-# version: 1.3.1
+# version: 1.4.0
 # guid: d2e3f4a5-b6c7-4d8e-9f0a-1b2c3d4e5f6a
 # last-edited: 2026-10-10
 #
@@ -185,8 +185,8 @@ groups:
             /api/v1/operations/v2/{{ $labels.op_id }} for the last log line.
 
       # OTel replacement for AudiobookOrganizerOpStalled (11-PR4). Fires per
-      # def_id when the most idle executing run of that def has not called
-      # UpdateProgress for 30 minutes.
+      # def_id when the most idle executing run of that def has been silent
+      # for longer than that def's own silence budget, with a 30-minute floor.
       # audiobook_organizer_ops_progress_age_seconds is read from the
       # registry's in-memory runHandle.lastProgressAt, the clock the stuck-op
       # watchdog uses, at scrape time. Every UpdateProgress stamps it,
@@ -200,19 +200,28 @@ groups:
       # A run that has not reported yet in this attempt is aged from the
       # attempt's start. A run claimed by the dispatcher but not yet picked
       # up by a worker has no age and cannot fire this rule.
-      # The gauge reads 0 once a def has no executing run, so a finished
-      # run clears the alert at the next scrape.
-      # for: 5m, not 30m. The 30 minutes are already in the threshold (age >
-      # 1800 s), so `for` only rides out a missed scrape or a restart, and
-      # the alert fires about 35 minutes into a silence. for: 30m would make
-      # it about 60.
-      # The watchdog cancels a run silent for longer than its def's
-      # ProgressTimeout (5m by default). This rule therefore fires for defs
-      # with a ProgressTimeout above 30m, or when the watchdog failed to stop
-      # a run.
+      # audiobook_organizer_ops_progress_timeout_seconds is the def's
+      # effective ProgressTimeout, the budget after which the watchdog cancels
+      # a silent run: 5m by default, and 45m to 2h for the LivenessNone defs
+      # that declare long silences (scheduler.dedup-llm-review is 2h). Judging
+      # every def against a flat 30m paged on healthy runs of those defs inside
+      # their own budgets. With the budget as the threshold the rule asks "did
+      # the watchdog fail to stop this run?"; clamp_min keeps the 30m floor for
+      # the short-budget defs, so a 5m-budget def still needs 30m of silence.
+      # Both sides are aggregated by def_id, so they match one-to-one, and
+      # both gauges come from one callback, so neither is ever present alone.
+      # Both read 0 once a def has no run in flight, so a finished run clears
+      # the alert at the next scrape.
+      # for: 5m, not 30m. The budget is already in the threshold, so `for`
+      # only rides out a missed scrape or a restart, and the alert fires about
+      # 5 minutes after the budget (or the 30m floor) is exceeded.
+      # Unit tests: alert-rules.test.yml (promtool test rules), run by
+      # internal/opsmetrics TestPromRules_Promtool when promtool is on PATH.
       # Soak until 2026-11-09 beside the old rule.
       - alert: AudiobookOrganizerOpStalledV2
-        expr: max by (def_id) (audiobook_organizer_ops_progress_age_seconds) > 1800
+        expr: >-
+          max by (def_id) (audiobook_organizer_ops_progress_age_seconds)
+          > clamp_min(max by (def_id) (audiobook_organizer_ops_progress_timeout_seconds), 1800)
         for: 5m
         labels:
           severity: warning
@@ -221,6 +230,8 @@ groups:
           description: >-
             Operation {{ $labels.def_id }} has a run in flight that has
             not reported progress for {{ $value | humanizeDuration }},
-            which is likely wedged rather than merely slow. Check
+            longer than the silence budget its watchdog allows (and at
+            least 30 minutes), so it is likely wedged and the watchdog
+            did not stop it. Check
             `journalctl -u audiobook-organizer` and the Operations tab for
             that operation's last log line.

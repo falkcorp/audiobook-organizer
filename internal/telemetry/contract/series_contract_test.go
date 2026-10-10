@@ -1,5 +1,5 @@
 // file: internal/telemetry/contract/series_contract_test.go
-// version: 1.2.4
+// version: 1.2.5
 // guid: c0ffe83b-1164-4b85-915e-820f693efdc1
 // last-edited: 2026-10-10
 
@@ -214,6 +214,7 @@ func buildSeedingTable() []seedRow {
 		{"audiobook_organizer_ops_items_total", "opsmetrics Items", opsSeed},
 		{"audiobook_organizer_ops_inflight", "opsmetrics RegisterInflight", opsSeed},
 		{"audiobook_organizer_ops_progress_age_seconds", "opsmetrics RegisterInflight", opsSeed},
+		{"audiobook_organizer_ops_progress_timeout_seconds", "opsmetrics RegisterInflight", opsSeed},
 
 		{"ai_dispatch_requests_total", "aidispatch.Call with failover", failover},
 		{"ai_dispatch_inflight", "aidispatch.Call with failover", failover},
@@ -346,7 +347,7 @@ func seedOpsMetrics() error {
 	r.Items("contract", opsmetrics.ItemsProcessed, 1)
 	r.RegisterInflight(func() map[opsmetrics.InflightKey]opsmetrics.InflightStat {
 		return map[opsmetrics.InflightKey]opsmetrics.InflightStat{
-			{DefID: "contract", Plugin: "contract"}: {Runs: 1, ProgressAge: time.Second},
+			{DefID: "contract", Plugin: "contract"}: {Runs: 1, ProgressAge: time.Second, ProgressTimeout: time.Minute},
 		}
 	})
 	return nil
@@ -749,6 +750,7 @@ var ourInstruments = []instrumentSpec{
 	{name: "audiobook_organizer.ops.items", kind: kindCounter, unit: "{item}", keys: []attribute.Key{telemetry.DefID, telemetry.Outcome}},
 	{name: "audiobook_organizer.ops.inflight", kind: kindGauge, unit: "{run}", keys: []attribute.Key{telemetry.DefID, telemetry.Plugin}},
 	{name: "audiobook_organizer.ops.progress_age", kind: kindGauge, unit: "s", keys: []attribute.Key{telemetry.DefID, telemetry.Plugin}},
+	{name: "audiobook_organizer.ops.progress_timeout", kind: kindGauge, unit: "s", keys: []attribute.Key{telemetry.DefID, telemetry.Plugin}},
 	{name: "ai_dispatch.requests", kind: kindCounter, unit: "{request}", keys: []attribute.Key{telemetry.Capability, telemetry.Endpoint, telemetry.Outcome}},
 	{name: "ai_dispatch.inflight", kind: kindUpDownCounter, unit: "{request}", keys: []attribute.Key{telemetry.Endpoint}},
 	{name: "ai_dispatch.failover", kind: kindCounter, unit: "{request}", keys: []attribute.Key{telemetry.Capability, telemetry.Endpoint, telemetry.Class}},
