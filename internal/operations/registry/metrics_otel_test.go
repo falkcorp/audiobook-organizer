@@ -200,14 +200,14 @@ func TestOpsMetrics_RunToFailure(t *testing.T) {
 	}
 }
 
-// TestOpsMetrics_ProgressCountsHighWaterMark: progress 10, 25, 25, 20 adds 25
-// items in total; the decrease adds nothing and does not lower the mark.
+// TestOpsMetrics_ProgressCountsHighWaterMark: progress 10, 25, 25, 20, 25 adds 25
+// items in total; the decrease adds nothing and does not lower the mark, so climbing back to 25 adds nothing.
 func TestOpsMetrics_ProgressCountsHighWaterMark(t *testing.T) {
 	g := newOtelRig(t)
 	const id = "test.otel-items"
 	def := makeValidDef(id)
 	def.Run = func(_ context.Context, _ json.RawMessage, rep registry.Reporter) error {
-		for _, cur := range []int{10, 25, 25, 20} {
+		for _, cur := range []int{10, 25, 25, 20, 25} {
 			_ = rep.UpdateProgress(cur, 100, "")
 		}
 		return nil
