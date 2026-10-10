@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.43.0
+// version: 1.44.0
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
 // last-edited: 2026-10-10
 
@@ -1029,7 +1029,8 @@ func (h *Handler) writeBackAudiobookMetadataImpl(c *gin.Context) {
 // bulkFetchMetadata fetches external metadata for multiple audiobooks and applies
 // fields only when they are missing and not manually overridden or locked.
 //
-// Like batch-update it writes only the database (CommitApply, no file work),
+// Like batch-update it writes only the database (CommitCandidateApply, no
+// file work),
 // so it takes no scan lock: a running scan's merge keeps the fields this
 // writes (scanner.mergeScannedKeepingForeignEdits). It used to refuse with
 // 409 while any scan ran, and stop mid-run when its stand-down lease lapsed.
@@ -1177,6 +1178,9 @@ func (h *Handler) bulkFetchMetadataImpl(c *gin.Context) {
 		// A candidate the owner rejected for this book is skipped too: it is
 		// never applied, by any path. An unreadable rejection list leaves the
 		// book alone this round rather than reading as "nothing rejected".
+		// This read picks; the commit below (CommitCandidateApply) reads the
+		// rejections again under the book's write stripe, so a rejection
+		// made while this book's fields are assembled still refuses it.
 		rejected, rerr := metafetch.LoadRejectedCandidates(store, bookID)
 		if rerr != nil {
 			result.Status = "error"
@@ -1479,14 +1483,27 @@ func (h *Handler) bulkFetchMetadataImpl(c *gin.Context) {
 		if didUpdate {
 			// Write only the fields this apply changed, onto the row as it
 			// stands now, and record history from the committed row
-			// (metafetch CommitApply). A whole-row UpdateBook of the read taken
-			// before the provider search reverted any edit that committed
-			// during the search, and history was recorded from this in-memory
-			// book rather than the stored row.
-			updated, commitErr := h.metadataFetchService.CommitApply(bookID, historyBefore, book, credits, sourceName)
+			// (metafetch CommitCandidateApply). A whole-row UpdateBook of the
+			// read taken before the provider search reverted any edit that
+			// committed during the search, and history was recorded from this
+			// in-memory book rather than the stored row. The commit re-checks
+			// the owner's rejections under the book's write stripe, the
+			// stripe a rejection is written under: a rejection made since the
+			// pick above refuses the write (owner_rejected), and an
+			// unreadable list refuses it too (error).
+			updated, commitErr := h.metadataFetchService.CommitCandidateApply(bookID, historyBefore, book, credits, &candidate)
 			if updated == nil {
-				result.Status = "error"
-				result.Message = fmt.Sprintf("failed to update book: %v", commitErr)
+				switch {
+				case errors.Is(commitErr, metafetch.ErrOwnerRejectedNotApplied):
+					result.Status = "owner_rejected"
+					result.Message = "the owner rejected this candidate while it was being applied; not applied"
+				case errors.Is(commitErr, metafetch.ErrOwnerRejectionCheckFailed):
+					result.Status = "error"
+					result.Message = "failed to read owner rejections: " + commitErr.Error()
+				default:
+					result.Status = "error"
+					result.Message = fmt.Sprintf("failed to update book: %v", commitErr)
+				}
 				setResult(i, result)
 				return nil
 			}

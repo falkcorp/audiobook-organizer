@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_fetch.go
-// version: 1.22.0
+// version: 1.22.1
 // guid: b24c7a25-2efa-4b85-adb0-2d591218eff2
 // last-edited: 2026-10-10
 
@@ -491,9 +491,9 @@ func (mfs *Service) FetchMetadataForBook(ctx context.Context, id string) (*Fetch
 			// Only the fields this apply changed land, on the row as it stands
 			// now: the provider search above is slow, and a whole-row UpdateBook
 			// of the earlier read reverted any write that landed meanwhile.
-			// History is recorded from the committed row (CommitApply). A
+			// History is recorded from the committed row (commitApply). A
 			// book with an error means the write stands and its history did
-			// not land; CommitApply logged it and undo refuses that apply.
+			// not land; commitApply logged it and undo refuses that apply.
 			//
 			// The commit guard checks the owner's rejections once more under
 			// the book's write stripe, the stripe RecordRejection writes
@@ -676,9 +676,9 @@ func (mfs *Service) FetchMetadataForBookByTitle(id string) (*FetchMetadataRespon
 		// Only the fields this apply changed land, on the row as it stands
 		// now: the provider search above is slow, and a whole-row UpdateBook
 		// of the earlier read reverted any write that landed meanwhile.
-		// History is recorded from the committed row (CommitApply). A book
+		// History is recorded from the committed row (commitApply). A book
 		// with an error means the write stands and its history did not land;
-		// CommitApply logged it and undo refuses that apply. The guard is
+		// commitApply logged it and undo refuses that apply. The guard is
 		// the owner-rejection check under the write stripe.
 		updatedBook, updateErr := mfs.commitApply(id, historyBefore, book, credits, src.Name(), "",
 			func(*database.Book) error { return mfs.refuseOwnerRejected(id, src.Name(), pickedTitle, pickedIDs) })

@@ -466,50 +466,50 @@ func (_c *MockMetadataFetchService_BrowseSearch_Call) RunAndReturn(run func(ctx 
 	return _c
 }
 
-// CommitApply provides a mock function for the type MockMetadataFetchService
-func (_mock *MockMetadataFetchService) CommitApply(id string, before *database.Book, book *database.Book, credits *metafetch.AuthorCredits, source string) (*database.Book, error) {
-	ret := _mock.Called(id, before, book, credits, source)
+// CommitCandidateApply provides a mock function for the type MockMetadataFetchService
+func (_mock *MockMetadataFetchService) CommitCandidateApply(id string, before *database.Book, book *database.Book, credits *metafetch.AuthorCredits, candidate *metafetch.MetadataCandidate) (*database.Book, error) {
+	ret := _mock.Called(id, before, book, credits, candidate)
 
 	if len(ret) == 0 {
-		panic("no return value specified for CommitApply")
+		panic("no return value specified for CommitCandidateApply")
 	}
 
 	var r0 *database.Book
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string, *database.Book, *database.Book, *metafetch.AuthorCredits, string) (*database.Book, error)); ok {
-		return returnFunc(id, before, book, credits, source)
+	if returnFunc, ok := ret.Get(0).(func(string, *database.Book, *database.Book, *metafetch.AuthorCredits, *metafetch.MetadataCandidate) (*database.Book, error)); ok {
+		return returnFunc(id, before, book, credits, candidate)
 	}
-	if returnFunc, ok := ret.Get(0).(func(string, *database.Book, *database.Book, *metafetch.AuthorCredits, string) *database.Book); ok {
-		r0 = returnFunc(id, before, book, credits, source)
+	if returnFunc, ok := ret.Get(0).(func(string, *database.Book, *database.Book, *metafetch.AuthorCredits, *metafetch.MetadataCandidate) *database.Book); ok {
+		r0 = returnFunc(id, before, book, credits, candidate)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*database.Book)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func(string, *database.Book, *database.Book, *metafetch.AuthorCredits, string) error); ok {
-		r1 = returnFunc(id, before, book, credits, source)
+	if returnFunc, ok := ret.Get(1).(func(string, *database.Book, *database.Book, *metafetch.AuthorCredits, *metafetch.MetadataCandidate) error); ok {
+		r1 = returnFunc(id, before, book, credits, candidate)
 	} else {
 		r1 = ret.Error(1)
 	}
 	return r0, r1
 }
 
-// MockMetadataFetchService_CommitApply_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CommitApply'
-type MockMetadataFetchService_CommitApply_Call struct {
+// MockMetadataFetchService_CommitCandidateApply_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CommitCandidateApply'
+type MockMetadataFetchService_CommitCandidateApply_Call struct {
 	*mock.Call
 }
 
-// CommitApply is a helper method to define mock.On call
+// CommitCandidateApply is a helper method to define mock.On call
 //   - id string
 //   - before *database.Book
 //   - book *database.Book
 //   - credits *metafetch.AuthorCredits
-//   - source string
-func (_e *MockMetadataFetchService_Expecter) CommitApply(id any, before any, book any, credits any, source any) *MockMetadataFetchService_CommitApply_Call {
-	return &MockMetadataFetchService_CommitApply_Call{Call: _e.mock.On("CommitApply", id, before, book, credits, source)}
+//   - candidate *metafetch.MetadataCandidate
+func (_e *MockMetadataFetchService_Expecter) CommitCandidateApply(id any, before any, book any, credits any, candidate any) *MockMetadataFetchService_CommitCandidateApply_Call {
+	return &MockMetadataFetchService_CommitCandidateApply_Call{Call: _e.mock.On("CommitCandidateApply", id, before, book, credits, candidate)}
 }
 
-func (_c *MockMetadataFetchService_CommitApply_Call) Run(run func(id string, before *database.Book, book *database.Book, credits *metafetch.AuthorCredits, source string)) *MockMetadataFetchService_CommitApply_Call {
+func (_c *MockMetadataFetchService_CommitCandidateApply_Call) Run(run func(id string, before *database.Book, book *database.Book, credits *metafetch.AuthorCredits, candidate *metafetch.MetadataCandidate)) *MockMetadataFetchService_CommitCandidateApply_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 string
 		if args[0] != nil {
@@ -527,9 +527,9 @@ func (_c *MockMetadataFetchService_CommitApply_Call) Run(run func(id string, bef
 		if args[3] != nil {
 			arg3 = args[3].(*metafetch.AuthorCredits)
 		}
-		var arg4 string
+		var arg4 *metafetch.MetadataCandidate
 		if args[4] != nil {
-			arg4 = args[4].(string)
+			arg4 = args[4].(*metafetch.MetadataCandidate)
 		}
 		run(
 			arg0,
@@ -542,12 +542,12 @@ func (_c *MockMetadataFetchService_CommitApply_Call) Run(run func(id string, bef
 	return _c
 }
 
-func (_c *MockMetadataFetchService_CommitApply_Call) Return(book1 *database.Book, err error) *MockMetadataFetchService_CommitApply_Call {
+func (_c *MockMetadataFetchService_CommitCandidateApply_Call) Return(book1 *database.Book, err error) *MockMetadataFetchService_CommitCandidateApply_Call {
 	_c.Call.Return(book1, err)
 	return _c
 }
 
-func (_c *MockMetadataFetchService_CommitApply_Call) RunAndReturn(run func(id string, before *database.Book, book *database.Book, credits *metafetch.AuthorCredits, source string) (*database.Book, error)) *MockMetadataFetchService_CommitApply_Call {
+func (_c *MockMetadataFetchService_CommitCandidateApply_Call) RunAndReturn(run func(id string, before *database.Book, book *database.Book, credits *metafetch.AuthorCredits, candidate *metafetch.MetadataCandidate) (*database.Book, error)) *MockMetadataFetchService_CommitCandidateApply_Call {
 	_c.Call.Return(run)
 	return _c
 }

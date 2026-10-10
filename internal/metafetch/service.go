@@ -1,5 +1,5 @@
 // file: internal/metafetch/service.go
-// version: 5.51.1
+// version: 5.51.2
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
 // last-edited: 2026-10-10
 

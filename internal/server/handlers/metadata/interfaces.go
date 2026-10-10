@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/interfaces.go
-// version: 1.29.0
+// version: 1.30.0
 // guid: b1ab2e4a-1f73-42f2-955d-c4a30f0fbaac
 // last-edited: 2026-10-10
 
@@ -214,11 +214,15 @@ type MetadataMatchMarker interface {
 
 // MetadataHistoryRecorder records applied metadata in the change history.
 type MetadataHistoryRecorder interface {
-	// CommitApply writes the fields an apply changed onto the row as it stands
-	// (ModifyBook) and records history from the committed row, under one batch
-	// id. A nil book means nothing was written; a book with an error means the
-	// write committed and its history did not, so undo refuses that apply.
-	CommitApply(id string, before, book *database.Book, credits *metafetch.AuthorCredits, source string) (*database.Book, error)
+	// CommitCandidateApply writes the fields an apply of candidate changed
+	// onto the row as it stands (ModifyBook) and records history from the
+	// committed row, under one batch id. Under the book's write stripe it
+	// re-reads the owner's rejections and refuses a candidate the owner
+	// rejected (metafetch.ErrOwnerRejectedNotApplied) or when they cannot be
+	// read (metafetch.ErrOwnerRejectionCheckFailed). A nil book means
+	// nothing was written; a book with an error means the write committed
+	// and its history did not, so undo refuses that apply.
+	CommitCandidateApply(id string, before, book *database.Book, credits *metafetch.AuthorCredits, candidate *metafetch.MetadataCandidate) (*database.Book, error)
 }
 
 // MetadataFetchService is the narrow *metafetch.Service subset the metadata

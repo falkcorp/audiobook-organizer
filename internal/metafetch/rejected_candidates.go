@@ -1,5 +1,5 @@
 // file: internal/metafetch/rejected_candidates.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 486771bb-091f-46bb-8846-ff740d2e8ab3
 // last-edited: 2026-10-10
 
@@ -560,7 +560,8 @@ func LoadAllRejectedCandidates(r RejectedCandidateReader) (map[string]RejectedSe
 // written holding the book's write stripe (underBookWriteLock), the stripe
 // every candidate apply re-reads the rejections under just before its
 // commit (Service.ApplyMetadataCandidateWithOptions, the auto-fetch's
-// commitApply guard). A rejection and an apply of the same book are
+// commitApply guard, and Service.CommitCandidateApply, the bulk fetch's
+// commit). A rejection and an apply of the same book are
 // therefore ordered: either the rejection is in before the apply's check,
 // and the apply is refused, or the apply committed first.
 type RejectionStore interface {

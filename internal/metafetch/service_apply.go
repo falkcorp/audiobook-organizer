@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.55.2
+// version: 1.55.3
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
 // last-edited: 2026-10-10
 
@@ -883,10 +883,10 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 
 	// Write only what this apply changed, onto the row as it stands under the
 	// book's write lock, then record history from the committed row
-	// (CommitApply). A whole-struct UpdateBook(id, book) here replaced every
+	// (commitApply). A whole-struct UpdateBook(id, book) here replaced every
 	// column with this apply's read, so a book-page save (or any other write)
 	// that committed during the apply was silently reverted. A book with an
-	// error means the write stands and its history did not land; CommitApply
+	// error means the write stands and its history did not land; commitApply
 	// logged it at Error and undo refuses that apply.
 	var noMatchGuard func(*database.Book) error
 	if opts.automatic() {

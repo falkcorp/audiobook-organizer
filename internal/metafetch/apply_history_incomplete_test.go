@@ -1,7 +1,7 @@
 // file: internal/metafetch/apply_history_incomplete_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8e4a1c73-2d6b-4f95-a3c0-6b9e2d7f4a81
-// last-edited: 2026-09-13
+// last-edited: 2026-10-10
 
 package metafetch
 
@@ -46,7 +46,7 @@ func TestUndoLastApply_RefusesWhenTheNewestApplysHistoryWasLost(t *testing.T) {
 	workA, err := database.SnapshotBook(book)
 	require.NoError(t, err)
 	workA.Title = "A Title"
-	_, err = svc.CommitApply(book.ID, beforeA, workA, nil, "Open Library")
+	_, err = svc.commitApply(book.ID, beforeA, workA, nil, "Open Library", "", nil)
 	require.NoError(t, err)
 
 	// Apply B: the write commits, its history rows fail.
@@ -59,7 +59,7 @@ func TestUndoLastApply_RefusesWhenTheNewestApplysHistoryWasLost(t *testing.T) {
 	pub := "B Pub"
 	workB.Publisher = &pub
 	store.failFetched = true
-	updated, errB := svc.CommitApply(book.ID, beforeB, workB, nil, "Audible")
+	updated, errB := svc.commitApply(book.ID, beforeB, workB, nil, "Audible", "", nil)
 	store.failFetched = false
 	require.NotNil(t, updated, "the book write itself committed")
 	require.ErrorIs(t, errB, ErrApplyHistoryIncomplete)
