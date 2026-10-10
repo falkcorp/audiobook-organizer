@@ -1,5 +1,5 @@
 // file: internal/telemetry/contract/series_contract_test.go
-// version: 1.2.1
+// version: 1.2.2
 // guid: c0ffe83b-1164-4b85-915e-820f693efdc1
 // last-edited: 2026-10-10
 
@@ -717,6 +717,11 @@ type instrumentSpec struct {
 // and its golden rows' source becomes "otel".
 var ourInstruments = []instrumentSpec{
 	{name: "audiobook_organizer.memdb.fallback_reads", kind: kindCounter, keys: []attribute.Key{telemetry.Outcome, telemetry.Site}},
+	{name: "ai_dispatch.requests", kind: kindCounter, unit: "{request}", keys: []attribute.Key{telemetry.Capability, telemetry.Endpoint, telemetry.Outcome}},
+	{name: "ai_dispatch.inflight", kind: kindUpDownCounter, unit: "{request}", keys: []attribute.Key{telemetry.Endpoint}},
+	{name: "ai_dispatch.failover", kind: kindCounter, unit: "{request}", keys: []attribute.Key{telemetry.Capability, telemetry.Endpoint, telemetry.Class}},
+	{name: "ai_dispatch.no_capable", kind: kindCounter, unit: "{request}", keys: []attribute.Key{telemetry.Capability}},
+	{name: "ai_dispatch.slot_wait", kind: kindHistogram, unit: "s", keys: []attribute.Key{telemetry.Endpoint}},
 }
 
 var allowedNamePrefixes = []string{"audiobook_organizer.", "ai_dispatch.", "ai."}
