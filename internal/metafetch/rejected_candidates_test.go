@@ -1,5 +1,5 @@
 // file: internal/metafetch/rejected_candidates_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3f0c9a51-7e2d-4b8a-9c16-5d4e8f2a7b30
 // last-edited: 2026-10-10
 
@@ -164,7 +164,7 @@ func TestRejectionKeys_CaseVariants(t *testing.T) {
 	m := memRejections{
 		RejectedCandidateStoreKey("b1", "Audible", "Synthetic Field Notes 3"): []byte("1"),
 		RejectedCandidateStoreKey("b1", "AUDIBLE", "SYNTHETIC FIELD NOTES 3"): []byte("1"),
-		RejectedCandidateStoreKey("b1", "audible", "synthetic field notes 3"): []byte(`{"ids":["asin:B0SYNUNA02"]}`),
+		RejectedCandidateStoreKey("b1", "audible", "synthetic field notes 3"): RejectionValue(nil, CandidateIdentifiers("B0SYNUNA02", "", "", "")),
 		RejectedCandidateStoreKey("b1", "Audible", "Synthetic Field Notes 4"): []byte("1"),
 	}
 	cand := &MetadataCandidate{Source: "aUdIbLe", Title: "Synthetic FIELD Notes 3", ASIN: "B0SYNUNA02"}

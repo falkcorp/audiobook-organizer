@@ -1,5 +1,5 @@
 // file: internal/metafetch/rejected_candidates.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: 486771bb-091f-46bb-8846-ff740d2e8ab3
 // last-edited: 2026-10-10
 
@@ -9,7 +9,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -29,29 +29,43 @@ import (
 // lookup.
 //
 // The key's VALUE says which of that source+title's records were rejected
-// (RejectionValue). Since 2026-10-10 it holds the rejected record's
-// identifiers, {"ids":["asin:b00x..."]} -- its ASIN, or every ISBN (as ISBN-13) it
-// carries when it has no ASIN -- so rejecting the abridged record does not
-// also refuse the unabridged record with the same title. A value with no
-// identifier (every key written before then holds "1") rejects every record
-// of that source+title, as it always did. Matching (Rejection.Matches) uses
-// the identifiers when both the rejection and the candidate carry one of the
-// same kind, and falls back to source+title otherwise.
+// (RejectionValue). Since 2026-10-10 it lists each rejected record's
+// identifiers as one group, {"records":[["asin:b00x...","isbn:978..."]]}:
+// the record's ASIN and every ISBN it carries (as ISBN-13), so rejecting the
+// abridged record does not also refuse the unabridged record with the same
+// title. A value with no identifier (every key written before then holds
+// "1") rejects every record of that source+title, as it always did.
+// Matching (Rejection.Matches) uses the identifiers when both the rejection
+// and the candidate carry one of the same kind, and falls back to
+// source+title otherwise. So once a rejection names an ISBN, a record of the
+// same source+title with no ASIN and a different ISBN is a different edition
+// and is not refused.
 //
 // Identifiers are book-wide, across every source (owner decision
-// 2026-10-10): a rejected ASIN names one Audible product, which Audible and
-// Audnexus ("Audnexus (Audible)") both serve, and a rejected ISBN names one
-// edition whichever provider reports it. So an identifier-precise rejection
-// refuses any provider's record for that book carrying one of its
-// identifiers, whatever the record's source or title (RejectedSet.Matches).
-// That index is a positive match only: the source+title fallback above
-// stays inside the rejection's own source+title, so an ASIN rejection under
-// Audible does not refuse an unrelated ISBN-only record of another
-// provider. A value with no identifier (every legacy "1") stays title-wide
-// under its own source and joins no index. ISBNs are compared as ISBN-13
-// (an ISBN-10 converted), so one provider's ISBN-10 meets another's
-// ISBN-13. Undo (RemoveRejection) takes the record's identifiers out of
-// every key of the book, whichever source it was stored under.
+// 2026-10-10: ASIN and ISBN rejections apply across all sources): a rejected
+// ASIN names one Audible product, which Audible and Audnexus ("Audnexus
+// (Audible)") both serve, and a rejected ISBN names one edition whichever
+// provider reports it. An Audible rejection stores its record's ISBN too, so
+// a Google Books or Hardcover record carrying that audiobook ISBN is
+// refused as well. So an identifier-precise rejection refuses any
+// provider's record for that book carrying one of its identifiers, whatever
+// the record's source or title (RejectedSet.Matches). That index is a
+// positive match only: the source+title fallback above stays inside the
+// rejection's own source+title, so an ASIN rejection under Audible does not
+// refuse an unrelated record of another provider that shares none of its
+// identifiers. A value with no identifier (every legacy "1") stays
+// title-wide under its own source and joins no index. ISBNs are compared as
+// ISBN-13 (an ISBN-10 converted, an "ISBN"/"ISBN-13:" label dropped), so
+// one provider's ISBN-10 meets another's ISBN-13.
+//
+// Undo (RemoveRejection) removes the undone record's rejection and nothing
+// else: under the record's own source+title, the records it is; under any
+// other key of the book, only records with its ASIN (the same product
+// rejected through another source, as Audnexus serves Audible's). A record
+// rejected under another source that only shares an ISBN with it is a
+// separate rejection the owner made and stays, and so does the refusal of
+// that ISBN: the undone record is then still refused if it carries it
+// (POST /metadata/unreject-candidate reports still_rejected).
 //
 // Matching folds case (RejectionKey, and the identifiers), the same way
 // mergeCandidateRows dedups the cached row: two candidates the cache treats
@@ -112,9 +126,13 @@ type Rejection struct {
 	// Any: every record of the source+title is rejected (a value with no
 	// identifier: a legacy key, or a record that carried none).
 	Any bool
-	// IDs: the rejected records' identifiers, typed and case-folded
-	// ("asin:b00x...", "isbn:978..."). Only read when Any is false.
+	// IDs: every rejected record's identifiers, typed and case-folded
+	// ("asin:b00x...", "isbn:978..."): the union of Records, which is what
+	// matching reads. Only read when Any is false.
 	IDs map[string]bool
+	// Records: each rejected record's identifiers as one group, sorted, so
+	// Undo can take one record out whole (RemoveRejection).
+	Records [][]string
 }
 
 // Matches reports whether the rejection refuses a record carrying ids
@@ -151,16 +169,63 @@ func (r *Rejection) hasKind(kind string) bool {
 	return false
 }
 
-func (r *Rejection) merge(every bool, ids []string) {
+// merge adds records (each a record's identifiers) to r, once each; every
+// widens r to every record of the title.
+func (r *Rejection) merge(every bool, records [][]string) {
 	if every {
 		r.Any = true
 	}
-	if len(ids) > 0 && r.IDs == nil {
-		r.IDs = make(map[string]bool, len(ids))
+	for _, rec := range records {
+		rec = sortedUnique(rec)
+		if len(rec) == 0 || r.hasRecord(rec) {
+			continue
+		}
+		r.Records = append(r.Records, rec)
 	}
-	for _, id := range ids {
-		r.IDs[id] = true
+	r.reindex()
+}
+
+func (r *Rejection) hasRecord(rec []string) bool {
+	for _, have := range r.Records {
+		if slices.Equal(have, rec) {
+			return true
+		}
 	}
+	return false
+}
+
+// dropRecords removes the records drop selects and reports whether any was
+// removed.
+func (r *Rejection) dropRecords(drop func(rec []string) bool) bool {
+	kept := r.Records[:0:0]
+	for _, rec := range r.Records {
+		if !drop(rec) {
+			kept = append(kept, rec)
+		}
+	}
+	removed := len(kept) != len(r.Records)
+	r.Records = kept
+	r.reindex()
+	return removed
+}
+
+// reindex rebuilds IDs from Records.
+func (r *Rejection) reindex() {
+	r.IDs = nil
+	for _, rec := range r.Records {
+		for _, id := range rec {
+			if r.IDs == nil {
+				r.IDs = map[string]bool{}
+			}
+			r.IDs[id] = true
+		}
+	}
+}
+
+func sortedUnique(ids []string) []string {
+	out := slices.Clone(ids)
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 func identifierKind(id string) string {
@@ -181,13 +246,30 @@ func normalizeIdentifier(v string) string {
 	return b.String()
 }
 
-// canonicalISBN is an ISBN in matching form: an ISBN-10 converted to its
-// ISBN-13 ("0-00-000001-X" and "9780000000011" are one edition), anything
-// else as normalizeIdentifier leaves it. One provider reporting only the
-// ISBN-10 and another only the ISBN-13 must still meet (the cross-source
-// index, RejectedSet).
+// stripISBNLabel drops a leading "ISBN" label from a normalised ISBN
+// ("ISBN 0306406152", "ISBN-13: 978...", "ISBN-10: 0-306-..."), so a
+// labelled value meets the bare one. The "10"/"13" after the label is
+// dropped only when what follows is then exactly an ISBN-10 or ISBN-13
+// long: "ISBN 1012345678" is an ISBN-10 that starts with 10.
+func stripISBNLabel(n string) string {
+	rest, ok := strings.CutPrefix(n, "isbn")
+	if !ok {
+		return n
+	}
+	if (len(rest) == 12 || len(rest) == 15) && (strings.HasPrefix(rest, "10") || strings.HasPrefix(rest, "13")) {
+		return rest[2:]
+	}
+	return rest
+}
+
+// canonicalISBN is an ISBN in matching form: an "ISBN" label dropped
+// (stripISBNLabel) and an ISBN-10 converted to its ISBN-13 ("0-00-000001-X"
+// and "9780000000011" are one edition), anything else as
+// normalizeIdentifier leaves it. One provider reporting only the ISBN-10
+// and another only the ISBN-13 must still meet (the cross-source index,
+// RejectedSet).
 func canonicalISBN(v string) string {
-	n := normalizeIdentifier(v)
+	n := stripISBNLabel(normalizeIdentifier(v))
 	if len(n) != 10 {
 		return n
 	}
@@ -222,6 +304,9 @@ func canonicalIdentifier(kind, val string) string {
 
 // CandidateIdentifiers is a record's identifiers in matching form: its
 // ASIN, and every ISBN it carries as ISBN-13 (canonicalISBN), once each.
+// It is also what rejecting the record stores (owner decision 2026-10-10:
+// ASIN and ISBN rejections apply across all sources, so an Audible
+// rejection names its audiobook ISBN too).
 func CandidateIdentifiers(asin, isbn, isbn10, isbn13 string) []string {
 	var ids []string
 	if a := normalizeIdentifier(asin); a != "" {
@@ -237,49 +322,58 @@ func CandidateIdentifiers(asin, isbn, isbn10, isbn13 string) []string {
 	return ids
 }
 
-// rejectionIdentifiers is what a new rejection of a record stores: its ASIN,
-// or every ISBN form when it has no ASIN (owner decision 2026-10-10).
-func rejectionIdentifiers(asin, isbn, isbn10, isbn13 string) []string {
-	if a := normalizeIdentifier(asin); a != "" {
-		return []string{"asin:" + a}
-	}
-	return CandidateIdentifiers("", isbn, isbn10, isbn13)
-}
-
-// CandidateRejectionIdentifiers is what rejecting c stores.
+// CandidateRejectionIdentifiers is what rejecting c stores: every
+// identifier c carries (CandidateIdentifiers).
 func CandidateRejectionIdentifiers(c *MetadataCandidate) []string {
 	if c == nil {
 		return nil
 	}
-	return rejectionIdentifiers(c.ASIN, c.ISBN, c.ISBN10, c.ISBN13)
+	return candidateIdentifiers(c)
 }
 
 func candidateIdentifiers(c *MetadataCandidate) []string {
 	return CandidateIdentifiers(c.ASIN, c.ISBN, c.ISBN10, c.ISBN13)
 }
 
-type rejectionValue struct {
-	IDs []string `json:"ids"`
-}
-
-// parseRejectionValue reads a stored value: its identifiers, or every=true
-// for a value naming none (every legacy "1").
-func parseRejectionValue(v []byte) (every bool, ids []string) {
-	var rv rejectionValue
-	if err := json.Unmarshal(v, &rv); err != nil || len(rv.IDs) == 0 {
-		return true, nil
-	}
-	for _, id := range rv.IDs {
-		if kind, val, ok := strings.Cut(strings.ToLower(id), ":"); ok && val != "" {
-			if c := canonicalIdentifier(kind, val); !strings.HasSuffix(c, ":") {
-				ids = append(ids, c)
-			}
+// asinOf is the "asin:" identifier among ids, or "".
+func asinOf(ids []string) string {
+	for _, id := range ids {
+		if identifierKind(id) == "asin" {
+			return id
 		}
 	}
-	if len(ids) == 0 {
+	return ""
+}
+
+type rejectionValue struct {
+	Records [][]string `json:"records"`
+}
+
+// parseRejectionValue reads a stored value: its records' identifiers, or
+// every=true for a value naming none (every legacy "1", and anything that
+// does not parse: the safe reading is the title-wide one).
+func parseRejectionValue(v []byte) (every bool, records [][]string) {
+	var rv rejectionValue
+	if err := json.Unmarshal(v, &rv); err != nil {
 		return true, nil
 	}
-	return false, ids
+	for _, rec := range rv.Records {
+		var ids []string
+		for _, id := range rec {
+			if kind, val, ok := strings.Cut(strings.ToLower(id), ":"); ok && val != "" {
+				if c := canonicalIdentifier(kind, val); !strings.HasSuffix(c, ":") {
+					ids = append(ids, c)
+				}
+			}
+		}
+		if len(ids) > 0 {
+			records = append(records, ids)
+		}
+	}
+	if len(records) == 0 {
+		return true, nil
+	}
+	return false, records
 }
 
 // parsedRejection is a stored value as a Rejection.
@@ -290,23 +384,23 @@ func parsedRejection(v []byte) *Rejection {
 }
 
 func encodeRejection(r *Rejection) []byte {
-	if r == nil || r.Any || len(r.IDs) == 0 {
+	if r == nil || r.Any || len(r.Records) == 0 {
 		return []byte("1")
 	}
-	ids := make([]string, 0, len(r.IDs))
-	for id := range r.IDs {
-		ids = append(ids, id)
+	records := make([][]string, 0, len(r.Records))
+	for _, rec := range r.Records {
+		records = append(records, sortedUnique(rec))
 	}
-	sort.Strings(ids)
-	out, _ := json.Marshal(rejectionValue{IDs: ids})
+	slices.SortFunc(records, func(a, b []string) int { return slices.Compare(a, b) })
+	out, _ := json.Marshal(rejectionValue{Records: records})
 	return out
 }
 
 // RejectionValue is the value to store when the owner rejects a record
 // carrying rejectIDs (CandidateRejectionIdentifiers) under a key whose
 // current value is existing (nil: no key yet). A key that already rejects
-// every record stays that way; otherwise the record's identifiers join the
-// key's, and a record with none widens the key to every record.
+// every record stays that way; otherwise the record joins the key's records,
+// and a record with no identifier widens the key to every record.
 func RejectionValue(existing []byte, rejectIDs []string) []byte {
 	r := &Rejection{}
 	if existing != nil {
@@ -315,23 +409,28 @@ func RejectionValue(existing []byte, rejectIDs []string) []byte {
 	if len(rejectIDs) == 0 {
 		r.Any = true
 	}
-	r.merge(false, rejectIDs)
+	r.merge(false, [][]string{rejectIDs})
 	return encodeRejection(r)
 }
 
 // UnrejectValue is what un-rejecting a record carrying candIDs
-// (CandidateIdentifiers) leaves of a key whose value is existing: the value
-// to write back, or remove=true to delete the key. The postcondition is that
-// the record no longer matches: its identifiers leave the key, and when the
-// rest would still match it (a key rejecting every record, a record with no
-// identifier, or no shared identifier kind) the whole key goes.
+// (CandidateIdentifiers) leaves of its own source+title key, whose value is
+// existing: the value to write back, or remove=true to delete the key. Every
+// record of the key sharing an identifier with candIDs leaves it, and when
+// the rest would still match the record by the source+title fallback (a key
+// rejecting every record, a record with no identifier, or no shared
+// identifier kind) the whole key goes, so the key no longer refuses it.
 func UnrejectValue(existing []byte, candIDs []string) (value []byte, remove bool) {
-	r := &Rejection{}
-	r.merge(parseRejectionValue(existing))
-	for _, id := range candIDs {
-		delete(r.IDs, id)
-	}
-	if r.Any || len(r.IDs) == 0 || r.Matches(candIDs) {
+	r := parsedRejection(existing)
+	r.dropRecords(func(rec []string) bool {
+		for _, id := range rec {
+			if slices.Contains(candIDs, id) {
+				return true
+			}
+		}
+		return false
+	})
+	if r.Any || len(r.Records) == 0 || r.Matches(candIDs) {
 		return nil, true
 	}
 	return encodeRejection(r), false
@@ -355,8 +454,8 @@ func (s *RejectedSet) add(suffix string, value []byte) {
 		r = &Rejection{}
 		s.byKey[key] = r
 	}
-	every, ids := parseRejectionValue(value)
-	r.merge(every, ids)
+	every, records := parseRejectionValue(value)
+	r.merge(every, records)
 	if every {
 		// A value naming no identifier (a legacy "1") is title-wide under
 		// its own source and nothing more: it joins no book-wide index.
@@ -365,8 +464,10 @@ func (s *RejectedSet) add(suffix string, value []byte) {
 	if s.ids == nil {
 		s.ids = map[string]bool{}
 	}
-	for _, id := range ids {
-		s.ids[id] = true
+	for _, rec := range records {
+		for _, id := range rec {
+			s.ids[id] = true
+		}
 	}
 }
 
@@ -524,16 +625,20 @@ func recordRejection(store RejectionStore, bookID string, c *MetadataCandidate) 
 	return nil
 }
 
-// RemoveRejection un-rejects c for bookID, so afterwards c matches no
-// rejection: every stored key of c's source+title, in whatever case it was
-// written, gives up c (UnrejectValue), and c's identifiers leave every
-// other key of the book too, whichever source or title it was stored under
-// (the book-wide index; see the file comment). A key left with no
-// identifier is deleted, never rewritten: an empty value would read as
-// "every record of the title". A key that names no identifier (a legacy
-// "1") of another source+title is left alone; it never matched c. changed
-// reports whether any key was rewritten or deleted. It holds the book's
-// write stripe while it writes (RejectionStore).
+// RemoveRejection un-rejects c for bookID: it removes c's own rejection and
+// nothing else (see the file comment). Under c's own source+title, in
+// whatever case the key was written, the records c is leave the key
+// (UnrejectValue), so that key no longer refuses c. Under every other key of
+// the book, the records with c's ASIN leave it, ISBNs and all: the same
+// product rejected through another source (an Audible rejection seen on the
+// Audnexus row). A record of another key that only shares an ISBN with c is
+// a separate rejection and stays, so c can still be refused afterwards when
+// it carries that ISBN; the caller re-reads to tell (the un-reject handler's
+// still_rejected). A key left with no record is deleted, never rewritten:
+// an empty value would read as "every record of the title". A key that
+// names no identifier (a legacy "1") of another source+title is left alone.
+// changed reports whether any key was rewritten or deleted. It holds the
+// book's write stripe while it writes (RejectionStore).
 func RemoveRejection(store RejectionStore, bookID string, c *MetadataCandidate) (changed bool, err error) {
 	if c == nil {
 		return false, nil
@@ -556,6 +661,7 @@ func removeRejection(store RejectionStore, bookID string, c *MetadataCandidate) 
 	}
 	want := RejectionKey(c.Source, c.Title)
 	ids := candidateIdentifiers(c)
+	asin := asinOf(ids)
 	for _, kv := range pairs {
 		suffix, ok := strings.CutPrefix(kv.Key, prefix)
 		if !ok {
@@ -565,7 +671,7 @@ func removeRejection(store RejectionStore, bookID string, c *MetadataCandidate) 
 		var remove bool
 		if RejectionKeyOfStored(suffix) == want {
 			value, remove = UnrejectValue(kv.Value, ids)
-		} else if value, remove, ok = dropIdentifiers(kv.Value, ids); !ok {
+		} else if value, remove, ok = dropProduct(kv.Value, asin); !ok {
 			continue
 		}
 		switch {
@@ -587,28 +693,26 @@ func removeRejection(store RejectionStore, bookID string, c *MetadataCandidate) 
 	return changed, nil
 }
 
-// dropIdentifiers takes ids out of another source+title's stored value
-// existing: the value to write back, or remove=true when no identifier is
-// left (the key is deleted; re-encoding an empty set would widen it to every
-// record of its title). touched is false when the value held none of ids,
-// or names no identifier at all (a legacy "1", which never matched c).
-func dropIdentifiers(existing []byte, ids []string) (value []byte, remove, touched bool) {
-	every, held := parseRejectionValue(existing)
-	if every {
+// dropProduct takes the records naming asin (one Audible product) out of
+// another source+title's stored value existing: the value to write back, or
+// remove=true when no record is left (the key is deleted; re-encoding an
+// empty set would widen it to every record of its title). touched is false
+// when asin is "" (c has no ASIN, so no other key holds its product), when
+// no record names it, or when the value names no identifier at all (a
+// legacy "1"). A record that only shares an ISBN with c is not c's and
+// stays.
+func dropProduct(existing []byte, asin string) (value []byte, remove, touched bool) {
+	if asin == "" {
 		return nil, false, false
 	}
-	r := &Rejection{}
-	r.merge(false, held)
-	for _, id := range ids {
-		if r.IDs[id] {
-			delete(r.IDs, id)
-			touched = true
-		}
-	}
-	if !touched {
+	r := parsedRejection(existing)
+	if r.Any {
 		return nil, false, false
 	}
-	if len(r.IDs) == 0 {
+	if !r.dropRecords(func(rec []string) bool { return slices.Contains(rec, asin) }) {
+		return nil, false, false
+	}
+	if len(r.Records) == 0 {
 		return nil, true, true
 	}
 	return encodeRejection(r), false, true

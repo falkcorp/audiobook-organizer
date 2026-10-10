@@ -1,5 +1,5 @@
 // file: internal/server/owner_rejected_apply_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: d5304ea1-88e0-43c3-9c2b-1b81c01fe9eb
 // last-edited: 2026-10-10
 
@@ -410,6 +410,7 @@ func TestUnrejectCandidate_BookScoped(t *testing.T) {
 	w := post(map[string]any{"book_id": book.ID, "candidate": unabridged})
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	require.Contains(t, w.Body.String(), `"unrejected":true`)
+	require.Contains(t, w.Body.String(), `"still_rejected":false`)
 
 	rejected, err := metafetch.LoadRejectedCandidates(store, book.ID)
 	require.NoError(t, err)
@@ -430,6 +431,21 @@ func TestUnrejectCandidate_BookScoped(t *testing.T) {
 	w = post(map[string]any{"book_id": book.ID, "candidate": unabridged})
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	require.Contains(t, w.Body.String(), `"unrejected":false`)
+
+	// S4: an Open Library record rejected on its own shares the ISBN of an
+	// Audible record. Undoing the Audible record leaves the Open Library
+	// rejection, which still refuses it: still_rejected.
+	withISBN := metafetch.MetadataCandidate{Title: "Synthetic Field Notes 3", Source: "Audible", ASIN: "B0SYNISB03", ISBN13: "9780306406157"}
+	olRecord := metafetch.MetadataCandidate{Title: "Synthetic Field Notes Three", Source: "Open Library", ISBN10: "0306406152"}
+	require.NoError(t, metafetch.RecordRejection(store, book.ID, &withISBN))
+	require.NoError(t, metafetch.RecordRejection(store, book.ID, &olRecord))
+	w = post(map[string]any{"book_id": book.ID, "candidate": withISBN})
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), `"unrejected":true`)
+	require.Contains(t, w.Body.String(), `"still_rejected":true`)
+	rejected, err = metafetch.LoadRejectedCandidates(store, book.ID)
+	require.NoError(t, err)
+	require.True(t, rejected.HasCandidate(&olRecord), "another source's rejection sharing the ISBN was removed")
 
 	require.Equal(t, http.StatusBadRequest, post(map[string]any{"book_id": book.ID}).Code)
 	require.Equal(t, http.StatusNotFound, post(map[string]any{"book_id": "no-such-book", "candidate": unabridged}).Code)
