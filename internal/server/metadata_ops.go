@@ -1,5 +1,5 @@
 // file: internal/server/metadata_ops.go
-// version: 1.39.0
+// version: 1.39.1
 // guid: fba55738-5898-4950-8e79-3ee008ad0c70
 // last-edited: 2026-10-10
 //
@@ -1130,9 +1130,9 @@ func (s *Server) runBulkWriteBack(
 		}
 
 		// WriteBackMetadataForBook serializes on the destination path itself
-		// (above). See path_locks.go for the three hazards that closes
-		// (version-group siblings, protected-path redirect, and the
-		// one-second-granularity .bak- backup name).
+		// (above). See path_locks.go for the hazards that closes
+		// (version-group siblings and protected-path redirect; the third, a
+		// one-second .bak- backup name, is historical).
 		// ctx carries the caller's tagger.WithoutBackup opt-out down to the
 		// tag and cover writes (WriteBackMetadataForBookContext).
 		count, writeErr := writeBackBookFiles(mfs, ctx, bookID)
