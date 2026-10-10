@@ -1,7 +1,7 @@
 // file: internal/database/soft_deleted_count.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 7e50b3c8-1a92-4d67-8f24-c65e09a1d3b7
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package database
 
@@ -88,7 +88,7 @@ func (m *MemStore) CountSoftDeletedBooks(olderThan *time.Time) (int, error) {
 // A memdb that knows it is missing book rows falls through to the Pebble scan,
 // as ListSoftDeletedBooks does; any other memdb error is returned unchanged.
 func (p *PebbleStore) CountSoftDeletedBooks(olderThan *time.Time) (int, error) {
-	if m := p.mem(); p.UseMemDB && m != nil {
+	if m := p.memOrFallback("CountSoftDeletedBooks"); m != nil {
 		n, err := m.CountSoftDeletedBooks(olderThan)
 		if err == nil {
 			return n, nil

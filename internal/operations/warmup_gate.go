@@ -1,7 +1,7 @@
 // file: internal/operations/warmup_gate.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9d3a7e52-6c14-4b0f-8a21-5f7e0c9b3d84
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package operations
 
@@ -39,12 +39,11 @@ type WarmupWaiter interface {
 //     operation proceeds on the slow path rather than blocking forever. Only a
 //     ctx cancel returns an error (ctx.Err()).
 //
-// heartbeat, if non-nil, is called every heartbeatEvery while waiting. The wait
-// is bounded by timeout, so a heartbeat here cannot mask an unbounded hang; it
-// only keeps a wait that approaches the stuck-op watchdog's idle limit from
-// being counted as the operation going quiet.
+// The caller's ctx must not carry the operation's own run timeout: the wait is
+// not part of the run, so it must neither spend that budget nor be cut short by
+// it (the registry waits on the cancel-only context and arms the timeout after).
 func WaitForWarmup(ctx context.Context, waiter WarmupWaiter, timeout time.Duration, log *slog.Logger,
-	onWait func(), heartbeat func(), heartbeatEvery time.Duration) error {
+	onWait func()) error {
 	if waiter == nil {
 		return nil
 	}
@@ -65,32 +64,17 @@ func WaitForWarmup(ctx context.Context, waiter WarmupWaiter, timeout time.Durati
 	waitCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	done := make(chan error, 1)
-	go func() { done <- waiter.WaitForWarmupCtx(waitCtx) }()
-
-	var tick <-chan time.Time
-	if heartbeat != nil && heartbeatEvery > 0 {
-		t := time.NewTicker(heartbeatEvery)
-		defer t.Stop()
-		tick = t.C
+	err := waiter.WaitForWarmupCtx(waitCtx)
+	if err == nil {
+		return nil
 	}
-	for {
-		select {
-		case err := <-done:
-			if err == nil {
-				return nil
-			}
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return ctxErr
-			}
-			// Our own deadline fired, not the caller's cancel.
-			if log != nil {
-				log.Warn("operation: startup warmup did not finish in time; proceeding on the slow read path",
-					"timeout", timeout)
-			}
-			return nil
-		case <-tick:
-			heartbeat()
-		}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
 	}
+	// Our own deadline fired, not the caller's cancel.
+	if log != nil {
+		log.Warn("operation: startup warmup did not finish in time; proceeding on the slow read path",
+			"timeout", timeout)
+	}
+	return nil
 }

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store.go
-// version: 1.210.3
+// version: 1.210.4
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package database
 
@@ -34,6 +34,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/titleutil"
 	"github.com/falkcorp/audiobook-organizer/internal/util"
 	ulid "github.com/oklog/ulid/v2"
+	"go.opentelemetry.io/otel/metric"
 )
 
 // prefixEnd returns an upper-bound key for Pebble range iteration
@@ -253,6 +254,9 @@ type PebbleStore struct {
 	// and cancellation alike. Read it only after warmupDone is closed; see
 	// WarmupStatus.
 	warmupDuration atomic.Int64
+	// memdbFallback counts reads that fell back to Pebble while the memdb was
+	// unpublished; nil (a no-op) on a store built without initMetrics.
+	memdbFallback metric.Int64Counter
 
 	// libGen is bumped by every book-level mutation (CreateBook, UpdateBook,
 	// DeleteBook) so response caches derived from the book corpus can key on
@@ -291,7 +295,7 @@ func (p *PebbleStore) memOrFallback(site string) *MemStore {
 	if m := p.mem(); m != nil {
 		return m
 	}
-	recordMemdbFallback(site)
+	p.recordMemdbFallback(site)
 	return nil
 }
 
@@ -702,6 +706,7 @@ func initPebbleStore(db *pebble.DB, path string, fs vfs.FS, st storageFormatStat
 	// NewIter races the close and panics). warmupDone is always non-nil so Close
 	// can wait unconditionally; it is closed immediately when there is no warmup
 	// goroutine to wait for.
+	store.initMetrics()
 	store.warmupDone = make(chan struct{})
 	if memStore, memErr := NewMemStore(); memErr != nil {
 		slog.Warn("memdb init failed, in-memory queries disabled", "error", memErr)
@@ -991,7 +996,7 @@ func (p *PebbleStore) GetAllBooksCore(limit, offset int) ([]BookCore, error) {
 // Any error other than ErrMemdbIncomplete is propagated unchanged — falling
 // back on an unrecognized failure would be guessing at its cause.
 func (p *PebbleStore) GetAllBooksCoreComplete(limit, offset int) ([]BookCore, error) {
-	if m := p.mem(); p.UseMemDB && m != nil {
+	if m := p.memOrFallback("GetAllBooksCoreComplete"); m != nil {
 		cores, err := m.GetAllBooksCoreComplete(limit, offset)
 		if err == nil {
 			return cores, nil
@@ -2364,7 +2369,7 @@ func (p *PebbleStore) GetBooksBySeriesIDCore(seriesID int) ([]BookCore, error) {
 // Any other error is propagated unchanged — falling back on an unrecognized
 // failure would be guessing at its cause.
 func (p *PebbleStore) GetBooksBySeriesIDAllVersions(seriesID int) ([]BookCore, error) {
-	if m := p.mem(); p.UseMemDB && m != nil {
+	if m := p.memOrFallback("GetBooksBySeriesIDAllVersions"); m != nil {
 		cores, err := m.GetBooksBySeriesIDAllVersions(seriesID, 0, 0)
 		if err == nil {
 			return cores, nil
@@ -2666,7 +2671,7 @@ func (p *PebbleStore) GetBooksByAuthorIDForRelinkCore(authorID int) ([]BookCore,
 // (includeTrashed=false) and GetBooksByAuthorIDForRelinkCore (includeTrashed=true).
 // One body so the two cannot drift on anything but the trash.
 func (p *PebbleStore) booksByAuthorIDForMutation(authorID int, includeTrashed bool) ([]BookCore, error) {
-	if m := p.mem(); p.UseMemDB && m != nil {
+	if m := p.memOrFallback("booksByAuthorIDForMutation"); m != nil {
 		// AllVersions, not the plain getter: this method's callers are merges,
 		// deletes and dedup, and a link they cannot see is one they will not
 		// rewrite before deleting the author — which orphans it. The Pebble
@@ -4530,7 +4535,7 @@ func (p *PebbleStore) ListSoftDeletedBooks(limit, offset int, olderThan *time.Ti
 	// correctly; falling through keeps the answer right and only makes it slow.
 	// Any other error is propagated unchanged — falling back on an unrecognized
 	// failure would be guessing at its cause.
-	if m := p.mem(); p.UseMemDB && m != nil {
+	if m := p.memOrFallback("ListSoftDeletedBooks"); m != nil {
 		trashed, err := m.ListSoftDeletedBooks(limit, offset, olderThan)
 		if err == nil {
 			return trashed, nil
@@ -4713,7 +4718,7 @@ func (p *PebbleStore) GetBooksByMetadataSourceHash(hash string) ([]Book, error) 
 	// Fast path: memdb's metadata_source_hash index. The scan below decodes
 	// every book row and runs on every metadata apply (MATCH-4). A memdb that
 	// has lost book rows returns an error and the scan runs instead.
-	if m := p.mem(); p.UseMemDB && m != nil {
+	if m := p.memOrFallback("GetBooksByMetadataSourceHash"); m != nil {
 		if books, err := m.GetBooksByMetadataSourceHash(hash); err == nil {
 			return books, nil
 		}

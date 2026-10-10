@@ -1,14 +1,16 @@
 // file: internal/database/memdb_metrics_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c27e5a90-4d13-4b68-8f0e-9a1b6d3c5e74
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package database
 
 import (
 	"context"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -16,7 +18,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/stretchr/testify/require"
-	"go.opentelemetry.io/otel"
 	otelprom "go.opentelemetry.io/otel/exporters/prometheus"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 )
@@ -75,7 +76,6 @@ func TestMemOrFallback_CountsOnlyUnreadyReadsAndShowsOnMetrics(t *testing.T) {
 	exporter, err := otelprom.New(otelprom.WithRegisterer(reg))
 	require.NoError(t, err)
 	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(exporter))
-	otel.SetMeterProvider(mp)
 	t.Cleanup(func() { _ = mp.Shutdown(context.Background()) })
 
 	scrape := func() string {
@@ -93,6 +93,9 @@ func TestMemOrFallback_CountsOnlyUnreadyReadsAndShowsOnMetrics(t *testing.T) {
 	}
 
 	p := newWarmPebbleForMemdbTest(t)
+	// A private provider: the test never touches the process-global one, so it
+	// is repeatable (-count=N) and cannot leak into another test.
+	p.setMeterProvider(mp)
 
 	// Ready: served from memdb, not counted.
 	_, err = p.GetAllAuthors()
@@ -118,4 +121,38 @@ func TestMemOrFallback_CountsOnlyUnreadyReadsAndShowsOnMetrics(t *testing.T) {
 	require.Empty(t, line("GetAllSeries"))
 	p.UseMemDB = true
 	p.memPtr.Store(m)
+}
+
+// Every read that chooses between memdb and Pebble must go through
+// memOrFallback, or its fallbacks are invisible on memdb_fallback_reads_total.
+// This fails if a hand-written guard that combines UseMemDB with a memdb
+// presence check (in any of the shapes this package has used) comes back.
+func TestNoRawMemdbReadGuards(t *testing.T) {
+	forms := []*regexp.Regexp{
+		regexp.MustCompile(`\.UseMemDB\s*&&`),             // p.UseMemDB && p.mem() != nil / && m != nil
+		regexp.MustCompile(`&&\s*\w+\.UseMemDB\b`),        // p.mem(); !deep && p.UseMemDB && ...
+		regexp.MustCompile(`!\s*\w+\.UseMemDB\s*\|\|`),    // !p.UseMemDB || m == nil
+		regexp.MustCompile(`\|\|\s*!?\s*\w+\.UseMemDB\b`), // m == nil || !p.UseMemDB
+	}
+	files, err := filepath.Glob("*.go")
+	require.NoError(t, err)
+	require.NotEmpty(t, files)
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		b, err := os.ReadFile(f)
+		require.NoError(t, err)
+		for n, line := range strings.Split(string(b), "\n") {
+			code := line
+			if i := strings.Index(code, "//"); i >= 0 {
+				code = code[:i]
+			}
+			for _, re := range forms {
+				if re.MatchString(code) {
+					t.Errorf("%s:%d: raw memdb guard %q; use p.memOrFallback(site) so a fallback read is counted", f, n+1, strings.TrimSpace(line))
+				}
+			}
+		}
+	}
 }

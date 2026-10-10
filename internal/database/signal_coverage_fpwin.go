@@ -1,7 +1,7 @@
 // file: internal/database/signal_coverage_fpwin.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5ab03e39-dbc3-43e9-8008-dd58c0f20f7d
-// last-edited: 2026-09-19
+// last-edited: 2026-10-10
 
 package database
 
@@ -465,7 +465,13 @@ func (p *PebbleStore) GetFingerprintWindowCoverage(ctx context.Context, deep boo
 		at     func(i int) *BookFile
 		source string
 	)
-	if mem := p.mem(); !deep && p.UseMemDB && mem != nil {
+	// A deep scan deliberately skips memdb, so it must not be counted as a
+	// fallback read; only the non-deep path asks memOrFallback.
+	var mem *MemStore
+	if !deep {
+		mem = p.memOrFallback("GetFingerprintWindowCoverage")
+	}
+	if mem != nil {
 		ptrs, err := mem.bookFilePointers()
 		if err != nil {
 			return nil, err

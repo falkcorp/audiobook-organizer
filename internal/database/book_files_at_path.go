@@ -1,7 +1,7 @@
 // file: internal/database/book_files_at_path.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 69f97b8f-0d70-497f-867c-a8be4011ceb8
-// last-edited: 2026-09-19
+// last-edited: 2026-10-10
 
 package database
 
@@ -39,8 +39,8 @@ func (p *PebbleStore) BookFilesAtPath(path string) ([]BookFile, error) {
 	if path == "" {
 		return nil, nil
 	}
-	m := p.mem()
-	if !p.UseMemDB || m == nil {
+	m := p.memOrFallback("BookFilesAtPath")
+	if m == nil {
 		return nil, fmt.Errorf("%w: memdb is not serving", ErrBookFilesAtPathUnavailable)
 	}
 	refs, err := m.bookFileRefsAtPath(path)

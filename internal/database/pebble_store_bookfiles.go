@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_bookfiles.go
-// version: 1.44.0
+// version: 1.44.1
 // guid: bee03868-fbc4-48b0-9c9a-11180e19779e
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 
 package database
 
@@ -916,8 +916,8 @@ func (s *PebbleStore) GetBookFiles(bookID string) ([]BookFile, error) {
 // GetBookFiles(bookID) (full Pebble). See
 // docs/specs/2026-07-05-store-getter-fidelity-unification.md.
 func (s *PebbleStore) GetBookFilesForIDsCore(bookIDs []string) (map[string][]BookFileCore, error) {
-	if s.UseMemDB && s.mem() != nil {
-		return s.mem().GetBookFilesForIDsCore(bookIDs)
+	if mem := s.memOrFallback("GetBookFilesForIDsCore"); mem != nil {
+		return mem.GetBookFilesForIDsCore(bookIDs)
 	}
 	return s.getBookFilesForIDsPebbleScan(bookIDs)
 }
@@ -991,8 +991,8 @@ func (s *PebbleStore) getBookFilesForIDsPebbleScan(bookIDs []string) (map[string
 // GetBookFiles(bookID) (full Pebble). See
 // docs/specs/2026-07-05-store-getter-fidelity-unification.md.
 func (s *PebbleStore) GetAllBookFilesCore() ([]BookFileCore, error) {
-	if s.UseMemDB && s.mem() != nil {
-		return s.mem().GetAllBookFilesCore()
+	if mem := s.memOrFallback("GetAllBookFilesCore"); mem != nil {
+		return mem.GetAllBookFilesCore()
 	}
 	full, err := s.getAllBookFilesPebbleScan()
 	if err != nil {
@@ -1013,7 +1013,7 @@ var bookFilesCompleteLog = logger.New("database.bookfiles-complete")
 // authoritative Pebble scan instead (as GetAllBooksCoreComplete does for
 // books). Any other memdb error is returned unchanged.
 func (s *PebbleStore) GetAllBookFilesCoreComplete() ([]BookFileCore, error) {
-	if m := s.mem(); s.UseMemDB && m != nil {
+	if m := s.memOrFallback("GetAllBookFilesCoreComplete"); m != nil {
 		cores, err := m.GetAllBookFilesCoreComplete()
 		if err == nil {
 			return cores, nil
@@ -1042,8 +1042,8 @@ func (s *PebbleStore) GetAllBookFilesCoreComplete() ([]BookFileCore, error) {
 // from every row: GetAllBookFilesCore would copy ~742k 624-byte structs
 // (~460 MB transient on prod) to read them.
 func (s *PebbleStore) VisitBookFiles(fn func(*BookFile)) error {
-	if s.UseMemDB && s.mem() != nil {
-		return s.mem().VisitBookFiles(fn)
+	if mem := s.memOrFallback("VisitBookFiles"); mem != nil {
+		return mem.VisitBookFiles(fn)
 	}
 	full, err := s.getAllBookFilesPebbleScan()
 	if err != nil {
@@ -1117,8 +1117,8 @@ func (s *PebbleStore) getAllBooksPebbleScan() ([]Book, error) {
 // (much smaller) deluge-touched subset (H2 + H8). Pebble full-scan retained
 // as the cold-start fallback.
 func (s *PebbleStore) GetBookFilesNeedingDelugeImportCore() ([]BookFileCore, error) {
-	if s.UseMemDB && s.mem() != nil {
-		return s.mem().GetBookFilesNeedingDelugeImportCore()
+	if mem := s.memOrFallback("GetBookFilesNeedingDelugeImportCore"); mem != nil {
+		return mem.GetBookFilesNeedingDelugeImportCore()
 	}
 	all, err := s.getAllBookFilesPebbleScan()
 	if err != nil {
@@ -1242,10 +1242,8 @@ func (s *PebbleStore) GetBookFileByAcoustID(fp string) (*BookFile, error) {
 // Memdb fastpath: when memdb is warm, walk in-RAM book_files (seg0..6 are
 // preserved post-MAYDEPLOY-J). Falls back to Pebble prefix scan below.
 func (s *PebbleStore) GetBookFileByAcoustIDFuzzy(fp string, minSimilarity float64) (*BookFile, error) {
-	if s.UseMemDB {
-		if m := s.mem(); m != nil {
-			return m.GetBookFileByAcoustIDFuzzy(fp, minSimilarity)
-		}
+	if m := s.memOrFallback("GetBookFileByAcoustIDFuzzy"); m != nil {
+		return m.GetBookFileByAcoustIDFuzzy(fp, minSimilarity)
 	}
 
 	prefix := []byte("book_file:")

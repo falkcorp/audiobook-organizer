@@ -1,7 +1,7 @@
 // file: internal/database/author_bookref.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: 436a4092-01fc-4768-b57c-942068cb726d
-// last-edited: 2026-09-12
+// last-edited: 2026-10-10
 
 package database
 
@@ -202,7 +202,7 @@ func (p *PebbleStore) GetAllAuthorBookRefCounts() (map[int]int, error) {
 // with the same memdb-first, fail-closed fallthrough: ErrMemdbIncomplete drops
 // to the authoritative Pebble scan, any other memdb error propagates.
 func (p *PebbleStore) GetAllAuthorBookRefBuckets() (map[int]AuthorRefBuckets, error) {
-	if m := p.mem(); p.UseMemDB && m != nil {
+	if m := p.memOrFallback("GetAllAuthorBookRefBuckets"); m != nil {
 		buckets, err := m.GetAllAuthorBookRefBuckets()
 		if err == nil {
 			return buckets, nil

@@ -1,7 +1,7 @@
 // file: internal/database/series_bookref.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 3b9d7c41-5e02-4a86-9f13-6c8ad20b47e5
-// last-edited: 2026-09-12
+// last-edited: 2026-10-10
 
 package database
 
@@ -124,7 +124,7 @@ func (p *PebbleStore) GetAllSeriesBookRefCounts() (map[int]int, error) {
 	// Loaded ONCE. Reset can swap memPtr underneath us, and reading it three
 	// times could report a refusal from one MemStore next to the (empty) loss
 	// map of its freshly-reset replacement -- a log line contradicting itself.
-	if m := p.mem(); p.UseMemDB && m != nil {
+	if m := p.memOrFallback("GetAllSeriesBookRefCounts"); m != nil {
 		counts, err := m.GetAllSeriesBookRefCounts()
 		if err == nil {
 			return counts, nil

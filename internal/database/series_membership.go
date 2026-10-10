@@ -1,7 +1,7 @@
 // file: internal/database/series_membership.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5d0f3b8e-2a71-4c96-b4e3-8f1a6c29d7b0
-// last-edited: 2026-09-13
+// last-edited: 2026-10-10
 
 package database
 
@@ -184,7 +184,7 @@ var seriesMembershipLog = logger.New("series-membership")
 // series -- instead of the one-scan-per-series the per-series getter costs.
 // Any other memdb error propagates unchanged.
 func (p *PebbleStore) GetBooksBySeriesIDsAllVersions(seriesIDs []int) (map[int][]BookCore, error) {
-	if m := p.mem(); p.UseMemDB && m != nil {
+	if m := p.memOrFallback("GetBooksBySeriesIDsAllVersions"); m != nil {
 		out, err := m.GetBooksBySeriesIDsAllVersions(seriesIDs)
 		if err == nil {
 			return out, nil

@@ -1,7 +1,7 @@
 // file: internal/database/book_listing_fields.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 4c6a2e85-1f93-4b7d-9e08-7a5d3c1b2f69
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package database
 
@@ -72,7 +72,7 @@ func (m *MemStore) GetBookListingFields(ids []string) (map[string]BookListingFie
 // made before this existed: two Pebble point reads and a full JSON decode
 // per book, which for 40-56k cached books was seconds of every request.
 func (p *PebbleStore) GetBookListingFields(ids []string) (map[string]BookListingFields, error) {
-	if m := p.mem(); p.UseMemDB && m != nil {
+	if m := p.memOrFallback("GetBookListingFields"); m != nil {
 		out, err := m.GetBookListingFields(ids)
 		if err == nil {
 			return out, nil
