@@ -66,6 +66,8 @@ const (
 	vtHoldEvidenceConflict = "edition_evidence_conflict"
 	vtHoldPrimaryVerdict   = "primary_has_fetch_verdict"
 	vtHoldOwnerManual      = "record_owner_manual_only"
+	vtHoldOwnerRejected    = "owner_rejected"
+	vtHoldRejectionUnknown = "owner_rejection_unknown"
 )
 
 // vtDurationTolerance: twins whose known runtimes differ by more than this
@@ -749,6 +751,14 @@ func (f *versionTwinFixer) row(rd vtReaders, gid string, members []database.Book
 			return b.hold(vtHoldOwnerManual, "the twin's record "+why+"; Doctor Who / Big Finish / Torchwood are "+
 				"applied by hand"), true, nil
 		}
+		// The owner's rejections for the primary: nobody picked this record
+		// for the primary, so one the owner rejected for it is never applied
+		// (vtOwnerRejected; the write guard checks again).
+		if why, unknown := vtOwnerRejected(rd, p.core.ID, cand); unknown {
+			return b.hold(vtHoldRejectionUnknown, why), true, nil
+		} else if why != "" {
+			return b.hold(vtHoldOwnerRejected, why), true, nil
+		}
 		if why := vtIdentity(pBook.Title, pAuthors, cand.Title, tAuthors); why != "" {
 			return b.hold(vtHoldIdentity, why), true, nil
 		}
@@ -1422,6 +1432,22 @@ func vtPreWrite(rd vtReaders, d *vtDetail) (map[string]bool, error) {
 	return cleared, nil
 }
 
+// vtOwnerRejected says why cand may not be applied to the primary because
+// the owner rejected it for that book (metafetch.RejectedSet): why is empty
+// when it may, and unknown is true when the rejections could not be read
+// (fail closed: the row is held, the write refused).
+func vtOwnerRejected(rd vtReaders, primaryID string, cand *metafetch.MetadataCandidate) (why string, unknown bool) {
+	rejected, err := metafetch.LoadRejectedCandidates(rd.store, primaryID)
+	if err != nil {
+		return "could not read the owner's rejected matches for the primary: " + err.Error(), true
+	}
+	if rejected.HasCandidate(cand) {
+		return "the owner rejected the twin's record (" + cand.Source + " " + vtRecord(cand) + ") for the primary " +
+			primaryID + "; un-reject it to apply it", false
+	}
+	return "", false
+}
+
 // vtWriteGuard is the check both classes run on the primary's row as it
 // stands at the write: inside the apply's ModifyBook, under the book's write
 // stripe (and on the row as first read, before the apply body; see
@@ -1446,6 +1472,14 @@ func vtPreWrite(rd vtReaders, d *vtDetail) (map[string]bool, error) {
 func vtWriteGuard(rd vtReaders, d *vtDetail, cleared map[string]bool, b *database.Book) error {
 	if err := vtStillNeeds(b, d); err != nil {
 		return err
+	}
+	if d.class == vtClassApplied && d.cand != nil {
+		if why, unknown := vtOwnerRejected(rd, d.primaryID, d.cand); unknown {
+			// Nothing about the row changed: retry once the rejections read.
+			return fmt.Errorf("%w: %s", repairs.ErrRetryLater, why)
+		} else if why != "" {
+			return errVTChanged("%s", why)
+		}
 	}
 	core := b.Core()
 	paths, ff, exts, err := vtITunesInputs(rd, &core)
