@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.211.0
+// version: 1.211.1
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-10
 
@@ -3501,10 +3501,13 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, opts bookWrite
 		var staged bool
 		var err error
 		if identityChanged {
-			if !asinReplaced {
-				oldASIN = ""
+			// stampASIN: the ASIN the row was fetched for, recorded only when
+			// this write also replaces it; "" leaves FetchedForASIN alone.
+			stampASIN := ""
+			if asinReplaced {
+				stampASIN = oldASIN
 			}
-			staged, err = p.stageCacheStaleStamp(batch, id, oldASIN)
+			staged, err = p.stageCacheStaleStamp(batch, id, stampASIN)
 		} else {
 			staged, err = p.stageCacheASINStamp(batch, id, oldASIN)
 		}
@@ -3604,7 +3607,8 @@ func (p *PebbleStore) candidateSearchIdentityChanged(oldBook, newBook *Book) boo
 
 // sameAuthorName reports whether two author ids resolve to authors with the
 // same (trimmed) name. An unreadable or missing author is "not the same": the
-// caller then drops the cached candidates, as it did before the name check.
+// caller then marks the cached row Stale (stageCacheStaleStamp), as it would
+// for any re-credit.
 func (p *PebbleStore) sameAuthorName(a, b int) bool {
 	oldA, err := p.GetAuthorByID(a)
 	if err != nil || oldA == nil {

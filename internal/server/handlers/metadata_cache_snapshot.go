@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_snapshot.go
-// version: 2.2.1
+// version: 2.2.2
 // guid: 9d3c7a51-2e6b-4f08-b4a9-7c1e5f2d8a36
 // last-edited: 2026-10-10
 
@@ -33,7 +33,7 @@ import (
 //
 //   - the metadata cache was written since the snapshot's build began
 //     (database.PebbleStore.MetadataCacheGeneration, which every writer of the
-//     keyspace moves, including UpdateBook's identity-change delete) -- the
+//     keyspace moves, including UpdateBook's identity-change Stale stamp) -- the
 //     normal trigger, so paging an unchanged cache rebuilds nothing;
 //   - a handler action marked it (apply dispatch, clear no-match), or an
 //     overlay found more changed books than it will read per request;
