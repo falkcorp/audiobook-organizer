@@ -1,5 +1,5 @@
 // file: internal/metadata/tag_properties.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 6f3c9a27-4e1d-4b85-9c20-7a5e1d8b3f64
 // last-edited: 2026-10-10
 
@@ -258,7 +258,16 @@ func PlanSnapshotRestore(key, oldSnap, newValue, currentSnap string) (SnapshotRe
 // before anything is written. It then reads the file back and fails unless
 // every property holds what was asked for, so a writer that drops a value, or
 // a removal it did not make, is an error and not a success.
+//
+// It keeps a .bak-* backup when create_backups is on (a rename's tag write);
+// WriteTagPropertiesContext takes the ctx that can opt out.
 func WriteTagProperties(path string, values map[string]string) error {
+	return WriteTagPropertiesContext(context.Background(), path, values)
+}
+
+// WriteTagPropertiesContext is WriteTagProperties under ctx: a ctx wrapped
+// with tagger.WithoutBackup (an operation revert) writes no .bak-* sibling.
+func WriteTagPropertiesContext(ctx context.Context, path string, values map[string]string) error {
 	tags := make(map[string][]string, len(values))
 	for key, v := range values {
 		props, ok := tagProperties[key]
@@ -297,9 +306,7 @@ func WriteTagProperties(path string, values map[string]string) error {
 	if err != nil {
 		return fmt.Errorf("tag properties abs path: %w", err)
 	}
-	// A tag revert is a single-book edit, so it keeps a backup when
-	// create_backups is on.
-	if err := writePropertiesWithTaglib(context.Background(), abs, tags); err != nil {
+	if err := writePropertiesWithTaglib(ctx, abs, tags); err != nil {
 		return fmt.Errorf("write tag properties to %s: %w", path, err)
 	}
 	raw, err := readTagsWithTaglib(abs)

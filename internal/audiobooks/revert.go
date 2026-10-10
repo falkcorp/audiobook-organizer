@@ -1,11 +1,12 @@
 // file: internal/audiobooks/revert.go
-// version: 1.66.0
+// version: 1.67.0
 // guid: d4e5f6a7-b8c9-d0e1-f2a3-b4c5d6e7f8a9
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package audiobooks
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,6 +26,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
+	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
@@ -194,12 +196,28 @@ func NewRevertService(db revertServiceStore) *RevertService {
 // did not store, or a removal it did not make is an error, so the row fails
 // instead of being marked reverted. metadata.WriteMetadataToFile could not be
 // used: its write map drops "" and turns one key into several properties.
+//
+// Every write it makes is part of RevertOperation, so it runs under
+// tagger.WithoutBackup: the revert journal (the operation's recorded
+// changes) is the safety net, and a .bak-* sibling per tag row would copy
+// the file once per reverted tag (owner decision D69, applied to reverts).
 func defaultRevertWriteTags(path string, tags map[string]any) error {
+	return writeTagPropertiesCtx(tagger.WithoutBackup(context.Background()), path, tags)
+}
+
+// defaultRenameWriteTags is the rename's tag writer: the same property write
+// as the revert's, but a rename is a single-book edit, so it keeps a .bak-*
+// backup when create_backups is on.
+func defaultRenameWriteTags(path string, tags map[string]any) error {
+	return writeTagPropertiesCtx(context.Background(), path, tags)
+}
+
+func writeTagPropertiesCtx(ctx context.Context, path string, tags map[string]any) error {
 	values := make(map[string]string, len(tags))
 	for k, v := range tags {
 		values[k] = fmt.Sprint(v)
 	}
-	return metadata.WriteTagProperties(path, values)
+	return metadata.WriteTagPropertiesContext(ctx, path, values)
 }
 
 // lockPaths takes the per-path lock on each distinct non-empty path, in

@@ -1,7 +1,7 @@
 // file: internal/config/persistence_test.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package config
 
@@ -906,7 +906,9 @@ func TestMigrateMetadataScoringFields_FlatBlob(t *testing.T) {
 	assert.Equal(t, float64(0.88), ms["embedding_best_match"])
 	assert.Equal(t, false, ms["llm_enabled"])
 	assert.Equal(t, float64(5), ms["llm_rerank_top_k"])
-	assert.Equal(t, true, ms["write_backup_before"])
+	// The flat write_backup_before_tag_write key is dropped, not carried into
+	// the nested blob: the setting was removed (create_backups is the switch).
+	assert.NotContains(t, ms, "write_backup_before")
 	assert.Equal(t, "/data", result["root_dir"])
 	assert.NotContains(t, result, "metadata_embedding_scoring_enabled")
 	assert.NotContains(t, result, "write_backup_before_tag_write")

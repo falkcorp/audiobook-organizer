@@ -1,7 +1,7 @@
 // file: web/src/pages/Settings.tsx
-// version: 1.62.0
+// version: 1.63.0
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 import { useState, useEffect, useMemo, useRef, ChangeEvent } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
@@ -405,7 +405,6 @@ export function Settings() {
     llm_enabled: false,
     llm_rerank_epsilon: 0.05,
     llm_rerank_top_k: 5,
-    write_backup_before: true,
   });
   const [maintenanceConfig, setMaintenanceConfig] = useState<api.MaintenanceConfig>({
     enabled: true,

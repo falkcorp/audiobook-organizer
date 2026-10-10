@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.173.2
+// version: 2.174.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-10
 
@@ -822,7 +822,6 @@ export interface MetadataScoringConfig {
   llm_enabled: boolean;
   llm_rerank_epsilon: number;
   llm_rerank_top_k: number;
-  write_backup_before: boolean;
 
   // --- new scoring knobs (TASK-02). All optional; the backend fail-open
   // defaults apply when a field is absent. Names mirror the Go json tags.

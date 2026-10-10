@@ -1,7 +1,7 @@
 <!-- file: docs/reference/config-api-shape.md -->
-<!-- version: 1.10.0 -->
+<!-- version: 1.11.0 -->
 <!-- guid: 2b7f9c31-a4e8-4f1d-b8a2-6c5d9e3f2a17 -->
-<!-- last-edited: 2026-10-09 -->
+<!-- last-edited: 2026-10-10 -->
 
 # Config API Shape Reference
 
@@ -382,8 +382,9 @@ interface MetadataScoringConfig {
   llm_enabled: boolean;             // Use LLM to rerank top-K candidates (default: false)
   llm_rerank_epsilon: number;       // Tie-break tolerance for LLM reranking (default: 0.05)
   llm_rerank_top_k: number;         // Send top-K candidates to LLM (default: 5)
-  write_backup_before: boolean;     // Write a tag backup before applying metadata (default: true)
 }
+// write_backup_before was removed 2026-10-10: create_backups is the one switch
+// for keeping a .bak-* copy before a tag write.
 ```
 
 **Flat aliases accepted by PUT /config:**
@@ -395,7 +396,6 @@ interface MetadataScoringConfig {
 | `metadata_llm_rerank_enabled` | `metadata_scoring.llm_enabled` |
 | `metadata_llm_rerank_epsilon` | `metadata_scoring.llm_rerank_epsilon` |
 | `metadata_llm_rerank_top_k` | `metadata_scoring.llm_rerank_top_k` |
-| `metadata_write_backup_before_apply` | `metadata_scoring.write_backup_before` |
 
 ---
 
