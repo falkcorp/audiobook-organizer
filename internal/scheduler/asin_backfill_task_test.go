@@ -1,7 +1,7 @@
 // file: internal/scheduler/asin_backfill_task_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6e1c9a47-3b0d-4f82-a5e9-2d7c8b41f036
-// last-edited: 2026-10-02
+// last-edited: 2026-10-09
 
 package scheduler
 
@@ -126,20 +126,6 @@ func TestASINBackfillTask_DisabledWithoutDef(t *testing.T) {
 	task, ok := ts.GetTask(asinBackfillTaskName)
 	require.True(t, ok)
 	assert.False(t, task.IsEnabled())
-}
-
-// scheduler.isbn-enrichment stays registered but refuses, so a stale schedule
-// row or API call fails loudly instead of writing ASINs by title prefix.
-func TestISBNEnrichmentOp_Retired(t *testing.T) {
-	store := dbmocks.NewMockStore(t)
-	store.EXPECT().UpsertOpDefinitionV2(mock.Anything).Return(nil).Maybe()
-	reg := opsregistry.New(store, slog.New(slog.DiscardHandler), 1, nil)
-	require.NoError(t, (&ExtraOpsRegistrar{}).RegisterISBNEnrichmentOp(reg))
-	def, ok := reg.Def("scheduler.isbn-enrichment")
-	require.True(t, ok, "the retired def must stay registered")
-	err := def.Run(context.Background(), nil, nil)
-	require.ErrorIs(t, err, ErrISBNEnrichmentRetired)
-	assert.Contains(t, err.Error(), "retired: use metafetch.asin-backfill")
 }
 
 // A per-book run from the metadata-apply queue (book_ids set) does NOT block

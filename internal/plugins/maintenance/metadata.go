@@ -1,15 +1,13 @@
 // file: internal/plugins/maintenance/metadata.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: a7b8c9d0-e1f2-3456-0123-678901234567
-// last-edited: 2026-10-02
+// last-edited: 2026-10-09
 
 package maintenance
 
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"time"
 
@@ -54,39 +52,3 @@ func (p *Plugin) runMetadataRefresh(ctx context.Context, _ json.RawMessage, repo
 // Removed 2026-09-27: maintenance.metadata-upgrade duplicated
 // scheduler.metadata-upgrade (internal/scheduler/extra_ops.go), which now
 // lists this ID as a FormerID so old rows and enqueues still resolve.
-
-// --- isbn-enrichment (retired) ---
-
-// errISBNEnrichmentRetired is returned by the retired
-// maintenance.isbn-enrichment op instead of running.
-var errISBNEnrichmentRetired = errors.New("retired: use metafetch.asin-backfill")
-
-// isbnEnrichmentDef is RETIRED (2026-10-02). The job searched Google Books /
-// Open Library and wrote ASINs by title-prefix matching, which put wrong ASINs
-// on books. metafetch.asin-backfill (Audible only, ASIN + ISBN in one op)
-// replaced it and runs from the scheduler's asin_backfill task. The def stays
-// registered so a stale schedule row or API call fails loudly instead of
-// 404ing or writing. Its Run refuses before taking the scan stand-down hold,
-// so a refused run never parks a scan. No Schedule: a retired op must not
-// fire on a cron.
-func (p *Plugin) isbnEnrichmentDef() sdk.OperationDef {
-	return sdk.OperationDef{
-		ID:              "maintenance.isbn-enrichment",
-		Liveness:        sdk.LivenessManual,
-		Plugin:          "maintenance",
-		DisplayName:     "ISBN enrichment (retired)",
-		Description:     "Retired: refuses to run. Use metafetch.asin-backfill, which fills ASINs and audiobook ISBNs from Audible.",
-		ResumePolicy:    sdk.ResumeDrop,
-		DefaultPriority: sdk.PriorityLow,
-		ConcurrencyKey:  "maintenance.isbn-enrichment",
-		Cancellable:     true,
-		Isolate:         false,
-		Timeout:         time.Minute,
-		Capabilities:    []sdk.Capability{sdk.CapLibraryRead},
-		Run:             p.runISBNEnrichment,
-	}
-}
-
-func (p *Plugin) runISBNEnrichment(context.Context, json.RawMessage, sdk.Reporter) error {
-	return fmt.Errorf("maintenance.isbn-enrichment: %w", errISBNEnrichmentRetired)
-}
