@@ -1,5 +1,5 @@
 // file: internal/audiobooks/filter_budget_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 87f0a067-4601-427f-9ecf-398a030c9059
 // last-edited: 2026-10-10
 
@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -189,42 +190,40 @@ func TestCheckFilterSetSize(t *testing.T) {
 // TestLibraryBudget_OneMegabyteDescription: one row with a 1 MB description
 // and the slowest admitted pattern. Uncut, that one match took 5.1 s, which
 // no budget can interrupt; cut to querygrammar.MaxPatternInputBytes it takes
-// about 80 ms, so the search finishes (or is refused) within the budget plus
-// about one cut match.
+// about 80 ms. The bound that matters is the cut itself, asserted on what the
+// matcher is handed (querygrammar.SetMatchInputHookForTesting) rather than on
+// how long the search took, which varies with -race and load.
 func TestLibraryBudget_OneMegabyteDescription(t *testing.T) {
 	ps, err := database.NewPebbleStore(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = ps.Close() })
 	ps.WaitForWarmup()
 	desc := strings.Repeat("A long description of the book with many words and sentences. ", 16700) // ~1 MB
+	require.Greater(t, len(desc), 60*querygrammar.MaxPatternInputBytes)
 	_, err = ps.CreateBook(&database.Book{Title: "One Long Book", FilePath: "/synthetic/long.m4b", Description: &desc})
 	require.NoError(t, err)
 	svc := NewAudiobookService(ps)
 
-	const pattern = `/(?:\pL?){245}zzz/`
-	// The unit no budget can interrupt is one match over the cut input:
-	// measure it here, so the bound holds under -race (which slows each
-	// match about 18x) as well as without it (about 80 ms).
-	tm, err := querygrammar.CompileText(pattern, false)
-	require.NoError(t, err)
-	mStart := time.Now()
-	tm.Match(desc[:querygrammar.MaxPatternInputBytes])
-	oneMatch := time.Since(mStart)
+	var matches, longest atomic.Int64
+	defer querygrammar.SetMatchInputHookForTesting(func(n int) {
+		matches.Add(1)
+		for cur := longest.Load(); int64(n) > cur && !longest.CompareAndSwap(cur, int64(n)); cur = longest.Load() {
+		}
+	})()
 
+	const pattern = `/(?:\pL?){245}zzz/`
 	f := ListFilters{FieldFilters: []FieldFilter{{Field: "description", Value: pattern}}}
-	start := time.Now()
 	books, _, err := svc.GetAudiobooksWithTotal(context.Background(), 50, 0, "", nil, nil, f)
-	took := time.Since(start)
-	t.Logf("1 MB description: %s (one cut match %s), err=%v", took, oneMatch, err)
+	t.Logf("1 MB description: %d match(es), longest input %d bytes, err=%v", matches.Load(), longest.Load(), err)
 	var slow *querygrammar.TooSlowError
 	if err != nil {
-		require.ErrorAs(t, err, &slow)
+		require.ErrorAs(t, err, &slow) // under -race one cut match can outlast the budget
 	} else {
 		require.Empty(t, books)
 	}
-	// Uncut, this one match took 5.1 s (far longer under -race), so the
-	// bound fails if the cut is removed.
-	require.Less(t, took, libraryPatternBudget+2*oneMatch+100*time.Millisecond)
+	require.Positive(t, matches.Load(), "the pattern ran over the description")
+	require.LessOrEqual(t, longest.Load(), int64(querygrammar.MaxPatternInputBytes),
+		"the matcher is handed at most the cut input, never the 1 MB field")
 }
 
 // TestSharedAllowance_OneSlotOneBudget: under WithSharedSearchAllowance the
