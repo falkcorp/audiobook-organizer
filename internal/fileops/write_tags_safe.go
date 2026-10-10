@@ -1,15 +1,19 @@
 // file: internal/fileops/write_tags_safe.go
-// version: 1.8.0
+// version: 1.10.0
 // guid: b4c5d6e7-f8a9-0b1c-2d3e-4f5a6b7c8d9e
-// last-edited: 2026-09-13
+// last-edited: 2026-10-10
 
 package fileops
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -42,12 +46,88 @@ type WriteTagsSafeOptions struct {
 	// bytes, so unlike either SHA it is unchanged by this write — which makes
 	// it the most durable link back to a pristine original.
 	TorrentHash string
+	// KeepBackup leaves the pre-write bytes beside the file as
+	// <name>.bak-<unix seconds> (a -N suffix when that name is taken) when the
+	// tagged copy is renamed in: the create_backups setting.
+	//
+	// How: after the tag write on the temp copy has succeeded, the original is
+	// HARDLINKED to the backup name, so the backup costs no data blocks: once
+	// the rename lands, the backup is the only name of the old inode. path
+	// exists at every instant (nothing renames the original away). Where a
+	// hardlink is refused (EXDEV, EPERM, ENOTSUP/EOPNOTSUPP: some network and
+	// FAT-family filesystems) the backup is a full fsynced copy instead
+	// (CopyFileExclusive).
+	//
+	// Failure: a failed tag write leaves no backup; a failed backup fails the
+	// write and leaves the original untouched; a failed rename removes the
+	// backup again (the original is intact, so the backup adds nothing).
+	//
+	// MTIME CONTRACT. The backup-cleanup sweeps (maintenance.cleanup-old-backups
+	// and scheduler.cleanup-old-backups) age a .bak-* file by its mtime. A
+	// hardlink shares the original's mtime, which can be years old, so after
+	// the rename the backup's mtime is set to now (os.Chtimes): it is then
+	// dated from when it was taken, not from when the audio was last written.
+	// The copy fallback already has mtime now. Both sweeps walk RootDir only,
+	// so a backup beside a file outside the library root is never collected.
+	KeepBackup bool
+}
+
+// maxBackupNameAttempts bounds the suffix search in keepBackup: a second write
+// of the same file within one second must not overwrite the first backup (that
+// one holds the older, more original bytes), so the name gets a -1, -2, ...
+// suffix instead.
+const maxBackupNameAttempts = 100
+
+// linkFile is os.Link and renameFile os.Rename: seams so a test can force the
+// copy fallback and a failed rename.
+var (
+	linkFile   = os.Link
+	renameFile = os.Rename
+)
+
+// linkUnsupported reports whether err from os.Link means this filesystem
+// will not hardlink here, so a full copy must stand in.
+func linkUnsupported(err error) bool {
+	return errors.Is(err, syscall.EXDEV) || errors.Is(err, syscall.EPERM) ||
+		errors.Is(err, syscall.ENOTSUP) || errors.Is(err, syscall.EOPNOTSUPP)
+}
+
+// keepBackup makes a fresh sibling named <path>.bak-<unix> (adding -N when
+// that name is taken) holding path's current bytes, and returns its name and
+// whether it is a hardlink. It hardlinks; where the filesystem refuses a link
+// it copies (CopyFileExclusive: O_EXCL, fsynced file and directory). Both
+// steps are exclusive, so an existing backup is never overwritten.
+func keepBackup(path string, now time.Time) (name string, linked bool, err error) {
+	base := path + ".bak-" + strconv.FormatInt(now.Unix(), 10)
+	useLink := true
+	name = base
+	for i := 1; i <= maxBackupNameAttempts; {
+		if useLink {
+			err = linkFile(path, name)
+			if err != nil && !errors.Is(err, fs.ErrExist) && linkUnsupported(err) {
+				useLink = false
+				continue // same name, by copy
+			}
+		} else {
+			err = CopyFileExclusive(path, name)
+		}
+		if err == nil {
+			return name, useLink, nil
+		}
+		if !errors.Is(err, fs.ErrExist) {
+			return "", false, err
+		}
+		name = base + "-" + strconv.Itoa(i)
+		i++
+	}
+	return "", false, fmt.Errorf("no free backup name for %s after %d attempts", path, maxBackupNameAttempts)
 }
 
 // WriteTagsSafe writes audio metadata tags to path safely:
 //  1. Copies the file to a sibling temp file in the same directory
 //  2. Calls writeFn(tmpPath) to perform the actual tag write on the copy
-//  3. On success: atomically renames the temp file over the original
+//  3. With opts.KeepBackup, hardlinks (or copies) the original to <path>.bak-<unix>
+//  4. On success: atomically renames the temp file over the original
 //
 // When BOTH opts.BookFileID and opts.Store are set it additionally computes
 // original_file_hash before the write and post_metadata_hash after it, and
@@ -132,9 +212,38 @@ func WriteTagsSafe(path string, writeFn func(tmpPath string) error, opts WriteTa
 		return originalHash, "", fmt.Errorf("WriteTagsSafe: writeFn: %w", err)
 	}
 
+	// Step 4a: keep the pre-write bytes beside the file (see KeepBackup). This
+	// runs only after writeFn succeeded, so a failed tag write leaves no
+	// backup, and it links or copies rather than renaming the original away,
+	// so path never stops existing.
+	var backupPath string
+	var backupLinked bool
+	if opts.KeepBackup {
+		if backupPath, backupLinked, err = keepBackup(path, time.Now()); err != nil {
+			return originalHash, "", fmt.Errorf("WriteTagsSafe: backup original: %w", err)
+		}
+	}
+
 	// Step 5: atomic rename — old file replaced only on success.
-	if err = os.Rename(tmpPath, path); err != nil {
+	if err = renameFile(tmpPath, path); err != nil {
+		if backupPath != "" {
+			// The original is intact and identical to the backup: drop it.
+			_ = os.Remove(backupPath)
+		}
 		return originalHash, "", fmt.Errorf("WriteTagsSafe: rename: %w", err)
+	}
+
+	// Step 5a: date a hardlinked backup from now. The cleanup sweeps age
+	// .bak-* by mtime (see KeepBackup, MTIME CONTRACT); before the rename the
+	// link shared the live file's inode, so this could not run earlier
+	// without changing the original's mtime. A failure only makes the backup
+	// eligible for cleanup sooner, so it is logged, not returned.
+	if backupLinked {
+		now := time.Now()
+		if cerr := os.Chtimes(backupPath, now, now); cerr != nil {
+			logger.New("fileops").Warn("WriteTagsSafe: backup %s keeps the original's mtime; the cleanup sweep may remove it early: %v",
+				logger.SanitizeLogValue(backupPath), cerr)
+		}
 	}
 
 	// Step 6: fingerprint the result (only when it will be persisted).

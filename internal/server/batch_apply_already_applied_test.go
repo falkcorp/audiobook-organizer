@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_already_applied_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5b2e8c71-4d9a-4f06-a3e1-7c8d2f9b0e46
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 
 package server
 
@@ -56,7 +56,7 @@ func TestApplyCachedCandidate_SkipsAlreadyAppliedBook(t *testing.T) {
 		for _, tc := range cases {
 			t.Run(status+"/"+tc.name, func(t *testing.T) {
 				svc := &fakeApplySvc{candidates: raw}
-				out := applyCachedCandidateForBookTimed(svc, appliedBooks(status), "b1", true, nil,
+				out := applyCachedCandidateForBookTimed(context.Background(), svc, appliedBooks(status), "b1", true, nil,
 					metafetch.NewApplyPhaseTimings(), nil, tc.pin, tc.mode)
 				if out.Applied || len(svc.appliedIDs) != 0 || len(svc.finishCalls) != 0 || len(svc.preflightIDs) != 0 {
 					t.Fatalf("an applied book was applied again: outcome %+v applied %v finish %d preflight %v",
@@ -83,7 +83,7 @@ func TestApplyCachedCandidate_RowApprovalReappliesAppliedBook(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc := &fakeApplySvc{candidates: raw}
-	out := applyCachedCandidateForBookTimed(svc, appliedBooks("matched"), "b1", false, nil,
+	out := applyCachedCandidateForBookTimed(context.Background(), svc, appliedBooks("matched"), "b1", false, nil,
 		metafetch.NewApplyPhaseTimings(), nil, rowPin(cand), "")
 	if !out.Applied || len(svc.appliedIDs) != 1 {
 		t.Fatalf("the owner's row approval of an applied book was refused: outcome %+v", out)
@@ -95,7 +95,7 @@ func TestApplyCachedCandidate_RowApprovalReappliesAppliedBook(t *testing.T) {
 	other := cand
 	other.Title = "Some Other Record"
 	stale := &fakeApplySvc{candidates: raw}
-	out = applyCachedCandidateForBookTimed(stale, appliedBooks("matched"), "b1", false, nil,
+	out = applyCachedCandidateForBookTimed(context.Background(), stale, appliedBooks("matched"), "b1", false, nil,
 		metafetch.NewApplyPhaseTimings(), nil, rowPin(other), "")
 	if out.Applied || out.Reason != applySkipStaleCandidate {
 		t.Fatalf("stale row pin on an applied book: outcome %+v, want %s", out, applySkipStaleCandidate)

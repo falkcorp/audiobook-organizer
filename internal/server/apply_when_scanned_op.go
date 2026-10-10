@@ -1,7 +1,7 @@
 // file: internal/server/apply_when_scanned_op.go
-// version: 1.7.0
+// version: 1.8.0
 // guid: 4c1f7e2a-9b3d-4e85-a6f0-2d8c5b71e934
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 
 package server
 
@@ -22,6 +22,7 @@ import (
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/scanlock"
 	metadatahandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -282,7 +283,7 @@ func (s *Server) applyOpResultBooks(ctx context.Context, opID string, bookIDs []
 					hold = h
 				}
 				defer hold.Release()
-				outcomes[i] = s.applyOpResultCandidateLocked(books, opID, bookID, byBook, claims)
+				outcomes[i] = s.applyOpResultCandidateLocked(ctx, books, opID, bookID, byBook, claims)
 				return nil
 			})
 		}
@@ -340,7 +341,7 @@ func (s *Server) runQueuedOpResultCandidate(ctx context.Context, q metadatahandl
 	if err != nil {
 		return err
 	}
-	o := s.applyOpResultCandidateLocked(s.store, q.OperationID, q.BookID, byBook, claims)
+	o := s.applyOpResultCandidateLocked(ctx, s.store, q.OperationID, q.BookID, byBook, claims)
 	switch {
 	case o.blocked:
 		return fmt.Errorf("not applied: %s", o.blockMsg)
@@ -354,7 +355,7 @@ func (s *Server) runQueuedOpResultCandidate(ctx context.Context, q metadatahandl
 // holds the book's scan lock; the file work is submitted before this returns,
 // so the pool's pending mark is in place before the lock is released and the
 // scanner cannot read the old tags in between.
-func (s *Server) applyOpResultCandidateLocked(books bookReader, opID, bookID string, byBook map[string]database.OperationResult, claims *applygate.ClaimIndex) opResultApplyOutcome {
+func (s *Server) applyOpResultCandidateLocked(ctx context.Context, books bookReader, opID, bookID string, byBook map[string]database.OperationResult, claims *applygate.ClaimIndex) opResultApplyOutcome {
 	mfs := s.metadataFetchService
 	opResult, ok := byBook[bookID]
 	if !ok {
@@ -427,25 +428,38 @@ func (s *Server) applyOpResultCandidateLocked(books bookReader, opID, bookID str
 		}), "applied status not saved; the review dialog may list this book again", "op_id", opID, "book_id", bookID)
 	}
 
-	// Queue file I/O through the worker pool (bounded concurrency). Submit
-	// marks the book pending for the scanner until the job has run.
-	if pool := s.fileIOPool; pool != nil {
-		submitted := pool.Submit(bookID, func() {
-			// Logged, not returned: this runs in the pool after the caller
-			// has already answered. The shared sequel: cover download, file
-			// I/O, and the tags exactly once.
-			if err := mfs.FinishApplyFileWork(bookID, pendingCover, true, true, nil); err != nil {
-				batchApplyCandidatesLog.Warn("background apply file work failed for book %s: %s",
-					logger.SanitizeLogValue(bookID), logger.SanitizeLogValue(err.Error()))
-			}
-		})
-		if !submitted {
-			// The pool is stopping (shutdown): the database has the applied
-			// metadata and the files do not. Say so; the next write-back or
-			// apply of the book writes them.
-			batchApplyCandidatesLog.Warn("file work for book %s dropped: the file-I/O pool is stopped; its tags and names were not updated",
-				logger.SanitizeLogValue(bookID))
-		}
-	}
+	s.submitOpResultFileWork(ctx, bookID, pendingCover)
 	return opResultApplyOutcome{applied: true}
+}
+
+// submitOpResultFileWork queues one batch-apply-candidates book's file work on
+// the file-I/O pool (bounded concurrency); Submit marks the book pending for
+// the scanner until the job has run. No pool, no file work.
+//
+// Every caller is a batch-apply-candidates request (applied now, or queued as
+// metadata.apply-when-scanned behind a scan), so the job runs under
+// tagger.WithoutBackup: no .bak-* sibling per file (owner decision D69).
+func (s *Server) submitOpResultFileWork(ctx context.Context, bookID, pendingCover string) {
+	pool := s.fileIOPool
+	if pool == nil {
+		return
+	}
+	mfs := s.metadataFetchService
+	fileCtx := tagger.WithoutBackup(ctx)
+	submitted := pool.Submit(bookID, func() {
+		// Logged, not returned: this runs in the pool after the caller has
+		// already answered. The shared sequel: cover download, file I/O, and
+		// the tags exactly once.
+		if err := finishApplyFileWork(mfs, fileCtx, bookID, pendingCover, true, true, nil); err != nil {
+			batchApplyCandidatesLog.Warn("background apply file work failed for book %s: %s",
+				logger.SanitizeLogValue(bookID), logger.SanitizeLogValue(err.Error()))
+		}
+	})
+	if !submitted {
+		// The pool is stopping (shutdown): the database has the applied
+		// metadata and the files do not. Say so; the next write-back or
+		// apply of the book writes them.
+		batchApplyCandidatesLog.Warn("file work for book %s dropped: the file-I/O pool is stopped; its tags and names were not updated",
+			logger.SanitizeLogValue(bookID))
+	}
 }

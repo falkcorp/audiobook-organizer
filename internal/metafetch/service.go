@@ -1,5 +1,5 @@
 // file: internal/metafetch/service.go
-// version: 5.51.1
+// version: 5.53.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
 // last-edited: 2026-10-10
 
@@ -227,8 +227,8 @@ type Service struct {
 	organizeSvc  *organizer.Service
 
 	// tagWriter replaces the audio-tag write in tests so they can count it
-	// (see writeTags). Nil in production.
-	tagWriter func(id string) (int, error)
+	// (see writeTags) and see the ctx it carries. Nil in production.
+	tagWriter func(ctx context.Context, id string) (int, error)
 
 	// coverDownload replaces metadata.DownloadCoverArt in tests (its SSRF guard
 	// refuses loopback, so an httptest server cannot stand in). Nil in production.
@@ -570,7 +570,7 @@ var coverEmbedLog = logger.New("metafetch-cover-embed")
 // the library copy, for a protected book). It used to resolve the copy again
 // here, under a copy policy, which is how a step could write a copy its job
 // had not locked; now it only refuses a protected book outright.
-func (mfs *Service) embedCoverInBookFiles(book *database.Book, coverPath string) {
+func (mfs *Service) embedCoverInBookFiles(ctx context.Context, book *database.Book, coverPath string) {
 	if !config.Snapshot().EmbedCoverArt {
 		coverEmbedLog.Debug("cover embed skipped: embed_cover_art setting is off")
 		return
@@ -670,7 +670,7 @@ func (mfs *Service) embedCoverInBookFiles(book *database.Book, coverPath string)
 		if mfs.db != nil {
 			deps.HashStore = mfs.db
 		}
-		err := tagger.EmbedCoverArtSafe(context.Background(), f, coverPath, deps)
+		err := tagger.EmbedCoverArtSafe(ctx, f, coverPath, deps)
 		switch {
 		case errors.Is(err, tagger.ErrProtectedPathWrite):
 			// The guard refused a protected file (no library copy to write

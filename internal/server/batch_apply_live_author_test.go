@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_live_author_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6b0e3f27-94c1-4a8d-b2e5-1d7c9a4f0e63
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 //
 // The certainty gate must judge a candidate against the book's LIVE author
 // (AuthorID and the book_authors join), never the denormalized Book.Author
@@ -14,6 +14,7 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -173,7 +174,7 @@ func TestGateUsesLiveAuthor_ReadFailureRefuses(t *testing.T) {
 			books, cand := valisFixture(nil)
 			mut(&books)
 			svc := &fakeApplySvc{candidates: candidateJSON(t, cand)}
-			out := applyCachedCandidateForBookTimed(svc, books, "valis", false, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand), "")
+			out := applyCachedCandidateForBookTimed(context.Background(), svc, books, "valis", false, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand), "")
 			if out.Applied || out.Reason != applySkipAuthorsUnreadable {
 				t.Fatalf("outcome %+v, want %s", out, applySkipAuthorsUnreadable)
 			}

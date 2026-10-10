@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_one_test.go
-// version: 1.21.2
+// version: 1.22.0
 // guid: 9d2b71fa-30c8-4e57-a614-8b5e0c7f2d93
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 //
 // Regression tests for applying ONE book's cached metadata candidate.
 //
@@ -14,6 +14,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"reflect"
@@ -50,6 +51,8 @@ type fakeApplySvc struct {
 	finishCalls   []finishCall
 	// checkpoints is the stand-down checkpoint each FinishApplyFileWork got.
 	checkpoints []func() error
+	// ctxs is the context each FinishApplyFileWork got (the backup opt-out).
+	ctxs []context.Context
 	// identityErr is what ValidateCachedIdentityForBook reports.
 	identityErr error
 	// preflightErr is what RenamePreflight reports; preflightIDs records calls.
@@ -198,7 +201,7 @@ func TestApplyCachedCandidate_HistoryIncompleteIsAppliedAndFlagged(t *testing.T)
 		candidates: candidateJSON(t, cand),
 		historyErr: errors.Join(errors.New("change history not recorded: disk full"), metafetch.ErrApplyHistoryIncomplete),
 	}
-	out := applyCachedCandidateForBookTimed(svc, books, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand), "")
+	out := applyCachedCandidateForBookTimed(context.Background(), svc, books, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand), "")
 	if !out.Applied || !out.OwnerReviewed || !out.HistoryFailed || !errors.Is(out.Err, metafetch.ErrApplyHistoryIncomplete) {
 		t.Fatalf("outcome %+v, want applied, owner-reviewed, history failed", out)
 	}
@@ -208,7 +211,7 @@ func TestApplyCachedCandidate_HistoryIncompleteIsAppliedAndFlagged(t *testing.T)
 
 	// Any other apply error is still a failed apply.
 	svc = &fakeApplySvc{candidates: candidateJSON(t, cand), applyErr: errors.New("boom")}
-	out = applyCachedCandidateForBookTimed(svc, books, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand), "")
+	out = applyCachedCandidateForBookTimed(context.Background(), svc, books, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand), "")
 	if out.Applied || out.HistoryFailed || out.Reason != applySkipApplyFailed {
 		t.Fatalf("plain apply error: outcome %+v, want %s", out, applySkipApplyFailed)
 	}
@@ -226,7 +229,7 @@ func TestApplyCachedCandidate_HistoryAndWriteBackFailuresBothSurface(t *testing.
 			historyErr: errors.Join(errors.New("change history not recorded: disk full"), metafetch.ErrApplyHistoryIncomplete),
 			finishErr:  errors.New("rename files: cross-device link"),
 		}
-		out := applyCachedCandidateForBookTimed(svc, books, "b1", writeBack, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand), "")
+		out := applyCachedCandidateForBookTimed(context.Background(), svc, books, "b1", writeBack, nil, metafetch.NewApplyPhaseTimings(), nil, rowPin(cand), "")
 		if !out.Applied || !out.HistoryFailed || !out.WriteBackFailed {
 			t.Fatalf("writeBack=%v: outcome %+v, want applied with history AND write-back flagged", writeBack, out)
 		}
@@ -245,14 +248,15 @@ func TestApplyCachedCandidate_HistoryAndWriteBackFailuresBothSurface(t *testing.
 	}
 }
 
-func (f *fakeApplySvc) FinishApplyFileWork(id, pendingCoverURL string, fileIO, writeTags bool, checkpoint func() error) error {
+func (f *fakeApplySvc) FinishApplyFileWork(ctx context.Context, id, pendingCoverURL string, fileIO, writeTags bool, checkpoint func() error) error {
+	f.ctxs = append(f.ctxs, ctx)
 	f.finishCalls = append(f.finishCalls, finishCall{id: id, cover: pendingCoverURL, fileIO: fileIO, writeTags: writeTags})
 	f.checkpoints = append(f.checkpoints, checkpoint)
 	return f.finishErr
 }
 
-func (f *fakeApplySvc) FinishApplyFileWorkTimed(id, pendingCoverURL string, fileIO, writeTags bool, checkpoint func() error, _ *metafetch.ApplyPhaseTimings) error {
-	return f.FinishApplyFileWork(id, pendingCoverURL, fileIO, writeTags, checkpoint)
+func (f *fakeApplySvc) FinishApplyFileWorkTimed(ctx context.Context, id, pendingCoverURL string, fileIO, writeTags bool, checkpoint func() error, _ *metafetch.ApplyPhaseTimings) error {
+	return f.FinishApplyFileWork(ctx, id, pendingCoverURL, fileIO, writeTags, checkpoint)
 }
 
 // The metadata.batch-apply-cached op holds a scan stand-down, and its check

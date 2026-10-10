@@ -1,11 +1,12 @@
 // file: internal/server/batch_apply_no_match_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8d4f2a61-0c7b-4e93-b5a2-6f1e9d3c7a08
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -56,7 +57,7 @@ func TestApplyCachedCandidate_ReviewApprovalOverridesNoMatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	pin := rowPin(cand)
-	out := applyCachedCandidateForBookTimed(svc, noMatchBooks(), "b1", false, nil,
+	out := applyCachedCandidateForBookTimed(context.Background(), svc, noMatchBooks(), "b1", false, nil,
 		metafetch.NewApplyPhaseTimings(), nil, pin, "")
 	if !out.Applied || len(svc.appliedIDs) != 1 {
 		t.Fatalf("the owner's approval was refused: outcome %+v", out)

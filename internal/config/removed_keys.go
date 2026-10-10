@@ -1,7 +1,7 @@
 // file: internal/config/removed_keys.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4c3e37ec-db93-46dc-bc36-a98e5c169f53
-// last-edited: 2026-09-12
+// last-edited: 2026-10-10
 
 package config
 
@@ -20,6 +20,11 @@ const sqliteRemovedMessage = "the enable_sqlite setting (the --enable-sqlite3-i-
 const autoFetchRemovedMessage = "the auto_fetch_metadata setting was removed: nothing ever read it. " +
 	"Each auto-fetch has its own switch: organize's fetch_metadata_first, the iTunes import's fetch-metadata option, " +
 	"and the per-book Fetch button"
+
+// writeBackupBeforeRemovedMessage explains the removal of the second backup switch.
+const writeBackupBeforeRemovedMessage = "the metadata_scoring.write_backup_before setting (formerly " +
+	"write_backup_before_tag_write) was removed: create_backups is the one switch for keeping a .bak-* " +
+	"copy of a file before a tag write"
 
 // removedConfigKey is a setting that used to exist and no longer does.
 type removedConfigKey struct {
@@ -48,6 +53,10 @@ var removedConfigKeys = []removedConfigKey{
 	// settings row still carrying it gets the removed-setting warning instead of
 	// being ignored in silence. The web settings page no longer sends it.
 	{key: "auto_fetch_metadata", message: autoFetchRemovedMessage},
+	// Removed 2026-10-10 (01-P79b). The flat legacy row/blob name and the
+	// nested viper/env name.
+	{key: "write_backup_before_tag_write", message: writeBackupBeforeRemovedMessage},
+	{key: "metadata_scoring.write_backup_before", message: writeBackupBeforeRemovedMessage},
 }
 
 // removedKeyInUpdate returns the rejection text for the first removed key

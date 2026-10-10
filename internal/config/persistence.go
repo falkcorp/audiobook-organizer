@@ -1,7 +1,7 @@
 // file: internal/config/persistence.go
-// version: 1.44.0
+// version: 1.45.0
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package config
 
@@ -263,8 +263,10 @@ func migrateDedupBlob(blob string) (string, bool) {
 	return string(migrated), true
 }
 
-// migrateMetadataScoringBlob rewrites flat metadata_embedding_* and write_backup_before_tag_write
-// fields to the nested MetadataScoringConfig format. Safe to call repeatedly.
+// migrateMetadataScoringBlob rewrites flat metadata_embedding_* fields to the
+// nested MetadataScoringConfig format and drops the flat
+// write_backup_before_tag_write key (that setting was removed 2026-10-10;
+// create_backups is the one backup switch). Safe to call repeatedly.
 // Returns (blob, false) if already nested or no flat keys present.
 func migrateMetadataScoringBlob(blob string) (string, bool) {
 	var raw map[string]any
@@ -281,7 +283,6 @@ func migrateMetadataScoringBlob(blob string) (string, bool) {
 		MetadataLLMScoringEnabled       bool    `json:"metadata_llm_scoring_enabled"`
 		MetadataLLMRerankEpsilon        float64 `json:"metadata_llm_rerank_epsilon"`
 		MetadataLLMRerankTopK           int     `json:"metadata_llm_rerank_top_k"`
-		WriteBackupBeforeTagWrite       bool    `json:"write_backup_before_tag_write"`
 	}
 	var old flatShape
 	json.Unmarshal([]byte(blob), &old) //nolint:errcheck
@@ -292,7 +293,6 @@ func migrateMetadataScoringBlob(blob string) (string, bool) {
 		"llm_enabled":          old.MetadataLLMScoringEnabled,
 		"llm_rerank_epsilon":   old.MetadataLLMRerankEpsilon,
 		"llm_rerank_top_k":     old.MetadataLLMRerankTopK,
-		"write_backup_before":  old.WriteBackupBeforeTagWrite,
 	}
 	delete(raw, "metadata_embedding_scoring_enabled")
 	delete(raw, "metadata_embedding_min_score")
@@ -1576,11 +1576,6 @@ func applySetting(key, value, typ string) error {
 			if n, err := strconv.Atoi(value); err == nil {
 				c.MetadataScoring.LLMRerankTopK = n
 			}
-		case "write_backup_before_tag_write":
-			if b, err := strconv.ParseBool(value); err == nil {
-				c.MetadataScoring.WriteBackupBefore = b
-			}
-
 		default:
 			applyErr = fmt.Errorf("unknown setting key: %s", key)
 		}

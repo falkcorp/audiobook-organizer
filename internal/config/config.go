@@ -1,7 +1,7 @@
 // file: internal/config/config.go
-// version: 1.144.0
+// version: 1.145.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package config
 
@@ -520,7 +520,8 @@ type MetadataScoringConfig struct {
 	LLMEnabled         bool    `json:"llm_enabled"          mapstructure:"llm_enabled"`
 	LLMRerankEpsilon   float64 `json:"llm_rerank_epsilon"   mapstructure:"llm_rerank_epsilon"`
 	LLMRerankTopK      int     `json:"llm_rerank_top_k"     mapstructure:"llm_rerank_top_k"`
-	WriteBackupBefore  bool    `json:"write_backup_before"  mapstructure:"write_backup_before"`
+	// write_backup_before was removed 2026-10-10: create_backups is the one
+	// switch for pre-write backups (removedConfigKeys).
 
 	// --- new: transcription boosts (defaults 2.0 / 1.4 / 1.6 / 1.4) ---
 	TranscriptionTitleExactBoost  float64 `json:"transcription_title_exact_boost"  mapstructure:"transcription_title_exact_boost"`
@@ -2777,7 +2778,6 @@ func InitConfig() {
 	viper.SetDefault("metadata_scoring.llm_enabled", false)
 	viper.SetDefault("metadata_scoring.llm_rerank_epsilon", 0.05)
 	viper.SetDefault("metadata_scoring.llm_rerank_top_k", 5)
-	viper.SetDefault("metadata_scoring.write_backup_before", true)
 	// Scoring literals extracted into config (INIT-3-T1) — defaults equal
 	// today's hardcoded literals so behavior is bit-identical until an
 	// operator tunes a knob. See MetadataScoringConfig for field docs.
@@ -2836,7 +2836,6 @@ func InitConfig() {
 	viper.BindEnv("metadata_scoring.llm_enabled", "METADATA_SCORING_LLM_ENABLED")                                           //nolint:errcheck
 	viper.BindEnv("metadata_scoring.llm_rerank_epsilon", "METADATA_SCORING_LLM_RERANK_EPSILON")                             //nolint:errcheck
 	viper.BindEnv("metadata_scoring.llm_rerank_top_k", "METADATA_SCORING_LLM_RERANK_TOP_K")                                 //nolint:errcheck
-	viper.BindEnv("metadata_scoring.write_backup_before", "METADATA_SCORING_WRITE_BACKUP_BEFORE")                           //nolint:errcheck
 	viper.BindEnv("metadata_scoring.transcription_title_exact_boost", "METADATA_SCORING_TRANSCRIPTION_TITLE_EXACT_BOOST")   //nolint:errcheck
 	viper.BindEnv("metadata_scoring.transcription_title_substr_boost", "METADATA_SCORING_TRANSCRIPTION_TITLE_SUBSTR_BOOST") //nolint:errcheck
 	viper.BindEnv("metadata_scoring.transcription_author_boost", "METADATA_SCORING_TRANSCRIPTION_AUTHOR_BOOST")             //nolint:errcheck
@@ -3193,7 +3192,6 @@ func InitConfig() {
 				LLMEnabled:         viper.GetBool("metadata_scoring.llm_enabled"),
 				LLMRerankEpsilon:   viper.GetFloat64("metadata_scoring.llm_rerank_epsilon"),
 				LLMRerankTopK:      viper.GetInt("metadata_scoring.llm_rerank_top_k"),
-				WriteBackupBefore:  viper.GetBool("metadata_scoring.write_backup_before"),
 
 				TranscriptionTitleExactBoost:  viper.GetFloat64("metadata_scoring.transcription_title_exact_boost"),
 				TranscriptionTitleSubstrBoost: viper.GetFloat64("metadata_scoring.transcription_title_substr_boost"),
@@ -3839,7 +3837,6 @@ func ResetToDefaults() {
 				LLMEnabled:         false,
 				LLMRerankEpsilon:   0.05,
 				LLMRerankTopK:      5,
-				WriteBackupBefore:  true,
 
 				TranscriptionTitleExactBoost:  2.0,
 				TranscriptionTitleSubstrBoost: 1.4,

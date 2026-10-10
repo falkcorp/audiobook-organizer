@@ -1,7 +1,7 @@
 // file: internal/server/scanlock_order_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3a8d0f52-6c1e-4b97-9e24-d71b5a0c8e63
-// last-edited: 2026-09-30
+// last-edited: 2026-10-10
 
 package server
 
@@ -130,7 +130,7 @@ func TestLockOrder_ApplyTakesL0ThenFileWorkTakesL1(t *testing.T) {
 	jobDone := make(chan struct{})
 	require.True(t, pool.Submit(id, func() {
 		defer close(jobDone)
-		_ = mfs.FinishApplyFileWork(id, "", true, true, nil)
+		_ = mfs.FinishApplyFileWork(context.Background(), id, "", true, true, nil)
 	}))
 	hold.Release()
 

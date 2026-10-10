@@ -1,7 +1,7 @@
 // file: internal/metafetch/apply_writes_test.go
-// version: 1.11.0
+// version: 1.13.1
 // guid: 5d095e77-781b-4acb-8d3f-c564f5f88f77
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 //
 // Pins that a metadata apply writes every selected field, never a deselected
 // one, records provenance for every field it writes, downloads the new cover,
@@ -341,7 +341,7 @@ func fileWorkHarness(t *testing.T, rootDir string, autoRename, autoTags bool, fi
 	}
 	svc := NewService(mock)
 	var calls []string
-	svc.tagWriter = func(id string) (int, error) {
+	svc.tagWriter = func(_ context.Context, id string) (int, error) {
 		calls = append(calls, "tags:"+id)
 		return 1, nil
 	}
@@ -378,7 +378,7 @@ func TestFinishApplyFileWork_WritesTagsOnce(t *testing.T) {
 	}
 	for _, tt := range tests {
 		svc, calls, _ := fileWorkHarness(t, "", false, tt.autoTags, nil)
-		require.NoError(t, svc.FinishApplyFileWork("b1", "", tt.fileIO, tt.writeTags, nil))
+		require.NoError(t, svc.FinishApplyFileWork(context.Background(), "b1", "", tt.fileIO, tt.writeTags, nil))
 		assert.Equal(t, tt.want, countPrefix(*calls, "tags:"),
 			"auto_write_tags=%v fileIO=%v writeTags=%v: tag writes", tt.autoTags, tt.fileIO, tt.writeTags)
 	}
@@ -388,11 +388,11 @@ func TestFinishApplyFileWork_WritesTagsOnce(t *testing.T) {
 // one reported (moved here from the batch path's tests with the logic).
 func TestFinishApplyFileWork_RenameFailureStillWritesTags(t *testing.T) {
 	svc, calls, _ := fileWorkHarness(t, "", true, false, errors.New("list exploded"))
-	svc.tagWriter = func(id string) (int, error) {
+	svc.tagWriter = func(_ context.Context, id string) (int, error) {
 		*calls = append(*calls, "tags:"+id)
 		return 0, errors.New("downstream symptom")
 	}
-	err := svc.FinishApplyFileWork("b1", "", true, true, nil)
+	err := svc.FinishApplyFileWork(context.Background(), "b1", "", true, true, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "list exploded", "the rename-side fault must win")
 	assert.Equal(t, 1, countPrefix(*calls, "tags:"))
@@ -402,7 +402,7 @@ func TestFinishApplyFileWork_RenameFailureStillWritesTags(t *testing.T) {
 func TestFinishApplyFileWork_DownloadsCoverFirst(t *testing.T) {
 	const cover = "https://covers.example.test/new.jpg"
 	svc, calls, book := fileWorkHarness(t, t.TempDir(), false, false, nil)
-	require.NoError(t, svc.FinishApplyFileWork("b1", cover, true, true, nil))
+	require.NoError(t, svc.FinishApplyFileWork(context.Background(), "b1", cover, true, true, nil))
 	assert.Equal(t, []string{"cover:" + cover, "tags:b1"}, *calls)
 	require.NotNil(t, book.CoverURL)
 	assert.Equal(t, "/api/v1/covers/local/b1.jpg", *book.CoverURL)
@@ -437,7 +437,7 @@ func TestFinishApplyFileWork_StopsWhereStandDownIsLost(t *testing.T) {
 				}
 				return nil
 			}
-			err := svc.FinishApplyFileWork("b1", cover, tt.fileIO, tt.writeTags, checkpoint)
+			err := svc.FinishApplyFileWork(context.Background(), "b1", cover, tt.fileIO, tt.writeTags, checkpoint)
 			require.ErrorIs(t, err, lost)
 			assert.Contains(t, err.Error(), "stopped before "+tt.wantStep)
 			assert.Equal(t, tt.wantCalls, *calls, "a step ran after the stand-down was lost")
@@ -633,15 +633,15 @@ func TestFinishAutoFetchFileWork_NeverCreatesALibraryCopy(t *testing.T) {
 		},
 	})
 	var tags []string
-	svc.tagWriter = func(id string) (int, error) { tags = append(tags, id); return 1, nil }
+	svc.tagWriter = func(_ context.Context, id string) (int, error) { tags = append(tags, id); return 1, nil }
 
-	require.NoError(t, svc.FinishAutoFetchFileWork("b1", "", true))
+	require.NoError(t, svc.FinishAutoFetchFileWork(context.Background(), "b1", "", true))
 	assert.Empty(t, tags, "no library copy: auto-fetch must not touch the files")
 
 	siblings = []database.Book{*book, {ID: "lib1", Title: "A Book", FilePath: filepath.Join(root, "A Book"), VersionGroupID: &vg}}
 	locks := &testPathLocks{}
 	svc.SetPathLocker(locks.lock)
-	require.NoError(t, svc.FinishAutoFetchFileWork("b1", "", true))
+	require.NoError(t, svc.FinishAutoFetchFileWork(context.Background(), "b1", "", true))
 	// The tag write is asked for b1; writeBackForBook resolves the copy. The
 	// locks show which files were written: lib1's, under lib1's book lock.
 	assert.Equal(t, []string{"b1"}, tags, "an existing library copy gets the file work, tagged once")
@@ -773,7 +773,7 @@ func TestFileWork_AutoFetchAndManualApplySerializeOnLibraryCopyPath(t *testing.T
 			// the failing direction -- no race between two sleeps decides it.
 			entered := make(chan string, 2)
 			proceed := make(chan struct{})
-			svc.tagWriter = func(id string) (int, error) {
+			svc.tagWriter = func(_ context.Context, id string) (int, error) {
 				entered <- id
 				<-proceed
 				return 1, nil
@@ -782,14 +782,14 @@ func TestFileWork_AutoFetchAndManualApplySerializeOnLibraryCopyPath(t *testing.T
 			svc.SetPathLocker(locks.lock)
 
 			var wg sync.WaitGroup
-			wg.Go(func() { assert.NoError(t, svc.FinishAutoFetchFileWork("a", "", true)) })
+			wg.Go(func() { assert.NoError(t, svc.FinishAutoFetchFileWork(context.Background(), "a", "", true)) })
 			select {
 			case <-entered:
 			case <-time.After(5 * time.Second):
 				close(proceed)
 				t.Fatal("auto-fetch of A never reached its tag write")
 			}
-			wg.Go(func() { assert.NoError(t, svc.FinishApplyFileWork("b", "", true, true, nil)) })
+			wg.Go(func() { assert.NoError(t, svc.FinishApplyFileWork(context.Background(), "b", "", true, true, nil)) })
 			select {
 			case id := <-entered:
 				t.Errorf("the manual apply of B reached its tag write (id %q) while auto-fetch of A was writing B's files", id)
@@ -805,10 +805,10 @@ func TestFileWork_AutoFetchAndManualApplySerializeOnLibraryCopyPath(t *testing.T
 			// A manual apply of A itself writes B's files too (through the rename
 			// pipeline when auto_write_tags_on_apply is on), so its path locks
 			// must name B's path and never A's.
-			svc.tagWriter = func(string) (int, error) { return 1, nil }
+			svc.tagWriter = func(context.Context, string) (int, error) { return 1, nil }
 			manual := &testPathLocks{}
 			svc.SetPathLocker(manual.lock)
-			require.NoError(t, svc.FinishApplyFileWork("a", "", true, true, nil))
+			require.NoError(t, svc.FinishApplyFileWork(context.Background(), "a", "", true, true, nil))
 			assert.Contains(t, manual.taken(), b.FilePath, "a manual apply of A must lock its library copy's path")
 			assert.NotContains(t, manual.taken(), a.FilePath, "a manual apply of A must never key a lock on A's protected path")
 		})
@@ -928,7 +928,7 @@ func TestFinishApplyFileWork_LocksALibraryCopyItCreates(t *testing.T) {
 	svc, h := newCopyHarness(t)
 	entered := make(chan string, 4)
 	proceed := make(chan struct{})
-	svc.tagWriter = func(id string) (int, error) {
+	svc.tagWriter = func(_ context.Context, id string) (int, error) {
 		entered <- "tags:" + id
 		<-proceed
 		return 1, nil
@@ -941,7 +941,7 @@ func TestFinishApplyFileWork_LocksALibraryCopyItCreates(t *testing.T) {
 	svc.SetPathLocker(locks.lock)
 
 	var wg sync.WaitGroup
-	wg.Go(func() { assert.NoError(t, svc.FinishApplyFileWork("a", "", true, true, nil)) })
+	wg.Go(func() { assert.NoError(t, svc.FinishApplyFileWork(context.Background(), "a", "", true, true, nil)) })
 	select {
 	case got := <-entered:
 		require.Equal(t, "tags:a", got)
@@ -950,7 +950,7 @@ func TestFinishApplyFileWork_LocksALibraryCopyItCreates(t *testing.T) {
 		t.Fatal("the apply of A never reached its tag write")
 	}
 	wg.Go(func() {
-		assert.NoError(t, svc.FinishApplyFileWork("c", "https://covers.example.test/c.jpg", true, true, nil))
+		assert.NoError(t, svc.FinishApplyFileWork(context.Background(), "c", "https://covers.example.test/c.jpg", true, true, nil))
 	})
 	// C's cover download writes only C's own covers file, so it may run now.
 	// Nothing of C's may touch the copy's files while A's job holds them.
@@ -984,7 +984,7 @@ func TestFinishApplyFileWork_NoLibraryCopyAfterStandDownLost(t *testing.T) {
 	lost := errors.New("scan stand-down lost")
 	// The cover download's check passes; the next one, before the copy, fails.
 	var checks int
-	err := svc.FinishApplyFileWork("a", "", true, true, func() error {
+	err := svc.FinishApplyFileWork(context.Background(), "a", "", true, true, func() error {
 		checks++
 		if checks == 1 {
 			return nil
@@ -1006,9 +1006,9 @@ func TestFinishApplyFileWork_FailedLibraryCopyStopsTheJob(t *testing.T) {
 	h.failFirst = true
 	svc.SetPathLocker((&testPathLocks{}).lock)
 	var tags []string
-	svc.tagWriter = func(id string) (int, error) { tags = append(tags, id); return 1, nil }
+	svc.tagWriter = func(_ context.Context, id string) (int, error) { tags = append(tags, id); return 1, nil }
 
-	err := svc.FinishApplyFileWork("a", "", true, true, nil)
+	err := svc.FinishApplyFileWork(context.Background(), "a", "", true, true, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "could not create its library copy")
 	assert.Empty(t, tags, "no tags may be written when the library copy could not be made")
@@ -1024,9 +1024,9 @@ func TestFinishApplyFileWork_UnusableNewCopyIsAnError(t *testing.T) {
 	h.protectedRow = true
 	svc.SetPathLocker((&testPathLocks{}).lock)
 	var tags []string
-	svc.tagWriter = func(id string) (int, error) { tags = append(tags, id); return 1, nil }
+	svc.tagWriter = func(_ context.Context, id string) (int, error) { tags = append(tags, id); return 1, nil }
 
-	err := svc.FinishApplyFileWork("a", "", true, true, nil)
+	err := svc.FinishApplyFileWork(context.Background(), "a", "", true, true, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not usable")
 	assert.Contains(t, err.Error(), "protected tree")
@@ -1039,9 +1039,9 @@ func TestFinishApplyFileWork_UnlinkedNewCopyNamesTheCause(t *testing.T) {
 	svc, h := newCopyHarness(t)
 	h.unlinked = true
 	svc.SetPathLocker((&testPathLocks{}).lock)
-	svc.tagWriter = func(string) (int, error) { return 1, nil }
+	svc.tagWriter = func(context.Context, string) (int, error) { return 1, nil }
 
-	err := svc.FinishApplyFileWork("a", "", true, true, nil)
+	err := svc.FinishApplyFileWork(context.Background(), "a", "", true, true, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not linked to the copy's version group")
 	assert.NotContains(t, err.Error(), "protected tree")
@@ -1055,9 +1055,9 @@ func TestFinishApplyFileWork_ReadErrorAtTheCopyLockStopsTheJob(t *testing.T) {
 	h.failReads = 1
 	svc.SetPathLocker((&testPathLocks{}).lock)
 	var tags []string
-	svc.tagWriter = func(id string) (int, error) { tags = append(tags, id); return 1, nil }
+	svc.tagWriter = func(_ context.Context, id string) (int, error) { tags = append(tags, id); return 1, nil }
 
-	err := svc.FinishApplyFileWork("a", "", true, true, nil)
+	err := svc.FinishApplyFileWork(context.Background(), "a", "", true, true, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "transient read error")
 	assert.Empty(t, tags, "no file step may run after the copy could not be resolved")
@@ -1084,12 +1084,12 @@ func TestFinishFileWork_NeverCreatesALibraryCopy(t *testing.T) {
 func TestFinishApplyFileWork_NewLibraryCopyGetsTheDownloadedCover(t *testing.T) {
 	svc, h := newCopyHarness(t)
 	svc.SetPathLocker((&testPathLocks{}).lock)
-	svc.tagWriter = func(string) (int, error) { return 1, nil }
+	svc.tagWriter = func(context.Context, string) (int, error) { return 1, nil }
 	svc.coverDownload = func(coverURL, destDir, bookID string) (string, error) {
 		return filepath.Join(destDir, "covers", bookID+".jpg"), nil
 	}
 
-	require.NoError(t, svc.FinishApplyFileWork("a", "https://covers.example.test/a.jpg", true, false, nil))
+	require.NoError(t, svc.FinishApplyFileWork(context.Background(), "a", "https://covers.example.test/a.jpg", true, false, nil))
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	require.Equal(t, 1, h.made)
@@ -1117,9 +1117,9 @@ func TestFinishAutoFetchFileWork_NeverRenamesAndTagsOnlyUnderWriteBack(t *testin
 				},
 			})
 			var tags []string
-			svc.tagWriter = func(id string) (int, error) { tags = append(tags, id); return 1, nil }
+			svc.tagWriter = func(_ context.Context, id string) (int, error) { tags = append(tags, id); return 1, nil }
 
-			require.NoError(t, svc.FinishAutoFetchFileWork("lib1", "", writeBack))
+			require.NoError(t, svc.FinishAutoFetchFileWork(context.Background(), "lib1", "", writeBack))
 
 			got, err := os.ReadFile(libFile)
 			require.NoError(t, err, "auto-fetch moved the book's file")
@@ -1140,7 +1140,7 @@ func TestFinishApplyFileWork_SameBookJobsSerialize(t *testing.T) {
 	svc, _, _ := fileWorkHarness(t, t.TempDir(), false, false, nil)
 	entered := make(chan string, 4)
 	proceed := make(chan struct{})
-	svc.tagWriter = func(id string) (int, error) {
+	svc.tagWriter = func(_ context.Context, id string) (int, error) {
 		entered <- "tags"
 		<-proceed
 		return 1, nil
@@ -1164,12 +1164,12 @@ func TestFinishApplyFileWork_SameBookJobsSerialize(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Go(func() {
-		assert.NoError(t, svc.FinishApplyFileWork("b1", "https://covers.example.test/x.jpg", false, true, nil))
+		assert.NoError(t, svc.FinishApplyFileWork(context.Background(), "b1", "https://covers.example.test/x.jpg", false, true, nil))
 	})
 	require.Equal(t, "cover:https://covers.example.test/x.jpg", next())
 	require.Equal(t, "tags", next())
 	wg.Go(func() {
-		assert.NoError(t, svc.FinishApplyFileWork("b1", "https://covers.example.test/y.jpg", false, true, nil))
+		assert.NoError(t, svc.FinishApplyFileWork(context.Background(), "b1", "https://covers.example.test/y.jpg", false, true, nil))
 	})
 	select {
 	case got := <-entered:
@@ -1191,7 +1191,7 @@ func TestAutoFetchKeepsExistingCover_ApplyReplacesIt(t *testing.T) {
 	svc, calls, book := fileWorkHarness(t, root, false, false, nil)
 	writeFile(t, filepath.Join(root, "covers", "b1.jpg"), "hand-picked")
 
-	require.NoError(t, svc.FinishAutoFetchFileWork("b1", cover, false))
+	require.NoError(t, svc.FinishAutoFetchFileWork(context.Background(), "b1", cover, false))
 	assert.Zero(t, countPrefix(*calls, "cover:"), "auto-fetch replaced an existing cover")
 	require.NotNil(t, book.CoverURL)
 	assert.Equal(t, "/api/v1/covers/local/b1.jpg", *book.CoverURL, "the kept cover is the one served")
@@ -1206,7 +1206,7 @@ func TestAutoFetchKeepsExistingCover_ApplyReplacesIt(t *testing.T) {
 	assert.Zero(t, countPrefix(*calls, "cover:"), "the no-pool auto-fetch path replaced an existing cover")
 
 	// An explicit apply replaces it.
-	require.NoError(t, svc.FinishApplyFileWork("b1", cover, false, false, nil))
+	require.NoError(t, svc.FinishApplyFileWork(context.Background(), "b1", cover, false, false, nil))
 	assert.Equal(t, 1, countPrefix(*calls, "cover:"), "an explicit apply must replace the cover")
 }
 
@@ -1218,7 +1218,7 @@ func TestFinishApplyFileWork_TwoVersionsMakeOneLibraryCopy(t *testing.T) {
 	svc, h := newCopyHarness(t)
 	locks := &testPathLocks{}
 	svc.SetPathLocker(locks.lock)
-	svc.tagWriter = func(string) (int, error) { return 1, nil }
+	svc.tagWriter = func(context.Context, string) (int, error) { return 1, nil }
 	entered := make(chan string, 2)
 	proceed := make(chan struct{})
 	inner := svc.libraryCopyMaker
@@ -1231,14 +1231,14 @@ func TestFinishApplyFileWork_TwoVersionsMakeOneLibraryCopy(t *testing.T) {
 	}
 
 	var wg sync.WaitGroup
-	wg.Go(func() { assert.NoError(t, svc.FinishApplyFileWork("a", "", true, true, nil)) })
+	wg.Go(func() { assert.NoError(t, svc.FinishApplyFileWork(context.Background(), "a", "", true, true, nil)) })
 	select {
 	case <-entered:
 	case <-time.After(5 * time.Second):
 		close(proceed)
 		t.Fatal("the apply of A never reached the copy maker")
 	}
-	wg.Go(func() { assert.NoError(t, svc.FinishApplyFileWork("c", "", true, true, nil)) })
+	wg.Go(func() { assert.NoError(t, svc.FinishApplyFileWork(context.Background(), "c", "", true, true, nil)) })
 	select {
 	case id := <-entered:
 		t.Errorf("the apply of %s reached the copy maker while the apply of A was making the copy", id)
@@ -1288,9 +1288,9 @@ func TestFinishApplyFileWork_WritesTheLockedCopyWhenTheLookupFlips(t *testing.T)
 	locks := &testPathLocks{}
 	svc.SetPathLocker(locks.lock)
 	var tags []string
-	svc.tagWriter = func(id string) (int, error) { tags = append(tags, id); return 1, nil }
+	svc.tagWriter = func(_ context.Context, id string) (int, error) { tags = append(tags, id); return 1, nil }
 
-	require.NoError(t, svc.FinishApplyFileWork("a", "", true, true, nil))
+	require.NoError(t, svc.FinishApplyFileWork(context.Background(), "a", "", true, true, nil))
 	assert.Equal(t, []string{"a"}, tags, "the job's tags are written once")
 	keys := locks.taken()
 	assert.Contains(t, keys, bookLockKey("s"), "the job locked S")
@@ -1321,9 +1321,9 @@ func TestFinishApplyFileWork_LockedCopyThatIsNoLongerACopyIsAnError(t *testing.T
 		return b, err
 	}
 	var tags []string
-	svc.tagWriter = func(id string) (int, error) { tags = append(tags, id); return 1, nil }
+	svc.tagWriter = func(_ context.Context, id string) (int, error) { tags = append(tags, id); return 1, nil }
 
-	err := svc.FinishApplyFileWork("a", "", true, true, nil)
+	err := svc.FinishApplyFileWork(context.Background(), "a", "", true, true, nil)
 	require.ErrorIs(t, err, errFileTargetChanged)
 	assert.Contains(t, err.Error(), "no longer in the book's version group")
 	assert.Empty(t, tags, "no tags may be written into a book that is no longer the copy")
@@ -1339,7 +1339,7 @@ func TestFinishApplyFileWork_NeverWritesAHalfMadeLibraryCopy(t *testing.T) {
 	svc, h := newCopyHarness(t)
 	svc.SetPathLocker((&testPathLocks{}).lock)
 	wrote := make(chan string, 8)
-	svc.tagWriter = func(id string) (int, error) { wrote <- id; return 1, nil }
+	svc.tagWriter = func(_ context.Context, id string) (int, error) { wrote <- id; return 1, nil }
 	created := make(chan struct{})
 	proceed := make(chan struct{})
 	inner := svc.libraryCopyMaker
@@ -1351,7 +1351,7 @@ func TestFinishApplyFileWork_NeverWritesAHalfMadeLibraryCopy(t *testing.T) {
 	}
 
 	var wg sync.WaitGroup
-	wg.Go(func() { assert.NoError(t, svc.FinishApplyFileWork("a", "", true, true, nil)) })
+	wg.Go(func() { assert.NoError(t, svc.FinishApplyFileWork(context.Background(), "a", "", true, true, nil)) })
 	select {
 	case <-created:
 	case <-time.After(5 * time.Second):
@@ -1362,7 +1362,7 @@ func TestFinishApplyFileWork_NeverWritesAHalfMadeLibraryCopy(t *testing.T) {
 	// started together it would block C at S's lock and hide a C that found
 	// S with no version-group key.
 	for _, id := range []string{"c", "s"} {
-		wg.Go(func() { assert.NoError(t, svc.FinishApplyFileWork(id, "", true, true, nil)) })
+		wg.Go(func() { assert.NoError(t, svc.FinishApplyFileWork(context.Background(), id, "", true, true, nil)) })
 		select {
 		case who := <-wrote:
 			t.Errorf("the apply of %s wrote files while copy S was still being made", who)
@@ -1401,7 +1401,7 @@ func TestWithBookFilesLocked_WaitsForAnApplyAndLocksTheCurrentPath(t *testing.T)
 	tagging := make(chan struct{})
 	proceed := make(chan struct{})
 	var once sync.Once
-	svc.tagWriter = func(string) (int, error) {
+	svc.tagWriter = func(context.Context, string) (int, error) {
 		once.Do(func() { close(tagging) })
 		<-proceed
 		// The apply moves S's files to Q before it releases S: after the
@@ -1415,7 +1415,7 @@ func TestWithBookFilesLocked_WaitsForAnApplyAndLocksTheCurrentPath(t *testing.T)
 	}
 
 	var wg sync.WaitGroup
-	wg.Go(func() { assert.NoError(t, svc.FinishApplyFileWork("s", "", true, true, nil)) })
+	wg.Go(func() { assert.NoError(t, svc.FinishApplyFileWork(context.Background(), "s", "", true, true, nil)) })
 	select {
 	case <-tagging:
 	case <-time.After(5 * time.Second):
@@ -1481,16 +1481,16 @@ func TestWriteBackAndRenameOnly_TakeTheFileWorkLocksInOrder(t *testing.T) {
 func TestFileWork_MixedEntryPointsOnOneGroupNeverDeadlock(t *testing.T) {
 	svc, h := newCopyHarness(t)
 	svc.SetPathLocker((&testPathLocks{}).lock)
-	svc.tagWriter = func(string) (int, error) { return 1, nil }
+	svc.tagWriter = func(context.Context, string) (int, error) { return 1, nil }
 	jobs := []func(){
-		func() { _ = svc.FinishApplyFileWork("a", "", true, true, nil) },
-		func() { _ = svc.FinishApplyFileWork("c", "", true, true, nil) },
-		func() { _ = svc.ApplyMetadataFileIO("c") },
-		func() { _ = svc.FinishAutoFetchFileWork("a", "", true) },
+		func() { _ = svc.FinishApplyFileWork(context.Background(), "a", "", true, true, nil) },
+		func() { _ = svc.FinishApplyFileWork(context.Background(), "c", "", true, true, nil) },
+		func() { _ = svc.ApplyMetadataFileIO(context.Background(), "c") },
+		func() { _ = svc.FinishAutoFetchFileWork(context.Background(), "a", "", true) },
 		func() { _, _ = svc.WriteBackMetadataForBook("a") },
 		func() { _, _ = svc.WriteBackMetadataForBook("c") },
 		func() { _ = svc.RunApplyPipelineRenameOnly(context.Background(), "c", nil) },
-		func() { _ = svc.FinishApplyFileWork("s", "", true, true, nil) },
+		func() { _ = svc.FinishApplyFileWork(context.Background(), "s", "", true, true, nil) },
 	}
 	done := make(chan struct{})
 	go func() {

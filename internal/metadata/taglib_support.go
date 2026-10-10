@@ -1,7 +1,7 @@
 // file: internal/metadata/taglib_support.go
-// version: 2.7.1
+// version: 2.9.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-09-14
+// last-edited: 2026-10-10
 //
 // TagLib WASM writer (default, no CGO required).
 // For native CGO performance, build with -tags native_taglib.
@@ -24,13 +24,14 @@ import (
 var taglibAvailable = true
 
 // writeMetadataWithTaglib performs metadata writing using TagLib via WASM.
-// TagLib edits tag atoms in place and does not corrupt audio data on failure —
-// no pre-write file copy is needed. The optional WriteBackupBeforeTagWrite
-// config flag handles backups at the call-site layer (backupFileBeforeWrite).
+// The write goes through tagger.WriteTagsSafe (temp copy, then rename), which
+// keeps a .bak-* backup when create_backups is on and ctx does not opt out.
 //
 // If packageSafeWriteDeps is configured, a protected (Deluge-managed) path is
 // refused with tagger.ErrProtectedPathWrite; it is never imported (see SetSafeWriteDeps).
-func writeMetadataWithTaglib(filePath string, metadata map[string]any, _ fileops.OperationConfig) error {
+//
+// ctx reaches tagger.WriteTagsSafe, so a tagger.WithoutBackup opt-out survives.
+func writeMetadataWithTaglib(ctx context.Context, filePath string, metadata map[string]any, _ fileops.OperationConfig) error {
 	abs, err := filepath.Abs(filePath)
 	if err != nil {
 		return fmt.Errorf("taglib abs path: %w", err)
@@ -41,7 +42,7 @@ func writeMetadataWithTaglib(filePath string, metadata map[string]any, _ fileops
 		return fmt.Errorf("no writable metadata supplied")
 	}
 
-	if err := tagger.WriteTagsSafe(context.Background(), abs, tags, 0, WithBookFileHashes(packageSafeWriteDeps)); err != nil {
+	if err := tagger.WriteTagsSafe(ctx, abs, tags, 0, WithBookFileHashes(packageSafeWriteDeps)); err != nil {
 		return fmt.Errorf("taglib write: %w", err)
 	}
 
@@ -76,19 +77,19 @@ func writeMetadataWithTaglibInPlace(filePath string, metadata map[string]any, _ 
 //
 // If packageSafeWriteDeps is configured, a protected (Deluge-managed) path is
 // refused with tagger.ErrProtectedPathWrite; it is never imported (see SetSafeWriteDeps).
-func writeSingleTagWithTaglib(filePath, tagName, value string) error {
+func writeSingleTagWithTaglib(ctx context.Context, filePath, tagName, value string) error {
 	abs, err := filepath.Abs(filePath)
 	if err != nil {
 		return fmt.Errorf("taglib abs: %w", err)
 	}
-	return tagger.WriteTagsSafe(context.Background(), abs, map[string][]string{tagName: {value}}, 0, WithBookFileHashes(packageSafeWriteDeps))
+	return tagger.WriteTagsSafe(ctx, abs, map[string][]string{tagName: {value}}, 0, WithBookFileHashes(packageSafeWriteDeps))
 }
 
 // writePropertiesWithTaglib writes tags as given, property by property, through
 // the same safe copy-and-rename write; a property with no values is removed.
 // WriteTagProperties is the caller and verifies the result.
-func writePropertiesWithTaglib(abs string, tags map[string][]string) error {
-	return tagger.WriteTagsSafe(context.Background(), abs, tags, 0, packageSafeWriteDeps)
+func writePropertiesWithTaglib(ctx context.Context, abs string, tags map[string][]string) error {
+	return tagger.WriteTagsSafe(ctx, abs, tags, 0, packageSafeWriteDeps)
 }
 
 // readTagsWithTaglib reads tags from a file via the TagLib WASM runtime.

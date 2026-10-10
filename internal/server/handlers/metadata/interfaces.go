@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/interfaces.go
-// version: 1.28.0
+// version: 1.29.0
 // guid: b1ab2e4a-1f73-42f2-955d-c4a30f0fbaac
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 
 // Narrow dependency interfaces for the metadata-domain HTTP handlers (the 19
 // per-book + library metadata endpoints extracted from the server package's
@@ -183,7 +183,7 @@ type MetadataApplier interface {
 	// download, file I/O, and a tag write that happens exactly once.
 	// checkpoint, when non-nil, is the caller's scan stand-down check, re-run
 	// before each file-writing step; nil means the caller holds none.
-	FinishApplyFileWork(id, pendingCoverURL string, fileIO, writeTags bool, checkpoint func() error) error
+	FinishApplyFileWork(ctx context.Context, id, pendingCoverURL string, fileIO, writeTags bool, checkpoint func() error) error
 	RunApplyPipelineRenameOnly(ctx context.Context, id string, book *database.Book) error
 	// RenameOnlyPreflight reports, before RunApplyPipelineRenameOnly moves
 	// anything, that the rename is known to fail (wrapping

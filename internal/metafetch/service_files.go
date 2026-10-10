@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_files.go
-// version: 1.18.0
+// version: 1.21.0
 // guid: 969b284a-5657-442b-beba-275e325e000b
-// last-edited: 2026-09-14
+// last-edited: 2026-10-10
 
 package metafetch
 
@@ -19,7 +19,6 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
@@ -54,47 +53,6 @@ func AudioFilesInDir(dir string) []string {
 	return files
 }
 
-// backupFileBeforeWrite creates a timestamped .bak copy of a file before
-// writing tags — IF the WriteBackupBeforeTagWrite config flag is enabled.
-//
-// Default is OFF. Historically this function ran unconditionally on every
-// tag write and used os.Link (hardlink) for "no disk space cost". Two
-// problems with that:
-//
-//  1. Tens of thousands of stale backup files accumulated across the
-//     library (43K+ files, multi-TB apparent size in production) because
-//     nothing ever cleaned them up.
-//  2. Hardlinks don't actually preserve pre-write content when the
-//     writer modifies the inode in place (which TagLib does for some
-//     formats). The "backup" could be a hardlink to the same now-modified
-//     data, providing false safety.
-//
-// The flag is opt-in. Users who turn it on should also run the
-// cleanup-backups maintenance endpoint periodically to keep the library
-// from growing unbounded.
-//
-// Failures are logged but non-fatal — the write-back proceeds regardless.
-func backupFileBeforeWrite(filePath string) {
-	if !config.AppConfig.MetadataScoring.WriteBackupBefore {
-		return
-	}
-	if filePath == "" {
-		return
-	}
-	if _, err := os.Stat(filePath); err != nil {
-		return
-	}
-	backupPath := filePath + ".bak-" + time.Now().Format("20060102-150405")
-	if err := os.Link(filePath, backupPath); err != nil {
-		// Hardlink failed — fall back to copy
-		if err := fileops.SafeCopy(filePath, backupPath, fileops.OperationConfig{}); err != nil {
-			slog.Warn("backup before tag write failed:", "path", filePath, "error", err)
-			return
-		}
-	}
-	slog.Debug("backup before tag write", "path", backupPath)
-}
-
 // tagWriteResult reports what runApplyPipeline did about audio tags.
 type tagWriteResult struct {
 	// handled: the pipeline owned the tag write for this run (wrote them, found
@@ -107,11 +65,11 @@ type tagWriteResult struct {
 // writeTags is the one tag write every apply path goes through, on the files
 // of targetID: the book the job locked (lockLibraryCopy). tagWriter is a test
 // seam that counts it; nil in production.
-func (mfs *Service) writeTags(id, targetID string, pt *ApplyPhaseTimings) (int, error) {
+func (mfs *Service) writeTags(ctx context.Context, id, targetID string, pt *ApplyPhaseTimings) (int, error) {
 	if mfs.tagWriter != nil {
-		return mfs.tagWriter(id)
+		return mfs.tagWriter(ctx, id)
 	}
-	return mfs.writeBackForBook(id, nil, targetID, pt)
+	return mfs.writeBackForBook(ctx, id, nil, targetID, pt)
 }
 
 // copyPolicy says whether lockLibraryCopy may create a library copy for a book
@@ -554,15 +512,22 @@ func (mfs *Service) createUsableLibraryCopy(id string, book *database.Book) (*da
 // library scan, and the handlers checked the hold between these steps before
 // they shared this sequel; a single check before the call would let a scan
 // that resumes mid-sequel run alongside the rename and the tag write.
-func (mfs *Service) FinishApplyFileWork(id, pendingCoverURL string, fileIO, writeTags bool, checkpoint func() error) error {
-	return mfs.FinishApplyFileWorkTimed(id, pendingCoverURL, fileIO, writeTags, checkpoint, NewApplyPhaseTimings())
+//
+// CONTEXT. ctx carries values only: the file work is not cancelled through it
+// (see FinishApplyFileWorkTimed). Its one job today is tagger.WithoutBackup:
+// the bulk apply paths (batch apply, apply-when-scanned, the restart replay)
+// wrap it so their tag and cover writes keep no .bak-* sibling (owner
+// decision D69); a single-book apply passes a plain ctx and keeps one when
+// create_backups is on.
+func (mfs *Service) FinishApplyFileWork(ctx context.Context, id, pendingCoverURL string, fileIO, writeTags bool, checkpoint func() error) error {
+	return mfs.FinishApplyFileWorkTimed(ctx, id, pendingCoverURL, fileIO, writeTags, checkpoint, NewApplyPhaseTimings())
 }
 
 // FinishApplyFileWorkTimed is FinishApplyFileWork recording each phase into
 // pt, which the caller may have started earlier (the batch apply records its
 // gate wait and DB apply into the same timer). When it returns it logs the one
 // per-book "apply phase durations" line. A nil pt records and logs nothing.
-func (mfs *Service) FinishApplyFileWorkTimed(id, pendingCoverURL string, fileIO, writeTags bool, checkpoint func() error, pt *ApplyPhaseTimings) error {
+func (mfs *Service) FinishApplyFileWorkTimed(ctx context.Context, id, pendingCoverURL string, fileIO, writeTags bool, checkpoint func() error, pt *ApplyPhaseTimings) error {
 	defer logApplyPhaseTimings(id, pt)
 	lockStart := time.Now()
 	releaseBook := mfs.lockBook(id)
@@ -588,11 +553,23 @@ func (mfs *Service) FinishApplyFileWorkTimed(id, pendingCoverURL string, fileIO,
 		return err
 	}
 	defer releaseCopy()
-	// context.Background: FinishApplyFileWork* takes no ctx yet, so the
-	// post-move path-write retry below it is bounded by its attempt count
-	// (0.7s), not by cancellation. Threading a ctx through this exported
-	// entry point and its callers is tracked separately.
-	return mfs.finishFileWork(context.Background(), id, targetID, fileIO, writeTags, checkpoint, pt)
+	// WithoutCancel: the caller's ctx is threaded for its values (the bulk
+	// tagger.WithoutBackup opt-out), not for cancellation. Pool jobs run after
+	// the request that queued them has returned, and a file job stopped
+	// part-way leaves renamed files with stale tags; the post-move path-write
+	// retry below stays bounded by its attempt count (0.7s).
+	return mfs.finishFileWork(valuesOnly(ctx), id, targetID, fileIO, writeTags, checkpoint, pt)
+}
+
+// valuesOnly returns ctx stripped of its deadline and cancellation, or
+// context.Background() for a nil ctx. The file-work entry points use it so
+// a bulk caller's tagger.WithoutBackup reaches the writes without the
+// caller's cancellation stopping a file job half done.
+func valuesOnly(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return context.WithoutCancel(ctx)
 }
 
 // standDown runs a stand-down checkpoint before a file-writing step. A nil
@@ -634,7 +611,12 @@ func standDown(checkpoint func() error, id, step string) error {
 // copy's for a protected book. Callers reach it through the server's
 // file-I/O pool (SetFileWorkScheduler); the restart replay
 // (recoverAutoFetchFileOp) calls it too.
-func (mfs *Service) FinishAutoFetchFileWork(id, pendingCoverURL string, writeTags bool) error {
+//
+// ctx carries values only (valuesOnly). The per-book Fetch button passes a
+// plain ctx and keeps create_backups siblings; the bulk callers (the iTunes
+// import's enrichment, the restart replay) wrap it with tagger.WithoutBackup.
+func (mfs *Service) FinishAutoFetchFileWork(ctx context.Context, id, pendingCoverURL string, writeTags bool) error {
+	ctx = valuesOnly(ctx)
 	releaseBook := mfs.lockBook(id)
 	defer releaseBook()
 	mfs.downloadAutoFetchCover(id, pendingCoverURL)
@@ -654,7 +636,9 @@ func (mfs *Service) FinishAutoFetchFileWork(id, pendingCoverURL string, writeTag
 			"book_id", logger.SanitizeLogValue(id), "path", logger.SanitizeLogValue(book.FilePath))
 		return nil
 	}
-	mfs.embedCover(id, book, targetID)
+	// ctx decides the cover embed's create_backups sibling: kept for the
+	// per-book Fetch button, skipped under a bulk caller's WithoutBackup.
+	mfs.embedCover(ctx, id, book, targetID)
 	if !writeTags {
 		return nil
 	}
@@ -663,7 +647,7 @@ func (mfs *Service) FinishAutoFetchFileWork(id, pendingCoverURL string, writeTag
 		return fmt.Errorf("auto-fetch file work: %w", err)
 	}
 	defer release()
-	if _, err := mfs.writeTags(id, targetID, nil); err != nil {
+	if _, err := mfs.writeTags(ctx, id, targetID, nil); err != nil {
 		return fmt.Errorf("auto-fetch file work: write tags for book %s: %w", id, err)
 	}
 	return nil
@@ -700,7 +684,7 @@ func (mfs *Service) finishFileWork(ctx context.Context, id, targetID string, fil
 		if err != nil {
 			tags.err = err
 		} else {
-			if _, err := mfs.writeTags(id, targetID, pt); err != nil {
+			if _, err := mfs.writeTags(ctx, id, targetID, pt); err != nil {
 				tags.err = err
 			}
 			release()
@@ -720,7 +704,7 @@ func (mfs *Service) finishFileWork(ctx context.Context, id, targetID string, fil
 // the library copy's, for a protected book), holding the path lock on those
 // files. Slow: ffmpeg. A target that no longer matches is logged and nothing
 // is embedded; the embed reports no error by design (ApplyMetadataFileIO).
-func (mfs *Service) embedCover(id string, book *database.Book, targetID string) {
+func (mfs *Service) embedCover(ctx context.Context, id string, book *database.Book, targetID string) {
 	if config.AppConfig.RootDir == "" {
 		return
 	}
@@ -737,7 +721,7 @@ func (mfs *Service) embedCover(id string, book *database.Book, targetID string) 
 	}
 	release := mfs.lockPath(target.FilePath)
 	defer release()
-	mfs.embedCoverInBookFiles(target, metadata.CoverPathForBook(config.AppConfig.RootDir, id))
+	mfs.embedCoverInBookFiles(ctx, target, metadata.CoverPathForBook(config.AppConfig.RootDir, id))
 }
 
 // ApplyMetadataFileIO runs the slow file operations after metadata is applied:
@@ -761,7 +745,10 @@ func (mfs *Service) embedCover(id string, book *database.Book, targetID string) 
 // The cover embed is deliberately NOT part of the returned error:
 // embedCoverInBookFiles reports nothing and a missing cover must not mask a
 // rename failure or block the pipeline below it.
-func (mfs *Service) ApplyMetadataFileIO(id string) error {
+//
+// ctx carries values only (valuesOnly), for the bulk tagger.WithoutBackup
+// opt-out.
+func (mfs *Service) ApplyMetadataFileIO(ctx context.Context, id string) error {
 	releaseBook := mfs.lockBook(id)
 	defer releaseBook()
 	targetID, releaseCopy, err := mfs.lockLibraryCopy(id, createLibraryCopy, nil)
@@ -769,9 +756,7 @@ func (mfs *Service) ApplyMetadataFileIO(id string) error {
 		return err
 	}
 	defer releaseCopy()
-	// context.Background: ApplyMetadataFileIO takes no ctx yet; see
-	// FinishApplyFileWorkTimed.
-	_, err = mfs.applyMetadataFileIO(context.Background(), id, targetID, nil)
+	_, err = mfs.applyMetadataFileIO(valuesOnly(ctx), id, targetID, nil)
 	return err
 }
 
@@ -792,7 +777,7 @@ func (mfs *Service) applyMetadataFileIO(ctx context.Context, id, targetID string
 	}
 
 	embedStart := time.Now()
-	mfs.embedCover(id, book, targetID)
+	mfs.embedCover(ctx, id, book, targetID)
 	pt.Since(PhaseEmbed, embedStart)
 
 	// Run file rename + tag write pipeline
