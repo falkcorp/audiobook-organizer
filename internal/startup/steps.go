@@ -1,5 +1,5 @@
 // file: internal/startup/steps.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b4c26097-4214-45ff-a1a8-d434f6b64fb1
 // last-edited: 2026-10-10
 
@@ -8,16 +8,20 @@
 // server up and reports a fixed token in /health's `degraded` list
 // (Degraded).
 //
-// It is a leaf package (stdlib only, layer 0 in internal/arch): most steps (opening the store, telemetry, the secure
-// state directory, the encryption key, loading persisted config) run in cmd
-// before any *server.Server exists, so the table and the token set cannot
-// live in package server. cmd builds one *Steps, runs its steps through Run,
-// and hands the same value to the server through ServerConfig.StartupSteps.
+// It is a leaf package (stdlib only, layer 0 in internal/arch): most steps
+// (opening the store, telemetry, the secure state directory, the encryption
+// key, loading persisted config) run in cmd before any *server.Server exists,
+// so the table and the token set cannot live in package server. cmd builds
+// one *Steps, runs its steps through Run, and hands the same value to the
+// server through ServerConfig.StartupSteps.
 //
 // Every Run call names its step with a string literal that must be a row of
 // Table, and every row must be named by some Run call. steps_test.go enforces
 // both with an AST scan of cmd/ and internal/, so a new startup step cannot
 // be added without a reviewed class, and a removed one cannot leave a dead row.
+// The scan follows exported *Steps fields and getters across packages; a
+// method value (r := steps.Run) is not followed, and a site missed that way
+// fails closed at runtime because Run rejects an unknown name.
 package startup
 
 import (

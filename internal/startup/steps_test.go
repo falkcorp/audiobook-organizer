@@ -1,5 +1,5 @@
 // file: internal/startup/steps_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 225d8029-438d-4ff7-9896-03d376746519
 // last-edited: 2026-10-10
 
@@ -174,34 +174,24 @@ type runSite struct {
 // or from a function of this package whose one result is *startup.Steps.
 // The filter is per PACKAGE, not per file: a Steps field or function can be
 // declared in one file and its Run called in another.
-func scanPackage(fset *token.FileSet, files []*ast.File) []runSite {
-	aliases := map[string]bool{}
-	for _, f := range files {
-		for _, imp := range f.Imports {
-			if p, _ := strconv.Unquote(imp.Path.Value); p == startupImportPath {
-				alias := "startup"
-				if imp.Name != nil {
-					alias = imp.Name.Name
-				}
-				aliases[alias] = true
-			}
-		}
-	}
-	if len(aliases) == 0 {
+//
+// foreign holds the EXPORTED field and function names that other scanned
+// packages declare with type *startup.Steps (see exportedStepsNames), so a
+// value reached across a package boundary -- cmd calling
+// cfg.StartupSteps.Run, where StartupSteps is declared in package server --
+// is recognised too, even in a package that never imports startup. Matching
+// is by final name only, so an unrelated field that happens to share such a
+// name over-reports (a spurious failure, never a missed site).
+//
+// Remaining blind spot: method values (r := steps.Run; r("x", f)) and Steps
+// passed through an interface. A site missed that way still fails closed at
+// runtime, because Run rejects a name that is not a Table row.
+func scanPackage(fset *token.FileSet, files []*ast.File, foreign map[string]bool) []runSite {
+	aliases := importAliases(files)
+	if len(aliases) == 0 && len(foreign) == 0 {
 		return nil
 	}
-	isStepsType := func(e ast.Expr) bool {
-		star, ok := e.(*ast.StarExpr)
-		if !ok {
-			return false
-		}
-		sel, ok := star.X.(*ast.SelectorExpr)
-		if !ok || sel.Sel.Name != "Steps" {
-			return false
-		}
-		id, ok := sel.X.(*ast.Ident)
-		return ok && aliases[id.Name]
-	}
+	isStepsType := func(e ast.Expr) bool { return isStepsTypeExpr(e, aliases) }
 	// startup.New(), or a chained setter on one (startup.New().SetErrorLog(f)).
 	var isNewCall func(e ast.Expr) bool
 	isNewCall = func(e ast.Expr) bool {
@@ -235,6 +225,9 @@ func scanPackage(fset *token.FileSet, files []*ast.File) []runSite {
 	// (e.g. the server's startupStepsFor): a variable assigned from one of
 	// them is a Steps value too.
 	returnsSteps := map[string]bool{}
+	for n := range foreign {
+		returnsSteps[n] = true
+	}
 	for _, f := range files {
 		for _, d := range f.Decls {
 			fd, ok := d.(*ast.FuncDecl)
@@ -257,6 +250,9 @@ func scanPackage(fset *token.FileSet, files []*ast.File) []runSite {
 	}(isNewCall)
 
 	names := map[string]bool{}
+	for n := range foreign {
+		names[n] = true
+	}
 	for _, f := range files {
 		ast.Inspect(f, func(n ast.Node) bool {
 			switch x := n.(type) {
@@ -312,6 +308,85 @@ func scanPackage(fset *token.FileSet, files []*ast.File) []runSite {
 		})
 	}
 	return sites
+}
+
+// importAliases returns the names under which files import internal/startup.
+func importAliases(files []*ast.File) map[string]bool {
+	aliases := map[string]bool{}
+	for _, f := range files {
+		for _, imp := range f.Imports {
+			if p, _ := strconv.Unquote(imp.Path.Value); p == startupImportPath {
+				alias := "startup"
+				if imp.Name != nil {
+					alias = imp.Name.Name
+				}
+				aliases[alias] = true
+			}
+		}
+	}
+	return aliases
+}
+
+// isStepsTypeExpr reports whether e is *<alias>.Steps for an import alias of
+// internal/startup.
+func isStepsTypeExpr(e ast.Expr, aliases map[string]bool) bool {
+	star, ok := e.(*ast.StarExpr)
+	if !ok {
+		return false
+	}
+	sel, ok := star.X.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "Steps" {
+		return false
+	}
+	id, ok := sel.X.(*ast.Ident)
+	return ok && aliases[id.Name]
+}
+
+// exportedStepsNames returns the exported struct-field names declared with
+// type *startup.Steps and the exported functions/methods whose one result is
+// *startup.Steps, in one package. scanRepo unions these across packages and
+// hands them to scanPackage as foreign names.
+func exportedStepsNames(files []*ast.File) map[string]bool {
+	aliases := importAliases(files)
+	out := map[string]bool{}
+	if len(aliases) == 0 {
+		return out
+	}
+	for _, f := range files {
+		ast.Inspect(f, func(n ast.Node) bool {
+			switch x := n.(type) {
+			case *ast.Field:
+				if isStepsTypeExpr(x.Type, aliases) {
+					for _, id := range x.Names {
+						if id.IsExported() {
+							out[id.Name] = true
+						}
+					}
+				}
+			case *ast.FuncDecl:
+				if x.Name.IsExported() && x.Type.Results != nil && len(x.Type.Results.List) == 1 &&
+					isStepsTypeExpr(x.Type.Results.List[0].Type, aliases) {
+					out[x.Name.Name] = true
+				}
+			}
+			return true
+		})
+	}
+	return out
+}
+
+// foreignFor returns the exported Steps names of every package except own.
+func foreignFor(own string, exported map[string]map[string]bool) map[string]bool {
+	out := map[string]bool{}
+	for dir, names := range exported {
+		if dir == own {
+			continue
+		}
+		for n := range names {
+			out[n] = true
+		}
+	}
+	return out
 }
 
 // checkSites returns one message per violation: a non-literal name, a name
@@ -391,9 +466,13 @@ func scanRepo(t *testing.T) []runSite {
 			t.Fatal(err)
 		}
 	}
+	exported := map[string]map[string]bool{}
+	for dir, files := range byDir {
+		exported[dir] = exportedStepsNames(files)
+	}
 	var sites []runSite
-	for _, files := range byDir {
-		sites = append(sites, scanPackage(fset, files)...)
+	for dir, files := range byDir {
+		sites = append(sites, scanPackage(fset, files, foreignFor(dir, exported))...)
 	}
 	return sites
 }
@@ -446,7 +525,7 @@ func f(s *srv, name string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sites := scanPackage(fset, []*ast.File{f})
+	sites := scanPackage(fset, []*ast.File{f}, nil)
 	if len(sites) != 5 {
 		t.Fatalf("found %d sites, want 5 (the other.Run call must not count): %+v", len(sites), sites)
 	}
@@ -469,7 +548,63 @@ func g(x interface{ Run(string, func() error) error }) { _ = x.Run("initializeSt
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := scanPackage(fset, []*ast.File{g}); len(got) != 0 {
+	if got := scanPackage(fset, []*ast.File{g}, nil); len(got) != 0 {
 		t.Fatalf("package without the import produced sites %+v", got)
+	}
+}
+
+// TestScanPackage_CrossPackageControl: package a exports a *startup.Steps
+// field and a getter; package b reaches them through a value of a's type
+// WITHOUT importing startup (the cmd -> cfg.StartupSteps shape). Both Run
+// calls must be found once a's exported names are seeded as foreign.
+func TestScanPackage_CrossPackageControl(t *testing.T) {
+	const srcA = `package a
+
+import "github.com/falkcorp/audiobook-organizer/internal/startup"
+
+type Config struct{ StartupSteps *startup.Steps }
+
+func (c *Config) Runner() *startup.Steps { return c.StartupSteps }
+`
+	const srcB = `package b
+
+import "example.com/a"
+
+func f(cfg *a.Config) {
+	_ = cfg.StartupSteps.Run("not-a-row", nil)
+	r := cfg.Runner()
+	_ = r.Run("also-not-a-row", nil)
+}
+`
+	fset := token.NewFileSet()
+	fa, err := parser.ParseFile(fset, "a.go", srcA, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fb, err := parser.ParseFile(fset, "b.go", srcB, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exported := map[string]map[string]bool{
+		"a": exportedStepsNames([]*ast.File{fa}),
+		"b": exportedStepsNames([]*ast.File{fb}),
+	}
+	if !exported["a"]["StartupSteps"] || !exported["a"]["Runner"] {
+		t.Fatalf("exported names of a = %v, want StartupSteps and Runner", exported["a"])
+	}
+	sites := scanPackage(fset, []*ast.File{fb}, foreignFor("b", exported))
+	if len(sites) != 2 {
+		t.Fatalf("found %d cross-package sites, want 2: %+v", len(sites), sites)
+	}
+	got := strings.Join(checkSites(sites, []Step{{Name: "initializeStore", Class: Fatal, Reason: "r"}}), "\n")
+	for _, want := range []string{`step "not-a-row" is missing`, `step "also-not-a-row" is missing`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("checker output lacks %q:\n%s", want, got)
+		}
+	}
+	// Without the foreign seeding the same package yields nothing: this is
+	// the blind spot the seeding closes.
+	if got := scanPackage(fset, []*ast.File{fb}, nil); len(got) != 0 {
+		t.Fatalf("unseeded scan of b found %+v; the control no longer proves the seeding", got)
 	}
 }
