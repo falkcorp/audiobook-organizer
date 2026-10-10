@@ -1,0 +1,1201 @@
+{
+  "description": "Shared fixture for the Review > Metadata lane's filter chain. The Go review query (internal/server/handlers/metadata_cache_query_test.go, TestReviewQuery_MatchesSharedCases) and the lane's client chain (task 02-PR18) must both produce want_ids, in order, for every case. rows are in API (CandidateResult) shape plus the server inputs (review_status, bucket); the reviewable rows are listed in the order the server lists them. Expected ids were derived by reading the TypeScript chain in web/src/components/review/lanes/useMetadataLane.ts, not by running either implementation. server_only cases exercise parameters the client chain has no equivalent for. Synthetic data only.",
+  "rows": [
+    {
+      "bucket": "reviewable",
+      "status": "matched",
+      "review_status": null,
+      "stale": false,
+      "fallback_deferred": false,
+      "book": {
+        "id": "b01",
+        "title": "Title 000001",
+        "language": "en",
+        "duration_seconds": 36000,
+        "runtime_lower_bound_seconds": 0,
+        "transcribed_title": ""
+      },
+      "candidate": {
+        "source": "Audible",
+        "score": 0.95,
+        "title": "Work 01",
+        "author": "Author 01",
+        "asin": "B000000001",
+        "isbn": "",
+        "language": "English",
+        "duration_sec": 36100,
+        "duration_delta_sec": 100,
+        "transcription_boosted": false
+      }
+    },
+    {
+      "bucket": "reviewable",
+      "status": "matched",
+      "review_status": null,
+      "stale": false,
+      "fallback_deferred": false,
+      "book": {
+        "id": "b02",
+        "title": "Title 000002",
+        "language": "en",
+        "duration_seconds": 36000,
+        "runtime_lower_bound_seconds": 0,
+        "transcribed_title": ""
+      },
+      "candidate": {
+        "source": "Audnexus",
+        "score": 0.4,
+        "title": "Shared Work",
+        "author": "Author 02",
+        "asin": "",
+        "isbn": "",
+        "language": "en",
+        "duration_sec": 36500,
+        "duration_delta_sec": 500,
+        "transcription_boosted": false
+      }
+    },
+    {
+      "bucket": "reviewable",
+      "status": "matched",
+      "review_status": null,
+      "stale": false,
+      "fallback_deferred": false,
+      "book": {
+        "id": "b03",
+        "title": "The Title 000003",
+        "language": "de",
+        "duration_seconds": 0,
+        "runtime_lower_bound_seconds": 0,
+        "transcribed_title": ""
+      },
+      "candidate": {
+        "source": "Google Books",
+        "score": 0.8,
+        "title": "Work 03",
+        "author": "Author 03",
+        "asin": "",
+        "isbn": "",
+        "language": "English",
+        "duration_sec": 20000,
+        "duration_delta_sec": 0,
+        "transcription_boosted": false
+      }
+    },
+    {
+      "bucket": "reviewable",
+      "status": "matched",
+      "review_status": null,
+      "stale": false,
+      "fallback_deferred": false,
+      "book": {
+        "id": "b04",
+        "title": "Title 000004",
+        "language": null,
+        "duration_seconds": 36000,
+        "runtime_lower_bound_seconds": 0,
+        "transcribed_title": ""
+      },
+      "candidate": {
+        "source": "Open Library",
+        "score": 0.85,
+        "title": "Work 04",
+        "author": "Author 04",
+        "asin": "",
+        "isbn": "",
+        "language": "fr",
+        "duration_sec": 30000,
+        "duration_delta_sec": 0,
+        "transcription_boosted": false
+      }
+    },
+    {
+      "bucket": "reviewable",
+      "status": "matched",
+      "review_status": null,
+      "stale": false,
+      "fallback_deferred": false,
+      "book": {
+        "id": "b05",
+        "title": "Title 000005",
+        "language": "en",
+        "duration_seconds": 36000,
+        "runtime_lower_bound_seconds": 0,
+        "transcribed_title": ""
+      },
+      "candidate": {
+        "source": "Audible",
+        "score": 0.9,
+        "title": "Work 05",
+        "author": "Author 05",
+        "asin": "B000000005",
+        "isbn": "",
+        "language": "eng",
+        "duration_sec": 36500,
+        "duration_delta_sec": 700,
+        "transcription_boosted": false
+      }
+    },
+    {
+      "bucket": "reviewable",
+      "status": "matched",
+      "review_status": null,
+      "stale": false,
+      "fallback_deferred": false,
+      "book": {
+        "id": "b06",
+        "title": "Title 000006",
+        "language": "en",
+        "duration_seconds": 0,
+        "runtime_lower_bound_seconds": 20000,
+        "transcribed_title": ""
+      },
+      "candidate": {
+        "source": "Google",
+        "score": 0.75,
+        "title": "Work 06",
+        "author": "Author 06",
+        "asin": "",
+        "isbn": "9780000000006",
+        "language": "",
+        "duration_sec": 10000,
+        "duration_delta_sec": 0,
+        "transcription_boosted": false
+      }
+    },
+    {
+      "bucket": "reviewable",
+      "status": "matched",
+      "review_status": null,
+      "stale": false,
+      "fallback_deferred": false,
+      "book": {
+        "id": "b07",
+        "title": "01 - Chapter",
+        "language": "en",
+        "duration_seconds": 3600,
+        "runtime_lower_bound_seconds": 0,
+        "transcribed_title": ""
+      },
+      "candidate": {
+        "source": "Audible",
+        "score": 0.9,
+        "title": "Shared Work",
+        "author": "Author 07",
+        "asin": "B0SHARED00",
+        "isbn": "",
+        "language": "en",
+        "duration_sec": 3600,
+        "duration_delta_sec": 0,
+        "transcription_boosted": false
+      }
+    },
+    {
+      "bucket": "reviewable",
+      "status": "matched",
+      "review_status": null,
+      "stale": false,
+      "fallback_deferred": false,
+      "book": {
+        "id": "b08",
+        "title": "02 - Chapter",
+        "language": "en",
+        "duration_seconds": 3600,
+        "runtime_lower_bound_seconds": 0,
+        "transcribed_title": ""
+      },
+      "candidate": {
+        "source": "audible",
+        "score": 0.9,
+        "title": "Shared Work",
+        "author": "Author 07",
+        "asin": "B0SHARED00",
+        "isbn": "",
+        "language": "en",
+        "duration_sec": 3600,
+        "duration_delta_sec": 0,
+        "transcription_boosted": false
+      }
+    },
+    {
+      "bucket": "reviewable",
+      "status": "matched",
+      "review_status": null,
+      "stale": true,
+      "fallback_deferred": false,
+      "book": {
+        "id": "b09",
+        "title": "Title 000009",
+        "language": "en",
+        "duration_seconds": 36000,
+        "runtime_lower_bound_seconds": 0,
+        "transcribed_title": "Spoken Title 9"
+      },
+      "candidate": {
+        "source": "Audible",
+        "score": 0.9,
+        "title": "Work 09",
+        "author": "Author 09",
+        "asin": "B000000009",
+        "isbn": "",
+        "language": "en",
+        "duration_sec": 36000,
+        "duration_delta_sec": 0,
+        "transcription_boosted": true
+      }
+    },
+    {
+      "bucket": "reviewable",
+      "status": "matched",
+      "review_status": null,
+      "stale": true,
+      "fallback_deferred": false,
+      "book": {
+        "id": "b10",
+        "title": "Title 000010 Saga",
+        "language": "en",
+        "duration_seconds": 36000,
+        "runtime_lower_bound_seconds": 0,
+        "transcribed_title": ""
+      },
+      "candidate": {
+        "source": "Open Library",
+        "score": 0.7,
+        "title": "Work 10",
+        "author": "Author 10",
+        "asin": "",
+        "isbn": "",
+        "language": "en",
+        "duration_sec": 36000,
+        "duration_delta_sec": 0,
+        "transcription_boosted": false
+      }
+    },
+    {
+      "bucket": "reviewable",
+      "status": "matched",
+      "review_status": null,
+      "stale": false,
+      "fallback_deferred": false,
+      "book": {
+        "id": "b11",
+        "title": "Title 000011",
+        "language": "en",
+        "duration_seconds": 36000,
+        "runtime_lower_bound_seconds": 0,
+        "transcribed_title": ""
+      },
+      "candidate": {
+        "source": "Audible",
+        "score": 0.88,
+        "title": "Work 11",
+        "author": "Author 11",
+        "asin": "",
+        "isbn": "9780000000011",
+        "language": "en",
+        "duration_sec": 36000,
+        "duration_delta_sec": 0,
+        "transcription_boosted": false
+      }
+    },
+    {
+      "bucket": "reviewable",
+      "status": "no_match",
+      "review_status": "no_match",
+      "stale": false,
+      "fallback_deferred": false,
+      "book": {
+        "id": "b12",
+        "title": "Title 000012",
+        "language": "en",
+        "duration_seconds": 36000,
+        "runtime_lower_bound_seconds": 0,
+        "transcribed_title": ""
+      },
+      "candidate": {
+        "source": "Google Books",
+        "score": 0.3,
+        "title": "Work 12",
+        "author": "Author 12",
+        "asin": "",
+        "isbn": "",
+        "language": "en",
+        "duration_sec": 36000,
+        "duration_delta_sec": 0,
+        "transcription_boosted": false
+      }
+    },
+    {
+      "bucket": "reviewable",
+      "status": "no_match",
+      "review_status": "no_match",
+      "stale": false,
+      "fallback_deferred": false,
+      "book": {
+        "id": "b13",
+        "title": "Title 000013",
+        "language": "en",
+        "duration_seconds": 36000,
+        "runtime_lower_bound_seconds": 0,
+        "transcribed_title": ""
+      },
+      "candidate": {
+        "source": "Audible",
+        "score": 0.6,
+        "title": "Shared Work",
+        "author": "Author 07",
+        "asin": "B0SHARED00",
+        "isbn": "",
+        "language": "en",
+        "duration_sec": 36000,
+        "duration_delta_sec": 0,
+        "transcription_boosted": false
+      }
+    },
+    {
+      "bucket": "reviewable",
+      "status": "applied",
+      "review_status": "matched",
+      "stale": true,
+      "fallback_deferred": false,
+      "book": {
+        "id": "b14",
+        "title": "Title 000014",
+        "language": "en",
+        "duration_seconds": 36000,
+        "runtime_lower_bound_seconds": 0,
+        "transcribed_title": ""
+      },
+      "candidate": {
+        "source": "Audible",
+        "score": 0.99,
+        "title": "Work 14",
+        "author": "Author 14",
+        "asin": "B000000014",
+        "isbn": "",
+        "language": "en",
+        "duration_sec": 36000,
+        "duration_delta_sec": 0,
+        "transcription_boosted": false
+      }
+    },
+    {
+      "bucket": "reviewable",
+      "status": "applied",
+      "review_status": "audio_confirmed",
+      "stale": false,
+      "fallback_deferred": false,
+      "book": {
+        "id": "b15",
+        "title": "Title 000015",
+        "language": "en",
+        "duration_seconds": 36000,
+        "runtime_lower_bound_seconds": 0,
+        "transcribed_title": ""
+      },
+      "candidate": {
+        "source": "Open Library",
+        "score": 0.9,
+        "title": "Work 15",
+        "author": "Author 15",
+        "asin": "",
+        "isbn": "",
+        "language": "en",
+        "duration_sec": 36000,
+        "duration_delta_sec": 0,
+        "transcription_boosted": false
+      }
+    },
+    {
+      "bucket": "unreviewable",
+      "status": "no_candidates",
+      "review_status": null,
+      "stale": true,
+      "fallback_deferred": true,
+      "book": {
+        "id": "u01",
+        "title": "Title 000101",
+        "language": "en",
+        "duration_seconds": 36000,
+        "runtime_lower_bound_seconds": 0,
+        "transcribed_title": ""
+      },
+      "candidate": null
+    },
+    {
+      "bucket": "unreviewable",
+      "status": "decode_error",
+      "review_status": null,
+      "stale": false,
+      "fallback_deferred": false,
+      "book": {
+        "id": "u02",
+        "title": "Title 000102",
+        "language": "en",
+        "duration_seconds": 36000,
+        "runtime_lower_bound_seconds": 0,
+        "transcribed_title": ""
+      },
+      "candidate": null
+    },
+    {
+      "bucket": "unreviewable",
+      "status": "resolved_no_candidates",
+      "review_status": "no_match",
+      "stale": false,
+      "fallback_deferred": false,
+      "book": {
+        "id": "u03",
+        "title": "Title 000103",
+        "language": "en",
+        "duration_seconds": 36000,
+        "runtime_lower_bound_seconds": 0,
+        "transcribed_title": ""
+      },
+      "candidate": null
+    },
+    {
+      "bucket": "unreviewable",
+      "status": "resolved_no_candidates",
+      "review_status": "matched",
+      "stale": true,
+      "fallback_deferred": false,
+      "book": {
+        "id": "u04",
+        "title": "Title 000104",
+        "language": "en",
+        "duration_seconds": 36000,
+        "runtime_lower_bound_seconds": 0,
+        "transcribed_title": ""
+      },
+      "candidate": null
+    }
+  ],
+  "facets": {
+    "matched": 11,
+    "no_match": 2,
+    "total": 15,
+    "total_applied": 2,
+    "errors": 1,
+    "stale": 5,
+    "deferred": 1,
+    "resolved_no_candidates": 2,
+    "unreviewable": 2,
+    "unreviewable_by_cause": {
+      "orphaned": 0,
+      "no_candidates": 1,
+      "decode_errors": 1,
+      "book_read_errors": 0
+    },
+    "sources": {
+      "audible": 9,
+      "google_books": 3,
+      "openlibrary": 3
+    }
+  },
+  "cases": [
+    {
+      "name": "no filters lists every reviewable row in listing order",
+      "query": {},
+      "want_ids": [
+        "b01",
+        "b02",
+        "b03",
+        "b04",
+        "b05",
+        "b06",
+        "b07",
+        "b08",
+        "b09",
+        "b10",
+        "b11",
+        "b12",
+        "b13",
+        "b14",
+        "b15"
+      ],
+      "why": "no filter applies; status order matched, no_match, applied",
+      "want_runtime_hidden": 0,
+      "server_only": false,
+      "want_total": 15
+    },
+    {
+      "name": "chip matched",
+      "query": {
+        "chip": "matched"
+      },
+      "want_ids": [
+        "b01",
+        "b02",
+        "b03",
+        "b04",
+        "b05",
+        "b06",
+        "b07",
+        "b08",
+        "b09",
+        "b10",
+        "b11"
+      ],
+      "why": "chipRows matched: results with status matched",
+      "want_runtime_hidden": 0,
+      "server_only": false,
+      "want_total": 11
+    },
+    {
+      "name": "chip no_match",
+      "query": {
+        "chip": "no_match"
+      },
+      "want_ids": [
+        "b12",
+        "b13"
+      ],
+      "why": "results with status no_match",
+      "want_runtime_hidden": 0,
+      "server_only": false,
+      "want_total": 2
+    },
+    {
+      "name": "chip total",
+      "query": {
+        "chip": "total"
+      },
+      "want_ids": [
+        "b01",
+        "b02",
+        "b03",
+        "b04",
+        "b05",
+        "b06",
+        "b07",
+        "b08",
+        "b09",
+        "b10",
+        "b11",
+        "b12",
+        "b13",
+        "b14",
+        "b15"
+      ],
+      "why": "every reviewable row",
+      "want_runtime_hidden": 0,
+      "server_only": false,
+      "want_total": 15
+    },
+    {
+      "name": "chip errors",
+      "query": {
+        "chip": "errors"
+      },
+      "want_ids": [
+        "u02"
+      ],
+      "why": "unreviewable rows with status decode_error",
+      "want_runtime_hidden": 0,
+      "server_only": false,
+      "want_total": 1
+    },
+    {
+      "name": "chip no_candidates",
+      "query": {
+        "chip": "no_candidates"
+      },
+      "want_ids": [
+        "u01"
+      ],
+      "why": "unreviewable no_candidates",
+      "want_runtime_hidden": 0,
+      "server_only": false,
+      "want_total": 1
+    },
+    {
+      "name": "chip resolved_no_candidates",
+      "query": {
+        "chip": "resolved_no_candidates"
+      },
+      "want_ids": [
+        "u03",
+        "u04"
+      ],
+      "why": "unreviewable resolved_no_candidates",
+      "want_runtime_hidden": 0,
+      "server_only": false,
+      "want_total": 2
+    },
+    {
+      "name": "chip stale reads both buckets, reviewable first",
+      "query": {
+        "chip": "stale"
+      },
+      "want_ids": [
+        "b09",
+        "b10",
+        "b14",
+        "u01",
+        "u04"
+      ],
+      "why": "[...results, ...unreviewable].filter(stale === true)",
+      "want_runtime_hidden": 0,
+      "server_only": false,
+      "want_total": 5
+    },
+    {
+      "name": "chip deferred",
+      "query": {
+        "chip": "deferred"
+      },
+      "want_ids": [
+        "u01"
+      ],
+      "why": "fallback_deferred === true over both buckets",
+      "want_runtime_hidden": 0,
+      "server_only": false,
+      "want_total": 1
+    },
+    {
+      "name": "chip pauses every filter but the title",
+      "query": {
+        "chip": "stale",
+        "q": "/^title 0000/",
+        "hide_applied": "true",
+        "hide_runtime": "true",
+        "min_confidence": "95"
+      },
+      "want_ids": [
+        "b09",
+        "b10",
+        "b14"
+      ],
+      "why": "chipRows only applies titleRegex; Title 000101/000104 do not start with 'title 0000'",
+      "want_runtime_hidden": 0,
+      "server_only": false,
+      "want_total": 3
+    },
+    {
+      "name": "hide applied",
+      "query": {
+        "hide_applied": "true"
+      },
+      "want_ids": [
+        "b01",
+        "b02",
+        "b03",
+        "b04",
+        "b05",
+        "b06",
+        "b07",
+        "b08",
+        "b09",
+        "b10",
+        "b11",
+        "b12",
+        "b13"
+      ],
+      "why": "rowStates applied (seeded from status applied): b14, b15",
+      "want_runtime_hidden": 0,
+      "server_only": false,
+      "want_total": 13
+    },
+    {
+      "name": "hide rejected",
+      "query": {
+        "hide_rejected": "true"
+      },
+      "want_ids": [
+        "b01",
+        "b02",
+        "b03",
+        "b04",
+        "b05",
+        "b06",
+        "b07",
+        "b08",
+        "b09",
+        "b10",
+        "b11",
+        "b14",
+        "b15"
+      ],
+      "why": "rowStates rejected (seeded from status no_match): b12, b13",
+      "want_runtime_hidden": 0,
+      "server_only": false,
+      "want_total": 13
+    },
+    {
+      "name": "hide rejected keeps a skipped no-match row",
+      "query": {
+        "hide_rejected": "true",
+        "skipped": "b12"
+      },
+      "want_ids": [
+        "b01",
+        "b02",
+        "b03",
+        "b04",
+        "b05",
+        "b06",
+        "b07",
+        "b08",
+        "b09",
+        "b10",
+        "b11",
+        "b12",
+        "b14",
+        "b15"
+      ],
+      "why": "skip sets the client-only state skipped, which the reconcile never turns into rejected",
+      "want_runtime_hidden": 0,
+      "server_only": false,
+      "want_total": 14
+    },
+    {
+      "name": "hide skipped; applied outranks skipped",
+      "query": {
+        "hide_skipped": "true",
+        "skipped": "b11,b14"
+      },
+      "want_ids": [
+        "b01",
+        "b02",
+        "b03",
+        "b04",
+        "b05",
+        "b06",
+        "b07",
+        "b08",
+        "b09",
+        "b10",
+        "b12",
+        "b13",
+        "b14",
+        "b15"
+      ],
+      "why": "b11 skipped; b14 server-applied, and applied outranks a local state",
+      "want_runtime_hidden": 0,
+      "server_only": false,
+      "want_total": 14
+    },
+    {
+      "name": "hide no match",
+      "query": {
+        "hide_no_match": "true"
+      },
+      "want_ids": [
+        "b01",
+        "b02",
+        "b03",
+        "b04",
+        "b05",
+        "b06",
+        "b07",
+        "b08",
+        "b09",
+        "b10",
+        "b11",
+        "b14",
+        "b15"
+      ],
+      "why": "status no_match hidden",
+      "want_runtime_hidden": 0,
+      "server_only": false,
+      "want_total": 13
+    },
+    {
+      "name": "min confidence 50 applies to matched rows only",
+      "query": {
+        "min_confidence": "50"
+      },
+      "want_ids": [
+        "b01",
+        "b03",
+        "b04",
+        "b05",
+        "b06",
+        "b07",
+        "b08",
+        "b09",
+        "b10",
+        "b11",
+        "b12",
+        "b13",
+        "b14",
+        "b15"
+      ],
+      "why": "b02 0.40*100 < 50; b12 (0.30) is no_match, not filtered",
+      "want_runtime_hidden": 0,
+      "server_only": false,
+      "want_total": 14
+    },
+    {
+      "name": "min confidence 90 boundary",
+      "query": {
+        "min_confidence": "90"
+      },
+      "want_ids": [
+        "b01",
+        "b05",
+        "b07",
+        "b08",
+        "b09",
+        "b12",
+        "b13",
+        "b14",
+        "b15"
+      ],
+      "why": "score*100 >= 90 for matched: 0.95, 0.90 (x4); 0.88, 0.85, 0.80, 0.75, 0.70, 0.40 fail",
+      "want_runtime_hidden": 0,
+      "server_only": false,
+      "want_total": 9
+    },
+    {
+      "name": "hide runtime differences",
+      "query": {
+        "hide_runtime": "true"
+      },
+      "want_ids": [
+        "b01",
+        "b02",
+        "b03",
+        "b07",
+        "b08",
+        "b09",
+        "b10",
+        "b11",
+        "b12",
+        "b13",
+        "b14",
+        "b15"
+      ],
+      "want_runtime_hidden": 3,
+      "why": "b04 6000/36000 > 10%; b05 delta 700 > 600; b06 lower bound 20000 vs 10000; b03 unknown book runtime kept",
+      "server_only": false,
+      "want_total": 12
+    },
+    {
+      "name": "match language; unknown on either side is a no-op",
+      "query": {
+        "match_language": "true"
+      },
+      "want_ids": [
+        "b01",
+        "b02",
+        "b04",
+        "b05",
+        "b06",
+        "b07",
+        "b08",
+        "b09",
+        "b10",
+        "b11",
+        "b12",
+        "b13",
+        "b14",
+        "b15"
+      ],
+      "why": "b03 de vs English; b04 book unset, b06 candidate unset, b05 en vs eng kept",
+      "want_runtime_hidden": 0,
+      "server_only": false,
+      "want_total": 14
+    },
+    {
+      "name": "has transcription",
+      "query": {
+        "has_transcription": "true"
+      },
+      "want_ids": [
+        "b09"
+      ],
+      "why": "only b09 has transcribed_title",
+      "want_runtime_hidden": 0,
+      "server_only": false,
+      "want_total": 1
+    },
+    {
+      "name": "transcription matched",
+      "query": {
+        "transcription_matched": "true"
+      },
+      "want_ids": [
+        "b09"
+      ],
+      "why": "only b09 candidate transcription_boosted",
+      "want_runtime_hidden": 0,
+      "server_only": false,
+      "want_total": 1
+    },
+    {
+      "name": "hide multi-book",
+      "query": {
+        "hide_multi_book": "true"
+      },
+      "want_ids": [
+        "b01",
+        "b02",
+        "b03",
+        "b04",
+        "b05",
+        "b06",
+        "b09",
+        "b10",
+        "b11",
+        "b12",
+        "b13",
+        "b14",
+        "b15"
+      ],
+      "why": "b07/b08 share asin B0SHARED00 and are matched; b13 shares it but is no_match",
+      "want_runtime_hidden": 0,
+      "server_only": false,
+      "want_total": 13
+    },
+    {
+      "name": "hide multi-book with an ungrouped member",
+      "query": {
+        "hide_multi_book": "true",
+        "ungrouped": "b07"
+      },
+      "want_ids": [
+        "b01",
+        "b02",
+        "b03",
+        "b04",
+        "b05",
+        "b06",
+        "b07",
+        "b08",
+        "b09",
+        "b10",
+        "b11",
+        "b12",
+        "b13",
+        "b14",
+        "b15"
+      ],
+      "why": "b07 is ungrouped, so b08 is alone in its key",
+      "want_runtime_hidden": 0,
+      "server_only": false,
+      "want_total": 15
+    },
+    {
+      "name": "multi-book is computed over the filtered set",
+      "query": {
+        "hide_multi_book": "true",
+        "q": "02"
+      },
+      "want_ids": [
+        "b02",
+        "b08"
+      ],
+      "why": "title filter leaves b02 and b08; b08's group partner b07 is filtered out, so nothing groups",
+      "want_runtime_hidden": 0,
+      "server_only": false,
+      "want_total": 2
+    },
+    {
+      "name": "title substring is case-insensitive",
+      "query": {
+        "q": "chapter"
+      },
+      "want_ids": [
+        "b07",
+        "b08"
+      ],
+      "why": "contains chapter",
+      "want_runtime_hidden": 0,
+      "server_only": false,
+      "want_total": 2
+    },
+    {
+      "name": "title glob matches the whole value",
+      "query": {
+        "q": "title*saga"
+      },
+      "want_ids": [
+        "b10"
+      ],
+      "why": "whole trimmed title must match title.*saga",
+      "want_runtime_hidden": 0,
+      "server_only": false,
+      "want_total": 1
+    },
+    {
+      "name": "title glob prefix via title: token",
+      "query": {
+        "q": "title:the*"
+      },
+      "want_ids": [
+        "b03"
+      ],
+      "why": "only The Title 000003 starts with the",
+      "want_runtime_hidden": 0,
+      "server_only": false,
+      "want_total": 1
+    },
+    {
+      "name": "title RE2",
+      "query": {
+        "q": "title:/^\\s*\\d/"
+      },
+      "want_ids": [
+        "b07",
+        "b08"
+      ],
+      "why": "titles starting with a digit",
+      "want_runtime_hidden": 0,
+      "server_only": false,
+      "want_total": 2
+    },
+    {
+      "name": "title RE2 negated",
+      "query": {
+        "q": "-title:/^\\s*\\d/"
+      },
+      "want_ids": [
+        "b01",
+        "b02",
+        "b03",
+        "b04",
+        "b05",
+        "b06",
+        "b09",
+        "b10",
+        "b11",
+        "b12",
+        "b13",
+        "b14",
+        "b15"
+      ],
+      "why": "negation of the previous case",
+      "want_runtime_hidden": 0,
+      "server_only": false,
+      "want_total": 13
+    },
+    {
+      "name": "quoted title is a literal substring",
+      "query": {
+        "q": "\"Title 00001\""
+      },
+      "want_ids": [
+        "b10",
+        "b11",
+        "b12",
+        "b13",
+        "b14",
+        "b15"
+      ],
+      "why": "'title 00001' occurs in Title 000010..000015 but not in Title 000001",
+      "want_runtime_hidden": 0,
+      "server_only": false,
+      "want_total": 6
+    },
+    {
+      "name": "source filter uses the provider id mapping",
+      "query": {
+        "source": "google_books"
+      },
+      "want_ids": [
+        "b03",
+        "b06",
+        "b12"
+      ],
+      "why": "Google Books and Google both map to google_books",
+      "want_runtime_hidden": 0,
+      "server_only": false,
+      "want_total": 3
+    },
+    {
+      "name": "the lane's strict combination",
+      "query": {
+        "hide_applied": "true",
+        "hide_rejected": "true",
+        "hide_no_match": "true",
+        "hide_runtime": "true",
+        "match_language": "true",
+        "min_confidence": "50"
+      },
+      "want_ids": [
+        "b01",
+        "b07",
+        "b08",
+        "b09",
+        "b10",
+        "b11"
+      ],
+      "want_runtime_hidden": 3,
+      "why": "applied b14 b15, rejected b12 b13, confidence b02, runtime b04 b05 b06 (counted), language b03",
+      "server_only": false,
+      "want_total": 6
+    },
+    {
+      "name": "bucket unreviewable",
+      "query": {
+        "bucket": "unreviewable"
+      },
+      "want_ids": [
+        "u01",
+        "u02",
+        "u03",
+        "u04"
+      ],
+      "why": "the unreviewable rows in listing order",
+      "server_only": true,
+      "want_runtime_hidden": 0,
+      "want_total": 4
+    },
+    {
+      "name": "sort by title",
+      "query": {
+        "sort": "title"
+      },
+      "want_ids": [
+        "b07",
+        "b08",
+        "b03",
+        "b01",
+        "b02",
+        "b04",
+        "b05",
+        "b06",
+        "b09",
+        "b10",
+        "b11",
+        "b12",
+        "b13",
+        "b14",
+        "b15"
+      ],
+      "why": "lower-cased title ascending, stable",
+      "server_only": true,
+      "want_runtime_hidden": 0,
+      "want_total": 15
+    },
+    {
+      "name": "sort by confidence",
+      "query": {
+        "sort": "confidence"
+      },
+      "want_ids": [
+        "b14",
+        "b01",
+        "b05",
+        "b07",
+        "b08",
+        "b09",
+        "b15",
+        "b11",
+        "b04",
+        "b03",
+        "b06",
+        "b10",
+        "b13",
+        "b02",
+        "b12"
+      ],
+      "why": "score descending, ties in listing order",
+      "server_only": true,
+      "want_runtime_hidden": 0,
+      "want_total": 15
+    }
+  ]
+}

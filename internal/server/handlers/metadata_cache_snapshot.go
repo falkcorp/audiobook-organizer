@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_snapshot.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 9d3c7a51-2e6b-4f08-b4a9-7c1e5f2d8a36
-// last-edited: 2026-10-03
+// last-edited: 2026-10-10
 
 package handlers
 
@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -89,6 +90,24 @@ type snapshotRow struct {
 	// hash is metafetch.CandidateHash(*cand), what every review-page apply
 	// button echoes back in its pin.
 	hash string
+	// title is the book's title as read when the row was built, and
+	// titleFold its strings.ToLower: what a substring Title filter compares
+	// against (the server-side review query, metadata_cache_query.go), so a
+	// keystroke does not lower-case every title in the library again. A book
+	// the overlay re-read is matched on its live title instead
+	// (snapshotRow.foldedTitle).
+	title     string
+	titleFold string
+}
+
+// foldedTitle returns strings.ToLower(title), from the precomputed fold when
+// title is the one the row was built with (the same string, usually the same
+// backing array, so the comparison is a pointer check).
+func (r *snapshotRow) foldedTitle(title string) string {
+	if title == r.title {
+		return r.titleFold
+	}
+	return strings.ToLower(title)
 }
 
 // reviewSnapshot is never mutated after it is published.
@@ -299,6 +318,10 @@ func (d *decodeTally) row(r loadedCacheRow) snapshotRow {
 			sr.cand = &cand
 			sr.hash = metafetch.CandidateHash(cand)
 		}
+	}
+	if r.book != nil {
+		sr.title = r.book.Title
+		sr.titleFold = strings.ToLower(r.book.Title)
 	}
 	// Neither is read after this point: the decoded candidate replaces the
 	// raw one, and the snapshot's books map (then the overlay) the book.
