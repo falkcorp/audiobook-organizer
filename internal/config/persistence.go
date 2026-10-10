@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/spf13/viper"
@@ -446,6 +447,35 @@ func migrateITunesBlob(blob string) (string, bool) {
 	return string(migrated), true
 }
 
+// embedCoverArtMigratedKey marks that migrateEmbedCoverArtBlob has run, so
+// the one-shot below never fires again and cannot undo a later operator choice.
+const embedCoverArtMigratedKey = "embed_cover_art_default_on_migrated"
+
+// migrateEmbedCoverArtBlob drops a stored "embed_cover_art": false so the new
+// default (true) applies. Run it exactly once per install (the caller gates it
+// on embedCoverArtMigratedKey).
+//
+// No stored false can be an operator choice: before 2026-10-09 (01-P79a) the
+// embed_cover_art key did nothing, the cover embed ran unconditionally, and
+// every settings save serialised the old default (false) into the blob. A
+// stored true is an explicit choice and is left alone, as is an absent key.
+func migrateEmbedCoverArtBlob(blob string) (string, bool) {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(blob), &raw); err != nil {
+		return blob, false
+	}
+	v, ok := raw["embed_cover_art"]
+	if !ok || strings.TrimSpace(string(v)) != "false" {
+		return blob, false
+	}
+	delete(raw, "embed_cover_art")
+	migrated, err := json.Marshal(raw)
+	if err != nil {
+		return blob, false
+	}
+	return string(migrated), true
+}
+
 // migrateMaintenanceBlob rewrites flat maintenance_window_* fields to the nested
 // MaintenanceConfig format. Safe to call repeatedly.
 func migrateMaintenanceBlob(blob string) (string, bool) {
@@ -778,6 +808,21 @@ func LoadConfigFromDatabase(store database.SettingsStore) error {
 			blobStr = migrated
 			if saveErr := saveRawBlob(store, migrated); saveErr != nil {
 				slog.Warn("config: failed to persist migrated auto-update blob", "err", saveErr)
+			}
+		}
+
+		// One-shot: a stored embed_cover_art=false predates the setting doing
+		// anything, so drop it and let the new default (true) apply.
+		if _, done := settingsMap[embedCoverArtMigratedKey]; !done {
+			if migrated, changed := migrateEmbedCoverArtBlob(blobStr); changed {
+				chapterConsolidationLog.Info("dropped stale embed_cover_art=false from the stored blob")
+				blobStr = migrated
+				if saveErr := saveRawBlob(store, migrated); saveErr != nil {
+					chapterConsolidationLog.Warn("failed to persist embed_cover_art blob migration: %v", saveErr)
+				}
+			}
+			if markErr := store.SetSetting(embedCoverArtMigratedKey, "true", "bool", false); markErr != nil {
+				chapterConsolidationLog.Warn("failed to record embed_cover_art migration marker: %v", markErr)
 			}
 		}
 

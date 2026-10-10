@@ -1,7 +1,7 @@
 // file: internal/config/persistence_test.go
-// version: 1.20.0
+// version: 1.21.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-10-08
+// last-edited: 2026-10-09
 
 package config
 
@@ -1303,4 +1303,60 @@ func TestApplySetting_RemovedITunesSyncKeysAreIgnored(t *testing.T) {
 	require.NoError(t, applySetting("itunes_sync_enabled", "true", "bool"))
 	require.NoError(t, applySetting("itunes_sync_interval", "60", "int"))
 	assert.Equal(t, ITunesConfig{}, AppConfig.ITunes, "a removed sync key must change nothing")
+}
+
+func TestMigrateEmbedCoverArtBlob(t *testing.T) {
+	out, changed := migrateEmbedCoverArtBlob(`{"embed_cover_art":false,"language":"en"}`)
+	assert.True(t, changed)
+	assert.NotContains(t, out, "embed_cover_art")
+	assert.Contains(t, out, `"language":"en"`)
+
+	for _, blob := range []string{`{"embed_cover_art":true}`, `{"language":"en"}`, `not json`} {
+		out, changed := migrateEmbedCoverArtBlob(blob)
+		assert.False(t, changed, blob)
+		assert.Equal(t, blob, out)
+	}
+}
+
+func TestLoadConfigFromDatabase_EmbedCoverArtMigration(t *testing.T) {
+	run := func(t *testing.T, blob string, marked bool) (loaded bool, saved string) {
+		resetConfigTestState()
+		t.Cleanup(resetConfigTestState)
+		viper.SetDefault("embed_cover_art", true)
+		Mutate(func(c *Config) { c.EmbedCoverArt = true })
+		store := mocks.NewMockStore(t)
+		setupMigrationExpectations(store)
+		settings := []database.Setting{{Key: "config_blob", Value: blob}}
+		if marked {
+			settings = append(settings, database.Setting{Key: embedCoverArtMigratedKey, Value: "true"})
+		}
+		store.EXPECT().GetAllSettings().Return(settings, nil).Once()
+		store.On("SetSetting", "config_blob", mock.Anything, "json", false).Run(func(args mock.Arguments) {
+			saved = args.String(1)
+		}).Return(nil).Maybe()
+		store.On("SetSetting", embedCoverArtMigratedKey, "true", "bool", false).Return(nil).Maybe()
+		require.NoError(t, LoadConfigFromDatabase(store))
+		return Snapshot().EmbedCoverArt, saved
+	}
+
+	t.Run("stored false loads as true and the key leaves the blob", func(t *testing.T) {
+		got, saved := run(t, `{"embed_cover_art":false}`, false)
+		assert.True(t, got)
+		assert.NotContains(t, saved, "embed_cover_art")
+	})
+	t.Run("stored true is untouched", func(t *testing.T) {
+		got, saved := run(t, `{"embed_cover_art":true}`, false)
+		assert.True(t, got)
+		assert.Contains(t, saved, `"embed_cover_art":true`)
+	})
+	t.Run("absent key is untouched", func(t *testing.T) {
+		got, saved := run(t, `{"language":"en"}`, false)
+		assert.True(t, got)
+		assert.NotContains(t, saved, "embed_cover_art")
+	})
+	t.Run("after the marker, a stored false is an operator choice", func(t *testing.T) {
+		got, saved := run(t, `{"embed_cover_art":false}`, true)
+		assert.False(t, got)
+		assert.Contains(t, saved, `"embed_cover_art":false`)
+	})
 }

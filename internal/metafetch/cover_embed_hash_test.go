@@ -1,5 +1,5 @@
 // file: internal/metafetch/cover_embed_hash_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4d8b2f60-1a97-4e3c-8c52-b6e9a0d7f314
 // last-edited: 2026-10-09
 
@@ -133,6 +133,7 @@ func writeEmbedFixture(t *testing.T, dir string) (audioPath, coverPath string) {
 
 // The embed_cover_art setting gates the embed: off leaves the file's bytes
 // alone, on rewrites them with the cover.
+// Mutates global config.AppConfig: must not be made parallel.
 func TestEmbedCoverInBookFiles_RespectsEmbedCoverArt(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
