@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_apply_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: bc6eeacd-35fa-4d23-a051-ee09424676a9
-// last-edited: 2026-09-13
+// last-edited: 2026-10-10
 
 package metafetch
 
@@ -98,7 +98,7 @@ var _ database.ActivityStorer = (*capturingActivityStore)(nil)
 // activity.Service backed by a capturing store, then returns both.
 // An owner-reviewed override is applied past legs the certainty gate refused;
 // its change-history rows are the only record to audit or revert it from.
-// History is recorded after the commit (CommitApply), so a failed history
+// History is recorded after the commit (commitApply), so a failed history
 // write cannot stop the write; it must instead come back with the response so
 // the op reports and counts it. An unreviewed apply keeps main's behaviour:
 // logged, the apply stands, no error.

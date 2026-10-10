@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/handler_test.go
-// version: 1.18.0
+// version: 1.19.0
 // guid: 1d31ef73-7c7a-4c3b-a840-01b0865023d7
 // last-edited: 2026-10-10
 
@@ -562,7 +562,7 @@ func TestBulkFetchMetadata_Updates(t *testing.T) {
 		}}, nil)
 	// onlyMissing defaults true; title has a value so it's only fetched (not applied),
 	// publisher is missing so it gets applied → didUpdate true.
-	d.mfs.EXPECT().CommitApply("b1", mock.Anything, mock.Anything, mock.Anything, "audible").Return(&database.Book{ID: "b1"}, nil)
+	d.mfs.EXPECT().CommitCandidateApply("b1", mock.Anything, mock.Anything, mock.Anything, candidateFromSource("audible")).Return(&database.Book{ID: "b1"}, nil)
 	d.mfs.EXPECT().ApplyMetadataSystemTags("b1", "audible", "").Return()
 	w := doReq(h.BulkFetchMetadata, http.MethodPost, "/metadata/bulk-fetch",
 		map[string]any{"book_ids": []string{"b1"}}, nil)
@@ -589,8 +589,10 @@ func TestBulkFetchMetadata_PrintYearCandidateFields(t *testing.T) {
 			Narrator: "Rob Inglis", Genre: "Fiction", Subtitle: "There and Back Again", PageCount: 310,
 		}}}, nil)
 	var saved *database.Book
-	d.mfs.EXPECT().CommitApply("b1", mock.Anything, mock.Anything, mock.Anything, "Hardcover").
-		Run(func(_ string, _ *database.Book, b *database.Book, _ *metafetch.AuthorCredits, _ string) { saved = b }).
+	d.mfs.EXPECT().CommitCandidateApply("b1", mock.Anything, mock.Anything, mock.Anything, candidateFromSource("Hardcover")).
+		Run(func(_ string, _ *database.Book, b *database.Book, _ *metafetch.AuthorCredits, _ *metafetch.MetadataCandidate) {
+			saved = b
+		}).
 		Return(&database.Book{ID: "b1"}, nil)
 	d.mfs.EXPECT().ApplyMetadataSystemTags("b1", "Hardcover", "").Return()
 
@@ -762,7 +764,7 @@ func TestBulkFetchMetadata_ParallelPreservesOrderAndCounts(t *testing.T) {
 		Return(&metafetch.SearchMetadataResponse{Results: []metafetch.MetadataCandidate{
 			{Title: "Old5", Source: "audible", Publisher: "Pub5"},
 		}}, nil)
-	mfs.EXPECT().CommitApply("b5", mock.Anything, mock.Anything, mock.Anything, "audible").Return(&database.Book{ID: "b5"}, nil)
+	mfs.EXPECT().CommitCandidateApply("b5", mock.Anything, mock.Anything, mock.Anything, candidateFromSource("audible")).Return(&database.Book{ID: "b5"}, nil)
 	mfs.EXPECT().ApplyMetadataSystemTags("b5", "audible", "").Return()
 
 	var utMu sync.Mutex
@@ -1007,8 +1009,10 @@ func TestBulkFetchMetadata_SkipsReviewOnlyTopCandidate(t *testing.T) {
 			{Title: "Chain Title", Source: "Audible", Publisher: "Audible Pub", Score: 0.9},
 		}}, nil)
 	var saved *database.Book
-	d.mfs.EXPECT().CommitApply("b1", mock.Anything, mock.Anything, mock.Anything, "Audible").
-		Run(func(_ string, _ *database.Book, b *database.Book, _ *metafetch.AuthorCredits, _ string) { saved = b }).
+	d.mfs.EXPECT().CommitCandidateApply("b1", mock.Anything, mock.Anything, mock.Anything, candidateFromSource("Audible")).
+		Run(func(_ string, _ *database.Book, b *database.Book, _ *metafetch.AuthorCredits, _ *metafetch.MetadataCandidate) {
+			saved = b
+		}).
 		Return(&database.Book{ID: "b1"}, nil)
 	d.mfs.EXPECT().ApplyMetadataSystemTags("b1", "Audible", "").Return()
 	w := doReq(h.BulkFetchMetadata, http.MethodPost, "/metadata/bulk-fetch",
@@ -1018,6 +1022,55 @@ func TestBulkFetchMetadata_SkipsReviewOnlyTopCandidate(t *testing.T) {
 	}
 	if saved == nil || saved.Publisher == nil || *saved.Publisher != "Audible Pub" {
 		t.Fatalf("saved %+v, want the Audible candidate's publisher", saved)
+	}
+}
+
+// candidateFromSource matches the candidate a bulk fetch commits by its
+// source.
+func candidateFromSource(source string) any {
+	return mock.MatchedBy(func(c *metafetch.MetadataCandidate) bool { return c != nil && c.Source == source })
+}
+
+// Review round 4, S1: the bulk fetch picks with the owner's rejections as
+// read after the search (none here), and the owner rejects the picked
+// candidate before its commit. The commit (CommitCandidateApply) re-reads
+// the rejections under the book's write stripe and refuses; the handler
+// reports owner_rejected, writes no system tags and counts nothing
+// updated. An unreadable list at the commit is an error. The refusal itself
+// is metafetch's TestCommitCandidateApply_RefusesRejectionMadeAfterThePick.
+func TestBulkFetchMetadata_RejectionAtCommitIsRefused(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		commitErr  error
+		wantStatus string
+	}{
+		{"rejected since the pick", fmt.Errorf("book b1: %w", &metafetch.OwnerRejectedNotAppliedError{Title: "Chain Title", Sources: []string{"Audible"}}), "owner_rejected"},
+		{"rejections unreadable at the commit", fmt.Errorf("book b1: %w", metafetch.ErrOwnerRejectionCheckFailed), "error"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, d := newHandler(t)
+			expectNoLocks(d.store)
+			d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1", Title: "Old"}, nil)
+			d.store.EXPECT().GetBookAuthors("b1").Return(nil, nil).Maybe()
+			d.mfs.EXPECT().SearchMetadataForBookWithOptions("b1", "", "", "", "", mock.Anything).
+				Return(&metafetch.SearchMetadataResponse{Results: []metafetch.MetadataCandidate{
+					{Title: "Chain Title", Source: "Audible", ASIN: "B0SYNBLK01", Publisher: "Audible Pub", Score: 0.9},
+				}}, nil)
+			d.mfs.EXPECT().CommitCandidateApply("b1", mock.Anything, mock.Anything, mock.Anything,
+				mock.MatchedBy(func(c *metafetch.MetadataCandidate) bool { return c != nil && c.ASIN == "B0SYNBLK01" })).
+				Return(nil, tc.commitErr)
+			// No ApplyMetadataSystemTags expectation: the mock fails the test
+			// if a refused book is tagged.
+			w := doReq(h.BulkFetchMetadata, http.MethodPost, "/metadata/bulk-fetch",
+				map[string]any{"book_ids": []string{"b1"}}, nil)
+			if w.Code != http.StatusOK {
+				t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+			}
+			body := w.Body.String()
+			if !strings.Contains(body, `"status":"`+tc.wantStatus+`"`) || !strings.Contains(body, `"updated_count":0`) {
+				t.Fatalf("body %s, want status %s and nothing updated", body, tc.wantStatus)
+			}
+		})
 	}
 }
 
@@ -1032,7 +1085,7 @@ func TestBulkFetchMetadata_OnlyReviewOnlyAppliesNothing(t *testing.T) {
 				Return(&metafetch.SearchMetadataResponse{Results: []metafetch.MetadataCandidate{
 					{Title: "Review Only Title", Source: source, Publisher: "Pub", Score: 0.99},
 				}}, nil)
-			// No CommitApply expectation: the mock fails the test on any write.
+			// No CommitCandidateApply expectation: the mock fails the test on any write.
 			w := doReq(h.BulkFetchMetadata, http.MethodPost, "/metadata/bulk-fetch",
 				map[string]any{"book_ids": []string{"b1"}}, nil)
 			if w.Code != http.StatusOK {

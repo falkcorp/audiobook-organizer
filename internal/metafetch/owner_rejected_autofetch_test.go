@@ -1,5 +1,5 @@
 // file: internal/metafetch/owner_rejected_autofetch_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 7c2e4a90-1b3d-4f6e-8a25-9d0c1e7f3b48
 // last-edited: 2026-10-10
 
@@ -331,6 +331,47 @@ func TestApplyCandidate_RefusedCommitLeavesNoAuthorCredit(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, sameAuthorCredits(before, after), "refused apply left author credits: before %+v, after %+v", before, after)
 			require.Nil(t, f.book(id).Description)
+		})
+	}
+}
+
+// Review round 4, S1: the bulk-fetch handler picks a candidate with the
+// rejections as read after its search, assembles the fields, and commits
+// through CommitCandidateApply. A rejection the owner makes between the
+// pick and the commit refuses the write; without one the same commit lands.
+func TestCommitCandidateApply_RefusesRejectionMadeAfterThePick(t *testing.T) {
+	cand := MetadataCandidate{Source: "Audible", Title: rejFetchTitle, ASIN: "B0SYNBLK01", ISBN13: "9780306406157"}
+	for _, tc := range []struct {
+		name     string
+		rejectAt func(*verdictFixture, string)
+		wantErr  error
+	}{
+		{"rejected after the pick", func(f *verdictFixture, id string) { require.NoError(t, RecordRejection(f.store, id, &cand)) }, ErrOwnerRejectedNotApplied},
+		{"another source rejected its ISBN after the pick", func(f *verdictFixture, id string) {
+			require.NoError(t, RecordRejection(f.store, id, &MetadataCandidate{Source: "Open Library", Title: "Other", ISBN10: "0306406152"}))
+		}, ErrOwnerRejectedNotApplied},
+		{"nothing rejected", func(*verdictFixture, string) {}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, id := rejFetchFixture(t)
+			before := f.book(id)
+			picked, err := LoadRejectedCandidates(f.store, id)
+			require.NoError(t, err)
+			require.False(t, picked.HasCandidate(&cand), "fixture: the candidate must be acceptable at the pick")
+
+			tc.rejectAt(f, id)
+			working := *before
+			working.Publisher = new("Synthetic Bulk Pub")
+			updated, err := f.mfs.CommitCandidateApply(id, before, &working, nil, &cand)
+			if tc.wantErr == nil {
+				require.NoError(t, err)
+				require.NotNil(t, updated)
+				require.Equal(t, "Synthetic Bulk Pub", *f.book(id).Publisher)
+				return
+			}
+			require.ErrorIs(t, err, tc.wantErr)
+			require.Nil(t, updated)
+			require.Nil(t, f.book(id).Publisher, "the candidate rejected after the pick was written")
 		})
 	}
 }
