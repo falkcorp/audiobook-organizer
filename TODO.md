@@ -1,7 +1,7 @@
 <!-- file: TODO.md -->
-<!-- version: 10.76.2 -->
+<!-- version: 10.76.3 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-10-08 -->
+<!-- last-edited: 2026-10-10 -->
 
 # Project TODO — live items only
 
@@ -13,6 +13,122 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **DOCS-ACTIVITY-BACKEND** Rewrite the live system docs that still describe
+      the activity log as NutsDB with SQLite "disabled by default for
+      pre-NutsDB deployments": `docs/system/storage.md` lines 147-172 (the
+      "SQLite (opt-in legacy)" paragraph, line 163 is the sentence about the
+      default), `docs/system/README.md:17`, `docs/system/architecture.md:37`
+      and `:64`, `docs/system/components.md:143`,
+      `.github/copilot-instructions.md:17`. Since 01-P1 (#3879, 2026-10-09)
+      the default is Pebble and SQLite is the legacy opt-in until 01-P75
+      removes it; `docs/architecture.md:18` and
+      `docs/reference/config-api-shape.md` already say so. Found by the #3879
+      review; the brief scoped docs to those two files, so this is the rest.
+
+- [ ] **PROP-CHROMEM-FLAKE** `TestProp_ChromemMatchesSqlite`
+      (`internal/server/dedup_engine_prop_test.go:387`) failed once on `main`
+      run 37995734374 attempt 1 ("sqlite→chromem overlap too low: 0 of 1
+      matched (chromem set=0)") and passed on the auto re-run. The 07-C4
+      throughput record (`docs/ci/2026-10-ci-throughput.md`) lists it as the
+      only re-run in the first ten merges after 07-C3. It is a random-seed
+      property test, so the counterexample is lost unless the seed is logged:
+      make the test print its seed on failure and pin that seed in a regression
+      case, then find out why chromem returned an empty set for an input sqlite
+      matched. A test that passes on re-run is a bug with a hidden input, not
+      noise.
+
+- [ ] **CI-GO-CACHE-STALE** Give the other Go jobs in `ci.yml` a build cache
+      that refreshes. The shared `Restore Go cache (manual)` step is keyed on
+      `go.sum` alone, so after one job saves it for a `go.sum`, every later job
+      hits the exact key and `actions/cache` never saves again; the entry then
+      holds only the first saver's build objects (not `-race`). Found on 07-C3
+      (PR #3882, 2026-10-09): each short-test shard recompiled the whole module
+      graph race-instrumented, 9 min 18 s before the first test ran. The shard
+      job got its own day-stamped race cache (`actions/cache/restore` +
+      `cache/save` on `main` once a day); `Fixture Tests (no -short, race)`
+      (8 min), `Errcheck Ratchet` (3.5 min), `Mock Freshness`, `Repo Guards` and
+      `Minimal CI / Go Vet & Build` (5 min) still pay the same recompile every
+      run. Done when each restores a cache that contains its own flavour of
+      build objects and the day's second run of each is measurably shorter.
+
+- [ ] **DECODE-REFUSAL-UI** Since 08-X3 (#3896) `acoustid.fingerprint-rescan`
+      is refused unless `ALLOW_SERVER_DECODE` is true, but the callers still
+      promise a rescan. The AcoustID reset confirm dialog and status line in
+      `web/src/components/dedup/DedupAcousticTab.tsx` (around 876 and 885)
+      say a full rescan follows the wipe; on a host without the switch the
+      reset wipes every fingerprint and the rescan fails. Add
+      `serverdecode.Allowed()` to the synchronous 503 check in
+      `internal/server/fingerprint_rescan.go` (beside
+      `fingerprint.Available()`), make the reset handler in
+      `internal/server/handlers/dedup/handler.go` skip or report the rescan,
+      and fix the `prog.Done` text in `internal/plugins/acoustid/reset_all.go`
+      that tells the operator to enqueue a rescan. `dedup.lsh-index-build`
+      (`internal/plugins/dedup/lsh_index_build.go:357`) also enqueues a
+      rescan on every build that finds unfingerprinted files, leaving a failed
+      op each time. Brief 03 PR 4 owns the dialog; 08-X3 froze the handlers.
+- [ ] **DECODE-AUDIT-D2** Owner decision D2: list every remaining in-process
+      decoder the 08-X3 switch does not cover and decide per path. Known:
+      `acoustid.backfill`, `acoustid.window-backfill`,
+      `internal/plugins/acoustid/{lsh_backfill,duration_backfill,online_lookup,worker_hub}.go`,
+      `internal/plugins/maintenance/{missing_file_audit,duration_backfill}.go`,
+      `internal/organizer/inplace_collision.go`,
+      `internal/reconcile/itunes_heal.go` (reaches
+      `internal/transcribe/whisper.go`), `internal/audio/sample.go`
+      (`ExtractSample`), and the on-server transcodes in
+      `internal/transcode/transcode.go` and `internal/remux/`. Some may only
+      call ffprobe; audit before guarding.
+
+- [ ] **SCORE-MISSING-AUTHOR-FETCH** 02-PR9a (#3900) ranks the Search and Browse
+      dialogs by `rank_score` (no penalty for a missing author or narrator), but
+      `score` still carries the 0.75 / 0.85 penalties everywhere else, including
+      `pickBestMatchFromScored` (`internal/metafetch/service_scoring.go`, the
+      `score *= 0.75` no-author and `score *= 0.85` no-narrator branches), which
+      feeds `bestTitleMatchForBook` on the single-book fetch path in
+      `internal/metafetch/service_fetch.go` (`FetchMetadataForBook` at :274,
+      `FetchMetadataForBookByTitle` at :474). That path does NOT go through
+      `applygate`: both take `scored[0]` and apply it via `guardedApply` ->
+      `CommitApply`, which checks only transcribed-title agreement, the
+      review-only source rule, `ApplySeriesPositionFilter` and the fill-only
+      `StripFilledFields`. Unattended callers: `audiobooks/organize.go:54`,
+      `organizer/service.go:373`, `itunes/service/importer.go:1086`,
+      `scheduler/extra_ops.go:918`, `server/entities_ops.go:269`; manual:
+      `handlers/metadata/book_scan_lock.go:404`. Making that pick neutral needs
+      its own gate on those applies first (a score floor and the sequence guard),
+      otherwise a title-only author-less candidate can win and be written. Also
+      `docs/architecture/identification-pipeline.md` "Stage 4" documents the
+      factors; say there that `rank_score` leaves them out.
+
+- [ ] **BULK-FETCH-NO-GATE** `POST /metadata/bulk-fetch`
+      (`internal/server/handlers/metadata/handler.go`, the loop around the
+      `IndexFunc` pick of the first non-review-only `searchResp.Results` row)
+      applies the search's top candidate to each book with no `applygate`, no
+      score floor, no sequence guard and no identity check; only the
+      review-only source rule, field locks and `onlyMissing` limit it. Route it
+      through `applygate.Evaluate` the way the cached batch apply does, or retire
+      the endpoint in favour of the gated batch apply. Found in the round-4
+      review of 02-PR9a (#3900); that PR does not change this pick.
+
+- [ ] **SCHED-GUARD-PLUGIN-COVERAGE** `TestScheduledOpsHaveADriver`
+      (`internal/server/op_schedule_driver_test.go`) enumerates ops through
+      `bootRegisteredOpIDs`, which registers a hand-written list of plugin
+      `OperationDefs()` (acoustid, dedup, deluge, itunes, metafetch). A plugin
+      that declares a `Schedule` but is missing from that list is invisible to
+      the guard. Derive the plugin list from the real serviceregistry wiring, or
+      fail when a registered plugin is absent from the list.
+
+- [ ] **TRASHED-VERSIONS-NO-ROUTE** The Trashed Versions page cannot load.
+      `web/src/pages/TrashedVersions.tsx:125` sends
+      `GET /api/v1/audiobooks/trashed-versions` and `/audiobooks/purged-versions`,
+      but the server registers neither list route. The only matching route is
+      `DELETE /purged-versions/:vid` (`internal/server/version_lifecycle.go:157`).
+      Both GETs fall through to `GET /audiobooks/:id`
+      (`internal/server/wire_audiobooks_routes.go:45`) with
+      `id="trashed-versions"` and `id="purged-versions"`, so the page always
+      shows its load error. This predates #3915, which only changed how the
+      response is read; the #3915 re-review (2026-10-10) confirmed it.
+      Fix: either add the two list endpoints (enveloped `{data:{versions}}`),
+      or remove the page and its nav entry. Owner call.
 
 - [ ] **CANDFB-1** Feed the `candfb:` candidate-feedback labels (Review →
       Candidates thumbs-down / applied positives) into
