@@ -1,7 +1,7 @@
 // file: internal/querygrammar/querygrammar_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 4d8a1e63-2b7c-4f90-a5e1-8c6d3b0f2a97
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package querygrammar
 
@@ -10,9 +10,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp/syntax"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // conformanceCase is one row of testdata/conformance.json, the corpus shared
@@ -273,5 +275,66 @@ func TestUnitParsers(t *testing.T) {
 	}
 	if _, err := ParseNumericExprUnits(">20zb", ParseBytes); err == nil {
 		t.Fatal(">20zb must be an error")
+	}
+}
+
+// TestLimits_RefuseQuickly: the patterns measured at 1.3 s, 23.5 s and
+// 2 m 10 s over 40,000 titles before the limits are refused at compile time,
+// in well under a millisecond each, with an error that says why.
+func TestLimits_RefuseQuickly(t *testing.T) {
+	cases := map[string]struct {
+		raw  string
+		want string
+	}{
+		"repeat of a star":         {`/(.*){1000}/`, "too complex"},
+		"nested optional repeat":   {`/(?:.?){1000}zzz/`, "too complex"},
+		"30 KB regex":              {"/" + strings.Repeat("(a|b)", 6000) + "/", "the limit is 256"},
+		"30 KB literal":            {strings.Repeat("a", 30000), "the limit is 256"},
+		"30 KB quoted literal":     {strings.Repeat("a", 30000), "the limit is 256"},
+		"wildcard with many stars": {strings.Repeat("a*", 60), "too complex"},
+	}
+	for name, tc := range cases {
+		start := time.Now()
+		_, err := CompileText(tc.raw, name == "30 KB quoted literal")
+		took := time.Since(start)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("%s: err = %v, want it to contain %q", name, err, tc.want)
+		}
+		if took > 50*time.Millisecond {
+			t.Fatalf("%s: refusing took %s", name, took)
+		}
+		t.Logf("%s: refused in %s: %v", name, took, err)
+	}
+}
+
+// TestLimits_OrdinaryPatternsFit pins the instruction counts the limits'
+// doc comment quotes, and that ordinary title patterns compile.
+func TestLimits_OrdinaryPatternsFit(t *testing.T) {
+	inst := func(expr string) int {
+		re, err := syntax.Parse(expr, syntax.Perl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		prog, err := syntax.Compile(re.Simplify())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(prog.Inst)
+	}
+	for expr, want := range map[string]int{
+		`(?i)(?:.?){10}zzz`:   25,
+		`(?i)(?:.?){30}zzz`:   65,
+		`(?i)(.*){1000}`:      4002,
+		`(?i)(?:.?){1000}zzz`: 2005,
+		`(?i)[a-z]{50}`:       52,
+	} {
+		if got := inst(expr); got != want {
+			t.Errorf("%s: %d instructions, the doc says %d", expr, got, want)
+		}
+	}
+	for _, raw := range []string{`/^\s*\p{L}/`, `/[a-z]{50}/`, `/(a|b|c|d|e|f|g|h|i|j|k|l|m|n|o|p|q|r|s|t|u|v|w|x|y|z){20}/`, `/chapter \d+/`, "the*lestat", strings.Repeat("x", MaxTextValueBytes)} {
+		if _, err := CompileText(raw, false); err != nil {
+			t.Errorf("CompileText(%q): %v", raw, err)
+		}
 	}
 }

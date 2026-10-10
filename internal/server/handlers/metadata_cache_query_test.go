@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_query_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 6c1f0e2a-9b47-4d35-8e60-2a7d4c9b1f38
 // last-edited: 2026-10-10
 
@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -293,6 +294,14 @@ func mustReviewQuery(t testing.TB, params map[string]string) *ReviewQuery {
 	return q
 }
 
+// mustEvaluate runs evaluateReviewQuery with a deadline no test reaches.
+func mustEvaluate(t testing.TB, base *reviewQueryBase, q *ReviewQuery) *reviewResultList {
+	t.Helper()
+	l, err := evaluateReviewQuery(base, q, time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	return l
+}
+
 func listIDs(l *reviewResultList) []string {
 	ids := make([]string, 0, len(l.refs))
 	for _, ref := range l.refs {
@@ -345,7 +354,7 @@ func TestReviewQuery_MatchesSharedCases(t *testing.T) {
 	for _, tc := range f.Cases {
 		t.Run(tc.Name, func(t *testing.T) {
 			q := mustReviewQuery(t, tc.Query)
-			l := evaluateReviewQuery(base, q)
+			l := mustEvaluate(t, base, q)
 			got := listIDs(l)
 			if got == nil {
 				got = []string{}
@@ -426,7 +435,7 @@ func TestReviewQuery_GrammarCorpus(t *testing.T) {
 			require.NotNil(t, c.WantMatch)
 			title := c.Input
 			snap := snapshotFromCases(t, []queryCaseRow{oneTitleRow(title)})
-			l := evaluateReviewQuery(baseFromSnapshot(t, snap), q)
+			l := mustEvaluate(t, baseFromSnapshot(t, snap), q)
 			require.Equal(t, *c.WantMatch, len(l.refs) == 1, "pattern %q quoted=%v input %q", c.Pattern, c.Quoted, c.Input)
 		})
 		ran++
@@ -449,8 +458,8 @@ func TestReviewQuery_ChipPausesOtherFilters(t *testing.T) {
 	f := loadQueryCases(t)
 	base := baseFromSnapshot(t, snapshotFromCases(t, f.Rows))
 	for _, chip := range reviewChips {
-		bare := listIDs(evaluateReviewQuery(base, mustReviewQuery(t, map[string]string{"chip": chip})))
-		loaded := listIDs(evaluateReviewQuery(base, mustReviewQuery(t, map[string]string{
+		bare := listIDs(mustEvaluate(t, base, mustReviewQuery(t, map[string]string{"chip": chip})))
+		loaded := listIDs(mustEvaluate(t, base, mustReviewQuery(t, map[string]string{
 			"chip": chip, "hide_applied": "true", "hide_rejected": "true", "hide_no_match": "true",
 			"hide_runtime": "true", "match_language": "true", "has_transcription": "true",
 			"transcription_matched": "true", "hide_multi_book": "true", "min_confidence": "99",
@@ -460,7 +469,7 @@ func TestReviewQuery_ChipPausesOtherFilters(t *testing.T) {
 		require.NotEmpty(t, bare, chip)
 	}
 	// The title still narrows a chip.
-	narrowed := listIDs(evaluateReviewQuery(base, mustReviewQuery(t, map[string]string{"chip": "total", "q": "chapter"})))
+	narrowed := listIDs(mustEvaluate(t, base, mustReviewQuery(t, map[string]string{"chip": "total", "q": "chapter"})))
 	require.Equal(t, []string{"b07", "b08"}, narrowed)
 }
 
@@ -585,32 +594,61 @@ func TestReviewQuery_IDsAllAfterPageHitsLRU(t *testing.T) {
 }
 
 // TestReviewQuery_WriteMissesLRU: a metadata-cache write and a book write
-// each move a generation, and each forces a re-evaluation.
+// each move a generation, and each forces a re-evaluation. The generation
+// label names the data the list was built from: while the old snapshot is
+// still served (stale-while-revalidate) the label stays the old one, and it
+// changes, with the rows, once the rebuild lands.
 func TestReviewQuery_WriteMissesLRU(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store, svc := goldenReviewStore(t)
 	h := NewMetadataCacheHandler(store, svc, nil, nil, nil)
+	h.reviewSnap.minInterval = 0 // the write's rebuild starts at once
 	const query = "hide_applied=true"
 
 	first, _, _ := servePage(t, h, query)
-	servePage(t, h, query)
+	firstIDs, _, _ := servePage(t, h, query+"&ids=all")
 	require.EqualValues(t, 1, h.reviewQuery.evaluations.Load())
+	require.Contains(t, firstIDs.Data.IDs, goldenBookID(0))
 
-	// A cache write.
+	// A cache write: book 0's entry loses its candidates, so it leaves the
+	// reviewable list once the snapshot reflects the write.
 	require.NoError(t, store.PutMetadataCache(&database.MetadataCandidateCache{BookID: goldenBookID(0), FetchedAt: time.Date(2000, 2, 1, 0, 0, 0, 0, time.UTC)}))
-	afterCache, _, _ := servePage(t, h, query)
-	require.EqualValues(t, 2, h.reviewQuery.evaluations.Load())
+	afterCache, _, _ := servePage(t, h, query+"&ids=all")
+	require.EqualValues(t, 2, h.reviewQuery.evaluations.Load(), "the write moved the live generation: the LRU missed")
+	rebuilt := fmt.Sprintf("%d.", store.MetadataCacheGeneration())
+	deadline := time.Now().Add(10 * time.Second)
+	for !strings.HasPrefix(afterCache.Data.Generation, rebuilt) {
+		// Still the old snapshot: the old rows, so the old label.
+		require.Equal(t, first.Data.Generation, afterCache.Data.Generation)
+		require.Contains(t, afterCache.Data.IDs, goldenBookID(0))
+		require.True(t, time.Now().Before(deadline), "the snapshot rebuild never landed")
+		time.Sleep(10 * time.Millisecond)
+		afterCache, _, _ = servePage(t, h, query+"&ids=all")
+	}
 	require.NotEqual(t, first.Data.Generation, afterCache.Data.Generation)
+	require.NotContains(t, afterCache.Data.IDs, goldenBookID(0), "the rebuilt page reflects the write")
+	require.Equal(t, len(firstIDs.Data.IDs)-1, afterCache.Data.Total)
 
-	// A book write.
+	// A book write. A title is an identity field, so the same batch deletes
+	// the book's cache row (MetadataCacheGeneration's contract) and a
+	// snapshot rebuild would drop the row; rebuilds are held off here so
+	// what is asserted is the overlay over the current snapshot.
+	h.reviewSnap.mu.Lock()
+	h.reviewSnap.minInterval = time.Hour
+	h.reviewSnap.mu.Unlock()
 	_, err := store.ModifyBook(goldenBookID(1), func(b *database.Book) error {
 		b.Title = "Title 000001 Retitled"
 		return nil
 	})
 	require.NoError(t, err)
+	before := h.reviewQuery.evaluations.Load()
+	sameQuery, _, _ := servePage(t, h, query+"&ids=all")
+	require.Equal(t, before+1, h.reviewQuery.evaluations.Load(), "the book write moved the live generation: the LRU missed")
+	// The book half of the label is the book generation the overlay read.
+	require.NotEqual(t, afterCache.Data.Generation, sameQuery.Data.Generation)
 	afterBook, _, _ := servePage(t, h, query+"&q=retitled")
-	require.EqualValues(t, 3, h.reviewQuery.evaluations.Load())
-	require.NotEqual(t, afterCache.Data.Generation, afterBook.Data.Generation)
+	require.Equal(t, sameQuery.Data.Generation, afterBook.Data.Generation)
+	require.True(t, strings.HasPrefix(afterBook.Data.Generation, rebuilt), "no rebuild ran: the cache half is the snapshot's")
 	// The overlay's live title is what the filter matched.
 	require.Len(t, afterBook.Data.Results, 1)
 	require.Equal(t, goldenBookID(1), afterBook.Data.Results[0].Book.ID)
@@ -770,6 +808,111 @@ func TestReviewQuery_BadFieldIs400(t *testing.T) {
 	// Words the lane reads as free text are not field tokens.
 	code, body, _ := serveReviewRaw(t, h, "view=page&q=NOT+foo:bar")
 	require.Equal(t, http.StatusOK, code, string(body))
+}
+
+// reviewQueryError400 serves q and returns the 400's error text and how long
+// the request took.
+func reviewQueryError400(t *testing.T, h *MetadataCacheHandler, q string) (string, time.Duration) {
+	t.Helper()
+	start := time.Now()
+	code, body, _ := serveReviewRaw(t, h, "view=page&q="+url.QueryEscape(q))
+	took := time.Since(start)
+	require.Equal(t, http.StatusBadRequest, code, "%.40s: %s", q, body)
+	var e struct {
+		Error string `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal(body, &e))
+	return e.Error, took
+}
+
+// TestReviewQuery_LimitsRefuseQuickly: the three patterns measured at 1.3 s,
+// 23.5 s and 2m10s over 40,000 titles before the limits are refused at parse
+// time, in milliseconds, with a 400 that says what to change; none of them
+// reaches an evaluation.
+func TestReviewQuery_LimitsRefuseQuickly(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store, svc := goldenReviewStore(t)
+	h := NewMetadataCacheHandler(store, svc, nil, nil, nil)
+	for _, tc := range []struct{ name, q, want string }{
+		{"(.*){1000}", `/(.*){1000}/`, "too complex to run over the library"},
+		{"(?:.?){1000}zzz", `/(?:.?){1000}zzz/`, "too complex to run over the library"},
+		{"30 KB pattern", "/" + strings.Repeat("(a|b)", 6000) + "/", "q is 30002 bytes long; the limit is 1024"},
+		{"300-byte value", strings.Repeat("x", 300), "the limit is 256"},
+		{"1033-byte q of short tokens", strings.TrimSpace(strings.Repeat("title:abcd ", 94)), "q is 1033 bytes long; the limit is 1024"},
+	} {
+		msg, took := reviewQueryError400(t, h, tc.q)
+		t.Logf("%s: refused in %s: %s", tc.name, took, msg)
+		require.Contains(t, msg, tc.want, tc.name)
+		require.Less(t, took, 100*time.Millisecond, tc.name)
+		require.Less(t, len(msg), 400, "a refused value is not echoed in full")
+	}
+	require.Zero(t, h.reviewQuery.evaluations.Load(), "no refused pattern was evaluated")
+	// Just under the q cap, a q of short tokens is still a query.
+	code, body, _ := serveReviewRaw(t, h, "view=page&q="+url.QueryEscape(strings.TrimSpace(strings.Repeat("title:abc ", 102))))
+	require.Equal(t, http.StatusOK, code, string(body))
+}
+
+// TestReviewQuery_DeadlineStopsEvaluation: a pattern inside the size limits
+// that is still slow over the whole set stops at the deadline with an error,
+// never a partial list.
+func TestReviewQuery_DeadlineStopsEvaluation(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a 40,000-row snapshot")
+	}
+	snap := syntheticReviewSnapshot(40000, true)
+	set, err := overlayLiveBooks(snap, nil, nil, changedIDs())
+	require.NoError(t, err)
+	base := newReviewQueryBase(reviewBaseKey{snap: snap}, set, time.Now())
+	// 65 instructions: allowed, and the slowest shape per instruction
+	// (nested optional repetition) -- about 250 ms over these titles.
+	q := mustReviewQuery(t, map[string]string{"q": `/(?:.?){30}zzz/`})
+	for _, params := range []map[string]string{
+		{"q": `/(?:.?){30}zzz/`},
+		{"q": `/(?:.?){30}zzz/`, "chip": "total"},
+		{"q": `/(?:.?){30}zzz/`, "chip": "stale"},
+	} {
+		q = mustReviewQuery(t, params)
+		const budget = 20 * time.Millisecond
+		start := time.Now()
+		l, err := evaluateReviewQuery(base, q, start.Add(budget))
+		took := time.Since(start)
+		t.Logf("%v: stopped after %s (deadline %s)", params, took, budget)
+		require.Nil(t, l, "a stopped evaluation returns no partial list")
+		var refused *reviewQueryError
+		require.ErrorAs(t, err, &refused)
+		require.Contains(t, refused.Error(), "took longer than")
+		require.Less(t, took, budget+50*time.Millisecond, "the clock is read often enough to stop near the deadline")
+	}
+	// Given time, the same pattern completes: the refusal was the clock, not
+	// the pattern. (Whether it fits reviewQueryEvalDeadline is a timing
+	// claim, measured in querygrammar.MaxPatternInst's comment, not asserted
+	// here: -race slows this pass past it.)
+	l, err := evaluateReviewQuery(base, q, time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	require.Empty(t, l.refs)
+}
+
+// TestReviewQuery_DeadlineIs400AndNotCached: through the handler, a stopped
+// evaluation is a 400 every waiter sees, and it is not stored, so the next
+// request evaluates again rather than reading a refusal (or a partial list)
+// from the LRU.
+func TestReviewQuery_DeadlineIs400AndNotCached(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store, svc := goldenReviewStore(t)
+	h := NewMetadataCacheHandler(store, svc, nil, nil, nil)
+	saved := reviewQueryEvalDeadline
+	reviewQueryEvalDeadline = -time.Second // every evaluation is already past it
+	t.Cleanup(func() { reviewQueryEvalDeadline = saved })
+
+	for range 2 {
+		msg, _ := reviewQueryError400(t, h, "title")
+		require.Contains(t, msg, "took longer than")
+	}
+	require.EqualValues(t, 2, h.reviewQuery.evaluations.Load(), "a refusal is never served from the LRU")
+
+	reviewQueryEvalDeadline = saved
+	page, _, _ := servePage(t, h, "q=title")
+	require.NotZero(t, page.Data.TotalCount)
 }
 
 // TestReviewQuery_ConcurrentIdenticalRequestsShareOneEvaluation: identical
