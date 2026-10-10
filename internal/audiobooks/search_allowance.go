@@ -1,5 +1,5 @@
 // file: internal/audiobooks/search_allowance.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 1feebd0f-6ce3-434b-b259-94010968fefa
 // last-edited: 2026-10-10
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/querygrammar"
 )
@@ -26,6 +27,19 @@ import (
 // request either finishes inside the budget or is refused once.
 
 type searchAllowanceKey struct{}
+
+// libraryPatternClock times every Library scan's pattern matches. It is
+// time.Now in production; a test swaps in a clock that advances a fixed step
+// per read, so each match costs exactly that step and a budget assertion is
+// arithmetic rather than a wall-clock measurement under -race and load.
+var libraryPatternClock = time.Now
+
+// newLibraryPatternBudget is the Budget one Library scan (or one request's
+// shared allowance) runs under: libraryPatternBudget on libraryPatternClock.
+// Every budget patternAllowance hands out comes from here.
+func newLibraryPatternBudget() *querygrammar.Budget {
+	return querygrammar.NewBudgetClock(libraryPatternBudget, libraryPatternClock)
+}
 
 type sharedSearchAllowance struct {
 	once    sync.Once
@@ -63,7 +77,7 @@ func patternAllowance(ctx context.Context) (budget *querygrammar.Budget, end fun
 		a.once.Do(func() {
 			a.release, a.err = querygrammar.AcquirePatternSlot(ctx)
 			if a.err == nil {
-				a.budget = querygrammar.NewBudget(libraryPatternBudget)
+				a.budget = newLibraryPatternBudget()
 			}
 		})
 		// once.Do returns after the winning call finished, so these reads are
@@ -79,5 +93,5 @@ func patternAllowance(ctx context.Context) (budget *querygrammar.Budget, end fun
 	if err != nil {
 		return nil, nil, err
 	}
-	return querygrammar.NewBudget(libraryPatternBudget), release, nil
+	return newLibraryPatternBudget(), release, nil
 }

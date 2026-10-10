@@ -1,5 +1,5 @@
 // file: internal/audiobooks/filter_budget_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 87f0a067-4601-427f-9ecf-398a030c9059
 // last-edited: 2026-10-10
 
@@ -260,30 +260,71 @@ func TestSharedAllowance_OneSlotOneBudget(t *testing.T) {
 	done() // idempotent
 }
 
+// stepClock advances step on every read, so a timed match (one read before
+// it, one after) costs exactly step. Exact only while matches run one at a
+// time, which a Library scan's walk does (forEachBookRow and memdb's loops
+// are single-goroutine, and a request's list and count run one after the
+// other).
+type stepClock struct {
+	mu   sync.Mutex
+	t    time.Time
+	step time.Duration
+}
+
+func (c *stepClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = c.t.Add(c.step)
+	return c.t
+}
+
+// stepLibraryPatternClock makes every pattern match a Library scan budgets
+// cost exactly step until the test ends.
+func stepLibraryPatternClock(t *testing.T, step time.Duration) {
+	t.Helper()
+	saved := libraryPatternClock
+	libraryPatternClock = (&stepClock{step: step}).now
+	t.Cleanup(func() { libraryPatternClock = saved })
+}
+
 // TestSharedAllowance_CountSpendsWhatTheListLeft: a budget the list nearly
 // spent refuses the count, so the request is refused once, never served
 // with two budgets.
+//
+// Every match costs exactly one step (stepLibraryPatternClock), so the
+// arithmetic is exact: 400 rows times three tokens is 1,200 steps a scan.
+// It used to calibrate the budget from one scan's wall time, and under -race
+// on a loaded runner the next scan took more than 1.5 times as long.
 func TestSharedAllowance_CountSpendsWhatTheListLeft(t *testing.T) {
-	svc := longTitleStore(t, 400)
+	const rows, step = 400, time.Millisecond
+	svc := longTitleStore(t, rows)
 	saved := libraryPatternBudget
 	t.Cleanup(func() { libraryPatternBudget = saved })
+	stepLibraryPatternClock(t, step)
 	f := ListFilters{FieldFilters: threeSlowTokens()}
-	// Measure one scan, then give the request a budget for about 1.5 of them.
-	probe := querygrammar.NewBudget(time.Hour)
+
+	// One scan: every row runs all three tokens (none keeps a row, so the
+	// walk never stops at a full page).
+	probe := querygrammar.NewBudgetClock(time.Hour, (&stepClock{step: step}).now)
 	bsf, ok := svc.buildBookSummaryFilter(f, true, probe)
 	require.True(t, ok)
 	_, err := svc.countSummariesPushdownFiltered(bsf)
 	require.NoError(t, err)
 	one := probe.Spent()
+	require.Equal(t, rows*3*step, one, "one scan is one match per row per token")
+	// A budget of 1.5 scans: the list fits, the count runs out halfway.
 	libraryPatternBudget = one * 3 / 2
 
 	ctx, done := WithSharedSearchAllowance(context.Background())
 	defer done()
 	_, _, err = svc.GetAudiobooksWithTotal(ctx, 50, 0, "", nil, nil, f)
 	require.NoError(t, err, "one scan fits a budget of 1.5 scans")
+	a := ctx.Value(searchAllowanceKey{}).(*sharedSearchAllowance)
+	require.Equal(t, one, a.budget.Spent(), "the list spent one scan of the request's budget")
 	_, err = svc.CountAudiobooksFiltered(ctx, f)
 	var slow *querygrammar.TooSlowError
 	require.ErrorAs(t, err, &slow, "the second scan spends what the first left")
+	require.Equal(t, libraryPatternBudget, a.budget.Spent(), "the count stopped on the match that spent the budget")
 
 	// Without the shared allowance each scan would have had its own budget.
 	_, err = svc.CountAudiobooksFiltered(context.Background(), f)
