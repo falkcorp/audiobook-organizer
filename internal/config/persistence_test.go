@@ -349,6 +349,14 @@ func TestApplySetting(t *testing.T) {
 			check: func() bool { return !AppConfig.CreateBackups },
 		},
 		{
+			name:  "review_metadata_server_query",
+			key:   "review_metadata_server_query",
+			value: "true",
+			typ:   "bool",
+			setup: func() { AppConfig.ReviewMetadataServerQuery = false },
+			check: func() bool { return AppConfig.ReviewMetadataServerQuery },
+		},
+		{
 			name:  "enable_disk_quota",
 			key:   "enable_disk_quota",
 			value: "true",

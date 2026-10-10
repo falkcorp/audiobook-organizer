@@ -60,6 +60,12 @@ func TestInitConfig(t *testing.T) {
 	if createBackups := viper.GetBool("create_backups"); !createBackups {
 		t.Error("Expected create_backups to be true by default")
 	}
+
+	// The Review > Metadata server query ships OFF: the lane keeps loading the
+	// full index until an operator turns it on.
+	if viper.GetBool("review_metadata_server_query") {
+		t.Error("Expected review_metadata_server_query to be false by default")
+	}
 }
 
 // TestStorageQuotaDefaults tests storage quota default values
@@ -422,6 +428,10 @@ func TestResetToDefaults(t *testing.T) {
 	// Verify backup defaults
 	if !AppConfig.CreateBackups {
 		t.Error("expected CreateBackups to be reset to true")
+	}
+
+	if AppConfig.ReviewMetadataServerQuery {
+		t.Error("expected ReviewMetadataServerQuery to be reset to false")
 	}
 
 	// Verify storage quota defaults

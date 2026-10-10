@@ -1,5 +1,5 @@
 // file: internal/config/persistence.go
-// version: 1.51.0
+// version: 1.52.0
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
 // last-edited: 2026-10-11
 
@@ -1157,6 +1157,10 @@ func applySetting(key, value, typ string) error {
 		case "create_backups":
 			if b, err := strconv.ParseBool(value); err == nil {
 				c.CreateBackups = b
+			}
+		case "review_metadata_server_query":
+			if b, err := strconv.ParseBool(value); err == nil {
+				c.ReviewMetadataServerQuery = b
 			}
 		case "supported_extensions":
 			var extensions []string
