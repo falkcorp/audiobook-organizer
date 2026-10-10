@@ -1,5 +1,5 @@
 // file: internal/organizer/service.go
-// version: 1.61.0
+// version: 1.62.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
 // last-edited: 2026-10-10
 
@@ -75,7 +75,7 @@ type OrganizerBookFileStore interface {
 	// partial failure cannot leave the organized copy owning some of its audio.
 	BatchCreateBookFiles(files []*database.BookFile) error
 	// GetBookFilesForIDsCore reads every candidate's rows in one call, for the
-	// folder scope (scopeBooks).
+	// folder scope (scopeBooks, and the per-book re-check in organizeBooksOpts).
 	GetBookFilesForIDsCore(bookIDs []string) (map[string][]database.BookFileCore, error)
 }
 
@@ -243,11 +243,17 @@ func NewService(db Store) *Service {
 
 // Request describes an organize operation request.
 type Request struct {
-	// FolderPath, when non-nil, restricts the run to books whose book_file
-	// rows all lie inside this folder (see newFolderScope for what is a valid
-	// value). nil means no folder restriction. A non-nil value that is empty,
-	// relative, or contains ".." fails the run with ErrInvalidFolderScope
-	// instead of widening it. Combined with BookIDs, both must hold.
+	// FolderPath, when non-nil, restricts the run to books whose files all
+	// lie inside this folder: every live book_file row AND a non-empty
+	// book.file_path, since some organize branches act on one and some on the
+	// other (folderScope.admit). Books with some of those inside and some
+	// outside are held back and counted (OutcomeStraddlesFolderScope,
+	// OutcomeFilePathOutsideFolderScope). nil means no folder restriction. A
+	// non-nil value that is empty, relative, or contains ".." fails the run
+	// with ErrInvalidFolderScope instead of widening it (see newFolderScope).
+	// "/" is accepted and every absolute path is inside it, so "/" means every
+	// book that has a file to organize: the whole library, asked for
+	// explicitly. Combined with BookIDs, both must hold.
 	FolderPath         *string
 	Priority           *int
 	FetchMetadataFirst bool
@@ -326,7 +332,7 @@ func (orgSvc *Service) PerformOrganizeStats(ctx context.Context, req *Request, l
 	// Get the candidate books: the BookIDs and/or FolderPath scope applied
 	// where the set is built, so nothing below (the metadata fetch, the filter,
 	// the organize) can see a book the caller did not scope in.
-	allBooks, straddling, err := orgSvc.loadCandidates(req, scope, "Loading library", log)
+	allBooks, scopeHeld, err := orgSvc.loadCandidates(req, scope, "Loading library", log)
 	if err != nil {
 		return nil, err
 	}
@@ -359,7 +365,7 @@ func (orgSvc *Service) PerformOrganizeStats(ctx context.Context, req *Request, l
 		// loader, so the reload is scoped exactly like the first load: it
 		// used to re-page the WHOLE library here, which silently undid any
 		// BookIDs scope for every FetchMetadataFirst run.
-		allBooks, straddling, err = orgSvc.loadCandidates(req, scope, "Reloading library after metadata", log)
+		allBooks, scopeHeld, err = orgSvc.loadCandidates(req, scope, "Reloading library after metadata", log)
 		if err != nil {
 			return nil, fmt.Errorf("failed to re-fetch books after metadata: %w", err)
 		}
@@ -374,10 +380,12 @@ func (orgSvc *Service) PerformOrganizeStats(ctx context.Context, req *Request, l
 	log.Debug("Organize: %s", logMsg)
 
 	// Perform organization
-	stats := orgSvc.organizeBooksOpts(ctx, booksToOrganize, alreadyCorrect, log, req.OperationID, req.LockBooksAgainstScan)
+	stats := orgSvc.organizeBooksOpts(ctx, booksToOrganize, alreadyCorrect, log, req.OperationID, req.LockBooksAgainstScan, scope)
 	stats.addCollision(OutcomePlaceholderSkipped, heldBack.placeholderTitle)
 	stats.addCollision(OutcomeVersionGroupUnreadable, heldBack.versionGroupUnreadable)
-	stats.addCollision(OutcomeStraddlesFolderScope, straddling)
+	for outcome, n := range scopeHeld {
+		stats.addCollision(outcome, n)
+	}
 
 	return stats, organizeOutcomeError(stats)
 }
@@ -386,8 +394,8 @@ func (orgSvc *Service) PerformOrganizeStats(ctx context.Context, req *Request, l
 // non-nil) names them directly; otherwise every book is paged in. req.FolderPath
 // (scope non-nil) is then applied to that set, so the two compose as an
 // intersection. progressLabel prefixes the "N books" progress stamp of the
-// paged read. straddling counts the books the folder scope held back.
-func (orgSvc *Service) loadCandidates(req *Request, scope *folderScope, progressLabel string, log logger.Logger) (books []database.Book, straddling int, err error) {
+// paged read. held counts the books the folder scope held back, by outcome.
+func (orgSvc *Service) loadCandidates(req *Request, scope *folderScope, progressLabel string, log logger.Logger) (books []database.Book, held heldBackByScope, err error) {
 	const fetchPageSize = 1000
 	if req.BookIDs != nil {
 		for _, id := range req.BookIDs {
@@ -409,7 +417,7 @@ func (orgSvc *Service) loadCandidates(req *Request, scope *folderScope, progress
 			page, fetchErr := orgSvc.db.GetAllBooksCore(fetchPageSize, offset)
 			if fetchErr != nil {
 				log.Error("Failed to fetch books: %s", fetchErr.Error())
-				return nil, 0, fmt.Errorf("failed to fetch books: %w", fetchErr)
+				return nil, nil, fmt.Errorf("failed to fetch books: %w", fetchErr)
 			}
 			for i := range page {
 				books = append(books, page[i].ToBook())
@@ -431,16 +439,16 @@ func (orgSvc *Service) loadCandidates(req *Request, scope *folderScope, progress
 		}
 	}
 	if scope == nil {
-		return books, 0, nil
+		return books, nil, nil
 	}
 	total := len(books)
-	books, straddling, err = orgSvc.scopeBooks(books, scope)
+	books, held, err = orgSvc.scopeBooks(books, scope)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, err
 	}
-	log.Info("Folder scope %s: %d of %d candidate books in scope, %d held back for straddling the folder boundary",
-		scope.root, len(books), total, straddling)
-	return books, straddling, nil
+	log.Info("Folder scope %s: %d of %d candidate books in scope; held back: %d straddling the folder boundary, %d with file_path outside it",
+		scope.root, len(books), total, held[OutcomeStraddlesFolderScope], held[OutcomeFilePathOutsideFolderScope])
+	return books, held, nil
 }
 
 // organizeOutcomeError converts a finished run's Stats into the error
@@ -1455,7 +1463,7 @@ func (orgSvc *Service) CommitLanding(book *database.Book, landing *Landing, oper
 }
 
 func (orgSvc *Service) organizeBooks(ctx context.Context, booksToOrganize []database.Book, alreadyCorrect []database.Book, log logger.Logger, operationID string) *Stats {
-	return orgSvc.organizeBooksOpts(ctx, booksToOrganize, alreadyCorrect, log, operationID, false)
+	return orgSvc.organizeBooksOpts(ctx, booksToOrganize, alreadyCorrect, log, operationID, false, nil)
 }
 
 // organizeBookLockWait bounds, in total, the second pass's wait for books a
@@ -1480,7 +1488,15 @@ func sameIntPtr(a, b *int) bool { return (a == nil) == (b == nil) && (a == nil |
 // Skipped under OutcomeScanBusy. The lock is L0, the outermost in the process
 // (internal/scanlock): it is taken before OrganizeOneBook and CommitLanding
 // take the version-group key (L1), and released after both.
-func (orgSvc *Service) organizeBooksOpts(ctx context.Context, booksToOrganize []database.Book, alreadyCorrect []database.Book, log logger.Logger, operationID string, lockBooks bool) *Stats {
+//
+// scope, when non-nil, is the run's folder scope. booksToOrganize was scoped
+// when it was listed, but each book is organized as it is NOW (re-read under
+// its scan lock with lockBooks, and OrganizeOneBook re-reads its rows either
+// way), and a scan can have merged an outside file into it or repointed its
+// file_path in between. So the same rule (folderScope.admit) is applied again
+// to the row about to be organized, and a book that no longer passes is
+// skipped and counted under its held-back outcome.
+func (orgSvc *Service) organizeBooksOpts(ctx context.Context, booksToOrganize []database.Book, alreadyCorrect []database.Book, log logger.Logger, operationID string, lockBooks bool, scope *folderScope) *Stats {
 	stats := &Stats{Total: len(booksToOrganize) + len(alreadyCorrect)}
 
 	// Thread-safe counters and collectors
@@ -1542,6 +1558,37 @@ func (orgSvc *Service) organizeBooksOpts(ctx context.Context, booksToOrganize []
 				fresh.Series = book.Series
 			}
 			book = *fresh
+		}
+
+		if scope != nil {
+			// Re-check the folder scope on the row about to be organized (see
+			// the function comment). Under lockBooks the scan cannot change it
+			// again before OrganizeOneBook runs.
+			rows, rowsErr := orgSvc.db.GetBookFilesForIDsCore([]string{book.ID})
+			if rowsErr != nil {
+				log.Error("Organize: re-read book_files of %s to re-check the folder scope: %v", book.ID, rowsErr)
+				statsMu.Lock()
+				stats.Failed++
+				statsMu.Unlock()
+				progressCounter.Add(1)
+				return
+			}
+			if verdict := scope.admit(book.FilePath, rows[book.ID]); verdict != scopeInside {
+				outcome := verdict.outcome()
+				if outcome == "" {
+					// scopeOutside: nothing it would touch is in the folder
+					// any more. Not part of this run, but it WAS listed (and
+					// counted in Total), so it is counted rather than dropped.
+					outcome = OutcomeLeftFolderScope
+				}
+				log.Info("Organize: %s skipped: %s (re-checked as it is now)", book.ID, outcome)
+				statsMu.Lock()
+				stats.Skipped++
+				stats.addCollision(outcome, 1)
+				statsMu.Unlock()
+				progressCounter.Add(1)
+				return
+			}
 		}
 
 		// Policy check: skip books tagged policy:no-organize.

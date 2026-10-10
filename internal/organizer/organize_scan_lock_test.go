@@ -1,7 +1,7 @@
 // file: internal/organizer/organize_scan_lock_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 7c3a9e15-2f84-4d6b-a0c1-58e2b94d7f36
-// last-edited: 2026-09-30
+// last-edited: 2026-10-10
 
 package organizer
 
@@ -57,7 +57,7 @@ func TestOrganizeBooks_WaitsForAHeldBookAndOrganizesAFreeOneAtOnce(t *testing.T)
 	scan := holdBook(t, held.ID)
 	done := make(chan *Stats, 1)
 	go func() {
-		done <- svc.organizeBooksOpts(context.Background(), []database.Book{*held, *free}, nil, &noopLogger{}, "", true)
+		done <- svc.organizeBooksOpts(context.Background(), []database.Book{*held, *free}, nil, &noopLogger{}, "", true, nil)
 	}()
 
 	deadline := time.Now().Add(10 * time.Second)
@@ -105,7 +105,7 @@ func TestOrganizeBooks_HeldBookIsOrganizedFromTheRowAfterTheScan(t *testing.T) {
 	scan := holdBook(t, b.ID)
 	done := make(chan *Stats, 1)
 	go func() {
-		done <- svc.organizeBooksOpts(context.Background(), []database.Book{*b}, nil, &noopLogger{}, "", true)
+		done <- svc.organizeBooksOpts(context.Background(), []database.Book{*b}, nil, &noopLogger{}, "", true, nil)
 	}()
 	time.Sleep(100 * time.Millisecond)
 	// The scanner's merge, while it holds the book.
@@ -141,7 +141,7 @@ func TestOrganizeBooks_CanceledInPass1CountsTheSetAsideBooks(t *testing.T) {
 	// Not canceled for the feeder's and the worker's checks in pass 1 (the
 	// book is set aside), canceled from the check after pass 1 on.
 	log := &cancelAfterLogger{after: 2}
-	stats := svc.organizeBooksOpts(context.Background(), []database.Book{*b}, nil, log, "", true)
+	stats := svc.organizeBooksOpts(context.Background(), []database.Book{*b}, nil, log, "", true, nil)
 	if stats.Skipped != 1 || stats.Collisions[OutcomeScanBusy] != 1 {
 		t.Fatalf("want the set-aside book counted skipped scan_busy, got %+v", stats)
 	}
@@ -158,7 +158,7 @@ func TestOrganizeBooks_BookHeldPastTheBoundIsSkippedBusyNotFailed(t *testing.T) 
 	b := addInPlaceBook(t, store, "busy", "Busy", src, filled(150, 3), nil, 0)
 	holdBook(t, b.ID)
 
-	stats := svc.organizeBooksOpts(context.Background(), []database.Book{*b}, nil, &noopLogger{}, "", true)
+	stats := svc.organizeBooksOpts(context.Background(), []database.Book{*b}, nil, &noopLogger{}, "", true, nil)
 	if stats.Skipped != 1 || stats.Failed != 0 || stats.Collisions[OutcomeScanBusy] != 1 {
 		t.Fatalf("want one scan_busy skip, got %+v", stats)
 	}
@@ -217,7 +217,7 @@ func TestOrganizeBooks_CopyLandsUnderTheBooksScanLock(t *testing.T) {
 		return func() {}
 	}
 
-	stats := svc.organizeBooksOpts(context.Background(), []database.Book{*x}, nil, &noopLogger{}, "", true)
+	stats := svc.organizeBooksOpts(context.Background(), []database.Book{*x}, nil, &noopLogger{}, "", true, nil)
 	if stats.Failed != 0 || stats.Organized != 1 {
 		t.Fatalf("want one organized copy, got %+v", stats)
 	}
@@ -250,7 +250,7 @@ func TestOrganizeBooks_LocksTheLibraryCopyToo(t *testing.T) {
 	scan := holdBook(t, "lib-copy")
 	done := make(chan *Stats, 1)
 	go func() {
-		done <- svc.organizeBooksOpts(context.Background(), []database.Book{*b}, nil, &noopLogger{}, "", true)
+		done <- svc.organizeBooksOpts(context.Background(), []database.Book{*b}, nil, &noopLogger{}, "", true, nil)
 	}()
 	select {
 	case st := <-done:
@@ -286,7 +286,7 @@ func TestOrganizeBooks_UnsettledCopyIsSkippedBusy(t *testing.T) {
 		cp.ID = fmt.Sprintf("copy-%d", n.Add(1))
 		return &cp, true
 	}
-	st := svc.organizeBooksOpts(context.Background(), []database.Book{*b}, nil, &noopLogger{}, "", true)
+	st := svc.organizeBooksOpts(context.Background(), []database.Book{*b}, nil, &noopLogger{}, "", true, nil)
 	if st.Organized+st.ReOrganized != 0 || st.Skipped != 1 {
 		t.Fatalf("an unsettled pair was organized: %+v", st)
 	}
@@ -312,7 +312,7 @@ func TestOrganizeBooks_RetryLocksTheStoredRowsCopy(t *testing.T) {
 	}
 	listed := *b
 	listed.Title = "Stale Title"
-	st := svc.organizeBooksOpts(context.Background(), []database.Book{listed}, nil, &noopLogger{}, "", true)
+	st := svc.organizeBooksOpts(context.Background(), []database.Book{listed}, nil, &noopLogger{}, "", true, nil)
 	if st.Organized+st.ReOrganized != 1 {
 		t.Fatalf("a stale listing kept the pair from settling: %+v", st)
 	}
