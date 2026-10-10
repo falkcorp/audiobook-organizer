@@ -1,7 +1,7 @@
 // file: internal/ai/cover_text.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 9a4c2e71-3b8d-4f16-a5e0-8d7c1b6f2e93
-// last-edited: 2026-09-26
+// last-edited: 2026-10-10
 
 package ai
 
@@ -101,7 +101,7 @@ func (r *RoutedCoverTextReader) parserFor(t aidispatch.Target) (*OpenAIParser, e
 	if p := r.parsers[cacheKey]; p != nil {
 		return p, nil
 	}
-	p := newRoutedEndpointParser(key, t.Endpoint.URL, t.Model)
+	p := newRoutedEndpointParser(key, t.Endpoint.URL, t.Model, t.Endpoint.ID)
 	r.parsers[cacheKey] = p
 	return p, nil
 }
@@ -181,6 +181,10 @@ func (r *RoutedCoverTextReader) coverTextAttempt(dataURL string) func(context.Co
 		}
 		text, err := ParseCoverTextReply(raw)
 		if err != nil {
+			// The request was ok (observe counted it); the reply was not usable.
+			// Without this the "reply-quality failures by task" panel could
+			// never show cover_text.
+			recordReplyFailure(ctx, p.callMeta(TaskCoverText, p.defaultModelOverride), err)
 			return nil, aidispatch.Quality(err)
 		}
 		return &CoverTextResult{Text: text, Raw: raw, Model: t.Model, EndpointID: t.Endpoint.ID}, nil

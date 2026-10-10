@@ -1,7 +1,7 @@
 // file: internal/ai/pool_routing.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 146b51bb-eb0a-45ab-953b-1cc0c095646e
-// last-edited: 2026-09-19
+// last-edited: 2026-10-10
 
 package ai
 
@@ -129,7 +129,7 @@ func (r *RoutedFilenameParser) parserFor(t aidispatch.Target) (*OpenAIParser, er
 	if p := r.parsers[cacheKey]; p != nil {
 		return p, nil
 	}
-	p := newRoutedEndpointParser(key, t.Endpoint.URL, t.Model)
+	p := newRoutedEndpointParser(key, t.Endpoint.URL, t.Model, t.Endpoint.ID)
 	r.parsers[cacheKey] = p
 	return p, nil
 }

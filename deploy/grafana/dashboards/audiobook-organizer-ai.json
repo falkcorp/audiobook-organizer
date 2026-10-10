@@ -473,7 +473,7 @@
     {
       "id": 8,
       "type": "timeseries",
-      "title": "Tokens per accepted parse (cost proxy)",
+      "title": "Tokens per accepted batch parse (cost proxy)",
       "description": "Parse-task tokens over accepted parse results, 1h. Accepted means usable (a field was merged), not high-confidence.",
       "datasource": {
         "type": "prometheus",
@@ -491,8 +491,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(ai_tokens_total{task=~\".*parse.*\"}[1h])) / sum(rate(ai_parse_results_total{accepted=\"true\"}[1h]))",
-          "legendFormat": "tokens per accepted parse",
+          "expr": "sum(rate(ai_tokens_total{task=\"batch_parse\"}[1h])) / sum(rate(ai_parse_results_total{task=\"batch_parse\",accepted=\"true\"}[1h]))",
+          "legendFormat": "tokens per accepted batch parse",
           "range": true,
           "refId": "A"
         }
