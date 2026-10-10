@@ -1,7 +1,7 @@
 // file: internal/server/op_id_aliases_test.go
-// version: 1.4.1
+// version: 1.5.0
 // guid: 2a7c5e93-1d4b-4f60-8e2a-b9c3d7f15e48
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 // Guard tests for operation-ID renames.
 //
@@ -248,6 +248,8 @@ var renamedOpIDs = map[string]string{
 	"maintenance.itunes-clone-into-library": "itunes.clone-into-library",
 	"library.optimize":                      "maintenance.library-optimize",
 	"maintenance.dedup-llm-review":          "dedup.llm-review",
+	"maintenance.series-prune":              "dedup.series-prune",
+	"maintenance.series-normalize":          "dedup.series-normalize",
 }
 
 func TestOpIDs_EveryAliasResolves(t *testing.T) {

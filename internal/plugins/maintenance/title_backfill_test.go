@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/title_backfill_test.go
-// version: 1.41.0
+// version: 1.42.0
 // guid: b2c3d4e5-f6a7-8901-bcde-ef0123456789
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 
 package maintenance
 
@@ -208,13 +208,7 @@ func (d fakeDeps) RunMetadataRefreshScan(_ context.Context, _ operations.Progres
 func (d fakeDeps) RunBulkWriteBack(_ context.Context, _ string, _ []string, _ bool, _ int, _ operations.ProgressReporter) error {
 	return nil
 }
-func (d fakeDeps) RunAutoPurgeSoftDeleted(_ string) {}
-func (d fakeDeps) ExecuteSeriesPrune(_ context.Context, _ operations.ProgressReporter, _ string) error {
-	return nil
-}
-func (d fakeDeps) ExecuteSeriesNormalizeCore(_ context.Context, _ string) ([]string, error) {
-	return nil, nil
-}
+func (d fakeDeps) RunAutoPurgeSoftDeleted(_ string)                   {}
 func (d fakeDeps) BackfillExternalIDs(_ func(int, int, string)) error { return nil }
 func (d fakeDeps) StripMovementAtoms(_ context.Context)               {}
 func (d fakeDeps) RemuxMalformedM4BFiles(_ context.Context, _ func(int, int, string)) error {

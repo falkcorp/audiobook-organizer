@@ -150,9 +150,7 @@ maintenance.resolve-production-authors	preview
 maintenance.review-status-index-repair	preview
 maintenance.rewrite-path-prefix	preview
 maintenance.series-denumber	preview
-maintenance.series-normalize	no-mode
 maintenance.series-phantom-repair	preview
-maintenance.series-prune	no-mode
 maintenance.split-joined-narrators	preview
 maintenance.tag-backfill	preview
 maintenance.temp-file-cleanup	no-mode

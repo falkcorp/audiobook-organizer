@@ -1,5 +1,5 @@
 // file: internal/server/op_schedule_driver_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: c47e92b1-5d08-4a3f-9e61-1b2f8d0a7c34
 // last-edited: 2026-10-10
 
@@ -26,7 +26,6 @@ var scheduleDriverAllowList = map[string]string{
 	"maintenance.db-optimize":         "twin of the scheduled scheduler.db-optimize; after P4a the task points here",
 	"maintenance.metadata-refresh":    "twin of the scheduled scheduler.metadata-refresh; after P4c the task points here",
 	"maintenance.purge-deleted":       "twin of the scheduled scheduler.purge-deleted; after P4b the task points here (it deletes)",
-	"maintenance.series-prune":        "twin of dedup.series-prune, which the series_prune task runs weekly (P5 aliases it)",
 	"maintenance.temp-file-cleanup":   "twin of the scheduled scheduler.temp-file-cleanup; after P4a the task points here",
 	"maintenance.tombstone-cleanup":   "twin of the scheduled scheduler.tombstone-cleanup; after P4a the task points here",
 	"maintenance.trash-cleanup":       "twin of the scheduled scheduler.trash-cleanup; after P4a the task points here",

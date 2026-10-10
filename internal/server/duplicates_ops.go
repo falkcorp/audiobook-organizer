@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_ops.go
-// version: 2.24.0
+// version: 2.25.0
 // guid: 8b3e1f92-d4c7-4a6e-b5f0-2a7c9d1e3f45
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 
 // duplicates_ops registers v2 OperationDefs for the 8 async dedup operations
 // that previously used s.queue.Enqueue.  HTTP handlers in duplicates_handlers.go
@@ -589,6 +589,7 @@ func (s *Server) RegisterSeriesDedupOp(reg *opsregistry.Registry) error {
 func (s *Server) RegisterSeriesPruneOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "dedup.series-prune",
+		FormerIDs:       []string{"maintenance.series-prune"},
 		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "dedup",
 		DisplayName:     "Series Prune",
@@ -780,6 +781,7 @@ func (s *Server) RegisterSeriesMergeOp(reg *opsregistry.Registry) error {
 func (s *Server) RegisterSeriesNormalizeOp(reg *opsregistry.Registry) error {
 	return reg.RegisterOp(opsregistry.OperationDef{
 		ID:              "dedup.series-normalize",
+		FormerIDs:       []string{"maintenance.series-normalize"},
 		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "dedup",
 		DisplayName:     "Series Name Normalization",
@@ -851,6 +853,16 @@ func (s *Server) RegisterSeriesNormalizeOp(reg *opsregistry.Registry) error {
 
 			for _, bookID := range affectedBookIDs {
 				op.AddEntity("books", bookID)
+			}
+
+			// A rename changes the cached series list, which carries a 24-hour
+			// TTL; without this the rename lands in the store while
+			// /api/v1/series keeps serving the old names. maintenance.series-normalize
+			// (merged into this op, 04-P5) did this and this body did not. Only
+			// invalidate when rows actually changed: dropping a warm cache for a
+			// no-op run costs a full recount for nothing.
+			if len(affectedBookIDs) > 0 {
+				s.InvalidateSeriesCache()
 			}
 
 			logging.Info(ctx, "series normalization normalize complete, now organizing", "affected_books", len(affectedBookIDs))
