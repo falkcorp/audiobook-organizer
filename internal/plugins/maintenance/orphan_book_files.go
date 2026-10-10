@@ -1,5 +1,5 @@
 // file: internal/plugins/maintenance/orphan_book_files.go
-// version: 2.2.0
+// version: 2.2.1
 // guid: 9d2c4f6a-8e1b-4c5d-9a7b-3e5f1a2c4b6d
 // last-edited: 2026-10-10
 
@@ -128,18 +128,17 @@ func findOrphanBookFiles(ctx context.Context, store orphanFileScanner) (orphans 
 	// limit=0 means "all" — the unbounded form used across this plugin.
 	//
 	// Complete, not plain GetAllBooksCore. This list is a membership set whose
-	// ABSENCES authorize a hard delete, so an undercount is not a smaller report,
-	// it is book_file rows destroyed. One book row missing from a partially warmed
-	// or lossy memdb removes that book from `valid` below, and every file row it
-	// owns is deleted while the book survives as a fileless shell.
+	// ABSENCES define the orphans, so an undercount is a wrong report: one book
+	// row missing from a partially warmed or lossy memdb removes that book from
+	// `valid` below and every file row it owns is reported as an orphan. The op
+	// is report-only, but its output is what a repoint plan is built from.
 	//
 	// Fail CLOSED on error, exactly as the soft-deleted union below does: the
 	// PebbleStore form recovers a tainted memdb by rescanning Pebble, so an error
-	// reaching here means no source could produce a trustworthy set — and this
-	// scan's caller feeds what it returns straight to DeleteBookFilesByIDs.
+	// reaching here means no source could produce a trustworthy set.
 	books, berr := store.GetAllBooksCoreComplete(0, 0)
 	if berr != nil {
-		return nil, 0, 0, fmt.Errorf("GetAllBooksCoreComplete (decides which book_file rows are deleted): %w", berr)
+		return nil, 0, 0, fmt.Errorf("GetAllBooksCoreComplete (defines which book_file rows are orphans): %w", berr)
 	}
 	valid := make(map[string]struct{}, len(books))
 	for _, b := range books {
@@ -152,20 +151,20 @@ func findOrphanBookFiles(ctx context.Context, store orphanFileScanner) (orphans 
 	//
 	// GetAllBooksCore deliberately excludes soft-deleted rows, so they must be
 	// added back explicitly here — this scan is a set-difference that treats
-	// every book_file whose owner is absent as garbage, and callers feed the
-	// result straight to DeleteBookFilesByIDs.
+	// every book_file whose owner is absent as an orphan, and a restorable
+	// book's files must not be reported as one.
 	//
 	// Until 2026-08-13 this was accidentally correct: the memdb implementation
 	// of GetAllBooksCore leaked soft-deleted rows, so they landed in `valid` by
 	// way of a bug. Fixing that bug is what made this union load-bearing —
 	// without it the very first orphan-cleanup run after the fix would have
-	// deleted the file rows of all 3,953 books soft-deleted by the July dedup
-	// drain. See TestFindOrphanBookFiles_SoftDeletedBooksKeepTheirFiles.
+	// flagged (back then, deleted) the file rows of every book soft-deleted by
+	// the July dedup drain. See TestFindOrphanBookFiles_SoftDeletedBooksKeepTheirFiles.
 	softDeleted, serr := store.ListSoftDeletedBooks(0, 0, nil)
 	if serr != nil {
 		// Fail CLOSED: without the soft-deleted set this scan cannot tell a
-		// restorable book's files from real garbage, and the caller deletes
-		// what it returns. Refuse rather than under-report.
+		// restorable book's files from real orphans. Refuse rather than
+		// over-report.
 		return nil, 0, 0, fmt.Errorf("ListSoftDeletedBooks (needed to protect restorable books): %w", serr)
 	}
 	for i := range softDeleted {
