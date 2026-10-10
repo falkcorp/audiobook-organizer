@@ -83,6 +83,14 @@ type OperationDef struct {
 	// atomic clock with lazy periodic DB flush.
 	Synchronous bool
 
+	// NoWarmupWait exempts this def from the startup warmup gate. By default a
+	// run is held (up to operations.WarmupWaitTimeout) until the store has
+	// finished warming its in-memory read layer after a restart, so it does not
+	// run against the slow fallback read path. Set this only on an interactive
+	// def, one a person triggers and is watching, where waiting a couple of
+	// minutes for a seconds-long write is worse than running on the slow path.
+	NoWarmupWait bool
+
 	// Concurrency. Required.
 	// ConcurrencyKey: ops with same non-empty key serialize; empty = no serialization.
 	ConcurrencyKey string

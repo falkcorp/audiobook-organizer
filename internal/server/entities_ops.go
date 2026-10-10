@@ -1,7 +1,7 @@
 // file: internal/server/entities_ops.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: 3f7e2a91-b4c6-4d85-9e13-7a2f10c84d32
-// last-edited: 2026-10-04
+// last-edited: 2026-10-10
 
 // entities_ops registers the UOS-02 OperationDefs for author entity
 // operations: author-merge and resolve-production-author. Each def is
@@ -53,7 +53,10 @@ func (s *Server) RegisterAuthorMergeOp(reg *opsregistry.Registry) error {
 		DefaultPriority: opsregistry.PriorityNormal,
 		Cancellable:     true,
 		Isolate:         false,
-		Timeout:         2 * time.Hour,
+		// Interactive: a person triggered this merge and is waiting on it, so it does
+		// not wait out the post-restart startup warmup (see NoWarmupWait).
+		NoWarmupWait: true,
+		Timeout:      2 * time.Hour,
 		// RESUME AUDIT 2026-09-11 (b): ResumeDrop, was ResumeRestart with no
 		// checkpoint, which meant a restart re-ran every merge id from zero. A
 		// re-issued merge for an id already deleted is not proven to no-op:

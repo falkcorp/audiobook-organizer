@@ -1,7 +1,7 @@
 // file: internal/database/author_file_refs.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: c6e57d72-7048-499d-85aa-1714156d9481
-// last-edited: 2026-09-12
+// last-edited: 2026-10-10
 
 package database
 
@@ -213,7 +213,7 @@ func (m *MemStore) authorRefPairs(txn *memdb.Txn) (map[string][]int, error) {
 // GetBookFilesForIDsCore reads Pebble too and the two halves agree.
 func (p *PebbleStore) GetAllAuthorFileRefCounts() (map[int]int, error) {
 	// Loaded ONCE: Reset can swap memPtr underneath us.
-	if m := p.mem(); p.UseMemDB && m != nil {
+	if m := p.memOrFallback("GetAllAuthorFileRefCounts"); m != nil {
 		return m.GetAllAuthorFileRefCounts()
 	}
 	return p.getAllAuthorFileRefCountsPebble()

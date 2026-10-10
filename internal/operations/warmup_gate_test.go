@@ -1,7 +1,7 @@
 // file: internal/operations/warmup_gate_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8a4d2f61-7e03-4c9b-b5a8-1d6e3f0c7b92
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package operations
 
@@ -35,7 +35,7 @@ func (f *fakeWaiter) WaitForWarmupCtx(ctx context.Context) error {
 func TestWaitForWarmup_NoWaiterProceedsAtOnce(t *testing.T) {
 	var waited atomic.Bool
 	err := WaitForWarmup(context.Background(), nil, time.Minute, slog.Default(),
-		func() { waited.Store(true) }, nil, 0)
+		func() { waited.Store(true) })
 	if err != nil || waited.Load() {
 		t.Fatalf("err=%v waited=%v; want nil,false", err, waited.Load())
 	}
@@ -46,7 +46,7 @@ func TestWaitForWarmup_AlreadyDoneDoesNotAnnounceAWait(t *testing.T) {
 	close(w.done)
 	var waited atomic.Bool
 	err := WaitForWarmup(context.Background(), w, time.Minute, slog.Default(),
-		func() { waited.Store(true) }, nil, 0)
+		func() { waited.Store(true) })
 	if err != nil || waited.Load() {
 		t.Fatalf("err=%v waited=%v; want nil,false", err, waited.Load())
 	}
@@ -55,11 +55,10 @@ func TestWaitForWarmup_AlreadyDoneDoesNotAnnounceAWait(t *testing.T) {
 func TestWaitForWarmup_BlocksUntilWarmupFinishes(t *testing.T) {
 	w := &fakeWaiter{done: make(chan struct{})}
 	var waited atomic.Int32
-	var beats atomic.Int32
 	result := make(chan error, 1)
 	go func() {
 		result <- WaitForWarmup(context.Background(), w, time.Minute, slog.Default(),
-			func() { waited.Add(1) }, func() { beats.Add(1) }, 10*time.Millisecond)
+			func() { waited.Add(1) })
 	}()
 	select {
 	case err := <-result:
@@ -68,9 +67,6 @@ func TestWaitForWarmup_BlocksUntilWarmupFinishes(t *testing.T) {
 	}
 	if waited.Load() != 1 {
 		t.Fatalf("onWait called %d times, want 1", waited.Load())
-	}
-	if beats.Load() == 0 {
-		t.Fatal("heartbeat never fired during the wait")
 	}
 	close(w.done)
 	select {
@@ -88,7 +84,7 @@ func TestWaitForWarmup_CtxCancelReturnsPromptly(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
 	go func() {
-		result <- WaitForWarmup(ctx, w, time.Minute, slog.Default(), nil, nil, 0)
+		result <- WaitForWarmup(ctx, w, time.Minute, slog.Default(), nil)
 	}()
 	time.Sleep(50 * time.Millisecond)
 	cancel()
@@ -107,7 +103,7 @@ func TestWaitForWarmup_CtxCancelReturnsPromptly(t *testing.T) {
 func TestWaitForWarmup_TimeoutProceeds(t *testing.T) {
 	w := &fakeWaiter{done: make(chan struct{})}
 	start := time.Now()
-	err := WaitForWarmup(context.Background(), w, 80*time.Millisecond, slog.Default(), nil, nil, 0)
+	err := WaitForWarmup(context.Background(), w, 80*time.Millisecond, slog.Default(), nil)
 	if err != nil {
 		t.Fatalf("err = %v, want nil on timeout", err)
 	}

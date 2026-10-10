@@ -1,7 +1,7 @@
 // file: internal/server/series_rename_ops.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: f9b6a9b0-62cc-40eb-8c93-e281b6dce050
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 // series_rename_ops registers entities.series-rename, the queued operation
 // behind PUT /series/:id/name and PATCH /series/:id. Both endpoints used to
@@ -162,6 +162,9 @@ func (s *Server) RegisterSeriesRenameOp(reg *opsregistry.Registry) error {
 		Cancellable:     false,
 		Isolate:         false,
 		Timeout:         5 * time.Minute,
+		// Interactive: a person clicked this and a single write is all it does, so it
+		// does not wait out the post-restart startup warmup (see NoWarmupWait).
+		NoWarmupWait: true,
 		// ResumeDrop: the journal row is written before the rename, so a re-run
 		// after a crash between the two could add a second row under the same op
 		// id. The rename is one write; an interrupted one surfaces as
