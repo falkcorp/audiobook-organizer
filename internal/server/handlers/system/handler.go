@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler.go
-// version: 1.21.0
+// version: 1.21.1
 // guid: 8475f406-df31-4286-95b0-30787397603e
-// last-edited: 2026-10-07
+// last-edited: 2026-10-09
 
 // Package system hosts the system-level HTTP handlers extracted from the server
 // package: health, status, announcements, storage, logs, activity-log,
@@ -147,10 +147,24 @@ func (h *Handler) resolveHub() EventStreamer {
 	return h.getHub()
 }
 
+// readinessSource is implemented by a store that warms an in-memory read layer
+// after start. ready: the layer is published. done: warmup finished, either
+// published or fallen back to the slow path, so there is nothing left to wait
+// for. ms: how long warmup took (meaningful once done).
+type readinessSource interface {
+	WarmupStatus() (ready, done bool, ms int64)
+}
+
+// DegradedMemdbWarming is the machine token reported in /health's `degraded`
+// list while the in-memory read layer is still warming.
+const DegradedMemdbWarming = "memdb_warming"
+
 // HealthCheck implements GET /health (and /api/health, /api/v1/health).
 //
-// LIVENESS ONLY — it deliberately says nothing about what this server is or
-// what it holds.
+// LIVENESS PLUS READINESS — it deliberately says nothing about what this server
+// is or what it holds. The only additions to liveness are the readiness flags
+// (ready, memdb_ready, warmup_ms) and `degraded`, a list of fixed machine
+// tokens; see the body of HealthCheck.
 //
 // This endpoint is necessarily unauthenticated: it is how a caller decides
 // whether the server is up at all, including the SPA's reconnect loop, which
@@ -167,11 +181,28 @@ func (h *Handler) resolveHub() EventStreamer {
 // polls this every 5 seconds while reconnecting. A single tiny read is enough
 // to answer the only question being asked: can the store respond?
 func (h *Handler) HealthCheck(c *gin.Context) {
+	// Readiness is reported next to liveness, never instead of it. The HTTP status
+	// stays 200 while the in-memory read layer warms (a probe or the SPA's
+	// reconnect loop must keep treating the process as up); callers that need to
+	// know whether reads are on the fast path read `ready`. Every value below is a
+	// bool, a number of milliseconds or a fixed machine token -- never an error
+	// string, path, version or count.
+	ready, memReady := true, true
+	var warmupMS int64
+	warmupDone := false
+	degraded := []string{}
+
 	resp := gin.H{
 		"status":    "ok",
 		"timestamp": time.Now().Unix(),
 	}
 	if store := h.resolveStore(); store != nil {
+		// A store with no warmup to report on has nothing to wait for, so it is
+		// ready. AsCapability sees through decorators (search index, audit).
+		if src, ok := database.AsCapability[readinessSource](store); ok {
+			memReady, warmupDone, warmupMS = src.WarmupStatus()
+			ready = warmupDone
+		}
 		// CountAuthors is the cheapest of the aggregates and, like the others,
 		// fails when the store is unreachable — which is the whole signal. The
 		// value is read and discarded on purpose.
@@ -182,6 +213,15 @@ func (h *Handler) HealthCheck(c *gin.Context) {
 			resp["status"] = "degraded"
 		}
 	}
+	if !ready {
+		degraded = append(degraded, DegradedMemdbWarming)
+	}
+	resp["ready"] = ready
+	resp["memdb_ready"] = memReady
+	if warmupDone {
+		resp["warmup_ms"] = warmupMS
+	}
+	resp["degraded"] = degraded
 	httputil.RespondWithOK(c, resp)
 }
 

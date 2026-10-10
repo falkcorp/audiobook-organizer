@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_stats.go
-// version: 1.10.1
+// version: 1.10.2
 // guid: 8643a893-1898-4098-8e69-c312531d962c
-// last-edited: 2026-09-12
+// last-edited: 2026-10-09
 
 package database
 
@@ -22,8 +22,8 @@ import (
 // Books with active segments count their segments; books without segments count as 1 file each.
 // Uses two range scans instead of per-book GetBookFiles calls to avoid N+1 queries.
 func (p *PebbleStore) CountFiles() (int, error) {
-	if p.UseMemDB && p.mem() != nil {
-		return p.mem().CountFiles()
+	if mem := p.memOrFallback("CountFiles"); mem != nil {
+		return mem.CountFiles()
 	}
 	// Pass 1: collect IDs of all primary, non-deleted books (key scan + JSON decode)
 	primaryBookIDs := make(map[string]struct{})
@@ -303,9 +303,9 @@ func (p *PebbleStore) computeLibraryStats() (*LibraryStats, error) {
 	// made the Pebble scan below unreachable whenever memdb was up, even with
 	// the flag explicitly off, so it could never be exercised by a test. Same
 	// defect as ListBooksByITunesPID in #2399.
-	if p.UseMemDB && p.mem() != nil {
+	if mem := p.memOrFallback("computeLibraryStats"); mem != nil {
 		importPaths, _ := p.GetAllImportPaths()
-		stats, err := p.mem().ComputeLibraryStats(p.rootDir, importPaths)
+		stats, err := mem.ComputeLibraryStats(p.rootDir, importPaths)
 		if err == nil {
 			return stats, nil
 		}

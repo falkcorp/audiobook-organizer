@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_series.go
-// version: 1.10.0
+// version: 1.10.1
 // guid: 29120d16-9add-4efd-81a5-edc1e8951f4d
-// last-edited: 2026-10-06
+// last-edited: 2026-10-09
 
 package database
 
@@ -18,8 +18,8 @@ import (
 )
 
 func (p *PebbleStore) GetAllSeries() ([]Series, error) {
-	if p.UseMemDB && p.mem() != nil {
-		return p.mem().GetAllSeries()
+	if mem := p.memOrFallback("GetAllSeries"); mem != nil {
+		return mem.GetAllSeries()
 	}
 	return p.GetAllSeries_Pebble()
 }
@@ -409,8 +409,8 @@ func (p *PebbleStore) renameSeriesLocked(id int, series *Series, name string) er
 }
 
 func (p *PebbleStore) GetAllSeriesBookCounts() (map[int]int, error) {
-	if p.UseMemDB && p.mem() != nil {
-		return p.mem().GetAllSeriesBookCounts()
+	if mem := p.memOrFallback("GetAllSeriesBookCounts"); mem != nil {
+		return mem.GetAllSeriesBookCounts()
 	}
 	return p.GetAllSeriesBookCounts_Pebble()
 }
@@ -444,8 +444,8 @@ func (p *PebbleStore) GetAllSeriesBookCounts_Pebble() (map[int]int, error) {
 
 // GetAllSeriesFileCounts returns the number of audio files per series.
 func (p *PebbleStore) GetAllSeriesFileCounts() (map[int]int, error) {
-	if p.UseMemDB && p.mem() != nil {
-		return p.mem().GetAllSeriesFileCounts()
+	if mem := p.memOrFallback("GetAllSeriesFileCounts"); mem != nil {
+		return mem.GetAllSeriesFileCounts()
 	}
 	bookIDToSeriesID := make(map[string]int)
 	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {

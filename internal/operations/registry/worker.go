@@ -1,7 +1,7 @@
 // file: internal/operations/registry/worker.go
-// version: 2.27.0
+// version: 2.27.1
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
-// last-edited: 2026-10-04
+// last-edited: 2026-10-09
 
 package registry
 
@@ -19,8 +19,23 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
+	"github.com/falkcorp/audiobook-organizer/internal/operations"
 )
+
+// warmupHeartbeatEvery is how often an op waiting on the store's startup warmup
+// stamps its liveness clock. The wait is bounded (operations.WarmupWaitTimeout,
+// 5 minutes) and the watchdog's default idle limit is also 5 minutes, so without
+// this a wait that runs to its bound would read as a stuck op.
+const warmupHeartbeatEvery = 30 * time.Second
+
+// warmupWaiter resolves, through the store decorator chain, the store's startup
+// warmup wait, or nil when no store in the chain has one.
+func (r *Registry) warmupWaiter() operations.WarmupWaiter {
+	w, _ := database.AsCapability[operations.WarmupWaiter](r.store)
+	return w
+}
 
 var operationTracer = otel.Tracer("audiobook-organizer/operations")
 
@@ -433,6 +448,18 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 	if dbr, ok := reporter.(*dbReporter); ok {
 		reporterForJoin = dbr
 	}
+
+	// Startup warmup gate (D44): after a restart the store's in-memory read layer
+	// warms for a couple of minutes and every read in that window silently takes
+	// the slow Pebble path. Hold the op's body until warmup finishes, bounded by
+	// operations.WarmupWaitTimeout. The store is resolved through the decorator
+	// chain; a store that has no warmup to wait for returns at once. A cancel
+	// during the wait is not handled here: runCtx is already canceled, so the
+	// terminal-status handling below sees it exactly as for any cancel at start.
+	_ = operations.WaitForWarmup(runCtx, r.warmupWaiter(), operations.WarmupWaitTimeout, r.logger,
+		func() { _ = reporter.UpdateProgress(0, 0, operations.WarmupStatusMessage) },
+		func() { touchFn() },
+		warmupHeartbeatEvery)
 
 	// Canonical "operation started" log line, with all the tags downstream
 	// readers (op_log feed, activity-log enricher, digest aggregator) need

@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_published_years.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 25de50ea-ea39-4e25-a304-1b95b87e1919
-// last-edited: 2026-09-12
+// last-edited: 2026-10-09
 
 package database
 
@@ -47,8 +47,8 @@ func sortedYears(seen map[int]struct{}) []int {
 // GetDistinctLanguages pays — ~5s at 68K rows measured 2026-08-25 — and is
 // only ever taken while memdb is not yet warm.
 func (p *PebbleStore) GetDistinctPublishedYears() ([]int, error) {
-	if p.UseMemDB && p.mem() != nil {
-		return p.mem().GetDistinctPublishedYears()
+	if mem := p.memOrFallback("GetDistinctPublishedYears"); mem != nil {
+		return mem.GetDistinctPublishedYears()
 	}
 
 	seen := map[int]struct{}{}

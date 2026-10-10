@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_importpaths.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: eb97f1d9-af89-4dc7-add9-70ab7c30d137
-// last-edited: 2026-09-12
+// last-edited: 2026-10-09
 
 package database
 
@@ -19,8 +19,8 @@ import (
 
 // GetAllImportPaths returns all managed import paths.
 func (p *PebbleStore) GetAllImportPaths() ([]ImportPath, error) {
-	if p.UseMemDB && p.mem() != nil {
-		return p.mem().GetAllImportPaths()
+	if mem := p.memOrFallback("GetAllImportPaths"); mem != nil {
+		return mem.GetAllImportPaths()
 	}
 	return p.GetAllImportPaths_Pebble()
 }
@@ -70,8 +70,8 @@ func (p *PebbleStore) CountBooksByPathPrefix(prefix string) (int, error) {
 	// conformance test that flips UseMemDB to comparing memdb against itself.
 	// ListBooksByITunesPID had the same defect and was fixed on 2026-08-14 for
 	// the same reason. See aggregate_count_conformance_test.go.
-	if p.UseMemDB && p.mem() != nil {
-		return p.mem().CountBooksByPathPrefix(prefix)
+	if mem := p.memOrFallback("CountBooksByPathPrefix"); mem != nil {
+		return mem.CountBooksByPathPrefix(prefix)
 	}
 	count := 0
 	if err := forEachBookRow(p.db, func(rowID string, rowValue []byte) error {

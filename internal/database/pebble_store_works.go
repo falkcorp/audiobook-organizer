@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_works.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: 1d915e6f-133a-4fba-995b-8e4b26b04486
-// last-edited: 2026-09-13
+// last-edited: 2026-10-09
 
 package database
 
@@ -264,8 +264,8 @@ func (p *PebbleStore) GetBooksByWorkID(workID string) ([]Book, error) {
 // books per work. Mirrors GetAllAuthorBookCounts; used to avoid N+1
 // GetBooksByWorkID lookups when listing/aggregating works.
 func (p *PebbleStore) GetAllWorkBookCounts() (map[string]int, error) {
-	if p.UseMemDB && p.mem() != nil {
-		return p.mem().GetAllWorkBookCounts()
+	if mem := p.memOrFallback("GetAllWorkBookCounts"); mem != nil {
+		return mem.GetAllWorkBookCounts()
 	}
 	counts := make(map[string]int)
 
