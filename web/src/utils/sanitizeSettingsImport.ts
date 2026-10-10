@@ -1,7 +1,7 @@
 // file: web/src/utils/sanitizeSettingsImport.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3f6b1c2e-8d4a-4e7f-9a51-c2d0b7e4f813
-// last-edited: 2026-09-12
+// last-edited: 2026-10-09
 
 import type * as api from '../services/api';
 
@@ -31,7 +31,7 @@ export const sanitizeSettingsImport = (
     'openai_api_key', 'metadata_sources', 'language',
     'concurrent_scans', 'memory_limit_type', 'cache_size', 'cache_invalidate_on_book_update',
     'metadata_fetch_cache_ttl_days', 'memory_limit_percent', 'memory_limit_mb',
-    'purge_soft_deleted_after_days', 'purge_soft_deleted_delete_files', 'log_level', 'log_format',
+    'purge_soft_deleted_after_days', 'backup_retention_days', 'purge_soft_deleted_delete_files', 'log_level', 'log_format',
     'enable_json_logging',
     'auto_rename_on_apply', 'auto_write_tags_on_apply', 'verify_after_write', 'protected_paths',
     // nested sub-struct keys (CFG-1)
@@ -132,6 +132,7 @@ export const sanitizeSettingsImport = (
       case 'memory_limit_percent':
       case 'memory_limit_mb':
       case 'purge_soft_deleted_after_days':
+      case 'backup_retention_days':
         if (typeof val === 'number') {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           (cleaned as any)[key] = val;

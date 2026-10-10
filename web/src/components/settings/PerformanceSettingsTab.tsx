@@ -1,7 +1,7 @@
 // file: web/src/components/settings/PerformanceSettingsTab.tsx
-// version: 1.0.2
+// version: 1.1.0
 // guid: a7b8c9d0-e1f2-3456-abcd-567890123456
-// last-edited: 2026-08-19
+// last-edited: 2026-10-09
 
 import {
   Grid,
@@ -28,6 +28,7 @@ interface PerformanceSettingsTabProps {
     memoryLimitPercent: number;
     memoryLimitMB: number;
     purgeSoftDeletedAfterDays: number;
+    backupRetentionDays: number;
     purgeSoftDeletedDeleteFiles: boolean;
     logLevel: string;
     logFormat: string;
@@ -230,6 +231,24 @@ export function PerformanceSettingsTab({ settings, handleChange }: PerformanceSe
           helperText="Set to 0 to disable automatic purge"
           slotProps={{
             htmlInput: { min: 0, max: 365 },
+          }}
+        />
+      </Grid>
+      <Grid
+        size={{
+          xs: 12,
+          sm: 6,
+        }}
+      >
+        <TextField
+          fullWidth
+          type="number"
+          label="Backup retention (days)"
+          value={settings.backupRetentionDays}
+          onChange={(e) => handleChange('backupRetentionDays', parseInt(e.target.value) || 0)}
+          helperText="0 = same as soft-delete retention"
+          slotProps={{
+            htmlInput: { min: 0, max: 3650 },
           }}
         />
       </Grid>

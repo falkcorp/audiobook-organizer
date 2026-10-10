@@ -1,7 +1,7 @@
 // file: web/src/utils/sanitizeSettingsImport.test.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8a2d4f60-1b3e-4c7a-b95d-6e0f2a7c3d19
-// last-edited: 2026-09-12
+// last-edited: 2026-10-09
 
 import { describe, it, expect } from 'vitest';
 import { sanitizeSettingsImport } from './sanitizeSettingsImport';
@@ -28,6 +28,11 @@ describe('sanitizeSettingsImport', () => {
       window_start: 2,
       window_end: 4,
     });
+  });
+
+  it('keeps backup_retention_days, coercing a numeric string', () => {
+    expect(load({ backup_retention_days: 10 }).backup_retention_days).toBe(10);
+    expect(load({ backup_retention_days: '14' }).backup_retention_days).toBe(14);
   });
 
   it('folds flat maintenance_window_* keys into the nested maintenance object', () => {

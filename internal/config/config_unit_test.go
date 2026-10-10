@@ -1,6 +1,6 @@
 // file: internal/config/config_unit_test.go
-// version: 1.16.0
-// last-edited: 2026-10-08
+// version: 1.17.0
+// last-edited: 2026-10-09
 
 package config
 
@@ -741,6 +741,7 @@ func TestApplySettingIntKeys(t *testing.T) {
 		{"auto_update_window_start", "2", func() int { return AppConfig.AutoUpdate.WindowStart }},
 		{"auto_update_window_end", "5", func() int { return AppConfig.AutoUpdate.WindowEnd }},
 		{"purge_soft_deleted_after_days", "30", func() int { return AppConfig.PurgeSoftDeletedAfterDays }},
+		{"backup_retention_days", "10", func() int { return AppConfig.BackupRetentionDays }},
 		{"maintenance_window_start", "3", func() int { return AppConfig.Maintenance.WindowStart }},
 		{"maintenance_window_end", "6", func() int { return AppConfig.Maintenance.WindowEnd }},
 		{"scheduled_dedup_refresh_interval", "24", func() int { return AppConfig.Scheduled.DedupRefresh.Interval }},

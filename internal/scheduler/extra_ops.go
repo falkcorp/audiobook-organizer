@@ -1,7 +1,7 @@
 // file: internal/scheduler/extra_ops.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: a9b8c7d6-e5f4-3210-fedc-ba9876543210
-// last-edited: 2026-10-05
+// last-edited: 2026-10-09
 
 // extra_ops registers OperationDefs for 13 scheduler tasks that previously
 // used the legacy triggerOperation / triggerOperationWithID helpers.  Each def
@@ -683,10 +683,7 @@ func runCleanupOldBackups(ctx context.Context, progress cleanupProgressLogger) e
 		_ = progress.Log("info", "No root directory configured, skipping backup cleanup", nil)
 		return nil
 	}
-	retentionDays := config.AppConfig.PurgeSoftDeletedAfterDays
-	if retentionDays <= 0 {
-		retentionDays = 30
-	}
+	retentionDays := config.EffectiveBackupRetentionDays()
 	maxAge := time.Duration(retentionDays) * 24 * time.Hour
 	removed := 0
 	_ = progress.Log("info", fmt.Sprintf("Scanning %s for .bak-* files older than %d days", rootDir, retentionDays), nil)
@@ -702,8 +699,9 @@ func runCleanupOldBackups(ctx context.Context, progress cleanupProgressLogger) e
 	// NOTE: this is one of THREE implementations of "delete old backup files"
 	// in the tree (see internal/plugins/maintenance/cleanup.go with the same
 	// predicate, and internal/maintenance/jobs/cleanup_backups.go with a
-	// different regex). All three are guarded; consolidating them is a separate
-	// change.
+	// different regex). All three are guarded, and the first two now share one
+	// retention source (the config package's effective-retention helper); consolidating
+	// them is a separate change.
 	app := appdirs.Current()
 	err := filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
 		if ctx.Err() != nil {
