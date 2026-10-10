@@ -1,5 +1,5 @@
 // file: internal/organizer/organize_folder_scope_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c41e0d2-93ab-4f58-b6a1-0e5d28c9f347
 // last-edited: 2026-10-10
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"testing"
 
@@ -37,9 +38,31 @@ type folderScopeFixture struct {
 	files   map[string]string // folder label -> source audio path
 }
 
+// newFolderScopeFixture plants one book per label under <tmp>/import/<label>,
+// outside the library root, so an organize copies it in (strategy "copy").
 func newFolderScopeFixture(t *testing.T, labels ...string) *folderScopeFixture {
 	t.Helper()
+	return buildFolderScopeFixture(t, false, labels...)
+}
+
+// newInPlaceFolderScopeFixture plants one book per label under
+// <root>/incoming/<label>, INSIDE the library root, so an organize renames it
+// in place. That is the branch that moves the source file, so it is the one
+// where "the out-of-scope file is still where it was" can actually fail.
+func newInPlaceFolderScopeFixture(t *testing.T, labels ...string) *folderScopeFixture {
+	t.Helper()
+	return buildFolderScopeFixture(t, true, labels...)
+}
+
+func buildFolderScopeFixture(t *testing.T, underRoot bool, labels ...string) *folderScopeFixture {
+	t.Helper()
 	store := newLandingTestStore(t)
+	if underRoot {
+		// In-place moves ask the complete ownership index (memdb) who owns a
+		// file and refuse while it is not serving; serve it, as prod does
+		// after warmup (see setupInPlace).
+		store.UseMemDB = true
+	}
 
 	prev := config.AppConfig
 	t.Cleanup(func() { config.AppConfig = prev })
@@ -60,8 +83,12 @@ func newFolderScopeFixture(t *testing.T, labels ...string) *folderScopeFixture {
 		books:   map[string]string{},
 		files:   map[string]string{},
 	}
+	base := filepath.Join(tmp, "import")
+	if underRoot {
+		base = filepath.Join(rootDir, "incoming")
+	}
 	for _, label := range labels {
-		dir := filepath.Join(tmp, "import", label)
+		dir := filepath.Join(base, label)
 		require.NoError(t, os.MkdirAll(dir, 0o755))
 		src := filepath.Join(dir, "book-"+label+".m4b")
 		require.NoError(t, os.WriteFile(src, []byte("audio "+label), 0o644))
@@ -93,16 +120,86 @@ func (fx *folderScopeFixture) bookCount(t *testing.T) int {
 	return len(books)
 }
 
+// libraryEntries lists the files that landed under the library root, minus
+// the fixture's own incoming/ tree (the in-place fixture's sources live there).
 func (fx *folderScopeFixture) libraryEntries(t *testing.T) []string {
 	t.Helper()
+	incoming := filepath.Join(fx.rootDir, "incoming")
 	var out []string
 	_ = filepath.WalkDir(fx.rootDir, func(p string, d os.DirEntry, err error) error {
-		if err == nil && !d.IsDir() {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() && p == incoming {
+			return filepath.SkipDir
+		}
+		if !d.IsDir() {
 			out = append(out, p)
 		}
 		return nil
 	})
 	return out
+}
+
+// landedContents is the content of every file that landed in the library, so
+// a test can say WHICH book landed rather than only how many did.
+func (fx *folderScopeFixture) landedContents(t *testing.T) []string {
+	t.Helper()
+	var out []string
+	for _, p := range fx.libraryEntries(t) {
+		b, err := os.ReadFile(p)
+		require.NoError(t, err)
+		out = append(out, string(b))
+	}
+	sort.Strings(out)
+	return out
+}
+
+// target is where an organize of label's book would land it.
+func (fx *folderScopeFixture) target(t *testing.T, label string) string {
+	t.Helper()
+	b, err := fx.store.GetBookByID(fx.books[label])
+	require.NoError(t, err)
+	require.NotNil(t, b)
+	target, err := fx.svc.newOrganizer().GenerateTargetPath(b)
+	require.NoError(t, err)
+	return target
+}
+
+// repointFilePath sets label's book.file_path to path and leaves its book_file
+// rows alone: the stale-column shape, where the two disagree.
+func (fx *folderScopeFixture) repointFilePath(t *testing.T, label, path string) {
+	t.Helper()
+	b, err := fx.store.GetBookByID(fx.books[label])
+	require.NoError(t, err)
+	require.NotNil(t, b)
+	b.FilePath = path
+	_, err = fx.store.UpdateBook(b.ID, b)
+	require.NoError(t, err)
+}
+
+// plantStale writes a file outside the scoped folder with content no fixture
+// book has, so a test can tell whether it was organized.
+func plantStale(t *testing.T, dir string) string {
+	t.Helper()
+	p := filepath.Join(dir, "stale.m4b")
+	require.NoError(t, os.WriteFile(p, []byte(staleContent), 0o644))
+	return p
+}
+
+const staleContent = "OUT OF SCOPE"
+
+func requireNotExist(t *testing.T, path, msg string) {
+	t.Helper()
+	_, err := os.Stat(path)
+	require.Truef(t, os.IsNotExist(err), "%s: %s exists (stat err %v)", msg, path, err)
+}
+
+func requireContent(t *testing.T, path, want, msg string) {
+	t.Helper()
+	got, err := os.ReadFile(path)
+	require.NoErrorf(t, err, "%s: %s", msg, path)
+	require.Equal(t, want, string(got), msg)
 }
 
 func TestOrganizeFolderScope_OnlyBooksInFolderAreOrganized(t *testing.T) {
@@ -116,16 +213,15 @@ func TestOrganizeFolderScope_OnlyBooksInFolderAreOrganized(t *testing.T) {
 
 	require.Equal(t, 1, stats.Total, "only the book under the scoped folder may be counted")
 	require.Equal(t, 1, stats.Organized)
-	require.Len(t, fx.libraryEntries(t), 1, "only the in-scope book's file may land in the library")
+	require.Equal(t, []string{"audio a"}, fx.landedContents(t),
+		"exactly the in-scope book's file, and no other, may land in the library")
 	require.Equal(t, 4, fx.bookCount(t), "3 originals + exactly 1 organized copy")
 
+	// Copy mode never removes a source, so "the source still exists" proves
+	// nothing here. What would show a leak is the out-of-scope book's
+	// DESTINATION existing.
 	for _, label := range []string{"ab", "b"} {
-		rows, err := fx.store.GetBookFiles(fx.books[label])
-		require.NoError(t, err)
-		require.Len(t, rows, 1)
-		require.Equal(t, fx.files[label], rows[0].FilePath, "%s: out-of-scope book_file row must not move", label)
-		_, statErr := os.Stat(fx.files[label])
-		require.NoError(t, statErr, "%s: out-of-scope source file must still exist", label)
+		requireNotExist(t, fx.target(t, label), label+": an out-of-scope book must not land in the library")
 	}
 }
 
@@ -168,7 +264,7 @@ func TestOrganizeFolderScope_UnusableFolderIsRejectedNotWidened(t *testing.T) {
 			scope := scope
 			stats, err := fx.svc.PerformOrganizeStats(context.Background(),
 				&Request{FolderPath: &scope}, logger.New("test"))
-			require.Error(t, err, "a scope that cannot be honored must fail, never fall back to the whole library")
+			require.ErrorIs(t, err, ErrInvalidFolderScope, "a scope that cannot be honored must fail, never fall back to the whole library")
 			require.Nil(t, stats)
 			require.Empty(t, fx.libraryEntries(t))
 			require.Equal(t, 1, fx.bookCount(t))
@@ -191,9 +287,11 @@ func TestOrganizeFolderScope_BookStraddlingBoundaryIsHeldBack(t *testing.T) {
 		&Request{FolderPath: &scope}, logger.New("test"))
 	require.NoError(t, err)
 	require.Zero(t, stats.Total)
+	require.Equal(t, 1, stats.Collisions[OutcomeStraddlesFolderScope],
+		"a held-back book must be counted, not silently dropped")
 	require.Empty(t, fx.libraryEntries(t))
-	_, statErr := os.Stat(extra)
-	require.NoError(t, statErr)
+	requireNotExist(t, fx.target(t, "a"), "a straddling book must not land")
+	requireNotExist(t, fx.target(t, "b"), "b is out of scope")
 }
 
 // fetchRecorder stands in for FetchMetadataForBook and records every ID it is
@@ -281,5 +379,233 @@ func TestFolderScope_Contains(t *testing.T) {
 		"x/a/book":        false,
 	} {
 		require.Equal(t, want, scope.contains(path), "contains(%q)", path)
+	}
+}
+
+// B1 (review round 1), copy branch. The scope was decided from book_file rows,
+// but a single-file book is copied from book.file_path -- the stale column.
+// Rows in /import/a, file_path in /import/b, scope /import/a: the run admitted
+// the book and copied the /import/b file into the library.
+func TestOrganizeFolderScope_StaleFilePathOutsideFolderIsHeldBack(t *testing.T) {
+	fx := newFolderScopeFixture(t, "a", "b")
+	stale := plantStale(t, fx.dirs["b"])
+	fx.repointFilePath(t, "a", stale)
+	scope := fx.dirs["a"]
+
+	stats, err := fx.svc.PerformOrganizeStats(context.Background(),
+		&Request{FolderPath: &scope}, logger.New("test"))
+	require.NoError(t, err)
+	require.NotContains(t, fx.landedContents(t), staleContent,
+		"a file outside the scoped folder was organized into the library")
+	require.Empty(t, fx.libraryEntries(t))
+	require.Zero(t, stats.Total)
+	require.Equal(t, 1, stats.Collisions[OutcomeFilePathOutsideFolderScope])
+	requireContent(t, stale, staleContent, "the out-of-scope file must be untouched")
+}
+
+// B1, in-place branch: the worse version. A book already under the library
+// root is RENAMED from book.file_path, so a stale file_path outside the scoped
+// folder was moved, not copied.
+func TestOrganizeFolderScope_InPlaceStaleFilePathOutsideFolderIsNotMoved(t *testing.T) {
+	fx := newInPlaceFolderScopeFixture(t, "a", "b")
+	stale := plantStale(t, fx.dirs["b"])
+	fx.repointFilePath(t, "a", stale)
+	scope := fx.dirs["a"]
+
+	stats, err := fx.svc.PerformOrganizeStats(context.Background(),
+		&Request{FolderPath: &scope}, logger.New("test"))
+	require.NoError(t, err)
+	requireContent(t, stale, staleContent, "a file outside the scoped folder was moved")
+	requireContent(t, fx.files["a"], "audio a", "a held-back book's own file must not move either")
+	requireContent(t, fx.files["b"], "audio b", "b is out of scope")
+	require.Empty(t, fx.libraryEntries(t))
+	require.Zero(t, stats.Organized+stats.ReOrganized)
+	require.Equal(t, 1, stats.Collisions[OutcomeFilePathOutsideFolderScope])
+}
+
+// S3: the in-place branch is the one that moves a source, so it is the only
+// place "the out-of-scope file is still where it was" can fail. Unscoped, both
+// books would be renamed to their targets.
+func TestOrganizeFolderScope_InPlaceRenamesOnlyTheScopedBook(t *testing.T) {
+	fx := newInPlaceFolderScopeFixture(t, "a", "ab", "b")
+	targetA, targetAB, targetB := fx.target(t, "a"), fx.target(t, "ab"), fx.target(t, "b")
+	scope := fx.dirs["a"]
+
+	stats, err := fx.svc.PerformOrganizeStats(context.Background(),
+		&Request{FolderPath: &scope}, logger.New("test"))
+	require.NoError(t, err)
+	require.Equal(t, 1, stats.Total)
+	require.Equal(t, 1, stats.Organized+stats.ReOrganized)
+
+	requireNotExist(t, fx.files["a"], "the in-scope book must have been renamed away")
+	requireContent(t, targetA, "audio a", "the in-scope book must land at its target")
+	for label, target := range map[string]string{"ab": targetAB, "b": targetB} {
+		requireContent(t, fx.files[label], "audio "+label, label+": an out-of-scope file must stay where it was")
+		requireNotExist(t, target, label+": an out-of-scope book must not be renamed")
+	}
+}
+
+// mergeOnReadStore stands in for a library scan that merges a book while the
+// organize waits for its scan lock: the first GetBookByID of bookID runs merge
+// against the store, then reads the book back.
+type mergeOnReadStore struct {
+	*database.PebbleStore
+	bookID string
+	merge  func() error
+	once   sync.Once
+}
+
+func (s *mergeOnReadStore) GetBookByID(id string) (*database.Book, error) {
+	if id == s.bookID {
+		var err error
+		s.once.Do(func() { err = s.merge() })
+		if err != nil {
+			return nil, err
+		}
+	}
+	return s.PebbleStore.GetBookByID(id)
+}
+
+// runWithMergeOnRead runs a FolderPath-scoped, scan-locked organize of fx's
+// folder a, with merge applied to book a the first time the run reads it by
+// ID. FolderPath only: a BookIDs load would call GetBookByID itself, and the
+// merge would land before the scope check rather than after it.
+func (fx *folderScopeFixture) runWithMergeOnRead(t *testing.T, merge func(t *testing.T)) *Stats {
+	t.Helper()
+	wrapped := &mergeOnReadStore{PebbleStore: fx.store, bookID: fx.books["a"], merge: func() error {
+		merge(t)
+		return nil
+	}}
+	scope := fx.dirs["a"]
+	stats, err := NewService(wrapped).PerformOrganizeStats(context.Background(),
+		&Request{FolderPath: &scope, LockBooksAgainstScan: true}, logger.New("test"))
+	require.NoError(t, err)
+	return stats
+}
+
+// S1 (review round 1): under LockBooksAgainstScan each book is re-read under
+// its scan lock and the FRESH row is organized. The scope was decided on the
+// listing, so a scan that repointed the book outside the folder in between
+// carried the outside file into the library.
+func TestOrganizeFolderScope_FreshRowIsRecheckedUnderScanLock(t *testing.T) {
+	fx := newFolderScopeFixture(t, "a", "b")
+	stale := plantStale(t, fx.dirs["b"])
+
+	stats := fx.runWithMergeOnRead(t, func(t *testing.T) { fx.repointFilePath(t, "a", stale) })
+	require.NotContains(t, fx.landedContents(t), staleContent,
+		"the re-read row pointed outside the folder and was organized anyway")
+	require.Empty(t, fx.libraryEntries(t))
+	require.Equal(t, 1, stats.Total, "the book was in scope when the run listed it")
+	require.Equal(t, 1, stats.Skipped)
+	require.Zero(t, stats.Organized+stats.ReOrganized)
+	require.Equal(t, 1, stats.Collisions[OutcomeFilePathOutsideFolderScope])
+}
+
+// S1, the other re-check outcome: by its turn nothing the book would touch is
+// in the folder any more (its only row went missing and file_path moved out).
+// Skipped and counted, not organized and not silently dropped.
+func TestOrganizeFolderScope_BookThatLeftTheFolderIsCountedNotOrganized(t *testing.T) {
+	fx := newFolderScopeFixture(t, "a", "b")
+	stale := plantStale(t, fx.dirs["b"])
+
+	stats := fx.runWithMergeOnRead(t, func(t *testing.T) {
+		rows, err := fx.store.GetBookFiles(fx.books["a"])
+		require.NoError(t, err)
+		for i := range rows {
+			rows[i].Missing = true
+			require.NoError(t, fx.store.UpdateBookFile(rows[i].ID, &rows[i]))
+		}
+		fx.repointFilePath(t, "a", stale)
+	})
+	require.Empty(t, fx.libraryEntries(t))
+	require.Equal(t, 1, stats.Skipped)
+	require.Zero(t, stats.Organized+stats.ReOrganized)
+	require.Equal(t, 1, stats.Collisions[OutcomeLeftFolderScope])
+}
+
+// N4: a Missing row is a path that is gone from disk; organize does not touch
+// it, so it cannot put a book outside the scope.
+func TestOrganizeFolderScope_MissingRowOutsideFolderDoesNotHoldBookBack(t *testing.T) {
+	fx := newFolderScopeFixture(t, "a", "b")
+	require.NoError(t, fx.store.CreateBookFile(&database.BookFile{
+		BookID: fx.books["a"], FilePath: filepath.Join(fx.dirs["b"], "gone.m4b"), Format: "m4b", Missing: true,
+	}))
+	scope := fx.dirs["a"]
+
+	stats, err := fx.svc.PerformOrganizeStats(context.Background(),
+		&Request{FolderPath: &scope}, logger.New("test"))
+	require.NoError(t, err)
+	require.Equal(t, 1, stats.Total)
+	require.Empty(t, stats.Collisions)
+	require.Equal(t, []string{"audio a"}, fx.landedContents(t))
+}
+
+// N1: a book with no live rows is handled the way an unscoped run handles it
+// when its file_path is inside the folder. Under the library root that means
+// it is renamed in place from file_path; scoping the run to its folder used to
+// drop it without a count.
+func TestOrganizeFolderScope_BookWithNoLiveRowsIsTreatedLikeAnUnscopedRun(t *testing.T) {
+	fx := newInPlaceFolderScopeFixture(t, "a", "b")
+	rows, err := fx.store.GetBookFiles(fx.books["a"])
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	rows[0].Missing = true
+	require.NoError(t, fx.store.UpdateBookFile(rows[0].ID, &rows[0]))
+	targetA := fx.target(t, "a")
+	scope := fx.dirs["a"]
+
+	stats, err := fx.svc.PerformOrganizeStats(context.Background(),
+		&Request{FolderPath: &scope}, logger.New("test"))
+	require.NoError(t, err)
+	require.Equal(t, 1, stats.Total)
+	require.Equal(t, 1, stats.Organized+stats.ReOrganized)
+	requireContent(t, targetA, "audio a", "the book must be renamed in place exactly as an unscoped run would")
+	requireContent(t, fx.files["b"], "audio b", "b is out of scope")
+}
+
+// N3: "/" is a valid absolute folder and every absolute path is inside it, so
+// it scopes the run to every book that has a file to organize: the whole
+// library, by another name. Pinned so a change to that is deliberate.
+func TestOrganizeFolderScope_RootFolderMeansEveryBook(t *testing.T) {
+	fx := newFolderScopeFixture(t, "a", "b")
+	scope := string(filepath.Separator)
+
+	stats, err := fx.svc.PerformOrganizeStats(context.Background(),
+		&Request{FolderPath: &scope}, logger.New("test"))
+	require.NoError(t, err)
+	require.Equal(t, 2, stats.Total)
+	require.Equal(t, []string{"audio a", "audio b"}, fx.landedContents(t))
+}
+
+// The rule both scopeBooks and the per-book re-check apply, on the cases the
+// end-to-end tests above do not reach. Paths are illustrative only.
+func TestFolderScope_Admit(t *testing.T) {
+	scope, err := newFolderScope(func() *string { s := "/x/a"; return &s }())
+	require.NoError(t, err)
+	row := func(path string, missing bool) database.BookFileCore {
+		return database.BookFileCore{FilePath: path, Missing: missing}
+	}
+	for name, tc := range map[string]struct {
+		filePath string
+		rows     []database.BookFileCore
+		want     scopeVerdict
+	}{
+		"rows and file_path inside":    {"/x/a/1.m4b", []database.BookFileCore{row("/x/a/1.m4b", false), row("/x/a/2.m4b", false)}, scopeInside},
+		"file_path is the folder":      {"/x/a", []database.BookFileCore{row("/x/a/1.m4b", false)}, scopeInside},
+		"nothing inside":               {"/x/b/1.m4b", []database.BookFileCore{row("/x/b/1.m4b", false)}, scopeOutside},
+		"rows split":                   {"/x/a/1.m4b", []database.BookFileCore{row("/x/a/1.m4b", false), row("/x/b/2.m4b", false)}, scopeStraddles},
+		"rows inside, file_path out":   {"/x/b/old.m4b", []database.BookFileCore{row("/x/a/1.m4b", false)}, scopeFilePathOutside},
+		"file_path is a parent dir":    {"/x", []database.BookFileCore{row("/x/a/1.m4b", false)}, scopeFilePathOutside},
+		"rows outside, file_path in":   {"/x/a/1.m4b", []database.BookFileCore{row("/x/b/1.m4b", false)}, scopeStraddles},
+		"missing row outside ignored":  {"/x/a/1.m4b", []database.BookFileCore{row("/x/a/1.m4b", false), row("/x/b/2.m4b", true)}, scopeInside},
+		"N2: empty-path row ignored":   {"/x/a/1.m4b", []database.BookFileCore{row("/x/a/1.m4b", false), row("", false)}, scopeInside},
+		"no rows, file_path inside":    {"/x/a/1.m4b", nil, scopeInside},
+		"no rows, file_path outside":   {"/x/b/1.m4b", nil, scopeOutside},
+		"only missing rows, no path":   {"", []database.BookFileCore{row("/x/a/1.m4b", true)}, scopeOutside},
+		"rows inside, empty file_path": {"", []database.BookFileCore{row("/x/a/1.m4b", false)}, scopeInside},
+		"nothing at all":               {"", nil, scopeOutside},
+		"sibling prefix is not inside": {"/x/ab/1.m4b", []database.BookFileCore{row("/x/ab/1.m4b", false)}, scopeOutside},
+	} {
+		require.Equal(t, tc.want, scope.admit(tc.filePath, tc.rows), name)
 	}
 }
