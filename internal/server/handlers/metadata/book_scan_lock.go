@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/book_scan_lock.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 070620af-532e-4357-a2a3-3f746b5e9e30
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 
 package metadatahandler
 
@@ -269,6 +269,11 @@ func (h *Handler) applyCandidateCore(ctx context.Context, id string, cand metafe
 		}
 		if refusal := asinConflictRefusal(book, &cand, overrideASIN); refusal != nil {
 			return nil, refusal
+		}
+		// A candidate the owner rejected is never applied, not even by hand:
+		// the owner un-rejects it first (errOwnerRejected).
+		if rerr := ownerRejectedRefusal(h.store, id, &cand); rerr != nil {
+			return nil, rerr
 		}
 		overridden = asinConflictRefusal(book, &cand, "") != nil
 	}

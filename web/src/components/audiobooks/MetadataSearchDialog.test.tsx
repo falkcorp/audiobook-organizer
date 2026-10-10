@@ -1,7 +1,7 @@
 // file: web/src/components/audiobooks/MetadataSearchDialog.test.tsx
-// version: 2.0.0
+// version: 2.1.0
 // guid: b2cf5226-9131-4f1a-9fd2-5c3286e4f800
-// last-edited: 2026-10-06
+// last-edited: 2026-10-10
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, fireEvent, waitFor } from '@testing-library/react';
@@ -68,6 +68,17 @@ const staleOne: MetadataCandidate = {
   apply_check: { identity_stale: true, book_asin: 'B00BOOKASI', detail: 'fetched for B00OLDASIN' },
 };
 
+// A kept candidate the owner rejected for this book: the server flags it.
+const rejectedOne: MetadataCandidate = {
+  title: 'Rejected One',
+  author: 'Someone',
+  source: 'audible',
+  // Scored above every other fixture so it renders first (the dialog sorts
+  // by score): the case that matters is a rejected candidate on top.
+  score: 0.99,
+  apply_check: { owner_rejected: true, detail: 'rejected by the owner' },
+};
+
 const plain: MetadataCandidate = {
   title: 'Plain',
   author: 'An Author',
@@ -119,6 +130,26 @@ describe('MetadataSearchDialog — candidate checks', () => {
     expect(screen.getByText('Fetched for another ASIN')).toBeInTheDocument();
     expect(screen.getAllByText('ASIN conflict')).toHaveLength(1);
     expect(screen.getAllByText('Fetched for another ASIN')).toHaveLength(1);
+  });
+
+  it('marks an owner-rejected candidate and refuses to stage it', async () => {
+    searchReturns(rejectedOne, plain);
+    renderDialog();
+    await screen.findByText('Rejected One');
+    expect(screen.getAllByTestId('owner-rejected-chip')).toHaveLength(1);
+
+    const picks = () => screen.getAllByRole('button', { name: /^(Pick|Picked)$/ });
+    fireEvent.click(picks()[0]);
+    expect(toast).toHaveBeenCalledWith(
+      'You rejected this candidate for this book. Un-reject it to apply it.',
+      'warning'
+    );
+    expect(screen.queryByTestId('staged-pick')).not.toBeInTheDocument();
+
+    // The other candidate still stages normally.
+    fireEvent.click(picks()[1]);
+    expect(await screen.findByTestId('staged-pick')).toHaveTextContent('Plain');
+    expect(mockApply).not.toHaveBeenCalled();
   });
 
 });

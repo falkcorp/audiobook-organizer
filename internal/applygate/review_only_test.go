@@ -1,7 +1,7 @@
 // file: internal/applygate/review_only_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: c09f46a0-0fa5-4191-b572-ea43cc5ace8b
-// last-edited: 2026-10-06
+// last-edited: 2026-10-10
 
 package applygate
 
@@ -33,7 +33,7 @@ func TestEvaluate_ReviewOnlySources(t *testing.T) {
 		if v.Allowed || v.Reason != ReasonReviewOnlySource {
 			t.Fatalf("%s: allowed=%v reason=%q, want refused %q", source, v.Allowed, v.Reason, ReasonReviewOnlySource)
 		}
-		if v2 := EvaluateInBatch(book, snap(book), rt, &c, nil, nil); v2.Allowed || v2.Reason != ReasonReviewOnlySource {
+		if v2 := EvaluateInBatch(book, snap(book), rt, &c, nil, nil, nil); v2.Allowed || v2.Reason != ReasonReviewOnlySource {
 			t.Fatalf("%s: EvaluateInBatch allowed=%v reason=%q", source, v2.Allowed, v2.Reason)
 		}
 		if !v.OwnerReviewOverridable() || !slices.Contains(v.RefusingReasons(), ReasonReviewOnlySource) {

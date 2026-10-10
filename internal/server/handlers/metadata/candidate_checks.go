@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/candidate_checks.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 7d2c5e91-3a8b-4f60-b1e4-9c0f6a2d8e57
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package metadatahandler
 
@@ -35,6 +35,10 @@ type candidateApplyCheck struct {
 	// carries and does not carry the book's current one. Shown as a warning;
 	// the apply does not refuse it, since the person is choosing.
 	IdentityStale bool `json:"identity_stale,omitempty"`
+	// OwnerRejected: the owner rejected this candidate for this book (POST
+	// /metadata/batch-reject-candidates). Applying it is refused, here as on
+	// every bulk path (applygate.ReasonOwnerRejected); un-reject it first.
+	OwnerRejected bool `json:"owner_rejected,omitempty"`
 	// BookASIN is the book's ASIN the checks ran against: the value an
 	// override of the conflict must send back (applyRequest.OverrideASIN).
 	BookASIN string `json:"book_asin,omitempty"`
@@ -42,7 +46,9 @@ type candidateApplyCheck struct {
 	Detail string `json:"detail,omitempty"`
 }
 
-func (c candidateApplyCheck) empty() bool { return !c.ASINConflict && !c.IdentityStale }
+func (c candidateApplyCheck) empty() bool {
+	return !c.ASINConflict && !c.IdentityStale && !c.OwnerRejected
+}
 
 // dialogCandidate is a search result as the dialog receives it: the candidate's
 // own fields, flattened, plus ApplyCheck when something disagrees. A client
@@ -56,10 +62,15 @@ type dialogCandidate struct {
 // checkCandidate runs the dialog's checks on one candidate. entry is the cache
 // row the candidate came from, nil for a fresh search (whose candidates were
 // found for the book as it is, so only the ASIN comparison applies).
-func checkCandidate(book *database.Book, entry *metafetch.MetadataCandidateCache, c *metafetch.MetadataCandidate) candidateApplyCheck {
+//
+// rejected is the book's owner rejections (nil: none known).
+func checkCandidate(book *database.Book, entry *metafetch.MetadataCandidateCache, rejected metafetch.RejectedSet, c *metafetch.MetadataCandidate) candidateApplyCheck {
 	var out candidateApplyCheck
 	if book == nil || c == nil {
 		return out
+	}
+	if rejected.HasCandidate(c) {
+		out.OwnerRejected = true
 	}
 	if book.ASIN != nil {
 		out.BookASIN = strings.TrimSpace(*book.ASIN)
@@ -73,6 +84,9 @@ func checkCandidate(book *database.Book, entry *metafetch.MetadataCandidateCache
 		out.IdentityStale = true
 		details = append(details, err.Error())
 	}
+	if out.OwnerRejected {
+		details = append(details, "you rejected this candidate for this book; un-reject it to apply it")
+	}
 	out.Detail = strings.Join(details, "; ")
 	return out
 }
@@ -80,11 +94,11 @@ func checkCandidate(book *database.Book, entry *metafetch.MetadataCandidateCache
 // withApplyChecks returns results as dialog candidates, each carrying its
 // checks against book. A nil book (it could not be read) returns them
 // unchecked rather than failing the search.
-func withApplyChecks(book *database.Book, entry *metafetch.MetadataCandidateCache, results []metafetch.MetadataCandidate) []dialogCandidate {
+func withApplyChecks(book *database.Book, entry *metafetch.MetadataCandidateCache, rejected metafetch.RejectedSet, results []metafetch.MetadataCandidate) []dialogCandidate {
 	out := make([]dialogCandidate, len(results))
 	for i := range results {
 		out[i].MetadataCandidate = results[i]
-		if chk := checkCandidate(book, entry, &results[i]); !chk.empty() {
+		if chk := checkCandidate(book, entry, rejected, &results[i]); !chk.empty() {
 			out[i].ApplyCheck = &chk
 		}
 	}
@@ -126,4 +140,30 @@ func asinConflictRefusal(book *database.Book, cand *metafetch.MetadataCandidate,
 		return nil
 	}
 	return &errASINConflict{BookASIN: cur, CandidateASIN: strings.TrimSpace(cand.ASIN), Detail: r.Detail}
+}
+
+// errOwnerRejected refuses a single-book apply of a candidate the owner
+// rejected for the book. Unlike an ASIN conflict there is no override on the
+// apply: the owner un-rejects the candidate (POST
+// /metadata/batch-unreject-candidates) and then applies it.
+type errOwnerRejected struct {
+	Source, Title string
+}
+
+func (e *errOwnerRejected) Error() string {
+	return fmt.Sprintf("you rejected the %s candidate %q for this book; un-reject it to apply it", e.Source, e.Title)
+}
+
+// ownerRejectedRefusal returns the refusal for applying cand to bookID, nil
+// when the owner did not reject it, or the read error: an unreadable
+// rejection list refuses the apply rather than reading as "not rejected".
+func ownerRejectedRefusal(r metafetch.RejectedCandidateReader, bookID string, cand *metafetch.MetadataCandidate) error {
+	rejected, err := metafetch.LoadRejectedCandidates(r, bookID)
+	if err != nil {
+		return fmt.Errorf("%s: %w", applygate.ReasonOwnerRejectionCheckFailed, err)
+	}
+	if rejected.HasCandidate(cand) {
+		return &errOwnerRejected{Source: cand.Source, Title: cand.Title}
+	}
+	return nil
 }

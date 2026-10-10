@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_one_test.go
-// version: 1.21.2
+// version: 1.21.3
 // guid: 9d2b71fa-30c8-4e57-a614-8b5e0c7f2d93
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 //
 // Regression tests for applying ONE book's cached metadata candidate.
 //
@@ -161,6 +161,9 @@ func (f fakeBooks) GetAllImportPaths() ([]database.ImportPath, error) { return n
 
 // GetRaw: an empty authority keyspace, so no title is a known person's name.
 func (f fakeBooks) GetRaw(string) ([]byte, error) { return nil, nil }
+
+// ScanPrefix: no owner rejections (rejectingBooks adds some).
+func (f fakeBooks) ScanPrefix(string) ([]database.KVPair, error) { return nil, nil }
 
 func (f fakeBooks) GetBookByID(id string) (*database.Book, error) {
 	if b, ok := f[id]; ok {

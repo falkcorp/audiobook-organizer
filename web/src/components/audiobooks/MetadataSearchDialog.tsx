@@ -1,7 +1,7 @@
 // file: web/src/components/audiobooks/MetadataSearchDialog.tsx
-// version: 2.0.0
+// version: 2.1.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
-// last-edited: 2026-10-06
+// last-edited: 2026-10-10
 
 import { useCallback, useEffect, useState, useRef } from 'react';
 import { applyFieldClick } from './fieldRangeSelect';
@@ -212,6 +212,12 @@ export function MetadataSearchDialog({
   // candidate's ASIN as conflicting with the book's.
   const stage = (candidate: MetadataCandidate, fields: string[] | undefined) => {
     const check = candidate.apply_check;
+    // The server refuses an owner-rejected candidate (409 owner_rejected),
+    // so it is never staged: say why instead.
+    if (check?.owner_rejected) {
+      toast('You rejected this candidate for this book. Un-reject it to apply it.', 'warning');
+      return;
+    }
     if (check?.asin_conflict && check.book_asin) {
       setAsinOverride({
         candidate,
@@ -741,6 +747,17 @@ export function MetadataSearchDialog({
                           color="info"
                           variant="outlined"
                         />
+                      )}
+                      {candidate.apply_check?.owner_rejected && (
+                        <Tooltip title="You rejected this candidate for this book. Un-reject it to apply it.">
+                          <Chip
+                            icon={<WarningAmberIcon />}
+                            label="Rejected by you"
+                            size="small"
+                            color="error"
+                            data-testid="owner-rejected-chip"
+                          />
+                        </Tooltip>
                       )}
                       {candidate.apply_check?.asin_conflict && (
                         <Tooltip title={candidate.apply_check.detail ?? ''}>

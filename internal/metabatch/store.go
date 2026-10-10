@@ -1,7 +1,7 @@
 // file: internal/metabatch/store.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 9d4e6b02-8a15-4c73-b2f9-7e1a3d508c62
-// last-edited: 2026-10-05
+// last-edited: 2026-10-10
 
 package metabatch
 
@@ -51,4 +51,7 @@ type Store interface {
 	// The author credits the certainty gate judges a candidate's author
 	// against (database.LiveBookAuthorNames), never the Book.Author snapshot.
 	database.BookAuthorReader
+	// The owner's candidate rejections: the upgrade never applies one
+	// (applygate.ReasonOwnerRejected).
+	RejectedCandidateReader
 }

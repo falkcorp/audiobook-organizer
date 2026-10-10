@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler.go
-// version: 1.41.0
+// version: 1.42.1
 // guid: 54bb4ad0-cab0-41fc-b9cb-557c96beee44
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 
 // Package metadatahandler hosts the metadata-domain HTTP handlers extracted
 // from the server package's metadata_handlers.go: batch-update / validate /
@@ -59,11 +59,13 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applycap"
+	"github.com/falkcorp/audiobook-organizer/internal/applygate"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	metadatapkg "github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -582,8 +584,16 @@ func (h *Handler) searchAudiobookMetadataImpl(c *gin.Context) {
 		// BypassFetchCache: ?refresh=true re-asks the providers; without it
 		// the per-source fetch cache answered the "refresh" for the same
 		// identity.
-		entry, err := h.metadataFetchService.FetchAndCache(c.Request.Context(), id, body.Query, body.Author, body.Narrator, body.Series,
-			metafetch.SearchOptions{UseRerank: body.UseRerank, BypassProviderThrottle: true, BypassFetchCache: refresh})
+		//
+		// MergeRank ranks the row this fetch writes the way the batch fetch
+		// ranks its own (metabatch.MergeRanker): an owner-rejected candidate
+		// goes last, so a dialog refetch cannot put one back into slot 0,
+		// where the review lane and every bulk apply read.
+		opts := metafetch.SearchOptions{UseRerank: body.UseRerank, BypassProviderThrottle: true, BypassFetchCache: refresh}
+		if book, berr := h.store.GetBookByID(id); berr == nil && book != nil {
+			opts.MergeRank = metabatch.MergeRanker(h.store, book)
+		}
+		entry, err := h.metadataFetchService.FetchAndCache(c.Request.Context(), id, body.Query, body.Author, body.Narrator, body.Series, opts)
 		if err != nil {
 			// Every provider failed: an outage, not a missing book.
 			if errors.Is(err, metafetch.ErrNoSourceAnswered) {
@@ -635,7 +645,13 @@ func (h *Handler) respondCandidates(c *gin.Context, id string, respH gin.H, entr
 	for k, v := range respH {
 		out[k] = v
 	}
-	out["results"] = withApplyChecks(book, entry, results)
+	// The owner's rejections mark candidates the apply would refuse. A
+	// failed read marks none; the apply itself refuses on it.
+	var rejected metafetch.RejectedSet
+	if h.store != nil {
+		rejected = metabatch.LoadRejectedCandidateKeys(h.store, id)
+	}
+	out["results"] = withApplyChecks(book, entry, rejected, results)
 	httputil.RespondWithOK(c, out)
 }
 
@@ -697,6 +713,11 @@ func (h *Handler) applyAudiobookMetadataImpl(c *gin.Context) {
 			return
 		}
 	}
+	// Likewise an owner-rejected candidate, answered now rather than queued.
+	if rerr := ownerRejectedRefusal(store, id, &body.Candidate); rerr != nil {
+		respondOwnerRejected(c, rerr)
+		return
+	}
 	q := QueuedApply{Kind: QueuedApplyCandidate, BookID: id,
 		Candidate: &body.Candidate, Fields: body.Fields, WriteBack: body.WriteBack,
 		OverrideASINConflict: body.OverrideASINConflict}
@@ -721,6 +742,11 @@ func (h *Handler) applyAudiobookMetadataImpl(c *gin.Context) {
 		var conflict *errASINConflict
 		if errors.As(err, &conflict) {
 			respondASINConflict(c, conflict)
+			return
+		}
+		var rejected *errOwnerRejected
+		if errors.As(err, &rejected) {
+			respondOwnerRejected(c, err)
 			return
 		}
 		var refused *errRenameWouldFail
@@ -753,6 +779,18 @@ func respondASINConflict(c *gin.Context, conflict *errASINConflict) {
 	httputil.RespondWithErrorFields(c, http.StatusConflict, conflict.Error(), "CONFLICT",
 		map[string]any{"reason": applyReasonASINConflict, "book_asin": conflict.BookASIN,
 			"candidate_asin": conflict.CandidateASIN, "detail": conflict.Detail})
+}
+
+// respondOwnerRejected answers 409 reason owner_rejected for a candidate the
+// owner rejected, or 500 when the rejections could not be read.
+func respondOwnerRejected(c *gin.Context, err error) {
+	var rejected *errOwnerRejected
+	if !errors.As(err, &rejected) {
+		httputil.InternalError(c, "failed to read owner rejections", err)
+		return
+	}
+	httputil.RespondWithErrorFields(c, http.StatusConflict, rejected.Error(), "CONFLICT",
+		map[string]any{"reason": applygate.ReasonOwnerRejected})
 }
 
 var noMatchLog = logger.New("metadata.nomatch")
@@ -1110,9 +1148,34 @@ func (h *Handler) bulkFetchMetadataImpl(c *gin.Context) {
 		// apply"): nobody picks the candidate here, so the best one a
 		// review-only source found is left for review and the best other
 		// one is applied, if there is one.
+		//
+		// A candidate the owner rejected for this book is skipped too: it is
+		// never applied, by any path. An unreadable rejection list leaves the
+		// book alone this round rather than reading as "nothing rejected".
+		rejected, rerr := metafetch.LoadRejectedCandidates(store, bookID)
+		if rerr != nil {
+			result.Status = "error"
+			result.Message = "failed to read owner rejections: " + rerr.Error()
+			setResult(i, result)
+			return nil
+		}
+		skippedRejected := 0
 		pick := slices.IndexFunc(searchResp.Results, func(c metafetch.MetadataCandidate) bool {
-			return !metafetch.IsReviewOnlyCandidateSource(c.Source)
+			if metafetch.IsReviewOnlyCandidateSource(c.Source) {
+				return false
+			}
+			if rejected.HasCandidate(&c) {
+				skippedRejected++
+				return false
+			}
+			return true
 		})
+		if pick < 0 && skippedRejected > 0 {
+			result.Status = "owner_rejected"
+			result.Message = "every applicable candidate was rejected by the owner; not applied"
+			setResult(i, result)
+			return nil
+		}
 		if pick < 0 {
 			result.Status = "review_only"
 			result.Message = "only review-only sources (Open Library, Google Books) matched; not applied, left for review"

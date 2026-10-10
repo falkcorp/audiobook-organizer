@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.33.0
+// version: 1.34.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 // Package handlers contains extracted HTTP handler types for the audiobook
 // organizer server. MetadataCacheHandler covers the persistent metadata-cache
@@ -964,6 +964,15 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 	// BuildCandidateBookInfo runs for the PAGE only. It is the one genuinely
 	// per-row-expensive call here, and a paginated caller must not pay for rows
 	// it did not ask for.
+	// The owner's rejections for the page, read in ONE scan rather than one
+	// per row: an index request's page is every reviewable row. Read live,
+	// not from the snapshot: a rejection is a raw key, which moves no cache
+	// generation. A failed read marks nothing; every apply path still
+	// refuses a rejected candidate on its own read.
+	rejectedByBook, rerr := metafetch.LoadAllRejectedCandidates(h.store)
+	if rerr != nil {
+		metadataCacheLog.Warn("review list: owner rejections unreadable; rows are not marked: %v", rerr)
+	}
 	results := make([]metabatch.CandidateResult, 0, len(page))
 	for i := range page {
 		book := lookupBook(page[i].sum.BookID)
@@ -994,6 +1003,7 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 			// Hashed over the full stored candidate (with its description),
 			// so the index view's pin matches what the apply recomputes.
 			CandidateHash: page[i].hash,
+			OwnerRejected: rejectedByBook[book.ID].HasCandidate(&cand),
 		})
 	}
 

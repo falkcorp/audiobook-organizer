@@ -1,7 +1,7 @@
 // file: internal/metafetch/cache.go
-// version: 1.30.1
+// version: 1.31.0
 // guid: a4f33a2e-3b4d-4306-bdce-476758e39120
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 //
 // Cache-layer on top of metafetch.Service. The persisted record type
 // lives in internal/database (MetadataCandidateCache) — re-exported
@@ -596,7 +596,15 @@ func (mfs *Service) FetchAndCacheWithResponse(ctx context.Context, limiter *rate
 // Callers must rule out noSourceAnswered first: an empty response nobody
 // answered is not a look, and recording it would date the row as checked.
 func (mfs *Service) cacheSearchResponse(bookID, query, author, narrator, series string, resp *SearchMetadataResponse) *MetadataCandidateCache {
-	candidates := resp.Results
+	// A search that REPLACES the row ranks its answer with the caller's
+	// MergeRank too, before the top-N cap, as the merge paths below do: the
+	// owner-rejected tier goes last and is evicted first. Until 2026-10-10 a
+	// plain replace kept the search's order, so a refetch put a candidate
+	// the owner had rejected straight back into slot 0, where the review
+	// lane and every bulk apply read. Within a tier the search's own order
+	// stands (the ranking is the search's business); resp.Results, which
+	// callers still hold, is not reordered.
+	candidates := rankCandidatesByTier(resp.Results, resp.mergeRank)
 	if len(candidates) > metadataCacheTopN {
 		candidates = candidates[:metadataCacheTopN]
 	}
@@ -792,35 +800,52 @@ func (mfs *Service) lockRow(bookID string) func() {
 // only when the union holds more than metadataCacheTopN better-or-equal ones.
 // Nothing here guarantees the chain's candidates all survive a merge.
 func mergeCandidateRows(fresh, cached []json.RawMessage, rank func(MetadataCandidate) int) []json.RawMessage {
+	if rank == nil {
+		rank = reviewOnlyLastRank
+	}
+	var union []json.RawMessage
+	seen := map[string]bool{}
+	for _, list := range [][]json.RawMessage{fresh, cached} {
+		for _, r := range list {
+			var c MetadataCandidate
+			if err := json.Unmarshal(r, &c); err == nil {
+				key := strings.ToLower(c.Source + "|" + c.Title + "|" + strings.TrimSpace(c.ASIN))
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+			}
+			union = append(union, r)
+		}
+	}
+	out := rankCandidateRows(union, rank)
+	if len(out) > metadataCacheTopN {
+		out = out[:metadataCacheTopN]
+	}
+	return out
+}
+
+// rankCandidateRows orders rows by rank (lower first), then by score, with a
+// row that does not decode kept after the ranked ones in its own order. It
+// drops nothing: mergeCandidateRows dedups and caps around it, and
+// RerankCachedCandidates re-orders a stored row with it alone.
+func rankCandidateRows(rows []json.RawMessage, rank func(MetadataCandidate) int) []json.RawMessage {
 	type ranked struct {
 		raw   json.RawMessage
 		score float64
 		rank  int
 	}
-	var rows, undecoded []ranked
-	seen := map[string]bool{}
-	for _, list := range [][]json.RawMessage{fresh, cached} {
-		for _, r := range list {
-			var c MetadataCandidate
-			if err := json.Unmarshal(r, &c); err != nil {
-				undecoded = append(undecoded, ranked{raw: r})
-				continue
-			}
-			key := strings.ToLower(c.Source + "|" + c.Title + "|" + strings.TrimSpace(c.ASIN))
-			if seen[key] {
-				continue
-			}
-			seen[key] = true
-			var rk int
-			if rank != nil {
-				rk = rank(c)
-			} else {
-				rk = reviewOnlyLastRank(c)
-			}
-			rows = append(rows, ranked{raw: r, score: c.Score, rank: rk})
+	var decoded []ranked
+	var undecoded []json.RawMessage
+	for _, r := range rows {
+		var c MetadataCandidate
+		if err := json.Unmarshal(r, &c); err != nil {
+			undecoded = append(undecoded, r)
+			continue
 		}
+		decoded = append(decoded, ranked{raw: r, score: c.Score, rank: rank(c)})
 	}
-	slices.SortStableFunc(rows, func(a, b ranked) int {
+	slices.SortStableFunc(decoded, func(a, b ranked) int {
 		switch {
 		case a.rank != b.rank:
 			return cmp.Compare(a.rank, b.rank)
@@ -831,12 +856,29 @@ func mergeCandidateRows(fresh, cached []json.RawMessage, rank func(MetadataCandi
 		}
 		return 0
 	})
-	out := make([]json.RawMessage, 0, len(rows)+len(undecoded))
-	for _, r := range append(rows, undecoded...) {
-		if len(out) == metadataCacheTopN {
-			break
-		}
+	out := make([]json.RawMessage, 0, len(rows))
+	for _, r := range decoded {
 		out = append(out, r.raw)
+	}
+	return append(out, undecoded...)
+}
+
+// rankCandidatesByTier is a copy of cands stably ordered by rank alone
+// (cacheSearchResponse's plain replace); nil rank returns cands as they are.
+func rankCandidatesByTier(cands []MetadataCandidate, rank func(MetadataCandidate) int) []MetadataCandidate {
+	if rank == nil || len(cands) < 2 {
+		return cands
+	}
+	tiers := make([]int, len(cands))
+	idx := make([]int, len(cands))
+	for i := range cands {
+		tiers[i] = rank(cands[i])
+		idx[i] = i
+	}
+	slices.SortStableFunc(idx, func(a, b int) int { return cmp.Compare(tiers[a], tiers[b]) })
+	out := make([]MetadataCandidate, len(cands))
+	for i, j := range idx {
+		out[i] = cands[j]
 	}
 	return out
 }

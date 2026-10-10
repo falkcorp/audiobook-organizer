@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.57.2
+// version: 1.58.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 // This file implements the maintenance.ServerDeps interface on *Server, giving
 // the maintenance plugin access to server internals without creating an import
@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
@@ -719,6 +720,15 @@ func (s *Server) SearchTranscriptionCandidate(_ context.Context, bookID, _, _ st
 	if applygate.ReviewOnlySource(&best) {
 		return maintenanceplugin.TranscriptionCandidate{}, false, nil
 	}
+	// An owner-rejected top candidate is never offered either: a rejection
+	// re-orders the row (owner_rejected_rerank.go), so a rejected slot 0
+	// means no other candidate is left. An unreadable rejection list is an
+	// error (the op skips and logs the book), never "nothing rejected".
+	if why, rerr := transcriptionOwnerRejected(s.store, bookID, &best); rerr != nil {
+		return maintenanceplugin.TranscriptionCandidate{}, false, rerr
+	} else if why != "" {
+		return maintenanceplugin.TranscriptionCandidate{}, false, nil
+	}
 	return maintenanceplugin.TranscriptionCandidate{Title: best.Title, Author: best.Author, Series: best.Series, Score: best.Score}, true, nil
 }
 
@@ -733,6 +743,25 @@ var errTranscriptionASINConflict = errors.New("cached candidate ASIN conflicts w
 // errTranscriptionReviewOnly refuses a transcription apply whose top cached
 // candidate is review-only (applygate.ReviewOnlySource).
 var errTranscriptionReviewOnly = errors.New("cached candidate is review-only (Open Library / Google Books)")
+
+// errTranscriptionOwnerRejected refuses a transcription apply whose top
+// cached candidate the owner rejected (applygate.ReasonOwnerRejected).
+var errTranscriptionOwnerRejected = errors.New("cached candidate was rejected by the owner")
+
+// transcriptionOwnerRejected is the owner-rejected check of the transcription
+// auto-match, which applies without the bulk gate: the gate's own leg
+// (applygate.Rejections), so the two cannot disagree. why is "" when c is not
+// rejected; a rejection list that cannot be read is an error.
+func transcriptionOwnerRejected(r metafetch.RejectedCandidateReader, bookID string, c *metafetch.MetadataCandidate) (why string, err error) {
+	rej := applygate.LoadRejections(r, bookID)
+	if rej.ReadErr != nil {
+		return "", fmt.Errorf("%s: book %s: %w", applygate.ReasonOwnerRejectionCheckFailed, bookID, rej.ReadErr)
+	}
+	if rej.Keys.HasCandidate(c) {
+		return applygate.ReasonOwnerRejected + ": " + c.Source + " candidate " + strconv.Quote(c.Title), nil
+	}
+	return "", nil
+}
 
 // transcriptionASINConflict describes an ASIN disagreement between book and
 // cand, or returns "" when either has none or they agree: the bulk gate's
@@ -819,6 +848,13 @@ func (s *Server) ApplyTranscriptionCandidate(_ context.Context, bookID, gatedTit
 	// Books candidate is applied by hand from the review page only.
 	if applygate.ReviewOnlySource(&cand) {
 		return fmt.Errorf("%w: book %s: %s candidate", errTranscriptionReviewOnly, bookID, cand.Source)
+	}
+	// OWNER-REJECTED: re-checked here against the row as it is now, not
+	// trusted from the search half -- the row may have changed between them.
+	if why, rerr := transcriptionOwnerRejected(s.store, bookID, &cand); rerr != nil {
+		return rerr
+	} else if why != "" {
+		return fmt.Errorf("%w: book %s: %s", errTranscriptionOwnerRejected, bookID, why)
 	}
 	if conflict := transcriptionASINConflict(book, cand); conflict != "" {
 		transcriptionApplyLog.Warn("apply-transcription-candidate: candidate ASIN conflicts with the book's: book_id=%s detail=%s",

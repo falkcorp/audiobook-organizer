@@ -1,7 +1,7 @@
 // file: internal/metabatch/usable_candidate.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 6a925443-e10e-4dc5-af83-0dcf909b6256
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package metabatch
 
@@ -35,9 +35,9 @@ const candidateRefusalOwnerRejected = "owner-rejected"
 // nil skips it), or the apply gate's score leg (applygate.ScoreGate: the
 // floor, or a transcribed title the candidate does not match) -- the same
 // rule the bulk apply gate applies.
-func CandidateRefusal(rejected map[string]bool, book *database.Book, entry *database.MetadataCandidateCache, c *metafetch.MetadataCandidate) string {
+func CandidateRefusal(rejected metafetch.RejectedSet, book *database.Book, entry *database.MetadataCandidateCache, c *metafetch.MetadataCandidate) string {
 	switch {
-	case rejected[c.Source+"|"+c.Title]:
+	case rejected.HasCandidate(c):
 		return candidateRefusalOwnerRejected
 	case applygate.CheckASIN(book, c).Outcome == applygate.OutcomeBlock:
 		return applygate.ReasonASINConflict
@@ -130,7 +130,13 @@ const (
 // leg is not needed: a merge only carries candidates fetched for the ASIN
 // the book holds now.
 func MergeRanker(kv RejectedCandidateReader, book *database.Book) func(metafetch.MetadataCandidate) int {
-	rejected := rejectedKeys(kv, book.ID)
+	return MergeRankerFor(book, rejectedKeys(kv, book.ID))
+}
+
+// MergeRankerFor is MergeRanker over rejections the caller already read
+// (metafetch.LoadRejectedCandidates), for a caller that must not rank on a
+// failed read as if nothing were rejected (the cached-row re-rank).
+func MergeRankerFor(book *database.Book, rejected metafetch.RejectedSet) func(metafetch.MetadataCandidate) int {
 	return func(c metafetch.MetadataCandidate) int {
 		switch why := CandidateRefusal(rejected, book, nil, &c); {
 		case why == candidateRefusalOwnerRejected:
@@ -144,7 +150,7 @@ func MergeRanker(kv RejectedCandidateReader, book *database.Book) func(metafetch
 	}
 }
 
-func rejectedKeys(kv RejectedCandidateReader, bookID string) map[string]bool {
+func rejectedKeys(kv RejectedCandidateReader, bookID string) metafetch.RejectedSet {
 	if kv == nil {
 		return nil
 	}

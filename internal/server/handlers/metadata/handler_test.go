@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata/handler_test.go
-// version: 1.16.0
+// version: 1.16.1
 // guid: 1d31ef73-7c7a-4c3b-a840-01b0865023d7
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 
 // Tests for the metadata-domain handlers. The store / metadata-fetch-service /
 // write-back-enqueuer / operations-registry / file-io-pool deps are generated
@@ -77,6 +77,8 @@ func newHandler(t *testing.T, opts ...func(*cfg)) (*metadatahandler.Handler, tes
 	}
 
 	store := metadatamocks.NewMockMetadataStore(t)
+	// No owner rejections unless a test says otherwise (applygate.ReasonOwnerRejected).
+	store.EXPECT().ScanPrefix(mock.Anything).Return(nil, nil).Maybe()
 	mfs := metadatamocks.NewMockMetadataFetchService(t)
 	reg := metadatamocks.NewMockOperationsRegistry(t)
 	pool := metadatamocks.NewMockFileIOPool(t)
@@ -284,6 +286,8 @@ func TestSearchAudiobookMetadata_PlainFetchAndCache(t *testing.T) {
 func TestSearchAudiobookMetadata_NoSourceAnsweredIs503(t *testing.T) {
 	h, d := newHandler(t)
 	d.mfs.EXPECT().GetCachedCandidates("b1").Return(nil, false, nil)
+	// The dialog reads the book to rank the row it writes (MergeRank).
+	d.store.EXPECT().GetBookByID("b1").Return(&database.Book{ID: "b1"}, nil)
 	d.mfs.EXPECT().FetchAndCache(mock.Anything, "b1", "", "", "", "", mock.Anything).
 		Return(nil, fmt.Errorf("%w (audible: timeout)", metafetch.ErrNoSourceAnswered))
 	w := doReq(h.SearchAudiobookMetadata, http.MethodPost, "/audiobooks/b1/search-metadata", nil, idParam("b1"))
@@ -670,6 +674,8 @@ func TestBulkFetchMetadata_LockReadErrorRefusesToApply(t *testing.T) {
 // call concurrently.
 func TestBulkFetchMetadata_ParallelPreservesOrderAndCounts(t *testing.T) {
 	store := metadatamocks.NewMockMetadataStore(t)
+	// No owner rejections unless a test says otherwise (applygate.ReasonOwnerRejected).
+	store.EXPECT().ScanPrefix(mock.Anything).Return(nil, nil).Maybe()
 	mfs := metadatamocks.NewMockMetadataFetchService(t)
 	expectNoLocks(store)
 
