@@ -1,5 +1,5 @@
 // file: internal/telemetry/meter.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3e198161-ea71-41ea-aec3-4900357db30b
 // last-edited: 2026-10-09
 
@@ -40,6 +40,10 @@ const ScopePrefix = "audiobook-organizer/"
 func Meter(name string) metric.Meter {
 	return meterFrom(otel.GetMeterProvider(), name)
 }
+
+// MeterFrom is Meter against an explicit provider, for a component that takes
+// its provider by injection so a test can pass a private one.
+func MeterFrom(mp metric.MeterProvider, name string) metric.Meter { return meterFrom(mp, name) }
 
 // meterFrom is Meter against an explicit provider. Tests use it with a private
 // provider: calling otel.SetMeterProvider in a test binary binds the global

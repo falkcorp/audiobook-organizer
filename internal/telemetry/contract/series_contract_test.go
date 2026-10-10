@@ -1,7 +1,7 @@
 // file: internal/telemetry/contract/series_contract_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: c0ffe83b-1164-4b85-915e-820f693efdc1
-// last-edited: 2026-10-10
+// last-edited: 2026-10-09
 
 // Package contract pins the /metrics series-name contract: the name, type and
 // label names of every Prometheus family the binary exports, read from
@@ -39,12 +39,14 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	otelmetric "go.opentelemetry.io/otel/metric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/falkcorp/audiobook-organizer/internal/aidispatch"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	"github.com/falkcorp/audiobook-organizer/internal/telemetry"
 )
@@ -163,6 +165,7 @@ func buildSeedingTable() []seedRow {
 		return seedRow{"audiobook_organizer_pebble_" + name, "metrics.SetPebbleSource(main, fixedSample)", pebble}
 	}
 	return []seedRow{
+		{"audiobook_organizer_memdb_fallback_reads_total", "(&database.PebbleStore{UseMemDB: true}).GetBooksByMetadataSourceHashInMemory on an unpublished memdb", once(seedMemdbFallback)},
 		{"audiobook_organizer_operations_started_total", "metrics.IncOperationStarted", do(func() { metrics.IncOperationStarted("contract") })},
 		{"audiobook_organizer_operations_completed_total", "metrics.IncOperationCompleted", do(func() { metrics.IncOperationCompleted("contract") })},
 		{"audiobook_organizer_operations_failed_total", "metrics.IncOperationFailed", do(func() { metrics.IncOperationFailed("contract") })},
@@ -306,6 +309,18 @@ func seedDispatchNoCapable() error {
 		func(context.Context, aidispatch.Target) (int, error) { return 0, nil })
 	if !errors.Is(err, aidispatch.ErrNoCapableEndpoint) {
 		return fmt.Errorf("no-capable seed: err %v, want ErrNoCapableEndpoint", err)
+	}
+	return nil
+}
+
+// seedMemdbFallback makes one read that wants the in-memory layer find it
+// unpublished: a zero-value store with UseMemDB on has no memdb, and this
+// method refuses without touching Pebble, so it counts outcome=refused.
+func seedMemdbFallback() error {
+	s := &database.PebbleStore{UseMemDB: true}
+	s.SetMeterProvider(otel.GetMeterProvider())
+	if _, err := s.GetBooksByMetadataSourceHashInMemory("contract"); !errors.Is(err, database.ErrMemDBNotReady) {
+		return fmt.Errorf("memdb fallback seed: err %v, want ErrMemDBNotReady", err)
 	}
 	return nil
 }
@@ -700,7 +715,9 @@ type instrumentSpec struct {
 // telemetry.Meter, one row per golden row with source "otel". It is empty
 // until the first family migrates (11-PR3); each migration adds its rows here
 // and its golden rows' source becomes "otel".
-var ourInstruments = []instrumentSpec{}
+var ourInstruments = []instrumentSpec{
+	{name: "audiobook_organizer.memdb.fallback_reads", kind: kindCounter, keys: []attribute.Key{telemetry.Outcome, telemetry.Site}},
+}
 
 var allowedNamePrefixes = []string{"audiobook_organizer.", "ai_dispatch.", "ai."}
 

@@ -1,7 +1,7 @@
 // file: internal/telemetry/attr.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7f188355-4355-41fd-ac81-763e2e6c74a6
-// last-edited: 2026-10-10
+// last-edited: 2026-10-09
 
 package telemetry
 
@@ -44,6 +44,9 @@ const (
 	Accepted   = attribute.Key("accepted")
 	Capability = attribute.Key("capability")
 	Endpoint   = attribute.Key("endpoint")
+	// Site names the call site (a store method) a counter was incremented from;
+	// a small fixed set of method names.
+	Site = attribute.Key("site")
 )
 
 // Keys already carried by the client_golang families pinned in the series
@@ -87,7 +90,7 @@ const (
 // instrumentKeys may be used by any instrument created through Meter.
 var instrumentKeys = []attribute.Key{
 	Outcome, DefID, Provider, Model, Task, Reason, Direction, Class, Kind, Plugin,
-	State, Phase, Accepted, Capability, Endpoint,
+	State, Phase, Accepted, Capability, Endpoint, Site,
 	Type, Field, Alias, Entry, Cache, Scope, Backend, OpType, Shape, Source, View,
 	Fixer, Store, Level,
 }
