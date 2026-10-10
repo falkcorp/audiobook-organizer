@@ -1,7 +1,7 @@
 # file: .github/workflows/nightly.yml
-# version: 1.3.0
+# version: 1.4.0
 # guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-# last-edited: 2026-10-05
+# last-edited: 2026-10-10
 
 # Nightly full CI: property tests, coverage check, E2E, staticcheck.
 # Runs the complete reusable-ci.yml suite on a schedule.
@@ -30,7 +30,7 @@ jobs:
     name: Full CI Suite
     uses: falkcorp/github-common/.github/workflows/reusable-ci.yml@eae0c5a6bce08e99eb6a1ffac7420f18c0367b9a # main 2026-10-05 (github-common#369: force-all; schedule/dispatch run every present language)
     with:
-      go-version: '1.27'
+      go-version: '1.27.2'
       node-version: '26'
       python-version: '3.13'
       rust-version: '1.76'

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/check_toolchain_versions.py
-# version: 1.2.0
+# version: 1.3.0
 # guid: 983ded55-56c4-4f7e-b15e-a2f724b54016
-# last-edited: 2026-10-09
+# last-edited: 2026-10-10
 """Fail when any Go or Node toolchain copy drifts from its pin (CI-04, CI-03).
 
 Run by ``.github/workflows/test-action-integration.yml`` ("Check version
@@ -12,26 +12,35 @@ never read ``.envrc``/the Dockerfiles/``.vscode``, and only ever emitted
 ``::warning::`` -- so a patch-level drift reported itself and then passed.
 
 Go -- three tiers, because the copies legitimately carry different precision.
-Do NOT "simplify" this into one full-equality comparison: CI and go.mod are
-two-component / minimum by design and the check would go red on a correct tree.
+Do NOT "simplify" this into one full-equality comparison: go.mod and
+repository-config.yml are minimum / two-component by design and the check
+would go red on a correct tree.
 
   1. Exact full version (``X.Y.Z``) -- the pin is ``export GOTOOLCHAIN :=
      goX.Y.Z`` in ``Makefile``; every one of these must equal it:
        - ``.envrc``                 ``export GOTOOLCHAIN=goX.Y.Z``
        - ``.vscode/settings.json``  every ``"GOTOOLCHAIN": "goX.Y.Z"``
        - ``.github/workflows/*.yml`` every step-level ``GOTOOLCHAIN: goX.Y.Z``
-         (a job that must run a tool under the exact pin while setup-go
-         keeps its floating ``'X.Y'``; the Mock Freshness job since 2026-10-09)
+         (a job that must run a tool under the exact pin; the Mock
+         Freshness job since 2026-10-09)
        - ``Dockerfile``, ``Dockerfile.build-cgo`` (and any other top-level
          ``Dockerfile*`` with a golang stage) ``FROM golang:X.Y.Z-...``. EVERY
          golang stage, in the required files and in any other ``Dockerfile*``,
          must carry an ``@sha256:`` digest (a stage without one is an error at
          its file:line), and the digests are compared per stage: every golang
          stage in every file must name the same digest.
-  2. Major.minor (``X.Y``) -- every literal ``go-version:`` in
-     ``.github/workflows/*.yml`` and ``versions.go`` in
-     ``.github/repository-config.yml`` must equal the pin's ``X.Y``
-     (setup-go takes a floating ``'X.Y'``; the Makefile pin does the rest).
+       - ``.woodpecker/*.yaml``     every ``GOTOOLCHAIN: goX.Y.Z``, plus the one
+         ``golang:X.Y.Z-<variant>@sha256:<64 hex>`` image (``&go_image`` in
+         ``checks-lint.yaml``; the other files use the alias). Exactly one
+         digest-carrying reference must exist, so the check cannot go vacuous.
+       - ``scripts/ci_remote.py``   ``GO_TOOLCHAIN = "goX.Y.Z"``
+       - ``.github/workflows/*.yml`` every literal ``go-version:`` (the full
+         patch, ``'X.Y.Z'``). This was a floating ``'X.Y'`` until 2026-10-10;
+         that let runners move to 1.27.2 on 2026-10-08 while every other path
+         stayed on 1.27.1, so the floating minor is now an error.
+  2. Major.minor (``X.Y``) -- ``versions.go`` in
+     ``.github/repository-config.yml`` must equal the pin's ``X.Y`` (it feeds
+     the shared reusable workflows' language matrix, which takes a minor).
   3. ``go.mod`` -- the ``go`` directive is a minimum: same ``X.Y`` as the pin,
      patch <= the pin's patch, and no ``toolchain`` directive at all.
 
@@ -74,6 +83,11 @@ GOLANG_REF_RE = re.compile(
 GOMOD_GO_RE = re.compile(r"^go\s+(\S+)\s*$", re.M)
 GOMOD_TOOLCHAIN_RE = re.compile(r"^toolchain\s+\S+", re.M)
 WORKFLOW_KEY_RE = re.compile(r"^\s*(?:-\s+)?(go-version|node-version)\s*:\s*(.*?)\s*$")
+WOODPECKER_GOTOOLCHAIN_RE = re.compile(r"^\s*GOTOOLCHAIN\s*:\s*['\"]?go([^'\"\s#]+)['\"]?\s*(?:#.*)?$")
+# Loose on purpose (any ``golang:`` reference), like DOCKER_FROM_GOLANG_RE: the
+# strict GOLANG_REF_RE then judges it, so a typo cannot hide a reference.
+WOODPECKER_GOLANG_RE = re.compile(r"(?<![\w/.-])golang(?P<ref>:[^\s'\"]*)")
+CI_REMOTE_TOOLCHAIN_RE = re.compile(r'^GO_TOOLCHAIN\s*=\s*"go(\d+\.\d+\.\d+)"', re.M)
 WORKFLOW_GOTOOLCHAIN_RE = re.compile(r"^\s*GOTOOLCHAIN\s*:\s*['\"]?go([^'\"\s]+)['\"]?\s*$")
 FULL_VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 GOMOD_VERSION_RE = re.compile(r"^(\d+)\.(\d+)(?:\.(\d+))?$")
@@ -143,6 +157,63 @@ def _repo_config_versions(c: Checker) -> dict[str, list[tuple[int, list[str]]]]:
     return out
 
 
+def check_woodpecker(c: Checker, pin_full: str) -> None:
+    """Every ``.woodpecker/*.yaml`` GOTOOLCHAIN and the digest-pinned golang image."""
+    print("--- Woodpecker ---")
+    files = sorted(p for p in (c.root / ".woodpecker").glob("*.y*ml") if p.is_file())
+    if not files:
+        c.error(".woodpecker", "no Woodpecker pipeline files found; the check would be vacuous")
+        return
+    toolchains = 0
+    digested: list[tuple[str, int]] = []
+    for path in files:
+        rel = path.relative_to(c.root).as_posix()
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if line.lstrip().startswith("#"):
+                continue
+            g = WOODPECKER_GOTOOLCHAIN_RE.match(line)
+            if g:
+                toolchains += 1
+                c.info(f"{rel}:{lineno}", f"GOTOOLCHAIN go{g.group(1)}")
+                if g.group(1) != pin_full:
+                    c.error(rel, f"GOTOOLCHAIN go{g.group(1)} != Makefile pin go{pin_full}", lineno)
+            for m in WOODPECKER_GOLANG_RE.finditer(line):
+                ref = m.group("ref")
+                rm = GOLANG_REF_RE.match(ref)
+                if not rm:
+                    c.error(rel, f"golang image 'golang{ref}' is not 'golang:<version>[-<variant>]@sha256:<64 hex>'", lineno)
+                    continue
+                version, digest = rm.group("version"), rm.group("digest")
+                c.info(f"{rel}:{lineno}", f"golang:{version}" + (f" @sha256:{digest[:12]}..." if digest else " (no digest)"))
+                if version != pin_full:
+                    c.error(rel, f"golang:{version} != Makefile pin {pin_full}", lineno)
+                if digest:
+                    digested.append((rel, lineno))
+                else:
+                    c.error(rel, f"golang:{version} image has no @sha256: digest; the Woodpecker golang image must be pinned by digest", lineno)
+    if toolchains == 0:
+        c.error(".woodpecker", "no GOTOOLCHAIN found in any Woodpecker file; the check would be vacuous")
+    if len(digested) != 1:
+        c.error(".woodpecker", f"expected exactly one digest-pinned golang image (the &go_image anchor), found {len(digested)}")
+
+
+def check_ci_remote(c: Checker, pin_full: str) -> None:
+    """``GO_TOOLCHAIN`` in scripts/ci_remote.py, the toolchain ``make ci-remote`` ships to nodes."""
+    print("--- ci_remote.py ---")
+    rel = "scripts/ci_remote.py"
+    text = c.read(rel)
+    if text is None:
+        return
+    found = list(CI_REMOTE_TOOLCHAIN_RE.finditer(text))
+    if len(found) != 1:
+        c.error(rel, f'expected exactly one \'GO_TOOLCHAIN = "goX.Y.Z"\' line, found {len(found)}')
+        return
+    m = found[0]
+    c.info(rel, m.group(1))
+    if m.group(1) != pin_full:
+        c.error(rel, f"GO_TOOLCHAIN go{m.group(1)} != Makefile pin go{pin_full}", _line_of(text, m.start()))
+
+
 def check(root: pathlib.Path, action_node_output: str | None) -> list[str]:
     c = Checker(root)
     print("--- Go toolchain pin (exact X.Y.Z) ---")
@@ -208,6 +279,9 @@ def check(root: pathlib.Path, action_node_output: str | None) -> list[str]:
         for rel, line, digest in stages:
             if digest != majority:
                 c.error(rel, f"golang image digests differ across stages: {detail}", line)
+
+    check_woodpecker(c, pin_full)
+    check_ci_remote(c, pin_full)
 
     print(f"--- Go major.minor ({pin_minor}) and go.mod minimum ---")
     text = c.read("go.mod")
@@ -275,8 +349,8 @@ def check(root: pathlib.Path, action_node_output: str | None) -> list[str]:
                 continue
             counts[key] += 1
             if key == "go-version":
-                if value != pin_minor:
-                    c.error(rel, f"go-version '{value}' != '{pin_minor}' (Makefile pin go{pin_full})", lineno)
+                if value != pin_full:
+                    c.error(rel, f"go-version '{value}' != '{pin_full}' (Makefile pin go{pin_full})", lineno)
             else:
                 node_rows.append((rel, lineno, value))
     c.info(".github/workflows go-version literals", str(counts["go-version"]))
