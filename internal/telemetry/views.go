@@ -1,7 +1,7 @@
 // file: internal/telemetry/views.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9154168b-56f2-4d06-bb53-f0b09d8954fa
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package telemetry
 
@@ -20,8 +20,12 @@ import (
 //
 // The lists for the families that exist today are copied from the live
 // client_golang constructors, so a family migrated to OTel keeps byte-identical
-// `le` labels (TestViewsMatchLiveBuckets in internal/telemetry/contract
-// compares them against a real scrape). The two exponential lists are
+// `le` labels. The expected `le` text of every histogram family is pinned
+// independently of this file in
+// internal/telemetry/contract/testdata/histogram_buckets.golden;
+// TestHistogramBucketsPinned checks both the scrape and this table against
+// it, so editing a list here fails until that file is changed on purpose in
+// the same PR. The two exponential lists are
 // generated with the same prometheus.ExponentialBuckets call the constructors
 // use, so the float64 values are bit-identical rather than retyped decimals.
 //

@@ -1,7 +1,7 @@
 // file: internal/telemetry/resource.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package telemetry
 
@@ -12,9 +12,11 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.27.0"
 )
 
-// deploymentEnvironmentKey is spelled out because semconv v1.27.0 has no
-// constant for it. The value is fixed to "prod" until 11-PR2 adds the
-// telemetry_environment config key.
+// deploymentEnvironmentKey is the older "deployment.environment" key, which
+// the 11-PR1 brief and spec 11 §3.3 chose. semconv v1.27.0 names the current
+// key DeploymentEnvironmentNameKey ("deployment.environment.name"); 11-PR2,
+// which adds the telemetry_environment config key, decides whether to move to
+// it. The value is fixed to "prod" until then.
 const (
 	deploymentEnvironmentKey = attribute.Key("deployment.environment")
 	deploymentEnvironment    = "prod"

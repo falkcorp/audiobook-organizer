@@ -1,7 +1,7 @@
 <!-- file: docs/AI-REFERENCE.md -->
-<!-- version: 1.4.0 -->
+<!-- version: 1.5.0 -->
 <!-- guid: e5f4g3h2-i1j0-k9l8-m7n6-o5p4q3r2s1t0 -->
-<!-- last-edited: 2026-10-09 -->
+<!-- last-edited: 2026-10-10 -->
 
 # AI Reference Guide — Audiobook Organizer
 
@@ -463,7 +463,7 @@ Background operations run with configurable timeout (default 30min, currently se
 - Configurable in settings
 
 ### Metrics
-`/metrics` (Prometheus text, default registry) is the primary metrics surface and must stay compatible (owner decision D66). New instruments are OTel: get a meter with `telemetry.Meter("<area>")` (`internal/telemetry/meter.go`); never add a `client_golang` constructor. Naming (spec `docs/proposals/2026-10-holistic/11-metrics-strategy-otel-prometheus.md` §3.1): dotted lowercase names prefixed `audiobook_organizer.` (`ai_dispatch.` and `ai.` are the only unprefixed exceptions); counters never end in `_total` (the exporter adds it); histograms set unit `s` or `By` and need an entry in the views table `internal/telemetry/views.go`; never unit `"1"` (it appends `_ratio`); attribute keys come from `internal/telemetry/attr.go`, with closed, small value sets (no ids, paths or free text). Scope labels are off (`prometheus.WithoutScopeInfo()`). The series contract `internal/telemetry/contract/testdata/series.golden` pins the name, type and label names of every family on `/metrics` (`TestSeriesContract`); adding, renaming or removing a family means editing the golden and the test's `seedingTable` in the same PR, plus a recording rule if a dashboard or alert reads the old name. `series_reserved.txt` holds the AI names reserved for 11-PR7.
+`/metrics` (Prometheus text, default registry) is the primary metrics surface and must stay compatible (owner decision D66). New instruments are OTel: get a meter with `telemetry.Meter("<area>")` (`internal/telemetry/meter.go`); never add a `client_golang` constructor. Naming (spec `docs/proposals/2026-10-holistic/11-metrics-strategy-otel-prometheus.md` §3.1): dotted lowercase names prefixed `audiobook_organizer.` (`ai_dispatch.` and `ai.` are the only unprefixed exceptions we create; otelgin's `http_server_*` families are third-party and also unprefixed); counters never end in `_total` (the exporter adds it); histograms set unit `s` or `By` and need an entry in the views table `internal/telemetry/views.go`; never unit `"1"` (it appends `_ratio`); attribute keys come from `AttributeKeys()` in `internal/telemetry/attr.go` (the legacy `op_id` and otelgin's semconv keys are scrape-only and rejected on new instruments), with closed, small value sets (no ids, paths or free text). Scope labels are off (`prometheus.WithoutScopeInfo()`). The series contract `internal/telemetry/contract/testdata/series.golden` pins the name, type and label names of every family. `TestSeriesContract` checks it against a seeded `/metrics` scrape (missing, retyped, relabelled or unlisted families fail), and `TestDeclaredFamiliesInGolden` parses every `client_golang` constructor and OTel instrument call under `internal/`, `pkg/` and `cmd/`, so a new family fails even if nothing seeds it; families from third-party code (otelgin) are seen only through seeding. `testdata/histogram_buckets.golden` pins every histogram's `le` text independently of `views.go`. Adding, renaming or removing a family means editing the golden(s) and the test's `seedingTable` in the same PR, plus a recording rule if a dashboard or alert reads the old name. `series_reserved.txt` holds the AI names reserved for 11-PR7.
 
 ---
 
