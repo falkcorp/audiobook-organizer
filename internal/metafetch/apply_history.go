@@ -1,7 +1,7 @@
 // file: internal/metafetch/apply_history.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 4b9d7e21-0c3a-4f58-b6e2-8a1f5d3c9e07
-// last-edited: 2026-10-06
+// last-edited: 2026-10-10
 
 package metafetch
 
@@ -287,6 +287,52 @@ func (mfs *Service) undoAuthorCredits(bookID string, r *database.MetadataChangeR
 			logger.SanitizeLogValue(r.BatchID), logger.SanitizeLogValue(bookID), err)
 		res.AuthorCreditsLeft = true
 	}
+}
+
+// revertAuthorCredits takes back the author credits an apply wrote
+// (credits.After minus credits.Before) when its commit wrote nothing (why).
+// Author apply is add-only, so those are exactly the authors it added; a
+// later apply naming one of them found it already credited and added
+// nothing, so removing it takes nothing of another apply's. Each one still
+// in the join is removed under the book_authors lock, as undo does
+// (undoAuthorCredits). A failure is logged at Error: the credit stays with
+// no history row naming it.
+func (mfs *Service) revertAuthorCredits(bookID string, credits *AuthorCredits, why error) {
+	if !credits.Changed() {
+		return
+	}
+	had := make(map[int]bool, len(credits.Before))
+	for _, ba := range credits.Before {
+		had[ba.AuthorID] = true
+	}
+	remove := map[int]bool{}
+	for _, ba := range credits.After {
+		if !had[ba.AuthorID] {
+			remove[ba.AuthorID] = true
+		}
+	}
+	if len(remove) == 0 {
+		return
+	}
+	_, err := mfs.db.ModifyBookAuthors(bookID, func(cur []database.BookAuthor) ([]database.BookAuthor, error) {
+		kept := make([]database.BookAuthor, 0, len(cur))
+		for _, ba := range cur {
+			if !remove[ba.AuthorID] {
+				kept = append(kept, ba)
+			}
+		}
+		if len(kept) == len(cur) {
+			return nil, database.ErrSkipBookAuthorsWrite
+		}
+		return kept, nil
+	})
+	if err != nil {
+		applyHistoryLog.Error("apply on %s was not committed (%v), and the author credits it added could not be taken back; they stay with no history row: %v",
+			logger.SanitizeLogValue(bookID), why, err)
+		return
+	}
+	applyHistoryLog.Info("apply on %s was not committed (%v); took back the %d author credit(s) it added",
+		logger.SanitizeLogValue(bookID), why, len(remove))
 }
 
 // sameAuthorCredits reports whether two book_authors joins credit the same
@@ -981,8 +1027,20 @@ func (mfs *Service) CommitApply(id string, before, book *database.Book, credits 
 // it to re-check "no match": its earlier check read a row that can be
 // minutes old in a bulk run, and the owner may have marked the book since.
 //
+// The author credits (credits) were written before this commit, under the
+// book_authors lock (applyAuthorCredit). When nothing is committed -- a
+// guard refused (no_match, the caller's Guard, the owner's rejection) or
+// the write failed -- they are taken back (revertAuthorCredits): no history
+// row describes them, so undo could never remove them, and a refused apply
+// must leave the book as it was.
+//
 // batchID fixes the history batch id (ApplyOptions.BatchID); "" draws one.
-func (mfs *Service) commitApply(id string, before, book *database.Book, credits *AuthorCredits, source, batchID string, guard func(fresh *database.Book) error) (*database.Book, error) {
+func (mfs *Service) commitApply(id string, before, book *database.Book, credits *AuthorCredits, source, batchID string, guard func(fresh *database.Book) error) (committed *database.Book, err error) {
+	defer func() {
+		if committed == nil {
+			mfs.revertAuthorCredits(id, credits, err)
+		}
+	}()
 	var mergedFields []string
 	updated, err := mfs.db.ModifyBook(id, func(fresh *database.Book) error {
 		if guard != nil {

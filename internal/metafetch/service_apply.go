@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_apply.go
-// version: 1.55.1
+// version: 1.55.2
 // guid: 6ca469ca-7d2e-4738-b6f1-ae09449ed9e4
 // last-edited: 2026-10-10
 
@@ -701,7 +701,8 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 	// runs again under the write lock (commitGuard below) on the fresh row,
 	// which is the check that counts; only a change landing between this
 	// read and that commit can still leave such a Series row behind (the
-	// maintenance series cleanup deletes orphan series).
+	// maintenance series cleanup deletes orphan series). The author credits
+	// the body writes are taken back on such a refusal (commitApply).
 	if opts.Guard != nil {
 		if gErr := opts.Guard(book); gErr != nil {
 			return nil, gErr
@@ -809,6 +810,9 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 	if opts.RefuseEmptyWrite {
 		changed, diffErr := database.ChangedBookFields(before, book)
 		if diffErr != nil {
+			// Nothing is committed: take back the credits guardedApplyWith
+			// wrote, as commitApply does on a refusal.
+			mfs.revertAuthorCredits(id, credits, diffErr)
 			return nil, diffErr
 		}
 		if len(changed) == 0 && !credits.Changed() {
@@ -899,7 +903,9 @@ func (mfs *Service) ApplyMetadataCandidateWithOptions(id string, candidate Metad
 	// The caller's own under-lock check (ApplyOptions.Guard) runs after the
 	// no_match one, on the same fresh row, inside the same ModifyBook; the
 	// owner-rejection backstop runs last, so a caller that checks the
-	// rejection itself reports the refusal its own way.
+	// rejection itself reports the refusal its own way. When any of them
+	// refuses, commitApply also takes back the author credits
+	// guardedApplyWith wrote above (revertAuthorCredits).
 	commitGuard := composeCommitGuards(noMatchGuard, opts.Guard, rejectionGuard)
 	updatedBook, updateErr := mfs.commitApply(id, before, book, credits, historySource, opts.BatchID, commitGuard)
 	if updatedBook == nil {
