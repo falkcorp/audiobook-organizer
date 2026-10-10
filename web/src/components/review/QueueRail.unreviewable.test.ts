@@ -11,7 +11,7 @@
  * unreviewable" over text that could equally have described 8,532 orphans or
  * 8,532 refetchable rows -- two situations with nothing in common except the
  * number. These tests pin that the tooltip now reports the actual split, and
- * that it degrades honestly when the server does not send one.
+ * that it says so plainly when the server does not send one.
  */
 
 import { describe, it, expect } from 'vitest';
