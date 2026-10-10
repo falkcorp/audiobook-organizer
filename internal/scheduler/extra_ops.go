@@ -1,5 +1,5 @@
 // file: internal/scheduler/extra_ops.go
-// version: 1.20.0
+// version: 1.20.1
 // guid: a9b8c7d6-e5f4-3210-fedc-ba9876543210
 // last-edited: 2026-10-09
 
@@ -700,8 +700,8 @@ func runCleanupOldBackups(ctx context.Context, progress cleanupProgressLogger) e
 	// in the tree (see internal/plugins/maintenance/cleanup.go with the same
 	// predicate, and internal/maintenance/jobs/cleanup_backups.go with a
 	// different regex). All three are guarded, and the first two now share one
-	// retention source (the config package's effective-retention helper); consolidating
-	// them is a separate change.
+	// retention source, config.EffectiveBackupRetentionDays(); consolidating them
+	// is a separate change.
 	app := appdirs.Current()
 	err := filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
 		if ctx.Err() != nil {

@@ -1,5 +1,5 @@
 // file: web/src/components/settings/PerformanceSettingsTab.tsx
-// version: 1.1.0
+// version: 1.1.1
 // guid: a7b8c9d0-e1f2-3456-abcd-567890123456
 // last-edited: 2026-10-09
 
@@ -248,7 +248,7 @@ export function PerformanceSettingsTab({ settings, handleChange }: PerformanceSe
           onChange={(e) => handleChange('backupRetentionDays', parseInt(e.target.value) || 0)}
           helperText="0 = same as soft-delete retention"
           slotProps={{
-            htmlInput: { min: 0, max: 3650 },
+            htmlInput: { min: 0, max: 365 },
           }}
         />
       </Grid>
