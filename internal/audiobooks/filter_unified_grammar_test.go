@@ -1,13 +1,15 @@
 // file: internal/audiobooks/filter_unified_grammar_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2c7e9a14-5b3f-4e81-9d06-a4f1c8b2e753
-// last-edited: 2026-10-06
+// last-edited: 2026-10-10
 
 package audiobooks
 
 import (
 	"context"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -248,4 +250,24 @@ func TestUnifiedGrammar_BitrateAndSampleRateUnits(t *testing.T) {
 	assert.True(t, fieldMatchesValue(high, "sample_rate", ">=44.1khz"))
 	assert.False(t, fieldMatchesValue(low, "sample_rate", ">=44.1khz"))
 	assert.Error(t, ValidateFilterValue(FieldFilter{Field: "bitrate", Value: "<64mb"}))
+}
+
+// Library search compiles its text values through the same querygrammar
+// limits as the Review query: a value too long or a pattern too large to
+// scan the library with is a 400 naming the token, refused at compile time,
+// not a multi-second (or multi-minute) scan.
+func TestUnifiedGrammar_OversizedPatternsAreRefused(t *testing.T) {
+	for _, f := range []FieldFilter{
+		{Field: "title", Value: `/(.*){1000}/`},
+		{Field: "title", Value: `/(?:.?){1000}zzz/`},
+		{Field: "author", Value: "/" + strings.Repeat("(a|b)", 6000) + "/"},
+		{Field: "series", Value: strings.Repeat("a", 300), Quoted: true},
+	} {
+		start := time.Now()
+		err := ValidateFilterValue(f)
+		require.Error(t, err, "%s:%.20s must be refused", f.Field, f.Value)
+		assert.Less(t, time.Since(start), 50*time.Millisecond)
+		assert.True(t, strings.Contains(err.Error(), "too complex") || strings.Contains(err.Error(), "the limit is 256"), err.Error())
+		assert.False(t, matchesFieldFilters(gramBook("anything"), []FieldFilter{f}), "fails closed")
+	}
 }

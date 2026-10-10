@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_query_bench_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: b5d2c8e4-1f6a-4a37-9c08-7e4b3d2a6f91
 // last-edited: 2026-10-10
 
@@ -121,7 +121,7 @@ func BenchmarkReviewQuery_40k(b *testing.B) {
 			b.ReportAllocs()
 			var listed int
 			for b.Loop() {
-				listed = len(evaluateReviewQuery(base, q).refs)
+				listed = len(mustEvaluate(b, base, q).refs)
 			}
 			b.ReportMetric(float64(listed), "rows_listed")
 		})
@@ -150,7 +150,7 @@ func TestReviewQuery_ResponseSizes40k(t *testing.T) {
 	base := newReviewQueryBase(reviewBaseKey{snap: snap}, set, time.Now())
 
 	pageQ := mustReviewQuery(t, map[string]string{"limit": "50"})
-	page := evaluateReviewQuery(base, pageQ)
+	page := mustEvaluate(t, base, pageQ)
 	pageBody, err := json.Marshal(gin.H{"data": reviewPageResponse(page, pageQ, nil)})
 	require.NoError(t, err)
 
@@ -160,7 +160,7 @@ func TestReviewQuery_ResponseSizes40k(t *testing.T) {
 	require.NoError(t, err)
 	allBase := newReviewQueryBase(reviewBaseKey{snap: allSnap}, allSet, time.Now())
 	idsQ := mustReviewQuery(t, map[string]string{"ids": "all"})
-	ids := evaluateReviewQuery(allBase, idsQ)
+	ids := mustEvaluate(t, allBase, idsQ)
 	idsBody, err := json.Marshal(gin.H{"data": reviewIDsResponse(ids)})
 	require.NoError(t, err)
 
