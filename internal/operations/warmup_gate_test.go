@@ -1,114 +1,60 @@
 // file: internal/operations/warmup_gate_test.go
-// version: 1.0.1
+// version: 2.0.0
 // guid: 8a4d2f61-7e03-4c9b-b5a8-1d6e3f0c7b92
 // last-edited: 2026-10-10
 
 package operations
 
 import (
-	"context"
-	"errors"
 	"log/slog"
-	"sync/atomic"
 	"testing"
 	"time"
 )
 
-type fakeWaiter struct {
-	done chan struct{}
-}
+type fakeStatus struct{ done bool }
 
-func (f *fakeWaiter) WaitForWarmupCtx(ctx context.Context) error {
-	select {
-	case <-f.done:
-		return nil
-	default:
-	}
-	select {
-	case <-f.done:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
+func (f *fakeStatus) WarmupStatus() (bool, bool, int64) { return f.done, f.done, 0 }
+
+func TestWarmupGate_NoSourceNeverHolds(t *testing.T) {
+	var g WarmupGate
+	if g.Holding(time.Now(), nil, slog.Default()) {
+		t.Fatal("held with no warmup source")
 	}
 }
 
-func TestWaitForWarmup_NoWaiterProceedsAtOnce(t *testing.T) {
-	var waited atomic.Bool
-	err := WaitForWarmup(context.Background(), nil, time.Minute, slog.Default(),
-		func() { waited.Store(true) })
-	if err != nil || waited.Load() {
-		t.Fatalf("err=%v waited=%v; want nil,false", err, waited.Load())
+func TestWarmupGate_HoldsWhileWarmingThenReleases(t *testing.T) {
+	var g WarmupGate
+	s := &fakeStatus{}
+	now := time.Unix(1000, 0)
+	if !g.Holding(now, s, slog.Default()) {
+		t.Fatal("did not hold while warming")
+	}
+	if !g.Holding(now.Add(10*time.Second), s, slog.Default()) {
+		t.Fatal("did not keep holding while warming")
+	}
+	s.done = true
+	if g.Holding(now.Add(11*time.Second), s, slog.Default()) {
+		t.Fatal("still held after warmup finished")
 	}
 }
 
-func TestWaitForWarmup_AlreadyDoneDoesNotAnnounceAWait(t *testing.T) {
-	w := &fakeWaiter{done: make(chan struct{})}
-	close(w.done)
-	var waited atomic.Bool
-	err := WaitForWarmup(context.Background(), w, time.Minute, slog.Default(),
-		func() { waited.Store(true) })
-	if err != nil || waited.Load() {
-		t.Fatalf("err=%v waited=%v; want nil,false", err, waited.Load())
+// The bound: a warmup that never finishes releases held work after 300 s,
+// measured from the first cycle that saw it warming.
+func TestWarmupGate_ReleasesAtTheBound(t *testing.T) {
+	var g WarmupGate
+	s := &fakeStatus{}
+	t0 := time.Unix(1000, 0)
+	if !g.Holding(t0, s, slog.Default()) {
+		t.Fatal("did not hold")
 	}
-}
-
-func TestWaitForWarmup_BlocksUntilWarmupFinishes(t *testing.T) {
-	w := &fakeWaiter{done: make(chan struct{})}
-	var waited atomic.Int32
-	result := make(chan error, 1)
-	go func() {
-		result <- WaitForWarmup(context.Background(), w, time.Minute, slog.Default(),
-			func() { waited.Add(1) })
-	}()
-	select {
-	case err := <-result:
-		t.Fatalf("returned before warmup finished: %v", err)
-	case <-time.After(100 * time.Millisecond):
+	if !g.Holding(t0.Add(WarmupWaitTimeout-time.Second), s, slog.Default()) {
+		t.Fatal("released before the bound")
 	}
-	if waited.Load() != 1 {
-		t.Fatalf("onWait called %d times, want 1", waited.Load())
+	if g.Holding(t0.Add(WarmupWaitTimeout), s, slog.Default()) {
+		t.Fatal("still held at the bound")
 	}
-	close(w.done)
-	select {
-	case err := <-result:
-		if err != nil {
-			t.Fatalf("err = %v, want nil", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("did not return after warmup finished")
-	}
-}
-
-func TestWaitForWarmup_CtxCancelReturnsPromptly(t *testing.T) {
-	w := &fakeWaiter{done: make(chan struct{})}
-	ctx, cancel := context.WithCancel(context.Background())
-	result := make(chan error, 1)
-	go func() {
-		result <- WaitForWarmup(ctx, w, time.Minute, slog.Default(), nil)
-	}()
-	time.Sleep(50 * time.Millisecond)
-	cancel()
-	select {
-	case err := <-result:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("err = %v, want context.Canceled", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("did not return after ctx cancel")
-	}
-}
-
-// The bound: a warmup that never finishes must not block the op forever. The
-// op proceeds (nil error) once the timeout elapses.
-func TestWaitForWarmup_TimeoutProceeds(t *testing.T) {
-	w := &fakeWaiter{done: make(chan struct{})}
-	start := time.Now()
-	err := WaitForWarmup(context.Background(), w, 80*time.Millisecond, slog.Default(), nil)
-	if err != nil {
-		t.Fatalf("err = %v, want nil on timeout", err)
-	}
-	if d := time.Since(start); d < 60*time.Millisecond || d > 2*time.Second {
-		t.Fatalf("waited %v, want about the 80ms timeout", d)
+	if g.Holding(t0.Add(WarmupWaitTimeout+time.Hour), s, slog.Default()) {
+		t.Fatal("held again after the bound")
 	}
 }
 

@@ -1,5 +1,5 @@
 // file: internal/operations/registry/worker.go
-// version: 2.27.2
+// version: 2.27.3
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
 // last-edited: 2026-10-10
 
@@ -19,17 +19,8 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
-	"github.com/falkcorp/audiobook-organizer/internal/operations"
 )
-
-// warmupWaiter resolves, through the store decorator chain, the store's startup
-// warmup wait, or nil when no store in the chain has one.
-func (r *Registry) warmupWaiter() operations.WarmupWaiter {
-	w, _ := database.AsCapability[operations.WarmupWaiter](r.store)
-	return w
-}
 
 var operationTracer = otel.Tracer("audiobook-organizer/operations")
 
@@ -248,26 +239,25 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 	}
 	// The cause layer sits under the timeout so a cancel with a cause
 	// (Shutdown's ErrShutdown) is visible through context.Cause(runCtx).
-	//
-	// The timeout is NOT armed here. runCtx (cause layer + timeout) is built only
-	// after the startup warmup gate below, so the wait spends none of the op's
-	// Timeout budget: arming it first meant a 1-minute-Timeout op that waited
-	// out a 130 s warmup started with a dead context. Everything that must be
-	// able to interrupt the wait (user cancel, shutdown) cancels causeCtx, which
-	// is the parent of runCtx, so h.cancel needs only cancelCause.
 	causeCtx, cancelCause := context.WithCancelCause(parentCtx)
-	var cancelTimeout context.CancelFunc // set once runCtx exists
-	cancel := func() { cancelCause(nil) }
-	var runCtx context.Context
+	runCtx, cancelTimeout := context.WithTimeout(causeCtx, timeout)
+	cancel := func() {
+		cancelTimeout()
+		cancelCause(nil)
+	}
+	// Decorate the run context (e.g. install a context-bound slog.Logger that
+	// tags every line with the operation id) via the optional decorator hook.
+	// Nil is the default when no decorator was wired via
+	// SetRunContextDecorator — runs proceed undecorated.
+	if r.runContextDecorator != nil {
+		runCtx = r.runContextDecorator(runCtx, qr.opID)
+	}
 	// reporterForJoin is assigned once the reporter is built below. The deferred
 	// join must be registered HERE, above every early return between this point
 	// and the reporter's construction, so no exit path can skip it.
 	var reporterForJoin *dbReporter
 	defer func() {
 		cancel()
-		if cancelTimeout != nil {
-			cancelTimeout()
-		}
 		// Cancelling runCtx only ASKS the flush loop to stop; it then runs a
 		// terminal flush that writes to the store. Returning without joining it
 		// drops this run from Registry.running while that write is still in
@@ -377,41 +367,6 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 			r.resumeDroppedScanOnRelease(qr.opID)
 		}
 		return false
-	}
-
-	// Startup warmup gate (D44). After a restart the store's in-memory read layer
-	// warms for a couple of minutes and every read in that window silently takes
-	// the slow Pebble path, so a run waits here, bounded by
-	// operations.WarmupWaitTimeout, until warmup finishes.
-	//
-	// It sits BEFORE the queued->running compare-and-set and before runCtx
-	// exists, on purpose:
-	//   - the row stays "queued" while waiting, so the stuck-op watchdog (which
-	//     skips non-running rows) and the uncheckpointed strike (which measures
-	//     from started_at, stamped below) cannot count the wait, and the
-	//     "ever reported" distinction the never_reported diagnosis rests on is
-	//     left alone: nothing here stamps lastProgressAt;
-	//   - the wait is on causeCtx, which carries no run timeout, so it spends none
-	//     of the op's Timeout and cannot be cut short by it. Registry.Cancel and
-	//     Shutdown cancel causeCtx and so still interrupt the wait;
-	//   - a cancel here never runs the body or logs "operation started".
-	if !def.NoWarmupWait {
-		if err := r.waitForStartupWarmup(causeCtx, qr, h); err != nil {
-			return r.finishWarmupWaitInterrupted(qr, h)
-		}
-	}
-
-	// Arm the run timeout now (fresh, whether the gate waited or timed out) and
-	// decorate the run context (e.g. install a context-bound slog.Logger that
-	// tags every line with the operation id) via the optional decorator hook.
-	// Nil is the default when no decorator was wired via
-	// SetRunContextDecorator — runs proceed undecorated.
-	// (Assigned through a closure: cancelTimeout is released by the deferred
-	// cleanup above on every path, which go vet's lostcancel cannot see.)
-	armRunTimeout := func() { runCtx, cancelTimeout = context.WithTimeout(causeCtx, timeout) }
-	armRunTimeout()
-	if r.runContextDecorator != nil {
-		runCtx = r.runContextDecorator(runCtx, qr.opID)
 	}
 
 	// Take the row from "queued" to "running" as a compare-and-set, and do not
@@ -949,76 +904,4 @@ func (r *Registry) finalStatusForCanceledRun(runCtx context.Context, h *runHandl
 		return status, &msg
 	}
 	return "canceled", nil
-}
-
-// waitForStartupWarmup runs the warmup gate for a picked-up run. It returns nil
-// when the run may proceed (warmup finished, nothing to wait for, or the wait
-// timed out) and a ctx error when the wait was interrupted by cancel/shutdown.
-//
-// While it waits, the row's progress message reads
-// operations.WarmupStatusMessage; the row's progress numbers and previous
-// message are kept and put back afterwards, so a resumed op's shown progress
-// and a queued row's size summary are not clobbered.
-func (r *Registry) waitForStartupWarmup(ctx context.Context, qr *queuedRun, h *runHandle) error {
-	waiter := r.warmupWaiter()
-	if waiter == nil {
-		return nil
-	}
-	var prev *database.OperationV2Row
-	var posted bool
-	err := operations.WaitForWarmup(ctx, waiter, operations.WarmupWaitTimeout, r.logger, func() {
-		row, gerr := r.store.GetOperationV2(qr.opID)
-		if gerr != nil || row == nil {
-			return
-		}
-		prev = row
-		if uerr := r.store.UpdateOpProgressV2(qr.opID, row.ProgressCurrent, row.ProgressTotal, operations.WarmupStatusMessage); uerr != nil {
-			r.logger.Warn("registry: could not post the startup-warmup wait message", "op_id", qr.opID, "error", uerr)
-			return
-		}
-		posted = true
-		h.setCurrentItem(operations.WarmupStatusMessage)
-		if r.bus != nil {
-			_ = r.bus.Publish(ctx, "op.updated", map[string]any{
-				"op_id":            qr.opID,
-				"progress_current": row.ProgressCurrent,
-				"progress_total":   row.ProgressTotal,
-			})
-		}
-	})
-	if posted {
-		h.setCurrentItem("")
-		if uerr := r.store.UpdateOpProgressV2(qr.opID, prev.ProgressCurrent, prev.ProgressTotal, prev.ProgressMessage); uerr != nil {
-			r.logger.Warn("registry: could not restore the row message after the startup-warmup wait", "op_id", qr.opID, "error", uerr)
-		}
-	}
-	return err
-}
-
-// finishWarmupWaitInterrupted ends a run whose startup-warmup wait was
-// interrupted. The body never ran, so there is no "operation started" record,
-// no run metrics, and nothing to unwind.
-//
-//   - Shutdown (and not a user cancel): the row is left "queued", like every
-//     other pre-start shutdown exit, so the next start dispatches it.
-//   - Anything else (a user cancel): the row ends "canceled" and the terminal is
-//     published and fanned out to the dependency scheduler, as for any cancel.
-func (r *Registry) finishWarmupWaitInterrupted(qr *queuedRun, h *runHandle) bool {
-	defer close(h.parked)
-	if r.shuttingDown.Load() && !h.userCanceled.Load() {
-		r.releaseRunHandle(qr.opID)
-		r.logger.Info("registry: run not started, shutdown during startup-warmup wait; left queued for the next start",
-			"op_id", qr.opID, "def_id", qr.defID)
-		return false
-	}
-	now := time.Now().UTC()
-	if err := r.store.UpdateOperationV2Status(qr.opID, "canceled", nil, &now, nil); err != nil {
-		r.logger.Warn("registry: failed to mark op canceled during startup-warmup wait", "op_id", qr.opID, "error", err)
-	}
-	r.releaseRunHandle(qr.opID)
-	r.publishOpTerminal(qr.opID, qr.defID, "canceled")
-	r.notifyDepTerminal("canceled", qr)
-	r.logger.Info("registry: run canceled during startup-warmup wait; body not started",
-		"op_id", qr.opID, "def_id", qr.defID)
-	return false
 }

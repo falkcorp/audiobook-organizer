@@ -1,5 +1,5 @@
 // file: internal/database/memdb_metrics.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5b0f6c1e-2a47-4d8e-9c35-7e1a4b9d2f60
 // last-edited: 2026-10-10
 
@@ -13,9 +13,19 @@ import (
 	"go.opentelemetry.io/otel/metric"
 )
 
+// Values of the `outcome` attribute on memdb_fallback_reads_total.
+const (
+	// memdbOutcomeFallback: the read was served from Pebble instead (slower).
+	memdbOutcomeFallback = "fallback"
+	// memdbOutcomeRefused: the read has no Pebble path and returned an error.
+	memdbOutcomeRefused = "refused"
+)
+
 // newMemdbFallbackCounter builds the fallback-read counter on mp. It counts
 // reads that wanted the in-memory query layer (UseMemDB is on) but found it not
-// yet published and fell back to the slow Pebble path. The OTel instrument name
+// yet published. Attributes: site (the method) and outcome, "fallback" when the
+// read was served from Pebble and "refused" when it had no Pebble path and
+// returned an error. The OTel instrument name
 // has no suffix; the Prometheus exporter appends "_total", so /metrics exposes
 // memdb_fallback_reads_total{site=...}.
 //
@@ -30,7 +40,7 @@ import (
 func newMemdbFallbackCounter(mp metric.MeterProvider) metric.Int64Counter {
 	c, err := mp.Meter("audiobook-organizer/database").Int64Counter(
 		"memdb_fallback_reads",
-		metric.WithDescription("Reads that fell back to the Pebble path because the memdb was not yet published."),
+		metric.WithDescription("Reads that wanted the in-memory layer before it was published: outcome=fallback were served from Pebble, outcome=refused returned an error."),
 	)
 	if err != nil {
 		return nil
@@ -47,10 +57,11 @@ func (p *PebbleStore) setMeterProvider(mp metric.MeterProvider) {
 // initMetrics wires the store's instruments to the process-global provider.
 func (p *PebbleStore) initMetrics() { p.setMeterProvider(otel.GetMeterProvider()) }
 
-// recordMemdbFallback counts one fallback read attributed to site (the calling
-// method name; a small fixed set, so label cardinality stays bounded).
-func (p *PebbleStore) recordMemdbFallback(site string) {
+// recordMemdbFallback counts one unmet memdb read attributed to site (the
+// calling method name) and outcome; both are small fixed sets, so label
+// cardinality stays bounded.
+func (p *PebbleStore) recordMemdbFallback(site, outcome string) {
 	if p.memdbFallback != nil {
-		p.memdbFallback.Add(context.Background(), 1, metric.WithAttributes(attribute.String("site", site)))
+		p.memdbFallback.Add(context.Background(), 1, metric.WithAttributes(attribute.String("site", site), attribute.String("outcome", outcome)))
 	}
 }

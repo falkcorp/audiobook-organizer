@@ -1,5 +1,5 @@
 // file: internal/database/memdb_metrics_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: c27e5a90-4d13-4b68-8f0e-9a1b6d3c5e74
 // last-edited: 2026-10-10
 
@@ -7,10 +7,11 @@ package database
 
 import (
 	"context"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -83,9 +84,10 @@ func TestMemOrFallback_CountsOnlyUnreadyReadsAndShowsOnMetrics(t *testing.T) {
 		promhttp.HandlerFor(reg, promhttp.HandlerOpts{}).ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
 		return rec.Body.String()
 	}
-	line := func(site string) string {
+	line := func(site, outcome string) string {
 		for _, l := range strings.Split(scrape(), "\n") {
-			if strings.HasPrefix(l, "memdb_fallback_reads_total{") && strings.Contains(l, `site="`+site+`"`) {
+			if strings.HasPrefix(l, "memdb_fallback_reads_total{") && strings.Contains(l, `site="`+site+`"`) &&
+				strings.Contains(l, `outcome="`+outcome+`"`) {
 				return l
 			}
 		}
@@ -100,7 +102,7 @@ func TestMemOrFallback_CountsOnlyUnreadyReadsAndShowsOnMetrics(t *testing.T) {
 	// Ready: served from memdb, not counted.
 	_, err = p.GetAllAuthors()
 	require.NoError(t, err)
-	require.Empty(t, line("GetAllAuthors"))
+	require.Empty(t, line("GetAllAuthors", "fallback"))
 
 	// Unpublished with UseMemDB on: a fallback read, counted once per call.
 	m := p.mem()
@@ -109,49 +111,74 @@ func TestMemOrFallback_CountsOnlyUnreadyReadsAndShowsOnMetrics(t *testing.T) {
 	require.NoError(t, err)
 	_, err = p.GetAllAuthors()
 	require.NoError(t, err)
-	got := line("GetAllAuthors")
+	got := line("GetAllAuthors", "fallback")
 	require.NotEmpty(t, got, "memdb_fallback_reads_total{site=\"GetAllAuthors\"} missing from scrape:\n%s", scrape())
 	require.True(t, strings.HasSuffix(got, " 2"), "want 2 fallback reads, got line %q", got)
 	t.Logf("scraped: %s", got)
+
+	// A read with no Pebble path is counted as refused, not as a fallback.
+	_, err = p.GetBooksByMetadataSourceHashInMemory("h")
+	require.ErrorIs(t, err, ErrMemDBNotReady)
+	require.NotEmpty(t, line("GetBooksByMetadataSourceHashInMemory", "refused"))
+	require.Empty(t, line("GetBooksByMetadataSourceHashInMemory", "fallback"))
 
 	// UseMemDB=false is a deliberate Pebble store (tests), never a fallback.
 	p.UseMemDB = false
 	_, err = p.GetAllSeries()
 	require.NoError(t, err)
-	require.Empty(t, line("GetAllSeries"))
+	require.Empty(t, line("GetAllSeries", "fallback"))
 	p.UseMemDB = true
 	p.memPtr.Store(m)
 }
 
 // Every read that chooses between memdb and Pebble must go through
-// memOrFallback, or its fallbacks are invisible on memdb_fallback_reads_total.
-// This fails if a hand-written guard that combines UseMemDB with a memdb
-// presence check (in any of the shapes this package has used) comes back.
+// memOrFallback / memOrRefuse, or its unmet memdb reads are invisible on
+// memdb_fallback_reads_total. This is an AST check, so it holds for every shape
+// the package has used, including the multi-statement ones a line regex misses:
+//
+//	if p.UseMemDB && p.mem() != nil { ... }
+//	if m := p.mem(); p.UseMemDB && m != nil { ... }
+//	if s.UseMemDB { if m := s.mem(); m != nil { ... } }
+//	if !p.UseMemDB { return err }; m := p.mem(); if m == nil { return err }
+//
+// The rule: a function that both reads the UseMemDB flag and calls .mem()
+// directly is a hand-rolled guard. Only the helpers themselves may.
 func TestNoRawMemdbReadGuards(t *testing.T) {
-	forms := []*regexp.Regexp{
-		regexp.MustCompile(`\.UseMemDB\s*&&`),             // p.UseMemDB && p.mem() != nil / && m != nil
-		regexp.MustCompile(`&&\s*\w+\.UseMemDB\b`),        // p.mem(); !deep && p.UseMemDB && ...
-		regexp.MustCompile(`!\s*\w+\.UseMemDB\s*\|\|`),    // !p.UseMemDB || m == nil
-		regexp.MustCompile(`\|\|\s*!?\s*\w+\.UseMemDB\b`), // m == nil || !p.UseMemDB
-	}
+	allowed := map[string]bool{"memOr": true}
 	files, err := filepath.Glob("*.go")
 	require.NoError(t, err)
 	require.NotEmpty(t, files)
+	fset := token.NewFileSet()
 	for _, f := range files {
 		if strings.HasSuffix(f, "_test.go") {
 			continue
 		}
-		b, err := os.ReadFile(f)
+		file, err := parser.ParseFile(fset, f, nil, 0)
 		require.NoError(t, err)
-		for n, line := range strings.Split(string(b), "\n") {
-			code := line
-			if i := strings.Index(code, "//"); i >= 0 {
-				code = code[:i]
+		for _, decl := range file.Decls {
+			fd, ok := decl.(*ast.FuncDecl)
+			if !ok || fd.Body == nil || allowed[fd.Name.Name] {
+				continue
 			}
-			for _, re := range forms {
-				if re.MatchString(code) {
-					t.Errorf("%s:%d: raw memdb guard %q; use p.memOrFallback(site) so a fallback read is counted", f, n+1, strings.TrimSpace(line))
+			var readsFlag, callsMem bool
+			var memPos token.Pos
+			ast.Inspect(fd.Body, func(n ast.Node) bool {
+				switch x := n.(type) {
+				case *ast.SelectorExpr:
+					if x.Sel.Name == "UseMemDB" {
+						readsFlag = true
+					}
+				case *ast.CallExpr:
+					if sel, ok := x.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "mem" && len(x.Args) == 0 {
+						callsMem = true
+						memPos = x.Pos()
+					}
 				}
+				return true
+			})
+			if readsFlag && callsMem {
+				t.Errorf("%s: %s reads UseMemDB and calls .mem() directly: use p.memOrFallback(site) (or memOrRefuse when there is no Pebble path) so the unmet read is counted",
+					fset.Position(memPos), fd.Name.Name)
 			}
 		}
 	}

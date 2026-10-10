@@ -1,7 +1,7 @@
 // file: internal/operations/registry/dispatcher.go
-// version: 2.6.0
+// version: 2.6.1
 // guid: a7b8c9d0-e1f2-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-10-03
+// last-edited: 2026-10-10
 
 package registry
 
@@ -10,6 +10,9 @@ import (
 	"encoding/json"
 	"slices"
 	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/operations"
 )
 
 // runDispatcher is the central dispatch loop. It ticks every 100ms or
@@ -59,6 +62,19 @@ func (r *Registry) dispatchCycle(ctx context.Context) {
 	}
 	r.mu.Unlock()
 
+	// Startup warmup gate (D44). While the store's in-memory read layer is still
+	// warming after a restart, non-exempt ops are held HERE, before anything is
+	// claimed: a held op keeps its queued row, takes no worker slot, no plugin
+	// or ConcurrencyKey slot and no write-set claim, and has no run timeout or
+	// watchdog clock started, so an exempt (interactive) op always finds a free
+	// worker and nothing time-based is spent on the wait. Registry.Cancel and
+	// Shutdown act on a held op exactly as on any queued op. The hold is bounded
+	// by operations.WarmupWaitTimeout.
+	holdForWarmup := r.warmupHolding()
+	if !holdForWarmup {
+		r.restoreWarmupHeld()
+	}
+
 	for _, row := range queued {
 		if ctx.Err() != nil {
 			return
@@ -90,6 +106,12 @@ func (r *Registry) dispatchCycle(ctx context.Context) {
 		}
 		if !ok {
 			// Unknown def — skip; may appear during rolling restarts.
+			continue
+		}
+
+		// Gate 1b: startup warmup (see holdForWarmup above). Exempt defs pass.
+		if holdForWarmup && !def.NoWarmupWait {
+			r.announceWarmupHeld(row)
 			continue
 		}
 
@@ -413,4 +435,71 @@ func (r *Registry) checkDependsOn(depDefIDs []string) bool {
 		}
 	}
 	return false
+}
+
+// warmupHolding reports whether non-exempt ops should be held back this cycle.
+// The store is resolved through the decorator chain each cycle (cheap); a store
+// with no warmup to report on never holds.
+func (r *Registry) warmupHolding() bool {
+	src, _ := database.AsCapability[operations.WarmupStatuser](r.store)
+	if src == nil {
+		return false
+	}
+	return r.warmupGate.Holding(r.livenessClock(), src, r.logger)
+}
+
+// announceWarmupHeld posts operations.WarmupStatusMessage on a held queued row,
+// once per row, keeping the row's progress numbers and remembering what it said
+// before so restoreWarmupHeld can put it back.
+func (r *Registry) announceWarmupHeld(row database.OperationV2Row) {
+	r.warmupMu.Lock()
+	if _, seen := r.warmupHeld[row.ID]; seen {
+		r.warmupMu.Unlock()
+		return
+	}
+	if r.warmupHeld == nil {
+		r.warmupHeld = make(map[string]database.OperationV2Row)
+	}
+	r.warmupHeld[row.ID] = row
+	r.warmupMu.Unlock()
+
+	if err := r.store.UpdateOpProgressV2(row.ID, row.ProgressCurrent, row.ProgressTotal, operations.WarmupStatusMessage); err != nil {
+		r.logger.Warn("registry: could not post the startup-warmup wait message", "op_id", row.ID, "error", err)
+		return
+	}
+	r.publishOpUpdated(row.ID, row.ProgressCurrent, row.ProgressTotal)
+}
+
+// restoreWarmupHeld puts back the message every announced row had before the
+// hold, once the hold ends, and publishes op.updated so a UI does not keep
+// showing "waiting for startup warmup". A row that has left the queue, or whose
+// message something else has since rewritten (a queued-summary merge), is left
+// alone.
+func (r *Registry) restoreWarmupHeld() {
+	r.warmupMu.Lock()
+	held := r.warmupHeld
+	r.warmupHeld = nil
+	r.warmupMu.Unlock()
+	for id, prev := range held {
+		cur, err := r.store.GetOperationV2(id)
+		if err != nil || cur == nil || cur.Status != "queued" || cur.ProgressMessage != operations.WarmupStatusMessage {
+			continue
+		}
+		if err := r.store.UpdateOpProgressV2(id, prev.ProgressCurrent, prev.ProgressTotal, prev.ProgressMessage); err != nil {
+			r.logger.Warn("registry: could not restore the row message after the startup-warmup hold", "op_id", id, "error", err)
+			continue
+		}
+		r.publishOpUpdated(id, prev.ProgressCurrent, prev.ProgressTotal)
+	}
+}
+
+func (r *Registry) publishOpUpdated(opID string, current, total int) {
+	if r.bus == nil {
+		return
+	}
+	_ = r.bus.Publish(context.Background(), "op.updated", map[string]any{
+		"op_id":            opID,
+		"progress_current": current,
+		"progress_total":   total,
+	})
 }

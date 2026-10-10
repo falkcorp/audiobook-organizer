@@ -1,7 +1,7 @@
 // file: internal/operations/registry/registry.go
-// version: 3.34.0
+// version: 3.34.1
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 
 package registry
 
@@ -20,6 +20,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
+	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/oklog/ulid/v2"
 )
 
@@ -57,6 +58,11 @@ type Registry struct {
 	nextRun          chan *queuedRun
 	dispatch         chan struct{}
 	store            database.OpsV2Store
+	// warmupGate holds non-exempt ops back while the store warms (dispatcher.go);
+	// warmupHeld remembers each held row's pre-hold message, under warmupMu.
+	warmupGate       operations.WarmupGate
+	warmupMu         sync.Mutex
+	warmupHeld       map[string]database.OperationV2Row
 	bus              Bus // may be nil; wired in UOS-06
 	activityRecorder ActivityRecorder
 	// activityMirror is the same object as activityRecorder when one is set,

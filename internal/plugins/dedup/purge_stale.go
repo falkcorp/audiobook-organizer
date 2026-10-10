@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/purge_stale.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7f3e1b2c-4a8d-4e1f-9c2a-3e5b8d0a1c47
-// last-edited: 2026-08-19
+// last-edited: 2026-10-10
 
 package dedup
 
@@ -35,6 +35,7 @@ func (p *Plugin) purgeStaleDef() sdk.OperationDef {
 		Description:     "Deletes pending dedup candidates that are no longer valid (chapter files in same folder, same version-group, distinct series volumes).",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityHigh, // user-triggered, finishes in seconds
+		NoWarmupWait:    true,             // so it does not wait out the post-restart warmup
 		ConcurrencyKey:  "dedup.purge-stale",
 		Cancellable:     true,
 		Isolate:         false,

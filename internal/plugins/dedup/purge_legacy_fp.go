@@ -1,7 +1,7 @@
 // file: internal/plugins/dedup/purge_legacy_fp.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 3b7a2e9f-c1d4-4f8b-a5e0-6d3c8b2f1e47
-// last-edited: 2026-09-26
+// last-edited: 2026-10-10
 
 // Package dedup — op dedup.purge-legacy-fp-candidates (T015, SPEC 1 §8 step 2).
 //
@@ -78,6 +78,7 @@ func (p *Plugin) purgeLegacyFPDef() sdk.OperationDef {
 			"Idempotent: a versioned flag prevents re-running after completion.",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityHigh, // user-triggered, runs fast
+		NoWarmupWait:    true,             // so it does not wait out the post-restart warmup
 		ConcurrencyKey:  "dedup.purge-legacy-fp-candidates",
 		Cancellable:     true,
 		Isolate:         false,
