@@ -8292,7 +8292,7 @@
       "post": {
         "operationId": "handleUnrejectCandidate",
         "summary": "Unreject one candidate for one book",
-        "description": "Removes the owner's rejection of one candidate for one book, by book and candidate (source, title, ASIN/ISBN) alone, and re-ranks the book's cached candidates. Afterwards the candidate matches no rejection; another record of the same title rejected by its own ASIN or ISBN stays rejected.",
+        "description": "Removes the owner's rejection of one candidate for one book, by book and candidate (source, title, ASIN/ISBN) alone, and re-ranks the book's cached candidates. The candidate's own rejection goes, with any rejection of the same ASIN under another source (Audible behind Audnexus). Every other rejection stays: another record of the same title rejected by its own ASIN or ISBN, and another source's record that only shares an ISBN with this one. still_rejected is true when one of those still refuses the candidate.",
         "tags": [
           "reading"
         ],
@@ -8326,7 +8326,7 @@
         },
         "responses": {
           "200": {
-            "description": "Success: {unrejected: bool}, false when no rejection matched"
+            "description": "Success: {unrejected: bool, still_rejected: bool}. unrejected is false when no rejection of the candidate was found; still_rejected is true when another rejection still refuses it."
           },
           "400": {
             "description": "Bad request"

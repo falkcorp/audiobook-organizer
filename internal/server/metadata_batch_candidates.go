@@ -1,5 +1,5 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 4.27.0
+// version: 4.28.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
 // last-edited: 2026-10-10
 //
@@ -1046,13 +1046,19 @@ func (s *Server) handleUnrejectCandidates(c *gin.Context) {
 // no such id at hand, and a rejection with no way back locks the owner out
 // of that record everywhere (applies refuse it, owner_rejected).
 //
-// Every stored rejection key of the candidate's source+title gives up the
-// candidate (metafetch.RemoveRejection), so afterwards it matches no
-// rejection; another record of the same title the owner rejected by its own
-// ASIN or ISBN stays rejected. The book's cached row is re-ranked. A batch
-// operation's result row that recorded the rejection keeps its "rejected"
-// status: it is that operation's history, and its own un-reject still works.
-// unrejected is false when no rejection matched (nothing to do).
+// It removes the candidate's own rejection (metafetch.RemoveRejection):
+// every stored key of its source+title gives the record up, and a rejection
+// of the same ASIN under another source (the Audible rejection behind an
+// Audnexus row) goes with it. Another record the owner rejected -- of the
+// same title by its own ASIN or ISBN, or under another source sharing only
+// an ISBN with this one -- stays rejected. still_rejected says the
+// candidate is refused anyway, by one of those other rejections (it carries
+// an ISBN another rejection names, or its source+title has another legacy
+// title-wide key); the owner undoes that one too to apply it. The book's
+// cached row is re-ranked. A batch operation's result row that recorded the
+// rejection keeps its "rejected" status: it is that operation's history,
+// and its own un-reject still works. unrejected is false when no rejection
+// of the candidate was found (nothing to do).
 func (s *Server) handleUnrejectCandidate(c *gin.Context) {
 	defer invalidateMetadataResultsCache()
 
@@ -1087,9 +1093,18 @@ func (s *Server) handleUnrejectCandidate(c *gin.Context) {
 		httputil.InternalError(c, "failed to remove rejection", err)
 		return
 	}
+	// Re-read after the write: another rejection can still refuse the
+	// candidate (see above). Read outside the write lock; a rejection made
+	// in between is the owner's newer decision either way.
+	after, err := metafetch.LoadRejectedCandidates(store, req.BookID)
+	if err != nil {
+		httputil.InternalError(c, "rejection removed; failed to re-read the remaining rejections", err)
+		return
+	}
 	httputil.RespondWithOK(c, struct {
-		Unrejected bool `json:"unrejected"`
-	}{Unrejected: changed})
+		Unrejected    bool `json:"unrejected"`
+		StillRejected bool `json:"still_rejected"`
+	}{Unrejected: changed, StillRejected: after.HasCandidate(req.Candidate)})
 }
 
 // latestMetadataResultsByBook scans the recent metadata_candidate_fetch
