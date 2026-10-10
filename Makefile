@@ -1,5 +1,5 @@
 # file: Makefile
-# version: 2.38.0
+# version: 2.39.0
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
 # last-edited: 2026-10-10
 
@@ -54,7 +54,7 @@ BACKUP_DIR  ?= $(CURDIR)/backups
 -include Makefile.local
 
 .PHONY: all build build-api run run-api install clean help \
-        web-install web-build web-dev web-test web-lint web-lint-memory \
+        web-install web-build web-typecheck web-dev web-test web-lint web-lint-memory \
         test test-short test-short-shard test-fixtures test-all test-all-short test-nightly test-frontend test-e2e test-e2e-demo \
         coverage coverage-check coverage-check-short ci \
         vet mocks mockery-install mocks-check staticcheck staticcheck-install oplint sdkguard bench-check fmt-check \
@@ -79,6 +79,7 @@ help:
 	@echo "Frontend:"
 	@echo "  make web-install    - Install npm dependencies"
 	@echo "  make web-build      - Build frontend (outputs to web/dist)"
+	@echo "  make web-typecheck  - Type-check frontend (TypeScript 7; npm run typecheck:ts6 for TS 6)"
 	@echo "  make web-dev        - Start Vite dev server"
 	@echo "  make web-test       - Run frontend unit tests"
 	@echo "  make web-lint       - Lint frontend code"
@@ -171,6 +172,12 @@ web-build: web-install
 	@echo "🌐 Building frontend..."
 	@cd $(WEB_DIR) && npm run build
 	@echo "✅ Frontend built (web/dist)"
+
+## web-typecheck: Type-check the frontend with TypeScript 7 (tsc); TS 6 stays as `npm run typecheck:ts6`
+web-typecheck:
+	@echo "🔎 Type-checking frontend..."
+	@npm run typecheck --prefix $(WEB_DIR)
+	@echo "✅ Frontend type check passed"
 
 ## web-dev: Start Vite dev server
 web-dev:
