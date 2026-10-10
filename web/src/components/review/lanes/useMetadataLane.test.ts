@@ -260,6 +260,8 @@ describe('stale-response discard', () => {
     push(reviewPayload([makeResult('second')]));
 
     const { result } = renderHook(() => useMetadataLane(toast));
+    // The lane reads its mode from the config before the first fetch.
+    await waitFor(() => expect(api.getCachedReviewResults).toHaveBeenCalledTimes(1));
 
     // Kick off the second fetch while the first is still in flight.
     act(() => result.current.refresh());
@@ -1634,6 +1636,8 @@ describe('a failed load is surfaced rather than swallowed', () => {
       }) as ReturnType<typeof api.getCachedReviewResults>
     );
     const { result } = renderHook(() => useMetadataLane(toast, true));
+    // The lane reads its mode from the config before the first fetch.
+    await waitFor(() => expect(api.getCachedReviewResults).toHaveBeenCalledTimes(1));
 
     // Supersede it with a fetch that succeeds.
     vi.mocked(api.getCachedReviewResults).mockResolvedValue(reviewPayload([makeResult('b1')]));

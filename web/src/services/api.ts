@@ -911,6 +911,20 @@ export interface PathAlias {
 }
 
 export interface Config {
+  /**
+   * Review > Metadata lane: ask the server for one filtered page per filter
+   * change (GET .../metadata/cache/review?view=page) instead of loading every
+   * reviewable row into the browser. Absent or false keeps the full-index
+   * lane. The lane reads it once at mount.
+   */
+  review_metadata_server_query?: boolean;
+  /**
+   * The fail-safe ceiling on one bulk apply (applycap). Zero or absent means
+   * the server default; the lane reads it once at mount in page mode, where
+   * the page response does not carry it.
+   */
+  bulk_apply_max_items?: number;
+
   // Core paths
   root_dir: string;
   path_aliases?: PathAlias[];
@@ -4590,6 +4604,176 @@ export async function getCachedReviewResults(
     timeoutMs: CACHED_REVIEW_TIMEOUT_MS,
   });
   if (!response.ok) throw await buildApiError(response, 'Failed to load cached review results');
+  const data = await response.json();
+  return data.data ?? data;
+}
+
+/** A chip view of the review query (the lane's ChipFilter). */
+export type ReviewChip =
+  | 'matched'
+  | 'no_match'
+  | 'total'
+  | 'errors'
+  | 'no_candidates'
+  | 'resolved_no_candidates'
+  | 'identity_stale'
+  | 'stale'
+  | 'deferred';
+
+/**
+ * The filter half of a view=page request: everything that decides WHICH rows
+ * match and in what order, none of which page they are cut into. Booleans are
+ * sent only when true and min_confidence only when above zero, which is what
+ * the server defaults to, so the request carries exactly the filters that
+ * change something.
+ */
+export interface ReviewQueryParams {
+  /** The Title box, in the Library search grammar. */
+  q?: string;
+  /** A provider id (reviewProviderID's vocabulary). */
+  source?: string;
+  /** A percentage of the candidate score; matched rows only. */
+  min_confidence?: number;
+  hide_applied?: boolean;
+  hide_rejected?: boolean;
+  hide_skipped?: boolean;
+  hide_no_match?: boolean;
+  hide_runtime?: boolean;
+  match_language?: boolean;
+  has_transcription?: boolean;
+  transcription_matched?: boolean;
+  hide_multi_book?: boolean;
+  /** Books pulled out of a multi-book group (only read with hide_multi_book). */
+  ungrouped?: string[];
+  /** The lane's client-only skipped books (only read with hide_skipped / hide_rejected). */
+  skipped?: string[];
+  /** A chip view; it pauses every filter but q. */
+  chip?: ReviewChip;
+  bucket?: ReviewBucket;
+  sort?: 'title' | 'confidence';
+}
+
+/** A view=page request: the filters plus the page cut from the result. */
+export interface ReviewPageParams extends ReviewQueryParams {
+  limit?: number;
+  offset?: number;
+}
+
+/**
+ * The rail's counts, from the same evaluation as the page. `total` is the
+ * whole reviewable set (not the filtered one), `sources` the provider counts
+ * over every reviewable row, and `runtime_hidden` the rows the runtime switch
+ * hid from THIS list.
+ */
+export interface ReviewFacets {
+  matched: number;
+  no_match: number;
+  total: number;
+  total_applied?: number;
+  errors: number;
+  stale: number;
+  deferred?: number;
+  resolved_no_candidates?: number;
+  unreviewable: number;
+  unreviewable_by_cause?: {
+    orphaned: number;
+    no_candidates: number;
+    decode_errors: number;
+    book_read_errors?: number;
+    /** Retitled since their search (02-PR5b); optional so an older server parses. */
+    identity_stale?: number;
+  };
+  sources: Record<string, number>;
+  runtime_hidden: number;
+}
+
+export interface ReviewPageResponse {
+  /** Index rows (no candidate description, score_breakdown or category_tags). */
+  results: CandidateResult[];
+  /** The size of the filtered list, not of this page. */
+  total_count: number;
+  offset: number;
+  limit: number;
+  truncated?: boolean;
+  /** Names the snapshot the list was cut from; an ids list is valid only for the generation it came with. */
+  generation: string;
+  facets: ReviewFacets;
+}
+
+export interface ReviewMatchingIds {
+  ids: string[];
+  total: number;
+  generation: string;
+}
+
+function reviewQueryString(params: ReviewPageParams, extra: Record<string, string> = {}): string {
+  const out = new URLSearchParams({ view: 'page', ...extra });
+  const text = (k: string, v: string | undefined) => {
+    if (v) out.set(k, v);
+  };
+  const flag = (k: string, v: boolean | undefined) => {
+    if (v) out.set(k, 'true');
+  };
+  text('q', params.q);
+  text('source', params.source);
+  if (params.min_confidence !== undefined && params.min_confidence > 0) {
+    out.set('min_confidence', String(params.min_confidence));
+  }
+  flag('hide_applied', params.hide_applied);
+  flag('hide_rejected', params.hide_rejected);
+  flag('hide_skipped', params.hide_skipped);
+  flag('hide_no_match', params.hide_no_match);
+  flag('hide_runtime', params.hide_runtime);
+  flag('match_language', params.match_language);
+  flag('has_transcription', params.has_transcription);
+  flag('transcription_matched', params.transcription_matched);
+  flag('hide_multi_book', params.hide_multi_book);
+  if (params.ungrouped?.length) out.set('ungrouped', params.ungrouped.join(','));
+  if (params.skipped?.length) out.set('skipped', params.skipped.join(','));
+  text('chip', params.chip);
+  if (params.bucket && params.bucket !== 'reviewable') out.set('bucket', params.bucket);
+  text('sort', params.sort);
+  if (params.limit !== undefined) out.set('limit', String(params.limit));
+  if (params.offset !== undefined) out.set('offset', String(params.offset));
+  return out.toString();
+}
+
+/**
+ * One page of the server-side review query (view=page): the rows
+ * [offset, offset+limit) of the filtered list, the filtered total, the rail's
+ * facet counts and the snapshot generation, from one evaluation. Rows are
+ * index rows; the page fetches full rows for what it shows with
+ * getCachedReviewResults's `ids`. A 400 carries the server's message (a bad
+ * Title pattern, a refused limit); an aborted `signal` rejects with an
+ * AbortError.
+ */
+export async function getReviewPage(
+  params: ReviewPageParams,
+  signal?: AbortSignal
+): Promise<ReviewPageResponse> {
+  const response = await apiFetch(
+    `${API_BASE}/audiobooks/metadata/cache/review?${reviewQueryString(params)}`,
+    { timeoutMs: CACHED_REVIEW_TIMEOUT_MS, signal }
+  );
+  if (!response.ok) throw await buildApiError(response, 'Failed to load the review page');
+  const data = await response.json();
+  return data.data ?? data;
+}
+
+/**
+ * Every book id the filters match (view=page&ids=all): ids only, never rows,
+ * with the generation they were listed at. "Select all N matching" uses it.
+ * limit and offset are not sent; the list is the whole result.
+ */
+export async function getReviewMatchingIds(
+  params: ReviewQueryParams,
+  signal?: AbortSignal
+): Promise<ReviewMatchingIds> {
+  const response = await apiFetch(
+    `${API_BASE}/audiobooks/metadata/cache/review?${reviewQueryString(params, { ids: 'all' })}`,
+    { timeoutMs: CACHED_REVIEW_TIMEOUT_MS, signal }
+  );
+  if (!response.ok) throw await buildApiError(response, 'Failed to list the matching books');
   const data = await response.json();
   return data.data ?? data;
 }
