@@ -1,5 +1,5 @@
 <!-- file: docs/AI-REFERENCE.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.5.1 -->
 <!-- guid: e5f4g3h2-i1j0-k9l8-m7n6-o5p4q3r2s1t0 -->
 <!-- last-edited: 2026-10-10 -->
 
@@ -100,9 +100,14 @@ The Go binary embeds the compiled React app. A single process serves both the AP
 - **openai_parser.go** — `OpenAIParser` with methods: `ParseFilename()`, `ParseAudiobook()`, `ParseCoverArt()`, `ReviewAuthorDuplicates()`, `DiscoverAuthorDuplicates()`, `CreateBatchAuthorDedup()`, `CheckBatchStatus()`, `DownloadBatchResults()`
 - **embedding_client.go** — Local embedding/LLM backend via Ollama: `bge-m3` (1024-dim vectors) for embeddings; `qwen2.5:7b-instruct` for LLM tasks. Primary backend for dedup/candidate ranking. See `internal/database/hnsw_embedding_store.go`, `internal/dedup/engine.go`, `internal/server/registry_wire.go` for integration points. OpenAI backend (`openai_parser.go`) remains in use for specific flows already documented above.
 
-### `internal/operations` — Background job queue (legacy v1)
-- **queue.go** — `OperationQueue` with timeout (configurable, default 30min), checkpoint/resume support, cancellation
-- Key: `Enqueue(id, type, folderPath, fn)`, `SetOperationTimeout()`, `SaveCheckpoint()`, `LoadCheckpoint()`
+### `internal/operations` — Operation support types and subpackages
+The legacy v1 queue (`OperationQueue`, `Enqueue`, `SaveCheckpoint`) no longer exists; plugin ops run through the registry below. This package now holds shared types and helpers. Redesign plan: `docs/proposals/2026-10-holistic/05-operations-v3.md`.
+- **state.go** — `OperationState` (persisted operation state) and the state reader/writer interfaces
+- **progress.go** — `ProgressReporter`, `OperationFunc`, `LoggerFromReporter`
+- **selection.go** — `ResolveBookIDs`, resolves a `SelectionSpec` to book IDs
+- **trigger_source.go** — `WithTriggerSource` / `TriggerSourceFromContext` / `IsManual`, carry what triggered a run in the context
+- **types.go** — `SelectionSpec`, `FilterSpec` and related types for server-side bulk targeting
+- Subpackages: `childop`, `freshness`, `opmode`, `registry`
 
 ### `internal/operations/registry` — Operations registry v2 (UOS)
 The plugin-op execution system. All `<plugin>.<op-name>` ops (dedup.*, maintenance.*, acoustid.*, …) run through this, persisted in the `opv2:` keyspace via `database.OpsV2Store` (`internal/database/pebble_store_ops_v2.go`).
