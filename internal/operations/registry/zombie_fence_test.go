@@ -1,5 +1,5 @@
 // file: internal/operations/registry/zombie_fence_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2bc00ec8-5dde-4047-bac7-1fe9b4d5ba53
 // last-edited: 2026-10-10
 
@@ -541,15 +541,21 @@ func TestZombie_WarnAfterTenMinutes(t *testing.T) {
 }
 
 // fenceProbeRun hands its fence to the test, then blocks until ctx ends and
-// reports whether the fence was already revoked at that moment.
+// reports the fence as the run saw it at that moment.
 type fenceProbeRun struct {
 	fence     chan registry.Fence
-	atDone    chan bool
+	atDone    chan fenceAtDone
 	waitFence bool // return once the fence is revoked, not on ctx.Done
 }
 
+// fenceAtDone is the fence as the run saw it when it observed the stop.
+type fenceAtDone struct {
+	revoked bool  // Fence.Revoked(): the explicit revoke had landed
+	check   error // Fence.Check(): what a fenced writer would get
+}
+
 func newFenceProbe() *fenceProbeRun {
-	return &fenceProbeRun{fence: make(chan registry.Fence, 1), atDone: make(chan bool, 1)}
+	return &fenceProbeRun{fence: make(chan registry.Fence, 1), atDone: make(chan fenceAtDone, 1)}
 }
 
 func (p *fenceProbeRun) run(ctx context.Context, _ json.RawMessage, _ registry.Reporter) error {
@@ -559,16 +565,16 @@ func (p *fenceProbeRun) run(ctx context.Context, _ json.RawMessage, _ registry.R
 		for !f.Revoked() {
 			select {
 			case <-ctx.Done():
-				p.atDone <- f.Revoked()
+				p.atDone <- fenceAtDone{revoked: f.Revoked(), check: f.Check()}
 				return ctx.Err()
 			case <-time.After(time.Millisecond):
 			}
 		}
-		p.atDone <- true
+		p.atDone <- fenceAtDone{revoked: true, check: f.Check()}
 		return nil
 	}
 	<-ctx.Done()
-	p.atDone <- f.Revoked()
+	p.atDone <- fenceAtDone{revoked: f.Revoked(), check: f.Check()}
 	return ctx.Err()
 }
 
@@ -578,9 +584,13 @@ func TestFence_RevokedOnEveryStopPath(t *testing.T) {
 		// prep adjusts the def; stop stops the run once it has started.
 		prep func(*registry.OperationDef, *fenceProbeRun)
 		stop func(t *testing.T, h *zombieHarness, id string)
-		// ordered: the revoke must be visible when the run sees ctx.Done.
-		// Timeout fires inside context.WithTimeout with no code of ours
-		// running, so its revoke can only be asserted within one cycle.
+		// ordered: the explicit revoke must be visible when the run sees
+		// ctx.Done. Timeout fires inside context.WithTimeout with no code of
+		// ours running, so its revoke necessarily follows the cancel and is
+		// only asserted to land; Check() still refuses at ctx.Done on every
+		// path, timeout included, because the fence is bound to the run
+		// context. (The deterministic revoke-before-cancel check is
+		// TestCancelPaths_RevokeBeforeCancel in fence_internal_test.go.)
 		ordered bool
 	}
 	cases := []stopCase{
@@ -655,13 +665,16 @@ func TestFence_RevokedOnEveryStopPath(t *testing.T) {
 				t.Fatalf("fresh fence: revoked=%v epoch=%d, want valid with an epoch", fence.Revoked(), fence.Epoch())
 			}
 			tc.stop(t, h, id)
-			var revokedAtDone bool
+			var at fenceAtDone
 			select {
-			case revokedAtDone = <-p.atDone:
+			case at = <-p.atDone:
 			case <-time.After(5 * time.Second):
 				t.Fatal("run never saw the stop")
 			}
-			if tc.ordered && !revokedAtDone {
+			if !errors.Is(at.check, registry.ErrFenced) {
+				t.Fatalf("Check() when the run saw the stop = %v, want ErrFenced", at.check)
+			}
+			if tc.ordered && !at.revoked {
 				t.Fatal("the run saw ctx.Done() before its fence was revoked")
 			}
 			deadline := time.Now().Add(time.Second)
