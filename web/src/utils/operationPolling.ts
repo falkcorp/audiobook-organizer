@@ -1,9 +1,10 @@
 // file: web/src/utils/operationPolling.ts
-// version: 1.5.0
+// version: 1.6.0
 // guid: 9d8c7b6a-5f4e-3d2c-1b0a-9e8d7c6b5a4f
-// last-edited: 2026-09-12
+// last-edited: 2026-10-10
 
 import * as api from '../services/api';
+import * as ops from '../generated/ops';
 
 export interface PollOptions {
   intervalMs?: number;
@@ -79,38 +80,34 @@ export function pollOperation(
 }
 
 /**
- * isTerminal reports whether an operations-v2 status is final, i.e. the op will
- * never report progress again and a poller must stop.
- *
- * MATCH THE PREFIX, NOT A LIST. The backend mints a whole family of interrupted
- * statuses — interrupted, interrupted_quiesced, interrupted_dropped,
- * interrupted_restart — one per ResumePolicy. Its own v1 mirror function
- * (internal/operations/registry/legacy_op_status.go) used to enumerate them,
- * drifted behind the side that mints them, and left rows stuck at "pending"
- * forever with nothing logged. A poller that enumerates has the same failure:
- * it never stops, and the UI spins on an op that finished.
+ * isTerminal reports whether a poller must stop. It is the generated isSettled
+ * (web/src/generated/ops.ts, from internal/operations/state/state.go): the
+ * strict terminal statuses plus every interrupted* status, matched by prefix so
+ * a resume policy added later is covered the day it is minted. A poller that
+ * does not recognise a settled status never stops, and the UI spins on an op
+ * that finished.
  */
 export function isTerminal(status: string): boolean {
-  return ['completed', 'failed', 'canceled'].includes(status) || isInterrupted(status);
+  return ops.isSettled(status);
 }
 
 /**
  * isInterrupted reports whether a status belongs to the interrupted family:
- * the legacy bare "interrupted" plus every "interrupted_*". Prefix-matched for
- * the reason given on isTerminal. Mirrors the server's
- * registry.IsInterruptedStatus; a Retry on one of these resumes the SAME
- * operation in place rather than starting a new one.
+ * the legacy bare "interrupted" plus every "interrupted_*". Generated from the
+ * same table as the server's registry.IsInterruptedStatus; a Retry on one of
+ * these resumes the SAME operation in place rather than starting a new one.
  */
 export function isInterrupted(status: string): boolean {
-  return status === 'interrupted' || status.startsWith('interrupted_');
+  return ops.isInterrupted(status);
 }
 
 /**
  * isRetryable reports whether the Activity page offers Retry for a status:
- * failed, canceled and the interrupted family. Every status here is one the
- * server's retry endpoint accepts (isRetryableV2Status); completed is accepted
- * there too but deliberately not offered here.
+ * failed, canceled and the interrupted family (the table's retryable column).
+ * Every status here is one the server's retry endpoint accepts
+ * (isRetryableV2Status); completed is accepted there too but deliberately not
+ * offered here.
  */
 export function isRetryable(status: string): boolean {
-  return status === 'failed' || status === 'canceled' || isInterrupted(status);
+  return ops.isRetryable(status);
 }
