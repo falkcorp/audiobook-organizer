@@ -1,13 +1,12 @@
 // file: internal/metafetch/batch.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
-// last-edited: 2026-09-19
+// last-edited: 2026-10-10
 
 package metafetch
 
 import (
 	"errors"
-	"fmt"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 )
@@ -98,28 +97,6 @@ func CountByStatus(results []CandidateResult, status string) int {
 		}
 	}
 	return n
-}
-
-// LoadRejectedCandidateKeys finds previously rejected candidates for a book.
-// Uses a dedicated rejection key prefix for fast lookup instead of scanning
-// all operation results.
-func LoadRejectedCandidateKeys(store rejectedKeyScanner, bookID string) map[string]bool {
-	keys := make(map[string]bool)
-	// Scan only rejection keys for this specific book
-	pairs, err := store.ScanPrefix(fmt.Sprintf("rejected_candidate:%s:", bookID))
-	if err != nil {
-		return keys
-	}
-	for _, kv := range pairs {
-		// Key format: rejected_candidate:{bookID}:{source}|{title}
-		// Value is just "1" — we only need the key
-		keyStr := string(kv.Key)
-		prefix := fmt.Sprintf("rejected_candidate:%s:", bookID)
-		if len(keyStr) > len(prefix) {
-			keys[keyStr[len(prefix):]] = true
-		}
-	}
-	return keys
 }
 
 // applyRuntimeInfo copies a canonical runtime onto info. A file-read error

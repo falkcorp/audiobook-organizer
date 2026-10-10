@@ -270,6 +270,11 @@ func (h *Handler) applyCandidateCore(ctx context.Context, id string, cand metafe
 		if refusal := asinConflictRefusal(book, &cand, overrideASIN); refusal != nil {
 			return nil, refusal
 		}
+		// A candidate the owner rejected is never applied, not even by hand:
+		// the owner un-rejects it first (errOwnerRejected).
+		if rerr := ownerRejectedRefusal(h.store, id, &cand); rerr != nil {
+			return nil, rerr
+		}
 		overridden = asinConflictRefusal(book, &cand, "") != nil
 	}
 	// The apply writes the database first; the rename runs afterwards in the

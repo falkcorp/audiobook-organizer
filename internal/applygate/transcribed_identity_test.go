@@ -1,7 +1,7 @@
 // file: internal/applygate/transcribed_identity_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 329bd78d-e4ca-434d-aa8d-65f766d386a1
-// last-edited: 2026-10-04
+// last-edited: 2026-10-10
 
 package applygate
 
@@ -117,7 +117,7 @@ func TestEvaluateTranscribed(t *testing.T) {
 			if tc.identityErr != nil {
 				idErr = errors.Join(tc.identityErr, errors.New("book b1 (stored x, current y)"))
 			}
-			v := EvaluateTranscribed(book, f.authors, database.ComputeBookRuntime(book, nil), &cand, idErr, nil, tc.ts, ManualOnlyGuard{Bulk: true})
+			v := EvaluateTranscribed(book, f.authors, database.ComputeBookRuntime(book, nil), &cand, idErr, nil, nil, tc.ts, ManualOnlyGuard{Bulk: true})
 
 			if v.Allowed != tc.wantAllowed {
 				t.Fatalf("allowed = %v (reason %q: %s), want %v", v.Allowed, v.Reason, v.Detail, tc.wantAllowed)
@@ -203,7 +203,7 @@ func TestEvaluateTranscribed_BlocksTheTranscriptionCannotLift(t *testing.T) {
 			cand := tc.cand
 			cand.Author, cand.Score, cand.DurationSec, cand.Source = "Terry Pratchett", 0.95, 36000, "Audible"
 			ts := TranscribedSearch{Query: tc.heard, Source: "transcribed_title", ExplainsStaleIdentity: true, FirstFilePath: tc.firstFile}
-			v := EvaluateTranscribed(book, Authors{"Terry Pratchett"}, database.ComputeBookRuntime(book, nil), &cand, stale, nil, ts, ManualOnlyGuard{Bulk: true})
+			v := EvaluateTranscribed(book, Authors{"Terry Pratchett"}, database.ComputeBookRuntime(book, nil), &cand, stale, nil, nil, ts, ManualOnlyGuard{Bulk: true})
 			if v.Allowed != tc.wantAllowed {
 				t.Fatalf("allowed = %v (reason %q: %s), want %v", v.Allowed, v.Reason, v.Detail, tc.wantAllowed)
 			}
@@ -337,7 +337,9 @@ func TestEvaluateTranscribed_OwnerManualOnly(t *testing.T) {
 				Score: 0.95, DurationSec: 36000, Source: "Audible"}
 			ts := TranscribedSearch{Query: tc.transcribed, Source: "transcribed_title", ExplainsStaleIdentity: true}
 			v := EvaluateTranscribed(book, Authors{author}, database.ComputeBookRuntime(book, nil), &cand,
-				errors.Join(metafetch.ErrStaleMetadataCache), nil, ts, tc.guard)
+				errors.Join(metafetch.ErrStaleMetadataCache), nil, nil,
+				ts, tc.guard)
+
 			if v.Allowed != tc.wantAllowed {
 				t.Fatalf("allowed = %v (reason %q: %s), want %v", v.Allowed, v.Reason, v.Detail, tc.wantAllowed)
 			}

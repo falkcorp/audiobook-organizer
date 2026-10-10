@@ -819,6 +819,21 @@ export function QueueRail({
                     </IconButton>
                   </Tooltip>
                 )}
+                {/* The owner rejected this candidate: every apply button
+                    refuses it server-side, so say so on the row rather than
+                    let an apply come back blocked with no visible reason. */}
+                {r.owner_rejected === true && (
+                  <Tooltip title="You rejected this candidate for this book. It will not be applied by any button; un-reject it to apply it.">
+                    <Chip
+                      size="small"
+                      color="error"
+                      variant="outlined"
+                      label="Rejected"
+                      data-testid={`owner-rejected-${r.book.id}`}
+                      aria-label={`Candidate for ${r.book.title} was rejected by you`}
+                    />
+                  </Tooltip>
+                )}
                 {/* Explicitly false, not falsy: a row with no age is not a
                     stale row, and marking it as one would be a claim the
                     payload never made. */}
