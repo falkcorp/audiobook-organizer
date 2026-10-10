@@ -214,7 +214,7 @@ func (s *Server) RegisterBatchSaveToFilesOp(reg *opsregistry.Registry) error {
 				// and with the book lock now inside the call it would be
 				// path-then-book, the reverse of every apply's order: a deadlock
 				// against an apply of the same book.
-				wroteFiles, wbErr := s.metadataFetchService.WriteBackMetadataForBookContext(ctx, id)
+				wroteFiles, wbErr := writeBackBookFiles(s.metadataFetchService, ctx, id)
 				if wbErr != nil {
 					failed.Add(1)
 					detail := wbErr.Error()

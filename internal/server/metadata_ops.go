@@ -1090,7 +1090,7 @@ func (s *Server) runBulkWriteBack(
 		// one-second-granularity .bak- backup name).
 		// ctx carries the caller's tagger.WithoutBackup opt-out down to the
 		// tag and cover writes (WriteBackMetadataForBookContext).
-		count, writeErr := mfs.WriteBackMetadataForBookContext(ctx, bookID)
+		count, writeErr := writeBackBookFiles(mfs, ctx, bookID)
 
 		if writeErr != nil {
 			failed.Add(1)
