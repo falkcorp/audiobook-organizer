@@ -1,7 +1,7 @@
-// file: web/src/components/dedup/FolderFilesChip.test.tsx
-// version: 1.0.0
+// file: web/src/components/review/compare/FolderFilesChip.test.tsx
+// version: 1.1.0
 // guid: 7c3e1f84-9a02-4d16-b5e7-2f8d61a4c093
-// last-edited: 2026-09-01
+// last-edited: 2026-10-10
 //
 // Written alongside the perf change that stopped this component building its
 // <Popover> on every render. The component had NO tests at all, and the change
@@ -23,10 +23,10 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ThemeProvider } from '@mui/material/styles';
 import { FolderFilesChip } from './FolderFilesChip';
-import { appTheme } from '../../theme';
-import * as api from '../../services/api';
+import { appTheme } from '../../../theme';
+import * as api from '../../../services/api';
 
-vi.mock('../../services/api');
+vi.mock('../../../services/api');
 
 beforeEach(() => {
   // This project sets neither `clearMocks` nor `restoreMocks` in its vitest

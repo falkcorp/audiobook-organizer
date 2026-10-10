@@ -1,7 +1,7 @@
-// file: web/src/components/dedup/LabelToggle.tsx
-// version: 1.0.0
+// file: web/src/components/review/compare/LabelToggle.tsx
+// version: 1.1.0
 // guid: 6f1b8d39-4a27-4c50-9e83-1d7a5c0b2e64
-// last-edited: 2026-06-19
+// last-edited: 2026-10-10
 
 // LabelToggle is the 3-way segmented control for a dedup gold label:
 // [ Dup | Unsure | Not ]. The current label is highlighted (green / amber /

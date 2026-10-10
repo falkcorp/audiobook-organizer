@@ -1,7 +1,7 @@
 // file: web/src/components/review/DupesPanel.tsx
-// version: 1.7.0
+// version: 1.7.1
 // guid: 1d6f8a03-7c25-4e91-b840-2a5c9e3b7d14
-// last-edited: 2026-10-06
+// last-edited: 2026-10-10
 //
 // The dupes lane's full surface: filter rail, spine, bulk bar, compare drawer.
 //
@@ -34,7 +34,7 @@ import {
   Typography,
 } from '@mui/material';
 import type { DedupBand } from '../../services/api';
-import { CandidateCompareDrawer } from '../dedup/CandidateCompareDrawer';
+import { CandidateCompareDrawer } from './compare/CandidateCompareDrawer';
 import { SelectAllMatchingBanner } from '../common/SelectAllMatchingBanner';
 import { DupesSpine } from './spine/DupesSpine';
 import type { SpineViewMode } from './spine/CompareSpine';

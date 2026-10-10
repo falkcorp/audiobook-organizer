@@ -1,7 +1,7 @@
 // file: web/src/pages/DedupLabels.tsx
-// version: 1.4.2
+// version: 1.4.3
 // guid: 7e3a1c92-4b60-4d85-9f21-6a5e0c9d3f58
-// last-edited: 2026-08-19
+// last-edited: 2026-10-10
 
 // DedupLabels — the C6 gold-dataset review page for the dedup feedback loop.
 // Lists labeled dedup examples (the dedup:label: keyspace), filterable by label
@@ -35,7 +35,7 @@ import {
   Tab,
 } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
-import { LabelToggle } from '../components/dedup/LabelToggle';
+import { LabelToggle } from '../components/review/compare/LabelToggle';
 import { PathVarsLegend } from '../components/common/PathVarsLegend';
 import {
   ColumnPicker,

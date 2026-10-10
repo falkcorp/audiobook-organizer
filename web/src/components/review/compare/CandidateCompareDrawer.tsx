@@ -1,7 +1,7 @@
-// file: web/src/components/dedup/CandidateCompareDrawer.tsx
-// version: 1.10.0
+// file: web/src/components/review/compare/CandidateCompareDrawer.tsx
+// version: 1.11.0
 // guid: a6f7b8c9-d0e1-2345-fabc-af6789012345
-// last-edited: 2026-09-26
+// last-edited: 2026-10-10
 // CandidateCompareDrawer is a right-side Drawer that shows a full side-by-side
 // comparison of the two books in a dedup candidate, plus the score breakdown.
 // It fetches the breakdown data on open via GET /api/v1/dedup/candidates/:id/breakdown.
@@ -28,19 +28,19 @@ import MergeIcon from '@mui/icons-material/MergeType';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import { useNavigate } from 'react-router-dom';
-import * as api from '../../services/api';
+import * as api from '../../../services/api';
 import type {
   AcoustIDCompareResponse,
   DedupBookDetail,
   DedupCandidateBreakdownResponse,
   DedupSignal,
-} from '../../services/api';
+} from '../../../services/api';
 import { ScoreBadgeRow } from './ScoreBadgeRow';
-import { EvidencePanel } from '../review/evidence/EvidencePanel';
-import { dedupEvidence } from '../review/evidence/adapters';
+import { EvidencePanel } from '../evidence/EvidencePanel';
+import { dedupEvidence } from '../evidence/adapters';
 // One label map for every surface. This file kept its own near-duplicate until
 // 2026-09-01; it had already drifted from the other two copies.
-import { isPrimaryKind, signalLabel } from '../review/evidence/signalLabels';
+import { isPrimaryKind, signalLabel } from '../evidence/signalLabels';
 import { FileInfoCompare } from './FileInfoCompare';
 import { AudioSamplePair } from './AudioSamplePair';
 import { FingerprintPair } from './FingerprintCanvas';

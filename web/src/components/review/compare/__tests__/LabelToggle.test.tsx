@@ -1,7 +1,7 @@
-// file: web/src/components/dedup/__tests__/LabelToggle.test.tsx
-// version: 1.0.0
+// file: web/src/components/review/compare/__tests__/LabelToggle.test.tsx
+// version: 1.1.0
 // guid: 2a9d7e14-5c83-4b60-9f02-6e1a8c3d5b47
-// last-edited: 2026-06-19
+// last-edited: 2026-10-10
 
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';

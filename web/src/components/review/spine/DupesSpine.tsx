@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/DupesSpine.tsx
-// version: 1.5.0
+// version: 1.5.1
 // guid: 9c4e7b21-6a58-4d03-8b7f-1e5d2a9c6403
-// last-edited: 2026-10-06
+// last-edited: 2026-10-10
 //
 // The duplicate-candidate renderer: book against book.
 //
@@ -44,7 +44,7 @@ import type { DupesAction } from '../reviewActions';
 import { dedupEvidence } from '../evidence/adapters';
 import { primarySignals } from '../evidence/signalLabels';
 import { EvidencePanel } from '../evidence/EvidencePanel';
-import { FolderFilesChip } from '../../dedup/FolderFilesChip';
+import { FolderFilesChip } from '../compare/FolderFilesChip';
 import { metadataQuality, qualityBand, recommendedKeepSide } from '../lanes/keepDecision';
 import { PathLinks, usePathAliases } from '../../common/PathLinks';
 import type { SpineViewMode } from './CompareSpine';
