@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_importpaths.go
 // version: 1.5.2
 // guid: eb97f1d9-af89-4dc7-add9-70ab7c30d137
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package database
 

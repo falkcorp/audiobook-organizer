@@ -1,7 +1,7 @@
 // file: internal/database/memdb_metrics_test.go
-// version: 1.0.3
+// version: 1.0.4
 // guid: c27e5a90-4d13-4b68-8f0e-9a1b6d3c5e74
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package database
 
@@ -141,8 +141,8 @@ func TestMemOrFallback_CountsOnlyUnreadyReadsAndShowsOnMetrics(t *testing.T) {
 //	if s.UseMemDB { if m := s.mem(); m != nil { ... } }
 //	if !p.UseMemDB { return err }; m := p.mem(); if m == nil { return err }
 //
-// The rule: a function that both reads the UseMemDB flag and calls .mem()
-// directly is a hand-rolled guard. Only the helpers themselves may.
+// The rule: a function that both reads the UseMemDB flag and touches .mem,
+// .memPtr or .IsMemReady (called or as a method value) is a hand-rolled guard. Only the helpers themselves may.
 func TestNoRawMemdbReadGuards(t *testing.T) {
 	allowed := map[string]bool{"memOr": true}
 	files, err := filepath.Glob("*.go")
@@ -163,13 +163,14 @@ func TestNoRawMemdbReadGuards(t *testing.T) {
 			var readsFlag, callsMem bool
 			var memPos token.Pos
 			ast.Inspect(fd.Body, func(n ast.Node) bool {
-				switch x := n.(type) {
-				case *ast.SelectorExpr:
-					if x.Sel.Name == "UseMemDB" {
+				// Any selector of the memdb accessors counts, called or not: a
+				// method value (f := p.mem) or a direct memPtr / IsMemReady
+				// check is the same hand-rolled guard.
+				if x, ok := n.(*ast.SelectorExpr); ok {
+					switch x.Sel.Name {
+					case "UseMemDB":
 						readsFlag = true
-					}
-				case *ast.CallExpr:
-					if sel, ok := x.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "mem" && len(x.Args) == 0 {
+					case "mem", "memPtr", "IsMemReady":
 						callsMem = true
 						memPos = x.Pos()
 					}
@@ -177,7 +178,7 @@ func TestNoRawMemdbReadGuards(t *testing.T) {
 				return true
 			})
 			if readsFlag && callsMem {
-				t.Errorf("%s: %s reads UseMemDB and calls .mem() directly: use p.memOrFallback(site) (or memOrRefuse when there is no Pebble path) so the unmet read is counted",
+				t.Errorf("%s: %s reads UseMemDB and uses .mem/.memPtr/.IsMemReady directly: use p.memOrFallback(site) (or memOrRefuse when there is no Pebble path) so the unmet read is counted",
 					fset.Position(memPos), fd.Name.Name)
 			}
 		}

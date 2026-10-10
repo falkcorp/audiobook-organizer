@@ -1,7 +1,7 @@
 // file: internal/telemetry/attr.go
 // version: 1.1.1
 // guid: 7f188355-4355-41fd-ac81-763e2e6c74a6
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package telemetry
 

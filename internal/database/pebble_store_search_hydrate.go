@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_search_hydrate.go
 // version: 1.0.1
 // guid: 5d7c2f1e-8a43-4b6e-9d1f-2c7a0e4b8f63
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package database
 

@@ -1,7 +1,7 @@
 // file: internal/telemetry/contract/series_contract_test.go
 // version: 1.2.1
 // guid: c0ffe83b-1164-4b85-915e-820f693efdc1
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 // Package contract pins the /metrics series-name contract: the name, type and
 // label names of every Prometheus family the binary exports, read from

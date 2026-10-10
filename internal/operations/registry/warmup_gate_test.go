@@ -1,5 +1,5 @@
 // file: internal/operations/registry/warmup_gate_test.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 3e8c1a74-5b92-4f06-a1d7-0c6b9e2f4a53
 // last-edited: 2026-10-10
 
@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
@@ -296,4 +297,77 @@ func TestDispatch_ExemptDefRunsWhileWarmingAndHeldOpTakesNoSlot(t *testing.T) {
 	}
 	close(store.release)
 	awaitStatus(t, store.fakeStore, heldID, "completed", 5*time.Second)
+}
+
+// cancelAfterSnapshotStore returns the queued snapshot the dispatcher asked for
+// and THEN cancels those rows, reproducing a cancel that lands between a
+// dispatch cycle's snapshot and its announce.
+type cancelAfterSnapshotStore struct {
+	*warmingStore
+	once sync.Once
+}
+
+func (c *cancelAfterSnapshotStore) ListQueuedOperationsV2() ([]database.OperationV2Row, error) {
+	rows, err := c.warmingStore.ListQueuedOperationsV2()
+	if len(rows) > 0 {
+		c.once.Do(func() {
+			now := time.Now().UTC()
+			for _, r := range rows {
+				_ = c.warmingStore.UpdateOperationV2Status(r.ID, "canceled", nil, &now, nil)
+			}
+		})
+	}
+	return rows, err
+}
+
+// A cancel between the cycle's queued snapshot and the announce must never
+// leave a canceled row saying "waiting for startup warmup", nor publish
+// op.updated for it.
+func TestDispatch_CancelAfterSnapshotNeverLeavesWaitMessage(t *testing.T) {
+	ctx := t.Context()
+	store := &cancelAfterSnapshotStore{warmingStore: newWarmingStore()}
+	bus := &warmupRecordingBus{}
+	r := registry.New(store, slog.Default(), 1, bus)
+	_ = r.RegisterOp(makeValidDef("test.w-snap-cancel"))
+	r.Start(ctx)
+
+	opID, _ := r.EnqueueOp(ctx, "test.w-snap-cancel", nil)
+	time.Sleep(500 * time.Millisecond)
+	row, _ := store.GetOperationV2(opID)
+	if row.Status != "canceled" {
+		t.Fatalf("status = %q, want canceled", row.Status)
+	}
+	if row.ProgressMessage == operations.WarmupStatusMessage {
+		t.Fatal("a canceled row was left saying \"waiting for startup warmup\"")
+	}
+	if n := bus.count("op.updated"); n != 0 {
+		t.Fatalf("op.updated published %d times for a row that was never written", n)
+	}
+}
+
+// Holding an op touches neither high_water_progress nor last_progress_at (the
+// watchdog and checkInfiniteRestart read them).
+func TestDispatch_HoldLeavesWatermarkAndLivenessUntouched(t *testing.T) {
+	ctx := t.Context()
+	store := newWarmingStore()
+	r := registry.New(store, slog.Default(), 1, nil)
+	def := makeValidDef("test.w-hold-hwm")
+	def.SummarizeQueued = func(json.RawMessage) (int, int, string) { return 3, 4, "summary" }
+	_ = r.RegisterOp(def)
+	r.Start(ctx)
+
+	opID, _ := r.EnqueueOp(ctx, "test.w-hold-hwm", nil)
+	time.Sleep(500 * time.Millisecond)
+	row, _ := store.GetOperationV2(opID)
+	if row.ProgressMessage != operations.WarmupStatusMessage {
+		t.Fatalf("op was not announced as held (message %q)", row.ProgressMessage)
+	}
+	if row.HighWaterProgress != 0 {
+		t.Fatalf("high_water_progress = %d after a hold, want 0", row.HighWaterProgress)
+	}
+	if row.LastProgressAt != nil {
+		t.Fatalf("last_progress_at = %v after a hold, want nil", row.LastProgressAt)
+	}
+	close(store.release)
+	awaitStatus(t, store.fakeStore, opID, "completed", 5*time.Second)
 }

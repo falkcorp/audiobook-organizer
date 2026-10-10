@@ -1,5 +1,5 @@
 // file: internal/operations/warmup_gate_test.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 8a4d2f61-7e03-4c9b-b5a8-1d6e3f0c7b92
 // last-edited: 2026-10-10
 
@@ -55,6 +55,21 @@ func TestWarmupGate_ReleasesAtTheBound(t *testing.T) {
 	}
 	if g.Holding(t0.Add(WarmupWaitTimeout+time.Hour), s, slog.Default()) {
 		t.Fatal("held again after the bound")
+	}
+}
+
+// Once warmup is seen done the clock resets, so a later warm-up gets a full bound.
+func TestWarmupGate_ResetsAfterDone(t *testing.T) {
+	var g WarmupGate
+	s := &fakeStatus{}
+	t0 := time.Unix(1000, 0)
+	g.Holding(t0, s, slog.Default())
+	s.done = true
+	g.Holding(t0.Add(time.Second), s, slog.Default())
+	s.done = false
+	later := t0.Add(2 * WarmupWaitTimeout)
+	if !g.Holding(later, s, slog.Default()) {
+		t.Fatal("a second warm-up was released immediately: the first one's clock leaked")
 	}
 }
 
