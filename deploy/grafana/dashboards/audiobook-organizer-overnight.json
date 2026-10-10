@@ -1232,8 +1232,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (def_id) (audiobook_organizer_ops_items_total)",
-          "legendFormat": "{{def_id}} (ops_items_total)",
+          "expr": "sum by (def_id) (increase(audiobook_organizer_ops_items_total[30m]))",
+          "legendFormat": "{{def_id}} items/30m",
           "range": true,
           "refId": "B"
         }

@@ -1,5 +1,5 @@
 # file: deploy/prometheus/alert-rules.yml
-# version: 1.3.0
+# version: 1.3.1
 # guid: d2e3f4a5-b6c7-4d8e-9f0a-1b2c3d4e5f6a
 # last-edited: 2026-10-10
 #
@@ -47,19 +47,21 @@ groups:
       # listed so the rule stays correct once 05-PR2 produces it; until then a
       # deadline hit is recorded as outcome=canceled, which this rule does not
       # count (the old operations_failed_total did not count timeouts either).
+      # Summed by def_id so it keeps the old rule's per-operation threshold
+      # (the old rule fires per op_type series) and def_id lands on the alert.
       # Soak until 2026-11-09 beside the old rule, then keep only this one.
       - alert: AudiobookOrganizerOpFailuresHighV2
-        expr: sum(rate(audiobook_organizer_ops_runs_total{outcome=~"failed|timed_out"}[15m])) > 0.1
+        expr: sum by (def_id) (rate(audiobook_organizer_ops_runs_total{outcome=~"failed|timed_out"}[15m])) > 0.1
         for: 10m
         labels:
           severity: warning
         annotations:
           summary: "audiobook-organizer operation failure rate is high"
           description: >-
-            Operation failure rate (failed and timed-out runs, all
-            operation definitions) has exceeded 0.1/s over 15m for at
-            least 10 minutes. Group audiobook_organizer_ops_runs_total by
-            def_id to find the failing operation.
+            Operation {{ $labels.def_id }} has had more than 0.1/s failed
+            or timed-out runs over 15m for at least 10 minutes. Check
+            `journalctl -u audiobook-organizer` and the Operations tab for
+            that operation's recent failures.
 
       # OPS-4: covers "AI backend (OpenAI/local Ollama) down" — the case
       # that was previously only discovered via OpenAI quota exhaustion
@@ -183,30 +185,42 @@ groups:
             /api/v1/operations/v2/{{ $labels.op_id }} for the last log line.
 
       # OTel replacement for AudiobookOrganizerOpStalled (11-PR4). Fires per
-      # def_id when that def has runs in flight and has counted no items in
-      # 30 minutes. ops_inflight and ops_items_total carry def_id (plus
-      # plugin / outcome), so the two sides are joined with `unless on
-      # (def_id)` after summing each to def_id; a plain `A and rate(B) == 0`
-      # never matches because the label sets differ. A def that has never
-      # produced an item has no ops_items_total series, so the right-hand
-      # side is empty and the alert fires for it too, which is what a run
-      # that is wedged before its first item looks like.
-      # NOT the legacy per-run gauge audiobook_organizer_op_items_total (no
-      # "s" in "ops"): audiobook_organizer_ops_items_total is the OTel counter.
+      # def_id when the most idle executing run of that def has not called
+      # UpdateProgress for 30 minutes.
+      # audiobook_organizer_ops_progress_age_seconds is read from the
+      # registry's in-memory runHandle.lastProgressAt, the clock the stuck-op
+      # watchdog uses, at scrape time. Every UpdateProgress stamps it,
+      # including a heartbeat that repeats the same value. So a phase that
+      # reports a constant current is alive while it keeps reporting: a
+      # database backup at 0/0, or a hash pass pinned at total/total. Item
+      # throughput (rate of ops_items_total) cannot see those phases and
+      # would fire on them. (That counter is audiobook_organizer_ops_items_total,
+      # plural "ops", NOT the legacy per-run gauge
+      # audiobook_organizer_op_items_total.)
+      # A run that has not reported yet in this attempt is aged from the
+      # attempt's start. A run claimed by the dispatcher but not yet picked
+      # up by a worker has no age and cannot fire this rule.
+      # The gauge reads 0 once a def has no executing run, so a finished
+      # run clears the alert at the next scrape.
+      # for: 5m, not 30m. The 30 minutes are already in the threshold (age >
+      # 1800 s), so `for` only rides out a missed scrape or a restart, and
+      # the alert fires about 35 minutes into a silence. for: 30m would make
+      # it about 60.
+      # The watchdog cancels a run silent for longer than its def's
+      # ProgressTimeout (5m by default). This rule therefore fires for defs
+      # with a ProgressTimeout above 30m, or when the watchdog failed to stop
+      # a run.
       # Soak until 2026-11-09 beside the old rule.
       - alert: AudiobookOrganizerOpStalledV2
-        expr: >-
-          sum by (def_id) (audiobook_organizer_ops_inflight) > 0
-          unless on (def_id)
-          sum by (def_id) (rate(audiobook_organizer_ops_items_total[30m])) > 0
-        for: 30m
+        expr: max by (def_id) (audiobook_organizer_ops_progress_age_seconds) > 1800
+        for: 5m
         labels:
           severity: warning
         annotations:
           summary: "audiobook-organizer operation appears stalled"
           description: >-
-            Operation {{ $labels.def_id }} has had runs in flight for at
-            least 30 minutes with no items processed in that window,
+            Operation {{ $labels.def_id }} has a run in flight that has
+            not reported progress for {{ $value | humanizeDuration }},
             which is likely wedged rather than merely slow. Check
             `journalctl -u audiobook-organizer` and the Operations tab for
             that operation's last log line.
