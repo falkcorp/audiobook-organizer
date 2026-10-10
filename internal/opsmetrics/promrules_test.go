@@ -1,5 +1,5 @@
 // file: internal/opsmetrics/promrules_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c4e8a1b6-52d9-4730-9f1a-7b3d6e0c8a25
 // last-edited: 2026-10-10
 
@@ -89,10 +89,13 @@ func TestPromRules_YAMLParse(t *testing.T) {
 		t.Errorf("OpFailuresHighV2 missing or wrong: %q", v2f)
 	}
 	// The stall rule reads the progress-age gauge (liveness), not item
-	// throughput, which cannot see a phase that heartbeats a constant value.
+	// throughput, which cannot see a phase that heartbeats a constant value,
+	// and judges it against the def's own watchdog budget with a 30m floor,
+	// so a LivenessNone def allowed 2h of silence does not page at 30m.
+	// alert-rules.test.yml pins the behaviour; this pins the shape.
 	v2s, ok := alerts["AudiobookOrganizerOpStalledV2"]
 	if !ok || !strings.Contains(v2s, "max by (def_id) (audiobook_organizer_ops_progress_age_seconds)") ||
-		!strings.Contains(v2s, "> 1800") {
+		!strings.Contains(v2s, "clamp_min(max by (def_id) (audiobook_organizer_ops_progress_timeout_seconds), 1800)") {
 		t.Errorf("OpStalledV2 missing or wrong: %q", v2s)
 	}
 	if _, ok := records["audiobook_organizer:ops_items_by_op_type:sum"]; !ok {
@@ -107,8 +110,9 @@ func TestPromRules_YAMLParse(t *testing.T) {
 	}
 }
 
-// TestPromRules_Promtool runs promtool check rules over every rule file when
-// the binary is on PATH.
+// TestPromRules_Promtool runs promtool check rules over every rule file, and
+// promtool test rules over every rule test file (*.test.yml), when the binary
+// is on PATH.
 func TestPromRules_Promtool(t *testing.T) {
 	bin, err := exec.LookPath("promtool")
 	if err != nil {
@@ -122,6 +126,18 @@ func TestPromRules_Promtool(t *testing.T) {
 		out, err := exec.Command(bin, "check", "rules", f).CombinedOutput()
 		if err != nil {
 			t.Errorf("promtool check rules %s: %v\n%s", filepath.Base(f), err, out)
+		}
+	}
+	tests, err := filepath.Glob(filepath.Join(promDir, "*.test.yml"))
+	if err != nil || len(tests) == 0 {
+		t.Fatalf("no rule test files under %s (err %v)", promDir, err)
+	}
+	for _, f := range tests {
+		// promtool resolves rule_files relative to the test file.
+		cmd := exec.Command(bin, "test", "rules", filepath.Base(f))
+		cmd.Dir = filepath.Dir(f)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Errorf("promtool test rules %s: %v\n%s", filepath.Base(f), err, out)
 		}
 	}
 }

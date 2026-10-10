@@ -1,5 +1,5 @@
 <!-- file: deploy/prometheus/README.md -->
-<!-- version: 1.2.1 -->
+<!-- version: 1.3.0 -->
 <!-- guid: e3f4a5b6-c7d8-4e9f-0a1b-2c3d4e5f6a7b -->
 <!-- last-edited: 2026-10-10 -->
 
@@ -36,7 +36,8 @@ something to plug into their own Prometheus + Alertmanager install.
 
 **Dual-rule soak (11-PR4).** Operation metrics now exist as OTel instruments
 (`audiobook_organizer_ops_runs_total`, `..._ops_run_duration_seconds`,
-`..._ops_items_total`, `..._ops_inflight`, `..._ops_progress_age_seconds`; note
+`..._ops_items_total`, `..._ops_inflight`, `..._ops_progress_age_seconds`,
+`..._ops_progress_timeout_seconds`; note
 the plural `ops`, which is not the legacy per-run gauge `op_items_total`).
 `alert-rules.yml` carries `AudiobookOrganizerOpFailuresHighV2` and
 `AudiobookOrganizerOpStalledV2` beside the two original rules, and the legacy
@@ -46,12 +47,29 @@ and the legacy gauges are deleted in a follow-up (see `todo.d/`).
 When comparing the two stall rules during the soak, note that they measure
 different things. The old rule fires on zero item throughput per run. V2
 fires when a def's most idle executing run has not called `UpdateProgress`
-for 30 minutes, and a heartbeat that repeats the same value counts as
-progress. V2 is therefore expected to stay quiet where the old rule fires on
+for longer than that def's own silence budget
+(`..._ops_progress_timeout_seconds`, the effective `ProgressTimeout`), with a
+30-minute floor, and a heartbeat that repeats the same value counts as
+progress. So V2 asks "did the watchdog fail to stop this run?": a 5-minute
+default def pages after 30 minutes of silence, while a LivenessNone def that
+declares 2 hours (`scheduler.dedup-llm-review`) stays quiet for those 2 hours. V2 is therefore expected to stay quiet where the old rule fires on
 phases that report a constant value, such as the pre-organize database backup
 at 0/0 or the iTunes hash pass pinned at total/total. Both rules are
 pre-empted by the registry watchdog, which cancels a run that is silent for
-longer than its def's `ProgressTimeout` (5 minutes by default).
+longer than its def's `ProgressTimeout` (5 minutes by default, up to 2 hours
+for the LivenessNone defs: `scheduler.dedup-llm-review` 2h;
+`scheduler.trash-cleanup`, `scheduler.cleanup-old-backups`,
+`scheduler.temp-file-cleanup`, AI journal prune and recompact activity digests
+1h; `maintenance.activity-reclaim` and `maintenance.optimize-activity-db`
+45m). The old rule can fire inside those budgets on a def that reports a start
+marker and then goes quiet; V2 does not, which is an expected soak
+difference.
+
+`alert-rules.test.yml` holds `promtool test rules` cases for V2 (a 2h-budget
+def silent 60 minutes stays quiet; a default def silent 40 minutes fires). Run
+`promtool test rules alert-rules.test.yml` from this directory; the Go test
+`internal/opsmetrics` `TestPromRules_Promtool` runs it when `promtool` is on
+`PATH`.
 
 Neither file is installed, run, or evaluated by this repo. See
 [`docs/system/runbooks.md`](../../docs/system/runbooks.md), section

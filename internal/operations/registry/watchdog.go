@@ -1,7 +1,7 @@
 // file: internal/operations/registry/watchdog.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 2b3c4d5e-6f7a-8901-bcde-f01234567890
-// last-edited: 2026-10-03
+// last-edited: 2026-10-10
 
 package registry
 
@@ -16,6 +16,17 @@ const (
 	defaultProgressTimeout      = 5 * time.Minute
 	defaultMinCheckpointTimeout = 5 * time.Minute // window before uncheckpointed strike
 )
+
+// effectiveProgressTimeout is the silence budget the watchdog allows one run
+// of def: def.ProgressTimeout, or defaultProgressTimeout when the def leaves it
+// 0. The ops.progress_timeout gauge (inflightByDef) reports the same value, so
+// the stall alert and the watchdog cannot disagree about a def's budget.
+func effectiveProgressTimeout(def OperationDef) time.Duration {
+	if def.ProgressTimeout == 0 {
+		return defaultProgressTimeout
+	}
+	return def.ProgressTimeout
+}
 
 // runWatchdog runs every watchdogInterval and inspects all in-flight ops.
 // It writes strikes for:
@@ -90,10 +101,7 @@ func (r *Registry) watchdogCycle() {
 		// --- Strike: stuck ---
 		// Cancel the op's context. The worker detects cancellation and sets
 		// terminal status when Run returns; we do NOT set status here.
-		progressTimeout := def.ProgressTimeout
-		if progressTimeout == 0 {
-			progressTimeout = defaultProgressTimeout
-		}
+		progressTimeout := effectiveProgressTimeout(def)
 		// Prefer the in-memory atomic clock over the DB row: if the reporter has
 		// stamped lastProgressAt (non-zero), use it — this avoids false-positive
 		// cancellations when UpdateOpProgressV2 is queued behind PebbleDB L0

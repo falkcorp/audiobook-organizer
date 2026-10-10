@@ -1,5 +1,5 @@
 // file: internal/opsmetrics/opsmetrics_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 91c2e7d5-3a48-4b0f-8e16-d5a70c3f2b84
 // last-edited: 2026-10-10
 
@@ -143,7 +143,7 @@ func TestNoRunIDAttribute(t *testing.T) {
 	rec.Finished("t.keys", "failed", time.Second)
 	rec.Items("t.keys", ItemsProcessed, 1)
 	unreg := rec.RegisterInflight(func() map[InflightKey]InflightStat {
-		return map[InflightKey]InflightStat{{DefID: "t.keys", Plugin: "p"}: {Runs: 1, ProgressAge: time.Second}}
+		return map[InflightKey]InflightStat{{DefID: "t.keys", Plugin: "p"}: {Runs: 1, ProgressAge: time.Second, ProgressTimeout: time.Minute}}
 	})
 	defer unreg()
 	for name, m := range collect() {
@@ -187,9 +187,9 @@ func TestNoRunIDAttribute(t *testing.T) {
 func TestInflightReportsZeroAfterRunsEnd(t *testing.T) {
 	RegisterDefID("t.inflight")
 	rec, collect := newRig(t)
-	cur := map[InflightKey]InflightStat{{DefID: "t.inflight", Plugin: "p"}: {Runs: 2, ProgressAge: 90 * time.Second}}
+	cur := map[InflightKey]InflightStat{{DefID: "t.inflight", Plugin: "p"}: {Runs: 2, ProgressAge: 90 * time.Second, ProgressTimeout: time.Hour}}
 	unreg := rec.RegisterInflight(func() map[InflightKey]InflightStat { return cur })
-	read := func() (int64, float64) {
+	read := func() (int64, float64, float64) {
 		m := collect()
 		g, ok := m["audiobook_organizer.ops.inflight"].Data.(metricdata.Gauge[int64])
 		if !ok || len(g.DataPoints) != 1 {
@@ -199,14 +199,18 @@ func TestInflightReportsZeroAfterRunsEnd(t *testing.T) {
 		if !ok || len(a.DataPoints) != 1 {
 			t.Fatalf("want one progress_age point, got %+v", a)
 		}
-		return g.DataPoints[0].Value, a.DataPoints[0].Value
+		to, ok := m["audiobook_organizer.ops.progress_timeout"].Data.(metricdata.Gauge[float64])
+		if !ok || len(to.DataPoints) != 1 {
+			t.Fatalf("want one progress_timeout point, got %+v", to)
+		}
+		return g.DataPoints[0].Value, a.DataPoints[0].Value, to.DataPoints[0].Value
 	}
-	if runs, age := read(); runs != 2 || age != 90 {
-		t.Fatalf("inflight = %d, progress_age = %v; want 2 and 90", runs, age)
+	if runs, age, budget := read(); runs != 2 || age != 90 || budget != 3600 {
+		t.Fatalf("inflight = %d, progress_age = %v, progress_timeout = %v; want 2, 90 and 3600", runs, age, budget)
 	}
 	cur = map[InflightKey]InflightStat{}
-	if runs, age := read(); runs != 0 || age != 0 {
-		t.Errorf("after the runs ended inflight = %d, progress_age = %v; want 0 and 0", runs, age)
+	if runs, age, budget := read(); runs != 0 || age != 0 || budget != 0 {
+		t.Errorf("after the runs ended inflight = %d, progress_age = %v, progress_timeout = %v; want 0, 0 and 0", runs, age, budget)
 	}
 	before := ActiveInflightCallbacks()
 	unreg()
@@ -223,8 +227,8 @@ func TestInflightFoldsKeys(t *testing.T) {
 	rec, collect := newRig(t)
 	unreg := rec.RegisterInflight(func() map[InflightKey]InflightStat {
 		return map[InflightKey]InflightStat{
-			{DefID: "unregistered-a", Plugin: "p"}: {Runs: 1, ProgressAge: 10 * time.Second},
-			{DefID: "unregistered-b", Plugin: "p"}: {Runs: 2, ProgressAge: 40 * time.Minute},
+			{DefID: "unregistered-a", Plugin: "p"}: {Runs: 1, ProgressAge: 10 * time.Second, ProgressTimeout: 2 * time.Hour},
+			{DefID: "unregistered-b", Plugin: "p"}: {Runs: 2, ProgressAge: 40 * time.Minute, ProgressTimeout: 5 * time.Minute},
 		}
 	})
 	defer unreg()
@@ -242,6 +246,10 @@ func TestInflightFoldsKeys(t *testing.T) {
 	}
 	if a.DataPoints[0].Value != 2400 {
 		t.Errorf("folded progress_age = %v, want 2400 (the max)", a.DataPoints[0].Value)
+	}
+	to := m["audiobook_organizer.ops.progress_timeout"].Data.(metricdata.Gauge[float64])
+	if len(to.DataPoints) != 1 || to.DataPoints[0].Value != 7200 {
+		t.Errorf("folded progress_timeout = %+v, want one point of 7200 (the max)", to.DataPoints)
 	}
 }
 

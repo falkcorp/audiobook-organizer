@@ -1,5 +1,5 @@
 // file: internal/operations/registry/registry.go
-// version: 3.35.2
+// version: 3.36.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-10-10
 
@@ -1680,8 +1680,8 @@ func phaseNames(phases []Phase) []string {
 	return names
 }
 
-// registerInflightGauge registers the ops.inflight / ops.progress_age
-// callback over r.running, the authoritative set of runs holding a slot. The
+// registerInflightGauge registers the ops.inflight / ops.progress_age /
+// ops.progress_timeout callback over r.running, the authoritative set of runs holding a slot. The
 // callback reads the map at collection time under r.mu, so there is no counter
 // pair whose missed decrement could leave a permanent false in-flight run (and
 // a false OpStalledV2 alert). Idempotent until unregisterInflightGauge.
@@ -1714,6 +1714,14 @@ func (r *Registry) unregisterInflightGauge() {
 // handle has neither stamp (no worker has picked the run up), so it counts as
 // in flight but contributes no age; computing now - 0 for it would read as a
 // decades-long stall on every run queued behind a saturated pool.
+//
+// ProgressTimeout is the def's effective watchdog budget, resolved by the
+// watchdog's own effectiveProgressTimeout, so
+// the stall alert judges a LivenessNone def that declares 2h of silence
+// against 2h rather than a flat 30m. A def that no longer resolves gets the
+// default. The def is read with lookupDefLocked under the r.mu.RLock this
+// function already holds: lookupDef would take r.mu.RLock a second time, and a
+// recursive RLock deadlocks once a writer is queued between the two.
 func (r *Registry) inflightByDef() map[opsmetrics.InflightKey]opsmetrics.InflightStat {
 	now := r.livenessClock()
 	r.mu.RLock()
@@ -1723,6 +1731,10 @@ func (r *Registry) inflightByDef() map[opsmetrics.InflightKey]opsmetrics.Infligh
 		k := opsmetrics.InflightKey{DefID: h.defID, Plugin: h.plugin}
 		st := out[k]
 		st.Runs++
+		if st.ProgressTimeout == 0 {
+			def, _ := r.lookupDefLocked(h.defID) // zero def -> the default
+			st.ProgressTimeout = effectiveProgressTimeout(def)
+		}
 		ts := h.lastProgressAt.Load()
 		if ts == 0 {
 			ts = h.attemptStartedAt.Load()

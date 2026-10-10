@@ -1,5 +1,5 @@
 // file: internal/operations/registry/reporter_db.go
-// version: 1.14.0
+// version: 1.15.0
 // guid: 1a2b3c4d-5e6f-7890-abcd-ef0123456789
 // last-edited: 2026-10-10
 
@@ -885,7 +885,7 @@ func attrsToJSON(attrs []slog.Attr) string {
 // processedItems converts one run attempt's UpdateProgress(current, total)
 // stream into increments of ops.items{outcome=processed}.
 //
-// Progress is not a single climbing number. Three shapes occur in the tree and
+// Progress is not a single climbing number. These shapes occur in the tree and
 // each needs a different response:
 //
 //   - Phase resets. A multi-phase op restarts current at 0 for each phase,
@@ -893,9 +893,20 @@ func attrsToJSON(attrs []slog.Attr) string {
 //     fetch, then scan, then organize; dedup/series_dedup.go). A single
 //     high-water mark for the whole run counts nothing in any phase that does
 //     not climb past the previous phase's peak, which made OpStalledV2 fire on
-//     healthy multi-phase runs. So progress is split into segments: a report
-//     below the mark starts a new segment when current is 0 or the total
-//     changed, and the new segment's mark is that report (it adds nothing).
+//     healthy multi-phase runs. So progress is split into segments: any report
+//     with current <= 0 starts a new segment at 0 (organizer's (0,0) before
+//     the reload and before the pre-organize backup is such a separator), and
+//     a report below the mark with a changed total starts a segment at that
+//     report (it adds nothing).
+//   - Indeterminate reports. A report with current > 0 and total <= 0 has no
+//     denominator and is dropped: it neither adds nor starts a segment.
+//     folder.autoscan hands one reporter to ScanDirectoryParallel, whose
+//     workers interleave a folder stream (dirsScanned, len(dirs)) with a file
+//     stream (filesScanned, 0) (scanner/scanner.go). Treating the two as one
+//     stream re-added nearly the whole file count at every switch from a
+//     folder report back to a file report, an overcount that grew without
+//     bound. Dropping the indeterminate stream counts the folders exactly. An
+//     op that only ever reports (n, 0) therefore counts nothing.
 //   - Out-of-order reports. registry.RunItems workers report concurrently, so
 //     11 can arrive after 12 with the same total. That is not a new phase: a
 //     decrease with the same total and a non-zero current is ignored, and the
@@ -907,22 +918,42 @@ func attrsToJSON(attrs []slog.Attr) string {
 //
 // The mark is seeded from the row's persisted progress when the attempt
 // starts (newProcessedItems), so a resumed attempt whose first report is its
-// checkpoint position does not count the checkpointed items a second time. The
-// persisted value can trail the previous attempt's last report by up to one
-// lazy-flush interval (ProgressFlushInterval, 30s by default), so a resume can
-// still over-count by that much; it is bounded and affects throughput only.
+// checkpoint position (metadata.batch-apply-cached reports (priorDone, total)
+// first) does not count the checkpointed items a second time. The persisted
+// value can trail the previous attempt's last report by up to one lazy-flush
+// interval (ProgressFlushInterval, 30s by default), so such a resume can still
+// over-count by that much; it is bounded and affects throughput only.
 //
-// A run that skips the 0 report and starts a new phase above the old mark
-// with a different total is read as continuing growth and adds current - mark;
-// the first report of a phase that does start below the mark adds nothing.
-// Both errors are bounded by one report and only affect throughput.
+// The seed can also be too high: progress is not cleared on requeue, so a
+// manual retry of a ResumeRequeue def (which reruns from zero) or a RunItems
+// resume whose checkpoint trails the flushed progress starts below it, and
+// RunItems' first report is offset+1, not a 0 marker. So the first
+// determinate report of an attempt is special: below the seed it starts a
+// segment there (adding nothing, whatever the total), at or above it adds
+// current - seed as usual.
+//
+// Known limits, both bounded and throughput-only:
+//   - Within an attempt, a new phase over the same total that starts at a
+//     non-zero value below the mark with no (0, ...) marker (a 1-based i+1
+//     loop) is read as late out-of-order reports: every report of that phase
+//     is lost until it climbs past the old mark, not just its first. No live
+//     site has that shape today (the organizer and dedup phases emit a 0
+//     marker), and a phase that skips the 0 report but changes the total
+//     loses only its first report. A phase that skips the 0 report and starts
+//     above the old mark with a different total is read as continuing growth
+//     and adds current - mark.
+//   - Fixed-step stage markers count as items. dedup/series_dedup.go reports
+//     (step, 6) per stage, so each run adds up to 6 "items" that are stages,
+//     not business items. ops.items is a throughput signal, not an exact
+//     count of the domain objects an op touched.
 type processedItems struct {
 	ops   *opsmetrics.Recorder
 	defID string
 
 	mu       sync.Mutex
-	segTotal int // total of the current segment
-	mark     int // highest current already counted in the current segment
+	segTotal int  // total of the current segment
+	mark     int  // highest current already counted in the current segment
+	seen     bool // a determinate report has been observed in this attempt
 }
 
 // newProcessedItems returns the counter for one attempt of defID, seeded with
@@ -941,15 +972,24 @@ func (p *processedItems) observe(current, total int) {
 	if p == nil {
 		return
 	}
+	if current > 0 && total <= 0 {
+		return // indeterminate: no denominator, see the type comment
+	}
 	var add int
 	p.mu.Lock()
+	first := !p.seen
+	p.seen = true
 	switch {
+	case current <= 0:
+		// A phase separator: a new segment at 0.
+		p.mark, p.segTotal = 0, total
 	case current > p.mark:
 		add = current - p.mark
 		p.mark, p.segTotal = current, total
-	case current < p.mark && (current <= 0 || total != p.segTotal):
-		// A new phase: start a segment at this report.
-		p.mark, p.segTotal = max(0, current), total
+	case current < p.mark && (first || total != p.segTotal):
+		// A new phase (or an attempt restarting below its seed): start a
+		// segment at this report.
+		p.mark, p.segTotal = current, total
 	}
 	p.mu.Unlock()
 	p.ops.Items(p.defID, opsmetrics.ItemsProcessed, int64(add))

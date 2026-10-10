@@ -1,5 +1,5 @@
 // file: internal/opsmetrics/opsmetrics.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 0b6e9c35-18d4-4f7a-b2c1-6a93e5d07f48
 // last-edited: 2026-10-10
 
@@ -14,6 +14,7 @@
 //	audiobook_organizer.ops.items         counter    {def_id, outcome}   -> audiobook_organizer_ops_items_total
 //	audiobook_organizer.ops.inflight      obs. gauge {def_id, plugin}    -> audiobook_organizer_ops_inflight
 //	audiobook_organizer.ops.progress_age  obs. gauge {def_id, plugin}    -> audiobook_organizer_ops_progress_age_seconds
+//	audiobook_organizer.ops.progress_timeout obs. gauge {def_id, plugin} -> audiobook_organizer_ops_progress_timeout_seconds
 //
 // ops.inflight counts runs holding a worker slot. That includes a run the
 // dispatcher has claimed (its stub handle is in the registry's running map)
@@ -21,8 +22,12 @@
 // ops.progress_age is the liveness signal: seconds since the most idle
 // executing run of the key last called UpdateProgress (a same-value heartbeat
 // counts), or since its attempt started when it has not reported yet. Runs not
-// yet picked up by a worker are left out of it. Both gauges come from one
-// collection callback (RegisterInflight).
+// yet picked up by a worker are left out of it. ops.progress_timeout is the
+// silence budget the registry watchdog allows that def: its effective
+// ProgressTimeout (the watchdog's default when the def leaves it 0). The stall
+// alert compares the two, so a def that declares a long budget (a LivenessNone
+// def allowed 2h of silence) does not page inside it. All three gauges come
+// from one collection callback (RegisterInflight).
 //
 // runs outcomes: started, completed, failed, canceled, timed_out, dropped. The
 // registry records started, completed, failed and canceled today. timed_out
@@ -123,6 +128,10 @@ type InflightStat struct {
 	// without a progress report (since its attempt started when it has not
 	// reported yet). Zero when none of the key's runs is executing.
 	ProgressAge time.Duration
+	// ProgressTimeout is the def's effective watchdog budget: how long one of
+	// its runs may go without a progress report before the watchdog cancels
+	// it. Zero when the key has no run.
+	ProgressTimeout time.Duration
 }
 
 // Recorder holds the instruments of one meter provider.
@@ -133,6 +142,7 @@ type Recorder struct {
 	items    metric.Int64Counter
 	inflight metric.Int64ObservableGauge
 	progAge  metric.Float64ObservableGauge
+	progTO   metric.Float64ObservableGauge
 }
 
 // New creates the instruments on mp. The metric API returns a no-op instrument
@@ -155,6 +165,9 @@ func New(mp metric.MeterProvider) *Recorder {
 	r.progAge, _ = m.Float64ObservableGauge("audiobook_organizer.ops.progress_age",
 		metric.WithUnit("s"),
 		metric.WithDescription("Seconds since the most idle executing run of a def_id last reported progress (or started its attempt, if it has not reported yet); 0 when none is executing."))
+	r.progTO, _ = m.Float64ObservableGauge("audiobook_organizer.ops.progress_timeout",
+		metric.WithUnit("s"),
+		metric.WithDescription("Effective watchdog ProgressTimeout in seconds of a def_id with a run in flight (the default when the def sets none); the silence budget ops.progress_age is judged against. 0 when none is in flight."))
 	return r
 }
 
@@ -206,14 +219,17 @@ var activeCallbacks atomic.Int64
 func ActiveInflightCallbacks() int64 { return activeCallbacks.Load() }
 
 // RegisterInflight registers one callback that reports source() as
-// ops.inflight (Runs) and ops.progress_age (ProgressAge) at every collection,
-// and returns the function that unregisters it. source returns the
-// authoritative current state per key (it is called at scrape time, so it must
-// be cheap and take its own locks). Keys that fold to the same label are
-// combined: Runs is summed, ProgressAge is the maximum. A key seen once and
-// absent later is reported as 0 on both gauges rather than vanishing, so a
-// finished run reads 0 instead of leaving the previous value in place or
-// dropping the series.
+// ops.inflight (Runs), ops.progress_age (ProgressAge) and ops.progress_timeout
+// (ProgressTimeout) at every collection, and returns the function that
+// unregisters it. source returns the authoritative current state per key (it
+// is called at scrape time, so it must be cheap and take its own locks). Keys
+// that fold to the same label are combined: Runs is summed, ProgressAge and
+// ProgressTimeout are each the maximum. (Only unregistered def ids fold, to
+// "other"; there the larger budget wins, so the stall alert errs quiet for a
+// folded key rather than paging a long-budget def inside its budget.) A key
+// seen once and absent later is reported as 0 on every gauge rather than
+// vanishing, so a finished run reads 0 instead of leaving the previous value
+// in place or dropping the series.
 //
 // RegisterInflight calls into the SDK (which takes its pipeline lock), and the
 // SDK runs the callback under that same lock, so the caller must not hold a
@@ -231,6 +247,7 @@ func (r *Recorder) RegisterInflight(source func() map[InflightKey]InflightStat) 
 			agg := folded[fk]
 			agg.Runs += st.Runs
 			agg.ProgressAge = max(agg.ProgressAge, st.ProgressAge)
+			agg.ProgressTimeout = max(agg.ProgressTimeout, st.ProgressTimeout)
 			folded[fk] = agg
 		}
 		for k := range seen {
@@ -243,9 +260,10 @@ func (r *Recorder) RegisterInflight(source func() map[InflightKey]InflightStat) 
 			set := metric.WithAttributes(telemetry.DefID.String(k.DefID), telemetry.Plugin.String(k.Plugin))
 			o.ObserveInt64(r.inflight, st.Runs, set)
 			o.ObserveFloat64(r.progAge, st.ProgressAge.Seconds(), set)
+			o.ObserveFloat64(r.progTO, st.ProgressTimeout.Seconds(), set)
 		}
 		return nil
-	}, r.inflight, r.progAge)
+	}, r.inflight, r.progAge, r.progTO)
 	if err != nil {
 		return func() {}
 	}

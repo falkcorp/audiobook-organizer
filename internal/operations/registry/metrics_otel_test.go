@@ -1,5 +1,5 @@
 // file: internal/operations/registry/metrics_otel_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 4d7c1e92-a3b8-4f06-8c5d-9e2f0b61a7d3
 // last-edited: 2026-10-10
 
@@ -305,6 +305,20 @@ func TestOpsMetrics_ProgressToItems(t *testing.T) {
 		// A new phase that skips the 0 report but has a different total
 		// starts a segment at its first report.
 		{"phase without zero report", []progressReport{{10, 10}, {3, 40}, {8, 40}}, 15},
+		// folder.autoscan: ScanDirectoryParallel interleaves a folder stream
+		// (dirsScanned, len(dirs)) with an indeterminate file stream
+		// (filesScanned, 0) on one reporter. The file reports are dropped, so
+		// the count is the 10 folders. Reading both as one stream counted 295.
+		{"interleaved indeterminate stream", []progressReport{{100, 0}, {5, 50}, {200, 0}, {10, 50}}, 10},
+		// (0,0) is a phase separator even though it has no total: the
+		// organizer reports it before the reload and before the pre-organize
+		// backup, and its organize loop's first report can carry the scan
+		// phase's total. Every variant of the rule must count 10 here.
+		{"zero-zero separator", []progressReport{{5, 5}, {0, 0}, {1, 5}, {5, 5}}, 10},
+		// Organizer shape: the scan phase starts at (0,N), the organize phase
+		// follows a (0,0) marker and its first report is (50, N) over the
+		// same N. Without the (0,0) reset the organize phase counts nothing.
+		{"organizer zero markers", []progressReport{{0, 0}, {0, 80}, {80, 80}, {0, 0}, {50, 80}, {80, 80}}, 160},
 	}
 	for i, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -325,6 +339,102 @@ func TestOpsMetrics_ResumedAttemptDoesNotRecountCheckpoint(t *testing.T) {
 	if got != 30 {
 		t.Errorf("items{processed} = %d, want 30 (the checkpointed 500 must not count again)", got)
 	}
+}
+
+// TestOpsMetrics_AttemptRestartsBelowSeed: progress is not cleared on
+// requeue, so a row can carry 500/1000 into an attempt that starts again from
+// the bottom. Its first report starts a segment, so the rerun is counted.
+func TestOpsMetrics_AttemptRestartsBelowSeed(t *testing.T) {
+	// A manual retry of a ResumeRequeue def reruns from zero; RunItems'
+	// first report is offset+1 (here 1), never a 0 marker. 1..30 adds 29.
+	var fromZero []progressReport
+	for i := 1; i <= 30; i++ {
+		fromZero = append(fromZero, progressReport{i, 1000})
+	}
+	if got := runProgress(t, "test.otel-items-retry-zero", fromZero, &progressReport{500, 1000}); got != 29 {
+		t.Errorf("retry from zero: items{processed} = %d, want 29", got)
+	}
+	// A RunItems resume whose checkpoint (400) trails the flushed progress
+	// (500): items 401..500 are processed again and must count.
+	trailing := []progressReport{{401, 1000}, {450, 1000}, {520, 1000}}
+	if got := runProgress(t, "test.otel-items-trailing-ckpt", trailing, &progressReport{500, 1000}); got != 119 {
+		t.Errorf("trailing checkpoint: items{processed} = %d, want 119", got)
+	}
+}
+
+// progressTimeout is the ops.progress_timeout value for defID, and whether a
+// point exists.
+func (g *otelRig) progressTimeout(t *testing.T, defID string) (float64, bool) {
+	t.Helper()
+	m, ok := g.collect(t)["audiobook_organizer.ops.progress_timeout"]
+	if !ok {
+		return 0, false
+	}
+	gauge, ok := m.Data.(metricdata.Gauge[float64])
+	if !ok {
+		t.Fatalf("ops.progress_timeout is %T, want Gauge[float64]", m.Data)
+	}
+	for _, dp := range gauge.DataPoints {
+		if attrIs(dp.Attributes, "def_id", defID) {
+			return dp.Value, true
+		}
+	}
+	return 0, false
+}
+
+// TestOpsMetrics_ProgressTimeoutLongBudget: a LivenessNone def that declares a
+// 2h silence budget (scheduler.dedup-llm-review's shape) and is silent for 40m
+// is healthy. The alert inputs show it: age 2400 under timeout 7200, so
+// OpStalledV2 (age > max(timeout, 1800)) stays quiet. A def with no explicit
+// budget reports the watchdog default.
+func TestOpsMetrics_ProgressTimeoutLongBudget(t *testing.T) {
+	var nowNano atomic.Int64
+	nowNano.Store(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).UnixNano())
+	clock := func() time.Time { return time.Unix(0, nowNano.Load()) }
+
+	g := newOtelRigWith(t, registry.Options{LivenessNow: clock})
+	const id = "test.otel-long-budget"
+	started, release := make(chan struct{}), make(chan struct{})
+	def := makeValidDef(id)
+	def.Liveness = registry.LivenessNone
+	def.ProgressTimeout = 2 * time.Hour
+	def.Run = func(context.Context, json.RawMessage, registry.Reporter) error {
+		close(started)
+		<-release
+		return nil
+	}
+	if err := g.reg.RegisterOp(def); err != nil {
+		t.Fatal(err)
+	}
+	g.reg.Start(t.Context())
+	t.Cleanup(func() { _ = g.reg.Shutdown(context.Background()) })
+	opID, err := g.reg.EnqueueOp(t.Context(), id, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	waitForOtel(t, "attempt start stamped", func() bool {
+		_, ok := g.progressAge(t, id)
+		return ok
+	})
+	nowNano.Add(int64(40 * time.Minute))
+	age, _ := g.progressAge(t, id)
+	budget, ok := g.progressTimeout(t, id)
+	if !ok || budget != 7200 {
+		t.Errorf("progress_timeout = %v (point %v), want 7200", budget, ok)
+	}
+	if age != 2400 {
+		t.Errorf("progress_age 40m into a silent run = %v, want 2400", age)
+	}
+	if age > max(budget, 1800) {
+		t.Errorf("OpStalledV2 inputs would fire: age %v > max(timeout %v, 1800)", age, budget)
+	}
+	close(release)
+	awaitStatus(t, g.store, opID, "completed", 5*time.Second)
+	waitForOtel(t, "progress_timeout back to 0", func() bool {
+		v, ok := g.progressTimeout(t, id)
+		return ok && v == 0
+	})
 }
 
 // TestOpsMetrics_ProgressAge: ops.progress_age measures time since the run's
