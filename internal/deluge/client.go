@@ -1,5 +1,5 @@
 // file: internal/deluge/client.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9a7b8c6d-0e1f-4a70-b8c5-3d7e0f1b9a99
 //
 // Deluge Web JSON-RPC client (backlog 6.1).
@@ -19,6 +19,7 @@ package deluge
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -143,8 +144,11 @@ func New(baseURL, password string) (*Client, error) {
 	}, nil
 }
 
-// call sends a JSON-RPC request and decodes the result.
-func (c *Client) call(method string, params ...any) (json.RawMessage, error) {
+// callCtx sends a JSON-RPC request and decodes the result. Cancelling ctx (or
+// passing its deadline) aborts the request in flight, so a caller can bound a
+// round trip far below the client's 5-minute transport timeout; callers with
+// no deadline pass context.Background().
+func (c *Client) callCtx(ctx context.Context, method string, params ...any) (json.RawMessage, error) {
 	if params == nil {
 		params = []any{}
 	}
@@ -155,7 +159,12 @@ func (c *Client) call(method string, params ...any) (json.RawMessage, error) {
 		ID:     id,
 	})
 
-	resp, err := c.client.Post(c.baseURL+"/json", "application/json", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/json", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("deluge rpc %s: %w", method, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("deluge rpc %s: %w", method, err)
 	}
@@ -181,10 +190,15 @@ func (c *Client) call(method string, params ...any) (json.RawMessage, error) {
 // replays the request once. It lives outside call because Login holds c.mu and
 // itself uses call. auth.login is never replayed.
 func (c *Client) callAuthed(method string, params ...any) (json.RawMessage, error) {
+	return c.callAuthedCtx(context.Background(), method, params...)
+}
+
+// callAuthedCtx is callAuthed bound to ctx (see callCtx).
+func (c *Client) callAuthedCtx(ctx context.Context, method string, params ...any) (json.RawMessage, error) {
 	c.mu.Lock()
 	gen := c.loginGen
 	c.mu.Unlock()
-	result, err := c.call(method, params...)
+	result, err := c.callCtx(ctx, method, params...)
 	if err == nil || method == "auth.login" || !isAuthError(err) {
 		return result, err
 	}
@@ -196,10 +210,10 @@ func (c *Client) callAuthed(method string, params ...any) (json.RawMessage, erro
 		c.authed = false
 	}
 	c.mu.Unlock()
-	if lerr := c.Login(); lerr != nil {
+	if lerr := c.LoginContext(ctx); lerr != nil {
 		return nil, lerr
 	}
-	return c.call(method, params...)
+	return c.callCtx(ctx, method, params...)
 }
 
 // isAuthError is true only for a Deluge RPC error with the not-authenticated
@@ -242,12 +256,19 @@ func NormalizeTorrentID(s string) (string, error) {
 // Login authenticates with the Deluge Web UI. Must be called before
 // other methods. Idempotent — skips if already authenticated.
 func (c *Client) Login() error {
+	return c.LoginContext(context.Background())
+}
+
+// LoginContext is Login bound to ctx. It holds c.mu for the round trip, so a
+// concurrent Login without a deadline can still make this one wait on the
+// mutex; ctx bounds only this call's own request.
+func (c *Client) LoginContext(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.authed {
 		return nil
 	}
-	result, err := c.call("auth.login", c.password)
+	result, err := c.callCtx(ctx, "auth.login", c.password)
 	if err != nil {
 		return fmt.Errorf("auth.login: %w", err)
 	}
@@ -368,14 +389,21 @@ func (c *Client) Connected() (bool, error) {
 // GetTorrentDetail returns the detail field set for one torrent. A torrent
 // Deluge does not know yields ErrTorrentNotFound.
 func (c *Client) GetTorrentDetail(hash string) (*TorrentDetail, error) {
+	return c.GetTorrentDetailContext(context.Background(), hash)
+}
+
+// GetTorrentDetailContext is GetTorrentDetail bound to ctx: the login and the
+// status call both abort when ctx is done, and the returned error then wraps
+// ctx's error (context.DeadlineExceeded for a timeout).
+func (c *Client) GetTorrentDetailContext(ctx context.Context, hash string) (*TorrentDetail, error) {
 	id, err := NormalizeTorrentID(hash)
 	if err != nil {
 		return nil, err
 	}
-	if err := c.Login(); err != nil {
+	if err := c.LoginContext(ctx); err != nil {
 		return nil, err
 	}
-	result, err := c.callAuthed("core.get_torrent_status", id, torrentDetailFields)
+	result, err := c.callAuthedCtx(ctx, "core.get_torrent_status", id, torrentDetailFields)
 	if err != nil {
 		if isUnknownTorrentError(err) {
 			return nil, fmt.Errorf("%w: %s", ErrTorrentNotFound, id)

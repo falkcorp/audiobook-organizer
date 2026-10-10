@@ -1,5 +1,5 @@
 // file: internal/server/deluge_discovery.go
-// version: 3.4.0
+// version: 3.5.0
 // guid: e6f7a8b9-c0d1-2e3f-4a5b-6c7d8e9f0a1b
 // last-edited: 2026-10-10
 //
@@ -11,15 +11,17 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"path/filepath"
-	"strings"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	delugeclient "github.com/falkcorp/audiobook-organizer/internal/deluge"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/importer"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 	"github.com/gin-gonic/gin"
 )
@@ -114,21 +116,47 @@ func (s *Server) handleDelugeDiscoverImport(c *gin.Context) {
 		return
 	}
 
+	// torrent_linked reports what the importer actually wrote, not what was
+	// asked for: a verified hash can still go unlinked (previously purged
+	// content, a failed version or file row), and the importer's note says why.
+	if linkNote == "" {
+		linkNote = resp.TorrentLinkNote
+	}
 	httputil.RespondWithCreated(c, struct {
 		Book            any    `json:"book"`
 		TorrentHash     string `json:"torrent_hash"`
 		TorrentLinked   bool   `json:"torrent_linked"`
 		TorrentLinkNote string `json:"torrent_link_note,omitempty"`
-	}{Book: resp, TorrentHash: req.TorrentHash, TorrentLinked: verifiedHash != "", TorrentLinkNote: linkNote})
+	}{Book: resp, TorrentHash: req.TorrentHash, TorrentLinked: resp.TorrentLinked, TorrentLinkNote: linkNote})
 }
+
+// discoverVerifyTimeout bounds the Deluge round trip (login plus one status
+// call) that verifies a discover-import hash. The client's own transport
+// timeout is 5 minutes, long enough for a proxy in front of the server to give
+// up first while the import still completes, inviting a retry that duplicates
+// the book. A variable only so tests can shorten it.
+var discoverVerifyTimeout = 15 * time.Second
+
+// discoverImportLog carries the upstream error detail that the response note
+// deliberately omits.
+var discoverImportLog = logger.New("server.deluge-discover-import")
+
+// Fixed notes for a hash dropped before the import. They never carry upstream
+// error text: a transport error names the Deluge URL, an internal host.
+const (
+	discoverNoteNotConfigured = "deluge not configured"
+	discoverNoteUnreachable   = "deluge unreachable"
+	discoverNoteTimedOut      = "deluge timed out"
+)
 
 // verifyDiscoveryTorrentHash normalizes the caller's torrent hash and
 // cross-checks it against Deluge. It returns the hash to store (empty when the
 // import must proceed unlinked), a note explaining why it is empty, and
 // ok=false when it has already written a 400 response.
 //
-// An unverifiable hash is dropped, never stored: Deluge not configured or
-// unreachable proceeds unlinked; a malformed hash, a torrent Deluge does not
+// An unverifiable hash is dropped, never stored: Deluge not configured,
+// unreachable or not answering within discoverVerifyTimeout proceeds unlinked
+// with a fixed note (the upstream error is logged, never returned); a malformed hash, a torrent Deluge does not
 // know, or a content_path that is not a file of that torrent is a 400.
 func (s *Server) verifyDiscoveryTorrentHash(c *gin.Context, contentPath, rawHash string) (hash, note string, ok bool) {
 	if rawHash == "" {
@@ -141,15 +169,23 @@ func (s *Server) verifyDiscoveryTorrentHash(c *gin.Context, contentPath, rawHash
 	}
 	client := getDelugeClient()
 	if client == nil {
-		return "", "deluge not configured", true
+		return "", discoverNoteNotConfigured, true
 	}
-	detail, err := client.GetTorrentDetail(hash)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), discoverVerifyTimeout)
+	defer cancel()
+	detail, err := client.GetTorrentDetailContext(ctx, hash)
 	if err != nil {
 		if errors.Is(err, delugeclient.ErrTorrentNotFound) {
 			httputil.RespondWithBadRequest(c, "torrent_hash does not name a torrent in Deluge")
 			return "", "", false
 		}
-		return "", "deluge unreachable: " + shortLinkError(err), true
+		note := discoverNoteUnreachable
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			note = discoverNoteTimedOut
+		}
+		discoverImportLog.Warn("torrent %s could not be verified against Deluge (%s); importing unlinked: %s",
+			hash, note, logger.SanitizeLogValue(err.Error()))
+		return "", note, true
 	}
 	// The route imports exactly one file, so an exact match against one entry
 	// of the torrent's file list is the strong check. Compare cleaned
@@ -166,17 +202,6 @@ func (s *Server) verifyDiscoveryTorrentHash(c *gin.Context, contentPath, rawHash
 	}
 	httputil.RespondWithBadRequest(c, "content_path is not a file of that torrent")
 	return "", "", false
-}
-
-// shortLinkError bounds an upstream error to a short single line for the
-// response note.
-func shortLinkError(err error) string {
-	msg := strings.Join(strings.Fields(err.Error()), " ")
-	const maxLen = 120
-	if len(msg) > maxLen {
-		msg = msg[:maxLen] + "..."
-	}
-	return msg
 }
 
 // handleDiscoveryImport triggers importToLibrary for all book_files that

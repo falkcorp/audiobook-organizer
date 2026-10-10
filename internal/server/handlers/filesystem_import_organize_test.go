@@ -1,7 +1,7 @@
 // file: internal/server/handlers/filesystem_import_organize_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2a6f8c14-9b30-4e75-8d21-c73f0a5e6b19
-// last-edited: 2026-08-25
+// last-edited: 2026-10-10
 
 package handlers_test
 
@@ -348,5 +348,44 @@ func TestImportFile_EmptyOpIDIsNotAdvertised(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "organize_skipped") {
 		t.Fatalf("must report that no trackable organize was queued: %s", w.Body.String())
+	}
+}
+
+// ImportFileRequest.TorrentHash is not JSON-bindable. This route runs under a
+// weaker permission than the Deluge discover route and does no cross-check
+// against Deluge, so a torrent_hash in its body must never reach the importer;
+// otherwise any caller could store a hash nobody verified.
+func TestImportFile_DropsSuppliedTorrentHash(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	imp := &fakeFileImporter{resp: &importer.ImportFileResponse{
+		ID: importedBookID, Title: "Some Audiobook", FilePath: importedFilePath, AuthorResolved: true,
+	}}
+	h := handlers.NewFilesystemHandler(nil, nil, nil, imp, nil, nil, "/library", false)
+	body, _ := json.Marshal(map[string]any{
+		"file_path":    importedFilePath,
+		"torrent_hash": "0123456789abcdef0123456789abcdef01234567",
+	})
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/import/file", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	h.ImportFile(c)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d: %s", w.Code, w.Body.String())
+	}
+	if imp.calls != 1 {
+		t.Fatalf("expected exactly 1 import, got %d", imp.calls)
+	}
+	// Positive control: the body WAS bound, so an empty hash below means the
+	// field was dropped, not that nothing was decoded.
+	if imp.gotReq.FilePath != importedFilePath {
+		t.Fatalf("control: file_path not bound, got %q", imp.gotReq.FilePath)
+	}
+	if imp.gotReq.TorrentHash != "" {
+		t.Errorf("torrent_hash from the request body reached the importer: %q", imp.gotReq.TorrentHash)
+	}
+	if strings.Contains(w.Body.String(), "torrent_link") {
+		t.Errorf("the import/file response must not carry torrent link fields: %s", w.Body.String())
 	}
 }

@@ -1,5 +1,5 @@
 // file: internal/deluge/movestorage_guard_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 9e3a7c15-4d28-4b6f-8a01-c5f2d7b30e64
 // last-edited: 2026-10-10
 //
@@ -105,5 +105,27 @@ func TestMoveStorageGuard_EnabledControlSeesTheMove(t *testing.T) {
 
 	if n := moves.Load(); n != 1 {
 		t.Fatalf("control: want 1 move_storage with the flag on, got %d", n)
+	}
+}
+
+// Positive control for the ImportToLibraryWith leg: with the flag on, the same
+// call shape as the disabled test above does send exactly one move, so its
+// zero is the guard holding and not the copy path never reaching the client.
+func TestMoveStorageGuard_EnabledControlImportSeesTheMove(t *testing.T) {
+	client, moves := newGuardClient(t)
+	setMoveEnabled(t, true)
+
+	src := filepath.Join(t.TempDir(), "book.m4b")
+	if err := os.WriteFile(src, []byte("audio"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{RootDir: t.TempDir(), DelugeMoveEnabled: true}
+	bf := &database.BookFile{ID: "id-guard", FilePath: src, DelugeHash: guardTestHash}
+	if _, err := ImportToLibraryWith(cfg, client, &fakeDelugStore{}, bf, ImportOptions{}); err != nil {
+		t.Fatalf("import failed: %v", err)
+	}
+
+	if n := moves.Load(); n != 1 {
+		t.Fatalf("control: want 1 move_storage from ImportToLibraryWith with the flag on, got %d", n)
 	}
 }
