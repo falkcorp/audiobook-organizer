@@ -1,7 +1,7 @@
 // file: internal/querygrammar/querygrammar.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 9b2e4c71-0f3a-4d6e-8a15-7c3d9e2f1b40
-// last-edited: 2026-10-06
+// last-edited: 2026-10-10
 
 // Package querygrammar is the ONE value grammar behind the Library search bar
 // and the Review → Metadata Title filter (owner decision 2026-10-06: one
@@ -20,6 +20,13 @@
 // Every malformed value is an ERROR, never a pattern that matches nothing or
 // everything: a bad filter that silently answers "0 books" reads as a fact
 // about the library, which is the defect this package exists to end.
+//
+// So is a value too large to evaluate safely (MaxTextValueBytes,
+// MaxPatternInst). A text value is typed by whoever is searching and matched
+// against every row of a library-sized scan, and RE2's linear-time guarantee
+// is linear in the program size times the input: before these limits,
+// /(?:.?){1000}zzz/ took 23.5 s over 40,000 titles and a 30 KB pattern
+// (accepted, under the 1 MB header limit) 2 m 10 s.
 package querygrammar
 
 import (
@@ -27,9 +34,66 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"regexp/syntax"
 	"strconv"
 	"strings"
 )
+
+// Limits on a text value. Both refuse the value with an error (a 400 at the
+// HTTP boundary), never truncate it.
+//
+// Measured on an M1 Max over 40,000 synthetic titles (12 and 85 characters):
+// the cost of a regex scan grows with the compiled program size times the
+// title length, and most of all with nested optional repetition, which keeps
+// many threads alive at every position. (?:.?){10}zzz, 25 instructions, took
+// 73 ms over 12-character titles and 554 ms over 85-character ones;
+// (?:.?){30}zzz, 65 instructions, 253 ms and 1.27 s; (.*){1000}, 4,002
+// instructions, 1.3 s; (?:.?){1000}zzz, 2,005 instructions, 7 s and 43 s.
+// Ordinary title patterns are far smaller: ^\s*\p{L} is 6 instructions,
+// [a-z]{50} 52, a 26-way alternation repeated 20 times 62.
+//
+// No program-size limit alone keeps EVERY pattern inside an interactive
+// budget (the 25-instruction case above already exceeds 15 ms), so these
+// limits bound the worst case to seconds rather than minutes, and a caller
+// that scans a whole library on a request path also bounds the scan's time
+// (the review query's evaluation deadline, reviewQueryEvalDeadline).
+const (
+	// MaxTextValueBytes is the longest text value accepted, in bytes. A
+	// title, author or series search term is a few dozen characters; 256
+	// leaves room for a long literal or regex.
+	MaxTextValueBytes = 256
+	// MaxPatternInst is the largest compiled program (regexp/syntax
+	// instructions, after Simplify expands counted repetition) a regex or a
+	// wildcard may compile to.
+	MaxPatternInst = 100
+)
+
+// checkTextValueLength refuses a value over MaxTextValueBytes.
+func checkTextValueLength(raw string) error {
+	if len(raw) > MaxTextValueBytes {
+		return fmt.Errorf("value is %d bytes long; the limit is %d (search for a shorter part of it)", len(raw), MaxTextValueBytes)
+	}
+	return nil
+}
+
+// checkProgramSize refuses an expression whose compiled program is larger
+// than MaxPatternInst instructions. expr has already compiled with regexp, so
+// a parse error here cannot happen; it is reported rather than ignored all
+// the same.
+func checkProgramSize(expr, shown string) error {
+	re, err := syntax.Parse(expr, syntax.Perl)
+	if err != nil {
+		return fmt.Errorf("invalid pattern %s: %w", shown, err)
+	}
+	prog, err := syntax.Compile(re.Simplify())
+	if err != nil {
+		return fmt.Errorf("invalid pattern %s: %w", shown, err)
+	}
+	if n := len(prog.Inst); n > MaxPatternInst {
+		return fmt.Errorf("pattern %s is too complex to run over the library (%d instructions; the limit is %d) — simplify it: fewer * wildcards, no large counted repeats such as {100}, no nested optional groups", shown, n, MaxPatternInst)
+	}
+	return nil
+}
 
 // Kind is the form a text value was written in.
 type Kind int
@@ -79,6 +143,9 @@ func CompileText(raw string, quoted bool) (*TextMatcher, error) {
 	if raw == "" {
 		return nil, errors.New("empty value")
 	}
+	if err := checkTextValueLength(raw); err != nil {
+		return nil, err
+	}
 	if quoted {
 		return &TextMatcher{Raw: raw, Kind: KindSubstring, needle: strings.ToLower(raw)}, nil
 	}
@@ -97,9 +164,13 @@ func CompileText(raw string, quoted bool) (*TextMatcher, error) {
 		for i, p := range parts {
 			parts[i] = regexp.QuoteMeta(p)
 		}
-		re, err := regexp.Compile(`(?is)^` + strings.Join(parts, ".*") + `$`)
+		expr := `(?is)^` + strings.Join(parts, ".*") + `$`
+		re, err := regexp.Compile(expr)
 		if err != nil { // unreachable: every piece is QuoteMeta'd
 			return nil, fmt.Errorf("invalid wildcard %q: %w", raw, err)
+		}
+		if err := checkProgramSize(expr, raw); err != nil {
+			return nil, err
 		}
 		return &TextMatcher{Raw: raw, Kind: KindGlob, re: re}, nil
 	}
@@ -119,7 +190,8 @@ func compileRegexForm(raw string) (*regexp.Regexp, error) {
 	if pattern == "" {
 		return nil, errors.New("empty regex //")
 	}
-	re, err := regexp.Compile("(?i)" + pattern)
+	expr := "(?i)" + pattern
+	re, err := regexp.Compile(expr)
 	if err != nil {
 		msg := err.Error()
 		if strings.Contains(pattern, "(?=") || strings.Contains(pattern, "(?!") ||
@@ -127,6 +199,9 @@ func compileRegexForm(raw string) (*regexp.Regexp, error) {
 			msg += " — RE2 has no lookahead/lookbehind; exclude with a negated filter instead, e.g. -title:/^\\s*\\d/"
 		}
 		return nil, fmt.Errorf("invalid regex %s: %s", raw, msg)
+	}
+	if err := checkProgramSize(expr, raw); err != nil {
+		return nil, err
 	}
 	return re, nil
 }

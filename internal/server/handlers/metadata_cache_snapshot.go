@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_snapshot.go
-// version: 2.2.0
+// version: 2.2.1
 // guid: 9d3c7a51-2e6b-4f08-b4a9-7c1e5f2d8a36
 // last-edited: 2026-10-10
 
@@ -101,8 +101,11 @@ type snapshotRow struct {
 }
 
 // foldedTitle returns strings.ToLower(title), from the precomputed fold when
-// title is the one the row was built with (the same string, usually the same
-// backing array, so the comparison is a pointer check).
+// title equals the one the row was built with. The equality is a string
+// comparison, not a pointer check: it compares lengths first and then the
+// bytes, and the bytes compare is cheap in the usual case only because the
+// title is normally the very same string the row was built from (the
+// runtime's memequal returns early when both sides share a backing array).
 func (r *snapshotRow) foldedTitle(title string) string {
 	if title == r.title {
 		return r.titleFold

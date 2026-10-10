@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_query.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3e8b5d17-6a0c-4f92-b1d4-9c27e0a5f6b3
 // last-edited: 2026-10-10
 
@@ -7,6 +7,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"slices"
@@ -16,6 +17,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/sync/singleflight"
@@ -51,6 +53,13 @@ import (
 // budget, so the pass is not sharded across workers: a pool would add
 // goroutine handoff to a pass that finishes in single milliseconds, and the
 // multi-book grouping needs the whole filtered set in one place anyway.
+//
+// Limits (a user pattern is code the server runs over every row): q is at
+// most reviewQueryMaxQBytes, each value at most querygrammar.MaxTextValueBytes
+// and each compiled pattern at most querygrammar.MaxPatternInst instructions,
+// all refused at parse time with a 400; and one evaluation stops at
+// reviewQueryEvalDeadline with a 400, never a partial list. The deadline
+// check costs about 0.05 ms of the chips-only pass at 40,000 rows.
 
 const (
 	reviewViewPage = "page"
@@ -70,7 +79,68 @@ const (
 	// freshness clock read) is reused at an unchanged generation, so a
 	// row's stale flag never lags the clock by more than this.
 	reviewQueryBaseMaxAge = 30 * time.Second
+
+	// reviewQueryMaxQBytes bounds the whole q parameter (free text plus every
+	// field:value token). Each value inside it is further bounded by
+	// querygrammar.MaxTextValueBytes and each pattern by
+	// querygrammar.MaxPatternInst; this cap keeps a pasted wall of tokens
+	// from being parsed at all.
+	reviewQueryMaxQBytes = 1024
+
+	// reviewQueryCheckEvery is how many rows an evaluation scans between
+	// deadline checks (a power of two: reviewEvalClock masks with it): one time.Now per 256 rows, under 1% of a substring
+	// pass, and with values capped at 256 bytes and patterns at 100
+	// instructions 256 rows of title matching stay in the low milliseconds.
+	reviewQueryCheckEvery = 256
 )
+
+// reviewQueryEvalDeadline bounds one evaluation of one filter. The grammar's
+// size limits make a pathological pattern a compile error, but the cost of a
+// regex over the review set is roughly program size times title length times
+// rows, and no size limit alone keeps every allowed pattern inside the
+// interactive budget (querygrammar.MaxPatternInst has the measurements). The
+// deadline is what bounds the time: it is taken inside the shared evaluation
+// (the singleflight), not from any one request's context, so a requester who
+// gives up neither cancels the work for the others nor lets it run on
+// unbounded. A var so tests can shrink it.
+var reviewQueryEvalDeadline = time.Second
+
+// reviewEvalClock counts rows and reads the clock every
+// reviewQueryCheckEvery of them. Not safe for concurrent use: one per
+// evaluation.
+type reviewEvalClock struct {
+	deadline time.Time
+	n        int
+	expired  bool
+}
+
+// over reports whether the evaluation has run past its deadline. Once true it
+// stays true, so every loop of the evaluation stops at its next row. It reads
+// the clock on the first row and every reviewQueryCheckEvery-th after it; the
+// rest is a counter and a mask, small enough to inline into the row loops.
+func (c *reviewEvalClock) over() bool {
+	c.n++
+	if c.n&(reviewQueryCheckEvery-1) != 1 {
+		return c.expired
+	}
+	return c.check()
+}
+
+func (c *reviewEvalClock) check() bool {
+	if !c.expired && !time.Now().Before(c.deadline) {
+		c.expired = true
+	}
+	return c.expired
+}
+
+// reviewQueryTooSlow is the deadline refusal: a *reviewQueryError, which the
+// handler serves as a 400 (the pattern, not the server, is what to change).
+func reviewQueryTooSlow() error {
+	return &reviewQueryError{msg: fmt.Sprintf(
+		"the search took longer than %s over the review set and was stopped; "+
+			"simplify the Title pattern (fewer wildcards, no nested optional groups, no large counted repeats)",
+		reviewQueryEvalDeadline)}
+}
 
 // Review chip views (the lane's ChipFilter). A chip view lists exactly the
 // rows its chip counts, narrowed only by the title filter.
@@ -218,6 +288,9 @@ func parseReviewQuery(get func(string) string) (*ReviewQuery, error) {
 	}
 	if q.Chip != "" && !slices.Contains(reviewChips, q.Chip) {
 		return nil, badReviewQuery("chip must be one of %s", strings.Join(reviewChips, ", "))
+	}
+	if len(q.Q) > reviewQueryMaxQBytes {
+		return nil, badReviewQuery("q is %d bytes long; the limit is %d (search for a shorter part of it)", len(q.Q), reviewQueryMaxQBytes)
 	}
 	if q.Bucket == "" {
 		q.Bucket = reviewBucketReviewable
@@ -514,7 +587,7 @@ func compileReviewTitleFilter(input string) (*reviewTitleFilter, error) {
 	for _, f := range filters {
 		m, err := querygrammar.CompileText(f.value, f.quoted)
 		if err != nil {
-			return nil, fmt.Errorf("title:%s — %s", f.value, err.Error())
+			return nil, fmt.Errorf("title:%s — %s", shortReviewToken(f.value), err.Error())
 		}
 		p := reviewTitlePart{m: m, negated: f.negated}
 		if m.Kind == querygrammar.KindSubstring {
@@ -523,6 +596,21 @@ func compileReviewTitleFilter(input string) (*reviewTitleFilter, error) {
 		out.parts = append(out.parts, p)
 	}
 	return out, nil
+}
+
+// shortReviewToken is a value as an error message names it: whole when short,
+// else its first 64 bytes (cut on a rune boundary) and an ellipsis, so a
+// refused 1 KB value is not echoed back in full.
+func shortReviewToken(v string) string {
+	const keep = 64
+	if len(v) <= keep {
+		return v
+	}
+	cut := keep
+	for cut > 0 && !utf8.RuneStart(v[cut]) {
+		cut--
+	}
+	return v[:cut] + "…"
 }
 
 // match reports whether a row's live title passes every part. A substring
@@ -692,9 +780,16 @@ type reviewBaseKey struct {
 
 func newReviewQueryBase(key reviewBaseKey, set reviewOverlay, now time.Time) *reviewQueryBase {
 	b := &reviewQueryBase{
-		key:        key,
-		set:        set,
-		generation: fmt.Sprintf("%d.%d", key.cacheGen, key.bookGen),
+		key: key,
+		set: set,
+		// The label names the data the base was built from, not the live
+		// generations it is keyed on: the snapshot can lag the live cache
+		// generation (stale-while-revalidate serves the current snapshot
+		// while a rebuild runs), and the cache rows come only from the
+		// snapshot. The book half is the live book generation read BEFORE
+		// the overlay, which the overlay therefore covers. Two bases with the
+		// same label hold the same cache rows and the same book reads.
+		generation: fmt.Sprintf("%d.%d", key.snap.cacheGen, key.bookGen),
 		builtAt:    now,
 	}
 	b.rows = buildReviewableRows(&b.set, now, true)
@@ -738,14 +833,21 @@ func (l *reviewResultList) row(r reviewRef) (*snapshotRow, string) {
 // (plus one over the survivors for the multi-book key, which is computed over
 // the WHOLE filtered set, never a page). It reads the base and never writes
 // it: the snapshot is immutable by contract and the base is shared.
-func evaluateReviewQuery(base *reviewQueryBase, q *ReviewQuery) *reviewResultList {
+//
+// It stops at deadline (checked every reviewQueryCheckEvery rows) and returns
+// reviewQueryTooSlow; a partial list is never returned.
+func evaluateReviewQuery(base *reviewQueryBase, q *ReviewQuery, deadline time.Time) (*reviewResultList, error) {
 	out := &reviewResultList{base: base, normalized: q.normalized}
+	clock := &reviewEvalClock{deadline: deadline}
 	rows := &base.rows
 	titleOK := func(row *snapshotRow) bool {
 		return q.title == nil || q.title.match(row, row.book.Title)
 	}
 	addReviewable := func(keep func(r *reviewableRow) bool) {
 		for i := range rows.reviewable {
+			if clock.over() {
+				return
+			}
 			r := &rows.reviewable[i]
 			if keep(r) && titleOK(r.row) {
 				out.refs = append(out.refs, reviewRef(i))
@@ -754,6 +856,9 @@ func evaluateReviewQuery(base *reviewQueryBase, q *ReviewQuery) *reviewResultLis
 	}
 	addUnreviewable := func(keep func(u *unreviewableRow) bool) {
 		for i := range rows.unreviewable {
+			if clock.over() {
+				return
+			}
 			u := &rows.unreviewable[i]
 			if keep(u) && titleOK(u.row) {
 				out.refs = append(out.refs, reviewRef(-i-1))
@@ -789,17 +894,20 @@ func evaluateReviewQuery(base *reviewQueryBase, q *ReviewQuery) *reviewResultLis
 	case q.Bucket == reviewBucketUnreviewable:
 		addUnreviewable(func(*unreviewableRow) bool { return true })
 	default:
-		evaluateReviewFilters(out, q)
+		evaluateReviewFilters(out, q, clock)
+	}
+	if clock.expired {
+		return nil, reviewQueryTooSlow()
 	}
 	sortReviewList(out, q.Sort)
-	return out
+	return out, nil
 }
 
 // evaluateReviewFilters is the lane's default chain, in its order:
 // beforeRuntime (title, source, confidence, row states, no-match), the
 // runtime switch (counted as it hides), language, transcription, then the
 // multi-book hide over the whole surviving set.
-func evaluateReviewFilters(out *reviewResultList, q *ReviewQuery) {
+func evaluateReviewFilters(out *reviewResultList, q *ReviewQuery, clock *reviewEvalClock) {
 	base := out.base
 	rows := &base.rows
 	skipped := map[string]struct{}{}
@@ -828,6 +936,9 @@ func evaluateReviewFilters(out *reviewResultList, q *ReviewQuery) {
 
 	out.refs = make([]reviewRef, 0, len(rows.reviewable))
 	for i := range rows.reviewable {
+		if clock.over() {
+			return
+		}
 		r := &rows.reviewable[i]
 		cand := r.row.cand
 		book := r.row.book
@@ -973,6 +1084,13 @@ func (s reviewSortByScore) Swap(i, j int) {
 // write moves a generation, the next request misses, and the lists of the
 // old base are dropped with it. Concurrent identical requests share one
 // evaluation (singleflight). Safe for concurrent use.
+//
+// Memory: the cached base holds a pointer to the snapshot it was built over
+// (and its overlay), so it pins that snapshot in memory even after the
+// snapshot cache has published a newer one. At most one old snapshot is
+// pinned this way: the base is replaced by the first request after a
+// generation moves, and is never served past reviewQueryBaseMaxAge, but it is
+// not released until a request replaces it.
 type reviewQueryCache struct {
 	mu    sync.Mutex
 	base  *reviewQueryBase
@@ -1115,7 +1233,7 @@ func (h *MetadataCacheHandler) reviewQueryList(ctx context.Context, q *ReviewQue
 		if cache != nil {
 			cache.evaluations.Add(1)
 		}
-		return evaluateReviewQuery(base, q), nil
+		return evaluateReviewQuery(base, q, time.Now().Add(reviewQueryEvalDeadline))
 	}
 	key := reviewBaseKey{snap: snap, cacheGen: cacheGen, bookGen: bookGen}
 	if l := cache.lookup(key, q.normalized); l != nil {
@@ -1130,7 +1248,13 @@ func (h *MetadataCacheHandler) reviewQueryList(ctx context.Context, q *ReviewQue
 			return nil, err
 		}
 		cache.evaluations.Add(1)
-		l := evaluateReviewQuery(base, q)
+		// The deadline starts here, inside the shared flight, so it bounds
+		// the evaluation every waiter shares and no single waiter's context
+		// can cut it short. A refusal is not stored: the LRU holds lists only.
+		l, err := evaluateReviewQuery(base, q, time.Now().Add(reviewQueryEvalDeadline))
+		if err != nil {
+			return nil, err
+		}
 		cache.store(l)
 		return l, nil
 	})
@@ -1205,6 +1329,11 @@ func (h *MetadataCacheHandler) getCacheReviewPage(c *gin.Context) {
 		return
 	}
 	l, err := h.reviewQueryList(c.Request.Context(), q)
+	var refused *reviewQueryError
+	if errors.As(err, &refused) {
+		httputil.RespondWithBadRequest(c, refused.Error())
+		return
+	}
 	if err != nil {
 		httputil.InternalError(c, "failed to query the review set", err)
 		return
