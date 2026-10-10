@@ -1,5 +1,5 @@
 // file: internal/config/appconfig_reads_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7b1d4e92-3c58-4a0f-9e26-d5a8c3f10b74
 // last-edited: 2026-10-10
 
@@ -29,8 +29,11 @@ import (
 // are the expected sources of decreases. Uses inside internal/config are out
 // of scope (reported informationally) until 07-M1 makes this package a leaf.
 //
+// Build-constrained files (for example bench-tagged ones) are counted too,
+// because parser.ParseFile ignores build tags.
+//
 // Measured at origin/main 005f0810d with this instrument: 625 uses in 183
-// files; 8 on an assignment left-hand side; 10 unqualified uses inside
+// files; 8 assignment or inc/dec targets as first measured; 10 unqualified uses inside
 // internal/config. This is deliberately
 // not the 636 from the A.5 measurement, whose command was never printed; plain
 // greps give different numbers than an AST walk (grep 'config\.AppConfig\.'
@@ -46,7 +49,8 @@ var appConfigSkipDirs = map[string]bool{
 type appConfigScan struct {
 	files        int
 	outside      int            // gated: qualified uses outside internal/config
-	writes       int            // informational: outside uses on an assignment LHS
+	bare         int            // informational: address-of / value uses outside internal/config
+	writes       int            // informational: outside assignment or inc/dec targets rooted at AppConfig
 	insideConfig int            // informational: unqualified AppConfig uses inside internal/config
 	perFile      map[string]int // outside uses per file
 }
@@ -79,12 +83,56 @@ func isAppConfigSel(n ast.Node, alias string) bool {
 	return ok && id.Name == alias
 }
 
-// countAppConfigUses returns (all qualified uses, uses on an assignment or
-// inc/dec left-hand side) for one file.
-func countAppConfigUses(f *ast.File, alias string) (total, writes int) {
+// appConfigUses classifies the qualified AppConfig selectors of one file.
+type appConfigUses struct {
+	total  int // every `<alias>.AppConfig` selector (the gated number)
+	bare   int // address-of / value uses: the selector is not the X of a further selector
+	writes int // assignment or inc/dec targets whose selector chain is rooted at AppConfig
+}
+
+// appConfigWriteTarget reports whether e, followed down through field
+// selectors, indexing and parens, is rooted at `<alias>.AppConfig`. An
+// AppConfig selector that only appears inside an index expression
+// (m[config.AppConfig.K] = v) is a read, not a write, because the walk goes
+// down X and never into the index.
+func appConfigWriteTarget(e ast.Expr, alias string) bool {
+	for {
+		if isAppConfigSel(e, alias) {
+			return true
+		}
+		switch x := e.(type) {
+		case *ast.SelectorExpr:
+			e = x.X
+		case *ast.IndexExpr:
+			e = x.X
+		case *ast.ParenExpr:
+			e = x.X
+		default:
+			return false
+		}
+	}
+}
+
+// classifyAppConfigUses counts the qualified AppConfig selectors in f.
+func classifyAppConfigUses(f *ast.File, alias string) appConfigUses {
+	var u appConfigUses
+	var stack []ast.Node
 	ast.Inspect(f, func(n ast.Node) bool {
+		if n == nil {
+			stack = stack[:len(stack)-1]
+			return true
+		}
 		if isAppConfigSel(n, alias) {
-			total++
+			u.total++
+			isField := false
+			if len(stack) > 0 {
+				if p, ok := stack[len(stack)-1].(*ast.SelectorExpr); ok && p.X == n {
+					isField = true
+				}
+			}
+			if !isField {
+				u.bare++
+			}
 		}
 		var lhs []ast.Expr
 		switch s := n.(type) {
@@ -94,16 +142,14 @@ func countAppConfigUses(f *ast.File, alias string) (total, writes int) {
 			lhs = []ast.Expr{s.X}
 		}
 		for _, e := range lhs {
-			ast.Inspect(e, func(m ast.Node) bool {
-				if isAppConfigSel(m, alias) {
-					writes++
-				}
-				return true
-			})
+			if appConfigWriteTarget(e, alias) {
+				u.writes++
+			}
 		}
+		stack = append(stack, n)
 		return true
 	})
-	return total, writes
+	return u
 }
 
 // countInsideConfig counts unqualified identifier uses of AppConfig in a file
@@ -152,11 +198,12 @@ func scanAppConfigReads(t *testing.T, root string) appConfigScan {
 			if alias == "" {
 				return nil
 			}
-			total, writes := countAppConfigUses(f, alias)
-			if total > 0 {
-				res.perFile[rel] = total
-				res.outside += total
-				res.writes += writes
+			u := classifyAppConfigUses(f, alias)
+			if u.total > 0 {
+				res.perFile[rel] = u.total
+				res.outside += u.total
+				res.bare += u.bare
+				res.writes += u.writes
 			}
 			return nil
 		})
@@ -201,8 +248,8 @@ func TestAppConfigDirectReadRatchet(t *testing.T) {
 		t.Fatalf("counted only %d AppConfig uses; the alias resolver is broken, not the code", res.outside)
 	}
 
-	t.Logf("files scanned=%d; direct AppConfig uses outside internal/config=%d (in %d files), of which on an assignment LHS=%d; unqualified uses inside internal/config (informational, not gated)=%d",
-		res.files, res.outside, len(res.perFile), res.writes, res.insideConfig)
+	t.Logf("files scanned=%d; direct AppConfig uses outside internal/config=%d (in %d files), of which address-of / value uses (not config.AppConfig.Field)=%d; write targets=%d; unqualified uses inside internal/config (informational, not gated)=%d",
+		res.files, res.outside, len(res.perFile), res.bare, res.writes, res.insideConfig)
 
 	if res.outside > appConfigReadBaseline {
 		type kv struct {
@@ -233,5 +280,37 @@ func TestAppConfigDirectReadRatchet(t *testing.T) {
 	if res.outside < appConfigReadBaseline {
 		t.Logf("NOTE (not a failure): uses fell to %d, below the baseline %d; lower appConfigReadBaseline to %d in this PR",
 			res.outside, appConfigReadBaseline, res.outside)
+	}
+}
+
+func TestClassifyAppConfigUses(t *testing.T) {
+	const src = `package x
+
+import cfg "github.com/falkcorp/audiobook-organizer/internal/config"
+
+func f(m map[string]int) {
+	_ = cfg.AppConfig.RootDir // field read
+	cfg.AppConfig.RootDir = "a" // field write
+	p := &cfg.AppConfig // address-of
+	c := cfg.AppConfig // value copy
+	m[cfg.AppConfig.RootDir] = 1 // index expression LHS: a read
+	cfg.AppConfig.Count++ // inc/dec write
+	_, _ = p, c
+}
+`
+	f, err := parser.ParseFile(token.NewFileSet(), "x.go", src, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := appConfigLocalName(f); got != "cfg" {
+		t.Fatalf("alias = %q, want cfg", got)
+	}
+	got := classifyAppConfigUses(f, "cfg")
+	want := appConfigUses{total: 6, bare: 2, writes: 2}
+	if got != want {
+		t.Fatalf("classify = %+v, want %+v", got, want)
+	}
+	if other := classifyAppConfigUses(f, "config"); other.total != 0 {
+		t.Fatalf("wrong alias matched %d uses", other.total)
 	}
 }
