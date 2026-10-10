@@ -1,5 +1,5 @@
 // file: internal/metadata/enhanced.go
-// version: 1.28.1
+// version: 1.28.2
 // guid: 7e8d9c0b-1a2f-3e4d-5c6b-7a8d9c0b1a2f
 // last-edited: 2026-10-10
 
@@ -489,8 +489,8 @@ func WriteMetadataToFile(filePath string, metadata map[string]any, config fileop
 	// Upstream taglib v0.11.1+ writes custom freeform atoms natively for MP4.
 	// Do NOT run ffmpeg after taglib — ffmpeg's -map_metadata strips freeform atoms.
 	if taglibAvailable {
-		// Every caller is a single-book edit (the PATCH write-back, a rename's
-		// tag write), so the write keeps a backup when create_backups is on.
+		// Every caller is a single-book edit (the PATCH write-back), so the write
+		// keeps a backup when create_backups is on.
 		nativeErr := writeMetadataWithTaglib(context.Background(), target, metadata, config)
 		if nativeErr == nil {
 			return nil
