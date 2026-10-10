@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/MetadataSearchDialog.tsx
-// version: 2.1.0
+// version: 2.2.0
 // guid: 8a9b0c1d-2e3f-4a5b-6c7d-8e9f0a1b2c3d
 // last-edited: 2026-10-10
 
@@ -36,6 +36,8 @@ import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import type { Book, MetadataCandidate } from '../../services/api';
 import * as api from '../../services/api';
 import { rankScoreOf } from './rankScore';
+import { OwnerRejectedChip } from './OwnerRejectedChip';
+import { clearOwnerRejected } from './ownerRejected';
 import {
   METADATA_APPLY_FIELD_LABELS,
   candidateApplyFieldValue,
@@ -216,7 +218,7 @@ export function MetadataSearchDialog({
     // The server refuses an owner-rejected candidate (409 owner_rejected),
     // so it is never staged: say why instead.
     if (check?.owner_rejected) {
-      toast('You rejected this candidate for this book. Un-reject it to apply it.', 'warning');
+      toast('You rejected this candidate for this book. Undo the rejection to apply it.', 'warning');
       return;
     }
     if (check?.asin_conflict && check.book_asin) {
@@ -750,15 +752,14 @@ export function MetadataSearchDialog({
                         />
                       )}
                       {candidate.apply_check?.owner_rejected && (
-                        <Tooltip title="You rejected this candidate for this book. Un-reject it to apply it.">
-                          <Chip
-                            icon={<WarningAmberIcon />}
-                            label="Rejected by you"
-                            size="small"
-                            color="error"
-                            data-testid="owner-rejected-chip"
-                          />
-                        </Tooltip>
+                        <OwnerRejectedChip
+                          bookId={book.id}
+                          candidate={candidate}
+                          toast={toast}
+                          onUnrejected={(c) =>
+                            setResults((prev) => prev.map((r) => (r === c ? clearOwnerRejected(r) : r)))
+                          }
+                        />
                       )}
                       {candidate.apply_check?.asin_conflict && (
                         <Tooltip title={candidate.apply_check.detail ?? ''}>

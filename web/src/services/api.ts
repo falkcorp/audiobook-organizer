@@ -3757,6 +3757,27 @@ export async function applyMetadataCandidate(
   return body.data;
 }
 
+/**
+ * Un-rejects one candidate for one book (POST /metadata/unreject-candidate):
+ * the owner's way back from a rejection, by book and candidate alone.
+ * `unrejected` is false when no rejection matched the candidate.
+ */
+export async function unrejectCandidate(
+  bookId: string,
+  candidate: MetadataCandidate
+): Promise<{ unrejected: boolean }> {
+  const response = await apiFetch(`${API_BASE}/metadata/unreject-candidate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ book_id: bookId, candidate }),
+  });
+  if (!response.ok) {
+    throw await buildApiError(response, 'Failed to undo the rejection');
+  }
+  const body = await response.json();
+  return body.data;
+}
+
 export async function markNoMatch(bookId: string): Promise<void> {
   const response = await apiFetch(`${API_BASE}/audiobooks/${bookId}/mark-no-match`, {
     method: 'POST',
