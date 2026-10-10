@@ -1,7 +1,7 @@
 // file: web/src/stores/operationGrouping.ts
-// version: 1.3.0
+// version: 1.3.1
 // guid: 8c4a1f37-2b95-4e60-9d13-6a7fb2e08c54
-// last-edited: 2026-09-20
+// last-edited: 2026-10-10
 
 import type { ActiveOperation } from './useOperationsStore';
 
@@ -10,7 +10,7 @@ import type { ActiveOperation } from './useOperationsStore';
  *
  * WHY READ-TIME, AND NOT A COMPACTOR. The activity log has a raw+compacted tier
  * split (six raw tiers folded into a denylisted `digest` output tier, see
- * internal/database/nuts_activity_store.go) and it exists to reclaim SPACE
+ * internal/database/activity_tiers.go) and it exists to reclaim SPACE
  * across millions of rows. Operations are nothing like that: 40 rows over 6
  * hours in prod. This is a readability problem, not a volume problem, so
  * nothing here is written down.

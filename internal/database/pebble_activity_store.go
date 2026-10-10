@@ -1,7 +1,7 @@
 // file: internal/database/pebble_activity_store.go
-// version: 1.30.2
+// version: 1.30.3
 // guid: d4e5f6a7-b8c9-0004-def0-000000000004
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 // Package database — PebbleDB-backed activity log store.
 //
@@ -2763,7 +2763,7 @@ func pactFilterFieldCarriesPredicate(v reflect.Value) bool {
 //   - Tier and ExcludeTiers, even though the ref value's first component IS a
 //     tier. That tier is the one baked into the PRIMARY KEY, while matchesFilter
 //     compares f.Tier against the decoded e.Tier — and those two can disagree:
-//     pebble_activity_backfill.go builds both keys from the NutsDB BUCKET's tier
+//     the retired NutsDB backfill built both keys from the NutsDB BUCKET's tier
 //     while marshalling the entry body untouched, so a backfilled row whose body
 //     Tier differs from its bucket would be filtered differently by the two
 //     paths. Pushing tier down would be right for every row Record wrote and

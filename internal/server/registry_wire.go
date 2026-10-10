@@ -1,7 +1,7 @@
 // file: internal/server/registry_wire.go
-// version: 1.29.1
+// version: 1.29.2
 // guid: e2c1977d-0023-498f-81bd-76e9912eec89
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package server
 
@@ -368,8 +368,8 @@ func init() {
 // service is one new line here + one new register.go in the domain pkg.
 //
 // W2 services use TryGet because serviceregistry.KeyActivity / serviceregistry.KeyActivityStore are only
-// Included when config.DatabasePath is set (the NutsDB sidecar can't open
-// without a path). All other W1+W2 services are unconditional and Get
+// Included when config.DatabasePath is set (the activitystore Build
+// returns an error when DatabasePath is empty). All other W1+W2 services are unconditional and Get
 // could safely be used — TryGet is used consistently here to keep the
 // wire-up uniform and tolerant of further phased Include() decisions.
 func wireServerFromContainer(s *Server, c *serviceregistry.Container) {

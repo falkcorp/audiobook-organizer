@@ -1,7 +1,7 @@
 // file: internal/database/activity_summarize_grouping_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: d4544dd5-4577-4b7b-8e9c-59e9fdfba58b
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package database
 
@@ -17,7 +17,7 @@ import (
 )
 
 // summarizeBackend is the slice of the store surface these tests drive, so one
-// body runs against all three activity backends (Pebble, SQLite).
+// body runs against both activity backends (Pebble, SQLite).
 type summarizeBackend interface {
 	Record(ActivityEntry) (int64, error)
 	Query(context.Context, ActivityFilter) ([]ActivityEntry, int, error)

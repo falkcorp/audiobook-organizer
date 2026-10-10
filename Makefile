@@ -1,7 +1,7 @@
 # file: Makefile
-# version: 2.35.0
+# version: 2.35.1
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
-# last-edited: 2026-10-09
+# last-edited: 2026-10-10
 
 BINARY := audiobook-organizer
 ROOT_DIR := $(shell git rev-parse --show-toplevel 2>/dev/null || pwd)
@@ -763,7 +763,7 @@ backup:
 	@STAMP=$$(date +%Y%m%d-%H%M%S); \
 		ssh $(DEPLOY_HOST) "tar -czf /tmp/aobackup-$$STAMP.tar.gz \
 			-C /var/lib/audiobook-organizer \
-			audiobooks.pebble activity.nutsdb embeddings.db 2>/dev/null || true"; \
+			audiobooks.pebble embeddings.db 2>/dev/null || true"; \
 		scp $(DEPLOY_HOST):/tmp/aobackup-$$STAMP.tar.gz $(BACKUP_DIR)/; \
 		ssh $(DEPLOY_HOST) "rm -f /tmp/aobackup-$$STAMP.tar.gz"; \
 		echo "✅ Backup saved to $(BACKUP_DIR)/aobackup-$$STAMP.tar.gz"
