@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.145.0
+// version: 1.146.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-10-10
 
@@ -1290,9 +1290,12 @@ type Config struct {
 	// push reader sends to. Empty (the default) means no push; /metrics is
 	// unaffected either way. It never falls back to OTelExporterOTLPEndpoint.
 	OTelMetricsOTLPEndpoint string `json:"otel_metrics_otlp_endpoint" mapstructure:"otel_metrics_otlp_endpoint"`
-	// OTelMetricsOTLPInterval is the push period as a Go duration ("60s").
+	// OTelMetricsOTLPInterval is the push period. Env OTEL_METRIC_EXPORT_INTERVAL
+	// is the OTel standard: a bare integer in MILLISECONDS ("60000"); a Go
+	// duration ("60s") is accepted too (telemetry.ParseMetricsInterval).
 	OTelMetricsOTLPInterval string `json:"otel_metrics_otlp_interval" mapstructure:"otel_metrics_otlp_interval"`
-	// OTelMetricsOTLPInsecure allows plaintext gRPC to a bare host:port.
+	// OTelMetricsOTLPInsecure allows plaintext gRPC to a bare host:port or a
+	// dns:/// target (an http:// URL is plaintext by itself, https:// is TLS).
 	OTelMetricsOTLPInsecure bool `json:"otel_metrics_otlp_insecure" mapstructure:"otel_metrics_otlp_insecure"`
 	// TelemetryEnvironment is the deployment.environment resource attribute.
 	TelemetryEnvironment string `json:"telemetry_environment" mapstructure:"telemetry_environment"`

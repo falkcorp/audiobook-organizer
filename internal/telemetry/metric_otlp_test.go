@@ -1,5 +1,5 @@
 // file: internal/telemetry/metric_otlp_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4c9e2a7d-1b63-4f08-a5d2-7e3b9c0f6a18
 // last-edited: 2026-10-10
 
@@ -210,9 +210,9 @@ func TestMetricEndpointOption_Forms(t *testing.T) {
 		}
 		for _, insecure := range []bool{false, true} {
 			opts := metricEndpointOption(tgt, insecure)
-			want := 1
-			if tgt.Bare && insecure {
-				want = 2 // WithEndpoint + WithInsecure
+			want := 2 // endpoint + TLS credentials
+			if metricPlaintext(tgt, insecure) {
+				want = 3 // endpoint + WithInsecure + insecure credentials
 			}
 			if len(opts) != want {
 				t.Errorf("metricEndpointOption(%q, insecure=%v) gave %d options, want %d", ep, insecure, len(opts), want)
@@ -227,7 +227,13 @@ func TestMetricEndpointOption_Forms(t *testing.T) {
 }
 
 func TestInterval_ParsingAndClamp(t *testing.T) {
-	for in, want := range map[string]time.Duration{"60s": 60 * time.Second, "": 0, "abc": 0, "-5s": 0, "0s": 0, "2m": 2 * time.Minute} {
+	for in, want := range map[string]time.Duration{
+		"60s": 60 * time.Second, "": 0, "abc": 0, "-5s": 0, "0s": 0, "2m": 2 * time.Minute,
+		// OTEL_METRIC_EXPORT_INTERVAL's standard form: integer milliseconds.
+		"60000": 60 * time.Second, " 30000 ": 30 * time.Second, "5000": 5 * time.Second,
+		"0": 0, "-1000": 0, "1.5": 0,
+		"99999999999999999": 24 * time.Hour, // capped, not overflowed; clampInterval clamps it to 1h
+	} {
 		if got := ParseMetricsInterval(in); got != want {
 			t.Errorf("ParseMetricsInterval(%q) = %v, want %v", in, got, want)
 		}
@@ -247,6 +253,31 @@ func TestInterval_ParsingAndClamp(t *testing.T) {
 		got, note := clampInterval(tc.in)
 		if got != tc.want || (note != "") != tc.note {
 			t.Errorf("clampInterval(%v) = %v, %q; want %v, note=%v", tc.in, got, note, tc.want, tc.note)
+		}
+	}
+}
+
+func TestMetricPlaintext_OneRule(t *testing.T) {
+	for _, tc := range []struct {
+		ep       string
+		insecure bool
+		want     bool
+	}{
+		{"http://192.0.2.10:4317", false, true},
+		{"http://192.0.2.10:4317", true, true},
+		{"https://collector.example.invalid:4317", false, false},
+		{"https://collector.example.invalid:4317", true, false},
+		{"192.0.2.10:4317", false, false},
+		{"192.0.2.10:4317", true, true},
+		{"dns:///collector.example.invalid:4317", false, false},
+		{"dns:///collector.example.invalid:4317", true, true},
+	} {
+		tgt, err := parseOTLPEndpoint(tc.ep)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := metricPlaintext(tgt, tc.insecure); got != tc.want {
+			t.Errorf("metricPlaintext(%q, insecure=%v) = %v, want %v", tc.ep, tc.insecure, got, tc.want)
 		}
 	}
 }

@@ -1,5 +1,5 @@
 // file: cmd/root.go
-// version: 1.25.0
+// version: 1.26.0
 // guid: 6a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
 // last-edited: 2026-10-10
 
@@ -283,7 +283,13 @@ var serveCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("failed to initialize OpenTelemetry: %w", err)
 		}
-		defer otelShutdown(context.Background())
+		defer func() {
+			// Bounded: the final OTLP flush must not hold the exit hostage
+			// when the collector is unreachable.
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = otelShutdown(ctx)
+		}()
 
 		// Initialize encryption for settings.
 		//
