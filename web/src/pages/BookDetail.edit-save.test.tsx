@@ -1,9 +1,9 @@
 // file: web/src/pages/BookDetail.edit-save.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: e1363ab6-cc3e-4440-bbae-cdb5b60a4672
-// last-edited: 2026-10-04
+// last-edited: 2026-10-10
 
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { act, render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -46,10 +46,22 @@ const renderPage = () =>
     </ToastProvider>
   );
 
+// Every field lookup is scoped to the dialog, and the only polled query is
+// the cheap role=dialog one. *ByLabelText against the whole page is the
+// expensive query here: jsdom resolves `input.labels` by walking the entire
+// document (about 2,400 nodes on this page, a quarter of them emotion <style>
+// tags) for each of the ~90 labelable elements, and that cache is thrown away
+// on every DOM mutation. findByLabelText(/^Title/) re-ran it on each mutation
+// while the dialog opened, and the 400 test's waitFor re-ran it again. One
+// uncached lookup measured 0.3-1.2 s on a dev laptop. This file was one of the
+// tests hitting the 30 s limit on the CPU-starved Woodpecker host, and these
+// lookups were the largest share of its CPU.
 const openEditor = async () => {
   const user = userEvent.setup();
   await user.click(await screen.findByRole('button', { name: /edit metadata/i }));
-  return screen.findByLabelText(/^Title/);
+  const dialog = await screen.findByRole('dialog');
+  const title = (await within(dialog).findByLabelText(/^Title/)) as HTMLInputElement;
+  return { dialog, title };
 };
 
 type Payload = Record<string, unknown> & { overrides?: Record<string, { value: unknown }> };
@@ -76,26 +88,35 @@ describe('BookDetail handleEditSave', () => {
       )
     );
     renderPage();
-    const title = (await openEditor()) as HTMLInputElement;
+    const { dialog, title } = await openEditor();
     fireEvent.change(title, { target: { value: 'Redshirts (Unabridged)' } });
-    fireEvent.click(screen.getByRole('button', { name: /^save/i }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /^save/i }));
 
     expect(
       (await screen.findAllByText(/the author cannot be cleared; set a different author/)).length
     ).toBeGreaterThan(0);
-    await waitFor(() =>
-      expect((screen.getByLabelText(/^Title/) as HTMLInputElement).value).toBe(
-        'Redshirts (Unabridged)'
-      )
+    // A dialog told to close stays in the DOM for MUI's exit transition
+    // (leavingScreen, 195 ms), so checking straight away cannot tell "kept
+    // open" from "closing". Let that window pass first; the act() flushes the
+    // transition's state update before the check. Timers fire in expiry
+    // order, so this one cannot overtake the transition's.
+    await act(() => new Promise((resolve) => setTimeout(resolve, 400)));
+    // Look the dialog up again rather than reusing `dialog`: a dialog that
+    // closed (or remounted with a reset form) leaves a detached subtree whose
+    // input still holds the typed value, so the old reference would pass.
+    const stillOpen = screen.getByRole('dialog');
+    expect(stillOpen).toBe(dialog);
+    expect((within(stillOpen).getByLabelText(/^Title/) as HTMLInputElement).value).toBe(
+      'Redshirts (Unabridged)'
     );
   });
 
   it('opens with the stored series number and does not send it when untouched', async () => {
     renderPage();
-    const title = (await openEditor()) as HTMLInputElement;
-    expect((screen.getByLabelText('Series Number') as HTMLInputElement).value).toBe('3');
+    const { dialog, title } = await openEditor();
+    expect((within(dialog).getByLabelText('Series Number') as HTMLInputElement).value).toBe('3');
     fireEvent.change(title, { target: { value: 'Redshirts (Unabridged)' } });
-    fireEvent.click(screen.getByRole('button', { name: /^save/i }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /^save/i }));
 
     await waitFor(() => expect(api.updateBook).toHaveBeenCalled());
     const payload = sentPayload();
@@ -105,9 +126,9 @@ describe('BookDetail handleEditSave', () => {
 
   it('sends null for a cleared series number', async () => {
     renderPage();
-    await openEditor();
-    fireEvent.change(screen.getByLabelText('Series Number'), { target: { value: '' } });
-    fireEvent.click(screen.getByRole('button', { name: /^save/i }));
+    const { dialog } = await openEditor();
+    fireEvent.change(within(dialog).getByLabelText('Series Number'), { target: { value: '' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: /^save/i }));
 
     await waitFor(() => expect(api.updateBook).toHaveBeenCalled());
     const payload = sentPayload();
@@ -117,9 +138,9 @@ describe('BookDetail handleEditSave', () => {
 
   it('sends a changed series number top-level and as an override', async () => {
     renderPage();
-    await openEditor();
-    fireEvent.change(screen.getByLabelText('Series Number'), { target: { value: '2.5' } });
-    fireEvent.click(screen.getByRole('button', { name: /^save/i }));
+    const { dialog } = await openEditor();
+    fireEvent.change(within(dialog).getByLabelText('Series Number'), { target: { value: '2.5' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: /^save/i }));
 
     await waitFor(() => expect(api.updateBook).toHaveBeenCalled());
     const payload = sentPayload();
@@ -135,9 +156,9 @@ describe('BookDetail handleEditSave', () => {
       warnings: ['the edit was saved but its field locks and overrides were not: disk full'],
     } as unknown as api.Book);
     renderPage();
-    const title = (await openEditor()) as HTMLInputElement;
+    const { dialog, title } = await openEditor();
     fireEvent.change(title, { target: { value: 'Redshirts (Unabridged)' } });
-    fireEvent.click(screen.getByRole('button', { name: /^save/i }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /^save/i }));
 
     expect(
       await screen.findByText(/Metadata saved, but not completely: .*field locks and overrides were not: disk full/)
