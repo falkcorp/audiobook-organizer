@@ -1,5 +1,5 @@
 // file: internal/scheduler/extra_ops.go
-// version: 1.20.1
+// version: 1.20.2
 // guid: a9b8c7d6-e5f4-3210-fedc-ba9876543210
 // last-edited: 2026-10-09
 
@@ -731,41 +731,6 @@ func runCleanupOldBackups(ctx context.Context, progress cleanupProgressLogger) e
 	})
 	_ = progress.Log("info", fmt.Sprintf("Backup cleanup complete: removed %d file(s)", removed), nil)
 	return err
-}
-
-// --- isbn-enrichment (retired) ---
-
-// ErrISBNEnrichmentRetired is what both retired isbn-enrichment ops
-// (scheduler.isbn-enrichment here, maintenance.isbn-enrichment in the
-// maintenance plugin) return instead of running.
-var ErrISBNEnrichmentRetired = errors.New("retired: use metafetch.asin-backfill")
-
-// RegisterISBNEnrichmentOp registers the RETIRED scheduler.isbn-enrichment
-// OperationDef. The job searched Google Books / Open Library and wrote ASINs
-// by title-prefix matching, which put wrong ASINs on books; it was replaced
-// on 2026-10-02 by metafetch.asin-backfill (Audible only), which the
-// asin_backfill scheduled task now runs. The def stays registered so a stale
-// schedule row or API call fails loudly with ErrISBNEnrichmentRetired
-// instead of 404ing or, worse, writing.
-func (r *ExtraOpsRegistrar) RegisterISBNEnrichmentOp(reg *opsregistry.Registry) error {
-	return reg.RegisterOp(opsregistry.OperationDef{
-		ID:              "scheduler.isbn-enrichment",
-		Liveness:        opsregistry.LivenessManual,
-		Plugin:          "scheduler",
-		DisplayName:     "ISBN Enrichment (retired)",
-		Description:     "Retired: refuses to run. Use metafetch.asin-backfill, which fills ASINs and audiobook ISBNs from Audible.",
-		DefaultPriority: opsregistry.PriorityLow,
-		Cancellable:     true,
-		Isolate:         false,
-		Timeout:         time.Minute,
-		ResumePolicy:    opsregistry.ResumeDrop,
-		ConcurrencyKey:  "scheduler.isbn-enrichment",
-		Permissions:     []auth.Permission{auth.PermSettingsManage},
-		Capabilities:    []opsregistry.Capability{opsregistry.CapLibraryRead},
-		Run: func(context.Context, json.RawMessage, opsregistry.Reporter) error {
-			return fmt.Errorf("scheduler.isbn-enrichment: %w", ErrISBNEnrichmentRetired)
-		},
-	})
 }
 
 // --- temp-file-cleanup ---

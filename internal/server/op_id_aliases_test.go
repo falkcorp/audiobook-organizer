@@ -1,7 +1,7 @@
 // file: internal/server/op_id_aliases_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 2a7c5e93-1d4b-4f60-8e2a-b9c3d7f15e48
-// last-edited: 2026-10-08
+// last-edited: 2026-10-09
 
 // Guard tests for operation-ID renames.
 //
@@ -69,6 +69,11 @@ var retiredOpIDs = map[string]string{
 	// incremental sync did. Not aliased to itunes.import: an old sync enqueue
 	// ({library_path, path_mappings}) is not an import request.
 	"itunes.sync": "removed; itunes.import (manual, re-runnable) replaces it",
+	// Stubs since 2026-10-02 that only returned a "retired" error; removed
+	// 2026-10-09. Not aliased to metafetch.asin-backfill: it takes different
+	// params, so an old enqueue is not an asin-backfill request.
+	"scheduler.isbn-enrichment":   "stub since 2026-10-02; metafetch.asin-backfill replaces it, params differ",
+	"maintenance.isbn-enrichment": "stub since 2026-10-02; metafetch.asin-backfill replaces it, params differ",
 }
 
 // bootRegisteredOpIDs boots a server the way TestNewServer_RegistersOpsWithEmptyRootDir
