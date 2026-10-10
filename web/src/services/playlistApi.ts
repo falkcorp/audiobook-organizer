@@ -1,6 +1,7 @@
 // file: web/src/services/playlistApi.ts
-// version: 2.0.0
+// version: 2.0.1
 // guid: 8d6e7f2a-9b0c-4a70-b8c5-3d7e0f1b9a99
+// last-edited: 2026-10-09
 
 const API_BASE = '/api/v1';
 
@@ -91,14 +92,6 @@ export async function addBooksToPlaylist(id: string, bookIds: string[]): Promise
 
 export async function removeBookFromPlaylist(id: string, bookId: string): Promise<UserPlaylist> {
   const resp = await jsonFetch(`${API_BASE}/playlists/${id}/books/${bookId}`, { method: 'DELETE' });
-  return resp.playlist;
-}
-
-export async function reorderPlaylist(id: string, bookIds: string[]): Promise<UserPlaylist> {
-  const resp = await jsonFetch(`${API_BASE}/playlists/${id}/reorder`, {
-    method: 'POST',
-    body: JSON.stringify({ book_ids: bookIds }),
-  });
   return resp.playlist;
 }
 

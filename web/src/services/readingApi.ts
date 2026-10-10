@@ -1,19 +1,11 @@
 // file: web/src/services/readingApi.ts
-// version: 1.4.0
+// version: 1.5.0
 // guid: 6b4c5d0e-7f8a-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-09-25
+// last-edited: 2026-10-09
 
 import { apiFetch } from '../utils/apiFetch';
 
 const API_BASE = '/api/v1';
-
-export interface UserPosition {
-  user_id: string;
-  book_id: string;
-  segment_id: string;
-  position_seconds: number;
-  updated_at: string;
-}
 
 export interface UserBookState {
   user_id: string;
@@ -50,27 +42,6 @@ export async function getBookState(bookId: string): Promise<UserBookState | null
   return body?.data ?? null;
 }
 
-export async function getBookPosition(bookId: string): Promise<UserPosition | null> {
-  const resp = await apiFetch(`${API_BASE}/audiobooks/${bookId}/position`);
-  if (!resp.ok) return null;
-  const body = await resp.json();
-  return body?.data ?? null;
-}
-
-export async function setBookPosition(
-  bookId: string,
-  segmentId: string,
-  positionSeconds: number
-): Promise<UserBookState> {
-  const resp = await apiFetch(`${API_BASE}/audiobooks/${bookId}/position`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ segment_id: segmentId, position_seconds: positionSeconds }),
-  });
-  const body = await resp.json();
-  return body.data;
-}
-
 export async function setBookStatus(
   bookId: string,
   status: ReadStatus
@@ -89,14 +60,4 @@ export async function clearBookStatus(bookId: string): Promise<UserBookState | n
   if (!resp.ok) return null;
   const body = await resp.json();
   return body?.data ?? null;
-}
-
-export async function listByStatus(
-  status: ReadStatus,
-  limit = 50,
-  offset = 0
-): Promise<{ states: UserBookState[]; count: number }> {
-  const resp = await apiFetch(`${API_BASE}/me/${status}?limit=${limit}&offset=${offset}`);
-  const body = await resp.json();
-  return body.data;
 }
