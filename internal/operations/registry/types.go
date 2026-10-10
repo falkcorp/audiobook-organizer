@@ -1,11 +1,12 @@
 // file: internal/operations/registry/types.go
-// version: 2.13.0
+// version: 2.13.1
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 
 // Package registry provides the UOS-02 in-memory OperationDef registry,
-// dispatcher, and in-process worker pool. See the spec at
-// docs/superpowers/specs/2026-05-04-unified-operations-system.md.
+// dispatcher, and in-process worker pool. See
+// docs/development/writing-a-plugin.md for how ops are defined; the planned
+// redesign is in docs/proposals/2026-10-holistic/05-operations-v3.md.
 package registry
 
 import (

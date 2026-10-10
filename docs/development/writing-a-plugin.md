@@ -1,7 +1,7 @@
 <!-- file: docs/development/writing-a-plugin.md -->
-<!-- version: 1.0.1 -->
+<!-- version: 1.0.2 -->
 <!-- guid: f7a8b9c0-d1e2-3456-g789-h0123456789ab -->
-<!-- last-edited: 2026-08-22 -->
+<!-- last-edited: 2026-10-10 -->
 
 # Writing a Plugin for Audiobook Organizer
 
@@ -31,6 +31,11 @@ operation needs (database handles, API clients, etc.) and calls
 **OperationDef** — the static description of one unit of async work. It declares
 an ID, priority, resume semantics, capabilities, and a `Run` function. Every
 field is set once at registration; nothing mutates it afterward.
+
+> **Operations v3 is coming.** A redesign of the operations platform is proposed in
+> `docs/proposals/2026-10-holistic/05-operations-v3.md`. Today's `OperationDef`
+> stays valid until the v3 adapter lands, and an op's id string never changes
+> when the op is ported.
 
 **Registry** — the narrow interface given to `Plugin.Register`. It exposes two
 methods:
