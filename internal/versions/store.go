@@ -1,7 +1,7 @@
 // file: internal/versions/store.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 5e81b3d7-92c4-4a06-8f15-6b0d2a749c38
-// last-edited: 2026-09-14
+// last-edited: 2026-10-10
 
 package versions
 
@@ -24,6 +24,14 @@ type versionUpdater interface {
 // Exported: internal/importer forwards its store into CheckFingerprint.
 type FingerprintReader interface {
 	GetBookVersionByTorrentHash(hash string) (*database.BookVersion, error)
+}
+
+// TorrentHolderReader is what LiveTorrentHolder needs: the torrent-hash index
+// plus the book lookup that tells a live holder from a stale index entry.
+// Exported: internal/importer and internal/server forward their stores into it.
+type TorrentHolderReader interface {
+	FingerprintReader
+	GetBookByID(id string) (*database.Book, error)
 }
 
 type altPromoter interface {

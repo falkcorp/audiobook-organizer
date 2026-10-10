@@ -1,5 +1,5 @@
 // file: internal/server/deluge_discover_import_link_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2d9c4e61-8b57-4f03-a1e8-6c3b7d905a42
 // last-edited: 2026-10-10
 //
@@ -39,8 +39,9 @@ const linkTestHash = "00112233445566778899aabbccddeeff00112233"
 type linkFakeDeluge struct {
 	srv        *httptest.Server
 	moves      atomic.Int32
-	known      bool   // does core.get_torrent_status know linkTestHash
-	savePath   string // torrent save_path
+	calls      atomic.Int32 // every JSON-RPC request, of any method
+	known      bool         // does core.get_torrent_status know linkTestHash
+	savePath   string       // torrent save_path
 	filePaths  []string
 	listLabel  string
 	torrentKey string
@@ -50,6 +51,7 @@ func newLinkFakeDeluge(t *testing.T, savePath string, filePaths ...string) *link
 	t.Helper()
 	f := &linkFakeDeluge{known: true, savePath: savePath, filePaths: filePaths, listLabel: "audiobooks", torrentKey: linkTestHash}
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.calls.Add(1)
 		var req struct {
 			Method string `json:"method"`
 			ID     int64  `json:"id"`
@@ -465,4 +467,64 @@ func TestDiscoverImport_DelugeHangs_TimesOutUnlinked(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, files, 1)
 	assert.Empty(t, files[0].DelugeHash)
+}
+
+// A torrent a live book already holds is refused with 409 before Deluge is
+// asked anything and before any book is created: a retried or doubled discover
+// import must neither duplicate the book nor move the one-to-one torrent index
+// away from the book that owns it.
+func TestDiscoverImport_AlreadyLinked_409(t *testing.T) {
+	env := newLinkImportEnv(t)
+	fake := newLinkFakeDeluge(t, env.dlDir, "Example Book.m4b")
+	env.useClient(t, fake.srv.URL)
+
+	first := env.post(t, map[string]string{"content_path": env.content, "torrent_hash": linkTestHash})
+	require.Equal(t, http.StatusCreated, first.Code, "body: %s", first.Body.String())
+	firstResp := decodeLinkResp(t, first)
+	require.True(t, firstResp.TorrentLinked, "control: the first import links the torrent")
+	owner, err := env.store.GetBookVersionByTorrentHash(linkTestHash)
+	require.NoError(t, err)
+	require.NotNil(t, owner)
+	books := env.bookCount(t)
+	callsBefore := fake.calls.Load()
+
+	w := env.post(t, map[string]string{"content_path": env.content, "torrent_hash": linkTestHash})
+	require.Equal(t, http.StatusConflict, w.Code, "body: %s", w.Body.String())
+	var body struct {
+		Code   string `json:"code"`
+		BookID string `json:"book_id"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	assert.Equal(t, "TORRENT_ALREADY_LINKED", body.Code)
+	assert.Equal(t, firstResp.Book.ID, body.BookID, "the 409 names the book that holds the torrent")
+
+	assert.Equal(t, books, env.bookCount(t), "no second book may be created")
+	assert.Equal(t, callsBefore, fake.calls.Load(), "the refusal comes before any Deluge request")
+	after, err := env.store.GetBookVersionByTorrentHash(linkTestHash)
+	require.NoError(t, err)
+	require.NotNil(t, after)
+	assert.Equal(t, owner.ID, after.ID, "the torrent index must still name the first book's version")
+}
+
+// Control for the 409: an index entry whose book was deleted is stale, so the
+// torrent can be imported and linked again rather than refused forever.
+func TestDiscoverImport_StaleTorrentIndex_Links(t *testing.T) {
+	env := newLinkImportEnv(t)
+	fake := newLinkFakeDeluge(t, env.dlDir, "Example Book.m4b")
+	env.useClient(t, fake.srv.URL)
+
+	_, err := env.store.CreateBookVersion(&database.BookVersion{
+		BookID: "01JGONEBOOK000000000000000", Status: database.BookVersionStatusActive,
+		Format: "m4b", Source: "deluge", TorrentHash: linkTestHash,
+	})
+	require.NoError(t, err)
+
+	w := env.post(t, map[string]string{"content_path": env.content, "torrent_hash": linkTestHash})
+	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
+	resp := decodeLinkResp(t, w)
+	assert.True(t, resp.TorrentLinked)
+	ver, err := env.store.GetBookVersionByTorrentHash(linkTestHash)
+	require.NoError(t, err)
+	require.NotNil(t, ver)
+	assert.Equal(t, resp.Book.ID, ver.BookID)
 }

@@ -1,5 +1,5 @@
 // file: internal/server/deluge_discovery.go
-// version: 3.5.0
+// version: 3.6.0
 // guid: e6f7a8b9-c0d1-2e3f-4a5b-6c7d8e9f0a1b
 // last-edited: 2026-10-10
 //
@@ -23,6 +23,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/importer"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
+	"github.com/falkcorp/audiobook-organizer/internal/versions"
 	"github.com/gin-gonic/gin"
 )
 
@@ -98,9 +99,10 @@ func (s *Server) handleDelugeDiscoverImport(c *gin.Context) {
 		return
 	}
 
-	// Resolve the torrent link BEFORE importing: a hash that does not check out
-	// against Deluge is rejected (400) or dropped (unlinked), and only a
-	// verified hash is ever handed to ImportFile.
+	// Resolve the torrent link BEFORE importing: a hash already linked to a
+	// live book is refused (409), a hash that does not check out against
+	// Deluge is rejected (400) or dropped (unlinked), and only a verified hash
+	// is ever handed to ImportFile.
 	verifiedHash, linkNote, ok := s.verifyDiscoveryTorrentHash(c, req.ContentPath, req.TorrentHash)
 	if !ok {
 		return
@@ -149,10 +151,25 @@ const (
 	discoverNoteTimedOut      = "deluge timed out"
 )
 
+// discoverErrAlreadyLinked is the 409 message for a torrent a live book
+// already holds; the response's book_id names that book.
+const discoverErrAlreadyLinked = "torrent is already linked to a book in the library"
+
 // verifyDiscoveryTorrentHash normalizes the caller's torrent hash and
 // cross-checks it against Deluge. It returns the hash to store (empty when the
 // import must proceed unlinked), a note explaining why it is empty, and
-// ok=false when it has already written a 400 response.
+// ok=false when it has already written an error response.
+//
+// A hash that a live version already holds in the torrent index is refused
+// with 409 before Deluge is asked anything and before any book is created:
+// the torrent is already in the library, so the request is a retry or a
+// duplicate, and importing it would create a second book whose link (were it
+// written) would move the one-to-one index away from the first. The check
+// runs whatever Deluge's state, because the duplicate book is the harm, not
+// the link. A discover content_path is the whole torrent (save_path/name), so
+// one torrent never legitimately feeds two single-file imports. ImportFile
+// keeps its own guard for any path that gets past this one (a concurrent
+// pair, or another caller).
 //
 // An unverifiable hash is dropped, never stored: Deluge not configured,
 // unreachable or not answering within discoverVerifyTimeout proceeds unlinked
@@ -166,6 +183,18 @@ func (s *Server) verifyDiscoveryTorrentHash(c *gin.Context, contentPath, rawHash
 	if err != nil {
 		httputil.RespondWithBadRequest(c, "torrent_hash is not a valid torrent id: "+err.Error())
 		return "", "", false
+	}
+	if store := s.storeForWiring(); store != nil {
+		holder, holdErr := versions.LiveTorrentHolder(store, hash)
+		if holdErr != nil {
+			httputil.InternalError(c, "failed to read the torrent index", holdErr)
+			return "", "", false
+		}
+		if holder != nil {
+			httputil.RespondWithErrorFields(c, http.StatusConflict, discoverErrAlreadyLinked, "TORRENT_ALREADY_LINKED",
+				map[string]any{"book_id": holder.BookID})
+			return "", "", false
+		}
 	}
 	client := getDelugeClient()
 	if client == nil {
