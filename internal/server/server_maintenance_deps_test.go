@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps_test.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 9c1e4f6a-2b7d-4a3e-8f5c-6d1a9b2e4c7f
-// last-edited: 2026-10-05
+// last-edited: 2026-10-10
 
 // Package server tests for TASK-23 (MATCH-6/BUG-3/QUAL-3): ApplyTranscriptionCandidate
 // must verify the identity of the re-read cached candidate against the
@@ -448,6 +448,58 @@ func TestApplyTranscriptionCandidate_OwnerManualOnlyRefused(t *testing.T) {
 			}
 			if len(*updateCalls) != 0 {
 				t.Fatalf("UpdateBook calls = %d, want 0", len(*updateCalls))
+			}
+		})
+	}
+}
+
+// The transcription auto-match's search (its dry run's whole view of a book)
+// and its apply agree on a candidate CandidateIdentityStale refuses: a row
+// marked Stale (retitled after the fetch), and a row fetched for an ASIN the
+// book no longer carries whose top candidate does not carry the new one. The
+// search reports no candidate, so the dry run never counts as eligible a book
+// the real run refuses; the apply refuses it and writes nothing. The unmarked
+// control proves the search is not over-suppressed.
+func TestSearchTranscriptionCandidate_IdentityStaleRowAgreesWithApply(t *testing.T) {
+	cand := metafetch.MetadataCandidate{Title: "Title 000001", Author: "Author 07", Score: 0.9, Source: "test"}
+	newASIN := "B00NEWASIN"
+	cases := []struct {
+		name  string
+		book  *database.Book
+		mark  func(*database.MetadataCandidateCache)
+		found bool
+	}{
+		{"unmarked", &database.Book{ID: "book-s0", Title: "Title 000001"}, func(*database.MetadataCandidateCache) {}, true},
+		{"stale", &database.Book{ID: "book-s1", Title: "Title 000002"}, func(e *database.MetadataCandidateCache) {
+			e.Stale, e.StaleQuestionFP = true, "fp-old-question"
+		}, false},
+		{"asin_replaced", &database.Book{ID: "book-s2", Title: "Title 000001", ASIN: &newASIN}, func(e *database.MetadataCandidateCache) {
+			e.FetchedForASIN = "B00OLDASIN"
+		}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			entry := mustCandidateCache(t, tc.book.ID, cand)
+			tc.mark(entry)
+			store, updateCalls := newTOCTOUCacheStore(t, tc.book, entry, entry)
+			s := &Server{store: store, metadataFetchService: metafetch.NewService(store)}
+			ctx := context.Background()
+
+			top, found, err := s.SearchTranscriptionCandidate(ctx, tc.book.ID, "irrelevant", "irrelevant")
+			if err != nil {
+				t.Fatalf("SearchTranscriptionCandidate() error = %v", err)
+			}
+			if found != tc.found {
+				t.Fatalf("SearchTranscriptionCandidate() found = %v (%+v), want %v", found, top, tc.found)
+			}
+			if tc.found {
+				return
+			}
+			if applyErr := s.ApplyTranscriptionCandidate(ctx, tc.book.ID, cand.Title, cand.Author); applyErr == nil {
+				t.Fatal("ApplyTranscriptionCandidate() = nil, want the identity refusal the search mirrors")
+			}
+			if len(*updateCalls) != 0 {
+				t.Fatalf("UpdateBook was called %d times, want 0", len(*updateCalls))
 			}
 		})
 	}

@@ -693,6 +693,12 @@ func (s *Server) CachedMetadataCandidates(bookID string) (*database.MetadataCand
 // Uses the local metadata cache — no external API calls. Returns the top
 // cached candidate (title, author, series, score) and true when one exists;
 // the zero value and false on cache-miss or unavailable service.
+//
+// A top candidate metafetch.CandidateIdentityStale refuses (a row marked
+// Stale because the book was retitled or re-credited after the fetch, or one
+// fetched for an ASIN the book no longer carries) is not a candidate either:
+// ApplyTranscriptionCandidate refuses it (transcriptionCacheIdentity), and the
+// op's dry run must skip the same books its real run skips.
 func (s *Server) SearchTranscriptionCandidate(_ context.Context, bookID, _, _ string) (maintenanceplugin.TranscriptionCandidate, bool, error) {
 	if s.metadataFetchService == nil {
 		return maintenanceplugin.TranscriptionCandidate{}, false, nil
@@ -713,6 +719,22 @@ func (s *Server) SearchTranscriptionCandidate(_ context.Context, bookID, _, _ st
 	// 2026-10-06) is never applied unattended: the book has no candidate for
 	// this op, and ApplyTranscriptionCandidate refuses it too.
 	if applygate.ReviewOnlySource(&best) {
+		return maintenanceplugin.TranscriptionCandidate{}, false, nil
+	}
+	if entry.Stale {
+		return maintenanceplugin.TranscriptionCandidate{}, false, nil
+	}
+	// The ASIN leg needs the book. Without a store there is no apply either
+	// (ApplyTranscriptionCandidate refuses "database not initialized").
+	store := s.Ops()
+	if store == nil {
+		return maintenanceplugin.TranscriptionCandidate{}, false, nil
+	}
+	book, err := store.GetBookByID(bookID)
+	if err != nil {
+		return maintenanceplugin.TranscriptionCandidate{}, false, fmt.Errorf("get book %s for the candidate identity check: %w", bookID, err)
+	}
+	if book == nil || metafetch.CandidateIdentityStale(entry, book, &best) != nil {
 		return maintenanceplugin.TranscriptionCandidate{}, false, nil
 	}
 	return maintenanceplugin.TranscriptionCandidate{Title: best.Title, Author: best.Author, Series: best.Series, Score: best.Score}, true, nil
