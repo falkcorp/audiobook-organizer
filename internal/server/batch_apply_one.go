@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_one.go
-// version: 1.37.0
+// version: 1.37.1
 // guid: 4e91c082-77a3-4d16-b5f8-2c0a9e3d4671
-// last-edited: 2026-10-07
+// last-edited: 2026-10-09
 
 package server
 
@@ -411,14 +411,16 @@ func planCachedApply(svc cachedApplyService, books bookReader, id string, claims
 	}
 	idErr := svc.ValidateCachedIdentityForBook(entry, book, authors)
 	ts := cachedTranscribedSearch(svc, books, entry, book, authors, idErr)
-	// The book's ASIN was replaced or cleared after this row was fetched, and
-	// the candidate does not carry the new one (metafetch.CandidateASINStale).
+	// The row is marked stale (the book was retitled or re-credited after the
+	// fetch), or the book's ASIN was replaced or cleared after this row was
+	// fetched and the candidate does not carry the new one
+	// (metafetch.CandidateIdentityStale).
 	// A candidate naming another ASIN is refused as asin_conflict anyway; this
 	// catches the one that names none (Open Library, Google Books), which the
 	// ASIN check passes. It joins the identity leg as identity_stale, and no
 	// transcription lifts it: a transcription can explain a stale query, not a
 	// book now identified by another record.
-	if asinErr := metafetch.CandidateASINStale(entry, book, &cand); asinErr != nil {
+	if asinErr := metafetch.CandidateIdentityStale(entry, book, &cand); asinErr != nil {
 		ts.ExplainsStaleIdentity = false
 		if idErr == nil {
 			idErr = asinErr

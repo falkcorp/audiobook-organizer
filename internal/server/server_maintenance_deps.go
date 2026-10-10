@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.57.0
+// version: 1.57.1
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
 // last-edited: 2026-10-09
 
@@ -925,10 +925,10 @@ func (s *Server) ApplyTranscriptionCandidate(_ context.Context, bookID, gatedTit
 // in its transcribed query, applygate.TranscribedIdentityLifts that the
 // candidate matches that transcription and nothing contradicts it).
 func transcriptionCacheIdentity(svc cachedApplyService, books bookReader, entry *metafetch.MetadataCandidateCache, book *database.Book, cand metafetch.MetadataCandidate) error {
-	// A row fetched for an ASIN the book no longer carries, for a candidate
-	// without the new one, is refused first: the planner adds it to the
+	// A row marked stale, or fetched for an ASIN the book no longer carries
+	// (for a candidate without the new one), is refused first: the planner adds it to the
 	// identity leg and no transcription lifts it (planCachedApply).
-	if asinErr := metafetch.CandidateASINStale(entry, book, &cand); asinErr != nil {
+	if asinErr := metafetch.CandidateIdentityStale(entry, book, &cand); asinErr != nil {
 		return asinErr
 	}
 	live, err := database.LiveBookAuthorNames(books, book)

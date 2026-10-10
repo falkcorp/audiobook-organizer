@@ -1,7 +1,7 @@
 // file: internal/server/batch_apply_one_test.go
-// version: 1.21.0
+// version: 1.21.1
 // guid: 9d2b71fa-30c8-4e57-a614-8b5e0c7f2d93
-// last-edited: 2026-10-07
+// last-edited: 2026-10-09
 //
 // Regression tests for applying ONE book's cached metadata candidate.
 //
@@ -37,14 +37,17 @@ type fakeApplySvc struct {
 	candidates []json.RawMessage
 	// fetchedForASIN is the cache row's FetchedForASIN.
 	fetchedForASIN string
-	queryMatches   map[string]bool
-	getErr         error
-	applyErr       error
-	finishErr      error
-	pendingCover   string
-	skippedLocked  []string
-	appliedIDs     []string
-	finishCalls    []finishCall
+	// staleRow is the cache row's Stale flag (the book's search identity
+	// changed after the fetch).
+	staleRow      bool
+	queryMatches  map[string]bool
+	getErr        error
+	applyErr      error
+	finishErr     error
+	pendingCover  string
+	skippedLocked []string
+	appliedIDs    []string
+	finishCalls   []finishCall
 	// checkpoints is the stand-down checkpoint each FinishApplyFileWork got.
 	checkpoints []func() error
 	// identityErr is what ValidateCachedIdentityForBook reports.
@@ -174,7 +177,7 @@ func (f *fakeApplySvc) GetCachedCandidates(bookID string) (*metafetch.MetadataCa
 	if len(f.candidates) == 0 {
 		return nil, false, nil
 	}
-	return &metafetch.MetadataCandidateCache{Candidates: f.candidates, FetchedForASIN: f.fetchedForASIN}, true, nil
+	return &metafetch.MetadataCandidateCache{Candidates: f.candidates, FetchedForASIN: f.fetchedForASIN, Stale: f.staleRow, StaleQuestionFP: "fp-synthetic"}, true, nil
 }
 
 func (f *fakeApplySvc) ApplyMetadataCandidateWithOptions(id string, _ metafetch.MetadataCandidate, _ []string, opts metafetch.ApplyOptions) (*metafetch.FetchMetadataResponse, error) {

@@ -1,12 +1,12 @@
 // file: internal/metafetch/cache_asin_replaced_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3e7a9d14-6b2c-4f58-a0d1-8c5e2b7f9a36
-// last-edited: 2026-10-05
+// last-edited: 2026-10-09
 
 // A book's cached candidates survive an ASIN change (database
 // candidateSearchIdentityChanged). The row records the ASIN its candidates
 // were fetched for (FetchedForASIN), so a candidate with no ASIN of its own
-// reads as stale once the book's ASIN is replaced: CandidateASINStale refuses
+// reads as stale once the book's ASIN is replaced: CandidateIdentityStale refuses
 // it, and the batch fetch re-asks the row instead of serving it as fresh.
 package metafetch
 
@@ -55,7 +55,7 @@ func TestCacheSearchResponse_UnstampedCarryTakesTheSearchASIN(t *testing.T) {
 	require.Equal(t, "B00CURRENT", stored.FetchedForASIN)
 }
 
-func TestCandidateASINStale(t *testing.T) {
+func TestCandidateIdentityStale(t *testing.T) {
 	asin := func(s string) *string { return &s }
 	cases := []struct {
 		name  string
@@ -75,7 +75,7 @@ func TestCandidateASINStale(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			entry := &MetadataCandidateCache{BookID: "b1", FetchedForASIN: tc.stamp}
 			book := &database.Book{ID: "b1", ASIN: tc.book}
-			err := CandidateASINStale(entry, book, &MetadataCandidate{ASIN: tc.cand})
+			err := CandidateIdentityStale(entry, book, &MetadataCandidate{ASIN: tc.cand})
 			require.Equal(t, tc.stale, err != nil, "err = %v", err)
 			if err != nil {
 				require.ErrorIs(t, err, ErrCandidateASINReplaced)
@@ -84,7 +84,7 @@ func TestCandidateASINStale(t *testing.T) {
 			}
 		})
 	}
-	require.NoError(t, CandidateASINStale(nil, &database.Book{}, &MetadataCandidate{}))
+	require.NoError(t, CandidateIdentityStale(nil, &database.Book{}, &MetadataCandidate{}))
 }
 
 // The batch fetch re-asks a row whose book's ASIN was replaced even when
@@ -129,6 +129,6 @@ func TestBatchVerdict_ReplacedASINIsReasked(t *testing.T) {
 	require.NotEqual(t, BatchVerdictNone, f.batchFetch(b.ID), "an answered empty search is not repeated every run")
 	require.Equal(t, calls, src.calls.Load())
 	book := f.book(b.ID)
-	require.ErrorIs(t, CandidateASINStale(entry, book, &MetadataCandidate{Title: "Rendezvous"}), ErrCandidateASINReplaced,
+	require.ErrorIs(t, CandidateIdentityStale(entry, book, &MetadataCandidate{Title: "Rendezvous"}), ErrCandidateASINReplaced,
 		"the carried candidates still read as stale to the apply gate")
 }

@@ -1,12 +1,13 @@
 // file: internal/metabatch/usable_candidate.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 6a925443-e10e-4dc5-af83-0dcf909b6256
-// last-edited: 2026-10-06
+// last-edited: 2026-10-09
 
 package metabatch
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -28,8 +29,8 @@ const candidateRefusalOwnerRejected = "owner-rejected"
 
 // CandidateRefusal is why one candidate is not usable for book ("" =
 // usable): owner-rejected (rejected: LoadRejectedCandidateKeys),
-// asin_conflict (applygate.CheckASIN), identity_stale because the book's ASIN
-// was replaced after entry was fetched (metafetch.CandidateASINStale; entry
+// asin_conflict (applygate.CheckASIN), identity_stale because entry is marked stale (the book was retitled) or the book's ASIN
+// was replaced after entry was fetched (metafetch.CandidateIdentityStale; entry
 // nil skips it), or the apply gate's score leg (applygate.ScoreGate: the
 // floor, or a transcribed title the candidate does not match) -- the same
 // rule the bulk apply gate applies.
@@ -39,8 +40,12 @@ func CandidateRefusal(rejected map[string]bool, book *database.Book, entry *data
 		return candidateRefusalOwnerRejected
 	case applygate.CheckASIN(book, c).Outcome == applygate.OutcomeBlock:
 		return applygate.ReasonASINConflict
-	case metafetch.CandidateASINStale(entry, book, c) != nil:
-		return applygate.ReasonIdentityStale + " (ASIN replaced)"
+	}
+	if err := metafetch.CandidateIdentityStale(entry, book, c); err != nil {
+		if errors.Is(err, metafetch.ErrCandidateASINReplaced) {
+			return applygate.ReasonIdentityStale + " (ASIN replaced)"
+		}
+		return applygate.ReasonIdentityStale + " (retitled)"
 	}
 	if ok, _, _, reason := applygate.ScoreGate(book, c); !ok {
 		return reason

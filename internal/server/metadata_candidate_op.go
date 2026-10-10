@@ -1,7 +1,7 @@
 // file: internal/server/metadata_candidate_op.go
-// version: 3.15.1
+// version: 3.15.2
 // guid: 3f7e2c91-b4a0-4d8e-9c5f-1a6b7d8e0f23
-// last-edited: 2026-10-06
+// last-edited: 2026-10-09
 //
 // Registers the metadata.candidate-fetch v2 OperationDef. Pure params
 // type moved to internal/metabatch.FetchOpParams.
@@ -402,11 +402,11 @@ func (s *Server) selectUnfetchedBooks(ctx context.Context, reporter opsregistry.
 	if err != nil {
 		return unfetchedSelection{}, fmt.Errorf("metadata-candidate-fetch: select unfetched books: %w", err)
 	}
-	msg := fmt.Sprintf("selected %d books to fetch: %d never fetched or invalidated, %d with an empty answer to questions no longer asked, "+
+	msg := fmt.Sprintf("selected %d books to fetch: %d never fetched or invalidated, %d with an empty answer to questions no longer asked, %d with a row marked stale (the book's identity changed), "+
 		"%d owed a fallback provider's answer, %d of them holding only unusable candidates (%d Google Books lookups left for a later quota day, %d of those books still asked of Open Library) "+
 		"(%d books the chain has not answered keep their chain and Open Library steps with any Google step put off) "+
 		"(%d live books read, %d left out with no usable search title)",
-		len(sel.IDs), sel.NoRow, sel.StaleEmpty, sel.FallbackPending, sel.FallbackUnusable, sel.FallbackCapped, len(sel.GoogleCapped)-sel.ChainCapped,
+		len(sel.IDs), sel.NoRow, sel.StaleEmpty, sel.Stale, sel.FallbackPending, sel.FallbackUnusable, sel.FallbackCapped, len(sel.GoogleCapped)-sel.ChainCapped,
 		sel.ChainCapped, sel.Scanned, sel.Unsearchable)
 	_ = reporter.Log(slog.LevelInfo, msg)
 	candidateFetchLog.Info("%s", msg)

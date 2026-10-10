@@ -1,7 +1,7 @@
 // file: internal/server/metadata_candidate_unfetched.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 6bf34beb-7e2f-40a9-b7a7-c5755a52c7fb
-// last-edited: 2026-10-06
+// last-edited: 2026-10-09
 //
 // Selects the books the scheduled candidate fetch asks the providers about:
 // books never fetched, books whose candidates were invalidated, and books
@@ -57,6 +57,9 @@ type unfetchedSelection struct {
 	// StaleEmpty: books whose 0-candidate row answered other questions than
 	// a search would ask now (metafetch.SearchFingerprintCurrent).
 	StaleEmpty int
+	// Stale: books whose row is marked Stale (database.MetadataCandidateCache.
+	// Stale), selected for refetch even though the row holds candidates.
+	Stale int
 	// FallbackPending: books whose current row holds no usable candidate
 	// (metabatch.NoUsableCandidate: none, all owner-rejected, all refused by the ASIN
 	// checks, or below the apply floor) and that a fallback provider (Open
@@ -103,7 +106,12 @@ type unfetchedSelection struct {
 //     query parser changed since the providers answered "nothing". A legacy
 //     (version "1") empty row is left out.
 //
-// A stale row is never selected for its staleness alone: that is the
+// A row marked Stale (the book's search identity changed after its candidates
+// were fetched, database.MetadataCandidateCache.Stale) IS selected, whatever
+// its candidate count and whether or not a fallback provider is enabled: its
+// candidates are for another identity and every apply gate already refuses them.
+//
+// A row that is merely past its TTL is never selected for its age alone: that is the
 // stale-refetch's to re-ask (POST .../batch-fetch-candidates with stale).
 // Neither is an empty row that is merely old: an empty answer for the same
 // questions ages out on its own (database.MetadataKnownEmptyTTL), and
@@ -164,8 +172,12 @@ func unfetchedCandidateBookIDs(ctx context.Context, store unfetchedSelectStore, 
 		return sel, fmt.Errorf("list metadata cache rows: %w", err)
 	}
 	candidates := make(map[string]int, len(summaries))
+	staleByBook := make(map[string]bool)
 	for _, s := range summaries {
 		candidates[s.BookID] = s.CandidateCount
+		if s.Stale {
+			staleByBook[s.BookID] = true
+		}
 	}
 
 	type pick struct {
@@ -199,7 +211,9 @@ func unfetchedCandidateBookIDs(ctx context.Context, store unfetchedSelectStore, 
 			// A row with candidates matters only to the fallback (its
 			// candidates may all be unusable); with no fallback provider
 			// enabled it was fetched and is left alone.
-			if hasRow && n > 0 && len(plan) == 0 {
+			// A row marked stale is never left alone: its candidates are for
+			// another identity.
+			if hasRow && n > 0 && len(plan) == 0 && !staleByBook[b.ID] {
 				continue
 			}
 			picks = append(picks, pick{book: b, hasRow: hasRow})
@@ -212,6 +226,7 @@ func unfetchedCandidateBookIDs(ctx context.Context, store unfetchedSelectStore, 
 
 	keep := make([]bool, len(picks))
 	stale := make([]bool, len(picks))
+	rowStale := make([]bool, len(picks))
 	// fallback marks a book selected because a fallback provider owes it an
 	// answer; unusable, one whose row holds candidates; googleOwed, one
 	// Google Books owes (capped below), with its last Google attempt.
@@ -255,6 +270,13 @@ func unfetchedCandidateBookIDs(ctx context.Context, store unfetchedSelectStore, 
 				// The row vanished or cannot be read: ask again, the safe
 				// direction for a fetch that never writes the book.
 				keep[i] = true
+				chainGoogle(i, b, q.Title)
+				return nil
+			}
+			// A row marked stale holds candidates found for an identity the
+			// book no longer has: re-ask, whatever its fingerprint says.
+			if entry.Stale || staleByBook[b.ID] {
+				keep[i], rowStale[i] = true, true
 				chainGoogle(i, b, q.Title)
 				return nil
 			}
@@ -337,7 +359,9 @@ func unfetchedCandidateBookIDs(ctx context.Context, store unfetchedSelectStore, 
 					googleRemaining -= perBook
 				}
 			}
-			if stale[i] {
+			if rowStale[i] {
+				sel.Stale++
+			} else if stale[i] {
 				sel.StaleEmpty++
 			} else {
 				sel.NoRow++
