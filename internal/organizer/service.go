@@ -1,5 +1,5 @@
 // file: internal/organizer/service.go
-// version: 1.60.1
+// version: 1.61.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
 // last-edited: 2026-10-10
 
@@ -74,6 +74,9 @@ type OrganizerBookFileStore interface {
 	// BatchCreateBookFiles writes a book's copied file rows atomically, so a
 	// partial failure cannot leave the organized copy owning some of its audio.
 	BatchCreateBookFiles(files []*database.BookFile) error
+	// GetBookFilesForIDsCore reads every candidate's rows in one call, for the
+	// folder scope (scopeBooks).
+	GetBookFilesForIDsCore(bookIDs []string) (map[string][]database.BookFileCore, error)
 }
 
 // OrganizerContributorStore reads the author/narrator/tag associations that the
@@ -240,11 +243,19 @@ func NewService(db Store) *Service {
 
 // Request describes an organize operation request.
 type Request struct {
+	// FolderPath, when non-nil, restricts the run to books whose book_file
+	// rows all lie inside this folder (see newFolderScope for what is a valid
+	// value). nil means no folder restriction. A non-nil value that is empty,
+	// relative, or contains ".." fails the run with ErrInvalidFolderScope
+	// instead of widening it. Combined with BookIDs, both must hold.
 	FolderPath         *string
 	Priority           *int
 	FetchMetadataFirst bool
 	OperationID        string
-	BookIDs            []string // if set, only organize these books
+	// BookIDs, when non-nil, restricts the run to these books. A non-nil EMPTY
+	// slice means "these zero books" and organizes nothing: an explicit scope
+	// that resolved to nothing must not fall back to the whole library.
+	BookIDs []string
 	// LockBooksAgainstScan makes each book's organize take its per-book scan
 	// lock (internal/scanlock, L0) for the whole OrganizeOneBook +
 	// CommitLanding span, so a library scan cannot read and merge a book while
@@ -295,6 +306,15 @@ func (orgSvc *Service) PerformOrganize(ctx context.Context, req *Request, log lo
 func (orgSvc *Service) PerformOrganizeStats(ctx context.Context, req *Request, log logger.Logger) (*Stats, error) {
 	log.Info("Starting file organization")
 
+	// Validate the scope before anything else touches disk or the store: the
+	// auto-backup below is a large write, and a run refused for a bad scope
+	// should not have paid for it.
+	scope, err := newFolderScope(req.FolderPath)
+	if err != nil {
+		log.Error("Organize refused: %v", err)
+		return nil, err
+	}
+
 	// Auto-backup database before organizing
 	orgSvc.autoBackup(ctx, log)
 	// A canceled or stood-down run stops here: the backup above returned at its
@@ -303,49 +323,12 @@ func (orgSvc *Service) PerformOrganizeStats(ctx context.Context, req *Request, l
 		return nil, fmt.Errorf("organize stopped after auto-backup: %w", context.Cause(ctx))
 	}
 
-	// Get books — either specific IDs or all books
-	const fetchPageSize = 1000
-	var allBooks []database.Book
-	if len(req.BookIDs) > 0 {
-		for _, id := range req.BookIDs {
-			book, err := orgSvc.db.GetBookByID(id)
-			if err != nil || book == nil {
-				log.Warn("Book %s not found, skipping", id)
-				continue
-			}
-			allBooks = append(allBooks, *book)
-		}
-	} else {
-		for offset := 0; ; offset += fetchPageSize {
-			// GetAllBooksCore: under prod's memdb-backed default, GetAllBooks
-			// already returned heavy-field-nil'd (Description/BookSig*/
-			// Author/Series) projections here, and expandPattern already
-			// falls back to AuthorID/SeriesID lookups when Author/Series are
-			// nil (see organizer.go) — so ToBook() is a lossless read-only
-			// projection for this call site, not a behavior change.
-			page, fetchErr := orgSvc.db.GetAllBooksCore(fetchPageSize, offset)
-			if fetchErr != nil {
-				log.Error("Failed to fetch books: %s", fetchErr.Error())
-				return nil, fmt.Errorf("failed to fetch books: %w", fetchErr)
-			}
-			for i := range page {
-				allBooks = append(allBooks, page[i].ToBook())
-			}
-			// Stamp per page. This loop pulls the whole library in 1,000-book
-			// pages and had no progress calls at all, so on a large library it
-			// was a second silent window after the backup — same failure mode,
-			// same watchdog. Total 0 (indeterminate) because the row count is
-			// not known until the last short page arrives. Not (0, 1): every
-			// progress bar in web/src renders total > 0 as a determinate bar,
-			// so total 1 showed the op as "0/1" stuck at 0% -- the same value
-			// the scanner's phases use for "unknown" is 0 (scanner.go,
-			// discovery phase). total 0 still stamps the watchdog clock:
-			// reporter_db.UpdateProgress touches it before reading any value.
-			log.UpdateProgress(0, 0, fmt.Sprintf("Loading library: %d books", len(allBooks)))
-			if len(page) < fetchPageSize {
-				break
-			}
-		}
+	// Get the candidate books: the BookIDs and/or FolderPath scope applied
+	// where the set is built, so nothing below (the metadata fetch, the filter,
+	// the organize) can see a book the caller did not scope in.
+	allBooks, straddling, err := orgSvc.loadCandidates(req, scope, "Loading library", log)
+	if err != nil {
+		return nil, err
 	}
 
 	logMsg := fmt.Sprintf("Fetched %d total books from database", len(allBooks))
@@ -372,21 +355,13 @@ func (orgSvc *Service) PerformOrganizeStats(ctx context.Context, req *Request, l
 		}
 		log.Info("Metadata enriched for %d books", enriched)
 
-		// Re-fetch all books since metadata may have changed
-		allBooks = nil
-		for offset := 0; ; offset += fetchPageSize {
-			page, fetchErr := orgSvc.db.GetAllBooksCore(fetchPageSize, offset)
-			if fetchErr != nil {
-				return nil, fmt.Errorf("failed to re-fetch books after metadata: %w", fetchErr)
-			}
-			for i := range page {
-				allBooks = append(allBooks, page[i].ToBook())
-			}
-			// Indeterminate (total 0) for the same reason as the first paging loop.
-			log.UpdateProgress(0, 0, fmt.Sprintf("Reloading library after metadata: %d books", len(allBooks)))
-			if len(page) < fetchPageSize {
-				break
-			}
+		// Re-fetch the books since metadata may have changed. Through the same
+		// loader, so the reload is scoped exactly like the first load: it
+		// used to re-page the WHOLE library here, which silently undid any
+		// BookIDs scope for every FetchMetadataFirst run.
+		allBooks, straddling, err = orgSvc.loadCandidates(req, scope, "Reloading library after metadata", log)
+		if err != nil {
+			return nil, fmt.Errorf("failed to re-fetch books after metadata: %w", err)
 		}
 	}
 
@@ -402,8 +377,70 @@ func (orgSvc *Service) PerformOrganizeStats(ctx context.Context, req *Request, l
 	stats := orgSvc.organizeBooksOpts(ctx, booksToOrganize, alreadyCorrect, log, req.OperationID, req.LockBooksAgainstScan)
 	stats.addCollision(OutcomePlaceholderSkipped, heldBack.placeholderTitle)
 	stats.addCollision(OutcomeVersionGroupUnreadable, heldBack.versionGroupUnreadable)
+	stats.addCollision(OutcomeStraddlesFolderScope, straddling)
 
 	return stats, organizeOutcomeError(stats)
+}
+
+// loadCandidates builds the set of books a run may touch. req.BookIDs (when
+// non-nil) names them directly; otherwise every book is paged in. req.FolderPath
+// (scope non-nil) is then applied to that set, so the two compose as an
+// intersection. progressLabel prefixes the "N books" progress stamp of the
+// paged read. straddling counts the books the folder scope held back.
+func (orgSvc *Service) loadCandidates(req *Request, scope *folderScope, progressLabel string, log logger.Logger) (books []database.Book, straddling int, err error) {
+	const fetchPageSize = 1000
+	if req.BookIDs != nil {
+		for _, id := range req.BookIDs {
+			book, getErr := orgSvc.db.GetBookByID(id)
+			if getErr != nil || book == nil {
+				log.Warn("Book %s not found, skipping", id)
+				continue
+			}
+			books = append(books, *book)
+		}
+	} else {
+		for offset := 0; ; offset += fetchPageSize {
+			// GetAllBooksCore: under prod's memdb-backed default, GetAllBooks
+			// already returned heavy-field-nil'd (Description/BookSig*/
+			// Author/Series) projections here, and expandPattern already
+			// falls back to AuthorID/SeriesID lookups when Author/Series are
+			// nil (see organizer.go) — so ToBook() is a lossless read-only
+			// projection for this call site, not a behavior change.
+			page, fetchErr := orgSvc.db.GetAllBooksCore(fetchPageSize, offset)
+			if fetchErr != nil {
+				log.Error("Failed to fetch books: %s", fetchErr.Error())
+				return nil, 0, fmt.Errorf("failed to fetch books: %w", fetchErr)
+			}
+			for i := range page {
+				books = append(books, page[i].ToBook())
+			}
+			// Stamp per page. This loop pulls the whole library in 1,000-book
+			// pages and had no progress calls at all, so on a large library it
+			// was a second silent window after the backup — same failure mode,
+			// same watchdog. Total 0 (indeterminate) because the row count is
+			// not known until the last short page arrives. Not (0, 1): every
+			// progress bar in web/src renders total > 0 as a determinate bar,
+			// so total 1 showed the op as "0/1" stuck at 0% -- the same value
+			// the scanner's phases use for "unknown" is 0 (scanner.go,
+			// discovery phase). total 0 still stamps the watchdog clock:
+			// reporter_db.UpdateProgress touches it before reading any value.
+			log.UpdateProgress(0, 0, fmt.Sprintf("%s: %d books", progressLabel, len(books)))
+			if len(page) < fetchPageSize {
+				break
+			}
+		}
+	}
+	if scope == nil {
+		return books, 0, nil
+	}
+	total := len(books)
+	books, straddling, err = orgSvc.scopeBooks(books, scope)
+	if err != nil {
+		return nil, 0, err
+	}
+	log.Info("Folder scope %s: %d of %d candidate books in scope, %d held back for straddling the folder boundary",
+		scope.root, len(books), total, straddling)
+	return books, straddling, nil
 }
 
 // organizeOutcomeError converts a finished run's Stats into the error
