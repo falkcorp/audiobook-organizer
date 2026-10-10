@@ -1,7 +1,7 @@
 // file: internal/deluge/client_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 0b8c9d7e-1f2a-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package deluge
 
@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -252,7 +253,11 @@ func (r *rpcRecorder) serve(t *testing.T) *Client {
 		res, e := r.handler(rq, n)
 		resp := rpcResponse{ID: rq.ID}
 		if e != "" {
-			resp.Error = &rpcError{Message: e, Code: 4}
+			code := 4
+			if e == "Not authenticated" {
+				code = 1
+			}
+			resp.Error = &rpcError{Message: e, Code: code}
 		} else {
 			resp.Result = json.RawMessage(res)
 		}
@@ -321,7 +326,7 @@ func TestGetTorrentDetail_RequestsDetailFields(t *testing.T) {
 func TestGetTorrentDetail_UnknownTorrent(t *testing.T) {
 	for name, h := range map[string]func(rpcRequest, int) (string, string){
 		"rpc error": func(rpcRequest, int) (string, string) {
-			return "", "InvalidTorrentError: Torrent id was not in the dictionary"
+			return "", "Failure: [Failure instance: Traceback (failure with no frames): <class 'deluge.error.InvalidTorrentError'>: torrent_id " + hashA + " not in session.\n]"
 		},
 		"empty object": func(rpcRequest, int) (string, string) { return `{}`, "" },
 	} {
@@ -437,7 +442,7 @@ func TestRemoveTorrent_FalseResultIsError(t *testing.T) {
 
 func TestRemoveTorrent_RPCError(t *testing.T) {
 	rec := &rpcRecorder{handler: func(rpcRequest, int) (string, string) {
-		return "", "InvalidTorrentError: Torrent does not exist"
+		return "", "Failure: [Failure instance: Traceback (failure with no frames): <class 'deluge.error.InvalidTorrentError'>: torrent_id " + hashA + " not in session.\n]"
 	}}
 	c := rec.serve(t)
 	if ok, err := c.RemoveTorrent(hashA, true); ok || !errors.Is(err, ErrTorrentNotFound) {
@@ -536,5 +541,112 @@ func TestExistingListPathUnchanged(t *testing.T) {
 	}
 	if len(rec.calls[0].Params[0].(map[string]any)) != 0 {
 		t.Errorf("filter = %v", rec.calls[0].Params[0])
+	}
+}
+
+func TestCall_TransportErrorWithAuthPhraseDoesNotRelogin(t *testing.T) {
+	var logins, status atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var rq rpcRequest
+		_ = json.NewDecoder(r.Body).Decode(&rq)
+		if rq.Method == "auth.login" {
+			logins.Add(1)
+			_ = json.NewEncoder(w).Encode(rpcResponse{ID: rq.ID, Result: json.RawMessage(`true`)})
+			return
+		}
+		status.Add(1)
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte("<html>502 Not authenticated upstream</html>"))
+	}))
+	defer srv.Close()
+	c, _ := New(srv.URL, "deluge")
+	if _, err := c.ListTorrentDetails([]string{hashA}); err == nil {
+		t.Fatal("want error")
+	}
+	if logins.Load() != 1 || status.Load() != 1 {
+		t.Errorf("logins=%d status calls=%d, want 1 and 1 (no re-login, no replay)", logins.Load(), status.Load())
+	}
+}
+
+func TestIsAuthError_OnlyTypedCode1(t *testing.T) {
+	if !isAuthError(&rpcError{Code: 1, Message: "Not authenticated"}) {
+		t.Error("code 1 should be an auth error")
+	}
+	if isAuthError(&rpcError{Code: 4, Message: "Not authenticated"}) {
+		t.Error("code 4 must not be an auth error")
+	}
+	if isAuthError(errors.New("deluge error 1: Not authenticated")) {
+		t.Error("untyped error must not be an auth error")
+	}
+}
+
+func TestCall_ConcurrentExpiredSessionLogsInOnce(t *testing.T) {
+	const n = 20
+	var (
+		mu       sync.Mutex
+		valid    bool
+		logins   int
+		arrived  int
+		released = make(chan struct{})
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var rq rpcRequest
+		_ = json.NewDecoder(r.Body).Decode(&rq)
+		if rq.Method == "auth.login" {
+			mu.Lock()
+			logins++
+			valid = true
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(rpcResponse{ID: rq.ID, Result: json.RawMessage(`true`)})
+			return
+		}
+		mu.Lock()
+		ok := valid
+		if !ok {
+			// Hold every expired-session request until all n are in flight, so
+			// all n see the auth error before any re-login completes.
+			arrived++
+			if arrived == n {
+				close(released)
+			}
+		}
+		mu.Unlock()
+		if !ok {
+			<-released
+			_ = json.NewEncoder(w).Encode(rpcResponse{ID: rq.ID, Error: &rpcError{Code: 1, Message: "Not authenticated"}})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(rpcResponse{ID: rq.ID, Result: json.RawMessage(`{}`)})
+	}))
+	defer srv.Close()
+	c, _ := New(srv.URL, "deluge")
+	if err := c.Login(); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	valid, logins = false, 0 // session expires server-side
+	mu.Unlock()
+
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := c.ListTorrentDetails([]string{hashA})
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Errorf("caller failed: %v", err)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if logins != 1 {
+		t.Errorf("logins = %d, want exactly 1", logins)
 	}
 }
