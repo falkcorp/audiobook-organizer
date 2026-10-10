@@ -1,7 +1,7 @@
 <!-- file: docs/ci/woodpecker.md -->
-<!-- version: 1.8.0 -->
+<!-- version: 1.9.0 -->
 <!-- guid: 2c8e5a14-9b3d-4f07-8e61-a4d0c7b2f913 -->
-<!-- last-edited: 2026-10-05 -->
+<!-- last-edited: 2026-10-10 -->
 
 # Woodpecker CI: install runbook
 
@@ -241,7 +241,7 @@ No workflow targets `host=llm1`; see Pipeline layout. This agent runs steps dire
 decode tests need the host's ffmpeg, ffprobe and fpcalc, and macOS has no
 Docker backend.
 
-- **Install layout:** `~/ci/woodpecker/bin/{woodpecker-agent,plugin-git}`. The agent is v3.18.1 darwin/arm64 from the woodpecker releases; plugin-git is 2.10.1.
+- **Install layout:** `~/ci/woodpecker/bin/{woodpecker-agent,plugin-git}`. The agent is darwin/arm64 from the woodpecker releases (v3.19.0 since 2026-10-10); plugin-git is 2.10.1.
 - **Logs:** `~/ci/woodpecker/agent.log`.
 - **Step workspaces:** `~/ci/woodpecker/work`.
 
@@ -272,7 +272,7 @@ the C compiler `-race` needs, and `golang-go` is only a bootstrap:
 - **Runs as:** the unprivileged system user `woodpecker` (no sudo). Pipelines
   execute pull-request code, so the agent never runs as a login user.
 - **Install layout:** `/tank/ci/woodpecker/bin/{woodpecker-agent,plugin-git}`
-  (v3.18.1 and 2.10.1, linux/amd64). `/tank/ci` is its own ZFS dataset and the
+  (agent v3.19.0 since 2026-10-10, plugin-git 2.10.1; linux/amd64). `/tank/ci` is its own ZFS dataset and the
   user's HOME.
 - **Caches:** `/tank/ci/cache/{go-build,gomod}`, set in every U1 workflow;
   `checks-build.yaml` also keeps the npm cache in `/tank/ci/cache/npm`.
@@ -286,6 +286,17 @@ the C compiler `-race` needs, and `golang-go` is only a bootstrap:
 - **Service:** `/etc/systemd/system/woodpecker-agent.service`, with the agent
   secret in the root-only `/etc/woodpecker-agent.env` (mode 600). Logs:
   `journalctl -u woodpecker-agent`.
+
+### Upgrading the U1 and llm1 agents
+
+U1 and llm1 run a plain binary, not a container, so a server upgrade leaves
+them behind. `scripts/ci/update_woodpecker_agents.py` brings them to the
+server's version (or `--version X`): it pauses each agent, waits for its
+running tasks, swaps in the checksum-verified release binary (the old one
+stays as `woodpecker-agent.<old>`), restarts it, and passes only once the
+server reports the new version. A host that never checks back in is rolled
+back. `--dry-run` reports versions only. U0's agent is upgraded with the
+swarm stack instead.
 
 ### Running CI from a workstation
 
