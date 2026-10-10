@@ -58,11 +58,12 @@ type ExtraOpsDeps struct {
 }
 
 // ExtraOpsStore is everything the 7 scheduler OperationDefs need from the
-// store. Measured with an empty-interface compiler probe under -gcflags=-e:
-// zero methods are called here directly -- the field only ever forwards into
-// three callees, so it is spelled as the union of their own already-narrow
-// interfaces rather than a fresh method list. Was database.Store (398 methods)
-// until 2026-08-19.
+// store: metabatch.Store, which the metadata upgrade forwards into its
+// service, plus the author, author-link and book methods the author and
+// metadata-refresh ops call directly. Was database.Store (398 methods) until
+// 2026-08-19; versions.TrashedVersionCleaner and the db-optimize/tombstone
+// methods left with scheduler.trash-cleanup, scheduler.db-optimize and
+// scheduler.tombstone-cleanup on 2026-10-10.
 type ExtraOpsStore interface {
 	metabatch.Store // NewMetadataUpgradeService
 
