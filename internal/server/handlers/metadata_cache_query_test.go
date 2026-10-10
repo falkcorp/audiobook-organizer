@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_query_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6c1f0e2a-9b47-4d35-8e60-2a7d4c9b1f38
 // last-edited: 2026-10-10
 
@@ -1019,4 +1019,39 @@ func TestReviewQuery_ConcurrentIdenticalRequestsShareOneEvaluation(t *testing.T)
 	for i := 2; i < len(totals); i++ {
 		require.Equal(t, totals[i%2], totals[i])
 	}
+}
+
+// TestReviewQuery_400BodyDoesNotEchoTheValue: the whole 400 body for a long
+// bad value repeats at most 64 bytes of it, whether the value is a title:
+// token or bare text.
+func TestReviewQuery_400BodyDoesNotEchoTheValue(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store, svc := goldenReviewStore(t)
+	h := NewMetadataCacheHandler(store, svc, nil, nil, nil)
+	unclosed := "/" + strings.Repeat("ab", 101)                        // 203 bytes
+	complexRe := "/(?:\\pL?){245}zzz" + strings.Repeat("q", 222) + "/" // 240 bytes
+	badParen := "/(" + strings.Repeat("c", 238) + "/"                  // 241 bytes
+	for _, v := range []string{unclosed, complexRe, badParen} {
+		for _, q := range []string{v, "title:" + v} {
+			code, body, _ := serveReviewRaw(t, h, "view=page&q="+url.QueryEscape(q))
+			require.Equal(t, http.StatusBadRequest, code, "%.40s: %s", q, body)
+			n := longestEcho(string(body), v)
+			t.Logf("%d bytes -> body echoes %d: %s", len(q), n, body)
+			require.LessOrEqual(t, n, 64, string(body))
+		}
+	}
+}
+
+// longestEcho is the length of the longest run of input that msg repeats.
+func longestEcho(msg, input string) int {
+	best := 0
+	for i := range input {
+		for j := i + best + 1; j <= len(input); j++ {
+			if !strings.Contains(msg, input[i:j]) {
+				break
+			}
+			best = j - i
+		}
+	}
+	return best
 }

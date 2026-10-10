@@ -1,5 +1,5 @@
 // file: internal/querygrammar/querygrammar.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 9b2e4c71-0f3a-4d6e-8a15-7c3d9e2f1b40
 // last-edited: 2026-10-10
 
@@ -13,7 +13,10 @@
 //	"two words"   literal substring (quotes switch every operator off)
 //	/RE2/         RE2 regex, case-insensitive by default ((?-i) opts out)
 //	a*  *a  *a*   glob on the WHOLE (trimmed) value; only * is a wildcard
-//	*             the value is non-empty
+//
+// A regex or glob is run over at most the first 16 KB of a field
+// (MaxPatternInputBytes); a substring is matched against all of it.
+//   - the value is non-empty
 //
 // and, for numeric fields, ParseNumericExpr's comparisons and ranges.
 //
@@ -40,6 +43,7 @@ import (
 	"regexp/syntax"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // Limits on a text value. Both refuse the value with an error (a 400 at the
@@ -65,10 +69,16 @@ import (
 // MaxPatternInst = 500 accepts every cleanup search above that is under 500
 // (.{100,} and .{120} find over-long titles) and refuses (.*){1000} and
 // (?:.?){1000}zzz, which took 1.3 s and 23.5 s over 40,000 titles before
-// these limits. The worst program it admits, nested optional repetition near
-// 500 instructions, costs about 0.5 ms per title and about 20 ms per
-// description-sized field, so a Budget overshoots its limit by at most one
-// such match.
+// these limits.
+//
+// The program size alone does not bound one match: the cost also grows with
+// the length of the field, and nothing bounds a description's length. The
+// worst program admitted, (?:\pL?){245}zzz (495 instructions), took 17.5 ms
+// over 3.7 KB, 0.5 s over 100 KB and 5.1 s over 1 MB. So a regex or glob is
+// run over at most the first MaxPatternInputBytes of a field. At 16 KB that
+// program takes about 80 ms (measured: 22 ms at 4 KB, 41 ms at 8 KB, 79 ms
+// at 16 KB, 183 ms at 32 KB), and a Budget, which can only stop between
+// matches, overshoots its limit by at most that much.
 const (
 	// MaxTextValueBytes is the longest text value accepted, in bytes. A
 	// title, author or series search term is a few dozen characters; 256
@@ -78,6 +88,12 @@ const (
 	// instructions, after Simplify expands counted repetition) a regex or a
 	// wildcard may compile to.
 	MaxPatternInst = 500
+	// MaxPatternInputBytes is how much of a field a regex or glob sees: the
+	// first 16 KB, cut back to a UTF-8 rune boundary. Every title, author,
+	// series and nearly every description is shorter; a pattern that needs
+	// text past 16 KB of a longer field does not see it (a substring search
+	// still scans the whole field).
+	MaxPatternInputBytes = 16 << 10
 )
 
 // checkTextValueLength refuses a value over MaxTextValueBytes.
@@ -92,17 +108,17 @@ func checkTextValueLength(raw string) error {
 // than MaxPatternInst instructions. expr has already compiled with regexp, so
 // a parse error here cannot happen; it is reported rather than ignored all
 // the same.
-func checkProgramSize(expr, shown string) error {
+func checkProgramSize(expr string) error {
 	re, err := syntax.Parse(expr, syntax.Perl)
 	if err != nil {
-		return fmt.Errorf("invalid pattern %s: %w", shown, err)
+		return fmt.Errorf("invalid pattern: %s", regexErrorReason(err))
 	}
 	prog, err := syntax.Compile(re.Simplify())
 	if err != nil {
-		return fmt.Errorf("invalid pattern %s: %w", shown, err)
+		return fmt.Errorf("invalid pattern: %s", regexErrorReason(err))
 	}
 	if n := len(prog.Inst); n > MaxPatternInst {
-		return fmt.Errorf("pattern %s is too complex to run over the library (%d instructions; the limit is %d) — simplify it: fewer * wildcards, no large counted repeats such as {100}, no nested optional groups", shown, n, MaxPatternInst)
+		return fmt.Errorf("the pattern is too complex to run over the library (%d instructions; the limit is %d) — simplify it: fewer * wildcards, no large counted repeats such as {100}, no nested optional groups", n, MaxPatternInst)
 	}
 	return nil
 }
@@ -179,9 +195,9 @@ func CompileText(raw string, quoted bool) (*TextMatcher, error) {
 		expr := `(?is)^` + strings.Join(parts, ".*") + `$`
 		re, err := regexp.Compile(expr)
 		if err != nil { // unreachable: every piece is QuoteMeta'd
-			return nil, fmt.Errorf("invalid wildcard %q: %w", raw, err)
+			return nil, fmt.Errorf("invalid wildcard: %s", regexErrorReason(err))
 		}
-		if err := checkProgramSize(expr, raw); err != nil {
+		if err := checkProgramSize(expr); err != nil {
 			return nil, err
 		}
 		return &TextMatcher{Raw: raw, Kind: KindGlob, re: re}, nil
@@ -193,10 +209,10 @@ func CompileText(raw string, quoted bool) (*TextMatcher, error) {
 func compileRegexForm(raw string) (*regexp.Regexp, error) {
 	closeIdx := closingSlash(raw)
 	if closeIdx < 0 {
-		return nil, fmt.Errorf("regex %s has no closing /; close it (e.g. /^\\s*\\p{L}/) or quote the value to search for a literal slash", raw)
+		return nil, errors.New("regex has no closing /; close it (e.g. /^\\s*\\p{L}/) or quote the value to search for a literal slash")
 	}
 	if closeIdx != len(raw)-1 {
-		return nil, fmt.Errorf("unexpected %q after the closing / of regex %s; flags are not supported (regex is case-insensitive by default, use (?-i) to opt out)", raw[closeIdx+1:], raw[:closeIdx+1])
+		return nil, fmt.Errorf("unexpected %q after the closing / of the regex; flags are not supported (regex is case-insensitive by default, use (?-i) to opt out)", ShortToken(raw[closeIdx+1:]))
 	}
 	pattern := raw[1:closeIdx]
 	if pattern == "" {
@@ -205,17 +221,49 @@ func compileRegexForm(raw string) (*regexp.Regexp, error) {
 	expr := "(?i)" + pattern
 	re, err := regexp.Compile(expr)
 	if err != nil {
-		msg := err.Error()
+		msg := regexErrorReason(err)
 		if strings.Contains(pattern, "(?=") || strings.Contains(pattern, "(?!") ||
 			strings.Contains(pattern, "(?<=") || strings.Contains(pattern, "(?<!") {
 			msg += " — RE2 has no lookahead/lookbehind; exclude with a negated filter instead, e.g. -title:/^\\s*\\d/"
 		}
-		return nil, fmt.Errorf("invalid regex %s: %s", raw, msg)
+		return nil, fmt.Errorf("invalid regex: %s", msg)
 	}
-	if err := checkProgramSize(expr, raw); err != nil {
+	if err := checkProgramSize(expr); err != nil {
 		return nil, err
 	}
 	return re, nil
+}
+
+// cutPatternInput is the part of a field a regex or glob is run over: all
+// of it up to MaxPatternInputBytes, else the first MaxPatternInputBytes cut
+// back to a UTF-8 rune boundary.
+func cutPatternInput(s string) string {
+	if len(s) <= MaxPatternInputBytes {
+		return s
+	}
+	cut := MaxPatternInputBytes
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
+}
+
+// regexErrorReason is why regexp refused a pattern, WITHOUT the pattern:
+// regexp's own message quotes the offending expression, which can be most of
+// a 256-byte value, and every caller already names the value it refused
+// (shortened with ShortToken). The offending fragment is kept when short.
+func regexErrorReason(err error) string {
+	var se *syntax.Error
+	if !errors.As(err, &se) {
+		return "the pattern does not compile"
+	}
+	if se.Expr == "" {
+		return string(se.Code)
+	}
+	if len(se.Expr) > 24 {
+		return string(se.Code)
+	}
+	return fmt.Sprintf("%s: %s", se.Code, se.Expr)
 }
 
 // closingSlash returns the index of the first unescaped "/" after position 0,
@@ -233,12 +281,14 @@ func closingSlash(raw string) int {
 }
 
 // Match reports whether s satisfies the value.
+//
+// A regex or glob sees at most the first MaxPatternInputBytes of s.
 func (m *TextMatcher) Match(s string) bool {
 	switch m.Kind {
 	case KindRegex:
-		return m.re.MatchString(s)
+		return m.re.MatchString(cutPatternInput(s))
 	case KindGlob:
-		return m.re.MatchString(strings.TrimSpace(s))
+		return m.re.MatchString(cutPatternInput(strings.TrimSpace(s)))
 	case KindNonEmpty:
 		return strings.TrimSpace(s) != ""
 	default:

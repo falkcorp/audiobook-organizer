@@ -79,22 +79,23 @@ func (svc *AudiobookService) GetAudiobooksWithTotal(ctx context.Context, limit i
 //
 // A query whose field filters hold a regex or glob takes one pattern slot
 // (querygrammar.AcquirePatternSlot; a *BusyError when none frees within its
-// wait) and a Budget of libraryPatternBudget for its pattern matches. A spent
+// wait) and a Budget of libraryPatternBudget for its pattern matches, or
+// shares the request's (WithSharedSearchAllowance, search_allowance.go). A spent
 // budget returns its *TooSlowError and nothing else: the walk's predicate can
 // only answer false once the budget is spent, so any rows it produced are
 // incomplete and are dropped. Every list path (GetAudiobooksPage, the search
 // result cache's builds, MatchingBookIDs) runs through here, so the slot is
-// taken at this ONE level and never nested.
+// taken at this ONE level and never nested (CountAudiobooksFiltered, the
+// other scan, is never called from inside this one).
 func (svc *AudiobookService) queryAudiobooks(ctx context.Context, limit int, offset int, search string, authorID *int, seriesID *int, f ListFilters, restrict map[string]struct{}, build bool) ([]database.Book, int, error) {
 	if !fieldFiltersCostly(f.FieldFilters) {
 		return svc.queryAudiobooksBudgeted(ctx, limit, offset, search, authorID, seriesID, f, restrict, build, nil)
 	}
-	release, err := querygrammar.AcquirePatternSlot(ctx)
+	budget, end, err := patternAllowance(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
-	defer release()
-	budget := querygrammar.NewBudget(libraryPatternBudget)
+	defer end()
 	books, total, err := svc.queryAudiobooksBudgeted(ctx, limit, offset, search, authorID, seriesID, f, restrict, build, budget)
 	if berr := budget.Err(); berr != nil {
 		return nil, 0, berr
@@ -953,12 +954,12 @@ func (svc *AudiobookService) CountAudiobooksFiltered(ctx context.Context, filter
 	// walk over the same predicate.
 	var budget *querygrammar.Budget
 	if fieldFiltersCostly(filters.FieldFilters) {
-		release, err := querygrammar.AcquirePatternSlot(ctx)
+		b, end, err := patternAllowance(ctx)
 		if err != nil {
 			return 0, err
 		}
-		defer release()
-		budget = querygrammar.NewBudget(libraryPatternBudget)
+		defer end()
+		budget = b
 	}
 	bsf, pushdownOK := svc.buildBookSummaryFilter(filtersForCount, true, budget)
 	if pushdownOK {

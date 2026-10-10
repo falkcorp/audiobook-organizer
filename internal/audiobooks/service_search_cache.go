@@ -1,5 +1,5 @@
 // file: internal/audiobooks/service_search_cache.go
-// version: 2.3.0
+// version: 2.3.1
 // guid: c3572a50-dc5f-4325-a58a-c578d837cde8
 // last-edited: 2026-10-10
 
@@ -197,6 +197,12 @@ func (svc *AudiobookService) GetAudiobooksPage(ctx context.Context, limit int, o
 			// The shared build spent its pattern budget or found every
 			// pattern slot busy. Running it again uncached would cost the
 			// same again for the same answer.
+			//
+			// Failures are not negative-cached (searchcache stores only
+			// successful builds), so a respond-async client that re-issues
+			// the request after this answer starts a new build, which
+			// spends another full budget and slot. Bounded per request by
+			// the budget and across requests by the slots.
 			return nil, 0, SearchMeta{}, err
 		case errors.Is(err, searchcache.ErrNotCurrent), errors.Is(err, searchcache.ErrBusy):
 			// The cache has no current list for a caller that must see every

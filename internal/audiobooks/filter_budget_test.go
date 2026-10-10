@@ -1,5 +1,5 @@
 // file: internal/audiobooks/filter_budget_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 87f0a067-4601-427f-9ecf-398a030c9059
 // last-edited: 2026-10-10
 
@@ -184,4 +184,165 @@ func TestCheckFilterSetSize(t *testing.T) {
 	svc := NewAudiobookService(mocks.NewMockStore(t))
 	_, _, err := svc.GetAudiobooksWithTotal(context.Background(), 10, 0, "", nil, nil, ListFilters{FieldFilters: patterns(9)})
 	require.ErrorContains(t, err, "the limit is 8")
+}
+
+// TestLibraryBudget_OneMegabyteDescription: one row with a 1 MB description
+// and the slowest admitted pattern. Uncut, that one match took 5.1 s, which
+// no budget can interrupt; cut to querygrammar.MaxPatternInputBytes it takes
+// about 80 ms, so the search finishes (or is refused) within the budget plus
+// about one cut match.
+func TestLibraryBudget_OneMegabyteDescription(t *testing.T) {
+	ps, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ps.Close() })
+	ps.WaitForWarmup()
+	desc := strings.Repeat("A long description of the book with many words and sentences. ", 16700) // ~1 MB
+	_, err = ps.CreateBook(&database.Book{Title: "One Long Book", FilePath: "/synthetic/long.m4b", Description: &desc})
+	require.NoError(t, err)
+	svc := NewAudiobookService(ps)
+
+	const pattern = `/(?:\pL?){245}zzz/`
+	// The unit no budget can interrupt is one match over the cut input:
+	// measure it here, so the bound holds under -race (which slows each
+	// match about 18x) as well as without it (about 80 ms).
+	tm, err := querygrammar.CompileText(pattern, false)
+	require.NoError(t, err)
+	mStart := time.Now()
+	tm.Match(desc[:querygrammar.MaxPatternInputBytes])
+	oneMatch := time.Since(mStart)
+
+	f := ListFilters{FieldFilters: []FieldFilter{{Field: "description", Value: pattern}}}
+	start := time.Now()
+	books, _, err := svc.GetAudiobooksWithTotal(context.Background(), 50, 0, "", nil, nil, f)
+	took := time.Since(start)
+	t.Logf("1 MB description: %s (one cut match %s), err=%v", took, oneMatch, err)
+	var slow *querygrammar.TooSlowError
+	if err != nil {
+		require.ErrorAs(t, err, &slow)
+	} else {
+		require.Empty(t, books)
+	}
+	// Uncut, this one match took 5.1 s (far longer under -race), so the
+	// bound fails if the cut is removed.
+	require.Less(t, took, libraryPatternBudget+2*oneMatch+100*time.Millisecond)
+}
+
+// TestSharedAllowance_OneSlotOneBudget: under WithSharedSearchAllowance the
+// list and the count of one request take ONE slot (held until done, so a
+// second count needs no new one) and spend ONE budget.
+func TestSharedAllowance_OneSlotOneBudget(t *testing.T) {
+	svc := longTitleStore(t, 50)
+	restore := querygrammar.SetPatternSlotsForTesting(1, 10*time.Millisecond)
+	defer restore()
+	f := ListFilters{FieldFilters: []FieldFilter{{Field: "title", Value: "/number/"}}}
+
+	ctx, done := WithSharedSearchAllowance(context.Background())
+	_, _, err := svc.GetAudiobooksWithTotal(ctx, 10, 0, "", nil, nil, f)
+	require.NoError(t, err)
+	a := ctx.Value(searchAllowanceKey{}).(*sharedSearchAllowance)
+	afterList := a.budget.Spent()
+	require.Positive(t, afterList)
+
+	// The request still holds the only slot: anyone else is busy...
+	_, err = querygrammar.AcquirePatternSlot(context.Background())
+	var busy *querygrammar.BusyError
+	require.ErrorAs(t, err, &busy)
+	// ...but its own count runs on it, against the same budget.
+	n, err := svc.CountAudiobooksFiltered(ctx, f)
+	require.NoError(t, err)
+	require.Equal(t, 50, n)
+	require.Greater(t, a.budget.Spent(), afterList, "the count charged the request's budget")
+
+	done()
+	release, err := querygrammar.AcquirePatternSlot(context.Background())
+	require.NoError(t, err, "done returns the slot")
+	release()
+	done() // idempotent
+}
+
+// TestSharedAllowance_CountSpendsWhatTheListLeft: a budget the list nearly
+// spent refuses the count, so the request is refused once, never served
+// with two budgets.
+func TestSharedAllowance_CountSpendsWhatTheListLeft(t *testing.T) {
+	svc := longTitleStore(t, 400)
+	saved := libraryPatternBudget
+	t.Cleanup(func() { libraryPatternBudget = saved })
+	f := ListFilters{FieldFilters: threeSlowTokens()}
+	// Measure one scan, then give the request a budget for about 1.5 of them.
+	probe := querygrammar.NewBudget(time.Hour)
+	bsf, ok := svc.buildBookSummaryFilter(f, true, probe)
+	require.True(t, ok)
+	_, err := svc.countSummariesPushdownFiltered(bsf)
+	require.NoError(t, err)
+	one := probe.Spent()
+	libraryPatternBudget = one * 3 / 2
+
+	ctx, done := WithSharedSearchAllowance(context.Background())
+	defer done()
+	_, _, err = svc.GetAudiobooksWithTotal(ctx, 50, 0, "", nil, nil, f)
+	require.NoError(t, err, "one scan fits a budget of 1.5 scans")
+	_, err = svc.CountAudiobooksFiltered(ctx, f)
+	var slow *querygrammar.TooSlowError
+	require.ErrorAs(t, err, &slow, "the second scan spends what the first left")
+
+	// Without the shared allowance each scan would have had its own budget.
+	_, err = svc.CountAudiobooksFiltered(context.Background(), f)
+	require.NoError(t, err)
+}
+
+// TestLibraryPatternSlots_ReleasedAfterEveryCall: with ONE slot, sequential
+// costly lists and counts never find it busy, including after a call that
+// failed inside (a spent budget), so every path returns its slot.
+func TestLibraryPatternSlots_ReleasedAfterEveryCall(t *testing.T) {
+	svc := longTitleStore(t, 30)
+	restore := querygrammar.SetPatternSlotsForTesting(1, 10*time.Millisecond)
+	defer restore()
+	f := ListFilters{FieldFilters: []FieldFilter{{Field: "title", Value: "/number/"}}}
+	for i := range 3 {
+		_, _, err := svc.GetAudiobooksWithTotal(context.Background(), 10, 0, "", nil, nil, f)
+		require.NoError(t, err, "list %d", i)
+		_, err = svc.CountAudiobooksFiltered(context.Background(), f)
+		require.NoError(t, err, "count %d", i)
+	}
+	saved := libraryPatternBudget
+	libraryPatternBudget = 0 // the next scans fail inside, after taking the slot
+	var slow *querygrammar.TooSlowError
+	_, _, err := svc.GetAudiobooksWithTotal(context.Background(), 10, 0, "", nil, nil, f)
+	require.ErrorAs(t, err, &slow)
+	_, err = svc.CountAudiobooksFiltered(context.Background(), f)
+	require.ErrorAs(t, err, &slow)
+	libraryPatternBudget = saved
+	_, _, err = svc.GetAudiobooksWithTotal(context.Background(), 10, 0, "", nil, nil, f)
+	require.NoError(t, err, "a failed call still returned its slot")
+}
+
+// longestEcho is the length of the longest run of input that msg repeats.
+func longestEcho(msg, input string) int {
+	best := 0
+	for i := range input {
+		for j := i + best + 1; j <= len(input); j++ {
+			if !strings.Contains(msg, input[i:j]) {
+				break
+			}
+			best = j - i
+		}
+	}
+	return best
+}
+
+// TestValidateFilterValue_DoesNotEchoLongValue: the 400 a Library filter
+// earns names the value shortened to 64 bytes; the reason that follows it
+// does not quote the value again (regexp's own message would quote all of it).
+func TestValidateFilterValue_DoesNotEchoLongValue(t *testing.T) {
+	unclosed := "/" + strings.Repeat("ab", 101)                        // 203 bytes
+	complexRe := "/(?:\\pL?){245}zzz" + strings.Repeat("q", 222) + "/" // 240 bytes
+	badParen := "/(" + strings.Repeat("c", 238) + "/"                  // 241 bytes
+	for _, v := range []string{unclosed, complexRe, badParen} {
+		err := ValidateFilterValue(FieldFilter{Field: "title", Value: v})
+		require.Error(t, err)
+		msg := "invalid filter value: " + err.Error() // the handler's whole 400 text
+		n := longestEcho(msg, v)
+		t.Logf("%d bytes -> echoes %d: %s", len(v), n, msg)
+		require.LessOrEqual(t, n, 64, msg)
+	}
 }
