@@ -1,7 +1,7 @@
 // file: internal/server/path_locks.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 6e2a9c14-7d3b-4f58-9a01-2c8b4d5e6f70
-// last-edited: 2026-09-12
+// last-edited: 2026-10-10
 
 package server
 
@@ -28,11 +28,12 @@ import (
 //     (SetPathLocker, wired in server.go), after its book and library-copy
 //     locks. Callers must not hold a key from this table around it -- see
 //     metafetch's lockBook for the lock order.
-//  3. Backup-filename collision. The copy-on-write backup name is
-//     filePath + ".bak-" + time.Now().Format("20060102-150405")
-//     (internal/metafetch/service_files.go:65) — ONE-SECOND granularity. Two
-//     writers touching the same file inside the same wall-clock second generate
-//     the identical backup name and clobber each other's backup.
+//  3. Backup-filename collision (historical). The retired write_backup_before
+//     backup was named filePath + ".bak-" + YYYYMMDD-HHMMSS, one-second
+//     granular, so two writers in the same second clobbered each other's
+//     backup. Its replacement, fileops.WriteTagsSafe's create_backups backup
+//     (<path>.bak-<unix>), is created exclusively and takes a -N suffix when
+//     the name is taken, so it no longer depends on this lock.
 //
 // Entries are refcounted and deleted on the last release, so a 60k-book run
 // does not leave 60k map entries behind.
