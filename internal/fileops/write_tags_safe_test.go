@@ -1,5 +1,5 @@
 // file: internal/fileops/write_tags_safe_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c5d6e7f8-a9b0-1c2d-3e4f-5a6b7c8d9e0f
 // last-edited: 2026-10-10
 
@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -295,14 +296,18 @@ func TestKeepBackup_SameSecondDoesNotOverwrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Unix(1700000000, 0)
-	first, err := keepBackup(path, now)
+	first, _, err := keepBackup(path, now)
 	if err != nil {
+		t.Fatal(err)
+	}
+	// Replace path with a new inode, as WriteTagsSafe's rename does.
+	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(path, []byte("second"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	second, err := keepBackup(path, now)
+	second, _, err := keepBackup(path, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -314,5 +319,121 @@ func TestKeepBackup_SameSecondDoesNotOverwrite(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(second); string(got) != "second" {
 		t.Errorf("second backup = %q, want %q", got, "second")
+	}
+}
+
+// The backup is a hardlink to the pre-write inode (no data blocks copied),
+// and after the rename its mtime is the backup time. The cleanup sweeps age
+// .bak-* files by mtime, so a link that kept the audio's old mtime would be
+// deleted on the next sweep (KeepBackup, MTIME CONTRACT).
+func TestWriteTagsSafe_KeepBackupIsHardlinkDatedNow(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audio.m4b")
+	if err := os.WriteFile(path, []byte("synthetic bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-400 * 24 * time.Hour)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	start := time.Now()
+	if _, _, err := WriteTagsSafe(path, writeBytes([]byte(" tagged")), WriteTagsSafeOptions{KeepBackup: true}); err != nil {
+		t.Fatalf("WriteTagsSafe: %v", err)
+	}
+	baks := backupSiblings(t, path)
+	if len(baks) != 1 {
+		t.Fatalf("want one backup, got %v", baks)
+	}
+	bak, err := os.Stat(baks[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(before, bak) {
+		t.Error("backup is not the pre-write inode; want a hardlink, not a copy")
+	}
+	if bak.ModTime().Before(start.Add(-2 * time.Second)) {
+		t.Errorf("backup mtime = %v, want about now (>= %v): the sweep would age it from the audio's old mtime", bak.ModTime(), start)
+	}
+	now, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.SameFile(now, bak) {
+		t.Error("the live file still shares the backup's inode after the write")
+	}
+}
+
+// A failed rename leaves the original as it was and removes the backup: the
+// original is intact, so the backup would only be clutter.
+func TestWriteTagsSafe_RenameFailureRemovesBackup(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audio.m4b")
+	original := []byte("synthetic bytes")
+	if err := os.WriteFile(path, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	prev := renameFile
+	renameFile = func(string, string) error { return errors.New("synthetic rename failure") }
+	t.Cleanup(func() { renameFile = prev })
+
+	if _, _, err := WriteTagsSafe(path, writeBytes([]byte(" tagged")), WriteTagsSafeOptions{KeepBackup: true}); err == nil {
+		t.Fatal("want the rename error")
+	}
+	if got, _ := os.ReadFile(path); !bytes.Equal(got, original) {
+		t.Errorf("original changed after a failed rename: %q", got)
+	}
+	if baks := backupSiblings(t, path); len(baks) != 0 {
+		t.Errorf("a failed rename must remove the backup, got %v", baks)
+	}
+}
+
+// Where the filesystem refuses a hardlink (EXDEV here), the backup is a full
+// copy of the pre-write bytes with its own inode and a current mtime.
+func TestWriteTagsSafe_KeepBackupCopyFallback(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audio.m4b")
+	original := []byte("synthetic bytes")
+	if err := os.WriteFile(path, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-400 * 24 * time.Hour)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prev := linkFile
+	linkFile = func(oldname, newname string) error {
+		return &os.LinkError{Op: "link", Old: oldname, New: newname, Err: syscall.EXDEV}
+	}
+	t.Cleanup(func() { linkFile = prev })
+
+	start := time.Now()
+	if _, _, err := WriteTagsSafe(path, writeBytes([]byte(" tagged")), WriteTagsSafeOptions{KeepBackup: true}); err != nil {
+		t.Fatalf("WriteTagsSafe: %v", err)
+	}
+	baks := backupSiblings(t, path)
+	if len(baks) != 1 {
+		t.Fatalf("want one backup, got %v", baks)
+	}
+	bak, err := os.Stat(baks[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.SameFile(before, bak) {
+		t.Error("fallback backup shares the original inode; want a copy")
+	}
+	if got, _ := os.ReadFile(baks[0]); !bytes.Equal(got, original) {
+		t.Errorf("fallback backup = %q, want the pre-write bytes", got)
+	}
+	if bak.ModTime().Before(start.Add(-2 * time.Second)) {
+		t.Errorf("fallback backup mtime = %v, want about now", bak.ModTime())
 	}
 }
