@@ -26,7 +26,7 @@ into one of the curated sections below, is a normal direct edit.
       `docs/reference/config-api-shape.md` already say so. Found by the #3879
       review; the brief scoped docs to those two files, so this is the rest.
 
-- [ ] **PROP-CHROMEM-FLAKE** `TestProp_ChromemMatchesSqlite`
+- [x] **PROP-CHROMEM-FLAKE** `TestProp_ChromemMatchesSqlite`
       (`internal/server/dedup_engine_prop_test.go:387`) failed once on `main`
       run 37995734374 attempt 1 ("sqlite→chromem overlap too low: 0 of 1
       matched (chromem set=0)") and passed on the auto re-run. The 07-C4
@@ -37,6 +37,21 @@ into one of the curated sections below, is a normal direct edit.
       case, then find out why chromem returned an empty set for an input sqlite
       matched. A test that passes on re-run is a bug with a hidden input, not
       noise.
+      Done 2026-10-10 (fix/prop-chromem-flake): the oracle was wrong, not a
+      backend. Both CI inputs had one document whose cosine sits on the 0.5
+      threshold: 10-10 (seed 3835638638717310857) b19 is 0.500041 in float32
+      but 0.499969 after the store's float16 round trip; 10-09 (seed
+      10234930014058505839) b1 is exactly 0.4999999928, which the store
+      rounds to 0.5 and chromem's float32 dot gives as 0x3effffff on amd64
+      (0.5 on arm64, which fuses multiply-adds). The test now checks each
+      backend against a float64 reference on the vector it actually scores,
+      excludes on-threshold documents (1e-5 band or references straddling),
+      and requires exact set equality elsewhere (chromem-go v0.7.0 is
+      brute force, not HNSW). Both inputs are pinned in
+      `TestChromemMatchesSqlite_PinnedCounterexamples`. rapid already prints
+      `-rapid.seed=` on failure, so no code was needed for that.
+      `-rapid.checks=3000`: 3000/3000 on arm64 and 3000/3000 under
+      `GOARCH=amd64`; both CI seeds pass on both arches.
 
 - [ ] **CI-GO-CACHE-STALE** Give the other Go jobs in `ci.yml` a build cache
       that refreshes. The shared `Restore Go cache (manual)` step is keyed on
@@ -1909,7 +1924,7 @@ This is throughput, not correctness.
       `EstimateDiskUsage` over a key range) would settle both the size question
       and hypothesis 1 cheaply, and should come before any redesign.
 
-- [ ] **`TestProp_ChromemMatchesSqlite` has a reproducible counterexample — chromem returns an EMPTY set where sqlite returns a match.** Found 2026-09-09 by a routine full-package `go test ./internal/server/ -count=1` on an unrelated branch; `rapid` hit it on a random seed after 0 shrink steps. Failure: `sqlite→chromem overlap too low: 0 of 1 matched (chromem set=0)` at `internal/server/dedup_engine_prop_test.go:387`.
+- [x] **`TestProp_ChromemMatchesSqlite` has a reproducible counterexample — chromem returns an EMPTY set where sqlite returns a match.** Found 2026-09-09 by a routine full-package `go test ./internal/server/ -count=1` on an unrelated branch; `rapid` hit it on a random seed after 0 shrink steps. Failure: `sqlite→chromem overlap too low: 0 of 1 matched (chromem set=0)` at `internal/server/dedup_engine_prop_test.go:387`.
 
   **Reproduced on pristine `origin/main` (0adfb5ebf)** with no other changes, so it is not branch-specific and not a flake in the usual sense — once `rapid` writes its failfile the case replays deterministically, 3/3.
 
@@ -1923,6 +1938,8 @@ This is throughput, not correctness.
 
   - **It is still unmitigated.** That section's cheapest proposed fix — clear or `.gitignore` `*/testdata/rapid` before a harness run — had not been done, which is how this was hit again on 2026-09-09, a week after the 2026-09-02 observation. Worth doing now: the trap has recurred once already.
   - **How to tell a pre-existing property failure from one your branch caused.** Both halves of the usual inference are artifacts: it fails deterministically in your tree only because *your own run* just wrote the failfile, and it "passes on main" only because that tree has none. Check `git status --porcelain internal/server/testdata/` and read the timestamp in the filename; then prove pre-existence by copying the failfile into a throwaway worktree at pristine `origin/main` (never into the primary checkout).
+
+  **Done 2026-10-10 (fix/prop-chromem-flake), see PROP-CHROMEM-FLAKE.** The 09-09 failfile is gone, so its exact input can't be recovered. It has the same direction ("chromem set=0") and the same denormal-heavy shape as the 10-09 CI failure, which was a float32 rounding tie at the 0.5 threshold, not a denormal or underflow problem. The denormal components contribute nothing to either score. `**/testdata/rapid/` is now in `.gitignore`.
 
 ## The review lane still downloads the entire candidate set (2026-09-09)
 
@@ -3606,6 +3623,8 @@ run reads as a clean 7/7.
 Fixes worth considering, cheapest first:
 
 - Clear `*/testdata/rapid` before a harness run (and/or `.gitignore` it).
+  The `.gitignore` half landed 2026-10-10 (`**/testdata/rapid/`); clearing
+  before a harness run is still open.
 - **Have `mutation-matrix.sh` re-verify the baseline between mutants**, or at
   least once at the end, and fail the run if the unmutated suite is no longer
   green. This is the transferable fix — it closes the whole class, not this one

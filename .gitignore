@@ -1,7 +1,7 @@
 # file: .gitignore
-# version: 1.0.3
+# version: 1.0.4
 # guid: f7d7af3c-a1f1-4d89-87ef-4a8dc9faea8a
-# last-edited: 2026-09-26
+# last-edited: 2026-10-10
 
 # Local overrides
 Makefile.local
@@ -284,6 +284,13 @@ web/tests/e2e/playwright-report/**/*
 
 # Dedup benchmark output (large raw API responses)
 testdata/dedup-bench/
+
+# pgregory.net/rapid failfiles. rapid writes one under the test package's
+# testdata/rapid/<Test>/ when a property fails and replays it first on every
+# later run, so a committed (or leftover) failfile turns that test
+# permanently red. Reproduce from the -rapid.seed= it prints instead, and pin
+# the input as a regular test case.
+**/testdata/rapid/
 
 # series_dedup.py generated cache files (do not commit)
 testdata/series_dump.json
