@@ -1,5 +1,5 @@
 // file: internal/operations/registry/worker.go
-// version: 2.27.3
+// version: 2.28.0
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
 // last-edited: 2026-10-10
 
@@ -108,6 +108,26 @@ type runHandle struct {
 	// "abandoned but still writing". A full handle always has a non-nil parked;
 	// dispatcher STUB handles do not (no goroutine to wait on).
 	parked chan struct{}
+	// fence is this attempt's write permit (fence.go). Every stop path revokes
+	// it BEFORE canceling the context: cancelIfActive / cancelWithCause (user
+	// cancel, watchdog kill, stand-down quiesce, shutdown), the timeout branch
+	// of executeRun's select, and RenewScanStandDown on a lost lease. The zero
+	// Fence on a dispatcher stub is a no-op to revoke.
+	fence Fence
+	// zombie is set when the run goroutine outlived the abandon grace (both the
+	// genuine-abandonment and the shutdown branches of executeRun). The handle
+	// then stays in r.running, holding its ConcurrencyKey and declared write
+	// set, until the goroutine really returns (owner decision D6).
+	zombie atomic.Bool
+	// zombieSince is when the run became a zombie (liveness clock, Unix ns).
+	zombieSince atomic.Int64
+	// zombieWarnedAt is when zombieSweep last logged this zombie (liveness
+	// clock, Unix ns); 0 means never. Only the watchdog goroutine writes it.
+	zombieWarnedAt atomic.Int64
+	// slotReleased records that releaseSlotKeepKeyLocked already gave back this
+	// run's pluginRunning slot (genuine abandonment), so releaseRunHandleLocked
+	// must not decrement it a second time. Guarded by Registry.mu.
+	slotReleased bool
 }
 
 // cancelIfActive cancels the run's context if it has been wired up.
@@ -125,8 +145,16 @@ type runHandle struct {
 // op is never executed. That gate did not exist until 2026-10-03 -- this
 // comment claimed it anyway, and stubs ran to completion after Shutdown began
 // (OPS-V2-DISPATCH-RACE).
+//
+// It revokes the run's fence first, so every cancel route (Cancel, the
+// watchdog, a stand-down quiesce) withdraws the write permit before the run
+// can observe ctx.Done().
 func (h *runHandle) cancelIfActive() {
-	if h != nil && h.cancel != nil {
+	if h == nil {
+		return
+	}
+	h.fence.revoke()
+	if h.cancel != nil {
 		h.cancel()
 	}
 }
@@ -138,6 +166,9 @@ func (h *runHandle) cancelWithCause(cause error) {
 	if h == nil {
 		return
 	}
+	// Revoke before canceling, as cancelIfActive does: this early-return
+	// branch never reaches cancelIfActive.
+	h.fence.revoke()
 	if h.cancelCause != nil {
 		h.cancelCause(cause)
 		return
@@ -252,11 +283,19 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 	if r.runContextDecorator != nil {
 		runCtx = r.runContextDecorator(runCtx, qr.opID)
 	}
+	// The attempt's write permit (fence.go). Fenced writers (repairs.Writer)
+	// read it from the run context and refuse every write once it is revoked.
+	fence := newFence(1)
+	runCtx = WithFence(runCtx, fence)
 	// reporterForJoin is assigned once the reporter is built below. The deferred
 	// join must be registered HERE, above every early return between this point
 	// and the reporter's construction, so no exit path can skip it.
 	var reporterForJoin *dbReporter
 	defer func() {
+		// Revoke before cancel on every exit of executeRun, including the
+		// abandonment returns: the run is over from the registry's side, so a
+		// goroutine still alive must not write.
+		fence.revoke()
 		cancel()
 		// Cancelling runCtx only ASKS the flush loop to stop; it then runs a
 		// terminal flush that writes to the store. Returning without joining it
@@ -285,6 +324,7 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 		cancel:         cancel,
 		cancelCause:    cancelCause,
 		parked:         make(chan struct{}),
+		fence:          fence,
 	}
 	h.attemptStartedAt.Store(attemptStartedAt.UnixNano())
 	r.mu.Lock()
@@ -513,9 +553,19 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 		// Normal completion or run-level error; check if ctx was already done.
 		if runCtx.Err() != nil {
 			ctxCanceled = true
+			fence.revoke()
 		}
 	case <-runCtx.Done():
 		ctxCanceled = true
+		// Revoke here for the stop paths no code of ours initiates: the def
+		// Timeout firing inside context.WithTimeout, or the parent context
+		// ending. Every other path (Cancel, watchdog, quiesce, shutdown) has
+		// already revoked inside cancelIfActive / cancelWithCause before
+		// canceling. Known gap: on a timeout the run can observe ctx.Done()
+		// and attempt a write in the instant before this goroutine is
+		// scheduled to revoke -- at most one scheduler tick, and only on the
+		// timeout / parent-cancel paths.
+		fence.revoke()
 		// Give the goroutine abandonGrace to return cleanly.
 		select {
 		case runErr = <-done:
@@ -540,6 +590,11 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 				// so Shutdown (bounded by its own context) genuinely drains.
 				r.logger.Info("registry: op goroutine abandoned during shutdown; waiting for it to exit before freeing slot",
 					"op_id", qr.opID, "plugin", qr.plugin)
+				// Reported by Zombies(). The slot is NOT released here (the pool
+				// is going away) and no terminal status is written, so Shutdown's
+				// timeout loop still stamps this row interrupted_*.
+				h.zombieSince.Store(r.livenessClock().UnixNano())
+				h.zombie.Store(true)
 				// R-3: same rationale as the genuine-abandonment path — the
 				// wedged goroutine's flushLoop is gone, so no-op its Log calls.
 				if dbr, ok := reporter.(*dbReporter); ok {
@@ -552,25 +607,33 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 				}()
 				return true
 			}
-			// Not shutting down: the op is genuinely abandoned. Free the slot now
-			// and spawn a replacement so the pool doesn't shrink; the runaway
-			// goroutine is monitored so the abandoned counter drains when it
-			// eventually returns.
+			// Not shutting down: the op is genuinely abandoned, and becomes a
+			// zombie (owner decision D6). Free its WORKER SLOT now and spawn a
+			// replacement so the pool doesn't shrink, but keep its handle in
+			// r.running: the handle holds the ConcurrencyKey (Gate 3) and the
+			// declared write set (Gate 3b) until the goroutine truly returns,
+			// so a second run of the same def cannot overlap it. Releasing the
+			// whole handle here (as this branch did until 05-PR3) freed the key
+			// at the 5s grace while the runaway Run was still writing.
 			//
-			// Mark the op as abandoned-but-alive BEFORE releasing the handle, so
-			// there is no instant at which RetryInterrupted sees neither and
-			// re-queues a row whose first Run is still executing.
+			// The flag is set BEFORE the slot is released, and the handle never
+			// leaves r.running until the goroutine exits, so RetryInterrupted
+			// and Cancel always see either a live handle or a finished run.
+			// The fence was already revoked (select above).
+			h.zombieSince.Store(r.livenessClock().UnixNano())
+			h.zombie.Store(true)
 			r.mu.Lock()
-			r.abandonedAlive[qr.opID] = struct{}{}
+			r.releaseSlotKeepKeyLocked(qr.opID)
 			r.mu.Unlock()
-			r.releaseRunHandle(qr.opID)
+			r.pingDispatch()
 			// C-3: write a terminal status so the row leaves the opv2 active
 			// index. Without this the row stayed "running" forever, and the
 			// ConcurrencyKey enqueue-dedupe in EnqueueOp kept returning this
 			// zombie op's ID for every future enqueue of the def — silently
 			// disabling the op type until restart. Nothing else writes this
 			// row's status afterwards: the runaway goroutine's eventual return
-			// only decrements the abandoned counter (below).
+			// only releases the held handle and decrements the abandoned
+			// counter (below).
 			//
 			// The status comes from finalStatusForCanceledRun, the same single
 			// decision point the non-abandoned path uses. This used to write
@@ -611,12 +674,22 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 			r.goroutineWG.Go(func() { r.startWorker(parentCtx, -1) })
 			go func() {
 				<-done
+				age := r.livenessClock().Sub(time.Unix(0, h.zombieSince.Load())).Round(time.Millisecond)
+				// Release the key and write set now that the goroutine is gone.
+				// Handle first, abandoned counter second -- the shutdown branch's
+				// order -- so a caller that waits for AbandonedCount to drain
+				// never finds the handle still registered. The identity check
+				// is belt and braces: Gate 0 refuses to claim an op id that is
+				// in r.running, so no other handle can sit under this id.
 				r.mu.Lock()
-				delete(r.abandonedAlive, qr.opID)
+				if cur, ok := r.running[qr.opID]; ok && cur == h {
+					r.releaseRunHandleLocked(qr.opID)
+				}
 				r.mu.Unlock()
+				r.pingDispatch()
 				r.abandoned.decrement(qr.plugin)
 				r.logger.Info("registry: abandoned goroutine returned",
-					"op_id", qr.opID, "plugin", qr.plugin)
+					"op_id", qr.opID, "plugin", qr.plugin, "zombie_age", age)
 			}()
 			return true // signal caller to exit
 		}

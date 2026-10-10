@@ -1,7 +1,7 @@
 // file: internal/operations/registry/reliability_fixes_test.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 8f1c2a3b-4d5e-6f70-8192-a3b4c5d6e7f8
-// last-edited: 2026-09-22
+// last-edited: 2026-10-10
 
 package registry_test
 
@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -81,8 +82,10 @@ func TestWatchdog_StuckBeforeFirstProgress(t *testing.T) {
 // TestAbandoned_TerminalStatusAllowsReenqueue verifies that a genuinely
 // abandoned op (ctx-canceled, goroutine doesn't return within grace) gets a
 // terminal status — so its row leaves the active index — and that a
-// subsequent enqueue of the same ConcurrencyKey'd def creates a NEW op that
-// runs to completion instead of returning the zombie's ID forever (C-3).
+// subsequent enqueue of the same ConcurrencyKey'd def creates a NEW op
+// instead of returning the zombie's ID forever (C-3). Since 05-PR3 (owner
+// decision D6) the zombie keeps its ConcurrencyKey until its goroutine
+// returns, so the new op stays queued until then and runs once it does.
 func TestAbandoned_TerminalStatusAllowsReenqueue(t *testing.T) {
 	ctx := t.Context()
 
@@ -111,7 +114,9 @@ func TestAbandoned_TerminalStatusAllowsReenqueue(t *testing.T) {
 	}
 	_ = r.RegisterOp(def)
 	r.Start(ctx)
-	defer close(release) // let the runaway goroutine drain at test end
+	var releaseOnce sync.Once
+	releaseRun := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releaseRun() // let the runaway goroutine drain at test end
 
 	op1, _ := r.EnqueueOp(ctx, "test.abandoned-reenqueue", nil)
 	select {
@@ -135,7 +140,13 @@ func TestAbandoned_TerminalStatusAllowsReenqueue(t *testing.T) {
 	if op2 == op1 {
 		t.Fatalf("re-enqueue returned the abandoned zombie's ID %s — op type silently disabled", op1)
 	}
-	// And the new op must actually run to completion.
+	// The zombie still holds the key: op2 waits rather than overlapping it.
+	time.Sleep(300 * time.Millisecond) // several dispatch ticks
+	if got := store.statusOf(op2); got != "queued" {
+		t.Fatalf("op2 is %q while op1's goroutine is still running, want queued", got)
+	}
+	// Once the runaway goroutine returns, the key is released and op2 runs.
+	releaseRun()
 	awaitStatus(t, store, op2, "completed", 5*time.Second)
 }
 

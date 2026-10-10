@@ -1,7 +1,7 @@
 // file: internal/repairs/engine.go
-// version: 1.19.0
+// version: 1.20.0
 // guid: 9b3e7f40-2d15-4a86-9c1f-6e0a4d8b7c25
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 
 package repairs
 
@@ -48,6 +48,12 @@ const (
 	OutcomeNotApplicable = "not_applicable"
 	OutcomeFailed        = "failed"
 	OutcomeAborted       = "aborted_standdown_lost"
+	// OutcomeCanceledSkip: the apply was canceled (or timed out, or was
+	// stopped by the watchdog or a shutdown) before this row started, or the
+	// run's fence refused one of the row's writes, so it was not (fully)
+	// applied. Like OutcomeAborted it is not checkpointed and not
+	// settled: a resumed apply checks the row again.
+	OutcomeCanceledSkip = "canceled_skipped"
 	// OutcomeRetryLater: the fixer wrote nothing because a check could not
 	// be answered right now (ErrRetryLater). Not settled: a resumed apply,
 	// or a new apply of the same plan, tries the row again.
@@ -374,9 +380,11 @@ type ApplyCheckpoint struct {
 }
 
 // settledForResume reports whether a checkpointed outcome is final. An
-// aborted or retry_later row wrote nothing and is applied again on resume.
+// aborted, canceled-skip or retry_later row wrote nothing and is applied again
+// on resume.
 func settledForResume(outcome string) bool {
-	return outcome != "" && outcome != OutcomeAborted && outcome != OutcomeWouldApply && outcome != OutcomeRetryLater
+	return outcome != "" && outcome != OutcomeAborted && outcome != OutcomeCanceledSkip &&
+		outcome != OutcomeWouldApply && outcome != OutcomeRetryLater
 }
 
 // RowResult is the apply outcome of one requested row.
@@ -614,6 +622,15 @@ func RunApply(ctx context.Context, f Fixer, plan *PlanResult, planOpID string, r
 		res.StandDownHeld = held
 	}
 
+	// The run's write permit (registry fence): once the registry revokes it
+	// (cancel, timeout, watchdog kill, quiesce, shutdown, abandonment, lost
+	// lease) every Writer write is refused, so a run that does not stop when
+	// asked cannot keep writing. Installed whether or not a stand-down is
+	// held. Without a registry the ctx carries the zero Fence, never revoked.
+	if deps.Writer != nil {
+		deps.Writer.setFence(registry.FenceFromContext(ctx).Check)
+		defer deps.Writer.setFence(nil)
+	}
 	var lost atomic.Bool
 	if held && deps.Writer != nil {
 		// The writes inside a row are the row's progress: each one renews
@@ -636,7 +653,7 @@ func RunApply(ctx context.Context, f Fixer, plan *PlanResult, planOpID string, r
 	settle := func(r RowResult) {
 		mu.Lock()
 		results = append(results, r)
-		if dryRun || deps.Checkpoint == nil || r.Outcome == OutcomeAborted {
+		if dryRun || deps.Checkpoint == nil || r.Outcome == OutcomeAborted || r.Outcome == OutcomeCanceledSkip {
 			mu.Unlock()
 			return
 		}
@@ -666,6 +683,16 @@ func RunApply(ctx context.Context, f Fixer, plan *PlanResult, planOpID string, r
 	}
 	runErr := registry.RunItems(ctx, reporter, parts, func(pctx context.Context, part []Row) error {
 		for _, planned := range part {
+			// Cancel is checked before EVERY row, not only between partitions:
+			// a partition can be hundreds of rows, and the 2026-10-01 apply
+			// kept retiring books after Cancel until a restart. The row in
+			// flight finishes (its writes are fenced once the registry
+			// revokes); each later row is reported canceled_skipped, not
+			// checkpointed, so a resume re-checks it.
+			if err := pctx.Err(); err != nil {
+				settle(RowResult{RowID: planned.RowID, Outcome: OutcomeCanceledSkip})
+				continue
+			}
 			settle(applyOne(pctx, f, plan.Params, planned, isOwner[planned.RowID], dryRun, deps, holder, held, &lost, reporter))
 			done.Add(1)
 		}
@@ -837,6 +864,10 @@ func applyOne(ctx context.Context, f Fixer, params json.RawMessage, planned Row,
 				out.Outcome = OutcomeAborted
 				return out
 			}
+			if errors.Is(err, registry.ErrFenced) {
+				out.Outcome = OutcomeCanceledSkip
+				return out
+			}
 			out.Outcome = OutcomeFailed
 			return out
 		}
@@ -852,6 +883,13 @@ func applyOne(ctx context.Context, f Fixer, params json.RawMessage, planned Row,
 			// keeps the fixer's account of how far the row got.
 			lost.Store(true)
 			out.Outcome = OutcomeAborted
+		case errors.Is(err, registry.ErrFenced):
+			// The run was stopped (cancel, timeout, watchdog, quiesce,
+			// shutdown) and its fence refused a write mid-row. Checked before
+			// partial for the same reason as the lease case: canceled_skipped
+			// is not settled, so a resumed apply re-runs the row and the fixer
+			// skips the steps already written. Error keeps how far it got.
+			out.Outcome = OutcomeCanceledSkip
 		case errors.Is(err, ErrPartiallyApplied):
 			out.Outcome = OutcomePartial
 		case errors.Is(err, ErrRetryLater):

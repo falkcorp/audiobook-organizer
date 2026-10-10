@@ -1,5 +1,5 @@
 // file: internal/operations/registry/retry.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 0b6f3d2e-9a41-4c7e-8f25-6d1e7a3c9b58
 // last-edited: 2026-10-10
 
@@ -56,8 +56,8 @@ func IsInterruptedStatus(status string) bool {
 // Refusals, all before any write:
 //   - ErrOpNotFound: no such row.
 //   - ErrOpNotRetryable: not in the interrupted family, or def unregistered.
-//   - ErrOpActive: the op still has a live run handle, its abandoned Run
-//     goroutine has not returned, or another queued/running run of the same
+//   - ErrOpActive: the op still has a live run handle (including a zombie:
+//     an abandoned Run goroutine that has not returned keeps its handle), or another queued/running run of the same
 //     def exists. The boot sweep's supersedeStaleQuiesced and the enqueue-time
 //     ConcurrencyKey dedupe never see this path, so this is the double-run
 //     guard; the def's admission lock (Registry.admitLocks) keeps a concurrent
@@ -87,8 +87,11 @@ func (r *Registry) RetryInterrupted(ctx context.Context, opID, actor string) err
 
 	r.mu.RLock()
 	def, defOK := r.lookupDefLocked(row.DefID)
-	_, live := r.running[opID]
-	_, runaway := r.abandonedAlive[opID]
+	// A zombie's handle stays in r.running until its goroutine returns
+	// (worker.go, genuine abandonment), so live alone refuses it; zombie only
+	// picks the message.
+	h, live := r.running[opID]
+	zombie := live && h.zombie.Load()
 	r.mu.RUnlock()
 	if !defOK {
 		return fmt.Errorf("%w: op %s's definition %q is not registered", ErrOpNotRetryable, opID, row.DefID)
@@ -96,12 +99,12 @@ func (r *Registry) RetryInterrupted(ctx context.Context, opID, actor string) err
 	// Retry is in place: the row keeps its stored def_id, which may be a
 	// former ID. The dispatcher resolves it again when it picks the row up.
 	r.noteAliasUse(row.DefID, aliasEntryRetry)
-	if live {
-		return fmt.Errorf("%w: op %s still has a live run handle", ErrOpActive, opID)
-	}
-	if runaway {
+	if zombie {
 		return fmt.Errorf("%w: op %s's previous run was abandoned by the watchdog and has not exited yet; retry once it does",
 			ErrOpActive, opID)
+	}
+	if live {
+		return fmt.Errorf("%w: op %s still has a live run handle", ErrOpActive, opID)
 	}
 	// Hold the def's admission lock from the same-def check through the
 	// re-queue, so EnqueueOp's dedupe cannot read the active set in between

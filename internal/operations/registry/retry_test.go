@@ -1,7 +1,7 @@
 // file: internal/operations/registry/retry_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7c2e9f14-5b3a-4d86-a1f0-3e8b6c9d2a47
-// last-edited: 2026-09-22
+// last-edited: 2026-10-10
 
 package registry_test
 
@@ -484,8 +484,13 @@ func TestRetryInterrupted_ConcurrentEnqueueCannotSlipASecondRunIn(t *testing.T) 
 // abandon path ignored userCanceled and recorded a deliberate cancel as
 // interrupted -- the bug fixed alongside this rewrite.
 //
-// Mutation check: drop the abandonedAlive refusal in RetryInterrupted and the
-// first Retry is accepted while the first Run is still blocked.
+// The refusal comes through the zombie handle: since 05-PR3 an abandoned run
+// keeps its handle in r.running until its goroutine returns, so the live-handle
+// check refuses it (the abandonedAlive side map is gone).
+//
+// Mutation check: drop the live-handle refusal in RetryInterrupted (or release
+// the handle at abandonment) and the first Retry is accepted while the first
+// Run is still blocked.
 func TestRetryInterrupted_RefusesWhileAnAbandonedRunIsStillExecuting(t *testing.T) {
 	ctx := t.Context()
 	store := newFakeStore()
@@ -544,6 +549,9 @@ func TestRetryInterrupted_RefusesWhileAnAbandonedRunIsStillExecuting(t *testing.
 	// once the status is visible the guard is armed.
 	awaitStatus(t, store, id, "interrupted_quiesced", 5*time.Second)
 
+	if z := r.Zombies(); len(z) != 1 || z[0].OpID != id {
+		t.Fatalf("Zombies() = %+v, want the abandoned scan %s", z, id)
+	}
 	err = r.RetryInterrupted(ctx, id, "alice")
 	if !errors.Is(err, registry.ErrOpActive) {
 		t.Fatalf("err = %v, want ErrOpActive while the abandoned Run is still executing", err)

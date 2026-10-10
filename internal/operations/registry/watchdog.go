@@ -1,5 +1,5 @@
 // file: internal/operations/registry/watchdog.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 2b3c4d5e-6f7a-8901-bcde-f01234567890
 // last-edited: 2026-10-10
 
@@ -9,6 +9,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
 const (
@@ -62,8 +64,49 @@ func (r *Registry) runWatchdog(ctx context.Context) {
 	}
 }
 
+// Zombie warning cadence (owner decision D6): a run whose goroutine outlived
+// the abandon grace is logged at WARN once it is zombieWarnAfter old, then
+// again every zombieWarnEvery while it lives.
+const (
+	zombieWarnAfter = 10 * time.Minute
+	zombieWarnEvery = time.Minute
+)
+
+// zombieSweep logs the long-lived zombies. It runs on the watchdog goroutine
+// (no goroutine of its own) and measures against the injected liveness clock.
+func (r *Registry) zombieSweep(now time.Time) {
+	r.mu.RLock()
+	var zombies []*runHandle
+	for _, h := range r.running {
+		if h != nil && h.zombie.Load() {
+			zombies = append(zombies, h)
+		}
+	}
+	r.mu.RUnlock()
+	for _, h := range zombies {
+		since := h.zombieSince.Load()
+		if since == 0 {
+			continue
+		}
+		age := now.Sub(time.Unix(0, since))
+		if age < zombieWarnAfter {
+			continue
+		}
+		if last := h.zombieWarnedAt.Load(); last != 0 && now.Sub(time.Unix(0, last)) < zombieWarnEvery {
+			continue
+		}
+		h.zombieWarnedAt.Store(now.UnixNano())
+		r.logger.Warn("registry: zombie op goroutine still alive; its concurrency key stays held until it exits",
+			"op_id", logger.SanitizeLogValue(h.id),
+			"def_id", logger.SanitizeLogValue(h.defID),
+			"key", logger.SanitizeLogValue(h.concurrencyKey),
+			"age", age.Round(time.Second))
+	}
+}
+
 // watchdogCycle inspects all running ops once.
 func (r *Registry) watchdogCycle() {
+	r.zombieSweep(r.livenessClock())
 	// Collect a snapshot of running handles to avoid holding the lock during DB
 	// calls.
 	r.mu.RLock()
@@ -94,6 +137,9 @@ func (r *Registry) watchdogCycle() {
 		// (e.g. saturated workers), its row may carry stale StartedAt /
 		// LastProgressAt values from a previous resumed run — inspecting those
 		// here would write spurious stuck strikes.
+		//
+		// A zombie whose row was written terminal at abandonment is skipped
+		// here too; zombieSweep above is what watches it.
 		if row.Status != "running" {
 			continue
 		}
