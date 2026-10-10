@@ -1,5 +1,5 @@
 // file: internal/ai/telemetry_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5d0b3f7e-6c1a-4e48-9a52-0f1b7c9d2e31
 // last-edited: 2026-10-10
 
@@ -75,7 +75,7 @@ func metricByName(rm metricdata.ResourceMetrics, name string) *metricdata.Metric
 func attrsMatch(set attribute.Set, want map[string]string) bool {
 	for k, v := range want {
 		got, ok := set.Value(attribute.Key(k))
-		if !ok || got.Emit() != v {
+		if !ok || got.String() != v {
 			return false
 		}
 	}
@@ -229,8 +229,8 @@ func assertSiteTelemetry(t *testing.T, tel *aiTelemetry, task, model string, wan
 		}
 		found = true
 		for _, kv := range sp.Attributes() {
-			if strings.Contains(kv.Value.Emit(), siteSentinel) {
-				t.Errorf("span ai.%s attribute %s carries caller text: %q", task, kv.Key, kv.Value.Emit())
+			if strings.Contains(kv.Value.String(), siteSentinel) {
+				t.Errorf("span ai.%s attribute %s carries caller text: %q", task, kv.Key, kv.Value.String())
 			}
 			switch string(kv.Key) {
 			case "ai.provider", "ai.model", "ai.task", "ai.tokens.input", "ai.tokens.output":
