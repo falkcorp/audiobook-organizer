@@ -1,5 +1,5 @@
 // file: cmd/encryption_key_guard_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2f58c3a9-6e41-4b07-90d8-7a13e5b2f846
 // last-edited: 2026-10-10
 
@@ -128,8 +128,8 @@ func TestGuard_FailsClosedOnACensusError(t *testing.T) {
 	}
 }
 
-// TestGuard_OverrideLetsTheOperatorThrough — and it is checked BEFORE the
-// census, so it also rescues the broken-store case.
+// TestGuard_OverrideLetsTheOperatorThrough — it also rescues the broken-store
+// case: a plain census I/O error yields to the override.
 func TestGuard_OverrideLetsTheOperatorThrough(t *testing.T) {
 	t.Setenv(allowKeyRegenEnv, "1")
 	store := &guardStore{
@@ -181,5 +181,49 @@ func TestGuard_WrappedUnreadableSettingsErrorIsRecognised(t *testing.T) {
 	if err == nil || strings.Contains(err.Error(), allowKeyRegenEnv) ||
 		!strings.Contains(err.Error(), unreadable.Remedy()) {
 		t.Fatalf("wrapped unreadable-row error got the census-error message: %v", err)
+	}
+}
+
+// TestGuard_OverrideDoesNotPassAnUnreadableRow — the override cannot get past
+// an unreadable settings row (loadConfigFromDB fails on it next), and honouring
+// it would write a new key file that the boot after the repair trusts while
+// every stored secret fails to decrypt and is deleted. So it is refused even
+// with the override set, with the unreadable-row message.
+func TestGuard_OverrideDoesNotPassAnUnreadableRow(t *testing.T) {
+	t.Setenv(allowKeyRegenEnv, "1")
+	unreadable := &database.UnreadableSettingsError{Keys: []string{"openai_api_key"}}
+	store := &guardStore{err: unreadable}
+
+	err := guardAgainstKeyRegeneration(store, t.TempDir(), t.TempDir())
+	if err == nil {
+		t.Fatalf("%s=1 let startup past an unreadable settings row", allowKeyRegenEnv)
+	}
+	if !strings.Contains(err.Error(), unreadable.Remedy()) || !strings.Contains(err.Error(), `"openai_api_key"`) {
+		t.Errorf("not the unreadable-row message: %v", err)
+	}
+	if strings.Contains(err.Error(), allowKeyRegenEnv) {
+		t.Errorf("error offers the override it just refused: %v", err)
+	}
+}
+
+// TestGuard_OverridePassesACensusIOError — the documented reason the override
+// exists: a broken census must not make the server unbootable.
+func TestGuard_OverridePassesACensusIOError(t *testing.T) {
+	t.Setenv(allowKeyRegenEnv, "1")
+	store := &guardStore{err: errors.New("iterate settings: pebble: read error")}
+
+	if err := guardAgainstKeyRegeneration(store, t.TempDir(), t.TempDir()); err != nil {
+		t.Errorf("%s=1 did not pass a census I/O error: %v", allowKeyRegenEnv, err)
+	}
+}
+
+// TestGuard_OverrideOnACleanFirstRun — the census now runs before the override
+// is read; a clean first run must still pass with it set.
+func TestGuard_OverrideOnACleanFirstRun(t *testing.T) {
+	t.Setenv(allowKeyRegenEnv, "1")
+	store := &guardStore{settings: []database.Setting{{Key: "root_dir", Value: "/srv/books"}}}
+
+	if err := guardAgainstKeyRegeneration(store, t.TempDir(), t.TempDir()); err != nil {
+		t.Errorf("guard blocked a clean first run with the override set: %v", err)
 	}
 }

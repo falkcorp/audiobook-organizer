@@ -1,5 +1,5 @@
 // file: cmd/root.go
-// version: 1.28.2
+// version: 1.28.3
 // guid: 6a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
 // last-edited: 2026-10-10
 
@@ -717,7 +717,9 @@ func setupFileLogging() (*os.File, error) {
 // It exists so a recoverable situation cannot become an unbootable one: if the
 // census itself is broken, or the operator has genuinely accepted the loss and
 // wants to start over, there has to be a way forward that is not "edit the
-// source".
+// source". It does not get past unreadable settings rows, where it cannot help
+// and would only mint a key that later costs the stored secrets; see
+// guardAgainstKeyRegeneration.
 const allowKeyRegenEnv = "ABK_ALLOW_ENCRYPTION_KEY_REGEN"
 
 // guardAgainstKeyRegeneration refuses to start when there is no encryption key
@@ -732,13 +734,20 @@ const allowKeyRegenEnv = "ABK_ALLOW_ENCRYPTION_KEY_REGEN"
 //
 // Fails CLOSED on a census error, and names the override in the message: a
 // store we cannot read is exactly the case where we must not gamble that there
-// was nothing to lose. The exception is an unreadable settings row
-// (*database.UnreadableSettingsError): there the override is not a way
-// forward, so that message names the rows and does not offer it.
+// was nothing to lose.
+//
+// Order matters. A key file found anywhere returns first, so a normal boot runs
+// no census. Otherwise the census runs BEFORE allowKeyRegenEnv is honoured,
+// because one census result is refused even with the override set: an
+// unreadable settings row (*database.UnreadableSettingsError). The override
+// cannot get past it -- loadConfigFromDB fails on the same rows next -- and
+// honouring it would let InitEncryption write a NEW key file first. Once the
+// row is repaired, the following boot would find that key, skip this guard,
+// fail to decrypt every stored secret, and LoadConfigFromDatabase would delete
+// them. So that message names the rows and the repair and does not offer the
+// override. Any other census error (I/O, iterator, close) still yields to the
+// override, which is the escape hatch it exists for.
 func guardAgainstKeyRegeneration(store database.Store, stateDir, legacyKeyDir string) error {
-	if os.Getenv(allowKeyRegenEnv) != "" {
-		return nil
-	}
 	if found := database.FindEncryptionKey(stateDir, legacyKeyDir); found != "" {
 		return nil // a key exists; InitEncryption will load it, not generate one
 	}
@@ -746,18 +755,14 @@ func guardAgainstKeyRegeneration(store database.Store, stateDir, legacyKeyDir st
 	settings, err := store.GetAllSettings()
 	var unreadable *database.UnreadableSettingsError
 	if errors.As(err, &unreadable) {
-		// Not the census-error message below: that one offers the override,
-		// and for an unreadable row the override cannot help. It only skips
-		// this check; InitEncryption would then write a NEW key file, and
-		// loadConfigFromDB would fail on the same rows anyway -- leaving a
-		// fresh key on disk that the next boot, after the row is repaired,
-		// would trust while every stored secret fails to decrypt.
-		//
-		// So the override is deliberately not named here.
+		// Refused regardless of allowKeyRegenEnv; see the doc comment.
 		return fmt.Errorf("settings row(s) %s cannot be read; %s. No encryption "+
 			"key was found in %q or %q, and whether encrypted settings exist "+
 			"cannot be checked until those rows are readable: %w",
 			unreadable.QuotedKeys(), unreadable.Remedy(), stateDir, legacyKeyDir, err)
+	}
+	if os.Getenv(allowKeyRegenEnv) != "" {
+		return nil // operator accepted the loss (or the census is broken)
 	}
 	if err != nil {
 		return fmt.Errorf("cannot determine whether encrypted settings exist, and no "+
