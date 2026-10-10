@@ -1,15 +1,15 @@
-// file: web/src/components/dedup/FileInfoCompare.tsx
-// version: 1.2.2
+// file: web/src/components/review/compare/FileInfoCompare.tsx
+// version: 1.3.0
 // guid: e4d5f6a7-b8c9-0123-defa-ed4567890123
-// last-edited: 2026-08-19
+// last-edited: 2026-10-10
 
 // FileInfoCompare renders a side-by-side comparison of two books' file lists.
 // Used inside CandidateCompareDrawer.
 
 import { Box, Chip, Divider, Stack, Tooltip, Typography } from '@mui/material';
-import type { DedupBookDetail } from '../../services/api';
-import { formatPath, usePathVars, type PathVar } from '../../utils/formatPath';
-import { formatBytes, formatDuration } from '../../utils/mediaFormat';
+import type { DedupBookDetail } from '../../../services/api';
+import { formatPath, usePathVars, type PathVar } from '../../../utils/formatPath';
+import { formatBytes, formatDuration } from '../../../utils/mediaFormat';
 
 interface BookFilesColumnProps {
   book: DedupBookDetail;

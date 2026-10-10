@@ -1,7 +1,7 @@
-// file: web/src/components/dedup/FingerprintCanvas.tsx
-// version: 1.1.2
+// file: web/src/components/review/compare/FingerprintCanvas.tsx
+// version: 1.2.0
 // guid: c7d8e9f0-a1b2-4c3d-8e4f-5a6b7c8d9e0f
-// last-edited: 2026-08-19
+// last-edited: 2026-10-10
 // FingerprintCanvas renders a chromaprint base64 fingerprint as a visual
 // bit-matrix heatmap. Each row = one time bucket (aggregated frames), each
 // column = one of the 32 bit positions. Cells are colored by bit value and

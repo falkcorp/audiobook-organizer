@@ -1,14 +1,14 @@
-// file: web/src/components/dedup/__tests__/FolderFilesChip.test.tsx
-// version: 1.0.1
+// file: web/src/components/review/compare/__tests__/FolderFilesChip.test.tsx
+// version: 1.1.0
 // guid: 9c2e7a41-5b80-4d63-8f19-3a6d1c5e2b47
-// last-edited: 2026-08-19
+// last-edited: 2026-10-10
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { FolderFilesChip } from '../FolderFilesChip';
-import * as api from '../../../services/api';
+import * as api from '../../../../services/api';
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../../services/api', () => ({
   getBookFiles: vi.fn(),
 }));
 

@@ -1,7 +1,7 @@
-// file: web/src/components/dedup/BandFilterBar.tsx
-// version: 1.0.1
+// file: web/src/components/review/compare/BandFilterBar.tsx
+// version: 1.1.0
 // guid: b1a2c3d4-e5f6-7890-abcd-ba1234567890
-// last-edited: 2026-08-19
+// last-edited: 2026-10-10
 
 // BandFilterBar renders four band chips (CERTAIN, HIGH, MEDIUM, REVIEW) with
 // per-band candidate counts fetched from /api/v1/dedup/stats. Each chip is
@@ -9,7 +9,7 @@
 // the band filter.
 
 import { Box, Chip, Skeleton, Stack, Tooltip } from '@mui/material';
-import type { DedupBand } from '../../services/api';
+import type { DedupBand } from '../../../services/api';
 
 // Band display configuration.
 const BAND_CONFIG: Record<

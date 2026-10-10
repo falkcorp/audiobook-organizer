@@ -1,7 +1,7 @@
-// file: web/src/components/dedup/FolderFilesChip.tsx
-// version: 1.2.0
+// file: web/src/components/review/compare/FolderFilesChip.tsx
+// version: 1.3.0
 // guid: 4a1c8e92-6d35-4b70-9f28-1e7a5c3d2b69
-// last-edited: 2026-10-06
+// last-edited: 2026-10-10
 
 // FolderFilesChip shows a small "Files" chip on a dedup candidate card. Clicking
 // it opens a popover that lazily fetches the book's file list (getBookFiles) and
@@ -20,7 +20,7 @@ import {
   Tooltip,
 } from '@mui/material';
 import FolderOpenIcon from '@mui/icons-material/FolderOpen';
-import { getBookFiles, type BookFile } from '../../services/api';
+import { getBookFiles, type BookFile } from '../../../services/api';
 
 interface FolderFilesChipProps {
   bookId: string;

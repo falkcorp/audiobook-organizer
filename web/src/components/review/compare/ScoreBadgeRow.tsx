@@ -1,13 +1,13 @@
-// file: web/src/components/dedup/ScoreBadgeRow.tsx
-// version: 1.2.0
+// file: web/src/components/review/compare/ScoreBadgeRow.tsx
+// version: 1.3.0
 // guid: c2b3d4e5-f6a7-8901-bcde-cb2345678901
-// last-edited: 2026-09-25
+// last-edited: 2026-10-10
 
 // ScoreBadgeRow renders a compact row of band + score chips for a candidate.
 // Used inside the candidate table and the comparison drawer header.
 
 import { Chip, Stack, Tooltip } from '@mui/material';
-import type { DedupBand } from '../../services/api';
+import type { DedupBand } from '../../../services/api';
 import { BAND_CONFIG } from './BandFilterBar';
 
 interface ScoreBadgeRowProps {

@@ -1,7 +1,7 @@
-// file: web/src/components/dedup/AudioSamplePair.tsx
-// version: 1.0.0
+// file: web/src/components/review/compare/AudioSamplePair.tsx
+// version: 1.1.0
 // guid: f5e6a7b8-c9d0-1234-efab-fe5678901234
-// last-edited: 2026-06-10
+// last-edited: 2026-10-10
 
 // AudioSamplePair renders a compact audio preview pair for two books inside
 // the CandidateCompareDrawer. Wraps the existing AudioSampleCompare dialog
@@ -10,8 +10,8 @@
 import { useState } from 'react';
 import { Button } from '@mui/material';
 import HeadphonesIcon from '@mui/icons-material/Headphones';
-import { AudioSampleCompare, type SampleBook } from '../AudioSampleCompare';
-import type { DedupBookDetail } from '../../services/api';
+import { AudioSampleCompare, type SampleBook } from '../../AudioSampleCompare';
+import type { DedupBookDetail } from '../../../services/api';
 
 interface AudioSamplePairProps {
   bookA: DedupBookDetail;

@@ -1,13 +1,13 @@
-// file: web/src/components/dedup/__tests__/BandFilterBar.test.tsx
-// version: 1.0.1
+// file: web/src/components/review/compare/__tests__/BandFilterBar.test.tsx
+// version: 1.1.0
 // guid: a1b2c3d4-e5f6-7890-abcd-111234567890
-// last-edited: 2026-08-19
+// last-edited: 2026-10-10
 
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 import { BandFilterBar } from '../BandFilterBar';
 import type { BandCounts } from '../BandFilterBar';
-import type { DedupBand } from '../../../services/api';
+import type { DedupBand } from '../../../../services/api';
 
 const mockCounts: BandCounts = {
   CERTAIN: 5,

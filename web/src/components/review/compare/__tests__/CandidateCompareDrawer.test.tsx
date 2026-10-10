@@ -1,16 +1,16 @@
-// file: web/src/components/dedup/__tests__/CandidateCompareDrawer.test.tsx
-// version: 2.2.0
+// file: web/src/components/review/compare/__tests__/CandidateCompareDrawer.test.tsx
+// version: 2.3.0
 // guid: c4d5e6f7-a8b9-0123-cdef-cd4567890123
-// last-edited: 2026-09-26
+// last-edited: 2026-10-10
 
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CandidateCompareDrawer } from '../CandidateCompareDrawer';
-import * as api from '../../../services/api';
-import type { DedupCandidateBreakdownResponse } from '../../../services/api';
+import * as api from '../../../../services/api';
+import type { DedupCandidateBreakdownResponse } from '../../../../services/api';
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../../services/api', () => ({
   compareAcoustID: vi.fn(),
   rejectDedupCandidate: vi.fn(),
   getConfig: vi.fn().mockResolvedValue({ root_dir: '/library' }),
