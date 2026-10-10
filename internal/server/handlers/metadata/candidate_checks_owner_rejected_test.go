@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/candidate_checks_owner_rejected_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 4b7e2d91-6c3a-4f08-a5d2-8e1f0c9b3a67
 // last-edited: 2026-10-10
 
@@ -32,7 +32,7 @@ func (m memRejectionKV) ScanPrefix(prefix string) ([]database.KVPair, error) {
 // stale behind (review round 3, N3). Synthetic fixtures.
 func TestCheckCandidate_OwnerRejectedFlagOnly(t *testing.T) {
 	kv := memRejectionKV{
-		metafetch.RejectedCandidateStoreKey("b1", "Audible", "Synthetic Field Notes 8"): []byte(`{"ids":["asin:b0synchk01"]}`),
+		metafetch.RejectedCandidateStoreKey("b1", "Audible", "Synthetic Field Notes 8"): metafetch.RejectionValue(nil, metafetch.CandidateIdentifiers("B0SYNCHK01", "", "", "")),
 	}
 	rejected, err := metafetch.LoadRejectedCandidates(kv, "b1")
 	if err != nil {
