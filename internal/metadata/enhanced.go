@@ -1,5 +1,5 @@
 // file: internal/metadata/enhanced.go
-// version: 1.27.0
+// version: 1.28.0
 // guid: 7e8d9c0b-1a2f-3e4d-5c6b-7a8d9c0b1a2f
 // last-edited: 2026-10-10
 
@@ -506,22 +506,45 @@ func WriteMetadataToFile(filePath string, metadata map[string]any, config fileop
 	// here. It must be a COPY (KeepBackupCopy): AtomicParsley --overWrite and
 	// friends may rewrite the same inode, and a hardlink would then hold the
 	// new bytes. A backup that cannot be taken fails the write, as it does on
-	// the native path. On a failed CLI write the backup is kept, not removed:
-	// the writers restore the original from their own copy, but a failed
-	// restore is possible, and then this is the only good copy. A format no
-	// CLI writer handles is refused below without touching the file, so it
-	// gets no backup.
+	// the native path. A format no CLI writer handles is refused below without
+	// touching the file, so it gets no backup.
+	var bak string
+	var before os.FileInfo
 	if cliWriterSupports(target) && tagger.BackupWanted(context.Background()) {
-		bak, berr := fileops.KeepBackupCopy(target)
-		if berr != nil {
+		var berr error
+		if bak, berr = fileops.KeepBackupCopy(target); berr != nil {
 			return fmt.Errorf("write metadata to %s: backup before CLI write: %w", filePath, berr)
 		}
+		before, _ = os.Stat(target)
 		slog.Debug("backup before CLI tag write", "path", logger.SanitizeLogValue(bak))
 	}
 
 	// The CLI writers rewrite the file outside fileops.WriteTagsSafe, so the
 	// new hashes are recorded on the file's row separately.
-	return writeMetadataViaCLIRecordingHashes(target, metadata, config)
+	err = writeMetadataViaCLIRecordingHashes(target, metadata, config)
+	if err != nil && bak != "" && fileUnchangedSince(target, before) {
+		// Nothing was written (the tool is missing, or it refused before
+		// touching the file), so the backup only duplicates the live file:
+		// drop it, as WriteTagsSafe does after a failed write. If the file
+		// changed at all -- a partial write, or the writer's own restore --
+		// the backup is kept: it may be the only good copy.
+		_ = os.Remove(bak)
+	}
+	return err
+}
+
+// fileUnchangedSince reports whether path is still the same inode with the
+// same size and mtime as before. A nil before (it could not be read) counts
+// as changed, which keeps the backup.
+func fileUnchangedSince(path string, before os.FileInfo) bool {
+	if before == nil {
+		return false
+	}
+	now, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return os.SameFile(before, now) && now.Size() == before.Size() && now.ModTime().Equal(before.ModTime())
 }
 
 // writeMetadataViaCLI dispatches to the per-container ffmpeg/CLI writers. Shared

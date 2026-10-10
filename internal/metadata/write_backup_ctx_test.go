@@ -1,5 +1,5 @@
 // file: internal/metadata/write_backup_ctx_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8f385b95-1f2d-4e61-9a15-32b784f3abc7
 // last-edited: 2026-10-10
 
@@ -57,20 +57,21 @@ func TestWriteSingleTagContext_BackupFollowsContext(t *testing.T) {
 // WriteMetadataToFile falls back to the CLI writers when the native write
 // fails. Those rewrite the file in place, outside fileops.WriteTagsSafe, so
 // the create_backups backup is taken before them, as a copy. The native path
-// is switched off here and the CLI writer (AtomicParsley) is not on PATH, so
-// the write fails at once; the backup must already exist, holding the original.
-// PATH is emptied so no CLI writer is found and the run never depends on
-// which tools the machine has.
+// is switched off here and a fake AtomicParsley on PATH rewrites the file IN
+// PLACE (same inode), the case a hardlinked backup would get wrong.
 func TestWriteMetadataToFile_CLIFallbackKeepsBackup(t *testing.T) {
 	prevDeps := packageSafeWriteDeps
 	prevTaglib := taglibAvailable
 	t.Cleanup(func() { packageSafeWriteDeps, taglibAvailable = prevDeps, prevTaglib })
 	packageSafeWriteDeps = tagger.SafeWriteDeps{}
 	taglibAvailable = false
-	t.Setenv("PATH", "")
+	bin := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "AtomicParsley"),
+		[]byte("#!/bin/sh\nprintf ' tagged' >> \"$1\"\n"), 0o755))
+	t.Setenv("PATH", bin)
 
-	prev := config.Snapshot()
-	t.Cleanup(func() { config.Mutate(func(c *config.Config) { *c = prev }) })
+	prev := config.Snapshot().CreateBackups
+	t.Cleanup(func() { config.Mutate(func(c *config.Config) { c.CreateBackups = prev }) })
 
 	for _, on := range []bool{true, false} {
 		config.Mutate(func(c *config.Config) { c.CreateBackups = on })
@@ -78,7 +79,10 @@ func TestWriteMetadataToFile_CLIFallbackKeepsBackup(t *testing.T) {
 		original := []byte("synthetic pre-write bytes")
 		require.NoError(t, os.WriteFile(path, original, 0o644))
 
-		require.Error(t, WriteMetadataToFile(path, map[string]any{"title": "Synthetic Title"}, fileops.OperationConfig{}))
+		require.NoError(t, WriteMetadataToFile(path, map[string]any{"title": "Synthetic Title"}, fileops.OperationConfig{}))
+		got, err := os.ReadFile(path)
+		require.NoError(t, err)
+		require.Equal(t, append(append([]byte{}, original...), " tagged"...), got, "the fake writer ran in place")
 
 		baks, err := filepath.Glob(path + ".bak-*")
 		require.NoError(t, err)
@@ -87,13 +91,36 @@ func TestWriteMetadataToFile_CLIFallbackKeepsBackup(t *testing.T) {
 			continue
 		}
 		require.Len(t, baks, 1, "create_backups on: one backup before the CLI write")
-		got, err := os.ReadFile(baks[0])
+		bakBytes, err := os.ReadFile(baks[0])
 		require.NoError(t, err)
-		require.Equal(t, original, got)
-		a, _ := os.Stat(path)
-		b, _ := os.Stat(baks[0])
-		require.False(t, os.SameFile(a, b), "the CLI-path backup must be a copy, not a hardlink")
+		require.Equal(t, original, bakBytes, "the backup must hold the pre-write bytes after an in-place write")
 	}
+}
+
+// A CLI write that fails without touching the file (here: the tool is not on
+// PATH) leaves no backup, as a failed WriteTagsSafe leaves none.
+func TestWriteMetadataToFile_CLIFailureUntouchedKeepsNoBackup(t *testing.T) {
+	prevDeps := packageSafeWriteDeps
+	prevTaglib := taglibAvailable
+	t.Cleanup(func() { packageSafeWriteDeps, taglibAvailable = prevDeps, prevTaglib })
+	packageSafeWriteDeps = tagger.SafeWriteDeps{}
+	taglibAvailable = false
+	t.Setenv("PATH", "")
+	prev := config.Snapshot().CreateBackups
+	t.Cleanup(func() { config.Mutate(func(c *config.Config) { c.CreateBackups = prev }) })
+	config.Mutate(func(c *config.Config) { c.CreateBackups = true })
+
+	path := filepath.Join(t.TempDir(), "synthetic.m4b")
+	original := []byte("synthetic pre-write bytes")
+	require.NoError(t, os.WriteFile(path, original, 0o644))
+	require.Error(t, WriteMetadataToFile(path, map[string]any{"title": "Synthetic Title"}, fileops.OperationConfig{}))
+
+	got, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, original, got)
+	baks, err := filepath.Glob(path + ".bak-*")
+	require.NoError(t, err)
+	require.Empty(t, baks, "a CLI write that touched nothing must leave no backup")
 }
 
 // A format no CLI writer handles is refused without a backup: nothing would
