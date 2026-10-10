@@ -21,6 +21,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 )
 
 // SchedulerDeps contains the external dependencies the TaskScheduler needs.
@@ -634,14 +635,18 @@ func (ts *TaskScheduler) WaitForOperation(ctx context.Context, opID string, onPo
 	}
 }
 
-// isTerminalOpV2Status reports whether a v2 operation status means the operation
-// will not progress further. The two interrupted_* states are terminal: an
-// interrupted op is resumed as a NEW op, so the id being waited on never moves
-// again. Omitting them is what made the legacy terminal set unsafe to reuse.
+// isTerminalOpV2Status reports whether WaitForOperation has nothing more to
+// wait for in this process: state.Props.Settled (completed, failed, canceled,
+// or any interrupted* status).
+//
+// It is Settled rather than the strict state.Props.Terminal because nothing
+// moves an interrupted row again in-session. interrupted_quiesced and
+// interrupted_restart are only picked up by the next boot's resume sweep (or
+// an operator's Retry), and interrupted_ask waits for a person. Waiting on
+// any of them would hold the scheduler's window until ctx ends. Before
+// 2026-10-10 this was a hand-written list (completed, failed, canceled,
+// interrupted_dropped, interrupted_quiesced) that missed interrupted_ask and
+// the legacy spellings; those now end the wait too.
 func isTerminalOpV2Status(status string) bool {
-	switch status {
-	case "completed", "failed", "canceled", "interrupted_dropped", "interrupted_quiesced":
-		return true
-	}
-	return false
+	return state.IsSettled(status)
 }

@@ -1,5 +1,5 @@
 // file: internal/operations/registry/registry.go
-// version: 3.34.2
+// version: 3.35.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-10-10
 
@@ -20,6 +20,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 	"github.com/oklog/ulid/v2"
 )
 
@@ -1227,17 +1228,13 @@ func (r *Registry) Cancel(opID string) error {
 }
 
 // isTerminalStatus reports whether a v2 row status means the op is finished
-// for good and there is nothing left to cancel or resume. This is the
-// registry-side twin of database.isTerminalV2Status and must list the same
-// statuses: an explicit allowlist, so an unlisted status is treated as live
-// (cancellable), which is the safe direction for a cancel — the cost of being
-// wrong is an extra terminal write, not a row the resume sweep still owns.
+// for good and there is nothing left to cancel or resume: state.Props.Terminal,
+// the same strict allowlist database.isTerminalV2Status uses. An unlisted status
+// is treated as live (cancellable), which is the safe direction for a cancel —
+// the cost of being wrong is an extra terminal write, not a row the resume
+// sweep still owns.
 func isTerminalStatus(status string) bool {
-	switch status {
-	case "completed", "failed", "canceled", "interrupted_dropped":
-		return true
-	}
-	return false
+	return state.IsTerminal(status)
 }
 
 // Discard deletes a persisted operation row that nothing is still executing:
@@ -1289,15 +1286,12 @@ func (r *Registry) Discard(opID string) error {
 	return nil
 }
 
-// discardableStatuses is the allow-list Discard hands the store: the terminal
-// statuses (isTerminalStatus) plus the interrupted_* family, which is finished
-// from the user's point of view whether or not the resume sweep would have
-// picked it up. "interrupted" and "interrupted_restart" are legacy spellings
-// the UI still groups with the family.
-var discardableStatuses = []string{
-	"completed", "failed", "canceled", "interrupted_dropped",
-	"interrupted", "interrupted_quiesced", "interrupted_ask", "interrupted_restart",
-}
+// discardableStatuses is the allow-list Discard hands the store:
+// state.Props.Discardable, i.e. the terminal statuses plus the interrupted_*
+// family, which is finished from the user's point of view whether or not the
+// resume sweep would have picked it up. "interrupted" and "interrupted_restart"
+// are legacy spellings the UI still groups with the family.
+var discardableStatuses = state.WithProp(func(p state.Props) bool { return p.Discardable })
 
 // hasLiveHandle reports whether opID currently has an in-memory run handle
 // (stub or full). Used by EnqueueOp's ConcurrencyKey dedupe to distinguish a

@@ -1,5 +1,5 @@
 // file: internal/arch/layering_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: 752fb2b9-4a13-4baf-9fb2-0fd2ac6f3ad5
 // last-edited: 2026-10-10
 
@@ -91,6 +91,7 @@ var layerOf = map[string]int{
 	"internal/mtls":                    0, // computed: imports no module package
 	"internal/operations/freshness":    0, // computed: imports no module package
 	"internal/operations/opmode":       0, // computed: imports no module package
+	"internal/operations/state":        0, // computed: imports no module package
 	"internal/pathutil":                0, // table: leaf
 	"internal/personname":              0, // table: leaf
 	"internal/querygrammar":            0, // table: leaf

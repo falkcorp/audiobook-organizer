@@ -1,17 +1,17 @@
 // file: internal/operations/registry/legacy_op_status.go
-// version: 1.3.1
+// version: 1.4.0
 // guid: 4a8c2f61-b703-49de-95e7-1c0d8b5a3e27
-// last-edited: 2026-09-13
+// last-edited: 2026-10-10
 
 package registry
 
 import (
 	"bytes"
 	"encoding/json"
-	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 )
 
 // legacyOpStore is the slice of the v1 operations surface needed to keep a
@@ -145,15 +145,22 @@ func legacyStatusFor(v2Status string) string {
 	return "" // not a terminal status; nothing to mirror
 }
 
-// isInterruptedStatus is the prefix match the comment above argues for, in one
-// place so IsTerminalStatus and legacyStatusFor cannot disagree about what the
-// interrupted family contains.
+// isInterruptedStatus is the prefix match the comment above argues for. It is
+// state.IsInterrupted, so IsTerminalStatus, legacyStatusFor and
+// IsInterruptedStatus cannot disagree about what the interrupted family
+// contains.
 func isInterruptedStatus(v2Status string) bool {
-	return v2Status == "interrupted" || strings.HasPrefix(v2Status, "interrupted_")
+	return state.IsInterrupted(v2Status)
 }
 
-// IsTerminalStatus reports whether a v2 operation status is terminal — the op
-// has stopped and will not progress further.
+// IsTerminalStatus reports whether a v2 operation status is settled — the op
+// has stopped and a poller has nothing more to wait for: state.Props.Settled
+// (completed, failed, canceled, or any interrupted* status).
+//
+// Despite the name this is NOT state.Props.Terminal. An interrupted_quiesced
+// row is settled (it stopped) but not terminal (the boot sweep will resume it);
+// a writer deciding whether to stamp completed_at or drop resume state wants
+// database.IsTerminalV2Status instead.
 //
 // Exported so callers outside this package can ask the question without
 // restating the answer. A caller that enumerates terminal statuses itself gets
@@ -162,11 +169,7 @@ func isInterruptedStatus(v2Status string) bool {
 // classified both as "still running". Anything polling on that mistake waits
 // forever.
 func IsTerminalStatus(v2Status string) bool {
-	switch v2Status {
-	case "completed", "failed", "canceled":
-		return true
-	}
-	return isInterruptedStatus(v2Status)
+	return state.IsSettled(v2Status)
 }
 
 // propagateLegacyOpStatus mirrors a v2 op's terminal status onto the legacy

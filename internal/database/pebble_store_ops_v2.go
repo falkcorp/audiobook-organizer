@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_ops_v2.go
-// version: 3.26.0
+// version: 3.27.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-04
+// last-edited: 2026-10-10
 
 // pebble_store_ops_v2 implements OpsV2Store for PebbleDB (the primary production
 // database). Key schema (all prefixed with "opv2:"):
@@ -34,6 +34,8 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
+
+	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 )
 
 // key builders
@@ -1220,6 +1222,9 @@ func (p *PebbleStore) ListWaitingDepsOps() (rows []OperationV2Row, err error) {
 
 // isResumableV2Status reports whether a v2 operation row in this status should be
 // handed to the registry's startup resume sweep (registry.resumeAfterStartup).
+// The answer is state.Props.Resumable (queued, running, interrupted_quiesced);
+// the reasons interrupted_dropped and interrupted_ask are excluded live on that
+// field in internal/operations/state.
 //
 // WHY THIS EXISTS AT ALL — READ BEFORE "SIMPLIFYING" IT BACK TO THE ACTIVE INDEX.
 // The sweep used to take its candidates from ListActiveOperationsV2, which reads
@@ -1236,60 +1241,29 @@ func (p *PebbleStore) ListWaitingDepsOps() (rows []OperationV2Row, err error) {
 // pebble_store_operations.go) to match the "interrupted" prefix — but library.scan
 // is v2-native and takes the registry path, which never consults that predicate.
 // Widening a predicate cannot fix a sweep that does not read it.
-//
-// interrupted_dropped and interrupted_ask are deliberately EXCLUDED: both are
-// decisions the sweep itself already made on a previous boot (ResumePolicy=drop,
-// or "awaiting user decision"). Re-including them would relitigate a settled
-// outcome on every restart, and interrupted_ask would resume without the user
-// ever answering. Only interrupted_quiesced — the status minted for every policy
-// that is NOT drop — is genuinely unfinished business.
 func isResumableV2Status(status string) bool {
-	return status == "queued" || status == "running" || status == "interrupted_quiesced"
+	return state.IsResumable(status)
 }
 
 // isTerminalV2Status reports whether a v2 status means the operation is finished
 // for good: no worker holds it, no resume sweep will pick it up, and nothing is
-// waiting on a user decision.
-//
-// This is an explicit allowlist, NOT the complement of the live states, and the
-// direction is the point. Every caller is a WRITER that stamps completed_at, so
-// the cost of being wrong is asymmetric:
-//
-//   - Miss a terminal status -> the repair stamps fewer rows than it could. The
-//     leftover row stays visible in Active Operations and someone reports it.
-//   - Miss a LIVE status -> the repair stamps a row that the scheduler, the
-//     dependency waiter, or the startup resume sweep still owns. That is silent,
-//     and the row then reads as finished work that never ran.
-//
-// So a status that is not listed here is treated as live. Adding a genuinely new
-// terminal state means adding it here; forgetting to costs visibility, not work.
-// (Contrast ListOperationsV2Since below, which is a READER and takes the opposite
-// default on purpose -- see its comment.)
-//
-// The excluded-but-terminal-looking cases, verified against their write sites:
-// "interrupted_quiesced" (registry.go:1263 via worker.go:264) is resumable;
-// "interrupted_ask" (resume.go:383) is waiting on a user; "interrupted_restart"
-// (server_lifecycle.go:121) is a resume marker. All three already pass a non-nil
-// completedAt at their write site, so excluding them here costs nothing.
+// waiting on a user decision. It is state.Props.Terminal, an explicit allowlist
+// whose direction is load-bearing: every caller here is a WRITER that stamps
+// completed_at, so an unknown status must read as live. The full rationale,
+// including why interrupted_quiesced/_ask/_restart are excluded, is on
+// state.Props. (Contrast ListOperationsV2Since below, which is a READER and
+// takes the opposite default on purpose -- see its comment.)
 func isTerminalV2Status(status string) bool {
-	switch status {
-	case "completed", "failed", "canceled", "interrupted_dropped":
-		return true
-	default:
-		return false
-	}
+	return state.IsTerminal(status)
 }
 
 // IsTerminalV2Status is the exported form of isTerminalV2Status, for callers
 // outside this package that must make the same finished/not-finished call.
-//
-// It delegates rather than duplicating the switch on purpose: the allowlist
-// above is load-bearing (see its comment) and a second copy is a second thing
-// to forget when a status is added. The first outside caller was the retention
-// job's opstate sweep (2026-09-07), which deletes an operation's resume state
-// and therefore needs exactly this question — NOT "is completed_at set", which
-// is true for interrupted_quiesced/_ask/_restart even though all three are
-// still waiting to be resumed.
+// The first outside caller was the retention job's opstate sweep (2026-09-07),
+// which deletes an operation's resume state and therefore needs exactly this
+// question — NOT "is completed_at set", which is true for
+// interrupted_quiesced/_ask/_restart even though all three are still waiting
+// to be resumed.
 func IsTerminalV2Status(status string) bool { return isTerminalV2Status(status) }
 
 // stampCompletedAtIfTerminal sets row.CompletedAt to now when the row holds a

@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations/pause.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3f6b0c28-5a17-4e93-b2d4-91e7c05a8b63
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package operations
 
@@ -15,6 +15,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/logging"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 	"github.com/gin-gonic/gin"
 )
 
@@ -152,16 +153,14 @@ func (h *Handler) pauseStatePayload() pauseResponse {
 	return resp
 }
 
-// isTerminalOpStatus reports whether a run has ended.
+// isTerminalOpStatus reports whether a run has ended: state.Props.Settled
+// (completed, failed, canceled, or any interrupted* status), plus the
+// two-L "cancelled" spelling this handler has always accepted.
 //
-// The prefix test on "interrupted" is deliberate: the backend mints a family of
-// interrupted_* statuses (one per ResumePolicy) and enumerating them has gone
-// wrong here before — an op finished as interrupted_dropped was counted as
-// in-progress forever, inflating the bell badge on every restart.
+// Settled matches the interrupted family by prefix, which is deliberate: the
+// backend mints one interrupted_* status per ResumePolicy and enumerating them
+// has gone wrong here before — an op finished as interrupted_dropped was
+// counted as in-progress forever, inflating the bell badge on every restart.
 func isTerminalOpStatus(status string) bool {
-	switch status {
-	case "completed", "failed", "canceled", "cancelled":
-		return true
-	}
-	return strings.HasPrefix(status, "interrupted")
+	return status == "cancelled" || state.IsSettled(status)
 }
