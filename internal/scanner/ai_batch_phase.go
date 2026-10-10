@@ -1,7 +1,7 @@
 // file: internal/scanner/ai_batch_phase.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: dc72fe25-f58e-4135-88f4-7f842e7e9a7a
-// last-edited: 2026-09-13
+// last-edited: 2026-10-10
 
 package scanner
 
@@ -21,6 +21,27 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
+
+// recordParseResult counts one item of this phase at its final disposition
+// (ai_parse_results_total). A package variable so a test can capture the calls
+// without a meter provider.
+var recordParseResult = ai.RecordParseResult
+
+// aiMergeSnapshot is the fields the merge below can fill, taken before and
+// after it: an item is "accepted" when the merge changed at least one of them.
+// Comparing the two snapshots keeps the accepted test in one place instead of
+// at each of the seven merge branches.
+type aiMergeSnapshot struct {
+	title, author, series, narrator, publisher string
+	position, year                             int
+}
+
+func snapshotAIMerge(b *Book) aiMergeSnapshot {
+	return aiMergeSnapshot{
+		title: b.Title, author: b.Author, series: b.Series, narrator: b.Narrator,
+		publisher: b.Publisher, position: b.Position, year: b.Year,
+	}
+}
 
 // maxTotalFailures is how many failed batches abort the whole phase. Package
 // scope rather than a local const so a test can assert the policy is UNCHANGED
@@ -233,6 +254,8 @@ func runAIBatchPhase(ctx context.Context, parser aiBatchParser, books []Book, ca
 					continue
 				}
 				aiMeta := out.results[i]
+				hadResult := aiMeta != nil
+				before := snapshotAIMerge(&books[idx])
 				if aiMeta == nil {
 					// No result for this filename. Still saved below: the save
 					// is what resolves the row and reports the path to stamp,
@@ -264,6 +287,13 @@ func runAIBatchPhase(ctx context.Context, parser aiBatchParser, books []Book, ca
 				if books[idx].Year == 0 && aiMeta.Year > 0 {
 					books[idx].Year = aiMeta.Year
 				}
+
+				// Final disposition of this item, counted exactly once: it was
+				// resolved, so this is the only loop that sees it. Accepted
+				// means the model returned a result AND the merge took at
+				// least one field from it; usable, not high-confidence
+				// (nothing compares ParsedMetadata.Confidence).
+				recordParseResult(ai.TaskBatchParse, hadResult && snapshotAIMerge(&books[idx]) != before)
 
 				stampPath, saveErr := save(ctx, &books[idx])
 				if saveErr != nil {
@@ -297,6 +327,9 @@ func runAIBatchPhase(ctx context.Context, parser aiBatchParser, books []Book, ca
 				if out.bookErrs[i] == nil {
 					continue
 				}
+				// Unresolved, with its own error: not accepted. These items are
+				// not in out.resolved, so the loop above never counted them.
+				recordParseResult(ai.TaskBatchParse, false)
 				booksFailed.Add(1)
 				recordBookFailure(AIBookFailure{Path: books[idx].FilePath, Err: out.bookErrs[i].Error()})
 				log.Warn("AI parsing failed for %s even on its own (batch %d/%d): %v",
@@ -330,6 +363,10 @@ func runAIBatchPhase(ctx context.Context, parser aiBatchParser, books []Book, ca
 				for i := range batch {
 					if !out.resolved[i] && out.bookErrs[i] == nil {
 						failedNames = append(failedNames, filenames[i])
+						// Left unresolved by the failure, with no error of its
+						// own: not accepted. Not counted by either loop above
+						// (not resolved, no book error), so once here.
+						recordParseResult(ai.TaskBatchParse, false)
 					}
 				}
 

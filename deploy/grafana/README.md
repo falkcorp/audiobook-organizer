@@ -1,7 +1,7 @@
 <!-- file: deploy/grafana/README.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: b0b4ed29-c562-4f65-b437-bea04f3dd564 -->
-<!-- last-edited: 2026-10-03 -->
+<!-- last-edited: 2026-10-10 -->
 
 # Grafana dashboards + provisioning
 
@@ -12,6 +12,7 @@ Dashboards for the Prometheus metrics audiobook-organizer serves on `/metrics`
 | File | What |
 |---|---|
 | `dashboards/audiobook-organizer-overnight.json` | "Audiobook Organizer — Overnight" (uid `aorg-overnight`): review-page p50/p95, number-leading titles, filename parse by shape, metadata fetch by provider/source, repairs/maintenance op and fixer durations, `books_total`. |
+| `dashboards/audiobook-organizer-ai.json` | "Audiobook Organizer — AI" (uid `aorg-ai`): AI request rate and failure ratio by task, failures by reason, reply-quality failures, latency p50/p95/p99, tokens per minute, parse accepted ratio, and `ai_dispatch_*` beside them. Reads only the `ai_*` and `ai_dispatch_*` families on `/metrics`. |
 | `provisioning/dashboards/audiobook-organizer.yaml` | A Grafana file-provider pointing at `/var/lib/grafana/dashboards`, for a host with no dashboard provider yet. |
 | `TRACING-RUNBOOK.md` | How to stand up Grafana Tempo next to the Loki+Alloy stack and turn on OTLP tracing. **Not done tonight**; tracing stays off in prod. |
 

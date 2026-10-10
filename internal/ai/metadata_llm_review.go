@@ -1,7 +1,7 @@
 // file: internal/ai/metadata_llm_review.go
-// version: 3.4.2
+// version: 3.5.0
 // guid: e4f92b17-3c8a-4d65-a1f3-9b2e07d84c61
-// last-edited: 2026-09-02
+// last-edited: 2026-10-10
 
 package ai
 
@@ -139,20 +139,23 @@ Include one score per input candidate, using the same index as the input.`
 
 	var scores []MetadataLLMScore
 	if err := DoWithRetry(ctx, p.maxRetries+1, 2*time.Second, func() error {
-		completion, err := p.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
-			Messages: []openai.ChatCompletionMessageParamUnion{
-				openai.SystemMessage(systemPrompt),
-				openai.UserMessage(userPrompt),
-			},
-			Model:                shared.ChatModel(p.metadataReviewModel()), // metadata LLM review uses MetadataReviewModel
-			MaxCompletionTokens:  param.NewOpt[int64](8000),
-			PromptCacheKey:       param.NewOpt("audiobook-metadata-score-v1"),
-			PromptCacheRetention: openai.ChatCompletionNewParamsPromptCacheRetention24h,
-			ResponseFormat: openai.ChatCompletionNewParamsResponseFormatUnion{
-				OfJSONObject: &jsonObjectFormat,
-			},
-			User: openai.String("ao-metadata-review"),
-		})
+		meta := p.callMeta(TaskMetadataReview, p.metadataReviewModel())
+		completion, err := observe(ctx, meta, func(callCtx context.Context) (*openai.ChatCompletion, error) {
+			return p.client.Chat.Completions.New(callCtx, openai.ChatCompletionNewParams{
+				Messages: []openai.ChatCompletionMessageParamUnion{
+					openai.SystemMessage(systemPrompt),
+					openai.UserMessage(userPrompt),
+				},
+				Model:                shared.ChatModel(p.metadataReviewModel()), // metadata LLM review uses MetadataReviewModel
+				MaxCompletionTokens:  param.NewOpt[int64](8000),
+				PromptCacheKey:       param.NewOpt("audiobook-metadata-score-v1"),
+				PromptCacheRetention: openai.ChatCompletionNewParamsPromptCacheRetention24h,
+				ResponseFormat: openai.ChatCompletionNewParamsResponseFormatUnion{
+					OfJSONObject: &jsonObjectFormat,
+				},
+				User: openai.String("ao-metadata-review"),
+			})
+		}, chatUsage)
 		if err != nil {
 			return fmt.Errorf("OpenAI API call failed: %w", err)
 		}

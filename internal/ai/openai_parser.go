@@ -1,7 +1,7 @@
 // file: internal/ai/openai_parser.go
-// version: 13.23.0
+// version: 13.24.0
 // guid: 9a0b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d
-// last-edited: 2026-09-26
+// last-edited: 2026-10-10
 
 package ai
 
@@ -15,6 +15,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -269,6 +271,11 @@ type OpenAIParser struct {
 	// model name (e.g. "qwen2.5:7b-instruct") instead of the OpenAI-only
 	// "gpt-5-mini" default. Empty means fall back to defaultModel.
 	defaultModelOverride string
+
+	// provider is the "provider" label of the ai_* metrics: "openai" when the
+	// parser talks to OpenAI, "local" for any other OpenAI-compatible base URL.
+	// Set once by newOpenAIParser, which every constructor goes through.
+	provider string
 }
 
 // Default cache TTL for AI responses (24 hours — metadata doesn't change often)
@@ -358,8 +365,9 @@ func newRoutedEndpointParser(apiKey, baseURL, model string) *OpenAIParser {
 }
 
 func newOpenAIParser(cfg *config.Config, apiKey, baseURL, model string, enabled bool, extra ...option.RequestOption) *OpenAIParser {
+	provider := providerForBaseURL(baseURL)
 	if !enabled || apiKey == "" {
-		return &OpenAIParser{enabled: false, cfg: cfg, defaultModelOverride: model}
+		return &OpenAIParser{enabled: false, cfg: cfg, defaultModelOverride: model, provider: provider}
 	}
 
 	clientOptions := []option.RequestOption{option.WithAPIKey(apiKey)}
@@ -377,7 +385,51 @@ func newOpenAIParser(cfg *config.Config, apiKey, baseURL, model string, enabled 
 		enabled:              true,
 		responseCache:        cache.New[*ParsedMetadata]("ai_response", aiResponseCacheTTL),
 		defaultModelOverride: model,
+		provider:             provider,
 	}
+}
+
+// providerForBaseURL is the "provider" metric label for a parser built with
+// baseURL: "openai" when it is empty (the SDK then uses OPENAI_BASE_URL if that
+// is set, so that is consulted too) or names the OpenAI host, else "local".
+func providerForBaseURL(baseURL string) string {
+	if baseURL == "" {
+		baseURL = os.Getenv("OPENAI_BASE_URL")
+	}
+	if baseURL == "" {
+		return providerOpenAI
+	}
+	if u, err := url.Parse(baseURL); err == nil {
+		if h := u.Hostname(); h == "api.openai.com" || strings.HasSuffix(h, ".openai.com") {
+			return providerOpenAI
+		}
+	}
+	return providerLocal
+}
+
+// callMeta builds the metric/trace identity of one request made by this parser.
+func (p *OpenAIParser) callMeta(task, model string) callMeta {
+	return callMeta{provider: p.provider, task: task, model: model}
+}
+
+// chatUsage reads the token counts the provider reported on a chat reply. It
+// lives here, not in ai_metrics.go, because it names the SDK type.
+func chatUsage(c *openai.ChatCompletion) (in, out int64) {
+	if c == nil {
+		return 0, 0
+	}
+	return c.Usage.PromptTokens, c.Usage.CompletionTokens
+}
+
+// aiHTTPFailure reports the HTTP status of an SDK error (0 when err is not
+// one) and whether it is a quota-exhaustion 429. It is the SDK-typed half of
+// the ai_failures_total classifier (classifyCall in ai_metrics.go).
+func aiHTTPFailure(err error) (status int, quota bool) {
+	var apiErr *openai.Error
+	if !errors.As(err, &apiErr) {
+		return 0, false
+	}
+	return apiErr.StatusCode, apiErr.StatusCode == 429 && isPermanentQuota429(apiErr)
 }
 
 // cacheKey generates a deterministic hash key for caching AI responses.
@@ -417,18 +469,21 @@ func (p *OpenAIParser) readCoverTextImage(ctx context.Context, dataURL string) (
 	if !p.enabled || p.client == nil {
 		return "", errors.New("cover text: endpoint parser is disabled")
 	}
-	completion, err := p.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
-		Model: shared.ChatModel(p.defaultModelOverride),
-		Messages: []openai.ChatCompletionMessageParamUnion{
-			openai.SystemMessage(coverTextSystemPrompt),
-			openai.UserMessage([]openai.ChatCompletionContentPartUnionParam{
-				openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{URL: dataURL}),
-				openai.TextContentPart("Read the text on this audiobook cover."),
-			}),
-		},
-		Temperature:         param.NewOpt(0.0),
-		MaxCompletionTokens: param.NewOpt[int64](800),
-	})
+	meta := p.callMeta(TaskCoverText, p.defaultModelOverride)
+	completion, err := observe(ctx, meta, func(callCtx context.Context) (*openai.ChatCompletion, error) {
+		return p.client.Chat.Completions.New(callCtx, openai.ChatCompletionNewParams{
+			Model: shared.ChatModel(p.defaultModelOverride),
+			Messages: []openai.ChatCompletionMessageParamUnion{
+				openai.SystemMessage(coverTextSystemPrompt),
+				openai.UserMessage([]openai.ChatCompletionContentPartUnionParam{
+					openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{URL: dataURL}),
+					openai.TextContentPart("Read the text on this audiobook cover."),
+				}),
+			},
+			Temperature:         param.NewOpt(0.0),
+			MaxCompletionTokens: param.NewOpt[int64](800),
+		})
+	}, chatUsage)
 	if err != nil {
 		return "", err
 	}
@@ -479,20 +534,23 @@ Set confidence based on clarity of the filename structure.`
 
 	jsonObjectFormat := shared.NewResponseFormatJSONObjectParam()
 
-	completion, err := p.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
-		Messages: []openai.ChatCompletionMessageParamUnion{
-			openai.SystemMessage(systemPrompt),
-			openai.UserMessage(userPrompt),
-		},
-		Model:                shared.ChatModel(p.filenameParseModel()), // filename parsing uses FilenameParseModel
-		MaxCompletionTokens:  param.NewOpt[int64](500),
-		PromptCacheKey:       param.NewOpt("audiobook-filename-parser-v1"),
-		PromptCacheRetention: openai.ChatCompletionNewParamsPromptCacheRetention24h,
-		ResponseFormat: openai.ChatCompletionNewParamsResponseFormatUnion{
-			OfJSONObject: &jsonObjectFormat,
-		},
-		User: openai.String("ao-metadata"),
-	})
+	meta := p.callMeta(TaskFilenameParse, p.filenameParseModel())
+	completion, err := observe(ctx, meta, func(callCtx context.Context) (*openai.ChatCompletion, error) {
+		return p.client.Chat.Completions.New(callCtx, openai.ChatCompletionNewParams{
+			Messages: []openai.ChatCompletionMessageParamUnion{
+				openai.SystemMessage(systemPrompt),
+				openai.UserMessage(userPrompt),
+			},
+			Model:                shared.ChatModel(p.filenameParseModel()), // filename parsing uses FilenameParseModel
+			MaxCompletionTokens:  param.NewOpt[int64](500),
+			PromptCacheKey:       param.NewOpt("audiobook-filename-parser-v1"),
+			PromptCacheRetention: openai.ChatCompletionNewParamsPromptCacheRetention24h,
+			ResponseFormat: openai.ChatCompletionNewParamsResponseFormatUnion{
+				OfJSONObject: &jsonObjectFormat,
+			},
+			User: openai.String("ao-metadata"),
+		})
+	}, chatUsage)
 
 	if err != nil {
 		return nil, fmt.Errorf("OpenAI API call failed: %w", err)
@@ -505,6 +563,7 @@ Set confidence based on clarity of the filename structure.`
 	content := completion.Choices[0].Message.Content
 	result, err := parseMetadataFromJSON(content)
 	if err != nil {
+		recordReplyFailure(ctx, meta, err)
 		return nil, err
 	}
 
@@ -585,20 +644,23 @@ Set confidence based on how much context was available and how unambiguous it is
 
 	jsonObjectFormat := shared.NewResponseFormatJSONObjectParam()
 
-	completion, err := p.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
-		Messages: []openai.ChatCompletionMessageParamUnion{
-			openai.SystemMessage(systemPrompt),
-			openai.UserMessage(userPrompt),
-		},
-		Model:                shared.ChatModel(p.filenameParseModel()), // audiobook context parsing uses FilenameParseModel
-		MaxCompletionTokens:  param.NewOpt[int64](500),
-		PromptCacheKey:       param.NewOpt("audiobook-context-parser-v1"),
-		PromptCacheRetention: openai.ChatCompletionNewParamsPromptCacheRetention24h,
-		ResponseFormat: openai.ChatCompletionNewParamsResponseFormatUnion{
-			OfJSONObject: &jsonObjectFormat,
-		},
-		User: openai.String("ao-metadata"),
-	})
+	meta := p.callMeta(TaskAudiobookParse, p.filenameParseModel())
+	completion, err := observe(ctx, meta, func(callCtx context.Context) (*openai.ChatCompletion, error) {
+		return p.client.Chat.Completions.New(callCtx, openai.ChatCompletionNewParams{
+			Messages: []openai.ChatCompletionMessageParamUnion{
+				openai.SystemMessage(systemPrompt),
+				openai.UserMessage(userPrompt),
+			},
+			Model:                shared.ChatModel(p.filenameParseModel()), // audiobook context parsing uses FilenameParseModel
+			MaxCompletionTokens:  param.NewOpt[int64](500),
+			PromptCacheKey:       param.NewOpt("audiobook-context-parser-v1"),
+			PromptCacheRetention: openai.ChatCompletionNewParamsPromptCacheRetention24h,
+			ResponseFormat: openai.ChatCompletionNewParamsResponseFormatUnion{
+				OfJSONObject: &jsonObjectFormat,
+			},
+			User: openai.String("ao-metadata"),
+		})
+	}, chatUsage)
 
 	if err != nil {
 		return nil, fmt.Errorf("OpenAI API call failed: %w", err)
@@ -611,6 +673,7 @@ Set confidence based on how much context was available and how unambiguous it is
 	content := completion.Choices[0].Message.Content
 	result, err := parseMetadataFromJSON(content)
 	if err != nil {
+		recordReplyFailure(ctx, meta, err)
 		return nil, err
 	}
 
@@ -680,22 +743,25 @@ Set confidence based on clarity of the filename structure.`
 
 	jsonObjectFormat := shared.NewResponseFormatJSONObjectParam()
 
+	meta := p.callMeta(TaskBatchParse, p.filenameParseModel())
 	var content string
 	if err := DoWithRetry(ctx, p.maxRetries+1, 2*time.Second, func() error {
-		completion, err := p.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
-			Messages: []openai.ChatCompletionMessageParamUnion{
-				openai.SystemMessage(systemPrompt),
-				openai.UserMessage(userPrompt.String()),
-			},
-			Model:                shared.ChatModel(p.filenameParseModel()), // batch filename parsing uses FilenameParseModel
-			MaxCompletionTokens:  param.NewOpt[int64](2000),
-			PromptCacheKey:       param.NewOpt("audiobook-batch-parser-v1"),
-			PromptCacheRetention: openai.ChatCompletionNewParamsPromptCacheRetention24h,
-			ResponseFormat: openai.ChatCompletionNewParamsResponseFormatUnion{
-				OfJSONObject: &jsonObjectFormat,
-			},
-			User: openai.String("ao-metadata"),
-		})
+		completion, err := observe(ctx, meta, func(callCtx context.Context) (*openai.ChatCompletion, error) {
+			return p.client.Chat.Completions.New(callCtx, openai.ChatCompletionNewParams{
+				Messages: []openai.ChatCompletionMessageParamUnion{
+					openai.SystemMessage(systemPrompt),
+					openai.UserMessage(userPrompt.String()),
+				},
+				Model:                shared.ChatModel(p.filenameParseModel()), // batch filename parsing uses FilenameParseModel
+				MaxCompletionTokens:  param.NewOpt[int64](2000),
+				PromptCacheKey:       param.NewOpt("audiobook-batch-parser-v1"),
+				PromptCacheRetention: openai.ChatCompletionNewParamsPromptCacheRetention24h,
+				ResponseFormat: openai.ChatCompletionNewParamsResponseFormatUnion{
+					OfJSONObject: &jsonObjectFormat,
+				},
+				User: openai.String("ao-metadata"),
+			})
+		}, chatUsage)
 		if err != nil {
 			return fmt.Errorf("OpenAI API call failed: %w", err)
 		}
@@ -711,6 +777,7 @@ Set confidence based on clarity of the filename structure.`
 	// or an error: the caller assigns results by position.
 	results, err := parseBatchMetadataFromJSON(content, len(filenames))
 	if err != nil {
+		recordReplyFailure(ctx, meta, err)
 		return nil, err
 	}
 	// results[i] belongs to filenames[i]: the count check above guarantees
@@ -753,25 +820,28 @@ Set confidence based on how clearly the text is readable on the cover.`
 
 	jsonObjectFormat := shared.NewResponseFormatJSONObjectParam()
 
-	completion, err := p.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
-		Messages: []openai.ChatCompletionMessageParamUnion{
-			openai.SystemMessage(systemPrompt),
-			openai.UserMessage([]openai.ChatCompletionContentPartUnionParam{
-				openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{
-					URL: dataURL,
+	meta := p.callMeta(TaskCoverArt, p.coverArtModel())
+	completion, err := observe(ctx, meta, func(callCtx context.Context) (*openai.ChatCompletion, error) {
+		return p.client.Chat.Completions.New(callCtx, openai.ChatCompletionNewParams{
+			Messages: []openai.ChatCompletionMessageParamUnion{
+				openai.SystemMessage(systemPrompt),
+				openai.UserMessage([]openai.ChatCompletionContentPartUnionParam{
+					openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{
+						URL: dataURL,
+					}),
+					openai.TextContentPart("Read the metadata from this audiobook cover image."),
 				}),
-				openai.TextContentPart("Read the metadata from this audiobook cover image."),
-			}),
-		},
-		Model:                shared.ChatModel(p.coverArtModel()), // cover art parsing uses CoverArtModel
-		PromptCacheKey:       param.NewOpt("audiobook-cover-parser-v1"),
-		PromptCacheRetention: openai.ChatCompletionNewParamsPromptCacheRetention24h,
-		MaxCompletionTokens:  param.NewOpt[int64](500),
-		ResponseFormat: openai.ChatCompletionNewParamsResponseFormatUnion{
-			OfJSONObject: &jsonObjectFormat,
-		},
-		User: openai.String("ao-metadata"),
-	})
+			},
+			Model:                shared.ChatModel(p.coverArtModel()), // cover art parsing uses CoverArtModel
+			PromptCacheKey:       param.NewOpt("audiobook-cover-parser-v1"),
+			PromptCacheRetention: openai.ChatCompletionNewParamsPromptCacheRetention24h,
+			MaxCompletionTokens:  param.NewOpt[int64](500),
+			ResponseFormat: openai.ChatCompletionNewParamsResponseFormatUnion{
+				OfJSONObject: &jsonObjectFormat,
+			},
+			User: openai.String("ao-metadata"),
+		})
+	}, chatUsage)
 
 	if err != nil {
 		return nil, fmt.Errorf("OpenAI API call failed: %w", err)
@@ -784,6 +854,7 @@ Set confidence based on how clearly the text is readable on the cover.`
 	content := completion.Choices[0].Message.Content
 	result, err := parseMetadataFromJSON(content)
 	if err != nil {
+		recordReplyFailure(ctx, meta, err)
 		return nil, err
 	}
 	logNumericCoercions("(cover art)", result)
@@ -1078,20 +1149,23 @@ The roles object fields are all optional — only include roles that are detecte
 
 	var suggestions []AuthorDedupSuggestion
 	if err := DoWithRetry(ctx, p.maxRetries+1, 2*time.Second, func() error {
-		completion, err := p.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
-			Messages: []openai.ChatCompletionMessageParamUnion{
-				openai.SystemMessage(systemPrompt),
-				openai.UserMessage(userPrompt),
-			},
-			Model:                shared.ChatModel(p.metadataReviewModel()), // author dedup review uses MetadataReviewModel
-			MaxCompletionTokens:  param.NewOpt[int64](32000),
-			PromptCacheKey:       param.NewOpt("audiobook-author-dedup-v4"),
-			PromptCacheRetention: openai.ChatCompletionNewParamsPromptCacheRetention24h,
-			ResponseFormat: openai.ChatCompletionNewParamsResponseFormatUnion{
-				OfJSONObject: &jsonObjectFormat,
-			},
-			User: openai.String("ao-metadata"),
-		})
+		meta := p.callMeta(TaskAuthorDedupReview, p.metadataReviewModel())
+		completion, err := observe(ctx, meta, func(callCtx context.Context) (*openai.ChatCompletion, error) {
+			return p.client.Chat.Completions.New(callCtx, openai.ChatCompletionNewParams{
+				Messages: []openai.ChatCompletionMessageParamUnion{
+					openai.SystemMessage(systemPrompt),
+					openai.UserMessage(userPrompt),
+				},
+				Model:                shared.ChatModel(p.metadataReviewModel()), // author dedup review uses MetadataReviewModel
+				MaxCompletionTokens:  param.NewOpt[int64](32000),
+				PromptCacheKey:       param.NewOpt("audiobook-author-dedup-v4"),
+				PromptCacheRetention: openai.ChatCompletionNewParamsPromptCacheRetention24h,
+				ResponseFormat: openai.ChatCompletionNewParamsResponseFormatUnion{
+					OfJSONObject: &jsonObjectFormat,
+				},
+				User: openai.String("ao-metadata"),
+			})
+		}, chatUsage)
 		if err != nil {
 			return fmt.Errorf("OpenAI API call failed: %w", err)
 		}
@@ -1200,20 +1274,23 @@ The roles object fields are all optional — only include roles that are detecte
 
 	var suggestions []AuthorDiscoverySuggestion
 	if err := DoWithRetry(ctx, p.maxRetries+1, 2*time.Second, func() error {
-		completion, err := p.client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
-			Messages: []openai.ChatCompletionMessageParamUnion{
-				openai.SystemMessage(systemPrompt),
-				openai.UserMessage(userPrompt),
-			},
-			Model:                shared.ChatModel(p.metadataReviewModel()), // author discovery review uses MetadataReviewModel
-			MaxCompletionTokens:  param.NewOpt[int64](16000),
-			PromptCacheKey:       param.NewOpt("audiobook-author-discover-v4"),
-			PromptCacheRetention: openai.ChatCompletionNewParamsPromptCacheRetention24h,
-			ResponseFormat: openai.ChatCompletionNewParamsResponseFormatUnion{
-				OfJSONObject: &jsonObjectFormat,
-			},
-			User: openai.String("ao-metadata"),
-		})
+		meta := p.callMeta(TaskAuthorDiscovery, p.metadataReviewModel())
+		completion, err := observe(ctx, meta, func(callCtx context.Context) (*openai.ChatCompletion, error) {
+			return p.client.Chat.Completions.New(callCtx, openai.ChatCompletionNewParams{
+				Messages: []openai.ChatCompletionMessageParamUnion{
+					openai.SystemMessage(systemPrompt),
+					openai.UserMessage(userPrompt),
+				},
+				Model:                shared.ChatModel(p.metadataReviewModel()), // author discovery review uses MetadataReviewModel
+				MaxCompletionTokens:  param.NewOpt[int64](16000),
+				PromptCacheKey:       param.NewOpt("audiobook-author-discover-v4"),
+				PromptCacheRetention: openai.ChatCompletionNewParamsPromptCacheRetention24h,
+				ResponseFormat: openai.ChatCompletionNewParamsResponseFormatUnion{
+					OfJSONObject: &jsonObjectFormat,
+				},
+				User: openai.String("ao-metadata"),
+			})
+		}, chatUsage)
 		if err != nil {
 			return fmt.Errorf("OpenAI API call failed: %w", err)
 		}
