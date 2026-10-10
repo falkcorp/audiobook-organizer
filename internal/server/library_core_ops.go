@@ -1,5 +1,5 @@
 // file: internal/server/library_core_ops.go
-// version: 1.14.1
+// version: 1.14.2
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-10-10
 
@@ -31,8 +31,12 @@ import (
 )
 
 type libraryOrganizeParams struct {
-	FolderPath         *string  `json:"folder_path,omitempty"`
-	BookIDs            []string `json:"book_ids,omitempty"`
+	FolderPath *string `json:"folder_path,omitempty"`
+	// omitzero, not omitempty: an explicit empty list means "organize these
+	// zero books" and must survive the marshal for EnqueueOp. omitempty
+	// dropped it, and an absent book_ids decodes to nil, which means the
+	// whole library. omitzero still omits nil, so today's bytes are unchanged.
+	BookIDs            []string `json:"book_ids,omitzero"`
 	FetchMetadataFirst bool     `json:"fetch_metadata_first"`
 }
 

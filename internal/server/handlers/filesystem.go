@@ -1,7 +1,7 @@
 // file: internal/server/handlers/filesystem.go
-// version: 1.8.0
+// version: 1.8.1
 // guid: c4d5e6f7-a8b9-0123-cdef-012345678901
-// last-edited: 2026-10-08
+// last-edited: 2026-10-10
 
 // Package handlers — FilesystemHandler covers home-directory, filesystem
 // browse, exclusion CRUD, import-path CRUD, and the on-demand single-file
@@ -491,7 +491,11 @@ type folderAutoScanParams struct {
 // canonical struct means a field added there cannot silently change what this
 // site's bytes compare against.
 type libraryOrganizeParams struct {
-	FolderPath         *string  `json:"folder_path,omitempty"`
-	BookIDs            []string `json:"book_ids,omitempty"`
+	FolderPath *string `json:"folder_path,omitempty"`
+	// omitzero, not omitempty: an explicit empty list means "organize these
+	// zero books" and must survive the marshal for EnqueueOp. omitempty
+	// dropped it, and an absent book_ids decodes to nil, which means the
+	// whole library. omitzero still omits nil, so today's bytes are unchanged.
+	BookIDs            []string `json:"book_ids,omitzero"`
 	FetchMetadataFirst bool     `json:"fetch_metadata_first"`
 }
