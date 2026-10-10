@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-10-organize-scope-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 377482e4-3d85-400d-a2d5-8a4b524c8bea -->
 <!-- last-edited: 2026-10-10 -->
 
@@ -11,17 +11,25 @@ Branch `fix/organize-folder-scope`.
 
 - **A folder-limited organize used to organize everything.** The organize
   operation accepted a "folder" setting and then ignored it, so asking it to
-  tidy one folder moved and renamed files across the whole library. Nothing in
-  the app's own screens sends a folder today, but the operation could be
-  started that way directly.
+  tidy one folder acted on every book in the library: books not yet in the
+  library folder were copied or linked into it, and books already there were
+  renamed to their proper place. Nothing in the app's own screens sends a
+  folder today, but the operation could be started that way directly.
 - **Two more ways it could spread past its limit were found and fixed.** An
   organize of a few chosen books with "fetch metadata first" turned on
   reloaded and organized every book after the fetch step. And an explicit
   empty list of books meant "all books" instead of "no books".
-- **A bad folder setting now stops the run instead of widening it.** A blank,
-  relative or `..` folder makes the run fail before it reads or touches
-  anything. A book with files both inside and outside the folder is left alone
-  and reported, because organizing it would move the files outside the folder.
+- **A bad folder setting now stops the run instead of widening it.** A folder
+  that is blank, is not a full path, or steps up out of itself makes the run
+  fail before it reads or touches anything.
+- **A book is only organized when every file it would touch is in the
+  folder.** A book can carry an out-of-date record of where its file is, and
+  organize sometimes works from that record. A book whose files are in the
+  folder but whose old record points somewhere else is now left alone and
+  reported, instead of having the file at the old location copied or renamed.
+  The same goes for a book with files both inside and outside the folder, and
+  for a book that a library scan moves out of the folder while the run is
+  under way: each book is checked again right before it is organized.
 
 ## Why it mattered
 
