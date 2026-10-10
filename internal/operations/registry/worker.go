@@ -1,5 +1,5 @@
 // file: internal/operations/registry/worker.go
-// version: 2.29.0
+// version: 2.29.1
 // guid: b8c9d0e1-f2a3-4b5c-6d7e-8f9a0b1c2d3e
 // last-edited: 2026-10-10
 
@@ -331,6 +331,10 @@ func (r *Registry) executeRun(parentCtx context.Context, qr *queuedRun) (wasAban
 	}
 	h.attemptStartedAt.Store(attemptStartedAt.UnixNano())
 	r.mu.Lock()
+	// prev is always this run's own dispatcher stub, never a zombie (05-PR3):
+	// Gate 0 refuses to claim an id that is in r.running, so a zombie's
+	// same-id re-queued row cannot reach a worker until the zombie's handle
+	// is released.
 	if prev, exists := r.running[qr.opID]; exists && prev.queuedCancel {
 		r.mu.Unlock()
 		// Status first, release second. The claim is what stops the dispatcher

@@ -1,5 +1,5 @@
 // file: internal/operations/registry/dispatcher.go
-// version: 2.7.0
+// version: 2.7.1
 // guid: a7b8c9d0-e1f2-3a4b-5c6d-7e8f9a0b1c2d
 // last-edited: 2026-10-10
 
@@ -89,9 +89,15 @@ func (r *Registry) dispatchCycle(ctx context.Context) {
 		// (same op_id, two "dispatched op" + "starting run" log lines
 		// 3ms apart, two book-merge complete events).
 		//
-		// A zombie handle (05-PR3) is keyed by ITS op id; a new enqueue of the
-		// same def has a new id, so it is not "already claimed" here. It is
-		// held back by Gate 3 / 3b instead.
+		// A zombie handle (05-PR3) is keyed by ITS op id. A new enqueue of the
+		// same def has a new id, so it is not "already claimed" here; Gate 3 /
+		// 3b hold it back instead. But the zombie's OWN row can come back to
+		// queued under the same id while the goroutine still runs: a scan
+		// stand-down quiesce leaves it interrupted_quiesced, and
+		// resumeQuiescedOp -> requeueInPlace (a holder releasing or giving up)
+		// flips it to queued in place. This check is what keeps that row from
+		// being claimed, and run a second time next to its own zombie, until
+		// the exit monitor releases the handle.
 		r.mu.RLock()
 		_, alreadyClaimed := r.running[row.ID]
 		r.mu.RUnlock()
@@ -353,6 +359,10 @@ func (r *Registry) dispatchCycle(ctx context.Context) {
 // un-dispatchable. Note this also re-opens the row to tryMergeQueuedParams,
 // which is correct -- an op that is not going to run should still be able to
 // absorb further requests.
+//
+// Never reached for a zombie (05-PR3): it releases a claim this dispatch
+// cycle just made, and Gate 0 refuses to claim an id that is in r.running,
+// so the handle under opID here is always the cycle's own stub.
 func (r *Registry) releaseClaim(opID, plugin, concurrencyKey string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

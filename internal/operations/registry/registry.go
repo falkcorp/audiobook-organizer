@@ -1,5 +1,5 @@
 // file: internal/operations/registry/registry.go
-// version: 3.38.0
+// version: 3.38.1
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-10-10
 
@@ -1368,10 +1368,14 @@ var discardableStatuses = state.WithProp(func(p state.Props) bool { return p.Dis
 //
 // A zombie handle (goroutine outlived the abandon grace) counts as live. That
 // does not bring back the C-3 dedupe trap: EnqueueOp's dedupe reads active
-// ROWS, and a zombie's row was written terminal at abandonment, so it is never
-// returned to be asked about. Discard does refuse a zombie's terminal row
-// until the goroutine exits, which is intended: the run may still be writing
-// progress and logs under that id.
+// ROWS, and a zombie's row was written terminal (or interrupted_quiesced, for
+// a scan stand-down quiesce) at abandonment, so it is not returned to be asked
+// about. The one exception is a quiesced row re-queued in place under the
+// same id while the zombie lives (resumeQuiescedOp -> requeueInPlace): it is
+// queued, so the dedupe returns it, which is right -- it is the pending run of
+// that def, and Gate 0 starts it once the zombie exits. Discard does refuse a
+// zombie's terminal row until the goroutine exits, which is intended: the run
+// may still be writing progress and logs under that id.
 func (r *Registry) hasLiveHandle(opID string) bool {
 	r.mu.RLock()
 	_, ok := r.running[opID]
@@ -1387,8 +1391,9 @@ func (r *Registry) AbandonedCount(plugin string) int {
 
 // GetCurrentItem returns the last SetCurrentItem label for a running operation.
 // Returns empty string if the op is not running or no label has been set.
-// A zombie still answers its last label; its row is terminal, so the handlers
-// that ask only do so for rows they list as running.
+// A zombie still answers its last label; its row is not "running" (terminal,
+// interrupted_quiesced, or re-queued), so the handlers that ask only do so
+// for rows they list as running.
 func (r *Registry) GetCurrentItem(opID string) string {
 	r.mu.RLock()
 	h, ok := r.running[opID]
