@@ -1,5 +1,5 @@
 // file: internal/config/config.go
-// version: 1.143.0
+// version: 1.144.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
 // last-edited: 2026-10-09
 
@@ -1653,6 +1653,9 @@ type Config struct {
 	// Lifecycle / retention
 	PurgeSoftDeletedAfterDays   int  `json:"purge_soft_deleted_after_days"`
 	PurgeSoftDeletedDeleteFiles bool `json:"purge_soft_deleted_delete_files"`
+	// BackupRetentionDays is how old a .bak-* file must be before the backup
+	// cleanup ops delete it. 0 means "not set": see EffectiveBackupRetentionDays.
+	BackupRetentionDays int `json:"backup_retention_days"`
 
 	// Logging
 	LogLevel          string `json:"log_level"`  // 'debug', 'info', 'warn', 'error'
@@ -2504,6 +2507,7 @@ func InitConfig() {
 
 	// Lifecycle / retention defaults
 	viper.SetDefault("purge_soft_deleted_after_days", 30)
+	viper.SetDefault("backup_retention_days", 0)
 	viper.SetDefault("purge_soft_deleted_delete_files", false)
 
 	// Set logging defaults
@@ -3032,6 +3036,7 @@ func InitConfig() {
 			// Lifecycle / retention
 			PurgeSoftDeletedAfterDays:   viper.GetInt("purge_soft_deleted_after_days"),
 			PurgeSoftDeletedDeleteFiles: viper.GetBool("purge_soft_deleted_delete_files"),
+			BackupRetentionDays:         viper.GetInt("backup_retention_days"),
 
 			// Logging
 			LogLevel:          viper.GetString("log_level"),
@@ -3768,6 +3773,7 @@ func ResetToDefaults() {
 			// Lifecycle / retention
 			PurgeSoftDeletedAfterDays:           30,
 			PurgeSoftDeletedDeleteFiles:         false,
+			BackupRetentionDays:                 0,
 			ActivityLogRetentionChangeDays:      90,
 			ActivityLogRetentionDebugDays:       30,
 			ActivityLogCompactionDays:           14,
@@ -4089,4 +4095,18 @@ type SearchResultCacheConfig struct {
 	Enabled     bool  `json:"enabled" mapstructure:"enabled"`
 	MaxBytes    int64 `json:"max_bytes" mapstructure:"max_bytes"`
 	WaitSeconds int   `json:"wait_seconds" mapstructure:"wait_seconds"`
+}
+
+// EffectiveBackupRetentionDays is the retention, in days, that the .bak-*
+// cleanup ops use: BackupRetentionDays when set (> 0), else
+// PurgeSoftDeletedAfterDays when set, else 30. The fallback keeps behaviour
+// unchanged until an operator sets backup_retention_days.
+func EffectiveBackupRetentionDays() int {
+	if AppConfig.BackupRetentionDays > 0 {
+		return AppConfig.BackupRetentionDays
+	}
+	if AppConfig.PurgeSoftDeletedAfterDays > 0 {
+		return AppConfig.PurgeSoftDeletedAfterDays
+	}
+	return 30
 }

@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.171.0
+// version: 2.172.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-09
 
@@ -1040,6 +1040,7 @@ export interface Config {
 
   // Lifecycle / retention
   purge_soft_deleted_after_days?: number;
+  backup_retention_days?: number;
   purge_soft_deleted_delete_files?: boolean;
 
   // Logging

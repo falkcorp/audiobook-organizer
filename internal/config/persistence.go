@@ -1,7 +1,7 @@
 // file: internal/config/persistence.go
-// version: 1.42.0
+// version: 1.43.0
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
-// last-edited: 2026-10-08
+// last-edited: 2026-10-09
 
 package config
 
@@ -1201,6 +1201,10 @@ func applySetting(key, value, typ string) error {
 		case "purge_soft_deleted_after_days":
 			if i, err := strconv.Atoi(value); err == nil {
 				c.PurgeSoftDeletedAfterDays = i
+			}
+		case "backup_retention_days":
+			if i, err := strconv.Atoi(value); err == nil {
+				c.BackupRetentionDays = i
 			}
 		case "purge_soft_deleted_delete_files":
 			if b, err := strconv.ParseBool(value); err == nil {

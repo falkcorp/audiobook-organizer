@@ -1,7 +1,7 @@
 // file: web/src/pages/Settings.tsx
-// version: 1.61.0
+// version: 1.62.0
 // guid: 7a8b9c0d-1e2f-3a4b-5c6d-7e8f9a0b1c2d
-// last-edited: 2026-09-27
+// last-edited: 2026-10-09
 
 import { useState, useEffect, useMemo, useRef, ChangeEvent } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
@@ -149,6 +149,7 @@ export interface SettingsState {
   logFormat: string;
   enableJsonLogging: boolean;
   purgeSoftDeletedAfterDays: number;
+  backupRetentionDays: number;
   purgeSoftDeletedDeleteFiles: boolean;
   autoUpdateEnabled: boolean;
   autoUpdateChannel: string;
@@ -321,6 +322,7 @@ export function Settings() {
 
     // Lifecycle / retention
     purgeSoftDeletedAfterDays: 30,
+    backupRetentionDays: 0,
     purgeSoftDeletedDeleteFiles: false,
 
     // Logging
@@ -596,6 +598,7 @@ export function Settings() {
 
         // Lifecycle / retention
         purgeSoftDeletedAfterDays: config.purge_soft_deleted_after_days ?? 30,
+        backupRetentionDays: config.backup_retention_days ?? 0,
         purgeSoftDeletedDeleteFiles: config.purge_soft_deleted_delete_files ?? false,
 
         // Logging

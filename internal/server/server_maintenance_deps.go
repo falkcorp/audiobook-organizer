@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.56.0
+// version: 1.57.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
-// last-edited: 2026-10-07
+// last-edited: 2026-10-09
 
 // This file implements the maintenance.ServerDeps interface on *Server, giving
 // the maintenance plugin access to server internals without creating an import
@@ -461,11 +461,7 @@ func (s *Server) ActivityLogRetentionDebugDays() int {
 }
 
 func (s *Server) BackupRetentionDays() int {
-	days := config.AppConfig.PurgeSoftDeletedAfterDays
-	if days <= 0 {
-		days = 30
-	}
-	return days
+	return config.EffectiveBackupRetentionDays()
 }
 
 // ---- operation orchestration (maintenance.library-optimize) ----

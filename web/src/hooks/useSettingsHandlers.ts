@@ -1,7 +1,7 @@
 // file: web/src/hooks/useSettingsHandlers.ts
-// version: 1.11.0
+// version: 1.12.0
 // guid: b8c9d0e1-f2a3-4567-bcde-678901234567
-// last-edited: 2026-09-12
+// last-edited: 2026-10-09
 
 import { ChangeEvent, Dispatch, MutableRefObject, SetStateAction } from 'react';
 import { NavigateFunction } from 'react-router-dom';
@@ -490,6 +490,7 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
         memory_limit_percent: settings.memoryLimitPercent,
         memory_limit_mb: settings.memoryLimitMB,
         purge_soft_deleted_after_days: settings.purgeSoftDeletedAfterDays,
+        backup_retention_days: settings.backupRetentionDays,
         purge_soft_deleted_delete_files: settings.purgeSoftDeletedDeleteFiles,
         log_level: settings.logLevel,
         log_format: settings.logFormat,
