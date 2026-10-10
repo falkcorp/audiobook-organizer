@@ -1,11 +1,11 @@
 <!-- file: docs/executive-summaries/2026-10-10-operation-status-table-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.0.1 -->
 <!-- guid: d11ae7cc-0628-4909-9393-c82bc835df5b -->
 <!-- last-edited: 2026-10-10 -->
 
 # Operations: one list of run statuses for the whole app
 
-Branch `task/05-pr1` (PR not yet opened). Task brief:
+PR [#3920](https://github.com/falkcorp/audiobook-organizer/pull/3920) (branch `task/05-pr1`). Task brief:
 [05-PR1](../proposals/2026-10-holistic/tasks/05/05-PR1.md).
 
 ## Executive Summary
@@ -18,11 +18,10 @@ Branch `task/05-pr1` (PR not yet opened). Task brief:
 - **The web page and the server can no longer drift.** The web app's list is
   produced automatically from the server's. If someone adds a state on the
   server and forgets to update the web app, the automated checks fail.
-- **A scheduled task can no longer stall on a run that is waiting for you.**
-  When one step of a scheduled window ended up "waiting for a decision", the
-  window kept waiting for it until it timed out. It now moves on.
-- **Nothing stored changed.** No saved operation is rewritten, and every
-  progress bar and Retry/Discard button behaves as before.
+- **Nothing you can see changes.** No saved operation is rewritten, and every
+  progress bar, scheduled task and Retry/Discard button behaves as before.
+  This is groundwork: it removes a kind of mistake rather than fixing a
+  visible one.
 
 ## Why it mattered
 
