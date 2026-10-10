@@ -1,7 +1,7 @@
 // file: internal/organizer/service.go
-// version: 1.59.0
+// version: 1.60.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
-// last-edited: 2026-10-08
+// last-edited: 2026-10-09
 
 package organizer
 
@@ -91,18 +91,15 @@ type OrganizerContributorStore interface {
 }
 
 // OrganizerAuditWriter records what an organize run did: the per-change rows,
-// the path history a move can be undone from, and the operation's own params
-// and state.
+// the path history a move can be undone from, and the operation's own state.
 //
-// SaveOperationParams and DeleteOperationState are declared here rather than
-// embedding operations.OperationParamsWriter / operations.OperationStateDeleter
-// so this package does not import internal/operations for two signatures. The
-// methods satisfy those interfaces structurally, which is what the calls to
-// operations.SaveParams and operations.ClearState need.
+// DeleteOperationState is declared here rather than embedding
+// operations.OperationStateDeleter so this package does not import
+// internal/operations for one signature. The method satisfies that interface
+// structurally, which is what the call to operations.ClearState needs.
 type OrganizerAuditWriter interface {
 	CreateOperationChange(change *database.OperationChange) error
 	RecordPathChange(change *database.BookPathChange) error
-	SaveOperationParams(opID string, params []byte) error
 	DeleteOperationState(opID string) error
 }
 
@@ -120,9 +117,9 @@ type OrganizerAuditWriter interface {
 // call finds it already compiles.
 //
 // database.OperationStore (30 methods) was in that list for one reason: the
-// organizer passes its store to operations.SaveParams and operations.ClearState,
-// which declared it. Narrowing those two parameters (see internal/operations/
-// state.go) is what made this narrowing possible -- a wide parameter propagates
+// organizer passed its store to operations.SaveParams (since deleted) and
+// operations.ClearState, which declared it. Narrowing those parameters (see
+// internal/operations/state.go) is what made this narrowing possible -- a wide parameter propagates
 // width to every caller and to every interface those callers declare.
 //
 // The compile-time assertion below is what proves the concrete store still
@@ -283,7 +280,6 @@ type Stats struct {
 
 // PerformOrganizeWithID executes organization with checkpoint support.
 func (orgSvc *Service) PerformOrganizeWithID(ctx context.Context, opID string, req *Request, log logger.Logger) error {
-	_ = operations.SaveParams(orgSvc.db, opID, operations.OrganizeParams{})
 	req.OperationID = opID
 	err := orgSvc.PerformOrganize(ctx, req, log)
 	_ = operations.ClearState(orgSvc.db, opID)

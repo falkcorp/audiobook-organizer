@@ -1,7 +1,7 @@
 // file: internal/metabatch/fetch_ops_index_test.go
-// version: 1.2.0
+// version: 1.4.0
 // guid: 5b7e0a34-9c26-4d18-a0f7-3e9b2c41d685
-// last-edited: 2026-09-19
+// last-edited: 2026-10-09
 
 package metabatch_test
 
@@ -23,12 +23,10 @@ type fetchIndexStore struct {
 	v2Rows []database.OperationV2Row
 	v2Err  error
 
-	v2ByID    map[string]*database.OperationV2Row
-	v1ByID    map[string]*database.Operation
-	v1Params  map[string][]byte
-	v2Calls   int
-	v1Calls   int
-	paramCall int
+	v2ByID  map[string]*database.OperationV2Row
+	v1ByID  map[string]*database.Operation
+	v2Calls int
+	v1Calls int
 }
 
 func (s *fetchIndexStore) GetRecentOperations(limit int) ([]database.Operation, error) {
@@ -46,14 +44,6 @@ func (s *fetchIndexStore) GetOperationV2(id string) (*database.OperationV2Row, e
 		return nil, nil
 	}
 	return s.v2ByID[id], nil
-}
-
-func (s *fetchIndexStore) GetOperationParams(opID string) ([]byte, error) {
-	s.paramCall++
-	if s.v1Params == nil {
-		return nil, nil
-	}
-	return s.v1Params[opID], nil
 }
 
 // ---------------------------------------------------------------------------

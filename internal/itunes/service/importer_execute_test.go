@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer_execute_test.go
-// version: 1.6.0
+// version: 1.8.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-10-08
+// last-edited: 2026-10-09
 
 package itunesservice
 
@@ -14,7 +14,6 @@ import (
 	dbmocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -71,9 +70,8 @@ func TestExecute_EmptyLibrary(t *testing.T) {
 	require.NoError(t, os.WriteFile(xmlPath, []byte(xmlContent), 0o644))
 
 	m := dbmocks.NewMockStore(t)
-	// Execute calls SaveParams → SaveOperationParams, then LoadCheckpoint → GetOperationState
+	// Execute calls LoadCheckpoint → GetOperationState
 	// With zero groups, it calls ClearState → DeleteOperationState and returns nil.
-	m.EXPECT().SaveOperationParams("test-op", mock.Anything).Return(nil).Once()
 	m.EXPECT().GetOperationState("test-op").Return(nil, nil).Once()
 	m.EXPECT().DeleteOperationState("test-op").Return(nil).Once()
 
@@ -101,7 +99,6 @@ func TestExecute_ParseFailure(t *testing.T) {
 	require.NoError(t, os.WriteFile(badXMLPath, []byte("not xml at all"), 0o644))
 
 	m := dbmocks.NewMockStore(t)
-	m.EXPECT().SaveOperationParams("op-fail", mock.Anything).Return(nil).Once()
 	m.EXPECT().GetOperationState("op-fail").Return(nil, nil).Once()
 	m.EXPECT().DeleteOperationState("op-fail").Return(nil).Once()
 

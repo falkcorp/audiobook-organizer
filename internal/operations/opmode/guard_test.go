@@ -1,7 +1,7 @@
 // file: internal/operations/opmode/guard_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4e03d07d-8575-4704-af45-0699789f2293
-// last-edited: 2026-09-29
+// last-edited: 2026-10-09
 
 package opmode
 
@@ -107,13 +107,6 @@ var allowPlainBool = map[string]string{
 	// maintenanceJobOpParams.DryRun is overwritten from a separate *bool decode
 	// and the job's advertised default before it is read (maintenance_job_op.go).
 	"internal/server/maintenance_job_op.go:maintenanceJobOpParams": "overwritten by opmode.ResolveDryRunDefault (both spellings, advertised default) before use",
-
-	// Legacy v1 param shapes. Nothing decodes or encodes them any more; they
-	// survive only as exported names. See the inventory doc.
-	"internal/operations/state.go:ComposerScanParams":       "unused legacy v1 params shape",
-	"internal/operations/state.go:BackfillFileHashesParams": "unused legacy v1 params shape",
-	"internal/operations/state.go:MissingFileRepairParams":  "unused legacy v1 params shape",
-	"internal/operations/state.go:BulkImportDelugeParams":   "unused legacy v1 params shape",
 
 	// Maintenance-job custom-param structs. The job's dry-run is the Run
 	// argument the dispatcher resolved (advertised default when omitted); these
