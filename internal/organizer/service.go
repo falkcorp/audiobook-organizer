@@ -1,5 +1,5 @@
 // file: internal/organizer/service.go
-// version: 1.62.2
+// version: 1.63.0
 // guid: c3d4e5f6-a7b8-c9d0-e1f2-a3b4c5d6e7f8
 // last-edited: 2026-10-10
 
@@ -30,6 +30,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/policy"
 	"github.com/falkcorp/audiobook-organizer/internal/scanlock"
+	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
 
@@ -350,6 +351,12 @@ func (orgSvc *Service) PerformOrganizeStats(ctx context.Context, req *Request, l
 	if req.FetchMetadataFirst {
 		log.Info("Fetching metadata before organizing...")
 		enriched := 0
+		// A fetch over many books is a bulk write: each fetched book's cover
+		// embed and tag write keep no .bak-* sibling (owner decision D69).
+		// With create_backups on, a backup per file would hold a full copy of
+		// every fetched file until the backup-cleanup sweep runs. The fetch
+		// queues its file work with this ctx, so the opt-out reaches it.
+		fetchCtx := tagger.WithoutBackup(ctx)
 		// A sequential network call per book over the whole library, and it had
 		// no progress calls either — the longest silent window of the three.
 		// Stamped per book because the total IS known here, unlike the paging
@@ -360,7 +367,7 @@ func (orgSvc *Service) PerformOrganizeStats(ctx context.Context, req *Request, l
 			if book.CoverURL != nil {
 				continue // already enriched
 			}
-			if _, err := orgSvc.FetchMetadataForBook(ctx, book.ID); err == nil {
+			if _, err := orgSvc.FetchMetadataForBook(fetchCtx, book.ID); err == nil {
 				enriched++
 			}
 		}

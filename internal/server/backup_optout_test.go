@@ -1,5 +1,5 @@
 // file: internal/server/backup_optout_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: e1296d8d-87ce-482e-a80c-45c24c802435
 // last-edited: 2026-10-10
 
@@ -113,6 +113,52 @@ func TestBackupOptOut_MaintenanceRunBulkWriteBack(t *testing.T) {
 
 	progress := registryProgressAdapter{r: &resumeRecorder{opID: "op-optout-maint"}}
 	require.NoError(t, s.RunBulkWriteBack(context.Background(), "op-optout-maint", []string{id}, false, 0, progress))
+	rec.requireAllOptOut(t, 1)
+}
+
+// runBulkWriteBack applies the opt-out itself, so a caller that hands it a
+// plain context (as dedup.series-normalize does) still keeps no backups. This
+// is the guard for every present and future caller.
+func TestBackupOptOut_RunBulkWriteBackPlainContext(t *testing.T) {
+	s, cleanup := setupTestServer(t)
+	defer cleanup()
+	backupsOn(t)
+	rec := captureWriteBack(t)
+	id := writeBackBook(t, s)
+
+	progress := registryProgressAdapter{r: &resumeRecorder{opID: "op-optout-direct"}}
+	require.NoError(t, s.runBulkWriteBack(context.Background(), "op-optout-direct", []string{id}, false, 0, progress, nil))
+	rec.requireAllOptOut(t, 1)
+}
+
+// dedup.series-normalize strips a series name, organizes the affected books
+// and then bulk-writes their tags. That write-back must keep no backups.
+func TestBackupOptOut_SeriesNormalizeOp(t *testing.T) {
+	s, cleanup := setupTestServer(t)
+	defer cleanup()
+	backupsOn(t)
+	rec := captureWriteBack(t)
+
+	author, err := s.store.CreateAuthor("Synthetic Author")
+	require.NoError(t, err)
+	series, err := s.store.CreateSeries("Synthetic Saga 05", &author.ID)
+	require.NoError(t, err)
+	_, err = s.store.CreateBook(&database.Book{
+		Title:    "Synthetic Title",
+		Format:   "m4b",
+		AuthorID: &author.ID,
+		SeriesID: &series.ID,
+		FilePath: filepath.Join(t.TempDir(), "synthetic.m4b"),
+	})
+	require.NoError(t, err)
+
+	reg := capOpReg(t)
+	require.NoError(t, s.RegisterSeriesNormalizeOp(reg))
+	def, ok := reg.Def("dedup.series-normalize")
+	require.True(t, ok)
+	// The op may end failed (the synthetic book has no file to organize);
+	// what matters here is the context its write-back hands down.
+	_ = def.Run(context.Background(), nil, &resumeRecorder{opID: "op-optout-normalize"})
 	rec.requireAllOptOut(t, 1)
 }
 
