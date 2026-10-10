@@ -34,5 +34,6 @@
       "running": 1.7192499999999997,
       "detail": "Candidate runtime compared against the local file's duration."
     }
-  ]
+  ],
+  "rank_score": 1.7192499999999997
 }

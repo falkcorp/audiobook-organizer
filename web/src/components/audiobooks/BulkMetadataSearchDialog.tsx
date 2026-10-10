@@ -1,7 +1,7 @@
 // file: web/src/components/audiobooks/BulkMetadataSearchDialog.tsx
-// version: 1.12.0
+// version: 1.12.1
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
-// last-edited: 2026-10-06
+// last-edited: 2026-10-10
 
 import { useCallback, useEffect, useState, useRef } from 'react';
 import { applyFieldClick } from './fieldRangeSelect';
@@ -43,6 +43,7 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import type { Audiobook } from '../../types';
 import type { BookFile, MetadataCandidate } from '../../services/api';
 import * as api from '../../services/api';
+import { rankScoreOf } from './rankScore';
 import {
   METADATA_APPLY_FIELD_LABELS,
   candidateApplyFieldValue,
@@ -956,7 +957,7 @@ export function BulkMetadataSearchDialog({
           {results
             .filter((c) => !sourceFilter || c.source === sourceFilter)
             .sort((a, b) =>
-              sortResults === 'source' ? a.source.localeCompare(b.source) : b.score - a.score
+              sortResults === 'source' ? a.source.localeCompare(b.source) : rankScoreOf(b) - rankScoreOf(a)
             )
             .map((candidate, idx) => {
               const isStaged =

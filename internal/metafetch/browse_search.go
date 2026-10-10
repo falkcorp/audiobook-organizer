@@ -1,7 +1,7 @@
 // file: internal/metafetch/browse_search.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5bc1837f-3fbc-42c0-ad1c-7faf383b5983
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 //
 // BrowseSearch is the Candidates view's "Search again": a free search by what
 // the reviewer typed, not a search for the book's own identity.
@@ -225,14 +225,14 @@ func scoreBrowseAnswer(r metadata.BookMetadata, source, title string, words map[
 			"No title was typed, so every result starts level; author, narrator and runtime agreement with the book order them.")
 	} else {
 		s, bd := ScoreOneResultWithBreakdown(r, words)
-		rec = &scoreRecorder{score: s, steps: bd.Steps}
+		rec = recorderFrom(s, &bd)
 	}
 	if author != "" {
 		want := authorjunk.FoldKey(author)
 		got := authorjunk.FoldKey(r.Author)
 		switch {
 		case got == "":
-			rec.mul("author", "Author missing", 0.75, "The search named an author but the result does not name one.")
+			rec.mulAbsence("author", "Author missing", 0.75, "The search named an author but the result does not name one.")
 		case strings.Contains(got, want) || strings.Contains(want, got):
 			rec.mul("author", "Author match", 1.5, "The result's author matches the author searched for.")
 		default:

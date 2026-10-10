@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.173.1
+// version: 2.173.2
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -3489,12 +3489,20 @@ export interface MetadataScoreStep {
   detail?: string;
   /** True when the operand was clamped by a configured cap. */
   capped?: boolean;
+  /** A multiply step that lowers `score` because a field is absent (no author,
+   *  no narrator) and which `rank_score` leaves out (counts it as x1). */
+  rank_neutral?: boolean;
+  /** A replace step's value in `rank_score` when it differs from `operand`. */
+  rank_operand?: number;
 }
 
 /** MetadataScoreBreakdown mirrors metafetch.ScoreBreakdown. */
 export interface MetadataScoreBreakdown {
   score: number;
   steps: MetadataScoreStep[];
+  /** `score` with every rank_neutral step as x1; absent on a breakdown cached
+   *  before it existed. */
+  rank_score?: number;
 }
 
 export interface MetadataCandidate {
@@ -3522,6 +3530,10 @@ export interface MetadataCandidate {
   language?: string;
   source: string;
   score: number;
+  /** `score` without the missing-author / missing-narrator penalties: the value
+   *  the Search and Browse dialogs order their list by (see rankScoreOf).
+   *  Absent on a row cached before it existed. */
+  rank_score?: number;
   /** Audible overall star rating (1–5 scale). Absent when not provided. */
   audible_rating_overall?: number;
   /** Number of Audible star ratings. */

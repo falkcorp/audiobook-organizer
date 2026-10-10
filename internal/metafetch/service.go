@@ -1,7 +1,7 @@
 // file: internal/metafetch/service.go
-// version: 5.51.0
+// version: 5.51.1
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package metafetch
 
@@ -275,6 +275,15 @@ type FetchMetadataResponse struct {
 }
 
 // MetadataCandidate represents a single search result for manual metadata matching.
+// RankValue is the score the dialog ranks by: RankScore, or Score for a row
+// cached before RankScore existed.
+func (c MetadataCandidate) RankValue() float64 {
+	if c.RankScore != 0 {
+		return c.RankScore
+	}
+	return c.Score
+}
+
 type MetadataCandidate struct {
 	Title          string `json:"title"`
 	Author         string `json:"author"`
@@ -309,6 +318,11 @@ type MetadataCandidate struct {
 	SeriesSecondary         string  `json:"series_secondary,omitempty"`
 	SeriesSecondaryPosition string  `json:"series_secondary_position,omitempty"`
 	Score                   float64 `json:"score"`
+	// RankScore is Score without the missing-author / missing-narrator
+	// penalties: the value the interactive Search/Browse dialog orders its list
+	// by (RankValue). Score, the stored candidate order and the apply gates are
+	// unchanged by it. Zero on a row cached before 2026-10-10.
+	RankScore float64 `json:"rank_score,omitempty"`
 	// ScoreBreakdown is the ordered derivation of Score, for the review UI's
 	// evidence panel. Replaying its steps reproduces Score -- asserted as a
 	// property in service_scoring_breakdown_test.go, not merely hoped for.

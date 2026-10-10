@@ -1,7 +1,7 @@
 // file: internal/metafetch/search_fanout.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: f2309d86-b2ad-4db6-9612-f5872d0e00df
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 
 package metafetch
 
@@ -490,6 +490,15 @@ func poolHasASINWithRuntime(states []*fanoutSource, asin string) bool {
 // newSearchCandidate builds the MetadataCandidate for one scored answer. The
 // runtime delta it carries (duration_delta_sec) drives the review UI's
 // runtime-differs flag.
+// rankOf is the ranking score of a freshly scored candidate: its breakdown's,
+// or the score itself when no breakdown was recorded.
+func rankOf(score float64, bd *ScoreBreakdown) float64 {
+	if bd != nil && bd.RankScore != 0 {
+		return bd.RankScore
+	}
+	return score
+}
+
 func newSearchCandidate(r metadata.BookMetadata, source string, score float64, breakdown *ScoreBreakdown, bookDurationSec int, transcriptionBoosted bool) MetadataCandidate {
 	durationDelta := 0
 	if bookDurationSec > 0 && r.DurationSec > 0 {
@@ -521,6 +530,7 @@ func newSearchCandidate(r metadata.BookMetadata, source string, score float64, b
 		Language:                r.Language,
 		Source:                  source,
 		Score:                   score,
+		RankScore:               rankOf(score, breakdown),
 		ScoreBreakdown:          breakdown,
 		DurationSec:             r.DurationSec,
 		DurationDeltaSec:        durationDelta,

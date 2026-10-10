@@ -1,7 +1,7 @@
 // file: web/src/components/audiobooks/MetadataSearchDialog.test.tsx
-// version: 2.0.0
+// version: 2.0.1
 // guid: b2cf5226-9131-4f1a-9fd2-5c3286e4f800
-// last-edited: 2026-10-06
+// last-edited: 2026-10-10
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, fireEvent, waitFor } from '@testing-library/react';
@@ -121,6 +121,60 @@ describe('MetadataSearchDialog — candidate checks', () => {
     expect(screen.getAllByText('Fetched for another ASIN')).toHaveLength(1);
   });
 
+});
+
+describe('MetadataSearchDialog — ordered by rank_score, applies the clicked row', () => {
+  // The server returns stored (score) order: X first. Y has no narrator, so
+  // its score carries the 0.85 penalty, but its rank_score does not.
+  const x: MetadataCandidate = {
+    title: 'Sample Saga 2',
+    author: 'Author 07',
+    source: 'audible',
+    score: 1.05,
+    rank_score: 1.05,
+  };
+  const y: MetadataCandidate = {
+    title: 'Sample Saga 1',
+    author: 'Author 07',
+    source: 'audible',
+    score: 0.9775,
+    rank_score: 1.15,
+  };
+
+  it('lists the highest rank_score first, whatever the order or the score', async () => {
+    searchReturns(x, y);
+    renderDialog();
+    await screen.findByText('Sample Saga 1');
+    const order = screen
+      .getAllByText(/^Sample Saga [12]$/)
+      .map((el) => el.textContent);
+    expect(order).toEqual(['Sample Saga 1', 'Sample Saga 2']);
+  });
+
+  it('falls back to score for a row with no rank_score', async () => {
+    const { rank_score: _drop, ...old } = x;
+    void _drop;
+    searchReturns(old as MetadataCandidate, { ...y, rank_score: undefined });
+    renderDialog();
+    await screen.findByText('Sample Saga 1');
+    const order = screen
+      .getAllByText(/^Sample Saga [12]$/)
+      .map((el) => el.textContent);
+    expect(order).toEqual(['Sample Saga 2', 'Sample Saga 1']);
+  });
+
+  it('picking the first displayed row applies that exact candidate', async () => {
+    searchReturns(x, y);
+    renderDialog();
+    await screen.findByText('Sample Saga 1');
+    const picks = () => screen.getAllByRole('button', { name: /^(Pick|Picked)$/ });
+    fireEvent.click(picks()[0]); // displayed first = Sample Saga 1 = server index 1
+    fireEvent.click(applyAndClose());
+    await waitFor(() => expect(mockApply).toHaveBeenCalledTimes(1));
+    expect(mockApply).toHaveBeenCalledWith('b1', y, undefined, true, undefined, {
+      background: true,
+    });
+  });
 });
 
 describe('MetadataSearchDialog — staging, one apply on close', () => {
