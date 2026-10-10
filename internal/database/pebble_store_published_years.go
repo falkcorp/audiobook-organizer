@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_published_years.go
 // version: 1.2.1
 // guid: 25de50ea-ea39-4e25-a304-1b95b87e1919
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package database
 

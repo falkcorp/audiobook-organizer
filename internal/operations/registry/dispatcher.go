@@ -1,5 +1,5 @@
 // file: internal/operations/registry/dispatcher.go
-// version: 2.6.1
+// version: 2.6.2
 // guid: a7b8c9d0-e1f2-3a4b-5c6d-7e8f9a0b1c2d
 // last-edited: 2026-10-10
 
@@ -463,8 +463,16 @@ func (r *Registry) announceWarmupHeld(row database.OperationV2Row) {
 	r.warmupHeld[row.ID] = row
 	r.warmupMu.Unlock()
 
-	if err := r.store.UpdateOpProgressV2(row.ID, row.ProgressCurrent, row.ProgressTotal, operations.WarmupStatusMessage); err != nil {
+	// SetOpQueuedProgressV2, not UpdateOpProgressV2: it writes only a row that is
+	// still queued (a cancel that landed between this cycle's snapshot and now
+	// leaves a terminal row untouched), and it stamps neither last_progress_at
+	// nor high_water_progress, which a hold must never move.
+	written, err := r.store.SetOpQueuedProgressV2(row.ID, row.ProgressCurrent, row.ProgressTotal, operations.WarmupStatusMessage)
+	if err != nil {
 		r.logger.Warn("registry: could not post the startup-warmup wait message", "op_id", row.ID, "error", err)
+		return
+	}
+	if !written {
 		return
 	}
 	r.publishOpUpdated(row.ID, row.ProgressCurrent, row.ProgressTotal)
@@ -474,22 +482,29 @@ func (r *Registry) announceWarmupHeld(row database.OperationV2Row) {
 // hold, once the hold ends, and publishes op.updated so a UI does not keep
 // showing "waiting for startup warmup". A row that has left the queue, or whose
 // message something else has since rewritten (a queued-summary merge), is left
-// alone.
+// alone, and op.updated is published only for a row actually written.
 func (r *Registry) restoreWarmupHeld() {
 	r.warmupMu.Lock()
 	held := r.warmupHeld
 	r.warmupHeld = nil
 	r.warmupMu.Unlock()
 	for id, prev := range held {
+		// The read is only for the message: a queued-summary merge may have
+		// rewritten it since, and that newer text must not be overwritten with
+		// the pre-hold one. Whether the row is still queued is decided by
+		// SetOpQueuedProgressV2 itself, atomically with the write.
 		cur, err := r.store.GetOperationV2(id)
-		if err != nil || cur == nil || cur.Status != "queued" || cur.ProgressMessage != operations.WarmupStatusMessage {
+		if err != nil || cur == nil || cur.ProgressMessage != operations.WarmupStatusMessage {
 			continue
 		}
-		if err := r.store.UpdateOpProgressV2(id, prev.ProgressCurrent, prev.ProgressTotal, prev.ProgressMessage); err != nil {
+		written, err := r.store.SetOpQueuedProgressV2(id, prev.ProgressCurrent, prev.ProgressTotal, prev.ProgressMessage)
+		if err != nil {
 			r.logger.Warn("registry: could not restore the row message after the startup-warmup hold", "op_id", id, "error", err)
 			continue
 		}
-		r.publishOpUpdated(id, prev.ProgressCurrent, prev.ProgressTotal)
+		if written {
+			r.publishOpUpdated(id, prev.ProgressCurrent, prev.ProgressTotal)
+		}
 	}
 }
 

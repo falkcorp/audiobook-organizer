@@ -1,5 +1,5 @@
 // file: internal/operations/warmup_gate.go
-// version: 2.0.0
+// version: 2.0.1
 // guid: 9d3a7e52-6c14-4b0f-8a21-5f7e0c9b3d84
 // last-edited: 2026-10-10
 
@@ -52,6 +52,10 @@ func (g *WarmupGate) Holding(now time.Time, src WarmupStatuser, log *slog.Logger
 		return false
 	}
 	if _, done, _ := src.WarmupStatus(); done {
+		// Forget the clock so a later warm-up (a store reopened under the same
+		// registry) gets a fresh bound instead of an already-expired one.
+		g.firstSeen.Store(0)
+		g.loggedEnd.Store(false)
 		return false
 	}
 	g.firstSeen.CompareAndSwap(0, now.UnixNano())

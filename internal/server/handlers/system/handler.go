@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/handler.go
 // version: 1.21.1
 // guid: 8475f406-df31-4286-95b0-30787397603e
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 // Package system hosts the system-level HTTP handlers extracted from the server
 // package: health, status, announcements, storage, logs, activity-log,
