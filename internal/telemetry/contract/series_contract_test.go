@@ -1,5 +1,5 @@
 // file: internal/telemetry/contract/series_contract_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: c0ffe83b-1164-4b85-915e-820f693efdc1
 // last-edited: 2026-10-10
 
@@ -726,7 +726,11 @@ func checkInstrument(spec instrumentSpec) []string {
 	}
 	allowed := telemetry.AttributeKeys()
 	for _, k := range spec.keys {
-		if !slices.Contains(allowed, k) {
+		switch {
+		case slices.Contains(allowed, k):
+		case slices.Contains(telemetry.ScrapeOnlyAttributeKeys(), k):
+			problems = append(problems, fmt.Sprintf("attribute key %q is scrape-only in internal/telemetry/attr.go (legacy or otelgin); a new instrument may not use it", k))
+		default:
 			problems = append(problems, fmt.Sprintf("attribute key %q is not in internal/telemetry/attr.go", k))
 		}
 	}
