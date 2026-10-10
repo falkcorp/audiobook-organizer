@@ -1,5 +1,5 @@
 <!-- file: deploy/grafana/METRICS-RUNBOOK.md -->
-<!-- version: 1.5.0 -->
+<!-- version: 1.6.0 -->
 <!-- guid: 5a2c8e71-3d94-4b60-8f17-c9e0a4d63b25 -->
 <!-- last-edited: 2026-10-10 -->
 
@@ -63,8 +63,10 @@ whitespace is trimmed):
 - `dns:///collector.example.invalid:4317`: TLS unless
   `otel_metrics_otlp_insecure` is true.
 
-The host is a DNS name (letters, digits, `.` and `-`, not starting or ending
-with `.` or `-`, at most 253 bytes) or a bracketed IPv6 address. **The port is
+The host is a DNS name (dot-separated labels of 1-63 letters, digits or `-`,
+not starting or ending with `-`, no empty label, at most 253 bytes), an IPv4
+address, or a bracketed IPv6 address. An all-numeric host that is not a valid
+IPv4 address (`4317`, `1.2.3`) is refused. **The port is
 required** and must be a number from 1 to 65535.
 
 **Everything else is refused, not repaired**: userinfo or any `@`, `?`, `#`,
@@ -83,6 +85,12 @@ error handler is additionally scrubbed of URL userinfo, path, query and
 fragment as a last line of defence.
 
 ### Transport rule
+
+Whatever the form, gRPC is handed an explicit `dns:///host:port` target, so a
+host called `unix` or `dns` is dialled as a host, never as a resolver scheme.
+For the trace exporter an `http://` endpoint is plaintext and `https://` is TLS
+with the system roots; a bare or `dns:///` trace endpoint still follows
+`OTEL_EXPORTER_OTLP_[TRACES_]INSECURE`.
 
 One rule, applied to every form: an `http://` URL is plaintext and an
 `https://` URL is TLS (the URL decides; the insecure key is not consulted); a
@@ -105,11 +113,16 @@ turn an explicit plaintext one back into TLS. The consequences:
   and `OTEL_METRIC_EXPORT_TIMEOUT`.
 - Pinned (the environment cannot change them): transport and TLS material,
   headers, temporality and histogram aggregation.
-- **A malformed `OTEL_EXPORTER_OTLP_HEADERS` is printed verbatim.** The OTel
-  SDK's internal logger reports a header value it cannot parse, token
-  included, through a path that bypasses this service's error handler and
-  redaction. Keep that variable well-formed (`key=value,key2=value2`), or
-  unset when not needed, and treat a log line mentioning it as sensitive.
+- **The SDK's own logger is replaced.** The OTel SDK reports bad configuration
+  (an unparsable `OTEL_EXPORTER_OTLP_ENDPOINT`, a malformed
+  `OTEL_EXPORTER_OTLP_HEADERS`) through its own logger, separate from the error
+  handler, and prints the raw offending value. At start-up, whether or not the
+  metric push is on, this service installs a sink that keeps the message and
+  the key names only and drops every value; only errors and warnings are
+  logged (at warn level, as `OpenTelemetry SDK log (values dropped, rate
+  limited)` with `value keys: ...`), and they share the class-keyed
+  10-minute limiter. To find the bad value, read the variable in the unit or
+  environment file named by the key, not the log.
 
 ## Turn it on
 
