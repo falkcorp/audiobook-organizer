@@ -1,5 +1,5 @@
 // file: internal/config/removed_keys_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9e2b6d41-7c3a-4f58-b0d9-2a61c8e4f735
 // last-edited: 2026-10-10
 
@@ -283,5 +283,75 @@ func TestRemovedWriteBackupBefore_WarnsOnLoad(t *testing.T) {
 	}
 	if msg, ok := removedKeyInUpdate(map[string]any{"write_backup_before_tag_write": true}); !ok || !strings.Contains(msg, "create_backups") {
 		t.Errorf("update with write_backup_before_tag_write: ok=%v msg=%q, want a refusal naming create_backups", ok, msg)
+	}
+}
+
+// A nested write_backup_before -- the shape a Settings page loaded before the
+// removal, or a settings export taken then, sends -- is refused with the
+// removed-setting message, not unknownConfigKeys' generic one.
+func TestUpdateConfig_RejectsNestedRemovedWriteBackupBefore(t *testing.T) {
+	restoreAppConfig(t)
+	ms, blobs := ladderTestStore(t)
+	svc := NewUpdateService(ms)
+
+	status, resp := svc.UpdateConfig(context.Background(), map[string]any{
+		"metadata_scoring": map[string]any{"write_backup_before": true, "llm_enabled": false},
+	})
+	if status != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; resp = %v", status, resp)
+	}
+	msg, _ := resp["error"].(string)
+	for _, want := range []string{"metadata_scoring.write_backup_before", "was removed", "create_backups"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error %q does not mention %q", msg, want)
+		}
+	}
+	if _, generic := resp["unknown_keys"]; generic {
+		t.Errorf("refused as a generic unknown key, want the removed-setting message: %v", resp)
+	}
+	if len(*blobs) != 0 {
+		t.Errorf("rejected PUT persisted %d blob(s)", len(*blobs))
+	}
+}
+
+// The config.yaml beside the database warns about a nested removed key too.
+func TestLoadConfigFromFile_NestedRemovedKeyWarns(t *testing.T) {
+	restoreAppConfig(t)
+	logs := captureRemovedKeyLogs(t)
+
+	dir := t.TempDir()
+	Mutate(func(c *Config) { c.DatabasePath = filepath.Join(dir, "audiobooks.pebble") })
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"),
+		[]byte("metadata_scoring:\n  write_backup_before: true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := LoadConfigFromFile(); err != nil {
+		t.Fatalf("LoadConfigFromFile: %v", err)
+	}
+	if out := logs.String(); !strings.Contains(out, "level=WARN") || !strings.Contains(out, "key=metadata_scoring.write_backup_before ") {
+		t.Errorf("expected a removed-setting WARN for metadata_scoring.write_backup_before, got:\n%s", out)
+	}
+}
+
+func TestHasConfigKey(t *testing.T) {
+	m := map[string]any{
+		"flat.dotted": 1,
+		"a":           map[string]any{"b": map[string]any{"c": nil}},
+		"scalar":      3,
+	}
+	for _, tc := range []struct {
+		key  string
+		want bool
+	}{
+		{"flat.dotted", true},
+		{"a.b.c", true},
+		{"a.b", true},
+		{"a.x", false},
+		{"scalar.x", false},
+		{"missing", false},
+	} {
+		if got := hasConfigKey(m, tc.key); got != tc.want {
+			t.Errorf("hasConfigKey(%q) = %v, want %v", tc.key, got, tc.want)
+		}
 	}
 }
