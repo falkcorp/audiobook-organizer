@@ -1,0 +1,15 @@
+<!-- file: internal/telemetry/testdata/client_golang_baseline.txt -->
+<!-- version: 1.0.0 -->
+<!-- guid: 7c1d4e5a-9b2f-4a60-8e3d-5f6a7b8c9d01 -->
+<!-- last-edited: 2026-10-10 -->
+# Ceiling for the number of client_golang metric families declared in non-test code
+# under internal/, pkg/ and cmd/. See ratchet_test.go (TestClientGolangConstructorRatchet).
+#
+# What is counted: calls to prometheus.New{Counter,Gauge,Histogram,Summary,Untyped}[Vec|Func]
+# and the same names on promauto, calls to newPebbleDesc with a string-literal first
+# argument, and prometheus.NewDesc calls outside the body of newPebbleDesc.
+#
+# This number may only be LOWERED, by hand, in the PR that moves a family to OTel.
+# Never raise it to make a PR pass. Print the current count with:
+#   go test -count=1 -v -run TestClientGolangConstructorRatchet ./internal/telemetry/
+69
