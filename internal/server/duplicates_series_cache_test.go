@@ -1,7 +1,7 @@
 // file: internal/server/duplicates_series_cache_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 7c1d94b6-2ea8-4f30-9c57-1b0e6a8d3f42
-// last-edited: 2026-08-30
+// last-edited: 2026-10-10
 
 package server
 
@@ -10,6 +10,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 
 	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
@@ -254,4 +256,71 @@ func (s *seriesRefCountFailStore) GetAllSeriesBookRefCounts() (map[int]int, erro
 		return s.firstCall, nil
 	}
 	return nil, errors.New("simulated: memdb tables incomplete")
+}
+
+// runRegisteredSeriesNormalize drives the REGISTERED dedup.series-normalize def
+// over store, because the cache invalidation under test lives in that def's Run
+// body, not in executeSeriesNormalizeCore. The store hands out no book rows
+// (GetBookByID returns nil), so the organize step counts each affected book as
+// unresolved instead of moving a file; the run therefore ends in an error when
+// a rename happened, which is irrelevant here -- the cache is invalidated
+// before organize starts.
+func runRegisteredSeriesNormalize(t *testing.T, s *Server, store *database.MockStore) error {
+	t.Helper()
+	def := relinkOpDef(t, s.RegisterSeriesNormalizeOp, "dedup.series-normalize")
+	s.store = store
+	return def.Run(context.Background(), nil, &relinkOpReporter{})
+}
+
+func newSeriesNormalizeCacheStore(series []database.Series, renamed map[int]string) *database.MockStore {
+	store := &database.MockStore{}
+	store.GetAllSeriesFunc = func() ([]database.Series, error) { return series, nil }
+	store.GetBooksBySeriesIDCoreFunc = func(int) ([]database.BookCore, error) {
+		return []database.BookCore{{ID: "book-1"}}, nil
+	}
+	store.GetBooksBySeriesIDAllVersionsFunc = func(int) ([]database.BookCore, error) {
+		return []database.BookCore{{ID: "book-1"}}, nil
+	}
+	store.UpdateSeriesNameFunc = func(id int, name string) error {
+		renamed[id] = name
+		return nil
+	}
+	store.GetBookByIDFunc = func(string) (*database.Book, error) { return nil, nil }
+	return store
+}
+
+// TestSeriesNormalizeOp_InvalidatesSeriesCacheWhenRowsRenamed locks the
+// invalidation dedup.series-normalize inherited from the merged
+// maintenance.series-normalize (04-P5). Without it a rename lands in the store
+// while /api/v1/series serves the old names for the cache's 24-hour TTL.
+func TestSeriesNormalizeOp_InvalidatesSeriesCacheWhenRowsRenamed(t *testing.T) {
+	s := newSeriesPruneServer(t)
+	renamed := map[int]string{}
+	store := newSeriesNormalizeCacheStore([]database.Series{{ID: 1, Name: "Example Saga, Book 1"}}, renamed)
+
+	require.True(t, seriesCacheIsPrimed(s), "precondition: series cache should be primed")
+	_ = runRegisteredSeriesNormalize(t, s, store)
+
+	require.NotEmpty(t, renamed, "precondition: the fixture series must actually be renamed, "+
+		"or the cache assertion below would pass for the wrong reason")
+	if seriesCacheIsPrimed(s) {
+		t.Error("series cache still primed after a normalize that renamed a series row")
+	}
+}
+
+// TestSeriesNormalizeOp_KeepsSeriesCacheWhenNothingRenamed is the other half: a
+// run with nothing to normalize changed nothing, and dropping the warm cache
+// costs a full recount. Without this case "invalidate unconditionally" would
+// pass the test above.
+func TestSeriesNormalizeOp_KeepsSeriesCacheWhenNothingRenamed(t *testing.T) {
+	s := newSeriesPruneServer(t)
+	renamed := map[int]string{}
+	store := newSeriesNormalizeCacheStore([]database.Series{{ID: 1, Name: "Discworld"}}, renamed)
+
+	require.NoError(t, runRegisteredSeriesNormalize(t, s, store))
+
+	require.Empty(t, renamed, "precondition: nothing should have been renamed")
+	if !seriesCacheIsPrimed(s) {
+		t.Error("series cache dropped by a normalize that renamed nothing")
+	}
 }
