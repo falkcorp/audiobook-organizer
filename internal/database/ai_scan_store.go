@@ -1,5 +1,5 @@
 // file: internal/database/ai_scan_store.go
-// version: 2.13.0
+// version: 2.14.0
 // last-edited: 2026-10-10
 // guid: a7b3c9d1-4e5f-6a7b-8c9d-0e1f2a3b4c5d
 
@@ -46,8 +46,9 @@ type AIScanStore struct {
 	// with an applied result in it. It also makes each replace of a scan's
 	// results one step (ReplaceScanResults, ReplaceScanResultsIfUnapplied):
 	// two overlapping replaces each listed the rows to delete before the other
-	// committed, and the scan kept both sets. Lock order: applyMu, then
-	// stateMu; idMu is a leaf.
+	// committed, and the scan kept both sets. SaveScanResult takes it too, so
+	// a save cannot land inside a replace. Lock order: applyMu, then stateMu;
+	// idMu is a leaf.
 	applyMu sync.Mutex
 	// stateMu serializes every read-modify-write of a phase row or a scan's
 	// status, so TransitionPhase and CompleteScanIfActive are true
@@ -758,7 +759,14 @@ func (s *AIScanStore) GetPhases(scanID int) ([]ScanPhase, error) {
 }
 
 // SaveScanResult saves a scan result, auto-assigning an ID.
+//
+// It holds applyMu like every other writer of a scan's results, so a save
+// lands wholly before or wholly after a replace. Unlocked, a save landing
+// between a replace's listing and its commit survived next to the full new
+// set as an extra row.
 func (s *AIScanStore) SaveScanResult(result *ScanResult) error {
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
 	id, err := s.nextID("scan_result")
 	if err != nil {
 		return fmt.Errorf("failed to generate result ID: %w", err)
