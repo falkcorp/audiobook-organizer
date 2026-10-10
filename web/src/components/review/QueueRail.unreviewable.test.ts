@@ -1,7 +1,7 @@
 // file: web/src/components/review/QueueRail.unreviewable.test.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: 4a1c8e35-9b72-4d06-8f13-2e5a7c94b0d8
-// last-edited: 2026-08-20
+// last-edited: 2026-10-10
 
 /**
  * The "N unreviewable" chip's tooltip.
@@ -58,5 +58,17 @@ describe('the unreviewable tooltip', () => {
     expect(text).toMatch(/no candidate stored/);
     expect(text).toMatch(/no longer exists/);
     expect(text).not.toMatch(/\d/);
+  });
+
+  it('names the retitled books and their remedy', () => {
+    const text = unreviewableReason({
+      orphaned: 0,
+      no_candidates: 0,
+      decode_errors: 0,
+      identity_stale: 4,
+    });
+
+    expect(text).toMatch(/4 retitled since their search/);
+    expect(text).toMatch(/candidate fetch replaces these/);
   });
 });

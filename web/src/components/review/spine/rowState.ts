@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/rowState.ts
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4d17c69b-0e83-4a25-91f6-7b2c8a034e51
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 //
 // Row-state derivations and formatting, lifted verbatim from
 // MetadataReviewDialog so CompareSpine can reuse them rather than reimplement
@@ -239,6 +239,12 @@ export function noCandidateLabel(r: {
         color: 'default',
         detail: `The book was already ruled on and has no stored candidate.${when}`,
       };
+    case 'identity_stale':
+      return {
+        label: 'Retitled since this search',
+        color: 'default',
+        detail: `The book was retitled or re-credited after its candidates were fetched, so they answer the old title and none is offered. The candidate fetch searches the current title and replaces them.${when}`,
+      };
     case 'decode_error':
       return {
         label: `Candidate will not decode${r.error_message ? `: ${r.error_message}` : ''}`,
@@ -249,7 +255,8 @@ export function noCandidateLabel(r: {
       return {
         label: 'Not searched',
         color: 'default',
-        detail: 'The candidate fetch did not search this book (marked no match, or no usable title).',
+        detail:
+          'The candidate fetch did not search this book (marked no match, or no usable title).',
       };
     case 'deferred':
       return {

@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useMetadataLane.ts
-// version: 1.35.0
+// version: 1.36.0
 // guid: 7c4e1a90-3b58-4d26-9a07-1e5a8b2c4f70
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 //
 // The metadata lane's data layer, LIFTED out of MetadataReviewDialog.
 //
@@ -543,7 +543,13 @@ export interface MetadataLaneSummary {
    * split omits it, and "no breakdown available" is a different claim from
    * "every cause is zero".
    */
-  unreviewable_by_cause?: { orphaned: number; no_candidates: number; decode_errors: number };
+  unreviewable_by_cause?: {
+    orphaned: number;
+    no_candidates: number;
+    decode_errors: number;
+    /** Pending books retitled since their search (absent from an older server). */
+    identity_stale?: number;
+  };
   /**
    * Books already ruled on whose stored candidate is gone. Optional for the
    * same reason as the breakdown above: a server that predates the split omits
@@ -563,6 +569,7 @@ export interface MetadataLaneSummary {
  *   errors                        candidates that will not decode
  *   no_candidates                 nobody has ruled on it, no candidate stored
  *   resolved_no_candidates        ruled on, candidate gone
+ *   identity_stale                nobody has ruled on it, retitled since its search
  *   stale                         rows the server flags `stale` (past the TTL and
  *                                 searchable by a refetch)
  *
@@ -575,6 +582,7 @@ export type ChipFilter =
   | 'errors'
   | 'no_candidates'
   | 'resolved_no_candidates'
+  | 'identity_stale'
   | 'stale'
   | 'deferred';
 
@@ -582,6 +590,7 @@ const CHIPS_NEEDING_UNREVIEWABLE: ReadonlySet<ChipFilter> = new Set<ChipFilter>(
   'errors',
   'no_candidates',
   'resolved_no_candidates',
+  'identity_stale',
   'stale',
   'deferred',
 ]);
@@ -591,7 +600,8 @@ export function isUnreviewableRow(r: CandidateResult): boolean {
   return (
     r.status === 'no_candidates' ||
     r.status === 'resolved_no_candidates' ||
-    r.status === 'decode_error'
+    r.status === 'decode_error' ||
+    r.status === 'identity_stale'
   );
 }
 
@@ -1328,6 +1338,8 @@ export function useMetadataLane(toast: Toast, active = true): MetadataLane {
         return unreviewableResults.filter((r) => r.status === 'no_candidates');
       case 'resolved_no_candidates':
         return unreviewableResults.filter((r) => r.status === 'resolved_no_candidates');
+      case 'identity_stale':
+        return unreviewableResults.filter((r) => r.status === 'identity_stale');
       case 'stale':
         // The server's per-row `stale` flag, computed by the same predicate as
         // the chip's count (and the {stale: true} refetch set). Nothing is

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_snapshot_test.go
-// version: 2.2.1
+// version: 2.3.0
 // guid: 5a0e9c37-1d4b-4f62-8b17-c2e6d9a40f13
 // last-edited: 2026-10-10
 
@@ -575,7 +575,7 @@ type snapKey struct {
 func keyOf(s *reviewSnapshot) snapKey {
 	k := snapKey{books: map[string]database.Book{}}
 	for _, r := range s.rows {
-		k.rows = append(k.rows, fmt.Sprintf("%s|%d|%s|%v|%s|%s", r.sum.BookID, r.candidateCount, r.hash, r.searchable, r.files.ITunesPath, r.lastChecked.UTC().Format(time.RFC3339Nano)))
+		k.rows = append(k.rows, fmt.Sprintf("%s|%d|%s|%v|%s|%s|stale=%v", r.sum.BookID, r.candidateCount, r.hash, r.searchable, r.files.ITunesPath, r.lastChecked.UTC().Format(time.RFC3339Nano), r.sum.Stale))
 	}
 	for id, b := range s.books {
 		k.books[id] = *b
@@ -669,6 +669,11 @@ func TestReviewSnapshot_IncrementalEqualsFull(t *testing.T) {
 	require.Equal(t, changedID, ids[0], "the refetched row sorts first by FetchedAt")
 	require.NotContains(t, ids, deletedRowID)
 	require.Contains(t, ids, identityID, "the identity change keeps its cache row, marked Stale")
+	for _, r := range incr.rows {
+		if r.sum.BookID == identityID {
+			require.True(t, r.sum.Stale, "the incremental re-read carries the row's Stale mark")
+		}
+	}
 	require.Contains(t, ids, asinFilledID, "an ASIN fill keeps the cache row")
 	require.NotNil(t, incr.books[asinFilledID].ASIN, "the ASIN fill reached the incremental build")
 	require.NotContains(t, ids, deletedBookID)

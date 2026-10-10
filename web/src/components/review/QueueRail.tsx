@@ -1,7 +1,7 @@
 // file: web/src/components/review/QueueRail.tsx
-// version: 1.15.0
+// version: 1.16.0
 // guid: 4f8c2b96-7a15-4e30-9d82-6b0e5a3c1f74
-// last-edited: 2026-10-06
+// last-edited: 2026-10-10
 //
 // The left rail: everything that decides WHICH candidates are in front of the
 // reviewer, plus a queue overview of the ones that made it through.
@@ -139,7 +139,12 @@ export interface QueueRailProps {
     total: number;
     unreviewable: number;
     stale: number;
-    unreviewable_by_cause?: { orphaned: number; no_candidates: number; decode_errors: number };
+    unreviewable_by_cause?: {
+      orphaned: number;
+      no_candidates: number;
+      decode_errors: number;
+      identity_stale?: number;
+    };
     /**
      * Books already ruled on that have no candidate left to show. Not a backlog
      * and not an error, so they are no longer counted in `unreviewable` — but
@@ -253,6 +258,7 @@ export function unreviewableReason(byCause?: {
   orphaned: number;
   no_candidates: number;
   decode_errors: number;
+  identity_stale?: number;
 }): string {
   if (!byCause) {
     return 'Cache entries with no candidate stored, or whose book no longer exists. Nothing here can be reviewed.';
@@ -270,6 +276,11 @@ export function unreviewableReason(byCause?: {
   }
   if (byCause.decode_errors > 0) {
     parts.push(`${byCause.decode_errors.toLocaleString()} whose stored candidate will not decode`);
+  }
+  if ((byCause.identity_stale ?? 0) > 0) {
+    parts.push(
+      `${(byCause.identity_stale ?? 0).toLocaleString()} retitled since their search \u2014 the candidate fetch replaces these`
+    );
   }
   if (parts.length === 0) return 'Nothing here can be reviewed.';
   return `Nothing here can be reviewed: ${parts.join('; ')}.`;
@@ -303,6 +314,7 @@ const CHIP_LABELS: Record<ChipFilter, string> = {
   errors: 'error',
   no_candidates: 'no-candidate',
   resolved_no_candidates: 'resolved, no-candidate',
+  identity_stale: 'retitled, awaiting refetch',
   stale: 'stale',
   deferred: 'deferred',
 };
@@ -468,6 +480,16 @@ export function QueueRail({
                 color="warning"
                 label={`${byCause.no_candidates.toLocaleString()} no candidates`}
                 {...chipProps('no_candidates', byCause.no_candidates)}
+              />
+            </Tooltip>
+          )}
+          {byCause && (byCause.identity_stale ?? 0) > 0 && (
+            <Tooltip title="Nobody has ruled on these books, and they were retitled or re-credited after their candidates were fetched, so those candidates answer the old title. They are not offered for review; the candidate fetch searches the current title and replaces them.">
+              <Chip
+                size="small"
+                color="warning"
+                label={`${(byCause.identity_stale ?? 0).toLocaleString()} retitled, awaiting refetch`}
+                {...chipProps('identity_stale', byCause.identity_stale ?? 0)}
               />
             </Tooltip>
           )}
@@ -770,7 +792,11 @@ export function QueueRail({
                       noWrap
                       sx={{ display: 'block' }}
                     >
-                      {r.status === 'decode_error' ? 'candidate will not decode' : 'no candidate'}
+                      {r.status === 'decode_error'
+                        ? 'candidate will not decode'
+                        : r.status === 'identity_stale'
+                          ? 'retitled since its search'
+                          : 'no candidate'}
                       {r.book.author ? ` \u00b7 ${r.book.author}` : ''}
                     </Typography>
                   ) : null}

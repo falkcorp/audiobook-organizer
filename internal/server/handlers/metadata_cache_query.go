@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_query.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 3e8b5d17-6a0c-4f92-b1d4-9c27e0a5f6b3
 // last-edited: 2026-10-10
 
@@ -105,13 +105,15 @@ const (
 	reviewChipErrors               = "errors"
 	reviewChipNoCandidates         = "no_candidates"
 	reviewChipResolvedNoCandidates = "resolved_no_candidates"
+	reviewChipIdentityStale        = "identity_stale"
 	reviewChipStale                = "stale"
 	reviewChipDeferred             = "deferred"
 )
 
 var reviewChips = []string{
 	reviewChipMatched, reviewChipNoMatch, reviewChipTotal, reviewChipErrors,
-	reviewChipNoCandidates, reviewChipResolvedNoCandidates, reviewChipStale, reviewChipDeferred,
+	reviewChipNoCandidates, reviewChipResolvedNoCandidates, reviewChipIdentityStale,
+	reviewChipStale, reviewChipDeferred,
 }
 
 // Review sort orders. The default is the listing's own order (status rank,
@@ -836,6 +838,8 @@ func evaluateReviewQuery(base *reviewQueryBase, q *ReviewQuery, budget *querygra
 			addUnreviewable(func(u *unreviewableRow) bool { return u.status == unreviewableStatusNoCandidates })
 		case reviewChipResolvedNoCandidates:
 			addUnreviewable(func(u *unreviewableRow) bool { return u.status == unreviewableStatusResolvedNoCandidates })
+		case reviewChipIdentityStale:
+			addUnreviewable(func(u *unreviewableRow) bool { return u.status == unreviewableStatusIdentityStale })
 		case reviewChipStale:
 			// Both buckets, reviewable first: [...results, ...unreviewable].
 			addReviewable(func(r *reviewableRow) bool { return r.stale })

@@ -485,7 +485,8 @@
       "orphaned": 0,
       "no_candidates": 1,
       "decode_errors": 1,
-      "book_read_errors": 0
+      "book_read_errors": 0,
+      "identity_stale": 0
     },
     "sources": {
       "audible": 9,

@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.174.2
+// version: 2.175.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-10
 
@@ -4254,9 +4254,13 @@ export interface CandidateBookInfo {
  * (`GET /metadata/cache/review?bucket=unreviewable`). Each names the summary
  * counter the row is counted under: `no_candidates` ->
  * `unreviewable_by_cause.no_candidates`, `resolved_no_candidates` ->
- * `resolved_no_candidates`, `decode_error` -> `errors`.
+ * `resolved_no_candidates`, `decode_error` -> `errors`, `identity_stale` ->
+ * `unreviewable_by_cause.identity_stale` (nobody has ruled on the book and its
+ * cached candidates were fetched for a title or author it no longer has; the
+ * candidate fetch replaces them).
  */
-export type UnreviewableStatus = 'no_candidates' | 'resolved_no_candidates' | 'decode_error';
+export type UnreviewableStatus =
+  'no_candidates' | 'resolved_no_candidates' | 'decode_error' | 'identity_stale';
 
 export interface CandidateResult {
   book: CandidateBookInfo;
@@ -4522,6 +4526,12 @@ export async function getCachedReviewResults(
     decode_errors: number;
     /** Live book reads that failed on this request (a store fault, not a gone book). */
     book_read_errors?: number;
+    /**
+     * Pending books retitled or re-credited after their candidates were
+     * fetched (the cache row is marked stale). Not offered for review; the
+     * candidate fetch replaces them. Absent from an older server.
+     */
+    identity_stale?: number;
   };
   /**
    * Books already matched or marked no-match whose stored candidate is gone.
