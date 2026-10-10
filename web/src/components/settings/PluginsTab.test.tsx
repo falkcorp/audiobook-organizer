@@ -17,7 +17,7 @@ describe('PluginsTab', () => {
   it('shows an error, not "No plugins registered", when the session has expired', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => loginPageResponse()));
     renderWithProviders(<PluginsTab />);
-    expect(await screen.findByText(/redirected to a login page/i)).toBeInTheDocument();
+    expect(await screen.findByText(/session has expired/i)).toBeInTheDocument();
     expect(screen.queryByText(/no plugins registered/i)).not.toBeInTheDocument();
   });
 });

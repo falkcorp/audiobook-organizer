@@ -1,7 +1,7 @@
 // file: web/src/utils/apiFetch.ts
-// version: 1.3.0
+// version: 1.4.0
 // guid: c1d2e3f4-a5b6-7890-cdef-012345678901
-// last-edited: 2026-08-11
+// last-edited: 2026-10-10
 
 /**
  * Thrown when a request is cut off by apiFetch's own `timeoutMs` deadline.
@@ -80,7 +80,7 @@ export function isAuthRedirectError(err: unknown): boolean {
  *  1. `response.redirected` + a cross-origin final URL. Catches the Cloudflare
  *     Access bounce exactly. Misses same-origin login redirects, and misses
  *     opaque/`redirect: 'manual'` responses where `redirected` is not set.
- *  2. An HTML content-type on an `/api/` route. Catches everything signal 1
+ *  2. An HTML content-type on an `/api/` route with a non-error status (<400). Catches everything signal 1
  *     misses, including a same-origin SSO page. `text/html` on an API route is
  *     never legitimate — every endpoint under /api/ answers JSON (or an empty
  *     body), so there is no correct response this can misfire on.
@@ -106,7 +106,15 @@ function assertNotAuthRedirect(requestUrl: string, response: Response): void {
   // this throws a TypeError and turns a passing suite red for reasons that
   // have nothing to do with auth.
   const contentType = response.headers?.get('Content-Type') ?? '';
-  if (contentType.toLowerCase().includes('text/html') && requestUrl.includes('/api/')) {
+  // Only a successful-looking response can be a login bounce: the bounce
+  // arrives as a 200 after fetch follows the redirect. An HTML 4xx/5xx on an
+  // API route (a proxy's 502 page, say) is a real server error and must reach
+  // the caller as one, not be mislabelled "session expired".
+  if (
+    (response.status ?? 200) < 400 &&
+    contentType.toLowerCase().includes('text/html') &&
+    requestUrl.includes('/api/')
+  ) {
     throw new ApiAuthRedirectError(requestUrl, response.url || requestUrl);
   }
 }

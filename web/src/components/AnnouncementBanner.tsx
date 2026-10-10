@@ -1,5 +1,5 @@
 // file: web/src/components/AnnouncementBanner.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-10-10
 
@@ -9,6 +9,7 @@ import { Alert, AlertTitle, Box, IconButton, Collapse } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import { STORAGE_KEYS } from '../lib/storageKeys';
 import { apiFetch } from '../utils/apiFetch';
+import { unwrapData } from '../utils/apiResponse';
 
 interface Announcement {
   id: string;
@@ -41,7 +42,7 @@ export function AnnouncementBanner() {
     try {
       const response = await apiFetch('/api/v1/system/announcements');
       if (!response.ok) return;
-      const data = await response.json();
+      const data = unwrapData<{ announcements?: Announcement[] }>(await response.json());
       setAnnouncements(data.announcements || []);
     } catch {
       // Silently fail - announcements are non-critical

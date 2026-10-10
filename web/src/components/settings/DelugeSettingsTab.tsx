@@ -1,5 +1,5 @@
 // file: web/src/components/settings/DelugeSettingsTab.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4f2a3b1c-5d6e-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-10
 
@@ -22,8 +22,18 @@ import {
   Typography,
 } from '@mui/material';
 import { apiFetch } from '../../utils/apiFetch';
+import { describeRequestError, responseErrorMessage, unwrapData } from '../../utils/apiResponse';
 
 const API_BASE = '/api/v1';
+
+// Calls a Deluge endpoint and returns the unwrapped payload. A non-2xx answer
+// throws with the server's reason (or `HTTP <status>`), and an expired session
+// throws ApiAuthRedirectError from apiFetch, so neither can be mistaken for data.
+async function delugeRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  const resp = await apiFetch(`${API_BASE}${path}`, init);
+  if (!resp.ok) throw new Error(await responseErrorMessage(resp));
+  return unwrapData<T>(await resp.json());
+}
 
 interface DelugeStatus {
   configured: boolean;
@@ -42,6 +52,7 @@ export default function DelugeSettingsTab() {
   const [status, setStatus] = useState<DelugeStatus | null>(null);
   const [testResult, setTestResult] = useState<{ connected: boolean; error?: string } | null>(null);
   const [testing, setTesting] = useState(false);
+  const [requestError, setRequestError] = useState('');
   const [torrents, setTorrents] = useState<Record<string, TorrentInfo>>({});
   const [showTorrents, setShowTorrents] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -52,50 +63,54 @@ export default function DelugeSettingsTab() {
   } | null>(null);
 
   useEffect(() => {
-    apiFetch(`${API_BASE}/deluge/status`)
-      .then((r) => r.json())
+    delugeRequest<DelugeStatus>('/deluge/status')
       .then(setStatus)
-      .catch(() => {});
+      .catch((err) => setRequestError(describeRequestError(err, 'Failed to load Deluge status')));
   }, []);
 
   const handleTestConnection = useCallback(async () => {
     setTesting(true);
     setTestResult(null);
+    setRequestError('');
     try {
-      const resp = await apiFetch(`${API_BASE}/deluge/test-connection`, { method: 'POST' });
-      const data = await resp.json();
+      const data = await delugeRequest<{ connected: boolean }>('/deluge/test-connection', {
+        method: 'POST',
+      });
       setTestResult(data);
     } catch (err: unknown) {
-      setTestResult({ connected: false, error: (err as Error).message });
+      setTestResult({ connected: false, error: describeRequestError(err, (err as Error).message) });
     } finally {
       setTesting(false);
     }
   }, []);
 
   const handleLoadTorrents = useCallback(async () => {
+    setRequestError('');
     try {
-      const resp = await apiFetch(`${API_BASE}/deluge/torrents`);
-      const data = await resp.json();
+      const data = await delugeRequest<{ torrents?: Record<string, TorrentInfo> }>(
+        '/deluge/torrents'
+      );
       setTorrents(data.torrents || {});
       setShowTorrents(true);
-    } catch {
+    } catch (err) {
       setTorrents({});
+      setShowTorrents(false);
+      setRequestError(describeRequestError(err, `Failed to load torrents: ${(err as Error).message}`));
     }
   }, []);
 
   const handleBulkImport = useCallback(async () => {
     setImporting(true);
     setImportResult(null);
+    setRequestError('');
     try {
-      const resp = await apiFetch(`${API_BASE}/discovery/import`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dry_run: false }),
-      });
-      const data = await resp.json();
+      const data = await delugeRequest<{ total: number; imported: number; failed: number }>(
+        '/discovery/import',
+        { method: 'POST', body: JSON.stringify({ dry_run: false }) }
+      );
       setImportResult({ total: data.total, imported: data.imported, failed: data.failed });
-    } catch {
-      setImportResult(null);
+    } catch (err) {
+      setRequestError(describeRequestError(err, `Import failed: ${(err as Error).message}`));
     } finally {
       setImporting(false);
     }
@@ -106,6 +121,11 @@ export default function DelugeSettingsTab() {
       <Typography variant="h6" gutterBottom>
         Deluge Integration
       </Typography>
+      {requestError && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {requestError}
+        </Alert>
+      )}
       <Typography
         variant="body2"
         sx={{

@@ -1,5 +1,5 @@
 // file: web/src/pages/TrashedVersions.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6f4a5b3c-7d8e-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-10
 
@@ -22,6 +22,7 @@ import {
   Typography,
 } from '@mui/material';
 import { apiFetch } from '../utils/apiFetch';
+import { describeRequestError, unwrapData } from '../utils/apiResponse';
 import {
   type BookVersion,
   restoreVersion,
@@ -124,7 +125,7 @@ export default function TrashedVersions() {
         tab === 'trash' ? '/audiobooks/trashed-versions' : '/audiobooks/purged-versions';
       const resp = await apiFetch(`${API_BASE}${endpoint}`);
       if (resp.ok) {
-        const data = await resp.json();
+        const data = unwrapData<{ versions?: BookVersion[] }>(await resp.json());
         setVersions(data.versions || []);
       } else {
         setVersions([]);
@@ -134,7 +135,7 @@ export default function TrashedVersions() {
       // An expired session (ApiAuthRedirectError) lands here too; show it
       // instead of an empty list that reads as "nothing trashed".
       setVersions([]);
-      setLoadError(err instanceof Error ? err.message : 'Failed to load versions');
+      setLoadError(describeRequestError(err, 'Failed to load versions'));
     } finally {
       setLoading(false);
     }

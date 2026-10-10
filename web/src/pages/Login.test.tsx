@@ -1,5 +1,5 @@
 // file: web/src/pages/Login.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8b2c3d4e-5f60-4718-9a2b-3c4d5e6f7081
 // last-edited: 2026-10-10
 
@@ -17,7 +17,7 @@ import { ThemeProvider } from '@mui/material';
 import { appTheme } from '../theme';
 import { Login } from './Login';
 import { useAuth } from '../contexts/AuthContext';
-import { loginPageResponse } from '../test/loginRedirect';
+import { loginPageWithJsonBody } from '../test/loginRedirect';
 
 vi.mock('../contexts/AuthContext', () => ({
   useAuth: vi.fn(),
@@ -118,9 +118,9 @@ describe('Login oauth-providers load (runs before a session exists)', () => {
     expect(await screen.findByRole('button', { name: /sign in with github/i })).toBeInTheDocument();
   });
 
-  it('shows no SSO buttons, and does not throw, when a login page comes back instead of JSON', async () => {
+  it('shows no SSO buttons, and does not throw, when a login page (even one whose body parses) comes back', async () => {
     mockUseAuth.mockReturnValue(unauthenticated());
-    const fetchMock = vi.fn(async () => loginPageResponse());
+    const fetchMock = vi.fn(async () => loginPageWithJsonBody({ data: { providers: ['github'] } }));
     vi.stubGlobal('fetch', fetchMock);
     renderLogin('/library');
 

@@ -4,7 +4,8 @@
 // last-edited: 2026-10-10
 
 import { useCallback, useEffect, useState, useRef } from 'react';
-import { apiFetch, isAuthRedirectError } from '../utils/apiFetch';
+import { apiFetch } from '../utils/apiFetch';
+import { describeRequestError, responseErrorMessage, unwrapData } from '../utils/apiResponse';
 import {
   Box,
   Button,
@@ -65,17 +66,18 @@ export default function Users() {
   const load = useCallback(async () => {
     try {
       const [uResp, iResp] = await Promise.all([
-        apiFetch(`${API_BASE}/users`).then((r) => r.json()),
-        apiFetch(`${API_BASE}/users/invites`).then((r) => r.json()),
+        apiFetch(`${API_BASE}/users`),
+        apiFetch(`${API_BASE}/users/invites`),
       ]);
-      setUsers(uResp.users || []);
-      setInvites(iResp.invites || []);
+      if (!uResp.ok) throw new Error(await responseErrorMessage(uResp));
+      if (!iResp.ok) throw new Error(await responseErrorMessage(iResp));
+      const uBody = unwrapData<{ users?: User[] }>(await uResp.json());
+      const iBody = unwrapData<{ invites?: Invite[] }>(await iResp.json());
+      setUsers(uBody.users || []);
+      setInvites(iBody.invites || []);
+      setError('');
     } catch (err) {
-      setError(
-        isAuthRedirectError(err)
-          ? 'Your session has expired. Sign in again to continue.'
-          : 'Failed to load users'
-      );
+      setError(describeRequestError(err, 'Failed to load users'));
     }
   }, []);
 
@@ -92,17 +94,13 @@ export default function Users() {
       try {
         const resp = await apiFetch(`${API_BASE}${path}`, { method: 'POST' });
         if (!resp.ok) {
-          const body = await resp.json().catch(() => ({}));
-          setError(body?.error || failureMessage);
+          const reason = await responseErrorMessage(resp);
+          setError(reason.startsWith('HTTP ') ? `${failureMessage} (${reason})` : reason);
           return null;
         }
         return resp;
       } catch (err) {
-        setError(
-          isAuthRedirectError(err)
-            ? 'Your session has expired. Sign in again to continue.'
-            : failureMessage
-        );
+        setError(describeRequestError(err, failureMessage));
         return null;
       }
     },
@@ -131,12 +129,12 @@ export default function Users() {
     async (id: string) => {
       const resp = await runUserAction(`/users/${id}/reset-password`, 'Failed to reset password');
       if (!resp) return;
-      const data = await resp.json();
+      const data = await resp.json().catch(() => null);
       // The endpoint returns { token, login_url }. Copy the URL — it is what the
       // user actually clicks. The bare token is kept as a fallback for a server
       // that predates login_url, and because login_url is relative when
       // EXTERNAL_URL is unset (the admin then prepends the address themselves).
-      const payload = data?.data ?? data;
+      const payload = unwrapData<{ login_url?: string; token?: string } | null>(data);
       const copyable = payload?.login_url || payload?.token;
       if (copyable) {
         setCopiedToken(copyable);
@@ -318,18 +316,14 @@ function CreateInviteDialog({
         body: JSON.stringify({ username, role_id: roleId }),
       });
       if (!resp.ok) {
-        const body = await resp.json().catch(() => ({}));
-        throw new Error(body.error || 'Failed to create invite');
+        const reason = await responseErrorMessage(resp);
+        throw new Error(reason.startsWith('HTTP ') ? 'Failed to create invite' : reason);
       }
       setUsername('');
       onClose();
       onCreated();
     } catch (err: unknown) {
-      setError(
-        isAuthRedirectError(err)
-          ? 'Your session has expired. Sign in again to continue.'
-          : (err as Error).message
-      );
+      setError(describeRequestError(err, (err as Error).message));
     }
   };
 

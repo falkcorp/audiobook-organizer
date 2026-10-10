@@ -1,5 +1,5 @@
 // file: web/src/App.tsx
-// version: 1.26.0
+// version: 1.27.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-10-10
 import { useState, useEffect, useCallback, lazy, Suspense, useRef } from 'react';
@@ -18,7 +18,7 @@ import { useAuth } from './contexts/AuthContext';
 import { useOperationsStore } from './stores/useOperationsStore';
 import { useReviewStore } from './stores/useReviewStore';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
-import { apiFetch } from './utils/apiFetch';
+import { apiFetch, isAuthRedirectError } from './utils/apiFetch';
 
 // Lazy-loaded pages (code-split for smaller initial bundle)
 const Library = lazy(() => import('./pages/Library').then((m) => ({ default: m.Library })));
@@ -161,10 +161,17 @@ function App() {
           // Server is back, reload the page
           window.location.reload();
         }
-      } catch (_e) {
-        // Server still down (or, for an ApiAuthRedirectError, answering with a
-        // login page rather than the health JSON): either way it is not back
-        // in a usable state, so do not reload; increment attempts
+      } catch (e) {
+        if (isAuthRedirectError(e)) {
+          // The server is up, but the Cloudflare Access session expired while
+          // it was restarting, so every request is bounced to the login page.
+          // Counting this as "still down" would strand the user behind the
+          // reconnect overlay forever; a full reload hands the browser to the
+          // identity provider's sign-in page.
+          window.location.reload();
+          return;
+        }
+        // Server still down, increment attempts
         if (!isUnmountedRef.current) {
           setReconnectAttempts((prev) => prev + 1);
         }
