@@ -1,5 +1,5 @@
 // file: internal/querygrammar/querygrammar.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 9b2e4c71-0f3a-4d6e-8a15-7c3d9e2f1b40
 // last-edited: 2026-10-10
 
@@ -26,7 +26,10 @@
 // against every row of a library-sized scan, and RE2's linear-time guarantee
 // is linear in the program size times the input: before these limits,
 // /(?:.?){1000}zzz/ took 23.5 s over 40,000 titles and a 30 KB pattern
-// (accepted, under the 1 MB header limit) 2 m 10 s.
+// (accepted, under the 1 MB header limit) 2 m 10 s. The size limits refuse
+// the absurd values; a value under them can still be slow over a whole
+// library, so every caller that scans one also gives the scan a Budget
+// (budget.go) and refuses the search when it is spent.
 package querygrammar
 
 import (
@@ -40,23 +43,32 @@ import (
 )
 
 // Limits on a text value. Both refuse the value with an error (a 400 at the
-// HTTP boundary), never truncate it.
+// HTTP boundary), never truncate it. They do NOT bound how long a search
+// takes; Budget (budget.go) does that. Their job is to refuse, in
+// microseconds, programs too large to be a real search, and to keep ONE match
+// short enough that a Budget, which can only stop between matches, stops
+// close to its limit.
 //
-// Measured on an M1 Max over 40,000 synthetic titles (12 and 85 characters):
-// the cost of a regex scan grows with the compiled program size times the
-// title length, and most of all with nested optional repetition, which keeps
-// many threads alive at every position. (?:.?){10}zzz, 25 instructions, took
-// 73 ms over 12-character titles and 554 ms over 85-character ones;
-// (?:.?){30}zzz, 65 instructions, 253 ms and 1.27 s; (.*){1000}, 4,002
-// instructions, 1.3 s; (?:.?){1000}zzz, 2,005 instructions, 7 s and 43 s.
-// Ordinary title patterns are far smaller: ^\s*\p{L} is 6 instructions,
-// [a-z]{50} 52, a 26-way alternation repeated 20 times 62.
+// Measured on an M1 Max (one match, (?i) prefix included in the count):
 //
-// No program-size limit alone keeps EVERY pattern inside an interactive
-// budget (the 25-instruction case above already exceeds 15 ms), so these
-// limits bound the worst case to seconds rather than minutes, and a caller
-// that scans a whole library on a request path also bounds the scan's time
-// (the review query's evaluation deadline, reviewQueryEvalDeadline).
+//	pattern              instructions  85-char title  3.7 KB description
+//	.{100,}                       103          8 ns          70 µs
+//	.{120}                        122          6 ns          89 µs
+//	.{250}                        252          6 ns         387 µs
+//	(.*){100}                     402          4 µs          15 µs
+//	(?:.?){120}zzz                245        158 µs         7.9 ms
+//	(?:\pL?){120}zzz              245        258 µs          11 ms
+//	(.*){250}                   1,002         15 µs          12 µs
+//	(?:.?){1000}zzz             2,005        1.1 ms           43 ms
+//	(.*){1000}                  4,002         39 µs          35 µs
+//
+// MaxPatternInst = 500 accepts every cleanup search above that is under 500
+// (.{100,} and .{120} find over-long titles) and refuses (.*){1000} and
+// (?:.?){1000}zzz, which took 1.3 s and 23.5 s over 40,000 titles before
+// these limits. The worst program it admits, nested optional repetition near
+// 500 instructions, costs about 0.5 ms per title and about 20 ms per
+// description-sized field, so a Budget overshoots its limit by at most one
+// such match.
 const (
 	// MaxTextValueBytes is the longest text value accepted, in bytes. A
 	// title, author or series search term is a few dozen characters; 256
@@ -65,7 +77,7 @@ const (
 	// MaxPatternInst is the largest compiled program (regexp/syntax
 	// instructions, after Simplify expands counted repetition) a regex or a
 	// wildcard may compile to.
-	MaxPatternInst = 100
+	MaxPatternInst = 500
 )
 
 // checkTextValueLength refuses a value over MaxTextValueBytes.

@@ -1,5 +1,5 @@
 // file: internal/audiobooks/filter_unified_grammar_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 2c7e9a14-5b3f-4e81-9d06-a4f1c8b2e753
 // last-edited: 2026-10-10
 
@@ -186,7 +186,7 @@ func TestUnifiedGrammar_PatternValuesAreNotPushedDownAsExact(t *testing.T) {
 	bsf, ok := svc.buildBookSummaryFilter(ListFilters{FieldFilters: []FieldFilter{
 		{Field: "review", Value: "/^no/"},
 		{Field: "library_state", Value: "org*"},
-	}}, true)
+	}}, true, nil)
 	require.True(t, ok)
 	assert.Empty(t, bsf.ReviewStatus, "regex review value must stay on the predicate")
 	assert.Empty(t, bsf.LibraryState, "glob library_state value must stay on the predicate")
@@ -196,7 +196,7 @@ func TestUnifiedGrammar_PatternValuesAreNotPushedDownAsExact(t *testing.T) {
 
 	bsf, ok = svc.buildBookSummaryFilter(ListFilters{FieldFilters: []FieldFilter{
 		{Field: "review", Value: "no_match"},
-	}}, true)
+	}}, true, nil)
 	require.True(t, ok)
 	assert.Equal(t, "no_match", bsf.ReviewStatus, "plain literal is still pushed down")
 }

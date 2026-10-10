@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_search_cache.go
-// version: 2.2.0
+// version: 2.3.0
 // guid: c3572a50-dc5f-4325-a58a-c578d837cde8
-// last-edited: 2026-10-06
+// last-edited: 2026-10-10
 
 package audiobooks
 
@@ -18,6 +18,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/querygrammar"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 	"github.com/falkcorp/audiobook-organizer/internal/searchcache"
 )
@@ -180,6 +181,9 @@ func (svc *AudiobookService) GetAudiobooksPage(ctx context.Context, limit int, o
 	if err := FirstInvalidFilterValue(f.PerUserFilters); err != nil {
 		return nil, 0, SearchMeta{}, fmt.Errorf("invalid filter value: %w", err)
 	}
+	if err := CheckFilterSetSize(f.FieldFilters, f.PerUserFilters); err != nil {
+		return nil, 0, SearchMeta{}, fmt.Errorf("invalid filter value: %w", err)
+	}
 	if key, ok := svc.searchCacheKey(search, authorID, seriesID, f); ok {
 		books, total, meta, err := svc.cachedSearchPage(ctx, key, limit, offset, search, authorID, seriesID, f)
 		var pending *searchcache.PendingError
@@ -188,6 +192,11 @@ func (svc *AudiobookService) GetAudiobooksPage(ctx context.Context, limit int, o
 			return books, total, meta, err
 		case ctx.Err() != nil:
 			// The caller has gone; running the search again helps nobody.
+			return nil, 0, SearchMeta{}, err
+		case IsSearchLimitError(err):
+			// The shared build spent its pattern budget or found every
+			// pattern slot busy. Running it again uncached would cost the
+			// same again for the same answer.
 			return nil, 0, SearchMeta{}, err
 		case errors.Is(err, searchcache.ErrNotCurrent), errors.Is(err, searchcache.ErrBusy):
 			// The cache has no current list for a caller that must see every
@@ -482,4 +491,13 @@ func (e *listSearchEvaluator) Less(ctx context.Context, a, b string) (bool, erro
 		return false, nil
 	}
 	return ids[0] == a, nil
+}
+
+// IsSearchLimitError reports whether err is a querygrammar evaluation limit
+// (a spent pattern budget or every pattern slot busy): an answer about the
+// search, which callers pass on rather than retry or swallow.
+func IsSearchLimitError(err error) bool {
+	var slow *querygrammar.TooSlowError
+	var busy *querygrammar.BusyError
+	return errors.As(err, &slow) || errors.As(err, &busy)
 }

@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_query_bench_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b5d2c8e4-1f6a-4a37-9c08-7e4b3d2a6f91
 // last-edited: 2026-10-10
 
@@ -18,6 +18,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
+	"github.com/falkcorp/audiobook-organizer/internal/querygrammar"
 )
 
 // syntheticReviewSnapshot is an in-memory snapshot of n rows shaped like
@@ -121,7 +122,17 @@ func BenchmarkReviewQuery_40k(b *testing.B) {
 			b.ReportAllocs()
 			var listed int
 			for b.Loop() {
-				listed = len(mustEvaluate(b, base, q).refs)
+				// As production runs it: a query with a regex gets a fresh
+				// pattern budget per evaluation (runReviewEvaluation).
+				var budget *querygrammar.Budget
+				if q.title.costly() {
+					budget = querygrammar.NewBudget(time.Hour)
+				}
+				l, err := evaluateReviewQuery(base, q, budget)
+				if err != nil {
+					b.Fatal(err)
+				}
+				listed = len(l.refs)
 			}
 			b.ReportMetric(float64(listed), "rows_listed")
 		})

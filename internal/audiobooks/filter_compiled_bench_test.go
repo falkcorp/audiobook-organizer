@@ -1,7 +1,7 @@
 // file: internal/audiobooks/filter_compiled_bench_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 8d90d532-6d88-49e0-b5b8-a4bba9dc1ace
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package audiobooks
 
@@ -9,8 +9,10 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/querygrammar"
 )
 
 // BenchmarkCompiledPredicate_100k measures the production field-filter
@@ -46,11 +48,30 @@ func BenchmarkCompiledPredicate_100k(b *testing.B) {
 		{"owner-query", []FieldFilter{{Field: "metadata", Value: "applied", Negated: true}, {Field: "duration", Value: ">20m"}}, true},
 		{"library-state-organized", []FieldFilter{{Field: "library_state", Value: "organized"}}, false},
 	}
+	// "+budget" runs the same set with a pattern budget attached, as the
+	// list and count scans do (withBudget): the difference is the cost of
+	// timing every regex/glob match.
+	type run struct {
+		name      string
+		filters   []FieldFilter
+		wantMatch bool
+		budget    bool
+	}
+	var runs []run
 	for _, s := range sets {
+		runs = append(runs, run{s.name, s.filters, s.wantMatch, false})
+		if s.name == "title-regex" {
+			runs = append(runs, run{s.name + "+budget", s.filters, s.wantMatch, true})
+		}
+	}
+	for _, s := range runs {
 		b.Run(s.name, func(b *testing.B) {
 			cfs, err := compileFieldFilters(s.filters)
 			if err != nil {
 				b.Fatal(err)
+			}
+			if s.budget {
+				withBudget(cfs, querygrammar.NewBudget(time.Hour))
 			}
 			b.ReportAllocs()
 			b.ResetTimer()
