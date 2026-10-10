@@ -15,3 +15,10 @@ Vitest's 30 s limit on the CPU-starved Woodpecker host, where it had timed out. 
 The 400 test also lets MUI's exit transition finish before it checks that the
 dialog is still open. Before this change, a handler that closed the dialog still
 passed the test, because a closing dialog stays in the DOM for 195 ms.
+
+#### Woodpecker's web-test step runs Vitest with eight workers
+
+Vitest picks `availableParallelism() - 1` workers by default, which is 47 on the U1
+CI host. Running beside the vet and fmt steps, that starved the box until other
+tests (`Library.scopedTagCloud`, `DedupBookTab.selectAll`) made no progress for
+tens of seconds and hit the 30 s limit. `--maxWorkers=8` caps it.
