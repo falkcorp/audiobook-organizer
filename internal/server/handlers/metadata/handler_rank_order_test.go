@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata/handler_rank_order_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: a628796c-ecbd-4442-8944-e88a2628321a
 // last-edited: 2026-10-10
 
@@ -149,8 +149,10 @@ func TestBulkFetchMetadata_PickIgnoresRankScore(t *testing.T) {
 	d.mfs.EXPECT().SearchMetadataForBookWithOptions("b1", "", "", "", "", mock.Anything).
 		Return(&metafetch.SearchMetadataResponse{Results: []metafetch.MetadataCandidate{review, x, y}}, nil)
 	var saved *database.Book
-	d.mfs.EXPECT().CommitApply("b1", mock.Anything, mock.Anything, mock.Anything, "Audible").
-		Run(func(_ string, _ *database.Book, b *database.Book, _ *metafetch.AuthorCredits, _ string) { saved = b }).
+	d.mfs.EXPECT().CommitCandidateApply("b1", mock.Anything, mock.Anything, mock.Anything, candidateFromSource("Audible")).
+		Run(func(_ string, _ *database.Book, b *database.Book, _ *metafetch.AuthorCredits, _ *metafetch.MetadataCandidate) {
+			saved = b
+		}).
 		Return(&database.Book{ID: "b1"}, nil)
 	d.mfs.EXPECT().ApplyMetadataSystemTags("b1", "Audible", "").Return()
 

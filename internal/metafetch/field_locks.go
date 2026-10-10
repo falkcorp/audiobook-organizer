@@ -1,7 +1,7 @@
 // file: internal/metafetch/field_locks.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 2e223955-0b75-4da2-8cbe-a6a99c75bf07
-// last-edited: 2026-10-03
+// last-edited: 2026-10-10
 
 package metafetch
 
@@ -151,7 +151,7 @@ func (mfs *Service) loadFieldLocks(bookID string) (database.FieldLocks, error) {
 // is returned; the caller must not persist the book then.
 //
 // It also returns the author join the apply read and wrote under the store's
-// book_authors lock (nil when no author was applied), for CommitApply's history.
+// book_authors lock (nil when no author was applied), for commitApply's history.
 func (mfs *Service) guardedApply(book *database.Book, meta metadata.BookMetadata, source string) (metadata.BookMetadata, []string, *AuthorCredits, error) {
 	meta, skipped, credits, _, err := mfs.guardedApplyWith(book, meta, source, false)
 	return meta, skipped, credits, err
