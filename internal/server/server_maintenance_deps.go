@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.57.2
+// version: 1.58.0
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 // This file implements the maintenance.ServerDeps interface on *Server, giving
 // the maintenance plugin access to server internals without creating an import
@@ -166,25 +166,6 @@ func (s *Server) RunBulkWriteBack(ctx context.Context, opID string, bookIDs []st
 
 func (s *Server) RunAutoPurgeSoftDeleted(opID string) {
 	s.runAutoPurgeSoftDeleted(opID)
-}
-
-// ExecuteSeriesPrune and ExecuteSeriesNormalizeCore took the store as a
-// parameter until 2026-08-19, threaded in by a caller that had fetched it from
-// this same Server. They close over s.store instead. The nil guard came with the
-// parameter and is kept verbatim so a not-yet-initialized database still fails
-// with the same message rather than panicking inside the helper.
-func (s *Server) ExecuteSeriesPrune(ctx context.Context, progress operations.ProgressReporter, opID string) error {
-	if s.store == nil {
-		return fmt.Errorf("database not initialized")
-	}
-	return s.executeSeriesPrune(ctx, s.store, progress, opID)
-}
-
-func (s *Server) ExecuteSeriesNormalizeCore(ctx context.Context, opID string) ([]string, error) {
-	if s.store == nil {
-		return nil, fmt.Errorf("database not initialized")
-	}
-	return executeSeriesNormalizeCore(ctx, s.store, opID)
 }
 
 // ---- one-shot startup ops ----
