@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.174.1
+// version: 2.175.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-10
 
@@ -3753,6 +3753,27 @@ export async function applyMetadataCandidate(
   });
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to apply metadata');
+  }
+  const body = await response.json();
+  return body.data;
+}
+
+/**
+ * Un-rejects one candidate for one book (POST /metadata/unreject-candidate):
+ * the owner's way back from a rejection, by book and candidate alone.
+ * `unrejected` is false when no rejection matched the candidate.
+ */
+export async function unrejectCandidate(
+  bookId: string,
+  candidate: MetadataCandidate
+): Promise<{ unrejected: boolean }> {
+  const response = await apiFetch(`${API_BASE}/metadata/unreject-candidate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ book_id: bookId, candidate }),
+  });
+  if (!response.ok) {
+    throw await buildApiError(response, 'Failed to undo the rejection');
   }
   const body = await response.json();
   return body.data;

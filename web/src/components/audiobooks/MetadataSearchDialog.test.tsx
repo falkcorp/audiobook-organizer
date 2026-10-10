@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/MetadataSearchDialog.test.tsx
-// version: 2.1.0
+// version: 2.2.0
 // guid: b2cf5226-9131-4f1a-9fd2-5c3286e4f800
 // last-edited: 2026-10-10
 
@@ -20,6 +20,7 @@ vi.mock('../../services/api', async (importOriginal) => {
     getBook: vi.fn(),
     undoLastApply: vi.fn(),
     markNoMatch: vi.fn(),
+    unrejectCandidate: vi.fn(),
   };
 });
 
@@ -30,6 +31,7 @@ import {
   pollOperationV2,
   getBook,
   markNoMatch,
+  unrejectCandidate,
 } from '../../services/api';
 import type { OperationV2 } from '../../services/api';
 import { submitStagedApply } from './stagedMetadataApply';
@@ -39,6 +41,7 @@ const mockApply = vi.mocked(applyMetadataCandidate);
 const mockPoll = vi.mocked(pollOperationV2);
 const mockGetBook = vi.mocked(getBook);
 const mockNoMatch = vi.mocked(markNoMatch);
+const mockUnreject = vi.mocked(unrejectCandidate);
 
 const theBook = { id: 'b1', title: 'A Title', author_name: 'An Author' } as Book;
 const toast = vi.fn();
@@ -74,7 +77,8 @@ const rejectedOne: MetadataCandidate = {
   author: 'Someone',
   source: 'audible',
   // Scored above every other fixture so it renders first (the dialog sorts
-  // by score): the case that matters is a rejected candidate on top.
+  // by rank score, falling back to score): the case that matters is a
+  // rejected candidate on top.
   score: 0.99,
   apply_check: { owner_rejected: true, detail: 'rejected by the owner' },
 };
@@ -141,7 +145,7 @@ describe('MetadataSearchDialog — candidate checks', () => {
     const picks = () => screen.getAllByRole('button', { name: /^(Pick|Picked)$/ });
     fireEvent.click(picks()[0]);
     expect(toast).toHaveBeenCalledWith(
-      'You rejected this candidate for this book. Un-reject it to apply it.',
+      'You rejected this candidate for this book. Undo the rejection to apply it.',
       'warning'
     );
     expect(screen.queryByTestId('staged-pick')).not.toBeInTheDocument();
@@ -150,6 +154,31 @@ describe('MetadataSearchDialog — candidate checks', () => {
     fireEvent.click(picks()[1]);
     expect(await screen.findByTestId('staged-pick')).toHaveTextContent('Plain');
     expect(mockApply).not.toHaveBeenCalled();
+  });
+
+  it('Undo un-rejects the candidate for this book, and it can then be staged', async () => {
+    mockUnreject.mockResolvedValue({ unrejected: true });
+    searchReturns(rejectedOne, plain);
+    renderDialog();
+    await screen.findByText('Rejected One');
+
+    fireEvent.click(screen.getByTestId('owner-rejected-undo'));
+    await waitFor(() => expect(mockUnreject).toHaveBeenCalledWith('b1', rejectedOne));
+    await waitFor(() => expect(screen.queryByTestId('owner-rejected-chip')).not.toBeInTheDocument());
+    expect(toast).toHaveBeenCalledWith('Rejection undone: this candidate can be applied again.', 'success');
+
+    fireEvent.click(screen.getAllByRole('button', { name: /^(Pick|Picked)$/ })[0]);
+    expect(await screen.findByTestId('staged-pick')).toHaveTextContent('Rejected One');
+  });
+
+  it('a failed Undo keeps the marker and says why', async () => {
+    mockUnreject.mockRejectedValue(new Error('Failed to undo the rejection'));
+    searchReturns(rejectedOne);
+    renderDialog();
+    await screen.findByText('Rejected One');
+    fireEvent.click(screen.getByTestId('owner-rejected-undo'));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith('Failed to undo the rejection', 'error'));
+    expect(screen.getByTestId('owner-rejected-chip')).toBeInTheDocument();
   });
 
 });
