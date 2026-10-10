@@ -1,5 +1,5 @@
 // file: internal/ai/telemetry_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5d0b3f7e-6c1a-4e48-9a52-0f1b7c9d2e31
 // last-edited: 2026-10-10
 
@@ -541,12 +541,12 @@ func assertSpanHasNoText(t *testing.T, sp sdktrace.ReadOnlySpan, banned ...strin
 	check("name", sp.Name())
 	check("status description", sp.Status().Description)
 	for _, kv := range sp.Attributes() {
-		check("attribute "+string(kv.Key), kv.Value.Emit())
+		check("attribute "+string(kv.Key), kv.Value.String())
 	}
 	for _, ev := range sp.Events() {
 		check("event name", ev.Name)
 		for _, kv := range ev.Attributes {
-			check("event "+ev.Name+" attribute "+string(kv.Key), kv.Value.Emit())
+			check("event "+ev.Name+" attribute "+string(kv.Key), kv.Value.String())
 		}
 	}
 }
@@ -587,7 +587,7 @@ func TestFailedCallSpanCarriesNoErrorText(t *testing.T) {
 				}
 				got := map[string]string{}
 				for _, kv := range sp.Attributes() {
-					got[string(kv.Key)] = kv.Value.Emit()
+					got[string(kv.Key)] = kv.Value.String()
 				}
 				if got["ai.failure_reason"] != reasonPermanent || got["ai.outcome"] != outcomeError ||
 					got["http.response.status_code"] != "401" {
@@ -624,7 +624,7 @@ func TestUnreachableCallSpanCarriesNoErrorText(t *testing.T) {
 		assertSpanHasNoText(t, sp, host, "127.0.0.1", "dial tcp", "connection refused", "Post ")
 		got := map[string]string{}
 		for _, kv := range sp.Attributes() {
-			got[string(kv.Key)] = kv.Value.Emit()
+			got[string(kv.Key)] = kv.Value.String()
 		}
 		if got["ai.failure_reason"] != reasonUnreachable {
 			t.Errorf("ai.failure_reason = %q, want %q", got["ai.failure_reason"], reasonUnreachable)
