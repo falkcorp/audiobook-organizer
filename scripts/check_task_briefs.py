@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # file: scripts/check_task_briefs.py
-# version: 1.0.2
+# version: 1.1.0
 # guid: 93f31e1f-3605-4f23-902b-2b8cf08b8c2d
-# last-edited: 2026-10-09
+# last-edited: 2026-10-10
 
 """Check and regenerate the dependency graph of the holistic-roadmap task briefs.
 
@@ -39,6 +39,13 @@ BLOCKS_RE = re.compile(
     r" \(generated from every brief's `Merge first` list on \d{4}-\d{2}-\d{2}; do not hand-edit\)$"
 )
 GENERATED_DATE_RE = re.compile(r" on \d{4}-\d{2}-\d{2};")
+# The four header lines, each a closed one-line comment. An unclosed line (a dropped " -->")
+# turns the rest of the brief into one HTML comment when rendered, and bump_header's regexes
+# silently stop matching it, so later regens leave the header stale without complaint.
+HEADER_RE = re.compile(
+    r"\A<!-- file: (\S+) -->\n<!-- version: \d+\.\d+\.\d+ -->\n"
+    r"<!-- guid: [0-9a-f-]{36} -->\n<!-- last-edited: \d{4}-\d{2}-\d{2} -->\n"
+)
 
 
 def read(path: str) -> str:
@@ -78,6 +85,7 @@ def load(root: str) -> dict[str, dict]:
             "blocks": [] if not bl or bl.group(1) == "none briefed" else bl.group(1).split(", "),
             "blocks_dangling": bl.group(2).split(", ") if bl and bl.group(2) else [],
             "blocks_ok": bl is not None,
+            "header": HEADER_RE.match(text),
         }
     return briefs
 
@@ -91,6 +99,11 @@ def verify(briefs: dict[str, dict]) -> int:
         print(msg)
 
     for bid, b in briefs.items():
+        hdr = b["header"]
+        if not hdr:
+            report(f"{bid}: header is not four closed '<!-- file/version/guid/last-edited -->' lines")
+        elif not b["path"].replace(os.sep, "/").endswith(hdr.group(1)):
+            report(f"{bid}: header file: {hdr.group(1)} does not match the brief's path")
         if not b["merge_first_ok"]:
             report(f"{bid}: Depends on does not open with '**Merge first:** ...'")
         if not b["blocks_ok"]:
