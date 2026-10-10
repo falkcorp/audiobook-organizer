@@ -268,7 +268,7 @@ func TestFinishApplyFileWorkTimed_EmitsPhaseLine(t *testing.T) {
 
 	pt := NewApplyPhaseTimings()
 	pt.Add(PhaseGateWait, 7*time.Millisecond)
-	if err := svc.FinishApplyFileWorkTimed(book.ID, "", false, true, nil, pt); err != nil {
+	if err := svc.FinishApplyFileWorkTimed(context.Background(), book.ID, "", false, true, nil, pt); err != nil {
 		t.Fatalf("FinishApplyFileWorkTimed: %v", err)
 	}
 

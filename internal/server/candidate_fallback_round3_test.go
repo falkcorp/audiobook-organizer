@@ -1,7 +1,7 @@
 // file: internal/server/candidate_fallback_round3_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7f057c74-2af0-44a5-bf9a-214d739ab5f0
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 
 package server
 
@@ -37,7 +37,7 @@ func TestUnseenOwnerMarker_DoesNotLiftReviewOnlySource(t *testing.T) {
 		cand := metafetch.MetadataCandidate{Title: "Moon Book", Author: "Zed Quill", Source: source, Score: 0.99, DurationSec: 36000}
 
 		svc := &fakeApplySvc{candidates: candidateJSON(t, cand)}
-		out := applyCachedCandidateForBookTimed(svc, books(), "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, ownerMarker(), "")
+		out := applyCachedCandidateForBookTimed(context.Background(), svc, books(), "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, ownerMarker(), "")
 		if out.Applied || out.OwnerReviewed || out.Reason != applySkipGateBlocked ||
 			out.Gate == nil || out.Gate.Reason != applygate.ReasonReviewOnlySource {
 			t.Fatalf("%s via hashless marker: outcome %+v (gate %+v), want gate_blocked / review_only_source", source, out, out.Gate)
@@ -48,7 +48,7 @@ func TestUnseenOwnerMarker_DoesNotLiftReviewOnlySource(t *testing.T) {
 
 		for name, pin := range map[string]*metafetch.CandidatePin{"bulk pin": bulkPin(cand), "row pin": rowPin(cand)} {
 			svc := &fakeApplySvc{candidates: candidateJSON(t, cand)}
-			out := applyCachedCandidateForBookTimed(svc, books(), "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, pin, "")
+			out := applyCachedCandidateForBookTimed(context.Background(), svc, books(), "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, pin, "")
 			if !out.Applied || !out.OwnerReviewed {
 				t.Fatalf("%s via %s matching the shown candidate: outcome %+v, want applied as owner-reviewed", source, name, out)
 			}
@@ -127,7 +127,7 @@ func TestBulkApplyPreview_SelectAllUsesTheUnseenRule(t *testing.T) {
 func TestUnseenOwnerMarker_StillLiftsCertaintyOnChainCandidate(t *testing.T) {
 	books, cand := refusedByAuthorAndTranscription()
 	svc := &fakeApplySvc{candidates: candidateJSON(t, cand)}
-	out := applyCachedCandidateForBookTimed(svc, books, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, ownerMarker(), "")
+	out := applyCachedCandidateForBookTimed(context.Background(), svc, books, "b1", false, nil, metafetch.NewApplyPhaseTimings(), nil, ownerMarker(), "")
 	if !out.Applied || !out.OwnerReviewed {
 		t.Fatalf("outcome %+v, want the marker to lift the certainty legs on an Audible candidate", out)
 	}

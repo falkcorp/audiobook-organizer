@@ -1,7 +1,7 @@
 // file: internal/itunes/service/importer.go
-// version: 1.40.0
+// version: 1.41.0
 // guid: 2b8e5f1a-4c7d-4e9f-b3a0-6d8c2e7a4f1b
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package itunesservice
 
@@ -37,6 +37,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
+	"github.com/falkcorp/audiobook-organizer/internal/tagger"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 )
 
@@ -1077,7 +1078,9 @@ func (imp *Importer) enrichImportedBooks(ctx context.Context, bookIDs []string, 
 	var breakerFails atomic.Int32
 	var breakerTripped sync.Once
 
-	enrichCtx, cancel := context.WithCancel(ctx)
+	// The import enriches every imported book: a bulk write, so the file
+	// work each fetch queues keeps no .bak-* sibling (owner decision D69).
+	enrichCtx, cancel := context.WithCancel(tagger.WithoutBackup(ctx))
 	defer cancel()
 
 	reporter := &loggerReporterAdapter{log: log}

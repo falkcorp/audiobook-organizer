@@ -1,11 +1,12 @@
 // file: internal/server/batch_apply_review_snapshot_pin_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2b7d4e91-6c05-4a38-9f1e-7d3a8c52e0b4
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -80,7 +81,7 @@ func TestApply_PinFromAStaleReviewSnapshotIsRefused(t *testing.T) {
 
 	svc := &fakeApplySvc{candidates: candidateJSON(t, newCand)}
 	books := fakeBooks{book.ID: book}
-	out := applyCachedCandidateForBookTimed(svc, books, book.ID, true, nil, metafetch.NewApplyPhaseTimings(), nil, &pin, "")
+	out := applyCachedCandidateForBookTimed(context.Background(), svc, books, book.ID, true, nil, metafetch.NewApplyPhaseTimings(), nil, &pin, "")
 	require.False(t, out.Applied)
 	require.Equal(t, applySkipStaleCandidate, out.Reason)
 	require.Empty(t, svc.appliedIDs)

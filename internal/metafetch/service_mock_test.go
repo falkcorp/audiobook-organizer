@@ -1,7 +1,7 @@
 // file: internal/metafetch/service_mock_test.go
-// version: 1.13.0
+// version: 1.15.0
 // guid: c3d4e5f6-a7b8-9012-cdef-012345678901
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 
 package metafetch
 
@@ -1802,7 +1802,7 @@ func TestApplyMetadataFileIO(t *testing.T) {
 			},
 		}
 		svc := NewService(mock)
-		err := svc.ApplyMetadataFileIO("nonexistent")
+		err := svc.ApplyMetadataFileIO(context.Background(), "nonexistent")
 		require.Error(t, err, "a missing book must be reported, not silently ignored")
 		assert.Contains(t, err.Error(), "nonexistent", "the error must name the book")
 	})
@@ -1814,7 +1814,7 @@ func TestApplyMetadataFileIO(t *testing.T) {
 			},
 		}
 		svc := NewService(mock)
-		err := svc.ApplyMetadataFileIO("b1")
+		err := svc.ApplyMetadataFileIO(context.Background(), "b1")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "pebble closed")
 	})
@@ -1838,7 +1838,7 @@ func TestApplyMetadataFileIO(t *testing.T) {
 			},
 		}
 		svc := NewService(mock)
-		err := svc.ApplyMetadataFileIO("b1")
+		err := svc.ApplyMetadataFileIO(context.Background(), "b1")
 		require.Error(t, err, "a pipeline failure must reach the caller")
 		assert.Contains(t, err.Error(), "list exploded")
 		assert.Contains(t, err.Error(), "b1", "the error must name the book")
@@ -1860,6 +1860,6 @@ func TestApplyMetadataFileIO(t *testing.T) {
 			},
 		}
 		svc := NewService(mock)
-		assert.NoError(t, svc.ApplyMetadataFileIO("b1"))
+		assert.NoError(t, svc.ApplyMetadataFileIO(context.Background(), "b1"))
 	})
 }
