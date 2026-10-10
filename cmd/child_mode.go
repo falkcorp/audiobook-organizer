@@ -1,13 +1,12 @@
 // file: cmd/child_mode.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 8c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
-// last-edited: 2026-10-06
+// last-edited: 2026-10-10
 
 package cmd
 
 import (
 	"fmt"
-	"log/slog"
 	"os"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -74,11 +73,21 @@ func RunOperationRunner() {
 		fmt.Fprintf(os.Stderr, "child mode: initializeStore: %v\n", err)
 		os.Exit(2)
 	}
-	// Best-effort: load persisted config so plugin registration sees the
-	// same AppConfig as the parent (notably RootDir, which the maintenance
-	// plugin gate at server.go:413 requires to be non-empty).
+	// Load persisted config so plugin registration sees the same AppConfig as
+	// the parent (notably RootDir, which the maintenance plugin gate in
+	// server.go requires to be non-empty).
+	//
+	// Fatal, the same as the server's "loadConfigFromDB" startup step
+	// (internal/startup.Table). Until 2026-10-10 a failure here was a warning
+	// and the child ran its op on defaults; an op that saves settings (dedup
+	// calibrate-composite -> ApplyUpdates -> SaveConfigToDatabase) writes the
+	// whole config struct as config_blob, so it would have overwritten the
+	// stored settings with those defaults. An empty settings keyspace (a fresh
+	// install) is not an error: LoadConfigFromDatabase returns nil for it.
 	if err := loadConfigFromDB(store); err != nil {
-		slog.Warn("child mode: loadConfigFromDB", "err", err)
+		fmt.Fprintf(os.Stderr, "child mode: failed to load config from database: %v\n", err)
+		_ = closeStore()
+		os.Exit(2)
 	}
 	if config.Snapshot().RootDir == "" {
 		// Re-apply env override after loadConfigFromDB may have reset it.

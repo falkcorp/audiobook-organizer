@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-10-startup-step-classes-executive-summary.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: ffeeeec4-a987-4932-b6d7-c01a304778f4 -->
 <!-- last-edited: 2026-10-10 -->
 
@@ -39,6 +39,12 @@ PR: pending (branch `task/07-r3`). Task brief:
 - **The fix:** the read failure is now reported as an error and the server
   stops before it serves. An empty settings store (a fresh install) is not a
   failure and starts normally.
+- **Background jobs too:** some jobs run in a separate helper process, which
+  read the saved settings the same way and also carried on with defaults when
+  the read failed. A job that saves settings (for example, duplicate-detection
+  calibration) could have replaced the saved settings the same way. The helper
+  process now stops with an error instead of running the job; a fresh install
+  with nothing saved still runs normally.
 
 ## Metrics start failure
 
