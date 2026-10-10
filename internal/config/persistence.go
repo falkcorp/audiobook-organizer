@@ -1,5 +1,5 @@
 // file: internal/config/persistence.go
-// version: 1.46.1
+// version: 1.47.0
 // guid: 9c8d7e6f-5a4b-3c2d-1e0f-9a8b7c6d5e4f
 // last-edited: 2026-10-10
 
@@ -7,6 +7,7 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -731,6 +732,15 @@ func LoadConfigFromDatabase(store database.SettingsStore) error {
 		// cmd runs this as the Fatal startup step "loadConfigFromDB"
 		// (internal/startup.Table). An empty settings keyspace is not an
 		// error: GetAllSettings returns no rows and nil.
+		//
+		// An unreadable row gets the same wording as cmd's key-regeneration
+		// guard (keys + Remedy), which hits the same rows first when no key
+		// file exists, so the two messages agree on what to do.
+		var unreadable *database.UnreadableSettingsError
+		if errors.As(err, &unreadable) {
+			return fmt.Errorf("settings row(s) %s cannot be read; %s: %w",
+				unreadable.QuotedKeys(), unreadable.Remedy(), err)
+		}
 		return fmt.Errorf("read settings: %w", err)
 	}
 

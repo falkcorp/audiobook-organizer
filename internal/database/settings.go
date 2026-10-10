@@ -1,5 +1,5 @@
 // file: internal/database/settings.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 8a7b6c5d-4e3f-2a1b-0c9d-8e7f6a5b4c3d
 // last-edited: 2026-10-10
 
@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/cockroachdb/pebble/v2"
@@ -375,8 +376,9 @@ func (s *PebbleStore) SetSetting(key, value, typ string, isSecret bool) error {
 // Every writer under the prefix (SetSetting, EmbeddingStore's index flag,
 // cmd/pebble-inject-skip) stores the JSON Setting envelope, so a row that does
 // not unmarshal is corruption, not another format. All such keys are reported
-// together; the error names keys only, never stored values (a value may be a
-// secret).
+// together as an *UnreadableSettingsError; the error names keys only, never
+// stored values (a value may be a secret). An iterator or close error is
+// returned wrapped, not as that type.
 func (s *PebbleStore) GetAllSettings() ([]Setting, error) {
 	iter, err := s.db.NewIter(&pebble.IterOptions{
 		LowerBound: []byte(settingKeyPrefix),
@@ -414,25 +416,72 @@ func collectSettings(iter settingsIter) (settings []Setting, err error) {
 		}
 	}()
 
-	var corrupt []error
+	var unreadable UnreadableSettingsError
 	for iter.First(); iter.Valid(); iter.Next() {
 		var setting Setting
 		if uerr := json.Unmarshal(iter.Value(), &setting); uerr != nil {
-			key := strings.TrimPrefix(string(iter.Key()), settingKeyPrefix)
+			unreadable.Keys = append(unreadable.Keys, strings.TrimPrefix(string(iter.Key()), settingKeyPrefix))
 			// %T, not uerr: a json.SyntaxError's text can quote the stored
 			// bytes, and the stored bytes may be an encrypted secret.
-			corrupt = append(corrupt, fmt.Errorf("setting %q: stored row is not a valid setting record (%T)", key, uerr))
+			unreadable.causes = append(unreadable.causes, fmt.Sprintf("%T", uerr))
 			continue
 		}
 		settings = append(settings, setting)
 	}
+	// Checked before the unreadable rows: an iterator error means the list of
+	// unreadable keys may itself be incomplete, so it is not reported as one.
 	if ierr := iter.Error(); ierr != nil {
 		return nil, fmt.Errorf("iterate settings: %w", ierr)
 	}
-	if len(corrupt) > 0 {
-		return nil, fmt.Errorf("%d unreadable settings row(s): %w", len(corrupt), errors.Join(corrupt...))
+	if len(unreadable.Keys) > 0 {
+		return nil, &unreadable
 	}
 	return settings, nil
+}
+
+// UnreadableSettingsError is GetAllSettings' error when one or more rows under
+// the settings prefix hold bytes that are not a Setting record. It is distinct
+// from an iterator or close error (which wraps the Pebble error instead)
+// because the remedy is different: the store itself is readable, and the named
+// rows have to be repaired or removed. No startup override helps, because every
+// startup path that reads settings (cmd's key-regeneration guard and
+// config.LoadConfigFromDatabase) fails on the same rows. Use errors.As.
+//
+// Keys are the setting names without the "setting:" prefix, in key order. The
+// error never carries stored bytes; a value may be an encrypted secret.
+type UnreadableSettingsError struct {
+	Keys   []string
+	causes []string // per-key decode error type (%T), parallel to Keys
+}
+
+func (e *UnreadableSettingsError) Error() string {
+	parts := make([]string, len(e.Keys))
+	for i, k := range e.Keys {
+		cause := "unknown"
+		if i < len(e.causes) {
+			cause = e.causes[i]
+		}
+		parts[i] = fmt.Sprintf("setting %q: stored row is not a valid setting record (%s)", k, cause)
+	}
+	return fmt.Sprintf("%d unreadable settings row(s): %s", len(e.Keys), strings.Join(parts, "; "))
+}
+
+// QuotedKeys renders Keys for an operator message: each name quoted, comma
+// separated.
+func (e *UnreadableSettingsError) QuotedKeys() string {
+	quoted := make([]string, len(e.Keys))
+	for i, k := range e.Keys {
+		quoted[i] = strconv.Quote(k)
+	}
+	return strings.Join(quoted, ", ")
+}
+
+// Remedy is the operator instruction shared by every startup path that
+// surfaces this error, so the key-regeneration guard and the config loader
+// cannot drift into giving different advice for the same rows.
+func (e *UnreadableSettingsError) Remedy() string {
+	return "startup stops until each named row (Pebble key \"" + settingKeyPrefix +
+		"<name>\") is repaired or removed"
 }
 
 func (s *PebbleStore) DeleteSetting(key string) error {

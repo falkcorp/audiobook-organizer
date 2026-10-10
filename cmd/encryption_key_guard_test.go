@@ -1,13 +1,14 @@
 // file: cmd/encryption_key_guard_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2f58c3a9-6e41-4b07-90d8-7a13e5b2f846
-// last-edited: 2026-09-09
+// last-edited: 2026-10-10
 
 package cmd
 
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -138,5 +139,47 @@ func TestGuard_OverrideLetsTheOperatorThrough(t *testing.T) {
 
 	if err := guardAgainstKeyRegeneration(store, t.TempDir(), t.TempDir()); err != nil {
 		t.Errorf("%s=1 did not allow startup: %v", allowKeyRegenEnv, err)
+	}
+}
+
+// TestGuard_UnreadableSettingsRowGetsItsOwnMessage — a corrupt settings row is
+// not a census the override can get past: loadConfigFromDB fails on the same
+// row next, and a key generated meanwhile would be trusted on the following
+// boot while every stored secret fails to decrypt. So the message names the
+// rows and the repair, and must not offer the override.
+func TestGuard_UnreadableSettingsRowGetsItsOwnMessage(t *testing.T) {
+	t.Setenv(allowKeyRegenEnv, "")
+	unreadable := &database.UnreadableSettingsError{Keys: []string{"openai_api_key", "config_blob"}}
+	store := &guardStore{err: unreadable}
+
+	err := guardAgainstKeyRegeneration(store, t.TempDir(), t.TempDir())
+	if err == nil {
+		t.Fatal("guard proceeded despite unreadable settings rows")
+	}
+	var got *database.UnreadableSettingsError
+	if !errors.As(err, &got) {
+		t.Errorf("typed error not preserved: %v", err)
+	}
+	for _, want := range []string{`"openai_api_key"`, `"config_blob"`, unreadable.Remedy()} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not contain %q: %v", want, err)
+		}
+	}
+	if strings.Contains(err.Error(), allowKeyRegenEnv) {
+		t.Errorf("error offers the override, which cannot help for an unreadable row: %v", err)
+	}
+}
+
+// TestGuard_WrappedUnreadableSettingsErrorIsRecognised — the check is
+// errors.As, so a store layer that wraps the error keeps the specific message.
+func TestGuard_WrappedUnreadableSettingsErrorIsRecognised(t *testing.T) {
+	t.Setenv(allowKeyRegenEnv, "")
+	unreadable := &database.UnreadableSettingsError{Keys: []string{"x"}}
+	store := &guardStore{err: fmt.Errorf("layer: %w", unreadable)}
+
+	err := guardAgainstKeyRegeneration(store, t.TempDir(), t.TempDir())
+	if err == nil || strings.Contains(err.Error(), allowKeyRegenEnv) ||
+		!strings.Contains(err.Error(), unreadable.Remedy()) {
+		t.Fatalf("wrapped unreadable-row error got the census-error message: %v", err)
 	}
 }

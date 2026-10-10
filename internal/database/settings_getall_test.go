@@ -1,5 +1,5 @@
 // file: internal/database/settings_getall_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f0d6a52-9c1e-4b7a-8e25-6d4c1f0a9b83
 // last-edited: 2026-10-10
 
@@ -100,6 +100,13 @@ func TestGetAllSettings_EveryCorruptRowIsNamed(t *testing.T) {
 			t.Errorf("error does not name %s: %v", k, err)
 		}
 	}
+	var unreadable *UnreadableSettingsError
+	if !errors.As(err, &unreadable) {
+		t.Fatalf("err is %T, want *UnreadableSettingsError: %v", err, err)
+	}
+	if got := strings.Join(unreadable.Keys, ","); got != "openai_api_key,some_flag" {
+		t.Errorf("Keys = %q, want openai_api_key,some_flag (no prefix, key order)", got)
+	}
 }
 
 // fakeIter replays rows and then reports iterErr / closeErr.
@@ -131,6 +138,12 @@ func TestCollectSettings_IteratorErrorFails(t *testing.T) {
 	if !errors.Is(err, ioErr) {
 		t.Fatalf("err = %v, want wrapping %v", err, ioErr)
 	}
+	// Not reported as unreadable rows: the census itself failed, so the
+	// caller's "repair the named rows" remedy would be wrong.
+	var unreadable *UnreadableSettingsError
+	if errors.As(err, &unreadable) {
+		t.Fatalf("iterator error reported as unreadable rows: %v", err)
+	}
 	if got != nil {
 		t.Fatalf("partial result returned alongside the error: %+v", got)
 	}
@@ -159,5 +172,17 @@ func TestCollectSettings_CleanIteration(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Key != "config_blob" {
 		t.Fatalf("got %+v", got)
+	}
+}
+
+// A corrupt row seen before an iterator error must not turn the I/O failure
+// into an "unreadable rows" error: the key list may be incomplete.
+func TestCollectSettings_IteratorErrorWinsOverUnreadableRow(t *testing.T) {
+	ioErr := errors.New("simulated pebble read error")
+	it := &fakeIter{keys: []string{"setting:bad"}, vals: []string{"garbage"}, iterErr: ioErr}
+	_, err := collectSettings(it)
+	var unreadable *UnreadableSettingsError
+	if !errors.Is(err, ioErr) || errors.As(err, &unreadable) {
+		t.Fatalf("err = %v (%T), want the wrapped iterator error only", err, err)
 	}
 }

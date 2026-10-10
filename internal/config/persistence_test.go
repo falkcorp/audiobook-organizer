@@ -1,5 +1,5 @@
 // file: internal/config/persistence_test.go
-// version: 1.23.0
+// version: 1.24.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
 // last-edited: 2026-10-10
 
@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -52,6 +53,28 @@ func TestLoadConfigFromDatabase(t *testing.T) {
 		err := LoadConfigFromDatabase(store)
 		if !errors.Is(err, boom) {
 			t.Fatalf("expected the GetAllSettings error, got %v", err)
+		}
+	})
+
+	t.Run("unreadable settings rows name the keys and the shared remedy", func(t *testing.T) {
+		// Same wording as cmd's key-regeneration guard, which reports these
+		// rows first when no key file exists; the two must give one remedy.
+		store := mocks.NewMockStore(t)
+		unreadable := &database.UnreadableSettingsError{Keys: []string{"config_blob", "openai_api_key"}}
+		store.EXPECT().GetAllSettings().Return(nil, unreadable).Once()
+
+		err := LoadConfigFromDatabase(store)
+		var got *database.UnreadableSettingsError
+		if !errors.As(err, &got) || got != unreadable {
+			t.Fatalf("typed error not preserved: %v", err)
+		}
+		for _, want := range []string{unreadable.QuotedKeys(), unreadable.Remedy()} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error does not contain %q: %v", want, err)
+			}
+		}
+		if strings.Contains(err.Error(), "read settings:") {
+			t.Errorf("unreadable rows got the generic read-error message: %v", err)
 		}
 	})
 
