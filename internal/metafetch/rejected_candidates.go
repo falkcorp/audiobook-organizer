@@ -1,5 +1,5 @@
 // file: internal/metafetch/rejected_candidates.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 486771bb-091f-46bb-8846-ff740d2e8ab3
 // last-edited: 2026-10-10
 
@@ -447,16 +447,29 @@ const (
 // review lane shows and every bulk apply reads -- and one just un-rejected
 // takes its place back.
 //
+// buildRank is called under the row lock, so it reads the owner's
+// rejections there: two re-ranks of one book (a reject and an un-reject in
+// quick succession) cannot leave the row in the order of the older
+// rejection set, since whichever takes the lock last reads the newest set.
+// A buildRank error is returned and nothing is written.
+//
 // It only re-orders. The raw row is read (not GetCachedCandidates, whose
 // legacy filter would drop candidates if its answer were written back),
 // nothing is deduplicated or capped, an undecodable candidate keeps its
 // place after the ranked ones, and every other field of the row is written
 // back as read. The row is written only when the order changed.
-func (mfs *Service) RerankCachedCandidates(bookID string, rank func(MetadataCandidate) int) (RerankOutcome, error) {
-	if mfs == nil || mfs.db == nil || rank == nil {
+func (mfs *Service) RerankCachedCandidates(bookID string, buildRank func() (func(MetadataCandidate) int, error)) (RerankOutcome, error) {
+	if mfs == nil || mfs.db == nil || buildRank == nil {
 		return RerankNoRow, nil
 	}
 	defer mfs.lockRow(bookID)()
+	rank, err := buildRank()
+	if err != nil {
+		return RerankUnchanged, fmt.Errorf("build the ranking for %s: %w", bookID, err)
+	}
+	if rank == nil {
+		return RerankNoRow, nil
+	}
 	entry, err := mfs.db.GetMetadataCache(bookID)
 	if err != nil {
 		return RerankNoRow, fmt.Errorf("read cache row for %s: %w", bookID, err)
