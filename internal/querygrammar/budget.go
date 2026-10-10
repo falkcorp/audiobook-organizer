@@ -1,5 +1,5 @@
 // file: internal/querygrammar/budget.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 1771412b-a65b-42bd-815e-dcf0c2cf7c1d
 // last-edited: 2026-10-10
 
@@ -49,17 +49,45 @@ func (e *TooSlowError) Error() string {
 		"Try a simpler search, such as fewer regex or * terms, shorter patterns, or another filter that narrows it first", e.Budget)
 }
 
+// RowRef names the row and field a match ran on, so an InexactError can say
+// which book to exclude. Passed by value; building one costs nothing.
+type RowRef struct {
+	Field string // the filter field, e.g. "description"
+	ID    string // the book's ID
+	Title string // the book's title, may be empty
+}
+
 // InexactError is returned when an evaluation met a field it could not answer
-// exactly: a regex or glob that depends on how the field ends (a $ or \z, a
-// \b, a glob with no trailing *) matched a field longer than
-// MaxPatternInputBytes, where the cut point is not the end. Callers answer it
-// with a 400, like TooSlowError: nothing partial is returned, because a row
-// answered "true" here might not end that way.
-type InexactError struct{}
+// exactly: a regex or glob that depends on how the field ends ($, \z, (?m)$,
+// \b, \B, or a glob that does not end in *) matched a field longer than
+// MaxPatternInputBytes at the cut point, where the cut is not the end.
+// Callers answer it with a 400, like TooSlowError: nothing partial is
+// returned, because a row answered "true" here might not end that way.
+// Field, BookID and Title name the first such row (any may be empty when the
+// caller did not say); Error shortens each to 64 bytes.
+type InexactError struct {
+	Field  string
+	BookID string
+	Title  string
+}
 
 func (e *InexactError) Error() string {
-	return fmt.Sprintf("the search cannot be answered exactly: its pattern depends on how a field ends ($, \\z, \\b, or a * wildcard pattern that does not end in *) "+
-		"and a field is longer than the %d KB a pattern is run over. Drop the end anchor, end the pattern with *, or add another filter that excludes the long field", MaxPatternInputBytes>>10)
+	var where string
+	if e.BookID != "" || e.Title != "" {
+		where = " The field that could not be answered is"
+		if e.Field != "" {
+			where += " the " + ShortToken(e.Field) + " of"
+		}
+		where += " book " + ShortToken(e.BookID)
+		if e.Title != "" {
+			where += " (" + ShortToken(e.Title) + ")"
+		}
+		where += "."
+	}
+	return fmt.Sprintf("the search cannot be answered exactly: its pattern depends on how a field ends "+
+		"(a $, \\z or (?m)$ anchor, a \\b or \\B boundary, or a * wildcard pattern that does not end in *) "+
+		"and a field is longer than the %d KB a pattern is run over.%s "+
+		"Drop that part of the pattern, end a wildcard pattern with *, or add a filter that excludes that book", MaxPatternInputBytes>>10, where)
 }
 
 // BusyError is returned when every pattern-evaluation slot stayed taken for
@@ -81,6 +109,8 @@ type Budget struct {
 	spent   atomic.Int64 // nanoseconds
 	expired atomic.Bool
 	inexact atomic.Bool // a match could not be trusted (InexactError)
+	// inexactRef is the first untrusted row, kept for the error message.
+	inexactRef atomic.Pointer[RowRef]
 }
 
 // NewBudget returns a Budget of limit, timed by the wall clock on EVERY
@@ -118,6 +148,12 @@ func (m *TextMatcher) Costly() bool {
 // not be trusted (MatchExact's exact=false): the budget is then Expired with
 // an *InexactError, and the caller discards the evaluation the same way.
 func (b *Budget) Match(m *TextMatcher, s string) bool {
+	return b.MatchRow(m, s, RowRef{})
+}
+
+// MatchRow is Match that also records which row an untrusted match came from,
+// so the *InexactError can name the book to exclude.
+func (b *Budget) MatchRow(m *TextMatcher, s string, ref RowRef) bool {
 	if b == nil || !m.Costly() {
 		return m.Match(s)
 	}
@@ -130,6 +166,7 @@ func (b *Budget) Match(m *TextMatcher, s string) bool {
 		b.expired.Store(true)
 	}
 	if !exact {
+		b.inexactRef.CompareAndSwap(nil, &ref)
 		b.inexact.Store(true)
 		return false
 	}
@@ -159,7 +196,11 @@ func (b *Budget) Err() error {
 	case b.expired.Load():
 		return &TooSlowError{Budget: b.limit}
 	case b.inexact.Load():
-		return &InexactError{}
+		e := &InexactError{}
+		if ref := b.inexactRef.Load(); ref != nil {
+			e.Field, e.BookID, e.Title = ref.Field, ref.ID, ref.Title
+		}
+		return e
 	}
 	return nil
 }

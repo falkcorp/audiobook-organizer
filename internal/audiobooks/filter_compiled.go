@@ -1,5 +1,5 @@
 // file: internal/audiobooks/filter_compiled.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 6a1f3c8e-9d24-4b7a-b0e5-2f8c4d1a7e36
 // last-edited: 2026-10-10
 
@@ -305,9 +305,10 @@ func fieldMatchesCompiled(book *database.Book, f *compiledFilter, rt runtimeFunc
 	// against each KNOWN value's decimal text, never the "0" rendering of an
 	// unset value: otherwise bitrate:* would match every unprobed book, and
 	// year:/^20/ would only ever see the print year of "1999 2021".
+	ref := querygrammar.RowRef{Field: f.Field, ID: book.ID, Title: book.Title}
 	if numericFilterFields[f.Field] {
 		for _, v := range numericFieldValues(book, f.Field) {
-			if f.budget.Match(f.text, strconv.FormatFloat(v, 'f', -1, 64)) {
+			if f.budget.MatchRow(f.text, strconv.FormatFloat(v, 'f', -1, 64), ref) {
 				return true
 			}
 		}
@@ -317,7 +318,7 @@ func fieldMatchesCompiled(book *database.Book, f *compiledFilter, rt runtimeFunc
 	if !known {
 		return false
 	}
-	return f.budget.Match(f.text, bookValue)
+	return f.budget.MatchRow(f.text, bookValue, ref)
 }
 
 // numericFieldValues returns a field's KNOWN numeric values. Empty means

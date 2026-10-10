@@ -1,5 +1,5 @@
 // file: web/src/components/audiobooks/SearchBar.tsx
-// version: 2.10.1
+// version: 2.10.2
 // last-edited: 2026-10-10
 // guid: 1d2e3f4a-5b6c-7d8e-9f0a-1b2c3d4e5f6a
 
@@ -178,7 +178,7 @@ const SEARCH_HELP = [
   { example: 'title:"a*"', desc: 'Quotes = literal text: no wildcard, regex or comparison' },
   {
     example: 'description:/chapter one/',
-    desc: 'A regex or wildcard sees only the first 16 KB of a long field, so a match past that is not found (and a negated filter keeps that row); a plain word searches all of it. If such a field matches a pattern that depends on how it ends ($, \\b, or * only at the start), the search is refused rather than guessed. A search that spends over 1 s matching patterns is stopped with a message',
+    desc: 'A regex or wildcard sees only the first 16 KB of a long field, so a match past that is not found (and a negated filter keeps that row); a plain word searches all of it. If such a field matches a pattern that depends on how it ends ($, \\z, \\b, \\B, or a wildcard pattern that does not end in *, such as *the end or a*b), the search is refused rather than guessed. A search that spends over 1 s matching patterns is stopped with a message',
   },
   { example: 'narrator:*', desc: 'Has a narrator (-narrator:* = no narrator)' },
   { example: 'year:>2020', desc: 'Published after 2020 (also >=, <, <=, !=)' },
