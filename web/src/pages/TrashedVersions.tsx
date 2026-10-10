@@ -1,9 +1,11 @@
 // file: web/src/pages/TrashedVersions.tsx
-// version: 1.1.3
+// version: 1.2.0
 // guid: 6f4a5b3c-7d8e-4a70-b8c5-3d7e0f1b9a99
+// last-edited: 2026-10-10
 
 import { useCallback, useEffect, useState } from 'react';
 import {
+  Alert,
   Box,
   Button,
   Chip,
@@ -19,6 +21,7 @@ import {
   Tabs,
   Typography,
 } from '@mui/material';
+import { apiFetch } from '../utils/apiFetch';
 import {
   type BookVersion,
   restoreVersion,
@@ -92,6 +95,7 @@ export default function TrashedVersions() {
   const [tab, setTab] = useState<'trash' | 'purged'>('trash');
   const [versions, setVersions] = useState<BookVersion[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
 
   const {
     visibleColumns,
@@ -114,16 +118,23 @@ export default function TrashedVersions() {
 
   const load = useCallback(async () => {
     setLoading(true);
+    setLoadError('');
     try {
       const endpoint =
         tab === 'trash' ? '/audiobooks/trashed-versions' : '/audiobooks/purged-versions';
-      const resp = await fetch(`${API_BASE}${endpoint}`);
+      const resp = await apiFetch(`${API_BASE}${endpoint}`);
       if (resp.ok) {
         const data = await resp.json();
         setVersions(data.versions || []);
+      } else {
+        setVersions([]);
+        setLoadError(`Failed to load versions (HTTP ${resp.status})`);
       }
-    } catch {
+    } catch (err) {
+      // An expired session (ApiAuthRedirectError) lands here too; show it
+      // instead of an empty list that reads as "nothing trashed".
       setVersions([]);
+      setLoadError(err instanceof Error ? err.message : 'Failed to load versions');
     } finally {
       setLoading(false);
     }
@@ -200,6 +211,8 @@ export default function TrashedVersions() {
         >
           Loading...
         </Typography>
+      ) : loadError ? (
+        <Alert severity="error">{loadError}</Alert>
       ) : versions.length === 0 ? (
         <Typography
           sx={{

@@ -1,7 +1,7 @@
 // file: web/src/components/settings/ITunesTransfer.tsx
-// version: 2.0.0
+// version: 2.1.0
 // guid: 5e6f7a8b-9c0d-1e2f-3a4b-5c6d7e8f9a0b
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 //
 // Download of the configured iTunes Library.itl. Upload, install, backup
 // listing and restore were removed with iTunes write-back on 2026-10-07:
@@ -19,11 +19,12 @@ import {
 } from '@mui/material';
 import CloudDownloadIcon from '@mui/icons-material/CloudDownload';
 import { useToast } from '../toast/ToastProvider';
+import { apiFetch } from '../../utils/apiFetch';
 
 const API_BASE = '/api/v1/itunes/library';
 
 async function downloadITL(): Promise<void> {
-  const resp = await fetch(`${API_BASE}/download`);
+  const resp = await apiFetch(`${API_BASE}/download`);
   if (!resp.ok) {
     const body = await resp.json().catch(() => ({ error: resp.statusText }));
     throw new Error(body.error || `Download failed: ${resp.status}`);

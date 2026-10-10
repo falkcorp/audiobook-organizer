@@ -1,7 +1,7 @@
 // file: web/src/pages/Login.tsx
-// version: 1.4.0
+// version: 1.5.0
 // guid: 9a3f2c1d-4b5e-6f70-8a9b-0c1d2e3f4a5b
-// last-edited: 2026-08-21
+// last-edited: 2026-10-10
 
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -20,6 +20,7 @@ import {
 } from '@mui/material';
 import { useAuth } from '../contexts/AuthContext';
 import { sanitizeReturn } from '../utils/safeReturn';
+import { apiFetch } from '../utils/apiFetch';
 
 type AuthMode = 'login' | 'setup';
 
@@ -66,7 +67,10 @@ export function Login() {
   useEffect(() => {
     const code = new URLSearchParams(location.search).get('error');
     if (code) setOauthError(oauthErrorMessage(code));
-    fetch('/api/v1/auth/oauth-providers', { credentials: 'include' })
+    // Runs before a session exists. An ApiAuthRedirectError (a login page
+    // came back instead of JSON) means the server wants a login, not that SSO
+    // is configured, so it falls through to the catch: no SSO buttons.
+    apiFetch('/api/v1/auth/oauth-providers')
       .then((r) => (r.ok ? r.json() : null))
       .then((body) => {
         const list = body?.data?.providers ?? body?.providers ?? [];

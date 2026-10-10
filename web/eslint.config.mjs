@@ -1,7 +1,7 @@
 // file: web/eslint.config.mjs
-// version: 1.4.0
+// version: 1.5.0
 // guid: 456e7890-b12c-34d5-c678-901234567890
-// last-edited: 2026-08-19
+// last-edited: 2026-10-10
 
 import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
@@ -67,6 +67,32 @@ export default tseslint.config(
         },
       ],
       'no-undef': 'off',
+    },
+  },
+  {
+    // Every browser request goes through apiFetch (src/utils/apiFetch.ts) so an
+    // expired Cloudflare Access session surfaces as ApiAuthRedirectError instead
+    // of a 200 login page that callers read as success. apiFetch itself and the
+    // tests (which stub globalThis.fetch) are the only places allowed to touch
+    // the raw API.
+    files: ['src/**/*.{ts,tsx}'],
+    ignores: ['src/utils/apiFetch.ts', 'src/**/*.test.{ts,tsx}'],
+    rules: {
+      'no-restricted-globals': [
+        'error',
+        {
+          name: 'fetch',
+          message: 'Use apiFetch from utils/apiFetch (or a services/* function) instead of raw fetch.',
+        },
+      ],
+      'no-restricted-properties': [
+        'error',
+        ...['window', 'globalThis', 'self'].map((object) => ({
+          object,
+          property: 'fetch',
+          message: 'Use apiFetch from utils/apiFetch (or a services/* function) instead of raw fetch.',
+        })),
+      ],
     },
   },
   {

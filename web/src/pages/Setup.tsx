@@ -1,6 +1,7 @@
 // file: web/src/pages/Setup.tsx
-// version: 1.1.1
+// version: 1.2.0
 // guid: 0f8a9b4c-1d2e-4a70-b8c5-3d7e0f1b9a99
+// last-edited: 2026-10-10
 
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -14,6 +15,7 @@ import {
   Typography,
   Alert,
 } from '@mui/material';
+import { apiFetch, isAuthRedirectError } from '../utils/apiFetch';
 const API_BASE = '/api/v1';
 
 export default function Setup() {
@@ -40,7 +42,7 @@ export default function Setup() {
 
     setLoading(true);
     try {
-      const resp = await fetch(`${API_BASE}/auth/setup`, {
+      const resp = await apiFetch(`${API_BASE}/auth/setup`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password, email }),
@@ -52,7 +54,11 @@ export default function Setup() {
       navigate('/');
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      setError(msg || 'Setup failed');
+      setError(
+        isAuthRedirectError(err)
+          ? 'The server requires a login before setup can run. Sign in and try again.'
+          : msg || 'Setup failed'
+      );
     } finally {
       setLoading(false);
     }

@@ -1,7 +1,7 @@
 // file: web/src/components/ChangeLog.test.tsx
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6e2f1a4c-9b3d-4e7a-8c1f-5d2b6a9e0f3c
-// last-edited: 2026-09-13
+// last-edited: 2026-10-10
 
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
@@ -9,6 +9,7 @@ import userEvent from '@testing-library/user-event';
 import { renderWithProviders } from '../test/renderWithProviders';
 import { ChangeLog } from './ChangeLog';
 import { ToastProvider } from './toast/ToastProvider';
+import { loginPageResponse } from '../test/loginRedirect';
 import { fetchActivity } from '../services/activityApi';
 import type { ActivityEntry } from '../services/activityApi';
 
@@ -173,6 +174,30 @@ describe('ChangeLog', () => {
       expect(writeBackCall).toBeDefined();
       // The revert itself landed, so the parent still refreshes.
       expect(onRevert).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not treat a login-page answer to the revert as success', async () => {
+      vi.mocked(fetchActivity).mockResolvedValue({
+        entries: [importEntry, tagWriteEntry],
+        total: 2,
+      });
+      const fetchMock = vi.fn(async () => loginPageResponse());
+      vi.stubGlobal('fetch', fetchMock);
+      const onRevert = vi.fn();
+      const user = userEvent.setup();
+
+      renderWithProviders(
+        <ToastProvider>
+          <ChangeLog bookId="book1" onRevert={onRevert} />
+        </ToastProvider>
+      );
+
+      await user.click(await screen.findByRole('button', { name: /revert/i }));
+
+      expect(await screen.findByText(/Revert failed: .*login page/)).toBeInTheDocument();
+      // The write-back must not run after a revert that never reached the server.
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(onRevert).not.toHaveBeenCalled();
     });
 
     it('shows the HTTP status when a failed response has no body', async () => {

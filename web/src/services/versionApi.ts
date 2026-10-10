@@ -1,9 +1,10 @@
 // file: web/src/services/versionApi.ts
-// version: 1.7.0
+// version: 1.8.0
 // guid: 9e7f8a3b-0c1d-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-09-25
+// last-edited: 2026-10-10
 
 import type { RevertOperationResult } from './api';
+import { apiFetch } from '../utils/apiFetch';
 
 const API_BASE = '/api/v1';
 
@@ -48,7 +49,7 @@ export interface UndoConflictReport {
 }
 
 async function jsonFetch(url: string, opts?: RequestInit) {
-  const resp = await fetch(url, {
+  const resp = await apiFetch(url, {
     headers: { 'Content-Type': 'application/json', ...opts?.headers },
     ...opts,
   });

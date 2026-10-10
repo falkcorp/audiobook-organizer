@@ -1,7 +1,9 @@
 // file: web/src/services/playlistApi.ts
-// version: 2.0.1
+// version: 2.1.0
 // guid: 8d6e7f2a-9b0c-4a70-b8c5-3d7e0f1b9a99
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
+
+import { apiFetch } from '../utils/apiFetch';
 
 const API_BASE = '/api/v1';
 
@@ -24,7 +26,7 @@ export interface UserPlaylist {
 }
 
 async function jsonFetch(url: string, opts?: RequestInit) {
-  const resp = await fetch(url, {
+  const resp = await apiFetch(url, {
     headers: { 'Content-Type': 'application/json', ...opts?.headers },
     ...opts,
   });

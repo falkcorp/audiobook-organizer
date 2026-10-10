@@ -1,6 +1,7 @@
 // file: web/src/components/settings/PluginsTab.tsx
-// version: 1.0.2
+// version: 1.1.0
 // guid: d5e6f7a8-b9c0-1d2e-3f4a-5b6c7d8e9f0a
+// last-edited: 2026-10-10
 
 import { useEffect, useState, useCallback } from 'react';
 import {
@@ -30,6 +31,7 @@ import {
   Error as ErrorIcon,
   Refresh as RefreshIcon,
 } from '@mui/icons-material';
+import { apiFetch } from '../../utils/apiFetch';
 
 interface PluginInfo {
   id: string;
@@ -46,7 +48,7 @@ interface PluginSettings {
 }
 
 async function fetchPlugins(): Promise<PluginInfo[]> {
-  const resp = await fetch('/api/v1/plugins');
+  const resp = await apiFetch('/api/v1/plugins');
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   const body = await resp.json();
   return body.data.plugins ?? [];
@@ -54,12 +56,12 @@ async function fetchPlugins(): Promise<PluginInfo[]> {
 
 async function togglePlugin(id: string, enable: boolean): Promise<void> {
   const action = enable ? 'enable' : 'disable';
-  const resp = await fetch(`/api/v1/plugins/${id}/${action}`, { method: 'POST' });
+  const resp = await apiFetch(`/api/v1/plugins/${id}/${action}`, { method: 'POST' });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
 }
 
 async function saveSettings(id: string, settings: PluginSettings): Promise<void> {
-  const resp = await fetch(`/api/v1/plugins/${id}/settings`, {
+  const resp = await apiFetch(`/api/v1/plugins/${id}/settings`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(settings),
@@ -303,7 +305,7 @@ export default function PluginsTab() {
           <CircularProgress />
         </Box>
       ) : plugins.length === 0 ? (
-        <Alert severity="info">No plugins registered.</Alert>
+        error ? null : <Alert severity="info">No plugins registered.</Alert>
       ) : (
         <TableContainer component={Paper} variant="outlined">
           <Table size="small">
