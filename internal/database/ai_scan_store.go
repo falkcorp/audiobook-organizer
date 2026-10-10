@@ -1,6 +1,6 @@
 // file: internal/database/ai_scan_store.go
-// version: 2.12.0
-// last-edited: 2026-10-04
+// version: 2.13.0
+// last-edited: 2026-10-10
 // guid: a7b3c9d1-4e5f-6a7b-8c9d-0e1f2a3b4c5d
 
 package database
@@ -43,12 +43,25 @@ type AIScanStore struct {
 	// applyMu makes "apply a result" and "supersede the scan" one decision
 	// each (MarkResultApplied, SupersedeIfUnapplied): without it a supersede
 	// could read "nothing applied", an apply land, and the scan then be hidden
-	// with an applied result in it.
+	// with an applied result in it. It also makes each replace of a scan's
+	// results one step (ReplaceScanResults, ReplaceScanResultsIfUnapplied):
+	// two overlapping replaces each listed the rows to delete before the other
+	// committed, and the scan kept both sets. Lock order: applyMu, then
+	// stateMu; idMu is a leaf.
 	applyMu sync.Mutex
 	// stateMu serializes every read-modify-write of a phase row or a scan's
 	// status, so TransitionPhase and CompleteScanIfActive are true
 	// compare-and-set operations against CancelScan's writes.
 	stateMu sync.Mutex
+	// idMu makes nextID's read-then-write of a counter one step. Without it
+	// two callers that both read the counter before either wrote it got the
+	// same ID. It is a leaf lock: nothing is acquired while holding it, so it
+	// may be taken under applyMu or stateMu.
+	//
+	// Like applyMu and stateMu it only serializes callers sharing this
+	// *AIScanStore. Production builds exactly one per process (the
+	// "aiscanstore" service in internal/server/registry_wire.go).
+	idMu sync.Mutex
 }
 
 // Scan represents a full pipeline run.
@@ -187,7 +200,10 @@ func (s *AIScanStore) CompactionStats() (stats CompactionStats, ok bool) {
 }
 
 // nextID atomically reads and increments the counter for the given entity type.
+// idMu makes the read and the write one step for every caller of this store.
 func (s *AIScanStore) nextID(counter string) (int, error) {
+	s.idMu.Lock()
+	defer s.idMu.Unlock()
 	key := s.k("counter:%s", counter)
 
 	value, closer, err := s.db.Get(key)
@@ -486,7 +502,7 @@ func (s *AIScanStore) ReplaceScanResultsIfUnapplied(scanID int, results []ScanRe
 			return false, nil
 		}
 	}
-	return true, s.ReplaceScanResults(scanID, results)
+	return true, s.replaceScanResultsLocked(scanID, results)
 }
 
 // SupersedeIfUnapplied marks scanID superseded by byID unless any of its
@@ -568,11 +584,27 @@ func (s *AIScanStore) GetPhaseArtifacts(scanID int, phaseType string) (map[strin
 // both enrichment phases finish at once and each triggers it — leaves exactly
 // one set of results instead of appending a duplicate of every suggestion.
 //
+// It holds applyMu, so overlapping replaces of one scan run one after the
+// other and the last one's set is what remains. Without the lock the
+// replace was one Pebble batch but not isolated: each call listed the rows to
+// delete, two calls listed before either committed, and the scan kept both
+// sets. The lock also keeps a replace from interleaving with
+// MarkResultApplied.
+//
 // It discards Applied / AppliedAt. That is safe only because the pipeline
 // calls it solely while its cross_validate phase is not yet complete, and
 // marks the phase complete right after; results are applied by a user after
 // that. Do not call it on a scan whose results may already have been applied.
 func (s *AIScanStore) ReplaceScanResults(scanID int, results []ScanResult) error {
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
+	return s.replaceScanResultsLocked(scanID, results)
+}
+
+// replaceScanResultsLocked is ReplaceScanResults for a caller already holding
+// applyMu (ReplaceScanResultsIfUnapplied). sync.Mutex is not re-entrant, so
+// calling the public method there would deadlock.
+func (s *AIScanStore) replaceScanResultsLocked(scanID int, results []ScanResult) error {
 	batch := s.db.NewBatch()
 	defer batch.Close()
 
