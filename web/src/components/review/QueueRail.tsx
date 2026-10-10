@@ -191,8 +191,9 @@ export interface QueueRailProps {
   onSelectPage?: (ids: string[], selected: boolean) => void;
   /**
    * Gmail's pattern: once the whole page is ticked, offer every book the view
-   * matches across all pages. The lane holds every matching row client-side
-   * (it loads with all=true), so this needs no request.
+   * matches across all pages. In index mode the lane holds every matching row
+   * (it loads with all=true), so this needs no request; in page mode (setting
+   * review_metadata_server_query) it fetches the matching ids, ids only.
    */
   onSelectAllMatching?: () => void;
   onClearSelection?: () => void;

@@ -1,7 +1,7 @@
 // file: web/src/components/review/ReviewWorkspace.tsx
-// version: 1.15.0
+// version: 1.16.0
 // guid: 8e0b4d59-1c76-42a3-95f8-7d2a6b3e0c81
-// last-edited: 2026-10-08
+// last-edited: 2026-10-10
 //
 // The unified review workspace: one screen for dedup, metadata apply, the
 // review queue, and library repairs.
@@ -216,10 +216,9 @@ export function ReviewWorkspace() {
   // Gated like the others: no fixer list, rows or trial polls unless visible.
   const repairs = useRepairsLane(toast, lane === 'repairs');
 
-  const unmatchedCount = useMemo(
-    () => metadata.results.filter((r) => r.status === 'no_match' || r.status === 'error').length,
-    [metadata.results]
-  );
+  // From the lane, which counts them from its rows (index mode) or the
+  // server's facets (page mode, where it holds only the current page).
+  const unmatchedCount = metadata.unmatchedCount;
 
   // Every command starts a background job and reports through the bell, so the
   // handler shape is uniform: fire, toast, let OperationsIndicator own progress.
@@ -526,10 +525,17 @@ export function ReviewWorkspace() {
             scope: 'view',
             startsGroup: true,
             run: () => {
-              const n = exportRowsAsCsv(metadata.filteredResults);
-              // Says WHAT was exported: "export" reads as "everything", and this
-              // is the filtered set.
-              toast(`Exported ${n.toLocaleString()} filtered row(s) to CSV.`, 'success');
+              void (async () => {
+                try {
+                  // Page mode pages through the server for the rows it does not hold.
+                  const n = exportRowsAsCsv(await metadata.exportRows());
+                  // Says WHAT was exported: "export" reads as "everything", and this
+                  // is the filtered set.
+                  toast(`Exported ${n.toLocaleString()} filtered row(s) to CSV.`, 'success');
+                } catch {
+                  toast('Could not export the filtered rows.', 'error');
+                }
+              })();
             },
           },
           {
@@ -549,7 +555,7 @@ export function ReviewWorkspace() {
       metadata.selectedIds,
       metadata.applicableSelectedIds,
       metadata.allVisiblePendingIds,
-      metadata.filteredResults,
+      metadata.exportRows,
       metadata.dispatch,
       metadata.bulkApplyMode,
       dedupPipeline.busy,

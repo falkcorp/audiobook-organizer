@@ -1,7 +1,7 @@
 // file: web/src/components/review/MetadataPanel.tsx
-// version: 1.11.0
+// version: 1.12.0
 // guid: 3f9a2c07-5b41-4e86-9d02-7c1e8b503a64
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 //
 // The metadata lane's full surface: queue rail, comparison spine, action bar.
 //
@@ -226,7 +226,7 @@ export function MetadataPanel({
           pageSize={metadata.pageSize}
           setPage={metadata.setPage}
           setPageSize={metadata.setPageSize}
-          filteredCount={metadata.filteredResults.length}
+          filteredCount={metadata.filteredCount}
           rowState={metadata.spineCtx.rowState}
           isSelected={metadata.spineCtx.isSelected}
           onToggleSelect={metadata.spineCtx.onToggleSelect}
@@ -260,7 +260,7 @@ export function MetadataPanel({
           <SelectionBar
             testIdPrefix="main-"
             pageIds={metadata.pageResults.map((r) => r.book.id)}
-            matchingCount={metadata.filteredResults.length}
+            matchingCount={metadata.filteredCount}
             selectedCount={metadata.selectedIds.size}
             allMatchingSelected={metadata.allMatchingSelected}
             isSelected={metadata.spineCtx.isSelected}
