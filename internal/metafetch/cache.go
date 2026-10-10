@@ -1,5 +1,5 @@
 // file: internal/metafetch/cache.go
-// version: 1.30.0
+// version: 1.30.1
 // guid: a4f33a2e-3b4d-4306-bdce-476758e39120
 // last-edited: 2026-10-09
 //
@@ -1105,6 +1105,11 @@ func (mfs *Service) plainFetchRowVouched(entry *MetadataCandidateCache, book *da
 // separate transcribed-title evidence (owner decision 2026-09-28:
 // applygate.EvaluateTranscribed).
 func (mfs *Service) cachedRowVouched(entry *MetadataCandidateCache, book *database.Book, query string) bool {
+	// A row marked Stale answers an identity the book no longer has, whatever
+	// its hash and fingerprint still say: nothing vouches for it.
+	if entry.Stale {
+		return false
+	}
 	live, lerr := database.LiveBookAuthorNames(mfs.db, book)
 	if lerr != nil {
 		return false
@@ -1140,7 +1145,7 @@ func (mfs *Service) CachedBatchVerdict(book *database.Book, query, author string
 	}
 	// The row must answer the book as it is now (cachedRowVouched says how;
 	// VouchedCachedRow shares the check).
-	if !mfs.cachedRowVouched(entry, book, query) {
+	if entry.Stale || !mfs.cachedRowVouched(entry, book, query) {
 		return entry, BatchVerdictNone, nil
 	}
 	// A row from the version "1" ladder for the same inputs keeps its fresh

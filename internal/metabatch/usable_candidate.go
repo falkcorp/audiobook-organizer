@@ -1,5 +1,5 @@
 // file: internal/metabatch/usable_candidate.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 6a925443-e10e-4dc5-af83-0dcf909b6256
 // last-edited: 2026-10-09
 
@@ -29,8 +29,9 @@ const candidateRefusalOwnerRejected = "owner-rejected"
 
 // CandidateRefusal is why one candidate is not usable for book ("" =
 // usable): owner-rejected (rejected: LoadRejectedCandidateKeys),
-// asin_conflict (applygate.CheckASIN), identity_stale because entry is marked stale (the book was retitled) or the book's ASIN
-// was replaced after entry was fetched (metafetch.CandidateIdentityStale; entry
+// asin_conflict (applygate.CheckASIN), identity_stale because entry is marked
+// stale (the book was retitled) or the book's ASIN was replaced after entry
+// was fetched (metafetch.CandidateIdentityStale; entry
 // nil skips it), or the apply gate's score leg (applygate.ScoreGate: the
 // floor, or a transcribed title the candidate does not match) -- the same
 // rule the bulk apply gate applies.

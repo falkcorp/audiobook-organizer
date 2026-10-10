@@ -1,5 +1,5 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.57.1
+// version: 1.57.2
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
 // last-edited: 2026-10-09
 
@@ -928,8 +928,8 @@ func transcriptionCacheIdentity(svc cachedApplyService, books bookReader, entry 
 	// A row marked stale, or fetched for an ASIN the book no longer carries
 	// (for a candidate without the new one), is refused first: the planner adds it to the
 	// identity leg and no transcription lifts it (planCachedApply).
-	if asinErr := metafetch.CandidateIdentityStale(entry, book, &cand); asinErr != nil {
-		return asinErr
+	if idStaleErr := metafetch.CandidateIdentityStale(entry, book, &cand); idStaleErr != nil {
+		return idStaleErr
 	}
 	live, err := database.LiveBookAuthorNames(books, book)
 	if err != nil {

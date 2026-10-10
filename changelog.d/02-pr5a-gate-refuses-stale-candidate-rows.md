@@ -1,1 +1,3 @@
+### Fixed
+
 Every apply gate now refuses a candidate from a metadata-candidate row marked stale (the book's search identity changed after the fetch) as `identity_stale`, and the scheduled candidate fetch picks such rows for refetch; nothing sets the flag yet, so behaviour is unchanged until 02-PR5b (`CandidateASINStale` is now `CandidateIdentityStale`).

@@ -1,5 +1,5 @@
 // file: internal/metafetch/cache_stale_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: c4a81e27-96d3-4b05-8f7a-3e5d0b2c9a16
 // last-edited: 2026-10-09
 
@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
+	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 )
 
 // CandidateIdentityStale refuses every candidate of a row marked Stale with
@@ -79,4 +80,34 @@ func TestCacheSearchResponse_ReplacementClearsStale(t *testing.T) {
 	stored, err = mfs.db.GetMetadataCache(preserveBookID)
 	require.NoError(t, err)
 	require.False(t, stored.Stale)
+}
+
+// A row marked Stale is re-asked by the batch fetch (the scheduled fetch
+// selects it with Force=false) even though its hash and fingerprint still
+// match the current question, and the replacement row is served as fresh.
+// VouchedCachedRow does not vouch it, so its candidates are not carried.
+func TestBatchVerdict_StaleRowIsReasked(t *testing.T) {
+	f := newVerdictFixture(t)
+	b, err := f.store.CreateBook(&database.Book{Title: "Title 000301", FilePath: "/lib/s/s.m4b"})
+	require.NoError(t, err)
+	src := &verdictSource{name: "Src", results: []metadata.BookMetadata{{Title: "Title 000301"}}}
+	f.mfs.SetOverrideSources([]metadata.MetadataSource{src})
+	f.batchFetch(b.ID)
+	require.Equal(t, BatchVerdictFreshCandidates, f.batchFetch(b.ID), "fixture: the fresh row is served")
+	book := f.book(b.ID)
+	require.NotNil(t, f.mfs.VouchedCachedRow(book, book.Title), "fixture: the unflagged row is vouched")
+
+	entry, err := f.store.GetMetadataCache(b.ID)
+	require.NoError(t, err)
+	entry.Stale, entry.StaleQuestionFP = true, "fp-synthetic"
+	require.NoError(t, f.store.PutMetadataCache(entry))
+
+	require.Nil(t, f.mfs.VouchedCachedRow(book, book.Title), "a stale row is not vouched")
+	// The search itself may be answered from the per-source fetch cache, so
+	// the proof of a re-ask is the verdict and the replaced row.
+	require.Equal(t, BatchVerdictNone, f.batchFetch(b.ID), "a stale row must be re-asked")
+	entry, err = f.store.GetMetadataCache(b.ID)
+	require.NoError(t, err)
+	require.False(t, entry.Stale, "the refetch replaced the row")
+	require.Equal(t, BatchVerdictFreshCandidates, f.batchFetch(b.ID))
 }
