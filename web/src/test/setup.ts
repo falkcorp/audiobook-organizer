@@ -1,11 +1,20 @@
 // file: web/src/test/setup.ts
-// version: 1.0.8
+// version: 1.1.0
 // guid: 8f9a0b1c-2d3e-4f5a-6b7c-8d9e0f1a2b3c
-// last-edited: 2026-09-27
+// last-edited: 2026-10-09
 
 import '@testing-library/jest-dom';
-import { cleanup } from '@testing-library/react';
+import { cleanup, configure } from '@testing-library/react';
 import { afterEach } from 'vitest';
+
+// findBy*/waitFor default to a 1 s asyncUtilTimeout. On the Woodpecker host the
+// web-test step shares the machine with five Go test workflows, and that second
+// is not enough for a dialog re-render: the same MetadataEditDialog test failed
+// in two consecutive pipelines (669, 670) on branches that never touched it and
+// passes locally in under 3 s. The per-test testTimeout (30 s) still bounds a
+// genuinely hung wait; this only stops the one-second clock from timing CPU
+// contention instead of the component.
+configure({ asyncUtilTimeout: 10_000 });
 
 const ResponseCtor = globalThis.Response;
 
