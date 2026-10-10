@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/CandidatesCard.test.tsx
-// version: 1.3.0
+// version: 1.3.1
 // guid: e012200e-9c38-4a1d-8587-8ac43ce9803b
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
@@ -163,6 +163,27 @@ describe('Candidates view', () => {
       .map((el) => el.querySelector('.MuiTypography-body2')?.textContent);
     expect(titles).toEqual(['High', 'Cached Pick', 'Low']);
     expect(within(list).getAllByText('How this score was reached')).toHaveLength(3);
+  });
+
+  it('orders the list and the Best match chip by rank_score, and Apply sends the clicked candidate', async () => {
+    const user = userEvent.setup();
+    const apply = vi.fn(() => Promise.resolve(false));
+    // X has the higher score; Y names no narrator (score x0.85) but the higher rank_score.
+    const x = { ...cand('Sample Saga 2', 1.05), rank_score: 1.05 } as MetadataCandidate;
+    const y = { ...cand('Sample Saga 1', 0.9775), rank_score: 1.15 } as MetadataCandidate;
+    const loader = new CandidateLoader(() => Promise.resolve([x, y]));
+    renderCards([row('b1')], { loader, apply });
+    await screen.findByText('Sample Saga 1');
+
+    const items = screen.getAllByTestId('candidate-item');
+    const titles = items.map((el) => el.querySelector('.MuiTypography-body2')?.textContent);
+    expect(titles).toEqual(['Sample Saga 1', 'Sample Saga 2']);
+    expect(within(items[0]).getByText('Best match')).toBeInTheDocument();
+    expect(within(items[1]).queryByText('Best match')).not.toBeInTheDocument();
+
+    // The second displayed row (stored index 0) is applied as that object.
+    await user.click(within(items[1]).getByRole('button', { name: 'Apply' }));
+    expect(apply).toHaveBeenCalledWith('b1', x);
   });
 
   it('loads at most 4 cards at a time across the page', async () => {

@@ -1,5 +1,5 @@
 // file: internal/metafetch/score_breakdown.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 6c81e35a-2b47-4d19-90fa-7e5c3d81b026
 // last-edited: 2026-10-10
 
@@ -347,9 +347,15 @@ func recordRerank(c *MetadataCandidate, llmScore, origMin, origMax, preScore flo
 	// The ranking score keeps its distance from Score: a candidate that was
 	// ranked 1/0.75 above its penalised score stays that far above the rescaled
 	// one. Score itself is the rescaled value, exactly as before.
+	// c.Score is already the rescaled value here, so the prior ranking score
+	// falls back to preScore, not to RankValue (which would read the new Score).
+	priorRank := c.RankScore
+	if priorRank == 0 {
+		priorRank = preScore
+	}
 	rank := c.Score
 	if preScore > 0 {
-		rank = c.Score * c.RankValue() / preScore
+		rank = c.Score * priorRank / preScore
 	}
 	sr := &scoreRecorder{score: c.ScoreBreakdown.Score, rank: rank, steps: c.ScoreBreakdown.Steps}
 	sr.replace("llm_rerank", "LLM rerank", c.Score, fmt.Sprintf(
