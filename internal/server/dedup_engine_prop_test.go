@@ -1,5 +1,5 @@
 // file: internal/server/dedup_engine_prop_test.go
-// version: 2.1.0
+// version: 2.1.1
 // guid: e6425d8b-3ab4-4e0c-86fd-71ece563085e
 // last-edited: 2026-10-10
 
@@ -360,9 +360,10 @@ func TestChromemMatchesSqlite_PinnedCounterexamples(t *testing.T) {
 	}
 }
 
+const chromemSqliteThreshold float32 = 0.5
+
 const (
-	chromemSqliteThreshold float32 = 0.5
-	chromemSqliteMaxK              = 20 // >= the largest n drawn, so neither backend truncates
+	chromemSqliteMaxK = 20 // >= the largest n drawn, so neither backend truncates
 
 	// propScoreTolerance bounds the float32 arithmetic error of either
 	// backend's score relative to a float64 reference on the same vector.
