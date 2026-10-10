@@ -1,5 +1,5 @@
 // file: internal/server/owner_rejected_apply_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: d5304ea1-88e0-43c3-9c2b-1b81c01fe9eb
 // last-edited: 2026-10-10
 
@@ -58,11 +58,11 @@ func (r rejectingBooks) ScanPrefix(prefix string) ([]database.KVPair, error) {
 func ownerRejectedFixture(t *testing.T) (rejectingBooks, metafetch.MetadataCandidate) {
 	t.Helper()
 	tenHours := 36000
-	books := fakeBooks{"b1": {ID: "b1", Title: "Big Cats 1", FilePath: "/lib/A/Big Cats/Big Cats 1.m4b", Duration: &tenHours}}
-	cand := metafetch.MetadataCandidate{Title: "Big Cats 1", SeriesPosition: "1", Score: 0.95, DurationSec: tenHours, Source: "Audible"}
+	books := fakeBooks{"b1": {ID: "b1", Title: "Synthetic Field Notes 1", FilePath: "/lib/A/Synthetic Field Notes/Synthetic Field Notes 1.m4b", Duration: &tenHours}}
+	cand := metafetch.MetadataCandidate{Title: "Synthetic Field Notes 1", SeriesPosition: "1", Score: 0.95, DurationSec: tenHours, Source: "Audible"}
 	// Stored in another case than the candidate carries: a rejection matches
 	// whatever case it was written in (mergeCandidateRows folds case too).
-	kv := rejKV{"rejected_candidate:b1:audible|BIG CATS 1": true}
+	kv := rejKV{"rejected_candidate:b1:audible|SYNTHETIC FIELD NOTES 1": true}
 	return rejectingBooks{fakeBooks: books, kv: kv}, cand
 }
 
@@ -120,12 +120,12 @@ func TestCachedApply_NoPinOverridesOwnerRejection(t *testing.T) {
 func TestOpResultApply_RefusesCandidateRejectedInAnotherOp(t *testing.T) {
 	tenHours := 36000
 	books := rejectingBooks{
-		fakeBooks: fakeBooks{"b1": {ID: "b1", Title: "Big Cats 1", Author: &database.Author{Name: "Ann Author"}, Duration: &tenHours}},
-		kv:        rejKV{"rejected_candidate:b1:Audible|Big Cats 1": true},
+		fakeBooks: fakeBooks{"b1": {ID: "b1", Title: "Synthetic Field Notes 1", Author: &database.Author{Name: "Synthetic Author A"}, Duration: &tenHours}},
+		kv:        rejKV{"rejected_candidate:b1:Audible|Synthetic Field Notes 1": true},
 	}
-	c := metafetch.MetadataCandidate{Title: "Big Cats 1", SeriesPosition: "1", Score: 0.95, DurationSec: tenHours, Source: "Audible"}
+	c := metafetch.MetadataCandidate{Title: "Synthetic Field Notes 1", SeriesPosition: "1", Score: 0.95, DurationSec: tenHours, Source: "Audible"}
 	older := CandidateResult{Status: "matched", Candidate: &c}
-	older.Book.Title, older.Book.Author = "Big Cats 1", "Ann Author"
+	older.Book.Title, older.Book.Author = "Synthetic Field Notes 1", "Synthetic Author A"
 	p := planOpResultApply(books, "b1", older, nil)
 	require.Equal(t, applySkipGateBlocked, p.Reason, "err=%v", p.Err)
 	require.NotNil(t, p.Gate)
@@ -159,7 +159,7 @@ func TestBulkFetch_SkipsOwnerRejected(t *testing.T) {
 	aud := testutil.MockAudibleServer(t, func(title string) []testutil.AudibleTestProduct {
 		return []testutil.AudibleTestProduct{{
 			ASIN: "B0TESTREJ1", Title: title, Authors: []string{"Meta Author"},
-			Publisher: "Rejected Pub", Language: "eng", ReleaseDate: "2020-01-01",
+			Publisher: "Synthetic Rejected Pub", Language: "eng", ReleaseDate: "2020-01-01",
 		}}
 	})
 	useOnlyAudible(t, aud.URL)
@@ -188,7 +188,7 @@ func TestBulkFetch_SkipsOwnerRejected(t *testing.T) {
 	got, err := store.GetBookByID(book.ID)
 	require.NoError(t, err)
 	if got.Publisher != nil {
-		require.NotEqual(t, "Rejected Pub", *got.Publisher, "owner-rejected candidate was applied")
+		require.NotEqual(t, "Synthetic Rejected Pub", *got.Publisher, "owner-rejected candidate was applied")
 	}
 }
 
@@ -210,11 +210,11 @@ func TestRejectCandidates_ReordersCachedRow(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
 	store := database.GetGlobalStore()
-	book, err := store.CreateBook(&database.Book{Title: "Quiet Harbor", Format: "m4b"})
+	book, err := store.CreateBook(&database.Book{Title: "Synthetic Field Notes 3", Format: "m4b"})
 	require.NoError(t, err)
 
-	rejected := metafetch.MetadataCandidate{Title: "Quiet Harbor", Source: "Audible", Score: 0.97}
-	other := metafetch.MetadataCandidate{Title: "Quiet Harbor (Unabridged)", Source: "Audible", Score: 0.93}
+	rejected := metafetch.MetadataCandidate{Title: "Synthetic Field Notes 3", Source: "Audible", Score: 0.97}
+	other := metafetch.MetadataCandidate{Title: "Synthetic Field Notes 3 (Unabridged)", Source: "Audible", Score: 0.93}
 	rows := append(candidateJSON(t, rejected), candidateJSON(t, other)...)
 	require.NoError(t, store.PutMetadataCache(&database.MetadataCandidateCache{
 		BookID: book.ID, Candidates: rows, FetchedAt: time.Now(), SourceHash: "h1",
@@ -237,14 +237,14 @@ func TestRejectCandidates_ReordersCachedRow(t *testing.T) {
 	post("/api/v1/metadata/batch-reject-candidates")
 	entry, err := store.GetMetadataCache(book.ID)
 	require.NoError(t, err)
-	require.Equal(t, []string{"Quiet Harbor (Unabridged)", "Quiet Harbor"}, candidateTitles(t, entry.Candidates),
+	require.Equal(t, []string{"Synthetic Field Notes 3 (Unabridged)", "Synthetic Field Notes 3"}, candidateTitles(t, entry.Candidates),
 		"the rejected candidate must leave slot 0, and must not be dropped")
 	require.Equal(t, "h1", entry.SourceHash, "a re-order touches nothing but the order")
 
 	post("/api/v1/metadata/batch-unreject-candidates")
 	entry, err = store.GetMetadataCache(book.ID)
 	require.NoError(t, err)
-	require.Equal(t, []string{"Quiet Harbor", "Quiet Harbor (Unabridged)"}, candidateTitles(t, entry.Candidates),
+	require.Equal(t, []string{"Synthetic Field Notes 3", "Synthetic Field Notes 3 (Unabridged)"}, candidateTitles(t, entry.Candidates),
 		"un-rejecting ranks the candidate by score again")
 	keys, err := store.ScanPrefix("rejected_candidate:" + book.ID + ":")
 	require.NoError(t, err)
@@ -258,16 +258,16 @@ func TestReviewLane_MarksOwnerRejectedCandidate(t *testing.T) {
 	store, err := database.NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
-	book, err := store.CreateBook(&database.Book{Title: "Quiet Harbor", FilePath: "/lib/B/Quiet Harbor.m4b", Format: "m4b"})
+	book, err := store.CreateBook(&database.Book{Title: "Synthetic Field Notes 3", FilePath: "/lib/B/Synthetic Field Notes 3.m4b", Format: "m4b"})
 	require.NoError(t, err)
-	cand := metafetch.MetadataCandidate{Title: "Quiet Harbor", Author: "Pat Writer", Source: "Audible", Score: 0.95}
+	cand := metafetch.MetadataCandidate{Title: "Synthetic Field Notes 3", Author: "Synthetic Penwright", Source: "Audible", Score: 0.95}
 	raw, err := json.Marshal(cand)
 	require.NoError(t, err)
 	require.NoError(t, store.PutMetadataCache(&database.MetadataCandidateCache{
 		BookID: book.ID, Candidates: []json.RawMessage{raw}, FetchedAt: time.Now(),
 		SearchFingerprint: metafetch.FingerprintPrefix + "x",
 	}))
-	require.NoError(t, store.SetRaw("rejected_candidate:"+book.ID+":Audible|Quiet Harbor", []byte("1")))
+	require.NoError(t, store.SetRaw("rejected_candidate:"+book.ID+":Audible|Synthetic Field Notes 3", []byte("1")))
 
 	h := handlers.NewMetadataCacheHandler(store, metafetch.NewService(store), nil, nil, nil)
 	w := httptest.NewRecorder()
@@ -298,15 +298,15 @@ func TestDialogFetch_DoesNotPutOwnerRejectedInSlotZero(t *testing.T) {
 	defer cleanup()
 	aud := testutil.MockAudibleServer(t, func(string) []testutil.AudibleTestProduct {
 		return []testutil.AudibleTestProduct{
-			{ASIN: "B0TESTREJ2", Title: "Quiet Harbor", Authors: []string{"Pat Writer"}, Language: "eng", ReleaseDate: "2020-01-01"},
-			{ASIN: "B0TESTREJ3", Title: "Quiet Harbor Returns", Authors: []string{"Pat Writer"}, Language: "eng", ReleaseDate: "2021-01-01"},
+			{ASIN: "B0TESTREJ2", Title: "Synthetic Field Notes 3", Authors: []string{"Synthetic Penwright"}, Language: "eng", ReleaseDate: "2020-01-01"},
+			{ASIN: "B0TESTREJ3", Title: "Synthetic Field Notes 3 Returns", Authors: []string{"Synthetic Penwright"}, Language: "eng", ReleaseDate: "2021-01-01"},
 		}
 	})
 	useOnlyAudible(t, aud.URL)
 	tempFile := filepath.Join(t.TempDir(), "qh.m4b")
 	require.NoError(t, os.WriteFile(tempFile, []byte("audio"), 0o644))
 	store := database.GetGlobalStore()
-	book, err := store.CreateBook(&database.Book{Title: "Quiet Harbor", FilePath: tempFile, Format: "m4b"})
+	book, err := store.CreateBook(&database.Book{Title: "Synthetic Field Notes 3", FilePath: tempFile, Format: "m4b"})
 	require.NoError(t, err)
 
 	fetch := func() []string {
@@ -337,13 +337,13 @@ func TestSingleApply_RefusesOwnerRejected(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
 	store := database.GetGlobalStore()
-	book, err := store.CreateBook(&database.Book{Title: "Quiet Harbor", Format: "m4b"})
+	book, err := store.CreateBook(&database.Book{Title: "Synthetic Field Notes 3", Format: "m4b"})
 	require.NoError(t, err)
-	cand := metafetch.MetadataCandidate{Title: "Quiet Harbor Returns", Author: "Pat Writer", Source: "Audible", Publisher: "Rejected Pub", Score: 0.95}
+	cand := metafetch.MetadataCandidate{Title: "Synthetic Field Notes 3 Returns", Author: "Synthetic Penwright", Source: "Audible", Publisher: "Synthetic Rejected Pub", Score: 0.95}
 	require.NoError(t, store.PutMetadataCache(&database.MetadataCandidateCache{
 		BookID: book.ID, Candidates: candidateJSON(t, cand), FetchedAt: time.Now(),
 	}))
-	require.NoError(t, store.SetRaw("rejected_candidate:"+book.ID+":Audible|Quiet Harbor Returns", []byte("1")))
+	require.NoError(t, store.SetRaw("rejected_candidate:"+book.ID+":Audible|Synthetic Field Notes 3 Returns", []byte("1")))
 
 	// The dialog's cached search marks the rejected candidate.
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/audiobooks/"+book.ID+"/search-metadata", strings.NewReader(`{}`))
@@ -375,6 +375,62 @@ func TestSingleApply_RefusesOwnerRejected(t *testing.T) {
 	require.Contains(t, w.Body.String(), "owner_rejected")
 	got, err := store.GetBookByID(book.ID)
 	require.NoError(t, err)
-	require.Equal(t, "Quiet Harbor", got.Title)
+	require.Equal(t, "Synthetic Field Notes 3", got.Title)
 	require.Nil(t, got.Publisher, "owner-rejected candidate was applied")
+}
+
+// S1b (2026-10-10): the owner un-rejects a candidate by book and candidate
+// alone (no operation id), from the metadata search windows. The rejection
+// stops matching, the cached row ranks the candidate by score again, and a
+// rejection of another record of the same title (its own ASIN) stays.
+func TestUnrejectCandidate_BookScoped(t *testing.T) {
+	server, cleanup := setupTestServer(t)
+	defer cleanup()
+	store := database.GetGlobalStore()
+	book, err := store.CreateBook(&database.Book{Title: "Synthetic Field Notes 3", Format: "m4b"})
+	require.NoError(t, err)
+
+	abridged := metafetch.MetadataCandidate{Title: "Synthetic Field Notes 3", Source: "Audible", ASIN: "B0SYNABR01", Score: 0.97}
+	unabridged := metafetch.MetadataCandidate{Title: "Synthetic Field Notes 3", Source: "Audible", ASIN: "B0SYNUNA02", Score: 0.95}
+	other := metafetch.MetadataCandidate{Title: "Synthetic Field Notes 3 (Companion)", Source: "Audible", Score: 0.93}
+	rows := append(append(candidateJSON(t, other), candidateJSON(t, abridged)...), candidateJSON(t, unabridged)...)
+	require.NoError(t, store.PutMetadataCache(&database.MetadataCandidateCache{BookID: book.ID, Candidates: rows, FetchedAt: time.Now()}))
+	require.NoError(t, metafetch.RecordRejection(store, book.ID, &abridged))
+	require.NoError(t, metafetch.RecordRejection(store, book.ID, &unabridged))
+
+	post := func(body any) *httptest.ResponseRecorder {
+		raw, _ := json.Marshal(body)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/metadata/unreject-candidate", bytes.NewReader(raw))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		server.router.ServeHTTP(w, req)
+		return w
+	}
+
+	w := post(map[string]any{"book_id": book.ID, "candidate": unabridged})
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), `"unrejected":true`)
+
+	rejected, err := metafetch.LoadRejectedCandidates(store, book.ID)
+	require.NoError(t, err)
+	require.False(t, rejected.HasCandidate(&unabridged), "the un-rejected candidate still matches a rejection")
+	require.True(t, rejected.HasCandidate(&abridged), "un-rejecting one record removed another record's rejection")
+
+	entry, err := store.GetMetadataCache(book.ID)
+	require.NoError(t, err)
+	require.Len(t, entry.Candidates, 3)
+	var top metafetch.MetadataCandidate
+	require.NoError(t, json.Unmarshal(entry.Candidates[0], &top))
+	require.Equal(t, "B0SYNUNA02", top.ASIN, "the un-rejected candidate ranks by score again, ahead of the still-rejected one")
+	var last metafetch.MetadataCandidate
+	require.NoError(t, json.Unmarshal(entry.Candidates[2], &last))
+	require.Equal(t, "B0SYNABR01", last.ASIN, "the still-rejected candidate stays last")
+
+	// Nothing left to un-reject for it: unrejected is false.
+	w = post(map[string]any{"book_id": book.ID, "candidate": unabridged})
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), `"unrejected":false`)
+
+	require.Equal(t, http.StatusBadRequest, post(map[string]any{"book_id": book.ID}).Code)
+	require.Equal(t, http.StatusNotFound, post(map[string]any{"book_id": "no-such-book", "candidate": unabridged}).Code)
 }

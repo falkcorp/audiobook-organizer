@@ -1,11 +1,12 @@
 // file: internal/metafetch/rejected_candidates.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 486771bb-091f-46bb-8846-ff740d2e8ab3
 // last-edited: 2026-10-10
 
 package metafetch
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -224,6 +225,13 @@ func parseRejectionValue(v []byte) (every bool, ids []string) {
 	return false, ids
 }
 
+// parsedRejection is a stored value as a Rejection.
+func parsedRejection(v []byte) *Rejection {
+	r := &Rejection{}
+	r.merge(parseRejectionValue(v))
+	return r
+}
+
 func encodeRejection(r *Rejection) []byte {
 	if r == nil || r.Any || len(r.IDs) == 0 {
 		return []byte("1")
@@ -417,12 +425,19 @@ func RemoveRejection(store RejectionStore, bookID string, c *MetadataCandidate) 
 			continue
 		}
 		value, remove := UnrejectValue(kv.Value, ids)
-		if remove {
+		switch {
+		case remove:
 			if err := store.DeleteRaw(kv.Key); err != nil {
 				return changed, fmt.Errorf("delete rejection %s: %w", kv.Key, err)
 			}
-		} else if err := store.SetRaw(kv.Key, value); err != nil {
-			return changed, fmt.Errorf("rewrite rejection %s: %w", kv.Key, err)
+		case bytes.Equal(value, encodeRejection(parsedRejection(kv.Value))):
+			// The key rejects other records of the title only: c was not
+			// among them, so nothing changes.
+			continue
+		default:
+			if err := store.SetRaw(kv.Key, value); err != nil {
+				return changed, fmt.Errorf("rewrite rejection %s: %w", kv.Key, err)
+			}
 		}
 		changed = true
 	}
