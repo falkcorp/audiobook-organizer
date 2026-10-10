@@ -1,5 +1,5 @@
 <!-- file: docs/executive-summaries/2026-10-10-owner-rejected-candidates-executive-summary.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 02f9b11f-058a-4b13-81a6-59ff338b29e3 -->
 <!-- last-edited: 2026-10-10 -->
 
@@ -30,6 +30,13 @@ added when it merges).
      books filed under a production company;
   9. the repair that copies a matched copy's metadata onto another copy of
      the same book.
+- Two more jobs could carry a rejected match onto a book and no longer do:
+  the job that fills in missing Audible IDs (it could stamp the rejected
+  edition's ID and ISBN onto the book), and the repair that fixes junk
+  titles (it could propose the rejected match's title).
+- A rejected Audible ID or ISBN now counts for every provider. The provider
+  tried after Audible (Audnexus) serves the same Audible product, so before
+  this a match you rejected from Audible could still be applied from there.
 - The nightly upgrade job was the worst case: it replaces fields that already
   have values, so a rejected match could overwrite a good title, description
   or publisher.
@@ -73,7 +80,9 @@ single or bulk, lifts that rule. The routes that do not use the safety check
 now check rejections themselves. The automatic "find and apply metadata"
 step skips a rejected record and tries the provider's next answer, then the
 next provider; when only rejected records match it applies nothing and says
-so. The copy-between-copies repair holds the book for review instead of
+so. Every route also checks your rejections again at the moment it writes,
+and rejecting a match waits for any write to that book already in progress,
+so a rejection made while a search is running is never missed. The copy-between-copies repair holds the book for review instead of
 applying a rejected record.
 
 ## Rejecting only the record you meant
@@ -90,8 +99,18 @@ one should not also turn down the right one.
 **The fix.** A new rejection remembers the rejected record's ASIN, or its
 ISBN when it has no ASIN. A record carrying a different identifier is not
 refused. When either side has no identifier to compare, the rejection still
-covers the whole title, as before. Undo removes the rejection of that one
-record and leaves your other rejections of the same title in place.
+covers the whole title, as before.
+
+An ASIN or ISBN you reject is rejected for that book from every provider,
+not only the one you rejected it from: Audible and Audnexus serve the same
+Audible product under one ASIN, and an ISBN names one edition whoever
+reports it. An ISBN-10 and its ISBN-13 count as the same ISBN.
+
+Undo removes that record's ASIN or ISBN from every rejection of the book,
+whichever provider it was rejected from. When the match carries an ASIN or
+ISBN, your other rejections of the same title stay in place. When it
+carries neither, Undo removes the rejection of that provider and title as a
+whole, since there is nothing to tell the records apart.
 
 ## A rejected match staying at the top of the list
 
@@ -123,7 +142,9 @@ no visible reason and no way to change your mind.
 **The fix.** The review page marks the row "Rejected". A book's metadata
 search window marks the suggestion "Rejected by you", will not let you pick
 it, and offers Undo, after which the suggestion can be picked and applied
-again. Still to do, filed as follow-ups: an Undo on the review page's row
-itself, putting the older bulk fetch through the full safety check (it only
-checks rejections today), and re-sorting a book's list after the repair
-copies another copy's suggestions onto it.
+again. Still to do, in the to-do list: an Undo on the review page's row
+itself (UNREJECT-FROM-REVIEW), putting the older bulk fetch through the full
+safety check (BULK-FETCH-NO-GATE; it only checks rejections today), and
+re-sorting a book's list after the repair copies another copy's suggestions
+onto it (VT-COPY-RERANK). None of these can apply a rejected match: every
+route refuses it.
