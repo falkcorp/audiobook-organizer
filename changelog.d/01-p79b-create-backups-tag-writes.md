@@ -42,7 +42,7 @@ the context (`tagger.WithoutBackup`):
   used to make one full backup per row. The revert journal is its safety net.
 
 Single-book edits keep a backup when the setting is on: a book edit's
-write-back, a per-book write-back, fetch or apply, and rename tag writes.
+write-back and a per-book write-back, fetch or apply.
 
 The two backup sweeps (`maintenance.cleanup-old-backups` and the scheduler's
 `cleanup-old-backups`) remove `.bak-*` siblings older than
