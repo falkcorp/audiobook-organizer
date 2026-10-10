@@ -1,5 +1,5 @@
 // file: internal/scheduler/extra_ops.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: a9b8c7d6-e5f4-3210-fedc-ba9876543210
 // last-edited: 2026-10-10
 
@@ -568,6 +568,10 @@ func runCleanupOldBackups(ctx context.Context, progress cleanupProgressLogger) e
 			return nil
 		}
 		if strings.Contains(info.Name(), ".bak-") {
+			// Age is the backup's mtime. A create_backups backup is a hardlink, which
+			// would keep the original's (often years-old) mtime; fileops.WriteTagsSafe
+			// stamps it to the write time so this check sees its real age (KeepBackup,
+			// MTIME CONTRACT). Changing either side breaks the other.
 			age := time.Since(info.ModTime())
 			if age > maxAge {
 				if rmErr := os.Remove(path); rmErr != nil {
