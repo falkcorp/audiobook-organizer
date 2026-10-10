@@ -1,5 +1,5 @@
 // file: internal/metafetch/rejected_candidates_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 3f0c9a51-7e2d-4b8a-9c16-5d4e8f2a7b30
 // last-edited: 2026-10-10
 
@@ -119,8 +119,9 @@ func TestRecordRejection_MergesAndKeepsLegacyBroad(t *testing.T) {
 	require.True(t, loadSet(t, legacy, "b1").HasCandidate(c))
 }
 
-// After un-rejecting a candidate it matches no rejection, whatever the key
-// held; and a record the owner still rejects stays rejected.
+// After un-rejecting a candidate its own source+title key no longer
+// refuses it, whatever the key held; and a record the owner still rejects
+// stays rejected.
 func TestRemoveRejection_Postcondition(t *testing.T) {
 	a := &MetadataCandidate{Source: "Audible", Title: "Synthetic Field Notes 3", ASIN: "B0SYNABR01"}
 	b := &MetadataCandidate{Source: "Audible", Title: "Synthetic Field Notes 3", ASIN: "B0SYNUNA02"}
