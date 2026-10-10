@@ -1,5 +1,5 @@
 // file: internal/telemetry/telemetry.go
-// version: 2.7.0
+// version: 2.8.0
 // guid: 2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-10-10
 
@@ -100,15 +100,27 @@ func InitOTEL(ctx context.Context, cfg *Config) (func(context.Context) error, er
 	}
 	emit(ctx, level, msg, attrs...)
 
-	return func(shutdownCtx context.Context) error {
-		var errs []error
-		for _, fn := range shutdowns {
-			if err := fn(shutdownCtx); err != nil {
-				errs = append(errs, err)
-			}
+	return func(shutdownCtx context.Context) error { return runShutdowns(shutdownCtx, shutdowns) }, nil
+}
+
+// runShutdowns runs fns in order, each with its own share of the caller's
+// deadline: fn i of n gets the time remaining divided by the n-i functions
+// still to run, so a tracer that hangs on an unreachable collector cannot
+// starve the meter flush behind it. Without a deadline each gets the caller's
+// context unchanged.
+func runShutdowns(ctx context.Context, fns []func(context.Context) error) error {
+	var errs []error
+	for i, fn := range fns {
+		fctx, cancel := ctx, context.CancelFunc(func() {})
+		if dl, ok := ctx.Deadline(); ok {
+			fctx, cancel = context.WithTimeout(ctx, time.Until(dl)/time.Duration(len(fns)-i))
 		}
-		return errors.Join(errs...)
-	}, nil
+		if err := fn(fctx); err != nil {
+			errs = append(errs, err)
+		}
+		cancel()
+	}
+	return errors.Join(errs...)
 }
 
 // traceEndpointOption turns the configured endpoint into the exporter option
@@ -211,6 +223,9 @@ func metricPlaintext(t otlpTarget, insecure bool) bool {
 //   - otherwise: TLS with the system root CAs. OTEL_EXPORTER_OTLP_CERTIFICATE
 //     and the client-certificate variables are therefore NOT honoured for
 //     metrics; use SSL_CERT_FILE / SSL_CERT_DIR for a private CA.
+//
+// Headers, temporality and histogram aggregation are pinned in newOTLPReader,
+// which lists what is pinned and what still follows the environment.
 func metricEndpointOption(t otlpTarget, insecure bool) []otlpmetricgrpc.Option {
 	var opts []otlpmetricgrpc.Option
 	if t.URL != "" {
@@ -362,17 +377,28 @@ func newOTLPReader(ctx context.Context, cfg *Config) (metric.Reader, string, err
 		return nil, "", err
 	}
 	interval, note := clampInterval(cfg.MetricsOTLPInterval)
-	// Everything the generic OTEL_EXPORTER_OTLP_* environment could otherwise
-	// change is pinned here (see metricEndpointOption for the transport):
+	// The generic OTEL_EXPORTER_OTLP_* environment is read by the exporter
+	// before these options, so what must not follow it is pinned here.
+	// PINNED (the environment cannot change it):
+	//   - transport and TLS material: see metricEndpointOption.
 	//   - headers: emptied, so the trace collector's credentials
 	//     (OTEL_EXPORTER_OTLP_HEADERS) are never sent to the metric host.
 	//     OTEL_EXPORTER_OTLP_METRICS_HEADERS is neutralised too: metric
 	//     headers are not supported yet.
 	//   - temporality: cumulative (owner decision D66), whatever
 	//     OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE says.
+	//   - histogram aggregation: the SDK default, so
+	//     OTEL_EXPORTER_OTLP_METRICS_DEFAULT_HISTOGRAM_AGGREGATION cannot switch
+	//     views-less histograms to exponential.
+	// STILL FOLLOWS THE ENVIRONMENT (benign, left alone on purpose):
+	//   - OTEL_EXPORTER_OTLP_[METRICS_]COMPRESSION and _TIMEOUT: payload
+	//     encoding and the per-request deadline; neither moves data to another
+	//     place or changes what is sent.
+	//   - OTEL_METRIC_EXPORT_TIMEOUT (read by the SDK's periodic reader).
 	opts := append(metricEndpointOption(target, cfg.MetricsOTLPInsecure),
 		otlpmetricgrpc.WithHeaders(map[string]string{}),
-		otlpmetricgrpc.WithTemporalitySelector(metric.CumulativeTemporalitySelector))
+		otlpmetricgrpc.WithTemporalitySelector(metric.CumulativeTemporalitySelector),
+		otlpmetricgrpc.WithAggregationSelector(metric.DefaultAggregationSelector))
 	exp, err := otlpmetricgrpc.New(ctx, opts...)
 	if err != nil {
 		return nil, note, err
