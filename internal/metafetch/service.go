@@ -1,5 +1,5 @@
 // file: internal/metafetch/service.go
-// version: 5.50.0
+// version: 5.51.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
 // last-edited: 2026-10-09
 
@@ -557,7 +557,7 @@ var coverEmbedLog = logger.New("metafetch-cover-embed")
 // here, under a copy policy, which is how a step could write a copy its job
 // had not locked; now it only refuses a protected book outright.
 func (mfs *Service) embedCoverInBookFiles(book *database.Book, coverPath string) {
-	if !config.AppConfig.EmbedCoverArt {
+	if !config.Snapshot().EmbedCoverArt {
 		coverEmbedLog.Debug("cover embed skipped: embed_cover_art setting is off")
 		return
 	}
