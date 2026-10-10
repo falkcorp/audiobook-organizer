@@ -1,5 +1,5 @@
 // file: internal/database/store_width_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 7d1b6c2e-4a93-4f58-9e0d-3c8a52b7f1e4
 // last-edited: 2026-10-10
 
@@ -7,9 +7,10 @@ package database
 
 import (
 	"go/ast"
+	"go/build"
 	"go/parser"
 	"go/token"
-	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -49,14 +50,23 @@ func flattenedExternalEmbeds(methods map[string]bool) []string {
 func flattenedMethods(t *testing.T, dir, iface string) map[string]bool {
 	t.Helper()
 	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, dir,
-		func(fi os.FileInfo) bool { return !strings.HasSuffix(fi.Name(), "_test.go") }, 0)
+	// go/build applies the default build constraints, so the count matches the
+	// package the compiler builds (parser.ParseDir ignored build tags).
+	bp, err := build.ImportDir(dir, 0)
 	if err != nil {
-		t.Fatalf("parse %s: %v", dir, err)
+		t.Fatalf("import %s: %v", dir, err)
+	}
+	var files []*ast.File
+	for _, name := range bp.GoFiles {
+		f, err := parser.ParseFile(fset, filepath.Join(dir, name), nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		files = append(files, f)
 	}
 	ifaces := map[string]*ast.InterfaceType{}
-	for _, p := range pkgs {
-		for _, f := range p.Files {
+	{
+		for _, f := range files {
 			for _, d := range f.Decls {
 				gd, ok := d.(*ast.GenDecl)
 				if !ok {
