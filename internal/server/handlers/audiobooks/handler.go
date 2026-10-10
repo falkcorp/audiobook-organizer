@@ -1,7 +1,7 @@
 // file: internal/server/handlers/audiobooks/handler.go
-// version: 1.30.0
+// version: 1.31.0
 // guid: 51fac747-9478-4075-8621-9da4bbdedc37
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 
 // Package audiobookshandler hosts the main library list / CRUD HTTP handlers
 // extracted from the server package's audiobooks_handlers.go: book listing
@@ -65,6 +65,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
+	"github.com/falkcorp/audiobook-organizer/internal/querygrammar"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 	"github.com/falkcorp/audiobook-organizer/internal/searchcache"
 	"github.com/falkcorp/audiobook-organizer/internal/security/pathvalidation"
@@ -651,6 +652,13 @@ func (h *Handler) parseListRequest(c *gin.Context) (listRequest, bool) {
 			httputil.RespondWithBadRequest(c, "invalid filter value: "+err.Error())
 			return listRequest{}, false
 		}
+		// Bound the set as a whole, as the Review query bounds its q: each
+		// value is already within querygrammar's per-value limits, and this
+		// refuses a pasted wall of them before any row is scanned.
+		if err := audiobookspkg.CheckFilterSetSize(fieldFilters); err != nil {
+			httputil.RespondWithBadRequest(c, "invalid filters parameter: "+err.Error())
+			return listRequest{}, false
+		}
 		for _, ff := range fieldFilters {
 			if audiobookspkg.IsPerUserField(ff.Field) {
 				filters.PerUserFilters = append(filters.PerUserFilters, ff)
@@ -791,6 +799,9 @@ func (h *Handler) ListAudiobooks(c *gin.Context) {
 			"status":         "running",
 			"matches_so_far": pending.MatchesSoFar,
 		})
+		return
+	}
+	if respondSearchLimit(c, err) {
 		return
 	}
 	if err != nil {
@@ -1210,6 +1221,9 @@ func (h *Handler) AudiobookFacets(c *gin.Context) {
 		return
 	}
 	facets, err := h.audiobookService.ScopedTagFacets(c.Request.Context(), req.params.Search, req.authorID, req.seriesID, req.filters)
+	if respondSearchLimit(c, err) {
+		return
+	}
 	if err != nil {
 		httputil.InternalError(c, "failed to compute scoped tag facets", err)
 		return
@@ -1258,4 +1272,25 @@ func (h *Handler) GetAudiobook(c *gin.Context) {
 	}
 
 	httputil.RespondWithOK(c, h.enrichBook(book))
+}
+
+// respondSearchLimit answers the querygrammar evaluation limits and reports
+// whether it did: a spent pattern budget is a 400 (the search, as written,
+// cannot be answered within the limit; nothing partial is returned), every
+// pattern slot busy is a 503 with Retry-After. The review handler in package
+// handlers has the same function; httputil and querygrammar are both leaf
+// packages, so neither can host it.
+func respondSearchLimit(c *gin.Context, err error) bool {
+	var slow *querygrammar.TooSlowError
+	if errors.As(err, &slow) {
+		httputil.RespondWithBadRequest(c, slow.Error())
+		return true
+	}
+	var busy *querygrammar.BusyError
+	if errors.As(err, &busy) {
+		c.Header("Retry-After", "2")
+		httputil.RespondWithServiceUnavailable(c, busy.Error())
+		return true
+	}
+	return false
 }

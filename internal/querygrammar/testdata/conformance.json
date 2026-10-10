@@ -670,11 +670,7 @@
     "pattern": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "quoted": false,
     "input": "xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-    "want_match": true,
-    "engines": [
-      "go"
-    ],
-    "skip_reason": "the size limits (MaxTextValueBytes, MaxPatternInst) are enforced by the Go engine, which evaluates every search on the server; the TS pre-check does not mirror them"
+    "want_match": true
   },
   {
     "name": "limit regex repeat expands past the program size",
@@ -699,25 +695,31 @@
     "skip_reason": "the size limits (MaxTextValueBytes, MaxPatternInst) are enforced by the Go engine, which evaluates every search on the server; the TS pre-check does not mirror them"
   },
   {
-    "name": "limit wildcard with too many stars",
-    "pattern": "a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*",
+    "name": "limit a wildcard with 128 stars is accepted",
+    "pattern": "a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*",
     "quoted": false,
-    "want_error": true,
-    "go_error_contains": "too complex",
-    "engines": [
-      "go"
-    ],
-    "skip_reason": "the size limits (MaxTextValueBytes, MaxPatternInst) are enforced by the Go engine, which evaluates every search on the server; the TS pre-check does not mirror them"
+    "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "want_match": true
   },
   {
     "name": "limit an ordinary counted repeat is accepted",
     "pattern": "/^[a-z]{3}\\d{2}/",
     "quoted": false,
     "input": "abc12 Delta",
-    "want_match": true,
-    "engines": [
-      "go"
-    ],
-    "skip_reason": "the size limits (MaxTextValueBytes, MaxPatternInst) are enforced by the Go engine, which evaluates every search on the server; the TS pre-check does not mirror them"
+    "want_match": true
+  },
+  {
+    "name": "limit a long-title cleanup regex is accepted",
+    "pattern": "/.{120}/",
+    "quoted": false,
+    "input": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "want_match": true
+  },
+  {
+    "name": "limit an open-ended counted repeat is accepted",
+    "pattern": "/^.{100,}$/",
+    "quoted": false,
+    "input": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+    "want_match": false
   }
 ]
