@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_rankscore_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 61e828ea-550f-4785-ab97-1e894be5a182
 // last-edited: 2026-10-10
 
@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	tmock "github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai/mocks"
@@ -181,6 +182,30 @@ func TestRerank_RankScoreDoesNotMoveTheWindowOrTheScores(t *testing.T) {
 	assert.Less(t, got[0].Score, 0.90, "B stays under the apply floor, as at HEAD")
 }
 
+// The final re-sort in RerankTopK follows the rescaled Score, not RankScore.
+// P (Score 0.90, penalised: RankScore 1.20) and Q (Score 0.88, RankScore 0.88)
+// are inside epsilon. The LLM prefers Q, so Q is rescaled to 0.90 and P to 0.88:
+// Score order [Q, P] while RankScore order is [P (1.173), Q (0.90)].
+func TestRerank_FinalSortFollowsScoreNotRankScore(t *testing.T) {
+	orig := config.AppConfig.MetadataScoring
+	config.AppConfig.MetadataScoring.LLMRerankEpsilon = 0.05
+	config.AppConfig.MetadataScoring.LLMRerankTopK = 5
+	t.Cleanup(func() { config.AppConfig.MetadataScoring = orig })
+
+	p := MetadataCandidate{Title: "P", Source: "Audible", Score: 0.90, RankScore: 1.20}
+	q := MetadataCandidate{Title: "Q", Source: "Audible", Score: 0.88, RankScore: 0.88}
+	llm := mocks.NewMockMetadataCandidateScorer(t)
+	llm.EXPECT().Score(tmock.Anything, tmock.Anything, tmock.Anything).Return([]float64{0.0, 1.0}, nil).Once()
+	svc := NewService(&database.MockStore{})
+	svc.SetMetadataLLMScorer(llm)
+	got := svc.RerankTopK(context.TODO(), &database.Book{}, []MetadataCandidate{p, q})
+	require.Len(t, got, 2)
+	assert.Equal(t, []string{"Q", "P"}, []string{got[0].Title, got[1].Title}, "stored order follows the rescaled Score")
+	assert.InDelta(t, 0.90, got[0].Score, 1e-12)
+	assert.InDelta(t, 0.88, got[1].Score, 1e-12)
+	assert.Greater(t, got[1].RankValue(), got[0].RankValue(), "fixture: RankScore order disagrees with Score order")
+}
+
 // When a rerank does run, Score is rescaled exactly as before and RankScore
 // keeps its distance from it.
 func TestRerank_RescalesScoreAsBeforeAndCarriesRankScore(t *testing.T) {
@@ -230,4 +255,13 @@ func TestRankValue_PreDeployRowFallsBackToScore(t *testing.T) {
 	c.RankScore = 0.9
 	assert.Equal(t, 0.9, c.RankValue())
 	assert.False(t, math.IsNaN(c.RankValue()))
+}
+
+// recordRerank with a candidate that has no RankScore: the ranking score
+// falls back to the PRE-rerank score's ratio (1), not to the rescaled Score.
+func TestRecordRerank_NoRankScoreFallsBackToPreScore(t *testing.T) {
+	c := MetadataCandidate{Title: "N", Score: 0.9,
+		ScoreBreakdown: &ScoreBreakdown{Score: 0.5, Steps: []ScoreStep{{ID: "base", Op: ScoreOpBase, Operand: 0.5, Running: 0.5}}}}
+	recordRerank(&c, 0.5, 0.5, 0.9, 0.5)
+	assert.InDelta(t, 0.9, c.RankScore, 1e-12)
 }

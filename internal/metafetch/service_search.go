@@ -1,5 +1,5 @@
 // file: internal/metafetch/service_search.go
-// version: 1.40.5
+// version: 1.40.6
 // guid: bcba782a-8ed4-4285-be91-2af3eddc90e3
 // last-edited: 2026-10-10
 
@@ -1572,9 +1572,15 @@ func (mfs *Service) searchMetadataForBook(
 			if candidateNum == expectedNum {
 				c.Score *= k.SeriesNumberExactBoost // Strong boost for exact number match
 				c.RankScore *= k.SeriesNumberExactBoost
+				if c.ScoreBreakdown != nil {
+					c.ScoreBreakdown.RankScore *= k.SeriesNumberExactBoost
+				}
 			} else if candidateNum != "" && candidateNum != expectedNum {
 				c.Score *= k.SeriesNumberWrongPenalty // Penalize wrong number in same series
 				c.RankScore *= k.SeriesNumberWrongPenalty
+				if c.ScoreBreakdown != nil {
+					c.ScoreBreakdown.RankScore *= k.SeriesNumberWrongPenalty
+				}
 			}
 		}
 	}

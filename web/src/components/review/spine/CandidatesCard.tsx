@@ -1,7 +1,7 @@
 // file: web/src/components/review/spine/CandidatesCard.tsx
-// version: 1.3.0
+// version: 1.3.1
 // guid: ceb6a375-997d-44e0-8c71-d83c1980ea33
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 //
 // The Candidates view's card (owner-approved 2026-10-07): the book's full info
 // on the LEFT, and on the RIGHT the full ranked candidate list the per-book
@@ -64,6 +64,7 @@ import {
   scoreColor,
 } from './rowState';
 import type { SpineRowProps } from './CompareSpine';
+import { rankScoreOf } from '../../audiobooks/rankScore';
 
 /** What the candidates view needs beyond a row's props; built once by the panel. */
 export interface CandidatesContext {
@@ -378,18 +379,19 @@ export const CandidatesCard = memo(function CandidatesCard({
   const cached = r.candidate;
   const list: MetadataCandidate[] =
     entry.status === 'done'
-      ? [...entry.results].sort((a, b) => b.score - a.score)
+      ? [...entry.results].sort((a, b) => rankScoreOf(b) - rankScoreOf(a))
       : entry.status === 'loading' && entry.partial
-        ? [...entry.partial].sort((a, b) => b.score - a.score)
+        ? [...entry.partial].sort((a, b) => rankScoreOf(b) - rankScoreOf(a))
         : cached && !query.browse
           ? [cached]
           : [];
   const visible = list.filter((c) => !hidden.some((h) => sameCandidate(h, c)));
-  // The highlight follows the highest score in the current list, not the
+  // The highlight follows the highest ranking score (rank_score; score for a
+  // row that predates it) in the current list, not the
   // background scan's cached pick: a fresh search can find a better match
   // (owner report 2026-10-07: Audible 284 sat below a highlighted 213 pick).
   const best = visible.reduce<MetadataCandidate | undefined>(
-    (b, c) => (b === undefined || c.score > b.score ? c : b),
+    (b, c) => (b === undefined || rankScoreOf(c) > rankScoreOf(b) ? c : b),
     undefined
   );
 

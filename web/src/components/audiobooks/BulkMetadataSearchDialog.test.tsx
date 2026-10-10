@@ -1,7 +1,7 @@
 // file: web/src/components/audiobooks/BulkMetadataSearchDialog.test.tsx
-// version: 2.0.0
+// version: 2.0.1
 // guid: ec4cb47b-6f18-4083-ab37-a05af679a097
-// last-edited: 2026-10-06
+// last-edited: 2026-10-10
 
 import { useState } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -243,6 +243,57 @@ describe('BulkMetadataSearchDialog — picks are staged, never applied while ope
         background: true,
       })
     );
+  });
+});
+
+describe('BulkMetadataSearchDialog — ordered by rank_score, applies the clicked row', () => {
+  // Server (score) order: X first. Y names no narrator, so its score carries
+  // the 0.85 penalty, but its rank_score does not.
+  const x: MetadataCandidate = {
+    title: 'Sample Saga 2',
+    author: 'Author 07',
+    source: 'audible',
+    score: 1.05,
+    rank_score: 1.05,
+  };
+  const y: MetadataCandidate = {
+    title: 'Sample Saga 1',
+    author: 'Author 07',
+    source: 'audible',
+    score: 0.9775,
+    rank_score: 1.15,
+  };
+  const titles = () => screen.getAllByText(/^Sample Saga [12]$/).map((el) => el.textContent);
+
+  it('lists the highest rank_score first, whatever the order or the score', async () => {
+    mockSearch.mockResolvedValue({ results: [x, y] } as Awaited<ReturnType<typeof searchMetadataForBook>>);
+    renderDialog([book('a')]);
+    await screen.findByText('Sample Saga 1');
+    expect(titles()).toEqual(['Sample Saga 1', 'Sample Saga 2']);
+  });
+
+  it('falls back to score for a row with no rank_score', async () => {
+    mockSearch.mockResolvedValue({
+      results: [
+        { ...x, rank_score: undefined },
+        { ...y, rank_score: undefined },
+      ],
+    } as Awaited<ReturnType<typeof searchMetadataForBook>>);
+    renderDialog([book('a')]);
+    await screen.findByText('Sample Saga 1');
+    expect(titles()).toEqual(['Sample Saga 2', 'Sample Saga 1']);
+  });
+
+  it('picking the first displayed row applies that exact candidate', async () => {
+    mockSearch.mockResolvedValue({ results: [x, y] } as Awaited<ReturnType<typeof searchMetadataForBook>>);
+    renderDialog([book('a')]);
+    await screen.findByText('Sample Saga 1');
+    fireEvent.click(pickButtons()[0]); // displayed first = Sample Saga 1 = server index 1
+    fireEvent.click(await screen.findByRole('button', { name: /Apply 1 book & close/ }));
+    await waitFor(() => expect(mockApply).toHaveBeenCalledTimes(1));
+    expect(mockApply).toHaveBeenCalledWith('a', y, undefined, true, undefined, {
+      background: true,
+    });
   });
 });
 
