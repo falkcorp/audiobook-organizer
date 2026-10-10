@@ -1,7 +1,7 @@
 // file: internal/server/metadata_batch_candidates.go
-// version: 4.24.3
+// version: 4.25.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6
-// last-edited: 2026-10-06
+// last-edited: 2026-10-10
 //
 // HTTP handlers for the metadata candidate batch fetch / apply pipeline.
 // Pure service types and logic live in internal/metabatch.
@@ -11,6 +11,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -28,6 +29,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
+	"github.com/falkcorp/audiobook-organizer/internal/querygrammar"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 )
 
@@ -103,6 +105,13 @@ func (s *Server) handleBatchFetchCandidates(c *gin.Context) {
 		resolved, err := operations.ResolveBookIDs(*req.Selection, func(f operations.FilterSpec) ([]string, error) {
 			return s.resolveFilterToBookIDs(c.Request.Context(), f)
 		})
+		var busy *querygrammar.BusyError
+		if errors.As(err, &busy) {
+			// Load, not a bad request: the client may retry.
+			c.Header("Retry-After", "2")
+			httputil.RespondWithServiceUnavailable(c, "failed to resolve selection: "+busy.Error())
+			return
+		}
 		if err != nil {
 			httputil.RespondWithBadRequest(c, "failed to resolve selection: "+err.Error())
 			return

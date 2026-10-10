@@ -1,6 +1,6 @@
 // file: web/src/components/audiobooks/SearchBar.tsx
-// version: 2.9.0
-// last-edited: 2026-10-06
+// version: 2.10.0
+// last-edited: 2026-10-10
 // guid: 1d2e3f4a-5b6c-7d8e-9f0a-1b2c3d4e5f6a
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -176,6 +176,10 @@ const SEARCH_HELP = [
   { example: 'author:/sanderson|jemisin/', desc: 'Regex alternation: either author' },
   { example: 'format:/^(m4b|mp3)$/', desc: 'Regex: format is exactly m4b or mp3' },
   { example: 'title:"a*"', desc: 'Quotes = literal text: no wildcard, regex or comparison' },
+  {
+    example: 'description:/chapter one/',
+    desc: 'A regex or wildcard sees only the first 16 KB of a long field; a plain word searches all of it. A search that spends over 1 s matching patterns is stopped with a message',
+  },
   { example: 'narrator:*', desc: 'Has a narrator (-narrator:* = no narrator)' },
   { example: 'year:>2020', desc: 'Published after 2020 (also >=, <, <=, !=)' },
   { example: 'year:[2015 TO 2020]', desc: 'Year range, inclusive (* leaves a side open)' },

@@ -1,5 +1,5 @@
 // file: internal/server/audiobooks_helpers.go
-// version: 1.9.0
+// version: 1.10.0
 // guid: 439aa827-edea-481d-8918-ddacd2c140b7
 // last-edited: 2026-10-10
 
@@ -53,6 +53,14 @@ import (
 // buildListResponse closure) and the startup cache warmer so both produce
 // identical results.
 func (s *Server) buildAudiobookListResponse(ctx context.Context, limit, offset int, search string, authorID, seriesID *int, filters ListFilters, showQuarantined bool) (gin.H, error) {
+	// The page and the total below are two scans over the same filters. With
+	// a regex or glob filter they share ONE pattern slot and ONE budget, so
+	// the request spends at most one budget and is refused at most once: if
+	// the count spends what the page left, the whole response is refused (a
+	// page with the page length posing as the total would be a wrong number
+	// that reads as a fact).
+	ctx, done := audiobooks.WithSharedSearchAllowance(ctx)
+	defer done()
 	// Push quarantine exclusion DOWN into the indexed scan (and the count) so a
 	// page of N returns N non-quarantined books and totalCount agrees. Dropping
 	// quarantined rows AFTER pagination (as this used to) made a 500-page return
@@ -124,9 +132,9 @@ func (s *Server) buildAudiobookListResponse(ctx context.Context, limit, offset i
 		if hasFilters {
 			tc, err := s.audiobookService.CountAudiobooksFiltered(ctx, filters)
 			if audiobooks.IsSearchLimitError(err) {
-				// A count stopped by its pattern budget, or refused a slot,
-				// would leave the page's own length as the total: a wrong
-				// number that reads as a fact. Refuse the response instead.
+				// The shared budget ran out in the count (see the top of
+				// this function): refuse the response rather than serve the
+				// page length as the total.
 				return nil, err
 			}
 			if err == nil {
