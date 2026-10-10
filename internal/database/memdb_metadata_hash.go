@@ -1,7 +1,7 @@
 // file: internal/database/memdb_metadata_hash.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5b8e0f3a-2c71-4d96-b0e4-7a19c3d52e84
-// last-edited: 2026-10-06
+// last-edited: 2026-10-10
 
 package database
 
@@ -66,7 +66,7 @@ func (p *PebbleStore) GetBooksByMetadataSourceHashInMemory(hash string) ([]Book,
 	if !p.UseMemDB {
 		return nil, fmt.Errorf("%w: memdb is disabled on this store (UseMemDB=false)", ErrMemDBNotReady)
 	}
-	m := p.mem()
+	m := p.memOrRefuse("GetBooksByMetadataSourceHashInMemory")
 	if m == nil {
 		return nil, fmt.Errorf("%w: memdb is not published yet (warmup still running, or it failed)", ErrMemDBNotReady)
 	}

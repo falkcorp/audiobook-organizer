@@ -1,7 +1,7 @@
 // file: internal/server/library_core_ops.go
-// version: 1.14.0
+// version: 1.14.1
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-08
+// last-edited: 2026-10-10
 
 // library_core_ops registers the scan, organize, and transcode OperationDefs
 // that previously went through the legacy BridgeQueue.
@@ -241,6 +241,7 @@ func (s *Server) RegisterLibraryImportOp(reg *opsregistry.Registry) error {
 		DisplayName:     "Manual Import",
 		Description:     "Import audiobooks from a specific folder or file (no full-library scan). The path must resolve under a configured import path.",
 		DefaultPriority: opsregistry.PriorityHigh, // user-triggered, should not wait behind background scans
+		NoWarmupWait:    true,                     // nor behind the post-restart warmup
 		Cancellable:     true,
 		Isolate:         false,
 		Timeout:         4 * time.Hour,

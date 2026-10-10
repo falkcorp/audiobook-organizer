@@ -1,7 +1,7 @@
 // file: internal/database/signal_coverage.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 3933e507-6dbe-4a9c-be3f-fc3512d67d44
-// last-edited: 2026-09-19
+// last-edited: 2026-10-10
 
 package database
 
@@ -395,7 +395,7 @@ func (p *PebbleStore) GetBookFileSignalCoverage(ctx context.Context, deep bool, 
 		if !p.UseMemDB {
 			return nil, fmt.Errorf("%w: memdb is disabled on this store (UseMemDB=false); pass deep=true for a Pebble scan", ErrMemDBNotReady)
 		}
-		mem := p.mem()
+		mem := p.memOrRefuse("GetBookFileSignalCoverage")
 		if mem == nil {
 			return nil, fmt.Errorf("%w: memdb is not published yet (warmup still running, or it failed and reads fell back to Pebble); retry later, or pass deep=true for a Pebble scan", ErrMemDBNotReady)
 		}

@@ -1,5 +1,5 @@
 // file: internal/database/book_files_with_hash.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 3c8e1f47-5a2b-4d96-b0e7-8f14a6d2c953
 // last-edited: 2026-10-10
 
@@ -40,7 +40,7 @@ func (p *PebbleStore) BookFilesWithHash(hash string) ([]BookFile, error) {
 	if hash == "" {
 		return nil, nil
 	}
-	m := p.memOrFallback("BookFilesWithHash")
+	m := p.memOrRefuse("BookFilesWithHash")
 	if m == nil {
 		return nil, fmt.Errorf("%w: memdb is not serving", ErrBookFilesWithHashUnavailable)
 	}

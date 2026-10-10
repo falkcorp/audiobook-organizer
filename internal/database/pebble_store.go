@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.210.4
+// version: 1.210.5
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-10
 
@@ -284,18 +284,30 @@ func (p *PebbleStore) IsMemReady() bool { return p.memPtr.Load() != nil }
 // memOrFallback returns the published memdb when this store reads through it
 // (UseMemDB) and it is ready, and nil otherwise. A nil result from a store that
 // wants memdb (UseMemDB true, not yet published) is a fallback read: it is
-// counted in memdb_fallback_reads_total under site, the calling method's name.
-// Stores built with UseMemDB=false never use memdb on purpose, so they are not
-// counted. Callers keep their existing control flow: a nil result means "take
-// the Pebble path".
+// counted in memdb_fallback_reads_total under site (the calling method's name)
+// with outcome="fallback". Stores built with UseMemDB=false never use memdb on
+// purpose, so they are not counted. Callers keep their existing control flow: a
+// nil result means "take the Pebble path".
 func (p *PebbleStore) memOrFallback(site string) *MemStore {
+	return p.memOr(site, memdbOutcomeFallback)
+}
+
+// memOrRefuse is memOrFallback for the reads that have NO Pebble path: when
+// memdb is wanted but not published they return an error instead of scanning.
+// The same unmet need is counted, with outcome="refused", so a refused read is
+// not mistaken for a slow-but-served one.
+func (p *PebbleStore) memOrRefuse(site string) *MemStore {
+	return p.memOr(site, memdbOutcomeRefused)
+}
+
+func (p *PebbleStore) memOr(site, outcome string) *MemStore {
 	if !p.UseMemDB {
 		return nil
 	}
 	if m := p.mem(); m != nil {
 		return m
 	}
-	p.recordMemdbFallback(site)
+	p.recordMemdbFallback(site, outcome)
 	return nil
 }
 
