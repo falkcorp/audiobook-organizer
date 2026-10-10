@@ -4,9 +4,9 @@
   // gone; the toolchain sets that build tag itself. Pin the toolchain instead
   // so gopls and the test runner match `make` and CI.
   "go.toolsEnvVars": {
-    "GOTOOLCHAIN": "go1.27.1"
+    "GOTOOLCHAIN": "go1.27.2"
   },
   "go.testEnvVars": {
-    "GOTOOLCHAIN": "go1.27.1"
+    "GOTOOLCHAIN": "go1.27.2"
   }
 }

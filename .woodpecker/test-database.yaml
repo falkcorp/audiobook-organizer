@@ -1,7 +1,7 @@
 # file: .woodpecker/test-database.yaml
-# version: 1.3.0
+# version: 1.3.1
 # guid: 3f1c9a52-8e47-4b0d-a6c1-5d2e7f9b0c14
-# last-edited: 2026-10-02
+# last-edited: 2026-10-09
 #
 # `make ci` test-short, part 1 of 3: internal/database ALONE.
 #
@@ -42,7 +42,7 @@ steps:
     # Local backend: `image` names the SHELL that runs the commands.
     image: bash
     environment:
-      GOTOOLCHAIN: go1.27.1
+      GOTOOLCHAIN: go1.27.2
       # Host-wide caches on U1's tank/ci dataset; see test-rest.yaml for why
       # per-run caches and cache keys without -trimpath filled disks.
       GOMODCACHE: /tank/ci/cache/gomod

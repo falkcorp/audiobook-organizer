@@ -1,7 +1,7 @@
 # file: Makefile.local.example
-# version: 1.5.0
+# version: 1.5.1
 # guid: a2b4c6d8-e0f2-4a6b-8c0d-2e4f6a8b0c2d
-# last-edited: 2026-10-03
+# last-edited: 2026-10-09
 #
 # TEMPLATE — copy to Makefile.local (gitignored) and fill in your own values.
 # Makefile.local is included by the committed Makefile via `-include
@@ -18,7 +18,7 @@
 #
 # ---------------------------------------------------------------------------
 # TOOLCHAIN: the `go build` lines below deliberately carry NO GOTOOLCHAIN
-# prefix. The committed Makefile exports it (`export GOTOOLCHAIN := go1.27.1`)
+# prefix. The committed Makefile exports it (`export GOTOOLCHAIN := go1.27.2`)
 # BEFORE its `-include Makefile.local`, and an exported make variable becomes an
 # environment variable for every recipe — including recipes defined in this
 # included file. Verified 2026-08-29 (then at go1.26.0): a probe target here

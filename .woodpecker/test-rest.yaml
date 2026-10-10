@@ -1,7 +1,7 @@
 # file: .woodpecker/test-rest.yaml
-# version: 1.7.0
+# version: 1.7.1
 # guid: c84e1b3d-2f9a-4c57-8d06-e3a1b7f5d942
-# last-edited: 2026-10-02
+# last-edited: 2026-10-09
 #
 # `make ci` test-short, part 3 of 3: every other package in `go list ./...`.
 # That includes internal/plugins/maintenance (65-110 s), internal/operations/
@@ -47,7 +47,7 @@ steps:
     # container image; the step runs on the host with the agent's PATH.
     image: bash
     environment:
-      GOTOOLCHAIN: go1.27.1
+      GOTOOLCHAIN: go1.27.2
       # The local backend gives every pipeline a fresh HOME, so Go's default
       # caches ($HOME/go/pkg/mod, which also holds the downloaded toolchain, and
       # the per-user build cache: $HOME/.cache/go-build on Linux) were re-created
