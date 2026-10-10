@@ -1,11 +1,12 @@
 // file: internal/deluge/client_test.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 0b8c9d7e-1f2a-4a70-b8c5-3d7e0f1b9a99
 // last-edited: 2026-10-10
 
 package deluge
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestLogin_Success(t *testing.T) {
@@ -648,5 +650,45 @@ func TestCall_ConcurrentExpiredSessionLogsInOnce(t *testing.T) {
 	defer mu.Unlock()
 	if logins != 1 {
 		t.Errorf("logins = %d, want exactly 1", logins)
+	}
+}
+
+// A Deluge that accepts the connection and never answers: the ctx deadline,
+// not the 5-minute transport timeout, must end the call, and the error must
+// say so (callers map it to "timed out").
+func TestGetTorrentDetailContext_HangingServerHonoursDeadline(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) })
+
+	c, err := New(srv.URL, "deluge")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+
+	type result struct{ err error }
+	done := make(chan result, 1)
+	go func() {
+		_, err := c.GetTorrentDetailContext(ctx, strings.Repeat("ab", 20))
+		done <- result{err}
+	}()
+	select {
+	case r := <-done:
+		if r.err == nil {
+			t.Fatal("want an error from a server that never answers")
+		}
+		if !errors.Is(r.err, context.DeadlineExceeded) {
+			t.Errorf("error does not wrap context.DeadlineExceeded: %v", r.err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("GetTorrentDetailContext ignored its context deadline")
 	}
 }

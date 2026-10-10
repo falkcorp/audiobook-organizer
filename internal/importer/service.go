@@ -1,5 +1,5 @@
 // file: internal/importer/service.go
-// version: 1.15.0
+// version: 1.16.0
 // guid: d0e1f2a3-b4c5-6d7e-8f9a-0b1c2d3e4f5b
 // last-edited: 2026-10-10
 
@@ -134,14 +134,23 @@ type ImportFileRequest struct {
 	// everywhere until 2026-08-25, which is exactly the bug this comment exists
 	// to stop recurring.
 	Organize bool `json:"organize"`
-	// TorrentHash is the infohash of the torrent this file came from. The
-	// caller has already normalized it (lower-case hex) and, where it can,
-	// verified it against Deluge; ImportFile only re-checks its shape and
-	// ignores an empty value. When set it is written onto the new
-	// BookVersion (TorrentHash, Source "deluge") and the new BookFile
-	// (DelugeHash). It does not mark the file as copied: the later copy into
-	// the library sets ImportedFromDelugeAt and DelugeOriginalPath.
-	TorrentHash string `json:"torrent_hash,omitempty"`
+	// TorrentHash is the infohash of the torrent this file came from.
+	//
+	// It is NOT bindable from JSON (`json:"-"`): POST /api/v1/import/file binds
+	// this struct straight from the request body under a weaker permission than
+	// the Deluge discover route, so a JSON tag here would let any caller store
+	// a hash nobody checked. Only trusted Go callers set it; today that is
+	// handleDelugeDiscoverImport, after cross-checking the hash against Deluge.
+	//
+	// ImportFile does NOT verify the hash against Deluge. It checks only the
+	// shape (40 or 64 lower-case hex) and trusts the caller for the rest, so a
+	// new caller must do its own verification first. An empty value means "no
+	// torrent". A hash whose content was previously purged or blocked is never
+	// linked (see ImportFileResponse.TorrentLinked). When it is linked it is
+	// written onto the new BookVersion (TorrentHash, Source "deluge") and the
+	// new BookFile (DelugeHash). It does not mark the file as copied: the later
+	// copy into the library sets ImportedFromDelugeAt and DelugeOriginalPath.
+	TorrentHash string `json:"-"`
 }
 
 // validTorrentHash reports whether s is exactly 40 (SHA-1) or 64 (SHA-256)
@@ -183,7 +192,34 @@ type ImportFileResponse struct {
 	// the failure is a queued op that defers, i.e. the old behavior, not
 	// something worse.
 	AuthorResolved bool `json:"author_resolved"`
+
+	// TorrentLinked reports what was actually written for
+	// ImportFileRequest.TorrentHash: true only when a BookVersion carrying the
+	// hash was created AND the BookFile row carrying it (DelugeHash) was
+	// created. It is false whenever no hash was given. TorrentLinkNote says why
+	// a given hash was not linked (one of the TorrentLinkNote* constants).
+	//
+	// Neither is serialized: the field they describe is not bindable from JSON
+	// either, so POST /api/v1/import/file has nothing to report, and the one
+	// caller that sets a hash (the Deluge discover import) lifts them into its
+	// own response.
+	TorrentLinked   bool   `json:"-"`
+	TorrentLinkNote string `json:"-"`
 }
+
+// Fixed notes for ImportFileResponse.TorrentLinkNote. They are API text, so
+// they never carry store or upstream error detail; that goes to the log.
+const (
+	// TorrentLinkNotePurged: the hash names content that was previously
+	// purged or blocked, so the file is imported but never linked to it.
+	TorrentLinkNotePurged = "content previously purged"
+	// TorrentLinkNoteVersionFailed: the version row could not be created, so
+	// neither the version nor the file row carries the hash.
+	TorrentLinkNoteVersionFailed = "version not recorded"
+	// TorrentLinkNoteFileFailed: the version carrying the hash was created but
+	// the book_file row was not, so the link is incomplete.
+	TorrentLinkNoteFileFailed = "book file row not recorded"
+)
 
 func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse, error) {
 	if req.TorrentHash != "" && !validTorrentHash(req.TorrentHash) {
@@ -342,6 +378,27 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 		book.ISBN13 = new(meta.ISBN13)
 	}
 
+	// Purge guard for the torrent link, BEFORE the book row exists. Content
+	// the owner purged or blocked must never come back linked to its torrent:
+	// a linked row joins the bulk-import candidates and later cleanup trusts
+	// the link. The import itself still goes ahead (a refusal has never failed
+	// an import), the hash is dropped, and no version is created for it, which
+	// is what CreateIngestVersion's own fingerprint refusal did before this
+	// check moved up. linkHash is local so req is never mutated.
+	linkHash := req.TorrentHash
+	var linkNote string
+	purged := false
+	if linkHash != "" {
+		if m := versions.CheckFingerprint(is.db, linkHash, nil); m != nil && m.Matched {
+			logger.New("importer").Warn("torrent %s matches previously %s content (book %s, version %s); importing %s without the torrent link",
+				linkHash, logger.SanitizeLogValue(m.Status), logger.SanitizeLogValue(m.BookID), logger.SanitizeLogValue(m.VersionID),
+				logger.SanitizeLogValue(req.FilePath))
+			linkHash = ""
+			linkNote = TorrentLinkNotePurged
+			purged = true
+		}
+	}
+
 	// Create book in database
 	created, err := is.db.CreateBook(book)
 	if err != nil {
@@ -356,17 +413,38 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 		}
 	}
 
-	// Create version row for the imported file (spec 3.1).
-	versionSource := "imported"
-	if req.TorrentHash != "" {
-		versionSource = "deluge"
+	// Create version row for the imported file (spec 3.1). A purged torrent
+	// gets no version at all, exactly as when CreateIngestVersion refused it.
+	//
+	// versionLinked is the gate for DelugeHash below: the file row carries the
+	// hash only when a version carrying it was really created, so the two
+	// halves of the link can never disagree in the file row's favour.
+	versionLinked := false
+	if purged {
+		logger.New("importer").Warn("not creating a version for book %s: its torrent content was previously purged", created.ID)
+	} else {
+		versionSource := "imported"
+		if linkHash != "" {
+			versionSource = "deluge"
+		}
+		ver, verErr := versions.CreateIngestVersion(is.db, versions.IngestVersionParams{
+			BookID: created.ID, FilePath: created.FilePath,
+			Format: created.Format, Source: versionSource,
+			TorrentHash: linkHash,
+		})
+		switch {
+		case verErr != nil:
+			slog.Warn("create ingest version", "id", created.ID, "err", verErr)
+			if linkHash != "" {
+				linkNote = TorrentLinkNoteVersionFailed
+			}
+		case linkHash != "" && ver != nil:
+			versionLinked = true
+		}
 	}
-	if _, verErr := versions.CreateIngestVersion(is.db, versions.IngestVersionParams{
-		BookID: created.ID, FilePath: created.FilePath,
-		Format: created.Format, Source: versionSource,
-		TorrentHash: req.TorrentHash,
-	}); verErr != nil {
-		slog.Warn("create ingest version", "id", created.ID, "err", verErr)
+	fileDelugeHash := ""
+	if versionLinked {
+		fileDelugeHash = linkHash
 	}
 
 	// Give the imported book its book_file row.
@@ -414,9 +492,10 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 		TrackCount:       meta.TrackTotal,
 		DiscNumber:       meta.DiscNumber,
 		DiscCount:        meta.DiscTotal,
-		// DelugeHash only; ImportedFromDelugeAt and DelugeOriginalPath stay
-		// unset because the file has not been copied (copy model, D57).
-		DelugeHash: req.TorrentHash,
+		// DelugeHash only, and only when the version carrying the same hash
+		// was created; ImportedFromDelugeAt and DelugeOriginalPath stay unset
+		// because the file has not been copied (copy model, D57).
+		DelugeHash: fileDelugeHash,
 	}
 	if meta.TrackNumber > 0 {
 		bf.TrackNumber = meta.TrackNumber
@@ -430,9 +509,15 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 		known.BookDurationSec = *created.Duration
 	}
 	bookfileaudio.EnsureDuration(bf, known, nil)
+	torrentLinked := false
 	if bfErr := is.db.CreateBookFile(bf); bfErr != nil {
 		slog.Warn("import: could not create book_file row — the book has no route to its audio, and organize will skip it",
 			"book_id", created.ID, "path", created.FilePath, "err", bfErr)
+		if versionLinked {
+			linkNote = TorrentLinkNoteFileFailed
+		}
+	} else {
+		torrentLinked = versionLinked
 	}
 
 	// Post-import dedup check — two paths, selected by config flag:
@@ -458,10 +543,12 @@ func (is *ImportService) ImportFile(req *ImportFileRequest) (*ImportFileResponse
 	}
 
 	return &ImportFileResponse{
-		ID:             created.ID,
-		Title:          created.Title,
-		FilePath:       created.FilePath,
-		AuthorResolved: created.AuthorID != nil || created.Author != nil,
+		ID:              created.ID,
+		Title:           created.Title,
+		FilePath:        created.FilePath,
+		AuthorResolved:  created.AuthorID != nil || created.Author != nil,
+		TorrentLinked:   torrentLinked,
+		TorrentLinkNote: linkNote,
 	}, nil
 }
 

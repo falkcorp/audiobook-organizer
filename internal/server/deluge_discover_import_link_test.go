@@ -1,5 +1,5 @@
 // file: internal/server/deluge_discover_import_link_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 2d9c4e61-8b57-4f03-a1e8-6c3b7d905a42
 // last-edited: 2026-10-10
 //
@@ -11,6 +11,7 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -19,6 +20,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -28,6 +30,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/deluge"
 	"github.com/falkcorp/audiobook-organizer/internal/importer"
+	"github.com/falkcorp/audiobook-organizer/internal/logger/logtest"
 )
 
 const linkTestHash = "00112233445566778899aabbccddeeff00112233"
@@ -237,13 +240,20 @@ func TestDiscoverImport_DelugeUnreachable_ImportsUnlinked(t *testing.T) {
 	url := "http://" + ln.Addr().String()
 	require.NoError(t, ln.Close())
 	env.useClient(t, url)
+	logs := logtest.Capture(t, slog.LevelWarn)
 
 	w := env.post(t, map[string]string{"content_path": env.content, "torrent_hash": linkTestHash})
 	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
 	t.Logf("unlinked response: %s", strings.TrimSpace(w.Body.String()))
 	resp := decodeLinkResp(t, w)
 	assert.False(t, resp.TorrentLinked)
-	assert.Contains(t, resp.TorrentLinkNote, "deluge unreachable")
+	// A fixed category, never upstream text: the transport error names the
+	// Deluge URL, an internal host.
+	assert.Equal(t, "deluge unreachable", resp.TorrentLinkNote)
+	addr := strings.TrimPrefix(url, "http://")
+	assert.NotContains(t, w.Body.String(), addr, "the response must not echo the Deluge address")
+	// Positive control: the detail is not lost, it goes to the server log.
+	assert.Contains(t, logs.String(), addr, "the upstream error must be logged")
 
 	ver, err := env.store.GetBookVersionByTorrentHash(linkTestHash)
 	require.NoError(t, err)
@@ -291,11 +301,11 @@ func TestDiscoverImport_UppercaseHashIsNormalized(t *testing.T) {
 
 // The importer cannot import internal/deluge, so it carries its own copy of
 // the hash-shape check. Both must accept and reject the same strings.
-func TestHashValidatorsAgree(t *testing.T) {
+func TestTorrentHashValidatorsAgree(t *testing.T) {
 	sha1 := linkTestHash
 	sha256 := strings.Repeat("ab", 32)
 	cases := []string{
-		"zz", sha1, sha256, strings.ToUpper(sha1), sha1 + "a", sha1[:39],
+		"zz", sha1, sha256, strings.ToUpper(sha1), sha1 + "a", sha1[:39], sha1[:32],
 		strings.Repeat(" ", 40), strings.Repeat("g", 40), sha256 + "0", sha1[:20] + "-" + sha1[21:],
 	}
 	env := newLinkImportEnv(t)
@@ -352,7 +362,7 @@ func TestImportedRowAppearsInBulkImportCandidates(t *testing.T) {
 	assert.True(t, found, "a linked import must be a bulk-import candidate (designed copy-model hand-off)")
 }
 
-func TestDiscoveryListSkipsLinkedTorrent(t *testing.T) {
+func TestDiscoverImport_ListSkipsLinkedTorrent(t *testing.T) {
 	env := newLinkImportEnv(t)
 	fake := newLinkFakeDeluge(t, env.dlDir, "Example Book.m4b")
 	client, err := deluge.New(fake.srv.URL, "deluge")
@@ -370,4 +380,89 @@ func TestDiscoveryListSkipsLinkedTorrent(t *testing.T) {
 	after, err := deluge.DiscoverUnimported(env.store, client, "audiobooks")
 	require.NoError(t, err)
 	assert.Empty(t, after, "tier 1 must now skip the linked torrent")
+}
+
+// Content the owner purged must not come back linked: the file is imported,
+// but neither a version nor the file row carries the hash, and the response
+// says so from what was written rather than from the verified hash.
+func TestDiscoverImport_PurgedContent_ImportsUnlinked(t *testing.T) {
+	env := newLinkImportEnv(t)
+	fake := newLinkFakeDeluge(t, env.dlDir, "Example Book.m4b")
+	env.useClient(t, fake.srv.URL)
+
+	old, err := env.store.CreateBookVersion(&database.BookVersion{
+		BookID: "01JOLDBOOK0000000000000000", Status: database.BookVersionStatusInactivePurged,
+		Format: "m4b", Source: "deluge", TorrentHash: linkTestHash,
+	})
+	require.NoError(t, err)
+
+	w := env.post(t, map[string]string{"content_path": env.content, "torrent_hash": linkTestHash})
+	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
+	resp := decodeLinkResp(t, w)
+	assert.False(t, resp.TorrentLinked, "purged content must not be reported linked")
+	assert.Equal(t, importer.TorrentLinkNotePurged, resp.TorrentLinkNote)
+	require.NotEmpty(t, resp.Book.ID, "the import itself still succeeds")
+
+	files, err := env.store.GetBookFiles(resp.Book.ID)
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	assert.Empty(t, files[0].DelugeHash, "the purged torrent's hash must not reach the file row")
+
+	ver, err := env.store.GetBookVersionByTorrentHash(linkTestHash)
+	require.NoError(t, err)
+	require.NotNil(t, ver)
+	assert.Equal(t, old.ID, ver.ID, "the torrent index must still name the purged version, not a new one")
+
+	cands, err := env.store.GetBookFilesNeedingDelugeImportCore()
+	require.NoError(t, err)
+	for _, c := range cands {
+		assert.NotEqual(t, resp.Book.ID, c.BookID, "purged content must not become a bulk-import candidate")
+	}
+}
+
+// A Deluge that accepts the connection and never answers must not hold the
+// request for the client's 5-minute transport timeout: the verification is
+// bounded by discoverVerifyTimeout and the import goes ahead unlinked.
+func TestDiscoverImport_DelugeHangs_TimesOutUnlinked(t *testing.T) {
+	env := newLinkImportEnv(t)
+	release := make(chan struct{})
+	hang := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	// Cleanups run last-in first-out: release the handler before Close waits
+	// for its connection.
+	t.Cleanup(hang.Close)
+	t.Cleanup(func() { close(release) })
+	env.useClient(t, hang.URL)
+
+	prev := discoverVerifyTimeout
+	discoverVerifyTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { discoverVerifyTimeout = prev })
+
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		done <- env.post(t, map[string]string{"content_path": env.content, "torrent_hash": linkTestHash})
+	}()
+	var w *httptest.ResponseRecorder
+	select {
+	case w = <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the discover import did not return: the Deluge verification is not bounded")
+	}
+	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
+	resp := decodeLinkResp(t, w)
+	assert.False(t, resp.TorrentLinked)
+	assert.Equal(t, "deluge timed out", resp.TorrentLinkNote)
+	assert.NotContains(t, w.Body.String(), strings.TrimPrefix(hang.URL, "http://"))
+
+	ver, err := env.store.GetBookVersionByTorrentHash(linkTestHash)
+	require.NoError(t, err)
+	assert.Nil(t, ver, "no hash may be written for a torrent that was not verified")
+	files, err := env.store.GetBookFiles(resp.Book.ID)
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	assert.Empty(t, files[0].DelugeHash)
 }

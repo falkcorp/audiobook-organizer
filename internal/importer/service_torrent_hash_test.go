@@ -1,11 +1,12 @@
 // file: internal/importer/service_torrent_hash_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7b0f6d2e-3a41-4c85-9e17-5d8a2c4b1f90
 // last-edited: 2026-10-10
 
 package importer
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -41,8 +42,12 @@ func TestImportFile_TorrentHashReachesVersionAndBookFile(t *testing.T) {
 	var created int
 	is := NewImportService(torrentStore(dir, &rows, &vers, &created))
 
-	if _, err := is.ImportFile(&ImportFileRequest{FilePath: path, TorrentHash: testTorrentHash}); err != nil {
+	resp, err := is.ImportFile(&ImportFileRequest{FilePath: path, TorrentHash: testTorrentHash})
+	if err != nil {
 		t.Fatalf("import failed: %v", err)
+	}
+	if !resp.TorrentLinked || resp.TorrentLinkNote != "" {
+		t.Errorf("want TorrentLinked with no note, got linked=%v note=%q", resp.TorrentLinked, resp.TorrentLinkNote)
 	}
 	if len(vers) != 1 {
 		t.Fatalf("want 1 version, got %d", len(vers))
@@ -80,8 +85,12 @@ func TestImportFile_NoTorrentHashIsUnchanged(t *testing.T) {
 	var created int
 	is := NewImportService(torrentStore(dir, &rows, &vers, &created))
 
-	if _, err := is.ImportFile(&ImportFileRequest{FilePath: path}); err != nil {
+	resp, err := is.ImportFile(&ImportFileRequest{FilePath: path})
+	if err != nil {
 		t.Fatalf("import failed: %v", err)
+	}
+	if resp.TorrentLinked || resp.TorrentLinkNote != "" {
+		t.Errorf("no hash given: want unlinked with no note, got linked=%v note=%q", resp.TorrentLinked, resp.TorrentLinkNote)
 	}
 	if len(vers) != 1 || vers[0].Source != "imported" || vers[0].TorrentHash != "" {
 		t.Errorf("want one imported version with no hash, got %+v", vers)
@@ -101,6 +110,8 @@ func TestImportFile_RejectsMalformedTorrentHash(t *testing.T) {
 		"41 chars":   testTorrentHash + "a",
 		"spaces":     strings.Repeat(" ", 40),
 		"39 chars":   testTorrentHash[:39],
+		// MD5 length: not an infohash (v1 is SHA-1, v2 is SHA-256).
+		"32 chars": testTorrentHash[:32],
 	}
 	for name, h := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -136,8 +147,9 @@ func TestImportFile_AcceptsSha256Length(t *testing.T) {
 	}
 }
 
-// Pins current behaviour: a purged-fingerprint refusal from CreateIngestVersion
-// is a logged warning, never an import failure.
+// A purged or blocked fingerprint is a logged warning, never an import
+// failure, and the purged torrent is never linked: no version, no DelugeHash
+// on the file row, and the response says so.
 func TestImportFile_PurgedFingerprintDoesNotFailImport(t *testing.T) {
 	withSupportedExt(t)
 	dir, path := stageFixture(t)
@@ -161,7 +173,77 @@ func TestImportFile_PurgedFingerprintDoesNotFailImport(t *testing.T) {
 	if len(vers) != 0 {
 		t.Errorf("the refused version must not be created, got %d", len(vers))
 	}
+	if created != 1 {
+		t.Errorf("the book is still created exactly once, got %d CreateBook calls", created)
+	}
 	if len(rows) != 1 {
-		t.Errorf("the book_file row is still written, got %d", len(rows))
+		t.Fatalf("the book_file row is still written, got %d", len(rows))
+	}
+	if rows[0].DelugeHash != "" {
+		t.Errorf("purged content must not be linked: DelugeHash = %q", rows[0].DelugeHash)
+	}
+	if resp.TorrentLinked {
+		t.Error("purged content must not be reported as linked")
+	}
+	if resp.TorrentLinkNote != TorrentLinkNotePurged {
+		t.Errorf("TorrentLinkNote = %q, want %q", resp.TorrentLinkNote, TorrentLinkNotePurged)
+	}
+}
+
+// The version carrying the hash was created but the file row was not: the link
+// is incomplete, so it must not be reported as linked.
+func TestImportFile_TorrentHashFileRowFailureIsNotLinked(t *testing.T) {
+	withSupportedExt(t)
+	dir, path := stageFixture(t)
+
+	var rows []*database.BookFile
+	var vers []*database.BookVersion
+	var created int
+	st := torrentStore(dir, &rows, &vers, &created)
+	st.CreateBookFileFunc = func(*database.BookFile) error { return errors.New("synthetic write failure") }
+	is := NewImportService(st)
+
+	resp, err := is.ImportFile(&ImportFileRequest{FilePath: path, TorrentHash: testTorrentHash})
+	if err != nil {
+		t.Fatalf("a book_file failure must not fail the import: %v", err)
+	}
+	if len(vers) != 1 {
+		t.Fatalf("control: the version is still created, got %d", len(vers))
+	}
+	if resp.TorrentLinked {
+		t.Error("no book_file row was written, so the torrent must not be reported linked")
+	}
+	if resp.TorrentLinkNote != TorrentLinkNoteFileFailed {
+		t.Errorf("TorrentLinkNote = %q, want %q", resp.TorrentLinkNote, TorrentLinkNoteFileFailed)
+	}
+}
+
+// The version could not be created: neither half of the link exists, so the
+// file row must not carry the hash on its own.
+func TestImportFile_TorrentHashVersionFailureDropsFileHash(t *testing.T) {
+	withSupportedExt(t)
+	dir, path := stageFixture(t)
+
+	var rows []*database.BookFile
+	var vers []*database.BookVersion
+	var created int
+	st := torrentStore(dir, &rows, &vers, &created)
+	st.CreateBookVersionFunc = func(*database.BookVersion) (*database.BookVersion, error) {
+		return nil, errors.New("synthetic version failure")
+	}
+	is := NewImportService(st)
+
+	resp, err := is.ImportFile(&ImportFileRequest{FilePath: path, TorrentHash: testTorrentHash})
+	if err != nil {
+		t.Fatalf("a version failure must not fail the import: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("the book_file row is still written, got %d", len(rows))
+	}
+	if rows[0].DelugeHash != "" {
+		t.Errorf("DelugeHash = %q, want empty when no version carries the hash", rows[0].DelugeHash)
+	}
+	if resp.TorrentLinked || resp.TorrentLinkNote != TorrentLinkNoteVersionFailed {
+		t.Errorf("want unlinked with note %q, got linked=%v note=%q", TorrentLinkNoteVersionFailed, resp.TorrentLinked, resp.TorrentLinkNote)
 	}
 }
