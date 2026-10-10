@@ -1,5 +1,5 @@
 // file: internal/telemetry/metric_env_isolation_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: c3a71e58-04bd-4f92-9e6a-5d18b2f7a0c4
 // last-edited: 2026-10-10
 
@@ -14,6 +14,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math/big"
 	"net"
@@ -85,6 +86,11 @@ func pushOnce(t *testing.T, cfg *Config) {
 		t.Fatal(err)
 	}
 	c.Add(ctx, 7)
+	hist, err := mp.Meter("env-isolation").Float64Histogram("env_isolation_latency")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hist.Record(ctx, 0.25)
 	_ = mp.Shutdown(ctx) // the flush error (TLS mismatch) is the point of one test
 }
 
@@ -98,6 +104,7 @@ func setHostileTraceEnv(t *testing.T) {
 	t.Setenv("OTEL_EXPORTER_OTLP_INSECURE", "true")
 	t.Setenv("OTEL_EXPORTER_OTLP_METRICS_HEADERS", "authorization=Bearer metrics-secret")
 	t.Setenv("OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE", "delta")
+	t.Setenv("OTEL_EXPORTER_OTLP_METRICS_DEFAULT_HISTOGRAM_AGGREGATION", "base2_exponential_bucket_histogram")
 }
 
 // A bare host:port with insecure=false is TLS. The generic
@@ -151,11 +158,18 @@ func checkPlaintextPush(t *testing.T, withCertEnv bool) {
 					t.Errorf("authorization header %q reached the metric collector", v)
 				}
 			}
-			var seen bool
+			var seen, histSeen bool
 			for _, req := range reqs {
 				for _, rm := range req.GetResourceMetrics() {
 					for _, sm := range rm.GetScopeMetrics() {
 						for _, m := range sm.GetMetrics() {
+							if m.GetName() == "env_isolation_latency" {
+								histSeen = true
+								if m.GetExponentialHistogram() != nil || m.GetHistogram() == nil {
+									t.Errorf("histogram exported as %T, want the explicit-bucket default (OTEL_EXPORTER_OTLP_METRICS_DEFAULT_HISTOGRAM_AGGREGATION must be ignored)", m.GetData())
+								}
+								continue
+							}
 							if m.GetName() != "env_isolation_things" {
 								continue
 							}
@@ -167,8 +181,8 @@ func checkPlaintextPush(t *testing.T, withCertEnv bool) {
 					}
 				}
 			}
-			if !seen {
-				t.Error("the counter never reached the collector")
+			if !seen || !histSeen {
+				t.Errorf("collector missed an instrument: counter=%v histogram=%v", seen, histSeen)
 			}
 		})
 	}
@@ -207,33 +221,53 @@ func TestRateLimitedErrorHandler(t *testing.T) {
 		func(_ slog.Level, msg string, attrs ...any) { lines = append(lines, line{msg, attrs}) })
 
 	h.Handle(nil) // ignored
-	h.Handle(errors.New("export failed: dial https://user:pw@collector.example.invalid:4317"))
+	h.Handle(errors.New("export failed: dial https://user:pw@collector.example.invalid:4317/?k=SECRET"))
 	for i := 0; i < 5; i++ {
 		now = now.Add(time.Minute)
-		h.Handle(errors.New("again"))
+		// Same class: only the digits differ.
+		h.Handle(errors.New("export failed: dial https://user:pw@collector.example.invalid:431" + string(rune('0'+i)) + "/?k=SECRET"))
 	}
 	if len(lines) != 1 {
-		t.Fatalf("logged %d lines inside the interval, want 1", len(lines))
+		t.Fatalf("logged %d lines for one class inside the interval, want 1", len(lines))
 	}
-	got := strings.Join(func() (out []string) {
-		for _, a := range lines[0].attrs {
-			if s, ok := a.(string); ok {
-				out = append(out, s)
-			}
-		}
-		return
-	}(), " ")
-	if strings.Contains(got, "user:pw") {
-		t.Errorf("userinfo leaked into the log line: %s", got)
+	if lines[0].msg != "OpenTelemetry error (rate limited)" {
+		t.Errorf("msg = %q", lines[0].msg)
+	}
+	got := fmt.Sprint(lines[0].attrs...)
+	if strings.Contains(got, "user:pw") || strings.Contains(got, "SECRET") {
+		t.Errorf("secrets leaked into the log line: %s", got)
+	}
+
+	// A DIFFERENT class in the same window is logged at once.
+	h.Handle(errors.New("rpc error: code = Unauthenticated desc = bad token"))
+	if len(lines) != 2 {
+		t.Fatalf("a distinct error class inside the window logged %d lines in total, want 2", len(lines))
 	}
 
 	now = now.Add(10 * time.Minute)
-	h.Handle(errors.New("later"))
-	if len(lines) != 2 {
-		t.Fatalf("logged %d lines after the interval, want 2", len(lines))
+	h.Handle(errors.New("export failed: dial https://collector.example.invalid:4317"))
+	if len(lines) != 3 {
+		t.Fatalf("logged %d lines after the interval, want 3", len(lines))
 	}
-	if lines[1].attrs[2] != "suppressed_since_last" || lines[1].attrs[3] != 5 {
-		t.Errorf("second line attrs = %v, want suppressed_since_last=5", lines[1].attrs)
+	if lines[2].attrs[2] != "suppressed_since_last" || lines[2].attrs[3] != 5 {
+		t.Errorf("third line attrs = %v, want suppressed_since_last=5", lines[2].attrs)
+	}
+}
+
+func TestRateLimitedErrorHandler_ClassTableIsBounded(t *testing.T) {
+	n := 0
+	now := time.Unix(1_000, 0)
+	h := newRateLimitedErrorHandler(time.Hour, func() time.Time { return now },
+		func(slog.Level, string, ...any) { n++ })
+	for i := 0; i < maxErrorClasses+20; i++ {
+		h.Handle(errors.New("distinct class " + strings.Repeat("x", i) + "y"))
+	}
+	if len(h.classes) > maxErrorClasses+1 { // the classes plus the overflow bucket
+		t.Errorf("class table holds %d entries, want at most %d", len(h.classes), maxErrorClasses+1)
+	}
+	// 32 classes plus the shared overflow bucket's first line.
+	if n != maxErrorClasses+1 {
+		t.Errorf("logged %d lines, want %d", n, maxErrorClasses+1)
 	}
 }
 
@@ -270,12 +304,22 @@ func TestRedactUserinfo(t *testing.T) {
 		"url":                 {"https://u:p@h:4317", "https://h:4317"},
 		"quoted-in-error":     {"endpoint \"http://u@h:1\" is bad", "endpoint \"http://h:1\" is bad"},
 		"dns-triple-slash":    {"dns:///u:secret@h:4317", "dns:///h:4317"},
-		"password-with-slash": {"https://u:pa/ss@h:4317", "https://h:4317"},
+		"password-with-slash": {"dns:///u:pa/ss@h:4317", "dns:///h:4317"},
 		"password-with-at":    {"https://u:p@ss@h:4317", "https://h:4317"},
 		"two-occurrences":     {"a https://u:one@h:1 b dns:///v:two@g:2 c", "a https://h:1 b dns:///g:2 c"},
+		"userinfo+query":      {"https://u:p@h:4317/?api_key=SECRET", "https://h:4317"},
+		"fragment":            {"https://h:4317/#token=SECRET", "https://h:4317"},
+		"query+fragment":      {"https://h:4317?a=SECRET#b=SECRET", "https://h:4317"},
+		"all-three":           {"dns:///u:p@h:4317?k=SECRET#f=SECRET", "dns:///h:4317"},
+		"query-with-at":       {"https://h:4317/?mail=a@b", "https://h:4317"},
+		"path-token":          {"https://h:4317/v1/SECRET", "https://h:4317"},
+		"unknown-scheme-path": {"grpc://h:4317/SECRET", "grpc://h:4317"},
+		"dns-keeps-target":    {"dns:///h:4317/name", "dns:///h:4317/name"},
+		"in-error-text":       {"dial \"https://u:p@h:4317/x?k=SECRET\": refused", "dial \"https://h:4317\": refused"},
 		"control-bare":        {"h:4317", "h:4317"},
+		"control-url":         {"https://h:4317", "https://h:4317"},
 		"control-dns":         {"dns:///h:4317", "dns:///h:4317"},
-		"control-parse-error": {"parse \"http://h:1\": invalid port", "parse \"http://h:1\": invalid port"},
+		"control-text":        {"connection refused", "connection refused"},
 	} {
 		if got := redactEndpointSecrets(tc[0]); got != tc[1] {
 			t.Errorf("%s: redactEndpointSecrets(%q) = %q, want %q", name, tc[0], got, tc[1])
@@ -288,14 +332,18 @@ func TestParseOTLPEndpoint_DropsQueryFragmentPathAndDisplays(t *testing.T) {
 		in, display string
 		dropped     string
 	}{
-		"query":         {"https://192.0.2.1:4317/?api_key=SECRET", "https://192.0.2.1:4317", "query/fragment+path"},
-		"fragment":      {"http://192.0.2.1:4317#token=SECRET", "http://192.0.2.1:4317", "query/fragment"},
-		"path-token":    {"https://192.0.2.1:4317/v1/SECRET", "https://192.0.2.1:4317", "path"},
-		"all":           {"https://u:SECRET@192.0.2.1:4317/p?a=SECRET#b=SECRET", "https://192.0.2.1:4317", "userinfo+query/fragment+path"},
-		"dns-query":     {"dns:///192.0.2.1:4317?k=SECRET", "dns:///192.0.2.1:4317", "query/fragment"},
-		"password-hash": {"https://u:pa#SECRET@192.0.2.1:4317", "https://192.0.2.1:4317", "userinfo"},
-		"control":       {"https://192.0.2.1:4317", "https://192.0.2.1:4317", ""},
-		"control-bare":  {"192.0.2.1:4317", "192.0.2.1:4317", ""},
+		"query":          {"https://192.0.2.1:4317/?api_key=SECRET", "https://192.0.2.1:4317", "query/fragment"},
+		"fragment":       {"http://192.0.2.1:4317#token=SECRET", "http://192.0.2.1:4317", "query/fragment"},
+		"path-token":     {"https://192.0.2.1:4317/v1/SECRET", "https://192.0.2.1:4317", "path"},
+		"all":            {"https://u:SECRET@192.0.2.1:4317/p?a=SECRET#b=SECRET", "https://192.0.2.1:4317", "userinfo+query/fragment+path"},
+		"dns-query":      {"dns:///192.0.2.1:4317?k=SECRET", "dns:///192.0.2.1:4317", "query/fragment"},
+		"password-hash":  {"dns:///u:pa#SECRET@192.0.2.1:4317", "dns:///192.0.2.1:4317", "userinfo"},
+		"mixed-case":     {"HTTPS://Collector:4317", "https://Collector:4317", ""},
+		"trailing-slash": {"https://192.0.2.1:4317/", "https://192.0.2.1:4317", ""},
+		"query-has-at":   {"https://192.0.2.1:4317?tok=a@b", "https://192.0.2.1:4317", "query/fragment"},
+		"path-has-at":    {"https://192.0.2.1:4317/path@x", "https://192.0.2.1:4317", "path"},
+		"control":        {"https://192.0.2.1:4317", "https://192.0.2.1:4317", ""},
+		"control-bare":   {"192.0.2.1:4317", "192.0.2.1:4317", ""},
 	} {
 		tgt, err := parseOTLPEndpoint(tc.in)
 		if err != nil {
@@ -352,7 +400,6 @@ func TestStripUserinfo_AtParseTime(t *testing.T) {
 		"https":        {"https://u:secret@192.0.2.1:4317", "https://192.0.2.1:4317", true},
 		"dns":          {"dns:///u:secret@192.0.2.1:4317", "dns:///192.0.2.1:4317", true},
 		"slash-in-pw":  {"dns:///u:se/cret@192.0.2.1:4317", "dns:///192.0.2.1:4317", true},
-		"at-in-pw":     {"http://u:se@cret@192.0.2.1:4317", "http://192.0.2.1:4317", true},
 		"bare":         {"u:secret@192.0.2.1:4317", "192.0.2.1:4317", true},
 		"control-bare": {"192.0.2.1:4317", "192.0.2.1:4317", false},
 		"control-dns":  {"dns:///192.0.2.1:4317", "dns:///192.0.2.1:4317", false},
@@ -419,5 +466,74 @@ func TestOTLPMetrics_DialErrorNeverLogsUserinfo(t *testing.T) {
 		if strings.Contains(l, "secret") {
 			t.Errorf("log output leaks userinfo: %q", l)
 		}
+	}
+}
+
+// Neither the error, Display() nor any emitted attribute may contain a path
+// token or a bad-port string, whatever shape the endpoint is in.
+func TestParseOTLPEndpoint_NeverEchoesPathTokens(t *testing.T) {
+	for _, ep := range []string{
+		"collector:4317/secrettoken",
+		"collector:abc/secrettoken",
+		"collector:abc",
+		"collector:0",
+		"collector:70000",
+		"https://collector/v1/secrettoken",
+		"https://collector.example.invalid/secrettoken",
+		"grpc://collector:4317/secrettoken",
+		"https://u:secrettoken@collector/secrettoken",
+		"https://%zz/secrettoken",
+		"[bad/secrettoken",
+		"http://:4317/secrettoken",
+	} {
+		tgt, err := parseOTLPEndpoint(ep)
+		if err == nil {
+			t.Errorf("%q: accepted (Display %q), want an error", ep, tgt.Display())
+		}
+		if err != nil && strings.Contains(err.Error(), "secrettoken") {
+			t.Errorf("%q: error %q echoes the endpoint", ep, err)
+		}
+		if strings.Contains(tgt.Display(), "secrettoken") {
+			t.Errorf("%q: Display %q echoes the endpoint", ep, tgt.Display())
+		}
+		if got := displayEndpoint(ep); strings.Contains(got, "secrettoken") {
+			t.Errorf("%q: displayEndpoint %q echoes the endpoint", ep, got)
+		}
+		level, msg, attrs := initSummary(LoadConfig("t", ep, WithMetricsOTLP(ep, time.Minute, false)), false, err, otlpStatus{Err: err})
+		_ = level
+		if out := fmt.Sprint(msg, attrs); strings.Contains(out, "secrettoken") {
+			t.Errorf("%q: initSummary emitted %q", ep, out)
+		}
+	}
+	// What is accepted is accepted with a numeric port, and a path is dropped.
+	for ep, want := range map[string]string{
+		"collector:4317":             "collector:4317",
+		"https://collector:4317/p/q": "https://collector:4317",
+		"https://[::1]:4317/":        "https://[::1]:4317",
+		"https://collector:65535":    "https://collector:65535",
+		"https://c:4317?tok=a@b":     "https://c:4317",
+		"https://c:4317/path@x":      "https://c:4317",
+		"https://u:p@c:4317/a?b#c":   "https://c:4317",
+	} {
+		tgt, err := parseOTLPEndpoint(ep)
+		if err != nil || tgt.Display() != want {
+			t.Errorf("%q: Display %q, err %v; want %q", ep, tgt.Display(), err, want)
+		}
+	}
+}
+
+func TestRunShutdowns_EachGetsItsShare(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 600*time.Millisecond)
+	defer cancel()
+	var secondErr error
+	err := runShutdowns(ctx, []func(context.Context) error{
+		func(c context.Context) error { <-c.Done(); return c.Err() }, // a hung tracer
+		func(c context.Context) error { secondErr = c.Err(); return nil },
+	})
+	if secondErr != nil {
+		t.Errorf("the second shutdown started with a dead context: %v", secondErr)
+	}
+	if err == nil {
+		t.Error("the hung shutdown's error was swallowed")
 	}
 }

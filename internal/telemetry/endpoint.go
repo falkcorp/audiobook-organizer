@@ -1,14 +1,16 @@
 // file: internal/telemetry/endpoint.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6e0f4b1a-52c7-4d83-9a1e-3b7c8d2f5a40
 // last-edited: 2026-10-10
 
 package telemetry
 
 import (
+	"errors"
 	"fmt"
 	"net"
-	"net/url"
+	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -60,11 +62,11 @@ func (t otlpTarget) Dropped() []string {
 	return out
 }
 
-// stripUserinfo removes URL userinfo from an endpoint string: everything
-// between the scheme separator (and any slashes after it) and the LAST '@',
-// so a password containing '/' or '@' goes too. It handles "scheme://u:p@h",
-// "dns:///u:p@h" and a scheme-less "u:p@h:4317". A path containing '@' is not
-// a valid OTLP endpoint and would be cut too, which is the safe direction.
+// stripUserinfo removes URL userinfo from the part of an endpoint that can
+// carry it: everything between the scheme separator (and any slashes after it)
+// and the LAST '@'. It is used for dns:/// targets and scheme-less host:port,
+// where there is no separate authority to look inside; a password containing
+// '/' or '@' goes too. http(s) URLs use authorityOf instead.
 func stripUserinfo(ep string) (string, bool) {
 	at := strings.LastIndex(ep, "@")
 	if at < 0 {
@@ -80,14 +82,53 @@ func stripUserinfo(ep string) (string, bool) {
 	return ep[:start] + ep[at+1:], true
 }
 
+// Error messages below NEVER echo the endpoint, in whole or in part, and
+// never wrap a url.Parse error (whose text quotes its input): a path, query or
+// password can hold a secret and these errors are logged. The caller knows
+// which config key it was parsing.
+var (
+	errNoHostPort  = errors.New("endpoint must name a host and a port")
+	errBadPort     = errors.New("endpoint port must be a number from 1 to 65535")
+	errNotHostPort = errors.New("endpoint is neither a URL nor host:port")
+	errBarePath    = errors.New("endpoint is neither a URL nor host:port: a bare host:port takes no path")
+	errNoDNSTarget = errors.New("endpoint dns:/// target names no host")
+	errUnparsable  = errors.New("endpoint is not a parsable URL")
+	schemeNameRE   = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]{0,15}$`)
+)
+
+// splitHostPort validates "host:port": a non-empty host and a numeric port in
+// 1-65535 (net.SplitHostPort checks neither the port's content nor its range).
+func splitHostPort(hp string) error {
+	host, port, err := net.SplitHostPort(hp)
+	if err != nil {
+		return errNotHostPort
+	}
+	if host == "" || port == "" {
+		return errNoHostPort
+	}
+	if n, err := strconv.ParseUint(port, 10, 16); err != nil || n == 0 {
+		return errBadPort
+	}
+	return nil
+}
+
+// cutQuery drops a "?query" or "#fragment". When the first '?' or '#' lies
+// before the last '@' it is part of a userinfo password and is left for the
+// userinfo strip to remove.
+func cutQuery(ep string) (string, bool) {
+	if qi := strings.IndexAny(ep, "?#"); qi >= 0 && qi > strings.LastIndex(ep, "@") {
+		return ep[:qi], true
+	}
+	return ep, false
+}
+
 // parseOTLPEndpoint validates an OTLP endpoint. Accepted forms:
 //
 //   - "http://host:port" (plaintext) and "https://host:port" (TLS)
 //   - a bare "host:port"
 //   - a "dns:///host:port" gRPC target
 //
-// Everything else is an error. Error messages are stable: the trace path's
-// callers and tests depend on them.
+// The port is required and must be a number from 1 to 65535.
 //
 // Anything after host:port that could carry a secret is removed before the
 // endpoint reaches an exporter, an error message or a log line: userinfo
@@ -96,51 +137,78 @@ func stripUserinfo(ep string) (string, bool) {
 // the path for gRPC (otlptracegrpc and otlpmetricgrpc both record it as
 // "URLPath is ignored by gRPC exporters", and WithEndpointURL takes only
 // u.Host), so dropping it changes nothing. A dns:/// target keeps its path,
-// which is the target name.
+// which is the target name. A bare host:port with a '/' is rejected.
 //
-// Order: when a '?' or '#' comes after the last '@', the query is cut first
-// (a query may itself contain '@'); otherwise the '?'/'#' is inside the
-// userinfo password and goes with it.
+// For http(s) the authority is the text after "//" up to the first '/', '?' or
+// '#', and userinfo is looked for only inside it (so "?tok=a@b" and
+// "/path@x" never become a host); a password therefore needs RFC 3986
+// percent-encoding of '/', '?' and '#'. dns:/// and bare forms have no
+// separate authority and use the last '@'.
+//
+// Errors are fixed strings that never quote the endpoint.
 func parseOTLPEndpoint(endpoint string) (otlpTarget, error) {
 	ep := strings.TrimSpace(endpoint)
-	var droppedQuery bool
-	if qi := strings.IndexAny(ep, "?#"); qi >= 0 && qi > strings.LastIndex(ep, "@") {
-		ep, droppedQuery = ep[:qi], true
-	}
-	ep, droppedUser := stripUserinfo(ep)
-	if qi := strings.IndexAny(ep, "?#"); qi >= 0 { // a '?'/'#' that was inside the password is gone; any left is a query
-		ep, droppedQuery = ep[:qi], true
-	}
-	t, err := parseStrippedOTLPEndpoint(ep)
-	t.DroppedUserinfo, t.DroppedQuery = droppedUser, droppedQuery
-	return t, err
-}
-
-func parseStrippedOTLPEndpoint(ep string) (otlpTarget, error) {
-	endpoint := ep
 	if scheme, rest, ok := strings.Cut(ep, "://"); ok {
+		if !schemeNameRE.MatchString(scheme) {
+			return otlpTarget{}, errNotHostPort
+		}
 		switch strings.ToLower(scheme) {
 		case "http", "https":
-			u, err := url.Parse(ep)
-			if err != nil {
-				return otlpTarget{}, fmt.Errorf("endpoint %q is not a URL: %w", endpoint, err)
-			}
-			if u.Hostname() == "" || u.Port() == "" {
-				return otlpTarget{}, fmt.Errorf("endpoint %q must name a host and a port", endpoint)
-			}
-			clean := strings.ToLower(u.Scheme) + "://" + u.Host
-			return otlpTarget{URL: clean, DroppedPath: ep != clean}, nil
+			return parseHTTPEndpoint(strings.ToLower(scheme), rest)
 		case "dns":
-			if strings.TrimLeft(rest, "/") == "" {
-				return otlpTarget{}, fmt.Errorf("endpoint %q names no target", endpoint)
+			t := otlpTarget{}
+			ep, t.DroppedQuery = cutQuery(ep)
+			ep, t.DroppedUserinfo = stripUserinfo(ep)
+			if qi := strings.IndexAny(ep, "?#"); qi >= 0 {
+				ep, t.DroppedQuery = ep[:qi], true
 			}
-			return otlpTarget{Target: ep}, nil
+			_, rest, _ := strings.Cut(ep, "://")
+			if strings.TrimLeft(rest, "/") == "" {
+				return t, errNoDNSTarget
+			}
+			t.Target = ep
+			return t, nil
 		}
-		return otlpTarget{}, fmt.Errorf("endpoint %q: scheme %q is not http, https or dns", endpoint, scheme)
+		return otlpTarget{}, fmt.Errorf("endpoint scheme %q is not http, https or dns", scheme)
 	}
-	host, port, err := net.SplitHostPort(ep)
-	if err != nil || host == "" || port == "" {
-		return otlpTarget{}, fmt.Errorf("endpoint %q is neither a URL nor host:port", endpoint)
+	t := otlpTarget{Bare: true}
+	ep, t.DroppedQuery = cutQuery(ep)
+	ep, t.DroppedUserinfo = stripUserinfo(ep)
+	if qi := strings.IndexAny(ep, "?#"); qi >= 0 {
+		ep, t.DroppedQuery = ep[:qi], true
 	}
-	return otlpTarget{Target: ep, Bare: true}, nil
+	if strings.Contains(ep, "/") {
+		return t, errBarePath
+	}
+	if err := splitHostPort(ep); err != nil {
+		return t, err
+	}
+	t.Target = ep
+	return t, nil
+}
+
+// parseHTTPEndpoint handles "http(s)://" + rest; see parseOTLPEndpoint.
+func parseHTTPEndpoint(scheme, rest string) (otlpTarget, error) {
+	t := otlpTarget{}
+	end := strings.IndexAny(rest, "/?#")
+	authority, tail := rest, ""
+	if end >= 0 {
+		authority, tail = rest[:end], rest[end:]
+	}
+	if i := strings.IndexAny(tail, "?#"); i >= 0 {
+		t.DroppedQuery = true
+		tail = tail[:i]
+	}
+	t.DroppedPath = tail != "" && tail != "/"
+	if at := strings.LastIndex(authority, "@"); at >= 0 {
+		authority, t.DroppedUserinfo = authority[at+1:], true
+	}
+	if err := splitHostPort(authority); err != nil {
+		if err == errNotHostPort {
+			err = errNoHostPort // a URL authority without ":port"
+		}
+		return t, err
+	}
+	t.URL = scheme + "://" + authority
+	return t, nil
 }

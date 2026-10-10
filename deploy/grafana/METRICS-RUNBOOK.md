@@ -1,5 +1,5 @@
 <!-- file: deploy/grafana/METRICS-RUNBOOK.md -->
-<!-- version: 1.3.0 -->
+<!-- version: 1.4.0 -->
 <!-- guid: 5a2c8e71-3d94-4b60-8f17-c9e0a4d63b25 -->
 <!-- last-edited: 2026-10-10 -->
 
@@ -19,10 +19,12 @@ Properties, in the order they matter in an incident:
   serving. A malformed endpoint is reported once, at start-up, as an
   error-level line: `OpenTelemetry initialized with the OTLP metric push OFF`,
   with an `otlp_metrics_error` attribute (URL userinfo is redacted). A
-  failing export is logged by a rate-limited handler: the first error, then at
-  most one line per 10 minutes (`OpenTelemetry export error (rate limited)`,
-  with a `suppressed_since_last` count). The handler is process-wide, so it
-  also covers trace-export errors.
+  failing export is logged by a rate-limited handler keyed by error class (the
+  message with digits normalised): each distinct error is logged at least once
+  per 10 minutes and repeats of the same one are counted
+  (`OpenTelemetry error (rate limited)`, with a `suppressed_since_last` count).
+  At most 32 classes are tracked, then new ones share one bucket. The handler
+  is process-wide, so it also covers trace-export errors.
 - **No fallback.** The trace endpoint (`otel_exporter_otlp_endpoint`) is never
   reused for metrics. Setting only the trace endpoint leaves metric push off.
 - gRPC only, cumulative temporality, no scope labels.
@@ -31,8 +33,10 @@ Properties, in the order they matter in an incident:
   uses. The metric push pins what matters, so none of them can change it:
   the transport (see "Transport rule"), headers (always empty, so a trace
   collector's `OTEL_EXPORTER_OTLP_HEADERS` bearer token is never sent to the
-  metric host), and temporality (always cumulative, whatever
-  `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE` says).
+  metric host), temporality (always cumulative, whatever
+  `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE` says) and histogram
+  aggregation (the SDK default, whatever
+  `OTEL_EXPORTER_OTLP_METRICS_DEFAULT_HISTOGRAM_AGGREGATION` says).
 
 ## The four keys
 
@@ -65,7 +69,12 @@ The start-up line shows the endpoint as `scheme://host:port` (attribute
 does not parse is shown as `(invalid)`. Error text is also scrubbed of URL
 userinfo, query and fragment as a backstop.
 
-A URL needs both a host and a port; `http://host` is rejected and logged.
+**The port is required** and must be a number from 1 to 65535, in every form:
+`http://host`, `host:abc` and `host:0` are rejected and logged. A bare
+`host:port` takes no path (`host:4317/x` is rejected). For `http(s)` the
+userinfo is looked for only before the first `/`, `?` or `#`, so a password
+containing `/`, `?` or `#` must be percent-encoded. Parse errors never quote
+the endpoint, so a path or token in a bad value cannot reach the log.
 
 ### Transport rule
 
@@ -84,7 +93,17 @@ turn an explicit plaintext one back into TLS. The consequences:
 - Metric headers are not supported yet: both `OTEL_EXPORTER_OTLP_HEADERS` and
   `OTEL_EXPORTER_OTLP_METRICS_HEADERS` are ignored. A collector that needs an
   auth header cannot be used until that is added.
-- Compression and timeout variables are still read by the SDK.
+- Still follows the environment, on purpose (benign: they change encoding and
+  deadlines, not where data goes or what is sent):
+  `OTEL_EXPORTER_OTLP_[METRICS_]COMPRESSION`, `OTEL_EXPORTER_OTLP_[METRICS_]TIMEOUT`
+  and `OTEL_METRIC_EXPORT_TIMEOUT`.
+- Pinned (the environment cannot change them): transport and TLS material,
+  headers, temporality and histogram aggregation.
+- **A malformed `OTEL_EXPORTER_OTLP_HEADERS` is printed verbatim.** The OTel
+  SDK's internal logger reports a header value it cannot parse, token
+  included, through a path that bypasses this service's error handler and
+  redaction. Keep that variable well-formed (`key=value,key2=value2`), or
+  unset when not needed, and treat a log line mentioning it as sensitive.
 
 ## Turn it on
 
@@ -115,8 +134,9 @@ restart. No code revert is needed and `/metrics` is untouched.
 
 - **No data at the collector.** The gRPC dial is non-blocking, so an
   unreachable collector is not a start-up error. Failed exports appear as
-  `OpenTelemetry export error (rate limited)` lines: the first, then at most
-  one per 10 minutes with a `suppressed_since_last` count. Check reachability
+  `OpenTelemetry error (rate limited)` lines: each distinct error at least
+  once, then at most one per 10 minutes per error with a
+  `suppressed_since_last` count. Check reachability
   and TLS: a `host:port` endpoint without `otel_metrics_otlp_insecure=true`
   uses TLS and will fail against a plaintext receiver.
 - **Error line at start-up with `otlp_metrics_error`.** The endpoint was
