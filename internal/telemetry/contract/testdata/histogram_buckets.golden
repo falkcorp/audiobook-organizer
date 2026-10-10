@@ -1,4 +1,5 @@
 audiobook_organizer_operation_duration_seconds	0.1,0.25,0.5,1,2.5,5,10,30,60,120,300,600,1800,3600,7200,14400,43200,86400
+audiobook_organizer_ops_run_duration_seconds	0.1,0.25,0.5,1,2.5,5,10,30,60,120,300,600,1800,3600,7200,14400,43200,86400
 audiobook_organizer_cache_get_duration_seconds	5e-07,2e-06,8e-06,3.2e-05,0.000128,0.000512,0.002048,0.008192,0.032768,0.131072
 audiobook_organizer_review_index_request_seconds	0.1,0.25,0.5,1,2,3,5,10,20,30,60,120
 audiobook_organizer_fixer_duration_seconds	0.1,0.5,1,5,10,30,60,120,300,600,1800,3600,7200

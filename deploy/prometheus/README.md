@@ -1,7 +1,7 @@
 <!-- file: deploy/prometheus/README.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: e3f4a5b6-c7d8-4e9f-0a1b-2c3d4e5f6a7b -->
-<!-- last-edited: 2026-08-01 -->
+<!-- last-edited: 2026-10-10 -->
 
 # Prometheus scrape config + alert rules (OPS-4, OPS-5)
 
@@ -29,6 +29,19 @@ something to plug into their own Prometheus + Alertmanager install.
   rate, AI-backend availability, memory pressure (tied to the real 12G
   `MemoryMax` cgroup limit), service down/unreachable, and disk space (the
   disk rule requires `node_exporter`, called out explicitly in the file).
+- `recording-rules.yml` — a `groups:` rule file with the
+  `audiobook_organizer_compat` group (currently
+  `audiobook_organizer:ops_items_by_op_type:sum`, per-operation item totals
+  under the old `op_type` label name).
+
+**Dual-rule soak (11-PR4).** Operation metrics now exist as OTel instruments
+(`audiobook_organizer_ops_runs_total`, `..._ops_run_duration_seconds`,
+`..._ops_items_total`, `..._ops_inflight`; note the plural `ops`, which is not
+the legacy per-run gauge `op_items_total`). `alert-rules.yml` carries
+`AudiobookOrganizerOpFailuresHighV2` and `AudiobookOrganizerOpStalledV2` beside
+the two original rules, and the legacy series are still emitted. Both sets run
+until 2026-11-09; then the old rules and the legacy gauges are deleted in a
+follow-up (see `todo.d/`).
 
 Neither file is installed, run, or evaluated by this repo. See
 [`docs/system/runbooks.md`](../../docs/system/runbooks.md), section

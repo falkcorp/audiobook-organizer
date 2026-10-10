@@ -1226,6 +1226,16 @@
           "legendFormat": "{{op_type}} {{op_id}}",
           "range": true,
           "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (def_id) (audiobook_organizer_ops_items_total)",
+          "legendFormat": "{{def_id}} (ops_items_total)",
+          "range": true,
+          "refId": "B"
         }
       ],
       "fieldConfig": {

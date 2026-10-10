@@ -37,6 +37,10 @@ audiobook_organizer_metadata_fetch_total	counter	provider,source
 audiobook_organizer_review_index_request_seconds	histogram	view
 audiobook_organizer_number_leading_titles	gauge	
 audiobook_organizer_fixer_duration_seconds	histogram	fixer,phase
+audiobook_organizer_ops_runs_total	counter	def_id,outcome	otel
+audiobook_organizer_ops_run_duration_seconds	histogram	def_id,outcome	otel
+audiobook_organizer_ops_items_total	counter	def_id,outcome	otel
+audiobook_organizer_ops_inflight	gauge	def_id,plugin	otel
 ai_dispatch_requests_total	counter	capability,endpoint,outcome	otel
 ai_dispatch_inflight	gauge	endpoint	otel
 ai_dispatch_failover_total	counter	capability,class,endpoint	otel

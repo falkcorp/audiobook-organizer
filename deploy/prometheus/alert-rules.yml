@@ -1,7 +1,7 @@
 # file: deploy/prometheus/alert-rules.yml
-# version: 1.2.0
+# version: 1.3.0
 # guid: d2e3f4a5-b6c7-4d8e-9f0a-1b2c3d4e5f6a
-# last-edited: 2026-07-18
+# last-edited: 2026-10-10
 #
 # TEMPLATE / SNIPPET — Prometheus alerting rules for audiobook-organizer
 # (OPS-4/OPS-5). This is NOT installed or evaluated by this repo; it must be
@@ -27,6 +27,8 @@ groups:
       # real regression (e.g. a bad importer run, a wedged op type) rather
       # than isolated noise. Tune down as real-world false-positive/negative
       # rates are observed.
+      # Soak until 2026-11-09; then delete in a follow-up PR (the V2 rule
+      # below reads the OTel family audiobook_organizer_ops_runs_total).
       - alert: AudiobookOrganizerOpFailuresHigh
         expr: rate(audiobook_organizer_operations_failed_total[15m]) > 0.1
         for: 10m
@@ -39,6 +41,25 @@ groups:
             for at least 10 minutes. Check `journalctl -u
             audiobook-organizer` and the Operations tab for the failing op
             type(s).
+
+      # OTel twin of AudiobookOrganizerOpFailuresHigh (11-PR4). Counts runs in
+      # audiobook_organizer_ops_runs_total (plural "ops"). outcome=timed_out is
+      # listed so the rule stays correct once 05-PR2 produces it; until then a
+      # deadline hit is recorded as outcome=canceled, which this rule does not
+      # count (the old operations_failed_total did not count timeouts either).
+      # Soak until 2026-11-09 beside the old rule, then keep only this one.
+      - alert: AudiobookOrganizerOpFailuresHighV2
+        expr: sum(rate(audiobook_organizer_ops_runs_total{outcome=~"failed|timed_out"}[15m])) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "audiobook-organizer operation failure rate is high"
+          description: >-
+            Operation failure rate (failed and timed-out runs, all
+            operation definitions) has exceeded 0.1/s over 15m for at
+            least 10 minutes. Group audiobook_organizer_ops_runs_total by
+            def_id to find the failing operation.
 
       # OPS-4: covers "AI backend (OpenAI/local Ollama) down" — the case
       # that was previously only discovered via OpenAI quota exhaustion
@@ -144,6 +165,9 @@ groups:
       # counter) and the series is deleted rather than reset to 0 on
       # completion — so there is never an in-series counter-reset for rate()
       # to misinterpret.
+      # Soak until 2026-11-09; then delete in a follow-up PR (see
+      # AudiobookOrganizerOpStalledV2 below, which reads per-def series
+      # instead of this per-run gauge).
       - alert: AudiobookOrganizerOpStalled
         expr: rate(audiobook_organizer_op_items_processed[30m]) == 0
         for: 30m
@@ -157,3 +181,32 @@ groups:
             in that window — likely wedged rather than merely slow. Check
             `journalctl -u audiobook-organizer` and GET
             /api/v1/operations/v2/{{ $labels.op_id }} for the last log line.
+
+      # OTel replacement for AudiobookOrganizerOpStalled (11-PR4). Fires per
+      # def_id when that def has runs in flight and has counted no items in
+      # 30 minutes. ops_inflight and ops_items_total carry def_id (plus
+      # plugin / outcome), so the two sides are joined with `unless on
+      # (def_id)` after summing each to def_id; a plain `A and rate(B) == 0`
+      # never matches because the label sets differ. A def that has never
+      # produced an item has no ops_items_total series, so the right-hand
+      # side is empty and the alert fires for it too, which is what a run
+      # that is wedged before its first item looks like.
+      # NOT the legacy per-run gauge audiobook_organizer_op_items_total (no
+      # "s" in "ops"): audiobook_organizer_ops_items_total is the OTel counter.
+      # Soak until 2026-11-09 beside the old rule.
+      - alert: AudiobookOrganizerOpStalledV2
+        expr: >-
+          sum by (def_id) (audiobook_organizer_ops_inflight) > 0
+          unless on (def_id)
+          sum by (def_id) (rate(audiobook_organizer_ops_items_total[30m])) > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "audiobook-organizer operation appears stalled"
+          description: >-
+            Operation {{ $labels.def_id }} has had runs in flight for at
+            least 30 minutes with no items processed in that window,
+            which is likely wedged rather than merely slow. Check
+            `journalctl -u audiobook-organizer` and the Operations tab for
+            that operation's last log line.

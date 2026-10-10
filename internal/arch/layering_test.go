@@ -1,5 +1,5 @@
 // file: internal/arch/layering_test.go
-// version: 1.1.3
+// version: 1.1.4
 // guid: 752fb2b9-4a13-4baf-9fb2-0fd2ac6f3ad5
 // last-edited: 2026-10-10
 
@@ -165,6 +165,7 @@ var layerOf = map[string]int{
 	"internal/oauth":                    3, // computed: max of imports=2, floored at 3
 	"internal/operations":               3, // computed: max of imports=0, floored at 3
 	"internal/operations/childop":       3, // computed: max of imports=2, floored at 3
+	"internal/opsmetrics":               3, // computed: max of imports=0, floored at 3
 	"internal/organizer":                3, // table: domain
 	"internal/playlist":                 3, // computed: max of imports=2, floored at 3
 	"internal/plugin":                   3, // computed: max of imports=0, floored at 3
