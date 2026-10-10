@@ -1,5 +1,5 @@
 // file: internal/server/owner_rejected_rerank.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: f8c8e21e-cb61-4f38-900e-80bbda768cca
 // last-edited: 2026-10-10
 
@@ -39,7 +39,7 @@ type rerankStore interface {
 
 // cachedRowReranker is the metafetch.Service method that re-orders a row.
 type cachedRowReranker interface {
-	RerankCachedCandidates(bookID string, rank func(metafetch.MetadataCandidate) int) (metafetch.RerankOutcome, error)
+	RerankCachedCandidates(bookID string, buildRank func() (func(metafetch.MetadataCandidate) int, error)) (metafetch.RerankOutcome, error)
 }
 
 // rerankCounts is what one rerankCachedRows pass did, for the log.
@@ -87,26 +87,31 @@ func rerankCachedRows(ctx context.Context, store rerankStore, svc cachedRowReran
 			if ctx.Err() != nil {
 				return nil
 			}
-			book, err := store.GetBookByID(id)
-			if err != nil {
-				atomic.AddInt64(&counts.Errors, 1)
-				ownerRejectedLog.Warn("re-rank: book read failed: book_id=%s err=%v", logger.SanitizeLogValue(id), err)
-				return nil
-			}
-			if book == nil {
+			// The book and its rejections are read under the row's lock
+			// (RerankCachedCandidates' buildRank), so the order written is
+			// the one the newest rejection set gives. A failed rejection read
+			// is an error (the one-time pass retries), never a ranking as if
+			// nothing were rejected.
+			missing := false
+			out, err := svc.RerankCachedCandidates(id, func() (func(metafetch.MetadataCandidate) int, error) {
+				book, err := store.GetBookByID(id)
+				if err != nil {
+					return nil, fmt.Errorf("read book: %w", err)
+				}
+				if book == nil {
+					missing = true
+					return nil, nil
+				}
+				rejected, err := metafetch.LoadRejectedCandidates(store, id)
+				if err != nil {
+					return nil, err
+				}
+				return metabatch.MergeRankerFor(book, rejected), nil
+			})
+			if missing {
 				atomic.AddInt64(&counts.BookMissing, 1)
 				return nil
 			}
-			// Read here, not through MergeRanker's loader: a failed read must
-			// count as an error (so the one-time pass retries), never rank
-			// the row as if nothing were rejected.
-			rejected, err := metafetch.LoadRejectedCandidates(store, id)
-			if err != nil {
-				atomic.AddInt64(&counts.Errors, 1)
-				ownerRejectedLog.Warn("re-rank: owner rejections unreadable: book_id=%s err=%v", logger.SanitizeLogValue(id), err)
-				return nil
-			}
-			out, err := svc.RerankCachedCandidates(id, metabatch.MergeRankerFor(book, rejected))
 			switch {
 			case err != nil:
 				atomic.AddInt64(&counts.Errors, 1)

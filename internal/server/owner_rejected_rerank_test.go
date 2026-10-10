@@ -1,5 +1,5 @@
 // file: internal/server/owner_rejected_rerank_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 118c8e73-9354-4107-840e-af173540ebc3
 // last-edited: 2026-10-10
 
@@ -42,7 +42,7 @@ func TestRerankOwnerRejectedRows_OneShot(t *testing.T) {
 
 	var books []*database.Book
 	before := map[string][]json.RawMessage{}
-	for _, title := range []string{"Quiet Harbor", "Long Field", "Grey Orchard"} {
+	for _, title := range []string{"Synthetic Field Notes 3", "Synthetic Field Notes 6", "Synthetic Field Notes 7"} {
 		b, cerr := store.CreateBook(&database.Book{Title: title, Format: "m4b"})
 		require.NoError(t, cerr)
 		books = append(books, b)
@@ -55,11 +55,11 @@ func TestRerankOwnerRejectedRows_OneShot(t *testing.T) {
 	}
 	// A second rejection of the last book (two keys, one book), a rejection
 	// of a book with no row, and one for a book that no longer exists.
-	require.NoError(t, store.SetRaw(metafetch.RejectedCandidateStoreKey(books[2].ID, "Audible", "Something Else"), []byte("1")))
-	nr, err := store.CreateBook(&database.Book{Title: "No Row", Format: "m4b"})
+	require.NoError(t, store.SetRaw(metafetch.RejectedCandidateStoreKey(books[2].ID, "Audible", "Synthetic Field Notes 8"), []byte("1")))
+	nr, err := store.CreateBook(&database.Book{Title: "Synthetic No Row", Format: "m4b"})
 	require.NoError(t, err)
-	require.NoError(t, store.SetRaw(metafetch.RejectedCandidateStoreKey(nr.ID, "Audible", "No Row"), []byte("1")))
-	require.NoError(t, store.SetRaw(metafetch.RejectedCandidateStoreKey("gone-book", "Audible", "Gone"), []byte("1")))
+	require.NoError(t, store.SetRaw(metafetch.RejectedCandidateStoreKey(nr.ID, "Audible", "Synthetic No Row"), []byte("1")))
+	require.NoError(t, store.SetRaw(metafetch.RejectedCandidateStoreKey("gone-book", "Audible", "Synthetic Gone"), []byte("1")))
 
 	res, err := rerankOwnerRejectedRows(context.Background(), store, svc, time.Now())
 	require.NoError(t, err)
@@ -85,7 +85,7 @@ func TestRerankOwnerRejectedRows_OneShot(t *testing.T) {
 
 type failingReranker struct{}
 
-func (failingReranker) RerankCachedCandidates(string, func(metafetch.MetadataCandidate) int) (metafetch.RerankOutcome, error) {
+func (failingReranker) RerankCachedCandidates(string, func() (func(metafetch.MetadataCandidate) int, error)) (metafetch.RerankOutcome, error) {
 	return metafetch.RerankUnchanged, errors.New("write failed")
 }
 
@@ -94,9 +94,9 @@ func TestRerankOwnerRejectedRows_FailureLeavesMarkerUnset(t *testing.T) {
 	store, err := database.NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
-	b, err := store.CreateBook(&database.Book{Title: "Quiet Harbor", Format: "m4b"})
+	b, err := store.CreateBook(&database.Book{Title: "Synthetic Field Notes 3", Format: "m4b"})
 	require.NoError(t, err)
-	require.NoError(t, store.SetRaw(metafetch.RejectedCandidateStoreKey(b.ID, "Audible", "Quiet Harbor"), []byte("1")))
+	require.NoError(t, store.SetRaw(metafetch.RejectedCandidateStoreKey(b.ID, "Audible", "Synthetic Field Notes 3"), []byte("1")))
 
 	res, err := rerankOwnerRejectedRows(context.Background(), store, failingReranker{}, time.Now())
 	require.NoError(t, err)
@@ -122,12 +122,12 @@ func TestRerankOwnerRejectedRows_UnreadableRejectionsFailClosed(t *testing.T) {
 	store, err := database.NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
-	b, err := store.CreateBook(&database.Book{Title: "Quiet Harbor", Format: "m4b"})
+	b, err := store.CreateBook(&database.Book{Title: "Synthetic Field Notes 3", Format: "m4b"})
 	require.NoError(t, err)
-	rows := append(candidateJSON(t, metafetch.MetadataCandidate{Title: "Quiet Harbor", Source: "Audible", Score: 0.97}),
-		candidateJSON(t, metafetch.MetadataCandidate{Title: "Quiet Harbor (Unabridged)", Source: "Audible", Score: 0.93})...)
+	rows := append(candidateJSON(t, metafetch.MetadataCandidate{Title: "Synthetic Field Notes 3", Source: "Audible", Score: 0.97}),
+		candidateJSON(t, metafetch.MetadataCandidate{Title: "Synthetic Field Notes 3 (Unabridged)", Source: "Audible", Score: 0.93})...)
 	require.NoError(t, store.PutMetadataCache(&database.MetadataCandidateCache{BookID: b.ID, Candidates: rows, FetchedAt: time.Now()}))
-	require.NoError(t, store.SetRaw(metafetch.RejectedCandidateStoreKey(b.ID, "Audible", "Quiet Harbor"), []byte("1")))
+	require.NoError(t, store.SetRaw(metafetch.RejectedCandidateStoreKey(b.ID, "Audible", "Synthetic Field Notes 3"), []byte("1")))
 
 	res, err := rerankOwnerRejectedRows(context.Background(), scanFailingStore{store}, metafetch.NewService(store), time.Now())
 	require.NoError(t, err)
@@ -135,5 +135,5 @@ func TestRerankOwnerRejectedRows_UnreadableRejectionsFailClosed(t *testing.T) {
 	require.EqualValues(t, 1, res.Counts.Errors)
 	row, err := store.GetMetadataCache(b.ID)
 	require.NoError(t, err)
-	require.Equal(t, "Quiet Harbor", candidateTitles(t, row.Candidates)[0])
+	require.Equal(t, "Synthetic Field Notes 3", candidateTitles(t, row.Candidates)[0])
 }

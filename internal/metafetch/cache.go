@@ -1,5 +1,5 @@
 // file: internal/metafetch/cache.go
-// version: 1.31.0
+// version: 1.32.0
 // guid: a4f33a2e-3b4d-4306-bdce-476758e39120
 // last-edited: 2026-10-10
 //
@@ -596,6 +596,16 @@ func (mfs *Service) FetchAndCacheWithResponse(ctx context.Context, limiter *rate
 // Callers must rule out noSourceAnswered first: an empty response nobody
 // answered is not a look, and recording it would date the row as checked.
 func (mfs *Service) cacheSearchResponse(bookID, query, author, narrator, series string, resp *SearchMetadataResponse) *MetadataCandidateCache {
+	// The row's read and write are one step for this book: a merge or a
+	// carried attempt read from a row another search replaces meanwhile
+	// would write the older row's state back over it. The ranking below is
+	// inside that step too: MergeRank reads the owner's rejections when it
+	// first ranks (metabatch.MergeRanker), and a rejection's re-rank
+	// (RerankCachedCandidates) takes the same lock, so the row is never
+	// written in an order computed from rejections older than one a re-rank
+	// already applied.
+	defer mfs.lockRow(bookID)()
+
 	// A search that REPLACES the row ranks its answer with the caller's
 	// MergeRank too, before the top-N cap, as the merge paths below do: the
 	// owner-rejected tier goes last and is evicted first. Until 2026-10-10 a
@@ -628,11 +638,6 @@ func (mfs *Service) cacheSearchResponse(bookID, query, author, narrator, series 
 		// The ASIN these candidates were fetched for (ASINReplaced reads it).
 		FetchedForASIN: resp.BookASIN,
 	}
-
-	// The row's read and write are one step for this book: a merge or a
-	// carried attempt read from a row another search replaces meanwhile
-	// would write the older row's state back over it.
-	defer mfs.lockRow(bookID)()
 
 	// prev is the row for the same inputs -- or the row the caller read and
 	// vouched for under other hashed inputs (SearchOptions.CarryFromSourceHash):

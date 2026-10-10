@@ -1,5 +1,5 @@
 // file: internal/metabatch/usable_candidate.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 6a925443-e10e-4dc5-af83-0dcf909b6256
 // last-edited: 2026-10-10
 
@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
@@ -129,8 +130,22 @@ const (
 // SearchOptions.MergeRank): the MergeRank* tiers above. The ASIN-replaced
 // leg is not needed: a merge only carries candidates fetched for the ASIN
 // the book holds now.
+//
+// The owner's rejections are read when the ranking is first used, not when
+// it is built: a search builds it before it runs, and metafetch ranks under
+// the book's cache-row lock after the search returns, so the rejections
+// read are the ones current when the row is written (a reject made during
+// the search is honoured), and a rejection's re-rank of the same row takes
+// the same lock.
 func MergeRanker(kv RejectedCandidateReader, book *database.Book) func(metafetch.MetadataCandidate) int {
-	return MergeRankerFor(book, rejectedKeys(kv, book.ID))
+	var (
+		once sync.Once
+		rank func(metafetch.MetadataCandidate) int
+	)
+	return func(c metafetch.MetadataCandidate) int {
+		once.Do(func() { rank = MergeRankerFor(book, rejectedKeys(kv, book.ID)) })
+		return rank(c)
+	}
 }
 
 // MergeRankerFor is MergeRanker over rejections the caller already read
