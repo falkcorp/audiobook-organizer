@@ -1,7 +1,7 @@
 // file: internal/organizer/collision.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 5b1f7c2a-9d34-4e18-8f60-c7a2b4d91e03
-// last-edited: 2026-09-19
+// last-edited: 2026-10-10
 
 // Pre-flight collision resolution for RenameFiles.
 //
@@ -841,9 +841,8 @@ func quarantineCollisionSource(rootDir, bookID, src string) (string, error) {
 	// bookID must be a value the STORE returned (see the call site: it passes
 	// prior.BookID, the id on the rehydrated row), never a request or op-params
 	// string handed straight in. That is the rule the rest of this package
-	// already follows — ApplyRename takes a request id, uses it only as a lookup
-	// key, and builds every path component from the row GetBookByID returns —
-	// and it is why organizer's path building has no open go/path-injection
+	// already follows — a request id is only a lookup key, and every path
+	// component is built from the row GetBookByID returns — and it is why organizer's path building has no open go/path-injection
 	// alerts while a direct string-to-join route does.
 	//
 	// SecureJoin on top of that, rather than filepath.Join plus a bespoke prefix

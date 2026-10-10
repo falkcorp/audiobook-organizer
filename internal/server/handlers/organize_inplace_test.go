@@ -1,7 +1,7 @@
 // file: internal/server/handlers/organize_inplace_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 9a4c7e21-5d3b-4f80-b6e2-1c8d0a7f3e94
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 
 package handlers_test
 
@@ -109,7 +109,7 @@ func (s *organizeSvcSpy) CreateOrganizedVersion(book *database.Book, landing *or
 func organizeBook(t *testing.T, store *organizeStoreFake, svc *organizeSvcSpy) (*httptest.ResponseRecorder, map[string]any) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	h := handlers.NewOrganizeHandler(store, nil, nil, svc, nil, false)
+	h := handlers.NewOrganizeHandler(store, nil, svc, nil, false)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodPost, "/audiobooks/"+store.book.ID+"/organize", nil)

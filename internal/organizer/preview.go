@@ -1,7 +1,7 @@
 // file: internal/organizer/preview.go
-// version: 1.5.0
+// version: 1.5.1
 // guid: f1a2b3c4-d5e6-7890-abcd-ef1234567890
-// last-edited: 2026-09-30
+// last-edited: 2026-10-10
 
 package organizer
 
@@ -237,14 +237,9 @@ func (ops *PreviewService) PreviewOrganize(bookID string) (*PreviewResponse, err
 	}
 
 	// Step 4: Write tags — build the tag map
-	rs := &RenameService{
-		db:                          ops.db,
-		IsProtectedPath:             ops.IsProtectedPath,
-		ResolveAuthorAndSeriesNames: ops.ResolveAuthorAndSeriesNames,
-	}
 	authorName, _ := ops.ResolveAuthorAndSeriesNames(book)
-	narratorStr := rs.resolveNarratorNames(bookID, book)
-	tagMeta := rs.BuildTagMetadata(book, authorName, narratorStr)
+	narratorStr := resolveNarratorNames(ops.db, bookID, book)
+	tagMeta := BuildTagMetadata(book, authorName, narratorStr)
 
 	if len(tagMeta) > 0 {
 		steps = append(steps, PreviewStep{

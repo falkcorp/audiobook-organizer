@@ -1,7 +1,7 @@
 // file: internal/server/handlers/organize_scan_lock_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 0e8b5c27-4a13-4f96-b7d2-c93a61e8f405
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 
 package handlers_test
 
@@ -72,7 +72,7 @@ func inPlaceSvc() *countingOrganizeSvc {
 func TestOrganizeBook_WaitsForTheScannerThenOrganizes(t *testing.T) {
 	store := &organizeStoreFake{book: &database.Book{ID: "b1", FilePath: "/lib/Old/Old.m4b"}}
 	svc := inPlaceSvc()
-	h := handlers.NewOrganizeHandler(store, nil, nil, svc, nil, false)
+	h := handlers.NewOrganizeHandler(store, nil, svc, nil, false)
 	scan := lockBook(t, "b1")
 
 	done := make(chan *httptest.ResponseRecorder, 1)
@@ -104,7 +104,7 @@ func TestOrganizeBook_WaitsForTheScannerThenOrganizes(t *testing.T) {
 func TestOrganizeBook_LocksTheLibraryCopyItActsOn(t *testing.T) {
 	store := &organizeStoreFake{book: &database.Book{ID: "b1", FilePath: "/lib/Old/Old.m4b"}}
 	svc := inPlaceSvc()
-	h := handlers.NewOrganizeHandler(store, nil, nil, svc, nil, false)
+	h := handlers.NewOrganizeHandler(store, nil, svc, nil, false)
 	h.SetLibraryCopyResolver(func(b *database.Book) (*database.Book, bool) {
 		cp := *b
 		cp.ID = "s1"
@@ -137,7 +137,7 @@ func TestOrganizeBook_OtherBookHeldDoesNotWait(t *testing.T) {
 	defer handlers.SetOrganizeBookLockWaitForTest(5 * time.Second)()
 	store := &organizeStoreFake{book: &database.Book{ID: "b1", FilePath: "/lib/Old/Old.m4b"}}
 	svc := inPlaceSvc()
-	h := handlers.NewOrganizeHandler(store, nil, nil, svc, nil, false)
+	h := handlers.NewOrganizeHandler(store, nil, svc, nil, false)
 	lockBook(t, "other")
 
 	start := time.Now()
@@ -155,7 +155,7 @@ func TestOrganizeBook_HeldPastTheBoundIsQueuedNot409(t *testing.T) {
 	defer handlers.SetOrganizeBookLockWaitForTest(30 * time.Millisecond)()
 	store := &organizeStoreFake{book: &database.Book{ID: "b1", FilePath: "/lib/Old/Old.m4b"}}
 	svc := inPlaceSvc()
-	h := handlers.NewOrganizeHandler(store, nil, nil, svc, nil, false)
+	h := handlers.NewOrganizeHandler(store, nil, svc, nil, false)
 	q := &fakeOrganizeQueuer{}
 	h.SetOrganizeQueuer(q)
 	lockBook(t, "b1")
@@ -177,7 +177,7 @@ func TestOrganizeBook_HeldPastTheBoundIsQueuedNot409(t *testing.T) {
 func TestRunQueuedOrganize_WaitsThenRunsAndReportsFailure(t *testing.T) {
 	store := &organizeStoreFake{book: &database.Book{ID: "b1", FilePath: "/lib/Old/Old.m4b"}}
 	svc := inPlaceSvc()
-	h := handlers.NewOrganizeHandler(store, nil, nil, svc, nil, false)
+	h := handlers.NewOrganizeHandler(store, nil, svc, nil, false)
 	scan := lockBook(t, "b1")
 
 	done := make(chan error, 1)
@@ -195,7 +195,7 @@ func TestRunQueuedOrganize_WaitsThenRunsAndReportsFailure(t *testing.T) {
 	}
 
 	failing := &countingOrganizeSvc{organizeSvcSpy: organizeSvcSpy{err: errors.New("disk on fire")}}
-	h2 := handlers.NewOrganizeHandler(store, nil, nil, failing, nil, false)
+	h2 := handlers.NewOrganizeHandler(store, nil, failing, nil, false)
 	err := h2.RunQueuedOrganize(context.Background(), "b1", nil)
 	if err == nil || !strings.Contains(err.Error(), "disk on fire") {
 		t.Fatalf("want the organize failure reported, got %v", err)
@@ -219,7 +219,7 @@ func unsettledResolver() func(*database.Book) (*database.Book, bool) {
 func TestOrganizeBook_UnsettledLockSetQueuesAndTouchesNothing(t *testing.T) {
 	store := &organizeStoreFake{book: &database.Book{ID: "b1", FilePath: "/lib/Old/Old.m4b"}}
 	svc := inPlaceSvc()
-	h := handlers.NewOrganizeHandler(store, nil, nil, svc, nil, false)
+	h := handlers.NewOrganizeHandler(store, nil, svc, nil, false)
 	h.SetLibraryCopyResolver(unsettledResolver())
 	q := &fakeOrganizeQueuer{}
 	h.SetOrganizeQueuer(q)
@@ -245,7 +245,7 @@ func TestRunQueuedOrganize_UnsettledLockSetFailsWithoutOrganizing(t *testing.T) 
 	defer handlers.SetOrganizeUnsettledRetryForTest(2, time.Millisecond)()
 	store := &organizeStoreFake{book: &database.Book{ID: "b1", FilePath: "/lib/Old/Old.m4b"}}
 	svc := inPlaceSvc()
-	h := handlers.NewOrganizeHandler(store, nil, nil, svc, nil, false)
+	h := handlers.NewOrganizeHandler(store, nil, svc, nil, false)
 	h.SetLibraryCopyResolver(unsettledResolver())
 
 	err := h.RunQueuedOrganize(context.Background(), "b1", nil)

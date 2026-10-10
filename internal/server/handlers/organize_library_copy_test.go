@@ -1,7 +1,7 @@
 // file: internal/server/handlers/organize_library_copy_test.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 68af52f3-742d-4b0c-99ba-e3a73e2e0443
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 
 package handlers_test
 
@@ -111,7 +111,7 @@ func TestOrganizeHandlers_ProtectedOriginalActsOnItsLibraryCopy(t *testing.T) {
 	orgSvc.SetOrganizeHooks(spy)
 	previewSvc := organizer.NewPreviewService(store)
 	previewSvc.ResolveLibraryCopy = resolve
-	h := handlers.NewOrganizeHandler(store, nil, previewSvc, orgSvc, nil, false)
+	h := handlers.NewOrganizeHandler(store, previewSvc, orgSvc, nil, false)
 	h.SetLibraryCopyResolver(resolve)
 
 	call := func(method string, fn gin.HandlerFunc) (int, map[string]any) {
