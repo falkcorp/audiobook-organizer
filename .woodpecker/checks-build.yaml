@@ -1,5 +1,5 @@
 # file: .woodpecker/checks-build.yaml
-# version: 1.3.0
+# version: 1.4.0
 # guid: 544e8a0d-e5d0-4952-8fb5-c05cde1dd245
 # last-edited: 2026-10-10
 #
@@ -72,7 +72,10 @@ steps:
       - export PATH="/tank/ci/tools/node/bin:$$PATH"
       - node --version
       - npm ci --prefix web --no-audit --no-fund
-      - cd web && npm run test -- --run
+      # vitest defaults to availableParallelism()-1 workers (47 on U1). Beside
+      # vet and fmt that starves the box: workers stall for tens of seconds and
+      # tests hit the 30s timeout. Eight workers keep the suite fast without it.
+      - cd web && npm run test -- --run --maxWorkers=8
 
   - name: cleanup
     # Same cleanup as test-rest.yaml: cap the shared GOCACHE, clear this clone
