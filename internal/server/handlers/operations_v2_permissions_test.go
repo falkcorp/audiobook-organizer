@@ -1,15 +1,16 @@
 // file: internal/server/handlers/operations_v2_permissions_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 61966351-b637-469e-8483-4e3819bf56f6
-// last-edited: 2026-08-18
+// last-edited: 2026-10-09
 
 // Covers TriggerOperationV2's per-def permission gate.
 //
 // Before this gate, OperationDef.Permissions was written to op_definitions_v2 and
 // read by nothing: the only guard on POST /operations/v2 is a single blanket
 // scan.trigger for every op. The seeded editor role holds scan.trigger but NOT
-// settings.manage, so the 37 maintenance ops were reachable by a role the v1
-// maintenance route rejects. These tests pin that closed.
+// settings.manage, so ops were reachable by a role the v1 maintenance route
+// rejects. A def that declares no Permissions is treated as settings.manage.
+// These tests pin that closed.
 //
 // Each test asserts the mock's call log, not just the status code: in the deny
 // cases no EnqueueOp expectation is registered, so mockery fails the test if the
@@ -23,6 +24,8 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	"github.com/falkcorp/audiobook-organizer/internal/database"
+	databasemocks "github.com/falkcorp/audiobook-organizer/internal/database/mocks"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	handlersmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/mocks"
@@ -97,19 +100,75 @@ func TestTriggerOperationV2_SkipsEnforcementWhenAuthDisabled(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "op8")
 }
 
-// A def that declares no permissions keeps the route-level guard as its only
-// gate. This is the majority of non-maintenance ops and must not regress to 403.
-func TestTriggerOperationV2_DefWithNoPermissionsIsUnaffected(t *testing.T) {
-	registry := handlersmocks.NewMockOperationsRegistry(t)
-	registry.EXPECT().Def("library.scan").Return(opsregistry.OperationDef{ID: "library.scan"}, true)
-	registry.EXPECT().EnqueueOp(mock.Anything, "library.scan", mock.Anything).Return("op9", nil)
+// A def that declares no permissions is treated as requiring settings.manage:
+// the route-level scan.trigger guard alone would let the seeded editor start it.
+// The def literal mirrors a plugin op (acoustid.scan) that declares nothing.
+func TestTriggerOperationV2_DefWithNoPermissionsRequiresSettingsManage(t *testing.T) {
+	t.Run("editor is refused", func(t *testing.T) {
+		registry := handlersmocks.NewMockOperationsRegistry(t)
+		registry.EXPECT().Def("acoustid.scan").Return(opsregistry.OperationDef{ID: "acoustid.scan"}, true)
+		// Deliberately NO EnqueueOp expectation: reaching it is the failure.
 
-	h := handlers.NewOperationsV2Handler(nil, registry, nil, true)
-	c, w := newOpsV2Ctx(http.MethodPost, "/operations/v2", `{"def_id":"library.scan"}`, nil)
-	withCallerPerms(c, auth.PermScanTrigger)
+		h := handlers.NewOperationsV2Handler(nil, registry, nil, true)
+		c, w := newOpsV2Ctx(http.MethodPost, "/operations/v2", `{"def_id":"acoustid.scan"}`, nil)
+		withCallerPerms(c, auth.PermScanTrigger)
+		h.TriggerOperationV2(c)
+
+		assert.Equal(t, http.StatusForbidden, w.Code)
+		assert.Contains(t, w.Body.String(), "permission denied: settings.manage")
+		registry.AssertNotCalled(t, "EnqueueOp", mock.Anything, mock.Anything, mock.Anything)
+	})
+	t.Run("admin is let through", func(t *testing.T) {
+		registry := handlersmocks.NewMockOperationsRegistry(t)
+		registry.EXPECT().Def("acoustid.scan").Return(opsregistry.OperationDef{ID: "acoustid.scan"}, true)
+		registry.EXPECT().EnqueueOp(mock.Anything, "acoustid.scan", mock.Anything).Return("op9", nil)
+
+		h := handlers.NewOperationsV2Handler(nil, registry, nil, true)
+		c, w := newOpsV2Ctx(http.MethodPost, "/operations/v2", `{"def_id":"acoustid.scan"}`, nil)
+		withCallerPerms(c, auth.PermScanTrigger, auth.PermSettingsManage)
+		h.TriggerOperationV2(c)
+
+		assert.Equal(t, http.StatusAccepted, w.Code)
+		assert.Contains(t, w.Body.String(), "op9")
+	})
+}
+
+// With auth disabled the default must not apply: auth.Can is false for a caller
+// with no permission set, so enforcing would 403 every trigger. The registry's
+// Def must not even be consulted.
+func TestTriggerOperationV2_NoPermissionsDefAllowedWhenAuthDisabled(t *testing.T) {
+	registry := handlersmocks.NewMockOperationsRegistry(t)
+	registry.EXPECT().EnqueueOp(mock.Anything, "acoustid.scan", mock.Anything).Return("op11", nil)
+	// No Def expectation: with auth disabled the gate must not run at all.
+
+	h := handlers.NewOperationsV2Handler(nil, registry, nil, false)
+	c, w := newOpsV2Ctx(http.MethodPost, "/operations/v2", `{"def_id":"acoustid.scan"}`, nil)
 	h.TriggerOperationV2(c)
 
 	assert.Equal(t, http.StatusAccepted, w.Code)
+	assert.Contains(t, w.Body.String(), "op11")
+}
+
+// Retry shares defPermissionsHeld with trigger, so an editor retrying a failed
+// run of a def that declares nothing is refused at the handler layer too (the
+// route itself already requires settings.manage).
+func TestRetryOperationV2_NoPermissionsDefRequiresSettingsManage(t *testing.T) {
+	store := databasemocks.NewMockOpsV2Store(t)
+	store.EXPECT().GetOperationV2("op-old").Return(&database.OperationV2Row{
+		ID: "op-old", DefID: "acoustid.scan", Status: "failed", Params: "{}",
+	}, nil)
+	registry := handlersmocks.NewMockOperationsRegistry(t)
+	registry.EXPECT().Def("acoustid.scan").Return(opsregistry.OperationDef{ID: "acoustid.scan"}, true)
+	// Deliberately NO EnqueueOp expectation: reaching it is the failure.
+
+	h := handlers.NewOperationsV2Handler(store, registry, nil, true)
+	c, w := newOpsV2Ctx(http.MethodPost, "/operations/v2/op-old/retry", "", gin.Params{{Key: "id", Value: "op-old"}})
+	withCallerPerms(c, auth.PermScanTrigger)
+	h.RetryOperationV2(c)
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	assert.Contains(t, w.Body.String(), "permission denied: settings.manage")
+	registry.AssertNotCalled(t, "EnqueueOp", mock.Anything, mock.Anything, mock.Anything)
 }
 
 // An unknown def_id falls through to EnqueueOp so the existing error response is

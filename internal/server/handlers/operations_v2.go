@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations_v2.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d
-// last-edited: 2026-09-25
+// last-edited: 2026-10-09
 
 // UOS-06: SSE event hub, /operations/timeline, single-op introspection,
 // cancel, trigger-op, and /op-defs endpoints.
@@ -627,21 +627,24 @@ func (h *OperationsV2Handler) TriggerOperationV2(c *gin.Context) {
 // RetryOperationV2) so the two cannot drift.
 //
 // The route-level guard on POST /operations/v2 is a single blanket
-// scan.trigger for EVERY op (wire_operations_routes.go), so without this the
-// per-def Permissions field is written to op_definitions_v2 and never read —
-// it reads like a gate and behaves like a comment. The seeded editor role
-// holds scan.trigger but not settings.manage, so the 37 maintenance ops were
-// reachable by a role the v1 maintenance route rejects.
+// scan.trigger for EVERY op (wire_operations_routes.go), which the seeded
+// editor role holds. A def that declares no Permissions would therefore be
+// startable by an editor, destructive ones included. So a def that declares
+// nothing is treated as requiring settings.manage (admin only); a def opts
+// into something narrower by declaring its own Permissions. Ops v3 native
+// defs must declare one (05 R19: ValidateCatalog rejects an empty Permission
+// on native v3 defs only).
 //
 // This lives in the handler and NOT in registry.EnqueueOp on purpose:
 // EnqueueOp has ~20 non-HTTP callers (internal/scheduler/tasks.go alone
 // enqueues 15 op types from context.Background(), plus internal/importer and
 // the dedup/maintenance plugins). Those carry no user and no permission set,
-// so a check down there would fail closed on every scheduled run.
+// so a check down there would fail closed on every scheduled run. Scheduler
+// driven EnqueueOp calls bypass this handler on purpose, so scheduled runs
+// are unaffected.
 //
-// Semantics are AND: every permission the def declares must be held. All defs
-// carry exactly one today, so this is untestable by behaviour — it is stated
-// here so the first two-permission def is not a coin flip.
+// Semantics are AND: every permission the def declares must be held. The
+// first two-permission def should not be a coin flip.
 //
 // An unknown def_id deliberately skips the check and falls through to
 // EnqueueOp, preserving today's error response. Nothing runs either way.
@@ -653,7 +656,11 @@ func (h *OperationsV2Handler) defPermissionsHeld(c *gin.Context, defID string) b
 	if !ok {
 		return true
 	}
-	for _, p := range def.Permissions {
+	required := def.Permissions
+	if len(required) == 0 {
+		required = []auth.Permission{auth.PermSettingsManage}
+	}
+	for _, p := range required {
 		if !auth.Can(c.Request.Context(), p) {
 			httputil.RespondWithForbidden(c, "permission denied: "+string(p))
 			return false
