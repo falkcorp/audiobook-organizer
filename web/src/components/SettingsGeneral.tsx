@@ -1,7 +1,7 @@
 // file: web/src/components/SettingsGeneral.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: 72ebd6f3-7436-4f24-8233-205c50dd05fb
-// last-edited: 2026-09-12
+// last-edited: 2026-10-10
 
 import { Dispatch, SetStateAction } from 'react';
 import {
@@ -688,6 +688,12 @@ export function SettingsGeneral(props: SettingsGeneralProps) {
           }
           label="Create backups before modifying files"
         />
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 6 }}>
+          Before a single-book tag write (an edit, fetch, apply or rename), the file&apos;s previous
+          version is kept beside it as a .bak-&lt;time&gt; file. Bulk operations keep none. Old
+          backups are removed after the backup retention period, but only inside the library folder:
+          a backup beside a file in an import path stays until you delete it.
+        </Typography>
       </Grid>
 
       <Grid size={12}>
