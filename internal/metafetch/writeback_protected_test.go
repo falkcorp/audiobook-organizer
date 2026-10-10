@@ -1,7 +1,7 @@
 // file: internal/metafetch/writeback_protected_test.go
-// version: 2.0.0
+// version: 2.1.0
 // guid: 0d5a8e37-b6c2-4f91-8a3e-c47f1d209b65
-// last-edited: 2026-09-14
+// last-edited: 2026-10-10
 
 package metafetch
 
@@ -60,14 +60,14 @@ func TestWriteFileTagsSafe_ProtectedPathIsRefusedNeverImported(t *testing.T) {
 	}
 	tags := map[string]any{"title": "T"}
 
-	err := svc.writeFileTagsSafe(protectedFile, tags, fileops.WriteTagsSafeOptions{}, fileops.OperationConfig{})
+	err := svc.writeFileTagsSafe(context.Background(), protectedFile, tags, fileops.WriteTagsSafeOptions{}, fileops.OperationConfig{})
 	if !errors.Is(err, tagger.ErrProtectedPathWrite) {
 		t.Fatalf("err = %v, want one wrapping tagger.ErrProtectedPathWrite", err)
 	}
 	if len(imp.calls) != 0 {
 		t.Errorf("importer called for %v: write-back must never import file by file", imp.calls)
 	}
-	if err := svc.writeFileTagsSafe(libraryFile, tags, fileops.WriteTagsSafeOptions{}, fileops.OperationConfig{}); err != nil {
+	if err := svc.writeFileTagsSafe(context.Background(), libraryFile, tags, fileops.WriteTagsSafeOptions{}, fileops.OperationConfig{}); err != nil {
 		t.Fatalf("unprotected write: %v", err)
 	}
 	if len(written) != 1 || written[0] != libraryFile {

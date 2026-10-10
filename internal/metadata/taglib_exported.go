@@ -1,7 +1,7 @@
 // file: internal/metadata/taglib_exported.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-09-14
+// last-edited: 2026-10-10
 //
 // Exported wrappers around the internal taglib read/write functions.
 // Both the WASM (taglib_support.go) and CGO (taglib_cgo.go) build
@@ -10,7 +10,11 @@
 
 package metadata
 
-import "github.com/falkcorp/audiobook-organizer/internal/tagger"
+import (
+	"context"
+
+	"github.com/falkcorp/audiobook-organizer/internal/tagger"
+)
 
 // packageSafeWriteDeps holds the optional Deluge-guard dependencies wired
 // in at startup by the server via SetSafeWriteDeps. Zero value = no guard
@@ -42,7 +46,14 @@ func ReadRawTags(filePath string) (map[string][]string, error) {
 }
 
 // WriteSingleTag writes one tag property to a file without disturbing
-// any other tags. Pass value="" to clear the property.
+// any other tags. Pass value="" to clear the property. It keeps a .bak-*
+// sibling when create_backups is on; a bulk caller uses WriteSingleTagContext.
 func WriteSingleTag(filePath, tagName, value string) error {
-	return writeSingleTagWithTaglib(filePath, tagName, value)
+	return WriteSingleTagContext(context.Background(), filePath, tagName, value)
+}
+
+// WriteSingleTagContext is WriteSingleTag under ctx: a ctx wrapped with
+// tagger.WithoutBackup writes no .bak-* sibling whatever create_backups says.
+func WriteSingleTagContext(ctx context.Context, filePath, tagName, value string) error {
+	return writeSingleTagWithTaglib(ctx, filePath, tagName, value)
 }

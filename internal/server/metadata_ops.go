@@ -1124,7 +1124,9 @@ func (s *Server) runBulkWriteBack(
 		// (above). See path_locks.go for the three hazards that closes
 		// (version-group siblings, protected-path redirect, and the
 		// one-second-granularity .bak- backup name).
-		count, writeErr := mfs.WriteBackMetadataForBook(bookID)
+		// ctx carries the caller's tagger.WithoutBackup opt-out down to the
+		// tag and cover writes (WriteBackMetadataForBookContext).
+		count, writeErr := mfs.WriteBackMetadataForBookContext(ctx, bookID)
 
 		if writeErr != nil {
 			failed.Add(1)

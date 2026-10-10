@@ -1,7 +1,7 @@
 // file: internal/tagger/safe_write.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 4a7e1c3b-9f02-4d85-b8e6-2f5a0d3c7b91
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 //
 // WriteTagsSafe / WriteImageSafe — pre-flight guard for all taglib writes.
 //
@@ -15,6 +15,10 @@
 // copies the file to a sibling temp file, writes tags into the copy, and
 // atomically renames it over the original. This keeps the on-disk state
 // consistent even if the process is killed mid-write.
+//
+// With the create_backups setting on, both also leave the pre-write bytes
+// beside the file (fileops.WriteTagsSafeOptions.KeepBackup) unless the
+// context opts out with WithoutBackup, which the bulk write-back ops do.
 
 package tagger
 
@@ -24,6 +28,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	taglib "go.senan.xyz/taglib"
@@ -103,6 +108,48 @@ type SafeWriteDeps struct {
 	HashStore  fileops.BookFileHashRecorder
 }
 
+// noBackupKey is the context key WithoutBackup sets. Unexported so only this
+// package can set or read it.
+type noBackupKey struct{}
+
+// WithoutBackup returns a context under which tag writes leave no .bak-*
+// sibling even when create_backups is on. Owner decision D69 (2026-10-09):
+// the bulk write-back ops wrap their context with this, because their safety
+// net is the provenance ledger and a sibling per file would double the
+// library's footprint until the backup-cleanup op runs. Single-book edits do
+// not wrap, so they keep backups when the setting is on.
+//
+// The opt-out rides on the context rather than on SafeWriteDeps because that
+// is one package-level value (metadata.SetSafeWriteDeps) shared by single-book
+// and bulk writes alike; a flag there would switch backups off everywhere.
+func WithoutBackup(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, noBackupKey{}, true)
+}
+
+// BackupWanted reports whether a tag write under ctx should keep a .bak-*
+// sibling: create_backups is on and ctx carries no WithoutBackup opt-out.
+// Writers that call fileops.WriteTagsSafe directly set KeepBackup from it.
+func BackupWanted(ctx context.Context) bool {
+	if ctx != nil {
+		if off, _ := ctx.Value(noBackupKey{}).(bool); off {
+			return false
+		}
+	}
+	return config.Snapshot().CreateBackups
+}
+
+// writeOptions is hashOptions plus the backup decision. It sets KeepBackup on
+// every result, including the empty options hashOptions returns when there is
+// no HashStore, so a deps value without one still honours create_backups.
+func (deps SafeWriteDeps) writeOptions(ctx context.Context, path, effectivePath string) fileops.WriteTagsSafeOptions {
+	o := deps.hashOptions(path, effectivePath)
+	o.KeepBackup = BackupWanted(ctx)
+	return o
+}
+
 // WriteTagsSafe writes tags to path, importing first if the path is protected.
 //
 // opts is the taglib write option (0 = merge, taglib.Clear = replace-all).
@@ -120,7 +167,7 @@ func WriteTagsSafe(ctx context.Context, path string, tags map[string][]string, o
 
 	_, _, err = fileops.WriteTagsSafe(effectivePath, func(tmpPath string) error {
 		return taglib.WriteTags(tmpPath, tags, opts)
-	}, deps.hashOptions(path, effectivePath))
+	}, deps.writeOptions(ctx, path, effectivePath))
 	if err != nil {
 		return fmt.Errorf("WriteTagsSafe: %w", err)
 	}
@@ -170,7 +217,7 @@ func WriteImageSafe(ctx context.Context, path string, data []byte, deps SafeWrit
 
 	_, _, err = fileops.WriteTagsSafe(effectivePath, func(tmpPath string) error {
 		return taglib.WriteImage(tmpPath, data)
-	}, deps.hashOptions(path, effectivePath))
+	}, deps.writeOptions(ctx, path, effectivePath))
 	if err != nil {
 		return fmt.Errorf("WriteImageSafe: %w", err)
 	}
