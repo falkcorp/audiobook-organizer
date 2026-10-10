@@ -1,5 +1,5 @@
 // file: internal/telemetry/telemetry.go
-// version: 2.4.0
+// version: 2.5.0
 // guid: 2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-10-10
 
@@ -9,6 +9,8 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,6 +20,8 @@ import (
 	"go.opentelemetry.io/otel/exporters/prometheus"
 	"go.opentelemetry.io/otel/sdk/metric"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"google.golang.org/grpc/credentials"
+	grpcinsecure "google.golang.org/grpc/credentials/insecure"
 )
 
 // InitOTEL initializes OpenTelemetry in two independent halves and returns one
@@ -73,25 +77,11 @@ func InitOTEL(ctx context.Context, cfg *Config) (func(context.Context) error, er
 		shutdowns = append(shutdowns, shutdownMetrics)
 	}
 
-	// One line for the whole init (this package is allowed one direct slog
-	// call: internal/logger's ratchet). A trace exporter that could not be
-	// started makes it an error-level line that says so.
-	level, msg, attrs := slog.LevelInfo, "OpenTelemetry initialized", []any{
-		"metrics", cfg.MetricsEnabled, "tracing", tracing, "endpoint", cfg.ExporterEndpoint,
-		"otlp_metrics", otlp.Enabled}
-	if tracingErr != nil {
-		level, msg = slog.LevelError, "OpenTelemetry initialized with tracing OFF: the trace exporter could not be started"
-		attrs = append(attrs, "tracing_error", tracingErr.Error())
+	level, msg, attrs := initSummary(cfg, tracing, tracingErr, otlp)
+	if otlp.Enabled {
+		installExportErrorHandler()
 	}
-	if otlp.Err != nil {
-		level = slog.LevelError
-		msg = "OpenTelemetry initialized with the OTLP metric push OFF: /metrics is unaffected"
-		attrs = append(attrs, "otlp_metrics_error", otlp.Err.Error())
-	}
-	if otlp.IntervalNote != "" {
-		attrs = append(attrs, "otlp_metrics_interval_note", otlp.IntervalNote)
-	}
-	slog.Log(ctx, level, msg, attrs...)
+	emit(ctx, level, msg, attrs...)
 
 	return func(shutdownCtx context.Context) error {
 		var errs []error
@@ -129,19 +119,76 @@ func traceEndpointOption(endpoint string) (otlptracegrpc.Option, error) {
 	return otlptracegrpc.WithEndpoint(t.Target), nil
 }
 
-// metricEndpointOption is traceEndpointOption for the metric exporter. Insecure
-// (plaintext gRPC) applies only to a bare host:port: an http:// URL is already
-// plaintext by the SDK's rule, an https:// URL is TLS, and a dns:/// target
-// follows the SDK's own insecure environment switch.
-func metricEndpointOption(t otlpTarget, insecure bool) []otlpmetricgrpc.Option {
+// initSummary builds the one start-up log line for the whole init (this
+// package is allowed one direct slog call, in emit: internal/logger's
+// ratchet). Each half that could not be started adds its own clause to the
+// message, so a start with both OFF says both. Endpoints and error text are
+// redacted of URL userinfo.
+func initSummary(cfg *Config, tracing bool, tracingErr error, otlp otlpStatus) (slog.Level, string, []any) {
+	level, msg, attrs := slog.LevelInfo, "OpenTelemetry initialized", []any{
+		"metrics", cfg.MetricsEnabled, "tracing", tracing, "endpoint", redactUserinfo(cfg.ExporterEndpoint),
+		"otlp_metrics", otlp.Enabled}
+	var off []string
+	if tracingErr != nil {
+		off = append(off, "tracing OFF: the trace exporter could not be started")
+		attrs = append(attrs, "tracing_error", redactUserinfo(tracingErr.Error()))
+	}
+	if otlp.Err != nil {
+		off = append(off, "the OTLP metric push OFF: /metrics is unaffected")
+		attrs = append(attrs, "otlp_metrics_error", redactUserinfo(otlp.Err.Error()))
+	}
+	if len(off) > 0 {
+		level, msg = slog.LevelError, "OpenTelemetry initialized with "+strings.Join(off, "; ")
+	}
+	if otlp.IntervalNote != "" {
+		attrs = append(attrs, "otlp_metrics_interval_note", otlp.IntervalNote)
+	}
+	return level, msg, attrs
+}
+
+// metricPlaintext is the one rule for whether the metric push uses plaintext
+// gRPC:
+//
+//   - an http:// URL is plaintext and an https:// URL is TLS (the URL decides;
+//     the insecure switch is not consulted);
+//   - a bare host:port or a dns:/// target is TLS unless insecure
+//     (otel_metrics_otlp_insecure) is true.
+func metricPlaintext(t otlpTarget, insecure bool) bool {
 	if t.URL != "" {
-		return []otlpmetricgrpc.Option{otlpmetricgrpc.WithEndpointURL(t.URL)}
+		return !strings.EqualFold(t.URL[:strings.Index(t.URL, "://")], "https")
 	}
-	opts := []otlpmetricgrpc.Option{otlpmetricgrpc.WithEndpoint(t.Target)}
-	if t.Bare && insecure {
-		opts = append(opts, otlpmetricgrpc.WithInsecure())
+	return insecure
+}
+
+// metricEndpointOption is traceEndpointOption for the metric exporter: the
+// endpoint plus an EXPLICIT transport, in every branch.
+//
+// otlpmetricgrpc reads the generic OTEL_EXPORTER_OTLP_* environment (the trace
+// exporter's own variables) before it applies options, so an unset transport
+// would inherit it: OTEL_EXPORTER_OTLP_ENDPOINT=http://... downgrades a TLS
+// metric endpoint to plaintext, and OTEL_EXPORTER_OTLP_CERTIFICATE or
+// *_CLIENT_CERTIFICATE install credentials that beat even WithInsecure (the
+// exporter prefers credentials over its insecure flag). Options win over the
+// environment, and credentials win over the insecure flag, so the transport is
+// pinned with credentials, not with WithInsecure alone:
+//
+//   - plaintext (see metricPlaintext): insecure credentials. No environment
+//     variable can turn this back into TLS.
+//   - otherwise: TLS with the system root CAs. OTEL_EXPORTER_OTLP_CERTIFICATE
+//     and the client-certificate variables are therefore NOT honoured for
+//     metrics; use SSL_CERT_FILE / SSL_CERT_DIR for a private CA.
+func metricEndpointOption(t otlpTarget, insecure bool) []otlpmetricgrpc.Option {
+	var opts []otlpmetricgrpc.Option
+	if t.URL != "" {
+		opts = append(opts, otlpmetricgrpc.WithEndpointURL(t.URL))
+	} else {
+		opts = append(opts, otlpmetricgrpc.WithEndpoint(t.Target))
 	}
-	return opts
+	if metricPlaintext(t, insecure) {
+		return append(opts, otlpmetricgrpc.WithInsecure(),
+			otlpmetricgrpc.WithTLSCredentials(grpcinsecure.NewCredentials()))
+	}
+	return append(opts, otlpmetricgrpc.WithTLSCredentials(credentials.NewTLS(nil)))
 }
 
 // initTracing builds the gRPC span exporter for the configured endpoint and
@@ -201,10 +248,23 @@ type otlpStatus struct {
 	IntervalNote string
 }
 
-// ParseMetricsInterval parses an OTEL_METRIC_EXPORT_INTERVAL-style Go duration
-// ("60s"). Empty, unparsable or non-positive input gives 0, which
-// newMeterProvider treats as "use the 60s default".
+// ParseMetricsInterval parses an OTEL_METRIC_EXPORT_INTERVAL value. The OTel
+// standard for that variable is a bare integer count of MILLISECONDS ("60000"),
+// and the SDK reads it too, so that form is accepted; a Go duration ("30s",
+// "2m") is accepted as well. Empty, unparsable or non-positive input gives 0,
+// which newMeterProvider treats as "use the 60s default".
 func ParseMetricsInterval(s string) time.Duration {
+	s = strings.TrimSpace(s)
+	if ms, err := strconv.ParseInt(s, 10, 64); err == nil {
+		const ceiling = 24 * time.Hour // keeps the multiplication from overflowing; clamped later
+		if ms <= 0 {
+			return 0
+		}
+		if ms > int64(ceiling/time.Millisecond) {
+			return ceiling
+		}
+		return time.Duration(ms) * time.Millisecond
+	}
 	d, err := time.ParseDuration(s)
 	if err != nil || d <= 0 {
 		return 0
@@ -268,11 +328,28 @@ func newOTLPReader(ctx context.Context, cfg *Config) (metric.Reader, string, err
 		return nil, "", err
 	}
 	interval, note := clampInterval(cfg.MetricsOTLPInterval)
-	exp, err := otlpmetricgrpc.New(ctx, metricEndpointOption(target, cfg.MetricsOTLPInsecure)...)
+	// Everything the generic OTEL_EXPORTER_OTLP_* environment could otherwise
+	// change is pinned here (see metricEndpointOption for the transport):
+	//   - headers: emptied, so the trace collector's credentials
+	//     (OTEL_EXPORTER_OTLP_HEADERS) are never sent to the metric host.
+	//     OTEL_EXPORTER_OTLP_METRICS_HEADERS is neutralised too: metric
+	//     headers are not supported yet.
+	//   - temporality: cumulative (owner decision D66), whatever
+	//     OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE says.
+	opts := append(metricEndpointOption(target, cfg.MetricsOTLPInsecure),
+		otlpmetricgrpc.WithHeaders(map[string]string{}),
+		otlpmetricgrpc.WithTemporalitySelector(metric.CumulativeTemporalitySelector))
+	exp, err := otlpmetricgrpc.New(ctx, opts...)
 	if err != nil {
 		return nil, note, err
 	}
 	return metric.NewPeriodicReader(exp, metric.WithInterval(interval)), note, nil
+}
+
+// emit is this package's single direct slog call (internal/logger ratchet):
+// InitOTEL's summary line and the export-error handler both go through it.
+func emit(ctx context.Context, level slog.Level, msg string, attrs ...any) {
+	slog.Log(ctx, level, msg, attrs...)
 }
 
 // initMetrics builds (once) the process-wide meter provider, installs it

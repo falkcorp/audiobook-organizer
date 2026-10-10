@@ -1,5 +1,5 @@
 // file: internal/telemetry/config.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d
 // last-edited: 2026-10-10
 
@@ -31,7 +31,9 @@ type Config struct {
 	// MetricsOTLPInterval is the push period; zero means the 60s default.
 	// Values are clamped to 5s..1h.
 	MetricsOTLPInterval time.Duration
-	// MetricsOTLPInsecure allows plaintext gRPC to a bare host:port.
+	// MetricsOTLPInsecure allows plaintext gRPC to a bare host:port or a
+	// dns:/// target. A URL decides for itself: http:// is plaintext and
+	// https:// is TLS, whatever this says.
 	MetricsOTLPInsecure bool
 	// Environment is the deployment.environment resource attribute; empty
 	// means "prod".
