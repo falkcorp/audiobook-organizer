@@ -1,5 +1,5 @@
 // file: internal/applygate/owner_rejected_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b82d75a5-b760-4375-98c3-d10426139c5d
 // last-edited: 2026-10-10
 
@@ -24,7 +24,7 @@ func TestEvaluate_OwnerRejectedLeg(t *testing.T) {
 		t.Fatalf("fixture: an unrejected candidate is refused: %+v", v)
 	}
 
-	rejected := &Rejections{Keys: metafetch.RejectedSet{metafetch.RejectionKey("AUDIBLE", "synthetic field notes 1"): true}}
+	rejected := &Rejections{Keys: metafetch.RejectedSet{metafetch.RejectionKey("AUDIBLE", "synthetic field notes 1"): {Any: true}}}
 	unreadable := &Rejections{ReadErr: errors.New("scan failed")}
 	for _, tc := range []struct {
 		name string
