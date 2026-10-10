@@ -1,7 +1,7 @@
 // file: internal/database/bookfiles_for_ids_fallback_test.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 8c2f6d14-7a39-4e05-b1d8-3e9a5c07f2b6
-// last-edited: 2026-10-05
+// last-edited: 2026-10-10
 
 package database
 
@@ -79,11 +79,11 @@ func TestMetadataCacheGeneration_CountsCacheWrites(t *testing.T) {
 	require.Equal(t, g0+2, store.MetadataCacheGeneration(), "a refused write does not move it")
 }
 
-// UpdateBook's identity-change delete and DeleteBook's sidecar delete remove
-// a book's cache row inside the book's own batch; both must move the
-// generation (after the commit), or the review snapshot keeps serving a
-// candidate that no longer exists. A write that deletes no row must not.
-func TestMetadataCacheGeneration_MovesOnBookWritesThatDeleteTheRow(t *testing.T) {
+// UpdateBook's identity-change stale stamp rewrites, and DeleteBook's sidecar
+// delete removes, a book's cache row inside the book's own batch; both must
+// move the generation (after the commit), or the review snapshot keeps serving
+// a row that no longer reads that way. A write that changes no row must not.
+func TestMetadataCacheGeneration_MovesOnBookWritesThatChangeTheRow(t *testing.T) {
 	store, err := NewPebbleStoreInMemory("db")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
@@ -95,12 +95,13 @@ func TestMetadataCacheGeneration_MovesOnBookWritesThatDeleteTheRow(t *testing.T)
 	book.Title = "T Retitled"
 	_, err = store.UpdateBook(book.ID, book)
 	require.NoError(t, err)
-	require.Equal(t, g+1, store.MetadataCacheGeneration(), "the title change deleted the cache row")
+	require.Equal(t, g+1, store.MetadataCacheGeneration(), "the title change marked the cache row stale")
 	entry, err := store.GetMetadataCache(book.ID)
 	require.NoError(t, err)
-	require.Nil(t, entry)
+	require.NotNil(t, entry)
+	require.True(t, entry.Stale)
 
-	// No row left: another identity change deletes nothing and moves nothing.
+	// Already stale: another identity change rewrites nothing and moves nothing.
 	book.Title = "T Retitled Again"
 	_, err = store.UpdateBook(book.ID, book)
 	require.NoError(t, err)

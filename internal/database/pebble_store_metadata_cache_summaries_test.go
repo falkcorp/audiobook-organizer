@@ -1,7 +1,7 @@
 // file: internal/database/pebble_store_metadata_cache_summaries_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 9b4e1f73-0c28-4d6a-a5e9-3f7d2c8b6e10
-// last-edited: 2026-10-06
+// last-edited: 2026-10-10
 
 package database
 
@@ -109,10 +109,10 @@ func TestMetadataCacheSummaries_TracksEveryWriter(t *testing.T) {
 	if _, err := p.UpdateBook("bk05", b); err != nil {
 		t.Fatal(err)
 	}
-	if e, _ := p.GetMetadataCache("bk05"); e != nil {
-		t.Fatal("fixture: identity change should have deleted the cache row")
+	if e, _ := p.GetMetadataCache("bk05"); e == nil || !e.Stale {
+		t.Fatal("fixture: identity change should have kept the cache row, marked Stale")
 	}
-	assertSummariesMatchScan(t, p, "after UpdateBook identity delete")
+	assertSummariesMatchScan(t, p, "after UpdateBook identity stale stamp")
 
 	if err := p.DeleteBook("bk06"); err != nil {
 		t.Fatal(err)

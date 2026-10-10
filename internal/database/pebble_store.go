@@ -1,5 +1,5 @@
 // file: internal/database/pebble_store.go
-// version: 1.210.5
+// version: 1.211.0
 // guid: 0c1d2e3f-4a5b-6c7d-8e9f-0a1b2c3d4e5f
 // last-edited: 2026-10-10
 
@@ -3438,13 +3438,13 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, opts bookWrite
 		}
 	}
 
-	// METADATA-CACHED-MATCHER: drop the cached candidates only when the
+	// METADATA-CACHED-MATCHER: mark the cached candidates Stale only when the
 	// write changed what the search for this book asks: its title or its
-	// author (candidateSearchIdentityChanged). The row is deleted in the same
+	// author (candidateSearchIdentityChanged). The row is rewritten in the same
 	// batch that writes the book. It is staged only when an entry exists:
-	// most books have none, and an unconditional Delete leaves a tombstone
-	// that ListMetadataCacheKeys' range scan (the cache review page) walks
-	// until compaction.
+	// most books have none, and an unconditional write leaves a tombstone
+	// or an empty row that ListMetadataCacheKeys' range scan (the cache review
+	// page) walks until compaction.
 	//
 	// ASIN, ISBN and series changes keep the row. Until 2026-10-05 they
 	// dropped it too, and metafetch.asin-backfill -- which fills an EMPTY ASIN
@@ -3469,26 +3469,26 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, opts bookWrite
 	// CheckEvidenceInBatch), identity_stale when it names none
 	// (metafetch.CandidateIdentityStale). A candidate equal to the new ASIN --
 	// the one just applied -- stays applicable.
-	// cacheRowDeleted: the batch deletes or rewrites the cache row, so the
+	// cacheRowChanged: the batch rewrites (or drops) the cache row, so the
 	// cache generation moves after the commit.
-	cacheRowDeleted := false
+	cacheRowChanged := false
 	var unlockCache func()
-	if p.candidateSearchIdentityChanged(oldBook, book) {
-		staged, err := p.stageDeleteIfPresent(batch, metadataCacheKey(id))
-		if err != nil {
-			batch.Close()
-			return nil, err
-		}
-		cacheRowDeleted = staged
-	} else if oldASIN, replaced := asinReplacedOnWrite(oldBook, book); replaced {
-		// A kept row records the ASIN its candidates were fetched for, so a
-		// candidate that carries no ASIN of its own (Open Library, Google
-		// Books) is read as stale once that ASIN is replaced or cleared
-		// (MetadataCandidateCache.ASINReplaced): the apply gate refuses it as
-		// identity_stale and the batch fetch refetches the row. The stripe
-		// lock is held until the batch commits, so a fetch cannot land between
-		// the read and the write and be overwritten by the older candidates.
-		// It is released right after the commit, before the memdb
+	identityChanged := p.candidateSearchIdentityChanged(oldBook, book)
+	oldASIN, asinReplaced := asinReplacedOnWrite(oldBook, book)
+	if identityChanged || asinReplaced {
+		// A retitle or re-credit keeps the row but marks it Stale (it used to
+		// delete it, which lost 1,180 candidate rows on 2026-10-06): the apply
+		// gate refuses every candidate of a Stale row
+		// (metafetch.CandidateIdentityStale) and the batch fetch refetches it.
+		// A replaced or cleared ASIN stamps the ASIN the candidates were
+		// fetched for, so a candidate that carries no ASIN of its own (Open
+		// Library, Google Books) is read as stale too
+		// (MetadataCandidateCache.ASINReplaced). A write that is both is one
+		// read and one rewrite of the row.
+		//
+		// The stripe lock is held until the batch commits, so a fetch cannot
+		// land between the read and the write and be overwritten by the older
+		// candidates. It is released right after the commit, before the memdb
 		// write-through and the change notification.
 		mu := p.metadataCacheLock(id)
 		mu.Lock()
@@ -3498,12 +3498,21 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, opts bookWrite
 				unlockCache()
 			}
 		}()
-		staged, err := p.stageCacheASINStamp(batch, id, oldASIN)
+		var staged bool
+		var err error
+		if identityChanged {
+			if !asinReplaced {
+				oldASIN = ""
+			}
+			staged, err = p.stageCacheStaleStamp(batch, id, oldASIN)
+		} else {
+			staged, err = p.stageCacheASINStamp(batch, id, oldASIN)
+		}
 		if err != nil {
 			batch.Close()
 			return nil, err
 		}
-		cacheRowDeleted = staged
+		cacheRowChanged = staged
 	}
 
 	// ISBN/ASIN secondary index: delete stale rows for old values and write
@@ -3537,7 +3546,7 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, opts bookWrite
 		unlockCache()
 		unlockCache = nil
 	}
-	if cacheRowDeleted {
+	if cacheRowChanged {
 		p.bumpMetadataCacheGeneration(id)
 	}
 	if markerMayExist {
