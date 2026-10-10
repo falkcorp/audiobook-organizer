@@ -737,13 +737,26 @@ func (h *MetadataCacheHandler) GetCacheReviewResults(c *gin.Context) {
 	// BuildCandidateBookInfo runs for the PAGE only. It is the one genuinely
 	// per-row-expensive call here, and a paginated caller must not pay for rows
 	// it did not ask for.
+	// The owner's rejections for the page, read in ONE scan rather than one
+	// per row: an index request's page is every reviewable row. Read live,
+	// not from the snapshot: a rejection is a raw key, which moves no cache
+	// generation. A failed read marks nothing; every apply path still
+	// refuses a rejected candidate on its own read.
+	rejectedByBook, rerr := metafetch.LoadAllRejectedCandidates(h.store)
+	if rerr != nil {
+		metadataCacheLog.Warn("review list: owner rejections unreadable; rows are not marked: %v", rerr)
+	}
 	results := make([]metabatch.CandidateResult, 0, len(page))
 	for i := range page {
 		book := lookupBook(page[i].row.sum.BookID)
 		if book == nil {
 			continue
 		}
-		results = append(results, page[i].result(book, freshCutoff, indexView))
+		res := page[i].result(book, freshCutoff, indexView)
+		// Judged against the stored candidate, not res.Candidate: the index
+		// view blanks the description and breakdown on the copy it serves.
+		res.OwnerRejected = rejectedByBook[book.ID].HasCandidate(page[i].row.cand)
+		results = append(results, res)
 	}
 
 	metabatch.ResolveSeriesNames(seriesStore, results)

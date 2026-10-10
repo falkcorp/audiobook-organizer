@@ -144,6 +144,10 @@ type MetadataStore interface {
 	// The field-lock guard's surface: bulkFetchMetadata consults
 	// database.LockedUserFields so a user-locked field is never overwritten.
 	database.MetadataFieldStateReader
+	// The owner's candidate rejections: the bulk fetch never applies one,
+	// and the search dialog's fetch ranks them last in the cached row
+	// (metabatch.MergeRanker).
+	metafetch.RejectedCandidateReader
 }
 
 // MetadataFetcher fetches and searches metadata for a book.

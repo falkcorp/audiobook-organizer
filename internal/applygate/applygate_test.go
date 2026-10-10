@@ -1,7 +1,7 @@
 // file: internal/applygate/applygate_test.go
-// version: 1.5.1
+// version: 1.5.2
 // guid: 7c1a9e40-3b5f-4d2e-8f61-a0d4c7e9b213
-// last-edited: 2026-09-29
+// last-edited: 2026-10-10
 
 package applygate
 
@@ -299,7 +299,7 @@ func refusedPairsFor(t *testing.T, ct, ht string) int {
 				if TranscriptionConfirms(book, c) {
 					t.Fatalf("TranscriptionConfirms accepted %q/%q (pos %q) ~ heard %q/%q, which origin/main refused", ct, ca, pos, ht, ha)
 				}
-				for _, v := range []Verdict{Evaluate(book, snap(book), database.ComputeBookRuntime(book, nil), c, nil), EvaluateInBatch(book, snap(book), database.ComputeBookRuntime(book, nil), c, nil, nil)} {
+				for _, v := range []Verdict{Evaluate(book, snap(book), database.ComputeBookRuntime(book, nil), c, nil), EvaluateInBatch(book, snap(book), database.ComputeBookRuntime(book, nil), c, nil, nil, nil)} {
 					if v.Allowed || v.AudioConfirmed || v.ScoreFloor != MinScore || v.ScoreReason != ReasonTranscriptionMismatch {
 						t.Fatalf("gate on %q/%q (pos %q) ~ heard %q/%q: allowed=%v audio=%v floor=%v score_reason=%q; origin/main refused it",
 							ct, ca, pos, ht, ha, v.Allowed, v.AudioConfirmed, v.ScoreFloor, v.ScoreReason)

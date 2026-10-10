@@ -1,7 +1,7 @@
 // file: internal/metabatch/upgrade.go
-// version: 2.3.0
+// version: 2.4.0
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
-// last-edited: 2026-10-05
+// last-edited: 2026-10-10
 //
 // Background job that upgrades metadata from lower-quality sources
 // (Open Library, Google Books, Wikipedia) to richer ones (Hardcover,
@@ -413,6 +413,15 @@ func (s *MetadataUpgradeService) tryUpgradeBook(ctx context.Context, bookID, cur
 		return out, errOwnerManualOnly
 	}
 
+	// The owner's candidate rejections: a rejected candidate is never the
+	// upgrade, whatever it scores (the gate's owner_rejected leg). Read
+	// before the search so an unreadable list costs no provider quota, and
+	// refused rather than read as "nothing rejected".
+	rejections := applygate.LoadRejections(s.DB, bookID)
+	if rejections.ReadErr != nil {
+		return skip(fmt.Sprintf("%s (%v)", applygate.ReasonOwnerRejectionCheckFailed, rejections.ReadErr))
+	}
+
 	// Run the full search pipeline — this goes through the
 	// metadata fetch cache, so sources that were already queried
 	// (and returned non-empty) won't hit the API again. Sources
@@ -477,8 +486,8 @@ func (s *MetadataUpgradeService) tryUpgradeBook(ctx context.Context, bookID, cur
 		// There is no owner override here: this is an automatic apply. There
 		// is no cache-identity leg either: the candidates were searched a
 		// moment ago from the book's current fields, so nothing can have
-		// drifted.
-		v := applygate.Evaluate(book, authors, rt, c, nil)
+		// drifted. A candidate the owner rejected is refused (owner_rejected).
+		v := applygate.EvaluateInBatch(book, authors, rt, c, nil, nil, rejections)
 		upgradeLog.Debug("gate: id=%s source=%s score=%.3f floor=%.3f transcription_confirms=%v allowed=%v reason=%s detail=%s",
 			logger.SanitizeLogValue(bookID), logger.SanitizeLogValue(candidateSlug), c.Score, v.ScoreFloor,
 			v.AudioConfirmed, v.Allowed, v.Reason, logger.SanitizeLogValue(v.Detail))

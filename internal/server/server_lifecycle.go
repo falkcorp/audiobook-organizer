@@ -1,5 +1,5 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.29.0
+// version: 4.30.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
 // last-edited: 2026-10-10
 
@@ -285,6 +285,11 @@ func (s *Server) Start(cfg ServerConfig) error {
 	}
 
 	s.seedRolesAndTokens()
+
+	// One-time: re-order every cached candidate row that holds an
+	// owner-rejected candidate, so it leaves slot 0 (owner_rejected_rerank.go).
+	// Background, bgWG-tracked; marker-gated, so it runs until it succeeds once.
+	s.startOwnerRejectedRerank()
 
 	// Operations interrupted by a previous shutdown/crash are resumed by the
 	// operations registry: Registry.Start runs resumeAfterStartup, which reads

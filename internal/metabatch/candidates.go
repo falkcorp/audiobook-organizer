@@ -1,7 +1,7 @@
 // file: internal/metabatch/candidates.go
-// version: 1.16.1
+// version: 1.17.0
 // guid: b2c3d4e5-f6a7-8b9c-0d1e-2f3a4b5c6d7e
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 //
 // Package metabatch contains pure service types and logic for the
 // metadata candidate batch fetch / apply pipeline. HTTP handlers live
@@ -123,6 +123,11 @@ type CandidateResult struct {
 	// record the owner looked at (metafetch.CandidatePin.ContentHash). Empty
 	// elsewhere.
 	CandidateHash string `json:"candidate_hash,omitempty"`
+	// OwnerRejected: the owner rejected Candidate for this book (POST
+	// /metadata/batch-reject-candidates). Served on the review list so the
+	// lane can say why every apply button refuses it: a rejected candidate
+	// is never applied, whatever pin is sent (applygate.ReasonOwnerRejected).
+	OwnerRejected bool `json:"owner_rejected,omitempty"`
 	// ReviewStatus is the book's raw MetadataReviewStatus ("" when nobody
 	// has ruled on it). Served on the review list's unreviewable bucket, where
 	// Status names the bucket rather than the verdict.
@@ -422,29 +427,21 @@ func CountByStatus(results []CandidateResult, status string) int {
 }
 
 // RejectedCandidateReader is what LoadRejectedCandidateKeys reads: the
-// owner's rejections under their key prefix.
-type RejectedCandidateReader interface {
-	ScanPrefix(prefix string) ([]database.KVPair, error)
-}
+// owner's rejections under their key prefix (metafetch.RejectedCandidatePrefix).
+type RejectedCandidateReader = metafetch.RejectedCandidateReader
 
-// LoadRejectedCandidateKeys finds previously rejected candidates for a book.
-// Uses a dedicated rejection key prefix for fast lookup instead of scanning
-// all operation results.
-func LoadRejectedCandidateKeys(store RejectedCandidateReader, bookID string) map[string]bool {
-	keys := make(map[string]bool)
-	// Scan only rejection keys for this specific book.
-	pairs, err := store.ScanPrefix(fmt.Sprintf("rejected_candidate:%s:", bookID))
+// LoadRejectedCandidateKeys is bookID's rejections in matching form
+// (metafetch.LoadRejectedCandidates; look one up with RejectedSet.Has). A
+// failed read answers an empty set: use it only where a missed rejection
+// cannot apply anything (ranking, counting). An apply path reads
+// metafetch.LoadRejectedCandidates and refuses the book on its error.
+func LoadRejectedCandidateKeys(store RejectedCandidateReader, bookID string) metafetch.RejectedSet {
+	keys, err := metafetch.LoadRejectedCandidates(store, bookID)
 	if err != nil {
-		return keys
+		return metafetch.RejectedSet{}
 	}
-	for _, kv := range pairs {
-		// Key format: rejected_candidate:{bookID}:{source}|{title}
-		// Value is just "1" — we only need the key.
-		keyStr := kv.Key
-		prefix := fmt.Sprintf("rejected_candidate:%s:", bookID)
-		if len(keyStr) > len(prefix) {
-			keys[keyStr[len(prefix):]] = true
-		}
+	if keys == nil {
+		keys = metafetch.RejectedSet{}
 	}
 	return keys
 }

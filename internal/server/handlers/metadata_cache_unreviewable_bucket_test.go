@@ -1,7 +1,7 @@
 // file: internal/server/handlers/metadata_cache_unreviewable_bucket_test.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 3b7e91c4-58d2-4a6f-9e13-c0a4f27d8b95
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 
 // GET /metadata/cache/review?bucket=unreviewable lists the books the review
 // rail's chips count but the default list drops (owner request 2026-09-27:
@@ -75,6 +75,8 @@ type unreviewableBody struct {
 func unreviewableFixture(t *testing.T, allowFileReads bool) *handlers.MetadataCacheHandler {
 	t.Helper()
 	store := handlersmocks.NewMockMetadataCacheBookStore(t)
+	// No owner rejections unless a test says otherwise (applygate.ReasonOwnerRejected).
+	store.EXPECT().ScanPrefix(mock.Anything).Return(nil, nil).Maybe()
 	store.EXPECT().GetRaw(mock.Anything).Return(nil, nil).Maybe() // authority lists: no known people
 	store.EXPECT().GetBookFilesForIDsCore(mock.Anything).Return(map[string][]database.BookFileCore{}, nil).Maybe()
 	if allowFileReads {
@@ -223,6 +225,8 @@ func TestGetCacheReviewResults_DefaultBucketUnchanged(t *testing.T) {
 
 func TestGetCacheReviewResults_RejectsUnknownBucket(t *testing.T) {
 	store := handlersmocks.NewMockMetadataCacheBookStore(t)
+	// No owner rejections unless a test says otherwise (applygate.ReasonOwnerRejected).
+	store.EXPECT().ScanPrefix(mock.Anything).Return(nil, nil).Maybe()
 	store.EXPECT().GetRaw(mock.Anything).Return(nil, nil).Maybe() // authority lists: no known people
 	store.EXPECT().GetBookFilesForIDsCore(mock.Anything).Return(map[string][]database.BookFileCore{}, nil).Maybe()
 	svc := handlersmocks.NewMockMetadataCacheFetchService(t)

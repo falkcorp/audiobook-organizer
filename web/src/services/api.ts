@@ -3575,6 +3575,9 @@ export interface CandidateApplyCheck {
   /** The candidate was fetched for an ASIN the book no longer carries. A
    *  warning only: the apply is not refused. */
   identity_stale?: boolean;
+  /** The owner rejected this candidate for this book. The apply is refused
+   *  (409, reason owner_rejected) with no override: un-reject it first. */
+  owner_rejected?: boolean;
   /** The book's ASIN the check ran against: the value an override sends back. */
   book_asin?: string;
   detail?: string;
@@ -4270,6 +4273,13 @@ export interface CandidateResult {
    * tell the reviewed record from any other. Absent on non-cache paths.
    */
   candidate_hash?: string;
+  /**
+   * The owner rejected `candidate` for this book (cache review list). A
+   * rejected candidate is never applied, by any button or path: the server
+   * refuses it as `owner_rejected` whatever pin is sent. Un-reject it to
+   * apply it.
+   */
+  owner_rejected?: boolean;
   status:
     | 'matched'
     | 'no_match'
