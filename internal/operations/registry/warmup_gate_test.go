@@ -1,5 +1,5 @@
 // file: internal/operations/registry/warmup_gate_test.go
-// version: 2.0.1
+// version: 2.0.2
 // guid: 3e8c1a74-5b92-4f06-a1d7-0c6b9e2f4a53
 // last-edited: 2026-10-10
 
@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/database"
-	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 
@@ -98,8 +97,8 @@ func TestDispatch_OpHeldWhileWarmingThenRuns(t *testing.T) {
 		t.Fatal("a held op must have no run handle (it would hold a slot and start clocks)")
 	}
 	row, _ := store.GetOperationV2(opID)
-	if row.ProgressMessage != operations.WarmupStatusMessage || row.ProgressCurrent != 1 || row.ProgressTotal != 4 {
-		t.Fatalf("held row = %d/%d %q, want 1/4 %q", row.ProgressCurrent, row.ProgressTotal, row.ProgressMessage, operations.WarmupStatusMessage)
+	if row.ProgressMessage != registry.WarmupStatusMessage || row.ProgressCurrent != 1 || row.ProgressTotal != 4 {
+		t.Fatalf("held row = %d/%d %q, want 1/4 %q", row.ProgressCurrent, row.ProgressTotal, row.ProgressMessage, registry.WarmupStatusMessage)
 	}
 
 	close(store.release)
@@ -207,7 +206,7 @@ func TestDispatch_HoldEndsAtTheBound(t *testing.T) {
 		t.Fatalf("status before the bound = %q, want queued", got)
 	}
 	clockMu.Lock()
-	clock = clock.Add(operations.WarmupWaitTimeout + time.Second)
+	clock = clock.Add(registry.WarmupWaitTimeout + time.Second)
 	clockMu.Unlock()
 	awaitStatus(t, store.fakeStore, opID, "completed", 5*time.Second)
 }
@@ -337,7 +336,7 @@ func TestDispatch_CancelAfterSnapshotNeverLeavesWaitMessage(t *testing.T) {
 	if row.Status != "canceled" {
 		t.Fatalf("status = %q, want canceled", row.Status)
 	}
-	if row.ProgressMessage == operations.WarmupStatusMessage {
+	if row.ProgressMessage == registry.WarmupStatusMessage {
 		t.Fatal("a canceled row was left saying \"waiting for startup warmup\"")
 	}
 	if n := bus.count("op.updated"); n != 0 {
@@ -359,7 +358,7 @@ func TestDispatch_HoldLeavesWatermarkAndLivenessUntouched(t *testing.T) {
 	opID, _ := r.EnqueueOp(ctx, "test.w-hold-hwm", nil)
 	time.Sleep(500 * time.Millisecond)
 	row, _ := store.GetOperationV2(opID)
-	if row.ProgressMessage != operations.WarmupStatusMessage {
+	if row.ProgressMessage != registry.WarmupStatusMessage {
 		t.Fatalf("op was not announced as held (message %q)", row.ProgressMessage)
 	}
 	if row.HighWaterProgress != 0 {
