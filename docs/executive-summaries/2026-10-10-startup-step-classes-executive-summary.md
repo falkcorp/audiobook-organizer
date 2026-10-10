@@ -1,11 +1,11 @@
 <!-- file: docs/executive-summaries/2026-10-10-startup-step-classes-executive-summary.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: ffeeeec4-a987-4932-b6d7-c01a304778f4 -->
 <!-- last-edited: 2026-10-10 -->
 
 # Startup: every step either stops the server or is reported
 
-PR: pending (branch `task/07-r3`). Task brief:
+PR: [#3930](https://github.com/falkcorp/audiobook-organizer/pull/3930) (branch `task/07-r3`). Task brief:
 [07-R3](../proposals/2026-10-holistic/tasks/07/07-R3.md).
 
 ## Executive Summary
@@ -18,7 +18,8 @@ PR: pending (branch `task/07-r3`). Task brief:
   server could not read its saved settings, it used to start anyway on
   built-in defaults. The next time anyone saved a setting, the server wrote
   the whole settings record, so those defaults replaced everything that had
-  been saved. It now refuses to start instead.
+  been saved. It now refuses to start instead, and the same applies
+  when a saved setting is damaged and cannot be read.
 - **Monitoring trouble no longer takes the library down.** If the metrics
   system cannot start, the server keeps serving, and the health check says
   `metrics_disabled`. Before, the server would not start at all.
@@ -45,6 +46,25 @@ PR: pending (branch `task/07-r3`). Task brief:
   calibration) could have replaced the saved settings the same way. The helper
   process now stops with an error instead of running the job; a fresh install
   with nothing saved still runs normally.
+
+## Damaged settings records
+
+- **What it was:** when the server read its saved settings, any single setting
+  it could not decode was quietly left out, and a database error part-way
+  through the read was ignored. If the main saved configuration record was
+  damaged, the server used older per-setting records instead, which on most
+  installs means the built-in defaults.
+- **Why it mattered:** this is the same wipe as above by a different route.
+  The server ran on defaults, and the next settings save replaced the saved
+  configuration with them, even though the damaged record could have been
+  repaired.
+- **The fix:** a damaged settings record, a damaged configuration record, or
+  a database read error now stops the server (and the separate helper
+  process) before it does anything. The error names the setting that could
+  not be read, but never shows what is stored in it, since that can be a
+  password or key. Repairing or removing the named record lets the server
+  start. An older install that has never had a main configuration record
+  still loads its per-setting records as before.
 
 ## Metrics start failure
 
