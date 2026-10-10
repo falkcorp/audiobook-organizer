@@ -1,5 +1,5 @@
 // file: cmd/root.go
-// version: 1.28.1
+// version: 1.28.2
 // guid: 6a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
 // last-edited: 2026-10-10
 
@@ -7,6 +7,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -731,7 +732,9 @@ const allowKeyRegenEnv = "ABK_ALLOW_ENCRYPTION_KEY_REGEN"
 //
 // Fails CLOSED on a census error, and names the override in the message: a
 // store we cannot read is exactly the case where we must not gamble that there
-// was nothing to lose.
+// was nothing to lose. The exception is an unreadable settings row
+// (*database.UnreadableSettingsError): there the override is not a way
+// forward, so that message names the rows and does not offer it.
 func guardAgainstKeyRegeneration(store database.Store, stateDir, legacyKeyDir string) error {
 	if os.Getenv(allowKeyRegenEnv) != "" {
 		return nil
@@ -741,6 +744,21 @@ func guardAgainstKeyRegeneration(store database.Store, stateDir, legacyKeyDir st
 	}
 
 	settings, err := store.GetAllSettings()
+	var unreadable *database.UnreadableSettingsError
+	if errors.As(err, &unreadable) {
+		// Not the census-error message below: that one offers the override,
+		// and for an unreadable row the override cannot help. It only skips
+		// this check; InitEncryption would then write a NEW key file, and
+		// loadConfigFromDB would fail on the same rows anyway -- leaving a
+		// fresh key on disk that the next boot, after the row is repaired,
+		// would trust while every stored secret fails to decrypt.
+		//
+		// So the override is deliberately not named here.
+		return fmt.Errorf("settings row(s) %s cannot be read; %s. No encryption "+
+			"key was found in %q or %q, and whether encrypted settings exist "+
+			"cannot be checked until those rows are readable: %w",
+			unreadable.QuotedKeys(), unreadable.Remedy(), stateDir, legacyKeyDir, err)
+	}
 	if err != nil {
 		return fmt.Errorf("cannot determine whether encrypted settings exist, and no "+
 			"encryption key was found in %q or %q — refusing to start, because "+
