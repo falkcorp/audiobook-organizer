@@ -1,7 +1,7 @@
 // file: internal/operations/registry/queued_merge.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 342326a8-40f7-440f-b6a6-0f7f8255b6b6
-// last-edited: 2026-09-25
+// last-edited: 2026-10-10
 
 package registry
 
@@ -30,6 +30,8 @@ func (r *Registry) tryMergeQueuedParams(
 		if r.canonicalDefID(op.DefID) != defID || op.Status != "queued" {
 			continue
 		}
+		// Only queued rows reach here; a zombie's row is terminal, so a
+		// zombie handle never matches.
 		if _, claimed := r.running[op.ID]; claimed {
 			continue
 		}

@@ -1,7 +1,7 @@
 // file: internal/operations/registry/scan_standdown_hold.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 3b7e91d4-0c52-4f6a-a8e3-6d2f1c9b5a07
-// last-edited: 2026-09-30
+// last-edited: 2026-10-10
 
 package registry
 
@@ -51,7 +51,8 @@ type scanStandDownHoldKey struct{}
 func (r *Registry) LibraryScanRunning() bool { return r.anyScanClaimed() }
 
 // anyScanClaimed reports whether any library.scan handle, full or stub, is in
-// r.running.
+// r.running. A zombie scan counts: its goroutine is still a running scan, so
+// a yielding op keeps yielding to it.
 func (r *Registry) anyScanClaimed() bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

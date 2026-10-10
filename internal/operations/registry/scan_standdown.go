@@ -1,7 +1,7 @@
 // file: internal/operations/registry/scan_standdown.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 8c1f2e6a-4b73-4d5e-9a12-7f0c3d94b6e1
-// last-edited: 2026-09-26
+// last-edited: 2026-10-10
 
 package registry
 
@@ -226,12 +226,15 @@ func (r *Registry) scanStandDownGraceFor() time.Duration {
 // RenewScanStandDown extends the caller's lease. Callers renew on their progress
 // heartbeat (the same signal the op watchdog reads). Returns false if the caller
 // is no longer a registered holder (lease already reaped / released) — the caller
-// must then abort its remaining writes.
+// must then abort its remaining writes. On false the holder's run fence is
+// revoked too (revokeHolderFence), so every fenced writer of that run refuses
+// from then on, not only the ones that read this return value.
 func (r *Registry) RenewScanStandDown(holderOpID string) bool {
 	r.scanGate.mu.Lock()
 	prev, ok := r.scanGate.holders[holderOpID]
 	if !ok {
 		r.scanGate.mu.Unlock()
+		r.revokeHolderFence(holderOpID)
 		return false
 	}
 	// A lapsed lease is lost even if nothing has reaped it yet: the dispatcher
@@ -240,6 +243,7 @@ func (r *Registry) RenewScanStandDown(holderOpID string) bool {
 	if r.standDownNow().After(prev) {
 		delete(r.scanGate.holders, holderOpID)
 		r.scanGate.mu.Unlock()
+		r.revokeHolderFence(holderOpID)
 		return false
 	}
 	expiry := r.standDownNow().Add(r.leaseTTL())
@@ -260,6 +264,22 @@ func (r *Registry) RenewScanStandDown(holderOpID string) bool {
 		r.writeScanStandDownMarker(mw)
 	}
 	return true
+}
+
+// revokeHolderFence revokes the run fence of a stand-down holder whose lease is
+// lapsed or missing. A holder id that names no run in this registry (a test
+// holder, a non-op caller) has nothing to revoke.
+//
+// Lock order: called with scanGate.mu RELEASED. The dispatcher's claim block
+// holds r.mu and then takes scanGate.mu (scanStandDownActive), so taking r.mu
+// while holding scanGate.mu would invert that order.
+func (r *Registry) revokeHolderFence(holderOpID string) {
+	r.mu.RLock()
+	h := r.running[holderOpID]
+	r.mu.RUnlock()
+	if h != nil {
+		h.fence.revoke()
+	}
 }
 
 // ScanStandDownValid reports whether the caller still holds a live (unexpired)
@@ -468,7 +488,9 @@ func (r *Registry) liveHoldersLocked() int {
 }
 
 // findRunningScan returns the opID and handle of a currently-RUNNING library.scan
-// (full handle with a live cancel), or ("", nil). Dispatcher stub handles (nil
+// (full handle with a live cancel), or ("", nil). A zombie scan is still
+// returned on purpose: a stand-down then waits on its parked channel, which
+// closes at the goroutine's true exit. Dispatcher stub handles (nil
 // cancel) are skipped: a scan claimed-but-not-yet-running has no goroutine to
 // wait on and is instead dropped at pickup by the executeRun gate check.
 func (r *Registry) findRunningScan() (string, *runHandle) {

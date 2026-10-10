@@ -1,7 +1,7 @@
 // file: internal/repairs/writer.go
-// version: 1.12.0
+// version: 1.13.0
 // guid: c71e0d93-4b28-4a5f-8e6c-2f9a1d7b3e48
-// last-edited: 2026-10-05
+// last-edited: 2026-10-10
 
 package repairs
 
@@ -100,6 +100,11 @@ type Writer struct {
 	// run, see setLease). leaseLost latches the first failed renewal.
 	lease     func() bool
 	leaseLost atomic.Bool
+	// fence is the run's write permit check (registry.Fence.Check); nil when
+	// none is installed. RunApply installs it for the run (setFence). beat
+	// checks it BEFORE the lease, so a canceled, timed-out or abandoned run
+	// writes nothing through this Writer.
+	fence func() error
 	// lockRenewEvery is how often LockWaiting renews the lease while it
 	// waits; zero means defaultLockRenewEvery. RunApply sets it from
 	// WaitOptions.LockRenewEvery.
@@ -245,11 +250,38 @@ func (w *Writer) setLease(renew func() bool) {
 	w.leaseLost.Store(false)
 }
 
-// beat renews the lease before a write. Once a renewal fails the lease is
-// gone for good (the registry never resurrects a lapsed holder), so every
-// later write is refused without trying again. The error wraps
-// ErrStandDownLost; the write it guards is not made.
+// setFence installs the run's write permit; nil clears it. beat checks it
+// before the lease, so a fenced Writer refuses every write.
+func (w *Writer) setFence(check func() error) {
+	w.fence = check
+}
+
+// beat checks the run's fence, then renews the lease, before a write. A
+// revoked fence refuses with an error wrapping whatever the check returned
+// (registry.ErrFenced). Once a renewal fails the lease is gone for good (the
+// registry never resurrects a lapsed holder), so every later write is refused
+// without trying again; that error wraps ErrStandDownLost. Either way the
+// write it guards is not made.
+//
+// Every write method of the Writer reaches beat: Modify, ModifyCredits,
+// SetPrimaryAuthor, SetUserState, AddBookTag, Recompute and LockWaiting
+// directly, and every journaled step (Journal, Step, JournalStep(s),
+// RepointBookFile, MoveBookFiles, SetTrackNumber, the iTunes-path clears,
+// LockFields) through journalRow.
 func (w *Writer) beat(what string) error {
+	if w.fence != nil {
+		if err := w.fence(); err != nil {
+			// The registry also revokes the fence when the stand-down lease
+			// is lost (RenewScanStandDown). Report that loss too, so callers
+			// that stop on ErrStandDownLost (retire_into, repairs_ops, the
+			// engine's abort path) still see it behind the fence.
+			if w.lease != nil && (w.leaseLost.Load() || !w.lease()) {
+				w.leaseLost.Store(true)
+				return fmt.Errorf("%w: %s not written: %w", ErrStandDownLost, what, err)
+			}
+			return fmt.Errorf("%s not written: %w", what, err)
+		}
+	}
 	if w.lease == nil {
 		return nil
 	}

@@ -1,5 +1,5 @@
 // file: internal/operations/registry/dispatcher.go
-// version: 2.6.3
+// version: 2.7.0
 // guid: a7b8c9d0-e1f2-3a4b-5c6d-7e8f9a0b1c2d
 // last-edited: 2026-10-10
 
@@ -88,6 +88,10 @@ func (r *Registry) dispatchCycle(ctx context.Context) {
 		// observed in prod on dedup.book-merge running twice
 		// (same op_id, two "dispatched op" + "starting run" log lines
 		// 3ms apart, two book-merge complete events).
+		//
+		// A zombie handle (05-PR3) is keyed by ITS op id; a new enqueue of the
+		// same def has a new id, so it is not "already claimed" here. It is
+		// held back by Gate 3 / 3b instead.
 		r.mu.RLock()
 		_, alreadyClaimed := r.running[row.ID]
 		r.mu.RUnlock()
@@ -130,7 +134,9 @@ func (r *Registry) dispatchCycle(ctx context.Context) {
 			continue
 		}
 
-		// Gate 3: ConcurrencyKey already running?
+		// Gate 3: ConcurrencyKey already running? A zombie (goroutine outlived
+		// the abandon grace) keeps its key until the goroutine exits, so a new
+		// run of the def stays queued here -- the intended block (D6).
 		if def.ConcurrencyKey != "" {
 			r.mu.RLock()
 			holder, held := r.concurrencyKeys[def.ConcurrencyKey]
@@ -365,6 +371,10 @@ func (r *Registry) releaseClaim(opID, plugin, concurrencyKey string) {
 // v1 semantics: Writes∩Writes only — a running op's Reads never block a
 // writer, and ops with empty Writes are invisible to the gate.
 // Caller must hold r.mu (read or write).
+//
+// A zombie handle stays in r.running with its writes, so it keeps blocking
+// overlapping writers until its goroutine exits (intended: it may still be
+// writing those resources).
 func (r *Registry) writeSetConflictLocked(candidateID string, candidateWrites []Resource) (*runHandle, []Resource) {
 	if len(candidateWrites) == 0 {
 		return nil, nil
@@ -422,6 +432,7 @@ func (r *Registry) logWriteSetDeferral(opID, defID string, holder *runHandle, ov
 }
 
 // checkDependsOn returns true if any op in depDefIDs is currently running.
+// A zombie of a dependency def counts as running: its goroutine still is.
 func (r *Registry) checkDependsOn(depDefIDs []string) bool {
 	if len(depDefIDs) == 0 {
 		return false

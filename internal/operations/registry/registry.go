@@ -1,5 +1,5 @@
 // file: internal/operations/registry/registry.go
-// version: 3.36.0
+// version: 3.37.0
 // guid: f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c
 // last-edited: 2026-10-10
 
@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"github.com/falkcorp/audiobook-organizer/internal/lifecycle"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -72,11 +73,6 @@ type Registry struct {
 	logger         *slog.Logger
 	workers        int
 	abandoned      *abandonedTracker
-	// abandonedAlive holds the op ids whose Run goroutine the watchdog abandoned
-	// (handle released, row written interrupted_*) and which has not returned
-	// yet. Guarded by mu. RetryInterrupted refuses such a row: re-queuing it
-	// would start a second Run of the same op while the first is still writing.
-	abandonedAlive map[string]struct{}
 	// retryMu serializes the runtime same-row re-queue paths —
 	// RetryInterrupted and resumeQuiescedOp — so both cannot read the same
 	// interrupted row and each flip it to queued (the second flip could land
@@ -278,7 +274,6 @@ func NewWithOptions(store database.OpsV2Store, logger *slog.Logger, workers int,
 		ops:                ops,
 		defs:               make(map[string]OperationDef),
 		running:            make(map[string]*runHandle),
-		abandonedAlive:     make(map[string]struct{}),
 		pluginRunning:      make(map[string]int),
 		pluginMax:          make(map[string]int),
 		concurrencyKeys:    make(map[string]string),
@@ -1167,7 +1162,20 @@ func (r *Registry) Cancel(opID string) error {
 
 	if running {
 		if h.cancel != nil {
+			// Zombie (its goroutine outlived the abandon grace): it was already
+			// stopped -- fence revoked, context canceled, row terminal. A second
+			// cancel changes nothing; in particular it must not touch
+			// userCanceled, which already decided the row's terminal status.
+			if h.zombie.Load() {
+				r.logger.Info("registry: cancel of an op already stopping (goroutine has not exited yet)",
+					"op_id", logger.SanitizeLogValue(opID))
+				return nil
+			}
 			r.logger.Info("registry: canceling running op", "op_id", logger.SanitizeLogValue(opID))
+			// Withdraw the write permit first, so the run cannot write in the
+			// window between seeing ctx.Done() and returning (cancelIfActive
+			// revokes too; the explicit call keeps the order visible here).
+			h.fence.revoke()
 			// Record the INTENT before canceling. The run may take seconds to
 			// notice its context and reach its terminal switch, by which time a
 			// shutdown may already be in progress; without this the run would be
@@ -1320,7 +1328,14 @@ var discardableStatuses = state.WithProp(func(p state.Props) bool { return p.Dis
 
 // hasLiveHandle reports whether opID currently has an in-memory run handle
 // (stub or full). Used by EnqueueOp's ConcurrencyKey dedupe to distinguish a
-// genuinely running op from a zombie "running" DB row.
+// genuinely running op from a stale "running" DB row.
+//
+// A zombie handle (goroutine outlived the abandon grace) counts as live. That
+// does not bring back the C-3 dedupe trap: EnqueueOp's dedupe reads active
+// ROWS, and a zombie's row was written terminal at abandonment, so it is never
+// returned to be asked about. Discard does refuse a zombie's terminal row
+// until the goroutine exits, which is intended: the run may still be writing
+// progress and logs under that id.
 func (r *Registry) hasLiveHandle(opID string) bool {
 	r.mu.RLock()
 	_, ok := r.running[opID]
@@ -1336,6 +1351,8 @@ func (r *Registry) AbandonedCount(plugin string) int {
 
 // GetCurrentItem returns the last SetCurrentItem label for a running operation.
 // Returns empty string if the op is not running or no label has been set.
+// A zombie still answers its last label; its row is terminal, so the handlers
+// that ask only do so for rows they list as running.
 func (r *Registry) GetCurrentItem(opID string) string {
 	r.mu.RLock()
 	h, ok := r.running[opID]
@@ -1349,7 +1366,8 @@ func (r *Registry) GetCurrentItem(opID string) string {
 // IsRunning reports whether a worker in THIS process holds a live run handle
 // for opID. A row whose status reads "running" but has no handle is left over
 // from a crash or restart, and nothing will produce its results until the
-// resume sweep re-dispatches it.
+// resume sweep re-dispatches it. A zombie (goroutine outlived the abandon
+// grace) reports true: its goroutine is still running in this process.
 func (r *Registry) IsRunning(opID string) bool {
 	if r == nil {
 		return false
@@ -1472,6 +1490,18 @@ func (r *Registry) Shutdown(ctx context.Context) error {
 				r.releaseRunHandleLocked(opID)
 				continue
 			}
+			// A genuinely abandoned zombie (slot already released) had its
+			// TERMINAL status written at abandonment (C-3), usually
+			// "canceled" via finalStatusForCanceledRun. Stamping
+			// interrupted_* over it would make a deliberately stopped run
+			// resumable on the next boot -- the stuck -> cancel -> resume
+			// loop. Leave both the row and the handle alone; goroutineWG
+			// below still waits (bounded) for its goroutine. A zombie from
+			// the shutdown branch has no terminal row yet and is stamped as
+			// before.
+			if h.slotReleased {
+				continue
+			}
 			h.abandoned = true
 			status := interruptedStatus(h.resumePolicy)
 			now := time.Now().UTC()
@@ -1587,7 +1617,10 @@ func (r *Registry) releaseRunHandleLocked(opID string) {
 		return
 	}
 	delete(r.running, opID)
-	if h.plugin != "" {
+	// A zombie gave its slot back at abandonment (releaseSlotKeepKeyLocked);
+	// decrementing again would let one more run of the plugin start than
+	// max_concurrent allows.
+	if h.plugin != "" && !h.slotReleased {
 		r.pluginRunning[h.plugin]--
 		if r.pluginRunning[h.plugin] < 0 {
 			r.pluginRunning[h.plugin] = 0
@@ -1598,6 +1631,71 @@ func (r *Registry) releaseRunHandleLocked(opID string) {
 			delete(r.concurrencyKeys, h.concurrencyKey)
 		}
 	}
+}
+
+// releaseSlotKeepKeyLocked gives back a zombie's worker slot (its
+// pluginRunning count) while leaving its handle in r.running, and with it the
+// ConcurrencyKey entry and the declared write set. Called once at genuine
+// abandonment; the handle itself is released by the exit monitor when the
+// goroutine returns (releaseRunHandleLocked, which then skips the slot).
+// Caller holds r.mu. Idempotent.
+func (r *Registry) releaseSlotKeepKeyLocked(opID string) {
+	h, ok := r.running[opID]
+	if !ok || h.slotReleased {
+		return
+	}
+	if h.plugin != "" {
+		r.pluginRunning[h.plugin]--
+		if r.pluginRunning[h.plugin] < 0 {
+			r.pluginRunning[h.plugin] = 0
+		}
+	}
+	h.slotReleased = true
+}
+
+// ZombieInfo describes a run whose goroutine outlived the abandon grace.
+type ZombieInfo struct {
+	OpID  string
+	DefID string
+	Key   string // the held ConcurrencyKey ("" when none)
+	Since time.Time
+}
+
+// Zombies lists the runs whose goroutine outlived the abandon grace and has
+// not returned yet, oldest first. Their handles stay in r.running, holding
+// their ConcurrencyKey and write set, until the goroutine exits.
+func (r *Registry) Zombies() []ZombieInfo {
+	r.mu.RLock()
+	var out []ZombieInfo
+	for _, h := range r.running {
+		if h == nil || !h.zombie.Load() {
+			continue
+		}
+		out = append(out, ZombieInfo{OpID: h.id, DefID: h.defID, Key: h.concurrencyKey,
+			Since: time.Unix(0, h.zombieSince.Load()).UTC()})
+	}
+	r.mu.RUnlock()
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].Since.Equal(out[j].Since) {
+			return out[i].Since.Before(out[j].Since)
+		}
+		return out[i].OpID < out[j].OpID
+	})
+	return out
+}
+
+// ZombieCount is len(Zombies()) without building the list (the ops.zombies
+// gauge in 05-PR2 reads it).
+func (r *Registry) ZombieCount() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	n := 0
+	for _, h := range r.running {
+		if h != nil && h.zombie.Load() {
+			n++
+		}
+	}
+	return n
 }
 
 // releaseQueuedClaimsForShutdown empties the nextRun buffer without blocking
@@ -1728,6 +1826,14 @@ func (r *Registry) inflightByDef() map[opsmetrics.InflightKey]opsmetrics.Infligh
 	defer r.mu.RUnlock()
 	out := make(map[opsmetrics.InflightKey]opsmetrics.InflightStat, len(r.running))
 	for _, h := range r.running {
+		// A genuinely abandoned zombie stays in r.running to hold its key,
+		// but it gave its slot back and its row is terminal: it is not in
+		// flight, and its ever-growing progress age would fire OpStalledV2 on
+		// a run already stopped. Zombies are counted by ZombieCount (the
+		// ops.zombies gauge, 05-PR2).
+		if h.slotReleased {
+			continue
+		}
 		k := opsmetrics.InflightKey{DefID: h.defID, Plugin: h.plugin}
 		st := out[k]
 		st.Runs++
