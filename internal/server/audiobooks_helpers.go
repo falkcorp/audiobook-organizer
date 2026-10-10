@@ -1,7 +1,7 @@
 // file: internal/server/audiobooks_helpers.go
-// version: 1.8.0
+// version: 1.9.0
 // guid: 439aa827-edea-481d-8918-ddacd2c140b7
-// last-edited: 2026-10-06
+// last-edited: 2026-10-10
 
 // Server-package helpers relocated out of audiobooks_handlers.go when the
 // audiobooks HTTP handlers were extracted into the handlers/audiobooks
@@ -39,6 +39,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
+	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
@@ -121,7 +122,14 @@ func (s *Server) buildAudiobookListResponse(ctx context.Context, limit, offset i
 	hasFilters := filters.IsPrimaryVersion != nil || filters.ExcludeQuarantined || filters.LibraryState != "" || filters.Tag != "" || len(filters.Tags) > 0
 	if search == "" && authorID == nil && seriesID == nil {
 		if hasFilters {
-			if tc, err := s.audiobookService.CountAudiobooksFiltered(ctx, filters); err == nil {
+			tc, err := s.audiobookService.CountAudiobooksFiltered(ctx, filters)
+			if audiobooks.IsSearchLimitError(err) {
+				// A count stopped by its pattern budget, or refused a slot,
+				// would leave the page's own length as the total: a wrong
+				// number that reads as a fact. Refuse the response instead.
+				return nil, err
+			}
+			if err == nil {
 				totalCount = tc
 			}
 		} else {

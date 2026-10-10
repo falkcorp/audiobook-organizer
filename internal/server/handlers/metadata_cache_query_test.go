@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_query_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6c1f0e2a-9b47-4d35-8e60-2a7d4c9b1f38
 // last-edited: 2026-10-10
 
@@ -31,6 +31,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
+	"github.com/falkcorp/audiobook-organizer/internal/querygrammar"
 )
 
 // goldenBookID is a ULID-length synthetic book id.
@@ -294,10 +295,10 @@ func mustReviewQuery(t testing.TB, params map[string]string) *ReviewQuery {
 	return q
 }
 
-// mustEvaluate runs evaluateReviewQuery with a deadline no test reaches.
+// mustEvaluate runs evaluateReviewQuery with no pattern budget.
 func mustEvaluate(t testing.TB, base *reviewQueryBase, q *ReviewQuery) *reviewResultList {
 	t.Helper()
-	l, err := evaluateReviewQuery(base, q, time.Now().Add(time.Hour))
+	l, err := evaluateReviewQuery(base, q, nil)
 	require.NoError(t, err)
 	return l
 }
@@ -852,67 +853,140 @@ func TestReviewQuery_LimitsRefuseQuickly(t *testing.T) {
 	require.Equal(t, http.StatusOK, code, string(body))
 }
 
-// TestReviewQuery_DeadlineStopsEvaluation: a pattern inside the size limits
-// that is still slow over the whole set stops at the deadline with an error,
-// never a partial list.
-func TestReviewQuery_DeadlineStopsEvaluation(t *testing.T) {
+// longTitleBase is a 40,000-row base whose titles are 85 characters, the
+// length the budget's measurements were taken at.
+func longTitleBase(t *testing.T) *reviewQueryBase {
+	t.Helper()
+	snap := syntheticReviewSnapshot(40000, true)
+	for i := range snap.rows {
+		r := &snap.rows[i]
+		title := fmt.Sprintf("%-85s", fmt.Sprintf("The Long Title Of Book Number %06d In A Long Series", i))
+		b := snap.books[r.sum.BookID]
+		require.NotNil(t, b)
+		b.Title, r.title, r.titleFold = title, title, strings.ToLower(title)
+	}
+	set, err := overlayLiveBooks(snap, nil, nil, changedIDs())
+	require.NoError(t, err)
+	return newReviewQueryBase(reviewBaseKey{snap: snap}, set, time.Now())
+}
+
+// fortySlowTokens is the coordinator's case: 40 negated tokens of an allowed
+// but slow pattern (95 instructions of \pL), each one evaluated on every row.
+var fortySlowTokens = strings.TrimSpace(strings.Repeat(`-title:/(?:\pL?){45}zzz/ `, 40))
+
+// TestReviewQuery_BudgetIsPerMatch: the budget charges every pattern match,
+// so 40 tokens spend it 40 times as fast as one. With a clock that makes
+// each match cost exactly 1 ms, a 100 ms budget stops the evaluation after
+// exactly 100 matches -- 2 rows and 20 tokens into the third -- whatever the
+// row count, and nothing partial is returned.
+func TestReviewQuery_BudgetIsPerMatch(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds a 40,000-row snapshot")
 	}
-	snap := syntheticReviewSnapshot(40000, true)
-	set, err := overlayLiveBooks(snap, nil, nil, changedIDs())
-	require.NoError(t, err)
-	base := newReviewQueryBase(reviewBaseKey{snap: snap}, set, time.Now())
-	// 65 instructions: allowed, and the slowest shape per instruction
-	// (nested optional repetition) -- about 250 ms over these titles.
-	q := mustReviewQuery(t, map[string]string{"q": `/(?:.?){30}zzz/`})
-	for _, params := range []map[string]string{
-		{"q": `/(?:.?){30}zzz/`},
-		{"q": `/(?:.?){30}zzz/`, "chip": "total"},
-		{"q": `/(?:.?){30}zzz/`, "chip": "stale"},
-	} {
-		q = mustReviewQuery(t, params)
-		const budget = 20 * time.Millisecond
-		start := time.Now()
-		l, err := evaluateReviewQuery(base, q, start.Add(budget))
-		took := time.Since(start)
-		t.Logf("%v: stopped after %s (deadline %s)", params, took, budget)
-		require.Nil(t, l, "a stopped evaluation returns no partial list")
-		var refused *reviewQueryError
-		require.ErrorAs(t, err, &refused)
-		require.Contains(t, refused.Error(), "took longer than")
-		require.Less(t, took, budget+50*time.Millisecond, "the clock is read often enough to stop near the deadline")
+	base := longTitleBase(t)
+	q := mustReviewQuery(t, map[string]string{"q": fortySlowTokens})
+	require.True(t, q.title.costly())
+	var mu sync.Mutex
+	clock := time.Unix(0, 0)
+	reads := 0
+	budget := querygrammar.NewBudgetClock(100*time.Millisecond, func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		reads++
+		clock = clock.Add(time.Millisecond)
+		return clock
+	})
+	l, err := evaluateReviewQuery(base, q, budget)
+	require.Nil(t, l, "a stopped evaluation returns no partial list")
+	var slow *querygrammar.TooSlowError
+	require.ErrorAs(t, err, &slow)
+	require.Equal(t, 200, reads, "100 timed matches (two clock reads each), then no more")
+}
+
+// TestReviewQuery_BudgetStopsNearLimit: with the wall clock, the 40-token
+// case stops within one match of its budget, where a rows-between-checks
+// clock overshot to 1.49 s against 1 s. The bound is loose for -race and a
+// loaded machine; TestReviewQuery_BudgetIsPerMatch pins the arithmetic.
+func TestReviewQuery_BudgetStopsNearLimit(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a 40,000-row snapshot")
 	}
-	// Given time, the same pattern completes: the refusal was the clock, not
-	// the pattern. (Whether it fits reviewQueryEvalDeadline is a timing
-	// claim, measured in querygrammar.MaxPatternInst's comment, not asserted
-	// here: -race slows this pass past it.)
-	l, err := evaluateReviewQuery(base, q, time.Now().Add(time.Hour))
+	base := longTitleBase(t)
+	for _, params := range []map[string]string{
+		{"q": fortySlowTokens},
+		{"q": `/(?:\pL?){45}zzz/`, "chip": "total"},
+		{"q": `/(?:\pL?){45}zzz/`, "chip": "stale"},
+	} {
+		q := mustReviewQuery(t, params)
+		const limit = 100 * time.Millisecond
+		budget := querygrammar.NewBudget(limit)
+		start := time.Now()
+		l, err := evaluateReviewQuery(base, q, budget)
+		took := time.Since(start)
+		t.Logf("%.40s chip=%s: stopped after %s, pattern time %s (budget %s)", params["q"], params["chip"], took, budget.Spent(), limit)
+		require.Nil(t, l)
+		var slow *querygrammar.TooSlowError
+		require.ErrorAs(t, err, &slow)
+		// One match past the limit, normally microseconds; the slack is for
+		// a match the scheduler preempted under -race or load.
+		// TestReviewQuery_BudgetIsPerMatch pins the arithmetic exactly.
+		require.Less(t, budget.Spent(), limit+500*time.Millisecond, "pattern time stops within one match of the budget")
+		require.Less(t, took, limit+time.Second, "wall time (loose: -race, load)")
+	}
+	// Given no budget, the same tokens complete: the refusal was the budget.
+	l, err := evaluateReviewQuery(base, mustReviewQuery(t, map[string]string{"q": `/(?:\pL?){45}zzz/`, "chip": "total"}), nil)
 	require.NoError(t, err)
 	require.Empty(t, l.refs)
 }
 
-// TestReviewQuery_DeadlineIs400AndNotCached: through the handler, a stopped
-// evaluation is a 400 every waiter sees, and it is not stored, so the next
+// TestReviewQuery_BudgetIs400AndNotCached: through the handler, a spent
+// budget is a 400 every waiter sees, and it is not stored, so the next
 // request evaluates again rather than reading a refusal (or a partial list)
-// from the LRU.
-func TestReviewQuery_DeadlineIs400AndNotCached(t *testing.T) {
+// from the LRU. A query with no regex or glob takes no budget at all.
+func TestReviewQuery_BudgetIs400AndNotCached(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store, svc := goldenReviewStore(t)
 	h := NewMetadataCacheHandler(store, svc, nil, nil, nil)
-	saved := reviewQueryEvalDeadline
-	reviewQueryEvalDeadline = -time.Second // every evaluation is already past it
-	t.Cleanup(func() { reviewQueryEvalDeadline = saved })
+	saved := reviewPatternBudget
+	reviewPatternBudget = 0 // spent before it starts
+	t.Cleanup(func() { reviewPatternBudget = saved })
 
 	for range 2 {
-		msg, _ := reviewQueryError400(t, h, "title")
-		require.Contains(t, msg, "took longer than")
+		msg, _ := reviewQueryError400(t, h, "/title/")
+		require.Contains(t, msg, "too slow")
+		require.Contains(t, msg, "simpler search")
 	}
 	require.EqualValues(t, 2, h.reviewQuery.evaluations.Load(), "a refusal is never served from the LRU")
-
-	reviewQueryEvalDeadline = saved
 	page, _, _ := servePage(t, h, "q=title")
+	require.NotZero(t, page.Data.TotalCount, "a substring query is not timed")
+
+	reviewPatternBudget = saved
+	page, _, _ = servePage(t, h, "q="+url.QueryEscape("/title/"))
 	require.NotZero(t, page.Data.TotalCount)
+}
+
+// TestReviewQuery_PatternSlotsFullIs503: with every pattern slot held, a
+// regex query waits the slot wait and is a 503 with Retry-After; a substring
+// query needs no slot and is served; a freed slot serves the regex.
+func TestReviewQuery_PatternSlotsFullIs503(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store, svc := goldenReviewStore(t)
+	h := NewMetadataCacheHandler(store, svc, nil, nil, nil)
+	restore := querygrammar.SetPatternSlotsForTesting(1, 20*time.Millisecond)
+	defer restore()
+	release, err := querygrammar.AcquirePatternSlot(context.Background())
+	require.NoError(t, err)
+
+	code, body, hdr := serveReviewRaw(t, h, "view=page&q="+url.QueryEscape("/title/"))
+	require.Equal(t, http.StatusServiceUnavailable, code, string(body))
+	require.Equal(t, "2", hdr.Get("Retry-After"))
+	require.Contains(t, string(body), "pattern searches")
+	code, _, _ = serveReviewRaw(t, h, "view=page&q=title")
+	require.Equal(t, http.StatusOK, code, "a substring query takes no slot")
+
+	release()
+	code, body, _ = serveReviewRaw(t, h, "view=page&q="+url.QueryEscape("/title/"))
+	require.Equal(t, http.StatusOK, code, string(body))
 }
 
 // TestReviewQuery_ConcurrentIdenticalRequestsShareOneEvaluation: identical

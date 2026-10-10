@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_query.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3e8b5d17-6a0c-4f92-b1d4-9c27e0a5f6b3
 // last-edited: 2026-10-10
 
@@ -17,7 +17,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/sync/singleflight"
@@ -57,9 +56,11 @@ import (
 // Limits (a user pattern is code the server runs over every row): q is at
 // most reviewQueryMaxQBytes, each value at most querygrammar.MaxTextValueBytes
 // and each compiled pattern at most querygrammar.MaxPatternInst instructions,
-// all refused at parse time with a 400; and one evaluation stops at
-// reviewQueryEvalDeadline with a 400, never a partial list. The deadline
-// check costs about 0.05 ms of the chips-only pass at 40,000 rows.
+// all refused at parse time with a 400. An evaluation with a regex or glob
+// takes one of the process-wide pattern slots (querygrammar.AcquirePatternSlot;
+// full past its wait is a 503) and a querygrammar.Budget of
+// reviewPatternBudget: once its pattern matches have spent that much time it
+// stops with a 400, never a partial list.
 
 const (
 	reviewViewPage = "page"
@@ -86,61 +87,14 @@ const (
 	// querygrammar.MaxPatternInst; this cap keeps a pasted wall of tokens
 	// from being parsed at all.
 	reviewQueryMaxQBytes = 1024
-
-	// reviewQueryCheckEvery is how many rows an evaluation scans between
-	// deadline checks (a power of two: reviewEvalClock masks with it): one time.Now per 256 rows, under 1% of a substring
-	// pass, and with values capped at 256 bytes and patterns at 100
-	// instructions 256 rows of title matching stay in the low milliseconds.
-	reviewQueryCheckEvery = 256
 )
 
-// reviewQueryEvalDeadline bounds one evaluation of one filter. The grammar's
-// size limits make a pathological pattern a compile error, but the cost of a
-// regex over the review set is roughly program size times title length times
-// rows, and no size limit alone keeps every allowed pattern inside the
-// interactive budget (querygrammar.MaxPatternInst has the measurements). The
-// deadline is what bounds the time: it is taken inside the shared evaluation
-// (the singleflight), not from any one request's context, so a requester who
-// gives up neither cancels the work for the others nor lets it run on
-// unbounded. A var so tests can shrink it.
-var reviewQueryEvalDeadline = time.Second
-
-// reviewEvalClock counts rows and reads the clock every
-// reviewQueryCheckEvery of them. Not safe for concurrent use: one per
-// evaluation.
-type reviewEvalClock struct {
-	deadline time.Time
-	n        int
-	expired  bool
-}
-
-// over reports whether the evaluation has run past its deadline. Once true it
-// stays true, so every loop of the evaluation stops at its next row. It reads
-// the clock on the first row and every reviewQueryCheckEvery-th after it; the
-// rest is a counter and a mask, small enough to inline into the row loops.
-func (c *reviewEvalClock) over() bool {
-	c.n++
-	if c.n&(reviewQueryCheckEvery-1) != 1 {
-		return c.expired
-	}
-	return c.check()
-}
-
-func (c *reviewEvalClock) check() bool {
-	if !c.expired && !time.Now().Before(c.deadline) {
-		c.expired = true
-	}
-	return c.expired
-}
-
-// reviewQueryTooSlow is the deadline refusal: a *reviewQueryError, which the
-// handler serves as a 400 (the pattern, not the server, is what to change).
-func reviewQueryTooSlow() error {
-	return &reviewQueryError{msg: fmt.Sprintf(
-		"the search took longer than %s over the review set and was stopped; "+
-			"simplify the Title pattern (fewer wildcards, no nested optional groups, no large counted repeats)",
-		reviewQueryEvalDeadline)}
-}
+// reviewPatternBudget is the regex/glob matching time one evaluation may
+// spend (querygrammar.Budget). The budget is created inside the shared
+// evaluation (the singleflight), not from any one request's context, so a
+// requester who gives up neither cancels the work for the others nor lets it
+// run on unbounded. A var so tests can shrink it.
+var reviewPatternBudget = querygrammar.DefaultPatternBudget
 
 // Review chip views (the lane's ChipFilter). A chip view lists exactly the
 // rows its chip counts, narrowed only by the title filter.
@@ -587,7 +541,7 @@ func compileReviewTitleFilter(input string) (*reviewTitleFilter, error) {
 	for _, f := range filters {
 		m, err := querygrammar.CompileText(f.value, f.quoted)
 		if err != nil {
-			return nil, fmt.Errorf("title:%s — %s", shortReviewToken(f.value), err.Error())
+			return nil, fmt.Errorf("title:%s — %s", querygrammar.ShortToken(f.value), err.Error())
 		}
 		p := reviewTitlePart{m: m, negated: f.negated}
 		if m.Kind == querygrammar.KindSubstring {
@@ -598,33 +552,32 @@ func compileReviewTitleFilter(input string) (*reviewTitleFilter, error) {
 	return out, nil
 }
 
-// shortReviewToken is a value as an error message names it: whole when short,
-// else its first 64 bytes (cut on a rune boundary) and an ellipsis, so a
-// refused 1 KB value is not echoed back in full.
-func shortReviewToken(v string) string {
-	const keep = 64
-	if len(v) <= keep {
-		return v
+// costly reports whether any part runs a compiled program (regex or glob),
+// i.e. whether an evaluation needs a pattern slot.
+func (f *reviewTitleFilter) costly() bool {
+	if f == nil {
+		return false
 	}
-	cut := keep
-	for cut > 0 && !utf8.RuneStart(v[cut]) {
-		cut--
+	for i := range f.parts {
+		if f.parts[i].m.Costly() {
+			return true
+		}
 	}
-	return v[:cut] + "…"
+	return false
 }
 
 // match reports whether a row's live title passes every part. A substring
 // part compares against the row's precomputed fold (exactly what
 // TextMatcher.Match does after lower-casing); a regex or glob part gets the
 // title as written, so (?-i) keeps its meaning.
-func (f *reviewTitleFilter) match(row *snapshotRow, title string) bool {
+func (f *reviewTitleFilter) match(row *snapshotRow, title string, budget *querygrammar.Budget) bool {
 	for i := range f.parts {
 		p := &f.parts[i]
 		var hit bool
 		if p.m.Kind == querygrammar.KindSubstring {
 			hit = strings.Contains(row.foldedTitle(title), p.needle)
 		} else {
-			hit = p.m.Match(title)
+			hit = budget.Match(p.m, title)
 		}
 		if hit == p.negated {
 			return false
@@ -834,18 +787,18 @@ func (l *reviewResultList) row(r reviewRef) (*snapshotRow, string) {
 // the WHOLE filtered set, never a page). It reads the base and never writes
 // it: the snapshot is immutable by contract and the base is shared.
 //
-// It stops at deadline (checked every reviewQueryCheckEvery rows) and returns
-// reviewQueryTooSlow; a partial list is never returned.
-func evaluateReviewQuery(base *reviewQueryBase, q *ReviewQuery, deadline time.Time) (*reviewResultList, error) {
+// Its regex and glob matches are timed against budget (nil: untimed); once
+// the budget is spent it stops and returns the budget's *TooSlowError, and a
+// partial list is never returned.
+func evaluateReviewQuery(base *reviewQueryBase, q *ReviewQuery, budget *querygrammar.Budget) (*reviewResultList, error) {
 	out := &reviewResultList{base: base, normalized: q.normalized}
-	clock := &reviewEvalClock{deadline: deadline}
 	rows := &base.rows
 	titleOK := func(row *snapshotRow) bool {
-		return q.title == nil || q.title.match(row, row.book.Title)
+		return q.title == nil || q.title.match(row, row.book.Title, budget)
 	}
 	addReviewable := func(keep func(r *reviewableRow) bool) {
 		for i := range rows.reviewable {
-			if clock.over() {
+			if budget.Expired() {
 				return
 			}
 			r := &rows.reviewable[i]
@@ -856,7 +809,7 @@ func evaluateReviewQuery(base *reviewQueryBase, q *ReviewQuery, deadline time.Ti
 	}
 	addUnreviewable := func(keep func(u *unreviewableRow) bool) {
 		for i := range rows.unreviewable {
-			if clock.over() {
+			if budget.Expired() {
 				return
 			}
 			u := &rows.unreviewable[i]
@@ -894,10 +847,10 @@ func evaluateReviewQuery(base *reviewQueryBase, q *ReviewQuery, deadline time.Ti
 	case q.Bucket == reviewBucketUnreviewable:
 		addUnreviewable(func(*unreviewableRow) bool { return true })
 	default:
-		evaluateReviewFilters(out, q, clock)
+		evaluateReviewFilters(out, q, budget)
 	}
-	if clock.expired {
-		return nil, reviewQueryTooSlow()
+	if err := budget.Err(); err != nil {
+		return nil, err
 	}
 	sortReviewList(out, q.Sort)
 	return out, nil
@@ -907,7 +860,7 @@ func evaluateReviewQuery(base *reviewQueryBase, q *ReviewQuery, deadline time.Ti
 // beforeRuntime (title, source, confidence, row states, no-match), the
 // runtime switch (counted as it hides), language, transcription, then the
 // multi-book hide over the whole surviving set.
-func evaluateReviewFilters(out *reviewResultList, q *ReviewQuery, clock *reviewEvalClock) {
+func evaluateReviewFilters(out *reviewResultList, q *ReviewQuery, budget *querygrammar.Budget) {
 	base := out.base
 	rows := &base.rows
 	skipped := map[string]struct{}{}
@@ -936,7 +889,7 @@ func evaluateReviewFilters(out *reviewResultList, q *ReviewQuery, clock *reviewE
 
 	out.refs = make([]reviewRef, 0, len(rows.reviewable))
 	for i := range rows.reviewable {
-		if clock.over() {
+		if budget.Expired() {
 			return
 		}
 		r := &rows.reviewable[i]
@@ -970,7 +923,7 @@ func evaluateReviewFilters(out *reviewResultList, q *ReviewQuery, clock *reviewE
 		if q.HideNoMatch && r.status == reviewStatusNoMatch {
 			continue
 		}
-		if q.title != nil && !q.title.match(r.row, book.Title) {
+		if q.title != nil && !q.title.match(r.row, book.Title, budget) {
 			continue
 		}
 		// Every row past this point is one the lane's beforeRuntime keeps,
@@ -1233,7 +1186,7 @@ func (h *MetadataCacheHandler) reviewQueryList(ctx context.Context, q *ReviewQue
 		if cache != nil {
 			cache.evaluations.Add(1)
 		}
-		return evaluateReviewQuery(base, q, time.Now().Add(reviewQueryEvalDeadline))
+		return runReviewEvaluation(ctx, base, q)
 	}
 	key := reviewBaseKey{snap: snap, cacheGen: cacheGen, bookGen: bookGen}
 	if l := cache.lookup(key, q.normalized); l != nil {
@@ -1248,10 +1201,11 @@ func (h *MetadataCacheHandler) reviewQueryList(ctx context.Context, q *ReviewQue
 			return nil, err
 		}
 		cache.evaluations.Add(1)
-		// The deadline starts here, inside the shared flight, so it bounds
-		// the evaluation every waiter shares and no single waiter's context
-		// can cut it short. A refusal is not stored: the LRU holds lists only.
-		l, err := evaluateReviewQuery(base, q, time.Now().Add(reviewQueryEvalDeadline))
+		// The slot wait and the budget start here, inside the shared flight,
+		// so they bound the evaluation every waiter shares and no single
+		// waiter's context can cut it short (hence context.Background). A
+		// refusal is not stored: the LRU holds lists only.
+		l, err := runReviewEvaluation(context.Background(), base, q)
 		if err != nil {
 			return nil, err
 		}
@@ -1262,6 +1216,22 @@ func (h *MetadataCacheHandler) reviewQueryList(ctx context.Context, q *ReviewQue
 		return nil, err
 	}
 	return v.(*reviewResultList), nil
+}
+
+// runReviewEvaluation evaluates q over base. A query with a regex or glob
+// first takes a pattern slot (waiting at most querygrammar's slot wait, or
+// until ctx is done) and runs under a fresh budget of reviewPatternBudget; a
+// query without one is a plain scan and needs neither.
+func runReviewEvaluation(ctx context.Context, base *reviewQueryBase, q *ReviewQuery) (*reviewResultList, error) {
+	if !q.title.costly() {
+		return evaluateReviewQuery(base, q, nil)
+	}
+	release, err := querygrammar.AcquirePatternSlot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	return evaluateReviewQuery(base, q, querygrammar.NewBudget(reviewPatternBudget))
 }
 
 // --- responses -------------------------------------------------------------------
@@ -1334,6 +1304,9 @@ func (h *MetadataCacheHandler) getCacheReviewPage(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, refused.Error())
 		return
 	}
+	if respondSearchLimit(c, err) {
+		return
+	}
 	if err != nil {
 		httputil.InternalError(c, "failed to query the review set", err)
 		return
@@ -1347,4 +1320,24 @@ func (h *MetadataCacheHandler) getCacheReviewPage(c *gin.Context) {
 	if d := time.Since(began); d > slowReviewListing {
 		metadataCacheLog.Warn("review query exceeded slow-request threshold: duration=%s query=%s listed=%d", d.Round(time.Millisecond), q.normalized, len(l.refs))
 	}
+}
+
+// respondSearchLimit answers the querygrammar evaluation limits and reports
+// whether it did: a spent pattern budget is a 400 (the search, as written,
+// cannot be answered within the limit), every pattern slot busy is a 503
+// with Retry-After. The audiobooks handler package has the same function;
+// httputil and querygrammar are both leaf packages, so neither can host it.
+func respondSearchLimit(c *gin.Context, err error) bool {
+	var slow *querygrammar.TooSlowError
+	if errors.As(err, &slow) {
+		httputil.RespondWithBadRequest(c, slow.Error())
+		return true
+	}
+	var busy *querygrammar.BusyError
+	if errors.As(err, &busy) {
+		c.Header("Retry-After", "2")
+		httputil.RespondWithServiceUnavailable(c, busy.Error())
+		return true
+	}
+	return false
 }

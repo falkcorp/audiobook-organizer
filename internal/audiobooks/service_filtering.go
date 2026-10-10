@@ -1,7 +1,7 @@
 // file: internal/audiobooks/service_filtering.go
-// version: 1.18.1
+// version: 1.19.0
 // guid: b4e8c3d2-e5f6-7a80-9b0c-1d2e3f4a5b6c
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package audiobooks
 
@@ -921,12 +921,12 @@ func (svc *AudiobookService) countSummariesPushdownFiltered(filter database.Book
 // fallback for memdb-stripped fields (description / version_notes /
 // book_sig_v1). The caller can DEBUG-log *pebbleLookups after the
 // walker returns to surface the cost of D3 fallback queries.
-func (svc *AudiobookService) buildBookSummaryFilter(f ListFilters, sortAsc bool) (database.BookSummaryFilter, bool) {
-	bsf, ok, _ := svc.buildBookSummaryFilterWithLookupCount(f, sortAsc)
+func (svc *AudiobookService) buildBookSummaryFilter(f ListFilters, sortAsc bool, budget *querygrammar.Budget) (database.BookSummaryFilter, bool) {
+	bsf, ok, _ := svc.buildBookSummaryFilterWithLookupCount(f, sortAsc, budget)
 	return bsf, ok
 }
 
-func (svc *AudiobookService) buildBookSummaryFilterWithLookupCount(f ListFilters, sortAsc bool) (database.BookSummaryFilter, bool, *int64) {
+func (svc *AudiobookService) buildBookSummaryFilterWithLookupCount(f ListFilters, sortAsc bool, budget *querygrammar.Budget) (database.BookSummaryFilter, bool, *int64) {
 	// Non-title sorts: the memdb walker still applies all other filter predicates
 	// (IsPrimary, LibraryState, RestrictToIDs, Predicate) and returns the
 	// filtered subset; the caller applySorting sorts that smaller slice in
@@ -1033,6 +1033,10 @@ func (svc *AudiobookService) buildBookSummaryFilterWithLookupCount(f ListFilters
 		fpCovMax := f.CoveragePercentMax
 		// Compile every value ONCE for the whole walk, not per row.
 		compiledFF, compiledOK := mustCompileForPredicate(remainingFF)
+		// The predicate cannot return an error, so a spent budget makes it
+		// match nothing; the caller checks budget.Err() after the walk and
+		// discards the result (queryAudiobooks, CountAudiobooksFiltered).
+		withBudget(compiledFF, budget)
 		cheapFF, strippedFF := splitCompiledFilters(compiledFF)
 		if len(strippedFF) > 0 {
 			slog.Debug("predicate uses stripped-field Pebble fallback",

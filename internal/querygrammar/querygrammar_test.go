@@ -1,5 +1,5 @@
 // file: internal/querygrammar/querygrammar_test.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 4d8a1e63-2b7c-4f90-a5e1-8c6d3b0f2a97
 // last-edited: 2026-10-10
 
@@ -286,12 +286,12 @@ func TestLimits_RefuseQuickly(t *testing.T) {
 		raw  string
 		want string
 	}{
-		"repeat of a star":         {`/(.*){1000}/`, "too complex"},
-		"nested optional repeat":   {`/(?:.?){1000}zzz/`, "too complex"},
-		"30 KB regex":              {"/" + strings.Repeat("(a|b)", 6000) + "/", "the limit is 256"},
-		"30 KB literal":            {strings.Repeat("a", 30000), "the limit is 256"},
-		"30 KB quoted literal":     {strings.Repeat("a", 30000), "the limit is 256"},
-		"wildcard with many stars": {strings.Repeat("a*", 60), "too complex"},
+		"repeat of a star":          {`/(.*){1000}/`, "too complex"},
+		"nested optional repeat":    {`/(?:.?){1000}zzz/`, "too complex"},
+		"30 KB regex":               {"/" + strings.Repeat("(a|b)", 6000) + "/", "the limit is 256"},
+		"30 KB literal":             {strings.Repeat("a", 30000), "the limit is 256"},
+		"30 KB quoted literal":      {strings.Repeat("a", 30000), "the limit is 256"},
+		"repeat of a star over 500": {`/(.*){250}/`, "1002 instructions; the limit is 500"},
 	}
 	for name, tc := range cases {
 		start := time.Now()
@@ -327,12 +327,16 @@ func TestLimits_OrdinaryPatternsFit(t *testing.T) {
 		`(?i)(.*){1000}`:      4002,
 		`(?i)(?:.?){1000}zzz`: 2005,
 		`(?i)[a-z]{50}`:       52,
+		`(?i).{120}`:          122,
+		`(?i).{100,}`:         103,
+		`(?i)(.*){100}`:       402,
 	} {
 		if got := inst(expr); got != want {
 			t.Errorf("%s: %d instructions, the doc says %d", expr, got, want)
 		}
 	}
-	for _, raw := range []string{`/^\s*\p{L}/`, `/[a-z]{50}/`, `/(a|b|c|d|e|f|g|h|i|j|k|l|m|n|o|p|q|r|s|t|u|v|w|x|y|z){20}/`, `/chapter \d+/`, "the*lestat", strings.Repeat("x", MaxTextValueBytes)} {
+	for _, raw := range []string{`/^\s*\p{L}/`, `/[a-z]{50}/`, `/(a|b|c|d|e|f|g|h|i|j|k|l|m|n|o|p|q|r|s|t|u|v|w|x|y|z){20}/`, `/chapter \d+/`, "the*lestat", strings.Repeat("x", MaxTextValueBytes),
+		`/.{120}/`, `/.{100,}/`, `/^.{100,}$/`, `/(.*){100}/`, strings.Repeat("a*", MaxTextValueBytes/2)} {
 		if _, err := CompileText(raw, false); err != nil {
 			t.Errorf("CompileText(%q): %v", raw, err)
 		}

@@ -1,7 +1,7 @@
 // file: internal/audiobooks/filter_compiled.go
-// version: 1.3.3
+// version: 1.4.0
 // guid: 6a1f3c8e-9d24-4b7a-b0e5-2f8c4d1a7e36
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 package audiobooks
 
@@ -28,6 +28,9 @@ type compiledFilter struct {
 	text *querygrammar.TextMatcher // text forms (substring/glob/regex)
 	cmp  *querygrammar.Comparison  // numeric comparison / range / equality
 	dur  durationExpr              // parsed duration expression (duration fields only)
+	// budget times the regex and glob matches of a list or count scan
+	// (withBudget); nil for single-row callers, which are not timed.
+	budget *querygrammar.Budget
 }
 
 // numericFilterFields are evaluated as numbers when the value is a
@@ -80,7 +83,9 @@ var ratingFields = map[string]bool{
 // what the list handler returns as its 400.
 func compileFieldFilter(f FieldFilter) (compiledFilter, error) {
 	cf := compiledFilter{FieldFilter: f}
-	wrap := func(err error) error { return fmt.Errorf("%s:%s — %w", f.Field, f.Value, err) }
+	wrap := func(err error) error {
+		return fmt.Errorf("%s:%s — %w", f.Field, querygrammar.ShortToken(f.Value), err)
+	}
 	switch {
 	case durationFilterFields[f.Field]:
 		e, err := parseDurationExpr(f.Value)
@@ -148,6 +153,66 @@ func compileFieldFilters(filters []FieldFilter) ([]compiledFilter, error) {
 	return out, nil
 }
 
+// withBudget points every filter at b, so a scan's regex and glob matches
+// are timed against it (querygrammar.Budget).
+func withBudget(cfs []compiledFilter, b *querygrammar.Budget) {
+	for i := range cfs {
+		cfs[i].budget = b
+	}
+}
+
+// isPatternFilter reports whether f's value compiles to a regex or a glob,
+// the matches a Budget times and a pattern slot bounds.
+func isPatternFilter(f FieldFilter) bool {
+	cf, err := compileFieldFilter(f)
+	return err == nil && cf.text != nil && cf.text.Costly()
+}
+
+// Limits on a whole filter set, beside the per-value ones in querygrammar.
+const (
+	// MaxFilterValueBytesTotal bounds the summed bytes of every filter
+	// value in one request, as the Review query bounds its q.
+	MaxFilterValueBytesTotal = 1024
+	// MaxPatternFilters bounds how many regex or glob filters one request
+	// may carry. Each one is matched against every row the scan reaches;
+	// the pattern budget stops a slow set, and this refuses an absurd one
+	// before it runs.
+	MaxPatternFilters = 8
+)
+
+// CheckFilterSetSize refuses a filter set over MaxFilterValueBytesTotal or
+// with more than MaxPatternFilters regex/glob filters, counted across every
+// slice given (book-global and per-user filters together).
+func CheckFilterSetSize(sets ...[]FieldFilter) error {
+	total, patterns := 0, 0
+	for _, filters := range sets {
+		for _, f := range filters {
+			total += len(f.Value)
+			if isPatternFilter(f) {
+				patterns++
+			}
+		}
+	}
+	if total > MaxFilterValueBytesTotal {
+		return fmt.Errorf("the filter values total %d bytes; the limit is %d (search for fewer or shorter values)", total, MaxFilterValueBytesTotal)
+	}
+	if patterns > MaxPatternFilters {
+		return fmt.Errorf("the search has %d regex or * filters; the limit is %d (combine some, or narrow with a plain word instead)", patterns, MaxPatternFilters)
+	}
+	return nil
+}
+
+// fieldFiltersCostly reports whether any filter is a pattern filter: a scan
+// over it takes a pattern slot and a budget.
+func fieldFiltersCostly(filters []FieldFilter) bool {
+	for _, f := range filters {
+		if isPatternFilter(f) {
+			return true
+		}
+	}
+	return false
+}
+
 // mustCompileForPredicate compiles filters for a predicate. The entry points
 // (handler 400, GetAudiobooksPage, CountAudiobooksFiltered) have already
 // validated, so an error here is a bypassed boundary: fail CLOSED (ok=false,
@@ -178,6 +243,11 @@ func splitCompiledFilters(filters []compiledFilter) (cheap, stripped []compiledF
 func matchesCompiledFilters(book *database.Book, filters []compiledFilter, rt runtimeFunc) bool {
 	for i := range filters {
 		f := &filters[i]
+		// A spent budget: the scan's result is discarded (the caller returns
+		// the budget's error), so stop doing work for it.
+		if f.budget.Expired() {
+			return false
+		}
 		// Fail CLOSED on an empty value — see FirstEmptyFilterValue.
 		if f.Value == "" {
 			return false
@@ -224,7 +294,7 @@ func fieldMatchesCompiled(book *database.Book, f *compiledFilter, rt runtimeFunc
 	// year:/^20/ would only ever see the print year of "1999 2021".
 	if numericFilterFields[f.Field] {
 		for _, v := range numericFieldValues(book, f.Field) {
-			if f.text.Match(strconv.FormatFloat(v, 'f', -1, 64)) {
+			if f.budget.Match(f.text, strconv.FormatFloat(v, 'f', -1, 64)) {
 				return true
 			}
 		}
@@ -234,7 +304,7 @@ func fieldMatchesCompiled(book *database.Book, f *compiledFilter, rt runtimeFunc
 	if !known {
 		return false
 	}
-	return f.text.Match(bookValue)
+	return f.budget.Match(f.text, bookValue)
 }
 
 // numericFieldValues returns a field's KNOWN numeric values. Empty means
