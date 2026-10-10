@@ -1,5 +1,5 @@
 # file: Makefile
-# version: 2.36.1
+# version: 2.37.0
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
 # last-edited: 2026-10-10
 
@@ -57,7 +57,7 @@ BACKUP_DIR  ?= $(CURDIR)/backups
         web-install web-build web-dev web-test web-lint web-lint-memory \
         test test-short test-short-shard test-fixtures test-all test-all-short test-nightly test-frontend test-e2e test-e2e-demo \
         coverage coverage-check coverage-check-short ci \
-        vet mocks mocks-check staticcheck oplint sdkguard bench-check fmt-check \
+        vet mocks mockery-install mocks-check staticcheck oplint sdkguard bench-check fmt-check \
         docker docker-run docker-stop \
         release-dry-run release-snapshot version \
         build-mtls-bridge build-mtls-bridge-windows \
@@ -400,24 +400,38 @@ mutate-matrix:
 ## mocks: Regenerate mockery-managed mocks from .mockery.yaml.
 ## Run this after editing an interface listed in .mockery.yaml.
 ## Pinned mockery version: v3.8.0 (module github.com/vektra/mockery/v3).
-## Install via scripts/setup-mockery.sh. Mockery v2.x cannot regenerate
+## Install with `make mockery-install`. Mockery v2.x cannot regenerate
 ## these mocks: it does not support merging multiple interfaces into one
 ## shared output file (e.g. internal/database/mocks/mock_store.go), so
 ## running an older/newer mockery binary here will silently corrupt or
 ## truncate that file. If `make mocks` produces a huge, repo-wide diff,
 ## you are running the wrong mockery version — check `mockery version`.
-mocks:
+mocks: mockery-install
 	@echo "🎭 Regenerating mockery-managed mocks..."
-	@mockery
+	@$(MOCKERY)
 	@echo "✅ Mocks regenerated"
+
+## mockery-install: Build the pinned mockery into GOBIN from tools/mockery/go.mod.
+## The module pins mockery v3.8.0 but raises golang.org/x/tools to v0.51.0:
+## v3.8.0's own x/tools (v0.49.0) cannot read the export data go1.27.2 writes.
+## Use this, never `go install github.com/vektra/mockery/v3@...`, which
+## ignores the tools module and brings back the old x/tools.
+## Every mockery call below uses $(MOCKERY), the binary this target just
+## built, never whatever `mockery` is first on PATH: a Homebrew mockery
+## reports the same v3.8.0 but carries the old x/tools.
+MOCKERY := $(or $(shell go env GOBIN),$(shell go env GOPATH)/bin)/mockery
+
+mockery-install:
+	@go -C tools/mockery install tool
+	@$(MOCKERY) version
 
 ## mocks-check: Verify committed mocks match what mockery would generate
 ## right now. Fails CI if someone edited an interface without re-running
-## mockery. Pinned mockery version: v3.8.0 (see scripts/setup-mockery.sh).
+## mockery. Pinned mockery version: v3.8.0 (see tools/mockery/go.mod).
 ## Backlog 5.9.
-mocks-check:
+mocks-check: mockery-install
 	@echo "🎭 Checking that committed mocks are up to date..."
-	@mockery --log-level warn
+	@$(MOCKERY) --log-level warn
 	@if ! git diff --quiet -- ':(glob)internal/**/mocks/**' internal/ai/mock_*_test.go internal/metadata/mock_*_test.go; then \
 		echo "❌ Committed mocks are stale. Run 'make mocks' and commit the result."; \
 		git diff --stat -- ':(glob)internal/**/mocks/**' internal/ai/mock_*_test.go internal/metadata/mock_*_test.go; \
