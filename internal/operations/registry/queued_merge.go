@@ -1,5 +1,5 @@
 // file: internal/operations/registry/queued_merge.go
-// version: 1.4.0
+// version: 1.4.1
 // guid: 342326a8-40f7-440f-b6a6-0f7f8255b6b6
 // last-edited: 2026-10-10
 
@@ -30,8 +30,12 @@ func (r *Registry) tryMergeQueuedParams(
 		if r.canonicalDefID(op.DefID) != defID || op.Status != "queued" {
 			continue
 		}
-		// Only queued rows reach here; a zombie's row is terminal, so a
-		// zombie handle never matches.
+		// A zombie's row is usually terminal, but one quiesced by a scan
+		// stand-down can be re-queued in place under the same id while its
+		// goroutine still runs (resumeQuiescedOp -> requeueInPlace). That row
+		// is queued and matches here; it is skipped as claimed, so new params
+		// are not merged into it. Harmless: the caller enqueues a fresh row,
+		// which Gate 3 holds until the zombie exits.
 		if _, claimed := r.running[op.ID]; claimed {
 			continue
 		}

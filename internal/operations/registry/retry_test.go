@@ -1,5 +1,5 @@
 // file: internal/operations/registry/retry_test.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 7c2e9f14-5b3a-4d86-a1f0-3e8b6c9d2a47
 // last-edited: 2026-10-10
 
@@ -486,7 +486,8 @@ func TestRetryInterrupted_ConcurrentEnqueueCannotSlipASecondRunIn(t *testing.T) 
 //
 // The refusal comes through the zombie handle: since 05-PR3 an abandoned run
 // keeps its handle in r.running until its goroutine returns, so the live-handle
-// check refuses it (the abandonedAlive side map is gone).
+// check refuses it (the separate side map that used to track abandoned runs
+// is gone).
 //
 // Mutation check: drop the live-handle refusal in RetryInterrupted (or release
 // the handle at abandonment) and the first Retry is accepted while the first
