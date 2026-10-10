@@ -1,5 +1,5 @@
 // file: internal/itunes/service/importer_error_paths_test.go
-// version: 1.9.0
+// version: 1.9.1
 // guid: a7c3f2e1-4d8b-4e6a-9f0c-2b5d7e3a8c1f
 // last-edited: 2026-10-09
 
@@ -81,7 +81,7 @@ func TestExecute_CorruptXML_ReturnsError(t *testing.T) {
 	require.NoError(t, os.WriteFile(corruptPath, bytes.Repeat([]byte{0xde, 0xad, 0xbe, 0xef}, 64), 0o644))
 
 	m := dbmocks.NewMockStore(t)
-	// Execute always calls SaveParams + LoadCheckpoint before attempting to parse.
+	// Execute always calls LoadCheckpoint before attempting to parse.
 	m.EXPECT().GetOperationState("op-corrupt").Return(nil, nil).Once()
 	// On parse failure ClearState (DeleteOperationState) is called.
 	m.EXPECT().DeleteOperationState("op-corrupt").Return(nil).Once()
