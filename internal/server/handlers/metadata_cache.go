@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache.go
-// version: 1.35.0
+// version: 1.36.0
 // guid: d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a
 // last-edited: 2026-10-10
 
@@ -501,7 +501,7 @@ func (h *MetadataCacheHandler) cachedListingFields(ids []string) map[string]data
 // lane's whole filter chain evaluated on the server, over the same snapshot
 // and overlay, by the same row derivation (buildReviewableRows). Parameters,
 // all optional: q (the Title box, Library grammar; a field other than title
-// is a 400), source, min_confidence (0-100, matched rows only), hide_applied,
+// is a 400), source, min_confidence (0-1000, matched rows only), hide_applied,
 // hide_rejected, hide_skipped with skipped= (the client-only skipped ids),
 // hide_no_match, hide_runtime, match_language, has_transcription,
 // transcription_matched, hide_multi_book with ungrouped= (ids pulled out of a

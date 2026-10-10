@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_query_test.go
-// version: 1.5.0
+// version: 1.6.0
 // guid: 6c1f0e2a-9b47-4d35-8e60-2a7d4c9b1f38
 // last-edited: 2026-10-10
 
@@ -802,7 +802,7 @@ func TestReviewQuery_BadFieldIs400(t *testing.T) {
 		"chip=nope":              "chip must be one of",
 		"sort=author":            "sort must be",
 		"limit=0":                "limit must be",
-		"min_confidence=101":     "min_confidence must be",
+		"min_confidence=1001":    "min_confidence must be",
 		"hide_runtime=maybe":     "hide_runtime must be true or false",
 		"ids=" + goldenBookID(1): "ids must be all",
 		"bucket=elsewhere":       "bucket must be",
@@ -819,6 +819,19 @@ func TestReviewQuery_BadFieldIs400(t *testing.T) {
 	// Words the lane reads as free text are not field tokens.
 	code, body, _ := serveReviewRaw(t, h, "view=page&q=NOT+foo:bar")
 	require.Equal(t, http.StatusOK, code, string(body))
+}
+
+// TestReviewQuery_MinConfidenceAcceptsTheLaneLevels: the lane's review levels
+// ask for min_confidence 190 (a score is a sum that exceeds 1.0). A cap of 100
+// answered every request from a lane on a level with a 400.
+func TestReviewQuery_MinConfidenceAcceptsTheLaneLevels(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store, svc := goldenReviewStore(t)
+	h := NewMetadataCacheHandler(store, svc, nil, nil, nil)
+	for _, v := range []string{"0", "85", "100", "190", "1000"} {
+		code, body, _ := serveReviewRaw(t, h, "view=page&min_confidence="+v)
+		require.Equal(t, http.StatusOK, code, "min_confidence=%s: %s", v, body)
+	}
 }
 
 // reviewQueryError400 serves q and returns the 400's error text and how long

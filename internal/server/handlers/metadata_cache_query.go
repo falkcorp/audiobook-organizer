@@ -1,5 +1,5 @@
 // file: internal/server/handlers/metadata_cache_query.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 3e8b5d17-6a0c-4f92-b1d4-9c27e0a5f6b3
 // last-edited: 2026-10-10
 
@@ -87,6 +87,14 @@ const (
 	// querygrammar.MaxPatternInst; this cap keeps a pasted wall of tokens
 	// from being parsed at all.
 	reviewQueryMaxQBytes = 1024
+
+	// reviewQueryMaxMinConfidence bounds min_confidence. It is NOT 100: a
+	// candidate score is a sum of signals that routinely exceeds 1.0, and the
+	// lane's own review levels ask for 190 (NORMAL_PRESET.confidenceThreshold),
+	// so a cap of 100 answered every request from a lane on a review level
+	// with a 400. The cap exists to refuse nonsense, not to mirror a ceiling
+	// the score does not have.
+	reviewQueryMaxMinConfidence = 1000
 )
 
 // reviewPatternBudget is the regex/glob matching time one evaluation may
@@ -131,7 +139,9 @@ type ReviewQuery struct {
 	Q string
 	// Source is a provider id (reviewProviderID's vocabulary).
 	Source string
-	// MinConfidence (0-100) applies to matched rows only, as the lane does.
+	// MinConfidence is a percentage of the candidate score (score*100 >= it),
+	// 0 to reviewQueryMaxMinConfidence, and applies to matched rows only, as the
+	// lane does.
 	MinConfidence float64
 	// The lane's switches.
 	HideApplied, HideRejected, HideSkipped, HideNoMatch bool
@@ -212,8 +222,8 @@ func parseReviewQuery(get func(string) string) (*ReviewQuery, error) {
 	}
 	if raw := strings.TrimSpace(get("min_confidence")); raw != "" {
 		v, perr := strconv.ParseFloat(raw, 64)
-		if perr != nil || math.IsNaN(v) || v < 0 || v > 100 {
-			return nil, badReviewQuery("min_confidence must be a number from 0 to 100, got %q", raw)
+		if perr != nil || math.IsNaN(v) || v < 0 || v > reviewQueryMaxMinConfidence {
+			return nil, badReviewQuery("min_confidence must be a number from 0 to %d, got %q", reviewQueryMaxMinConfidence, raw)
 		}
 		q.MinConfidence = v
 	}
