@@ -1,5 +1,5 @@
 // file: internal/metadata/write_backup_ctx_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 8f385b95-1f2d-4e61-9a15-32b784f3abc7
 // last-edited: 2026-10-10
 
@@ -57,21 +57,24 @@ func TestWriteSingleTagContext_BackupFollowsContext(t *testing.T) {
 // WriteMetadataToFile falls back to the CLI writers when the native write
 // fails. Those rewrite the file in place, outside fileops.WriteTagsSafe, so
 // the create_backups backup is taken before them, as a copy. The native path
-// is switched off here and the format is one no CLI writer handles, so the
-// write fails at once; the backup must already exist, holding the original.
+// is switched off here and the CLI writer (AtomicParsley) is not on PATH, so
+// the write fails at once; the backup must already exist, holding the original.
+// PATH is emptied so no CLI writer is found and the run never depends on
+// which tools the machine has.
 func TestWriteMetadataToFile_CLIFallbackKeepsBackup(t *testing.T) {
 	prevDeps := packageSafeWriteDeps
 	prevTaglib := taglibAvailable
 	t.Cleanup(func() { packageSafeWriteDeps, taglibAvailable = prevDeps, prevTaglib })
 	packageSafeWriteDeps = tagger.SafeWriteDeps{}
 	taglibAvailable = false
+	t.Setenv("PATH", "")
 
 	prev := config.Snapshot()
 	t.Cleanup(func() { config.Mutate(func(c *config.Config) { *c = prev }) })
 
 	for _, on := range []bool{true, false} {
 		config.Mutate(func(c *config.Config) { c.CreateBackups = on })
-		path := filepath.Join(t.TempDir(), "synthetic.ogg")
+		path := filepath.Join(t.TempDir(), "synthetic.m4b")
 		original := []byte("synthetic pre-write bytes")
 		require.NoError(t, os.WriteFile(path, original, 0o644))
 
@@ -91,4 +94,25 @@ func TestWriteMetadataToFile_CLIFallbackKeepsBackup(t *testing.T) {
 		b, _ := os.Stat(baks[0])
 		require.False(t, os.SameFile(a, b), "the CLI-path backup must be a copy, not a hardlink")
 	}
+}
+
+// A format no CLI writer handles is refused without a backup: nothing would
+// be written, and the file need not even exist.
+func TestWriteMetadataToFile_UnsupportedFormatKeepsNoBackup(t *testing.T) {
+	prevDeps := packageSafeWriteDeps
+	prevTaglib := taglibAvailable
+	t.Cleanup(func() { packageSafeWriteDeps, taglibAvailable = prevDeps, prevTaglib })
+	packageSafeWriteDeps = tagger.SafeWriteDeps{}
+	taglibAvailable = false
+	prev := config.Snapshot().CreateBackups
+	t.Cleanup(func() { config.Mutate(func(c *config.Config) { c.CreateBackups = prev }) })
+	config.Mutate(func(c *config.Config) { c.CreateBackups = true })
+
+	path := filepath.Join(t.TempDir(), "synthetic.ogg")
+	require.NoError(t, os.WriteFile(path, []byte("synthetic bytes"), 0o644))
+	err := WriteMetadataToFile(path, map[string]any{"title": "Synthetic Title"}, fileops.OperationConfig{})
+	require.EqualError(t, err, "unsupported file format: .ogg")
+	baks, gerr := filepath.Glob(path + ".bak-*")
+	require.NoError(t, gerr)
+	require.Empty(t, baks)
 }

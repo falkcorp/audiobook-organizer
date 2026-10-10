@@ -1,5 +1,5 @@
 // file: internal/server/backup_optout_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: e1296d8d-87ce-482e-a80c-45c24c802435
 // last-edited: 2026-10-10
 
@@ -33,11 +33,17 @@ import (
 
 // backupsOn turns create_backups on for one test and checks the precondition:
 // a plain context WANTS a backup, so a false below is the opt-out's doing.
+//
+// It restores only CreateBackups. These tests call it after setupTestServer,
+// whose deferred cleanup restores the process config first; restoring a whole
+// snapshot here afterwards re-installed the test server's config (its temp
+// DatabasePath and stores), and the next test to build a server exited the
+// process from serviceregistry.Build.
 func backupsOn(t *testing.T) {
 	t.Helper()
-	prev := config.Snapshot()
+	prev := config.Snapshot().CreateBackups
 	config.Mutate(func(c *config.Config) { c.CreateBackups = true })
-	t.Cleanup(func() { config.Mutate(func(c *config.Config) { *c = prev }) })
+	t.Cleanup(func() { config.Mutate(func(c *config.Config) { c.CreateBackups = prev }) })
 	require.True(t, tagger.BackupWanted(context.Background()), "precondition: create_backups on")
 }
 
