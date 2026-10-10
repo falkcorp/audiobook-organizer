@@ -1,5 +1,5 @@
 // file: internal/server/batch_apply_one_test.go
-// version: 1.21.1
+// version: 1.21.2
 // guid: 9d2b71fa-30c8-4e57-a614-8b5e0c7f2d93
 // last-edited: 2026-10-09
 //
@@ -370,7 +370,7 @@ func TestApplyCachedCandidate_ApplyFailureIsNotReportedAsApplied(t *testing.T) {
 	}
 }
 
-// TestApplyCachedCandidate_WriteBackFailureStaysApplied is the honesty check.
+// TestApplyCachedCandidate_WriteBackFailureStaysApplied is the reporting check.
 // The database change is real and durable even when writing the audio files
 // fails, so the book must NOT be reported as unapplied — that would send
 // someone re-applying work that already succeeded.
