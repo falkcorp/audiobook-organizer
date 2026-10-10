@@ -1,7 +1,7 @@
 # file: .github/workflows/ci.yml
-# version: 3.22.0
+# version: 3.23.0
 # guid: f1a2b3c4-d5e6-f7a8-b9c0-d1e2f3a4b5c6
-# last-edited: 2026-10-09
+# last-edited: 2026-10-10
 
 # Fast parallel CI for PRs and pushes.
 # Runs go vet/build, short tests, frontend lint/build, and frontend unit tests
@@ -378,6 +378,13 @@ jobs:
 
       - name: Check Go formatting
         run: make fmt-check
+
+      # web/src/generated/ops.ts is generated from internal/operations/state
+      # (tools/cmd/opsgen). A status added on the Go side without regenerating
+      # leaves the web pollers classifying it as live, which spins them forever.
+      # Same make target `make ci` runs.
+      - name: Generated run-status table is fresh
+        run: make ops-check
 
       # The auto-revert selector decides which commits get reverted off main, so
       # it gets tested somewhere that actually runs. Stdlib unittest, no pip step

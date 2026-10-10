@@ -1,10 +1,11 @@
 // file: web/src/utils/operationPolling.test.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 7c2e5a19-4b83-4d06-9f71-2ae8d5c30b14
-// last-edited: 2026-09-12
+// last-edited: 2026-10-10
 
 import { describe, expect, it } from 'vitest';
 
+import { STATUS_PROPS, type OperationV2Status } from '../generated/ops';
 import { isInterrupted, isRetryable, isTerminal } from './operationPolling';
 
 // isRetryable is what the Activity page offers Retry for; every status it
@@ -64,5 +65,25 @@ describe('isTerminal', () => {
 
   it.each(['queued', 'running', 'pending', ''])('treats %s as non-terminal', (status) => {
     expect(isTerminal(status)).toBe(false);
+  });
+});
+
+// The three helpers delegate to the generated table, so every status the Go
+// side knows must answer here exactly as STATUS_PROPS says.
+describe('agreement with the generated run-status table', () => {
+  const statuses = Object.keys(STATUS_PROPS) as OperationV2Status[];
+
+  it.each(statuses)('%s matches STATUS_PROPS', (status) => {
+    const props = STATUS_PROPS[status];
+    expect(isTerminal(status)).toBe(props.settled);
+    expect(isRetryable(status)).toBe(props.retryable);
+    expect(isInterrupted(status)).toBe(
+      status === 'interrupted' || status.startsWith('interrupted_')
+    );
+  });
+
+  it('includes waiting_deps as a live status', () => {
+    expect(statuses).toContain('waiting_deps');
+    expect(isTerminal('waiting_deps')).toBe(false);
   });
 });

@@ -1,5 +1,5 @@
 // file: web/src/services/api.ts
-// version: 2.173.2
+// version: 2.174.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
 // last-edited: 2026-10-10
 
@@ -10,6 +10,8 @@ import type { FilterOptions } from '../types';
 
 import { withOptimisticOperation } from '../utils/withOptimisticOperation';
 import { apiFetch } from '../utils/apiFetch';
+import { isSettled } from '../generated/ops';
+import type { OperationV2Status } from '../generated/ops';
 
 const API_BASE = '/api/v1';
 
@@ -502,55 +504,31 @@ export interface OperationLog {
 }
 
 /**
- * Every status the v2 registry can write to an operation row.
- *
- * The four `interrupted_*` variants are one per resume policy, minted by
- * interruptedStatus in internal/operations/registry/legacy_op_status.go.
- * `interrupted_quiesced` is the default for three of the four policies — i.e.
- * the common case — and was missing from this union until 2026-08-16, which
- * also made a comparison against it a type error rather than merely a false
- * one.
+ * OperationV2Status (every status the v2 registry can write to an operation
+ * row, plus the legacy spellings accepted on read) is generated from the Go
+ * run-status table in internal/operations/state/state.go. Never hand-edit the
+ * union here: a status added on the Go side only reaches the web by
+ * regenerating web/src/generated/ops.ts (`make generate-ops`), and `make ci`
+ * fails while that file is stale.
  */
-export type OperationV2Status =
-  | 'queued'
-  | 'running'
-  | 'interrupting'
-  | 'completed'
-  | 'failed'
-  | 'canceled'
-  | 'interrupted'
-  | 'interrupted_ask'
-  | 'interrupted_dropped'
-  | 'interrupted_quiesced'
-  | 'interrupted_restart';
+export type { OperationV2Status } from '../generated/ops';
 
 /**
- * isOperationTerminal reports whether an operation has stopped for good.
+ * isOperationTerminal reports whether a poller must stop: the generated
+ * isSettled, i.e. the strict terminal statuses plus every interrupted* status.
+ * A deploy-quiesced scan is settled (it will not move again in this session)
+ * even though the boot sweep may resume it later, so a poller that waited for
+ * it would spin until the next deploy.
  *
- * The prefix rule is deliberate, and mirrors legacyStatusFor in
- * internal/operations/registry/legacy_op_status.go. The registry mints one
- * `interrupted_<policy>` status per resume policy, so any hardcoded list here
- * goes stale the moment a policy is added — and a poller that does not
- * recognise a terminal status does not fail, it spins at 1s forever while the
- * UI shows the operation still running. Matching the prefix cannot fall behind
- * the backend that way.
- *
- * `interrupting` is deliberately NOT terminal: it is the transitional state
- * while an operation is being asked to stop, and it does not start with
- * `interrupted`.
+ * Kept as a named function rather than a bare re-export so the callers and the
+ * tests that vi.mock this module keep one stable seam.
  *
  * Takes a plain string rather than OperationV2Status because the legacy
  * Operation shape types status as string, and getOperationStatus casts a v2
- * record into it — a narrower parameter would push a cast to the call sites and
- * hide exactly the drift this exists to prevent.
+ * record into it.
  */
 export function isOperationTerminal(status: string): boolean {
-  return (
-    status === 'completed' ||
-    status === 'failed' ||
-    status === 'canceled' ||
-    status.startsWith('interrupted')
-  );
+  return isSettled(status);
 }
 
 // Operations V2 (UOS-05: new timeline endpoint)
@@ -2702,7 +2680,7 @@ export async function pollOperation(
     // Was `op.status === 'cancelled'` (two Ls) against a backend that mints
     // 'canceled' (one L), so this loop never terminated on a cancelled
     // operation — and it recognised none of the interrupted_* statuses either.
-    if (isOperationTerminal(op.status)) {
+    if (isSettled(op.status)) {
       return op;
     }
     if (deadline !== undefined && Date.now() >= deadline) {
@@ -4707,7 +4685,7 @@ export async function batchApplyFromCache(
 // type, not the endpoint. This comment used to say pollOperation polled v1 and
 // that a v2 id would 404 there; neither has been true since that retirement.
 //
-// Both pollers now share isOperationTerminal. This one used to test against a
+// Both pollers now share the generated isSettled. This one used to test against a
 // hardcoded OP_V2_TERMINAL list that omitted 'interrupted_quiesced' — the
 // status three of the four resume policies produce — so it hung on the common
 // interruption just as pollOperation hung on every cancellation.
@@ -4727,7 +4705,7 @@ export async function pollOperationV2(
     if (signal?.aborted) throw aborted();
     const op = await getOperationV2(id, { signal, timeoutMs: opts?.requestTimeoutMs });
     onProgress?.(op);
-    if (isOperationTerminal(op.status)) return op;
+    if (isSettled(op.status)) return op;
     await new Promise<void>((resolve, reject) => {
       const t = setTimeout(() => {
         signal?.removeEventListener('abort', onAbort);

@@ -1,5 +1,5 @@
 # file: Makefile
-# version: 2.35.1
+# version: 2.36.0
 # guid: c1d2e3f4-g5h6-7890-ijkl-m1234567890n
 # last-edited: 2026-10-10
 
@@ -479,6 +479,15 @@ sdkguard:
 	@go run ./tools/cmd/sdkguard/main.go
 	@echo "✅ SDK guard passed"
 
+## generate-ops: Regenerate web/src/generated/ops.ts from internal/operations/state
+.PHONY: generate-ops ops-check
+generate-ops:
+	@go run ./tools/cmd/opsgen
+
+## ops-check: Fail if web/src/generated/ops.ts is stale (run make generate-ops)
+ops-check:
+	@go run ./tools/cmd/opsgen -check
+
 ## bench-check: Typecheck the //go:build bench code (nothing else did)
 #
 # Deliberately NOT the same as build-bench above, despite the near-identical
@@ -684,7 +693,7 @@ coverage-check-short:
 	echo "✅ Coverage $$coverage% meets floor $$floor%"
 
 ## ci: Fast CI check (short tests — prop tests skipped; use test-nightly for full suite)
-ci: mocks-check staticcheck sdkguard bench-check fmt-check test-all-short coverage-check-short lint-errcheck-ratchet
+ci: mocks-check staticcheck sdkguard ops-check bench-check fmt-check test-all-short coverage-check-short lint-errcheck-ratchet
 	@echo "✅ All CI checks passed!"
 
 ## ci-remote: Same gates as `make ci`, sharded across the CI_NODES runner pool
