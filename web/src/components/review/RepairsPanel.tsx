@@ -1,7 +1,7 @@
 // file: web/src/components/review/RepairsPanel.tsx
-// version: 1.24.0
+// version: 1.25.0
 // guid: 9c4f1a73-2e58-4b06-a9d1-6e3b8c7f0d52
-// last-edited: 2026-10-08
+// last-edited: 2026-10-10
 
 /**
  * The repairs lane's surface: a rail of fixers and the selected fixer's trial.
@@ -117,6 +117,7 @@ function applySummary(la: RepairOpRef | undefined): string | null {
   if (o.changed_since_plan) parts.push(`changed ${o.changed_since_plan}`);
   if (o.failed) parts.push(`failed ${o.failed}`);
   if (o.retry_later) parts.push(`retry later ${o.retry_later}`);
+  if (o.canceled_skipped) parts.push(`not applied (canceled) ${o.canceled_skipped}`);
   return `Last apply ${ageOf(la.completed_at ?? la.queued_at)}${la.dry_run ? ' (preview)' : ''}: ${parts.join(', ')}`;
 }
 
@@ -708,6 +709,8 @@ function PlanView({ repairs, viewMode }: RepairsPanelProps) {
                 '. Rows that changed since the trial were left alone; re-run the trial to pick them up.'}
               {(repairs.applyResult.retry_later ?? 0) > 0 &&
                 '. Rows marked "Retry later" could not be checked right now; apply them again in a few minutes.'}
+              {(repairs.applyResult.by_outcome.canceled_skipped ?? 0) > 0 &&
+                '. The apply was canceled; rows marked "Not applied" were not written and can be applied again.'}
             </Alert>
           )}
 

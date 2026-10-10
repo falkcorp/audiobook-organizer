@@ -1,7 +1,7 @@
 // file: web/src/components/review/lanes/useRepairsLane.test.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2e8c6b14-7f39-4a50-9d21-b4a7e3c9f615
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 //
 // The repairs lane's data layer against a mocked API.
 //
@@ -24,6 +24,7 @@ import type {
 import {
   REPAIRS_FIXER_STORAGE_KEY,
   SETTLED_OUTCOMES,
+  applySeverity,
   repairApplyConfirmMessage,
   repairOwnerApplyConfirmMessage,
   summarizeApply,
@@ -559,6 +560,40 @@ describe('useRepairsLane: retry_later', () => {
     };
     expect(summarizeApply(r)).toContain('retry later 1');
     expect(SETTLED_OUTCOMES.has('retry_later')).toBe(false);
+  });
+});
+
+describe('useRepairsLane: canceled_skipped', () => {
+  // A 10-row apply canceled after row 3: the server reports the other seven
+  // canceled_skipped and leaves `aborted` unset (that field is the lost
+  // stand-down lease, not a cancel).
+  const canceled: RepairApplyResult = {
+    fixer_id: 'maintenance.fragment-consolidation',
+    plan_op_id: 'op-plan',
+    dry_run: false,
+    requested: 10,
+    by_outcome: { applied: 3, canceled_skipped: 7 },
+    applied: 3,
+    changed_since_plan: 0,
+    partially_applied: 0,
+    failed: 0,
+    standdown_held: true,
+    rows: [],
+  };
+
+  it('counts canceled rows in the summary and reports a warning, not success', () => {
+    expect(summarizeApply(canceled)).toContain('not applied (canceled) 7');
+    expect(applySeverity(canceled)).toBe('warning');
+  });
+
+  it('keeps canceled rows selectable, so they can be applied again', () => {
+    expect(SETTLED_OUTCOMES.has('canceled_skipped')).toBe(false);
+  });
+
+  it('still reports success for an apply with nothing canceled', () => {
+    const clean = { ...canceled, requested: 3, by_outcome: { applied: 3 } };
+    expect(summarizeApply(clean)).not.toContain('canceled');
+    expect(applySeverity(clean)).toBe('success');
   });
 });
 

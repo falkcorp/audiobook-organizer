@@ -1,7 +1,7 @@
 // file: web/src/components/review/repairs/RowParts.tsx
-// version: 1.0.0
+// version: 1.1.0
 // guid: 09def8d7-b23c-49be-80d7-cfdb4a959792
-// last-edited: 2026-10-08
+// last-edited: 2026-10-10
 
 /**
  * Pieces of a repairs row that every view renders the same way: its title
@@ -32,6 +32,7 @@ const OUTCOME_LABEL: Record<RepairOutcome, string> = {
   aborted_standdown_lost: 'Stopped: scan resumed',
   retry_later: 'Retry later (nothing written)',
   owner_apply_refused: 'Owner apply refused',
+  canceled_skipped: 'Not applied: apply canceled',
 };
 
 const OUTCOME_COLOR: Record<RepairOutcome, 'success' | 'info' | 'warning' | 'error' | 'default'> = {
@@ -45,6 +46,7 @@ const OUTCOME_COLOR: Record<RepairOutcome, 'success' | 'info' | 'warning' | 'err
   aborted_standdown_lost: 'error',
   retry_later: 'warning',
   owner_apply_refused: 'error',
+  canceled_skipped: 'warning',
 };
 
 export function OutcomeChip({ result }: { result: RepairRowResult }) {
