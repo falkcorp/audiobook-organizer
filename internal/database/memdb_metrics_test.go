@@ -1,7 +1,7 @@
 // file: internal/database/memdb_metrics_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: c27e5a90-4d13-4b68-8f0e-9a1b6d3c5e74
-// last-edited: 2026-10-10
+// last-edited: 2026-10-09
 
 package database
 
@@ -71,7 +71,7 @@ func TestWaitForWarmupCtx_FinishedBeatsCanceledAndCancelEndsWait(t *testing.T) {
 }
 
 // The fallback counter counts only when the store wants memdb and it is not
-// published, and it reaches /metrics as memdb_fallback_reads_total{site=...}.
+// published, and it reaches /metrics as audiobook_organizer_memdb_fallback_reads_total{site=...}.
 func TestMemOrFallback_CountsOnlyUnreadyReadsAndShowsOnMetrics(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	exporter, err := otelprom.New(otelprom.WithRegisterer(reg))
@@ -86,7 +86,7 @@ func TestMemOrFallback_CountsOnlyUnreadyReadsAndShowsOnMetrics(t *testing.T) {
 	}
 	line := func(site, outcome string) string {
 		for _, l := range strings.Split(scrape(), "\n") {
-			if strings.HasPrefix(l, "memdb_fallback_reads_total{") && strings.Contains(l, `site="`+site+`"`) &&
+			if strings.HasPrefix(l, "audiobook_organizer_memdb_fallback_reads_total{") && strings.Contains(l, `site="`+site+`"`) &&
 				strings.Contains(l, `outcome="`+outcome+`"`) {
 				return l
 			}
@@ -97,7 +97,7 @@ func TestMemOrFallback_CountsOnlyUnreadyReadsAndShowsOnMetrics(t *testing.T) {
 	p := newWarmPebbleForMemdbTest(t)
 	// A private provider: the test never touches the process-global one, so it
 	// is repeatable (-count=N) and cannot leak into another test.
-	p.setMeterProvider(mp)
+	p.SetMeterProvider(mp)
 
 	// Ready: served from memdb, not counted.
 	_, err = p.GetAllAuthors()
@@ -112,7 +112,7 @@ func TestMemOrFallback_CountsOnlyUnreadyReadsAndShowsOnMetrics(t *testing.T) {
 	_, err = p.GetAllAuthors()
 	require.NoError(t, err)
 	got := line("GetAllAuthors", "fallback")
-	require.NotEmpty(t, got, "memdb_fallback_reads_total{site=\"GetAllAuthors\"} missing from scrape:\n%s", scrape())
+	require.NotEmpty(t, got, "audiobook_organizer_memdb_fallback_reads_total{site=\"GetAllAuthors\"} missing from scrape:\n%s", scrape())
 	require.True(t, strings.HasSuffix(got, " 2"), "want 2 fallback reads, got line %q", got)
 	t.Logf("scraped: %s", got)
 
@@ -133,7 +133,7 @@ func TestMemOrFallback_CountsOnlyUnreadyReadsAndShowsOnMetrics(t *testing.T) {
 
 // Every read that chooses between memdb and Pebble must go through
 // memOrFallback / memOrRefuse, or its unmet memdb reads are invisible on
-// memdb_fallback_reads_total. This is an AST check, so it holds for every shape
+// audiobook_organizer_memdb_fallback_reads_total. This is an AST check, so it holds for every shape
 // the package has used, including the multi-statement ones a line regex misses:
 //
 //	if p.UseMemDB && p.mem() != nil { ... }
