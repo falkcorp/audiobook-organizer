@@ -1,5 +1,5 @@
 // file: internal/telemetry/telemetry.go
-// version: 2.6.0
+// version: 2.7.0
 // guid: 2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e
 // last-edited: 2026-10-10
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -77,17 +78,21 @@ func InitOTEL(ctx context.Context, cfg *Config) (func(context.Context) error, er
 		shutdowns = append(shutdowns, shutdownMetrics)
 	}
 
-	// Userinfo in an endpoint is dropped at parse time (gRPC never uses it).
-	// Say so once, naming the keys but never the value.
+	// Userinfo, query, fragment and (http/https) path are dropped from an
+	// endpoint at parse time (gRPC never uses them). Say so once, naming the
+	// key and the kind of thing dropped, never the value.
 	var dropped []string
-	if t, _ := parseOTLPEndpoint(cfg.ExporterEndpoint); t.DroppedUserinfo {
-		dropped = append(dropped, "otel_exporter_otlp_endpoint")
-	}
-	if t, _ := parseOTLPEndpoint(cfg.MetricsOTLPEndpoint); t.DroppedUserinfo {
-		dropped = append(dropped, "otel_metrics_otlp_endpoint")
+	for key, ep := range map[string]string{
+		"otel_exporter_otlp_endpoint": cfg.ExporterEndpoint,
+		"otel_metrics_otlp_endpoint":  cfg.MetricsOTLPEndpoint,
+	} {
+		if t, _ := parseOTLPEndpoint(ep); len(t.Dropped()) > 0 {
+			dropped = append(dropped, key+"("+strings.Join(t.Dropped(), "+")+")")
+		}
 	}
 	if len(dropped) > 0 {
-		emit(ctx, slog.LevelWarn, "OpenTelemetry endpoint userinfo (user:pass@) was dropped: OTLP/gRPC does not use it", "keys", strings.Join(dropped, ","))
+		sort.Strings(dropped)
+		emit(ctx, slog.LevelWarn, "OpenTelemetry endpoint extras were dropped: OTLP/gRPC does not use them", "keys", strings.Join(dropped, ","))
 	}
 	level, msg, attrs := initSummary(cfg, tracing, tracingErr, otlp)
 	if otlp.Enabled {
@@ -138,16 +143,19 @@ func traceEndpointOption(endpoint string) (otlptracegrpc.Option, error) {
 // redacted of URL userinfo.
 func initSummary(cfg *Config, tracing bool, tracingErr error, otlp otlpStatus) (slog.Level, string, []any) {
 	level, msg, attrs := slog.LevelInfo, "OpenTelemetry initialized", []any{
-		"metrics", cfg.MetricsEnabled, "tracing", tracing, "endpoint", redactUserinfo(cfg.ExporterEndpoint),
+		"metrics", cfg.MetricsEnabled, "tracing", tracing, "endpoint", displayEndpoint(cfg.ExporterEndpoint),
 		"otlp_metrics", otlp.Enabled}
+	if cfg.MetricsOTLPEndpoint != "" {
+		attrs = append(attrs, "otlp_metrics_endpoint", displayEndpoint(cfg.MetricsOTLPEndpoint))
+	}
 	var off []string
 	if tracingErr != nil {
 		off = append(off, "tracing OFF: the trace exporter could not be started")
-		attrs = append(attrs, "tracing_error", redactUserinfo(tracingErr.Error()))
+		attrs = append(attrs, "tracing_error", redactEndpointSecrets(tracingErr.Error()))
 	}
 	if otlp.Err != nil {
 		off = append(off, "the OTLP metric push OFF: /metrics is unaffected")
-		attrs = append(attrs, "otlp_metrics_error", redactUserinfo(otlp.Err.Error()))
+		attrs = append(attrs, "otlp_metrics_error", redactEndpointSecrets(otlp.Err.Error()))
 	}
 	if len(off) > 0 {
 		level, msg = slog.LevelError, "OpenTelemetry initialized with "+strings.Join(off, "; ")
@@ -156,6 +164,20 @@ func initSummary(cfg *Config, tracing bool, tracingErr error, otlp otlpStatus) (
 		attrs = append(attrs, "otlp_metrics_interval_note", otlp.IntervalNote)
 	}
 	return level, msg, attrs
+}
+
+// displayEndpoint is the loggable form of a configured endpoint: the parsed
+// target's Display(), never the configured string. An endpoint that does not
+// parse is reported as "(invalid)" rather than echoed.
+func displayEndpoint(endpoint string) string {
+	if strings.TrimSpace(endpoint) == "" {
+		return ""
+	}
+	t, err := parseOTLPEndpoint(endpoint)
+	if err != nil {
+		return "(invalid)"
+	}
+	return t.Display()
 }
 
 // metricPlaintext is the one rule for whether the metric push uses plaintext

@@ -1,5 +1,5 @@
 <!-- file: deploy/grafana/METRICS-RUNBOOK.md -->
-<!-- version: 1.2.0 -->
+<!-- version: 1.3.0 -->
 <!-- guid: 5a2c8e71-3d94-4b60-8f17-c9e0a4d63b25 -->
 <!-- last-edited: 2026-10-10 -->
 
@@ -54,9 +54,16 @@ Accepted endpoint forms:
 - `collector.example.invalid:4317` or `dns:///collector.example.invalid:4317`:
   TLS, unless `otel_metrics_otlp_insecure` is true.
 
-Userinfo (`user:pass@`) in either OTLP endpoint is dropped at parse time:
-OTLP/gRPC never uses it, and dropping it keeps it out of errors and logs. A
-single warning at start-up names the config key, never the value.
+Anything after `host:port` that could carry a secret is dropped from either
+OTLP endpoint at parse time: userinfo (`user:pass@`), `?query`, `#fragment`
+and, for `http(s)` URLs, the path. OTLP/gRPC authenticates with headers and
+credentials only and the SDK ignores the path, so nothing functional changes;
+a `dns:///` target keeps its path because that is the target name. A single
+start-up warning names the config key and what was dropped, never the value.
+The start-up line shows the endpoint as `scheme://host:port` (attribute
+`endpoint`, plus `otlp_metrics_endpoint` when the push is on); an endpoint that
+does not parse is shown as `(invalid)`. Error text is also scrubbed of URL
+userinfo, query and fragment as a backstop.
 
 A URL needs both a host and a port; `http://host` is rejected and logged.
 
