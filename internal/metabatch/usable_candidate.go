@@ -1,5 +1,5 @@
 // file: internal/metabatch/usable_candidate.go
-// version: 1.3.0
+// version: 1.4.0
 // guid: 6a925443-e10e-4dc5-af83-0dcf909b6256
 // last-edited: 2026-10-10
 
@@ -167,7 +167,7 @@ func MergeRankerFor(book *database.Book, rejected metafetch.RejectedSet) func(me
 
 func rejectedKeys(kv RejectedCandidateReader, bookID string) metafetch.RejectedSet {
 	if kv == nil {
-		return nil
+		return metafetch.RejectedSet{}
 	}
 	return LoadRejectedCandidateKeys(kv, bookID)
 }

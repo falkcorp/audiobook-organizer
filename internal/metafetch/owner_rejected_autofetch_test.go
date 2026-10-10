@@ -1,5 +1,5 @@
 // file: internal/metafetch/owner_rejected_autofetch_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 7c2e4a90-1b3d-4f6e-8a25-9d0c1e7f3b48
 // last-edited: 2026-10-10
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -155,4 +156,138 @@ func TestAutoFetch_UnreadableRejectionsFailClosed(t *testing.T) {
 			require.Nil(t, f.book(id).Description)
 		})
 	}
+}
+
+// B1 (round 3): the default chain is Audible, then Open Library (review
+// only), then Audnexus, which serves the same Audible product by the book's
+// ASIN. A record rejected under Audible must not come back through
+// Audnexus.
+func TestAutoFetch_AudibleRejectionRefusesAudnexusSameASIN(t *testing.T) {
+	for _, fetch := range autoFetchRuns {
+		t.Run(fetch.label, func(t *testing.T) {
+			rec := rejFetchRecord("B0SYNREJ01", "rejected description")
+			audible := &verdictSource{name: "Audible", results: []metadata.BookMetadata{rec}}
+			audnexus := &verdictSource{name: audnexusSource, results: []metadata.BookMetadata{rec}}
+			f, id := rejFetchFixture(t, audible, audnexus)
+			rejectFor(t, f.store, id, "Audible", rec)
+
+			_, err := fetch.run(f.mfs, id)
+			require.ErrorIs(t, err, ErrOwnerRejectedNotApplied)
+			var ore *OwnerRejectedNotAppliedError
+			require.ErrorAs(t, err, &ore)
+			require.Equal(t, []string{"Audible", audnexusSource}, ore.Sources)
+			require.Positive(t, audnexus.calls.Load(), "fixture: Audnexus must have been asked")
+			require.Nil(t, f.book(id).Description, "the rejected record was applied through Audnexus")
+		})
+	}
+}
+
+// B1 (owner decision 2026-10-10): a rejected ISBN refuses another
+// provider's record of that ISBN, in either ISBN form.
+func TestAutoFetch_ISBNRejectionRefusesOtherProvider(t *testing.T) {
+	for _, fetch := range autoFetchRuns {
+		t.Run(fetch.label, func(t *testing.T) {
+			rejected := metadata.BookMetadata{Title: rejFetchTitle, Author: "Synthetic Penwright", ISBN10: "0306406152", Description: "rejected description"}
+			sameISBN := metadata.BookMetadata{Title: rejFetchTitle, Author: "Synthetic Penwright", ISBN13: "9780306406157", Description: "other provider description"}
+			a := &verdictSource{name: "Audible", results: []metadata.BookMetadata{rejected}}
+			b := &verdictSource{name: "Synthetic Source B", results: []metadata.BookMetadata{sameISBN}}
+			f, id := rejFetchFixture(t, a, b)
+			rejectFor(t, f.store, id, "Audible", rejected)
+
+			_, err := fetch.run(f.mfs, id)
+			require.ErrorIs(t, err, ErrOwnerRejectedNotApplied)
+			require.Nil(t, f.book(id).Description)
+		})
+	}
+}
+
+// rejectingSource records the owner's rejection of its own record while it
+// is being searched: a rejection made while the providers answer.
+type rejectingSource struct {
+	*verdictSource
+	onSearch func()
+}
+
+func (r *rejectingSource) SearchByTitle(ctx context.Context, q string) ([]metadata.BookMetadata, error) {
+	r.onSearch()
+	return r.verdictSource.SearchByTitle(ctx, q)
+}
+
+func (r *rejectingSource) SearchByTitleAndAuthor(ctx context.Context, t, a string) ([]metadata.BookMetadata, error) {
+	r.onSearch()
+	return r.verdictSource.SearchByTitleAndAuthor(ctx, t, a)
+}
+
+// S2 (round 3): the rejections are read again just before the write, so a
+// rejection made during the search is honoured.
+func TestAutoFetch_RejectionDuringSearchIsHonoured(t *testing.T) {
+	for _, fetch := range autoFetchRuns {
+		t.Run(fetch.label, func(t *testing.T) {
+			rec := rejFetchRecord("B0SYNREJ01", "rejected description")
+			src := &rejectingSource{verdictSource: &verdictSource{name: "Audible", results: []metadata.BookMetadata{rec}}}
+			f, id := rejFetchFixture(t, src)
+			var once sync.Once
+			src.onSearch = func() { once.Do(func() { rejectFor(t, f.store, id, "Audible", rec) }) }
+
+			_, err := fetch.run(f.mfs, id)
+			require.ErrorIs(t, err, ErrOwnerRejectedNotApplied)
+			require.Nil(t, f.book(id).Description, "a rejection made during the search was not honoured")
+		})
+	}
+}
+
+// S2 (round 3): ApplyMetadataCandidateWithOptions, the choke point every
+// candidate apply goes through, refuses a rejected candidate whatever the
+// options, including a record rejected under another source with the same
+// ASIN.
+func TestApplyCandidate_RefusesOwnerRejected(t *testing.T) {
+	rec := rejFetchRecord("B0SYNREJ01", "rejected description")
+	for _, tc := range []struct {
+		name string
+		opts ApplyOptions
+		cand MetadataCandidate
+	}{
+		{"hand-picked", ApplyOptions{}, MetadataCandidate{Source: "Audible", Title: rejFetchTitle, ASIN: "B0SYNREJ01", Description: "rejected description"}},
+		{"fill-only", ApplyOptions{FillOnly: true}, MetadataCandidate{Source: "Audible", Title: rejFetchTitle, ASIN: "B0SYNREJ01", Description: "rejected description"}},
+		{"owner-reviewed", ApplyOptions{OwnerReviewed: true}, MetadataCandidate{Source: "Audible", Title: rejFetchTitle, ASIN: "B0SYNREJ01", Description: "rejected description"}},
+		{"Audnexus, same ASIN", ApplyOptions{}, MetadataCandidate{Source: audnexusSource, Title: rejFetchTitle, ASIN: "B0SYNREJ01", Description: "rejected description"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, id := rejFetchFixture(t)
+			rejectFor(t, f.store, id, "Audible", rec)
+			_, err := f.mfs.ApplyMetadataCandidateWithOptions(id, tc.cand, nil, tc.opts)
+			require.ErrorIs(t, err, ErrOwnerRejectedNotApplied)
+			require.Nil(t, f.book(id).Description)
+		})
+	}
+}
+
+// S2 (round 3): the rejection re-read runs under the book's write stripe at
+// the commit, so a rejection landing after the apply started still wins.
+func TestApplyCandidate_RejectionDuringApplyRefusedAtCommit(t *testing.T) {
+	rec := rejFetchRecord("B0SYNREJ01", "rejected description")
+	f, id := rejFetchFixture(t)
+	cand := MetadataCandidate{Source: "Audible", Title: rejFetchTitle, ASIN: "B0SYNREJ01", Description: "rejected description"}
+	calls := 0
+	guard := func(*database.Book) error {
+		calls++
+		if calls == 1 {
+			// The first call is before the apply body, outside the stripe:
+			// the owner rejects the candidate now.
+			rejectFor(t, f.store, id, "Audible", rec)
+		}
+		return nil
+	}
+	_, err := f.mfs.ApplyMetadataCandidateWithOptions(id, cand, nil, ApplyOptions{Guard: guard})
+	require.ErrorIs(t, err, ErrOwnerRejectedNotApplied)
+	require.Nil(t, f.book(id).Description, "the rejection made during the apply was not honoured at the commit")
+}
+
+// An unreadable rejection list refuses the apply.
+func TestApplyCandidate_UnreadableRejectionsFailClosed(t *testing.T) {
+	f, id := rejFetchFixture(t)
+	svc := NewService(failingRejectionScan{f.store})
+	_, err := svc.ApplyMetadataCandidate(id, MetadataCandidate{Source: "Audible", Title: rejFetchTitle, Description: "d"}, nil)
+	require.ErrorIs(t, err, ErrOwnerRejectionCheckFailed)
+	require.Nil(t, f.book(id).Description)
 }

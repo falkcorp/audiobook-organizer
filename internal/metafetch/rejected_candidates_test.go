@@ -1,11 +1,12 @@
 // file: internal/metafetch/rejected_candidates_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: 3f0c9a51-7e2d-4b8a-9c16-5d4e8f2a7b30
 // last-edited: 2026-10-10
 
 package metafetch
 
 import (
+	"errors"
 	"sort"
 	"strings"
 	"testing"
@@ -31,6 +32,16 @@ func (m memRejections) ScanPrefix(prefix string) ([]database.KVPair, error) {
 func (m memRejections) GetRaw(key string) ([]byte, error) { return m[key], nil }
 func (m memRejections) SetRaw(key string, v []byte) error { m[key] = v; return nil }
 func (m memRejections) DeleteRaw(key string) error        { delete(m, key); return nil }
+
+// ModifyBook stands in for the book write stripe: every book exists, and
+// nothing is written.
+func (m memRejections) ModifyBook(id string, fn func(*database.Book) error) (*database.Book, error) {
+	b := &database.Book{ID: id}
+	if err := fn(b); err != nil && !errors.Is(err, database.ErrSkipBookWrite) {
+		return nil, err
+	}
+	return b, nil
+}
 
 func loadSet(t *testing.T, m memRejections, bookID string) RejectedSet {
 	t.Helper()
