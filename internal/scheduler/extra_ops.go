@@ -1,5 +1,5 @@
 // file: internal/scheduler/extra_ops.go
-// version: 1.22.0
+// version: 1.23.0
 // guid: a9b8c7d6-e5f4-3210-fedc-ba9876543210
 // last-edited: 2026-10-10
 
@@ -33,6 +33,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
+	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
@@ -568,11 +569,12 @@ func runCleanupOldBackups(ctx context.Context, progress cleanupProgressLogger) e
 			return nil
 		}
 		if strings.Contains(info.Name(), ".bak-") {
-			// Age is the backup's mtime. A create_backups backup is a hardlink, which
-			// would keep the original's (often years-old) mtime; fileops.WriteTagsSafe
-			// stamps it to the write time so this check sees its real age (KeepBackup,
-			// MTIME CONTRACT). Changing either side breaks the other.
-			age := time.Since(info.ModTime())
+			// Age is the time in the backup's NAME (fileops.BackupTime: <unix>[-N]
+			// or the legacy YYYYMMDD-HHMMSS), falling back to mtime for a name
+			// without one. A create_backups backup is a hardlink and keeps the
+			// original audio's mtime, often years old, so mtime alone would delete
+			// a fresh backup on the next run (fileops KeepBackup, AGE CONTRACT).
+			age := time.Since(fileops.BackupTime(info.Name(), info.ModTime()))
 			if age > maxAge {
 				if rmErr := os.Remove(path); rmErr != nil {
 					slog.Warn("failed to remove old backup:", "path", path, "rmErr", rmErr)
