@@ -1,5 +1,5 @@
 // file: internal/metafetch/owner_rejected_autofetch_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 7c2e4a90-1b3d-4f6e-8a25-9d0c1e7f3b48
 // last-edited: 2026-10-10
 
@@ -265,20 +265,23 @@ func TestApplyCandidate_RefusesOwnerRejected(t *testing.T) {
 // S2 (round 3): the rejection re-read runs under the book's write stripe at
 // the commit, so a rejection landing after the apply started still wins.
 func TestApplyCandidate_RejectionDuringApplyRefusedAtCommit(t *testing.T) {
-	rec := rejFetchRecord("B0SYNREJ01", "rejected description")
 	f, id := rejFetchFixture(t)
 	cand := MetadataCandidate{Source: "Audible", Title: rejFetchTitle, ASIN: "B0SYNREJ01", Description: "rejected description"}
 	calls := 0
 	guard := func(*database.Book) error {
 		calls++
-		if calls == 1 {
-			// The first call is before the apply body, outside the stripe:
-			// the owner rejects the candidate now.
-			rejectFor(t, f.store, id, "Audible", rec)
+		if calls == 2 {
+			// The second call is the commit guard, under the book's write
+			// stripe, after every earlier check passed. The rejection key is
+			// written raw (RecordRejection would wait for the stripe this
+			// call holds); the owner-rejection guard runs after this one.
+			key := RejectedCandidateStoreKey(id, cand.Source, cand.Title)
+			require.NoError(t, f.store.SetRaw(key, RejectionValue(nil, CandidateRejectionIdentifiers(&cand))))
 		}
 		return nil
 	}
 	_, err := f.mfs.ApplyMetadataCandidateWithOptions(id, cand, nil, ApplyOptions{Guard: guard})
+	require.Equal(t, 2, calls, "fixture: the guard must reach the commit")
 	require.ErrorIs(t, err, ErrOwnerRejectedNotApplied)
 	require.Nil(t, f.book(id).Description, "the rejection made during the apply was not honoured at the commit")
 }
