@@ -1,7 +1,7 @@
 # file: .woodpecker/test-fixtures.yaml
-# version: 1.0.0
+# version: 1.0.1
 # guid: cf4b2a0b-48ac-4607-b815-6816d2cbc041
-# last-edited: 2026-10-05
+# last-edited: 2026-10-09
 #
 # The tests that -short skips, run WITHOUT -short and with -race: the mirror of
 # ci.yml's fixture-tests job. The other three test workflows pass -short, so
@@ -40,7 +40,7 @@ steps:
     # container image; the step runs on the host with the agent's PATH.
     image: bash
     environment:
-      GOTOOLCHAIN: go1.27.1
+      GOTOOLCHAIN: go1.27.2
       # The local backend gives every pipeline a fresh HOME, so Go's default
       # caches ($HOME/go/pkg/mod, which also holds the downloaded toolchain, and
       # the per-user build cache: $HOME/.cache/go-build on Linux) were re-created
