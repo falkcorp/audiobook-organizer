@@ -1,7 +1,7 @@
 // file: internal/scheduler/scheduler.go
-// version: 1.17.0
+// version: 1.18.0
 // guid: 3f7a9c21-b4d8-4e05-a6f2-8c1d0e3b7a94
-// last-edited: 2026-10-08
+// last-edited: 2026-10-10
 
 // Package scheduler implements the unified task scheduling system.
 // TaskScheduler manages all registered tasks, their schedules, and manual
@@ -188,6 +188,9 @@ func NewTaskScheduler(deps SchedulerDeps) *TaskScheduler {
 		"dedup_llm_review",
 		"author_split_scan",
 		"series_prune",
+		// Report-only reads (04-P1); they sit before the deleting tasks below.
+		"file_integrity_check",
+		"orphan_book_files_cleanup",
 		// isbn_enrichment left this list on 2026-10-02: its replacement,
 		// asin_backfill, runs on its own interval and a full walk is too long
 		// for the window to wait behind.

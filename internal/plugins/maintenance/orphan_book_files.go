@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/orphan_book_files.go
-// version: 2.1.0
+// version: 2.2.0
 // guid: 9d2c4f6a-8e1b-4c5d-9a7b-3e5f1a2c4b6d
-// last-edited: 2026-09-19
+// last-edited: 2026-10-10
 
 package maintenance
 
@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/database"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -49,7 +50,10 @@ func (p *Plugin) orphanBookFilesCleanupDef() sdk.OperationDef {
 		Timeout:         30 * time.Minute,
 		Schedule:        &sched,
 		Capabilities:    []sdk.Capability{sdk.CapLibraryRead},
-		Run:             p.runOrphanBookFilesCleanup,
+		// Explicit so the def does not rely on the empty-means-settings.manage
+		// default (08-X2); the scheduler now enqueues it nightly.
+		Permissions: []auth.Permission{auth.PermSettingsManage},
+		Run:         p.runOrphanBookFilesCleanup,
 	}
 }
 

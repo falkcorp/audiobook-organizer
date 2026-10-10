@@ -1,7 +1,7 @@
 // file: internal/server/handlers/operations_v2_permissions_test.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 61966351-b637-469e-8483-4e3819bf56f6
-// last-edited: 2026-10-09
+// last-edited: 2026-10-10
 
 // Covers TriggerOperationV2's per-def permission gate.
 //
@@ -234,4 +234,30 @@ func TestTriggerOperationV2_SettingsManageDoesNotUnlockEditMetadata(t *testing.T
 	assert.Equal(t, http.StatusForbidden, w.Code)
 	assert.Contains(t, w.Body.String(), string(auth.PermLibraryEditMetadata))
 	registry.AssertNotCalled(t, "EnqueueOp", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// The two scheduled report-only checks (maintenance.file-integrity-check and
+// maintenance.orphan-book-files-cleanup) declare settings.manage; a caller with
+// only scan.trigger (the seeded editor) must be refused on both. The real defs'
+// Permissions are pinned in internal/plugins/maintenance so this mock cannot drift.
+func TestTriggerOperationV2_EditorCannotRunScheduledIntegrityChecks(t *testing.T) {
+	for _, id := range []string{"maintenance.file-integrity-check", "maintenance.orphan-book-files-cleanup"} {
+		t.Run(id, func(t *testing.T) {
+			registry := handlersmocks.NewMockOperationsRegistry(t)
+			registry.EXPECT().Def(id).Return(opsregistry.OperationDef{
+				ID:          id,
+				Permissions: []auth.Permission{auth.PermSettingsManage},
+			}, true)
+			// Deliberately NO EnqueueOp expectation: reaching it is the failure.
+
+			h := handlers.NewOperationsV2Handler(nil, registry, nil, true)
+			c, w := newOpsV2Ctx(http.MethodPost, "/operations/v2", `{"def_id":"`+id+`"}`, nil)
+			withCallerPerms(c, auth.PermScanTrigger)
+			h.TriggerOperationV2(c)
+
+			assert.Equal(t, http.StatusForbidden, w.Code)
+			assert.Contains(t, w.Body.String(), string(auth.PermSettingsManage))
+			registry.AssertNotCalled(t, "EnqueueOp", mock.Anything, mock.Anything, mock.Anything)
+		})
+	}
 }

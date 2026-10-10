@@ -1,7 +1,7 @@
 // file: internal/scheduler/maintenance.go
-// version: 1.11.0
+// version: 1.12.0
 // guid: 7d2e8f4a-c3b1-4a09-8e5f-2d6c0b9a3e71
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 
 package scheduler
 
@@ -187,6 +187,19 @@ var taskV2DefIDs = map[string]string{
 	"optimize_activity_db":        "maintenance.optimize-activity-db",
 	"nightly_activity_compaction": "maintenance.nightly-compact-activity-log",
 	"ai_journal_prune":            "maintenance.prune-ai-journal",
+	"file_integrity_check":        "maintenance.file-integrity-check",
+	"orphan_book_files_cleanup":   "maintenance.orphan-book-files-cleanup",
+}
+
+// TaskV2DefIDs returns a copy of the task-name to v2-def-ID map. The
+// schedule-has-driver guard in internal/server uses it to ask whether an op that
+// declares a cron Schedule has a scheduler task that really enqueues it.
+func TaskV2DefIDs() map[string]string {
+	out := make(map[string]string, len(taskV2DefIDs))
+	for k, v := range taskV2DefIDs {
+		out[k] = v
+	}
+	return out
 }
 
 // taskConcurrencySiblings lists defs that share a task's ConcurrencyKey. While

@@ -1,7 +1,7 @@
 // file: internal/scheduler/tasks.go
-// version: 1.21.0
+// version: 1.22.0
 // guid: 9b4c7e21-a5f3-4d08-b2e6-3c8d1f7a0e54
-// last-edited: 2026-10-07
+// last-edited: 2026-10-10
 
 // Package scheduler — task registrations.
 // All 23 registered tasks are defined here. Each task's TriggerFn and
@@ -1125,6 +1125,49 @@ func (ts *TaskScheduler) registerAllTasks() {
 		GetInterval:            func() time.Duration { return 24 * time.Hour },
 		RunOnStart:             func() bool { return false },
 		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.TombstoneCleanup },
+	})
+
+	ts.registerTask(TaskDefinition{
+		Name:        "file_integrity_check",
+		Description: "Report book_file rows whose hash drifted with no tag-write on record (report-only)",
+		Category:    "maintenance",
+		TriggerFn: func(source string) (*database.Operation, error) {
+			if ts.deps.Store() == nil {
+				return nil, fmt.Errorf("database not initialized")
+			}
+			// Empty params on purpose: the op is report-only and takes none.
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "maintenance.file-integrity-check", map[string]any{})
+			if enqErr != nil {
+				return nil, fmt.Errorf("failed to enqueue maintenance.file-integrity-check: %w", enqErr)
+			}
+			return v2ScheduledOp(v2ID, "file-integrity-check"), nil
+		},
+		IsEnabled:              func() bool { return true },
+		GetInterval:            func() time.Duration { return 24 * time.Hour },
+		RunOnStart:             func() bool { return false },
+		RunInMaintenanceWindow: func() bool { return true },
+	})
+
+	ts.registerTask(TaskDefinition{
+		Name:        "orphan_book_files_cleanup",
+		Description: "Report book_file rows whose book no longer exists (report-only, never deletes)",
+		Category:    "maintenance",
+		TriggerFn: func(source string) (*database.Operation, error) {
+			if ts.deps.Store() == nil {
+				return nil, fmt.Errorf("database not initialized")
+			}
+			// Empty params on purpose: a delete key would be refused by the op,
+			// and absence is the report-only default.
+			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "maintenance.orphan-book-files-cleanup", map[string]any{})
+			if enqErr != nil {
+				return nil, fmt.Errorf("failed to enqueue maintenance.orphan-book-files-cleanup: %w", enqErr)
+			}
+			return v2ScheduledOp(v2ID, "orphan-book-files-cleanup"), nil
+		},
+		IsEnabled:              func() bool { return true },
+		GetInterval:            func() time.Duration { return 24 * time.Hour },
+		RunOnStart:             func() bool { return false },
+		RunInMaintenanceWindow: func() bool { return true },
 	})
 
 	ts.registerTask(TaskDefinition{
