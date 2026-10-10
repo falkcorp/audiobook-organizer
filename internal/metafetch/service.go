@@ -1,5 +1,5 @@
 // file: internal/metafetch/service.go
-// version: 5.52.0
+// version: 5.53.0
 // guid: e5f6a7b8-c9d0-e1f2-a3b4-c5d6e7f8a9b0
 // last-edited: 2026-10-10
 
@@ -227,8 +227,8 @@ type Service struct {
 	organizeSvc  *organizer.Service
 
 	// tagWriter replaces the audio-tag write in tests so they can count it
-	// (see writeTags). Nil in production.
-	tagWriter func(id string) (int, error)
+	// (see writeTags) and see the ctx it carries. Nil in production.
+	tagWriter func(ctx context.Context, id string) (int, error)
 
 	// coverDownload replaces metadata.DownloadCoverArt in tests (its SSRF guard
 	// refuses loopback, so an httptest server cannot stand in). Nil in production.

@@ -1,5 +1,5 @@
 // file: internal/metafetch/apply_writes_test.go
-// version: 1.13.0
+// version: 1.13.1
 // guid: 5d095e77-781b-4acb-8d3f-c564f5f88f77
 // last-edited: 2026-10-10
 //
@@ -341,7 +341,7 @@ func fileWorkHarness(t *testing.T, rootDir string, autoRename, autoTags bool, fi
 	}
 	svc := NewService(mock)
 	var calls []string
-	svc.tagWriter = func(id string) (int, error) {
+	svc.tagWriter = func(_ context.Context, id string) (int, error) {
 		calls = append(calls, "tags:"+id)
 		return 1, nil
 	}
@@ -388,7 +388,7 @@ func TestFinishApplyFileWork_WritesTagsOnce(t *testing.T) {
 // one reported (moved here from the batch path's tests with the logic).
 func TestFinishApplyFileWork_RenameFailureStillWritesTags(t *testing.T) {
 	svc, calls, _ := fileWorkHarness(t, "", true, false, errors.New("list exploded"))
-	svc.tagWriter = func(id string) (int, error) {
+	svc.tagWriter = func(_ context.Context, id string) (int, error) {
 		*calls = append(*calls, "tags:"+id)
 		return 0, errors.New("downstream symptom")
 	}
@@ -633,7 +633,7 @@ func TestFinishAutoFetchFileWork_NeverCreatesALibraryCopy(t *testing.T) {
 		},
 	})
 	var tags []string
-	svc.tagWriter = func(id string) (int, error) { tags = append(tags, id); return 1, nil }
+	svc.tagWriter = func(_ context.Context, id string) (int, error) { tags = append(tags, id); return 1, nil }
 
 	require.NoError(t, svc.FinishAutoFetchFileWork(context.Background(), "b1", "", true))
 	assert.Empty(t, tags, "no library copy: auto-fetch must not touch the files")
@@ -773,7 +773,7 @@ func TestFileWork_AutoFetchAndManualApplySerializeOnLibraryCopyPath(t *testing.T
 			// the failing direction -- no race between two sleeps decides it.
 			entered := make(chan string, 2)
 			proceed := make(chan struct{})
-			svc.tagWriter = func(id string) (int, error) {
+			svc.tagWriter = func(_ context.Context, id string) (int, error) {
 				entered <- id
 				<-proceed
 				return 1, nil
@@ -805,7 +805,7 @@ func TestFileWork_AutoFetchAndManualApplySerializeOnLibraryCopyPath(t *testing.T
 			// A manual apply of A itself writes B's files too (through the rename
 			// pipeline when auto_write_tags_on_apply is on), so its path locks
 			// must name B's path and never A's.
-			svc.tagWriter = func(string) (int, error) { return 1, nil }
+			svc.tagWriter = func(context.Context, string) (int, error) { return 1, nil }
 			manual := &testPathLocks{}
 			svc.SetPathLocker(manual.lock)
 			require.NoError(t, svc.FinishApplyFileWork(context.Background(), "a", "", true, true, nil))
@@ -928,7 +928,7 @@ func TestFinishApplyFileWork_LocksALibraryCopyItCreates(t *testing.T) {
 	svc, h := newCopyHarness(t)
 	entered := make(chan string, 4)
 	proceed := make(chan struct{})
-	svc.tagWriter = func(id string) (int, error) {
+	svc.tagWriter = func(_ context.Context, id string) (int, error) {
 		entered <- "tags:" + id
 		<-proceed
 		return 1, nil
@@ -1006,7 +1006,7 @@ func TestFinishApplyFileWork_FailedLibraryCopyStopsTheJob(t *testing.T) {
 	h.failFirst = true
 	svc.SetPathLocker((&testPathLocks{}).lock)
 	var tags []string
-	svc.tagWriter = func(id string) (int, error) { tags = append(tags, id); return 1, nil }
+	svc.tagWriter = func(_ context.Context, id string) (int, error) { tags = append(tags, id); return 1, nil }
 
 	err := svc.FinishApplyFileWork(context.Background(), "a", "", true, true, nil)
 	require.Error(t, err)
@@ -1024,7 +1024,7 @@ func TestFinishApplyFileWork_UnusableNewCopyIsAnError(t *testing.T) {
 	h.protectedRow = true
 	svc.SetPathLocker((&testPathLocks{}).lock)
 	var tags []string
-	svc.tagWriter = func(id string) (int, error) { tags = append(tags, id); return 1, nil }
+	svc.tagWriter = func(_ context.Context, id string) (int, error) { tags = append(tags, id); return 1, nil }
 
 	err := svc.FinishApplyFileWork(context.Background(), "a", "", true, true, nil)
 	require.Error(t, err)
@@ -1039,7 +1039,7 @@ func TestFinishApplyFileWork_UnlinkedNewCopyNamesTheCause(t *testing.T) {
 	svc, h := newCopyHarness(t)
 	h.unlinked = true
 	svc.SetPathLocker((&testPathLocks{}).lock)
-	svc.tagWriter = func(string) (int, error) { return 1, nil }
+	svc.tagWriter = func(context.Context, string) (int, error) { return 1, nil }
 
 	err := svc.FinishApplyFileWork(context.Background(), "a", "", true, true, nil)
 	require.Error(t, err)
@@ -1055,7 +1055,7 @@ func TestFinishApplyFileWork_ReadErrorAtTheCopyLockStopsTheJob(t *testing.T) {
 	h.failReads = 1
 	svc.SetPathLocker((&testPathLocks{}).lock)
 	var tags []string
-	svc.tagWriter = func(id string) (int, error) { tags = append(tags, id); return 1, nil }
+	svc.tagWriter = func(_ context.Context, id string) (int, error) { tags = append(tags, id); return 1, nil }
 
 	err := svc.FinishApplyFileWork(context.Background(), "a", "", true, true, nil)
 	require.Error(t, err)
@@ -1084,7 +1084,7 @@ func TestFinishFileWork_NeverCreatesALibraryCopy(t *testing.T) {
 func TestFinishApplyFileWork_NewLibraryCopyGetsTheDownloadedCover(t *testing.T) {
 	svc, h := newCopyHarness(t)
 	svc.SetPathLocker((&testPathLocks{}).lock)
-	svc.tagWriter = func(string) (int, error) { return 1, nil }
+	svc.tagWriter = func(context.Context, string) (int, error) { return 1, nil }
 	svc.coverDownload = func(coverURL, destDir, bookID string) (string, error) {
 		return filepath.Join(destDir, "covers", bookID+".jpg"), nil
 	}
@@ -1117,7 +1117,7 @@ func TestFinishAutoFetchFileWork_NeverRenamesAndTagsOnlyUnderWriteBack(t *testin
 				},
 			})
 			var tags []string
-			svc.tagWriter = func(id string) (int, error) { tags = append(tags, id); return 1, nil }
+			svc.tagWriter = func(_ context.Context, id string) (int, error) { tags = append(tags, id); return 1, nil }
 
 			require.NoError(t, svc.FinishAutoFetchFileWork(context.Background(), "lib1", "", writeBack))
 
@@ -1140,7 +1140,7 @@ func TestFinishApplyFileWork_SameBookJobsSerialize(t *testing.T) {
 	svc, _, _ := fileWorkHarness(t, t.TempDir(), false, false, nil)
 	entered := make(chan string, 4)
 	proceed := make(chan struct{})
-	svc.tagWriter = func(id string) (int, error) {
+	svc.tagWriter = func(_ context.Context, id string) (int, error) {
 		entered <- "tags"
 		<-proceed
 		return 1, nil
@@ -1218,7 +1218,7 @@ func TestFinishApplyFileWork_TwoVersionsMakeOneLibraryCopy(t *testing.T) {
 	svc, h := newCopyHarness(t)
 	locks := &testPathLocks{}
 	svc.SetPathLocker(locks.lock)
-	svc.tagWriter = func(string) (int, error) { return 1, nil }
+	svc.tagWriter = func(context.Context, string) (int, error) { return 1, nil }
 	entered := make(chan string, 2)
 	proceed := make(chan struct{})
 	inner := svc.libraryCopyMaker
@@ -1288,7 +1288,7 @@ func TestFinishApplyFileWork_WritesTheLockedCopyWhenTheLookupFlips(t *testing.T)
 	locks := &testPathLocks{}
 	svc.SetPathLocker(locks.lock)
 	var tags []string
-	svc.tagWriter = func(id string) (int, error) { tags = append(tags, id); return 1, nil }
+	svc.tagWriter = func(_ context.Context, id string) (int, error) { tags = append(tags, id); return 1, nil }
 
 	require.NoError(t, svc.FinishApplyFileWork(context.Background(), "a", "", true, true, nil))
 	assert.Equal(t, []string{"a"}, tags, "the job's tags are written once")
@@ -1321,7 +1321,7 @@ func TestFinishApplyFileWork_LockedCopyThatIsNoLongerACopyIsAnError(t *testing.T
 		return b, err
 	}
 	var tags []string
-	svc.tagWriter = func(id string) (int, error) { tags = append(tags, id); return 1, nil }
+	svc.tagWriter = func(_ context.Context, id string) (int, error) { tags = append(tags, id); return 1, nil }
 
 	err := svc.FinishApplyFileWork(context.Background(), "a", "", true, true, nil)
 	require.ErrorIs(t, err, errFileTargetChanged)
@@ -1339,7 +1339,7 @@ func TestFinishApplyFileWork_NeverWritesAHalfMadeLibraryCopy(t *testing.T) {
 	svc, h := newCopyHarness(t)
 	svc.SetPathLocker((&testPathLocks{}).lock)
 	wrote := make(chan string, 8)
-	svc.tagWriter = func(id string) (int, error) { wrote <- id; return 1, nil }
+	svc.tagWriter = func(_ context.Context, id string) (int, error) { wrote <- id; return 1, nil }
 	created := make(chan struct{})
 	proceed := make(chan struct{})
 	inner := svc.libraryCopyMaker
@@ -1401,7 +1401,7 @@ func TestWithBookFilesLocked_WaitsForAnApplyAndLocksTheCurrentPath(t *testing.T)
 	tagging := make(chan struct{})
 	proceed := make(chan struct{})
 	var once sync.Once
-	svc.tagWriter = func(string) (int, error) {
+	svc.tagWriter = func(context.Context, string) (int, error) {
 		once.Do(func() { close(tagging) })
 		<-proceed
 		// The apply moves S's files to Q before it releases S: after the
@@ -1481,7 +1481,7 @@ func TestWriteBackAndRenameOnly_TakeTheFileWorkLocksInOrder(t *testing.T) {
 func TestFileWork_MixedEntryPointsOnOneGroupNeverDeadlock(t *testing.T) {
 	svc, h := newCopyHarness(t)
 	svc.SetPathLocker((&testPathLocks{}).lock)
-	svc.tagWriter = func(string) (int, error) { return 1, nil }
+	svc.tagWriter = func(context.Context, string) (int, error) { return 1, nil }
 	jobs := []func(){
 		func() { _ = svc.FinishApplyFileWork(context.Background(), "a", "", true, true, nil) },
 		func() { _ = svc.FinishApplyFileWork(context.Background(), "c", "", true, true, nil) },
